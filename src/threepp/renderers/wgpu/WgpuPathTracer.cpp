@@ -987,8 +987,8 @@ R"(
             }
         }
 
-        // Flat ambient — skip for transmissive surfaces
-        if (h.transmission < 0.5) {
+        // Flat ambient fallback — only when no environment map is providing indirect light
+        if (rt.envColor.w < 1.5 && h.transmission < 0.5 && h.metalness < 0.5) {
             radiance += throughput * albedo * rt.params.y;
         }
 
@@ -1122,10 +1122,23 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let sampleClean = select(vec3<f32>(0.0), sample, sample.x == sample.x);
     let oldClean    = select(vec3<f32>(0.0), old,    old.x == old.x);
 
+    // Adaptive outlier rejection: clamp sample relative to running average.
+    // Allows legitimate highlights to accumulate over time while suppressing
+    // single-sample fireflies that are orders of magnitude brighter.
+    var clamped = sampleClean;
+    if (pixelFC > 8.0) {
+        let avgLum = max(dot(oldClean, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.01);
+        let smpLum = dot(sampleClean, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let maxLum = avgLum * 20.0;  // allow 20x brighter than average
+        if (smpLum > maxLum) {
+            clamped = sampleClean * (maxLum / smpLum);
+        }
+    }
+
     // Stop accumulating once float16 precision is exhausted (~1024 frames)
     if (pixelFC < 1024.0) {
         let alpha   = 1.0 / (pixelFC + 1.0);
-        let blended = oldClean * (1.0 - alpha) + sampleClean * alpha;
+        let blended = oldClean * (1.0 - alpha) + clamped * alpha;
         textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
     } else {
         textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
