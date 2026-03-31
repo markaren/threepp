@@ -1447,41 +1447,76 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cIrr = demod(cColor, cAlbedo);
     let cLum = luminance_a(cIrr);
 
-    // Luminance sigma on irradiance: relaxed for noisy pixels, tight as they converge
-    let lumSigma = max(0.02, 0.25 / sqrt(cFC + 1.0));
+    // Single-pass: gather neighbor data, compute variance, and filter simultaneously.
+    // First collect same-mesh neighbor irradiance for variance estimate,
+    // then use variance-based sigma for luminance edge-stopping weights.
+    var lumMean = 0.0;
+    var lumSqMean = 0.0;
+    var nSamples = 0.0;
 
-    // 3×3 bilateral filter on demodulated irradiance
-    var irrSum    = vec3<f32>(0.0);
-    var weightSum = 0.0;
+    // Neighbor data cached to avoid double texture reads
+    var nIrr:   array<vec3<f32>, 9>;
+    var nNorm:  array<vec3<f32>, 9>;
+    var nDepth: array<f32, 9>;
+    var nValid: array<bool, 9>;
 
     for (var dy = -1; dy <= 1; dy++) {
         for (var dx = -1; dx <= 1; dx++) {
+            let i = (dy + 1) * 3 + (dx + 1);
             let sp      = clamp(pixel + vec2<i32>(dx, dy) * step, vec2<i32>(0), res - 1);
-            let sColor  = textureLoad(colorIn, sp, 0).xyz;
             let sGB     = textureLoad(gBuf, sp, 0);
-            let sNorm   = sGB.xyz;
-            let sDepth  = sGB.w;
-            let sAlbedo = textureLoad(albedoBuf, sp, 0).xyz;
-
-            // Demodulate neighbor
-            let sIrr = demod(sColor, sAlbedo);
-
-            // Mesh-ID edge-stopping: never blend across different objects
             let sMeshId = u32(textureLoad(hitMeshBuf, sp, 0).r);
-            if (sMeshId != cMeshId) { continue; }
 
-            // Normal edge-stopping
-            let w_n = pow(max(0.0, dot(cNorm, sNorm)), 64.0);
-            // Depth edge-stopping
-            let w_d = exp(-abs(cDepth - sDepth) * 2.0 / (cDepth + 0.01));
-            // Luminance edge-stopping on irradiance (not final color)
-            let sLum = luminance_a(sIrr);
-            let w_l  = exp(-(sLum - cLum) * (sLum - cLum) / (lumSigma * lumSigma + 1e-6));
+            if (sMeshId != cMeshId) {
+                nValid[i] = false;
+                continue;
+            }
+            nValid[i] = true;
 
-            let w = w_n * w_d * w_l;
-            irrSum    += sIrr * w;
-            weightSum += w;
+            let sColor  = textureLoad(colorIn, sp, 0).xyz;
+            let sAlbedo = textureLoad(albedoBuf, sp, 0).xyz;
+            nIrr[i]   = demod(sColor, sAlbedo);
+            nNorm[i]  = sGB.xyz;
+            nDepth[i] = sGB.w;
+
+            let sLum = luminance_a(nIrr[i]);
+            lumMean   += sLum;
+            lumSqMean += sLum * sLum;
+            nSamples  += 1.0;
         }
+    }
+
+    // Variance-based luminance sigma: blur where noisy, preserve where clean.
+    // Need enough same-mesh neighbors for a stable estimate; fall back otherwise.
+    var lumSigma: f32;
+    if (nSamples >= 5.0) {
+        lumMean   /= nSamples;
+        lumSqMean /= nSamples;
+        let localVar = max(0.0, lumSqMean - lumMean * lumMean);
+        lumSigma = max(0.02, sqrt(localVar) * 2.0 / sqrt(cFC + 1.0));
+    } else {
+        // Too few neighbors (near seams) — use conservative frame-count sigma
+        lumSigma = max(0.02, 0.25 / sqrt(cFC + 1.0));
+    }
+
+    // Apply bilateral weights using cached data
+    var irrSum    = vec3<f32>(0.0);
+    var weightSum = 0.0;
+
+    for (var j = 0; j < 9; j++) {
+        if (!nValid[j]) { continue; }
+
+        // Normal edge-stopping
+        let w_n = pow(max(0.0, dot(cNorm, nNorm[j])), 64.0);
+        // Depth edge-stopping
+        let w_d = exp(-abs(cDepth - nDepth[j]) * 2.0 / (cDepth + 0.01));
+        // Luminance edge-stopping on irradiance
+        let sLum = luminance_a(nIrr[j]);
+        let w_l  = exp(-(sLum - cLum) * (sLum - cLum) / (lumSigma * lumSigma + 1e-6));
+
+        let w = w_n * w_d * w_l;
+        irrSum    += nIrr[j] * w;
+        weightSum += w;
     }
 
     // Filter irradiance, then remodulate with center pixel's albedo
@@ -3396,12 +3431,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         WgpuTexture* dst = &d.filteredA;
         WgpuTexture* aux = &d.filteredB;
 
-        // With albedo demodulation the filter operates on smooth irradiance,
-        // so more passes clean noise without blurring texture.
-        // Skip filtering entirely once converged — no need to blur a clean image.
-        const bool hasMotion = (movedBits[0] | movedBits[1]) != 0u;
-        const int nPasses = (d.frameCount_ < 4.f || hasMotion) ? 4 :
-                            (d.frameCount_ < 16.f)             ? 2 : 0;
+        // Always run 2 passes — the variance-based sigma naturally makes the filter
+        // transparent when converged, avoiding visible brightness steps from pass count changes.
+        // Early frames get extra passes for faster initial cleanup.
+        const int nPasses = (d.frameCount_ < 4.f) ? 4 : 2;
 
         for (int pass = 0; pass < nPasses; ++pass) {
             AtrousGpuUniforms au{static_cast<uint32_t>(1u << pass), {0u, 0u, 0u}};
