@@ -20,7 +20,7 @@ namespace {
         auto mat = MeshStandardMaterial::create({
                 {"color", Color::white},
                 {"emissive", Color::white},
-                {"emissiveIntensity", 5.0f},
+                {"emissiveIntensity", 4.0f},
                 {"roughness", 1.0f},
         });
         auto mesh = Mesh::create(PlaneGeometry::create(2.6f, 2.6f), mat);
@@ -139,7 +139,7 @@ int main() {
     scene.add(makeGlassSphere());
 
     // Point light for raytracer mode (emissive NEE handles path tracer mode)
-    auto light = PointLight::create(Color::white, 1.5f);
+    auto light = PointLight::create(Color::white, 0.5f);
     light->position.set(0.f, 9.5f, 0.f);
     scene.add(light);
 
@@ -216,6 +216,8 @@ int main() {
 
     canvas.animate([&] {
         const float dt = clock.getDelta();
+
+        light->visible = renderMode != 1;
 
         fpsAccum += dt;
         ++fpsFrames;

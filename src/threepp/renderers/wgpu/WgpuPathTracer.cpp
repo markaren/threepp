@@ -166,8 +166,8 @@ fn ggxD(NdotH: f32, alpha: f32) -> f32 {
 }
 
 fn ggxG1(NdotX: f32, alpha: f32) -> f32 {
-    let k = alpha * 0.5;
-    return NdotX / max(NdotX * (1.0 - k) + k, 1e-6);
+    let a2 = alpha * alpha;
+    return 2.0 * NdotX / max(NdotX + sqrt(a2 + (1.0 - a2) * NdotX * NdotX), 1e-6);
 }
 
 fn schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
@@ -998,7 +998,7 @@ R"(
             radiance += throughput * albedo * rt.params.y;
         }
 
-        if (i > 0) {
+        if (i > 2) {
             let p = max(max(throughput.r, throughput.g), throughput.b);
             if (rand(seed) > p) { break; }
             throughput /= p;

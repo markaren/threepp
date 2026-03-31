@@ -154,8 +154,12 @@ int main() {
         if (!raster) ImGui::Text("Frames: %d", pathTracer.frameCount());
         ImGui::Separator();
 
-        ImGui::Checkbox("AnimateBox", &animateBox);
-        ImGui::Checkbox("EnclosingBox", &showEnclosingBox);
+        if (ImGui::Checkbox("AnimateBox", &animateBox)) {
+            pathTracer.resetAccumulation();
+        }
+        if (ImGui::Checkbox("EnclosingBox", &showEnclosingBox)) {
+            pathTracer.resetAccumulation();
+        }
 
         if (renderMode == 0 || renderMode == 1) {
             if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
