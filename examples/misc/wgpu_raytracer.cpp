@@ -2,6 +2,7 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/lights/PointLight.hpp"
+#include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
@@ -73,8 +74,13 @@ int main() {
     sphere2->castShadow = true;
     floor->receiveShadow = true;
 
+    ImageLoader imgLoader;
+    auto img = imgLoader.loadHDR(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr", 4, false);
+    auto env = Texture::create(*img);
+
     Scene scene;
-    scene.background = Color::whitesmoke;
+    scene.environment = env;
+
     scene.add(boxMesh);
     scene.add(sphere1);
     scene.add(sphere2);
@@ -103,12 +109,6 @@ int main() {
     pointLight->position.set(5.f, 6.f, -2.f);
     scene.add(pointLight);
 
-    // auto pointLight2 = PointLight::create(Color::white, 0.4f);
-    // pointLight2->castShadow = true;
-    // pointLight2->shadow->bias = -0.005f;
-    // pointLight2->shadow->mapSize.set(1024, 1024);
-    // pointLight2->position.set(-5.f, 6.f, 4.f);
-    // scene.add(pointLight2);
 
     // ---- Camera + controls ----
     PerspectiveCamera rtCam(60.f, canvas.aspect(), 0.1f, 300.f);
