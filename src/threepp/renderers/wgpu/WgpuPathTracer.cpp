@@ -46,7 +46,7 @@ constexpr int MAX_TEX_SLOTS = 64;
 constexpr int TILE_SIZE = 1024;
 constexpr int ATLAS_COLS = 8;  // tiles per row in atlas (8 × 1024 = 8192 ≤ GPU max)
 constexpr int TRI_TEX_HEIGHT = 8;
-constexpr int MAT_TEX_HEIGHT = 5;
+constexpr int MAT_TEX_HEIGHT = 6;
 constexpr int TEX_PAGE_WIDTH = 8192;
 
 // Initial placeholder capacities — grown dynamically as scenes demand more.
@@ -143,6 +143,8 @@ struct Hit  {
     frontFace:    f32,
     attenuationColor: vec3<f32>,
     attenuationDist:  f32,
+    clearcoat:        f32,
+    clearcoatAlpha:   f32,
 }
 
 fn pcg(v: u32) -> u32 {
@@ -369,10 +371,14 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     let mat4 = textureLoad(matData, vec2<i32>(matIdx, 4), 0);
     (*h).attenuationColor = mat4.xyz;
     (*h).attenuationDist  = mat4.w;
+    // Row 5: clearcoat + clearcoatAlpha
+    let mat5 = textureLoad(matData, vec2<i32>(matIdx, 5), 0);
+    (*h).clearcoat      = mat5.x;
+    (*h).clearcoatAlpha = mat5.y;
 }
 
 fn sceneHit(ray: Ray) -> Hit {
-    var h: Hit; h.t = 1e30; h.meshIdx = -1; h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0); h.attenuationDist = 0.0;
+    var h: Hit; h.t = 1e30; h.meshIdx = -1; h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0); h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
     var stack: array<i32, 64>;
     var top: i32 = 0;
     stack[0] = 0; top = 1;
@@ -996,6 +1002,35 @@ R"(
             let p = max(max(throughput.r, throughput.g), throughput.b);
             if (rand(seed) > p) { break; }
             throughput /= p;
+        }
+
+        // Clearcoat lobe: dielectric specular layer on top of base material.
+        // Skip on transmissive surfaces (clearcoat on glass is not physical).
+        if (h.clearcoat > 0.0 && h.transmission < 0.01) {
+            let ccF0 = 0.04;  // dielectric IOR ~1.5
+            let ccCos = max(0.0, dot(wo, h.normal));
+            let ccFresnel = ccF0 + (1.0 - ccF0) * pow(1.0 - ccCos, 5.0);
+            let ccWeight = h.clearcoat * ccFresnel;
+            // Sampling probability: clamp above 0.15 to bound variance on dark surfaces
+            // where base contributes little and clearcoat reflection dominates visually.
+            let ccProb = max(ccWeight, 0.15 * h.clearcoat);
+            if (rand(seed) < ccProb) {
+                let wi_cc = sampleVNDF(wo, h.normal, h.clearcoatAlpha, seed);
+                let cos_cc = dot(h.normal, wi_cc);
+                if (cos_cc <= 0.0) { break; }
+                let G1_cc = ggxG1(cos_cc, h.clearcoatAlpha);
+                throughput *= vec3<f32>(ccWeight * G1_cc / ccProb);
+                prevWo        = wo;
+                prevNormal    = h.normal;
+                prevAlpha     = h.clearcoatAlpha;
+                prevMetalness = 0.0;
+                afterTransmission = false;
+                ray.origin = h.point + h.normal * 1e-3;
+                ray.dir    = wi_cc;
+                continue;
+            }
+            // Passed through clearcoat — attenuate base by energy not reflected
+            throughput *= (1.0 - ccWeight) / (1.0 - ccProb);
         }
 
         // Transmission lobe: refract through transmissive surfaces
@@ -1856,6 +1891,8 @@ struct ExtractedMaterial {
     float alphaTest = 0.f;
     Color attenuationColor{1.f, 1.f, 1.f};
     float attenuationDistance = 0.f;
+    float clearcoat = 0.f;
+    float clearcoatRoughness = 0.f;
 };
 
 static ExtractedMaterial extractMaterial(const Material* mat) {
@@ -1883,6 +1920,11 @@ static ExtractedMaterial extractMaterial(const Material* mat) {
     if (auto* a = dynamic_cast<const MaterialWithAttenuation*>(mat)) {
         m.attenuationColor = a->attenuationColor;
         m.attenuationDistance = std::max(0.f, a->attenuationDistance);
+    }
+    if (auto* cc = dynamic_cast<const MaterialWithClearcoat*>(mat)) {
+        m.clearcoat = std::clamp(cc->clearcoat, 0.f, 1.f);
+        const float ccr = std::clamp(cc->clearcoatRoughness, 0.f, 1.f);
+        m.clearcoatRoughness = std::max(1e-4f, ccr * ccr);
     }
     m.alphaTest = mat->alphaTest;
     return m;
@@ -1971,6 +2013,7 @@ static int buildGeometryBuffers(
         setTexel(matBuffer, maxMats, matCount, 3, em.ior, em.alphaTest, 0.f, 0.f);
         setTexel(matBuffer, maxMats, matCount, 4,
                 em.attenuationColor.r, em.attenuationColor.g, em.attenuationColor.b, em.attenuationDistance);
+        setTexel(matBuffer, maxMats, matCount, 5, em.clearcoat, em.clearcoatRoughness, 0.f, 0.f);
 
         const int matIdx = matCount++;
         const int meshIdx = matIdx;
