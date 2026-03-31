@@ -2841,6 +2841,17 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             if (auto* mc = mat->as<MaterialWithColor>()) enclosingBoxColor = mc->color;
             return;
         }
+        // Transparent meshes with no texture and no transmission are raster-only
+        // overlay effects (e.g. separate clearcoat geometry layers). They have no
+        // physical meaning in path tracing and render as opaque shells that occlude
+        // everything beneath them.
+        if (mat->transparent) {
+            auto* mwm = dynamic_cast<MaterialWithMap*>(mat);
+            auto* mwt = dynamic_cast<MaterialWithTransmission*>(mat);
+            const bool hasMap = mwm && mwm->map;
+            const bool hasTransmission = mwt && mwt->transmission > 0.f;
+            if (!hasMap && !hasTransmission) return;
+        }
         rtMeshes.push_back(&m);
     });
     std::vector<PointLight*> pointLights;
