@@ -14,7 +14,7 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Wgpu Path Tracer",
-                  {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", true}});
+                  {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
 
     WgpuRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
@@ -130,7 +130,7 @@ int main() {
     float fpsAccum = 0.f;
     int fpsFrames = 0;
 
-    std::cout << "Press T to switch render mode: Raster -> Raytracer -> PathTracer" << std::endl;
+    std::cout << "Press T to switch render mode: Raytracer -> PathTracer -> Raster" << std::endl;
     int renderMode = 0;// 0=raytracer, 1=pathtracer, 2=raster,
     std::vector<std::string> renderModeNames = {"Raytracer", "PathTracer", "Raster"};
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
