@@ -1115,7 +1115,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     // Secondary bounce hit a moved mesh — cap rather than reset so static
     // surfaces can still converge while indirect lighting refreshes.
-    if (touchedMoved) { pixelFC = min(pixelFC, 3.0); }
+    if (touchedMoved) { pixelFC = min(pixelFC, 8.0); }
     if (fc == 0u) { pixelFC = 0.0; }
 
     // NaN guard: reject corrupted samples to prevent permanent accumulation damage
@@ -1419,8 +1419,6 @@ fn luminance_a(c: vec3<f32>) -> f32 {
 }
 
 // Demodulate: divide out albedo to isolate irradiance (smooth signal).
-// Floor at 0.1 to prevent extreme amplification on dark surfaces (black gloves etc.)
-// where tiny color differences get magnified 100x+ and defeat the filter.
 fn demod(color: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
     return color / max(albedo, vec3<f32>(0.1));
 }
@@ -1448,85 +1446,88 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Demodulate center pixel: compare irradiance (smooth) not final color (textured)
+    // Demodulate center pixel for accumulation path
     let cIrr = demod(cColor, cAlbedo);
-    let cLum = luminance_a(cIrr);
+    // Blend luminance source: demod for bright surfaces (texture-aware), raw for dark (stable)
+    let albedoLum = luminance_a(cAlbedo);
+    let demodBlend = smoothstep(0.05, 0.2, albedoLum);
+    let cLum = mix(luminance_a(cColor), luminance_a(cIrr), demodBlend);
 
-    // Single-pass: gather neighbor data, compute variance, and filter simultaneously.
-    // First collect same-mesh neighbor irradiance for variance estimate,
-    // then use variance-based sigma for luminance edge-stopping weights.
+    // Variance estimate from immediate 3×3 neighbors
     var lumMean = 0.0;
     var lumSqMean = 0.0;
-    var nSamples = 0.0;
+    var varN = 0.0;
+    for (var vy = -1; vy <= 1; vy++) {
+        for (var vx = -1; vx <= 1; vx++) {
+            let vp = clamp(pixel + vec2<i32>(vx, vy), vec2<i32>(0), res - 1);
+            if (u32(textureLoad(hitMeshBuf, vp, 0).r) != cMeshId) { continue; }
+            let vCol = textureLoad(colorIn, vp, 0).xyz;
+            let vAlb = textureLoad(albedoBuf, vp, 0).xyz;
+            let vAlbLum = luminance_a(vAlb);
+            let vDemod = smoothstep(0.05, 0.2, vAlbLum);
+            let vLum = mix(luminance_a(vCol), luminance_a(demod(vCol, vAlb)), vDemod);
+            lumMean   += vLum;
+            lumSqMean += vLum * vLum;
+            varN      += 1.0;
+        }
+    }
+    // Stable baseline sigma from frame count — always applied, prevents oscillation.
+    // Variance can only INCREASE sigma (more blur where noisy), never decrease it.
+    let baseSigma = 0.25 / sqrt(cFC + 1.0);
+    var lumSigma = baseSigma;
+    if (varN >= 5.0) {
+        lumMean   /= varN;
+        lumSqMean /= varN;
+        let localVar = max(0.0, lumSqMean - lumMean * lumMean);
+        let varSigma = sqrt(localVar) * 2.0 / sqrt(cFC + 1.0);
+        lumSigma = max(baseSigma, varSigma);
+    }
+    lumSigma = max(0.02, lumSigma);
 
-    // Neighbor data cached to avoid double texture reads
-    var nIrr:   array<vec3<f32>, 9>;
-    var nNorm:  array<vec3<f32>, 9>;
-    var nDepth: array<f32, 9>;
-    var nValid: array<bool, 9>;
+    // 5×5 bilateral filter — tracks both demodulated irradiance and raw color
+    let kw = array<f32, 5>(1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
 
-    for (var dy = -1; dy <= 1; dy++) {
-        for (var dx = -1; dx <= 1; dx++) {
-            let i = (dy + 1) * 3 + (dx + 1);
+    var irrSum    = vec3<f32>(0.0);
+    var rawSum    = vec3<f32>(0.0);
+    var weightSum = 0.0;
+
+    for (var dy = -2; dy <= 2; dy++) {
+        for (var dx = -2; dx <= 2; dx++) {
             let sp      = clamp(pixel + vec2<i32>(dx, dy) * step, vec2<i32>(0), res - 1);
-            let sGB     = textureLoad(gBuf, sp, 0);
             let sMeshId = u32(textureLoad(hitMeshBuf, sp, 0).r);
-
-            if (sMeshId != cMeshId) {
-                nValid[i] = false;
-                continue;
-            }
-            nValid[i] = true;
+            if (sMeshId != cMeshId) { continue; }
 
             let sColor  = textureLoad(colorIn, sp, 0).xyz;
+            let sGB     = textureLoad(gBuf, sp, 0);
             let sAlbedo = textureLoad(albedoBuf, sp, 0).xyz;
-            nIrr[i]   = demod(sColor, sAlbedo);
-            nNorm[i]  = sGB.xyz;
-            nDepth[i] = sGB.w;
+            let sIrr    = demod(sColor, sAlbedo);
+            let sNorm   = sGB.xyz;
+            let sDepth  = sGB.w;
 
-            let sLum = luminance_a(nIrr[i]);
-            lumMean   += sLum;
-            lumSqMean += sLum * sLum;
-            nSamples  += 1.0;
+            // Spatial weight (separable Gaussian)
+            let w_s = kw[dy + 2] * kw[dx + 2];
+            // Normal edge-stopping
+            let w_n = pow(max(0.0, dot(cNorm, sNorm)), 64.0);
+            // Depth edge-stopping
+            let w_d = exp(-abs(cDepth - sDepth) * 2.0 / (cDepth + 0.01));
+            // Luminance edge-stopping: demod for bright surfaces, raw for dark
+            let sAlbLum = luminance_a(sAlbedo);
+            let sDemod = smoothstep(0.05, 0.2, sAlbLum);
+            let sLum = mix(luminance_a(sColor), luminance_a(sIrr), sDemod);
+            let w_l  = exp(-(sLum - cLum) * (sLum - cLum) / (lumSigma * lumSigma + 1e-6));
+
+            let w = w_s * w_n * w_d * w_l;
+            irrSum    += sIrr * w;
+            rawSum    += sColor * w;
+            weightSum += w;
         }
     }
 
-    // Variance-based luminance sigma: blur where noisy, preserve where clean.
-    // Need enough same-mesh neighbors for a stable estimate; fall back otherwise.
-    var lumSigma: f32;
-    if (nSamples >= 5.0) {
-        lumMean   /= nSamples;
-        lumSqMean /= nSamples;
-        let localVar = max(0.0, lumSqMean - lumMean * lumMean);
-        lumSigma = max(0.02, sqrt(localVar) * 2.0 / sqrt(cFC + 1.0));
-    } else {
-        // Too few neighbors (near seams) — use conservative frame-count sigma
-        lumSigma = max(0.02, 0.25 / sqrt(cFC + 1.0));
-    }
-
-    // Apply bilateral weights using cached data
-    var irrSum    = vec3<f32>(0.0);
-    var weightSum = 0.0;
-
-    for (var j = 0; j < 9; j++) {
-        if (!nValid[j]) { continue; }
-
-        // Normal edge-stopping
-        let w_n = pow(max(0.0, dot(cNorm, nNorm[j])), 64.0);
-        // Depth edge-stopping
-        let w_d = exp(-abs(cDepth - nDepth[j]) * 2.0 / (cDepth + 0.01));
-        // Luminance edge-stopping on irradiance
-        let sLum = luminance_a(nIrr[j]);
-        let w_l  = exp(-(sLum - cLum) * (sLum - cLum) / (lumSigma * lumSigma + 1e-6));
-
-        let w = w_n * w_d * w_l;
-        irrSum    += nIrr[j] * w;
-        weightSum += w;
-    }
-
-    // Filter irradiance, then remodulate with center pixel's albedo
+    // Blend: demod/remod path for bright surfaces, raw filter for dark surfaces
     let filteredIrr = select(cIrr, irrSum / weightSum, weightSum > 1e-6);
-    let result = filteredIrr * cAlbedo;
+    let filteredRaw = select(cColor, rawSum / weightSum, weightSum > 1e-6);
+    let demodResult = filteredIrr * cAlbedo;
+    let result = mix(filteredRaw, demodResult, demodBlend);
     textureStore(colorOut, pixel, vec4<f32>(result, cFC));
 }
 )";
@@ -3435,10 +3436,9 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         WgpuTexture* dst = &d.filteredA;
         WgpuTexture* aux = &d.filteredB;
 
-        // Always run 2 passes — the variance-based sigma naturally makes the filter
-        // transparent when converged, avoiding visible brightness steps from pass count changes.
-        // Early frames get extra passes for faster initial cleanup.
-        const int nPasses = (d.frameCount_ < 4.f) ? 4 : 2;
+        // 5×5 kernel covers more area per pass, so fewer passes needed.
+        // Variance-based sigma makes the filter transparent when converged.
+        const int nPasses = (d.frameCount_ < 4.f) ? 3 : 2;
 
         for (int pass = 0; pass < nPasses; ++pass) {
             AtrousGpuUniforms au{static_cast<uint32_t>(1u << pass), {0u, 0u, 0u}};
