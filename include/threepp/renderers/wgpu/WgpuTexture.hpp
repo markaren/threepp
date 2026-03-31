@@ -25,6 +25,7 @@ namespace threepp {
             RGBA32Float,
             RGBA16Float,   // 8 bytes/pixel — storage-writable + linearly filterable
             RG32Float,
+            R32Float,      // 4 bytes/pixel — single channel float
             RGBA8Unorm
         };
 

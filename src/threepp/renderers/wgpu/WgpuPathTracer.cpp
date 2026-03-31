@@ -65,9 +65,9 @@ static int triTexPages(int triCap) {
 }
 
 // ---------------------------------------------------------------------------
-// WGSL compute shader — path tracer + accumulator
+// WGSL compute shader — common code shared by raycaster and path tracer
 // ---------------------------------------------------------------------------
-constexpr const char* csWGSL = R"(
+constexpr const char* csCommonWGSL = R"(
 
 struct RtUniforms {
     camOri:     vec4<f32>,
@@ -87,7 +87,7 @@ struct RtUniforms {
     spp:          vec4<f32>,
     movedMeshBits: vec4<u32>,  // bit i = mesh i moved (words 0/1 cover meshes 0-63)
     envColor:      vec4<f32>,  // xyz = color/tint, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex
-    envIntensity:  vec4<f32>,  // x = intensity scale for env/sky light
+    envIntensity:  vec4<f32>,  // x = intensity scale, y = envWidth, z = envHeight, w = hasEnvCDF
     params:        vec4<f32>,  // x = maxBounces, y = ambientFactor, z = movedPixelFC, w = fireflyClamp
     emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive power
 };
@@ -152,28 +152,6 @@ fn rand(seed: ptr<function, u32>) -> f32 {
     return f32(*seed) / 4294967296.0;
 }
 
-// R2 quasi-random sequence (Martin Roberts) — low-discrepancy 2D points
-// Uses the plastic constant for optimal 2D stratification
-const R2_A1: f32 = 0.7548776662466927;  // 1/phi2
-const R2_A2: f32 = 0.5698402909980532;  // 1/phi2^2
-fn r2Seq(n: u32) -> vec2<f32> {
-    return fract(vec2<f32>(f32(n) * R2_A1, f32(n) * R2_A2));
-}
-
-fn cosineHemisphere(n: vec3<f32>, seed: ptr<function, u32>) -> vec3<f32> {
-    let u1  = rand(seed);
-    let u2  = rand(seed);
-    let r   = sqrt(u1);
-    let phi = 6.28318530718 * u2;
-    let lx  = r * cos(phi);
-    let ly  = r * sin(phi);
-    let lz  = sqrt(max(0.0, 1.0 - u1));
-    let nt  = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.y) < 0.99);
-    let rgt = normalize(cross(nt, n));
-    let up  = cross(n, rgt);
-    return normalize(lx * rgt + ly * up + lz * n);
-}
-
 const PI: f32 = 3.14159265358979;
 
 fn ggxD(NdotH: f32, alpha: f32) -> f32 {
@@ -189,64 +167,6 @@ fn ggxG1(NdotX: f32, alpha: f32) -> f32 {
 
 fn schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
     return F0 + (vec3<f32>(1.0) - F0) * pow(max(0.0, 1.0 - cosTheta), 5.0);
-}
-
-// Heitz 2018 VNDF (Visible Normal Distribution Function) sampling.
-// Samples half-vectors proportional to the visible microfacet area,
-// eliminating wasted below-horizon samples from plain D(h) sampling.
-fn sampleVNDF(wo: vec3<f32>, n: vec3<f32>, alpha: f32,
-              seed: ptr<function, u32>) -> vec3<f32> {
-    // Build local frame around n
-    let nt  = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.y) < 0.99);
-    let t1  = normalize(cross(nt, n));
-    let t2  = cross(n, t1);
-    // Transform wo to local frame (t1, t2, n)
-    let woLocal = vec3<f32>(dot(wo, t1), dot(wo, t2), dot(wo, n));
-    // Stretch to isotropic configuration (isotropic alpha)
-    let woStr = normalize(vec3<f32>(alpha * woLocal.x, alpha * woLocal.y, woLocal.z));
-    // Build orthonormal basis around stretched wo
-    let lensq = woStr.x * woStr.x + woStr.y * woStr.y;
-    let T1 = select(vec3<f32>(1.0, 0.0, 0.0),
-                    vec3<f32>(-woStr.y, woStr.x, 0.0) / sqrt(lensq),
-                    lensq > 1e-7);
-    let T2 = cross(woStr, T1);
-    // Sample projected disk
-    let u1  = rand(seed);
-    let u2  = rand(seed);
-    let r   = sqrt(u1);
-    let phi = 2.0 * PI * u2;
-    let t1s = r * cos(phi);
-    let s   = 0.5 * (1.0 + woStr.z);
-    let t2s = mix(sqrt(max(0.0, 1.0 - t1s * t1s)), r * sin(phi), s);
-    // Compute half-vector in stretched space, then unstretch
-    let nhLocal = t1s * T1 + t2s * T2
-                + sqrt(max(0.0, 1.0 - t1s * t1s - t2s * t2s)) * woStr;
-    let hLocal = normalize(vec3<f32>(alpha * nhLocal.x, alpha * nhLocal.y, max(1e-6, nhLocal.z)));
-    // Transform back to world space
-    let hm = hLocal.x * t1 + hLocal.y * t2 + hLocal.z * n;
-    return reflect(-wo, hm);
-}
-
-// PDF of the VNDF sampling strategy, expressed in reflected-direction (wi) space.
-fn vndfPdf(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>, alpha: f32) -> f32 {
-    let hm    = normalize(wo + wi);
-    let NdotH = max(0.0, dot(n, hm));
-    let NdotV = max(1e-6, dot(n, wo));
-    let D     = ggxD(NdotH, alpha);
-    let G1v   = ggxG1(NdotV, alpha);
-    // VNDF PDF_h = D * G1 * VdotH / NdotV; Jacobian to wi: / (4 * VdotH)
-    // VdotH cancels → PDF_wi = D * G1 / (4 * NdotV)
-    return D * G1v / (4.0 * NdotV);
-}
-
-// Combined BRDF PDF (mixed specular + diffuse lobes, matching the path tracer's sampling strategy).
-fn brdfPdf(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>, alpha: f32, metalness: f32) -> f32 {
-    let NdotL = dot(n, wi);
-    if (NdotL <= 0.0) { return 0.0; }
-    let p_spec  = mix(0.5, 0.98, metalness);
-    let specPdf = vndfPdf(wo, wi, n, alpha);
-    let diffPdf = NdotL / PI;
-    return p_spec * specPdf + (1.0 - p_spec) * diffPdf;
 }
 )"
 R"(
@@ -293,7 +213,8 @@ fn sampleAtlasAlpha(uv: vec2<f32>, texSlot: f32) -> f32 {
     let a11 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y1), 0).w;
     return mix(mix(a00, a10, wx), mix(a01, a11, wx), wy);
 }
-
+)"
+R"(
 // Returns the raw environment/background color with no intensity scaling.
 // Callers apply rt.envIntensity.x themselves when using this as a light source.
 fn sampleEnv(d: vec3<f32>) -> vec3<f32> {
@@ -494,35 +415,17 @@ fn makeRay(px: vec2<f32>, res: vec2<f32>) -> Ray {
                          + rt.camUp.xyz  * (ndc.y * rt.tanHalfFov.x));
     return ray;
 }
+)";
 
-fn hemisphereAmbient(n: vec3<f32>) -> vec3<f32> {
-    // Sample environment in 6 fixed hemisphere directions around the normal
-    // for cheap but decent ambient/indirect approximation.
-    let nt = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.y) < 0.99);
-    let T  = normalize(cross(n, nt));
-    let B  = cross(n, T);
-    // 6 directions: normal, 4 tilted 60° around normal, and one at 45°
-    var acc = sampleEnv(n);                                          // straight up
-    acc += sampleEnv(normalize(n + T * 0.866));                      // 60° tilt
-    acc += sampleEnv(normalize(n - T * 0.866));
-    acc += sampleEnv(normalize(n + B * 0.866));
-    acc += sampleEnv(normalize(n - B * 0.866));
-    acc += sampleEnv(normalize(n + T * 0.5 + B * 0.5));             // 45° diagonal
-    return acc / 6.0;
-}
+// ---------------------------------------------------------------------------
+// WGSL compute shader — raycaster-specific code
+// ---------------------------------------------------------------------------
+constexpr const char* csRaytraceWGSL = R"(
 
 fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
     var albedo = h.albedo;
     if (h.texSlot >= 0.0) { albedo = sampleAtlas(h.uv, h.texSlot); }
-    // Environment-based ambient: hemisphere average scaled by envIntensity
-    let ambient = hemisphereAmbient(h.normal) * rt.envIntensity.x;
-    let F0_a    = mix(vec3<f32>(0.04), albedo, h.metalness);
-    let NdotV_a = max(0.001, dot(h.normal, normalize(-rd)));
-    let F_a     = schlick(NdotV_a, F0_a);
-    // Diffuse ambient (non-metals) + specular ambient (Fresnel-weighted env reflection)
-    let diffAmb = albedo * (vec3<f32>(1.0) - F_a) * (1.0 - h.metalness) * ambient;
-    let specAmb = F_a * sampleEnv(reflect(rd, h.normal)) * rt.envIntensity.x;
-    var col = diffAmb * 0.3 + specAmb * 0.15;
+    var col = albedo * rt.params.y;
     let count = i32(rt.lightCount.x);
     let wo_s = normalize(-rd);
     for (var li = 0; li < 4; li++) {
@@ -651,6 +554,205 @@ fn raytrace(ray: Ray) -> vec3<f32> {
     return col;
 }
 
+@compute @workgroup_size(8, 8)
+fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let pixel = vec2<i32>(i32(gid.x), i32(gid.y));
+    let res   = rt.iRes.xy;
+    if (f32(pixel.x) >= res.x || f32(pixel.y) >= res.y) { return; }
+
+    let spp = i32(rt.spp.x);
+    let fp  = vec2<f32>(f32(pixel.x), f32(pixel.y));
+    var sample: vec3<f32>;
+    if (spp >= 4) {
+        let o0 = vec2<f32>( 0.125,  0.375);
+        let o1 = vec2<f32>(-0.375,  0.125);
+        let o2 = vec2<f32>( 0.375, -0.125);
+        let o3 = vec2<f32>(-0.125, -0.375);
+        sample = (raytrace(makeRay(fp + o0, res))
+                + raytrace(makeRay(fp + o1, res))
+                + raytrace(makeRay(fp + o2, res))
+                + raytrace(makeRay(fp + o3, res))) * 0.25;
+    } else if (spp >= 2) {
+        let o0 = vec2<f32>( 0.25,  0.25);
+        let o1 = vec2<f32>(-0.25, -0.25);
+        sample = (raytrace(makeRay(fp + o0, res))
+                + raytrace(makeRay(fp + o1, res))) * 0.5;
+    } else {
+        sample = raytrace(makeRay(fp + vec2<f32>(0.5, 0.5), res));
+    }
+    textureStore(accumWrite, pixel, vec4<f32>(sample, 1.0));
+    let centerHit = sceneHit(makeRay(fp + vec2<f32>(0.5, 0.5), res));
+    let tVal = select(centerHit.t, 0.0, centerHit.t >= 1e20);
+    textureStore(gBufWrite, pixel, vec4<f32>(vec3<f32>(0.0), tVal));
+}
+)";
+
+// ---------------------------------------------------------------------------
+// WGSL compute shader — path tracer-specific code
+// ---------------------------------------------------------------------------
+constexpr const char* csPathTraceWGSL = R"(
+
+@group(0) @binding(12) var envCdfTex:     texture_2d<f32>;  // conditional CDF (per-row), R32Float
+@group(0) @binding(13) var envMargTex:    texture_2d<f32>;  // marginal CDF (1-column), R32Float
+
+const HAS_ENV_CDF: bool = /*ENV_CDF_FLAG*/false;
+
+// R2 quasi-random sequence (Martin Roberts) — low-discrepancy 2D points
+// Uses the plastic constant for optimal 2D stratification
+const R2_A1: f32 = 0.7548776662466927;  // 1/phi2
+const R2_A2: f32 = 0.5698402909980532;  // 1/phi2^2
+fn r2Seq(n: u32) -> vec2<f32> {
+    return fract(vec2<f32>(f32(n) * R2_A1, f32(n) * R2_A2));
+}
+
+fn cosineHemisphere(n: vec3<f32>, seed: ptr<function, u32>) -> vec3<f32> {
+    let u1  = rand(seed);
+    let u2  = rand(seed);
+    let r   = sqrt(u1);
+    let phi = 6.28318530718 * u2;
+    let lx  = r * cos(phi);
+    let ly  = r * sin(phi);
+    let lz  = sqrt(max(0.0, 1.0 - u1));
+    let nt  = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.y) < 0.99);
+    let rgt = normalize(cross(nt, n));
+    let up  = cross(n, rgt);
+    return normalize(lx * rgt + ly * up + lz * n);
+}
+
+// Heitz 2018 VNDF (Visible Normal Distribution Function) sampling.
+// Samples half-vectors proportional to the visible microfacet area,
+// eliminating wasted below-horizon samples from plain D(h) sampling.
+fn sampleVNDF(wo: vec3<f32>, n: vec3<f32>, alpha: f32,
+              seed: ptr<function, u32>) -> vec3<f32> {
+    // Build local frame around n
+    let nt  = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.y) < 0.99);
+    let t1  = normalize(cross(nt, n));
+    let t2  = cross(n, t1);
+    // Transform wo to local frame (t1, t2, n)
+    let woLocal = vec3<f32>(dot(wo, t1), dot(wo, t2), dot(wo, n));
+    // Stretch to isotropic configuration (isotropic alpha)
+    let woStr = normalize(vec3<f32>(alpha * woLocal.x, alpha * woLocal.y, woLocal.z));
+    // Build orthonormal basis around stretched wo
+    let lensq = woStr.x * woStr.x + woStr.y * woStr.y;
+    let T1 = select(vec3<f32>(1.0, 0.0, 0.0),
+                    vec3<f32>(-woStr.y, woStr.x, 0.0) / sqrt(lensq),
+                    lensq > 1e-7);
+    let T2 = cross(woStr, T1);
+    // Sample projected disk
+    let u1  = rand(seed);
+    let u2  = rand(seed);
+    let r   = sqrt(u1);
+    let phi = 2.0 * PI * u2;
+    let t1s = r * cos(phi);
+    let s   = 0.5 * (1.0 + woStr.z);
+    let t2s = mix(sqrt(max(0.0, 1.0 - t1s * t1s)), r * sin(phi), s);
+    // Compute half-vector in stretched space, then unstretch
+    let nhLocal = t1s * T1 + t2s * T2
+                + sqrt(max(0.0, 1.0 - t1s * t1s - t2s * t2s)) * woStr;
+    let hLocal = normalize(vec3<f32>(alpha * nhLocal.x, alpha * nhLocal.y, max(1e-6, nhLocal.z)));
+    // Transform back to world space
+    let hm = hLocal.x * t1 + hLocal.y * t2 + hLocal.z * n;
+    return reflect(-wo, hm);
+}
+
+// PDF of the VNDF sampling strategy, expressed in reflected-direction (wi) space.
+fn vndfPdf(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>, alpha: f32) -> f32 {
+    let hm    = normalize(wo + wi);
+    let NdotH = max(0.0, dot(n, hm));
+    let NdotV = max(1e-6, dot(n, wo));
+    let D     = ggxD(NdotH, alpha);
+    let G1v   = ggxG1(NdotV, alpha);
+    // VNDF PDF_h = D * G1 * VdotH / NdotV; Jacobian to wi: / (4 * VdotH)
+    // VdotH cancels → PDF_wi = D * G1 / (4 * NdotV)
+    return D * G1v / (4.0 * NdotV);
+}
+
+// Combined BRDF PDF (mixed specular + diffuse lobes, matching the path tracer's sampling strategy).
+fn brdfPdf(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>, alpha: f32, metalness: f32) -> f32 {
+    let NdotL = dot(n, wi);
+    if (NdotL <= 0.0) { return 0.0; }
+    let p_spec  = mix(0.5, 0.98, metalness);
+    let specPdf = vndfPdf(wo, wi, n, alpha);
+    let diffPdf = NdotL / PI;
+    return p_spec * specPdf + (1.0 - p_spec) * diffPdf;
+}
+)"
+R"(
+// Binary search a 1D CDF stored in a texture row.
+// Returns the index where cdf[index] >= xi.
+fn cdfSearch(tex: texture_2d<f32>, row: i32, size: i32, xi: f32) -> i32 {
+    var lo = 0;
+    var hi = size - 1;
+    for (var iter = 0; iter < 16; iter++) {
+        if (lo >= hi) { break; }
+        let mid = (lo + hi) >> 1;
+        if (textureLoad(tex, vec2<i32>(mid, row), 0).x < xi) { lo = mid + 1; } else { hi = mid; }
+    }
+    return lo;
+}
+
+// Direction → equirectangular UV (matches sampleEnv mapping)
+fn dirToUV(d: vec3<f32>) -> vec2<f32> {
+    let nd = normalize(d);
+    let phi   = atan2(nd.z, nd.x);
+    let theta = asin(clamp(nd.y, -1.0, 1.0));
+    return vec2<f32>(0.5 + phi / (2.0 * PI), 0.5 - theta / PI);
+}
+
+// UV → direction (inverse of dirToUV)
+fn uvToDir(uv: vec2<f32>) -> vec3<f32> {
+    let phi   = (uv.x - 0.5) * 2.0 * PI;
+    let theta = (0.5 - uv.y) * PI;
+    let ct = cos(theta);
+    return vec3<f32>(ct * cos(phi), sin(theta), ct * sin(phi));
+}
+
+// Importance-sample the environment map using precomputed 2D CDF.
+// Returns: xyz = sampled direction, w = PDF (in solid angle measure).
+fn sampleEnvImportance(seed: ptr<function, u32>) -> vec4<f32> {
+    let envW = i32(rt.envIntensity.y);
+    let envH = i32(rt.envIntensity.z);
+
+    // 1) Sample marginal CDF to pick a row (v)
+    let xi_v = rand(seed);
+    let row  = cdfSearch(envMargTex, 0, envH, xi_v);
+
+    // 2) Sample conditional CDF at that row to pick a column (u)
+    let xi_u = rand(seed);
+    let col  = cdfSearch(envCdfTex, row, envW, xi_u);
+
+    // 3) Convert to UV with sub-pixel centering
+    let u = (f32(col) + 0.5) / f32(envW);
+    let v = (f32(row) + 0.5) / f32(envH);
+    let dir = uvToDir(vec2<f32>(u, v));
+
+    // 4) Compute PDF = luminance(pixel) / totalLuminance, converted to solid angle
+    let envCol = textureLoad(envTex, vec2<i32>(col, row), 0).xyz;
+    let lum = 0.2126 * envCol.r + 0.7152 * envCol.g + 0.0722 * envCol.b + 1e-10;
+
+    let theta = (0.5 - v) * PI;
+    let sinTheta = max(abs(sin(theta)), 1e-6);
+    let totalSum = rt.envIntensity.w;
+    let pdf_uv = lum / max(totalSum, 1e-10);
+    let pdf = pdf_uv * f32(envW * envH) / (2.0 * PI * PI * sinTheta);
+
+    return vec4<f32>(dir, pdf);
+}
+
+// PDF for a given direction under env importance sampling (for MIS).
+fn envImportancePdf(d: vec3<f32>) -> f32 {
+    let envW = i32(rt.envIntensity.y);
+    let envH = i32(rt.envIntensity.z);
+    let uv = dirToUV(d);
+    let envCol = sampleEnv(d);
+    let lum = 0.2126 * envCol.r + 0.7152 * envCol.g + 0.0722 * envCol.b + 1e-10;
+    let theta = (0.5 - uv.y) * PI;
+    let sinTheta = max(abs(sin(theta)), 1e-6);
+    let totalSum = rt.envIntensity.w;
+    let pdf_uv = lum / max(totalSum, 1e-10);
+    return pdf_uv * f32(envW * envH) / (2.0 * PI * PI * sinTheta);
+}
+
 fn isMeshMoved(idx: i32) -> bool {
     if (idx < 0 || idx >= 64) { return false; }
     let ui = u32(idx);
@@ -685,7 +787,14 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             // Primary ray miss = background pixel: show full color.
             // Indirect bounces: scale by envIntensity to control env light contribution.
             let envScale = select(rt.envIntensity.x, 1.0, i == 0);
-            radiance += throughput * sampleEnv(ray.dir) * envScale;
+            var envMisW = 1.0;
+            // MIS: BRDF sampling hit the env — weight against env importance PDF
+            if (HAS_ENV_CDF && i > 0 && !afterTransmission && prevAlpha > 0.01) {
+                let pdf_env  = envImportancePdf(ray.dir);
+                let pdf_brdf = brdfPdf(prevWo, normalize(ray.dir), prevNormal, prevAlpha, prevMetalness);
+                envMisW = pdf_brdf / max(pdf_brdf + pdf_env, 1e-8);
+            }
+            radiance += throughput * sampleEnv(ray.dir) * envScale * envMisW;
             break;
         }
         if (i == 0) {
@@ -708,12 +817,10 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                 // MIS: BRDF sampling hit emissive — weight by balance heuristic
                 let cosLight = abs(dot(h.geoNormal, -ray.dir));
                 if (cosLight > 1e-6) {
-                    // Power-weighted light PDF: (luminance * dist²) / (totalPower * cosLight)
                     let emLum = 0.2126 * h.emissive.r + 0.7152 * h.emissive.g + 0.0722 * h.emissive.b;
                     let pdf_light = (emLum * h.t * h.t) / (totalPower * cosLight);
                     let pdf_brdf  = brdfPdf(prevWo, normalize(ray.dir), prevNormal, prevAlpha, prevMetalness);
                     let w = pdf_brdf / max(pdf_brdf + pdf_light, 1e-8);
-                    // Guard against NaN/inf from degenerate PDFs
                     if (w == w && w < 1e10) {
                         radiance += throughput * h.emissive * w;
                     }
@@ -778,7 +885,6 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
 R"(
         // --- Emissive surface NEE (power-weighted CDF sampling) ---
         if (emTriCount > 0) {
-            // Power-weighted selection via binary search on cumulative power (.z)
             let totalPower = rt.emissiveInfo.y;
             let xi = rand(seed) * totalPower;
             var lo = 0;
@@ -787,17 +893,15 @@ R"(
                 let mid = (lo + hi) >> 1;
                 if (emissiveTris[mid].z < xi) { lo = mid + 1; } else { hi = mid; }
             }
-            let emInfo = emissiveTris[lo];  // x=triIndex, y=area, z=cumulativePower, w=power
+            let emInfo = emissiveTris[lo];
             let eTi   = i32(emInfo.x);
             let eArea = emInfo.y;
             let ePower = emInfo.w;
 
-            // Load emissive triangle vertices from triData (world space)
             let ev0 = textureLoad(triData, triCoord(eTi, 0), 0).xyz;
             let ev1 = textureLoad(triData, triCoord(eTi, 1), 0).xyz;
             let ev2 = textureLoad(triData, triCoord(eTi, 2), 0).xyz;
 
-            // Uniform sample point on triangle
             let su1 = sqrt(rand(seed));
             let u2  = rand(seed);
             let lightPoint = (1.0 - su1) * ev0 + su1 * (1.0 - u2) * ev1 + su1 * u2 * ev2;
@@ -807,29 +911,21 @@ R"(
             let ln      = toLight / dist;
             let NdotL   = dot(h.normal, ln);
 
-            // Light surface normal (geometric)
             let lightNormal = normalize(cross(ev1 - ev0, ev2 - ev0));
             let cosLight    = abs(dot(lightNormal, -ln));
 
             if (NdotL > 0.0 && cosLight > 1e-6) {
-                // Shadow ray to emissive surface
                 var sr: Ray;
                 sr.origin = h.point + h.normal * 1e-3;
                 sr.dir    = ln;
                 let sh    = sceneHit(sr);
 
-                // Check if we actually hit the emissive triangle (not occluded)
                 if (sh.t >= dist - 1e-2) {
-                    // Load emissive color from material
                     let eMatIdx = i32(textureLoad(triData, triCoord(eTi, 0), 0).w);
                     let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
 
-                    // PDF: (power_i / totalPower) for selection, then 1/area_i on triangle
-                    // Area PDF = power_i / (totalPower * area_i)
-                    // Convert to solid angle: pdf = areaPdf * dist² / cosLight
                     let pdf = (ePower * dist * dist) / (totalPower * eArea * cosLight);
 
-                    // Evaluate BRDF at hit point for light direction
                     let hv    = normalize(wo + ln);
                     let NdotH = max(0.0, dot(h.normal, hv));
                     let NdotV = max(0.001, dot(h.normal, wo));
@@ -841,7 +937,6 @@ R"(
                     let f_spec = D * F * G / max(4.0 * NdotV * NdotL, 1e-6);
                     let f_diff = (vec3<f32>(1.0) - F) * albedo / PI;
 
-                    // MIS balance heuristic: weight light sample against BRDF sample
                     let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
                     let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);
                     radiance += throughput * (f_diff + f_spec) * NdotL * emColor * w_light / pdf;
@@ -849,7 +944,40 @@ R"(
             }
         }
 
-        radiance += throughput * albedo * rt.params.y;
+        // --- Environment map NEE (importance-sampled) ---
+        if (HAS_ENV_CDF && !afterTransmission && h.shininess > 0.01 && i < 2) {
+            let envSample = sampleEnvImportance(seed);
+            let envDir    = envSample.xyz;
+            let envPdf    = envSample.w;
+            let envNdotL  = dot(h.normal, envDir);
+            if (envNdotL > 0.0 && envPdf > 1e-8) {
+                var sr: Ray;
+                sr.origin = h.point + h.normal * 1e-3;
+                sr.dir    = envDir;
+                let sh = sceneHit(sr);
+                if (sh.t >= 1e29) {
+                    let hv    = normalize(wo + envDir);
+                    let NdotH = max(0.0, dot(h.normal, hv));
+                    let NdotV = max(0.001, dot(h.normal, wo));
+                    let VdotH = max(0.0, dot(wo, hv));
+                    let F0    = mix(vec3<f32>(0.04), albedo, h.metalness);
+                    let D     = ggxD(NdotH, h.shininess);
+                    let F     = schlick(VdotH, F0);
+                    let G     = ggxG1(NdotV, h.shininess) * ggxG1(max(0.001, envNdotL), h.shininess);
+                    let f_spec = D * F * G / max(4.0 * NdotV * envNdotL, 1e-6);
+                    let f_diff = (vec3<f32>(1.0) - F) * albedo * (1.0 - h.metalness) / PI;
+                    let envCol = sampleEnv(envDir) * rt.envIntensity.x;
+                    let pdf_brdf_env = brdfPdf(wo, envDir, h.normal, h.shininess, h.metalness);
+                    let w_env = envPdf / max(envPdf + pdf_brdf_env, 1e-8);
+                    radiance += throughput * (f_diff + f_spec) * envNdotL * envCol * w_env / envPdf;
+                }
+            }
+        }
+
+        // Flat ambient fallback — skip for transmissive surfaces and when env CDF is active
+        if (h.transmission < 0.5 && !HAS_ENV_CDF) {
+            radiance += throughput * albedo * rt.params.y;
+        }
 
         if (i > 0) {
             let p = max(max(throughput.r, throughput.g), throughput.b);
@@ -862,17 +990,14 @@ R"(
             let entering = h.frontFace > 0.5;
             let eta = select(h.ior, 1.0 / h.ior, entering);
 
-            // Perturb normal by roughness (frosted glass)
             var tNorm = h.normal;
             var usedMicrofacet = false;
             if (h.shininess > 1e-3) {
                 let wo_t = normalize(-ray.dir);
                 let hm = sampleVNDF(wo_t, h.normal, h.shininess, seed);
-                // Only use microfacet normal if it's in the same hemisphere
                 if (dot(hm, h.normal) > 0.0) { tNorm = hm; usedMicrofacet = true; }
             }
 
-            // Dielectric Fresnel (Schlick approximation)
             let cosI    = abs(dot(normalize(ray.dir), tNorm));
             let r0      = pow((1.0 - h.ior) / (1.0 + h.ior), 2.0);
             let fresnel = r0 + (1.0 - r0) * pow(1.0 - cosI, 5.0);
@@ -880,14 +1005,11 @@ R"(
             var wi_t: vec3<f32>;
             var didRefract = false;
             if (rand(seed) < fresnel) {
-                // Fresnel reflection
                 wi_t = reflect(ray.dir, tNorm);
                 ray.origin = h.point + h.normal * 1e-3;
             } else {
-                // Snell's law refraction
                 let refracted = refract(normalize(ray.dir), tNorm, eta);
                 if (length(refracted) < 0.001) {
-                    // Total internal reflection
                     wi_t = reflect(ray.dir, tNorm);
                     ray.origin = h.point + h.normal * 1e-3;
                 } else {
@@ -896,19 +1018,14 @@ R"(
                     didRefract = true;
                 }
             }
-            // G1 masking-shadowing for microfacet transmission (energy conservation)
-            // VNDF importance sampling cancels G1(wo) from the PDF, leaving G1(wi).
             var microWeight = 1.0;
             if (usedMicrofacet) {
                 let cosOut = abs(dot(wi_t, h.normal));
                 microWeight = ggxG1(cosOut, h.shininess);
             }
-            // eta² Jacobian: solid angle compression when refracting between media
             let glassTint = mix(albedo, vec3<f32>(1.0), h.transmission) * microWeight;
             var volAtten = vec3<f32>(1.0);
-            // Beer's law volume attenuation: colored absorption over distance
             if (didRefract && h.attenuationDist > 0.0 && !entering) {
-                // We're exiting the medium — apply attenuation based on path length
                 let absorbCoeff = -log(max(h.attenuationColor, vec3<f32>(1e-6))) / h.attenuationDist;
                 volAtten = exp(-absorbCoeff * h.t);
             }
@@ -920,8 +1037,6 @@ R"(
 
         let F0_b = mix(vec3<f32>(0.04), albedo, h.metalness);
         var wi_b: vec3<f32>;
-        // Importance-sample the lobe type by metalness:
-        // metals are pure specular (p_spec→1), dielectrics split 50/50.
         let p_spec = mix(0.5, 0.98, h.metalness);
         if (rand(seed) < p_spec) {
             wi_b = sampleVNDF(wo, h.normal, h.shininess, seed);
@@ -935,10 +1050,8 @@ R"(
             wi_b = cosineHemisphere(h.normal, seed);
             let cos_b = dot(h.normal, wi_b);
             if (cos_b <= 0.0) { break; }
-            // Diffuse contribution is zero for pure metals, scales with (1-metalness)
             throughput *= albedo * (1.0 - h.metalness) / (1.0 - p_spec);
         }
-        // Save prev-bounce properties for MIS on next iteration
         prevWo        = wo;
         prevNormal    = h.normal;
         prevAlpha     = h.shininess;
@@ -963,88 +1076,68 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (f32(pixel.x) >= res.x || f32(pixel.y) >= res.y) { return; }
 
     let fc   = u32(rt.frameCount.x);
-    let isPT = rt.mode.x > 0.5;
+    // R2 quasi-random sub-pixel jitter (low-discrepancy stratification)
+    let r2  = r2Seq(fc);
+    // Per-pixel Cranley-Patterson rotation: offset R2 by a spatial hash to decorrelate pixels
+    let pixHash = pcg(gid.x + gid.y * 65537u);
+    let jx  = fract(r2.x + f32(pixHash) / 4294967296.0) - 0.5;
+    let jy  = fract(r2.y + f32(pcg(pixHash)) / 4294967296.0) - 0.5;
+    var seed = pcg(pcg(gid.x + gid.y * 65537u) + fc * 12979u);
+    let ray = makeRay(vec2<f32>(f32(pixel.x) + jx, f32(pixel.y) + jy), res);
+    var primaryMeshIdx: u32;
+    var primaryNormal:  vec3<f32>;
+    var primaryDepth:   f32;
+    var touchedMoved:   bool;
+    var sample  = pathTrace(ray, &seed, &primaryMeshIdx, &primaryNormal, &primaryDepth, &touchedMoved);
 
-    var sample: vec3<f32>;
+    let prev     = textureLoad(accumRead, pixel, 0);
+    let old      = prev.xyz;
+    var pixelFC  = prev.w;
 
-    if (!isPT) {
-        let spp = i32(rt.spp.x);
-        let fp  = vec2<f32>(f32(pixel.x), f32(pixel.y));
-        if (spp >= 4) {
-            let o0 = vec2<f32>( 0.125,  0.375);
-            let o1 = vec2<f32>(-0.375,  0.125);
-            let o2 = vec2<f32>( 0.375, -0.125);
-            let o3 = vec2<f32>(-0.125, -0.375);
-            sample = (raytrace(makeRay(fp + o0, res))
-                    + raytrace(makeRay(fp + o1, res))
-                    + raytrace(makeRay(fp + o2, res))
-                    + raytrace(makeRay(fp + o3, res))) * 0.25;
-        } else if (spp >= 2) {
-            let o0 = vec2<f32>( 0.25,  0.25);
-            let o1 = vec2<f32>(-0.25, -0.25);
-            sample = (raytrace(makeRay(fp + o0, res))
-                    + raytrace(makeRay(fp + o1, res))) * 0.5;
-        } else {
-            sample = raytrace(makeRay(fp + vec2<f32>(0.5, 0.5), res));
-        }
-        textureStore(accumWrite, pixel, vec4<f32>(sample, 1.0));
-        // Write primary-hit depth to gBuffer for raster overlay occlusion.
-        // Use 0.0 as the miss sentinel (same convention as path-tracer mode);
-        // sceneHit() returns t=1e30 for misses which overflows float16 to +inf.
-        let centerHit = sceneHit(makeRay(fp + vec2<f32>(0.5, 0.5), res));
-        let tVal = select(centerHit.t, 0.0, centerHit.t >= 1e20);
-        textureStore(gBufWrite, pixel, vec4<f32>(vec3<f32>(0.0), tVal));
-    } else {
-        // R2 quasi-random sub-pixel jitter (low-discrepancy stratification)
-        let r2  = r2Seq(fc);
-        // Per-pixel Cranley-Patterson rotation: offset R2 by a spatial hash to decorrelate pixels
-        let pixHash = pcg(gid.x + gid.y * 65537u);
-        let jx  = fract(r2.x + f32(pixHash) / 4294967296.0) - 0.5;
-        let jy  = fract(r2.y + f32(pcg(pixHash)) / 4294967296.0) - 0.5;
-        var seed = pcg(gid.x * 1973u + 1u) ^ pcg(gid.y * 9277u + 1u) ^ pcg(fc * 26699u + 1u);
-        let ray = makeRay(vec2<f32>(f32(pixel.x) + jx, f32(pixel.y) + jy), res);
-        var primaryMeshIdx: u32;
-        var primaryNormal:  vec3<f32>;
-        var primaryDepth:   f32;
-        var touchedMoved:   bool;
-        sample  = pathTrace(ray, &seed, &primaryMeshIdx, &primaryNormal, &primaryDepth, &touchedMoved);
-
-        let prev     = textureLoad(accumRead, pixel, 0);
-        let old      = prev.xyz;
-        var pixelFC  = prev.w;
-
-        // Only reset pixels whose *current* primary ray hits a moved mesh.
-        var meshMoved = false;
-        if (primaryMeshIdx < 64u) {
-            meshMoved = isMeshMoved(i32(primaryMeshIdx));
-        }
-        if (meshMoved) { pixelFC = 0.0; }
-        // Shadow/bounce rays hit a moved mesh — partially reset so shadows refresh.
-        if (touchedMoved && !meshMoved) { pixelFC = min(pixelFC, rt.params.z); }
-        if (fc == 0u) { pixelFC = 0.0; }
-
-        // NaN guard: reject corrupted samples to prevent permanent accumulation damage
-        // (NaN * 0 = NaN, so even full resets can't recover once NaN enters the buffer)
-        let sampleClean = select(vec3<f32>(0.0), sample, sample.x == sample.x);
-        let oldClean    = select(vec3<f32>(0.0), old,    old.x == old.x);
-
-        // Stop accumulating once float16 precision is exhausted (~1024 frames)
-        if (pixelFC < 1024.0) {
-            let alpha   = 1.0 / (pixelFC + 1.0);
-            var blended = oldClean * (1.0 - alpha) + sampleClean * alpha;
-            let clampMax = rt.params.w;
-            if (clampMax > 0.0) {
-                blended = min(blended, vec3<f32>(clampMax));
-            }
-            textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
-        } else {
-            textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
-        }
-        textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), 0.0, 0.0, 0.0));
-        textureStore(gBufWrite,    pixel, vec4<f32>(primaryNormal, primaryDepth));
+    // Only reset pixels whose *current* primary ray hits a moved mesh.
+    var meshMoved = false;
+    if (primaryMeshIdx < 64u) {
+        meshMoved = isMeshMoved(i32(primaryMeshIdx));
     }
+    if (meshMoved) { pixelFC = 0.0; }
+    // Shadow/bounce rays hit a moved mesh — partially reset so shadows refresh.
+    if (touchedMoved && !meshMoved) { pixelFC = min(pixelFC, rt.params.z); }
+    if (fc == 0u) { pixelFC = 0.0; }
+
+    // NaN guard: reject corrupted samples to prevent permanent accumulation damage
+    let sampleClean = select(vec3<f32>(0.0), sample, sample.x == sample.x);
+    let oldClean    = select(vec3<f32>(0.0), old,    old.x == old.x);
+
+    // Stop accumulating once float16 precision is exhausted (~1024 frames)
+    if (pixelFC < 1024.0) {
+        let alpha   = 1.0 / (pixelFC + 1.0);
+        var blended = oldClean * (1.0 - alpha) + sampleClean * alpha;
+        let clampMax = rt.params.w;
+        if (clampMax > 0.0) {
+            blended = min(blended, vec3<f32>(clampMax));
+        }
+        textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
+    } else {
+        textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
+    }
+    textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), 0.0, 0.0, 0.0));
+    textureStore(gBufWrite,    pixel, vec4<f32>(primaryNormal, primaryDepth));
 }
 )";
+
+// Build a raycaster or path tracer shader by concatenating common + specific code.
+static std::string buildRtShader(bool pathTrace, bool hasEnvCdf) {
+    std::string src = std::string(csCommonWGSL) + "\n" +
+                      (pathTrace ? csPathTraceWGSL : csRaytraceWGSL);
+    if (pathTrace) {
+        const std::string marker = "/*ENV_CDF_FLAG*/false";
+        auto pos = src.find(marker);
+        if (pos != std::string::npos) {
+            src.replace(pos, marker.size(), hasEnvCdf ? "true" : "false");
+        }
+    }
+    return src;
+}
 
 // ---------------------------------------------------------------------------
 // WGSL vertex-transform compute shader
@@ -1464,7 +1557,7 @@ struct alignas(16) RtGpuUniforms {
     float    spp[4];
     uint32_t movedMeshBits[4];  // bit i = mesh i moved; words 0/1 = meshes 0–63
     float    envColor[4];       // xyz = color, w = mode (0=sky, 1=solid color, 2=equirect tex)
-    float    envIntensity[4];   // x = env/sky light intensity scale
+    float    envIntensity[4];   // x = intensity, y = envWidth, z = envHeight, w = totalLumSum (0 = no CDF)
     float    params[4];        // x = maxBounces, y = ambientFactor, z = movedPixelFC, w = fireflyClamp
     float    emissiveInfo[4]; // x = emissive tri count, y = total emissive area
 };
@@ -1514,6 +1607,67 @@ struct BvhNode {
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
+
+/// Build 2D CDF for importance-sampling an equirectangular environment map.
+/// Returns {conditionalCDF (width*height floats), marginalCDF (height floats), totalLuminanceSum}.
+/// Both CDFs are normalized to [0,1]. The sin(theta) Jacobian is baked in so that
+/// pixels near the equator (more solid angle) are sampled proportionally more.
+struct EnvCdfResult {
+    std::vector<float> conditional; // width × height
+    std::vector<float> marginal;    // height
+    float totalSum = 0.f;
+    int width = 0, height = 0;
+};
+
+template<typename T>
+static EnvCdfResult buildEnvCdf(const std::vector<T>& pixels, int w, int h) {
+    EnvCdfResult r;
+    r.width = w;
+    r.height = h;
+    r.conditional.resize(static_cast<size_t>(w) * h);
+    r.marginal.resize(h);
+
+    // Row luminance sums (weighted by sin(theta) for solid angle)
+    for (int y = 0; y < h; ++y) {
+        const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(h);
+        const float theta = (0.5f - v) * 3.14159265359f;
+        const float sinTheta = std::max(std::abs(std::sin(theta)), 1e-6f);
+
+        float rowSum = 0.f;
+        for (int x = 0; x < w; ++x) {
+            const size_t idx = (static_cast<size_t>(y) * w + x) * 4;
+            float rf, gf, bf;
+            if constexpr (std::is_same_v<T, float>) {
+                rf = pixels[idx]; gf = pixels[idx + 1]; bf = pixels[idx + 2];
+            } else {
+                rf = pixels[idx] / 255.f; gf = pixels[idx + 1] / 255.f; bf = pixels[idx + 2] / 255.f;
+            }
+            const float lum = (0.2126f * rf + 0.7152f * gf + 0.0722f * bf) * sinTheta;
+            rowSum += lum;
+            r.conditional[static_cast<size_t>(y) * w + x] = rowSum;
+        }
+        // Normalize conditional CDF for this row
+        if (rowSum > 1e-10f) {
+            for (int x = 0; x < w; ++x)
+                r.conditional[static_cast<size_t>(y) * w + x] /= rowSum;
+        } else {
+            // Uniform fallback for black rows
+            for (int x = 0; x < w; ++x)
+                r.conditional[static_cast<size_t>(y) * w + x] = static_cast<float>(x + 1) / static_cast<float>(w);
+        }
+        r.totalSum += rowSum;
+        r.marginal[y] = r.totalSum;
+    }
+    // Normalize marginal CDF
+    if (r.totalSum > 1e-10f) {
+        for (int y = 0; y < h; ++y)
+            r.marginal[y] /= r.totalSum;
+    } else {
+        for (int y = 0; y < h; ++y)
+            r.marginal[y] = static_cast<float>(y + 1) / static_cast<float>(h);
+    }
+    return r;
+}
 
 /// Build texture atlas sized to actual slot usage (not MAX_TEX_SLOTS).
 /// Returns {pixel data, rows used (>= 1)}.
@@ -2076,6 +2230,9 @@ struct WgpuPathTracer::Impl {
     WgpuTexture* readHitMesh;
     WgpuTexture* writeHitMesh;
     WgpuTexture envTexGpu;   // equirectangular env map (1x1 placeholder when unused)
+    WgpuTexture envCdfTex;  // conditional CDF (width × height), R32Float
+    WgpuTexture envMargTex; // marginal CDF (height × 1), R32Float
+    float       envLumSum_ = 0.f;  // total luminance sum for PDF normalization
     Texture*    prevEnvTex_ = nullptr;
 
     // G-buffer ping-pong
@@ -2146,6 +2303,7 @@ struct WgpuPathTracer::Impl {
     WgpuComputePipeline vtPipeline;
     WgpuComputePipeline refitPipeline;
     WgpuComputePipeline rtPipeline;
+    WgpuComputePipeline rtRaycastPipeline;
 
     // Depth-fill pipeline — writes NDC depth from gBuffer primary-ray t values
     WGPURenderPipeline      depthFillPipeline_ = nullptr;
@@ -2202,6 +2360,11 @@ struct WgpuPathTracer::Impl {
     std::future<AsyncBuildResult> asyncBuild_;
     bool buildPending_ = false;
 
+    // Async env CDF build
+    std::future<EnvCdfResult> asyncEnvCdf_;
+    bool envCdfPending_ = false;
+    bool shaderHasEnvCdf_ = false;  // tracks which shader variant is active
+
     // Frame state
     std::unordered_map<Texture*, int> texSlotMap;
     std::vector<Mesh*> prevMeshes;
@@ -2244,6 +2407,10 @@ struct WgpuPathTracer::Impl {
           readHitMesh(&hitMeshA), writeHitMesh(&hitMeshB),
           envTexGpu(r, 1u, 1u, WgpuTexture::Format::RGBA8Unorm,
                     WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
+          envCdfTex(r, 1u, 1u, WgpuTexture::Format::R32Float,
+                    WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
+          envMargTex(r, 1u, 1u, WgpuTexture::Format::R32Float,
+                     WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           // G-buffer ping-pong
           gBufA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                 WgpuTexture::Format::RGBA16Float),
@@ -2286,7 +2453,8 @@ struct WgpuPathTracer::Impl {
           // Compute pipelines
           vtPipeline(r, vtWGSL, "vt_main"),
           refitPipeline(r, refitWGSL, "bvh_refit"),
-          rtPipeline(r, csWGSL, "rt_main"),
+          rtPipeline(r, buildRtShader(true, false), "rt_main"),
+          rtRaycastPipeline(r, buildRtShader(false, false), "rt_main"),
           // Display pipeline
           displayCam(-1.f, 1.f, 1.f, -1.f, 0.1f, 10.f),
           // CPU buffers — empty; sized dynamically by async build
@@ -2313,6 +2481,17 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setTexture(9, envTexGpu);
         rtPipeline.setStorageTexture(10, *gBufCur);
         rtPipeline.setStorageBufferRead(11, emissiveTriBuf);
+        rtPipeline.setTexture(12, envCdfTex);
+        rtPipeline.setTexture(13, envMargTex);
+
+        rtRaycastPipeline.setUniformBuffer(0, rtUniformBuf);
+        rtRaycastPipeline.setStorageBufferRead(3, bvhNodeBuf);
+        rtRaycastPipeline.setTexture(4, matTex);
+        rtRaycastPipeline.setTexture(5, triTex);
+        rtRaycastPipeline.setTexture(6, texAtlasTex);
+        rtRaycastPipeline.setTexture(9, envTexGpu);
+        rtRaycastPipeline.setStorageTexture(10, *gBufCur);
+        rtRaycastPipeline.setStorageBufferRead(11, emissiveTriBuf);
 
         // TAA pipeline: uniform buffer is static binding
         taaPipeline.setUniformBuffer(0, taaUniBuf);
@@ -2457,6 +2636,7 @@ struct WgpuPathTracer::Impl {
         hitMeshB.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
 
         rtPipeline.setStorageTexture(10, *gBufCur);
+        rtRaycastPipeline.setStorageTexture(10, *gBufCur);
 
         frameCount_ = 0.f;
     }
@@ -2639,6 +2819,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.refitPipeline.setStorageBufferRead(3, d.leafIndexBuf);
             d.rtPipeline.setTexture(5, d.triTex);
             d.rtPipeline.setStorageBufferRead(11, d.emissiveTriBuf);
+            d.rtRaycastPipeline.setTexture(5, d.triTex);
+            d.rtRaycastPipeline.setStorageBufferRead(11, d.emissiveTriBuf);
         }
         if (r.bvhCapacity > d.bvhCapacity_) {
             d.bvhCapacity_ = r.bvhCapacity;
@@ -2650,6 +2832,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.refitPipeline.setStorageBuffer(1, d.bvhNodeBuf);
             d.refitPipeline.setStorageBuffer(2, d.bvhCounterBuf);
             d.rtPipeline.setStorageBufferRead(3, d.bvhNodeBuf);
+            d.rtRaycastPipeline.setStorageBufferRead(3, d.bvhNodeBuf);
         }
         if (r.matCapacity > d.matCapacity_) {
             d.matCapacity_ = r.matCapacity;
@@ -2657,6 +2840,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                                     WgpuTexture::Format::RGBA32Float,
                                     WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
             d.rtPipeline.setTexture(4, d.matTex);
+            d.rtRaycastPipeline.setTexture(4, d.matTex);
         }
         if (r.meshCapacity > d.meshCapacity_) {
             d.meshCapacity_ = r.meshCapacity;
@@ -2673,6 +2857,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                     WgpuTexture::Format::RGBA8Unorm,
                     WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
             d.rtPipeline.setTexture(6, d.texAtlasTex);
+            d.rtRaycastPipeline.setTexture(6, d.texAtlasTex);
         }
         d.texAtlasTex.write(r.atlasData.data(), r.atlasData.size());
 
@@ -2806,6 +2991,26 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                         d.envTexGpu.write(src.data(), src.size());
                     }
                     d.rtPipeline.setTexture(9, d.envTexGpu);
+                    d.rtRaycastPipeline.setTexture(9, d.envTexGpu);
+
+                    // Kick off CDF build on background thread.
+                    // envTex (Texture*) is kept alive by the scene, so we can reference its data directly.
+                    int w = img.width, h = img.height;
+                    if (isHdr) {
+                        const float* ptr = img.data<float>().data();
+                        d.asyncEnvCdf_ = std::async(std::launch::async, [ptr, w, h]() {
+                            // Wrap raw pointer in a lightweight span-like view
+                            std::vector<float> tmp(ptr, ptr + static_cast<size_t>(w) * h * 4);
+                            return buildEnvCdf(tmp, w, h);
+                        });
+                    } else {
+                        const unsigned char* ptr = img.data<unsigned char>().data();
+                        d.asyncEnvCdf_ = std::async(std::launch::async, [ptr, w, h]() {
+                            std::vector<unsigned char> tmp(ptr, ptr + static_cast<size_t>(w) * h * 4);
+                            return buildEnvCdf(tmp, w, h);
+                        });
+                    }
+                    d.envCdfPending_ = true;
                 }
                 d.prevEnvTex_ = envTex;
             }
@@ -2815,9 +3020,51 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             u.envColor[0] = c.r; u.envColor[1] = c.g; u.envColor[2] = c.b;
             u.envColor[3] = 1.f;
             d.prevEnvTex_ = nullptr;
+            d.envLumSum_ = 0.f;  // no env map = no importance sampling
+            if (d.shaderHasEnvCdf_) {
+                d.rtPipeline.replaceShader(buildRtShader(true, false));
+                d.shaderHasEnvCdf_ = false;
+            }
         }
     }
+    // Check if async CDF build finished — upload to GPU
+    if (d.envCdfPending_ && d.asyncEnvCdf_.valid() &&
+        d.asyncEnvCdf_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        auto cdf = d.asyncEnvCdf_.get();
+        d.envCdfPending_ = false;
+        d.envLumSum_ = cdf.totalSum;
+        d.envCdfTex = WgpuTexture(d.renderer,
+                                  static_cast<uint32_t>(cdf.width),
+                                  static_cast<uint32_t>(cdf.height),
+                                  WgpuTexture::Format::R32Float,
+                                  WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
+        d.envCdfTex.write(cdf.conditional.data(), cdf.conditional.size() * sizeof(float));
+        d.rtPipeline.setTexture(12, d.envCdfTex);
+        d.envMargTex = WgpuTexture(d.renderer,
+                                   static_cast<uint32_t>(cdf.height), 1u,
+                                   WgpuTexture::Format::R32Float,
+                                   WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
+        d.envMargTex.write(cdf.marginal.data(), cdf.marginal.size() * sizeof(float));
+        d.rtPipeline.setTexture(13, d.envMargTex);
+        // Swap to env CDF shader variant
+        if (!d.shaderHasEnvCdf_) {
+            d.rtPipeline.replaceShader(buildRtShader(true, true));
+            d.shaderHasEnvCdf_ = true;
+        }
+    }
+
     u.envIntensity[0] = d.envIntensity_;
+    // Pass envmap dimensions and total luminance sum for importance sampling
+    if (d.envLumSum_ > 0.f && d.prevEnvTex_) {
+        auto& eImg = d.prevEnvTex_->image();
+        u.envIntensity[1] = static_cast<float>(eImg.width);
+        u.envIntensity[2] = static_cast<float>(eImg.height);
+        u.envIntensity[3] = d.envLumSum_;
+    } else {
+        u.envIntensity[1] = 0.f;
+        u.envIntensity[2] = 0.f;
+        u.envIntensity[3] = 0.f;
+    }
     u.params[0] = static_cast<float>(d.maxBounces_);
     u.params[1] = d.ambientFactor_;
     u.params[2] = d.movedPixelFC_;
@@ -2865,10 +3112,12 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     d.rtUniformBuf.write(&u, sizeof(u));
 
     // Set per-frame texture bindings (accum + hitMesh ping-pong)
-    d.rtPipeline.setTexture(1, *d.readAccum);
-    d.rtPipeline.setStorageTexture(2, *d.writeAccum);
-    d.rtPipeline.setTexture(7, *d.readHitMesh);
-    d.rtPipeline.setStorageTexture(8, *d.writeHitMesh);
+    const bool isPT = d.mode_ == Mode::PathTracer;
+    auto& activePipeline = isPT ? d.rtPipeline : d.rtRaycastPipeline;
+    activePipeline.setTexture(1, *d.readAccum);
+    activePipeline.setStorageTexture(2, *d.writeAccum);
+    activePipeline.setTexture(7, *d.readHitMesh);
+    activePipeline.setStorageTexture(8, *d.writeHitMesh);
 
     // Batched GPU dispatch — single command encoder + compute pass
     {
@@ -2890,7 +3139,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
         const uint32_t gx = (static_cast<uint32_t>(d.width_) + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
-        d.rtPipeline.encode(pass, gx, gy);
+        activePipeline.encode(pass, gx, gy);
 
         wgpuComputePassEncoderEnd(pass);
         wgpuComputePassEncoderRelease(pass);
@@ -2911,6 +3160,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // Swap gBuf for next frame
     std::swap(d.gBufCur, d.gBufPrev);
     d.rtPipeline.setStorageTexture(10, *d.gBufCur);
+    d.rtRaycastPipeline.setStorageTexture(10, *d.gBufCur);
 
     // TAA + spatial denoiser (path tracer mode only)
     WgpuTexture* displayTex = d.readAccum;

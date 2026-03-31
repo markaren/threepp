@@ -18,6 +18,7 @@ namespace {
             case WgpuTexture::Format::RGBA32Float: return WGPUTextureFormat_RGBA32Float;
             case WgpuTexture::Format::RGBA16Float: return WGPUTextureFormat_RGBA16Float;
             case WgpuTexture::Format::RG32Float:   return WGPUTextureFormat_RG32Float;
+            case WgpuTexture::Format::R32Float:    return WGPUTextureFormat_R32Float;
             case WgpuTexture::Format::RGBA8Unorm:  return WGPUTextureFormat_RGBA8Unorm;
         }
         return WGPUTextureFormat_RGBA8Unorm;
@@ -232,6 +233,22 @@ void WgpuComputePipeline::setStorageBufferRead(uint32_t binding, WgpuBuffer& buf
     info.buffer = buffer.buffer();
     info.bufferSize = buffer.size();
     impl_->bindings[binding] = info;
+}
+
+void WgpuComputePipeline::replaceShader(const std::string& wgslSource) {
+    // Release old shader module
+    if (impl_->shaderModule) wgpuShaderModuleRelease(impl_->shaderModule);
+
+    WGPUShaderSourceWGSL wgslSrc{};
+    wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
+    wgslSrc.chain.next = nullptr;
+    wgslSrc.code = {.data = wgslSource.c_str(), .length = static_cast<size_t>(wgslSource.size())};
+
+    WGPUShaderModuleDescriptor shaderDesc{};
+    shaderDesc.nextInChain = &wgslSrc.chain;
+    shaderDesc.label = WGPUStringView{"compute_shader", WGPU_STRLEN};
+    impl_->shaderModule = wgpuDeviceCreateShaderModule(impl_->device, &shaderDesc);
+    impl_->pipelineBuilt = false;
 }
 
 void WgpuComputePipeline::encode(WGPUComputePassEncoder pass, uint32_t x, uint32_t y, uint32_t z) {

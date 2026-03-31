@@ -64,6 +64,9 @@ namespace threepp {
         /// Encode a dispatch into an existing compute pass (no submission).
         void encode(WGPUComputePassEncoder pass, uint32_t x, uint32_t y = 1, uint32_t z = 1);
 
+        /// Replace the shader module with new WGSL source (forces pipeline rebuild on next dispatch).
+        void replaceShader(const std::string& wgslSource);
+
         /// Create an encoder, dispatch, and submit (convenience wrapper).
         void dispatch(uint32_t x, uint32_t y = 1, uint32_t z = 1);
 

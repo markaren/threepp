@@ -16,6 +16,7 @@ namespace {
             case WgpuTexture::Format::RGBA32Float: return WGPUTextureFormat_RGBA32Float;
             case WgpuTexture::Format::RGBA16Float: return WGPUTextureFormat_RGBA16Float;
             case WgpuTexture::Format::RG32Float:   return WGPUTextureFormat_RG32Float;
+            case WgpuTexture::Format::R32Float:    return WGPUTextureFormat_R32Float;
             case WgpuTexture::Format::RGBA8Unorm:  return WGPUTextureFormat_RGBA8Unorm;
         }
         return WGPUTextureFormat_RGBA8Unorm;
@@ -26,6 +27,7 @@ namespace {
             case WgpuTexture::Format::RGBA32Float: return 16;
             case WgpuTexture::Format::RGBA16Float: return 8;
             case WgpuTexture::Format::RG32Float:   return 8;
+            case WgpuTexture::Format::R32Float:    return 4;
             case WgpuTexture::Format::RGBA8Unorm:  return 4;
         }
         return 4;
