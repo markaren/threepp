@@ -90,7 +90,7 @@ struct RtUniforms {
     movedMeshBits: vec4<u32>,  // bit i = mesh i moved (words 0/1 cover meshes 0-63)
     envColor:      vec4<f32>,  // xyz = color/tint, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex
     envIntensity:  vec4<f32>,  // x = intensity scale, y = envWidth, z = envHeight, w = hasEnvCDF
-    params:        vec4<f32>,  // x = maxBounces, y = ambientFactor
+    params:        vec4<f32>,  // x = maxBounces
     emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive power
 };
 
@@ -434,11 +434,10 @@ constexpr const char* csRaytraceWGSL = R"(
 fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
     var albedo = h.albedo;
     if (h.texSlot >= 0.0) { albedo = sampleAtlas(h.uv, h.texSlot); }
-    // Ambient: use env light in normal direction when envmap is available, otherwise flat ambient
-    // Flat ambient, boosted by env average brightness when envmap is present
-    let envBoost = select(1.0, max(1.0, rt.envIntensity.x * 3.0), rt.envColor.w > 1.5);
-    var ambient = vec3<f32>(rt.params.y * envBoost);
-    var col = albedo * ambient;
+    // Environment map diffuse fill light (no shadows)
+    var col = select(vec3<f32>(0.0),
+                     albedo * sampleEnv(h.normal) * rt.envIntensity.x * (1.0 - h.metalness),
+                     rt.envColor.w > 1.5);
     let count = i32(rt.lightCount.x);
     let wo_s = normalize(-rd);
     for (var li = 0; li < 4; li++) {
@@ -991,11 +990,6 @@ R"(
                     radiance += throughput * (f_diff + f_spec) * envNdotL * envCol * w_env / envPdf;
                 }
             }
-        }
-
-        // Flat ambient fallback — only when no environment map is providing indirect light
-        if (rt.envColor.w < 1.5 && h.transmission < 0.5 && h.metalness < 0.5) {
-            radiance += throughput * albedo * rt.params.y;
         }
 
         if (i > 2) {
@@ -1675,7 +1669,7 @@ struct alignas(16) RtGpuUniforms {
     uint32_t movedMeshBits[4];  // bit i = mesh i moved; words 0/1 = meshes 0–63
     float    envColor[4];       // xyz = color, w = mode (0=sky, 1=solid color, 2=equirect tex)
     float    envIntensity[4];   // x = intensity, y = envWidth, z = envHeight, w = totalLumSum (0 = no CDF)
-    float    params[4];        // x = maxBounces, y = ambientFactor
+    float    params[4];        // x = maxBounces
     float    emissiveInfo[4]; // x = emissive tri count, y = total emissive area
 };
 static_assert(sizeof(RtGpuUniforms) == 512, "RtGpuUniforms must be 512 bytes");
@@ -1937,7 +1931,6 @@ static int buildGeometryBuffers(
         std::vector<float>& matBuffer,
         std::vector<float>& rawObjTriBuf,
         std::vector<float>& matrixBuf,
-        float emissiveScale,
         int maxTris, int maxMats, int maxMeshes) {
     std::ranges::fill(triBuffer, 0.f);
     std::ranges::fill(matBuffer, 0.f);
@@ -2009,7 +2002,7 @@ static int buildGeometryBuffers(
         }
         setTexel(matBuffer, maxMats, matCount, 1, texSlot, em.metalness, normalSlot, roughSlot);
         setTexel(matBuffer, maxMats, matCount, 2,
-                em.emissive.r * emissiveScale, em.emissive.g * emissiveScale, em.emissive.b * emissiveScale, em.transmission);
+                em.emissive.r, em.emissive.g, em.emissive.b, em.transmission);
         setTexel(matBuffer, maxMats, matCount, 3, em.ior, em.alphaTest, 0.f, 0.f);
         setTexel(matBuffer, maxMats, matCount, 4,
                 em.attenuationColor.r, em.attenuationColor.g, em.attenuationColor.b, em.attenuationDistance);
@@ -2386,10 +2379,8 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer  atrousUniBuf;
     bool denoiserEnabled_ = false;
     float envIntensity_ = 1.0f;
-    float emissiveScale_ = 1.0f;
     int maxBounces_ = 6;
     float exposure_ = 1.0f;
-    float ambientFactor_ = 0.03f;
 
     // Dynamic capacity tracking — buffers grow as scenes demand more
     int triCapacity_  = INIT_TRI_CAP;
@@ -2871,7 +2862,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     if (topoChanged) {
         d.prevMeshes = rtMeshes;
         auto meshes = rtMeshes;
-        float emissiveScale = d.emissiveScale_;
 
         Impl::AsyncBuildResult r;
         r.meshes = meshes;
@@ -2902,7 +2892,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
 
         r.triCount = buildGeometryBuffers(meshes, r.texSlotMap, r.triBuffer, r.matBuffer,
-                                           r.rawObjTriBuf, r.matrixCpuBuf, emissiveScale,
+                                           r.rawObjTriBuf, r.matrixCpuBuf,
                                            r.triCapacity, r.matCapacity, r.meshCapacity);
         buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
         r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
@@ -2947,8 +2937,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.prevMeshes = rtMeshes;
 
         auto meshes = rtMeshes;
-        float emissiveScale = d.emissiveScale_;
-        d.asyncBuild_ = std::async(std::launch::async, [meshes, emissiveScale]() {
+        d.asyncBuild_ = std::async(std::launch::async, [meshes]() {
             Impl::AsyncBuildResult r;
             r.meshes = meshes;
             r.texSlotMap.clear();
@@ -2978,7 +2967,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
 
             r.triCount = buildGeometryBuffers(meshes, r.texSlotMap, r.triBuffer, r.matBuffer,
-                                               r.rawObjTriBuf, r.matrixCpuBuf, emissiveScale,
+                                               r.rawObjTriBuf, r.matrixCpuBuf,
                                                r.triCapacity, r.matCapacity, r.meshCapacity);
             buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
             r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
@@ -3373,7 +3362,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         u.envIntensity[3] = 0.f;
     }
     u.params[0] = static_cast<float>(d.maxBounces_);
-    u.params[1] = d.ambientFactor_;
+    u.params[1] = 0.f;
     u.params[2] = 0.f;
     u.params[3] = 0.f;
     u.emissiveInfo[0] = static_cast<float>(d.emissiveTriCount_);
@@ -3681,15 +3670,6 @@ float WgpuPathTracer::envIntensity() const {
     return pimpl_->envIntensity_;
 }
 
-void WgpuPathTracer::setEmissiveScale(float scale) {
-    pimpl_->emissiveScale_ = scale;
-    pimpl_->prevMeshes.clear();
-}
-
-float WgpuPathTracer::emissiveScale() const {
-    return pimpl_->emissiveScale_;
-}
-
 void WgpuPathTracer::setMaxBounces(int bounces) {
     bounces = std::max(1, std::min(bounces, 32));
     if (pimpl_->maxBounces_ != bounces) {
@@ -3708,17 +3688,6 @@ void WgpuPathTracer::setExposure(float exposure) {
 
 float WgpuPathTracer::exposure() const {
     return pimpl_->exposure_;
-}
-
-void WgpuPathTracer::setAmbientFactor(float factor) {
-    if (pimpl_->ambientFactor_ != factor) {
-        pimpl_->ambientFactor_ = factor;
-        pimpl_->frameCount_ = 0.f;
-    }
-}
-
-float WgpuPathTracer::ambientFactor() const {
-    return pimpl_->ambientFactor_;
 }
 
 void WgpuPathTracer::setDenoiserEnabled(bool enabled) {

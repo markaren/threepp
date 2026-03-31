@@ -305,7 +305,6 @@ int main() {
     });
     trooper->position.set(6.f, 0.f, -6.f);
     trooper->rotation.y = -0.5f;
-
     scene.add(trooper);
 
     // Emissive orb (floating, back-left)
@@ -330,12 +329,16 @@ int main() {
     auto cone = Mesh::create(ConeGeometry::create(0.6f, 1.5f, 32),
                              matRoughDiffuse(Color(0.9f, 0.85f, 0.3f), 0.4f));
     cone->position.set(6.f, 0.75f, 2.f);
+    cone->castShadow = true;
+    cone->receiveShadow = true;
     scene.add(cone);
 
     // Capsule (mid-left)
     auto capsule = Mesh::create(CapsuleGeometry::create(0.35f, 1.0f, 16, 24),
                                 matRoughDiffuse(Color(0.4f, 0.2f, 0.6f), 0.6f));
     capsule->position.set(-6.f, 0.85f, 2.f);
+    capsule->castShadow = true;
+    capsule->receiveShadow = true;
     scene.add(capsule);
 
     // Sphere grid (roughness/metalness matrix)
@@ -358,7 +361,6 @@ int main() {
     bool denoiserOn = pathTracer.denoiserEnabled();
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
-    float ambientFactor = pathTracer.ambientFactor();
     float pixelScale = pathTracer.pixelScale();
     float fps = 0.f;
     float fpsAccum = 0.f;
@@ -402,8 +404,6 @@ int main() {
                 pathTracer.setDenoiserEnabled(denoiserOn);
             if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 16))
                 pathTracer.setMaxBounces(maxBounces);
-            if (ImGui::SliderFloat("Ambient", &ambientFactor, 0.0f, 0.2f))
-                pathTracer.setAmbientFactor(ambientFactor);
         }
 
         ImGui::End();

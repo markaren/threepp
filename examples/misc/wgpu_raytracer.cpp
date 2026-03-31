@@ -125,7 +125,6 @@ int main() {
     bool raster = false;
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
-    float ambientFactor = pathTracer.ambientFactor();
     float fps = 0.f;
     float fpsAccum = 0.f;
     int fpsFrames = 0;
@@ -161,7 +160,7 @@ int main() {
             pathTracer.resetAccumulation();
         }
 
-        if (renderMode == 0 || renderMode == 1) {
+        if (renderMode != 2) {
             if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
                 pathTracer.setExposure(exposure);
         }
@@ -171,8 +170,6 @@ int main() {
                 pathTracer.setDenoiserEnabled(denoiserOn);
             if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 16))
                 pathTracer.setMaxBounces(maxBounces);
-            if (ImGui::SliderFloat("Ambient", &ambientFactor, 0.0f, 0.2f))
-                pathTracer.setAmbientFactor(ambientFactor);
         }
 
         ImGui::End();

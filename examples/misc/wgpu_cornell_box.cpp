@@ -158,7 +158,6 @@ int main() {
     bool denoiserOn = pathTracer.denoiserEnabled();
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
-    float ambientFactor = pathTracer.ambientFactor();
     float fps = 0.f;
     float fpsAccum = 0.f;
     int fpsFrames = 0;
@@ -194,8 +193,6 @@ int main() {
                 pathTracer.setDenoiserEnabled(denoiserOn);
             if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 16))
                 pathTracer.setMaxBounces(maxBounces);
-            if (ImGui::SliderFloat("Ambient", &ambientFactor, 0.0f, 0.2f))
-                pathTracer.setAmbientFactor(ambientFactor);
         }
 
         ImGui::End();

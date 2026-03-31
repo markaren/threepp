@@ -45,12 +45,6 @@ namespace threepp {
         void setEnvIntensity(float intensity);
         [[nodiscard]] float envIntensity() const;
 
-        /// Scale applied to material emissive values. Default: 1.0.
-        /// Useful for GLTF models whose emissive values are calibrated for raster
-        /// but too bright as physical radiance in path tracing.
-        void setEmissiveScale(float scale);
-        [[nodiscard]] float emissiveScale() const;
-
         /// Maximum number of bounces for path tracing. Default: 8.
         /// Higher values improve light transport accuracy at the cost of performance.
         void setMaxBounces(int bounces);
@@ -60,10 +54,6 @@ namespace threepp {
         /// Adjusting this does not reset accumulation.
         void setExposure(float exposure);
         [[nodiscard]] float exposure() const;
-
-        /// Ambient light factor added per bounce. Default: 0.03.
-        void setAmbientFactor(float factor);
-        [[nodiscard]] float ambientFactor() const;
 
         /// Enable/disable the à-trous wavelet denoiser (path tracer mode only). Default: true.
         void setDenoiserEnabled(bool enabled);
