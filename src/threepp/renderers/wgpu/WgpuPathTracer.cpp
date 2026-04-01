@@ -280,8 +280,8 @@ fn aabbDist(bmin: vec3<f32>, bmax: vec3<f32>, ray: Ray, tmax: f32) -> f32 {
 }
 
 // Test 4 child AABBs simultaneously using SoA layout. Returns vec4 of distances.
-fn aabbDist4(nd: Bvh4NodeGpu, ray: Ray, tmax: f32) -> vec4<f32> {
-    let invD = vec3<f32>(1.0) / ray.dir;
+// invD is precomputed once per ray as 1.0/ray.dir to avoid redundant divides per node.
+fn aabbDist4(nd: Bvh4NodeGpu, ray: Ray, invD: vec3<f32>, tmax: f32) -> vec4<f32> {
     let ox = vec4<f32>(ray.origin.x); let oy = vec4<f32>(ray.origin.y); let oz = vec4<f32>(ray.origin.z);
     let idx = vec4<f32>(invD.x); let idy = vec4<f32>(invD.y); let idz = vec4<f32>(invD.z);
 
@@ -478,14 +478,15 @@ fn decodeLeafShadow(ci: i32, ray: Ray, h: ptr<function, ShadowHit>) {
 fn sceneHitShadow(ray: Ray, maxDist: f32) -> ShadowHit {
     var h: ShadowHit;
     h.t = maxDist; h.meshIdx = -1; h.transmission = 0.0;
-    var stack: array<i32, 32>;
+    let invD = vec3<f32>(1.0) / ray.dir;
+    var stack: array<i32, 16>;
     var top: i32 = 0;
     stack[0] = 0; top = 1;
 
     while (top > 0) {
         top -= 1;
         let nd = bvhNodes[stack[top]];
-        let dists = aabbDist4(nd, ray, h.t);
+        let dists = aabbDist4(nd, ray, invD, h.t);
         if (all(dists >= vec4<f32>(1e30))) { continue; }
 
         let ci0 = bitcast<i32>(nd.cIdx.x);
@@ -498,26 +499,19 @@ fn sceneHitShadow(ray: Ray, maxDist: f32) -> ShadowHit {
         if (dists.z < 1e30 && ci2 < 0) { decodeLeafShadow(ci2, ray, &h); }
         if (dists.w < 1e30 && ci3 < 0) { decodeLeafShadow(ci3, ray, &h); }
 
-        var n0 = dists.x; var n1 = dists.y; var n2 = dists.z; var n3 = dists.w;
-        var k0 = ci0; var k1 = ci1; var k2 = ci2; var k3 = ci3;
-        if (k0 < 0) { n0 = 1e30; } if (k1 < 0) { n1 = 1e30; }
-        if (k2 < 0) { n2 = 1e30; } if (k3 < 0) { n3 = 1e30; }
-        if (n0 < n1) { let t0=n0;n0=n1;n1=t0; let t1=k0;k0=k1;k1=t1; }
-        if (n2 < n3) { let t0=n2;n2=n3;n3=t0; let t1=k2;k2=k3;k3=t1; }
-        if (n0 < n2) { let t0=n0;n0=n2;n2=t0; let t1=k0;k0=k2;k2=t1; }
-        if (n1 < n3) { let t0=n1;n1=n3;n3=t0; let t1=k1;k1=k3;k3=t1; }
-        if (n1 < n2) { let t0=n1;n1=n2;n2=t0; let t1=k1;k1=k2;k2=t1; }
-        if (n0 < 1e30) { stack[top] = k0; top++; }
-        if (n1 < 1e30) { stack[top] = k1; top++; }
-        if (n2 < 1e30) { stack[top] = k2; top++; }
-        if (n3 < 1e30) { stack[top] = k3; top++; }
+        // Shadow: no sorting needed, just push all hit internal children
+        if (dists.x < 1e30 && ci0 >= 0) { stack[top] = ci0; top++; }
+        if (dists.y < 1e30 && ci1 >= 0) { stack[top] = ci1; top++; }
+        if (dists.z < 1e30 && ci2 >= 0) { stack[top] = ci2; top++; }
+        if (dists.w < 1e30 && ci3 >= 0) { stack[top] = ci3; top++; }
     }
     return h;
 }
 
 fn sceneHit(ray: Ray) -> Hit {
     var h: Hit; h.t = 1e30; h.meshIdx = -1; h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0); h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
-    var stack: array<i32, 32>;
+    let invD = vec3<f32>(1.0) / ray.dir;
+    var stack: array<i32, 16>;
     var top: i32 = 0;
     stack[0] = 0; top = 1;
 
@@ -525,19 +519,14 @@ fn sceneHit(ray: Ray) -> Hit {
         top -= 1;
         let nd = bvhNodes[stack[top]];
 
-        // Test all 4 child AABBs at once
-        let dists = aabbDist4(nd, ray, h.t);
-
-        // Early exit — no child hit
+        let dists = aabbDist4(nd, ray, invD, h.t);
         if (all(dists >= vec4<f32>(1e30))) { continue; }
 
-        // Unpack child indices
         let ci0 = bitcast<i32>(nd.cIdx.x);
         let ci1 = bitcast<i32>(nd.cIdx.y);
         let ci2 = bitcast<i32>(nd.cIdx.z);
         let ci3 = bitcast<i32>(nd.cIdx.w);
 
-        // Process leaves immediately
         if (dists.x < 1e30 && ci0 < 0) { decodeLeaf(ci0, ray, &h); }
         if (dists.y < 1e30 && ci1 < 0) { decodeLeaf(ci1, ray, &h); }
         if (dists.z < 1e30 && ci2 < 0) { decodeLeaf(ci2, ray, &h); }
@@ -546,16 +535,13 @@ fn sceneHit(ray: Ray) -> Hit {
         // Push internal children — nearest last so it's popped first
         var n0 = dists.x; var n1 = dists.y; var n2 = dists.z; var n3 = dists.w;
         var k0 = ci0; var k1 = ci1; var k2 = ci2; var k3 = ci3;
-        // Mark leaves/misses as invalid so they won't be pushed
         if (k0 < 0) { n0 = 1e30; } if (k1 < 0) { n1 = 1e30; }
         if (k2 < 0) { n2 = 1e30; } if (k3 < 0) { n3 = 1e30; }
-        // Sort descending (farthest first) — 5-comparator network
         if (n0 < n1) { let t0=n0;n0=n1;n1=t0; let t1=k0;k0=k1;k1=t1; }
         if (n2 < n3) { let t0=n2;n2=n3;n3=t0; let t1=k2;k2=k3;k3=t1; }
         if (n0 < n2) { let t0=n0;n0=n2;n2=t0; let t1=k0;k0=k2;k2=t1; }
         if (n1 < n3) { let t0=n1;n1=n3;n3=t0; let t1=k1;k1=k3;k3=t1; }
         if (n1 < n2) { let t0=n1;n1=n2;n2=t0; let t1=k1;k1=k2;k2=t1; }
-        // Push valid internals (n < 1e30 means hit)
         if (n0 < 1e30) { stack[top] = k0; top++; }
         if (n1 < 1e30) { stack[top] = k1; top++; }
         if (n2 < 1e30) { stack[top] = k2; top++; }
@@ -1143,7 +1129,7 @@ R"(
             }
         }
 
-        if (i > 2) {
+        if (i > 1) {
             let p = max(max(throughput.r, throughput.g), throughput.b);
             if (rand(seed) > p) { break; }
             throughput /= p;
