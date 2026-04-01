@@ -43,9 +43,9 @@ using namespace threepp;
 // ---------------------------------------------------------------------------
 namespace {
 
-constexpr int MAX_TEX_SLOTS = 64;
+constexpr int MAX_TEX_SLOTS = 256;
 constexpr int TILE_SIZE = 1024;
-constexpr int ATLAS_COLS = 8;  // tiles per row in atlas (8 × 1024 = 8192 ≤ GPU max)
+constexpr int ATLAS_COLS = 8;  // tiles per row in atlas (8 × 1024 = 8192 wide, grows tall)
 constexpr int TRI_TEX_HEIGHT = 8;
 constexpr int MAT_TEX_HEIGHT = 6;
 constexpr int TEX_PAGE_WIDTH = 8192;
@@ -119,13 +119,10 @@ struct RtUniforms {
 };
 
 struct Bvh4NodeGpu {
-    cMinX: vec4<f32>,
-    cMinY: vec4<f32>,
-    cMinZ: vec4<f32>,
-    cMaxX: vec4<f32>,
-    cMaxY: vec4<f32>,
-    cMaxZ: vec4<f32>,
-    cIdx:  vec4<f32>,
+    p0:   vec4<u32>,  // cMinX(01), cMinX(23), cMinY(01), cMinY(23) as packed f16 pairs
+    p1:   vec4<u32>,  // cMinZ(01), cMinZ(23), cMaxX(01), cMaxX(23)
+    p2:   vec4<u32>,  // cMaxY(01), cMaxY(23), cMaxZ(01), cMaxZ(23)
+    cIdx: vec4<u32>,  // child indices (bitcast to i32 for leaf encoding)
 }
 
 @group(0) @binding(0) var<uniform> rt:          RtUniforms;
@@ -141,13 +138,15 @@ struct Bvh4NodeGpu {
 @group(0) @binding(10) var gBufWrite:   texture_storage_2d<rgba16float, write>;
 @group(0) @binding(11) var<storage, read> emissiveTris: array<vec4<f32>>;  // per tri: (triIndex, area, 0, 0)
 @group(0) @binding(14) var albedoWrite: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(15) var gBufRead:    texture_2d<f32>;
 
 const TILE_SIZE:   i32 = 1024;
-const MAX_TEX_SLOTS: i32 = 64;
+const MAX_TEX_SLOTS: i32 = 256;
 const ATLAS_COLS:  i32 = 8;
 
 struct Ray  { origin: vec3<f32>, dir: vec3<f32> }
 struct Isect { t: f32, u: f32, v: f32 }
+struct RawHit { t: f32, triIdx: i32, u: f32, v: f32 }
 struct Hit  {
     t:            f32,
     point:        vec3<f32>,
@@ -295,15 +294,29 @@ fn aabbDist(bmin: vec3<f32>, bmax: vec3<f32>, ray: Ray, tmax: f32) -> f32 {
     return 1e30;
 }
 
-// Test 4 child AABBs simultaneously using SoA layout. Returns vec4 of distances.
-// invD is precomputed once per ray as 1.0/ray.dir to avoid redundant divides per node.
+// Unpack f16-compressed AABB row: two packed u32 → vec4<f32>
+fn unpackRow(a: u32, b: u32) -> vec4<f32> {
+    let lo = unpack2x16float(a);
+    let hi = unpack2x16float(b);
+    return vec4<f32>(lo.x, lo.y, hi.x, hi.y);
+}
+
+// Test 4 child AABBs simultaneously using SoA layout with f16-packed bounds.
+// Returns vec4 of distances. invD is precomputed once per ray as 1.0/ray.dir.
 fn aabbDist4(nd: Bvh4NodeGpu, ray: Ray, invD: vec3<f32>, tmax: f32) -> vec4<f32> {
+    let cMinX = unpackRow(nd.p0.x, nd.p0.y);
+    let cMinY = unpackRow(nd.p0.z, nd.p0.w);
+    let cMinZ = unpackRow(nd.p1.x, nd.p1.y);
+    let cMaxX = unpackRow(nd.p1.z, nd.p1.w);
+    let cMaxY = unpackRow(nd.p2.x, nd.p2.y);
+    let cMaxZ = unpackRow(nd.p2.z, nd.p2.w);
+
     let ox = vec4<f32>(ray.origin.x); let oy = vec4<f32>(ray.origin.y); let oz = vec4<f32>(ray.origin.z);
     let idx = vec4<f32>(invD.x); let idy = vec4<f32>(invD.y); let idz = vec4<f32>(invD.z);
 
-    let t1x = (nd.cMinX - ox) * idx;  let t2x = (nd.cMaxX - ox) * idx;
-    let t1y = (nd.cMinY - oy) * idy;  let t2y = (nd.cMaxY - oy) * idy;
-    let t1z = (nd.cMinZ - oz) * idz;  let t2z = (nd.cMaxZ - oz) * idz;
+    let t1x = (cMinX - ox) * idx;  let t2x = (cMaxX - ox) * idx;
+    let t1y = (cMinY - oy) * idy;  let t2y = (cMaxY - oy) * idy;
+    let t1z = (cMinZ - oz) * idz;  let t2z = (cMaxZ - oz) * idz;
 
     let tNear = max(max(min(t1x, t2x), min(t1y, t2y)), min(t1z, t2z));
     let tFar  = min(min(max(t1x, t2x), max(t1y, t2y)), max(t1z, t2z));
@@ -332,22 +345,62 @@ fn evalBrdf(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
         D * F * G / max(4.0 * NdotV * NdotL, 1e-6));
 }
 
-fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
+// Lightweight intersection — geometry + alpha test only.
+// Full material loading deferred to loadHitMaterial() for the winning triangle.
+fn testTriangle(ray: Ray, ti: i32, rh: ptr<function, RawHit>) {
+    let r0 = textureLoad(triData, triCoord(ti, 0), 0);
+    let v0 = r0.xyz;
+    let v1 = textureLoad(triData, triCoord(ti, 1), 0).xyz;
+    let v2 = textureLoad(triData, triCoord(ti, 2), 0).xyz;
+
+    let isect = triIntersect(ray, v0, v1, v2);
+    if (isect.t >= (*rh).t) { return; }
+
+    // Alpha test — needed for fences/leaves/cutouts
+    let matIdx = i32(r0.w);
+    let mat3   = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
+    let alphaTest = mat3.y;
+    if (alphaTest > 0.0) {
+        let mat1 = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
+        if (mat1.x >= 0.0) {
+            let w  = 1.0 - isect.u - isect.v;
+            let uv01 = textureLoad(triData, triCoord(ti, 6), 0);
+            let uv2  = textureLoad(triData, triCoord(ti, 7), 0).xy;
+            let iuv  = vec2<f32>(uv01.x, uv01.y) * w
+                     + vec2<f32>(uv01.z, uv01.w) * isect.u
+                     + uv2                        * isect.v;
+            if (sampleAtlasAlpha(iuv, mat1.x) < alphaTest) { return; }
+        }
+    }
+
+    (*rh).t = isect.t;
+    (*rh).triIdx = ti;
+    (*rh).u = isect.u;
+    (*rh).v = isect.v;
+}
+
+// Full material loading — called once for the closest hit triangle.
+fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
+    var h: Hit;
+    h.t = rh.t;
+    h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0;
+    h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
+    h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
+    h.meshIdx = -1;
+
+    let ti = rh.triIdx;
     let r0  = textureLoad(triData, triCoord(ti, 0), 0);
     let v0  = r0.xyz;
     let r1  = textureLoad(triData, triCoord(ti, 1), 0);
     let v1  = r1.xyz;
     let v2  = textureLoad(triData, triCoord(ti, 2), 0).xyz;
 
-    let isect = triIntersect(ray, v0, v1, v2);
-    if (isect.t >= (*h).t) { return; }
-
-    let w  = 1.0 - isect.u - isect.v;
+    let w  = 1.0 - rh.u - rh.v;
     let uv01 = textureLoad(triData, triCoord(ti, 6), 0);
     let uv2  = textureLoad(triData, triCoord(ti, 7), 0).xy;
     let iuv  = vec2<f32>(uv01.x, uv01.y) * w
-             + vec2<f32>(uv01.z, uv01.w) * isect.u
-             + uv2                        * isect.v;
+             + vec2<f32>(uv01.z, uv01.w) * rh.u
+             + uv2                        * rh.v;
 
     let matIdx = i32(r0.w);
     let mat0   = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
@@ -355,15 +408,10 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     let mat2   = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
     let mat3   = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
 
-    let alphaTest = mat3.y;
-    if (alphaTest > 0.0 && mat1.x >= 0.0) {
-        if (sampleAtlasAlpha(iuv, mat1.x) < alphaTest) { return; }
-    }
-
     let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
     let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
     let n2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
-    let sn = normalize(n0 * w + n1 * isect.u + n2 * isect.v);
+    let sn = normalize(n0 * w + n1 * rh.u + n2 * rh.v);
 
     let isFrontFace = dot(ray.dir, sn) < 0.0;
     var finalNorm = select(-sn, sn, isFrontFace);
@@ -403,34 +451,35 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     let geoN    = select(sn, geoNcross / geoNlen, geoNlen > 1e-8);
     let geoNorm = select(-geoN, geoN, isFrontFace);
 
-    (*h).t         = isect.t;
-    (*h).point     = ray.origin + isect.t * ray.dir;
-    (*h).normal    = finalNorm;
-    (*h).geoNormal = geoNorm;
-    (*h).albedo    = mat0.xyz;
-    (*h).shininess = shininess;
-    (*h).uv        = iuv;
-    (*h).texSlot   = mat1.x;
-    (*h).metalness = mat1.y;
-    (*h).emissive     = mat2.xyz;
-    (*h).transmission = mat2.w;
-    (*h).ior          = mat3.x;
-    (*h).frontFace    = select(0.0, 1.0, isFrontFace);
-    (*h).meshIdx      = i32(r1.w);
+    h.point     = ray.origin + rh.t * ray.dir;
+    h.normal    = finalNorm;
+    h.geoNormal = geoNorm;
+    h.albedo    = mat0.xyz;
+    h.shininess = shininess;
+    h.uv        = iuv;
+    h.texSlot   = mat1.x;
+    h.metalness = mat1.y;
+    h.emissive     = mat2.xyz;
+    h.transmission = mat2.w;
+    h.ior          = mat3.x;
+    h.frontFace    = select(0.0, 1.0, isFrontFace);
+    h.meshIdx      = i32(r1.w);
     let mat4 = textureLoad(matData, vec2<i32>(matIdx, 4), 0);
-    (*h).attenuationColor = mat4.xyz;
-    (*h).attenuationDist  = mat4.w;
+    h.attenuationColor = mat4.xyz;
+    h.attenuationDist  = mat4.w;
     let mat5 = textureLoad(matData, vec2<i32>(matIdx, 5), 0);
-    (*h).clearcoat      = mat5.x;
-    (*h).clearcoatAlpha = mat5.y;
+    h.clearcoat      = mat5.x;
+    h.clearcoatAlpha = mat5.y;
+    return h;
 }
-
-fn decodeLeaf(ci: i32, ray: Ray, h: ptr<function, Hit>) {
+)"
+R"(
+fn decodeLeaf(ci: i32, ray: Ray, rh: ptr<function, RawHit>) {
     let raw = -ci;
     let triStart = (raw - 1) / MAX_LEAF_TRIS;
     let triCount = ((raw - 1) % MAX_LEAF_TRIS) + 1;
     for (var t = triStart; t < triStart + triCount; t++) {
-        testTriangle(ray, t, h);
+        testTriangle(ray, t, rh);
     }
 }
 
@@ -446,88 +495,43 @@ struct ShadowHit {
     transmission: f32,
 }
 
-fn testTriangleShadow(ray: Ray, ti: i32, h: ptr<function, ShadowHit>) {
+// Shadow traversal reuses RawHit + decodeLeaf for geometry test.
+// Material loading deferred to loadShadowHitMaterial for the closest hit only.
+fn loadShadowHitMaterial(rh: RawHit, ray: Ray) -> ShadowHit {
+    var h: ShadowHit;
+    h.t = rh.t; h.meshIdx = -1; h.transmission = 0.0;
+    let ti = rh.triIdx;
     let r0  = textureLoad(triData, triCoord(ti, 0), 0);
-    let v0  = r0.xyz;
     let r1  = textureLoad(triData, triCoord(ti, 1), 0);
+    let v0  = r0.xyz;
     let v1  = r1.xyz;
     let v2  = textureLoad(triData, triCoord(ti, 2), 0).xyz;
-    let isect = triIntersect(ray, v0, v1, v2);
-    if (isect.t >= (*h).t) { return; }
     let matIdx = i32(r0.w);
-    let mat3   = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
-    let mat0   = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
-    let mat1   = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
-    let w  = 1.0 - isect.u - isect.v;
+    let mat0 = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
+    let mat1 = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
+    let mat2 = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
+    let w  = 1.0 - rh.u - rh.v;
     let uv01 = textureLoad(triData, triCoord(ti, 6), 0);
     let uv2  = textureLoad(triData, triCoord(ti, 7), 0).xy;
     let iuv  = vec2<f32>(uv01.x, uv01.y) * w
-             + vec2<f32>(uv01.z, uv01.w) * isect.u
-             + uv2                        * isect.v;
-    let alphaTest = mat3.y;
-    if (alphaTest > 0.0 && mat1.x >= 0.0) {
-        let texAlpha = sampleAtlasAlpha(iuv, mat1.x);
-        if (texAlpha < alphaTest) { return; }
-    }
+             + vec2<f32>(uv01.z, uv01.w) * rh.u
+             + uv2                        * rh.v;
     let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
     let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
     let n2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
-    let sn = normalize(n0 * w + n1 * isect.u + n2 * isect.v);
-    let mat2 = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
-    (*h).t            = isect.t;
-    (*h).point        = ray.origin + isect.t * ray.dir;
-    (*h).normal       = select(-sn, sn, dot(ray.dir, sn) < 0.0);
-    (*h).albedo       = mat0.xyz;
-    (*h).uv           = iuv;
-    (*h).texSlot      = mat1.x;
-    (*h).meshIdx      = i32(r1.w);
-    (*h).transmission = mat2.w;
-}
-
-fn decodeLeafShadow(ci: i32, ray: Ray, h: ptr<function, ShadowHit>) {
-    let raw = -ci;
-    let triStart = (raw - 1) / MAX_LEAF_TRIS;
-    let triCount = ((raw - 1) % MAX_LEAF_TRIS) + 1;
-    for (var t = triStart; t < triStart + triCount; t++) {
-        testTriangleShadow(ray, t, h);
-    }
-}
-
-fn sceneHitShadow(ray: Ray, maxDist: f32) -> ShadowHit {
-    var h: ShadowHit;
-    h.t = maxDist; h.meshIdx = -1; h.transmission = 0.0;
-    let invD = vec3<f32>(1.0) / ray.dir;
-    var stack: array<i32, 16>;
-    var top: i32 = 0;
-    stack[0] = 0; top = 1;
-
-    while (top > 0) {
-        top -= 1;
-        let nd = bvhNodes[stack[top]];
-        let dists = aabbDist4(nd, ray, invD, h.t);
-        if (all(dists >= vec4<f32>(1e30))) { continue; }
-
-        let ci0 = bitcast<i32>(nd.cIdx.x);
-        let ci1 = bitcast<i32>(nd.cIdx.y);
-        let ci2 = bitcast<i32>(nd.cIdx.z);
-        let ci3 = bitcast<i32>(nd.cIdx.w);
-
-        if (dists.x < 1e30 && ci0 < 0) { decodeLeafShadow(ci0, ray, &h); }
-        if (dists.y < 1e30 && ci1 < 0) { decodeLeafShadow(ci1, ray, &h); }
-        if (dists.z < 1e30 && ci2 < 0) { decodeLeafShadow(ci2, ray, &h); }
-        if (dists.w < 1e30 && ci3 < 0) { decodeLeafShadow(ci3, ray, &h); }
-
-        // Shadow: no sorting needed, just push all hit internal children
-        if (dists.x < 1e30 && ci0 >= 0) { stack[top] = ci0; top++; }
-        if (dists.y < 1e30 && ci1 >= 0) { stack[top] = ci1; top++; }
-        if (dists.z < 1e30 && ci2 >= 0) { stack[top] = ci2; top++; }
-        if (dists.w < 1e30 && ci3 >= 0) { stack[top] = ci3; top++; }
-    }
+    let sn = normalize(n0 * w + n1 * rh.u + n2 * rh.v);
+    h.point        = ray.origin + rh.t * ray.dir;
+    h.normal       = select(-sn, sn, dot(ray.dir, sn) < 0.0);
+    h.albedo       = mat0.xyz;
+    h.uv           = iuv;
+    h.texSlot      = mat1.x;
+    h.meshIdx      = i32(r1.w);
+    h.transmission = mat2.w;
     return h;
 }
 
-fn sceneHit(ray: Ray) -> Hit {
-    var h: Hit; h.t = 1e30; h.meshIdx = -1; h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0); h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
+fn sceneHitRaw(ray: Ray, maxT: f32) -> RawHit {
+    var rh: RawHit; rh.t = maxT; rh.triIdx = -1;
     let invD = vec3<f32>(1.0) / ray.dir;
     var stack: array<i32, 16>;
     var top: i32 = 0;
@@ -537,7 +541,7 @@ fn sceneHit(ray: Ray) -> Hit {
         top -= 1;
         let nd = bvhNodes[stack[top]];
 
-        let dists = aabbDist4(nd, ray, invD, h.t);
+        let dists = aabbDist4(nd, ray, invD, rh.t);
         if (all(dists >= vec4<f32>(1e30))) { continue; }
 
         let ci0 = bitcast<i32>(nd.cIdx.x);
@@ -545,10 +549,10 @@ fn sceneHit(ray: Ray) -> Hit {
         let ci2 = bitcast<i32>(nd.cIdx.z);
         let ci3 = bitcast<i32>(nd.cIdx.w);
 
-        if (dists.x < 1e30 && ci0 < 0) { decodeLeaf(ci0, ray, &h); }
-        if (dists.y < 1e30 && ci1 < 0) { decodeLeaf(ci1, ray, &h); }
-        if (dists.z < 1e30 && ci2 < 0) { decodeLeaf(ci2, ray, &h); }
-        if (dists.w < 1e30 && ci3 < 0) { decodeLeaf(ci3, ray, &h); }
+        if (dists.x < 1e30 && ci0 < 0) { decodeLeaf(ci0, ray, &rh); }
+        if (dists.y < 1e30 && ci1 < 0) { decodeLeaf(ci1, ray, &rh); }
+        if (dists.z < 1e30 && ci2 < 0) { decodeLeaf(ci2, ray, &rh); }
+        if (dists.w < 1e30 && ci3 < 0) { decodeLeaf(ci3, ray, &rh); }
 
         // Push internal children — nearest last so it's popped first
         var n0 = dists.x; var n1 = dists.y; var n2 = dists.z; var n3 = dists.w;
@@ -565,7 +569,69 @@ fn sceneHit(ray: Ray) -> Hit {
         if (n2 < 1e30) { stack[top] = k2; top++; }
         if (n3 < 1e30) { stack[top] = k3; top++; }
     }
-    return h;
+    return rh;
+}
+
+fn sceneHit(ray: Ray) -> Hit {
+    let rh = sceneHitRaw(ray, 1e30);
+    if (rh.triIdx < 0) {
+        var h: Hit; h.t = 1e30; h.meshIdx = -1; h.transmission = 0.0; h.ior = 1.5;
+        h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
+        h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
+        return h;
+    }
+    return loadHitMaterial(rh, ray);
+}
+
+// Fast any-hit traversal for shadow rays — exits on first intersection.
+// No sorting, no closest-hit search. Much faster for large scenes.
+fn sceneAnyHit(ray: Ray, maxT: f32) -> RawHit {
+    var rh: RawHit; rh.t = maxT; rh.triIdx = -1;
+    let invD = vec3<f32>(1.0) / ray.dir;
+    var stack: array<i32, 16>;
+    var top: i32 = 0;
+    stack[0] = 0; top = 1;
+
+    while (top > 0) {
+        top -= 1;
+        let nd = bvhNodes[stack[top]];
+        let dists = aabbDist4(nd, ray, invD, rh.t);
+        if (all(dists >= vec4<f32>(1e30))) { continue; }
+
+        let ci0 = bitcast<i32>(nd.cIdx.x);
+        let ci1 = bitcast<i32>(nd.cIdx.y);
+        let ci2 = bitcast<i32>(nd.cIdx.z);
+        let ci3 = bitcast<i32>(nd.cIdx.w);
+
+        if (dists.x < 1e30 && ci0 < 0) { decodeLeaf(ci0, ray, &rh); if (rh.triIdx >= 0) { return rh; } }
+        if (dists.y < 1e30 && ci1 < 0) { decodeLeaf(ci1, ray, &rh); if (rh.triIdx >= 0) { return rh; } }
+        if (dists.z < 1e30 && ci2 < 0) { decodeLeaf(ci2, ray, &rh); if (rh.triIdx >= 0) { return rh; } }
+        if (dists.w < 1e30 && ci3 < 0) { decodeLeaf(ci3, ray, &rh); if (rh.triIdx >= 0) { return rh; } }
+
+        // No sorting — just push all hit internal children
+        if (dists.x < 1e30 && ci0 >= 0) { stack[top] = ci0; top++; }
+        if (dists.y < 1e30 && ci1 >= 0) { stack[top] = ci1; top++; }
+        if (dists.z < 1e30 && ci2 >= 0) { stack[top] = ci2; top++; }
+        if (dists.w < 1e30 && ci3 >= 0) { stack[top] = ci3; top++; }
+    }
+    return rh;
+}
+
+// Fast boolean occlusion test — true if anything blocks the ray.
+fn sceneOccluded(ray: Ray, maxDist: f32) -> bool {
+    let rh = sceneAnyHit(ray, maxDist);
+    return rh.triIdx >= 0;
+}
+
+// Closest-hit shadow — needed for transmission shadow chains that walk front-to-back.
+fn sceneHitShadow(ray: Ray, maxDist: f32) -> ShadowHit {
+    let rh = sceneHitRaw(ray, maxDist);
+    if (rh.triIdx < 0) {
+        var h: ShadowHit;
+        h.t = maxDist; h.meshIdx = -1; h.transmission = 0.0;
+        return h;
+    }
+    return loadShadowHitMaterial(rh, ray);
 }
 
 fn makeRay(px: vec2<f32>, res: vec2<f32>) -> Ray {
@@ -1083,9 +1149,8 @@ R"(
                 var sr: Ray;
                 sr.origin = h.point + h.normal * 1e-3;
                 sr.dir    = ln;
-                let sh    = sceneHitShadow(sr, dist);
 
-                if (sh.t >= dist - 1e-2) {
+                if (!sceneOccluded(sr, dist - 1e-2)) {
                     let eMatIdx = i32(textureLoad(triData, triCoord(eTi, 0), 0).w);
                     let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
 
@@ -1109,8 +1174,7 @@ R"(
                 var sr: Ray;
                 sr.origin = h.point + h.normal * 1e-3;
                 sr.dir    = envDir;
-                let sh = sceneHitShadow(sr, 1e30);
-                if (sh.t >= 1e29) {
+                if (!sceneOccluded(sr, 1e30)) {
                     let brdf = evalBrdf(wo, envDir, h.normal, albedo, h.metalness, h.shininess);
                     let envCol = sampleEnv(envDir) * rt.envIntensity.x;
                     let pdf_brdf_env = brdfPdf(wo, envDir, h.normal, h.shininess, h.metalness);
@@ -1234,7 +1298,8 @@ R"(
     }
     return radiance;
 }
-
+)"
+R"(
 @compute @workgroup_size(8, 8)
 fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let pixel = vec2<i32>(i32(gid.x), i32(gid.y));
@@ -1242,6 +1307,39 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (f32(pixel.x) >= res.x || f32(pixel.y) >= res.y) { return; }
 
     let fc   = u32(rt.frameCount.x);
+    let globalFrame = u32(rt.params.y);
+    let foveatedOn = rt.params.z > 0.5;
+
+    // --- Foveated convergence: center traces every frame, periphery less often ---
+    // This accelerates perceived convergence by prioritising where the eye looks.
+    let center = res * 0.5;
+    let dxy = (vec2<f32>(f32(pixel.x), f32(pixel.y)) - center) / center;
+    let dist = length(dxy);
+    var skipMask = 0u;  // trace every frame
+    if (foveatedOn && dist > 0.65)      { skipMask = 3u; }  // periphery: trace every 4th frame (fc & 3 == 0)
+    else if (foveatedOn && dist > 0.3)  { skipMask = 1u; }  // middle: trace every 2nd frame (fc & 1 == 0)
+
+    // Don't foveate sky/env-map pixels — they're cheap to trace (BVH miss)
+    // and skipping creates visible zone boundaries in uniform backgrounds.
+    // Use previous frame's gBuf depth: env/sky pixels have depth <= 0.
+    let prevDepth = textureLoad(gBufRead, pixel, 0).w;
+    let isEnvPixel = prevDepth <= 0.0;
+    let foveatedSkip = skipMask > 0u && (fc & skipMask) != 0u && !isEnvPixel;
+
+    // Foveated skip: pass through previous accumulation unchanged.
+    // The pixel keeps its existing color & frame count; it will trace on a future frame.
+    if (foveatedSkip) {
+        textureStore(accumWrite,   pixel, textureLoad(accumRead, pixel, 0));
+        textureStore(hitMeshWrite, pixel, textureLoad(hitMeshRead, pixel, 0));
+        // Preserve previous gBuf (depth) so display shader tone-maps correctly.
+        textureStore(gBufWrite,    pixel, textureLoad(gBufRead, pixel, 0));
+        textureStore(albedoWrite,  pixel, vec4<f32>(vec3<f32>(0.0), 0.0));
+        return;
+    }
+
+    // Checkerboard: skip half pixels during camera movement (fc == 0)
+    let checkerSkip = fc == 0u && ((u32(pixel.x) + u32(pixel.y) + globalFrame) & 1u) == 0u;
+
     // R2 quasi-random sub-pixel jitter (low-discrepancy stratification)
     let r2  = r2Seq(fc);
     // Per-pixel Cranley-Patterson rotation: offset R2 by a spatial hash to decorrelate pixels
@@ -1249,6 +1347,49 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let jx  = fract(r2.x + f32(pixHash) / 4294967296.0) - 0.5;
     let jy  = fract(r2.y + f32(pcg(pixHash)) / 4294967296.0) - 0.5;
     var seed = pcg(pcg(gid.x + gid.y * 65537u) + fc * 12979u);
+    let centerRay = makeRay(vec2<f32>(f32(pixel.x) + 0.5, f32(pixel.y) + 0.5), res);
+
+    // --- Checkerboard fast path: primary ray for depth + reprojection only ---
+    if (checkerSkip) {
+        let rh = sceneHitRaw(centerRay, 1e30);
+        let depth = select(0.0, rh.t, rh.triIdx >= 0);
+
+        let prev = textureLoad(accumRead, pixel, 0);
+        var old  = prev.xyz;
+        var pixelFC = prev.w;
+
+        var reprojOk = false;
+        if (pixelFC > 0.0 && depth > 0.0) {
+            let worldPos = rt.camOri.xyz + centerRay.dir * depth;
+            let toPoint  = worldPos - rt.prevCamOri.xyz;
+            let prevZ    = dot(toPoint, rt.prevCamFwd.xyz);
+            if (prevZ > 0.001) {
+                let aspect   = res.x / res.y;
+                let prevNdcX = dot(toPoint, rt.prevCamRgt.xyz) / (prevZ * rt.tanHalfFov.x * aspect);
+                let prevNdcY = dot(toPoint, rt.prevCamUp.xyz)  / (prevZ * rt.tanHalfFov.x);
+                let prevPx   = vec2<i32>(
+                    i32((prevNdcX + 1.0) * 0.5 * res.x),
+                    i32((1.0 - prevNdcY) * 0.5 * res.y));
+                if (prevPx.x >= 0 && prevPx.x < i32(res.x) &&
+                    prevPx.y >= 0 && prevPx.y < i32(res.y)) {
+                    let reproj = textureLoad(accumRead, prevPx, 0);
+                    old = reproj.xyz;
+                    pixelFC = min(reproj.w * 0.5, 8.0);
+                    reprojOk = true;
+                }
+            }
+        }
+        if (!reprojOk) { pixelFC = 0.0; }
+
+        let oldClean = select(vec3<f32>(0.0), old, old.x == old.x);
+        textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
+        textureStore(hitMeshWrite, pixel, textureLoad(hitMeshRead, pixel, 0));
+        textureStore(gBufWrite,    pixel, vec4<f32>(vec3<f32>(0.0), depth));
+        textureStore(albedoWrite,  pixel, vec4<f32>(vec3<f32>(0.0), 0.0));
+        return;
+    }
+
+    // --- Full path trace for active pixels ---
     let ray = makeRay(vec2<f32>(f32(pixel.x) + jx, f32(pixel.y) + jy), res);
     var primaryMeshIdx: u32;
     var primaryNormal:  vec3<f32>;
@@ -1262,12 +1403,12 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var pixelFC  = prev.w;
 
     // Reset pixels whose primary ray hits a moved mesh.
-    let prevMeshIdx = u32(textureLoad(hitMeshRead, pixel, 0).r);
+    let prevMeshU = u32(textureLoad(hitMeshRead, pixel, 0).r);
     if (primaryMeshIdx < 64u && isMeshMoved(i32(primaryMeshIdx))) {
         pixelFC = 0.0;
     }
     // Moved mesh left this pixel (was covering it, now moved away) — flush stale color.
-    if (primaryMeshIdx != prevMeshIdx && prevMeshIdx < 64u && isMeshMoved(i32(prevMeshIdx))) {
+    if (primaryMeshIdx != prevMeshU && prevMeshU < 64u && isMeshMoved(i32(prevMeshU))) {
         pixelFC = 0.0;
     }
     // Secondary bounce hit a moved mesh — cap rather than reset so static
@@ -1275,8 +1416,6 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (touchedMoved) { pixelFC = min(pixelFC, 8.0); }
 
     // Camera moved: reproject accumulation from previous frame's screen position
-    // instead of discarding all history.  Only attempt if prior accumulation exists
-    // (pixelFC > 0 means this pixel had valid data from a previous frame).
     if (fc == 0u) {
         var reprojOk = false;
         if (pixelFC > 0.0 && primaryDepth > 0.0) {
@@ -1294,7 +1433,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     prevPx.y >= 0 && prevPx.y < i32(res.y)) {
                     let reproj = textureLoad(accumRead, prevPx, 0);
                     old = reproj.xyz;
-                    pixelFC = min(reproj.w * 0.5, 8.0);  // carry some history but cap to avoid ghosting
+                    pixelFC = min(reproj.w * 0.5, 8.0);
                     reprojOk = true;
                 }
             }
@@ -1307,13 +1446,11 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let oldClean    = select(vec3<f32>(0.0), old,    old.x == old.x);
 
     // Adaptive outlier rejection: clamp sample relative to running average.
-    // Allows legitimate highlights to accumulate over time while suppressing
-    // single-sample fireflies that are orders of magnitude brighter.
     var clamped = sampleClean;
     if (pixelFC > 8.0) {
         let avgLum = max(dot(oldClean, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.01);
         let smpLum = dot(sampleClean, vec3<f32>(0.2126, 0.7152, 0.0722));
-        let maxLum = avgLum * 20.0;  // allow 20x brighter than average
+        let maxLum = avgLum * 20.0;
         if (smpLum > maxLum) {
             clamped = sampleClean * (maxLum / smpLum);
         }
@@ -1368,7 +1505,8 @@ struct MeshMatrices {
 }
 struct VtUniforms {
     triCount: u32,
-    _p0: u32, _p1: u32, _p2: u32,
+    groupsX:  u32,
+    _p1: u32, _p2: u32,
 }
 
 @group(0) @binding(0) var<storage, read> objTris:  array<ObjTriData>;
@@ -1378,8 +1516,9 @@ struct VtUniforms {
 
 @compute @workgroup_size(64)
 fn vt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= vtUni.triCount) { return; }
-    let ti  = i32(gid.x);
+    let linearId = gid.x + gid.y * vtUni.groupsX * 64u;
+    if (linearId >= vtUni.triCount) { return; }
+    let ti  = i32(linearId);
     let obj = objTris[ti];
     let mi  = i32(obj.v1.w);
     let mat = meshMats[mi];
@@ -1405,17 +1544,15 @@ fn vt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // ---------------------------------------------------------------------------
 constexpr const char* refitWGSL_ = R"(
 struct Bvh4NodeGpu {
-    cMinX: vec4<f32>,
-    cMinY: vec4<f32>,
-    cMinZ: vec4<f32>,
-    cMaxX: vec4<f32>,
-    cMaxY: vec4<f32>,
-    cMaxZ: vec4<f32>,
-    cIdx:  vec4<f32>,
+    p0:   vec4<u32>,  // cMinX(01), cMinX(23), cMinY(01), cMinY(23) as packed f16 pairs
+    p1:   vec4<u32>,  // cMinZ(01), cMinZ(23), cMaxX(01), cMaxX(23)
+    p2:   vec4<u32>,  // cMaxY(01), cMaxY(23), cMaxZ(01), cMaxZ(23)
+    cIdx: vec4<u32>,  // child indices (bitcast to i32 for leaf encoding)
 }
 struct RefitUniforms {
     leafCount: u32,
-    _p0: u32, _p1: u32, _p2: u32,
+    groupsX:   u32,
+    _p1: u32, _p2: u32,
 }
 
 @group(0) @binding(0) var triTex:                          texture_2d<f32>;
@@ -1425,26 +1562,59 @@ struct RefitUniforms {
 @group(0) @binding(4) var<uniform>             refitUni:   RefitUniforms;
 @group(0) @binding(5) var<storage, read>       refitMeta:  array<vec4<i32>>;  // (parent, childCount, numInternal, 0)
 
+// Unpack f16 pair → vec2<f32>
+fn up(v: u32) -> vec2<f32> { return unpack2x16float(v); }
+// Pack vec2<f32> → f16 pair as u32
+fn pk(a: f32, b: f32) -> u32 { return pack2x16float(vec2<f32>(a, b)); }
+
+// Unpack 4 f16s from two u32 → vec4<f32>
+fn unpackRow(a: u32, b: u32) -> vec4<f32> {
+    let lo = unpack2x16float(a);
+    let hi = unpack2x16float(b);
+    return vec4<f32>(lo.x, lo.y, hi.x, hi.y);
+}
+
 fn writeChildAABB(ni: i32, c: i32, bmin: vec3<f32>, bmax: vec3<f32>) {
+    // Read current packed values, update the f16 pair containing child c, write back.
+    // Children 0,1 are in the .x component; children 2,3 in the .y component.
+    var n = bvhNodes[ni];
     if (c == 0) {
-        bvhNodes[ni].cMinX.x = bmin.x; bvhNodes[ni].cMinY.x = bmin.y; bvhNodes[ni].cMinZ.x = bmin.z;
-        bvhNodes[ni].cMaxX.x = bmax.x; bvhNodes[ni].cMaxY.x = bmax.y; bvhNodes[ni].cMaxZ.x = bmax.z;
+        let old0 = up(n.p0.x); n.p0.x = pk(bmin.x, old0.y);  // cMinX: child0
+        let old2 = up(n.p0.z); n.p0.z = pk(bmin.y, old2.y);  // cMinY: child0
+        let old4 = up(n.p1.x); n.p1.x = pk(bmin.z, old4.y);  // cMinZ: child0
+        let old6 = up(n.p1.z); n.p1.z = pk(bmax.x, old6.y);  // cMaxX: child0
+        let old8 = up(n.p2.x); n.p2.x = pk(bmax.y, old8.y);  // cMaxY: child0
+        let oldA = up(n.p2.z); n.p2.z = pk(bmax.z, oldA.y);  // cMaxZ: child0
     } else if (c == 1) {
-        bvhNodes[ni].cMinX.y = bmin.x; bvhNodes[ni].cMinY.y = bmin.y; bvhNodes[ni].cMinZ.y = bmin.z;
-        bvhNodes[ni].cMaxX.y = bmax.x; bvhNodes[ni].cMaxY.y = bmax.y; bvhNodes[ni].cMaxZ.y = bmax.z;
+        let old0 = up(n.p0.x); n.p0.x = pk(old0.x, bmin.x);
+        let old2 = up(n.p0.z); n.p0.z = pk(old2.x, bmin.y);
+        let old4 = up(n.p1.x); n.p1.x = pk(old4.x, bmin.z);
+        let old6 = up(n.p1.z); n.p1.z = pk(old6.x, bmax.x);
+        let old8 = up(n.p2.x); n.p2.x = pk(old8.x, bmax.y);
+        let oldA = up(n.p2.z); n.p2.z = pk(oldA.x, bmax.z);
     } else if (c == 2) {
-        bvhNodes[ni].cMinX.z = bmin.x; bvhNodes[ni].cMinY.z = bmin.y; bvhNodes[ni].cMinZ.z = bmin.z;
-        bvhNodes[ni].cMaxX.z = bmax.x; bvhNodes[ni].cMaxY.z = bmax.y; bvhNodes[ni].cMaxZ.z = bmax.z;
+        let old1 = up(n.p0.y); n.p0.y = pk(bmin.x, old1.y);
+        let old3 = up(n.p0.w); n.p0.w = pk(bmin.y, old3.y);
+        let old5 = up(n.p1.y); n.p1.y = pk(bmin.z, old5.y);
+        let old7 = up(n.p1.w); n.p1.w = pk(bmax.x, old7.y);
+        let old9 = up(n.p2.y); n.p2.y = pk(bmax.y, old9.y);
+        let oldB = up(n.p2.w); n.p2.w = pk(bmax.z, oldB.y);
     } else {
-        bvhNodes[ni].cMinX.w = bmin.x; bvhNodes[ni].cMinY.w = bmin.y; bvhNodes[ni].cMinZ.w = bmin.z;
-        bvhNodes[ni].cMaxX.w = bmax.x; bvhNodes[ni].cMaxY.w = bmax.y; bvhNodes[ni].cMaxZ.w = bmax.z;
+        let old1 = up(n.p0.y); n.p0.y = pk(old1.x, bmin.x);
+        let old3 = up(n.p0.w); n.p0.w = pk(old3.x, bmin.y);
+        let old5 = up(n.p1.y); n.p1.y = pk(old5.x, bmin.z);
+        let old7 = up(n.p1.w); n.p1.w = pk(old7.x, bmax.x);
+        let old9 = up(n.p2.y); n.p2.y = pk(old9.x, bmax.y);
+        let oldB = up(n.p2.w); n.p2.w = pk(oldB.x, bmax.z);
     }
+    bvhNodes[ni] = n;
 }
 
 @compute @workgroup_size(64)
 fn bvh_refit(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= refitUni.leafCount) { return; }
-    let wideNi = leafIdxBuf[i32(gid.x)];
+    let linearId = gid.x + gid.y * refitUni.groupsX * 64u;
+    if (linearId >= refitUni.leafCount) { return; }
+    let wideNi = leafIdxBuf[i32(linearId)];
     let nfo = refitMeta[wideNi];
     let childCount = nfo.y;
 
@@ -1504,12 +1674,19 @@ fn bvh_refit(@builtin(global_invocation_id) gid: vec3<u32>) {
             let cc = refitMeta[ci].y;
             var bmin = vec3<f32>(1e30);
             var bmax = vec3<f32>(-1e30);
-            let cMinXa = array<f32, 4>(child.cMinX.x, child.cMinX.y, child.cMinX.z, child.cMinX.w);
-            let cMinYa = array<f32, 4>(child.cMinY.x, child.cMinY.y, child.cMinY.z, child.cMinY.w);
-            let cMinZa = array<f32, 4>(child.cMinZ.x, child.cMinZ.y, child.cMinZ.z, child.cMinZ.w);
-            let cMaxXa = array<f32, 4>(child.cMaxX.x, child.cMaxX.y, child.cMaxX.z, child.cMaxX.w);
-            let cMaxYa = array<f32, 4>(child.cMaxY.x, child.cMaxY.y, child.cMaxY.z, child.cMaxY.w);
-            let cMaxZa = array<f32, 4>(child.cMaxZ.x, child.cMaxZ.y, child.cMaxZ.z, child.cMaxZ.w);
+            // Unpack all 6 AABB rows from f16
+            let cMinXv = unpackRow(child.p0.x, child.p0.y);
+            let cMinYv = unpackRow(child.p0.z, child.p0.w);
+            let cMinZv = unpackRow(child.p1.x, child.p1.y);
+            let cMaxXv = unpackRow(child.p1.z, child.p1.w);
+            let cMaxYv = unpackRow(child.p2.x, child.p2.y);
+            let cMaxZv = unpackRow(child.p2.z, child.p2.w);
+            let cMinXa = array<f32, 4>(cMinXv.x, cMinXv.y, cMinXv.z, cMinXv.w);
+            let cMinYa = array<f32, 4>(cMinYv.x, cMinYv.y, cMinYv.z, cMinYv.w);
+            let cMinZa = array<f32, 4>(cMinZv.x, cMinZv.y, cMinZv.z, cMinZv.w);
+            let cMaxXa = array<f32, 4>(cMaxXv.x, cMaxXv.y, cMaxXv.z, cMaxXv.w);
+            let cMaxYa = array<f32, 4>(cMaxYv.x, cMaxYv.y, cMaxYv.z, cMaxYv.w);
+            let cMaxZa = array<f32, 4>(cMaxZv.x, cMaxZv.y, cMaxZv.z, cMaxZv.w);
             for (var gc: i32 = 0; gc < cc; gc++) {
                 bmin = min(bmin, vec3<f32>(cMinXa[gc], cMinYa[gc], cMinZa[gc]));
                 bmax = max(bmax, vec3<f32>(cMaxXa[gc], cMaxYa[gc], cMaxZa[gc]));
@@ -1887,10 +2064,10 @@ struct alignas(16) RtGpuUniforms {
 static_assert(sizeof(RtGpuUniforms) == 576, "RtGpuUniforms must be 576 bytes");
 
 struct alignas(16) VtGpuUniforms {
-    uint32_t triCount, _p[3];
+    uint32_t triCount, groupsX, _p[2];
 };
 struct alignas(16) RefitGpuUniforms {
-    uint32_t leafCount, _p[3];
+    uint32_t leafCount, groupsX, _p[2];
 };
 struct alignas(16) AtrousGpuUniforms {
     uint32_t stepSize, _p[3];
@@ -2115,6 +2292,9 @@ static std::pair<std::vector<unsigned char>, int> buildAtlas(
         auto* mwr = dynamic_cast<MaterialWithRoughness*>(mesh->material().get());
         if (mwr && mwr->roughnessMap) addTexture(mwr->roughnessMap.get(), slot);
     }
+    std::cerr << "[PathTracer] Atlas: " << slot << " unique textures in "
+              << ATLAS_COLS << "x" << rows << " grid (" << (ATLAS_COLS * TILE_SIZE)
+              << "x" << (rows * TILE_SIZE) << " px)" << std::endl;
     return {std::move(atlas), rows};
 }
 
@@ -2700,24 +2880,49 @@ static void collapseBvh4(
 ///
 /// Refit metadata is stored in a separate buffer (4 ints per node):
 ///   (parent, childCount, numInternalChildren, 0)
-static constexpr int BVH4_GPU_FLOATS = 28;
+static constexpr int BVH4_GPU_U32S = 16;  // 64 bytes per node (was 112 with f32 AABBs)
 static constexpr int BVH4_REFIT_INTS = 4;  // per-node refit metadata
 
-static void packBvh4Buffer(const std::vector<Bvh4Node>& nodes, std::vector<float>& buf, int capacity) {
-    std::ranges::fill(buf, 0.f);
+// Convert f32 to IEEE 754 half-precision (f16), returned as uint16_t.
+static uint16_t f32ToF16(float value) {
+    uint32_t f;
+    std::memcpy(&f, &value, sizeof(f));
+    const uint32_t sign = (f >> 16) & 0x8000u;
+    const int32_t  exp  = static_cast<int32_t>((f >> 23) & 0xFFu) - 127 + 15;
+    const uint32_t mant = f & 0x007FFFFFu;
+    if (exp <= 0) return static_cast<uint16_t>(sign);          // flush subnormals to zero
+    if (exp >= 31) return static_cast<uint16_t>(sign | 0x7C00u); // infinity / overflow
+    return static_cast<uint16_t>(sign | (static_cast<uint32_t>(exp) << 10) | (mant >> 13));
+}
+
+// Pack two f32 values into a single u32 as two f16 halves (matches WGSL unpack2x16float).
+static uint32_t packF16x2(float a, float b) {
+    return uint32_t(f32ToF16(a)) | (uint32_t(f32ToF16(b)) << 16);
+}
+
+static void packBvh4Buffer(const std::vector<Bvh4Node>& nodes, std::vector<uint32_t>& buf, int capacity) {
+    std::ranges::fill(buf, 0u);
     const int nc = std::min(static_cast<int>(nodes.size()), capacity);
     for (int i = 0; i < nc; i++) {
         const auto& n = nodes[i];
-        float* p = buf.data() + static_cast<size_t>(i) * BVH4_GPU_FLOATS;
-        // row0-5: SoA AABBs
-        for (int c = 0; c < 4; c++) p[0  + c] = n.childMinX[c];
-        for (int c = 0; c < 4; c++) p[4  + c] = n.childMinY[c];
-        for (int c = 0; c < 4; c++) p[8  + c] = n.childMinZ[c];
-        for (int c = 0; c < 4; c++) p[12 + c] = n.childMaxX[c];
-        for (int c = 0; c < 4; c++) p[16 + c] = n.childMaxY[c];
-        for (int c = 0; c < 4; c++) p[20 + c] = n.childMaxZ[c];
-        // row6: child indices (triCount packed into leaf encoding)
-        for (int c = 0; c < 4; c++) std::memcpy(p + 24 + c, &n.childIdx[c], sizeof(int));
+        uint32_t* p = buf.data() + static_cast<size_t>(i) * BVH4_GPU_U32S;
+        // p0: cMinX(01), cMinX(23), cMinY(01), cMinY(23)
+        p[0] = packF16x2(n.childMinX[0], n.childMinX[1]);
+        p[1] = packF16x2(n.childMinX[2], n.childMinX[3]);
+        p[2] = packF16x2(n.childMinY[0], n.childMinY[1]);
+        p[3] = packF16x2(n.childMinY[2], n.childMinY[3]);
+        // p1: cMinZ(01), cMinZ(23), cMaxX(01), cMaxX(23)
+        p[4] = packF16x2(n.childMinZ[0], n.childMinZ[1]);
+        p[5] = packF16x2(n.childMinZ[2], n.childMinZ[3]);
+        p[6] = packF16x2(n.childMaxX[0], n.childMaxX[1]);
+        p[7] = packF16x2(n.childMaxX[2], n.childMaxX[3]);
+        // p2: cMaxY(01), cMaxY(23), cMaxZ(01), cMaxZ(23)
+        p[8]  = packF16x2(n.childMaxY[0], n.childMaxY[1]);
+        p[9]  = packF16x2(n.childMaxY[2], n.childMaxY[3]);
+        p[10] = packF16x2(n.childMaxZ[0], n.childMaxZ[1]);
+        p[11] = packF16x2(n.childMaxZ[2], n.childMaxZ[3]);
+        // cIdx: child indices as bitcast u32
+        for (int c = 0; c < 4; c++) std::memcpy(p + 12 + c, &n.childIdx[c], sizeof(int));
     }
 }
 
@@ -2823,7 +3028,7 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer  atrousUniBuf;
     bool denoiserEnabled_ = false;
     float envIntensity_ = 1.0f;
-    int maxBounces_ = 6;
+    int maxBounces_ = 5;
     float exposure_ = 1.0f;
 
     // Dynamic capacity tracking — buffers grow as scenes demand more
@@ -2887,7 +3092,7 @@ struct WgpuPathTracer::Impl {
     std::vector<float> matBuffer;
     std::vector<float> rawObjTriBuf;
     std::vector<float> matrixCpuBuf;
-    std::vector<float> bvhNodeCpuBuf;
+    std::vector<uint32_t> bvhNodeCpuBuf;
     std::vector<int32_t> refitMetaCpuBuf;
     std::vector<uint32_t> bvhCounterZeros;
 
@@ -2908,7 +3113,7 @@ struct WgpuPathTracer::Impl {
         std::vector<Bvh4Node> bvhNodes;
         std::vector<int> bvhIndices;
         std::vector<int> leafIndices;
-        std::vector<float> bvhNodeCpuBuf;
+        std::vector<uint32_t> bvhNodeCpuBuf;
         std::vector<int32_t> refitMetaCpuBuf;
         std::vector<float> emissiveTriCpu;
         int triCount = 0;
@@ -2941,7 +3146,12 @@ struct WgpuPathTracer::Impl {
     std::vector<Matrix4> prevEntryMatrices;
     int triCount_ = 0;
     int numBvhNodes_ = 0;
+    uint32_t vtDispatchX_ = 1, vtDispatchY_ = 1;
+    uint32_t rfDispatchX_ = 1, rfDispatchY_ = 1;
     float frameCount_ = 0.f;
+    uint32_t globalFrameCounter_ = 0;
+    bool foveatedEnabled_ = true;
+    int foveatedConvergeFrames_ = 4;
     Vector3 prevCamPos_;
     Vector3 prevCamDir_;
     Mode mode_ = Mode::Raytracer;
@@ -3007,7 +3217,7 @@ struct WgpuPathTracer::Impl {
           taaUniBuf(r, sizeof(TaaGpuUniforms)),
           atrousUniBuf(r, sizeof(AtrousGpuUniforms)),
           // Storage buffers (small placeholders — grown dynamically on first build)
-          bvhNodeBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * BVH4_GPU_FLOATS * sizeof(float),
+          bvhNodeBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * BVH4_GPU_U32S * sizeof(uint32_t),
                      WgpuBuffer::Usage::Storage),
           bvhCounterBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * sizeof(uint32_t),
                         WgpuBuffer::Usage::Storage),
@@ -3062,6 +3272,7 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setTexture(12, envCdfTex);
         rtPipeline.setTexture(13, envMargTex);
         rtPipeline.setStorageTexture(14, albedoTex);
+        rtPipeline.setTexture(15, *gBufPrev);
 
         rtRaycastPipeline.setUniformBuffer(0, rtUniformBuf);
         rtRaycastPipeline.setStorageBufferRead(3, bvhNodeBuf);
@@ -3072,6 +3283,7 @@ struct WgpuPathTracer::Impl {
         rtRaycastPipeline.setStorageTexture(10, *gBufCur);
         rtRaycastPipeline.setStorageBufferRead(11, emissiveTriBuf);
         rtRaycastPipeline.setStorageTexture(14, albedoTex);
+        rtRaycastPipeline.setTexture(15, *gBufPrev);
 
         // TAA pipeline: uniform buffer is static binding
         taaPipeline.setUniformBuffer(0, taaUniBuf);
@@ -3225,8 +3437,10 @@ struct WgpuPathTracer::Impl {
         hitMeshB.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
 
         rtPipeline.setStorageTexture(10, *gBufCur);
+        rtPipeline.setTexture(15, *gBufPrev);
         rtPipeline.setStorageTexture(14, albedoTex);
         rtRaycastPipeline.setStorageTexture(10, *gBufCur);
+        rtRaycastPipeline.setTexture(15, *gBufPrev);
         rtRaycastPipeline.setStorageTexture(14, albedoTex);
         atrousPipeline.setTexture(4, albedoTex);
 
@@ -3346,10 +3560,9 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
         const int matCount = static_cast<int>(meshes.size());
         const int meshCount = static_cast<int>(entries.size());
-        r.triCapacity  = nextPow2(std::max(totalTris, 1));
-        r.matCapacity  = nextPow2(std::max(matCount, 1));
-        r.meshCapacity = nextPow2(std::max(meshCount, 1));
-        r.bvhCapacity  = 2 * r.triCapacity - 1;
+        r.triCapacity  = std::max(totalTris, 1);
+        r.matCapacity  = std::max(matCount, 1);
+        r.meshCapacity = std::max(meshCount, 1);
 
         const int pages = triTexPages(r.triCapacity);
         r.triBuffer.resize(static_cast<size_t>(TEX_PAGE_WIDTH) * TRI_TEX_HEIGHT * pages * 4, 0.f);
@@ -3362,7 +3575,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                                            r.triCapacity, r.matCapacity, r.meshCapacity);
         buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
         r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
-        r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_FLOATS, 0.f);
+        r.bvhCapacity = r.numBvhNodes;  // exact — no overallocation
+        r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_U32S, 0u);
         packBvh4Buffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
         r.refitMetaCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_REFIT_INTS, 0);
         packRefitMetadata(r.bvhNodes, r.refitMetaCpuBuf, r.bvhCapacity);
@@ -3430,10 +3644,9 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             }
             const int matCount = static_cast<int>(meshes.size());
             const int meshCount = static_cast<int>(entries.size());
-            r.triCapacity  = nextPow2(std::max(totalTris, 1));
-            r.matCapacity  = nextPow2(std::max(matCount, 1));
-            r.meshCapacity = nextPow2(std::max(meshCount, 1));
-            r.bvhCapacity  = 2 * r.triCapacity - 1;
+            r.triCapacity  = std::max(totalTris, 1);
+            r.matCapacity  = std::max(matCount, 1);
+            r.meshCapacity = std::max(meshCount, 1);
 
             const int pages = triTexPages(r.triCapacity);
             r.triBuffer.resize(static_cast<size_t>(TEX_PAGE_WIDTH) * TRI_TEX_HEIGHT * pages * 4, 0.f);
@@ -3446,7 +3659,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                                                r.triCapacity, r.matCapacity, r.meshCapacity);
             buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
             r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
-            r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_FLOATS, 0.f);
+            r.bvhCapacity = r.numBvhNodes;  // exact — no overallocation
+            r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_U32S, 0u);
             packBvh4Buffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
             r.refitMetaCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_REFIT_INTS, 0);
             packRefitMetadata(r.bvhNodes, r.refitMetaCpuBuf, r.bvhCapacity);
@@ -3510,6 +3724,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.triCount_ = r.triCount;
         d.numBvhNodes_ = r.numBvhNodes;
         d.emissiveTriCount_ = r.emissiveTriCount;
+
+        std::cerr << "[PathTracer] Scene: " << r.triCount << " tris, "
+                  << r.numBvhNodes << " BVH nodes, "
+                  << r.matCapacity << " materials, "
+                  << r.meshCapacity << " meshes" << std::endl;
         d.emissiveTotalArea_ = r.emissiveTotalArea;
         d.emissiveTotalPower_ = r.emissiveTotalPower;
 
@@ -3537,7 +3756,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
         if (r.bvhCapacity > d.bvhCapacity_) {
             d.bvhCapacity_ = r.bvhCapacity;
-            d.bvhNodeBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_FLOATS * sizeof(float),
+            d.bvhNodeBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_U32S * sizeof(uint32_t),
                                        WgpuBuffer::Usage::Storage);
             d.bvhCounterBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.bvhCapacity) * sizeof(uint32_t),
                                           WgpuBuffer::Usage::Storage);
@@ -3581,7 +3800,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.texAtlasTex.write(r.atlasData.data(), r.atlasData.size());
 
         // Upload geometry + BVH
-        d.bvhNodeBuf.write(d.bvhNodeCpuBuf.data(), d.numBvhNodes_ * BVH4_GPU_FLOATS * sizeof(float));
+        d.bvhNodeBuf.write(d.bvhNodeCpuBuf.data(), d.numBvhNodes_ * BVH4_GPU_U32S * sizeof(uint32_t));
         d.refitMetaBuf.write(d.refitMetaCpuBuf.data(), d.numBvhNodes_ * BVH4_REFIT_INTS * sizeof(int32_t));
         d.objTriBuf.write(d.rawObjTriBuf.data(), static_cast<size_t>(d.triCount_) * 32 * sizeof(float));
         d.leafIndexBuf.write(d.leafIndices.data(), d.leafIndices.size() * sizeof(int));
@@ -3591,6 +3810,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.emissiveTriBuf.write(d.emissiveTriCpu.data(),
                                    d.emissiveTriCpu.size() * sizeof(float));
         }
+
+        // Free large CPU-side build buffers now that data lives on GPU.
+        { std::vector<float>().swap(d.triBuffer); }
+        { std::vector<float>().swap(d.matBuffer); }
+        { std::vector<float>().swap(d.rawObjTriBuf); }
+        { std::vector<uint32_t>().swap(d.bvhNodeCpuBuf); }
+        { std::vector<int32_t>().swap(d.refitMetaCpuBuf); }
+        { std::vector<float>().swap(d.emissiveTriCpu); }
     }
 
 #ifndef __EMSCRIPTEN__
@@ -3664,12 +3891,27 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
         d.matrixBuf.write(d.matrixCpuBuf.data(), static_cast<size_t>(d.meshCapacity_) * 32 * sizeof(float));
 
+        // Compute 2D dispatch dimensions (WebGPU max per-dimension is 65535)
+        const uint32_t vtTotal = (static_cast<uint32_t>(d.triCount_) + 63u) / 64u;
+        const uint32_t vtGx = (std::min)(vtTotal, 65535u);
+        const uint32_t vtGy = (vtTotal + vtGx - 1u) / vtGx;
+        d.vtDispatchX_ = vtGx;
+        d.vtDispatchY_ = vtGy;
+
         VtGpuUniforms vtU{};
         vtU.triCount = static_cast<uint32_t>(d.triCount_);
+        vtU.groupsX  = vtGx;
         d.vtUniBuf.write(&vtU, sizeof(vtU));
+
+        const uint32_t rfTotal = (static_cast<uint32_t>(d.leafIndices.size()) + 63u) / 64u;
+        const uint32_t rfGx = (std::min)(rfTotal, 65535u);
+        const uint32_t rfGy = (rfTotal + rfGx - 1u) / rfGx;
+        d.rfDispatchX_ = rfGx;
+        d.rfDispatchY_ = rfGy;
 
         RefitGpuUniforms rfU{};
         rfU.leafCount = static_cast<uint32_t>(d.leafIndices.size());
+        rfU.groupsX   = rfGx;
         d.refitUniBuf.write(&rfU, sizeof(rfU));
         d.bvhCounterBuf.write(d.bvhCounterZeros.data(),
                               static_cast<size_t>(d.numBvhNodes_) * sizeof(uint32_t));
@@ -3851,8 +4093,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         u.envIntensity[3] = 0.f;
     }
     u.params[0] = static_cast<float>(d.maxBounces_);
-    u.params[1] = 0.f;
-    u.params[2] = 0.f;
+    u.params[1] = static_cast<float>(d.globalFrameCounter_++);
+    u.params[2] = (d.foveatedEnabled_ && d.frameCount_ > 0.f) ? 1.f : 0.f;
     u.params[3] = 0.f;
     u.emissiveInfo[0] = static_cast<float>(d.emissiveTriCount_);
     u.emissiveInfo[1] = d.emissiveTotalPower_;
@@ -3920,16 +4162,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             // Pass 1: vertex transform (writes triTex)
             passDesc.label = WGPUStringView{"vt_pass", WGPU_STRLEN};
             WGPUComputePassEncoder vtPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
-            const uint32_t vtGx = (static_cast<uint32_t>(d.triCount_) + 63u) / 64u;
-            d.vtPipeline.encode(vtPass, vtGx);
+            d.vtPipeline.encode(vtPass, d.vtDispatchX_, d.vtDispatchY_);
             wgpuComputePassEncoderEnd(vtPass);
             wgpuComputePassEncoderRelease(vtPass);
 
             // Pass 2: BVH refit (reads triTex, writes bvhNodes)
             passDesc.label = WGPUStringView{"rf_pass", WGPU_STRLEN};
             WGPUComputePassEncoder rfPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
-            const uint32_t rfGx = (static_cast<uint32_t>(d.leafIndices.size()) + 63u) / 64u;
-            d.refitPipeline.encode(rfPass, rfGx);
+            d.refitPipeline.encode(rfPass, d.rfDispatchX_, d.rfDispatchY_);
             wgpuComputePassEncoderEnd(rfPass);
             wgpuComputePassEncoderRelease(rfPass);
         }
@@ -3959,13 +4199,16 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // Swap gBuf for next frame
     std::swap(d.gBufCur, d.gBufPrev);
     d.rtPipeline.setStorageTexture(10, *d.gBufCur);
+    d.rtPipeline.setTexture(15, *d.gBufPrev);
     d.rtRaycastPipeline.setStorageTexture(10, *d.gBufCur);
+    d.rtRaycastPipeline.setTexture(15, *d.gBufPrev);
 
     // TAA + spatial denoiser (path tracer mode only)
     // Skip entirely when fully converged — accumulation is already clean.
     WgpuTexture* displayTex = d.readAccum;
     const bool hasMotion = (movedBits[0] | movedBits[1]) != 0u;
-    const bool needsDenoise = d.frameCount_ < 64.f || hasMotion;
+    const bool foveatedActive = d.foveatedEnabled_ && d.frameCount_ > 0.f;
+    const bool needsDenoise = (d.frameCount_ < 64.f || hasMotion) && !foveatedActive;
     if (d.denoiserEnabled_ && d.mode_ == Mode::PathTracer && needsDenoise) {
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
@@ -4175,7 +4418,7 @@ float WgpuPathTracer::envIntensity() const {
 }
 
 void WgpuPathTracer::setMaxBounces(int bounces) {
-    bounces = std::max(1, std::min(bounces, 32));
+    bounces = std::max(1, std::min(bounces, 16));
     if (pimpl_->maxBounces_ != bounces) {
         pimpl_->maxBounces_ = bounces;
         pimpl_->frameCount_ = 0.f;
@@ -4237,6 +4480,14 @@ void WgpuPathTracer::setPixelScale(float scale) {
 
 float WgpuPathTracer::pixelScale() const {
     return pimpl_->pixelScale_;
+}
+
+void WgpuPathTracer::setFoveatedRendering(bool enabled) {
+    pimpl_->foveatedEnabled_ = enabled;
+}
+
+bool WgpuPathTracer::foveatedRendering() const {
+    return pimpl_->foveatedEnabled_;
 }
 
 int WgpuPathTracer::frameCount() const {

@@ -68,6 +68,12 @@ namespace threepp {
         void setPixelScale(float scale);
         [[nodiscard]] float pixelScale() const;
 
+        /// Enable/disable foveated rendering during camera motion. Default: true.
+        /// Renders center at full resolution, periphery at reduced resolution.
+        /// Converges to full quality when camera is stationary (lossless).
+        void setFoveatedRendering(bool enabled);
+        [[nodiscard]] bool foveatedRendering() const;
+
         [[nodiscard]] int frameCount() const;
         void resetAccumulation();
 
