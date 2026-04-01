@@ -69,7 +69,26 @@ static int triTexPages(int triCap) {
 // ---------------------------------------------------------------------------
 // WGSL compute shader — common code shared by raycaster and path tracer
 // ---------------------------------------------------------------------------
+// Shared WGSL definitions used by multiple shaders (VT, refit, RT).
+constexpr const char* csSharedDefsWGSL = R"(
+const TRI_PAGE_W:  i32 = 8192;
+const TRI_PAGE_H:  i32 = 8;
+const MAX_LEAF_TRIS: i32 = 8;
+
+fn triCoord(ti: i32, row: i32) -> vec2<i32> {
+    return vec2<i32>(ti % TRI_PAGE_W, (ti / TRI_PAGE_W) * TRI_PAGE_H + row);
+}
+)";
+
 constexpr const char* csCommonWGSL = R"(
+
+// Named constants
+const RAY_EPS:  f32 = 1e-3;   // surface offset for secondary rays
+const TRI_MISS: f32 = 1e30;   // sentinel for no intersection
+
+fn luminance(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
 
 struct RtUniforms {
     camOri:     vec4<f32>,
@@ -104,8 +123,6 @@ struct Bvh4NodeGpu {
     cIdx:  vec4<f32>,
 }
 
-const MAX_LEAF_TRIS: i32 = 8;
-
 @group(0) @binding(0) var<uniform> rt:          RtUniforms;
 @group(0) @binding(1) var accumRead:  texture_2d<f32>;
 @group(0) @binding(2) var accumWrite: texture_storage_2d<rgba16float, write>;
@@ -120,15 +137,9 @@ const MAX_LEAF_TRIS: i32 = 8;
 @group(0) @binding(11) var<storage, read> emissiveTris: array<vec4<f32>>;  // per tri: (triIndex, area, 0, 0)
 @group(0) @binding(14) var albedoWrite: texture_storage_2d<rgba16float, write>;
 
-const TRI_PAGE_W:  i32 = 8192;
-const TRI_PAGE_H:  i32 = 8;
 const TILE_SIZE:   i32 = 1024;
 const MAX_TEX_SLOTS: i32 = 64;
 const ATLAS_COLS:  i32 = 8;
-
-fn triCoord(ti: i32, row: i32) -> vec2<i32> {
-    return vec2<i32>(ti % TRI_PAGE_W, (ti / TRI_PAGE_W) * TRI_PAGE_H + row);
-}
 
 struct Ray  { origin: vec3<f32>, dir: vec3<f32> }
 struct Isect { t: f32, u: f32, v: f32 }
@@ -295,7 +306,25 @@ fn aabbDist4(nd: Bvh4NodeGpu, ray: Ray, invD: vec3<f32>, tmax: f32) -> vec4<f32>
     let hit = tFar >= max(tNear, vec4<f32>(0.0));
     let nearClamp = max(tNear, vec4<f32>(0.0));
     let inRange = nearClamp < vec4<f32>(tmax);
-    return select(vec4<f32>(1e30), nearClamp, hit & inRange);
+    return select(vec4<f32>(TRI_MISS), nearClamp, hit & inRange);
+}
+
+// BRDF evaluation: GGX specular + Lambertian diffuse.
+struct BrdfResult { f_diff: vec3<f32>, f_spec: vec3<f32> }
+fn evalBrdf(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
+            albedo: vec3<f32>, metalness: f32, alpha: f32) -> BrdfResult {
+    let hv    = normalize(wo + wi);
+    let NdotH = max(0.0, dot(n, hv));
+    let NdotV = max(0.001, dot(n, wo));
+    let NdotL = max(0.001, abs(dot(n, wi)));
+    let VdotH = max(0.0, dot(wo, hv));
+    let F0    = mix(vec3<f32>(0.04), albedo, metalness);
+    let D     = ggxD(NdotH, alpha);
+    let F     = schlick(VdotH, F0);
+    let G     = ggxG1(NdotV, alpha) * ggxG1(NdotL, alpha);
+    return BrdfResult(
+        (vec3<f32>(1.0) - F) * albedo * (1.0 - metalness) / PI,
+        D * F * G / max(4.0 * NdotV * NdotL, 1e-6));
 }
 
 fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
@@ -309,11 +338,6 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     if (isect.t >= (*h).t) { return; }
 
     let w  = 1.0 - isect.u - isect.v;
-    let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
-    let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
-    let n2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
-    let sn = normalize(n0 * w + n1 * isect.u + n2 * isect.v);
-
     let uv01 = textureLoad(triData, triCoord(ti, 6), 0);
     let uv2  = textureLoad(triData, triCoord(ti, 7), 0).xy;
     let iuv  = vec2<f32>(uv01.x, uv01.y) * w
@@ -326,12 +350,15 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     let mat2   = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
     let mat3   = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
 
-    // Alpha test: discard hit if texture alpha is below threshold
     let alphaTest = mat3.y;
     if (alphaTest > 0.0 && mat1.x >= 0.0) {
-        let texAlpha = sampleAtlasAlpha(iuv, mat1.x);
-        if (texAlpha < alphaTest) { return; }
+        if (sampleAtlasAlpha(iuv, mat1.x) < alphaTest) { return; }
     }
+
+    let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
+    let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
+    let n2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
+    let sn = normalize(n0 * w + n1 * isect.u + n2 * isect.v);
 
     let isFrontFace = dot(ray.dir, sn) < 0.0;
     var finalNorm = select(-sn, sn, isFrontFace);
@@ -340,8 +367,7 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     let normalSlot = mat1.z;
     if (normalSlot >= 0.0) {
         let nmSample = sampleAtlas(iuv, normalSlot);
-        let nmTangent = nmSample * 2.0 - 1.0;  // [0,1] → [-1,1]
-        // Compute TBN from triangle edges and UVs
+        let nmTangent = nmSample * 2.0 - 1.0;
         let e1  = v1 - v0;
         let e2  = v2 - v0;
         let uv0 = vec2<f32>(uv01.x, uv01.y);
@@ -352,7 +378,6 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
         if (abs(denom) > 1e-8) {
             let invD = 1.0 / denom;
             var T = normalize((e1 * duv2.y - e2 * duv1.y) * invD);
-            // Gram-Schmidt orthogonalize T against N
             T = normalize(T - finalNorm * dot(finalNorm, T));
             let B = cross(finalNorm, T);
             finalNorm = normalize(T * nmTangent.x + B * nmTangent.y + finalNorm * nmTangent.z);
@@ -364,12 +389,10 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     let roughSlot = mat1.w;
     if (roughSlot >= 0.0) {
         let roughSample = sampleAtlas(iuv, roughSlot);
-        // roughnessMap green channel (glTF convention)
-        let mappedRough = roughSample.y;
-        shininess = max(1e-4, mappedRough * mappedRough);
+        shininess = max(1e-4, roughSample.y * roughSample.y);
     }
 
-    // Geometric (flat) normal — needed for MIS PDF of emissive surfaces
+    // Geometric (flat) normal
     let geoNcross = cross(v1 - v0, v2 - v0);
     let geoNlen   = length(geoNcross);
     let geoN    = select(sn, geoNcross / geoNlen, geoNlen > 1e-8);
@@ -389,11 +412,9 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     (*h).ior          = mat3.x;
     (*h).frontFace    = select(0.0, 1.0, isFrontFace);
     (*h).meshIdx      = i32(r1.w);
-    // Row 4: attenuationColor.rgb + attenuationDistance
     let mat4 = textureLoad(matData, vec2<i32>(matIdx, 4), 0);
     (*h).attenuationColor = mat4.xyz;
     (*h).attenuationDist  = mat4.w;
-    // Row 5: clearcoat + clearcoatAlpha
     let mat5 = textureLoad(matData, vec2<i32>(matIdx, 5), 0);
     (*h).clearcoat      = mat5.x;
     (*h).clearcoatAlpha = mat5.y;
@@ -426,36 +447,28 @@ fn testTriangleShadow(ray: Ray, ti: i32, h: ptr<function, ShadowHit>) {
     let r1  = textureLoad(triData, triCoord(ti, 1), 0);
     let v1  = r1.xyz;
     let v2  = textureLoad(triData, triCoord(ti, 2), 0).xyz;
-
     let isect = triIntersect(ray, v0, v1, v2);
     if (isect.t >= (*h).t) { return; }
-
     let matIdx = i32(r0.w);
     let mat3   = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
     let mat0   = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
     let mat1   = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
-
     let w  = 1.0 - isect.u - isect.v;
     let uv01 = textureLoad(triData, triCoord(ti, 6), 0);
     let uv2  = textureLoad(triData, triCoord(ti, 7), 0).xy;
     let iuv  = vec2<f32>(uv01.x, uv01.y) * w
              + vec2<f32>(uv01.z, uv01.w) * isect.u
              + uv2                        * isect.v;
-
-    // Alpha test
     let alphaTest = mat3.y;
     if (alphaTest > 0.0 && mat1.x >= 0.0) {
         let texAlpha = sampleAtlasAlpha(iuv, mat1.x);
         if (texAlpha < alphaTest) { return; }
     }
-
     let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
     let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
     let n2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
     let sn = normalize(n0 * w + n1 * isect.u + n2 * isect.v);
-
     let mat2 = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
-
     (*h).t            = isect.t;
     (*h).point        = ray.origin + isect.t * ray.dir;
     (*h).normal       = select(-sn, sn, dot(ray.dir, sn) < 0.0);
@@ -608,18 +621,8 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
         }
         if (shAtten.x + shAtten.y + shAtten.z > 0.001) {
             let NdotL = max(0.0, dot(h.normal, ln));
-            let hv    = normalize(wo_s + ln);
-            let NdotH = max(0.0, dot(h.normal, hv));
-            let NdotV = max(0.001, dot(h.normal, wo_s));
-            let NdotL2 = max(0.001, NdotL);
-            let VdotH = max(0.0, dot(wo_s, hv));
-            let F0_s  = mix(vec3<f32>(0.04), albedo, h.metalness);
-            let Ds    = ggxD(NdotH, h.shininess);
-            let Fs    = schlick(VdotH, F0_s);
-            let Gs    = ggxG1(NdotV, h.shininess) * ggxG1(NdotL2, h.shininess);
-            let f_spec = Ds * Fs * Gs / max(4.0 * NdotV * NdotL2, 1e-6);
-            let f_diff = (vec3<f32>(1.0) - Fs) * albedo / PI;
-            col += shAtten * lc * (f_diff + f_spec) * NdotL;
+            let brdf = evalBrdf(wo_s, ln, h.normal, albedo, h.metalness, h.shininess);
+            col += shAtten * lc * (brdf.f_diff + brdf.f_spec) * NdotL;
         }
     }
     return clamp(col + h.emissive, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -1023,17 +1026,8 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             if (shadowAtten.x + shadowAtten.y + shadowAtten.z > 0.001) {
                 let NdotL = dot(h.normal, ln);
                 if (NdotL <= 0.0) { continue; }
-                let hv    = normalize(wo + ln);
-                let NdotH = max(0.0, dot(h.normal, hv));
-                let NdotV = max(0.001, dot(h.normal, wo));
-                let VdotH = max(0.0, dot(wo, hv));
-                let F0    = mix(vec3<f32>(0.04), albedo, h.metalness);
-                let D     = ggxD(NdotH, h.shininess);
-                let F     = schlick(VdotH, F0);
-                let G     = ggxG1(NdotV, h.shininess) * ggxG1(max(0.001, NdotL), h.shininess);
-                let f_spec = D * F * G / max(4.0 * NdotV * NdotL, 1e-6);
-                let f_diff = (vec3<f32>(1.0) - F) * albedo / PI;
-                radiance  += throughput * shadowAtten * (f_diff + f_spec) * NdotL * lc;
+                let brdf = evalBrdf(wo, ln, h.normal, albedo, h.metalness, h.shininess);
+                radiance += throughput * shadowAtten * (brdf.f_diff + brdf.f_spec) * NdotL * lc;
             }
         }
 )"
@@ -1080,21 +1074,11 @@ R"(
                     let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
 
                     let pdf = (ePower * dist * dist) / (totalPower * eArea * cosLight);
-
-                    let hv    = normalize(wo + ln);
-                    let NdotH = max(0.0, dot(h.normal, hv));
-                    let NdotV = max(0.001, dot(h.normal, wo));
-                    let VdotH = max(0.0, dot(wo, hv));
-                    let F0    = mix(vec3<f32>(0.04), albedo, h.metalness);
-                    let D     = ggxD(NdotH, h.shininess);
-                    let F     = schlick(VdotH, F0);
-                    let G     = ggxG1(NdotV, h.shininess) * ggxG1(max(0.001, NdotL), h.shininess);
-                    let f_spec = D * F * G / max(4.0 * NdotV * NdotL, 1e-6);
-                    let f_diff = (vec3<f32>(1.0) - F) * albedo / PI;
+                    let brdf = evalBrdf(wo, ln, h.normal, albedo, h.metalness, h.shininess);
 
                     let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
                     let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);
-                    radiance += throughput * (f_diff + f_spec) * NdotL * emColor * w_light / pdf;
+                    radiance += throughput * (brdf.f_diff + brdf.f_spec) * NdotL * emColor * w_light / pdf;
                 }
             }
         }
@@ -1111,20 +1095,11 @@ R"(
                 sr.dir    = envDir;
                 let sh = sceneHitShadow(sr, 1e30);
                 if (sh.t >= 1e29) {
-                    let hv    = normalize(wo + envDir);
-                    let NdotH = max(0.0, dot(h.normal, hv));
-                    let NdotV = max(0.001, dot(h.normal, wo));
-                    let VdotH = max(0.0, dot(wo, hv));
-                    let F0    = mix(vec3<f32>(0.04), albedo, h.metalness);
-                    let D     = ggxD(NdotH, h.shininess);
-                    let F     = schlick(VdotH, F0);
-                    let G     = ggxG1(NdotV, h.shininess) * ggxG1(max(0.001, envNdotL), h.shininess);
-                    let f_spec = D * F * G / max(4.0 * NdotV * envNdotL, 1e-6);
-                    let f_diff = (vec3<f32>(1.0) - F) * albedo * (1.0 - h.metalness) / PI;
+                    let brdf = evalBrdf(wo, envDir, h.normal, albedo, h.metalness, h.shininess);
                     let envCol = sampleEnv(envDir) * rt.envIntensity.x;
                     let pdf_brdf_env = brdfPdf(wo, envDir, h.normal, h.shininess, h.metalness);
                     let w_env = envPdf / max(envPdf + pdf_brdf_env, 1e-8);
-                    radiance += throughput * (f_diff + f_spec) * envNdotL * envCol * w_env / envPdf;
+                    radiance += throughput * (brdf.f_diff + brdf.f_spec) * envNdotL * envCol * w_env / envPdf;
                 }
             }
         }
@@ -1317,7 +1292,8 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 // Build a raycaster or path tracer shader by concatenating common + specific code.
 static std::string buildRtShader(bool pathTrace, bool hasEnvCdf) {
-    std::string src = std::string(csCommonWGSL) + "\n" +
+    std::string src = std::string(csSharedDefsWGSL) + "\n" +
+                      csCommonWGSL + "\n" +
                       (pathTrace ? csPathTraceWGSL : csRaytraceWGSL);
     if (pathTrace) {
         const std::string marker = "/*ENV_CDF_FLAG*/false";
@@ -1332,14 +1308,7 @@ static std::string buildRtShader(bool pathTrace, bool hasEnvCdf) {
 // ---------------------------------------------------------------------------
 // WGSL vertex-transform compute shader
 // ---------------------------------------------------------------------------
-constexpr const char* vtWGSL = R"(
-const TRI_PAGE_W: i32 = 8192;
-const TRI_PAGE_H: i32 = 8;
-
-fn triCoord(ti: i32, row: i32) -> vec2<i32> {
-    return vec2<i32>(ti % TRI_PAGE_W, (ti / TRI_PAGE_W) * TRI_PAGE_H + row);
-}
-
+constexpr const char* vtWGSL_ = R"(
 struct ObjTriData {
     v0:   vec4<f32>,
     v1:   vec4<f32>,
@@ -1391,15 +1360,7 @@ fn vt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // ---------------------------------------------------------------------------
 // WGSL BVH refit compute shader
 // ---------------------------------------------------------------------------
-constexpr const char* refitWGSL = R"(
-const TRI_PAGE_W: i32 = 8192;
-const TRI_PAGE_H: i32 = 8;
-const MAX_LEAF_TRIS: i32 = 8;
-
-fn triCoord(ti: i32, row: i32) -> vec2<i32> {
-    return vec2<i32>(ti % TRI_PAGE_W, (ti / TRI_PAGE_W) * TRI_PAGE_H + row);
-}
-
+constexpr const char* refitWGSL_ = R"(
 struct Bvh4NodeGpu {
     cMinX: vec4<f32>,
     cMinY: vec4<f32>,
@@ -1516,6 +1477,9 @@ fn bvh_refit(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 )";
+
+static std::string buildVtShader() { return std::string(csSharedDefsWGSL) + "\n" + vtWGSL_; }
+static std::string buildRefitShader() { return std::string(csSharedDefsWGSL) + "\n" + refitWGSL_; }
 
 // ---------------------------------------------------------------------------
 // WGSL TAA-style temporal filter
@@ -2962,8 +2926,8 @@ struct WgpuPathTracer::Impl {
           refitUniBuf(r, sizeof(RefitGpuUniforms)),
           rtUniformBuf(r, sizeof(RtGpuUniforms)),
           // Compute pipelines
-          vtPipeline(r, vtWGSL, "vt_main"),
-          refitPipeline(r, refitWGSL, "bvh_refit"),
+          vtPipeline(r, buildVtShader(), "vt_main"),
+          refitPipeline(r, buildRefitShader(), "bvh_refit"),
           rtPipeline(r, buildRtShader(true, false), "rt_main"),
           rtRaycastPipeline(r, buildRtShader(false, false), "rt_main"),
           // Display pipeline
