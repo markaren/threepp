@@ -17,6 +17,7 @@
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/objects/Line.hpp"
+#include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/Texture.hpp"
@@ -1957,6 +1958,37 @@ static EnvCdfResult buildEnvCdf(const std::vector<T>& pixels, int w, int h) {
     return r;
 }
 
+// ---------------------------------------------------------------------------
+// Instancing support: flatten InstancedMesh into individual entries
+// ---------------------------------------------------------------------------
+
+struct RtMeshEntry {
+    Mesh* mesh;
+    Matrix4 worldMatrix;
+};
+
+/// Expand the mesh list so that each InstancedMesh becomes N separate entries
+/// (one per instance), each with its own effective world matrix.
+/// Regular meshes produce a single entry.
+static std::vector<RtMeshEntry> expandMeshEntries(const std::vector<Mesh*>& meshes) {
+    std::vector<RtMeshEntry> entries;
+    for (auto* mesh : meshes) {
+        auto* inst = dynamic_cast<InstancedMesh*>(mesh);
+        if (inst && inst->count() > 0) {
+            for (size_t j = 0; j < inst->count(); ++j) {
+                Matrix4 instMat;
+                inst->getMatrixAt(j, instMat);
+                Matrix4 world;
+                world.multiplyMatrices(*mesh->matrixWorld, instMat);
+                entries.push_back({mesh, world});
+            }
+        } else {
+            entries.push_back({mesh, *mesh->matrixWorld});
+        }
+    }
+    return entries;
+}
+
 /// Build texture atlas sized to actual slot usage (not MAX_TEX_SLOTS).
 /// Returns {pixel data, rows used (>= 1)}.
 static std::pair<std::vector<unsigned char>, int> buildAtlas(
@@ -2102,7 +2134,7 @@ static ExtractedMaterial extractMaterial(const Material* mat) {
 }
 
 static int buildGeometryBuffers(
-        const std::vector<Mesh*>& meshes,
+        const std::vector<RtMeshEntry>& entries,
         const std::unordered_map<Texture*, int>& texSlotMap,
         std::vector<float>& triBuffer,
         std::vector<float>& matBuffer,
@@ -2116,6 +2148,10 @@ static int buildGeometryBuffers(
 
     int triCount = 0;
     int matCount = 0;
+    int meshCount = 0;
+
+    // Track which Mesh* has already had its material written
+    std::unordered_map<Mesh*, int> meshToMatIdx;
 
     auto setTexel = [&](std::vector<float>& buf, int width, int col, int row,
                         float x, float y, float z, float w) {
@@ -2137,59 +2173,78 @@ static int buildGeometryBuffers(
         p[0] = x; p[1] = y; p[2] = z; p[3] = w;
     };
 
-    for (auto& mesh : meshes) {
-        if (triCount >= maxTris || matCount >= maxMats) break;
+    for (auto& entry : entries) {
+        if (triCount >= maxTris || meshCount >= maxMeshes) break;
 
-        auto em = extractMaterial(mesh->material().get());
-        setTexel(matBuffer, maxMats, matCount, 0,
-                 em.albedo.r, em.albedo.g, em.albedo.b, em.shininess);
-
-        float texSlot = -1.f;
-        float normalSlot = -1.f;
+        // Deduplicate material: write once per unique Mesh*
+        int matIdx;
         float texOffsetX = 0.f, texOffsetY = 0.f;
         float texRepeatX = 1.f, texRepeatY = 1.f;
-        if (auto* mwm = dynamic_cast<MaterialWithMap*>(mesh->material().get())) {
-            if (mwm->map) {
-                auto it = texSlotMap.find(mwm->map.get());
-                if (it != texSlotMap.end()) {
-                    texSlot = static_cast<float>(it->second);
+        auto matIt = meshToMatIdx.find(entry.mesh);
+        if (matIt != meshToMatIdx.end()) {
+            matIdx = matIt->second;
+            // Still need tex repeat/offset for UV baking
+            if (auto* mwm = dynamic_cast<MaterialWithMap*>(entry.mesh->material().get())) {
+                if (mwm->map) {
                     texOffsetX = mwm->map->offset.x;
                     texOffsetY = mwm->map->offset.y;
                     texRepeatX = mwm->map->repeat.x;
                     texRepeatY = mwm->map->repeat.y;
                 }
             }
-        }
-        if (auto* mnm = dynamic_cast<MaterialWithNormalMap*>(mesh->material().get())) {
-            if (mnm->normalMap) {
-                auto it = texSlotMap.find(mnm->normalMap.get());
-                if (it != texSlotMap.end()) {
-                    normalSlot = static_cast<float>(it->second);
+        } else {
+            if (matCount >= maxMats) continue;
+            matIdx = matCount++;
+            meshToMatIdx[entry.mesh] = matIdx;
+
+            auto em = extractMaterial(entry.mesh->material().get());
+            setTexel(matBuffer, maxMats, matIdx, 0,
+                     em.albedo.r, em.albedo.g, em.albedo.b, em.shininess);
+
+            float texSlot = -1.f;
+            float normalSlot = -1.f;
+            if (auto* mwm = dynamic_cast<MaterialWithMap*>(entry.mesh->material().get())) {
+                if (mwm->map) {
+                    auto it = texSlotMap.find(mwm->map.get());
+                    if (it != texSlotMap.end()) {
+                        texSlot = static_cast<float>(it->second);
+                        texOffsetX = mwm->map->offset.x;
+                        texOffsetY = mwm->map->offset.y;
+                        texRepeatX = mwm->map->repeat.x;
+                        texRepeatY = mwm->map->repeat.y;
+                    }
                 }
             }
-        }
-        float roughSlot = -1.f;
-        if (auto* mwr = dynamic_cast<MaterialWithRoughness*>(mesh->material().get())) {
-            if (mwr->roughnessMap) {
-                auto it = texSlotMap.find(mwr->roughnessMap.get());
-                if (it != texSlotMap.end()) {
-                    roughSlot = static_cast<float>(it->second);
+            if (auto* mnm = dynamic_cast<MaterialWithNormalMap*>(entry.mesh->material().get())) {
+                if (mnm->normalMap) {
+                    auto it = texSlotMap.find(mnm->normalMap.get());
+                    if (it != texSlotMap.end()) {
+                        normalSlot = static_cast<float>(it->second);
+                    }
                 }
             }
+            float roughSlot = -1.f;
+            if (auto* mwr = dynamic_cast<MaterialWithRoughness*>(entry.mesh->material().get())) {
+                if (mwr->roughnessMap) {
+                    auto it = texSlotMap.find(mwr->roughnessMap.get());
+                    if (it != texSlotMap.end()) {
+                        roughSlot = static_cast<float>(it->second);
+                    }
+                }
+            }
+            setTexel(matBuffer, maxMats, matIdx, 1, texSlot, em.metalness, normalSlot, roughSlot);
+            setTexel(matBuffer, maxMats, matIdx, 2,
+                    em.emissive.r, em.emissive.g, em.emissive.b, em.transmission);
+            setTexel(matBuffer, maxMats, matIdx, 3, em.ior, em.alphaTest, 0.f, 0.f);
+            setTexel(matBuffer, maxMats, matIdx, 4,
+                    em.attenuationColor.r, em.attenuationColor.g, em.attenuationColor.b, em.attenuationDistance);
+            setTexel(matBuffer, maxMats, matIdx, 5, em.clearcoat, em.clearcoatRoughness, 0.f, 0.f);
         }
-        setTexel(matBuffer, maxMats, matCount, 1, texSlot, em.metalness, normalSlot, roughSlot);
-        setTexel(matBuffer, maxMats, matCount, 2,
-                em.emissive.r, em.emissive.g, em.emissive.b, em.transmission);
-        setTexel(matBuffer, maxMats, matCount, 3, em.ior, em.alphaTest, 0.f, 0.f);
-        setTexel(matBuffer, maxMats, matCount, 4,
-                em.attenuationColor.r, em.attenuationColor.g, em.attenuationColor.b, em.attenuationDistance);
-        setTexel(matBuffer, maxMats, matCount, 5, em.clearcoat, em.clearcoatRoughness, 0.f, 0.f);
 
-        const int matIdx = matCount++;
-        const int meshIdx = matIdx;
+        const int meshIdx = meshCount++;
 
-        mesh->updateWorldMatrix(true, true);
-        const auto& world = *mesh->matrixWorld;
+        // Per-entry world matrix
+        const auto& world = entry.worldMatrix;
         Matrix4 normalMat(world);
         normalMat.invert().transpose();
 
@@ -2199,7 +2254,7 @@ static int buildGeometryBuffers(
             std::memcpy(mp + 16, normalMat.elements.data(), 16 * sizeof(float));
         }
 
-        auto* geo = mesh->geometry().get();
+        auto* geo = entry.mesh->geometry().get();
         auto* pos = geo->getAttribute<float>("position");
         if (!pos) continue;
         auto* nrm = geo->getAttribute<float>("normal");
@@ -2827,7 +2882,8 @@ struct WgpuPathTracer::Impl {
         int emissiveTriCount = 0;
         float emissiveTotalArea = 0.f;
         float emissiveTotalPower = 0.f;
-        std::vector<Mesh*> meshes;  // snapshot of mesh list
+        std::vector<Mesh*> meshes;       // unique meshes (for atlas)
+        std::vector<RtMeshEntry> entries; // expanded instances
         // Capacities used for buffer sizing (next-power-of-2)
         int triCapacity = 0;
         int matCapacity = 0;
@@ -2847,7 +2903,8 @@ struct WgpuPathTracer::Impl {
     // Frame state
     std::unordered_map<Texture*, int> texSlotMap;
     std::vector<Mesh*> prevMeshes;
-    std::vector<Matrix4> prevMeshMatrices;
+    int prevEntryCount_ = 0;
+    std::vector<Matrix4> prevEntryMatrices;
     int triCount_ = 0;
     int numBvhNodes_ = 0;
     float frameCount_ = 0.f;
@@ -3213,8 +3270,15 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     std::vector<SpotLight*> spotLights;
     scene.traverseType<SpotLight>([&](SpotLight& l) { if (l.visible) spotLights.push_back(&l); });
 
-    // Detect topology change
-    const bool topoChanged = (rtMeshes != d.prevMeshes);
+    // Compute entry count for instanced mesh awareness
+    int totalEntryCount = 0;
+    for (auto* m : rtMeshes) {
+        auto* inst = dynamic_cast<InstancedMesh*>(m);
+        totalEntryCount += (inst && inst->count() > 0) ? static_cast<int>(inst->count()) : 1;
+    }
+
+    // Detect topology change (mesh list or instance configuration changed)
+    const bool topoChanged = (rtMeshes != d.prevMeshes) || (totalEntryCount != d.prevEntryCount_);
 
     // Build scene data (BVH, geometry buffers, atlas, emissives) when topology changes.
     // Native: async on background thread.  Emscripten: synchronous (no pthreads).
@@ -3222,18 +3286,24 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 #ifdef __EMSCRIPTEN__
     if (topoChanged) {
         d.prevMeshes = rtMeshes;
+        d.prevEntryCount_ = totalEntryCount;
         auto meshes = rtMeshes;
+
+        // Expand InstancedMesh objects into individual entries
+        for (auto* m : meshes) m->updateWorldMatrix(true, true);
+        auto entries = expandMeshEntries(meshes);
 
         Impl::AsyncBuildResult r;
         r.meshes = meshes;
+        r.entries = entries;
         r.texSlotMap.clear();
         auto [atlasData, atlasRows] = buildAtlas(meshes, r.texSlotMap);
         r.atlasData = std::move(atlasData);
         r.atlasRows = atlasRows;
 
         int totalTris = 0;
-        for (auto* mesh : meshes) {
-            auto* geo = mesh->geometry().get();
+        for (auto& entry : entries) {
+            auto* geo = entry.mesh->geometry().get();
             auto* idx = geo->getIndex();
             auto* pos = geo->getAttribute<float>("position");
             if (!pos) continue;
@@ -3241,9 +3311,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                              : static_cast<int>(pos->count()) / 3;
         }
         const int matCount = static_cast<int>(meshes.size());
+        const int meshCount = static_cast<int>(entries.size());
         r.triCapacity  = nextPow2(std::max(totalTris, 1));
         r.matCapacity  = nextPow2(std::max(matCount, 1));
-        r.meshCapacity = r.matCapacity;
+        r.meshCapacity = nextPow2(std::max(meshCount, 1));
         r.bvhCapacity  = 2 * r.triCapacity - 1;
 
         const int pages = triTexPages(r.triCapacity);
@@ -3252,7 +3323,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 32, 0.f);
         r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
 
-        r.triCount = buildGeometryBuffers(meshes, r.texSlotMap, r.triBuffer, r.matBuffer,
+        r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
                                            r.rawObjTriBuf, r.matrixCpuBuf,
                                            r.triCapacity, r.matCapacity, r.meshCapacity);
         buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
@@ -3298,19 +3369,25 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     if (topoChanged && !d.buildPending_) {
         d.buildPending_ = true;
         d.prevMeshes = rtMeshes;
+        d.prevEntryCount_ = totalEntryCount;
 
         auto meshes = rtMeshes;
-        d.asyncBuild_ = std::async(std::launch::async, [meshes]() {
+        // Expand instances on main thread (reads InstancedMesh data)
+        for (auto* m : meshes) m->updateWorldMatrix(true, true);
+        auto entries = expandMeshEntries(meshes);
+
+        d.asyncBuild_ = std::async(std::launch::async, [meshes, entries]() {
             Impl::AsyncBuildResult r;
             r.meshes = meshes;
+            r.entries = entries;
             r.texSlotMap.clear();
             auto [atlasData, atlasRows] = buildAtlas(meshes, r.texSlotMap);
             r.atlasData = std::move(atlasData);
             r.atlasRows = atlasRows;
 
             int totalTris = 0;
-            for (auto* mesh : meshes) {
-                auto* geo = mesh->geometry().get();
+            for (auto& entry : entries) {
+                auto* geo = entry.mesh->geometry().get();
                 auto* idx = geo->getIndex();
                 auto* pos = geo->getAttribute<float>("position");
                 if (!pos) continue;
@@ -3318,9 +3395,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                                  : static_cast<int>(pos->count()) / 3;
             }
             const int matCount = static_cast<int>(meshes.size());
+            const int meshCount = static_cast<int>(entries.size());
             r.triCapacity  = nextPow2(std::max(totalTris, 1));
             r.matCapacity  = nextPow2(std::max(matCount, 1));
-            r.meshCapacity = r.matCapacity;
+            r.meshCapacity = nextPow2(std::max(meshCount, 1));
             r.bvhCapacity  = 2 * r.triCapacity - 1;
 
             const int pages = triTexPages(r.triCapacity);
@@ -3329,7 +3407,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 32, 0.f);
             r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
 
-            r.triCount = buildGeometryBuffers(meshes, r.texSlotMap, r.triBuffer, r.matBuffer,
+            r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
                                                r.rawObjTriBuf, r.matrixCpuBuf,
                                                r.triCapacity, r.matCapacity, r.meshCapacity);
             buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
@@ -3490,22 +3568,25 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
     scene.updateMatrixWorld();
 
-    // Detect per-mesh matrix changes; build bitmask of which meshes moved.
+    // Expand entries for movement detection (uses current world matrices)
+    auto rtEntries = expandMeshEntries(rtMeshes);
+
+    // Detect per-entry matrix changes; build bitmask of which entries moved.
     // movedBits is used by the GPU for per-pixel accumulation reset.
     // anyMeshMoved drives the vertex-transform and BVH-refit pipelines.
     uint32_t movedBits[2] = {0u, 0u};
-    bool anyMeshMoved = (d.prevMeshMatrices.size() != rtMeshes.size());
+    bool anyMeshMoved = (d.prevEntryMatrices.size() != rtEntries.size());
 
     if (topoJustFinished) {
         // Topology change: all pixels need to re-accumulate (mesh-to-triangle mapping changed)
         movedBits[0] = movedBits[1] = 0xFFFFFFFFu;
         anyMeshMoved = true;
     } else if (anyMeshMoved) {
-        // Mesh count mismatch (shouldn't happen without topo change, but be safe)
+        // Entry count mismatch (shouldn't happen without topo change, but be safe)
         movedBits[0] = movedBits[1] = 0xFFFFFFFFu;
     } else {
-        for (size_t i = 0; i < rtMeshes.size() && i < static_cast<size_t>(d.meshCapacity_); ++i) {
-            if (*rtMeshes[i]->matrixWorld != d.prevMeshMatrices[i]) {
+        for (size_t i = 0; i < rtEntries.size() && i < static_cast<size_t>(d.meshCapacity_); ++i) {
+            if (rtEntries[i].worldMatrix != d.prevEntryMatrices[i]) {
                 anyMeshMoved = true;
                 if (i < 32u) movedBits[0] |= (1u << i);
                 else         movedBits[1] |= (1u << (i - 32u));
@@ -3514,31 +3595,31 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     }
     // Note: camMoved resets all pixels via fc==0u in the shader; no movedBits needed for that.
 
-    // Compute per-mesh motion matrices: prevWorld * inverse(curWorld)
+    // Compute per-entry motion matrices: prevWorld * inverse(curWorld)
     // Used by TAA to reproject pixels on moving objects to their previous-frame screen position.
     d.motionMatCpu.resize(static_cast<size_t>(d.meshCapacity_) * 16, 0.f);
-    for (size_t i = 0; i < rtMeshes.size() && i < static_cast<size_t>(d.meshCapacity_); ++i) {
+    for (size_t i = 0; i < rtEntries.size() && i < static_cast<size_t>(d.meshCapacity_); ++i) {
         Matrix4 mot;  // identity by default
-        if (i < d.prevMeshMatrices.size()) {
-            Matrix4 curInv(*rtMeshes[i]->matrixWorld);
+        if (i < d.prevEntryMatrices.size()) {
+            Matrix4 curInv(rtEntries[i].worldMatrix);
             curInv.invert();
-            mot.multiplyMatrices(d.prevMeshMatrices[i], curInv);
+            mot.multiplyMatrices(d.prevEntryMatrices[i], curInv);
         }
-        // else: identity (new mesh, no previous frame)
+        // else: identity (new entry, no previous frame)
         std::memcpy(d.motionMatCpu.data() + i * 16, mot.elements.data(), 16 * sizeof(float));
     }
     d.motionMatBuf.write(d.motionMatCpu.data(), d.motionMatCpu.size() * sizeof(float));
 
-    d.prevMeshMatrices.resize(rtMeshes.size());
-    for (size_t i = 0; i < rtMeshes.size(); ++i)
-        d.prevMeshMatrices[i] = *rtMeshes[i]->matrixWorld;
+    d.prevEntryMatrices.resize(rtEntries.size());
+    for (size_t i = 0; i < rtEntries.size(); ++i)
+        d.prevEntryMatrices[i] = rtEntries[i].worldMatrix;
     if (anyMeshMoved) {
         if (!topoChanged) {
             std::ranges::fill(d.matrixCpuBuf, 0.f);
             int mi = 0;
-            for (auto* mesh : rtMeshes) {
+            for (auto& entry : rtEntries) {
                 if (mi >= d.meshCapacity_) break;
-                const auto& w = *mesh->matrixWorld;
+                const auto& w = entry.worldMatrix;
                 Matrix4 nm(w);
                 nm.invert().transpose();
                 float* p = d.matrixCpuBuf.data() + mi * 32;
@@ -4137,6 +4218,7 @@ int WgpuPathTracer::overlayLayer() const {
 
 void WgpuPathTracer::markDirty() {
     pimpl_->prevMeshes.clear();
+    pimpl_->prevEntryCount_ = 0;
 }
 
 void WgpuPathTracer::dispose() {
