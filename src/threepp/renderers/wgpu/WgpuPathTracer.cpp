@@ -94,16 +94,22 @@ struct RtUniforms {
     emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive power
 };
 
-struct BvhNodeGpu {
-    row0: vec4<f32>,
-    row1: vec4<f32>,
-    row2: vec4<f32>,
+struct Bvh4NodeGpu {
+    cMinX: vec4<f32>,  // child min X [0..3]
+    cMinY: vec4<f32>,  // child min Y [0..3]
+    cMinZ: vec4<f32>,  // child min Z [0..3]
+    cMaxX: vec4<f32>,  // child max X [0..3]
+    cMaxY: vec4<f32>,  // child max Y [0..3]
+    cMaxZ: vec4<f32>,  // child max Z [0..3]
+    cIdx:  vec4<f32>,  // child indices (bitcast i32): <0 = leaf -(triStart*8+triCount), >=0 = internal
 }
+
+const MAX_LEAF_TRIS: i32 = 8;
 
 @group(0) @binding(0) var<uniform> rt:          RtUniforms;
 @group(0) @binding(1) var accumRead:  texture_2d<f32>;
 @group(0) @binding(2) var accumWrite: texture_storage_2d<rgba16float, write>;
-@group(0) @binding(3) var<storage, read> bvhNodes: array<BvhNodeGpu>;
+@group(0) @binding(3) var<storage, read> bvhNodes: array<Bvh4NodeGpu>;
 @group(0) @binding(4) var matData:    texture_2d<f32>;
 @group(0) @binding(5) var triData:       texture_2d<f32>;
 @group(0) @binding(6) var texAtlas:      texture_2d<f32>;
@@ -272,8 +278,24 @@ fn aabbDist(bmin: vec3<f32>, bmax: vec3<f32>, ray: Ray, tmax: f32) -> f32 {
     if (tFar >= max(tNear, 0.0) && tNear < tmax) { return max(tNear, 0.0); }
     return 1e30;
 }
-fn aabbHit(bmin: vec3<f32>, bmax: vec3<f32>, ray: Ray, tmax: f32) -> bool {
-    return aabbDist(bmin, bmax, ray, tmax) < 1e30;
+
+// Test 4 child AABBs simultaneously using SoA layout. Returns vec4 of distances.
+fn aabbDist4(nd: Bvh4NodeGpu, ray: Ray, tmax: f32) -> vec4<f32> {
+    let invD = vec3<f32>(1.0) / ray.dir;
+    let ox = vec4<f32>(ray.origin.x); let oy = vec4<f32>(ray.origin.y); let oz = vec4<f32>(ray.origin.z);
+    let idx = vec4<f32>(invD.x); let idy = vec4<f32>(invD.y); let idz = vec4<f32>(invD.z);
+
+    let t1x = (nd.cMinX - ox) * idx;  let t2x = (nd.cMaxX - ox) * idx;
+    let t1y = (nd.cMinY - oy) * idy;  let t2y = (nd.cMaxY - oy) * idy;
+    let t1z = (nd.cMinZ - oz) * idz;  let t2z = (nd.cMaxZ - oz) * idz;
+
+    let tNear = max(max(min(t1x, t2x), min(t1y, t2y)), min(t1z, t2z));
+    let tFar  = min(min(max(t1x, t2x), max(t1y, t2y)), max(t1z, t2z));
+
+    let hit = tFar >= max(tNear, vec4<f32>(0.0));
+    let nearClamp = max(tNear, vec4<f32>(0.0));
+    let inRange = nearClamp < vec4<f32>(tmax);
+    return select(vec4<f32>(1e30), nearClamp, hit & inRange);
 }
 
 fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
@@ -377,38 +399,58 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     (*h).clearcoatAlpha = mat5.y;
 }
 
+fn decodeLeaf(ci: i32, ray: Ray, h: ptr<function, Hit>) {
+    let raw = -ci;
+    let triStart = (raw - 1) / MAX_LEAF_TRIS;
+    let triCount = ((raw - 1) % MAX_LEAF_TRIS) + 1;
+    for (var t = triStart; t < triStart + triCount; t++) {
+        testTriangle(ray, t, h);
+    }
+}
+
 fn sceneHit(ray: Ray) -> Hit {
     var h: Hit; h.t = 1e30; h.meshIdx = -1; h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0); h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
-    var stack: array<i32, 64>;
+    var stack: array<i32, 32>;
     var top: i32 = 0;
     stack[0] = 0; top = 1;
 
     while (top > 0) {
         top -= 1;
-        let ni  = stack[top];
-        let nd  = bvhNodes[ni];
-        if (!aabbHit(nd.row0.xyz, nd.row1.xyz, ray, h.t)) { continue; }
-        let left  = bitcast<i32>(nd.row0.w);
-        let right = bitcast<i32>(nd.row1.w);
-        if (left < 0) {
-            let triStart = -left - 1;
-            let triCount = right;
-            for (var ti = triStart; ti < triStart + triCount; ti++) {
-                testTriangle(ray, ti, &h);
-            }
-        } else {
-            let lnd = bvhNodes[left];
-            let rnd = bvhNodes[right];
-            let dL = aabbDist(lnd.row0.xyz, lnd.row1.xyz, ray, h.t);
-            let dR = aabbDist(rnd.row0.xyz, rnd.row1.xyz, ray, h.t);
-            if (dL < dR) {
-                if (dR < 1e30) { stack[top] = right; top += 1; }
-                if (dL < 1e30) { stack[top] = left;  top += 1; }
-            } else {
-                if (dL < 1e30) { stack[top] = left;  top += 1; }
-                if (dR < 1e30) { stack[top] = right; top += 1; }
-            }
-        }
+        let nd = bvhNodes[stack[top]];
+
+        // Test all 4 child AABBs at once
+        let dists = aabbDist4(nd, ray, h.t);
+
+        // Unpack child indices
+        let ci0 = bitcast<i32>(nd.cIdx.x);
+        let ci1 = bitcast<i32>(nd.cIdx.y);
+        let ci2 = bitcast<i32>(nd.cIdx.z);
+        let ci3 = bitcast<i32>(nd.cIdx.w);
+
+        // Process leaves immediately
+        if (dists.x < 1e30 && ci0 < 0) { decodeLeaf(ci0, ray, &h); }
+        if (dists.y < 1e30 && ci1 < 0) { decodeLeaf(ci1, ray, &h); }
+        if (dists.z < 1e30 && ci2 < 0) { decodeLeaf(ci2, ray, &h); }
+        if (dists.w < 1e30 && ci3 < 0) { decodeLeaf(ci3, ray, &h); }
+
+        // Push internal children — nearest last so it's popped first
+        // Partial sort: just ensure the nearest of any pair is on top
+        var n0 = dists.x; var n1 = dists.y; var n2 = dists.z; var n3 = dists.w;
+        var k0 = ci0; var k1 = ci1; var k2 = ci2; var k3 = ci3;
+        // Mark leaves/misses as invalid so they won't be pushed
+        if (k0 < 0) { n0 = 1e30; } if (k1 < 0) { n1 = 1e30; }
+        if (k2 < 0) { n2 = 1e30; } if (k3 < 0) { n3 = 1e30; }
+        // Sort descending (farthest first) — 5-comparator network
+        if (n0 < n1) { let t0=n0;n0=n1;n1=t0; let t1=k0;k0=k1;k1=t1; }
+        if (n2 < n3) { let t0=n2;n2=n3;n3=t0; let t1=k2;k2=k3;k3=t1; }
+        if (n0 < n2) { let t0=n0;n0=n2;n2=t0; let t1=k0;k0=k2;k2=t1; }
+        if (n1 < n3) { let t0=n1;n1=n3;n3=t0; let t1=k1;k1=k3;k3=t1; }
+        if (n1 < n2) { let t0=n1;n1=n2;n2=t0; let t1=k1;k1=k2;k2=t1; }
+        // Push valid internals (n < 1e30 means hit)
+        if (n0 < 1e30) { stack[top] = k0; top++; }
+        if (n1 < 1e30) { stack[top] = k1; top++; }
+        if (n2 < 1e30) { stack[top] = k2; top++; }
+        if (n3 < 1e30) { stack[top] = k3; top++; }
     }
     return h;
 }
@@ -1257,15 +1299,20 @@ fn vt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 constexpr const char* refitWGSL = R"(
 const TRI_PAGE_W: i32 = 8192;
 const TRI_PAGE_H: i32 = 8;
+const MAX_LEAF_TRIS: i32 = 8;
 
 fn triCoord(ti: i32, row: i32) -> vec2<i32> {
     return vec2<i32>(ti % TRI_PAGE_W, (ti / TRI_PAGE_W) * TRI_PAGE_H + row);
 }
 
-struct BvhNodeGpu {
-    row0: vec4<f32>,
-    row1: vec4<f32>,
-    row2: vec4<f32>,
+struct Bvh4NodeGpu {
+    cMinX: vec4<f32>,
+    cMinY: vec4<f32>,
+    cMinZ: vec4<f32>,
+    cMaxX: vec4<f32>,
+    cMaxY: vec4<f32>,
+    cMaxZ: vec4<f32>,
+    cIdx:  vec4<f32>,
 }
 struct RefitUniforms {
     leafCount: u32,
@@ -1273,44 +1320,104 @@ struct RefitUniforms {
 }
 
 @group(0) @binding(0) var triTex:                          texture_2d<f32>;
-@group(0) @binding(1) var<storage, read_write> bvhNodes:   array<BvhNodeGpu>;
+@group(0) @binding(1) var<storage, read_write> bvhNodes:   array<Bvh4NodeGpu>;
 @group(0) @binding(2) var<storage, read_write> bvhCounters: array<atomic<u32>>;
 @group(0) @binding(3) var<storage, read>       leafIdxBuf: array<i32>;
 @group(0) @binding(4) var<uniform>             refitUni:   RefitUniforms;
+@group(0) @binding(5) var<storage, read>       refitMeta:  array<vec4<i32>>;  // (parent, childCount, numInternal, 0)
+
+fn writeChildAABB(ni: i32, c: i32, bmin: vec3<f32>, bmax: vec3<f32>) {
+    if (c == 0) {
+        bvhNodes[ni].cMinX.x = bmin.x; bvhNodes[ni].cMinY.x = bmin.y; bvhNodes[ni].cMinZ.x = bmin.z;
+        bvhNodes[ni].cMaxX.x = bmax.x; bvhNodes[ni].cMaxY.x = bmax.y; bvhNodes[ni].cMaxZ.x = bmax.z;
+    } else if (c == 1) {
+        bvhNodes[ni].cMinX.y = bmin.x; bvhNodes[ni].cMinY.y = bmin.y; bvhNodes[ni].cMinZ.y = bmin.z;
+        bvhNodes[ni].cMaxX.y = bmax.x; bvhNodes[ni].cMaxY.y = bmax.y; bvhNodes[ni].cMaxZ.y = bmax.z;
+    } else if (c == 2) {
+        bvhNodes[ni].cMinX.z = bmin.x; bvhNodes[ni].cMinY.z = bmin.y; bvhNodes[ni].cMinZ.z = bmin.z;
+        bvhNodes[ni].cMaxX.z = bmax.x; bvhNodes[ni].cMaxY.z = bmax.y; bvhNodes[ni].cMaxZ.z = bmax.z;
+    } else {
+        bvhNodes[ni].cMinX.w = bmin.x; bvhNodes[ni].cMinY.w = bmin.y; bvhNodes[ni].cMinZ.w = bmin.z;
+        bvhNodes[ni].cMaxX.w = bmax.x; bvhNodes[ni].cMaxY.w = bmax.y; bvhNodes[ni].cMaxZ.w = bmax.z;
+    }
+}
 
 @compute @workgroup_size(64)
 fn bvh_refit(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= refitUni.leafCount) { return; }
-    let leafNi   = leafIdxBuf[i32(gid.x)];
-    let triStart = -(bitcast<i32>(bvhNodes[leafNi].row0.w)) - 1;
-    let triCount =   bitcast<i32>(bvhNodes[leafNi].row1.w);
+    let wideNi = leafIdxBuf[i32(gid.x)];
+    let nfo = refitMeta[wideNi];
+    let childCount = nfo.y;
 
-    var bmin = vec3<f32>(1e30);
-    var bmax = vec3<f32>(-1e30);
-    for (var ti = triStart; ti < triStart + triCount; ti++) {
-        for (var row = 0; row < 3; row++) {
-            let v = textureLoad(triTex, triCoord(ti, row), 0).xyz;
-            bmin = min(bmin, v);
-            bmax = max(bmax, v);
+    // Refit all leaf children of this wide node
+    let cIdxVec = bvhNodes[wideNi].cIdx;
+    let leafIdx = array<i32, 4>(bitcast<i32>(cIdxVec.x), bitcast<i32>(cIdxVec.y),
+                                 bitcast<i32>(cIdxVec.z), bitcast<i32>(cIdxVec.w));
+
+    for (var c: i32 = 0; c < childCount; c++) {
+        let ci = leafIdx[c];
+        if (ci >= 0) { continue; }
+
+        // Decode packed leaf: triStart and triCount
+        let raw = -ci;
+        let triStart = (raw - 1) / MAX_LEAF_TRIS;
+        let triCount = ((raw - 1) % MAX_LEAF_TRIS) + 1;
+
+        var bmin = vec3<f32>(1e30);
+        var bmax = vec3<f32>(-1e30);
+        for (var ti = triStart; ti < triStart + triCount; ti++) {
+            for (var row = 0; row < 3; row++) {
+                let v = textureLoad(triTex, triCoord(ti, row), 0).xyz;
+                bmin = min(bmin, v);
+                bmax = max(bmax, v);
+            }
         }
+        writeChildAABB(wideNi, c, bmin, bmax);
     }
-    bvhNodes[leafNi].row0 = vec4<f32>(bmin, bvhNodes[leafNi].row0.w);
-    bvhNodes[leafNi].row1 = vec4<f32>(bmax, bvhNodes[leafNi].row1.w);
 
-    var curNi = bitcast<i32>(bvhNodes[leafNi].row2.x);
+    // If this node has internal children, we must wait for them before propagating.
+    let numInternal = nfo.z;
+    if (numInternal > 0) {
+        let cnt = atomicAdd(&bvhCounters[wideNi], 1u);
+        if (cnt < u32(numInternal)) { return; }
+    }
+
+    // Propagate up to parent
+    var curNi = nfo.x;
     loop {
         if (curNi < 0) { break; }
+        let curNfo = refitMeta[curNi];
+        let numInt = u32(curNfo.z);
         let cnt = atomicAdd(&bvhCounters[curNi], 1u);
-        if (cnt == 0u) { break; }
-        let lNi = bitcast<i32>(bvhNodes[curNi].row0.w);
-        let rNi = bitcast<i32>(bvhNodes[curNi].row1.w);
-        bvhNodes[curNi].row0 = vec4<f32>(
-            min(bvhNodes[lNi].row0.xyz, bvhNodes[rNi].row0.xyz),
-            bvhNodes[curNi].row0.w);
-        bvhNodes[curNi].row1 = vec4<f32>(
-            max(bvhNodes[lNi].row1.xyz, bvhNodes[rNi].row1.xyz),
-            bvhNodes[curNi].row1.w);
-        curNi = bitcast<i32>(bvhNodes[curNi].row2.x);
+        let curChildCount = curNfo.y;
+        let hasLeaves = u32(curChildCount) > numInt;
+        let expected = select(numInt - 1u, numInt, hasLeaves);
+        if (cnt < expected) { break; }
+
+        // All children done — recompute internal children's AABBs from their sub-children
+        let pIdxVec = bvhNodes[curNi].cIdx;
+        let pIdx = array<i32, 4>(bitcast<i32>(pIdxVec.x), bitcast<i32>(pIdxVec.y),
+                                  bitcast<i32>(pIdxVec.z), bitcast<i32>(pIdxVec.w));
+        for (var c: i32 = 0; c < curChildCount; c++) {
+            let ci = pIdx[c];
+            if (ci < 0) { continue; }
+            let child = bvhNodes[ci];
+            let cc = refitMeta[ci].y;
+            var bmin = vec3<f32>(1e30);
+            var bmax = vec3<f32>(-1e30);
+            let cMinXa = array<f32, 4>(child.cMinX.x, child.cMinX.y, child.cMinX.z, child.cMinX.w);
+            let cMinYa = array<f32, 4>(child.cMinY.x, child.cMinY.y, child.cMinY.z, child.cMinY.w);
+            let cMinZa = array<f32, 4>(child.cMinZ.x, child.cMinZ.y, child.cMinZ.z, child.cMinZ.w);
+            let cMaxXa = array<f32, 4>(child.cMaxX.x, child.cMaxX.y, child.cMaxX.z, child.cMaxX.w);
+            let cMaxYa = array<f32, 4>(child.cMaxY.x, child.cMaxY.y, child.cMaxY.z, child.cMaxY.w);
+            let cMaxZa = array<f32, 4>(child.cMaxZ.x, child.cMaxZ.y, child.cMaxZ.z, child.cMaxZ.w);
+            for (var gc: i32 = 0; gc < cc; gc++) {
+                bmin = min(bmin, vec3<f32>(cMinXa[gc], cMinYa[gc], cMinZa[gc]));
+                bmax = max(bmax, vec3<f32>(cMaxXa[gc], cMaxYa[gc], cMaxZa[gc]));
+            }
+            writeChildAABB(curNi, c, bmin, bmax);
+        }
+        curNi = curNfo.x;
     }
 }
 )";
@@ -1704,7 +1811,7 @@ struct alignas(16) TaaGpuUniforms {
 static_assert(sizeof(TaaGpuUniforms) == 192, "TaaGpuUniforms must be 192 bytes");
 
 // ---------------------------------------------------------------------------
-// BVH node (48 bytes, matches GPU BvhNodeGpu)
+// Binary BVH node (used during build, then collapsed to BVH4)
 // ---------------------------------------------------------------------------
 struct BvhNode {
     float minX, minY, minZ;
@@ -2282,35 +2389,213 @@ static int pagedIdx(int ti, int row) {
     return ((ti / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + ti % TEX_PAGE_WIDTH) * 4;
 }
 
-static void packBvhNodeBuffer(const std::vector<BvhNode>& nodes, std::vector<float>& buf, int bvhCapacity) {
+// ---------------------------------------------------------------------------
+// Wide BVH (BVH4): collapse binary BVH into 4-way tree
+// ---------------------------------------------------------------------------
+
+// BVH4 node: up to 4 children, stored in SoA layout for SIMD AABB testing
+// Leaf encoding: childIdx = -(triStart * MAX_LEAF_TRIS + triCount), where triCount is 1-based.
+// Decode: raw = -childIdx; triStart = (raw - 1) / MAX_LEAF_TRIS; triCount = ((raw - 1) % MAX_LEAF_TRIS) + 1
+static constexpr int MAX_LEAF_TRIS = 8;
+
+struct Bvh4Node {
+    float childMinX[4], childMinY[4], childMinZ[4];
+    float childMaxX[4], childMaxY[4], childMaxZ[4];
+    int   childIdx[4];  // >= 0: internal node index, < 0: leaf (encoded triStart+triCount)
+    int   childCount;        // 1..4 valid children
+    int   numInternalChildren; // count of children with childIdx >= 0
+    int   parent;
+};
+
+/// Collapse a binary BVH into a BVH4 tree.
+/// Walk the binary tree and greedily expand internal children until each node
+/// has up to 4 children (which may be leaves or further internal BVH4 nodes).
+static void collapseBvh4(
+        const std::vector<BvhNode>& bin,
+        std::vector<Bvh4Node>& wide,
+        std::vector<int>& leafIndicesOut,
+        int binNodeIdx, int parentWide) {
+
+    const int wi = static_cast<int>(wide.size());
+    wide.emplace_back();
+
+    // Collect children by expanding shallowest internal nodes first.
+    // Start with the two binary children of binNodeIdx.
+    struct Candidate {
+        int binIdx;
+        float area;
+    };
+    std::vector<Candidate> children;
+    auto addChild = [&](int bi) {
+        const auto& n = bin[bi];
+        float a = boxSurfaceArea(n.minX, n.minY, n.minZ, n.maxX, n.maxY, n.maxZ);
+        children.push_back({bi, a});
+    };
+
+    // Helper: encode a binary leaf (triStart, triCount) into a single negative int
+    auto encodeLeaf = [](int binLeft, int binRight) -> int {
+        const int triStart = -(binLeft + 1);
+        const int triCount = binRight;
+        return -(triStart * MAX_LEAF_TRIS + triCount);
+    };
+
+    const auto& root = bin[binNodeIdx];
+    if (root.left < 0) {
+        // The binary root itself is a leaf — make a BVH4 leaf wrapper
+        Bvh4Node& w = wide[wi];
+        w.childCount = 1;
+        w.childIdx[0] = encodeLeaf(root.left, root.right);
+        w.childMinX[0] = root.minX; w.childMinY[0] = root.minY; w.childMinZ[0] = root.minZ;
+        w.childMaxX[0] = root.maxX; w.childMaxY[0] = root.maxY; w.childMaxZ[0] = root.maxZ;
+        for (int c = 1; c < 4; c++) {
+            w.childIdx[c] = 0;
+            w.childMinX[c] = 1e30f; w.childMinY[c] = 1e30f; w.childMinZ[c] = 1e30f;
+            w.childMaxX[c] = 1e30f; w.childMaxY[c] = 1e30f; w.childMaxZ[c] = 1e30f;
+        }
+        w.parent = parentWide;
+        leafIndicesOut.push_back(wi);
+        return;
+    }
+
+    addChild(root.left);
+    addChild(root.right);
+
+    // Greedily expand the largest-area internal child until we have 4 or all are leaves
+    while (static_cast<int>(children.size()) < 4) {
+        int bestIdx = -1;
+        float bestArea = -1.f;
+        for (int i = 0; i < static_cast<int>(children.size()); i++) {
+            const auto& bn = bin[children[i].binIdx];
+            if (bn.left >= 0 && children[i].area > bestArea) {  // is internal
+                bestIdx = i;
+                bestArea = children[i].area;
+            }
+        }
+        if (bestIdx < 0) break;  // all children are leaves
+
+        // Expand: replace the internal child with its two children
+        int expandBin = children[bestIdx].binIdx;
+        children.erase(children.begin() + bestIdx);
+        const auto& expanded = bin[expandBin];
+        // Insert in same position to preserve order
+        auto addChildAt = [&](int bi, int pos) {
+            const auto& n = bin[bi];
+            float a = boxSurfaceArea(n.minX, n.minY, n.minZ, n.maxX, n.maxY, n.maxZ);
+            children.insert(children.begin() + pos, {bi, a});
+        };
+        addChildAt(expanded.left, bestIdx);
+        addChildAt(expanded.right, bestIdx + 1);
+    }
+
+    // Fill the BVH4 node
+    Bvh4Node& w = wide[wi];
+    w.childCount = static_cast<int>(children.size());
+    w.numInternalChildren = 0;
+    w.parent = parentWide;
+    bool hasLeafChild = false;
+
+    for (int c = 0; c < 4; c++) {
+        if (c < w.childCount) {
+            const auto& bn = bin[children[c].binIdx];
+            w.childMinX[c] = bn.minX; w.childMinY[c] = bn.minY; w.childMinZ[c] = bn.minZ;
+            w.childMaxX[c] = bn.maxX; w.childMaxY[c] = bn.maxY; w.childMaxZ[c] = bn.maxZ;
+            if (bn.left < 0) {
+                // Leaf child — encode triStart+triCount into single int
+                w.childIdx[c] = encodeLeaf(bn.left, bn.right);
+                hasLeafChild = true;
+            } else {
+                w.childIdx[c] = 0;  // placeholder, will be patched
+                w.numInternalChildren++;
+            }
+        } else {
+            // Empty slot — zero-volume AABB at infinity, always out of range
+            w.childIdx[c] = 0;
+            w.childMinX[c] = 1e30f; w.childMinY[c] = 1e30f; w.childMinZ[c] = 1e30f;
+            w.childMaxX[c] = 1e30f; w.childMaxY[c] = 1e30f; w.childMaxZ[c] = 1e30f;
+        }
+    }
+
+    if (hasLeafChild) leafIndicesOut.push_back(wi);
+
+    // Recurse on internal children and patch their indices
+    for (int c = 0; c < w.childCount; c++) {
+        const auto& bn = bin[children[c].binIdx];
+        if (bn.left >= 0) {
+            int childWideIdx = static_cast<int>(wide.size());
+            wide[wi].childIdx[c] = childWideIdx;
+            collapseBvh4(bin, wide, leafIndicesOut, children[c].binIdx, wi);
+        }
+    }
+}
+
+/// Pack BVH4 nodes into a flat GPU buffer (7 × vec4 = 28 floats per node).
+///
+/// Layout per node:
+///   row0: childMinX[0..3]
+///   row1: childMinY[0..3]
+///   row2: childMinZ[0..3]
+///   row3: childMaxX[0..3]
+///   row4: childMaxY[0..3]
+///   row5: childMaxZ[0..3]
+///   row6: childIdx[0..3]  (i32 via bitcast: >=0 internal, <0 leaf packed triStart*8+triCount)
+///
+/// Refit metadata is stored in a separate buffer (4 ints per node):
+///   (parent, childCount, numInternalChildren, 0)
+static constexpr int BVH4_GPU_FLOATS = 28;
+static constexpr int BVH4_REFIT_INTS = 4;  // per-node refit metadata
+
+static void packBvh4Buffer(const std::vector<Bvh4Node>& nodes, std::vector<float>& buf, int capacity) {
     std::ranges::fill(buf, 0.f);
-    const int nc = std::min(static_cast<int>(nodes.size()), bvhCapacity);
+    const int nc = std::min(static_cast<int>(nodes.size()), capacity);
     for (int i = 0; i < nc; i++) {
         const auto& n = nodes[i];
-        float* p = buf.data() + i * 12;
-        p[0] = n.minX; p[1] = n.minY; p[2] = n.minZ;
-        std::memcpy(p + 3, &n.left, sizeof(int));
-        p[4] = n.maxX; p[5] = n.maxY; p[6] = n.maxZ;
-        std::memcpy(p + 7, &n.right, sizeof(int));
-        std::memcpy(p + 8, &n.parent, sizeof(int));
+        float* p = buf.data() + static_cast<size_t>(i) * BVH4_GPU_FLOATS;
+        // row0-5: SoA AABBs
+        for (int c = 0; c < 4; c++) p[0  + c] = n.childMinX[c];
+        for (int c = 0; c < 4; c++) p[4  + c] = n.childMinY[c];
+        for (int c = 0; c < 4; c++) p[8  + c] = n.childMinZ[c];
+        for (int c = 0; c < 4; c++) p[12 + c] = n.childMaxX[c];
+        for (int c = 0; c < 4; c++) p[16 + c] = n.childMaxY[c];
+        for (int c = 0; c < 4; c++) p[20 + c] = n.childMaxZ[c];
+        // row6: child indices (triCount packed into leaf encoding)
+        for (int c = 0; c < 4; c++) std::memcpy(p + 24 + c, &n.childIdx[c], sizeof(int));
+    }
+}
+
+static void packRefitMetadata(const std::vector<Bvh4Node>& nodes, std::vector<int32_t>& buf, int capacity) {
+    std::ranges::fill(buf, 0);
+    const int nc = std::min(static_cast<int>(nodes.size()), capacity);
+    for (int i = 0; i < nc; i++) {
+        const auto& n = nodes[i];
+        int32_t* p = buf.data() + static_cast<size_t>(i) * BVH4_REFIT_INTS;
+        p[0] = n.parent;
+        p[1] = n.childCount;
+        p[2] = n.numInternalChildren;
+        p[3] = 0;
     }
 }
 
 static void buildBVH(std::vector<float>& triBuffer, int triCount,
-                     std::vector<BvhNode>& nodes, std::vector<int>& indices,
+                     std::vector<Bvh4Node>& wideNodes, std::vector<int>& indices,
                      std::vector<int>& leafIndices,
                      std::vector<float>& rawObjTriBuf) {
     indices.resize(triCount);
     std::iota(indices.begin(), indices.end(), 0);
-    nodes.clear();
-    nodes.reserve(triCount * 2);
-    buildBvhNode(nodes, indices, triBuffer, 0, triCount, -1);
 
+    // Phase 1: build binary BVH
+    std::vector<BvhNode> binNodes;
+    binNodes.reserve(triCount * 2);
+    buildBvhNode(binNodes, indices, triBuffer, 0, triCount, -1);
+
+    // Phase 2: collapse binary → BVH4
+    wideNodes.clear();
+    wideNodes.reserve(binNodes.size() / 2);  // roughly half as many nodes
     leafIndices.clear();
-    for (int i = 0; i < static_cast<int>(nodes.size()); i++) {
-        if (nodes[i].left < 0) leafIndices.push_back(i);
+    if (!binNodes.empty()) {
+        collapseBvh4(binNodes, wideNodes, leafIndices, 0, -1);
     }
 
+    // Sort triangle data to match BVH index ordering
     std::vector<float> sorted(triBuffer.size(), 0.f);
     std::vector<float> sortedObj(rawObjTriBuf.size(), 0.f);
     for (int ni = 0; ni < triCount; ni++) {
@@ -2400,6 +2685,7 @@ struct WgpuPathTracer::Impl {
     // GPU storage buffers
     WgpuBuffer bvhNodeBuf;
     WgpuBuffer bvhCounterBuf;
+    WgpuBuffer refitMetaBuf;
     WgpuBuffer objTriBuf;
     WgpuBuffer matrixBuf;
     WgpuBuffer motionMatBuf;            // per-mesh motion matrices for TAA reprojection
@@ -2443,10 +2729,11 @@ struct WgpuPathTracer::Impl {
     std::vector<float> rawObjTriBuf;
     std::vector<float> matrixCpuBuf;
     std::vector<float> bvhNodeCpuBuf;
+    std::vector<int32_t> refitMetaCpuBuf;
     std::vector<uint32_t> bvhCounterZeros;
 
-    // BVH state
-    std::vector<BvhNode> bvhNodes;
+    // BVH state (wide BVH4)
+    std::vector<Bvh4Node> bvhNodes;
     std::vector<int> bvhIndices;
     std::vector<int> leafIndices;
 
@@ -2459,10 +2746,11 @@ struct WgpuPathTracer::Impl {
         std::vector<float> matBuffer;
         std::vector<float> rawObjTriBuf;
         std::vector<float> matrixCpuBuf;
-        std::vector<BvhNode> bvhNodes;
+        std::vector<Bvh4Node> bvhNodes;
         std::vector<int> bvhIndices;
         std::vector<int> leafIndices;
         std::vector<float> bvhNodeCpuBuf;
+        std::vector<int32_t> refitMetaCpuBuf;
         std::vector<float> emissiveTriCpu;
         int triCount = 0;
         int numBvhNodes = 0;
@@ -2558,10 +2846,12 @@ struct WgpuPathTracer::Impl {
           taaUniBuf(r, sizeof(TaaGpuUniforms)),
           atrousUniBuf(r, sizeof(AtrousGpuUniforms)),
           // Storage buffers (small placeholders — grown dynamically on first build)
-          bvhNodeBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * 12 * sizeof(float),
+          bvhNodeBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * BVH4_GPU_FLOATS * sizeof(float),
                      WgpuBuffer::Usage::Storage),
           bvhCounterBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * sizeof(uint32_t),
                         WgpuBuffer::Usage::Storage),
+          refitMetaBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * BVH4_REFIT_INTS * sizeof(int32_t),
+                       WgpuBuffer::Usage::Storage),
           objTriBuf(r, static_cast<size_t>(INIT_TRI_CAP) * 32 * sizeof(float),
                     WgpuBuffer::Usage::Storage),
           matrixBuf(r, static_cast<size_t>(INIT_MESH_CAP) * 32 * sizeof(float),
@@ -2598,6 +2888,7 @@ struct WgpuPathTracer::Impl {
         refitPipeline.setStorageBuffer(2, bvhCounterBuf);
         refitPipeline.setStorageBufferRead(3, leafIndexBuf);
         refitPipeline.setUniformBuffer(4, refitUniBuf);
+        refitPipeline.setStorageBufferRead(5, refitMetaBuf);
 
         rtPipeline.setUniformBuffer(0, rtUniformBuf);
         rtPipeline.setStorageBufferRead(3, bvhNodeBuf);
@@ -2896,8 +3187,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                                            r.triCapacity, r.matCapacity, r.meshCapacity);
         buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
         r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
-        r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * 12, 0.f);
-        packBvhNodeBuffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
+        r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_FLOATS, 0.f);
+        packBvh4Buffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
+        r.refitMetaCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_REFIT_INTS, 0);
+        packRefitMetadata(r.bvhNodes, r.refitMetaCpuBuf, r.bvhCapacity);
 
         r.emissiveTriCount = 0;
         r.emissiveTotalArea = 0.f;
@@ -2971,8 +3264,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                                                r.triCapacity, r.matCapacity, r.meshCapacity);
             buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
             r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
-            r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * 12, 0.f);
-            packBvhNodeBuffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
+            r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_FLOATS, 0.f);
+            packBvh4Buffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
+            r.refitMetaCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_REFIT_INTS, 0);
+            packRefitMetadata(r.bvhNodes, r.refitMetaCpuBuf, r.bvhCapacity);
 
             r.emissiveTriCount = 0;
             r.emissiveTotalArea = 0.f;
@@ -3028,6 +3323,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.bvhIndices = std::move(r.bvhIndices);
         d.leafIndices = std::move(r.leafIndices);
         d.bvhNodeCpuBuf = std::move(r.bvhNodeCpuBuf);
+        d.refitMetaCpuBuf = std::move(r.refitMetaCpuBuf);
         d.emissiveTriCpu = std::move(r.emissiveTriCpu);
         d.triCount_ = r.triCount;
         d.numBvhNodes_ = r.numBvhNodes;
@@ -3059,13 +3355,16 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
         if (r.bvhCapacity > d.bvhCapacity_) {
             d.bvhCapacity_ = r.bvhCapacity;
-            d.bvhNodeBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.bvhCapacity) * 12 * sizeof(float),
+            d.bvhNodeBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_FLOATS * sizeof(float),
                                        WgpuBuffer::Usage::Storage);
             d.bvhCounterBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.bvhCapacity) * sizeof(uint32_t),
                                           WgpuBuffer::Usage::Storage);
             d.bvhCounterZeros.resize(r.bvhCapacity, 0u);
+            d.refitMetaBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.bvhCapacity) * BVH4_REFIT_INTS * sizeof(int32_t),
+                                         WgpuBuffer::Usage::Storage);
             d.refitPipeline.setStorageBuffer(1, d.bvhNodeBuf);
             d.refitPipeline.setStorageBuffer(2, d.bvhCounterBuf);
+            d.refitPipeline.setStorageBufferRead(5, d.refitMetaBuf);
             d.rtPipeline.setStorageBufferRead(3, d.bvhNodeBuf);
             d.rtRaycastPipeline.setStorageBufferRead(3, d.bvhNodeBuf);
         }
@@ -3100,7 +3399,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.texAtlasTex.write(r.atlasData.data(), r.atlasData.size());
 
         // Upload geometry + BVH
-        d.bvhNodeBuf.write(d.bvhNodeCpuBuf.data(), d.numBvhNodes_ * 12 * sizeof(float));
+        d.bvhNodeBuf.write(d.bvhNodeCpuBuf.data(), d.numBvhNodes_ * BVH4_GPU_FLOATS * sizeof(float));
+        d.refitMetaBuf.write(d.refitMetaCpuBuf.data(), d.numBvhNodes_ * BVH4_REFIT_INTS * sizeof(int32_t));
         d.objTriBuf.write(d.rawObjTriBuf.data(), static_cast<size_t>(d.triCount_) * 32 * sizeof(float));
         d.leafIndexBuf.write(d.leafIndices.data(), d.leafIndices.size() * sizeof(int));
         d.matTex.write(d.matBuffer.data(), d.matBuffer.size() * sizeof(float));
@@ -3422,21 +3722,31 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(d.device, &encDesc);
 
         WGPUComputePassDescriptor passDesc{};
-        passDesc.label = WGPUStringView{"pt_pass", WGPU_STRLEN};
-        WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
 
         if (anyMeshMoved) {
+            // Pass 1: vertex transform (writes triTex)
+            passDesc.label = WGPUStringView{"vt_pass", WGPU_STRLEN};
+            WGPUComputePassEncoder vtPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
             const uint32_t vtGx = (static_cast<uint32_t>(d.triCount_) + 63u) / 64u;
-            d.vtPipeline.encode(pass, vtGx);
+            d.vtPipeline.encode(vtPass, vtGx);
+            wgpuComputePassEncoderEnd(vtPass);
+            wgpuComputePassEncoderRelease(vtPass);
 
+            // Pass 2: BVH refit (reads triTex, writes bvhNodes)
+            passDesc.label = WGPUStringView{"rf_pass", WGPU_STRLEN};
+            WGPUComputePassEncoder rfPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
             const uint32_t rfGx = (static_cast<uint32_t>(d.leafIndices.size()) + 63u) / 64u;
-            d.refitPipeline.encode(pass, rfGx);
+            d.refitPipeline.encode(rfPass, rfGx);
+            wgpuComputePassEncoderEnd(rfPass);
+            wgpuComputePassEncoderRelease(rfPass);
         }
 
+        // Pass 3: ray trace (reads triTex + bvhNodes)
+        passDesc.label = WGPUStringView{"rt_pass", WGPU_STRLEN};
+        WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
         const uint32_t gx = (static_cast<uint32_t>(d.width_) + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
         activePipeline.encode(pass, gx, gy);
-
         wgpuComputePassEncoderEnd(pass);
         wgpuComputePassEncoderRelease(pass);
 
