@@ -12,6 +12,9 @@
 #include <unordered_map>
 #include <vector>
 
+#include <threepp/lights/DirectionalLight.hpp>
+#include <threepp/lights/PointLight.hpp>
+#include <threepp/lights/SpotLight.hpp>
 #include <threepp/loaders/ImageLoader.hpp>
 #include <threepp/materials/MeshPhysicalMaterial.hpp>
 #include <threepp/objects/Bone.hpp>
@@ -679,6 +682,46 @@ namespace threepp {
                         }
                     }
                     obj->add(meshObj);
+                }
+
+                // KHR_lights_punctual: extract lights from glTF nodes
+                if (nodeDef.contains("extensions") &&
+                    nodeDef["extensions"].contains("KHR_lights_punctual")) {
+                    int lightIdx = nodeDef["extensions"]["KHR_lights_punctual"]["light"].get<int>();
+                    if (gltf.contains("extensions") &&
+                        gltf["extensions"].contains("KHR_lights_punctual") &&
+                        gltf["extensions"]["KHR_lights_punctual"].contains("lights")) {
+                        const auto& lightDef = gltf["extensions"]["KHR_lights_punctual"]["lights"][lightIdx];
+                        std::string ltype = lightDef.value("type", "point");
+                        float intensity = lightDef.value("intensity", 1.0f);
+                        Color color(1.f, 1.f, 1.f);
+                        if (lightDef.contains("color")) {
+                            auto c = lightDef["color"].get<std::vector<float>>();
+                            if (c.size() >= 3) color.setRGB(c[0], c[1], c[2]);
+                        }
+                        float range = lightDef.value("range", 0.0f);
+
+                        std::shared_ptr<Light> light;
+                        if (ltype == "directional") {
+                            light = DirectionalLight::create(color, intensity);
+                        } else if (ltype == "spot") {
+                            float innerCone = lightDef.value("innerConeAngle", 0.0f);
+                            float outerCone = lightDef.value("outerConeAngle", math::PI / 4.f);
+                            float penumbra = (outerCone > 0.f) ? (1.f - innerCone / outerCone) : 0.f;
+                            light = SpotLight::create(color, intensity, range, outerCone, penumbra);
+                        } else {
+                            // "point" or fallback
+                            light = PointLight::create(color, intensity, range);
+                        }
+                        if (light) {
+                            light->name = lightDef.value("name", "light_" + std::to_string(lightIdx));
+                            light->visible = false;  // hidden by default; user opts in
+                            obj->add(light);
+                            std::cerr << "[GLTFLoader] Light: " << light->name
+                                      << " type=" << ltype << " intensity=" << intensity
+                                      << " range=" << range << std::endl;
+                        }
+                    }
                 }
 
                 if (nodeDef.contains("children")) {
