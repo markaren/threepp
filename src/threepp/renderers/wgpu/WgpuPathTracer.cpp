@@ -584,10 +584,8 @@ constexpr const char* csRaytraceWGSL = R"(
 fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
     var albedo = h.albedo;
     if (h.texSlot >= 0.0) { albedo = sampleAtlas(h.uv, h.texSlot); }
-    // Environment map diffuse fill light (no shadows)
-    var col = select(vec3<f32>(0.0),
-                     albedo * sampleEnv(h.normal) * rt.envIntensity.x * (1.0 - h.metalness),
-                     rt.envColor.w > 1.5);
+    // Environment diffuse fill light (sky gradient, solid color, or equirect)
+    var col = albedo * sampleEnv(h.normal) * rt.envIntensity.x * (1.0 - h.metalness);
     let count = i32(rt.lightCount.x);
     let wo_s = normalize(-rd);
     for (var li = 0; li < 4; li++) {
