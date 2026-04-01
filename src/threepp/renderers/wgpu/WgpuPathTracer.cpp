@@ -95,13 +95,13 @@ struct RtUniforms {
 };
 
 struct Bvh4NodeGpu {
-    cMinX: vec4<f32>,  // child min X [0..3]
-    cMinY: vec4<f32>,  // child min Y [0..3]
-    cMinZ: vec4<f32>,  // child min Z [0..3]
-    cMaxX: vec4<f32>,  // child max X [0..3]
-    cMaxY: vec4<f32>,  // child max Y [0..3]
-    cMaxZ: vec4<f32>,  // child max Z [0..3]
-    cIdx:  vec4<f32>,  // child indices (bitcast i32): <0 = leaf -(triStart*8+triCount), >=0 = internal
+    cMinX: vec4<f32>,
+    cMinY: vec4<f32>,
+    cMinZ: vec4<f32>,
+    cMaxX: vec4<f32>,
+    cMaxY: vec4<f32>,
+    cMaxZ: vec4<f32>,
+    cIdx:  vec4<f32>,
 }
 
 const MAX_LEAF_TRIS: i32 = 8;
@@ -408,6 +408,113 @@ fn decodeLeaf(ci: i32, ray: Ray, h: ptr<function, Hit>) {
     }
 }
 
+// Shadow hit: lightweight struct for shadow rays (no normal maps, roughness, clearcoat, etc.)
+struct ShadowHit {
+    t:            f32,
+    point:        vec3<f32>,
+    normal:       vec3<f32>,
+    albedo:       vec3<f32>,
+    uv:           vec2<f32>,
+    texSlot:      f32,
+    meshIdx:      i32,
+    transmission: f32,
+}
+
+fn testTriangleShadow(ray: Ray, ti: i32, h: ptr<function, ShadowHit>) {
+    let r0  = textureLoad(triData, triCoord(ti, 0), 0);
+    let v0  = r0.xyz;
+    let r1  = textureLoad(triData, triCoord(ti, 1), 0);
+    let v1  = r1.xyz;
+    let v2  = textureLoad(triData, triCoord(ti, 2), 0).xyz;
+
+    let isect = triIntersect(ray, v0, v1, v2);
+    if (isect.t >= (*h).t) { return; }
+
+    let matIdx = i32(r0.w);
+    let mat3   = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
+    let mat0   = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
+    let mat1   = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
+
+    let w  = 1.0 - isect.u - isect.v;
+    let uv01 = textureLoad(triData, triCoord(ti, 6), 0);
+    let uv2  = textureLoad(triData, triCoord(ti, 7), 0).xy;
+    let iuv  = vec2<f32>(uv01.x, uv01.y) * w
+             + vec2<f32>(uv01.z, uv01.w) * isect.u
+             + uv2                        * isect.v;
+
+    // Alpha test
+    let alphaTest = mat3.y;
+    if (alphaTest > 0.0 && mat1.x >= 0.0) {
+        let texAlpha = sampleAtlasAlpha(iuv, mat1.x);
+        if (texAlpha < alphaTest) { return; }
+    }
+
+    let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
+    let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
+    let n2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
+    let sn = normalize(n0 * w + n1 * isect.u + n2 * isect.v);
+
+    let mat2 = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
+
+    (*h).t            = isect.t;
+    (*h).point        = ray.origin + isect.t * ray.dir;
+    (*h).normal       = select(-sn, sn, dot(ray.dir, sn) < 0.0);
+    (*h).albedo       = mat0.xyz;
+    (*h).uv           = iuv;
+    (*h).texSlot      = mat1.x;
+    (*h).meshIdx      = i32(r1.w);
+    (*h).transmission = mat2.w;
+}
+
+fn decodeLeafShadow(ci: i32, ray: Ray, h: ptr<function, ShadowHit>) {
+    let raw = -ci;
+    let triStart = (raw - 1) / MAX_LEAF_TRIS;
+    let triCount = ((raw - 1) % MAX_LEAF_TRIS) + 1;
+    for (var t = triStart; t < triStart + triCount; t++) {
+        testTriangleShadow(ray, t, h);
+    }
+}
+
+fn sceneHitShadow(ray: Ray, maxDist: f32) -> ShadowHit {
+    var h: ShadowHit;
+    h.t = maxDist; h.meshIdx = -1; h.transmission = 0.0;
+    var stack: array<i32, 32>;
+    var top: i32 = 0;
+    stack[0] = 0; top = 1;
+
+    while (top > 0) {
+        top -= 1;
+        let nd = bvhNodes[stack[top]];
+        let dists = aabbDist4(nd, ray, h.t);
+        if (all(dists >= vec4<f32>(1e30))) { continue; }
+
+        let ci0 = bitcast<i32>(nd.cIdx.x);
+        let ci1 = bitcast<i32>(nd.cIdx.y);
+        let ci2 = bitcast<i32>(nd.cIdx.z);
+        let ci3 = bitcast<i32>(nd.cIdx.w);
+
+        if (dists.x < 1e30 && ci0 < 0) { decodeLeafShadow(ci0, ray, &h); }
+        if (dists.y < 1e30 && ci1 < 0) { decodeLeafShadow(ci1, ray, &h); }
+        if (dists.z < 1e30 && ci2 < 0) { decodeLeafShadow(ci2, ray, &h); }
+        if (dists.w < 1e30 && ci3 < 0) { decodeLeafShadow(ci3, ray, &h); }
+
+        var n0 = dists.x; var n1 = dists.y; var n2 = dists.z; var n3 = dists.w;
+        var k0 = ci0; var k1 = ci1; var k2 = ci2; var k3 = ci3;
+        if (k0 < 0) { n0 = 1e30; } if (k1 < 0) { n1 = 1e30; }
+        if (k2 < 0) { n2 = 1e30; } if (k3 < 0) { n3 = 1e30; }
+        if (n0 < n1) { let t0=n0;n0=n1;n1=t0; let t1=k0;k0=k1;k1=t1; }
+        if (n2 < n3) { let t0=n2;n2=n3;n3=t0; let t1=k2;k2=k3;k3=t1; }
+        if (n0 < n2) { let t0=n0;n0=n2;n2=t0; let t1=k0;k0=k2;k2=t1; }
+        if (n1 < n3) { let t0=n1;n1=n3;n3=t0; let t1=k1;k1=k3;k3=t1; }
+        if (n1 < n2) { let t0=n1;n1=n2;n2=t0; let t1=k1;k1=k2;k2=t1; }
+        if (n0 < 1e30) { stack[top] = k0; top++; }
+        if (n1 < 1e30) { stack[top] = k1; top++; }
+        if (n2 < 1e30) { stack[top] = k2; top++; }
+        if (n3 < 1e30) { stack[top] = k3; top++; }
+    }
+    return h;
+}
+
 fn sceneHit(ray: Ray) -> Hit {
     var h: Hit; h.t = 1e30; h.meshIdx = -1; h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0); h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
     var stack: array<i32, 32>;
@@ -420,6 +527,9 @@ fn sceneHit(ray: Ray) -> Hit {
 
         // Test all 4 child AABBs at once
         let dists = aabbDist4(nd, ray, h.t);
+
+        // Early exit — no child hit
+        if (all(dists >= vec4<f32>(1e30))) { continue; }
 
         // Unpack child indices
         let ci0 = bitcast<i32>(nd.cIdx.x);
@@ -434,7 +544,6 @@ fn sceneHit(ray: Ray) -> Hit {
         if (dists.w < 1e30 && ci3 < 0) { decodeLeaf(ci3, ray, &h); }
 
         // Push internal children — nearest last so it's popped first
-        // Partial sort: just ensure the nearest of any pair is on top
         var n0 = dists.x; var n1 = dists.y; var n2 = dists.z; var n3 = dists.w;
         var k0 = ci0; var k1 = ci1; var k2 = ci2; var k3 = ci3;
         // Mark leaves/misses as invalid so they won't be pushed
@@ -503,7 +612,7 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
         var sr: Ray; sr.origin = h.point + h.normal * 1e-3; sr.dir = ln;
         var shAtten = vec3<f32>(1.0);
         for (var si = 0; si < 4; si++) {
-            let sh = sceneHit(sr);
+            let sh = sceneHitShadow(sr, ld - 1e-3);
             if (sh.t >= ld - 1e-3) { break; }
             if (sh.transmission < 0.01) { shAtten = vec3<f32>(0.0); break; }
             var shAlb = sh.albedo;
@@ -916,7 +1025,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             sr.dir    = ln;
             var shadowAtten = vec3<f32>(1.0);
             for (var si = 0; si < 4; si++) {
-                let sh = sceneHit(sr);
+                let sh = sceneHitShadow(sr, ld - 1e-3);
                 if (sh.t >= ld - 1e-3) { break; }
                 if (isMeshMoved(sh.meshIdx)) { *touchedMoved = true; }
                 if (sh.transmission < 0.01) { shadowAtten = vec3<f32>(0.0); break; }
@@ -978,7 +1087,7 @@ R"(
                 var sr: Ray;
                 sr.origin = h.point + h.normal * 1e-3;
                 sr.dir    = ln;
-                let sh    = sceneHit(sr);
+                let sh    = sceneHitShadow(sr, dist);
 
                 if (sh.t >= dist - 1e-2) {
                     let eMatIdx = i32(textureLoad(triData, triCoord(eTi, 0), 0).w);
@@ -1014,7 +1123,7 @@ R"(
                 var sr: Ray;
                 sr.origin = h.point + h.normal * 1e-3;
                 sr.dir    = envDir;
-                let sh = sceneHit(sr);
+                let sh = sceneHitShadow(sr, 1e30);
                 if (sh.t >= 1e29) {
                     let hv    = normalize(wo + envDir);
                     let NdotH = max(0.0, dot(h.normal, hv));
