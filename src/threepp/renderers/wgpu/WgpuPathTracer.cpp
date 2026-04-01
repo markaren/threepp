@@ -96,6 +96,10 @@ struct RtUniforms {
     camFwd:     vec4<f32>,
     camRgt:     vec4<f32>,
     camUp:      vec4<f32>,
+    prevCamOri: vec4<f32>,
+    prevCamFwd: vec4<f32>,
+    prevCamRgt: vec4<f32>,
+    prevCamUp:  vec4<f32>,
     iRes:       vec4<f32>,
     tanHalfFov: vec4<f32>,
     frameCount: vec4<f32>,
@@ -1254,7 +1258,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var sample  = pathTrace(ray, &seed, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &touchedMoved);
 
     let prev     = textureLoad(accumRead, pixel, 0);
-    let old      = prev.xyz;
+    var old      = prev.xyz;
     var pixelFC  = prev.w;
 
     // Reset pixels whose primary ray hits a moved mesh.
@@ -1269,7 +1273,34 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Secondary bounce hit a moved mesh — cap rather than reset so static
     // surfaces can still converge while indirect lighting refreshes.
     if (touchedMoved) { pixelFC = min(pixelFC, 8.0); }
-    if (fc == 0u) { pixelFC = 0.0; }
+
+    // Camera moved: reproject accumulation from previous frame's screen position
+    // instead of discarding all history.  Only attempt if prior accumulation exists
+    // (pixelFC > 0 means this pixel had valid data from a previous frame).
+    if (fc == 0u) {
+        var reprojOk = false;
+        if (pixelFC > 0.0 && primaryDepth > 0.0) {
+            let worldPos = rt.camOri.xyz + ray.dir * primaryDepth;
+            let toPoint  = worldPos - rt.prevCamOri.xyz;
+            let prevZ    = dot(toPoint, rt.prevCamFwd.xyz);
+            if (prevZ > 0.001) {
+                let aspect   = res.x / res.y;
+                let prevNdcX = dot(toPoint, rt.prevCamRgt.xyz) / (prevZ * rt.tanHalfFov.x * aspect);
+                let prevNdcY = dot(toPoint, rt.prevCamUp.xyz)  / (prevZ * rt.tanHalfFov.x);
+                let prevPx   = vec2<i32>(
+                    i32((prevNdcX + 1.0) * 0.5 * res.x),
+                    i32((1.0 - prevNdcY) * 0.5 * res.y));
+                if (prevPx.x >= 0 && prevPx.x < i32(res.x) &&
+                    prevPx.y >= 0 && prevPx.y < i32(res.y)) {
+                    let reproj = textureLoad(accumRead, prevPx, 0);
+                    old = reproj.xyz;
+                    pixelFC = min(reproj.w * 0.5, 8.0);  // carry some history but cap to avoid ghosting
+                    reprojOk = true;
+                }
+            }
+        }
+        if (!reprojOk) { pixelFC = 0.0; }
+    }
 
     // NaN guard: reject corrupted samples to prevent permanent accumulation damage
     let sampleClean = select(vec3<f32>(0.0), sample, sample.x == sample.x);
@@ -1549,11 +1580,14 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             cMax = max(cMax, nc);
         }
     }
-    // Slightly widen box for robustness (avoids over-clamping due to noise)
+    // Widen box for robustness (avoids over-clamping due to noise).
+    // When accumulation is low (camera/mesh just moved), the 3×3 neighborhood is very
+    // noisy — widen aggressively so reprojected history isn't destroyed by clamping.
     let boxCenter = (cMin + cMax) * 0.5;
     let boxExtent = (cMax - cMin) * 0.5;
-    cMin = boxCenter - boxExtent * 1.25;
-    cMax = boxCenter + boxExtent * 1.25;
+    let widen = select(1.25, 3.0, curFC < 2.0);
+    cMin = boxCenter - boxExtent * widen;
+    cMax = boxCenter + boxExtent * widen;
 
     // Reproject current pixel into previous frame's screen space
     let aspect = res.x / res.y;
@@ -1598,9 +1632,6 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (((mbits >> bit) & 1u) != 0u) { movedMesh = true; }
     }
 
-    // First frame has no history
-    if (taa.frameCount.x < 0.5) { useHist = false; }
-
     var result = curColor;
     if (useHist) {
         // Bilinear interpolation of history — avoids nearest-neighbor artifacts
@@ -1613,11 +1644,10 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let histColor = mix(mix(h00, h10, fx), mix(h01, h11, fx), fy);
         let clamped   = clamp(histColor, cMin, cMax);
         // Blend: use more history early (noisy), more current once converged.
-        // For moved meshes: pixelFC is always 0 (reset) so the normal formula gives alpha=1.0
-        // (ignore history). With motion vectors the history IS correctly reprojected, so
-        // override to blend ~20% current + 80% history for effective temporal accumulation.
+        // When accumulation was reset (camera or mesh moved, curFC==0), the reprojected
+        // history is still valid — blend 20% current + 80% history for smooth motion.
         var alpha = clamp(1.0 / (curFC * 0.5 + 1.0), 0.1, 1.0);
-        if (movedMesh) { alpha = 0.2; }
+        if (curFC < 0.5 || movedMesh) { alpha = 0.2; }
         result = mix(clamped, curColor, alpha);
     }
 
@@ -1833,6 +1863,10 @@ struct alignas(16) RtGpuUniforms {
     float camFwd[4];
     float camRgt[4];
     float camUp[4];
+    float prevCamOri[4];
+    float prevCamFwd[4];
+    float prevCamRgt[4];
+    float prevCamUp[4];
     float iRes[4];
     float tanHalfFov[4];
     float frameCount[4];
@@ -1850,7 +1884,7 @@ struct alignas(16) RtGpuUniforms {
     float    params[4];        // x = maxBounces
     float    emissiveInfo[4]; // x = emissive tri count, y = total emissive area
 };
-static_assert(sizeof(RtGpuUniforms) == 512, "RtGpuUniforms must be 512 bytes");
+static_assert(sizeof(RtGpuUniforms) == 576, "RtGpuUniforms must be 576 bytes");
 
 struct alignas(16) VtGpuUniforms {
     uint32_t triCount, _p[3];
@@ -3653,6 +3687,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.camFwd[0] = fwd.x; u.camFwd[1] = fwd.y; u.camFwd[2] = fwd.z;
     u.camRgt[0] = rgt.x; u.camRgt[1] = rgt.y; u.camRgt[2] = rgt.z;
     u.camUp[0] = up.x; u.camUp[1] = up.y; u.camUp[2] = up.z;
+    u.prevCamOri[0] = d.prevCamOri_[0]; u.prevCamOri[1] = d.prevCamOri_[1]; u.prevCamOri[2] = d.prevCamOri_[2];
+    u.prevCamFwd[0] = d.prevCamFwd_[0]; u.prevCamFwd[1] = d.prevCamFwd_[1]; u.prevCamFwd[2] = d.prevCamFwd_[2];
+    u.prevCamRgt[0] = d.prevCamRgt_[0]; u.prevCamRgt[1] = d.prevCamRgt_[1]; u.prevCamRgt[2] = d.prevCamRgt_[2];
+    u.prevCamUp[0]  = d.prevCamUp_[0];  u.prevCamUp[1]  = d.prevCamUp_[1];  u.prevCamUp[2]  = d.prevCamUp_[2];
     u.iRes[0] = static_cast<float>(d.width_);
     u.iRes[1] = static_cast<float>(d.height_);
     u.tanHalfFov[0] = tanHalfFov;
@@ -3982,12 +4020,13 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
         displayTex = src;
 
-        // Store camera for next frame's reprojection
-        d.prevCamOri_[0] = camPos.x; d.prevCamOri_[1] = camPos.y; d.prevCamOri_[2] = camPos.z;
-        d.prevCamFwd_[0] = fwd.x;    d.prevCamFwd_[1] = fwd.y;    d.prevCamFwd_[2] = fwd.z;
-        d.prevCamRgt_[0] = rgt.x;    d.prevCamRgt_[1] = rgt.y;    d.prevCamRgt_[2] = rgt.z;
-        d.prevCamUp_[0]  = up.x;     d.prevCamUp_[1]  = up.y;     d.prevCamUp_[2]  = up.z;
     }
+
+    // Store camera for next frame's reprojection (must run every frame, not just when denoiser is active)
+    d.prevCamOri_[0] = camPos.x; d.prevCamOri_[1] = camPos.y; d.prevCamOri_[2] = camPos.z;
+    d.prevCamFwd_[0] = fwd.x;    d.prevCamFwd_[1] = fwd.y;    d.prevCamFwd_[2] = fwd.z;
+    d.prevCamRgt_[0] = rgt.x;    d.prevCamRgt_[1] = rgt.y;    d.prevCamRgt_[2] = rgt.z;
+    d.prevCamUp_[0]  = up.x;     d.prevCamUp_[1]  = up.y;     d.prevCamUp_[2]  = up.z;
 
     d.displayMat->customTextures["accumTex"] = displayTex;
     d.displayMat->customTextures["gBufTex"]  = d.gBufPrev;  // used to skip ACES on background pixels
