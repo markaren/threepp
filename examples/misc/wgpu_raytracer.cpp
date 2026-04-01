@@ -23,6 +23,7 @@ int main() {
     pathTracer.setEnvIntensity(0.5f);
     pathTracer.setSamplesPerPixel(2);
     pathTracer.setDenoiserEnabled(false);
+    pathTracer.setFoveatedRendering(false);
 
     // ---- Scene objects ----
     TextureLoader tl;
