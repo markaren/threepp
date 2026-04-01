@@ -103,8 +103,8 @@ struct RtUniforms {
     lightCount: vec4<f32>,
     lightPos:   array<vec4<f32>, 4>,
     lightCol:   array<vec4<f32>, 4>,
-    lightType:  array<vec4<f32>, 4>,  // x: 0=point, 1=directional, 2=spot; y=cosAngle; z=cosOuter
-    lightDir:   array<vec4<f32>, 4>,  // xyz: spotlight direction (normalized)
+    lightType:  array<vec4<f32>, 4>,  // x: 0=point, 1=directional, 2=spot; y=cosAngle; z=cosOuter; w=distance
+    lightDir:   array<vec4<f32>, 4>,  // xyz: spotlight direction (normalized); w=decay
     spp:          vec4<f32>,
     movedMeshBits: vec4<u32>,  // bit i = mesh i moved (words 0/1 cover meshes 0-63)
     envColor:      vec4<f32>,  // xyz = color/tint, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex
@@ -598,6 +598,13 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
                            normalize(rt.lightPos[li].xyz), ltype == 1);
         let ld    = select(length(rt.lightPos[li].xyz - h.point), 1e30, ltype == 1);
 
+        // Distance/decay attenuation (matches raster renderer)
+        let lDist = rt.lightType[li].w;
+        let lDecay = rt.lightDir[li].w;
+        if (lDist > 0.0 && ltype != 1) {
+            lc *= pow(max(1.0 - ld / lDist, 0.0), lDecay);
+        }
+
         // Spotlight cone attenuation
         if (ltype == 2) {
             let spotDir   = rt.lightDir[li].xyz;
@@ -1000,6 +1007,12 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             let ln    = select(normalize(rt.lightPos[li].xyz - h.point),
                                normalize(rt.lightPos[li].xyz), ltype == 1);
             let ld    = select(length(rt.lightPos[li].xyz - h.point), 1e30, ltype == 1);
+            // Distance/decay attenuation (matches raster renderer)
+            let lDist = rt.lightType[li].w;
+            let lDecay = rt.lightDir[li].w;
+            if (lDist > 0.0 && ltype != 1) {
+                lc *= pow(max(1.0 - ld / lDist, 0.0), lDecay);
+            }
             // Spotlight cone attenuation
             if (ltype == 2) {
                 let spotDir   = rt.lightDir[li].xyz;
@@ -1829,8 +1842,8 @@ struct alignas(16) RtGpuUniforms {
     float lightCount[4];
     float lightPos[4][4];
     float lightCol[4][4];
-    float lightType[4][4];      // [i][0]=type (0=pt,1=dir,2=spot), [i][1]=cosAngle, [i][2]=cosOuter
-    float lightDir[4][4];       // [i] = spotlight direction xyz
+    float lightType[4][4];      // [i][0]=type (0=pt,1=dir,2=spot), [i][1]=cosAngle, [i][2]=cosOuter, [i][3]=distance
+    float lightDir[4][4];       // [i] = spotlight direction xyz, [i][3]=decay
     float    spp[4];
     uint32_t movedMeshBits[4];  // bit i = mesh i moved; words 0/1 = meshes 0–63
     float    envColor[4];       // xyz = color, w = mode (0=sky, 1=solid color, 2=equirect tex)
@@ -3740,6 +3753,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         const auto& lc = l->color;
         const float li = l->intensity;
         packLight(lp.x, lp.y, lp.z, lc.r * li, lc.g * li, lc.b * li, 0.f);
+        u.lightType[nLights - 1][3] = l->distance;
+        u.lightDir[nLights - 1][3] = l->decay;
     }
     for (auto* l : dirLights) {
         Vector3 dir = Vector3(l->position).sub(l->target().position).normalize();
@@ -3760,7 +3775,9 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         u.lightType[nLights][0] = 2.f;
         u.lightType[nLights][1] = cosAngle;
         u.lightType[nLights][2] = cosOuter;
+        u.lightType[nLights][3] = l->distance;
         u.lightDir[nLights][0] = dir.x; u.lightDir[nLights][1] = dir.y; u.lightDir[nLights][2] = dir.z;
+        u.lightDir[nLights][3] = l->decay;
         ++nLights;
     }
     u.lightCount[0] = static_cast<float>(nLights);
