@@ -57,9 +57,25 @@ struct WgpuComputePipeline::Impl {
     WGPUPipelineLayout pipelineLayout = nullptr;
     WGPUBindGroupLayout bindGroupLayout = nullptr;
     std::string entryPoint;
+    std::string pendingSource;  // deferred: compiled on first use
 
     std::unordered_map<uint32_t, BindingInfo> bindings;
     bool pipelineBuilt = false;
+
+    void ensureShaderModule() {
+        if (shaderModule || pendingSource.empty()) return;
+
+        WGPUShaderSourceWGSL wgslSrc{};
+        wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
+        wgslSrc.chain.next = nullptr;
+        wgslSrc.code = {.data = pendingSource.c_str(), .length = pendingSource.size()};
+
+        WGPUShaderModuleDescriptor shaderDesc{};
+        shaderDesc.nextInChain = &wgslSrc.chain;
+        shaderDesc.label = WGPUStringView{"compute_shader", WGPU_STRLEN};
+        shaderModule = wgpuDeviceCreateShaderModule(device, &shaderDesc);
+        pendingSource.clear();
+    }
 
     ~Impl() {
         if (pipeline) wgpuComputePipelineRelease(pipeline);
@@ -69,6 +85,8 @@ struct WgpuComputePipeline::Impl {
     }
 
     void buildPipeline() {
+        ensureShaderModule();
+
         if (pipelineBuilt) {
             // Rebuild bind group layout if bindings changed
             if (bindGroupLayout) wgpuBindGroupLayoutRelease(bindGroupLayout);
@@ -145,16 +163,7 @@ WgpuComputePipeline::WgpuComputePipeline(WgpuRenderer& renderer, const std::stri
     impl_->device = static_cast<WGPUDevice>(renderer.nativeDevice());
     impl_->queue = static_cast<WGPUQueue>(renderer.nativeQueue());
     impl_->entryPoint = entryPoint;
-
-    WGPUShaderSourceWGSL wgslSrc{};
-    wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
-    wgslSrc.chain.next = nullptr;
-    wgslSrc.code = {.data = wgslSource.c_str(), .length = static_cast<size_t>(wgslSource.size())};
-
-    WGPUShaderModuleDescriptor shaderDesc{};
-    shaderDesc.nextInChain = &wgslSrc.chain;
-    shaderDesc.label = WGPUStringView{"compute_shader", WGPU_STRLEN} ;
-    impl_->shaderModule = wgpuDeviceCreateShaderModule(impl_->device, &shaderDesc);
+    impl_->pendingSource = wgslSource;  // deferred — compiled on first use
 }
 
 WgpuComputePipeline::~WgpuComputePipeline() {
@@ -237,17 +246,11 @@ void WgpuComputePipeline::setStorageBufferRead(uint32_t binding, WgpuBuffer& buf
 
 void WgpuComputePipeline::replaceShader(const std::string& wgslSource) {
     // Release old shader module
-    if (impl_->shaderModule) wgpuShaderModuleRelease(impl_->shaderModule);
-
-    WGPUShaderSourceWGSL wgslSrc{};
-    wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
-    wgslSrc.chain.next = nullptr;
-    wgslSrc.code = {.data = wgslSource.c_str(), .length = static_cast<size_t>(wgslSource.size())};
-
-    WGPUShaderModuleDescriptor shaderDesc{};
-    shaderDesc.nextInChain = &wgslSrc.chain;
-    shaderDesc.label = WGPUStringView{"compute_shader", WGPU_STRLEN};
-    impl_->shaderModule = wgpuDeviceCreateShaderModule(impl_->device, &shaderDesc);
+    if (impl_->shaderModule) {
+        wgpuShaderModuleRelease(impl_->shaderModule);
+        impl_->shaderModule = nullptr;
+    }
+    impl_->pendingSource = wgslSource;  // deferred — compiled on next encode
     impl_->pipelineBuilt = false;
 }
 
