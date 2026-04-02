@@ -3316,11 +3316,16 @@ struct WgpuPathTracer::Impl {
         refitPipeline.setUniformBuffer(4, refitUniBuf);
         refitPipeline.setStorageBufferRead(5, refitMetaBuf);
 
+        // RT pipelines — set ALL bindings upfront (per-frame ones get overwritten)
         rtPipeline.setUniformBuffer(0, rtUniformBuf);
+        rtPipeline.setTexture(1, *readAccum);
+        rtPipeline.setStorageTexture(2, *writeAccum);
         rtPipeline.setStorageBufferRead(3, bvhNodeBuf);
         rtPipeline.setTexture(4, matTex);
         rtPipeline.setTexture(5, triTex);
         rtPipeline.setTexture(6, texAtlasTex);
+        rtPipeline.setTexture(7, *readHitMesh);
+        rtPipeline.setStorageTexture(8, *writeHitMesh);
         rtPipeline.setTexture(9, envTexGpu);
         rtPipeline.setStorageTexture(10, *gBufCur);
         rtPipeline.setStorageBufferRead(11, emissiveTriBuf);
@@ -3330,23 +3335,46 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setTexture(15, *gBufPrev);
 
         rtRaycastPipeline.setUniformBuffer(0, rtUniformBuf);
+        rtRaycastPipeline.setTexture(1, *readAccum);
+        rtRaycastPipeline.setStorageTexture(2, *writeAccum);
         rtRaycastPipeline.setStorageBufferRead(3, bvhNodeBuf);
         rtRaycastPipeline.setTexture(4, matTex);
         rtRaycastPipeline.setTexture(5, triTex);
         rtRaycastPipeline.setTexture(6, texAtlasTex);
+        rtRaycastPipeline.setTexture(7, *readHitMesh);
+        rtRaycastPipeline.setStorageTexture(8, *writeHitMesh);
         rtRaycastPipeline.setTexture(9, envTexGpu);
         rtRaycastPipeline.setStorageTexture(10, *gBufCur);
         rtRaycastPipeline.setStorageBufferRead(11, emissiveTriBuf);
         rtRaycastPipeline.setStorageTexture(14, albedoTex);
         rtRaycastPipeline.setTexture(15, *gBufPrev);
 
-        // TAA pipeline: uniform buffer is static binding
+        // TAA pipeline — set ALL bindings upfront
         taaPipeline.setUniformBuffer(0, taaUniBuf);
+        taaPipeline.setTexture(1, *readAccum);
+        taaPipeline.setTexture(2, *gBufPrev);
+        taaPipeline.setTexture(3, *taaHistRead);
+        taaPipeline.setStorageTexture(4, *taaHistWrite);
+        taaPipeline.setTexture(5, *readHitMesh);
         taaPipeline.setStorageBufferRead(6, motionMatBuf);
 
-        // Spatial filter: uniform buffer + albedo are static bindings
+        // Spatial filter — set ALL bindings upfront
         atrousPipeline.setUniformBuffer(0, atrousUniBuf);
+        atrousPipeline.setTexture(1, *readAccum);
+        atrousPipeline.setStorageTexture(2, *writeAccum);
+        atrousPipeline.setTexture(3, *gBufPrev);
         atrousPipeline.setTexture(4, albedoTex);
+        atrousPipeline.setTexture(5, *readHitMesh);
+
+        // Kick off async shader compilation for all 6 pipelines
+        // (the big RT shaders benefit most — VT/refit/TAA/atrous are small)
+        rtPipeline.startAsyncBuild();
+        rtRaycastPipeline.startAsyncBuild();
+        vtPipeline.startAsyncBuild();
+        refitPipeline.startAsyncBuild();
+        taaPipeline.startAsyncBuild();
+        atrousPipeline.startAsyncBuild();
+        std::cerr << "[PathTracer] Async shader compilation started for 6 pipelines" << std::endl;
 
         // Zero-fill accumulators and SVGF textures
         {
@@ -4200,6 +4228,12 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // Set per-frame texture bindings (accum + hitMesh ping-pong)
     const bool isPT = d.mode_ == Mode::PathTracer;
     auto& activePipeline = isPT ? d.rtPipeline : d.rtRaycastPipeline;
+
+    // Skip entire frame if the active pipeline is still compiling asynchronously
+    if (!activePipeline.isReady()) {
+        return;
+    }
+
     activePipeline.setTexture(1, *d.readAccum);
     activePipeline.setStorageTexture(2, *d.writeAccum);
     activePipeline.setTexture(7, *d.readHitMesh);

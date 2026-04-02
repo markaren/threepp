@@ -8,6 +8,8 @@
 
 #include <unordered_map>
 #include <stdexcept>
+#include <future>
+#include <iostream>
 
 using namespace threepp;
 
@@ -61,6 +63,9 @@ struct WgpuComputePipeline::Impl {
 
     std::unordered_map<uint32_t, BindingInfo> bindings;
     bool pipelineBuilt = false;
+    std::future<WGPUComputePipeline> asyncFuture;
+    bool asyncPending = false;
+    bool layoutDirty = false;  // set when bindings change during async build
 
     void ensureShaderModule() {
         if (shaderModule || pendingSource.empty()) return;
@@ -78,20 +83,33 @@ struct WgpuComputePipeline::Impl {
     }
 
     ~Impl() {
+        waitForAsync();
         if (pipeline) wgpuComputePipelineRelease(pipeline);
         if (pipelineLayout) wgpuPipelineLayoutRelease(pipelineLayout);
         if (bindGroupLayout) wgpuBindGroupLayoutRelease(bindGroupLayout);
         if (shaderModule) wgpuShaderModuleRelease(shaderModule);
     }
 
-    void buildPipeline() {
+    void waitForAsync() {
+        if (asyncPending && asyncFuture.valid()) {
+            auto p = asyncFuture.get();
+            if (p) wgpuComputePipelineRelease(p);
+            asyncPending = false;
+        }
+    }
+
+    void rebuildLayout() {
         ensureShaderModule();
 
+        if (asyncPending) {
+            // Must wait — the async thread holds references to pipelineLayout/bindGroupLayout
+            waitForAsync();
+        }
+
         if (pipelineBuilt) {
-            // Rebuild bind group layout if bindings changed
             if (bindGroupLayout) wgpuBindGroupLayoutRelease(bindGroupLayout);
             if (pipelineLayout) wgpuPipelineLayoutRelease(pipelineLayout);
-            if (pipeline) wgpuComputePipelineRelease(pipeline);
+            if (pipeline) { wgpuComputePipelineRelease(pipeline); pipeline = nullptr; }
         }
 
         // Build bind group layout entries
@@ -143,16 +161,47 @@ struct WgpuComputePipeline::Impl {
         plDesc.bindGroupLayoutCount = 1;
         plDesc.bindGroupLayouts = &bindGroupLayout;
         pipelineLayout = wgpuDeviceCreatePipelineLayout(device, &plDesc);
+    }
 
+    WGPUComputePipelineDescriptor makePipeDesc() {
         auto ep = WGPUStringView{entryPoint.c_str(), static_cast<size_t>(entryPoint.size())};
         WGPUComputePipelineDescriptor pipeDesc{};
         pipeDesc.label = WGPUStringView{"compute_pipe", WGPU_STRLEN} ;
         pipeDesc.layout = pipelineLayout;
         pipeDesc.compute.module = shaderModule;
         pipeDesc.compute.entryPoint = ep;
-        pipeline = wgpuDeviceCreateComputePipeline(device, &pipeDesc);
+        return pipeDesc;
+    }
 
+    void buildPipeline() {
+        rebuildLayout();
+        auto pipeDesc = makePipeDesc();
+        pipeline = wgpuDeviceCreateComputePipeline(device, &pipeDesc);
         pipelineBuilt = true;
+        asyncPending = false;
+        layoutDirty = false;
+    }
+
+    void buildPipelineAsync() {
+        rebuildLayout();
+        asyncPending = true;
+        layoutDirty = false;
+
+        // Capture what the background thread needs — device, layout, module, entry point
+        auto dev = device;
+        auto pl = pipelineLayout;
+        auto sm = shaderModule;
+        auto ep = entryPoint;
+
+        asyncFuture = std::async(std::launch::async, [dev, pl, sm, ep]() {
+            auto epView = WGPUStringView{ep.c_str(), ep.size()};
+            WGPUComputePipelineDescriptor pipeDesc{};
+            pipeDesc.label = WGPUStringView{"compute_pipe_async", WGPU_STRLEN};
+            pipeDesc.layout = pl;
+            pipeDesc.compute.module = sm;
+            pipeDesc.compute.entryPoint = epView;
+            return wgpuDeviceCreateComputePipeline(dev, &pipeDesc);
+        });
     }
 };
 
@@ -179,6 +228,7 @@ void WgpuComputePipeline::setStorageTexture(uint32_t binding, WgpuTexture& textu
         it->second.type != BindingType::StorageTextureWrite ||
         it->second.textureFormat != fmt) {
         impl_->pipelineBuilt = false;
+        impl_->layoutDirty = true;
     }
     BindingInfo info{};
     info.type = BindingType::StorageTextureWrite;
@@ -194,6 +244,7 @@ void WgpuComputePipeline::setTexture(uint32_t binding, WgpuTexture& texture) {
         it->second.type != BindingType::Texture ||
         it->second.textureFormat != fmt) {
         impl_->pipelineBuilt = false;
+        impl_->layoutDirty = true;
     }
     BindingInfo info{};
     info.type = BindingType::Texture;
@@ -208,6 +259,7 @@ void WgpuComputePipeline::setUniformBuffer(uint32_t binding, WgpuBuffer& buffer)
         it->second.type != BindingType::UniformBuffer ||
         it->second.bufferSize != buffer.size()) {
         impl_->pipelineBuilt = false;
+        impl_->layoutDirty = true;
     }
     BindingInfo info{};
     info.type = BindingType::UniformBuffer;
@@ -222,6 +274,7 @@ void WgpuComputePipeline::setStorageBuffer(uint32_t binding, WgpuBuffer& buffer)
         it->second.type != BindingType::StorageBuffer ||
         it->second.bufferSize != buffer.size()) {
         impl_->pipelineBuilt = false;
+        impl_->layoutDirty = true;
     }
     BindingInfo info{};
     info.type = BindingType::StorageBuffer;
@@ -236,6 +289,7 @@ void WgpuComputePipeline::setStorageBufferRead(uint32_t binding, WgpuBuffer& buf
         it->second.type != BindingType::StorageBufferRead ||
         it->second.bufferSize != buffer.size()) {
         impl_->pipelineBuilt = false;
+        impl_->layoutDirty = true;
     }
     BindingInfo info{};
     info.type = BindingType::StorageBufferRead;
@@ -244,17 +298,52 @@ void WgpuComputePipeline::setStorageBufferRead(uint32_t binding, WgpuBuffer& buf
     impl_->bindings[binding] = info;
 }
 
+void WgpuComputePipeline::startAsyncBuild() {
+    if (!impl_->pipelineBuilt && !impl_->asyncPending) {
+        impl_->buildPipelineAsync();
+    }
+}
+
+bool WgpuComputePipeline::isReady() const {
+    if (impl_->pipelineBuilt) return true;
+    // Only "not ready" when async is actively compiling and hasn't finished
+    if (impl_->asyncPending && impl_->asyncFuture.valid() &&
+        impl_->asyncFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        return false;
+    }
+    return true;  // sync build will happen in encode()
+}
+
 void WgpuComputePipeline::replaceShader(const std::string& wgslSource) {
-    // Release old shader module
+    // Must wait for async — it holds a reference to the shader module
+    impl_->waitForAsync();
     if (impl_->shaderModule) {
         wgpuShaderModuleRelease(impl_->shaderModule);
         impl_->shaderModule = nullptr;
     }
     impl_->pendingSource = wgslSource;  // deferred — compiled on next encode
     impl_->pipelineBuilt = false;
+    impl_->layoutDirty = true;
 }
 
 void WgpuComputePipeline::encode(WGPUComputePassEncoder pass, uint32_t x, uint32_t y, uint32_t z) {
+    // If async build is pending, check if it completed
+    if (impl_->asyncPending && impl_->asyncFuture.valid()) {
+        if (impl_->asyncFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            return;  // not ready yet — skip this frame's dispatch
+        }
+        auto asyncPipeline = impl_->asyncFuture.get();
+        impl_->asyncPending = false;
+
+        if (impl_->layoutDirty) {
+            // Bindings changed during async — discard stale pipeline, sync rebuild below
+            if (asyncPipeline) wgpuComputePipelineRelease(asyncPipeline);
+        } else {
+            impl_->pipeline = asyncPipeline;
+            impl_->pipelineBuilt = true;
+        }
+    }
+
     if (!impl_->pipelineBuilt) {
         impl_->buildPipeline();
     }

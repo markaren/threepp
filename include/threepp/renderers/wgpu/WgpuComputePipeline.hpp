@@ -64,6 +64,13 @@ namespace threepp {
         /// Encode a dispatch into an existing compute pass (no submission).
         void encode(WGPUComputePassEncoder pass, uint32_t x, uint32_t y = 1, uint32_t z = 1);
 
+        /// Start async pipeline compilation. Call after bindings are configured.
+        /// Encode() will be a no-op until compilation completes.
+        void startAsyncBuild();
+
+        /// Returns true if the pipeline is ready for dispatch.
+        bool isReady() const;
+
         /// Replace the shader module with new WGSL source (forces pipeline rebuild on next dispatch).
         void replaceShader(const std::string& wgslSource);
 
