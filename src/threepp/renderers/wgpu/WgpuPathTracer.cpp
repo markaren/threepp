@@ -2709,11 +2709,19 @@ static int buildBvhNode(
         }
     }
 
-    // If no good split found, or splitting is more expensive than a leaf, make a leaf
-    if (bestAxis < 0 || bestCost >= leafCost) {
+    // If no good split found, or splitting is more expensive than a leaf, make a leaf.
+    // But never exceed 8 tris — the BVH4 leaf encoding can't hold more.
+    if (count <= 8 && (bestAxis < 0 || bestCost >= leafCost)) {
         nodes[ni].left = -(start + 1);
         nodes[ni].right = count;
         return ni;
+    }
+
+    // Force split even if SAH says leaf is cheaper — pick longest axis, median split
+    if (bestAxis < 0) {
+        const float extents[3] = {maxX - minX, maxY - minY, maxZ - minZ};
+        bestAxis = (extents[0] >= extents[1] && extents[0] >= extents[2]) ? 0
+                 : (extents[1] >= extents[2]) ? 1 : 2;
     }
 
     const float splitPos = centMin[bestAxis]
