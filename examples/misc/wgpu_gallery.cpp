@@ -359,6 +359,7 @@ int main() {
     bool pathTracerOn = false;
     bool showWindow = true;
     bool denoiserOn = pathTracer.denoiserEnabled();
+    bool foveatOn = pathTracer.foveatedRendering();
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
     float pixelScale = pathTracer.pixelScale();
@@ -402,6 +403,8 @@ int main() {
         if (renderMode == 1 && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);
+            if (ImGui::Checkbox("Foveat", &foveatOn))
+                pathTracer.setFoveatedRendering(foveatOn);
             if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 16))
                 pathTracer.setMaxBounces(maxBounces);
         }
