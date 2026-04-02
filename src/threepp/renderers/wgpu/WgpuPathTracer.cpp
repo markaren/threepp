@@ -1743,6 +1743,13 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
+    // Foveated-skipped (stale) pixels: pass through unchanged — don't blend stale data
+    let globalFC = taa.frameCount.x;
+    if (curFC < globalFC - 0.5) {
+        textureStore(taaOut, pixel, vec4<f32>(curColor, curFC));
+        return;
+    }
+
     // Build 3×3 neighborhood color box for clamping (same mesh only)
     let curMeshId = u32(textureLoad(hitMeshTex, pixel, 0).r);
     var cMin = curColor;
@@ -1839,7 +1846,7 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 //   high frame count → gentle filter to preserve converged detail
 // ---------------------------------------------------------------------------
 constexpr const char* svgfAtrousWGSL = R"(
-struct AtrousUni { stepSize: u32, _p0: u32, _p1: u32, _p2: u32, }
+struct AtrousUni { stepSize: u32, _p0: u32, frameCount: f32, _p1: f32, }
 
 @group(0) @binding(0) var<uniform> uni:      AtrousUni;
 @group(0) @binding(1) var colorIn:  texture_2d<f32>;
@@ -2070,7 +2077,8 @@ struct alignas(16) RefitGpuUniforms {
     uint32_t leafCount, groupsX, _p[2];
 };
 struct alignas(16) AtrousGpuUniforms {
-    uint32_t stepSize, _p[3];
+    uint32_t stepSize, _p0;
+    float    frameCount, _p1;
 };
 struct alignas(16) DepthFillUniforms {
     float projView[16];   // NDC-remapped proj * view  (64 bytes)
@@ -4208,7 +4216,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     WgpuTexture* displayTex = d.readAccum;
     const bool hasMotion = (movedBits[0] | movedBits[1]) != 0u;
     const bool foveatedActive = d.foveatedEnabled_ && d.frameCount_ > 0.f;
-    const bool needsDenoise = (d.frameCount_ < 64.f || hasMotion) && !foveatedActive;
+    const bool needsDenoise = (d.frameCount_ < 64.f || hasMotion);
     if (d.denoiserEnabled_ && d.mode_ == Mode::PathTracer && needsDenoise) {
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
@@ -4251,7 +4259,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                             (d.frameCount_ < 32.f || hasMotion)   ? 2 : 1;
 
         for (int pass = 0; pass < nPasses; ++pass) {
-            AtrousGpuUniforms au{static_cast<uint32_t>(1u << pass), {0u, 0u, 0u}};
+            AtrousGpuUniforms au{static_cast<uint32_t>(1u << pass), 0u, d.frameCount_, 0.f};
             d.atrousUniBuf.write(&au, sizeof(au));
             d.atrousPipeline.setTexture(1, *src);
             d.atrousPipeline.setStorageTexture(2, *dst);
