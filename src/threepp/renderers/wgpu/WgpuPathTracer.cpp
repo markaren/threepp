@@ -25,9 +25,10 @@
 #include <webgpu/webgpu.h>
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
-#include <iostream>
 #include <cstring>
+#include <iostream>
 #ifndef __EMSCRIPTEN__
 #include <future>
 #endif
@@ -120,10 +121,13 @@ struct RtUniforms {
 };
 
 struct Bvh4NodeGpu {
-    p0:   vec4<u32>,  // cMinX(01), cMinX(23), cMinY(01), cMinY(23) as packed f16 pairs
-    p1:   vec4<u32>,  // cMinZ(01), cMinZ(23), cMaxX(01), cMaxX(23)
-    p2:   vec4<u32>,  // cMaxY(01), cMaxY(23), cMaxZ(01), cMaxZ(23)
-    cIdx: vec4<u32>,  // child indices (bitcast to i32 for leaf encoding)
+    cMinX: vec4<f32>,
+    cMinY: vec4<f32>,
+    cMinZ: vec4<f32>,
+    cMaxX: vec4<f32>,
+    cMaxY: vec4<f32>,
+    cMaxZ: vec4<f32>,
+    cIdx:  vec4<u32>,  // child indices (bitcast to i32 for leaf encoding)
 }
 
 @group(0) @binding(0) var<uniform> rt:          RtUniforms;
@@ -144,6 +148,7 @@ struct Bvh4NodeGpu {
 
 const TILE_SIZE:   i32 = 1024;
 const MAX_TEX_SLOTS: i32 = 256;
+const EMPTY_CHILD: i32 = -2147483648;  // INT_MIN — sentinel for unused BVH4 child slots
 const ATLAS_COLS:  i32 = 8;
 
 struct Ray  { origin: vec3<f32>, dir: vec3<f32> }
@@ -314,29 +319,15 @@ fn aabbDist(bmin: vec3<f32>, bmax: vec3<f32>, ray: Ray, tmax: f32) -> f32 {
     return 1e30;
 }
 
-// Unpack f16-compressed AABB row: two packed u32 → vec4<f32>
-fn unpackRow(a: u32, b: u32) -> vec4<f32> {
-    let lo = unpack2x16float(a);
-    let hi = unpack2x16float(b);
-    return vec4<f32>(lo.x, lo.y, hi.x, hi.y);
-}
-
-// Test 4 child AABBs simultaneously using SoA layout with f16-packed bounds.
+// Test 4 child AABBs simultaneously using SoA f32 layout.
 // Returns vec4 of distances. invD is precomputed once per ray as 1.0/ray.dir.
 fn aabbDist4(nd: Bvh4NodeGpu, ray: Ray, invD: vec3<f32>, tmax: f32) -> vec4<f32> {
-    let cMinX = unpackRow(nd.p0.x, nd.p0.y);
-    let cMinY = unpackRow(nd.p0.z, nd.p0.w);
-    let cMinZ = unpackRow(nd.p1.x, nd.p1.y);
-    let cMaxX = unpackRow(nd.p1.z, nd.p1.w);
-    let cMaxY = unpackRow(nd.p2.x, nd.p2.y);
-    let cMaxZ = unpackRow(nd.p2.z, nd.p2.w);
-
     let ox = vec4<f32>(ray.origin.x); let oy = vec4<f32>(ray.origin.y); let oz = vec4<f32>(ray.origin.z);
     let idx = vec4<f32>(invD.x); let idy = vec4<f32>(invD.y); let idz = vec4<f32>(invD.z);
 
-    let t1x = (cMinX - ox) * idx;  let t2x = (cMaxX - ox) * idx;
-    let t1y = (cMinY - oy) * idy;  let t2y = (cMaxY - oy) * idy;
-    let t1z = (cMinZ - oz) * idz;  let t2z = (cMaxZ - oz) * idz;
+    let t1x = (nd.cMinX - ox) * idx;  let t2x = (nd.cMaxX - ox) * idx;
+    let t1y = (nd.cMinY - oy) * idy;  let t2y = (nd.cMaxY - oy) * idy;
+    let t1z = (nd.cMinZ - oz) * idz;  let t2z = (nd.cMaxZ - oz) * idz;
 
     let tNear = max(max(min(t1x, t2x), min(t1y, t2y)), min(t1z, t2z));
     let tFar  = min(min(max(t1x, t2x), max(t1y, t2y)), max(t1z, t2z));
@@ -569,10 +560,10 @@ fn sceneHitRaw(ray: Ray, maxT: f32) -> RawHit {
         let ci2 = bitcast<i32>(nd.cIdx.z);
         let ci3 = bitcast<i32>(nd.cIdx.w);
 
-        if (dists.x < 1e30 && ci0 < 0) { decodeLeaf(ci0, ray, &rh); }
-        if (dists.y < 1e30 && ci1 < 0) { decodeLeaf(ci1, ray, &rh); }
-        if (dists.z < 1e30 && ci2 < 0) { decodeLeaf(ci2, ray, &rh); }
-        if (dists.w < 1e30 && ci3 < 0) { decodeLeaf(ci3, ray, &rh); }
+        if (dists.x < 1e30 && ci0 < 0 && ci0 != EMPTY_CHILD) { decodeLeaf(ci0, ray, &rh); }
+        if (dists.y < 1e30 && ci1 < 0 && ci1 != EMPTY_CHILD) { decodeLeaf(ci1, ray, &rh); }
+        if (dists.z < 1e30 && ci2 < 0 && ci2 != EMPTY_CHILD) { decodeLeaf(ci2, ray, &rh); }
+        if (dists.w < 1e30 && ci3 < 0 && ci3 != EMPTY_CHILD) { decodeLeaf(ci3, ray, &rh); }
 
         // Push internal children — nearest last so it's popped first
         var n0 = dists.x; var n1 = dists.y; var n2 = dists.z; var n3 = dists.w;
@@ -623,10 +614,10 @@ fn sceneAnyHit(ray: Ray, maxT: f32) -> RawHit {
         let ci2 = bitcast<i32>(nd.cIdx.z);
         let ci3 = bitcast<i32>(nd.cIdx.w);
 
-        if (dists.x < 1e30 && ci0 < 0) { decodeLeaf(ci0, ray, &rh); if (rh.triIdx >= 0) { return rh; } }
-        if (dists.y < 1e30 && ci1 < 0) { decodeLeaf(ci1, ray, &rh); if (rh.triIdx >= 0) { return rh; } }
-        if (dists.z < 1e30 && ci2 < 0) { decodeLeaf(ci2, ray, &rh); if (rh.triIdx >= 0) { return rh; } }
-        if (dists.w < 1e30 && ci3 < 0) { decodeLeaf(ci3, ray, &rh); if (rh.triIdx >= 0) { return rh; } }
+        if (dists.x < 1e30 && ci0 < 0 && ci0 != EMPTY_CHILD) { decodeLeaf(ci0, ray, &rh); if (rh.triIdx >= 0) { return rh; } }
+        if (dists.y < 1e30 && ci1 < 0 && ci1 != EMPTY_CHILD) { decodeLeaf(ci1, ray, &rh); if (rh.triIdx >= 0) { return rh; } }
+        if (dists.z < 1e30 && ci2 < 0 && ci2 != EMPTY_CHILD) { decodeLeaf(ci2, ray, &rh); if (rh.triIdx >= 0) { return rh; } }
+        if (dists.w < 1e30 && ci3 < 0 && ci3 != EMPTY_CHILD) { decodeLeaf(ci3, ray, &rh); if (rh.triIdx >= 0) { return rh; } }
 
         // No sorting — just push all hit internal children
         if (dists.x < 1e30 && ci0 >= 0) { stack[top] = ci0; top++; }
@@ -1565,10 +1556,13 @@ fn vt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // ---------------------------------------------------------------------------
 constexpr const char* refitWGSL_ = R"(
 struct Bvh4NodeGpu {
-    p0:   vec4<u32>,  // cMinX(01), cMinX(23), cMinY(01), cMinY(23) as packed f16 pairs
-    p1:   vec4<u32>,  // cMinZ(01), cMinZ(23), cMaxX(01), cMaxX(23)
-    p2:   vec4<u32>,  // cMaxY(01), cMaxY(23), cMaxZ(01), cMaxZ(23)
-    cIdx: vec4<u32>,  // child indices (bitcast to i32 for leaf encoding)
+    cMinX: vec4<f32>,
+    cMinY: vec4<f32>,
+    cMinZ: vec4<f32>,
+    cMaxX: vec4<f32>,
+    cMaxY: vec4<f32>,
+    cMaxZ: vec4<f32>,
+    cIdx:  vec4<u32>,  // child indices (bitcast to i32 for leaf encoding)
 }
 struct RefitUniforms {
     leafCount: u32,
@@ -1583,51 +1577,14 @@ struct RefitUniforms {
 @group(0) @binding(4) var<uniform>             refitUni:   RefitUniforms;
 @group(0) @binding(5) var<storage, read>       refitMeta:  array<vec4<i32>>;  // (parent, childCount, numInternal, 0)
 
-// Unpack f16 pair → vec2<f32>
-fn up(v: u32) -> vec2<f32> { return unpack2x16float(v); }
-// Pack vec2<f32> → f16 pair as u32
-fn pk(a: f32, b: f32) -> u32 { return pack2x16float(vec2<f32>(a, b)); }
-
-// Unpack 4 f16s from two u32 → vec4<f32>
-fn unpackRow(a: u32, b: u32) -> vec4<f32> {
-    let lo = unpack2x16float(a);
-    let hi = unpack2x16float(b);
-    return vec4<f32>(lo.x, lo.y, hi.x, hi.y);
-}
-
 fn writeChildAABB(ni: i32, c: i32, bmin: vec3<f32>, bmax: vec3<f32>) {
-    // Read current packed values, update the f16 pair containing child c, write back.
-    // Children 0,1 are in the .x component; children 2,3 in the .y component.
     var n = bvhNodes[ni];
-    if (c == 0) {
-        let old0 = up(n.p0.x); n.p0.x = pk(bmin.x, old0.y);  // cMinX: child0
-        let old2 = up(n.p0.z); n.p0.z = pk(bmin.y, old2.y);  // cMinY: child0
-        let old4 = up(n.p1.x); n.p1.x = pk(bmin.z, old4.y);  // cMinZ: child0
-        let old6 = up(n.p1.z); n.p1.z = pk(bmax.x, old6.y);  // cMaxX: child0
-        let old8 = up(n.p2.x); n.p2.x = pk(bmax.y, old8.y);  // cMaxY: child0
-        let oldA = up(n.p2.z); n.p2.z = pk(bmax.z, oldA.y);  // cMaxZ: child0
-    } else if (c == 1) {
-        let old0 = up(n.p0.x); n.p0.x = pk(old0.x, bmin.x);
-        let old2 = up(n.p0.z); n.p0.z = pk(old2.x, bmin.y);
-        let old4 = up(n.p1.x); n.p1.x = pk(old4.x, bmin.z);
-        let old6 = up(n.p1.z); n.p1.z = pk(old6.x, bmax.x);
-        let old8 = up(n.p2.x); n.p2.x = pk(old8.x, bmax.y);
-        let oldA = up(n.p2.z); n.p2.z = pk(oldA.x, bmax.z);
-    } else if (c == 2) {
-        let old1 = up(n.p0.y); n.p0.y = pk(bmin.x, old1.y);
-        let old3 = up(n.p0.w); n.p0.w = pk(bmin.y, old3.y);
-        let old5 = up(n.p1.y); n.p1.y = pk(bmin.z, old5.y);
-        let old7 = up(n.p1.w); n.p1.w = pk(bmax.x, old7.y);
-        let old9 = up(n.p2.y); n.p2.y = pk(bmax.y, old9.y);
-        let oldB = up(n.p2.w); n.p2.w = pk(bmax.z, oldB.y);
-    } else {
-        let old1 = up(n.p0.y); n.p0.y = pk(old1.x, bmin.x);
-        let old3 = up(n.p0.w); n.p0.w = pk(old3.x, bmin.y);
-        let old5 = up(n.p1.y); n.p1.y = pk(old5.x, bmin.z);
-        let old7 = up(n.p1.w); n.p1.w = pk(old7.x, bmax.x);
-        let old9 = up(n.p2.y); n.p2.y = pk(old9.x, bmax.y);
-        let oldB = up(n.p2.w); n.p2.w = pk(oldB.x, bmax.z);
-    }
+    n.cMinX[c] = bmin.x;
+    n.cMinY[c] = bmin.y;
+    n.cMinZ[c] = bmin.z;
+    n.cMaxX[c] = bmax.x;
+    n.cMaxY[c] = bmax.y;
+    n.cMaxZ[c] = bmax.z;
     bvhNodes[ni] = n;
 }
 
@@ -1695,19 +1652,13 @@ fn bvh_refit(@builtin(global_invocation_id) gid: vec3<u32>) {
             let cc = refitMeta[ci].y;
             var bmin = vec3<f32>(1e30);
             var bmax = vec3<f32>(-1e30);
-            // Unpack all 6 AABB rows from f16
-            let cMinXv = unpackRow(child.p0.x, child.p0.y);
-            let cMinYv = unpackRow(child.p0.z, child.p0.w);
-            let cMinZv = unpackRow(child.p1.x, child.p1.y);
-            let cMaxXv = unpackRow(child.p1.z, child.p1.w);
-            let cMaxYv = unpackRow(child.p2.x, child.p2.y);
-            let cMaxZv = unpackRow(child.p2.z, child.p2.w);
-            let cMinXa = array<f32, 4>(cMinXv.x, cMinXv.y, cMinXv.z, cMinXv.w);
-            let cMinYa = array<f32, 4>(cMinYv.x, cMinYv.y, cMinYv.z, cMinYv.w);
-            let cMinZa = array<f32, 4>(cMinZv.x, cMinZv.y, cMinZv.z, cMinZv.w);
-            let cMaxXa = array<f32, 4>(cMaxXv.x, cMaxXv.y, cMaxXv.z, cMaxXv.w);
-            let cMaxYa = array<f32, 4>(cMaxYv.x, cMaxYv.y, cMaxYv.z, cMaxYv.w);
-            let cMaxZa = array<f32, 4>(cMaxZv.x, cMaxZv.y, cMaxZv.z, cMaxZv.w);
+            // Read f32 child AABBs directly
+            let cMinXa = array<f32, 4>(child.cMinX.x, child.cMinX.y, child.cMinX.z, child.cMinX.w);
+            let cMinYa = array<f32, 4>(child.cMinY.x, child.cMinY.y, child.cMinY.z, child.cMinY.w);
+            let cMinZa = array<f32, 4>(child.cMinZ.x, child.cMinZ.y, child.cMinZ.z, child.cMinZ.w);
+            let cMaxXa = array<f32, 4>(child.cMaxX.x, child.cMaxX.y, child.cMaxX.z, child.cMaxX.w);
+            let cMaxYa = array<f32, 4>(child.cMaxY.x, child.cMaxY.y, child.cMaxY.z, child.cMaxY.w);
+            let cMaxZa = array<f32, 4>(child.cMaxZ.x, child.cMaxZ.y, child.cMaxZ.z, child.cMaxZ.w);
             for (var gc: i32 = 0; gc < cc; gc++) {
                 bmin = min(bmin, vec3<f32>(cMinXa[gc], cMinYa[gc], cMinZa[gc]));
                 bmax = max(bmax, vec3<f32>(cMaxXa[gc], cMaxYa[gc], cMaxZa[gc]));
@@ -2377,6 +2328,12 @@ static ExtractedMaterial extractMaterial(const Material* mat) {
     return m;
 }
 
+// Compute flat index into a paged triBuffer for triangle `ti`, row `row`.
+// The texture is TEX_PAGE_WIDTH columns wide; each triangle occupies TRI_TEX_HEIGHT rows.
+static int pagedIdx(int ti, int row) {
+    return ((ti / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + ti % TEX_PAGE_WIDTH) * 4;
+}
+
 static int buildGeometryBuffers(
         const std::vector<RtMeshEntry>& entries,
         const std::unordered_map<Texture*, int>& texSlotMap,
@@ -2542,14 +2499,20 @@ static int buildGeometryBuffers(
             const auto [u1, v1uv] = uv(i1);
             const auto [u2, v2uv] = uv(i2);
 
-            setTexel(triBuffer, maxTris, triCount, 0, v0.x, v0.y, v0.z, static_cast<float>(matIdx));
-            setTexel(triBuffer, maxTris, triCount, 1, v1.x, v1.y, v1.z, 0.f);
-            setTexel(triBuffer, maxTris, triCount, 2, v2.x, v2.y, v2.z, 0.f);
-            setTexel(triBuffer, maxTris, triCount, 3, n0.x, n0.y, n0.z, 0.f);
-            setTexel(triBuffer, maxTris, triCount, 4, n1.x, n1.y, n1.z, 0.f);
-            setTexel(triBuffer, maxTris, triCount, 5, n2.x, n2.y, n2.z, 0.f);
-            setTexel(triBuffer, maxTris, triCount, 6, u0, v0uv, u1, v1uv);
-            setTexel(triBuffer, maxTris, triCount, 7, u2, v2uv, 0.f, 0.f);
+            // Use paged layout (matches triGet/pagedIdx/GPU triCoord)
+            auto setTri = [&](int row, float x, float y, float z, float w) {
+                int idx = pagedIdx(triCount, row);
+                triBuffer[idx + 0] = x; triBuffer[idx + 1] = y;
+                triBuffer[idx + 2] = z; triBuffer[idx + 3] = w;
+            };
+            setTri(0, v0.x, v0.y, v0.z, static_cast<float>(matIdx));
+            setTri(1, v1.x, v1.y, v1.z, 0.f);
+            setTri(2, v2.x, v2.y, v2.z, 0.f);
+            setTri(3, n0.x, n0.y, n0.z, 0.f);
+            setTri(4, n1.x, n1.y, n1.z, 0.f);
+            setTri(5, n2.x, n2.y, n2.z, 0.f);
+            setTri(6, u0, v0uv, u1, v1uv);
+            setTri(7, u2, v2uv, 0.f, 0.f);
 
             const Vector3 ov0 = objVert(i0), ov1 = objVert(i1), ov2 = objVert(i2);
             const Vector3 on0 = objNorm(i0), on1 = objNorm(i1), on2 = objNorm(i2);
@@ -2762,10 +2725,6 @@ static int buildBvhNode(
     return ni;
 }
 
-static int pagedIdx(int ti, int row) {
-    return ((ti / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + ti % TEX_PAGE_WIDTH) * 4;
-}
-
 // ---------------------------------------------------------------------------
 // Wide BVH (BVH4): collapse binary BVH into 4-way tree
 // ---------------------------------------------------------------------------
@@ -2825,9 +2784,9 @@ static void collapseBvh4(
         w.childMinX[0] = root.minX; w.childMinY[0] = root.minY; w.childMinZ[0] = root.minZ;
         w.childMaxX[0] = root.maxX; w.childMaxY[0] = root.maxY; w.childMaxZ[0] = root.maxZ;
         for (int c = 1; c < 4; c++) {
-            w.childIdx[c] = 0;
+            w.childIdx[c] = INT_MIN;
             w.childMinX[c] = 1e30f; w.childMinY[c] = 1e30f; w.childMinZ[c] = 1e30f;
-            w.childMaxX[c] = 1e30f; w.childMaxY[c] = 1e30f; w.childMaxZ[c] = 1e30f;
+            w.childMaxX[c] = -1e30f; w.childMaxY[c] = -1e30f; w.childMaxZ[c] = -1e30f;
         }
         w.parent = parentWide;
         leafIndicesOut.push_back(wi);
@@ -2885,10 +2844,10 @@ static void collapseBvh4(
                 w.numInternalChildren++;
             }
         } else {
-            // Empty slot — zero-volume AABB at infinity, always out of range
-            w.childIdx[c] = 0;
+            // Empty slot — INT_MIN sentinel, skipped by WGSL EMPTY_CHILD check
+            w.childIdx[c] = INT_MIN;
             w.childMinX[c] = 1e30f; w.childMinY[c] = 1e30f; w.childMinZ[c] = 1e30f;
-            w.childMaxX[c] = 1e30f; w.childMaxY[c] = 1e30f; w.childMaxZ[c] = 1e30f;
+            w.childMaxX[c] = -1e30f; w.childMaxY[c] = -1e30f; w.childMaxZ[c] = -1e30f;
         }
     }
 
@@ -2918,7 +2877,7 @@ static void collapseBvh4(
 ///
 /// Refit metadata is stored in a separate buffer (4 ints per node):
 ///   (parent, childCount, numInternalChildren, 0)
-static constexpr int BVH4_GPU_U32S = 16;  // 64 bytes per node (was 112 with f32 AABBs)
+static constexpr int BVH4_GPU_U32S = 28;  // 112 bytes per node (f32 AABBs: 6*vec4 + cIdx)
 static constexpr int BVH4_REFIT_INTS = 4;  // per-node refit metadata
 
 // Convert f32 to IEEE 754 half-precision (f16), returned as uint16_t.
@@ -2969,37 +2928,18 @@ static void packBvh4Buffer(const std::vector<Bvh4Node>& nodes, std::vector<uint3
     const int nc = std::min(static_cast<int>(nodes.size()), capacity);
     for (int i = 0; i < nc; i++) {
         const auto& n = nodes[i];
-        uint32_t* p = buf.data() + static_cast<size_t>(i) * BVH4_GPU_U32S;
+        float* p = reinterpret_cast<float*>(buf.data() + static_cast<size_t>(i) * BVH4_GPU_U32S);
 
-        // Expand each child AABB by f16 epsilon before packing to prevent
-        // zero-extent boxes when triangle extent < f16 precision at that position.
-        float cMinX[4], cMinY[4], cMinZ[4], cMaxX[4], cMaxY[4], cMaxZ[4];
-        for (int c = 0; c < 4; c++) {
-            float ex = f16Eps(std::max(std::abs(n.childMinX[c]), std::abs(n.childMaxX[c])));
-            float ey = f16Eps(std::max(std::abs(n.childMinY[c]), std::abs(n.childMaxY[c])));
-            float ez = f16Eps(std::max(std::abs(n.childMinZ[c]), std::abs(n.childMaxZ[c])));
-            cMinX[c] = n.childMinX[c] - ex; cMaxX[c] = n.childMaxX[c] + ex;
-            cMinY[c] = n.childMinY[c] - ey; cMaxY[c] = n.childMaxY[c] + ey;
-            cMinZ[c] = n.childMinZ[c] - ez; cMaxZ[c] = n.childMaxZ[c] + ez;
-        }
-
-        // p0: cMinX(01), cMinX(23), cMinY(01), cMinY(23) — conservative: round min DOWN
-        p[0] = packF16x2Min(cMinX[0], cMinX[1]);
-        p[1] = packF16x2Min(cMinX[2], cMinX[3]);
-        p[2] = packF16x2Min(cMinY[0], cMinY[1]);
-        p[3] = packF16x2Min(cMinY[2], cMinY[3]);
-        // p1: cMinZ(01), cMinZ(23), cMaxX(01), cMaxX(23) — conservative: max rounds UP
-        p[4] = packF16x2Min(cMinZ[0], cMinZ[1]);
-        p[5] = packF16x2Min(cMinZ[2], cMinZ[3]);
-        p[6] = packF16x2Max(cMaxX[0], cMaxX[1]);
-        p[7] = packF16x2Max(cMaxX[2], cMaxX[3]);
-        // p2: cMaxY(01), cMaxY(23), cMaxZ(01), cMaxZ(23)
-        p[8]  = packF16x2Max(cMaxY[0], cMaxY[1]);
-        p[9]  = packF16x2Max(cMaxY[2], cMaxY[3]);
-        p[10] = packF16x2Max(cMaxZ[0], cMaxZ[1]);
-        p[11] = packF16x2Max(cMaxZ[2], cMaxZ[3]);
+        // f32 SoA layout: cMinX[4], cMinY[4], cMinZ[4], cMaxX[4], cMaxY[4], cMaxZ[4], cIdx[4]
+        for (int c = 0; c < 4; c++) p[0 + c]  = n.childMinX[c];
+        for (int c = 0; c < 4; c++) p[4 + c]  = n.childMinY[c];
+        for (int c = 0; c < 4; c++) p[8 + c]  = n.childMinZ[c];
+        for (int c = 0; c < 4; c++) p[12 + c] = n.childMaxX[c];
+        for (int c = 0; c < 4; c++) p[16 + c] = n.childMaxY[c];
+        for (int c = 0; c < 4; c++) p[20 + c] = n.childMaxZ[c];
         // cIdx: child indices as bitcast u32
-        for (int c = 0; c < 4; c++) std::memcpy(p + 12 + c, &n.childIdx[c], sizeof(int));
+        uint32_t* pi = buf.data() + static_cast<size_t>(i) * BVH4_GPU_U32S;
+        for (int c = 0; c < 4; c++) std::memcpy(pi + 24 + c, &n.childIdx[c], sizeof(int));
     }
 }
 
@@ -3686,7 +3626,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                                            r.triCapacity, r.matCapacity, r.meshCapacity);
         buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
         r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
-        r.bvhCapacity = r.numBvhNodes;  // exact — no overallocation
+        r.bvhCapacity = std::max(r.numBvhNodes, 1);  // at least 1 to avoid 0-byte buffers
         r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_U32S, 0u);
         packBvh4Buffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
         r.refitMetaCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_REFIT_INTS, 0);
@@ -3770,7 +3710,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                                                r.triCapacity, r.matCapacity, r.meshCapacity);
             buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
             r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
-            r.bvhCapacity = r.numBvhNodes;  // exact — no overallocation
+            r.bvhCapacity = std::max(r.numBvhNodes, 1);  // at least 1 to avoid 0-byte buffers
             r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_U32S, 0u);
             packBvh4Buffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
             r.refitMetaCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_REFIT_INTS, 0);
