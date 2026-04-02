@@ -2930,13 +2930,16 @@ static void packBvh4Buffer(const std::vector<Bvh4Node>& nodes, std::vector<uint3
         const auto& n = nodes[i];
         float* p = reinterpret_cast<float*>(buf.data() + static_cast<size_t>(i) * BVH4_GPU_U32S);
 
-        // f32 SoA layout: cMinX[4], cMinY[4], cMinZ[4], cMaxX[4], cMaxY[4], cMaxZ[4], cIdx[4]
-        for (int c = 0; c < 4; c++) p[0 + c]  = n.childMinX[c];
-        for (int c = 0; c < 4; c++) p[4 + c]  = n.childMinY[c];
-        for (int c = 0; c < 4; c++) p[8 + c]  = n.childMinZ[c];
-        for (int c = 0; c < 4; c++) p[12 + c] = n.childMaxX[c];
-        for (int c = 0; c < 4; c++) p[16 + c] = n.childMaxY[c];
-        for (int c = 0; c < 4; c++) p[20 + c] = n.childMaxZ[c];
+        // f32 SoA layout with small epsilon expansion to cover CPU/GPU float discrepancy.
+        // BVH AABBs are built from CPU-transformed vertices (applyMatrix4), but the GPU
+        // VT pass recomputes world positions via mat*vec4 which can differ by a few ULPs.
+        constexpr float E = 1e-5f;
+        for (int c = 0; c < 4; c++) p[0 + c]  = n.childMinX[c] - E;
+        for (int c = 0; c < 4; c++) p[4 + c]  = n.childMinY[c] - E;
+        for (int c = 0; c < 4; c++) p[8 + c]  = n.childMinZ[c] - E;
+        for (int c = 0; c < 4; c++) p[12 + c] = n.childMaxX[c] + E;
+        for (int c = 0; c < 4; c++) p[16 + c] = n.childMaxY[c] + E;
+        for (int c = 0; c < 4; c++) p[20 + c] = n.childMaxZ[c] + E;
         // cIdx: child indices as bitcast u32
         uint32_t* pi = buf.data() + static_cast<size_t>(i) * BVH4_GPU_U32S;
         for (int c = 0; c < 4; c++) std::memcpy(pi + 24 + c, &n.childIdx[c], sizeof(int));
