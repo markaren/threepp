@@ -3788,7 +3788,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.emissiveTotalPower_ = r.emissiveTotalPower;
 
         // Grow GPU buffers when scene exceeds current capacity (same pattern as atlas)
-        if (r.triCapacity > d.triCapacity_) {
+        if (r.triCapacity != d.triCapacity_) {
             d.triCapacity_ = r.triCapacity;
             const int pages = triTexPages(r.triCapacity);
             d.triTex = WgpuTexture(d.renderer, TEX_PAGE_WIDTH, TRI_TEX_HEIGHT * pages,
@@ -3809,7 +3809,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.rtRaycastPipeline.setTexture(5, d.triTex);
             d.rtRaycastPipeline.setStorageBufferRead(11, d.emissiveTriBuf);
         }
-        if (r.bvhCapacity > d.bvhCapacity_) {
+        if (r.bvhCapacity != d.bvhCapacity_) {
             d.bvhCapacity_ = r.bvhCapacity;
             d.bvhNodeBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_U32S * sizeof(uint32_t),
                                        WgpuBuffer::Usage::Storage);
@@ -3824,7 +3824,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.rtPipeline.setStorageBufferRead(3, d.bvhNodeBuf);
             d.rtRaycastPipeline.setStorageBufferRead(3, d.bvhNodeBuf);
         }
-        if (r.matCapacity > d.matCapacity_) {
+        if (r.matCapacity != d.matCapacity_) {
             d.matCapacity_ = r.matCapacity;
             d.matTex = WgpuTexture(d.renderer, r.matCapacity, MAT_TEX_HEIGHT,
                                     WgpuTexture::Format::RGBA32Float,
@@ -3832,7 +3832,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.rtPipeline.setTexture(4, d.matTex);
             d.rtRaycastPipeline.setTexture(4, d.matTex);
         }
-        if (r.meshCapacity > d.meshCapacity_) {
+        if (r.meshCapacity != d.meshCapacity_) {
             d.meshCapacity_ = r.meshCapacity;
             d.matrixBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.meshCapacity) * 32 * sizeof(float),
                                       WgpuBuffer::Usage::Storage);
@@ -4214,19 +4214,21 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         WGPUComputePassDescriptor passDesc{};
 
         if (anyMeshMoved) {
-            // Pass 1: vertex transform (writes triTex)
+            // Pass 1: vertex transform (writes triTex from objTriBuf + matrices)
             passDesc.label = WGPUStringView{"vt_pass", WGPU_STRLEN};
             WGPUComputePassEncoder vtPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
             d.vtPipeline.encode(vtPass, d.vtDispatchX_, d.vtDispatchY_);
             wgpuComputePassEncoderEnd(vtPass);
             wgpuComputePassEncoderRelease(vtPass);
 
-            // Pass 2: BVH refit (reads triTex, writes bvhNodes)
-            passDesc.label = WGPUStringView{"rf_pass", WGPU_STRLEN};
-            WGPUComputePassEncoder rfPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
-            d.refitPipeline.encode(rfPass, d.rfDispatchX_, d.rfDispatchY_);
-            wgpuComputePassEncoderEnd(rfPass);
-            wgpuComputePassEncoderRelease(rfPass);
+            // Pass 2: BVH refit — skip on fresh build (CPU already packed padded f16 AABBs)
+            if (!topoJustFinished) {
+                passDesc.label = WGPUStringView{"rf_pass", WGPU_STRLEN};
+                WGPUComputePassEncoder rfPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
+                d.refitPipeline.encode(rfPass, d.rfDispatchX_, d.rfDispatchY_);
+                wgpuComputePassEncoderEnd(rfPass);
+                wgpuComputePassEncoderRelease(rfPass);
+            }
         }
 
         // Pass 3: ray trace (reads triTex + bvhNodes)
