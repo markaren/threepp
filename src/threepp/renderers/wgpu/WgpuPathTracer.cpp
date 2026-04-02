@@ -112,8 +112,9 @@ struct RtUniforms {
     lightDir:   array<vec4<f32>, 4>,  // xyz: spotlight direction (normalized); w=decay
     spp:          vec4<f32>,
     movedMeshBits: vec4<u32>,  // bit i = mesh i moved (words 0/1 cover meshes 0-63)
-    envColor:      vec4<f32>,  // xyz = color/tint, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex
+    envColor:      vec4<f32>,  // xyz = color/tint, w = mode: 0=none, 1=solid color, 2=equirect tex
     envIntensity:  vec4<f32>,  // x = intensity scale, y = envWidth, z = envHeight, w = hasEnvCDF
+    bgColor:       vec4<f32>,  // xyz = color, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex (bgTex)
     params:        vec4<f32>,  // x = maxBounces
     emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive power
 };
@@ -139,6 +140,7 @@ struct Bvh4NodeGpu {
 @group(0) @binding(11) var<storage, read> emissiveTris: array<vec4<f32>>;  // per tri: (triIndex, area, 0, 0)
 @group(0) @binding(14) var albedoWrite: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(15) var gBufRead:    texture_2d<f32>;
+@group(0) @binding(16) var bgTex:       texture_2d<f32>;
 
 const TILE_SIZE:   i32 = 1024;
 const MAX_TEX_SLOTS: i32 = 256;
@@ -241,23 +243,41 @@ fn sampleAtlasAlpha(uv: vec2<f32>, texSlot: f32) -> f32 {
 }
 )"
 R"(
-// Returns the raw environment/background color with no intensity scaling.
-// Callers apply rt.envIntensity.x themselves when using this as a light source.
+// Equirectangular lookup helper (shared by sampleEnv and sampleBackground).
+fn equirectUV(d: vec3<f32>) -> vec2<f32> {
+    let nd  = normalize(d);
+    let phi = atan2(nd.z, nd.x);
+    let theta = asin(clamp(nd.y, -1.0, 1.0));
+    return vec2<f32>(0.5 + phi / (2.0 * PI), 0.5 - theta / PI);
+}
+
+// IBL environment lighting (scene.environment).  Returns BLACK when no environment is set.
+// Callers apply rt.envIntensity.x themselves.
 fn sampleEnv(d: vec3<f32>) -> vec3<f32> {
     let mode = i32(rt.envColor.w);
     if (mode == 1) {
         return rt.envColor.xyz;
     } else if (mode == 2) {
-        // Equirectangular texture
-        let nd  = normalize(d);
-        let phi = atan2(nd.z, nd.x);
-        let theta = asin(clamp(nd.y, -1.0, 1.0));
-        let uv  = vec2<f32>(0.5 + phi / (2.0 * PI),
-                            0.5 - theta / PI);
-        let sz  = vec2<f32>(textureDimensions(envTex, 0));
-        let px  = vec2<i32>(i32(uv.x * sz.x) % i32(sz.x),
-                            clamp(i32(uv.y * sz.y), 0, i32(sz.y) - 1));
+        let uv = equirectUV(d);
+        let sz = vec2<f32>(textureDimensions(envTex, 0));
+        let px = vec2<i32>(i32(uv.x * sz.x) % i32(sz.x),
+                           clamp(i32(uv.y * sz.y), 0, i32(sz.y) - 1));
         return textureLoad(envTex, px, 0).xyz;
+    }
+    return vec3<f32>(0.0);  // no environment = no IBL
+}
+
+// Background color for ray misses (scene.background).
+fn sampleBackground(d: vec3<f32>) -> vec3<f32> {
+    let mode = i32(rt.bgColor.w);
+    if (mode == 1) {
+        return rt.bgColor.xyz;
+    } else if (mode == 2) {
+        let uv = equirectUV(d);
+        let sz = vec2<f32>(textureDimensions(bgTex, 0));
+        let px = vec2<i32>(i32(uv.x * sz.x) % i32(sz.x),
+                           clamp(i32(uv.y * sz.y), 0, i32(sz.y) - 1));
+        return textureLoad(bgTex, px, 0).xyz;
     }
     // Default: procedural sky gradient
     let t = clamp(0.5 * (normalize(d).y + 1.0), 0.0, 1.0);
@@ -707,7 +727,7 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
 R"(
 fn raytrace(ray: Ray) -> vec3<f32> {
     let h0 = sceneHit(ray);
-    if (h0.t >= 1e30) { return sampleEnv(ray.dir); }
+    if (h0.t >= 1e30) { return sampleBackground(ray.dir); }
 
     // Transmission: one-level refraction for raytracer mode (smooth surfaces only)
     if (h0.transmission > 0.5 && h0.shininess < 0.1) {
@@ -720,7 +740,7 @@ fn raytrace(ray: Ray) -> vec3<f32> {
             rr.origin = h0.point - h0.normal * 1e-3;
             rr.dir    = refDir;
             let hr = sceneHit(rr);
-            if (hr.t >= 1e30) { return sampleEnv(rr.dir) * glassTint; }
+            if (hr.t >= 1e30) { return sampleBackground(rr.dir) * glassTint; }
             // Beer's law attenuation through the medium
             var volAtten = vec3<f32>(1.0);
             if (h0.attenuationDist > 0.0) {
@@ -736,7 +756,7 @@ fn raytrace(ray: Ray) -> vec3<f32> {
                 rr2.origin = hr.point - hr.normal * 1e-3;
                 rr2.dir    = refDir2;
                 let hr2 = sceneHit(rr2);
-                if (hr2.t >= 1e30) { return sampleEnv(rr2.dir) * glassTint * volAtten; }
+                if (hr2.t >= 1e30) { return sampleBackground(rr2.dir) * glassTint * volAtten; }
                 return shade(hr2, rr2.dir) * glassTint * volAtten;
             }
             return shade(hr, rr.dir) * glassTint * volAtten;
@@ -1016,17 +1036,18 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
     for (var i = 0; i < i32(rt.params.x); i++) {
         let h = sceneHit(ray);
         if (h.t >= 1e29) {
-            // Primary ray miss = background pixel: show full color.
-            // Indirect bounces: scale by envIntensity to control env light contribution.
-            let envScale = select(rt.envIntensity.x, 1.0, i == 0);
-            var envMisW = 1.0;
-            // MIS: BRDF sampling hit the env — weight against env importance PDF
-            if (HAS_ENV_CDF && rt.envColor.w > 1.5 && i > 0 && prevAlpha > 0.01) {
-                let pdf_env  = envImportancePdf(ray.dir);
-                let pdf_brdf = brdfPdf(prevWo, normalize(ray.dir), prevNormal, prevAlpha, prevMetalness);
-                envMisW = pdf_brdf / max(pdf_brdf + pdf_env, 1e-8);
+            // Primary ray miss: show background.  Bounced misses: use env IBL.
+            if (i == 0) {
+                radiance += throughput * sampleBackground(ray.dir);
+            } else {
+                var envMisW = 1.0;
+                if (HAS_ENV_CDF && rt.envColor.w > 1.5 && prevAlpha > 0.01) {
+                    let pdf_env  = envImportancePdf(ray.dir);
+                    let pdf_brdf = brdfPdf(prevWo, normalize(ray.dir), prevNormal, prevAlpha, prevMetalness);
+                    envMisW = pdf_brdf / max(pdf_brdf + pdf_env, 1e-8);
+                }
+                radiance += throughput * sampleEnv(ray.dir) * rt.envIntensity.x * envMisW;
             }
-            radiance += throughput * sampleEnv(ray.dir) * envScale * envMisW;
             break;
         }
         if (i == 0) {
@@ -1895,7 +1916,7 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cLum = mix(luminance_a(cColor), luminance_a(cIrr), demodBlend);
 
     // Luminance sigma: relaxed when noisy (low FC), tight when converged
-    let lumSigma = max(0.02, 0.25 / sqrt(cFC + 1.0));
+    let lumSigma = max(0.05, 0.5 / sqrt(cFC + 1.0));
 
     // 5×5 bilateral filter — tracks both demodulated irradiance and raw color
     let kw = array<f32, 5>(1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
@@ -2063,12 +2084,13 @@ struct alignas(16) RtGpuUniforms {
     float lightDir[4][4];       // [i] = spotlight direction xyz, [i][3]=decay
     float    spp[4];
     uint32_t movedMeshBits[4];  // bit i = mesh i moved; words 0/1 = meshes 0–63
-    float    envColor[4];       // xyz = color, w = mode (0=sky, 1=solid color, 2=equirect tex)
+    float    envColor[4];       // xyz = color, w = mode (0=none, 1=solid color, 2=equirect tex)
     float    envIntensity[4];   // x = intensity, y = envWidth, z = envHeight, w = totalLumSum (0 = no CDF)
+    float    bgColor[4];       // xyz = color, w = mode (0=sky gradient, 1=solid color, 2=equirect bgTex)
     float    params[4];        // x = maxBounces
     float    emissiveInfo[4]; // x = emissive tri count, y = total emissive area
 };
-static_assert(sizeof(RtGpuUniforms) == 576, "RtGpuUniforms must be 576 bytes");
+static_assert(sizeof(RtGpuUniforms) == 592, "RtGpuUniforms must be 592 bytes");
 
 struct alignas(16) VtGpuUniforms {
     uint32_t triCount, groupsX, _p[2];
@@ -3051,11 +3073,13 @@ struct WgpuPathTracer::Impl {
     WgpuTexture hitMeshB;
     WgpuTexture* readHitMesh;
     WgpuTexture* writeHitMesh;
-    WgpuTexture envTexGpu;   // equirectangular env map (1x1 placeholder when unused)
+    WgpuTexture envTexGpu;   // equirectangular env map for IBL (1x1 placeholder when unused)
+    WgpuTexture bgTexGpu;   // equirectangular background for ray misses (1x1 placeholder when unused)
     WgpuTexture envCdfTex;  // conditional CDF (width × height), R32Float
     WgpuTexture envMargTex; // marginal CDF (height × 1), R32Float
     float       envLumSum_ = 0.f;  // total luminance sum for PDF normalization
     Texture*    prevEnvTex_ = nullptr;
+    Texture*    prevBgTex_  = nullptr;
 
     // G-buffer ping-pong
     WgpuTexture gBufA;          // normal.xyz + depth.w
@@ -3242,6 +3266,8 @@ struct WgpuPathTracer::Impl {
           readHitMesh(&hitMeshA), writeHitMesh(&hitMeshB),
           envTexGpu(r, 1u, 1u, WgpuTexture::Format::RGBA8Unorm,
                     WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
+          bgTexGpu(r, 1u, 1u, WgpuTexture::Format::RGBA8Unorm,
+                   WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           envCdfTex(r, 1u, 1u, WgpuTexture::Format::R32Float,
                     WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           envMargTex(r, 1u, 1u, WgpuTexture::Format::R32Float,
@@ -3333,6 +3359,7 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setTexture(13, envMargTex);
         rtPipeline.setStorageTexture(14, albedoTex);
         rtPipeline.setTexture(15, *gBufPrev);
+        rtPipeline.setTexture(16, bgTexGpu);
 
         rtRaycastPipeline.setUniformBuffer(0, rtUniformBuf);
         rtRaycastPipeline.setTexture(1, *readAccum);
@@ -3348,6 +3375,7 @@ struct WgpuPathTracer::Impl {
         rtRaycastPipeline.setStorageBufferRead(11, emissiveTriBuf);
         rtRaycastPipeline.setStorageTexture(14, albedoTex);
         rtRaycastPipeline.setTexture(15, *gBufPrev);
+        rtRaycastPipeline.setTexture(16, bgTexGpu);
 
         // TAA pipeline — set ALL bindings upfront
         taaPipeline.setUniformBuffer(0, taaUniBuf);
@@ -3552,8 +3580,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
     // Reset accumulation on camera movement
     const bool camMoved =
-            (camPos - d.prevCamPos_).length() > 1e-5f ||
-            (fwd - d.prevCamDir_).length() > 1e-5f;
+            (camPos - d.prevCamPos_).length() > 1e-4f ||
+            (fwd - d.prevCamDir_).length() > 1e-4f;
     if (camMoved) {
         d.frameCount_ = 0.f;
         d.prevCamPos_ = camPos;
@@ -4026,46 +4054,49 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.movedMeshBits[0] = movedBits[0];
     u.movedMeshBits[1] = movedBits[1];
 
-    // Environment light from scene.background / scene.environment
-    u.envColor[3] = 0.f;  // default: sky gradient
-    if (auto* s = dynamic_cast<Scene*>(&scene)) {
-        // Priority: environment texture > background texture > background color
-        Texture* envTex = s->environment.get();
-        if (!envTex && s->background.isTexture())
-            envTex = s->background.texture().get();
+    // Helper: upload an equirectangular texture to a GPU texture object.
+    auto uploadEquirect = [&](Texture* tex, WgpuTexture& gpuTex) {
+        auto& img = tex->image();
+        if (img.width <= 0 || img.height <= 0) return;
+        bool isHdr = false;
+        try { (void)img.data<float>(); isHdr = true; }
+        catch (const std::bad_variant_access&) {}
+        if (isHdr) {
+            const auto& src = img.data<float>();
+            gpuTex = WgpuTexture(d.renderer,
+                                 static_cast<uint32_t>(img.width),
+                                 static_cast<uint32_t>(img.height),
+                                 WgpuTexture::Format::RGBA32Float,
+                                 WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
+            gpuTex.write(src.data(), src.size() * sizeof(float));
+        } else {
+            const auto& src = img.data<unsigned char>();
+            gpuTex = WgpuTexture(d.renderer,
+                                 static_cast<uint32_t>(img.width),
+                                 static_cast<uint32_t>(img.height),
+                                 WgpuTexture::Format::RGBA8Unorm,
+                                 WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
+            gpuTex.write(src.data(), src.size());
+        }
+    };
 
+    // --- Environment (IBL lighting): scene.environment ---
+    u.envColor[3] = 0.f;  // default: no IBL
+    if (auto* s = dynamic_cast<Scene*>(&scene)) {
+        Texture* envTex = s->environment.get();
         if (envTex) {
             if (envTex != d.prevEnvTex_) {
-                // Upload new equirectangular texture (LDR or HDR)
+                uploadEquirect(envTex, d.envTexGpu);
+                d.rtPipeline.setTexture(9, d.envTexGpu);
+                d.rtRaycastPipeline.setTexture(9, d.envTexGpu);
+
+                // Build env CDF for importance sampling.
                 auto& img = envTex->image();
                 if (img.width > 0 && img.height > 0) {
+                    int w = img.width, h = img.height;
                     bool isHdr = false;
                     try { (void)img.data<float>(); isHdr = true; }
                     catch (const std::bad_variant_access&) {}
-
-                    if (isHdr) {
-                        const auto& src = img.data<float>();
-                        d.envTexGpu = WgpuTexture(d.renderer,
-                                                  static_cast<uint32_t>(img.width),
-                                                  static_cast<uint32_t>(img.height),
-                                                  WgpuTexture::Format::RGBA32Float,
-                                                  WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
-                        d.envTexGpu.write(src.data(), src.size() * sizeof(float));
-                    } else {
-                        const auto& src = img.data<unsigned char>();
-                        d.envTexGpu = WgpuTexture(d.renderer,
-                                                  static_cast<uint32_t>(img.width),
-                                                  static_cast<uint32_t>(img.height),
-                                                  WgpuTexture::Format::RGBA8Unorm,
-                                                  WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
-                        d.envTexGpu.write(src.data(), src.size());
-                    }
-                    d.rtPipeline.setTexture(9, d.envTexGpu);
-                    d.rtRaycastPipeline.setTexture(9, d.envTexGpu);
-
-                    // Build env CDF for importance sampling.
-                    // Native: async on background thread.  Emscripten: synchronous.
-                    int w = img.width, h = img.height;
 #ifdef __EMSCRIPTEN__
                     EnvCdfResult cdf;
                     if (isHdr) {
@@ -4115,25 +4146,49 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 d.prevEnvTex_ = envTex;
             }
             u.envColor[3] = 2.f;
-        } else if (s->background.isColor()) {
-            const Color& c = s->background.color();
-            u.envColor[0] = c.r; u.envColor[1] = c.g; u.envColor[2] = c.b;
-            u.envColor[3] = 1.f;
-            d.prevEnvTex_ = nullptr;
-            d.envLumSum_ = 0.f;  // no env map = no importance sampling
-            if (d.shaderHasEnvCdf_) {
-                d.rtPipeline.replaceShader(buildRtShader(true, false));
-                d.shaderHasEnvCdf_ = false;
+        } else {
+            // No environment = no IBL; clear CDF
+            if (d.prevEnvTex_) {
+                d.prevEnvTex_ = nullptr;
+                d.envLumSum_ = 0.f;
+                if (d.shaderHasEnvCdf_) {
+                    d.rtPipeline.replaceShader(buildRtShader(true, false));
+                    d.shaderHasEnvCdf_ = false;
+                }
             }
         }
+
+        // --- Background (ray miss): scene.background ---
+        u.bgColor[3] = 0.f;  // default: procedural sky gradient
+        if (s->background.isTexture()) {
+            Texture* bgTex = s->background.texture().get();
+            if (bgTex != d.prevBgTex_) {
+                uploadEquirect(bgTex, d.bgTexGpu);
+                d.rtPipeline.setTexture(16, d.bgTexGpu);
+                d.rtRaycastPipeline.setTexture(16, d.bgTexGpu);
+                d.prevBgTex_ = bgTex;
+            }
+            u.bgColor[3] = 2.f;
+        } else if (s->background.isColor()) {
+            const Color& c = s->background.color();
+            u.bgColor[0] = c.r; u.bgColor[1] = c.g; u.bgColor[2] = c.b;
+            u.bgColor[3] = 1.f;
+            d.prevBgTex_ = nullptr;
+        }
+
     }
-    // Enclosing box overrides environment: use its color as solid-color miss background
+    // Enclosing box overrides both background AND environment:
+    // an enclosed room shouldn't have outdoor sky reflections or IBL.
     if (hasEnclosingBox) {
+        u.bgColor[0] = enclosingBoxColor.r;
+        u.bgColor[1] = enclosingBoxColor.g;
+        u.bgColor[2] = enclosingBoxColor.b;
+        u.bgColor[3] = 1.f;  // solid color mode
         u.envColor[0] = enclosingBoxColor.r;
         u.envColor[1] = enclosingBoxColor.g;
         u.envColor[2] = enclosingBoxColor.b;
-        u.envColor[3] = 1.f;  // solid color mode
-        d.envLumSum_ = 0.f;
+        u.envColor[3] = 1.f;  // solid color mode — no IBL
+        // Don't clobber d.envLumSum_ — it's needed if the box is toggled off later
     }
 #ifndef __EMSCRIPTEN__
     // Check if async CDF build finished — upload to GPU
