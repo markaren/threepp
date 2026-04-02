@@ -3932,8 +3932,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     }
 
 #ifndef __EMSCRIPTEN__
-    // While building, skip RT dispatch — just return so the window stays responsive
+    // While building, skip RT dispatch — but keep display updated so screen isn't blank
     if (d.buildPending_) {
+        d.displayMat->customTextures["accumTex"] = d.readAccum;
+        d.displayMat->customTextures["gBufTex"]  = d.gBufPrev;
+        d.displayMat->uniformsNeedUpdate = true;
         return;
     }
 #endif
@@ -4284,8 +4287,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     const bool isPT = d.mode_ == Mode::PathTracer;
     auto& activePipeline = isPT ? d.rtPipeline : d.rtRaycastPipeline;
 
-    // Skip entire frame if the active pipeline is still compiling asynchronously
+    // Skip RT dispatch if the active pipeline is still compiling asynchronously
     if (!activePipeline.isReady()) {
+        d.displayMat->customTextures["accumTex"] = d.readAccum;
+        d.displayMat->customTextures["gBufTex"]  = d.gBufPrev;
+        d.displayMat->uniformsNeedUpdate = true;
         return;
     }
 
