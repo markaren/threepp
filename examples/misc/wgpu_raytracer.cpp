@@ -127,6 +127,7 @@ int main() {
     bool raster = false;
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
+    float envIntensity = pathTracer.envIntensity();
     float fps = 0.f;
     float fpsAccum = 0.f;
     int fpsFrames = 0;
@@ -165,6 +166,8 @@ int main() {
         if (renderMode != 2) {
             if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
                 pathTracer.setExposure(exposure);
+            if (ImGui::SliderFloat("EnvIntensity", &envIntensity, 0.1f, 5.0f))
+                pathTracer.setEnvIntensity(envIntensity);
         }
 
         if (renderMode == 1 && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
