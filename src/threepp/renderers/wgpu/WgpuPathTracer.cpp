@@ -2900,20 +2900,46 @@ static constexpr int BVH4_GPU_U32S = 16;  // 64 bytes per node (was 112 with f32
 static constexpr int BVH4_REFIT_INTS = 4;  // per-node refit metadata
 
 // Convert f32 to IEEE 754 half-precision (f16), returned as uint16_t.
-static uint16_t f32ToF16(float value) {
+// roundUp: true = round toward +∞ (for AABB max), false = round toward -∞ (for AABB min).
+static uint16_t f32ToF16(float value, bool roundUp = false) {
     uint32_t f;
     std::memcpy(&f, &value, sizeof(f));
     const uint32_t sign = (f >> 16) & 0x8000u;
+    const bool     neg  = (sign != 0);
     const int32_t  exp  = static_cast<int32_t>((f >> 23) & 0xFFu) - 127 + 15;
     const uint32_t mant = f & 0x007FFFFFu;
-    if (exp <= 0) return static_cast<uint16_t>(sign);          // flush subnormals to zero
+    if (exp <= 0) {
+        // Subnormal/zero: if rounding away from zero, return smallest representable
+        if (roundUp && !neg && value > 0.f) return 0x0001u;          // +smallest subnormal
+        if (!roundUp && neg && value < 0.f) return static_cast<uint16_t>(0x8001u); // -smallest subnormal
+        return static_cast<uint16_t>(sign);
+    }
     if (exp >= 31) return static_cast<uint16_t>(sign | 0x7C00u); // infinity / overflow
-    return static_cast<uint16_t>(sign | (static_cast<uint32_t>(exp) << 10) | (mant >> 13));
+    uint16_t h = static_cast<uint16_t>(sign | (static_cast<uint32_t>(exp) << 10) | (mant >> 13));
+    // If truncated bits are nonzero and we need to round away from zero, bump the result
+    bool needsBump = (roundUp && !neg) || (!roundUp && neg);
+    if (needsBump && (mant & 0x1FFFu) != 0) {
+        h++;  // safe: won't overflow past inf (0x7C00) in practice for AABB values
+    }
+    return h;
 }
 
 // Pack two f32 values into a single u32 as two f16 halves (matches WGSL unpack2x16float).
 static uint32_t packF16x2(float a, float b) {
     return uint32_t(f32ToF16(a)) | (uint32_t(f32ToF16(b)) << 16);
+}
+// Conservative packing for AABBs: min rounds down, max rounds up.
+static uint32_t packF16x2Min(float a, float b) {
+    return uint32_t(f32ToF16(a, false)) | (uint32_t(f32ToF16(b, false)) << 16);
+}
+static uint32_t packF16x2Max(float a, float b) {
+    return uint32_t(f32ToF16(a, true)) | (uint32_t(f32ToF16(b, true)) << 16);
+}
+
+// Compute f16 ULP-based epsilon: expand AABB so thin boxes survive f16 quantization.
+// At value v, f16 precision is ~|v|/1024. We pad by 2 ULPs + a small absolute floor.
+static float f16Eps(float v) {
+    return std::max(std::abs(v) * (2.f / 1024.f), 1e-4f);
 }
 
 static void packBvh4Buffer(const std::vector<Bvh4Node>& nodes, std::vector<uint32_t>& buf, int capacity) {
@@ -2922,21 +2948,34 @@ static void packBvh4Buffer(const std::vector<Bvh4Node>& nodes, std::vector<uint3
     for (int i = 0; i < nc; i++) {
         const auto& n = nodes[i];
         uint32_t* p = buf.data() + static_cast<size_t>(i) * BVH4_GPU_U32S;
-        // p0: cMinX(01), cMinX(23), cMinY(01), cMinY(23)
-        p[0] = packF16x2(n.childMinX[0], n.childMinX[1]);
-        p[1] = packF16x2(n.childMinX[2], n.childMinX[3]);
-        p[2] = packF16x2(n.childMinY[0], n.childMinY[1]);
-        p[3] = packF16x2(n.childMinY[2], n.childMinY[3]);
-        // p1: cMinZ(01), cMinZ(23), cMaxX(01), cMaxX(23)
-        p[4] = packF16x2(n.childMinZ[0], n.childMinZ[1]);
-        p[5] = packF16x2(n.childMinZ[2], n.childMinZ[3]);
-        p[6] = packF16x2(n.childMaxX[0], n.childMaxX[1]);
-        p[7] = packF16x2(n.childMaxX[2], n.childMaxX[3]);
+
+        // Expand each child AABB by f16 epsilon before packing to prevent
+        // zero-extent boxes when triangle extent < f16 precision at that position.
+        float cMinX[4], cMinY[4], cMinZ[4], cMaxX[4], cMaxY[4], cMaxZ[4];
+        for (int c = 0; c < 4; c++) {
+            float ex = f16Eps(std::max(std::abs(n.childMinX[c]), std::abs(n.childMaxX[c])));
+            float ey = f16Eps(std::max(std::abs(n.childMinY[c]), std::abs(n.childMaxY[c])));
+            float ez = f16Eps(std::max(std::abs(n.childMinZ[c]), std::abs(n.childMaxZ[c])));
+            cMinX[c] = n.childMinX[c] - ex; cMaxX[c] = n.childMaxX[c] + ex;
+            cMinY[c] = n.childMinY[c] - ey; cMaxY[c] = n.childMaxY[c] + ey;
+            cMinZ[c] = n.childMinZ[c] - ez; cMaxZ[c] = n.childMaxZ[c] + ez;
+        }
+
+        // p0: cMinX(01), cMinX(23), cMinY(01), cMinY(23) — conservative: round min DOWN
+        p[0] = packF16x2Min(cMinX[0], cMinX[1]);
+        p[1] = packF16x2Min(cMinX[2], cMinX[3]);
+        p[2] = packF16x2Min(cMinY[0], cMinY[1]);
+        p[3] = packF16x2Min(cMinY[2], cMinY[3]);
+        // p1: cMinZ(01), cMinZ(23), cMaxX(01), cMaxX(23) — conservative: max rounds UP
+        p[4] = packF16x2Min(cMinZ[0], cMinZ[1]);
+        p[5] = packF16x2Min(cMinZ[2], cMinZ[3]);
+        p[6] = packF16x2Max(cMaxX[0], cMaxX[1]);
+        p[7] = packF16x2Max(cMaxX[2], cMaxX[3]);
         // p2: cMaxY(01), cMaxY(23), cMaxZ(01), cMaxZ(23)
-        p[8]  = packF16x2(n.childMaxY[0], n.childMaxY[1]);
-        p[9]  = packF16x2(n.childMaxY[2], n.childMaxY[3]);
-        p[10] = packF16x2(n.childMaxZ[0], n.childMaxZ[1]);
-        p[11] = packF16x2(n.childMaxZ[2], n.childMaxZ[3]);
+        p[8]  = packF16x2Max(cMaxY[0], cMaxY[1]);
+        p[9]  = packF16x2Max(cMaxY[2], cMaxY[3]);
+        p[10] = packF16x2Max(cMaxZ[0], cMaxZ[1]);
+        p[11] = packF16x2Max(cMaxZ[2], cMaxZ[3]);
         // cIdx: child indices as bitcast u32
         for (int c = 0; c < 4; c++) std::memcpy(p + 12 + c, &n.childIdx[c], sizeof(int));
     }
