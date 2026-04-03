@@ -3484,9 +3484,6 @@ struct WgpuPathTracer::Impl {
         int bvhCapacity = 0;
     };
 #ifndef __EMSCRIPTEN__
-    std::future<AsyncBuildResult> asyncBuild_;
-    bool buildPending_ = false;
-
     // Async env CDF build
     std::future<EnvCdfResult> asyncEnvCdf_;
     bool envCdfPending_ = false;
@@ -3997,98 +3994,89 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         topoJustFinished = true;
         d.frameCount_ = 0.f;
 #else
-    if (topoChanged && !d.buildPending_) {
-        d.buildPending_ = true;
+    if (topoChanged) {
         d.prevMeshes = rtMeshes;
         d.prevEntryCount_ = totalEntryCount;
 
         auto meshes = rtMeshes;
-        // Expand instances on main thread (reads InstancedMesh data)
         for (auto* m : meshes) m->updateWorldMatrix(true, true);
         auto entries = expandMeshEntries(meshes);
 
-        d.asyncBuild_ = std::async(std::launch::async, [meshes, entries]() {
-            Impl::AsyncBuildResult r;
-            r.meshes = meshes;
-            r.entries = entries;
-            r.texSlotMap.clear();
-            auto [atlasData, atlasRows] = buildAtlas(meshes, r.texSlotMap);
-            r.atlasData = std::move(atlasData);
-            r.atlasRows = atlasRows;
+        Impl::AsyncBuildResult r;
+        r.meshes = meshes;
+        r.entries = entries;
+        r.texSlotMap.clear();
+        auto [atlasData, atlasRows] = buildAtlas(meshes, r.texSlotMap);
+        r.atlasData = std::move(atlasData);
+        r.atlasRows = atlasRows;
 
-            int totalTris = 0;
-            for (auto& entry : entries) {
-                auto* geo = entry.mesh->geometry().get();
-                auto* idx = geo->getIndex();
-                auto* pos = geo->getAttribute<float>("position");
-                if (!pos) continue;
-                totalTris += idx ? static_cast<int>(idx->count()) / 3
-                                 : static_cast<int>(pos->count()) / 3;
-            }
-            const int matCount = static_cast<int>(meshes.size());
-            const int meshCount = static_cast<int>(entries.size());
-            r.triCapacity  = std::clamp(totalTris, 1, MAX_TRI_CAP);
-            r.matCapacity  = std::max(matCount, 1);
-            r.meshCapacity = std::max(meshCount, 1);
+        int totalTris = 0;
+        for (auto& entry : entries) {
+            auto* geo = entry.mesh->geometry().get();
+            auto* idx = geo->getIndex();
+            auto* pos = geo->getAttribute<float>("position");
+            if (!pos) continue;
+            totalTris += idx ? static_cast<int>(idx->count()) / 3
+                             : static_cast<int>(pos->count()) / 3;
+        }
+        const int matCount = static_cast<int>(meshes.size());
+        const int meshCount = static_cast<int>(entries.size());
+        r.triCapacity  = std::clamp(totalTris, 1, MAX_TRI_CAP);
+        if (totalTris > MAX_TRI_CAP) {
+            std::cerr << "[PathTracer] Warning: scene has " << totalTris
+                      << " tris, capped to " << MAX_TRI_CAP << " (128 MB buffer limit)\n";
+        }
+        r.matCapacity  = std::max(matCount, 1);
+        r.meshCapacity = std::max(meshCount, 1);
 
-            const int pages = triTexPages(r.triCapacity);
-            r.triBuffer.resize(static_cast<size_t>(TEX_PAGE_WIDTH) * TRI_TEX_HEIGHT * pages * 4, 0.f);
-            r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
-            r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 48, 0.f);
-            r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
+        const int pages = triTexPages(r.triCapacity);
+        r.triBuffer.resize(static_cast<size_t>(TEX_PAGE_WIDTH) * TRI_TEX_HEIGHT * pages * 4, 0.f);
+        r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
+        r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 48, 0.f);
+        r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
 
-            r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
-                                               r.rawObjTriBuf, r.matrixCpuBuf,
-                                               r.triCapacity, r.matCapacity, r.meshCapacity);
-            buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
-            r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
-            r.bvhCapacity = std::max(r.numBvhNodes, 1);  // at least 1 to avoid 0-byte buffers
-            r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_U32S, 0u);
-            packBvh4Buffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
-            r.refitMetaCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_REFIT_INTS, 0);
-            packRefitMetadata(r.bvhNodes, r.refitMetaCpuBuf, r.bvhCapacity);
+        r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
+                                           r.rawObjTriBuf, r.matrixCpuBuf,
+                                           r.triCapacity, r.matCapacity, r.meshCapacity);
+        buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
+        r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
+        r.bvhCapacity = std::max(r.numBvhNodes, 1);
+        r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_U32S, 0u);
+        packBvh4Buffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
+        r.refitMetaCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_REFIT_INTS, 0);
+        packRefitMetadata(r.bvhNodes, r.refitMetaCpuBuf, r.bvhCapacity);
 
-            r.emissiveTriCount = 0;
-            r.emissiveTotalArea = 0.f;
-            r.emissiveTotalPower = 0.f;
-            for (int ti = 0; ti < r.triCount; ti++) {
-                const int matIdx = static_cast<int>(r.triBuffer[pagedIdx(ti, 0) + 3]);
-                const float er = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 0];
-                const float eg = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 1];
-                const float eb = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 2];
-                const float luminance = 0.2126f * er + 0.7152f * eg + 0.0722f * eb;
-                if (luminance > 0.001f) {
-                    const float* v0p = r.triBuffer.data() + pagedIdx(ti, 0);
-                    const float* v1p = r.triBuffer.data() + pagedIdx(ti, 1);
-                    const float* v2p = r.triBuffer.data() + pagedIdx(ti, 2);
-                    Vector3 v0(v0p[0], v0p[1], v0p[2]);
-                    Vector3 v1(v1p[0], v1p[1], v1p[2]);
-                    Vector3 v2(v2p[0], v2p[1], v2p[2]);
-                    Vector3 cross;
-                    cross.crossVectors(v1 - v0, v2 - v0);
-                    const float area = cross.length() * 0.5f;
-                    if (area > 1e-8f) {
-                        const float power = area * luminance;
-                        r.emissiveTotalArea += area;
-                        r.emissiveTotalPower += power;
-                        r.emissiveTriCpu.push_back(static_cast<float>(ti));
-                        r.emissiveTriCpu.push_back(area);
-                        r.emissiveTriCpu.push_back(r.emissiveTotalPower);
-                        r.emissiveTriCpu.push_back(power);
-                        r.emissiveTriCount++;
-                    }
+        r.emissiveTriCount = 0;
+        r.emissiveTotalArea = 0.f;
+        r.emissiveTotalPower = 0.f;
+        for (int ti = 0; ti < r.triCount; ti++) {
+            const int matIdx = static_cast<int>(r.triBuffer[pagedIdx(ti, 0) + 3]);
+            const float er = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 0];
+            const float eg = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 1];
+            const float eb = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 2];
+            const float luminance = 0.2126f * er + 0.7152f * eg + 0.0722f * eb;
+            if (luminance > 0.001f) {
+                const float* v0p = r.triBuffer.data() + pagedIdx(ti, 0);
+                const float* v1p = r.triBuffer.data() + pagedIdx(ti, 1);
+                const float* v2p = r.triBuffer.data() + pagedIdx(ti, 2);
+                Vector3 v0(v0p[0], v0p[1], v0p[2]);
+                Vector3 v1(v1p[0], v1p[1], v1p[2]);
+                Vector3 v2(v2p[0], v2p[1], v2p[2]);
+                Vector3 cross;
+                cross.crossVectors(v1 - v0, v2 - v0);
+                const float area = cross.length() * 0.5f;
+                if (area > 1e-8f) {
+                    const float power = area * luminance;
+                    r.emissiveTotalArea += area;
+                    r.emissiveTotalPower += power;
+                    r.emissiveTriCpu.push_back(static_cast<float>(ti));
+                    r.emissiveTriCpu.push_back(area);
+                    r.emissiveTriCpu.push_back(r.emissiveTotalPower);
+                    r.emissiveTriCpu.push_back(power);
+                    r.emissiveTriCount++;
                 }
             }
-            return r;
-        });
-    }
-
-    // Check if async build finished — upload results to GPU (must happen on main thread)
-    if (d.buildPending_ && d.asyncBuild_.valid() &&
-        d.asyncBuild_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-
-        auto r = d.asyncBuild_.get();
-        d.buildPending_ = false;
+        }
         topoJustFinished = true;
         d.frameCount_ = 0.f;
 #endif
@@ -4204,16 +4192,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         { std::vector<float>().swap(d.emissiveTriCpu); }
     }
 
-#ifndef __EMSCRIPTEN__
-    // While building or before first build, skip RT dispatch — show previous accum
-    if (d.buildPending_ || d.triCount_ == 0) {
+    // Before first build, skip RT dispatch
+    if (d.triCount_ == 0) {
         d.displayMat->customTextures["accumTex"] = d.readAccum;
         d.displayMat->customTextures["gBufTex"]  = d.gBufPrev;
         d.displayMat->uniformsNeedUpdate = true;
         d.renderer.render(d.displayScene, d.displayCam);
         return;
     }
-#endif
 
     scene.updateMatrixWorld();
 
