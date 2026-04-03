@@ -51,7 +51,7 @@ static std::vector<ModelEntry> scanModels(const fs::path& root) {
         }
     }
     std::ranges::sort(entries,
-              [](const auto& a, const auto& b) { return a.name < b.name; });
+                      [](const auto& a, const auto& b) { return a.name < b.name; });
     return entries;
 }
 
@@ -96,7 +96,8 @@ int main(int argc, char** argv) {
 
     // ---- Scene ----
     Scene scene;
-    scene.background =  env;
+    scene.background = env;
+    scene.environment = env;
 
     auto light = DirectionalLight::create(0xffffff, 2.0f);
     light->position.set(5, 10, 7);
@@ -107,6 +108,7 @@ int main(int argc, char** argv) {
     PerspectiveCamera camera(50.f, canvas.aspect(), 0.01f, 1000.f);
     camera.position.set(0.f, 1.f, 3.f);
     OrbitControls controls{camera, canvas};
+    controls.enableKeys = false;
     controls.update();
 
     // ---- Async model loading ----
@@ -135,8 +137,8 @@ int main(int argc, char** argv) {
                         hasMesh = true;
                     });
                     result->traverseType<Light>([&](Light& l) {
-                       l.visible = true;
-                   });
+                        l.visible = true;
+                    });
                 }
                 if (!hasMesh) {
                     std::cerr << "Skipping '" << name << "': no mesh geometry" << std::endl;
@@ -211,7 +213,7 @@ int main(int argc, char** argv) {
         // Model list
         if (ImGui::CollapsingHeader("Models")) {
             for (int i = 0; i < static_cast<int>(models.size()); i++) {
-                bool selected = (i == currentModel);
+                const bool selected = (i == currentModel);
                 if (ImGui::Selectable(models[i].name.c_str(), selected)) {
                     loadModel(i);
                 }
@@ -230,6 +232,7 @@ int main(int argc, char** argv) {
     IOCapture ioCapture;
     ioCapture.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
     ioCapture.preventScrollEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
+    ioCapture.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
     canvas.setIOCapture(&ioCapture);
 
     canvas.onWindowResize([&](const WindowSize& ns) {
