@@ -59,8 +59,9 @@ constexpr int INIT_TRI_CAP  = 1;
 constexpr int INIT_MAT_CAP  = 1;
 constexpr int INIT_MESH_CAP = 1;
 
-// objTriBuf is 128 bytes/tri — cap at 2M tris (256 MB buffer limit).
-constexpr int MAX_TRI_CAP = 2'000'000;
+// objTriBuf is 48 floats (192 bytes) per tri.
+// Max tri count is computed at runtime from the device's maxStorageBufferBindingSize.
+constexpr size_t BYTES_PER_TRI = 48 * sizeof(float);  // 192
 
 static int nextPow2(int v) {
     if (v <= 0) return 1;
@@ -1798,17 +1799,21 @@ struct VtUniforms {
     _p1: u32, _p2: u32,
 }
 
-@group(0) @binding(0) var<storage, read> objTris:  array<ObjTriData>;
-@group(0) @binding(1) var<storage, read> meshMats: array<MeshMatrices>;
+@group(0) @binding(0) var<storage, read> objTris:   array<ObjTriData>;
+@group(0) @binding(1) var<storage, read> meshMats:  array<MeshMatrices>;
 @group(0) @binding(2) var triOut: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(3) var<uniform> vtUni: VtUniforms;
+@group(0) @binding(4) var<storage, read> objTris2:  array<ObjTriData>;  // overflow buffer
 
 @compute @workgroup_size(64)
 fn vt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let linearId = gid.x + gid.y * vtUni.groupsX * 64u;
     if (linearId >= vtUni.triCount) { return; }
     let ti  = i32(linearId);
-    let obj = objTris[ti];
+    let splitAt = i32(vtUni._p1);
+    var obj: ObjTriData;
+    if (ti < splitAt) { obj = objTris[ti]; }
+    else              { obj = objTris2[ti - splitAt]; }
     let mi  = i32(obj.v1.w);
     let mat = meshMats[mi];
     let v0  = (mat.world  * vec4<f32>(obj.v0.xyz, 1.0)).xyz;
@@ -2325,7 +2330,7 @@ struct alignas(16) RtGpuUniforms {
 static_assert(sizeof(RtGpuUniforms) == 592, "RtGpuUniforms must be 592 bytes");
 
 struct alignas(16) VtGpuUniforms {
-    uint32_t triCount, groupsX, _p[2];
+    uint32_t triCount, groupsX, splitAt, _p1;
 };
 struct alignas(16) RefitGpuUniforms {
     uint32_t leafCount, groupsX, _p[2];
@@ -3478,6 +3483,8 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer bvhCounterBuf;
     WgpuBuffer refitMetaBuf;
     WgpuBuffer objTriBuf;
+    WgpuBuffer objTriBuf2;  // overflow buffer for large scenes
+    int objTriSplit_ = 0;   // split point: tris [0, split) in buf1, [split, count) in buf2
     WgpuBuffer matrixBuf;
     WgpuBuffer motionMatBuf;            // per-mesh motion matrices for TAA reprojection
     std::vector<float> motionMatCpu;    // CPU staging: prevWorld * inverse(curWorld) per mesh
@@ -3557,6 +3564,7 @@ struct WgpuPathTracer::Impl {
         int matCapacity = 0;
         int meshCapacity = 0;
         int bvhCapacity = 0;
+        int objTriSplit = 0;  // split point for two-buffer objTri scheme
     };
 #ifndef __EMSCRIPTEN__
     // Async env CDF build
@@ -3585,6 +3593,14 @@ struct WgpuPathTracer::Impl {
     int overlayLayer_ = -1;  // -1 = disabled; objects on this layer bypass path tracing and go to raster overlay
 
     int width_, height_;
+
+    int maxTriCap() const {
+        WGPULimits limits{};
+        wgpuDeviceGetLimits(device, &limits);
+        return static_cast<int>(std::min(
+            limits.maxStorageBufferBindingSize / BYTES_PER_TRI,
+            uint64_t(INT_MAX)));
+    }
 
     Impl(WgpuRenderer& r, int w, int h)
         : renderer(r),
@@ -3654,6 +3670,7 @@ struct WgpuPathTracer::Impl {
                        WgpuBuffer::Usage::Storage),
           objTriBuf(r, static_cast<size_t>(INIT_TRI_CAP) * 48 * sizeof(float),
                     WgpuBuffer::Usage::Storage),
+          objTriBuf2(r, 192u, WgpuBuffer::Usage::Storage),  // placeholder — grown when needed
           matrixBuf(r, static_cast<size_t>(INIT_MESH_CAP) * 32 * sizeof(float),
                     WgpuBuffer::Usage::Storage),
           motionMatBuf(r, static_cast<size_t>(INIT_MESH_CAP) * 16 * sizeof(float),
@@ -3682,6 +3699,7 @@ struct WgpuPathTracer::Impl {
         vtPipeline.setStorageBufferRead(1, matrixBuf);
         vtPipeline.setStorageTexture(2, triTex);
         vtPipeline.setUniformBuffer(3, vtUniBuf);
+        vtPipeline.setStorageBufferRead(4, objTriBuf2);
 
         refitPipeline.setTexture(0, triTex);
         refitPipeline.setStorageBuffer(1, bvhNodeBuf);
@@ -4013,11 +4031,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
         const int matCount = static_cast<int>(meshes.size());
         const int meshCount = static_cast<int>(entries.size());
-        r.triCapacity  = std::clamp(totalTris, 1, MAX_TRI_CAP);
-        if (totalTris > MAX_TRI_CAP) {
+        const int triCap = d.maxTriCap();
+        const int maxTotalTris = triCap * 2;  // two split buffers
+        r.triCapacity  = std::clamp(totalTris, 1, maxTotalTris);
+        if (totalTris > maxTotalTris) {
             std::cerr << "[PathTracer] Warning: scene has " << totalTris
-                      << " tris, capped to " << MAX_TRI_CAP << " (256 MB buffer limit)\n";
+                      << " tris, capped to " << maxTotalTris << " (2x GPU buffer limit)\n";
         }
+        r.objTriSplit = std::min(r.triCapacity, triCap);  // first buffer holds up to triCap
         r.matCapacity  = std::max(matCount, 1);
         r.meshCapacity = std::max(meshCount, 1);
 
@@ -4101,11 +4122,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
         const int matCount = static_cast<int>(meshes.size());
         const int meshCount = static_cast<int>(entries.size());
-        r.triCapacity  = std::clamp(totalTris, 1, MAX_TRI_CAP);
-        if (totalTris > MAX_TRI_CAP) {
+        const int triCap = d.maxTriCap();
+        const int maxTotalTris = triCap * 2;  // two split buffers
+        r.triCapacity  = std::clamp(totalTris, 1, maxTotalTris);
+        if (totalTris > maxTotalTris) {
             std::cerr << "[PathTracer] Warning: scene has " << totalTris
-                      << " tris, capped to " << MAX_TRI_CAP << " (256 MB buffer limit)\n";
+                      << " tris, capped to " << maxTotalTris << " (2x GPU buffer limit)\n";
         }
+        r.objTriSplit = std::min(r.triCapacity, triCap);  // first buffer holds up to triCap
         r.matCapacity  = std::max(matCount, 1);
         r.meshCapacity = std::max(meshCount, 1);
 
@@ -4174,6 +4198,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.refitMetaCpuBuf = std::move(r.refitMetaCpuBuf);
         d.emissiveTriCpu = std::move(r.emissiveTriCpu);
         d.triCount_ = r.triCount;
+        d.objTriSplit_ = r.objTriSplit;
         d.numBvhNodes_ = r.numBvhNodes;
         d.emissiveTriCount_ = r.emissiveTriCount;
 
@@ -4191,14 +4216,20 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.triTex = WgpuTexture(d.renderer, TEX_PAGE_WIDTH, TRI_TEX_HEIGHT * pages,
                                     WgpuTexture::Format::RGBA32Float,
                                     WgpuTexture::Storage | WgpuTexture::TextureBinding);
-            d.objTriBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.triCapacity) * 48 * sizeof(float),
+            // Split objTri data across two buffers to stay within per-buffer size limits
+            const size_t buf1Tris = static_cast<size_t>(r.objTriSplit);
+            const size_t buf2Tris = static_cast<size_t>(std::max(r.triCapacity - r.objTriSplit, 0));
+            d.objTriBuf = WgpuBuffer(d.renderer, buf1Tris * BYTES_PER_TRI,
                                       WgpuBuffer::Usage::Storage);
+            d.objTriBuf2 = WgpuBuffer(d.renderer, std::max(buf2Tris * BYTES_PER_TRI, size_t(192)),
+                                       WgpuBuffer::Usage::Storage);
             d.leafIndexBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.triCapacity) * sizeof(int),
                                          WgpuBuffer::Usage::Storage);
             d.emissiveTriBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.triCapacity) * 4 * sizeof(float),
                                            WgpuBuffer::Usage::Storage);
             d.vtPipeline.setStorageBufferRead(0, d.objTriBuf);
             d.vtPipeline.setStorageTexture(2, d.triTex);
+            d.vtPipeline.setStorageBufferRead(4, d.objTriBuf2);
             d.refitPipeline.setTexture(0, d.triTex);
             d.refitPipeline.setStorageBufferRead(3, d.leafIndexBuf);
             d.rtPipeline.setTexture(5, d.triTex);
@@ -4264,7 +4295,17 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         // Upload geometry + BVH
         d.bvhNodeBuf.write(d.bvhNodeCpuBuf.data(), d.numBvhNodes_ * BVH4_GPU_U32S * sizeof(uint32_t));
         d.refitMetaBuf.write(d.refitMetaCpuBuf.data(), d.numBvhNodes_ * BVH4_REFIT_INTS * sizeof(int32_t));
-        d.objTriBuf.write(d.rawObjTriBuf.data(), static_cast<size_t>(d.triCount_) * 48 * sizeof(float));
+        // Upload objTri data split across two buffers
+        {
+            const size_t splitAt = static_cast<size_t>(d.objTriSplit_);
+            const size_t totalTris = static_cast<size_t>(d.triCount_);
+            const size_t buf1Tris = std::min(totalTris, splitAt);
+            const size_t buf2Tris = totalTris > splitAt ? totalTris - splitAt : 0;
+            d.objTriBuf.write(d.rawObjTriBuf.data(), buf1Tris * BYTES_PER_TRI);
+            if (buf2Tris > 0) {
+                d.objTriBuf2.write(d.rawObjTriBuf.data() + splitAt * 48, buf2Tris * BYTES_PER_TRI);
+            }
+        }
         d.leafIndexBuf.write(d.leafIndices.data(), d.leafIndices.size() * sizeof(int));
         d.matTex.write(d.matBuffer.data(), d.matBuffer.size() * sizeof(float));
 
@@ -4365,6 +4406,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         VtGpuUniforms vtU{};
         vtU.triCount = static_cast<uint32_t>(d.triCount_);
         vtU.groupsX  = vtGx;
+        vtU.splitAt  = static_cast<uint32_t>(d.objTriSplit_);
         d.vtUniBuf.write(&vtU, sizeof(vtU));
 
         const uint32_t rfTotal = (static_cast<uint32_t>(d.leafIndices.size()) + 63u) / 64u;
