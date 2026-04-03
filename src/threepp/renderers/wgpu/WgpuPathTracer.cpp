@@ -1532,16 +1532,21 @@ R"(
                 let cosOut = abs(dot(wi_t, h.normal));
                 microWeight = ggxG1(cosOut, h.shininess);
             }
-            let glassTint = mix(albedo, vec3<f32>(1.0), h.transmission) * microWeight;
-            var volAtten = vec3<f32>(1.0);
-            if (didRefract && h.attenuationDist > 0.0 && !entering) {
-                let absorbCoeff = -log(max(h.attenuationColor, vec3<f32>(1e-6))) / h.attenuationDist;
-                let pathLen = select(h.t, h.thickness, h.t < 1e-2 && h.thickness > 0.0);
-                volAtten = exp(-absorbCoeff * pathLen);
+            if (didRefract) {
+                let glassTint = mix(albedo, vec3<f32>(1.0), h.transmission) * microWeight;
+                var volAtten = vec3<f32>(1.0);
+                if (h.attenuationDist > 0.0 && !entering) {
+                    let absorbCoeff = -log(max(h.attenuationColor, vec3<f32>(1e-6))) / h.attenuationDist;
+                    let pathLen = select(h.t, h.thickness, h.t < 1e-2 && h.thickness > 0.0);
+                    volAtten = exp(-absorbCoeff * pathLen);
+                }
+                // Non-symmetry correction: BTDF includes (η_t/η_i)² = 1/η² to account
+                // for solid angle change at refractive interface.
+                throughput *= glassTint * volAtten / (eta * eta) * channelMask;
+            } else {
+                // Fresnel reflection: no volume interaction, just surface bounce
+                throughput *= vec3<f32>(microWeight) * channelMask;
             }
-            // Non-symmetry correction: BTDF includes (η_t/η_i)² = 1/η² to account
-            // for solid angle change at refractive interface.
-            throughput *= select(glassTint * volAtten, glassTint * volAtten / (eta * eta), didRefract) * channelMask;
             afterTransmission = true;
             ray.dir = wi_t;
             continue;
@@ -4586,6 +4591,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         ++nLights;
     };
     for (auto* l : pointLights) {
+        if (!l->visible) continue;
         const auto& lp = l->position;
         const auto& lc = l->color;
         const float li = l->intensity;
@@ -4594,13 +4600,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         u.lightDir[nLights - 1][3] = l->decay;
     }
     for (auto* l : dirLights) {
+        if (!l->visible) continue;
         Vector3 dir = Vector3(l->position).sub(l->target().position).normalize();
         const auto& lc = l->color;
         const float li = l->intensity;
         packLight(dir.x, dir.y, dir.z, lc.r * li, lc.g * li, lc.b * li, 1.f);
     }
     for (auto* l : spotLights) {
-        if (nLights >= 4) break;
+        if (nLights >= 4 || !l->visible) break;
         const auto& lp = l->position;
         const auto& lc = l->color;
         const float li = l->intensity;
