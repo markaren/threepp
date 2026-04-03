@@ -858,8 +858,17 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
     if (h.texSlot >= 0.0) { albedo = srgbToLinear(sampleAtlas(h.uv, h.texSlot)); }
     // Unlit: return flat color, no lighting
     if (h.shininess < 0.0) { return albedo; }
-    // Environment diffuse fill light (sky gradient, solid color, or equirect)
-    var col = albedo * sampleEnv(h.normal) * rt.envIntensity.x * (1.0 - h.metalness) * h.ao;
+    // Environment lighting:
+    // Non-metals: averaged env for soft diffuse ambient (no HDRI pattern)
+    // Metals: env along reflect direction weighted by albedo (colored reflection)
+    let envAvg = (sampleEnv(vec3<f32>(1,0,0)) + sampleEnv(vec3<f32>(-1,0,0))
+               + sampleEnv(vec3<f32>(0,1,0)) + sampleEnv(vec3<f32>(0,-1,0))
+               + sampleEnv(vec3<f32>(0,0,1)) + sampleEnv(vec3<f32>(0,0,-1))) / 6.0;
+    let wo_env = normalize(-rd);
+    let reflDir = reflect(rd, h.normal);
+    let metalEnv = albedo * sampleEnv(reflDir) * rt.envIntensity.x;
+    let diffuseEnv = albedo * envAvg * rt.envIntensity.x * (1.0 - h.metalness);
+    var col = (mix(diffuseEnv, metalEnv, h.metalness)) * h.ao;
     let count = i32(rt.lightCount.x);
     let wo_s = normalize(-rd);
     for (var li = 0; li < 4; li++) {
@@ -923,12 +932,10 @@ fn raytrace(ray: Ray) -> vec3<f32> {
     for (var bounce = 0; bounce < 3; bounce++) {
         let h = sceneHit(r);
 
-        // Miss: sample background (primary) or environment (bounced)
+        // Miss: sample background (primary) or skip (bounced — shade() already added env)
         if (h.t >= 1e30) {
             if (bounce == 0) {
                 col += throughput * sampleBackground(r.dir);
-            } else {
-                col += throughput * sampleEnv(r.dir) * rt.envIntensity.x;
             }
             break;
         }
@@ -937,21 +944,27 @@ fn raytrace(ray: Ray) -> vec3<f32> {
         let wo = normalize(-r.dir);
         let hasTransmission = h.transmission > 0.5 && h.shininess < 0.1;
 
-        // Transmission: refract through glass (skip shading, just pass through)
+        // Transmission: Fresnel reflection on surface + refract through glass
         if (hasTransmission && bounce < 2) {
-            let glassTint = mix(h.albedo, vec3<f32>(1.0), h.transmission);
             let entering = h.frontFace > 0.5;
             let eta = select(h.ior, 1.0 / h.ior, entering);
             let refDir = refract(normalize(r.dir), h.normal, eta);
             if (length(refDir) < 0.001) { break; }
+            // Fresnel reflection (Schlick) — makes glass surface visible
+            let cosI = abs(dot(normalize(-r.dir), h.normal));
+            let r0 = pow((1.0 - h.ior) / (1.0 + h.ior), 2.0);
+            let fresnel = r0 + (1.0 - r0) * pow(1.0 - cosI, 5.0);
+            let reflDir = reflect(r.dir, h.normal);
+            col += throughput * sampleEnv(reflDir) * rt.envIntensity.x * fresnel;
             // Beer's law attenuation
+            let glassTint = mix(h.albedo, vec3<f32>(1.0), h.transmission);
             var volAtten = vec3<f32>(1.0);
             if (h.attenuationDist > 0.0 && !entering) {
                 let absorbCoeff = -log(max(h.attenuationColor, vec3<f32>(1e-6))) / h.attenuationDist;
                 let pathLen = select(h.t, h.thickness, h.t < 1e-2 && h.thickness > 0.0);
                 volAtten = exp(-absorbCoeff * pathLen);
             }
-            throughput *= glassTint * volAtten;
+            throughput *= glassTint * volAtten * (1.0 - fresnel);
             r.origin = h.point - h.normal * 1e-3;
             r.dir = refDir;
             continue;
@@ -960,7 +973,6 @@ fn raytrace(ray: Ray) -> vec3<f32> {
         // Shade the surface (opaque hit)
         col += throughput * shade(h, r.dir);
 
-        let isSmooth = h.shininess >= 0.0 && h.shininess < 0.05;
         let isMetal  = h.metalness > 0.5 && h.shininess < 0.3;
         let hasClearcoat = h.clearcoat > 0.0 && h.transmission < 0.01;
 
@@ -976,19 +988,15 @@ fn raytrace(ray: Ray) -> vec3<f32> {
             col += throughput * ccCol * ccK * ccRoughFade;
         }
 
-        // Specular reflection bounce
-        if (isSmooth || isMetal) {
-            let F0_h = computeF0(h.albedo, h.metalness, h.specularColor, h.specularIntensity);
-            let NdotV = max(0.001, dot(h.normal, wo));
-            let roughFade = max(0.0, 1.0 - h.shininess * 10.0);
-            let k = schlick(NdotV, F0_h) * roughFade;
-            throughput *= k;
+        // Specular reflection bounce (metals only) — trace for scene geometry
+        if (isMetal) {
+            throughput *= h.albedo;
             r.origin = h.point + h.normal * 1e-3;
             r.dir = reflect(r.dir, h.normal);
             continue;
         }
 
-        break; // diffuse surface — no more bounces
+        break;
     }
     return col;
 }
