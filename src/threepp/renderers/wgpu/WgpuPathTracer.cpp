@@ -156,7 +156,7 @@ struct Bvh4NodeGpu {
 const MAX_TEX_SLOTS: i32 = 256;
 const EMPTY_CHILD: i32 = -2147483648;  // INT_MIN — sentinel for unused BVH4 child slots
 
-fn TILE_SIZE() -> i32 { return i32(rt.spp.y); }
+fn TILE_SIZE() -> i32 { return max(i32(rt.spp.y), 1); }
 
 struct Ray  { origin: vec3<f32>, dir: vec3<f32> }
 struct Isect { t: f32, u: f32, v: f32 }
@@ -4630,6 +4630,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.displayMat->customTextures["accumTex"] = d.readAccum;
         d.displayMat->customTextures["gBufTex"]  = d.gBufPrev;
         d.displayMat->uniformsNeedUpdate = true;
+        d.renderer.render(d.displayScene, d.displayCam);
         return;
     }
 
@@ -4900,7 +4901,10 @@ WgpuPathTracer::Mode WgpuPathTracer::mode() const {
 }
 
 void WgpuPathTracer::setEnvIntensity(float intensity) {
-    pimpl_->envIntensity_ = intensity;
+    if (intensity != pimpl_->envIntensity_) {
+        pimpl_->envIntensity_ = intensity;
+        pimpl_->frameCount_ = 0.f;
+    }
 }
 
 float WgpuPathTracer::envIntensity() const {
