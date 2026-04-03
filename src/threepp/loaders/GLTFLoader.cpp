@@ -516,7 +516,8 @@ namespace threepp {
                         ext.contains("KHR_materials_ior") ||
                         ext.contains("KHR_materials_dispersion") ||
                         ext.contains("KHR_materials_specular") ||
-                        ext.contains("KHR_materials_sheen")) {
+                        ext.contains("KHR_materials_sheen") ||
+                        ext.contains("KHR_materials_volume")) {
                         needsPhysical = true;
                     }
                 }
@@ -649,6 +650,17 @@ namespace threepp {
                             auto c = sp["specularColorFactor"];
                             physMat->specularColor = Color(c[0].get<float>(), c[1].get<float>(), c[2].get<float>());
                         }
+                    }
+
+                    // KHR_materials_volume
+                    if (ext.contains("KHR_materials_volume")) {
+                        const auto& vol = ext["KHR_materials_volume"];
+                        physMat->attenuationDistance = vol.value("attenuationDistance", 0.0f);
+                        if (vol.contains("attenuationColor")) {
+                            auto c = vol["attenuationColor"];
+                            physMat->attenuationColor = Color(c[0].get<float>(), c[1].get<float>(), c[2].get<float>());
+                        }
+                        physMat->thickness = vol.value("thicknessFactor", 0.0f);
                     }
 
                     // KHR_materials_clearcoat

@@ -184,6 +184,7 @@ struct Hit  {
     specularColor:    vec3<f32>,
     specularIntensity: f32,
     dispersion:       f32,
+    thickness:        f32,
 }
 
 fn pcg(v: u32) -> u32 {
@@ -514,6 +515,7 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0; h.ao = 1.0;
     h.sheenColor = vec3<f32>(0.0); h.sheenRoughness = 0.0;
     h.specularColor = vec3<f32>(1.0); h.specularIntensity = 1.0;
+    h.dispersion = 0.0; h.thickness = 0.0;
     h.meshIdx = -1;
 
     let ti = rh.triIdx;
@@ -650,9 +652,10 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     h.specularColor     = mat17.xyz;
     h.specularIntensity = mat17.w;
 
-    // Dispersion (row 18)
+    // Dispersion + thickness (row 18)
     let mat18 = textureLoad(matData, vec2<i32>(matIdx, 18), 0);
     h.dispersion = mat18.x;
+    h.thickness  = mat18.y;
 
     return h;
 }
@@ -770,6 +773,7 @@ fn sceneHit(ray: Ray) -> Hit {
         h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0; h.ao = 1.0;
         h.sheenColor = vec3<f32>(0.0); h.sheenRoughness = 0.0;
         h.specularColor = vec3<f32>(1.0); h.specularIntensity = 1.0;
+        h.dispersion = 0.0; h.thickness = 0.0;
         return h;
     }
     return loadHitMaterial(rh, ray);
@@ -926,7 +930,8 @@ fn raytrace(ray: Ray) -> vec3<f32> {
             var volAtten = vec3<f32>(1.0);
             if (h0.attenuationDist > 0.0) {
                 let absorbCoeff = -log(max(h0.attenuationColor, vec3<f32>(1e-6))) / h0.attenuationDist;
-                volAtten = exp(-absorbCoeff * hr.t);
+                let pathLen = select(hr.t, h0.thickness, hr.t < 1e-2 && h0.thickness > 0.0);
+                volAtten = exp(-absorbCoeff * pathLen);
             }
             // Second refraction (exit surface)
             let exitEnter = hr.frontFace > 0.5;
@@ -1510,7 +1515,8 @@ R"(
             var volAtten = vec3<f32>(1.0);
             if (didRefract && h.attenuationDist > 0.0 && !entering) {
                 let absorbCoeff = -log(max(h.attenuationColor, vec3<f32>(1e-6))) / h.attenuationDist;
-                volAtten = exp(-absorbCoeff * h.t);
+                let pathLen = select(h.t, h.thickness, h.t < 1e-2 && h.thickness > 0.0);
+                volAtten = exp(-absorbCoeff * pathLen);
             }
             // Non-symmetry correction: BTDF includes (η_t/η_i)² = 1/η² to account
             // for solid angle change at refractive interface.
@@ -2566,6 +2572,7 @@ struct ExtractedMaterial {
     float specularIntensity = 1.f;
     Color specularColor{1.f, 1.f, 1.f};
     float dispersion = 0.f;
+    float thickness = 0.f;
 };
 
 static ExtractedMaterial extractMaterial(const Material* mat) {
@@ -2599,6 +2606,9 @@ static ExtractedMaterial extractMaterial(const Material* mat) {
     if (auto* a = dynamic_cast<const MaterialWithAttenuation*>(mat)) {
         m.attenuationColor = a->attenuationColor;
         m.attenuationDistance = std::max(0.f, a->attenuationDistance);
+    }
+    if (auto* th = dynamic_cast<const MaterialWithThickness*>(mat)) {
+        m.thickness = std::max(0.f, th->thickness);
     }
     if (auto* cc = dynamic_cast<const MaterialWithClearcoat*>(mat)) {
         m.clearcoat = std::clamp(cc->clearcoat, 0.f, 1.f);
@@ -2776,8 +2786,8 @@ static int buildGeometryBuffers(
             // Row 17: PBR specular (r, g, b, intensity)
             setTexel(matBuffer, maxMats, matIdx, 17,
                     em.specularColor.r, em.specularColor.g, em.specularColor.b, em.specularIntensity);
-            // Row 18: dispersion
-            setTexel(matBuffer, maxMats, matIdx, 18, em.dispersion, 0.f, 0.f, 0.f);
+            // Row 18: dispersion + thickness
+            setTexel(matBuffer, maxMats, matIdx, 18, em.dispersion, em.thickness, 0.f, 0.f);
         }
 
         const int meshIdx = meshCount++;
