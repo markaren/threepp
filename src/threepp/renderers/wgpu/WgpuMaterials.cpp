@@ -34,7 +34,9 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry)
         p.diffuse = m->color;
         p.roughness = m->roughness;
         p.metalness = m->metalness;
-        p.emissive = m->emissive;
+        p.emissive = Color(m->emissive.r * m->emissiveIntensity,
+                           m->emissive.g * m->emissiveIntensity,
+                           m->emissive.b * m->emissiveIntensity);
         if (m->map) { p.diffuseMap = m->map.get(); p.features |= ShaderFeatures::Texture; }
         if (m->normalMap) {
             p.normalMap = m->normalMap.get();
@@ -63,7 +65,9 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry)
         p.diffuse = m->color;
         p.specularColor = m->specular;
         p.shininess = m->shininess;
-        p.emissive = m->emissive;
+        p.emissive = Color(m->emissive.r * m->emissiveIntensity,
+                           m->emissive.g * m->emissiveIntensity,
+                           m->emissive.b * m->emissiveIntensity);
         if (m->map) { p.diffuseMap = m->map.get(); p.features |= ShaderFeatures::Texture; }
         if (m->normalMap) { p.normalMap = m->normalMap.get(); p.normalScale = m->normalScale; p.features |= ShaderFeatures::NormalMap; }
         if (m->emissiveMap) { p.emissiveMap = m->emissiveMap.get(); p.features |= ShaderFeatures::EmissiveMap; }
@@ -75,7 +79,9 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry)
     } else if (auto m = dynamic_cast<MeshToonMaterial*>(rawMat)) {
         p.features |= ShaderFeatures::Lighting;
         p.diffuse = m->color;
-        p.emissive = m->emissive;
+        p.emissive = Color(m->emissive.r * m->emissiveIntensity,
+                           m->emissive.g * m->emissiveIntensity,
+                           m->emissive.b * m->emissiveIntensity);
         if (m->map) { p.diffuseMap = m->map.get(); p.features |= ShaderFeatures::Texture; }
         if (m->emissiveMap) { p.emissiveMap = m->emissiveMap.get(); p.features |= ShaderFeatures::EmissiveMap; }
         if (m->normalMap) { p.normalMap = m->normalMap.get(); p.normalScale = m->normalScale; p.features |= ShaderFeatures::NormalMap; }
@@ -84,7 +90,9 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry)
     } else if (auto m = dynamic_cast<MeshLambertMaterial*>(rawMat)) {
         p.features |= ShaderFeatures::Lighting;
         p.diffuse = m->color;
-        p.emissive = m->emissive;
+        p.emissive = Color(m->emissive.r * m->emissiveIntensity,
+                           m->emissive.g * m->emissiveIntensity,
+                           m->emissive.b * m->emissiveIntensity);
         if (m->map) { p.diffuseMap = m->map.get(); p.features |= ShaderFeatures::Texture; }
     } else if (dynamic_cast<MeshNormalMaterial*>(rawMat)) {
         p.features |= ShaderFeatures::NormalVis;

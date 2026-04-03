@@ -47,14 +47,18 @@ namespace {
 constexpr int MAX_TEX_SLOTS = 256;
 constexpr int TILE_SIZE = 1024;
 constexpr int ATLAS_COLS = 8;  // tiles per row in atlas (8 × 1024 = 8192 wide, grows tall)
-constexpr int TRI_TEX_HEIGHT = 8;
-constexpr int MAT_TEX_HEIGHT = 6;
+constexpr int TRI_TEX_HEIGHT = 12;
+constexpr int MAT_TEX_HEIGHT = 16;
 constexpr int TEX_PAGE_WIDTH = 8192;
 
 // Initial placeholder capacities — grown dynamically as scenes demand more.
 constexpr int INIT_TRI_CAP  = 1;
 constexpr int INIT_MAT_CAP  = 1;
 constexpr int INIT_MESH_CAP = 1;
+
+// WebGPU default max_storage_buffer_binding_size is 128 MB.
+// objTriBuf is 128 bytes/tri — cap at 1M tris to stay within the limit.
+constexpr int MAX_TRI_CAP = 1'000'000;
 
 static int nextPow2(int v) {
     if (v <= 0) return 1;
@@ -74,7 +78,7 @@ static int triTexPages(int triCap) {
 // Shared WGSL definitions used by multiple shaders (VT, refit, RT).
 constexpr const char* csSharedDefsWGSL = R"(
 const TRI_PAGE_W:  i32 = 8192;
-const TRI_PAGE_H:  i32 = 8;
+const TRI_PAGE_H:  i32 = 12;
 const MAX_LEAF_TRIS: i32 = 8;
 
 fn triCoord(ti: i32, row: i32) -> vec2<i32> {
@@ -173,6 +177,7 @@ struct Hit  {
     attenuationDist:  f32,
     clearcoat:        f32,
     clearcoatAlpha:   f32,
+    ao:               f32,
 }
 
 fn pcg(v: u32) -> u32 {
@@ -203,15 +208,30 @@ fn schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
 }
 )"
 R"(
+// Decode encoded texture slot: slot*16 + wrapS*4 + wrapT
+// Wrap modes: 0=repeat, 1=clamp, 2=mirror
+fn applyWrap(u: f32, mode: i32) -> f32 {
+    if (mode == 1) { return clamp(u, 0.0, 1.0); }
+    if (mode == 2) {
+        let m = abs(u) % 2.0;
+        return select(m, 2.0 - m, m > 1.0);
+    }
+    return fract(u);
+}
+
 fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
-    let slot = i32(texSlot);
+    let enc  = i32(texSlot);
+    let slot = enc / 16;
+    let wS   = (enc % 16) / 4;
+    let wT   = enc % 4;
     let col  = slot % ATLAS_COLS;
     let row  = slot / ATLAS_COLS;
     let ox   = col * TILE_SIZE;
     let oy   = row * TILE_SIZE;
     let ts   = f32(TILE_SIZE);
-    // Bilinear filter, clamped within the tile to avoid atlas bleeding
-    let fp  = vec2<f32>(fract(uv.x), fract(uv.y)) * ts - 0.5;
+    let wu   = applyWrap(uv.x, wS);
+    let wv   = applyWrap(uv.y, wT);
+    let fp  = vec2<f32>(wu, wv) * ts - 0.5;
     let x0  = clamp(i32(floor(fp.x)), 0, TILE_SIZE - 1);
     let y0  = clamp(i32(floor(fp.y)), 0, TILE_SIZE - 1);
     let x1  = clamp(x0 + 1,          0, TILE_SIZE - 1);
@@ -227,13 +247,18 @@ fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
 }
 
 fn sampleAtlasAlpha(uv: vec2<f32>, texSlot: f32) -> f32 {
-    let slot = i32(texSlot);
+    let enc  = i32(texSlot);
+    let slot = enc / 16;
+    let wS   = (enc % 16) / 4;
+    let wT   = enc % 4;
     let col  = slot % ATLAS_COLS;
     let row  = slot / ATLAS_COLS;
     let ox   = col * TILE_SIZE;
     let oy   = row * TILE_SIZE;
     let ts   = f32(TILE_SIZE);
-    let fp  = vec2<f32>(fract(uv.x), fract(uv.y)) * ts - 0.5;
+    let wu   = applyWrap(uv.x, wS);
+    let wv   = applyWrap(uv.y, wT);
+    let fp  = vec2<f32>(wu, wv) * ts - 0.5;
     let x0  = clamp(i32(floor(fp.x)), 0, TILE_SIZE - 1);
     let y0  = clamp(i32(floor(fp.y)), 0, TILE_SIZE - 1);
     let x1  = clamp(x0 + 1,          0, TILE_SIZE - 1);
@@ -245,6 +270,19 @@ fn sampleAtlasAlpha(uv: vec2<f32>, texSlot: f32) -> f32 {
     let a01 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y1), 0).w;
     let a11 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y1), 0).w;
     return mix(mix(a00, a10, wx), mix(a01, a11, wx), wy);
+}
+
+// Apply per-channel UV transform from matData.
+// channelRow: 6=baseColor, 8=metalRough, 10=normal, 12=emissive, 14=occlusion
+fn transformUV(uv0: vec2<f32>, uv1: vec2<f32>, matIdx: i32, channelRow: i32) -> vec2<f32> {
+    let r0 = textureLoad(matData, vec2<i32>(matIdx, channelRow), 0);
+    let r1 = textureLoad(matData, vec2<i32>(matIdx, channelRow + 1), 0);
+    // r0 = (a, b, tx, c),  r1 = (d, ty, texCoord, 0)
+    let rawUV = select(uv0, uv1, i32(r1.z) == 1);
+    return vec2<f32>(
+        r0.x * rawUV.x + r0.y * rawUV.y + r0.z,
+        r0.w * rawUV.x + r1.x * rawUV.y + r1.y
+    );
 }
 )"
 R"(
@@ -367,20 +405,47 @@ fn testTriangle(ray: Ray, ti: i32, rh: ptr<function, RawHit>) {
     let isect = triIntersect(ray, v0, v1, v2);
     if (isect.t >= (*rh).t) { return; }
 
-    // Alpha test — needed for fences/leaves/cutouts
     let matIdx = i32(r0.w);
     let mat3   = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
+
+    // Back-face culling for single-sided materials (mat3.z = 0 means single-sided)
+    if (mat3.z < 0.5) {
+        let geoNormal = cross(v1 - v0, v2 - v0);
+        if (dot(ray.dir, geoNormal) > 0.0) { return; }
+    }
+
+    // Alpha handling: alphaTest (cutoff) or stochastic alpha (blend mode)
+    // Negative mat3.w signals BLEND mode; absolute value is opacity.
     let alphaTest = mat3.y;
-    if (alphaTest > 0.0) {
+    let blendMode = mat3.w < 0.0;
+    let opacity   = abs(mat3.w);
+    let needsAlpha = alphaTest > 0.0 || blendMode;
+    if (needsAlpha) {
+        var alpha = opacity;
         let mat1 = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
         if (mat1.x >= 0.0) {
             let w  = 1.0 - isect.u - isect.v;
             let uv01 = textureLoad(triData, triCoord(ti, 6), 0);
             let uv2  = textureLoad(triData, triCoord(ti, 7), 0).xy;
-            let iuv  = vec2<f32>(uv01.x, uv01.y) * w
+            let iuv0 = vec2<f32>(uv01.x, uv01.y) * w
                      + vec2<f32>(uv01.z, uv01.w) * isect.u
                      + uv2                        * isect.v;
-            if (sampleAtlasAlpha(iuv, mat1.x) < alphaTest) { return; }
+            let uv1_01 = textureLoad(triData, triCoord(ti, 8), 0);
+            let uv1_2  = textureLoad(triData, triCoord(ti, 9), 0).xy;
+            let iuv1 = vec2<f32>(uv1_01.x, uv1_01.y) * w
+                     + vec2<f32>(uv1_01.z, uv1_01.w) * isect.u
+                     + uv1_2                          * isect.v;
+            let tuv = transformUV(iuv0, iuv1, matIdx, 6);
+            alpha *= sampleAtlasAlpha(tuv, mat1.x);
+        }
+        if (alphaTest > 0.0) {
+            // Hard cutoff
+            if (alpha < alphaTest) { return; }
+        } else {
+            // Stochastic alpha: varies per frame so it converges over accumulation
+            let h = pcg(pcg(u32(ti)) ^ pcg(bitcast<u32>(isect.t)) ^ u32(rt.params.y));
+            let rng = f32(h) / 4294967295.0;
+            if (rng > alpha) { return; }
         }
     }
 
@@ -396,7 +461,7 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     h.t = rh.t;
     h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0;
     h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
-    h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
+    h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0; h.ao = 1.0;
     h.meshIdx = -1;
 
     let ti = rh.triIdx;
@@ -407,17 +472,31 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     let v2  = textureLoad(triData, triCoord(ti, 2), 0).xyz;
 
     let w  = 1.0 - rh.u - rh.v;
+    // Interpolate UV0
     let uv01 = textureLoad(triData, triCoord(ti, 6), 0);
     let uv2  = textureLoad(triData, triCoord(ti, 7), 0).xy;
-    let iuv  = vec2<f32>(uv01.x, uv01.y) * w
+    let iuv0 = vec2<f32>(uv01.x, uv01.y) * w
              + vec2<f32>(uv01.z, uv01.w) * rh.u
              + uv2                        * rh.v;
+    // Interpolate UV1
+    let uv1_01 = textureLoad(triData, triCoord(ti, 8), 0);
+    let uv1_2  = textureLoad(triData, triCoord(ti, 9), 0).xy;
+    let iuv1   = vec2<f32>(uv1_01.x, uv1_01.y) * w
+               + vec2<f32>(uv1_01.z, uv1_01.w) * rh.u
+               + uv1_2                          * rh.v;
 
     let matIdx = i32(r0.w);
     let mat0   = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
     let mat1   = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
     let mat2   = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
     let mat3   = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
+
+    // Per-channel transformed UVs
+    let bcUV    = transformUV(iuv0, iuv1, matIdx, 6);   // baseColor
+    let mrUV    = transformUV(iuv0, iuv1, matIdx, 8);   // metalRough
+    let nmUV    = transformUV(iuv0, iuv1, matIdx, 10);  // normal
+    let emUV    = transformUV(iuv0, iuv1, matIdx, 12);  // emissive
+    let aoUV    = transformUV(iuv0, iuv1, matIdx, 14);  // occlusion
 
     let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
     let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
@@ -427,17 +506,18 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     let isFrontFace = dot(ray.dir, sn) < 0.0;
     var finalNorm = select(-sn, sn, isFrontFace);
 
-    // Normal mapping
+    // Normal mapping (uses normal-channel UV)
     let normalSlot = mat1.z;
     if (normalSlot >= 0.0) {
-        let nmSample = sampleAtlas(iuv, normalSlot);
+        let nmSample = sampleAtlas(nmUV, normalSlot);
         let nmTangent = nmSample * 2.0 - 1.0;
         let e1  = v1 - v0;
         let e2  = v2 - v0;
-        let uv0 = vec2<f32>(uv01.x, uv01.y);
-        let uv1 = vec2<f32>(uv01.z, uv01.w);
-        let duv1 = uv1 - uv0;
-        let duv2 = uv2 - uv0;
+        // Tangent basis uses raw UV0 (geometry-defined)
+        let tuv0 = vec2<f32>(uv01.x, uv01.y);
+        let tuv1 = vec2<f32>(uv01.z, uv01.w);
+        let duv1 = tuv1 - tuv0;
+        let duv2 = uv2 - tuv0;
         let denom = duv1.x * duv2.y - duv2.x * duv1.y;
         if (abs(denom) > 1e-8) {
             let invD = 1.0 / denom;
@@ -448,12 +528,15 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
         }
     }
 
-    // Roughness map
+    // Roughness + metalness from metallicRoughness texture (uses metalRough UV)
+    // glTF packs: G = roughness, B = metallic
     var shininess = mat0.w;
+    var metalness = mat1.y;
     let roughSlot = mat1.w;
     if (roughSlot >= 0.0) {
-        let roughSample = sampleAtlas(iuv, roughSlot);
+        let roughSample = sampleAtlas(mrUV, roughSlot);
         shininess = max(1e-4, roughSample.y * roughSample.y);
+        metalness = roughSample.z;
     }
 
     // Geometric (flat) normal
@@ -462,15 +545,23 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     let geoN    = select(sn, geoNcross / geoNlen, geoNlen > 1e-8);
     let geoNorm = select(-geoN, geoN, isFrontFace);
 
+    // Vertex color interpolation
+    let vc01 = textureLoad(triData, triCoord(ti, 10), 0);
+    let vc2  = textureLoad(triData, triCoord(ti, 11), 0);
+    let cb2  = textureLoad(triData, triCoord(ti, 7), 0).w;
+    let col0 = vec3<f32>(vc01.x, vc01.y, vc01.z);
+    let col1 = vec3<f32>(vc01.w, vc2.x, vc2.y);
+    let col2 = vec3<f32>(vc2.z, vc2.w, cb2);
+    let vcolor = col0 * w + col1 * rh.u + col2 * rh.v;
+
     h.point     = ray.origin + rh.t * ray.dir;
     h.normal    = finalNorm;
     h.geoNormal = geoNorm;
-    h.albedo    = mat0.xyz;
+    h.albedo    = mat0.xyz * vcolor;
     h.shininess = shininess;
-    h.uv        = iuv;
+    h.uv        = bcUV;
     h.texSlot   = mat1.x;
-    h.metalness = mat1.y;
-    h.emissive     = mat2.xyz;
+    h.metalness = metalness;
     h.transmission = mat2.w;
     h.ior          = mat3.x;
     h.frontFace    = select(0.0, 1.0, isFrontFace);
@@ -481,6 +572,22 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     let mat5 = textureLoad(matData, vec2<i32>(matIdx, 5), 0);
     h.clearcoat      = mat5.x;
     h.clearcoatAlpha = mat5.y;
+
+    // Emissive map (uses emissive UV)
+    var emissive = mat2.xyz;
+    let emissiveSlot = mat5.z;
+    if (emissiveSlot >= 0.0) {
+        emissive *= sampleAtlas(emUV, emissiveSlot);
+    }
+    h.emissive = emissive;
+
+    // AO map (uses occlusion UV)
+    h.ao = 1.0;
+    let aoSlot = mat5.w;
+    if (aoSlot >= 0.0) {
+        h.ao = sampleAtlas(aoUV, aoSlot).x;
+    }
+
     return h;
 }
 )"
@@ -524,9 +631,15 @@ fn loadShadowHitMaterial(rh: RawHit, ray: Ray) -> ShadowHit {
     let w  = 1.0 - rh.u - rh.v;
     let uv01 = textureLoad(triData, triCoord(ti, 6), 0);
     let uv2  = textureLoad(triData, triCoord(ti, 7), 0).xy;
-    let iuv  = vec2<f32>(uv01.x, uv01.y) * w
+    let iuv0 = vec2<f32>(uv01.x, uv01.y) * w
              + vec2<f32>(uv01.z, uv01.w) * rh.u
              + uv2                        * rh.v;
+    let uv1_01 = textureLoad(triData, triCoord(ti, 8), 0);
+    let uv1_2  = textureLoad(triData, triCoord(ti, 9), 0).xy;
+    let iuv1   = vec2<f32>(uv1_01.x, uv1_01.y) * w
+               + vec2<f32>(uv1_01.z, uv1_01.w) * rh.u
+               + uv1_2                          * rh.v;
+    let bcUV = transformUV(iuv0, iuv1, matIdx, 6);
     let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
     let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
     let n2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
@@ -534,7 +647,7 @@ fn loadShadowHitMaterial(rh: RawHit, ray: Ray) -> ShadowHit {
     h.point        = ray.origin + rh.t * ray.dir;
     h.normal       = select(-sn, sn, dot(ray.dir, sn) < 0.0);
     h.albedo       = mat0.xyz;
-    h.uv           = iuv;
+    h.uv           = bcUV;
     h.texSlot      = mat1.x;
     h.meshIdx      = i32(r1.w);
     h.transmission = mat2.w;
@@ -588,7 +701,7 @@ fn sceneHit(ray: Ray) -> Hit {
     if (rh.triIdx < 0) {
         var h: Hit; h.t = 1e30; h.meshIdx = -1; h.transmission = 0.0; h.ior = 1.5;
         h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
-        h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
+        h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0; h.ao = 1.0;
         return h;
     }
     return loadHitMaterial(rh, ray);
@@ -667,7 +780,7 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
     var albedo = h.albedo;
     if (h.texSlot >= 0.0) { albedo = sampleAtlas(h.uv, h.texSlot); }
     // Environment diffuse fill light (sky gradient, solid color, or equirect)
-    var col = albedo * sampleEnv(h.normal) * rt.envIntensity.x * (1.0 - h.metalness);
+    var col = albedo * sampleEnv(h.normal) * rt.envIntensity.x * (1.0 - h.metalness) * h.ao;
     let count = i32(rt.lightCount.x);
     let wo_s = normalize(-rd);
     for (var li = 0; li < 4; li++) {
@@ -1414,6 +1527,10 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var old      = prev.xyz;
     var pixelFC  = prev.w;
 
+    // Force-reset on mode switch / topology rebuild (params.w flag)
+    let forceReset = rt.params.w > 0.5;
+    if (forceReset) { pixelFC = 0.0; }
+
     // Reset pixels whose primary ray hits a moved mesh.
     let prevMeshU = u32(textureLoad(hitMeshRead, pixel, 0).r);
     if (primaryMeshIdx < 64u && isMeshMoved(i32(primaryMeshIdx))) {
@@ -1510,6 +1627,10 @@ struct ObjTriData {
     n2:   vec4<f32>,
     uv01: vec4<f32>,
     uv2:  vec4<f32>,
+    uv1_01: vec4<f32>,
+    uv1_2:  vec4<f32>,
+    vcol01: vec4<f32>,  // vertex color: v0.r, v0.g, v0.b, v1.r
+    vcol2:  vec4<f32>,  // vertex color: v1.g, v1.b, v2.r, v2.g  (v2.b in uv2.w)
 }
 struct MeshMatrices {
     world:  mat4x4<f32>,
@@ -1548,6 +1669,10 @@ fn vt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(triOut, triCoord(ti, 5), vec4<f32>(n2, 0.0));
     textureStore(triOut, triCoord(ti, 6), obj.uv01);
     textureStore(triOut, triCoord(ti, 7), obj.uv2);
+    textureStore(triOut, triCoord(ti, 8), obj.uv1_01);
+    textureStore(triOut, triCoord(ti, 9), obj.uv1_2);
+    textureStore(triOut, triCoord(ti, 10), obj.vcol01);
+    textureStore(triOut, triCoord(ti, 11), obj.vcol2);
 }
 )";
 
@@ -2206,6 +2331,10 @@ static std::pair<std::vector<unsigned char>, int> buildAtlas(
             countTex(mnm->normalMap.get());
         if (auto* mwr = dynamic_cast<MaterialWithRoughness*>(mesh->material().get()))
             countTex(mwr->roughnessMap.get());
+        if (auto* mwe = dynamic_cast<MaterialWithEmissive*>(mesh->material().get()))
+            countTex(mwe->emissiveMap.get());
+        if (auto* mwa = dynamic_cast<MaterialWithAoMap*>(mesh->material().get()))
+            countTex(mwa->aoMap.get());
     }
 
     const int rows = std::max(1, (slotCount + ATLAS_COLS - 1) / ATLAS_COLS);
@@ -2272,11 +2401,28 @@ static std::pair<std::vector<unsigned char>, int> buildAtlas(
         if (mnm && mnm->normalMap) addTexture(mnm->normalMap.get(), slot);
         auto* mwr = dynamic_cast<MaterialWithRoughness*>(mesh->material().get());
         if (mwr && mwr->roughnessMap) addTexture(mwr->roughnessMap.get(), slot);
+        auto* mwe = dynamic_cast<MaterialWithEmissive*>(mesh->material().get());
+        if (mwe && mwe->emissiveMap) addTexture(mwe->emissiveMap.get(), slot);
+        auto* mwa = dynamic_cast<MaterialWithAoMap*>(mesh->material().get());
+        if (mwa && mwa->aoMap) addTexture(mwa->aoMap.get(), slot);
     }
     std::cerr << "[PathTracer] Atlas: " << slot << " unique textures in "
               << ATLAS_COLS << "x" << rows << " grid (" << (ATLAS_COLS * TILE_SIZE)
               << "x" << (rows * TILE_SIZE) << " px)" << std::endl;
     return {std::move(atlas), rows};
+}
+
+// Encode texture slot index + wrap modes into a single float.
+// Layout: slot * 16 + wrapS * 4 + wrapT  (wrap: 0=repeat, 1=clamp, 2=mirror)
+static float encodeSlotWrap(int slot, const Texture* tex) {
+    int ws = 0, wt = 0;
+    if (tex) {
+        if (tex->wrapS == TextureWrapping::ClampToEdge) ws = 1;
+        else if (tex->wrapS == TextureWrapping::MirroredRepeat) ws = 2;
+        if (tex->wrapT == TextureWrapping::ClampToEdge) wt = 1;
+        else if (tex->wrapT == TextureWrapping::MirroredRepeat) wt = 2;
+    }
+    return static_cast<float>(slot * 16 + ws * 4 + wt);
 }
 
 struct ExtractedMaterial {
@@ -2370,7 +2516,7 @@ static int buildGeometryBuffers(
         buf[idx + 3] = w;
     };
     auto setObj = [&](int ti, int field, float x, float y, float z, float w) {
-        float* p = rawObjTriBuf.data() + ti * 32 + field * 4;
+        float* p = rawObjTriBuf.data() + ti * 48 + field * 4;
         p[0] = x; p[1] = y; p[2] = z; p[3] = w;
     };
 
@@ -2379,20 +2525,9 @@ static int buildGeometryBuffers(
 
         // Deduplicate material: write once per unique Mesh*
         int matIdx;
-        float texOffsetX = 0.f, texOffsetY = 0.f;
-        float texRepeatX = 1.f, texRepeatY = 1.f;
         auto matIt = meshToMatIdx.find(entry.mesh);
         if (matIt != meshToMatIdx.end()) {
             matIdx = matIt->second;
-            // Still need tex repeat/offset for UV baking
-            if (auto* mwm = dynamic_cast<MaterialWithMap*>(entry.mesh->material().get())) {
-                if (mwm->map) {
-                    texOffsetX = mwm->map->offset.x;
-                    texOffsetY = mwm->map->offset.y;
-                    texRepeatX = mwm->map->repeat.x;
-                    texRepeatY = mwm->map->repeat.y;
-                }
-            }
         } else {
             if (matCount >= maxMats) continue;
             matIdx = matCount++;
@@ -2408,11 +2543,7 @@ static int buildGeometryBuffers(
                 if (mwm->map) {
                     auto it = texSlotMap.find(mwm->map.get());
                     if (it != texSlotMap.end()) {
-                        texSlot = static_cast<float>(it->second);
-                        texOffsetX = mwm->map->offset.x;
-                        texOffsetY = mwm->map->offset.y;
-                        texRepeatX = mwm->map->repeat.x;
-                        texRepeatY = mwm->map->repeat.y;
+                        texSlot = encodeSlotWrap(it->second, mwm->map.get());
                     }
                 }
             }
@@ -2420,7 +2551,7 @@ static int buildGeometryBuffers(
                 if (mnm->normalMap) {
                     auto it = texSlotMap.find(mnm->normalMap.get());
                     if (it != texSlotMap.end()) {
-                        normalSlot = static_cast<float>(it->second);
+                        normalSlot = encodeSlotWrap(it->second, mnm->normalMap.get());
                     }
                 }
             }
@@ -2429,17 +2560,72 @@ static int buildGeometryBuffers(
                 if (mwr->roughnessMap) {
                     auto it = texSlotMap.find(mwr->roughnessMap.get());
                     if (it != texSlotMap.end()) {
-                        roughSlot = static_cast<float>(it->second);
+                        roughSlot = encodeSlotWrap(it->second, mwr->roughnessMap.get());
                     }
                 }
             }
             setTexel(matBuffer, maxMats, matIdx, 1, texSlot, em.metalness, normalSlot, roughSlot);
             setTexel(matBuffer, maxMats, matIdx, 2,
                     em.emissive.r, em.emissive.g, em.emissive.b, em.transmission);
-            setTexel(matBuffer, maxMats, matIdx, 3, em.ior, em.alphaTest, 0.f, 0.f);
+            const float doubleSided = (entry.mesh->material()->side == Side::Double || em.transmission > 0.f) ? 1.f : 0.f;
+            const float opacity = std::clamp(entry.mesh->material()->opacity, 0.f, 1.f);
+            // Encode blend mode: negative opacity signals stochastic alpha (BLEND mode)
+            const float opacityEnc = (entry.mesh->material()->transparent && em.alphaTest <= 0.f)
+                                     ? -opacity : opacity;
+            setTexel(matBuffer, maxMats, matIdx, 3, em.ior, em.alphaTest, doubleSided, opacityEnc);
             setTexel(matBuffer, maxMats, matIdx, 4,
                     em.attenuationColor.r, em.attenuationColor.g, em.attenuationColor.b, em.attenuationDistance);
-            setTexel(matBuffer, maxMats, matIdx, 5, em.clearcoat, em.clearcoatRoughness, 0.f, 0.f);
+            float emissiveSlot = -1.f;
+            if (auto* mwe = dynamic_cast<MaterialWithEmissive*>(entry.mesh->material().get())) {
+                if (mwe->emissiveMap) {
+                    auto it = texSlotMap.find(mwe->emissiveMap.get());
+                    if (it != texSlotMap.end()) {
+                        emissiveSlot = encodeSlotWrap(it->second, mwe->emissiveMap.get());
+                    }
+                }
+            }
+            float aoSlot = -1.f;
+            if (auto* mwa = dynamic_cast<MaterialWithAoMap*>(entry.mesh->material().get())) {
+                if (mwa->aoMap) {
+                    auto it = texSlotMap.find(mwa->aoMap.get());
+                    if (it != texSlotMap.end()) {
+                        aoSlot = encodeSlotWrap(it->second, mwa->aoMap.get());
+                    }
+                }
+            }
+            setTexel(matBuffer, maxMats, matIdx, 5, em.clearcoat, em.clearcoatRoughness, emissiveSlot, aoSlot);
+
+            // Per-channel UV transforms (rows 6-15, 2 rows per channel)
+            // Layout per channel: row N = (a, b, tx, c), row N+1 = (d, ty, texCoord, 0)
+            // where u' = a*u + b*v + tx,  v' = c*u + d*v + ty
+            auto writeUvTransform = [&](int row, const Texture* tex) {
+                if (tex) {
+                    const_cast<Texture*>(tex)->updateMatrix();
+                    const auto& e = tex->matrix.elements;
+                    // Column-major: e[0]=a, e[3]=b, e[6]=tx, e[1]=c, e[4]=d, e[7]=ty
+                    setTexel(matBuffer, maxMats, matIdx, row,
+                             e[0], e[3], e[6], e[1]);
+                    setTexel(matBuffer, maxMats, matIdx, row + 1,
+                             e[4], e[7], static_cast<float>(tex->texCoord), 0.f);
+                } else {
+                    // Identity transform, UV0
+                    setTexel(matBuffer, maxMats, matIdx, row, 1.f, 0.f, 0.f, 0.f);
+                    setTexel(matBuffer, maxMats, matIdx, row + 1, 1.f, 0.f, 0.f, 0.f);
+                }
+            };
+
+            auto* mat = entry.mesh->material().get();
+            auto* mwm = dynamic_cast<MaterialWithMap*>(mat);
+            auto* mnm = dynamic_cast<MaterialWithNormalMap*>(mat);
+            auto* mwr = dynamic_cast<MaterialWithRoughness*>(mat);
+            auto* mwe = dynamic_cast<MaterialWithEmissive*>(mat);
+            auto* mwa = dynamic_cast<MaterialWithAoMap*>(mat);
+
+            writeUvTransform(6,  mwm ? mwm->map.get() : nullptr);           // baseColor
+            writeUvTransform(8,  mwr ? mwr->roughnessMap.get() : nullptr);   // metalRough
+            writeUvTransform(10, mnm ? mnm->normalMap.get() : nullptr);      // normal
+            writeUvTransform(12, mwe ? mwe->emissiveMap.get() : nullptr);    // emissive
+            writeUvTransform(14, mwa ? mwa->aoMap.get() : nullptr);          // occlusion
         }
 
         const int meshIdx = meshCount++;
@@ -2460,6 +2646,8 @@ static int buildGeometryBuffers(
         if (!pos) continue;
         auto* nrm = geo->getAttribute<float>("normal");
         auto* uvs = geo->getAttribute<float>("uv");
+        auto* uv2s = geo->getAttribute<float>("uv2");
+        auto* cols = geo->getAttribute<float>("color");
         auto* idx = geo->getIndex();
 
         auto vert = [&](int i) {
@@ -2482,8 +2670,15 @@ static int buildGeometryBuffers(
         };
         auto uv = [&](int i) -> std::pair<float, float> {
             if (!uvs) return {0.f, 0.f};
-            return {uvs->getX(i) * texRepeatX + texOffsetX,
-                    uvs->getY(i) * texRepeatY + texOffsetY};
+            return {uvs->getX(i), uvs->getY(i)};
+        };
+        auto uv1 = [&](int i) -> std::pair<float, float> {
+            if (!uv2s) return {0.f, 0.f};
+            return {uv2s->getX(i), uv2s->getY(i)};
+        };
+        auto vcol = [&](int i) -> std::tuple<float, float, float> {
+            if (!cols) return {1.f, 1.f, 1.f};
+            return {cols->getX(i), cols->getY(i), cols->getZ(i)};
         };
         auto vi = [&](int tri, int corner) -> int {
             return idx ? static_cast<int>(idx->getX(tri * 3 + corner)) : tri * 3 + corner;
@@ -2498,6 +2693,12 @@ static int buildGeometryBuffers(
             const auto [u0, v0uv] = uv(i0);
             const auto [u1, v1uv] = uv(i1);
             const auto [u2, v2uv] = uv(i2);
+            const auto [u1_0, v1_0] = uv1(i0);
+            const auto [u1_1, v1_1] = uv1(i1);
+            const auto [u1_2, v1_2] = uv1(i2);
+            const auto [cr0, cg0, cb0] = vcol(i0);
+            const auto [cr1, cg1, cb1] = vcol(i1);
+            const auto [cr2, cg2, cb2] = vcol(i2);
 
             // Use paged layout (matches triGet/pagedIdx/GPU triCoord)
             auto setTri = [&](int row, float x, float y, float z, float w) {
@@ -2512,7 +2713,11 @@ static int buildGeometryBuffers(
             setTri(4, n1.x, n1.y, n1.z, 0.f);
             setTri(5, n2.x, n2.y, n2.z, 0.f);
             setTri(6, u0, v0uv, u1, v1uv);
-            setTri(7, u2, v2uv, 0.f, 0.f);
+            setTri(7, u2, v2uv, 0.f, cb2);
+            setTri(8, u1_0, v1_0, u1_1, v1_1);
+            setTri(9, u1_2, v1_2, 0.f, 0.f);
+            setTri(10, cr0, cg0, cb0, cr1);
+            setTri(11, cg1, cb1, cr2, cg2);
 
             const Vector3 ov0 = objVert(i0), ov1 = objVert(i1), ov2 = objVert(i2);
             const Vector3 on0 = objNorm(i0), on1 = objNorm(i1), on2 = objNorm(i2);
@@ -2523,7 +2728,11 @@ static int buildGeometryBuffers(
             setObj(triCount, 4, on1.x, on1.y, on1.z, 0.f);
             setObj(triCount, 5, on2.x, on2.y, on2.z, 0.f);
             setObj(triCount, 6, u0, v0uv, u1, v1uv);
-            setObj(triCount, 7, u2, v2uv, 0.f, 0.f);
+            setObj(triCount, 7, u2, v2uv, 0.f, cb2);
+            setObj(triCount, 8, u1_0, v1_0, u1_1, v1_1);
+            setObj(triCount, 9, u1_2, v1_2, 0.f, 0.f);
+            setObj(triCount, 10, cr0, cg0, cb0, cr1);
+            setObj(triCount, 11, cg1, cb1, cr2, cg2);
 
             ++triCount;
         }
@@ -2987,7 +3196,7 @@ static void buildBVH(std::vector<float>& triBuffer, int triCount,
         for (int row = 0; row < TRI_TEX_HEIGHT; row++)
             for (int c = 0; c < 4; c++)
                 sorted[pagedIdx(ni, row) + c] = triBuffer[pagedIdx(oi, row) + c];
-        std::memcpy(sortedObj.data() + ni * 32, rawObjTriBuf.data() + oi * 32, 32 * sizeof(float));
+        std::memcpy(sortedObj.data() + ni * 48, rawObjTriBuf.data() + oi * 48, 48 * sizeof(float));
     }
     triBuffer = std::move(sorted);
     rawObjTriBuf = std::move(sortedObj);
@@ -3247,7 +3456,7 @@ struct WgpuPathTracer::Impl {
                         WgpuBuffer::Usage::Storage),
           refitMetaBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * BVH4_REFIT_INTS * sizeof(int32_t),
                        WgpuBuffer::Usage::Storage),
-          objTriBuf(r, static_cast<size_t>(INIT_TRI_CAP) * 32 * sizeof(float),
+          objTriBuf(r, static_cast<size_t>(INIT_TRI_CAP) * 48 * sizeof(float),
                     WgpuBuffer::Usage::Storage),
           matrixBuf(r, static_cast<size_t>(INIT_MESH_CAP) * 32 * sizeof(float),
                     WgpuBuffer::Usage::Storage),
@@ -3533,8 +3742,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
     // Collect visible, non-wireframe, non-line meshes and lights
     std::vector<Mesh*> rtMeshes;
-    bool hasEnclosingBox = false;
-    Color enclosingBoxColor;
     scene.traverseVisible([&](Object3D& o) {
         auto* m_ptr = dynamic_cast<Mesh*>(&o);
         if (!m_ptr) return;
@@ -3545,13 +3752,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         auto* mww = mat->as<MaterialWithWireframe>();
         if (mww && mww->wireframe) return;
         if (mat->is<LineBasicMaterial>()) return;
-        // Side::Back meshes (enclosing boxes) poison the BVH with scene-spanning
-        // triangles.  Exclude them and use their color as the ray-miss background.
-        if (mat->side == Side::Back) {
-            hasEnclosingBox = true;
-            if (auto* mc = mat->as<MaterialWithColor>()) enclosingBoxColor = mc->color;
-            return;
-        }
         // Transparent meshes with no texture and no transmission are raster-only
         // overlay effects (e.g. separate clearcoat geometry layers). They have no
         // physical meaning in path tracing and render as opaque shells that occlude
@@ -3561,7 +3761,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             auto* mwt = dynamic_cast<MaterialWithTransmission*>(mat);
             const bool hasMap = mwm && mwm->map;
             const bool hasTransmission = mwt && mwt->transmission > 0.f;
-            if (!hasMap && !hasTransmission) return;
+            const bool hasBlend = mat->opacity < 0.999f;
+            if (!hasMap && !hasTransmission && !hasBlend) return;
         }
         rtMeshes.push_back(&m);
     });
@@ -3614,14 +3815,18 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
         const int matCount = static_cast<int>(meshes.size());
         const int meshCount = static_cast<int>(entries.size());
-        r.triCapacity  = std::max(totalTris, 1);
+        r.triCapacity  = std::clamp(totalTris, 1, MAX_TRI_CAP);
+        if (totalTris > MAX_TRI_CAP) {
+            std::cerr << "[PathTracer] Warning: scene has " << totalTris
+                      << " tris, capped to " << MAX_TRI_CAP << " (128 MB buffer limit)\n";
+        }
         r.matCapacity  = std::max(matCount, 1);
         r.meshCapacity = std::max(meshCount, 1);
 
         const int pages = triTexPages(r.triCapacity);
         r.triBuffer.resize(static_cast<size_t>(TEX_PAGE_WIDTH) * TRI_TEX_HEIGHT * pages * 4, 0.f);
         r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
-        r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 32, 0.f);
+        r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 48, 0.f);
         r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
 
         r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
@@ -3667,6 +3872,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             }
         }
         topoJustFinished = true;
+        d.frameCount_ = 0.f;
 #else
     if (topoChanged && !d.buildPending_) {
         d.buildPending_ = true;
@@ -3698,14 +3904,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             }
             const int matCount = static_cast<int>(meshes.size());
             const int meshCount = static_cast<int>(entries.size());
-            r.triCapacity  = std::max(totalTris, 1);
+            r.triCapacity  = std::clamp(totalTris, 1, MAX_TRI_CAP);
             r.matCapacity  = std::max(matCount, 1);
             r.meshCapacity = std::max(meshCount, 1);
 
             const int pages = triTexPages(r.triCapacity);
             r.triBuffer.resize(static_cast<size_t>(TEX_PAGE_WIDTH) * TRI_TEX_HEIGHT * pages * 4, 0.f);
             r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
-            r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 32, 0.f);
+            r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 48, 0.f);
             r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
 
             r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
@@ -3761,6 +3967,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         auto r = d.asyncBuild_.get();
         d.buildPending_ = false;
         topoJustFinished = true;
+        d.frameCount_ = 0.f;
 #endif
 
         // Move CPU results into Impl
@@ -3793,7 +4000,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.triTex = WgpuTexture(d.renderer, TEX_PAGE_WIDTH, TRI_TEX_HEIGHT * pages,
                                     WgpuTexture::Format::RGBA32Float,
                                     WgpuTexture::Storage | WgpuTexture::TextureBinding);
-            d.objTriBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.triCapacity) * 32 * sizeof(float),
+            d.objTriBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.triCapacity) * 48 * sizeof(float),
                                       WgpuBuffer::Usage::Storage);
             d.leafIndexBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.triCapacity) * sizeof(int),
                                          WgpuBuffer::Usage::Storage);
@@ -3856,7 +4063,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         // Upload geometry + BVH
         d.bvhNodeBuf.write(d.bvhNodeCpuBuf.data(), d.numBvhNodes_ * BVH4_GPU_U32S * sizeof(uint32_t));
         d.refitMetaBuf.write(d.refitMetaCpuBuf.data(), d.numBvhNodes_ * BVH4_REFIT_INTS * sizeof(int32_t));
-        d.objTriBuf.write(d.rawObjTriBuf.data(), static_cast<size_t>(d.triCount_) * 32 * sizeof(float));
+        d.objTriBuf.write(d.rawObjTriBuf.data(), static_cast<size_t>(d.triCount_) * 48 * sizeof(float));
         d.leafIndexBuf.write(d.leafIndices.data(), d.leafIndices.size() * sizeof(int));
         d.matTex.write(d.matBuffer.data(), d.matBuffer.size() * sizeof(float));
 
@@ -3875,11 +4082,12 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     }
 
 #ifndef __EMSCRIPTEN__
-    // While building, skip RT dispatch — but keep display updated so screen isn't blank
-    if (d.buildPending_) {
+    // While building or before first build, skip RT dispatch — show previous accum
+    if (d.buildPending_ || d.triCount_ == 0) {
         d.displayMat->customTextures["accumTex"] = d.readAccum;
         d.displayMat->customTextures["gBufTex"]  = d.gBufPrev;
         d.displayMat->uniformsNeedUpdate = true;
+        d.renderer.render(d.displayScene, d.displayCam);
         return;
     }
 #endif
@@ -4123,19 +4331,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
 
     }
-    // Enclosing box overrides both background AND environment:
-    // an enclosed room shouldn't have outdoor sky reflections or IBL.
-    if (hasEnclosingBox) {
-        u.bgColor[0] = enclosingBoxColor.r;
-        u.bgColor[1] = enclosingBoxColor.g;
-        u.bgColor[2] = enclosingBoxColor.b;
-        u.bgColor[3] = 1.f;  // solid color mode
-        u.envColor[0] = enclosingBoxColor.r;
-        u.envColor[1] = enclosingBoxColor.g;
-        u.envColor[2] = enclosingBoxColor.b;
-        u.envColor[3] = 1.f;  // solid color mode — no IBL
-        // Don't clobber d.envLumSum_ — it's needed if the box is toggled off later
-    }
 #ifndef __EMSCRIPTEN__
     // Check if async CDF build finished — upload to GPU
     if (d.envCdfPending_ && d.asyncEnvCdf_.valid() &&
@@ -4179,7 +4374,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.params[0] = static_cast<float>(d.maxBounces_);
     u.params[1] = static_cast<float>(d.globalFrameCounter_++);
     u.params[2] = (d.foveatedEnabled_ && d.frameCount_ > 0.f) ? 1.f : 0.f;
-    u.params[3] = 0.f;
+    u.params[3] = (d.frameCount_ == 0.f) ? 1.f : 0.f;  // force-reset accum on first frame
     u.emissiveInfo[0] = static_cast<float>(d.emissiveTriCount_);
     u.emissiveInfo[1] = d.emissiveTotalPower_;
 

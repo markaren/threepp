@@ -431,6 +431,41 @@ namespace threepp {
                 return tex;
             }
 
+            // Apply KHR_texture_transform from a textureInfo JSON node.
+            // Returns a (possibly cloned) texture with transform applied.
+            std::shared_ptr<Texture> applyTextureTransform(
+                    const json& texInfo, std::shared_ptr<Texture> tex) {
+                if (!tex) return tex;
+                int texCoordVal = texInfo.value("texCoord", 0);
+                bool hasTransform = false;
+                float offX = 0, offY = 0, scX = 1, scY = 1, rot = 0;
+                if (texInfo.contains("extensions") &&
+                    texInfo["extensions"].contains("KHR_texture_transform")) {
+                    hasTransform = true;
+                    const auto& tt = texInfo["extensions"]["KHR_texture_transform"];
+                    if (tt.contains("offset")) {
+                        offX = tt["offset"][0].get<float>();
+                        offY = tt["offset"][1].get<float>();
+                    }
+                    if (tt.contains("scale")) {
+                        scX = tt["scale"][0].get<float>();
+                        scY = tt["scale"][1].get<float>();
+                    }
+                    rot = tt.value("rotation", 0.0f);
+                    texCoordVal = tt.value("texCoord", texCoordVal);
+                }
+                if (!hasTransform && texCoordVal == 0) return tex;
+                // Clone to avoid sharing transforms between channels
+                auto clone = tex->clone();
+                clone->offset = {offX, offY};
+                clone->repeat = {scX, scY};
+                clone->rotation = rot;
+                clone->center = {0, 0};
+                clone->texCoord = texCoordVal;
+                clone->updateMatrix();
+                return clone;
+            }
+
             // -----------------------------------------------------------------------
             //  Material
             // -----------------------------------------------------------------------
@@ -476,7 +511,7 @@ namespace threepp {
                     // Base color texture
                     if (pbr.contains("baseColorTexture")) {
                         int ti = pbr["baseColorTexture"]["index"].get<int>();
-                        mat->map = loadTexture(ti);
+                        mat->map = applyTextureTransform(pbr["baseColorTexture"], loadTexture(ti));
                     }
 
                     // Metalness / roughness
@@ -486,7 +521,7 @@ namespace threepp {
                     // Metallic-roughness texture (G=roughness, B=metalness per spec)
                     if (pbr.contains("metallicRoughnessTexture")) {
                         int ti = pbr["metallicRoughnessTexture"]["index"].get<int>();
-                        auto tex = loadTexture(ti);
+                        auto tex = applyTextureTransform(pbr["metallicRoughnessTexture"], loadTexture(ti));
                         mat->metalnessMap = tex;
                         mat->roughnessMap = tex;
                     }
@@ -495,7 +530,7 @@ namespace threepp {
                 // Normal map
                 if (matDef.contains("normalTexture")) {
                     int ti = matDef["normalTexture"]["index"].get<int>();
-                    mat->normalMap = loadTexture(ti);
+                    mat->normalMap = applyTextureTransform(matDef["normalTexture"], loadTexture(ti));
                     float scale = matDef["normalTexture"].value("scale", 1.0f);
                     mat->normalScale = Vector2{scale, scale};
                 }
@@ -503,7 +538,7 @@ namespace threepp {
                 // Occlusion map
                 if (matDef.contains("occlusionTexture")) {
                     int ti = matDef["occlusionTexture"]["index"].get<int>();
-                    mat->aoMap = loadTexture(ti);
+                    mat->aoMap = applyTextureTransform(matDef["occlusionTexture"], loadTexture(ti));
                     mat->aoMapIntensity = matDef["occlusionTexture"].value("strength", 1.0f);
                 }
 
@@ -514,7 +549,7 @@ namespace threepp {
                 }
                 if (matDef.contains("emissiveTexture")) {
                     int ti = matDef["emissiveTexture"]["index"].get<int>();
-                    mat->emissiveMap = loadTexture(ti);
+                    mat->emissiveMap = applyTextureTransform(matDef["emissiveTexture"], loadTexture(ti));
                 }
 
                 // Alpha mode
@@ -548,6 +583,12 @@ namespace threepp {
                     if (ext.contains("KHR_materials_ior")) {
                         const auto& iorExt = ext["KHR_materials_ior"];
                         physMat->setIor(iorExt.value("ior", 1.5f));
+                    }
+
+                    // KHR_materials_emissive_strength
+                    if (ext.contains("KHR_materials_emissive_strength")) {
+                        float strength = ext["KHR_materials_emissive_strength"].value("emissiveStrength", 1.0f);
+                        mat->emissiveIntensity = strength;
                     }
 
                     // KHR_materials_clearcoat
@@ -607,7 +648,14 @@ namespace threepp {
                     addFloatAttr("NORMAL", "normal", 3);
                     addFloatAttr("TEXCOORD_0", "uv", 2);
                     addFloatAttr("TEXCOORD_1", "uv2", 2);
-                    addFloatAttr("COLOR_0", "color", 4);// may be RGB or RGBA; 4 is safe
+                    // COLOR_0: use actual accessor component count (VEC3 or VEC4)
+                    if (attrs.contains("COLOR_0")) {
+                        int accIdx = attrs["COLOR_0"].get<int>();
+                        auto [ptr, stride, count, ct, nc] = getAccessor(accIdx);
+                        auto data = readFloats(accIdx);
+                        geometry->setAttribute("color",
+                                FloatBufferAttribute::create(std::move(data), nc));
+                    }
                     addFloatAttr("TANGENT", "tangent", 4);
 
                     if (hasSkin) {

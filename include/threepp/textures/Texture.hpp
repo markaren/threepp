@@ -45,6 +45,8 @@ namespace threepp {
         Vector2 center{0, 0};
         float rotation = 0;
 
+        int texCoord = 0;  // UV set index (0 = TEXCOORD_0, 1 = TEXCOORD_1)
+
         bool matrixAutoUpdate = true;
         Matrix3 matrix{};
 

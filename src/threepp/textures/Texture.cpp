@@ -183,6 +183,7 @@ Texture& Texture::copy(const Texture& source) {
     this->repeat.copy(source.repeat);
     this->center.copy(source.center);
     this->rotation = source.rotation;
+    this->texCoord = source.texCoord;
 
     this->matrixAutoUpdate = source.matrixAutoUpdate;
     this->matrix.copy(source.matrix);
