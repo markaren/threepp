@@ -84,7 +84,7 @@ int main(int argc, char** argv) {
     WgpuPathTracer pathTracer(renderer, canvas.size());
     pathTracer.setEnvIntensity(0.1f);
     pathTracer.setExposure(1.0f);
-    pathTracer.setSamplesPerPixel(2);
+    pathTracer.setSamplesPerPixel(4);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setFoveatedRendering(false);
     pathTracer.setMaxBounces(4);
@@ -96,8 +96,7 @@ int main(int argc, char** argv) {
 
     // ---- Scene ----
     Scene scene;
-    scene.background = Color::black;
-    scene.environment = env;
+    scene.background =  env;
 
     auto light = DirectionalLight::create(0xffffff, 2.0f);
     light->position.set(5, 10, 7);
@@ -132,7 +131,7 @@ int main(int argc, char** argv) {
                 // Verify it has renderable geometry
                 bool hasMesh = false;
                 if (result) {
-                    result->traverseType<Mesh>([&](Mesh& m) {
+                    result->traverseType<Mesh>([&](Mesh&) {
                         hasMesh = true;
                     });
                     result->traverseType<Light>([&](Light& l) {

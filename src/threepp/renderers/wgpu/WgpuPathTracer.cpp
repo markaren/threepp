@@ -3381,7 +3381,7 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer  taaUniBuf;
     WgpuBuffer  atrousUniBuf;
     bool denoiserEnabled_ = false;
-    float envIntensity_ = 1.0f;
+    float envIntensity_ = 0.5f;
     int maxBounces_ = 5;
     float exposure_ = 1.0f;
 
@@ -4344,9 +4344,13 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     };
 
     // --- Environment (IBL lighting): scene.environment ---
+    // Fallback: use background texture for IBL when no environment is set.
     u.envColor[3] = 0.f;  // default: no IBL
     if (auto* s = dynamic_cast<Scene*>(&scene)) {
         Texture* envTex = s->environment.get();
+        if (!envTex && s->background.isTexture()) {
+            envTex = s->background.texture().get();
+        }
         if (envTex) {
             if (envTex != d.prevEnvTex_) {
                 uploadEquirect(envTex, d.envTexGpu);
