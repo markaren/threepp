@@ -769,7 +769,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
 
         // Project to screen space
         let clipPos = transform.proj * transform.view * vec4<f32>(refractedPos, 1.0);
-        let refrUV = clipPos.xy / clipPos.w * 0.5 + 0.5;
+        let refrNDC = clipPos.xy / clipPos.w * 0.5 + 0.5;
+        let refrUV = vec2<f32>(refrNDC.x, 1.0 - refrNDC.y);
         let framebufferLod = log2(samplerW) * roughness * clamp(ior * 2.0 - 2.0, 0.0, 1.0);
         var transmittedLight = textureSampleLevel(t_transmissionMap, s_transmissionMap, refrUV, framebufferLod).rgb;
 
