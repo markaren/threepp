@@ -59,9 +59,8 @@ constexpr int INIT_TRI_CAP  = 1;
 constexpr int INIT_MAT_CAP  = 1;
 constexpr int INIT_MESH_CAP = 1;
 
-// WebGPU default max_storage_buffer_binding_size is 128 MB.
-// objTriBuf is 128 bytes/tri — cap at 1M tris to stay within the limit.
-constexpr int MAX_TRI_CAP = 1'000'000;
+// objTriBuf is 128 bytes/tri — cap at 2M tris (256 MB buffer limit).
+constexpr int MAX_TRI_CAP = 2'000'000;
 
 static int nextPow2(int v) {
     if (v <= 0) return 1;
@@ -4012,7 +4011,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.triCapacity  = std::clamp(totalTris, 1, MAX_TRI_CAP);
         if (totalTris > MAX_TRI_CAP) {
             std::cerr << "[PathTracer] Warning: scene has " << totalTris
-                      << " tris, capped to " << MAX_TRI_CAP << " (128 MB buffer limit)\n";
+                      << " tris, capped to " << MAX_TRI_CAP << " (256 MB buffer limit)\n";
         }
         r.matCapacity  = std::max(matCount, 1);
         r.meshCapacity = std::max(meshCount, 1);
@@ -4100,7 +4099,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.triCapacity  = std::clamp(totalTris, 1, MAX_TRI_CAP);
         if (totalTris > MAX_TRI_CAP) {
             std::cerr << "[PathTracer] Warning: scene has " << totalTris
-                      << " tris, capped to " << MAX_TRI_CAP << " (128 MB buffer limit)\n";
+                      << " tris, capped to " << MAX_TRI_CAP << " (256 MB buffer limit)\n";
         }
         r.matCapacity  = std::max(matCount, 1);
         r.meshCapacity = std::max(meshCount, 1);

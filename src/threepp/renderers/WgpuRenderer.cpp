@@ -1057,6 +1057,13 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
         WGPUDeviceDescriptor deviceDesc{};
         deviceDesc.label = WGPUStringView{"threepp_device", sizeof("threepp_device") - 1};
 
+        // Request adapter's max storage buffer limit (default 128MB may be too small for large scenes)
+        WGPULimits adapterLimits{};
+        wgpuAdapterGetLimits(adapter, &adapterLimits);
+        adapterLimits.maxStorageBufferBindingSize = (std::max)(
+            adapterLimits.maxStorageBufferBindingSize, uint64_t(256u * 1024u * 1024u));
+        deviceDesc.requiredLimits = &adapterLimits;
+
         // Install an error callback that logs instead of panicking.
         // Transient validation errors (e.g. stale scissor rect during window
         // resize) are non-fatal and should not abort the process.
