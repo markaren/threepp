@@ -82,9 +82,9 @@ int main(int argc, char** argv) {
     WgpuRenderer renderer(canvas);
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
-    pathTracer.setEnvIntensity(0.1f);
+    pathTracer.setEnvIntensity(0.5f);
     pathTracer.setExposure(1.0f);
-    pathTracer.setSamplesPerPixel(4);
+    pathTracer.setSamplesPerPixel(2);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setFoveatedRendering(false);
     pathTracer.setMaxBounces(4);
@@ -99,10 +99,11 @@ int main(int argc, char** argv) {
     scene.background = env;
     scene.environment = env;
 
-    auto light = DirectionalLight::create(0xffffff, 2.0f);
-    light->position.set(5, 10, 7);
+    auto light = DirectionalLight::create(0xffffff, 1.0f);
+    light->position.set(1, 1, 1);
+    light->visible = false;
     scene.add(light);
-    scene.add(AmbientLight::create(0xffffff, 0.3f));
+    scene.add(AmbientLight::create(0xffffff, 0.2f));
 
     // ---- Camera ----
     PerspectiveCamera camera(50.f, canvas.aspect(), 0.01f, 1000.f);
@@ -175,8 +176,10 @@ int main(int argc, char** argv) {
     // ---- UI ----
     int renderMode = 2;
     const char* modeNames[] = {"Raytracer", "PathTracer", "Raster"};
+    bool dirLight = false;
     bool denoiserOn = pathTracer.denoiserEnabled();
     float exposure = pathTracer.exposure();
+    float envIntensity = pathTracer.envIntensity();
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
@@ -223,8 +226,19 @@ int main(int argc, char** argv) {
         ImGui::Separator();
         if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
             pathTracer.setExposure(exposure);
-        if (ImGui::Checkbox("Denoiser", &denoiserOn))
-            pathTracer.setDenoiserEnabled(denoiserOn);
+        if (ImGui::SliderFloat("EnvIntensity", &envIntensity, 0.0f, 1.0f))
+            pathTracer.setEnvIntensity(envIntensity);
+
+        if (renderMode == 1) {
+            if (ImGui::Checkbox("Denoiser", &denoiserOn))
+                pathTracer.setDenoiserEnabled(denoiserOn);
+        }
+        if (renderMode != 2) {
+            if (ImGui::Checkbox("Show DirLight", &dirLight)) {
+                light->visible = dirLight;
+                pathTracer.markDirty();
+            }
+        }
 
         ImGui::End();
     });
@@ -254,7 +268,7 @@ int main(int argc, char** argv) {
             fpsFrames = 0;
         }
 
-        light->visible = renderMode == 2;
+        light->visible = dirLight || renderMode == 2;
 
         // Check async model load
         if (loadPending && modelFuture.valid() &&
