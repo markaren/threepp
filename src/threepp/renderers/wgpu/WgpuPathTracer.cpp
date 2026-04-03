@@ -49,7 +49,7 @@ constexpr int MAX_TEX_SLOTS = 256;
 constexpr int TILE_SIZE = 1024;
 constexpr int ATLAS_COLS = 8;  // tiles per row in atlas (8 × 1024 = 8192 wide, grows tall)
 constexpr int TRI_TEX_HEIGHT = 12;
-constexpr int MAT_TEX_HEIGHT = 18;
+constexpr int MAT_TEX_HEIGHT = 19;
 constexpr int TEX_PAGE_WIDTH = 8192;
 
 // Initial placeholder capacities — grown dynamically as scenes demand more.
@@ -183,6 +183,7 @@ struct Hit  {
     sheenRoughness:   f32,
     specularColor:    vec3<f32>,
     specularIntensity: f32,
+    dispersion:       f32,
 }
 
 fn pcg(v: u32) -> u32 {
@@ -648,6 +649,10 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     let mat17 = textureLoad(matData, vec2<i32>(matIdx, 17), 0);
     h.specularColor     = mat17.xyz;
     h.specularIntensity = mat17.w;
+
+    // Dispersion (row 18)
+    let mat18 = textureLoad(matData, vec2<i32>(matIdx, 18), 0);
+    h.dispersion = mat18.x;
 
     return h;
 }
@@ -1446,7 +1451,27 @@ R"(
         // Transmission lobe: refract through transmissive surfaces
         if (h.transmission > 0.0 && rand(seed) < h.transmission) {
             let entering = h.frontFace > 0.5;
-            let eta = select(h.ior, 1.0 / h.ior, entering);
+
+            // Dispersion: stochastic wavelength selection.
+            // Pick one of R/G/B, compute per-channel IOR via Cauchy-like model,
+            // and weight throughput by 3x for the selected channel.
+            var channelMask = vec3<f32>(1.0);
+            var ior_eff = h.ior;
+            if (h.dispersion > 0.0) {
+                // Cauchy dispersion from KHR_materials_dispersion (dispersion = 20/V_d).
+                // B = (ior-1)*dispersion / (20*(1/λ_F² - 1/λ_C²)) where
+                // λ_F=0.4861μm, λ_C=0.6563μm → denominator ≈ 38.2.
+                let lambda = array<f32, 3>(0.6563, 0.55, 0.4861);
+                let ref_inv_sq = 1.0 / (0.5893 * 0.5893);
+                let ch = u32(rand(seed) * 3.0) % 3u;
+                let inv_sq = 1.0 / (lambda[ch] * lambda[ch]);
+                let B = (h.ior - 1.0) * h.dispersion / 38.2;
+                ior_eff = h.ior + B * (inv_sq - ref_inv_sq);
+                channelMask = vec3<f32>(0.0);
+                channelMask[ch] = 3.0;
+            }
+
+            let eta = select(ior_eff, 1.0 / ior_eff, entering);
 
             var tNorm = h.normal;
             var usedMicrofacet = false;
@@ -1457,7 +1482,7 @@ R"(
             }
 
             let cosI    = abs(dot(normalize(ray.dir), tNorm));
-            let r0      = pow((1.0 - h.ior) / (1.0 + h.ior), 2.0);
+            let r0      = pow((1.0 - ior_eff) / (1.0 + ior_eff), 2.0);
             let fresnel = r0 + (1.0 - r0) * pow(1.0 - cosI, 5.0);
 
             var wi_t: vec3<f32>;
@@ -1489,7 +1514,7 @@ R"(
             }
             // Non-symmetry correction: BTDF includes (η_t/η_i)² = 1/η² to account
             // for solid angle change at refractive interface.
-            throughput *= select(glassTint * volAtten, glassTint * volAtten / (eta * eta), didRefract);
+            throughput *= select(glassTint * volAtten, glassTint * volAtten / (eta * eta), didRefract) * channelMask;
             afterTransmission = true;
             ray.dir = wi_t;
             continue;
@@ -2540,6 +2565,7 @@ struct ExtractedMaterial {
     float sheenRoughness = 0.f;
     float specularIntensity = 1.f;
     Color specularColor{1.f, 1.f, 1.f};
+    float dispersion = 0.f;
 };
 
 static ExtractedMaterial extractMaterial(const Material* mat) {
@@ -2568,6 +2594,7 @@ static ExtractedMaterial extractMaterial(const Material* mat) {
     if (auto* t = dynamic_cast<const MaterialWithTransmission*>(mat)) {
         m.transmission = std::clamp(t->transmission, 0.f, 1.f);
         m.ior = std::max(1.f, t->ior);
+        m.dispersion = std::max(0.f, t->dispersion);
     }
     if (auto* a = dynamic_cast<const MaterialWithAttenuation*>(mat)) {
         m.attenuationColor = a->attenuationColor;
@@ -2583,7 +2610,7 @@ static ExtractedMaterial extractMaterial(const Material* mat) {
         m.sheenRoughness = std::clamp(sh->sheenRoughness, 0.f, 1.f);
     }
     if (auto* sp = dynamic_cast<const MaterialWithPbrSpecular*>(mat)) {
-        m.specularIntensity = std::clamp(sp->specularIntensity, 0.f, 1.f);
+        m.specularIntensity = std::max(0.f, sp->specularIntensity);
         m.specularColor = sp->specularColor;
     }
     m.alphaTest = mat->alphaTest;
@@ -2749,6 +2776,8 @@ static int buildGeometryBuffers(
             // Row 17: PBR specular (r, g, b, intensity)
             setTexel(matBuffer, maxMats, matIdx, 17,
                     em.specularColor.r, em.specularColor.g, em.specularColor.b, em.specularIntensity);
+            // Row 18: dispersion
+            setTexel(matBuffer, maxMats, matIdx, 18, em.dispersion, 0.f, 0.f, 0.f);
         }
 
         const int meshIdx = meshCount++;

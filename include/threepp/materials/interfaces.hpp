@@ -199,6 +199,7 @@ namespace threepp {
 
         float transmission = 0;
         float ior = 1.5f;
+        float dispersion = 0;
         std::shared_ptr<Texture> transmissionMap;
     };
 

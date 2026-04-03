@@ -513,7 +513,10 @@ namespace threepp {
                     const auto& ext = matDef["extensions"];
                     if (ext.contains("KHR_materials_transmission") ||
                         ext.contains("KHR_materials_clearcoat") ||
-                        ext.contains("KHR_materials_ior")) {
+                        ext.contains("KHR_materials_ior") ||
+                        ext.contains("KHR_materials_dispersion") ||
+                        ext.contains("KHR_materials_specular") ||
+                        ext.contains("KHR_materials_sheen")) {
                         needsPhysical = true;
                     }
                 }
@@ -614,6 +617,12 @@ namespace threepp {
                     if (ext.contains("KHR_materials_ior")) {
                         const auto& iorExt = ext["KHR_materials_ior"];
                         physMat->setIor(iorExt.value("ior", 1.5f));
+                    }
+
+                    // KHR_materials_dispersion
+                    if (ext.contains("KHR_materials_dispersion")) {
+                        const auto& dispExt = ext["KHR_materials_dispersion"];
+                        physMat->dispersion = dispExt.value("dispersion", 0.0f);
                     }
 
                     // KHR_materials_emissive_strength
