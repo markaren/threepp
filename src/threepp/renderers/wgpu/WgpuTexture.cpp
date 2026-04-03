@@ -99,7 +99,8 @@ WgpuTexture::WgpuTexture(WgpuRenderer& renderer, uint32_t width, uint32_t height
 }
 
 WgpuTexture::WgpuTexture(WgpuRenderer& renderer, uint32_t width, uint32_t height,
-                       Format format, Dimension dimension, uint32_t usage)
+                       Format format, Dimension dimension, uint32_t usage,
+                       uint32_t layers)
     : device_(static_cast<WGPUDevice>(renderer.nativeDevice())),
       queue_(static_cast<WGPUQueue>(renderer.nativeQueue())),
       width_(width), height_(height), format_(format),
@@ -107,10 +108,13 @@ WgpuTexture::WgpuTexture(WgpuRenderer& renderer, uint32_t width, uint32_t height
       bytesPerPixel_(::bytesPerPixel(format)) {
 
     bool isCube = (dimension == Dimension::Cube);
+    bool isArray = (dimension == Dimension::D2Array);
+    uint32_t depth = isCube ? 6u : (isArray ? layers : 1u);
+    layers_ = depth;
 
     WGPUTextureDescriptor texDesc{};
     texDesc.label = WGPUStringView{"gpu_texture", WGPU_STRLEN} ;
-    texDesc.size = {width, height, isCube ? 6u : 1u};
+    texDesc.size = {width, height, depth};
     texDesc.mipLevelCount = 1;
     texDesc.sampleCount = 1;
     texDesc.dimension = WGPUTextureDimension_2D;
@@ -121,11 +125,13 @@ WgpuTexture::WgpuTexture(WgpuRenderer& renderer, uint32_t width, uint32_t height
     WGPUTextureViewDescriptor viewDesc{};
     viewDesc.label = WGPUStringView{"gpu_tex_view", WGPU_STRLEN} ;
     viewDesc.format = toWGPUFormat(format);
-    viewDesc.dimension = isCube ? WGPUTextureViewDimension_Cube : WGPUTextureViewDimension_2D;
+    viewDesc.dimension = isCube ? WGPUTextureViewDimension_Cube
+                       : isArray ? WGPUTextureViewDimension_2DArray
+                       : WGPUTextureViewDimension_2D;
     viewDesc.baseMipLevel = 0;
     viewDesc.mipLevelCount = 1;
     viewDesc.baseArrayLayer = 0;
-    viewDesc.arrayLayerCount = isCube ? 6 : 1;
+    viewDesc.arrayLayerCount = depth;
     viewDesc.aspect = WGPUTextureAspect_All;
     view_ = wgpuTextureCreateView(texture_, &viewDesc);
 
@@ -149,7 +155,7 @@ WgpuTexture::WgpuTexture(WgpuTexture&& other) noexcept
     : device_(other.device_), queue_(other.queue_),
       texture_(other.texture_), view_(other.view_), sampler_(other.sampler_),
       width_(other.width_), height_(other.height_), format_(other.format_),
-      dimension_(other.dimension_), bytesPerPixel_(other.bytesPerPixel_) {
+      dimension_(other.dimension_), layers_(other.layers_), bytesPerPixel_(other.bytesPerPixel_) {
     other.texture_ = nullptr;
     other.view_ = nullptr;
     other.sampler_ = nullptr;
@@ -167,6 +173,7 @@ WgpuTexture& WgpuTexture::operator=(WgpuTexture&& other) noexcept {
         height_ = other.height_;
         format_ = other.format_;
         dimension_ = other.dimension_;
+        layers_ = other.layers_;
         bytesPerPixel_ = other.bytesPerPixel_;
         other.texture_ = nullptr;
         other.view_ = nullptr;
@@ -270,6 +277,41 @@ void WgpuTexture::writeFace(uint32_t face, const void* data, size_t size) {
         layout.bytesPerRow = paddedBytesPerRow;
         layout.rowsPerImage = height_;
 
+        WGPUExtent3D extent = {width_, height_, 1};
+        wgpuQueueWriteTexture(queue_, &dst, padded.data(), paddedSize, &layout, &extent);
+    }
+}
+
+void WgpuTexture::writeLayer(uint32_t layer, const void* data, size_t size) {
+    WGPUTexelCopyTextureInfo dst{};
+    dst.texture = texture_;
+    dst.mipLevel = 0;
+    dst.origin = {0, 0, layer};
+    dst.aspect = WGPUTextureAspect_All;
+
+    uint32_t unpaddedBytesPerRow = width_ * bytesPerPixel_;
+    uint32_t paddedBytesPerRow = ((unpaddedBytesPerRow + 255) / 256) * 256;
+
+    if (paddedBytesPerRow == unpaddedBytesPerRow) {
+        WGPUTexelCopyBufferLayout layout{};
+        layout.offset = 0;
+        layout.bytesPerRow = unpaddedBytesPerRow;
+        layout.rowsPerImage = height_;
+        WGPUExtent3D extent = {width_, height_, 1};
+        wgpuQueueWriteTexture(queue_, &dst, data, size, &layout, &extent);
+    } else {
+        size_t paddedSize = static_cast<size_t>(paddedBytesPerRow) * height_;
+        std::vector<uint8_t> padded(paddedSize, 0);
+        auto* src = static_cast<const uint8_t*>(data);
+        for (uint32_t row = 0; row < height_; row++) {
+            std::memcpy(padded.data() + row * paddedBytesPerRow,
+                        src + row * unpaddedBytesPerRow,
+                        unpaddedBytesPerRow);
+        }
+        WGPUTexelCopyBufferLayout layout{};
+        layout.offset = 0;
+        layout.bytesPerRow = paddedBytesPerRow;
+        layout.rowsPerImage = height_;
         WGPUExtent3D extent = {width_, height_, 1};
         wgpuQueueWriteTexture(queue_, &dst, padded.data(), paddedSize, &layout, &extent);
     }

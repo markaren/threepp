@@ -5,6 +5,8 @@
 #include "threepp/renderers/wgpu/WgpuComputePipeline.hpp"
 #include "threepp/renderers/wgpu/WgpuTexture.hpp"
 
+#include <tuple>
+
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/core/Object3D.hpp"
@@ -141,7 +143,7 @@ struct Bvh4NodeGpu {
 @group(0) @binding(3) var<storage, read> bvhNodes: array<Bvh4NodeGpu>;
 @group(0) @binding(4) var matData:    texture_2d<f32>;
 @group(0) @binding(5) var triData:       texture_2d<f32>;
-@group(0) @binding(6) var texAtlas:      texture_2d<f32>;
+@group(0) @binding(6) var texAtlas:      texture_2d_array<f32>;
 @group(0) @binding(7) var hitMeshRead:   texture_2d<f32>;
 @group(0) @binding(8) var hitMeshWrite:  texture_storage_2d<rgba16float, write>;
 @group(0) @binding(9)  var envTex:      texture_2d<f32>;
@@ -151,10 +153,10 @@ struct Bvh4NodeGpu {
 @group(0) @binding(15) var gBufRead:    texture_2d<f32>;
 @group(0) @binding(16) var bgTex:       texture_2d<f32>;
 
-const TILE_SIZE:   i32 = 1024;
 const MAX_TEX_SLOTS: i32 = 256;
 const EMPTY_CHILD: i32 = -2147483648;  // INT_MIN — sentinel for unused BVH4 child slots
-const ATLAS_COLS:  i32 = 8;
+
+fn TILE_SIZE() -> i32 { return i32(rt.spp.y); }
 
 struct Ray  { origin: vec3<f32>, dir: vec3<f32> }
 struct Isect { t: f32, u: f32, v: f32 }
@@ -236,8 +238,8 @@ fn applyWrap(u: f32, mode: i32) -> f32 {
 }
 
 fn wrapCoord(v: i32, mode: i32) -> i32 {
-    if (mode == 0) { return ((v % TILE_SIZE) + TILE_SIZE) % TILE_SIZE; } // repeat
-    return clamp(v, 0, TILE_SIZE - 1); // clamp / mirror (already wrapped by applyWrap)
+    if (mode == 0) { return ((v % TILE_SIZE()) + TILE_SIZE()) % TILE_SIZE(); } // repeat
+    return clamp(v, 0, TILE_SIZE() - 1); // clamp / mirror (already wrapped by applyWrap)
 }
 
 fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
@@ -245,11 +247,15 @@ fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
     let slot = enc / 16;
     let wS   = (enc % 16) / 4;
     let wT   = enc % 4;
-    let col  = slot % ATLAS_COLS;
-    let row  = slot / ATLAS_COLS;
-    let ox   = col * TILE_SIZE;
-    let oy   = row * TILE_SIZE;
-    let ts   = f32(TILE_SIZE);
+    let atlasCols = i32(textureDimensions(texAtlas, 0).x) / TILE_SIZE();
+    let slotsPerLayer = atlasCols * atlasCols;
+    let layer = slot / slotsPerLayer;
+    let localSlot = slot % slotsPerLayer;
+    let col  = localSlot % atlasCols;
+    let row  = localSlot / atlasCols;
+    let ox   = col * TILE_SIZE();
+    let oy   = row * TILE_SIZE();
+    let ts   = f32(TILE_SIZE());
     let wu   = applyWrap(uv.x, wS);
     let wv   = applyWrap(uv.y, wT);
     let fp  = vec2<f32>(wu, wv) * ts - 0.5;
@@ -259,10 +265,10 @@ fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
     let y1  = wrapCoord(i32(floor(fp.y)) + 1, wT);
     let wx  = fp.x - floor(fp.x);
     let wy  = fp.y - floor(fp.y);
-    let c00 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y0), 0);
-    let c10 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y0), 0);
-    let c01 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y1), 0);
-    let c11 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y1), 0);
+    let c00 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y0), layer, 0);
+    let c10 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y0), layer, 0);
+    let c01 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y1), layer, 0);
+    let c11 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y1), layer, 0);
     let blended = mix(mix(c00, c10, wx), mix(c01, c11, wx), wy);
     return blended.xyz;
 }
@@ -272,11 +278,15 @@ fn sampleAtlasAlpha(uv: vec2<f32>, texSlot: f32) -> f32 {
     let slot = enc / 16;
     let wS   = (enc % 16) / 4;
     let wT   = enc % 4;
-    let col  = slot % ATLAS_COLS;
-    let row  = slot / ATLAS_COLS;
-    let ox   = col * TILE_SIZE;
-    let oy   = row * TILE_SIZE;
-    let ts   = f32(TILE_SIZE);
+    let atlasCols = i32(textureDimensions(texAtlas, 0).x) / TILE_SIZE();
+    let slotsPerLayer = atlasCols * atlasCols;
+    let layer = slot / slotsPerLayer;
+    let localSlot = slot % slotsPerLayer;
+    let col  = localSlot % atlasCols;
+    let row  = localSlot / atlasCols;
+    let ox   = col * TILE_SIZE();
+    let oy   = row * TILE_SIZE();
+    let ts   = f32(TILE_SIZE());
     let wu   = applyWrap(uv.x, wS);
     let wv   = applyWrap(uv.y, wT);
     let fp  = vec2<f32>(wu, wv) * ts - 0.5;
@@ -286,10 +296,10 @@ fn sampleAtlasAlpha(uv: vec2<f32>, texSlot: f32) -> f32 {
     let y1  = wrapCoord(i32(floor(fp.y)) + 1, wT);
     let wx  = fp.x - floor(fp.x);
     let wy  = fp.y - floor(fp.y);
-    let a00 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y0), 0).w;
-    let a10 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y0), 0).w;
-    let a01 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y1), 0).w;
-    let a11 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y1), 0).w;
+    let a00 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y0), layer, 0).w;
+    let a10 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y0), layer, 0).w;
+    let a01 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y1), layer, 0).w;
+    let a11 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y1), layer, 0).w;
     return mix(mix(a00, a10, wx), mix(a01, a11, wx), wy);
 }
 
@@ -2449,8 +2459,8 @@ static std::vector<RtMeshEntry> expandMeshEntries(const std::vector<Mesh*>& mesh
 }
 
 /// Build texture atlas sized to actual slot usage (not MAX_TEX_SLOTS).
-/// Returns {pixel data, rows used (>= 1)}.
-static std::pair<std::vector<unsigned char>, int> buildAtlas(
+/// Returns {pixel data, rows, columns, tileSize}.
+static std::tuple<std::vector<unsigned char>, int, int, int> buildAtlas(
         const std::vector<Mesh*>& meshes,
         std::unordered_map<Texture*, int>& texSlotMap) {
     // First pass: count unique textures to determine atlas size.
@@ -2479,10 +2489,15 @@ static std::pair<std::vector<unsigned char>, int> buildAtlas(
             countTex(mwa->aoMap.get());
     }
 
-    const int rows = std::max(1, (slotCount + ATLAS_COLS - 1) / ATLAS_COLS);
+    // Layout: 8×8 grid of 1024px tiles per layer (8192×8192), multiple layers for >64 textures
+    const int slotsPerLayer = ATLAS_COLS * ATLAS_COLS; // 64
+    const int numLayers = std::max(1, (slotCount + slotsPerLayer - 1) / slotsPerLayer);
+    const int atlasCols = ATLAS_COLS;
+    const int rows = ATLAS_COLS; // square grid per layer
     const int atlasW = ATLAS_COLS * TILE_SIZE;
-    const int atlasH = rows * TILE_SIZE;
-    std::vector<unsigned char> atlas(atlasW * atlasH * 4, 255);
+    const int atlasH = ATLAS_COLS * TILE_SIZE;
+    const size_t layerBytes = static_cast<size_t>(atlasW) * atlasH * 4;
+    std::vector<unsigned char> atlas(layerBytes * numLayers, 255);
 
     auto addTexture = [&](Texture* tex, int& slot) {
         if (!tex || slot >= MAX_TEX_SLOTS) return;
@@ -2494,27 +2509,28 @@ static std::pair<std::vector<unsigned char>, int> buildAtlas(
         const int srcH = static_cast<int>(img.height);
         const int ch = static_cast<int>(src.size()) / (srcW * srcH);
 
-        const int col = slot % ATLAS_COLS;
-        const int row = slot / ATLAS_COLS;
+        const int layer = slot / slotsPerLayer;
+        const int localSlot = slot % slotsPerLayer;
+        const int col = localSlot % ATLAS_COLS;
+        const int row = localSlot / ATLAS_COLS;
         const int destX = col * TILE_SIZE;
         const int destY = row * TILE_SIZE;
+        unsigned char* layerBase = atlas.data() + layer * layerBytes;
 
         if (srcW == TILE_SIZE && srcH == TILE_SIZE && ch == 4) {
-            // Fast path: direct row memcpy when source matches tile dimensions and has 4 channels
             for (int ty = 0; ty < TILE_SIZE; ++ty) {
                 const int di = ((destY + ty) * atlasW + destX) * 4;
                 const int si = ty * srcW * 4;
-                std::memcpy(atlas.data() + di, src.data() + si, TILE_SIZE * 4);
+                std::memcpy(layerBase + di, src.data() + si, TILE_SIZE * 4);
             }
         } else {
-            // Precompute X mapping table to avoid repeated division in inner loop
             int xmap[TILE_SIZE];
             for (int tx = 0; tx < TILE_SIZE; ++tx)
                 xmap[tx] = tx * srcW / TILE_SIZE;
             for (int ty = 0; ty < TILE_SIZE; ++ty) {
                 const int sy = ty * srcH / TILE_SIZE;
                 const int srcRowOff = sy * srcW;
-                unsigned char* dst = atlas.data() + ((destY + ty) * atlasW + destX) * 4;
+                unsigned char* dst = layerBase + ((destY + ty) * atlasW + destX) * 4;
                 if (ch == 4) {
                     for (int tx = 0; tx < TILE_SIZE; ++tx) {
                         std::memcpy(dst + tx * 4, src.data() + (srcRowOff + xmap[tx]) * 4, 4);
@@ -2549,9 +2565,9 @@ static std::pair<std::vector<unsigned char>, int> buildAtlas(
         if (mwa && mwa->aoMap) addTexture(mwa->aoMap.get(), slot);
     }
     std::cerr << "[PathTracer] Atlas: " << slot << " unique textures in "
-              << ATLAS_COLS << "x" << rows << " grid (" << (ATLAS_COLS * TILE_SIZE)
-              << "x" << (rows * TILE_SIZE) << " px)" << std::endl;
-    return {std::move(atlas), rows};
+              << numLayers << " layer(s), " << ATLAS_COLS << "x" << ATLAS_COLS
+              << " grid (" << atlasW << "x" << atlasH << " px/layer)" << std::endl;
+    return {std::move(atlas), numLayers, ATLAS_COLS, TILE_SIZE};
 }
 
 // Encode texture slot index + wrap modes into a single float.
@@ -3390,7 +3406,9 @@ struct WgpuPathTracer::Impl {
     WgpuTexture triTex;
     WgpuTexture matTex;
     WgpuTexture texAtlasTex;
-    int atlasRows_ = 0;  // current atlas row count (0 = initial placeholder)
+    int atlasLayers_ = 0;  // current atlas row count (0 = initial placeholder)
+    int atlasCols_ = ATLAS_COLS;  // current atlas column count
+    int tileSize_ = TILE_SIZE;   // current tile size (may reduce for large texture counts)
     WgpuTexture accumA;
     WgpuTexture accumB;
     WgpuTexture* readAccum;
@@ -3509,7 +3527,9 @@ struct WgpuPathTracer::Impl {
     // Async scene build result — CPU work done on background thread
     struct AsyncBuildResult {
         std::vector<unsigned char> atlasData;
-        int atlasRows = 0;
+        int atlasLayers = 0;
+        int atlasCols = ATLAS_COLS;
+        int tileSize = TILE_SIZE;
         std::unordered_map<Texture*, int> texSlotMap;
         std::vector<float> triBuffer;
         std::vector<float> matBuffer;
@@ -3575,7 +3595,8 @@ struct WgpuPathTracer::Impl {
                  WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           texAtlasTex(r, 1u, 1u,
                       WgpuTexture::Format::RGBA8Unorm,
-                      WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
+                      WgpuTexture::Dimension::D2Array,
+                      WgpuTexture::TextureBinding | WgpuTexture::CopyDst, 1u),
           // Accumulation textures
           accumA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                  WgpuTexture::Format::RGBA16Float),
@@ -3971,9 +3992,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.meshes = meshes;
         r.entries = entries;
         r.texSlotMap.clear();
-        auto [atlasData, atlasRows] = buildAtlas(meshes, r.texSlotMap);
+        auto [atlasData, atlasLayers, atlasCols_, tileSize_] = buildAtlas(meshes, r.texSlotMap);
         r.atlasData = std::move(atlasData);
-        r.atlasRows = atlasRows;
+        r.atlasLayers = atlasLayers;
+        r.atlasCols = atlasCols_;
+        r.tileSize = tileSize_;
 
         int totalTris = 0;
         for (auto& entry : entries) {
@@ -4057,9 +4080,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.meshes = meshes;
         r.entries = entries;
         r.texSlotMap.clear();
-        auto [atlasData, atlasRows] = buildAtlas(meshes, r.texSlotMap);
+        auto [atlasData, atlasLayers, atlasCols_, tileSize_] = buildAtlas(meshes, r.texSlotMap);
         r.atlasData = std::move(atlasData);
-        r.atlasRows = atlasRows;
+        r.atlasLayers = atlasLayers;
+        r.atlasCols = atlasCols_;
+        r.tileSize = tileSize_;
 
         int totalTris = 0;
         for (auto& entry : entries) {
@@ -4211,16 +4236,26 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
 
         // Upload atlas
-        if (r.atlasRows != d.atlasRows_) {
-            d.atlasRows_ = r.atlasRows;
+        if (r.atlasLayers != d.atlasLayers_ || r.atlasCols != d.atlasCols_ || r.tileSize != d.tileSize_) {
+            d.atlasLayers_ = r.atlasLayers;
+            d.atlasCols_ = r.atlasCols;
+            d.tileSize_ = r.tileSize;
+            const int layerW = ATLAS_COLS * TILE_SIZE;
+            const int layerH = ATLAS_COLS * TILE_SIZE;
             d.texAtlasTex = WgpuTexture(d.renderer,
-                    ATLAS_COLS * TILE_SIZE, r.atlasRows * TILE_SIZE,
+                    layerW, layerH,
                     WgpuTexture::Format::RGBA8Unorm,
-                    WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
+                    WgpuTexture::Dimension::D2Array,
+                    WgpuTexture::TextureBinding | WgpuTexture::CopyDst,
+                    r.atlasLayers);
             d.rtPipeline.setTexture(6, d.texAtlasTex);
             d.rtRaycastPipeline.setTexture(6, d.texAtlasTex);
         }
-        d.texAtlasTex.write(r.atlasData.data(), r.atlasData.size());
+        // Upload atlas layers
+        const size_t layerBytes = static_cast<size_t>(ATLAS_COLS * TILE_SIZE) * (ATLAS_COLS * TILE_SIZE) * 4;
+        for (int layer = 0; layer < r.atlasLayers; ++layer) {
+            d.texAtlasTex.writeLayer(layer, r.atlasData.data() + layer * layerBytes, layerBytes);
+        }
 
         // Upload geometry + BVH
         d.bvhNodeBuf.write(d.bvhNodeCpuBuf.data(), d.numBvhNodes_ * BVH4_GPU_U32S * sizeof(uint32_t));
@@ -4365,6 +4400,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.triCount[0] = static_cast<float>(d.triCount_);
     u.mode[0] = (d.mode_ == Mode::PathTracer) ? 1.f : 0.f;
     u.spp[0] = static_cast<float>(d.spp_);
+    u.spp[1] = static_cast<float>(d.tileSize_);
     u.movedMeshBits[0] = movedBits[0];
     u.movedMeshBits[1] = movedBits[1];
 

@@ -31,6 +31,7 @@ namespace threepp {
 
         enum class Dimension {
             D2,
+            D2Array,
             Cube
         };
 
@@ -50,10 +51,11 @@ namespace threepp {
         WgpuTexture(WgpuRenderer& renderer, uint32_t width, uint32_t height,
                    Format format, uint32_t usage = Storage | TextureBinding | CopyDst);
 
-        /// Create a GPU texture with explicit dimension (2D or Cube).
+        /// Create a GPU texture with explicit dimension (2D, 2DArray, or Cube).
         WgpuTexture(WgpuRenderer& renderer, uint32_t width, uint32_t height,
                    Format format, Dimension dimension,
-                   uint32_t usage = TextureBinding | CopyDst);
+                   uint32_t usage = TextureBinding | CopyDst,
+                   uint32_t layers = 0);
 
         ~WgpuTexture();
 
@@ -71,6 +73,9 @@ namespace threepp {
         /// @param size Size of data in bytes
         void writeFace(uint32_t face, const void* data, size_t size);
 
+        /// Upload CPU data to a single layer of a 2D array texture.
+        void writeLayer(uint32_t layer, const void* data, size_t size);
+
         /// Get the raw WGPUTexture handle.
         [[nodiscard]] WGPUTexture texture() const { return texture_; }
 
@@ -84,6 +89,7 @@ namespace threepp {
         [[nodiscard]] uint32_t height() const { return height_; }
         [[nodiscard]] Format format() const { return format_; }
         [[nodiscard]] Dimension dimension() const { return dimension_; }
+        [[nodiscard]] uint32_t layers() const { return layers_; }
 
     private:
         WGPUDevice device_ = nullptr;
@@ -95,6 +101,7 @@ namespace threepp {
         uint32_t height_ = 0;
         Format format_;
         Dimension dimension_ = Dimension::D2;
+        uint32_t layers_ = 1;
         uint32_t bytesPerPixel_ = 0;
 
         void release();

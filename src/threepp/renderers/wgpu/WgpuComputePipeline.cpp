@@ -46,6 +46,7 @@ struct WgpuComputePipeline::BindingInfo {
     // For textures
     WGPUTextureView textureView = nullptr;
     WGPUTextureFormat textureFormat = WGPUTextureFormat_Undefined;
+    WGPUTextureViewDimension textureDimension = WGPUTextureViewDimension_2D;
     // For buffers
     WGPUBuffer buffer = nullptr;
     size_t bufferSize = 0;
@@ -131,7 +132,7 @@ struct WgpuComputePipeline::Impl {
                                        info.textureFormat == WGPUTextureFormat_RGBA8Unorm);
                     e.texture.sampleType = filterable ? WGPUTextureSampleType_Float
                                                       : WGPUTextureSampleType_UnfilterableFloat;
-                    e.texture.viewDimension = WGPUTextureViewDimension_2D;
+                    e.texture.viewDimension = info.textureDimension;
                     break;
                 }
                 case BindingType::UniformBuffer:
@@ -239,10 +240,13 @@ void WgpuComputePipeline::setStorageTexture(uint32_t binding, WgpuTexture& textu
 
 void WgpuComputePipeline::setTexture(uint32_t binding, WgpuTexture& texture) {
     auto fmt = toWGPUFormat(texture.format());
+    auto dim = (texture.dimension() == WgpuTexture::Dimension::D2Array)
+             ? WGPUTextureViewDimension_2DArray : WGPUTextureViewDimension_2D;
     auto it = impl_->bindings.find(binding);
     if (it == impl_->bindings.end() ||
         it->second.type != BindingType::Texture ||
-        it->second.textureFormat != fmt) {
+        it->second.textureFormat != fmt ||
+        it->second.textureDimension != dim) {
         impl_->pipelineBuilt = false;
         impl_->layoutDirty = true;
     }
@@ -250,6 +254,7 @@ void WgpuComputePipeline::setTexture(uint32_t binding, WgpuTexture& texture) {
     info.type = BindingType::Texture;
     info.textureView = texture.view();
     info.textureFormat = fmt;
+    info.textureDimension = dim;
     impl_->bindings[binding] = info;
 }
 
