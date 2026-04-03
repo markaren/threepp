@@ -82,12 +82,12 @@ int main(int argc, char** argv) {
     WgpuRenderer renderer(canvas);
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
-    pathTracer.setEnvIntensity(1.0f);
+    pathTracer.setEnvIntensity(0.1f);
     pathTracer.setExposure(1.0f);
     pathTracer.setSamplesPerPixel(2);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setFoveatedRendering(false);
-    pathTracer.setMaxBounces(5);
+    pathTracer.setMaxBounces(4);
     pathTracer.setMode(WgpuPathTracer::Mode::Raytracer);
 
     ImageLoader imgLoader;
@@ -251,6 +251,8 @@ int main(int argc, char** argv) {
             fpsAccum = 0.f;
             fpsFrames = 0;
         }
+
+        light->visible = renderMode == 2;
 
         // Check async model load
         if (loadPending && modelFuture.valid() &&

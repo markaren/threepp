@@ -13,6 +13,7 @@
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/lights/SpotLight.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
+#include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Matrix4.hpp"
@@ -48,7 +49,7 @@ constexpr int MAX_TEX_SLOTS = 256;
 constexpr int TILE_SIZE = 1024;
 constexpr int ATLAS_COLS = 8;  // tiles per row in atlas (8 × 1024 = 8192 wide, grows tall)
 constexpr int TRI_TEX_HEIGHT = 12;
-constexpr int MAT_TEX_HEIGHT = 16;
+constexpr int MAT_TEX_HEIGHT = 18;
 constexpr int TEX_PAGE_WIDTH = 8192;
 
 // Initial placeholder capacities — grown dynamically as scenes demand more.
@@ -178,6 +179,10 @@ struct Hit  {
     clearcoat:        f32,
     clearcoatAlpha:   f32,
     ao:               f32,
+    sheenColor:       vec3<f32>,
+    sheenRoughness:   f32,
+    specularColor:    vec3<f32>,
+    specularIntensity: f32,
 }
 
 fn pcg(v: u32) -> u32 {
@@ -208,6 +213,15 @@ fn schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
 }
 )"
 R"(
+// sRGB → linear conversion (for baseColor and emissive textures)
+fn srgbToLinear(c: vec3<f32>) -> vec3<f32> {
+    return select(
+        pow((c + 0.055) / 1.055, vec3<f32>(2.4)),
+        c / 12.92,
+        c <= vec3<f32>(0.04045)
+    );
+}
+
 // Decode encoded texture slot: slot*16 + wrapS*4 + wrapT
 // Wrap modes: 0=repeat, 1=clamp, 2=mirror
 fn applyWrap(u: f32, mode: i32) -> f32 {
@@ -376,22 +390,57 @@ fn aabbDist4(nd: Bvh4NodeGpu, ray: Ray, invD: vec3<f32>, tmax: f32) -> vec4<f32>
     return select(vec4<f32>(TRI_MISS), nearClamp, hit & inRange);
 }
 
+// Compute F0 incorporating PBR specular extension.
+// glTF: dielectric F0 = specularIntensity * specularColor * 0.04
+fn computeF0(albedo: vec3<f32>, metalness: f32,
+             specularColor: vec3<f32>, specularIntensity: f32) -> vec3<f32> {
+    let dielectricF0 = vec3<f32>(0.04) * specularColor * specularIntensity;
+    return mix(dielectricF0, albedo, metalness);
+}
+
 // BRDF evaluation: GGX specular + Lambertian diffuse.
 struct BrdfResult { f_diff: vec3<f32>, f_spec: vec3<f32> }
 fn evalBrdf(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
-            albedo: vec3<f32>, metalness: f32, alpha: f32) -> BrdfResult {
+            albedo: vec3<f32>, metalness: f32, alpha: f32,
+            F0: vec3<f32>) -> BrdfResult {
     let hv    = normalize(wo + wi);
     let NdotH = max(0.0, dot(n, hv));
     let NdotV = max(0.001, dot(n, wo));
     let NdotL = max(0.001, abs(dot(n, wi)));
     let VdotH = max(0.0, dot(wo, hv));
-    let F0    = mix(vec3<f32>(0.04), albedo, metalness);
     let D     = ggxD(NdotH, alpha);
     let F     = schlick(VdotH, F0);
     let G     = ggxG1(NdotV, alpha) * ggxG1(NdotL, alpha);
     return BrdfResult(
         (vec3<f32>(1.0) - F) * albedo * (1.0 - metalness) / PI,
         D * F * G / max(4.0 * NdotV * NdotL, 1e-6));
+}
+
+// Charlie sheen NDF (Estevez & Kulla, 2017)
+fn charlieD(NdotH: f32, alpha: f32) -> f32 {
+    let a2 = alpha * alpha;
+    let sinTheta2 = 1.0 - NdotH * NdotH;
+    let sinTheta  = max(sqrt(sinTheta2), 1e-6);
+    let invA  = 1.0 / a2;
+    return (2.0 + invA) * pow(sinTheta, invA) / (2.0 * PI);
+}
+
+// Ashikhmin visibility for sheen (Neubelt & Pettineo, 2013)
+fn sheenV(NdotV: f32, NdotL: f32) -> f32 {
+    return 1.0 / (4.0 * (NdotL + NdotV - NdotL * NdotV));
+}
+
+// Evaluate sheen lobe: returns sheen contribution for given directions
+fn evalSheen(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
+             sheenColor: vec3<f32>, sheenRoughness: f32) -> vec3<f32> {
+    let hv    = normalize(wo + wi);
+    let NdotH = max(0.0, dot(n, hv));
+    let NdotV = max(0.001, dot(n, wo));
+    let NdotL = max(0.001, dot(n, wi));
+    let alpha = max(sheenRoughness * sheenRoughness, 1e-4);
+    let D = charlieD(NdotH, alpha);
+    let V = sheenV(NdotV, NdotL);
+    return sheenColor * D * V;
 }
 
 // Lightweight intersection — geometry + alpha test only.
@@ -462,6 +511,8 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0;
     h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
     h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0; h.ao = 1.0;
+    h.sheenColor = vec3<f32>(0.0); h.sheenRoughness = 0.0;
+    h.specularColor = vec3<f32>(1.0); h.specularIntensity = 1.0;
     h.meshIdx = -1;
 
     let ti = rh.triIdx;
@@ -577,7 +628,7 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     var emissive = mat2.xyz;
     let emissiveSlot = mat5.z;
     if (emissiveSlot >= 0.0) {
-        emissive *= sampleAtlas(emUV, emissiveSlot);
+        emissive *= srgbToLinear(sampleAtlas(emUV, emissiveSlot));
     }
     h.emissive = emissive;
 
@@ -587,6 +638,16 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     if (aoSlot >= 0.0) {
         h.ao = sampleAtlas(aoUV, aoSlot).x;
     }
+
+    // Sheen (row 16)
+    let mat16 = textureLoad(matData, vec2<i32>(matIdx, 16), 0);
+    h.sheenColor     = mat16.xyz;
+    h.sheenRoughness = mat16.w;
+
+    // PBR specular (row 17)
+    let mat17 = textureLoad(matData, vec2<i32>(matIdx, 17), 0);
+    h.specularColor     = mat17.xyz;
+    h.specularIntensity = mat17.w;
 
     return h;
 }
@@ -702,6 +763,8 @@ fn sceneHit(ray: Ray) -> Hit {
         var h: Hit; h.t = 1e30; h.meshIdx = -1; h.transmission = 0.0; h.ior = 1.5;
         h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
         h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0; h.ao = 1.0;
+        h.sheenColor = vec3<f32>(0.0); h.sheenRoughness = 0.0;
+        h.specularColor = vec3<f32>(1.0); h.specularIntensity = 1.0;
         return h;
     }
     return loadHitMaterial(rh, ray);
@@ -778,7 +841,9 @@ constexpr const char* csRaytraceWGSL = R"(
 
 fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
     var albedo = h.albedo;
-    if (h.texSlot >= 0.0) { albedo = sampleAtlas(h.uv, h.texSlot); }
+    if (h.texSlot >= 0.0) { albedo = srgbToLinear(sampleAtlas(h.uv, h.texSlot)); }
+    // Unlit: return flat color, no lighting
+    if (h.shininess < 0.0) { return albedo; }
     // Environment diffuse fill light (sky gradient, solid color, or equirect)
     var col = albedo * sampleEnv(h.normal) * rt.envIntensity.x * (1.0 - h.metalness) * h.ao;
     let count = i32(rt.lightCount.x);
@@ -815,14 +880,21 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
             if (sh.t >= ld - 1e-3) { break; }
             if (sh.transmission < 0.01) { shAtten = vec3<f32>(0.0); break; }
             var shAlb = sh.albedo;
-            if (sh.texSlot >= 0.0) { shAlb = sampleAtlas(sh.uv, sh.texSlot); }
+            if (sh.texSlot >= 0.0) { shAlb = srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
             shAtten *= shAlb * sh.transmission;
             sr.origin = sh.point - sh.normal * 1e-3;
         }
         if (shAtten.x + shAtten.y + shAtten.z > 0.001) {
             let NdotL = max(0.0, dot(h.normal, ln));
-            let brdf = evalBrdf(wo_s, ln, h.normal, albedo, h.metalness, h.shininess);
-            col += shAtten * lc * (brdf.f_diff + brdf.f_spec) * NdotL;
+            let F0_s = computeF0(albedo, h.metalness, h.specularColor, h.specularIntensity);
+            let brdf = evalBrdf(wo_s, ln, h.normal, albedo, h.metalness, h.shininess, F0_s);
+            var lobeSum = brdf.f_diff + brdf.f_spec;
+            // Sheen lobe
+            let sheenLum = dot(h.sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
+            if (sheenLum > 0.001) {
+                lobeSum += evalSheen(wo_s, ln, h.normal, h.sheenColor, h.sheenRoughness);
+            }
+            col += shAtten * lc * lobeSum * NdotL;
         }
     }
     return clamp(col + h.emissive, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -871,7 +943,7 @@ fn raytrace(ray: Ray) -> vec3<f32> {
 
     // Specular mirror bounces (two levels, unrolled — deterministic, no seed needed).
     if (h0.shininess < 0.05 || (h0.metalness > 0.5 && h0.shininess < 0.3)) {
-        let F0_0   = mix(vec3<f32>(0.04), h0.albedo, h0.metalness);
+        let F0_0   = computeF0(h0.albedo, h0.metalness, h0.specularColor, h0.specularIntensity);
         let NdotV0 = max(0.001, dot(h0.normal, normalize(-ray.dir)));
         let roughFade = max(0.0, 1.0 - h0.shininess * 10.0);
         let k0     = schlick(NdotV0, F0_0) * roughFade;
@@ -888,7 +960,7 @@ fn raytrace(ray: Ray) -> vec3<f32> {
             var base1 = shade(h1, r1.dir);
             // Second specular bounce: reflections-of-reflections
             if (h1.shininess < 0.5) {
-                let F0_1   = mix(vec3<f32>(0.04), h1.albedo, h1.metalness);
+                let F0_1   = computeF0(h1.albedo, h1.metalness, h1.specularColor, h1.specularIntensity);
                 let NdotV1 = max(0.001, dot(h1.normal, normalize(-r1.dir)));
                 let k1     = schlick(NdotV1, F0_1) * max(0.0, 1.0 - h1.shininess * 2.0);
                 var r2: Ray;
@@ -896,7 +968,7 @@ fn raytrace(ray: Ray) -> vec3<f32> {
                 r2.dir    = reflect(r1.dir, h1.normal);
                 let h2    = sceneHit(r2);
                 var rc2   = select(shade(h2, r2.dir), sampleEnv(r2.dir) * rt.envIntensity.x, h2.t >= 1e30);
-                rc2   = max(rc2, mix(vec3<f32>(0.04), h1.albedo, h1.metalness) * 0.08);
+                rc2   = max(rc2, F0_1 * 0.08);
                 base1 = base1 * (vec3<f32>(1.0) - k1) + rc2 * k1;
             }
             rc1 = base1;
@@ -1186,11 +1258,18 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         }
 
         var albedo = h.albedo;
-        if (h.texSlot >= 0.0) { albedo = sampleAtlas(h.uv, h.texSlot); }
+        if (h.texSlot >= 0.0) { albedo = srgbToLinear(sampleAtlas(h.uv, h.texSlot)); }
 
         if (i == 0) { *primaryAlbedo = albedo; }
 
+        // Unlit: return flat color, no bouncing
+        if (h.shininess < 0.0) {
+            radiance += throughput * albedo;
+            break;
+        }
+
         let wo = normalize(-ray.dir);
+        let F0_h = computeF0(albedo, h.metalness, h.specularColor, h.specularIntensity);
 
         // --- Analytical light NEE ---
         let lcount = i32(rt.lightCount.x);
@@ -1226,15 +1305,18 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                 if (isMeshMoved(sh.meshIdx)) { *touchedMoved = true; }
                 if (sh.transmission < 0.01) { shadowAtten = vec3<f32>(0.0); break; }
                 var shAlbedo = sh.albedo;
-                if (sh.texSlot >= 0.0) { shAlbedo = sampleAtlas(sh.uv, sh.texSlot); }
+                if (sh.texSlot >= 0.0) { shAlbedo = srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
                 shadowAtten *= shAlbedo * sh.transmission;
                 sr.origin = sh.point - sh.normal * 1e-3;
             }
             if (shadowAtten.x + shadowAtten.y + shadowAtten.z > 0.001) {
                 let NdotL = dot(h.normal, ln);
                 if (NdotL <= 0.0) { continue; }
-                let brdf = evalBrdf(wo, ln, h.normal, albedo, h.metalness, h.shininess);
-                radiance += throughput * shadowAtten * (brdf.f_diff + brdf.f_spec) * NdotL * lc;
+                let brdf = evalBrdf(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h);
+                var lobeSum = brdf.f_diff + brdf.f_spec;
+                let sheenLum2 = dot(h.sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
+                if (sheenLum2 > 0.001) { lobeSum += evalSheen(wo, ln, h.normal, h.sheenColor, h.sheenRoughness); }
+                radiance += throughput * shadowAtten * lobeSum * NdotL * lc;
             }
         }
 )"
@@ -1280,11 +1362,14 @@ R"(
                     let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
 
                     let pdf = (ePower * dist * dist) / (totalPower * eArea * cosLight);
-                    let brdf = evalBrdf(wo, ln, h.normal, albedo, h.metalness, h.shininess);
+                    let brdf = evalBrdf(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h);
+                    var lobeSum3 = brdf.f_diff + brdf.f_spec;
+                    let sheenLum3 = dot(h.sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
+                    if (sheenLum3 > 0.001) { lobeSum3 += evalSheen(wo, ln, h.normal, h.sheenColor, h.sheenRoughness); }
 
                     let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
                     let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);
-                    radiance += throughput * (brdf.f_diff + brdf.f_spec) * NdotL * emColor * w_light / pdf;
+                    radiance += throughput * lobeSum3 * NdotL * emColor * w_light / pdf;
                 }
             }
         }
@@ -1300,11 +1385,14 @@ R"(
                 sr.origin = h.point + h.normal * 1e-3;
                 sr.dir    = envDir;
                 if (!sceneOccluded(sr, 1e30)) {
-                    let brdf = evalBrdf(wo, envDir, h.normal, albedo, h.metalness, h.shininess);
+                    let brdf = evalBrdf(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h);
+                    var lobeSum4 = brdf.f_diff + brdf.f_spec;
+                    let sheenLum4 = dot(h.sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
+                    if (sheenLum4 > 0.001) { lobeSum4 += evalSheen(wo, envDir, h.normal, h.sheenColor, h.sheenRoughness); }
                     let envCol = sampleEnv(envDir) * rt.envIntensity.x;
                     let pdf_brdf_env = brdfPdf(wo, envDir, h.normal, h.shininess, h.metalness);
                     let w_env = envPdf / max(envPdf + pdf_brdf_env, 1e-8);
-                    radiance += throughput * (brdf.f_diff + brdf.f_spec) * envNdotL * envCol * w_env / envPdf;
+                    radiance += throughput * lobeSum4 * envNdotL * envCol * w_env / envPdf;
                 }
             }
         }
@@ -1342,6 +1430,17 @@ R"(
             }
             // Passed through clearcoat — attenuate base by energy not reflected
             throughput *= (1.0 - ccWeight) / (1.0 - ccProb);
+        }
+
+        // Sheen lobe: soft velvet-like reflection at grazing angles
+        let sheenLumPT = dot(h.sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
+        if (sheenLumPT > 0.001 && h.transmission < 0.01) {
+            let sheenAlpha = max(h.sheenRoughness * h.sheenRoughness, 1e-4);
+            // Approximate sheen reflectance at grazing angle for energy conservation
+            let NdotV_sh = max(0.001, dot(wo, h.normal));
+            let sheenFresnel = sheenLumPT * pow(1.0 - NdotV_sh, 3.0);
+            // Attenuate base layer by sheen energy
+            throughput *= (1.0 - sheenFresnel);
         }
 
         // Transmission lobe: refract through transmissive surfaces
@@ -1396,7 +1495,7 @@ R"(
             continue;
         }
 
-        let F0_b = mix(vec3<f32>(0.04), albedo, h.metalness);
+        let F0_b = F0_h;
         var wi_b: vec3<f32>;
         let p_spec = mix(0.5, 0.98, h.metalness);
         if (rand(seed) < p_spec) {
@@ -2437,6 +2536,10 @@ struct ExtractedMaterial {
     float attenuationDistance = 0.f;
     float clearcoat = 0.f;
     float clearcoatRoughness = 0.f;
+    Color sheenColor{0.f, 0.f, 0.f};
+    float sheenRoughness = 0.f;
+    float specularIntensity = 1.f;
+    Color specularColor{1.f, 1.f, 1.f};
 };
 
 static ExtractedMaterial extractMaterial(const Material* mat) {
@@ -2444,6 +2547,11 @@ static ExtractedMaterial extractMaterial(const Material* mat) {
     if (!mat) return m;
     if (auto* c = dynamic_cast<const MaterialWithColor*>(mat))
         m.albedo = c->color;
+    // MeshBasicMaterial → unlit: shininess = -1 signals no lighting
+    if (dynamic_cast<const MeshBasicMaterial*>(mat)) {
+        m.shininess = -1.f;
+        return m;
+    }
     if (auto* r = dynamic_cast<const MaterialWithRoughness*>(mat)) {
         const float rough = std::max(0.f, std::min(1.f, r->roughness));
         m.shininess = std::max(1e-4f, rough * rough);
@@ -2469,6 +2577,14 @@ static ExtractedMaterial extractMaterial(const Material* mat) {
         m.clearcoat = std::clamp(cc->clearcoat, 0.f, 1.f);
         const float ccr = std::clamp(cc->clearcoatRoughness, 0.f, 1.f);
         m.clearcoatRoughness = std::max(1e-4f, ccr * ccr);
+    }
+    if (auto* sh = dynamic_cast<const MaterialWithSheen*>(mat)) {
+        m.sheenColor = sh->sheenColor;
+        m.sheenRoughness = std::clamp(sh->sheenRoughness, 0.f, 1.f);
+    }
+    if (auto* sp = dynamic_cast<const MaterialWithPbrSpecular*>(mat)) {
+        m.specularIntensity = std::clamp(sp->specularIntensity, 0.f, 1.f);
+        m.specularColor = sp->specularColor;
     }
     m.alphaTest = mat->alphaTest;
     return m;
@@ -2626,6 +2742,13 @@ static int buildGeometryBuffers(
             writeUvTransform(10, mnm ? mnm->normalMap.get() : nullptr);      // normal
             writeUvTransform(12, mwe ? mwe->emissiveMap.get() : nullptr);    // emissive
             writeUvTransform(14, mwa ? mwa->aoMap.get() : nullptr);          // occlusion
+
+            // Row 16: sheen (r, g, b, roughness)
+            setTexel(matBuffer, maxMats, matIdx, 16,
+                    em.sheenColor.r, em.sheenColor.g, em.sheenColor.b, em.sheenRoughness);
+            // Row 17: PBR specular (r, g, b, intensity)
+            setTexel(matBuffer, maxMats, matIdx, 17,
+                    em.specularColor.r, em.specularColor.g, em.specularColor.b, em.specularIntensity);
         }
 
         const int meshIdx = meshCount++;

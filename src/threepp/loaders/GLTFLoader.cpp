@@ -16,6 +16,7 @@
 #include <threepp/lights/PointLight.hpp>
 #include <threepp/lights/SpotLight.hpp>
 #include <threepp/loaders/ImageLoader.hpp>
+#include <threepp/materials/MeshBasicMaterial.hpp>
 #include <threepp/materials/MeshPhysicalMaterial.hpp>
 #include <threepp/objects/Bone.hpp>
 #include <threepp/objects/Skeleton.hpp>
@@ -476,6 +477,36 @@ namespace threepp {
 
                 const auto& matDef = gltf["materials"][matIdx];
 
+                // KHR_materials_unlit → MeshBasicMaterial
+                if (matDef.contains("extensions") &&
+                    matDef["extensions"].contains("KHR_materials_unlit")) {
+                    auto basicMat = MeshBasicMaterial::create();
+                    basicMat->name = matDef.value("name", "");
+                    if (matDef.contains("pbrMetallicRoughness")) {
+                        const auto& pbr = matDef["pbrMetallicRoughness"];
+                        if (pbr.contains("baseColorFactor")) {
+                            auto f = pbr["baseColorFactor"].get<std::vector<float>>();
+                            basicMat->color = Color(f[0], f[1], f[2]);
+                            if (f.size() > 3) basicMat->opacity = f[3];
+                        }
+                        if (pbr.contains("baseColorTexture")) {
+                            int ti = pbr["baseColorTexture"]["index"].get<int>();
+                            basicMat->map = applyTextureTransform(pbr["baseColorTexture"], loadTexture(ti));
+                        }
+                    }
+                    std::string alphaMode = matDef.value("alphaMode", "OPAQUE");
+                    if (alphaMode == "BLEND") {
+                        basicMat->transparent = true;
+                    } else if (alphaMode == "MASK") {
+                        basicMat->alphaTest = matDef.value("alphaCutoff", 0.5f);
+                    }
+                    if (matDef.value("doubleSided", false)) {
+                        basicMat->side = Side::Double;
+                    }
+                    materialCache[matIdx] = basicMat;
+                    return basicMat;
+                }
+
                 // Check if we need MeshPhysicalMaterial (for transmission, clearcoat, etc.)
                 bool needsPhysical = false;
                 if (matDef.contains("extensions")) {
@@ -589,6 +620,26 @@ namespace threepp {
                     if (ext.contains("KHR_materials_emissive_strength")) {
                         float strength = ext["KHR_materials_emissive_strength"].value("emissiveStrength", 1.0f);
                         mat->emissiveIntensity = strength;
+                    }
+
+                    // KHR_materials_sheen
+                    if (ext.contains("KHR_materials_sheen")) {
+                        const auto& sh = ext["KHR_materials_sheen"];
+                        if (sh.contains("sheenColorFactor")) {
+                            auto c = sh["sheenColorFactor"];
+                            physMat->sheenColor = Color(c[0].get<float>(), c[1].get<float>(), c[2].get<float>());
+                        }
+                        physMat->sheenRoughness = sh.value("sheenRoughnessFactor", 0.0f);
+                    }
+
+                    // KHR_materials_specular
+                    if (ext.contains("KHR_materials_specular")) {
+                        const auto& sp = ext["KHR_materials_specular"];
+                        physMat->specularIntensity = sp.value("specularFactor", 1.0f);
+                        if (sp.contains("specularColorFactor")) {
+                            auto c = sp["specularColorFactor"];
+                            physMat->specularColor = Color(c[0].get<float>(), c[1].get<float>(), c[2].get<float>());
+                        }
                     }
 
                     // KHR_materials_clearcoat

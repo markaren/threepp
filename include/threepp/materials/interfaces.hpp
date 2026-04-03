@@ -210,7 +210,15 @@ namespace threepp {
 
     struct MaterialWithSheen: virtual Material {
 
-        std::optional<Color> sheen;
+        Color sheenColor{0, 0, 0};
+        float sheenRoughness{0.f};
+        std::optional<Color> sheen;  // legacy
+    };
+
+    struct MaterialWithPbrSpecular: virtual Material {
+
+        float specularIntensity{1.f};
+        Color specularColor{1, 1, 1};
     };
 
     struct MaterialWithCombine: virtual Material {
