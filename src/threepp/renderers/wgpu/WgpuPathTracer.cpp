@@ -494,7 +494,7 @@ fn testTriangle(ray: Ray, ti: i32, rh: ptr<function, RawHit>) {
             if (alpha < alphaTest) { return; }
         } else {
             // Stochastic alpha: varies per frame so it converges over accumulation
-            let h = pcg(pcg(u32(ti)) ^ pcg(bitcast<u32>(isect.t)) ^ u32(rt.params.y));
+            let h = pcg(pcg(u32(ti)) ^ pcg(bitcast<u32>(isect.t)));
             let rng = f32(h) / 4294967295.0;
             if (rng > alpha) { return; }
         }
