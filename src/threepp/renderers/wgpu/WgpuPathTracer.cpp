@@ -235,6 +235,11 @@ fn applyWrap(u: f32, mode: i32) -> f32 {
     return fract(u);
 }
 
+fn wrapCoord(v: i32, mode: i32) -> i32 {
+    if (mode == 0) { return ((v % TILE_SIZE) + TILE_SIZE) % TILE_SIZE; } // repeat
+    return clamp(v, 0, TILE_SIZE - 1); // clamp / mirror (already wrapped by applyWrap)
+}
+
 fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
     let enc  = i32(texSlot);
     let slot = enc / 16;
@@ -248,10 +253,10 @@ fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
     let wu   = applyWrap(uv.x, wS);
     let wv   = applyWrap(uv.y, wT);
     let fp  = vec2<f32>(wu, wv) * ts - 0.5;
-    let x0  = clamp(i32(floor(fp.x)), 0, TILE_SIZE - 1);
-    let y0  = clamp(i32(floor(fp.y)), 0, TILE_SIZE - 1);
-    let x1  = clamp(x0 + 1,          0, TILE_SIZE - 1);
-    let y1  = clamp(y0 + 1,          0, TILE_SIZE - 1);
+    let x0  = wrapCoord(i32(floor(fp.x)), wS);
+    let y0  = wrapCoord(i32(floor(fp.y)), wT);
+    let x1  = wrapCoord(i32(floor(fp.x)) + 1, wS);
+    let y1  = wrapCoord(i32(floor(fp.y)) + 1, wT);
     let wx  = fp.x - floor(fp.x);
     let wy  = fp.y - floor(fp.y);
     let c00 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y0), 0);
@@ -275,10 +280,10 @@ fn sampleAtlasAlpha(uv: vec2<f32>, texSlot: f32) -> f32 {
     let wu   = applyWrap(uv.x, wS);
     let wv   = applyWrap(uv.y, wT);
     let fp  = vec2<f32>(wu, wv) * ts - 0.5;
-    let x0  = clamp(i32(floor(fp.x)), 0, TILE_SIZE - 1);
-    let y0  = clamp(i32(floor(fp.y)), 0, TILE_SIZE - 1);
-    let x1  = clamp(x0 + 1,          0, TILE_SIZE - 1);
-    let y1  = clamp(y0 + 1,          0, TILE_SIZE - 1);
+    let x0  = wrapCoord(i32(floor(fp.x)), wS);
+    let y0  = wrapCoord(i32(floor(fp.y)), wT);
+    let x1  = wrapCoord(i32(floor(fp.x)) + 1, wS);
+    let y1  = wrapCoord(i32(floor(fp.y)) + 1, wT);
     let wx  = fp.x - floor(fp.x);
     let wy  = fp.y - floor(fp.y);
     let a00 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y0), 0).w;
@@ -884,7 +889,7 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
 
         var sr: Ray; sr.origin = h.point + h.normal * 1e-3; sr.dir = ln;
         var shAtten = vec3<f32>(1.0);
-        for (var si = 0; si < 4; si++) {
+        for (var si = 0; si < 2; si++) {
             let sh = sceneHitShadow(sr, ld - 1e-3);
             if (sh.t >= ld - 1e-3) { break; }
             if (sh.transmission < 0.01) { shAtten = vec3<f32>(0.0); break; }
@@ -911,80 +916,79 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
 )"
 R"(
 fn raytrace(ray: Ray) -> vec3<f32> {
-    let h0 = sceneHit(ray);
-    if (h0.t >= 1e30) { return sampleBackground(ray.dir); }
+    var r = ray;
+    var col = vec3<f32>(0.0);
+    var throughput = vec3<f32>(1.0);
 
-    // Transmission: one-level refraction for raytracer mode (smooth surfaces only)
-    if (h0.transmission > 0.5 && h0.shininess < 0.1) {
-        let glassTint = mix(h0.albedo, vec3<f32>(1.0), h0.transmission);
-        let entering = h0.frontFace > 0.5;
-        let eta = select(h0.ior, 1.0 / h0.ior, entering);
-        let refDir = refract(normalize(ray.dir), h0.normal, eta);
-        if (length(refDir) > 0.001) {
-            var rr: Ray;
-            rr.origin = h0.point - h0.normal * 1e-3;
-            rr.dir    = refDir;
-            let hr = sceneHit(rr);
-            if (hr.t >= 1e30) { return sampleBackground(rr.dir) * glassTint; }
-            // Beer's law attenuation through the medium
+    for (var bounce = 0; bounce < 3; bounce++) {
+        let h = sceneHit(r);
+
+        // Miss: sample background (primary) or environment (bounced)
+        if (h.t >= 1e30) {
+            if (bounce == 0) {
+                col += throughput * sampleBackground(r.dir);
+            } else {
+                col += throughput * sampleEnv(r.dir) * rt.envIntensity.x;
+            }
+            break;
+        }
+
+        // Determine next bounce type
+        let wo = normalize(-r.dir);
+        let hasTransmission = h.transmission > 0.5 && h.shininess < 0.1;
+
+        // Transmission: refract through glass (skip shading, just pass through)
+        if (hasTransmission && bounce < 2) {
+            let glassTint = mix(h.albedo, vec3<f32>(1.0), h.transmission);
+            let entering = h.frontFace > 0.5;
+            let eta = select(h.ior, 1.0 / h.ior, entering);
+            let refDir = refract(normalize(r.dir), h.normal, eta);
+            if (length(refDir) < 0.001) { break; }
+            // Beer's law attenuation
             var volAtten = vec3<f32>(1.0);
-            if (h0.attenuationDist > 0.0) {
-                let absorbCoeff = -log(max(h0.attenuationColor, vec3<f32>(1e-6))) / h0.attenuationDist;
-                let pathLen = select(hr.t, h0.thickness, hr.t < 1e-2 && h0.thickness > 0.0);
+            if (h.attenuationDist > 0.0 && !entering) {
+                let absorbCoeff = -log(max(h.attenuationColor, vec3<f32>(1e-6))) / h.attenuationDist;
+                let pathLen = select(h.t, h.thickness, h.t < 1e-2 && h.thickness > 0.0);
                 volAtten = exp(-absorbCoeff * pathLen);
             }
-            // Second refraction (exit surface)
-            let exitEnter = hr.frontFace > 0.5;
-            let eta2 = select(hr.ior, 1.0 / hr.ior, exitEnter);
-            let refDir2 = refract(normalize(rr.dir), hr.normal, eta2);
-            if (length(refDir2) > 0.001) {
-                var rr2: Ray;
-                rr2.origin = hr.point - hr.normal * 1e-3;
-                rr2.dir    = refDir2;
-                let hr2 = sceneHit(rr2);
-                if (hr2.t >= 1e30) { return sampleBackground(rr2.dir) * glassTint * volAtten; }
-                return shade(hr2, rr2.dir) * glassTint * volAtten;
-            }
-            return shade(hr, rr.dir) * glassTint * volAtten;
+            throughput *= glassTint * volAtten;
+            r.origin = h.point - h.normal * 1e-3;
+            r.dir = refDir;
+            continue;
         }
-    }
 
-    var col = shade(h0, ray.dir);
+        // Shade the surface (opaque hit)
+        col += throughput * shade(h, r.dir);
 
-    // Specular mirror bounces (two levels, unrolled — deterministic, no seed needed).
-    if (h0.shininess < 0.05 || (h0.metalness > 0.5 && h0.shininess < 0.3)) {
-        let F0_0   = computeF0(h0.albedo, h0.metalness, h0.specularColor, h0.specularIntensity);
-        let NdotV0 = max(0.001, dot(h0.normal, normalize(-ray.dir)));
-        let roughFade = max(0.0, 1.0 - h0.shininess * 10.0);
-        let k0     = schlick(NdotV0, F0_0) * roughFade;
+        let isSmooth = h.shininess >= 0.0 && h.shininess < 0.05;
+        let isMetal  = h.metalness > 0.5 && h.shininess < 0.3;
+        let hasClearcoat = h.clearcoat > 0.0 && h.transmission < 0.01;
 
-        var r1: Ray;
-        r1.origin = h0.point + h0.normal * 1e-3;
-        r1.dir    = reflect(ray.dir, h0.normal);
-        let h1    = sceneHit(r1);
-
-        var rc1: vec3<f32>;
-        if (h1.t >= 1e30) {
-            rc1 = sampleEnv(r1.dir) * rt.envIntensity.x;
-        } else {
-            var base1 = shade(h1, r1.dir);
-            // Second specular bounce: reflections-of-reflections
-            if (h1.shininess < 0.5) {
-                let F0_1   = computeF0(h1.albedo, h1.metalness, h1.specularColor, h1.specularIntensity);
-                let NdotV1 = max(0.001, dot(h1.normal, normalize(-r1.dir)));
-                let k1     = schlick(NdotV1, F0_1) * max(0.0, 1.0 - h1.shininess * 2.0);
-                var r2: Ray;
-                r2.origin = h1.point + h1.normal * 1e-3;
-                r2.dir    = reflect(r1.dir, h1.normal);
-                let h2    = sceneHit(r2);
-                var rc2   = select(shade(h2, r2.dir), sampleEnv(r2.dir) * rt.envIntensity.x, h2.t >= 1e30);
-                rc2   = max(rc2, F0_1 * 0.08);
-                base1 = base1 * (vec3<f32>(1.0) - k1) + rc2 * k1;
-            }
-            rc1 = base1;
+        // Clearcoat: env-only dielectric reflection layer
+        if (hasClearcoat) {
+            let ccF0 = 0.04;
+            let ccCos = max(0.001, dot(h.normal, wo));
+            let ccFresnel = ccF0 + (1.0 - ccF0) * pow(1.0 - ccCos, 5.0);
+            let ccK = h.clearcoat * ccFresnel;
+            let ccRoughFade = max(0.0, 1.0 - h.clearcoatAlpha * 10.0);
+            let ccRefDir = reflect(r.dir, h.normal);
+            let ccCol = sampleEnv(ccRefDir) * rt.envIntensity.x;
+            col += throughput * ccCol * ccK * ccRoughFade;
         }
-        rc1 = max(rc1, F0_0 * 0.08);
-        col = col * (vec3<f32>(1.0) - k0) + rc1 * k0;
+
+        // Specular reflection bounce
+        if (isSmooth || isMetal) {
+            let F0_h = computeF0(h.albedo, h.metalness, h.specularColor, h.specularIntensity);
+            let NdotV = max(0.001, dot(h.normal, wo));
+            let roughFade = max(0.0, 1.0 - h.shininess * 10.0);
+            let k = schlick(NdotV, F0_h) * roughFade;
+            throughput *= k;
+            r.origin = h.point + h.normal * 1e-3;
+            r.dir = reflect(r.dir, h.normal);
+            continue;
+        }
+
+        break; // diffuse surface — no more bounces
     }
     return col;
 }
