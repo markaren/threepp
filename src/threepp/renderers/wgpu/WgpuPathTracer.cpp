@@ -693,14 +693,17 @@ fn decodeLeaf(ci: i32, ray: Ray, rh: ptr<function, RawHit>) {
 
 // Shadow hit: lightweight struct for shadow rays (no normal maps, roughness, clearcoat, etc.)
 struct ShadowHit {
-    t:            f32,
-    point:        vec3<f32>,
-    normal:       vec3<f32>,
-    albedo:       vec3<f32>,
-    uv:           vec2<f32>,
-    texSlot:      f32,
-    meshIdx:      i32,
-    transmission: f32,
+    t:                f32,
+    point:            vec3<f32>,
+    normal:           vec3<f32>,
+    albedo:           vec3<f32>,
+    uv:               vec2<f32>,
+    texSlot:          f32,
+    meshIdx:          i32,
+    transmission:     f32,
+    frontFace:        f32,
+    attenuationColor: vec3<f32>,
+    attenuationDist:  f32,
 }
 
 // Shadow traversal reuses RawHit + decodeLeaf for geometry test.
@@ -735,12 +738,17 @@ fn loadShadowHitMaterial(rh: RawHit, ray: Ray) -> ShadowHit {
     let n2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
     let sn = normalize(n0 * w + n1 * rh.u + n2 * rh.v);
     h.point        = ray.origin + rh.t * ray.dir;
-    h.normal       = select(-sn, sn, dot(ray.dir, sn) < 0.0);
+    let isFrontFace = dot(ray.dir, sn) < 0.0;
+    h.normal       = select(-sn, sn, isFrontFace);
     h.albedo       = mat0.xyz;
     h.uv           = bcUV;
     h.texSlot      = mat1.x;
     h.meshIdx      = i32(r1.w);
     h.transmission = mat2.w;
+    h.frontFace    = select(0.0, 1.0, isFrontFace);
+    let mat4 = textureLoad(matData, vec2<i32>(matIdx, 4), 0);
+    h.attenuationColor = mat4.xyz;
+    h.attenuationDist  = mat4.w;
     return h;
 }
 
@@ -846,6 +854,7 @@ fn sceneHitShadow(ray: Ray, maxDist: f32) -> ShadowHit {
     if (rh.triIdx < 0) {
         var h: ShadowHit;
         h.t = maxDist; h.meshIdx = -1; h.transmission = 0.0;
+        h.frontFace = 1.0; h.attenuationColor = vec3<f32>(1.0); h.attenuationDist = 0.0;
         return h;
     }
     return loadShadowHitMaterial(rh, ray);
@@ -1608,13 +1617,42 @@ R"(
                         rMaxDist = dist - 1e-2;  // match classic NEE offset
                     }
                 }
-                // Simple occlusion test (matches classic NEE exactly)
-                var sr: Ray;
-                sr.origin = h.point + h.normal * 1e-3;
-                sr.dir = rDir;
-                if (!sceneOccluded(sr, rMaxDist)) {
-                    reservoirShadowAtten = vec3<f32>(1.0);
+                // Glass-aware shadow traversal with Beer-Lambert volumetric absorption.
+            // At each glass surface:
+            //   front face (entering): save attenuationColor/Dist for this glass volume.
+            //   back face  (exiting):  apply exp(-absorb * thickness) where thickness = sh.t
+            //                          from the entry-step origin to this back face.
+            // Also applies albedo×transmission tint for textured/tinted glass.
+            var sr: Ray;
+            sr.origin = h.point + h.normal * 1e-3;
+            sr.dir = rDir;
+            var rAtten = vec3<f32>(1.0);
+            // Track current glass volume Beer-Lambert params (set when entering)
+            var glassAttCol = vec3<f32>(1.0);
+            var glassAttDist = 0.0;
+            var inGlass = false;
+            for (var si = 0; si < 4; si++) {
+                let sh = sceneHitShadow(sr, rMaxDist);
+                if (sh.t >= rMaxDist) { break; }                         // clear path to light
+                if (sh.transmission < 0.01) { rAtten = vec3<f32>(0.0); break; } // opaque blocker
+                var shAlbedo = sh.albedo;
+                if (sh.texSlot >= 0.0) { shAlbedo = srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
+                rAtten *= shAlbedo * sh.transmission;                    // albedo/transmission tint
+                // Beer-Lambert: apply on back face (exiting glass)
+                if (sh.frontFace > 0.5) {
+                    // Entering glass — save attenuation params for exit
+                    glassAttCol  = sh.attenuationColor;
+                    glassAttDist = sh.attenuationDist;
+                    inGlass = true;
+                } else if (inGlass && glassAttDist > 0.0) {
+                    // Exiting glass — sh.t is the thickness from entry-step origin to back face
+                    let absorbCoeff = -log(max(glassAttCol, vec3<f32>(1e-6))) / glassAttDist;
+                    rAtten *= exp(-absorbCoeff * sh.t);
+                    inGlass = false;
                 }
+                sr.origin = sh.point + sr.dir * 1e-3;                   // step past the glass surface
+            }
+            reservoirShadowAtten = rAtten;
             }
 
             // === SHADE FROM RESERVOIR ===
@@ -1701,6 +1739,7 @@ R"(
             sr.origin = h.point + h.normal * 1e-3;
             sr.dir    = ln;
             var shadowAtten = vec3<f32>(1.0);
+            var sGlassAttCol = vec3<f32>(1.0); var sGlassAttDist = 0.0; var sInGlass = false;
             for (var si = 0; si < 4; si++) {
                 let sh = sceneHitShadow(sr, ld - 1e-3);
                 if (sh.t >= ld - 1e-3) { break; }
@@ -1709,6 +1748,14 @@ R"(
                 var shAlbedo = sh.albedo;
                 if (sh.texSlot >= 0.0) { shAlbedo = srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
                 shadowAtten *= shAlbedo * sh.transmission;
+                // Beer-Lambert volumetric absorption through glass
+                if (sh.frontFace > 0.5) {
+                    sGlassAttCol = sh.attenuationColor; sGlassAttDist = sh.attenuationDist; sInGlass = true;
+                } else if (sInGlass && sGlassAttDist > 0.0) {
+                    let sAbsorb = -log(max(sGlassAttCol, vec3<f32>(1e-6))) / sGlassAttDist;
+                    shadowAtten *= exp(-sAbsorb * sh.t);
+                    sInGlass = false;
+                }
                 sr.origin = sh.point + sr.dir * 1e-3;
             }
             if (shadowAtten.x + shadowAtten.y + shadowAtten.z > 0.001) {
