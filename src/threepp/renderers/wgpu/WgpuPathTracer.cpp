@@ -1414,7 +1414,8 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         // Applying ReSTIR NEE to a glass surface over-brightens it and makes it
         // appear opaque. Fall back to classic NEE for those hits.
         let useReSTIR = i == 0 && rt.restirParams.x > 0.5 && rt.mode.x > 0.5
-                        && h.transmission < 0.05;
+                        && h.transmission < 0.05
+                        && h.shininess > 0.07;
 
         if (useReSTIR) {
             // ======= ReSTIR DI: Initial candidate generation =======
