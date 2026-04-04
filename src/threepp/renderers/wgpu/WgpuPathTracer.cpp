@@ -1452,7 +1452,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
 R"(
             // 2. Emissive triangles — CDF samples
             if (emTriCount > 0 && totalPower > 0.0) {
-                for (var ei = 0; ei < 4; ei++) {
+                for (var ei = 0; ei < 16; ei++) {
                     let xi = rand(seed) * totalPower;
                     var lo = 0;
                     var hi = emTriCount - 1;
@@ -2136,7 +2136,12 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     // Secondary bounce hit a moved mesh — cap rather than reset so static
     // surfaces can still converge while indirect lighting refreshes.
-    if (touchedMoved) { pixelFC = min(pixelFC, 8.0); }
+    // If the moved mesh is itself an emissive source, use a much tighter cap (2 frames)
+    // so that reflections/shadows of moving lights clear in ~33ms rather than ~133ms.
+    if (touchedMoved) {
+        let emissiveMoved = rt.restirParams.z > 0.5;
+        pixelFC = min(pixelFC, select(8.0, 2.0, emissiveMoved));
+    }
 
     // Camera moved: reproject accumulation from previous frame's screen position
     if (fc == 0u) {
@@ -3945,6 +3950,7 @@ struct WgpuPathTracer::Impl {
     int emissiveTriCount_ = 0;
     float emissiveTotalArea_ = 0.f;
     float emissiveTotalPower_ = 0.f;
+    std::unordered_set<int> emissiveMeshSet_;  // mesh indices that contribute emissive light
 
     // GPU uniform buffers
     WgpuBuffer vtUniBuf;
@@ -4001,6 +4007,7 @@ struct WgpuPathTracer::Impl {
         std::vector<uint32_t> bvhNodeCpuBuf;
         std::vector<int32_t> refitMetaCpuBuf;
         std::vector<float> emissiveTriCpu;
+        std::unordered_set<int> emissiveMeshSet;  // mesh indices with emissive contribution
         int triCount = 0;
         int numBvhNodes = 0;
         int emissiveTriCount = 0;
@@ -4581,6 +4588,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                     r.emissiveTriCpu.push_back(r.emissiveTotalPower);
                     r.emissiveTriCpu.push_back(power);
                     r.emissiveTriCount++;
+                    // Record which mesh this emissive tri belongs to (triData row1.w = meshIdx)
+                    r.emissiveMeshSet.insert(static_cast<int>(v1p[3]));
                 }
             }
         }
@@ -4672,6 +4681,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                     r.emissiveTriCpu.push_back(r.emissiveTotalPower);
                     r.emissiveTriCpu.push_back(power);
                     r.emissiveTriCount++;
+                    r.emissiveMeshSet.insert(static_cast<int>(v1p[3]));
                 }
             }
         }
@@ -4691,6 +4701,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.bvhNodeCpuBuf = std::move(r.bvhNodeCpuBuf);
         d.refitMetaCpuBuf = std::move(r.refitMetaCpuBuf);
         d.emissiveTriCpu = std::move(r.emissiveTriCpu);
+        d.emissiveMeshSet_ = std::move(r.emissiveMeshSet);
         d.triCount_ = r.triCount;
         d.objTriSplit_ = r.objTriSplit;
         d.numBvhNodes_ = r.numBvhNodes;
@@ -4957,6 +4968,17 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.spp[1] = static_cast<float>(d.tileSize_);
     u.movedMeshBits[0] = movedBits[0];
     u.movedMeshBits[1] = movedBits[1];
+    // Detect if any moved mesh is an emissive source — triggers tighter accum cap in shader.
+    bool anyEmissiveMoved = false;
+    if (movedBits[0] | movedBits[1]) {
+        for (int mi = 0; mi < 64 && !anyEmissiveMoved; ++mi) {
+            const uint32_t word = (mi < 32) ? movedBits[0] : movedBits[1];
+            const uint32_t bit  = static_cast<uint32_t>(mi < 32 ? mi : mi - 32);
+            if ((word >> bit) & 1u) {
+                anyEmissiveMoved = d.emissiveMeshSet_.count(mi) > 0;
+            }
+        }
+    }
 
     // Helper: upload an equirectangular texture to a GPU texture object.
     auto uploadEquirect = [&](Texture* tex, WgpuTexture& gpuTex) {
@@ -5132,7 +5154,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.emissiveInfo[0] = static_cast<float>(d.emissiveTriCount_);
     u.emissiveInfo[1] = d.emissiveTotalPower_;
     u.restirParams[0] = d.restirEnabled_ ? 1.f : 0.f;
-    u.restirParams[1] = 8.f;   // M clamp — lower = crisper shadows, higher = lower variance
+    u.restirParams[1] = 20.f;  // M clamp — lower = crisper shadows, higher = lower variance
+    u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
 
     int nLights = 0;
     auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
@@ -5545,9 +5568,7 @@ bool WgpuPathTracer::denoiserEnabled() const {
 }
 
 void WgpuPathTracer::setReSTIREnabled(bool enabled) {
-    if (enabled && !pimpl_->restirEnabled_) {
-        pimpl_->frameCount_ = 0.f;  // flush stale reservoir before first temporal reuse
-    }
+    pimpl_->frameCount_ = 0.f;  // flush stale reservoir before first temporal reuse
     pimpl_->restirEnabled_ = enabled;
 }
 
