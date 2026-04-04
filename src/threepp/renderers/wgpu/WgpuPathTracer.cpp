@@ -2174,13 +2174,23 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let oldClean    = select(vec3<f32>(0.0), old,    old.x == old.x);
 
     // Adaptive outlier rejection: clamp sample relative to running average.
+    // Hard cap first (catches extreme fireflies regardless of history).
+    let lum3 = vec3<f32>(0.2126, 0.7152, 0.0722);
     var clamped = sampleClean;
+    let rawLum = dot(sampleClean, lum3);
+    let hardCap = 12.0;
+    if (rawLum > hardCap) {
+        clamped = sampleClean * (hardCap / rawLum);
+    }
+    // Relative clamp: only once history is reliable (≥8 frames), 7× running average.
+    // Do NOT start earlier — moving emissives land on pixels with dark history,
+    // making avgLum artificially low and crushing legitimate bright samples.
     if (pixelFC > 8.0) {
-        let avgLum = max(dot(oldClean, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.01);
-        let smpLum = dot(sampleClean, vec3<f32>(0.2126, 0.7152, 0.0722));
-        let maxLum = avgLum * 20.0;
+        let avgLum = max(dot(oldClean, lum3), 0.05);
+        let smpLum = dot(clamped, lum3);
+        let maxLum = avgLum * 7.0;
         if (smpLum > maxLum) {
-            clamped = sampleClean * (maxLum / smpLum);
+            clamped = clamped * (maxLum / smpLum);
         }
     }
 
@@ -2595,7 +2605,7 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cLum = mix(luminance_a(cColor), luminance_a(cIrr), demodBlend);
 
     // Luminance sigma: relaxed when noisy (low FC), tight when converged
-    let lumSigma = max(0.05, 0.5 / sqrt(cFC + 1.0));
+    let lumSigma = max(0.02, 0.5 / sqrt(cFC + 1.0));
 
     // 5×5 bilateral filter — tracks both demodulated irradiance and raw color
     let kw = array<f32, 5>(1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
@@ -2620,7 +2630,7 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Spatial weight (separable Gaussian)
             let w_s = kw[dy + 2] * kw[dx + 2];
             // Normal edge-stopping: relaxed for noisy pixels (low FC), sharp when converged
-            let normPow = mix(16.0, 64.0, smoothstep(0.0, 8.0, cFC));
+            let normPow = mix(16.0, 128.0, smoothstep(0.0, 8.0, cFC));
             let w_n = pow(max(0.0, dot(cNorm, sNorm)), normPow);
             // Depth edge-stopping
             let w_d = exp(-abs(cDepth - sDepth) * 2.0 / (cDepth + 0.01));
@@ -2630,9 +2640,18 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let sLum = mix(luminance_a(sColor), luminance_a(sIrr), sDemod);
             let w_l  = exp(-(sLum - cLum) * (sLum - cLum) / (lumSigma * lumSigma + 1e-6));
 
+            // Per-sample outlier clamp: suppress extreme bright samples in filter window
+            var sIrrClamped  = sIrr;
+            var sColorClamped = sColor;
+            let sIrrLum = luminance_a(sIrr);
+            let sColLum = luminance_a(sColor);
+            let filterCap = 12.0;
+            if (sIrrLum > filterCap) { sIrrClamped  = sIrr  * (filterCap / sIrrLum); }
+            if (sColLum > filterCap) { sColorClamped = sColor * (filterCap / sColLum); }
+
             let w = w_s * w_n * w_d * w_l;
-            irrSum    += sIrr * w;
-            rawSum    += sColor * w;
+            irrSum    += sIrrClamped  * w;
+            rawSum    += sColorClamped * w;
             weightSum += w;
         }
     }
@@ -5366,8 +5385,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
         // 5×5 kernel covers more area per pass, so fewer passes needed.
         // Scale down as image converges: sigma shrinks, filter becomes transparent.
-        const int nPasses = (d.frameCount_ < 4.f)                ? 3 :
-                            (d.frameCount_ < 32.f || hasMotion)   ? 2 : 1;
+        // Extra pass on very first frames spreads sparse path-tracer samples across larger area.
+        const int nPasses = (d.frameCount_ < 2.f)                ? 4 :
+                            (d.frameCount_ < 8.f)                 ? 3 :
+                            (d.frameCount_ < 64.f || hasMotion)   ? 2 : 1;
 
         for (int pass = 0; pass < nPasses; ++pass) {
             AtrousGpuUniforms au{static_cast<uint32_t>(1u << pass), 0u, d.frameCount_, 0.f};
