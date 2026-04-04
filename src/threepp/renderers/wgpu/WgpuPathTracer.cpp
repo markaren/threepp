@@ -1296,6 +1296,7 @@ fn isMeshMoved(idx: i32) -> bool {
 
 fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
              pixel: vec2<i32>,
+             maxBounces:     i32,
              primaryMeshIdx: ptr<function, u32>,
              primaryNormal:  ptr<function, vec3<f32>>,
              primaryDepth:   ptr<function, f32>,
@@ -1317,7 +1318,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
     var prevWo        = vec3<f32>(0.0);
     var afterTransmission = false;
 
-    for (var i = 0; i < i32(rt.params.x); i++) {
+    for (var i = 0; i < maxBounces; i++) {
         let h = sceneHit(ray);
         if (h.t >= 1e29) {
             // Primary ray miss: show background.  Bounced misses: use env IBL.
@@ -1953,9 +1954,13 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res   = rt.iRes.xy;
     if (f32(pixel.x) >= res.x || f32(pixel.y) >= res.y) { return; }
 
-    let fc   = u32(rt.frameCount.x);
-    let globalFrame = u32(rt.params.y);
+    let fc         = u32(rt.frameCount.x);
     let foveatedOn = rt.params.z > 0.5;
+
+    // During camera movement (fc==0) use fewer bounces to maintain interactive FPS.
+    // 4 bounces handles glass (enter + exit + continue) and most indirect light.
+    // Full bounce count resumes immediately once the camera stops.
+    let maxBounces = select(i32(rt.params.x), min(i32(rt.params.x), 4), fc == 0u);
 
     // --- Foveated convergence: center traces every frame, periphery less often ---
     // This accelerates perceived convergence by prioritising where the eye looks.
@@ -1984,9 +1989,6 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Checkerboard: skip half pixels during camera movement (fc == 0)
-    let checkerSkip = fc == 0u && ((u32(pixel.x) + u32(pixel.y) + globalFrame) & 1u) == 0u;
-
     // R2 quasi-random sub-pixel jitter (low-discrepancy stratification)
     let r2  = r2Seq(fc);
     // Per-pixel Cranley-Patterson rotation: offset R2 by a spatial hash to decorrelate pixels
@@ -1994,47 +1996,6 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let jx  = fract(r2.x + f32(pixHash) / 4294967296.0) - 0.5;
     let jy  = fract(r2.y + f32(pcg(pixHash)) / 4294967296.0) - 0.5;
     var seed = pcg(pcg(gid.x + gid.y * 65537u) + fc * 12979u);
-    let centerRay = makeRay(vec2<f32>(f32(pixel.x) + 0.5, f32(pixel.y) + 0.5), res);
-
-    // --- Checkerboard fast path: primary ray for depth + reprojection only ---
-    if (checkerSkip) {
-        let rh = sceneHitRaw(centerRay, 1e30);
-        let depth = select(0.0, rh.t, rh.triIdx >= 0);
-
-        let prev = textureLoad(accumRead, pixel, 0);
-        var old  = prev.xyz;
-        var pixelFC = prev.w;
-
-        var reprojOk = false;
-        if (pixelFC > 0.0 && depth > 0.0) {
-            let worldPos = rt.camOri.xyz + centerRay.dir * depth;
-            let toPoint  = worldPos - rt.prevCamOri.xyz;
-            let prevZ    = dot(toPoint, rt.prevCamFwd.xyz);
-            if (prevZ > 0.001) {
-                let aspect   = res.x / res.y;
-                let prevNdcX = dot(toPoint, rt.prevCamRgt.xyz) / (prevZ * rt.tanHalfFov.x * aspect);
-                let prevNdcY = dot(toPoint, rt.prevCamUp.xyz)  / (prevZ * rt.tanHalfFov.x);
-                let prevPx   = vec2<i32>(
-                    i32((prevNdcX + 1.0) * 0.5 * res.x),
-                    i32((1.0 - prevNdcY) * 0.5 * res.y));
-                if (prevPx.x >= 0 && prevPx.x < i32(res.x) &&
-                    prevPx.y >= 0 && prevPx.y < i32(res.y)) {
-                    let reproj = textureLoad(accumRead, prevPx, 0);
-                    old = reproj.xyz;
-                    pixelFC = min(reproj.w * 0.5, 8.0);
-                    reprojOk = true;
-                }
-            }
-        }
-        if (!reprojOk) { pixelFC = 0.0; }
-
-        let oldClean = select(vec3<f32>(0.0), old, old.x == old.x);
-        textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
-        textureStore(hitMeshWrite, pixel, textureLoad(hitMeshRead, pixel, 0));
-        textureStore(gBufWrite,    pixel, vec4<f32>(vec3<f32>(0.0), depth));
-        textureStore(albedoWrite,  pixel, vec4<f32>(vec3<f32>(0.0), 0.0));
-        return;
-    }
 
     // --- Full path trace for active pixels ---
     let ray = makeRay(vec2<f32>(f32(pixel.x) + jx, f32(pixel.y) + jy), res);
@@ -2043,7 +2004,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var primaryDepth:   f32;
     var primaryAlbedo:  vec3<f32>;
     var touchedMoved:   bool;
-    var sample  = pathTrace(ray, &seed, pixel, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &touchedMoved);
+    var sample  = pathTrace(ray, &seed, pixel, maxBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &touchedMoved);
 
     let prev     = textureLoad(accumRead, pixel, 0);
     var old      = prev.xyz;
@@ -5416,6 +5377,9 @@ bool WgpuPathTracer::denoiserEnabled() const {
 }
 
 void WgpuPathTracer::setReSTIREnabled(bool enabled) {
+    if (enabled && !pimpl_->restirEnabled_) {
+        pimpl_->frameCount_ = 0.f;  // flush stale reservoir before first temporal reuse
+    }
     pimpl_->restirEnabled_ = enabled;
 }
 
