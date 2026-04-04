@@ -1392,7 +1392,12 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
 
         // --- NEE: ReSTIR DI at bounce 0, classic NEE at deeper bounces ---
         let lcount = i32(rt.lightCount.x);
-        let useReSTIR = i == 0 && rt.restirParams.x > 0.5 && rt.mode.x > 0.5;
+        // Skip ReSTIR for transmissive/glass surfaces — direct illumination is
+        // mostly irrelevant there (primary interaction is transmission, not reflection).
+        // Applying ReSTIR NEE to a glass surface over-brightens it and makes it
+        // appear opaque. Fall back to classic NEE for those hits.
+        let useReSTIR = i == 0 && rt.restirParams.x > 0.5 && rt.mode.x > 0.5
+                        && h.transmission < 0.05;
 
         if (useReSTIR) {
             // ======= ReSTIR DI: Initial candidate generation =======
@@ -1795,6 +1800,14 @@ R"(
         }
 
         } // end ReSTIR vs classic NEE
+
+        // When ReSTIR is globally enabled but was skipped for this pixel (glass /
+        // high-transmission surface), zero out the reservoir so stale data from a
+        // prior opaque frame at the same pixel location never bleeds into temporal reuse.
+        if (i == 0 && rt.restirParams.x > 0.5 && !useReSTIR) {
+            textureStore(reservoirWrite,  pixel, vec4<f32>(0.0));
+            textureStore(reservoirWWrite, pixel, vec4<f32>(0.0));
+        }
 
         if (i > 1) {
             let p = max(max(throughput.r, throughput.g), throughput.b);
