@@ -923,6 +923,7 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
 
         var sr: Ray; sr.origin = h.point + h.normal * 1e-3; sr.dir = ln;
         var shAtten = vec3<f32>(1.0);
+        var rcGlassAttCol = vec3<f32>(1.0); var rcGlassAttDist = 0.0; var rcInGlass = false;
         for (var si = 0; si < 2; si++) {
             let sh = sceneHitShadow(sr, ld - 1e-3);
             if (sh.t >= ld - 1e-3) { break; }
@@ -930,7 +931,14 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
             var shAlb = sh.albedo;
             if (sh.texSlot >= 0.0) { shAlb = srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
             shAtten *= shAlb * sh.transmission;
-            sr.origin = sh.point - sh.normal * 1e-3;
+            if (sh.frontFace > 0.5) {
+                rcGlassAttCol = sh.attenuationColor; rcGlassAttDist = sh.attenuationDist; rcInGlass = true;
+            } else if (rcInGlass && rcGlassAttDist > 0.0) {
+                let rcAbsorb = -log(max(rcGlassAttCol, vec3<f32>(1e-6))) / rcGlassAttDist;
+                shAtten *= exp(-rcAbsorb * sh.t);
+                rcInGlass = false;
+            }
+            sr.origin = sh.point + sr.dir * 1e-3;
         }
         if (shAtten.x + shAtten.y + shAtten.z > 0.001) {
             let NdotL = max(0.0, dot(h.normal, ln));
@@ -1805,8 +1813,25 @@ R"(
                 var sr: Ray;
                 sr.origin = h.point + h.normal * 1e-3;
                 sr.dir    = ln;
-
-                if (!sceneOccluded(sr, dist - 1e-2)) {
+                var emAtten = vec3<f32>(1.0);
+                var emGlassAttCol = vec3<f32>(1.0); var emGlassAttDist = 0.0; var emInGlass = false;
+                for (var si = 0; si < 4; si++) {
+                    let sh = sceneHitShadow(sr, dist - 1e-2);
+                    if (sh.t >= dist - 1e-2) { break; }
+                    if (sh.transmission < 0.01) { emAtten = vec3<f32>(0.0); break; }
+                    var shAlb = sh.albedo;
+                    if (sh.texSlot >= 0.0) { shAlb = srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
+                    emAtten *= shAlb * sh.transmission;
+                    if (sh.frontFace > 0.5) {
+                        emGlassAttCol = sh.attenuationColor; emGlassAttDist = sh.attenuationDist; emInGlass = true;
+                    } else if (emInGlass && emGlassAttDist > 0.0) {
+                        let emAbsorb = -log(max(emGlassAttCol, vec3<f32>(1e-6))) / emGlassAttDist;
+                        emAtten *= exp(-emAbsorb * sh.t);
+                        emInGlass = false;
+                    }
+                    sr.origin = sh.point + sr.dir * 1e-3;
+                }
+                if (emAtten.x + emAtten.y + emAtten.z > 0.001) {
                     let eMatIdx = i32(textureLoad(triData, triCoord(eTi, 0), 0).w);
                     let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
 
@@ -1818,7 +1843,7 @@ R"(
 
                     let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
                     let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);
-                    radiance += throughput * lobeSum3 * NdotL * emColor * w_light / pdf;
+                    radiance += throughput * emAtten * lobeSum3 * NdotL * emColor * w_light / pdf;
                 }
             }
         }
@@ -1833,7 +1858,25 @@ R"(
                 var sr: Ray;
                 sr.origin = h.point + h.normal * 1e-3;
                 sr.dir    = envDir;
-                if (!sceneOccluded(sr, 1e30)) {
+                var envAtten = vec3<f32>(1.0);
+                var envGlassAttCol = vec3<f32>(1.0); var envGlassAttDist = 0.0; var envInGlass = false;
+                for (var si = 0; si < 4; si++) {
+                    let sh = sceneHitShadow(sr, 1e30);
+                    if (sh.t >= 1e30) { break; }
+                    if (sh.transmission < 0.01) { envAtten = vec3<f32>(0.0); break; }
+                    var shAlb = sh.albedo;
+                    if (sh.texSlot >= 0.0) { shAlb = srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
+                    envAtten *= shAlb * sh.transmission;
+                    if (sh.frontFace > 0.5) {
+                        envGlassAttCol = sh.attenuationColor; envGlassAttDist = sh.attenuationDist; envInGlass = true;
+                    } else if (envInGlass && envGlassAttDist > 0.0) {
+                        let envAbsorb = -log(max(envGlassAttCol, vec3<f32>(1e-6))) / envGlassAttDist;
+                        envAtten *= exp(-envAbsorb * sh.t);
+                        envInGlass = false;
+                    }
+                    sr.origin = sh.point + sr.dir * 1e-3;
+                }
+                if (envAtten.x + envAtten.y + envAtten.z > 0.001) {
                     let brdf = evalBrdf(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h);
                     var lobeSum4 = brdf.f_diff + brdf.f_spec;
                     let sheenLum4 = dot(h.sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -1841,7 +1884,7 @@ R"(
                     let envCol = sampleEnv(envDir) * rt.envIntensity.x;
                     let pdf_brdf_env = brdfPdf(wo, envDir, h.normal, h.shininess, h.metalness);
                     let w_env = envPdf / max(envPdf + pdf_brdf_env, 1e-8);
-                    radiance += throughput * lobeSum4 * envNdotL * envCol * w_env / envPdf;
+                    radiance += throughput * envAtten * lobeSum4 * envNdotL * envCol * w_env / envPdf;
                 }
             }
         }
