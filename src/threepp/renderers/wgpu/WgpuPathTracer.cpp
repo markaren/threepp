@@ -1986,6 +1986,13 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Preserve previous gBuf (depth) so display shader tone-maps correctly.
         textureStore(gBufWrite,    pixel, textureLoad(gBufRead, pixel, 0));
         textureStore(albedoWrite,  pixel, vec4<f32>(vec3<f32>(0.0), 0.0));
+        // Pass reservoir through the ping-pong so the next traced frame sees a valid prior.
+        // Without this the reservoir slot contains whatever was written 2-4 frames ago
+        // (stale/garbage after multiple skips), producing huge wrong temporal weights → acne.
+        if (rt.restirParams.x > 0.5) {
+            textureStore(reservoirWrite,  pixel, textureLoad(reservoirRead,  pixel, 0));
+            textureStore(reservoirWWrite, pixel, textureLoad(reservoirWRead, pixel, 0));
+        }
         return;
     }
 
