@@ -4024,6 +4024,9 @@ struct WgpuPathTracer::Impl {
 
     // Shader compilation wait tracking
     uint32_t shaderWaitFrames_ = 0;
+    // True from when RT async build starts until the very first dispatch completes.
+    // Ensures the VT pass (objTriBuf → triTex) runs on first dispatch even if no mesh moved.
+    bool firstDispatchPending_ = false;
 
     // Frame state
     std::unordered_map<Texture*, int> texSlotMap;
@@ -4823,6 +4826,9 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         // (~30s extra freeze on first cold-cache launch).
         d.rtPipeline.startAsyncBuild();
         d.rtRaycastPipeline.startAsyncBuild();
+        // Mark that triTex has not yet been populated via the VT pass.
+        // The first real dispatch must run the VT pass even if no mesh moved.
+        d.firstDispatchPending_ = true;
     }
 
     // Before first build, skip RT dispatch
@@ -5210,6 +5216,15 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         std::cerr << "[PathTracer] RT shaders ready after "
                   << (d.shaderWaitFrames_ / 60) << "s — rendering started." << std::endl;
         d.shaderWaitFrames_ = 0;
+    }
+    // First dispatch after async shader compilation: triTex has never been written by the VT
+    // pass (every prior frame returned early).  Force the VT pass to run now so the RT shader
+    // sees valid world-space triangle data, and reset accumulation for a clean start.
+    if (d.firstDispatchPending_) {
+        d.firstDispatchPending_ = false;
+        anyMeshMoved = true;
+        movedBits[0] = movedBits[1] = 0xFFFFFFFFu;
+        d.frameCount_ = 0.f;
     }
 
     activePipeline.setTexture(1, *d.readAccum);
