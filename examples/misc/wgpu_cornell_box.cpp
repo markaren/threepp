@@ -125,6 +125,7 @@ int main() {
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setMaxBounces(6);
     pathTracer.setMode(WgpuPathTracer::Mode::Raytracer);
+    pathTracer.setReSTIREnabled(true);
 
     // ---- Scene ----
     Scene scene;

@@ -59,6 +59,10 @@ namespace threepp {
         void setDenoiserEnabled(bool enabled);
         [[nodiscard]] bool denoiserEnabled() const;
 
+        /// Enable/disable ReSTIR DI for direct illumination. Default: false.
+        void setReSTIREnabled(bool enabled);
+        [[nodiscard]] bool restirEnabled() const;
+
         /// Resize accumulation textures. Resets accumulation.
         void setSize(std::pair<int, int> size);
         [[nodiscard]] std::pair<int, int> size() const;

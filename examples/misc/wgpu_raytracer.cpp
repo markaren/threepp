@@ -24,6 +24,7 @@ int main() {
     pathTracer.setSamplesPerPixel(2);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setFoveatedRendering(false);
+    pathTracer.setReSTIREnabled(true);
 
     // ---- Scene objects ----
     TextureLoader tl;
@@ -122,6 +123,7 @@ int main() {
     // ---- UI ----
     bool pathTracerOn = false;
     bool denoiserOn = pathTracer.denoiserEnabled();
+    bool restirOn = pathTracer.restirEnabled();
     bool animateBox = true;
     bool showEnclosingBox = true;
     bool raster = false;
@@ -173,6 +175,8 @@ int main() {
         if (renderMode == 1 && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);
+            if (ImGui::Checkbox("ReSTIR", &restirOn))
+                pathTracer.setReSTIREnabled(restirOn);
             if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 16))
                 pathTracer.setMaxBounces(maxBounces);
         }

@@ -125,6 +125,7 @@ struct RtUniforms {
     bgColor:       vec4<f32>,  // xyz = color, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex (bgTex)
     params:        vec4<f32>,  // x = maxBounces
     emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive power
+    restirParams:  vec4<f32>,  // x = enabled, y = M_clamp
 };
 
 struct Bvh4NodeGpu {
@@ -152,6 +153,10 @@ struct Bvh4NodeGpu {
 @group(0) @binding(14) var albedoWrite: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(15) var gBufRead:    texture_2d<f32>;
 @group(0) @binding(16) var bgTex:       texture_2d<f32>;
+@group(0) @binding(17) var reservoirRead:   texture_2d<f32>;
+@group(0) @binding(18) var reservoirWrite:  texture_storage_2d<rgba32float, write>;
+@group(0) @binding(19) var reservoirWRead:  texture_2d<f32>;
+@group(0) @binding(20) var reservoirWWrite: texture_storage_2d<rgba32float, write>;
 
 const MAX_TEX_SLOTS: i32 = 256;
 const EMPTY_CHILD: i32 = -2147483648;  // INT_MIN — sentinel for unused BVH4 child slots
@@ -1134,6 +1139,76 @@ fn brdfPdf(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>, alpha: f32, metalness: f3
     let diffPdf = NdotL / PI;
     return p_spec * specPdf + (1.0 - p_spec) * diffPdf;
 }
+
+// ---------------------------------------------------------------------------
+// ReSTIR DI — Reservoir data structure and helpers
+// ---------------------------------------------------------------------------
+struct Reservoir {
+    lightPos:  vec3<f32>,   // world-space position (area/point) or direction (env/dir)
+    lightType: f32,         // 0..999 = analytical light index, 1000+ = emissive tri (1000+triIdx), -1 = env
+    W_sum:     f32,         // running weight sum
+    M:         f32,         // candidate count
+    W:         f32,         // final weight = W_sum / (M * p_hat)
+    p_hat:     f32,         // target PDF of selected sample
+}
+
+fn emptyReservoir() -> Reservoir {
+    return Reservoir(vec3<f32>(0.0), -1.0, 0.0, 0.0, 0.0, 0.0);
+}
+
+fn updateReservoir(r: ptr<function, Reservoir>,
+                   pos: vec3<f32>, ltype: f32, w: f32,
+                   p_hat_new: f32, seed: ptr<function, u32>) {
+    (*r).W_sum += w;
+    (*r).M += 1.0;
+    if (rand(seed) < w / max((*r).W_sum, 1e-20)) {
+        (*r).lightPos  = pos;
+        (*r).lightType = ltype;
+        (*r).p_hat     = p_hat_new;
+    }
+}
+
+fn finalizeReservoir(r: ptr<function, Reservoir>) {
+    (*r).W = (*r).W_sum / max((*r).M * (*r).p_hat, 1e-20);
+}
+
+fn restirLuminance(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+// Evaluate unshadowed target function for a reservoir sample.
+// Returns luminance of (BRDF * Le * NdotL * geometry).
+fn restirTargetPdf(point: vec3<f32>, normal: vec3<f32>, wo: vec3<f32>,
+                   albedo: vec3<f32>, metalness: f32, alpha: f32, F0: vec3<f32>,
+                   lightPos: vec3<f32>, lightType: f32,
+                   lightLe: vec3<f32>) -> f32 {
+    // Determine direction to light
+    let typeCode = i32(lightType);
+    var ln: vec3<f32>;
+    if (typeCode < 0) {
+        // Environment: lightPos is direction
+        ln = normalize(lightPos);
+    } else if (typeCode < 1000) {
+        // Analytical light
+        let ltype = i32(rt.lightType[typeCode].x);
+        if (ltype == 1) {
+            ln = normalize(lightPos); // directional
+        } else {
+            ln = normalize(lightPos - point);
+        }
+    } else {
+        // Emissive triangle
+        ln = normalize(lightPos - point);
+    }
+
+    let NdotL = dot(normal, ln);
+    if (NdotL <= 0.0) { return 0.0; }
+
+    let brdf = evalBrdf(wo, ln, normal, albedo, metalness, alpha, F0);
+    let lobeSum = brdf.f_diff + brdf.f_spec;
+
+    return restirLuminance(lobeSum * NdotL * lightLe);
+}
 )"
 R"(
 // Binary search a 1D CDF stored in a texture row.
@@ -1220,6 +1295,7 @@ fn isMeshMoved(idx: i32) -> bool {
 }
 
 fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
+             pixel: vec2<i32>,
              primaryMeshIdx: ptr<function, u32>,
              primaryNormal:  ptr<function, vec3<f32>>,
              primaryDepth:   ptr<function, f32>,
@@ -1247,6 +1323,11 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             // Primary ray miss: show background.  Bounced misses: use env IBL.
             if (i == 0) {
                 radiance += throughput * sampleBackground(ray.dir);
+                // Store empty reservoir on primary miss
+                if (rt.restirParams.x > 0.5) {
+                    textureStore(reservoirWrite, pixel, vec4<f32>(0.0));
+                    textureStore(reservoirWWrite, pixel, vec4<f32>(0.0));
+                }
             } else {
                 var envMisW = 1.0;
                 if (HAS_ENV_CDF && rt.envColor.w > 1.5 && prevAlpha > 0.01) {
@@ -1297,14 +1378,298 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         // Unlit: return flat color, no bouncing
         if (h.shininess < 0.0) {
             radiance += throughput * albedo;
+            if (i == 0 && rt.restirParams.x > 0.5) {
+                textureStore(reservoirWrite, pixel, vec4<f32>(0.0));
+                textureStore(reservoirWWrite, pixel, vec4<f32>(0.0));
+            }
             break;
         }
 
         let wo = normalize(-ray.dir);
         let F0_h = computeF0(albedo, h.metalness, h.specularColor, h.specularIntensity);
 
-        // --- Analytical light NEE ---
+        // --- NEE: ReSTIR DI at bounce 0, classic NEE at deeper bounces ---
         let lcount = i32(rt.lightCount.x);
+        let useReSTIR = i == 0 && rt.restirParams.x > 0.5 && rt.mode.x > 0.5;
+
+        if (useReSTIR) {
+            // ======= ReSTIR DI: Initial candidate generation =======
+            var reservoir = emptyReservoir();
+
+            // 1. Analytical lights — sample ONE uniformly to keep M correct
+            if (lcount > 0) {
+                let li = i32(rand(seed) * f32(lcount)) % lcount;
+                var lc = rt.lightCol[li].xyz;
+                let ltype = i32(rt.lightType[li].x);
+                var lightP = rt.lightPos[li].xyz;
+                let ln = select(normalize(lightP - h.point), normalize(lightP), ltype == 1);
+                let ld = select(length(lightP - h.point), 1e30, ltype == 1);
+                let lDist = rt.lightType[li].w;
+                let lDecay = rt.lightDir[li].w;
+                if (lDist > 0.0 && ltype != 1) {
+                    lc *= pow(max(1.0 - ld / lDist, 0.0), lDecay);
+                }
+                if (ltype == 2) {
+                    let spotDir = rt.lightDir[li].xyz;
+                    let cosTheta = dot(-ln, spotDir);
+                    let cosInner = rt.lightType[li].y;
+                    let cosOuter = rt.lightType[li].z;
+                    lc *= clamp((cosTheta - cosOuter) / max(cosInner - cosOuter, 1e-6), 0.0, 1.0);
+                }
+                let p_hat_a = restirTargetPdf(h.point, h.normal, wo, albedo, h.metalness, h.shininess, F0_h,
+                                              lightP, f32(li), lc);
+                if (p_hat_a > 0.0) {
+                    let p_source = 1.0 / max(f32(lcount), 1.0);
+                    updateReservoir(&reservoir, lightP, f32(li),
+                                    p_hat_a / p_source, p_hat_a, seed);
+                }
+            }
+)"
+R"(
+            // 2. Emissive triangles — CDF samples
+            if (emTriCount > 0 && totalPower > 0.0) {
+                for (var ei = 0; ei < 4; ei++) {
+                    let xi = rand(seed) * totalPower;
+                    var lo = 0;
+                    var hi = emTriCount - 1;
+                    while (lo < hi) {
+                        let mid = (lo + hi) >> 1;
+                        if (emissiveTris[mid].z < xi) { lo = mid + 1; } else { hi = mid; }
+                    }
+                    let emInfo = emissiveTris[lo];
+                    let eTi   = i32(emInfo.x);
+                    let eArea = emInfo.y;
+                    let ePower = emInfo.w;
+                    let ev0 = textureLoad(triData, triCoord(eTi, 0), 0).xyz;
+                    let ev1 = textureLoad(triData, triCoord(eTi, 1), 0).xyz;
+                    let ev2 = textureLoad(triData, triCoord(eTi, 2), 0).xyz;
+                    let su1 = sqrt(rand(seed));
+                    let u2  = rand(seed);
+                    let lightPoint = (1.0 - su1) * ev0 + su1 * (1.0 - u2) * ev1 + su1 * u2 * ev2;
+                    let toLight = lightPoint - h.point;
+                    let dist = length(toLight);
+                    let ln_e = toLight / dist;
+                    let lightNormal = normalize(cross(ev1 - ev0, ev2 - ev0));
+                    let cosLight = abs(dot(lightNormal, -ln_e));
+                    let NdotL_e = dot(h.normal, ln_e);
+                    if (NdotL_e > 0.0 && cosLight > 1e-6) {
+                        let eMatIdx = i32(textureLoad(triData, triCoord(eTi, 0), 0).w);
+                        let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
+                        let p_hat_e = restirTargetPdf(h.point, h.normal, wo, albedo, h.metalness, h.shininess, F0_h,
+                                                      lightPoint, 1000.0 + f32(eTi), emColor);
+                        if (p_hat_e > 0.0) {
+                            let p_source_e = (ePower / totalPower) * (dist * dist) / (eArea * cosLight);
+                            updateReservoir(&reservoir, lightPoint, 1000.0 + f32(eTi),
+                                            p_hat_e / p_source_e, p_hat_e, seed);
+                        }
+                    }
+                }
+            }
+
+            // 3. Environment — 1 importance sample
+            if (HAS_ENV_CDF && rt.envColor.w > 1.5) {
+                let envSample = sampleEnvImportance(seed);
+                let envDir = envSample.xyz;
+                let envPdf = envSample.w;
+                if (dot(h.normal, envDir) > 0.0 && envPdf > 1e-8) {
+                    let envCol = sampleEnv(envDir) * rt.envIntensity.x;
+                    let p_hat_env = restirTargetPdf(h.point, h.normal, wo, albedo, h.metalness, h.shininess, F0_h,
+                                                    envDir, -1.0, envCol);
+                    if (p_hat_env > 0.0) {
+                        updateReservoir(&reservoir, envDir, -1.0,
+                                        p_hat_env / envPdf, p_hat_env, seed);
+                    }
+                }
+            }
+
+            finalizeReservoir(&reservoir);
+)"
+R"(
+            // === TEMPORAL REUSE ===
+            if (rt.frameCount.x > 0.0) {
+                // Reproject current hit to previous frame pixel
+                let relP = h.point - vec3<f32>(rt.prevCamOri.x, rt.prevCamOri.y, rt.prevCamOri.z);
+                let prevFwd = vec3<f32>(rt.prevCamFwd.x, rt.prevCamFwd.y, rt.prevCamFwd.z);
+                let prevRgt = vec3<f32>(rt.prevCamRgt.x, rt.prevCamRgt.y, rt.prevCamRgt.z);
+                let prevUp  = vec3<f32>(rt.prevCamUp.x, rt.prevCamUp.y, rt.prevCamUp.z);
+                let dz = dot(relP, prevFwd);
+                if (dz > 0.0) {
+                    let dx = dot(relP, prevRgt);
+                    let dy = dot(relP, prevUp);
+                    let thf = rt.tanHalfFov.x;
+                    let aspect = rt.iRes.x / rt.iRes.y;
+                    let ndcX = dx / (dz * thf * aspect);
+                    let ndcY = dy / (dz * thf);
+                    let prevU = (ndcX * 0.5 + 0.5) * rt.iRes.x;
+                    let prevV = (0.5 - ndcY * 0.5) * rt.iRes.y;
+                    let prevPx = vec2<i32>(i32(prevU), i32(prevV));
+
+                    if (prevPx.x >= 0 && prevPx.y >= 0 &&
+                        prevPx.x < i32(rt.iRes.x) && prevPx.y < i32(rt.iRes.y)) {
+
+                        let prevGB = textureLoad(gBufRead, prevPx, 0);
+                        let prevN = prevGB.xyz;
+                        let prevD = prevGB.w;
+                        let curD = h.t;
+                        let valid = dot(h.normal, prevN) > 0.9 &&
+                                    abs(curD - prevD) / max(curD, 1e-6) < 0.1;
+
+                        if (valid) {
+                            let prevSample = textureLoad(reservoirRead, prevPx, 0);
+                            let prevWeight = textureLoad(reservoirWRead, prevPx, 0);
+
+                            var rPrev: Reservoir;
+                            rPrev.lightPos  = prevSample.xyz;
+                            rPrev.lightType = prevSample.w;
+                            rPrev.W_sum = prevWeight.x;
+                            rPrev.M     = min(prevWeight.y, rt.restirParams.y);
+                            rPrev.W     = prevWeight.z;
+                            rPrev.p_hat = prevWeight.w;
+
+                            // Re-evaluate prev sample's target PDF at current shading point
+                            var prevLe = vec3<f32>(0.0);
+                            let prevTypeCode = i32(rPrev.lightType);
+                            if (prevTypeCode < 0) {
+                                prevLe = sampleEnv(rPrev.lightPos) * rt.envIntensity.x;
+                            } else if (prevTypeCode >= 1000) {
+                                let peTi = prevTypeCode - 1000;
+                                let peMatIdx = i32(textureLoad(triData, triCoord(peTi, 0), 0).w);
+                                prevLe = textureLoad(matData, vec2<i32>(peMatIdx, 2), 0).xyz;
+                            } else if (prevTypeCode >= 0 && prevTypeCode < lcount) {
+                                var lc_prev = rt.lightCol[prevTypeCode].xyz;
+                                let ltype_prev = i32(rt.lightType[prevTypeCode].x);
+                                let toL_prev = rPrev.lightPos - h.point;
+                                let ld_prev = select(length(toL_prev), 1e30, ltype_prev == 1);
+                                let lDist_prev = rt.lightType[prevTypeCode].w;
+                                let lDecay_prev = rt.lightDir[prevTypeCode].w;
+                                if (lDist_prev > 0.0 && ltype_prev != 1) {
+                                    lc_prev *= pow(max(1.0 - ld_prev / lDist_prev, 0.0), lDecay_prev);
+                                }
+                                if (ltype_prev == 2) {
+                                    let ln_prev = select(normalize(toL_prev), normalize(rPrev.lightPos), ltype_prev == 1);
+                                    let spotDir_prev = rt.lightDir[prevTypeCode].xyz;
+                                    let cosTheta_prev = dot(-ln_prev, spotDir_prev);
+                                    let cosInner_prev = rt.lightType[prevTypeCode].y;
+                                    let cosOuter_prev = rt.lightType[prevTypeCode].z;
+                                    lc_prev *= clamp((cosTheta_prev - cosOuter_prev) / max(cosInner_prev - cosOuter_prev, 1e-6), 0.0, 1.0);
+                                }
+                                prevLe = lc_prev;
+                            }
+                            let p_hat_prev = restirTargetPdf(h.point, h.normal, wo, albedo,
+                                                             h.metalness, h.shininess, F0_h,
+                                                             rPrev.lightPos, rPrev.lightType, prevLe);
+                            if (p_hat_prev > 0.0 && rPrev.W > 0.0) {
+                                let w_prev = p_hat_prev * rPrev.M * rPrev.W;
+                                reservoir.W_sum += w_prev;
+                                reservoir.M += rPrev.M;
+                                if (rand(seed) < w_prev / max(reservoir.W_sum, 1e-20)) {
+                                    reservoir.lightPos  = rPrev.lightPos;
+                                    reservoir.lightType = rPrev.lightType;
+                                    reservoir.p_hat     = p_hat_prev;
+                                }
+                                finalizeReservoir(&reservoir);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // === VISIBILITY TEST — shadow ray from shading point ===
+            var reservoirShadowAtten = vec3<f32>(0.0);
+            let rTypeCodeV = i32(reservoir.lightType);
+            if (reservoir.p_hat > 0.0 && reservoir.W > 0.0) {
+                var rDir: vec3<f32>;
+                var rMaxDist: f32;
+                if (rTypeCodeV < 0) {
+                    // Environment: lightPos stores direction
+                    rDir = normalize(reservoir.lightPos);
+                    rMaxDist = 1e30;
+                } else if (rTypeCodeV >= 1000) {
+                    let toL = reservoir.lightPos - h.point;
+                    let dist = length(toL);
+                    rDir = toL / dist;
+                    rMaxDist = dist - 1e-2;  // match classic NEE offset
+                } else {
+                    let ltype = i32(rt.lightType[rTypeCodeV].x);
+                    if (ltype == 1) {
+                        rDir = normalize(reservoir.lightPos);
+                        rMaxDist = 1e30;
+                    } else {
+                        let toL = reservoir.lightPos - h.point;
+                        let dist = length(toL);
+                        rDir = toL / dist;
+                        rMaxDist = dist - 1e-2;  // match classic NEE offset
+                    }
+                }
+                // Simple occlusion test (matches classic NEE exactly)
+                var sr: Ray;
+                sr.origin = h.point + h.normal * 1e-3;
+                sr.dir = rDir;
+                if (!sceneOccluded(sr, rMaxDist)) {
+                    reservoirShadowAtten = vec3<f32>(1.0);
+                }
+            }
+
+            // === SHADE FROM RESERVOIR ===
+            if (reservoirShadowAtten.x + reservoirShadowAtten.y + reservoirShadowAtten.z > 0.001) {
+                let rTypeCode = i32(reservoir.lightType);
+                var rLn: vec3<f32>;
+                var rLe: vec3<f32>;
+                if (rTypeCode < 0) {
+                    // Environment: lightPos stores direction
+                    rLn = normalize(reservoir.lightPos);
+                    rLe = sampleEnv(rLn) * rt.envIntensity.x;
+                } else if (rTypeCode >= 1000) {
+                    rLn = normalize(reservoir.lightPos - h.point);
+                    let reTi = rTypeCode - 1000;
+                    let reMatIdx = i32(textureLoad(triData, triCoord(reTi, 0), 0).w);
+                    rLe = textureLoad(matData, vec2<i32>(reMatIdx, 2), 0).xyz;
+                } else {
+                    var lc = rt.lightCol[rTypeCode].xyz;
+                    let ltype = i32(rt.lightType[rTypeCode].x);
+                    if (ltype == 1) { rLn = normalize(reservoir.lightPos); }
+                    else { rLn = normalize(reservoir.lightPos - h.point); }
+                    let ld = select(length(reservoir.lightPos - h.point), 1e30, ltype == 1);
+                    let lDist = rt.lightType[rTypeCode].w;
+                    let lDecay = rt.lightDir[rTypeCode].w;
+                    if (lDist > 0.0 && ltype != 1) {
+                        lc *= pow(max(1.0 - ld / lDist, 0.0), lDecay);
+                    }
+                    if (ltype == 2) {
+                        let spotDir = rt.lightDir[rTypeCode].xyz;
+                        let cosTheta = dot(-rLn, spotDir);
+                        let cosInner = rt.lightType[rTypeCode].y;
+                        let cosOuter = rt.lightType[rTypeCode].z;
+                        lc *= clamp((cosTheta - cosOuter) / max(cosInner - cosOuter, 1e-6), 0.0, 1.0);
+                    }
+                    rLe = lc;
+                }
+                let rNdotL = max(dot(h.normal, rLn), 0.0);
+                let rBrdf = evalBrdf(wo, rLn, h.normal, albedo, h.metalness, h.shininess, F0_h);
+                var rLobeSum = rBrdf.f_diff + rBrdf.f_spec;
+                let rSheenLum = dot(h.sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
+                if (rSheenLum > 0.001) { rLobeSum += evalSheen(wo, rLn, h.normal, h.sheenColor, h.sheenRoughness); }
+                let contribution = rLobeSum * rNdotL * rLe;
+                radiance += throughput * reservoirShadowAtten * reservoir.W * contribution;
+            }
+            // === STORE RESERVOIR ===
+            // If visibility failed, reset M and W to 0 so next frame does not inherit
+            // an occluded sample via temporal reuse.  This eliminates the "smeared shadow"
+            // bias where high-p̂ but occluded samples propagate indefinitely through the
+            // temporal reservoir.  Lit pixels accumulate M normally; shadowed pixels
+            // restart fresh each frame (path-tracer accumulation still converges them).
+            let visible = reservoirShadowAtten.x + reservoirShadowAtten.y + reservoirShadowAtten.z > 0.001;
+            let rW = select(0.0, select(0.0, reservoir.W, reservoir.W == reservoir.W), visible);
+            let rM = select(0.0, reservoir.M, visible);
+            textureStore(reservoirWrite, pixel,
+                vec4<f32>(reservoir.lightPos, reservoir.lightType));
+            textureStore(reservoirWWrite, pixel,
+                vec4<f32>(reservoir.W_sum, rM, rW, reservoir.p_hat));
+
+        } else {
+        // ======= Classic NEE (bounces > 0 or ReSTIR disabled) =======
+
+        // --- Analytical light NEE ---
         for (var li = 0; li < 4; li++) {
             if (li >= lcount) { break; }
             var lc    = rt.lightCol[li].xyz;
@@ -1312,13 +1677,11 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             let ln    = select(normalize(rt.lightPos[li].xyz - h.point),
                                normalize(rt.lightPos[li].xyz), ltype == 1);
             let ld    = select(length(rt.lightPos[li].xyz - h.point), 1e30, ltype == 1);
-            // Distance/decay attenuation (matches raster renderer)
             let lDist = rt.lightType[li].w;
             let lDecay = rt.lightDir[li].w;
             if (lDist > 0.0 && ltype != 1) {
                 lc *= pow(max(1.0 - ld / lDist, 0.0), lDecay);
             }
-            // Spotlight cone attenuation
             if (ltype == 2) {
                 let spotDir   = rt.lightDir[li].xyz;
                 let cosTheta  = dot(-ln, spotDir);
@@ -1339,7 +1702,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                 var shAlbedo = sh.albedo;
                 if (sh.texSlot >= 0.0) { shAlbedo = srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
                 shadowAtten *= shAlbedo * sh.transmission;
-                sr.origin = sh.point - sh.normal * 1e-3;
+                sr.origin = sh.point + sr.dir * 1e-3;
             }
             if (shadowAtten.x + shadowAtten.y + shadowAtten.z > 0.001) {
                 let NdotL = dot(h.normal, ln);
@@ -1355,8 +1718,8 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
 R"(
         // --- Emissive surface NEE (power-weighted CDF sampling) ---
         if (emTriCount > 0) {
-            let totalPower = rt.emissiveInfo.y;
-            let xi = rand(seed) * totalPower;
+            let totalPower2 = rt.emissiveInfo.y;
+            let xi = rand(seed) * totalPower2;
             var lo = 0;
             var hi = emTriCount - 1;
             while (lo < hi) {
@@ -1393,7 +1756,7 @@ R"(
                     let eMatIdx = i32(textureLoad(triData, triCoord(eTi, 0), 0).w);
                     let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
 
-                    let pdf = (ePower * dist * dist) / (totalPower * eArea * cosLight);
+                    let pdf = (ePower * dist * dist) / (totalPower2 * eArea * cosLight);
                     let brdf = evalBrdf(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h);
                     var lobeSum3 = brdf.f_diff + brdf.f_spec;
                     let sheenLum3 = dot(h.sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -1428,6 +1791,8 @@ R"(
                 }
             }
         }
+
+        } // end ReSTIR vs classic NEE
 
         if (i > 1) {
             let p = max(max(throughput.r, throughput.g), throughput.b);
@@ -1678,7 +2043,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var primaryDepth:   f32;
     var primaryAlbedo:  vec3<f32>;
     var touchedMoved:   bool;
-    var sample  = pathTrace(ray, &seed, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &touchedMoved);
+    var sample  = pathTrace(ray, &seed, pixel, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &touchedMoved);
 
     let prev     = textureLoad(accumRead, pixel, 0);
     var old      = prev.xyz;
@@ -2326,8 +2691,9 @@ struct alignas(16) RtGpuUniforms {
     float    bgColor[4];       // xyz = color, w = mode (0=sky gradient, 1=solid color, 2=equirect bgTex)
     float    params[4];        // x = maxBounces
     float    emissiveInfo[4]; // x = emissive tri count, y = total emissive area
+    float    restirParams[4]; // x = enabled, y = M_clamp, z = reserved, w = reserved
 };
-static_assert(sizeof(RtGpuUniforms) == 592, "RtGpuUniforms must be 592 bytes");
+static_assert(sizeof(RtGpuUniforms) == 608, "RtGpuUniforms must be 608 bytes");
 
 struct alignas(16) VtGpuUniforms {
     uint32_t triCount, groupsX, splitAt, _p1;
@@ -3440,6 +3806,16 @@ struct WgpuPathTracer::Impl {
     WgpuTexture* gBufCur;       // current frame writes here
     WgpuTexture* gBufPrev;      // previous frame's G-buffer
 
+    // ReSTIR DI reservoir ping-pong
+    WgpuTexture reservoirA;     // rgba32float — lightPos.xyz + encoded type/index
+    WgpuTexture reservoirB;
+    WgpuTexture reservoirWA;    // rgba32float — W_sum, M, W, p_hat
+    WgpuTexture reservoirWB;
+    WgpuTexture* reservoirRead;
+    WgpuTexture* reservoirWrite;
+    WgpuTexture* reservoirWRead;
+    WgpuTexture* reservoirWWrite;
+
     // Albedo buffer (primary-hit albedo for demodulation/remodulation)
     WgpuTexture albedoTex;
 
@@ -3459,6 +3835,7 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer  taaUniBuf;
     WgpuBuffer  atrousUniBuf;
     bool denoiserEnabled_ = false;
+    bool restirEnabled_ = false;
     float envIntensity_ = 0.5f;
     int maxBounces_ = 5;
     float exposure_ = 1.0f;
@@ -3642,6 +4019,17 @@ struct WgpuPathTracer::Impl {
           gBufB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                 WgpuTexture::Format::RGBA16Float),
           gBufCur(&gBufA), gBufPrev(&gBufB),
+          // ReSTIR DI reservoir ping-pong
+          reservoirA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                     WgpuTexture::Format::RGBA32Float),
+          reservoirB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                     WgpuTexture::Format::RGBA32Float),
+          reservoirWA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                      WgpuTexture::Format::RGBA32Float),
+          reservoirWB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                      WgpuTexture::Format::RGBA32Float),
+          reservoirRead(&reservoirA), reservoirWrite(&reservoirB),
+          reservoirWRead(&reservoirWA), reservoirWWrite(&reservoirWB),
           // Albedo buffer for demodulation
           albedoTex(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                     WgpuTexture::Format::RGBA16Float),
@@ -3726,6 +4114,10 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(14, albedoTex);
         rtPipeline.setTexture(15, *gBufPrev);
         rtPipeline.setTexture(16, bgTexGpu);
+        rtPipeline.setTexture(17, *reservoirRead);
+        rtPipeline.setStorageTexture(18, *reservoirWrite);
+        rtPipeline.setTexture(19, *reservoirWRead);
+        rtPipeline.setStorageTexture(20, *reservoirWWrite);
 
         rtRaycastPipeline.setUniformBuffer(0, rtUniformBuf);
         rtRaycastPipeline.setTexture(1, *readAccum);
@@ -3742,6 +4134,10 @@ struct WgpuPathTracer::Impl {
         rtRaycastPipeline.setStorageTexture(14, albedoTex);
         rtRaycastPipeline.setTexture(15, *gBufPrev);
         rtRaycastPipeline.setTexture(16, bgTexGpu);
+        rtRaycastPipeline.setTexture(17, *reservoirRead);
+        rtRaycastPipeline.setStorageTexture(18, *reservoirWrite);
+        rtRaycastPipeline.setTexture(19, *reservoirWRead);
+        rtRaycastPipeline.setStorageTexture(20, *reservoirWWrite);
 
         // TAA pipeline — set ALL bindings upfront
         taaPipeline.setUniformBuffer(0, taaUniBuf);
@@ -3891,6 +4287,16 @@ struct WgpuPathTracer::Impl {
         gBufCur  = &gBufA;
         gBufPrev = &gBufB;
 
+        auto fmt32 = WgpuTexture::Format::RGBA32Float;
+        reservoirA  = WgpuTexture(renderer, uw, uh, fmt32);
+        reservoirB  = WgpuTexture(renderer, uw, uh, fmt32);
+        reservoirWA = WgpuTexture(renderer, uw, uh, fmt32);
+        reservoirWB = WgpuTexture(renderer, uw, uh, fmt32);
+        reservoirRead   = &reservoirA;
+        reservoirWrite  = &reservoirB;
+        reservoirWRead  = &reservoirWA;
+        reservoirWWrite = &reservoirWB;
+
         albedoTex = WgpuTexture(renderer, uw, uh, fmt);
 
         taaHistA = WgpuTexture(renderer, uw, uh, fmt);
@@ -3916,9 +4322,17 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(10, *gBufCur);
         rtPipeline.setTexture(15, *gBufPrev);
         rtPipeline.setStorageTexture(14, albedoTex);
+        rtPipeline.setTexture(17, *reservoirRead);
+        rtPipeline.setStorageTexture(18, *reservoirWrite);
+        rtPipeline.setTexture(19, *reservoirWRead);
+        rtPipeline.setStorageTexture(20, *reservoirWWrite);
         rtRaycastPipeline.setStorageTexture(10, *gBufCur);
         rtRaycastPipeline.setTexture(15, *gBufPrev);
         rtRaycastPipeline.setStorageTexture(14, albedoTex);
+        rtRaycastPipeline.setTexture(17, *reservoirRead);
+        rtRaycastPipeline.setStorageTexture(18, *reservoirWrite);
+        rtRaycastPipeline.setTexture(19, *reservoirWRead);
+        rtRaycastPipeline.setStorageTexture(20, *reservoirWWrite);
         atrousPipeline.setTexture(4, albedoTex);
 
         frameCount_ = 0.f;
@@ -4623,6 +5037,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.params[3] = (d.frameCount_ == 0.f) ? 1.f : 0.f;  // force-reset accum on first frame
     u.emissiveInfo[0] = static_cast<float>(d.emissiveTriCount_);
     u.emissiveInfo[1] = d.emissiveTotalPower_;
+    u.restirParams[0] = d.restirEnabled_ ? 1.f : 0.f;
+    u.restirParams[1] = 8.f;   // M clamp — lower = crisper shadows, higher = lower variance
 
     int nLights = 0;
     auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
@@ -4741,6 +5157,18 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     d.rtPipeline.setTexture(15, *d.gBufPrev);
     d.rtRaycastPipeline.setStorageTexture(10, *d.gBufCur);
     d.rtRaycastPipeline.setTexture(15, *d.gBufPrev);
+
+    // Swap ReSTIR reservoir ping-pong
+    std::swap(d.reservoirRead, d.reservoirWrite);
+    std::swap(d.reservoirWRead, d.reservoirWWrite);
+    d.rtPipeline.setTexture(17, *d.reservoirRead);
+    d.rtPipeline.setStorageTexture(18, *d.reservoirWrite);
+    d.rtPipeline.setTexture(19, *d.reservoirWRead);
+    d.rtPipeline.setStorageTexture(20, *d.reservoirWWrite);
+    d.rtRaycastPipeline.setTexture(17, *d.reservoirRead);
+    d.rtRaycastPipeline.setStorageTexture(18, *d.reservoirWrite);
+    d.rtRaycastPipeline.setTexture(19, *d.reservoirWRead);
+    d.rtRaycastPipeline.setStorageTexture(20, *d.reservoirWWrite);
 
     // TAA + spatial denoiser (path tracer mode only)
     // Skip entirely when fully converged — accumulation is already clean.
@@ -4985,6 +5413,14 @@ void WgpuPathTracer::setDenoiserEnabled(bool enabled) {
 
 bool WgpuPathTracer::denoiserEnabled() const {
     return pimpl_->denoiserEnabled_;
+}
+
+void WgpuPathTracer::setReSTIREnabled(bool enabled) {
+    pimpl_->restirEnabled_ = enabled;
+}
+
+bool WgpuPathTracer::restirEnabled() const {
+    return pimpl_->restirEnabled_;
 }
 
 void WgpuPathTracer::setSamplesPerPixel(int spp) {
