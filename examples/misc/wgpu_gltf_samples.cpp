@@ -87,6 +87,7 @@ int main(int argc, char** argv) {
     pathTracer.setSamplesPerPixel(2);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setFoveatedRendering(false);
+    pathTracer.setReSTIREnabled(false);
     pathTracer.setMaxBounces(4);
     pathTracer.setMode(WgpuPathTracer::Mode::Raytracer);
 
@@ -178,6 +179,7 @@ int main(int argc, char** argv) {
     const char* modeNames[] = {"Raytracer", "PathTracer", "Raster"};
     bool dirLight = false;
     bool denoiserOn = pathTracer.denoiserEnabled();
+    bool restdirOn = pathTracer.restirEnabled();
     float exposure = pathTracer.exposure();
     float envIntensity = pathTracer.envIntensity();
     float fps = 0.f, fpsAccum = 0.f;
@@ -232,6 +234,8 @@ int main(int argc, char** argv) {
         if (renderMode == 1) {
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);
+            if (ImGui::Checkbox("REsTDIR", &restdirOn))
+                pathTracer.setReSTIREnabled(restdirOn);
         }
         if (renderMode != 2) {
             if (ImGui::Checkbox("Show DirLight", &dirLight)) {
