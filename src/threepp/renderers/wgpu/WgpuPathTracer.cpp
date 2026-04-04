@@ -1597,6 +1597,91 @@ R"(
                     }
                 }
             }
+)"
+R"(
+            // Snapshot reservoir before spatial reuse — stored for next-frame temporal reuse.
+            // Spatial reuse is used for shading only; if we stored the post-spatial reservoir
+            // a shadowed pixel that borrows a lit neighbour's light would keep failing visibility
+            // and permanently accumulate W=0 (feedback loop → fades to black).
+            let preSpReservoir = reservoir;
+
+            // === SPATIAL REUSE — 8 random neighbours from previous frame ===
+            // Reads last-frame reservoirs from a disk of radius ~30 px.
+            // Geometry check (normal, depth) prevents bleeding across surfaces.
+            // Uses one-frame-lagged neighbours — avoids a second dispatch and is
+            // visually indistinguishable from same-frame spatial reuse.
+            {
+                for (var spI = 0u; spI < 8u; spI++) {
+                    let spAngle = rand(seed) * 2.0 * PI;
+                    let spR     = sqrt(rand(seed)) * 30.0;
+                    let spOff   = vec2<i32>(i32(spR * cos(spAngle)), i32(spR * sin(spAngle)));
+                    if (all(spOff == vec2<i32>(0))) { continue; }
+                    let spPx = clamp(pixel + spOff,
+                                     vec2<i32>(0),
+                                     vec2<i32>(i32(rt.iRes.x) - 1, i32(rt.iRes.y) - 1));
+
+                    // Reject across surface boundaries
+                    let spGB = textureLoad(gBufRead, spPx, 0);
+                    if (dot(h.normal, spGB.xyz) < 0.906 ||
+                        abs(h.t - spGB.w) / max(h.t, 1e-3) > 0.15) { continue; }
+
+                    let spSmp = textureLoad(reservoirRead,  spPx, 0);
+                    let spWt  = textureLoad(reservoirWRead, spPx, 0);
+                    var rSp: Reservoir;
+                    rSp.lightPos  = spSmp.xyz;
+                    rSp.lightType = spSmp.w;
+                    rSp.W_sum = spWt.x;
+                    rSp.M     = min(spWt.y, 4.0); // low cap: spatial neighbours must not drown out this pixel's own candidates
+                    rSp.W     = spWt.z;
+                    rSp.p_hat = spWt.w;
+                    if (rSp.W <= 0.0 || rSp.M <= 0.0) { continue; }
+
+                    // Re-evaluate neighbour's chosen light at the CURRENT shading point
+                    var spLe  = vec3<f32>(0.0);
+                    let spTC  = i32(rSp.lightType);
+                    if (spTC < 0) {
+                        spLe = sampleEnv(rSp.lightPos) * rt.envIntensity.x;
+                    } else if (spTC >= 1000) {
+                        let spTi  = spTC - 1000;
+                        let spMat = i32(textureLoad(triData, triCoord(spTi, 0), 0).w);
+                        spLe = textureLoad(matData, vec2<i32>(spMat, 2), 0).xyz;
+                    } else if (spTC < lcount) {
+                        var lc_sp    = rt.lightCol[spTC].xyz;
+                        let ltype_sp = i32(rt.lightType[spTC].x);
+                        let toL_sp   = rSp.lightPos - h.point;
+                        let ld_sp    = select(length(toL_sp), 1e30, ltype_sp == 1);
+                        let lDist_sp = rt.lightType[spTC].w;
+                        let lDcy_sp  = rt.lightDir[spTC].w;
+                        if (lDist_sp > 0.0 && ltype_sp != 1) {
+                            lc_sp *= pow(max(1.0 - ld_sp / lDist_sp, 0.0), lDcy_sp);
+                        }
+                        if (ltype_sp == 2) {
+                            let ln_sp  = select(normalize(toL_sp), normalize(rSp.lightPos), ltype_sp == 1);
+                            let sd_sp  = rt.lightDir[spTC].xyz;
+                            let ct_sp  = dot(-ln_sp, sd_sp);
+                            let ci_sp  = rt.lightType[spTC].y;
+                            let co_sp  = rt.lightType[spTC].z;
+                            lc_sp *= clamp((ct_sp - co_sp) / max(ci_sp - co_sp, 1e-6), 0.0, 1.0);
+                        }
+                        spLe = lc_sp;
+                    }
+
+                    let p_hat_sp = restirTargetPdf(h.point, h.normal, wo, albedo,
+                                                    h.metalness, h.shininess, F0_h,
+                                                    rSp.lightPos, rSp.lightType, spLe);
+                    if (p_hat_sp > 0.0) {
+                        let w_sp = p_hat_sp * rSp.M * rSp.W;
+                        reservoir.W_sum += w_sp;
+                        reservoir.M     += rSp.M;
+                        if (rand(seed) < w_sp / max(reservoir.W_sum, 1e-20)) {
+                            reservoir.lightPos  = rSp.lightPos;
+                            reservoir.lightType = rSp.lightType;
+                            reservoir.p_hat     = p_hat_sp;
+                        }
+                    }
+                }
+                finalizeReservoir(&reservoir);
+            }
 
             // === VISIBILITY TEST — shadow ray from shading point ===
             var reservoirShadowAtten = vec3<f32>(0.0);
@@ -1712,12 +1797,15 @@ R"(
             // temporal reservoir.  Lit pixels accumulate M normally; shadowed pixels
             // restart fresh each frame (path-tracer accumulation still converges them).
             let visible = reservoirShadowAtten.x + reservoirShadowAtten.y + reservoirShadowAtten.z > 0.001;
-            let rW = select(0.0, select(0.0, reservoir.W, reservoir.W == reservoir.W), visible);
-            let rM = select(0.0, reservoir.M, visible);
+            // Store pre-spatial reservoir so temporal reuse next frame reflects what
+            // THIS pixel actually selected (with known good visibility), not what a
+            // neighbour selected that may be occluded here.
+            let rW = select(0.0, select(0.0, preSpReservoir.W, preSpReservoir.W == preSpReservoir.W), visible);
+            let rM = select(0.0, preSpReservoir.M, visible);
             textureStore(reservoirWrite, pixel,
-                vec4<f32>(reservoir.lightPos, reservoir.lightType));
+                vec4<f32>(preSpReservoir.lightPos, preSpReservoir.lightType));
             textureStore(reservoirWWrite, pixel,
-                vec4<f32>(reservoir.W_sum, rM, rW, reservoir.p_hat));
+                vec4<f32>(preSpReservoir.W_sum, rM, rW, preSpReservoir.p_hat));
 
         } else {
         // ======= Classic NEE (bounces > 0 or ReSTIR disabled) =======
