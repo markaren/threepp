@@ -364,11 +364,11 @@ int main() {
     WgpuRenderer renderer(canvas);
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
-    pathTracer.setMaxBounces(8);
+    pathTracer.setMaxBounces(5);
     pathTracer.setMode(WgpuPathTracer::Mode::PathTracer);
     pathTracer.setDenoiserEnabled(true);
     pathTracer.setReSTIREnabled(true);
-    pathTracer.setFoveatedRendering(true);
+    pathTracer.setFoveatedRendering(false);
     pathTracer.setExposure(1.0f);
 
     // ── Scene ──────────────────────────────────────────────────────────────────
@@ -408,11 +408,11 @@ int main() {
     controls.update();
 
     // ── State ──────────────────────────────────────────────────────────────────
-    bool restirOn   = true;
-    bool denoiserOn = true;
+    bool restirOn   = pathTracer.restirEnabled();
+    bool denoiserOn = pathTracer.denoiserEnabled();
     bool animating  = true;
-    bool foveated   = true;
-    int  maxBounces = 8;
+    bool foveated   = pathTracer.foveatedRendering();
+    int  maxBounces = pathTracer.maxBounces();
     float exposure  = 1.0f;
     float fps = 0.f, fpsAccum = 0.f;
     int   fpsFrames = 0;
