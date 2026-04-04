@@ -331,6 +331,12 @@ void WgpuComputePipeline::replaceShader(const std::string& wgslSource) {
     impl_->layoutDirty = true;
 }
 
+void WgpuComputePipeline::forceFinishBuild() {
+    // Block until the async compilation is done (no-op if not running or already built).
+    // After this returns, isReady() will return true and encode() will do a fast sync rebuild.
+    impl_->waitForAsync();
+}
+
 void WgpuComputePipeline::encode(WGPUComputePassEncoder pass, uint32_t x, uint32_t y, uint32_t z) {
     // If async build is pending, check if it completed
     if (impl_->asyncPending && impl_->asyncFuture.valid()) {

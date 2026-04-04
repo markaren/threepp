@@ -39,6 +39,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <webgpu/wgpu.h>
 
 using namespace threepp;
 
@@ -3918,6 +3919,9 @@ struct WgpuPathTracer::Impl {
 #endif
     bool shaderHasEnvCdf_ = false;  // tracks which shader variant is active
 
+    // Shader compilation wait tracking
+    uint32_t shaderWaitFrames_ = 0;
+
     // Frame state
     std::unordered_map<Texture*, int> texSlotMap;
     std::vector<Mesh*> prevMeshes;
@@ -4124,15 +4128,17 @@ struct WgpuPathTracer::Impl {
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(5, *readHitMesh);
 
-        // Kick off async shader compilation for all 6 pipelines
-        // (the big RT shaders benefit most — VT/refit/TAA/atrous are small)
-        rtPipeline.startAsyncBuild();
-        rtRaycastPipeline.startAsyncBuild();
+        // Kick off async shader compilation for the small helper pipelines.
+        // The large RT shaders are compiled after the first topology build so that
+        // async uses the real (scene-sized) buffer bindings — this avoids a costly
+        // double-compilation where the initial async result gets discarded because
+        // layoutDirty=true (topology bindings changed) and the pipeline must be
+        // rebuilt synchronously on the main thread a second time.
         vtPipeline.startAsyncBuild();
         refitPipeline.startAsyncBuild();
         taaPipeline.startAsyncBuild();
         atrousPipeline.startAsyncBuild();
-        std::cerr << "[PathTracer] Async shader compilation started for 6 pipelines" << std::endl;
+        std::cerr << "[PathTracer] Async shader compilation started for helper pipelines" << std::endl;
 
         // Zero-fill accumulators and SVGF textures
         {
@@ -4703,6 +4709,17 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         { std::vector<uint32_t>().swap(d.bvhNodeCpuBuf); }
         { std::vector<int32_t>().swap(d.refitMetaCpuBuf); }
         { std::vector<float>().swap(d.emissiveTriCpu); }
+
+        // Start async RT pipeline compilation NOW — after all topology bindings (buffer sizes,
+        // texture formats) are finalised.  This ensures:
+        //  • layoutDirty stays false between now and the first dispatch (per-frame ping-pong
+        //    swaps only change texture views, never the layout type/format → no dirty).
+        //  • When async completes, the result is used directly without a second compile.
+        // Previously these were started in the constructor with 1-tri placeholder bindings,
+        // causing a layoutDirty discard → a second full synchronous compile on the main thread
+        // (~30s extra freeze on first cold-cache launch).
+        d.rtPipeline.startAsyncBuild();
+        d.rtRaycastPipeline.startAsyncBuild();
     }
 
     // Before first build, skip RT dispatch
@@ -5057,13 +5074,39 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     const bool isPT = d.mode_ == Mode::PathTracer;
     auto& activePipeline = isPT ? d.rtPipeline : d.rtRaycastPipeline;
 
-    // Skip RT dispatch if the active pipeline is still compiling asynchronously
+    // Skip RT dispatch if the active pipeline is still compiling asynchronously.
+    // On cold shader cache (first launch / code change) this can take 10-30 seconds.
     if (!activePipeline.isReady()) {
-        d.displayMat->customTextures["accumTex"] = d.readAccum;
-        d.displayMat->customTextures["gBufTex"]  = d.gBufPrev;
-        d.displayMat->uniformsNeedUpdate = true;
-        d.renderer.render(d.displayScene, d.displayCam);
-        return;
+        ++d.shaderWaitFrames_;
+        if (d.shaderWaitFrames_ == 1) {
+            std::cerr << "[PathTracer] Compiling RT shaders — first launch may take 10-30s "
+                         "(subsequent launches are instant via driver cache)." << std::endl;
+        } else if (d.shaderWaitFrames_ % 180 == 0) {
+            std::cerr << "[PathTracer] Still compiling shaders... ("
+                      << (d.shaderWaitFrames_ / 60) << "s elapsed)" << std::endl;
+        }
+        // Tick the device so backends that need main-thread event processing make progress.
+        wgpuDevicePoll(d.device, false, nullptr);
+        // Safety net: after ~60 seconds still black, force-block until async finishes.
+        // This prevents a permanent black screen if something prevents the future from
+        // being polled to completion in the normal render loop.
+        if (d.shaderWaitFrames_ >= 3600) {
+            std::cerr << "[PathTracer] 60s timeout — force-completing shader compilation." << std::endl;
+            activePipeline.forceFinishBuild();
+            d.shaderWaitFrames_ = 0;
+            // Fall through: isReady() now returns true; encode() will do the fast sync rebuild.
+        } else {
+            d.displayMat->customTextures["accumTex"] = d.readAccum;
+            d.displayMat->customTextures["gBufTex"]  = d.gBufPrev;
+            d.displayMat->uniformsNeedUpdate = true;
+            d.renderer.render(d.displayScene, d.displayCam);
+            return;
+        }
+    }
+    if (d.shaderWaitFrames_ > 0) {
+        std::cerr << "[PathTracer] RT shaders ready after "
+                  << (d.shaderWaitFrames_ / 60) << "s — rendering started." << std::endl;
+        d.shaderWaitFrames_ = 0;
     }
 
     activePipeline.setTexture(1, *d.readAccum);

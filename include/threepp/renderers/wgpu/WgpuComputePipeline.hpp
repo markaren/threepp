@@ -74,6 +74,10 @@ namespace threepp {
         /// Replace the shader module with new WGSL source (forces pipeline rebuild on next dispatch).
         void replaceShader(const std::string& wgslSource);
 
+        /// Block until any in-progress async build completes (then marks for sync rebuild).
+        /// Call this if isReady() has been false for too long.
+        void forceFinishBuild();
+
         /// Create an encoder, dispatch, and submit (convenience wrapper).
         void dispatch(uint32_t x, uint32_t y = 1, uint32_t z = 1);
 
