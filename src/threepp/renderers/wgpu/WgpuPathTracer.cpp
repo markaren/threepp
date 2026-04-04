@@ -1683,6 +1683,7 @@ R"(
                 }
                 finalizeReservoir(&reservoir);
             }
+            reservoir.W = min(reservoir.W, 5.0);
 
             // === VISIBILITY TEST — shadow ray from shading point ===
             var reservoirShadowAtten = vec3<f32>(0.0);
