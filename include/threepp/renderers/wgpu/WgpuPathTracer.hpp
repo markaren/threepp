@@ -55,6 +55,14 @@ namespace threepp {
         void setExposure(float exposure);
         [[nodiscard]] float exposure() const;
 
+        /// Per-contribution firefly clamp on indirect MIS paths (luminance cap).
+        /// Default: 8.0 — matches production renderers (Arnold/Cycles/RenderMan).
+        /// Pass a very large value (or <= 0 for auto-disable) when unbiased HDR
+        /// is required — e.g. ML training data, light-transport validation.
+        /// Primary-ray emissive hits are never clamped.
+        void setFireflyClamp(float cap);
+        [[nodiscard]] float fireflyClamp() const;
+
         /// Enable/disable the à-trous wavelet denoiser (path tracer mode only). Default: true.
         void setDenoiserEnabled(bool enabled);
         [[nodiscard]] bool denoiserEnabled() const;

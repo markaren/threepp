@@ -120,12 +120,12 @@ struct RtUniforms {
     lightType:  array<vec4<f32>, 4>,  // x: 0=point, 1=directional, 2=spot; y=cosAngle; z=cosOuter; w=distance
     lightDir:   array<vec4<f32>, 4>,  // xyz: spotlight direction (normalized); w=decay
     spp:          vec4<f32>,
-    movedMeshBits: vec4<u32>,  // bit i = mesh i moved (words 0/1 cover meshes 0-63)
+    movedMeshBits: vec4<u32>,  // bit i = mesh i moved (4 words cover meshes 0-127)
     envColor:      vec4<f32>,  // xyz = color/tint, w = mode: 0=none, 1=solid color, 2=equirect tex
     envIntensity:  vec4<f32>,  // x = intensity scale, y = envWidth, z = envHeight, w = hasEnvCDF
     bgColor:       vec4<f32>,  // xyz = color, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex (bgTex)
     params:        vec4<f32>,  // x = maxBounces
-    emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive power
+    emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive power, z = fireflyCap
     restirParams:  vec4<f32>,  // x = enabled, y = M_clamp, z = emissiveMoved, w = hybridMode
 };
 
@@ -166,6 +166,7 @@ struct Bvh4NodeGpu {
 @group(0) @binding(25) var hybridGBuf3: texture_2d<f32>;  // worldPos.xyz, transmission
 @group(0) @binding(26) var hybridGBuf4: texture_2d<f32>;  // geoNormal.xyz, frontFace
 @group(0) @binding(27) var hybridGBuf5: texture_2d<f32>;  // uv.x, uv.y, matIdx, meshIdx
+@group(0) @binding(29) var<storage, read> rtMotionMats: array<mat4x4<f32>>;  // prevWorld * inverse(curWorld) per mesh
 
 const MAX_TEX_SLOTS: i32 = 256;
 const EMPTY_CHILD: i32 = -2147483648;  // INT_MIN — sentinel for unused BVH4 child slots
@@ -523,10 +524,25 @@ fn testTriangle(ray: Ray, ti: i32, rh: ptr<function, RawHit>) {
             // Hard cutoff
             if (alpha < alphaTest) { return; }
         } else {
-            // Stochastic alpha: varies per frame so it converges over accumulation
-            let h = pcg(pcg(u32(ti)) ^ pcg(bitcast<u32>(isect.t)));
-            let rng = f32(h) / 4294967295.0;
-            if (rng > alpha) { return; }
+            // Stochastic alpha with bias-zero early-outs.
+            //
+            // Variance reduction: when alpha is ~1.0 (effectively opaque),
+            // skip the coin flip entirely — one probabilistic pass-through per
+            // ~1000 frames is invisible but contributes zero variance.
+            // Symmetric early-out for alpha≈0 (fully transparent).
+            // This alone fixes stochastic-alpha fireflies on glTF materials
+            // with alpha-packed textures whose alpha is 0.98-1.00.
+            // For genuinely translucent regions (0.01 < alpha < 0.99), fall
+            // back to the unbiased stochastic coin-flip.
+            if (alpha >= 0.99) {
+                // always accept — effectively opaque
+            } else if (alpha <= 0.01) {
+                return;  // always skip — effectively transparent
+            } else {
+                let h = pcg(pcg(u32(ti)) ^ pcg(bitcast<u32>(isect.t)));
+                let rng = f32(h) / 4294967295.0;
+                if (rng > alpha) { return; }
+            }
         }
     }
 
@@ -1034,11 +1050,39 @@ fn traceShadowRay(origin: vec3<f32>, normal: vec3<f32>, dir: vec3<f32>,
 }
 
 // BRDF + sheen combined evaluation: returns full lobe sum (diffuse + specular + sheen).
+// Clearcoat lobe evaluation: dielectric GGX specular layered on top of base.
+// Returns the radiance multiplier for wi given wo at this surface point.
+fn evalClearcoat(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
+                 ccWeight: f32, ccAlpha: f32) -> f32 {
+    if (ccWeight <= 0.0 || ccAlpha <= 0.0) { return 0.0; }
+    let hv    = normalize(wo + wi);
+    let NdotH = max(0.0, dot(n, hv));
+    let NdotV = max(0.001, dot(n, wo));
+    let NdotL = max(0.001, dot(n, wi));
+    let D     = ggxD(NdotH, ccAlpha);
+    let G     = ggxG1(NdotV, ccAlpha) * ggxG1(NdotL, ccAlpha);
+    return D * G / max(4.0 * NdotV * NdotL, 1e-6) * ccWeight;
+}
+
 fn evalBrdfFull(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
                 albedo: vec3<f32>, metalness: f32, alpha: f32, F0: vec3<f32>,
-                sheenColor: vec3<f32>, sheenRoughness: f32) -> vec3<f32> {
+                sheenColor: vec3<f32>, sheenRoughness: f32,
+                clearcoat: f32, clearcoatAlpha: f32) -> vec3<f32> {
     let brdf = evalBrdf(wo, wi, n, albedo, metalness, alpha, F0);
-    var lobeSum = brdf.f_diff + brdf.f_spec;
+    // Clearcoat Fresnel attenuation of the base layer. ccF0 = 0.04 (dielectric IOR ~1.5).
+    // Mirrors the stochastic split in the BRDF-sampling path: base lobes receive
+    // (1 - ccWeight) of the energy; clearcoat receives ccWeight.
+    var ccWeight = 0.0;
+    if (clearcoat > 0.0) {
+        let ccF0 = 0.04;
+        let NdotV_cc = max(0.0, dot(n, wo));
+        let ccFresnel = ccF0 + (1.0 - ccF0) * pow(1.0 - NdotV_cc, 5.0);
+        ccWeight = clearcoat * ccFresnel;
+    }
+    var lobeSum = (brdf.f_diff + brdf.f_spec) * (1.0 - ccWeight);
+    if (ccWeight > 0.0) {
+        lobeSum += vec3<f32>(evalClearcoat(wo, wi, n, ccWeight, clearcoatAlpha));
+    }
     let sheenLum = dot(sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
     if (sheenLum > 0.001) {
         lobeSum += evalSheen(wo, wi, n, sheenColor, sheenRoughness);
@@ -1534,11 +1578,29 @@ fn envImportancePdf(d: vec3<f32>) -> f32 {
     return pdf_uv * f32(envW * envH) / (2.0 * PI * PI * sinTheta);
 }
 
+// Per-contribution firefly clamp for injection-time MIS spikes.
+// Cap comes from CPU (default 8 luminance — standard production value,
+// Arnold/Cycles/RenderMan). Set very large to disable for unbiased HDR
+// (ML training data, light-transport validation). NaN-guarded.
+fn addClamped(rad: ptr<function, vec3<f32>>, contrib: vec3<f32>, cap: f32) {
+    if (!(contrib.x == contrib.x) || !(contrib.y == contrib.y) || !(contrib.z == contrib.z)) {
+        return;
+    }
+    let lum = dot(contrib, vec3<f32>(0.2126, 0.7152, 0.0722));
+    if (lum > cap) { *rad += contrib * (cap / lum); }
+    else           { *rad += contrib; }
+}
+
 fn isMeshMoved(idx: i32) -> bool {
-    if (idx < 0 || idx >= 64) { return false; }
+    if (idx < 0 || idx >= 128) { return false; }
     let ui = u32(idx);
     let bit  = ui & 31u;
-    let word = select(rt.movedMeshBits.x, rt.movedMeshBits.y, ui >= 32u);
+    let wi   = ui >> 5u;  // 0..3
+    var word: u32 = 0u;
+    if      (wi == 0u) { word = rt.movedMeshBits.x; }
+    else if (wi == 1u) { word = rt.movedMeshBits.y; }
+    else if (wi == 2u) { word = rt.movedMeshBits.z; }
+    else               { word = rt.movedMeshBits.w; }
     return ((word >> bit) & 1u) != 0u;
 }
 
@@ -1552,7 +1614,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
              primaryRough:   ptr<function, f32>,
              primaryMatIdx:  ptr<function, i32>,
              touchedMoved:   ptr<function, bool>) -> vec3<f32> {
-    *primaryMeshIdx = 64u;
+    *primaryMeshIdx = 128u;
     *primaryNormal  = vec3<f32>(0.0);
     *primaryDepth   = 0.0;  // 0 = sky/no-hit sentinel for denoiser
     *primaryAlbedo  = vec3<f32>(1.0);  // default white (sky/miss: no demodulation)
@@ -1605,7 +1667,9 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                     let pdf_brdf = brdfPdf(prevWo, normalize(ray.dir), prevNormal, prevAlpha, prevMetalness);
                     envMisW = pdf_brdf / max(pdf_brdf + pdf_env, 1e-8);
                 }
-                radiance += throughput * sampleEnv(ray.dir) * rt.envIntensity.x * envMisW;
+                addClamped(&radiance,
+                    throughput * sampleEnv(ray.dir) * rt.envIntensity.x * envMisW,
+                    rt.emissiveInfo.z);
             }
             break;
         }
@@ -1640,7 +1704,13 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                     }
                 }
             }
-        } else if (isMeshMoved(h.meshIdx)) {
+        } else if (isMeshMoved(h.meshIdx) && u32(h.meshIdx) != *primaryMeshIdx) {
+            // Only flag "touched moved" when the secondary bounce lands on a
+            // DIFFERENT moved mesh than the primary — in that case relative
+            // motion between two independently-moving meshes cannot be
+            // reprojected.  If primary and secondary are on the same moved
+            // mesh, the mesh's own motion matrix already reprojects the whole
+            // rigid interaction correctly → no cap needed.
             *touchedMoved = true;
         }
 
@@ -1651,7 +1721,11 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         if (length(h.emissive) > 0.0) {
             if (i == 0 || emTriCount == 0 || afterTransmission) {
                 // Primary ray, no NEE available, or after transmission: full weight
-                radiance += throughput * h.emissive;
+                if (i == 0) {
+                    radiance += throughput * h.emissive;  // primary: physically correct, don't clamp
+                } else {
+                    addClamped(&radiance, throughput * h.emissive, rt.emissiveInfo.z);
+                }
             } else {
                 // MIS: BRDF sampling hit emissive — weight by balance heuristic
                 let cosLight = abs(dot(h.geoNormal, -ray.dir));
@@ -1661,7 +1735,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                     let pdf_brdf  = brdfPdf(prevWo, normalize(ray.dir), prevNormal, prevAlpha, prevMetalness);
                     let w = pdf_brdf / max(pdf_brdf + pdf_light, 1e-8);
                     if (w == w && w < 1e10) {
-                        radiance += throughput * h.emissive * w;
+                        addClamped(&radiance, throughput * h.emissive * w, rt.emissiveInfo.z);
                     }
                 }
             }
@@ -1758,8 +1832,22 @@ R"(
 R"(
             // === TEMPORAL REUSE ===
             if (rt.frameCount.x > 0.0) {
+                // Motion-vector reprojection: transform the current hit point back into
+                // the PREVIOUS frame's world space when the hit mesh moved (rotated/translated).
+                // Without this the reservoir temporal reuse fails on moving meshes — we'd
+                // sample the wrong pixel's reservoir and the validation check would reject it,
+                // forcing reservoir restart every frame → visible light-sampling noise.
+                let primaryMoved = h.meshIdx >= 0 && h.meshIdx < 128 && isMeshMoved(h.meshIdx);
+                var reprojPoint = h.point;
+                var expectedPrevN = h.normal;
+                if (primaryMoved) {
+                    let M = rtMotionMats[h.meshIdx];
+                    reprojPoint = (M * vec4<f32>(h.point, 1.0)).xyz;
+                    // Rotate normal via 3x3 part (assumes rigid motion — uniform scale).
+                    expectedPrevN = normalize((M * vec4<f32>(h.normal, 0.0)).xyz);
+                }
                 // Reproject current hit to previous frame pixel
-                let relP = h.point - vec3<f32>(rt.prevCamOri.x, rt.prevCamOri.y, rt.prevCamOri.z);
+                let relP = reprojPoint - vec3<f32>(rt.prevCamOri.x, rt.prevCamOri.y, rt.prevCamOri.z);
                 let prevFwd = vec3<f32>(rt.prevCamFwd.x, rt.prevCamFwd.y, rt.prevCamFwd.z);
                 let prevRgt = vec3<f32>(rt.prevCamRgt.x, rt.prevCamRgt.y, rt.prevCamRgt.z);
                 let prevUp  = vec3<f32>(rt.prevCamUp.x, rt.prevCamUp.y, rt.prevCamUp.z);
@@ -1781,8 +1869,11 @@ R"(
                         let prevGB = textureLoad(gBufRead, prevPx, 0);
                         let prevN = prevGB.xyz;
                         let prevD = prevGB.w;
-                        let curD = h.t;
-                        let valid = dot(h.normal, prevN) > 0.9 &&
+                        // Compare prev-camera distance to reprojected point, not h.t
+                        // (h.t is distance from current camera, but prevD is stored
+                        // from previous camera's viewpoint).
+                        let curD = length(relP);
+                        let valid = dot(expectedPrevN, prevN) > 0.9 &&
                                     abs(curD - prevD) / max(curD, 1e-6) < 0.1;
 
                         if (valid) {
@@ -1889,8 +1980,10 @@ R"(
                 let rLe = evalLightRadiance(reservoir.lightPos, reservoir.lightType, h.point);
                 let rNdotL = max(dot(h.normal, rd.dir), 0.0);
                 let rLobeSum = evalBrdfFull(wo, rd.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
-                                            h.sheenColor, h.sheenRoughness);
-                radiance += throughput * reservoirShadowAtten * reservoir.W * rLobeSum * rNdotL * rLe;
+                                            h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+                addClamped(&radiance,
+                    throughput * reservoirShadowAtten * reservoir.W * rLobeSum * rNdotL * rLe,
+                    rt.emissiveInfo.z);
             }
             // === STORE RESERVOIR ===
             // If visibility failed, reset M and W to 0 so next frame does not inherit
@@ -1921,8 +2014,10 @@ R"(
             let shadowAtten = traceShadowRay(h.point, h.normal, le.dir, le.dist - 1e-3, 4);
             if (shadowAtten.x + shadowAtten.y + shadowAtten.z > 0.001) {
                 let lobeSum = evalBrdfFull(wo, le.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
-                                           h.sheenColor, h.sheenRoughness);
-                radiance += throughput * shadowAtten * lobeSum * NdotL * le.color;
+                                           h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+                addClamped(&radiance,
+                    throughput * shadowAtten * lobeSum * NdotL * le.color,
+                    rt.emissiveInfo.z);
             }
         }
 )"
@@ -1944,10 +2039,12 @@ R"(
                     let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
                     let pdf = (es.power * dist * dist) / (totalPower2 * es.area * cosLight);
                     let lobeSum3 = evalBrdfFull(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h,
-                                                h.sheenColor, h.sheenRoughness);
+                                                h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
                     let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
                     let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);
-                    radiance += throughput * emAtten * lobeSum3 * NdotL * emColor * w_light / pdf;
+                    addClamped(&radiance,
+                        throughput * emAtten * lobeSum3 * NdotL * emColor * w_light / pdf,
+                        rt.emissiveInfo.z);
                 }
             }
         }
@@ -1962,11 +2059,13 @@ R"(
                 let envAtten = traceShadowRay(h.point, h.normal, envDir, 1e30, 4);
                 if (envAtten.x + envAtten.y + envAtten.z > 0.001) {
                     let lobeSum4 = evalBrdfFull(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h,
-                                                h.sheenColor, h.sheenRoughness);
+                                                h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
                     let envCol = sampleEnv(envDir) * rt.envIntensity.x;
                     let pdf_brdf_env = brdfPdf(wo, envDir, h.normal, h.shininess, h.metalness);
                     let w_env = envPdf / max(envPdf + pdf_brdf_env, 1e-8);
-                    radiance += throughput * envAtten * lobeSum4 * envNdotL * envCol * w_env / envPdf;
+                    addClamped(&radiance,
+                        throughput * envAtten * lobeSum4 * envNdotL * envCol * w_env / envPdf,
+                        rt.emissiveInfo.z);
                 }
             }
         }
@@ -2219,13 +2318,24 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let forceReset = rt.params.w > 0.5;
     if (forceReset) { pixelFC = 0.0; }
 
-    // Reset pixels whose primary ray hits a moved mesh.
+    // Reproject accumulation buffer across camera/mesh motion using motion vectors.
+    // Two reprojection cases, unified through the same math:
+    //   (A) Primary ray hits a moved mesh: transform worldPos by the mesh's
+    //       motion matrix to find where this surface point was last frame,
+    //       then project into the prev camera's screen space. Lets the TAA
+    //       history follow rotating/translating meshes instead of resetting.
+    //   (B) Camera moved (fc == 0u), primary hit a static surface: worldPos is
+    //       already in the prev frame's world space, so identity-transform
+    //       before prev-camera reprojection.
+    // Without the motion-matrix branch, rotating meshes (e.g. a car) get
+    // pixelFC=0 every frame → 1 spp visible noise. With it, their accumulation
+    // follows the surface and converges like static geometry.
     let prevMeshU = u32(textureLoad(hitMeshRead, pixel, 0).r);
-    if (primaryMeshIdx < 64u && isMeshMoved(i32(primaryMeshIdx))) {
-        pixelFC = 0.0;
-    }
-    // Moved mesh left this pixel (was covering it, now moved away) — flush stale color.
-    if (primaryMeshIdx != prevMeshU && prevMeshU < 64u && isMeshMoved(i32(prevMeshU))) {
+    let primaryMoved = primaryMeshIdx < 128u && isMeshMoved(i32(primaryMeshIdx));
+
+    // Disocclusion: moved mesh LEFT this pixel (was here last frame, gone now)
+    // → history is stale regardless of what's here now.
+    if (primaryMeshIdx != prevMeshU && prevMeshU < 128u && isMeshMoved(i32(prevMeshU))) {
         pixelFC = 0.0;
     }
     // Secondary bounce hit a moved mesh — cap rather than reset so static
@@ -2237,26 +2347,97 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         pixelFC = min(pixelFC, select(8.0, 2.0, emissiveMoved));
     }
 
-    // Camera moved: reproject accumulation from previous frame's screen position
-    if (fc == 0u) {
+    // Unified motion-vector reprojection.  Runs when either the camera moved
+    // (fc==0u) OR the primary-hit mesh moved.  Handles both together: if the
+    // car rotates AND the camera moves, we compose mesh motion (motionMats)
+    // with camera motion (prevCam*) in a single reprojection.
+    if (primaryMoved || fc == 0u) {
         var reprojOk = false;
         if (pixelFC > 0.0 && primaryDepth > 0.0) {
             let worldPos = rt.camOri.xyz + ray.dir * primaryDepth;
-            let toPoint  = worldPos - rt.prevCamOri.xyz;
-            let prevZ    = dot(toPoint, rt.prevCamFwd.xyz);
+            // For moved meshes: transform curWorld→prevWorld using the mesh's
+            // motion matrix (prevWorld * inverse(curWorld)).  For static surfaces,
+            // prevWorld == worldPos.
+            var prevWorldPos = worldPos;
+            if (primaryMoved) {
+                prevWorldPos = (rtMotionMats[primaryMeshIdx] * vec4<f32>(worldPos, 1.0)).xyz;
+            }
+            let toPoint = prevWorldPos - rt.prevCamOri.xyz;
+            let prevZ   = dot(toPoint, rt.prevCamFwd.xyz);
             if (prevZ > 0.001) {
                 let aspect   = res.x / res.y;
                 let prevNdcX = dot(toPoint, rt.prevCamRgt.xyz) / (prevZ * rt.tanHalfFov.x * aspect);
                 let prevNdcY = dot(toPoint, rt.prevCamUp.xyz)  / (prevZ * rt.tanHalfFov.x);
-                let prevPx   = vec2<i32>(
-                    i32((prevNdcX + 1.0) * 0.5 * res.x),
-                    i32((1.0 - prevNdcY) * 0.5 * res.y));
-                if (prevPx.x >= 0 && prevPx.x < i32(res.x) &&
-                    prevPx.y >= 0 && prevPx.y < i32(res.y)) {
-                    let reproj = textureLoad(accumRead, prevPx, 0);
-                    old = reproj.xyz;
-                    pixelFC = min(reproj.w * 0.5, 8.0);
-                    reprojOk = true;
+                // Path tracer uses pixel-CORNER ray convention
+                // (ray target = pixel.xy + jitter, jitter ∈ [-0.5,0.5] with
+                // mean 0 → mean ray target is pixel corner, not centre).
+                // So prevNdcX maps directly to pixel coordinate — no -0.5
+                // offset like TAA (which uses centre-convention rays).
+                let prevU = (prevNdcX + 1.0) * 0.5 * res.x;
+                let prevV = (1.0 - prevNdcY) * 0.5 * res.y;
+                let pxBase = vec2<i32>(i32(floor(prevU)), i32(floor(prevV)));
+                // Need full 2×2 footprint in bounds for bilinear
+                if (pxBase.x >= 0 && pxBase.x + 1 < i32(res.x) &&
+                    pxBase.y >= 0 && pxBase.y + 1 < i32(res.y)) {
+                    let fx = prevU - f32(pxBase.x);
+                    let fy = prevV - f32(pxBase.y);
+                    // Bilinear weights for the 4 corners
+                    let w00 = (1.0 - fx) * (1.0 - fy);
+                    let w10 = fx         * (1.0 - fy);
+                    let w01 = (1.0 - fx) *         fy;
+                    let w11 = fx         *         fy;
+                    // Validate each corner: only blend from corners that
+                    // belong to the same mesh as the current pixel. Corners
+                    // on different meshes (disocclusion / silhouette) are
+                    // dropped and weights renormalised.
+                    let p00 = pxBase;
+                    let p10 = pxBase + vec2<i32>(1, 0);
+                    let p01 = pxBase + vec2<i32>(0, 1);
+                    let p11 = pxBase + vec2<i32>(1, 1);
+                    let m00 = u32(textureLoad(hitMeshRead, p00, 0).r);
+                    let m10 = u32(textureLoad(hitMeshRead, p10, 0).r);
+                    let m01 = u32(textureLoad(hitMeshRead, p01, 0).r);
+                    let m11 = u32(textureLoad(hitMeshRead, p11, 0).r);
+                    let v00 = select(0.0, w00, m00 == primaryMeshIdx);
+                    let v10 = select(0.0, w10, m10 == primaryMeshIdx);
+                    let v01 = select(0.0, w01, m01 == primaryMeshIdx);
+                    let v11 = select(0.0, w11, m11 == primaryMeshIdx);
+                    let wSum = v00 + v10 + v01 + v11;
+                    if (wSum > 1e-4) {
+                        let a00 = textureLoad(accumRead, p00, 0);
+                        let a10 = textureLoad(accumRead, p10, 0);
+                        let a01 = textureLoad(accumRead, p01, 0);
+                        let a11 = textureLoad(accumRead, p11, 0);
+                        let inv = 1.0 / wSum;
+                        old = (a00.xyz * v00 + a10.xyz * v10
+                             + a01.xyz * v01 + a11.xyz * v11) * inv;
+                        let prevFC = (a00.w * v00 + a10.w * v10
+                                    + a01.w * v01 + a11.w * v11) * inv;
+                        // Roughness-adaptive history cap.
+                        //   Diffuse/matte (rough≈1): no view-dependent shading,
+                        //     history stays valid as long as reprojection is
+                        //     accurate → cap at 256 (√256 = 16× noise drop).
+                        //   Mirror/metal (rough≈0): specular lobe is view-
+                        //     dependent, history goes stale → cap tight at 8
+                        //     so reflections refresh as camera moves.
+                        //   primaryRough (= sqrt(alpha)) comes from pathTrace.
+                        // Moving meshes: per-mesh motion reprojection compounds
+                        // sub-pixel bilinear blur every frame, so cap tighter
+                        // (32 diffuse / 4 mirror) to shed history faster and
+                        // avoid motion smear on rotating/translating geometry.
+                        let staticCap = mix(8.0, 256.0,
+                                            smoothstep(0.15, 0.7, primaryRough));
+                        let movingCap = mix(4.0, 32.0,
+                                            smoothstep(0.15, 0.7, primaryRough));
+                        if (primaryMoved) {
+                            pixelFC = min(prevFC * 0.5, movingCap);
+                        } else {
+                            // Pure camera reprojection (static mesh): halve
+                            // to absorb any residual sub-pixel drift.
+                            pixelFC = min(prevFC * 0.5, staticCap);
+                        }
+                        reprojOk = true;
+                    }
                 }
             }
         }
@@ -2291,7 +2472,31 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Stop accumulating once float16 precision is exhausted (~1024 frames)
     let alpha = 1.0 / (pixelFC + 1.0);
     if (pixelFC < 1024.0) {
-        let blended = oldClean * (1.0 - alpha) + clamped * alpha;
+        var blended = oldClean * (1.0 - alpha) + clamped * alpha;
+        // DEBUG: flip to true to visualize pixelFC (history length) instead of radiance.
+        // log2 ramp covers the full 0..256 range:
+        //   black = 0,  red ≈ 8,  orange ≈ 32,  yellow ≈ 128,  white ≥ 256.
+        // Diffuse-capped (roughCap=256) surfaces should converge to white.
+        // Specular-capped (roughCap=8) surfaces stay red.
+        const DEBUG_VIS_PIXEL_FC = false;
+        if (DEBUG_VIS_PIXEL_FC) {
+            // log2(pixelFC+1)/8 maps pixelFC=0→0, 8→~0.39, 32→~0.63, 256→1.0
+            let fcN = clamp(log2(pixelFC + 1.0) / 8.0, 0.0, 1.0);
+            blended = vec3<f32>(fcN, fcN * fcN, fcN * fcN * fcN);
+        }
+        // DEBUG: flip to true to visualize RAW single-sample path trace output
+        // (bypasses all accumulation). If fireflies are visible in this view,
+        // they originate in the path tracer itself. If NOT visible here but
+        // visible in the accumulated output, accumulation logic is injecting
+        // noise (e.g. reprojection returning bad history, outlier rejection
+        // not firing). Tonemap the sample so extreme fireflies don't just
+        // paint the screen white.
+        const DEBUG_VIS_RAW_SAMPLE = false;
+        if (DEBUG_VIS_RAW_SAMPLE) {
+            // Simple Reinhard to compress fireflies into [0,1] while
+            // keeping relative brightness visible.
+            blended = sampleClean / (sampleClean + vec3<f32>(1.0));
+        }
         textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
     } else {
         textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
@@ -2610,9 +2815,14 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // to find where this surface point was in the previous frame.
     let meshIdx = u32(textureLoad(hitMeshTex, pixel, 0).r);
     var prevWorldPos = worldPos;
-    if (meshIdx < 64u) {
-        let bit   = meshIdx & 31u;
-        let mbits = select(taa.movedMeshBits.x, taa.movedMeshBits.y, meshIdx >= 32u);
+    if (meshIdx < 128u) {
+        let bit = meshIdx & 31u;
+        let wi  = meshIdx >> 5u;
+        var mbits: u32 = 0u;
+        if      (wi == 0u) { mbits = taa.movedMeshBits.x; }
+        else if (wi == 1u) { mbits = taa.movedMeshBits.y; }
+        else if (wi == 2u) { mbits = taa.movedMeshBits.z; }
+        else               { mbits = taa.movedMeshBits.w; }
         if (((mbits >> bit) & 1u) != 0u) {
             prevWorldPos = (motionMats[meshIdx] * vec4<f32>(worldPos, 1.0)).xyz;
         }
@@ -2634,9 +2844,14 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Detect moved mesh (reuse meshIdx from reprojection above)
     var movedMesh = false;
-    if (meshIdx < 64u) {
-        let bit   = meshIdx & 31u;
-        let mbits = select(taa.movedMeshBits.x, taa.movedMeshBits.y, meshIdx >= 32u);
+    if (meshIdx < 128u) {
+        let bit = meshIdx & 31u;
+        let wi  = meshIdx >> 5u;
+        var mbits: u32 = 0u;
+        if      (wi == 0u) { mbits = taa.movedMeshBits.x; }
+        else if (wi == 1u) { mbits = taa.movedMeshBits.y; }
+        else if (wi == 2u) { mbits = taa.movedMeshBits.z; }
+        else               { mbits = taa.movedMeshBits.w; }
         if (((mbits >> bit) & 1u) != 0u) { movedMesh = true; }
     }
 
@@ -3048,16 +3263,27 @@ fn fs(in: VSOut) -> FSOut {
         if (alphaTest > 0.0) {
             if (alpha < alphaTest) { discard; }
         } else {
-            // Stochastic alpha: per-pixel, per-frame hash so accumulation converges.
-            let px = u32(in.clipPos.x);
-            let py = u32(in.clipPos.y);
-            let fc = bitcast<u32>(u.tileSize.y);
-            var h1 = px * 1973u + py * 9277u + fc * 26699u;
-            h1 = h1 ^ (h1 >> 16u); h1 = h1 * 0x7feb352du;
-            h1 = h1 ^ (h1 >> 15u); h1 = h1 * 0x846ca68bu;
-            h1 = h1 ^ (h1 >> 16u);
-            let rng = f32(h1) / 4294967295.0;
-            if (rng > alpha) { discard; }
+            // Match the compute-shader bias-zero early-outs: alpha≥0.99
+            // treats the hit as fully opaque (no coin flip → no variance);
+            // alpha≤0.01 is fully transparent. This is what kills
+            // stochastic-alpha noise on glTF materials whose alpha channel
+            // sits at ~1.0 over nearly the whole surface.
+            if (alpha >= 0.99) {
+                // always accept
+            } else if (alpha <= 0.01) {
+                discard;
+            } else {
+                // Stochastic alpha: per-pixel, per-frame hash so accumulation converges.
+                let px = u32(in.clipPos.x);
+                let py = u32(in.clipPos.y);
+                let fc = bitcast<u32>(u.tileSize.y);
+                var h1 = px * 1973u + py * 9277u + fc * 26699u;
+                h1 = h1 ^ (h1 >> 16u); h1 = h1 * 0x7feb352du;
+                h1 = h1 ^ (h1 >> 15u); h1 = h1 * 0x846ca68bu;
+                h1 = h1 ^ (h1 >> 16u);
+                let rng = f32(h1) / 4294967295.0;
+                if (rng > alpha) { discard; }
+            }
         }
     }
 
@@ -3172,12 +3398,12 @@ struct alignas(16) RtGpuUniforms {
     float lightType[4][4];      // [i][0]=type (0=pt,1=dir,2=spot), [i][1]=cosAngle, [i][2]=cosOuter, [i][3]=distance
     float lightDir[4][4];       // [i] = spotlight direction xyz, [i][3]=decay
     float    spp[4];
-    uint32_t movedMeshBits[4];  // bit i = mesh i moved; words 0/1 = meshes 0–63
+    uint32_t movedMeshBits[4];  // bit i = mesh i moved; 4 words cover meshes 0–127
     float    envColor[4];       // xyz = color, w = mode (0=none, 1=solid color, 2=equirect tex)
     float    envIntensity[4];   // x = intensity, y = envWidth, z = envHeight, w = totalLumSum (0 = no CDF)
     float    bgColor[4];       // xyz = color, w = mode (0=sky gradient, 1=solid color, 2=equirect bgTex)
     float    params[4];        // x = maxBounces
-    float    emissiveInfo[4]; // x = emissive tri count, y = total emissive area
+    float    emissiveInfo[4]; // x = emissive tri count, y = total emissive power, z = fireflyCap
     float    restirParams[4]; // x = enabled, y = M_clamp, z = reserved, w = reserved
 };
 static_assert(sizeof(RtGpuUniforms) == 608, "RtGpuUniforms must be 608 bytes");
@@ -3623,7 +3849,14 @@ static int buildGeometryBuffers(
                     em.emissive.r, em.emissive.g, em.emissive.b, em.transmission);
             const float doubleSided = (entry.mesh->material()->side == Side::Double || em.transmission > 0.f) ? 1.f : 0.f;
             const float opacity = std::clamp(entry.mesh->material()->opacity, 0.f, 1.f);
-            // Encode blend mode: negative opacity signals stochastic alpha (BLEND mode)
+            // Encode blend mode: negative opacity signals stochastic alpha (BLEND mode).
+            // We must keep BLEND mode any time `transparent=true` without alphaTest,
+            // even if scalar opacity==1.0 — because the baseColor texture may still
+            // carry a non-trivial alpha channel (logos, decals, cutouts drawn with
+            // soft edges). The GPU path has per-texel early-outs that silently
+            // promote alpha≥0.99 texels to opaque (zero variance) while preserving
+            // the transparent regions, so the logo shape survives without the
+            // stochastic-noise cost on solid paint.
             const float opacityEnc = (entry.mesh->material()->transparent && em.alphaTest <= 0.f)
                                      ? -opacity : opacity;
             setTexel(matBuffer, maxMats, matIdx, 3, em.ior, em.alphaTest, doubleSided, opacityEnc);
@@ -4370,6 +4603,12 @@ struct WgpuPathTracer::Impl {
     float envIntensity_ = 0.5f;
     int maxBounces_ = 5;
     float exposure_ = 1.0f;
+    // Per-contribution firefly clamp (luminance cap) on indirect MIS paths.
+    // Default 8.0 matches production renderers (Arnold/Cycles/RenderMan).
+    // Set to a very large value (e.g. 1e30f) to disable clipping when
+    // unbiased HDR output is required (ML training data, light-transport
+    // validation). Primary-ray emissive hits are never clamped.
+    float fireflyCap_ = 8.0f;
 
     // Dynamic capacity tracking — buffers grow as scenes demand more
     int triCapacity_  = INIT_TRI_CAP;
@@ -4708,6 +4947,7 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setTexture(26, hybridGBuf4);
         rtPipeline.setTexture(27, hybridGBuf5);
         rtPipeline.setTexture(28, hybridGBuf0);
+        rtPipeline.setStorageBufferRead(29, motionMatBuf);
 
         rtRaycastPipeline.setUniformBuffer(0, rtUniformBuf);
         rtRaycastPipeline.setTexture(1, *readAccum);
@@ -4736,6 +4976,7 @@ struct WgpuPathTracer::Impl {
         rtRaycastPipeline.setTexture(26, hybridGBuf4);
         rtRaycastPipeline.setTexture(27, hybridGBuf5);
         rtRaycastPipeline.setTexture(28, hybridGBuf0);
+        rtRaycastPipeline.setStorageBufferRead(29, motionMatBuf);
 
         // TAA pipeline — set ALL bindings upfront
         taaPipeline.setUniformBuffer(0, taaUniBuf);
@@ -4791,9 +5032,9 @@ struct WgpuPathTracer::Impl {
             std::vector<float> ones(w * h * 4, 1.f);
             albedoTex.write(ones.data(), ones.size() * sizeof(float));
         }
-        // Fill hitMesh textures with sentinel 64.0f (= "no hit")
+        // Fill hitMesh textures with sentinel 128.0f (= "no hit")
         {
-            std::vector<float> hitSentinel(w * h * 4, 64.f);
+            std::vector<float> hitSentinel(w * h * 4, 128.f);
             hitMeshA.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
             hitMeshB.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
         }
@@ -5073,7 +5314,7 @@ struct WgpuPathTracer::Impl {
         momentsA.write(zeros.data(), zeros.size() * sizeof(float));
         momentsB.write(zeros.data(), zeros.size() * sizeof(float));
 
-        std::vector<float> hitSentinel(w * h * 4, 64.f);
+        std::vector<float> hitSentinel(w * h * 4, 128.f);
         hitMeshA.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
         hitMeshB.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
 
@@ -5107,6 +5348,8 @@ struct WgpuPathTracer::Impl {
         rtRaycastPipeline.setTexture(26, hybridGBuf4);
         rtRaycastPipeline.setTexture(27, hybridGBuf5);
         rtRaycastPipeline.setTexture(28, hybridGBuf0);
+        rtPipeline.setStorageBufferRead(29, motionMatBuf);
+        rtRaycastPipeline.setStorageBufferRead(29, motionMatBuf);
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(6, *momentsRead);
         taaPipeline.setTexture(7, albedoTex);
@@ -5472,6 +5715,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                                          WgpuBuffer::Usage::Storage);
             d.vtPipeline.setStorageBufferRead(1, d.matrixBuf);
             d.taaPipeline.setStorageBufferRead(6, d.motionMatBuf);
+            d.rtPipeline.setStorageBufferRead(29, d.motionMatBuf);
+            d.rtRaycastPipeline.setStorageBufferRead(29, d.motionMatBuf);
         }
 
         // Upload atlas
@@ -5564,22 +5809,21 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // Detect per-entry matrix changes; build bitmask of which entries moved.
     // movedBits is used by the GPU for per-pixel accumulation reset.
     // anyMeshMoved drives the vertex-transform and BVH-refit pipelines.
-    uint32_t movedBits[2] = {0u, 0u};
+    uint32_t movedBits[4] = {0u, 0u, 0u, 0u};
     bool anyMeshMoved = (d.prevEntryMatrices.size() != rtEntries.size());
 
     if (topoJustFinished) {
         // Topology change: all pixels need to re-accumulate (mesh-to-triangle mapping changed)
-        movedBits[0] = movedBits[1] = 0xFFFFFFFFu;
+        movedBits[0] = movedBits[1] = movedBits[2] = movedBits[3] = 0xFFFFFFFFu;
         anyMeshMoved = true;
     } else if (anyMeshMoved) {
         // Entry count mismatch (shouldn't happen without topo change, but be safe)
-        movedBits[0] = movedBits[1] = 0xFFFFFFFFu;
+        movedBits[0] = movedBits[1] = movedBits[2] = movedBits[3] = 0xFFFFFFFFu;
     } else {
-        for (size_t i = 0; i < rtEntries.size() && i < static_cast<size_t>(d.meshCapacity_); ++i) {
+        for (size_t i = 0; i < rtEntries.size() && i < static_cast<size_t>(d.meshCapacity_) && i < 128u; ++i) {
             if (rtEntries[i].worldMatrix != d.prevEntryMatrices[i]) {
                 anyMeshMoved = true;
-                if (i < 32u) movedBits[0] |= (1u << i);
-                else         movedBits[1] |= (1u << (i - 32u));
+                movedBits[i >> 5u] |= (1u << (i & 31u));
             }
         }
     }
@@ -5673,12 +5917,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.spp[1] = static_cast<float>(d.tileSize_);
     u.movedMeshBits[0] = movedBits[0];
     u.movedMeshBits[1] = movedBits[1];
+    u.movedMeshBits[2] = movedBits[2];
+    u.movedMeshBits[3] = movedBits[3];
     // Detect if any moved mesh is an emissive source — triggers tighter accum cap in shader.
     bool anyEmissiveMoved = false;
-    if (movedBits[0] | movedBits[1]) {
-        for (int mi = 0; mi < 64 && !anyEmissiveMoved; ++mi) {
-            const uint32_t word = (mi < 32) ? movedBits[0] : movedBits[1];
-            const uint32_t bit  = static_cast<uint32_t>(mi < 32 ? mi : mi - 32);
+    if (movedBits[0] | movedBits[1] | movedBits[2] | movedBits[3]) {
+        for (int mi = 0; mi < 128 && !anyEmissiveMoved; ++mi) {
+            const uint32_t word = movedBits[mi >> 5];
+            const uint32_t bit  = static_cast<uint32_t>(mi & 31);
             if ((word >> bit) & 1u) {
                 anyEmissiveMoved = d.emissiveMeshSet_.count(mi) > 0;
             }
@@ -5858,6 +6104,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.params[3] = (d.frameCount_ == 0.f) ? 1.f : 0.f;  // force-reset accum on first frame
     u.emissiveInfo[0] = static_cast<float>(d.emissiveTriCount_);
     u.emissiveInfo[1] = d.emissiveTotalPower_;
+    u.emissiveInfo[2] = d.fireflyCap_;  // luminance cap for indirect MIS contributions
     u.restirParams[0] = d.restirEnabled_ ? 1.f : 0.f;
     u.restirParams[1] = 20.f;  // M clamp — lower = crisper shadows, higher = lower variance
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
@@ -5952,7 +6199,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     if (d.firstDispatchPending_) {
         d.firstDispatchPending_ = false;
         anyMeshMoved = true;
-        movedBits[0] = movedBits[1] = 0xFFFFFFFFu;
+        movedBits[0] = movedBits[1] = movedBits[2] = movedBits[3] = 0xFFFFFFFFu;
         d.frameCount_ = 0.f;
     }
 
@@ -6126,7 +6373,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // TAA + spatial denoiser (path tracer mode only)
     // Skip entirely when fully converged — accumulation is already clean.
     WgpuTexture* displayTex = d.readAccum;
-    const bool hasMotion = (movedBits[0] | movedBits[1]) != 0u;
+    const bool hasMotion = (movedBits[0] | movedBits[1] | movedBits[2] | movedBits[3]) != 0u;
     const bool foveatedActive = d.foveatedEnabled_ && d.frameCount_ > 0.f;
     const bool needsDenoise = (d.frameCount_ < 64.f || hasMotion);
     if (d.denoiserEnabled_ && d.mode_ == Mode::PathTracer && needsDenoise) {
@@ -6149,6 +6396,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         tu.frameCount[0] = d.frameCount_;
         tu.movedMeshBits[0] = movedBits[0];
         tu.movedMeshBits[1] = movedBits[1];
+        tu.movedMeshBits[2] = movedBits[2];
+        tu.movedMeshBits[3] = movedBits[3];
         d.taaUniBuf.write(&tu, sizeof(tu));
 
         d.taaPipeline.setTexture(1, *d.readAccum);
@@ -6390,6 +6639,14 @@ bool WgpuPathTracer::hybridMode() const {
 
 void WgpuPathTracer::setSamplesPerPixel(int spp) {
     pimpl_->spp_ = (spp >= 4) ? 4 : (spp >= 2) ? 2 : 1;
+}
+
+void WgpuPathTracer::setFireflyClamp(float cap) {
+    pimpl_->fireflyCap_ = (cap > 0.f) ? cap : 1e30f;
+}
+
+float WgpuPathTracer::fireflyClamp() const {
+    return pimpl_->fireflyCap_;
 }
 
 int WgpuPathTracer::samplesPerPixel() const {
