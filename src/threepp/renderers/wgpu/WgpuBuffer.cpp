@@ -14,8 +14,13 @@ WgpuBuffer::WgpuBuffer(WgpuRenderer& renderer, size_t size, Usage usage)
     WGPUBufferDescriptor desc{};
     desc.label = WGPUStringView{"gpu_buffer", WGPU_STRLEN} ;
     desc.size = size;
-    desc.usage = (usage == Usage::Storage ? WGPUBufferUsage_Storage : WGPUBufferUsage_Uniform)
-                 | WGPUBufferUsage_CopyDst;
+    WGPUBufferUsage baseUsage = WGPUBufferUsage_Uniform;
+    switch (usage) {
+        case Usage::Storage: baseUsage = WGPUBufferUsage_Storage; break;
+        case Usage::Vertex:  baseUsage = WGPUBufferUsage_Vertex;  break;
+        case Usage::Uniform: baseUsage = WGPUBufferUsage_Uniform; break;
+    }
+    desc.usage = baseUsage | WGPUBufferUsage_CopyDst;
     buffer_ = wgpuDeviceCreateBuffer(device_, &desc);
 }
 

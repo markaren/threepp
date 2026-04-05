@@ -51,6 +51,7 @@ namespace {
         if (usage & WgpuTexture::TextureBinding)  flags |= WGPUTextureUsage_TextureBinding;
         if (usage & WgpuTexture::CopyDst)         flags |= WGPUTextureUsage_CopyDst;
         if (usage & WgpuTexture::CopySrc)         flags |= WGPUTextureUsage_CopySrc;
+        if (usage & WgpuTexture::RenderAttachment) flags |= WGPUTextureUsage_RenderAttachment;
         return flags;
     }
 

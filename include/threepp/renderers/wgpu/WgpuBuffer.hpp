@@ -17,7 +17,7 @@ namespace threepp {
     class WgpuBuffer {
 
     public:
-        enum class Usage { Uniform, Storage };
+        enum class Usage { Uniform, Storage, Vertex };
 
         /// Create a GPU buffer.
         /// @param renderer WgpuRenderer providing the WebGPU device/queue

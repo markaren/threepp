@@ -36,10 +36,11 @@ namespace threepp {
         };
 
         enum Usage : uint32_t {
-            Storage        = 1 << 0,
-            TextureBinding = 1 << 1,
-            CopyDst        = 1 << 2,
-            CopySrc        = 1 << 3
+            Storage          = 1 << 0,
+            TextureBinding   = 1 << 1,
+            CopyDst          = 1 << 2,
+            CopySrc          = 1 << 3,
+            RenderAttachment = 1 << 4
         };
 
         /// Create a GPU texture.

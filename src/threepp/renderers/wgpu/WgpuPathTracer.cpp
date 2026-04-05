@@ -126,7 +126,7 @@ struct RtUniforms {
     bgColor:       vec4<f32>,  // xyz = color, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex (bgTex)
     params:        vec4<f32>,  // x = maxBounces
     emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive power
-    restirParams:  vec4<f32>,  // x = enabled, y = M_clamp
+    restirParams:  vec4<f32>,  // x = enabled, y = M_clamp, z = emissiveMoved, w = hybridMode
 };
 
 struct Bvh4NodeGpu {
@@ -160,6 +160,12 @@ struct Bvh4NodeGpu {
 @group(0) @binding(20) var reservoirWWrite: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(21) var momentsRead:     texture_2d<f32>;
 @group(0) @binding(22) var momentsWrite:    texture_storage_2d<rgba16float, write>;
+@group(0) @binding(28) var hybridGBuf0: texture_2d<f32>;  // normal.xyz, t
+@group(0) @binding(23) var hybridGBuf1: texture_2d<f32>;  // albedo.rgb, metalness
+@group(0) @binding(24) var hybridGBuf2: texture_2d<f32>;  // emissive.rgb, shininess
+@group(0) @binding(25) var hybridGBuf3: texture_2d<f32>;  // worldPos.xyz, transmission
+@group(0) @binding(26) var hybridGBuf4: texture_2d<f32>;  // geoNormal.xyz, frontFace
+@group(0) @binding(27) var hybridGBuf5: texture_2d<f32>;  // uv.x, uv.y, matIdx, meshIdx
 
 const MAX_TEX_SLOTS: i32 = 256;
 const EMPTY_CHILD: i32 = -2147483648;  // INT_MIN — sentinel for unused BVH4 child slots
@@ -810,6 +816,73 @@ fn sceneHit(ray: Ray) -> Hit {
     return loadHitMaterial(rh, ray);
 }
 
+// Reconstruct a Hit from the hybrid G-buffer (populated by the raster pass).
+// Mirrors loadHitMaterial but reads primary-ray data from the G-buffer instead
+// of doing barycentric interpolation. Normal-mapping is skipped (v1 limitation).
+fn loadFromGBuffer(pixel: vec2<i32>) -> Hit {
+    var h: Hit;
+    h.t = 1e30; h.meshIdx = -1;
+    h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0;
+    h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
+    h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0; h.ao = 1.0;
+    h.sheenColor = vec3<f32>(0.0); h.sheenRoughness = 0.0;
+    h.specularColor = vec3<f32>(1.0); h.specularIntensity = 1.0;
+    h.dispersion = 0.0; h.thickness = 0.0;
+
+    let g0 = textureLoad(hybridGBuf0, pixel, 0);  // normal, t (this frame's raster)
+    let g1 = textureLoad(hybridGBuf1, pixel, 0);  // albedo, metalness
+    let g2 = textureLoad(hybridGBuf2, pixel, 0);  // emissive, shininess
+    let g3 = textureLoad(hybridGBuf3, pixel, 0);  // worldPos, transmission
+    let g4 = textureLoad(hybridGBuf4, pixel, 0);  // geoNormal, frontFace
+    let g5 = textureLoad(hybridGBuf5, pixel, 0);  // uv, matIdx, meshIdx
+
+    if (g0.w <= 0.0) { return h; }  // sky / background — caller handles miss
+
+    h.t         = g0.w;
+    h.normal    = g0.xyz;
+    h.geoNormal = g4.xyz;
+    h.point     = g3.xyz;
+    h.frontFace = g4.w;
+    h.uv        = g5.xy;
+    let matIdx  = i32(g5.z);
+    h.meshIdx   = i32(g5.w);
+
+    let mat0 = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
+    let mat1 = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
+    let mat2 = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
+    let mat3 = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
+
+    h.albedo       = g1.xyz;
+    h.metalness    = g1.w;
+    h.emissive     = g2.xyz;
+    h.shininess    = g2.w;
+    h.transmission = g3.w;
+    h.texSlot      = mat1.x;
+    h.ior          = mat3.x;
+
+    // Note: we don't have raw uv1, so we use uv0 for all channels (no per-channel
+    // transforms yet in hybrid mode). This matches the common case where all maps
+    // share the same UV0.
+    let mat4 = textureLoad(matData, vec2<i32>(matIdx, 4), 0);
+    h.attenuationColor = mat4.xyz;
+    h.attenuationDist  = mat4.w;
+    let mat5 = textureLoad(matData, vec2<i32>(matIdx, 5), 0);
+    h.clearcoat      = mat5.x;
+    h.clearcoatAlpha = mat5.y;
+    let mat16 = textureLoad(matData, vec2<i32>(matIdx, 16), 0);
+    h.sheenColor     = mat16.xyz;
+    h.sheenRoughness = mat16.w;
+    let mat17 = textureLoad(matData, vec2<i32>(matIdx, 17), 0);
+    h.specularColor     = mat17.xyz;
+    h.specularIntensity = mat17.w;
+    let mat18 = textureLoad(matData, vec2<i32>(matIdx, 18), 0);
+    h.dispersion = mat18.x;
+    h.thickness  = mat18.y;
+
+    return h;
+}
+)"
+R"(
 // Fast any-hit traversal for shadow rays — exits on first intersection.
 // No sorting, no closest-hit search. Much faster for large scenes.
 fn sceneAnyHit(ray: Ray, maxT: f32) -> RawHit {
@@ -1490,7 +1563,17 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
     var afterTransmission = false;
 
     for (var i = 0; i < maxBounces; i++) {
-        let h = sceneHit(ray);
+        var h: Hit;
+        if (i == 0 && rt.restirParams.w > 0.5) {
+            // Hybrid mode: read primary hit from rasterized G-buffer.
+            // Fall back to ray tracing for transmissive surfaces (glass).
+            h = loadFromGBuffer(pixel);
+            if (h.t < 1e29 && h.transmission > 0.05) {
+                h = sceneHit(ray);
+            }
+        } else {
+            h = sceneHit(ray);
+        }
         if (h.t >= 1e29) {
             // Primary ray miss: show background.  Bounced misses: use env IBL.
             if (i == 0) {
@@ -2689,6 +2772,115 @@ struct DepthFillUniforms {
 )";
 
 // ---------------------------------------------------------------------------
+// WGSL G-buffer rasterization shader (hybrid mode)
+// Rasterizes primary visibility to 6 MRT targets matching the path tracer's
+// G-buffer format. Path tracer skips bounce-0 ray casts when hybrid is active.
+// ---------------------------------------------------------------------------
+constexpr const char* gBufRasterWGSL = R"(
+struct GBufUniforms {
+    viewProj: mat4x4<f32>,
+    camOri:   vec4<f32>,
+};
+
+struct MeshMats {
+    world:  mat4x4<f32>,
+    normal: mat4x4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> u: GBufUniforms;
+@group(0) @binding(1) var<storage, read> meshMats: array<MeshMats>;
+@group(0) @binding(2) var matData: texture_2d<f32>;
+
+struct VSOut {
+    @builtin(position) clipPos: vec4<f32>,
+    @location(0) worldPos:     vec3<f32>,
+    @location(1) worldNormal:  vec3<f32>,
+    @location(2) uv:           vec2<f32>,
+    @location(3) vcolor:       vec3<f32>,
+    @location(4) @interpolate(flat) matIdxF:      f32,
+    @location(5) @interpolate(flat) meshIdxF:     f32,
+};
+
+// Must match transformUV in csCommonWGSL (channelRow 6 = baseColor).
+fn transformUV_raster(uv0: vec2<f32>, matIdx: i32, channelRow: i32) -> vec2<f32> {
+    let r0 = textureLoad(matData, vec2<i32>(matIdx, channelRow), 0);
+    let r1 = textureLoad(matData, vec2<i32>(matIdx, channelRow + 1), 0);
+    return vec2<f32>(
+        r0.x * uv0.x + r0.y * uv0.y + r0.z,
+        r0.w * uv0.x + r1.x * uv0.y + r1.y
+    );
+}
+
+@vertex
+fn vs(@location(0) pos: vec3<f32>,
+      @location(1) normal: vec3<f32>,
+      @location(2) uv: vec2<f32>,
+      @location(3) vcolor: vec3<f32>,
+      @location(4) meshIdxF: f32,
+      @location(5) matIdxF: f32) -> VSOut {
+    let mi = i32(meshIdxF);
+    let mm = meshMats[mi];
+    let worldP = (mm.world * vec4<f32>(pos, 1.0)).xyz;
+    let worldN = normalize((mm.normal * vec4<f32>(normal, 0.0)).xyz);
+    var o: VSOut;
+    o.clipPos     = u.viewProj * vec4<f32>(worldP, 1.0);
+    o.worldPos    = worldP;
+    o.worldNormal = worldN;
+    o.uv          = uv;
+    o.vcolor      = vcolor;
+    o.matIdxF     = matIdxF;
+    o.meshIdxF    = meshIdxF;
+    return o;
+}
+
+struct FSOut {
+    @location(0) rt0: vec4<f32>,  // normal.xyz, t
+    @location(1) rt1: vec4<f32>,  // albedo.rgb, metalness
+    @location(2) rt2: vec4<f32>,  // emissive.rgb, shininess
+    @location(3) rt3: vec4<f32>,  // worldPos.xyz, transmission
+    @location(4) rt4: vec4<f32>,  // geoNormal.xyz, frontFace
+    @location(5) rt5: vec4<f32>,  // uv.x, uv.y, matIdx, meshIdx
+};
+
+@fragment
+fn fs(in: VSOut) -> FSOut {
+    let matIdx = i32(in.matIdxF);
+    let mat0 = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
+    let mat1 = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
+    let mat2 = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
+
+    // Determine front-face via ray direction (matches compute shader's convention).
+    // Using @builtin(front_facing) here causes per-triangle stripes on meshes with
+    // inconsistent winding, because winding-based front-face disagrees with the
+    // ray-based test the path tracer uses for the same surface.
+    let worldNormal = normalize(in.worldNormal);
+    let viewDir = normalize(in.worldPos - u.camOri.xyz);
+    let isFront = dot(viewDir, worldNormal) < 0.0;
+    let sn = select(-worldNormal, worldNormal, isFront);
+
+    // Geometric normal from screen-space derivatives (flat normal)
+    let dpdx = dpdx(in.worldPos);
+    let dpdy = dpdy(in.worldPos);
+    var geoN = normalize(cross(dpdx, dpdy));
+    // Align with interpolated normal to handle winding
+    if (dot(geoN, sn) < 0.0) { geoN = -geoN; }
+
+    var out: FSOut;
+    // t = parametric ray distance (matches path tracer's h.t semantics)
+    let t = length(in.worldPos - u.camOri.xyz);
+
+    out.rt0 = vec4<f32>(sn, t);
+    out.rt1 = vec4<f32>(mat0.xyz * in.vcolor, mat1.y);       // albedo, metalness
+    out.rt2 = vec4<f32>(mat2.xyz, mat0.w);                    // emissive, shininess
+    out.rt3 = vec4<f32>(in.worldPos, mat2.w);                 // worldPos, transmission
+    out.rt4 = vec4<f32>(geoN, select(0.0, 1.0, isFront));   // geoNormal, frontFace
+    let bcUV = transformUV_raster(in.uv, matIdx, 6);
+    out.rt5 = vec4<f32>(bcUV.x, bcUV.y, in.matIdxF, in.meshIdxF);
+    return out;
+}
+)";
+
+// ---------------------------------------------------------------------------
 // WGSL display shader — blit accumulated texture to screen with ACES + gamma
 // ---------------------------------------------------------------------------
 constexpr const char* displayWGSL = R"(
@@ -2792,6 +2984,10 @@ struct alignas(16) DepthFillUniforms {
     float iRes[4];        // resolution xy              (16 bytes)
     float tanHalfFov[4];  // x = tanHalfFov             (16 bytes)
     // total = 160 bytes (16-byte aligned, no padding needed)
+};
+struct alignas(16) GBufRasterUniforms {
+    float viewProj[16];   // 64 bytes
+    float camOri[4];      // 16 bytes — total 80 bytes
 };
 struct alignas(16) TaaGpuUniforms {
     float prevCamOri[4], prevCamFwd[4], prevCamRgt[4], prevCamUp[4];
@@ -3114,6 +3310,10 @@ static int pagedIdx(int ti, int row) {
     return ((ti / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + ti % TEX_PAGE_WIDTH) * 4;
 }
 
+// Raster vertex layout: 13 floats = 52 bytes per vertex, 3 verts per tri.
+// pos.xyz(3) + normal.xyz(3) + uv.xy(2) + color.rgb(3) + meshIdxF(1) + matIdxF(1)
+static constexpr int RASTER_VTX_FLOATS = 13;
+
 static int buildGeometryBuffers(
         const std::vector<RtMeshEntry>& entries,
         const std::unordered_map<Texture*, int>& texSlotMap,
@@ -3121,11 +3321,13 @@ static int buildGeometryBuffers(
         std::vector<float>& matBuffer,
         std::vector<float>& rawObjTriBuf,
         std::vector<float>& matrixBuf,
+        std::vector<float>& rasterVtxBuf,
         int maxTris, int maxMats, int maxMeshes) {
     std::ranges::fill(triBuffer, 0.f);
     std::ranges::fill(matBuffer, 0.f);
     std::ranges::fill(rawObjTriBuf, 0.f);
     std::ranges::fill(matrixBuf, 0.f);
+    std::ranges::fill(rasterVtxBuf, 0.f);
 
     int triCount = 0;
     int matCount = 0;
@@ -3376,6 +3578,22 @@ static int buildGeometryBuffers(
             setObj(triCount, 9, u1_2, v1_2, 0.f, 0.f);
             setObj(triCount, 10, cr0, cg0, cb0, cr1);
             setObj(triCount, 11, cg1, cb1, cr2, cg2);
+
+            // Raster vertex buffer (object-space, 3 verts per tri, non-indexed)
+            auto setVtx = [&](int localVi, const Vector3& p, const Vector3& n,
+                              float uu, float vv, float cr, float cg, float cb) {
+                const int vi = triCount * 3 + localVi;
+                float* v = rasterVtxBuf.data() + vi * RASTER_VTX_FLOATS;
+                v[0] = p.x; v[1] = p.y; v[2] = p.z;
+                v[3] = n.x; v[4] = n.y; v[5] = n.z;
+                v[6] = uu; v[7] = vv;
+                v[8] = cr; v[9] = cg; v[10] = cb;
+                v[11] = static_cast<float>(meshIdx);
+                v[12] = static_cast<float>(matIdx);
+            };
+            setVtx(0, ov0, on0, u0, v0uv, cr0, cg0, cb0);
+            setVtx(1, ov1, on1, u1, v1uv, cr1, cg1, cb1);
+            setVtx(2, ov2, on2, u2, v2uv, cr2, cg2, cb2);
 
             ++triCount;
         }
@@ -3884,6 +4102,14 @@ struct WgpuPathTracer::Impl {
     WgpuTexture* gBufCur;       // current frame writes here
     WgpuTexture* gBufPrev;      // previous frame's G-buffer
 
+    // Hybrid rasterization G-buffer (extended, only used when hybridMode_ = true)
+    WgpuTexture hybridGBuf0;    // normal.xyz + t (separate from gBufCur to avoid usage conflict)
+    WgpuTexture hybridGBuf1;    // albedo.rgb + metalness
+    WgpuTexture hybridGBuf2;    // emissive.rgb + shininess
+    WgpuTexture hybridGBuf3;    // worldPos.xyz + transmission
+    WgpuTexture hybridGBuf4;    // geoNormal.xyz + frontFace
+    WgpuTexture hybridGBuf5;    // uv.x, uv.y, matIdx, meshIdx
+
     // ReSTIR DI reservoir ping-pong
     WgpuTexture reservoirA;     // rgba32float — lightPos.xyz + encoded type/index
     WgpuTexture reservoirB;
@@ -3920,6 +4146,7 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer  atrousUniBuf;
     bool denoiserEnabled_ = false;
     bool restirEnabled_ = false;
+    bool hybridMode_ = false;
     float envIntensity_ = 0.5f;
     int maxBounces_ = 5;
     float exposure_ = 1.0f;
@@ -3946,6 +4173,8 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer objTriBuf;
     WgpuBuffer objTriBuf2;  // overflow buffer for large scenes
     int objTriSplit_ = 0;   // split point: tris [0, split) in buf1, [split, count) in buf2
+    WgpuBuffer gBufRasterVtxBuf;  // hybrid raster VBO: 13 f32/vtx, 3 vtx/tri
+    int gBufRasterTriCap_ = 0;    // capacity in triangles (for resize detection)
     WgpuBuffer matrixBuf;
     WgpuBuffer motionMatBuf;            // per-mesh motion matrices for TAA reprojection
     std::vector<float> motionMatCpu;    // CPU staging: prevWorld * inverse(curWorld) per mesh
@@ -3978,6 +4207,17 @@ struct WgpuPathTracer::Impl {
     WGPUBuffer              depthFillUniBuf_ = nullptr;
     uint32_t                depthFillSampleCount_ = 0;  // 0 = not yet built
 
+    // G-buffer rasterization pipeline (hybrid mode)
+    WGPURenderPipeline      gBufRasterPipeline_ = nullptr;
+    WGPUPipelineLayout      gBufRasterPipeLayout_ = nullptr;
+    WGPUBindGroupLayout     gBufRasterBGL_ = nullptr;
+    WGPUShaderModule        gBufRasterShader_ = nullptr;
+    WGPUBuffer              gBufRasterUniBuf_ = nullptr;
+    WGPUTexture             gBufDepth_ = nullptr;
+    WGPUTextureView         gBufDepthView_ = nullptr;
+    int                     gBufDepthW_ = 0;
+    int                     gBufDepthH_ = 0;
+
     // Display pipeline
     OrthographicCamera displayCam;
     Scene displayScene;
@@ -4008,6 +4248,7 @@ struct WgpuPathTracer::Impl {
         std::vector<float> matBuffer;
         std::vector<float> rawObjTriBuf;
         std::vector<float> matrixCpuBuf;
+        std::vector<float> rasterVtxCpuBuf;  // raster-mode vertex buffer (13 floats/vtx, 3 vtx/tri)
         std::vector<Bvh4Node> bvhNodes;
         std::vector<int> bvhIndices;
         std::vector<int> leafIndices;
@@ -4105,12 +4346,33 @@ struct WgpuPathTracer::Impl {
                     WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           envMargTex(r, 1u, 1u, WgpuTexture::Format::R32Float,
                      WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
-          // G-buffer ping-pong
+          // G-buffer ping-pong (RenderAttachment for hybrid raster mode)
           gBufA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                WgpuTexture::Format::RGBA16Float),
+                WgpuTexture::Format::RGBA16Float,
+                WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
           gBufB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                WgpuTexture::Format::RGBA16Float),
+                WgpuTexture::Format::RGBA16Float,
+                WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
           gBufCur(&gBufA), gBufPrev(&gBufB),
+          // Hybrid rasterization G-buffer (extended)
+          hybridGBuf0(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                      WgpuTexture::Format::RGBA16Float,
+                      WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
+          hybridGBuf1(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                      WgpuTexture::Format::RGBA16Float,
+                      WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
+          hybridGBuf2(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                      WgpuTexture::Format::RGBA16Float,
+                      WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
+          hybridGBuf3(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                      WgpuTexture::Format::RGBA32Float,
+                      WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
+          hybridGBuf4(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                      WgpuTexture::Format::RGBA16Float,
+                      WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
+          hybridGBuf5(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                      WgpuTexture::Format::RGBA16Float,
+                      WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
           // ReSTIR DI reservoir ping-pong
           reservoirA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                      WgpuTexture::Format::RGBA32Float),
@@ -4157,6 +4419,8 @@ struct WgpuPathTracer::Impl {
           objTriBuf(r, static_cast<size_t>(INIT_TRI_CAP) * 48 * sizeof(float),
                     WgpuBuffer::Usage::Storage),
           objTriBuf2(r, 192u, WgpuBuffer::Usage::Storage),  // placeholder — grown when needed
+          gBufRasterVtxBuf(r, static_cast<size_t>(INIT_TRI_CAP) * 3 * RASTER_VTX_FLOATS * sizeof(float),
+                           WgpuBuffer::Usage::Vertex),
           matrixBuf(r, static_cast<size_t>(INIT_MESH_CAP) * 32 * sizeof(float),
                     WgpuBuffer::Usage::Storage),
           motionMatBuf(r, static_cast<size_t>(INIT_MESH_CAP) * 16 * sizeof(float),
@@ -4218,6 +4482,12 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(20, *reservoirWWrite);
         rtPipeline.setTexture(21, *momentsRead);
         rtPipeline.setStorageTexture(22, *momentsWrite);
+        rtPipeline.setTexture(23, hybridGBuf1);
+        rtPipeline.setTexture(24, hybridGBuf2);
+        rtPipeline.setTexture(25, hybridGBuf3);
+        rtPipeline.setTexture(26, hybridGBuf4);
+        rtPipeline.setTexture(27, hybridGBuf5);
+        rtPipeline.setTexture(28, hybridGBuf0);
 
         rtRaycastPipeline.setUniformBuffer(0, rtUniformBuf);
         rtRaycastPipeline.setTexture(1, *readAccum);
@@ -4240,6 +4510,12 @@ struct WgpuPathTracer::Impl {
         rtRaycastPipeline.setStorageTexture(20, *reservoirWWrite);
         rtRaycastPipeline.setTexture(21, *momentsRead);
         rtRaycastPipeline.setStorageTexture(22, *momentsWrite);
+        rtRaycastPipeline.setTexture(23, hybridGBuf1);
+        rtRaycastPipeline.setTexture(24, hybridGBuf2);
+        rtRaycastPipeline.setTexture(25, hybridGBuf3);
+        rtRaycastPipeline.setTexture(26, hybridGBuf4);
+        rtRaycastPipeline.setTexture(27, hybridGBuf5);
+        rtRaycastPipeline.setTexture(28, hybridGBuf0);
 
         // TAA pipeline — set ALL bindings upfront
         taaPipeline.setUniformBuffer(0, taaUniBuf);
@@ -4278,6 +4554,12 @@ struct WgpuPathTracer::Impl {
             accumB.write(zeros.data(), zeros.size() * sizeof(float));
             gBufA.write(zeros.data(), zeros.size() * sizeof(float));
             gBufB.write(zeros.data(), zeros.size() * sizeof(float));
+            hybridGBuf0.write(zeros.data(), zeros.size() * sizeof(float));
+            hybridGBuf1.write(zeros.data(), zeros.size() * sizeof(float));
+            hybridGBuf2.write(zeros.data(), zeros.size() * sizeof(float));
+            hybridGBuf3.write(zeros.data(), zeros.size() * sizeof(float));
+            hybridGBuf4.write(zeros.data(), zeros.size() * sizeof(float));
+            hybridGBuf5.write(zeros.data(), zeros.size() * sizeof(float));
             taaHistA.write(zeros.data(), zeros.size() * sizeof(float));
             taaHistB.write(zeros.data(), zeros.size() * sizeof(float));
             momentsA.write(zeros.data(), zeros.size() * sizeof(float));
@@ -4342,6 +4624,124 @@ struct WgpuPathTracer::Impl {
             ubDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
             depthFillUniBuf_ = wgpuDeviceCreateBuffer(device, &ubDesc);
         }
+
+        // G-buffer rasterization: shader + BGL + layout + uniform buffer + pipeline.
+        {
+            WGPUShaderModuleDescriptor smDesc{};
+            smDesc.label = WGPUStringView{"gbuf_raster_sm", WGPU_STRLEN};
+            WGPUShaderSourceWGSL wgslSrc{};
+            wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
+            wgslSrc.code = WGPUStringView{gBufRasterWGSL, WGPU_STRLEN};
+            smDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&wgslSrc);
+            gBufRasterShader_ = wgpuDeviceCreateShaderModule(device, &smDesc);
+
+            WGPUBindGroupLayoutEntry bglEntries[3]{};
+            bglEntries[0].binding = 0;
+            bglEntries[0].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
+            bglEntries[0].buffer.type = WGPUBufferBindingType_Uniform;
+            bglEntries[0].buffer.minBindingSize = sizeof(GBufRasterUniforms);
+            bglEntries[1].binding = 1;
+            bglEntries[1].visibility = WGPUShaderStage_Vertex;
+            bglEntries[1].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+            bglEntries[2].binding = 2;
+            bglEntries[2].visibility = WGPUShaderStage_Fragment;
+            bglEntries[2].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
+            bglEntries[2].texture.viewDimension = WGPUTextureViewDimension_2D;
+            WGPUBindGroupLayoutDescriptor bglDesc{};
+            bglDesc.label = WGPUStringView{"gbuf_raster_bgl", WGPU_STRLEN};
+            bglDesc.entryCount = 3;
+            bglDesc.entries = bglEntries;
+            gBufRasterBGL_ = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
+
+            WGPUPipelineLayoutDescriptor plDesc{};
+            plDesc.label = WGPUStringView{"gbuf_raster_pl", WGPU_STRLEN};
+            plDesc.bindGroupLayoutCount = 1;
+            plDesc.bindGroupLayouts = &gBufRasterBGL_;
+            gBufRasterPipeLayout_ = wgpuDeviceCreatePipelineLayout(device, &plDesc);
+
+            WGPUBufferDescriptor ubDesc{};
+            ubDesc.label = WGPUStringView{"gbuf_raster_uni", WGPU_STRLEN};
+            ubDesc.size = sizeof(GBufRasterUniforms);
+            ubDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+            gBufRasterUniBuf_ = wgpuDeviceCreateBuffer(device, &ubDesc);
+
+            // Vertex layout: 6 attributes, 13 floats per vertex, interleaved.
+            static WGPUVertexAttribute vattrs[6];
+            vattrs[0] = {WGPUVertexFormat_Float32x3,  0 * sizeof(float), 0};
+            vattrs[1] = {WGPUVertexFormat_Float32x3,  3 * sizeof(float), 1};
+            vattrs[2] = {WGPUVertexFormat_Float32x2,  6 * sizeof(float), 2};
+            vattrs[3] = {WGPUVertexFormat_Float32x3,  8 * sizeof(float), 3};
+            vattrs[4] = {WGPUVertexFormat_Float32,   11 * sizeof(float), 4};
+            vattrs[5] = {WGPUVertexFormat_Float32,   12 * sizeof(float), 5};
+            static WGPUVertexBufferLayout vbLayout{};
+            vbLayout.arrayStride = RASTER_VTX_FLOATS * sizeof(float);
+            vbLayout.stepMode    = WGPUVertexStepMode_Vertex;
+            vbLayout.attributeCount = 6;
+            vbLayout.attributes  = vattrs;
+
+            WGPURenderPipelineDescriptor rpDesc{};
+            rpDesc.label = WGPUStringView{"gbuf_raster_rp", WGPU_STRLEN};
+            rpDesc.layout = gBufRasterPipeLayout_;
+            rpDesc.vertex.module = gBufRasterShader_;
+            rpDesc.vertex.entryPoint = WGPUStringView{"vs", WGPU_STRLEN};
+            rpDesc.vertex.bufferCount = 1;
+            rpDesc.vertex.buffers = &vbLayout;
+
+            WGPUPrimitiveState prim{};
+            prim.topology = WGPUPrimitiveTopology_TriangleList;
+            prim.cullMode = WGPUCullMode_None;   // double-sided handled in fragment
+            prim.frontFace = WGPUFrontFace_CCW;
+            rpDesc.primitive = prim;
+
+            WGPUDepthStencilState ds{};
+            ds.format = WGPUTextureFormat_Depth24Plus;
+            ds.depthWriteEnabled = WGPUOptionalBool_True;
+            ds.depthCompare = WGPUCompareFunction_Less;
+            rpDesc.depthStencil = &ds;
+
+            WGPUColorTargetState targets[6];
+            for (auto& t : targets) {
+                t = {};
+                t.format = WGPUTextureFormat_RGBA16Float;
+                t.writeMask = WGPUColorWriteMask_All;
+            }
+            targets[3].format = WGPUTextureFormat_RGBA32Float;  // worldPos needs fp32 precision
+            WGPUFragmentState frag{};
+            frag.module = gBufRasterShader_;
+            frag.entryPoint = WGPUStringView{"fs", WGPU_STRLEN};
+            frag.targetCount = 6;
+            frag.targets = targets;
+            rpDesc.fragment = &frag;
+
+            rpDesc.multisample.count = 1;
+            rpDesc.multisample.mask  = 0xFFFFFFFF;
+            gBufRasterPipeline_ = wgpuDeviceCreateRenderPipeline(device, &rpDesc);
+        }
+    }
+
+    // Ensure the hybrid-raster depth texture matches the current G-buffer dimensions.
+    void ensureGBufDepth(int w, int h) {
+        if (gBufDepth_ && gBufDepthW_ == w && gBufDepthH_ == h) return;
+        if (gBufDepthView_) { wgpuTextureViewRelease(gBufDepthView_); gBufDepthView_ = nullptr; }
+        if (gBufDepth_)     { wgpuTextureRelease(gBufDepth_);         gBufDepth_ = nullptr; }
+        WGPUTextureDescriptor td{};
+        td.label = WGPUStringView{"gbuf_depth", WGPU_STRLEN};
+        td.size = {static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1};
+        td.mipLevelCount = 1;
+        td.sampleCount = 1;
+        td.dimension = WGPUTextureDimension_2D;
+        td.format = WGPUTextureFormat_Depth24Plus;
+        td.usage = WGPUTextureUsage_RenderAttachment;
+        gBufDepth_ = wgpuDeviceCreateTexture(device, &td);
+        WGPUTextureViewDescriptor vd{};
+        vd.label = WGPUStringView{"gbuf_depth_view", WGPU_STRLEN};
+        vd.format = WGPUTextureFormat_Depth24Plus;
+        vd.dimension = WGPUTextureViewDimension_2D;
+        vd.baseMipLevel = 0; vd.mipLevelCount = 1;
+        vd.baseArrayLayer = 0; vd.arrayLayerCount = 1;
+        vd.aspect = WGPUTextureAspect_DepthOnly;
+        gBufDepthView_ = wgpuTextureCreateView(gBufDepth_, &vd);
+        gBufDepthW_ = w; gBufDepthH_ = h;
     }
 
     // Build (or rebuild) the depth-fill render pipeline for a given MSAA sample count.
@@ -4389,10 +4789,19 @@ struct WgpuPathTracer::Impl {
         readHitMesh  = &hitMeshA;
         writeHitMesh = &hitMeshB;
 
-        gBufA = WgpuTexture(renderer, uw, uh, fmt);
-        gBufB = WgpuTexture(renderer, uw, uh, fmt);
+        const uint32_t gBufUsage = WgpuTexture::Storage | WgpuTexture::TextureBinding
+                                 | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment;
+        gBufA = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
+        gBufB = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
         gBufCur  = &gBufA;
         gBufPrev = &gBufB;
+
+        hybridGBuf0 = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
+        hybridGBuf1 = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
+        hybridGBuf2 = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
+        hybridGBuf3 = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float, gBufUsage);
+        hybridGBuf4 = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
+        hybridGBuf5 = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
 
         auto fmt32 = WgpuTexture::Format::RGBA32Float;
         reservoirA  = WgpuTexture(renderer, uw, uh, fmt32);
@@ -4424,6 +4833,12 @@ struct WgpuPathTracer::Impl {
         accumB.write(zeros.data(), zeros.size() * sizeof(float));
         gBufA.write(zeros.data(), zeros.size() * sizeof(float));
         gBufB.write(zeros.data(), zeros.size() * sizeof(float));
+        hybridGBuf0.write(zeros.data(), zeros.size() * sizeof(float));
+        hybridGBuf1.write(zeros.data(), zeros.size() * sizeof(float));
+        hybridGBuf2.write(zeros.data(), zeros.size() * sizeof(float));
+        hybridGBuf3.write(zeros.data(), zeros.size() * sizeof(float));
+        hybridGBuf4.write(zeros.data(), zeros.size() * sizeof(float));
+        hybridGBuf5.write(zeros.data(), zeros.size() * sizeof(float));
         taaHistA.write(zeros.data(), zeros.size() * sizeof(float));
         taaHistB.write(zeros.data(), zeros.size() * sizeof(float));
         momentsA.write(zeros.data(), zeros.size() * sizeof(float));
@@ -4451,6 +4866,18 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(22, *momentsWrite);
         rtRaycastPipeline.setTexture(21, *momentsRead);
         rtRaycastPipeline.setStorageTexture(22, *momentsWrite);
+        rtPipeline.setTexture(23, hybridGBuf1);
+        rtPipeline.setTexture(24, hybridGBuf2);
+        rtPipeline.setTexture(25, hybridGBuf3);
+        rtPipeline.setTexture(26, hybridGBuf4);
+        rtPipeline.setTexture(27, hybridGBuf5);
+        rtPipeline.setTexture(28, hybridGBuf0);
+        rtRaycastPipeline.setTexture(23, hybridGBuf1);
+        rtRaycastPipeline.setTexture(24, hybridGBuf2);
+        rtRaycastPipeline.setTexture(25, hybridGBuf3);
+        rtRaycastPipeline.setTexture(26, hybridGBuf4);
+        rtRaycastPipeline.setTexture(27, hybridGBuf5);
+        rtRaycastPipeline.setTexture(28, hybridGBuf0);
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(6, *momentsRead);
 
@@ -4580,9 +5007,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
         r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 48, 0.f);
         r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
+        r.rasterVtxCpuBuf.resize(static_cast<size_t>(r.triCapacity) * 3 * RASTER_VTX_FLOATS, 0.f);
 
         r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
-                                           r.rawObjTriBuf, r.matrixCpuBuf,
+                                           r.rawObjTriBuf, r.matrixCpuBuf, r.rasterVtxCpuBuf,
                                            r.triCapacity, r.matCapacity, r.meshCapacity);
         buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
         r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
@@ -4673,9 +5101,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
         r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 48, 0.f);
         r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
+        r.rasterVtxCpuBuf.resize(static_cast<size_t>(r.triCapacity) * 3 * RASTER_VTX_FLOATS, 0.f);
 
         r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
-                                           r.rawObjTriBuf, r.matrixCpuBuf,
+                                           r.rawObjTriBuf, r.matrixCpuBuf, r.rasterVtxCpuBuf,
                                            r.triCapacity, r.matCapacity, r.meshCapacity);
         buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
         r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
@@ -4745,6 +5174,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                   << r.meshCapacity << " meshes" << std::endl;
         d.emissiveTotalArea_ = r.emissiveTotalArea;
         d.emissiveTotalPower_ = r.emissiveTotalPower;
+
+        // Grow raster vertex buffer if needed
+        if (r.triCapacity != d.gBufRasterTriCap_) {
+            d.gBufRasterTriCap_ = r.triCapacity;
+            d.gBufRasterVtxBuf = WgpuBuffer(d.renderer,
+                    static_cast<size_t>(r.triCapacity) * 3 * RASTER_VTX_FLOATS * sizeof(float),
+                    WgpuBuffer::Usage::Vertex);
+        }
 
         // Grow GPU buffers when scene exceeds current capacity (same pattern as atlas)
         if (r.triCapacity != d.triCapacity_) {
@@ -4845,6 +5282,12 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
         d.leafIndexBuf.write(d.leafIndices.data(), d.leafIndices.size() * sizeof(int));
         d.matTex.write(d.matBuffer.data(), d.matBuffer.size() * sizeof(float));
+
+        // Upload raster vertex buffer (hybrid mode)
+        if (d.triCount_ > 0) {
+            d.gBufRasterVtxBuf.write(r.rasterVtxCpuBuf.data(),
+                    static_cast<size_t>(d.triCount_) * 3 * RASTER_VTX_FLOATS * sizeof(float));
+        }
 
         if (d.emissiveTriCount_ > 0) {
             d.emissiveTriBuf.write(d.emissiveTriCpu.data(),
@@ -5188,6 +5631,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.restirParams[0] = d.restirEnabled_ ? 1.f : 0.f;
     u.restirParams[1] = 20.f;  // M clamp — lower = crisper shadows, higher = lower variance
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
+    u.restirParams[3] = d.hybridMode_ ? 1.f : 0.f;     // hybrid rasterization mode
 
     int nLights = 0;
     auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
@@ -5311,6 +5755,87 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 wgpuComputePassEncoderEnd(rfPass);
                 wgpuComputePassEncoderRelease(rfPass);
             }
+        }
+
+        // Pass 2.5: Hybrid G-buffer rasterization (populates hybridGBuf1..5 + gBufCur).
+        if (d.hybridMode_ && d.triCount_ > 0 && d.gBufRasterPipeline_) {
+            d.ensureGBufDepth(d.width_, d.height_);
+
+            // Upload uniforms: viewProj + camera origin.
+            GBufRasterUniforms gu{};
+            {
+                Matrix4 proj = camera.projectionMatrix;
+                // Apply the NDC z remap matching WgpuRenderer::render() (0..1 Z range).
+                auto& e = proj.elements;
+                e[2]  = 0.5f * e[2]  + 0.5f * e[3];
+                e[6]  = 0.5f * e[6]  + 0.5f * e[7];
+                e[10] = 0.5f * e[10] + 0.5f * e[11];
+                e[14] = 0.5f * e[14] + 0.5f * e[15];
+                Matrix4 pv;
+                pv.multiplyMatrices(proj, camera.matrixWorldInverse);
+                const auto& pe = pv.elements;
+                for (int i = 0; i < 16; ++i) gu.viewProj[i] = pe[i];
+            }
+            gu.camOri[0] = camPos.x; gu.camOri[1] = camPos.y; gu.camOri[2] = camPos.z; gu.camOri[3] = 0.f;
+            wgpuQueueWriteBuffer(d.queue, d.gBufRasterUniBuf_, 0, &gu, sizeof(gu));
+
+            // Build bind group: uniforms (0) + meshMats (1, storage-read) + matData (2, texture).
+            WGPUBindGroupEntry bgEntries[3]{};
+            bgEntries[0].binding = 0;
+            bgEntries[0].buffer  = d.gBufRasterUniBuf_;
+            bgEntries[0].offset  = 0;
+            bgEntries[0].size    = sizeof(GBufRasterUniforms);
+            bgEntries[1].binding = 1;
+            bgEntries[1].buffer  = d.matrixBuf.buffer();
+            bgEntries[1].offset  = 0;
+            bgEntries[1].size    = d.matrixBuf.size();
+            bgEntries[2].binding     = 2;
+            bgEntries[2].textureView = d.matTex.view();
+            WGPUBindGroupDescriptor bgDesc{};
+            bgDesc.layout     = d.gBufRasterBGL_;
+            bgDesc.entryCount = 3;
+            bgDesc.entries    = bgEntries;
+            WGPUBindGroup bg = wgpuDeviceCreateBindGroup(d.device, &bgDesc);
+
+            // Begin render pass with 6 color targets + depth attachment.
+            WGPURenderPassColorAttachment colorAtts[6]{};
+            WGPUTextureView colorViews[6] = {
+                d.hybridGBuf0.view(),
+                d.hybridGBuf1.view(),
+                d.hybridGBuf2.view(),
+                d.hybridGBuf3.view(),
+                d.hybridGBuf4.view(),
+                d.hybridGBuf5.view(),
+            };
+            for (int i = 0; i < 6; ++i) {
+                colorAtts[i].view          = colorViews[i];
+                colorAtts[i].loadOp        = WGPULoadOp_Clear;
+                colorAtts[i].storeOp       = WGPUStoreOp_Store;
+                colorAtts[i].depthSlice    = WGPU_DEPTH_SLICE_UNDEFINED;
+                colorAtts[i].clearValue    = {0.0, 0.0, 0.0, 0.0};
+            }
+            WGPURenderPassDepthStencilAttachment dAtt{};
+            dAtt.view            = d.gBufDepthView_;
+            dAtt.depthLoadOp     = WGPULoadOp_Clear;
+            dAtt.depthStoreOp    = WGPUStoreOp_Store;
+            dAtt.depthClearValue = 1.0f;
+
+            WGPURenderPassDescriptor rpDesc{};
+            rpDesc.label                  = WGPUStringView{"gbuf_raster_pass", WGPU_STRLEN};
+            rpDesc.colorAttachmentCount   = 6;
+            rpDesc.colorAttachments       = colorAtts;
+            rpDesc.depthStencilAttachment = &dAtt;
+            WGPURenderPassEncoder rpass = wgpuCommandEncoderBeginRenderPass(encoder, &rpDesc);
+
+            wgpuRenderPassEncoderSetPipeline(rpass, d.gBufRasterPipeline_);
+            wgpuRenderPassEncoderSetBindGroup(rpass, 0, bg, 0, nullptr);
+            wgpuRenderPassEncoderSetViewport(rpass, 0.f, 0.f,
+                static_cast<float>(d.width_), static_cast<float>(d.height_), 0.f, 1.f);
+            wgpuRenderPassEncoderSetVertexBuffer(rpass, 0, d.gBufRasterVtxBuf.buffer(), 0, WGPU_WHOLE_SIZE);
+            wgpuRenderPassEncoderDraw(rpass, d.triCount_ * 3, 1, 0, 0);
+            wgpuRenderPassEncoderEnd(rpass);
+            wgpuRenderPassEncoderRelease(rpass);
+            wgpuBindGroupRelease(bg);
         }
 
         // Pass 3: ray trace (reads triTex + bvhNodes)
@@ -5618,6 +6143,15 @@ bool WgpuPathTracer::restirEnabled() const {
     return pimpl_->restirEnabled_;
 }
 
+void WgpuPathTracer::setHybridMode(bool enabled) {
+    pimpl_->hybridMode_ = enabled;
+    pimpl_->frameCount_ = 0.f;  // reset accumulation on toggle
+}
+
+bool WgpuPathTracer::hybridMode() const {
+    return pimpl_->hybridMode_;
+}
+
 void WgpuPathTracer::setSamplesPerPixel(int spp) {
     pimpl_->spp_ = (spp >= 4) ? 4 : (spp >= 2) ? 2 : 1;
 }
@@ -5691,4 +6225,11 @@ void WgpuPathTracer::dispose() {
     if (d.depthFillBGL_)        { wgpuBindGroupLayoutRelease(d.depthFillBGL_);       d.depthFillBGL_ = nullptr; }
     if (d.depthFillShader_)     { wgpuShaderModuleRelease(d.depthFillShader_);       d.depthFillShader_ = nullptr; }
     if (d.depthFillUniBuf_)     { wgpuBufferRelease(d.depthFillUniBuf_);             d.depthFillUniBuf_ = nullptr; }
+    if (d.gBufRasterPipeline_)   { wgpuRenderPipelineRelease(d.gBufRasterPipeline_);   d.gBufRasterPipeline_ = nullptr; }
+    if (d.gBufRasterPipeLayout_) { wgpuPipelineLayoutRelease(d.gBufRasterPipeLayout_); d.gBufRasterPipeLayout_ = nullptr; }
+    if (d.gBufRasterBGL_)        { wgpuBindGroupLayoutRelease(d.gBufRasterBGL_);       d.gBufRasterBGL_ = nullptr; }
+    if (d.gBufRasterShader_)     { wgpuShaderModuleRelease(d.gBufRasterShader_);       d.gBufRasterShader_ = nullptr; }
+    if (d.gBufRasterUniBuf_)     { wgpuBufferRelease(d.gBufRasterUniBuf_);             d.gBufRasterUniBuf_ = nullptr; }
+    if (d.gBufDepthView_)        { wgpuTextureViewRelease(d.gBufDepthView_);           d.gBufDepthView_ = nullptr; }
+    if (d.gBufDepth_)            { wgpuTextureRelease(d.gBufDepth_);                   d.gBufDepth_ = nullptr; }
 }
