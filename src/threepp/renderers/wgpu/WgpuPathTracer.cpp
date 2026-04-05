@@ -158,6 +158,8 @@ struct Bvh4NodeGpu {
 @group(0) @binding(18) var reservoirWrite:  texture_storage_2d<rgba32float, write>;
 @group(0) @binding(19) var reservoirWRead:  texture_2d<f32>;
 @group(0) @binding(20) var reservoirWWrite: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(21) var momentsRead:     texture_2d<f32>;
+@group(0) @binding(22) var momentsWrite:    texture_storage_2d<rgba16float, write>;
 
 const MAX_TEX_SLOTS: i32 = 256;
 const EMPTY_CHILD: i32 = -2147483648;  // INT_MIN — sentinel for unused BVH4 child slots
@@ -1065,6 +1067,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let tVal = select(centerHit.t, 0.0, centerHit.t >= 1e20);
     textureStore(gBufWrite, pixel, vec4<f32>(vec3<f32>(0.0), tVal));
     textureStore(albedoWrite, pixel, vec4<f32>(1.0, 1.0, 1.0, 1.0));
+    textureStore(momentsWrite, pixel, vec4<f32>(0.0));
 }
 )";
 
@@ -2180,6 +2183,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Preserve previous gBuf (depth) so display shader tone-maps correctly.
         textureStore(gBufWrite,    pixel, textureLoad(gBufRead, pixel, 0));
         textureStore(albedoWrite,  pixel, vec4<f32>(vec3<f32>(0.0), 0.0));
+        textureStore(momentsWrite, pixel, textureLoad(momentsRead, pixel, 0));
         // Pass reservoir through the ping-pong so the next traced frame sees a valid prior.
         // Without this the reservoir slot contains whatever was written 2-4 frames ago
         // (stale/garbage after multiple skips), producing huge wrong temporal weights → acne.
@@ -2285,13 +2289,32 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // Stop accumulating once float16 precision is exhausted (~1024 frames)
+    let alpha = 1.0 / (pixelFC + 1.0);
     if (pixelFC < 1024.0) {
-        let alpha   = 1.0 / (pixelFC + 1.0);
         let blended = oldClean * (1.0 - alpha) + clamped * alpha;
         textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
     } else {
         textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
     }
+
+    // Temporal variance tracking: accumulate 1st and 2nd moments of luminance.
+    // Use post-hard-cap, pre-relative-clamp luminance so variance reflects true
+    // sample spread (relative clamp would artificially suppress it).
+    let sampleLum = dot(clamped, lum3);
+    let prevMom = textureLoad(momentsRead, pixel, 0).xy;
+    var m1 = prevMom.x;  // mean luminance
+    var m2 = prevMom.y;  // mean squared luminance
+    // Use faster-decaying alpha for moments: they track current noise level,
+    // not long-term average. Floor at 0.1 so variance stays responsive even
+    // when accumulation has converged (pixelFC high → alpha tiny).
+    let momAlpha = max(alpha, 0.1);
+    if (pixelFC < 1.0) { m1 = sampleLum; m2 = sampleLum * sampleLum; }
+    else {
+        m1 = m1 * (1.0 - momAlpha) + sampleLum * momAlpha;
+        m2 = m2 * (1.0 - momAlpha) + sampleLum * sampleLum * momAlpha;
+    }
+    textureStore(momentsWrite, pixel, vec4<f32>(m1, m2, 0.0, 0.0));
+
     textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), 0.0, 0.0, 0.0));
     textureStore(albedoWrite,  pixel, vec4<f32>(primaryAlbedo, 1.0));
     textureStore(gBufWrite,    pixel, vec4<f32>(primaryNormal, primaryDepth));
@@ -2654,6 +2677,7 @@ struct AtrousUni { stepSize: u32, _p0: u32, frameCount: f32, _p1: f32, }
 @group(0) @binding(3) var gBuf:     texture_2d<f32>;
 @group(0) @binding(4) var albedoBuf: texture_2d<f32>;
 @group(0) @binding(5) var hitMeshBuf: texture_2d<f32>;
+@group(0) @binding(6) var momentsBuf: texture_2d<f32>;
 
 fn luminance_a(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -2694,8 +2718,12 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let demodBlend = smoothstep(0.05, 0.2, albedoLum);
     let cLum = mix(luminance_a(cColor), luminance_a(cIrr), demodBlend);
 
-    // Luminance sigma: relaxed when noisy (low FC), tight when converged
-    let lumSigma = max(0.02, 0.5 / sqrt(cFC + 1.0));
+    // Variance-guided luminance sigma: read temporal variance from moments buffer.
+    // σ² = E[L²] - E[L]² gives per-pixel noise estimate — filter aggressively
+    // where variance is high, stay sharp where converged.
+    let moments = textureLoad(momentsBuf, pixel, 0).xy;
+    let variance = max(moments.y - moments.x * moments.x, 0.0);
+    let lumSigma = max(0.02, sqrt(variance) * 0.7);
 
     // 5×5 bilateral filter — tracks both demodulated irradiance and raw color
     let kw = array<f32, 5>(1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
@@ -2720,10 +2748,10 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Spatial weight (separable Gaussian)
             let w_s = kw[dy + 2] * kw[dx + 2];
             // Normal edge-stopping: relaxed for noisy pixels (low FC), sharp when converged
-            let normPow = mix(16.0, 128.0, smoothstep(0.0, 8.0, cFC));
+            let normPow = mix(32.0, 128.0, smoothstep(0.0, 8.0, cFC));
             let w_n = pow(max(0.0, dot(cNorm, sNorm)), normPow);
             // Depth edge-stopping
-            let w_d = exp(-abs(cDepth - sDepth) * 2.0 / (cDepth + 0.01));
+            let w_d = exp(-abs(cDepth - sDepth) * 4.0 / (cDepth + 0.01));
             // Luminance edge-stopping: demod for bright surfaces, raw for dark
             let sAlbLum = luminance_a(sAlbedo);
             let sDemod = smoothstep(0.05, 0.2, sAlbLum);
@@ -4005,6 +4033,12 @@ struct WgpuPathTracer::Impl {
     // Albedo buffer (primary-hit albedo for demodulation/remodulation)
     WgpuTexture albedoTex;
 
+    // Temporal variance moments ping-pong (μ, μ² of luminance)
+    WgpuTexture momentsA;
+    WgpuTexture momentsB;
+    WgpuTexture* momentsRead;
+    WgpuTexture* momentsWrite;
+
     // TAA history ping-pong
     WgpuTexture taaHistA;       // previous TAA output
     WgpuTexture taaHistB;
@@ -4227,6 +4261,12 @@ struct WgpuPathTracer::Impl {
           // Albedo buffer for demodulation
           albedoTex(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                     WgpuTexture::Format::RGBA16Float),
+          // Temporal variance moments ping-pong
+          momentsA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                   WgpuTexture::Format::RGBA16Float),
+          momentsB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                   WgpuTexture::Format::RGBA16Float),
+          momentsRead(&momentsA), momentsWrite(&momentsB),
           // TAA history ping-pong
           taaHistA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                    WgpuTexture::Format::RGBA16Float),
@@ -4312,6 +4352,8 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(18, *reservoirWrite);
         rtPipeline.setTexture(19, *reservoirWRead);
         rtPipeline.setStorageTexture(20, *reservoirWWrite);
+        rtPipeline.setTexture(21, *momentsRead);
+        rtPipeline.setStorageTexture(22, *momentsWrite);
 
         rtRaycastPipeline.setUniformBuffer(0, rtUniformBuf);
         rtRaycastPipeline.setTexture(1, *readAccum);
@@ -4332,6 +4374,8 @@ struct WgpuPathTracer::Impl {
         rtRaycastPipeline.setStorageTexture(18, *reservoirWrite);
         rtRaycastPipeline.setTexture(19, *reservoirWRead);
         rtRaycastPipeline.setStorageTexture(20, *reservoirWWrite);
+        rtRaycastPipeline.setTexture(21, *momentsRead);
+        rtRaycastPipeline.setStorageTexture(22, *momentsWrite);
 
         // TAA pipeline — set ALL bindings upfront
         taaPipeline.setUniformBuffer(0, taaUniBuf);
@@ -4349,6 +4393,7 @@ struct WgpuPathTracer::Impl {
         atrousPipeline.setTexture(3, *gBufPrev);
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(5, *readHitMesh);
+        atrousPipeline.setTexture(6, *momentsRead);
 
         // Kick off async shader compilation for the small helper pipelines.
         // The large RT shaders are compiled after the first topology build so that
@@ -4371,6 +4416,8 @@ struct WgpuPathTracer::Impl {
             gBufB.write(zeros.data(), zeros.size() * sizeof(float));
             taaHistA.write(zeros.data(), zeros.size() * sizeof(float));
             taaHistB.write(zeros.data(), zeros.size() * sizeof(float));
+            momentsA.write(zeros.data(), zeros.size() * sizeof(float));
+            momentsB.write(zeros.data(), zeros.size() * sizeof(float));
         }
         // Init albedo to white (no demodulation effect until first frame writes real values)
         {
@@ -4495,6 +4542,11 @@ struct WgpuPathTracer::Impl {
 
         albedoTex = WgpuTexture(renderer, uw, uh, fmt);
 
+        momentsA = WgpuTexture(renderer, uw, uh, fmt);
+        momentsB = WgpuTexture(renderer, uw, uh, fmt);
+        momentsRead  = &momentsA;
+        momentsWrite = &momentsB;
+
         taaHistA = WgpuTexture(renderer, uw, uh, fmt);
         taaHistB = WgpuTexture(renderer, uw, uh, fmt);
         taaHistRead  = &taaHistA;
@@ -4510,6 +4562,8 @@ struct WgpuPathTracer::Impl {
         gBufB.write(zeros.data(), zeros.size() * sizeof(float));
         taaHistA.write(zeros.data(), zeros.size() * sizeof(float));
         taaHistB.write(zeros.data(), zeros.size() * sizeof(float));
+        momentsA.write(zeros.data(), zeros.size() * sizeof(float));
+        momentsB.write(zeros.data(), zeros.size() * sizeof(float));
 
         std::vector<float> hitSentinel(w * h * 4, 64.f);
         hitMeshA.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
@@ -4529,7 +4583,12 @@ struct WgpuPathTracer::Impl {
         rtRaycastPipeline.setStorageTexture(18, *reservoirWrite);
         rtRaycastPipeline.setTexture(19, *reservoirWRead);
         rtRaycastPipeline.setStorageTexture(20, *reservoirWWrite);
+        rtPipeline.setTexture(21, *momentsRead);
+        rtPipeline.setStorageTexture(22, *momentsWrite);
+        rtRaycastPipeline.setTexture(21, *momentsRead);
+        rtRaycastPipeline.setStorageTexture(22, *momentsWrite);
         atrousPipeline.setTexture(4, albedoTex);
+        atrousPipeline.setTexture(6, *momentsRead);
 
         frameCount_ = 0.f;
     }
@@ -5431,6 +5490,15 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     d.rtRaycastPipeline.setTexture(19, *d.reservoirWRead);
     d.rtRaycastPipeline.setStorageTexture(20, *d.reservoirWWrite);
 
+    // Swap moments ping-pong
+    std::swap(d.momentsRead, d.momentsWrite);
+    d.rtPipeline.setTexture(21, *d.momentsRead);
+    d.rtPipeline.setStorageTexture(22, *d.momentsWrite);
+    d.rtRaycastPipeline.setTexture(21, *d.momentsRead);
+    d.rtRaycastPipeline.setStorageTexture(22, *d.momentsWrite);
+    // Update denoiser's moments reference (reads converged moments)
+    d.atrousPipeline.setTexture(6, *d.momentsRead);
+
     // TAA + spatial denoiser (path tracer mode only)
     // Skip entirely when fully converged — accumulation is already clean.
     WgpuTexture* displayTex = d.readAccum;
@@ -5476,8 +5544,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         // 5×5 kernel covers more area per pass, so fewer passes needed.
         // Scale down as image converges: sigma shrinks, filter becomes transparent.
         // Extra pass on very first frames spreads sparse path-tracer samples across larger area.
-        const int nPasses = (d.frameCount_ < 2.f)                ? 4 :
-                            (d.frameCount_ < 8.f)                 ? 3 :
+        const int nPasses = (d.frameCount_ < 2.f)                ? 2 :
                             (d.frameCount_ < 64.f || hasMotion)   ? 2 : 1;
 
         for (int pass = 0; pass < nPasses; ++pass) {
