@@ -187,6 +187,7 @@ struct Hit  {
     metalness:    f32,
     emissive:     vec3<f32>,
     meshIdx:      i32,
+    matIdx:       i32,
     transmission: f32,
     ior:          f32,
     frontFace:    f32,
@@ -545,7 +546,7 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     h.sheenColor = vec3<f32>(0.0); h.sheenRoughness = 0.0;
     h.specularColor = vec3<f32>(1.0); h.specularIntensity = 1.0;
     h.dispersion = 0.0; h.thickness = 0.0;
-    h.meshIdx = -1;
+    h.meshIdx = -1; h.matIdx = -1;
 
     let ti = rh.triIdx;
     let r0  = textureLoad(triData, triCoord(ti, 0), 0);
@@ -649,6 +650,7 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     h.ior          = mat3.x;
     h.frontFace    = select(0.0, 1.0, isFrontFace);
     h.meshIdx      = i32(r1.w);
+    h.matIdx       = matIdx;
     let mat4 = textureLoad(matData, vec2<i32>(matIdx, 4), 0);
     h.attenuationColor = mat4.xyz;
     h.attenuationDist  = mat4.w;
@@ -805,7 +807,7 @@ fn sceneHitRaw(ray: Ray, maxT: f32) -> RawHit {
 fn sceneHit(ray: Ray) -> Hit {
     let rh = sceneHitRaw(ray, 1e30);
     if (rh.triIdx < 0) {
-        var h: Hit; h.t = 1e30; h.meshIdx = -1; h.transmission = 0.0; h.ior = 1.5;
+        var h: Hit; h.t = 1e30; h.meshIdx = -1; h.matIdx = -1; h.transmission = 0.0; h.ior = 1.5;
         h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
         h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0; h.ao = 1.0;
         h.sheenColor = vec3<f32>(0.0); h.sheenRoughness = 0.0;
@@ -821,7 +823,7 @@ fn sceneHit(ray: Ray) -> Hit {
 // of doing barycentric interpolation. Normal-mapping is skipped (v1 limitation).
 fn loadFromGBuffer(pixel: vec2<i32>) -> Hit {
     var h: Hit;
-    h.t = 1e30; h.meshIdx = -1;
+    h.t = 1e30; h.meshIdx = -1; h.matIdx = -1;
     h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0;
     h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
     h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0; h.ao = 1.0;
@@ -847,6 +849,7 @@ fn loadFromGBuffer(pixel: vec2<i32>) -> Hit {
     h.ao        = g5.z;
     let matIdx  = i32(g5.x);
     h.meshIdx   = i32(g5.y);
+    h.matIdx    = matIdx;
 
     let mat0 = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
     let mat1 = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
@@ -1547,12 +1550,14 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
              primaryDepth:   ptr<function, f32>,
              primaryAlbedo:  ptr<function, vec3<f32>>,
              primaryRough:   ptr<function, f32>,
+             primaryMatIdx:  ptr<function, i32>,
              touchedMoved:   ptr<function, bool>) -> vec3<f32> {
     *primaryMeshIdx = 64u;
     *primaryNormal  = vec3<f32>(0.0);
     *primaryDepth   = 0.0;  // 0 = sky/no-hit sentinel for denoiser
     *primaryAlbedo  = vec3<f32>(1.0);  // default white (sky/miss: no demodulation)
     *primaryRough   = 1.0;  // sky: treat as fully rough (max history)
+    *primaryMatIdx  = -1;   // sky: no material
     *touchedMoved   = false;
     var ray        = ray_in;
     var throughput = vec3<f32>(1.0);
@@ -1609,6 +1614,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             *primaryNormal  = h.normal;
             *primaryDepth   = h.t;
             *primaryRough   = sqrt(h.shininess);  // linear roughness for TAA blend
+            *primaryMatIdx  = h.matIdx;
 
             // Adaptive bounce cap (hybrid-mode perf optimization) — tighten based
             // on primary surface material. NEE/ReSTIR handles direct lighting well;
@@ -2201,8 +2207,9 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var primaryDepth:   f32;
     var primaryAlbedo:  vec3<f32>;
     var primaryRough:   f32;
+    var primaryMatIdx:  i32;
     var touchedMoved:   bool;
-    var sample  = pathTrace(ray, &seed, pixel, maxBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &primaryRough, &touchedMoved);
+    var sample  = pathTrace(ray, &seed, pixel, maxBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &primaryRough, &primaryMatIdx, &touchedMoved);
 
     let prev     = textureLoad(accumRead, pixel, 0);
     var old      = prev.xyz;
@@ -2308,7 +2315,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     textureStore(momentsWrite, pixel, vec4<f32>(m1, m2, 0.0, 0.0));
 
-    textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), 0.0, 0.0, 0.0));
+    textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), 0.0, 0.0));
     textureStore(albedoWrite,  pixel, vec4<f32>(primaryAlbedo, primaryRough));
     textureStore(gBufWrite,    pixel, vec4<f32>(primaryNormal, primaryDepth));
 }
@@ -2705,7 +2712,9 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cNorm   = cGB.xyz;
     let cDepth  = cGB.w;
     let cAlbedo = textureLoad(albedoBuf, pixel, 0).xyz;
-    let cMeshId = u32(textureLoad(hitMeshBuf, pixel, 0).r);
+    let cHitId  = textureLoad(hitMeshBuf, pixel, 0);
+    let cMeshId = u32(cHitId.r);
+    let cMatId  = i32(cHitId.g);
 
     // Sky pixels: pass through
     if (cDepth < 1e-6) {
@@ -2737,8 +2746,15 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var dy = -2; dy <= 2; dy++) {
         for (var dx = -2; dx <= 2; dx++) {
             let sp      = clamp(pixel + vec2<i32>(dx, dy) * step, vec2<i32>(0), res - 1);
-            let sMeshId = u32(textureLoad(hitMeshBuf, sp, 0).r);
-            if (sMeshId != cMeshId) { continue; }
+            let sHitId  = textureLoad(hitMeshBuf, sp, 0);
+            let sMeshId = u32(sHitId.r);
+            let sMatId  = i32(sHitId.g);
+            // Reject only when BOTH mesh and material differ. This allows the
+            // filter to share samples across distinct meshes that have the same
+            // material (two chairs, repeated walls, foliage instances), which
+            // roughly doubles usable samples per pixel in scenes with repeated
+            // elements, without introducing cross-material light leak.
+            if (sMeshId != cMeshId && sMatId != cMatId) { continue; }
 
             let sColor  = textureLoad(colorIn, sp, 0).xyz;
             let sGB     = textureLoad(gBuf, sp, 0);
