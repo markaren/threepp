@@ -1973,7 +1973,16 @@ R"(
         }
 
         if (i > 1) {
-            let p = max(max(throughput.r, throughput.g), throughput.b);
+            // Roughness-weighted Russian roulette. Standard RR already terminates
+            // low-throughput paths; weighting by surface smoothness lets rough
+            // bounces die faster since their BRDF spreads energy over a huge
+            // solid angle (each bounce carries little info anyway). Smooth/metal
+            // paths retain near-full continuation probability — they're where
+            // deep bounces matter. Still unbiased: throughput /= p compensates.
+            let p_base = max(max(throughput.r, throughput.g), throughput.b);
+            let rough  = sqrt(h.shininess);  // linear roughness = sqrt(alpha)
+            let weight = mix(0.6, 1.0, 1.0 - rough);
+            let p = clamp(p_base * weight, 0.05, 1.0);
             if (rand(seed) > p) { break; }
             throughput /= p;
         }
