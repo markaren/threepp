@@ -1546,11 +1546,13 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
              primaryNormal:  ptr<function, vec3<f32>>,
              primaryDepth:   ptr<function, f32>,
              primaryAlbedo:  ptr<function, vec3<f32>>,
+             primaryRough:   ptr<function, f32>,
              touchedMoved:   ptr<function, bool>) -> vec3<f32> {
     *primaryMeshIdx = 64u;
     *primaryNormal  = vec3<f32>(0.0);
     *primaryDepth   = 0.0;  // 0 = sky/no-hit sentinel for denoiser
     *primaryAlbedo  = vec3<f32>(1.0);  // default white (sky/miss: no demodulation)
+    *primaryRough   = 1.0;  // sky: treat as fully rough (max history)
     *touchedMoved   = false;
     var ray        = ray_in;
     var throughput = vec3<f32>(1.0);
@@ -1606,6 +1608,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             *primaryMeshIdx = u32(h.meshIdx);
             *primaryNormal  = h.normal;
             *primaryDepth   = h.t;
+            *primaryRough   = sqrt(h.shininess);  // linear roughness for TAA blend
 
             // Adaptive bounce cap (hybrid-mode perf optimization) — tighten based
             // on primary surface material. NEE/ReSTIR handles direct lighting well;
@@ -2197,8 +2200,9 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var primaryNormal:  vec3<f32>;
     var primaryDepth:   f32;
     var primaryAlbedo:  vec3<f32>;
+    var primaryRough:   f32;
     var touchedMoved:   bool;
-    var sample  = pathTrace(ray, &seed, pixel, maxBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &touchedMoved);
+    var sample  = pathTrace(ray, &seed, pixel, maxBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &primaryRough, &touchedMoved);
 
     let prev     = textureLoad(accumRead, pixel, 0);
     var old      = prev.xyz;
@@ -2305,7 +2309,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(momentsWrite, pixel, vec4<f32>(m1, m2, 0.0, 0.0));
 
     textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), 0.0, 0.0, 0.0));
-    textureStore(albedoWrite,  pixel, vec4<f32>(primaryAlbedo, 1.0));
+    textureStore(albedoWrite,  pixel, vec4<f32>(primaryAlbedo, primaryRough));
     textureStore(gBufWrite,    pixel, vec4<f32>(primaryNormal, primaryDepth));
 }
 )";
@@ -2535,6 +2539,7 @@ struct TaaUniforms {
 @group(0) @binding(4) var taaOut:    texture_storage_2d<rgba16float, write>;
 @group(0) @binding(5) var hitMeshTex: texture_2d<f32>;
 @group(0) @binding(6) var<storage, read> motionMats: array<mat4x4<f32>>;
+@group(0) @binding(7) var albedoTex:  texture_2d<f32>;  // .w = primary linear roughness
 
 @compute @workgroup_size(8, 8)
 fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -2644,6 +2649,14 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // history is still valid — blend 20% current + 80% history for smooth motion.
         var alpha = clamp(1.0 / (curFC * 0.5 + 1.0), 0.1, 1.0);
         if (curFC < 0.5 || movedMesh) { alpha = 0.2; }
+        // Roughness-adaptive blend: smooth/specular surfaces have view-dependent
+        // reflections that can't be reprojected — boost current-frame weight so
+        // they don't trail. Rough diffuse paths are view-independent; keep the
+        // long history for low noise. Roughness stored in albedo.w at primary hit.
+        let primaryRough = textureLoad(albedoTex, pixel, 0).w;
+        let smoothness = 1.0 - clamp(primaryRough, 0.0, 1.0);
+        let specBoost = mix(1.0, 3.0, smoothness * smoothness);
+        alpha = min(1.0, alpha * specBoost);
         result = mix(clamped, curColor, alpha);
     }
 
@@ -4716,6 +4729,7 @@ struct WgpuPathTracer::Impl {
         taaPipeline.setStorageTexture(4, *taaHistWrite);
         taaPipeline.setTexture(5, *readHitMesh);
         taaPipeline.setStorageBufferRead(6, motionMatBuf);
+        taaPipeline.setTexture(7, albedoTex);
 
         // Spatial filter — set ALL bindings upfront
         atrousPipeline.setUniformBuffer(0, atrousUniBuf);
@@ -5079,6 +5093,7 @@ struct WgpuPathTracer::Impl {
         rtRaycastPipeline.setTexture(28, hybridGBuf0);
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(6, *momentsRead);
+        taaPipeline.setTexture(7, albedoTex);
 
         frameCount_ = 0.f;
     }
@@ -6125,6 +6140,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.taaPipeline.setTexture(3, *d.taaHistRead);
         d.taaPipeline.setStorageTexture(4, *d.taaHistWrite);
         d.taaPipeline.setTexture(5, *d.readHitMesh);
+        d.taaPipeline.setTexture(7, d.albedoTex);
         d.taaPipeline.dispatch(gx, gy);
 
         std::swap(d.taaHistRead, d.taaHistWrite);
