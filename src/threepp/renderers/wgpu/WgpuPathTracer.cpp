@@ -4356,7 +4356,7 @@ struct WgpuPathTracer::Impl {
           gBufCur(&gBufA), gBufPrev(&gBufB),
           // Hybrid rasterization G-buffer (extended)
           hybridGBuf0(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                      WgpuTexture::Format::RGBA16Float,
+                      WgpuTexture::Format::RGBA32Float,
                       WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
           hybridGBuf1(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                       WgpuTexture::Format::RGBA16Float,
@@ -4368,7 +4368,7 @@ struct WgpuPathTracer::Impl {
                       WgpuTexture::Format::RGBA32Float,
                       WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
           hybridGBuf4(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                      WgpuTexture::Format::RGBA16Float,
+                      WgpuTexture::Format::RGBA32Float,
                       WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
           hybridGBuf5(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                       WgpuTexture::Format::RGBA16Float,
@@ -4705,7 +4705,9 @@ struct WgpuPathTracer::Impl {
                 t.format = WGPUTextureFormat_RGBA16Float;
                 t.writeMask = WGPUColorWriteMask_All;
             }
+            targets[0].format = WGPUTextureFormat_RGBA32Float;  // normal needs fp32 (reflection/shading)
             targets[3].format = WGPUTextureFormat_RGBA32Float;  // worldPos needs fp32 precision
+            targets[4].format = WGPUTextureFormat_RGBA32Float;  // geoNormal needs fp32 (shadow rays)
             WGPUFragmentState frag{};
             frag.module = gBufRasterShader_;
             frag.entryPoint = WGPUStringView{"fs", WGPU_STRLEN};
@@ -4796,11 +4798,11 @@ struct WgpuPathTracer::Impl {
         gBufCur  = &gBufA;
         gBufPrev = &gBufB;
 
-        hybridGBuf0 = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
+        hybridGBuf0 = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float, gBufUsage);
         hybridGBuf1 = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
         hybridGBuf2 = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
         hybridGBuf3 = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float, gBufUsage);
-        hybridGBuf4 = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
+        hybridGBuf4 = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float, gBufUsage);
         hybridGBuf5 = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
 
         auto fmt32 = WgpuTexture::Format::RGBA32Float;
