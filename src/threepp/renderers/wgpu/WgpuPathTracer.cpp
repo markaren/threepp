@@ -834,7 +834,7 @@ fn loadFromGBuffer(pixel: vec2<i32>) -> Hit {
     let g2 = textureLoad(hybridGBuf2, pixel, 0);  // emissive, shininess
     let g3 = textureLoad(hybridGBuf3, pixel, 0);  // worldPos, transmission
     let g4 = textureLoad(hybridGBuf4, pixel, 0);  // geoNormal, frontFace
-    let g5 = textureLoad(hybridGBuf5, pixel, 0);  // uv, matIdx, meshIdx
+    let g5 = textureLoad(hybridGBuf5, pixel, 0);  // matIdx, meshIdx, ao, 0
 
     if (g0.w <= 0.0) { return h; }  // sky / background — caller handles miss
 
@@ -843,9 +843,10 @@ fn loadFromGBuffer(pixel: vec2<i32>) -> Hit {
     h.geoNormal = g4.xyz;
     h.point     = g3.xyz;
     h.frontFace = g4.w;
-    h.uv        = g5.xy;
-    let matIdx  = i32(g5.z);
-    h.meshIdx   = i32(g5.w);
+    h.uv        = vec2<f32>(0.0);  // textures already resolved in raster FS
+    h.ao        = g5.z;
+    let matIdx  = i32(g5.x);
+    h.meshIdx   = i32(g5.y);
 
     let mat0 = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
     let mat1 = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
@@ -857,7 +858,7 @@ fn loadFromGBuffer(pixel: vec2<i32>) -> Hit {
     h.emissive     = g2.xyz;
     h.shininess    = g2.w;
     h.transmission = g3.w;
-    h.texSlot      = mat1.x;
+    h.texSlot      = -1.0;  // baseColor already resolved into g1.albedo
     h.ior          = mat3.x;
 
     // Note: we don't have raw uv1, so we use uv0 for all channels (no per-channel
@@ -1566,9 +1567,11 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         var h: Hit;
         if (i == 0 && rt.restirParams.w > 0.5) {
             // Hybrid mode: read primary hit from rasterized G-buffer.
-            // Fall back to ray tracing for transmissive surfaces (glass).
+            // Fall back to ray tracing for:
+            //  - transmissive surfaces (glass needs proper refraction)
+            //  - empty pixels (discarded alpha-test/blend may hide geometry behind)
             h = loadFromGBuffer(pixel);
-            if (h.t < 1e29 && h.transmission > 0.05) {
+            if (h.t >= 1e29 || h.transmission > 0.05) {
                 h = sceneHit(ray);
             }
         } else {
@@ -2780,6 +2783,7 @@ constexpr const char* gBufRasterWGSL = R"(
 struct GBufUniforms {
     viewProj: mat4x4<f32>,
     camOri:   vec4<f32>,
+    tileSize: vec4<f32>,  // x = atlas tile size
 };
 
 struct MeshMats {
@@ -2789,35 +2793,95 @@ struct MeshMats {
 
 @group(0) @binding(0) var<uniform> u: GBufUniforms;
 @group(0) @binding(1) var<storage, read> meshMats: array<MeshMats>;
-@group(0) @binding(2) var matData: texture_2d<f32>;
+@group(0) @binding(2) var matData:  texture_2d<f32>;
+@group(0) @binding(3) var texAtlas: texture_2d_array<f32>;
+
+fn tileSz() -> i32 { return max(i32(u.tileSize.x), 1); }
+
+fn srgbToLinearR(c: vec3<f32>) -> vec3<f32> {
+    return select(
+        pow((c + 0.055) / 1.055, vec3<f32>(2.4)),
+        c / 12.92,
+        c <= vec3<f32>(0.04045)
+    );
+}
+
+fn applyWrapR(uu: f32, mode: i32) -> f32 {
+    if (mode == 1) { return clamp(uu, 0.0, 1.0); }
+    if (mode == 2) {
+        let m = abs(uu) % 2.0;
+        return select(m, 2.0 - m, m > 1.0);
+    }
+    return fract(uu);
+}
+
+fn wrapCoordR(v: i32, mode: i32) -> i32 {
+    let ts = tileSz();
+    if (mode == 0) { return ((v % ts) + ts) % ts; }
+    return clamp(v, 0, ts - 1);
+}
+
+fn sampleAtlasR(uv: vec2<f32>, texSlot: f32) -> vec4<f32> {
+    let enc  = i32(texSlot);
+    let slot = enc / 16;
+    let wS   = (enc % 16) / 4;
+    let wT   = enc % 4;
+    let ts   = tileSz();
+    let atlasCols = i32(textureDimensions(texAtlas, 0).x) / ts;
+    let slotsPerLayer = atlasCols * atlasCols;
+    let layer = slot / slotsPerLayer;
+    let localSlot = slot % slotsPerLayer;
+    let col  = localSlot % atlasCols;
+    let row  = localSlot / atlasCols;
+    let ox   = col * ts;
+    let oy   = row * ts;
+    let tsf  = f32(ts);
+    let wu   = applyWrapR(uv.x, wS);
+    let wv   = applyWrapR(uv.y, wT);
+    let fp   = vec2<f32>(wu, wv) * tsf - 0.5;
+    let x0   = wrapCoordR(i32(floor(fp.x)), wS);
+    let y0   = wrapCoordR(i32(floor(fp.y)), wT);
+    let x1   = wrapCoordR(i32(floor(fp.x)) + 1, wS);
+    let y1   = wrapCoordR(i32(floor(fp.y)) + 1, wT);
+    let wx   = fp.x - floor(fp.x);
+    let wy   = fp.y - floor(fp.y);
+    let c00  = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y0), layer, 0);
+    let c10  = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y0), layer, 0);
+    let c01  = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y1), layer, 0);
+    let c11  = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y1), layer, 0);
+    return mix(mix(c00, c10, wx), mix(c01, c11, wx), wy);
+}
+
+// Matches transformUV in csCommonWGSL: selects uv0 vs uv1 based on r1.z.
+fn transformUV_r(uv0: vec2<f32>, uv1: vec2<f32>, matIdx: i32, channelRow: i32) -> vec2<f32> {
+    let r0 = textureLoad(matData, vec2<i32>(matIdx, channelRow), 0);
+    let r1 = textureLoad(matData, vec2<i32>(matIdx, channelRow + 1), 0);
+    let rawUV = select(uv0, uv1, i32(r1.z) == 1);
+    return vec2<f32>(
+        r0.x * rawUV.x + r0.y * rawUV.y + r0.z,
+        r0.w * rawUV.x + r1.x * rawUV.y + r1.y
+    );
+}
 
 struct VSOut {
     @builtin(position) clipPos: vec4<f32>,
     @location(0) worldPos:     vec3<f32>,
     @location(1) worldNormal:  vec3<f32>,
-    @location(2) uv:           vec2<f32>,
+    @location(2) uv0:          vec2<f32>,
     @location(3) vcolor:       vec3<f32>,
     @location(4) @interpolate(flat) matIdxF:      f32,
     @location(5) @interpolate(flat) meshIdxF:     f32,
+    @location(6) uv1:          vec2<f32>,
 };
-
-// Must match transformUV in csCommonWGSL (channelRow 6 = baseColor).
-fn transformUV_raster(uv0: vec2<f32>, matIdx: i32, channelRow: i32) -> vec2<f32> {
-    let r0 = textureLoad(matData, vec2<i32>(matIdx, channelRow), 0);
-    let r1 = textureLoad(matData, vec2<i32>(matIdx, channelRow + 1), 0);
-    return vec2<f32>(
-        r0.x * uv0.x + r0.y * uv0.y + r0.z,
-        r0.w * uv0.x + r1.x * uv0.y + r1.y
-    );
-}
 
 @vertex
 fn vs(@location(0) pos: vec3<f32>,
       @location(1) normal: vec3<f32>,
-      @location(2) uv: vec2<f32>,
+      @location(2) uv0: vec2<f32>,
       @location(3) vcolor: vec3<f32>,
       @location(4) meshIdxF: f32,
-      @location(5) matIdxF: f32) -> VSOut {
+      @location(5) matIdxF: f32,
+      @location(6) uv1: vec2<f32>) -> VSOut {
     let mi = i32(meshIdxF);
     let mm = meshMats[mi];
     let worldP = (mm.world * vec4<f32>(pos, 1.0)).xyz;
@@ -2826,7 +2890,8 @@ fn vs(@location(0) pos: vec3<f32>,
     o.clipPos     = u.viewProj * vec4<f32>(worldP, 1.0);
     o.worldPos    = worldP;
     o.worldNormal = worldN;
-    o.uv          = uv;
+    o.uv0         = uv0;
+    o.uv1         = uv1;
     o.vcolor      = vcolor;
     o.matIdxF     = matIdxF;
     o.meshIdxF    = meshIdxF;
@@ -2835,11 +2900,11 @@ fn vs(@location(0) pos: vec3<f32>,
 
 struct FSOut {
     @location(0) rt0: vec4<f32>,  // normal.xyz, t
-    @location(1) rt1: vec4<f32>,  // albedo.rgb, metalness
-    @location(2) rt2: vec4<f32>,  // emissive.rgb, shininess
+    @location(1) rt1: vec4<f32>,  // albedo.rgb (resolved), metalness
+    @location(2) rt2: vec4<f32>,  // emissive.rgb (resolved), shininess
     @location(3) rt3: vec4<f32>,  // worldPos.xyz, transmission
     @location(4) rt4: vec4<f32>,  // geoNormal.xyz, frontFace
-    @location(5) rt5: vec4<f32>,  // uv.x, uv.y, matIdx, meshIdx
+    @location(5) rt5: vec4<f32>,  // matIdx, meshIdx, ao, 0
 };
 
 @fragment
@@ -2849,11 +2914,9 @@ fn fs(in: VSOut) -> FSOut {
     let mat1 = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
     let mat2 = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
     let mat3 = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
+    let mat5 = textureLoad(matData, vec2<i32>(matIdx, 5), 0);
 
     // Determine front-face via ray direction (matches compute shader's convention).
-    // Using @builtin(front_facing) here causes per-triangle stripes on meshes with
-    // inconsistent winding, because winding-based front-face disagrees with the
-    // ray-based test the path tracer uses for the same surface.
     let worldNormal = normalize(in.worldNormal);
     let viewDir = normalize(in.worldPos - u.camOri.xyz);
     let isFront = dot(viewDir, worldNormal) < 0.0;
@@ -2862,26 +2925,106 @@ fn fs(in: VSOut) -> FSOut {
     // raster result matches compute sceneHit, which rejects back-face hits early.
     if (mat3.z < 0.5 && !isFront) { discard; }
 
-    let sn = select(-worldNormal, worldNormal, isFront);
+    var sn = select(-worldNormal, worldNormal, isFront);
 
-    // Geometric normal from screen-space derivatives (flat normal)
-    let dpdx = dpdx(in.worldPos);
-    let dpdy = dpdy(in.worldPos);
-    var geoN = normalize(cross(dpdx, dpdy));
-    // Align with interpolated normal to handle winding
+    // Per-channel transformed UVs (match compute shader's sceneHit).
+    let bcUV = transformUV_r(in.uv0, in.uv1, matIdx,  6);
+    let mrUV = transformUV_r(in.uv0, in.uv1, matIdx,  8);
+    let nmUV = transformUV_r(in.uv0, in.uv1, matIdx, 10);
+    let emUV = transformUV_r(in.uv0, in.uv1, matIdx, 12);
+    let aoUV = transformUV_r(in.uv0, in.uv1, matIdx, 14);
+
+    // Normal mapping via derivative-based TBN (using raw uv0, matches compute).
+    let nmSlot = mat1.z;
+    if (nmSlot >= 0.0) {
+        let dPx = dpdx(in.worldPos);
+        let dPy = dpdy(in.worldPos);
+        let dUx = dpdx(in.uv0);
+        let dUy = dpdy(in.uv0);
+        let denom = dUx.x * dUy.y - dUy.x * dUx.y;
+        if (abs(denom) > 1e-8) {
+            let invD = 1.0 / denom;
+            var T = normalize((dPx * dUy.y - dPy * dUx.y) * invD);
+            T = normalize(T - sn * dot(sn, T));
+            let B = cross(sn, T);
+            let nmSample = sampleAtlasR(nmUV, nmSlot).xyz;
+            let nmTangent = nmSample * 2.0 - 1.0;
+            sn = normalize(T * nmTangent.x + B * nmTangent.y + sn * nmTangent.z);
+        }
+    }
+
+    // Geometric normal from screen-space derivatives (flat per-triangle)
+    let dpdx_p = dpdx(in.worldPos);
+    let dpdy_p = dpdy(in.worldPos);
+    var geoN = normalize(cross(dpdx_p, dpdy_p));
     if (dot(geoN, sn) < 0.0) { geoN = -geoN; }
 
-    var out: FSOut;
-    // t = parametric ray distance (matches path tracer's h.t semantics)
-    let t = length(in.worldPos - u.camOri.xyz);
+    // Resolve albedo (match shade() at downstream: textured replaces factor).
+    var albedo = mat0.xyz * in.vcolor;
+    var sampledAlpha = 1.0;
+    let bcSlot = mat1.x;
+    if (bcSlot >= 0.0) {
+        let bcRGBA = sampleAtlasR(bcUV, bcSlot);
+        albedo = srgbToLinearR(bcRGBA.xyz);
+        sampledAlpha = bcRGBA.w;
+    }
 
+    // Alpha handling — mirror compute shader's alphaTestTri (WgpuPathTracer.cpp:497).
+    // mat3.y = alphaTest cutoff, mat3.w = opacity (negative => BLEND mode).
+    let alphaTest = mat3.y;
+    let blendMode = mat3.w < 0.0;
+    let opacity   = abs(mat3.w);
+    let needsAlpha = alphaTest > 0.0 || blendMode;
+    if (needsAlpha) {
+        let alpha = opacity * sampledAlpha;
+        if (alphaTest > 0.0) {
+            if (alpha < alphaTest) { discard; }
+        } else {
+            // Stochastic alpha: per-pixel, per-frame hash so accumulation converges.
+            let px = u32(in.clipPos.x);
+            let py = u32(in.clipPos.y);
+            let fc = bitcast<u32>(u.tileSize.y);
+            var h1 = px * 1973u + py * 9277u + fc * 26699u;
+            h1 = h1 ^ (h1 >> 16u); h1 = h1 * 0x7feb352du;
+            h1 = h1 ^ (h1 >> 15u); h1 = h1 * 0x846ca68bu;
+            h1 = h1 ^ (h1 >> 16u);
+            let rng = f32(h1) / 4294967295.0;
+            if (rng > alpha) { discard; }
+        }
+    }
+
+    // Resolve metalness/roughness (metalRough map uses metalRough UV).
+    var shininess = mat0.w;
+    var metalness = mat1.y;
+    let roughSlot = mat1.w;
+    if (roughSlot >= 0.0) {
+        let rs = sampleAtlasR(mrUV, roughSlot).xyz;
+        shininess = max(1e-4, rs.y * rs.y);
+        metalness = rs.z;
+    }
+
+    // Resolve emissive (factor × texture).
+    var emissive = mat2.xyz;
+    let emSlot = mat5.z;
+    if (emSlot >= 0.0) {
+        emissive *= srgbToLinearR(sampleAtlasR(emUV, emSlot).xyz);
+    }
+
+    // Resolve AO.
+    var ao = 1.0;
+    let aoSlot = mat5.w;
+    if (aoSlot >= 0.0) {
+        ao = sampleAtlasR(aoUV, aoSlot).x;
+    }
+
+    var out: FSOut;
+    let t = length(in.worldPos - u.camOri.xyz);
     out.rt0 = vec4<f32>(sn, t);
-    out.rt1 = vec4<f32>(mat0.xyz * in.vcolor, mat1.y);       // albedo, metalness
-    out.rt2 = vec4<f32>(mat2.xyz, mat0.w);                    // emissive, shininess
-    out.rt3 = vec4<f32>(in.worldPos, mat2.w);                 // worldPos, transmission
-    out.rt4 = vec4<f32>(geoN, select(0.0, 1.0, isFront));   // geoNormal, frontFace
-    let bcUV = transformUV_raster(in.uv, matIdx, 6);
-    out.rt5 = vec4<f32>(bcUV.x, bcUV.y, in.matIdxF, in.meshIdxF);
+    out.rt1 = vec4<f32>(albedo, metalness);
+    out.rt2 = vec4<f32>(emissive, shininess);
+    out.rt3 = vec4<f32>(in.worldPos, mat2.w);
+    out.rt4 = vec4<f32>(geoN, select(0.0, 1.0, isFront));
+    out.rt5 = vec4<f32>(in.matIdxF, in.meshIdxF, ao, 0.0);
     return out;
 }
 )";
@@ -2993,7 +3136,8 @@ struct alignas(16) DepthFillUniforms {
 };
 struct alignas(16) GBufRasterUniforms {
     float viewProj[16];   // 64 bytes
-    float camOri[4];      // 16 bytes — total 80 bytes
+    float camOri[4];      // 16 bytes
+    float tileSize[4];    // 16 bytes — x = tile size (matches rt.spp.y); total 96 bytes
 };
 struct alignas(16) TaaGpuUniforms {
     float prevCamOri[4], prevCamFwd[4], prevCamRgt[4], prevCamUp[4];
@@ -3316,9 +3460,9 @@ static int pagedIdx(int ti, int row) {
     return ((ti / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + ti % TEX_PAGE_WIDTH) * 4;
 }
 
-// Raster vertex layout: 13 floats = 52 bytes per vertex, 3 verts per tri.
-// pos.xyz(3) + normal.xyz(3) + uv.xy(2) + color.rgb(3) + meshIdxF(1) + matIdxF(1)
-static constexpr int RASTER_VTX_FLOATS = 13;
+// Raster vertex layout: 15 floats = 60 bytes per vertex, 3 verts per tri.
+// pos.xyz(3) + normal.xyz(3) + uv0.xy(2) + color.rgb(3) + meshIdxF(1) + matIdxF(1) + uv1.xy(2)
+static constexpr int RASTER_VTX_FLOATS = 15;
 
 static int buildGeometryBuffers(
         const std::vector<RtMeshEntry>& entries,
@@ -3587,7 +3731,8 @@ static int buildGeometryBuffers(
 
             // Raster vertex buffer (object-space, 3 verts per tri, non-indexed)
             auto setVtx = [&](int localVi, const Vector3& p, const Vector3& n,
-                              float uu, float vv, float cr, float cg, float cb) {
+                              float uu, float vv, float cr, float cg, float cb,
+                              float uu1, float vv1) {
                 const int vi = triCount * 3 + localVi;
                 float* v = rasterVtxBuf.data() + vi * RASTER_VTX_FLOATS;
                 v[0] = p.x; v[1] = p.y; v[2] = p.z;
@@ -3596,10 +3741,11 @@ static int buildGeometryBuffers(
                 v[8] = cr; v[9] = cg; v[10] = cb;
                 v[11] = static_cast<float>(meshIdx);
                 v[12] = static_cast<float>(matIdx);
+                v[13] = uu1; v[14] = vv1;
             };
-            setVtx(0, ov0, on0, u0, v0uv, cr0, cg0, cb0);
-            setVtx(1, ov1, on1, u1, v1uv, cr1, cg1, cb1);
-            setVtx(2, ov2, on2, u2, v2uv, cr2, cg2, cb2);
+            setVtx(0, ov0, on0, u0, v0uv, cr0, cg0, cb0, u1_0, v1_0);
+            setVtx(1, ov1, on1, u1, v1uv, cr1, cg1, cb1, u1_1, v1_1);
+            setVtx(2, ov2, on2, u2, v2uv, cr2, cg2, cb2, u1_2, v1_2);
 
             ++triCount;
         }
@@ -4377,7 +4523,7 @@ struct WgpuPathTracer::Impl {
                       WgpuTexture::Format::RGBA32Float,
                       WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
           hybridGBuf5(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                      WgpuTexture::Format::RGBA16Float,
+                      WgpuTexture::Format::RGBA32Float,
                       WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
           // ReSTIR DI reservoir ping-pong
           reservoirA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
@@ -4641,7 +4787,7 @@ struct WgpuPathTracer::Impl {
             smDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&wgslSrc);
             gBufRasterShader_ = wgpuDeviceCreateShaderModule(device, &smDesc);
 
-            WGPUBindGroupLayoutEntry bglEntries[3]{};
+            WGPUBindGroupLayoutEntry bglEntries[4]{};
             bglEntries[0].binding = 0;
             bglEntries[0].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
             bglEntries[0].buffer.type = WGPUBufferBindingType_Uniform;
@@ -4653,9 +4799,13 @@ struct WgpuPathTracer::Impl {
             bglEntries[2].visibility = WGPUShaderStage_Fragment;
             bglEntries[2].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
             bglEntries[2].texture.viewDimension = WGPUTextureViewDimension_2D;
+            bglEntries[3].binding = 3;
+            bglEntries[3].visibility = WGPUShaderStage_Fragment;
+            bglEntries[3].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
+            bglEntries[3].texture.viewDimension = WGPUTextureViewDimension_2DArray;
             WGPUBindGroupLayoutDescriptor bglDesc{};
             bglDesc.label = WGPUStringView{"gbuf_raster_bgl", WGPU_STRLEN};
-            bglDesc.entryCount = 3;
+            bglDesc.entryCount = 4;
             bglDesc.entries = bglEntries;
             gBufRasterBGL_ = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
 
@@ -4671,18 +4821,19 @@ struct WgpuPathTracer::Impl {
             ubDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
             gBufRasterUniBuf_ = wgpuDeviceCreateBuffer(device, &ubDesc);
 
-            // Vertex layout: 6 attributes, 13 floats per vertex, interleaved.
-            static WGPUVertexAttribute vattrs[6];
+            // Vertex layout: 7 attributes, 15 floats per vertex, interleaved.
+            static WGPUVertexAttribute vattrs[7];
             vattrs[0] = {WGPUVertexFormat_Float32x3,  0 * sizeof(float), 0};
             vattrs[1] = {WGPUVertexFormat_Float32x3,  3 * sizeof(float), 1};
             vattrs[2] = {WGPUVertexFormat_Float32x2,  6 * sizeof(float), 2};
             vattrs[3] = {WGPUVertexFormat_Float32x3,  8 * sizeof(float), 3};
             vattrs[4] = {WGPUVertexFormat_Float32,   11 * sizeof(float), 4};
             vattrs[5] = {WGPUVertexFormat_Float32,   12 * sizeof(float), 5};
+            vattrs[6] = {WGPUVertexFormat_Float32x2, 13 * sizeof(float), 6};
             static WGPUVertexBufferLayout vbLayout{};
             vbLayout.arrayStride = RASTER_VTX_FLOATS * sizeof(float);
             vbLayout.stepMode    = WGPUVertexStepMode_Vertex;
-            vbLayout.attributeCount = 6;
+            vbLayout.attributeCount = 7;
             vbLayout.attributes  = vattrs;
 
             WGPURenderPipelineDescriptor rpDesc{};
@@ -4714,6 +4865,7 @@ struct WgpuPathTracer::Impl {
             targets[0].format = WGPUTextureFormat_RGBA32Float;  // normal needs fp32 (reflection/shading)
             targets[3].format = WGPUTextureFormat_RGBA32Float;  // worldPos needs fp32 precision
             targets[4].format = WGPUTextureFormat_RGBA32Float;  // geoNormal needs fp32 (shadow rays)
+            targets[5].format = WGPUTextureFormat_RGBA32Float;  // uv needs fp32 for texture sampling precision
             WGPUFragmentState frag{};
             frag.module = gBufRasterShader_;
             frag.entryPoint = WGPUStringView{"fs", WGPU_STRLEN};
@@ -4809,7 +4961,7 @@ struct WgpuPathTracer::Impl {
         hybridGBuf2 = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
         hybridGBuf3 = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float, gBufUsage);
         hybridGBuf4 = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float, gBufUsage);
-        hybridGBuf5 = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
+        hybridGBuf5 = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float, gBufUsage);
 
         auto fmt32 = WgpuTexture::Format::RGBA32Float;
         reservoirA  = WgpuTexture(renderer, uw, uh, fmt32);
@@ -5785,10 +5937,13 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 for (int i = 0; i < 16; ++i) gu.viewProj[i] = pe[i];
             }
             gu.camOri[0] = camPos.x; gu.camOri[1] = camPos.y; gu.camOri[2] = camPos.z; gu.camOri[3] = 0.f;
+            gu.tileSize[0] = static_cast<float>(d.tileSize_);
+            gu.tileSize[1] = d.frameCount_;  // for stochastic alpha blend
+            gu.tileSize[2] = 0.f; gu.tileSize[3] = 0.f;
             wgpuQueueWriteBuffer(d.queue, d.gBufRasterUniBuf_, 0, &gu, sizeof(gu));
 
-            // Build bind group: uniforms (0) + meshMats (1, storage-read) + matData (2, texture).
-            WGPUBindGroupEntry bgEntries[3]{};
+            // Build bind group: uniforms (0) + meshMats (1, storage-read) + matData (2, texture) + texAtlas (3).
+            WGPUBindGroupEntry bgEntries[4]{};
             bgEntries[0].binding = 0;
             bgEntries[0].buffer  = d.gBufRasterUniBuf_;
             bgEntries[0].offset  = 0;
@@ -5799,9 +5954,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             bgEntries[1].size    = d.matrixBuf.size();
             bgEntries[2].binding     = 2;
             bgEntries[2].textureView = d.matTex.view();
+            bgEntries[3].binding     = 3;
+            bgEntries[3].textureView = d.texAtlasTex.view();
             WGPUBindGroupDescriptor bgDesc{};
             bgDesc.layout     = d.gBufRasterBGL_;
-            bgDesc.entryCount = 3;
+            bgDesc.entryCount = 4;
             bgDesc.entries    = bgEntries;
             WGPUBindGroup bg = wgpuDeviceCreateBindGroup(d.device, &bgDesc);
 
