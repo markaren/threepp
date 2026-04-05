@@ -241,6 +241,7 @@ int main() {
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setMaxBounces(5);
     pathTracer.setMode(WgpuPathTracer::Mode::Raytracer);
+    pathTracer.setHybridMode(true);
 
     // ---- Scene ----
     Scene scene;
@@ -323,14 +324,6 @@ int main() {
     emPoint->visible = false;
     scene.add(emPoint);
 
-    // text geom
-    // FontLoader fontLoader;
-    // auto font = fontLoader.defaultFont();
-    // auto textGeom = Text3D::create(ExtrudeTextGeometry::Options(font, 1, 0.1f), "threepp!", matEmissive(Color::red, 0.7f));
-    // textGeom->geometry()->center();
-    // textGeom->position.set(0,5,-10.f);
-    // scene.add(textGeom);
-
     // Cone (mid-right)
     auto cone = Mesh::create(ConeGeometry::create(0.6f, 1.5f, 32),
                              matRoughDiffuse(Color(0.9f, 0.85f, 0.3f), 0.4f));
@@ -367,6 +360,7 @@ int main() {
     bool denoiserOn = pathTracer.denoiserEnabled();
     bool foveatOn = pathTracer.foveatedRendering();
     bool restirOn = pathTracer.restirEnabled();
+    bool hybridOn = pathTracer.hybridMode();
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
     float pixelScale = pathTracer.pixelScale();
@@ -401,7 +395,7 @@ int main() {
         }
 
         if (renderMode == 0 || renderMode == 1) {
-            if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
+            if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 2.0f))
                 pathTracer.setExposure(exposure);
             if (ImGui::SliderFloat("Pixel Scale", &pixelScale, 0.25f, 2.0f, "%.2f"))
                 pathTracer.setPixelScale(pixelScale);
@@ -414,7 +408,9 @@ int main() {
                 pathTracer.setFoveatedRendering(foveatOn);
             if (ImGui::Checkbox("ReSTIR", &restirOn))
                 pathTracer.setReSTIREnabled(restirOn);
-            if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 16))
+            if (ImGui::Checkbox("Hybrid mode", &hybridOn))
+                pathTracer.setHybridMode(hybridOn);
+            if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8))
                 pathTracer.setMaxBounces(maxBounces);
         }
 

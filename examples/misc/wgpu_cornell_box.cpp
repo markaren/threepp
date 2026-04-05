@@ -126,6 +126,7 @@ int main() {
     pathTracer.setMaxBounces(6);
     pathTracer.setMode(WgpuPathTracer::Mode::Raytracer);
     pathTracer.setReSTIREnabled(true);
+    pathTracer.setFoveatedRendering(false);
 
     // ---- Scene ----
     Scene scene;
@@ -157,6 +158,9 @@ int main() {
     bool raster = false;
     bool pathTracerOn = false;
     bool denoiserOn = pathTracer.denoiserEnabled();
+    bool hybridOn = pathTracer.hybridMode();
+    bool restdirOn = pathTracer.restirEnabled();
+    bool foveatOn = pathTracer.foveatedRendering();
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
     float fps = 0.f;
@@ -192,7 +196,13 @@ int main() {
         if (renderMode == 1 && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);
-            if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 16))
+            if (ImGui::Checkbox("ReSTIR", &restdirOn))
+                pathTracer.setReSTIREnabled(restdirOn);
+            if (ImGui::Checkbox("Hybrid mode", &hybridOn))
+                pathTracer.setHybridMode(hybridOn);
+            if (ImGui::Checkbox("Foveated", &foveatOn))
+                pathTracer.setFoveatedRendering(foveatOn);
+            if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8))
                 pathTracer.setMaxBounces(maxBounces);
         }
 

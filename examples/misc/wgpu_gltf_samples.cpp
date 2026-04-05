@@ -90,6 +90,7 @@ int main(int argc, char** argv) {
     pathTracer.setReSTIREnabled(false);
     pathTracer.setMaxBounces(4);
     pathTracer.setMode(WgpuPathTracer::Mode::Raytracer);
+    pathTracer.setHybridMode(true);
 
     ImageLoader imgLoader;
     auto img = imgLoader.loadHDR(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr", 4, false);
@@ -180,6 +181,7 @@ int main(int argc, char** argv) {
     bool dirLight = false;
     bool denoiserOn = pathTracer.denoiserEnabled();
     bool restdirOn = pathTracer.restirEnabled();
+    bool hybridMode = pathTracer.hybridMode();
     float exposure = pathTracer.exposure();
     float envIntensity = pathTracer.envIntensity();
     float fps = 0.f, fpsAccum = 0.f;
@@ -236,6 +238,8 @@ int main(int argc, char** argv) {
                 pathTracer.setDenoiserEnabled(denoiserOn);
             if (ImGui::Checkbox("REsTDIR", &restdirOn))
                 pathTracer.setReSTIREnabled(restdirOn);
+            if (ImGui::Checkbox("Hybrid mode", &hybridMode))
+                pathTracer.setHybridMode(hybridMode);
         }
         if (renderMode != 2) {
             if (ImGui::Checkbox("Show DirLight", &dirLight)) {

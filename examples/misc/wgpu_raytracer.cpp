@@ -25,6 +25,7 @@ int main() {
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setFoveatedRendering(false);
     pathTracer.setReSTIREnabled(true);
+    pathTracer.setHybridMode(true);
 
     // ---- Scene objects ----
     TextureLoader tl;
