@@ -2848,6 +2848,7 @@ fn fs(in: VSOut) -> FSOut {
     let mat0 = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
     let mat1 = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
     let mat2 = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
+    let mat3 = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
 
     // Determine front-face via ray direction (matches compute shader's convention).
     // Using @builtin(front_facing) here causes per-triangle stripes on meshes with
@@ -2856,6 +2857,11 @@ fn fs(in: VSOut) -> FSOut {
     let worldNormal = normalize(in.worldNormal);
     let viewDir = normalize(in.worldPos - u.camOri.xyz);
     let isFront = dot(viewDir, worldNormal) < 0.0;
+
+    // Single-sided materials (mat3.z < 0.5): discard back-facing fragments so the
+    // raster result matches compute sceneHit, which rejects back-face hits early.
+    if (mat3.z < 0.5 && !isFront) { discard; }
+
     let sn = select(-worldNormal, worldNormal, isFront);
 
     // Geometric normal from screen-space derivatives (flat normal)
