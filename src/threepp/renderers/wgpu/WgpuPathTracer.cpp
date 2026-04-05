@@ -1563,7 +1563,12 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
     var prevWo        = vec3<f32>(0.0);
     var afterTransmission = false;
 
+    // Adaptive bounce cap — set at bounce 0 from primary surface material.
+    // Starts at maxBounces, gets tightened if the primary is diffuse/rough.
+    var effectiveBounces = maxBounces;
+
     for (var i = 0; i < maxBounces; i++) {
+        if (i >= effectiveBounces) { break; }
         var h: Hit;
         if (i == 0 && rt.restirParams.w > 0.5) {
             // Hybrid mode: read primary hit from rasterized G-buffer.
@@ -1601,6 +1606,31 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             *primaryMeshIdx = u32(h.meshIdx);
             *primaryNormal  = h.normal;
             *primaryDepth   = h.t;
+
+            // Adaptive bounce cap (hybrid-mode perf optimization) — tighten based
+            // on primary surface material. NEE/ReSTIR handles direct lighting well;
+            // env IBL covers ambient indirect for diffuse surfaces; deeper bounces
+            // are only needed when the BRDF propagates information (metals/mirrors/glass).
+            // This trades a small amount of color bleeding between diffuse surfaces
+            // for a big reduction in secondary ray count.
+            // shininess = GGX alpha = roughness^2.
+            if (rt.restirParams.w > 0.5) {
+                let isGlass  = h.transmission > 0.05;
+                let isMetal  = h.metalness > 0.5;
+                let isMirror = h.shininess < 0.05;      // r <= 0.22
+                let isGlossy = h.shininess < 0.25;      // r <= 0.5
+                if (!isGlass && !isMetal && !isMirror) {
+                    if (isGlossy) {
+                        effectiveBounces = min(maxBounces, 3);
+                    } else {
+                        // Rough diffuse/non-metal: allow 1 indirect bounce so
+                        // interior surfaces can receive light transported off
+                        // other surfaces (e.g. wall lit by sun coming through a
+                        // window = wall→floor→sky requires 2 bounces from camera).
+                        effectiveBounces = min(maxBounces, 2);
+                    }
+                }
+            }
         } else if (isMeshMoved(h.meshIdx)) {
             *touchedMoved = true;
         }
@@ -4446,7 +4476,7 @@ struct WgpuPathTracer::Impl {
     uint32_t rfDispatchX_ = 1, rfDispatchY_ = 1;
     float frameCount_ = 0.f;
     uint32_t globalFrameCounter_ = 0;
-    bool foveatedEnabled_ = true;
+    bool foveatedEnabled_ = false;
     int foveatedConvergeFrames_ = 4;
     Vector3 prevCamPos_;
     Vector3 prevCamDir_;
