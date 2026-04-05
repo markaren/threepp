@@ -873,6 +873,156 @@ fn makeRay(px: vec2<f32>, res: vec2<f32>) -> Ray {
                          + rt.camUp.xyz  * (ndc.y * rt.tanHalfFov.x));
     return ray;
 }
+
+// ---------------------------------------------------------------------------
+// Shared light/shadow helpers — used by both classic NEE and ReSTIR
+// ---------------------------------------------------------------------------
+
+// Evaluate analytical light: returns (direction, attenuated color).
+// For directional lights, dir = normalized lightPos, dist is ignored.
+struct LightEval { dir: vec3<f32>, color: vec3<f32>, dist: f32 }
+fn evalAnalyticalLight(li: i32, point: vec3<f32>) -> LightEval {
+    var le: LightEval;
+    var lc    = rt.lightCol[li].xyz;
+    let ltype = i32(rt.lightType[li].x);
+    let lPos  = rt.lightPos[li].xyz;
+    le.dir  = select(normalize(lPos - point), normalize(lPos), ltype == 1);
+    le.dist = select(length(lPos - point), 1e30, ltype == 1);
+    let lDist = rt.lightType[li].w;
+    let lDecay = rt.lightDir[li].w;
+    if (lDist > 0.0 && ltype != 1) {
+        lc *= pow(max(1.0 - le.dist / lDist, 0.0), lDecay);
+    }
+    if (ltype == 2) {
+        let spotDir  = rt.lightDir[li].xyz;
+        let cosTheta = dot(-le.dir, spotDir);
+        let cosInner = rt.lightType[li].y;
+        let cosOuter = rt.lightType[li].z;
+        lc *= clamp((cosTheta - cosOuter) / max(cosInner - cosOuter, 1e-6), 0.0, 1.0);
+    }
+    le.color = lc;
+    return le;
+}
+
+// Evaluate light radiance for a given light type code and position.
+// Handles analytical lights, emissive triangles, and environment.
+fn evalLightRadiance(lightPos: vec3<f32>, lightType: f32, point: vec3<f32>) -> vec3<f32> {
+    let typeCode = i32(lightType);
+    if (typeCode < 0) {
+        return sampleEnv(lightPos) * rt.envIntensity.x;
+    } else if (typeCode >= 1000) {
+        let eTi = typeCode - 1000;
+        let eMatIdx = i32(textureLoad(triData, triCoord(eTi, 0), 0).w);
+        return textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
+    } else {
+        let lcount = i32(rt.lightCount.x);
+        if (typeCode < lcount) {
+            let le = evalAnalyticalLight(typeCode, point);
+            return le.color;
+        }
+    }
+    return vec3<f32>(0.0);
+}
+
+// Shadow ray with glass-aware Beer-Lambert volumetric absorption.
+// Returns RGB attenuation (0 = fully occluded, 1 = fully visible).
+fn traceShadowRay(origin: vec3<f32>, normal: vec3<f32>, dir: vec3<f32>,
+                  maxDist: f32, maxBounces: i32) -> vec3<f32> {
+    var sr: Ray;
+    sr.origin = origin + normal * 1e-3;
+    sr.dir = dir;
+    var atten = vec3<f32>(1.0);
+    var glassAttCol = vec3<f32>(1.0);
+    var glassAttDist = 0.0;
+    var inGlass = false;
+    for (var si = 0; si < maxBounces; si++) {
+        let sh = sceneHitShadow(sr, maxDist);
+        if (sh.t >= maxDist) { break; }
+        if (sh.transmission < 0.01) { return vec3<f32>(0.0); }
+        var shAlbedo = sh.albedo;
+        if (sh.texSlot >= 0.0) { shAlbedo = srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
+        atten *= shAlbedo * sh.transmission;
+        if (sh.frontFace > 0.5) {
+            glassAttCol = sh.attenuationColor;
+            glassAttDist = sh.attenuationDist;
+            inGlass = true;
+        } else if (inGlass && glassAttDist > 0.0) {
+            let absorbCoeff = -log(max(glassAttCol, vec3<f32>(1e-6))) / glassAttDist;
+            atten *= exp(-absorbCoeff * sh.t);
+            inGlass = false;
+        }
+        sr.origin = sh.point + sr.dir * 1e-3;
+    }
+    return atten;
+}
+
+// BRDF + sheen combined evaluation: returns full lobe sum (diffuse + specular + sheen).
+fn evalBrdfFull(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
+                albedo: vec3<f32>, metalness: f32, alpha: f32, F0: vec3<f32>,
+                sheenColor: vec3<f32>, sheenRoughness: f32) -> vec3<f32> {
+    let brdf = evalBrdf(wo, wi, n, albedo, metalness, alpha, F0);
+    var lobeSum = brdf.f_diff + brdf.f_spec;
+    let sheenLum = dot(sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
+    if (sheenLum > 0.001) {
+        lobeSum += evalSheen(wo, wi, n, sheenColor, sheenRoughness);
+    }
+    return lobeSum;
+}
+
+// Compute direction and max distance from a reservoir light to a shading point.
+struct ReservoirDir { dir: vec3<f32>, maxDist: f32 }
+fn reservoirLightDir(lightPos: vec3<f32>, lightType: f32, point: vec3<f32>) -> ReservoirDir {
+    var rd: ReservoirDir;
+    let typeCode = i32(lightType);
+    if (typeCode < 0) {
+        rd.dir = normalize(lightPos);
+        rd.maxDist = 1e30;
+    } else if (typeCode >= 1000) {
+        let toL = lightPos - point;
+        let dist = length(toL);
+        rd.dir = toL / dist;
+        rd.maxDist = dist - 1e-2;
+    } else {
+        let ltype = i32(rt.lightType[typeCode].x);
+        if (ltype == 1) {
+            rd.dir = normalize(lightPos);
+            rd.maxDist = 1e30;
+        } else {
+            let toL = lightPos - point;
+            let dist = length(toL);
+            rd.dir = toL / dist;
+            rd.maxDist = dist - 1e-2;
+        }
+    }
+    return rd;
+}
+
+// Sample an emissive triangle from the power-weighted CDF.
+// Returns: xyz = sampled point on triangle, w = triangle index (as float).
+struct EmissiveSample { point: vec3<f32>, normal: vec3<f32>, triIdx: i32, area: f32, power: f32 }
+fn sampleEmissiveTriCdf(seed: ptr<function, u32>, totalPower: f32, emTriCount: i32) -> EmissiveSample {
+    let xi = rand(seed) * totalPower;
+    var lo = 0;
+    var hi = emTriCount - 1;
+    while (lo < hi) {
+        let mid = (lo + hi) >> 1;
+        if (emissiveTris[mid].z < xi) { lo = mid + 1; } else { hi = mid; }
+    }
+    let emInfo = emissiveTris[lo];
+    let eTi  = i32(emInfo.x);
+    let ev0 = textureLoad(triData, triCoord(eTi, 0), 0).xyz;
+    let ev1 = textureLoad(triData, triCoord(eTi, 1), 0).xyz;
+    let ev2 = textureLoad(triData, triCoord(eTi, 2), 0).xyz;
+    let su1 = sqrt(rand(seed));
+    let u2  = rand(seed);
+    var es: EmissiveSample;
+    es.point  = (1.0 - su1) * ev0 + su1 * (1.0 - u2) * ev1 + su1 * u2 * ev2;
+    es.normal = normalize(cross(ev1 - ev0, ev2 - ev0));
+    es.triIdx = eTi;
+    es.area   = emInfo.y;
+    es.power  = emInfo.w;
+    return es;
+}
 )";
 
 // ---------------------------------------------------------------------------
@@ -1427,25 +1577,10 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             // 1. Analytical lights — sample ONE uniformly to keep M correct
             if (lcount > 0) {
                 let li = i32(rand(seed) * f32(lcount)) % lcount;
-                var lc = rt.lightCol[li].xyz;
-                let ltype = i32(rt.lightType[li].x);
-                var lightP = rt.lightPos[li].xyz;
-                let ln = select(normalize(lightP - h.point), normalize(lightP), ltype == 1);
-                let ld = select(length(lightP - h.point), 1e30, ltype == 1);
-                let lDist = rt.lightType[li].w;
-                let lDecay = rt.lightDir[li].w;
-                if (lDist > 0.0 && ltype != 1) {
-                    lc *= pow(max(1.0 - ld / lDist, 0.0), lDecay);
-                }
-                if (ltype == 2) {
-                    let spotDir = rt.lightDir[li].xyz;
-                    let cosTheta = dot(-ln, spotDir);
-                    let cosInner = rt.lightType[li].y;
-                    let cosOuter = rt.lightType[li].z;
-                    lc *= clamp((cosTheta - cosOuter) / max(cosInner - cosOuter, 1e-6), 0.0, 1.0);
-                }
+                let le = evalAnalyticalLight(li, h.point);
+                let lightP = rt.lightPos[li].xyz;
                 let p_hat_a = restirTargetPdf(h.point, h.normal, wo, albedo, h.metalness, h.shininess, F0_h,
-                                              lightP, f32(li), lc);
+                                              lightP, f32(li), le.color);
                 if (p_hat_a > 0.0) {
                     let p_source = 1.0 / max(f32(lcount), 1.0);
                     updateReservoir(&reservoir, lightP, f32(li),
@@ -1457,37 +1592,20 @@ R"(
             // 2. Emissive triangles — CDF samples
             if (emTriCount > 0 && totalPower > 0.0) {
                 for (var ei = 0; ei < 16; ei++) {
-                    let xi = rand(seed) * totalPower;
-                    var lo = 0;
-                    var hi = emTriCount - 1;
-                    while (lo < hi) {
-                        let mid = (lo + hi) >> 1;
-                        if (emissiveTris[mid].z < xi) { lo = mid + 1; } else { hi = mid; }
-                    }
-                    let emInfo = emissiveTris[lo];
-                    let eTi   = i32(emInfo.x);
-                    let eArea = emInfo.y;
-                    let ePower = emInfo.w;
-                    let ev0 = textureLoad(triData, triCoord(eTi, 0), 0).xyz;
-                    let ev1 = textureLoad(triData, triCoord(eTi, 1), 0).xyz;
-                    let ev2 = textureLoad(triData, triCoord(eTi, 2), 0).xyz;
-                    let su1 = sqrt(rand(seed));
-                    let u2  = rand(seed);
-                    let lightPoint = (1.0 - su1) * ev0 + su1 * (1.0 - u2) * ev1 + su1 * u2 * ev2;
-                    let toLight = lightPoint - h.point;
+                    let es = sampleEmissiveTriCdf(seed, totalPower, emTriCount);
+                    let toLight = es.point - h.point;
                     let dist = length(toLight);
                     let ln_e = toLight / dist;
-                    let lightNormal = normalize(cross(ev1 - ev0, ev2 - ev0));
-                    let cosLight = abs(dot(lightNormal, -ln_e));
+                    let cosLight = abs(dot(es.normal, -ln_e));
                     let NdotL_e = dot(h.normal, ln_e);
                     if (NdotL_e > 0.0 && cosLight > 1e-6) {
-                        let eMatIdx = i32(textureLoad(triData, triCoord(eTi, 0), 0).w);
+                        let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
                         let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
                         let p_hat_e = restirTargetPdf(h.point, h.normal, wo, albedo, h.metalness, h.shininess, F0_h,
-                                                      lightPoint, 1000.0 + f32(eTi), emColor);
+                                                      es.point, 1000.0 + f32(es.triIdx), emColor);
                         if (p_hat_e > 0.0) {
-                            let p_source_e = (ePower / totalPower) * (dist * dist) / (eArea * cosLight);
-                            updateReservoir(&reservoir, lightPoint, 1000.0 + f32(eTi),
+                            let p_source_e = (es.power / totalPower) * (dist * dist) / (es.area * cosLight);
+                            updateReservoir(&reservoir, es.point, 1000.0 + f32(es.triIdx),
                                             p_hat_e / p_source_e, p_hat_e, seed);
                         }
                     }
@@ -1555,34 +1673,7 @@ R"(
                             rPrev.p_hat = prevWeight.w;
 
                             // Re-evaluate prev sample's target PDF at current shading point
-                            var prevLe = vec3<f32>(0.0);
-                            let prevTypeCode = i32(rPrev.lightType);
-                            if (prevTypeCode < 0) {
-                                prevLe = sampleEnv(rPrev.lightPos) * rt.envIntensity.x;
-                            } else if (prevTypeCode >= 1000) {
-                                let peTi = prevTypeCode - 1000;
-                                let peMatIdx = i32(textureLoad(triData, triCoord(peTi, 0), 0).w);
-                                prevLe = textureLoad(matData, vec2<i32>(peMatIdx, 2), 0).xyz;
-                            } else if (prevTypeCode >= 0 && prevTypeCode < lcount) {
-                                var lc_prev = rt.lightCol[prevTypeCode].xyz;
-                                let ltype_prev = i32(rt.lightType[prevTypeCode].x);
-                                let toL_prev = rPrev.lightPos - h.point;
-                                let ld_prev = select(length(toL_prev), 1e30, ltype_prev == 1);
-                                let lDist_prev = rt.lightType[prevTypeCode].w;
-                                let lDecay_prev = rt.lightDir[prevTypeCode].w;
-                                if (lDist_prev > 0.0 && ltype_prev != 1) {
-                                    lc_prev *= pow(max(1.0 - ld_prev / lDist_prev, 0.0), lDecay_prev);
-                                }
-                                if (ltype_prev == 2) {
-                                    let ln_prev = select(normalize(toL_prev), normalize(rPrev.lightPos), ltype_prev == 1);
-                                    let spotDir_prev = rt.lightDir[prevTypeCode].xyz;
-                                    let cosTheta_prev = dot(-ln_prev, spotDir_prev);
-                                    let cosInner_prev = rt.lightType[prevTypeCode].y;
-                                    let cosOuter_prev = rt.lightType[prevTypeCode].z;
-                                    lc_prev *= clamp((cosTheta_prev - cosOuter_prev) / max(cosInner_prev - cosOuter_prev, 1e-6), 0.0, 1.0);
-                                }
-                                prevLe = lc_prev;
-                            }
+                            let prevLe = evalLightRadiance(rPrev.lightPos, rPrev.lightType, h.point);
                             let p_hat_prev = restirTargetPdf(h.point, h.normal, wo, albedo,
                                                              h.metalness, h.shininess, F0_h,
                                                              rPrev.lightPos, rPrev.lightType, prevLe);
@@ -1641,35 +1732,7 @@ R"(
                     if (rSp.W <= 0.0 || rSp.M <= 0.0) { continue; }
 
                     // Re-evaluate neighbour's chosen light at the CURRENT shading point
-                    var spLe  = vec3<f32>(0.0);
-                    let spTC  = i32(rSp.lightType);
-                    if (spTC < 0) {
-                        spLe = sampleEnv(rSp.lightPos) * rt.envIntensity.x;
-                    } else if (spTC >= 1000) {
-                        let spTi  = spTC - 1000;
-                        let spMat = i32(textureLoad(triData, triCoord(spTi, 0), 0).w);
-                        spLe = textureLoad(matData, vec2<i32>(spMat, 2), 0).xyz;
-                    } else if (spTC < lcount) {
-                        var lc_sp    = rt.lightCol[spTC].xyz;
-                        let ltype_sp = i32(rt.lightType[spTC].x);
-                        let toL_sp   = rSp.lightPos - h.point;
-                        let ld_sp    = select(length(toL_sp), 1e30, ltype_sp == 1);
-                        let lDist_sp = rt.lightType[spTC].w;
-                        let lDcy_sp  = rt.lightDir[spTC].w;
-                        if (lDist_sp > 0.0 && ltype_sp != 1) {
-                            lc_sp *= pow(max(1.0 - ld_sp / lDist_sp, 0.0), lDcy_sp);
-                        }
-                        if (ltype_sp == 2) {
-                            let ln_sp  = select(normalize(toL_sp), normalize(rSp.lightPos), ltype_sp == 1);
-                            let sd_sp  = rt.lightDir[spTC].xyz;
-                            let ct_sp  = dot(-ln_sp, sd_sp);
-                            let ci_sp  = rt.lightType[spTC].y;
-                            let co_sp  = rt.lightType[spTC].z;
-                            lc_sp *= clamp((ct_sp - co_sp) / max(ci_sp - co_sp, 1e-6), 0.0, 1.0);
-                        }
-                        spLe = lc_sp;
-                    }
-
+                    let spLe = evalLightRadiance(rSp.lightPos, rSp.lightType, h.point);
                     let p_hat_sp = restirTargetPdf(h.point, h.normal, wo, albedo,
                                                     h.metalness, h.shininess, F0_h,
                                                     rSp.lightPos, rSp.lightType, spLe);
@@ -1690,110 +1753,19 @@ R"(
 
             // === VISIBILITY TEST — shadow ray from shading point ===
             var reservoirShadowAtten = vec3<f32>(0.0);
-            let rTypeCodeV = i32(reservoir.lightType);
             if (reservoir.p_hat > 0.0 && reservoir.W > 0.0) {
-                var rDir: vec3<f32>;
-                var rMaxDist: f32;
-                if (rTypeCodeV < 0) {
-                    // Environment: lightPos stores direction
-                    rDir = normalize(reservoir.lightPos);
-                    rMaxDist = 1e30;
-                } else if (rTypeCodeV >= 1000) {
-                    let toL = reservoir.lightPos - h.point;
-                    let dist = length(toL);
-                    rDir = toL / dist;
-                    rMaxDist = dist - 1e-2;  // match classic NEE offset
-                } else {
-                    let ltype = i32(rt.lightType[rTypeCodeV].x);
-                    if (ltype == 1) {
-                        rDir = normalize(reservoir.lightPos);
-                        rMaxDist = 1e30;
-                    } else {
-                        let toL = reservoir.lightPos - h.point;
-                        let dist = length(toL);
-                        rDir = toL / dist;
-                        rMaxDist = dist - 1e-2;  // match classic NEE offset
-                    }
-                }
-                // Glass-aware shadow traversal with Beer-Lambert volumetric absorption.
-            // At each glass surface:
-            //   front face (entering): save attenuationColor/Dist for this glass volume.
-            //   back face  (exiting):  apply exp(-absorb * thickness) where thickness = sh.t
-            //                          from the entry-step origin to this back face.
-            // Also applies albedo×transmission tint for textured/tinted glass.
-            var sr: Ray;
-            sr.origin = h.point + h.normal * 1e-3;
-            sr.dir = rDir;
-            var rAtten = vec3<f32>(1.0);
-            // Track current glass volume Beer-Lambert params (set when entering)
-            var glassAttCol = vec3<f32>(1.0);
-            var glassAttDist = 0.0;
-            var inGlass = false;
-            for (var si = 0; si < 4; si++) {
-                let sh = sceneHitShadow(sr, rMaxDist);
-                if (sh.t >= rMaxDist) { break; }                         // clear path to light
-                if (sh.transmission < 0.01) { rAtten = vec3<f32>(0.0); break; } // opaque blocker
-                var shAlbedo = sh.albedo;
-                if (sh.texSlot >= 0.0) { shAlbedo = srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
-                rAtten *= shAlbedo * sh.transmission;                    // albedo/transmission tint
-                // Beer-Lambert: apply on back face (exiting glass)
-                if (sh.frontFace > 0.5) {
-                    // Entering glass — save attenuation params for exit
-                    glassAttCol  = sh.attenuationColor;
-                    glassAttDist = sh.attenuationDist;
-                    inGlass = true;
-                } else if (inGlass && glassAttDist > 0.0) {
-                    // Exiting glass — sh.t is the thickness from entry-step origin to back face
-                    let absorbCoeff = -log(max(glassAttCol, vec3<f32>(1e-6))) / glassAttDist;
-                    rAtten *= exp(-absorbCoeff * sh.t);
-                    inGlass = false;
-                }
-                sr.origin = sh.point + sr.dir * 1e-3;                   // step past the glass surface
-            }
-            reservoirShadowAtten = rAtten;
+                let rd = reservoirLightDir(reservoir.lightPos, reservoir.lightType, h.point);
+                reservoirShadowAtten = traceShadowRay(h.point, h.normal, rd.dir, rd.maxDist, 4);
             }
 
             // === SHADE FROM RESERVOIR ===
             if (reservoirShadowAtten.x + reservoirShadowAtten.y + reservoirShadowAtten.z > 0.001) {
-                let rTypeCode = i32(reservoir.lightType);
-                var rLn: vec3<f32>;
-                var rLe: vec3<f32>;
-                if (rTypeCode < 0) {
-                    // Environment: lightPos stores direction
-                    rLn = normalize(reservoir.lightPos);
-                    rLe = sampleEnv(rLn) * rt.envIntensity.x;
-                } else if (rTypeCode >= 1000) {
-                    rLn = normalize(reservoir.lightPos - h.point);
-                    let reTi = rTypeCode - 1000;
-                    let reMatIdx = i32(textureLoad(triData, triCoord(reTi, 0), 0).w);
-                    rLe = textureLoad(matData, vec2<i32>(reMatIdx, 2), 0).xyz;
-                } else {
-                    var lc = rt.lightCol[rTypeCode].xyz;
-                    let ltype = i32(rt.lightType[rTypeCode].x);
-                    if (ltype == 1) { rLn = normalize(reservoir.lightPos); }
-                    else { rLn = normalize(reservoir.lightPos - h.point); }
-                    let ld = select(length(reservoir.lightPos - h.point), 1e30, ltype == 1);
-                    let lDist = rt.lightType[rTypeCode].w;
-                    let lDecay = rt.lightDir[rTypeCode].w;
-                    if (lDist > 0.0 && ltype != 1) {
-                        lc *= pow(max(1.0 - ld / lDist, 0.0), lDecay);
-                    }
-                    if (ltype == 2) {
-                        let spotDir = rt.lightDir[rTypeCode].xyz;
-                        let cosTheta = dot(-rLn, spotDir);
-                        let cosInner = rt.lightType[rTypeCode].y;
-                        let cosOuter = rt.lightType[rTypeCode].z;
-                        lc *= clamp((cosTheta - cosOuter) / max(cosInner - cosOuter, 1e-6), 0.0, 1.0);
-                    }
-                    rLe = lc;
-                }
-                let rNdotL = max(dot(h.normal, rLn), 0.0);
-                let rBrdf = evalBrdf(wo, rLn, h.normal, albedo, h.metalness, h.shininess, F0_h);
-                var rLobeSum = rBrdf.f_diff + rBrdf.f_spec;
-                let rSheenLum = dot(h.sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
-                if (rSheenLum > 0.001) { rLobeSum += evalSheen(wo, rLn, h.normal, h.sheenColor, h.sheenRoughness); }
-                let contribution = rLobeSum * rNdotL * rLe;
-                radiance += throughput * reservoirShadowAtten * reservoir.W * contribution;
+                let rd = reservoirLightDir(reservoir.lightPos, reservoir.lightType, h.point);
+                let rLe = evalLightRadiance(reservoir.lightPos, reservoir.lightType, h.point);
+                let rNdotL = max(dot(h.normal, rd.dir), 0.0);
+                let rLobeSum = evalBrdfFull(wo, rd.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                            h.sheenColor, h.sheenRoughness);
+                radiance += throughput * reservoirShadowAtten * reservoir.W * rLobeSum * rNdotL * rLe;
             }
             // === STORE RESERVOIR ===
             // If visibility failed, reset M and W to 0 so next frame does not inherit
@@ -1818,55 +1790,14 @@ R"(
         // --- Analytical light NEE ---
         for (var li = 0; li < 4; li++) {
             if (li >= lcount) { break; }
-            var lc    = rt.lightCol[li].xyz;
-            let ltype = i32(rt.lightType[li].x);
-            let ln    = select(normalize(rt.lightPos[li].xyz - h.point),
-                               normalize(rt.lightPos[li].xyz), ltype == 1);
-            let ld    = select(length(rt.lightPos[li].xyz - h.point), 1e30, ltype == 1);
-            let lDist = rt.lightType[li].w;
-            let lDecay = rt.lightDir[li].w;
-            if (lDist > 0.0 && ltype != 1) {
-                lc *= pow(max(1.0 - ld / lDist, 0.0), lDecay);
-            }
-            if (ltype == 2) {
-                let spotDir   = rt.lightDir[li].xyz;
-                let cosTheta  = dot(-ln, spotDir);
-                let cosInner  = rt.lightType[li].y;
-                let cosOuter  = rt.lightType[li].z;
-                let spotAtten = clamp((cosTheta - cosOuter) / max(cosInner - cosOuter, 1e-6), 0.0, 1.0);
-                lc *= spotAtten;
-            }
-            var sr: Ray;
-            sr.origin = h.point + h.normal * 1e-3;
-            sr.dir    = ln;
-            var shadowAtten = vec3<f32>(1.0);
-            var sGlassAttCol = vec3<f32>(1.0); var sGlassAttDist = 0.0; var sInGlass = false;
-            for (var si = 0; si < 4; si++) {
-                let sh = sceneHitShadow(sr, ld - 1e-3);
-                if (sh.t >= ld - 1e-3) { break; }
-                if (isMeshMoved(sh.meshIdx)) { *touchedMoved = true; }
-                if (sh.transmission < 0.01) { shadowAtten = vec3<f32>(0.0); break; }
-                var shAlbedo = sh.albedo;
-                if (sh.texSlot >= 0.0) { shAlbedo = srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
-                shadowAtten *= shAlbedo * sh.transmission;
-                // Beer-Lambert volumetric absorption through glass
-                if (sh.frontFace > 0.5) {
-                    sGlassAttCol = sh.attenuationColor; sGlassAttDist = sh.attenuationDist; sInGlass = true;
-                } else if (sInGlass && sGlassAttDist > 0.0) {
-                    let sAbsorb = -log(max(sGlassAttCol, vec3<f32>(1e-6))) / sGlassAttDist;
-                    shadowAtten *= exp(-sAbsorb * sh.t);
-                    sInGlass = false;
-                }
-                sr.origin = sh.point + sr.dir * 1e-3;
-            }
+            let le = evalAnalyticalLight(li, h.point);
+            let NdotL = dot(h.normal, le.dir);
+            if (NdotL <= 0.0) { continue; }
+            let shadowAtten = traceShadowRay(h.point, h.normal, le.dir, le.dist - 1e-3, 4);
             if (shadowAtten.x + shadowAtten.y + shadowAtten.z > 0.001) {
-                let NdotL = dot(h.normal, ln);
-                if (NdotL <= 0.0) { continue; }
-                let brdf = evalBrdf(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h);
-                var lobeSum = brdf.f_diff + brdf.f_spec;
-                let sheenLum2 = dot(h.sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
-                if (sheenLum2 > 0.001) { lobeSum += evalSheen(wo, ln, h.normal, h.sheenColor, h.sheenRoughness); }
-                radiance += throughput * shadowAtten * lobeSum * NdotL * lc;
+                let lobeSum = evalBrdfFull(wo, le.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                           h.sheenColor, h.sheenRoughness);
+                radiance += throughput * shadowAtten * lobeSum * NdotL * le.color;
             }
         }
 )"
@@ -1874,66 +1805,21 @@ R"(
         // --- Emissive surface NEE (power-weighted CDF sampling) ---
         if (emTriCount > 0) {
             let totalPower2 = rt.emissiveInfo.y;
-            let xi = rand(seed) * totalPower2;
-            var lo = 0;
-            var hi = emTriCount - 1;
-            while (lo < hi) {
-                let mid = (lo + hi) >> 1;
-                if (emissiveTris[mid].z < xi) { lo = mid + 1; } else { hi = mid; }
-            }
-            let emInfo = emissiveTris[lo];
-            let eTi   = i32(emInfo.x);
-            let eArea = emInfo.y;
-            let ePower = emInfo.w;
-
-            let ev0 = textureLoad(triData, triCoord(eTi, 0), 0).xyz;
-            let ev1 = textureLoad(triData, triCoord(eTi, 1), 0).xyz;
-            let ev2 = textureLoad(triData, triCoord(eTi, 2), 0).xyz;
-
-            let su1 = sqrt(rand(seed));
-            let u2  = rand(seed);
-            let lightPoint = (1.0 - su1) * ev0 + su1 * (1.0 - u2) * ev1 + su1 * u2 * ev2;
-
-            let toLight = lightPoint - h.point;
+            let es = sampleEmissiveTriCdf(seed, totalPower2, emTriCount);
+            let toLight = es.point - h.point;
             let dist    = length(toLight);
             let ln      = toLight / dist;
             let NdotL   = dot(h.normal, ln);
-
-            let lightNormal = normalize(cross(ev1 - ev0, ev2 - ev0));
-            let cosLight    = abs(dot(lightNormal, -ln));
+            let cosLight = abs(dot(es.normal, -ln));
 
             if (NdotL > 0.0 && cosLight > 1e-6) {
-                var sr: Ray;
-                sr.origin = h.point + h.normal * 1e-3;
-                sr.dir    = ln;
-                var emAtten = vec3<f32>(1.0);
-                var emGlassAttCol = vec3<f32>(1.0); var emGlassAttDist = 0.0; var emInGlass = false;
-                for (var si = 0; si < 4; si++) {
-                    let sh = sceneHitShadow(sr, dist - 1e-2);
-                    if (sh.t >= dist - 1e-2) { break; }
-                    if (sh.transmission < 0.01) { emAtten = vec3<f32>(0.0); break; }
-                    var shAlb = sh.albedo;
-                    if (sh.texSlot >= 0.0) { shAlb = srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
-                    emAtten *= shAlb * sh.transmission;
-                    if (sh.frontFace > 0.5) {
-                        emGlassAttCol = sh.attenuationColor; emGlassAttDist = sh.attenuationDist; emInGlass = true;
-                    } else if (emInGlass && emGlassAttDist > 0.0) {
-                        let emAbsorb = -log(max(emGlassAttCol, vec3<f32>(1e-6))) / emGlassAttDist;
-                        emAtten *= exp(-emAbsorb * sh.t);
-                        emInGlass = false;
-                    }
-                    sr.origin = sh.point + sr.dir * 1e-3;
-                }
+                let emAtten = traceShadowRay(h.point, h.normal, ln, dist - 1e-2, 4);
                 if (emAtten.x + emAtten.y + emAtten.z > 0.001) {
-                    let eMatIdx = i32(textureLoad(triData, triCoord(eTi, 0), 0).w);
+                    let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
                     let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
-
-                    let pdf = (ePower * dist * dist) / (totalPower2 * eArea * cosLight);
-                    let brdf = evalBrdf(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h);
-                    var lobeSum3 = brdf.f_diff + brdf.f_spec;
-                    let sheenLum3 = dot(h.sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
-                    if (sheenLum3 > 0.001) { lobeSum3 += evalSheen(wo, ln, h.normal, h.sheenColor, h.sheenRoughness); }
-
+                    let pdf = (es.power * dist * dist) / (totalPower2 * es.area * cosLight);
+                    let lobeSum3 = evalBrdfFull(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                                h.sheenColor, h.sheenRoughness);
                     let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
                     let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);
                     radiance += throughput * emAtten * lobeSum3 * NdotL * emColor * w_light / pdf;
@@ -1948,32 +1834,10 @@ R"(
             let envPdf    = envSample.w;
             let envNdotL  = dot(h.normal, envDir);
             if (envNdotL > 0.0 && envPdf > 1e-8) {
-                var sr: Ray;
-                sr.origin = h.point + h.normal * 1e-3;
-                sr.dir    = envDir;
-                var envAtten = vec3<f32>(1.0);
-                var envGlassAttCol = vec3<f32>(1.0); var envGlassAttDist = 0.0; var envInGlass = false;
-                for (var si = 0; si < 4; si++) {
-                    let sh = sceneHitShadow(sr, 1e30);
-                    if (sh.t >= 1e30) { break; }
-                    if (sh.transmission < 0.01) { envAtten = vec3<f32>(0.0); break; }
-                    var shAlb = sh.albedo;
-                    if (sh.texSlot >= 0.0) { shAlb = srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
-                    envAtten *= shAlb * sh.transmission;
-                    if (sh.frontFace > 0.5) {
-                        envGlassAttCol = sh.attenuationColor; envGlassAttDist = sh.attenuationDist; envInGlass = true;
-                    } else if (envInGlass && envGlassAttDist > 0.0) {
-                        let envAbsorb = -log(max(envGlassAttCol, vec3<f32>(1e-6))) / envGlassAttDist;
-                        envAtten *= exp(-envAbsorb * sh.t);
-                        envInGlass = false;
-                    }
-                    sr.origin = sh.point + sr.dir * 1e-3;
-                }
+                let envAtten = traceShadowRay(h.point, h.normal, envDir, 1e30, 4);
                 if (envAtten.x + envAtten.y + envAtten.z > 0.001) {
-                    let brdf = evalBrdf(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h);
-                    var lobeSum4 = brdf.f_diff + brdf.f_spec;
-                    let sheenLum4 = dot(h.sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
-                    if (sheenLum4 > 0.001) { lobeSum4 += evalSheen(wo, envDir, h.normal, h.sheenColor, h.sheenRoughness); }
+                    let lobeSum4 = evalBrdfFull(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                                h.sheenColor, h.sheenRoughness);
                     let envCol = sampleEnv(envDir) * rt.envIntensity.x;
                     let pdf_brdf_env = brdfPdf(wo, envDir, h.normal, h.shininess, h.metalness);
                     let w_env = envPdf / max(envPdf + pdf_brdf_env, 1e-8);
