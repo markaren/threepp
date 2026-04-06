@@ -83,26 +83,26 @@ namespace {
         constexpr float D = 20.f;// depth (z)
 
         // Floor
-        auto floor = Mesh::create(PlaneGeometry::create(W, D), matRoughDiffuse(Color(0.6f, 0.6f, 0.6f), 0.9f, Side::Double));
+        auto floor = Mesh::create(PlaneGeometry::create(W, D), matRoughDiffuse(Color(0.6f, 0.6f, 0.6f), 0.9f, Side::Front));
         floor->rotation.x = -math::PI / 2.f;
         floor->receiveShadow = true;
         group->add(floor);
 
         // Ceiling
-        auto ceiling = Mesh::create(PlaneGeometry::create(W, D), matRoughDiffuse(Color(0.85f, 0.85f, 0.85f), 0.9f, Side::Double));
+        auto ceiling = Mesh::create(PlaneGeometry::create(W, D), matRoughDiffuse(Color(0.85f, 0.85f, 0.85f), 0.9f, Side::Front));
         ceiling->rotation.x = math::PI / 2.f;
         ceiling->position.y = H;
         ceiling->receiveShadow = true;
         group->add(ceiling);
 
         // Back wall
-        auto back = Mesh::create(PlaneGeometry::create(W, H), matRoughDiffuse(Color(0.75f, 0.75f, 0.75f), 0.9f, Side::Double));
+        auto back = Mesh::create(PlaneGeometry::create(W, H), matRoughDiffuse(Color(0.75f, 0.75f, 0.75f), 0.9f, Side::Front));
         back->position.set(0.f, H / 2.f, -D / 2.f);
         back->receiveShadow = true;
         group->add(back);
 
         // Solid left wall (shown when window is off)
-        auto wallMat = matRoughDiffuse(Color(0.7f, 0.35f, 0.2f), 0.9f, Side::Double);
+        auto wallMat = matRoughDiffuse(Color(0.7f, 0.35f, 0.2f), 0.9f, Side::Front);
         auto leftSolid = Mesh::create(PlaneGeometry::create(D, H), wallMat);
         leftSolid->rotation.y = math::PI / 2.f;
         leftSolid->position.set(-W / 2.f, H / 2.f, 0.f);
@@ -147,7 +147,7 @@ namespace {
 
         // Bright emissive panel filling the window opening (flush with wall)
         auto sunPanel = Mesh::create(PlaneGeometry::create(winW + 2, winH + 2),
-                                     matEmissive(Color(1.0f, 0.95f, 0.8f), 15.0f));
+                                     matEmissive(Color(1.0f, 0.95f, 0.8f), 10.0f));
         sunPanel->rotation.y = math::PI / 2.f;
         sunPanel->position.set(-W / 2.f - 0.1f, winCY, winCZ);
         windowGroup->add(sunPanel);
@@ -171,7 +171,7 @@ namespace {
 
         // Right wall (cool blue-grey)
         auto right = Mesh::create(PlaneGeometry::create(D, H),
-                                  matRoughDiffuse(Color(0.3f, 0.4f, 0.55f), 0.9f, Side::Double));
+                                  matRoughDiffuse(Color(0.3f, 0.4f, 0.55f), 0.9f, Side::Front));
         right->rotation.y = -math::PI / 2.f;
         right->position.set(W / 2.f, H / 2.f, 0.f);
         right->receiveShadow = true;
@@ -239,6 +239,7 @@ int main() {
     pathTracer.setExposure(1.0f);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setMaxBounces(5);
+    pathTracer.setFireflyClamp(0);
 
     // ---- Scene ----
     Scene scene;
@@ -307,13 +308,10 @@ int main() {
     scene.add(trooper);
 
     // Emissive orb (floating, back-left)
-    auto emOrb = Mesh::create(SphereGeometry::create(0.4f, 32, 32), matEmissive(Color(0.2f, 1.0f, 0.6f), 4.0f));
+    auto emOrb = Mesh::create(BoxGeometry::create(), matEmissive(Color(0.2f, 1.0f, 0.6f), 2.f));
+    emOrb->rotateY(math::degToRad(45));
     emOrb->position.set(-9.f, 0.5f, -9.f);
     scene.add(emOrb);
-
-    auto emOrb2 = Mesh::create(SphereGeometry::create(0.4f, 32, 32), matEmissive(Color(1.f, 2.0f, 0.2f), 4.0f));
-    emOrb2->position.set(9.f, 8.5f, 9.f);
-    // scene.add(emOrb2);
 
     auto emPoint = PointLight::create(Color(0.2f, 1.0f, 0.6f), 1.0f);
     emPoint->position.copy(emOrb->position);
