@@ -239,7 +239,6 @@ int main() {
     pathTracer.setExposure(1.0f);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setMaxBounces(5);
-    pathTracer.setHybridMode(true);
 
     // ---- Scene ----
     Scene scene;
@@ -355,7 +354,6 @@ int main() {
     bool denoiserOn = pathTracer.denoiserEnabled();
     bool foveatOn = pathTracer.foveatedRendering();
     bool restirOn = pathTracer.restirEnabled();
-    bool hybridOn = pathTracer.hybridMode();
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
     float pixelScale = pathTracer.pixelScale();
@@ -386,7 +384,7 @@ int main() {
         if (!raster && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 2.0f))
                 pathTracer.setExposure(exposure);
-            if (ImGui::SliderFloat("Pixel Scale", &pixelScale, 0.25f, 2.0f, "%.2f"))
+            if (ImGui::SliderFloat("Pixel Scale", &pixelScale, 0.25f, 1.2f, "%.2f"))
                 pathTracer.setPixelScale(pixelScale);
 
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
@@ -395,8 +393,6 @@ int main() {
                 pathTracer.setFoveatedRendering(foveatOn);
             if (ImGui::Checkbox("ReSTIR", &restirOn))
                 pathTracer.setReSTIREnabled(restirOn);
-            if (ImGui::Checkbox("Hybrid mode", &hybridOn))
-                pathTracer.setHybridMode(hybridOn);
             if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8))
                 pathTracer.setMaxBounces(maxBounces);
         }

@@ -371,7 +371,6 @@ int main() {
     pathTracer.setReSTIREnabled(true);
     pathTracer.setFoveatedRendering(false);
     pathTracer.setExposure(1.0f);
-    pathTracer.setHybridMode(true);
 
     // ── Scene ──────────────────────────────────────────────────────────────────
     Scene scene;
@@ -412,7 +411,6 @@ int main() {
     // ── State ──────────────────────────────────────────────────────────────────
     bool restirOn = pathTracer.restirEnabled();
     bool denoiserOn = pathTracer.denoiserEnabled();
-    bool hybridMode = pathTracer.hybridMode();
     bool animating = true;
     bool foveated = pathTracer.foveatedRendering();
     int maxBounces = pathTracer.maxBounces();
@@ -463,8 +461,6 @@ int main() {
             pathTracer.setDenoiserEnabled(denoiserOn);
         if (ImGui::Checkbox("Foveated (F)", &foveated))
             pathTracer.setFoveatedRendering(foveated);
-        if (ImGui::Checkbox("Hybrid mode", &hybridMode))
-            pathTracer.setHybridMode(hybridMode);
         if (ImGui::Checkbox("Animate (A)", &animating)) {}
         if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 12))
             pathTracer.setMaxBounces(maxBounces);

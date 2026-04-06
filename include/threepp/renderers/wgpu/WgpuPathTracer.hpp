@@ -59,13 +59,6 @@ namespace threepp {
         void setReSTIREnabled(bool enabled);
         [[nodiscard]] bool restirEnabled() const;
 
-        /// Enable/disable hybrid rasterization: rasterize primary G-buffer, then
-        /// path-trace bounces 1+. Reduces primary BVH traversal cost, especially
-        /// valuable for fast camera motion (driving simulators). Default: false.
-        /// Transmissive surfaces fall back to full ray tracing.
-        void setHybridMode(bool enabled);
-        [[nodiscard]] bool hybridMode() const;
-
         /// Resize accumulation textures. Resets accumulation.
         void setSize(std::pair<int, int> size);
         [[nodiscard]] std::pair<int, int> size() const;

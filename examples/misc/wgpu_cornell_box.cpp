@@ -164,7 +164,6 @@ int main() {
     // ---- UI ----
     bool raster = false;
     bool denoiserOn = pathTracer.denoiserEnabled();
-    bool hybridOn = pathTracer.hybridMode();
     bool restdirOn = pathTracer.restirEnabled();
     bool foveatOn = pathTracer.foveatedRendering();
     int maxBounces = pathTracer.maxBounces();
@@ -195,8 +194,6 @@ int main() {
                 pathTracer.setDenoiserEnabled(denoiserOn);
             if (ImGui::Checkbox("ReSTIR", &restdirOn))
                 pathTracer.setReSTIREnabled(restdirOn);
-            if (ImGui::Checkbox("Hybrid mode", &hybridOn))
-                pathTracer.setHybridMode(hybridOn);
             if (ImGui::Checkbox("Foveated", &foveatOn))
                 pathTracer.setFoveatedRendering(foveatOn);
             if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8))

@@ -24,7 +24,6 @@ int main() {
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setFoveatedRendering(false);
     pathTracer.setReSTIREnabled(true);
-    pathTracer.setHybridMode(true);
 
     // ---- Scene objects ----
     TextureLoader tl;
@@ -124,7 +123,6 @@ int main() {
     bool pathTracerOn = false;
     bool denoiserOn = pathTracer.denoiserEnabled();
     bool restirOn = pathTracer.restirEnabled();
-    bool hybridOn = pathTracer.hybridMode();
     bool animateBox = true;
     bool showEnclosingBox = true;
     int maxBounces = pathTracer.maxBounces();
@@ -168,8 +166,6 @@ int main() {
                 pathTracer.setDenoiserEnabled(denoiserOn);
             if (ImGui::Checkbox("ReSTIR", &restirOn))
                 pathTracer.setReSTIREnabled(restirOn);
-            if (ImGui::Checkbox("Hybrid mode", &hybridOn))
-                pathTracer.setHybridMode(hybridOn);
             if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8))
                 pathTracer.setMaxBounces(maxBounces);
         }

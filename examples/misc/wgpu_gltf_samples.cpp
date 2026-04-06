@@ -89,7 +89,6 @@ int main(int argc, char** argv) {
     pathTracer.setFoveatedRendering(false);
     pathTracer.setReSTIREnabled(false);
     pathTracer.setMaxBounces(4);
-    pathTracer.setHybridMode(true);
 
     ImageLoader imgLoader;
     auto img = imgLoader.loadHDR(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr", 4, false);
@@ -182,10 +181,10 @@ int main(int argc, char** argv) {
     bool dirLight = light->visible;
     bool denoiserOn = pathTracer.denoiserEnabled();
     bool restdirOn = pathTracer.restirEnabled();
-    bool hybridMode = pathTracer.hybridMode();
     float exposure = pathTracer.exposure();
     float envIntensity = pathTracer.envIntensity();
     float fps = 0.f, fpsAccum = 0.f;
+    float pixelScale = pathTracer.pixelScale();
     int fpsFrames = 0;
 
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
@@ -229,14 +228,14 @@ int main(int argc, char** argv) {
             pathTracer.setExposure(exposure);
         if (ImGui::SliderFloat("EnvIntensity", &envIntensity, 0.0f, 1.0f))
             pathTracer.setEnvIntensity(envIntensity);
+        if (ImGui::SliderFloat("Pixel Scale", &pixelScale, 0.25f, 1.2f, "%.2f"))
+            pathTracer.setPixelScale(pixelScale);
 
         if (!raster && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);
             if (ImGui::Checkbox("REsTDIR", &restdirOn))
                 pathTracer.setReSTIREnabled(restdirOn);
-            if (ImGui::Checkbox("Hybrid mode", &hybridMode))
-                pathTracer.setHybridMode(hybridMode);
 
             if (ImGui::Checkbox("Show DirLight", &dirLight)) {
                 light->visible = dirLight;
