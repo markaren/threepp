@@ -160,6 +160,10 @@ struct Bvh4NodeGpu {
 @group(0) @binding(20) var reservoirWWrite: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(21) var momentsRead:     texture_2d<f32>;
 @group(0) @binding(22) var momentsWrite:    texture_storage_2d<rgba16float, write>;
+@group(0) @binding(23) var diffAccumRead:   texture_2d<f32>;
+@group(0) @binding(24) var diffAccumWrite:  texture_storage_2d<rgba16float, write>;
+@group(0) @binding(25) var specAccumRead:   texture_2d<f32>;
+@group(0) @binding(26) var specAccumWrite:  texture_storage_2d<rgba16float, write>;
 @group(0) @binding(29) var<storage, read> rtMotionMats: array<mat4x4<f32>>;  // prevWorld * inverse(curWorld) per mesh
 
 const MAX_TEX_SLOTS: i32 = 256;
@@ -1038,6 +1042,33 @@ fn evalBrdfFull(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
     return lobeSum;
 }
 
+struct BrdfSplit { diff: vec3<f32>, spec: vec3<f32> }
+
+fn evalBrdfFullSplit(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
+                     albedo: vec3<f32>, metalness: f32, alpha: f32, F0: vec3<f32>,
+                     sheenColor: vec3<f32>, sheenRoughness: f32,
+                     clearcoat: f32, clearcoatAlpha: f32) -> BrdfSplit {
+    let brdf = evalBrdf(wo, wi, n, albedo, metalness, alpha, F0);
+    var ccWeight = 0.0;
+    if (clearcoat > 0.0) {
+        let ccF0 = 0.04;
+        let NdotV_cc = max(0.0, dot(n, wo));
+        let ccFresnel = ccF0 + (1.0 - ccF0) * pow(1.0 - NdotV_cc, 5.0);
+        ccWeight = clearcoat * ccFresnel;
+    }
+    var d = brdf.f_diff * (1.0 - ccWeight);
+    var s = brdf.f_spec * (1.0 - ccWeight);
+    if (ccWeight > 0.0) {
+        s += vec3<f32>(evalClearcoat(wo, wi, n, ccWeight, clearcoatAlpha));
+    }
+    let sheenLum = dot(sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
+    if (sheenLum > 0.001) {
+        // Sheen is a diffuse-like soft reflection; route to diffuse
+        d += evalSheen(wo, wi, n, sheenColor, sheenRoughness);
+    }
+    return BrdfSplit(d, s);
+}
+
 // Compute direction and max distance from a reservoir light to a shading point.
 struct ReservoirDir { dir: vec3<f32>, maxDist: f32 }
 fn reservoirLightDir(lightPos: vec3<f32>, lightType: f32, point: vec3<f32>) -> ReservoirDir {
@@ -1182,6 +1213,25 @@ fn brdfPdf(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>, alpha: f32, metalness: f3
     let specPdf = vndfPdf(wo, wi, n, alpha);
     let diffPdf = NdotL / PI;
     return p_spec * specPdf + (1.0 - p_spec) * diffPdf;
+}
+
+// Route a clamped contribution to diffuse or specular radiance buffer.
+// Bounce 0 NEE: always diffuse (specular split handled at ReSTIR shade site).
+// Bounce > 0:   follows firstBounceSpec flag.
+fn addSplit(diff: ptr<function, vec3<f32>>,
+            spec: ptr<function, vec3<f32>>,
+            contrib: vec3<f32>, cap: f32,
+            bounce: i32, firstSpec: bool) {
+    var c = contrib;
+    if (cap > 0.0) {
+        let lum = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+        if (lum > cap) { c *= cap / lum; }
+    }
+    if (bounce == 0 || !firstSpec) {
+        *diff += c;
+    } else {
+        *spec += c;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1358,6 +1408,8 @@ fn isMeshMoved(idx: i32) -> bool {
     return ((word >> bit) & 1u) != 0u;
 }
 
+struct SplitRadiance { diff: vec3<f32>, spec: vec3<f32> }
+
 fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
              pixel: vec2<i32>,
              maxBounces:     i32,
@@ -1367,7 +1419,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
              primaryAlbedo:  ptr<function, vec3<f32>>,
              primaryRough:   ptr<function, f32>,
              primaryMatIdx:  ptr<function, i32>,
-             touchedMoved:   ptr<function, bool>) -> vec3<f32> {
+             touchedMoved:   ptr<function, bool>) -> SplitRadiance {
     *primaryMeshIdx = 128u;
     *primaryNormal  = vec3<f32>(0.0);
     *primaryDepth   = 0.0;  // 0 = sky/no-hit sentinel for denoiser
@@ -1377,7 +1429,9 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
     *touchedMoved   = false;
     var ray        = ray_in;
     var throughput = vec3<f32>(1.0);
-    var radiance   = vec3<f32>(0.0);
+    var diffRad    = vec3<f32>(0.0);
+    var specRad    = vec3<f32>(0.0);
+    var firstBounceSpec = false;  // determines routing for bounces > 0
 
     // Previous-bounce surface properties for MIS weighting
     var prevNormal    = vec3<f32>(0.0, 1.0, 0.0);
@@ -1393,7 +1447,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         if (h.t >= 1e29) {
             // Primary ray miss: show background.  Bounced misses: use env IBL.
             if (i == 0) {
-                radiance += throughput * sampleBackground(ray.dir);
+                diffRad += throughput * sampleBackground(ray.dir);
                 // Store empty reservoir on primary miss
                 if (rt.restirParams.x > 0.5) {
                     textureStore(reservoirWrite, pixel, vec4<f32>(0.0));
@@ -1406,9 +1460,9 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                     let pdf_brdf = brdfPdf(prevWo, normalize(ray.dir), prevNormal, prevAlpha, prevMetalness);
                     envMisW = pdf_brdf / max(pdf_brdf + pdf_env, 1e-8);
                 }
-                addClamped(&radiance,
+                addSplit(&diffRad, &specRad,
                     throughput * sampleEnv(ray.dir) * rt.envIntensity.x * envMisW,
-                    rt.emissiveInfo.z);
+                    rt.emissiveInfo.z, i, firstBounceSpec);
             }
             break;
         }
@@ -1451,9 +1505,10 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             if (i == 0 || emTriCount == 0 || afterTransmission) {
                 // Primary ray, no NEE available, or after transmission: full weight
                 if (i == 0) {
-                    radiance += throughput * h.emissive;  // primary: physically correct, don't clamp
+                    diffRad += throughput * h.emissive;  // primary: physically correct, don't clamp
                 } else {
-                    addClamped(&radiance, throughput * h.emissive, rt.emissiveInfo.z);
+                    addSplit(&diffRad, &specRad, throughput * h.emissive,
+                             rt.emissiveInfo.z, i, firstBounceSpec);
                 }
             } else {
                 // MIS: BRDF sampling hit emissive — weight by balance heuristic
@@ -1464,7 +1519,8 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                     let pdf_brdf  = brdfPdf(prevWo, normalize(ray.dir), prevNormal, prevAlpha, prevMetalness);
                     let w = pdf_brdf / max(pdf_brdf + pdf_light, 1e-8);
                     if (w == w && w < 1e10) {
-                        addClamped(&radiance, throughput * h.emissive * w, rt.emissiveInfo.z);
+                        addSplit(&diffRad, &specRad, throughput * h.emissive * w,
+                                 rt.emissiveInfo.z, i, firstBounceSpec);
                     }
                 }
             }
@@ -1477,7 +1533,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
 
         // Unlit: return flat color, no bouncing
         if (h.shininess < 0.0) {
-            radiance += throughput * albedo;
+            diffRad += throughput * albedo;
             if (i == 0 && rt.restirParams.x > 0.5) {
                 textureStore(reservoirWrite, pixel, vec4<f32>(0.0));
                 textureStore(reservoirWWrite, pixel, vec4<f32>(0.0));
@@ -1730,16 +1786,17 @@ R"(
                 reservoirShadowAtten = traceShadowRay(h.point, h.normal, rd.dir, rd.maxDist, 2);
             }
 
-            // === SHADE FROM RESERVOIR ===
+            // === SHADE FROM RESERVOIR (split diffuse/specular) ===
             if (reservoirShadowAtten.x + reservoirShadowAtten.y + reservoirShadowAtten.z > 0.001) {
                 let rd = reservoirLightDir(reservoir.lightPos, reservoir.lightType, h.point);
                 let rLe = evalLightRadiance(reservoir.lightPos, reservoir.lightType, h.point);
                 let rNdotL = max(dot(h.normal, rd.dir), 0.0);
-                let rLobeSum = evalBrdfFull(wo, rd.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
-                                            h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                addClamped(&radiance,
-                    throughput * reservoirShadowAtten * reservoir.W * rLobeSum * rNdotL * rLe,
-                    rt.emissiveInfo.z);
+                let rSplit = evalBrdfFullSplit(wo, rd.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                              h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+                let cap = rt.emissiveInfo.z;
+                let shade = throughput * reservoirShadowAtten * reservoir.W * rNdotL * rLe;
+                addSplit(&diffRad, &specRad, shade * rSplit.diff, cap, 0, false);
+                addSplit(&diffRad, &specRad, shade * rSplit.spec, cap, 1, true);
             }
             // === STORE RESERVOIR ===
             // If visibility failed, reset M and W to 0 so next frame does not inherit
@@ -1769,11 +1826,19 @@ R"(
             if (NdotL <= 0.0) { continue; }
             let shadowAtten = traceShadowRay(h.point, h.normal, le.dir, le.dist - 1e-3, 2);
             if (shadowAtten.x + shadowAtten.y + shadowAtten.z > 0.001) {
-                let lobeSum = evalBrdfFull(wo, le.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
-                                           h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                addClamped(&radiance,
-                    throughput * shadowAtten * lobeSum * NdotL * le.color,
-                    rt.emissiveInfo.z);
+                let cap = rt.emissiveInfo.z;
+                if (i == 0) {
+                    let bs = evalBrdfFullSplit(wo, le.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                              h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+                    let shade = throughput * shadowAtten * NdotL * le.color;
+                    addSplit(&diffRad, &specRad, shade * bs.diff, cap, 0, false);
+                    addSplit(&diffRad, &specRad, shade * bs.spec, cap, 1, true);
+                } else {
+                    let lobeSum = evalBrdfFull(wo, le.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                               h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+                    addSplit(&diffRad, &specRad, throughput * shadowAtten * lobeSum * NdotL * le.color,
+                             cap, i, firstBounceSpec);
+                }
             }
         }
 )"
@@ -1794,13 +1859,21 @@ R"(
                     let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
                     let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
                     let pdf = (es.power * dist * dist) / (totalPower2 * es.area * cosLight);
-                    let lobeSum3 = evalBrdfFull(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h,
-                                                h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
                     let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
                     let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);
-                    addClamped(&radiance,
-                        throughput * emAtten * lobeSum3 * NdotL * emColor * w_light / pdf,
-                        rt.emissiveInfo.z);
+                    let cap = rt.emissiveInfo.z;
+                    if (i == 0) {
+                        let bs = evalBrdfFullSplit(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                                   h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+                        let shade = throughput * emAtten * NdotL * emColor * w_light / pdf;
+                        addSplit(&diffRad, &specRad, shade * bs.diff, cap, 0, false);
+                        addSplit(&diffRad, &specRad, shade * bs.spec, cap, 1, true);
+                    } else {
+                        let lobeSum3 = evalBrdfFull(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                                     h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+                        addSplit(&diffRad, &specRad, throughput * emAtten * lobeSum3 * NdotL * emColor * w_light / pdf,
+                                 cap, i, firstBounceSpec);
+                    }
                 }
             }
         }
@@ -1814,14 +1887,22 @@ R"(
             if (envNdotL > 0.0 && envPdf > 1e-8) {
                 let envAtten = traceShadowRay(h.point, h.normal, envDir, 1e30, 2);
                 if (envAtten.x + envAtten.y + envAtten.z > 0.001) {
-                    let lobeSum4 = evalBrdfFull(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h,
-                                                h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
                     let envCol = sampleEnv(envDir) * rt.envIntensity.x;
                     let pdf_brdf_env = brdfPdf(wo, envDir, h.normal, h.shininess, h.metalness);
                     let w_env = envPdf / max(envPdf + pdf_brdf_env, 1e-8);
-                    addClamped(&radiance,
-                        throughput * envAtten * lobeSum4 * envNdotL * envCol * w_env / envPdf,
-                        rt.emissiveInfo.z);
+                    let cap = rt.emissiveInfo.z;
+                    if (i == 0) {
+                        let bs = evalBrdfFullSplit(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                                   h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+                        let shade = throughput * envAtten * envNdotL * envCol * w_env / envPdf;
+                        addSplit(&diffRad, &specRad, shade * bs.diff, cap, 0, false);
+                        addSplit(&diffRad, &specRad, shade * bs.spec, cap, 1, true);
+                    } else {
+                        let lobeSum4 = evalBrdfFull(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                                     h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+                        addSplit(&diffRad, &specRad, throughput * envAtten * lobeSum4 * envNdotL * envCol * w_env / envPdf,
+                                 cap, i, firstBounceSpec);
+                    }
                 }
             }
         }
@@ -1967,7 +2048,11 @@ R"(
         let F0_b = F0_h;
         var wi_b: vec3<f32>;
         let p_spec = mix(0.5, 0.98, h.metalness);
-        if (rand(seed) < p_spec) {
+        let isSpecBounce = rand(seed) < p_spec;
+        if (i == 0) { firstBounceSpec = isSpecBounce; }
+        // Transmission at bounce 0 also counts as specular for routing
+        if (i == 0 && afterTransmission) { firstBounceSpec = true; }
+        if (isSpecBounce) {
             wi_b = sampleVNDF(wo, h.normal, h.shininess, seed);
             let cos_b = dot(h.normal, wi_b);
             if (cos_b <= 0.0) { break; }
@@ -1989,7 +2074,7 @@ R"(
         ray.origin = h.point + h.normal * 1e-3;
         ray.dir    = wi_b;
     }
-    return radiance;
+    return SplitRadiance(diffRad, specRad);
 }
 )"
 R"(
@@ -2072,6 +2157,8 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // The pixel keeps its existing color & frame count; it will trace on a future frame.
     if (foveatedSkip) {
         textureStore(accumWrite,   pixel, textureLoad(accumRead, pixel, 0));
+        textureStore(diffAccumWrite, pixel, textureLoad(diffAccumRead, pixel, 0));
+        textureStore(specAccumWrite, pixel, textureLoad(specAccumRead, pixel, 0));
         textureStore(hitMeshWrite, pixel, textureLoad(hitMeshRead, pixel, 0));
         // Preserve previous gBuf (depth) so display shader tone-maps correctly.
         textureStore(gBufWrite,    pixel, textureLoad(gBufRead, pixel, 0));
@@ -2112,7 +2199,8 @@ R"(
     var primaryRough:   f32;
     var primaryMatIdx:  i32;
     var touchedMoved:   bool;
-    var sample  = pathTrace(ray, &seed, pixel, varianceReducedBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &primaryRough, &primaryMatIdx, &touchedMoved);
+    var ptResult = pathTrace(ray, &seed, pixel, varianceReducedBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &primaryRough, &primaryMatIdx, &touchedMoved);
+    var sample = ptResult.diff + ptResult.spec;
 
     let prev     = textureLoad(accumRead, pixel, 0);
     var old      = prev.xyz;
@@ -2323,6 +2411,30 @@ R"(
         m2 = m2 * (1.0 - momAlpha) + sampleLum * sampleLum * momAlpha;
     }
     textureStore(momentsWrite, pixel, vec4<f32>(m1, m2, 0.0, 0.0));
+
+    // --- Diffuse/specular split accumulation ---
+    {
+        let diffSample = select(vec3<f32>(0.0), ptResult.diff, ptResult.diff.x == ptResult.diff.x);
+        let specSample = select(vec3<f32>(0.0), ptResult.spec, ptResult.spec.x == ptResult.spec.x);
+        let prevDiff = textureLoad(diffAccumRead, pixel, 0);
+        let prevSpec = textureLoad(specAccumRead, pixel, 0);
+        let oldDiff = select(vec3<f32>(0.0), prevDiff.xyz, prevDiff.x == prevDiff.x);
+        let oldSpec = select(vec3<f32>(0.0), prevSpec.xyz, prevSpec.x == prevSpec.x);
+        // Clamp split samples with the same hard cap
+        var dClamped = diffSample;
+        let dLum = dot(diffSample, lum3);
+        if (dLum > hardCap) { dClamped = diffSample * (hardCap / dLum); }
+        var sClamped = specSample;
+        let sLum = dot(specSample, lum3);
+        if (sLum > hardCap) { sClamped = specSample * (hardCap / sLum); }
+        if (pixelFC < 1024.0) {
+            textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff * (1.0 - alpha) + dClamped * alpha, pixelFC + 1.0));
+            textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec * (1.0 - alpha) + sClamped * alpha, pixelFC + 1.0));
+        } else {
+            textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff, pixelFC));
+            textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec, pixelFC));
+        }
+    }
 
     textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), 0.0, 0.0));
     textureStore(albedoWrite,  pixel, vec4<f32>(primaryAlbedo, primaryRough));
@@ -2696,7 +2808,8 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 //   high frame count → gentle filter to preserve converged detail
 // ---------------------------------------------------------------------------
 constexpr const char* svgfAtrousWGSL = R"(
-struct AtrousUni { stepSize: u32, _p0: u32, frameCount: f32, _p1: f32, }
+struct AtrousUni { stepSize: u32, mode: u32, frameCount: f32, _p1: f32, }
+// mode: 0 = combined/diffuse (wide kernel, relaxed), 1 = specular (tight, aggressive firefly clamp)
 
 @group(0) @binding(0) var<uniform> uni:      AtrousUni;
 @group(0) @binding(1) var colorIn:  texture_2d<f32>;
@@ -2742,11 +2855,13 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Demodulate center pixel for accumulation path
-    let cIrr = demod(cColor, cAlbedo);
+    // Specular mode: skip demodulation (specular is not modulated by surface albedo).
+    let isSpec = uni.mode == 1u;
+    // Demodulate center pixel for accumulation path (diffuse only)
+    let cIrr = select(demod(cColor, cAlbedo), cColor, isSpec);
     // Blend luminance source: demod for bright surfaces (texture-aware), raw for dark (stable)
     let albedoLum = luminance_a(cAlbedo);
-    let demodBlend = smoothstep(0.05, 0.2, albedoLum);
+    let demodBlend = select(smoothstep(0.05, 0.2, albedoLum), 0.0, isSpec);
     let cLum = mix(luminance_a(cColor), luminance_a(cIrr), demodBlend);
 
     // Variance-guided luminance sigma: read temporal variance from moments buffer.
@@ -2797,13 +2912,12 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let w_l  = exp(-(sLum - cLum) * (sLum - cLum) / (lumSigma * lumSigma + 1e-6));
 
             // Per-sample outlier clamp: suppress extreme bright samples in filter window.
-            // Glossy/metallic surfaces get a tighter cap — specular fireflies are the
-            // main noise source there, and clamping them is far cheaper than blurring.
+            // Specular mode: tighter cap to kill fireflies without blurring.
             var sIrrClamped  = sIrr;
             var sColorClamped = sColor;
             let sIrrLum = luminance_a(sIrr);
             let sColLum = luminance_a(sColor);
-            let filterCap = mix(3.0, 12.0, smoothstep(0.1, 0.4, cRough));
+            let filterCap = select(12.0, 3.0, uni.mode == 1u);
             if (sIrrLum > filterCap) { sIrrClamped  = sIrr  * (filterCap / sIrrLum); }
             if (sColLum > filterCap) { sColorClamped = sColor * (filterCap / sColLum); }
 
@@ -2881,7 +2995,11 @@ struct TransformUniforms {
 @group(0) @binding(0) var<uniform> transform: TransformUniforms;
 @group(0) @binding(2) var accumTex: texture_2d<f32>;
 // binding 3 = accumTex sampler (unused)
-@group(0) @binding(4) var gBufTex:  texture_2d<f32>;  // gBuf: .w = primary hit t, 0 = background
+@group(0) @binding(4) var diffTex:  texture_2d<f32>;   // diffuse radiance
+// binding 5 = diffTex sampler (unused)
+@group(0) @binding(6) var gBufTex:  texture_2d<f32>;  // gBuf: .w = primary hit t, 0 = background
+// binding 7 = gBufTex sampler (unused)
+@group(0) @binding(8) var specTex:  texture_2d<f32>;   // specular radiance
 
 @vertex
 fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
@@ -2922,7 +3040,7 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
 
         // Background: skip bilateral, just nearest-neighbor
         if (dRef <= 0.0) {
-            let col = textureLoad(accumTex, pNearest, 0).xyz;
+            let col = textureLoad(diffTex, pNearest, 0).xyz + textureLoad(specTex, pNearest, 0).xyz;
             return vec4<f32>(pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)), 1.0);
         }
 
@@ -2956,7 +3074,7 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
             let wd = exp(-abs(dRef - sd) * 8.0 / max(dRef, 0.01));
 
             let w = bwa[i] * wn * wd;
-            colSum += textureLoad(accumTex, sp, 0).xyz * w;
+            colSum += (textureLoad(diffTex, sp, 0).xyz + textureLoad(specTex, sp, 0).xyz) * w;
             wSum   += w;
         }
 
@@ -2964,7 +3082,7 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
         if (wSum > 1e-6) {
             col = colSum / wSum;
         } else {
-            col = textureLoad(accumTex, pNearest, 0).xyz;
+            col = textureLoad(diffTex, pNearest, 0).xyz + textureLoad(specTex, pNearest, 0).xyz;
         }
 
         let gc = pow(aces(col * exposure), vec3<f32>(1.0 / 2.2));
@@ -2973,7 +3091,11 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
 
     // Native resolution (pixelScale >= 1): direct lookup, no filtering needed
     let px  = clamp(vec2<i32>(fragPos.xy * pixScale), vec2<i32>(0), accumSize - 1);
-    let col = textureLoad(accumTex, px, 0).xyz;
+    // Combine denoised diffuse + specular (split denoising gives better quality
+    // because each channel gets optimal filter parameters).
+    let diffuse  = textureLoad(diffTex, px, 0).xyz;
+    let specular = textureLoad(specTex, px, 0).xyz;
+    let col = diffuse + specular;
     let t   = textureLoad(gBufTex,  px, 0).w;
     // Background pixels: just gamma-correct, no tone mapping.
     // Geometry pixels: exposure + ACES tone mapping + gamma.
@@ -3027,7 +3149,7 @@ struct alignas(16) RefitGpuUniforms {
     uint32_t leafCount, groupsX, _p[2];
 };
 struct alignas(16) AtrousGpuUniforms {
-    uint32_t stepSize, _p0;
+    uint32_t stepSize, mode;  // mode: 0=diffuse, 1=specular
     float    frameCount, _p1;
 };
 struct alignas(16) DepthFillUniforms {
@@ -4163,9 +4285,32 @@ struct WgpuPathTracer::Impl {
     WgpuTexture* taaHistRead;
     WgpuTexture* taaHistWrite;
 
-    // Spatial filter ping-pong
+    // Diffuse/specular split accumulation
+    WgpuTexture diffAccumA;
+    WgpuTexture diffAccumB;
+    WgpuTexture* readDiffAccum;
+    WgpuTexture* writeDiffAccum;
+    WgpuTexture specAccumA;
+    WgpuTexture specAccumB;
+    WgpuTexture* readSpecAccum;
+    WgpuTexture* writeSpecAccum;
+
+    // Spatial filter ping-pong (shared between diffuse and specular passes)
     WgpuTexture filteredA;
     WgpuTexture filteredB;
+    // Denoised output textures for display
+    WgpuTexture denoisedDiff;
+    WgpuTexture denoisedSpec;
+
+    // TAA history for split channels
+    WgpuTexture taaHistDiffA;
+    WgpuTexture taaHistDiffB;
+    WgpuTexture* taaHistDiffRead;
+    WgpuTexture* taaHistDiffWrite;
+    WgpuTexture taaHistSpecA;
+    WgpuTexture taaHistSpecB;
+    WgpuTexture* taaHistSpecRead;
+    WgpuTexture* taaHistSpecWrite;
 
     // Denoiser pipelines
     WgpuComputePipeline taaPipeline;
@@ -4396,11 +4541,36 @@ struct WgpuPathTracer::Impl {
           taaHistB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                    WgpuTexture::Format::RGBA16Float),
           taaHistRead(&taaHistA), taaHistWrite(&taaHistB),
+          // Diffuse/specular split accumulation
+          diffAccumA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                     WgpuTexture::Format::RGBA16Float),
+          diffAccumB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                     WgpuTexture::Format::RGBA16Float),
+          readDiffAccum(&diffAccumA), writeDiffAccum(&diffAccumB),
+          specAccumA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                     WgpuTexture::Format::RGBA16Float),
+          specAccumB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                     WgpuTexture::Format::RGBA16Float),
+          readSpecAccum(&specAccumA), writeSpecAccum(&specAccumB),
           // Spatial filter ping-pong
           filteredA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                     WgpuTexture::Format::RGBA16Float),
           filteredB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                     WgpuTexture::Format::RGBA16Float),
+          denoisedDiff(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                       WgpuTexture::Format::RGBA16Float),
+          denoisedSpec(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                       WgpuTexture::Format::RGBA16Float),
+          taaHistDiffA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                       WgpuTexture::Format::RGBA16Float),
+          taaHistDiffB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                       WgpuTexture::Format::RGBA16Float),
+          taaHistDiffRead(&taaHistDiffA), taaHistDiffWrite(&taaHistDiffB),
+          taaHistSpecA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                       WgpuTexture::Format::RGBA16Float),
+          taaHistSpecB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                       WgpuTexture::Format::RGBA16Float),
+          taaHistSpecRead(&taaHistSpecA), taaHistSpecWrite(&taaHistSpecB),
           // Denoiser pipelines
           taaPipeline(r, taaWGSL, "taa_main"),
           atrousPipeline(r, svgfAtrousWGSL, "svgf_atrous_main"),
@@ -4476,6 +4646,10 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(20, *reservoirWWrite);
         rtPipeline.setTexture(21, *momentsRead);
         rtPipeline.setStorageTexture(22, *momentsWrite);
+        rtPipeline.setTexture(23, *readDiffAccum);
+        rtPipeline.setStorageTexture(24, *writeDiffAccum);
+        rtPipeline.setTexture(25, *readSpecAccum);
+        rtPipeline.setStorageTexture(26, *writeSpecAccum);
         rtPipeline.setStorageBufferRead(29, motionMatBuf);
 
         // TAA pipeline — set ALL bindings upfront
@@ -4540,6 +4714,8 @@ struct WgpuPathTracer::Impl {
         displayMat->fragmentShader = displayWGSL;
         displayMat->customTextures["accumTex"] = readAccum;
         displayMat->customTextures["gBufTex"]  = gBufPrev;
+        displayMat->customTextures["diffTex"]  = readDiffAccum;
+        displayMat->customTextures["specTex"]  = readSpecAccum;
         displayScene.add(Mesh::create(PlaneGeometry::create(2.f, 2.f), displayMat));
 
         // Depth-fill: build shader, BGL, layout, and uniform buffer now.
@@ -4656,8 +4832,19 @@ struct WgpuPathTracer::Impl {
         taaHistRead  = &taaHistA;
         taaHistWrite = &taaHistB;
 
+        diffAccumA = WgpuTexture(renderer, uw, uh, fmt);
+        diffAccumB = WgpuTexture(renderer, uw, uh, fmt);
+        readDiffAccum  = &diffAccumA;
+        writeDiffAccum = &diffAccumB;
+        specAccumA = WgpuTexture(renderer, uw, uh, fmt);
+        specAccumB = WgpuTexture(renderer, uw, uh, fmt);
+        readSpecAccum  = &specAccumA;
+        writeSpecAccum = &specAccumB;
+
         filteredA = WgpuTexture(renderer, uw, uh, fmt);
         filteredB = WgpuTexture(renderer, uw, uh, fmt);
+        denoisedDiff = WgpuTexture(renderer, uw, uh, fmt);
+        denoisedSpec = WgpuTexture(renderer, uw, uh, fmt);
 
         std::vector<float> zeros(w * h * 4, 0.f);
         accumA.write(zeros.data(), zeros.size() * sizeof(float));
@@ -4668,6 +4855,10 @@ struct WgpuPathTracer::Impl {
         taaHistB.write(zeros.data(), zeros.size() * sizeof(float));
         momentsA.write(zeros.data(), zeros.size() * sizeof(float));
         momentsB.write(zeros.data(), zeros.size() * sizeof(float));
+        diffAccumA.write(zeros.data(), zeros.size() * sizeof(float));
+        diffAccumB.write(zeros.data(), zeros.size() * sizeof(float));
+        specAccumA.write(zeros.data(), zeros.size() * sizeof(float));
+        specAccumB.write(zeros.data(), zeros.size() * sizeof(float));
         std::vector<float> hitSentinel(w * h * 4, 128.f);
         hitMeshA.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
         hitMeshB.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
@@ -4681,6 +4872,10 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(20, *reservoirWWrite);
         rtPipeline.setTexture(21, *momentsRead);
         rtPipeline.setStorageTexture(22, *momentsWrite);
+        rtPipeline.setTexture(23, *readDiffAccum);
+        rtPipeline.setStorageTexture(24, *writeDiffAccum);
+        rtPipeline.setTexture(25, *readSpecAccum);
+        rtPipeline.setStorageTexture(26, *writeSpecAccum);
         rtPipeline.setStorageBufferRead(29, motionMatBuf);
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(6, *momentsRead);
@@ -5103,6 +5298,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     if (d.triCount_ == 0) {
         d.displayMat->customTextures["accumTex"] = d.readAccum;
         d.displayMat->customTextures["gBufTex"]  = d.gBufPrev;
+        d.displayMat->customTextures["diffTex"]  = d.readDiffAccum;
+        d.displayMat->customTextures["specTex"]  = d.readSpecAccum;
         d.displayMat->uniformsNeedUpdate = true;
         d.renderer.render(d.displayScene, d.displayCam);
         return;
@@ -5555,9 +5752,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         wgpuCommandEncoderRelease(encoder);
     }
 
-    // Swap ping-pong (accum + hitMesh)
+    // Swap ping-pong (accum + hitMesh + diffuse/specular split)
     std::swap(d.readAccum, d.writeAccum);
     std::swap(d.readHitMesh, d.writeHitMesh);
+    std::swap(d.readDiffAccum, d.writeDiffAccum);
+    std::swap(d.readSpecAccum, d.writeSpecAccum);
 
     // Swap gBuf for next frame
     std::swap(d.gBufCur, d.gBufPrev);
@@ -5576,12 +5775,19 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     std::swap(d.momentsRead, d.momentsWrite);
     d.rtPipeline.setTexture(21, *d.momentsRead);
     d.rtPipeline.setStorageTexture(22, *d.momentsWrite);
+    // Update split accum bindings after swap
+    d.rtPipeline.setTexture(23, *d.readDiffAccum);
+    d.rtPipeline.setStorageTexture(24, *d.writeDiffAccum);
+    d.rtPipeline.setTexture(25, *d.readSpecAccum);
+    d.rtPipeline.setStorageTexture(26, *d.writeSpecAccum);
     // Update denoiser's moments reference (reads converged moments)
     d.atrousPipeline.setTexture(6, *d.momentsRead);
 
     // TAA + spatial denoiser (path tracer mode only)
     // Skip entirely when fully converged — accumulation is already clean.
     WgpuTexture* displayTex = d.readAccum;
+    WgpuTexture* displayDiff = d.readDiffAccum;
+    WgpuTexture* displaySpec = d.readSpecAccum;
     const bool hasMotion = (movedBits[0] | movedBits[1] | movedBits[2] | movedBits[3]) != 0u;
     const bool foveatedActive = d.foveatedEnabled_ && d.frameCount_ > 0.f;
     const bool needsDenoise = (d.frameCount_ < 64.f || hasMotion);
@@ -5619,30 +5825,54 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
         std::swap(d.taaHistRead, d.taaHistWrite);
 
-        // --- Spatial filter on TAA output ---
-        WgpuTexture* src = d.taaHistRead;  // TAA output (after swap)
-        WgpuTexture* dst = &d.filteredA;
-        WgpuTexture* aux = &d.filteredB;
+        // --- Spatial filter: diffuse (mode=0, wider kernel) ---
+        WgpuTexture* denoisedDiffPtr = d.readDiffAccum;
+        WgpuTexture* denoisedSpecPtr = d.readSpecAccum;
 
-        // 5×5 kernel covers more area per pass, so fewer passes needed.
-        // Scale down as image converges: sigma shrinks, filter becomes transparent.
-        // Extra pass on very first frames spreads sparse path-tracer samples across larger area.
-        const int nPasses = (d.frameCount_ < 2.f)                ? 2 :
-                            (d.frameCount_ < 64.f || hasMotion)   ? 2 : 1;
-
-        for (int pass = 0; pass < nPasses; ++pass) {
-            AtrousGpuUniforms au{static_cast<uint32_t>(1u << pass), 0u, d.frameCount_, 0.f};
-            d.atrousUniBuf.write(&au, sizeof(au));
-            d.atrousPipeline.setTexture(1, *src);
-            d.atrousPipeline.setStorageTexture(2, *dst);
-            d.atrousPipeline.setTexture(3, *d.gBufPrev);
-            d.atrousPipeline.setTexture(5, *d.readHitMesh);
-            d.atrousPipeline.dispatch(gx, gy);
-            src = dst;
-            std::swap(dst, aux);
+        const int nDiffPasses = (d.frameCount_ < 2.f) ? 3 :
+                                (d.frameCount_ < 64.f || hasMotion) ? 2 : 1;
+        {
+            WgpuTexture* src = d.readDiffAccum;
+            WgpuTexture* dst = &d.denoisedDiff;
+            WgpuTexture* aux = &d.filteredA;
+            for (int pass = 0; pass < nDiffPasses; ++pass) {
+                AtrousGpuUniforms au{static_cast<uint32_t>(1u << pass), 0u, d.frameCount_, 0.f};
+                d.atrousUniBuf.write(&au, sizeof(au));
+                d.atrousPipeline.setTexture(1, *src);
+                d.atrousPipeline.setStorageTexture(2, *dst);
+                d.atrousPipeline.setTexture(3, *d.gBufPrev);
+                d.atrousPipeline.setTexture(5, *d.readHitMesh);
+                d.atrousPipeline.dispatch(gx, gy);
+                src = dst;
+                std::swap(dst, aux);
+            }
+            denoisedDiffPtr = src;
         }
-        displayTex = src;
 
+        // --- Spatial filter: specular (mode=1, tight + aggressive firefly clamp) ---
+        const int nSpecPasses = (d.frameCount_ < 2.f) ? 1 :
+                                (d.frameCount_ < 64.f || hasMotion) ? 1 : 0;
+        {
+            WgpuTexture* src = d.readSpecAccum;
+            WgpuTexture* dst = &d.denoisedSpec;
+            WgpuTexture* aux = &d.filteredB;
+            for (int pass = 0; pass < nSpecPasses; ++pass) {
+                AtrousGpuUniforms au{static_cast<uint32_t>(1u << pass), 1u, d.frameCount_, 0.f};
+                d.atrousUniBuf.write(&au, sizeof(au));
+                d.atrousPipeline.setTexture(1, *src);
+                d.atrousPipeline.setStorageTexture(2, *dst);
+                d.atrousPipeline.setTexture(3, *d.gBufPrev);
+                d.atrousPipeline.setTexture(5, *d.readHitMesh);
+                d.atrousPipeline.dispatch(gx, gy);
+                src = dst;
+                std::swap(dst, aux);
+            }
+            denoisedSpecPtr = src;
+        }
+
+        displayTex = d.taaHistRead;  // fallback combined
+        displayDiff = denoisedDiffPtr;
+        displaySpec = denoisedSpecPtr;
     }
 
     // Store camera for next frame's reprojection (must run every frame, not just when denoiser is active)
@@ -5653,6 +5883,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
     d.displayMat->customTextures["accumTex"] = displayTex;
     d.displayMat->customTextures["gBufTex"]  = d.gBufPrev;
+    d.displayMat->customTextures["diffTex"]  = displayDiff;
+    d.displayMat->customTextures["specTex"]  = displaySpec;
     d.displayMat->uniformsNeedUpdate = true;
     d.frameCount_ += 1.f;
 
