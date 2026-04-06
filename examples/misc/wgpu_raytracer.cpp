@@ -21,7 +21,6 @@ int main() {
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
     pathTracer.setEnvIntensity(0.5f);
-    pathTracer.setSamplesPerPixel(2);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setFoveatedRendering(false);
     pathTracer.setReSTIREnabled(true);
@@ -128,7 +127,6 @@ int main() {
     bool hybridOn = pathTracer.hybridMode();
     bool animateBox = true;
     bool showEnclosingBox = true;
-    bool raster = false;
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
     float envIntensity = pathTracer.envIntensity();
@@ -136,18 +134,11 @@ int main() {
     float fpsAccum = 0.f;
     int fpsFrames = 0;
 
-    std::cout << "Press T to switch render mode: Raytracer -> PathTracer -> Raster" << std::endl;
-    int renderMode = 0;// 0=raytracer, 1=pathtracer, 2=raster,
-    std::vector<std::string> renderModeNames = {"Raytracer", "PathTracer", "Raster"};
+    std::cout << "Press T to switch render mode: PathTracer -> Raster" << std::endl;
+
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::T) {
-            renderMode = (renderMode + 1) % 3;
-            raster = (renderMode == 2);
-            pathTracerOn = (renderMode == 1);
-            if (!raster) {
-                pathTracer.setMode(pathTracerOn ? WgpuPathTracer::Mode::PathTracer
-                                                : WgpuPathTracer::Mode::Raytracer);
-            }
+            pathTracerOn = !pathTracerOn;
         }
     });
     canvas.addKeyListener(keyAdapter);
@@ -155,26 +146,24 @@ int main() {
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({});
         ImGui::SetNextWindowSize({});
-        ImGui::Begin(renderModeNames[renderMode].c_str());
+        ImGui::Begin(pathTracerOn ? "Path Tracer" : "Raster");
         ImGui::Text("FPS: %.1f", fps);
-        if (!raster) ImGui::Text("Frames: %d", pathTracer.frameCount());
+        if (pathTracerOn) ImGui::Text("Frames: %d", pathTracer.frameCount());
         ImGui::Separator();
 
         if (ImGui::Checkbox("AnimateBox", &animateBox)) {
             pathTracer.resetAccumulation();
         }
-        if (ImGui::Checkbox("EnclosingBox", &showEnclosingBox)) {
-            pathTracer.resetAccumulation();
-        }
+        // if (ImGui::Checkbox("EnclosingBox", &showEnclosingBox)) {
+        //     pathTracer.resetAccumulation();
+        // }
 
-        if (renderMode != 2) {
+        if (pathTracerOn && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
                 pathTracer.setExposure(exposure);
             if (ImGui::SliderFloat("EnvIntensity", &envIntensity, 0.1f, 5.0f))
                 pathTracer.setEnvIntensity(envIntensity);
-        }
 
-        if (renderMode == 1 && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);
             if (ImGui::Checkbox("ReSTIR", &restirOn))
@@ -224,7 +213,7 @@ int main() {
 
         controls.update();
 
-        if (!raster) {
+        if (pathTracerOn) {
             pathTracer.render(scene, rtCam);
         } else {
             renderer.render(scene, rtCam);

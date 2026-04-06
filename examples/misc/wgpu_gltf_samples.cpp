@@ -80,16 +80,15 @@ int main(int argc, char** argv) {
                   {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
 
     WgpuRenderer renderer(canvas);
+    renderer.shadowMap().enabled = true;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
     pathTracer.setEnvIntensity(0.5f);
     pathTracer.setExposure(1.0f);
-    pathTracer.setSamplesPerPixel(2);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setFoveatedRendering(false);
     pathTracer.setReSTIREnabled(false);
     pathTracer.setMaxBounces(4);
-    pathTracer.setMode(WgpuPathTracer::Mode::Raytracer);
     pathTracer.setHybridMode(true);
 
     ImageLoader imgLoader;
@@ -104,6 +103,7 @@ int main(int argc, char** argv) {
     auto light = DirectionalLight::create(0xffffff, 1.0f);
     light->position.set(1, 1, 1);
     light->visible = false;
+    light->castShadow = true;
     scene.add(light);
     scene.add(AmbientLight::create(0xffffff, 0.2f));
 
@@ -133,6 +133,8 @@ int main(int argc, char** argv) {
         modelFuture = std::async(std::launch::async, [&loader, path, name = models[idx].name]() -> std::shared_ptr<Group> {
             try {
                 auto result = loader.load(path.string());
+                result->receiveShadow = true;
+                result->castShadow = true;
                 // Verify it has renderable geometry
                 bool hasMesh = false;
                 if (result) {
@@ -176,9 +178,8 @@ int main(int argc, char** argv) {
     loadModel(0);
 
     // ---- UI ----
-    int renderMode = 2;
-    const char* modeNames[] = {"Raytracer", "PathTracer", "Raster"};
-    bool dirLight = false;
+    bool raster = false;
+    bool dirLight = light->visible;
     bool denoiserOn = pathTracer.denoiserEnabled();
     bool restdirOn = pathTracer.restirEnabled();
     bool hybridMode = pathTracer.hybridMode();
@@ -189,11 +190,7 @@ int main(int argc, char** argv) {
 
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::T) {
-            renderMode = (renderMode + 1) % 3;
-            if (renderMode < 2) {
-                pathTracer.setMode(renderMode == 1 ? WgpuPathTracer::Mode::PathTracer
-                                                   : WgpuPathTracer::Mode::Raytracer);
-            }
+            raster = !raster;
         }
         if (ev.key == Key::RIGHT || ev.key == Key::N) {
             loadModel((currentModel + 1) % static_cast<int>(models.size()));
@@ -209,8 +206,8 @@ int main(int argc, char** argv) {
         ImGui::SetNextWindowSize({300, 0});
         ImGui::Begin("GLTF Samples");
         ImGui::Text("FPS: %.1f", fps);
-        ImGui::Text("Mode: %s (T to cycle)", modeNames[renderMode]);
-        if (renderMode < 2) ImGui::Text("Frames: %d", pathTracer.frameCount());
+        ImGui::Text("Mode: %s (T to cycle)", raster ? "Raster" : "Path tracer");
+        if (!raster) ImGui::Text("Frames: %d", pathTracer.frameCount());
 
         ImGui::Separator();
         ImGui::Text("Model: %s", currentModel >= 0 ? models[currentModel].name.c_str() : "none");
@@ -233,15 +230,14 @@ int main(int argc, char** argv) {
         if (ImGui::SliderFloat("EnvIntensity", &envIntensity, 0.0f, 1.0f))
             pathTracer.setEnvIntensity(envIntensity);
 
-        if (renderMode == 1) {
+        if (!raster && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);
             if (ImGui::Checkbox("REsTDIR", &restdirOn))
                 pathTracer.setReSTIREnabled(restdirOn);
             if (ImGui::Checkbox("Hybrid mode", &hybridMode))
                 pathTracer.setHybridMode(hybridMode);
-        }
-        if (renderMode != 2) {
+
             if (ImGui::Checkbox("Show DirLight", &dirLight)) {
                 light->visible = dirLight;
                 pathTracer.markDirty();
@@ -276,7 +272,7 @@ int main(int argc, char** argv) {
             fpsFrames = 0;
         }
 
-        light->visible = dirLight || renderMode == 2;
+        light->visible = dirLight || raster;
 
         // Check async model load
         if (loadPending && modelFuture.valid() &&
@@ -298,7 +294,7 @@ int main(int argc, char** argv) {
 
         controls.update();
 
-        if (renderMode == 2) {
+        if (raster) {
             renderer.render(scene, camera);
         } else {
             pathTracer.render(scene, camera);

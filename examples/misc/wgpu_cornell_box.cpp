@@ -37,6 +37,7 @@ namespace {
         // Floor
         auto floor = Mesh::create(PlaneGeometry::create(S, S), whiteMat());
         floor->rotation.x = -math::PI / 2.f;
+        floor->receiveShadow = true;
         group->add(floor);
 
         // Ceiling
@@ -72,6 +73,8 @@ namespace {
         auto mesh = Mesh::create(BoxGeometry::create(1.5f, 3.f, 1.5f), whiteMat());
         mesh->position.set(-1.5f, 1.5f, -1.5f);
         mesh->rotation.y = 0.3f;
+        mesh->castShadow = true;
+        mesh->receiveShadow = true;
         return mesh;
     }
 
@@ -80,6 +83,8 @@ namespace {
         auto mesh = Mesh::create(BoxGeometry::create(1.5f, 1.5f, 1.5f), whiteMat());
         mesh->position.set(1.5f, 0.75f, 1.0f);
         mesh->rotation.y = -0.3f;
+        mesh->castShadow = true;
+        mesh->receiveShadow = true;
         return mesh;
     }
 
@@ -92,6 +97,8 @@ namespace {
         });
         auto mesh = Mesh::create(SphereGeometry::create(0.6f, 48, 48), mat);
         mesh->position.set(1.5f, 2.1f, 1.0f); // sits on short box (1.5 height + 0.6 radius)
+        mesh->castShadow = true;
+        mesh->receiveShadow = true;
         return mesh;
     }
 
@@ -106,6 +113,8 @@ namespace {
         });
         auto mesh = Mesh::create(SphereGeometry::create(0.7f, 48, 48), mat);
         mesh->position.set(-1.5f, 0.7f, 1.8f);
+        mesh->castShadow = true;
+        mesh->receiveShadow = true;
         return mesh;
     }
 
@@ -117,14 +126,13 @@ int main() {
                   {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
 
     WgpuRenderer renderer(canvas);
+    renderer.shadowMap().enabled = true;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
     pathTracer.setEnvIntensity(0.0f);
     pathTracer.setExposure(0.8f);
-    pathTracer.setSamplesPerPixel(2);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setMaxBounces(6);
-    pathTracer.setMode(WgpuPathTracer::Mode::Raytracer);
     pathTracer.setReSTIREnabled(true);
     pathTracer.setFoveatedRendering(false);
 
@@ -143,6 +151,7 @@ int main() {
     // Point light for raytracer mode (emissive NEE handles path tracer mode)
     auto light = PointLight::create(Color::white, 0.5f);
     light->position.set(0.f, 9.5f, 0.f);
+    light->castShadow = true;
     scene.add(light);
 
     // ---- Camera ----
@@ -153,10 +162,7 @@ int main() {
     controls.update();
 
     // ---- UI ----
-    int renderMode = 0;
-    std::vector<std::string> renderModeNames = {"Raytracer", "PathTracer", "Raster"};
     bool raster = false;
-    bool pathTracerOn = false;
     bool denoiserOn = pathTracer.denoiserEnabled();
     bool hybridOn = pathTracer.hybridMode();
     bool restdirOn = pathTracer.restirEnabled();
@@ -169,13 +175,7 @@ int main() {
 
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::T) {
-            renderMode = (renderMode + 1) % 3;
-            raster = (renderMode == 2);
-            pathTracerOn = (renderMode == 1);
-            if (!raster) {
-                pathTracer.setMode(pathTracerOn ? WgpuPathTracer::Mode::PathTracer
-                                                : WgpuPathTracer::Mode::Raytracer);
-            }
+            raster = !raster;
         }
     });
     canvas.addKeyListener(keyAdapter);
@@ -183,17 +183,14 @@ int main() {
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({});
         ImGui::SetNextWindowSize({});
-        ImGui::Begin(renderModeNames[renderMode].c_str());
+        ImGui::Begin(raster ? "Raster" : "Path Tracer");
         ImGui::Text("FPS: %.1f", fps);
         if (!raster) ImGui::Text("Frames: %d", pathTracer.frameCount());
         ImGui::Separator();
 
-        if (renderMode == 0 || renderMode == 1) {
+        if (!raster && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
                 pathTracer.setExposure(exposure);
-        }
-
-        if (renderMode == 1 && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);
             if (ImGui::Checkbox("ReSTIR", &restdirOn))
@@ -225,7 +222,7 @@ int main() {
     canvas.animate([&] {
         const float dt = clock.getDelta();
 
-        light->visible = renderMode != 1;
+        light->visible = raster;
 
         fpsAccum += dt;
         ++fpsFrames;

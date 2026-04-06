@@ -237,10 +237,8 @@ int main() {
     WgpuPathTracer pathTracer(renderer, canvas.size());
     pathTracer.setEnvIntensity(0.0f);
     pathTracer.setExposure(1.0f);
-    pathTracer.setSamplesPerPixel(2);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setMaxBounces(5);
-    pathTracer.setMode(WgpuPathTracer::Mode::Raytracer);
     pathTracer.setHybridMode(true);
 
     // ---- Scene ----
@@ -352,10 +350,7 @@ int main() {
     controls.update();
 
     // ---- UI ----
-    int renderMode = 0;
-    std::vector<std::string> renderModeNames = {"Raytracer", "PathTracer", "Raster"};
     bool raster = false;
-    bool pathTracerOn = false;
     bool showWindow = true;
     bool denoiserOn = pathTracer.denoiserEnabled();
     bool foveatOn = pathTracer.foveatedRendering();
@@ -370,13 +365,7 @@ int main() {
 
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::T) {
-            renderMode = (renderMode + 1) % 3;
-            raster = (renderMode == 2);
-            pathTracerOn = (renderMode == 1);
-            if (!raster) {
-                pathTracer.setMode(pathTracerOn ? WgpuPathTracer::Mode::PathTracer
-                                                : WgpuPathTracer::Mode::Raytracer);
-            }
+            raster = !raster;
         }
     });
     canvas.addKeyListener(keyAdapter);
@@ -384,7 +373,7 @@ int main() {
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({});
         ImGui::SetNextWindowSize({});
-        ImGui::Begin(renderModeNames[renderMode].c_str());
+        ImGui::Begin(raster ? "Raster" : "Path Tracer");
         ImGui::Text("FPS: %.1f", fps);
         if (!raster) ImGui::Text("Frames: %d", pathTracer.frameCount());
         ImGui::Separator();
@@ -394,14 +383,12 @@ int main() {
             solidWall->visible = !showWindow;
         }
 
-        if (renderMode == 0 || renderMode == 1) {
+        if (!raster && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 2.0f))
                 pathTracer.setExposure(exposure);
             if (ImGui::SliderFloat("Pixel Scale", &pixelScale, 0.25f, 2.0f, "%.2f"))
                 pathTracer.setPixelScale(pixelScale);
-        }
 
-        if (renderMode == 1 && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);
             if (ImGui::Checkbox("Foveat", &foveatOn))
@@ -433,7 +420,7 @@ int main() {
     canvas.animate([&] {
         const float dt = clock.getDelta();
 
-        emPoint->visible = renderMode != 1;
+        emPoint->visible = raster;
         emOrb->visible = !emPoint->visible;
 
         fpsAccum += dt;

@@ -15,11 +15,6 @@ namespace threepp {
     class WgpuPathTracer {
 
     public:
-        enum class Mode {
-            Raytracer,  ///< Deterministic GGX shading, 4x RGSS AA, single mirror bounce
-            PathTracer  ///< Monte Carlo path tracing with progressive accumulation
-        };
-
         /// Create a path tracer.
         /// @param renderer  WgpuRenderer that owns the WebGPU device and surface.
         /// @param size      Initial viewport size in pixels (width, height).
@@ -32,13 +27,6 @@ namespace threepp {
 
         /// Trace / accumulate one frame and blit to screen.
         void render(Object3D& scene, Camera& camera);
-
-        void setMode(Mode mode);
-        [[nodiscard]] Mode mode() const;
-
-        /// Set samples per pixel for raytracer mode (1, 2, or 4). Default: 1.
-        void setSamplesPerPixel(int spp);
-        [[nodiscard]] int samplesPerPixel() const;
 
         /// Scale applied to environment/sky light contribution. Default: 1.0.
         /// Set < 1.0 to reduce env light influence on path-traced results.

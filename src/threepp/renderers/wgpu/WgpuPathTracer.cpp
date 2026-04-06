@@ -1147,203 +1147,7 @@ fn sampleEmissiveTriCdf(seed: ptr<function, u32>, totalPower: f32, emTriCount: i
 )";
 
 // ---------------------------------------------------------------------------
-// WGSL compute shader — raycaster-specific code
-// ---------------------------------------------------------------------------
-constexpr const char* csRaytraceWGSL = R"(
-
-fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
-    var albedo = h.albedo;
-    if (h.texSlot >= 0.0) { albedo = srgbToLinear(sampleAtlas(h.uv, h.texSlot)); }
-    // Unlit: return flat color, no lighting
-    if (h.shininess < 0.0) { return albedo; }
-    // Environment lighting:
-    // Non-metals: averaged env for soft diffuse ambient (no HDRI pattern)
-    // Metals: env along reflect direction weighted by albedo (colored reflection)
-    let envAvg = (sampleEnv(vec3<f32>(1,0,0)) + sampleEnv(vec3<f32>(-1,0,0))
-               + sampleEnv(vec3<f32>(0,1,0)) + sampleEnv(vec3<f32>(0,-1,0))
-               + sampleEnv(vec3<f32>(0,0,1)) + sampleEnv(vec3<f32>(0,0,-1))) / 6.0;
-    let wo_env = normalize(-rd);
-    let reflDir = reflect(rd, h.normal);
-    let metalEnv = albedo * sampleEnv(reflDir) * rt.envIntensity.x;
-    let diffuseEnv = albedo * envAvg * rt.envIntensity.x * (1.0 - h.metalness);
-    var col = (mix(diffuseEnv, metalEnv, h.metalness)) * h.ao;
-    let count = i32(rt.lightCount.x);
-    let wo_s = normalize(-rd);
-    for (var li = 0; li < 4; li++) {
-        if (li >= count) { break; }
-        var lc    = rt.lightCol[li].xyz;
-        let ltype = i32(rt.lightType[li].x);  // 0=point, 1=directional, 2=spot
-        let ln    = select(normalize(rt.lightPos[li].xyz - h.point),
-                           normalize(rt.lightPos[li].xyz), ltype == 1);
-        let ld    = select(length(rt.lightPos[li].xyz - h.point), 1e30, ltype == 1);
-
-        // Distance/decay attenuation (matches raster renderer)
-        let lDist = rt.lightType[li].w;
-        let lDecay = rt.lightDir[li].w;
-        if (lDist > 0.0 && ltype != 1) {
-            lc *= pow(max(1.0 - ld / lDist, 0.0), lDecay);
-        }
-
-        // Spotlight cone attenuation
-        if (ltype == 2) {
-            let spotDir   = rt.lightDir[li].xyz;
-            let cosTheta  = dot(-ln, spotDir);
-            let cosInner  = rt.lightType[li].y;
-            let cosOuter  = rt.lightType[li].z;
-            let spotAtten = clamp((cosTheta - cosOuter) / max(cosInner - cosOuter, 1e-6), 0.0, 1.0);
-            lc *= spotAtten;
-        }
-
-        var sr: Ray; sr.origin = h.point + h.normal * 1e-3; sr.dir = ln;
-        var shAtten = vec3<f32>(1.0);
-        var rcGlassAttCol = vec3<f32>(1.0); var rcGlassAttDist = 0.0; var rcInGlass = false;
-        for (var si = 0; si < 2; si++) {
-            let sh = sceneHitShadow(sr, ld - 1e-3);
-            if (sh.t >= ld - 1e-3) { break; }
-            if (sh.transmission < 0.01) { shAtten = vec3<f32>(0.0); break; }
-            var shAlb = sh.albedo;
-            if (sh.texSlot >= 0.0) { shAlb = srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
-            shAtten *= shAlb * sh.transmission;
-            if (sh.frontFace > 0.5) {
-                rcGlassAttCol = sh.attenuationColor; rcGlassAttDist = sh.attenuationDist; rcInGlass = true;
-            } else if (rcInGlass && rcGlassAttDist > 0.0) {
-                let rcAbsorb = -log(max(rcGlassAttCol, vec3<f32>(1e-6))) / rcGlassAttDist;
-                shAtten *= exp(-rcAbsorb * sh.t);
-                rcInGlass = false;
-            }
-            sr.origin = sh.point + sr.dir * 1e-3;
-        }
-        if (shAtten.x + shAtten.y + shAtten.z > 0.001) {
-            let NdotL = max(0.0, dot(h.normal, ln));
-            let F0_s = computeF0(albedo, h.metalness, h.specularColor, h.specularIntensity);
-            let brdf = evalBrdf(wo_s, ln, h.normal, albedo, h.metalness, h.shininess, F0_s);
-            var lobeSum = brdf.f_diff + brdf.f_spec;
-            // Sheen lobe
-            let sheenLum = dot(h.sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
-            if (sheenLum > 0.001) {
-                lobeSum += evalSheen(wo_s, ln, h.normal, h.sheenColor, h.sheenRoughness);
-            }
-            col += shAtten * lc * lobeSum * NdotL;
-        }
-    }
-    return clamp(col + h.emissive, vec3<f32>(0.0), vec3<f32>(1.0));
-}
-)"
-R"(
-fn raytrace(ray: Ray) -> vec3<f32> {
-    var r = ray;
-    var col = vec3<f32>(0.0);
-    var throughput = vec3<f32>(1.0);
-
-    for (var bounce = 0; bounce < 3; bounce++) {
-        let h = sceneHit(r);
-
-        // Miss: sample background (primary) or skip (bounced — shade() already added env)
-        if (h.t >= 1e30) {
-            if (bounce == 0) {
-                col += throughput * sampleBackground(r.dir);
-            }
-            break;
-        }
-
-        // Determine next bounce type
-        let wo = normalize(-r.dir);
-        let hasTransmission = h.transmission > 0.5 && h.shininess < 0.1;
-
-        // Transmission: Fresnel reflection on surface + refract through glass
-        if (hasTransmission && bounce < 2) {
-            let entering = h.frontFace > 0.5;
-            let eta = select(h.ior, 1.0 / h.ior, entering);
-            let refDir = refract(normalize(r.dir), h.normal, eta);
-            if (length(refDir) < 0.001) { break; }
-            // Fresnel reflection (Schlick) — makes glass surface visible
-            let cosI = abs(dot(normalize(-r.dir), h.normal));
-            let r0 = pow((1.0 - h.ior) / (1.0 + h.ior), 2.0);
-            let fresnel = r0 + (1.0 - r0) * pow(1.0 - cosI, 5.0);
-            let reflDir = reflect(r.dir, h.normal);
-            col += throughput * sampleEnv(reflDir) * rt.envIntensity.x * fresnel;
-            // Beer's law attenuation
-            let glassTint = mix(h.albedo, vec3<f32>(1.0), h.transmission);
-            var volAtten = vec3<f32>(1.0);
-            if (h.attenuationDist > 0.0 && !entering) {
-                let absorbCoeff = -log(max(h.attenuationColor, vec3<f32>(1e-6))) / h.attenuationDist;
-                let pathLen = select(h.t, h.thickness, h.t < 1e-2 && h.thickness > 0.0);
-                volAtten = exp(-absorbCoeff * pathLen);
-            }
-            throughput *= glassTint * volAtten * (1.0 - fresnel);
-            r.origin = h.point - h.normal * 1e-3;
-            r.dir = refDir;
-            continue;
-        }
-
-        // Shade the surface (opaque hit)
-        col += throughput * shade(h, r.dir);
-
-        let isMetal  = h.metalness > 0.5 && h.shininess < 0.3;
-        let hasClearcoat = h.clearcoat > 0.0 && h.transmission < 0.01;
-
-        // Clearcoat: env-only dielectric reflection layer
-        if (hasClearcoat) {
-            let ccF0 = 0.04;
-            let ccCos = max(0.001, dot(h.normal, wo));
-            let ccFresnel = ccF0 + (1.0 - ccF0) * pow(1.0 - ccCos, 5.0);
-            let ccK = h.clearcoat * ccFresnel;
-            let ccRoughFade = max(0.0, 1.0 - h.clearcoatAlpha * 10.0);
-            let ccRefDir = reflect(r.dir, h.normal);
-            let ccCol = sampleEnv(ccRefDir) * rt.envIntensity.x;
-            col += throughput * ccCol * ccK * ccRoughFade;
-        }
-
-        // Specular reflection bounce (metals only) — trace for scene geometry
-        if (isMetal) {
-            throughput *= h.albedo;
-            r.origin = h.point + h.normal * 1e-3;
-            r.dir = reflect(r.dir, h.normal);
-            continue;
-        }
-
-        break;
-    }
-    return col;
-}
-
-@compute @workgroup_size(8, 8)
-fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let pixel = vec2<i32>(i32(gid.x), i32(gid.y));
-    let res   = rt.iRes.xy;
-    if (f32(pixel.x) >= res.x || f32(pixel.y) >= res.y) { return; }
-
-    let spp = i32(rt.spp.x);
-    let fp  = vec2<f32>(f32(pixel.x), f32(pixel.y));
-    var sample: vec3<f32>;
-    if (spp >= 4) {
-        let o0 = vec2<f32>( 0.125,  0.375);
-        let o1 = vec2<f32>(-0.375,  0.125);
-        let o2 = vec2<f32>( 0.375, -0.125);
-        let o3 = vec2<f32>(-0.125, -0.375);
-        sample = (raytrace(makeRay(fp + o0, res))
-                + raytrace(makeRay(fp + o1, res))
-                + raytrace(makeRay(fp + o2, res))
-                + raytrace(makeRay(fp + o3, res))) * 0.25;
-    } else if (spp >= 2) {
-        let o0 = vec2<f32>( 0.25,  0.25);
-        let o1 = vec2<f32>(-0.25, -0.25);
-        sample = (raytrace(makeRay(fp + o0, res))
-                + raytrace(makeRay(fp + o1, res))) * 0.5;
-    } else {
-        sample = raytrace(makeRay(fp + vec2<f32>(0.5, 0.5), res));
-    }
-    textureStore(accumWrite, pixel, vec4<f32>(sample, 1.0));
-    let centerHit = sceneHit(makeRay(fp + vec2<f32>(0.5, 0.5), res));
-    let tVal = select(centerHit.t, 0.0, centerHit.t >= 1e20);
-    textureStore(gBufWrite, pixel, vec4<f32>(vec3<f32>(0.0), tVal));
-    textureStore(albedoWrite, pixel, vec4<f32>(1.0, 1.0, 1.0, 1.0));
-    textureStore(momentsWrite, pixel, vec4<f32>(0.0));
-}
-)";
-
-// ---------------------------------------------------------------------------
-// WGSL compute shader — path tracer-specific code
+// WGSL compute shader — path tracer code
 // ---------------------------------------------------------------------------
 constexpr const char* csPathTraceWGSL = R"(
 
@@ -1765,7 +1569,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         // mostly irrelevant there (primary interaction is transmission, not reflection).
         // Applying ReSTIR NEE to a glass surface over-brightens it and makes it
         // appear opaque. Fall back to classic NEE for those hits.
-        let useReSTIR = i == 0 && rt.restirParams.x > 0.5 && rt.mode.x > 0.5
+        let useReSTIR = i == 0 && rt.restirParams.x > 0.5
                         && h.transmission < 0.05
                         && h.shininess > 0.07;
 
@@ -2580,16 +2384,14 @@ R"(
 )";
 
 // Build a raycaster or path tracer shader by concatenating common + specific code.
-static std::string buildRtShader(bool pathTrace, bool hasEnvCdf) {
+static std::string buildRtShader(bool hasEnvCdf) {
     std::string src = std::string(csSharedDefsWGSL) + "\n" +
                       csCommonWGSL + "\n" +
-                      (pathTrace ? csPathTraceWGSL : csRaytraceWGSL);
-    if (pathTrace) {
-        const std::string marker = "/*ENV_CDF_FLAG*/false";
-        auto pos = src.find(marker);
-        if (pos != std::string::npos) {
-            src.replace(pos, marker.size(), hasEnvCdf ? "true" : "false");
-        }
+                      csPathTraceWGSL;
+    const std::string marker = "/*ENV_CDF_FLAG*/false";
+    auto pos = src.find(marker);
+    if (pos != std::string::npos) {
+        src.replace(pos, marker.size(), hasEnvCdf ? "true" : "false");
     }
     return src;
 }
@@ -4709,7 +4511,6 @@ struct WgpuPathTracer::Impl {
     WgpuComputePipeline vtPipeline;
     WgpuComputePipeline refitPipeline;
     WgpuComputePipeline rtPipeline;
-    WgpuComputePipeline rtRaycastPipeline;
 
     // Depth-fill pipeline — writes NDC depth from gBuffer primary-ray t values
     WGPURenderPipeline      depthFillPipeline_ = nullptr;
@@ -4810,8 +4611,6 @@ struct WgpuPathTracer::Impl {
     int foveatedConvergeFrames_ = 4;
     Vector3 prevCamPos_;
     Vector3 prevCamDir_;
-    Mode mode_ = Mode::Raytracer;
-    int spp_ = 2;
     int overlayLayer_ = -1;  // -1 = disabled; objects on this layer bypass path tracing and go to raster overlay
 
     int width_, height_;
@@ -4948,8 +4747,7 @@ struct WgpuPathTracer::Impl {
           // Compute pipelines
           vtPipeline(r, buildVtShader(), "vt_main"),
           refitPipeline(r, buildRefitShader(), "bvh_refit"),
-          rtPipeline(r, buildRtShader(true, false), "rt_main"),
-          rtRaycastPipeline(r, buildRtShader(false, false), "rt_main"),
+          rtPipeline(r, buildRtShader(false), "rt_main"),
           // Display pipeline
           displayCam(-1.f, 1.f, 1.f, -1.f, 0.1f, 10.f),
           // CPU buffers — empty; sized dynamically by async build
@@ -5001,35 +4799,6 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setTexture(27, hybridGBuf5);
         rtPipeline.setTexture(28, hybridGBuf0);
         rtPipeline.setStorageBufferRead(29, motionMatBuf);
-
-        rtRaycastPipeline.setUniformBuffer(0, rtUniformBuf);
-        rtRaycastPipeline.setTexture(1, *readAccum);
-        rtRaycastPipeline.setStorageTexture(2, *writeAccum);
-        rtRaycastPipeline.setStorageBufferRead(3, bvhNodeBuf);
-        rtRaycastPipeline.setTexture(4, matTex);
-        rtRaycastPipeline.setTexture(5, triTex);
-        rtRaycastPipeline.setTexture(6, texAtlasTex);
-        rtRaycastPipeline.setTexture(7, *readHitMesh);
-        rtRaycastPipeline.setStorageTexture(8, *writeHitMesh);
-        rtRaycastPipeline.setTexture(9, envTexGpu);
-        rtRaycastPipeline.setStorageTexture(10, *gBufCur);
-        rtRaycastPipeline.setStorageBufferRead(11, emissiveTriBuf);
-        rtRaycastPipeline.setStorageTexture(14, albedoTex);
-        rtRaycastPipeline.setTexture(15, *gBufPrev);
-        rtRaycastPipeline.setTexture(16, bgTexGpu);
-        rtRaycastPipeline.setTexture(17, *reservoirRead);
-        rtRaycastPipeline.setStorageTexture(18, *reservoirWrite);
-        rtRaycastPipeline.setTexture(19, *reservoirWRead);
-        rtRaycastPipeline.setStorageTexture(20, *reservoirWWrite);
-        rtRaycastPipeline.setTexture(21, *momentsRead);
-        rtRaycastPipeline.setStorageTexture(22, *momentsWrite);
-        rtRaycastPipeline.setTexture(23, hybridGBuf1);
-        rtRaycastPipeline.setTexture(24, hybridGBuf2);
-        rtRaycastPipeline.setTexture(25, hybridGBuf3);
-        rtRaycastPipeline.setTexture(26, hybridGBuf4);
-        rtRaycastPipeline.setTexture(27, hybridGBuf5);
-        rtRaycastPipeline.setTexture(28, hybridGBuf0);
-        rtRaycastPipeline.setStorageBufferRead(29, motionMatBuf);
 
         // TAA pipeline — set ALL bindings upfront
         taaPipeline.setUniformBuffer(0, taaUniBuf);
@@ -5378,31 +5147,15 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(18, *reservoirWrite);
         rtPipeline.setTexture(19, *reservoirWRead);
         rtPipeline.setStorageTexture(20, *reservoirWWrite);
-        rtRaycastPipeline.setStorageTexture(10, *gBufCur);
-        rtRaycastPipeline.setTexture(15, *gBufPrev);
-        rtRaycastPipeline.setStorageTexture(14, albedoTex);
-        rtRaycastPipeline.setTexture(17, *reservoirRead);
-        rtRaycastPipeline.setStorageTexture(18, *reservoirWrite);
-        rtRaycastPipeline.setTexture(19, *reservoirWRead);
-        rtRaycastPipeline.setStorageTexture(20, *reservoirWWrite);
         rtPipeline.setTexture(21, *momentsRead);
         rtPipeline.setStorageTexture(22, *momentsWrite);
-        rtRaycastPipeline.setTexture(21, *momentsRead);
-        rtRaycastPipeline.setStorageTexture(22, *momentsWrite);
         rtPipeline.setTexture(23, hybridGBuf1);
         rtPipeline.setTexture(24, hybridGBuf2);
         rtPipeline.setTexture(25, hybridGBuf3);
         rtPipeline.setTexture(26, hybridGBuf4);
         rtPipeline.setTexture(27, hybridGBuf5);
         rtPipeline.setTexture(28, hybridGBuf0);
-        rtRaycastPipeline.setTexture(23, hybridGBuf1);
-        rtRaycastPipeline.setTexture(24, hybridGBuf2);
-        rtRaycastPipeline.setTexture(25, hybridGBuf3);
-        rtRaycastPipeline.setTexture(26, hybridGBuf4);
-        rtRaycastPipeline.setTexture(27, hybridGBuf5);
-        rtRaycastPipeline.setTexture(28, hybridGBuf0);
         rtPipeline.setStorageBufferRead(29, motionMatBuf);
-        rtRaycastPipeline.setStorageBufferRead(29, motionMatBuf);
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(6, *momentsRead);
         taaPipeline.setTexture(7, albedoTex);
@@ -5734,8 +5487,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.refitPipeline.setStorageBufferRead(3, d.leafIndexBuf);
             d.rtPipeline.setTexture(5, d.triTex);
             d.rtPipeline.setStorageBufferRead(11, d.emissiveTriBuf);
-            d.rtRaycastPipeline.setTexture(5, d.triTex);
-            d.rtRaycastPipeline.setStorageBufferRead(11, d.emissiveTriBuf);
         }
         if (r.bvhCapacity != d.bvhCapacity_) {
             d.bvhCapacity_ = r.bvhCapacity;
@@ -5750,7 +5501,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.refitPipeline.setStorageBuffer(2, d.bvhCounterBuf);
             d.refitPipeline.setStorageBufferRead(5, d.refitMetaBuf);
             d.rtPipeline.setStorageBufferRead(3, d.bvhNodeBuf);
-            d.rtRaycastPipeline.setStorageBufferRead(3, d.bvhNodeBuf);
         }
         if (r.matCapacity != d.matCapacity_) {
             d.matCapacity_ = r.matCapacity;
@@ -5758,7 +5508,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                                     WgpuTexture::Format::RGBA32Float,
                                     WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
             d.rtPipeline.setTexture(4, d.matTex);
-            d.rtRaycastPipeline.setTexture(4, d.matTex);
         }
         if (r.meshCapacity != d.meshCapacity_) {
             d.meshCapacity_ = r.meshCapacity;
@@ -5769,7 +5518,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.vtPipeline.setStorageBufferRead(1, d.matrixBuf);
             d.taaPipeline.setStorageBufferRead(6, d.motionMatBuf);
             d.rtPipeline.setStorageBufferRead(29, d.motionMatBuf);
-            d.rtRaycastPipeline.setStorageBufferRead(29, d.motionMatBuf);
         }
 
         // Upload atlas
@@ -5786,7 +5534,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                     WgpuTexture::TextureBinding | WgpuTexture::CopyDst,
                     r.atlasLayers);
             d.rtPipeline.setTexture(6, d.texAtlasTex);
-            d.rtRaycastPipeline.setTexture(6, d.texAtlasTex);
         }
         // Upload atlas layers
         const size_t layerBytes = static_cast<size_t>(ATLAS_COLS * TILE_SIZE) * (ATLAS_COLS * TILE_SIZE) * 4;
@@ -5839,7 +5586,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         // causing a layoutDirty discard → a second full synchronous compile on the main thread
         // (~30s extra freeze on first cold-cache launch).
         d.rtPipeline.startAsyncBuild();
-        d.rtRaycastPipeline.startAsyncBuild();
         // Mark that triTex has not yet been populated via the VT pass.
         // The first real dispatch must run the VT pass even if no mesh moved.
         d.firstDispatchPending_ = true;
@@ -5965,8 +5711,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.tanHalfFov[0] = tanHalfFov;
     u.frameCount[0] = d.frameCount_;
     u.triCount[0] = static_cast<float>(d.triCount_);
-    u.mode[0] = (d.mode_ == Mode::PathTracer) ? 1.f : 0.f;
-    u.spp[0] = static_cast<float>(d.spp_);
+    u.mode[0] = 1.f;  // always path tracer
     u.spp[1] = static_cast<float>(d.tileSize_);
     u.movedMeshBits[0] = movedBits[0];
     u.movedMeshBits[1] = movedBits[1];
@@ -6022,7 +5767,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             if (envTex != d.prevEnvTex_) {
                 uploadEquirect(envTex, d.envTexGpu);
                 d.rtPipeline.setTexture(9, d.envTexGpu);
-                d.rtRaycastPipeline.setTexture(9, d.envTexGpu);
 
                 // Build env CDF for importance sampling.
                 auto& img = envTex->image();
@@ -6057,7 +5801,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                     d.envMargTex.write(cdf.marginal.data(), cdf.marginal.size() * sizeof(float));
                     d.rtPipeline.setTexture(13, d.envMargTex);
                     if (!d.shaderHasEnvCdf_) {
-                        d.rtPipeline.replaceShader(buildRtShader(true, true));
+                        d.rtPipeline.replaceShader(buildRtShader(true));
                         d.shaderHasEnvCdf_ = true;
                     }
 #else
@@ -6086,7 +5830,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 d.prevEnvTex_ = nullptr;
                 d.envLumSum_ = 0.f;
                 if (d.shaderHasEnvCdf_) {
-                    d.rtPipeline.replaceShader(buildRtShader(true, false));
+                    d.rtPipeline.replaceShader(buildRtShader(false));
                     d.shaderHasEnvCdf_ = false;
                 }
             }
@@ -6099,7 +5843,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             if (bgTex != d.prevBgTex_) {
                 uploadEquirect(bgTex, d.bgTexGpu);
                 d.rtPipeline.setTexture(16, d.bgTexGpu);
-                d.rtRaycastPipeline.setTexture(16, d.bgTexGpu);
                 d.prevBgTex_ = bgTex;
             }
             u.bgColor[3] = 2.f;
@@ -6133,7 +5876,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.rtPipeline.setTexture(13, d.envMargTex);
         // Swap to env CDF shader variant
         if (!d.shaderHasEnvCdf_) {
-            d.rtPipeline.replaceShader(buildRtShader(true, true));
+            d.rtPipeline.replaceShader(buildRtShader(true));
             d.shaderHasEnvCdf_ = true;
         }
     }
@@ -6209,8 +5952,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     d.rtUniformBuf.write(&u, sizeof(u));
 
     // Set per-frame texture bindings (accum + hitMesh ping-pong)
-    const bool isPT = d.mode_ == Mode::PathTracer;
-    auto& activePipeline = isPT ? d.rtPipeline : d.rtRaycastPipeline;
+    auto& activePipeline = d.rtPipeline;
 
     // Skip RT dispatch if the active pipeline is still compiling asynchronously.
     // On cold shader cache (first launch / code change) this can take 10-30 seconds.
@@ -6399,8 +6141,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     std::swap(d.gBufCur, d.gBufPrev);
     d.rtPipeline.setStorageTexture(10, *d.gBufCur);
     d.rtPipeline.setTexture(15, *d.gBufPrev);
-    d.rtRaycastPipeline.setStorageTexture(10, *d.gBufCur);
-    d.rtRaycastPipeline.setTexture(15, *d.gBufPrev);
 
     // Swap ReSTIR reservoir ping-pong
     std::swap(d.reservoirRead, d.reservoirWrite);
@@ -6409,17 +6149,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     d.rtPipeline.setStorageTexture(18, *d.reservoirWrite);
     d.rtPipeline.setTexture(19, *d.reservoirWRead);
     d.rtPipeline.setStorageTexture(20, *d.reservoirWWrite);
-    d.rtRaycastPipeline.setTexture(17, *d.reservoirRead);
-    d.rtRaycastPipeline.setStorageTexture(18, *d.reservoirWrite);
-    d.rtRaycastPipeline.setTexture(19, *d.reservoirWRead);
-    d.rtRaycastPipeline.setStorageTexture(20, *d.reservoirWWrite);
 
     // Swap moments ping-pong
     std::swap(d.momentsRead, d.momentsWrite);
     d.rtPipeline.setTexture(21, *d.momentsRead);
     d.rtPipeline.setStorageTexture(22, *d.momentsWrite);
-    d.rtRaycastPipeline.setTexture(21, *d.momentsRead);
-    d.rtRaycastPipeline.setStorageTexture(22, *d.momentsWrite);
     // Update denoiser's moments reference (reads converged moments)
     d.atrousPipeline.setTexture(6, *d.momentsRead);
 
@@ -6429,7 +6163,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     const bool hasMotion = (movedBits[0] | movedBits[1] | movedBits[2] | movedBits[3]) != 0u;
     const bool foveatedActive = d.foveatedEnabled_ && d.frameCount_ > 0.f;
     const bool needsDenoise = (d.frameCount_ < 64.f || hasMotion);
-    if (d.denoiserEnabled_ && d.mode_ == Mode::PathTracer && needsDenoise) {
+    if (d.denoiserEnabled_ && needsDenoise) {
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
 
@@ -6622,17 +6356,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     }
 }
 
-void WgpuPathTracer::setMode(Mode mode) {
-    if (pimpl_->mode_ != mode) {
-        pimpl_->mode_ = mode;
-        pimpl_->frameCount_ = 0.f;
-    }
-}
-
-WgpuPathTracer::Mode WgpuPathTracer::mode() const {
-    return pimpl_->mode_;
-}
-
 void WgpuPathTracer::setEnvIntensity(float intensity) {
     if (intensity != pimpl_->envIntensity_) {
         pimpl_->envIntensity_ = intensity;
@@ -6690,9 +6413,6 @@ bool WgpuPathTracer::hybridMode() const {
     return pimpl_->hybridMode_;
 }
 
-void WgpuPathTracer::setSamplesPerPixel(int spp) {
-    pimpl_->spp_ = (spp >= 4) ? 4 : (spp >= 2) ? 2 : 1;
-}
 
 void WgpuPathTracer::setFireflyClamp(float cap) {
     pimpl_->fireflyCap_ = (cap > 0.f) ? cap : 1e30f;
@@ -6702,9 +6422,6 @@ float WgpuPathTracer::fireflyClamp() const {
     return pimpl_->fireflyCap_;
 }
 
-int WgpuPathTracer::samplesPerPixel() const {
-    return pimpl_->spp_;
-}
 
 void WgpuPathTracer::setSize(std::pair<int, int> size) {
     pimpl_->fullWidth_ = size.first;
