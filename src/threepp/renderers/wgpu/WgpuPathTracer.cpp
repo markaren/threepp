@@ -1336,9 +1336,6 @@ fn envImportancePdf(d: vec3<f32>) -> f32 {
 }
 
 // Per-contribution firefly clamp for injection-time MIS spikes.
-// Cap comes from CPU (default 8 luminance — standard production value,
-// Arnold/Cycles/RenderMan). Set very large to disable for unbiased HDR
-// (ML training data, light-transport validation). NaN-guarded.
 fn addClamped(rad: ptr<function, vec3<f32>>, contrib: vec3<f32>, cap: f32) {
     if (!(contrib.x == contrib.x) || !(contrib.y == contrib.y) || !(contrib.z == contrib.z)) {
         return;
@@ -1388,9 +1385,6 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
     var prevMetalness = 0.0;
     var prevWo        = vec3<f32>(0.0);
     var afterTransmission = false;
-
-    // Adaptive bounce cap — set at bounce 0 from primary surface material.
-    // Starts at maxBounces, gets tightened if the primary is diffuse/rough.
     var effectiveBounces = maxBounces;
 
     for (var i = 0; i < maxBounces; i++) {
@@ -1425,27 +1419,17 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             *primaryRough   = sqrt(h.shininess);  // linear roughness for TAA blend
             *primaryMatIdx  = h.matIdx;
 
-            // Adaptive bounce cap — tighten based on primary surface material.
-            // NEE/ReSTIR handles direct lighting well; env IBL covers ambient
-            // indirect for diffuse surfaces; deeper bounces are only needed
-            // when the BRDF propagates information (metals/mirrors/glass).
-            // This trades a small amount of color bleeding between diffuse
-            // surfaces for a big reduction in secondary ray count.
-            // shininess = GGX alpha = roughness^2.
+            // Adaptive bounce cap — reduce bounces for diffuse/glossy surfaces.
             {
                 let isGlass  = h.transmission > 0.05;
                 let isMetal  = h.metalness > 0.5;
-                let isMirror = h.shininess < 0.05;      // r <= 0.22
-                let isGlossy = h.shininess < 0.25;      // r <= 0.5
+                let isMirror = h.shininess < 0.05;
+                let isGlossy = h.shininess < 0.25;
                 if (!isGlass && !isMetal && !isMirror) {
                     if (isGlossy) {
-                        effectiveBounces = min(maxBounces, 3);
+                        effectiveBounces = min(maxBounces, 4);
                     } else {
-                        // Rough diffuse/non-metal: allow 1 indirect bounce so
-                        // interior surfaces can receive light transported off
-                        // other surfaces (e.g. wall lit by sun coming through a
-                        // window = wall→floor→sky requires 2 bounces from camera).
-                        effectiveBounces = min(maxBounces, 2);
+                        effectiveBounces = min(maxBounces, 3);
                     }
                 }
             }
@@ -1517,30 +1501,42 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             // ======= ReSTIR DI: Initial candidate generation =======
             var reservoir = emptyReservoir();
 
-            // 1. Analytical lights — sample ONE uniformly to keep M correct
-            if (lcount > 0) {
-                let li = i32(rand(seed) * f32(lcount)) % lcount;
-                let le = evalAnalyticalLight(li, h.point);
-                let lightP = rt.lightPos[li].xyz;
-                let p_hat_a = restirTargetPdf(h.point, h.normal, wo, albedo, h.metalness, h.shininess, F0_h,
-                                              lightP, f32(li), le.color);
-                if (p_hat_a > 0.0) {
-                    let p_source = 1.0 / max(f32(lcount), 1.0);
-                    updateReservoir(&reservoir, lightP, f32(li),
-                                    p_hat_a / p_source, p_hat_a, seed);
+            // 1. Analytical lights — evaluate ALL (typically 1-4, cheap).
+            // Sampling only one caused visible flicker during camera motion
+            // when temporal reuse breaks and each frame randomly picks a different light.
+            {
+                let p_source_a = 1.0 / max(f32(lcount), 1.0);
+                for (var li = 0; li < 4; li++) {
+                    if (li >= lcount) { break; }
+                    let le = evalAnalyticalLight(li, h.point);
+                    let lightP = rt.lightPos[li].xyz;
+                    let p_hat_a = restirTargetPdf(h.point, h.normal, wo, albedo, h.metalness, h.shininess, F0_h,
+                                                  lightP, f32(li), le.color);
+                    reservoir.M += 1.0;
+                    if (p_hat_a > 0.0) {
+                        let w = p_hat_a / p_source_a;
+                        reservoir.W_sum += w;
+                        if (rand(seed) < w / max(reservoir.W_sum, 1e-20)) {
+                            reservoir.lightPos  = lightP;
+                            reservoir.lightType = f32(li);
+                            reservoir.p_hat     = p_hat_a;
+                        }
+                    }
                 }
             }
 )"
 R"(
             // 2. Emissive triangles — CDF samples
             if (emTriCount > 0 && totalPower > 0.0) {
-                for (var ei = 0; ei < 16; ei++) {
+                for (var ei = 0; ei < 8; ei++) {
                     let es = sampleEmissiveTriCdf(seed, totalPower, emTriCount);
                     let toLight = es.point - h.point;
                     let dist = length(toLight);
                     let ln_e = toLight / dist;
                     let cosLight = abs(dot(es.normal, -ln_e));
                     let NdotL_e = dot(h.normal, ln_e);
+                    // Always count in M for correct RIS normalization.
+                    reservoir.M += 1.0;
                     if (NdotL_e > 0.0 && cosLight > 1e-6) {
                         let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
                         let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
@@ -1548,8 +1544,13 @@ R"(
                                                       es.point, 1000.0 + f32(es.triIdx), emColor);
                         if (p_hat_e > 0.0) {
                             let p_source_e = (es.power / totalPower) * (dist * dist) / (es.area * cosLight);
-                            updateReservoir(&reservoir, es.point, 1000.0 + f32(es.triIdx),
-                                            p_hat_e / p_source_e, p_hat_e, seed);
+                            let w = p_hat_e / p_source_e;
+                            reservoir.W_sum += w;
+                            if (rand(seed) < w / max(reservoir.W_sum, 1e-20)) {
+                                reservoir.lightPos  = es.point;
+                                reservoir.lightType = 1000.0 + f32(es.triIdx);
+                                reservoir.p_hat     = p_hat_e;
+                            }
                         }
                     }
                 }
@@ -1560,13 +1561,20 @@ R"(
                 let envSample = sampleEnvImportance(seed);
                 let envDir = envSample.xyz;
                 let envPdf = envSample.w;
+                // Always count in M for correct RIS normalization.
+                reservoir.M += 1.0;
                 if (dot(h.normal, envDir) > 0.0 && envPdf > 1e-8) {
                     let envCol = sampleEnv(envDir) * rt.envIntensity.x;
                     let p_hat_env = restirTargetPdf(h.point, h.normal, wo, albedo, h.metalness, h.shininess, F0_h,
                                                     envDir, -1.0, envCol);
                     if (p_hat_env > 0.0) {
-                        updateReservoir(&reservoir, envDir, -1.0,
-                                        p_hat_env / envPdf, p_hat_env, seed);
+                        let w = p_hat_env / envPdf;
+                        reservoir.W_sum += w;
+                        if (rand(seed) < w / max(reservoir.W_sum, 1e-20)) {
+                            reservoir.lightPos  = envDir;
+                            reservoir.lightType = -1.0;
+                            reservoir.p_hat     = p_hat_env;
+                        }
                     }
                 }
             }
@@ -1666,7 +1674,10 @@ R"(
             // Uses one-frame-lagged neighbours — avoids a second dispatch and is
             // visually indistinguishable from same-frame spatial reuse.
             {
-                for (var spI = 0u; spI < 8u; spI++) {
+                let spMax = 8u;
+                let mTarget = 30.0; // stop borrowing once we have enough confidence
+                for (var spI = 0u; spI < spMax; spI++) {
+                    if (reservoir.M >= mTarget) { break; }
                     let spAngle = rand(seed) * 2.0 * PI;
                     let spR     = sqrt(rand(seed)) * 20.0;
                     let spOff   = vec2<i32>(i32(spR * cos(spAngle)), i32(spR * sin(spAngle)));
@@ -1716,7 +1727,7 @@ R"(
             var reservoirShadowAtten = vec3<f32>(0.0);
             if (reservoir.p_hat > 0.0 && reservoir.W > 0.0) {
                 let rd = reservoirLightDir(reservoir.lightPos, reservoir.lightType, h.point);
-                reservoirShadowAtten = traceShadowRay(h.point, h.normal, rd.dir, rd.maxDist, 4);
+                reservoirShadowAtten = traceShadowRay(h.point, h.normal, rd.dir, rd.maxDist, 2);
             }
 
             // === SHADE FROM RESERVOIR ===
@@ -1756,7 +1767,7 @@ R"(
             let le = evalAnalyticalLight(li, h.point);
             let NdotL = dot(h.normal, le.dir);
             if (NdotL <= 0.0) { continue; }
-            let shadowAtten = traceShadowRay(h.point, h.normal, le.dir, le.dist - 1e-3, 4);
+            let shadowAtten = traceShadowRay(h.point, h.normal, le.dir, le.dist - 1e-3, 2);
             if (shadowAtten.x + shadowAtten.y + shadowAtten.z > 0.001) {
                 let lobeSum = evalBrdfFull(wo, le.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
                                            h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
@@ -1778,7 +1789,7 @@ R"(
             let cosLight = abs(dot(es.normal, -ln));
 
             if (NdotL > 0.0 && cosLight > 1e-6) {
-                let emAtten = traceShadowRay(h.point, h.normal, ln, dist - 1e-2, 4);
+                let emAtten = traceShadowRay(h.point, h.normal, ln, dist - 1e-2, 2);
                 if (emAtten.x + emAtten.y + emAtten.z > 0.001) {
                     let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
                     let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
@@ -1801,7 +1812,7 @@ R"(
             let envPdf    = envSample.w;
             let envNdotL  = dot(h.normal, envDir);
             if (envNdotL > 0.0 && envPdf > 1e-8) {
-                let envAtten = traceShadowRay(h.point, h.normal, envDir, 1e30, 4);
+                let envAtten = traceShadowRay(h.point, h.normal, envDir, 1e30, 2);
                 if (envAtten.x + envAtten.y + envAtten.z > 0.001) {
                     let lobeSum4 = evalBrdfFull(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h,
                                                 h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
@@ -1826,14 +1837,9 @@ R"(
         }
 
         if (i > 1) {
-            // Roughness-weighted Russian roulette. Standard RR already terminates
-            // low-throughput paths; weighting by surface smoothness lets rough
-            // bounces die faster since their BRDF spreads energy over a huge
-            // solid angle (each bounce carries little info anyway). Smooth/metal
-            // paths retain near-full continuation probability — they're where
-            // deep bounces matter. Still unbiased: throughput /= p compensates.
+            // Roughness-weighted Russian roulette — smoother surfaces survive longer.
             let p_base = max(max(throughput.r, throughput.g), throughput.b);
-            let rough  = sqrt(h.shininess);  // linear roughness = sqrt(alpha)
+            let rough  = sqrt(h.shininess);
             let weight = mix(0.6, 1.0, 1.0 - rough);
             let p = clamp(p_base * weight, 0.05, 1.0);
             if (rand(seed) > p) { break; }
@@ -3351,10 +3357,6 @@ static int pagedIdx(int ti, int row) {
     return ((ti / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + ti % TEX_PAGE_WIDTH) * 4;
 }
 
-// Raster vertex layout: 15 floats = 60 bytes per vertex, 3 verts per tri.
-// pos.xyz(3) + normal.xyz(3) + uv0.xy(2) + color.rgb(3) + meshIdxF(1) + matIdxF(1) + uv1.xy(2)
-static constexpr int RASTER_VTX_FLOATS = 15;
-
 static int buildGeometryBuffers(
         const std::vector<RtMeshEntry>& entries,
         const std::unordered_map<Texture*, int>& texSlotMap,
@@ -3362,13 +3364,11 @@ static int buildGeometryBuffers(
         std::vector<float>& matBuffer,
         std::vector<float>& rawObjTriBuf,
         std::vector<float>& matrixBuf,
-        std::vector<float>& rasterVtxBuf,
         int maxTris, int maxMats, int maxMeshes) {
     std::ranges::fill(triBuffer, 0.f);
     std::ranges::fill(matBuffer, 0.f);
     std::ranges::fill(rawObjTriBuf, 0.f);
     std::ranges::fill(matrixBuf, 0.f);
-    std::ranges::fill(rasterVtxBuf, 0.f);
 
     int triCount = 0;
     int matCount = 0;
@@ -3626,24 +3626,6 @@ static int buildGeometryBuffers(
             setObj(triCount, 9, u1_2, v1_2, 0.f, 0.f);
             setObj(triCount, 10, cr0, cg0, cb0, cr1);
             setObj(triCount, 11, cg1, cb1, cr2, cg2);
-
-            // Raster vertex buffer (object-space, 3 verts per tri, non-indexed)
-            auto setVtx = [&](int localVi, const Vector3& p, const Vector3& n,
-                              float uu, float vv, float cr, float cg, float cb,
-                              float uu1, float vv1) {
-                const int vi = triCount * 3 + localVi;
-                float* v = rasterVtxBuf.data() + vi * RASTER_VTX_FLOATS;
-                v[0] = p.x; v[1] = p.y; v[2] = p.z;
-                v[3] = n.x; v[4] = n.y; v[5] = n.z;
-                v[6] = uu; v[7] = vv;
-                v[8] = cr; v[9] = cg; v[10] = cb;
-                v[11] = static_cast<float>(meshIdx);
-                v[12] = static_cast<float>(matIdx);
-                v[13] = uu1; v[14] = vv1;
-            };
-            setVtx(0, ov0, on0, u0, v0uv, cr0, cg0, cb0, u1_0, v1_0);
-            setVtx(1, ov1, on1, u1, v1uv, cr1, cg1, cb1, u1_1, v1_1);
-            setVtx(2, ov2, on2, u2, v2uv, cr2, cg2, cb2, u1_2, v1_2);
 
             ++triCount;
         }
@@ -4187,7 +4169,7 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer  taaUniBuf;
     WgpuBuffer  atrousUniBuf;
     bool denoiserEnabled_ = false;
-    bool restirEnabled_ = false;
+    bool restirEnabled_ = true;
     float envIntensity_ = 0.5f;
     int maxBounces_ = 5;
     float exposure_ = 1.0f;
@@ -4281,7 +4263,6 @@ struct WgpuPathTracer::Impl {
         std::vector<float> matBuffer;
         std::vector<float> rawObjTriBuf;
         std::vector<float> matrixCpuBuf;
-        std::vector<float> rasterVtxCpuBuf;  // raster-mode vertex buffer (13 floats/vtx, 3 vtx/tri)
         std::vector<Bvh4Node> bvhNodes;
         std::vector<int> bvhIndices;
         std::vector<int> leafIndices;
@@ -4827,10 +4808,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
         r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 48, 0.f);
         r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
-        r.rasterVtxCpuBuf.resize(static_cast<size_t>(r.triCapacity) * 3 * RASTER_VTX_FLOATS, 0.f);
-
         r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
-                                           r.rawObjTriBuf, r.matrixCpuBuf, r.rasterVtxCpuBuf,
+                                           r.rawObjTriBuf, r.matrixCpuBuf,
                                            r.triCapacity, r.matCapacity, r.meshCapacity);
         buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
         r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
@@ -4921,10 +4900,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
         r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 48, 0.f);
         r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
-        r.rasterVtxCpuBuf.resize(static_cast<size_t>(r.triCapacity) * 3 * RASTER_VTX_FLOATS, 0.f);
-
         r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
-                                           r.rawObjTriBuf, r.matrixCpuBuf, r.rasterVtxCpuBuf,
+                                           r.rawObjTriBuf, r.matrixCpuBuf,
                                            r.triCapacity, r.matCapacity, r.meshCapacity);
         buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
         r.numBvhNodes = static_cast<int>(r.bvhNodes.size());

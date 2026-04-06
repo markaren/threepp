@@ -55,7 +55,7 @@ namespace threepp {
         void setDenoiserEnabled(bool enabled);
         [[nodiscard]] bool denoiserEnabled() const;
 
-        /// Enable/disable ReSTIR DI for direct illumination. Default: false.
+        /// Enable/disable ReSTIR DI for direct illumination. Default: true.
         void setReSTIREnabled(bool enabled);
         [[nodiscard]] bool restirEnabled() const;
 
