@@ -2729,7 +2729,9 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cGB     = textureLoad(gBuf, pixel, 0);
     let cNorm   = cGB.xyz;
     let cDepth  = cGB.w;
-    let cAlbedo = textureLoad(albedoBuf, pixel, 0).xyz;
+    let cAlbedoFull = textureLoad(albedoBuf, pixel, 0);
+    let cAlbedo = cAlbedoFull.xyz;
+    let cRough  = cAlbedoFull.w;  // linear roughness (0 = mirror, 1 = diffuse)
     let cHitId  = textureLoad(hitMeshBuf, pixel, 0);
     let cMeshId = u32(cHitId.r);
     let cMatId  = i32(cHitId.g);
@@ -2794,12 +2796,14 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let sLum = mix(luminance_a(sColor), luminance_a(sIrr), sDemod);
             let w_l  = exp(-(sLum - cLum) * (sLum - cLum) / (lumSigma * lumSigma + 1e-6));
 
-            // Per-sample outlier clamp: suppress extreme bright samples in filter window
+            // Per-sample outlier clamp: suppress extreme bright samples in filter window.
+            // Glossy/metallic surfaces get a tighter cap — specular fireflies are the
+            // main noise source there, and clamping them is far cheaper than blurring.
             var sIrrClamped  = sIrr;
             var sColorClamped = sColor;
             let sIrrLum = luminance_a(sIrr);
             let sColLum = luminance_a(sColor);
-            let filterCap = 12.0;
+            let filterCap = mix(3.0, 12.0, smoothstep(0.1, 0.4, cRough));
             if (sIrrLum > filterCap) { sIrrClamped  = sIrr  * (filterCap / sIrrLum); }
             if (sColLum > filterCap) { sColorClamped = sColor * (filterCap / sColLum); }
 
