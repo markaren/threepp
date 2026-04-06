@@ -2899,8 +2899,17 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 //   high frame count → gentle filter to preserve converged detail
 // ---------------------------------------------------------------------------
 constexpr const char* svgfAtrousWGSL = R"(
-struct AtrousUni { stepSize: u32, mode: u32, frameCount: f32, _p1: f32, }
-// mode: 0 = combined/diffuse (wide kernel, relaxed), 1 = specular (tight, aggressive firefly clamp)
+struct AtrousUni {
+    stepSize: u32, mode: u32, frameCount: f32, _p1: f32,
+    // TAA reprojection data (used when mode=2)
+    prevCamOri: vec4<f32>, prevCamFwd: vec4<f32>, prevCamRgt: vec4<f32>, prevCamUp: vec4<f32>,
+    curCamOri:  vec4<f32>, curCamFwd:  vec4<f32>, curCamRgt:  vec4<f32>, curCamUp:  vec4<f32>,
+    iRes:       vec4<f32>,
+    tanHalfFov: vec4<f32>,
+    movedMeshBits: vec4<u32>,
+}
+// mode: 0 = diffuse (wide kernel, relaxed), 1 = specular (tight, aggressive firefly clamp)
+//       2 = temporal filter (reprojection + variance clamping)
 
 @group(0) @binding(0) var<uniform> uni:      AtrousUni;
 @group(0) @binding(1) var colorIn:  texture_2d<f32>;
@@ -2909,6 +2918,8 @@ struct AtrousUni { stepSize: u32, mode: u32, frameCount: f32, _p1: f32, }
 @group(0) @binding(4) var albedoBuf: texture_2d<f32>;
 @group(0) @binding(5) var hitMeshBuf: texture_2d<f32>;
 @group(0) @binding(6) var momentsBuf: texture_2d<f32>;
+@group(0) @binding(7) var taaHistIn: texture_2d<f32>;   // previous temporal output (.w = history length)
+@group(0) @binding(8) var<storage, read> motionMats: array<mat4x4<f32>>;
 
 fn luminance_a(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -2919,12 +2930,167 @@ fn demod(color: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
     return color / max(albedo, vec3<f32>(0.1));
 }
 
-@compute @workgroup_size(8, 8)
-fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let pixel = vec2<i32>(gid.xy);
-    let res   = vec2<i32>(textureDimensions(colorIn, 0));
-    if (pixel.x >= res.x || pixel.y >= res.y) { return; }
+// ---------------------------------------------------------------------------
+// Mode 2: Temporal filter — reprojection + variance clamping + anti-lag
+// ---------------------------------------------------------------------------
+fn temporal_filter(pixel: vec2<i32>, res: vec2<f32>, iRes: vec2<i32>) {
+    let isSpec  = uni._p1 > 0.5;  // reuse _p1 as sub-mode flag for temporal pass
+    let curSamp  = textureLoad(colorIn, pixel, 0);
+    let curColor = curSamp.xyz;
+    let curFC    = curSamp.w;
 
+    // stepSize == 0 → pass-through mode (reset history, no blending)
+    if (uni.stepSize == 0u) {
+        textureStore(colorOut, pixel, vec4<f32>(curColor, 0.0));
+        return;
+    }
+
+    let curGB    = textureLoad(gBuf, pixel, 0);
+    let curDepth = curGB.w;
+
+    // Sky pixels: pass through, history length = 0
+    if (curDepth < 1e-6) {
+        textureStore(colorOut, pixel, vec4<f32>(curColor, 0.0));
+        return;
+    }
+
+    // Foveated-skipped (stale) pixels: pass through unchanged
+    let globalFC = uni.frameCount;
+    if (curFC < globalFC - 0.5) {
+        let prevHist = textureLoad(taaHistIn, pixel, 0);
+        textureStore(colorOut, pixel, vec4<f32>(prevHist.xyz, prevHist.w));
+        return;
+    }
+
+    // Build 3×3 neighborhood stats for clamping + variance estimation
+    let curMeshId = u32(textureLoad(hitMeshBuf, pixel, 0).r);
+    var cMin = curColor;
+    var cMax = curColor;
+    var m1 = vec3<f32>(0.0);
+    var m2 = vec3<f32>(0.0);
+    var nCount = 0.0;
+    for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+            let sp = clamp(pixel + vec2<i32>(dx, dy), vec2<i32>(0), iRes - 1);
+            let nMeshId = u32(textureLoad(hitMeshBuf, sp, 0).r);
+            if (nMeshId != curMeshId) { continue; }
+            let nc = textureLoad(colorIn, sp, 0).xyz;
+            cMin = min(cMin, nc);
+            cMax = max(cMax, nc);
+            m1 += nc;
+            m2 += nc * nc;
+            nCount += 1.0;
+        }
+    }
+
+    // Variance-based clamp box: µ ± γ·σ
+    // Conservative parameters — this is a stabilizer on already-accumulated data,
+    // NOT the primary temporal accumulator (RT shader handles that).
+    let invN  = 1.0 / max(nCount, 1.0);
+    let mean  = m1 * invN;
+    let sigma = sqrt(max(m2 * invN - mean * mean, vec3<f32>(0.0)));
+    let gamma = select(1.0, 0.5, isSpec);  // tight clamping to prevent ghosting
+    let histLen = textureLoad(taaHistIn, pixel, 0).w;
+    let earlyBoost = select(1.0, 1.5, histLen < 3.0);
+    let boxMin = mean - sigma * gamma * earlyBoost;
+    let boxMax = mean + sigma * gamma * earlyBoost;
+
+    // Reproject current pixel into previous frame's screen space
+    let aspect = res.x / res.y;
+    let ndc = vec2<f32>((f32(pixel.x) + 0.5) / res.x * 2.0 - 1.0,
+                         1.0 - (f32(pixel.y) + 0.5) / res.y * 2.0);
+    let rayDir   = normalize(uni.curCamFwd.xyz
+                            + uni.curCamRgt.xyz * (ndc.x * uni.tanHalfFov.x * aspect)
+                            + uni.curCamUp.xyz  * (ndc.y * uni.tanHalfFov.x));
+    let worldPos = uni.curCamOri.xyz + rayDir * curDepth;
+
+    // For moved meshes: transform world pos by motion matrix
+    let meshIdx = u32(textureLoad(hitMeshBuf, pixel, 0).r);
+    var prevWorldPos = worldPos;
+    var movedMesh = false;
+    if (meshIdx < 128u) {
+        let bit = meshIdx & 31u;
+        let wi  = meshIdx >> 5u;
+        var mbits: u32 = 0u;
+        if      (wi == 0u) { mbits = uni.movedMeshBits.x; }
+        else if (wi == 1u) { mbits = uni.movedMeshBits.y; }
+        else if (wi == 2u) { mbits = uni.movedMeshBits.z; }
+        else               { mbits = uni.movedMeshBits.w; }
+        if (((mbits >> bit) & 1u) != 0u) {
+            prevWorldPos = (motionMats[meshIdx] * vec4<f32>(worldPos, 1.0)).xyz;
+            movedMesh = true;
+        }
+    }
+
+    let toPoint  = prevWorldPos - uni.prevCamOri.xyz;
+    let prevZ    = dot(toPoint, uni.prevCamFwd.xyz);
+
+    var useHist = prevZ > 0.001;
+    let prevNdcX = dot(toPoint, uni.prevCamRgt.xyz) / (prevZ * uni.tanHalfFov.x * aspect);
+    let prevNdcY = dot(toPoint, uni.prevCamUp.xyz)  / (prevZ * uni.tanHalfFov.x);
+    let prevPx   = vec2<f32>((prevNdcX + 1.0) * 0.5 * res.x - 0.5,
+                              (1.0 - prevNdcY) * 0.5 * res.y - 0.5);
+    let prevPixel = vec2<i32>(i32(floor(prevPx.x)), i32(floor(prevPx.y)));
+
+    // Bounds check (need 2×2 footprint for bilinear)
+    useHist = useHist && prevPixel.x >= 0 && prevPixel.x + 1 < iRes.x
+                      && prevPixel.y >= 0 && prevPixel.y + 1 < iRes.y;
+
+    // Hard disocclusion bypass
+    let disoccluded = curFC < 1.5 || movedMesh;
+
+    var result = curColor;
+    var newHistLen = 1.0;
+
+    if (useHist && !disoccluded) {
+        // Bilinear interpolation of history color
+        let fx = fract(prevPx.x);
+        let fy = fract(prevPx.y);
+        let h00 = textureLoad(taaHistIn, prevPixel, 0);
+        let h10 = textureLoad(taaHistIn, prevPixel + vec2<i32>(1, 0), 0);
+        let h01 = textureLoad(taaHistIn, prevPixel + vec2<i32>(0, 1), 0);
+        let h11 = textureLoad(taaHistIn, prevPixel + vec2<i32>(1, 1), 0);
+        let histColor = mix(mix(h00.xyz, h10.xyz, fx), mix(h01.xyz, h11.xyz, fx), fy);
+        let prevHistLen = mix(mix(h00.w, h10.w, fx), mix(h01.w, h11.w, fx), fy);
+
+        // Luminance-based anti-lag
+        let curLum  = luminance_a(curColor);
+        let histLum = luminance_a(histColor);
+        let lumDiff = abs(curLum - histLum) / max(max(curLum, histLum), 0.01);
+        let antiLag = smoothstep(0.1, 0.5, lumDiff);
+
+        // Clamp history to variance-based neighborhood box
+        let clamped = clamp(histColor, boxMin, boxMax);
+        let clampDist = length(histColor - clamped) / max(length(histColor), 0.01);
+
+        // Adaptive history length — short since RT shader already accumulates
+        let maxHist = select(8.0, 4.0, isSpec);
+        var effHistLen = min(prevHistLen, maxHist);
+        effHistLen = mix(effHistLen, 0.0, antiLag);
+        effHistLen = mix(effHistLen, 0.0, smoothstep(0.05, 0.3, clampDist));
+
+        let alpha = 1.0 / (effHistLen + 1.0);
+
+        // Roughness-adaptive blend for specular mode
+        var finalAlpha = alpha;
+        if (isSpec) {
+            let primaryRough = textureLoad(albedoBuf, pixel, 0).w;
+            let smoothness = 1.0 - clamp(primaryRough, 0.0, 1.0);
+            let specBoost = mix(1.0, 2.5, smoothness * smoothness);
+            finalAlpha = min(1.0, alpha * specBoost);
+        }
+
+        result = mix(clamped, curColor, finalAlpha);
+        newHistLen = effHistLen + 1.0;
+    }
+
+    textureStore(colorOut, pixel, vec4<f32>(result, newHistLen));
+}
+
+// ---------------------------------------------------------------------------
+// Mode 0/1: Spatial à-trous wavelet filter
+// ---------------------------------------------------------------------------
+fn spatial_filter(pixel: vec2<i32>, res: vec2<i32>) {
     let step = i32(uni.stepSize);
 
     let cSamp   = textureLoad(colorIn, pixel, 0);
@@ -2935,7 +3101,7 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cDepth  = cGB.w;
     let cAlbedoFull = textureLoad(albedoBuf, pixel, 0);
     let cAlbedo = cAlbedoFull.xyz;
-    let cRough  = cAlbedoFull.w;  // linear roughness (0 = mirror, 1 = diffuse)
+    let cRough  = cAlbedoFull.w;
     let cHitId  = textureLoad(hitMeshBuf, pixel, 0);
     let cMeshId = u32(cHitId.r);
     let cMatId  = i32(cHitId.g);
@@ -2946,26 +3112,19 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Specular mode: skip demodulation (specular is not modulated by surface albedo).
     let isSpec = uni.mode == 1u;
-    // Demodulate center pixel for accumulation path (diffuse only)
     let cIrr = select(demod(cColor, cAlbedo), cColor, isSpec);
-    // Blend luminance source: demod for bright surfaces (texture-aware), raw for dark (stable)
     let albedoLum = luminance_a(cAlbedo);
     let demodBlend = select(smoothstep(0.05, 0.2, albedoLum), 0.0, isSpec);
     let cLum = mix(luminance_a(cColor), luminance_a(cIrr), demodBlend);
 
-    // Variance-guided luminance sigma: read temporal variance from moments buffer.
-    // σ² = E[L²] - E[L]² gives per-pixel noise estimate — filter aggressively
-    // where variance is high, stay sharp where converged.
+    // Variance-guided luminance sigma
     let moments = textureLoad(momentsBuf, pixel, 0).xy;
     let variance = max(moments.y - moments.x * moments.x, 0.0);
-    // Specular: very wide sigma so the filter aggressively smooths noise.
-    // Without TAA temporal smoothing, the spatial filter is our only tool.
     let baseSigma = select(0.7, mix(0.5, 2.0, cRough), isSpec);
     let lumSigma = max(select(0.02, 0.1, isSpec), sqrt(variance) * baseSigma);
 
-    // 5×5 bilateral filter — tracks both demodulated irradiance and raw color
+    // 5×5 bilateral filter
     let kw = array<f32, 5>(1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
 
     var irrSum    = vec3<f32>(0.0);
@@ -2978,11 +3137,6 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let sHitId  = textureLoad(hitMeshBuf, sp, 0);
             let sMeshId = u32(sHitId.r);
             let sMatId  = i32(sHitId.g);
-            // Reject only when BOTH mesh and material differ. This allows the
-            // filter to share samples across distinct meshes that have the same
-            // material (two chairs, repeated walls, foliage instances), which
-            // roughly doubles usable samples per pixel in scenes with repeated
-            // elements, without introducing cross-material light leak.
             if (sMeshId != cMeshId && sMatId != cMatId) { continue; }
 
             let sColor  = textureLoad(colorIn, sp, 0).xyz;
@@ -2992,24 +3146,14 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let sNorm   = sGB.xyz;
             let sDepth  = sGB.w;
 
-            // Spatial weight (separable Gaussian)
             let w_s = kw[dy + 2] * kw[dx + 2];
-            // Normal edge-stopping: FC-adaptive for BOTH modes.
-            // Low cFC (noisy, moving): relaxed (pow=2) so the filter can smooth
-            // curved surfaces (torus, sphere) where normals vary rapidly.
-            // High cFC (converged): aggressive (pow=128) to preserve sharp edges.
-            // The material ID check already prevents cross-object bleed.
             let specNormPow = mix(8.0, 16.0, smoothstep(0.0, 8.0, cFC));
             let diffNormPow = mix(8.0, 128.0, smoothstep(0.0, 16.0, cFC));
             let normPow = select(diffNormPow, specNormPow, isSpec);
             let w_n = pow(max(0.0, dot(cNorm, sNorm)), normPow);
-            // Depth edge-stopping: FC-adaptive — relaxed when noisy
             let depthBase = select(4.0, mix(1.0, 3.0, cRough), isSpec);
             let depthScale = mix(1.0, depthBase, smoothstep(0.0, 8.0, cFC));
             let w_d = exp(-abs(cDepth - sDepth) * depthScale / (cDepth + 0.01));
-            // Luminance edge-stopping: always active, but with wider sigma at
-            // low cFC so the filter can still smooth noisy curved surfaces.
-            // At high cFC, tight sigma preserves texture detail on flat surfaces.
             let lumBoost = mix(4.0, 1.0, smoothstep(0.0, 8.0, cFC));
             let effectiveLumSigma = lumSigma * lumBoost;
             let sAlbLum = luminance_a(sAlbedo);
@@ -3017,16 +3161,10 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let sLum = mix(luminance_a(sColor), luminance_a(sIrr), sDemod);
             let w_l = exp(-(sLum - cLum) * (sLum - cLum) / (effectiveLumSigma * effectiveLumSigma + 1e-6));
 
-            // Per-sample outlier clamp: suppress extreme bright samples in filter window.
-            // Specular mode: tighter cap to kill fireflies without blurring.
             var sIrrClamped  = sIrr;
             var sColorClamped = sColor;
             let sIrrLum = luminance_a(sIrr);
             let sColLum = luminance_a(sColor);
-            // Specular firefly cap: roughness-adaptive — rough metals tolerate
-            // higher values (wider lobe, more variance), glossy needs tight cap.
-            // Aggressive clamping is critical since we don't have TAA temporal smoothing
-            // on the specular split buffer.
             let specCap = mix(4.0, 10.0, cRough);
             let filterCap = select(12.0, specCap, isSpec);
             if (sIrrLum > filterCap) { sIrrClamped  = sIrr  * (filterCap / sIrrLum); }
@@ -3039,18 +3177,27 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Blend: demod/remod path for bright surfaces, raw filter for dark surfaces
     let filteredIrr = select(cIrr, irrSum / weightSum, weightSum > 1e-6);
     let filteredRaw = select(cColor, rawSum / weightSum, weightSum > 1e-6);
     let demodResult = filteredIrr * cAlbedo;
     let spatialResult = mix(filteredRaw, demodResult, demodBlend);
-    // Roughness-driven blend for specular: smooth metals (low roughness)
-    // have clean reflections — don't blur them. Rough surfaces benefit
-    // from spatial filtering. Diffuse always gets full filtering.
     let specRoughBlend = smoothstep(0.05, 0.3, cRough);
     let filterBlend = select(1.0, specRoughBlend, isSpec);
     let result = mix(cColor, spatialResult, filterBlend);
     textureStore(colorOut, pixel, vec4<f32>(result, cFC));
+}
+
+@compute @workgroup_size(8, 8)
+fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let pixel = vec2<i32>(gid.xy);
+    let res   = vec2<i32>(textureDimensions(colorIn, 0));
+    if (pixel.x >= res.x || pixel.y >= res.y) { return; }
+
+    if (uni.mode == 2u) {
+        temporal_filter(pixel, vec2<f32>(f32(res.x), f32(res.y)), res);
+    } else {
+        spatial_filter(pixel, res);
+    }
 }
 )";
 
@@ -3266,8 +3413,14 @@ struct alignas(16) RefitGpuUniforms {
     uint32_t leafCount, groupsX, _p[2];
 };
 struct alignas(16) AtrousGpuUniforms {
-    uint32_t stepSize, mode;  // mode: 0=diffuse, 1=specular
+    uint32_t stepSize, mode;  // mode: 0=diffuse, 1=specular, 2=temporal
     float    frameCount, _p1;
+    // TAA reprojection data (only used when mode=2)
+    float prevCamOri[4], prevCamFwd[4], prevCamRgt[4], prevCamUp[4];
+    float curCamOri[4],  curCamFwd[4],  curCamRgt[4],  curCamUp[4];
+    float iRes[4];
+    float tanHalfFov[4];
+    uint32_t movedMeshBits[4];
 };
 struct alignas(16) DepthFillUniforms {
     float projView[16];   // NDC-remapped proj * view  (64 bytes)
@@ -4682,12 +4835,12 @@ struct WgpuPathTracer::Impl {
                        WgpuTexture::Format::RGBA16Float),
           taaHistDiffB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                        WgpuTexture::Format::RGBA16Float),
-          taaHistDiffRead(&denoisedDiff), taaHistDiffWrite(&filteredA),
+          taaHistDiffRead(&taaHistDiffA), taaHistDiffWrite(&taaHistDiffB),
           taaHistSpecA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                        WgpuTexture::Format::RGBA16Float),
           taaHistSpecB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                        WgpuTexture::Format::RGBA16Float),
-          taaHistSpecRead(&denoisedSpec), taaHistSpecWrite(&filteredB),
+          taaHistSpecRead(&taaHistSpecA), taaHistSpecWrite(&taaHistSpecB),
           // Denoiser pipelines
           taaPipeline(r, taaWGSL, "taa_main"),
           atrousPipeline(r, svgfAtrousWGSL, "svgf_atrous_main"),
@@ -4779,7 +4932,7 @@ struct WgpuPathTracer::Impl {
         taaPipeline.setStorageBufferRead(6, motionMatBuf);
         taaPipeline.setTexture(7, albedoTex);
 
-        // Spatial filter — set ALL bindings upfront
+        // Spatial + temporal filter — set ALL bindings upfront
         atrousPipeline.setUniformBuffer(0, atrousUniBuf);
         atrousPipeline.setTexture(1, *readAccum);
         atrousPipeline.setStorageTexture(2, *writeAccum);
@@ -4787,6 +4940,8 @@ struct WgpuPathTracer::Impl {
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(5, *readHitMesh);
         atrousPipeline.setTexture(6, *momentsRead);
+        atrousPipeline.setTexture(7, *taaHistDiffRead);
+        atrousPipeline.setStorageBufferRead(8, motionMatBuf);
 
         // Kick off async shader compilation for the small helper pipelines.
         // The large RT shaders are compiled after the first topology build so that
@@ -4960,14 +5115,12 @@ struct WgpuPathTracer::Impl {
 
         taaHistDiffA = WgpuTexture(renderer, uw, uh, fmt);
         taaHistDiffB = WgpuTexture(renderer, uw, uh, fmt);
-        // Workaround: use displayable textures for TAA history ping-pong
-        // (taaHistDiff/Spec textures have display issues in WebGPU abstraction)
-        taaHistDiffRead  = &denoisedDiff;
-        taaHistDiffWrite = &filteredA;
+        taaHistDiffRead  = &taaHistDiffA;
+        taaHistDiffWrite = &taaHistDiffB;
         taaHistSpecA = WgpuTexture(renderer, uw, uh, fmt);
         taaHistSpecB = WgpuTexture(renderer, uw, uh, fmt);
-        taaHistSpecRead  = &denoisedSpec;
-        taaHistSpecWrite = &filteredB;
+        taaHistSpecRead  = &taaHistSpecA;
+        taaHistSpecWrite = &taaHistSpecB;
 
         filteredA = WgpuTexture(renderer, uw, uh, fmt);
         filteredB = WgpuTexture(renderer, uw, uh, fmt);
@@ -5015,6 +5168,8 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageBufferRead(29, motionMatBuf);
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(6, *momentsRead);
+        atrousPipeline.setTexture(7, *taaHistDiffRead);
+        atrousPipeline.setStorageBufferRead(8, motionMatBuf);
         taaPipeline.setTexture(7, albedoTex);
 
         frameCount_ = 0.f;
@@ -5363,6 +5518,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.vtPipeline.setStorageBufferRead(1, d.matrixBuf);
             d.taaPipeline.setStorageBufferRead(6, d.motionMatBuf);
             d.rtPipeline.setStorageBufferRead(29, d.motionMatBuf);
+            d.atrousPipeline.setStorageBufferRead(8, d.motionMatBuf);
         }
 
         // Upload atlas
@@ -5919,10 +6075,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // Update denoiser's moments reference (reads converged moments)
     d.atrousPipeline.setTexture(6, *d.momentsRead);
 
-    // Spatial denoiser (path tracer mode only) — à-trous wavelet filter on
-    // split diffuse/specular channels independently. Each channel gets its own
-    // mode (diffuse=0, specular=1) with roughness-adaptive edge-stopping.
-    // 3 cascade passes with step sizes 1, 2, 4 give effective 25-pixel radius.
+    // Denoiser (path tracer mode only):
+    // 1. Spatial à-trous (mode=0/1): wavelet filter on RT-accumulated channels
+    // 2. Temporal stabilizer (mode=2): light blend of spatial output with history
+    //    to reduce frame-to-frame flickering of the spatial filter
     WgpuTexture* displayTex = d.readAccum;
     WgpuTexture* displayDiff = d.readDiffAccum;
     WgpuTexture* displaySpec = d.readSpecAccum;
@@ -5935,41 +6091,86 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         AtrousGpuUniforms au{};
         au.frameCount = d.frameCount_;
 
-        // Helper: run N-pass à-trous cascade on a channel.
-        // Uses denoisedXxx and filteredX as ping-pong targets.
-        // Input: srcAccum (raw accumulation), output lands in dstDenoised.
+        // Fill reprojection data (used by temporal stabilizer pass)
+        au.prevCamOri[0] = d.prevCamOri_[0]; au.prevCamOri[1] = d.prevCamOri_[1]; au.prevCamOri[2] = d.prevCamOri_[2];
+        au.prevCamFwd[0] = d.prevCamFwd_[0]; au.prevCamFwd[1] = d.prevCamFwd_[1]; au.prevCamFwd[2] = d.prevCamFwd_[2];
+        au.prevCamRgt[0] = d.prevCamRgt_[0]; au.prevCamRgt[1] = d.prevCamRgt_[1]; au.prevCamRgt[2] = d.prevCamRgt_[2];
+        au.prevCamUp[0]  = d.prevCamUp_[0];  au.prevCamUp[1]  = d.prevCamUp_[1];  au.prevCamUp[2]  = d.prevCamUp_[2];
+        au.curCamOri[0] = camPos.x; au.curCamOri[1] = camPos.y; au.curCamOri[2] = camPos.z;
+        au.curCamFwd[0] = fwd.x; au.curCamFwd[1] = fwd.y; au.curCamFwd[2] = fwd.z;
+        au.curCamRgt[0] = rgt.x; au.curCamRgt[1] = rgt.y; au.curCamRgt[2] = rgt.z;
+        au.curCamUp[0]  = up.x;  au.curCamUp[1]  = up.y;  au.curCamUp[2]  = up.z;
+        au.iRes[0] = static_cast<float>(d.width_);
+        au.iRes[1] = static_cast<float>(d.height_);
+        au.tanHalfFov[0] = tanHalfFov;
+        au.movedMeshBits[0] = movedBits[0];
+        au.movedMeshBits[1] = movedBits[1];
+        au.movedMeshBits[2] = movedBits[2];
+        au.movedMeshBits[3] = movedBits[3];
+
+        d.atrousPipeline.setTexture(3, *d.gBufPrev);
+        d.atrousPipeline.setTexture(5, *d.readHitMesh);
+
+        // --- Step 1: Spatial passes on RT-accumulated output ---
         auto runAtrous = [&](WgpuTexture& srcAccum, WgpuTexture& dstDenoised,
                              WgpuTexture& tmpFiltered, uint32_t mode, int passes) {
             au.mode = mode;
-            d.atrousPipeline.setTexture(3, *d.gBufPrev);
-            d.atrousPipeline.setTexture(5, *d.readHitMesh);
-
-            // Ping-pong: src → dst → tmp → dst → ...
-            // Pass 0 always reads srcAccum, writes dstDenoised.
-            // Odd passes write tmpFiltered, even passes write dstDenoised.
+            au._p1 = 0.f;
             WgpuTexture* readTex  = &srcAccum;
             for (int p = 0; p < passes; ++p) {
                 WgpuTexture* writeTex = (p % 2 == 0) ? &dstDenoised : &tmpFiltered;
-                au.stepSize = static_cast<uint32_t>(1 << p);  // 1, 2, 4, ...
+                au.stepSize = static_cast<uint32_t>(1 << p);
                 d.atrousUniBuf.write(&au, sizeof(au));
                 d.atrousPipeline.setTexture(1, *readTex);
                 d.atrousPipeline.setStorageTexture(2, *writeTex);
                 d.atrousPipeline.dispatch(gx, gy);
                 readTex = writeTex;
             }
-            // If odd number of passes, result is in dstDenoised (good).
-            // If even number, result is in tmpFiltered — copy it.
-            // With passes=1 (diffuse) or passes=3 (specular), always odd → in dstDenoised.
         };
 
-        // Diffuse: 3 passes (step 1,2,4) — odd count so result lands in dstDenoised
+        // Diffuse spatial: 3 passes (step 1,2,4) → denoisedDiff
         runAtrous(*d.readDiffAccum, d.denoisedDiff, d.filteredA, 0, 3);
-
-        // Specular: 3 passes (step 1,2,4)
+        // Specular spatial: 3 passes (step 1,2,4) → denoisedSpec
         runAtrous(*d.readSpecAccum, d.denoisedSpec, d.filteredB, 1, 3);
 
-        displayDiff = &d.denoisedDiff;
-        displaySpec = &d.denoisedSpec;
+        // --- Step 2: Temporal stabilizer on spatially denoised output ---
+        // Blends the current spatial result with previous denoised history to
+        // reduce frame-to-frame flickering. When camera/mesh moves, runs in
+        // pass-through mode (stepSize=0) to keep history fresh without blending.
+        const bool cameraMoved =
+            std::abs(camPos.x - d.prevCamOri_[0]) > 1e-5f ||
+            std::abs(camPos.y - d.prevCamOri_[1]) > 1e-5f ||
+            std::abs(camPos.z - d.prevCamOri_[2]) > 1e-5f ||
+            std::abs(fwd.x - d.prevCamFwd_[0]) > 1e-5f ||
+            std::abs(fwd.y - d.prevCamFwd_[1]) > 1e-5f ||
+            std::abs(fwd.z - d.prevCamFwd_[2]) > 1e-5f;
+
+        au.mode = 2;
+        // stepSize=0 → pass-through (reset history), stepSize=1 → blend with history
+        au.stepSize = (cameraMoved || hasMotion) ? 0u : 1u;
+
+        // Diffuse temporal stabilizer
+        au._p1 = 0.f;
+        d.atrousUniBuf.write(&au, sizeof(au));
+        d.atrousPipeline.setTexture(1, d.denoisedDiff);
+        d.atrousPipeline.setStorageTexture(2, *d.taaHistDiffWrite);
+        d.atrousPipeline.setTexture(7, *d.taaHistDiffRead);
+        d.atrousPipeline.dispatch(gx, gy);
+
+        // Specular temporal stabilizer
+        au._p1 = 1.f;
+        d.atrousUniBuf.write(&au, sizeof(au));
+        d.atrousPipeline.setTexture(1, d.denoisedSpec);
+        d.atrousPipeline.setStorageTexture(2, *d.taaHistSpecWrite);
+        d.atrousPipeline.setTexture(7, *d.taaHistSpecRead);
+        d.atrousPipeline.dispatch(gx, gy);
+
+        // Swap TAA history ping-pong
+        std::swap(d.taaHistDiffRead, d.taaHistDiffWrite);
+        std::swap(d.taaHistSpecRead, d.taaHistSpecWrite);
+
+        displayDiff = d.taaHistDiffRead;
+        displaySpec = d.taaHistSpecRead;
     }
 
     // Store camera for next frame's reprojection (must run every frame, not just when denoiser is active)
