@@ -2175,9 +2175,17 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Foveated skip: pass through previous accumulation unchanged.
     // The pixel keeps its existing color & frame count; it will trace on a future frame.
     if (foveatedSkip) {
-        textureStore(accumWrite,   pixel, textureLoad(accumRead, pixel, 0));
-        textureStore(diffAccumWrite, pixel, textureLoad(diffAccumRead, pixel, 0));
-        textureStore(specAccumWrite, pixel, textureLoad(specAccumRead, pixel, 0));
+        let rawMode = rt.restirParams.w > 0.5;
+        if (rawMode) {
+            // Raw mode: write sentinel .w = -1 so temporal denoiser knows to pass through history
+            textureStore(accumWrite,     pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
+            textureStore(diffAccumWrite, pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
+            textureStore(specAccumWrite, pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
+        } else {
+            textureStore(accumWrite,   pixel, textureLoad(accumRead, pixel, 0));
+            textureStore(diffAccumWrite, pixel, textureLoad(diffAccumRead, pixel, 0));
+            textureStore(specAccumWrite, pixel, textureLoad(specAccumRead, pixel, 0));
+        }
         textureStore(hitMeshWrite, pixel, textureLoad(hitMeshRead, pixel, 0));
         // Preserve previous gBuf (depth) so display shader tone-maps correctly.
         textureStore(gBufWrite,    pixel, textureLoad(gBufRead, pixel, 0));
@@ -2220,6 +2228,44 @@ R"(
     var touchedMoved:   bool;
     var ptResult = pathTrace(ray, &seed, pixel, varianceReducedBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &primaryRough, &primaryMatIdx, &touchedMoved);
     var sample = ptResult.diff + ptResult.spec;
+
+    // Raw 1-spp output mode (temporal denoiser pipeline)
+    let rawOutputMode = rt.restirParams.w > 0.5;
+    if (rawOutputMode) {
+        let lum3 = vec3<f32>(0.2126, 0.7152, 0.0722);
+        // NaN guard
+        var sampleClean = select(vec3<f32>(0.0), sample, sample.x == sample.x);
+        // Hard firefly cap
+        let hardCap = 12.0;
+        let rawLum = dot(sampleClean, lum3);
+        if (rawLum > hardCap) { sampleClean = sampleClean * (hardCap / rawLum); }
+
+        // Split diff/spec with clamping
+        let diffSample = select(vec3<f32>(0.0), ptResult.diff, ptResult.diff.x == ptResult.diff.x);
+        let specSample = select(vec3<f32>(0.0), ptResult.spec, ptResult.spec.x == ptResult.spec.x);
+        var dClamped = diffSample;
+        let dLum = dot(diffSample, lum3);
+        if (dLum > hardCap) { dClamped = diffSample * (hardCap / dLum); }
+        let specHardCap = mix(3.0, 8.0, primaryRough);
+        var sClamped = specSample;
+        let sLum = dot(specSample, lum3);
+        if (sLum > specHardCap) { sClamped = specSample * (specHardCap / sLum); }
+
+        let fc = rt.frameCount.x;
+        textureStore(accumWrite, pixel, vec4<f32>(sampleClean, fc));
+        textureStore(diffAccumWrite, pixel, vec4<f32>(dClamped, fc));
+        textureStore(specAccumWrite, pixel, vec4<f32>(sClamped, fc));
+
+        // Raw single-sample moments
+        let sLumMom = dot(sampleClean, lum3);
+        textureStore(momentsWrite, pixel, vec4<f32>(sLumMom, sLumMom * sLumMom, 0.0, 0.0));
+
+        // G-buffer, hit mesh (with touchedMoved in .b), albedo
+        textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), select(0.0, 1.0, touchedMoved), 0.0));
+        textureStore(albedoWrite, pixel, vec4<f32>(primaryAlbedo, primaryRough));
+        textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
+        return;
+    }
 
     let prev     = textureLoad(accumRead, pixel, 0);
     var old      = prev.xyz;
@@ -2740,16 +2786,18 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Foveated-skipped (stale) pixels: pass through unchanged — don't blend stale data
-    let globalFC = taa.frameCount.x;
-    if (curFC < globalFC - 0.5) {
+    // Foveated-skipped pixels: .w = -1 sentinel in raw mode — pass through history
+    if (curFC < -0.5) {
         let prevHist = textureLoad(taaHistIn, pixel, 0);
         textureStore(taaOut, pixel, vec4<f32>(prevHist.xyz, prevHist.w));
         return;
     }
 
-    // Build 3×3 neighborhood stats for clamping + variance estimation
-    let curMeshId = u32(textureLoad(hitMeshTex, pixel, 0).r);
+    // Build 3×3 neighborhood stats from raw input.
+    // TODO: once binding 8 (preFilteredIn) works, use pre-filtered for stable stats.
+    let hitInfo  = textureLoad(hitMeshTex, pixel, 0);
+    let curMeshId = u32(hitInfo.r);
+    let touchedMoved = hitInfo.b > 0.5;
     var cMin = curColor;
     var cMax = curColor;
     var m1 = vec3<f32>(0.0);   // 1st moment (mean)
@@ -2773,15 +2821,16 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let invN  = 1.0 / max(nCount, 1.0);
     let mean  = m1 * invN;
     let sigma = sqrt(max(m2 * invN - mean * mean, vec3<f32>(0.0)));
-    // Gamma controls box width: lower = tighter clamping = less ghosting but more flickering
-    // Diffuse: wider (more stable, diffuse is spatially smooth)
-    // Specular: tighter (specular changes faster, needs responsive clamping)
-    let gamma = select(1.5, 0.75, isSpec);
-    // Widen when history is very short (noisy current frame, trust history more)
+    // Gamma controls box width: wide enough for noisy 1-spp but tight enough to reject ghosts.
+    let gamma = select(3.0, 1.5, isSpec);
+    // Minimum box half-width: prevents box collapse when sigma→0
+    let minHalfWidth = vec3<f32>(0.02);
+    let halfWidth = max(sigma * gamma, minHalfWidth);
+    // Widen when history is very short (first few frames, trust neighborhood more)
     let histLen = textureLoad(taaHistIn, pixel, 0).w;
     let earlyBoost = select(1.0, 2.0, histLen < 4.0);
-    let boxMin = mean - sigma * gamma * earlyBoost;
-    let boxMax = mean + sigma * gamma * earlyBoost;
+    let boxMin = mean - halfWidth * earlyBoost;
+    let boxMax = mean + halfWidth * earlyBoost;
 
     // Reproject current pixel into previous frame's screen space
     let aspect = res.x / res.y;
@@ -2824,9 +2873,12 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     useHist = useHist && prevPixel.x >= 0 && prevPixel.x + 1 < iRes.x
                       && prevPixel.y >= 0 && prevPixel.y + 1 < iRes.y;
 
-    // Hard disocclusion bypass: when the path tracer reset this pixel's frame count,
-    // or the mesh at this pixel moved, skip TAA history entirely — output raw current.
-    let disoccluded = curFC < 1.5 || movedMesh;
+    // Depth-based disocclusion: compare prevZ (z-depth in prev camera space) with
+    // curZDepth (z-depth in current camera space). Can't use curDepth directly because
+    // it's ray distance, not z-depth — differs by cos(θ) for off-center pixels.
+    let curZDepth = dot(worldPos - taa.curCamOri.xyz, taa.curCamFwd.xyz);
+    let depthRatio = abs(prevZ - curZDepth) / max(curZDepth, 0.01);
+    let disoccluded = useHist && depthRatio > 0.1;
 
     var result = curColor;
     var newHistLen = 1.0;  // reset: this is the first sample
@@ -2842,14 +2894,11 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let histColor = mix(mix(h00.xyz, h10.xyz, fx), mix(h01.xyz, h11.xyz, fx), fy);
         let prevHistLen = mix(mix(h00.w, h10.w, fx), mix(h01.w, h11.w, fx), fy);
 
-        // Luminance-based anti-lag: detect sudden luminance changes and reduce
-        // history weight proportionally. This fights ghosting from lighting changes
-        // that motion vectors can't capture (lights turning on/off, shadows moving).
-        let curLum  = luminance_t(curColor);
-        let histLum = luminance_t(histColor);
-        let lumDiff = abs(curLum - histLum) / max(max(curLum, histLum), 0.01);
-        // antiLag: 0 = no change → keep history; 1 = big change → reset
-        let antiLag = smoothstep(0.1, 0.5, lumDiff);
+        // Anti-lag disabled for raw 1-spp pipeline: Monte Carlo noise between
+        // frames causes huge per-pixel luminance differences that look like scene
+        // changes to the anti-lag detector, preventing any accumulation.
+        // TODO: re-enable with pre-filtered luminance comparison once binding 8 works.
+        let antiLag = 0.0;
 
         // Clamp history to variance-based neighborhood box
         let clamped = clamp(histColor, boxMin, boxMax);
@@ -2857,15 +2906,24 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // How much did clamping change the history? If a lot, history is unreliable.
         let clampDist = length(histColor - clamped) / max(length(histColor), 0.01);
 
-        // Adaptive history length: cap based on reliability signals
-        // Max history = 32 frames for diffuse (stable), 16 for specular (view-dependent)
-        let maxHist = select(32.0, 16.0, isSpec);
+        // Roughness-adaptive history caps
+        let primaryRoughForCap = textureLoad(albedoTex, pixel, 0).w;
+        let roughT = smoothstep(0.05, 0.3, primaryRoughForCap);
+        // Diffuse: 8 (rough/fast-changing) to 256 (smooth/stable)
+        // Specular: 8 (glossy reflections change fast) to 32 (rough spec is stable)
+        let maxHist = select(
+            mix(8.0, 256.0, roughT),  // diffuse
+            mix(8.0, 32.0, roughT),   // specular
+            isSpec
+        );
         var effHistLen = min(prevHistLen, maxHist);
         // Anti-lag: reduce effective history when luminance changed
         effHistLen = mix(effHistLen, 0.0, antiLag);
-        // Clamp distance: reduce history when it was clamped a lot (disocclusion)
-        effHistLen = mix(effHistLen, 0.0, smoothstep(0.05, 0.3, clampDist));
-        // Note: movedMesh and curFC<1.5 cases are handled above (disoccluded bypass)
+        // Clamp distance: reduce history when it was clamped a lot.
+        // Moderately relaxed for raw 1-spp (noisy variance box causes some clamping).
+        effHistLen = mix(effHistLen, 0.0, smoothstep(0.15, 0.5, clampDist));
+        // touchedMoved: mesh moved this frame — cap history aggressively
+        if (touchedMoved) { effHistLen = min(effHistLen, 8.0); }
 
         // Blend factor from history length: α = 1/(histLen+1)
         // More history → blend less current frame → smoother
@@ -2889,6 +2947,84 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // .w = per-pixel history length (used by spatial filter for variance-adaptive sigma)
     textureStore(taaOut, pixel, vec4<f32>(result, newHistLen));
+}
+)";
+
+// ---------------------------------------------------------------------------
+// WGSL spatial pre-filter for temporal denoiser pipeline.
+// Lightweight 5×5 cross-bilateral: stabilizes neighborhood statistics
+// so the temporal filter's variance clamping box is meaningful.
+// No luminance edge-stopping (signal too noisy), no demodulation.
+// ---------------------------------------------------------------------------
+constexpr const char* preFilterWGSL = R"(
+struct PreFilterUni { stepSize: u32, _p0: u32, _p1: f32, _p2: f32, }
+
+@group(0) @binding(0) var<uniform> uni: PreFilterUni;
+@group(0) @binding(1) var colorIn:    texture_2d<f32>;
+@group(0) @binding(2) var colorOut:   texture_storage_2d<rgba16float, write>;
+@group(0) @binding(3) var gBuf:       texture_2d<f32>;
+@group(0) @binding(4) var hitMeshBuf: texture_2d<f32>;
+
+@compute @workgroup_size(8, 8)
+fn prefilter_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let pixel = vec2<i32>(gid.xy);
+    let res   = vec2<i32>(textureDimensions(colorIn, 0));
+    if (pixel.x >= res.x || pixel.y >= res.y) { return; }
+
+    let step = i32(uni.stepSize);
+
+    let cSamp  = textureLoad(colorIn, pixel, 0);
+    let cColor = cSamp.xyz;
+    let cFC    = cSamp.w;
+    let cGB    = textureLoad(gBuf, pixel, 0);
+    let cNorm  = cGB.xyz;
+    let cDepth = cGB.w;
+    let cMeshId = u32(textureLoad(hitMeshBuf, pixel, 0).r);
+
+    // Sky or foveated-skip sentinel: pass through
+    if (cDepth < 1e-6 || cFC < -0.5) {
+        textureStore(colorOut, pixel, vec4<f32>(cColor, cFC));
+        return;
+    }
+
+    // 5×5 Gaussian kernel weights (separable)
+    let kw = array<f32, 5>(1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
+
+    var colorSum = vec3<f32>(0.0);
+    var weightSum = 0.0;
+    let fireflyCap = 12.0;
+
+    for (var dy = -2; dy <= 2; dy++) {
+        for (var dx = -2; dx <= 2; dx++) {
+            let sp = clamp(pixel + vec2<i32>(dx, dy) * step, vec2<i32>(0), res - 1);
+
+            let sMeshId = u32(textureLoad(hitMeshBuf, sp, 0).r);
+            if (sMeshId != cMeshId) { continue; }
+
+            let sGB    = textureLoad(gBuf, sp, 0);
+            let sNorm  = sGB.xyz;
+            let sDepth = sGB.w;
+
+            // Spatial weight
+            let w_s = kw[dy + 2] * kw[dx + 2];
+            // Normal edge-stopping (relaxed — pow=4)
+            let w_n = pow(max(0.0, dot(cNorm, sNorm)), 4.0);
+            // Depth edge-stopping (relaxed)
+            let w_d = exp(-abs(cDepth - sDepth) * 1.0 / (cDepth + 0.01));
+
+            // Read and firefly-clamp neighbor
+            var sColor = textureLoad(colorIn, sp, 0).xyz;
+            let sLum = dot(sColor, vec3<f32>(0.2126, 0.7152, 0.0722));
+            if (sLum > fireflyCap) { sColor = sColor * (fireflyCap / sLum); }
+
+            let w = w_s * w_n * w_d;
+            colorSum += sColor * w;
+            weightSum += w;
+        }
+    }
+
+    let result = select(cColor, colorSum / weightSum, weightSum > 1e-6);
+    textureStore(colorOut, pixel, vec4<f32>(result, cFC));
 }
 )";
 
@@ -3267,6 +3403,10 @@ struct alignas(16) RefitGpuUniforms {
 struct alignas(16) AtrousGpuUniforms {
     uint32_t stepSize, mode;  // mode: 0=diffuse, 1=specular
     float    frameCount, _p1;
+};
+struct alignas(16) PreFilterGpuUniforms {
+    uint32_t stepSize, _p0;
+    float    _p1, _p2;
 };
 struct alignas(16) DepthFillUniforms {
     float projView[16];   // NDC-remapped proj * view  (64 bytes)
@@ -4431,9 +4571,12 @@ struct WgpuPathTracer::Impl {
     // Denoiser pipelines
     WgpuComputePipeline taaPipeline;
     WgpuComputePipeline atrousPipeline;
+    WgpuComputePipeline preFilterPipeline;
     WgpuBuffer  taaUniBuf;
     WgpuBuffer  atrousUniBuf;
+    WgpuBuffer  preFilterUniBuf;
     bool denoiserEnabled_ = true;
+    bool temporalDenoiserEnabled_ = false;
     bool restirEnabled_ = true;
     float envIntensity_ = 0.5f;
     int maxBounces_ = 5;
@@ -4681,17 +4824,19 @@ struct WgpuPathTracer::Impl {
                        WgpuTexture::Format::RGBA16Float),
           taaHistDiffB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                        WgpuTexture::Format::RGBA16Float),
-          taaHistDiffRead(&denoisedDiff), taaHistDiffWrite(&filteredA),
+          taaHistDiffRead(&taaHistDiffA), taaHistDiffWrite(&taaHistDiffB),
           taaHistSpecA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                        WgpuTexture::Format::RGBA16Float),
           taaHistSpecB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                        WgpuTexture::Format::RGBA16Float),
-          taaHistSpecRead(&denoisedSpec), taaHistSpecWrite(&filteredB),
+          taaHistSpecRead(&taaHistSpecA), taaHistSpecWrite(&taaHistSpecB),
           // Denoiser pipelines
           taaPipeline(r, taaWGSL, "taa_main"),
           atrousPipeline(r, svgfAtrousWGSL, "svgf_atrous_main"),
+          preFilterPipeline(r, preFilterWGSL, "prefilter_main"),
           taaUniBuf(r, sizeof(TaaGpuUniforms)),
           atrousUniBuf(r, sizeof(AtrousGpuUniforms)),
+          preFilterUniBuf(r, sizeof(PreFilterGpuUniforms)),
           // Storage buffers (small placeholders — grown dynamically on first build)
           bvhNodeBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * BVH4_GPU_U32S * sizeof(uint32_t),
                      WgpuBuffer::Usage::Storage),
@@ -4777,6 +4922,7 @@ struct WgpuPathTracer::Impl {
         taaPipeline.setTexture(5, *readHitMesh);
         taaPipeline.setStorageBufferRead(6, motionMatBuf);
         taaPipeline.setTexture(7, albedoTex);
+        taaPipeline.setTexture(8, filteredA);  // preFilteredIn (rebound per-channel at dispatch)
 
         // Spatial filter — set ALL bindings upfront
         atrousPipeline.setUniformBuffer(0, atrousUniBuf);
@@ -4787,6 +4933,13 @@ struct WgpuPathTracer::Impl {
         atrousPipeline.setTexture(5, *readHitMesh);
         atrousPipeline.setTexture(6, *momentsRead);
 
+        // Pre-filter pipeline bindings
+        preFilterPipeline.setUniformBuffer(0, preFilterUniBuf);
+        preFilterPipeline.setTexture(1, *readDiffAccum);
+        preFilterPipeline.setStorageTexture(2, filteredA);
+        preFilterPipeline.setTexture(3, *gBufPrev);
+        preFilterPipeline.setTexture(4, *readHitMesh);
+
         // Kick off async shader compilation for the small helper pipelines.
         // The large RT shaders are compiled after the first topology build so that
         // async uses the real (scene-sized) buffer bindings — this avoids a costly
@@ -4796,6 +4949,7 @@ struct WgpuPathTracer::Impl {
         vtPipeline.startAsyncBuild();
         refitPipeline.startAsyncBuild();
         taaPipeline.startAsyncBuild();
+        preFilterPipeline.startAsyncBuild();
         atrousPipeline.startAsyncBuild();
         std::cerr << "[PathTracer] Async shader compilation started for helper pipelines" << std::endl;
 
@@ -4961,12 +5115,12 @@ struct WgpuPathTracer::Impl {
         taaHistDiffB = WgpuTexture(renderer, uw, uh, fmt);
         // Workaround: use displayable textures for TAA history ping-pong
         // (taaHistDiff/Spec textures have display issues in WebGPU abstraction)
-        taaHistDiffRead  = &denoisedDiff;
-        taaHistDiffWrite = &filteredA;
+        taaHistDiffRead  = &taaHistDiffA;
+        taaHistDiffWrite = &taaHistDiffB;
         taaHistSpecA = WgpuTexture(renderer, uw, uh, fmt);
         taaHistSpecB = WgpuTexture(renderer, uw, uh, fmt);
-        taaHistSpecRead  = &denoisedSpec;
-        taaHistSpecWrite = &filteredB;
+        taaHistSpecRead  = &taaHistSpecA;
+        taaHistSpecWrite = &taaHistSpecB;
 
         filteredA = WgpuTexture(renderer, uw, uh, fmt);
         filteredB = WgpuTexture(renderer, uw, uh, fmt);
@@ -5014,7 +5168,12 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageBufferRead(29, motionMatBuf);
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(6, *momentsRead);
+        preFilterPipeline.setTexture(1, *readDiffAccum);
+        preFilterPipeline.setStorageTexture(2, filteredA);
+        preFilterPipeline.setTexture(3, *gBufPrev);
+        preFilterPipeline.setTexture(4, *readHitMesh);
         taaPipeline.setTexture(7, albedoTex);
+        taaPipeline.setTexture(8, filteredA);
 
         frameCount_ = 0.f;
     }
@@ -5744,7 +5903,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.restirParams[0] = d.restirEnabled_ ? 1.f : 0.f;
     u.restirParams[1] = 20.f;  // M clamp — lower = crisper shadows, higher = lower variance
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
-    u.restirParams[3] = 0.f;                            // reserved
+    u.restirParams[3] = d.temporalDenoiserEnabled_ ? 1.f : 0.f;  // 1 = raw 1-spp output (no EMA)
 
     int nLights = 0;
     auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
@@ -5927,7 +6086,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     WgpuTexture* displaySpec = d.readSpecAccum;
     const bool hasMotion = (movedBits[0] | movedBits[1] | movedBits[2] | movedBits[3]) != 0u;
     const bool needsDenoise = (d.frameCount_ < 64.f || hasMotion);
-    if (d.denoiserEnabled_ && needsDenoise) {
+    if (d.denoiserEnabled_ && needsDenoise && !d.temporalDenoiserEnabled_) {
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
 
@@ -5966,6 +6125,102 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
         // Specular: 3 passes (step 1,2,4)
         runAtrous(*d.readSpecAccum, d.denoisedSpec, d.filteredB, 1, 3);
+
+        displayDiff = &d.denoisedDiff;
+        displaySpec = &d.denoisedSpec;
+    } else if (d.temporalDenoiserEnabled_ && d.denoiserEnabled_) {
+        // New pipeline: 1-spp → pre-filter → temporal → spatial cleanup
+        const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
+        const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
+
+        // --- Phase 2: Spatial pre-filter (stabilize neighborhood stats) ---
+        PreFilterGpuUniforms pfu{};
+        pfu.stepSize = 1;
+
+        // Diffuse: readDiffAccum → filteredA
+        d.preFilterPipeline.setTexture(1, *d.readDiffAccum);
+        d.preFilterPipeline.setStorageTexture(2, d.filteredA);
+        d.preFilterPipeline.setTexture(3, *d.gBufPrev);
+        d.preFilterPipeline.setTexture(4, *d.readHitMesh);
+        d.preFilterUniBuf.write(&pfu, sizeof(pfu));
+        d.preFilterPipeline.dispatch(gx, gy);
+
+        // Specular: readSpecAccum → filteredB
+        d.preFilterPipeline.setTexture(1, *d.readSpecAccum);
+        d.preFilterPipeline.setStorageTexture(2, d.filteredB);
+        d.preFilterUniBuf.write(&pfu, sizeof(pfu));
+        d.preFilterPipeline.dispatch(gx, gy);
+
+        // --- Phase 3: Temporal accumulation ---
+        {
+            TaaGpuUniforms tu{};
+            tu.prevCamOri[0] = d.prevCamOri_[0]; tu.prevCamOri[1] = d.prevCamOri_[1]; tu.prevCamOri[2] = d.prevCamOri_[2];
+            tu.prevCamFwd[0] = d.prevCamFwd_[0]; tu.prevCamFwd[1] = d.prevCamFwd_[1]; tu.prevCamFwd[2] = d.prevCamFwd_[2];
+            tu.prevCamRgt[0] = d.prevCamRgt_[0]; tu.prevCamRgt[1] = d.prevCamRgt_[1]; tu.prevCamRgt[2] = d.prevCamRgt_[2];
+            tu.prevCamUp[0]  = d.prevCamUp_[0];  tu.prevCamUp[1]  = d.prevCamUp_[1];  tu.prevCamUp[2]  = d.prevCamUp_[2];
+            tu.curCamOri[0] = camPos.x; tu.curCamOri[1] = camPos.y; tu.curCamOri[2] = camPos.z;
+            tu.curCamFwd[0] = fwd.x; tu.curCamFwd[1] = fwd.y; tu.curCamFwd[2] = fwd.z;
+            tu.curCamRgt[0] = rgt.x; tu.curCamRgt[1] = rgt.y; tu.curCamRgt[2] = rgt.z;
+            tu.curCamUp[0]  = up.x;  tu.curCamUp[1]  = up.y;  tu.curCamUp[2]  = up.z;
+            tu.iRes[0] = static_cast<float>(d.width_);
+            tu.iRes[1] = static_cast<float>(d.height_);
+            tu.tanHalfFov[0] = tanHalfFov;
+            tu.frameCount[0] = d.frameCount_;
+            tu.movedMeshBits[0] = movedBits[0];
+            tu.movedMeshBits[1] = movedBits[1];
+            tu.movedMeshBits[2] = movedBits[2];
+            tu.movedMeshBits[3] = movedBits[3];
+
+            // Diffuse temporal: raw → taaHistDiffWrite, preFiltered = filteredA
+            tu.frameCount[1] = 0.f;  // mode = diffuse
+            d.taaUniBuf.write(&tu, sizeof(tu));
+            d.taaPipeline.setTexture(1, *d.readDiffAccum);       // raw 1-spp
+            d.taaPipeline.setTexture(2, *d.gBufPrev);
+            d.taaPipeline.setTexture(3, *d.taaHistDiffRead);     // prev temporal history
+            d.taaPipeline.setStorageTexture(4, *d.taaHistDiffWrite);
+            d.taaPipeline.setTexture(5, *d.readHitMesh);
+            d.taaPipeline.setTexture(8, d.filteredA);             // preFilteredIn
+            d.taaPipeline.dispatch(gx, gy);
+
+            // Specular temporal: raw → taaHistSpecWrite, preFiltered = filteredB
+            tu.frameCount[1] = 1.f;  // mode = specular
+            d.taaUniBuf.write(&tu, sizeof(tu));
+            d.taaPipeline.setTexture(1, *d.readSpecAccum);
+            d.taaPipeline.setTexture(3, *d.taaHistSpecRead);
+            d.taaPipeline.setStorageTexture(4, *d.taaHistSpecWrite);
+            d.taaPipeline.setTexture(8, d.filteredB);
+            d.taaPipeline.dispatch(gx, gy);
+
+            // Swap temporal history ping-pong
+            std::swap(d.taaHistDiffRead, d.taaHistDiffWrite);
+            std::swap(d.taaHistSpecRead, d.taaHistSpecWrite);
+        }
+
+        // --- Phase 4: Spatial cleanup on temporal output ---
+        AtrousGpuUniforms au{};
+        au.frameCount = d.frameCount_;
+
+        auto runAtrous = [&](WgpuTexture& srcAccum, WgpuTexture& dstDenoised,
+                             WgpuTexture& tmpFiltered, uint32_t mode, int passes) {
+            au.mode = mode;
+            d.atrousPipeline.setTexture(3, *d.gBufPrev);
+            d.atrousPipeline.setTexture(5, *d.readHitMesh);
+            WgpuTexture* readTex = &srcAccum;
+            for (int p = 0; p < passes; ++p) {
+                WgpuTexture* writeTex = (p % 2 == 0) ? &dstDenoised : &tmpFiltered;
+                au.stepSize = static_cast<uint32_t>(1 << p);
+                d.atrousUniBuf.write(&au, sizeof(au));
+                d.atrousPipeline.setTexture(1, *readTex);
+                d.atrousPipeline.setStorageTexture(2, *writeTex);
+                d.atrousPipeline.dispatch(gx, gy);
+                readTex = writeTex;
+            }
+        };
+
+        // Cleanup reads temporal output (taaHistDiffRead/SpecRead after swap = just-written).
+        // Uses filteredA/B as ping-pong temp — safe, temporal already consumed them.
+        runAtrous(*d.taaHistDiffRead, d.denoisedDiff, d.filteredA, 0, 3);
+        runAtrous(*d.taaHistSpecRead, d.denoisedSpec, d.filteredB, 1, 3);
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;
@@ -6143,6 +6398,14 @@ void WgpuPathTracer::setDenoiserEnabled(bool enabled) {
 
 bool WgpuPathTracer::denoiserEnabled() const {
     return pimpl_->denoiserEnabled_;
+}
+
+void WgpuPathTracer::setTemporalDenoiser(bool enabled) {
+    pimpl_->temporalDenoiserEnabled_ = enabled;
+}
+
+bool WgpuPathTracer::temporalDenoiser() const {
+    return pimpl_->temporalDenoiserEnabled_;
 }
 
 void WgpuPathTracer::setReSTIREnabled(bool enabled) {
