@@ -2427,7 +2427,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                         // avoid motion smear on rotating/translating geometry.
                         let staticCap = mix(8.0, 256.0,
                                             smoothstep(0.15, 0.7, primaryRough));
-                        let movingCap = mix(4.0, 32.0,
+                        let movingCap = mix(8.0, 64.0,
                                             smoothstep(0.15, 0.7, primaryRough));
                         if (primaryMoved) {
                             pixelFC = min(prevFC * 0.5, movingCap);
