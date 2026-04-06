@@ -2343,14 +2343,6 @@ R"(
     // the pixel "alive" to detect illumination changes while avoiding expensive
     // deep traces.  Camera motion resets fc to 0, automatically disabling this.
     var varianceReducedBounces = maxBounces;
-    if (fc > 16u && !isEnvPixel) {
-        let mom = textureLoad(momentsRead, pixel, 0).xy;
-        let variance = max(mom.y - mom.x * mom.x, 0.0);
-        let relVar   = variance / max(mom.x * mom.x, 1e-6);
-        if (relVar < 0.005) {
-            varianceReducedBounces = max(1, min(maxBounces, 1));
-        }
-    }
 
     // R2 quasi-random sub-pixel jitter (low-discrepancy stratification)
     let r2  = r2Seq(fc);
