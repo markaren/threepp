@@ -1680,14 +1680,14 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             *primaryRough   = sqrt(h.shininess);  // linear roughness for TAA blend
             *primaryMatIdx  = h.matIdx;
 
-            // Adaptive bounce cap (hybrid-mode perf optimization) — tighten based
-            // on primary surface material. NEE/ReSTIR handles direct lighting well;
-            // env IBL covers ambient indirect for diffuse surfaces; deeper bounces
-            // are only needed when the BRDF propagates information (metals/mirrors/glass).
-            // This trades a small amount of color bleeding between diffuse surfaces
-            // for a big reduction in secondary ray count.
+            // Adaptive bounce cap — tighten based on primary surface material.
+            // NEE/ReSTIR handles direct lighting well; env IBL covers ambient
+            // indirect for diffuse surfaces; deeper bounces are only needed
+            // when the BRDF propagates information (metals/mirrors/glass).
+            // This trades a small amount of color bleeding between diffuse
+            // surfaces for a big reduction in secondary ray count.
             // shininess = GGX alpha = roughness^2.
-            if (rt.restirParams.w > 0.5) {
+            {
                 let isGlass  = h.transmission > 0.05;
                 let isMetal  = h.metalness > 0.5;
                 let isMirror = h.shininess < 0.05;      // r <= 0.22
@@ -2251,25 +2251,70 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let fc         = u32(rt.frameCount.x);
     let foveatedOn = rt.params.z > 0.5;
 
-    // During camera movement (fc==0) use fewer bounces to maintain interactive FPS.
-    // 4 bounces handles glass (enter + exit + continue) and most indirect light.
-    // Full bounce count resumes immediately once the camera stops.
-    let maxBounces = select(i32(rt.params.x), min(i32(rt.params.x), 4), fc == 0u);
-
-    // --- Foveated convergence: center traces every frame, periphery less often ---
-    // This accelerates perceived convergence by prioritising where the eye looks.
-    let center = res * 0.5;
-    let dxy = (vec2<f32>(f32(pixel.x), f32(pixel.y)) - center) / center;
-    let dist = length(dxy);
-    var skipMask = 0u;  // trace every frame
-    if (foveatedOn && dist > 0.65)      { skipMask = 3u; }  // periphery: trace every 4th frame (fc & 3 == 0)
-    else if (foveatedOn && dist > 0.3)  { skipMask = 1u; }  // middle: trace every 2nd frame (fc & 1 == 0)
-
     // Don't foveate sky/env-map pixels — they're cheap to trace (BVH miss)
     // and skipping creates visible zone boundaries in uniform backgrounds.
     // Use previous frame's gBuf depth: env/sky pixels have depth <= 0.
     let prevDepth = textureLoad(gBufRead, pixel, 0).w;
     let isEnvPixel = prevDepth <= 0.0;
+
+    // --- Material classification from previous frame's G-buffer ---
+    // Used for material-aware bounce cap (camera motion) and foveated scheduling.
+    // matClass: 0 = specular (glass/metal/mirror), 1 = glossy, 2 = rough diffuse, 3 = sky
+    var matClass = 3u;  // default: sky/unknown → conservative (full bounces, no aggressive skip)
+    if (!isEnvPixel) {
+        let prevMatIdx = i32(textureLoad(hitMeshRead, pixel, 0).g);
+        if (prevMatIdx >= 0) {
+            let m0 = textureLoad(matData, vec2<i32>(prevMatIdx, 0), 0);   // .w = shininess (alpha = roughness^2)
+            let m1 = textureLoad(matData, vec2<i32>(prevMatIdx, 1), 0);   // .y = metalness
+            let m14 = textureLoad(matData, vec2<i32>(prevMatIdx, 14), 0); // .x = transmission
+            let shininess    = m0.w;
+            let metalness    = m1.y;
+            let transmission = m14.x;
+            let isGlass  = transmission > 0.05;
+            let isMetal  = metalness > 0.5;
+            let isMirror = shininess < 0.05;
+            let isGlossy = shininess < 0.25;
+            if (isGlass || isMetal || isMirror) { matClass = 0u; }
+            else if (isGlossy)                  { matClass = 1u; }
+            else                                { matClass = 2u; }
+        }
+    }
+
+    // Material-aware camera-motion bounce cap.  During movement (fc==0) reduce
+    // bounces per material class instead of a flat cap of 4 for all pixels.
+    // Glass/metal/mirror need 4 (refraction chains), diffuse only needs 2.
+    var maxBounces = i32(rt.params.x);
+    if (fc == 0u) {
+        if      (matClass <= 0u) { maxBounces = min(maxBounces, 4); }  // specular
+        else if (matClass == 1u) { maxBounces = min(maxBounces, 3); }  // glossy
+        else if (matClass == 2u) { maxBounces = min(maxBounces, 2); }  // rough diffuse
+        else                     { maxBounces = min(maxBounces, 4); }  // sky/unknown
+    }
+
+    // --- Material-aware foveated convergence ---
+    // Rough diffuse surfaces converge fast (low-frequency BRDF, reprojects well)
+    // so they tolerate more aggressive skipping.  Specular surfaces need more
+    // temporal samples for reflections.
+    let center = res * 0.5;
+    let dxy = (vec2<f32>(f32(pixel.x), f32(pixel.y)) - center) / center;
+    let dist = length(dxy);
+    var skipMask = 0u;
+    if (foveatedOn) {
+        if (matClass <= 0u) {
+            // Specular/glass: trace more often — reflections are view-dependent
+            if (dist > 0.65) { skipMask = 1u; }       // periphery: every 2nd frame
+            // middle + center: every frame
+        } else if (matClass == 2u) {
+            // Rough diffuse: converges fast, skip more aggressively
+            if      (dist > 0.65) { skipMask = 7u; }  // periphery: every 8th frame
+            else if (dist > 0.3)  { skipMask = 3u; }  // middle: every 4th frame
+        } else {
+            // Glossy / sky / unknown: default schedule
+            if      (dist > 0.65) { skipMask = 3u; }  // periphery: every 4th frame
+            else if (dist > 0.3)  { skipMask = 1u; }  // middle: every 2nd frame
+        }
+    }
+
     let foveatedSkip = skipMask > 0u && (fc & skipMask) != 0u && !isEnvPixel;
 
     // Foveated skip: pass through previous accumulation unchanged.
@@ -2290,6 +2335,22 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         return;
     }
+)"
+R"(
+    // --- Variance-driven bounce reduction for converged pixels ---
+    // Once moments have stabilized (fc > 16), check if this pixel's relative
+    // variance is low enough to reduce bounces to 1.  The single bounce keeps
+    // the pixel "alive" to detect illumination changes while avoiding expensive
+    // deep traces.  Camera motion resets fc to 0, automatically disabling this.
+    var varianceReducedBounces = maxBounces;
+    if (fc > 16u && !isEnvPixel) {
+        let mom = textureLoad(momentsRead, pixel, 0).xy;
+        let variance = max(mom.y - mom.x * mom.x, 0.0);
+        let relVar   = variance / max(mom.x * mom.x, 1e-6);
+        if (relVar < 0.005) {
+            varianceReducedBounces = max(1, min(maxBounces, 1));
+        }
+    }
 
     // R2 quasi-random sub-pixel jitter (low-discrepancy stratification)
     let r2  = r2Seq(fc);
@@ -2308,7 +2369,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var primaryRough:   f32;
     var primaryMatIdx:  i32;
     var touchedMoved:   bool;
-    var sample  = pathTrace(ray, &seed, pixel, maxBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &primaryRough, &primaryMatIdx, &touchedMoved);
+    var sample  = pathTrace(ray, &seed, pixel, varianceReducedBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &primaryRough, &primaryMatIdx, &touchedMoved);
 
     let prev     = textureLoad(accumRead, pixel, 0);
     var old      = prev.xyz;
