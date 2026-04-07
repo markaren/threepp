@@ -394,9 +394,16 @@ fn triIntersect(ray: Ray, v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>) -> Isect 
     var V = Ax * Cy - Ay * Cx;
     var W = Bx * Ay - By * Ax;
     if (U == 0.0 || V == 0.0 || W == 0.0) {
-        U = f32(f32(Cx) * f32(By)) - f32(f32(Cy) * f32(Bx));
-        V = f32(f32(Ax) * f32(Cy)) - f32(f32(Ay) * f32(Cx));
-        W = f32(f32(Bx) * f32(Ay)) - f32(f32(By) * f32(Ax));
+        // FMA-based Dekker two-product: fma(a,b,-(a*b)) gives exact rounding error
+        let CxBy_p = Cx * By; let CxBy_e = fma(Cx, By, -CxBy_p);
+        let CyBx_p = Cy * Bx; let CyBx_e = fma(Cy, Bx, -CyBx_p);
+        U = (CxBy_p - CyBx_p) + (CxBy_e - CyBx_e);
+        let AxCy_p = Ax * Cy; let AxCy_e = fma(Ax, Cy, -AxCy_p);
+        let AyCx_p = Ay * Cx; let AyCx_e = fma(Ay, Cx, -AyCx_p);
+        V = (AxCy_p - AyCx_p) + (AxCy_e - AyCx_e);
+        let BxAy_p = Bx * Ay; let BxAy_e = fma(Bx, Ay, -BxAy_p);
+        let ByAx_p = By * Ax; let ByAx_e = fma(By, Ax, -ByAx_p);
+        W = (BxAy_p - ByAx_p) + (BxAy_e - ByAx_e);
     }
     if ((U < 0.0 || V < 0.0 || W < 0.0) && (U > 0.0 || V > 0.0 || W > 0.0)) { return r; }
     let det = U + V + W;
@@ -418,7 +425,7 @@ fn aabbDist(bmin: vec3<f32>, bmax: vec3<f32>, ray: Ray, tmax: f32) -> f32 {
     let t1    = (bmin - ray.origin) * invD;
     let t2    = (bmax - ray.origin) * invD;
     let tNear = max(max(min(t1.x, t2.x), min(t1.y, t2.y)), min(t1.z, t2.z));
-    let tFar  = min(min(max(t1.x, t2.x), max(t1.y, t2.y)), max(t1.z, t2.z));
+    let tFar  = min(min(max(t1.x, t2.x), max(t1.y, t2.y)), max(t1.z, t2.z)) * 1.0000007;
     if (tFar >= max(tNear, 0.0) && tNear < tmax) { return max(tNear, 0.0); }
     return 1e30;
 }
@@ -434,7 +441,8 @@ fn aabbDist4(nd: Bvh4NodeGpu, ray: Ray, invD: vec3<f32>, tmax: f32) -> vec4<f32>
     let t1z = (nd.cMinZ - oz) * idz;  let t2z = (nd.cMaxZ - oz) * idz;
 
     let tNear = max(max(min(t1x, t2x), min(t1y, t2y)), min(t1z, t2z));
-    let tFar  = min(min(max(t1x, t2x), max(t1y, t2y)), max(t1z, t2z));
+    // Robust slab test (PBRT): scale tFar by 1+2*gamma(3) to absorb FP rounding.
+    let tFar  = min(min(max(t1x, t2x), max(t1y, t2y)), max(t1z, t2z)) * vec4<f32>(1.0000007);
 
     let hit = tFar >= max(tNear, vec4<f32>(0.0));
     let nearClamp = max(tNear, vec4<f32>(0.0));
@@ -800,7 +808,7 @@ fn loadShadowHitMaterial(rh: RawHit, ray: Ray) -> ShadowHit {
 fn sceneHitRaw(ray: Ray, maxT: f32) -> RawHit {
     var rh: RawHit; rh.t = maxT; rh.triIdx = -1;
     let invD = vec3<f32>(1.0) / ray.dir;
-    var stack: array<i32, 16>;
+    var stack: array<i32, 32>;
     var top: i32 = 0;
     stack[0] = 0; top = 1;
 
@@ -860,7 +868,7 @@ R"(
 fn sceneAnyHit(ray: Ray, maxT: f32) -> RawHit {
     var rh: RawHit; rh.t = maxT; rh.triIdx = -1;
     let invD = vec3<f32>(1.0) / ray.dir;
-    var stack: array<i32, 16>;
+    var stack: array<i32, 32>;
     var top: i32 = 0;
     stack[0] = 0; top = 1;
 
@@ -2642,13 +2650,16 @@ struct RefitUniforms {
 @group(0) @binding(5) var<storage, read>       refitMeta:  array<vec4<i32>>;  // (parent, childCount, numInternal, 0)
 
 fn writeChildAABB(ni: i32, c: i32, bmin: vec3<f32>, bmax: vec3<f32>) {
+    // Scale-aware padding: max(1e-5, 1e-5 * extent) so it stays meaningful at any scale.
+    let extent = max(abs(bmin), abs(bmax));
+    let E = max(extent * vec3<f32>(1e-5), vec3<f32>(1e-6));
     var n = bvhNodes[ni];
-    n.cMinX[c] = bmin.x;
-    n.cMinY[c] = bmin.y;
-    n.cMinZ[c] = bmin.z;
-    n.cMaxX[c] = bmax.x;
-    n.cMaxY[c] = bmax.y;
-    n.cMaxZ[c] = bmax.z;
+    n.cMinX[c] = bmin.x - E.x;
+    n.cMinY[c] = bmin.y - E.y;
+    n.cMinZ[c] = bmin.z - E.z;
+    n.cMaxX[c] = bmax.x + E.x;
+    n.cMaxY[c] = bmax.y + E.y;
+    n.cMaxZ[c] = bmax.z + E.z;
     bvhNodes[ni] = n;
 }
 
