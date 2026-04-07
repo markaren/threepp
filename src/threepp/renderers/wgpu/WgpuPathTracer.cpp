@@ -2286,6 +2286,10 @@ R"(
     let prevSpecRaw = textureLoad(specAccumRead, pixel, 0).xyz;
     var oldDiff = select(vec3<f32>(0.0), prevDiffRaw, prevDiffRaw.x == prevDiffRaw.x);
     var oldSpec = select(vec3<f32>(0.0), prevSpecRaw, prevSpecRaw.x == prevSpecRaw.x);
+    // Moments reprojected from same position as color — set inside reprojection block.
+    // Falls back to current-pixel read if reprojection fails.
+    var prevMomM1 = textureLoad(momentsRead, pixel, 0).x;
+    var prevMomM2 = textureLoad(momentsRead, pixel, 0).y;
 
     // Force-reset on mode switch / topology rebuild (params.w flag)
     let forceReset = rt.params.w > 0.5;
@@ -2397,6 +2401,13 @@ R"(
                         let s01 = textureLoad(specAccumRead, p01, 0).xyz;
                         let s11 = textureLoad(specAccumRead, p11, 0).xyz;
                         oldSpec = (s00 * v00 + s10 * v10 + s01 * v01 + s11 * v11) * inv;
+                        // Reproject moments from same reprojected position as color
+                        let mom00 = textureLoad(momentsRead, p00, 0).xy;
+                        let mom10 = textureLoad(momentsRead, p10, 0).xy;
+                        let mom01 = textureLoad(momentsRead, p01, 0).xy;
+                        let mom11 = textureLoad(momentsRead, p11, 0).xy;
+                        prevMomM1 = (mom00.x*v00 + mom10.x*v10 + mom01.x*v01 + mom11.x*v11) * inv;
+                        prevMomM2 = (mom00.y*v00 + mom10.y*v10 + mom01.y*v01 + mom11.y*v11) * inv;
                         // Roughness-adaptive history cap.
                         //   Diffuse/matte (rough≈1): no view-dependent shading,
                         //     history stays valid as long as reprojection is
@@ -2495,13 +2506,11 @@ R"(
     // Use post-hard-cap, pre-relative-clamp luminance so variance reflects true
     // sample spread (relative clamp would artificially suppress it).
     let sampleLum = dot(clamped, lum3);
-    let prevMom = textureLoad(momentsRead, pixel, 0).xy;
-    var m1 = prevMom.x;  // mean luminance
-    var m2 = prevMom.y;  // mean squared luminance
-    // Use faster-decaying alpha for moments: they track current noise level,
-    // not long-term average. Floor at 0.1 so variance stays responsive even
-    // when accumulation has converged (pixelFC high → alpha tiny).
+    // Use reprojected moments (prevMomM1/M2) set in the reprojection block above.
+    // Floor alpha at 0.1 so variance stays responsive even at convergence.
     let momAlpha = max(alpha, 0.1);
+    var m1 = prevMomM1;
+    var m2 = prevMomM2;
     if (pixelFC < 1.0) { m1 = sampleLum; m2 = sampleLum * sampleLum; }
     else {
         m1 = m1 * (1.0 - momAlpha) + sampleLum * momAlpha;
@@ -2536,7 +2545,7 @@ R"(
         }
     }
 
-    textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), 0.0, 0.0));
+    textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), select(0.0, 1.0, touchedMoved), 0.0));
     textureStore(albedoWrite,  pixel, vec4<f32>(primaryAlbedo, primaryRough));
 
     textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
@@ -2774,6 +2783,8 @@ struct TaaUniforms {
 @group(0) @binding(5) var hitMeshTex: texture_2d<f32>;
 @group(0) @binding(6) var<storage, read> motionMats: array<mat4x4<f32>>;
 @group(0) @binding(7) var albedoTex:  texture_2d<f32>;  // .w = primary linear roughness
+@group(0) @binding(8) var momentsIn:  texture_2d<f32>;  // (E[L], E[L²]) from RT pass
+@group(0) @binding(9) var gBufPrev:   texture_2d<f32>;  // previous frame g-buffer (depth in .w)
 
 fn luminance_t(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -2806,44 +2817,14 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Build 3×3 neighborhood stats from raw input.
-    // TODO: once binding 8 (preFilteredIn) works, use pre-filtered for stable stats.
     let hitInfo  = textureLoad(hitMeshTex, pixel, 0);
     let curMeshId = u32(hitInfo.r);
     let touchedMoved = hitInfo.b > 0.5;
-    var cMin = curColor;
-    var cMax = curColor;
-    var m1 = vec3<f32>(0.0);   // 1st moment (mean)
-    var m2 = vec3<f32>(0.0);   // 2nd moment (mean of squares)
-    var nCount = 0.0;
-    for (var dy = -1; dy <= 1; dy++) {
-        for (var dx = -1; dx <= 1; dx++) {
-            let sp = clamp(pixel + vec2<i32>(dx, dy), vec2<i32>(0), iRes - 1);
-            let nMeshId = u32(textureLoad(hitMeshTex, sp, 0).r);
-            if (nMeshId != curMeshId) { continue; }
-            let nc = textureLoad(accumIn, sp, 0).xyz;
-            cMin = min(cMin, nc);
-            cMax = max(cMax, nc);
-            m1 += nc;
-            m2 += nc * nc;
-            nCount += 1.0;
-        }
-    }
 
-    // Variance-based box: µ ± γ·σ (tighter than min/max, more robust)
-    let invN  = 1.0 / max(nCount, 1.0);
-    let mean  = m1 * invN;
-    let sigma = sqrt(max(m2 * invN - mean * mean, vec3<f32>(0.0)));
-    // Gamma controls box width: wide enough for noisy 1-spp but tight enough to reject ghosts.
-    let gamma = select(3.0, 1.5, isSpec);
-    // Minimum box half-width: prevents box collapse when sigma→0
-    let minHalfWidth = vec3<f32>(0.02);
-    let halfWidth = max(sigma * gamma, minHalfWidth);
-    // Widen when history is very short (first few frames, trust neighborhood more)
-    let histLen = textureLoad(taaHistIn, pixel, 0).w;
-    let earlyBoost = select(1.0, 2.0, histLen < 4.0);
-    let boxMin = mean - halfWidth * earlyBoost;
-    let boxMax = mean + halfWidth * earlyBoost;
+    // No variance box. SVGF design: temporal pass = pure EMA + disocclusion reset.
+    // The moments-driven à-trous spatial filter handles all noise removal.
+    // Box clamping in temporal passes is a rasterizer TAA technique — incorrect for
+    // path tracing where every sample is independently noisy regardless of history.
 
     // Reproject current pixel into previous frame's screen space
     let aspect = res.x / res.y;
@@ -2886,75 +2867,65 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     useHist = useHist && prevPixel.x >= 0 && prevPixel.x + 1 < iRes.x
                       && prevPixel.y >= 0 && prevPixel.y + 1 < iRes.y;
 
-    // Depth-based disocclusion: compare prevZ (z-depth in prev camera space) with
-    // curZDepth (z-depth in current camera space). Can't use curDepth directly because
-    // it's ray distance, not z-depth — differs by cos(θ) for off-center pixels.
+    // Depth-based disocclusion (two conditions):
+    // 1. Standard: prevZ vs curZDepth — detects when current surface wasn't visible before.
+    // 2. Revealed: current surface is much deeper than previous surface at prevPixel
+    //    — detects background pixels revealed when a foreground object moved away.
+    //    Without this, background pixels behind a moving object keep torus-color history.
     let curZDepth = dot(worldPos - taa.curCamOri.xyz, taa.curCamFwd.xyz);
     let depthRatio = abs(prevZ - curZDepth) / max(curZDepth, 0.01);
-    let disoccluded = useHist && depthRatio > 0.1;
+    // Previous frame's ray depth at prevPixel (g-buffer .w stores ray distance).
+    // Use curDepth (also ray distance) for comparison — same units, valid for both
+    // center and edge pixels. curZDepth (z-depth) would diverge by 1/cos(θ) at edges.
+    let prevFrameDepth = textureLoad(gBufPrev, prevPixel, 0).w;
+    // Depth mismatch: fires for BOTH revealed background (cur deeper) AND
+    // object moved into view (cur shallower). The signed version missed the
+    // latter case — torus silhouette pixels were picking up background history.
+    let revealedRatio = abs(curDepth - prevFrameDepth) / max(curDepth, 0.01);
+    let disoccluded = useHist && (depthRatio > 0.1 || revealedRatio > 0.15);
 
     var result = curColor;
     var newHistLen = 1.0;  // reset: this is the first sample
 
     if (useHist && !disoccluded) {
-        // Bilinear interpolation of history color
+        // Bilinear history fetch
         let fx = fract(prevPx.x);
         let fy = fract(prevPx.y);
+        let px10 = prevPixel + vec2<i32>(1, 0);
+        let px01 = prevPixel + vec2<i32>(0, 1);
+        let px11 = prevPixel + vec2<i32>(1, 1);
         let h00 = textureLoad(taaHistIn, prevPixel, 0);
-        let h10 = textureLoad(taaHistIn, prevPixel + vec2<i32>(1, 0), 0);
-        let h01 = textureLoad(taaHistIn, prevPixel + vec2<i32>(0, 1), 0);
-        let h11 = textureLoad(taaHistIn, prevPixel + vec2<i32>(1, 1), 0);
-        let histColor = mix(mix(h00.xyz, h10.xyz, fx), mix(h01.xyz, h11.xyz, fx), fy);
-        let prevHistLen = mix(mix(h00.w, h10.w, fx), mix(h01.w, h11.w, fx), fy);
+        let h10 = textureLoad(taaHistIn, px10, 0);
+        let h01 = textureLoad(taaHistIn, px01, 0);
+        let h11 = textureLoad(taaHistIn, px11, 0);
+        let histColor   = mix(mix(h00.xyz, h10.xyz, fx), mix(h01.xyz, h11.xyz, fx), fy);
+        let prevHistLen = mix(mix(h00.w,   h10.w,   fx), mix(h01.w,   h11.w,   fx), fy);
 
-        // Anti-lag disabled for raw 1-spp pipeline: Monte Carlo noise between
-        // frames causes huge per-pixel luminance differences that look like scene
-        // changes to the anti-lag detector, preventing any accumulation.
-        // TODO: re-enable with pre-filtered luminance comparison once binding 8 works.
-        let antiLag = 0.0;
+        // SVGF-style: pure EMA accumulation, no color-box clamping.
+        // The moments-driven à-trous spatial filter handles all noise removal.
+        // Ghosting is controlled by depth disocclusion (above) + touchedMoved cap.
 
-        // Clamp history to variance-based neighborhood box
-        let clamped = clamp(histColor, boxMin, boxMax);
-
-        // How much did clamping change the history? If a lot, history is unreliable.
-        let clampDist = length(histColor - clamped) / max(length(histColor), 0.01);
-
-        // Roughness-adaptive history caps
         let primaryRoughForCap = textureLoad(albedoTex, pixel, 0).w;
         let roughT = smoothstep(0.05, 0.3, primaryRoughForCap);
-        // Diffuse: 8 (rough/fast-changing) to 256 (smooth/stable)
-        // Specular: 8 (glossy reflections change fast) to 32 (rough spec is stable)
         let maxHist = select(
-            mix(8.0, 256.0, roughT),  // diffuse
-            mix(8.0, 32.0, roughT),   // specular
+            256.0,                    // diffuse: large history
+            mix(8.0, 32.0, roughT),  // specular: 8 smooth → 32 rough
             isSpec
         );
         var effHistLen = min(prevHistLen, maxHist);
-        // Anti-lag: reduce effective history when luminance changed
-        effHistLen = mix(effHistLen, 0.0, antiLag);
-        // Clamp distance: reduce history when it was clamped a lot.
-        // Moderately relaxed for raw 1-spp (noisy variance box causes some clamping).
-        effHistLen = mix(effHistLen, 0.0, smoothstep(0.15, 0.5, clampDist));
-        // touchedMoved: mesh moved this frame — cap history aggressively
-        if (touchedMoved) { effHistLen = min(effHistLen, 8.0); }
+        if (touchedMoved) { effHistLen = min(effHistLen, 4.0); }
 
-        // Blend factor from history length: α = 1/(histLen+1)
-        // More history → blend less current frame → smoother
-        let alpha = 1.0 / (effHistLen + 1.0);
-
-        // Roughness-adaptive blend for specular mode:
-        // Smooth/glossy surfaces have view-dependent reflections that can't be
-        // reprojected correctly without virtual motion vectors (Phase 3).
-        // Boost current-frame weight for glossy to reduce ghosting/trailing.
+        // Minimum alpha: keep filter responsive to lighting changes even at convergence.
+        // 1/32 ≈ 3% — matches SVGF's recommended floor.
+        let alpha = max(1.0 / 32.0, 1.0 / (effHistLen + 1.0));
         var finalAlpha = alpha;
         if (isSpec) {
-            let primaryRough = textureLoad(albedoTex, pixel, 0).w;
-            let smoothness = 1.0 - clamp(primaryRough, 0.0, 1.0);
+            let smoothness = 1.0 - clamp(primaryRoughForCap, 0.0, 1.0);
             let specBoost = mix(1.0, 2.5, smoothness * smoothness);
             finalAlpha = min(1.0, alpha * specBoost);
         }
 
-        result = mix(clamped, curColor, finalAlpha);
+        result = mix(histColor, curColor, finalAlpha);
         newHistLen = effHistLen + 1.0;
     }
 
@@ -3104,15 +3075,12 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let demodBlend = select(smoothstep(0.05, 0.2, albedoLum), 0.0, isSpec);
     let cLum = mix(luminance_a(cColor), luminance_a(cIrr), demodBlend);
 
-    // Variance-guided luminance sigma: read temporal variance from moments buffer.
-    // σ² = E[L²] - E[L]² gives per-pixel noise estimate — filter aggressively
-    // where variance is high, stay sharp where converged.
+    // Variance-guided luminance sigma.
+    // Temporal variance from moments (reprojected, stable after ~10 frames).
     let moments = textureLoad(momentsBuf, pixel, 0).xy;
-    let variance = max(moments.y - moments.x * moments.x, 0.0);
-    // Specular: very wide sigma so the filter aggressively smooths noise.
-    // Without TAA temporal smoothing, the spatial filter is our only tool.
+    let temporalVar = max(moments.y - moments.x * moments.x, 0.0);
     let baseSigma = select(0.7, mix(0.5, 2.0, cRough), isSpec);
-    let lumSigma = max(select(0.02, 0.1, isSpec), sqrt(variance) * baseSigma);
+    let lumSigma  = max(select(0.02, 0.1, isSpec), sqrt(temporalVar) * baseSigma);
 
     // 5×5 bilateral filter — tracks both demodulated irradiance and raw color
     let kw = array<f32, 5>(1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
@@ -3120,6 +3088,11 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var irrSum    = vec3<f32>(0.0);
     var rawSum    = vec3<f32>(0.0);
     var weightSum = 0.0;
+    // Spatial luminance moments — accumulated during the filter loop below.
+    // Used to bootstrap variance in early frames before temporal moments converge.
+    var spatLumM1 = 0.0;
+    var spatLumM2 = 0.0;
+    var spatWsum  = 0.0;
 
     for (var dy = -2; dy <= 2; dy++) {
         for (var dx = -2; dx <= 2; dx++) {
@@ -3184,8 +3157,20 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             irrSum    += sIrrClamped  * w;
             rawSum    += sColorClamped * w;
             weightSum += w;
+            // Spatial luminance moments (unweighted by edge-stopping — spatial-only weight)
+            // Used for variance bootstrapping in early frames before temporal moments converge.
+            spatLumM1 += sLum * w_s;
+            spatLumM2 += sLum * sLum * w_s;
+            spatWsum  += w_s;
         }
     }
+
+    // Blend temporal and spatial variance for diagnostics / future passes:
+    // Early frames (cFC < 8): temporal moments haven't converged → rely on spatial estimate.
+    // Converged (cFC > 32): temporal moments are stable → use them (more accurate, follows surfaces).
+    let spatVar  = select(temporalVar, max(spatLumM2/spatWsum - (spatLumM1/spatWsum)*(spatLumM1/spatWsum), 0.0), spatWsum > 1e-6);
+    let varBlend = smoothstep(4.0, 32.0, cFC);
+    let variance = mix(spatVar, temporalVar, varBlend);
 
     // Blend: demod/remod path for bright surfaces, raw filter for dark surfaces
     let filteredIrr = select(cIrr, irrSum / weightSum, weightSum > 1e-6);
@@ -4591,6 +4576,7 @@ struct WgpuPathTracer::Impl {
     bool denoiserEnabled_ = true;
     bool temporalDenoiserEnabled_ = false;
     bool restirEnabled_ = true;
+    int spp_ = 1;
     float envIntensity_ = 0.5f;
     int maxBounces_ = 5;
     float exposure_ = 1.0f;
@@ -4935,7 +4921,8 @@ struct WgpuPathTracer::Impl {
         taaPipeline.setTexture(5, *readHitMesh);
         taaPipeline.setStorageBufferRead(6, motionMatBuf);
         taaPipeline.setTexture(7, albedoTex);
-        taaPipeline.setTexture(8, filteredA);  // preFilteredIn (rebound per-channel at dispatch)
+        taaPipeline.setTexture(8, *momentsRead);  // temporally accumulated (E[L], E[L²])
+        taaPipeline.setTexture(9, *gBufCur);      // previous frame g-buffer (depth for revealed-bg check)
 
         // Spatial filter — set ALL bindings upfront
         atrousPipeline.setUniformBuffer(0, atrousUniBuf);
@@ -5186,7 +5173,8 @@ struct WgpuPathTracer::Impl {
         preFilterPipeline.setTexture(3, *gBufPrev);
         preFilterPipeline.setTexture(4, *readHitMesh);
         taaPipeline.setTexture(7, albedoTex);
-        taaPipeline.setTexture(8, filteredA);
+        taaPipeline.setTexture(8, *momentsRead);
+        taaPipeline.setTexture(9, *gBufCur);  // prev frame depth
 
         frameCount_ = 0.f;
     }
@@ -6010,83 +5998,90 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.frameCount_ = 0.f;
     }
 
-    activePipeline.setTexture(1, *d.readAccum);
-    activePipeline.setStorageTexture(2, *d.writeAccum);
-    activePipeline.setTexture(7, *d.readHitMesh);
-    activePipeline.setStorageTexture(8, *d.writeHitMesh);
+    const uint32_t gx = (static_cast<uint32_t>(d.width_) + 7u) / 8u;
+    const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
 
-    // Batched GPU dispatch — single command encoder + compute pass
-    {
-        WGPUCommandEncoderDescriptor encDesc{};
-        encDesc.label = WGPUStringView{"pt_enc", WGPU_STRLEN};
-        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(d.device, &encDesc);
+    for (int sampleIdx = 0; sampleIdx < d.spp_; ++sampleIdx) {
 
-        WGPUComputePassDescriptor passDesc{};
-
-        if (anyMeshMoved) {
-            // Pass 1: vertex transform (writes triTex from objTriBuf + matrices)
-            passDesc.label = WGPUStringView{"vt_pass", WGPU_STRLEN};
-            WGPUComputePassEncoder vtPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
-            d.vtPipeline.encode(vtPass, d.vtDispatchX_, d.vtDispatchY_);
-            wgpuComputePassEncoderEnd(vtPass);
-            wgpuComputePassEncoderRelease(vtPass);
-
-            // Pass 2: BVH refit — skip on fresh build (CPU already packed padded f16 AABBs)
-            if (!topoJustFinished) {
-                passDesc.label = WGPUStringView{"rf_pass", WGPU_STRLEN};
-                WGPUComputePassEncoder rfPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
-                d.refitPipeline.encode(rfPass, d.rfDispatchX_, d.rfDispatchY_);
-                wgpuComputePassEncoderEnd(rfPass);
-                wgpuComputePassEncoderRelease(rfPass);
-            }
+        // Update frame count in uniforms for each sample (different random seed)
+        if (sampleIdx > 0) {
+            d.frameCount_ += 1.f;
+            u.frameCount[0] = d.frameCount_;
+            d.rtUniformBuf.write(&u, sizeof(u));
         }
 
-        // Pass 3: ray trace (reads triTex + bvhNodes)
-        passDesc.label = WGPUStringView{"rt_pass", WGPU_STRLEN};
-        WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
-        const uint32_t gx = (static_cast<uint32_t>(d.width_) + 7u) / 8u;
-        const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
-        activePipeline.encode(pass, gx, gy);
-        wgpuComputePassEncoderEnd(pass);
-        wgpuComputePassEncoderRelease(pass);
+        activePipeline.setTexture(1, *d.readAccum);
+        activePipeline.setStorageTexture(2, *d.writeAccum);
+        activePipeline.setTexture(7, *d.readHitMesh);
+        activePipeline.setStorageTexture(8, *d.writeHitMesh);
 
-        WGPUCommandBufferDescriptor cmdDesc{};
-        cmdDesc.label = WGPUStringView{"pt_cmd", WGPU_STRLEN};
-        WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
-        wgpuQueueSubmit(d.queue, 1, &cmd);
+        // GPU dispatch
+        {
+            WGPUCommandEncoderDescriptor encDesc{};
+            encDesc.label = WGPUStringView{"pt_enc", WGPU_STRLEN};
+            WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(d.device, &encDesc);
 
-        wgpuCommandBufferRelease(cmd);
-        wgpuCommandEncoderRelease(encoder);
+            WGPUComputePassDescriptor passDesc{};
+
+            // VT + BVH refit only on first sample (geometry doesn't change between samples)
+            if (sampleIdx == 0 && anyMeshMoved) {
+                passDesc.label = WGPUStringView{"vt_pass", WGPU_STRLEN};
+                WGPUComputePassEncoder vtPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
+                d.vtPipeline.encode(vtPass, d.vtDispatchX_, d.vtDispatchY_);
+                wgpuComputePassEncoderEnd(vtPass);
+                wgpuComputePassEncoderRelease(vtPass);
+
+                if (!topoJustFinished) {
+                    passDesc.label = WGPUStringView{"rf_pass", WGPU_STRLEN};
+                    WGPUComputePassEncoder rfPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
+                    d.refitPipeline.encode(rfPass, d.rfDispatchX_, d.rfDispatchY_);
+                    wgpuComputePassEncoderEnd(rfPass);
+                    wgpuComputePassEncoderRelease(rfPass);
+                }
+            }
+
+            // Ray trace
+            passDesc.label = WGPUStringView{"rt_pass", WGPU_STRLEN};
+            WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
+            activePipeline.encode(pass, gx, gy);
+            wgpuComputePassEncoderEnd(pass);
+            wgpuComputePassEncoderRelease(pass);
+
+            WGPUCommandBufferDescriptor cmdDesc{};
+            cmdDesc.label = WGPUStringView{"pt_cmd", WGPU_STRLEN};
+            WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+            wgpuQueueSubmit(d.queue, 1, &cmd);
+
+            wgpuCommandBufferRelease(cmd);
+            wgpuCommandEncoderRelease(encoder);
+        }
+
+        // Swap all ping-pong buffers so next sample reads this sample's output
+        std::swap(d.readAccum, d.writeAccum);
+        std::swap(d.readHitMesh, d.writeHitMesh);
+        std::swap(d.readDiffAccum, d.writeDiffAccum);
+        std::swap(d.readSpecAccum, d.writeSpecAccum);
+
+        std::swap(d.gBufCur, d.gBufPrev);
+        d.rtPipeline.setStorageTexture(10, *d.gBufCur);
+        d.rtPipeline.setTexture(15, *d.gBufPrev);
+
+        std::swap(d.reservoirRead, d.reservoirWrite);
+        std::swap(d.reservoirWRead, d.reservoirWWrite);
+        d.rtPipeline.setTexture(17, *d.reservoirRead);
+        d.rtPipeline.setStorageTexture(18, *d.reservoirWrite);
+        d.rtPipeline.setTexture(19, *d.reservoirWRead);
+        d.rtPipeline.setStorageTexture(20, *d.reservoirWWrite);
+
+        std::swap(d.momentsRead, d.momentsWrite);
+        d.rtPipeline.setTexture(21, *d.momentsRead);
+        d.rtPipeline.setStorageTexture(22, *d.momentsWrite);
+        d.rtPipeline.setTexture(23, *d.readDiffAccum);
+        d.rtPipeline.setStorageTexture(24, *d.writeDiffAccum);
+        d.rtPipeline.setTexture(25, *d.readSpecAccum);
+        d.rtPipeline.setStorageTexture(26, *d.writeSpecAccum);
     }
 
-    // Swap ping-pong (accum + hitMesh + diffuse/specular split)
-    std::swap(d.readAccum, d.writeAccum);
-    std::swap(d.readHitMesh, d.writeHitMesh);
-    std::swap(d.readDiffAccum, d.writeDiffAccum);
-    std::swap(d.readSpecAccum, d.writeSpecAccum);
-
-    // Swap gBuf for next frame
-    std::swap(d.gBufCur, d.gBufPrev);
-    d.rtPipeline.setStorageTexture(10, *d.gBufCur);
-    d.rtPipeline.setTexture(15, *d.gBufPrev);
-
-    // Swap ReSTIR reservoir ping-pong
-    std::swap(d.reservoirRead, d.reservoirWrite);
-    std::swap(d.reservoirWRead, d.reservoirWWrite);
-    d.rtPipeline.setTexture(17, *d.reservoirRead);
-    d.rtPipeline.setStorageTexture(18, *d.reservoirWrite);
-    d.rtPipeline.setTexture(19, *d.reservoirWRead);
-    d.rtPipeline.setStorageTexture(20, *d.reservoirWWrite);
-
-    // Swap moments ping-pong
-    std::swap(d.momentsRead, d.momentsWrite);
-    d.rtPipeline.setTexture(21, *d.momentsRead);
-    d.rtPipeline.setStorageTexture(22, *d.momentsWrite);
-    // Update split accum bindings after swap
-    d.rtPipeline.setTexture(23, *d.readDiffAccum);
-    d.rtPipeline.setStorageTexture(24, *d.writeDiffAccum);
-    d.rtPipeline.setTexture(25, *d.readSpecAccum);
-    d.rtPipeline.setStorageTexture(26, *d.writeSpecAccum);
     // Update denoiser's moments reference (reads converged moments)
     d.atrousPipeline.setTexture(6, *d.momentsRead);
 
@@ -6146,24 +6141,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
 
-        // --- Phase 2: Spatial pre-filter (stabilize neighborhood stats) ---
-        PreFilterGpuUniforms pfu{};
-        pfu.stepSize = 1;
-
-        // Diffuse: readDiffAccum → filteredA
-        d.preFilterPipeline.setTexture(1, *d.readDiffAccum);
-        d.preFilterPipeline.setStorageTexture(2, d.filteredA);
-        d.preFilterPipeline.setTexture(3, *d.gBufPrev);
-        d.preFilterPipeline.setTexture(4, *d.readHitMesh);
-        d.preFilterUniBuf.write(&pfu, sizeof(pfu));
-        d.preFilterPipeline.dispatch(gx, gy);
-
-        // Specular: readSpecAccum → filteredB
-        d.preFilterPipeline.setTexture(1, *d.readSpecAccum);
-        d.preFilterPipeline.setStorageTexture(2, d.filteredB);
-        d.preFilterUniBuf.write(&pfu, sizeof(pfu));
-        d.preFilterPipeline.dispatch(gx, gy);
-
         // --- Phase 3: Temporal accumulation ---
         {
             TaaGpuUniforms tu{};
@@ -6188,20 +6165,21 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             tu.frameCount[1] = 0.f;  // mode = diffuse
             d.taaUniBuf.write(&tu, sizeof(tu));
             d.taaPipeline.setTexture(1, *d.readDiffAccum);       // raw 1-spp
-            d.taaPipeline.setTexture(2, *d.gBufPrev);
+            d.taaPipeline.setTexture(2, *d.gBufPrev);            // current frame g-buffer (after swap: gBufPrev = just-written)
             d.taaPipeline.setTexture(3, *d.taaHistDiffRead);     // prev temporal history
             d.taaPipeline.setStorageTexture(4, *d.taaHistDiffWrite);
             d.taaPipeline.setTexture(5, *d.readHitMesh);
-            d.taaPipeline.setTexture(8, d.filteredA);             // preFilteredIn
+            d.taaPipeline.setTexture(8, *d.momentsRead);
+            d.taaPipeline.setTexture(9, *d.gBufCur);             // previous frame g-buffer (after swap: gBufCur = prev frame)
             d.taaPipeline.dispatch(gx, gy);
 
-            // Specular temporal: raw → taaHistSpecWrite, preFiltered = filteredB
+            // Specular temporal: raw → taaHistSpecWrite
             tu.frameCount[1] = 1.f;  // mode = specular
             d.taaUniBuf.write(&tu, sizeof(tu));
             d.taaPipeline.setTexture(1, *d.readSpecAccum);
             d.taaPipeline.setTexture(3, *d.taaHistSpecRead);
             d.taaPipeline.setStorageTexture(4, *d.taaHistSpecWrite);
-            d.taaPipeline.setTexture(8, d.filteredB);
+            d.taaPipeline.setTexture(8, *d.momentsRead);
             d.taaPipeline.dispatch(gx, gy);
 
             // Swap temporal history ping-pong
@@ -6428,6 +6406,14 @@ void WgpuPathTracer::setReSTIREnabled(bool enabled) {
 
 bool WgpuPathTracer::restirEnabled() const {
     return pimpl_->restirEnabled_;
+}
+
+void WgpuPathTracer::setSamplesPerPixel(int spp) {
+    pimpl_->spp_ = std::max(1, spp);
+}
+
+int WgpuPathTracer::samplesPerPixel() const {
+    return pimpl_->spp_;
 }
 
 void WgpuPathTracer::setFireflyClamp(float cap) {
