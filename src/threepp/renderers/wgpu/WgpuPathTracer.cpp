@@ -2220,18 +2220,13 @@ R"(
     // deep traces.  Camera motion resets fc to 0, automatically disabling this.
     var varianceReducedBounces = maxBounces;
 
-    // Per-pixel Cranley-Patterson rotation: offset R2 by a spatial hash to decorrelate pixels
-    let pixHash = pcg(gid.x + gid.y * 65537u);
-    let r2 = r2Seq(fc);
-    // Sub-pixel jitter centred on pixel centre (0.5, 0.5), range ±0.375.
-    // Gives TAA true sub-pixel information for silhouette AA without
-    // destabilising reprojection (TAA uses ray-distance for disocclusion, which
-    // is self-consistent because gBuf.w stores primaryDepth = h.t along this ray).
-    let jx = (fract(r2.x + f32(pixHash)       / 4294967296.0) - 0.5) * 0.75;
-    let jy = (fract(r2.y + f32(pcg(pixHash))  / 4294967296.0) - 0.5) * 0.75;
     var seed = pcg(pcg(gid.x + gid.y * 65537u) + fc * 12979u);
 
-    let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5 + jx, f32(pixel.y) + 0.5 + jy), res);
+    // No primary-ray jitter. Sub-pixel AA comes from BRDF/light importance sampling.
+    // Jitter forces the TAA history lookup to shift its bilinear blend ratio every frame;
+    // at geometry edges this mixes foreground/background history in varying proportions
+    // → shake that no amount of jitter-offset compensation can eliminate at 1 spp.
+    let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5, f32(pixel.y) + 0.5), res);
     var primaryMeshIdx: u32;
     var primaryNormal:  vec3<f32>;
     var primaryDepth:   f32;
@@ -2772,9 +2767,9 @@ constexpr const char* taaWGSL = R"(
 struct TaaUniforms {
     prevCamOri: vec4<f32>, prevCamFwd: vec4<f32>, prevCamRgt: vec4<f32>, prevCamUp: vec4<f32>,
     curCamOri:  vec4<f32>, curCamFwd:  vec4<f32>, curCamRgt:  vec4<f32>, curCamUp:  vec4<f32>,
-    iRes:       vec4<f32>,
+    iRes:       vec4<f32>,   // .xy = resolution, .zw = prevJx/prevJy
     tanHalfFov: vec4<f32>,
-    frameCount: vec4<f32>,   // .x = global FC, .y = mode (0=diff, 1=spec)
+    frameCount: vec4<f32>,   // .x = global FC, .y = mode (0=diff, 1=spec), .z = curJx, .w = curJy
     movedMeshBits: vec4<u32>,
 }
 
@@ -2830,7 +2825,6 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // path tracing where every sample is independently noisy regardless of history.
 
     // Reproject current pixel into previous frame's screen space.
-    // Primary ray is from pixel center so curDepth and this ray direction are consistent.
     let aspect = res.x / res.y;
     let ndc = vec2<f32>((f32(pixel.x) + 0.5) / res.x * 2.0 - 1.0,
                          1.0 - (f32(pixel.y) + 0.5) / res.y * 2.0);
@@ -2945,9 +2939,11 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var effHistLen = min(prevHistLen, maxHist);
         if (touchedMoved) { effHistLen = min(effHistLen, 4.0); }
 
-        // Minimum alpha: keep filter responsive to lighting changes even at convergence.
-        // 1/32 ≈ 3% — matches SVGF's recommended floor.
-        let alpha = max(1.0 / 32.0, 1.0 / (effHistLen + 1.0));
+        // Alpha floor: 1/32 while converging / in motion; drop to 1/64 once stable
+        // (history > 32 frames and pixel surface not moving) to halve noise injection
+        // at convergence without slowing response to lighting changes.
+        let stableFloor = select(1.0/32.0, 1.0/64.0, effHistLen > 32.0 && !touchedMoved);
+        let alpha = max(stableFloor, 1.0 / (effHistLen + 1.0));
         var finalAlpha = alpha;
         if (isSpec) {
             let smoothness = 1.0 - clamp(primaryRoughForCap, 0.0, 1.0);
@@ -3449,9 +3445,9 @@ struct alignas(16) DepthFillUniforms {
 struct alignas(16) TaaGpuUniforms {
     float prevCamOri[4], prevCamFwd[4], prevCamRgt[4], prevCamUp[4];
     float curCamOri[4],  curCamFwd[4],  curCamRgt[4],  curCamUp[4];
-    float iRes[4];
+    float iRes[4];          // [0]=w [1]=h [2]=prevJx [3]=prevJy
     float tanHalfFov[4];
-    float frameCount[4];
+    float frameCount[4];   // [0]=FC [1]=mode(0=diff,1=spec) [2]=curJx [3]=curJy
     uint32_t movedMeshBits[4];
 };
 static_assert(sizeof(TaaGpuUniforms) == 192, "TaaGpuUniforms must be 192 bytes");
