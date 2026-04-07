@@ -2223,9 +2223,9 @@ R"(
     var seed = pcg(pcg(gid.x + gid.y * 65537u) + fc * 12979u);
 
     // No primary-ray jitter. Sub-pixel AA comes from BRDF/light importance sampling.
-    // Jitter forces the TAA history lookup to shift its bilinear blend ratio every frame;
-    // at geometry edges this mixes foreground/background history in varying proportions
-    // → shake that no amount of jitter-offset compensation can eliminate at 1 spp.
+    // Jitter forces TAA disocclusion to fire every other frame at geometry edges
+    // (g-buffer depth/normal alternates between foreground/background) → perpetual
+    // 1-spp noise that never converges. Post-process FXAA handles edge AA instead.
     let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5, f32(pixel.y) + 0.5), res);
     var primaryMeshIdx: u32;
     var primaryNormal:  vec3<f32>;
@@ -2872,7 +2872,7 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let depthRatio = abs(prevZ - curZDepth) / max(curZDepth, 0.01);
     // Previous frame's ray depth at prevPixel (g-buffer .w stores ray distance).
     // Use curDepth (also ray distance) for comparison — same units, valid for both
-    // center and edge pixels. curZDepth (z-depth) would diverge by 1/cos(θ) at edges.
+    // center and edge pixels since rays from the same camera origin have the same length unit.
     let prevFrameDepth = textureLoad(gBufPrev, prevPixel, 0).w;
     // Depth mismatch: fires for BOTH revealed background (cur deeper) AND
     // object moved into view (cur shallower). The signed version missed the
@@ -3287,6 +3287,20 @@ fn aces(x: vec3<f32>) -> vec3<f32> {
                  vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+fn luma(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.299, 0.587, 0.114));
+}
+
+// Tonemap + gamma-correct a single accum-space pixel (used by FXAA).
+fn tonemapAt(p: vec2<i32>, sz: vec2<i32>, expo: f32) -> vec3<f32> {
+    let pc  = clamp(p, vec2<i32>(0), sz - vec2<i32>(1, 1));
+    let col = textureLoad(diffTex, pc, 0).xyz + textureLoad(specTex, pc, 0).xyz;
+    if (textureLoad(gBufTex, pc, 0).w <= 0.0) {
+        return pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+    }
+    return pow(aces(col * expo), vec3<f32>(1.0 / 2.2));
+}
+
 @fragment
 fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     // _pad carries the renderer's pixelRatio (== path tracer pixelScale).
@@ -3365,23 +3379,63 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
         return vec4<f32>(gc, 1.0);
     }
 
-    // Native resolution (pixelScale >= 1): direct lookup, no filtering needed
-    let px  = clamp(vec2<i32>(fragPos.xy * pixScale), vec2<i32>(0), accumSize - 1);
-    // Combine denoised diffuse + specular (split denoising gives better quality
-    // because each channel gets optimal filter parameters).
-    let diffuse  = textureLoad(diffTex, px, 0).xyz;
-    let specular = textureLoad(specTex, px, 0).xyz;
-    let col = diffuse + specular;
-    let t   = textureLoad(gBufTex,  px, 0).w;
-    // Background pixels: just gamma-correct, no tone mapping.
-    // Geometry pixels: exposure + ACES tone mapping + gamma.
-    var gc: vec3<f32>;
-    if (t <= 0.0) {
-        gc = pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
-    } else {
-        gc = pow(aces(col * exposure), vec3<f32>(1.0 / 2.2));
+    // Native resolution — FXAA quality pass (Jimenez 2011 Quality).
+    // Operates on the fully tone-mapped, gamma-corrected output so luma
+    // comparisons match perceptual intensity.  No temporal state involved.
+    let px = clamp(vec2<i32>(fragPos.xy * pixScale), vec2<i32>(0), accumSize - 1);
+
+    // === Phase 1: sample cardinal neighbors (5 reads) ===
+    let c  = tonemapAt(px,                        accumSize, exposure);
+    let cN = tonemapAt(px + vec2<i32>( 0, -1), accumSize, exposure);
+    let cS = tonemapAt(px + vec2<i32>( 0,  1), accumSize, exposure);
+    let cE = tonemapAt(px + vec2<i32>( 1,  0), accumSize, exposure);
+    let cW = tonemapAt(px + vec2<i32>(-1,  0), accumSize, exposure);
+
+    let lC = luma(c);
+    let lN = luma(cN); let lS = luma(cS);
+    let lE = luma(cE); let lW = luma(cW);
+
+    let lMin   = min(lC, min(min(lN, lS), min(lE, lW)));
+    let lMax   = max(lC, max(max(lN, lS), max(lE, lW)));
+    let lRange = lMax - lMin;
+
+    // === Early exit for non-edge pixels ===
+    // Stricter threshold than vanilla FXAA — denoised output is already smooth, so
+    // only process genuinely hard edges (e.g. silhouettes) not denoiser gradients.
+    let edgeThresh = max(0.05, lMax * 0.166);
+    if (lRange < edgeThresh) {
+        return vec4<f32>(c, 1.0);
     }
-    return vec4<f32>(gc, 1.0);
+
+    // === Phase 2: corner samples for edge direction (4 reads) ===
+    let lNW = luma(tonemapAt(px + vec2<i32>(-1, -1), accumSize, exposure));
+    let lNE = luma(tonemapAt(px + vec2<i32>( 1, -1), accumSize, exposure));
+    let lSW = luma(tonemapAt(px + vec2<i32>(-1,  1), accumSize, exposure));
+    let lSE = luma(tonemapAt(px + vec2<i32>( 1,  1), accumSize, exposure));
+
+    // Sub-pixel blend: kept conservative to avoid blurring already-smooth interiors
+    let lumAvg      = 0.25 * (lN + lS + lE + lW) + 0.125 * (lNW + lNE + lSW + lSE);
+    let subPixFactor = clamp(abs(lumAvg - lC) / lRange, 0.0, 1.0);
+    let subPixBlend  = subPixFactor * subPixFactor * 0.35;
+
+    // Sobel-like edge direction (H = row gradient → horizontal edge, V = col gradient → vertical edge)
+    let edgeH = abs(lNW + 2.0*lN + lNE - lSW - 2.0*lS - lSE);
+    let edgeV = abs(lNW + 2.0*lW + lSW - lNE - 2.0*lE - lSE);
+    let isHorz = edgeH >= edgeV;
+
+    // === Phase 3: perpendicular step — pick which side to blend toward (2 reads) ===
+    let perp = select(vec2<i32>(1, 0), vec2<i32>(0, 1), isHorz);
+    let lP   = luma(tonemapAt(px + perp, accumSize, exposure));
+    let lM   = luma(tonemapAt(px - perp, accumSize, exposure));
+    let blendPx = select(px - perp, px + perp, abs(lP - lC) >= abs(lM - lC));
+
+    // === Final blend — capped at 0.25 to avoid double-edge widening ===
+    // At 50% both edge pixels pull toward each other equally → 2-pixel-wide transition.
+    // 25% gives a gentler 1-pixel-wide smooth transition without visible thickening.
+    let edgeBlend   = clamp((lRange - edgeThresh) / lMax, 0.0, 0.25);
+    let blendFactor = max(subPixBlend, edgeBlend);
+    let blendCol    = tonemapAt(blendPx, accumSize, exposure);
+    return vec4<f32>(mix(c, blendCol, blendFactor), 1.0);
 }
 )";
 
