@@ -1691,8 +1691,9 @@ R"(
                     let prevU = (ndcX * 0.5 + 0.5) * rt.iRes.x;
                     let prevV = (0.5 - ndcY * 0.5) * rt.iRes.y;
                     // Round to nearest pixel (not truncate) to cancel jitter bias —
-                    // h.point comes from a jittered ray, so prevU/V have ±0.5 noise.
-                    let prevPx = vec2<i32>(i32(floor(prevU + 0.5)), i32(floor(prevV + 0.5)));
+                    // Primary ray is pixel-center (no jitter), so prevU/V land at i+0.5.
+                    // floor() gives the correct pixel index; +0.5 would overshoot by one.
+                    let prevPx = vec2<i32>(i32(floor(prevU)), i32(floor(prevV)));
 
                     if (prevPx.x >= 0 && prevPx.y >= 0 &&
                         prevPx.x < i32(rt.iRes.x) && prevPx.y < i32(rt.iRes.y)) {
@@ -2220,15 +2221,15 @@ R"(
     var varianceReducedBounces = maxBounces;
 
     // R2 quasi-random sub-pixel jitter (low-discrepancy stratification)
-    let r2  = r2Seq(fc);
+
     // Per-pixel Cranley-Patterson rotation: offset R2 by a spatial hash to decorrelate pixels
-    let pixHash = pcg(gid.x + gid.y * 65537u);
-    let jx  = fract(r2.x + f32(pixHash) / 4294967296.0) - 0.5;
-    let jy  = fract(r2.y + f32(pcg(pixHash)) / 4294967296.0) - 0.5;
     var seed = pcg(pcg(gid.x + gid.y * 65537u) + fc * 12979u);
 
-    // --- Full path trace for active pixels ---
-    let ray = makeRay(vec2<f32>(f32(pixel.x) + jx, f32(pixel.y) + jy), res);
+    // Pixel-center primary ray — no jitter. Path tracing gets anti-aliasing from
+    // BRDF/light sampling. Jitter misaligns g-buffer depth (ray distance) with the
+    // pixel-center ray direction used in TAA reprojection → edge shimmer.
+    // Instead, we store z-depth (dot with camera forward) so TAA worldPos is exact.
+    let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5, f32(pixel.y) + 0.5), res);
     var primaryMeshIdx: u32;
     var primaryNormal:  vec3<f32>;
     var primaryDepth:   f32;
@@ -2826,7 +2827,8 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Box clamping in temporal passes is a rasterizer TAA technique — incorrect for
     // path tracing where every sample is independently noisy regardless of history.
 
-    // Reproject current pixel into previous frame's screen space
+    // Reproject current pixel into previous frame's screen space.
+    // Primary ray is from pixel center so curDepth and this ray direction are consistent.
     let aspect = res.x / res.y;
     let ndc = vec2<f32>((f32(pixel.x) + 0.5) / res.x * 2.0 - 1.0,
                          1.0 - (f32(pixel.y) + 0.5) / res.y * 2.0);
@@ -2885,7 +2887,7 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let disoccluded = useHist && (depthRatio > 0.1 || revealedRatio > 0.15);
 
     var result = curColor;
-    var newHistLen = 1.0;  // reset: this is the first sample
+    var newHistLen = 1.0;
 
     if (useHist && !disoccluded) {
         // Bilinear history fetch
