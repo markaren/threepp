@@ -87,6 +87,11 @@ namespace threepp {
         void setOverlayLayer(int channel);
         [[nodiscard]] int overlayLayer() const;
 
+        /// AOV visualization mode. 0=off (normal rendering), 1=depth, 2=normals,
+        /// 3=albedo, 4=instance ID, 5=roughness. AOV output is noise-free (single sample).
+        void setAOVMode(int mode);
+        [[nodiscard]] int aovMode() const;
+
         /// Force a full scene rebuild (geometry + materials) on the next render call.
         void markDirty();
 

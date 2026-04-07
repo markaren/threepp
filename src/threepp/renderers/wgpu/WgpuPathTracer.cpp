@@ -2219,6 +2219,10 @@ R"(
     // deep traces.  Camera motion resets fc to 0, automatically disabling this.
     var varianceReducedBounces = maxBounces;
 
+    // AOV mode: only need primary-hit geometry data — skip all secondary bounces.
+    let aovMode = i32(rt.emissiveInfo.w);
+    if (aovMode > 0) { varianceReducedBounces = 1; }
+
     // R2 quasi-random sub-pixel jitter (low-discrepancy stratification)
     let r2  = r2Seq(fc);
     // Per-pixel Cranley-Patterson rotation: offset R2 by a spatial hash to decorrelate pixels
@@ -2238,6 +2242,26 @@ R"(
     var touchedMoved:   bool;
     var ptResult = pathTrace(ray, &seed, pixel, varianceReducedBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &primaryRough, &primaryMatIdx, &touchedMoved);
     var sample = ptResult.diff + ptResult.spec;
+
+    // AOV visualization mode — write noise-free primary-hit data and return early.
+    // Writes to diffAccumWrite (display shader reads diffTex + specTex).
+    if (aovMode > 0) {
+        var aovColor = vec3<f32>(0.0);
+        if (aovMode == 1)      { aovColor = vec3<f32>(primaryDepth / (primaryDepth + 1.0)); }
+        else if (aovMode == 2) { aovColor = primaryNormal * 0.5 + 0.5; }
+        else if (aovMode == 3) { aovColor = primaryAlbedo; }
+        else if (aovMode == 4) { aovColor = vec3<f32>(f32(primaryMeshIdx % 32u) / 32.0,
+                                                       f32((primaryMeshIdx * 7u) % 32u) / 32.0,
+                                                       f32((primaryMeshIdx * 13u) % 32u) / 32.0); }
+        else if (aovMode == 5) { aovColor = vec3<f32>(primaryRough); }
+        textureStore(diffAccumWrite, pixel, vec4<f32>(aovColor, 1.0));
+        textureStore(specAccumWrite, pixel, vec4<f32>(0.0, 0.0, 0.0, 1.0));
+        textureStore(accumWrite, pixel, vec4<f32>(aovColor, 1.0));
+        textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), 0.0, 0.0));
+        textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
+        textureStore(albedoWrite, pixel, vec4<f32>(primaryAlbedo, primaryRough));
+        return;
+    }
 
     // Raw 1-spp output mode (temporal denoiser pipeline)
     let rawOutputMode = rt.restirParams.w > 0.5;
@@ -3278,12 +3302,22 @@ fn aces(x: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
-    // _pad carries the renderer's pixelRatio (== path tracer pixelScale).
-    // Accum texture is at scaled resolution; screen is at full resolution.
-    // Map screen pixel → accum pixel by multiplying by the scale factor.
-    let pixScale  = max(transform._pad, 0.01);
+    // _pad encodes both pixelScale and AOV mode:
+    //   _pad = pixelScale + aovMode * 10.0
+    // Normal rendering: aovMode=0, _pad = pixelScale (0.1-2.0)
+    // AOV mode N: _pad = pixelScale + N*10  (N in 1..5, so _pad > 10)
+    let rawPad    = transform._pad;
+    let aovMode   = i32(rawPad / 10.0);
+    let pixScale  = max(rawPad - f32(aovMode) * 10.0, 0.01);
     let accumSize = vec2<i32>(textureDimensions(accumTex, 0));
     let exposure  = transform.cameraPos.z;
+
+    // AOV mode: direct passthrough of diffTex, gamma only (no tone mapping)
+    if (aovMode > 0) {
+        let px = clamp(vec2<i32>(fragPos.xy * pixScale), vec2<i32>(0), accumSize - 1);
+        let col = textureLoad(diffTex, px, 0).xyz;
+        return vec4<f32>(pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)), 1.0);
+    }
 
     // When rendering at reduced resolution (pixelScale < 1), use joint bilateral
     // upsampling guided by the G-buffer (normal + depth). This reconstructs sharp
@@ -4600,6 +4634,7 @@ struct WgpuPathTracer::Impl {
     // unbiased HDR output is required (ML training data, light-transport
     // validation). Primary-ray emissive hits are never clamped.
     float fireflyCap_ = 8.0f;
+    int aovMode_ = 0;  // 0=off, 1=depth, 2=normals, 3=albedo, 4=instanceId, 5=roughness
 
     // Dynamic capacity tracking — buffers grow as scenes demand more
     int triCapacity_  = INIT_TRI_CAP;
@@ -5913,6 +5948,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.emissiveInfo[0] = static_cast<float>(d.emissiveTriCount_);
     u.emissiveInfo[1] = d.emissiveTotalPower_;
     u.emissiveInfo[2] = d.fireflyCap_;  // luminance cap for indirect MIS contributions
+    u.emissiveInfo[3] = static_cast<float>(d.aovMode_);  // AOV visualization mode
     u.restirParams[0] = d.restirEnabled_ ? 1.f : 0.f;
     u.restirParams[1] = 20.f;  // M clamp — lower = crisper shadows, higher = lower variance
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
@@ -6098,7 +6134,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     WgpuTexture* displayDiff = d.readDiffAccum;
     WgpuTexture* displaySpec = d.readSpecAccum;
     const bool hasMotion = (movedBits[0] | movedBits[1] | movedBits[2] | movedBits[3]) != 0u;
-    const bool needsDenoise = (d.frameCount_ < 64.f || hasMotion);
+    const bool needsDenoise = (d.frameCount_ < 64.f || hasMotion) && d.aovMode_ == 0;
     if (d.denoiserEnabled_ && needsDenoise && !d.temporalDenoiserEnabled_) {
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
@@ -6141,7 +6177,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;
-    } else if (d.temporalDenoiserEnabled_ && d.denoiserEnabled_) {
+    } else if (d.temporalDenoiserEnabled_ && d.denoiserEnabled_ && d.aovMode_ == 0) {
         // New pipeline: 1-spp → pre-filter → temporal → spatial cleanup
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
@@ -6252,9 +6288,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     d.displayMat->uniformsNeedUpdate = true;
     d.frameCount_ += 1.f;
 
-    // Pass exposure to display shader via ortho camera z-position (read as transform.cameraPos.z).
-    // Default z=1.0 matches identity exposure; ortho projection is unaffected by z translation.
+    // Pass exposure via camera z (transform.cameraPos.z); always positive so the display quad
+    // stays in front of the near plane.  AOV mode is encoded in _pad: _pad = pixelScale + aovMode*10,
+    // allowing the display shader to extract both pixelScale and aovMode from a single float.
     d.displayCam.position.z = d.exposure_;
+    d.renderer.setPixelRatioHint(d.pixelScale_ + static_cast<float>(d.aovMode_) * 10.f);
 
     // Blit to screen
     d.renderer.render(d.displayScene, d.displayCam);
@@ -6438,6 +6476,17 @@ float WgpuPathTracer::fireflyClamp() const {
     return pimpl_->fireflyCap_;
 }
 
+void WgpuPathTracer::setAOVMode(int mode) {
+    mode = std::max(0, std::min(mode, 5));
+    if (pimpl_->aovMode_ != mode) {
+        pimpl_->aovMode_ = mode;
+        pimpl_->frameCount_ = 0.f;
+    }
+}
+
+int WgpuPathTracer::aovMode() const {
+    return pimpl_->aovMode_;
+}
 
 void WgpuPathTracer::setSize(std::pair<int, int> size) {
     pimpl_->fullWidth_ = size.first;
