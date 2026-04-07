@@ -1690,7 +1690,9 @@ R"(
                     let ndcY = dy / (dz * thf);
                     let prevU = (ndcX * 0.5 + 0.5) * rt.iRes.x;
                     let prevV = (0.5 - ndcY * 0.5) * rt.iRes.y;
-                    let prevPx = vec2<i32>(i32(prevU), i32(prevV));
+                    // Round to nearest pixel (not truncate) to cancel jitter bias —
+                    // h.point comes from a jittered ray, so prevU/V have ±0.5 noise.
+                    let prevPx = vec2<i32>(i32(floor(prevU + 0.5)), i32(floor(prevV + 0.5)));
 
                     if (prevPx.x >= 0 && prevPx.y >= 0 &&
                         prevPx.x < i32(rt.iRes.x) && prevPx.y < i32(rt.iRes.y)) {
