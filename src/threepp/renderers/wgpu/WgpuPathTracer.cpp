@@ -2220,16 +2220,18 @@ R"(
     // deep traces.  Camera motion resets fc to 0, automatically disabling this.
     var varianceReducedBounces = maxBounces;
 
-    // R2 quasi-random sub-pixel jitter (low-discrepancy stratification)
-
     // Per-pixel Cranley-Patterson rotation: offset R2 by a spatial hash to decorrelate pixels
+    let pixHash = pcg(gid.x + gid.y * 65537u);
+    let r2 = r2Seq(fc);
+    // Sub-pixel jitter centred on pixel centre (0.5, 0.5), range ±0.375.
+    // Gives TAA true sub-pixel information for silhouette AA without
+    // destabilising reprojection (TAA uses ray-distance for disocclusion, which
+    // is self-consistent because gBuf.w stores primaryDepth = h.t along this ray).
+    let jx = (fract(r2.x + f32(pixHash)       / 4294967296.0) - 0.5) * 0.75;
+    let jy = (fract(r2.y + f32(pcg(pixHash))  / 4294967296.0) - 0.5) * 0.75;
     var seed = pcg(pcg(gid.x + gid.y * 65537u) + fc * 12979u);
 
-    // Pixel-center primary ray — no jitter. Path tracing gets anti-aliasing from
-    // BRDF/light sampling. Jitter misaligns g-buffer depth (ray distance) with the
-    // pixel-center ray direction used in TAA reprojection → edge shimmer.
-    // Instead, we store z-depth (dot with camera forward) so TAA worldPos is exact.
-    let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5, f32(pixel.y) + 0.5), res);
+    let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5 + jx, f32(pixel.y) + 0.5 + jy), res);
     var primaryMeshIdx: u32;
     var primaryNormal:  vec3<f32>;
     var primaryDepth:   f32;
@@ -2840,7 +2842,6 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // For moved meshes: transform world pos by motion matrix
     let meshIdx = u32(textureLoad(hitMeshTex, pixel, 0).r);
     var prevWorldPos = worldPos;
-    var movedMesh = false;
     if (meshIdx < 128u) {
         let bit = meshIdx & 31u;
         let wi  = meshIdx >> 5u;
@@ -2851,7 +2852,6 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         else               { mbits = taa.movedMeshBits.w; }
         if (((mbits >> bit) & 1u) != 0u) {
             prevWorldPos = (motionMats[meshIdx] * vec4<f32>(worldPos, 1.0)).xyz;
-            movedMesh = true;
         }
     }
 
@@ -2890,18 +2890,46 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var newHistLen = 1.0;
 
     if (useHist && !disoccluded) {
-        // Bilinear history fetch
+        // Per-tap validated bilinear history fetch.
+        // Blindly blending 4 taps at geometry edges mixes foreground/background
+        // history → shimmer as the jitter shifts the bilinear footprint frame-to-frame.
+        // Each tap is validated against: depth agreement + normal agreement with current pixel.
         let fx = fract(prevPx.x);
         let fy = fract(prevPx.y);
+        let px00 = prevPixel;
         let px10 = prevPixel + vec2<i32>(1, 0);
         let px01 = prevPixel + vec2<i32>(0, 1);
         let px11 = prevPixel + vec2<i32>(1, 1);
-        let h00 = textureLoad(taaHistIn, prevPixel, 0);
+
+        let h00 = textureLoad(taaHistIn, px00, 0);
         let h10 = textureLoad(taaHistIn, px10, 0);
         let h01 = textureLoad(taaHistIn, px01, 0);
         let h11 = textureLoad(taaHistIn, px11, 0);
-        let histColor   = mix(mix(h00.xyz, h10.xyz, fx), mix(h01.xyz, h11.xyz, fx), fy);
-        let prevHistLen = mix(mix(h00.w,   h10.w,   fx), mix(h01.w,   h11.w,   fx), fy);
+
+        let curNorm = curGB.xyz;
+        let gb00 = textureLoad(gBufPrev, px00, 0);
+        let gb10 = textureLoad(gBufPrev, px10, 0);
+        let gb01 = textureLoad(gBufPrev, px01, 0);
+        let gb11 = textureLoad(gBufPrev, px11, 0);
+
+        // Slightly relaxed depth threshold vs global disocclusion to avoid over-rejection
+        let depthTol = 0.2;
+        let normTol  = 0.8;  // dot(curNorm, tapNorm) must exceed this
+
+        let v00 = select(0.0, (1.0-fx)*(1.0-fy), abs(gb00.w - curDepth)/max(curDepth,0.01) < depthTol && dot(curNorm, gb00.xyz) > normTol);
+        let v10 = select(0.0, fx      *(1.0-fy), abs(gb10.w - curDepth)/max(curDepth,0.01) < depthTol && dot(curNorm, gb10.xyz) > normTol);
+        let v01 = select(0.0, (1.0-fx)*fy,       abs(gb01.w - curDepth)/max(curDepth,0.01) < depthTol && dot(curNorm, gb01.xyz) > normTol);
+        let v11 = select(0.0, fx      *fy,        abs(gb11.w - curDepth)/max(curDepth,0.01) < depthTol && dot(curNorm, gb11.xyz) > normTol);
+        let vSum = v00 + v10 + v01 + v11;
+
+        // No valid taps — treat as disoccluded
+        if (vSum < 1e-6) {
+            textureStore(taaOut, pixel, vec4<f32>(curColor, 1.0));
+            return;
+        }
+        let inv = 1.0 / vSum;
+        let histColor   = (h00.xyz*v00 + h10.xyz*v10 + h01.xyz*v01 + h11.xyz*v11) * inv;
+        let prevHistLen = (h00.w  *v00 + h10.w  *v10 + h01.w  *v01 + h11.w  *v11) * inv;
 
         // SVGF-style: pure EMA accumulation, no color-box clamping.
         // The moments-driven à-trous spatial filter handles all noise removal.
