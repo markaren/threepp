@@ -3275,7 +3275,8 @@ struct TransformUniforms {
 // binding 5 = diffTex sampler (unused)
 @group(0) @binding(6) var gBufTex:  texture_2d<f32>;  // gBuf: .w = primary hit t, 0 = background
 // binding 7 = gBufTex sampler (unused)
-@group(0) @binding(8) var specTex:  texture_2d<f32>;   // specular radiance
+@group(0) @binding(8) var specTex:     texture_2d<f32>;   // specular radiance
+@group(0) @binding(10) var upscaleTex: texture_2d<f32>;   // TAAU full-res output (1×1 dummy when inactive)
 
 @vertex
 fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
@@ -3301,6 +3302,15 @@ fn tonemapAt(p: vec2<i32>, sz: vec2<i32>, expo: f32) -> vec3<f32> {
     return pow(aces(col * expo), vec3<f32>(1.0 / 2.2));
 }
 
+// Tonemap + gamma-correct a full-res TAAU pixel.
+// histLen < 0 means sky sentinel — apply gamma but no ACES.
+fn tonemapUpscaleAt(p: vec2<i32>, sz: vec2<i32>, expo: f32) -> vec3<f32> {
+    let pc = clamp(p, vec2<i32>(0), sz - vec2<i32>(1, 1));
+    let s  = textureLoad(upscaleTex, pc, 0);
+    if (s.w < 0.0) { return pow(max(s.xyz, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)); }
+    return pow(aces(s.xyz * expo), vec3<f32>(1.0 / 2.2));
+}
+
 @fragment
 fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     // _pad carries the renderer's pixelRatio (== path tracer pixelScale).
@@ -3309,6 +3319,55 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     let pixScale  = max(transform._pad, 0.01);
     let accumSize = vec2<i32>(textureDimensions(accumTex, 0));
     let exposure  = transform.cameraPos.z;
+
+    // Temporal upscale path: if upscaleTex is full-res (> 1×1), TAAU is active.
+    // Apply FXAA directly on the full-res temporally upscaled output.
+    let upscaleSize = vec2<i32>(textureDimensions(upscaleTex, 0));
+    if (upscaleSize.x > 1) {
+        let px = vec2<i32>(i32(fragPos.x), i32(fragPos.y));
+
+        let c  = tonemapUpscaleAt(px,                          upscaleSize, exposure);
+        let cN = tonemapUpscaleAt(px + vec2<i32>( 0, -1), upscaleSize, exposure);
+        let cS = tonemapUpscaleAt(px + vec2<i32>( 0,  1), upscaleSize, exposure);
+        let cE = tonemapUpscaleAt(px + vec2<i32>( 1,  0), upscaleSize, exposure);
+        let cW = tonemapUpscaleAt(px + vec2<i32>(-1,  0), upscaleSize, exposure);
+
+        let lC = luma(c);
+        let lN = luma(cN); let lS = luma(cS);
+        let lE = luma(cE); let lW = luma(cW);
+
+        let lMin   = min(lC, min(min(lN, lS), min(lE, lW)));
+        let lMax   = max(lC, max(max(lN, lS), max(lE, lW)));
+        let lRange = lMax - lMin;
+
+        let edgeThresh = max(0.05, lMax * 0.166);
+        if (lRange < edgeThresh) {
+            return vec4<f32>(c, 1.0);
+        }
+
+        let lNW = luma(tonemapUpscaleAt(px + vec2<i32>(-1, -1), upscaleSize, exposure));
+        let lNE = luma(tonemapUpscaleAt(px + vec2<i32>( 1, -1), upscaleSize, exposure));
+        let lSW = luma(tonemapUpscaleAt(px + vec2<i32>(-1,  1), upscaleSize, exposure));
+        let lSE = luma(tonemapUpscaleAt(px + vec2<i32>( 1,  1), upscaleSize, exposure));
+
+        let lumAvg       = 0.25 * (lN + lS + lE + lW) + 0.125 * (lNW + lNE + lSW + lSE);
+        let subPixFactor = clamp(abs(lumAvg - lC) / lRange, 0.0, 1.0);
+        let subPixBlend  = subPixFactor * subPixFactor * 0.35;
+
+        let edgeH  = abs(lNW + 2.0*lN + lNE - lSW - 2.0*lS - lSE);
+        let edgeV  = abs(lNW + 2.0*lW + lSW - lNE - 2.0*lE - lSE);
+        let isHorz = edgeH >= edgeV;
+
+        let perp   = select(vec2<i32>(1, 0), vec2<i32>(0, 1), isHorz);
+        let lP     = luma(tonemapUpscaleAt(px + perp, upscaleSize, exposure));
+        let lM     = luma(tonemapUpscaleAt(px - perp, upscaleSize, exposure));
+        let blendPx = select(px - perp, px + perp, abs(lP - lC) >= abs(lM - lC));
+
+        let edgeBlend   = clamp((lRange - edgeThresh) / lMax, 0.0, 0.25);
+        let blendFactor = max(subPixBlend, edgeBlend);
+        let blendCol    = tonemapUpscaleAt(blendPx, upscaleSize, exposure);
+        return vec4<f32>(mix(c, blendCol, blendFactor), 1.0);
+    }
 
     // When rendering at reduced resolution (pixelScale < 1), use joint bilateral
     // upsampling guided by the G-buffer (normal + depth). This reconstructs sharp
@@ -3505,6 +3564,15 @@ struct alignas(16) TaaGpuUniforms {
     uint32_t movedMeshBits[4];
 };
 static_assert(sizeof(TaaGpuUniforms) == 192, "TaaGpuUniforms must be 192 bytes");
+
+struct alignas(16) UpscaleGpuUniforms {
+    float prevCamOri[4], prevCamFwd[4], prevCamRgt[4], prevCamUp[4]; // 64 bytes
+    float curCamOri[4],  curCamFwd[4],  curCamRgt[4],  curCamUp[4]; // 64 bytes
+    float iRes[4];        // [0]=fullW [1]=fullH [2]=pixelScale [3]=0
+    float tanHalfFov[4];
+    float frameCount[4];  // [0]=FC
+};
+static_assert(sizeof(UpscaleGpuUniforms) == 176, "UpscaleGpuUniforms must be 176 bytes");
 
 // ---------------------------------------------------------------------------
 // Binary BVH node (used during build, then collapsed to BVH4)
@@ -4558,6 +4626,113 @@ static void buildBVH(std::vector<float>& triBuffer, int triCount,
 }// anonymous namespace
 
 // ---------------------------------------------------------------------------
+// WGSL temporal upscale shader — runs at full resolution, accumulates low-res
+// denoised frames into a full-res history buffer via reprojection + EMA.
+// ---------------------------------------------------------------------------
+constexpr const char* upscaleWGSL = R"(
+struct UpscaleUniforms {
+    prevCamOri: vec4<f32>,
+    prevCamFwd: vec4<f32>,
+    prevCamRgt: vec4<f32>,
+    prevCamUp:  vec4<f32>,
+    curCamOri:  vec4<f32>,
+    curCamFwd:  vec4<f32>,
+    curCamRgt:  vec4<f32>,
+    curCamUp:   vec4<f32>,
+    iRes:       vec4<f32>,   // [0]=fullW [1]=fullH [2]=pixelScale [3]=0
+    tanHalfFov: vec4<f32>,
+    frameCount: vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> up: UpscaleUniforms;
+@group(0) @binding(1) var denoisedDiff: texture_2d<f32>;
+@group(0) @binding(2) var denoisedSpec: texture_2d<f32>;
+@group(0) @binding(3) var gBufCurLow: texture_2d<f32>;  // normal.xyz + rayDist.w
+@group(0) @binding(4) var historyIn:  texture_2d<f32>;  // previous full-res output
+@group(0) @binding(5) var historyOut: texture_storage_2d<rgba16float, write>;
+
+@compute @workgroup_size(8, 8)
+fn upscale_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let fullPx  = vec2<i32>(i32(gid.x), i32(gid.y));
+    let fullW   = up.iRes.x;
+    let fullH   = up.iRes.y;
+    if (f32(fullPx.x) >= fullW || f32(fullPx.y) >= fullH) { return; }
+
+    let pixScale   = up.iRes.z;
+    let lowResSize = vec2<i32>(textureDimensions(denoisedDiff));
+
+    // Map full-res pixel to low-res accum pixel
+    let lowResPx = clamp(
+        vec2<i32>(vec2<f32>(fullPx) * pixScale),
+        vec2<i32>(0),
+        lowResSize - vec2<i32>(1)
+    );
+
+    // Current denoised color at low-res pixel
+    let curColor = textureLoad(denoisedDiff, lowResPx, 0).xyz
+                 + textureLoad(denoisedSpec, lowResPx, 0).xyz;
+
+    // G-buffer: normal.xyz + ray distance.w
+    let gBuf     = textureLoad(gBufCurLow, lowResPx, 0);
+    let curDepth = gBuf.w;
+
+    // Sky pixel — no temporal history possible
+    if (curDepth < 1e-6) {
+        textureStore(historyOut, fullPx, vec4<f32>(curColor, -1.0));
+        return;
+    }
+
+    // Reconstruct world position from low-res pixel-center ray + ray distance
+    let aspect  = fullW / fullH;
+    let tanHfov = up.tanHalfFov.x;
+    let lowNdc  = vec2<f32>(
+        (f32(lowResPx.x) + 0.5) / f32(lowResSize.x) * 2.0 - 1.0,
+        1.0 - (f32(lowResPx.y) + 0.5) / f32(lowResSize.y) * 2.0
+    );
+    let rayDir  = normalize(up.curCamFwd.xyz
+                          + up.curCamRgt.xyz * (lowNdc.x * tanHfov * aspect)
+                          + up.curCamUp.xyz  * (lowNdc.y * tanHfov));
+    let worldPos = up.curCamOri.xyz + rayDir * curDepth;
+
+    // Reproject world position to previous frame's full-res screen
+    let relP  = worldPos - up.prevCamOri.xyz;
+    let prevZ = dot(relP, up.prevCamFwd.xyz);
+    if (prevZ <= 0.001) {
+        textureStore(historyOut, fullPx, vec4<f32>(curColor, 1.0));
+        return;
+    }
+
+    let prevNdcX = dot(relP, up.prevCamRgt.xyz) / (prevZ * tanHfov * aspect);
+    let prevNdcY = dot(relP, up.prevCamUp.xyz)  / (prevZ * tanHfov);
+    let prevU    = (prevNdcX + 1.0) * 0.5 * fullW - 0.5;
+    let prevV    = (1.0 - prevNdcY) * 0.5 * fullH - 0.5;
+    let prevFullPx = vec2<i32>(i32(floor(prevU)), i32(floor(prevV)));
+
+    if (prevFullPx.x < 0 || prevFullPx.y < 0 ||
+        prevFullPx.x >= i32(fullW) || prevFullPx.y >= i32(fullH)) {
+        textureStore(historyOut, fullPx, vec4<f32>(curColor, 1.0));
+        return;
+    }
+
+    // Fetch full-res history (.w = histLen; -1 = sky sentinel; 0 = fresh/reset)
+    let histSamp  = textureLoad(historyIn, prevFullPx, 0);
+    let histColor = histSamp.xyz;
+    let histLen   = histSamp.w;
+
+    // Disocclusion: only reject sky-sentinel history (depth cross-frame comparison
+    // is unreliable for moving cameras — let short max-history handle ghosting).
+    var result     = curColor;
+    var newHistLen = 1.0;
+    if (histLen >= 0.0) {
+        newHistLen = min(histLen + 1.0, 32.0);
+        let alpha  = max(1.0 / 16.0, 1.0 / newHistLen);
+        result = mix(histColor, curColor, alpha);
+    }
+
+    textureStore(historyOut, fullPx, vec4<f32>(result, newHistLen));
+}
+)";
+
+// ---------------------------------------------------------------------------
 // WgpuPathTracer::Impl
 // ---------------------------------------------------------------------------
 struct WgpuPathTracer::Impl {
@@ -4645,6 +4820,16 @@ struct WgpuPathTracer::Impl {
     WgpuTexture taaHistSpecB;
     WgpuTexture* taaHistSpecRead;
     WgpuTexture* taaHistSpecWrite;
+
+    // Temporal upscale (TAAU) — full-res ping-pong, active when pixelScale < 0.85
+    WgpuTexture upscaleTexA;
+    WgpuTexture upscaleTexB;
+    WgpuTexture zeroTex;           // 1×1 dummy; bound when upscale inactive
+    WgpuTexture* upscaleRead;
+    WgpuTexture* upscaleWrite;
+    WgpuComputePipeline upscalePipeline;
+    WgpuBuffer          upscaleUniBuf;
+    UpscaleGpuUniforms  upscaleUBO{};
 
     // Denoiser pipelines
     WgpuComputePipeline taaPipeline;
@@ -4909,6 +5094,19 @@ struct WgpuPathTracer::Impl {
           taaHistSpecB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                        WgpuTexture::Format::RGBA16Float),
           taaHistSpecRead(&taaHistSpecA), taaHistSpecWrite(&taaHistSpecB),
+          // TAAU full-res ping-pong textures
+          upscaleTexA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                      WgpuTexture::Format::RGBA16Float,
+                      WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
+          upscaleTexB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                      WgpuTexture::Format::RGBA16Float,
+                      WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
+          zeroTex(r, 1u, 1u,
+                  WgpuTexture::Format::RGBA16Float,
+                  WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
+          upscaleRead(&upscaleTexA), upscaleWrite(&upscaleTexB),
+          upscalePipeline(r, upscaleWGSL, "upscale_main"),
+          upscaleUniBuf(r, sizeof(UpscaleGpuUniforms)),
           // Denoiser pipelines
           taaPipeline(r, taaWGSL, "taa_main"),
           atrousPipeline(r, svgfAtrousWGSL, "svgf_atrous_main"),
@@ -5020,6 +5218,14 @@ struct WgpuPathTracer::Impl {
         preFilterPipeline.setTexture(3, *gBufPrev);
         preFilterPipeline.setTexture(4, *readHitMesh);
 
+        // TAAU pipeline — initial bindings (per-frame ones refreshed in render)
+        upscalePipeline.setUniformBuffer(0, upscaleUniBuf);
+        upscalePipeline.setTexture(1, denoisedDiff);
+        upscalePipeline.setTexture(2, denoisedSpec);
+        upscalePipeline.setTexture(3, *gBufCur);
+        upscalePipeline.setTexture(4, *upscaleRead);
+        upscalePipeline.setStorageTexture(5, *upscaleWrite);
+
         // Kick off async shader compilation for the small helper pipelines.
         // The large RT shaders are compiled after the first topology build so that
         // async uses the real (scene-sized) buffer bindings — this avoids a costly
@@ -5031,6 +5237,7 @@ struct WgpuPathTracer::Impl {
         taaPipeline.startAsyncBuild();
         preFilterPipeline.startAsyncBuild();
         atrousPipeline.startAsyncBuild();
+        upscalePipeline.startAsyncBuild();
         std::cerr << "[PathTracer] Async shader compilation started for helper pipelines" << std::endl;
 
         // Zero-fill accumulators and SVGF textures
@@ -5064,8 +5271,9 @@ struct WgpuPathTracer::Impl {
         displayMat->fragmentShader = displayWGSL;
         displayMat->customTextures["accumTex"] = readAccum;
         displayMat->customTextures["gBufTex"]  = gBufPrev;
-        displayMat->customTextures["diffTex"]  = readDiffAccum;
-        displayMat->customTextures["specTex"]  = readSpecAccum;
+        displayMat->customTextures["diffTex"]      = readDiffAccum;
+        displayMat->customTextures["specTex"]      = readSpecAccum;
+        displayMat->customTextures["upscaleTex"]   = &zeroTex;
         displayScene.add(Mesh::create(PlaneGeometry::create(2.f, 2.f), displayMat));
 
         // Depth-fill: build shader, BGL, layout, and uniform buffer now.
@@ -5257,6 +5465,30 @@ struct WgpuPathTracer::Impl {
         taaPipeline.setTexture(9, *gBufCur);  // prev frame depth
 
         frameCount_ = 0.f;
+    }
+
+    void recreateUpscaleTextures(int fw, int fh) {
+        auto ufw = static_cast<uint32_t>(fw);
+        auto ufh = static_cast<uint32_t>(fh);
+        const uint32_t usage = WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst;
+        auto fmt = WgpuTexture::Format::RGBA16Float;
+        upscaleTexA = WgpuTexture(renderer, ufw, ufh, fmt, usage);
+        upscaleTexB = WgpuTexture(renderer, ufw, ufh, fmt, usage);
+        upscaleRead  = &upscaleTexA;
+        upscaleWrite = &upscaleTexB;
+        std::vector<float> zeros(fw * fh * 4, 0.f);
+        upscaleTexA.write(zeros.data(), zeros.size() * sizeof(float));
+        upscaleTexB.write(zeros.data(), zeros.size() * sizeof(float));
+    }
+
+    void resetUpscaleHistory() {
+        // Zero-fill histLen (w=0 → first frame takes 100% current, no stale blending)
+        const int fw = fullWidth_;
+        const int fh = fullHeight_;
+        if (fw <= 0 || fh <= 0) return;
+        std::vector<float> zeros(fw * fh * 4, 0.f);
+        upscaleTexA.write(zeros.data(), zeros.size() * sizeof(float));
+        upscaleTexB.write(zeros.data(), zeros.size() * sizeof(float));
     }
 };
 
@@ -6297,6 +6529,43 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         displaySpec = &d.denoisedSpec;
     }
 
+    // --- TAAU: temporal upscale (active when pixelScale < 0.65, i.e. ≥1.5× upscale) ---
+    if (d.pixelScale_ < 0.65f) {
+        UpscaleGpuUniforms& uu = d.upscaleUBO;
+        uu.prevCamOri[0] = d.prevCamOri_[0]; uu.prevCamOri[1] = d.prevCamOri_[1]; uu.prevCamOri[2] = d.prevCamOri_[2]; uu.prevCamOri[3] = 0.f;
+        uu.prevCamFwd[0] = d.prevCamFwd_[0]; uu.prevCamFwd[1] = d.prevCamFwd_[1]; uu.prevCamFwd[2] = d.prevCamFwd_[2]; uu.prevCamFwd[3] = 0.f;
+        uu.prevCamRgt[0] = d.prevCamRgt_[0]; uu.prevCamRgt[1] = d.prevCamRgt_[1]; uu.prevCamRgt[2] = d.prevCamRgt_[2]; uu.prevCamRgt[3] = 0.f;
+        uu.prevCamUp[0]  = d.prevCamUp_[0];  uu.prevCamUp[1]  = d.prevCamUp_[1];  uu.prevCamUp[2]  = d.prevCamUp_[2];  uu.prevCamUp[3]  = 0.f;
+        uu.curCamOri[0] = camPos.x; uu.curCamOri[1] = camPos.y; uu.curCamOri[2] = camPos.z; uu.curCamOri[3] = 0.f;
+        uu.curCamFwd[0] = fwd.x;    uu.curCamFwd[1] = fwd.y;    uu.curCamFwd[2] = fwd.z;    uu.curCamFwd[3] = 0.f;
+        uu.curCamRgt[0] = rgt.x;    uu.curCamRgt[1] = rgt.y;    uu.curCamRgt[2] = rgt.z;    uu.curCamRgt[3] = 0.f;
+        uu.curCamUp[0]  = up.x;     uu.curCamUp[1]  = up.y;     uu.curCamUp[2]  = up.z;     uu.curCamUp[3]  = 0.f;
+        uu.iRes[0] = static_cast<float>(d.fullWidth_);
+        uu.iRes[1] = static_cast<float>(d.fullHeight_);
+        uu.iRes[2] = d.pixelScale_;
+        uu.iRes[3] = 0.f;
+        uu.tanHalfFov[0] = tanHalfFov;
+        uu.tanHalfFov[1] = uu.tanHalfFov[2] = uu.tanHalfFov[3] = 0.f;
+        uu.frameCount[0] = d.frameCount_;
+        uu.frameCount[1] = uu.frameCount[2] = uu.frameCount[3] = 0.f;
+        d.upscaleUniBuf.write(&uu, sizeof(uu));
+
+        d.upscalePipeline.setTexture(1, *displayDiff);
+        d.upscalePipeline.setTexture(2, *displaySpec);
+        d.upscalePipeline.setTexture(3, *d.gBufPrev);
+        d.upscalePipeline.setTexture(4, *d.upscaleRead);
+        d.upscalePipeline.setStorageTexture(5, *d.upscaleWrite);
+
+        const int ugx = (d.fullWidth_  + 7) / 8;
+        const int ugy = (d.fullHeight_ + 7) / 8;
+        d.upscalePipeline.dispatch(ugx, ugy, 1);
+        std::swap(d.upscaleRead, d.upscaleWrite);
+
+        d.displayMat->customTextures["upscaleTex"] = d.upscaleRead;
+    } else {
+        d.displayMat->customTextures["upscaleTex"] = &d.zeroTex;
+    }
+
     // Store camera for next frame's reprojection (must run every frame, not just when denoiser is active)
     d.prevCamOri_[0] = camPos.x; d.prevCamOri_[1] = camPos.y; d.prevCamOri_[2] = camPos.z;
     d.prevCamFwd_[0] = fwd.x;    d.prevCamFwd_[1] = fwd.y;    d.prevCamFwd_[2] = fwd.z;
@@ -6511,6 +6780,7 @@ void WgpuPathTracer::setSize(std::pair<int, int> size) {
     const int sw = std::max(1, static_cast<int>(size.first * pimpl_->pixelScale_));
     const int sh = std::max(1, static_cast<int>(size.second * pimpl_->pixelScale_));
     pimpl_->recreateAccumTextures(sw, sh);
+    pimpl_->recreateUpscaleTextures(size.first, size.second);
 }
 
 std::pair<int, int> WgpuPathTracer::size() const {
@@ -6527,6 +6797,7 @@ void WgpuPathTracer::setPixelScale(float scale) {
         const int sw = std::max(1, static_cast<int>(pimpl_->fullWidth_ * scale));
         const int sh = std::max(1, static_cast<int>(pimpl_->fullHeight_ * scale));
         pimpl_->recreateAccumTextures(sw, sh);
+        pimpl_->resetUpscaleHistory();
     }
 }
 
