@@ -1733,9 +1733,12 @@ R"(
                     if (prevPx.x >= 0 && prevPx.y >= 0 &&
                         prevPx.x < i32(rt.iRes.x) && prevPx.y < i32(rt.iRes.y)) {
 
-                        let prevGB = textureLoad(gBufRead, prevPx, 0);
-                        let prevN = prevGB.xyz;
-                        let prevD = prevGB.w;
+                        // Use stable (unjittered) g-buffer for validation — jittered
+                        // normals/depth flip at silhouette edges causing reservoir
+                        // resets every frame → noise spikes during motion.
+                        let prevSGB = textureLoad(stableGBufRead, prevPx, 0);
+                        let prevN = prevSGB.xyz;
+                        let prevD = prevSGB.w;
                         // Compare prev-camera distance to reprojected point, not h.t
                         // (h.t is distance from current camera, but prevD is stored
                         // from previous camera's viewpoint).
@@ -1801,10 +1804,11 @@ R"(
                                      vec2<i32>(0),
                                      vec2<i32>(i32(rt.iRes.x) - 1, i32(rt.iRes.y) - 1));
 
-                    // Reject across surface boundaries
-                    let spGB = textureLoad(gBufRead, spPx, 0);
-                    if (dot(h.normal, spGB.xyz) < 0.906 ||
-                        abs(h.t - spGB.w) / max(h.t, 1e-3) > 0.1) { continue; }
+                    // Reject across surface boundaries — use stable g-buffer for
+                    // consistent validation regardless of sub-pixel jitter.
+                    let spSGB = textureLoad(stableGBufRead, spPx, 0);
+                    if (dot(h.normal, spSGB.xyz) < 0.906 ||
+                        abs(h.t - spSGB.w) / max(h.t, 1e-3) > 0.1) { continue; }
 
                     let spSmp = textureLoad(reservoirRead,  spPx, 0);
                     let spWt  = textureLoad(reservoirWRead, spPx, 0);
@@ -3183,17 +3187,14 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cMeshId = u32(cHitId.r);
     let cMatId  = i32(cHitId.g);
 
-    // mode bits: 0 = diffuse, 1 = specular, 2 = temporal cleanup
+    // mode: 0 = diffuse, 1 = specular, 2 = diffuse temporal, 3 = specular temporal
     let isSpec = (uni.mode & 1u) != 0u;
     let isTemporal = (uni.mode & 2u) != 0u;
-    // For temporal cleanup, use global frame count (uniform across pixels) instead of
-    // per-pixel TAA history length — prevents grid artifacts from spatially varying
-    // edge-stopping parameters at à-trous step boundaries.
-    let cFC = select(cSamp.w, uni.frameCount, isTemporal);
+    let cFC = cSamp.w;
 
     // Sky pixels: pass through
     if (cDepth < 1e-6) {
-        textureStore(colorOut, pixel, vec4<f32>(cColor, cSamp.w));
+        textureStore(colorOut, pixel, vec4<f32>(cColor, cFC));
         return;
     }
 
@@ -3271,7 +3272,7 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Temporal cleanup: widen luminance sigma to tolerate TAA noise residuals
             // without creating grid patches, but keep relative scaling so strong
             // edges (glass/transmission) are still preserved.
-            let finalLumSigma = select(effectiveLumSigma, effectiveLumSigma * 4.0, isTemporal);
+            let finalLumSigma = select(effectiveLumSigma, effectiveLumSigma * 3.0, isTemporal);
             let w_l = exp(-(sLum - cLum) * (sLum - cLum) / (finalLumSigma * finalLumSigma + 1e-6));
 
             // Per-sample outlier clamp: suppress extreme bright samples in filter window.
