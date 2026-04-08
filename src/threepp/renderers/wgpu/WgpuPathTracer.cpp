@@ -167,6 +167,12 @@ struct Bvh4NodeGpu {
 @group(0) @binding(27) var stableGBufWrite: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(28) var stableGBufRead:  texture_2d<f32>;
 @group(0) @binding(29) var<storage, read> rtMotionMats: array<mat4x4<f32>>;  // prevWorld * inverse(curWorld) per mesh
+@group(0) @binding(30) var giResRead:    texture_2d<f32>;
+@group(0) @binding(31) var giResWrite:   texture_storage_2d<rgba32float, write>;
+@group(0) @binding(32) var giResWRead:   texture_2d<f32>;
+@group(0) @binding(33) var giResWWrite:  texture_storage_2d<rgba32float, write>;
+@group(0) @binding(34) var giResLoRead:  texture_2d<f32>;
+@group(0) @binding(35) var giResLoWrite: texture_storage_2d<rgba16float, write>;
 
 const MAX_TEX_SLOTS: i32 = 256;
 const EMPTY_CHILD: i32 = -2147483648;  // INT_MIN — sentinel for unused BVH4 child slots
@@ -1461,6 +1467,45 @@ fn isMeshMoved(idx: i32) -> bool {
     return ((word >> bit) & 1u) != 0u;
 }
 
+// -------- Octahedral normal encoding (for GI reservoir packing) --------
+fn octEncode(n: vec3<f32>) -> vec2<f32> {
+    let t = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
+    if (n.z < 0.0) {
+        return (1.0 - abs(t.yx)) * select(vec2<f32>(-1.0), vec2<f32>(1.0), t.xy >= vec2<f32>(0.0));
+    }
+    return t;
+}
+fn octDecode(e: vec2<f32>) -> vec3<f32> {
+    var n = vec3<f32>(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    if (n.z < 0.0) {
+        let xy = (1.0 - abs(n.yx)) * select(vec2<f32>(-1.0), vec2<f32>(1.0), n.xy >= vec2<f32>(0.0));
+        n = vec3<f32>(xy, n.z);
+    }
+    return normalize(n);
+}
+fn packOctNormal(n: vec3<f32>) -> f32 {
+    let e = octEncode(n);
+    return bitcast<f32>(pack2x16snorm(e));
+}
+fn unpackOctNormal(p: f32) -> vec3<f32> {
+    return octDecode(unpack2x16snorm(bitcast<u32>(p)));
+}
+
+// -------- GI target PDF: importance of a secondary hit as a virtual light --------
+fn giTargetPdf(point: vec3<f32>, normal: vec3<f32>, wo: vec3<f32>,
+               albedo: vec3<f32>, metalness: f32, alpha: f32, F0: vec3<f32>,
+               secHitPos: vec3<f32>, secHitNorm: vec3<f32>, Lo: vec3<f32>) -> f32 {
+    let wi = normalize(secHitPos - point);
+    let NdotL = dot(normal, wi);
+    if (NdotL <= 0.0) { return 0.0; }
+    let delta = secHitPos - point;
+    let dist2 = dot(delta, delta);
+    let cosTheta2 = max(dot(secHitNorm, -wi), 0.0);
+    let G = cosTheta2 / max(dist2, 0.01);
+    let brdf = evalBrdf(wo, wi, normal, albedo, metalness, max(alpha, 0.1), F0);
+    return luminance((brdf.f_diff + brdf.f_spec) * NdotL * Lo * G);
+}
+
 struct SplitRadiance { diff: vec3<f32>, spec: vec3<f32> }
 )";
 
@@ -1497,6 +1542,17 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
     var afterTransmission = false;
     var effectiveBounces = maxBounces;
 
+    // Bounce-0 surface data for ReSTIR GI (captured at i==0, used at i==1)
+    var b0Point  = vec3<f32>(0.0);
+    var b0Normal = vec3<f32>(0.0, 1.0, 0.0);
+    var b0Wo     = vec3<f32>(0.0);
+    var b0Albedo = vec3<f32>(1.0);
+    var b0F0     = vec3<f32>(0.04);
+    var b0Metal  = 0.0;
+    var b0Alpha  = 1.0;
+    var b0MeshIdx = -1;
+    var giResStored = false;
+
     for (var i = 0; i < maxBounces; i++) {
         if (i >= effectiveBounces) { break; }
         var h = sceneHit(ray);
@@ -1509,6 +1565,11 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                     textureStore(reservoirWrite, pixel, vec4<f32>(0.0));
                     textureStore(reservoirWWrite, pixel, vec4<f32>(0.0));
                 }
+                if (rt.spp.x > 0.5) {
+                    textureStore(giResWrite,   pixel, vec4<f32>(0.0));
+                    textureStore(giResWWrite,  pixel, vec4<f32>(0.0));
+                    textureStore(giResLoWrite, pixel, vec4<f32>(0.0));
+                }
             } else {
                 var envMisW = 1.0;
                 if (HAS_ENV_CDF && rt.envColor.w > 1.5 && prevAlpha > 0.01) {
@@ -1519,6 +1580,13 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                 addSplit(&diffRad, &specRad,
                     throughput * sampleEnv(ray.dir) * rt.envIntensity.x * envMisW,
                     rt.emissiveInfo.z, i, firstBounceSpec);
+            }
+            // Empty GI reservoir on miss at bounce 1
+            if (i == 1 && rt.spp.x > 0.5 && !giResStored) {
+                textureStore(giResWrite,   pixel, vec4<f32>(0.0));
+                textureStore(giResWWrite,  pixel, vec4<f32>(0.0));
+                textureStore(giResLoWrite, pixel, vec4<f32>(0.0));
+                giResStored = true;
             }
             break;
         }
@@ -1594,11 +1662,35 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                 textureStore(reservoirWrite, pixel, vec4<f32>(0.0));
                 textureStore(reservoirWWrite, pixel, vec4<f32>(0.0));
             }
+            if (i <= 1 && rt.spp.x > 0.5 && !giResStored) {
+                textureStore(giResWrite,   pixel, vec4<f32>(0.0));
+                textureStore(giResWWrite,  pixel, vec4<f32>(0.0));
+                textureStore(giResLoWrite, pixel, vec4<f32>(0.0));
+                giResStored = true;
+            }
             break;
         }
 
         let wo = normalize(-ray.dir);
         let F0_h = computeF0(albedo, h.metalness, h.specularColor, h.specularIntensity);
+
+        // Capture bounce-0 surface data for ReSTIR GI
+        if (i == 0) {
+            b0Point  = h.point;
+            b0Normal = h.normal;
+            b0Wo     = wo;
+            b0Albedo = albedo;
+            b0F0     = F0_h;
+            b0Metal  = h.metalness;
+            b0Alpha  = h.shininess;
+            b0MeshIdx = h.meshIdx;
+        }
+
+        // ReSTIR GI only for diffuse/glossy primary surfaces — specular primaries
+        // (mirrors, metals with low roughness) are better served by BRDF sampling.
+        let useReSTIRGI = i == 1 && rt.spp.x > 0.5 && !afterTransmission
+                          && h.transmission < 0.05 && b0Alpha > 0.05;
+        var giLo = vec3<f32>(0.0);
 
         // --- NEE: ReSTIR DI at bounce 0, classic NEE at deeper bounces ---
         let lcount = i32(rt.lightCount.x);
@@ -1903,8 +1995,12 @@ constexpr const char* csPathTraceWGSL2b = R"(
                 } else {
                     let lobeSum = evalBrdfFull(wo, le.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
                                                h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                    addSplit(&diffRad, &specRad, throughput * shadowAtten * lobeSum * NdotL * le.color,
-                             cap, i, firstBounceSpec);
+                    let neeContrib = shadowAtten * lobeSum * NdotL * le.color;
+                    if (useReSTIRGI) {
+                        giLo += neeContrib;
+                    } else {
+                        addSplit(&diffRad, &specRad, throughput * neeContrib, cap, i, firstBounceSpec);
+                    }
                 }
             }
         }
@@ -1938,8 +2034,12 @@ R"(
                     } else {
                         let lobeSum3 = evalBrdfFull(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h,
                                                      h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                        addSplit(&diffRad, &specRad, throughput * emAtten * lobeSum3 * NdotL * emColor * w_light / pdf,
-                                 cap, i, firstBounceSpec);
+                        let emNeeContrib = emAtten * lobeSum3 * NdotL * emColor * w_light / pdf;
+                        if (useReSTIRGI) {
+                            giLo += emNeeContrib;
+                        } else {
+                            addSplit(&diffRad, &specRad, throughput * emNeeContrib, cap, i, firstBounceSpec);
+                        }
                     }
                 }
             }
@@ -1967,8 +2067,12 @@ R"(
                     } else {
                         let lobeSum4 = evalBrdfFull(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h,
                                                      h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                        addSplit(&diffRad, &specRad, throughput * envAtten * lobeSum4 * envNdotL * envCol * w_env / envPdf,
-                                 cap, i, firstBounceSpec);
+                        let envNeeContrib = envAtten * lobeSum4 * envNdotL * envCol * w_env / envPdf;
+                        if (useReSTIRGI) {
+                            giLo += envNeeContrib;
+                        } else {
+                            addSplit(&diffRad, &specRad, throughput * envNeeContrib, cap, i, firstBounceSpec);
+                        }
                     }
                 }
             }
@@ -1982,6 +2086,205 @@ R"(
         if (i == 0 && rt.restirParams.x > 0.5 && !useReSTIR) {
             textureStore(reservoirWrite,  pixel, vec4<f32>(0.0));
             textureStore(reservoirWWrite, pixel, vec4<f32>(0.0));
+        }
+
+        // ======= ReSTIR GI: Build reservoir, temporal reuse, shade, store =======
+        // Skip when secondary hit is too close to primary (seam geometry → G factor spike)
+        let giSecDist2 = dot(h.point - b0Point, h.point - b0Point);
+        if (useReSTIRGI && !giResStored && giSecDist2 > 0.04) {
+            // --- Build 1-sample reservoir from captured Lo ---
+            let giP_hat = giTargetPdf(b0Point, b0Normal, b0Wo, b0Albedo, b0Metal, b0Alpha, b0F0,
+                                       h.point, h.normal, giLo);
+            var giW_sum = giP_hat;  // w = p_hat / p_source; p_source = 1 → w = p_hat
+            var giM = 1.0;
+            var giSecPos  = h.point;
+            var giSecNorm = h.normal;
+            var giLoRes   = giLo;
+            var giPhat    = giP_hat;
+)"
+R"(
+            // --- Temporal reuse ---
+            if (rt.frameCount.x > 0.0) {
+                let giMeshMoved = b0MeshIdx >= 0 && b0MeshIdx < 128 && isMeshMoved(b0MeshIdx);
+                var giReprojPt = b0Point;
+                var giExpectedN = b0Normal;
+                if (giMeshMoved) {
+                    let giMotMat = rtMotionMats[b0MeshIdx];
+                    giReprojPt = (giMotMat * vec4<f32>(b0Point, 1.0)).xyz;
+                    giExpectedN = normalize((giMotMat * vec4<f32>(b0Normal, 0.0)).xyz);
+                }
+                let giRelP = giReprojPt - vec3<f32>(rt.prevCamOri.x, rt.prevCamOri.y, rt.prevCamOri.z);
+                let giPrevFwd = vec3<f32>(rt.prevCamFwd.x, rt.prevCamFwd.y, rt.prevCamFwd.z);
+                let giPrevRgt = vec3<f32>(rt.prevCamRgt.x, rt.prevCamRgt.y, rt.prevCamRgt.z);
+                let giPrevUp  = vec3<f32>(rt.prevCamUp.x, rt.prevCamUp.y, rt.prevCamUp.z);
+                let giDz = dot(giRelP, giPrevFwd);
+                if (giDz > 0.0) {
+                    let giDx = dot(giRelP, giPrevRgt);
+                    let giDy = dot(giRelP, giPrevUp);
+                    let giThf = rt.tanHalfFov.x;
+                    let giAspect = rt.iRes.x / rt.iRes.y;
+                    let giPrevU = (giDx / (giDz * giThf * giAspect) * 0.5 + 0.5) * rt.iRes.x;
+                    let giPrevV = (0.5 - giDy / (giDz * giThf) * 0.5) * rt.iRes.y;
+                    let giPrevPx = vec2<i32>(i32(floor(giPrevU)), i32(floor(giPrevV)));
+
+                    if (giPrevPx.x >= 0 && giPrevPx.y >= 0 &&
+                        giPrevPx.x < i32(rt.iRes.x) && giPrevPx.y < i32(rt.iRes.y)) {
+
+                        let giPrevSGB = textureLoad(stableGBufRead, giPrevPx, 0);
+                        let giPrevN = giPrevSGB.xyz;
+                        let giPrevD = giPrevSGB.w;
+                        let giCurD  = length(giRelP);
+                        let giPrevMesh = i32(textureLoad(hitMeshRead, giPrevPx, 0).r);
+                        let giValid = dot(giExpectedN, giPrevN) > 0.95 &&
+                                      abs(giCurD - giPrevD) / max(giCurD, 1e-6) < 0.05 &&
+                                      giPrevMesh == b0MeshIdx;
+
+                        if (giValid) {
+                            let prevGiSample = textureLoad(giResRead, giPrevPx, 0);
+                            let prevGiWeight = textureLoad(giResWRead, giPrevPx, 0);
+                            let prevGiLo     = textureLoad(giResLoRead, giPrevPx, 0).xyz;
+
+                            let prevSecPos  = prevGiSample.xyz;
+                            let prevSecNorm = unpackOctNormal(prevGiSample.w);
+                            let prevW_sum = prevGiWeight.x;
+                            let prevM     = min(prevGiWeight.y, 20.0);  // M clamp
+                            let prevW     = prevGiWeight.z;
+                            let prevPhat  = prevGiWeight.w;
+)"
+R"(
+                            // Reject prev reservoir if its secondary hit is too close to current primary
+                            let prevSecDist2 = dot(prevSecPos - b0Point, prevSecPos - b0Point);
+                            // Re-evaluate prev sample's GI target PDF at current primary surface
+                            let giPhatPrev = select(0.0,
+                                giTargetPdf(b0Point, b0Normal, b0Wo, b0Albedo, b0Metal, b0Alpha, b0F0,
+                                            prevSecPos, prevSecNorm, prevGiLo),
+                                prevSecDist2 > 0.04);
+                            if (giPhatPrev > 0.0 && prevW > 0.0) {
+                                let giWPrev = giPhatPrev * prevM * prevW;
+                                giW_sum += giWPrev;
+                                giM += prevM;
+                                if (rand(seed) < giWPrev / max(giW_sum, 1e-20)) {
+                                    giSecPos  = prevSecPos;
+                                    giSecNorm = prevSecNorm;
+                                    giLoRes   = prevGiLo;
+                                    giPhat    = giPhatPrev;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- Snapshot pre-spatial reservoir (stored for next-frame temporal reuse) ---
+            let giPreSpW_sum = giW_sum;
+            let giPreSpM     = giM;
+            let giPreSpPhat  = giPhat;
+            let giPreSpSecPos  = giSecPos;
+            let giPreSpSecNorm = giSecNorm;
+            let giPreSpLoRes   = giLoRes;
+)"
+R"(
+            // --- Spatial reuse: 4 neighbours from 20px disk ---
+            {
+                for (var spI = 0u; spI < 4u; spI++) {
+                    let spAngle = rand(seed) * 2.0 * PI;
+                    let spR     = sqrt(rand(seed)) * 20.0;
+                    let spOff   = vec2<i32>(i32(spR * cos(spAngle)), i32(spR * sin(spAngle)));
+                    if (all(spOff == vec2<i32>(0))) { continue; }
+                    let spPx = clamp(pixel + spOff,
+                                     vec2<i32>(0),
+                                     vec2<i32>(i32(rt.iRes.x) - 1, i32(rt.iRes.y) - 1));
+
+                    // Geometry validation via stable g-buffer + mesh ID
+                    let spSGB = textureLoad(stableGBufRead, spPx, 0);
+                    let spMesh = i32(textureLoad(hitMeshRead, spPx, 0).r);
+                    let b0Depth = length(b0Point - vec3<f32>(rt.camOri.x, rt.camOri.y, rt.camOri.z));
+                    if (dot(b0Normal, spSGB.xyz) < 0.95 ||
+                        abs(b0Depth - spSGB.w) / max(b0Depth, 1e-3) > 0.05 ||
+                        spMesh != b0MeshIdx) { continue; }
+
+                    let spGiSample = textureLoad(giResRead, spPx, 0);
+                    let spGiWeight = textureLoad(giResWRead, spPx, 0);
+                    let spGiLo     = textureLoad(giResLoRead, spPx, 0).xyz;
+
+                    let spSecPos  = spGiSample.xyz;
+                    let spSecNorm = unpackOctNormal(spGiSample.w);
+                    let spM = min(spGiWeight.y, 4.0);  // spatial M cap
+                    let spW = spGiWeight.z;
+                    if (spW <= 0.0 || spM <= 0.0) { continue; }
+
+                    // Reject if neighbour's secondary hit too close to our primary
+                    let spSecDist2 = dot(spSecPos - b0Point, spSecPos - b0Point);
+                    if (spSecDist2 < 0.04) { continue; }
+
+                    let spGiPhat = giTargetPdf(b0Point, b0Normal, b0Wo, b0Albedo, b0Metal, b0Alpha, b0F0,
+                                                spSecPos, spSecNorm, spGiLo);
+                    if (spGiPhat > 0.0) {
+                        let spGiW = spGiPhat * spM * spW;
+                        giW_sum += spGiW;
+                        giM += spM;
+                        if (rand(seed) < spGiW / max(giW_sum, 1e-20)) {
+                            giSecPos  = spSecPos;
+                            giSecNorm = spSecNorm;
+                            giLoRes   = spGiLo;
+                            giPhat    = spGiPhat;
+                        }
+                    }
+                }
+            }
+
+            // --- Finalize reservoir weight ---
+            var giW = select(0.0, giW_sum / max(giM * giPhat, 1e-20), giPhat > 0.0);
+            giW = min(giW, 3.0);
+
+            // --- Visibility test: shadow ray from primary hit to secondary hit ---
+            let giWi = normalize(giSecPos - b0Point);
+            let giNdotL = max(dot(b0Normal, giWi), 0.0);
+            var giVisAtten = vec3<f32>(0.0);
+            if (giNdotL > 0.0 && giW > 0.0) {
+                let giDist = length(giSecPos - b0Point);
+                giVisAtten = traceShadowRay(b0Point, b0Normal, giWi, giDist - 1e-3, 2);
+            }
+
+            // --- Shade from GI reservoir ---
+            if (giVisAtten.x + giVisAtten.y + giVisAtten.z > 0.001 && giNdotL > 0.0) {
+                let giDelta = giSecPos - b0Point;
+                let giDist2 = dot(giDelta, giDelta);
+                let giCosTheta2 = max(dot(giSecNorm, -giWi), 0.0);
+                let giG = giCosTheta2 / max(giDist2, 0.01);
+                let giBrdf = evalBrdfFullSplit(b0Wo, giWi, b0Normal, b0Albedo, b0Metal, b0Alpha, b0F0,
+                                                vec3<f32>(0.0), 0.0, 0.0, 0.0);
+                let giShade = giVisAtten * giW * giNdotL * giLoRes * giG;
+                // Hard luminance cap on GI contribution to prevent seam/firefly spikes
+                let giCap = rt.emissiveInfo.z;
+                var giContribD = giShade * giBrdf.diff;
+                var giContribS = giShade * giBrdf.spec;
+                let giLum = luminance(giContribD + giContribS);
+                let giHardCap = 2.0;
+                if (giLum > giHardCap) {
+                    let giScale = giHardCap / giLum;
+                    giContribD *= giScale;
+                    giContribS *= giScale;
+                }
+                addSplit(&diffRad, &specRad, giContribD, giCap, 1, false);
+                addSplit(&diffRad, &specRad, giContribS, giCap, 1, true);
+            }
+
+            // --- Store PRE-SPATIAL reservoir (visibility-gated) ---
+            // Same as DI: store what this pixel selected before spatial reuse.
+            // Prevents feedback loops where a shadowed pixel borrows a lit neighbour.
+            let giVisible = giVisAtten.x + giVisAtten.y + giVisAtten.z > 0.001;
+            let giStoreW_f = select(0.0, select(0.0, giPreSpW_sum / max(giPreSpM * giPreSpPhat, 1e-20), giPreSpPhat > 0.0), giVisible);
+            let giStoreM_f = select(0.0, giPreSpM, giVisible);
+            textureStore(giResWrite,   pixel, vec4<f32>(giPreSpSecPos, packOctNormal(giPreSpSecNorm)));
+            textureStore(giResWWrite,  pixel, vec4<f32>(giPreSpW_sum, giStoreM_f, min(giStoreW_f, 3.0), giPreSpPhat));
+            textureStore(giResLoWrite, pixel, vec4<f32>(giPreSpLoRes, 0.0));
+            giResStored = true;
+        }
+        // Fallback: if GI was active (Lo captured) but reservoir skipped (close hit),
+        // add the captured Lo back via classic accumulation so energy isn't lost.
+        if (useReSTIRGI && !giResStored && luminance(giLo) > 0.0) {
+            addSplit(&diffRad, &specRad, throughput * giLo, rt.emissiveInfo.z, 1, firstBounceSpec);
         }
 
         if (i > 1) {
@@ -2141,6 +2444,12 @@ R"(
         ray.origin = h.point + h.normal * 1e-3;
         ray.dir    = wi_b;
     }
+    // Safety net: if GI enabled but no reservoir was stored (e.g. maxBounces < 2), write empty
+    if (rt.spp.x > 0.5 && !giResStored) {
+        textureStore(giResWrite,   pixel, vec4<f32>(0.0));
+        textureStore(giResWWrite,  pixel, vec4<f32>(0.0));
+        textureStore(giResLoWrite, pixel, vec4<f32>(0.0));
+    }
     return SplitRadiance(diffRad, specRad);
 }
 )";
@@ -2248,6 +2557,11 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (rt.restirParams.x > 0.5) {
             textureStore(reservoirWrite,  pixel, textureLoad(reservoirRead,  pixel, 0));
             textureStore(reservoirWWrite, pixel, textureLoad(reservoirWRead, pixel, 0));
+        }
+        if (rt.spp.x > 0.5) {
+            textureStore(giResWrite,   pixel, textureLoad(giResRead,   pixel, 0));
+            textureStore(giResWWrite,  pixel, textureLoad(giResWRead,  pixel, 0));
+            textureStore(giResLoWrite, pixel, textureLoad(giResLoRead, pixel, 0));
         }
         return;
     }
@@ -4802,6 +5116,20 @@ struct WgpuPathTracer::Impl {
     WgpuTexture* reservoirWRead;
     WgpuTexture* reservoirWWrite;
 
+    // ReSTIR GI reservoir ping-pong
+    WgpuTexture giResA;       // rgba32float — secHitPos.xyz + octahedral-packed normal
+    WgpuTexture giResB;
+    WgpuTexture giResWA;      // rgba32float — W_sum, M, W, p_hat
+    WgpuTexture giResWB;
+    WgpuTexture giResLoA;     // rgba16float — Lo radiance at secondary hit
+    WgpuTexture giResLoB;
+    WgpuTexture* giResRead;
+    WgpuTexture* giResWrite;
+    WgpuTexture* giResWRead;
+    WgpuTexture* giResWWrite;
+    WgpuTexture* giResLoRead;
+    WgpuTexture* giResLoWrite;
+
     // Albedo buffer (primary-hit albedo for demodulation/remodulation)
     WgpuTexture albedoTex;
 
@@ -4864,6 +5192,7 @@ struct WgpuPathTracer::Impl {
     bool denoiserEnabled_ = true;
     bool temporalDenoiserEnabled_ = false;
     bool restirEnabled_ = true;
+    bool restirGiEnabled_ = false;
     int spp_ = 1;
     float envIntensity_ = 0.5f;
     int maxBounces_ = 4;
@@ -5081,6 +5410,22 @@ struct WgpuPathTracer::Impl {
                       WgpuTexture::Format::RGBA32Float),
           reservoirRead(&reservoirA), reservoirWrite(&reservoirB),
           reservoirWRead(&reservoirWA), reservoirWWrite(&reservoirWB),
+          // ReSTIR GI reservoir ping-pong
+          giResA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                 WgpuTexture::Format::RGBA32Float),
+          giResB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                 WgpuTexture::Format::RGBA32Float),
+          giResWA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                  WgpuTexture::Format::RGBA32Float),
+          giResWB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                  WgpuTexture::Format::RGBA32Float),
+          giResLoA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                   WgpuTexture::Format::RGBA16Float),
+          giResLoB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                   WgpuTexture::Format::RGBA16Float),
+          giResRead(&giResA), giResWrite(&giResB),
+          giResWRead(&giResWA), giResWWrite(&giResWB),
+          giResLoRead(&giResLoA), giResLoWrite(&giResLoB),
           // Albedo buffer for demodulation
           albedoTex(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                     WgpuTexture::Format::RGBA16Float),
@@ -5223,6 +5568,12 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(27, *stableGBufCur);
         rtPipeline.setTexture(28, *stableGBufPrev);
         rtPipeline.setStorageBufferRead(29, motionMatBuf);
+        rtPipeline.setTexture(30, *giResRead);
+        rtPipeline.setStorageTexture(31, *giResWrite);
+        rtPipeline.setTexture(32, *giResWRead);
+        rtPipeline.setStorageTexture(33, *giResWWrite);
+        rtPipeline.setTexture(34, *giResLoRead);
+        rtPipeline.setStorageTexture(35, *giResLoWrite);
 
         // TAA pipeline — set ALL bindings upfront
         taaPipeline.setUniformBuffer(0, taaUniBuf);
@@ -5423,6 +5774,19 @@ struct WgpuPathTracer::Impl {
         reservoirWRead  = &reservoirWA;
         reservoirWWrite = &reservoirWB;
 
+        giResA  = WgpuTexture(renderer, uw, uh, fmt32);
+        giResB  = WgpuTexture(renderer, uw, uh, fmt32);
+        giResWA = WgpuTexture(renderer, uw, uh, fmt32);
+        giResWB = WgpuTexture(renderer, uw, uh, fmt32);
+        giResLoA = WgpuTexture(renderer, uw, uh, fmt);
+        giResLoB = WgpuTexture(renderer, uw, uh, fmt);
+        giResRead   = &giResA;
+        giResWrite  = &giResB;
+        giResWRead  = &giResWA;
+        giResWWrite = &giResWB;
+        giResLoRead  = &giResLoA;
+        giResLoWrite = &giResLoB;
+
         albedoTex = WgpuTexture(renderer, uw, uh, fmt);
 
         momentsA = WgpuTexture(renderer, uw, uh, fmt);
@@ -5503,6 +5867,12 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(27, *stableGBufCur);
         rtPipeline.setTexture(28, *stableGBufPrev);
         rtPipeline.setStorageBufferRead(29, motionMatBuf);
+        rtPipeline.setTexture(30, *giResRead);
+        rtPipeline.setStorageTexture(31, *giResWrite);
+        rtPipeline.setTexture(32, *giResWRead);
+        rtPipeline.setStorageTexture(33, *giResWWrite);
+        rtPipeline.setTexture(34, *giResLoRead);
+        rtPipeline.setStorageTexture(35, *giResLoWrite);
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(6, *momentsRead);
         preFilterPipeline.setTexture(1, *readDiffAccum);
@@ -6265,6 +6635,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.emissiveInfo[1] = d.emissiveTotalPower_;
     u.emissiveInfo[2] = d.fireflyCap_;  // luminance cap for indirect MIS contributions
     u.emissiveInfo[3] = static_cast<float>(d.aovMode_);  // AOV visualization mode
+    u.spp[0] = d.restirGiEnabled_ ? 1.f : 0.f;
     u.restirParams[0] = d.restirEnabled_ ? 1.f : 0.f;
     u.restirParams[1] = 20.f;  // M clamp — lower = crisper shadows, higher = lower variance
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
@@ -6440,6 +6811,16 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.rtPipeline.setStorageTexture(18, *d.reservoirWrite);
         d.rtPipeline.setTexture(19, *d.reservoirWRead);
         d.rtPipeline.setStorageTexture(20, *d.reservoirWWrite);
+
+        std::swap(d.giResRead, d.giResWrite);
+        std::swap(d.giResWRead, d.giResWWrite);
+        std::swap(d.giResLoRead, d.giResLoWrite);
+        d.rtPipeline.setTexture(30, *d.giResRead);
+        d.rtPipeline.setStorageTexture(31, *d.giResWrite);
+        d.rtPipeline.setTexture(32, *d.giResWRead);
+        d.rtPipeline.setStorageTexture(33, *d.giResWWrite);
+        d.rtPipeline.setTexture(34, *d.giResLoRead);
+        d.rtPipeline.setStorageTexture(35, *d.giResLoWrite);
 
         std::swap(d.momentsRead, d.momentsWrite);
         d.rtPipeline.setTexture(21, *d.momentsRead);
@@ -6808,6 +7189,15 @@ void WgpuPathTracer::setReSTIREnabled(bool enabled) {
 
 bool WgpuPathTracer::restirEnabled() const {
     return pimpl_->restirEnabled_;
+}
+
+void WgpuPathTracer::setReSTIRGIEnabled(bool enabled) {
+    pimpl_->frameCount_ = 0.f;
+    pimpl_->restirGiEnabled_ = enabled;
+}
+
+bool WgpuPathTracer::restirGiEnabled() const {
+    return pimpl_->restirGiEnabled_;
 }
 
 void WgpuPathTracer::setSamplesPerPixel(int spp) {

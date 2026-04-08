@@ -64,6 +64,11 @@ namespace threepp {
         void setReSTIREnabled(bool enabled);
         [[nodiscard]] bool restirEnabled() const;
 
+        /// Enable/disable ReSTIR GI for indirect illumination (bounce 1). Default: false.
+        /// Reuses secondary hit points across frames/neighbors for lower-variance GI.
+        void setReSTIRGIEnabled(bool enabled);
+        [[nodiscard]] bool restirGiEnabled() const;
+
         /// Samples per pixel per frame. Default: 1. Higher values reduce noise
         /// at the cost of proportionally more RT time per frame.
         void setSamplesPerPixel(int spp);
