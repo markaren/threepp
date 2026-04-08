@@ -3333,20 +3333,6 @@ fn aces(x: vec3<f32>) -> vec3<f32> {
                  vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
-fn luma(c: vec3<f32>) -> f32 {
-    return dot(c, vec3<f32>(0.299, 0.587, 0.114));
-}
-
-// Tonemap + gamma-correct a single accum-space pixel (used by FXAA).
-fn tonemapAt(p: vec2<i32>, sz: vec2<i32>, expo: f32) -> vec3<f32> {
-    let pc  = clamp(p, vec2<i32>(0), sz - vec2<i32>(1, 1));
-    let col = textureLoad(diffTex, pc, 0).xyz + textureLoad(specTex, pc, 0).xyz;
-    if (textureLoad(gBufTex, pc, 0).w <= 0.0) {
-        return pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
-    }
-    return pow(aces(col * expo), vec3<f32>(1.0 / 2.2));
-}
-
 // Tonemap + gamma-correct a full-res TAAU pixel.
 // histLen < 0 means sky sentinel — apply gamma but no ACES.
 fn tonemapUpscaleAt(p: vec2<i32>, sz: vec2<i32>, expo: f32) -> vec3<f32> {
@@ -3376,52 +3362,10 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     }
 
     // Temporal upscale path: if upscaleTex is full-res (> 1×1), TAAU is active.
-    // Apply FXAA directly on the full-res temporally upscaled output.
     let upscaleSize = vec2<i32>(textureDimensions(upscaleTex, 0));
     if (upscaleSize.x > 1) {
         let px = vec2<i32>(i32(fragPos.x), i32(fragPos.y));
-
-        let c  = tonemapUpscaleAt(px,                          upscaleSize, exposure);
-        let cN = tonemapUpscaleAt(px + vec2<i32>( 0, -1), upscaleSize, exposure);
-        let cS = tonemapUpscaleAt(px + vec2<i32>( 0,  1), upscaleSize, exposure);
-        let cE = tonemapUpscaleAt(px + vec2<i32>( 1,  0), upscaleSize, exposure);
-        let cW = tonemapUpscaleAt(px + vec2<i32>(-1,  0), upscaleSize, exposure);
-
-        let lC = luma(c);
-        let lN = luma(cN); let lS = luma(cS);
-        let lE = luma(cE); let lW = luma(cW);
-
-        let lMin   = min(lC, min(min(lN, lS), min(lE, lW)));
-        let lMax   = max(lC, max(max(lN, lS), max(lE, lW)));
-        let lRange = lMax - lMin;
-
-        let edgeThresh = max(0.05, lMax * 0.166);
-        if (lRange < edgeThresh) {
-            return vec4<f32>(c, 1.0);
-        }
-
-        let lNW = luma(tonemapUpscaleAt(px + vec2<i32>(-1, -1), upscaleSize, exposure));
-        let lNE = luma(tonemapUpscaleAt(px + vec2<i32>( 1, -1), upscaleSize, exposure));
-        let lSW = luma(tonemapUpscaleAt(px + vec2<i32>(-1,  1), upscaleSize, exposure));
-        let lSE = luma(tonemapUpscaleAt(px + vec2<i32>( 1,  1), upscaleSize, exposure));
-
-        let lumAvg       = 0.25 * (lN + lS + lE + lW) + 0.125 * (lNW + lNE + lSW + lSE);
-        let subPixFactor = clamp(abs(lumAvg - lC) / lRange, 0.0, 1.0);
-        let subPixBlend  = subPixFactor * subPixFactor * 0.35;
-
-        let edgeH  = abs(lNW + 2.0*lN + lNE - lSW - 2.0*lS - lSE);
-        let edgeV  = abs(lNW + 2.0*lW + lSW - lNE - 2.0*lE - lSE);
-        let isHorz = edgeH >= edgeV;
-
-        let perp   = select(vec2<i32>(1, 0), vec2<i32>(0, 1), isHorz);
-        let lP     = luma(tonemapUpscaleAt(px + perp, upscaleSize, exposure));
-        let lM     = luma(tonemapUpscaleAt(px - perp, upscaleSize, exposure));
-        let blendPx = select(px - perp, px + perp, abs(lP - lC) >= abs(lM - lC));
-
-        let edgeBlend   = clamp((lRange - edgeThresh) / lMax, 0.0, 0.25);
-        let blendFactor = max(subPixBlend, edgeBlend);
-        let blendCol    = tonemapUpscaleAt(blendPx, upscaleSize, exposure);
-        return vec4<f32>(mix(c, blendCol, blendFactor), 1.0);
+        return vec4<f32>(tonemapUpscaleAt(px, upscaleSize, exposure), 1.0);
     }
 
     // When rendering at reduced resolution (pixelScale < 1), use joint bilateral
@@ -3493,63 +3437,13 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
         return vec4<f32>(gc, 1.0);
     }
 
-    // Native resolution — FXAA quality pass (Jimenez 2011 Quality).
-    // Operates on the fully tone-mapped, gamma-corrected output so luma
-    // comparisons match perceptual intensity.  No temporal state involved.
-    let px = clamp(vec2<i32>(fragPos.xy * pixScale), vec2<i32>(0), accumSize - 1);
-
-    // === Phase 1: sample cardinal neighbors (5 reads) ===
-    let c  = tonemapAt(px,                        accumSize, exposure);
-    let cN = tonemapAt(px + vec2<i32>( 0, -1), accumSize, exposure);
-    let cS = tonemapAt(px + vec2<i32>( 0,  1), accumSize, exposure);
-    let cE = tonemapAt(px + vec2<i32>( 1,  0), accumSize, exposure);
-    let cW = tonemapAt(px + vec2<i32>(-1,  0), accumSize, exposure);
-
-    let lC = luma(c);
-    let lN = luma(cN); let lS = luma(cS);
-    let lE = luma(cE); let lW = luma(cW);
-
-    let lMin   = min(lC, min(min(lN, lS), min(lE, lW)));
-    let lMax   = max(lC, max(max(lN, lS), max(lE, lW)));
-    let lRange = lMax - lMin;
-
-    // === Early exit for non-edge pixels ===
-    // Stricter threshold than vanilla FXAA — denoised output is already smooth, so
-    // only process genuinely hard edges (e.g. silhouettes) not denoiser gradients.
-    let edgeThresh = max(0.05, lMax * 0.166);
-    if (lRange < edgeThresh) {
-        return vec4<f32>(c, 1.0);
+    // Native resolution — tonemap and gamma correct.
+    let px  = clamp(vec2<i32>(fragPos.xy * pixScale), vec2<i32>(0), accumSize - 1);
+    let col = textureLoad(diffTex, px, 0).xyz + textureLoad(specTex, px, 0).xyz;
+    if (textureLoad(gBufTex, px, 0).w <= 0.0) {
+        return vec4<f32>(pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)), 1.0);
     }
-
-    // === Phase 2: corner samples for edge direction (4 reads) ===
-    let lNW = luma(tonemapAt(px + vec2<i32>(-1, -1), accumSize, exposure));
-    let lNE = luma(tonemapAt(px + vec2<i32>( 1, -1), accumSize, exposure));
-    let lSW = luma(tonemapAt(px + vec2<i32>(-1,  1), accumSize, exposure));
-    let lSE = luma(tonemapAt(px + vec2<i32>( 1,  1), accumSize, exposure));
-
-    // Sub-pixel blend: kept conservative to avoid blurring already-smooth interiors
-    let lumAvg      = 0.25 * (lN + lS + lE + lW) + 0.125 * (lNW + lNE + lSW + lSE);
-    let subPixFactor = clamp(abs(lumAvg - lC) / lRange, 0.0, 1.0);
-    let subPixBlend  = subPixFactor * subPixFactor * 0.35;
-
-    // Sobel-like edge direction (H = row gradient → horizontal edge, V = col gradient → vertical edge)
-    let edgeH = abs(lNW + 2.0*lN + lNE - lSW - 2.0*lS - lSE);
-    let edgeV = abs(lNW + 2.0*lW + lSW - lNE - 2.0*lE - lSE);
-    let isHorz = edgeH >= edgeV;
-
-    // === Phase 3: perpendicular step — pick which side to blend toward (2 reads) ===
-    let perp = select(vec2<i32>(1, 0), vec2<i32>(0, 1), isHorz);
-    let lP   = luma(tonemapAt(px + perp, accumSize, exposure));
-    let lM   = luma(tonemapAt(px - perp, accumSize, exposure));
-    let blendPx = select(px - perp, px + perp, abs(lP - lC) >= abs(lM - lC));
-
-    // === Final blend — capped at 0.25 to avoid double-edge widening ===
-    // At 50% both edge pixels pull toward each other equally → 2-pixel-wide transition.
-    // 25% gives a gentler 1-pixel-wide smooth transition without visible thickening.
-    let edgeBlend   = clamp((lRange - edgeThresh) / lMax, 0.0, 0.25);
-    let blendFactor = max(subPixBlend, edgeBlend);
-    let blendCol    = tonemapAt(blendPx, accumSize, exposure);
-    return vec4<f32>(mix(c, blendCol, blendFactor), 1.0);
+    return vec4<f32>(pow(aces(col * exposure), vec3<f32>(1.0 / 2.2)), 1.0);
 }
 )";
 
