@@ -662,7 +662,10 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     let roughSlot = mat1.w;
     if (roughSlot >= 0.0) {
         let roughSample = sampleAtlas(mrUV, roughSlot);
-        shininess = max(1e-4, roughSample.y * roughSample.y);
+        // Final alpha = (baseRoughness * textureRoughness)²
+        //             = baseRoughness² * textureRoughness²
+        //             = mat0.w * sample² (since mat0.w already stores roughness²)
+        shininess = max(1e-4, mat0.w * roughSample.y * roughSample.y);
         metalness = roughSample.z;
     }
 
@@ -4792,7 +4795,7 @@ struct WgpuPathTracer::Impl {
     bool restirEnabled_ = true;
     int spp_ = 1;
     float envIntensity_ = 0.5f;
-    int maxBounces_ = 5;
+    int maxBounces_ = 4;
     float exposure_ = 1.0f;
     // Per-contribution firefly clamp (luminance cap) on indirect MIS paths.
     // Default 8.0 matches production renderers (Arnold/Cycles/RenderMan).
