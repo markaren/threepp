@@ -2224,13 +2224,16 @@ R"(
     let aovMode = i32(rt.emissiveInfo.w);
     if (aovMode > 0) { varianceReducedBounces = 1; }
 
+    // Per-pixel Cranley-Patterson rotation: offset R2 by a spatial hash to decorrelate pixels.
+    let pixHash = pcg(gid.x + gid.y * 65537u);
+    let r2 = r2Seq(fc);
+    // Sub-pixel jitter centred on pixel centre (0.5, 0.5), range ±0.375.
+    // Gives TAA true sub-pixel information for silhouette AA.
+    let jx = (fract(r2.x + f32(pixHash)       / 4294967296.0) - 0.5) * 0.75;
+    let jy = (fract(r2.y + f32(pcg(pixHash))  / 4294967296.0) - 0.5) * 0.75;
     var seed = pcg(pcg(gid.x + gid.y * 65537u) + fc * 12979u);
 
-    // No primary-ray jitter. Sub-pixel AA comes from BRDF/light importance sampling.
-    // Jitter forces TAA disocclusion to fire every other frame at geometry edges
-    // (g-buffer depth/normal alternates between foreground/background) → perpetual
-    // 1-spp noise that never converges. Post-process FXAA handles edge AA instead.
-    let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5, f32(pixel.y) + 0.5), res);
+    let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5 + jx, f32(pixel.y) + 0.5 + jy), res);
     var primaryMeshIdx: u32;
     var primaryNormal:  vec3<f32>;
     var primaryDepth:   f32;
@@ -2808,6 +2811,17 @@ struct TaaUniforms {
 @group(0) @binding(8) var momentsIn:  texture_2d<f32>;  // (E[L], E[L²]) from RT pass
 @group(0) @binding(9) var gBufPrev:   texture_2d<f32>;  // previous frame g-buffer (depth in .w)
 
+fn pcg_t(v: u32) -> u32 {
+    var s = v * 747796405u + 2891336453u;
+    s = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    return (s >> 22u) ^ s;
+}
+const R2_A1_T: f32 = 0.7548776662466927;
+const R2_A2_T: f32 = 0.5698402909980532;
+fn r2Seq_t(n: u32) -> vec2<f32> {
+    return fract(vec2<f32>(f32(n) * R2_A1_T, f32(n) * R2_A2_T));
+}
+
 fn luminance_t(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
@@ -2849,9 +2863,16 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // path tracing where every sample is independently noisy regardless of history.
 
     // Reproject current pixel into previous frame's screen space.
+    // Reconstruct worldPos using the jittered ray — same Cranley-Patterson formula as the
+    // path tracer so the ray direction matches the depth stored in the g-buffer.
     let aspect = res.x / res.y;
-    let ndc = vec2<f32>((f32(pixel.x) + 0.5) / res.x * 2.0 - 1.0,
-                         1.0 - (f32(pixel.y) + 0.5) / res.y * 2.0);
+    let taa_fc   = u32(taa.frameCount.x);
+    let tPixHash = pcg_t(u32(pixel.x) + u32(pixel.y) * 65537u);
+    let tR2      = r2Seq_t(taa_fc);
+    let tJx      = (fract(tR2.x + f32(tPixHash)           / 4294967296.0) - 0.5) * 0.75;
+    let tJy      = (fract(tR2.y + f32(pcg_t(tPixHash))    / 4294967296.0) - 0.5) * 0.75;
+    let ndc = vec2<f32>((f32(pixel.x) + 0.5 + tJx) / res.x * 2.0 - 1.0,
+                         1.0 - (f32(pixel.y) + 0.5 + tJy) / res.y * 2.0);
     let rayDir   = normalize(taa.curCamFwd.xyz
                             + taa.curCamRgt.xyz * (ndc.x * taa.tanHalfFov.x * aspect)
                             + taa.curCamUp.xyz  * (ndc.y * taa.tanHalfFov.x));
