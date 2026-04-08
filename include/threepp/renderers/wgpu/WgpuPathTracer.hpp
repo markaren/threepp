@@ -64,6 +64,11 @@ namespace threepp {
         void setReSTIREnabled(bool enabled);
         [[nodiscard]] bool restirEnabled() const;
 
+        /// Samples per pixel per frame. Default: 1. Higher values reduce noise
+        /// at the cost of proportionally more RT time per frame.
+        void setSamplesPerPixel(int spp);
+        [[nodiscard]] int samplesPerPixel() const;
+
         /// Resize accumulation textures. Resets accumulation.
         void setSize(std::pair<int, int> size);
         [[nodiscard]] std::pair<int, int> size() const;
