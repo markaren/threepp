@@ -164,6 +164,8 @@ struct Bvh4NodeGpu {
 @group(0) @binding(24) var diffAccumWrite:  texture_storage_2d<rgba16float, write>;
 @group(0) @binding(25) var specAccumRead:   texture_2d<f32>;
 @group(0) @binding(26) var specAccumWrite:  texture_storage_2d<rgba16float, write>;
+@group(0) @binding(27) var stableGBufWrite: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(28) var stableGBufRead:  texture_2d<f32>;
 @group(0) @binding(29) var<storage, read> rtMotionMats: array<mat4x4<f32>>;  // prevWorld * inverse(curWorld) per mesh
 
 const MAX_TEX_SLOTS: i32 = 256;
@@ -848,6 +850,36 @@ fn sceneHitRaw(ray: Ray, maxT: f32) -> RawHit {
         if (n3 < 1e30) { stack[top] = k3; top++; }
     }
     return rh;
+}
+
+// Lightweight primary-hit query: BVH traversal + normal/depth/meshIdx only.
+// No material evaluation, no texture sampling, no UV interpolation.
+// Used for the unjittered stable G-buffer that drives à-trous edge-stopping.
+struct StableHit { t: f32, normal: vec3<f32>, meshIdx: i32, matIdx: i32 }
+
+fn stablePrimaryHit(ray: Ray) -> StableHit {
+    var sh: StableHit;
+    sh.t = 0.0; sh.normal = vec3<f32>(0.0); sh.meshIdx = -1; sh.matIdx = -1;
+    let rh = sceneHitRaw(ray, 1e30);
+    if (rh.triIdx < 0) { return sh; }
+
+    let ti = rh.triIdx;
+    let w  = 1.0 - rh.u - rh.v;
+    // Interpolate smooth normal from vertex normals
+    let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
+    let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
+    let n2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
+    let sn = normalize(n0 * w + n1 * rh.u + n2 * rh.v);
+
+    // meshIdx from triData row 1, matIdx from row 0
+    let r0 = textureLoad(triData, triCoord(ti, 0), 0);
+    let r1 = textureLoad(triData, triCoord(ti, 1), 0);
+
+    sh.t = rh.t;
+    sh.normal = select(-sn, sn, dot(ray.dir, sn) < 0.0);
+    sh.meshIdx = i32(r1.w);
+    sh.matIdx  = i32(r0.w);
+    return sh;
 }
 
 fn sceneHit(ray: Ray) -> Hit {
@@ -2203,6 +2235,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         textureStore(hitMeshWrite, pixel, textureLoad(hitMeshRead, pixel, 0));
         // Preserve previous gBuf (depth) so display shader tone-maps correctly.
         textureStore(gBufWrite,    pixel, textureLoad(gBufRead, pixel, 0));
+        textureStore(stableGBufWrite, pixel, textureLoad(stableGBufRead, pixel, 0));
         textureStore(albedoWrite,  pixel, vec4<f32>(vec3<f32>(0.0), 0.0));
         textureStore(momentsWrite, pixel, textureLoad(momentsRead, pixel, 0));
         // Pass reservoir through the ping-pong so the next traced frame sees a valid prior.
@@ -2247,6 +2280,13 @@ R"(
     var ptResult = pathTrace(ray, &seed, pixel, varianceReducedBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &primaryRough, &primaryMatIdx, &touchedMoved);
     var sample = ptResult.diff + ptResult.spec;
 
+    // Unjittered primary ray for stable G-buffer: traces a pixel-center ray
+    // (no jitter) to get stable normal/depth/meshID for à-trous edge-stopping.
+    // BVH traversal only — no shading, no material eval. Keeps edge-stopping
+    // weights consistent frame-to-frame despite sub-pixel jitter on the radiance ray.
+    let centerRay = makeRay(vec2<f32>(f32(pixel.x) + 0.5, f32(pixel.y) + 0.5), res);
+    let stableHit = stablePrimaryHit(centerRay);
+
     // AOV visualization mode — write noise-free primary-hit data and return early.
     // Writes to diffAccumWrite (display shader reads diffTex + specTex).
     if (aovMode > 0) {
@@ -2263,6 +2303,7 @@ R"(
         textureStore(accumWrite, pixel, vec4<f32>(aovColor, 1.0));
         textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), 0.0, 0.0));
         textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
+        textureStore(stableGBufWrite, pixel, vec4<f32>(stableHit.normal, stableHit.t));
         textureStore(albedoWrite, pixel, vec4<f32>(primaryAlbedo, primaryRough));
         return;
     }
@@ -2302,6 +2343,7 @@ R"(
         textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), select(0.0, 1.0, touchedMoved), 0.0));
         textureStore(albedoWrite, pixel, vec4<f32>(primaryAlbedo, primaryRough));
         textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
+        textureStore(stableGBufWrite, pixel, vec4<f32>(stableHit.normal, stableHit.t));
         return;
     }
 
@@ -2577,6 +2619,7 @@ R"(
     textureStore(albedoWrite,  pixel, vec4<f32>(primaryAlbedo, primaryRough));
 
     textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
+    textureStore(stableGBufWrite, pixel, vec4<f32>(stableHit.normal, stableHit.t));
 }
 )";
 
@@ -2813,6 +2856,8 @@ struct TaaUniforms {
 @group(0) @binding(7) var albedoTex:  texture_2d<f32>;  // .w = primary linear roughness
 @group(0) @binding(8) var momentsIn:  texture_2d<f32>;  // (E[L], E[L²]) from RT pass
 @group(0) @binding(9) var gBufPrev:   texture_2d<f32>;  // previous frame g-buffer (depth in .w)
+@group(0) @binding(10) var stableGBuf:     texture_2d<f32>; // unjittered current: normal.xyz + depth.w
+@group(0) @binding(11) var stableGBufPrev: texture_2d<f32>; // unjittered previous frame
 
 fn pcg_t(v: u32) -> u32 {
     var s = v * 747796405u + 2891336453u;
@@ -2842,6 +2887,11 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let curFC    = curSamp.w;
     let curGB    = textureLoad(gBufCur, pixel, 0);
     let curDepth = curGB.w;
+    // Stable G-buffer: unjittered primary ray — consistent normal/depth for
+    // reprojection and per-tap validation, eliminating silhouette shimmer.
+    let stableGB   = textureLoad(stableGBuf, pixel, 0);
+    let stableNorm = stableGB.xyz;
+    let stableDepth = stableGB.w;
 
     // Sky pixels: pass through, history length = 0
     if (curDepth < 1e-6) {
@@ -2866,20 +2916,15 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // path tracing where every sample is independently noisy regardless of history.
 
     // Reproject current pixel into previous frame's screen space.
-    // Reconstruct worldPos using the jittered ray — same Cranley-Patterson formula as the
-    // path tracer so the ray direction matches the depth stored in the g-buffer.
+    // Use unjittered center ray + stable depth for consistent reprojection
+    // across frames — eliminates shimmer from jitter-dependent world positions.
     let aspect = res.x / res.y;
-    let taa_fc   = u32(taa.frameCount.x);
-    let tPixHash = pcg_t(u32(pixel.x) + u32(pixel.y) * 65537u);
-    let tR2      = r2Seq_t(taa_fc);
-    let tJx      = (fract(tR2.x + f32(tPixHash)           / 4294967296.0) - 0.5) * 0.75;
-    let tJy      = (fract(tR2.y + f32(pcg_t(tPixHash))    / 4294967296.0) - 0.5) * 0.75;
-    let ndc = vec2<f32>((f32(pixel.x) + 0.5 + tJx) / res.x * 2.0 - 1.0,
-                         1.0 - (f32(pixel.y) + 0.5 + tJy) / res.y * 2.0);
+    let ndc = vec2<f32>((f32(pixel.x) + 0.5) / res.x * 2.0 - 1.0,
+                         1.0 - (f32(pixel.y) + 0.5) / res.y * 2.0);
     let rayDir   = normalize(taa.curCamFwd.xyz
                             + taa.curCamRgt.xyz * (ndc.x * taa.tanHalfFov.x * aspect)
                             + taa.curCamUp.xyz  * (ndc.y * taa.tanHalfFov.x));
-    let worldPos = taa.curCamOri.xyz + rayDir * curDepth;
+    let worldPos = taa.curCamOri.xyz + rayDir * stableDepth;
 
     // For moved meshes: transform world pos by motion matrix
     let meshIdx = u32(textureLoad(hitMeshTex, pixel, 0).r);
@@ -2919,13 +2964,9 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let curZDepth = dot(worldPos - taa.curCamOri.xyz, taa.curCamFwd.xyz);
     let depthRatio = abs(prevZ - curZDepth) / max(curZDepth, 0.01);
     // Previous frame's ray depth at prevPixel (g-buffer .w stores ray distance).
-    // Use curDepth (also ray distance) for comparison — same units, valid for both
-    // center and edge pixels since rays from the same camera origin have the same length unit.
-    let prevFrameDepth = textureLoad(gBufPrev, prevPixel, 0).w;
-    // Depth mismatch: fires for BOTH revealed background (cur deeper) AND
-    // object moved into view (cur shallower). The signed version missed the
-    // latter case — torus silhouette pixels were picking up background history.
-    let revealedRatio = abs(curDepth - prevFrameDepth) / max(curDepth, 0.01);
+    // Use stable depth on both sides — consistent across frames regardless of jitter.
+    let prevFrameStableDepth = textureLoad(stableGBufPrev, prevPixel, 0).w;
+    let revealedRatio = abs(stableDepth - prevFrameStableDepth) / max(stableDepth, 0.01);
     let disoccluded = useHist && (depthRatio > 0.1 || revealedRatio > 0.15);
 
     var result = curColor;
@@ -2948,20 +2989,23 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let h01 = textureLoad(taaHistIn, px01, 0);
         let h11 = textureLoad(taaHistIn, px11, 0);
 
-        let curNorm = curGB.xyz;
-        let gb00 = textureLoad(gBufPrev, px00, 0);
-        let gb10 = textureLoad(gBufPrev, px10, 0);
-        let gb01 = textureLoad(gBufPrev, px01, 0);
-        let gb11 = textureLoad(gBufPrev, px11, 0);
+        // Use stable (unjittered) g-buffer on BOTH sides for per-tap validation.
+        // Current pixel: stableGBuf (geometric normals + unjittered depth).
+        // Previous taps: stableGBufPrev (also geometric normals + unjittered depth).
+        // This avoids mismatch between geometric vs normal-mapped normals on textured surfaces.
+        let sg00 = textureLoad(stableGBufPrev, px00, 0);
+        let sg10 = textureLoad(stableGBufPrev, px10, 0);
+        let sg01 = textureLoad(stableGBufPrev, px01, 0);
+        let sg11 = textureLoad(stableGBufPrev, px11, 0);
 
         // Slightly relaxed depth threshold vs global disocclusion to avoid over-rejection
         let depthTol = 0.2;
-        let normTol  = 0.8;  // dot(curNorm, tapNorm) must exceed this
+        let normTol  = 0.8;  // dot(stableNorm, tapNorm) must exceed this
 
-        let v00 = select(0.0, (1.0-fx)*(1.0-fy), abs(gb00.w - curDepth)/max(curDepth,0.01) < depthTol && dot(curNorm, gb00.xyz) > normTol);
-        let v10 = select(0.0, fx      *(1.0-fy), abs(gb10.w - curDepth)/max(curDepth,0.01) < depthTol && dot(curNorm, gb10.xyz) > normTol);
-        let v01 = select(0.0, (1.0-fx)*fy,       abs(gb01.w - curDepth)/max(curDepth,0.01) < depthTol && dot(curNorm, gb01.xyz) > normTol);
-        let v11 = select(0.0, fx      *fy,        abs(gb11.w - curDepth)/max(curDepth,0.01) < depthTol && dot(curNorm, gb11.xyz) > normTol);
+        let v00 = select(0.0, (1.0-fx)*(1.0-fy), abs(sg00.w - stableDepth)/max(stableDepth,0.01) < depthTol && dot(stableNorm, sg00.xyz) > normTol);
+        let v10 = select(0.0, fx      *(1.0-fy), abs(sg10.w - stableDepth)/max(stableDepth,0.01) < depthTol && dot(stableNorm, sg10.xyz) > normTol);
+        let v01 = select(0.0, (1.0-fx)*fy,       abs(sg01.w - stableDepth)/max(stableDepth,0.01) < depthTol && dot(stableNorm, sg01.xyz) > normTol);
+        let v11 = select(0.0, fx      *fy,        abs(sg11.w - stableDepth)/max(stableDepth,0.01) < depthTol && dot(stableNorm, sg11.xyz) > normTol);
         let vSum = v00 + v10 + v01 + v11;
 
         // No valid taps — treat as disoccluded
@@ -3103,6 +3147,7 @@ struct AtrousUni { stepSize: u32, mode: u32, frameCount: f32, _p1: f32, }
 @group(0) @binding(4) var albedoBuf: texture_2d<f32>;
 @group(0) @binding(5) var hitMeshBuf: texture_2d<f32>;
 @group(0) @binding(6) var momentsBuf: texture_2d<f32>;
+@group(0) @binding(7) var stableGBuf: texture_2d<f32>;  // unjittered: normal.xyz + depth.w
 
 fn luminance_a(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -3123,10 +3168,14 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let cSamp   = textureLoad(colorIn, pixel, 0);
     let cColor  = cSamp.xyz;
-    let cFC     = cSamp.w;
     let cGB     = textureLoad(gBuf, pixel, 0);
     let cNorm   = cGB.xyz;
     let cDepth  = cGB.w;
+    // Stable G-buffer: unjittered primary ray hit — normal and depth are
+    // consistent frame-to-frame, eliminating square patch artifacts from jitter.
+    let cStableGB = textureLoad(stableGBuf, pixel, 0);
+    let cStableN  = cStableGB.xyz;
+    let cStableD  = cStableGB.w;
     let cAlbedoFull = textureLoad(albedoBuf, pixel, 0);
     let cAlbedo = cAlbedoFull.xyz;
     let cRough  = cAlbedoFull.w;  // linear roughness (0 = mirror, 1 = diffuse)
@@ -3134,14 +3183,20 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cMeshId = u32(cHitId.r);
     let cMatId  = i32(cHitId.g);
 
+    // mode bits: 0 = diffuse, 1 = specular, 2 = temporal cleanup
+    let isSpec = (uni.mode & 1u) != 0u;
+    let isTemporal = (uni.mode & 2u) != 0u;
+    // For temporal cleanup, use global frame count (uniform across pixels) instead of
+    // per-pixel TAA history length — prevents grid artifacts from spatially varying
+    // edge-stopping parameters at à-trous step boundaries.
+    let cFC = select(cSamp.w, uni.frameCount, isTemporal);
+
     // Sky pixels: pass through
     if (cDepth < 1e-6) {
-        textureStore(colorOut, pixel, vec4<f32>(cColor, cFC));
+        textureStore(colorOut, pixel, vec4<f32>(cColor, cSamp.w));
         return;
     }
 
-    // Specular mode: skip demodulation (specular is not modulated by surface albedo).
-    let isSpec = uni.mode == 1u;
     // Demodulate center pixel for accumulation path (diffuse only)
     let cIrr = select(demod(cColor, cAlbedo), cColor, isSpec);
     // Blend luminance source: demod for bright surfaces (texture-aware), raw for dark (stable)
@@ -3186,7 +3241,9 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let sAlbedo = textureLoad(albedoBuf, sp, 0).xyz;
             let sIrr    = demod(sColor, sAlbedo);
             let sNorm   = sGB.xyz;
-            let sDepth  = sGB.w;
+            let sStableGB = textureLoad(stableGBuf, sp, 0);
+            let sStableN  = sStableGB.xyz;
+            let sStableD  = sStableGB.w;
 
             // Spatial weight (separable Gaussian)
             let w_s = kw[dy + 2] * kw[dx + 2];
@@ -3198,11 +3255,12 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let specNormPow = mix(2.0, 16.0, smoothstep(0.0, 32.0, cFC));
             let diffNormPow = mix(2.0, 128.0, smoothstep(0.0, 48.0, cFC));
             let normPow = select(diffNormPow, specNormPow, isSpec);
-            let w_n = pow(max(0.0, dot(cNorm, sNorm)), normPow);
-            // Depth edge-stopping: FC-adaptive — relaxed when noisy
+            let w_n = pow(max(0.0, dot(cStableN, sStableN)), normPow);
+            // Depth edge-stopping using stable (unjittered) depth — consistent
+            // frame-to-frame, no square patch artifacts from jitter.
             let depthBase = select(4.0, mix(1.0, 3.0, cRough), isSpec);
             let depthScale = mix(1.0, depthBase, smoothstep(0.0, 32.0, cFC));
-            let w_d = exp(-abs(cDepth - sDepth) * depthScale / (cDepth + 0.01));
+            let w_d = exp(-abs(cStableD - sStableD) * depthScale / (cStableD + 0.01));
             // Luminance edge-stopping: wider sigma while noisy, but not so wide
             // that shadow boundaries blur out
             let lumBoost = mix(4.0, 1.0, smoothstep(0.0, 16.0, cFC));
@@ -3210,7 +3268,11 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let sAlbLum = luminance_a(sAlbedo);
             let sDemod = smoothstep(0.05, 0.2, sAlbLum);
             let sLum = mix(luminance_a(sColor), luminance_a(sIrr), sDemod);
-            let w_l = exp(-(sLum - cLum) * (sLum - cLum) / (effectiveLumSigma * effectiveLumSigma + 1e-6));
+            // Temporal cleanup: widen luminance sigma to tolerate TAA noise residuals
+            // without creating grid patches, but keep relative scaling so strong
+            // edges (glass/transmission) are still preserved.
+            let finalLumSigma = select(effectiveLumSigma, effectiveLumSigma * 4.0, isTemporal);
+            let w_l = exp(-(sLum - cLum) * (sLum - cLum) / (finalLumSigma * finalLumSigma + 1e-6));
 
             // Per-sample outlier clamp: suppress extreme bright samples in filter window.
             // Specular mode: tighter cap to kill fireflies without blurring.
@@ -4724,6 +4786,11 @@ struct WgpuPathTracer::Impl {
     WgpuTexture* gBufCur;       // current frame writes here
     WgpuTexture* gBufPrev;      // previous frame's G-buffer
 
+    WgpuTexture stableGBufA;   // r32float — jitter-corrected depth for à-trous
+    WgpuTexture stableGBufB;
+    WgpuTexture* stableGBufCur;
+    WgpuTexture* stableGBufPrev;
+
     // ReSTIR DI reservoir ping-pong
     WgpuTexture reservoirA;     // rgba32float — lightPos.xyz + encoded type/index
     WgpuTexture reservoirB;
@@ -4994,6 +5061,14 @@ struct WgpuPathTracer::Impl {
                 WgpuTexture::Format::RGBA16Float,
                 WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
           gBufCur(&gBufA), gBufPrev(&gBufB),
+          // Stable G-buffer ping-pong (unjittered primary ray: normal.xyz + depth.w)
+          stableGBufA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                       WgpuTexture::Format::RGBA16Float,
+                       WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
+          stableGBufB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                       WgpuTexture::Format::RGBA16Float,
+                       WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
+          stableGBufCur(&stableGBufA), stableGBufPrev(&stableGBufB),
           // ReSTIR DI reservoir ping-pong
           reservoirA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                      WgpuTexture::Format::RGBA32Float),
@@ -5144,6 +5219,8 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(24, *writeDiffAccum);
         rtPipeline.setTexture(25, *readSpecAccum);
         rtPipeline.setStorageTexture(26, *writeSpecAccum);
+        rtPipeline.setStorageTexture(27, *stableGBufCur);
+        rtPipeline.setTexture(28, *stableGBufPrev);
         rtPipeline.setStorageBufferRead(29, motionMatBuf);
 
         // TAA pipeline — set ALL bindings upfront
@@ -5157,6 +5234,8 @@ struct WgpuPathTracer::Impl {
         taaPipeline.setTexture(7, albedoTex);
         taaPipeline.setTexture(8, *momentsRead);  // temporally accumulated (E[L], E[L²])
         taaPipeline.setTexture(9, *gBufCur);      // previous frame g-buffer (depth for revealed-bg check)
+        taaPipeline.setTexture(10, *stableGBufPrev);  // current frame stable g-buffer
+        taaPipeline.setTexture(11, *stableGBufCur);   // previous frame stable g-buffer
 
         // Spatial filter — set ALL bindings upfront
         atrousPipeline.setUniformBuffer(0, atrousUniBuf);
@@ -5166,6 +5245,7 @@ struct WgpuPathTracer::Impl {
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(5, *readHitMesh);
         atrousPipeline.setTexture(6, *momentsRead);
+        atrousPipeline.setTexture(7, *stableGBufPrev);
 
         // Pre-filter pipeline bindings
         preFilterPipeline.setUniformBuffer(0, preFilterUniBuf);
@@ -5203,6 +5283,8 @@ struct WgpuPathTracer::Impl {
             accumB.write(zeros.data(), zeros.size() * sizeof(float));
             gBufA.write(zeros.data(), zeros.size() * sizeof(float));
             gBufB.write(zeros.data(), zeros.size() * sizeof(float));
+            stableGBufA.write(zeros.data(), zeros.size() * sizeof(float));
+            stableGBufB.write(zeros.data(), zeros.size() * sizeof(float));
             taaHistA.write(zeros.data(), zeros.size() * sizeof(float));
             taaHistB.write(zeros.data(), zeros.size() * sizeof(float));
             momentsA.write(zeros.data(), zeros.size() * sizeof(float));
@@ -5324,6 +5406,12 @@ struct WgpuPathTracer::Impl {
         gBufCur  = &gBufA;
         gBufPrev = &gBufB;
 
+        const auto sdUsage = WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst;
+        stableGBufA = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA16Float, sdUsage);
+        stableGBufB = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA16Float, sdUsage);
+        stableGBufCur  = &stableGBufA;
+        stableGBufPrev = &stableGBufB;
+
         auto fmt32 = WgpuTexture::Format::RGBA32Float;
         reservoirA  = WgpuTexture(renderer, uw, uh, fmt32);
         reservoirB  = WgpuTexture(renderer, uw, uh, fmt32);
@@ -5376,6 +5464,8 @@ struct WgpuPathTracer::Impl {
         accumB.write(zeros.data(), zeros.size() * sizeof(float));
         gBufA.write(zeros.data(), zeros.size() * sizeof(float));
         gBufB.write(zeros.data(), zeros.size() * sizeof(float));
+        stableGBufA.write(zeros.data(), zeros.size() * sizeof(float));
+        stableGBufB.write(zeros.data(), zeros.size() * sizeof(float));
         taaHistA.write(zeros.data(), zeros.size() * sizeof(float));
         taaHistB.write(zeros.data(), zeros.size() * sizeof(float));
         taaHistDiffA.write(zeros.data(), zeros.size() * sizeof(float));
@@ -5409,6 +5499,8 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(24, *writeDiffAccum);
         rtPipeline.setTexture(25, *readSpecAccum);
         rtPipeline.setStorageTexture(26, *writeSpecAccum);
+        rtPipeline.setStorageTexture(27, *stableGBufCur);
+        rtPipeline.setTexture(28, *stableGBufPrev);
         rtPipeline.setStorageBufferRead(29, motionMatBuf);
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(6, *momentsRead);
@@ -5419,6 +5511,8 @@ struct WgpuPathTracer::Impl {
         taaPipeline.setTexture(7, albedoTex);
         taaPipeline.setTexture(8, *momentsRead);
         taaPipeline.setTexture(9, *gBufCur);  // prev frame depth
+        taaPipeline.setTexture(10, *stableGBufPrev);
+        taaPipeline.setTexture(11, *stableGBufCur);
 
         frameCount_ = 0.f;
     }
@@ -6335,6 +6429,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.rtPipeline.setStorageTexture(10, *d.gBufCur);
         d.rtPipeline.setTexture(15, *d.gBufPrev);
 
+        std::swap(d.stableGBufCur, d.stableGBufPrev);
+        d.rtPipeline.setStorageTexture(27, *d.stableGBufCur);
+        d.rtPipeline.setTexture(28, *d.stableGBufPrev);
+
         std::swap(d.reservoirRead, d.reservoirWrite);
         std::swap(d.reservoirWRead, d.reservoirWWrite);
         d.rtPipeline.setTexture(17, *d.reservoirRead);
@@ -6378,29 +6476,21 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             au.mode = mode;
             d.atrousPipeline.setTexture(3, *d.gBufPrev);
             d.atrousPipeline.setTexture(5, *d.readHitMesh);
+            d.atrousPipeline.setTexture(7, *d.stableGBufPrev);
 
-            // Ping-pong: src → dst → tmp → dst → ...
-            // Pass 0 always reads srcAccum, writes dstDenoised.
-            // Odd passes write tmpFiltered, even passes write dstDenoised.
             WgpuTexture* readTex  = &srcAccum;
             for (int p = 0; p < passes; ++p) {
                 WgpuTexture* writeTex = (p % 2 == 0) ? &dstDenoised : &tmpFiltered;
-                au.stepSize = static_cast<uint32_t>(1 << p);  // 1, 2, 4, ...
+                au.stepSize = static_cast<uint32_t>(1 << p);
                 d.atrousUniBuf.write(&au, sizeof(au));
                 d.atrousPipeline.setTexture(1, *readTex);
                 d.atrousPipeline.setStorageTexture(2, *writeTex);
                 d.atrousPipeline.dispatch(gx, gy);
                 readTex = writeTex;
             }
-            // If odd number of passes, result is in dstDenoised (good).
-            // If even number, result is in tmpFiltered — copy it.
-            // With passes=1 (diffuse) or passes=3 (specular), always odd → in dstDenoised.
         };
 
-        // Diffuse: 3 passes (step 1,2,4) — odd count so result lands in dstDenoised
         runAtrous(*d.readDiffAccum, d.denoisedDiff, d.filteredA, 0, 3);
-
-        // Specular: 3 passes (step 1,2,4)
         runAtrous(*d.readSpecAccum, d.denoisedSpec, d.filteredB, 1, 3);
 
         displayDiff = &d.denoisedDiff;
@@ -6440,6 +6530,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.taaPipeline.setTexture(5, *d.readHitMesh);
             d.taaPipeline.setTexture(8, *d.momentsRead);
             d.taaPipeline.setTexture(9, *d.gBufCur);             // previous frame g-buffer (after swap: gBufCur = prev frame)
+            d.taaPipeline.setTexture(10, *d.stableGBufPrev);    // current frame stable g-buffer
+            d.taaPipeline.setTexture(11, *d.stableGBufCur);     // previous frame stable g-buffer
             d.taaPipeline.dispatch(gx, gy);
 
             // Specular temporal: raw → taaHistSpecWrite
@@ -6465,6 +6557,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             au.mode = mode;
             d.atrousPipeline.setTexture(3, *d.gBufPrev);
             d.atrousPipeline.setTexture(5, *d.readHitMesh);
+            d.atrousPipeline.setTexture(7, *d.stableGBufPrev);
             WgpuTexture* readTex = &srcAccum;
             for (int p = 0; p < passes; ++p) {
                 WgpuTexture* writeTex = (p % 2 == 0) ? &dstDenoised : &tmpFiltered;
@@ -6479,8 +6572,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
         // Cleanup reads temporal output (taaHistDiffRead/SpecRead after swap = just-written).
         // Uses filteredA/B as ping-pong temp — safe, temporal already consumed them.
-        runAtrous(*d.taaHistDiffRead, d.denoisedDiff, d.filteredA, 0, 3);
-        runAtrous(*d.taaHistSpecRead, d.denoisedSpec, d.filteredB, 1, 3);
+        runAtrous(*d.taaHistDiffRead, d.denoisedDiff, d.filteredA, 2, 3);  // 2 = diffuse | temporal
+        runAtrous(*d.taaHistSpecRead, d.denoisedSpec, d.filteredB, 3, 3);  // 3 = specular | temporal
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;
