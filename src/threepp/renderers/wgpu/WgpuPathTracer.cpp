@@ -49,8 +49,8 @@ using namespace threepp;
 namespace {
 
 constexpr int MAX_TEX_SLOTS = 256;
-constexpr int TILE_SIZE = 1024;
-constexpr int ATLAS_COLS = 8;  // tiles per row in atlas (8 × 1024 = 8192 wide, grows tall)
+constexpr int DEFAULT_TILE_SIZE = 1024;
+constexpr int ATLAS_WIDTH = 8192;  // fixed atlas width; cols = ATLAS_WIDTH / tileSize
 constexpr int TRI_TEX_HEIGHT = 12;
 constexpr int MAT_TEX_HEIGHT = 19;
 constexpr int TEX_PAGE_WIDTH = 8192;
@@ -3638,7 +3638,9 @@ static std::vector<RtMeshEntry> expandMeshEntries(const std::vector<Mesh*>& mesh
 /// Returns {pixel data, rows, columns, tileSize}.
 static std::tuple<std::vector<unsigned char>, int, int, int> buildAtlas(
         const std::vector<Mesh*>& meshes,
-        std::unordered_map<Texture*, int>& texSlotMap) {
+        std::unordered_map<Texture*, int>& texSlotMap,
+        int TILE_SIZE = DEFAULT_TILE_SIZE) {
+    const int ATLAS_COLS = ATLAS_WIDTH / TILE_SIZE;
     // First pass: count unique textures to determine atlas size.
     int slotCount = 0;
     std::unordered_set<Texture*> seen;
@@ -3700,7 +3702,7 @@ static std::tuple<std::vector<unsigned char>, int, int, int> buildAtlas(
                 std::memcpy(layerBase + di, src.data() + si, TILE_SIZE * 4);
             }
         } else {
-            int xmap[TILE_SIZE];
+            std::vector<int> xmap(TILE_SIZE);
             for (int tx = 0; tx < TILE_SIZE; ++tx)
                 xmap[tx] = tx * srcW / TILE_SIZE;
             for (int ty = 0; ty < TILE_SIZE; ++ty) {
@@ -4697,8 +4699,9 @@ struct WgpuPathTracer::Impl {
     WgpuTexture matTex;
     WgpuTexture texAtlasTex;
     int atlasLayers_ = 0;  // current atlas row count (0 = initial placeholder)
-    int atlasCols_ = ATLAS_COLS;  // current atlas column count
-    int tileSize_ = TILE_SIZE;   // current tile size (may reduce for large texture counts)
+    int atlasCols_ = ATLAS_WIDTH / DEFAULT_TILE_SIZE;
+    int tileSize_ = DEFAULT_TILE_SIZE;
+    int textureResolution_ = DEFAULT_TILE_SIZE;  // user config: 1024 or 2048
     WgpuTexture accumA;
     WgpuTexture accumB;
     WgpuTexture* readAccum;
@@ -4881,8 +4884,8 @@ struct WgpuPathTracer::Impl {
     struct AsyncBuildResult {
         std::vector<unsigned char> atlasData;
         int atlasLayers = 0;
-        int atlasCols = ATLAS_COLS;
-        int tileSize = TILE_SIZE;
+        int atlasCols = ATLAS_WIDTH / DEFAULT_TILE_SIZE;
+        int tileSize = DEFAULT_TILE_SIZE;
         std::unordered_map<Texture*, int> texSlotMap;
         std::vector<float> triBuffer;
         std::vector<float> matBuffer;
@@ -5534,7 +5537,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.meshes = meshes;
         r.entries = entries;
         r.texSlotMap.clear();
-        auto [atlasData, atlasLayers, atlasCols_, tileSize_] = buildAtlas(meshes, r.texSlotMap);
+        auto [atlasData, atlasLayers, atlasCols_, tileSize_] = buildAtlas(meshes, r.texSlotMap, d.textureResolution_);
         r.atlasData = std::move(atlasData);
         r.atlasLayers = atlasLayers;
         r.atlasCols = atlasCols_;
@@ -5626,7 +5629,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.meshes = meshes;
         r.entries = entries;
         r.texSlotMap.clear();
-        auto [atlasData, atlasLayers, atlasCols_, tileSize_] = buildAtlas(meshes, r.texSlotMap);
+        auto [atlasData, atlasLayers, atlasCols_, tileSize_] = buildAtlas(meshes, r.texSlotMap, d.textureResolution_);
         r.atlasData = std::move(atlasData);
         r.atlasLayers = atlasLayers;
         r.atlasCols = atlasCols_;
@@ -5794,8 +5797,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.atlasLayers_ = r.atlasLayers;
             d.atlasCols_ = r.atlasCols;
             d.tileSize_ = r.tileSize;
-            const int layerW = ATLAS_COLS * TILE_SIZE;
-            const int layerH = ATLAS_COLS * TILE_SIZE;
+            const int layerW = d.atlasCols_ * d.tileSize_;
+            const int layerH = d.atlasCols_ * d.tileSize_;
             d.texAtlasTex = WgpuTexture(d.renderer,
                     layerW, layerH,
                     WgpuTexture::Format::RGBA8Unorm,
@@ -5805,7 +5808,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.rtPipeline.setTexture(6, d.texAtlasTex);
         }
         // Upload atlas layers
-        const size_t layerBytes = static_cast<size_t>(ATLAS_COLS * TILE_SIZE) * (ATLAS_COLS * TILE_SIZE) * 4;
+        const size_t layerBytes = static_cast<size_t>(d.atlasCols_ * d.tileSize_) * (d.atlasCols_ * d.tileSize_) * 4;
         for (int layer = 0; layer < r.atlasLayers; ++layer) {
             d.texAtlasTex.writeLayer(layer, r.atlasData.data() + layer * layerBytes, layerBytes);
         }
@@ -6794,6 +6797,15 @@ void WgpuPathTracer::setOverlayLayer(int channel) {
 
 int WgpuPathTracer::overlayLayer() const {
     return pimpl_->overlayLayer_;
+}
+
+void WgpuPathTracer::setTextureResolution(int size) {
+    size = (size >= 2048) ? 2048 : 1024;
+    pimpl_->textureResolution_ = size;
+}
+
+int WgpuPathTracer::textureResolution() const {
+    return pimpl_->textureResolution_;
 }
 
 void WgpuPathTracer::markDirty() {

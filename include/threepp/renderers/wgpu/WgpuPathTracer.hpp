@@ -97,6 +97,11 @@ namespace threepp {
         void setAOVMode(int mode);
         [[nodiscard]] int aovMode() const;
 
+        /// Texture atlas tile resolution. Default: 1024. Set to 2048 for higher
+        /// quality textures.
+        void setTextureResolution(int size);
+        [[nodiscard]] int textureResolution() const;
+
         /// Force a full scene rebuild (geometry + materials) on the next render call.
         void markDirty();
 
