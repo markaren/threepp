@@ -2183,9 +2183,16 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let foveatedSkip = skipMask > 0u && (fc & skipMask) != 0u && !isEnvPixel;
 
-    // Foveated skip: pass through previous accumulation unchanged.
+    // Checkerboard skip: during camera movement (fc==0) skip half the pixels each frame,
+    // alternating which half via globalFrameCounter so both patterns are covered across
+    // two consecutive frames.  TAA reconstructs skipped pixels from history exactly as
+    // it does for foveated pixels — no custom reprojection needed.
+    let checkerSkip = fc == 0u && !isEnvPixel &&
+        ((u32(pixel.x) + u32(pixel.y) + u32(rt.params.y)) & 1u) == 0u;
+
+    // Foveated/checkerboard skip: pass through previous accumulation unchanged.
     // The pixel keeps its existing color & frame count; it will trace on a future frame.
-    if (foveatedSkip) {
+    if (foveatedSkip || checkerSkip) {
         let rawMode = rt.restirParams.w > 0.5;
         if (rawMode) {
             // Raw mode: write sentinel .w = -1 so temporal denoiser knows to pass through history
