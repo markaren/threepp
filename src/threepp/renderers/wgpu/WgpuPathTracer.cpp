@@ -2611,9 +2611,6 @@ R"(
     var stableNrm = vec3<f32>(0.0);
     var stableT   = 0.0;
     if (primaryTriIdx >= 0) {
-        // Use jittered hit's smooth normal directly — sub-pixel offset changes
-        // barycentric coords by ~3% on typical triangles, negligible normal difference.
-        // Saves 3 texture loads vs re-interpolating at center-ray barycentrics.
         stableNrm = primaryNormal;
         let ti = primaryTriIdx;
         let sv0 = textureLoad(triData, triCoord(ti, 0), 0).xyz;
@@ -2711,7 +2708,8 @@ R"(
     // Force-reset on mode switch / topology rebuild (params.w flag)
     let forceReset = rt.params.w > 0.5;
     if (forceReset) { pixelFC = 0.0; }
-
+)"
+R"(
     // Reproject accumulation buffer across camera/mesh motion using motion vectors.
     // Two reprojection cases, unified through the same math:
     //   (A) Primary ray hits a moved mesh: transform worldPos by the mesh's
@@ -3237,8 +3235,26 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let stableNorm = stableGB.xyz;
     let stableDepth = stableGB.w;
 
-    // Sky pixels: pass through, history length = 0
+    // Sky pixels: pass through — unless this is a geometry/sky silhouette edge.
+    // At edges, jitter alternates between sky and geometry.  The non-temporal
+    // path blindly accumulates both → converges.  We replicate that here: if
+    // the pixel has been accumulating (histLen > 0) in a static scene, blend
+    // the sky sample into the existing history instead of nuking it.
     if (curDepth < 1e-6) {
+        let camDist2_sky = dot(taa.curCamOri.xyz - taa.prevCamOri.xyz,
+                               taa.curCamOri.xyz - taa.prevCamOri.xyz);
+        let camRotDot_sky = dot(taa.curCamFwd.xyz, taa.prevCamFwd.xyz);
+        let skyStatic = camDist2_sky < 1e-10 && camRotDot_sky > 0.9999995;
+        if (skyStatic && curFC > -0.5) {
+            let prevHist = textureLoad(taaHistIn, pixel, 0);
+            if (prevHist.w > 1.5) {
+                // Edge pixel with accumulated history — blend sky sample in.
+                let alpha = max(1.0/64.0, 1.0 / (prevHist.w + 1.0));
+                let blended = mix(prevHist.xyz, curColor, alpha);
+                textureStore(taaOut, pixel, vec4<f32>(blended, prevHist.w + 1.0));
+                return;
+            }
+        }
         textureStore(taaOut, pixel, vec4<f32>(curColor, 0.0));
         return;
     }
@@ -3302,18 +3318,31 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     useHist = useHist && prevPixel.x >= 0 && prevPixel.x + 1 < iRes.x
                       && prevPixel.y >= 0 && prevPixel.y + 1 < iRes.y;
 
+    // Scene-static detection: when neither camera nor any mesh moved, depth
+    // changes at silhouette pixels are caused solely by sub-pixel jitter making
+    // the primary ray alternate between foreground/background triangles.  These
+    // should NOT be treated as disocclusion — the pixel is accumulating the
+    // coverage-weighted average of both surfaces for sub-pixel anti-aliasing.
+    let camDist2 = dot(taa.curCamOri.xyz - taa.prevCamOri.xyz,
+                       taa.curCamOri.xyz - taa.prevCamOri.xyz);
+    let camRotDot = dot(taa.curCamFwd.xyz, taa.prevCamFwd.xyz);
+    let camMoved  = camDist2 > 1e-10 || camRotDot < 0.9999995;
+    let anyMeshMoved = (taa.movedMeshBits.x | taa.movedMeshBits.y
+                      | taa.movedMeshBits.z | taa.movedMeshBits.w) != 0u;
+    let sceneStatic = !camMoved && !anyMeshMoved;
+)"
+R"(
     // Depth-based disocclusion (two conditions):
     // 1. Standard: prevZ vs curZDepth — detects when current surface wasn't visible before.
     // 2. Revealed: current surface is much deeper than previous surface at prevPixel
     //    — detects background pixels revealed when a foreground object moved away.
-    //    Without this, background pixels behind a moving object keep torus-color history.
+    //    Gated on actual motion: in a static scene the stable G-buffer oscillates
+    //    at silhouettes due to jitter, which is NOT true disocclusion.
     let curZDepth = dot(worldPos - taa.curCamOri.xyz, taa.curCamFwd.xyz);
     let depthRatio = abs(prevZ - curZDepth) / max(curZDepth, 0.01);
-    // Previous frame's ray depth at prevPixel (g-buffer .w stores ray distance).
-    // Use stable depth on both sides — consistent across frames regardless of jitter.
     let prevFrameStableDepth = textureLoad(stableGBufPrev, prevPixel, 0).w;
     let revealedRatio = abs(stableDepth - prevFrameStableDepth) / max(stableDepth, 0.01);
-    let disoccluded = useHist && (depthRatio > 0.1 || revealedRatio > 0.15);
+    let disoccluded = useHist && (depthRatio > 0.1 || (!sceneStatic && revealedRatio > 0.15));
 
     var result = curColor;
     var newHistLen = 1.0;
@@ -3354,20 +3383,36 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let v11 = select(0.0, fx      *fy,        abs(sg11.w - stableDepth)/max(stableDepth,0.01) < depthTol && dot(stableNorm, sg11.xyz) > normTol);
         let vSum = v00 + v10 + v01 + v11;
 
-        // No valid taps — treat as disoccluded
+        // No valid taps — normally treat as disoccluded.
+        // Exception: in a static scene, validation fails at silhouette pixels
+        // because the stable G-buffer oscillates with jitter.  Since nothing
+        // moved, the history at the current pixel position IS the correct
+        // accumulation — read it directly (reprojection is identity).
+        var histColor   = vec3<f32>(0.0);
+        var prevHistLen = 0.0;
         if (vSum < 1e-6) {
-            if (isSkippedPixel) {
-                // Skipped pixel with no valid reprojection — pass through current-position history
+            if (sceneStatic && !isSkippedPixel) {
+                let directHist = textureLoad(taaHistIn, pixel, 0);
+                if (directHist.w > 0.5) {
+                    histColor   = directHist.xyz;
+                    prevHistLen = directHist.w;
+                } else {
+                    textureStore(taaOut, pixel, vec4<f32>(curColor, 1.0));
+                    return;
+                }
+            } else if (isSkippedPixel) {
                 let fallback = textureLoad(taaHistIn, pixel, 0);
                 textureStore(taaOut, pixel, vec4<f32>(fallback.xyz, fallback.w));
+                return;
             } else {
                 textureStore(taaOut, pixel, vec4<f32>(curColor, 1.0));
+                return;
             }
-            return;
+        } else {
+            let inv = 1.0 / vSum;
+            histColor   = (h00.xyz*v00 + h10.xyz*v10 + h01.xyz*v01 + h11.xyz*v11) * inv;
+            prevHistLen = (h00.w  *v00 + h10.w  *v10 + h01.w  *v01 + h11.w  *v11) * inv;
         }
-        let inv = 1.0 / vSum;
-        let histColor   = (h00.xyz*v00 + h10.xyz*v10 + h01.xyz*v01 + h11.xyz*v11) * inv;
-        let prevHistLen = (h00.w  *v00 + h10.w  *v10 + h01.w  *v01 + h11.w  *v11) * inv;
 
         // SVGF-style: pure EMA accumulation, no color-box clamping.
         // The moments-driven à-trous spatial filter handles all noise removal.
