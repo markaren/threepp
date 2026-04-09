@@ -472,7 +472,7 @@ fn evalBrdf(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
     let hv    = normalize(wo + wi);
     let NdotH = max(0.0, dot(n, hv));
     let NdotV = max(0.001, dot(n, wo));
-    let NdotL = max(0.001, abs(dot(n, wi)));
+    let NdotL = max(0.001, dot(n, wi));
     let VdotH = max(0.0, dot(wo, hv));
     let D     = ggxD(NdotH, alpha);
     let F     = schlick(VdotH, F0);
@@ -572,7 +572,10 @@ fn testTriangle(ray: Ray, ti: i32, rh: ptr<function, RawHit>) {
             } else if (alpha <= 0.01) {
                 return;  // always skip — effectively transparent
             } else {
-                let h = pcg(pcg(u32(ti)) ^ pcg(bitcast<u32>(isect.t)));
+                // XOR in the global frame counter so the coin-flip varies every
+                // frame — without this the same triangle at the same hit distance
+                // always accepts/rejects, creating a fixed pattern that never converges.
+                let h = pcg(pcg(u32(ti) ^ u32(rt.params.y) * 2654435761u) ^ pcg(bitcast<u32>(isect.t)));
                 let rng = f32(h) / 4294967295.0;
                 if (rng > alpha) { return; }
             }
@@ -842,16 +845,21 @@ fn sceneHitRaw(ray: Ray, maxT: f32) -> RawHit {
         if (dists.z < 1e30 && ci2 < 0 && ci2 != EMPTY_CHILD) { decodeLeaf(ci2, ray, &rh); }
         if (dists.w < 1e30 && ci3 < 0 && ci3 != EMPTY_CHILD) { decodeLeaf(ci3, ray, &rh); }
 
-        // Push internal children — nearest last so it's popped first
+        // Push internal children nearest-last (popped first).
+        // Branchless 5-comparator sorting network using select() — avoids
+        // conditional branches that serialise across GPU warps.
         var n0 = dists.x; var n1 = dists.y; var n2 = dists.z; var n3 = dists.w;
         var k0 = ci0; var k1 = ci1; var k2 = ci2; var k3 = ci3;
         if (k0 < 0) { n0 = 1e30; } if (k1 < 0) { n1 = 1e30; }
         if (k2 < 0) { n2 = 1e30; } if (k3 < 0) { n3 = 1e30; }
-        if (n0 < n1) { let t0=n0;n0=n1;n1=t0; let t1=k0;k0=k1;k1=t1; }
-        if (n2 < n3) { let t0=n2;n2=n3;n3=t0; let t1=k2;k2=k3;k3=t1; }
-        if (n0 < n2) { let t0=n0;n0=n2;n2=t0; let t1=k0;k0=k2;k2=t1; }
-        if (n1 < n3) { let t0=n1;n1=n3;n3=t0; let t1=k1;k1=k3;k3=t1; }
-        if (n1 < n2) { let t0=n1;n1=n2;n2=t0; let t1=k1;k1=k2;k2=t1; }
+        // Each step: c = (na < nb); new_na = select(na,nb,c); new_nb = select(nb,na,c)
+        // Result is descending order (n0 >= n1 >= n2 >= n3).
+        var c: bool; var tn: f32; var tk: i32;
+        c=n0<n1; tn=select(n0,n1,c); n1=select(n1,n0,c); n0=tn; tk=select(k0,k1,c); k1=select(k1,k0,c); k0=tk;
+        c=n2<n3; tn=select(n2,n3,c); n3=select(n3,n2,c); n2=tn; tk=select(k2,k3,c); k3=select(k3,k2,c); k2=tk;
+        c=n0<n2; tn=select(n0,n2,c); n2=select(n2,n0,c); n0=tn; tk=select(k0,k2,c); k2=select(k2,k0,c); k0=tk;
+        c=n1<n3; tn=select(n1,n3,c); n3=select(n3,n1,c); n1=tn; tk=select(k1,k3,c); k3=select(k3,k1,c); k1=tk;
+        c=n1<n2; tn=select(n1,n2,c); n2=select(n2,n1,c); n1=tn; tk=select(k1,k2,c); k2=select(k2,k1,c); k1=tk;
         if (n0 < 1e30) { stack[top] = k0; top++; }
         if (n1 < 1e30) { stack[top] = k1; top++; }
         if (n2 < 1e30) { stack[top] = k2; top++; }
@@ -902,11 +910,21 @@ fn sceneAnyHit(ray: Ray, maxT: f32) -> RawHit {
         if (dists.z < 1e30 && ci2 < 0 && ci2 != EMPTY_CHILD) { decodeLeaf(ci2, ray, &rh); if (rh.triIdx >= 0) { return rh; } }
         if (dists.w < 1e30 && ci3 < 0 && ci3 != EMPTY_CHILD) { decodeLeaf(ci3, ray, &rh); if (rh.triIdx >= 0) { return rh; } }
 
-        // No sorting — just push all hit internal children
-        if (dists.x < 1e30 && ci0 >= 0) { stack[top] = ci0; top++; }
-        if (dists.y < 1e30 && ci1 >= 0) { stack[top] = ci1; top++; }
-        if (dists.z < 1e30 && ci2 >= 0) { stack[top] = ci2; top++; }
-        if (dists.w < 1e30 && ci3 >= 0) { stack[top] = ci3; top++; }
+        // Push internal children nearest-last (popped first) — front-to-back
+        // traversal order maximises early-exit probability for shadow rays.
+        var n0 = dists.x; var n1 = dists.y; var n2 = dists.z; var n3 = dists.w;
+        var k0 = ci0; var k1 = ci1; var k2 = ci2; var k3 = ci3;
+        if (k0 < 0) { n0 = 1e30; } if (k1 < 0) { n1 = 1e30; }
+        if (k2 < 0) { n2 = 1e30; } if (k3 < 0) { n3 = 1e30; }
+        if (n0 < n1) { let t0=n0;n0=n1;n1=t0; let t1=k0;k0=k1;k1=t1; }
+        if (n2 < n3) { let t0=n2;n2=n3;n3=t0; let t1=k2;k2=k3;k3=t1; }
+        if (n0 < n2) { let t0=n0;n0=n2;n2=t0; let t1=k0;k0=k2;k2=t1; }
+        if (n1 < n3) { let t0=n1;n1=n3;n3=t0; let t1=k1;k1=k3;k3=t1; }
+        if (n1 < n2) { let t0=n1;n1=n2;n2=t0; let t1=k1;k1=k2;k2=t1; }
+        if (n0 < 1e30) { stack[top] = k0; top++; }
+        if (n1 < 1e30) { stack[top] = k1; top++; }
+        if (n2 < 1e30) { stack[top] = k2; top++; }
+        if (n3 < 1e30) { stack[top] = k3; top++; }
     }
     return rh;
 }
@@ -1298,9 +1316,6 @@ fn finalizeReservoir(r: ptr<function, Reservoir>) {
     (*r).W = (*r).W_sum / max((*r).M * (*r).p_hat, 1e-20);
 }
 
-fn restirLuminance(c: vec3<f32>) -> f32 {
-    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
-}
 
 // Evaluate unshadowed target function for a reservoir sample.
 // Returns luminance of (BRDF * Le * NdotL * geometry).
@@ -1338,7 +1353,7 @@ fn restirTargetPdf(point: vec3<f32>, normal: vec3<f32>, wo: vec3<f32>,
     let brdf = evalBrdf(wo, ln, normal, albedo, metalness, safeAlpha, F0);
     let lobeSum = brdf.f_diff + brdf.f_spec;
 
-    return restirLuminance(lobeSum * NdotL * lightLe);
+    return luminance(lobeSum * NdotL * lightLe);
 }
 )"
 R"(
@@ -2350,9 +2365,19 @@ R"(
                 if (dot(hm, h.normal) > 0.0) { tNorm = hm; usedMicrofacet = true; }
             }
 
-            let cosI    = abs(dot(normalize(ray.dir), tNorm));
-            let r0      = pow((1.0 - ior_eff) / (1.0 + ior_eff), 2.0);
-            let fresnel = r0 + (1.0 - r0) * pow(1.0 - cosI, 5.0);
+            let cosI = abs(dot(normalize(ray.dir), tNorm));
+            let r0   = pow((1.0 - ior_eff) / (1.0 + ior_eff), 2.0);
+            // Schlick's approximation is derived for the less-dense side of the
+            // interface. When entering (air→glass) that is cosI. When exiting
+            // (glass→air), the correct angle is cosT — the transmitted angle in
+            // air — computed via Snell's law. This gives accurate Fresnel values
+            // as the critical angle is approached and automatically drives
+            // reflectance to 1 at TIR onset (imaginary cosT → clamped 0 → fresnel = 1).
+            let sin2I = max(0.0, 1.0 - cosI * cosI);
+            let cosSchlick = select(cosI,
+                sqrt(max(0.0, 1.0 - ior_eff * ior_eff * sin2I)),
+                !entering);
+            let fresnel = r0 + (1.0 - r0) * pow(1.0 - cosSchlick, 5.0);
 
             var wi_t: vec3<f32>;
             var didRefract = false;
@@ -3205,9 +3230,6 @@ fn r2Seq_t(n: u32) -> vec2<f32> {
     return fract(vec2<f32>(f32(n) * R2_A1_T, f32(n) * R2_A2_T));
 }
 
-fn luminance_t(c: vec3<f32>) -> f32 {
-    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
-}
 
 @compute @workgroup_size(8, 8)
 fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -3504,7 +3526,7 @@ struct AtrousUni { stepSize: u32, mode: u32, frameCount: f32, _p1: f32, }
 @group(0) @binding(6) var momentsBuf: texture_2d<f32>;
 @group(0) @binding(7) var stableGBuf: texture_2d<f32>;  // unjittered: normal.xyz + depth.w
 
-fn luminance_a(c: vec3<f32>) -> f32 {
+fn luminance(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
@@ -3552,9 +3574,9 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Demodulate center pixel for accumulation path (diffuse only)
     let cIrr = select(demod(cColor, cAlbedo), cColor, isSpec);
     // Blend luminance source: demod for bright surfaces (texture-aware), raw for dark (stable)
-    let albedoLum = luminance_a(cAlbedo);
+    let albedoLum = luminance(cAlbedo);
     let demodBlend = select(smoothstep(0.05, 0.2, albedoLum), 0.0, isSpec);
-    let cLum = mix(luminance_a(cColor), luminance_a(cIrr), demodBlend);
+    let cLum = mix(luminance(cColor), luminance(cIrr), demodBlend);
 
     // Variance-guided luminance sigma.
     // Temporal variance from moments (reprojected, stable after ~10 frames).
@@ -3617,9 +3639,9 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // that shadow boundaries blur out
             let lumBoost = mix(4.0, 1.0, smoothstep(0.0, 16.0, cFC));
             let effectiveLumSigma = lumSigma * lumBoost;
-            let sAlbLum = luminance_a(sAlbedo);
+            let sAlbLum = luminance(sAlbedo);
             let sDemod = smoothstep(0.05, 0.2, sAlbLum);
-            let sLum = mix(luminance_a(sColor), luminance_a(sIrr), sDemod);
+            let sLum = mix(luminance(sColor), luminance(sIrr), sDemod);
             // Temporal cleanup: widen luminance sigma to tolerate TAA noise residuals
             // without creating grid patches, but keep relative scaling so strong
             // edges (glass/transmission) are still preserved.
@@ -3630,8 +3652,8 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Specular mode: tighter cap to kill fireflies without blurring.
             var sIrrClamped  = sIrr;
             var sColorClamped = sColor;
-            let sIrrLum = luminance_a(sIrr);
-            let sColLum = luminance_a(sColor);
+            let sIrrLum = luminance(sIrr);
+            let sColLum = luminance(sColor);
             // Specular firefly cap: roughness-adaptive — rough metals tolerate
             // higher values (wider lobe, more variance), glossy needs tight cap.
             // Aggressive clamping is critical since we don't have TAA temporal smoothing
