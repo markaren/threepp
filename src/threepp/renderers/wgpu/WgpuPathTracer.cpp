@@ -609,7 +609,8 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     let w  = 1.0 - rh.u - rh.v;
     // Interpolate UV0
     let uv01 = textureLoad(triData, triCoord(ti, 6), 0);
-    let uv2  = textureLoad(triData, triCoord(ti, 7), 0).xy;
+    let uv2_full = textureLoad(triData, triCoord(ti, 7), 0);
+    let uv2  = uv2_full.xy;
     let iuv0 = vec2<f32>(uv01.x, uv01.y) * w
              + vec2<f32>(uv01.z, uv01.w) * rh.u
              + uv2                        * rh.v;
@@ -686,7 +687,7 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     // Vertex color interpolation
     let vc01 = textureLoad(triData, triCoord(ti, 10), 0);
     let vc2  = textureLoad(triData, triCoord(ti, 11), 0);
-    let cb2  = textureLoad(triData, triCoord(ti, 7), 0).w;
+    let cb2  = uv2_full.w;
     let col0 = vec3<f32>(vc01.x, vc01.y, vc01.z);
     let col1 = vec3<f32>(vc01.w, vc2.x, vc2.y);
     let col2 = vec3<f32>(vc2.z, vc2.w, cb2);
@@ -777,14 +778,19 @@ fn loadShadowHitMaterial(rh: RawHit, ray: Ray) -> ShadowHit {
     h.t = rh.t; h.meshIdx = -1; h.transmission = 0.0;
     let ti = rh.triIdx;
     let r0  = textureLoad(triData, triCoord(ti, 0), 0);
+    let matIdx = i32(r0.w);
+    let mat2 = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
+    // Fast path: opaque material — skip normals, UVs, attenuation.
+    if (mat2.w < 0.01) {
+        h.point = ray.origin + rh.t * ray.dir;
+        return h;
+    }
     let r1  = textureLoad(triData, triCoord(ti, 1), 0);
     let v0  = r0.xyz;
     let v1  = r1.xyz;
     let v2  = textureLoad(triData, triCoord(ti, 2), 0).xyz;
-    let matIdx = i32(r0.w);
     let mat0 = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
     let mat1 = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
-    let mat2 = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
     let w  = 1.0 - rh.u - rh.v;
     let uv01 = textureLoad(triData, triCoord(ti, 6), 0);
     let uv2  = textureLoad(triData, triCoord(ti, 7), 0).xy;
@@ -2687,8 +2693,9 @@ R"(
     var oldSpec = select(vec3<f32>(0.0), prevSpecRaw, prevSpecRaw.x == prevSpecRaw.x);
     // Moments reprojected from same position as color — set inside reprojection block.
     // Falls back to current-pixel read if reprojection fails.
-    var prevMomM1 = textureLoad(momentsRead, pixel, 0).x;
-    var prevMomM2 = textureLoad(momentsRead, pixel, 0).y;
+    let prevMom = textureLoad(momentsRead, pixel, 0);
+    var prevMomM1 = prevMom.x;
+    var prevMomM2 = prevMom.y;
 
     // Force-reset on mode switch / topology rebuild (params.w flag)
     let forceReset = rt.params.w > 0.5;
