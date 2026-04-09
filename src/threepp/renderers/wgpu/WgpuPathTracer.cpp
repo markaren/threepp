@@ -1732,7 +1732,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
 R"(
             // 2. Emissive triangles — CDF samples
             if (emTriCount > 0 && totalPower > 0.0) {
-                for (var ei = 0; ei < 8; ei++) {
+                for (var ei = 0; ei < 4; ei++) {
                     let es = sampleEmissiveTriCdf(seed, totalPower, emTriCount);
                     let toLight = es.point - h.point;
                     let dist = length(toLight);
@@ -1884,8 +1884,8 @@ R"(
             // Uses one-frame-lagged neighbours — avoids a second dispatch and is
             // visually indistinguishable from same-frame spatial reuse.
             {
-                let spMax = 8u;
-                let mTarget = 30.0; // stop borrowing once we have enough confidence
+                let spMax = 5u;
+                let mTarget = 20.0; // stop borrowing once we have enough confidence
                 for (var spI = 0u; spI < spMax; spI++) {
                     if (reservoir.M >= mTarget) { break; }
                     let spAngle = rand(seed) * 2.0 * PI;
@@ -2480,10 +2480,10 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (prevMatIdx >= 0) {
             let m0 = textureLoad(matData, vec2<i32>(prevMatIdx, 0), 0);   // .w = shininess (alpha = roughness^2)
             let m1 = textureLoad(matData, vec2<i32>(prevMatIdx, 1), 0);   // .y = metalness
-            let m14 = textureLoad(matData, vec2<i32>(prevMatIdx, 14), 0); // .x = transmission
+            let m2 = textureLoad(matData, vec2<i32>(prevMatIdx, 2), 0);   // .w = transmission
             let shininess    = m0.w;
             let metalness    = m1.y;
-            let transmission = m14.x;
+            let transmission = m2.w;
             let isGlass  = transmission > 0.05;
             let isMetal  = metalness > 0.5;
             let isMirror = shininess < 0.05;
@@ -2499,10 +2499,10 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Glass/metal/mirror need 4 (refraction chains), diffuse only needs 2.
     var maxBounces = i32(rt.params.x);
     if (fc == 0u) {
-        if      (matClass <= 0u) { maxBounces = min(maxBounces, 4); }  // specular
-        else if (matClass == 1u) { maxBounces = min(maxBounces, 3); }  // glossy
-        else if (matClass == 2u) { maxBounces = min(maxBounces, 2); }  // rough diffuse
-        else                     { maxBounces = min(maxBounces, 4); }  // sky/unknown
+        if      (matClass <= 0u) { maxBounces = min(maxBounces, 3); }  // specular
+        else if (matClass == 1u) { maxBounces = min(maxBounces, 2); }  // glossy
+        else if (matClass == 2u) { maxBounces = min(maxBounces, 1); }  // rough diffuse
+        else                     { maxBounces = min(maxBounces, 3); }  // sky/unknown
     }
 
     // --- Material-aware foveated convergence ---
@@ -2533,17 +2533,19 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Checkerboard skip: during camera movement (fc==0) skip half the pixels each frame,
     // alternating which half via globalFrameCounter so both patterns are covered across
-    // two consecutive frames.  The temporal denoiser (TAA) reconstructs skipped pixels
-    // from reprojected history.  Only enabled in raw/temporal mode — the EMA accumulation
-    // path expects every pixel traced every frame; skipping half causes a brightness
-    // mismatch (converged-vs-1spp) that manifests as checkerboard flashing.
-    let rawMode = rt.restirParams.w > 0.5;
-    let checkerSkip = rawMode && fc == 0u && !isEnvPixel &&
+    // two consecutive frames.  Disabled when the EMA spatial denoiser is active — it
+    // expects every pixel traced every frame; skipping half causes a brightness mismatch
+    // (converged-vs-1spp) that manifests as checkerboard flashing.  Safe with no denoiser
+    // (both halves go through the same accumulation math) and with the temporal denoiser
+    // (TAA reconstructs skipped pixels from reprojected history).
+    let emaDenoiserOn = rt.spp.z > 0.5;
+    let checkerSkip = !emaDenoiserOn && fc == 0u && !isEnvPixel &&
         ((u32(pixel.x) + u32(pixel.y) + u32(rt.params.y)) & 1u) == 0u;
 
     // Foveated/checkerboard skip: pass through previous accumulation unchanged.
     // The pixel keeps its existing color & frame count; it will trace on a future frame.
     if (foveatedSkip || checkerSkip) {
+        let rawMode = rt.restirParams.w > 0.5;
         if (rawMode) {
             // Raw mode: write sentinel .w = -1 so temporal denoiser knows to pass through history
             textureStore(accumWrite,     pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
@@ -6665,6 +6667,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.emissiveInfo[2] = d.fireflyCap_;  // luminance cap for indirect MIS contributions
     u.emissiveInfo[3] = static_cast<float>(d.aovMode_);  // AOV visualization mode
     u.spp[0] = d.restirGiEnabled_ ? 1.f : 0.f;
+    u.spp[2] = (d.denoiserEnabled_ && !d.temporalDenoiserEnabled_) ? 1.f : 0.f;  // EMA spatial denoiser active
     u.restirParams[0] = d.restirEnabled_ ? 1.f : 0.f;
     u.restirParams[1] = 20.f;  // M clamp — lower = crisper shadows, higher = lower variance
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
@@ -6901,8 +6904,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             }
         };
 
-        runAtrous(*d.readDiffAccum, d.denoisedDiff, d.filteredA, 0, 3);
-        runAtrous(*d.readSpecAccum, d.denoisedSpec, d.filteredB, 1, 3);
+        runAtrous(*d.readDiffAccum, d.denoisedDiff, d.filteredA, 0, 2);
+        runAtrous(*d.readSpecAccum, d.denoisedSpec, d.filteredB, 1, 2);
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;
@@ -6983,8 +6986,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
         // Cleanup reads temporal output (taaHistDiffRead/SpecRead after swap = just-written).
         // Uses filteredA/B as ping-pong temp — safe, temporal already consumed them.
-        runAtrous(*d.taaHistDiffRead, d.denoisedDiff, d.filteredA, 2, 3);  // 2 = diffuse | temporal
-        runAtrous(*d.taaHistSpecRead, d.denoisedSpec, d.filteredB, 3, 3);  // 3 = specular | temporal
+        runAtrous(*d.taaHistDiffRead, d.denoisedDiff, d.filteredA, 2, 2);  // 2 = diffuse | temporal
+        runAtrous(*d.taaHistSpecRead, d.denoisedSpec, d.filteredB, 3, 2);  // 3 = specular | temporal
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;
