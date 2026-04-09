@@ -1161,6 +1161,15 @@ fn r2Seq(n: u32) -> vec2<f32> {
     return fract(vec2<f32>(f32(n) * R2_A1, f32(n) * R2_A2));
 }
 
+// Interleaved Gradient Noise (Jimenez et al. 2014) — approximate 2D blue noise.
+// Used as a per-pixel Cranley-Patterson rotation so Monte Carlo errors distribute
+// as blue noise in screen space (Heitz & Belcour 2019) rather than white noise.
+// Evaluating with (px,py) and (py,px) yields two different linear combinations,
+// giving two largely uncorrelated blue-noise patterns for the X and Y jitter dims.
+fn ign(px: u32, py: u32) -> f32 {
+    return fract(52.9829189 * fract(0.06711056 * f32(px) + 0.00583715 * f32(py)));
+}
+
 fn cosineHemisphere(n: vec3<f32>, seed: ptr<function, u32>) -> vec3<f32> {
     let u1  = rand(seed);
     let u2  = rand(seed);
@@ -2566,13 +2575,18 @@ R"(
     let aovMode = i32(rt.emissiveInfo.w);
     if (aovMode > 0) { varianceReducedBounces = 1; }
 
-    // Per-pixel Cranley-Patterson rotation: offset R2 by a spatial hash to decorrelate pixels.
-    let pixHash = pcg(gid.x + gid.y * 65537u);
+    // Spatio-temporal blue noise (Heitz & Belcour 2019):
+    // R2 sequence advances each frame for temporal stratification (unchanged).
+    // Per-pixel Cranley-Patterson rotation uses IGN (Jimenez et al. 2014) instead
+    // of PCG: IGN has approximately blue-noise spectral properties in screen space,
+    // so Monte Carlo errors from neighbouring pixels are perceptually de-correlated.
+    // The two jitter axes use ign(x,y) and ign(y,x) — different linear combinations
+    // of the same coordinates — giving two largely uncorrelated blue-noise offsets.
     let r2 = r2Seq(fc);
     // Sub-pixel jitter centred on pixel centre (0.5, 0.5), range ±0.375.
     // Gives TAA true sub-pixel information for silhouette AA.
-    let jx = (fract(r2.x + f32(pixHash)       / 4294967296.0) - 0.5) * 0.75;
-    let jy = (fract(r2.y + f32(pcg(pixHash))  / 4294967296.0) - 0.5) * 0.75;
+    let jx = (fract(r2.x + ign(gid.x, gid.y)) - 0.5) * 0.75;
+    let jy = (fract(r2.y + ign(gid.y, gid.x)) - 0.5) * 0.75;
     var seed = pcg(pcg(gid.x + gid.y * 65537u) + fc * 12979u);
 
     let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5 + jx, f32(pixel.y) + 0.5 + jy), res);
