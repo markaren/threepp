@@ -198,17 +198,15 @@ struct Hit  {
     transmission: f32,
     ior:          f32,
     frontFace:    f32,
-    attenuationColor: vec3<f32>,
-    attenuationDist:  f32,
     clearcoat:        f32,
     clearcoatAlpha:   f32,
-    ao:               f32,
     sheenColor:       vec3<f32>,
     sheenRoughness:   f32,
     specularColor:    vec3<f32>,
     specularIntensity: f32,
     dispersion:       f32,
     thickness:        f32,
+    triIdx:           i32,
 }
 
 fn pcg(v: u32) -> u32 {
@@ -592,14 +590,15 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     var h: Hit;
     h.t = rh.t;
     h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0;
-    h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
-    h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0; h.ao = 1.0;
+    h.geoNormal = vec3<f32>(0.0);
+    h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
     h.sheenColor = vec3<f32>(0.0); h.sheenRoughness = 0.0;
     h.specularColor = vec3<f32>(1.0); h.specularIntensity = 1.0;
     h.dispersion = 0.0; h.thickness = 0.0;
-    h.meshIdx = -1; h.matIdx = -1;
+    h.meshIdx = -1; h.matIdx = -1; h.triIdx = -1;
 
     let ti = rh.triIdx;
+    h.triIdx = ti;
     let r0  = textureLoad(triData, triCoord(ti, 0), 0);
     let v0  = r0.xyz;
     let r1  = textureLoad(triData, triCoord(ti, 1), 0);
@@ -609,29 +608,32 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     let w  = 1.0 - rh.u - rh.v;
     // Interpolate UV0
     let uv01 = textureLoad(triData, triCoord(ti, 6), 0);
-    let uv2  = textureLoad(triData, triCoord(ti, 7), 0).xy;
+    let uv2_full = textureLoad(triData, triCoord(ti, 7), 0);
+    let uv2  = uv2_full.xy;
     let iuv0 = vec2<f32>(uv01.x, uv01.y) * w
              + vec2<f32>(uv01.z, uv01.w) * rh.u
              + uv2                        * rh.v;
-    // Interpolate UV1
-    let uv1_01 = textureLoad(triData, triCoord(ti, 8), 0);
-    let uv1_2  = textureLoad(triData, triCoord(ti, 9), 0).xy;
-    let iuv1   = vec2<f32>(uv1_01.x, uv1_01.y) * w
-               + vec2<f32>(uv1_01.z, uv1_01.w) * rh.u
-               + uv1_2                          * rh.v;
-
     let matIdx = i32(r0.w);
     let mat0   = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
     let mat1   = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
     let mat2   = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
     let mat3   = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
 
-    // Per-channel transformed UVs
-    let bcUV    = transformUV(iuv0, iuv1, matIdx, 6);   // baseColor
-    let mrUV    = transformUV(iuv0, iuv1, matIdx, 8);   // metalRough
-    let nmUV    = transformUV(iuv0, iuv1, matIdx, 10);  // normal
-    let emUV    = transformUV(iuv0, iuv1, matIdx, 12);  // emissive
-    let aoUV    = transformUV(iuv0, iuv1, matIdx, 14);  // occlusion
+    // Per-channel transformed UVs — skip UV1 interpolation (2 triData reads) and
+    // all 10 transformUV matData reads when all channels use identity UV0.
+    let mat18 = textureLoad(matData, vec2<i32>(matIdx, 18), 0);
+    var bcUV = iuv0; var mrUV = iuv0; var nmUV = iuv0; var emUV = iuv0;
+    if (mat18.z > 0.5) {
+        let uv1_01 = textureLoad(triData, triCoord(ti, 8), 0);
+        let uv1_2  = textureLoad(triData, triCoord(ti, 9), 0).xy;
+        let iuv1   = vec2<f32>(uv1_01.x, uv1_01.y) * w
+                   + vec2<f32>(uv1_01.z, uv1_01.w) * rh.u
+                   + uv1_2                          * rh.v;
+        bcUV = transformUV(iuv0, iuv1, matIdx, 6);   // baseColor
+        mrUV = transformUV(iuv0, iuv1, matIdx, 8);   // metalRough
+        nmUV = transformUV(iuv0, iuv1, matIdx, 10);  // normal
+        emUV = transformUV(iuv0, iuv1, matIdx, 12);  // emissive
+    }
 
     let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
     let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
@@ -686,7 +688,7 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     // Vertex color interpolation
     let vc01 = textureLoad(triData, triCoord(ti, 10), 0);
     let vc2  = textureLoad(triData, triCoord(ti, 11), 0);
-    let cb2  = textureLoad(triData, triCoord(ti, 7), 0).w;
+    let cb2  = uv2_full.w;
     let col0 = vec3<f32>(vc01.x, vc01.y, vc01.z);
     let col1 = vec3<f32>(vc01.w, vc2.x, vc2.y);
     let col2 = vec3<f32>(vc2.z, vc2.w, cb2);
@@ -705,9 +707,6 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     h.frontFace    = select(0.0, 1.0, isFrontFace);
     h.meshIdx      = i32(r1.w);
     h.matIdx       = matIdx;
-    let mat4 = textureLoad(matData, vec2<i32>(matIdx, 4), 0);
-    h.attenuationColor = mat4.xyz;
-    h.attenuationDist  = mat4.w;
     let mat5 = textureLoad(matData, vec2<i32>(matIdx, 5), 0);
     h.clearcoat      = mat5.x;
     h.clearcoatAlpha = mat5.y;
@@ -720,27 +719,25 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     }
     h.emissive = emissive;
 
-    // AO map (uses occlusion UV)
-    h.ao = 1.0;
-    let aoSlot = mat5.w;
-    if (aoSlot >= 0.0) {
-        h.ao = sampleAtlas(aoUV, aoSlot).x;
+    // Advanced PBR features (sheen, specular extension, dispersion, thickness)
+    // Skip 2 matData reads when material uses defaults — most common case.
+    if (mat18.w > 0.5) {
+        let mat16 = textureLoad(matData, vec2<i32>(matIdx, 16), 0);
+        h.sheenColor     = mat16.xyz;
+        h.sheenRoughness = mat16.w;
+        let mat17 = textureLoad(matData, vec2<i32>(matIdx, 17), 0);
+        h.specularColor     = mat17.xyz;
+        h.specularIntensity = mat17.w;
+        h.dispersion = mat18.x;
+        h.thickness  = mat18.y;
+    } else {
+        h.sheenColor = vec3<f32>(0.0);
+        h.sheenRoughness = 0.0;
+        h.specularColor = vec3<f32>(1.0);
+        h.specularIntensity = 1.0;
+        h.dispersion = 0.0;
+        h.thickness = 0.0;
     }
-
-    // Sheen (row 16)
-    let mat16 = textureLoad(matData, vec2<i32>(matIdx, 16), 0);
-    h.sheenColor     = mat16.xyz;
-    h.sheenRoughness = mat16.w;
-
-    // PBR specular (row 17)
-    let mat17 = textureLoad(matData, vec2<i32>(matIdx, 17), 0);
-    h.specularColor     = mat17.xyz;
-    h.specularIntensity = mat17.w;
-
-    // Dispersion + thickness (row 18)
-    let mat18 = textureLoad(matData, vec2<i32>(matIdx, 18), 0);
-    h.dispersion = mat18.x;
-    h.thickness  = mat18.y;
 
     return h;
 }
@@ -777,14 +774,19 @@ fn loadShadowHitMaterial(rh: RawHit, ray: Ray) -> ShadowHit {
     h.t = rh.t; h.meshIdx = -1; h.transmission = 0.0;
     let ti = rh.triIdx;
     let r0  = textureLoad(triData, triCoord(ti, 0), 0);
+    let matIdx = i32(r0.w);
+    let mat2 = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
+    // Fast path: opaque material — skip normals, UVs, attenuation.
+    if (mat2.w < 0.01) {
+        h.point = ray.origin + rh.t * ray.dir;
+        return h;
+    }
     let r1  = textureLoad(triData, triCoord(ti, 1), 0);
     let v0  = r0.xyz;
     let v1  = r1.xyz;
     let v2  = textureLoad(triData, triCoord(ti, 2), 0).xyz;
-    let matIdx = i32(r0.w);
     let mat0 = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
     let mat1 = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
-    let mat2 = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
     let w  = 1.0 - rh.u - rh.v;
     let uv01 = textureLoad(triData, triCoord(ti, 6), 0);
     let uv2  = textureLoad(triData, triCoord(ti, 7), 0).xy;
@@ -858,42 +860,13 @@ fn sceneHitRaw(ray: Ray, maxT: f32) -> RawHit {
     return rh;
 }
 
-// Lightweight primary-hit query: BVH traversal + normal/depth/meshIdx only.
-// No material evaluation, no texture sampling, no UV interpolation.
-// Used for the unjittered stable G-buffer that drives à-trous edge-stopping.
-struct StableHit { t: f32, normal: vec3<f32>, meshIdx: i32, matIdx: i32 }
-
-fn stablePrimaryHit(ray: Ray) -> StableHit {
-    var sh: StableHit;
-    sh.t = 0.0; sh.normal = vec3<f32>(0.0); sh.meshIdx = -1; sh.matIdx = -1;
-    let rh = sceneHitRaw(ray, 1e30);
-    if (rh.triIdx < 0) { return sh; }
-
-    let ti = rh.triIdx;
-    let w  = 1.0 - rh.u - rh.v;
-    // Interpolate smooth normal from vertex normals
-    let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
-    let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
-    let n2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
-    let sn = normalize(n0 * w + n1 * rh.u + n2 * rh.v);
-
-    // meshIdx from triData row 1, matIdx from row 0
-    let r0 = textureLoad(triData, triCoord(ti, 0), 0);
-    let r1 = textureLoad(triData, triCoord(ti, 1), 0);
-
-    sh.t = rh.t;
-    sh.normal = select(-sn, sn, dot(ray.dir, sn) < 0.0);
-    sh.meshIdx = i32(r1.w);
-    sh.matIdx  = i32(r0.w);
-    return sh;
-}
 
 fn sceneHit(ray: Ray) -> Hit {
     let rh = sceneHitRaw(ray, 1e30);
     if (rh.triIdx < 0) {
-        var h: Hit; h.t = 1e30; h.meshIdx = -1; h.matIdx = -1; h.transmission = 0.0; h.ior = 1.5;
-        h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
-        h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0; h.ao = 1.0;
+        var h: Hit; h.t = 1e30; h.meshIdx = -1; h.matIdx = -1; h.triIdx = -1; h.transmission = 0.0; h.ior = 1.5;
+        h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0);
+        h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
         h.sheenColor = vec3<f32>(0.0); h.sheenRoughness = 0.0;
         h.specularColor = vec3<f32>(1.0); h.specularIntensity = 1.0;
         h.dispersion = 0.0; h.thickness = 0.0;
@@ -1520,6 +1493,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
              primaryAlbedo:  ptr<function, vec3<f32>>,
              primaryRough:   ptr<function, f32>,
              primaryMatIdx:  ptr<function, i32>,
+             primaryTriIdx:  ptr<function, i32>,
              touchedMoved:   ptr<function, bool>) -> SplitRadiance {
     *primaryMeshIdx = 128u;
     *primaryNormal  = vec3<f32>(0.0);
@@ -1527,6 +1501,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
     *primaryAlbedo  = vec3<f32>(1.0);  // default white (sky/miss: no demodulation)
     *primaryRough   = 1.0;  // sky: treat as fully rough (max history)
     *primaryMatIdx  = -1;   // sky: no material
+    *primaryTriIdx  = -1;   // sky: no triangle
     *touchedMoved   = false;
     var ray        = ray_in;
     var throughput = vec3<f32>(1.0);
@@ -1596,6 +1571,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             *primaryDepth   = h.t;
             *primaryRough   = sqrt(h.shininess);  // linear roughness for TAA blend
             *primaryMatIdx  = h.matIdx;
+            *primaryTriIdx  = h.triIdx;
 
             // Adaptive bounce cap — reduce bounces for diffuse/glossy surfaces.
             {
@@ -1733,7 +1709,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
 R"(
             // 2. Emissive triangles — CDF samples
             if (emTriCount > 0 && totalPower > 0.0) {
-                for (var ei = 0; ei < 8; ei++) {
+                for (var ei = 0; ei < 4; ei++) {
                     let es = sampleEmissiveTriCdf(seed, totalPower, emTriCount);
                     let toLight = es.point - h.point;
                     let dist = length(toLight);
@@ -1885,8 +1861,8 @@ R"(
             // Uses one-frame-lagged neighbours — avoids a second dispatch and is
             // visually indistinguishable from same-frame spatial reuse.
             {
-                let spMax = 8u;
-                let mTarget = 30.0; // stop borrowing once we have enough confidence
+                let spMax = 5u;
+                let mTarget = 20.0; // stop borrowing once we have enough confidence
                 for (var spI = 0u; spI < spMax; spI++) {
                     if (reservoir.M >= mTarget) { break; }
                     let spAngle = rand(seed) * 2.0 * PI;
@@ -2345,12 +2321,15 @@ R"(
             // Dispersion: stochastic wavelength selection.
             // Pick one of R/G/B, compute per-channel IOR via Cauchy-like model,
             // and weight throughput by 3x for the selected channel.
+            // Load attenuation on demand — only needed for transmissive hits (~5%).
+            // Saves 1 textureLoad (mat4) for the 95% non-transmissive case.
+            let tMat4 = textureLoad(matData, vec2<i32>(h.matIdx, 4), 0);
+            let tAttColor = tMat4.xyz;
+            let tAttDist  = tMat4.w;
+
             var channelMask = vec3<f32>(1.0);
             var ior_eff = h.ior;
             if (h.dispersion > 0.0) {
-                // Cauchy dispersion from KHR_materials_dispersion (dispersion = 20/V_d).
-                // B = (ior-1)*dispersion / (20*(1/λ_F² - 1/λ_C²)) where
-                // λ_F=0.4861μm, λ_C=0.6563μm → denominator ≈ 38.2.
                 let lambda = array<f32, 3>(0.6563, 0.55, 0.4861);
                 let ref_inv_sq = 1.0 / (0.5893 * 0.5893);
                 let ch = u32(rand(seed) * 3.0) % 3u;
@@ -2399,8 +2378,8 @@ R"(
             if (didRefract) {
                 let glassTint = mix(albedo, vec3<f32>(1.0), h.transmission) * microWeight;
                 var volAtten = vec3<f32>(1.0);
-                if (h.attenuationDist > 0.0 && !entering) {
-                    let absorbCoeff = -log(max(h.attenuationColor, vec3<f32>(1e-6))) / h.attenuationDist;
+                if (tAttDist > 0.0 && !entering) {
+                    let absorbCoeff = -log(max(tAttColor, vec3<f32>(1e-6))) / tAttDist;
                     let pathLen = select(h.t, h.thickness, h.t < 1e-2 && h.thickness > 0.0);
                     volAtten = exp(-absorbCoeff * pathLen);
                 }
@@ -2481,10 +2460,10 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (prevMatIdx >= 0) {
             let m0 = textureLoad(matData, vec2<i32>(prevMatIdx, 0), 0);   // .w = shininess (alpha = roughness^2)
             let m1 = textureLoad(matData, vec2<i32>(prevMatIdx, 1), 0);   // .y = metalness
-            let m14 = textureLoad(matData, vec2<i32>(prevMatIdx, 14), 0); // .x = transmission
+            let m2 = textureLoad(matData, vec2<i32>(prevMatIdx, 2), 0);   // .w = transmission
             let shininess    = m0.w;
             let metalness    = m1.y;
-            let transmission = m14.x;
+            let transmission = m2.w;
             let isGlass  = transmission > 0.05;
             let isMetal  = metalness > 0.5;
             let isMirror = shininess < 0.05;
@@ -2500,10 +2479,10 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Glass/metal/mirror need 4 (refraction chains), diffuse only needs 2.
     var maxBounces = i32(rt.params.x);
     if (fc == 0u) {
-        if      (matClass <= 0u) { maxBounces = min(maxBounces, 4); }  // specular
-        else if (matClass == 1u) { maxBounces = min(maxBounces, 3); }  // glossy
-        else if (matClass == 2u) { maxBounces = min(maxBounces, 2); }  // rough diffuse
-        else                     { maxBounces = min(maxBounces, 4); }  // sky/unknown
+        if      (matClass <= 0u) { maxBounces = min(maxBounces, 3); }  // specular
+        else if (matClass == 1u) { maxBounces = min(maxBounces, 2); }  // glossy
+        else if (matClass == 2u) { maxBounces = min(maxBounces, 1); }  // rough diffuse
+        else                     { maxBounces = min(maxBounces, 3); }  // sky/unknown
     }
 
     // --- Material-aware foveated convergence ---
@@ -2532,9 +2511,19 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let foveatedSkip = skipMask > 0u && (fc & skipMask) != 0u && !isEnvPixel;
 
-    // Foveated skip: pass through previous accumulation unchanged.
+    // Checkerboard skip: during camera movement (fc==0) skip half the pixels each frame,
+    // alternating which half via globalFrameCounter so both patterns are covered across
+    // two consecutive frames.  Only during rotation — translation causes parallax that
+    // makes stale checkerboard pixels visually wrong (foreground/background mismatch).
+    // Also disabled when the EMA spatial denoiser is active (brightness mismatch).
+    let emaDenoiserOn = rt.spp.z > 0.5;
+    let camTranslated = length(rt.camOri.xyz - rt.prevCamOri.xyz) > 1e-5;
+    let checkerSkip = !emaDenoiserOn && !camTranslated && fc == 0u && !isEnvPixel &&
+        ((u32(pixel.x) + u32(pixel.y) + u32(rt.params.y)) & 1u) == 0u;
+
+    // Foveated/checkerboard skip: pass through previous accumulation unchanged.
     // The pixel keeps its existing color & frame count; it will trace on a future frame.
-    if (foveatedSkip) {
+    if (foveatedSkip || checkerSkip) {
         let rawMode = rt.restirParams.w > 0.5;
         if (rawMode) {
             // Raw mode: write sentinel .w = -1 so temporal denoiser knows to pass through history
@@ -2595,16 +2584,42 @@ R"(
     var primaryAlbedo:  vec3<f32>;
     var primaryRough:   f32;
     var primaryMatIdx:  i32;
+    var primaryTriIdx:  i32;
     var touchedMoved:   bool;
-    var ptResult = pathTrace(ray, &seed, pixel, varianceReducedBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &primaryRough, &primaryMatIdx, &touchedMoved);
+    var ptResult = pathTrace(ray, &seed, pixel, varianceReducedBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &primaryRough, &primaryMatIdx, &primaryTriIdx, &touchedMoved);
     var sample = ptResult.diff + ptResult.spec;
-
-    // Unjittered primary ray for stable G-buffer: traces a pixel-center ray
-    // (no jitter) to get stable normal/depth/meshID for à-trous edge-stopping.
-    // BVH traversal only — no shading, no material eval. Keeps edge-stopping
-    // weights consistent frame-to-frame despite sub-pixel jitter on the radiance ray.
+)"
+R"(
+    // Stable G-buffer: re-intersect only the primary-hit triangle with the
+    // unjittered pixel-center ray.  Single ray-triangle test instead of full
+    // BVH traversal — same stable normal/depth for edge-stopping, much cheaper.
+    // Falls back to jittered primary data at edge pixels where the center ray
+    // misses the jittered ray's triangle (sub-pixel geometry boundary).
     let centerRay = makeRay(vec2<f32>(f32(pixel.x) + 0.5, f32(pixel.y) + 0.5), res);
-    let stableHit = stablePrimaryHit(centerRay);
+    var stableNrm = vec3<f32>(0.0);
+    var stableT   = 0.0;
+    if (primaryTriIdx >= 0) {
+        // Use jittered hit's smooth normal directly — sub-pixel offset changes
+        // barycentric coords by ~3% on typical triangles, negligible normal difference.
+        // Saves 3 texture loads vs re-interpolating at center-ray barycentrics.
+        stableNrm = primaryNormal;
+        let ti = primaryTriIdx;
+        let sv0 = textureLoad(triData, triCoord(ti, 0), 0).xyz;
+        let sv1 = textureLoad(triData, triCoord(ti, 1), 0).xyz;
+        let sv2 = textureLoad(triData, triCoord(ti, 2), 0).xyz;
+        let isect = triIntersect(centerRay, sv0, sv1, sv2);
+        if (isect.t < 1e29) {
+            stableT = isect.t;
+        } else {
+            // Edge pixel: intersect center ray with tangent plane at jittered hit point.
+            let hitPt = centerRay.origin + primaryDepth * ray.dir;
+            let denom = dot(centerRay.dir, primaryNormal);
+            if (abs(denom) > 1e-8) {
+                let planeT = dot(hitPt - centerRay.origin, primaryNormal) / denom;
+                if (planeT > 0.0) { stableT = planeT; }
+            }
+        }
+    }
 
     // AOV visualization mode — write noise-free primary-hit data and return early.
     // Writes to diffAccumWrite (display shader reads diffTex + specTex).
@@ -2622,7 +2637,7 @@ R"(
         textureStore(accumWrite, pixel, vec4<f32>(aovColor, 1.0));
         textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), 0.0, 0.0));
         textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
-        textureStore(stableGBufWrite, pixel, vec4<f32>(stableHit.normal, stableHit.t));
+        textureStore(stableGBufWrite, pixel, vec4<f32>(stableNrm, stableT));
         textureStore(albedoWrite, pixel, vec4<f32>(primaryAlbedo, primaryRough));
         return;
     }
@@ -2662,7 +2677,7 @@ R"(
         textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), select(0.0, 1.0, touchedMoved), 0.0));
         textureStore(albedoWrite, pixel, vec4<f32>(primaryAlbedo, primaryRough));
         textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
-        textureStore(stableGBufWrite, pixel, vec4<f32>(stableHit.normal, stableHit.t));
+        textureStore(stableGBufWrite, pixel, vec4<f32>(stableNrm, stableT));
         return;
     }
 
@@ -2677,8 +2692,9 @@ R"(
     var oldSpec = select(vec3<f32>(0.0), prevSpecRaw, prevSpecRaw.x == prevSpecRaw.x);
     // Moments reprojected from same position as color — set inside reprojection block.
     // Falls back to current-pixel read if reprojection fails.
-    var prevMomM1 = textureLoad(momentsRead, pixel, 0).x;
-    var prevMomM2 = textureLoad(momentsRead, pixel, 0).y;
+    let prevMom = textureLoad(momentsRead, pixel, 0);
+    var prevMomM1 = prevMom.x;
+    var prevMomM2 = prevMom.y;
 
     // Force-reset on mode switch / topology rebuild (params.w flag)
     let forceReset = rt.params.w > 0.5;
@@ -2938,7 +2954,7 @@ R"(
     textureStore(albedoWrite,  pixel, vec4<f32>(primaryAlbedo, primaryRough));
 
     textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
-    textureStore(stableGBufWrite, pixel, vec4<f32>(stableHit.normal, stableHit.t));
+    textureStore(stableGBufWrite, pixel, vec4<f32>(stableNrm, stableT));
 }
 )";
 
@@ -3218,12 +3234,14 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Foveated-skipped pixels: .w = -1 sentinel in raw mode — pass through history
-    if (curFC < -0.5) {
-        let prevHist = textureLoad(taaHistIn, pixel, 0);
-        textureStore(taaOut, pixel, vec4<f32>(prevHist.xyz, prevHist.w));
-        return;
-    }
+    // Foveated/checkerboard-skipped pixels: .w = -1 sentinel in raw mode.
+    // Instead of blindly passing through history at the current pixel position,
+    // mark this pixel so that after reprojection we write the reprojected history
+    // without blending a new sample.  This keeps brightness consistent with
+    // neighboring traced pixels (which go through EMA) and avoids the checkerboard
+    // flashing artefact caused by half the pixels being stale while the other half
+    // get a fresh 1-spp blend.
+    let isSkippedPixel = curFC < -0.5;
 
     let hitInfo  = textureLoad(hitMeshTex, pixel, 0);
     let curMeshId = u32(hitInfo.r);
@@ -3329,7 +3347,13 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // No valid taps — treat as disoccluded
         if (vSum < 1e-6) {
-            textureStore(taaOut, pixel, vec4<f32>(curColor, 1.0));
+            if (isSkippedPixel) {
+                // Skipped pixel with no valid reprojection — pass through current-position history
+                let fallback = textureLoad(taaHistIn, pixel, 0);
+                textureStore(taaOut, pixel, vec4<f32>(fallback.xyz, fallback.w));
+            } else {
+                textureStore(taaOut, pixel, vec4<f32>(curColor, 1.0));
+            }
             return;
         }
         let inv = 1.0 / vSum;
@@ -3362,8 +3386,20 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             finalAlpha = min(1.0, alpha * specBoost);
         }
 
-        result = mix(histColor, curColor, finalAlpha);
+        // Checkerboard/foveated skip: run the same EMA blend but substitute
+        // reprojected history for the missing current sample.  This applies the
+        // identical alpha-weighted transform that traced pixels receive, so both
+        // halves of the checkerboard have matching brightness — no flash.
+        let blendSrc = select(curColor, histColor, isSkippedPixel);
+
+        result = mix(histColor, blendSrc, finalAlpha);
         newHistLen = effHistLen + 1.0;
+    } else if (isSkippedPixel) {
+        // Skipped pixel with no usable history (disoccluded or out of bounds)
+        // — pass through whatever history exists at this pixel position.
+        let fallback = textureLoad(taaHistIn, pixel, 0);
+        textureStore(taaOut, pixel, vec4<f32>(fallback.xyz, max(fallback.w, 1.0)));
+        return;
     }
 
     // .w = per-pixel history length (used by spatial filter for variance-adaptive sigma)
@@ -4365,11 +4401,34 @@ static int buildGeometryBuffers(
             auto* mwe = dynamic_cast<MaterialWithEmissive*>(mat);
             auto* mwa = dynamic_cast<MaterialWithAoMap*>(mat);
 
-            writeUvTransform(6,  mwm ? mwm->map.get() : nullptr);           // baseColor
-            writeUvTransform(8,  mwr ? mwr->roughnessMap.get() : nullptr);   // metalRough
-            writeUvTransform(10, mnm ? mnm->normalMap.get() : nullptr);      // normal
-            writeUvTransform(12, mwe ? mwe->emissiveMap.get() : nullptr);    // emissive
-            writeUvTransform(14, mwa ? mwa->aoMap.get() : nullptr);          // occlusion
+            const Texture* uvTextures[5] = {
+                mwm ? mwm->map.get() : nullptr,
+                mwr ? mwr->roughnessMap.get() : nullptr,
+                mnm ? mnm->normalMap.get() : nullptr,
+                mwe ? mwe->emissiveMap.get() : nullptr,
+                mwa ? mwa->aoMap.get() : nullptr
+            };
+            writeUvTransform(6,  uvTextures[0]);   // baseColor
+            writeUvTransform(8,  uvTextures[1]);   // metalRough
+            writeUvTransform(10, uvTextures[2]);    // normal
+            writeUvTransform(12, uvTextures[3]);    // emissive
+            writeUvTransform(14, uvTextures[4]);    // occlusion
+
+            // Check if any channel uses non-identity UV transform or UV1
+            float hasCustomUV = 0.f;
+            for (const auto* tex : uvTextures) {
+                if (tex) {
+                    const_cast<Texture*>(tex)->updateMatrix();
+                    const auto& e = tex->matrix.elements;
+                    // Identity check: a=1, b=0, tx=0, c=0, d=1, ty=0
+                    if (e[0] != 1.f || e[3] != 0.f || e[6] != 0.f ||
+                        e[1] != 0.f || e[4] != 1.f || e[7] != 0.f ||
+                        tex->texCoord != 0) {
+                        hasCustomUV = 1.f;
+                        break;
+                    }
+                }
+            }
 
             // Row 16: sheen (r, g, b, roughness)
             setTexel(matBuffer, maxMats, matIdx, 16,
@@ -4377,8 +4436,12 @@ static int buildGeometryBuffers(
             // Row 17: PBR specular (r, g, b, intensity)
             setTexel(matBuffer, maxMats, matIdx, 17,
                     em.specularColor.r, em.specularColor.g, em.specularColor.b, em.specularIntensity);
-            // Row 18: dispersion + thickness
-            setTexel(matBuffer, maxMats, matIdx, 18, em.dispersion, em.thickness, 0.f, 0.f);
+            // Row 18: dispersion + thickness + hasCustomUV + hasAdvancedPBR flags
+            const bool hasAdvanced = (em.sheenColor.r != 0.f || em.sheenColor.g != 0.f || em.sheenColor.b != 0.f ||
+                                      em.specularIntensity != 1.f ||
+                                      em.specularColor.r != 1.f || em.specularColor.g != 1.f || em.specularColor.b != 1.f ||
+                                      em.dispersion != 0.f || em.thickness != 0.f);
+            setTexel(matBuffer, maxMats, matIdx, 18, em.dispersion, em.thickness, hasCustomUV, hasAdvanced ? 1.f : 0.f);
         }
 
         const int meshIdx = meshCount++;
@@ -6637,6 +6700,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.emissiveInfo[2] = d.fireflyCap_;  // luminance cap for indirect MIS contributions
     u.emissiveInfo[3] = static_cast<float>(d.aovMode_);  // AOV visualization mode
     u.spp[0] = d.restirGiEnabled_ ? 1.f : 0.f;
+    u.spp[2] = (d.denoiserEnabled_ && !d.temporalDenoiserEnabled_) ? 1.f : 0.f;  // EMA spatial denoiser active
     u.restirParams[0] = d.restirEnabled_ ? 1.f : 0.f;
     u.restirParams[1] = 20.f;  // M clamp — lower = crisper shadows, higher = lower variance
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
@@ -6873,8 +6937,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             }
         };
 
-        runAtrous(*d.readDiffAccum, d.denoisedDiff, d.filteredA, 0, 3);
-        runAtrous(*d.readSpecAccum, d.denoisedSpec, d.filteredB, 1, 3);
+        runAtrous(*d.readDiffAccum, d.denoisedDiff, d.filteredA, 0, 2);
+        runAtrous(*d.readSpecAccum, d.denoisedSpec, d.filteredB, 1, 2);
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;
@@ -6955,8 +7019,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
         // Cleanup reads temporal output (taaHistDiffRead/SpecRead after swap = just-written).
         // Uses filteredA/B as ping-pong temp — safe, temporal already consumed them.
-        runAtrous(*d.taaHistDiffRead, d.denoisedDiff, d.filteredA, 2, 3);  // 2 = diffuse | temporal
-        runAtrous(*d.taaHistSpecRead, d.denoisedSpec, d.filteredB, 3, 3);  // 3 = specular | temporal
+        runAtrous(*d.taaHistDiffRead, d.denoisedDiff, d.filteredA, 2, 2);  // 2 = diffuse | temporal
+        runAtrous(*d.taaHistSpecRead, d.denoisedSpec, d.filteredB, 3, 2);  // 3 = specular | temporal
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;
