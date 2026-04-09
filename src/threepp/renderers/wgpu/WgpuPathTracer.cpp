@@ -614,25 +614,28 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     let iuv0 = vec2<f32>(uv01.x, uv01.y) * w
              + vec2<f32>(uv01.z, uv01.w) * rh.u
              + uv2                        * rh.v;
-    // Interpolate UV1
-    let uv1_01 = textureLoad(triData, triCoord(ti, 8), 0);
-    let uv1_2  = textureLoad(triData, triCoord(ti, 9), 0).xy;
-    let iuv1   = vec2<f32>(uv1_01.x, uv1_01.y) * w
-               + vec2<f32>(uv1_01.z, uv1_01.w) * rh.u
-               + uv1_2                          * rh.v;
-
     let matIdx = i32(r0.w);
     let mat0   = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
     let mat1   = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
     let mat2   = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
     let mat3   = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
 
-    // Per-channel transformed UVs
-    let bcUV    = transformUV(iuv0, iuv1, matIdx, 6);   // baseColor
-    let mrUV    = transformUV(iuv0, iuv1, matIdx, 8);   // metalRough
-    let nmUV    = transformUV(iuv0, iuv1, matIdx, 10);  // normal
-    let emUV    = transformUV(iuv0, iuv1, matIdx, 12);  // emissive
-    let aoUV    = transformUV(iuv0, iuv1, matIdx, 14);  // occlusion
+    // Per-channel transformed UVs — skip UV1 interpolation (2 triData reads) and
+    // all 10 transformUV matData reads when all channels use identity UV0.
+    let mat18 = textureLoad(matData, vec2<i32>(matIdx, 18), 0);
+    var bcUV = iuv0; var mrUV = iuv0; var nmUV = iuv0; var emUV = iuv0; var aoUV = iuv0;
+    if (mat18.z > 0.5) {
+        let uv1_01 = textureLoad(triData, triCoord(ti, 8), 0);
+        let uv1_2  = textureLoad(triData, triCoord(ti, 9), 0).xy;
+        let iuv1   = vec2<f32>(uv1_01.x, uv1_01.y) * w
+                   + vec2<f32>(uv1_01.z, uv1_01.w) * rh.u
+                   + uv1_2                          * rh.v;
+        bcUV = transformUV(iuv0, iuv1, matIdx, 6);   // baseColor
+        mrUV = transformUV(iuv0, iuv1, matIdx, 8);   // metalRough
+        nmUV = transformUV(iuv0, iuv1, matIdx, 10);  // normal
+        emUV = transformUV(iuv0, iuv1, matIdx, 12);  // emissive
+        aoUV = transformUV(iuv0, iuv1, matIdx, 14);  // occlusion
+    }
 
     let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
     let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
@@ -728,20 +731,25 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
         h.ao = sampleAtlas(aoUV, aoSlot).x;
     }
 
-    // Sheen (row 16)
-    let mat16 = textureLoad(matData, vec2<i32>(matIdx, 16), 0);
-    h.sheenColor     = mat16.xyz;
-    h.sheenRoughness = mat16.w;
-
-    // PBR specular (row 17)
-    let mat17 = textureLoad(matData, vec2<i32>(matIdx, 17), 0);
-    h.specularColor     = mat17.xyz;
-    h.specularIntensity = mat17.w;
-
-    // Dispersion + thickness (row 18)
-    let mat18 = textureLoad(matData, vec2<i32>(matIdx, 18), 0);
-    h.dispersion = mat18.x;
-    h.thickness  = mat18.y;
+    // Advanced PBR features (sheen, specular extension, dispersion, thickness)
+    // Skip 2 matData reads when material uses defaults — most common case.
+    if (mat18.w > 0.5) {
+        let mat16 = textureLoad(matData, vec2<i32>(matIdx, 16), 0);
+        h.sheenColor     = mat16.xyz;
+        h.sheenRoughness = mat16.w;
+        let mat17 = textureLoad(matData, vec2<i32>(matIdx, 17), 0);
+        h.specularColor     = mat17.xyz;
+        h.specularIntensity = mat17.w;
+        h.dispersion = mat18.x;
+        h.thickness  = mat18.y;
+    } else {
+        h.sheenColor = vec3<f32>(0.0);
+        h.sheenRoughness = 0.0;
+        h.specularColor = vec3<f32>(1.0);
+        h.specularIntensity = 1.0;
+        h.dispersion = 0.0;
+        h.thickness = 0.0;
+    }
 
     return h;
 }
@@ -2539,13 +2547,12 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Checkerboard skip: during camera movement (fc==0) skip half the pixels each frame,
     // alternating which half via globalFrameCounter so both patterns are covered across
-    // two consecutive frames.  Disabled when the EMA spatial denoiser is active — it
-    // expects every pixel traced every frame; skipping half causes a brightness mismatch
-    // (converged-vs-1spp) that manifests as checkerboard flashing.  Safe with no denoiser
-    // (both halves go through the same accumulation math) and with the temporal denoiser
-    // (TAA reconstructs skipped pixels from reprojected history).
+    // two consecutive frames.  Only during rotation — translation causes parallax that
+    // makes stale checkerboard pixels visually wrong (foreground/background mismatch).
+    // Also disabled when the EMA spatial denoiser is active (brightness mismatch).
     let emaDenoiserOn = rt.spp.z > 0.5;
-    let checkerSkip = !emaDenoiserOn && fc == 0u && !isEnvPixel &&
+    let camTranslated = length(rt.camOri.xyz - rt.prevCamOri.xyz) > 1e-5;
+    let checkerSkip = !emaDenoiserOn && !camTranslated && fc == 0u && !isEnvPixel &&
         ((u32(pixel.x) + u32(pixel.y) + u32(rt.params.y)) & 1u) == 0u;
 
     // Foveated/checkerboard skip: pass through previous accumulation unchanged.
@@ -4402,11 +4409,34 @@ static int buildGeometryBuffers(
             auto* mwe = dynamic_cast<MaterialWithEmissive*>(mat);
             auto* mwa = dynamic_cast<MaterialWithAoMap*>(mat);
 
-            writeUvTransform(6,  mwm ? mwm->map.get() : nullptr);           // baseColor
-            writeUvTransform(8,  mwr ? mwr->roughnessMap.get() : nullptr);   // metalRough
-            writeUvTransform(10, mnm ? mnm->normalMap.get() : nullptr);      // normal
-            writeUvTransform(12, mwe ? mwe->emissiveMap.get() : nullptr);    // emissive
-            writeUvTransform(14, mwa ? mwa->aoMap.get() : nullptr);          // occlusion
+            const Texture* uvTextures[5] = {
+                mwm ? mwm->map.get() : nullptr,
+                mwr ? mwr->roughnessMap.get() : nullptr,
+                mnm ? mnm->normalMap.get() : nullptr,
+                mwe ? mwe->emissiveMap.get() : nullptr,
+                mwa ? mwa->aoMap.get() : nullptr
+            };
+            writeUvTransform(6,  uvTextures[0]);   // baseColor
+            writeUvTransform(8,  uvTextures[1]);   // metalRough
+            writeUvTransform(10, uvTextures[2]);    // normal
+            writeUvTransform(12, uvTextures[3]);    // emissive
+            writeUvTransform(14, uvTextures[4]);    // occlusion
+
+            // Check if any channel uses non-identity UV transform or UV1
+            float hasCustomUV = 0.f;
+            for (const auto* tex : uvTextures) {
+                if (tex) {
+                    const_cast<Texture*>(tex)->updateMatrix();
+                    const auto& e = tex->matrix.elements;
+                    // Identity check: a=1, b=0, tx=0, c=0, d=1, ty=0
+                    if (e[0] != 1.f || e[3] != 0.f || e[6] != 0.f ||
+                        e[1] != 0.f || e[4] != 1.f || e[7] != 0.f ||
+                        tex->texCoord != 0) {
+                        hasCustomUV = 1.f;
+                        break;
+                    }
+                }
+            }
 
             // Row 16: sheen (r, g, b, roughness)
             setTexel(matBuffer, maxMats, matIdx, 16,
@@ -4414,8 +4444,12 @@ static int buildGeometryBuffers(
             // Row 17: PBR specular (r, g, b, intensity)
             setTexel(matBuffer, maxMats, matIdx, 17,
                     em.specularColor.r, em.specularColor.g, em.specularColor.b, em.specularIntensity);
-            // Row 18: dispersion + thickness
-            setTexel(matBuffer, maxMats, matIdx, 18, em.dispersion, em.thickness, 0.f, 0.f);
+            // Row 18: dispersion + thickness + hasCustomUV + hasAdvancedPBR flags
+            const bool hasAdvanced = (em.sheenColor.r != 0.f || em.sheenColor.g != 0.f || em.sheenColor.b != 0.f ||
+                                      em.specularIntensity != 1.f ||
+                                      em.specularColor.r != 1.f || em.specularColor.g != 1.f || em.specularColor.b != 1.f ||
+                                      em.dispersion != 0.f || em.thickness != 0.f);
+            setTexel(matBuffer, maxMats, matIdx, 18, em.dispersion, em.thickness, hasCustomUV, hasAdvanced ? 1.f : 0.f);
         }
 
         const int meshIdx = meshCount++;
