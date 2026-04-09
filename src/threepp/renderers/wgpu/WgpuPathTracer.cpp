@@ -1686,10 +1686,11 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             b0MeshIdx = h.meshIdx;
         }
 
-        // ReSTIR GI only for diffuse/glossy primary surfaces — specular primaries
-        // (mirrors, metals with low roughness) are better served by BRDF sampling.
+        // ReSTIR GI for diffuse/glossy surfaces. Metals need higher roughness
+        // threshold — narrow specular lobe causes BRDF eval spikes in GI shading.
+        let giAlphaMin = select(0.01, 0.1, b0Metal > 0.5);
         let useReSTIRGI = i == 1 && rt.spp.x > 0.5 && !afterTransmission
-                          && h.transmission < 0.05 && b0Alpha > 0.05;
+                          && h.transmission < 0.05 && b0Alpha > giAlphaMin;
         var giLo = vec3<f32>(0.0);
 
         // --- NEE: ReSTIR DI at bounce 0, classic NEE at deeper bounces ---
