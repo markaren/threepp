@@ -209,6 +209,7 @@ struct Hit  {
     specularIntensity: f32,
     dispersion:       f32,
     thickness:        f32,
+    triIdx:           i32,
 }
 
 fn pcg(v: u32) -> u32 {
@@ -597,9 +598,10 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     h.sheenColor = vec3<f32>(0.0); h.sheenRoughness = 0.0;
     h.specularColor = vec3<f32>(1.0); h.specularIntensity = 1.0;
     h.dispersion = 0.0; h.thickness = 0.0;
-    h.meshIdx = -1; h.matIdx = -1;
+    h.meshIdx = -1; h.matIdx = -1; h.triIdx = -1;
 
     let ti = rh.triIdx;
+    h.triIdx = ti;
     let r0  = textureLoad(triData, triCoord(ti, 0), 0);
     let v0  = r0.xyz;
     let r1  = textureLoad(triData, triCoord(ti, 1), 0);
@@ -905,7 +907,7 @@ fn stablePrimaryHit(ray: Ray) -> StableHit {
 fn sceneHit(ray: Ray) -> Hit {
     let rh = sceneHitRaw(ray, 1e30);
     if (rh.triIdx < 0) {
-        var h: Hit; h.t = 1e30; h.meshIdx = -1; h.matIdx = -1; h.transmission = 0.0; h.ior = 1.5;
+        var h: Hit; h.t = 1e30; h.meshIdx = -1; h.matIdx = -1; h.triIdx = -1; h.transmission = 0.0; h.ior = 1.5;
         h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
         h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0; h.ao = 1.0;
         h.sheenColor = vec3<f32>(0.0); h.sheenRoughness = 0.0;
@@ -1534,6 +1536,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
              primaryAlbedo:  ptr<function, vec3<f32>>,
              primaryRough:   ptr<function, f32>,
              primaryMatIdx:  ptr<function, i32>,
+             primaryTriIdx:  ptr<function, i32>,
              touchedMoved:   ptr<function, bool>) -> SplitRadiance {
     *primaryMeshIdx = 128u;
     *primaryNormal  = vec3<f32>(0.0);
@@ -1541,6 +1544,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
     *primaryAlbedo  = vec3<f32>(1.0);  // default white (sky/miss: no demodulation)
     *primaryRough   = 1.0;  // sky: treat as fully rough (max history)
     *primaryMatIdx  = -1;   // sky: no material
+    *primaryTriIdx  = -1;   // sky: no triangle
     *touchedMoved   = false;
     var ray        = ray_in;
     var throughput = vec3<f32>(1.0);
@@ -1610,6 +1614,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             *primaryDepth   = h.t;
             *primaryRough   = sqrt(h.shininess);  // linear roughness for TAA blend
             *primaryMatIdx  = h.matIdx;
+            *primaryTriIdx  = h.triIdx;
 
             // Adaptive bounce cap — reduce bounces for diffuse/glossy surfaces.
             {
@@ -2618,16 +2623,54 @@ R"(
     var primaryAlbedo:  vec3<f32>;
     var primaryRough:   f32;
     var primaryMatIdx:  i32;
+    var primaryTriIdx:  i32;
     var touchedMoved:   bool;
-    var ptResult = pathTrace(ray, &seed, pixel, varianceReducedBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &primaryRough, &primaryMatIdx, &touchedMoved);
+    var ptResult = pathTrace(ray, &seed, pixel, varianceReducedBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &primaryRough, &primaryMatIdx, &primaryTriIdx, &touchedMoved);
     var sample = ptResult.diff + ptResult.spec;
-
-    // Unjittered primary ray for stable G-buffer: traces a pixel-center ray
-    // (no jitter) to get stable normal/depth/meshID for à-trous edge-stopping.
-    // BVH traversal only — no shading, no material eval. Keeps edge-stopping
-    // weights consistent frame-to-frame despite sub-pixel jitter on the radiance ray.
+)"
+R"(
+    // Stable G-buffer: re-intersect only the primary-hit triangle with the
+    // unjittered pixel-center ray.  Single ray-triangle test instead of full
+    // BVH traversal — same stable normal/depth for edge-stopping, much cheaper.
+    // Falls back to jittered primary data at edge pixels where the center ray
+    // misses the jittered ray's triangle (sub-pixel geometry boundary).
     let centerRay = makeRay(vec2<f32>(f32(pixel.x) + 0.5, f32(pixel.y) + 0.5), res);
-    let stableHit = stablePrimaryHit(centerRay);
+    var stableHit: StableHit;
+    stableHit.t = 0.0; stableHit.normal = vec3<f32>(0.0); stableHit.meshIdx = -1; stableHit.matIdx = -1;
+    if (primaryTriIdx >= 0) {
+        let ti = primaryTriIdx;
+        let sr0 = textureLoad(triData, triCoord(ti, 0), 0);
+        let sr1 = textureLoad(triData, triCoord(ti, 1), 0);
+        let sv2 = textureLoad(triData, triCoord(ti, 2), 0).xyz;
+        let isect = triIntersect(centerRay, sr0.xyz, sr1.xyz, sv2);
+        if (isect.t < 1e29) {
+            let sw = 1.0 - isect.u - isect.v;
+            let sn0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
+            let sn1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
+            let sn2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
+            let sNorm = normalize(sn0 * sw + sn1 * isect.u + sn2 * isect.v);
+            stableHit.t = isect.t;
+            stableHit.normal = select(-sNorm, sNorm, dot(centerRay.dir, sNorm) < 0.0);
+            stableHit.meshIdx = i32(sr1.w);
+            stableHit.matIdx  = i32(sr0.w);
+        } else {
+            // Edge pixel: center ray missed the triangle's barycentric region.
+            // Use the jittered hit's smooth normal (continuous at shared edges) and
+            // intersect the center ray with the tangent plane at the jittered hit point.
+            // This gives a stable depth without the discontinuities of geometric normals.
+            let hitPt = centerRay.origin + primaryDepth * ray.dir;
+            let denom = dot(centerRay.dir, primaryNormal);
+            if (abs(denom) > 1e-8) {
+                let planeT = dot(hitPt - centerRay.origin, primaryNormal) / denom;
+                if (planeT > 0.0) {
+                    stableHit.t = planeT;
+                    stableHit.normal = primaryNormal;
+                    stableHit.meshIdx = i32(sr1.w);
+                    stableHit.matIdx  = i32(sr0.w);
+                }
+            }
+        }
+    }
 
     // AOV visualization mode — write noise-free primary-hit data and return early.
     // Writes to diffAccumWrite (display shader reads diffTex + specTex).
