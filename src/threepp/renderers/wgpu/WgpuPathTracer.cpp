@@ -202,7 +202,6 @@ struct Hit  {
     attenuationDist:  f32,
     clearcoat:        f32,
     clearcoatAlpha:   f32,
-    ao:               f32,
     sheenColor:       vec3<f32>,
     sheenRoughness:   f32,
     specularColor:    vec3<f32>,
@@ -594,7 +593,7 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     h.t = rh.t;
     h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0;
     h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
-    h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0; h.ao = 1.0;
+    h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
     h.sheenColor = vec3<f32>(0.0); h.sheenRoughness = 0.0;
     h.specularColor = vec3<f32>(1.0); h.specularIntensity = 1.0;
     h.dispersion = 0.0; h.thickness = 0.0;
@@ -625,7 +624,7 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     // Per-channel transformed UVs — skip UV1 interpolation (2 triData reads) and
     // all 10 transformUV matData reads when all channels use identity UV0.
     let mat18 = textureLoad(matData, vec2<i32>(matIdx, 18), 0);
-    var bcUV = iuv0; var mrUV = iuv0; var nmUV = iuv0; var emUV = iuv0; var aoUV = iuv0;
+    var bcUV = iuv0; var mrUV = iuv0; var nmUV = iuv0; var emUV = iuv0;
     if (mat18.z > 0.5) {
         let uv1_01 = textureLoad(triData, triCoord(ti, 8), 0);
         let uv1_2  = textureLoad(triData, triCoord(ti, 9), 0).xy;
@@ -636,7 +635,6 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
         mrUV = transformUV(iuv0, iuv1, matIdx, 8);   // metalRough
         nmUV = transformUV(iuv0, iuv1, matIdx, 10);  // normal
         emUV = transformUV(iuv0, iuv1, matIdx, 12);  // emissive
-        aoUV = transformUV(iuv0, iuv1, matIdx, 14);  // occlusion
     }
 
     let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
@@ -725,13 +723,6 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
         emissive *= srgbToLinear(sampleAtlas(emUV, emissiveSlot));
     }
     h.emissive = emissive;
-
-    // AO map (uses occlusion UV)
-    h.ao = 1.0;
-    let aoSlot = mat5.w;
-    if (aoSlot >= 0.0) {
-        h.ao = sampleAtlas(aoUV, aoSlot).x;
-    }
 
     // Advanced PBR features (sheen, specular extension, dispersion, thickness)
     // Skip 2 matData reads when material uses defaults — most common case.
@@ -880,7 +871,7 @@ fn sceneHit(ray: Ray) -> Hit {
     if (rh.triIdx < 0) {
         var h: Hit; h.t = 1e30; h.meshIdx = -1; h.matIdx = -1; h.triIdx = -1; h.transmission = 0.0; h.ior = 1.5;
         h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
-        h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0; h.ao = 1.0;
+        h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
         h.sheenColor = vec3<f32>(0.0); h.sheenRoughness = 0.0;
         h.specularColor = vec3<f32>(1.0); h.specularIntensity = 1.0;
         h.dispersion = 0.0; h.thickness = 0.0;
