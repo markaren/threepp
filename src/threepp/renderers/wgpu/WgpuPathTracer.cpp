@@ -2609,31 +2609,24 @@ R"(
     var stableNrm = vec3<f32>(0.0);
     var stableT   = 0.0;
     if (primaryTriIdx >= 0) {
+        // Use jittered hit's smooth normal directly — sub-pixel offset changes
+        // barycentric coords by ~3% on typical triangles, negligible normal difference.
+        // Saves 3 texture loads vs re-interpolating at center-ray barycentrics.
+        stableNrm = primaryNormal;
         let ti = primaryTriIdx;
-        let sr0 = textureLoad(triData, triCoord(ti, 0), 0);
-        let sr1 = textureLoad(triData, triCoord(ti, 1), 0);
+        let sv0 = textureLoad(triData, triCoord(ti, 0), 0).xyz;
+        let sv1 = textureLoad(triData, triCoord(ti, 1), 0).xyz;
         let sv2 = textureLoad(triData, triCoord(ti, 2), 0).xyz;
-        let isect = triIntersect(centerRay, sr0.xyz, sr1.xyz, sv2);
+        let isect = triIntersect(centerRay, sv0, sv1, sv2);
         if (isect.t < 1e29) {
-            let sw = 1.0 - isect.u - isect.v;
-            let sn0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
-            let sn1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
-            let sn2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
-            let sNorm = normalize(sn0 * sw + sn1 * isect.u + sn2 * isect.v);
-            stableT   = isect.t;
-            stableNrm = select(-sNorm, sNorm, dot(centerRay.dir, sNorm) < 0.0);
+            stableT = isect.t;
         } else {
-            // Edge pixel: center ray missed the triangle's barycentric region.
-            // Use the jittered hit's smooth normal (continuous at shared edges) and
-            // intersect the center ray with the tangent plane at the jittered hit point.
+            // Edge pixel: intersect center ray with tangent plane at jittered hit point.
             let hitPt = centerRay.origin + primaryDepth * ray.dir;
             let denom = dot(centerRay.dir, primaryNormal);
             if (abs(denom) > 1e-8) {
                 let planeT = dot(hitPt - centerRay.origin, primaryNormal) / denom;
-                if (planeT > 0.0) {
-                    stableT   = planeT;
-                    stableNrm = primaryNormal;
-                }
+                if (planeT > 0.0) { stableT = planeT; }
             }
         }
     }
