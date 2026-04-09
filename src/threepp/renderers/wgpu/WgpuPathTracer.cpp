@@ -874,35 +874,6 @@ fn sceneHitRaw(ray: Ray, maxT: f32) -> RawHit {
     return rh;
 }
 
-// Lightweight primary-hit query: BVH traversal + normal/depth/meshIdx only.
-// No material evaluation, no texture sampling, no UV interpolation.
-// Used for the unjittered stable G-buffer that drives à-trous edge-stopping.
-struct StableHit { t: f32, normal: vec3<f32>, meshIdx: i32, matIdx: i32 }
-
-fn stablePrimaryHit(ray: Ray) -> StableHit {
-    var sh: StableHit;
-    sh.t = 0.0; sh.normal = vec3<f32>(0.0); sh.meshIdx = -1; sh.matIdx = -1;
-    let rh = sceneHitRaw(ray, 1e30);
-    if (rh.triIdx < 0) { return sh; }
-
-    let ti = rh.triIdx;
-    let w  = 1.0 - rh.u - rh.v;
-    // Interpolate smooth normal from vertex normals
-    let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
-    let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
-    let n2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
-    let sn = normalize(n0 * w + n1 * rh.u + n2 * rh.v);
-
-    // meshIdx from triData row 1, matIdx from row 0
-    let r0 = textureLoad(triData, triCoord(ti, 0), 0);
-    let r1 = textureLoad(triData, triCoord(ti, 1), 0);
-
-    sh.t = rh.t;
-    sh.normal = select(-sn, sn, dot(ray.dir, sn) < 0.0);
-    sh.meshIdx = i32(r1.w);
-    sh.matIdx  = i32(r0.w);
-    return sh;
-}
 
 fn sceneHit(ray: Ray) -> Hit {
     let rh = sceneHitRaw(ray, 1e30);
@@ -2635,8 +2606,8 @@ R"(
     // Falls back to jittered primary data at edge pixels where the center ray
     // misses the jittered ray's triangle (sub-pixel geometry boundary).
     let centerRay = makeRay(vec2<f32>(f32(pixel.x) + 0.5, f32(pixel.y) + 0.5), res);
-    var stableHit: StableHit;
-    stableHit.t = 0.0; stableHit.normal = vec3<f32>(0.0); stableHit.meshIdx = -1; stableHit.matIdx = -1;
+    var stableNrm = vec3<f32>(0.0);
+    var stableT   = 0.0;
     if (primaryTriIdx >= 0) {
         let ti = primaryTriIdx;
         let sr0 = textureLoad(triData, triCoord(ti, 0), 0);
@@ -2649,24 +2620,19 @@ R"(
             let sn1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
             let sn2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
             let sNorm = normalize(sn0 * sw + sn1 * isect.u + sn2 * isect.v);
-            stableHit.t = isect.t;
-            stableHit.normal = select(-sNorm, sNorm, dot(centerRay.dir, sNorm) < 0.0);
-            stableHit.meshIdx = i32(sr1.w);
-            stableHit.matIdx  = i32(sr0.w);
+            stableT   = isect.t;
+            stableNrm = select(-sNorm, sNorm, dot(centerRay.dir, sNorm) < 0.0);
         } else {
             // Edge pixel: center ray missed the triangle's barycentric region.
             // Use the jittered hit's smooth normal (continuous at shared edges) and
             // intersect the center ray with the tangent plane at the jittered hit point.
-            // This gives a stable depth without the discontinuities of geometric normals.
             let hitPt = centerRay.origin + primaryDepth * ray.dir;
             let denom = dot(centerRay.dir, primaryNormal);
             if (abs(denom) > 1e-8) {
                 let planeT = dot(hitPt - centerRay.origin, primaryNormal) / denom;
                 if (planeT > 0.0) {
-                    stableHit.t = planeT;
-                    stableHit.normal = primaryNormal;
-                    stableHit.meshIdx = i32(sr1.w);
-                    stableHit.matIdx  = i32(sr0.w);
+                    stableT   = planeT;
+                    stableNrm = primaryNormal;
                 }
             }
         }
@@ -2688,7 +2654,7 @@ R"(
         textureStore(accumWrite, pixel, vec4<f32>(aovColor, 1.0));
         textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), 0.0, 0.0));
         textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
-        textureStore(stableGBufWrite, pixel, vec4<f32>(stableHit.normal, stableHit.t));
+        textureStore(stableGBufWrite, pixel, vec4<f32>(stableNrm, stableT));
         textureStore(albedoWrite, pixel, vec4<f32>(primaryAlbedo, primaryRough));
         return;
     }
@@ -2728,7 +2694,7 @@ R"(
         textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), select(0.0, 1.0, touchedMoved), 0.0));
         textureStore(albedoWrite, pixel, vec4<f32>(primaryAlbedo, primaryRough));
         textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
-        textureStore(stableGBufWrite, pixel, vec4<f32>(stableHit.normal, stableHit.t));
+        textureStore(stableGBufWrite, pixel, vec4<f32>(stableNrm, stableT));
         return;
     }
 
@@ -3005,7 +2971,7 @@ R"(
     textureStore(albedoWrite,  pixel, vec4<f32>(primaryAlbedo, primaryRough));
 
     textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
-    textureStore(stableGBufWrite, pixel, vec4<f32>(stableHit.normal, stableHit.t));
+    textureStore(stableGBufWrite, pixel, vec4<f32>(stableNrm, stableT));
 }
 )";
 
