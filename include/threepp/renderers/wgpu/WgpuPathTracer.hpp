@@ -64,6 +64,11 @@ namespace threepp {
         void setReSTIREnabled(bool enabled);
         [[nodiscard]] bool restirEnabled() const;
 
+        /// Enable/disable ReSTIR GI for indirect illumination (bounce 1). Default: false.
+        /// Reuses secondary hit points across frames/neighbors for lower-variance GI.
+        void setReSTIRGIEnabled(bool enabled);
+        [[nodiscard]] bool restirGiEnabled() const;
+
         /// Samples per pixel per frame. Default: 1. Higher values reduce noise
         /// at the cost of proportionally more RT time per frame.
         void setSamplesPerPixel(int spp);
@@ -96,6 +101,11 @@ namespace threepp {
         /// 3=albedo, 4=instance ID, 5=roughness. AOV output is noise-free (single sample).
         void setAOVMode(int mode);
         [[nodiscard]] int aovMode() const;
+
+        /// Texture atlas tile resolution. Default: 1024. Set to 2048 for higher
+        /// quality textures.
+        void setTextureResolution(int size);
+        [[nodiscard]] int textureResolution() const;
 
         /// Force a full scene rebuild (geometry + materials) on the next render call.
         void markDirty();
