@@ -262,7 +262,10 @@ fn wrapCoord(v: i32, mode: i32) -> i32 {
     return clamp(v, 0, TILE_SIZE() - 1); // clamp / mirror (already wrapped by applyWrap)
 }
 
-fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
+// Bilinear, wrap-aware atlas fetch — returns full RGBA texel.
+// sampleAtlas / sampleAtlasAlpha delegate here to share the wrap/tile logic
+// and avoid duplicating 4 texture loads each time both channels are needed.
+fn sampleAtlasRGBA(uv: vec2<f32>, texSlot: f32) -> vec4<f32> {
     let enc  = i32(texSlot);
     let slot = enc / 16;
     let wS   = (enc % 16) / 4;
@@ -289,38 +292,13 @@ fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
     let c10 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y0), layer, 0);
     let c01 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y1), layer, 0);
     let c11 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y1), layer, 0);
-    let blended = mix(mix(c00, c10, wx), mix(c01, c11, wx), wy);
-    return blended.xyz;
+    return mix(mix(c00, c10, wx), mix(c01, c11, wx), wy);
 }
-
+fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
+    return sampleAtlasRGBA(uv, texSlot).xyz;
+}
 fn sampleAtlasAlpha(uv: vec2<f32>, texSlot: f32) -> f32 {
-    let enc  = i32(texSlot);
-    let slot = enc / 16;
-    let wS   = (enc % 16) / 4;
-    let wT   = enc % 4;
-    let atlasCols = i32(textureDimensions(texAtlas, 0).x) / TILE_SIZE();
-    let slotsPerLayer = atlasCols * atlasCols;
-    let layer = slot / slotsPerLayer;
-    let localSlot = slot % slotsPerLayer;
-    let col  = localSlot % atlasCols;
-    let row  = localSlot / atlasCols;
-    let ox   = col * TILE_SIZE();
-    let oy   = row * TILE_SIZE();
-    let ts   = f32(TILE_SIZE());
-    let wu   = applyWrap(uv.x, wS);
-    let wv   = applyWrap(uv.y, wT);
-    let fp  = vec2<f32>(wu, wv) * ts - 0.5;
-    let x0  = wrapCoord(i32(floor(fp.x)), wS);
-    let y0  = wrapCoord(i32(floor(fp.y)), wT);
-    let x1  = wrapCoord(i32(floor(fp.x)) + 1, wS);
-    let y1  = wrapCoord(i32(floor(fp.y)) + 1, wT);
-    let wx  = fp.x - floor(fp.x);
-    let wy  = fp.y - floor(fp.y);
-    let a00 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y0), layer, 0).w;
-    let a10 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y0), layer, 0).w;
-    let a01 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y1), layer, 0).w;
-    let a11 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y1), layer, 0).w;
-    return mix(mix(a00, a10, wx), mix(a01, a11, wx), wy);
+    return sampleAtlasRGBA(uv, texSlot).w;
 }
 
 // Apply per-channel UV transform from matData.
@@ -1444,15 +1422,10 @@ fn addClamped(rad: ptr<function, vec3<f32>>, contrib: vec3<f32>, cap: f32) {
 
 fn isMeshMoved(idx: i32) -> bool {
     if (idx < 0 || idx >= 128) { return false; }
-    let ui = u32(idx);
-    let bit  = ui & 31u;
-    let wi   = ui >> 5u;  // 0..3
-    var word: u32 = 0u;
-    if      (wi == 0u) { word = rt.movedMeshBits.x; }
-    else if (wi == 1u) { word = rt.movedMeshBits.y; }
-    else if (wi == 2u) { word = rt.movedMeshBits.z; }
-    else               { word = rt.movedMeshBits.w; }
-    return ((word >> bit) & 1u) != 0u;
+    let ui  = u32(idx);
+    let bit = ui & 31u;
+    let wi  = ui >> 5u;  // 0..3 — selects x/y/z/w of movedMeshBits
+    return ((rt.movedMeshBits[wi] >> bit) & 1u) != 0u;
 }
 
 // -------- Octahedral normal encoding (for GI reservoir packing) --------
@@ -3597,8 +3570,31 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var spatLumM2 = 0.0;
     var spatWsum  = 0.0;
 
+    // Center pixel (dx=0, dy=0) — contribute using pre-loaded registers to avoid
+    // 5 redundant textureLoad calls that the loop body would otherwise issue.
+    // All edge-stopping weights are 1.0 for the center (same normal, depth, luminance).
+    {
+        let w_s0      = kw[2] * kw[2];
+        let cIrrDemod = demod(cColor, cAlbedo);  // consistent with loop: always demodulate
+        let specCap0  = mix(4.0, 10.0, cRough);
+        let filterCap0 = select(12.0, specCap0, isSpec);
+        let cIrrLum   = luminance(cIrrDemod);
+        let cColLum   = luminance(cColor);
+        var cIrrC  = cIrrDemod;
+        var cColorC = cColor;
+        if (cIrrLum > filterCap0) { cIrrC  = cIrrDemod * (filterCap0 / cIrrLum); }
+        if (cColLum > filterCap0) { cColorC = cColor   * (filterCap0 / cColLum); }
+        irrSum    += cIrrC  * w_s0;
+        rawSum    += cColorC * w_s0;
+        weightSum += w_s0;
+        spatLumM1 += cLum * w_s0;
+        spatLumM2 += cLum * cLum * w_s0;
+        spatWsum  += w_s0;
+    }
+
     for (var dy = -2; dy <= 2; dy++) {
         for (var dx = -2; dx <= 2; dx++) {
+            if (dx == 0 && dy == 0) { continue; }  // handled above with pre-loaded values
             let sp      = clamp(pixel + vec2<i32>(dx, dy) * step, vec2<i32>(0), res - 1);
             let sHitId  = textureLoad(hitMeshBuf, sp, 0);
             let sMeshId = u32(sHitId.r);
