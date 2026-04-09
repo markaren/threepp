@@ -2533,15 +2533,17 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Checkerboard skip: during camera movement (fc==0) skip half the pixels each frame,
     // alternating which half via globalFrameCounter so both patterns are covered across
-    // two consecutive frames.  TAA reconstructs skipped pixels from history exactly as
-    // it does for foveated pixels — no custom reprojection needed.
-    let checkerSkip = fc == 0u && !isEnvPixel &&
+    // two consecutive frames.  The temporal denoiser (TAA) reconstructs skipped pixels
+    // from reprojected history.  Only enabled in raw/temporal mode — the EMA accumulation
+    // path expects every pixel traced every frame; skipping half causes a brightness
+    // mismatch (converged-vs-1spp) that manifests as checkerboard flashing.
+    let rawMode = rt.restirParams.w > 0.5;
+    let checkerSkip = rawMode && fc == 0u && !isEnvPixel &&
         ((u32(pixel.x) + u32(pixel.y) + u32(rt.params.y)) & 1u) == 0u;
 
     // Foveated/checkerboard skip: pass through previous accumulation unchanged.
     // The pixel keeps its existing color & frame count; it will trace on a future frame.
     if (foveatedSkip || checkerSkip) {
-        let rawMode = rt.restirParams.w > 0.5;
         if (rawMode) {
             // Raw mode: write sentinel .w = -1 so temporal denoiser knows to pass through history
             textureStore(accumWrite,     pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
@@ -3224,12 +3226,14 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Foveated-skipped pixels: .w = -1 sentinel in raw mode — pass through history
-    if (curFC < -0.5) {
-        let prevHist = textureLoad(taaHistIn, pixel, 0);
-        textureStore(taaOut, pixel, vec4<f32>(prevHist.xyz, prevHist.w));
-        return;
-    }
+    // Foveated/checkerboard-skipped pixels: .w = -1 sentinel in raw mode.
+    // Instead of blindly passing through history at the current pixel position,
+    // mark this pixel so that after reprojection we write the reprojected history
+    // without blending a new sample.  This keeps brightness consistent with
+    // neighboring traced pixels (which go through EMA) and avoids the checkerboard
+    // flashing artefact caused by half the pixels being stale while the other half
+    // get a fresh 1-spp blend.
+    let isSkippedPixel = curFC < -0.5;
 
     let hitInfo  = textureLoad(hitMeshTex, pixel, 0);
     let curMeshId = u32(hitInfo.r);
@@ -3335,7 +3339,13 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         // No valid taps — treat as disoccluded
         if (vSum < 1e-6) {
-            textureStore(taaOut, pixel, vec4<f32>(curColor, 1.0));
+            if (isSkippedPixel) {
+                // Skipped pixel with no valid reprojection — pass through current-position history
+                let fallback = textureLoad(taaHistIn, pixel, 0);
+                textureStore(taaOut, pixel, vec4<f32>(fallback.xyz, fallback.w));
+            } else {
+                textureStore(taaOut, pixel, vec4<f32>(curColor, 1.0));
+            }
             return;
         }
         let inv = 1.0 / vSum;
@@ -3368,8 +3378,20 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             finalAlpha = min(1.0, alpha * specBoost);
         }
 
-        result = mix(histColor, curColor, finalAlpha);
+        // Checkerboard/foveated skip: run the same EMA blend but substitute
+        // reprojected history for the missing current sample.  This applies the
+        // identical alpha-weighted transform that traced pixels receive, so both
+        // halves of the checkerboard have matching brightness — no flash.
+        let blendSrc = select(curColor, histColor, isSkippedPixel);
+
+        result = mix(histColor, blendSrc, finalAlpha);
         newHistLen = effHistLen + 1.0;
+    } else if (isSkippedPixel) {
+        // Skipped pixel with no usable history (disoccluded or out of bounds)
+        // — pass through whatever history exists at this pixel position.
+        let fallback = textureLoad(taaHistIn, pixel, 0);
+        textureStore(taaOut, pixel, vec4<f32>(fallback.xyz, max(fallback.w, 1.0)));
+        return;
     }
 
     // .w = per-pixel history length (used by spatial filter for variance-adaptive sigma)
