@@ -198,8 +198,6 @@ struct Hit  {
     transmission: f32,
     ior:          f32,
     frontFace:    f32,
-    attenuationColor: vec3<f32>,
-    attenuationDist:  f32,
     clearcoat:        f32,
     clearcoatAlpha:   f32,
     sheenColor:       vec3<f32>,
@@ -592,8 +590,8 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     var h: Hit;
     h.t = rh.t;
     h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0;
-    h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
-    h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
+    h.geoNormal = vec3<f32>(0.0);
+    h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
     h.sheenColor = vec3<f32>(0.0); h.sheenRoughness = 0.0;
     h.specularColor = vec3<f32>(1.0); h.specularIntensity = 1.0;
     h.dispersion = 0.0; h.thickness = 0.0;
@@ -709,9 +707,6 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     h.frontFace    = select(0.0, 1.0, isFrontFace);
     h.meshIdx      = i32(r1.w);
     h.matIdx       = matIdx;
-    let mat4 = textureLoad(matData, vec2<i32>(matIdx, 4), 0);
-    h.attenuationColor = mat4.xyz;
-    h.attenuationDist  = mat4.w;
     let mat5 = textureLoad(matData, vec2<i32>(matIdx, 5), 0);
     h.clearcoat      = mat5.x;
     h.clearcoatAlpha = mat5.y;
@@ -870,8 +865,8 @@ fn sceneHit(ray: Ray) -> Hit {
     let rh = sceneHitRaw(ray, 1e30);
     if (rh.triIdx < 0) {
         var h: Hit; h.t = 1e30; h.meshIdx = -1; h.matIdx = -1; h.triIdx = -1; h.transmission = 0.0; h.ior = 1.5;
-        h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0);
-        h.attenuationDist = 0.0; h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
+        h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0);
+        h.clearcoat = 0.0; h.clearcoatAlpha = 0.0;
         h.sheenColor = vec3<f32>(0.0); h.sheenRoughness = 0.0;
         h.specularColor = vec3<f32>(1.0); h.specularIntensity = 1.0;
         h.dispersion = 0.0; h.thickness = 0.0;
@@ -2325,12 +2320,15 @@ R"(
             // Dispersion: stochastic wavelength selection.
             // Pick one of R/G/B, compute per-channel IOR via Cauchy-like model,
             // and weight throughput by 3x for the selected channel.
+            // Load attenuation on demand — only needed for transmissive hits (~5%).
+            // Saves 1 textureLoad (mat4) for the 95% non-transmissive case.
+            let tMat4 = textureLoad(matData, vec2<i32>(h.matIdx, 4), 0);
+            let tAttColor = tMat4.xyz;
+            let tAttDist  = tMat4.w;
+
             var channelMask = vec3<f32>(1.0);
             var ior_eff = h.ior;
             if (h.dispersion > 0.0) {
-                // Cauchy dispersion from KHR_materials_dispersion (dispersion = 20/V_d).
-                // B = (ior-1)*dispersion / (20*(1/λ_F² - 1/λ_C²)) where
-                // λ_F=0.4861μm, λ_C=0.6563μm → denominator ≈ 38.2.
                 let lambda = array<f32, 3>(0.6563, 0.55, 0.4861);
                 let ref_inv_sq = 1.0 / (0.5893 * 0.5893);
                 let ch = u32(rand(seed) * 3.0) % 3u;
@@ -2379,8 +2377,8 @@ R"(
             if (didRefract) {
                 let glassTint = mix(albedo, vec3<f32>(1.0), h.transmission) * microWeight;
                 var volAtten = vec3<f32>(1.0);
-                if (h.attenuationDist > 0.0 && !entering) {
-                    let absorbCoeff = -log(max(h.attenuationColor, vec3<f32>(1e-6))) / h.attenuationDist;
+                if (tAttDist > 0.0 && !entering) {
+                    let absorbCoeff = -log(max(tAttColor, vec3<f32>(1e-6))) / tAttDist;
                     let pathLen = select(h.t, h.thickness, h.t < 1e-2 && h.thickness > 0.0);
                     volAtten = exp(-absorbCoeff * pathLen);
                 }
