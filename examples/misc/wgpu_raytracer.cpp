@@ -167,7 +167,7 @@ int main() {
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);
             if (ImGui::Checkbox("Temporal Denoiser", &temporalDenoiserOn))
-                pathTracer.setTemporalDenoiser(denoiserOn);
+                pathTracer.setTemporalDenoiser(temporalDenoiserOn);
             if (ImGui::Checkbox("ReSTIR DI", &restirOn))
                 pathTracer.setReSTIREnabled(restirOn);
             if (ImGui::Checkbox("ReSTIR GI", &restirGIOn))
