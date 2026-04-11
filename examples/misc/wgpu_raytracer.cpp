@@ -22,8 +22,10 @@ int main() {
     WgpuPathTracer pathTracer(renderer, canvas.size());
     pathTracer.setEnvIntensity(0.5f);
     pathTracer.setDenoiserEnabled(false);
+    pathTracer.setTemporalDenoiser(false);
     pathTracer.setFoveatedRendering(false);
     pathTracer.setReSTIREnabled(true);
+    pathTracer.setReSTIRGIEnabled(false);
 
     // ---- Scene objects ----
     TextureLoader tl;
@@ -63,8 +65,9 @@ int main() {
                                           {"metalness", 0.f}}));
     glassSphere->position.set(0.f, 0.2f, 3.f);
 
+    float floorSize = 160.f;
     auto floor = Mesh::create(
-            PlaneGeometry::create(16.f, 16.f, 4, 4),
+            PlaneGeometry::create(floorSize, floorSize),
             MeshStandardMaterial::create({{"color", Color::darkgrey},
                                           {"roughness", 0.99f}}));
     floor->rotation.x = -math::PI / 2.f;
@@ -90,7 +93,7 @@ int main() {
     scene.add(floor);
     scene.add(enclosingBox);
 
-    auto grid = GridHelper::create(16);
+    auto grid = GridHelper::create(floorSize);
     grid->position.y = -0.99f;
     scene.add(grid);
 
@@ -120,9 +123,11 @@ int main() {
     controls.update();
 
     // ---- UI ----
-    bool pathTracerOn = false;
+    bool pathTracerOn = true;
     bool denoiserOn = pathTracer.denoiserEnabled();
+    bool temporalDenoiserOn = pathTracer.temporalDenoiser();
     bool restirOn = pathTracer.restirEnabled();
+    bool restirGIOn = pathTracer.restirGiEnabled();
     bool animateBox = true;
     bool showEnclosingBox = true;
     int maxBounces = pathTracer.maxBounces();
@@ -152,9 +157,6 @@ int main() {
         if (ImGui::Checkbox("AnimateBox", &animateBox)) {
             pathTracer.resetAccumulation();
         }
-        // if (ImGui::Checkbox("EnclosingBox", &showEnclosingBox)) {
-        //     pathTracer.resetAccumulation();
-        // }
 
         if (pathTracerOn && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
@@ -164,8 +166,12 @@ int main() {
 
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);
-            if (ImGui::Checkbox("ReSTIR", &restirOn))
+            if (ImGui::Checkbox("Temporal Denoiser", &temporalDenoiserOn))
+                pathTracer.setTemporalDenoiser(denoiserOn);
+            if (ImGui::Checkbox("ReSTIR DI", &restirOn))
                 pathTracer.setReSTIREnabled(restirOn);
+            if (ImGui::Checkbox("ReSTIR GI", &restirGIOn))
+                pathTracer.setReSTIRGIEnabled(restirGIOn);
             if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8))
                 pathTracer.setMaxBounces(maxBounces);
         }
