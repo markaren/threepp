@@ -4992,18 +4992,45 @@ static void buildBVH(std::vector<float>& triBuffer, int triCount,
         collapseBvh4(binNodes, wideNodes, leafIndices, 0, -1);
     }
 
-    // Sort triangle data to match BVH index ordering
-    std::vector<float> sorted(triBuffer.size(), 0.f);
-    std::vector<float> sortedObj(rawObjTriBuf.size(), 0.f);
-    for (int ni = 0; ni < triCount; ni++) {
-        const int oi = indices[ni];
-        for (int row = 0; row < TRI_TEX_HEIGHT; row++)
-            for (int c = 0; c < 4; c++)
-                sorted[pagedIdx(ni, row) + c] = triBuffer[pagedIdx(oi, row) + c];
-        std::memcpy(sortedObj.data() + ni * 48, rawObjTriBuf.data() + oi * 48, 48 * sizeof(float));
+    // Sort triangle data to match BVH index ordering.
+    // Uses in-place cycle-following permutation to avoid allocating two full copies
+    // (~1.2 GB for large scenes). Extra memory: O(n/8) for the visited bitmap + 2 tri temps.
+    {
+        std::vector<bool> visited(triCount, false);
+        std::vector<float> tmpTri(TRI_TEX_HEIGHT * 4);   // one triangle's worth of triBuffer rows
+        std::array<float, 48> tmpObj{};                   // one triangle's worth of rawObjTriBuf
+
+        for (int i = 0; i < triCount; i++) {
+            if (visited[i]) continue;
+            visited[i] = true;
+            if (indices[i] == i) continue;   // already in place
+
+            // Save element at cycle start
+            for (int row = 0; row < TRI_TEX_HEIGHT; row++)
+                for (int c = 0; c < 4; c++)
+                    tmpTri[row * 4 + c] = triBuffer[pagedIdx(i, row) + c];
+            std::memcpy(tmpObj.data(), rawObjTriBuf.data() + i * 48, 48 * sizeof(float));
+
+            int j = i;
+            while (true) {
+                const int k = indices[j];
+                if (k == i) break;   // cycle closes back to start
+                // Slide A[k] (not yet touched) into A[j]
+                for (int row = 0; row < TRI_TEX_HEIGHT; row++)
+                    for (int c = 0; c < 4; c++)
+                        triBuffer[pagedIdx(j, row) + c] = triBuffer[pagedIdx(k, row) + c];
+                std::memcpy(rawObjTriBuf.data() + j * 48,
+                            rawObjTriBuf.data() + k * 48, 48 * sizeof(float));
+                visited[k] = true;
+                j = k;
+            }
+            // j is the last position in the cycle; receives the saved start element
+            for (int row = 0; row < TRI_TEX_HEIGHT; row++)
+                for (int c = 0; c < 4; c++)
+                    triBuffer[pagedIdx(j, row) + c] = tmpTri[row * 4 + c];
+            std::memcpy(rawObjTriBuf.data() + j * 48, tmpObj.data(), 48 * sizeof(float));
+        }
     }
-    triBuffer = std::move(sorted);
-    rawObjTriBuf = std::move(sortedObj);
 }
 
 }// anonymous namespace
