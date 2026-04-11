@@ -5362,6 +5362,15 @@ struct WgpuPathTracer::Impl {
             uint64_t(INT_MAX)));
     }
 
+    // Pack the stored previous-frame camera vectors into any UBO struct that has
+    // float[4] prevCamOri/Fwd/Rgt/Up fields (RT, TAA, and upscale UBOs all share this layout).
+    void fillPrevCamUbo(float* ori4, float* fwd4, float* rgt4, float* up4) const {
+        ori4[0] = prevCamOri_[0]; ori4[1] = prevCamOri_[1]; ori4[2] = prevCamOri_[2]; ori4[3] = 0.f;
+        fwd4[0] = prevCamFwd_[0]; fwd4[1] = prevCamFwd_[1]; fwd4[2] = prevCamFwd_[2]; fwd4[3] = 0.f;
+        rgt4[0] = prevCamRgt_[0]; rgt4[1] = prevCamRgt_[1]; rgt4[2] = prevCamRgt_[2]; rgt4[3] = 0.f;
+        up4[0]  = prevCamUp_[0];  up4[1]  = prevCamUp_[1];  up4[2]  = prevCamUp_[2];  up4[3]  = 0.f;
+    }
+
     Impl(WgpuRenderer& r, int w, int h)
         : renderer(r),
           device(static_cast<WGPUDevice>(r.nativeDevice())),
@@ -6369,10 +6378,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.camFwd[0] = fwd.x; u.camFwd[1] = fwd.y; u.camFwd[2] = fwd.z;
     u.camRgt[0] = rgt.x; u.camRgt[1] = rgt.y; u.camRgt[2] = rgt.z;
     u.camUp[0] = up.x; u.camUp[1] = up.y; u.camUp[2] = up.z;
-    u.prevCamOri[0] = d.prevCamOri_[0]; u.prevCamOri[1] = d.prevCamOri_[1]; u.prevCamOri[2] = d.prevCamOri_[2];
-    u.prevCamFwd[0] = d.prevCamFwd_[0]; u.prevCamFwd[1] = d.prevCamFwd_[1]; u.prevCamFwd[2] = d.prevCamFwd_[2];
-    u.prevCamRgt[0] = d.prevCamRgt_[0]; u.prevCamRgt[1] = d.prevCamRgt_[1]; u.prevCamRgt[2] = d.prevCamRgt_[2];
-    u.prevCamUp[0]  = d.prevCamUp_[0];  u.prevCamUp[1]  = d.prevCamUp_[1];  u.prevCamUp[2]  = d.prevCamUp_[2];
+    d.fillPrevCamUbo(u.prevCamOri, u.prevCamFwd, u.prevCamRgt, u.prevCamUp);
     u.iRes[0] = static_cast<float>(d.width_);
     u.iRes[1] = static_cast<float>(d.height_);
     u.tanHalfFov[0] = tanHalfFov;
@@ -6823,10 +6829,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         // --- Phase 3: Temporal accumulation ---
         {
             TaaGpuUniforms tu{};
-            tu.prevCamOri[0] = d.prevCamOri_[0]; tu.prevCamOri[1] = d.prevCamOri_[1]; tu.prevCamOri[2] = d.prevCamOri_[2];
-            tu.prevCamFwd[0] = d.prevCamFwd_[0]; tu.prevCamFwd[1] = d.prevCamFwd_[1]; tu.prevCamFwd[2] = d.prevCamFwd_[2];
-            tu.prevCamRgt[0] = d.prevCamRgt_[0]; tu.prevCamRgt[1] = d.prevCamRgt_[1]; tu.prevCamRgt[2] = d.prevCamRgt_[2];
-            tu.prevCamUp[0]  = d.prevCamUp_[0];  tu.prevCamUp[1]  = d.prevCamUp_[1];  tu.prevCamUp[2]  = d.prevCamUp_[2];
+            d.fillPrevCamUbo(tu.prevCamOri, tu.prevCamFwd, tu.prevCamRgt, tu.prevCamUp);
             tu.curCamOri[0] = camPos.x; tu.curCamOri[1] = camPos.y; tu.curCamOri[2] = camPos.z;
             tu.curCamFwd[0] = fwd.x; tu.curCamFwd[1] = fwd.y; tu.curCamFwd[2] = fwd.z;
             tu.curCamRgt[0] = rgt.x; tu.curCamRgt[1] = rgt.y; tu.curCamRgt[2] = rgt.z;
@@ -6899,10 +6902,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // --- TAAU: temporal upscale (active when pixelScale < 0.65, i.e. ≥1.5× upscale) ---
     if (d.pixelScale_ < 0.65f) {
         UpscaleGpuUniforms& uu = d.upscaleUBO;
-        uu.prevCamOri[0] = d.prevCamOri_[0]; uu.prevCamOri[1] = d.prevCamOri_[1]; uu.prevCamOri[2] = d.prevCamOri_[2]; uu.prevCamOri[3] = 0.f;
-        uu.prevCamFwd[0] = d.prevCamFwd_[0]; uu.prevCamFwd[1] = d.prevCamFwd_[1]; uu.prevCamFwd[2] = d.prevCamFwd_[2]; uu.prevCamFwd[3] = 0.f;
-        uu.prevCamRgt[0] = d.prevCamRgt_[0]; uu.prevCamRgt[1] = d.prevCamRgt_[1]; uu.prevCamRgt[2] = d.prevCamRgt_[2]; uu.prevCamRgt[3] = 0.f;
-        uu.prevCamUp[0]  = d.prevCamUp_[0];  uu.prevCamUp[1]  = d.prevCamUp_[1];  uu.prevCamUp[2]  = d.prevCamUp_[2];  uu.prevCamUp[3]  = 0.f;
+        d.fillPrevCamUbo(uu.prevCamOri, uu.prevCamFwd, uu.prevCamRgt, uu.prevCamUp);
         uu.curCamOri[0] = camPos.x; uu.curCamOri[1] = camPos.y; uu.curCamOri[2] = camPos.z; uu.curCamOri[3] = 0.f;
         uu.curCamFwd[0] = fwd.x;    uu.curCamFwd[1] = fwd.y;    uu.curCamFwd[2] = fwd.z;    uu.curCamFwd[3] = 0.f;
         uu.curCamRgt[0] = rgt.x;    uu.curCamRgt[1] = rgt.y;    uu.curCamRgt[2] = rgt.z;    uu.curCamRgt[3] = 0.f;
