@@ -2294,12 +2294,14 @@ R"(
             addSplit(&diffRad, &specRad, throughput * giLo, rt.emissiveInfo.z, 1, firstBounceSpec);
         }
 
-        if (i > 1) {
+        if (i > 0) {
             // Roughness-weighted Russian roulette — smoother surfaces survive longer.
+            // Starts at i > 0 (after primary) so dim throughputs in enclosed scenes
+            // terminate fast instead of burning the full bounce budget.
             let p_base = max(max(throughput.r, throughput.g), throughput.b);
             let rough  = sqrt(h.shininess);
-            let weight = mix(0.6, 1.0, 1.0 - rough);
-            let p = clamp(p_base * weight, 0.05, 1.0);
+            let weight = mix(0.25, 1.0, 1.0 - rough);
+            let p = clamp(p_base * weight, 0.02, 1.0);
             if (rand(seed) > p) { break; }
             throughput /= p;
         }
