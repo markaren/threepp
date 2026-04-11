@@ -32,11 +32,12 @@ namespace {
     auto makePedestal() {
         auto mat = MeshStandardMaterial::create({
                 {"color", Color(0.7f, 0.7f, 0.72f)},
-                {"roughness", 0.3f},
+                {"roughness", 0.6f},
                 {"metalness", 0.0f},
+                {"side", Side::Double},
         });
-        auto mesh = Mesh::create(CylinderGeometry::create(1.0f, 1.2f, 1.5f, 48), mat);
-        mesh->position.set(0.f, 0.75f, 0.f);
+        auto mesh = Mesh::create(CylinderGeometry::create(1.0f, 1.2f, 1.5f, 64), mat);
+        mesh->position.set(0.f, 0.75f - 0.05f, 0.f);
         return mesh;
     }
 
@@ -56,7 +57,8 @@ namespace {
     auto makeBackWall() {
         auto mat = MeshStandardMaterial::create({
                 {"color", Color(0.75f, 0.75f, 0.75f)},
-                {"roughness", 0.9f},
+                {"roughness", 0.01f},
+                {"metalness", 0.9f},
         });
         auto mesh = Mesh::create(BoxGeometry::create(12.f, 8.f, 0.1f), mat);
         mesh->position.set(0.f, 4.f, -5.f);
