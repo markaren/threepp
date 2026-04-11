@@ -964,10 +964,23 @@ fn evalLightRadiance(lightPos: vec3<f32>, lightType: f32, point: vec3<f32>) -> v
 
 // Shadow ray with glass-aware Beer-Lambert volumetric absorption.
 // Returns RGB attenuation (0 = fully occluded, 1 = fully visible).
+//
+// Glass light-leak fix: maxBounces must be large enough to survive passing through
+// a glass object (front + back face = 2 surfaces) AND still test the opaque wall
+// or occluder beyond it.  With maxBounces=2 a single glass sphere exhausts both
+// iterations (si=0: front face, si=1: back face) before the wall is ever checked,
+// so the wall behind is never tested → light leaks through the wall.
+// With maxBounces=4 the shadow ray handles up to 2 glass objects in the path and
+// still has budget left for the first opaque occluder.  All call sites use 4.
+//
+// Origin offset: `normal * 1e-3` keeps the origin just outside the originating
+// surface, preventing self-intersection.  For NdotL > 0 (required for NEE to fire)
+// the shadow direction has a positive outward component, so the convex surface is
+// never re-entered at positive t regardless of offset strategy.
 fn traceShadowRay(origin: vec3<f32>, normal: vec3<f32>, dir: vec3<f32>,
                   maxDist: f32, maxBounces: i32) -> vec3<f32> {
     var sr: Ray;
-    sr.origin = origin + normal * 1e-3;
+    sr.origin = origin + normal * 1e-3;   // stay just outside the originating surface
     sr.dir = dir;
     var atten = vec3<f32>(1.0);
     var glassAttCol = vec3<f32>(1.0);
@@ -1905,7 +1918,7 @@ R"(
             var reservoirShadowAtten = vec3<f32>(0.0);
             if (reservoir.p_hat > 0.0 && reservoir.W > 0.0) {
                 let rd = reservoirLightDir(reservoir.lightPos, reservoir.lightType, h.point);
-                reservoirShadowAtten = traceShadowRay(h.point, h.normal, rd.dir, rd.maxDist, 2);
+                reservoirShadowAtten = traceShadowRay(h.point, h.normal, rd.dir, rd.maxDist, 4);
             }
 
             // === SHADE FROM RESERVOIR (split diffuse/specular) ===
@@ -1950,7 +1963,7 @@ constexpr const char* csPathTraceWGSL2b = R"(
             let le = evalAnalyticalLight(li, h.point);
             let NdotL = dot(h.normal, le.dir);
             if (NdotL <= 0.0) { continue; }
-            let shadowAtten = traceShadowRay(h.point, h.normal, le.dir, le.dist - 1e-3, 2);
+            let shadowAtten = traceShadowRay(h.point, h.normal, le.dir, le.dist - 1e-3, 4);
             if (shadowAtten.x + shadowAtten.y + shadowAtten.z > 0.001) {
                 let cap = rt.emissiveInfo.z;
                 if (i == 0) {
@@ -1984,7 +1997,7 @@ R"(
             let cosLight = abs(dot(es.normal, -ln));
 
             if (NdotL > 0.0 && cosLight > 1e-6) {
-                let emAtten = traceShadowRay(h.point, h.normal, ln, dist - 1e-2, 2);
+                let emAtten = traceShadowRay(h.point, h.normal, ln, dist - 1e-2, 4);
                 if (emAtten.x + emAtten.y + emAtten.z > 0.001) {
                     let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
                     let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
@@ -2019,7 +2032,7 @@ R"(
             let envPdf    = envSample.w;
             let envNdotL  = dot(h.normal, envDir);
             if (envNdotL > 0.0 && envPdf > 1e-8) {
-                let envAtten = traceShadowRay(h.point, h.normal, envDir, 1e30, 2);
+                let envAtten = traceShadowRay(h.point, h.normal, envDir, 1e30, 4);
                 if (envAtten.x + envAtten.y + envAtten.z > 0.001) {
                     let envCol = sampleEnv(envDir) * rt.envIntensity.x;
                     let pdf_brdf_env = brdfPdf(wo, envDir, h.normal, h.shininess, h.metalness);
@@ -2222,7 +2235,7 @@ R"(
             var giVisAtten = vec3<f32>(0.0);
             if (giNdotL > 0.0 && giW > 0.0) {
                 let giDist = length(giSecPos - b0Point);
-                giVisAtten = traceShadowRay(b0Point, b0Normal, giWi, giDist - 1e-3, 2);
+                giVisAtten = traceShadowRay(b0Point, b0Normal, giWi, giDist - 1e-3, 4);
             }
 
             // --- Shade from GI reservoir ---
@@ -5323,9 +5336,6 @@ struct WgpuPathTracer::Impl {
     int  bvhRootIdx_              = 0;    // 0 = normal root; >0 = combined overlay root
     bool pendingConsolidation_    = false;// full rebuild scheduled after append
     int  stableFramesSinceAppend_ = 0;   // frames since last append without topology change
-    // Root AABB saved after full rebuild — needed to build combined-root on first append
-    float bvhRootMinX_ =  1e30f, bvhRootMinY_ =  1e30f, bvhRootMinZ_ =  1e30f;
-    float bvhRootMaxX_ = -1e30f, bvhRootMaxY_ = -1e30f, bvhRootMaxZ_ = -1e30f;
     float pixelScale_ = 1.0f;
     int fullWidth_ = 0;   // unscaled window size
     int fullHeight_ = 0;
@@ -6137,12 +6147,18 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                     combinedRoot.childCount = 2;
                     combinedRoot.numInternalChildren = 2;
                     combinedRoot.childIdx[0] = 0;  // old BVH root
-                    combinedRoot.childMinX[0] = d.bvhRootMinX_;
-                    combinedRoot.childMinY[0] = d.bvhRootMinY_;
-                    combinedRoot.childMinZ[0] = d.bvhRootMinZ_;
-                    combinedRoot.childMaxX[0] = d.bvhRootMaxX_;
-                    combinedRoot.childMaxY[0] = d.bvhRootMaxY_;
-                    combinedRoot.childMaxZ[0] = d.bvhRootMaxZ_;
+                    // Use maximally conservative (infinite) AABB for the old subtree.
+                    // The saved bvhRootMinX_/Max_ are computed from the original root's child
+                    // slot extents which may not tightly bound ALL geometry in that subtree
+                    // (e.g. nodes added later, or float rounding). A too-tight AABB here would
+                    // cause sceneAnyHit to cull shadow rays that should hit the old geometry
+                    // (= light leaking through walls). The cost is one extra AABB test per ray.
+                    combinedRoot.childMinX[0] = -1e30f;
+                    combinedRoot.childMinY[0] = -1e30f;
+                    combinedRoot.childMinZ[0] = -1e30f;
+                    combinedRoot.childMaxX[0] =  1e30f;
+                    combinedRoot.childMaxY[0] =  1e30f;
+                    combinedRoot.childMaxZ[0] =  1e30f;
                     combinedRoot.childIdx[1] = overlayRootNodeIdx;
                     if (!overlayNodes.empty()) {
                         const auto& ov = overlayNodes[0];
@@ -6433,17 +6449,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.pendingConsolidation_ = false;
         d.stableFramesSinceAppend_ = 0;
 
-        // Save root AABB for building combined-root on the first append after this build
-        if (!d.bvhNodes.empty()) {
-            const auto& root = d.bvhNodes[0];
-            d.bvhRootMinX_ = *std::min_element(root.childMinX, root.childMinX + 4);
-            d.bvhRootMinY_ = *std::min_element(root.childMinY, root.childMinY + 4);
-            d.bvhRootMinZ_ = *std::min_element(root.childMinZ, root.childMinZ + 4);
-            d.bvhRootMaxX_ = *std::max_element(root.childMaxX, root.childMaxX + 4);
-            d.bvhRootMaxY_ = *std::max_element(root.childMaxY, root.childMaxY + 4);
-            d.bvhRootMaxZ_ = *std::max_element(root.childMaxZ, root.childMaxZ + 4);
-        }
-
         std::cerr << "[PathTracer] Scene: " << r.triCount << " tris, "
                   << r.numBvhNodes << " BVH nodes, "
                   << r.matCapacity << " materials, "
@@ -6613,6 +6618,28 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
     }
     // Note: camMoved triggers per-pixel reprojection via camMovedFlag (params.w bit 1); no movedBits needed for that.
+
+    // --- Consolidation rebuild: after a fast-append the BVH has an overlay combined-root.
+    // Once the scene has been stable (no topology or matrix changes) for 120 frames (~2 s at
+    // 60 fps), schedule a full rebuild so the BVH reverts to a clean single-root structure.
+    // The rebuild fires by clearing prevMeshes, which makes topoChanged = true next frame.
+    // frameCount_ will reset (brief flash is acceptable — scene has converged by then).
+    if (d.pendingConsolidation_) {
+        if (!topoChanged && !anyMeshMoved) {
+            ++d.stableFramesSinceAppend_;
+            if (d.stableFramesSinceAppend_ >= 120) {
+                std::cerr << "[PathTracer] Consolidation rebuild triggered after "
+                          << d.stableFramesSinceAppend_ << " stable frames\n";
+                d.prevMeshes.clear();       // force topoChanged = true next frame
+                d.pendingConsolidation_    = false;
+                d.stableFramesSinceAppend_ = 0;
+            }
+        } else {
+            // Scene changed again — restart the stable-frame counter so we only
+            // consolidate after a truly quiet period following the last append.
+            d.stableFramesSinceAppend_ = 0;
+        }
+    }
 
     // Compute per-entry motion matrices: prevWorld * inverse(curWorld)
     // Used by TAA to reproject pixels on moving objects to their previous-frame screen position.
