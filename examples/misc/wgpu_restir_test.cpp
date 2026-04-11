@@ -385,7 +385,7 @@ int main() {
     // The path tracer tracks moved meshes in a 64-bit bitmask; meshes at index ≥ 64
     // are silently ignored, so animated emissives beyond that limit never get their
     // accumulation buffer cleared — they smear and dim after frame 0.
-    // auto orbiters = buildOrbiters(scene);
+    auto orbiters = buildOrbiters(scene);
     buildWallDecor(scene);
 
     // Spot lights — used only in raytracer / raster mode for comparison
@@ -410,6 +410,7 @@ int main() {
 
     // ── State ──────────────────────────────────────────────────────────────────
     bool restirOn = pathTracer.restirEnabled();
+    bool restirGiOn = pathTracer.restirGiEnabled();
     bool denoiserOn = pathTracer.denoiserEnabled();
     bool animating = true;
     bool foveated = pathTracer.foveatedRendering();
@@ -424,6 +425,10 @@ int main() {
         if (ev.key == Key::R) {
             restirOn = !restirOn;
             pathTracer.setReSTIREnabled(restirOn);
+        }
+        if (ev.key == Key::G) {
+            restirGiOn = !restirGiOn;
+            pathTracer.setReSTIRGIEnabled(restirGiOn);
         }
         if (ev.key == Key::D) {
             denoiserOn = !denoiserOn;
@@ -447,8 +452,9 @@ int main() {
         ImGui::Text("Frames accumulated: %d", pathTracer.frameCount());
         ImGui::Separator();
 
-        ImGui::TextDisabled("[T] mode  [R] ReSTIR  [D] denoise");
+        ImGui::TextDisabled("[R] ReSTIR DI [G] ReSTIR GI");
         ImGui::TextDisabled("[A] animate  [F] foveated");
+        ImGui::TextDisabled("[D] denoise");
         ImGui::Separator();
 
 
@@ -457,6 +463,8 @@ int main() {
 
         if (ImGui::Checkbox("ReSTIR DI (R)", &restirOn))
             pathTracer.setReSTIREnabled(restirOn);
+        if (ImGui::Checkbox("ReSTIR GI (R)", &restirGiOn))
+            pathTracer.setReSTIRGIEnabled(restirGiOn);
         if (ImGui::Checkbox("Denoiser (D)", &denoiserOn))
             pathTracer.setDenoiserEnabled(denoiserOn);
         if (ImGui::Checkbox("Foveated (F)", &foveated))
@@ -504,11 +512,11 @@ int main() {
         // Animate orbiting emissive lights
         if (animating) {
             orbitTime += dt * 0.35f;
-            // for (auto& o : orbiters) {
-            //     const float a = orbitTime + o.phase;
-            //     o.mesh->position.set(o.radius * std::cos(a), o.height,
-            //                          o.radius * std::sin(a));
-            // }
+            for (auto& o : orbiters) {
+                const float a = orbitTime + o.phase;
+                o.mesh->position.set(o.radius * std::cos(a), o.height,
+                                     o.radius * std::sin(a));
+            }
         }
 
         controls.update();
