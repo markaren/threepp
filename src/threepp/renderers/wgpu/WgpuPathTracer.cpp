@@ -7178,7 +7178,9 @@ float WgpuPathTracer::exposure() const {
 }
 
 void WgpuPathTracer::setDenoiserEnabled(bool enabled) {
+    if (pimpl_->denoiserEnabled_ == enabled) return;
     pimpl_->denoiserEnabled_ = enabled;
+    pimpl_->frameCount_ = 0.f;  // jitter state changes — flush stale history
 }
 
 bool WgpuPathTracer::denoiserEnabled() const {
@@ -7186,7 +7188,9 @@ bool WgpuPathTracer::denoiserEnabled() const {
 }
 
 void WgpuPathTracer::setTemporalDenoiser(bool enabled) {
+    if (pimpl_->temporalDenoiserEnabled_ == enabled) return;
     pimpl_->temporalDenoiserEnabled_ = enabled;
+    pimpl_->frameCount_ = 0.f;
 }
 
 bool WgpuPathTracer::temporalDenoiser() const {
