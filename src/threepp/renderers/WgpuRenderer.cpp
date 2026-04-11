@@ -72,6 +72,9 @@
 #include <emscripten.h>
 #endif
 
+// X11 defines a None macro which breaks one of the enums
+#undef None
+
 // stb_image_write — implementation is already compiled in GLRenderer.cpp.
 // Match the linkage used by the implementation (extern "C" in C++).
 #define STBIWDEF extern "C"
