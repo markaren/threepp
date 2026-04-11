@@ -26,6 +26,7 @@ int main() {
     pathTracer.setFoveatedRendering(false);
     pathTracer.setReSTIREnabled(true);
     pathTracer.setReSTIRGIEnabled(false);
+    pathTracer.setMaxBounces(3);
 
     // ---- Scene objects ----
     TextureLoader tl;
@@ -65,11 +66,12 @@ int main() {
                                           {"metalness", 0.f}}));
     glassSphere->position.set(0.f, 0.2f, 3.f);
 
-    float floorSize = 160.f;
+    float floorSize = 32.f;
     auto floor = Mesh::create(
             PlaneGeometry::create(floorSize, floorSize),
             MeshStandardMaterial::create({{"color", Color::darkgrey},
-                                          {"roughness", 0.99f}}));
+                                          {"roughness", 0.99f},
+                                          {"side", Side::Double}}));
     floor->rotation.x = -math::PI / 2.f;
     floor->position.y = -1.f;
 
@@ -154,7 +156,9 @@ int main() {
         if (pathTracerOn) ImGui::Text("Frames: %d", pathTracer.frameCount());
         ImGui::Separator();
 
-        if (ImGui::Checkbox("AnimateBox", &animateBox)) {
+        ImGui::Checkbox("AnimateBox", &animateBox);
+
+        if (ImGui::Checkbox("EnclosingBox", &showEnclosingBox)) {
             pathTracer.resetAccumulation();
         }
 
@@ -172,7 +176,7 @@ int main() {
                 pathTracer.setReSTIREnabled(restirOn);
             if (ImGui::Checkbox("ReSTIR GI", &restirGIOn))
                 pathTracer.setReSTIRGIEnabled(restirGIOn);
-            if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8))
+            if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 6))
                 pathTracer.setMaxBounces(maxBounces);
         }
 
