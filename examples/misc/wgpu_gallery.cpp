@@ -101,6 +101,13 @@ namespace {
         back->receiveShadow = true;
         group->add(back);
 
+        // Front wall
+        auto front = Mesh::create(PlaneGeometry::create(W, H), matRoughDiffuse(Color(0.75f, 0.75f, 0.75f), 0.9f, Side::Front));
+        front->rotation.y = math::PI;
+        front->position.set(0.f, H / 2.f, D / 2.f);
+        front->receiveShadow = true;
+        group->add(front);
+
         // Solid left wall (shown when window is off)
         auto wallMat = matRoughDiffuse(Color(0.7f, 0.35f, 0.2f), 0.9f, Side::Front);
         auto leftSolid = Mesh::create(PlaneGeometry::create(D, H), wallMat);
@@ -238,6 +245,7 @@ int main() {
     pathTracer.setEnvIntensity(0.0f);
     pathTracer.setExposure(1.0f);
     pathTracer.setDenoiserEnabled(false);
+    pathTracer.setReSTIREnabled(false);
     pathTracer.setMaxBounces(5);
     pathTracer.setFireflyClamp(0);
 
@@ -352,6 +360,7 @@ int main() {
     bool denoiserOn = pathTracer.denoiserEnabled();
     bool foveatOn = pathTracer.foveatedRendering();
     bool restirOn = pathTracer.restirEnabled();
+    bool restirGiOn = pathTracer.restirGiEnabled();
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
     float pixelScale = pathTracer.pixelScale();
@@ -389,9 +398,11 @@ int main() {
                 pathTracer.setDenoiserEnabled(denoiserOn);
             if (ImGui::Checkbox("Foveat", &foveatOn))
                 pathTracer.setFoveatedRendering(foveatOn);
-            if (ImGui::Checkbox("ReSTIR", &restirOn))
+            if (ImGui::Checkbox("ReSTIR DI", &restirOn))
                 pathTracer.setReSTIREnabled(restirOn);
-            if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8))
+            if (ImGui::Checkbox("ReSTIR GI", &restirGiOn))
+                pathTracer.setReSTIRGIEnabled(restirGiOn);
+            if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 6))
                 pathTracer.setMaxBounces(maxBounces);
         }
 
