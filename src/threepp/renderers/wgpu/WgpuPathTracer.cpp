@@ -1474,6 +1474,24 @@ fn giTargetPdf(point: vec3<f32>, normal: vec3<f32>, wo: vec3<f32>,
     return luminance((brdf.f_diff + brdf.f_spec) * NdotL * Lo * G);
 }
 
+// Jacobian of the reconnection shift: ratio of differential solid angles subtended
+// by the secondary hit (secPos/secNorm) as seen from two different primary shading
+// points (fromPrimary = source, toPrimary = current).
+// J = (cosθ_to · d²_from) / (cosθ_from · d²_to)
+// where θ = angle at secNorm vs. direction toward the respective primary.
+// Equals 1 when from == to (static scene).  Clamped to [0, 4] to prevent
+// fireflies from near-grazing secondary hits.
+fn reconnJacobian(secPos: vec3<f32>, secNorm: vec3<f32>,
+                  fromPrimary: vec3<f32>, toPrimary: vec3<f32>) -> f32 {
+    let vFrom = fromPrimary - secPos;
+    let vTo   = toPrimary   - secPos;
+    let d2From = dot(vFrom, vFrom);
+    let d2To   = dot(vTo,   vTo);
+    let cosFrom = abs(dot(secNorm, vFrom) / max(sqrt(d2From), 1e-6));
+    let cosTo   = abs(dot(secNorm, vTo)   / max(sqrt(d2To),   1e-6));
+    return clamp((cosTo * d2From) / max(cosFrom * d2To, 1e-6), 0.0, 4.0);
+}
+
 struct SplitRadiance { diff: vec3<f32>, spec: vec3<f32> }
 )";
 
@@ -2132,7 +2150,8 @@ R"(
                                             prevSecPos, prevSecNorm, prevGiLo),
                                 prevSecDist2 > 0.04);
                             if (giPhatPrev > 0.0 && prevW > 0.0) {
-                                let giWPrev = giPhatPrev * prevM * prevW;
+                                let J = reconnJacobian(prevSecPos, prevSecNorm, giReprojPt, b0Point);
+                                let giWPrev = giPhatPrev * prevM * prevW * J;
                                 giW_sum += giWPrev;
                                 giM += prevM;
                                 if (rand(seed) < giWPrev / max(giW_sum, 1e-20)) {
@@ -2175,6 +2194,16 @@ R"(
                         abs(b0Depth - spSGB.w) / max(b0Depth, 1e-3) > 0.05 ||
                         spMesh != b0MeshIdx) { continue; }
 
+                    // Reconstruct neighbour's previous-frame primary point for Jacobian
+                    let spNdc = vec2<f32>(
+                        (f32(spPx.x) + 0.5) / rt.iRes.x * 2.0 - 1.0,
+                        1.0 - (f32(spPx.y) + 0.5) / rt.iRes.y * 2.0);
+                    let spAspect = rt.iRes.x / rt.iRes.y;
+                    let spDir = normalize(rt.prevCamFwd.xyz
+                        + rt.prevCamRgt.xyz * (spNdc.x * rt.tanHalfFov.x * spAspect)
+                        + rt.prevCamUp.xyz  * (spNdc.y * rt.tanHalfFov.x));
+                    let spPrimary = rt.prevCamOri.xyz + spDir * spSGB.w;
+
                     let spGiSample = textureLoad(giResRead, spPx, 0);
                     let spGiWeight = textureLoad(giResWRead, spPx, 0);
                     let spGiLo     = textureLoad(giResLoRead, spPx, 0).xyz;
@@ -2192,7 +2221,8 @@ R"(
                     let spGiPhat = giTargetPdf(b0Point, b0Normal, b0Wo, b0Albedo, b0Metal, b0Alpha, b0F0,
                                                 spSecPos, spSecNorm, spGiLo);
                     if (spGiPhat > 0.0) {
-                        let spGiW = spGiPhat * spM * spW;
+                        let J = reconnJacobian(spSecPos, spSecNorm, spPrimary, b0Point);
+                        let spGiW = spGiPhat * spM * spW * J;
                         giW_sum += spGiW;
                         giM += spM;
                         if (rand(seed) < spGiW / max(giW_sum, 1e-20)) {
