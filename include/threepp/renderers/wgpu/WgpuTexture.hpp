@@ -43,6 +43,9 @@ namespace threepp {
             RenderAttachment = 1 << 4
         };
 
+        /// Null (empty) texture — no GPU resources allocated. Safe to destroy.
+        WgpuTexture() noexcept = default;
+
         /// Create a GPU texture.
         /// @param renderer WgpuRenderer providing the WebGPU device/queue
         /// @param width Texture width in pixels
@@ -100,7 +103,7 @@ namespace threepp {
         WGPUSampler sampler_ = nullptr;
         uint32_t width_ = 0;
         uint32_t height_ = 0;
-        Format format_;
+        Format format_ = Format::RGBA16Float;
         Dimension dimension_ = Dimension::D2;
         uint32_t layers_ = 1;
         uint32_t bytesPerPixel_ = 0;

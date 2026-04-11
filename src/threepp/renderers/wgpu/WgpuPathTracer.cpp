@@ -5116,6 +5116,18 @@ fn upscale_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 )";
 
 // ---------------------------------------------------------------------------
+// PingPong — ping-pong texture pair with read/write pointer aliases
+// ---------------------------------------------------------------------------
+struct PingPong {
+    WgpuTexture a, b;
+    WgpuTexture* read  = &a;
+    WgpuTexture* write = &b;
+    void swap() { std::swap(read, write); }
+    // Must be called after a/b are recreated (e.g. on viewport resize).
+    void resetPtrs() { read = &a; write = &b; }
+};
+
+// ---------------------------------------------------------------------------
 // WgpuPathTracer::Impl
 // ---------------------------------------------------------------------------
 struct WgpuPathTracer::Impl {
@@ -5131,14 +5143,8 @@ struct WgpuPathTracer::Impl {
     int atlasCols_ = ATLAS_WIDTH / DEFAULT_TILE_SIZE;
     int tileSize_ = DEFAULT_TILE_SIZE;
     int textureResolution_ = DEFAULT_TILE_SIZE;  // user config: 1024 or 2048
-    WgpuTexture accumA;
-    WgpuTexture accumB;
-    WgpuTexture* readAccum;
-    WgpuTexture* writeAccum;
-    WgpuTexture hitMeshA;
-    WgpuTexture hitMeshB;
-    WgpuTexture* readHitMesh;
-    WgpuTexture* writeHitMesh;
+    PingPong accum;
+    PingPong hitMesh;
     WgpuTexture envTexGpu;   // equirectangular env map for IBL (1x1 placeholder when unused)
     WgpuTexture bgTexGpu;   // equirectangular background for ray misses (1x1 placeholder when unused)
     WgpuTexture envCdfTex;  // conditional CDF (width × height), R32Float
@@ -5147,84 +5153,44 @@ struct WgpuPathTracer::Impl {
     Texture*    prevEnvTex_ = nullptr;
     Texture*    prevBgTex_  = nullptr;
 
-    // G-buffer ping-pong
-    WgpuTexture gBufA;          // normal.xyz + depth.w
-    WgpuTexture gBufB;
-    WgpuTexture* gBufCur;       // current frame writes here
-    WgpuTexture* gBufPrev;      // previous frame's G-buffer
+    // G-buffer ping-pong (read = current frame, write = previous frame)
+    PingPong gBuf;
 
     // ReSTIR DI reservoir ping-pong
-    WgpuTexture reservoirA;     // rgba32float — lightPos.xyz + encoded type/index
-    WgpuTexture reservoirB;
-    WgpuTexture reservoirWA;    // rgba32float — W_sum, M, W, p_hat
-    WgpuTexture reservoirWB;
-    WgpuTexture* reservoirRead;
-    WgpuTexture* reservoirWrite;
-    WgpuTexture* reservoirWRead;
-    WgpuTexture* reservoirWWrite;
+    PingPong reservoir;   // rgba32float — lightPos.xyz + encoded type/index
+    PingPong reservoirW;  // rgba32float — W_sum, M, W, p_hat
 
     // ReSTIR GI reservoir ping-pong
-    WgpuTexture giResA;       // rgba32float — secHitPos.xyz + octahedral-packed normal
-    WgpuTexture giResB;
-    WgpuTexture giResWA;      // rgba32float — W_sum, M, W, p_hat
-    WgpuTexture giResWB;
-    WgpuTexture giResLoA;     // rgba16float — Lo radiance at secondary hit
-    WgpuTexture giResLoB;
-    WgpuTexture* giResRead;
-    WgpuTexture* giResWrite;
-    WgpuTexture* giResWRead;
-    WgpuTexture* giResWWrite;
-    WgpuTexture* giResLoRead;
-    WgpuTexture* giResLoWrite;
+    PingPong giRes;    // rgba32float — secHitPos.xyz + octahedral-packed normal
+    PingPong giResW;   // rgba32float — W_sum, M, W, p_hat
+    PingPong giResLo;  // rgba16float — Lo radiance at secondary hit
 
     // Albedo buffer (primary-hit albedo for demodulation/remodulation)
     WgpuTexture albedoTex;
 
     // Temporal variance moments ping-pong (μ, μ² of luminance)
-    WgpuTexture momentsA;
-    WgpuTexture momentsB;
-    WgpuTexture* momentsRead;
-    WgpuTexture* momentsWrite;
+    PingPong moments;
 
     // TAA history ping-pong
-    WgpuTexture taaHistA;       // previous TAA output
-    WgpuTexture taaHistB;
-    WgpuTexture* taaHistRead;
-    WgpuTexture* taaHistWrite;
+    PingPong taaHist;
 
     // Diffuse/specular split accumulation
-    WgpuTexture diffAccumA;
-    WgpuTexture diffAccumB;
-    WgpuTexture* readDiffAccum;
-    WgpuTexture* writeDiffAccum;
-    WgpuTexture specAccumA;
-    WgpuTexture specAccumB;
-    WgpuTexture* readSpecAccum;
-    WgpuTexture* writeSpecAccum;
+    PingPong diffAccum;
+    PingPong specAccum;
 
     // Spatial filter ping-pong (shared between diffuse and specular passes)
-    WgpuTexture filteredA;
-    WgpuTexture filteredB;
+    PingPong filtered;
     // Denoised output textures for display
     WgpuTexture denoisedDiff;
     WgpuTexture denoisedSpec;
 
     // TAA history for split channels
-    WgpuTexture taaHistDiffA;
-    WgpuTexture taaHistDiffB;
-    WgpuTexture* taaHistDiffRead;
-    WgpuTexture* taaHistDiffWrite;
-    WgpuTexture taaHistSpecA;
-    WgpuTexture taaHistSpecB;
-    WgpuTexture* taaHistSpecRead;
-    WgpuTexture* taaHistSpecWrite;
+    PingPong taaHistDiff;
+    PingPong taaHistSpec;
 
     // Temporal upscale (TAAU) — full-res ping-pong, active when pixelScale < 0.85
-    WgpuTexture upscaleTexA;
-    WgpuTexture upscaleTexB;
+    PingPong upscale;
     WgpuTexture zeroTex;           // 1×1 dummy; bound when upscale inactive
-    WgpuTexture* upscaleRead;
-    WgpuTexture* upscaleWrite;
     WgpuComputePipeline upscalePipeline;
     WgpuBuffer          upscaleUniBuf;
     UpscaleGpuUniforms  upscaleUBO{};
@@ -5411,17 +5377,6 @@ struct WgpuPathTracer::Impl {
                       WgpuTexture::Format::RGBA8Unorm,
                       WgpuTexture::Dimension::D2Array,
                       WgpuTexture::TextureBinding | WgpuTexture::CopyDst, 1u),
-          // Accumulation textures
-          accumA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                 WgpuTexture::Format::RGBA16Float),
-          accumB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                 WgpuTexture::Format::RGBA16Float),
-          readAccum(&accumA), writeAccum(&accumB),
-          hitMeshA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                   WgpuTexture::Format::RGBA16Float),
-          hitMeshB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                   WgpuTexture::Format::RGBA16Float),
-          readHitMesh(&hitMeshA), writeHitMesh(&hitMeshB),
           envTexGpu(r, 1u, 1u, WgpuTexture::Format::RGBA8Unorm,
                     WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           bgTexGpu(r, 1u, 1u, WgpuTexture::Format::RGBA8Unorm,
@@ -5430,97 +5385,16 @@ struct WgpuPathTracer::Impl {
                     WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           envMargTex(r, 1u, 1u, WgpuTexture::Format::R32Float,
                      WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
-          // G-buffer ping-pong
-          gBufA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                WgpuTexture::Format::RGBA16Float,
-                WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
-          gBufB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                WgpuTexture::Format::RGBA16Float,
-                WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment),
-          gBufCur(&gBufA), gBufPrev(&gBufB),
-          // ReSTIR DI reservoir ping-pong
-          reservoirA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                     WgpuTexture::Format::RGBA32Float),
-          reservoirB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                     WgpuTexture::Format::RGBA32Float),
-          reservoirWA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                      WgpuTexture::Format::RGBA32Float),
-          reservoirWB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                      WgpuTexture::Format::RGBA32Float),
-          reservoirRead(&reservoirA), reservoirWrite(&reservoirB),
-          reservoirWRead(&reservoirWA), reservoirWWrite(&reservoirWB),
-          // ReSTIR GI reservoir ping-pong
-          giResA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                 WgpuTexture::Format::RGBA32Float),
-          giResB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                 WgpuTexture::Format::RGBA32Float),
-          giResWA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                  WgpuTexture::Format::RGBA32Float),
-          giResWB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                  WgpuTexture::Format::RGBA32Float),
-          giResLoA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                   WgpuTexture::Format::RGBA16Float),
-          giResLoB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                   WgpuTexture::Format::RGBA16Float),
-          giResRead(&giResA), giResWrite(&giResB),
-          giResWRead(&giResWA), giResWWrite(&giResWB),
-          giResLoRead(&giResLoA), giResLoWrite(&giResLoB),
           // Albedo buffer for demodulation
           albedoTex(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                    WgpuTexture::Format::RGBA16Float),
-          // Temporal variance moments ping-pong
-          momentsA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                   WgpuTexture::Format::RGBA16Float),
-          momentsB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                   WgpuTexture::Format::RGBA16Float),
-          momentsRead(&momentsA), momentsWrite(&momentsB),
-          // TAA history ping-pong
-          taaHistA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                   WgpuTexture::Format::RGBA16Float),
-          taaHistB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                   WgpuTexture::Format::RGBA16Float),
-          taaHistRead(&taaHistA), taaHistWrite(&taaHistB),
-          // Diffuse/specular split accumulation
-          diffAccumA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                     WgpuTexture::Format::RGBA16Float),
-          diffAccumB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                     WgpuTexture::Format::RGBA16Float),
-          readDiffAccum(&diffAccumA), writeDiffAccum(&diffAccumB),
-          specAccumA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                     WgpuTexture::Format::RGBA16Float),
-          specAccumB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                     WgpuTexture::Format::RGBA16Float),
-          readSpecAccum(&specAccumA), writeSpecAccum(&specAccumB),
-          // Spatial filter ping-pong
-          filteredA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                    WgpuTexture::Format::RGBA16Float),
-          filteredB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                     WgpuTexture::Format::RGBA16Float),
           denoisedDiff(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                        WgpuTexture::Format::RGBA16Float),
           denoisedSpec(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                        WgpuTexture::Format::RGBA16Float),
-          taaHistDiffA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                       WgpuTexture::Format::RGBA16Float),
-          taaHistDiffB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                       WgpuTexture::Format::RGBA16Float),
-          taaHistDiffRead(&taaHistDiffA), taaHistDiffWrite(&taaHistDiffB),
-          taaHistSpecA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                       WgpuTexture::Format::RGBA16Float),
-          taaHistSpecB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                       WgpuTexture::Format::RGBA16Float),
-          taaHistSpecRead(&taaHistSpecA), taaHistSpecWrite(&taaHistSpecB),
-          // TAAU full-res ping-pong textures
-          upscaleTexA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                      WgpuTexture::Format::RGBA16Float,
-                      WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
-          upscaleTexB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                      WgpuTexture::Format::RGBA16Float,
-                      WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           zeroTex(r, 1u, 1u,
                   WgpuTexture::Format::RGBA16Float,
                   WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
-          upscaleRead(&upscaleTexA), upscaleWrite(&upscaleTexB),
           upscalePipeline(r, upscaleWGSL, "upscale_main"),
           upscaleUniBuf(r, sizeof(UpscaleGpuUniforms)),
           // Denoiser pipelines
@@ -5562,6 +5436,46 @@ struct WgpuPathTracer::Impl {
           width_(w), height_(h),
           fullWidth_(w), fullHeight_(h) {
 
+        // Allocate ping-pong textures (must happen in body; PingPong can't use
+        // member-initializer-list syntax for sub-members)
+        auto ww = static_cast<uint32_t>(w), wh = static_cast<uint32_t>(h);
+        using F = WgpuTexture::Format;
+        constexpr uint32_t STB = WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst;
+        constexpr uint32_t STBR = STB | WgpuTexture::RenderAttachment;
+        accum.a      = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        accum.b      = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        hitMesh.a    = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        hitMesh.b    = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        gBuf.a       = WgpuTexture(r, ww, wh, F::RGBA16Float, STBR);
+        gBuf.b       = WgpuTexture(r, ww, wh, F::RGBA16Float, STBR);
+        reservoir.a  = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        reservoir.b  = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        reservoirW.a = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        reservoirW.b = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        giRes.a      = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        giRes.b      = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        giResW.a     = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        giResW.b     = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        giResLo.a    = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        giResLo.b    = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        moments.a    = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        moments.b    = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        taaHist.a    = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        taaHist.b    = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        diffAccum.a  = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        diffAccum.b  = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        specAccum.a  = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        specAccum.b  = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        filtered.a   = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        filtered.b   = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        taaHistDiff.a = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        taaHistDiff.b = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        taaHistSpec.a = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        taaHistSpec.b = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        upscale.a    = WgpuTexture(r, ww, wh, F::RGBA16Float, STB);
+        upscale.b    = WgpuTexture(r, ww, wh, F::RGBA16Float, STB);
+        // read/write pointers default to &a / &b — no explicit init needed
+
         // Wire compute pipeline bindings
         vtPipeline.setStorageBufferRead(0, objTriBuf);
         vtPipeline.setStorageBufferRead(1, matrixBuf);
@@ -5578,75 +5492,75 @@ struct WgpuPathTracer::Impl {
 
         // RT pipelines — set ALL bindings upfront (per-frame ones get overwritten)
         rtPipeline.setUniformBuffer(0, rtUniformBuf);
-        rtPipeline.setTexture(1, *readAccum);
-        rtPipeline.setStorageTexture(2, *writeAccum);
+        rtPipeline.setTexture(1, *accum.read);
+        rtPipeline.setStorageTexture(2, *accum.write);
         rtPipeline.setStorageBufferRead(3, bvhNodeBuf);
         rtPipeline.setTexture(4, matTex);
         rtPipeline.setTexture(5, triTex);
         rtPipeline.setTexture(6, texAtlasTex);
-        rtPipeline.setTexture(7, *readHitMesh);
-        rtPipeline.setStorageTexture(8, *writeHitMesh);
+        rtPipeline.setTexture(7, *hitMesh.read);
+        rtPipeline.setStorageTexture(8, *hitMesh.write);
         rtPipeline.setTexture(9, envTexGpu);
-        rtPipeline.setStorageTexture(10, *gBufCur);
+        rtPipeline.setStorageTexture(10, *gBuf.read);
         rtPipeline.setStorageBufferRead(11, emissiveTriBuf);
         rtPipeline.setTexture(12, envCdfTex);
         rtPipeline.setTexture(13, envMargTex);
         rtPipeline.setStorageTexture(14, albedoTex);
-        rtPipeline.setTexture(15, *gBufPrev);
+        rtPipeline.setTexture(15, *gBuf.write);
         rtPipeline.setTexture(16, bgTexGpu);
-        rtPipeline.setTexture(17, *reservoirRead);
-        rtPipeline.setStorageTexture(18, *reservoirWrite);
-        rtPipeline.setTexture(19, *reservoirWRead);
-        rtPipeline.setStorageTexture(20, *reservoirWWrite);
-        rtPipeline.setTexture(21, *momentsRead);
-        rtPipeline.setStorageTexture(22, *momentsWrite);
-        rtPipeline.setTexture(23, *readDiffAccum);
-        rtPipeline.setStorageTexture(24, *writeDiffAccum);
-        rtPipeline.setTexture(25, *readSpecAccum);
-        rtPipeline.setStorageTexture(26, *writeSpecAccum);
+        rtPipeline.setTexture(17, *reservoir.read);
+        rtPipeline.setStorageTexture(18, *reservoir.write);
+        rtPipeline.setTexture(19, *reservoirW.read);
+        rtPipeline.setStorageTexture(20, *reservoirW.write);
+        rtPipeline.setTexture(21, *moments.read);
+        rtPipeline.setStorageTexture(22, *moments.write);
+        rtPipeline.setTexture(23, *diffAccum.read);
+        rtPipeline.setStorageTexture(24, *diffAccum.write);
+        rtPipeline.setTexture(25, *specAccum.read);
+        rtPipeline.setStorageTexture(26, *specAccum.write);
         rtPipeline.setStorageBufferRead(27, motionMatBuf);
-        rtPipeline.setTexture(28, *giResRead);
-        rtPipeline.setStorageTexture(29, *giResWrite);
-        rtPipeline.setTexture(30, *giResWRead);
-        rtPipeline.setStorageTexture(31, *giResWWrite);
-        rtPipeline.setTexture(32, *giResLoRead);
-        rtPipeline.setStorageTexture(33, *giResLoWrite);
+        rtPipeline.setTexture(28, *giRes.read);
+        rtPipeline.setStorageTexture(29, *giRes.write);
+        rtPipeline.setTexture(30, *giResW.read);
+        rtPipeline.setStorageTexture(31, *giResW.write);
+        rtPipeline.setTexture(32, *giResLo.read);
+        rtPipeline.setStorageTexture(33, *giResLo.write);
 
         // TAA pipeline — set ALL bindings upfront
         taaPipeline.setUniformBuffer(0, taaUniBuf);
-        taaPipeline.setTexture(1, *readAccum);
-        taaPipeline.setTexture(2, *gBufPrev);
-        taaPipeline.setTexture(3, *taaHistRead);
-        taaPipeline.setStorageTexture(4, *taaHistWrite);
-        taaPipeline.setTexture(5, *readHitMesh);
+        taaPipeline.setTexture(1, *accum.read);
+        taaPipeline.setTexture(2, *gBuf.write);
+        taaPipeline.setTexture(3, *taaHist.read);
+        taaPipeline.setStorageTexture(4, *taaHist.write);
+        taaPipeline.setTexture(5, *hitMesh.read);
         taaPipeline.setStorageBufferRead(6, motionMatBuf);
         taaPipeline.setTexture(7, albedoTex);
-        taaPipeline.setTexture(8, *momentsRead);  // temporally accumulated (E[L], E[L²])
-        taaPipeline.setTexture(9, *gBufCur);      // previous frame g-buffer (depth for revealed-bg check)
+        taaPipeline.setTexture(8, *moments.read);  // temporally accumulated (E[L], E[L²])
+        taaPipeline.setTexture(9, *gBuf.read);      // previous frame g-buffer (depth for revealed-bg check)
 
         // Spatial filter — set ALL bindings upfront
         atrousPipeline.setUniformBuffer(0, atrousUniBuf);
-        atrousPipeline.setTexture(1, *readAccum);
-        atrousPipeline.setStorageTexture(2, *writeAccum);
-        atrousPipeline.setTexture(3, *gBufPrev);
+        atrousPipeline.setTexture(1, *accum.read);
+        atrousPipeline.setStorageTexture(2, *accum.write);
+        atrousPipeline.setTexture(3, *gBuf.write);
         atrousPipeline.setTexture(4, albedoTex);
-        atrousPipeline.setTexture(5, *readHitMesh);
-        atrousPipeline.setTexture(6, *momentsRead);
+        atrousPipeline.setTexture(5, *hitMesh.read);
+        atrousPipeline.setTexture(6, *moments.read);
 
         // Pre-filter pipeline bindings
         preFilterPipeline.setUniformBuffer(0, preFilterUniBuf);
-        preFilterPipeline.setTexture(1, *readDiffAccum);
-        preFilterPipeline.setStorageTexture(2, filteredA);
-        preFilterPipeline.setTexture(3, *gBufPrev);
-        preFilterPipeline.setTexture(4, *readHitMesh);
+        preFilterPipeline.setTexture(1, *diffAccum.read);
+        preFilterPipeline.setStorageTexture(2, filtered.a);
+        preFilterPipeline.setTexture(3, *gBuf.write);
+        preFilterPipeline.setTexture(4, *hitMesh.read);
 
         // TAAU pipeline — initial bindings (per-frame ones refreshed in render)
         upscalePipeline.setUniformBuffer(0, upscaleUniBuf);
         upscalePipeline.setTexture(1, denoisedDiff);
         upscalePipeline.setTexture(2, denoisedSpec);
-        upscalePipeline.setTexture(3, *gBufCur);
-        upscalePipeline.setTexture(4, *upscaleRead);
-        upscalePipeline.setStorageTexture(5, *upscaleWrite);
+        upscalePipeline.setTexture(3, *gBuf.read);
+        upscalePipeline.setTexture(4, *upscale.read);
+        upscalePipeline.setStorageTexture(5, *upscale.write);
 
         // Kick off async shader compilation for the small helper pipelines.
         // The large RT shaders are compiled after the first topology build so that
@@ -5665,14 +5579,14 @@ struct WgpuPathTracer::Impl {
         // Zero-fill accumulators and SVGF textures
         {
             std::vector<float> zeros(w * h * 4, 0.f);
-            accumA.write(zeros.data(), zeros.size() * sizeof(float));
-            accumB.write(zeros.data(), zeros.size() * sizeof(float));
-            gBufA.write(zeros.data(), zeros.size() * sizeof(float));
-            gBufB.write(zeros.data(), zeros.size() * sizeof(float));
-            taaHistA.write(zeros.data(), zeros.size() * sizeof(float));
-            taaHistB.write(zeros.data(), zeros.size() * sizeof(float));
-            momentsA.write(zeros.data(), zeros.size() * sizeof(float));
-            momentsB.write(zeros.data(), zeros.size() * sizeof(float));
+            accum.a.write(zeros.data(), zeros.size() * sizeof(float));
+            accum.b.write(zeros.data(), zeros.size() * sizeof(float));
+            gBuf.a.write(zeros.data(), zeros.size() * sizeof(float));
+            gBuf.b.write(zeros.data(), zeros.size() * sizeof(float));
+            taaHist.a.write(zeros.data(), zeros.size() * sizeof(float));
+            taaHist.b.write(zeros.data(), zeros.size() * sizeof(float));
+            moments.a.write(zeros.data(), zeros.size() * sizeof(float));
+            moments.b.write(zeros.data(), zeros.size() * sizeof(float));
         }
         // Init albedo to white (no demodulation effect until first frame writes real values)
         {
@@ -5682,8 +5596,8 @@ struct WgpuPathTracer::Impl {
         // Fill hitMesh textures with sentinel 128.0f (= "no hit")
         {
             std::vector<float> hitSentinel(w * h * 4, 128.f);
-            hitMeshA.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
-            hitMeshB.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
+            hitMesh.a.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
+            hitMesh.b.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
         }
 
         // Display quad
@@ -5691,10 +5605,10 @@ struct WgpuPathTracer::Impl {
         displayMat = ShaderMaterial::create();
         displayMat->vertexShader = displayWGSL;
         displayMat->fragmentShader = displayWGSL;
-        displayMat->customTextures["accumTex"] = readAccum;
-        displayMat->customTextures["gBufTex"]  = gBufPrev;
-        displayMat->customTextures["diffTex"]      = readDiffAccum;
-        displayMat->customTextures["specTex"]      = readSpecAccum;
+        displayMat->customTextures["accumTex"] = accum.read;
+        displayMat->customTextures["gBufTex"]  = gBuf.write;
+        displayMat->customTextures["diffTex"]      = diffAccum.read;
+        displayMat->customTextures["specTex"]      = specAccum.read;
         displayMat->customTextures["upscaleTex"]   = &zeroTex;
         displayScene.add(Mesh::create(PlaneGeometry::create(2.f, 2.f), displayMat));
 
@@ -5773,137 +5687,137 @@ struct WgpuPathTracer::Impl {
         auto uh = static_cast<uint32_t>(h);
         auto fmt = WgpuTexture::Format::RGBA16Float;
 
-        accumA = WgpuTexture(renderer, uw, uh, fmt);
-        accumB = WgpuTexture(renderer, uw, uh, fmt);
-        readAccum = &accumA;
-        writeAccum = &accumB;
+        accum.a = WgpuTexture(renderer, uw, uh, fmt);
+        accum.b = WgpuTexture(renderer, uw, uh, fmt);
+        accum.read = &accum.a;
+        accum.write = &accum.b;
 
-        hitMeshA = WgpuTexture(renderer, uw, uh, fmt);
-        hitMeshB = WgpuTexture(renderer, uw, uh, fmt);
-        readHitMesh  = &hitMeshA;
-        writeHitMesh = &hitMeshB;
+        hitMesh.a = WgpuTexture(renderer, uw, uh, fmt);
+        hitMesh.b = WgpuTexture(renderer, uw, uh, fmt);
+        hitMesh.read  = &hitMesh.a;
+        hitMesh.write = &hitMesh.b;
 
         const uint32_t gBufUsage = WgpuTexture::Storage | WgpuTexture::TextureBinding
                                  | WgpuTexture::CopyDst | WgpuTexture::RenderAttachment;
-        gBufA = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
-        gBufB = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
-        gBufCur  = &gBufA;
-        gBufPrev = &gBufB;
+        gBuf.a = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
+        gBuf.b = WgpuTexture(renderer, uw, uh, fmt, gBufUsage);
+        gBuf.read  = &gBuf.a;
+        gBuf.write = &gBuf.b;
 
         auto fmt32 = WgpuTexture::Format::RGBA32Float;
-        reservoirA  = WgpuTexture(renderer, uw, uh, fmt32);
-        reservoirB  = WgpuTexture(renderer, uw, uh, fmt32);
-        reservoirWA = WgpuTexture(renderer, uw, uh, fmt32);
-        reservoirWB = WgpuTexture(renderer, uw, uh, fmt32);
-        reservoirRead   = &reservoirA;
-        reservoirWrite  = &reservoirB;
-        reservoirWRead  = &reservoirWA;
-        reservoirWWrite = &reservoirWB;
+        reservoir.a  = WgpuTexture(renderer, uw, uh, fmt32);
+        reservoir.b  = WgpuTexture(renderer, uw, uh, fmt32);
+        reservoirW.a = WgpuTexture(renderer, uw, uh, fmt32);
+        reservoirW.b = WgpuTexture(renderer, uw, uh, fmt32);
+        reservoir.read   = &reservoir.a;
+        reservoir.write  = &reservoir.b;
+        reservoirW.read  = &reservoirW.a;
+        reservoirW.write = &reservoirW.b;
 
-        giResA  = WgpuTexture(renderer, uw, uh, fmt32);
-        giResB  = WgpuTexture(renderer, uw, uh, fmt32);
-        giResWA = WgpuTexture(renderer, uw, uh, fmt32);
-        giResWB = WgpuTexture(renderer, uw, uh, fmt32);
-        giResLoA = WgpuTexture(renderer, uw, uh, fmt);
-        giResLoB = WgpuTexture(renderer, uw, uh, fmt);
-        giResRead   = &giResA;
-        giResWrite  = &giResB;
-        giResWRead  = &giResWA;
-        giResWWrite = &giResWB;
-        giResLoRead  = &giResLoA;
-        giResLoWrite = &giResLoB;
+        giRes.a  = WgpuTexture(renderer, uw, uh, fmt32);
+        giRes.b  = WgpuTexture(renderer, uw, uh, fmt32);
+        giResW.a = WgpuTexture(renderer, uw, uh, fmt32);
+        giResW.b = WgpuTexture(renderer, uw, uh, fmt32);
+        giResLo.a = WgpuTexture(renderer, uw, uh, fmt);
+        giResLo.b = WgpuTexture(renderer, uw, uh, fmt);
+        giRes.read   = &giRes.a;
+        giRes.write  = &giRes.b;
+        giResW.read  = &giResW.a;
+        giResW.write = &giResW.b;
+        giResLo.read  = &giResLo.a;
+        giResLo.write = &giResLo.b;
 
         albedoTex = WgpuTexture(renderer, uw, uh, fmt);
 
-        momentsA = WgpuTexture(renderer, uw, uh, fmt);
-        momentsB = WgpuTexture(renderer, uw, uh, fmt);
-        momentsRead  = &momentsA;
-        momentsWrite = &momentsB;
+        moments.a = WgpuTexture(renderer, uw, uh, fmt);
+        moments.b = WgpuTexture(renderer, uw, uh, fmt);
+        moments.read  = &moments.a;
+        moments.write = &moments.b;
 
-        taaHistA = WgpuTexture(renderer, uw, uh, fmt);
-        taaHistB = WgpuTexture(renderer, uw, uh, fmt);
-        taaHistRead  = &taaHistA;
-        taaHistWrite = &taaHistB;
+        taaHist.a = WgpuTexture(renderer, uw, uh, fmt);
+        taaHist.b = WgpuTexture(renderer, uw, uh, fmt);
+        taaHist.read  = &taaHist.a;
+        taaHist.write = &taaHist.b;
 
-        diffAccumA = WgpuTexture(renderer, uw, uh, fmt);
-        diffAccumB = WgpuTexture(renderer, uw, uh, fmt);
-        readDiffAccum  = &diffAccumA;
-        writeDiffAccum = &diffAccumB;
-        specAccumA = WgpuTexture(renderer, uw, uh, fmt);
-        specAccumB = WgpuTexture(renderer, uw, uh, fmt);
-        readSpecAccum  = &specAccumA;
-        writeSpecAccum = &specAccumB;
+        diffAccum.a = WgpuTexture(renderer, uw, uh, fmt);
+        diffAccum.b = WgpuTexture(renderer, uw, uh, fmt);
+        diffAccum.read  = &diffAccum.a;
+        diffAccum.write = &diffAccum.b;
+        specAccum.a = WgpuTexture(renderer, uw, uh, fmt);
+        specAccum.b = WgpuTexture(renderer, uw, uh, fmt);
+        specAccum.read  = &specAccum.a;
+        specAccum.write = &specAccum.b;
 
-        taaHistDiffA = WgpuTexture(renderer, uw, uh, fmt);
-        taaHistDiffB = WgpuTexture(renderer, uw, uh, fmt);
+        taaHistDiff.a = WgpuTexture(renderer, uw, uh, fmt);
+        taaHistDiff.b = WgpuTexture(renderer, uw, uh, fmt);
         // Workaround: use displayable textures for TAA history ping-pong
         // (taaHistDiff/Spec textures have display issues in WebGPU abstraction)
-        taaHistDiffRead  = &taaHistDiffA;
-        taaHistDiffWrite = &taaHistDiffB;
-        taaHistSpecA = WgpuTexture(renderer, uw, uh, fmt);
-        taaHistSpecB = WgpuTexture(renderer, uw, uh, fmt);
-        taaHistSpecRead  = &taaHistSpecA;
-        taaHistSpecWrite = &taaHistSpecB;
+        taaHistDiff.read  = &taaHistDiff.a;
+        taaHistDiff.write = &taaHistDiff.b;
+        taaHistSpec.a = WgpuTexture(renderer, uw, uh, fmt);
+        taaHistSpec.b = WgpuTexture(renderer, uw, uh, fmt);
+        taaHistSpec.read  = &taaHistSpec.a;
+        taaHistSpec.write = &taaHistSpec.b;
 
-        filteredA = WgpuTexture(renderer, uw, uh, fmt);
-        filteredB = WgpuTexture(renderer, uw, uh, fmt);
+        filtered.a = WgpuTexture(renderer, uw, uh, fmt);
+        filtered.b = WgpuTexture(renderer, uw, uh, fmt);
         denoisedDiff = WgpuTexture(renderer, uw, uh, fmt);
         denoisedSpec = WgpuTexture(renderer, uw, uh, fmt);
 
         std::vector<float> zeros(w * h * 4, 0.f);
-        accumA.write(zeros.data(), zeros.size() * sizeof(float));
-        accumB.write(zeros.data(), zeros.size() * sizeof(float));
-        gBufA.write(zeros.data(), zeros.size() * sizeof(float));
-        gBufB.write(zeros.data(), zeros.size() * sizeof(float));
-        taaHistA.write(zeros.data(), zeros.size() * sizeof(float));
-        taaHistB.write(zeros.data(), zeros.size() * sizeof(float));
-        taaHistDiffA.write(zeros.data(), zeros.size() * sizeof(float));
-        taaHistDiffB.write(zeros.data(), zeros.size() * sizeof(float));
-        taaHistSpecA.write(zeros.data(), zeros.size() * sizeof(float));
-        taaHistSpecB.write(zeros.data(), zeros.size() * sizeof(float));
-        momentsA.write(zeros.data(), zeros.size() * sizeof(float));
-        momentsB.write(zeros.data(), zeros.size() * sizeof(float));
-        diffAccumA.write(zeros.data(), zeros.size() * sizeof(float));
-        diffAccumB.write(zeros.data(), zeros.size() * sizeof(float));
-        specAccumA.write(zeros.data(), zeros.size() * sizeof(float));
-        specAccumB.write(zeros.data(), zeros.size() * sizeof(float));
+        accum.a.write(zeros.data(), zeros.size() * sizeof(float));
+        accum.b.write(zeros.data(), zeros.size() * sizeof(float));
+        gBuf.a.write(zeros.data(), zeros.size() * sizeof(float));
+        gBuf.b.write(zeros.data(), zeros.size() * sizeof(float));
+        taaHist.a.write(zeros.data(), zeros.size() * sizeof(float));
+        taaHist.b.write(zeros.data(), zeros.size() * sizeof(float));
+        taaHistDiff.a.write(zeros.data(), zeros.size() * sizeof(float));
+        taaHistDiff.b.write(zeros.data(), zeros.size() * sizeof(float));
+        taaHistSpec.a.write(zeros.data(), zeros.size() * sizeof(float));
+        taaHistSpec.b.write(zeros.data(), zeros.size() * sizeof(float));
+        moments.a.write(zeros.data(), zeros.size() * sizeof(float));
+        moments.b.write(zeros.data(), zeros.size() * sizeof(float));
+        diffAccum.a.write(zeros.data(), zeros.size() * sizeof(float));
+        diffAccum.b.write(zeros.data(), zeros.size() * sizeof(float));
+        specAccum.a.write(zeros.data(), zeros.size() * sizeof(float));
+        specAccum.b.write(zeros.data(), zeros.size() * sizeof(float));
         denoisedDiff.write(zeros.data(), zeros.size() * sizeof(float));
         denoisedSpec.write(zeros.data(), zeros.size() * sizeof(float));
-        filteredA.write(zeros.data(), zeros.size() * sizeof(float));
-        filteredB.write(zeros.data(), zeros.size() * sizeof(float));
+        filtered.a.write(zeros.data(), zeros.size() * sizeof(float));
+        filtered.b.write(zeros.data(), zeros.size() * sizeof(float));
         std::vector<float> hitSentinel(w * h * 4, 128.f);
-        hitMeshA.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
-        hitMeshB.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
+        hitMesh.a.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
+        hitMesh.b.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
 
-        rtPipeline.setStorageTexture(10, *gBufCur);
-        rtPipeline.setTexture(15, *gBufPrev);
+        rtPipeline.setStorageTexture(10, *gBuf.read);
+        rtPipeline.setTexture(15, *gBuf.write);
         rtPipeline.setStorageTexture(14, albedoTex);
-        rtPipeline.setTexture(17, *reservoirRead);
-        rtPipeline.setStorageTexture(18, *reservoirWrite);
-        rtPipeline.setTexture(19, *reservoirWRead);
-        rtPipeline.setStorageTexture(20, *reservoirWWrite);
-        rtPipeline.setTexture(21, *momentsRead);
-        rtPipeline.setStorageTexture(22, *momentsWrite);
-        rtPipeline.setTexture(23, *readDiffAccum);
-        rtPipeline.setStorageTexture(24, *writeDiffAccum);
-        rtPipeline.setTexture(25, *readSpecAccum);
-        rtPipeline.setStorageTexture(26, *writeSpecAccum);
+        rtPipeline.setTexture(17, *reservoir.read);
+        rtPipeline.setStorageTexture(18, *reservoir.write);
+        rtPipeline.setTexture(19, *reservoirW.read);
+        rtPipeline.setStorageTexture(20, *reservoirW.write);
+        rtPipeline.setTexture(21, *moments.read);
+        rtPipeline.setStorageTexture(22, *moments.write);
+        rtPipeline.setTexture(23, *diffAccum.read);
+        rtPipeline.setStorageTexture(24, *diffAccum.write);
+        rtPipeline.setTexture(25, *specAccum.read);
+        rtPipeline.setStorageTexture(26, *specAccum.write);
         rtPipeline.setStorageBufferRead(27, motionMatBuf);
-        rtPipeline.setTexture(28, *giResRead);
-        rtPipeline.setStorageTexture(29, *giResWrite);
-        rtPipeline.setTexture(30, *giResWRead);
-        rtPipeline.setStorageTexture(31, *giResWWrite);
-        rtPipeline.setTexture(32, *giResLoRead);
-        rtPipeline.setStorageTexture(33, *giResLoWrite);
+        rtPipeline.setTexture(28, *giRes.read);
+        rtPipeline.setStorageTexture(29, *giRes.write);
+        rtPipeline.setTexture(30, *giResW.read);
+        rtPipeline.setStorageTexture(31, *giResW.write);
+        rtPipeline.setTexture(32, *giResLo.read);
+        rtPipeline.setStorageTexture(33, *giResLo.write);
         atrousPipeline.setTexture(4, albedoTex);
-        atrousPipeline.setTexture(6, *momentsRead);
-        preFilterPipeline.setTexture(1, *readDiffAccum);
-        preFilterPipeline.setStorageTexture(2, filteredA);
-        preFilterPipeline.setTexture(3, *gBufPrev);
-        preFilterPipeline.setTexture(4, *readHitMesh);
+        atrousPipeline.setTexture(6, *moments.read);
+        preFilterPipeline.setTexture(1, *diffAccum.read);
+        preFilterPipeline.setStorageTexture(2, filtered.a);
+        preFilterPipeline.setTexture(3, *gBuf.write);
+        preFilterPipeline.setTexture(4, *hitMesh.read);
         taaPipeline.setTexture(7, albedoTex);
-        taaPipeline.setTexture(8, *momentsRead);
-        taaPipeline.setTexture(9, *gBufCur);  // prev frame depth
+        taaPipeline.setTexture(8, *moments.read);
+        taaPipeline.setTexture(9, *gBuf.read);  // prev frame depth
 
         frameCount_ = 0.f;
     }
@@ -5913,13 +5827,13 @@ struct WgpuPathTracer::Impl {
         auto ufh = static_cast<uint32_t>(fh);
         const uint32_t usage = WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst;
         auto fmt = WgpuTexture::Format::RGBA16Float;
-        upscaleTexA = WgpuTexture(renderer, ufw, ufh, fmt, usage);
-        upscaleTexB = WgpuTexture(renderer, ufw, ufh, fmt, usage);
-        upscaleRead  = &upscaleTexA;
-        upscaleWrite = &upscaleTexB;
+        upscale.a = WgpuTexture(renderer, ufw, ufh, fmt, usage);
+        upscale.b = WgpuTexture(renderer, ufw, ufh, fmt, usage);
+        upscale.read  = &upscale.a;
+        upscale.write = &upscale.b;
         std::vector<float> zeros(fw * fh * 4, 0.f);
-        upscaleTexA.write(zeros.data(), zeros.size() * sizeof(float));
-        upscaleTexB.write(zeros.data(), zeros.size() * sizeof(float));
+        upscale.a.write(zeros.data(), zeros.size() * sizeof(float));
+        upscale.b.write(zeros.data(), zeros.size() * sizeof(float));
     }
 
     void resetUpscaleHistory() {
@@ -5928,8 +5842,8 @@ struct WgpuPathTracer::Impl {
         const int fh = fullHeight_;
         if (fw <= 0 || fh <= 0) return;
         std::vector<float> zeros(fw * fh * 4, 0.f);
-        upscaleTexA.write(zeros.data(), zeros.size() * sizeof(float));
-        upscaleTexB.write(zeros.data(), zeros.size() * sizeof(float));
+        upscale.a.write(zeros.data(), zeros.size() * sizeof(float));
+        upscale.b.write(zeros.data(), zeros.size() * sizeof(float));
     }
 };
 
@@ -6344,10 +6258,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
     // Before first build, skip RT dispatch
     if (d.triCount_ == 0) {
-        d.displayMat->customTextures["accumTex"] = d.readAccum;
-        d.displayMat->customTextures["gBufTex"]  = d.gBufPrev;
-        d.displayMat->customTextures["diffTex"]  = d.readDiffAccum;
-        d.displayMat->customTextures["specTex"]  = d.readSpecAccum;
+        d.displayMat->customTextures["accumTex"] = d.accum.read;
+        d.displayMat->customTextures["gBufTex"]  = d.gBuf.write;
+        d.displayMat->customTextures["diffTex"]  = d.diffAccum.read;
+        d.displayMat->customTextures["specTex"]  = d.specAccum.read;
         d.displayMat->uniformsNeedUpdate = true;
         d.renderer.render(d.displayScene, d.displayCam);
         return;
@@ -6740,8 +6654,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.shaderWaitFrames_ = 0;
             // Fall through: isReady() now returns true; encode() will do the fast sync rebuild.
         } else {
-            d.displayMat->customTextures["accumTex"] = d.readAccum;
-            d.displayMat->customTextures["gBufTex"]  = d.gBufPrev;
+            d.displayMat->customTextures["accumTex"] = d.accum.read;
+            d.displayMat->customTextures["gBufTex"]  = d.gBuf.write;
             d.displayMat->uniformsNeedUpdate = true;
             d.renderer.render(d.displayScene, d.displayCam);
             return;
@@ -6774,10 +6688,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.rtUniformBuf.write(&u, sizeof(u));
         }
 
-        activePipeline.setTexture(1, *d.readAccum);
-        activePipeline.setStorageTexture(2, *d.writeAccum);
-        activePipeline.setTexture(7, *d.readHitMesh);
-        activePipeline.setStorageTexture(8, *d.writeHitMesh);
+        activePipeline.setTexture(1, *d.accum.read);
+        activePipeline.setStorageTexture(2, *d.accum.write);
+        activePipeline.setTexture(7, *d.hitMesh.read);
+        activePipeline.setStorageTexture(8, *d.hitMesh.write);
 
         // GPU dispatch
         {
@@ -6821,51 +6735,51 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
 
         // Swap all ping-pong buffers so next sample reads this sample's output
-        std::swap(d.readAccum, d.writeAccum);
-        std::swap(d.readHitMesh, d.writeHitMesh);
-        std::swap(d.readDiffAccum, d.writeDiffAccum);
-        std::swap(d.readSpecAccum, d.writeSpecAccum);
+        d.accum.swap();
+        d.hitMesh.swap();
+        d.diffAccum.swap();
+        d.specAccum.swap();
 
-        std::swap(d.gBufCur, d.gBufPrev);
-        d.rtPipeline.setStorageTexture(10, *d.gBufCur);
-        d.rtPipeline.setTexture(15, *d.gBufPrev);
+        d.gBuf.swap();
+        d.rtPipeline.setStorageTexture(10, *d.gBuf.read);
+        d.rtPipeline.setTexture(15, *d.gBuf.write);
 
-        std::swap(d.reservoirRead, d.reservoirWrite);
-        std::swap(d.reservoirWRead, d.reservoirWWrite);
-        d.rtPipeline.setTexture(17, *d.reservoirRead);
-        d.rtPipeline.setStorageTexture(18, *d.reservoirWrite);
-        d.rtPipeline.setTexture(19, *d.reservoirWRead);
-        d.rtPipeline.setStorageTexture(20, *d.reservoirWWrite);
+        d.reservoir.swap();
+        d.reservoirW.swap();
+        d.rtPipeline.setTexture(17, *d.reservoir.read);
+        d.rtPipeline.setStorageTexture(18, *d.reservoir.write);
+        d.rtPipeline.setTexture(19, *d.reservoirW.read);
+        d.rtPipeline.setStorageTexture(20, *d.reservoirW.write);
 
-        std::swap(d.giResRead, d.giResWrite);
-        std::swap(d.giResWRead, d.giResWWrite);
-        std::swap(d.giResLoRead, d.giResLoWrite);
-        d.rtPipeline.setTexture(28, *d.giResRead);
-        d.rtPipeline.setStorageTexture(29, *d.giResWrite);
-        d.rtPipeline.setTexture(30, *d.giResWRead);
-        d.rtPipeline.setStorageTexture(31, *d.giResWWrite);
-        d.rtPipeline.setTexture(32, *d.giResLoRead);
-        d.rtPipeline.setStorageTexture(33, *d.giResLoWrite);
+        d.giRes.swap();
+        d.giResW.swap();
+        d.giResLo.swap();
+        d.rtPipeline.setTexture(28, *d.giRes.read);
+        d.rtPipeline.setStorageTexture(29, *d.giRes.write);
+        d.rtPipeline.setTexture(30, *d.giResW.read);
+        d.rtPipeline.setStorageTexture(31, *d.giResW.write);
+        d.rtPipeline.setTexture(32, *d.giResLo.read);
+        d.rtPipeline.setStorageTexture(33, *d.giResLo.write);
 
-        std::swap(d.momentsRead, d.momentsWrite);
-        d.rtPipeline.setTexture(21, *d.momentsRead);
-        d.rtPipeline.setStorageTexture(22, *d.momentsWrite);
-        d.rtPipeline.setTexture(23, *d.readDiffAccum);
-        d.rtPipeline.setStorageTexture(24, *d.writeDiffAccum);
-        d.rtPipeline.setTexture(25, *d.readSpecAccum);
-        d.rtPipeline.setStorageTexture(26, *d.writeSpecAccum);
+        d.moments.swap();
+        d.rtPipeline.setTexture(21, *d.moments.read);
+        d.rtPipeline.setStorageTexture(22, *d.moments.write);
+        d.rtPipeline.setTexture(23, *d.diffAccum.read);
+        d.rtPipeline.setStorageTexture(24, *d.diffAccum.write);
+        d.rtPipeline.setTexture(25, *d.specAccum.read);
+        d.rtPipeline.setStorageTexture(26, *d.specAccum.write);
     }
 
     // Update denoiser's moments reference (reads converged moments)
-    d.atrousPipeline.setTexture(6, *d.momentsRead);
+    d.atrousPipeline.setTexture(6, *d.moments.read);
 
     // Spatial denoiser (path tracer mode only) — à-trous wavelet filter on
     // split diffuse/specular channels independently. Each channel gets its own
     // mode (diffuse=0, specular=1) with roughness-adaptive edge-stopping.
     // 3 cascade passes with step sizes 1, 2, 4 give effective 25-pixel radius.
-    WgpuTexture* displayTex = d.readAccum;
-    WgpuTexture* displayDiff = d.readDiffAccum;
-    WgpuTexture* displaySpec = d.readSpecAccum;
+    WgpuTexture* displayTex = d.accum.read;
+    WgpuTexture* displayDiff = d.diffAccum.read;
+    WgpuTexture* displaySpec = d.specAccum.read;
     const bool hasMotion = (movedBits[0] | movedBits[1] | movedBits[2] | movedBits[3]) != 0u;
     const bool needsDenoise = (d.frameCount_ < 64.f || hasMotion || camMoved) && d.aovMode_ == 0;
     if (d.denoiserEnabled_ && needsDenoise && !d.temporalDenoiserEnabled_) {
@@ -6881,8 +6795,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         auto runAtrous = [&](WgpuTexture& srcAccum, WgpuTexture& dstDenoised,
                              WgpuTexture& tmpFiltered, uint32_t mode, int passes) {
             au.mode = mode;
-            d.atrousPipeline.setTexture(3, *d.gBufPrev);
-            d.atrousPipeline.setTexture(5, *d.readHitMesh);
+            d.atrousPipeline.setTexture(3, *d.gBuf.write);
+            d.atrousPipeline.setTexture(5, *d.hitMesh.read);
 
             WgpuTexture* readTex  = &srcAccum;
             for (int p = 0; p < passes; ++p) {
@@ -6896,8 +6810,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             }
         };
 
-        runAtrous(*d.readDiffAccum, d.denoisedDiff, d.filteredA, 0, 2);
-        runAtrous(*d.readSpecAccum, d.denoisedSpec, d.filteredB, 1, 2);
+        runAtrous(*d.diffAccum.read, d.denoisedDiff, d.filtered.a, 0, 2);
+        runAtrous(*d.specAccum.read, d.denoisedSpec, d.filtered.b, 1, 2);
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;
@@ -6926,30 +6840,30 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             tu.movedMeshBits[2] = movedBits[2];
             tu.movedMeshBits[3] = movedBits[3];
 
-            // Diffuse temporal: raw → taaHistDiffWrite, preFiltered = filteredA
+            // Diffuse temporal: raw → taaHistDiff.write, preFiltered = filtered.a
             tu.frameCount[1] = 0.f;  // mode = diffuse
             d.taaUniBuf.write(&tu, sizeof(tu));
-            d.taaPipeline.setTexture(1, *d.readDiffAccum);       // raw 1-spp
-            d.taaPipeline.setTexture(2, *d.gBufPrev);            // current frame g-buffer (after swap: gBufPrev = just-written)
-            d.taaPipeline.setTexture(3, *d.taaHistDiffRead);     // prev temporal history
-            d.taaPipeline.setStorageTexture(4, *d.taaHistDiffWrite);
-            d.taaPipeline.setTexture(5, *d.readHitMesh);
-            d.taaPipeline.setTexture(8, *d.momentsRead);
-            d.taaPipeline.setTexture(9, *d.gBufCur);             // previous frame g-buffer (after swap: gBufCur = prev frame)
+            d.taaPipeline.setTexture(1, *d.diffAccum.read);       // raw 1-spp
+            d.taaPipeline.setTexture(2, *d.gBuf.write);            // current frame g-buffer (after swap: gBuf.write = just-written)
+            d.taaPipeline.setTexture(3, *d.taaHistDiff.read);     // prev temporal history
+            d.taaPipeline.setStorageTexture(4, *d.taaHistDiff.write);
+            d.taaPipeline.setTexture(5, *d.hitMesh.read);
+            d.taaPipeline.setTexture(8, *d.moments.read);
+            d.taaPipeline.setTexture(9, *d.gBuf.read);             // previous frame g-buffer (after swap: gBuf.read = prev frame)
             d.taaPipeline.dispatch(gx, gy);
 
-            // Specular temporal: raw → taaHistSpecWrite
+            // Specular temporal: raw → taaHistSpec.write
             tu.frameCount[1] = 1.f;  // mode = specular
             d.taaUniBuf.write(&tu, sizeof(tu));
-            d.taaPipeline.setTexture(1, *d.readSpecAccum);
-            d.taaPipeline.setTexture(3, *d.taaHistSpecRead);
-            d.taaPipeline.setStorageTexture(4, *d.taaHistSpecWrite);
-            d.taaPipeline.setTexture(8, *d.momentsRead);
+            d.taaPipeline.setTexture(1, *d.specAccum.read);
+            d.taaPipeline.setTexture(3, *d.taaHistSpec.read);
+            d.taaPipeline.setStorageTexture(4, *d.taaHistSpec.write);
+            d.taaPipeline.setTexture(8, *d.moments.read);
             d.taaPipeline.dispatch(gx, gy);
 
             // Swap temporal history ping-pong
-            std::swap(d.taaHistDiffRead, d.taaHistDiffWrite);
-            std::swap(d.taaHistSpecRead, d.taaHistSpecWrite);
+            d.taaHistDiff.swap();
+            d.taaHistSpec.swap();
         }
 
         // --- Phase 4: Spatial cleanup on temporal output ---
@@ -6959,8 +6873,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         auto runAtrous = [&](WgpuTexture& srcAccum, WgpuTexture& dstDenoised,
                              WgpuTexture& tmpFiltered, uint32_t mode, int passes) {
             au.mode = mode;
-            d.atrousPipeline.setTexture(3, *d.gBufPrev);
-            d.atrousPipeline.setTexture(5, *d.readHitMesh);
+            d.atrousPipeline.setTexture(3, *d.gBuf.write);
+            d.atrousPipeline.setTexture(5, *d.hitMesh.read);
             WgpuTexture* readTex = &srcAccum;
             for (int p = 0; p < passes; ++p) {
                 WgpuTexture* writeTex = (p % 2 == 0) ? &dstDenoised : &tmpFiltered;
@@ -6973,10 +6887,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             }
         };
 
-        // Cleanup reads temporal output (taaHistDiffRead/SpecRead after swap = just-written).
-        // Uses filteredA/B as ping-pong temp — safe, temporal already consumed them.
-        runAtrous(*d.taaHistDiffRead, d.denoisedDiff, d.filteredA, 2, 2);  // 2 = diffuse | temporal
-        runAtrous(*d.taaHistSpecRead, d.denoisedSpec, d.filteredB, 3, 2);  // 3 = specular | temporal
+        // Cleanup reads temporal output (taaHistDiff.read/SpecRead after swap = just-written).
+        // Uses filtered.a/B as ping-pong temp — safe, temporal already consumed them.
+        runAtrous(*d.taaHistDiff.read, d.denoisedDiff, d.filtered.a, 2, 2);  // 2 = diffuse | temporal
+        runAtrous(*d.taaHistSpec.read, d.denoisedSpec, d.filtered.b, 3, 2);  // 3 = specular | temporal
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;
@@ -7005,16 +6919,16 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
         d.upscalePipeline.setTexture(1, *displayDiff);
         d.upscalePipeline.setTexture(2, *displaySpec);
-        d.upscalePipeline.setTexture(3, *d.gBufPrev);
-        d.upscalePipeline.setTexture(4, *d.upscaleRead);
-        d.upscalePipeline.setStorageTexture(5, *d.upscaleWrite);
+        d.upscalePipeline.setTexture(3, *d.gBuf.write);
+        d.upscalePipeline.setTexture(4, *d.upscale.read);
+        d.upscalePipeline.setStorageTexture(5, *d.upscale.write);
 
         const int ugx = (d.fullWidth_  + 7) / 8;
         const int ugy = (d.fullHeight_ + 7) / 8;
         d.upscalePipeline.dispatch(ugx, ugy, 1);
-        std::swap(d.upscaleRead, d.upscaleWrite);
+        d.upscale.swap();
 
-        d.displayMat->customTextures["upscaleTex"] = d.upscaleRead;
+        d.displayMat->customTextures["upscaleTex"] = d.upscale.read;
     } else {
         d.displayMat->customTextures["upscaleTex"] = &d.zeroTex;
     }
@@ -7026,7 +6940,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     d.prevCamUp_[0]  = up.x;     d.prevCamUp_[1]  = up.y;     d.prevCamUp_[2]  = up.z;
 
     d.displayMat->customTextures["accumTex"] = displayTex;
-    d.displayMat->customTextures["gBufTex"]  = d.gBufPrev;
+    d.displayMat->customTextures["gBufTex"]  = d.gBuf.write;
     d.displayMat->customTextures["diffTex"]  = displayDiff;
     d.displayMat->customTextures["specTex"]  = displaySpec;
     d.displayMat->uniformsNeedUpdate = true;
@@ -7106,14 +7020,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 dfu.tanHalfFov[0] = tanHalfFov;
                 wgpuQueueWriteBuffer(d.queue, d.depthFillUniBuf_, 0, &dfu, sizeof(dfu));
 
-                // Build bind group: uniform (0) + gBufPrev (1)
+                // Build bind group: uniform (0) + gBuf.write (1)
                 WGPUBindGroupEntry bgEntries[2]{};
                 bgEntries[0].binding = 0;
                 bgEntries[0].buffer  = d.depthFillUniBuf_;
                 bgEntries[0].offset  = 0;
                 bgEntries[0].size    = sizeof(DepthFillUniforms);
                 bgEntries[1].binding    = 1;
-                bgEntries[1].textureView = d.gBufPrev->view();
+                bgEntries[1].textureView = d.gBuf.write->view();
                 WGPUBindGroupDescriptor bgDesc{};
                 bgDesc.layout     = d.depthFillBGL_;
                 bgDesc.entryCount = 2;
