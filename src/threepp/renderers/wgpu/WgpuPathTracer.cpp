@@ -2526,11 +2526,12 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // alternating which half via globalFrameCounter so both patterns are covered across
     // two consecutive frames.  Only during rotation — translation causes parallax that
     // makes stale checkerboard pixels visually wrong (foreground/background mismatch).
-    // Also disabled when any denoiser is active (brightness mismatch with skipped pixels).
+    // When the temporal denoiser is active, skipped pixels write a -1 sentinel so TAA
+    // passes through its history cleanly (no stale data blended in).
     let denoiserOn = rt.spp.z > 0.5;
     let camTranslated = length(rt.camOri.xyz - rt.prevCamOri.xyz) > 1e-5;
     let camMovedEarly = (u32(rt.params.w) & 2u) != 0u;  // params.w bit 1 = camMoved
-    let checkerSkip = !denoiserOn && camMovedEarly && !camTranslated && !isEnvPixel &&
+    let checkerSkip = camMovedEarly && !camTranslated && !isEnvPixel &&
         ((u32(pixel.x) + u32(pixel.y) + u32(rt.params.y)) & 1u) == 0u;
 
     // Foveated/checkerboard skip: pass through previous accumulation unchanged.
@@ -2538,7 +2539,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (foveatedSkip || checkerSkip) {
         let rawMode = rt.restirParams.w > 0.5;
         if (rawMode) {
-            // Raw mode: write sentinel .w = -1 so temporal denoiser knows to pass through history
+            // Raw/temporal-denoiser mode: write sentinel .w = -1 so TAA knows to pass through history
             textureStore(accumWrite,     pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
             textureStore(diffAccumWrite, pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
             textureStore(specAccumWrite, pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
