@@ -127,6 +127,7 @@ struct RtUniforms {
     params:        vec4<f32>,  // x = maxBounces
     emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive power, z = fireflyCap
     restirParams:  vec4<f32>,  // x = enabled, y = M_clamp, z = emissiveMoved, w = reserved
+    bvhAux:        vec4<u32>,  // .x = bvhRootIdx (0 = normal root, >0 = overlay combined root)
 };
 
 struct Bvh4NodeGpu {
@@ -778,7 +779,7 @@ fn sceneHitRaw(ray: Ray, maxT: f32) -> RawHit {
     let invD = vec3<f32>(1.0) / ray.dir;
     var stack: array<i32, 32>;
     var top: i32 = 0;
-    stack[0] = 0; top = 1;
+    stack[0] = i32(rt.bvhAux.x); top = 1;  // bvhAux.x = root node index (0=normal, >0=overlay)
 
     while (top > 0) {
         top -= 1;
@@ -844,7 +845,7 @@ fn sceneAnyHit(ray: Ray, maxT: f32) -> RawHit {
     let invD = vec3<f32>(1.0) / ray.dir;
     var stack: array<i32, 32>;
     var top: i32 = 0;
-    stack[0] = 0; top = 1;
+    stack[0] = i32(rt.bvhAux.x); top = 1;  // bvhAux.x = root node index (0=normal, >0=overlay)
 
     while (top > 0) {
         top -= 1;
@@ -3851,8 +3852,9 @@ struct alignas(16) RtGpuUniforms {
     float    params[4];        // x = maxBounces
     float    emissiveInfo[4]; // x = emissive tri count, y = total emissive power, z = fireflyCap
     float    restirParams[4]; // x = enabled, y = M_clamp, z = reserved, w = reserved
+    uint32_t bvhAux[4];      // [0] = bvhRootIdx (0 = normal root, >0 = overlay combined root)
 };
-static_assert(sizeof(RtGpuUniforms) == 608, "RtGpuUniforms must be 608 bytes");
+static_assert(sizeof(RtGpuUniforms) == 624, "RtGpuUniforms must be 624 bytes");
 
 struct alignas(16) VtGpuUniforms {
     uint32_t triCount, groupsX, splitAt, _p1;
@@ -4217,15 +4219,19 @@ static int buildGeometryBuffers(
         std::vector<float>& matBuffer,
         std::vector<float>& rawObjTriBuf,
         std::vector<float>& matrixBuf,
-        int maxTris, int maxMats, int maxMeshes) {
-    std::ranges::fill(triBuffer, 0.f);
-    std::ranges::fill(matBuffer, 0.f);
-    std::ranges::fill(rawObjTriBuf, 0.f);
-    std::ranges::fill(matrixBuf, 0.f);
+        int maxTris, int maxMats, int maxMeshes,
+        int triOffset = 0, int matOffset = 0, int meshOffset = 0) {
+    // Full build: clear everything.  Append mode (offsets > 0): preserve existing data.
+    if (triOffset == 0 && matOffset == 0 && meshOffset == 0) {
+        std::ranges::fill(triBuffer, 0.f);
+        std::ranges::fill(matBuffer, 0.f);
+        std::ranges::fill(rawObjTriBuf, 0.f);
+        std::ranges::fill(matrixBuf, 0.f);
+    }
 
-    int triCount = 0;
-    int matCount = 0;
-    int meshCount = 0;
+    int triCount = triOffset;
+    int matCount = matOffset;
+    int meshCount = meshOffset;
 
     // Track which Mesh* has already had its material written
     std::unordered_map<Mesh*, int> meshToMatIdx;
@@ -4978,6 +4984,119 @@ static void buildBVH(std::vector<float>& triBuffer, int triCount,
     }
 }
 
+/// Build a BVH for newly appended triangles at indices [oldTriCount, oldTriCount+newTriCount).
+/// Triangles must already be written to triBuffer/rawObjTriBuf at those offsets.
+/// On return, overlayNodes contains the overlay BVH4 tree with leaf triStart values
+/// already offset to global indices.  overlayLeafIndices holds which overlay nodes have
+/// leaf children (local indices, add numOldBvhNodes to get the global offset).
+/// triBuffer and rawObjTriBuf are updated so the new tris are in BVH leaf order.
+static void buildOverlayBVH(
+    std::vector<float>& triBuffer,
+    std::vector<float>& rawObjTriBuf,
+    int oldTriCount, int newTriCount,
+    std::vector<Bvh4Node>& overlayNodes,
+    std::vector<int>& overlayLeafIndices)
+{
+    if (newTriCount <= 0) { overlayNodes.clear(); overlayLeafIndices.clear(); return; }
+
+    // Extract new tris into local buffers (indices 0..newTriCount-1).
+    // localTriBuf must be sized for the paged layout: at least one full page even for small counts.
+    const int localPages = triTexPages(newTriCount);
+    const size_t localTrisWords = static_cast<size_t>(localPages) * TEX_PAGE_WIDTH * TRI_TEX_HEIGHT * 4;
+    const size_t localObjWords  = static_cast<size_t>(newTriCount) * 32;
+    std::vector<float> localTriBuf(localTrisWords, 0.f);
+    std::vector<float> localObjBuf(localObjWords, 0.f);
+
+    for (int li = 0; li < newTriCount; li++) {
+        const int gi = oldTriCount + li;
+        for (int row = 0; row < TRI_TEX_HEIGHT; row++) {
+            const int lp = ((li / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + li % TEX_PAGE_WIDTH) * 4;
+            const int gp = pagedIdx(gi, row);
+            for (int c = 0; c < 4; c++) localTriBuf[lp + c] = triBuffer[gp + c];
+        }
+        std::memcpy(localObjBuf.data() + li * 32, rawObjTriBuf.data() + gi * 32, 32 * sizeof(float));
+    }
+
+    // Build binary BVH over local indices
+    std::vector<int> localIdx(newTriCount);
+    std::iota(localIdx.begin(), localIdx.end(), 0);
+    std::vector<BvhNode> binNodes;
+    binNodes.reserve(newTriCount * 2);
+    buildBvhNode(binNodes, localIdx, localTriBuf, 0, newTriCount, -1);
+
+    // Collapse to BVH4
+    overlayNodes.clear();
+    overlayLeafIndices.clear();
+    if (!binNodes.empty()) {
+        overlayNodes.reserve(binNodes.size() / 2);
+        collapseBvh4(binNodes, overlayNodes, overlayLeafIndices, 0, -1);
+    }
+
+    // Sort local buffers to BVH leaf order (same cycle-permutation as buildBVH)
+    {
+        std::vector<bool> visited(newTriCount, false);
+        std::vector<float> tmpTri(TRI_TEX_HEIGHT * 4);
+        std::array<float, 32> tmpObj{};
+
+        for (int i = 0; i < newTriCount; i++) {
+            if (visited[i]) continue;
+            visited[i] = true;
+            if (localIdx[i] == i) continue;
+
+            for (int row = 0; row < TRI_TEX_HEIGHT; row++)
+                for (int c = 0; c < 4; c++) {
+                    const int lp = ((i / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + i % TEX_PAGE_WIDTH) * 4;
+                    tmpTri[row * 4 + c] = localTriBuf[lp + c];
+                }
+            std::memcpy(tmpObj.data(), localObjBuf.data() + i * 32, 32 * sizeof(float));
+
+            int j = i;
+            while (true) {
+                const int k = localIdx[j];
+                if (k == i) break;
+                for (int row = 0; row < TRI_TEX_HEIGHT; row++)
+                    for (int c = 0; c < 4; c++) {
+                        const int jp = ((j / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + j % TEX_PAGE_WIDTH) * 4;
+                        const int kp = ((k / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + k % TEX_PAGE_WIDTH) * 4;
+                        localTriBuf[jp + c] = localTriBuf[kp + c];
+                    }
+                std::memcpy(localObjBuf.data() + j * 32, localObjBuf.data() + k * 32, 32 * sizeof(float));
+                visited[k] = true;
+                j = k;
+            }
+            for (int row = 0; row < TRI_TEX_HEIGHT; row++)
+                for (int c = 0; c < 4; c++) {
+                    const int jp = ((j / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + j % TEX_PAGE_WIDTH) * 4;
+                    localTriBuf[jp + c] = tmpTri[row * 4 + c];
+                }
+            std::memcpy(localObjBuf.data() + j * 32, tmpObj.data(), 32 * sizeof(float));
+        }
+    }
+
+    // Offset all leaf triStart values in overlayNodes from local to global indices
+    for (auto& node : overlayNodes) {
+        for (int c = 0; c < 4; c++) {
+            const int ci = node.childIdx[c];
+            if (ci >= 0 || ci == INT_MIN) continue;  // internal or empty
+            const int raw = -ci;
+            const int localStart = (raw - 1) / MAX_LEAF_TRIS;
+            const int cnt = ((raw - 1) % MAX_LEAF_TRIS) + 1;
+            node.childIdx[c] = -(((localStart + oldTriCount) * MAX_LEAF_TRIS) + cnt);
+        }
+    }
+
+    // Copy sorted local buffers back to global arrays at offset
+    for (int li = 0; li < newTriCount; li++) {
+        const int gi = oldTriCount + li;
+        for (int row = 0; row < TRI_TEX_HEIGHT; row++) {
+            const int lp = ((li / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + li % TEX_PAGE_WIDTH) * 4;
+            const int gp = pagedIdx(gi, row);
+            for (int c = 0; c < 4; c++) triBuffer[gp + c] = localTriBuf[lp + c];
+        }
+        std::memcpy(rawObjTriBuf.data() + gi * 32, localObjBuf.data() + li * 32, 32 * sizeof(float));
+    }
+}
+
 }// anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -5195,6 +5314,18 @@ struct WgpuPathTracer::Impl {
     int matCapacity_  = INIT_MAT_CAP;
     int meshCapacity_ = INIT_MESH_CAP;
     int bvhCapacity_  = 2 * INIT_TRI_CAP - 1;
+
+    // Actual scene counts (distinct from capacity which includes headroom)
+    int matCount_  = 0;  // number of unique materials/meshes in use
+    int meshCount_ = 0;  // number of mesh entries (instances) in use
+
+    // Overlay BVH state — append-only fast path
+    int  bvhRootIdx_              = 0;    // 0 = normal root; >0 = combined overlay root
+    bool pendingConsolidation_    = false;// full rebuild scheduled after append
+    int  stableFramesSinceAppend_ = 0;   // frames since last append without topology change
+    // Root AABB saved after full rebuild — needed to build combined-root on first append
+    float bvhRootMinX_ =  1e30f, bvhRootMinY_ =  1e30f, bvhRootMinZ_ =  1e30f;
+    float bvhRootMaxX_ = -1e30f, bvhRootMaxY_ = -1e30f, bvhRootMaxZ_ = -1e30f;
     float pixelScale_ = 1.0f;
     int fullWidth_ = 0;   // unscaled window size
     int fullHeight_ = 0;
@@ -5293,6 +5424,8 @@ struct WgpuPathTracer::Impl {
         int meshCapacity = 0;
         int bvhCapacity = 0;
         int objTriSplit = 0;  // split point for two-buffer objTri scheme
+        int matCount = 0;     // actual number of unique materials (matCapacity ≥ matCount)
+        int meshCount = 0;    // actual number of mesh entries (meshCapacity ≥ meshCount)
     };
 #ifndef __EMSCRIPTEN__
     // Async env CDF build
@@ -5900,11 +6033,189 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // Detect topology change (mesh list or instance configuration changed)
     const bool topoChanged = (rtMeshes != d.prevMeshes) || (totalEntryCount != d.prevEntryCount_);
 
+    // --- Append-only fast path ---
+    // If only new meshes were added (none removed), skip the full BVH rebuild and instead
+    // build a small overlay BVH for just the new triangles.  This avoids O(N_total) rebuild
+    // and frameCount_ reset — new objects converge via normal temporal accumulation.
+    // Overlay design: new tris sit at [oldTriCount..] in objTriBuf.  A small sub-BVH is built
+    // for them.  A new combined-root node references both the old root (always node 0) and the
+    // overlay root.  The traversal uniform bvhAux.x is updated to point at the combined root.
+    bool didFastAppend = false;
+    if (topoChanged && !d.prevMeshes.empty() && d.triCount_ > 0 && d.bvhRootIdx_ == 0
+        && !d.matBuffer.empty() && !d.matrixCpuBuf.empty()) {  // mat/matrix buffers kept alive
+        // Check all previous meshes are still present (pure append, no removals)
+        std::unordered_set<Mesh*> prevSet(d.prevMeshes.begin(), d.prevMeshes.end());
+        bool allOldPresent = (rtMeshes.size() >= d.prevMeshes.size());
+        if (allOldPresent) {
+            for (auto* m : d.prevMeshes) {
+                if (std::find(rtMeshes.begin(), rtMeshes.end(), m) == rtMeshes.end()) {
+                    allOldPresent = false; break;
+                }
+            }
+        }
+
+        if (allOldPresent && totalEntryCount >= d.prevEntryCount_) {
+            // Identify new meshes
+            std::vector<Mesh*> addedMeshes;
+            for (auto* m : rtMeshes)
+                if (!prevSet.count(m)) addedMeshes.push_back(m);
+
+            // Update world matrices and expand instances before counting triangles
+            for (auto* m : addedMeshes) m->updateWorldMatrix(true, true);
+            auto addedEntries = expandMeshEntries(addedMeshes);
+
+            // Count total new triangles across all expanded entries (includes instanced copies)
+            int newTris = 0;
+            for (auto& entry : addedEntries) {
+                auto* geo = entry.mesh->geometry().get();
+                auto* idx = geo->getIndex();
+                auto* pos = geo->getAttribute<float>("position");
+                if (!pos) continue;
+                newTris += idx ? static_cast<int>(idx->count()) / 3
+                               : static_cast<int>(pos->count()) / 3;
+            }
+
+            const int oldTriCount = d.triCount_;
+            const int oldBvhNodes = d.numBvhNodes_;
+            const int oldMatCount  = d.matCount_;
+            const int oldMeshCount = d.meshCount_;
+            // Worst-case BVH nodes: ~2 per leaf, max 8 tris per leaf
+            const int projBvhNodes = oldBvhNodes + (newTris / MAX_LEAF_TRIS + 2) * 4;
+
+            // trisFit: check total capacity AND that new tris fit in buffer 1
+            // (fast-append uploads to objTriBuf only; two-buffer overflow not supported here)
+            const bool trisFit = (oldTriCount + newTris) <= d.triCapacity_ &&
+                                 (oldTriCount + newTris) <= d.objTriSplit_;
+            const bool bvhFit  = projBvhNodes <= d.bvhCapacity_;
+            // matsFit: at most one material slot per unique Mesh* (materials are deduplicated by Mesh*)
+            const bool matsFit = (oldMatCount  + static_cast<int>(addedMeshes.size())) <= d.matCapacity_;
+            // meshesFit: one matrix slot per expanded entry (one per instance for InstancedMesh)
+            const bool meshesFit = (oldMeshCount + static_cast<int>(addedEntries.size())) <= d.meshCapacity_;
+
+            if (!addedMeshes.empty() && newTris > 0 && trisFit && bvhFit && matsFit && meshesFit) {
+                // Build new tris into LOCAL temp buffers using local indices (0..newTris-1).
+                // These are small (proportional to newTris, not totalTris).
+                const int localPages = triTexPages(newTris);
+                std::vector<float> localTriBuf(
+                    static_cast<size_t>(TEX_PAGE_WIDTH) * TRI_TEX_HEIGHT * localPages * 4, 0.f);
+                std::vector<float> localObjBuf(static_cast<size_t>(newTris) * 32, 0.f);
+
+                // Build geometry into local buffers.
+                // matOffset and meshOffset are global — new mat/mesh rows go at correct columns
+                // in d.matBuffer and d.matrixCpuBuf (which have 2× headroom and are kept alive).
+                int appendedTris = buildGeometryBuffers(
+                    addedEntries, d.texSlotMap,
+                    localTriBuf, d.matBuffer, localObjBuf, d.matrixCpuBuf,
+                    newTris, d.matCapacity_, d.meshCapacity_,
+                    0 /*triOffset — local*/, oldMatCount, oldMeshCount);
+
+                if (appendedTris == newTris) {
+                    // Build overlay BVH on local buffers (leaf triStart = local 0..newTris-1)
+                    std::vector<Bvh4Node> overlayNodes;
+                    std::vector<int> overlayLeafIndices;
+                    buildOverlayBVH(localTriBuf, localObjBuf, 0, newTris,
+                                    overlayNodes, overlayLeafIndices);
+
+                    // Offset leaf triStart values from local to global (add oldTriCount)
+                    for (auto& node : overlayNodes) {
+                        for (int c = 0; c < 4; c++) {
+                            const int ci = node.childIdx[c];
+                            if (ci >= 0 || ci == INT_MIN) continue;
+                            const int raw = -ci;
+                            const int localStart = (raw - 1) / MAX_LEAF_TRIS;
+                            const int cnt = ((raw - 1) % MAX_LEAF_TRIS) + 1;
+                            node.childIdx[c] = -(((localStart + oldTriCount) * MAX_LEAF_TRIS) + cnt);
+                        }
+                    }
+
+                    const int overlayRootNodeIdx = oldBvhNodes;
+                    const int combinedRootIdx    = oldBvhNodes + static_cast<int>(overlayNodes.size());
+
+                    // Build combined root referencing old root (node 0) and overlay root
+                    Bvh4Node combinedRoot{};
+                    combinedRoot.parent = -1;
+                    combinedRoot.childCount = 2;
+                    combinedRoot.numInternalChildren = 2;
+                    combinedRoot.childIdx[0] = 0;  // old BVH root
+                    combinedRoot.childMinX[0] = d.bvhRootMinX_;
+                    combinedRoot.childMinY[0] = d.bvhRootMinY_;
+                    combinedRoot.childMinZ[0] = d.bvhRootMinZ_;
+                    combinedRoot.childMaxX[0] = d.bvhRootMaxX_;
+                    combinedRoot.childMaxY[0] = d.bvhRootMaxY_;
+                    combinedRoot.childMaxZ[0] = d.bvhRootMaxZ_;
+                    combinedRoot.childIdx[1] = overlayRootNodeIdx;
+                    if (!overlayNodes.empty()) {
+                        const auto& ov = overlayNodes[0];
+                        combinedRoot.childMinX[1] = *std::min_element(ov.childMinX, ov.childMinX + 4);
+                        combinedRoot.childMinY[1] = *std::min_element(ov.childMinY, ov.childMinY + 4);
+                        combinedRoot.childMinZ[1] = *std::min_element(ov.childMinZ, ov.childMinZ + 4);
+                        combinedRoot.childMaxX[1] = *std::max_element(ov.childMaxX, ov.childMaxX + 4);
+                        combinedRoot.childMaxY[1] = *std::max_element(ov.childMaxY, ov.childMaxY + 4);
+                        combinedRoot.childMaxZ[1] = *std::max_element(ov.childMaxZ, ov.childMaxZ + 4);
+                    }
+                    for (int c = 2; c < 4; c++) {
+                        combinedRoot.childIdx[c] = INT_MIN;
+                        combinedRoot.childMinX[c] = 1e30f; combinedRoot.childMinY[c] = 1e30f; combinedRoot.childMinZ[c] = 1e30f;
+                        combinedRoot.childMaxX[c] = -1e30f; combinedRoot.childMaxY[c] = -1e30f; combinedRoot.childMaxZ[c] = -1e30f;
+                    }
+
+                    // Pack overlay nodes + combined root and upload at offset oldBvhNodes
+                    const int packedCount = static_cast<int>(overlayNodes.size()) + 1;
+                    std::vector<Bvh4Node> toPackVec(overlayNodes.begin(), overlayNodes.end());
+                    toPackVec.push_back(combinedRoot);
+                    std::vector<uint32_t> packedBvh(packedCount * BVH4_GPU_U32S, 0u);
+                    packBvh4Buffer(toPackVec, packedBvh, packedCount);
+                    d.bvhNodeBuf.write(packedBvh.data(),
+                        packedCount * BVH4_GPU_U32S * sizeof(uint32_t),
+                        static_cast<size_t>(oldBvhNodes) * BVH4_GPU_U32S * sizeof(uint32_t));
+
+                    // Upload sorted local obj-space triangle data at offset in objTriBuf
+                    d.objTriBuf.write(localObjBuf.data(),
+                        static_cast<size_t>(newTris) * BYTES_PER_TRI,
+                        static_cast<size_t>(oldTriCount) * BYTES_PER_TRI);
+
+                    // Re-upload matBuffer (small, new material rows were appended in-place)
+                    d.matTex.write(d.matBuffer.data(), d.matBuffer.size() * sizeof(float));
+
+                    // Upload new mesh matrix rows (only the new portion)
+                    const int addedMeshCount = static_cast<int>(addedEntries.size());
+                    d.matrixBuf.write(
+                        d.matrixCpuBuf.data() + static_cast<size_t>(oldMeshCount) * 32,
+                        static_cast<size_t>(addedMeshCount) * 32 * sizeof(float),
+                        static_cast<size_t>(oldMeshCount) * 32 * sizeof(float));
+
+                    // Update leaf indices for refit (append overlay leaf node global indices)
+                    for (int li : overlayLeafIndices)
+                        d.leafIndices.push_back(oldBvhNodes + li);
+                    d.leafIndexBuf.write(d.leafIndices.data(), d.leafIndices.size() * sizeof(int));
+
+                    // Update Impl state
+                    d.triCount_   += newTris;
+                    d.matCount_   += static_cast<int>(addedMeshes.size());  // rough: unique meshes
+                    d.meshCount_  += addedMeshCount;
+                    d.numBvhNodes_ = combinedRootIdx + 1;
+                    d.bvhRootIdx_  = combinedRootIdx;
+                    d.pendingConsolidation_    = true;
+                    d.stableFramesSinceAppend_ = 0;
+                    d.prevMeshes = rtMeshes;
+                    d.prevEntryCount_ = totalEntryCount;
+
+                    // Force VT pass next frame — new obj-space triangles need world-space transform
+                    d.firstDispatchPending_ = true;
+
+                    didFastAppend = true;
+                    std::cerr << "[PathTracer] Fast-append: +" << newTris
+                              << " tris, combined root=" << combinedRootIdx << std::endl;
+                }
+            }
+        }
+    }
+
     // Build scene data (BVH, geometry buffers, atlas, emissives) when topology changes.
     // Native: async on background thread.  Emscripten: synchronous (no pthreads).
     bool topoJustFinished = false;
 #ifdef __EMSCRIPTEN__
-    if (topoChanged) {
+    if (topoChanged && !didFastAppend) {
         d.prevMeshes = rtMeshes;
         d.prevEntryCount_ = totalEntryCount;
         auto meshes = rtMeshes;
@@ -5936,14 +6247,16 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         const int meshCount = static_cast<int>(entries.size());
         const int triCap = d.maxTriCap();
         const int maxTotalTris = triCap * 2;  // two split buffers
-        r.triCapacity  = std::clamp(totalTris, 1, maxTotalTris);
+        const int rawTriCap = std::clamp(totalTris, 1, maxTotalTris);
         if (totalTris > maxTotalTris) {
             std::cerr << "[PathTracer] Warning: scene has " << totalTris
                       << " tris, capped to " << maxTotalTris << " (2x GPU buffer limit)\n";
         }
+        // Reserve 50% headroom so append-only topology changes don't require buffer recreation
+        r.triCapacity  = std::min(rawTriCap + rawTriCap / 2, maxTotalTris);
         r.objTriSplit = std::min(r.triCapacity, triCap);  // first buffer holds up to triCap
-        r.matCapacity  = std::max(matCount, 1);
-        r.meshCapacity = std::max(meshCount, 1);
+        r.matCapacity  = std::max(matCount * 2, 1);    // 2× headroom for new materials on append
+        r.meshCapacity = std::max(meshCount * 2, 1);   // 2× headroom for new meshes on append
 
         const int pages = triTexPages(r.triCapacity);
         r.triBuffer.resize(static_cast<size_t>(TEX_PAGE_WIDTH) * TRI_TEX_HEIGHT * pages * 4, 0.f);
@@ -5953,9 +6266,12 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
                                            r.rawObjTriBuf, r.matrixCpuBuf,
                                            r.triCapacity, r.matCapacity, r.meshCapacity);
+        r.matCount  = matCount;   // upper-bound: number of unique meshes (some may share materials)
+        r.meshCount = meshCount;  // number of expanded mesh entries (instances)
         buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
         r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
-        r.bvhCapacity = std::max(r.numBvhNodes, 1);  // at least 1 to avoid 0-byte buffers
+        // Reserve 2× BVH nodes so overlay BVH can be appended without buffer recreation
+        r.bvhCapacity = std::max(r.numBvhNodes * 2, 1);
         r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_U32S, 0u);
         packBvh4Buffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
         r.refitMetaCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_REFIT_INTS, 0);
@@ -5997,7 +6313,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         topoJustFinished = true;
         d.frameCount_ = 0.f;
 #else
-    if (topoChanged) {
+    if (topoChanged && !didFastAppend) {
         d.prevMeshes = rtMeshes;
         d.prevEntryCount_ = totalEntryCount;
 
@@ -6028,14 +6344,16 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         const int meshCount = static_cast<int>(entries.size());
         const int triCap = d.maxTriCap();
         const int maxTotalTris = triCap * 2;  // two split buffers
-        r.triCapacity  = std::clamp(totalTris, 1, maxTotalTris);
+        const int rawTriCap = std::clamp(totalTris, 1, maxTotalTris);
         if (totalTris > maxTotalTris) {
             std::cerr << "[PathTracer] Warning: scene has " << totalTris
                       << " tris, capped to " << maxTotalTris << " (2x GPU buffer limit)\n";
         }
+        // Reserve 50% headroom so append-only topology changes don't require buffer recreation
+        r.triCapacity  = std::min(rawTriCap + rawTriCap / 2, maxTotalTris);
         r.objTriSplit = std::min(r.triCapacity, triCap);  // first buffer holds up to triCap
-        r.matCapacity  = std::max(matCount, 1);
-        r.meshCapacity = std::max(meshCount, 1);
+        r.matCapacity  = std::max(matCount * 2, 1);    // 2× headroom for new materials on append
+        r.meshCapacity = std::max(meshCount * 2, 1);   // 2× headroom for new meshes on append
 
         const int pages = triTexPages(r.triCapacity);
         r.triBuffer.resize(static_cast<size_t>(TEX_PAGE_WIDTH) * TRI_TEX_HEIGHT * pages * 4, 0.f);
@@ -6045,9 +6363,12 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
                                            r.rawObjTriBuf, r.matrixCpuBuf,
                                            r.triCapacity, r.matCapacity, r.meshCapacity);
+        r.matCount  = matCount;   // upper-bound: number of unique meshes (some may share materials)
+        r.meshCount = meshCount;  // number of expanded mesh entries (instances)
         buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
         r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
-        r.bvhCapacity = std::max(r.numBvhNodes, 1);
+        // Reserve 2× BVH nodes so overlay BVH can be appended without buffer recreation
+        r.bvhCapacity = std::max(r.numBvhNodes * 2, 1);
         r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_U32S, 0u);
         packBvh4Buffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
         r.refitMetaCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_REFIT_INTS, 0);
@@ -6106,6 +6427,22 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.objTriSplit_ = r.objTriSplit;
         d.numBvhNodes_ = r.numBvhNodes;
         d.emissiveTriCount_ = r.emissiveTriCount;
+        d.matCount_  = r.matCount;
+        d.meshCount_ = r.meshCount;
+        d.bvhRootIdx_ = 0;          // fresh build always resets to root = node 0
+        d.pendingConsolidation_ = false;
+        d.stableFramesSinceAppend_ = 0;
+
+        // Save root AABB for building combined-root on the first append after this build
+        if (!d.bvhNodes.empty()) {
+            const auto& root = d.bvhNodes[0];
+            d.bvhRootMinX_ = *std::min_element(root.childMinX, root.childMinX + 4);
+            d.bvhRootMinY_ = *std::min_element(root.childMinY, root.childMinY + 4);
+            d.bvhRootMinZ_ = *std::min_element(root.childMinZ, root.childMinZ + 4);
+            d.bvhRootMaxX_ = *std::max_element(root.childMaxX, root.childMaxX + 4);
+            d.bvhRootMaxY_ = *std::max_element(root.childMaxY, root.childMaxY + 4);
+            d.bvhRootMaxZ_ = *std::max_element(root.childMaxZ, root.childMaxZ + 4);
+        }
 
         std::cerr << "[PathTracer] Scene: " << r.triCount << " tris, "
                   << r.numBvhNodes << " BVH nodes, "
@@ -6216,8 +6553,9 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
 
         // Free large CPU-side build buffers now that data lives on GPU.
+        // matBuffer and matrixCpuBuf are kept alive — they're small (~KB) and needed for
+        // the append-only fast path to write new material/mesh-matrix rows.
         { std::vector<float>().swap(d.triBuffer); }
-        { std::vector<float>().swap(d.matBuffer); }
         { std::vector<float>().swap(d.rawObjTriBuf); }
         { std::vector<uint32_t>().swap(d.bvhNodeCpuBuf); }
         { std::vector<int32_t>().swap(d.refitMetaCpuBuf); }
@@ -6561,6 +6899,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.restirParams[1] = 20.f;  // M clamp — lower = crisper shadows, higher = lower variance
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
     u.restirParams[3] = d.temporalDenoiserEnabled_ ? 1.f : 0.f;  // 1 = raw 1-spp output (no EMA)
+    u.bvhAux[0] = static_cast<uint32_t>(d.bvhRootIdx_);  // traversal root (0=normal, >0=overlay)
 
     int nLights = 0;
     auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
