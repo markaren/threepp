@@ -6032,18 +6032,20 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         // (triggered by camMoved flag in params.w). No FC reset needed.
     }
 
-    // Collect visible, non-wireframe, non-line meshes and lights
+    // Collect RT-eligible meshes via full traverse (NOT traverseVisible).
+    // We deliberately ignore Object3D::visible here so the rtMeshes list — and the
+    // BVH that gets built from it — stays stable across .visible toggles.  Hidden
+    // meshes are handled per-frame by overriding their world matrix to translate
+    // them far out of the scene, so the refit pass culls them naturally without
+    // a topology rebuild or fast-append.  Effective visibility (own + ancestors)
+    // is determined in a parallel traverseVisible pass below.
     std::vector<Mesh*> rtMeshes;
-    scene.traverseVisible([&](Object3D& o) {
-        auto* m_ptr = dynamic_cast<Mesh*>(&o);
-        if (!m_ptr) return;
-        auto& m = *m_ptr;
-        if (d.overlayLayer_ >= 0 && m.layers.isEnabled(static_cast<unsigned>(d.overlayLayer_))) return;
+    auto isRtEligibleMaterial = [](Mesh& m) {
         auto* mat = m.material().get();
-        if (!mat->visible) return;
+        if (!mat->visible) return false;
         auto* mww = mat->as<MaterialWithWireframe>();
-        if (mww && mww->wireframe) return;
-        if (mat->is<LineBasicMaterial>()) return;
+        if (mww && mww->wireframe) return false;
+        if (mat->is<LineBasicMaterial>()) return false;
         // Transparent meshes with no texture and no transmission are raster-only
         // overlay effects (e.g. separate clearcoat geometry layers). They have no
         // physical meaning in path tracing and render as opaque shells that occlude
@@ -6054,10 +6056,36 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             const bool hasMap = mwm && mwm->map;
             const bool hasTransmission = mwt && mwt->transmission > 0.f;
             const bool hasBlend = mat->opacity < 0.999f;
-            if (!hasMap && !hasTransmission && !hasBlend) return;
+            if (!hasMap && !hasTransmission && !hasBlend) return false;
         }
+        return true;
+    };
+    scene.traverse([&](Object3D& o) {
+        auto* m_ptr = dynamic_cast<Mesh*>(&o);
+        if (!m_ptr) return;
+        auto& m = *m_ptr;
+        if (d.overlayLayer_ >= 0 && m.layers.isEnabled(static_cast<unsigned>(d.overlayLayer_))) return;
+        if (!isRtEligibleMaterial(m)) return;
         rtMeshes.push_back(&m);
     });
+    // Build the set of meshes that are effectively visible (mesh.visible AND all
+    // ancestors visible).  traverseVisible handles ancestor propagation for free.
+    std::unordered_set<Mesh*> visibleMeshSet;
+    scene.traverseVisible([&](Object3D& o) {
+        if (auto* mp = dynamic_cast<Mesh*>(&o)) visibleMeshSet.insert(mp);
+    });
+    // Hide-by-translate: replace world matrices of effectively-hidden entries
+    // with a far-away pure translation.  Refit then places those triangles' AABB
+    // at ~(1e18,1e18,1e18) where no real ray can reach them.  Visibility flips
+    // become matrix changes which the per-frame diff loop catches and refits —
+    // no BVH topology rebuild / fast-append required.
+    auto applyHideOverride = [&](std::vector<RtMeshEntry>& entries) {
+        Matrix4 hideMat;
+        hideMat.makeTranslation(1e18f, 1e18f, 1e18f);
+        for (auto& e : entries) {
+            if (!visibleMeshSet.count(e.mesh)) e.worldMatrix = hideMat;
+        }
+    };
     std::vector<PointLight*> pointLights;
     scene.traverseType<PointLight>([&](PointLight& l) { if (l.visible) pointLights.push_back(&l); });
     std::vector<DirectionalLight*> dirLights;
@@ -6105,6 +6133,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             // Update world matrices and expand instances before counting triangles
             for (auto* m : addedMeshes) m->updateWorldMatrix(true, true);
             auto addedEntries = expandMeshEntries(addedMeshes);
+            applyHideOverride(addedEntries);
 
             // Count total new triangles across all expanded entries (includes instanced copies)
             int newTris = 0;
@@ -6271,6 +6300,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         // Expand InstancedMesh objects into individual entries
         for (auto* m : meshes) m->updateWorldMatrix(true, true);
         auto entries = expandMeshEntries(meshes);
+        applyHideOverride(entries);
 
         Impl::AsyncBuildResult r;
         r.meshes = meshes;
@@ -6368,6 +6398,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         auto meshes = rtMeshes;
         for (auto* m : meshes) m->updateWorldMatrix(true, true);
         auto entries = expandMeshEntries(meshes);
+        applyHideOverride(entries);
 
         Impl::AsyncBuildResult r;
         r.meshes = meshes;
@@ -6627,6 +6658,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
     // Expand entries for movement detection (uses current world matrices)
     auto rtEntries = expandMeshEntries(rtMeshes);
+    applyHideOverride(rtEntries);
 
     // Detect per-entry matrix changes; build bitmask of which entries moved.
     // movedBits is used by the GPU for per-pixel accumulation reset.
