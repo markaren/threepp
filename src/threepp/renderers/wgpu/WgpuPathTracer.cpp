@@ -51,7 +51,7 @@ namespace {
 constexpr int MAX_TEX_SLOTS = 256;
 constexpr int DEFAULT_TILE_SIZE = 1024;
 constexpr int ATLAS_WIDTH = 8192;  // fixed atlas width; cols = ATLAS_WIDTH / tileSize
-constexpr int TRI_TEX_HEIGHT = 12;
+constexpr int TRI_TEX_HEIGHT = 8;   // rows per tri: pos(3)+nrm(3)+uv0(2) — UV1 and vcols removed
 constexpr int MAT_TEX_HEIGHT = 19;
 constexpr int TEX_PAGE_WIDTH = 8192;
 
@@ -60,9 +60,9 @@ constexpr int INIT_TRI_CAP  = 1;
 constexpr int INIT_MAT_CAP  = 1;
 constexpr int INIT_MESH_CAP = 1;
 
-// objTriBuf is 48 floats (192 bytes) per tri.
+// objTriBuf is 32 floats (128 bytes) per tri (8 fields × vec4).
 // Max tri count is computed at runtime from the device's maxStorageBufferBindingSize.
-constexpr size_t BYTES_PER_TRI = 48 * sizeof(float);  // 192
+constexpr size_t BYTES_PER_TRI = 32 * sizeof(float);  // 128
 
 static int nextPow2(int v) {
     if (v <= 0) return 1;
@@ -82,7 +82,7 @@ static int triTexPages(int triCap) {
 // Shared WGSL definitions used by multiple shaders (VT, refit, RT).
 constexpr const char* csSharedDefsWGSL = R"(
 const TRI_PAGE_W:  i32 = 8192;
-const TRI_PAGE_H:  i32 = 12;
+const TRI_PAGE_H:  i32 = 8;
 const MAX_LEAF_TRIS: i32 = 8;
 
 fn triCoord(ti: i32, row: i32) -> vec2<i32> {
@@ -521,12 +521,7 @@ fn testTriangle(ray: Ray, ti: i32, rh: ptr<function, RawHit>) {
             let iuv0 = vec2<f32>(uv01.x, uv01.y) * w
                      + vec2<f32>(uv01.z, uv01.w) * isect.u
                      + uv2                        * isect.v;
-            let uv1_01 = textureLoad(triData, triCoord(ti, 8), 0);
-            let uv1_2  = textureLoad(triData, triCoord(ti, 9), 0).xy;
-            let iuv1 = vec2<f32>(uv1_01.x, uv1_01.y) * w
-                     + vec2<f32>(uv1_01.z, uv1_01.w) * isect.u
-                     + uv1_2                          * isect.v;
-            let tuv = transformUV(iuv0, iuv1, matIdx, 6);
+            let tuv = transformUV(iuv0, iuv0, matIdx, 6);
             alpha *= sampleAtlasAlpha(tuv, mat1.x);
         }
         if (alphaTest > 0.0) {
@@ -598,20 +593,15 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     let mat2   = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
     let mat3   = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
 
-    // Per-channel transformed UVs — skip UV1 interpolation (2 triData reads) and
-    // all 10 transformUV matData reads when all channels use identity UV0.
+    // Per-channel transformed UVs (UV1 removed; UV0 is the only UV set).
+    // Skip all 10 matData reads when all channels use identity UV0.
     let mat18 = textureLoad(matData, vec2<i32>(matIdx, 18), 0);
     var bcUV = iuv0; var mrUV = iuv0; var nmUV = iuv0; var emUV = iuv0;
     if (mat18.z > 0.5) {
-        let uv1_01 = textureLoad(triData, triCoord(ti, 8), 0);
-        let uv1_2  = textureLoad(triData, triCoord(ti, 9), 0).xy;
-        let iuv1   = vec2<f32>(uv1_01.x, uv1_01.y) * w
-                   + vec2<f32>(uv1_01.z, uv1_01.w) * rh.u
-                   + uv1_2                          * rh.v;
-        bcUV = transformUV(iuv0, iuv1, matIdx, 6);   // baseColor
-        mrUV = transformUV(iuv0, iuv1, matIdx, 8);   // metalRough
-        nmUV = transformUV(iuv0, iuv1, matIdx, 10);  // normal
-        emUV = transformUV(iuv0, iuv1, matIdx, 12);  // emissive
+        bcUV = transformUV(iuv0, iuv0, matIdx, 6);   // baseColor
+        mrUV = transformUV(iuv0, iuv0, matIdx, 8);   // metalRough
+        nmUV = transformUV(iuv0, iuv0, matIdx, 10);  // normal
+        emUV = transformUV(iuv0, iuv0, matIdx, 12);  // emissive
     }
 
     let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
@@ -664,19 +654,10 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     let geoN    = select(sn, geoNcross / geoNlen, geoNlen > 1e-8);
     let geoNorm = select(-geoN, geoN, isFrontFace);
 
-    // Vertex color interpolation
-    let vc01 = textureLoad(triData, triCoord(ti, 10), 0);
-    let vc2  = textureLoad(triData, triCoord(ti, 11), 0);
-    let cb2  = uv2_full.w;
-    let col0 = vec3<f32>(vc01.x, vc01.y, vc01.z);
-    let col1 = vec3<f32>(vc01.w, vc2.x, vc2.y);
-    let col2 = vec3<f32>(vc2.z, vc2.w, cb2);
-    let vcolor = col0 * w + col1 * rh.u + col2 * rh.v;
-
     h.point     = ray.origin + rh.t * ray.dir;
     h.normal    = finalNorm;
     h.geoNormal = geoNorm;
-    h.albedo    = mat0.xyz * vcolor;
+    h.albedo    = mat0.xyz;
     h.shininess = shininess;
     h.uv        = bcUV;
     h.texSlot   = mat1.x;
@@ -772,12 +753,7 @@ fn loadShadowHitMaterial(rh: RawHit, ray: Ray) -> ShadowHit {
     let iuv0 = vec2<f32>(uv01.x, uv01.y) * w
              + vec2<f32>(uv01.z, uv01.w) * rh.u
              + uv2                        * rh.v;
-    let uv1_01 = textureLoad(triData, triCoord(ti, 8), 0);
-    let uv1_2  = textureLoad(triData, triCoord(ti, 9), 0).xy;
-    let iuv1   = vec2<f32>(uv1_01.x, uv1_01.y) * w
-               + vec2<f32>(uv1_01.z, uv1_01.w) * rh.u
-               + uv1_2                          * rh.v;
-    let bcUV = transformUV(iuv0, iuv1, matIdx, 6);
+    let bcUV = transformUV(iuv0, iuv0, matIdx, 6);
     let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
     let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
     let n2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
@@ -2996,11 +2972,7 @@ struct ObjTriData {
     n1:   vec4<f32>,
     n2:   vec4<f32>,
     uv01: vec4<f32>,
-    uv2:  vec4<f32>,
-    uv1_01: vec4<f32>,
-    uv1_2:  vec4<f32>,
-    vcol01: vec4<f32>,  // vertex color: v0.r, v0.g, v0.b, v1.r
-    vcol2:  vec4<f32>,  // vertex color: v1.g, v1.b, v2.r, v2.g  (v2.b in uv2.w)
+    uv2:  vec4<f32>,   // .w unused (was cb2 vertex-color component)
 }
 struct MeshMatrices {
     world:  mat4x4<f32>,
@@ -3043,10 +3015,6 @@ fn vt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     textureStore(triOut, triCoord(ti, 5), vec4<f32>(n2, 0.0));
     textureStore(triOut, triCoord(ti, 6), obj.uv01);
     textureStore(triOut, triCoord(ti, 7), obj.uv2);
-    textureStore(triOut, triCoord(ti, 8), obj.uv1_01);
-    textureStore(triOut, triCoord(ti, 9), obj.uv1_2);
-    textureStore(triOut, triCoord(ti, 10), obj.vcol01);
-    textureStore(triOut, triCoord(ti, 11), obj.vcol2);
 }
 )";
 
@@ -4277,7 +4245,7 @@ static int buildGeometryBuffers(
         buf[idx + 3] = w;
     };
     auto setObj = [&](int ti, int field, float x, float y, float z, float w) {
-        float* p = rawObjTriBuf.data() + ti * 48 + field * 4;
+        float* p = rawObjTriBuf.data() + ti * 32 + field * 4;
         p[0] = x; p[1] = y; p[2] = z; p[3] = w;
     };
 
@@ -4450,8 +4418,6 @@ static int buildGeometryBuffers(
         if (!pos) continue;
         auto* nrm = geo->getAttribute<float>("normal");
         auto* uvs = geo->getAttribute<float>("uv");
-        auto* uv2s = geo->getAttribute<float>("uv2");
-        auto* cols = geo->getAttribute<float>("color");
         auto* idx = geo->getIndex();
 
         auto vert = [&](int i) {
@@ -4476,14 +4442,6 @@ static int buildGeometryBuffers(
             if (!uvs) return {0.f, 0.f};
             return {uvs->getX(i), uvs->getY(i)};
         };
-        auto uv1 = [&](int i) -> std::pair<float, float> {
-            if (!uv2s) return {0.f, 0.f};
-            return {uv2s->getX(i), uv2s->getY(i)};
-        };
-        auto vcol = [&](int i) -> std::tuple<float, float, float> {
-            if (!cols) return {1.f, 1.f, 1.f};
-            return {cols->getX(i), cols->getY(i), cols->getZ(i)};
-        };
         auto vi = [&](int tri, int corner) -> int {
             return idx ? static_cast<int>(idx->getX(tri * 3 + corner)) : tri * 3 + corner;
         };
@@ -4497,12 +4455,6 @@ static int buildGeometryBuffers(
             const auto [u0, v0uv] = uv(i0);
             const auto [u1, v1uv] = uv(i1);
             const auto [u2, v2uv] = uv(i2);
-            const auto [u1_0, v1_0] = uv1(i0);
-            const auto [u1_1, v1_1] = uv1(i1);
-            const auto [u1_2, v1_2] = uv1(i2);
-            const auto [cr0, cg0, cb0] = vcol(i0);
-            const auto [cr1, cg1, cb1] = vcol(i1);
-            const auto [cr2, cg2, cb2] = vcol(i2);
 
             // Use paged layout (matches triGet/pagedIdx/GPU triCoord)
             auto setTri = [&](int row, float x, float y, float z, float w) {
@@ -4517,11 +4469,7 @@ static int buildGeometryBuffers(
             setTri(4, n1.x, n1.y, n1.z, 0.f);
             setTri(5, n2.x, n2.y, n2.z, 0.f);
             setTri(6, u0, v0uv, u1, v1uv);
-            setTri(7, u2, v2uv, 0.f, cb2);
-            setTri(8, u1_0, v1_0, u1_1, v1_1);
-            setTri(9, u1_2, v1_2, 0.f, 0.f);
-            setTri(10, cr0, cg0, cb0, cr1);
-            setTri(11, cg1, cb1, cr2, cg2);
+            setTri(7, u2, v2uv, 0.f, 0.f);
 
             const Vector3 ov0 = objVert(i0), ov1 = objVert(i1), ov2 = objVert(i2);
             const Vector3 on0 = objNorm(i0), on1 = objNorm(i1), on2 = objNorm(i2);
@@ -4532,11 +4480,7 @@ static int buildGeometryBuffers(
             setObj(triCount, 4, on1.x, on1.y, on1.z, 0.f);
             setObj(triCount, 5, on2.x, on2.y, on2.z, 0.f);
             setObj(triCount, 6, u0, v0uv, u1, v1uv);
-            setObj(triCount, 7, u2, v2uv, 0.f, cb2);
-            setObj(triCount, 8, u1_0, v1_0, u1_1, v1_1);
-            setObj(triCount, 9, u1_2, v1_2, 0.f, 0.f);
-            setObj(triCount, 10, cr0, cg0, cb0, cr1);
-            setObj(triCount, 11, cg1, cb1, cr2, cg2);
+            setObj(triCount, 7, u2, v2uv, 0.f, 0.f);
 
             ++triCount;
         }
@@ -4997,8 +4941,8 @@ static void buildBVH(std::vector<float>& triBuffer, int triCount,
     // (~1.2 GB for large scenes). Extra memory: O(n/8) for the visited bitmap + 2 tri temps.
     {
         std::vector<bool> visited(triCount, false);
-        std::vector<float> tmpTri(TRI_TEX_HEIGHT * 4);   // one triangle's worth of triBuffer rows
-        std::array<float, 48> tmpObj{};                   // one triangle's worth of rawObjTriBuf
+        std::vector<float> tmpTri(TRI_TEX_HEIGHT * 4);   // one triangle's worth of triBuffer rows (8*4=32)
+        std::array<float, 32> tmpObj{};                   // one triangle's worth of rawObjTriBuf (32 floats)
 
         for (int i = 0; i < triCount; i++) {
             if (visited[i]) continue;
@@ -5009,7 +4953,7 @@ static void buildBVH(std::vector<float>& triBuffer, int triCount,
             for (int row = 0; row < TRI_TEX_HEIGHT; row++)
                 for (int c = 0; c < 4; c++)
                     tmpTri[row * 4 + c] = triBuffer[pagedIdx(i, row) + c];
-            std::memcpy(tmpObj.data(), rawObjTriBuf.data() + i * 48, 48 * sizeof(float));
+            std::memcpy(tmpObj.data(), rawObjTriBuf.data() + i * 32, 32 * sizeof(float));
 
             int j = i;
             while (true) {
@@ -5019,8 +4963,8 @@ static void buildBVH(std::vector<float>& triBuffer, int triCount,
                 for (int row = 0; row < TRI_TEX_HEIGHT; row++)
                     for (int c = 0; c < 4; c++)
                         triBuffer[pagedIdx(j, row) + c] = triBuffer[pagedIdx(k, row) + c];
-                std::memcpy(rawObjTriBuf.data() + j * 48,
-                            rawObjTriBuf.data() + k * 48, 48 * sizeof(float));
+                std::memcpy(rawObjTriBuf.data() + j * 32,
+                            rawObjTriBuf.data() + k * 32, 32 * sizeof(float));
                 visited[k] = true;
                 j = k;
             }
@@ -5028,7 +4972,7 @@ static void buildBVH(std::vector<float>& triBuffer, int triCount,
             for (int row = 0; row < TRI_TEX_HEIGHT; row++)
                 for (int c = 0; c < 4; c++)
                     triBuffer[pagedIdx(j, row) + c] = tmpTri[row * 4 + c];
-            std::memcpy(rawObjTriBuf.data() + j * 48, tmpObj.data(), 48 * sizeof(float));
+            std::memcpy(rawObjTriBuf.data() + j * 32, tmpObj.data(), 32 * sizeof(float));
         }
     }
 }
@@ -5447,9 +5391,9 @@ struct WgpuPathTracer::Impl {
                         WgpuBuffer::Usage::Storage),
           refitMetaBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * BVH4_REFIT_INTS * sizeof(int32_t),
                        WgpuBuffer::Usage::Storage),
-          objTriBuf(r, static_cast<size_t>(INIT_TRI_CAP) * 48 * sizeof(float),
+          objTriBuf(r, static_cast<size_t>(INIT_TRI_CAP) * 32 * sizeof(float),
                     WgpuBuffer::Usage::Storage),
-          objTriBuf2(r, 192u, WgpuBuffer::Usage::Storage),  // placeholder — grown when needed
+          objTriBuf2(r, 128u, WgpuBuffer::Usage::Storage),  // placeholder — grown when needed
           matrixBuf(r, static_cast<size_t>(INIT_MESH_CAP) * 32 * sizeof(float),
                     WgpuBuffer::Usage::Storage),
           motionMatBuf(r, static_cast<size_t>(INIT_MESH_CAP) * 16 * sizeof(float),
@@ -6003,7 +5947,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         const int pages = triTexPages(r.triCapacity);
         r.triBuffer.resize(static_cast<size_t>(TEX_PAGE_WIDTH) * TRI_TEX_HEIGHT * pages * 4, 0.f);
         r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
-        r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 48, 0.f);
+        r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 32, 0.f);
         r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
         r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
                                            r.rawObjTriBuf, r.matrixCpuBuf,
@@ -6095,7 +6039,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         const int pages = triTexPages(r.triCapacity);
         r.triBuffer.resize(static_cast<size_t>(TEX_PAGE_WIDTH) * TRI_TEX_HEIGHT * pages * 4, 0.f);
         r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
-        r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 48, 0.f);
+        r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 32, 0.f);
         r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
         r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
                                            r.rawObjTriBuf, r.matrixCpuBuf,
@@ -6181,7 +6125,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             const size_t buf2Tris = static_cast<size_t>(std::max(r.triCapacity - r.objTriSplit, 0));
             d.objTriBuf = WgpuBuffer(d.renderer, buf1Tris * BYTES_PER_TRI,
                                       WgpuBuffer::Usage::Storage);
-            d.objTriBuf2 = WgpuBuffer(d.renderer, std::max(buf2Tris * BYTES_PER_TRI, size_t(192)),
+            d.objTriBuf2 = WgpuBuffer(d.renderer, std::max(buf2Tris * BYTES_PER_TRI, size_t(128)),
                                        WgpuBuffer::Usage::Storage);
             d.leafIndexBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.triCapacity) * sizeof(int),
                                          WgpuBuffer::Usage::Storage);
@@ -6259,7 +6203,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             const size_t buf2Tris = totalTris > splitAt ? totalTris - splitAt : 0;
             d.objTriBuf.write(d.rawObjTriBuf.data(), buf1Tris * BYTES_PER_TRI);
             if (buf2Tris > 0) {
-                d.objTriBuf2.write(d.rawObjTriBuf.data() + splitAt * 48, buf2Tris * BYTES_PER_TRI);
+                d.objTriBuf2.write(d.rawObjTriBuf.data() + splitAt * 32, buf2Tris * BYTES_PER_TRI);
             }
         }
         d.leafIndexBuf.write(d.leafIndices.data(), d.leafIndices.size() * sizeof(int));
