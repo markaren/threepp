@@ -2509,8 +2509,8 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // Material-aware camera-motion bounce cap.  During movement (fc==0) reduce
-    // bounces per material class instead of a flat cap of 4 for all pixels.
+    // Material-aware first-frame bounce cap.  On the very first sample (fc==0,
+    // i.e. after forceReset) reduce bounces per material class to warm up faster.
     // Glass/metal/mirror need 4 (refraction chains), diffuse only needs 2.
     var maxBounces = i32(rt.params.x);
     if (fc == 0u) {
@@ -2546,14 +2546,15 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let foveatedSkip = skipMask > 0u && (fc & skipMask) != 0u && !isEnvPixel;
 
-    // Checkerboard skip: during camera movement (fc==0) skip half the pixels each frame,
+    // Checkerboard skip: during camera rotation skip half the pixels each frame,
     // alternating which half via globalFrameCounter so both patterns are covered across
     // two consecutive frames.  Only during rotation — translation causes parallax that
     // makes stale checkerboard pixels visually wrong (foreground/background mismatch).
     // Also disabled when any denoiser is active (brightness mismatch with skipped pixels).
     let denoiserOn = rt.spp.z > 0.5;
     let camTranslated = length(rt.camOri.xyz - rt.prevCamOri.xyz) > 1e-5;
-    let checkerSkip = !denoiserOn && !camTranslated && fc == 0u && !isEnvPixel &&
+    let camMovedEarly = (u32(rt.params.w) & 2u) != 0u;  // params.w bit 1 = camMoved
+    let checkerSkip = !denoiserOn && camMovedEarly && !camTranslated && !isEnvPixel &&
         ((u32(pixel.x) + u32(pixel.y) + u32(rt.params.y)) & 1u) == 0u;
 
     // Foveated/checkerboard skip: pass through previous accumulation unchanged.
@@ -2704,8 +2705,9 @@ R"(
     var prevMomM1 = prevMom.x;
     var prevMomM2 = prevMom.y;
 
-    // Force-reset on mode switch / topology rebuild (params.w flag)
-    let forceReset = rt.params.w > 0.5;
+    // params.w encodes: 1.0=forceReset, 2.0=camMoved, 3.0=both
+    let forceReset = (u32(rt.params.w) & 1u) != 0u;
+    let camMovedFlag = (u32(rt.params.w) & 2u) != 0u;
     if (forceReset) { pixelFC = 0.0; }
 )"
 R"(
@@ -2715,7 +2717,7 @@ R"(
     //       motion matrix to find where this surface point was last frame,
     //       then project into the prev camera's screen space. Lets the TAA
     //       history follow rotating/translating meshes instead of resetting.
-    //   (B) Camera moved (fc == 0u), primary hit a static surface: worldPos is
+    //   (B) Camera moved (camMovedFlag), primary hit a static surface: worldPos is
     //       already in the prev frame's world space, so identity-transform
     //       before prev-camera reprojection.
     // Without the motion-matrix branch, rotating meshes (e.g. a car) get
@@ -2739,10 +2741,10 @@ R"(
     }
 
     // Unified motion-vector reprojection.  Runs when either the camera moved
-    // (fc==0u) OR the primary-hit mesh moved.  Handles both together: if the
+    // (camMovedFlag) OR the primary-hit mesh moved.  Handles both together: if the
     // car rotates AND the camera moves, we compose mesh motion (motionMats)
     // with camera motion (prevCam*) in a single reprojection.
-    if (primaryMoved || fc == 0u) {
+    if (primaryMoved || camMovedFlag) {
         var reprojOk = false;
         if (pixelFC > 0.0 && primaryDepth > 0.0) {
             let worldPos = rt.camOri.xyz + ray.dir * primaryDepth;
@@ -5950,14 +5952,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     Vector3 rgt = Vector3(fwd).cross(Vector3(0.f, 1.f, 0.f)).normalize();
     Vector3 up = Vector3(rgt).cross(fwd);
 
-    // Reset accumulation on camera movement
     const bool camMoved =
             (camPos - d.prevCamPos_).length() > 1e-4f ||
             (fwd - d.prevCamDir_).length() > 1e-4f;
     if (camMoved) {
-        d.frameCount_ = 0.f;
         d.prevCamPos_ = camPos;
         d.prevCamDir_ = fwd;
+        // Both EMA and TAA pipelines handle camera motion via per-pixel reprojection
+        // (triggered by camMoved flag in params.w). No FC reset needed.
     }
 
     // Collect visible, non-wireframe, non-line meshes and lights
@@ -6377,7 +6379,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             }
         }
     }
-    // Note: camMoved resets all pixels via fc==0u in the shader; no movedBits needed for that.
+    // Note: camMoved triggers per-pixel reprojection via camMovedFlag (params.w bit 1); no movedBits needed for that.
 
     // Compute per-entry motion matrices: prevWorld * inverse(curWorld)
     // Used by TAA to reproject pixels on moving objects to their previous-frame screen position.
@@ -6648,7 +6650,15 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.params[0] = static_cast<float>(d.maxBounces_);
     u.params[1] = static_cast<float>(d.globalFrameCounter_++);
     u.params[2] = (d.foveatedEnabled_ && d.frameCount_ > 0.f) ? 1.f : 0.f;
-    u.params[3] = (d.frameCount_ == 0.f) ? 1.f : 0.f;  // force-reset accum on first frame
+    // params.w encodes two boolean flags:
+    //   1.0 = forceReset (first frame / topology rebuild)
+    //   2.0 = camMoved   (camera translated/rotated this frame)
+    //   3.0 = both
+    {
+        const float fr = (d.frameCount_ == 0.f) ? 1.f : 0.f;
+        const float cm = camMoved ? 2.f : 0.f;
+        u.params[3] = fr + cm;
+    }
     u.emissiveInfo[0] = static_cast<float>(d.emissiveTriCount_);
     u.emissiveInfo[1] = d.emissiveTotalPower_;
     u.emissiveInfo[2] = d.fireflyCap_;  // luminance cap for indirect MIS contributions
@@ -6857,7 +6867,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     WgpuTexture* displayDiff = d.readDiffAccum;
     WgpuTexture* displaySpec = d.readSpecAccum;
     const bool hasMotion = (movedBits[0] | movedBits[1] | movedBits[2] | movedBits[3]) != 0u;
-    const bool needsDenoise = (d.frameCount_ < 64.f || hasMotion) && d.aovMode_ == 0;
+    const bool needsDenoise = (d.frameCount_ < 64.f || hasMotion || camMoved) && d.aovMode_ == 0;
     if (d.denoiserEnabled_ && needsDenoise && !d.temporalDenoiserEnabled_) {
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
