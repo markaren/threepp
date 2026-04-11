@@ -142,6 +142,7 @@ int main(int argc, char** argv) {
                     });
                     result->traverseType<Light>([&](Light& l) {
                         l.visible = true;
+                        l.intensity = std::max(l.intensity, 1.0f);
                     });
                 }
                 if (!hasMesh) {
@@ -181,6 +182,7 @@ int main(int argc, char** argv) {
     bool dirLight = light->visible;
     bool denoiserOn = pathTracer.denoiserEnabled();
     bool restdirOn = pathTracer.restirEnabled();
+    bool restdirGIOn = pathTracer.restirGiEnabled();
     float exposure = pathTracer.exposure();
     float envIntensity = pathTracer.envIntensity();
     float fps = 0.f, fpsAccum = 0.f;
@@ -234,8 +236,10 @@ int main(int argc, char** argv) {
         if (!raster && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);
-            if (ImGui::Checkbox("REsTDIR", &restdirOn))
+            if (ImGui::Checkbox("REsTDIR DI", &restdirOn))
                 pathTracer.setReSTIREnabled(restdirOn);
+            if (ImGui::Checkbox("REsTDIR GI", &restdirGIOn))
+                pathTracer.setReSTIRGIEnabled(restdirGIOn);
 
             if (ImGui::Checkbox("Show DirLight", &dirLight)) {
                 light->visible = dirLight;

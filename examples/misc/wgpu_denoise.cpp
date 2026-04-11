@@ -102,8 +102,9 @@ int main() {
     pathTracer.setEnvIntensity(0.0f);
     pathTracer.setExposure(1.0f);
     pathTracer.setDenoiserEnabled(true);
-    pathTracer.setMaxBounces(6);
+    pathTracer.setMaxBounces(4);
     pathTracer.setReSTIREnabled(true);
+    pathTracer.setReSTIRGIEnabled(true);
     // pathTracer.setFireflyClamp(0.001);
 
     // ---- Scene ----
@@ -152,7 +153,9 @@ int main() {
 
     // ---- UI ----
     bool denoiserOn = pathTracer.denoiserEnabled();
+    bool temporalDenoiserOn = pathTracer.temporalDenoiser();
     bool restirOn = pathTracer.restirEnabled();
+    bool restirGIOn = pathTracer.restirGiEnabled();
     bool rotating = true;
     float rotSpeed = 0.5f;
     int maxBounces = pathTracer.maxBounces();
@@ -177,11 +180,15 @@ int main() {
 
         if (ImGui::Checkbox("Denoiser", &denoiserOn))
             pathTracer.setDenoiserEnabled(denoiserOn);
-        if (ImGui::Checkbox("ReSTIR", &restirOn))
+        if (ImGui::Checkbox("Temporal Denoiser", &temporalDenoiserOn))
+            pathTracer.setTemporalDenoiser(temporalDenoiserOn);
+        if (ImGui::Checkbox("ReSTIR DI", &restirOn))
             pathTracer.setReSTIREnabled(restirOn);
+        if (ImGui::Checkbox("ReSTIR GI", &restirGIOn))
+            pathTracer.setReSTIRGIEnabled(restirGIOn);
         if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
             pathTracer.setExposure(exposure);
-        if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8))
+        if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 6))
             pathTracer.setMaxBounces(maxBounces);
 
         ImGui::End();
