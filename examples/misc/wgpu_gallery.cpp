@@ -102,8 +102,7 @@ namespace {
         group->add(back);
 
         // Front wall
-        auto front = Mesh::create(PlaneGeometry::create(W, H), matRoughDiffuse(Color(0.75f, 0.75f, 0.75f), 0.9f, Side::Front));
-        front->rotation.y = math::PI;
+        auto front = Mesh::create(PlaneGeometry::create(W, H), matRoughDiffuse(Color(0.75f, 0.75f, 0.75f), 0.9f, Side::Back));
         front->position.set(0.f, H / 2.f, D / 2.f);
         front->receiveShadow = true;
         group->add(front);

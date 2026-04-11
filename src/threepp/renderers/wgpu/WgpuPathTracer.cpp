@@ -500,10 +500,19 @@ fn testTriangle(ray: Ray, ti: i32, rh: ptr<function, RawHit>) {
     let matIdx = i32(r0.w);
     let mat3   = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
 
-    // Back-face culling for single-sided materials (mat3.z = 0 means single-sided)
-    if (mat3.z < 0.5) {
+    // Side-aware face culling.
+    //   mat3.z = 0 → Side::Front  : cull back faces   (dot(dir,geoN) > 0)
+    //   mat3.z = 1 → Side::Double : no culling        (glass also forced to 1)
+    //   mat3.z = 2 → Side::Back   : cull front faces  (dot(dir,geoN) < 0)
+    // The cull applies uniformly to all ray types (primary, shadow, GI, bounce);
+    // for the gallery scene this is consistent with rasterized three.js behaviour.
+    let sideFlag = mat3.z;
+    if (sideFlag < 0.5) {
         let geoNormal = cross(v1 - v0, v2 - v0);
         if (dot(ray.dir, geoNormal) > 0.0) { return; }
+    } else if (sideFlag > 1.5) {
+        let geoNormal = cross(v1 - v0, v2 - v0);
+        if (dot(ray.dir, geoNormal) < 0.0) { return; }
     }
 
     // Alpha handling: alphaTest (cutoff) or stochastic alpha (blend mode)
@@ -608,7 +617,11 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
     let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
     let n2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
-    let sn = normalize(n0 * w + n1 * rh.u + n2 * rh.v);
+    var sn = normalize(n0 * w + n1 * rh.u + n2 * rh.v);
+    // Side::Back: flip the shading normal so the geometric back face (the
+    // rendered side) is treated as the "front" by all downstream isFrontFace
+    // logic.  This keeps BRDF, NEE and refraction code unchanged.
+    if (mat3.z > 1.5) { sn = -sn; }
 
     let isFrontFace = dot(ray.dir, sn) < 0.0;
     var finalNorm = select(-sn, sn, isFrontFace);
@@ -649,8 +662,10 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
         metalness = roughSample.z;
     }
 
-    // Geometric (flat) normal
-    let geoNcross = cross(v1 - v0, v2 - v0);
+    // Geometric (flat) normal — also flipped for Side::Back so it matches
+    // the shading-normal convention established above.
+    var geoNcross = cross(v1 - v0, v2 - v0);
+    if (mat3.z > 1.5) { geoNcross = -geoNcross; }
     let geoNlen   = length(geoNcross);
     let geoN    = select(sn, geoNcross / geoNlen, geoNlen > 1e-8);
     let geoNorm = select(-geoN, geoN, isFrontFace);
@@ -4316,7 +4331,22 @@ static int buildGeometryBuffers(
             setTexel(matBuffer, maxMats, matIdx, 1, texSlot, em.metalness, normalSlot, roughSlot);
             setTexel(matBuffer, maxMats, matIdx, 2,
                     em.emissive.r, em.emissive.g, em.emissive.b, em.transmission);
-            const float doubleSided = (entry.mesh->material()->side == Side::Double || em.transmission > 0.f) ? 1.f : 0.f;
+            // sideFlag: 0 = Side::Front (cull back faces)
+            //           1 = Side::Double (no culling) — also forced for glass
+            //           2 = Side::Back (cull front faces, flip shading normal)
+            // Glass must always be double-sided for refraction to work, so
+            // transmission > 0 overrides the material's nominal side.
+            float sideFlag;
+            if (em.transmission > 0.f) {
+                sideFlag = 1.f;
+            } else {
+                switch (entry.mesh->material()->side) {
+                    case Side::Double: sideFlag = 1.f; break;
+                    case Side::Back:   sideFlag = 2.f; break;
+                    case Side::Front:
+                    default:           sideFlag = 0.f; break;
+                }
+            }
             const float opacity = std::clamp(entry.mesh->material()->opacity, 0.f, 1.f);
             // Encode blend mode: negative opacity signals stochastic alpha (BLEND mode).
             // We must keep BLEND mode any time `transparent=true` without alphaTest,
@@ -4328,7 +4358,7 @@ static int buildGeometryBuffers(
             // stochastic-noise cost on solid paint.
             const float opacityEnc = (entry.mesh->material()->transparent && em.alphaTest <= 0.f)
                                      ? -opacity : opacity;
-            setTexel(matBuffer, maxMats, matIdx, 3, em.ior, em.alphaTest, doubleSided, opacityEnc);
+            setTexel(matBuffer, maxMats, matIdx, 3, em.ior, em.alphaTest, sideFlag, opacityEnc);
             setTexel(matBuffer, maxMats, matIdx, 4,
                     em.attenuationColor.r, em.attenuationColor.g, em.attenuationColor.b, em.attenuationDistance);
             float emissiveSlot = -1.f;
