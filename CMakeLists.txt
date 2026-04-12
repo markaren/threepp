@@ -7,7 +7,7 @@ option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
 option(THREEPP_BUILD_TESTS "Build test suite" ON)
 option(THREEPP_WITH_SVG "Build with SVGLoader" ON)
 option(THREEPP_WITH_AUDIO "Build with Audio" ON)
-option(THREEPP_WITH_USD "Build with USDLoader (tinyusdz)" ON)
+option(THREEPP_WITH_USD "Build with USDLoader (tinyusdz)" OFF)
 option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 
 
