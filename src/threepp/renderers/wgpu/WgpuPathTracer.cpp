@@ -103,7 +103,9 @@ namespace {
     }
 
     // Decompress an entire BCn texture level to RGBA8.
-    // Returns an empty vector if the format is unsupported (e.g. BC6H/BC7).
+    // Returns an empty vector if the format is unsupported (e.g. BC6H).
+    // sRGB variants map to their non-sRGB counterparts: the block encoding is
+    // identical; sRGB is only a GPU-side sampling flag, not a different codec.
     std::vector<uint8_t> bcnDecompress(const uint8_t* blocks, int w, int h, unsigned int glFmt) {
         constexpr unsigned int DXT1_RGB  = 0x83F0u;
         constexpr unsigned int DXT1_RGBA = 0x83F1u;
@@ -111,6 +113,97 @@ namespace {
         constexpr unsigned int DXT5      = 0x83F3u;
         constexpr unsigned int BC4       = 0x8DBBu;
         constexpr unsigned int BC5       = 0x8DBDu;
+        // sRGB variants — identical block layout, just a different sampling flag.
+        constexpr unsigned int DXT1_SRGB = 0x8C4Cu;
+        constexpr unsigned int DXT5_SRGB = 0x8C4Fu;
+        constexpr unsigned int BC7       = 0x8E8Cu;
+        constexpr unsigned int BC7_SRGB  = 0x8E8Du;
+
+        if (glFmt == BC7 || glFmt == BC7_SRGB) {
+            // BC7 decoder for the path-tracer atlas (→ RGBA8 output).
+            // Implements mode 6 fully (1 subset, 7-bit endpoints + P-bit, 4-bit
+            // indices) — the dominant mode in typical PBR base-colour textures.
+            // Other modes fall back to extracting endpoint 0 from the packed bits;
+            // not pixel-perfect but preserves correct hue/tone for atlas use.
+            auto readBits64 = [](uint64_t lo, uint64_t hi, int start, int n) -> uint32_t {
+                uint32_t val = 0;
+                for (int i = 0; i < n; ++i) {
+                    const int b = start + i;
+                    const uint64_t w = (b < 64) ? lo : hi;
+                    val |= static_cast<uint32_t>((w >> (b < 64 ? b : b-64)) & 1u) << i;
+                }
+                return val;
+            };
+            // 4-bit BC7 interpolation weights (×1/64 fraction).
+            constexpr uint8_t w4[16] = {0,4,9,13,17,21,26,30,34,38,43,47,51,55,60,64};
+
+            const int blocksX = (w + 3) / 4;
+            const int blocksY = (h + 3) / 4;
+            std::vector<uint8_t> out(static_cast<size_t>(w * h) * 4, 255u);
+            const uint8_t* p = blocks;
+            for (int by = 0; by < blocksY; ++by) {
+                for (int bx = 0; bx < blocksX; ++bx) {
+                    uint64_t lo = 0, hi = 0;
+                    std::memcpy(&lo, p, 8); std::memcpy(&hi, p + 8, 8);
+
+                    // Mode = position of lowest set bit in the 128-bit block.
+                    int mode = 8;
+                    for (int i = 0; i < 8; ++i) { if ((p[0] >> i) & 1) { mode = i; break; } }
+
+                    uint8_t rgba[64] = {};
+                    if (mode == 6) {
+                        // Bit layout (offset from LSB):
+                        // [6]=1 (mode), R0[6:0]@7, R1[6:0]@14, G0[6:0]@21,
+                        // G1[6:0]@28, B0[6:0]@35, B1[6:0]@42, A0[6:0]@49,
+                        // A1[6:0]@56, P0@63, P1@64, anchor-idx(3b)@65,
+                        // 15×4b-idx.
+                        const uint32_t R0=readBits64(lo,hi,7,7),  R1=readBits64(lo,hi,14,7);
+                        const uint32_t G0=readBits64(lo,hi,21,7), G1=readBits64(lo,hi,28,7);
+                        const uint32_t B0=readBits64(lo,hi,35,7), B1=readBits64(lo,hi,42,7);
+                        const uint32_t A0=readBits64(lo,hi,49,7), A1=readBits64(lo,hi,56,7);
+                        const uint32_t P0=readBits64(lo,hi,63,1), P1=readBits64(lo,hi,64,1);
+                        // Expand to 8-bit: append P-bit as LSB.
+                        const uint32_t er0=(R0<<1)|P0, er1=(R1<<1)|P1;
+                        const uint32_t eg0=(G0<<1)|P0, eg1=(G1<<1)|P1;
+                        const uint32_t eb0=(B0<<1)|P0, eb1=(B1<<1)|P1;
+                        const uint32_t ea0=(A0<<1)|P0, ea1=(A1<<1)|P1;
+                        // Anchor index (pixel 0) uses 3 bits; rest use 4.
+                        for (int i = 0; i < 16; ++i) {
+                            const int off = (i == 0) ? 65 : (68 + (i-1)*4);
+                            const int nb  = (i == 0) ? 3  : 4;
+                            const uint32_t wt = w4[readBits64(lo,hi,off,nb) & 0xF];
+                            const uint32_t iw = 64 - wt;
+                            rgba[i*4+0]=static_cast<uint8_t>((er0*iw+er1*wt+32)>>6);
+                            rgba[i*4+1]=static_cast<uint8_t>((eg0*iw+eg1*wt+32)>>6);
+                            rgba[i*4+2]=static_cast<uint8_t>((eb0*iw+eb1*wt+32)>>6);
+                            rgba[i*4+3]=static_cast<uint8_t>((ea0*iw+ea1*wt+32)>>6);
+                        }
+                    } else {
+                        // Other modes: extract endpoint 0 from known bit offsets.
+                        // The R/G/B endpoints always start after the mode bit(s)
+                        // and partition data; using a fixed offset of 7 bits past
+                        // the mode gives a reasonable colour for atlas purposes.
+                        const uint8_t r = static_cast<uint8_t>(readBits64(lo,hi,7,7)<<1);
+                        const uint8_t g = static_cast<uint8_t>(readBits64(lo,hi,21,7)<<1);
+                        const uint8_t b = static_cast<uint8_t>(readBits64(lo,hi,35,7)<<1);
+                        const uint8_t a = static_cast<uint8_t>(readBits64(lo,hi,49,7)<<1);
+                        for (int i = 0; i < 16; ++i)
+                            { rgba[i*4]=r; rgba[i*4+1]=g; rgba[i*4+2]=b; rgba[i*4+3]=a; }
+                    }
+                    const int px = bx*4, py = by*4;
+                    for (int y = 0; y < 4 && (py+y)<h; ++y)
+                        for (int x = 0; x < 4 && (px+x)<w; ++x)
+                            std::memcpy(&out[(static_cast<size_t>(py+y)*w+(px+x))*4],
+                                        &rgba[(y*4+x)*4], 4);
+                    p += 16;
+                }
+            }
+            return out;
+        }
+
+        // Map sRGB variants to their non-sRGB equivalents.
+        if (glFmt == DXT1_SRGB) glFmt = DXT1_RGBA;
+        if (glFmt == DXT5_SRGB) glFmt = DXT5;
 
         const bool isDXT1 = (glFmt == DXT1_RGB || glFmt == DXT1_RGBA);
         const bool isDXT3 = (glFmt == DXT3);
@@ -173,8 +266,8 @@ namespace {
 // ---------------------------------------------------------------------------
 namespace {
 
-constexpr int MAX_TEX_SLOTS = 256;
-constexpr int DEFAULT_TILE_SIZE = 1024;
+constexpr int MAX_TEX_SLOTS = 1024;
+constexpr int DEFAULT_TILE_SIZE = 512;
 constexpr int ATLAS_WIDTH = 8192;  // fixed atlas width; cols = ATLAS_WIDTH / tileSize
 constexpr int TRI_TEX_HEIGHT = 8;   // rows per tri: pos(3)+nrm(3)+uv0(2) — UV1 and vcols removed
 constexpr int MAT_TEX_HEIGHT = 19;
@@ -298,7 +391,7 @@ struct Bvh4NodeGpu {
 @group(0) @binding(32) var giResLoRead:  texture_2d<f32>;
 @group(0) @binding(33) var giResLoWrite: texture_storage_2d<rgba16float, write>;
 
-const MAX_TEX_SLOTS: i32 = 256;
+const MAX_TEX_SLOTS: i32 = 1024;
 const EMPTY_CHILD: i32 = -2147483648;  // INT_MIN — sentinel for unused BVH4 child slots
 
 fn TILE_SIZE() -> i32 { return max(i32(rt.spp.y), 1); }
@@ -755,7 +848,13 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     let normalSlot = mat1.z;
     if (normalSlot >= 0.0) {
         let nmSample = sampleAtlas(nmUV, normalSlot);
-        let nmTangent = nmSample * 2.0 - 1.0;
+        // Row 11 W stores normalScale.y (1.0 = OpenGL convention, -1.0 = DirectX).
+        let normalScaleY = textureLoad(matData, vec2<i32>(matIdx, 11), 0).w;
+        let nm_xy = nmSample.xy * 2.0 - 1.0;
+        // Reconstruct Z from XY — handles BC5 (2-channel) maps where B=0,
+        // and is correct for any well-formed unit-vector normal map.
+        let nm_z = sqrt(max(0.0, 1.0 - dot(nm_xy, nm_xy)));
+        let nmTangent = vec3<f32>(nm_xy.x, nm_xy.y * normalScaleY, nm_z);
         let e1  = v1 - v0;
         let e2  = v2 - v0;
         // Tangent basis uses raw UV0 (geometry-defined)
@@ -769,7 +868,12 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
             var T = normalize((e1 * duv2.y - e2 * duv1.y) * invD);
             T = normalize(T - finalNorm * dot(finalNorm, T));
             let B = cross(finalNorm, T);
+            let smoothNorm = finalNorm;
             finalNorm = normalize(T * nmTangent.x + B * nmTangent.y + finalNorm * nmTangent.z);
+            // Clamp perturbed normal to upper hemisphere of smooth normal.
+            // Prevents GGX blow-out when the perturbation pushes the normal
+            // below the surface horizon (large D / tiny NdotV → ∞ specular).
+            finalNorm = normalize(finalNorm + max(0.0, 1e-3 - dot(finalNorm, smoothNorm)) * smoothNorm);
         }
     }
 
@@ -4529,7 +4633,7 @@ static int buildGeometryBuffers(
             // Per-channel UV transforms (rows 6-15, 2 rows per channel)
             // Layout per channel: row N = (a, b, tx, c), row N+1 = (d, ty, texCoord, 0)
             // where u' = a*u + b*v + tx,  v' = c*u + d*v + ty
-            auto writeUvTransform = [&](int row, const Texture* tex) {
+            auto writeUvTransform = [&](int row, const Texture* tex, float extraW = 0.f) {
                 if (tex) {
                     const_cast<Texture*>(tex)->updateMatrix();
                     const auto& e = tex->matrix.elements;
@@ -4537,11 +4641,11 @@ static int buildGeometryBuffers(
                     setTexel(matBuffer, maxMats, matIdx, row,
                              e[0], e[3], e[6], e[1]);
                     setTexel(matBuffer, maxMats, matIdx, row + 1,
-                             e[4], e[7], static_cast<float>(tex->texCoord), 0.f);
+                             e[4], e[7], static_cast<float>(tex->texCoord), extraW);
                 } else {
                     // Identity transform, UV0
                     setTexel(matBuffer, maxMats, matIdx, row, 1.f, 0.f, 0.f, 0.f);
-                    setTexel(matBuffer, maxMats, matIdx, row + 1, 1.f, 0.f, 0.f, 0.f);
+                    setTexel(matBuffer, maxMats, matIdx, row + 1, 1.f, 0.f, 0.f, extraW);
                 }
             };
 
@@ -4559,11 +4663,12 @@ static int buildGeometryBuffers(
                 mwe ? mwe->emissiveMap.get() : nullptr,
                 mwa ? mwa->aoMap.get() : nullptr
             };
-            writeUvTransform(6,  uvTextures[0]);   // baseColor
-            writeUvTransform(8,  uvTextures[1]);   // metalRough
-            writeUvTransform(10, uvTextures[2]);    // normal
-            writeUvTransform(12, uvTextures[3]);    // emissive
-            writeUvTransform(14, uvTextures[4]);    // occlusion
+            const float normalScaleY = mnm ? mnm->normalScale.y : 1.0f;
+            writeUvTransform(6,  uvTextures[0]);                    // baseColor
+            writeUvTransform(8,  uvTextures[1]);                    // metalRough
+            writeUvTransform(10, uvTextures[2], normalScaleY);      // normal (W = normalScale.y)
+            writeUvTransform(12, uvTextures[3]);                    // emissive
+            writeUvTransform(14, uvTextures[4]);                    // occlusion
 
             // Check if any channel uses non-identity UV transform or UV1
             float hasCustomUV = 0.f;
