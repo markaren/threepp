@@ -12,7 +12,7 @@ int main() {
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
-    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 1000.f);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 100.f);
     camera->position.set(0, 1, 5);
 
     OrbitControls controls{*camera, canvas};
