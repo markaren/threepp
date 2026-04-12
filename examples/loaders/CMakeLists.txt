@@ -16,3 +16,7 @@ add_example(NAME "collada_loader")
 if (THREEPP_WITH_SVG)
     add_example(NAME "svg_loader" LINK_IMGUI)
 endif ()
+
+if (THREEPP_WITH_USD)
+    add_example(NAME "usd_loader")
+endif ()
