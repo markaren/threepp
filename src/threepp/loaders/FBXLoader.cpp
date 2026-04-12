@@ -3,14 +3,20 @@
 #include "threepp/constants.hpp"
 #include "threepp/core/BufferAttribute.hpp"
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/lights/PointLight.hpp"
+#include "threepp/lights/SpotLight.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/materials/MeshPhongMaterial.hpp"
+#include "threepp/materials/MeshPhysicalMaterial.hpp"
+#include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 
 #include "ofbx.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -142,30 +148,158 @@ namespace threepp {
             return false;
         }
 
-        std::shared_ptr<MeshPhongMaterial> buildMaterial(
+        // Returns true when the filename suggests a PBR ORM-packed texture
+        // (R=AO, G=Roughness, B=Metalness).  This heuristic covers Unreal Engine
+        // exports (e.g. "_Specular") and common explicit ORM naming.
+        // Without this guard, traditional Phong specular maps would be
+        // misinterpreted as roughness/metalness data.
+        bool looksLikeORM(const std::filesystem::path& p) {
+            const auto stem = p.stem().string();
+            // Case-insensitive search for known ORM suffixes/substrings.
+            auto ci = [&](const char* needle) {
+                auto it = std::search(stem.begin(), stem.end(),
+                                      needle, needle + std::strlen(needle),
+                                      [](char a, char b){ return std::tolower(a) == std::tolower(b); });
+                return it != stem.end();
+            };
+            return ci("_specular") || ci("_orm") || ci("_rma") || ci("_occlusionroughnessmetallic")
+                || ci("_roughness") || ci("_metalrough") || ci("_metallicrough");
+        }
+
+        // Load a texture from the given FBX texture slot, configure wrapping,
+        // and return it.  Returns nullptr if the slot is empty or unsupported.
+        std::shared_ptr<Texture> loadTex(const ofbx::Texture* slot,
+                                         const std::filesystem::path& baseDir,
+                                         TextureLoader& texLoader) {
+            if (!slot) return nullptr;
+            auto p = resolveTexturePath(slot, baseDir);
+            if (p.empty() || !isSupportedImageFormat(p)) return nullptr;
+            auto tex = texLoader.load(p);
+            if (tex) {
+                tex->wrapS = TextureWrapping::Repeat;
+                tex->wrapT = TextureWrapping::Repeat;
+                tex->needsUpdate();
+            }
+            return tex;
+        }
+
+        // Returns true when the material name or diffuse texture name suggests glass.
+        // Also covers the FBX opacity property for materials that set it explicitly.
+        bool looksLikeGlass(const ofbx::Material* mat, const std::filesystem::path& diffPath) {
+            // Explicit FBX opacity property
+            if (static_cast<float>(mat->getOpacity()) < 0.99f) return true;
+            // Name-based heuristic: material name or diffuse texture stem
+            auto ciContains = [](const std::string& s, const char* needle) {
+                return std::search(s.begin(), s.end(), needle, needle + std::strlen(needle),
+                                   [](char a, char b){ return std::tolower(a) == std::tolower(b); }) != s.end();
+            };
+            const std::string matName(mat->name);
+            for (const char* kw : {"glass", "window", "crystal", "transparent"}) {
+                if (ciContains(matName, kw)) return true;
+            }
+            if (!diffPath.empty()) {
+                const std::string stem = diffPath.stem().string();
+                for (const char* kw : {"glass", "window", "crystal"}) {
+                    if (ciContains(stem, kw)) return true;
+                }
+            }
+            return false;
+        }
+
+        // Apply normal map + emissive — shared between all material types.
+        // Opacity/transmission is handled per-branch.
+        template<typename M>
+        void applyCommon(M& m, const ofbx::Material* mat,
+                         const std::filesystem::path& baseDir,
+                         TextureLoader& texLoader) {
+            if (auto tex = loadTex(mat->getTexture(ofbx::Texture::NORMAL), baseDir, texLoader)) {
+                m.normalMap   = tex;
+                m.normalScale = {1.0f, -1.0f};  // DirectX → OpenGL Y-flip
+            }
+            if (auto tex = loadTex(mat->getTexture(ofbx::Texture::EMISSIVE), baseDir, texLoader)) {
+                m.emissiveMap = tex;
+                m.emissive.setHex(0xffffff);
+            }
+        }
+
+        std::shared_ptr<Material> buildMaterial(
                 const ofbx::Material* mat,
                 const std::filesystem::path& baseDir,
                 TextureLoader& texLoader) {
-            auto material = MeshPhongMaterial::create();
-            if (!mat) return material;
+            if (!mat) return MeshStandardMaterial::create();
+
+            // Detect PBR workflow: SPECULAR slot contains an ORM-packed texture.
+            const ofbx::Texture* specSlot = mat->getTexture(ofbx::Texture::SPECULAR);
+            const auto specPath = resolveTexturePath(specSlot, baseDir);
+            const bool isPBR = !specPath.empty() && isSupportedImageFormat(specPath)
+                               && looksLikeORM(specPath);
+
             const auto dc = mat->getDiffuseColor();
-            material->color.setRGB(dc.r, dc.g, dc.b);
-            const auto sc = mat->getSpecularColor();
-            material->specular.setRGB(sc.r, sc.g, sc.b);
-            if (const auto* diffTex = mat->getTexture(ofbx::Texture::DIFFUSE)) {
-                auto texPath = resolveTexturePath(diffTex, baseDir);
-                if (!texPath.empty() && isSupportedImageFormat(texPath)) {
-                    auto tex = texLoader.load(texPath, true);
-                    if (tex) {
-                        tex->wrapS = TextureWrapping::Repeat;
-                        tex->wrapT = TextureWrapping::Repeat;
-                        tex->needsUpdate();
-                    }
-                    material->map = tex;
-                    material->color.setHex(0xffffff);
+            const float opacity = static_cast<float>(mat->getOpacity());
+
+            // Resolve diffuse path for glass heuristic.
+            const auto diffPath = resolveTexturePath(mat->getTexture(ofbx::Texture::DIFFUSE), baseDir);
+            const bool isGlass = looksLikeGlass(mat, diffPath);
+
+            if (isPBR) {
+                // ---- PBR / MeshPhysicalMaterial --------------------------------
+                auto m = MeshPhysicalMaterial::create();
+                m->color.setRGB(dc.r, dc.g, dc.b);
+                if (auto tex = loadTex(mat->getTexture(ofbx::Texture::DIFFUSE), baseDir, texLoader)) {
+                    m->map = tex;
+                    m->color.setHex(0xffffff);
                 }
+                if (auto tex = texLoader.load(specPath)) {
+                    tex->wrapS = TextureWrapping::Repeat;
+                    tex->wrapT = TextureWrapping::Repeat;
+                    tex->needsUpdate();
+                    m->roughnessMap = tex;
+                    m->metalnessMap = tex;
+                    m->roughness    = 1.0f;  // texture drives; keep metalness default 0
+                }
+                applyCommon(*m, mat, baseDir, texLoader);
+                if (isGlass) {
+                    m->transmission = opacity < 0.99f ? std::max(0.01f, 1.0f - opacity) : 1.0f;
+                    m->setIor(1.5f);
+                    m->side = Side::Double;
+                }
+                return m;
+            } else if (isGlass) {
+                // ---- Glass (no ORM) / MeshPhysicalMaterial ---------------------
+                auto m = MeshPhysicalMaterial::create();
+                m->color.setRGB(dc.r, dc.g, dc.b);
+                if (auto tex = loadTex(mat->getTexture(ofbx::Texture::DIFFUSE), baseDir, texLoader)) {
+                    m->map = tex;
+                    m->color.setHex(0xffffff);
+                }
+                m->transmission = opacity < 0.99f ? std::max(0.01f, 1.0f - opacity) : 1.0f;
+                m->setIor(1.5f);
+                m->side = Side::Double;
+                applyCommon(*m, mat, baseDir, texLoader);
+                return m;
+            } else {
+                // ---- Phong / MeshPhongMaterial ----------------------------------
+                auto m = MeshPhongMaterial::create();
+                m->color.setRGB(dc.r, dc.g, dc.b);
+                if (auto tex = loadTex(mat->getTexture(ofbx::Texture::DIFFUSE), baseDir, texLoader)) {
+                    m->map = tex;
+                    m->color.setHex(0xffffff);
+                }
+                // Specular color + shininess from FBX material properties.
+                const auto sc = mat->getSpecularColor();
+                m->specular.setRGB(sc.r, sc.g, sc.b);
+                const double shin = mat->getShininess();
+                if (shin > 0.0) m->shininess = static_cast<float>(shin);
+                if (auto tex = loadTex(specSlot, baseDir, texLoader))
+                    m->specularMap = tex;
+                applyCommon(*m, mat, baseDir, texLoader);
+                if (opacity < 0.99f) {
+                    m->opacity     = std::max(0.01f, opacity);
+                    m->transparent = true;
+                    m->side        = Side::Double;
+                }
+                return m;
             }
-            return material;
         }
 
     }// namespace
@@ -252,6 +386,56 @@ namespace threepp {
                     meshGroup->add(Mesh::create(geometry, material));
                 }
                 root->add(meshGroup);
+            }
+        }
+
+        // -----------------------------------------------------------------------
+        // Lights
+        // -----------------------------------------------------------------------
+        const int lightCount = scene->getLightCount();
+        for (int li = 0; li < lightCount; ++li) {
+            const ofbx::Light* fbxLight = scene->getLight(li);
+            if (!fbxLight) continue;
+
+            const auto fc = fbxLight->getColor();
+            const Color color(fc.r, fc.g, fc.b);
+            // FBX intensity is in percent (0-100+). Normalize to 0-1 range.
+            const float intensity = static_cast<float>(fbxLight->getIntensity()) / 100.0f;
+
+            std::shared_ptr<Object3D> lightNode;
+
+            switch (fbxLight->getLightType()) {
+                case ofbx::Light::LightType::POINT: {
+                    auto light = PointLight::create(color, intensity);
+                    lightNode = light;
+                    break;
+                }
+                case ofbx::Light::LightType::DIRECTIONAL: {
+                    auto light = DirectionalLight::create(color, intensity);
+                    lightNode = light;
+                    break;
+                }
+                case ofbx::Light::LightType::SPOT: {
+                    const float outerAngle = static_cast<float>(fbxLight->getOuterAngle())
+                                           * math::DEG2RAD;
+                    const float innerAngle = static_cast<float>(fbxLight->getInnerAngle())
+                                           * math::DEG2RAD;
+                    // penumbra = 1 - (inner/outer), clamped to [0,1]
+                    const float penumbra = (outerAngle > 0.0f)
+                            ? std::max(0.0f, std::min(1.0f, 1.0f - innerAngle / outerAngle))
+                            : 0.0f;
+                    auto light = SpotLight::create(color, intensity, 0.0f, outerAngle, penumbra);
+                    lightNode = light;
+                    break;
+                }
+                default:
+                    break;
+            }
+
+            if (lightNode) {
+                lightNode->name = fbxLight->name;
+                lightNode->applyMatrix4(toMatrix4(fbxLight->getGlobalTransform()));
+                root->add(lightNode);
             }
         }
 
