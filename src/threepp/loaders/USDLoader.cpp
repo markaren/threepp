@@ -7,18 +7,20 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
-#include "threepp/textures/Texture.hpp"
 
 #include "tinyusdz.hh"
+#include "composition.hh"
+#include "asset-resolution.hh"
+#include "stage.hh"
+#include "tydra/render-data.hh"
 #include "tydra/scene-access.hh"
-#include "tydra/shader-network.hh"
-#include "usdGeom.hh"
-#include "usdShade.hh"
-#include "value-types.hh"
 
+#include <algorithm>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace threepp {
@@ -26,16 +28,38 @@ namespace threepp {
     namespace {
 
         // -----------------------------------------------------------------------
-        // Geometry helpers
+        // Helpers
         // -----------------------------------------------------------------------
 
-        void triangulateFace(const std::vector<int32_t>& fvi, int faceStart, int count,
-                             std::vector<unsigned int>& triIndices) {
-            for (int i = 1; i + 1 < count; ++i) {
-                triIndices.push_back(static_cast<unsigned int>(fvi[faceStart]));
-                triIndices.push_back(static_cast<unsigned int>(fvi[faceStart + i]));
-                triIndices.push_back(static_cast<unsigned int>(fvi[faceStart + i + 1]));
-            }
+        // ----------------------------------------------------------------------
+        // Strip list-edit qualifiers that tinyusdz's CompositeReferences /
+        // CompositePayload do not support (Delete, Add, Order).
+        // In a single-layer flat composition those arcs are no-ops anyway:
+        // "delete references" removes items from a weaker opinion that simply
+        // doesn't exist here.  Stripping them lets composition proceed without
+        // bailing out on the first such prim.
+        // ----------------------------------------------------------------------
+
+        void stripUnsupportedArcs(tinyusdz::PrimSpec& ps) {
+            using tinyusdz::ListEditQual;
+            auto isUnsupported = [](ListEditQual q) {
+                return q == ListEditQual::Delete ||
+                       q == ListEditQual::Add    ||
+                       q == ListEditQual::Order;
+            };
+            if (ps.metas().references && isUnsupported(ps.metas().references->first))
+                ps.metas().references.reset();
+            if (ps.metas().payload && isUnsupported(ps.metas().payload->first))
+                ps.metas().payload.reset();
+            if (ps.metas().inherits && isUnsupported(ps.metas().inherits->first))
+                ps.metas().inherits.reset();
+            for (auto& child : ps.children())
+                stripUnsupportedArcs(child);
+        }
+
+        void stripUnsupportedArcsInLayer(tinyusdz::Layer& layer) {
+            for (auto& [name, ps] : layer.primspecs())
+                stripUnsupportedArcs(ps);
         }
 
         Matrix4 toMatrix4(const tinyusdz::value::matrix4d& mat) {
@@ -52,198 +76,364 @@ namespace threepp {
                 static_cast<float>(r[2][3]), static_cast<float>(r[3][3]));
         }
 
-        std::shared_ptr<BufferGeometry> geometryFromGeomMesh(const tinyusdz::GeomMesh& geomMesh) {
-            const auto points = geomMesh.get_points();
-            const auto fvc = geomMesh.get_faceVertexCounts();
-            const auto fvi = geomMesh.get_faceVertexIndices();
-            if (points.empty() || fvc.empty() || fvi.empty()) return nullptr;
+        // -----------------------------------------------------------------------
+        // Geometry
+        // -----------------------------------------------------------------------
 
-            // Triangulate
-            std::vector<unsigned int> triIndices;
-            triIndices.reserve(fvi.size());
-            int faceStart = 0;
-            for (int count : fvc) {
-                if (count >= 3) triangulateFace(fvi, faceStart, count, triIndices);
-                faceStart += count;
-            }
-            if (triIndices.empty()) return nullptr;
+        std::shared_ptr<BufferGeometry> geometryFromRenderMesh(
+                const tinyusdz::tydra::RenderMesh& rm) {
 
-            // Positions
-            std::vector<float> positions;
-            positions.reserve(points.size() * 3);
-            for (const auto& p : points) {
-                positions.push_back(p[0]);
-                positions.push_back(p[1]);
-                positions.push_back(p[2]);
+            if (rm.points.empty()) return nullptr;
+
+            // Prefer triangulated index buffer; fall back to raw (should not happen
+            // with triangulate=true but be defensive).
+            const std::vector<uint32_t>& idxBuf = rm.is_triangulated()
+                ? rm.triangulatedFaceVertexIndices
+                : rm.usdFaceVertexIndices;
+            if (idxBuf.empty()) return nullptr;
+
+            // Positions — vec3 = std::array<float,3>
+            std::vector<float> pos;
+            pos.reserve(rm.points.size() * 3);
+            for (const auto& p : rm.points) {
+                pos.push_back(p[0]);
+                pos.push_back(p[1]);
+                pos.push_back(p[2]);
             }
 
             auto geometry = BufferGeometry::create();
             geometry->setAttribute("position",
-                    FloatBufferAttribute::create(std::move(positions), 3));
-            geometry->setIndex(triIndices);
+                    FloatBufferAttribute::create(std::move(pos), 3));
 
-            // Normals — vertex-interp accepted directly; face-varying falls back to computed
-            bool hasNormals = false;
-            const auto normals = geomMesh.get_normals();
-            if (!normals.empty() &&
-                geomMesh.get_normalsInterpolation() == tinyusdz::Interpolation::Vertex) {
-                std::vector<float> normData;
-                normData.reserve(normals.size() * 3);
-                for (const auto& n : normals) {
-                    normData.push_back(n[0]);
-                    normData.push_back(n[1]);
-                    normData.push_back(n[2]);
-                }
+            // Copy indices (uint32 → unsigned int, same size on all modern targets)
+            std::vector<unsigned int> indices(idxBuf.begin(), idxBuf.end());
+            geometry->setIndex(indices);
+
+            // Normals
+            const auto& nattr = rm.normals;
+            const size_t nVerts = nattr.vertex_count();
+            if (nVerts > 0 &&
+                nattr.format == tinyusdz::tydra::VertexAttributeFormat::Vec3) {
+                const float* nptr =
+                    reinterpret_cast<const float*>(nattr.data.data());
                 geometry->setAttribute("normal",
-                        FloatBufferAttribute::create(std::move(normData), 3));
-                hasNormals = true;
+                        FloatBufferAttribute::create(
+                            std::vector<float>(nptr, nptr + nVerts * 3), 3));
+            } else {
+                geometry->computeVertexNormals();
             }
-            if (!hasNormals) geometry->computeVertexNormals();
 
-            // UV: try "st" then "st0"
-            for (const char* uvName : {"st", "st0"}) {
-                if (!geomMesh.has_primvar(uvName)) continue;
-                tinyusdz::GeomPrimvar pv;
-                std::string pvErr;
-                if (!geomMesh.get_primvar(uvName, &pv, &pvErr)) continue;
-                std::vector<tinyusdz::value::texcoord2f> uvs;
-                if (pv.flatten_with_indices(&uvs)) {
-                    std::vector<float> uvData;
-                    uvData.reserve(uvs.size() * 2);
-                    for (const auto& uv : uvs) {
-                        uvData.push_back(uv[0]);
-                        uvData.push_back(uv[1]);
-                    }
+            // UV (slot 0)
+            if (!rm.texcoords.empty()) {
+                const auto& tcattr = rm.texcoords.begin()->second;
+                const size_t nUVs = tcattr.vertex_count();
+                if (nUVs > 0 &&
+                    tcattr.format == tinyusdz::tydra::VertexAttributeFormat::Vec2) {
+                    const float* uvptr =
+                        reinterpret_cast<const float*>(tcattr.data.data());
                     geometry->setAttribute("uv",
-                            FloatBufferAttribute::create(std::move(uvData), 2));
+                            FloatBufferAttribute::create(
+                                std::vector<float>(uvptr, uvptr + nUVs * 2), 2));
                 }
-                break;
             }
 
             return geometry;
         }
 
         // -----------------------------------------------------------------------
-        // Material / texture helpers
+        // Textures — build a cache indexed in parallel with RenderScene::textures
         // -----------------------------------------------------------------------
 
-        // Resolve the file path from a UsdUVTexture, relative to baseDir.
-        std::filesystem::path resolveTexturePath(const tinyusdz::UsdUVTexture& uvtex,
-                                                 const std::filesystem::path& baseDir) {
-            if (!uvtex.file.authored()) return {};
-            auto maybeAnim = uvtex.file.get_value();
-            if (!maybeAnim) return {};
-            tinyusdz::value::AssetPath assetPath;
-            if (!maybeAnim->get_scalar(&assetPath)) return {};
-
-            // Prefer already-resolved path, fall back to relative
-            const std::string resolved = assetPath.GetResolvedPath();
-            if (!resolved.empty()) return std::filesystem::path(resolved);
-
-            const std::string raw = assetPath.GetAssetPath();
-            if (raw.empty()) return {};
-            return baseDir / raw;
-        }
-
-        // Follow a connected attribute to its UsdUVTexture and load the texture.
-        // AttrT must have is_connection() / get_connections().
-        template<typename AttrT>
-        std::shared_ptr<Texture> loadConnectedTexture(
-                const tinyusdz::Stage& stage,
-                const AttrT& attr,
+        std::vector<std::shared_ptr<Texture>> buildTextureCache(
+                const tinyusdz::tydra::RenderScene& scene,
                 const std::filesystem::path& baseDir,
-                TextureLoader& texLoader,
-                bool flipY = true) {
-            if (!attr.is_connection()) return nullptr;
-            const auto& conns = attr.get_connections();
-            if (conns.empty()) return nullptr;
-
-            // Connection path e.g. "/Materials/Mat/DiffTex.outputs:rgb"
-            // Get only the prim part: "/Materials/Mat/DiffTex"
-            tinyusdz::Path texPrimPath(conns[0].prim_part(), "");
-            auto primResult = stage.GetPrimAtPath(texPrimPath);
-            if (!primResult) return nullptr;
-
-            const tinyusdz::Shader* shader = primResult.value()->as<tinyusdz::Shader>();
-            if (!shader) return nullptr;
-
-            const tinyusdz::UsdUVTexture* uvtex = shader->value.as<tinyusdz::UsdUVTexture>();
-            if (!uvtex) return nullptr;
-
-            const auto texPath = resolveTexturePath(*uvtex, baseDir);
-            if (texPath.empty() || !std::filesystem::exists(texPath)) return nullptr;
-
-            return texLoader.load(texPath, flipY);
-        }
-
-        // Build a MeshStandardMaterial from a bound UsdPreviewSurface.
-        std::shared_ptr<MeshStandardMaterial> materialFromPreviewSurface(
-                const tinyusdz::UsdPreviewSurface& ps,
-                const tinyusdz::Stage& stage,
-                const std::filesystem::path& baseDir,
+                const tinyusdz::AssetResolutionResolver& resolver,
                 TextureLoader& texLoader) {
-            auto mat = MeshStandardMaterial::create();
 
-            // --- diffuseColor / map ---
-            if (ps.diffuseColor.is_connection()) {
-                auto tex = loadConnectedTexture(stage, ps.diffuseColor, baseDir, texLoader, true);
-                if (tex) mat->map = tex;
+            std::vector<std::shared_ptr<Texture>> cache(scene.textures.size());
+
+            for (size_t ti = 0; ti < scene.textures.size(); ++ti) {
+                const auto& uvtex = scene.textures[ti];
+                if (uvtex.texture_image_id < 0 ||
+                    uvtex.texture_image_id >= static_cast<int64_t>(scene.images.size()))
+                    continue;
+
+                const auto& img = scene.images[uvtex.texture_image_id];
+                if (img.asset_identifier.empty()) continue;
+
+                // asset_identifier is the raw USD path string (from
+                // assetPath.GetAssetPath()).  Normalise backslashes first.
+                std::string rawId = img.asset_identifier;
+                std::replace(rawId.begin(), rawId.end(), '\\', '/');
+
+                // Strip leading "./" for filesystem join
+                std::string rel = rawId;
+                if (rel.size() >= 2 && rel[0] == '.' && rel[1] == '/') rel = rel.substr(2);
+
+                // Try candidates in priority order:
+                //  1. baseDir-relative (handles the common ./textures/foo case)
+                //  2. resolver (knows referenced-file sub-directories)
+                //  3. raw path as-is (already absolute)
+                std::filesystem::path texPath;
+                auto candidate = baseDir / rel;
+                if (std::filesystem::exists(candidate)) {
+                    texPath = candidate;
+                } else {
+                    const std::string resolved = resolver.resolve(rawId);
+                    if (!resolved.empty() && std::filesystem::exists(resolved)) {
+                        texPath = resolved;
+                    } else {
+                        texPath = rawId;
+                    }
+                }
+                if (!std::filesystem::exists(texPath))
+                    continue;
+
+                const bool flipY = true;
+                cache[ti] = texLoader.load(texPath, flipY);
+            }
+
+            return cache;
+        }
+
+        // -----------------------------------------------------------------------
+        // MDL shader fallback — NVIDIA Omniverse materials use MDL (OmniPBR,
+        // OmniGlass, …) rather than UsdPreviewSurface, so ConvertToRenderScene
+        // produces a default (grey) material.  We fall back by reading
+        // inputs:diffuse_texture / inputs:normalmap_texture / inputs:ORM_texture
+        // directly from the Shader child PrimSpec in the composed Layer.
+        // PrimSpecs from referenced files have their CWP set by
+        // PropagateAssetResolverState during CompositeReferences, so we can
+        // resolve "./Textures/foo.png" relative to the correct source directory.
+        // -----------------------------------------------------------------------
+
+        // Replace <UDIM> token with the first tile index so we get a usable path.
+        std::string resolveUDIM(const std::string& s) {
+            std::string out = s;
+            const std::string tok = "<UDIM>";
+            auto pos = out.find(tok);
+            if (pos != std::string::npos) out.replace(pos, tok.size(), "1001");
+            return out;
+        }
+
+        // Given a raw asset path string from a Shader prop, resolve it to an
+        // existing file path.  'cwp' is the directory of the USD file that
+        // defined the prim (from PrimSpec::get_current_working_path()).
+        std::filesystem::path resolveAssetPath(
+                const std::string& rawIn,
+                const std::filesystem::path& cwp,
+                const std::filesystem::path& baseDir,
+                const tinyusdz::AssetResolutionResolver& resolver) {
+
+            std::string raw = resolveUDIM(rawIn);
+            // Normalise separators
+            std::replace(raw.begin(), raw.end(), '\\', '/');
+            // Strip leading "./"
+            std::string rel = raw;
+            if (rel.size() >= 2 && rel[0] == '.' && rel[1] == '/') rel = rel.substr(2);
+
+            // Priority: cwp (source file dir) > baseDir (root stage dir) > resolver
+            for (const auto& base : {cwp, baseDir}) {
+                auto cand = base / rel;
+                if (std::filesystem::exists(cand)) return cand;
+            }
+            const std::string resolved = resolver.resolve(raw);
+            if (!resolved.empty() && std::filesystem::exists(resolved))
+                return std::filesystem::path(resolved);
+            return {};  // not found
+        }
+
+        // Try to build a textured material from an MDL Shader PrimSpec.
+        // Returns nullptr if the PrimSpec is not a recognisable MDL shader.
+        std::shared_ptr<MeshStandardMaterial> materialFromMDLPrimSpec(
+                const tinyusdz::PrimSpec& shaderSpec,
+                const std::filesystem::path& baseDir,
+                const tinyusdz::AssetResolutionResolver& resolver,
+                TextureLoader& texLoader) {
+
+            // Only handle MDL shaders (sourceAsset implementation, or no info:id)
+            auto infoIdIt = shaderSpec.props().find("info:id");
+            if (infoIdIt != shaderSpec.props().end()) {
+                // Has an info:id → if it's UsdPreviewSurface, ConvertToRenderScene
+                // already handled it; skip the MDL fallback.
+                return nullptr;
+            }
+
+            const std::filesystem::path cwp =
+                shaderSpec.get_current_working_path().empty()
+                    ? baseDir
+                    : std::filesystem::path(shaderSpec.get_current_working_path());
+
+            auto mat = MeshStandardMaterial::create();
+            bool anyTex = false;
+
+            auto tryLoad = [&](const std::string& propName, bool flipY = true)
+                    -> std::shared_ptr<Texture> {
+                auto it = shaderSpec.props().find(propName);
+                if (it == shaderSpec.props().end()) return nullptr;
+                const auto& prop = it->second;
+                if (!prop.is_attribute()) return nullptr;
+                auto pv = prop.get_attribute().get_value<tinyusdz::value::AssetPath>();
+                if (!pv) return nullptr;
+                const std::string raw = pv.value().GetAssetPath();
+                if (raw.empty()) return nullptr;
+                auto texPath = resolveAssetPath(raw, cwp, baseDir, resolver);
+                if (texPath.empty()) return nullptr;
+                return texLoader.load(texPath, flipY);
+            };
+
+            // Albedo / diffuse
+            if (auto t = tryLoad("inputs:diffuse_texture")) {
+                mat->map = t; anyTex = true;
+            } else if (auto t2 = tryLoad("inputs:albedo_texture")) {
+                mat->map = t2; anyTex = true;
+            }
+            // Normal map (linear, no flip needed for tangent-space normals)
+            if (auto t = tryLoad("inputs:normalmap_texture", false)) {
+                t->encoding = Encoding::Linear;
+                mat->normalMap = t; anyTex = true;
+            } else if (auto t2 = tryLoad("inputs:normal_texture", false)) {
+                t2->encoding = Encoding::Linear;
+                mat->normalMap = t2; anyTex = true;
+            }
+            // ORM packed map (R=occlusion, G=roughness, B=metallic)
+            if (auto t = tryLoad("inputs:ORM_texture", false)) {
+                t->encoding = Encoding::Linear;
+                mat->aoMap         = t;
+                mat->roughnessMap  = t;
+                mat->metalnessMap  = t;
+                anyTex = true;
+            }
+            // Emissive
+            if (auto t = tryLoad("inputs:emissive_texture")) {
+                mat->emissiveMap = t; anyTex = true;
+            }
+
+            return anyTex ? mat : nullptr;
+        }
+
+        // Given a prim abs_path, walk up the ancestor chain in the composed Layer
+        // to find the nearest 'material:binding' relationship.
+        // Returns the bound material's prim path string, or empty if not found.
+        // This is the fallback for composite/instanceable scenes where
+        // ConvertToRenderScene's GetBoundMaterial fails because instanceable
+        // expanded paths don't exist in the Stage tree.
+        std::string findMaterialBindingInLayer(
+                const tinyusdz::Layer& layer,
+                const std::string& primAbsPath) {
+
+            std::string path = primAbsPath;
+            while (!path.empty()) {
+                const tinyusdz::PrimSpec* spec = nullptr;
+                std::string err;
+                if (layer.find_primspec_at(tinyusdz::Path(path, ""), &spec, &err) && spec) {
+                    auto it = spec->props().find("material:binding");
+                    if (it != spec->props().end() && it->second.is_relationship()) {
+                        const auto& rel = it->second.get_relationship();
+                        if (rel.is_path()) {
+                            return rel.targetPath.prim_part();
+                        } else if (rel.is_pathvector() && !rel.targetPathVector.empty()) {
+                            return rel.targetPathVector[0].prim_part();
+                        }
+                    }
+                }
+                // Strip the last path component to walk up
+                auto slashPos = path.rfind('/');
+                if (slashPos == 0 || slashPos == std::string::npos) break;
+                path = path.substr(0, slashPos);
+            }
+            return {};
+        }
+
+        // Walk the composed layer to find the MDL Shader child of a material prim
+        // at 'matAbsPath', then build a material from its MDL inputs.
+        std::shared_ptr<MeshStandardMaterial> materialFromMDLLayer(
+                const tinyusdz::Layer& layer,
+                const std::string& matAbsPath,
+                const std::filesystem::path& baseDir,
+                const tinyusdz::AssetResolutionResolver& resolver,
+                TextureLoader& texLoader) {
+
+            const tinyusdz::PrimSpec* matSpec = nullptr;
+            std::string err;
+            if (!layer.find_primspec_at(tinyusdz::Path(matAbsPath, ""), &matSpec, &err) || !matSpec)
+                return nullptr;
+
+            for (const auto& child : matSpec->children()) {
+                if (auto mat = materialFromMDLPrimSpec(child, baseDir, resolver, texLoader))
+                    return mat;
+            }
+            return nullptr;
+        }
+
+        // -----------------------------------------------------------------------
+        // Material
+        // -----------------------------------------------------------------------
+
+        std::shared_ptr<MeshStandardMaterial> materialFromRenderMaterial(
+                const tinyusdz::tydra::RenderScene& scene,
+                int materialId,
+                const std::vector<std::shared_ptr<Texture>>& texCache) {
+
+            auto mat = MeshStandardMaterial::create();
+            if (materialId < 0 || materialId >= static_cast<int>(scene.materials.size()))
+                return mat;
+
+            const auto& shader = scene.materials[materialId].surfaceShader;
+
+            // Helper: return cached texture or nullptr
+            auto getTex = [&](int texId) -> std::shared_ptr<Texture> {
+                if (texId < 0 || texId >= static_cast<int>(texCache.size())) return nullptr;
+                return texCache[texId];
+            };
+
+            // diffuseColor / map
+            if (shader.diffuseColor.is_texture()) {
+                mat->map = getTex(shader.diffuseColor.texture_id);
             } else {
-                tinyusdz::value::color3f c{0.18f, 0.18f, 0.18f};
-                ps.diffuseColor.get_value().get_scalar(&c);
+                const auto& c = shader.diffuseColor.value;
                 mat->color.setRGB(c[0], c[1], c[2]);
             }
 
-            // --- roughness / roughnessMap ---
-            if (ps.roughness.is_connection()) {
-                auto tex = loadConnectedTexture(stage, ps.roughness, baseDir, texLoader, true);
-                if (tex) mat->roughnessMap = tex;
+            // roughness
+            if (shader.roughness.is_texture()) {
+                mat->roughnessMap = getTex(shader.roughness.texture_id);
             } else {
-                float r = 0.5f;
-                ps.roughness.get_value().get_scalar(&r);
-                mat->roughness = r;
+                mat->roughness = shader.roughness.value;
             }
 
-            // --- metallic / metalnessMap ---
-            if (ps.metallic.is_connection()) {
-                auto tex = loadConnectedTexture(stage, ps.metallic, baseDir, texLoader, true);
-                if (tex) mat->metalnessMap = tex;
+            // metallic
+            if (shader.metallic.is_texture()) {
+                mat->metalnessMap = getTex(shader.metallic.texture_id);
             } else {
-                float m = 0.0f;
-                ps.metallic.get_value().get_scalar(&m);
-                mat->metalness = m;
+                mat->metalness = shader.metallic.value;
             }
 
-            // --- emissiveColor / emissiveMap ---
-            if (ps.emissiveColor.is_connection()) {
-                auto tex = loadConnectedTexture(stage, ps.emissiveColor, baseDir, texLoader, true);
-                if (tex) mat->emissiveMap = tex;
+            // emissiveColor
+            if (shader.emissiveColor.is_texture()) {
+                mat->emissiveMap = getTex(shader.emissiveColor.texture_id);
             } else {
-                tinyusdz::value::color3f e{0.f, 0.f, 0.f};
-                ps.emissiveColor.get_value().get_scalar(&e);
+                const auto& e = shader.emissiveColor.value;
                 mat->emissive.setRGB(e[0], e[1], e[2]);
             }
 
-            // --- normal map (always a texture in UsdPreviewSurface) ---
-            if (ps.normal.is_connection()) {
-                // Normal maps are linear — don't flip Y (USD tangent space)
-                auto tex = loadConnectedTexture(stage, ps.normal, baseDir, texLoader, false);
+            // normal map
+            if (shader.normal.is_texture()) {
+                auto tex = getTex(shader.normal.texture_id);
                 if (tex) {
                     tex->encoding = Encoding::Linear;
                     mat->normalMap = tex;
                 }
             }
 
-            // --- occlusion → aoMap ---
-            if (ps.occlusion.is_connection()) {
-                auto tex = loadConnectedTexture(stage, ps.occlusion, baseDir, texLoader, true);
-                if (tex) mat->aoMap = tex;
+            // occlusion → aoMap
+            if (shader.occlusion.is_texture()) {
+                mat->aoMap = getTex(shader.occlusion.texture_id);
             }
 
-            // --- opacity ---
-            if (!ps.opacity.is_connection()) {
-                float op = 1.0f;
-                ps.opacity.get_value().get_scalar(&op);
+            // opacity
+            if (!shader.opacity.is_texture()) {
+                const float op = shader.opacity.value;
                 if (op < 1.0f) {
                     mat->opacity = op;
                     mat->transparent = true;
@@ -253,39 +443,63 @@ namespace threepp {
             return mat;
         }
 
-        // Resolve a material for a given mesh prim path.
-        std::shared_ptr<MeshStandardMaterial> resolveMaterial(
-                const tinyusdz::Stage& stage,
-                const std::string& primPathStr,
-                const std::filesystem::path& baseDir,
-                TextureLoader& texLoader) {
-            tinyusdz::Path primPath(primPathStr, "");
-            tinyusdz::Path matPath;
-            const tinyusdz::Material* material = nullptr;
-            std::string err;
+        // -----------------------------------------------------------------------
+        // Node traversal — flattened: each mesh goes straight under root so that
+        // global_matrix can be used directly (no re-composition needed).
+        // -----------------------------------------------------------------------
 
-            if (!tinyusdz::tydra::GetBoundMaterial(stage, primPath, "", &matPath, &material, &err)
-                    || !material) {
-                return MeshStandardMaterial::create();
+        void visitNode(const tinyusdz::tydra::RenderScene& scene,
+                       const tinyusdz::tydra::Node& node,
+                       Group& root,
+                       const std::vector<std::shared_ptr<Texture>>& texCache,
+                       const std::unordered_map<int, std::shared_ptr<MeshStandardMaterial>>& mdlOverrides,
+                       const std::unordered_map<std::string, std::shared_ptr<MeshStandardMaterial>>& meshPathMdlMap) {
+
+            if (node.nodeType == tinyusdz::tydra::NodeType::Mesh &&
+                node.id >= 0 &&
+                node.id < static_cast<int>(scene.meshes.size())) {
+
+                const auto& rm = scene.meshes[node.id];
+                auto geometry = geometryFromRenderMesh(rm);
+                if (geometry) {
+                    // Pick the first sub-mesh material; fall back to whole-mesh
+                    int matId = rm.material_id;
+                    if (!rm.material_subsetMap.empty()) {
+                        const int subMatId = rm.material_subsetMap.begin()->second.material_id;
+                        if (subMatId >= 0) matId = subMatId;
+                    }
+
+                    // Priority:
+                    // 1. mdlOverrides by material_id (non-composite MDL files)
+                    // 2. meshPathMdlMap by node.abs_path (composite/instanceable scenes)
+                    // 3. materialFromRenderMaterial (UsdPreviewSurface or default grey)
+                    std::shared_ptr<MeshStandardMaterial> material;
+                    auto mdlIt = mdlOverrides.find(matId);
+                    if (mdlIt != mdlOverrides.end() && mdlIt->second) {
+                        material = mdlIt->second;
+                    } else {
+                        auto pathIt = meshPathMdlMap.find(node.abs_path);
+                        if (pathIt != meshPathMdlMap.end() && pathIt->second) {
+                            material = pathIt->second;
+                        } else {
+                            material = materialFromRenderMaterial(scene, matId, texCache);
+                        }
+                    }
+
+                    auto mesh = Mesh::create(geometry, material);
+
+                    // Apply world-space transform from RenderScene
+                    mesh->matrix->copy(toMatrix4(node.global_matrix));
+                    mesh->matrix->decompose(mesh->position, mesh->quaternion, mesh->scale);
+                    mesh->matrixAutoUpdate = false;
+
+                    root.add(mesh);
+                }
             }
 
-            // Follow surface output connection → shader prim
-            if (!material->surface.authored()) return MeshStandardMaterial::create();
-            const auto& surfConns = material->surface.get_connections();
-            if (surfConns.empty()) return MeshStandardMaterial::create();
-
-            tinyusdz::Path shaderPrimPath(surfConns[0].prim_part(), "");
-            auto primResult = stage.GetPrimAtPath(shaderPrimPath);
-            if (!primResult) return MeshStandardMaterial::create();
-
-            const tinyusdz::Shader* shader = primResult.value()->as<tinyusdz::Shader>();
-            if (!shader) return MeshStandardMaterial::create();
-
-            const tinyusdz::UsdPreviewSurface* ps =
-                    shader->value.as<tinyusdz::UsdPreviewSurface>();
-            if (!ps) return MeshStandardMaterial::create();
-
-            return materialFromPreviewSurface(*ps, stage, baseDir, texLoader);
+            for (const auto& child : node.children) {
+                visitNode(scene, child, root, texCache, mdlOverrides, meshPathMdlMap);
+            }
         }
 
     }// namespace
@@ -306,48 +520,210 @@ namespace threepp {
                 return e;
             }();
 
-            tinyusdz::Stage stage;
-            std::string warn, err;
-            bool ok = (ext == ".usdz")
-                ? tinyusdz::LoadUSDZFromFile(pathStr, &stage, &warn, &err)
-                : tinyusdz::LoadUSDFromFile(pathStr, &stage, &warn, &err);
-
-            if (!warn.empty()) std::cerr << "[USDLoader] Warning: " << warn << "\n";
-            if (!ok) {
-                std::cerr << "[USDLoader] Failed to load '" << pathStr << "': " << err << "\n";
-                return nullptr;
-            }
-
             const std::filesystem::path baseDir = path.parent_path();
 
-            tinyusdz::tydra::PathPrimMap<tinyusdz::GeomMesh> meshMap;
-            tinyusdz::tydra::ListPrims(stage, meshMap);
-            if (meshMap.empty()) {
-                std::cerr << "[USDLoader] No GeomMesh prims found in '" << pathStr << "'\n";
+            // --- Set up asset resolver with the file's directory ---
+            tinyusdz::AssetResolutionResolver resolver;
+            resolver.set_current_working_path(baseDir.string());
+            resolver.set_search_paths({baseDir.string()});
+
+            // --- Load raw Layer (no composition yet) ---
+            tinyusdz::Layer layer;
+            std::string warn, err;
+            bool ok;
+            if (ext == ".usdz") {
+                // USDZ is a zip; load directly to Stage (self-contained, no external refs)
+                tinyusdz::Stage stageDirect;
+                ok = tinyusdz::LoadUSDZFromFile(pathStr, &stageDirect, &warn, &err);
+                if (!ok) {
+                    std::cerr << "[USDLoader] Failed to load '" << pathStr << "': " << err << "\n";
+                    return nullptr;
+                }
+                return buildFromStage(stageDirect, pathStr, baseDir, resolver);
+            } else {
+                ok = tinyusdz::LoadLayerFromFile(pathStr, &layer, &warn, &err);
+            }
+
+            if (!ok) {
+                std::cerr << "[USDLoader] Failed to load layer '" << pathStr << "': " << err << "\n";
                 return nullptr;
             }
 
-            // Z-up → Y-up root correction
+            // --- Composition pipeline (LIVRPS order) ---
+            // 1. Sublayers first (strongest opinion)
+            {
+                tinyusdz::Layer composed;
+                std::string cw, ce;
+                if (tinyusdz::CompositeSublayers(resolver, layer, &composed, &cw, &ce))
+                    layer = std::move(composed);
+            }
+
+            // 2. References and payloads — iterate until stable (max 8 passes).
+            // Strip unsupported list-edit qualifiers (Delete/Add/Order) once
+            // per expansion: the original layer first, then again after each
+            // successful composition pass so arcs introduced by referenced files
+            // don't trip up subsequent passes.
+            // NOTE: do NOT call stripUnsupportedArcsInLayer inside the
+            // check_unresolved_references() predicate — the layer may be large
+            // and calling it every iteration would stall on big scenes.
+            stripUnsupportedArcsInLayer(layer);
+
+            for (int pass = 0; pass < 8; ++pass) {
+                bool progressed = false;
+
+                if (layer.check_unresolved_references()) {
+                    tinyusdz::Layer composed;
+                    std::string cw, ce;
+                    if (!tinyusdz::CompositeReferences(resolver, layer, &composed, &cw, &ce))
+                        break;
+                    layer = std::move(composed);
+                    stripUnsupportedArcsInLayer(layer); // strip arcs from newly expanded files
+                    progressed = true;
+                }
+
+                if (layer.check_unresolved_payload()) {
+                    tinyusdz::Layer composed;
+                    std::string cw, ce;
+                    if (!tinyusdz::CompositePayload(resolver, layer, &composed, &cw, &ce))
+                        break;
+                    layer = std::move(composed);
+                    stripUnsupportedArcsInLayer(layer);
+                    progressed = true;
+                }
+
+                if (!progressed) break;
+            }
+
+            // --- Build Stage from composed Layer ---
+            tinyusdz::Stage stage;
+            // Copy layer metadata (upAxis, defaultPrim, etc.) before LayerToStage
+            // may reset them.
+            stage.metas() = layer.metas();
+            {
+                std::string sw, se;
+                if (!tinyusdz::LayerToStage(layer, &stage, &sw, &se)) {
+                    std::cerr << "[USDLoader] LayerToStage failed for '" << pathStr << "': " << se << "\n";
+                    return nullptr;
+                }
+            }
+
+            return buildFromStage(stage, pathStr, baseDir, resolver, &layer);
+        }
+
+        std::shared_ptr<Group> buildFromStage(const tinyusdz::Stage& stage,
+                                               const std::string& pathStr,
+                                               const std::filesystem::path& baseDir,
+                                               const tinyusdz::AssetResolutionResolver& resolver,
+                                               const tinyusdz::Layer* layer = nullptr) {
+            // --- Convert to RenderScene (triangulates, builds vertex indices) ---
+            tinyusdz::tydra::RenderSceneConverterEnv env(stage);
+            env.usd_filename = pathStr;
+            // Use the resolver that accumulated all referenced-file search paths
+            // during composition so texture/asset paths resolve correctly.
+            // NOTE: AssetResolutionResolver copy operator does NOT copy
+            // _current_working_path (tinyusdz bug), so restore it explicitly.
+            env.asset_resolver = resolver;
+            env.asset_resolver.set_current_working_path(baseDir.string());
+
+            // triangulate and build single-indexable vertex buffers
+            env.mesh_config.triangulate           = true;
+            env.mesh_config.build_vertex_indices  = true;
+            env.mesh_config.compute_normals       = true;
+
+            // load_texture_assets = true ensures asset_identifier is always
+            // populated with the raw USD path string (assetPath.GetAssetPath()),
+            // even if tinyusdz's own decoder fails.  We reload the file ourselves
+            // below via buildTextureCache so the decoded buffer is not used.
+            env.scene_config.load_texture_assets  = true;
+
+            tinyusdz::tydra::RenderScene renderScene;
+            tinyusdz::tydra::RenderSceneConverter converter;
+
+            if (!converter.ConvertToRenderScene(env, &renderScene))
+                return nullptr;
+
+            if (renderScene.meshes.empty()) {
+                std::cerr << "[USDLoader] No meshes after conversion of '" << pathStr << "'\n";
+                return nullptr;
+            }
+
+
+            // --- Textures via RenderScene (UsdPreviewSurface path) ---
+            auto texCache = buildTextureCache(renderScene, baseDir, env.asset_resolver, texLoader);
+
+            // --- MDL material overrides (NVIDIA Omniverse OmniPBR etc.) ---
+            // ConvertToRenderScene yields default grey materials for MDL shaders.
+            // We fall back by reading inputs:diffuse/normal/ORM textures directly
+            // from Shader PrimSpecs in the composed Layer.
+            //
+            // Two cases:
+            //  A) renderScene.materials is populated (individual / non-instanceable):
+            //     build mdlOverrides[material_id] for materials lacking textures.
+            //  B) renderScene.materials is empty (composite / instanceable prims):
+            //     GetBoundMaterial in tinyusdz fails because instanceable-expanded
+            //     prim paths don't exist in the Stage tree.  Resolve material:binding
+            //     directly from the Layer for each mesh node abs_path instead.
+            std::unordered_map<int, std::shared_ptr<MeshStandardMaterial>> mdlOverrides;
+            std::unordered_map<std::string, std::shared_ptr<MeshStandardMaterial>> meshPathMdlMap;
+
+            if (layer) {
+                // Case A — per-material-id overrides
+                for (int mi = 0; mi < static_cast<int>(renderScene.materials.size()); ++mi) {
+                    const auto& rmat = renderScene.materials[mi];
+                    const bool hasTextures =
+                        rmat.surfaceShader.diffuseColor.is_texture() ||
+                        rmat.surfaceShader.roughness.is_texture()    ||
+                        rmat.surfaceShader.metallic.is_texture()     ||
+                        rmat.surfaceShader.normal.is_texture();
+                    if (hasTextures) continue;
+                    if (auto mdlMat = materialFromMDLLayer(
+                            *layer, rmat.abs_path, baseDir, env.asset_resolver, texLoader))
+                        mdlOverrides[mi] = std::move(mdlMat);
+                }
+
+                // Case B — per-mesh-path overrides for instanceable / composite scenes
+                if (renderScene.materials.empty()) {
+                    // Cache unique material paths to avoid re-loading the same textures
+                    std::unordered_map<std::string,
+                                       std::shared_ptr<MeshStandardMaterial>> matPathCache;
+
+                    std::function<void(const tinyusdz::tydra::Node&)> buildMap =
+                        [&](const tinyusdz::tydra::Node& n) {
+                            if (n.nodeType == tinyusdz::tydra::NodeType::Mesh &&
+                                !n.abs_path.empty()) {
+                                const std::string matPath =
+                                    findMaterialBindingInLayer(*layer, n.abs_path);
+                                if (!matPath.empty()) {
+                                    auto cit = matPathCache.find(matPath);
+                                    if (cit == matPathCache.end()) {
+                                        auto mdlMat = materialFromMDLLayer(
+                                            *layer, matPath, baseDir,
+                                            env.asset_resolver, texLoader);
+                                        cit = matPathCache.emplace(matPath,
+                                                                    std::move(mdlMat)).first;
+                                    }
+                                    if (cit->second)
+                                        meshPathMdlMap[n.abs_path] = cit->second;
+                                }
+                            }
+                            for (const auto& c : n.children) buildMap(c);
+                        };
+
+                    for (const auto& n : renderScene.nodes) buildMap(n);
+                }
+            }
+
+            // --- Root group + Z-up correction ---
+            // renderScene.meta.upAxis is never populated by ConvertToRenderScene;
+            // read from stage metadata directly.
             auto root = Group::create();
             if (stage.metas().upAxis.get_value() == tinyusdz::Axis::Z) {
                 root->rotation.x = -math::PI / 2.0f;
             }
 
-            for (const auto& [primPath, geomMeshPtr] : meshMap) {
-                if (!geomMeshPtr) continue;
-                auto geometry = geometryFromGeomMesh(*geomMeshPtr);
-                if (!geometry) continue;
-
-                auto material = resolveMaterial(stage, primPath, baseDir, texLoader);
-                auto mesh = Mesh::create(geometry, material);
-
-                if (auto xform = geomMeshPtr->GetLocalMatrix()) {
-                    mesh->matrix->copy(toMatrix4(*xform));
-                    mesh->matrix->decompose(mesh->position, mesh->quaternion, mesh->scale);
-                    mesh->matrixAutoUpdate = false;
-                }
-
-                root->add(mesh);
+            // --- Walk node tree ---
+            for (const auto& node : renderScene.nodes) {
+                visitNode(renderScene, node, *root, texCache, mdlOverrides, meshPathMdlMap);
             }
 
             if (root->children.empty()) {
