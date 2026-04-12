@@ -93,6 +93,96 @@ namespace threepp {
             return ((w + 3u) / 4u) * ((h + 3u) / 4u) * bb;
         }
 
+        // -----------------------------------------------------------------------
+        // Vertical flip of a compressed mip level.
+        //
+        // DDS files store rows top-to-bottom; OpenGL (and stb_image-loaded
+        // textures) expect bottom-to-top.  We must:
+        //   1. Reverse the order of 4×4 block-rows in memory.
+        //   2. Flip the pixel-row indexing *within* each block so the four
+        //      pixel rows are also reversed.
+        //
+        // This keeps DDS textures consistent with the stb_image flipY=true
+        // convention used for all other texture formats.
+        // -----------------------------------------------------------------------
+
+        // Flip the 3-bit index rows inside a BC4/DXT5-alpha 6-byte bitfield.
+        // The 48 bits encode 16 pixels × 3 bits in row-major order (row 0 first).
+        inline void flipBC4Bits(uint8_t* p6) {
+            uint64_t bits = 0;
+            for (int i = 0; i < 6; ++i) bits |= static_cast<uint64_t>(p6[i]) << (i * 8);
+            const uint64_t r0 = (bits >>  0) & 0xFFFu;
+            const uint64_t r1 = (bits >> 12) & 0xFFFu;
+            const uint64_t r2 = (bits >> 24) & 0xFFFu;
+            const uint64_t r3 = (bits >> 36) & 0xFFFu;
+            const uint64_t flipped = r3 | (r2 << 12) | (r1 << 24) | (r0 << 36);
+            for (int i = 0; i < 6; ++i) p6[i] = static_cast<uint8_t>((flipped >> (i * 8)) & 0xFF);
+        }
+
+        inline void flipBlockInPlace(uint8_t* b, uint32_t glFmt) {
+            const bool isDXT1 = (glFmt == GL_COMPRESSED_RGB_S3TC_DXT1_EXT ||
+                                  glFmt == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
+            const bool isDXT3 = (glFmt == GL_COMPRESSED_RGBA_S3TC_DXT3_EXT);
+            const bool isDXT5 = (glFmt == GL_COMPRESSED_RGBA_S3TC_DXT5_EXT);
+            const bool isBC4  = (glFmt == GL_COMPRESSED_RED_RGTC1);
+            const bool isBC5  = (glFmt == GL_COMPRESSED_RG_RGTC2);
+
+            if (isDXT1) {
+                // bytes 4-7 are the 2-bit row indices: row0=b[4], row3=b[7]
+                std::swap(b[4], b[7]);
+                std::swap(b[5], b[6]);
+            } else if (isDXT3) {
+                // bytes 0-7: 4-bit explicit alpha, 2 bytes per pixel-row
+                std::swap(b[0], b[6]); std::swap(b[1], b[7]);
+                std::swap(b[2], b[4]); std::swap(b[3], b[5]);
+                // bytes 8-15: DXT1 colour block
+                std::swap(b[12], b[15]);
+                std::swap(b[13], b[14]);
+            } else if (isDXT5) {
+                // bytes 0-1: alpha0/alpha1; bytes 2-7: 3-bit index rows
+                flipBC4Bits(b + 2);
+                // bytes 8-15: DXT1 colour block
+                std::swap(b[12], b[15]);
+                std::swap(b[13], b[14]);
+            } else if (isBC4) {
+                flipBC4Bits(b + 2);
+            } else if (isBC5) {
+                flipBC4Bits(b + 2);      // R channel
+                flipBC4Bits(b + 8 + 2);  // G channel
+            }
+            // BC6H / BC7: not handled; those formats are already rare and the
+            // decoders for their internal row layout are non-trivial.
+        }
+
+        // Flip an entire mip level in-place.
+        void flipMipY(uint8_t* data, uint32_t w, uint32_t h, uint32_t glFmt) {
+            const uint32_t bb      = blockBytes(glFmt);
+            const uint32_t blocksX = (w + 3u) / 4u;
+            const uint32_t blocksY = (h + 3u) / 4u;
+            const uint32_t rowBytes = blocksX * bb;
+
+            // Swap pairs of block-rows from outside in, flipping each block.
+            for (uint32_t top = 0, bot = blocksY - 1; top < bot; ++top, --bot) {
+                uint8_t* rowT = data + top * rowBytes;
+                uint8_t* rowB = data + bot * rowBytes;
+                for (uint32_t col = 0; col < blocksX; ++col) {
+                    uint8_t* blkT = rowT + col * bb;
+                    uint8_t* blkB = rowB + col * bb;
+                    // Flip internal rows, then swap the two blocks.
+                    flipBlockInPlace(blkT, glFmt);
+                    flipBlockInPlace(blkB, glFmt);
+                    for (uint32_t byte = 0; byte < bb; ++byte)
+                        std::swap(blkT[byte], blkB[byte]);
+                }
+            }
+            // Middle row (odd blocksY): just flip internal rows.
+            if (blocksY % 2 == 1) {
+                uint8_t* mid = data + (blocksY / 2) * rowBytes;
+                for (uint32_t col = 0; col < blocksX; ++col)
+                    flipBlockInPlace(mid + col * bb, glFmt);
+            }
+        }
+
         std::shared_ptr<Texture> parseDDS(const uint8_t* raw, size_t size) {
             if (size < 4 + sizeof(DDSHeader)) {
                 std::cerr << "[DDSLoader] File too small\n";
@@ -162,6 +252,10 @@ namespace threepp {
                 std::vector<unsigned char> buf(bytes);
                 std::memcpy(buf.data(), raw + dataOffset, bytes);
                 dataOffset += bytes;
+
+                // Flip Y to match stb_image's flipY=true convention so DDS
+                // textures are consistent with all other texture formats.
+                flipMipY(buf.data(), w, h, glFmt);
 
                 mips.emplace_back(std::move(buf), w, h, glFmt);
             }
