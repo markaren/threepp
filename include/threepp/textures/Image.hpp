@@ -18,6 +18,10 @@ namespace threepp {
         unsigned int height;
         unsigned int depth;
 
+        struct CompressedFormat {
+            unsigned int format;
+        };
+
         // When set, the data_ buffer holds a compressed block payload and this
         // value is the GL compressed internal format token (e.g.
         // GL_COMPRESSED_RGBA_S3TC_DXT5_EXT). Used by GLTextures to call
@@ -32,9 +36,9 @@ namespace threepp {
 
         // Constructor for compressed block data.
         Image(std::vector<unsigned char> data, unsigned int width, unsigned int height,
-              unsigned int glCompressedFormat)
+              CompressedFormat glCompressedFormat)
             : width(width), height(height), depth(0),
-              compressedFormat(glCompressedFormat),
+              compressedFormat(glCompressedFormat.format),
               data_(std::move(data)){};
 
         void setData(ImageData data) {

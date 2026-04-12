@@ -24,6 +24,10 @@ namespace threepp {
         constexpr uint32_t GL_COMPRESSED_RG_RGTC2                   = 0x8DBDu;
         constexpr uint32_t GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT    = 0x8E8Fu;
         constexpr uint32_t GL_COMPRESSED_RGBA_BPTC_UNORM            = 0x8E8Cu;
+        // sRGB variants — used for BaseColor / Emissive textures.
+        constexpr uint32_t GL_COMPRESSED_SRGB_S3TC_DXT1_EXT         = 0x8C4Cu;
+        constexpr uint32_t GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT   = 0x8C4Fu;
+        constexpr uint32_t GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM      = 0x8E8Du;
 
         constexpr uint32_t makeFourCC(char a, char b, char c, char d) {
             return static_cast<uint32_t>(a)
@@ -71,12 +75,15 @@ namespace threepp {
         uint32_t dxgiToGL(uint32_t dxgi) {
             switch (dxgi) {
                 case 71: return GL_COMPRESSED_RGBA_S3TC_DXT1_EXT;        // BC1_UNORM
+                case 72: return GL_COMPRESSED_SRGB_S3TC_DXT1_EXT;        // BC1_UNORM_SRGB
                 case 74: return GL_COMPRESSED_RGBA_S3TC_DXT3_EXT;        // BC2_UNORM
                 case 77: return GL_COMPRESSED_RGBA_S3TC_DXT5_EXT;        // BC3_UNORM
+                case 78: return GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT;  // BC3_UNORM_SRGB
                 case 80: return GL_COMPRESSED_RED_RGTC1;                  // BC4_UNORM
                 case 83: return GL_COMPRESSED_RG_RGTC2;                   // BC5_UNORM
                 case 95: return GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT;   // BC6H_UF16
                 case 98: return GL_COMPRESSED_RGBA_BPTC_UNORM;           // BC7_UNORM
+                case 99: return GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM;     // BC7_UNORM_SRGB
                 default: return 0;
             }
         }
@@ -257,7 +264,7 @@ namespace threepp {
                 // textures are consistent with all other texture formats.
                 flipMipY(buf.data(), w, h, glFmt);
 
-                mips.emplace_back(std::move(buf), w, h, glFmt);
+                mips.emplace_back(std::move(buf), w, h, Image::CompressedFormat(glFmt));
             }
 
             if (mips.empty()) return nullptr;
