@@ -733,6 +733,11 @@ void gl::GLState::texImage3D(GLuint target, GLint level, GLint internalFormat, G
     glTexImage3D(target, level, internalFormat, width, height, depth, 0, format, type, pixels);
 }
 
+void gl::GLState::texCompressedImage2D(GLuint target, GLint level, GLuint internalFormat, GLint width, GLint height, GLsizei imageSize, const void* data) {
+
+    glCompressedTexImage2D(target, level, internalFormat, width, height, 0, imageSize, data);
+}
+
 void gl::GLState::scissor(const Vector4& scissor) {
 
     if (!currentScissor.equals(scissor)) {
