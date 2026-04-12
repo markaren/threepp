@@ -8,4 +8,8 @@
 #include "STLLoader.hpp"
 #include "TextureLoader.hpp"
 
+#ifdef THREEPP_WITH_USD
+#include "USDLoader.hpp"
+#endif
+
 #endif//THREEPP_LOADERS_HPP

@@ -478,6 +478,16 @@ if (THREEPP_WITH_SVG)
     )
 endif ()
 
+if (THREEPP_WITH_USD)
+    list(APPEND publicHeaders
+            "threepp/loaders/USDLoader.hpp"
+    )
+
+    list(APPEND sources
+            "threepp/loaders/USDLoader.cpp"
+    )
+endif ()
+
 if (THREEPP_WITH_AUDIO)
     list(APPEND publicHeaders
             "threepp/audio/Audio.hpp"
@@ -582,6 +592,15 @@ if (THREEPP_WITH_AUDIO)
             PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/external/miniaudio"
     )
+endif ()
+
+if (THREEPP_WITH_USD)
+    message("Using tinyusdz: "${tinyusdz_SOURCE_DIR}"")
+    target_link_libraries(threepp PRIVATE tinyusdz_static)
+    target_include_directories(threepp PRIVATE
+            "${tinyusdz_SOURCE_DIR}/src"
+    )
+    target_compile_definitions(threepp PRIVATE THREEPP_WITH_USD)
 endif ()
 
 if (NOT DEFINED EMSCRIPTEN)

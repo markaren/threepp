@@ -5,6 +5,9 @@
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/OBJLoader.hpp"
 #include "threepp/loaders/STLLoader.hpp"
+#ifdef THREEPP_WITH_USD
+#include "threepp/loaders/USDLoader.hpp"
+#endif
 #include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/objects/Mesh.hpp"
 
@@ -47,6 +50,13 @@ std::shared_ptr<Group> ModelLoader::load(const std::filesystem::path& path) {
         group->add(Mesh::create(geometry, MeshPhongMaterial::create()));
         return group;
     }
+
+#ifdef THREEPP_WITH_USD
+    if (ext == ".usd" || ext == ".usda" || ext == ".usdc" || ext == ".usdz") {
+        thread_local USDLoader loader;
+        return loader.load(path);
+    }
+#endif
 
     std::cerr << "[ModelLoader] Unsupported file extension '" << ext << "'." << std::endl;
     return nullptr;
