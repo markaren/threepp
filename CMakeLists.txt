@@ -7,7 +7,10 @@ option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
 option(THREEPP_BUILD_TESTS "Build test suite" ON)
 option(THREEPP_WITH_SVG "Build with SVGLoader" ON)
 option(THREEPP_WITH_AUDIO "Build with Audio" ON)
+
+option(THREEPP_WITH_FBX "Build with FBXLoader (OpenFBX)" OFF)
 option(THREEPP_WITH_USD "Build with USDLoader (tinyusdz)" OFF)
+
 option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 
 
@@ -85,6 +88,27 @@ if (THREEPP_WITH_USD)
         INTERFACE_INCLUDE_DIRECTORIES
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/tinyusdz>"
     )
+endif ()
+
+
+if (THREEPP_WITH_FBX)
+    include(FetchContent)
+    message(STATUS "Fetching OpenFBX...")
+    FetchContent_Declare(
+        openfbx
+        GIT_REPOSITORY https://github.com/nem0/OpenFBX.git
+        GIT_TAG        master
+        GIT_SHALLOW    TRUE
+    )
+    # Populate source only — do NOT call add_subdirectory (OpenFBX's CMakeLists
+    # has an unresolvable install-export dependency on libdeflate_static).
+    # CMP0169 OLD lets us call FetchContent_Populate directly without CMake 4.x
+    # routing through add_subdirectory.
+    cmake_policy(SET CMP0169 OLD)
+    FetchContent_GetProperties(openfbx)
+    if (NOT openfbx_POPULATED)
+        FetchContent_Populate(openfbx)
+    endif ()
 endif ()
 
 add_subdirectory(src)

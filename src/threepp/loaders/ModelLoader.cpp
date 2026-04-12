@@ -8,6 +8,9 @@
 #ifdef THREEPP_WITH_USD
 #include "threepp/loaders/USDLoader.hpp"
 #endif
+#ifdef THREEPP_WITH_FBX
+#include "threepp/loaders/FBXLoader.hpp"
+#endif
 #include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/objects/Mesh.hpp"
 
@@ -54,6 +57,13 @@ std::shared_ptr<Group> ModelLoader::load(const std::filesystem::path& path) {
 #ifdef THREEPP_WITH_USD
     if (ext == ".usd" || ext == ".usda" || ext == ".usdc" || ext == ".usdz") {
         thread_local USDLoader loader;
+        return loader.load(path);
+    }
+#endif
+
+#ifdef THREEPP_WITH_FBX
+    if (ext == ".fbx") {
+        thread_local FBXLoader loader;
         return loader.load(path);
     }
 #endif
