@@ -111,6 +111,7 @@ set(publicHeaders
         "threepp/loaders/AssimpLoader.hpp"
         "threepp/loaders/CubeTextureLoader.hpp"
         "threepp/loaders/ColladaLoader.hpp"
+        "threepp/loaders/DDSLoader.hpp"
         "threepp/loaders/FontLoader.hpp"
         "threepp/loaders/GLTFLoader.hpp"
         "threepp/loaders/MTLLoader.hpp"
@@ -350,6 +351,7 @@ set(sources
         "threepp/input/PeripheralsEventSource.cpp"
 
         "threepp/loaders/ColladaLoader.cpp"
+        "threepp/loaders/DDSLoader.cpp"
         "threepp/loaders/FontLoader.cpp"
         "threepp/loaders/GLTFLoader.cpp"
         "threepp/loaders/ImageLoader.cpp"
@@ -488,6 +490,18 @@ if (THREEPP_WITH_USD)
     )
 endif ()
 
+if (THREEPP_WITH_FBX)
+    list(APPEND publicHeaders
+            "threepp/loaders/FBXLoader.hpp"
+    )
+
+    list(APPEND sources
+            "threepp/loaders/FBXLoader.cpp"
+            "${openfbx_SOURCE_DIR}/src/ofbx.cpp"
+            "${openfbx_SOURCE_DIR}/src/libdeflate.c"
+    )
+endif ()
+
 if (THREEPP_WITH_AUDIO)
     list(APPEND publicHeaders
             "threepp/audio/Audio.hpp"
@@ -601,6 +615,11 @@ if (THREEPP_WITH_USD)
             "${tinyusdz_SOURCE_DIR}/src"
     )
     target_compile_definitions(threepp PRIVATE THREEPP_WITH_USD)
+endif ()
+
+if (THREEPP_WITH_FBX)
+    target_include_directories(threepp PRIVATE "${openfbx_SOURCE_DIR}/src")
+    target_compile_definitions(threepp PRIVATE THREEPP_WITH_FBX)
 endif ()
 
 if (NOT DEFINED EMSCRIPTEN)

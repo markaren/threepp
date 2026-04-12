@@ -2,6 +2,7 @@
 #ifndef THREEPP_IMAGE_HPP
 #define THREEPP_IMAGE_HPP
 
+#include <optional>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -17,11 +18,24 @@ namespace threepp {
         unsigned int height;
         unsigned int depth;
 
+        // When set, the data_ buffer holds a compressed block payload and this
+        // value is the GL compressed internal format token (e.g.
+        // GL_COMPRESSED_RGBA_S3TC_DXT5_EXT). Used by GLTextures to call
+        // glCompressedTexImage2D instead of glTexImage2D.
+        std::optional<unsigned int> compressedFormat;
+
         Image(ImageData data, unsigned int width, unsigned int height)
             : width(width), height(height), depth(0), data_(std::move(data)){};
 
         Image(ImageData data, unsigned int width, unsigned int height, unsigned int depth)
             : width(width), height(height), depth(depth), data_(std::move(data)){};
+
+        // Constructor for compressed block data.
+        Image(std::vector<unsigned char> data, unsigned int width, unsigned int height,
+              unsigned int glCompressedFormat)
+            : width(width), height(height), depth(0),
+              compressedFormat(glCompressedFormat),
+              data_(std::move(data)){};
 
         void setData(ImageData data) {
 

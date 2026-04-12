@@ -1,8 +1,11 @@
 
 #include "threepp/loaders/TextureLoader.hpp"
 
+#include "threepp/loaders/DDSLoader.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <regex>
 #include <vector>
@@ -54,6 +57,17 @@ struct TextureLoader::Impl {
         if (!std::filesystem::exists(path)) {
             std::cerr << "[TextureLoader] No such file: '" << absolute(path).string() << "'!" << std::endl;
             return nullptr;
+        }
+
+        {
+            auto ext = path.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){ return std::tolower(c); });
+            if (ext == ".dds") {
+                DDSLoader ddsLoader;
+                auto texture = ddsLoader.load(path);
+                if (texture && useCache_) cache_[path.string()] = texture;
+                return texture;
+            }
         }
 
         bool isJPEG = checkIsJPEG(path.string());

@@ -198,7 +198,25 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
         // if there are no manual mipmaps
         // set 0 level mipmap and then use GL to generate other mipmap levels
 
-        if (!mipmaps.empty()) {
+        if (image.compressedFormat.has_value()) {
+
+            // GPU-native compressed texture (e.g. DDS/BCn).
+            // Level 0 is the base image; additional mip levels are in mipmaps().
+            const GLuint compFmt = static_cast<GLuint>(*image.compressedFormat);
+            auto uploadCompressed = [&](int level, Image& img) {
+                const auto& buf = img.data();
+                state->texCompressedImage2D(GL_TEXTURE_2D, level, compFmt,
+                        static_cast<int>(img.width), static_cast<int>(img.height),
+                        static_cast<int>(buf.size()), buf.data());
+            };
+            uploadCompressed(0, image);
+            for (unsigned i = 0; i < mipmaps.size(); ++i) {
+                uploadCompressed(static_cast<int>(i + 1), mipmaps[i]);
+            }
+            texture.generateMipmaps = false;
+            textureProperties->maxMipLevel = static_cast<int>(mipmaps.size());
+
+        } else if (!mipmaps.empty()) {
 
             for (unsigned i = 0; i < mipmaps.size(); ++i) {
 
