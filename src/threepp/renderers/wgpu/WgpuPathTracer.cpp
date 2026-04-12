@@ -44,6 +44,131 @@
 using namespace threepp;
 
 // ---------------------------------------------------------------------------
+// Software BCn / DXT decompressor
+// Converts compressed block data (DXT1/3/5, BC4, BC5) to RGBA8.
+// Used by the texture atlas builder which requires plain RGBA8 input.
+// ---------------------------------------------------------------------------
+namespace {
+
+    inline void bc_unpackRGB565(uint16_t c, uint8_t& r, uint8_t& g, uint8_t& b) {
+        r = static_cast<uint8_t>((c >> 11) * 255 / 31);
+        g = static_cast<uint8_t>(((c >> 5) & 0x3F) * 255 / 63);
+        b = static_cast<uint8_t>((c & 0x1F) * 255 / 31);
+    }
+
+    // Decode one 4×4 BC4 block (8 bytes) into 16 uint8 red values.
+    inline void bc_decodeBC4Block(const uint8_t* src, uint8_t out[16]) {
+        const uint8_t r0 = src[0], r1 = src[1];
+        uint8_t pal[8];
+        pal[0] = r0; pal[1] = r1;
+        if (r0 > r1) {
+            pal[2] = static_cast<uint8_t>((6*r0 + 1*r1) / 7);
+            pal[3] = static_cast<uint8_t>((5*r0 + 2*r1) / 7);
+            pal[4] = static_cast<uint8_t>((4*r0 + 3*r1) / 7);
+            pal[5] = static_cast<uint8_t>((3*r0 + 4*r1) / 7);
+            pal[6] = static_cast<uint8_t>((2*r0 + 5*r1) / 7);
+            pal[7] = static_cast<uint8_t>((1*r0 + 6*r1) / 7);
+        } else {
+            pal[2] = static_cast<uint8_t>((4*r0 + 1*r1) / 5);
+            pal[3] = static_cast<uint8_t>((3*r0 + 2*r1) / 5);
+            pal[4] = static_cast<uint8_t>((2*r0 + 3*r1) / 5);
+            pal[5] = static_cast<uint8_t>((1*r0 + 4*r1) / 5);
+            pal[6] = 0; pal[7] = 255;
+        }
+        uint64_t bits = 0;
+        for (int i = 0; i < 6; ++i) bits |= static_cast<uint64_t>(src[2 + i]) << (i * 8);
+        for (int i = 0; i < 16; ++i)
+            out[i] = pal[(bits >> (i * 3)) & 7];
+    }
+
+    // Decode one 4×4 DXT1 (BC1) block (8 bytes) into 64 bytes RGBA.
+    inline void bc_decodeDXT1Block(const uint8_t* src, uint8_t out[64], bool punchThrough) {
+        uint16_t c0, c1;
+        std::memcpy(&c0, src, 2); std::memcpy(&c1, src + 2, 2);
+        uint8_t r[4], g[4], b[4], a[4];
+        bc_unpackRGB565(c0, r[0], g[0], b[0]); a[0] = 255;
+        bc_unpackRGB565(c1, r[1], g[1], b[1]); a[1] = 255;
+        if (c0 > c1 || !punchThrough) {
+            r[2]=(2*r[0]+r[1])/3; g[2]=(2*g[0]+g[1])/3; b[2]=(2*b[0]+b[1])/3; a[2]=255;
+            r[3]=(r[0]+2*r[1])/3; g[3]=(g[0]+2*g[1])/3; b[3]=(b[0]+2*b[1])/3; a[3]=255;
+        } else {
+            r[2]=(r[0]+r[1])/2; g[2]=(g[0]+g[1])/2; b[2]=(b[0]+b[1])/2; a[2]=255;
+            r[3]=0; g[3]=0; b[3]=0; a[3]=0;
+        }
+        uint32_t idx; std::memcpy(&idx, src + 4, 4);
+        for (int i = 0; i < 16; ++i) {
+            const int p = (idx >> (i * 2)) & 3;
+            out[i*4+0]=r[p]; out[i*4+1]=g[p]; out[i*4+2]=b[p]; out[i*4+3]=a[p];
+        }
+    }
+
+    // Decompress an entire BCn texture level to RGBA8.
+    // Returns an empty vector if the format is unsupported (e.g. BC6H/BC7).
+    std::vector<uint8_t> bcnDecompress(const uint8_t* blocks, int w, int h, unsigned int glFmt) {
+        constexpr unsigned int DXT1_RGB  = 0x83F0u;
+        constexpr unsigned int DXT1_RGBA = 0x83F1u;
+        constexpr unsigned int DXT3      = 0x83F2u;
+        constexpr unsigned int DXT5      = 0x83F3u;
+        constexpr unsigned int BC4       = 0x8DBBu;
+        constexpr unsigned int BC5       = 0x8DBDu;
+
+        const bool isDXT1 = (glFmt == DXT1_RGB || glFmt == DXT1_RGBA);
+        const bool isDXT3 = (glFmt == DXT3);
+        const bool isDXT5 = (glFmt == DXT5);
+        const bool isBC4  = (glFmt == BC4);
+        const bool isBC5  = (glFmt == BC5);
+        if (!isDXT1 && !isDXT3 && !isDXT5 && !isBC4 && !isBC5) return {};
+
+        const int blocksX = (w + 3) / 4;
+        const int blocksY = (h + 3) / 4;
+        std::vector<uint8_t> out(static_cast<size_t>(w * h) * 4, 255u);
+
+        const uint8_t* p = blocks;
+        for (int by = 0; by < blocksY; ++by) {
+            for (int bx = 0; bx < blocksX; ++bx) {
+                uint8_t rgba[64] = {};
+                if (isDXT1) {
+                    bc_decodeDXT1Block(p, rgba, glFmt == DXT1_RGBA);
+                    p += 8;
+                } else if (isDXT3) {
+                    uint8_t alpha[16];
+                    for (int i = 0; i < 8; ++i) {
+                        alpha[i*2+0] = static_cast<uint8_t>((p[i] & 0x0F) * 17);
+                        alpha[i*2+1] = static_cast<uint8_t>((p[i] >> 4)   * 17);
+                    }
+                    bc_decodeDXT1Block(p + 8, rgba, false);
+                    for (int i = 0; i < 16; ++i) rgba[i*4+3] = alpha[i];
+                    p += 16;
+                } else if (isDXT5) {
+                    uint8_t alpha[16];
+                    bc_decodeBC4Block(p, alpha);
+                    bc_decodeDXT1Block(p + 8, rgba, false);
+                    for (int i = 0; i < 16; ++i) rgba[i*4+3] = alpha[i];
+                    p += 16;
+                } else if (isBC4) {
+                    uint8_t r[16]; bc_decodeBC4Block(p, r);
+                    for (int i = 0; i < 16; ++i) { rgba[i*4]=r[i]; rgba[i*4+1]=0; rgba[i*4+2]=0; rgba[i*4+3]=255; }
+                    p += 8;
+                } else if (isBC5) {
+                    uint8_t r[16], g[16];
+                    bc_decodeBC4Block(p, r); bc_decodeBC4Block(p + 8, g);
+                    for (int i = 0; i < 16; ++i) { rgba[i*4]=r[i]; rgba[i*4+1]=g[i]; rgba[i*4+2]=0; rgba[i*4+3]=255; }
+                    p += 16;
+                }
+                // Write 4×4 block into output, clamping to texture bounds.
+                const int px = bx * 4, py = by * 4;
+                for (int y = 0; y < 4 && (py + y) < h; ++y)
+                    for (int x = 0; x < 4 && (px + x) < w; ++x)
+                        std::memcpy(&out[(static_cast<size_t>(py + y) * w + (px + x)) * 4],
+                                    &rgba[(y * 4 + x) * 4], 4);
+            }
+        }
+        return out;
+    }
+
+}// namespace
+
+// ---------------------------------------------------------------------------
 // Limits
 // ---------------------------------------------------------------------------
 namespace {
@@ -4085,10 +4210,28 @@ static std::tuple<std::vector<unsigned char>, int, int, int> buildAtlas(
         if (texSlotMap.count(tex)) return;
         auto& img = tex->image();
         if (img.width == 0 || img.height == 0) return;
-        const auto& src = img.data<unsigned char>();
         const int srcW = static_cast<int>(img.width);
         const int srcH = static_cast<int>(img.height);
-        const int ch = static_cast<int>(src.size()) / (srcW * srcH);
+
+        // Decompress BCn/DXT blocks to plain RGBA8 for the atlas blit.
+        std::vector<uint8_t> decompressed;
+        if (img.compressedFormat.has_value()) {
+            const auto& compressed = img.data<unsigned char>();
+            decompressed = bcnDecompress(compressed.data(), srcW, srcH, *img.compressedFormat);
+            if (decompressed.empty()) {
+                std::cerr << "[Atlas] Unsupported compressed format 0x"
+                          << std::hex << *img.compressedFormat << std::dec
+                          << " — texture skipped\n";
+                return;
+            }
+        }
+
+        const uint8_t* srcPtr = img.compressedFormat.has_value()
+            ? decompressed.data()
+            : img.data<unsigned char>().data();
+        const int ch = img.compressedFormat.has_value()
+            ? 4
+            : static_cast<int>(img.data<unsigned char>().size()) / (srcW * srcH);
 
         const int layer = slot / slotsPerLayer;
         const int localSlot = slot % slotsPerLayer;
@@ -4102,7 +4245,7 @@ static std::tuple<std::vector<unsigned char>, int, int, int> buildAtlas(
             for (int ty = 0; ty < TILE_SIZE; ++ty) {
                 const int di = ((destY + ty) * atlasW + destX) * 4;
                 const int si = ty * srcW * 4;
-                std::memcpy(layerBase + di, src.data() + si, TILE_SIZE * 4);
+                std::memcpy(layerBase + di, srcPtr + si, TILE_SIZE * 4);
             }
         } else {
             std::vector<int> xmap(TILE_SIZE);
@@ -4114,16 +4257,16 @@ static std::tuple<std::vector<unsigned char>, int, int, int> buildAtlas(
                 unsigned char* dst = layerBase + ((destY + ty) * atlasW + destX) * 4;
                 if (ch == 4) {
                     for (int tx = 0; tx < TILE_SIZE; ++tx) {
-                        std::memcpy(dst + tx * 4, src.data() + (srcRowOff + xmap[tx]) * 4, 4);
+                        std::memcpy(dst + tx * 4, srcPtr + (srcRowOff + xmap[tx]) * 4, 4);
                     }
                 } else {
                     for (int tx = 0; tx < TILE_SIZE; ++tx) {
                         const int si = (srcRowOff + xmap[tx]) * ch;
                         const int di = tx * 4;
-                        dst[di + 0] = src[si + 0];
-                        dst[di + 1] = src[si + 1];
-                        dst[di + 2] = src[si + 2];
-                        dst[di + 3] = ch >= 4 ? src[si + 3] : 255u;
+                        dst[di + 0] = srcPtr[si + 0];
+                        dst[di + 1] = srcPtr[si + 1];
+                        dst[di + 2] = srcPtr[si + 2];
+                        dst[di + 3] = ch >= 4 ? srcPtr[si + 3] : 255u;
                     }
                 }
             }
