@@ -27,8 +27,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-
-
     // ---- Window & Renderer ----
     Canvas canvas("Bistro scene",
                   {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
@@ -37,7 +35,7 @@ int main(int argc, char** argv) {
     renderer.shadowMap().enabled = true;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
-    pathTracer.setEnvIntensity(0.5f);
+    pathTracer.setEnvIntensity(1.0f);
     pathTracer.setExposure(1.0f);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setFoveatedRendering(false);
@@ -53,13 +51,6 @@ int main(int argc, char** argv) {
     scene.background = env;
     scene.environment = env;
 
-    auto light = DirectionalLight::create(0xffffff, 1.0f);
-    light->position.set(1, 1, 1);
-    light->visible = false;
-    light->castShadow = true;
-    scene.add(light);
-    scene.add(AmbientLight::create(0xffffff, 0.2f));
-
     // ---- Camera ----
     PerspectiveCamera camera(50.f, canvas.aspect(), 0.01f, 1000.f);
     camera.position.set(0.f, 1.f, 3.f);
@@ -69,11 +60,19 @@ int main(int argc, char** argv) {
 
     // ---- Async model loading ----
     ModelLoader loader;
-    auto interior = loader.load(modelFolder / "BistroInterior.fbx");
+    auto interior = loader.load(modelFolder / "BistroInterior_Wine.fbx");
     auto exterior = loader.load(modelFolder / "BistroExterior.fbx");
 
     scene.add(interior);
     scene.add(exterior);
+
+    exterior->traverseType<Light>([&](Light& l) {
+        l.visible = false;
+    });
+
+    interior->traverseType<Light>([&](Light& l) {
+        l.visible = false;
+    });
 
 
     // Auto-fit camera to model bounding box
@@ -97,7 +96,6 @@ int main(int argc, char** argv) {
 
     // ---- UI ----
     bool raster = false;
-    bool dirLight = light->visible;
     bool denoiserOn = pathTracer.denoiserEnabled();
     bool restdirOn = pathTracer.restirEnabled();
     bool restdirGIOn = pathTracer.restirGiEnabled();
@@ -138,10 +136,6 @@ int main(int argc, char** argv) {
             if (ImGui::Checkbox("REsTDIR GI", &restdirGIOn))
                 pathTracer.setReSTIRGIEnabled(restdirGIOn);
 
-            if (ImGui::Checkbox("Show DirLight", &dirLight)) {
-                light->visible = dirLight;
-                pathTracer.markDirty();
-            }
         }
 
         ImGui::End();
@@ -171,8 +165,6 @@ int main(int argc, char** argv) {
             fpsAccum = 0.f;
             fpsFrames = 0;
         }
-
-        light->visible = dirLight || raster;
 
         controls.update();
 
