@@ -17,9 +17,8 @@ int main() {
     camera.position.set(0, 0, 5);
 
     RGBELoader hdrLoader;
-    auto hdrTexture = hdrLoader.load(std::string(DATA_FOLDER) + "/textures/env/san_giuseppe_bridge/san_giuseppe_bridge_4k.hdr");
 
-    if (hdrTexture) {
+    if (auto hdrTexture = hdrLoader.load(std::string(DATA_FOLDER) + "/textures/env/san_giuseppe_bridge/san_giuseppe_bridge_4k.hdr")) {
         scene->background = hdrTexture;
         scene->environment = hdrTexture;
     }
