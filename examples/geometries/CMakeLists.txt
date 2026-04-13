@@ -7,7 +7,6 @@ add_example(NAME "tube_geometry" WEB)
 add_example(NAME "shape_geometry" WEB)
 add_example(NAME "convex_geometry" WEB)
 add_example(NAME "dynamic" WEB)
-add_example(NAME "heightmap")
 
 add_example(NAME "basic_geometries" LINK_IMGUI WEB)
 
