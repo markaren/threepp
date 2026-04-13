@@ -128,21 +128,21 @@ int main() {
     Object3D target;
     target.position.set(0.f, 2.f, 0.f);
 
-    auto keyLight = SpotLight::create(Color(1.0f, 0.9f, 0.7f), 2.0f, 15.f, math::PI / 6.f, 0.3f, 1.f);
+    auto keyLight = SpotLight::create(Color(1.0f, 0.9f, 0.7f), 6.0f, 15.f, math::PI / 6.f, 0.3f);
     keyLight->position.set(4.f, 7.f, 3.f);
     keyLight->setTarget(target);
 
     scene.add(keyLight);
 
     // Cool fill light — point light from the left
-    auto fillLight = PointLight::create(Color(0.4f, 0.6f, 1.0f), 1.0f);
-    fillLight->distance = 12.f;
+    auto fillLight = PointLight::create(Color(0.4f, 0.6f, 1.0f), 2.5f);
+    // fillLight->distance = 12.f;
     fillLight->position.set(-4.f, 4.f, 2.f);
     scene.add(fillLight);
 
     // Rim/back light — warm point light behind
-    auto rimLight = PointLight::create(Color(1.0f, 0.5f, 0.2f), 0.8f);
-    rimLight->distance = 10.f;
+    auto rimLight = PointLight::create(Color(1.0f, 0.5f, 0.2f), 1.2f);
+    // rimLight->distance = 10.f;
     rimLight->position.set(1.f, 5.f, -4.f);
     scene.add(rimLight);
 
