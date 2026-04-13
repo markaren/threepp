@@ -2230,7 +2230,7 @@ constexpr const char* csPathTraceWGSL2b = R"(
                     let lobeSum = evalBrdfFull(wo, le.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
                                                h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
                     let neeContrib = shadowAtten * lobeSum * NdotL * le.color;
-                    if (useReSTIRGI) {
+                    if (useReSTIRGI && !giResStored) {
                         giLo += neeContrib;
                     } else {
                         addSplit(&diffRad, &specRad, throughput * neeContrib, cap, i, firstBounceSpec);
@@ -2269,7 +2269,7 @@ R"(
                         let lobeSum3 = evalBrdfFull(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h,
                                                      h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
                         let emNeeContrib = emAtten * lobeSum3 * NdotL * emColor * w_light / pdf;
-                        if (useReSTIRGI) {
+                        if (useReSTIRGI && !giResStored) {
                             giLo += emNeeContrib;
                         } else {
                             addSplit(&diffRad, &specRad, throughput * emNeeContrib, cap, i, firstBounceSpec);
@@ -2309,7 +2309,7 @@ R"(
                         let lobeSum4 = evalBrdfFull(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h,
                                                      h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
                         let envNeeContrib = envAtten * lobeSum4 * envNdotL * envCol * w_env / envPdf;
-                        if (useReSTIRGI) {
+                        if (useReSTIRGI && !giResStored) {
                             giLo += envNeeContrib;
                         } else {
                             addSplit(&diffRad, &specRad, throughput * envNeeContrib, cap, i, firstBounceSpec);
