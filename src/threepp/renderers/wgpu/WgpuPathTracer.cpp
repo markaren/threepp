@@ -1546,7 +1546,17 @@ fn finalizeReservoir(r: ptr<function, Reservoir>) {
 
 
 // Evaluate unshadowed target function for a reservoir sample.
-// Returns luminance of (BRDF * Le * NdotL * geometry).
+// Returns NdotL * luminance(Le) — geometry-weighted light intensity without BRDF.
+//
+// Using a BRDF-based target PDF introduced texture-pattern bias: the roughness clamp
+// (safeAlpha) needed to tame GGX D spikes on smooth surfaces created a systematic
+// mismatch between the reservoir weight and the actual shade-time BRDF evaluation.
+// The mismatch was spatially correlated with the roughness texture, making the texture
+// pattern visible in the lighting.
+//
+// A pure luminance target is unbiased, roughness-independent, and produces good
+// reservoir quality for diffuse-dominant scenes. Specular variance is slightly higher
+// but handled by the temporal accumulation.
 fn restirTargetPdf(point: vec3<f32>, normal: vec3<f32>, wo: vec3<f32>,
                    albedo: vec3<f32>, metalness: f32, alpha: f32, F0: vec3<f32>,
                    lightPos: vec3<f32>, lightType: f32,
@@ -1573,15 +1583,7 @@ fn restirTargetPdf(point: vec3<f32>, normal: vec3<f32>, wo: vec3<f32>,
     let NdotL = dot(normal, ln);
     if (NdotL <= 0.0) { return 0.0; }
 
-    // Clamp roughness floor for the target PDF to prevent extreme GGX D values
-    // on low-roughness surfaces. Without this, the specular peak creates
-    // p_hat swings of 1e5+ between smooth/rough regions, producing stable
-    // roughness-correlated brightness patches in the reservoir weights.
-    let safeAlpha = max(alpha, 0.1);
-    let brdf = evalBrdf(wo, ln, normal, albedo, metalness, safeAlpha, F0);
-    let lobeSum = brdf.f_diff + brdf.f_spec;
-
-    return luminance(lobeSum * NdotL * lightLe);
+    return NdotL * luminance(lightLe);
 }
 )"
 R"(
@@ -1944,8 +1946,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         // the reservoir can't sample — results oscillate between bright/black.
         // Classic NEE + bounce-1 BRDF hit handles specular reflections correctly.
         let useReSTIR = i == 0 && rt.restirParams.x > 0.5
-                        && h.transmission < 0.05
-                        && h.shininess >= 0.05;
+                        && h.transmission < 0.05;
 
         if (useReSTIR) {
             // ======= ReSTIR DI: Initial candidate generation =======
@@ -7365,9 +7366,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.frameCount_ = 0.f;
         d.prevNLights_ = nLights;
         u.frameCount[0] = 0.f;
-        // params[3] was packed before this detection — re-stamp forceReset bit (bit 0)
-        // so pixelFC resets this frame rather than next.
-        u.params[3] += 1.f;  // fr was 0 here (frameCount_ was > 0); cm bit preserved
+        // params[3] was packed before this detection; recompute from scratch to ensure
+        // forceReset (bit 0) is set correctly regardless of prior state of params[3].
+        // += 1 would corrupt the encoding if params[3] was already 1 (fr already set),
+        // flipping forceReset off and camMoved on instead.
+        u.params[3] = 1.f + (camMoved ? 2.f : 0.f);
     }
 
     d.rtUniformBuf.write(&u, sizeof(u));
