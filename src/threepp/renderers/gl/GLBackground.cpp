@@ -23,9 +23,10 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
         background = scene->as<Scene>()->background;
     }
 
+    // Resolve equirectangular textures to cubemaps up front (mirrors three.js WebGLBackground).
+    Texture* resolvedBackground = nullptr;
     if (background && background->isTexture()) {
-
-        cubemaps.get(background->texture().get());
+        resolvedBackground = cubemaps.get(background->texture().get());
     }
 
     if (!background || (background && background->empty())) {
@@ -43,51 +44,52 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
         renderer.clear(renderer.autoClearColor, renderer.autoClearDepth, renderer.autoClearStencil);
     }
 
-    if (background && background->isTexture()) {
+    // resolvedBackground is either the original texture or the converted CubeTexture.
+    // Only render the skybox if it resolves to a CubeTexture.
+    if (auto* cubeBackground = dynamic_cast<CubeTexture*>(resolvedBackground)) {
 
         auto tex = background->texture();
-        if (auto cubeTexture = std::dynamic_pointer_cast<CubeTexture>(tex)) {
 
-            if (!boxMesh) {
-                auto shaderMaterial = ShaderMaterial::create();
-                shaderMaterial->name = "BackgroundCubeMaterial";
-                shaderMaterial->uniforms = shaders::ShaderLib::instance().cube.uniforms;
-                shaderMaterial->vertexShader = shaders::ShaderLib::instance().cube.vertexShader;
-                shaderMaterial->fragmentShader = shaders::ShaderLib::instance().cube.fragmentShader;
-                shaderMaterial->side = Side::Back;
-                shaderMaterial->depthTest = false;
-                shaderMaterial->depthWrite = false;
-                shaderMaterial->fog = false;
+        if (!boxMesh) {
+            auto shaderMaterial = ShaderMaterial::create();
+            shaderMaterial->name = "BackgroundCubeMaterial";
+            shaderMaterial->uniforms = shaders::ShaderLib::instance().cube.uniforms;
+            shaderMaterial->vertexShader = shaders::ShaderLib::instance().cube.vertexShader;
+            shaderMaterial->fragmentShader = shaders::ShaderLib::instance().cube.fragmentShader;
+            shaderMaterial->side = Side::Back;
+            shaderMaterial->depthTest = false;
+            shaderMaterial->depthWrite = false;
+            shaderMaterial->fog = false;
 
-                auto geometry = BoxGeometry::create(1, 1, 1);
-                geometry->deleteAttribute("normal");
-                geometry->deleteAttribute("uv");
+            auto geometry = BoxGeometry::create(1, 1, 1);
+            geometry->deleteAttribute("normal");
+            geometry->deleteAttribute("uv");
 
-                boxMesh = std::make_unique<Mesh>(geometry, shaderMaterial);
+            boxMesh = std::make_unique<Mesh>(geometry, shaderMaterial);
 
-                boxMesh->onBeforeRender = [&](void*, Object3D*, Camera* camera, BufferGeometry*, Material*, std::optional<GeometryGroup>) {
-                    boxMesh->matrixWorld->copyPosition(*camera->matrixWorld);
-                };
+            boxMesh->onBeforeRender = [&](void*, Object3D*, Camera* camera, BufferGeometry*, Material*, std::optional<GeometryGroup>) {
+                boxMesh->matrixWorld->copyPosition(*camera->matrixWorld);
+            };
 
-                objects.update(boxMesh.get());
-            }
-
-            auto shaderMaterial = boxMesh->material()->as<ShaderMaterial>();
-            shaderMaterial->envMap = background->texture();
-            shaderMaterial->uniforms.at("envMap").setValue(background->texture().get());
-            shaderMaterial->uniforms.at("flipEnvMap").setValue(cubeTexture->_needsFlipEnvMap);
-
-            if (currentBackground != &background.value() || currentBackgroundVersion != tex->version() || currentTonemapping != renderer.toneMapping) {
-
-                shaderMaterial->needsUpdate();
-
-                currentBackground = &background.value();
-                currentBackgroundVersion = tex->version();
-                currentTonemapping = renderer.toneMapping;
-            }
-
-            renderList.unshift(boxMesh.get(), boxMesh->geometry().get(), boxMesh->material().get(), 0, 0, std::nullopt);
+            objects.update(boxMesh.get());
         }
+
+        auto shaderMaterial = boxMesh->material()->as<ShaderMaterial>();
+        // envMap must be non-null for USE_ENVMAP to be compiled in; the uniform carries the actual ptr.
+        shaderMaterial->envMap = tex;
+        shaderMaterial->uniforms.at("envMap").setValue(cubeBackground);
+        shaderMaterial->uniforms.at("flipEnvMap").setValue(cubeBackground->_needsFlipEnvMap);
+
+        if (currentBackground != &background.value() || currentBackgroundVersion != tex->version() || currentTonemapping != renderer.toneMapping) {
+
+            shaderMaterial->needsUpdate();
+
+            currentBackground = &background.value();
+            currentBackgroundVersion = tex->version();
+            currentTonemapping = renderer.toneMapping;
+        }
+
+        renderList.unshift(boxMesh.get(), boxMesh->geometry().get(), boxMesh->material().get(), 0, 0, std::nullopt);
     }
 }
 

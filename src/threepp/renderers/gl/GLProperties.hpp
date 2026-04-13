@@ -11,6 +11,7 @@
 #include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/textures/Texture.hpp"
 
+#include <array>
 #include <optional>
 #include <unordered_map>
 
@@ -30,6 +31,7 @@ namespace threepp::gl {
     struct RenderTargetProperties {
 
         std::optional<unsigned int> glFramebuffer;
+        std::optional<std::array<unsigned int, 6>> glCubeFramebuffers;
         std::optional<unsigned int> glDepthbuffer;
     };
 

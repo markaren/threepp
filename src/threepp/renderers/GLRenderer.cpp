@@ -666,11 +666,9 @@ struct GLRenderer::Impl {
         materialProperties->fog = scene->fog;
         auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
         if (materialWithEnvMap && materialWithEnvMap->envMap) {
-            cubemaps.get(materialWithEnvMap->envMap.get());
-            materialProperties->envMap = materialWithEnvMap->envMap.get();
+            materialProperties->envMap = cubemaps.get(materialWithEnvMap->envMap.get());
         } else {
-            cubemaps.get(materialProperties->environment);
-            materialProperties->envMap = materialProperties->environment;
+            materialProperties->envMap = cubemaps.get(materialProperties->environment);
         }
 
         if (programs.empty()) {
@@ -787,11 +785,9 @@ struct GLRenderer::Impl {
         Texture* envMap;
         auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
         if (materialWithEnvMap && materialWithEnvMap->envMap) {
-            cubemaps.get(materialWithEnvMap->envMap.get());
-            envMap = materialWithEnvMap->envMap.get();
+            envMap = cubemaps.get(materialWithEnvMap->envMap.get());
         } else {
-            cubemaps.get(environment.get());
-            envMap = environment.get();
+            envMap = cubemaps.get(environment.get());
         }
         bool vertexAlphas = material->vertexColors &&
                             object->geometry() &&
@@ -1106,7 +1102,12 @@ struct GLRenderer::Impl {
 
         if (renderTarget) {
 
-            framebuffer = *properties.renderTargetProperties.get(renderTarget)->glFramebuffer;
+            const auto* rtProps = properties.renderTargetProperties.get(renderTarget);
+            if (rtProps->glCubeFramebuffers) {
+                framebuffer = (*rtProps->glCubeFramebuffers)[activeCubeFace];
+            } else {
+                framebuffer = *rtProps->glFramebuffer;
+            }
 
             _currentViewport.copy(renderTarget->viewport);
             _currentScissor.copy(renderTarget->scissor);

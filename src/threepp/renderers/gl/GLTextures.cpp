@@ -4,6 +4,7 @@
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
 
+#include "threepp/textures/CubeTexture.hpp"
 #include "threepp/textures/DataTexture3D.hpp"
 
 #ifdef __EMSCRIPTEN__
@@ -305,7 +306,11 @@ void gl::GLTextures::deallocateRenderTarget(GLRenderTarget* renderTarget) {
         renderTarget->depthTexture->dispose();
     }
 
-    glDeleteFramebuffers(1, &renderTargetProperties->glFramebuffer.value());
+    if (renderTargetProperties->glCubeFramebuffers) {
+        glDeleteFramebuffers(6, renderTargetProperties->glCubeFramebuffers->data());
+    } else if (renderTargetProperties->glFramebuffer) {
+        glDeleteFramebuffers(1, &renderTargetProperties->glFramebuffer.value());
+    }
     if (renderTargetProperties->glDepthbuffer) glDeleteRenderbuffers(1, &renderTargetProperties->glDepthbuffer.value());
 
     properties->textureProperties.remove(texture.get());
@@ -564,41 +569,84 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
     info->memory.textures++;
 
     // Handles WebGL2 RGBFormat fallback - #18858
-
     if (texture->format == Format::RGB && (texture->type == Type::Float || texture->type == Type::HalfFloat)) {
-
         texture->format = Format::RGBA;
-
         std::cerr << "THREE.GLRenderer: Rendering to textures with RGB format is not supported. Using RGBA format instead." << std::endl;
     }
 
-    // Setup framebuffer
+    const bool isCube = dynamic_cast<CubeTexture*>(texture.get()) != nullptr;
 
-    GLuint glFramebuffer;
-    glGenFramebuffers(1, &glFramebuffer);
-    renderTargetProperties->glFramebuffer = glFramebuffer;
+    if (isCube) {
 
-    // Setup color buffer
+        // Allocate a single GL_TEXTURE_CUBE_MAP with storage for all 6 faces.
+        const GLuint glFormat = toGLFormat(texture->format);
+        const GLuint glType = toGLType(texture->type);
+        const auto glInternalFormat = getInternalFormat(glFormat, glType);
 
-    auto glTextureType = GL_TEXTURE_2D;
+        state->bindTexture(GL_TEXTURE_CUBE_MAP, glTexture);
+        setTextureParameters(GL_TEXTURE_CUBE_MAP, *texture);
 
-    state->bindTexture(glTextureType, textureProperties->glTexture);
-    setTextureParameters(glTextureType, *texture);
-    setupFrameBufferTexture(*renderTargetProperties->glFramebuffer, renderTarget, *texture, GL_COLOR_ATTACHMENT0, glTextureType);
+        for (int i = 0; i < 6; i++) {
+            state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, glInternalFormat,
+                              renderTarget->width, renderTarget->height, glFormat, glType, nullptr);
+        }
 
-    if (textureNeedsGenerateMipmaps(*texture)) {
+        // Create one FBO per face and attach the corresponding cube face.
+        std::array<GLuint, 6> fbos{};
+        glGenFramebuffers(6, fbos.data());
+        renderTargetProperties->glCubeFramebuffers = {fbos[0], fbos[1], fbos[2], fbos[3], fbos[4], fbos[5]};
+        renderTargetProperties->glFramebuffer = fbos[0];// face 0 is the "default"
 
-        generateMipmap(GL_TEXTURE_2D, *texture, renderTarget->width, renderTarget->height);
-    }
+        for (int i = 0; i < 6; i++) {
+            state->bindFramebuffer(GL_FRAMEBUFFER, fbos[i]);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                   GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, glTexture, 0);
+        }
 
-    state->bindTexture(GL_TEXTURE_2D, 0);
+        // Shared depth renderbuffer across all faces.
+        if (renderTarget->depthBuffer) {
+            GLuint glDepthbuffer;
+            glGenRenderbuffers(1, &glDepthbuffer);
+            renderTargetProperties->glDepthbuffer = glDepthbuffer;
 
+            glBindRenderbuffer(GL_RENDERBUFFER, glDepthbuffer);
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT16,
+                                  renderTarget->width, renderTarget->height);
+            glBindRenderbuffer(GL_RENDERBUFFER, 0);
 
-    // Setup depth and stencil buffers
+            for (int i = 0; i < 6; i++) {
+                state->bindFramebuffer(GL_FRAMEBUFFER, fbos[i]);
+                glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                         GL_RENDERBUFFER, glDepthbuffer);
+            }
+        }
 
-    if (renderTarget->depthBuffer) {
+        state->bindFramebuffer(GL_FRAMEBUFFER, 0);
+        state->bindTexture(GL_TEXTURE_CUBE_MAP, 0);
 
-        setupDepthRenderbuffer(renderTarget);
+    } else {
+
+        // Standard 2D render target.
+
+        GLuint glFramebuffer;
+        glGenFramebuffers(1, &glFramebuffer);
+        renderTargetProperties->glFramebuffer = glFramebuffer;
+
+        auto glTextureType = GL_TEXTURE_2D;
+
+        state->bindTexture(glTextureType, textureProperties->glTexture);
+        setTextureParameters(glTextureType, *texture);
+        setupFrameBufferTexture(*renderTargetProperties->glFramebuffer, renderTarget, *texture, GL_COLOR_ATTACHMENT0, glTextureType);
+
+        if (textureNeedsGenerateMipmaps(*texture)) {
+            generateMipmap(GL_TEXTURE_2D, *texture, renderTarget->width, renderTarget->height);
+        }
+
+        state->bindTexture(GL_TEXTURE_2D, 0);
+
+        if (renderTarget->depthBuffer) {
+            setupDepthRenderbuffer(renderTarget);
+        }
     }
 }
 
@@ -608,7 +656,8 @@ void gl::GLTextures::updateRenderTargetMipmap(GLRenderTarget* renderTarget) {
 
     if (textureNeedsGenerateMipmaps(*texture)) {
 
-        const auto target = GL_TEXTURE_2D;
+        const auto isCube = dynamic_cast<CubeTexture*>(texture.get()) != nullptr;
+        const auto target = isCube ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
         const auto glTexture = properties->textureProperties.get(texture.get())->glTexture;
 
         state->bindTexture(target, *glTexture);
