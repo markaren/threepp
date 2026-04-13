@@ -5794,6 +5794,7 @@ struct WgpuPathTracer::Impl {
     uint32_t rfDispatchX_ = 1, rfDispatchY_ = 1;
     float frameCount_ = 0.f;
     uint32_t globalFrameCounter_ = 0;
+    int prevNLights_ = -1;
     bool foveatedEnabled_ = false;
     int foveatedConvergeFrames_ = 4;
     Vector3 prevCamPos_;
@@ -7355,6 +7356,20 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         ++nLights;
     }
     u.lightCount[0] = static_cast<float>(nLights);
+
+    // Flush stale ReSTIR reservoirs when the light count changes (e.g. light.visible toggle).
+    // Reservoirs hold candidates for lights that no longer exist, causing them to linger.
+    // Re-stamp frameCount in the uniform AFTER the reset so the GPU sees fc=0 this frame
+    // (forceReset fires immediately rather than one frame late).
+    if (nLights != d.prevNLights_) {
+        d.frameCount_ = 0.f;
+        d.prevNLights_ = nLights;
+        u.frameCount[0] = 0.f;
+        // params[3] was packed before this detection — re-stamp forceReset bit (bit 0)
+        // so pixelFC resets this frame rather than next.
+        u.params[3] += 1.f;  // fr was 0 here (frameCount_ was > 0); cm bit preserved
+    }
+
     d.rtUniformBuf.write(&u, sizeof(u));
 
     // Set per-frame texture bindings (accum + hitMesh ping-pong)
