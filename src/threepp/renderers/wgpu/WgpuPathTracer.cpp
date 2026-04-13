@@ -2867,31 +2867,40 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 )"
 R"(
-    // --- Variance-driven bounce reduction for converged pixels ---
-    // Once moments have stabilized (fc > 16), check if this pixel's relative
-    // variance is low enough to reduce bounces to 1.  The single bounce keeps
-    // the pixel "alive" to detect illumination changes while avoiding expensive
-    // deep traces.  Camera motion resets fc to 0, automatically disabling this.
+    // --- Adaptive bounce termination for converged pixels ---
+    // Rough diffuse pixels (matClass==2) have low-frequency indirect illumination —
+    // once enough frames have accumulated, dropping to 1 bounce is visually lossless.
+    // Specular/glossy pixels (matClass 0/1) are view-dependent and must keep full bounces.
+    // Using matClass (not variance) avoids the variance threshold mapping onto the
+    // roughness texture and creating a material-correlated brightness pattern.
+    // Camera/mesh motion resets fc to 0, automatically re-enabling full bounces.
     var varianceReducedBounces = maxBounces;
 
     // AOV mode: only need primary-hit geometry data — skip all secondary bounces.
+    // Exception: mode 6 (adaptive bounce vis) must let the reduction logic run first
+    // so we can visualize what would actually be reduced.
     let aovMode = i32(rt.emissiveInfo.w);
-    if (aovMode > 0) { varianceReducedBounces = 1; }
+    if (aovMode > 0 && aovMode != 6) { varianceReducedBounces = 1; }
 
-    // Read moments (mu, mu2) accumulated over prior frames.
-    // Relative variance = (mu2 - mu^2) / mu^2 — dimensionless noise measure.
-    // When < 1% the pixel is visually converged; drop to 1 bounce to free GPU budget.
-    // Guard: fc > 16 ensures enough samples for a stable estimate.
-    // Guard: mu > 0.05 skips dark/occluded pixels — they rely on bounces 2+ for
-    // indirect illumination; reducing them to 1 bounce makes them appear too dark.
-    if (fc > 16u && varianceReducedBounces > 1) {
-        let mom = textureLoad(momentsRead, pixel, 0);
-        let mu  = mom.r;
-        let mu2 = mom.g;
-        let variance = mu2 - mu * mu;
-        let relVar = variance / max(mu * mu, 1e-4);
-        if (relVar < 0.01 && mu > 0.05) { varianceReducedBounces = 1; }
+    // Only reduce rough diffuse (matClass==2) — specular/glossy/glass are view-dependent
+    // and must keep full bounces. Sky pixels (matClass==3) are already cheap.
+    // Use per-pixel history length (accumRead.w) not global fc — global fc doesn't reset
+    // on camera move, so it would incorrectly reduce bounces during motion.
+    // Guard forceReset and camMoved: accumRead.w is stale on these frames (holds the
+    // previous scene's pixelFC), so we must not trust it until accumulation has written
+    // fresh values.
+    let pixelHistory = textureLoad(accumRead, pixel, 0).w;
+    let forceResetNow = (u32(rt.params.w) & 1u) != 0u;
+    let camMovedNow   = (u32(rt.params.w) & 2u) != 0u;
+    if (pixelHistory > 32.0 && matClass >= 1u && !forceResetNow && !camMovedNow && varianceReducedBounces > 1) {
+        varianceReducedBounces = 1;
     }
+    // wouldReduce: true when the adaptive reduction actually fired this pixel.
+    // Used only by the non-AOV accumulation path; AOV mode 6 recomputes eligibility
+    // inline using primaryRough (actual texture-modulated roughness) after pathTrace.
+    let wouldReduce = varianceReducedBounces < maxBounces;
+    // For AOV mode 6: force 1 bounce (geometry data is all we need for the heatmap).
+    if (aovMode == 6) { varianceReducedBounces = 1; }
 
     // Spatio-temporal blue noise (Heitz & Belcour 2019):
     // R2 sequence advances each frame for temporal stratification (unchanged).
@@ -2933,9 +2942,18 @@ R"(
                                                        f32((primaryMeshIdx * 7u) % 32u) / 32.0,
                                                        f32((primaryMeshIdx * 13u) % 32u) / 32.0); }
         else if (aovMode == 5) { aovColor = vec3<f32>(primaryRough); }
-        textureStore(diffAccumWrite, pixel, vec4<f32>(aovColor, 1.0));
-        textureStore(specAccumWrite, pixel, vec4<f32>(0.0, 0.0, 0.0, 1.0));
-        textureStore(accumWrite, pixel, vec4<f32>(aovColor, 1.0));
+        else if (aovMode == 6) {
+            // Use actual per-pixel roughness (includes roughnessMap texture, not just base value).
+            // threshold: roughness² > 0.05  ↔  roughness > 0.224  (matches isMirror in pathTrace)
+            // Sky pixels: primaryDepth == 0 → always blue (no geometry, no saving)
+            let isEligible = primaryRough > 0.224 && primaryDepth > 0.0 && !camMovedNow;
+            aovColor = select(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(1.0, 0.0, 0.0), isEligible);
+        }
+        textureStore(diffAccumWrite, pixel, vec4<f32>(aovColor, pixelHistory + 1.0));
+        textureStore(specAccumWrite, pixel, vec4<f32>(0.0, 0.0, 0.0, pixelHistory));
+        // Preserve pixelHistory in .w so adaptive bounce reduction keeps accumulating
+        // across AOV mode 6 frames and doesn't reset to 1 each frame.
+        textureStore(accumWrite, pixel, vec4<f32>(aovColor, pixelHistory + 1.0));
         textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), 0.0, 0.0));
         textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
         textureStore(albedoWrite, pixel, vec4<f32>(primaryAlbedo, primaryRough));
@@ -5653,7 +5671,7 @@ struct WgpuPathTracer::Impl {
     // unbiased HDR output is required (ML training data, light-transport
     // validation). Primary-ray emissive hits are never clamped.
     float fireflyCap_ = 8.0f;
-    int aovMode_ = 0;  // 0=off, 1=depth, 2=normals, 3=albedo, 4=instanceId, 5=roughness
+    int aovMode_ = 0;  // 0=off, 1=depth, 2=normals, 3=albedo, 4=instanceId, 5=roughness, 6=adaptiveBounce
 
     // Dynamic capacity tracking — buffers grow as scenes demand more
     int triCapacity_  = INIT_TRI_CAP;
@@ -7422,7 +7440,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.frameCount_ = 0.f;
     }
 
-    const uint32_t gx = (static_cast<uint32_t>(d.width_) + 7u) / 8u;
+    const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
     const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
 
     for (int sampleIdx = 0; sampleIdx < d.spp_; ++sampleIdx) {
@@ -7907,7 +7925,7 @@ float WgpuPathTracer::fireflyClamp() const {
 }
 
 void WgpuPathTracer::setAOVMode(int mode) {
-    mode = std::max(0, std::min(mode, 5));
+    mode = std::max(0, std::min(mode, 6));
     if (pimpl_->aovMode_ != mode) {
         pimpl_->aovMode_ = mode;
         pimpl_->frameCount_ = 0.f;

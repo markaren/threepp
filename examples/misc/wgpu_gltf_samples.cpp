@@ -189,6 +189,7 @@ int main(int argc, char** argv) {
     float fps = 0.f, fpsAccum = 0.f;
     float pixelScale = pathTracer.pixelScale();
     int fpsFrames = 0;
+    int aovMode = pathTracer.aovMode();
 
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::T) {
@@ -245,6 +246,10 @@ int main(int argc, char** argv) {
             if (ImGui::Checkbox("Show DirLight", &dirLight)) {
                 light->visible = dirLight;
             }
+
+            const char* aovItems[] = { "Off", "Depth", "Normals", "Albedo", "Instance ID", "Roughness", "Adaptive Bounce" };
+            if (ImGui::Combo("AOV", &aovMode, aovItems, IM_ARRAYSIZE(aovItems)))
+                pathTracer.setAOVMode(aovMode);
         }
 
         ImGui::End();
