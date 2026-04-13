@@ -38,9 +38,11 @@ int main(int argc, char** argv) {
     pathTracer.setEnvIntensity(1.0f);
     pathTracer.setExposure(1.0f);
     pathTracer.setDenoiserEnabled(false);
-    pathTracer.setFoveatedRendering(false);
+    pathTracer.setFoveatedRendering(true);
     pathTracer.setReSTIREnabled(false);
-    pathTracer.setMaxBounces(4);
+    pathTracer.setReSTIRGIEnabled(false);
+    pathTracer.setMaxBounces(3);
+    pathTracer.setFoveatedRendering(true);
 
     ImageLoader imgLoader;
     auto img = imgLoader.loadHDR(modelFolder / "san_giuseppe_bridge_4k.hdr", 4, false);
@@ -66,11 +68,7 @@ int main(int argc, char** argv) {
     scene.add(interior);
     scene.add(exterior);
 
-    exterior->traverseType<Light>([&](Light& l) {
-        l.visible = false;
-    });
-
-    interior->traverseType<Light>([&](Light& l) {
+    scene.traverseType<Light>([&](Light& l) {
         l.visible = false;
     });
 
@@ -92,7 +90,7 @@ int main(int argc, char** argv) {
         controls.update();
     };
 
-    fitCamera(*exterior);
+    fitCamera(scene);
 
     // ---- UI ----
     bool raster = false;
