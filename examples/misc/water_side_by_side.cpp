@@ -9,6 +9,7 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include <cmath>
+#include <cstring>
 
 using namespace threepp;
 
