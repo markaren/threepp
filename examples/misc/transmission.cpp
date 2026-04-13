@@ -3,6 +3,8 @@
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/threepp.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 
 int main() {
@@ -30,9 +32,8 @@ int main() {
 
     // Colorful opaque background objects
     std::array<Color, 6> colors = {
-        Color(0xe74c3c), Color(0x3498db), Color(0x2ecc71),
-        Color(0xf39c12), Color(0x9b59b6), Color(0x1abc9c)
-    };
+            Color(0xe74c3c), Color(0x3498db), Color(0x2ecc71),
+            Color(0xf39c12), Color(0x9b59b6), Color(0x1abc9c)};
 
     std::vector<std::shared_ptr<Mesh>> boxes;
     auto boxGeo = BoxGeometry::create(1.2f, 1.2f, 1.2f);
