@@ -2825,7 +2825,9 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let denoiserOn = rt.spp.z > 0.5;
     let camTranslated = length(rt.camOri.xyz - rt.prevCamOri.xyz) > 1e-5;
     let camMovedEarly = (u32(rt.params.w) & 2u) != 0u;  // params.w bit 1 = camMoved
-    let checkerSkip = camMovedEarly && !camTranslated && !isEnvPixel &&
+    // Checkerboard skip is redundant when foveated coarsening is active (both
+    // reduce work during rotation). Only enable checkerboard when foveation is off.
+    let checkerSkip = !foveatedOn && camMovedEarly && !camTranslated && !isEnvPixel &&
         ((u32(pixel.x) + u32(pixel.y) + u32(rt.params.y)) & 1u) == 0u;
 
     // Foveated spatial coarsening: follower pixels copy from the block leader's
