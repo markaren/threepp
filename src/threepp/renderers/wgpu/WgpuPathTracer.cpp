@@ -2877,6 +2877,21 @@ R"(
     let aovMode = i32(rt.emissiveInfo.w);
     if (aovMode > 0) { varianceReducedBounces = 1; }
 
+    // Read moments (mu, mu2) accumulated over prior frames.
+    // Relative variance = (mu2 - mu^2) / mu^2 — dimensionless noise measure.
+    // When < 1% the pixel is visually converged; drop to 1 bounce to free GPU budget.
+    // Guard: fc > 16 ensures enough samples for a stable estimate.
+    // Guard: mu > 0.05 skips dark/occluded pixels — they rely on bounces 2+ for
+    // indirect illumination; reducing them to 1 bounce makes them appear too dark.
+    if (fc > 16u && varianceReducedBounces > 1) {
+        let mom = textureLoad(momentsRead, pixel, 0);
+        let mu  = mom.r;
+        let mu2 = mom.g;
+        let variance = mu2 - mu * mu;
+        let relVar = variance / max(mu * mu, 1e-4);
+        if (relVar < 0.01 && mu > 0.05) { varianceReducedBounces = 1; }
+    }
+
     // Spatio-temporal blue noise (Heitz & Belcour 2019):
     // R2 sequence advances each frame for temporal stratification (unchanged).
     // Per-pixel Cranley-Patterson rotation uses IGN (Jimenez et al. 2014) instead
