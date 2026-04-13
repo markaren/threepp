@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
     pathTracer.setMaxBounces(4);
 
     RGBELoader imgLoader;
-    auto env = imgLoader.load(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr");
+    auto env = imgLoader.load(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr", false);
 
     // ---- Scene ----
     Scene scene;
@@ -142,7 +142,7 @@ int main(int argc, char** argv) {
                         hasMesh = true;
                     });
                     result->traverseType<Light>([&](Light& l) {
-                        l.visible = true;
+                        l.visible = false;
                         l.intensity = std::max(l.intensity, 1.0f);
                     });
                 }
@@ -244,7 +244,6 @@ int main(int argc, char** argv) {
 
             if (ImGui::Checkbox("Show DirLight", &dirLight)) {
                 light->visible = dirLight;
-                pathTracer.markDirty();
             }
         }
 
