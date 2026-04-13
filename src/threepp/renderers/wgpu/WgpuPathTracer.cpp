@@ -2007,28 +2007,11 @@ R"(
                 }
             }
 
-            // 3. Environment — 1 importance sample
-            if (HAS_ENV_CDF && rt.envColor.w > 1.5) {
-                let envSample = sampleEnvImportance(seed);
-                let envDir = envSample.xyz;
-                let envPdf = envSample.w;
-                // Always count in M for correct RIS normalization.
-                reservoir.M += 1.0;
-                if (dot(h.normal, envDir) > 0.0 && envPdf > 1e-8) {
-                    let envCol = sampleEnv(envDir) * rt.envIntensity.x;
-                    let p_hat_env = restirTargetPdf(h.point, h.normal, wo, albedo, h.metalness, h.shininess, F0_h,
-                                                    envDir, -1.0, envCol);
-                    if (p_hat_env > 0.0) {
-                        let w = p_hat_env / envPdf;
-                        reservoir.W_sum += w;
-                        if (rand(seed) < w / max(reservoir.W_sum, 1e-20)) {
-                            reservoir.lightPos  = envDir;
-                            reservoir.lightType = -1.0;
-                            reservoir.p_hat     = p_hat_env;
-                        }
-                    }
-                }
-            }
+            // 3. Environment — NOT sampled via reservoir.
+            // Env lighting is handled by the explicit env NEE block that runs unconditionally
+            // after the ReSTIR/classic if-else, paired with the BRDF env-miss MIS complement.
+            // Including env here caused double-counting: reservoir estimated direct env AND
+            // the BRDF miss at bounce 1 added its MIS complement on top.
 
             finalizeReservoir(&reservoir);
 )"
@@ -2296,7 +2279,14 @@ R"(
             }
         }
 
-        // --- Environment map NEE (importance-sampled) ---
+        } // end ReSTIR vs classic NEE
+
+        // --- Environment map NEE (importance-sampled, always runs regardless of ReSTIR) ---
+        // Placed outside the ReSTIR/classic if-else so it executes at every bounce for
+        // every code path.  The BRDF env-miss at bounce i+1 is its MIS complement —
+        // no special handling needed when ReSTIR is active because env is never put
+        // into the reservoir (see candidate section 3, removed), so there is no
+        // double-counting risk here.
         if (HAS_ENV_CDF && rt.envColor.w > 1.5 && h.shininess > 0.01 && i < 4) {
             let envSample = sampleEnvImportance(seed);
             let envDir    = envSample.xyz;
@@ -2328,8 +2318,6 @@ R"(
                 }
             }
         }
-
-        } // end ReSTIR vs classic NEE
 
         // When ReSTIR is globally enabled but was skipped for this pixel (glass /
         // high-transmission surface), zero out the reservoir so stale data from a
