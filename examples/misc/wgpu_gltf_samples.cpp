@@ -85,12 +85,13 @@ int main(int argc, char** argv) {
     renderer.shadowMap().enabled = true;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
-    pathTracer.setEnvIntensity(0.5f);
+    pathTracer.setEnvIntensity(1.0f);
     pathTracer.setExposure(1.0f);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setFoveatedRendering(false);
     pathTracer.setReSTIREnabled(false);
     pathTracer.setMaxBounces(4);
+    pathTracer.setFoveatedRendering(false);
 
     RGBELoader imgLoader;
     auto env = imgLoader.load(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr", false);
@@ -190,6 +191,7 @@ int main(int argc, char** argv) {
     float pixelScale = pathTracer.pixelScale();
     int fpsFrames = 0;
     int aovMode = pathTracer.aovMode();
+    bool foveatOn = pathTracer.foveatedRendering();
 
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::T) {
@@ -228,20 +230,25 @@ int main(int argc, char** argv) {
         }
 
         ImGui::Separator();
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
-            pathTracer.setExposure(exposure);
-        if (ImGui::SliderFloat("EnvIntensity", &envIntensity, 0.0f, 1.0f))
-            pathTracer.setEnvIntensity(envIntensity);
-        if (ImGui::SliderFloat("Pixel Scale", &pixelScale, 0.25f, 1.2f, "%.2f"))
-            pathTracer.setPixelScale(pixelScale);
+
 
         if (!raster && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
+
+            if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
+                pathTracer.setExposure(exposure);
+            if (ImGui::SliderFloat("EnvIntensity", &envIntensity, 0.0f, 1.0f))
+                pathTracer.setEnvIntensity(envIntensity);
+            if (ImGui::SliderFloat("Pixel Scale", &pixelScale, 0.25f, 1.2f, "%.2f"))
+                pathTracer.setPixelScale(pixelScale);
+
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);
             if (ImGui::Checkbox("REsTDIR DI", &restdirOn))
                 pathTracer.setReSTIREnabled(restdirOn);
             if (ImGui::Checkbox("REsTDIR GI", &restdirGIOn))
                 pathTracer.setReSTIRGIEnabled(restdirGIOn);
+            if (ImGui::Checkbox("Foveated Rendering", &foveatOn))
+                pathTracer.setFoveatedRendering(foveatOn);
 
             if (ImGui::Checkbox("Show DirLight", &dirLight)) {
                 light->visible = dirLight;
