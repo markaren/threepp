@@ -7,6 +7,7 @@
 #include "threepp/threepp.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <future>
 
