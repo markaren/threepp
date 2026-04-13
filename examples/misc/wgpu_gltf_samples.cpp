@@ -2,6 +2,7 @@
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
+#include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
 #include "threepp/renderers/wgpu/WgpuPathTracer.hpp"
 #include "threepp/threepp.hpp"
@@ -91,9 +92,8 @@ int main(int argc, char** argv) {
     pathTracer.setReSTIREnabled(false);
     pathTracer.setMaxBounces(4);
 
-    ImageLoader imgLoader;
-    auto img = imgLoader.loadHDR(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr", 4, false);
-    auto env = Texture::create(*img);
+    RGBELoader imgLoader;
+    auto env = imgLoader.load(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr");
 
     // ---- Scene ----
     Scene scene;

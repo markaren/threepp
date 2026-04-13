@@ -63,7 +63,7 @@ int main() {
     float transmission = glassMat->transmission;
     float roughness = glassMat->roughness;
     float metalness = glassMat->metalness;
-    float ior = glassMat->ior();
+    float ior = glassMat->ior;
     float thickness = glassMat->thickness;
     float attenuationDistance = glassMat->attenuationDistance;
     std::array<float, 3> attenuationColor = {1.f, 1.f, 1.f};

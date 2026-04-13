@@ -1,14 +1,13 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
-#include "threepp/loaders/ImageLoader.hpp"
+#include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
 #include "threepp/renderers/wgpu/WgpuPathTracer.hpp"
 #include "threepp/threepp.hpp"
 
 #include <algorithm>
 #include <filesystem>
-#include <future>
 
 using namespace threepp;
 namespace fs = std::filesystem;
@@ -44,9 +43,8 @@ int main(int argc, char** argv) {
     pathTracer.setMaxBounces(3);
     pathTracer.setFoveatedRendering(true);
 
-    ImageLoader imgLoader;
-    auto img = imgLoader.loadHDR(modelFolder / "san_giuseppe_bridge_4k.hdr", 4, false);
-    auto env = Texture::create(*img);
+    RGBELoader imgLoader;
+    auto env = imgLoader.load(modelFolder / "san_giuseppe_bridge_4k.hdr", false);
 
     // ---- Scene ----
     Scene scene;

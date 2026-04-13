@@ -3,6 +3,7 @@
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
+#include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
@@ -81,12 +82,12 @@ int main() {
     glassSphere->castShadow = true;
     floor->receiveShadow = true;
 
-    ImageLoader imgLoader;
-    auto img = imgLoader.loadHDR(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr", 4, false);
-    auto env = Texture::create(*img);
+    RGBELoader imgLoader;
+    auto img = imgLoader.load(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr", false);
 
     Scene scene;
-    scene.environment = env;
+    scene.background = img;
+    scene.environment = img;
 
     scene.add(boxMesh);
     scene.add(sphere1);

@@ -50,7 +50,7 @@ void RenderState::setupLightsView(Camera* camera) {
 
 RenderState* RenderStates::get(Object3D* scene, size_t renderCallDepth) {
 
-    if (renderCallDepth >= renderStates_[scene->uuid].size()) {
+    while (renderCallDepth >= renderStates_[scene->uuid].size()) {
 
         renderStates_[scene->uuid].emplace_back(std::make_unique<RenderState>());
     }
