@@ -382,6 +382,11 @@ struct WgpuRenderer::Impl {
         WGPURenderPipeline pipelines[5]{};
         WGPUShaderModule shaderModules[5]{};
 
+        // Per-blit cached objects — valid as long as colorTexture doesn't change (no resize)
+        WGPUTextureView cachedInputView = nullptr;
+        WGPUBindGroup  cachedBindGroup  = nullptr;
+        float          lastExposure     = -1.f;
+
         bool initialized = false;
     } toneMap_;
 
@@ -1405,6 +1410,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         if (toneMap_.width == w && toneMap_.height == h && toneMap_.colorTexture) return;
 
         // Release old
+        if (toneMap_.cachedBindGroup)  { wgpuBindGroupRelease(toneMap_.cachedBindGroup);  toneMap_.cachedBindGroup  = nullptr; }
+        if (toneMap_.cachedInputView)  { wgpuTextureViewRelease(toneMap_.cachedInputView); toneMap_.cachedInputView = nullptr; }
+        toneMap_.lastExposure = -1.f;
         if (toneMap_.colorView) wgpuTextureViewRelease(toneMap_.colorView);
         if (toneMap_.colorTexture) wgpuTextureRelease(toneMap_.colorTexture);
         if (toneMap_.depthView) wgpuTextureViewRelease(toneMap_.depthView);
@@ -1445,29 +1453,36 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         int idx = toneMapPipelineIndex();
         if (!toneMap_.pipelines[idx]) return;
 
-        // Upload exposure uniform into the persistent buffer
-        float params[4] = {scope.toneMappingExposure, 0, 0, 0};
-        wgpuQueueWriteBuffer(queue, toneMap_.uniformBuf, 0, params, 16);
+        // Upload exposure uniform only when it changes
+        const float exposure = scope.toneMappingExposure;
+        if (exposure != toneMap_.lastExposure) {
+            float params[4] = {exposure, 0, 0, 0};
+            wgpuQueueWriteBuffer(queue, toneMap_.uniformBuf, 0, params, 16);
+            toneMap_.lastExposure = exposure;
+        }
 
-        // Input texture view
-        WGPUTextureView inputView = wgpuTextureCreateView(toneMap_.colorTexture, nullptr);
+        // Input texture view and bind group are stable until the RT is resized — cache them.
+        if (!toneMap_.cachedInputView) {
+            toneMap_.cachedInputView = wgpuTextureCreateView(toneMap_.colorTexture, nullptr);
+        }
+        if (!toneMap_.cachedBindGroup) {
+            WGPUBindGroupEntry bgEntries[3]{};
+            bgEntries[0].binding = 0;
+            bgEntries[0].textureView = toneMap_.cachedInputView;
+            bgEntries[1].binding = 1;
+            bgEntries[1].sampler = toneMap_.sampler;
+            bgEntries[2].binding = 2;
+            bgEntries[2].buffer = toneMap_.uniformBuf;
+            bgEntries[2].size = 16;
 
-        // Create bind group
-        WGPUBindGroupEntry bgEntries[3]{};
-        bgEntries[0].binding = 0;
-        bgEntries[0].textureView = inputView;
-        bgEntries[1].binding = 1;
-        bgEntries[1].sampler = toneMap_.sampler;
-        bgEntries[2].binding = 2;
-        bgEntries[2].buffer = toneMap_.uniformBuf;
-        bgEntries[2].size = 16;
-
-        WGPUBindGroupDescriptor bgDesc{};
-        bgDesc.label = WGPUStringView{"tonemap_bg", sizeof("tonemap_bg") - 1};
-        bgDesc.layout = toneMap_.bindGroupLayout;
-        bgDesc.entryCount = 3;
-        bgDesc.entries = bgEntries;
-        WGPUBindGroup bindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
+            WGPUBindGroupDescriptor bgDesc{};
+            bgDesc.label = WGPUStringView{"tonemap_bg", sizeof("tonemap_bg") - 1};
+            bgDesc.layout = toneMap_.bindGroupLayout;
+            bgDesc.entryCount = 3;
+            bgDesc.entries = bgEntries;
+            toneMap_.cachedBindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
+        }
+        WGPUBindGroup bindGroup = toneMap_.cachedBindGroup;
 
         // Render to the surface
         WGPUTextureView surfaceColorView;
@@ -1513,12 +1528,10 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         wgpuRenderPassEncoderEnd(rp);
         wgpuRenderPassEncoderRelease(rp);
 
-        wgpuBindGroupRelease(bindGroup);
-        wgpuTextureViewRelease(inputView);
 #ifndef __EMSCRIPTEN__
         wgpuTextureViewRelease(surfaceColorView);
 #endif
-        // toneMap_.uniformBuf is persistent — not released here
+        // toneMap_.uniformBuf, cachedInputView, cachedBindGroup are persistent — not released here
     }
 
     // Render the ImGui overlay directly to the surface (after tone map blit).
@@ -2901,6 +2914,8 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         if (toneMap_.colorTexture) wgpuTextureRelease(toneMap_.colorTexture);
         if (toneMap_.depthView) wgpuTextureViewRelease(toneMap_.depthView);
         if (toneMap_.depthTexture) wgpuTextureRelease(toneMap_.depthTexture);
+        if (toneMap_.cachedBindGroup)  { wgpuBindGroupRelease(toneMap_.cachedBindGroup);  }
+        if (toneMap_.cachedInputView)  { wgpuTextureViewRelease(toneMap_.cachedInputView); }
         for (auto& p : toneMap_.pipelines) { if (p) wgpuRenderPipelineRelease(p); }
         for (auto& m : toneMap_.shaderModules) { if (m) wgpuShaderModuleRelease(m); }
         if (toneMap_.sampler) wgpuSamplerRelease(toneMap_.sampler);

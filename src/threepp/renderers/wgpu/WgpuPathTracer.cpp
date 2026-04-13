@@ -5662,6 +5662,7 @@ struct WgpuPathTracer::Impl {
     WGPUBindGroupLayout     depthFillBGL_ = nullptr;
     WGPUShaderModule        depthFillShader_ = nullptr;
     WGPUBuffer              depthFillUniBuf_ = nullptr;
+    WGPUBindGroup           depthFillBG_ = nullptr;     // cached bind group (stable until resize)
     uint32_t                depthFillSampleCount_ = 0;  // 0 = not yet built
 
     // Display pipeline
@@ -5746,6 +5747,7 @@ struct WgpuPathTracer::Impl {
     Vector3 prevCamPos_;
     Vector3 prevCamDir_;
     int overlayLayer_ = -1;  // -1 = disabled; objects on this layer bypass path tracing and go to raster overlay
+    bool overlayFoundLastFrame_ = false;  // cached: did last frame's traversal find any overlay objects?
 
     int width_, height_;
 
@@ -6222,6 +6224,9 @@ struct WgpuPathTracer::Impl {
         taaPipeline.setTexture(7, albedoTex);
         taaPipeline.setTexture(8, *moments.read);
         taaPipeline.setTexture(9, *gBuf.read);  // prev frame depth
+
+        // Depth fill bind group references gBuf.write — invalidate on resize
+        if (depthFillBG_) { wgpuBindGroupRelease(depthFillBG_); depthFillBG_ = nullptr; }
 
         frameCount_ = 0.f;
     }
@@ -7615,6 +7620,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         std::vector<Entry> hidden;
         bool hasOverlay = false;
 
+        // Skip traversal entirely when no overlay layer is configured and last frame
+        // confirmed the scene has no wireframe/Line overlay objects.
+        const bool mightHaveOverlay = (d.overlayLayer_ >= 0) || d.overlayFoundLastFrame_;
+        if (mightHaveOverlay) {
+
         // Only toggle renderable objects (Mesh / Line), never containers/groups,
         // so parent nodes remain visible and their children are reachable.
         scene.traverse([&](Object3D& obj) {
@@ -7637,6 +7647,9 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 hasOverlay = true;
             }
         });
+
+        } // end if (mightHaveOverlay)
+        d.overlayFoundLastFrame_ = hasOverlay;
 
         if (hasOverlay) {
             // Reconstruct rasterizer depth from path-traced primary-hit t values.
@@ -7670,19 +7683,22 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 dfu.tanHalfFov[0] = tanHalfFov;
                 wgpuQueueWriteBuffer(d.queue, d.depthFillUniBuf_, 0, &dfu, sizeof(dfu));
 
-                // Build bind group: uniform (0) + gBuf.write (1)
-                WGPUBindGroupEntry bgEntries[2]{};
-                bgEntries[0].binding = 0;
-                bgEntries[0].buffer  = d.depthFillUniBuf_;
-                bgEntries[0].offset  = 0;
-                bgEntries[0].size    = sizeof(DepthFillUniforms);
-                bgEntries[1].binding    = 1;
-                bgEntries[1].textureView = d.gBuf.write->view();
-                WGPUBindGroupDescriptor bgDesc{};
-                bgDesc.layout     = d.depthFillBGL_;
-                bgDesc.entryCount = 2;
-                bgDesc.entries    = bgEntries;
-                WGPUBindGroup bg = wgpuDeviceCreateBindGroup(d.device, &bgDesc);
+                // Build bind group: uniform (0) + gBuf.write (1) — cached until resize
+                if (!d.depthFillBG_) {
+                    WGPUBindGroupEntry bgEntries[2]{};
+                    bgEntries[0].binding = 0;
+                    bgEntries[0].buffer  = d.depthFillUniBuf_;
+                    bgEntries[0].offset  = 0;
+                    bgEntries[0].size    = sizeof(DepthFillUniforms);
+                    bgEntries[1].binding     = 1;
+                    bgEntries[1].textureView = d.gBuf.write->view();
+                    WGPUBindGroupDescriptor bgDesc{};
+                    bgDesc.layout     = d.depthFillBGL_;
+                    bgDesc.entryCount = 2;
+                    bgDesc.entries    = bgEntries;
+                    d.depthFillBG_ = wgpuDeviceCreateBindGroup(d.device, &bgDesc);
+                }
+                WGPUBindGroup bg = d.depthFillBG_;
 
                 // Depth-fill render pass: loads existing depth, then overwrites with
                 // reconstructed path-traced depth. No color attachment.
@@ -7703,7 +7719,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
                 wgpuRenderPassEncoderEnd(pass);
                 wgpuRenderPassEncoderRelease(pass);
-                wgpuBindGroupRelease(bg);
+                // depthFillBG_ is persistent — not released here
             }
 
             // Overlay render: preserve color AND depth (use reconstructed depth for occlusion).
@@ -7888,6 +7904,7 @@ void WgpuPathTracer::markDirty() {
 
 void WgpuPathTracer::dispose() {
     auto& d = *pimpl_;
+    if (d.depthFillBG_)         { wgpuBindGroupRelease(d.depthFillBG_);             d.depthFillBG_ = nullptr; }
     if (d.depthFillPipeline_)   { wgpuRenderPipelineRelease(d.depthFillPipeline_);   d.depthFillPipeline_ = nullptr; }
     if (d.depthFillPipeLayout_) { wgpuPipelineLayoutRelease(d.depthFillPipeLayout_); d.depthFillPipeLayout_ = nullptr; }
     if (d.depthFillBGL_)        { wgpuBindGroupLayoutRelease(d.depthFillBGL_);       d.depthFillBGL_ = nullptr; }
