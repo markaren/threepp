@@ -2124,13 +2124,17 @@ R"(
             // and permanently accumulate W=0 (feedback loop → fades to black).
             let preSpReservoir = reservoir;
 
-            // === SPATIAL REUSE — 8 random neighbours from previous frame ===
+            // === SPATIAL REUSE — random neighbours from previous frame ===
             // Reads last-frame reservoirs from a disk of radius ~20 px.
             // Geometry check (normal, depth) prevents bleeding across surfaces.
             // Uses one-frame-lagged neighbours — avoids a second dispatch and is
             // visually indistinguishable from same-frame spatial reuse.
+            // Reduce iterations during camera motion: previous-frame neighbours
+            // are stale (geometry checks reject most), wasting GPU cycles that
+            // foveated rendering is trying to save.
             {
-                let spMax = 5u;
+                let camMoving = (u32(rt.params.w) & 2u) != 0u;
+                let spMax = select(5u, 2u, camMoving);
                 let mTarget = 20.0; // stop borrowing once we have enough confidence
                 for (var spI = 0u; spI < spMax; spI++) {
                     if (reservoir.M >= mTarget) { break; }
@@ -2778,31 +2782,39 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         else                     { maxBounces = min(maxBounces, 3); }  // sky/unknown
     }
 
-    // --- Material-aware foveated convergence ---
-    // Rough diffuse surfaces converge fast (low-frequency BRDF, reprojects well)
-    // so they tolerate more aggressive skipping.  Specular surfaces need more
-    // temporal samples for reflections.
+    // --- Foveated rendering: progressive spatial coarsening ---
+    // Instead of temporal frame-skipping (which leaves stale pixels → ghosting
+    // during camera motion), we reduce spatial resolution outside the center cone.
+    // Pixels in the same NxN block share the trace from the block's top-left
+    // corner (the "leader"). Every pixel gets a fresh value each frame — no
+    // ghosting — but the periphery traces fewer unique rays.
+    //
+    // Zone layout (normalized distance from center):
+    //   dist <= 0.30 : 1×1 (full resolution)
+    //   dist <= 0.55 : 2×2 blocks
+    //   dist >  0.55 : 4×4 blocks
+    // During static camera: fall back to every-pixel tracing (fc > 0 handles
+    // convergence naturally, no skip needed).
     let center = res * 0.5;
     let dxy = (vec2<f32>(f32(pixel.x), f32(pixel.y)) - center) / center;
     let dist = length(dxy);
-    var skipMask = 0u;
-    if (foveatedOn) {
-        if (matClass <= 0u) {
-            // Specular/glass: trace more often — reflections are view-dependent
-            if (dist > 0.65) { skipMask = 1u; }       // periphery: every 2nd frame
-            // middle + center: every frame
-        } else if (matClass == 2u) {
-            // Rough diffuse: converges fast, skip more aggressively
-            if      (dist > 0.65) { skipMask = 7u; }  // periphery: every 8th frame
-            else if (dist > 0.3)  { skipMask = 3u; }  // middle: every 4th frame
-        } else {
-            // Glossy / sky / unknown: default schedule
-            if      (dist > 0.65) { skipMask = 3u; }  // periphery: every 4th frame
-            else if (dist > 0.3)  { skipMask = 1u; }  // middle: every 2nd frame
+    let camMovingFov = (u32(rt.params.w) & 2u) != 0u;
+    var fovBlockSize = 1u;
+    if (foveatedOn && camMovingFov && !isEnvPixel) {
+        if (dist > 0.55) {
+            fovBlockSize = 4u;
+            maxBounces = min(maxBounces, 1);  // periphery: direct light only
+        } else if (dist > 0.30) {
+            fovBlockSize = 2u;
+            maxBounces = min(maxBounces, 2);  // middle: one indirect bounce
         }
     }
-
-    let foveatedSkip = skipMask > 0u && (fc & skipMask) != 0u && !isEnvPixel;
+    // Snap to block leader (top-left pixel of the block)
+    let fovLeader = vec2<i32>(
+        i32((u32(pixel.x) / fovBlockSize) * fovBlockSize),
+        i32((u32(pixel.y) / fovBlockSize) * fovBlockSize));
+    let isFovLeader = all(pixel == fovLeader);
+    let foveatedSkip = fovBlockSize > 1u && !isFovLeader;
 
     // Checkerboard skip: during camera rotation skip half the pixels each frame,
     // alternating which half via globalFrameCounter so both patterns are covered across
@@ -2816,36 +2828,37 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let checkerSkip = camMovedEarly && !camTranslated && !isEnvPixel &&
         ((u32(pixel.x) + u32(pixel.y) + u32(rt.params.y)) & 1u) == 0u;
 
-    // Foveated/checkerboard skip: pass through previous accumulation unchanged.
-    // The pixel keeps its existing color & frame count; it will trace on a future frame.
+    // Foveated spatial coarsening: follower pixels copy from the block leader's
+    // previous-frame result.  The leader itself always traces fresh this frame.
+    // This gives spatially coherent blocks with at most 1-frame latency — no
+    // multi-frame ghosting.
+    //
+    // Checkerboard skip: pass through previous accumulation unchanged.
     if (foveatedSkip || checkerSkip) {
+        // Foveated followers read from the leader; checkerboard reads from self.
+        let src = select(pixel, fovLeader, foveatedSkip);
         let rawMode = rt.restirParams.w > 0.5;
         if (rawMode) {
-            // Raw/temporal-denoiser mode: write sentinel .w = -1 so TAA knows to pass through history
             textureStore(accumWrite,     pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
             textureStore(diffAccumWrite, pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
             textureStore(specAccumWrite, pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
         } else {
-            textureStore(accumWrite,   pixel, textureLoad(accumRead, pixel, 0));
-            textureStore(diffAccumWrite, pixel, textureLoad(diffAccumRead, pixel, 0));
-            textureStore(specAccumWrite, pixel, textureLoad(specAccumRead, pixel, 0));
+            textureStore(accumWrite,     pixel, textureLoad(accumRead, src, 0));
+            textureStore(diffAccumWrite, pixel, textureLoad(diffAccumRead, src, 0));
+            textureStore(specAccumWrite, pixel, textureLoad(specAccumRead, src, 0));
         }
-        textureStore(hitMeshWrite, pixel, textureLoad(hitMeshRead, pixel, 0));
-        // Preserve previous gBuf (depth) so display shader tone-maps correctly.
-        textureStore(gBufWrite,    pixel, textureLoad(gBufRead, pixel, 0));
+        textureStore(hitMeshWrite, pixel, textureLoad(hitMeshRead, src, 0));
+        textureStore(gBufWrite,    pixel, textureLoad(gBufRead, src, 0));
         textureStore(albedoWrite,  pixel, vec4<f32>(vec3<f32>(0.0), 0.0));
-        textureStore(momentsWrite, pixel, textureLoad(momentsRead, pixel, 0));
-        // Pass reservoir through the ping-pong so the next traced frame sees a valid prior.
-        // Without this the reservoir slot contains whatever was written 2-4 frames ago
-        // (stale/garbage after multiple skips), producing huge wrong temporal weights → acne.
+        textureStore(momentsWrite, pixel, textureLoad(momentsRead, src, 0));
         if (rt.restirParams.x > 0.5) {
-            textureStore(reservoirWrite,  pixel, textureLoad(reservoirRead,  pixel, 0));
-            textureStore(reservoirWWrite, pixel, textureLoad(reservoirWRead, pixel, 0));
+            textureStore(reservoirWrite,  pixel, textureLoad(reservoirRead,  src, 0));
+            textureStore(reservoirWWrite, pixel, textureLoad(reservoirWRead, src, 0));
         }
         if (rt.spp.x > 0.5) {
-            textureStore(giResWrite,   pixel, textureLoad(giResRead,   pixel, 0));
-            textureStore(giResWWrite,  pixel, textureLoad(giResWRead,  pixel, 0));
-            textureStore(giResLoWrite, pixel, textureLoad(giResLoRead, pixel, 0));
+            textureStore(giResWrite,   pixel, textureLoad(giResRead,   src, 0));
+            textureStore(giResWWrite,  pixel, textureLoad(giResWRead,  src, 0));
+            textureStore(giResLoWrite, pixel, textureLoad(giResLoRead, src, 0));
         }
         return;
     }
@@ -5770,6 +5783,7 @@ struct WgpuPathTracer::Impl {
     Vector3 prevCamDir_;
     int overlayLayer_ = -1;  // -1 = disabled; objects on this layer bypass path tracing and go to raster overlay
     bool overlayFoundLastFrame_ = true;   // cached: did last frame's traversal find any overlay objects? (true = scan on first frame)
+    int camMovingFrames_ = 0;             // consecutive frames camera was moving (for foveated flush cooldown)
 
     int width_, height_;
 
@@ -6305,6 +6319,20 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.prevCamDir_ = fwd;
         // Both EMA and TAA pipelines handle camera motion via per-pixel reprojection
         // (triggered by camMoved flag in params.w). No FC reset needed.
+    }
+
+    // Foveated flush: when camera transitions from sustained motion → stopped,
+    // follower pixels hold block-copied values. Reset frameCount so the EMA
+    // restarts fresh. Require several consecutive moving frames before arming
+    // the reset — prevents flicker during slow camera movement where camMoved
+    // toggles on/off around the threshold every few frames.
+    if (camMoved) {
+        d.camMovingFrames_++;
+    } else {
+        if (d.foveatedEnabled_ && d.camMovingFrames_ >= 3) {
+            d.frameCount_ = 0.f;
+        }
+        d.camMovingFrames_ = 0;
     }
 
     // Collect RT-eligible meshes via full traverse (NOT traverseVisible).
