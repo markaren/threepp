@@ -264,7 +264,9 @@ namespace threepp {
                 // textures are consistent with all other texture formats.
                 flipMipY(buf.data(), w, h, glFmt);
 
-                mips.emplace_back(std::move(buf), w, h, Image::CompressedFormat(glFmt));
+                Image::CompressedFormat cf{};
+                cf.format = glFmt;
+                mips.emplace_back(std::move(buf), w, h,cf);
             }
 
             if (mips.empty()) return nullptr;

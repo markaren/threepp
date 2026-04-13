@@ -25,7 +25,7 @@ namespace {
 GLCubeMaps::GLCubeMaps(GLRenderer& renderer)
     : renderer(renderer) {}
 
-void GLCubeMaps::get(Texture* texture) {
+Texture* GLCubeMaps::get(Texture* texture) {
 
     if (texture) {
 
@@ -33,10 +33,11 @@ void GLCubeMaps::get(Texture* texture) {
 
         if (mapping == Mapping::EquirectangularReflection || mapping == Mapping::EquirectangularRefraction) {
 
-            if (cubemaps.count(texture)) {
+            if (cubemaps.contains(texture)) {
 
-                const auto cubemap = cubemaps.at(texture)->texture;
+                const auto cubemap = cubemaps.at(texture)->texture.get();
                 mapTextureMapping(*cubemap, texture->mapping);
+                return cubemap;
 
             } else {
 
@@ -52,13 +53,19 @@ void GLCubeMaps::get(Texture* texture) {
 
                     renderer.setRenderTarget(currentRenderTarget);
 
-                    //TODO
+                    auto* cubemap = cubemaps[texture]->texture.get();
+                    mapTextureMapping(*cubemap, texture->mapping);
+                    return cubemap;
 
-                    mapTextureMapping(*renderTarget->texture, texture->mapping);
+                } else {
+
+                    return nullptr;
                 }
             }
         }
     }
+
+    return texture;
 }
 
 void GLCubeMaps::dispose() {

@@ -5,6 +5,7 @@
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
 #include "threepp/materials/RawShaderMaterial.hpp"
+#include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/scenes/Scene.hpp"
@@ -98,14 +99,29 @@ ProgramParameters::ProgramParameters(
     mapEncoding = getTextureEncodingFromMap(map ? mapMaterial->map : nullptr);
     matcap = matcapMaterial && matcapMaterial->matcap;
     matcapEncoding = getTextureEncodingFromMap(matcap ? matcapMaterial->matcap : nullptr);
-    envMap = envmapMaterial && envmapMaterial->envMap;
+    // For MeshStandardMaterial, scene.environment is the implicit IBL source when
+    // no explicit envMap is set — mirrors three.js WebGLPrograms.getParameters().
+    Texture* effectiveEnvMap = (envmapMaterial && envmapMaterial->envMap)
+                                       ? envmapMaterial->envMap.get()
+                                       : (material->is<MeshStandardMaterial>() ? scene->environment.get() : nullptr);
+
+    envMap = effectiveEnvMap != nullptr;
     if (envMap) {
-        envMapMode = as_integer(envmapMaterial->envMap->mapping);
+        // Equirectangular sources are always converted to a regular cubemap at runtime.
+        const auto srcMapping = effectiveEnvMap->mapping;
+        const bool isEquirect = srcMapping == Mapping::EquirectangularReflection ||
+                                srcMapping == Mapping::EquirectangularRefraction;
+        const bool isRefract = srcMapping == Mapping::EquirectangularRefraction ||
+                               srcMapping == Mapping::CubeRefraction;
+        const auto resolvedMapping = isEquirect
+                                             ? (isRefract ? Mapping::CubeRefraction : Mapping::CubeReflection)
+                                             : srcMapping;
+        envMapMode = as_integer(resolvedMapping);
     }
-    envMapEncoding = getTextureEncodingFromMap(envMap ? envmapMaterial->envMap : nullptr);
+    envMapEncoding = effectiveEnvMap ? effectiveEnvMap->encoding : Encoding::Linear;
     envMapCubeUV = envMapMode != 0 &&
-                   (envmapMaterial->envMap->mapping == Mapping::CubeReflection ||
-                    envmapMaterial->envMap->mapping == Mapping::CubeRefraction);
+                   (static_cast<Mapping>(envMapMode) == Mapping::CubeUVReflection ||
+                    static_cast<Mapping>(envMapMode) == Mapping::CubeUVRefraction);
     lightMap = lightmapMaterial && lightmapMaterial->lightMap;
     lightMapEncoding = getTextureEncodingFromMap(lightMap ? lightmapMaterial->lightMap : nullptr);
     aoMap = aomapMaterial && aomapMaterial->aoMap;

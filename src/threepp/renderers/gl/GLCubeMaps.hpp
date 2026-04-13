@@ -16,7 +16,10 @@ namespace threepp {
         public:
             explicit GLCubeMaps(GLRenderer& renderer);
 
-            void get(Texture* texture);
+            // Returns the converted CubeTexture for equirectangular inputs,
+            // the original texture for anything else, or nullptr if not ready.
+            // Mirrors three.js WebGLCubeMaps.get().
+            Texture* get(Texture* texture);
 
             void dispose();
 

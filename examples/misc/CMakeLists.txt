@@ -5,6 +5,7 @@ add_example(NAME "clipping" WEB LINK_IMGUI)
 add_example(NAME "morphtargets" LINK_IMGUI)
 add_example(NAME "morphtargets_sphere" LINK_ASSIMP)
 add_example(NAME "multiple_scenes" WEB)
+add_example(NAME "transmission" LINK_IMGUI WEB)
 
 if (THREEPP_WITH_WGPU)
     add_example(NAME "wgpu_triangle")

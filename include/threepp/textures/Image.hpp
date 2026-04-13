@@ -6,6 +6,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <cstdint>
 
 namespace threepp {
 
@@ -19,7 +20,7 @@ namespace threepp {
         unsigned int depth;
 
         struct CompressedFormat {
-            unsigned int format;
+            uint32_t format;
         };
 
         // When set, the data_ buffer holds a compressed block payload and this
