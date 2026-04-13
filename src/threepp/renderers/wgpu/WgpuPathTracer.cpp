@@ -1170,11 +1170,20 @@ fn evalAnalyticalLight(li: i32, point: vec3<f32>) -> LightEval {
     let lPos  = rt.lightPos[li].xyz;
     le.dir  = select(normalize(lPos - point), normalize(lPos), ltype == 1);
     le.dist = select(length(lPos - point), 1e30, ltype == 1);
-    let lDist = rt.lightType[li].w;
-    let lDecay = rt.lightDir[li].w;
-    if (lDist > 0.0 && ltype != 1) {
-        lc *= pow(max(1.0 - le.dist / lDist, 0.0), lDecay);
+
+    // Physically correct attenuation for point and spot lights:
+    //   irradiance = intensity / r²  (inverse-square law)
+    // Optional smooth distance window (Frostbite/UE4) avoids a hard cutoff:
+    //   window(r, rmax) = saturate(1 - (r/rmax)^4)²
+    if (ltype != 1) {
+        let inv_sq = 1.0 / max(le.dist * le.dist, 1e-4);
+        let lDist  = rt.lightType[li].w;
+        let window = select(1.0,
+                            pow(max(1.0 - pow(le.dist / lDist, 4.0), 0.0), 2.0),
+                            lDist > 0.0);
+        lc *= inv_sq * window;
     }
+
     if (ltype == 2) {
         let spotDir  = rt.lightDir[li].xyz;
         let cosTheta = dot(-le.dir, spotDir);
@@ -1857,6 +1866,14 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                     addSplit(&diffRad, &specRad, throughput * h.emissive,
                              rt.emissiveInfo.z, i, firstBounceSpec);
                 }
+            } else if (i == 1 && rt.restirParams.x > 0.5 && !firstBounceSpec) {
+                // Bounce 0 was diffuse and used ReSTIR DI, which samples emissive triangles
+                // and already produced an unbiased estimate of the full direct illumination.
+                // Adding the BRDF-sampled emissive here would double-count: ReSTIR gives I,
+                // and this MIS branch would add w_brdf*I on top → (1+w_brdf)*I overcounting.
+                // Skip for diffuse bounce 0 only — specular reflections MUST keep their
+                // bounce-1 emissive contribution because pdf_brdf >> pdf_nee there and
+                // the mirror reflection of a light is almost entirely BRDF-driven.
             } else {
                 // MIS: BRDF sampling hit emissive — weight by balance heuristic
                 let cosLight = abs(dot(h.geoNormal, -ray.dir));
@@ -1922,8 +1939,13 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         // mostly irrelevant there (primary interaction is transmission, not reflection).
         // Applying ReSTIR NEE to a glass surface over-brightens it and makes it
         // appear opaque. Fall back to classic NEE for those hits.
+        // Skip ReSTIR for near-mirror surfaces (alpha < 0.05 ≈ roughness < 0.22).
+        // The target PDF is an extreme spike around the reflection direction that
+        // the reservoir can't sample — results oscillate between bright/black.
+        // Classic NEE + bounce-1 BRDF hit handles specular reflections correctly.
         let useReSTIR = i == 0 && rt.restirParams.x > 0.5
-                        && h.transmission < 0.05;
+                        && h.transmission < 0.05
+                        && h.shininess >= 0.05;
 
         if (useReSTIR) {
             // ======= ReSTIR DI: Initial candidate generation =======
@@ -2070,7 +2092,7 @@ R"(
                             rPrev.lightPos  = prevSample.xyz;
                             rPrev.lightType = prevSample.w;
                             rPrev.W_sum = prevWeight.x;
-                            rPrev.M     = min(prevWeight.y, rt.restirParams.y);
+                            rPrev.M     = min(prevWeight.y, rt.restirParams.y) * 0.8;
                             rPrev.W     = prevWeight.z;
                             rPrev.p_hat = prevWeight.w;
 
@@ -5747,7 +5769,7 @@ struct WgpuPathTracer::Impl {
     Vector3 prevCamPos_;
     Vector3 prevCamDir_;
     int overlayLayer_ = -1;  // -1 = disabled; objects on this layer bypass path tracing and go to raster overlay
-    bool overlayFoundLastFrame_ = false;  // cached: did last frame's traversal find any overlay objects?
+    bool overlayFoundLastFrame_ = true;   // cached: did last frame's traversal find any overlay objects? (true = scan on first frame)
 
     int width_, height_;
 
@@ -7240,7 +7262,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.spp[0] = d.restirGiEnabled_ ? 1.f : 0.f;
     u.spp[2] = d.denoiserEnabled_ ? 1.f : 0.f;  // any denoiser active → disable sub-pixel jitter
     u.restirParams[0] = d.restirEnabled_ ? 1.f : 0.f;
-    u.restirParams[1] = 20.f;  // M clamp — lower = crisper shadows, higher = lower variance
+    u.restirParams[1] = camMoved ? 5.f : 20.f;  // M clamp — low during motion to flush stale reservoirs
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
     u.restirParams[3] = d.temporalDenoiserEnabled_ ? 1.f : 0.f;  // 1 = raw 1-spp output (no EMA)
     u.bvhAux[0] = static_cast<uint32_t>(d.bvhRootIdx_);  // traversal root (0=normal, >0=overlay)
