@@ -15,6 +15,7 @@
 #include <threepp/loaders/ImageLoader.hpp>
 #include <threepp/materials/MeshPhysicalMaterial.hpp>
 #include <threepp/objects/Bone.hpp>
+#include <threepp/objects/ObjectWithMaterials.hpp>
 #include <threepp/objects/Skeleton.hpp>
 #include <threepp/objects/SkinnedMesh.hpp>
 
@@ -127,6 +128,15 @@ namespace threepp {
             std::unordered_map<int, std::shared_ptr<Object3D>> nodeObjects;
             std::unordered_map<int, std::shared_ptr<Skeleton>> skinCache;
             std::unordered_set<int> builtNodes;
+
+            // KHR_materials_variants support
+            std::vector<std::string> variantNames;
+            struct PrimVariantMapping {
+                int materialIdx;
+                std::vector<int> variantIndices;
+            };
+            // meshIdx -> primIdx -> list of variant mappings
+            std::unordered_map<int, std::unordered_map<int, std::vector<PrimVariantMapping>>> primVariantData;
 
             // -----------------------------------------------------------------------
             //  Buffer/accessor helpers
@@ -585,6 +595,7 @@ namespace threepp {
                 auto group = Group::create();
                 group->name = meshDef.value("name", "");
 
+                int primIdx = 0;
                 for (const auto& prim : primitives) {
                     auto geometry = BufferGeometry::create();
 
@@ -641,14 +652,37 @@ namespace threepp {
                         mesh = SkinnedMesh::create(geometry, mat);
                     else
                         mesh = Mesh::create(geometry, mat);
+
+                    // Tag for KHR_materials_variants post-load resolution
+                    mesh->userData["__gltfMeshIdx"] = meshIdx;
+                    mesh->userData["__gltfPrimIdx"] = primIdx;
+
+                    // Collect per-primitive variant mappings
+                    if (!variantNames.empty() &&
+                        prim.contains("extensions") &&
+                        prim["extensions"].contains("KHR_materials_variants")) {
+                        const auto& vext = prim["extensions"]["KHR_materials_variants"];
+                        if (vext.contains("mappings")) {
+                            for (const auto& mapping : vext["mappings"]) {
+                                PrimVariantMapping pvm;
+                                pvm.materialIdx = mapping["material"].get<int>();
+                                pvm.variantIndices = mapping["variants"].get<std::vector<int>>();
+                                primVariantData[meshIdx][primIdx].push_back(std::move(pvm));
+                            }
+                        }
+                    }
+
                     group->add(mesh);
+                    ++primIdx;
                 }
 
                 // If only one primitive and not skinned, unwrap the group
                 if (group->children.size() == 1 && !hasSkin) {
                     auto child = group->children[0];
                     child->name = group->name;
-                    return child->clone();
+                    auto cloned = child->clone();
+                    cloned->userData = child->userData;// Object3D::copy() doesn't copy userData
+                    return cloned;
                 }
                 return group;
             }
@@ -713,6 +747,16 @@ namespace threepp {
                 int numBuffers = gltf.contains("buffers") ? static_cast<int>(gltf["buffers"].size()) : 0;
                 buffers.resize(numBuffers);
 
+                // Parse top-level KHR_materials_variants names
+                if (gltf.contains("extensions") &&
+                    gltf["extensions"].contains("KHR_materials_variants")) {
+                    const auto& ext = gltf["extensions"]["KHR_materials_variants"];
+                    if (ext.contains("variants")) {
+                        for (const auto& v : ext["variants"])
+                            variantNames.push_back(v.value("name", ""));
+                    }
+                }
+
                 gatherJoints();
                 preCreateNodes();
 
@@ -731,6 +775,7 @@ namespace threepp {
                     result.scene = Group::create();
                 }
 
+                resolveVariants(result);
                 return result;
             }
 
@@ -773,6 +818,16 @@ namespace threepp {
                 int numBuffers = gltf.contains("buffers") ? static_cast<int>(gltf["buffers"].size()) : 0;
                 if (static_cast<int>(buffers.size()) < numBuffers) buffers.resize(numBuffers);
 
+                // Parse top-level KHR_materials_variants names
+                if (gltf.contains("extensions") &&
+                    gltf["extensions"].contains("KHR_materials_variants")) {
+                    const auto& ext = gltf["extensions"]["KHR_materials_variants"];
+                    if (ext.contains("variants")) {
+                        for (const auto& v : ext["variants"])
+                            variantNames.push_back(v.value("name", ""));
+                    }
+                }
+
                 gatherJoints();
                 preCreateNodes();
 
@@ -791,7 +846,36 @@ namespace threepp {
                     result.scene = Group::create();
                 }
 
+                resolveVariants(result);
                 return result;
+            }
+
+            void resolveVariants(GLTFResult& result) {
+                if (variantNames.empty() || !result.scene) return;
+                result.variants.names = variantNames;
+                result.scene->traverse([&](Object3D& obj) {
+                    auto* owm = dynamic_cast<ObjectWithMaterials*>(&obj);
+                    if (!owm) return;
+                    auto mi = obj.userData.find("__gltfMeshIdx");
+                    auto pi = obj.userData.find("__gltfPrimIdx");
+                    if (mi == obj.userData.end()) return;
+                    int mIdx = std::any_cast<int>(mi->second);
+                    int pIdx = std::any_cast<int>(pi->second);
+                    obj.userData.erase("__gltfMeshIdx");
+                    obj.userData.erase("__gltfPrimIdx");
+                    result.variants.defaults[obj.uuid] = owm->material();
+                    auto meshIt = primVariantData.find(mIdx);
+                    if (meshIt == primVariantData.end()) return;
+                    auto primIt = meshIt->second.find(pIdx);
+                    if (primIt == meshIt->second.end()) return;
+                    for (const auto& pvm : primIt->second) {
+                        auto mat = loadMaterial(pvm.materialIdx);
+                        for (int vi : pvm.variantIndices) {
+                            if (vi < 0 || vi >= static_cast<int>(variantNames.size())) continue;
+                            result.variants.table[variantNames[vi]].push_back({obj.uuid, mat});
+                        }
+                    }
+                });
             }
         };
 
