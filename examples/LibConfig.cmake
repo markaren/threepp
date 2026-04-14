@@ -11,7 +11,8 @@ if (THREEPP_FETCH_ASSIMP AND (NOT TARGET assimp::assimp))
     FetchContent_Declare(
             assimp
             GIT_REPOSITORY https://github.com/assimp/assimp.git
-            GIT_TAG v6.0.2
+            GIT_TAG        v6.0.2
+            GIT_SHALLOW    TRUE
     )
     FetchContent_MakeAvailable(assimp)
 endif ()
