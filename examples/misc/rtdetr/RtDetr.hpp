@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace rtdetr {
@@ -134,6 +135,9 @@ namespace rtdetr {
         /// Elementwise exact GELU: 0.5 * x * (1 + erf(x / sqrt(2))).
         GPUTensor gelu_(const GPUTensor& x);
 
+        /// Elementwise ReLU: max(0, x).
+        GPUTensor relu_(const GPUTensor& x);
+
         /// Compute multi-head attention scores (pre-softmax).
         /// `qkv` shape [M, 3*D] (output of a combined QKV linear). Returns
         /// [H, M, M] with values scaled by 1/sqrt(d) where d = D / H.
@@ -201,6 +205,49 @@ namespace rtdetr {
         struct NeckFeatures { GPUTensor s3, s4, s5; };
         NeckFeatures ccfm_(const GPUTensor& p3, const GPUTensor& p4, const GPUTensor& f5);
 
+        /// Multi-Scale Deformable Attention (MSDeformAttn).
+        /// Core cross-attention mechanism of the RT-DETR decoder.
+        ///
+        /// value:           [total_tokens, D]  multi-scale projected values (D = H*d)
+        /// spatialShapes:   per-level (H, W) pairs
+        /// refPts:          [Nq, 2] reference points in normalized [0,1] coords
+        /// samplingOffsets: [Nq, H*L*P*2] predicted sampling offsets
+        /// attnWeights:     [Nq, H*L*P] attention weights (must be softmaxed)
+        /// Returns:         [Nq, D]
+        GPUTensor msDeformAttn_(const GPUTensor& value,
+                                const std::vector<std::pair<uint32_t,uint32_t>>& spatialShapes,
+                                const GPUTensor& refPts,
+                                const GPUTensor& samplingOffsets,
+                                const GPUTensor& attnWeights,
+                                uint32_t numHeads);
+
+        /// A single detection result.
+        struct Detection {
+            int   classId;
+            float confidence;
+            float x1, y1, x2, y2;   ///< box in original image pixels
+        };
+
+        /// RTDETRDecoder output: final class scores and bounding boxes.
+        struct DecoderOutput {
+            std::vector<float> scores;  ///< [300 * 80] class logits
+            std::vector<float> bboxes;  ///< [300 * 4]  normalized (cx, cy, w, h)
+        };
+
+        /// Run end-to-end inference on an RGBA image.
+        /// Returns detections above confThresh after NMS.
+        std::vector<Detection> infer(const unsigned char* rgba,
+                                     int width, int height,
+                                     float confThresh = 0.5f);
+
+        /// Full RTDETRDecoder forward pass (model.28).
+        /// Selects top-300 queries from enc_output, runs 6 decoder layers
+        /// with self-attention, MSDeformAttn cross-attention, and FFN.
+        /// Returns final class scores and iteratively-refined bounding boxes.
+        DecoderOutput decoder_(const GPUTensor& memory,
+                               const GPUTensor& encOutput,
+                               const std::vector<std::pair<uint32_t,uint32_t>>& spatialShapes);
+
         /// Concatenate two tensors along the channel axis. a and b must have
         /// matching H and W. Output channel count = a.C() + b.C().
         GPUTensor concatC_(const GPUTensor& a, const GPUTensor& b);
@@ -240,6 +287,8 @@ namespace rtdetr {
         threepp::WgpuComputePipeline attnApplyPipe_;
         threepp::WgpuComputePipeline upsample2xPipe_;
         threepp::WgpuComputePipeline addSiluPipe_;
+        threepp::WgpuComputePipeline msDeformAttnPipe_;
+        threepp::WgpuComputePipeline reluPipe_;
         threepp::WgpuBuffer          convParamBuf_;
         threepp::WgpuBuffer          poolParamBuf_;
         threepp::WgpuBuffer          concatParamBuf_;
@@ -250,6 +299,7 @@ namespace rtdetr {
         threepp::WgpuBuffer          geluParamBuf_;
         threepp::WgpuBuffer          attnParamBuf_;
         threepp::WgpuBuffer          upsampleParamBuf_;
+        threepp::WgpuBuffer          msDeformParamBuf_;
     };
 
 }// namespace rtdetr

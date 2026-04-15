@@ -5,6 +5,7 @@
 
 #include "threepp/threepp.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
+#include "threepp/loaders/ImageLoader.hpp"
 
 #include "rtdetr/RtDetr.hpp"
 #include "rtdetr/WeightLoader.hpp"
@@ -12,6 +13,7 @@
 #include <filesystem>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <iomanip>
 #include <iostream>
@@ -19,6 +21,20 @@
 #include <vector>
 
 using namespace threepp;
+
+// COCO class names (80 classes, 0-indexed)
+static const char* kCocoNames[80] = {
+    "person","bicycle","car","motorbike","aeroplane","bus","train","truck","boat",
+    "traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat",
+    "dog","horse","sheep","cow","elephant","bear","zebra","giraffe","backpack",
+    "umbrella","handbag","tie","suitcase","frisbee","skis","snowboard","sports ball",
+    "kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket",
+    "bottle","wine glass","cup","fork","knife","spoon","bowl","banana","apple",
+    "sandwich","orange","broccoli","carrot","hot dog","pizza","donut","cake","chair",
+    "sofa","pottedplant","bed","diningtable","toilet","tvmonitor","laptop","mouse",
+    "remote","keyboard","cell phone","microwave","oven","toaster","sink","refrigerator",
+    "book","clock","vase","scissors","teddy bear","hair drier","toothbrush"
+};
 
 namespace {
 
@@ -36,12 +52,14 @@ bool allInBounds(int y, int x, int inH, int inW,
 
 int main(int argc, char** argv) {
     std::string weightsPath = "C:\\dev\\threepp\\scripts\\rtdetr_l.weights";
-    if (argc > 1) weightsPath = argv[1];
+    // if (argc > 1) weightsPath = argv[1];
     std::string refPath = "C:\\dev\\threepp\\scripts\\rtdetr_l_ref.bin";
-    if (argc > 2) refPath = argv[2];
+    // if (argc > 2) refPath = argv[1];
+    std::string imagePath;
+    if (argc > 1) imagePath = argv[1];
 
     Canvas::Parameters p;
-    p.title("RT-DETR Inference (milestone 2: DWConv)")
+    p.title("RT-DETR-L WebGPU Inference")
      .size(640, 640)
      .graphicsApi(GraphicsAPI::WebGPU);
 
@@ -49,6 +67,87 @@ int main(int argc, char** argv) {
     WgpuRenderer renderer(canvas);
 
     rtdetr::RtDetr model(renderer);
+
+    // -----------------------------------------------------------
+    //  Milestone 9: MSDeformAttn analytical test.
+    //  Runs before weight loading — only needs compute pipelines.
+    //
+    //  Synthetic setup: 2 heads, 2 levels, 1 sampling point.
+    //  Head dim d=2, so D=4.  Level 0: 2×2 (4 tokens),
+    //  Level 1: 1×1 (1 token). Total tokens = 5.
+    //  Value = sequential floats so we can predict bilinear results.
+    //  Reference point at (0.5, 0.5) — maps to pixel center.
+    //  All offsets = 0, so we sample exactly at ref point.
+    //  Attention weights: 0.5 each per head (uniform over L*P=2).
+    //
+    //  With ref=(0.5,0.5), offset=0, level 0 (2×2):
+    //    sx = 0.5*2 = 1.0, sy = 0.5*2 = 1.0
+    //    Bilinear at (1.0, 1.0): fx = 0.5, fy = 0.5
+    //    All 4 corners contribute 0.25 each → average of 4 tokens.
+    //  Level 1 (1×1): sx = 0.5, sy = 0.5
+    //    fx = 0.0, fy = 0.0 → only top-left in-bounds, weight = 1.0.
+    // -----------------------------------------------------------
+    {
+        std::cout << "\nMilestone 9 - MSDeformAttn analytical test\n";
+
+        const uint32_t H = 2, d = 2, D = H * d;
+        const uint32_t L = 2, P = 1;
+        const uint32_t Nq = 1;
+
+        // Level 0: 2×2 = 4 tokens.  Level 1: 1×1 = 1 token.  Total = 5.
+        // Value shape: [5, 4].  val[i] = i + 1 (1-indexed sequential).
+        const uint32_t totalTokens = 5;
+        std::vector<float> valData(totalTokens * D);
+        for (uint32_t i = 0; i < totalTokens * D; ++i)
+            valData[i] = float(i + 1);
+        auto value = model.uploadTensor({totalTokens, D}, valData.data());
+
+        std::vector<std::pair<uint32_t,uint32_t>> shapes = {{2,2}, {1,1}};
+
+        std::vector<float> refData = {0.5f, 0.5f};
+        auto refPts = model.uploadTensor({Nq, 2u}, refData.data());
+
+        std::vector<float> offData(Nq * H * L * P * 2, 0.0f);
+        auto offs = model.uploadTensor({Nq, H * L * P * 2}, offData.data());
+
+        // attn weights: 0.5 per (level, point) pair within each head.
+        std::vector<float> awData(Nq * H * L * P, 0.5f);
+        auto aw = model.uploadTensor({Nq, H * L * P}, awData.data());
+
+        auto out = model.msDeformAttn_(value, shapes, refPts, offs, aw, H);
+        auto outCpu = model.readback(out.buffer(), out.numel());
+
+        // Expected: for col c, level0 avg = c+7, level1 val = c+17.
+        // output[c] = 0.5*(c+7) + 0.5*(c+17) = c + 12.
+        // → [12, 13, 14, 15]
+        std::vector<float> expected = {12.0f, 13.0f, 14.0f, 15.0f};
+
+        std::cout << "  Output:   [";
+        for (size_t i = 0; i < outCpu.size(); ++i)
+            std::cout << outCpu[i] << (i + 1 < outCpu.size() ? ", " : "");
+        std::cout << "]\n  Expected: [";
+        for (size_t i = 0; i < expected.size(); ++i)
+            std::cout << expected[i] << (i + 1 < expected.size() ? ", " : "");
+        std::cout << "]\n";
+
+        size_t m9fail = 0;
+        for (size_t i = 0; i < expected.size(); ++i) {
+            if (std::fabs(outCpu[i] - expected[i]) > 1e-4f) {
+                std::cout << "  MISMATCH at [" << i << "]: got=" << outCpu[i]
+                          << " exp=" << expected[i] << "\n";
+                ++m9fail;
+            }
+        }
+        std::cout << "  RESULT: " << (m9fail == 0 ? "PASS" : "FAIL") << "\n";
+    }
+
+    // Load weights (skip gracefully if file not found).
+    if (!std::filesystem::exists(weightsPath)) {
+        std::cout << "\nWeights file not found: " << weightsPath << "\n";
+        std::cout << "  Run: python scripts/export_rtdetr_weights.py\n";
+        std::cout << "  Milestone 9 (MSDeformAttn) test completed above.\n";
+        return 0;
+    }
     model.loadWeights(weightsPath);
 
     // Probe: model.11 (AIFI transformer encoder).
@@ -1303,6 +1402,137 @@ int main(int argc, char** argv) {
     } else {
         std::cout << "\nMilestone 5d - skipped (no reference at " << refPath << ")\n";
         std::cout << "  Run: python scripts/capture_rtdetr_activations.py\n";
+    }
+
+    // -----------------------------------------------------------
+    //  Milestone 10: Full decoder forward pass (smoke test).
+    //  Uses reference memory + enc_output from the capture script
+    //  (or live backbone if ref not available).
+    // -----------------------------------------------------------
+    {
+        std::cout << "\nMilestone 10 - Full decoder forward pass\n";
+
+        // Build memory from reference input_projs (or re-run backbone).
+        rtdetr::GPUTensor mem, encOut;
+        std::vector<std::pair<uint32_t,uint32_t>> shapes;
+
+        {
+            // Full pipeline: backbone → AIFI → CCFM → input_proj → memory → enc_output.
+            auto input = model.allocFilled({3, 640, 640}, 0.5f);
+            auto bp    = model.backbone_(input);
+            auto f5    = model.aifi_(bp.p5);
+            auto neck  = model.ccfm_(bp.p3, bp.p4, f5);
+            auto ip0   = model.inputProj_(neck.s3, 0);
+            auto ip1   = model.inputProj_(neck.s4, 1);
+            auto ip2   = model.inputProj_(neck.s5, 2);
+            mem        = model.buildMemory_(ip0, ip1, ip2);
+            auto lin   = model.linear_(mem, "model.28.enc_output.0.weight",
+                                            "model.28.enc_output.0.bias");
+            encOut     = model.layerNorm_(lin, "model.28.enc_output.1.weight",
+                                               "model.28.enc_output.1.bias");
+            shapes = {{ip0.H(), ip0.W()},
+                      {ip1.H(), ip1.W()},
+                      {ip2.H(), ip2.W()}};
+        }
+
+        auto result = model.decoder_(mem, encOut, shapes);
+
+        // Sanity checks on output shapes and value ranges.
+        bool ok = true;
+        if (result.scores.size() != 300 * 80) {
+            std::cout << "  FAIL: scores size " << result.scores.size()
+                      << " (expected 24000)\n";
+            ok = false;
+        }
+        if (result.bboxes.size() != 300 * 4) {
+            std::cout << "  FAIL: bboxes size " << result.bboxes.size()
+                      << " (expected 1200)\n";
+            ok = false;
+        }
+
+        // Check bboxes are in (0,1) (sigmoid output).
+        size_t oob = 0;
+        for (float v : result.bboxes) {
+            if (v <= 0.f || v >= 1.f) ++oob;
+        }
+        if (oob > 0) {
+            std::cout << "  WARNING: " << oob << "/1200 bbox values out of (0,1)\n";
+        }
+
+        // Print top-5 detections by max class score.
+        std::cout << "  Top-5 detections:\n";
+        std::vector<std::pair<float, int>> topDets(300);
+        for (int i = 0; i < 300; ++i) {
+            float mx = result.scores[size_t(i) * 80];
+            for (int c = 1; c < 80; ++c)
+                mx = std::max(mx, result.scores[size_t(i) * 80 + c]);
+            topDets[i] = {mx, i};
+        }
+        std::partial_sort(topDets.begin(), topDets.begin() + 5, topDets.end(),
+                          [](auto& a, auto& b) { return a.first > b.first; });
+        for (int i = 0; i < 5; ++i) {
+            int qi = topDets[i].second;
+            float cx = result.bboxes[size_t(qi) * 4 + 0];
+            float cy = result.bboxes[size_t(qi) * 4 + 1];
+            float w  = result.bboxes[size_t(qi) * 4 + 2];
+            float h  = result.bboxes[size_t(qi) * 4 + 3];
+            // Find best class.
+            int bestC = 0; float bestS = result.scores[size_t(qi) * 80];
+            for (int c = 1; c < 80; ++c) {
+                float s = result.scores[size_t(qi) * 80 + c];
+                if (s > bestS) { bestS = s; bestC = c; }
+            }
+            std::cout << "    [" << i << "] query=" << qi
+                      << "  class=" << bestC << "  score=" << bestS
+                      << "  bbox=(" << cx << "," << cy << "," << w << "," << h << ")\n";
+        }
+
+        std::cout << "  RESULT: " << (ok ? "PASS (smoke)" : "FAIL") << "\n";
+    }
+
+    // -----------------------------------------------------------
+    //  Milestone 11: Real image inference.
+    //  Usage: rtdetr_inference <weights> <ref> <image.jpg>
+    // -----------------------------------------------------------
+    if (!imagePath.empty()) {
+        std::cout << "\nMilestone 11 - Real image inference\n";
+        std::cout << "  Image: " << imagePath << "\n";
+
+        ImageLoader imgLoader;
+        auto imgOpt = imgLoader.load(imagePath, 4, false);   // RGBA, no flip
+        if (!imgOpt) {
+            std::cerr << "  ERROR: Could not load image '" << imagePath << "'\n";
+        } else {
+            auto& img = *imgOpt;
+            std::cout << "  Loaded: " << img.width << " x " << img.height << "\n";
+
+            for (int i = 0; i < 5; i++) {
+                auto& rgba = img.data<unsigned char>();
+
+                using clk = std::chrono::steady_clock;
+                auto t0 = clk::now();
+                auto dets = model.infer(rgba.data(), int(img.width), int(img.height), 0.3f);
+                auto t1 = clk::now();
+                double elapsed = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+                std::cout << "  Inference: " << std::fixed << std::setprecision(1)
+                          << elapsed << " ms\n";
+                std::cout << "  Detections: " << dets.size() << "\n";
+
+                for (size_t i = 0; i < dets.size(); ++i) {
+                    auto& d = dets[i];
+                    const char* name = (d.classId >= 0 && d.classId < 80)
+                        ? kCocoNames[d.classId] : "unknown";
+                    std::cout << "    [" << i << "] " << std::left << std::setw(18) << name
+                              << std::right << std::fixed
+                              << "  conf=" << std::setprecision(3) << d.confidence
+                              << "  box=(" << std::setprecision(1)
+                              << d.x1 << "," << d.y1 << ","
+                              << d.x2 << "," << d.y2 << ")\n";
+                }
+                std::cout << "  RESULT: " << (dets.empty() ? "NO DETECTIONS" : "PASS") << "\n";
+            }
+        }
     }
 
     return (interiorMismatch == 0 && cMismatch == 0 && miss5 == 0 && miss6 == 0) ? 0 : 1;

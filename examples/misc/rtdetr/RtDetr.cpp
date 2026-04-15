@@ -424,6 +424,149 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 )WGSL";
 
 // ============================================================
+//  WGSL: elementwise ReLU
+// ============================================================
+static const char* kReluWgsl = R"WGSL(
+struct ReluParams { n: u32, _p0: u32, _p1: u32, _p2: u32, }
+@group(0) @binding(0) var<uniform>             p: ReluParams;
+@group(0) @binding(1) var<storage, read>       x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= p.n) { return; }
+    y[i] = max(0.0, x[i]);
+}
+)WGSL";
+
+// ============================================================
+//  WGSL: Multi-Scale Deformable Attention (MSDeformAttn)
+// ============================================================
+//
+// RT-DETR-L parameters: H=8 heads, L=3 levels, P=4 points, d=32 head dim.
+// Inputs:
+//   value:   [total_tokens, H*d]  (projected values, flattened across levels)
+//   shapes:  [L, 2]  (H_l, W_l per level)
+//   offsets: [N_q, H*L*P*2]  (predicted sampling offsets)
+//   attnW:   [N_q, H*L*P]   (attention weights, already softmaxed)
+//   refPts:  [N_q, 2]       (reference points in [0,1] normalized coords)
+//   lvlStarts: [L]           (cumulative token offset per level)
+// Output:  [N_q, H*d]
+//
+// Each thread computes one (query, head_dim_k) output element, iterating
+// over L*P sampling points and accumulating the bilinearly-interpolated
+// value weighted by attention.
+//
+struct MsDeformParams {
+    uint32_t Nq;       ///< number of queries
+    uint32_t H;        ///< number of attention heads
+    uint32_t d;        ///< head dimension (D / H)
+    uint32_t L;        ///< number of levels
+    uint32_t P;        ///< number of sampling points per head per level
+    uint32_t _p0, _p1, _p2;   // pad to 32 bytes
+};
+
+static const char* kMsDeformAttnWgsl = R"WGSL(
+struct MsDeformParams {
+    Nq: u32, H: u32, d: u32, L: u32, P: u32,
+    _p0: u32, _p1: u32, _p2: u32,
+}
+
+@group(0) @binding(0) var<uniform>             p:         MsDeformParams;
+@group(0) @binding(1) var<storage, read>       value:     array<f32>;   // [total_tokens, H*d]
+@group(0) @binding(2) var<storage, read>       shapes:    array<u32>;   // [L*2]: H0,W0,H1,W1,...
+@group(0) @binding(3) var<storage, read>       lvlStart:  array<u32>;   // [L]: cumulative token offset
+@group(0) @binding(4) var<storage, read>       refPts:    array<f32>;   // [Nq, 2]: cx, cy in [0,1]
+@group(0) @binding(5) var<storage, read>       offsets:   array<f32>;   // [Nq, H*L*P*2]
+@group(0) @binding(6) var<storage, read>       attnW:     array<f32>;   // [Nq, H*L*P]
+@group(0) @binding(7) var<storage, read_write> out:       array<f32>;   // [Nq, H*d]
+
+// Bilinear sampling helper.  Samples value[token_offset + gy*W + gx, h*d + k]
+// at fractional position (sx, sy) within the level's spatial grid.
+// Clamps to grid boundaries.
+fn bilinear(h: u32, k: u32, base: u32, Hl: u32, Wl: u32, sx: f32, sy: f32) -> f32 {
+    let Hd = p.H * p.d;
+    // Pixel centers at 0.5 .. Wl-0.5; convert to integer grid
+    let fx = sx - 0.5;
+    let fy = sy - 0.5;
+
+    let x0 = i32(floor(fx));
+    let y0 = i32(floor(fy));
+    let x1 = x0 + 1;
+    let y1 = y0 + 1;
+
+    let wx = fx - f32(x0);
+    let wy = fy - f32(y0);
+
+    let iW = i32(Wl);
+    let iH = i32(Hl);
+    let col = h * p.d + k;
+
+    var acc: f32 = 0.0;
+
+    // top-left
+    if (x0 >= 0 && x0 < iW && y0 >= 0 && y0 < iH) {
+        acc += (1.0 - wx) * (1.0 - wy) * value[(base + u32(y0) * Wl + u32(x0)) * Hd + col];
+    }
+    // top-right
+    if (x1 >= 0 && x1 < iW && y0 >= 0 && y0 < iH) {
+        acc += wx * (1.0 - wy) * value[(base + u32(y0) * Wl + u32(x1)) * Hd + col];
+    }
+    // bottom-left
+    if (x0 >= 0 && x0 < iW && y1 >= 0 && y1 < iH) {
+        acc += (1.0 - wx) * wy * value[(base + u32(y1) * Wl + u32(x0)) * Hd + col];
+    }
+    // bottom-right
+    if (x1 >= 0 && x1 < iW && y1 >= 0 && y1 < iH) {
+        acc += wx * wy * value[(base + u32(y1) * Wl + u32(x1)) * Hd + col];
+    }
+    return acc;
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let k = gid.x;    // head-dim index  [0..d)
+    let q = gid.y;    // query index     [0..Nq)
+    let h = gid.z;    // head index      [0..H)
+    if (k >= p.d || q >= p.Nq || h >= p.H) { return; }
+
+    // Reference point for this query (normalized 0..1).
+    let ref_x = refPts[q * 2u + 0u];
+    let ref_y = refPts[q * 2u + 1u];
+
+    let LP = p.L * p.P;
+    let offStride = p.H * LP * 2u;   // row stride of offsets: H*L*P*2
+    let awStride  = p.H * LP;        // row stride of attn weights: H*L*P
+
+    var acc: f32 = 0.0;
+    for (var l: u32 = 0u; l < p.L; l = l + 1u) {
+        let Hl = shapes[l * 2u + 0u];
+        let Wl = shapes[l * 2u + 1u];
+        let base = lvlStart[l];
+
+        for (var pt: u32 = 0u; pt < p.P; pt = pt + 1u) {
+            // Offset index: offsets[q, h, l, pt, 0/1]
+            let offIdx = q * offStride + (h * LP + l * p.P + pt) * 2u;
+            let ox = offsets[offIdx + 0u];
+            let oy = offsets[offIdx + 1u];
+
+            // Attention weight index: attnW[q, h, l*P + pt]
+            let aw = attnW[q * awStride + h * LP + l * p.P + pt];
+
+            // Sample position in pixel space (pixel centers at 0.5).
+            let sx = ref_x * f32(Wl) + ox;
+            let sy = ref_y * f32(Hl) + oy;
+
+            acc += aw * bilinear(h, k, base, Hl, Wl, sx, sy);
+        }
+    }
+
+    out[q * (p.H * p.d) + h * p.d + k] = acc;
+}
+)WGSL";
+
+// ============================================================
 //  WGSL: multi-head attention scores (pre-softmax) from combined QKV
 // ============================================================
 struct AttnParams {
@@ -559,6 +702,8 @@ RtDetr::RtDetr(WgpuRenderer& renderer)
       attnApplyPipe_(renderer, kAttnApplyWgsl, "main"),
       upsample2xPipe_(renderer, kUpsample2xWgsl, "main"),
       addSiluPipe_(renderer, kAddSiluWgsl, "main"),
+      msDeformAttnPipe_(renderer, kMsDeformAttnWgsl, "main"),
+      reluPipe_(renderer, kReluWgsl, "main"),
       convParamBuf_(renderer, sizeof(ConvParams), WgpuBuffer::Usage::Uniform),
       poolParamBuf_(renderer, sizeof(PoolParams), WgpuBuffer::Usage::Uniform),
       concatParamBuf_(renderer, sizeof(ConcatParams), WgpuBuffer::Usage::Uniform),
@@ -568,7 +713,8 @@ RtDetr::RtDetr(WgpuRenderer& renderer)
       softmaxParamBuf_(renderer, sizeof(SoftmaxParams), WgpuBuffer::Usage::Uniform),
       geluParamBuf_(renderer, sizeof(GeluParams), WgpuBuffer::Usage::Uniform),
       attnParamBuf_(renderer, sizeof(AttnParams), WgpuBuffer::Usage::Uniform),
-      upsampleParamBuf_(renderer, sizeof(UpsampleParams), WgpuBuffer::Usage::Uniform)
+      upsampleParamBuf_(renderer, sizeof(UpsampleParams), WgpuBuffer::Usage::Uniform),
+      msDeformParamBuf_(renderer, sizeof(MsDeformParams), WgpuBuffer::Usage::Uniform)
 {
 }
 
@@ -1084,6 +1230,21 @@ GPUTensor RtDetr::gelu_(const GPUTensor& x) {
     return out;
 }
 
+GPUTensor RtDetr::relu_(const GPUTensor& x) {
+    uint32_t N = x.numel();
+    GeluParams gp{N, 0, 0, 0};   // reuse GeluParams (same layout)
+    geluParamBuf_.write(&gp, sizeof(gp));
+
+    auto out = makeReadbackTensor(renderer_, std::initializer_list<uint32_t>{N});
+    out.shape = x.shape;
+
+    reluPipe_.setUniformBuffer(0,     geluParamBuf_);
+    reluPipe_.setStorageBufferRead(1, const_cast<GPUTensor&>(x).buffer());
+    reluPipe_.setStorageBuffer(2,     out.buffer());
+    reluPipe_.dispatch(divCeil(N, 64), 1, 1);
+    return out;
+}
+
 GPUTensor RtDetr::attnScores_(const GPUTensor& qkv, uint32_t H) {
     if (qkv.shape.size() != 2)
         throw std::runtime_error("attnScores_: qkv must be 2D [M, 3*D]");
@@ -1120,6 +1281,60 @@ GPUTensor RtDetr::attnApply_(const GPUTensor& qkv, const GPUTensor& attn, uint32
     attnApplyPipe_.setStorageBufferRead(2, const_cast<GPUTensor&>(attn).buffer());
     attnApplyPipe_.setStorageBuffer(3,     out.buffer());
     attnApplyPipe_.dispatch(divCeil(d, 8), divCeil(M, 8), H);
+    return out;
+}
+
+GPUTensor RtDetr::msDeformAttn_(const GPUTensor& value,
+                                const std::vector<std::pair<uint32_t,uint32_t>>& spatialShapes,
+                                const GPUTensor& refPts,
+                                const GPUTensor& samplingOffsets,
+                                const GPUTensor& attnWeights,
+                                uint32_t numHeads) {
+    // value: [total_tokens, D]  (D = numHeads * headDim)
+    // refPts: [Nq, 2]
+    // samplingOffsets: [Nq, H*L*P*2]
+    // attnWeights: [Nq, H*L*P]  (must already be softmaxed)
+    uint32_t D  = value.shape.back();
+    uint32_t d  = D / numHeads;
+    uint32_t L  = uint32_t(spatialShapes.size());
+    uint32_t Nq = refPts.shape[0];
+
+    // Infer P (points per head per level) from attnWeights shape.
+    uint32_t HLP = attnWeights.shape.back();
+    uint32_t P   = HLP / (numHeads * L);
+
+    // Upload spatial shapes [L*2] and level start offsets [L].
+    std::vector<uint32_t> shapesBuf(L * 2);
+    std::vector<uint32_t> startsBuf(L);
+    uint32_t cumulative = 0;
+    for (uint32_t i = 0; i < L; ++i) {
+        shapesBuf[i * 2 + 0] = spatialShapes[i].first;   // H
+        shapesBuf[i * 2 + 1] = spatialShapes[i].second;  // W
+        startsBuf[i] = cumulative;
+        cumulative += spatialShapes[i].first * spatialShapes[i].second;
+    }
+
+    // Create small GPU buffers for shapes and level starts.
+    WgpuBuffer shapeGpu(renderer_, L * 2 * sizeof(uint32_t), WgpuBuffer::Usage::Storage);
+    shapeGpu.write(shapesBuf.data(), shapesBuf.size() * sizeof(uint32_t));
+    WgpuBuffer startsGpu(renderer_, L * sizeof(uint32_t), WgpuBuffer::Usage::Storage);
+    startsGpu.write(startsBuf.data(), startsBuf.size() * sizeof(uint32_t));
+
+    // Uniform params.
+    MsDeformParams mp{Nq, numHeads, d, L, P, 0, 0, 0};
+    msDeformParamBuf_.write(&mp, sizeof(mp));
+
+    auto out = makeReadbackTensor(renderer_, {Nq, D});
+
+    msDeformAttnPipe_.setUniformBuffer(0,     msDeformParamBuf_);
+    msDeformAttnPipe_.setStorageBufferRead(1, const_cast<GPUTensor&>(value).buffer());
+    msDeformAttnPipe_.setStorageBufferRead(2, shapeGpu);
+    msDeformAttnPipe_.setStorageBufferRead(3, startsGpu);
+    msDeformAttnPipe_.setStorageBufferRead(4, const_cast<GPUTensor&>(refPts).buffer());
+    msDeformAttnPipe_.setStorageBufferRead(5, const_cast<GPUTensor&>(samplingOffsets).buffer());
+    msDeformAttnPipe_.setStorageBufferRead(6, const_cast<GPUTensor&>(attnWeights).buffer());
+    msDeformAttnPipe_.setStorageBuffer(7,     out.buffer());
+    msDeformAttnPipe_.dispatch(divCeil(d, 8), divCeil(Nq, 8), numHeads);
     return out;
 }
 
@@ -1360,6 +1575,224 @@ GPUTensor RtDetr::inputProj_(const GPUTensor& x, int scaleIdx) {
                  1, 1, 0, 0, Activation::None);
 }
 
+// ============================================================
+//  RTDETRDecoder full forward pass (model.28)
+// ============================================================
+RtDetr::DecoderOutput RtDetr::decoder_(
+        const GPUTensor& memory,
+        const GPUTensor& encOutput,
+        const std::vector<std::pair<uint32_t,uint32_t>>& spatialShapes) {
+
+    const uint32_t totalTokens = memory.shape[0];
+    const uint32_t D = 256;
+    const uint32_t numHeads = 8;
+    const uint32_t headDim  = D / numHeads;    // 32
+    const uint32_t numLevels = uint32_t(spatialShapes.size());
+    const uint32_t numPoints = 4;
+    const uint32_t numQueries = 300;
+    const uint32_t numClasses = 80;
+    const uint32_t numLayers  = 6;
+
+    // CPU helpers.
+    auto sigmoidF = [](float x) -> float { return 1.0f / (1.0f + std::exp(-x)); };
+    auto invSigmoid = [](float x) -> float {
+        x = std::clamp(x, 1e-5f, 1.0f - 1e-5f);
+        return std::log(x / (1.0f - x));
+    };
+    auto cpuSoftmax = [](float* row, size_t n) {
+        float mx = *std::max_element(row, row + n);
+        float s = 0.f;
+        for (size_t i = 0; i < n; ++i) { row[i] = std::exp(row[i] - mx); s += row[i]; }
+        float inv = 1.f / s;
+        for (size_t i = 0; i < n; ++i) row[i] *= inv;
+    };
+
+    // ----------------------------------------------------------------
+    //  Step 1: enc_score_head → top-K selection
+    // ----------------------------------------------------------------
+    auto encScores = linear_(encOutput, "model.28.enc_score_head.weight",
+                                        "model.28.enc_score_head.bias");
+    auto scoresCpu = readback(encScores.buffer(), encScores.numel());
+    // [totalTokens, 80]: find max class score per token, pick top-300.
+    std::vector<std::pair<float, uint32_t>> maxScores(totalTokens);
+    for (uint32_t t = 0; t < totalTokens; ++t) {
+        float mx = scoresCpu[size_t(t) * numClasses];
+        for (uint32_t c = 1; c < numClasses; ++c)
+            mx = std::max(mx, scoresCpu[size_t(t) * numClasses + c]);
+        maxScores[t] = {mx, t};
+    }
+    std::partial_sort(maxScores.begin(), maxScores.begin() + numQueries,
+                      maxScores.end(), [](auto& a, auto& b) { return a.first > b.first; });
+
+    std::vector<uint32_t> topkIdx(numQueries);
+    for (uint32_t i = 0; i < numQueries; ++i) topkIdx[i] = maxScores[i].second;
+
+    // Gather target [300, 256] from enc_output.
+    auto encOutCpu = readback(const_cast<GPUTensor&>(encOutput).buffer(), encOutput.numel());
+    std::vector<float> targetCpu(size_t(numQueries) * D);
+    for (uint32_t i = 0; i < numQueries; ++i)
+        std::copy_n(encOutCpu.data() + size_t(topkIdx[i]) * D, D,
+                    targetCpu.data() + size_t(i) * D);
+
+    auto target = uploadTensor({numQueries, D}, targetCpu.data());
+
+    // ----------------------------------------------------------------
+    //  Step 2: enc_bbox_head MLP on selected tokens → reference_points
+    // ----------------------------------------------------------------
+    auto bboxMLP = [&](const GPUTensor& x, const std::string& prefix) -> GPUTensor {
+        auto h1 = linear_(x, prefix + ".layers.0.weight", prefix + ".layers.0.bias");
+        h1 = relu_(h1);
+        auto h2 = linear_(h1, prefix + ".layers.1.weight", prefix + ".layers.1.bias");
+        h2 = relu_(h2);
+        return linear_(h2, prefix + ".layers.2.weight", prefix + ".layers.2.bias");
+    };
+
+    auto encBboxRaw = bboxMLP(target, "model.28.enc_bbox_head");
+    auto bboxRawCpu = readback(encBboxRaw.buffer(), encBboxRaw.numel());
+    // sigmoid → reference_points [300, 4].
+    std::vector<float> refPts(size_t(numQueries) * 4);
+    for (size_t i = 0; i < refPts.size(); ++i)
+        refPts[i] = sigmoidF(bboxRawCpu[i]);
+
+    std::cout << "  Decoder: top-300 selected, enc_bbox ref_pts ready\n";
+
+    // ----------------------------------------------------------------
+    //  Step 3: Decoder layers (×6)
+    // ----------------------------------------------------------------
+    for (uint32_t layer = 0; layer < numLayers; ++layer) {
+        std::string p = "model.28.decoder.layers." + std::to_string(layer);
+
+        // --- 3a: query_pos_head MLP (4 → 512 → 256) ---
+        // Shared across layers; uses detached ref_points.
+        std::vector<float> refXy(size_t(numQueries) * 4);
+        std::copy(refPts.begin(), refPts.end(), refXy.begin());
+        auto refTensor = uploadTensor({numQueries, 4u}, refXy.data());
+
+        auto qp1 = linear_(refTensor, "model.28.query_pos_head.layers.0.weight",
+                                       "model.28.query_pos_head.layers.0.bias");
+        qp1 = relu_(qp1);
+        auto queryPos = linear_(qp1, "model.28.query_pos_head.layers.1.weight",
+                                      "model.28.query_pos_head.layers.1.bias");
+
+        // --- 3b: Self-attention ---
+        // q = k = target + query_pos, v = target
+        auto qkInput = addTensor_(target, queryPos);
+
+        // Project through in_proj [768, 256].
+        auto yqk = linear_(qkInput, p + ".self_attn.in_proj_weight",
+                                     p + ".self_attn.in_proj_bias");
+        auto yt  = linear_(target,  p + ".self_attn.in_proj_weight",
+                                     p + ".self_attn.in_proj_bias");
+
+        // CPU splice: Q from yqk[:,:D], K from yqk[:,D:2D], V from yt[:,2D:3D].
+        auto yqkCpu = readback(yqk.buffer(), yqk.numel());
+        auto ytCpu  = readback(yt.buffer(),  yt.numel());
+        std::vector<float> qkvCpu(size_t(numQueries) * 3 * D);
+        for (uint32_t i = 0; i < numQueries; ++i) {
+            size_t s = size_t(i) * 3 * D;
+            std::copy_n(yqkCpu.data() + s,           D, qkvCpu.data() + s);
+            std::copy_n(yqkCpu.data() + s + D,       D, qkvCpu.data() + s + D);
+            std::copy_n(ytCpu.data()  + s + 2 * D,   D, qkvCpu.data() + s + 2 * D);
+        }
+        auto qkv = uploadTensor({numQueries, 3 * D}, qkvCpu.data());
+
+        auto scores  = attnScores_(qkv, numHeads);
+        auto attnSm  = softmaxLast_(scores);
+        auto heads   = attnApply_(qkv, attnSm, numHeads);
+
+        auto attnOut = linear_(heads, p + ".self_attn.out_proj.weight",
+                                      p + ".self_attn.out_proj.bias");
+        target = addTensor_(target, attnOut);
+        target = layerNorm_(target, p + ".norm1.weight", p + ".norm1.bias");
+
+        // --- 3c: Cross-attention (MSDeformAttn) ---
+        auto crossQuery = addTensor_(target, queryPos);
+
+        // Value projection (per-layer).
+        auto value = linear_(memory, p + ".cross_attn.value_proj.weight",
+                                     p + ".cross_attn.value_proj.bias");
+
+        // Sampling offsets + attention weights.
+        auto rawOffsets = linear_(crossQuery, p + ".cross_attn.sampling_offsets.weight",
+                                              p + ".cross_attn.sampling_offsets.bias");
+        auto rawAttnW   = linear_(crossQuery, p + ".cross_attn.attention_weights.weight",
+                                              p + ".cross_attn.attention_weights.bias");
+
+        // Softmax: [300, 96] → treat as [300*8, 12], softmax over 12.
+        auto rawAttnCpu = readback(rawAttnW.buffer(), rawAttnW.numel());
+        uint32_t LP = numLevels * numPoints;   // 12
+        for (uint32_t r = 0; r < numQueries * numHeads; ++r)
+            cpuSoftmax(rawAttnCpu.data() + size_t(r) * LP, LP);
+        auto attnWSm = uploadTensor({numQueries, numHeads * LP}, rawAttnCpu.data());
+
+        // Preprocess offsets: raw [Nq, H*L*P*2] → pixel-space.
+        // PyTorch formula (4-element ref): loc = ref[:2] + raw / P * ref[2:] * 0.5
+        // Pixel: pixel = loc * [W, H] - 0.5. My kernel adds ref*W to ox, so:
+        // ox = (raw_x / P * ref_w * 0.5) * W_l
+        auto rawOffCpu = readback(rawOffsets.buffer(), rawOffsets.numel());
+        const uint32_t offStride = numHeads * numLevels * numPoints * 2;
+        for (uint32_t q = 0; q < numQueries; ++q) {
+            float ref_w = refPts[size_t(q) * 4 + 2];
+            float ref_h = refPts[size_t(q) * 4 + 3];
+            for (uint32_t h = 0; h < numHeads; ++h) {
+                for (uint32_t l = 0; l < numLevels; ++l) {
+                    float Wl = float(spatialShapes[l].second);
+                    float Hl = float(spatialShapes[l].first);
+                    for (uint32_t pt = 0; pt < numPoints; ++pt) {
+                        size_t idx = size_t(q) * offStride
+                                   + (size_t(h) * numLevels * numPoints + size_t(l) * numPoints + pt) * 2;
+                        rawOffCpu[idx + 0] = rawOffCpu[idx + 0] / float(numPoints) * ref_w * 0.5f * Wl;
+                        rawOffCpu[idx + 1] = rawOffCpu[idx + 1] / float(numPoints) * ref_h * 0.5f * Hl;
+                    }
+                }
+            }
+        }
+        auto offsScaled = uploadTensor({numQueries, offStride}, rawOffCpu.data());
+
+        // Reference points [300, 2] (cx, cy only) for the kernel.
+        std::vector<float> refXy2(size_t(numQueries) * 2);
+        for (uint32_t q = 0; q < numQueries; ++q) {
+            refXy2[size_t(q) * 2 + 0] = refPts[size_t(q) * 4 + 0];
+            refXy2[size_t(q) * 2 + 1] = refPts[size_t(q) * 4 + 1];
+        }
+        auto refPtsTensor = uploadTensor({numQueries, 2u}, refXy2.data());
+
+        auto crossOut  = msDeformAttn_(value, spatialShapes, refPtsTensor, offsScaled, attnWSm, numHeads);
+        auto crossProj = linear_(crossOut, p + ".cross_attn.output_proj.weight",
+                                           p + ".cross_attn.output_proj.bias");
+        target = addTensor_(target, crossProj);
+        target = layerNorm_(target, p + ".norm2.weight", p + ".norm2.bias");
+
+        // --- 3d: FFN ---
+        auto ff1 = linear_(target, p + ".linear1.weight", p + ".linear1.bias");
+        auto ffg = gelu_(ff1);
+        auto ff2 = linear_(ffg, p + ".linear2.weight", p + ".linear2.bias");
+        target = addTensor_(target, ff2);
+        target = layerNorm_(target, p + ".norm3.weight", p + ".norm3.bias");
+
+        // --- 3e: Iterative bbox refinement ---
+        auto bboxDelta = bboxMLP(target, "model.28.dec_bbox_head." + std::to_string(layer));
+        auto deltaCpu = readback(bboxDelta.buffer(), bboxDelta.numel());
+        for (uint32_t q = 0; q < numQueries; ++q) {
+            for (uint32_t c = 0; c < 4; ++c) {
+                size_t i = size_t(q) * 4 + c;
+                refPts[i] = sigmoidF(deltaCpu[i] + invSigmoid(refPts[i]));
+            }
+        }
+
+        std::cout << "  Decoder layer " << layer << " done\n";
+    }
+
+    // ----------------------------------------------------------------
+    //  Step 4: Final output — last layer's score head + bboxes
+    // ----------------------------------------------------------------
+    auto finalScores = linear_(target, "model.28.dec_score_head.5.weight",
+                                       "model.28.dec_score_head.5.bias");
+    auto finalScoresCpu = readback(finalScores.buffer(), finalScores.numel());
+
+    return DecoderOutput{std::move(finalScoresCpu), refPts};
+}
+
 GPUTensor RtDetr::upsample2x_(const GPUTensor& x) {
     uint32_t C = x.C(), H = x.H(), W = x.W();
     UpsampleParams up{C, H, W, 0};
@@ -1439,6 +1872,117 @@ RtDetr::NeckFeatures RtDetr::ccfm_(const GPUTensor& p3, const GPUTensor& p4, con
     // model.27: RepC3 n=3 -> S5
     auto s5 = repC3_(c26, "model.27", 3);
     return NeckFeatures{std::move(s3), std::move(s4), std::move(s5)};
+}
+
+// ============================================================
+//  End-to-end inference
+// ============================================================
+std::vector<RtDetr::Detection> RtDetr::infer(
+        const unsigned char* rgba, int srcW, int srcH, float confThresh) {
+
+    const int dstW = INPUT_SIZE, dstH = INPUT_SIZE;
+
+    // --- 1. CPU preprocessing: bilinear resize + /255 → [3, 640, 640] ---
+    std::vector<float> chw(size_t(3) * dstH * dstW);
+    for (int dy = 0; dy < dstH; ++dy) {
+        float sy = (float(dy) + 0.5f) * float(srcH) / float(dstH) - 0.5f;
+        int y0 = std::max(0, int(std::floor(sy)));
+        int y1 = std::min(srcH - 1, y0 + 1);
+        float fy = sy - float(y0);
+        for (int dx = 0; dx < dstW; ++dx) {
+            float sx = (float(dx) + 0.5f) * float(srcW) / float(dstW) - 0.5f;
+            int x0 = std::max(0, int(std::floor(sx)));
+            int x1 = std::min(srcW - 1, x0 + 1);
+            float fx = sx - float(x0);
+            for (int c = 0; c < 3; ++c) {
+                float tl = float(rgba[(y0 * srcW + x0) * 4 + c]);
+                float tr = float(rgba[(y0 * srcW + x1) * 4 + c]);
+                float bl = float(rgba[(y1 * srcW + x0) * 4 + c]);
+                float br = float(rgba[(y1 * srcW + x1) * 4 + c]);
+                float val = (1 - fy) * ((1 - fx) * tl + fx * tr)
+                          + fy       * ((1 - fx) * bl + fx * br);
+                chw[size_t(c) * dstH * dstW + size_t(dy) * dstW + dx] = val / 255.0f;
+            }
+        }
+    }
+    auto input = uploadTensor({3u, uint32_t(dstH), uint32_t(dstW)}, chw.data());
+
+    // --- 2. Forward pass ---
+    auto bp   = backbone_(input);
+    auto f5   = aifi_(bp.p5);
+    auto neck = ccfm_(bp.p3, bp.p4, f5);
+    auto ip0  = inputProj_(neck.s3, 0);
+    auto ip1  = inputProj_(neck.s4, 1);
+    auto ip2  = inputProj_(neck.s5, 2);
+    auto mem  = buildMemory_(ip0, ip1, ip2);
+    auto lin  = linear_(mem, "model.28.enc_output.0.weight",
+                              "model.28.enc_output.0.bias");
+    auto eo   = layerNorm_(lin, "model.28.enc_output.1.weight",
+                                 "model.28.enc_output.1.bias");
+
+    std::vector<std::pair<uint32_t,uint32_t>> shapes = {
+        {ip0.H(), ip0.W()}, {ip1.H(), ip1.W()}, {ip2.H(), ip2.W()}};
+
+    auto dec = decoder_(mem, eo, shapes);
+
+    // --- 3. Post-processing: sigmoid, threshold, NMS ---
+    auto sigmoidF = [](float x) -> float { return 1.0f / (1.0f + std::exp(-x)); };
+    auto iou = [](const Detection& a, const Detection& b) -> float {
+        float ix1 = std::max(a.x1, b.x1), iy1 = std::max(a.y1, b.y1);
+        float ix2 = std::min(a.x2, b.x2), iy2 = std::min(a.y2, b.y2);
+        float inter = std::max(0.f, ix2 - ix1) * std::max(0.f, iy2 - iy1);
+        float areaA = (a.x2 - a.x1) * (a.y2 - a.y1);
+        float areaB = (b.x2 - b.x1) * (b.y2 - b.y1);
+        return inter / (areaA + areaB - inter + 1e-6f);
+    };
+
+    // Convert logits → probabilities, find best class per query.
+    std::vector<Detection> candidates;
+    for (int q = 0; q < 300; ++q) {
+        int bestC = 0;
+        float bestP = sigmoidF(dec.scores[size_t(q) * NUM_CLASSES]);
+        for (int c = 1; c < NUM_CLASSES; ++c) {
+            float p = sigmoidF(dec.scores[size_t(q) * NUM_CLASSES + c]);
+            if (p > bestP) { bestP = p; bestC = c; }
+        }
+        if (bestP < confThresh) continue;
+
+        float cx = dec.bboxes[size_t(q) * 4 + 0];
+        float cy = dec.bboxes[size_t(q) * 4 + 1];
+        float w  = dec.bboxes[size_t(q) * 4 + 2];
+        float h  = dec.bboxes[size_t(q) * 4 + 3];
+
+        // Normalized (cx,cy,w,h) → image pixels (x1,y1,x2,y2).
+        float x1 = (cx - w * 0.5f) * float(srcW);
+        float y1 = (cy - h * 0.5f) * float(srcH);
+        float x2 = (cx + w * 0.5f) * float(srcW);
+        float y2 = (cy + h * 0.5f) * float(srcH);
+        // Clamp to image bounds.
+        x1 = std::clamp(x1, 0.f, float(srcW));
+        y1 = std::clamp(y1, 0.f, float(srcH));
+        x2 = std::clamp(x2, 0.f, float(srcW));
+        y2 = std::clamp(y2, 0.f, float(srcH));
+
+        candidates.push_back({bestC, bestP, x1, y1, x2, y2});
+    }
+
+    // NMS: sort by confidence descending, greedily suppress overlaps.
+    std::sort(candidates.begin(), candidates.end(),
+              [](auto& a, auto& b) { return a.confidence > b.confidence; });
+    std::vector<bool> suppressed(candidates.size(), false);
+    std::vector<Detection> results;
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        if (suppressed[i]) continue;
+        results.push_back(candidates[i]);
+        for (size_t j = i + 1; j < candidates.size(); ++j) {
+            if (!suppressed[j] && candidates[j].classId == candidates[i].classId
+                && iou(candidates[i], candidates[j]) > 0.7f) {
+                suppressed[j] = true;
+            }
+        }
+    }
+
+    return results;
 }
 
 // ============================================================
