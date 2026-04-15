@@ -742,4 +742,8 @@ namespace threepp {
         return pimpl_->load(path);
     }
 
+    USDResult USDLoader::loadFull(const std::filesystem::path& path) {
+        return {pimpl_->load(path), {}};
+    }
+
 }// namespace threepp

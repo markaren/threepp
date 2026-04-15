@@ -10,3 +10,5 @@ compile_commands.json
 src/external/wgpu-native/
 
 temp/
+
+.claude
