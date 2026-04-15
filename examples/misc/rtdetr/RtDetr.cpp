@@ -125,40 +125,154 @@ fn load_weight(i: u32) -> f32 {
     return select(pair.x, pair.y, (i & 1u) == 1u);
 }
 
-@compute @workgroup_size(8, 8, 4)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let ox = gid.x; let oy = gid.y; let oc = gid.z;
-    if ox >= p.out_w || oy >= p.out_h || oc >= p.out_c { return; }
+// Tiled 1×1 conv path: treats conv as GEMM — out[oc, pos] = sum_ic w[oc,ic] * inp[ic, pos].
+// Workgroup: 16 output channels × 16 spatial positions. Tiles over in_c in chunks of 16.
+// Falls back to generic path for non-1×1 kernels.
+const TILE = 16u;
+var<workgroup> tileInp: array<f32, 256>;  // [TILE_IC × TILE_POS]
+var<workgroup> tileW:   array<f32, 256>;  // [TILE_OC × TILE_IC]
 
-    let in_pitch  = p.in_h * p.in_w;
+@compute @workgroup_size(16, 16, 1)
+fn main(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+) {
+    // gid.x = output spatial position, gid.y = output channel
+    let pos = gid.x;
+    let oc  = gid.y;
+    let lp  = lid.x;   // local spatial idx [0..15]
+    let loc = lid.y;    // local output channel idx [0..15]
+
     let out_pitch = p.out_h * p.out_w;
-    let k_area    = p.k_h * p.k_w;
-    let w_per_oc  = p.in_c * k_area;
+    let in_pitch  = p.in_h * p.in_w;
+    let total_pos = out_pitch;
 
-    var sum = 0.0;
-    for (var ic = 0u; ic < p.in_c; ic++) {
-        for (var ky = 0u; ky < p.k_h; ky++) {
-            for (var kx = 0u; kx < p.k_w; kx++) {
-                let iy = i32(oy * p.stride_h + ky) - i32(p.pad_h);
-                let ix = i32(ox * p.stride_w + kx) - i32(p.pad_w);
-                if iy >= 0 && iy < i32(p.in_h) && ix >= 0 && ix < i32(p.in_w) {
-                    let ii = ic * in_pitch + u32(iy) * p.in_w + u32(ix);
-                    let wi = oc * w_per_oc + ic * k_area + ky * p.k_w + kx;
-                    sum += inp[ii] * load_weight(wi);
+    if (p.k_h == 1u && p.k_w == 1u) {
+        // ---- Tiled 1×1 path ----
+        // Map spatial position to (oy, ox).
+        let oy = pos / p.out_w;
+        let ox = pos % p.out_w;
+        let iy = oy * p.stride_h;
+        let ix = ox * p.stride_w;
+
+        var acc = 0.0;
+        let numTiles = (p.in_c + TILE - 1u) / TILE;
+
+        for (var t = 0u; t < numTiles; t++) {
+            let icOff = t * TILE;
+
+            // Load tile of input: tileInp[loc][lp] = inp[(icOff+loc), iy*in_w+ix]
+            let tic = icOff + loc;
+            if (tic < p.in_c && pos < total_pos) {
+                tileInp[loc * TILE + lp] = inp[tic * in_pitch + iy * p.in_w + ix];
+            } else {
+                tileInp[loc * TILE + lp] = 0.0;
+            }
+
+            // Load tile of weights: tileW[loc][lp] = w[oc, icOff+lp]
+            let wic = icOff + lp;
+            if (oc < p.out_c && wic < p.in_c) {
+                tileW[loc * TILE + lp] = load_weight(oc * p.in_c + wic);
+            } else {
+                tileW[loc * TILE + lp] = 0.0;
+            }
+
+            workgroupBarrier();
+
+            for (var k = 0u; k < TILE; k++) {
+                acc += tileW[loc * TILE + k] * tileInp[k * TILE + lp];
+            }
+
+            workgroupBarrier();
+        }
+
+        if (oc < p.out_c && pos < total_pos) {
+            if p.has_bias != 0u { acc += bias[oc]; }
+            if p.activation == 1u {
+                acc = max(0.0, acc);
+            } else if p.activation == 2u {
+                acc = acc / (1.0 + exp(-acc));
+            }
+            out[oc * out_pitch + oy * p.out_w + ox] = acc;
+        }
+    } else if (p.k_h == 3u && p.k_w == 3u) {
+        // ---- Specialized 3×3 path: unrolled kernel, loop over in_c ----
+        if (pos >= total_pos || oc >= p.out_c) { return; }
+        let oy = pos / p.out_w;
+        let ox = pos % p.out_w;
+        let w_per_oc = p.in_c * 9u;
+
+        var sum = 0.0;
+        for (var ic = 0u; ic < p.in_c; ic++) {
+            let wBase = oc * w_per_oc + ic * 9u;
+            let icBase = ic * in_pitch;
+            // Unrolled 3×3 kernel — avoids per-pixel branch overhead for padding.
+            let cy = i32(oy * p.stride_h) - i32(p.pad_h);
+            let cx = i32(ox * p.stride_w) - i32(p.pad_w);
+            let h = i32(p.in_h);
+            let w = i32(p.in_w);
+            // Row 0
+            if cy >= 0 && cy < h {
+                let row = icBase + u32(cy) * p.in_w;
+                if cx >= 0 && cx < w     { sum += inp[row + u32(cx)]     * load_weight(wBase);     }
+                if cx+1 >= 0 && cx+1 < w { sum += inp[row + u32(cx+1)]   * load_weight(wBase + 1u); }
+                if cx+2 >= 0 && cx+2 < w { sum += inp[row + u32(cx+2)]   * load_weight(wBase + 2u); }
+            }
+            // Row 1
+            if cy+1 >= 0 && cy+1 < h {
+                let row = icBase + u32(cy+1) * p.in_w;
+                if cx >= 0 && cx < w     { sum += inp[row + u32(cx)]     * load_weight(wBase + 3u); }
+                if cx+1 >= 0 && cx+1 < w { sum += inp[row + u32(cx+1)]   * load_weight(wBase + 4u); }
+                if cx+2 >= 0 && cx+2 < w { sum += inp[row + u32(cx+2)]   * load_weight(wBase + 5u); }
+            }
+            // Row 2
+            if cy+2 >= 0 && cy+2 < h {
+                let row = icBase + u32(cy+2) * p.in_w;
+                if cx >= 0 && cx < w     { sum += inp[row + u32(cx)]     * load_weight(wBase + 6u); }
+                if cx+1 >= 0 && cx+1 < w { sum += inp[row + u32(cx+1)]   * load_weight(wBase + 7u); }
+                if cx+2 >= 0 && cx+2 < w { sum += inp[row + u32(cx+2)]   * load_weight(wBase + 8u); }
+            }
+        }
+
+        if p.has_bias != 0u { sum += bias[oc]; }
+        if p.activation == 1u {
+            sum = max(0.0, sum);
+        } else if p.activation == 2u {
+            sum = sum / (1.0 + exp(-sum));
+        }
+        out[oc * out_pitch + oy * p.out_w + ox] = sum;
+
+    } else {
+        // ---- Generic path for other kernel sizes ----
+        if (pos >= total_pos || oc >= p.out_c) { return; }
+        let oy = pos / p.out_w;
+        let ox = pos % p.out_w;
+        let k_area = p.k_h * p.k_w;
+        let w_per_oc = p.in_c * k_area;
+
+        var sum = 0.0;
+        for (var ic = 0u; ic < p.in_c; ic++) {
+            for (var ky = 0u; ky < p.k_h; ky++) {
+                for (var kx = 0u; kx < p.k_w; kx++) {
+                    let iy = i32(oy * p.stride_h + ky) - i32(p.pad_h);
+                    let ix = i32(ox * p.stride_w + kx) - i32(p.pad_w);
+                    if iy >= 0 && iy < i32(p.in_h) && ix >= 0 && ix < i32(p.in_w) {
+                        let ii = ic * in_pitch + u32(iy) * p.in_w + u32(ix);
+                        let wi = oc * w_per_oc + ic * k_area + ky * p.k_w + kx;
+                        sum += inp[ii] * load_weight(wi);
+                    }
                 }
             }
         }
+
+        if p.has_bias != 0u { sum += bias[oc]; }
+        if p.activation == 1u {
+            sum = max(0.0, sum);
+        } else if p.activation == 2u {
+            sum = sum / (1.0 + exp(-sum));
+        }
+        out[oc * out_pitch + oy * p.out_w + ox] = sum;
     }
-
-    if p.has_bias != 0u { sum += bias[oc]; }
-
-    if p.activation == 1u {
-        sum = max(0.0, sum);
-    } else if p.activation == 2u {
-        sum = sum / (1.0 + exp(-sum));
-    }
-
-    out[oc * out_pitch + oy * p.out_w + ox] = sum;
 }
 )WGSL";
 
@@ -308,24 +422,63 @@ struct LinearParams { uint32_t M, N, K, hasBias; };
 static const char* kLinearWgsl = R"WGSL(
 struct LinearParams { M: u32, N: u32, K: u32, hasBias: u32, }
 @group(0) @binding(0) var<uniform>             p: LinearParams;
-@group(0) @binding(1) var<storage, read>       x: array<f32>;
+@group(0) @binding(1) var<storage, read>       x: array<f32>;   // [M, K]
 @group(0) @binding(2) var<storage, read>       w: array<f32>;   // [N, K] row-major
 @group(0) @binding(3) var<storage, read>       b: array<f32>;   // [N] (unused if hasBias==0)
 @group(0) @binding(4) var<storage, read_write> y: array<f32>;   // [M, N]
 
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+// Tiled GEMM: 16×16 output tile per workgroup, TILE_K=16 reduction tiles.
+const TILE = 16u;
+
+var<workgroup> tileX: array<f32, 256>;   // TILE × TILE = 16×16
+var<workgroup> tileW: array<f32, 256>;   // TILE × TILE
+
+@compute @workgroup_size(16, 16, 1)
+fn main(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+) {
     let m = gid.y;
     let n = gid.x;
-    if (m >= p.M || n >= p.N) { return; }
+    let lm = lid.y;
+    let ln = lid.x;
+
     var acc: f32 = 0.0;
-    let xBase = m * p.K;
-    let wBase = n * p.K;
-    for (var k: u32 = 0u; k < p.K; k = k + 1u) {
-        acc = acc + x[xBase + k] * w[wBase + k];
+    let numTiles = (p.K + TILE - 1u) / TILE;
+
+    for (var t: u32 = 0u; t < numTiles; t = t + 1u) {
+        let kOff = t * TILE;
+
+        // Load tile of X [TILE rows of M, TILE cols of K]
+        let xk = kOff + ln;
+        if (m < p.M && xk < p.K) {
+            tileX[lm * TILE + ln] = x[m * p.K + xk];
+        } else {
+            tileX[lm * TILE + ln] = 0.0;
+        }
+
+        // Load tile of W^T: W[n, kOff+lm]
+        let wk = kOff + lm;
+        if (n < p.N && wk < p.K) {
+            tileW[lm * TILE + ln] = w[n * p.K + wk];
+        } else {
+            tileW[lm * TILE + ln] = 0.0;
+        }
+
+        workgroupBarrier();
+
+        // Accumulate: acc += sum_k tileX[lm][k] * tileW[k][ln]
+        for (var k: u32 = 0u; k < TILE; k = k + 1u) {
+            acc += tileX[lm * TILE + k] * tileW[k * TILE + ln];
+        }
+
+        workgroupBarrier();
     }
-    if (p.hasBias != 0u) { acc = acc + b[n]; }
-    y[m * p.N + n] = acc;
+
+    if (m < p.M && n < p.N) {
+        if (p.hasBias != 0u) { acc = acc + b[n]; }
+        y[m * p.N + n] = acc;
+    }
 }
 )WGSL";
 
@@ -1024,8 +1177,7 @@ void RtDetr::loadWeights(const std::string& path) {
             auto t = makeTensorV(renderer_, sh);
             t.upload(data.data());
             weights_.emplace(name, std::move(t));
-            // Mirror 2D linear weights and any bias on CPU for analytical tests
-            // and reference comparisons.
+            // Mirror weights and biases on CPU for analytical tests.
             if (sh.size() == 2 || (sh.size() == 1 && endsWith(name, ".bias"))
                 || (sh.size() == 1 && endsWith(name, ".weight"))) {
                 cpuWeights_[name] = data;
@@ -1156,7 +1308,8 @@ GPUTensor RtDetr::conv_(const GPUTensor& x,
     convPipe_.setStorageBufferRead(2, wt.buffer());
     convPipe_.setStorageBufferRead(3, biasBuf);
     convPipe_.setStorageBuffer(4,     out.buffer());
-    convPipe_.dispatch(divCeil(out_w, 8), divCeil(out_h, 8), divCeil(out_c, 4));
+    uint32_t totalPos = out_h * out_w;
+    convPipe_.dispatch(divCeil(totalPos, 16), divCeil(out_c, 16), 1);
 
     return out;
 }
@@ -1349,7 +1502,7 @@ GPUTensor RtDetr::linear_(const GPUTensor& x,
     // A bias buffer binding is still required by the shader; reuse w when none.
     linearPipe_.setStorageBufferRead(3, biasBuf ? *biasBuf : wIt->second.buffer());
     linearPipe_.setStorageBuffer(4,     out.buffer());
-    linearPipe_.dispatch(divCeil(N, 8), divCeil(M, 8), 1);
+    linearPipe_.dispatch(divCeil(N, 16), divCeil(M, 16), 1);
     return out;
 }
 
@@ -2065,7 +2218,8 @@ std::vector<RtDetr::Detection> RtDetr::infer(
     const int dstW = INPUT_SIZE, dstH = INPUT_SIZE;
 
     using clk = std::chrono::steady_clock;
-    auto t0 = clk::now();
+    auto tInferStart = clk::now();
+    auto t0 = tInferStart;
     auto lapMs = [&](const char* label) {
         auto now = clk::now();
         double ms = std::chrono::duration<double, std::milli>(now - t0).count();
@@ -2115,10 +2269,6 @@ std::vector<RtDetr::Detection> RtDetr::infer(
                               "model.28.enc_output.0.bias");
     auto eo   = layerNorm_(lin, "model.28.enc_output.1.weight",
                                  "model.28.enc_output.1.bias");
-    // Force GPU sync so enc_output timing reflects actual GPU work,
-    // not just dispatch overhead. Without this, the decoder's first
-    // readback absorbs the entire pipeline cost.
-    { auto _ = readback(eo.buffer(), 1); }
     lapMs("enc_output");
 
     std::vector<std::pair<uint32_t,uint32_t>> shapes = {
@@ -2126,6 +2276,11 @@ std::vector<RtDetr::Detection> RtDetr::infer(
 
     auto dec = decoder_(mem, eo, shapes);
     lapMs("decoder");
+    {
+        double totalMs = std::chrono::duration<double, std::milli>(clk::now() - tInferStart).count();
+        std::cout << "    [TOTAL] " << std::fixed << std::setprecision(1)
+                  << totalMs << " ms\n";
+    }
 
     // --- 3. Post-processing: sigmoid, threshold, NMS ---
     auto sigmoidF = [](float x) -> float { return 1.0f / (1.0f + std::exp(-x)); };

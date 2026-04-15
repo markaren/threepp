@@ -69,11 +69,15 @@ static std::shared_ptr<LineSegments> makeBoxLines(
 }
 
 int main(int argc, char** argv) {
-    std::string imgPath     = "C:\\Users\\larsi\\Downloads\\dog.jpg";
-    std::string weightsPath = "C:\\Users\\larsi\\Downloads\\yolo_weights.weights";
+    std::string imgPath;
+    std::string weightsPath;
 
     if (argc > 1) imgPath     = argv[1];
     if (argc > 2) weightsPath = argv[2];
+
+    if (imgPath.empty() || weightsPath.empty()) {
+        std::cerr << "Usage: " << argv[0] << " imgPath weightsPath\n";
+    }
 
     // ----------------------------------------------------------------
     // Load input image on CPU
