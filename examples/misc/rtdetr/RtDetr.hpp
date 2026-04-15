@@ -248,6 +248,12 @@ namespace rtdetr {
                                const GPUTensor& encOutput,
                                const std::vector<std::pair<uint32_t,uint32_t>>& spatialShapes);
 
+        /// GPU transpose: [C, H, W] → [H*W, C] token layout.
+        GPUTensor transposeCHW2Tokens_(const GPUTensor& x);
+
+        /// GPU transpose: [H*W, C] → [C, H, W] spatial layout.
+        GPUTensor transposeTokens2CHW_(const GPUTensor& x, uint32_t C, uint32_t H, uint32_t W);
+
         /// Concatenate two tensors along the channel axis. a and b must have
         /// matching H and W. Output channel count = a.C() + b.C().
         GPUTensor concatC_(const GPUTensor& a, const GPUTensor& b);
@@ -289,6 +295,11 @@ namespace rtdetr {
         threepp::WgpuComputePipeline addSiluPipe_;
         threepp::WgpuComputePipeline msDeformAttnPipe_;
         threepp::WgpuComputePipeline reluPipe_;
+        threepp::WgpuComputePipeline transposeCHW2TokensPipe_;
+        threepp::WgpuComputePipeline transposeTokens2CHWPipe_;
+        threepp::WgpuComputePipeline transposeMaskPipe_;
+        threepp::WgpuComputePipeline qkvSplicePipe_;
+        threepp::WgpuComputePipeline offsetPreprocessPipe_;
         threepp::WgpuBuffer          convParamBuf_;
         threepp::WgpuBuffer          poolParamBuf_;
         threepp::WgpuBuffer          concatParamBuf_;
@@ -300,6 +311,10 @@ namespace rtdetr {
         threepp::WgpuBuffer          attnParamBuf_;
         threepp::WgpuBuffer          upsampleParamBuf_;
         threepp::WgpuBuffer          msDeformParamBuf_;
+        threepp::WgpuBuffer          transposeParamBuf_;
+        threepp::WgpuBuffer          transposeMaskParamBuf_;
+        threepp::WgpuBuffer          qkvSpliceParamBuf_;
+        threepp::WgpuBuffer          offsetPreprocessParamBuf_;
     };
 
 }// namespace rtdetr

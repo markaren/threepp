@@ -424,6 +424,181 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 )WGSL";
 
 // ============================================================
+//  WGSL: CHW → (HW, C) transpose
+// ============================================================
+// Transposes a [C, H, W] spatial tensor to [H*W, C] token layout.
+// One thread per (token, channel_block) element.
+struct TransposeParams { uint32_t C, H, W, _p; };
+
+static const char* kTransposeCHW2TokensWgsl = R"WGSL(
+struct TransposeParams { C: u32, H: u32, W: u32, _p: u32, }
+@group(0) @binding(0) var<uniform>             p:   TransposeParams;
+@group(0) @binding(1) var<storage, read>       inp: array<f32>;   // [C, H, W]
+@group(0) @binding(2) var<storage, read_write> out: array<f32>;   // [H*W, C]
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let M = p.H * p.W;
+    let total = M * p.C;
+    if (idx >= total) { return; }
+    let token = idx / p.C;    // row in output
+    let c     = idx % p.C;    // column in output
+    out[token * p.C + c] = inp[c * M + token];
+}
+)WGSL";
+
+// ============================================================
+//  WGSL: (HW, C) → CHW transpose
+// ============================================================
+static const char* kTransposeTokens2CHWWgsl = R"WGSL(
+struct TransposeParams { C: u32, H: u32, W: u32, _p: u32, }
+@group(0) @binding(0) var<uniform>             p:   TransposeParams;
+@group(0) @binding(1) var<storage, read>       inp: array<f32>;   // [H*W, C]
+@group(0) @binding(2) var<storage, read_write> out: array<f32>;   // [C, H, W]
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let M = p.H * p.W;
+    let total = M * p.C;
+    if (idx >= total) { return; }
+    let token = idx / p.C;
+    let c     = idx % p.C;
+    out[c * M + token] = inp[token * p.C + c];
+}
+)WGSL";
+
+// ============================================================
+//  WGSL: CHW → (HW, C) transpose with valid_mask (buildMemory)
+// ============================================================
+// Transposes [C, H, W] to [H*W, C] at a given offset in the output buffer,
+// zeroing elements where the anchor falls on the border (valid_mask).
+// level = 0,1,2 controls wh = 0.05 * 2^level; eps = 1e-2.
+struct TransposeMaskParams {
+    uint32_t C, H, W;
+    uint32_t outOffset;    // token offset in the output buffer
+    uint32_t level;
+    uint32_t _p0, _p1, _p2;
+};
+
+static const char* kTransposeMaskWgsl = R"WGSL(
+struct Params {
+    C: u32, H: u32, W: u32,
+    outOffset: u32,
+    level: u32,
+    _p0: u32, _p1: u32, _p2: u32,
+}
+@group(0) @binding(0) var<uniform>             p:   Params;
+@group(0) @binding(1) var<storage, read>       inp: array<f32>;   // [C, H, W]
+@group(0) @binding(2) var<storage, read_write> out: array<f32>;   // [totalTokens, C]
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let M = p.H * p.W;
+    let total = M * p.C;
+    if (idx >= total) { return; }
+    let token = idx / p.C;   // spatial position
+    let c     = idx % p.C;   // channel
+
+    // Compute validity: anchor (gy, gx) with cx=(gx+0.5)/W, cy=(gy+0.5)/H
+    let gy = token / p.W;
+    let gx = token % p.W;
+    let cx = (f32(gx) + 0.5) / f32(p.W);
+    let cy = (f32(gy) + 0.5) / f32(p.H);
+    let wh = 0.05 * f32(1u << p.level);
+    let eps = 0.01;
+    let valid = cx > eps && cx < (1.0 - eps)
+             && cy > eps && cy < (1.0 - eps)
+             && wh > eps && wh < (1.0 - eps);
+
+    let v = select(0.0, inp[c * M + token], valid);
+    out[(p.outOffset + token) * p.C + c] = v;
+}
+)WGSL";
+
+// ============================================================
+//  WGSL: QKV splice for self-attention
+// ============================================================
+// Given yqk [M, 3D] (from q=k=target+pos linear) and yt [M, 3D] (from v=target linear),
+// produce qkv [M, 3D] = [yqk.Q | yqk.K | yt.V].
+// One thread per element (M * 3D).
+struct QkvSpliceParams { uint32_t M, D, _p0, _p1; };
+
+static const char* kQkvSpliceWgsl = R"WGSL(
+struct Params { M: u32, D: u32, _p0: u32, _p1: u32, }
+@group(0) @binding(0) var<uniform>             p:   Params;
+@group(0) @binding(1) var<storage, read>       yqk: array<f32>;   // [M, 3*D]
+@group(0) @binding(2) var<storage, read>       yt:  array<f32>;   // [M, 3*D]
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;   // [M, 3*D]
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let total = p.M * 3u * p.D;
+    if (idx >= total) { return; }
+    let row = idx / (3u * p.D);
+    let col = idx % (3u * p.D);
+    // col in [0, D): Q from yqk; [D, 2D): K from yqk; [2D, 3D): V from yt
+    if (col < 2u * p.D) {
+        out[idx] = yqk[idx];
+    } else {
+        out[idx] = yt[idx];
+    }
+}
+)WGSL";
+
+// ============================================================
+//  WGSL: deformable attention offset preprocessing
+// ============================================================
+// raw [Nq, H*L*P*2] → pixel-space offsets for MSDeformAttn kernel.
+// For 4-element ref points: offset_x *= (ref_w * 0.5 * W_l) / P,
+//                           offset_y *= (ref_h * 0.5 * H_l) / P.
+struct OffsetPreprocessParams {
+    uint32_t Nq, numHeads, numLevels, numPoints;
+};
+struct LevelShape { uint32_t H, W; };
+
+static const char* kOffsetPreprocessWgsl = R"WGSL(
+struct Params { Nq: u32, numHeads: u32, numLevels: u32, numPoints: u32, }
+struct LevelShape { H: u32, W: u32, }
+
+@group(0) @binding(0) var<uniform>             p:       Params;
+@group(0) @binding(1) var<storage, read>       refPts:  array<f32>;   // [Nq, 4] (cx,cy,w,h)
+@group(0) @binding(2) var<storage, read>       levels:  array<LevelShape>;  // [L]
+@group(0) @binding(3) var<storage, read_write> offsets: array<f32>;   // [Nq, H*L*P*2] in-place
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let stride = p.numHeads * p.numLevels * p.numPoints * 2u;
+    let total = p.Nq * stride;
+    if (idx >= total) { return; }
+    let q = idx / stride;
+    let rem = idx % stride;
+    let pair = rem / 2u;    // which (head, level, point)
+    let xy = rem % 2u;      // 0=x, 1=y
+
+    let h = pair / (p.numLevels * p.numPoints);
+    let lp = pair % (p.numLevels * p.numPoints);
+    let l = lp / p.numPoints;
+
+    let ref_w = refPts[q * 4u + 2u];
+    let ref_h = refPts[q * 4u + 3u];
+    let Wl = f32(levels[l].W);
+    let Hl = f32(levels[l].H);
+    let P = f32(p.numPoints);
+
+    if (xy == 0u) {
+        offsets[idx] = offsets[idx] / P * ref_w * 0.5 * Wl;
+    } else {
+        offsets[idx] = offsets[idx] / P * ref_h * 0.5 * Hl;
+    }
+}
+)WGSL";
+
+// ============================================================
 //  WGSL: elementwise ReLU
 // ============================================================
 static const char* kReluWgsl = R"WGSL(
@@ -704,6 +879,11 @@ RtDetr::RtDetr(WgpuRenderer& renderer)
       addSiluPipe_(renderer, kAddSiluWgsl, "main"),
       msDeformAttnPipe_(renderer, kMsDeformAttnWgsl, "main"),
       reluPipe_(renderer, kReluWgsl, "main"),
+      transposeCHW2TokensPipe_(renderer, kTransposeCHW2TokensWgsl, "main"),
+      transposeTokens2CHWPipe_(renderer, kTransposeTokens2CHWWgsl, "main"),
+      transposeMaskPipe_(renderer, kTransposeMaskWgsl, "main"),
+      qkvSplicePipe_(renderer, kQkvSpliceWgsl, "main"),
+      offsetPreprocessPipe_(renderer, kOffsetPreprocessWgsl, "main"),
       convParamBuf_(renderer, sizeof(ConvParams), WgpuBuffer::Usage::Uniform),
       poolParamBuf_(renderer, sizeof(PoolParams), WgpuBuffer::Usage::Uniform),
       concatParamBuf_(renderer, sizeof(ConcatParams), WgpuBuffer::Usage::Uniform),
@@ -714,7 +894,11 @@ RtDetr::RtDetr(WgpuRenderer& renderer)
       geluParamBuf_(renderer, sizeof(GeluParams), WgpuBuffer::Usage::Uniform),
       attnParamBuf_(renderer, sizeof(AttnParams), WgpuBuffer::Usage::Uniform),
       upsampleParamBuf_(renderer, sizeof(UpsampleParams), WgpuBuffer::Usage::Uniform),
-      msDeformParamBuf_(renderer, sizeof(MsDeformParams), WgpuBuffer::Usage::Uniform)
+      msDeformParamBuf_(renderer, sizeof(MsDeformParams), WgpuBuffer::Usage::Uniform),
+      transposeParamBuf_(renderer, sizeof(TransposeParams), WgpuBuffer::Usage::Uniform),
+      transposeMaskParamBuf_(renderer, sizeof(TransposeMaskParams), WgpuBuffer::Usage::Uniform),
+      qkvSpliceParamBuf_(renderer, sizeof(QkvSpliceParams), WgpuBuffer::Usage::Uniform),
+      offsetPreprocessParamBuf_(renderer, sizeof(OffsetPreprocessParams), WgpuBuffer::Usage::Uniform)
 {
 }
 
@@ -1390,54 +1574,28 @@ GPUTensor RtDetr::aifi_(const GPUTensor& x) {
     const uint32_t M = Hs * Ws;
     const uint32_t numHeads = 8;   // ultralytics RT-DETR-L AIFI default
 
-    // --- 1. Readback + transpose [D, H, W] → [M, D] on CPU ---
-    std::vector<float> cpuNchw = readback(const_cast<GPUTensor&>(x).buffer(), x.numel());
-    std::vector<float> tokens(size_t(M) * D);
-    for (uint32_t c = 0; c < D; ++c) {
-        for (uint32_t y = 0; y < Hs; ++y) {
-            for (uint32_t w = 0; w < Ws; ++w) {
-                tokens[(size_t(y) * Ws + w) * D + c] =
-                    cpuNchw[(size_t(c) * Hs + y) * Ws + w];
-            }
-        }
-    }
+    // --- 1. GPU transpose [D, H, W] → [M, D] ---
+    auto tok = transposeCHW2Tokens_(x);
 
-    // --- 2. Upload tokens and pos embed, add (q/k path = tokens+pos, v = tokens) ---
-    auto tok  = uploadTensor({M, D}, tokens.data());
+    // --- 2. Build pos embed, add on CPU for q/k path (M=400, D=256 → tiny) ---
     auto pos  = make2dSinCosPosEmbed(Hs, Ws, D);
-    // ultralytics AIFI: q = k = src + pos, v = src (pos added to q,k only)
-    std::vector<float> tokPlusPos(tokens.size());
-    for (size_t i = 0; i < tokens.size(); ++i) tokPlusPos[i] = tokens[i] + pos[i];
-    auto qk   = uploadTensor({M, D}, tokPlusPos.data());
+    auto posTensor = uploadTensor({M, D}, pos.data());
+    auto qk   = addTensor_(tok, posTensor);
 
-    // --- 3. Combined QKV projection: we need two linear calls because q=k=qk, v=tok.
-    //        Allocate a [M, 3*D] buffer manually and run three linears writing into slices.
-    //        Simpler: compute q, k from qk with in_proj (q rows 0..D-1, k rows D..2D-1),
-    //        and v from tok (rows 2D..3D-1). We run linear three times and concat on CPU.
-    // The in_proj_weight is packed as [3D, D] row-major: rows [0..D) for Q, [D..2D) for K,
-    // [2D..3D) for V. We can't easily slice the weight on the fly, so run one linear each
-    // by reading back + splitting the weight at load time. For now, readback qk and tok and
-    // do full [M,3D] = linear(concat_rows), but that still conflates q=k with v.
-    //
-    // Cleanest path: compute y_qk = linear(qk, in_proj_weight, in_proj_bias) → [M, 3D]
-    //              and y_t  = linear(tok, in_proj_weight, 0)                → [M, 3D]
-    // Then build QKV = [y_qk.Q || y_qk.K || y_t.V] on CPU and re-upload.
-    // (Doing this on CPU is cheap: M=400, 3D=768 ⇒ 921K floats.)
+    // --- 3. QKV projection + GPU splice ---
+    // yqk = linear(qk, in_proj) → [M, 3D], yt = linear(tok, in_proj) → [M, 3D]
+    // QKV splice: Q=yqk[:,:D], K=yqk[:,D:2D], V=yt[:,2D:3D] — done on GPU.
     auto yqk = linear_(qk,  "model.11.ma.in_proj_weight", "model.11.ma.in_proj_bias");
     auto yt  = linear_(tok, "model.11.ma.in_proj_weight", "model.11.ma.in_proj_bias");
-    std::vector<float> yqkCpu = readback(yqk.buffer(), yqk.numel());
-    std::vector<float> ytCpu  = readback(yt.buffer(),  yt.numel());
-    std::vector<float> qkvCpu(size_t(M) * 3 * D);
-    for (uint32_t i = 0; i < M; ++i) {
-        size_t srcQ = size_t(i) * 3 * D + 0 * D;
-        size_t srcK = size_t(i) * 3 * D + 1 * D;
-        size_t srcV = size_t(i) * 3 * D + 2 * D;
-        size_t dst  = size_t(i) * 3 * D;
-        std::copy(yqkCpu.begin() + srcQ, yqkCpu.begin() + srcQ + D, qkvCpu.begin() + dst + 0*D);
-        std::copy(yqkCpu.begin() + srcK, yqkCpu.begin() + srcK + D, qkvCpu.begin() + dst + 1*D);
-        std::copy(ytCpu.begin()  + srcV, ytCpu.begin()  + srcV + D, qkvCpu.begin() + dst + 2*D);
-    }
-    auto qkv = uploadTensor({M, 3 * D}, qkvCpu.data());
+    uint32_t total3D = M * 3 * D;
+    QkvSpliceParams sp{M, D, 0, 0};
+    qkvSpliceParamBuf_.write(&sp, sizeof(sp));
+    auto qkv = makeReadbackTensorV(renderer_, {M, 3 * D});
+    qkvSplicePipe_.setUniformBuffer(0,     qkvSpliceParamBuf_);
+    qkvSplicePipe_.setStorageBufferRead(1, yqk.buffer());
+    qkvSplicePipe_.setStorageBufferRead(2, yt.buffer());
+    qkvSplicePipe_.setStorageBuffer(3,     qkv.buffer());
+    qkvSplicePipe_.dispatch(divCeil(total3D, 64), 1, 1);
 
     // --- 4. Scores, softmax, apply ---
     auto scores  = attnScores_(qkv, numHeads);
@@ -1456,20 +1614,8 @@ GPUTensor RtDetr::aifi_(const GPUTensor& x) {
     auto r2 = addTensor_(n1, h2);
     auto n2 = layerNorm_(r2, "model.11.norm2.weight", "model.11.norm2.bias");
 
-    // --- 7. Transpose [M, D] → [D, H, W] on CPU, re-upload ---
-    std::vector<float> n2Cpu = readback(n2.buffer(), n2.numel());
-    std::vector<float> outNchw(size_t(D) * Hs * Ws);
-    for (uint32_t c = 0; c < D; ++c) {
-        for (uint32_t y = 0; y < Hs; ++y) {
-            for (uint32_t w = 0; w < Ws; ++w) {
-                outNchw[(size_t(c) * Hs + y) * Ws + w] =
-                    n2Cpu[(size_t(y) * Ws + w) * D + c];
-            }
-        }
-    }
-    auto result = makeReadbackTensor(renderer_, {D, Hs, Ws});
-    result.buf->write(outNchw.data(), outNchw.size() * sizeof(float));
-    return result;
+    // --- 7. GPU transpose [M, D] → [D, H, W] ---
+    return transposeTokens2CHW_(n2, D, Hs, Ws);
 }
 
 GPUTensor RtDetr::addTensor_(const GPUTensor& a, const GPUTensor& b) {
@@ -1523,49 +1669,65 @@ GPUTensor RtDetr::addSilu_(const GPUTensor& a, const GPUTensor& b) {
     return out;
 }
 
-GPUTensor RtDetr::buildMemory_(const GPUTensor& p0, const GPUTensor& p1, const GPUTensor& p2) {
-    // ultralytics applies valid_mask * feats before enc_output.
-    // Anchor at (gy, gx) on a (H, W) level: cx=(gx+0.5)/W, cy=(gy+0.5)/H,
-    // w=h=0.05*2^level. Valid iff all four components lie strictly inside
-    // (eps, 1-eps) with eps = 1e-2. wh is always valid for levels 0..2
-    // with grid_size=0.05, so only the cx/cy edge check matters here.
-    constexpr float kEps = 1e-2f;
-    auto transposeChw2tokens = [&](const GPUTensor& p, std::vector<float>& out, int level) {
-        uint32_t C = p.C(), H = p.H(), W = p.W();
-        auto cpu = readback(const_cast<GPUTensor&>(p).buffer(), p.numel());
-        size_t base = out.size();
-        out.resize(base + size_t(H) * W * C);
-        float wh = 0.05f * float(1u << level);
-        bool whValid = (wh > kEps) && (wh < 1.f - kEps);
-        // CHW -> (HW, C), row-major over (gy, gx).
-        for (uint32_t c = 0; c < C; ++c) {
-            for (uint32_t gy = 0; gy < H; ++gy) {
-                float cy = (float(gy) + 0.5f) / float(H);
-                for (uint32_t gx = 0; gx < W; ++gx) {
-                    float cx = (float(gx) + 0.5f) / float(W);
-                    bool valid = whValid
-                               && cx > kEps && cx < 1.f - kEps
-                               && cy > kEps && cy < 1.f - kEps;
-                    size_t yx = size_t(gy) * W + gx;
-                    float v = valid ? cpu[size_t(c) * H * W + yx] : 0.f;
-                    out[base + yx * C + c] = v;
-                }
-            }
-        }
-    };
-    std::vector<float> tokens;
-    transposeChw2tokens(p0, tokens, 0);
-    transposeChw2tokens(p1, tokens, 1);
-    transposeChw2tokens(p2, tokens, 2);
+// ============================================================
+//  GPU transpose: [C, H, W] → [H*W, C]
+// ============================================================
+GPUTensor RtDetr::transposeCHW2Tokens_(const GPUTensor& x) {
+    uint32_t C = x.C(), H = x.H(), W = x.W();
+    uint32_t total = C * H * W;
+    TransposeParams tp{C, H, W, 0};
+    transposeParamBuf_.write(&tp, sizeof(tp));
 
-    uint32_t M = uint32_t(p0.H() * p0.W() + p1.H() * p1.W() + p2.H() * p2.W());
+    auto out = makeReadbackTensor(renderer_, std::initializer_list<uint32_t>{H * W, C});
+    transposeCHW2TokensPipe_.setUniformBuffer(0,     transposeParamBuf_);
+    transposeCHW2TokensPipe_.setStorageBufferRead(1, const_cast<GPUTensor&>(x).buffer());
+    transposeCHW2TokensPipe_.setStorageBuffer(2,     out.buffer());
+    transposeCHW2TokensPipe_.dispatch(divCeil(total, 64), 1, 1);
+    return out;
+}
+
+// ============================================================
+//  GPU transpose: [H*W, C] → [C, H, W]
+// ============================================================
+GPUTensor RtDetr::transposeTokens2CHW_(const GPUTensor& x, uint32_t C, uint32_t H, uint32_t W) {
+    uint32_t total = C * H * W;
+    TransposeParams tp{C, H, W, 0};
+    transposeParamBuf_.write(&tp, sizeof(tp));
+
+    auto out = makeReadbackTensor(renderer_, {C, H, W});
+    transposeTokens2CHWPipe_.setUniformBuffer(0,     transposeParamBuf_);
+    transposeTokens2CHWPipe_.setStorageBufferRead(1, const_cast<GPUTensor&>(x).buffer());
+    transposeTokens2CHWPipe_.setStorageBuffer(2,     out.buffer());
+    transposeTokens2CHWPipe_.dispatch(divCeil(total, 64), 1, 1);
+    return out;
+}
+
+GPUTensor RtDetr::buildMemory_(const GPUTensor& p0, const GPUTensor& p1, const GPUTensor& p2) {
+    // GPU-accelerated: transpose [C,H,W] → [H*W,C] with valid_mask, writing
+    // each level at its token offset into a single output buffer.
     uint32_t D = p0.C();
-    GPUTensor out;
-    out.shape = {M, D};
-    out.buf = std::make_unique<WgpuBuffer>(
-        renderer_, size_t(M) * D * sizeof(float),
-        WgpuBuffer::Usage::StorageReadback);
-    out.buf->write(tokens.data(), tokens.size() * sizeof(float));
+    uint32_t M0 = p0.H() * p0.W();
+    uint32_t M1 = p1.H() * p1.W();
+    uint32_t M2 = p2.H() * p2.W();
+    uint32_t M  = M0 + M1 + M2;
+
+    auto out = makeReadbackTensor(renderer_, std::initializer_list<uint32_t>{M, D});
+
+    // Dispatch one kernel per level, each writing to its slice of `out`.
+    const GPUTensor* levels[3] = {&p0, &p1, &p2};
+    uint32_t offsets[3] = {0, M0, M0 + M1};
+    for (int l = 0; l < 3; ++l) {
+        const GPUTensor& p = *levels[l];
+        uint32_t C = p.C(), H = p.H(), W = p.W();
+        uint32_t total = C * H * W;
+        TransposeMaskParams mp{C, H, W, offsets[l], uint32_t(l), 0, 0, 0};
+        transposeMaskParamBuf_.write(&mp, sizeof(mp));
+
+        transposeMaskPipe_.setUniformBuffer(0,     transposeMaskParamBuf_);
+        transposeMaskPipe_.setStorageBufferRead(1, const_cast<GPUTensor&>(p).buffer());
+        transposeMaskPipe_.setStorageBuffer(2,     out.buffer());
+        transposeMaskPipe_.dispatch(divCeil(total, 64), 1, 1);
+    }
     return out;
 }
 
@@ -1607,6 +1769,15 @@ RtDetr::DecoderOutput RtDetr::decoder_(
         for (size_t i = 0; i < n; ++i) row[i] *= inv;
     };
 
+    using clk = std::chrono::steady_clock;
+    auto dtStart = clk::now();
+    auto dtLap = [&](const char* label) {
+        auto now = clk::now();
+        double ms = std::chrono::duration<double, std::milli>(now - dtStart).count();
+        std::cout << "      " << label << ": " << std::fixed << std::setprecision(1) << ms << " ms\n";
+        dtStart = now;
+    };
+
     // ----------------------------------------------------------------
     //  Step 1: enc_score_head → top-K selection
     // ----------------------------------------------------------------
@@ -1635,6 +1806,7 @@ RtDetr::DecoderOutput RtDetr::decoder_(
                     targetCpu.data() + size_t(i) * D);
 
     auto target = uploadTensor({numQueries, D}, targetCpu.data());
+    dtLap("enc_score+gather");
 
     // ----------------------------------------------------------------
     //  Step 2: enc_bbox_head MLP on selected tokens → reference_points
@@ -1654,6 +1826,7 @@ RtDetr::DecoderOutput RtDetr::decoder_(
     for (size_t i = 0; i < refPts.size(); ++i)
         refPts[i] = sigmoidF(bboxRawCpu[i]);
 
+    dtLap("enc_bbox+topk");
     std::cout << "  Decoder: top-300 selected, enc_bbox ref_pts ready\n";
 
     // ----------------------------------------------------------------
@@ -1684,17 +1857,20 @@ RtDetr::DecoderOutput RtDetr::decoder_(
         auto yt  = linear_(target,  p + ".self_attn.in_proj_weight",
                                      p + ".self_attn.in_proj_bias");
 
-        // CPU splice: Q from yqk[:,:D], K from yqk[:,D:2D], V from yt[:,2D:3D].
-        auto yqkCpu = readback(yqk.buffer(), yqk.numel());
-        auto ytCpu  = readback(yt.buffer(),  yt.numel());
-        std::vector<float> qkvCpu(size_t(numQueries) * 3 * D);
-        for (uint32_t i = 0; i < numQueries; ++i) {
-            size_t s = size_t(i) * 3 * D;
-            std::copy_n(yqkCpu.data() + s,           D, qkvCpu.data() + s);
-            std::copy_n(yqkCpu.data() + s + D,       D, qkvCpu.data() + s + D);
-            std::copy_n(ytCpu.data()  + s + 2 * D,   D, qkvCpu.data() + s + 2 * D);
+        // GPU splice: Q from yqk[:,:D], K from yqk[:,D:2D], V from yt[:,2D:3D].
+        GPUTensor qkv;
+        {
+            uint32_t total3D = numQueries * 3 * D;
+            QkvSpliceParams sp{numQueries, D, 0, 0};
+            qkvSpliceParamBuf_.write(&sp, sizeof(sp));
+            auto qkvTmp = makeReadbackTensorV(renderer_, {numQueries, 3 * D});
+            qkvSplicePipe_.setUniformBuffer(0,     qkvSpliceParamBuf_);
+            qkvSplicePipe_.setStorageBufferRead(1, yqk.buffer());
+            qkvSplicePipe_.setStorageBufferRead(2, yt.buffer());
+            qkvSplicePipe_.setStorageBuffer(3,     qkvTmp.buffer());
+            qkvSplicePipe_.dispatch(divCeil(total3D, 64), 1, 1);
+            qkv = std::move(qkvTmp);
         }
-        auto qkv = uploadTensor({numQueries, 3 * D}, qkvCpu.data());
 
         auto scores  = attnScores_(qkv, numHeads);
         auto attnSm  = softmaxLast_(scores);
@@ -1704,6 +1880,7 @@ RtDetr::DecoderOutput RtDetr::decoder_(
                                       p + ".self_attn.out_proj.bias");
         target = addTensor_(target, attnOut);
         target = layerNorm_(target, p + ".norm1.weight", p + ".norm1.bias");
+        dtLap("self_attn");
 
         // --- 3c: Cross-attention (MSDeformAttn) ---
         auto crossQuery = addTensor_(target, queryPos);
@@ -1718,38 +1895,40 @@ RtDetr::DecoderOutput RtDetr::decoder_(
         auto rawAttnW   = linear_(crossQuery, p + ".cross_attn.attention_weights.weight",
                                               p + ".cross_attn.attention_weights.bias");
 
-        // Softmax: [300, 96] → treat as [300*8, 12], softmax over 12.
-        auto rawAttnCpu = readback(rawAttnW.buffer(), rawAttnW.numel());
+        // GPU softmax: reshape [300, 96] → [2400, 12], softmax over last dim.
         uint32_t LP = numLevels * numPoints;   // 12
-        for (uint32_t r = 0; r < numQueries * numHeads; ++r)
-            cpuSoftmax(rawAttnCpu.data() + size_t(r) * LP, LP);
-        auto attnWSm = uploadTensor({numQueries, numHeads * LP}, rawAttnCpu.data());
+        rawAttnW.shape = {numQueries * numHeads, LP};
+        auto attnWSm = softmaxLast_(rawAttnW);
+        attnWSm.shape = {numQueries, numHeads * LP};  // restore logical shape
 
-        // Preprocess offsets: raw [Nq, H*L*P*2] → pixel-space.
-        // PyTorch formula (4-element ref): loc = ref[:2] + raw / P * ref[2:] * 0.5
-        // Pixel: pixel = loc * [W, H] - 0.5. My kernel adds ref*W to ox, so:
-        // ox = (raw_x / P * ref_w * 0.5) * W_l
-        auto rawOffCpu = readback(rawOffsets.buffer(), rawOffsets.numel());
+        // GPU offset preprocessing: scale raw offsets by ref_wh and spatial dims.
         const uint32_t offStride = numHeads * numLevels * numPoints * 2;
-        for (uint32_t q = 0; q < numQueries; ++q) {
-            float ref_w = refPts[size_t(q) * 4 + 2];
-            float ref_h = refPts[size_t(q) * 4 + 3];
-            for (uint32_t h = 0; h < numHeads; ++h) {
-                for (uint32_t l = 0; l < numLevels; ++l) {
-                    float Wl = float(spatialShapes[l].second);
-                    float Hl = float(spatialShapes[l].first);
-                    for (uint32_t pt = 0; pt < numPoints; ++pt) {
-                        size_t idx = size_t(q) * offStride
-                                   + (size_t(h) * numLevels * numPoints + size_t(l) * numPoints + pt) * 2;
-                        rawOffCpu[idx + 0] = rawOffCpu[idx + 0] / float(numPoints) * ref_w * 0.5f * Wl;
-                        rawOffCpu[idx + 1] = rawOffCpu[idx + 1] / float(numPoints) * ref_h * 0.5f * Hl;
-                    }
-                }
-            }
-        }
-        auto offsScaled = uploadTensor({numQueries, offStride}, rawOffCpu.data());
+        {
+            // Upload ref_pts [300, 4] for the kernel.
+            auto refPts4Tensor = uploadTensor({numQueries, 4u}, refPts.data());
 
-        // Reference points [300, 2] (cx, cy only) for the kernel.
+            // Upload level shapes [L] as (H,W) pairs.
+            std::vector<uint32_t> levelData(numLevels * 2);
+            for (uint32_t ll = 0; ll < numLevels; ++ll) {
+                levelData[ll * 2 + 0] = spatialShapes[ll].first;
+                levelData[ll * 2 + 1] = spatialShapes[ll].second;
+            }
+            WgpuBuffer levelBuf(renderer_, numLevels * 2 * sizeof(uint32_t),
+                                WgpuBuffer::Usage::Storage);
+            levelBuf.write(levelData.data(), levelData.size() * sizeof(uint32_t));
+
+            OffsetPreprocessParams opp{numQueries, numHeads, numLevels, numPoints};
+            offsetPreprocessParamBuf_.write(&opp, sizeof(opp));
+
+            // rawOffsets is in-place modified by the kernel.
+            offsetPreprocessPipe_.setUniformBuffer(0,     offsetPreprocessParamBuf_);
+            offsetPreprocessPipe_.setStorageBufferRead(1, refPts4Tensor.buffer());
+            offsetPreprocessPipe_.setStorageBufferRead(2, levelBuf);
+            offsetPreprocessPipe_.setStorageBuffer(3,     rawOffsets.buffer());
+            offsetPreprocessPipe_.dispatch(divCeil(numQueries * offStride, 64), 1, 1);
+        }
+
+        // Reference points [300, 2] (cx, cy only) for the MSDeformAttn kernel.
         std::vector<float> refXy2(size_t(numQueries) * 2);
         for (uint32_t q = 0; q < numQueries; ++q) {
             refXy2[size_t(q) * 2 + 0] = refPts[size_t(q) * 4 + 0];
@@ -1757,11 +1936,12 @@ RtDetr::DecoderOutput RtDetr::decoder_(
         }
         auto refPtsTensor = uploadTensor({numQueries, 2u}, refXy2.data());
 
-        auto crossOut  = msDeformAttn_(value, spatialShapes, refPtsTensor, offsScaled, attnWSm, numHeads);
+        auto crossOut  = msDeformAttn_(value, spatialShapes, refPtsTensor, rawOffsets, attnWSm, numHeads);
         auto crossProj = linear_(crossOut, p + ".cross_attn.output_proj.weight",
                                            p + ".cross_attn.output_proj.bias");
         target = addTensor_(target, crossProj);
         target = layerNorm_(target, p + ".norm2.weight", p + ".norm2.bias");
+        dtLap("cross_attn");
 
         // --- 3d: FFN ---
         auto ff1 = linear_(target, p + ".linear1.weight", p + ".linear1.bias");
@@ -1770,6 +1950,7 @@ RtDetr::DecoderOutput RtDetr::decoder_(
         target = addTensor_(target, ff2);
         target = layerNorm_(target, p + ".norm3.weight", p + ".norm3.bias");
 
+        dtLap("ffn");
         // --- 3e: Iterative bbox refinement ---
         auto bboxDelta = bboxMLP(target, "model.28.dec_bbox_head." + std::to_string(layer));
         auto deltaCpu = readback(bboxDelta.buffer(), bboxDelta.numel());
@@ -1780,6 +1961,7 @@ RtDetr::DecoderOutput RtDetr::decoder_(
             }
         }
 
+        dtLap("bbox_refine");
         std::cout << "  Decoder layer " << layer << " done\n";
     }
 
@@ -1882,6 +2064,16 @@ std::vector<RtDetr::Detection> RtDetr::infer(
 
     const int dstW = INPUT_SIZE, dstH = INPUT_SIZE;
 
+    using clk = std::chrono::steady_clock;
+    auto t0 = clk::now();
+    auto lapMs = [&](const char* label) {
+        auto now = clk::now();
+        double ms = std::chrono::duration<double, std::milli>(now - t0).count();
+        std::cout << "    [" << label << "] " << std::fixed << std::setprecision(1)
+                  << ms << " ms\n";
+        t0 = now;
+    };
+
     // --- 1. CPU preprocessing: bilinear resize + /255 → [3, 640, 640] ---
     std::vector<float> chw(size_t(3) * dstH * dstW);
     for (int dy = 0; dy < dstH; ++dy) {
@@ -1906,11 +2098,15 @@ std::vector<RtDetr::Detection> RtDetr::infer(
         }
     }
     auto input = uploadTensor({3u, uint32_t(dstH), uint32_t(dstW)}, chw.data());
+    lapMs("preprocess");
 
     // --- 2. Forward pass ---
     auto bp   = backbone_(input);
+    lapMs("backbone");
     auto f5   = aifi_(bp.p5);
+    lapMs("aifi");
     auto neck = ccfm_(bp.p3, bp.p4, f5);
+    lapMs("ccfm");
     auto ip0  = inputProj_(neck.s3, 0);
     auto ip1  = inputProj_(neck.s4, 1);
     auto ip2  = inputProj_(neck.s5, 2);
@@ -1919,11 +2115,17 @@ std::vector<RtDetr::Detection> RtDetr::infer(
                               "model.28.enc_output.0.bias");
     auto eo   = layerNorm_(lin, "model.28.enc_output.1.weight",
                                  "model.28.enc_output.1.bias");
+    // Force GPU sync so enc_output timing reflects actual GPU work,
+    // not just dispatch overhead. Without this, the decoder's first
+    // readback absorbs the entire pipeline cost.
+    { auto _ = readback(eo.buffer(), 1); }
+    lapMs("enc_output");
 
     std::vector<std::pair<uint32_t,uint32_t>> shapes = {
         {ip0.H(), ip0.W()}, {ip1.H(), ip1.W()}, {ip2.H(), ip2.W()}};
 
     auto dec = decoder_(mem, eo, shapes);
+    lapMs("decoder");
 
     // --- 3. Post-processing: sigmoid, threshold, NMS ---
     auto sigmoidF = [](float x) -> float { return 1.0f / (1.0f + std::exp(-x)); };

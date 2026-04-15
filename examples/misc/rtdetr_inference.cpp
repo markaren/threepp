@@ -1506,7 +1506,7 @@ int main(int argc, char** argv) {
             auto& img = *imgOpt;
             std::cout << "  Loaded: " << img.width << " x " << img.height << "\n";
 
-            for (int i = 0; i < 5; i++) {
+            // for (int i = 0; i < 5; i++) {
                 auto& rgba = img.data<unsigned char>();
 
                 using clk = std::chrono::steady_clock;
@@ -1531,7 +1531,7 @@ int main(int argc, char** argv) {
                               << d.x2 << "," << d.y2 << ")\n";
                 }
                 std::cout << "  RESULT: " << (dets.empty() ? "NO DETECTIONS" : "PASS") << "\n";
-            }
+            // }
         }
     }
 
