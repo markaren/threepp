@@ -42,7 +42,7 @@ inline uint32_t divCeil(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 //  WGSL: depthwise conv
 // ============================================================
 //
-// Weight layout: [C, 1, kH, kW] packed as f16 pairs → u32.
+// Weight layout: [C, 1, kH, kW] stored as f32.
 // Each output element out[c, y, x] reads only from input channel c.
 // Workgroup 8×8×4 covers 8×8 output × 4 channels.
 //
@@ -55,14 +55,9 @@ struct ConvParams {
 }
 @group(0) @binding(0) var<uniform>             p:    ConvParams;
 @group(0) @binding(1) var<storage, read>       inp:  array<f32>;
-@group(0) @binding(2) var<storage, read>       wt:   array<u32>;   // packed f16 pairs
+@group(0) @binding(2) var<storage, read>       wt:   array<f32>;
 @group(0) @binding(3) var<storage, read>       bias: array<f32>;
 @group(0) @binding(4) var<storage, read_write> out:  array<f32>;
-
-fn load_weight(i: u32) -> f32 {
-    let pair = unpack2x16float(wt[i >> 1u]);
-    return select(pair.x, pair.y, (i & 1u) == 1u);
-}
 
 @compute @workgroup_size(8, 8, 4)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -81,7 +76,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             if iy >= 0 && iy < i32(p.in_h) && ix >= 0 && ix < i32(p.in_w) {
                 let ii = oc * in_pitch + u32(iy) * p.in_w + u32(ix);
                 let wi = oc * kstride + ky * p.k_w + kx;
-                sum += inp[ii] * load_weight(wi);
+                sum += inp[ii] * wt[wi];
             }
         }
     }
@@ -103,9 +98,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 //  WGSL: standard (non-grouped) 2D conv
 // ============================================================
 //
-// Weight layout: [out_c, in_c, kH, kW] packed as f16 pairs → u32.
-// One thread per output element. Workgroup 8×8×4 covers
-// 8×8 output pixels × 4 output channels.
+// Weight layout: [out_c, in_c, kH, kW] stored as f32.
+// One thread per output element.
 //
 static const char* kConv2dWgsl = R"WGSL(
 struct ConvParams {
@@ -116,14 +110,9 @@ struct ConvParams {
 }
 @group(0) @binding(0) var<uniform>             p:    ConvParams;
 @group(0) @binding(1) var<storage, read>       inp:  array<f32>;
-@group(0) @binding(2) var<storage, read>       wt:   array<u32>;   // packed f16 pairs
+@group(0) @binding(2) var<storage, read>       wt:   array<f32>;
 @group(0) @binding(3) var<storage, read>       bias: array<f32>;
 @group(0) @binding(4) var<storage, read_write> out:  array<f32>;
-
-fn load_weight(i: u32) -> f32 {
-    let pair = unpack2x16float(wt[i >> 1u]);
-    return select(pair.x, pair.y, (i & 1u) == 1u);
-}
 
 // Tiled 1×1 conv path: treats conv as GEMM — out[oc, pos] = sum_ic w[oc,ic] * inp[ic, pos].
 // Workgroup: 16 output channels × 16 spatial positions. Tiles over in_c in chunks of 16.
@@ -172,7 +161,7 @@ fn main(
             // Load tile of weights: tileW[loc][lp] = w[oc, icOff+lp]
             let wic = icOff + lp;
             if (oc < p.out_c && wic < p.in_c) {
-                tileW[loc * TILE + lp] = load_weight(oc * p.in_c + wic);
+                tileW[loc * TILE + lp] = wt[oc * p.in_c + wic];
             } else {
                 tileW[loc * TILE + lp] = 0.0;
             }
@@ -214,23 +203,23 @@ fn main(
             // Row 0
             if cy >= 0 && cy < h {
                 let row = icBase + u32(cy) * p.in_w;
-                if cx >= 0 && cx < w     { sum += inp[row + u32(cx)]     * load_weight(wBase);     }
-                if cx+1 >= 0 && cx+1 < w { sum += inp[row + u32(cx+1)]   * load_weight(wBase + 1u); }
-                if cx+2 >= 0 && cx+2 < w { sum += inp[row + u32(cx+2)]   * load_weight(wBase + 2u); }
+                if cx >= 0 && cx < w     { sum += inp[row + u32(cx)]     * wt[wBase];     }
+                if cx+1 >= 0 && cx+1 < w { sum += inp[row + u32(cx+1)]   * wt[wBase + 1u]; }
+                if cx+2 >= 0 && cx+2 < w { sum += inp[row + u32(cx+2)]   * wt[wBase + 2u]; }
             }
             // Row 1
             if cy+1 >= 0 && cy+1 < h {
                 let row = icBase + u32(cy+1) * p.in_w;
-                if cx >= 0 && cx < w     { sum += inp[row + u32(cx)]     * load_weight(wBase + 3u); }
-                if cx+1 >= 0 && cx+1 < w { sum += inp[row + u32(cx+1)]   * load_weight(wBase + 4u); }
-                if cx+2 >= 0 && cx+2 < w { sum += inp[row + u32(cx+2)]   * load_weight(wBase + 5u); }
+                if cx >= 0 && cx < w     { sum += inp[row + u32(cx)]     * wt[wBase + 3u]; }
+                if cx+1 >= 0 && cx+1 < w { sum += inp[row + u32(cx+1)]   * wt[wBase + 4u]; }
+                if cx+2 >= 0 && cx+2 < w { sum += inp[row + u32(cx+2)]   * wt[wBase + 5u]; }
             }
             // Row 2
             if cy+2 >= 0 && cy+2 < h {
                 let row = icBase + u32(cy+2) * p.in_w;
-                if cx >= 0 && cx < w     { sum += inp[row + u32(cx)]     * load_weight(wBase + 6u); }
-                if cx+1 >= 0 && cx+1 < w { sum += inp[row + u32(cx+1)]   * load_weight(wBase + 7u); }
-                if cx+2 >= 0 && cx+2 < w { sum += inp[row + u32(cx+2)]   * load_weight(wBase + 8u); }
+                if cx >= 0 && cx < w     { sum += inp[row + u32(cx)]     * wt[wBase + 6u]; }
+                if cx+1 >= 0 && cx+1 < w { sum += inp[row + u32(cx+1)]   * wt[wBase + 7u]; }
+                if cx+2 >= 0 && cx+2 < w { sum += inp[row + u32(cx+2)]   * wt[wBase + 8u]; }
             }
         }
 
@@ -259,7 +248,7 @@ fn main(
                     if iy >= 0 && iy < i32(p.in_h) && ix >= 0 && ix < i32(p.in_w) {
                         let ii = ic * in_pitch + u32(iy) * p.in_w + u32(ix);
                         let wi = oc * w_per_oc + ic * k_area + ky * p.k_w + kx;
-                        sum += inp[ii] * load_weight(wi);
+                        sum += inp[ii] * wt[wi];
                     }
                 }
             }
@@ -1136,7 +1125,6 @@ void RtDetr::loadWeights(const std::string& path) {
 
     weights_.clear();
     cpuWeights_.clear();
-    size_t packedCount = 0;
     for (auto& [name, data] : w.data) {
         const auto& sh = w.shapes.at(name);
         bool isConvWeight = (sh.size() == 4 && endsWith(name, ".weight"));
@@ -1146,33 +1134,11 @@ void RtDetr::loadWeights(const std::string& path) {
         if (isFusedBias) cpuWeights_[name] = data;
 
         if (isConvWeight) {
-            size_t n = data.size();
-            if (n == 0 || (n % 2) != 0) {
-                auto t = makeTensorV(renderer_, sh);
-                t.upload(data.data());
-                weights_.emplace(name, std::move(t));
-                // No fp16 pack for odd-sized weights; CPU mirror = raw data
-                if (endsWith(name, ".fused.weight")) cpuWeights_[name] = data;
-                continue;
-            }
-            std::vector<uint32_t> packed(n / 2);
-            std::vector<float>    rt;
-            bool keepMirror = endsWith(name, ".fused.weight");
-            if (keepMirror) rt.resize(n);
-            for (size_t i = 0; i < n; i += 2) {
-                uint16_t lo = f32_to_f16(data[i]);
-                uint16_t hi = f32_to_f16(data[i + 1]);
-                packed[i / 2] = uint32_t(lo) | (uint32_t(hi) << 16);
-                if (keepMirror) {
-                    rt[i]     = f16_to_f32(lo);
-                    rt[i + 1] = f16_to_f32(hi);
-                }
-            }
-            auto t = makeF16WeightTensor(renderer_, sh);
-            t.buf->write(packed.data(), packed.size() * sizeof(uint32_t));
+            // Upload conv weights as fp32 (no fp16 packing — full precision).
+            auto t = makeTensorV(renderer_, sh);
+            t.upload(data.data());
             weights_.emplace(name, std::move(t));
-            if (keepMirror) cpuWeights_[name] = std::move(rt);
-            ++packedCount;
+            if (endsWith(name, ".fused.weight")) cpuWeights_[name] = data;
         } else {
             auto t = makeTensorV(renderer_, sh);
             t.upload(data.data());
@@ -1187,8 +1153,7 @@ void RtDetr::loadWeights(const std::string& path) {
 
     std::cout << "RtDetr::loadWeights: "
               << weights_.size() << " GPU tensors"
-              << " (folded " << foldedCount << " BN blocks,"
-              << " fp16-packed " << packedCount << " conv weights)\n";
+              << " (folded " << foldedCount << " BN blocks, fp32 conv weights)\n";
 }
 
 // ============================================================
@@ -1972,12 +1937,55 @@ RtDetr::DecoderOutput RtDetr::decoder_(
         return linear_(h2, prefix + ".layers.2.weight", prefix + ".layers.2.bias");
     };
 
+    // Generate anchors in logit space for all tokens.
+    // For each level with spatial dims (H, W): cx=(gx+0.5)/W, cy=(gy+0.5)/H,
+    // wh = 0.05 * 2^level.  Convert to logit space: inv_sigmoid(val).
+    // Anchors outside (eps, 1-eps) are invalid → set to +inf (large logit).
+    const float eps = 0.01f;
+    std::vector<float> allAnchors(size_t(totalTokens) * 4);
+    {
+        size_t idx = 0;
+        for (uint32_t lvl = 0; lvl < numLevels; ++lvl) {
+            uint32_t H = spatialShapes[lvl].first;
+            uint32_t W = spatialShapes[lvl].second;
+            float wh = 0.05f * float(1u << lvl);
+            for (uint32_t gy = 0; gy < H; ++gy) {
+                for (uint32_t gx = 0; gx < W; ++gx) {
+                    float cx = (float(gx) + 0.5f) / float(W);
+                    float cy = (float(gy) + 0.5f) / float(H);
+                    // Check validity: all four coords must be in (eps, 1-eps)
+                    bool valid = cx > eps && cx < (1.0f - eps)
+                              && cy > eps && cy < (1.0f - eps)
+                              && wh > eps && wh < (1.0f - eps);
+                    if (valid) {
+                        allAnchors[idx * 4 + 0] = invSigmoid(cx);
+                        allAnchors[idx * 4 + 1] = invSigmoid(cy);
+                        allAnchors[idx * 4 + 2] = invSigmoid(wh);
+                        allAnchors[idx * 4 + 3] = invSigmoid(wh);
+                    } else {
+                        allAnchors[idx * 4 + 0] = 1e8f;
+                        allAnchors[idx * 4 + 1] = 1e8f;
+                        allAnchors[idx * 4 + 2] = 1e8f;
+                        allAnchors[idx * 4 + 3] = 1e8f;
+                    }
+                    ++idx;
+                }
+            }
+        }
+    }
+
+    // Gather top-300 anchors.
+    std::vector<float> topkAnchors(size_t(numQueries) * 4);
+    for (uint32_t i = 0; i < numQueries; ++i)
+        std::copy_n(allAnchors.data() + size_t(topkIdx[i]) * 4, 4,
+                    topkAnchors.data() + size_t(i) * 4);
+
     auto encBboxRaw = bboxMLP(target, "model.28.enc_bbox_head");
     auto bboxRawCpu = readback(encBboxRaw.buffer(), encBboxRaw.numel());
-    // sigmoid → reference_points [300, 4].
+    // reference_points = sigmoid(enc_bbox_head_delta + anchor_logit) [300, 4].
     std::vector<float> refPts(size_t(numQueries) * 4);
     for (size_t i = 0; i < refPts.size(); ++i)
-        refPts[i] = sigmoidF(bboxRawCpu[i]);
+        refPts[i] = sigmoidF(bboxRawCpu[i] + topkAnchors[i]);
 
     dtLap("enc_bbox+topk");
     std::cout << "  Decoder: top-300 selected, enc_bbox ref_pts ready\n";
