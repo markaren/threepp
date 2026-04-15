@@ -23,4 +23,10 @@ if (THREEPP_WITH_WGPU)
                         yolov8/YoloV8n.cpp
                         yolov8/WeightLoader.cpp)
     target_include_directories(yolov8_inference PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${WGPU_INCLUDE_DIR})
+
+    add_example(NAME "rtdetr_inference"
+                SOURCES rtdetr_inference.cpp
+                        rtdetr/RtDetr.cpp
+                        rtdetr/WeightLoader.cpp)
+    target_include_directories(rtdetr_inference PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${WGPU_INCLUDE_DIR})
 endif ()
