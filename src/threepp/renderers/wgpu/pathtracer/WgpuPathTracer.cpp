@@ -135,10 +135,8 @@ struct WgpuPathTracer::Impl {
     // Denoiser pipelines
     WgpuComputePipeline taaPipeline;
     WgpuComputePipeline atrousPipeline;
-    WgpuComputePipeline preFilterPipeline;
     WgpuBuffer  taaUniBuf;
     WgpuBuffer  atrousUniBuf;
-    WgpuBuffer  preFilterUniBuf;
     bool denoiserEnabled_ = true;
     bool temporalDenoiserEnabled_ = false;
     bool restirEnabled_ = true;
@@ -361,10 +359,8 @@ struct WgpuPathTracer::Impl {
           // Denoiser pipelines
           taaPipeline(r, taaWGSL, "taa_main"),
           atrousPipeline(r, svgfAtrousWGSL, "svgf_atrous_main"),
-          preFilterPipeline(r, preFilterWGSL, "prefilter_main"),
           taaUniBuf(r, sizeof(TaaGpuUniforms)),
           atrousUniBuf(r, sizeof(AtrousGpuUniforms)),
-          preFilterUniBuf(r, sizeof(PreFilterGpuUniforms)),
           // Storage buffers (small placeholders — grown dynamically on first build)
           bvhNodeBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * BVH4_GPU_U32S * sizeof(uint32_t),
                      WgpuBuffer::Usage::Storage),
@@ -508,13 +504,6 @@ struct WgpuPathTracer::Impl {
         atrousPipeline.setTexture(5, *hitMesh.read);
         atrousPipeline.setTexture(6, *moments.read);
 
-        // Pre-filter pipeline bindings
-        preFilterPipeline.setUniformBuffer(0, preFilterUniBuf);
-        preFilterPipeline.setTexture(1, *diffAccum.read);
-        preFilterPipeline.setStorageTexture(2, filtered.a);
-        preFilterPipeline.setTexture(3, *gBuf.write);
-        preFilterPipeline.setTexture(4, *hitMesh.read);
-
         // TAAU pipeline — initial bindings (per-frame ones refreshed in render)
         upscalePipeline.setUniformBuffer(0, upscaleUniBuf);
         upscalePipeline.setTexture(1, denoisedDiff);
@@ -532,7 +521,6 @@ struct WgpuPathTracer::Impl {
         vtPipeline.startAsyncBuild();
         refitPipeline.startAsyncBuild();
         taaPipeline.startAsyncBuild();
-        preFilterPipeline.startAsyncBuild();
         atrousPipeline.startAsyncBuild();
         upscalePipeline.startAsyncBuild();
         std::cerr << "[PathTracer] Async shader compilation started for helper pipelines" << std::endl;
@@ -772,10 +760,6 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(33, *giResLo.write);
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(6, *moments.read);
-        preFilterPipeline.setTexture(1, *diffAccum.read);
-        preFilterPipeline.setStorageTexture(2, filtered.a);
-        preFilterPipeline.setTexture(3, *gBuf.write);
-        preFilterPipeline.setTexture(4, *hitMesh.read);
         taaPipeline.setTexture(7, albedoTex);
         taaPipeline.setTexture(8, *moments.read);
         taaPipeline.setTexture(9, *gBuf.read);  // prev frame depth
@@ -2037,14 +2021,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
 
-        // Pre-filter disabled: the 5×5 cross-bilateral has no demodulation, no
-        // luminance edge-stopping, and no albedo awareness — it blurs raw color
-        // across same-mesh/same-normal/same-depth neighbors unconditionally,
-        // washing out textures (marble veins, wood grain) and shadows before
-        // the à-trous ever sees them. The à-trous downstream has proper demod,
-        // luminance edge-stop, and a per-sample firefly clamp of its own, so
-        // the prefilter's role is redundant.
-
         AtrousGpuUniforms au{};
         au.frameCount = d.frameCount_;
 
@@ -2072,27 +2048,19 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         };
 
         // 5 atrous passes (SVGF reference) — step sizes 1,2,4,8,16 → effective 32-pixel radius.
-        // Input: raw diff/spec accum directly (prefilter skipped). Scratch:
-        // taaHistDiff/Spec.a and filtered.a/b provide ping-pong targets.
+        // Input: raw diff/spec accum directly. Scratch: taaHistDiff/Spec.a
+        // (unused outside the temporal path) as ping-pong targets.
         runAtrous(*d.diffAccum.read, d.denoisedDiff, d.taaHistDiff.a, 0, 5);
         runAtrous(*d.specAccum.read, d.denoisedSpec, d.taaHistSpec.a, 1, 5);
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;
     } else if (d.temporalDenoiserEnabled_ && d.denoiserEnabled_ && d.aovMode_ == 0) {
-        // SVGF-style pipeline: 1-spp → pre-filter → temporal → spatial cleanup.
+        // SVGF-style pipeline: 1-spp → temporal → spatial cleanup.
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
 
-        // --- Phase 2: Pre-filter disabled ---
-        // The 5×5 cross-bilateral washes textures and shadows before the
-        // temporal+spatial stages can preserve them properly (no demod, no
-        // luminance edge-stop, no albedo awareness).  TAA below feeds directly
-        // from the raw accumulation buffers instead; its per-pixel disocclusion
-        // + the downstream à-trous (with albedo-similarity and luminance
-        // edge-stops) handle fireflies without the blanket blur.
-
-        // --- Phase 3: Temporal accumulation ---
+        // --- Phase 2: Temporal accumulation ---
         {
             TaaGpuUniforms tu{};
             d.fillPrevCamUbo(tu.prevCamOri, tu.prevCamFwd, tu.prevCamRgt, tu.prevCamUp);
@@ -2112,7 +2080,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             // Diffuse temporal: raw diffAccum → taaHistDiff.write
             tu.frameCount[1] = 0.f;  // mode = diffuse
             d.taaUniBuf.write(&tu, sizeof(tu));
-            d.taaPipeline.setTexture(1, *d.diffAccum.read);        // raw 1-spp (prefilter skipped)
+            d.taaPipeline.setTexture(1, *d.diffAccum.read);        // raw 1-spp accumulation
             d.taaPipeline.setTexture(2, *d.gBuf.write);            // current frame g-buffer (after swap: gBuf.write = just-written)
             d.taaPipeline.setTexture(3, *d.taaHistDiff.read);     // prev temporal history
             d.taaPipeline.setStorageTexture(4, *d.taaHistDiff.write);
@@ -2135,7 +2103,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.taaHistSpec.swap();
         }
 
-        // --- Phase 4: Spatial cleanup on temporal output ---
+        // --- Phase 3: Spatial cleanup on temporal output ---
         AtrousGpuUniforms au{};
         au.frameCount = d.frameCount_;
 
@@ -2158,8 +2126,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         };
 
         // Cleanup reads temporal output (taaHistDiff.read/SpecRead after swap = just-written).
-        // Uses filtered.a/b as ping-pong temp — safe, pre-filter outputs were already
-        // consumed by TAA above and are no longer needed.
+        // Uses filtered.a/b as ping-pong scratch for the à-trous cascade.
         runAtrous(*d.taaHistDiff.read, d.denoisedDiff, d.filtered.a, 2, 5);  // 2 = diffuse | temporal
         runAtrous(*d.taaHistSpec.read, d.denoisedSpec, d.filtered.b, 3, 5);  // 3 = specular | temporal
 

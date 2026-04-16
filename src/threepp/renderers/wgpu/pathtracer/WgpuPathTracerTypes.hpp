@@ -95,10 +95,6 @@ namespace threepp::wgpu_pt {
         std::uint32_t stepSize, mode;  // mode: 0=diffuse, 1=specular
         float         frameCount, _p1;
     };
-    struct alignas(16) PreFilterGpuUniforms {
-        std::uint32_t stepSize, _p0;
-        float         _p1, _p2;
-    };
     struct alignas(16) DepthFillUniforms {
         float projView[16];   // NDC-remapped proj * view  (64 bytes)
         float camOri[4];      // camera position            (16 bytes)

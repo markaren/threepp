@@ -31,7 +31,6 @@ namespace threepp::wgpu_pt {
 
     // -- Denoiser pipeline fragments -------------------------------------------
     extern const char* const taaWGSL;
-    extern const char* const preFilterWGSL;
     extern const char* const svgfAtrousWGSL;
 
     // -- Display / depth-fill / temporal-upscale pipeline fragments ------------

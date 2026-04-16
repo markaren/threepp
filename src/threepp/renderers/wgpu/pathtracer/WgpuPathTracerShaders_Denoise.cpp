@@ -209,84 +209,6 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 )";
 
 // ---------------------------------------------------------------------------
-// WGSL spatial pre-filter for temporal denoiser pipeline.
-// Lightweight 5×5 cross-bilateral: stabilizes neighborhood statistics
-// so the temporal filter's variance clamping box is meaningful.
-// No luminance edge-stopping (signal too noisy), no demodulation.
-// ---------------------------------------------------------------------------
-const char* const preFilterWGSL = R"(
-struct PreFilterUni { stepSize: u32, _p0: u32, _p1: f32, _p2: f32, }
-
-@group(0) @binding(0) var<uniform> uni: PreFilterUni;
-@group(0) @binding(1) var colorIn:    texture_2d<f32>;
-@group(0) @binding(2) var colorOut:   texture_storage_2d<rgba16float, write>;
-@group(0) @binding(3) var gBuf:       texture_2d<f32>;
-@group(0) @binding(4) var hitMeshBuf: texture_2d<f32>;
-
-@compute @workgroup_size(8, 8)
-fn prefilter_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let pixel = vec2<i32>(gid.xy);
-    let res   = vec2<i32>(textureDimensions(colorIn, 0));
-    if (pixel.x >= res.x || pixel.y >= res.y) { return; }
-
-    let step = i32(uni.stepSize);
-
-    let cSamp  = textureLoad(colorIn, pixel, 0);
-    let cColor = cSamp.xyz;
-    let cFC    = cSamp.w;
-    let cGB    = textureLoad(gBuf, pixel, 0);
-    let cNorm  = cGB.xyz;
-    let cDepth = cGB.w;
-    let cMeshId = u32(textureLoad(hitMeshBuf, pixel, 0).r);
-
-    // Sky or foveated-skip sentinel: pass through
-    if (cDepth < 1e-6 || cFC < -0.5) {
-        textureStore(colorOut, pixel, vec4<f32>(cColor, cFC));
-        return;
-    }
-
-    // 5×5 Gaussian kernel weights (separable)
-    let kw = array<f32, 5>(1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
-
-    var colorSum = vec3<f32>(0.0);
-    var weightSum = 0.0;
-    let fireflyCap = 12.0;
-
-    for (var dy = -2; dy <= 2; dy++) {
-        for (var dx = -2; dx <= 2; dx++) {
-            let sp = clamp(pixel + vec2<i32>(dx, dy) * step, vec2<i32>(0), res - 1);
-
-            let sMeshId = u32(textureLoad(hitMeshBuf, sp, 0).r);
-            if (sMeshId != cMeshId) { continue; }
-
-            let sGB    = textureLoad(gBuf, sp, 0);
-            let sNorm  = sGB.xyz;
-            let sDepth = sGB.w;
-
-            // Spatial weight
-            let w_s = kw[dy + 2] * kw[dx + 2];
-            // Normal edge-stopping (relaxed — pow=4)
-            let w_n = pow(max(0.0, dot(cNorm, sNorm)), 4.0);
-            // Depth edge-stopping (relaxed)
-            let w_d = exp(-abs(cDepth - sDepth) * 1.0 / (cDepth + 0.01));
-
-            // Read and firefly-clamp neighbor
-            var sColor = textureLoad(colorIn, sp, 0).xyz;
-            let sLum = dot(sColor, vec3<f32>(0.2126, 0.7152, 0.0722));
-            if (sLum > fireflyCap) { sColor = sColor * (fireflyCap / sLum); }
-
-            let w = w_s * w_n * w_d;
-            colorSum += sColor * w;
-            weightSum += w;
-        }
-    }
-
-    let result = select(cColor, colorSum / weightSum, weightSum > 1e-6);
-    textureStore(colorOut, pixel, vec4<f32>(result, cFC));
-}
-)";
-
-// ---------------------------------------------------------------------------
 // WGSL variance-guided à-trous spatial filter
 // Uses the frame count (w channel) to adapt filter strength:
 //   low frame count → more aggressive blur to suppress MC noise
@@ -513,7 +435,7 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let demodResult = filteredIrr * cAlbedo;
     var spatialResult = mix(filteredRaw, demodResult, demodBlend);
 
-    // Output firefly clamp (replaces the role of the removed 5×5 prefilter).
+    // Output firefly clamp.
     // The per-sample clamp in the kernel bounds neighbor contributions, but a
     // bright center pixel can still dominate the output at small step sizes
     // (step=1 has high center weight).  Clamp the result against the mean of
