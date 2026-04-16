@@ -2022,22 +2022,50 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // Spatial denoiser (path tracer mode only) — à-trous wavelet filter on
     // split diffuse/specular channels independently. Each channel gets its own
     // mode (diffuse=0, specular=1) with roughness-adaptive edge-stopping.
-    // 3 cascade passes with step sizes 1, 2, 4 give effective 25-pixel radius.
+    // 5 cascade passes with step sizes 1, 2, 4, 8, 16 give effective 32-pixel radius.
     WgpuTexture* displayTex = d.accum.read;
     WgpuTexture* displayDiff = d.diffAccum.read;
     WgpuTexture* displaySpec = d.specAccum.read;
     const bool hasMotion = (movedBits[0] | movedBits[1] | movedBits[2] | movedBits[3]) != 0u;
-    const bool needsDenoise = (d.frameCount_ < 64.f || hasMotion || camMoved) && d.aovMode_ == 0;
-    if (d.denoiserEnabled_ && needsDenoise && !d.temporalDenoiserEnabled_) {
+    (void) hasMotion; (void) camMoved;
+    // Run the denoiser on every frame when enabled. The previous heuristic gated
+    // it off after 64 static frames (banking on accumulator convergence to take
+    // over), which produced a perceptible "denoiser pops off" transition once the
+    // camera stopped moving. With blue-noise input + 5 passes the filter is
+    // detail-preserving at convergence, so always-on is the cleaner trade.
+    if (d.denoiserEnabled_ && d.aovMode_ == 0 && !d.temporalDenoiserEnabled_) {
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
+
+        // Pre-filter pass: 5×5 cross-bilateral with hard firefly cap on each
+        // sample. Knocks down secondary-bounce outliers in the accumulated
+        // diff/spec buffers before atrous sees them — atrous's bilateral
+        // edge-stopping treats fireflies as edges and refuses to blur them.
+        // Output: filtered.a (diffuse), filtered.b (specular).
+        {
+            PreFilterGpuUniforms pu{};
+            pu.stepSize = 1u;
+            d.preFilterUniBuf.write(&pu, sizeof(pu));
+            d.preFilterPipeline.setTexture(3, *d.gBuf.write);
+            d.preFilterPipeline.setTexture(4, *d.hitMesh.read);
+
+            d.preFilterPipeline.setTexture(1, *d.diffAccum.read);
+            d.preFilterPipeline.setStorageTexture(2, d.filtered.a);
+            d.preFilterPipeline.dispatch(gx, gy);
+
+            d.preFilterPipeline.setTexture(1, *d.specAccum.read);
+            d.preFilterPipeline.setStorageTexture(2, d.filtered.b);
+            d.preFilterPipeline.dispatch(gx, gy);
+        }
 
         AtrousGpuUniforms au{};
         au.frameCount = d.frameCount_;
 
         // Helper: run N-pass à-trous cascade on a channel.
-        // Uses denoisedXxx and filteredX as ping-pong targets.
-        // Input: srcAccum (raw accumulation), output lands in dstDenoised.
+        // Uses dstDenoised and tmpFiltered as ping-pong targets.
+        // Input: srcAccum (raw accumulation), output ALWAYS lands in dstDenoised
+        // regardless of `passes` parity. The trick: parity of (passes-1-p) makes
+        // the final pass (p == passes-1) always write to dst.
         auto runAtrous = [&](WgpuTexture& srcAccum, WgpuTexture& dstDenoised,
                              WgpuTexture& tmpFiltered, uint32_t mode, int passes) {
             au.mode = mode;
@@ -2046,7 +2074,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
             WgpuTexture* readTex  = &srcAccum;
             for (int p = 0; p < passes; ++p) {
-                WgpuTexture* writeTex = (p % 2 == 0) ? &dstDenoised : &tmpFiltered;
+                WgpuTexture* writeTex = (((passes - 1 - p) % 2) == 0) ? &dstDenoised : &tmpFiltered;
                 au.stepSize = static_cast<uint32_t>(1 << p);
                 d.atrousUniBuf.write(&au, sizeof(au));
                 d.atrousPipeline.setTexture(1, *readTex);
@@ -2056,15 +2084,41 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             }
         };
 
-        runAtrous(*d.diffAccum.read, d.denoisedDiff, d.filtered.a, 0, 2);
-        runAtrous(*d.specAccum.read, d.denoisedSpec, d.filtered.b, 1, 2);
+        // 5 atrous passes (SVGF reference) — step sizes 1,2,4,8,16 → effective 32-pixel radius.
+        // Input: pre-filtered samples in filtered.a/b. Scratch: taaHistDiff/Spec.a
+        // (unused outside the temporal path) — can't reuse filtered.a/b as ping-pong
+        // because they're already serving as the input texture.
+        runAtrous(d.filtered.a, d.denoisedDiff, d.taaHistDiff.a, 0, 5);
+        runAtrous(d.filtered.b, d.denoisedSpec, d.taaHistSpec.a, 1, 5);
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;
     } else if (d.temporalDenoiserEnabled_ && d.denoiserEnabled_ && d.aovMode_ == 0) {
-        // New pipeline: 1-spp → pre-filter → temporal → spatial cleanup
+        // SVGF-style pipeline: 1-spp → pre-filter → temporal → spatial cleanup.
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
+
+        // --- Phase 2: Pre-filter (5×5 cross-bilateral on raw 1-spp input) ---
+        // Knocks down the worst fireflies and high-freq noise BEFORE temporal
+        // accumulation, so the history buffer doesn't bake in long-tail outliers.
+        // Output: filtered.a (diffuse), filtered.b (specular).
+        {
+            PreFilterGpuUniforms pu{};
+            pu.stepSize = 1u;
+            d.preFilterUniBuf.write(&pu, sizeof(pu));
+            d.preFilterPipeline.setTexture(3, *d.gBuf.write);
+            d.preFilterPipeline.setTexture(4, *d.hitMesh.read);
+
+            // Diffuse: diffAccum.read → filtered.a
+            d.preFilterPipeline.setTexture(1, *d.diffAccum.read);
+            d.preFilterPipeline.setStorageTexture(2, d.filtered.a);
+            d.preFilterPipeline.dispatch(gx, gy);
+
+            // Specular: specAccum.read → filtered.b
+            d.preFilterPipeline.setTexture(1, *d.specAccum.read);
+            d.preFilterPipeline.setStorageTexture(2, d.filtered.b);
+            d.preFilterPipeline.dispatch(gx, gy);
+        }
 
         // --- Phase 3: Temporal accumulation ---
         {
@@ -2083,10 +2137,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             tu.movedMeshBits[2] = movedBits[2];
             tu.movedMeshBits[3] = movedBits[3];
 
-            // Diffuse temporal: raw → taaHistDiff.write, preFiltered = filtered.a
+            // Diffuse temporal: pre-filtered (filtered.a) → taaHistDiff.write
             tu.frameCount[1] = 0.f;  // mode = diffuse
             d.taaUniBuf.write(&tu, sizeof(tu));
-            d.taaPipeline.setTexture(1, *d.diffAccum.read);       // raw 1-spp
+            d.taaPipeline.setTexture(1, d.filtered.a);             // pre-filtered 1-spp
             d.taaPipeline.setTexture(2, *d.gBuf.write);            // current frame g-buffer (after swap: gBuf.write = just-written)
             d.taaPipeline.setTexture(3, *d.taaHistDiff.read);     // prev temporal history
             d.taaPipeline.setStorageTexture(4, *d.taaHistDiff.write);
@@ -2095,10 +2149,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.taaPipeline.setTexture(9, *d.gBuf.read);             // previous frame g-buffer (after swap: gBuf.read = prev frame)
             d.taaPipeline.dispatch(gx, gy);
 
-            // Specular temporal: raw → taaHistSpec.write
+            // Specular temporal: pre-filtered (filtered.b) → taaHistSpec.write
             tu.frameCount[1] = 1.f;  // mode = specular
             d.taaUniBuf.write(&tu, sizeof(tu));
-            d.taaPipeline.setTexture(1, *d.specAccum.read);
+            d.taaPipeline.setTexture(1, d.filtered.b);
             d.taaPipeline.setTexture(3, *d.taaHistSpec.read);
             d.taaPipeline.setStorageTexture(4, *d.taaHistSpec.write);
             d.taaPipeline.setTexture(8, *d.moments.read);
@@ -2113,6 +2167,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         AtrousGpuUniforms au{};
         au.frameCount = d.frameCount_;
 
+        // Same parity trick as the non-temporal path: last pass always lands in dst.
         auto runAtrous = [&](WgpuTexture& srcAccum, WgpuTexture& dstDenoised,
                              WgpuTexture& tmpFiltered, uint32_t mode, int passes) {
             au.mode = mode;
@@ -2120,7 +2175,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.atrousPipeline.setTexture(5, *d.hitMesh.read);
             WgpuTexture* readTex = &srcAccum;
             for (int p = 0; p < passes; ++p) {
-                WgpuTexture* writeTex = (p % 2 == 0) ? &dstDenoised : &tmpFiltered;
+                WgpuTexture* writeTex = (((passes - 1 - p) % 2) == 0) ? &dstDenoised : &tmpFiltered;
                 au.stepSize = static_cast<uint32_t>(1 << p);
                 d.atrousUniBuf.write(&au, sizeof(au));
                 d.atrousPipeline.setTexture(1, *readTex);
@@ -2131,9 +2186,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         };
 
         // Cleanup reads temporal output (taaHistDiff.read/SpecRead after swap = just-written).
-        // Uses filtered.a/B as ping-pong temp — safe, temporal already consumed them.
-        runAtrous(*d.taaHistDiff.read, d.denoisedDiff, d.filtered.a, 2, 2);  // 2 = diffuse | temporal
-        runAtrous(*d.taaHistSpec.read, d.denoisedSpec, d.filtered.b, 3, 2);  // 3 = specular | temporal
+        // Uses filtered.a/b as ping-pong temp — safe, pre-filter outputs were already
+        // consumed by TAA above and are no longer needed.
+        runAtrous(*d.taaHistDiff.read, d.denoisedDiff, d.filtered.a, 2, 5);  // 2 = diffuse | temporal
+        runAtrous(*d.taaHistSpec.read, d.denoisedSpec, d.filtered.b, 3, 5);  // 3 = specular | temporal
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;

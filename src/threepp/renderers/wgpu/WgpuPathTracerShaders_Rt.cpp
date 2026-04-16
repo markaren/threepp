@@ -136,6 +136,73 @@ fn rand(seed: ptr<function, u32>) -> f32 {
 
 const PI: f32 = 3.14159265358979;
 
+// ---------------------------------------------------------------------------
+// Spatio-temporal blue noise (Heitz & Belcour 2019, "Distributing Monte Carlo
+// Errors as a Blue Noise in Screen Space"). Two-tier construction:
+//  1. Per-frame, per-dim QMC point from the R2 / golden-ratio plastic constants
+//     (low-discrepancy across the integration sequence).
+//  2. Per-pixel Cranley-Patterson rotation by a screen-space blue-noise pattern
+//     (Interleaved Gradient Noise + golden-ratio temporal advance — a poor-man's
+//     STBN that gives blue-noise spectral falloff per frame and decorrelates
+//     across frames so TAA / atrous can resolve the residual).
+//
+// Net effect: the same rays remain Monte Carlo (unbiased), but the per-pixel
+// error correlates spatially as blue noise rather than white noise, which
+// SVGF and TAA reconstruct dramatically better.
+// ---------------------------------------------------------------------------
+const R2_A1: f32 = 0.7548776662466927;  // 1/phi2  (2D plastic constant axis 1)
+const R2_A2: f32 = 0.5698402909980532;  // 1/phi2^2 (2D plastic constant axis 2)
+const R1_A1: f32 = 0.6180339887498949;  // 1/phi   (1D golden-ratio sequence)
+const GOLDEN_F32: f32 = 1.6180339887498949;
+
+fn r2Seq(n: u32) -> vec2<f32> {
+    return fract(vec2<f32>(f32(n) * R2_A1, f32(n) * R2_A2));
+}
+
+// Interleaved Gradient Noise (Jimenez 2014) — approximate 2D blue noise.
+// Same coefficients evaluated with (px,py) and (py,px) yield two largely
+// uncorrelated blue-noise patterns suitable for X/Y rotation.
+fn ign(px: u32, py: u32) -> f32 {
+    return fract(52.9829189 * fract(0.06711056 * f32(px) + 0.00583715 * f32(py)));
+}
+
+// Temporal-advanced IGN: same blue-noise spatial pattern, rotated each frame
+// by golden-ratio (decorrelates frames evenly across the unit interval).
+fn ign_t(px: u32, py: u32, fc: u32) -> f32 {
+    return fract(ign(px, py) + f32(fc) * GOLDEN_F32);
+}
+
+// Per-thread BN state (var<private> = per-invocation in compute).
+// `bnDim` advances on every consumed sample and indexes into the QMC sequence,
+// so each integrator dimension gets its own well-distributed point.
+var<private> bnPx: u32;
+var<private> bnPy: u32;
+var<private> bnFc: u32;
+var<private> bnDim: u32;
+
+fn bnInit(px: u32, py: u32, fc: u32) {
+    bnPx = px; bnPy = py; bnFc = fc; bnDim = 0u;
+}
+
+fn bnNext1d() -> f32 {
+    // Frame and dim both advance the QMC; per-pixel offset is blue-noise.
+    let qmc = fract(f32(bnFc) * R1_A1 + f32(bnDim) * 0.7548776662466927);
+    let off = ign_t(bnPx, bnPy, bnFc + bnDim * 17u);
+    bnDim = bnDim + 1u;
+    return fract(qmc + off);
+}
+
+fn bnNext2d() -> vec2<f32> {
+    // R2 (plastic) sequence stratifies the (frame*K + dim) index in 2D;
+    // per-pixel offset uses ign(x,y) and ign(y,x) for two decorrelated axes.
+    let idx = bnFc * 8u + bnDim;
+    let qmc = fract(vec2<f32>(f32(idx) * R2_A1, f32(idx) * R2_A2));
+    let ox  = ign_t(bnPx, bnPy, bnFc + bnDim * 13u);
+    let oy  = ign_t(bnPy, bnPx, bnFc + bnDim * 31u);
+    bnDim = bnDim + 1u;
+    return fract(qmc + vec2<f32>(ox, oy));
+}
+
 fn ggxD(NdotH: f32, alpha: f32) -> f32 {
     let a2 = alpha * alpha;
     let d  = NdotH * NdotH * (a2 - 1.0) + 1.0;
@@ -1058,7 +1125,8 @@ fn reservoirLightDir(lightPos: vec3<f32>, lightType: f32, point: vec3<f32>) -> R
 // Returns: xyz = sampled point on triangle, w = triangle index (as float).
 struct EmissiveSample { point: vec3<f32>, normal: vec3<f32>, triIdx: i32, area: f32, power: f32 }
 fn sampleEmissiveTriCdf(seed: ptr<function, u32>, totalPower: f32, emTriCount: i32) -> EmissiveSample {
-    let xi = rand(seed) * totalPower;
+    // Blue-noise: 1D pick + 2D barycentric (3 BN samples per NEE call).
+    let xi = bnNext1d() * totalPower;
     var lo = 0;
     var hi = emTriCount - 1;
     while (lo < hi) {
@@ -1070,8 +1138,9 @@ fn sampleEmissiveTriCdf(seed: ptr<function, u32>, totalPower: f32, emTriCount: i
     let ev0 = textureLoad(triData, triCoord(eTi, 0), 0).xyz;
     let ev1 = textureLoad(triData, triCoord(eTi, 1), 0).xyz;
     let ev2 = textureLoad(triData, triCoord(eTi, 2), 0).xyz;
-    let su1 = sqrt(rand(seed));
-    let u2  = rand(seed);
+    let bnBary = bnNext2d();
+    let su1 = sqrt(bnBary.x);
+    let u2  = bnBary.y;
     var es: EmissiveSample;
     es.point  = (1.0 - su1) * ev0 + su1 * (1.0 - u2) * ev1 + su1 * u2 * ev2;
     es.normal = normalize(cross(ev1 - ev0, ev2 - ev0));
@@ -1092,26 +1161,12 @@ const char* const csPathTraceWGSL = R"(
 
 const HAS_ENV_CDF: bool = /*ENV_CDF_FLAG*/false;
 
-// R2 quasi-random sequence (Martin Roberts) — low-discrepancy 2D points
-// Uses the plastic constant for optimal 2D stratification
-const R2_A1: f32 = 0.7548776662466927;  // 1/phi2
-const R2_A2: f32 = 0.5698402909980532;  // 1/phi2^2
-fn r2Seq(n: u32) -> vec2<f32> {
-    return fract(vec2<f32>(f32(n) * R2_A1, f32(n) * R2_A2));
-}
-
-// Interleaved Gradient Noise (Jimenez et al. 2014) — approximate 2D blue noise.
-// Used as a per-pixel Cranley-Patterson rotation so Monte Carlo errors distribute
-// as blue noise in screen space (Heitz & Belcour 2019) rather than white noise.
-// Evaluating with (px,py) and (py,px) yields two different linear combinations,
-// giving two largely uncorrelated blue-noise patterns for the X and Y jitter dims.
-fn ign(px: u32, py: u32) -> f32 {
-    return fract(52.9829189 * fract(0.06711056 * f32(px) + 0.00583715 * f32(py)));
-}
+// r2Seq, ign, ign_t and the bnNext1d/2d helpers are defined in csCommonWGSL.
 
 fn cosineHemisphere(n: vec3<f32>, seed: ptr<function, u32>) -> vec3<f32> {
-    let u1  = rand(seed);
-    let u2  = rand(seed);
+    let bn  = bnNext2d();
+    let u1  = bn.x;
+    let u2  = bn.y;
     let r   = sqrt(u1);
     let phi = 6.28318530718 * u2;
     let lx  = r * cos(phi);
@@ -1142,9 +1197,10 @@ fn sampleVNDF(wo: vec3<f32>, n: vec3<f32>, alpha: f32,
                     vec3<f32>(-woStr.y, woStr.x, 0.0) / sqrt(lensq),
                     lensq > 1e-7);
     let T2 = cross(woStr, T1);
-    // Sample projected disk
-    let u1  = rand(seed);
-    let u2  = rand(seed);
+    // Sample projected disk — blue-noise stratified.
+    let bn  = bnNext2d();
+    let u1  = bn.x;
+    let u2  = bn.y;
     let r   = sqrt(u1);
     let phi = 2.0 * PI * u2;
     let t1s = r * cos(phi);
@@ -2564,20 +2620,19 @@ R"(
     let pixelHistory = textureLoad(accumRead, pixel, 0).w;
     let camMovedNow  = (u32(rt.params.w) & 2u) != 0u;
 
-    // Spatio-temporal blue noise (Heitz & Belcour 2019):
-    // R2 sequence advances each frame for temporal stratification (unchanged).
-    // Per-pixel Cranley-Patterson rotation uses IGN (Jimenez et al. 2014) instead
-    // of PCG: IGN has approximately blue-noise spectral properties in screen space,
-    // so Monte Carlo errors from neighbouring pixels are perceptually de-correlated.
-    // The two jitter axes use ign(x,y) and ign(y,x) — different linear combinations
-    // of the same coordinates — giving two largely uncorrelated blue-noise offsets.
-    let r2 = r2Seq(fc);
+    // Spatio-temporal blue noise (Heitz & Belcour 2019).
+    // Camera jitter and the integrator both consume the same per-pixel BN state
+    // (defined in csCommonWGSL): R2/golden-ratio QMC across frames+dims, with a
+    // per-pixel Cranley-Patterson rotation that has blue-noise spectral falloff.
     // Sub-pixel jitter centred on pixel centre (0.5, 0.5), range ±0.375.
-    // Gives TAA true sub-pixel information for silhouette AA.
     // Disabled when the denoiser is active: jitter misaligns noisy colour vs.
     // the denoiser's edge-stopping data (normals/depth), causing shimmer.
-    let jx = select((fract(r2.x + ign(gid.x, gid.y)) - 0.5) * 0.75, 0.0, denoiserOn);
-    let jy = select((fract(r2.y + ign(gid.y, gid.x)) - 0.5) * 0.75, 0.0, denoiserOn);
+    bnInit(gid.x, gid.y, fc);
+    let camBn = bnNext2d();
+    let jx = select((camBn.x - 0.5) * 0.75, 0.0, denoiserOn);
+    let jy = select((camBn.y - 0.5) * 0.75, 0.0, denoiserOn);
+    // PCG seed kept for the many integrator dims that don't yet use BN
+    // (RR termination, lobe selection, ReSTIR M-sampling, etc.).
     var seed = pcg(pcg(gid.x + gid.y * 65537u) + fc * 12979u);
 
     let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5 + jx, f32(pixel.y) + 0.5 + jy), res);

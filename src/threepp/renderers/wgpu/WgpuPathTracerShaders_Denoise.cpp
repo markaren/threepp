@@ -353,10 +353,15 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // Variance-guided luminance sigma.
     // Temporal variance from moments (reprojected, stable after ~10 frames).
+    // Floor is generous (0.15 diffuse / 0.4 spec) so that at convergence — where
+    // temporal variance shrinks toward zero — the bilateral retains enough
+    // headroom to absorb scattered indirect-light noise. Edge protection is
+    // delegated to the geometric checks (mesh/material ID, normal, depth);
+    // luminance edge-stopping should not be the primary edge guard.
     let moments = textureLoad(momentsBuf, pixel, 0).xy;
     let temporalVar = max(moments.y - moments.x * moments.x, 0.0);
     let baseSigma = select(0.7, mix(0.5, 2.0, cRough), isSpec);
-    let lumSigma  = max(select(0.02, 0.1, isSpec), sqrt(temporalVar) * baseSigma);
+    let lumSigma  = max(select(0.15, 0.4, isSpec), sqrt(temporalVar) * baseSigma);
 
     // 5×5 bilateral filter — tracks both demodulated irradiance and raw color
     let kw = array<f32, 5>(1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
@@ -399,12 +404,15 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let sHitId  = textureLoad(hitMeshBuf, sp, 0);
             let sMeshId = u32(sHitId.r);
             let sMatId  = i32(sHitId.g);
-            // Reject only when BOTH mesh and material differ. This allows the
-            // filter to share samples across distinct meshes that have the same
-            // material (two chairs, repeated walls, foliage instances), which
-            // roughly doubles usable samples per pixel in scenes with repeated
-            // elements, without introducing cross-material light leak.
-            if (sMeshId != cMeshId && sMatId != cMatId) { continue; }
+            // Material ID must match. Mesh ID is allowed to differ — that
+            // preserves the "share samples across distinct meshes with the
+            // same material" benefit (instanced chairs, repeated walls,
+            // foliage), but blocks the cross-material bleed that the previous
+            // (sMeshId != cMeshId && sMatId != cMatId) form let through at
+            // multi-material seams (a single mesh with several submaterials,
+            // or two adjacent meshes coincidentally sharing one material on
+            // one side and not the other).
+            if (sMatId != cMatId) { continue; }
 
             let sColor  = textureLoad(colorIn, sp, 0).xyz;
             let sGB     = textureLoad(gBuf, sp, 0);
@@ -428,9 +436,11 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let depthBase = select(4.0, mix(1.0, 3.0, cRough), isSpec);
             let depthScale = mix(1.0, depthBase, smoothstep(0.0, 32.0, cFC));
             let w_d = exp(-abs(cDepth - sGB.w) * depthScale / (cDepth + 0.01));
-            // Luminance edge-stopping: wider sigma while noisy, but not so wide
-            // that shadow boundaries blur out
-            let lumBoost = mix(4.0, 1.0, smoothstep(0.0, 16.0, cFC));
+            // Luminance edge-stopping: wider sigma while noisy. Keeps a 1.5×
+            // residual multiplier at convergence so the filter retains smoothing
+            // power for residual bounce noise. Cross-edge bleed is the job of
+            // the geometric checks above, not luminance.
+            let lumBoost = mix(4.0, 1.5, smoothstep(0.0, 64.0, cFC));
             let effectiveLumSigma = lumSigma * lumBoost;
             let sAlbLum = luminance(sAlbedo);
             let sDemod = smoothstep(0.05, 0.2, sAlbLum);
