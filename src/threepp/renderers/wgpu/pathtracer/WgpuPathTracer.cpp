@@ -2046,11 +2046,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             }
         };
 
-        // 5 atrous passes (SVGF reference) — step sizes 1,2,4,8,16 → effective 32-pixel radius.
+        // 4 atrous passes — step sizes 1,2,4,8 → effective 16-pixel radius.
+        // Reduced from the SVGF reference 5 because the albedo-similarity edge-stop
+        // (factor 40) and output firefly clamp already suppress the residual noise
+        // that the 5th pass (step=16) would have handled, at 20% less compute.
         // Input: raw diff/spec accum directly. Scratch: taaHistDiff/Spec.a
         // (unused outside the temporal path) as ping-pong targets.
-        runAtrous(*d.diffAccum.read, d.denoisedDiff, d.taaHistDiff.a, 0, 5);
-        runAtrous(*d.specAccum.read, d.denoisedSpec, d.taaHistSpec.a, 1, 5);
+        runAtrous(*d.diffAccum.read, d.denoisedDiff, d.taaHistDiff.a, 0, 4);
+        runAtrous(*d.specAccum.read, d.denoisedSpec, d.taaHistSpec.a, 1, 4);
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;
@@ -2125,9 +2128,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         };
 
         // Cleanup reads temporal output (taaHistDiff.read/SpecRead after swap = just-written).
-        // Uses filtered.a/b as ping-pong scratch for the à-trous cascade.
-        runAtrous(*d.taaHistDiff.read, d.denoisedDiff, d.filtered.a, 2, 5);  // 2 = diffuse | temporal
-        runAtrous(*d.taaHistSpec.read, d.denoisedSpec, d.filtered.b, 3, 5);  // 3 = specular | temporal
+        // 4 passes (down from 5): temporal input is already substantially denoised
+        // by the EMA, so the cleanup only needs to remove the residual 1-spp noise
+        // that TAA couldn't absorb. Uses filtered.a/b as ping-pong scratch.
+        runAtrous(*d.taaHistDiff.read, d.denoisedDiff, d.filtered.a, 2, 4);  // 2 = diffuse | temporal
+        runAtrous(*d.taaHistSpec.read, d.denoisedSpec, d.filtered.b, 3, 4);  // 3 = specular | temporal
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;
