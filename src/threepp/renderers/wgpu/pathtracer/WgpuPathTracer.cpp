@@ -2037,26 +2037,13 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
 
-        // Pre-filter pass: 5×5 cross-bilateral with hard firefly cap on each
-        // sample. Knocks down secondary-bounce outliers in the accumulated
-        // diff/spec buffers before atrous sees them — atrous's bilateral
-        // edge-stopping treats fireflies as edges and refuses to blur them.
-        // Output: filtered.a (diffuse), filtered.b (specular).
-        {
-            PreFilterGpuUniforms pu{};
-            pu.stepSize = 1u;
-            d.preFilterUniBuf.write(&pu, sizeof(pu));
-            d.preFilterPipeline.setTexture(3, *d.gBuf.write);
-            d.preFilterPipeline.setTexture(4, *d.hitMesh.read);
-
-            d.preFilterPipeline.setTexture(1, *d.diffAccum.read);
-            d.preFilterPipeline.setStorageTexture(2, d.filtered.a);
-            d.preFilterPipeline.dispatch(gx, gy);
-
-            d.preFilterPipeline.setTexture(1, *d.specAccum.read);
-            d.preFilterPipeline.setStorageTexture(2, d.filtered.b);
-            d.preFilterPipeline.dispatch(gx, gy);
-        }
+        // Pre-filter disabled: the 5×5 cross-bilateral has no demodulation, no
+        // luminance edge-stopping, and no albedo awareness — it blurs raw color
+        // across same-mesh/same-normal/same-depth neighbors unconditionally,
+        // washing out textures (marble veins, wood grain) and shadows before
+        // the à-trous ever sees them. The à-trous downstream has proper demod,
+        // luminance edge-stop, and a per-sample firefly clamp of its own, so
+        // the prefilter's role is redundant.
 
         AtrousGpuUniforms au{};
         au.frameCount = d.frameCount_;
@@ -2085,11 +2072,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         };
 
         // 5 atrous passes (SVGF reference) — step sizes 1,2,4,8,16 → effective 32-pixel radius.
-        // Input: pre-filtered samples in filtered.a/b. Scratch: taaHistDiff/Spec.a
-        // (unused outside the temporal path) — can't reuse filtered.a/b as ping-pong
-        // because they're already serving as the input texture.
-        runAtrous(d.filtered.a, d.denoisedDiff, d.taaHistDiff.a, 0, 5);
-        runAtrous(d.filtered.b, d.denoisedSpec, d.taaHistSpec.a, 1, 5);
+        // Input: raw diff/spec accum directly (prefilter skipped). Scratch:
+        // taaHistDiff/Spec.a and filtered.a/b provide ping-pong targets.
+        runAtrous(*d.diffAccum.read, d.denoisedDiff, d.taaHistDiff.a, 0, 5);
+        runAtrous(*d.specAccum.read, d.denoisedSpec, d.taaHistSpec.a, 1, 5);
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;
@@ -2098,27 +2084,13 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
 
-        // --- Phase 2: Pre-filter (5×5 cross-bilateral on raw 1-spp input) ---
-        // Knocks down the worst fireflies and high-freq noise BEFORE temporal
-        // accumulation, so the history buffer doesn't bake in long-tail outliers.
-        // Output: filtered.a (diffuse), filtered.b (specular).
-        {
-            PreFilterGpuUniforms pu{};
-            pu.stepSize = 1u;
-            d.preFilterUniBuf.write(&pu, sizeof(pu));
-            d.preFilterPipeline.setTexture(3, *d.gBuf.write);
-            d.preFilterPipeline.setTexture(4, *d.hitMesh.read);
-
-            // Diffuse: diffAccum.read → filtered.a
-            d.preFilterPipeline.setTexture(1, *d.diffAccum.read);
-            d.preFilterPipeline.setStorageTexture(2, d.filtered.a);
-            d.preFilterPipeline.dispatch(gx, gy);
-
-            // Specular: specAccum.read → filtered.b
-            d.preFilterPipeline.setTexture(1, *d.specAccum.read);
-            d.preFilterPipeline.setStorageTexture(2, d.filtered.b);
-            d.preFilterPipeline.dispatch(gx, gy);
-        }
+        // --- Phase 2: Pre-filter disabled ---
+        // The 5×5 cross-bilateral washes textures and shadows before the
+        // temporal+spatial stages can preserve them properly (no demod, no
+        // luminance edge-stop, no albedo awareness).  TAA below feeds directly
+        // from the raw accumulation buffers instead; its per-pixel disocclusion
+        // + the downstream à-trous (with albedo-similarity and luminance
+        // edge-stops) handle fireflies without the blanket blur.
 
         // --- Phase 3: Temporal accumulation ---
         {
@@ -2137,10 +2109,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             tu.movedMeshBits[2] = movedBits[2];
             tu.movedMeshBits[3] = movedBits[3];
 
-            // Diffuse temporal: pre-filtered (filtered.a) → taaHistDiff.write
+            // Diffuse temporal: raw diffAccum → taaHistDiff.write
             tu.frameCount[1] = 0.f;  // mode = diffuse
             d.taaUniBuf.write(&tu, sizeof(tu));
-            d.taaPipeline.setTexture(1, d.filtered.a);             // pre-filtered 1-spp
+            d.taaPipeline.setTexture(1, *d.diffAccum.read);        // raw 1-spp (prefilter skipped)
             d.taaPipeline.setTexture(2, *d.gBuf.write);            // current frame g-buffer (after swap: gBuf.write = just-written)
             d.taaPipeline.setTexture(3, *d.taaHistDiff.read);     // prev temporal history
             d.taaPipeline.setStorageTexture(4, *d.taaHistDiff.write);
@@ -2149,10 +2121,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.taaPipeline.setTexture(9, *d.gBuf.read);             // previous frame g-buffer (after swap: gBuf.read = prev frame)
             d.taaPipeline.dispatch(gx, gy);
 
-            // Specular temporal: pre-filtered (filtered.b) → taaHistSpec.write
+            // Specular temporal: raw specAccum → taaHistSpec.write
             tu.frameCount[1] = 1.f;  // mode = specular
             d.taaUniBuf.write(&tu, sizeof(tu));
-            d.taaPipeline.setTexture(1, d.filtered.b);
+            d.taaPipeline.setTexture(1, *d.specAccum.read);
             d.taaPipeline.setTexture(3, *d.taaHistSpec.read);
             d.taaPipeline.setStorageTexture(4, *d.taaHistSpec.write);
             d.taaPipeline.setTexture(8, *d.moments.read);

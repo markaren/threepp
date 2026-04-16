@@ -425,10 +425,12 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Normal edge-stopping: FC-adaptive for BOTH modes.
             // Low cFC (noisy, moving): relaxed (pow=2) so the filter can smooth
             // curved surfaces (torus, sphere) where normals vary rapidly.
-            // High cFC (converged): aggressive (pow=128) to preserve sharp edges.
+            // High cFC (converged): aggressive to preserve sharp edges.
             // The material ID check already prevents cross-object bleed.
+            // Faster ramp (24 frames vs 48) helps silhouettes and subtle
+            // geometric detail snap into focus sooner after camera settles.
             let specNormPow = mix(2.0, 16.0, smoothstep(0.0, 32.0, cFC));
-            let diffNormPow = mix(2.0, 128.0, smoothstep(0.0, 48.0, cFC));
+            let diffNormPow = mix(2.0, 128.0, smoothstep(0.0, 24.0, cFC));
             let normPow = select(diffNormPow, specNormPow, isSpec);
             let w_n = pow(max(0.0, dot(cNorm, sNorm)), normPow);
             // Depth edge-stopping: rays fire through pixel centers (no jitter),
@@ -436,11 +438,12 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let depthBase = select(4.0, mix(1.0, 3.0, cRough), isSpec);
             let depthScale = mix(1.0, depthBase, smoothstep(0.0, 32.0, cFC));
             let w_d = exp(-abs(cDepth - sGB.w) * depthScale / (cDepth + 0.01));
-            // Luminance edge-stopping: wider sigma while noisy. Keeps a 1.5×
-            // residual multiplier at convergence so the filter retains smoothing
-            // power for residual bounce noise. Cross-edge bleed is the job of
-            // the geometric checks above, not luminance.
-            let lumBoost = mix(4.0, 1.0, smoothstep(0.0, 64.0, cFC));
+            // Luminance edge-stopping: wider sigma while noisy, tight at convergence.
+            // This is the primary mechanism preserving SHADOWS — shadow pixels have
+            // same material/normal/depth as lit neighbors, so only the luminance stop
+            // can keep them from being smoothed away. Ramp to 1.0× in 24 frames
+            // (was 64) so shadow edges sharpen within ~0.8s at 30fps.
+            let lumBoost = mix(4.0, 1.0, smoothstep(0.0, 24.0, cFC));
             let effectiveLumSigma = lumSigma * lumBoost;
             let sAlbLum = luminance(sAlbedo);
             let sDemod = smoothstep(0.05, 0.2, sAlbLum);
@@ -466,7 +469,26 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (sIrrLum > filterCap) { sIrrClamped  = sIrr  * (filterCap / sIrrLum); }
             if (sColLum > filterCap) { sColorClamped = sColor * (filterCap / sColLum); }
 
-            let w = w_s * w_n * w_d * w_l;
+            // Albedo-similarity edge-stop (diffuse only).
+            // Within a single material, texture variation creates albedo variation
+            // without triggering material-ID/normal/depth edge-stops. Without this
+            // check, the filter averages directly across texture boundaries and
+            // washes out details like marble veins, wood grain, or fabric weave.
+            //
+            // Factor 40 is aggressive: any noticeable albedo delta (~0.05 per
+            // channel) already drops contribution below 70%, and 5 à-trous passes
+            // compound any mixing across 32 pixels.  Same-color neighbors within
+            // a uniform region (e.g. marble base at ~0.01 delta) still contribute
+            // ~96% so noise reduction still works — but marble veins (~0.1 delta)
+            // drop to ~30%, bark-to-leaf (~0.3 delta) to <1%.
+            //
+            // Also protects against color contamination from the per-channel
+            // demod floor: neighbors with very different albedos (where the floor
+            // would distort hue) contribute little.
+            let albDiff = cAlbedo - sAlbedo;
+            let w_a = select(exp(-dot(albDiff, albDiff) * 40.0), 1.0, isSpec);
+
+            let w = w_s * w_n * w_d * w_l * w_a;
             irrSum    += sIrrClamped  * w;
             rawSum    += sColorClamped * w;
             weightSum += w;
@@ -489,7 +511,20 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let filteredIrr = select(cIrr, irrSum / weightSum, weightSum > 1e-6);
     let filteredRaw = select(cColor, rawSum / weightSum, weightSum > 1e-6);
     let demodResult = filteredIrr * cAlbedo;
-    let spatialResult = mix(filteredRaw, demodResult, demodBlend);
+    var spatialResult = mix(filteredRaw, demodResult, demodBlend);
+
+    // Output firefly clamp (replaces the role of the removed 5×5 prefilter).
+    // The per-sample clamp in the kernel bounds neighbor contributions, but a
+    // bright center pixel can still dominate the output at small step sizes
+    // (step=1 has high center weight).  Clamp the result against the mean of
+    // neighbors (rawSum / weightSum, already per-sample-clamped) at 3× so a
+    // legitimate bright sample survives but a 10-100× firefly is pulled back.
+    let resLum = luminance(spatialResult);
+    let neighborMeanLum = luminance(filteredRaw);
+    let fireflyCeil = max(neighborMeanLum * 3.0, 0.5);
+    if (resLum > fireflyCeil) {
+        spatialResult = spatialResult * (fireflyCeil / resLum);
+    }
     // Roughness-driven blend for specular: smooth metals (low roughness)
     // have clean reflections — don't blur them. Rough surfaces benefit
     // from spatial filtering. Diffuse always gets full filtering.
