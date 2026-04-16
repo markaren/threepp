@@ -3,215 +3,6 @@
 namespace threepp::wgpu_pt {
 
 // ---------------------------------------------------------------------------
-// WGSL ReLAX-inspired temporal accumulation (Phase 1)
-// Per-channel temporal filter with per-pixel history length, moment tracking,
-// luminance-based anti-lag clamping, and mode-aware blending (diffuse vs specular).
-// Runs separately on diffuse and specular split buffers.
-// ---------------------------------------------------------------------------
-const char* const taaWGSL = R"(
-struct TaaUniforms {
-    prevCamOri: vec4<f32>, prevCamFwd: vec4<f32>, prevCamRgt: vec4<f32>, prevCamUp: vec4<f32>,
-    curCamOri:  vec4<f32>, curCamFwd:  vec4<f32>, curCamRgt:  vec4<f32>, curCamUp:  vec4<f32>,
-    iRes:       vec4<f32>,   // .xy = resolution, .zw = prevJx/prevJy
-    tanHalfFov: vec4<f32>,
-    frameCount: vec4<f32>,   // .x = global FC, .y = mode (0=diff, 1=spec), .z = curJx, .w = curJy
-    movedMeshBits: vec4<u32>,
-}
-
-@group(0) @binding(0) var<uniform> taa:      TaaUniforms;
-@group(0) @binding(1) var accumIn:   texture_2d<f32>;
-@group(0) @binding(2) var gBufCur:   texture_2d<f32>;
-@group(0) @binding(3) var taaHistIn: texture_2d<f32>;  // .w = history length
-@group(0) @binding(4) var taaOut:    texture_storage_2d<rgba16float, write>;
-@group(0) @binding(5) var hitMeshTex: texture_2d<f32>;
-@group(0) @binding(6) var<storage, read> motionMats: array<mat4x4<f32>>;
-@group(0) @binding(7) var albedoTex:  texture_2d<f32>;  // .w = primary linear roughness
-@group(0) @binding(8) var momentsIn:  texture_2d<f32>;  // (E[L], E[L²]) from RT pass
-@group(0) @binding(9) var gBufPrev:   texture_2d<f32>;  // previous frame g-buffer (depth in .w)
-
-fn pcg_t(v: u32) -> u32 {
-    var s = v * 747796405u + 2891336453u;
-    s = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
-    return (s >> 22u) ^ s;
-}
-const R2_A1_T: f32 = 0.7548776662466927;
-const R2_A2_T: f32 = 0.5698402909980532;
-fn r2Seq_t(n: u32) -> vec2<f32> {
-    return fract(vec2<f32>(f32(n) * R2_A1_T, f32(n) * R2_A2_T));
-}
-
-
-@compute @workgroup_size(8, 8)
-fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let pixel = vec2<i32>(gid.xy);
-    let res   = taa.iRes.xy;
-    let iRes  = vec2<i32>(i32(res.x), i32(res.y));
-    if (pixel.x >= iRes.x || pixel.y >= iRes.y) { return; }
-
-    let isSpec  = taa.frameCount.y > 0.5;
-    let curSamp  = textureLoad(accumIn, pixel, 0);
-    let curColor = curSamp.xyz;
-    let curFC    = curSamp.w;
-    let curGB    = textureLoad(gBufCur, pixel, 0);
-    let curNorm  = curGB.xyz;
-    let curDepth = curGB.w;
-
-    // Sky pixels: pass through, history length = 0
-    if (curDepth < 1e-6) {
-        textureStore(taaOut, pixel, vec4<f32>(curColor, 0.0));
-        return;
-    }
-
-    // Foveated/checkerboard-skipped pixels: .w = -1 sentinel — pass through history.
-    if (curFC < -0.5) {
-        let prevHist = textureLoad(taaHistIn, pixel, 0);
-        textureStore(taaOut, pixel, vec4<f32>(prevHist.xyz, prevHist.w));
-        return;
-    }
-
-    let hitInfo  = textureLoad(hitMeshTex, pixel, 0);
-    let curMeshId = u32(hitInfo.r);
-    let touchedMoved = hitInfo.b > 0.5;
-
-    // No variance box. SVGF design: temporal pass = pure EMA + disocclusion reset.
-    // The moments-driven à-trous spatial filter handles all noise removal.
-    // Box clamping in temporal passes is a rasterizer TAA technique — incorrect for
-    // path tracing where every sample is independently noisy regardless of history.
-
-    // Reproject current pixel into previous frame's screen space.
-    // With sub-pixel jitter enabled, the stored depth corresponds to a jittered
-    // sub-position rather than the pixel centre; the resulting worldPos is off
-    // by sub-pixel magnitude.  Bilinear history fetch (below) absorbs it.
-    let aspect = res.x / res.y;
-    let ndc = vec2<f32>((f32(pixel.x) + 0.5) / res.x * 2.0 - 1.0,
-                         1.0 - (f32(pixel.y) + 0.5) / res.y * 2.0);
-    let rayDir   = normalize(taa.curCamFwd.xyz
-                            + taa.curCamRgt.xyz * (ndc.x * taa.tanHalfFov.x * aspect)
-                            + taa.curCamUp.xyz  * (ndc.y * taa.tanHalfFov.x));
-    let worldPos = taa.curCamOri.xyz + rayDir * curDepth;
-
-    // For moved meshes: transform world pos by motion matrix
-    let meshIdx = u32(textureLoad(hitMeshTex, pixel, 0).r);
-    var prevWorldPos = worldPos;
-    if (meshIdx < 128u) {
-        let bit = meshIdx & 31u;
-        let wi  = meshIdx >> 5u;
-        var mbits: u32 = 0u;
-        if      (wi == 0u) { mbits = taa.movedMeshBits.x; }
-        else if (wi == 1u) { mbits = taa.movedMeshBits.y; }
-        else if (wi == 2u) { mbits = taa.movedMeshBits.z; }
-        else               { mbits = taa.movedMeshBits.w; }
-        if (((mbits >> bit) & 1u) != 0u) {
-            prevWorldPos = (motionMats[meshIdx] * vec4<f32>(worldPos, 1.0)).xyz;
-        }
-    }
-
-    let toPoint  = prevWorldPos - taa.prevCamOri.xyz;
-    let prevZ    = dot(toPoint, taa.prevCamFwd.xyz);
-
-    var useHist = prevZ > 0.001;
-    let prevNdcX = dot(toPoint, taa.prevCamRgt.xyz) / (prevZ * taa.tanHalfFov.x * aspect);
-    let prevNdcY = dot(toPoint, taa.prevCamUp.xyz)  / (prevZ * taa.tanHalfFov.x);
-    let prevPx   = vec2<f32>((prevNdcX + 1.0) * 0.5 * res.x - 0.5,
-                              (1.0 - prevNdcY) * 0.5 * res.y - 0.5);
-    let prevPixel = vec2<i32>(i32(floor(prevPx.x)), i32(floor(prevPx.y)));
-
-    // Bounds check (need 2×2 footprint for bilinear)
-    useHist = useHist && prevPixel.x >= 0 && prevPixel.x + 1 < iRes.x
-                      && prevPixel.y >= 0 && prevPixel.y + 1 < iRes.y;
-
-    // Depth-based disocclusion (two conditions):
-    // 1. Standard: prevZ vs curZDepth — detects when current surface wasn't visible before.
-    // 2. Revealed: current surface is much deeper than previous surface at prevPixel
-    //    — detects background pixels revealed when a foreground object moved away.
-    //    With blue-noise sub-pixel jitter, G-buffer depths vary by sub-pixel
-    //    magnitude frame-to-frame; the 15% threshold is well above that noise
-    //    floor, so silhouette false-positives remain rare.
-    let curZDepth = dot(worldPos - taa.curCamOri.xyz, taa.curCamFwd.xyz);
-    let depthRatio = abs(prevZ - curZDepth) / max(curZDepth, 0.01);
-    let prevFrameDepth = textureLoad(gBufPrev, prevPixel, 0).w;
-    let revealedRatio = abs(curDepth - prevFrameDepth) / max(curDepth, 0.01);
-    let disoccluded = useHist && (depthRatio > 0.1 || revealedRatio > 0.15);
-
-    var result = curColor;
-    var newHistLen = 1.0;
-
-    if (useHist && !disoccluded) {
-        // Per-tap validated bilinear history fetch.
-        // Blending across geometry edges mixes foreground/background history.
-        // Each tap is validated against depth and normal agreement with the current pixel.
-        let fx = fract(prevPx.x);
-        let fy = fract(prevPx.y);
-        let px00 = prevPixel;
-        let px10 = prevPixel + vec2<i32>(1, 0);
-        let px01 = prevPixel + vec2<i32>(0, 1);
-        let px11 = prevPixel + vec2<i32>(1, 1);
-
-        let h00 = textureLoad(taaHistIn, px00, 0);
-        let h10 = textureLoad(taaHistIn, px10, 0);
-        let h01 = textureLoad(taaHistIn, px01, 0);
-        let h11 = textureLoad(taaHistIn, px11, 0);
-
-        // Use g-buffer on BOTH sides for per-tap validation.
-        let sg00 = textureLoad(gBufPrev, px00, 0);
-        let sg10 = textureLoad(gBufPrev, px10, 0);
-        let sg01 = textureLoad(gBufPrev, px01, 0);
-        let sg11 = textureLoad(gBufPrev, px11, 0);
-
-        // Depth tolerance sized for blue-noise jitter variance. Sub-pixel jitter
-        // causes stored depth to vary by <~1% on tilted surfaces; 12% is well
-        // above that but still rejects genuine foreground/background mismatches.
-        let depthTol = 0.12;
-        let normTol  = 0.8;  // dot(curNorm, tapNorm) must exceed this
-
-        let v00 = select(0.0, (1.0-fx)*(1.0-fy), abs(sg00.w - curDepth)/max(curDepth,0.01) < depthTol && dot(curNorm, sg00.xyz) > normTol);
-        let v10 = select(0.0, fx      *(1.0-fy), abs(sg10.w - curDepth)/max(curDepth,0.01) < depthTol && dot(curNorm, sg10.xyz) > normTol);
-        let v01 = select(0.0, (1.0-fx)*fy,       abs(sg01.w - curDepth)/max(curDepth,0.01) < depthTol && dot(curNorm, sg01.xyz) > normTol);
-        let v11 = select(0.0, fx      *fy,        abs(sg11.w - curDepth)/max(curDepth,0.01) < depthTol && dot(curNorm, sg11.xyz) > normTol);
-        let vSum = v00 + v10 + v01 + v11;
-
-        // No valid taps — treat as disoccluded
-        if (vSum < 1e-6) {
-            textureStore(taaOut, pixel, vec4<f32>(curColor, 1.0));
-            return;
-        }
-        let inv = 1.0 / vSum;
-        let histColor   = (h00.xyz*v00 + h10.xyz*v10 + h01.xyz*v01 + h11.xyz*v11) * inv;
-        let prevHistLen = (h00.w  *v00 + h10.w  *v10 + h01.w  *v01 + h11.w  *v11) * inv;
-
-        // SVGF-style: pure EMA accumulation, no color-box clamping.
-        // The moments-driven à-trous spatial filter handles all noise removal.
-        // Ghosting is controlled by depth disocclusion (above) + touchedMoved cap.
-
-        let primaryRoughForCap = textureLoad(albedoTex, pixel, 0).w;
-        let roughT = smoothstep(0.05, 0.3, primaryRoughForCap);
-        let maxHist = select(
-            256.0,                    // diffuse: large history
-            mix(8.0, 32.0, roughT),  // specular: 8 smooth → 32 rough
-            isSpec
-        );
-        var effHistLen = min(prevHistLen, maxHist);
-        if (touchedMoved) { effHistLen = min(effHistLen, 4.0); }
-
-        // Minimum alpha: keep filter responsive to lighting changes even at convergence.
-        let alpha = max(1.0 / 64.0, 1.0 / (effHistLen + 1.0));
-        var finalAlpha = alpha;
-        if (isSpec) {
-            let smoothness = 1.0 - clamp(primaryRoughForCap, 0.0, 1.0);
-            let specBoost = mix(1.0, 2.5, smoothness * smoothness);
-            finalAlpha = min(1.0, alpha * specBoost);
-        }
-
-        result = mix(histColor, curColor, finalAlpha);
-        newHistLen = effHistLen + 1.0;
-    }
-
-    // .w = per-pixel history length (used by spatial filter for variance-adaptive sigma)
-    textureStore(taaOut, pixel, vec4<f32>(result, newHistLen));
-}
-)";
-
-// ---------------------------------------------------------------------------
 // WGSL variance-guided à-trous spatial filter
 // Uses the frame count (w channel) to adapt filter strength:
 //   low frame count → more aggressive blur to suppress MC noise
@@ -219,7 +10,7 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // ---------------------------------------------------------------------------
 const char* const svgfAtrousWGSL = R"(
 struct AtrousUni { stepSize: u32, mode: u32, frameCount: f32, _p1: f32, }
-// mode: 0 = combined/diffuse (wide kernel, relaxed), 1 = specular (tight, aggressive firefly clamp)
+// mode: 0 = diffuse (wide kernel, relaxed), 1 = specular (tight, aggressive firefly clamp)
 
 @group(0) @binding(0) var<uniform> uni:      AtrousUni;
 @group(0) @binding(1) var colorIn:  texture_2d<f32>;
@@ -258,9 +49,8 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cMeshId = u32(cHitId.r);
     let cMatId  = i32(cHitId.g);
 
-    // mode: 0 = diffuse, 1 = specular, 2 = diffuse temporal, 3 = specular temporal
-    let isSpec = (uni.mode & 1u) != 0u;
-    let isTemporal = (uni.mode & 2u) != 0u;
+    // mode: 0 = diffuse, 1 = specular
+    let isSpec = uni.mode != 0u;
     let cFC = cSamp.w;
 
     // Sky pixels: pass through
@@ -373,11 +163,7 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let sAlbLum = luminance(sAlbedo);
             let sDemod = smoothstep(0.05, 0.2, sAlbLum);
             let sLum = mix(luminance(sColor), luminance(sIrr), sDemod);
-            // Temporal cleanup: widen luminance sigma to tolerate TAA noise residuals
-            // without creating grid patches, but keep relative scaling so strong
-            // edges (glass/transmission) are still preserved.
-            let finalLumSigma = select(effectiveLumSigma, effectiveLumSigma * 2.0, isTemporal);
-            let w_l = exp(-(sLum - cLum) * (sLum - cLum) / (finalLumSigma * finalLumSigma + 1e-6));
+            let w_l = exp(-(sLum - cLum) * (sLum - cLum) / (effectiveLumSigma * effectiveLumSigma + 1e-6));
 
             // Per-sample outlier clamp: suppress extreme bright samples in filter window.
             // Specular mode: tighter cap to kill fireflies without blurring.

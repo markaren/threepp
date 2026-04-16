@@ -108,9 +108,6 @@ struct WgpuPathTracer::Impl {
     // Temporal variance moments ping-pong (μ, μ² of luminance)
     PingPong moments;
 
-    // TAA history ping-pong
-    PingPong taaHist;
-
     // Diffuse/specular split accumulation
     PingPong diffAccum;
     PingPong specAccum;
@@ -121,10 +118,6 @@ struct WgpuPathTracer::Impl {
     WgpuTexture denoisedDiff;
     WgpuTexture denoisedSpec;
 
-    // TAA history for split channels
-    PingPong taaHistDiff;
-    PingPong taaHistSpec;
-
     // Temporal upscale (TAAU) — full-res ping-pong, active when pixelScale < 0.85
     PingPong upscale;
     WgpuTexture zeroTex;           // 1×1 dummy; bound when upscale inactive
@@ -132,13 +125,10 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer          upscaleUniBuf;
     UpscaleGpuUniforms  upscaleUBO{};
 
-    // Denoiser pipelines
-    WgpuComputePipeline taaPipeline;
+    // Denoiser pipeline (spatial à-trous only)
     WgpuComputePipeline atrousPipeline;
-    WgpuBuffer  taaUniBuf;
     WgpuBuffer  atrousUniBuf;
     bool denoiserEnabled_ = true;
-    bool temporalDenoiserEnabled_ = false;
     bool restirEnabled_ = true;
     bool restirGiEnabled_ = false;
     int spp_ = 1;
@@ -357,10 +347,8 @@ struct WgpuPathTracer::Impl {
                   WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           upscalePipeline(r, upscaleWGSL, "upscale_main"),
           upscaleUniBuf(r, sizeof(UpscaleGpuUniforms)),
-          // Denoiser pipelines
-          taaPipeline(r, taaWGSL, "taa_main"),
+          // Denoiser pipeline (spatial à-trous only)
           atrousPipeline(r, svgfAtrousWGSL, "svgf_atrous_main"),
-          taaUniBuf(r, sizeof(TaaGpuUniforms)),
           atrousUniBuf(r, sizeof(AtrousGpuUniforms)),
           // Storage buffers (small placeholders — grown dynamically on first build)
           bvhNodeBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * BVH4_GPU_U32S * sizeof(uint32_t),
@@ -419,18 +407,12 @@ struct WgpuPathTracer::Impl {
         giResLo.b    = WgpuTexture(r, ww, wh, F::RGBA16Float);
         moments.a    = WgpuTexture(r, ww, wh, F::RGBA16Float);
         moments.b    = WgpuTexture(r, ww, wh, F::RGBA16Float);
-        taaHist.a    = WgpuTexture(r, ww, wh, F::RGBA16Float);
-        taaHist.b    = WgpuTexture(r, ww, wh, F::RGBA16Float);
         diffAccum.a  = WgpuTexture(r, ww, wh, F::RGBA16Float);
         diffAccum.b  = WgpuTexture(r, ww, wh, F::RGBA16Float);
         specAccum.a  = WgpuTexture(r, ww, wh, F::RGBA16Float);
         specAccum.b  = WgpuTexture(r, ww, wh, F::RGBA16Float);
         filtered.a   = WgpuTexture(r, ww, wh, F::RGBA16Float);
         filtered.b   = WgpuTexture(r, ww, wh, F::RGBA16Float);
-        taaHistDiff.a = WgpuTexture(r, ww, wh, F::RGBA16Float);
-        taaHistDiff.b = WgpuTexture(r, ww, wh, F::RGBA16Float);
-        taaHistSpec.a = WgpuTexture(r, ww, wh, F::RGBA16Float);
-        taaHistSpec.b = WgpuTexture(r, ww, wh, F::RGBA16Float);
         upscale.a    = WgpuTexture(r, ww, wh, F::RGBA16Float, STB);
         upscale.b    = WgpuTexture(r, ww, wh, F::RGBA16Float, STB);
         // read/write pointers default to &a / &b — no explicit init needed
@@ -486,18 +468,6 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(33, *giResLo.write);
         rtPipeline.setStorageBuffer(34, pathCounterBuf);
 
-        // TAA pipeline — set ALL bindings upfront
-        taaPipeline.setUniformBuffer(0, taaUniBuf);
-        taaPipeline.setTexture(1, *accum.read);
-        taaPipeline.setTexture(2, *gBuf.write);
-        taaPipeline.setTexture(3, *taaHist.read);
-        taaPipeline.setStorageTexture(4, *taaHist.write);
-        taaPipeline.setTexture(5, *hitMesh.read);
-        taaPipeline.setStorageBufferRead(6, motionMatBuf);
-        taaPipeline.setTexture(7, albedoTex);
-        taaPipeline.setTexture(8, *moments.read);  // temporally accumulated (E[L], E[L²])
-        taaPipeline.setTexture(9, *gBuf.read);      // previous frame g-buffer (depth for revealed-bg check)
-
         // Spatial filter — set ALL bindings upfront
         atrousPipeline.setUniformBuffer(0, atrousUniBuf);
         atrousPipeline.setTexture(1, *accum.read);
@@ -523,7 +493,6 @@ struct WgpuPathTracer::Impl {
         // rebuilt synchronously on the main thread a second time.
         vtPipeline.startAsyncBuild();
         refitPipeline.startAsyncBuild();
-        taaPipeline.startAsyncBuild();
         atrousPipeline.startAsyncBuild();
         upscalePipeline.startAsyncBuild();
         std::cerr << "[PathTracer] Async shader compilation started for helper pipelines" << std::endl;
@@ -535,8 +504,6 @@ struct WgpuPathTracer::Impl {
             accum.b.write(zeros.data(), zeros.size() * sizeof(float));
             gBuf.a.write(zeros.data(), zeros.size() * sizeof(float));
             gBuf.b.write(zeros.data(), zeros.size() * sizeof(float));
-            taaHist.a.write(zeros.data(), zeros.size() * sizeof(float));
-            taaHist.b.write(zeros.data(), zeros.size() * sizeof(float));
             moments.a.write(zeros.data(), zeros.size() * sizeof(float));
             moments.b.write(zeros.data(), zeros.size() * sizeof(float));
         }
@@ -686,11 +653,6 @@ struct WgpuPathTracer::Impl {
         moments.read  = &moments.a;
         moments.write = &moments.b;
 
-        taaHist.a = WgpuTexture(renderer, uw, uh, fmt);
-        taaHist.b = WgpuTexture(renderer, uw, uh, fmt);
-        taaHist.read  = &taaHist.a;
-        taaHist.write = &taaHist.b;
-
         diffAccum.a = WgpuTexture(renderer, uw, uh, fmt);
         diffAccum.b = WgpuTexture(renderer, uw, uh, fmt);
         diffAccum.read  = &diffAccum.a;
@@ -699,17 +661,6 @@ struct WgpuPathTracer::Impl {
         specAccum.b = WgpuTexture(renderer, uw, uh, fmt);
         specAccum.read  = &specAccum.a;
         specAccum.write = &specAccum.b;
-
-        taaHistDiff.a = WgpuTexture(renderer, uw, uh, fmt);
-        taaHistDiff.b = WgpuTexture(renderer, uw, uh, fmt);
-        // Workaround: use displayable textures for TAA history ping-pong
-        // (taaHistDiff/Spec textures have display issues in WebGPU abstraction)
-        taaHistDiff.read  = &taaHistDiff.a;
-        taaHistDiff.write = &taaHistDiff.b;
-        taaHistSpec.a = WgpuTexture(renderer, uw, uh, fmt);
-        taaHistSpec.b = WgpuTexture(renderer, uw, uh, fmt);
-        taaHistSpec.read  = &taaHistSpec.a;
-        taaHistSpec.write = &taaHistSpec.b;
 
         filtered.a = WgpuTexture(renderer, uw, uh, fmt);
         filtered.b = WgpuTexture(renderer, uw, uh, fmt);
@@ -721,12 +672,6 @@ struct WgpuPathTracer::Impl {
         accum.b.write(zeros.data(), zeros.size() * sizeof(float));
         gBuf.a.write(zeros.data(), zeros.size() * sizeof(float));
         gBuf.b.write(zeros.data(), zeros.size() * sizeof(float));
-        taaHist.a.write(zeros.data(), zeros.size() * sizeof(float));
-        taaHist.b.write(zeros.data(), zeros.size() * sizeof(float));
-        taaHistDiff.a.write(zeros.data(), zeros.size() * sizeof(float));
-        taaHistDiff.b.write(zeros.data(), zeros.size() * sizeof(float));
-        taaHistSpec.a.write(zeros.data(), zeros.size() * sizeof(float));
-        taaHistSpec.b.write(zeros.data(), zeros.size() * sizeof(float));
         moments.a.write(zeros.data(), zeros.size() * sizeof(float));
         moments.b.write(zeros.data(), zeros.size() * sizeof(float));
         diffAccum.a.write(zeros.data(), zeros.size() * sizeof(float));
@@ -763,9 +708,6 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(33, *giResLo.write);
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(6, *moments.read);
-        taaPipeline.setTexture(7, albedoTex);
-        taaPipeline.setTexture(8, *moments.read);
-        taaPipeline.setTexture(9, *gBuf.read);  // prev frame depth
 
         // Depth fill bind group references gBuf.write — invalidate on resize
         if (depthFillBG_) { wgpuBindGroupRelease(depthFillBG_); depthFillBG_ = nullptr; }
@@ -1382,7 +1324,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.motionMatBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.meshCapacity) * 16 * sizeof(float),
                                          WgpuBuffer::Usage::Storage);
             d.vtPipeline.setStorageBufferRead(1, d.matrixBuf);
-            d.taaPipeline.setStorageBufferRead(6, d.motionMatBuf);
             d.rtPipeline.setStorageBufferRead(27, d.motionMatBuf);
         }
 
@@ -1797,7 +1738,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.restirParams[0] = d.restirEnabled_ ? 1.f : 0.f;
     u.restirParams[1] = camMoved ? 5.f : 20.f;  // M clamp — low during motion to flush stale reservoirs
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
-    u.restirParams[3] = d.temporalDenoiserEnabled_ ? 1.f : 0.f;  // 1 = raw 1-spp output (no EMA)
+    u.restirParams[3] = 0.f;  // reserved (was rawMode/temporal denoiser flag)
     u.bvhAux[0] = static_cast<uint32_t>(d.bvhRootIdx_);  // traversal root (0=normal, >0=overlay)
 
     int nLights = 0;
@@ -2030,7 +1971,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // over), which produced a perceptible "denoiser pops off" transition once the
     // camera stopped moving. With blue-noise input + 5 passes the filter is
     // detail-preserving at convergence, so always-on is the cleaner trade.
-    if (d.denoiserEnabled_ && d.aovMode_ == 0 && !d.temporalDenoiserEnabled_) {
+    if (d.denoiserEnabled_ && d.aovMode_ == 0) {
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
 
@@ -2061,92 +2002,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         };
 
         // 4 atrous passes — step sizes 1,2,4,8 → effective 16-pixel radius.
-        // Reduced from the SVGF reference 5 because the albedo-similarity edge-stop
-        // (factor 40) and output firefly clamp already suppress the residual noise
-        // that the 5th pass (step=16) would have handled, at 20% less compute.
-        // Input: raw diff/spec accum directly. Scratch: taaHistDiff/Spec.a
-        // (unused outside the temporal path) as ping-pong targets.
-        runAtrous(*d.diffAccum.read, d.denoisedDiff, d.taaHistDiff.a, 0, 4);
-        runAtrous(*d.specAccum.read, d.denoisedSpec, d.taaHistSpec.a, 1, 4);
-
-        displayDiff = &d.denoisedDiff;
-        displaySpec = &d.denoisedSpec;
-    } else if (d.temporalDenoiserEnabled_ && d.denoiserEnabled_ && d.aovMode_ == 0) {
-        // SVGF-style pipeline: 1-spp → temporal → spatial cleanup.
-        const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
-        const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
-
-        // --- Phase 2: Temporal accumulation ---
-        {
-            TaaGpuUniforms tu{};
-            d.fillPrevCamUbo(tu.prevCamOri, tu.prevCamFwd, tu.prevCamRgt, tu.prevCamUp);
-            tu.curCamOri[0] = camPos.x; tu.curCamOri[1] = camPos.y; tu.curCamOri[2] = camPos.z;
-            tu.curCamFwd[0] = fwd.x; tu.curCamFwd[1] = fwd.y; tu.curCamFwd[2] = fwd.z;
-            tu.curCamRgt[0] = rgt.x; tu.curCamRgt[1] = rgt.y; tu.curCamRgt[2] = rgt.z;
-            tu.curCamUp[0]  = up.x;  tu.curCamUp[1]  = up.y;  tu.curCamUp[2]  = up.z;
-            tu.iRes[0] = static_cast<float>(d.width_);
-            tu.iRes[1] = static_cast<float>(d.height_);
-            tu.tanHalfFov[0] = tanHalfFov;
-            tu.frameCount[0] = d.frameCount_;
-            tu.movedMeshBits[0] = movedBits[0];
-            tu.movedMeshBits[1] = movedBits[1];
-            tu.movedMeshBits[2] = movedBits[2];
-            tu.movedMeshBits[3] = movedBits[3];
-
-            // Diffuse temporal: raw diffAccum → taaHistDiff.write
-            tu.frameCount[1] = 0.f;  // mode = diffuse
-            d.taaUniBuf.write(&tu, sizeof(tu));
-            d.taaPipeline.setTexture(1, *d.diffAccum.read);        // raw 1-spp accumulation
-            d.taaPipeline.setTexture(2, *d.gBuf.write);            // current frame g-buffer (after swap: gBuf.write = just-written)
-            d.taaPipeline.setTexture(3, *d.taaHistDiff.read);     // prev temporal history
-            d.taaPipeline.setStorageTexture(4, *d.taaHistDiff.write);
-            d.taaPipeline.setTexture(5, *d.hitMesh.read);
-            d.taaPipeline.setTexture(8, *d.moments.read);
-            d.taaPipeline.setTexture(9, *d.gBuf.read);             // previous frame g-buffer (after swap: gBuf.read = prev frame)
-            d.taaPipeline.dispatch(gx, gy);
-
-            // Specular temporal: raw specAccum → taaHistSpec.write
-            tu.frameCount[1] = 1.f;  // mode = specular
-            d.taaUniBuf.write(&tu, sizeof(tu));
-            d.taaPipeline.setTexture(1, *d.specAccum.read);
-            d.taaPipeline.setTexture(3, *d.taaHistSpec.read);
-            d.taaPipeline.setStorageTexture(4, *d.taaHistSpec.write);
-            d.taaPipeline.setTexture(8, *d.moments.read);
-            d.taaPipeline.dispatch(gx, gy);
-
-            // Swap temporal history ping-pong
-            d.taaHistDiff.swap();
-            d.taaHistSpec.swap();
-        }
-
-        // --- Phase 3: Spatial cleanup on temporal output ---
-        AtrousGpuUniforms au{};
-        au.frameCount = d.frameCount_;
-
-        // Same parity trick as the non-temporal path: last pass always lands in dst.
-        auto runAtrous = [&](WgpuTexture& srcAccum, WgpuTexture& dstDenoised,
-                             WgpuTexture& tmpFiltered, uint32_t mode, int passes) {
-            au.mode = mode;
-            d.atrousPipeline.setTexture(3, *d.gBuf.write);
-            d.atrousPipeline.setTexture(5, *d.hitMesh.read);
-            WgpuTexture* readTex = &srcAccum;
-            for (int p = 0; p < passes; ++p) {
-                WgpuTexture* writeTex = (((passes - 1 - p) % 2) == 0) ? &dstDenoised : &tmpFiltered;
-                au.stepSize = static_cast<uint32_t>(1 << p);
-                d.atrousUniBuf.write(&au, sizeof(au));
-                d.atrousPipeline.setTexture(1, *readTex);
-                d.atrousPipeline.setStorageTexture(2, *writeTex);
-                d.atrousPipeline.dispatch(gx, gy);
-                readTex = writeTex;
-            }
-        };
-
-        // Cleanup reads temporal output (taaHistDiff.read/SpecRead after swap = just-written).
-        // 4 passes (down from 5): temporal input is already substantially denoised
-        // by the EMA, so the cleanup only needs to remove the residual 1-spp noise
-        // that TAA couldn't absorb. Uses filtered.a/b as ping-pong scratch.
-        runAtrous(*d.taaHistDiff.read, d.denoisedDiff, d.filtered.a, 2, 4);  // 2 = diffuse | temporal
-        runAtrous(*d.taaHistSpec.read, d.denoisedSpec, d.filtered.b, 3, 4);  // 3 = specular | temporal
+        // Input: raw diff/spec accum directly. Scratch: filtered.a/b as ping-pong
+        // targets (final pass always lands in denoisedDiff/Spec via parity trick).
+        runAtrous(*d.diffAccum.read, d.denoisedDiff, d.filtered.a, 0, 4);
+        runAtrous(*d.specAccum.read, d.denoisedSpec, d.filtered.b, 1, 4);
 
         displayDiff = &d.denoisedDiff;
         displaySpec = &d.denoisedSpec;
@@ -2373,16 +2232,6 @@ void WgpuPathTracer::setDenoiserEnabled(bool enabled) {
 
 bool WgpuPathTracer::denoiserEnabled() const {
     return pimpl_->denoiserEnabled_;
-}
-
-void WgpuPathTracer::setTemporalDenoiser(bool enabled) {
-    if (pimpl_->temporalDenoiserEnabled_ == enabled) return;
-    pimpl_->temporalDenoiserEnabled_ = enabled;
-    pimpl_->frameCount_ = 0.f;
-}
-
-bool WgpuPathTracer::temporalDenoiser() const {
-    return pimpl_->temporalDenoiserEnabled_;
 }
 
 void WgpuPathTracer::setReSTIREnabled(bool enabled) {

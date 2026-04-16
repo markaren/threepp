@@ -30,7 +30,6 @@ namespace threepp::wgpu_pt {
     std::string buildRefitShader();
 
     // -- Denoiser pipeline fragments -------------------------------------------
-    extern const char* const taaWGSL;
     extern const char* const svgfAtrousWGSL;
 
     // -- Display / depth-fill / temporal-upscale pipeline fragments ------------

@@ -2611,26 +2611,19 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (foveatedSkip || checkerSkip) {
         // Foveated followers read from the leader; checkerboard reads from self.
         let src = select(pixel, fovLeader, foveatedSkip);
-        let rawMode = rt.restirParams.w > 0.5;
-        if (rawMode) {
-            textureStore(accumWrite,     pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
-            textureStore(diffAccumWrite, pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
-            textureStore(specAccumWrite, pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
-        } else {
-            // Cap history on leader-copied samples.  The follower never truly sampled
-            // its own world position — its color is spatially stamped from the leader.
-            // Storing the leader's pixelFC (possibly 256) would give the next fresh
-            // sample only ~0.4% weight at the moment motion ends, burning in whatever
-            // noisy value the last foveated leader produced.  Cap to 4 so the first
-            // post-motion sample gets ~20% weight and any outlier decays in ~20 frames.
-            let leaderAccum = textureLoad(accumRead, src, 0);
-            let leaderDiff  = textureLoad(diffAccumRead, src, 0);
-            let leaderSpec  = textureLoad(specAccumRead, src, 0);
-            let histCap = 4.0;
-            textureStore(accumWrite,     pixel, vec4<f32>(leaderAccum.xyz, min(leaderAccum.w, histCap)));
-            textureStore(diffAccumWrite, pixel, vec4<f32>(leaderDiff.xyz,  min(leaderDiff.w,  histCap)));
-            textureStore(specAccumWrite, pixel, vec4<f32>(leaderSpec.xyz,  min(leaderSpec.w,  histCap)));
-        }
+        // Cap history on leader-copied samples.  The follower never truly sampled
+        // its own world position — its color is spatially stamped from the leader.
+        // Storing the leader's pixelFC (possibly 256) would give the next fresh
+        // sample only ~0.4% weight at the moment motion ends, burning in whatever
+        // noisy value the last foveated leader produced.  Cap to 4 so the first
+        // post-motion sample gets ~20% weight and any outlier decays in ~20 frames.
+        let leaderAccum = textureLoad(accumRead, src, 0);
+        let leaderDiff  = textureLoad(diffAccumRead, src, 0);
+        let leaderSpec  = textureLoad(specAccumRead, src, 0);
+        let histCap = 4.0;
+        textureStore(accumWrite,     pixel, vec4<f32>(leaderAccum.xyz, min(leaderAccum.w, histCap)));
+        textureStore(diffAccumWrite, pixel, vec4<f32>(leaderDiff.xyz,  min(leaderDiff.w,  histCap)));
+        textureStore(specAccumWrite, pixel, vec4<f32>(leaderSpec.xyz,  min(leaderSpec.w,  histCap)));
         textureStore(hitMeshWrite, pixel, textureLoad(hitMeshRead, src, 0));
         textureStore(gBufWrite,    pixel, textureLoad(gBufRead, src, 0));
         textureStore(albedoWrite,  pixel, vec4<f32>(vec3<f32>(0.0), 0.0));
@@ -2719,44 +2712,6 @@ R"(
         textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), 0.0, 0.0));
         textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
         textureStore(albedoWrite, pixel, vec4<f32>(primaryAlbedo, primaryRough));
-        continue;
-    }
-
-    // Raw 1-spp output mode (temporal denoiser pipeline)
-    let rawOutputMode = rt.restirParams.w > 0.5;
-    if (rawOutputMode) {
-        let lum3 = vec3<f32>(0.2126, 0.7152, 0.0722);
-        // NaN guard
-        var sampleClean = select(vec3<f32>(0.0), sample, sample.x == sample.x);
-        // Hard firefly cap
-        let hardCap = 12.0;
-        let rawLum = dot(sampleClean, lum3);
-        if (rawLum > hardCap) { sampleClean = sampleClean * (hardCap / rawLum); }
-
-        // Split diff/spec with clamping
-        let diffSample = select(vec3<f32>(0.0), ptResult.diff, ptResult.diff.x == ptResult.diff.x);
-        let specSample = select(vec3<f32>(0.0), ptResult.spec, ptResult.spec.x == ptResult.spec.x);
-        var dClamped = diffSample;
-        let dLum = dot(diffSample, lum3);
-        if (dLum > hardCap) { dClamped = diffSample * (hardCap / dLum); }
-        let specHardCap = mix(3.0, 8.0, primaryRough);
-        var sClamped = specSample;
-        let sLum = dot(specSample, lum3);
-        if (sLum > specHardCap) { sClamped = specSample * (specHardCap / sLum); }
-
-        let fc = rt.frameCount.x;
-        textureStore(accumWrite, pixel, vec4<f32>(sampleClean, fc));
-        textureStore(diffAccumWrite, pixel, vec4<f32>(dClamped, fc));
-        textureStore(specAccumWrite, pixel, vec4<f32>(sClamped, fc));
-
-        // Raw single-sample moments
-        let sLumMom = dot(sampleClean, lum3);
-        textureStore(momentsWrite, pixel, vec4<f32>(sLumMom, sLumMom * sLumMom, 0.0, 0.0));
-
-        // G-buffer, hit mesh (with touchedMoved in .b), albedo
-        textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), select(0.0, 1.0, touchedMoved), 0.0));
-        textureStore(albedoWrite, pixel, vec4<f32>(primaryAlbedo, primaryRough));
-        textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
         continue;
     }
 

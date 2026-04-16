@@ -55,11 +55,6 @@ namespace threepp {
         void setDenoiserEnabled(bool enabled);
         [[nodiscard]] bool denoiserEnabled() const;
 
-        /// Enable/disable the new temporal denoiser pipeline (1-spp → pre-filter → temporal → cleanup).
-        /// When false (default), uses the legacy EMA-in-RT + spatial-only pipeline.
-        void setTemporalDenoiser(bool enabled);
-        [[nodiscard]] bool temporalDenoiser() const;
-
         /// Enable/disable ReSTIR DI for direct illumination. Default: true.
         void setReSTIREnabled(bool enabled);
         [[nodiscard]] bool restirEnabled() const;

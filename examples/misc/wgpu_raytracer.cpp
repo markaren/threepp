@@ -23,7 +23,6 @@ int main() {
     WgpuPathTracer pathTracer(renderer, canvas.size());
     pathTracer.setEnvIntensity(0.5f);
     pathTracer.setDenoiserEnabled(false);
-    pathTracer.setTemporalDenoiser(false);
     pathTracer.setFoveatedRendering(false);
     pathTracer.setReSTIREnabled(true);
     pathTracer.setReSTIRGIEnabled(false);
@@ -128,7 +127,6 @@ int main() {
     // ---- UI ----
     bool pathTracerOn = true;
     bool denoiserOn = pathTracer.denoiserEnabled();
-    bool temporalDenoiserOn = pathTracer.temporalDenoiser();
     bool restirOn = pathTracer.restirEnabled();
     bool restirGIOn = pathTracer.restirGiEnabled();
     bool animateBox = true;
@@ -171,8 +169,6 @@ int main() {
 
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);
-            if (ImGui::Checkbox("Temporal Denoiser", &temporalDenoiserOn))
-                pathTracer.setTemporalDenoiser(temporalDenoiserOn);
             if (ImGui::Checkbox("ReSTIR DI", &restirOn))
                 pathTracer.setReSTIREnabled(restirOn);
             if (ImGui::Checkbox("ReSTIR GI", &restirGIOn))

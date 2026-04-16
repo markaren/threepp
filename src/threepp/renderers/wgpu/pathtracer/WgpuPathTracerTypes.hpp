@@ -105,16 +105,6 @@ namespace threepp::wgpu_pt {
         float tanHalfFov[4];  // x = tanHalfFov             (16 bytes)
         // total = 160 bytes (16-byte aligned, no padding needed)
     };
-    struct alignas(16) TaaGpuUniforms {
-        float prevCamOri[4], prevCamFwd[4], prevCamRgt[4], prevCamUp[4];
-        float curCamOri[4],  curCamFwd[4],  curCamRgt[4],  curCamUp[4];
-        float iRes[4];          // [0]=w [1]=h [2]=prevJx [3]=prevJy
-        float tanHalfFov[4];
-        float frameCount[4];   // [0]=FC [1]=mode(0=diff,1=spec) [2]=curJx [3]=curJy
-        std::uint32_t movedMeshBits[4];
-    };
-    static_assert(sizeof(TaaGpuUniforms) == 192, "TaaGpuUniforms must be 192 bytes");
-
     struct alignas(16) UpscaleGpuUniforms {
         float prevCamOri[4], prevCamFwd[4], prevCamRgt[4], prevCamUp[4]; // 64 bytes
         float curCamOri[4],  curCamFwd[4],  curCamRgt[4],  curCamUp[4]; // 64 bytes
