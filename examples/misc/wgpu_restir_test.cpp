@@ -366,8 +366,9 @@ int main() {
     WgpuRenderer renderer(canvas);
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
-    pathTracer.setMaxBounces(5);
+    pathTracer.setMaxBounces(4);
     pathTracer.setDenoiserEnabled(true);
+    pathTracer.setTemporalDenoiser(true);
     pathTracer.setReSTIREnabled(true);
     pathTracer.setFoveatedRendering(false);
     pathTracer.setExposure(1.0f);
@@ -412,6 +413,7 @@ int main() {
     bool restirOn = pathTracer.restirEnabled();
     bool restirGiOn = pathTracer.restirGiEnabled();
     bool denoiserOn = pathTracer.denoiserEnabled();
+    bool temporalDenoiserOn = pathTracer.temporalDenoiser();
     bool animating = true;
     bool foveated = pathTracer.foveatedRendering();
     int maxBounces = pathTracer.maxBounces();
@@ -433,6 +435,10 @@ int main() {
         if (ev.key == Key::D) {
             denoiserOn = !denoiserOn;
             pathTracer.setDenoiserEnabled(denoiserOn);
+        }
+        if (ev.key == Key::T) {
+            temporalDenoiserOn = !temporalDenoiserOn;
+            pathTracer.setTemporalDenoiser(temporalDenoiserOn);
         }
         if (ev.key == Key::A) { animating = !animating; }
         if (ev.key == Key::F) {
@@ -467,6 +473,8 @@ int main() {
             pathTracer.setReSTIRGIEnabled(restirGiOn);
         if (ImGui::Checkbox("Denoiser (D)", &denoiserOn))
             pathTracer.setDenoiserEnabled(denoiserOn);
+        if (ImGui::Checkbox("Temporal Denoiser (T)", &temporalDenoiserOn))
+            pathTracer.setTemporalDenoiser(temporalDenoiserOn);
         if (ImGui::Checkbox("Foveated (F)", &foveated))
             pathTracer.setFoveatedRendering(foveated);
         if (ImGui::Checkbox("Animate (A)", &animating)) {}
