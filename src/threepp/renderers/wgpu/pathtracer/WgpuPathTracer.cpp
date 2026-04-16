@@ -181,6 +181,7 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer bvhNodeBuf;
     WgpuBuffer bvhCounterBuf;
     WgpuBuffer refitMetaBuf;
+    WgpuBuffer pathCounterBuf;  // atomic<u32> work-queue head for persistent-thread path regeneration
     WgpuBuffer objTriBuf;
     WgpuBuffer objTriBuf2;  // overflow buffer for large scenes
     int objTriSplit_ = 0;   // split point: tris [0, split) in buf1, [split, count) in buf2
@@ -368,6 +369,7 @@ struct WgpuPathTracer::Impl {
                         WgpuBuffer::Usage::Storage),
           refitMetaBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * BVH4_REFIT_INTS * sizeof(int32_t),
                        WgpuBuffer::Usage::Storage),
+          pathCounterBuf(r, sizeof(uint32_t), WgpuBuffer::Usage::Storage),
           objTriBuf(r, static_cast<size_t>(INIT_TRI_CAP) * 32 * sizeof(float),
                     WgpuBuffer::Usage::Storage),
           objTriBuf2(r, 128u, WgpuBuffer::Usage::Storage),  // placeholder — grown when needed
@@ -482,6 +484,7 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageTexture(31, *giResW.write);
         rtPipeline.setTexture(32, *giResLo.read);
         rtPipeline.setStorageTexture(33, *giResLo.write);
+        rtPipeline.setStorageBuffer(34, pathCounterBuf);
 
         // TAA pipeline — set ALL bindings upfront
         taaPipeline.setUniformBuffer(0, taaUniBuf);
@@ -1905,8 +1908,13 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.frameCount_ = 0.f;
     }
 
-    const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
-    const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
+    // Persistent-thread dispatch size.  Fixed count (not pixel-proportional):
+    // we want enough workgroups to saturate the GPU but few enough that each
+    // thread pulls multiple pixels from the queue (→ within-warp rebalancing).
+    // 1024 workgroups × 64 threads = 65k threads.  On 1080p (2M pixels) that's
+    // ~31 paths per thread; threads finishing short paths early pull more work
+    // while warp-mates continue tracing long paths, reducing idle lanes.
+    constexpr uint32_t rtWorkgroups = 1024u;
 
     for (int sampleIdx = 0; sampleIdx < d.spp_; ++sampleIdx) {
 
@@ -1947,10 +1955,16 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 }
             }
 
+            // Reset the path-regeneration work queue counter to 0 so this
+            // dispatch starts pulling pixel indices from the beginning.
+            // (Each sample dispatch is an independent traversal of all pixels.)
+            const uint32_t counterZero = 0u;
+            d.pathCounterBuf.write(&counterZero, sizeof(counterZero));
+
             // Ray trace
             passDesc.label = WGPUStringView{"rt_pass", WGPU_STRLEN};
             WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
-            activePipeline.encode(pass, gx, gy);
+            activePipeline.encode(pass, rtWorkgroups, 1u);
             wgpuComputePassEncoderEnd(pass);
             wgpuComputePassEncoderRelease(pass);
 

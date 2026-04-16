@@ -88,6 +88,12 @@ struct Bvh4NodeGpu {
 @group(0) @binding(31) var giResWWrite:  texture_storage_2d<rgba32float, write>;
 @group(0) @binding(32) var giResLoRead:  texture_2d<f32>;
 @group(0) @binding(33) var giResLoWrite: texture_storage_2d<rgba16float, write>;
+// Persistent-thread work queue: one atomic<u32> counter.  Threads pull pixel
+// indices by atomicAdd(1) until the counter exceeds width*height, at which
+// point the thread exits.  Dispatch size is fixed (not proportional to screen
+// resolution), so threads that finish a short path immediately grab the next
+// work unit rather than idling for warp-mates tracing long paths.
+@group(0) @binding(34) var<storage, read_write> pathCounter: atomic<u32>;
 
 const MAX_TEX_SLOTS: i32 = 1024;
 const EMPTY_CHILD: i32 = -2147483648;  // INT_MIN — sentinel for unused BVH4 child slots
@@ -2479,12 +2485,19 @@ R"(
 const char* const csPathTraceWGSL3 = R"(
 @compute @workgroup_size(8, 8)
 fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let pixel = vec2<i32>(i32(gid.x), i32(gid.y));
     let res   = rt.iRes.xy;
-    if (f32(pixel.x) >= res.x || f32(pixel.y) >= res.y) { return; }
+    let totalPixels = u32(res.x) * u32(res.y);
+    let resXu = u32(res.x);
+    // Persistent-thread work-stealing loop.  Each iteration claims one pixel
+    // from the global queue.  Replaces the previous 1-thread-per-pixel mapping
+    // where a thread tracing a short path idled while warp-mates continued.
+    loop {
+        let pixelIdx = atomicAdd(&pathCounter, 1u);
+        if (pixelIdx >= totalPixels) { break; }
+        let pixel = vec2<i32>(i32(pixelIdx % resXu), i32(pixelIdx / resXu));
 
-    let fc         = u32(rt.frameCount.x);
-    let foveatedOn = rt.params.z > 0.5;
+        let fc         = u32(rt.frameCount.x);
+        let foveatedOn = rt.params.z > 0.5;
 
     // Don't foveate sky/env-map pixels — they're cheap to trace (BVH miss)
     // and skipping creates visible zone boundaries in uniform backgrounds.
@@ -2631,7 +2644,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             textureStore(giResWWrite,  pixel, textureLoad(giResWRead,  src, 0));
             textureStore(giResLoWrite, pixel, textureLoad(giResLoRead, src, 0));
         }
-        return;
+        continue;
     }
 )"
 R"(
@@ -2659,13 +2672,13 @@ R"(
     // (depth scale 4, albedo-similarity stop) tolerate. TAA bilinear history
     // fetch absorbs the worldPos sub-pixel mismatch, accumulating correctly
     // toward the true super-sampled mean.
-    bnInit(gid.x, gid.y, fc);
+    bnInit(u32(pixel.x), u32(pixel.y), fc);
     let camBn = bnNext2d();
     let jx = (camBn.x - 0.5) * 0.75;
     let jy = (camBn.y - 0.5) * 0.75;
     // PCG seed kept for the many integrator dims that don't yet use BN
     // (RR termination, lobe selection, ReSTIR M-sampling, etc.).
-    var seed = pcg(pcg(gid.x + gid.y * 65537u) + fc * 12979u);
+    var seed = pcg(pcg(u32(pixel.x) + u32(pixel.y) * 65537u) + fc * 12979u);
 
     let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5 + jx, f32(pixel.y) + 0.5 + jy), res);
     var primaryMeshIdx: u32;
@@ -2706,7 +2719,7 @@ R"(
         textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), 0.0, 0.0));
         textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
         textureStore(albedoWrite, pixel, vec4<f32>(primaryAlbedo, primaryRough));
-        return;
+        continue;
     }
 
     // Raw 1-spp output mode (temporal denoiser pipeline)
@@ -2744,7 +2757,7 @@ R"(
         textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), select(0.0, 1.0, touchedMoved), 0.0));
         textureStore(albedoWrite, pixel, vec4<f32>(primaryAlbedo, primaryRough));
         textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
-        return;
+        continue;
     }
 
     let prev     = textureLoad(accumRead, pixel, 0);
@@ -3022,6 +3035,7 @@ R"(
     textureStore(albedoWrite,  pixel, vec4<f32>(primaryAlbedo, primaryRough));
 
     textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
+    }  // end of work-stealing loop
 }
 )";
 
