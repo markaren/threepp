@@ -2553,40 +2553,16 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 )"
 R"(
-    // --- Adaptive bounce termination for converged pixels ---
-    // Rough diffuse pixels (matClass==2) have low-frequency indirect illumination —
-    // once enough frames have accumulated, dropping to 1 bounce is visually lossless.
-    // Specular/glossy pixels (matClass 0/1) are view-dependent and must keep full bounces.
-    // Using matClass (not variance) avoids the variance threshold mapping onto the
-    // roughness texture and creating a material-correlated brightness pattern.
-    // Camera/mesh motion resets fc to 0, automatically re-enabling full bounces.
-    var varianceReducedBounces = maxBounces;
-
     // AOV mode: only need primary-hit geometry data — skip all secondary bounces.
-    // Exception: mode 6 (adaptive bounce vis) must let the reduction logic run first
-    // so we can visualize what would actually be reduced.
+    // Mode 6 also caps to 1 bounce (geometry is all the heatmap needs).
+    var varianceReducedBounces = maxBounces;
     let aovMode = i32(rt.emissiveInfo.w);
-    if (aovMode > 0 && aovMode != 6) { varianceReducedBounces = 1; }
+    if (aovMode > 0) { varianceReducedBounces = 1; }
 
-    // Only reduce rough diffuse (matClass==2) — specular/glossy/glass are view-dependent
-    // and must keep full bounces. Sky pixels (matClass==3) are already cheap.
-    // Use per-pixel history length (accumRead.w) not global fc — global fc doesn't reset
-    // on camera move, so it would incorrectly reduce bounces during motion.
-    // Guard forceReset and camMoved: accumRead.w is stale on these frames (holds the
-    // previous scene's pixelFC), so we must not trust it until accumulation has written
-    // fresh values.
+    // pixelHistory and camMovedNow are consumed by the AOV mode 6 eligibility
+    // check below.
     let pixelHistory = textureLoad(accumRead, pixel, 0).w;
-    let forceResetNow = (u32(rt.params.w) & 1u) != 0u;
-    let camMovedNow   = (u32(rt.params.w) & 2u) != 0u;
-    if (pixelHistory > 32.0 && matClass >= 1u && !forceResetNow && !camMovedNow && varianceReducedBounces > 1) {
-        varianceReducedBounces = 1;
-    }
-    // wouldReduce: true when the adaptive reduction actually fired this pixel.
-    // Used only by the non-AOV accumulation path; AOV mode 6 recomputes eligibility
-    // inline using primaryRough (actual texture-modulated roughness) after pathTrace.
-    let wouldReduce = varianceReducedBounces < maxBounces;
-    // For AOV mode 6: force 1 bounce (geometry data is all we need for the heatmap).
-    if (aovMode == 6) { varianceReducedBounces = 1; }
+    let camMovedNow  = (u32(rt.params.w) & 2u) != 0u;
 
     // Spatio-temporal blue noise (Heitz & Belcour 2019):
     // R2 sequence advances each frame for temporal stratification (unchanged).
