@@ -1791,7 +1791,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.emissiveInfo[2] = d.fireflyCap_;  // luminance cap for indirect MIS contributions
     u.emissiveInfo[3] = static_cast<float>(d.aovMode_);  // AOV visualization mode
     u.spp[0] = d.restirGiEnabled_ ? 1.f : 0.f;
-    u.spp[2] = d.denoiserEnabled_ ? 1.f : 0.f;  // any denoiser active → disable sub-pixel jitter
     u.restirParams[0] = d.restirEnabled_ ? 1.f : 0.f;
     u.restirParams[1] = camMoved ? 5.f : 20.f;  // M clamp — low during motion to flush stale reservoirs
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap

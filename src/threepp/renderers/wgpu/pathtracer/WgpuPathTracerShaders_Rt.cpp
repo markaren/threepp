@@ -1801,9 +1801,10 @@ R"(
                     let ndcY = dy / (dz * thf);
                     let prevU = (ndcX * 0.5 + 0.5) * rt.iRes.x;
                     let prevV = (0.5 - ndcY * 0.5) * rt.iRes.y;
-                    // Round to nearest pixel (not truncate) to cancel jitter bias —
-                    // Primary ray is pixel-center (no jitter), so prevU/V land at i+0.5.
-                    // floor() gives the correct pixel index; +0.5 would overshoot by one.
+                    // Primary rays are jittered within ±0.375 of pixel centre;
+                    // prevU/V land near (i + 0.5 ± 0.375). floor() rounds to the
+                    // nearest pixel index below that — correct in all cases since
+                    // jitter never pushes prevU across an integer boundary.
                     let prevPx = vec2<i32>(i32(floor(prevU)), i32(floor(prevV)));
 
                     if (prevPx.x >= 0 && prevPx.y >= 0 &&
@@ -2565,7 +2566,6 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // makes stale checkerboard pixels visually wrong (foreground/background mismatch).
     // When the temporal denoiser is active, skipped pixels write a -1 sentinel so TAA
     // passes through its history cleanly (no stale data blended in).
-    let denoiserOn = rt.spp.z > 0.5;
     let camTranslated = length(rt.camOri.xyz - rt.prevCamOri.xyz) > 1e-5;
     let camMovedEarly = (u32(rt.params.w) & 2u) != 0u;  // params.w bit 1 = camMoved
     // Checkerboard skip is redundant when foveated coarsening is active (both
@@ -2635,12 +2635,18 @@ R"(
     // (defined in csCommonWGSL): R2/golden-ratio QMC across frames+dims, with a
     // per-pixel Cranley-Patterson rotation that has blue-noise spectral falloff.
     // Sub-pixel jitter centred on pixel centre (0.5, 0.5), range ±0.375.
-    // Disabled when the denoiser is active: jitter misaligns noisy colour vs.
-    // the denoiser's edge-stopping data (normals/depth), causing shimmer.
+    //
+    // Jitter is now enabled even with the denoiser active: the blue-noise
+    // distribution keeps sub-pixel offsets spatio-temporally decorrelated, so
+    // neighbouring pixels' stored gbuf values differ by bounded (~1% depth,
+    // <5° normal on curved surfaces) amounts that the à-trous edge-stops
+    // (depth scale 4, albedo-similarity stop) tolerate. TAA bilinear history
+    // fetch absorbs the worldPos sub-pixel mismatch, accumulating correctly
+    // toward the true super-sampled mean.
     bnInit(gid.x, gid.y, fc);
     let camBn = bnNext2d();
-    let jx = select((camBn.x - 0.5) * 0.75, 0.0, denoiserOn);
-    let jy = select((camBn.y - 0.5) * 0.75, 0.0, denoiserOn);
+    let jx = (camBn.x - 0.5) * 0.75;
+    let jy = (camBn.y - 0.5) * 0.75;
     // PCG seed kept for the many integrator dims that don't yet use BN
     // (RR termination, lobe selection, ReSTIR M-sampling, etc.).
     var seed = pcg(pcg(gid.x + gid.y * 65537u) + fc * 12979u);

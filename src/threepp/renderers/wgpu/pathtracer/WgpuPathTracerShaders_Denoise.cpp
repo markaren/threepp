@@ -79,8 +79,9 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // path tracing where every sample is independently noisy regardless of history.
 
     // Reproject current pixel into previous frame's screen space.
-    // Rays fire through pixel centers (no jitter with denoiser active), so
-    // depths are consistent across frames and reprojection is exact for static scenes.
+    // With sub-pixel jitter enabled, the stored depth corresponds to a jittered
+    // sub-position rather than the pixel centre; the resulting worldPos is off
+    // by sub-pixel magnitude.  Bilinear history fetch (below) absorbs it.
     let aspect = res.x / res.y;
     let ndc = vec2<f32>((f32(pixel.x) + 0.5) / res.x * 2.0 - 1.0,
                          1.0 - (f32(pixel.y) + 0.5) / res.y * 2.0);
@@ -123,8 +124,9 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // 1. Standard: prevZ vs curZDepth — detects when current surface wasn't visible before.
     // 2. Revealed: current surface is much deeper than previous surface at prevPixel
     //    — detects background pixels revealed when a foreground object moved away.
-    //    With no jitter the G-buffer depths are stable frame-to-frame, so this
-    //    check is reliable in all motion states (no false positives at silhouettes).
+    //    With blue-noise sub-pixel jitter, G-buffer depths vary by sub-pixel
+    //    magnitude frame-to-frame; the 15% threshold is well above that noise
+    //    floor, so silhouette false-positives remain rare.
     let curZDepth = dot(worldPos - taa.curCamOri.xyz, taa.curCamFwd.xyz);
     let depthRatio = abs(prevZ - curZDepth) / max(curZDepth, 0.01);
     let prevFrameDepth = textureLoad(gBufPrev, prevPixel, 0).w;
@@ -150,14 +152,15 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let h01 = textureLoad(taaHistIn, px01, 0);
         let h11 = textureLoad(taaHistIn, px11, 0);
 
-        // Use g-buffer on BOTH sides for per-tap validation (no jitter with denoiser active).
+        // Use g-buffer on BOTH sides for per-tap validation.
         let sg00 = textureLoad(gBufPrev, px00, 0);
         let sg10 = textureLoad(gBufPrev, px10, 0);
         let sg01 = textureLoad(gBufPrev, px01, 0);
         let sg11 = textureLoad(gBufPrev, px11, 0);
 
-        // Without jitter, depths are perfectly consistent between frames for static surfaces,
-        // so we can use a tighter depth tolerance for sharper edge stopping.
+        // Depth tolerance sized for blue-noise jitter variance. Sub-pixel jitter
+        // causes stored depth to vary by <~1% on tilted surfaces; 12% is well
+        // above that but still rejects genuine foreground/background mismatches.
         let depthTol = 0.12;
         let normTol  = 0.8;  // dot(curNorm, tapNorm) must exceed this
 
@@ -355,8 +358,8 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let diffNormPow = mix(2.0, 128.0, smoothstep(0.0, 24.0, cFC));
             let normPow = select(diffNormPow, specNormPow, isSpec);
             let w_n = pow(max(0.0, dot(cNorm, sNorm)), normPow);
-            // Depth edge-stopping: rays fire through pixel centers (no jitter),
-            // so depths are stable frame-to-frame — no patch artifacts.
+            // Depth edge-stopping: sub-pixel blue-noise jitter contributes
+            // <1% depth variance on typical surfaces, well inside the falloff.
             let depthBase = select(4.0, mix(1.0, 3.0, cRough), isSpec);
             let depthScale = mix(1.0, depthBase, smoothstep(0.0, 32.0, cFC));
             let w_d = exp(-abs(cDepth - sGB.w) * depthScale / (cDepth + 0.01));
