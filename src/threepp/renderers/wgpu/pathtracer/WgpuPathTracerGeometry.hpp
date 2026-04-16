@@ -5,7 +5,7 @@
 // from the expanded RtMeshEntry list. Output buffers are sampled by the WGSL
 // path tracer as paged textures.
 
-#include "WgpuPathTracerTypes.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerTypes.hpp"
 
 #include <unordered_map>
 #include <vector>

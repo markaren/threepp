@@ -1,6 +1,6 @@
-#include "WgpuPathTracerAtlas.hpp"
-#include "WgpuPathTracerBCn.hpp"
-#include "WgpuPathTracerTypes.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerAtlas.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerTypes.hpp"
 
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"

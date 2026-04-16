@@ -1,5 +1,5 @@
-#include "WgpuPathTracerBvh.hpp"
-#include "WgpuPathTracerGeometry.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBvh.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerGeometry.hpp"
 
 #include <algorithm>
 #include <array>

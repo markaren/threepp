@@ -5,7 +5,7 @@
 // collapses it to a 4-way tree (BVH4), and serializes it into the GPU buffer
 // layout sampled by the WGSL traversal kernel.
 
-#include "WgpuPathTracerTypes.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerTypes.hpp"
 
 #include <cstdint>
 #include <vector>

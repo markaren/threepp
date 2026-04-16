@@ -612,15 +612,16 @@ if (THREEPP_WITH_WGPU)
             "threepp/renderers/wgpu/WgpuComputePipeline.cpp"
             "threepp/renderers/wgpu/EffectComposer.cpp"
             "threepp/renderers/wgpu/ShaderPass.cpp"
-            "threepp/renderers/wgpu/WgpuPathTracer.cpp"
-            "threepp/renderers/wgpu/WgpuPathTracerBCn.cpp"
-            "threepp/renderers/wgpu/WgpuPathTracerAtlas.cpp"
-            "threepp/renderers/wgpu/WgpuPathTracerGeometry.cpp"
-            "threepp/renderers/wgpu/WgpuPathTracerBvh.cpp"
-            "threepp/renderers/wgpu/WgpuPathTracerShaders_Display.cpp"
-            "threepp/renderers/wgpu/WgpuPathTracerShaders_Denoise.cpp"
-            "threepp/renderers/wgpu/WgpuPathTracerShaders_VtRefit.cpp"
-            "threepp/renderers/wgpu/WgpuPathTracerShaders_Rt.cpp"
+
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracer.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerAtlas.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerGeometry.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBvh.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders_Display.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders_Denoise.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders_VtRefit.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders_Rt.cpp"
     )
     if (APPLE)
         list(APPEND sources

@@ -191,7 +191,7 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (touchedMoved) { effHistLen = min(effHistLen, 4.0); }
 
         // Minimum alpha: keep filter responsive to lighting changes even at convergence.
-        let alpha = max(1.0 / 32.0, 1.0 / (effHistLen + 1.0));
+        let alpha = max(1.0 / 64.0, 1.0 / (effHistLen + 1.0));
         var finalAlpha = alpha;
         if (isSpec) {
             let smoothness = 1.0 - clamp(primaryRoughForCap, 0.0, 1.0);
@@ -361,7 +361,7 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let moments = textureLoad(momentsBuf, pixel, 0).xy;
     let temporalVar = max(moments.y - moments.x * moments.x, 0.0);
     let baseSigma = select(0.7, mix(0.5, 2.0, cRough), isSpec);
-    let lumSigma  = max(select(0.15, 0.4, isSpec), sqrt(temporalVar) * baseSigma);
+    let lumSigma  = max(select(0.08, 0.2, isSpec), sqrt(temporalVar) * baseSigma);
 
     // 5×5 bilateral filter — tracks both demodulated irradiance and raw color
     let kw = array<f32, 5>(1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
@@ -381,8 +381,8 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     {
         let w_s0      = kw[2] * kw[2];
         let cIrrDemod = demod(cColor, cAlbedo);  // consistent with loop: always demodulate
-        let specCap0  = mix(4.0, 10.0, cRough);
-        let filterCap0 = select(12.0, specCap0, isSpec);
+        let specCap0  = mix(6.0, 16.0, cRough);
+        let filterCap0 = select(20.0, specCap0, isSpec);
         let cIrrLum   = luminance(cIrrDemod);
         let cColLum   = luminance(cColor);
         var cIrrC  = cIrrDemod;
@@ -440,7 +440,7 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // residual multiplier at convergence so the filter retains smoothing
             // power for residual bounce noise. Cross-edge bleed is the job of
             // the geometric checks above, not luminance.
-            let lumBoost = mix(4.0, 1.5, smoothstep(0.0, 64.0, cFC));
+            let lumBoost = mix(4.0, 1.0, smoothstep(0.0, 64.0, cFC));
             let effectiveLumSigma = lumSigma * lumBoost;
             let sAlbLum = luminance(sAlbedo);
             let sDemod = smoothstep(0.05, 0.2, sAlbLum);
@@ -448,7 +448,7 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Temporal cleanup: widen luminance sigma to tolerate TAA noise residuals
             // without creating grid patches, but keep relative scaling so strong
             // edges (glass/transmission) are still preserved.
-            let finalLumSigma = select(effectiveLumSigma, effectiveLumSigma * 3.0, isTemporal);
+            let finalLumSigma = select(effectiveLumSigma, effectiveLumSigma * 2.0, isTemporal);
             let w_l = exp(-(sLum - cLum) * (sLum - cLum) / (finalLumSigma * finalLumSigma + 1e-6));
 
             // Per-sample outlier clamp: suppress extreme bright samples in filter window.
@@ -461,8 +461,8 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // higher values (wider lobe, more variance), glossy needs tight cap.
             // Aggressive clamping is critical since we don't have TAA temporal smoothing
             // on the specular split buffer.
-            let specCap = mix(4.0, 10.0, cRough);
-            let filterCap = select(12.0, specCap, isSpec);
+            let specCap = mix(6.0, 16.0, cRough);
+            let filterCap = select(20.0, specCap, isSpec);
             if (sIrrLum > filterCap) { sIrrClamped  = sIrr  * (filterCap / sIrrLum); }
             if (sColLum > filterCap) { sColorClamped = sColor * (filterCap / sColLum); }
 

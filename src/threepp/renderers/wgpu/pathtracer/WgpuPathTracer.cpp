@@ -5,13 +5,13 @@
 #include "threepp/renderers/wgpu/WgpuComputePipeline.hpp"
 #include "threepp/renderers/wgpu/WgpuTexture.hpp"
 
-#include "WgpuPathTracerTypes.hpp"
-#include "WgpuPathTracerBCn.hpp"
-#include "WgpuPathTracerEnvCdf.hpp"
-#include "WgpuPathTracerAtlas.hpp"
-#include "WgpuPathTracerGeometry.hpp"
-#include "WgpuPathTracerBvh.hpp"
-#include "WgpuPathTracerShaders.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerAtlas.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBvh.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerEnvCdf.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerGeometry.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerTypes.hpp"
 
 #include <tuple>
 

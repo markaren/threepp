@@ -2588,9 +2588,19 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             textureStore(diffAccumWrite, pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
             textureStore(specAccumWrite, pixel, vec4<f32>(vec3<f32>(0.0), -1.0));
         } else {
-            textureStore(accumWrite,     pixel, textureLoad(accumRead, src, 0));
-            textureStore(diffAccumWrite, pixel, textureLoad(diffAccumRead, src, 0));
-            textureStore(specAccumWrite, pixel, textureLoad(specAccumRead, src, 0));
+            // Cap history on leader-copied samples.  The follower never truly sampled
+            // its own world position — its color is spatially stamped from the leader.
+            // Storing the leader's pixelFC (possibly 256) would give the next fresh
+            // sample only ~0.4% weight at the moment motion ends, burning in whatever
+            // noisy value the last foveated leader produced.  Cap to 4 so the first
+            // post-motion sample gets ~20% weight and any outlier decays in ~20 frames.
+            let leaderAccum = textureLoad(accumRead, src, 0);
+            let leaderDiff  = textureLoad(diffAccumRead, src, 0);
+            let leaderSpec  = textureLoad(specAccumRead, src, 0);
+            let histCap = 4.0;
+            textureStore(accumWrite,     pixel, vec4<f32>(leaderAccum.xyz, min(leaderAccum.w, histCap)));
+            textureStore(diffAccumWrite, pixel, vec4<f32>(leaderDiff.xyz,  min(leaderDiff.w,  histCap)));
+            textureStore(specAccumWrite, pixel, vec4<f32>(leaderSpec.xyz,  min(leaderSpec.w,  histCap)));
         }
         textureStore(hitMeshWrite, pixel, textureLoad(hitMeshRead, src, 0));
         textureStore(gBufWrite,    pixel, textureLoad(gBufRead, src, 0));

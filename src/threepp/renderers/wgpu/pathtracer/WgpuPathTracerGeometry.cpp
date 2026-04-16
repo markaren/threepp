@@ -1,4 +1,4 @@
-#include "WgpuPathTracerGeometry.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerGeometry.hpp"
 #include "WgpuPathTracerAtlas.hpp"
 
 #include "threepp/core/BufferAttribute.hpp"

@@ -1,4 +1,4 @@
-#include "WgpuPathTracerBCn.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.hpp"
 
 #include <cstring>
 
