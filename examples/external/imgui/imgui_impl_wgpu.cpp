@@ -65,9 +65,9 @@
 #define IMGUI_IMPL_WEBGPU_BACKEND_WGPU_EMSCRIPTEN
 #endif
 
-#ifdef IMGUI_IMPL_WEBGPU_BACKEND_DAWN
 // Dawn renamed WGPUProgrammableStageDescriptor to WGPUComputeState (see: https://github.com/webgpu-native/webgpu-headers/pull/413)
-// Using type alias until WGPU adopts the same naming convention (#8369)
+// wgpu-native v29+ adopted the same rename. Keep alias for Emscripten legacy WGPU path which still uses the old name.
+#if !defined(IMGUI_IMPL_WEBGPU_BACKEND_WGPU_EMSCRIPTEN)
 using WGPUProgrammableStageDescriptor = WGPUComputeState;
 #endif
 
@@ -708,7 +708,7 @@ bool ImGui_ImplWGPU_CreateDeviceObjects()
     // Vertex input configuration
     WGPUVertexAttribute attribute_desc[] =
     {
-#ifdef IMGUI_IMPL_WEBGPU_BACKEND_DAWN
+#if !defined(IMGUI_IMPL_WEBGPU_BACKEND_WGPU_EMSCRIPTEN)
         { nullptr, WGPUVertexFormat_Float32x2, (uint64_t)offsetof(ImDrawVert, pos), 0 },
         { nullptr, WGPUVertexFormat_Float32x2, (uint64_t)offsetof(ImDrawVert, uv),  1 },
         { nullptr, WGPUVertexFormat_Unorm8x4,  (uint64_t)offsetof(ImDrawVert, col), 2 },
@@ -921,7 +921,7 @@ void ImGui_ImplWGPU_NewFrame()
 
 bool ImGui_ImplWGPU_IsSurfaceStatusError(WGPUSurfaceGetCurrentTextureStatus status)
 {
-#if defined(IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
+#if !defined(IMGUI_IMPL_WEBGPU_BACKEND_WGPU_EMSCRIPTEN)
     return (status == WGPUSurfaceGetCurrentTextureStatus_Error);
 #else
     return (status == WGPUSurfaceGetCurrentTextureStatus_OutOfMemory || status == WGPUSurfaceGetCurrentTextureStatus_DeviceLost);
