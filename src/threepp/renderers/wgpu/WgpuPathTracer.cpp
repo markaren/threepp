@@ -7925,6 +7925,7 @@ int WgpuPathTracer::aovMode() const {
 }
 
 void WgpuPathTracer::setSize(std::pair<int, int> size) {
+    if (size.first <= 0 || size.second <= 0) return; // minimised — skip texture recreation
     pimpl_->fullWidth_ = size.first;
     pimpl_->fullHeight_ = size.second;
     const int sw = std::max(1, static_cast<int>(size.first * pimpl_->pixelScale_));

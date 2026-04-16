@@ -1151,10 +1151,27 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
         if (!surface) return false;
 
         wgpuSurfaceGetCurrentTexture(surface, &frame_.surfaceTexture);
+        if (frame_.surfaceTexture.status == WGPUSurfaceGetCurrentTextureStatus_Occluded) {
+            // Window not visible — release the acquired texture slot back to the
+            // swap chain via present, otherwise subsequent calls time out.
+            if (frame_.surfaceTexture.texture) {
+                wgpuTextureRelease(frame_.surfaceTexture.texture);
+                frame_.surfaceTexture.texture = nullptr;
+            }
+            wgpuSurfacePresent(surface);
+            return false;
+        }
         if (frame_.surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
             frame_.surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
-            std::cerr << "WgpuRenderer: Failed to acquire surface texture (status "
-                      << static_cast<int>(frame_.surfaceTexture.status) << ")" << std::endl;
+            // Outdated/Lost means the surface needs reconfiguring (e.g. after restore).
+            const auto s = frame_.surfaceTexture.status;
+            if (s == WGPUSurfaceGetCurrentTextureStatus_Outdated ||
+                s == WGPUSurfaceGetCurrentTextureStatus_Lost) {
+                configureSurface();
+            } else {
+                std::cerr << "WgpuRenderer: Failed to acquire surface texture (status "
+                          << static_cast<int>(s) << ")" << std::endl;
+            }
             return false;
         }
 
