@@ -37,11 +37,10 @@ int main(int argc, char** argv) {
     pathTracer.setEnvIntensity(1.0f);
     pathTracer.setExposure(1.0f);
     pathTracer.setDenoiserEnabled(false);
-    pathTracer.setFoveatedRendering(true);
+    pathTracer.setFoveatedRendering(false);
     pathTracer.setReSTIREnabled(false);
     pathTracer.setReSTIRGIEnabled(false);
     pathTracer.setMaxBounces(3);
-    pathTracer.setFoveatedRendering(true);
 
     RGBELoader imgLoader;
     auto env = imgLoader.load(modelFolder / "san_giuseppe_bridge_4k.hdr", false);
