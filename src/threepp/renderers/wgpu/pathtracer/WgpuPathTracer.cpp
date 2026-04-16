@@ -161,7 +161,7 @@ struct WgpuPathTracer::Impl {
     int fullWidth_ = 0;   // unscaled window size
     int fullHeight_ = 0;
 
-    // Previous camera vectors for TAA reprojection
+    // Previous camera vectors for accumulation + TAAU reprojection
     float prevCamOri_[3] = {0.f, 0.f, 0.f};
     float prevCamFwd_[3] = {0.f, 0.f, -1.f};
     float prevCamRgt_[3] = {1.f, 0.f, 0.f};
@@ -176,7 +176,7 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer objTriBuf2;  // overflow buffer for large scenes
     int objTriSplit_ = 0;   // split point: tris [0, split) in buf1, [split, count) in buf2
     WgpuBuffer matrixBuf;
-    WgpuBuffer motionMatBuf;            // per-mesh motion matrices for TAA reprojection
+    WgpuBuffer motionMatBuf;            // per-mesh motion matrices for RT accum reprojection
     std::vector<float> motionMatCpu;    // CPU staging: prevWorld * inverse(curWorld) per mesh
     WgpuBuffer leafIndexBuf;
 
@@ -304,7 +304,7 @@ struct WgpuPathTracer::Impl {
     }
 
     // Pack the stored previous-frame camera vectors into any UBO struct that has
-    // float[4] prevCamOri/Fwd/Rgt/Up fields (RT, TAA, and upscale UBOs all share this layout).
+    // float[4] prevCamOri/Fwd/Rgt/Up fields (RT and upscale UBOs share this layout).
     void fillPrevCamUbo(float* ori4, float* fwd4, float* rgt4, float* up4) const {
         ori4[0] = prevCamOri_[0]; ori4[1] = prevCamOri_[1]; ori4[2] = prevCamOri_[2]; ori4[3] = 0.f;
         fwd4[0] = prevCamFwd_[0]; fwd4[1] = prevCamFwd_[1]; fwd4[2] = prevCamFwd_[2]; fwd4[3] = 0.f;
@@ -765,8 +765,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     if (camMoved) {
         d.prevCamPos_ = camPos;
         d.prevCamDir_ = fwd;
-        // Both EMA and TAA pipelines handle camera motion via per-pixel reprojection
-        // (triggered by camMoved flag in params.w). No FC reset needed.
+        // Camera motion is handled via per-pixel reprojection in the RT accumulation
+        // pass (triggered by camMoved flag in params.w). No FC reset needed.
     }
 
     // Foveated flush: when camera transitions from sustained motion → stopped,
@@ -1456,7 +1456,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     }
 
     // Compute per-entry motion matrices: prevWorld * inverse(curWorld)
-    // Used by TAA to reproject pixels on moving objects to their previous-frame screen position.
+    // Used by the RT accumulation reprojection to map pixels on moving objects
+    // to their previous-frame screen position so temporal history follows the surface.
     d.motionMatCpu.resize(static_cast<size_t>(d.meshCapacity_) * 16, 0.f);
     for (size_t i = 0; i < rtEntries.size() && i < static_cast<size_t>(d.meshCapacity_); ++i) {
         Matrix4 mot;  // identity by default

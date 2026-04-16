@@ -173,8 +173,9 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let sColLum = luminance(sColor);
             // Specular firefly cap: roughness-adaptive — rough metals tolerate
             // higher values (wider lobe, more variance), glossy needs tight cap.
-            // Aggressive clamping is critical since we don't have TAA temporal smoothing
-            // on the specular split buffer.
+            // The spatial filter is the only smoothing the specular channel gets,
+            // so aggressive per-sample clamping is critical to kill fireflies before
+            // the kernel averages them in.
             let specCap = mix(6.0, 16.0, cRough);
             let filterCap = select(20.0, specCap, isSpec);
             if (sIrrLum > filterCap) { sIrrClamped  = sIrr  * (filterCap / sIrrLum); }

@@ -150,11 +150,11 @@ const PI: f32 = 3.14159265358979;
 //  2. Per-pixel Cranley-Patterson rotation by a screen-space blue-noise pattern
 //     (Interleaved Gradient Noise + golden-ratio temporal advance — a poor-man's
 //     STBN that gives blue-noise spectral falloff per frame and decorrelates
-//     across frames so TAA / atrous can resolve the residual).
+//     across frames so the à-trous filter can resolve the residual).
 //
 // Net effect: the same rays remain Monte Carlo (unbiased), but the per-pixel
 // error correlates spatially as blue noise rather than white noise, which
-// SVGF and TAA reconstruct dramatically better.
+// SVGF-style spatial filters reconstruct dramatically better.
 // ---------------------------------------------------------------------------
 const R2_A1: f32 = 0.7548776662466927;  // 1/phi2  (2D plastic constant axis 1)
 const R2_A2: f32 = 0.5698402909980532;  // 1/phi2^2 (2D plastic constant axis 2)
@@ -1587,7 +1587,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             *primaryMeshIdx = u32(h.meshIdx);
             *primaryNormal  = h.normal;
             *primaryDepth   = h.t;
-            *primaryRough   = sqrt(h.shininess);  // linear roughness for TAA blend
+            *primaryRough   = sqrt(h.shininess);  // linear roughness (denoiser consumes via .w)
             *primaryMatIdx  = h.matIdx;
             *primaryTriIdx  = h.triIdx;
 
@@ -2585,11 +2585,9 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // roughly perpendicular to the view direction, so screen-space parallax is
     // small and uniform across depths, safe for checkerboarding.
     //
-    // Staleness during allowed motion is handled downstream:
-    //   - Temporal denoiser: skipped pixels write a -1 sentinel so TAA passes
-    //     through its reprojected history cleanly.
-    //   - Non-temporal: follower-copy branch caps pixelFC to 4 at stamp time so
-    //     the stale value decays in ~5 frames once the pixel traces fresh again.
+    // Staleness during allowed motion is handled by the follower-copy branch
+    // capping pixelFC to 4 at stamp time: the next fresh sample at that pixel
+    // gets ~20% EMA weight and the stale value decays in ~5 frames.
     // Foveated coarsening still excludes checker to avoid compounding sparsity.
     let camMovedEarly = (u32(rt.params.w) & 2u) != 0u;  // params.w bit 1 = camMoved
     let dTrans = rt.camOri.xyz - rt.prevCamOri.xyz;
@@ -2658,13 +2656,13 @@ R"(
     // per-pixel Cranley-Patterson rotation that has blue-noise spectral falloff.
     // Sub-pixel jitter centred on pixel centre (0.5, 0.5), range ±0.375.
     //
-    // Jitter is now enabled even with the denoiser active: the blue-noise
-    // distribution keeps sub-pixel offsets spatio-temporally decorrelated, so
-    // neighbouring pixels' stored gbuf values differ by bounded (~1% depth,
-    // <5° normal on curved surfaces) amounts that the à-trous edge-stops
-    // (depth scale 4, albedo-similarity stop) tolerate. TAA bilinear history
-    // fetch absorbs the worldPos sub-pixel mismatch, accumulating correctly
-    // toward the true super-sampled mean.
+    // Jitter is always on: blue-noise decorrelation keeps sub-pixel offsets
+    // spatio-temporally varied, so neighbouring pixels' stored gbuf values
+    // differ by bounded (~1% depth, <5° normal on curved surfaces) amounts
+    // that the à-trous edge-stops (depth scale 4, albedo-similarity stop)
+    // tolerate. The RT accumulation's bilinear reprojection absorbs the
+    // worldPos sub-pixel mismatch, accumulating correctly toward the true
+    // super-sampled mean.
     bnInit(u32(pixel.x), u32(pixel.y), fc);
     let camBn = bnNext2d();
     let jx = (camBn.x - 0.5) * 0.75;
@@ -2740,7 +2738,7 @@ R"(
     // Two reprojection cases, unified through the same math:
     //   (A) Primary ray hits a moved mesh: transform worldPos by the mesh's
     //       motion matrix to find where this surface point was last frame,
-    //       then project into the prev camera's screen space. Lets the TAA
+    //       then project into the prev camera's screen space. Lets the EMA
     //       history follow rotating/translating meshes instead of resetting.
     //   (B) Camera moved (camMovedFlag), primary hit a static surface: worldPos is
     //       already in the prev frame's world space, so identity-transform
@@ -2790,7 +2788,7 @@ R"(
                 // (ray target = pixel.xy + jitter, jitter ∈ [-0.5,0.5] with
                 // mean 0 → mean ray target is pixel corner, not centre).
                 // So prevNdcX maps directly to pixel coordinate — no -0.5
-                // offset like TAA (which uses centre-convention rays).
+                // offset.
                 let prevU = (prevNdcX + 1.0) * 0.5 * res.x;
                 let prevV = (1.0 - prevNdcY) * 0.5 * res.y;
                 let pxBase = vec2<i32>(i32(floor(prevU)), i32(floor(prevV)));
