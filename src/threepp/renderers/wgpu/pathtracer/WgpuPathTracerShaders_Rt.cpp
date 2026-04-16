@@ -2560,17 +2560,33 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let isFovLeader = all(pixel == fovLeader);
     let foveatedSkip = fovBlockSize > 1u && !isFovLeader;
 
-    // Checkerboard skip: during camera rotation skip half the pixels each frame,
+    // Checkerboard skip: during camera motion skip half the pixels each frame,
     // alternating which half via globalFrameCounter so both patterns are covered across
-    // two consecutive frames.  Only during rotation — translation causes parallax that
-    // makes stale checkerboard pixels visually wrong (foreground/background mismatch).
-    // When the temporal denoiser is active, skipped pixels write a -1 sentinel so TAA
-    // passes through its history cleanly (no stale data blended in).
-    let camTranslated = length(rt.camOri.xyz - rt.prevCamOri.xyz) > 1e-5;
+    // two consecutive frames.
+    //
+    // Fires during rotation, pan, and orbit.  Disabled for forward/backward dolly
+    // motion: dolly changes depth of every pixel proportionally, and the screen-
+    // space parallax scales inversely with depth, so near geometry moves many
+    // pixels per frame — a single alternation can't reconstruct that cleanly and
+    // produces visible ghosting on close surfaces.  Pan and orbit have motion
+    // roughly perpendicular to the view direction, so screen-space parallax is
+    // small and uniform across depths, safe for checkerboarding.
+    //
+    // Staleness during allowed motion is handled downstream:
+    //   - Temporal denoiser: skipped pixels write a -1 sentinel so TAA passes
+    //     through its reprojected history cleanly.
+    //   - Non-temporal: follower-copy branch caps pixelFC to 4 at stamp time so
+    //     the stale value decays in ~5 frames once the pixel traces fresh again.
+    // Foveated coarsening still excludes checker to avoid compounding sparsity.
     let camMovedEarly = (u32(rt.params.w) & 2u) != 0u;  // params.w bit 1 = camMoved
-    // Checkerboard skip is redundant when foveated coarsening is active (both
-    // reduce work during rotation). Only enable checkerboard when foveation is off.
-    let checkerSkip = !foveatedOn && camMovedEarly && !camTranslated && !isEnvPixel &&
+    let dTrans = rt.camOri.xyz - rt.prevCamOri.xyz;
+    let tLen = length(dTrans);
+    // "Dolly" = translation aligned with view axis.  cos(45°)≈0.7.  Pan is
+    // perpendicular (ratio ≈ 0), orbit is tangential (ratio ≈ 0), dolly is
+    // parallel (ratio ≈ 1).
+    let dollyRatio = select(0.0, abs(dot(dTrans, rt.camFwd.xyz)) / tLen, tLen > 1e-5);
+    let isDolly = dollyRatio > 0.7;
+    let checkerSkip = !foveatedOn && camMovedEarly && !isDolly && !isEnvPixel &&
         ((u32(pixel.x) + u32(pixel.y) + u32(rt.params.y)) & 1u) == 0u;
 
     // Foveated spatial coarsening: follower pixels copy from the block leader's
