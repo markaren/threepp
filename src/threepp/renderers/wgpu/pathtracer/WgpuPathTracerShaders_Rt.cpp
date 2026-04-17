@@ -177,10 +177,15 @@ struct PathStateEntry {
 // and bounces kernel doesn't need to carry bounce1's ReSTIR GI reservoir
 // state.  Lower register pressure → higher occupancy → more concurrent
 // warps hiding BVH + shadow-ray latency.
-// No alive1Queue needed because both kernels read from the same aliveQueue;
-// warps that are fully past bounce1 still dispatch in bounces_main but
-// short-circuit via the pathAlive check.
+// F2b update: alive1Queue added below for actual inter-bounce compaction so
+// rt_bounces_main dispatches on ONLY bounce1-survivors (~12% of pixels on
+// Bistro).  Accumulation moves to a new rt_accum_main kernel that iterates
+// aliveQueue so dead-at-bounce1 paths still get their primary radiance
+// written to accum textures.
 @group(0) @binding(42) var<storage, read_write> bounce1Counter: atomic<u32>;
+@group(0) @binding(43) var<storage, read_write> alive1Queue: array<u32>;
+@group(0) @binding(44) var<storage, read_write> alive1Count: atomic<u32>;
+@group(0) @binding(45) var<storage, read_write> accumCounter: atomic<u32>;
 // Dedicated work-queue counter for rt_compact_main.  Can't share with
 // bounceCounter because a CPU-side reset between the two passes can't
 // interleave with GPU work inside the same command encoder.
@@ -3365,36 +3370,35 @@ fn rt_compact_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------
-// rt_bounces_main (bounce split, Stage D; wavefront compaction from F1).
-// Consumes pathStateBuf entries written by primaryShade-in-rt_main, runs the
-// bounce loop (runBounces), and performs the full accumulation / reprojection
-// pipeline that previously lived inline at the end of rt_main.  Splits the
-// megakernel into primary / shade / bounce phases, reducing register pressure
-// in each and enabling future material-sorting optimisations (wavefront).
+// rt_bounces_main (F2b: reads alive1Queue — bounce1-survivors only).
+// Consumes PathStateEntry entries that rt_bounce1_main wrote back with
+// pathAlive=true, runs the bounce loop starting at i=2 (runBounces), and
+// writes the updated diffRad / specRad / touchedMoved back to pathStateBuf.
+// Accumulation has MOVED to rt_accum_main which runs over aliveQueue (all
+// non-skipAccum pixels — including dead-at-primary and dead-at-bounce1).
 //
-// Reads pixel indices from aliveQueue (written by rt_compact_main).  skipAccum
-// pixels are already filtered out — this kernel only sees work that needs
-// runBounces (possibly with pathAlive=false) + accumulation.
+// The work reduction is the whole point of F2b: on Bistro only ~12% of
+// paths survive bounce 1, so this kernel's dispatch is 8× smaller than
+// rt_bounce1_main's.
 // ---------------------------------------------------------------------------
 @compute @workgroup_size(8, 8)
 fn rt_bounces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = rt.iRes.xy;
-    let aliveTotal = atomicLoad(&aliveCount);
+    let aliveTotal = atomicLoad(&alive1Count);
     let resXu = u32(res.x);
     loop {
-        // Pull from the compacted work queue.  Stop once we've processed every
-        // entry compaction appended.  (Other threads will also hit this
-        // termination; the last-writer-wins counter bump is harmless.)
+        // Pull from the compacted bounce1-survivor queue.
         let slot = atomicAdd(&bounceCounter, 1u);
         if (slot >= aliveTotal) { break; }
-        let pixelIdx = aliveQueue[slot];
+        let pixelIdx = alive1Queue[slot];
         let pixel = vec2<i32>(i32(pixelIdx % resXu), i32(pixelIdx / resXu));
 
         let entry = pathStateBuf[pixelIdx];
         let flagBits = bitcast<u32>(entry.w2.w);
 
-        // Deserialize PrimaryShadeResult from PathStateEntry (see packing legend
-        // at struct declaration above).
+        // Deserialize PrimaryShadeResult from PathStateEntry.  All paths in
+        // alive1Queue have pathAlive=true (bounce1 kernel only appends survivors),
+        // so no pathAlive guard needed here.
         var state: PrimaryShadeResult;
         state.rayOrigin        = entry.w0.xyz;
         var seed               = bitcast<u32>(entry.w0.w);
@@ -3404,7 +3408,7 @@ fn rt_bounces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         state.firstBounceSpec  = (flagBits & 1u)  != 0u;
         state.afterTransmission = (flagBits & 2u) != 0u;
         var touchedMoved       = (flagBits & 4u)  != 0u;
-        state.pathAlive        = (flagBits & 8u)  != 0u;
+        state.pathAlive        = true;
         state.giResStored      = (flagBits & 16u) != 0u;
         state.diffRad          = entry.w3.xyz;
         state.prevMetalness    = entry.w3.w;
@@ -3423,212 +3427,24 @@ fn rt_bounces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         state.primaryMatIdx    = bitcast<i32>(entry.w10.w);
         state.b0F0             = entry.w11.xyz;
 
-        // Run bounces if path survived primaryShade, otherwise fall through with
-        // primary-only radiance.
-        var ptResult: SplitRadiance;
+        // Run bounces 2..N.  runBounces' for-loop starts at i=2 post-F2a.
         let primaryMeshIdx_u   = u32(state.b0MeshIdx);
-        if (state.pathAlive) {
-            let bouncesResult = runBounces(state, &seed, pixel, primaryMeshIdx_u, &touchedMoved);
-            ptResult = SplitRadiance(state.diffRad + bouncesResult.diff,
-                                     state.specRad + bouncesResult.spec);
-        } else {
-            ptResult = SplitRadiance(state.diffRad, state.specRad);
-        }
-        var sample = ptResult.diff + ptResult.spec;
+        let bouncesResult = runBounces(state, &seed, pixel, primaryMeshIdx_u, &touchedMoved);
+        let finalDiff = state.diffRad + bouncesResult.diff;
+        let finalSpec = state.specRad + bouncesResult.spec;
 
-        // Derived values (aliases for readability in the preserved accumulation
-        // block below).  Uses b0* captured early in primaryShade (valid for all
-        // primary hits, including unlit which leaves pathAlive=false).
-        let primaryMeshIdx = primaryMeshIdx_u;
-        let primaryDepth   = state.primaryDepth;
-        let primaryRough   = sqrt(state.b0Alpha);
+        // Write back to pathStateBuf.  rt_accum_main reads diffRad/specRad +
+        // flagBits.touchedMoved from here.  We only modify the fields that
+        // can change; everything else (b0*, primaryDepth, primaryMatIdx) is
+        // already up to date from primaryShade / bounce1.
+        var flagBitsOut = flagBits;
+        if (touchedMoved) { flagBitsOut |= 4u; }
 
-        // === Accumulation + reprojection (moved verbatim from rt_main) ===
-        let prev    = textureLoad(accumRead, pixel, 0);
-        var old     = prev.xyz;
-        var pixelFC = prev.w;
-
-        let prevDiffRaw = textureLoad(diffAccumRead, pixel, 0).xyz;
-        let prevSpecRaw = textureLoad(specAccumRead, pixel, 0).xyz;
-        var oldDiff = select(vec3<f32>(0.0), prevDiffRaw, prevDiffRaw.x == prevDiffRaw.x);
-        var oldSpec = select(vec3<f32>(0.0), prevSpecRaw, prevSpecRaw.x == prevSpecRaw.x);
-        let prevMom = textureLoad(momentsRead, pixel, 0);
-        var prevMomM1 = prevMom.x;
-        var prevMomM2 = prevMom.y;
-
-        let forceReset   = (u32(rt.params.w) & 1u) != 0u;
-        let camMovedFlag = (u32(rt.params.w) & 2u) != 0u;
-        if (forceReset) { pixelFC = 0.0; }
-
-        let prevMeshU = u32(textureLoad(hitMeshRead, pixel, 0).r);
-        let primaryMoved = primaryMeshIdx < 128u && isMeshMoved(i32(primaryMeshIdx));
-
-        if (primaryMeshIdx != prevMeshU && prevMeshU < 128u && isMeshMoved(i32(prevMeshU))) {
-            pixelFC = 0.0;
-        }
-        if (touchedMoved) {
-            let emissiveMoved = rt.restirParams.z > 0.5;
-            pixelFC = min(pixelFC, select(8.0, 2.0, emissiveMoved));
-        }
-)"
-R"(
-        if (primaryMoved || camMovedFlag) {
-            var reprojOk = false;
-            if (pixelFC > 0.0 && primaryDepth > 0.0) {
-                // b0Point == rt.camOri + cameraRayDir * primaryDepth (captured from
-                // h.point at primary hit), so we read it directly instead of
-                // reconstructing the camera ray.
-                let worldPos = state.b0Point;
-                var prevWorldPos = worldPos;
-                if (primaryMoved) {
-                    prevWorldPos = (rtMotionMats[primaryMeshIdx] * vec4<f32>(worldPos, 1.0)).xyz;
-                }
-                let toPoint = prevWorldPos - rt.prevCamOri.xyz;
-                let prevZ   = dot(toPoint, rt.prevCamFwd.xyz);
-                if (prevZ > 0.001) {
-                    let aspect   = res.x / res.y;
-                    let prevNdcX = dot(toPoint, rt.prevCamRgt.xyz) / (prevZ * rt.tanHalfFov.x * aspect);
-                    let prevNdcY = dot(toPoint, rt.prevCamUp.xyz)  / (prevZ * rt.tanHalfFov.x);
-                    let prevU = (prevNdcX + 1.0) * 0.5 * res.x;
-                    let prevV = (1.0 - prevNdcY) * 0.5 * res.y;
-                    let pxBase = vec2<i32>(i32(floor(prevU)), i32(floor(prevV)));
-                    if (pxBase.x >= 0 && pxBase.x + 1 < i32(res.x) &&
-                        pxBase.y >= 0 && pxBase.y + 1 < i32(res.y)) {
-                        let fx = prevU - f32(pxBase.x);
-                        let fy = prevV - f32(pxBase.y);
-                        let w00 = (1.0 - fx) * (1.0 - fy);
-                        let w10 = fx         * (1.0 - fy);
-                        let w01 = (1.0 - fx) *         fy;
-                        let w11 = fx         *         fy;
-                        let p00 = pxBase;
-                        let p10 = pxBase + vec2<i32>(1, 0);
-                        let p01 = pxBase + vec2<i32>(0, 1);
-                        let p11 = pxBase + vec2<i32>(1, 1);
-                        let m00 = u32(textureLoad(hitMeshRead, p00, 0).r);
-                        let m10 = u32(textureLoad(hitMeshRead, p10, 0).r);
-                        let m01 = u32(textureLoad(hitMeshRead, p01, 0).r);
-                        let m11 = u32(textureLoad(hitMeshRead, p11, 0).r);
-                        let v00 = select(0.0, w00, m00 == primaryMeshIdx);
-                        let v10 = select(0.0, w10, m10 == primaryMeshIdx);
-                        let v01 = select(0.0, w01, m01 == primaryMeshIdx);
-                        let v11 = select(0.0, w11, m11 == primaryMeshIdx);
-                        let wSum = v00 + v10 + v01 + v11;
-                        if (wSum > 1e-4) {
-                            let a00 = textureLoad(accumRead, p00, 0);
-                            let a10 = textureLoad(accumRead, p10, 0);
-                            let a01 = textureLoad(accumRead, p01, 0);
-                            let a11 = textureLoad(accumRead, p11, 0);
-                            let inv = 1.0 / wSum;
-                            old = (a00.xyz * v00 + a10.xyz * v10
-                                 + a01.xyz * v01 + a11.xyz * v11) * inv;
-                            let prevFC = (a00.w * v00 + a10.w * v10
-                                        + a01.w * v01 + a11.w * v11) * inv;
-                            let d00 = textureLoad(diffAccumRead, p00, 0).xyz;
-                            let d10 = textureLoad(diffAccumRead, p10, 0).xyz;
-                            let d01 = textureLoad(diffAccumRead, p01, 0).xyz;
-                            let d11 = textureLoad(diffAccumRead, p11, 0).xyz;
-                            oldDiff = (d00 * v00 + d10 * v10 + d01 * v01 + d11 * v11) * inv;
-                            let s00 = textureLoad(specAccumRead, p00, 0).xyz;
-                            let s10 = textureLoad(specAccumRead, p10, 0).xyz;
-                            let s01 = textureLoad(specAccumRead, p01, 0).xyz;
-                            let s11 = textureLoad(specAccumRead, p11, 0).xyz;
-                            oldSpec = (s00 * v00 + s10 * v10 + s01 * v01 + s11 * v11) * inv;
-                            let mom00 = textureLoad(momentsRead, p00, 0).xy;
-                            let mom10 = textureLoad(momentsRead, p10, 0).xy;
-                            let mom01 = textureLoad(momentsRead, p01, 0).xy;
-                            let mom11 = textureLoad(momentsRead, p11, 0).xy;
-                            prevMomM1 = (mom00.x*v00 + mom10.x*v10 + mom01.x*v01 + mom11.x*v11) * inv;
-                            prevMomM2 = (mom00.y*v00 + mom10.y*v10 + mom01.y*v01 + mom11.y*v11) * inv;
-                            let staticCap = mix(8.0, 256.0, smoothstep(0.15, 0.7, primaryRough));
-                            let movingCap = mix(8.0, 64.0,  smoothstep(0.15, 0.7, primaryRough));
-                            if (primaryMoved) {
-                                pixelFC = min(prevFC * 0.5, movingCap);
-                            } else {
-                                pixelFC = min(prevFC * 0.5, staticCap);
-                            }
-                            reprojOk = true;
-                        }
-                    }
-                }
-            }
-            if (!reprojOk) {
-                pixelFC = 0.0;
-                oldDiff = vec3<f32>(0.0);
-                oldSpec = vec3<f32>(0.0);
-            }
-        }
-)"
-R"(
-        // NaN guard + hard/relative clamp.
-        let sampleClean = select(vec3<f32>(0.0), sample, sample.x == sample.x);
-        let oldClean    = select(vec3<f32>(0.0), old,    old.x == old.x);
-        let lum3 = vec3<f32>(0.2126, 0.7152, 0.0722);
-        var clamped = sampleClean;
-        let rawLum = dot(sampleClean, lum3);
-        let hardCap = 12.0;
-        if (rawLum > hardCap) {
-            clamped = sampleClean * (hardCap / rawLum);
-        }
-        if (pixelFC > 8.0) {
-            let avgLum = max(dot(oldClean, lum3), 0.05);
-            let smpLum = dot(clamped, lum3);
-            let maxLum = avgLum * 7.0;
-            if (smpLum > maxLum) {
-                clamped = clamped * (maxLum / smpLum);
-            }
-        }
-
-        let alpha = 1.0 / (pixelFC + 1.0);
-        if (pixelFC < 1024.0) {
-            var blended = oldClean * (1.0 - alpha) + clamped * alpha;
-            const DEBUG_VIS_PIXEL_FC = false;
-            if (DEBUG_VIS_PIXEL_FC) {
-                let fcN = clamp(log2(pixelFC + 1.0) / 8.0, 0.0, 1.0);
-                blended = vec3<f32>(fcN, fcN * fcN, fcN * fcN * fcN);
-            }
-            const DEBUG_VIS_RAW_SAMPLE = false;
-            if (DEBUG_VIS_RAW_SAMPLE) {
-                blended = sampleClean / (sampleClean + vec3<f32>(1.0));
-            }
-            textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
-        } else {
-            textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
-        }
-
-        // Moments
-        let sampleLum = dot(clamped, lum3);
-        let momAlpha = max(alpha, 0.1);
-        var m1 = prevMomM1;
-        var m2 = prevMomM2;
-        if (pixelFC < 1.0) { m1 = sampleLum; m2 = sampleLum * sampleLum; }
-        else {
-            m1 = m1 * (1.0 - momAlpha) + sampleLum * momAlpha;
-            m2 = m2 * (1.0 - momAlpha) + sampleLum * sampleLum * momAlpha;
-        }
-        textureStore(momentsWrite, pixel, vec4<f32>(m1, m2, 0.0, 0.0));
-
-        // Split accum (diffuse/specular)
-        {
-            let diffSample = select(vec3<f32>(0.0), ptResult.diff, ptResult.diff.x == ptResult.diff.x);
-            let specSample = select(vec3<f32>(0.0), ptResult.spec, ptResult.spec.x == ptResult.spec.x);
-            var dClamped = diffSample;
-            let dLum = dot(diffSample, lum3);
-            if (dLum > hardCap) { dClamped = diffSample * (hardCap / dLum); }
-            let specHardCap = mix(3.0, 8.0, primaryRough);
-            var sClamped = specSample;
-            let sLum = dot(specSample, lum3);
-            if (sLum > specHardCap) { sClamped = specSample * (specHardCap / sLum); }
-            if (pixelFC < 1024.0) {
-                textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff * (1.0 - alpha) + dClamped * alpha, pixelFC + 1.0));
-                textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec * (1.0 - alpha) + sClamped * alpha, pixelFC + 1.0));
-            } else {
-                textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff, pixelFC));
-                textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec, pixelFC));
-            }
-        }
-
-        // hitMesh includes touchedMoved — written here since it depends on runBounces output.
-        textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(state.primaryMatIdx), select(0.0, 1.0, touchedMoved), 0.0));
+        var newEntry = entry;
+        newEntry.w2 = vec4<f32>(entry.w2.xyz, bitcast<f32>(flagBitsOut));
+        newEntry.w3 = vec4<f32>(finalDiff, entry.w3.w);
+        newEntry.w4 = vec4<f32>(finalSpec, entry.w4.w);
+        pathStateBuf[pixelIdx] = newEntry;
     }
 }
 
@@ -4234,6 +4050,245 @@ R"(
         newEntry.w5 = vec4<f32>(prevNormal, entry.w5.w);
         newEntry.w6 = vec4<f32>(prevWo,     entry.w6.w);
         pathStateBuf[pixelIdx] = newEntry;
+
+        // F2b: append to alive1Queue if path survives bounce 1.  rt_bounces_main
+        // will read this compacted list, dispatching on ~12% of non-skipAccum
+        // pixels instead of 100%.
+        if (pathStillAlive) {
+            let outSlot = atomicAdd(&alive1Count, 1u);
+            alive1Queue[outSlot] = pixelIdx;
+        }
+    }
+}
+)";
+
+const char* const csAccumWGSL1 = R"(
+
+// ---------------------------------------------------------------------------
+// rt_accum_main (F2b: accumulation kernel).
+// Reads pixel indices from aliveQueue (non-skipAccum pixels — ALL path
+// outcomes: dead-at-primary, dead-at-bounce1, and bounce1-survivors).  Pulls
+// final accumulated radiance + touchedMoved + primary hit info from
+// pathStateBuf and runs the full accumulation / temporal-reprojection
+// pipeline that previously lived inline at the end of rt_bounces_main.
+//
+// Register budget in this kernel is tiny (no BVH traversal, no BRDF
+// evaluation), so splitting it out is pure win for rt_bounces_main's
+// occupancy.
+// ---------------------------------------------------------------------------
+@compute @workgroup_size(8, 8)
+fn rt_accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let res = rt.iRes.xy;
+    let aliveTotal = atomicLoad(&aliveCount);
+    let resXu = u32(res.x);
+    loop {
+        let slot = atomicAdd(&accumCounter, 1u);
+        if (slot >= aliveTotal) { break; }
+        let pixelIdx = aliveQueue[slot];
+        let pixel = vec2<i32>(i32(pixelIdx % resXu), i32(pixelIdx / resXu));
+
+        let entry = pathStateBuf[pixelIdx];
+        let flagBits = bitcast<u32>(entry.w2.w);
+
+        // Deserialize only what the accumulation block needs.
+        let diffRadFinal   = entry.w3.xyz;
+        let specRadFinal   = entry.w4.xyz;
+        let touchedMoved   = (flagBits & 4u) != 0u;
+        let b0Point        = entry.w7.xyz;
+        let b0Alpha        = entry.w7.w;
+        let b0MeshIdx      = bitcast<i32>(entry.w9.w);
+        let primaryMatIdx  = bitcast<i32>(entry.w10.w);
+        let primaryDepth   = entry.w5.w;
+        let primaryMeshIdx = u32(b0MeshIdx);
+        let primaryRough   = sqrt(b0Alpha);
+
+        let ptDiff = diffRadFinal;
+        let ptSpec = specRadFinal;
+        var sample = ptDiff + ptSpec;
+
+        // === Accumulation + reprojection (moved verbatim from rt_bounces_main) ===
+        let prev    = textureLoad(accumRead, pixel, 0);
+        var old     = prev.xyz;
+        var pixelFC = prev.w;
+
+        let prevDiffRaw = textureLoad(diffAccumRead, pixel, 0).xyz;
+        let prevSpecRaw = textureLoad(specAccumRead, pixel, 0).xyz;
+        var oldDiff = select(vec3<f32>(0.0), prevDiffRaw, prevDiffRaw.x == prevDiffRaw.x);
+        var oldSpec = select(vec3<f32>(0.0), prevSpecRaw, prevSpecRaw.x == prevSpecRaw.x);
+        let prevMom = textureLoad(momentsRead, pixel, 0);
+        var prevMomM1 = prevMom.x;
+        var prevMomM2 = prevMom.y;
+
+        let forceReset   = (u32(rt.params.w) & 1u) != 0u;
+        let camMovedFlag = (u32(rt.params.w) & 2u) != 0u;
+        if (forceReset) { pixelFC = 0.0; }
+
+        let prevMeshU = u32(textureLoad(hitMeshRead, pixel, 0).r);
+        let primaryMoved = primaryMeshIdx < 128u && isMeshMoved(i32(primaryMeshIdx));
+
+        if (primaryMeshIdx != prevMeshU && prevMeshU < 128u && isMeshMoved(i32(prevMeshU))) {
+            pixelFC = 0.0;
+        }
+        if (touchedMoved) {
+            let emissiveMoved = rt.restirParams.z > 0.5;
+            pixelFC = min(pixelFC, select(8.0, 2.0, emissiveMoved));
+        }
+)"
+R"(
+        if (primaryMoved || camMovedFlag) {
+            var reprojOk = false;
+            if (pixelFC > 0.0 && primaryDepth > 0.0) {
+                let worldPos = b0Point;
+                var prevWorldPos = worldPos;
+                if (primaryMoved) {
+                    prevWorldPos = (rtMotionMats[primaryMeshIdx] * vec4<f32>(worldPos, 1.0)).xyz;
+                }
+                let toPoint = prevWorldPos - rt.prevCamOri.xyz;
+                let prevZ   = dot(toPoint, rt.prevCamFwd.xyz);
+                if (prevZ > 0.001) {
+                    let aspect   = res.x / res.y;
+                    let prevNdcX = dot(toPoint, rt.prevCamRgt.xyz) / (prevZ * rt.tanHalfFov.x * aspect);
+                    let prevNdcY = dot(toPoint, rt.prevCamUp.xyz)  / (prevZ * rt.tanHalfFov.x);
+                    let prevU = (prevNdcX + 1.0) * 0.5 * res.x;
+                    let prevV = (1.0 - prevNdcY) * 0.5 * res.y;
+                    let pxBase = vec2<i32>(i32(floor(prevU)), i32(floor(prevV)));
+                    if (pxBase.x >= 0 && pxBase.x + 1 < i32(res.x) &&
+                        pxBase.y >= 0 && pxBase.y + 1 < i32(res.y)) {
+                        let fx = prevU - f32(pxBase.x);
+                        let fy = prevV - f32(pxBase.y);
+                        let w00 = (1.0 - fx) * (1.0 - fy);
+                        let w10 = fx         * (1.0 - fy);
+                        let w01 = (1.0 - fx) *         fy;
+                        let w11 = fx         *         fy;
+                        let p00 = pxBase;
+                        let p10 = pxBase + vec2<i32>(1, 0);
+                        let p01 = pxBase + vec2<i32>(0, 1);
+                        let p11 = pxBase + vec2<i32>(1, 1);
+                        let m00 = u32(textureLoad(hitMeshRead, p00, 0).r);
+                        let m10 = u32(textureLoad(hitMeshRead, p10, 0).r);
+                        let m01 = u32(textureLoad(hitMeshRead, p01, 0).r);
+                        let m11 = u32(textureLoad(hitMeshRead, p11, 0).r);
+                        let v00 = select(0.0, w00, m00 == primaryMeshIdx);
+                        let v10 = select(0.0, w10, m10 == primaryMeshIdx);
+                        let v01 = select(0.0, w01, m01 == primaryMeshIdx);
+                        let v11 = select(0.0, w11, m11 == primaryMeshIdx);
+                        let wSum = v00 + v10 + v01 + v11;
+                        if (wSum > 1e-4) {
+                            let a00 = textureLoad(accumRead, p00, 0);
+                            let a10 = textureLoad(accumRead, p10, 0);
+                            let a01 = textureLoad(accumRead, p01, 0);
+                            let a11 = textureLoad(accumRead, p11, 0);
+                            let inv = 1.0 / wSum;
+                            old = (a00.xyz * v00 + a10.xyz * v10
+                                 + a01.xyz * v01 + a11.xyz * v11) * inv;
+                            let prevFC = (a00.w * v00 + a10.w * v10
+                                        + a01.w * v01 + a11.w * v11) * inv;
+                            let d00 = textureLoad(diffAccumRead, p00, 0).xyz;
+                            let d10 = textureLoad(diffAccumRead, p10, 0).xyz;
+                            let d01 = textureLoad(diffAccumRead, p01, 0).xyz;
+                            let d11 = textureLoad(diffAccumRead, p11, 0).xyz;
+                            oldDiff = (d00 * v00 + d10 * v10 + d01 * v01 + d11 * v11) * inv;
+                            let s00 = textureLoad(specAccumRead, p00, 0).xyz;
+                            let s10 = textureLoad(specAccumRead, p10, 0).xyz;
+                            let s01 = textureLoad(specAccumRead, p01, 0).xyz;
+                            let s11 = textureLoad(specAccumRead, p11, 0).xyz;
+                            oldSpec = (s00 * v00 + s10 * v10 + s01 * v01 + s11 * v11) * inv;
+                            let mom00 = textureLoad(momentsRead, p00, 0).xy;
+                            let mom10 = textureLoad(momentsRead, p10, 0).xy;
+                            let mom01 = textureLoad(momentsRead, p01, 0).xy;
+                            let mom11 = textureLoad(momentsRead, p11, 0).xy;
+                            prevMomM1 = (mom00.x*v00 + mom10.x*v10 + mom01.x*v01 + mom11.x*v11) * inv;
+                            prevMomM2 = (mom00.y*v00 + mom10.y*v10 + mom01.y*v01 + mom11.y*v11) * inv;
+                            let staticCap = mix(8.0, 256.0, smoothstep(0.15, 0.7, primaryRough));
+                            let movingCap = mix(8.0, 64.0,  smoothstep(0.15, 0.7, primaryRough));
+                            if (primaryMoved) {
+                                pixelFC = min(prevFC * 0.5, movingCap);
+                            } else {
+                                pixelFC = min(prevFC * 0.5, staticCap);
+                            }
+                            reprojOk = true;
+                        }
+                    }
+                }
+            }
+            if (!reprojOk) {
+                pixelFC = 0.0;
+                oldDiff = vec3<f32>(0.0);
+                oldSpec = vec3<f32>(0.0);
+            }
+        }
+)"
+R"(
+        // NaN guard + hard/relative clamp.
+        let sampleClean = select(vec3<f32>(0.0), sample, sample.x == sample.x);
+        let oldClean    = select(vec3<f32>(0.0), old,    old.x == old.x);
+        let lum3 = vec3<f32>(0.2126, 0.7152, 0.0722);
+        var clamped = sampleClean;
+        let rawLum = dot(sampleClean, lum3);
+        let hardCap = 12.0;
+        if (rawLum > hardCap) {
+            clamped = sampleClean * (hardCap / rawLum);
+        }
+        if (pixelFC > 8.0) {
+            let avgLum = max(dot(oldClean, lum3), 0.05);
+            let smpLum = dot(clamped, lum3);
+            let maxLum = avgLum * 7.0;
+            if (smpLum > maxLum) {
+                clamped = clamped * (maxLum / smpLum);
+            }
+        }
+
+        let alpha = 1.0 / (pixelFC + 1.0);
+        if (pixelFC < 1024.0) {
+            var blended = oldClean * (1.0 - alpha) + clamped * alpha;
+            const DEBUG_VIS_PIXEL_FC = false;
+            if (DEBUG_VIS_PIXEL_FC) {
+                let fcN = clamp(log2(pixelFC + 1.0) / 8.0, 0.0, 1.0);
+                blended = vec3<f32>(fcN, fcN * fcN, fcN * fcN * fcN);
+            }
+            const DEBUG_VIS_RAW_SAMPLE = false;
+            if (DEBUG_VIS_RAW_SAMPLE) {
+                blended = sampleClean / (sampleClean + vec3<f32>(1.0));
+            }
+            textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
+        } else {
+            textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
+        }
+
+        // Moments
+        let sampleLum = dot(clamped, lum3);
+        let momAlpha = max(alpha, 0.1);
+        var m1 = prevMomM1;
+        var m2 = prevMomM2;
+        if (pixelFC < 1.0) { m1 = sampleLum; m2 = sampleLum * sampleLum; }
+        else {
+            m1 = m1 * (1.0 - momAlpha) + sampleLum * momAlpha;
+            m2 = m2 * (1.0 - momAlpha) + sampleLum * sampleLum * momAlpha;
+        }
+        textureStore(momentsWrite, pixel, vec4<f32>(m1, m2, 0.0, 0.0));
+
+        // Split accum (diffuse/specular)
+        {
+            let diffSample = select(vec3<f32>(0.0), ptDiff, ptDiff.x == ptDiff.x);
+            let specSample = select(vec3<f32>(0.0), ptSpec, ptSpec.x == ptSpec.x);
+            var dClamped = diffSample;
+            let dLum = dot(diffSample, lum3);
+            if (dLum > hardCap) { dClamped = diffSample * (hardCap / dLum); }
+            let specHardCap = mix(3.0, 8.0, primaryRough);
+            var sClamped = specSample;
+            let sLum = dot(specSample, lum3);
+            if (sLum > specHardCap) { sClamped = specSample * (specHardCap / sLum); }
+            if (pixelFC < 1024.0) {
+                textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff * (1.0 - alpha) + dClamped * alpha, pixelFC + 1.0));
+                textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec * (1.0 - alpha) + sClamped * alpha, pixelFC + 1.0));
+            } else {
+                textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff, pixelFC));
+                textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec, pixelFC));
+            }
+        }
+
+        // hitMesh includes touchedMoved — written here since it depends on runBounces output.
+        textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), select(0.0, 1.0, touchedMoved), 0.0));
     }
 }
 )";
@@ -4250,7 +4305,8 @@ std::string buildRtShader(bool hasEnvCdf) {
                       csPrimaryShadeWGSL3 + "\n" +
                       csPathTraceWGSL2 + "\n" +
                       csPathTraceWGSL3 + "\n" +
-                      csBounce1WGSL;
+                      csBounce1WGSL + "\n" +
+                      csAccumWGSL1;
     const std::string marker = "/*ENV_CDF_FLAG*/false";
     auto pos = src.find(marker);
     if (pos != std::string::npos) {
