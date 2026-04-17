@@ -186,6 +186,15 @@ struct PathStateEntry {
 @group(0) @binding(43) var<storage, read_write> alive1Queue: array<u32>;
 @group(0) @binding(44) var<storage, read_write> alive1Count: atomic<u32>;
 @group(0) @binding(45) var<storage, read_write> accumCounter: atomic<u32>;
+// F2c: material sort before bounce1 for warp coherence.  aliveQueue is
+// bucket-sorted by primaryMatIdx % 256 into sortedAliveQueue.  bounce1 reads
+// sortedAliveQueue instead so adjacent warp lanes execute coherent BRDF code.
+// 256 buckets is enough to cover typical scene material counts (Bistro has
+// ~100); hash collisions merely reduce coherence, not correctness.
+@group(0) @binding(46) var<storage, read_write> matBucketCount: array<atomic<u32>, 256>;
+@group(0) @binding(47) var<storage, read_write> matBucketOffset: array<u32, 256>;
+@group(0) @binding(48) var<storage, read_write> sortedAliveQueue: array<u32>;
+@group(0) @binding(49) var<storage, read_write> sortCounter: atomic<u32>;
 // Dedicated work-queue counter for rt_compact_main.  Can't share with
 // bounceCounter because a CPU-side reset between the two passes can't
 // interleave with GPU work inside the same command encoder.
@@ -3360,12 +3369,59 @@ fn rt_compact_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     loop {
         let pixelIdx = atomicAdd(&compactCounter, 1u);
         if (pixelIdx >= totalPixels) { break; }
-        let flagBits = bitcast<u32>(pathStateBuf[pixelIdx].w2.w);
+        let entry = pathStateBuf[pixelIdx];
+        let flagBits = bitcast<u32>(entry.w2.w);
         let skipAccum = (flagBits & 32u) != 0u;
         if (!skipAccum) {
             let slot = atomicAdd(&aliveCount, 1u);
             aliveQueue[slot] = pixelIdx;
+            // F2c: count for bucket-sort before bounce1.  primaryMatIdx is
+            // stored at entry.w10.w (i32 bitcast).  Hash via low 8 bits →
+            // 256 buckets.  Dead-at-primary pixels get counted too and end
+            // up grouped together in the sorted queue — bounce1 early-exits
+            // on them so coherent grouping is a net win.
+            let matIdx = bitcast<i32>(entry.w10.w);
+            let bucket = u32(matIdx) & 0xFFu;
+            atomicAdd(&matBucketCount[bucket], 1u);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// rt_sort_prefix_main (F2c: exclusive prefix sum over material buckets).
+// Dispatch 1 workgroup of 1 thread.  256 serial adds — trivial cost.
+// Side effect: zeroes matBucketCount so the scatter pass can reuse it as
+// a per-bucket fill counter via atomicAdd.
+// ---------------------------------------------------------------------------
+@compute @workgroup_size(1)
+fn rt_sort_prefix_main() {
+    var sum: u32 = 0u;
+    for (var i = 0u; i < 256u; i = i + 1u) {
+        let cnt = atomicLoad(&matBucketCount[i]);
+        matBucketOffset[i] = sum;
+        sum = sum + cnt;
+        atomicStore(&matBucketCount[i], 0u);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// rt_sort_scatter_main (F2c: bucket-sort aliveQueue by primaryMatIdx).
+// Reads each aliveQueue entry's matIdx from pathStateBuf, scatters the pixel
+// index into sortedAliveQueue at offset[bucket] + atomicAdd(count[bucket]).
+// After this pass, bounce1 reads sortedAliveQueue so warp lanes execute
+// materially-coherent BRDF code.
+// ---------------------------------------------------------------------------
+@compute @workgroup_size(8, 8)
+fn rt_sort_scatter_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let aliveTotal = atomicLoad(&aliveCount);
+    loop {
+        let slot = atomicAdd(&sortCounter, 1u);
+        if (slot >= aliveTotal) { break; }
+        let pixelIdx = aliveQueue[slot];
+        let matIdx = bitcast<i32>(pathStateBuf[pixelIdx].w10.w);
+        let bucket = u32(matIdx) & 0xFFu;
+        let outSlot = matBucketOffset[bucket] + atomicAdd(&matBucketCount[bucket], 1u);
+        sortedAliveQueue[outSlot] = pixelIdx;
     }
 }
 
@@ -3475,7 +3531,9 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     loop {
         let slot = atomicAdd(&bounce1Counter, 1u);
         if (slot >= aliveTotal) { break; }
-        let pixelIdx = aliveQueue[slot];
+        // F2c: read from material-sorted queue so adjacent warp lanes hit
+        // coherent BRDF code.  Same pixels as aliveQueue, just permuted.
+        let pixelIdx = sortedAliveQueue[slot];
         let pixel = vec2<i32>(i32(pixelIdx % resXu), i32(pixelIdx / resXu));
 
         let entry = pathStateBuf[pixelIdx];

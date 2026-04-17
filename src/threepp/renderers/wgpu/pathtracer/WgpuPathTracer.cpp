@@ -184,6 +184,10 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer alive1QueueBuf;     // F2b: bounce1-survivor pixel indices (same size as aliveQueueBuf)
     WgpuBuffer alive1CountBuf;     // F2b: atomic<u32> append head for alive1Queue
     WgpuBuffer accumCounterBuf;    // F2b: atomic<u32> work-steal counter for rt_accum_main
+    WgpuBuffer matBucketCountBuf;  // F2c: 256 atomic<u32> per-material counts (also reused as scatter fill)
+    WgpuBuffer matBucketOffsetBuf; // F2c: 256 u32 bucket offsets (prefix sum of counts)
+    WgpuBuffer sortedAliveQueueBuf;// F2c: material-sorted permutation of aliveQueue
+    WgpuBuffer sortCounterBuf;     // F2c: atomic<u32> work-steal counter for rt_sort_scatter_main
     WgpuBuffer primaryHitBuf;      // kernel-split: RawHit per pixel written by primaryPipeline, read by rtPipeline (16 B/px)
     int primaryHitBufPixels_ = 0;  // current allocated pixel capacity (resized with viewport)
     WgpuBuffer pathStateBuf;       // bounce-split: PathStateEntry (12 vec4 = 192 B/px) carrying state from primary_shade → rt_bounces_main
@@ -217,6 +221,8 @@ struct WgpuPathTracer::Impl {
     WgpuComputePipeline compactPipeline;  // F1: compacts pathStateBuf flags -> aliveQueue
     WgpuComputePipeline bounce1Pipeline;  // F2a: processes bounce 1 (i=1) for each alive pixel
     WgpuComputePipeline accumPipeline;    // F2b: accumulation kernel (reads aliveQueue, writes accum textures)
+    WgpuComputePipeline sortPrefixPipeline;  // F2c: prefix sum over matBucketCount
+    WgpuComputePipeline sortScatterPipeline; // F2c: scatters aliveQueue → sortedAliveQueue by matIdx bucket
 
     // Depth-fill pipeline — writes NDC depth from gBuffer primary-ray t values
     WGPURenderPipeline      depthFillPipeline_ = nullptr;
@@ -387,6 +393,10 @@ struct WgpuPathTracer::Impl {
           alive1QueueBuf(r, static_cast<size_t>(w * h) * sizeof(uint32_t), WgpuBuffer::Usage::Storage),
           alive1CountBuf(r, sizeof(uint32_t), WgpuBuffer::Usage::Storage),
           accumCounterBuf(r, sizeof(uint32_t), WgpuBuffer::Usage::Storage),
+          matBucketCountBuf(r, 256u * sizeof(uint32_t), WgpuBuffer::Usage::Storage),
+          matBucketOffsetBuf(r, 256u * sizeof(uint32_t), WgpuBuffer::Usage::Storage),
+          sortedAliveQueueBuf(r, static_cast<size_t>(w * h) * sizeof(uint32_t), WgpuBuffer::Usage::Storage),
+          sortCounterBuf(r, sizeof(uint32_t), WgpuBuffer::Usage::Storage),
           // primaryHitBuf: 16 bytes × pixel count.  Sized lazily to actual viewport
           // resolution (see recreatePerFrameBuffers).  Placeholder size here.
           primaryHitBuf(r, static_cast<size_t>(w * h) * 16u, WgpuBuffer::Usage::Storage),
@@ -417,6 +427,8 @@ struct WgpuPathTracer::Impl {
           compactPipeline(r, buildRtShader(false), "rt_compact_main"),
           bounce1Pipeline(r, buildRtShader(false), "rt_bounce1_main"),
           accumPipeline(r, buildRtShader(false), "rt_accum_main"),
+          sortPrefixPipeline(r, buildRtShader(false), "rt_sort_prefix_main"),
+          sortScatterPipeline(r, buildRtShader(false), "rt_sort_scatter_main"),
           // Display pipeline
           displayCam(-1.f, 1.f, 1.f, -1.f, 0.1f, 10.f),
           // CPU buffers — empty; sized dynamically by async build
@@ -520,6 +532,10 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageBuffer(43, alive1QueueBuf);
         rtPipeline.setStorageBuffer(44, alive1CountBuf);
         rtPipeline.setStorageBuffer(45, accumCounterBuf);
+        rtPipeline.setStorageBuffer(46, matBucketCountBuf);
+        rtPipeline.setStorageBuffer(47, matBucketOffsetBuf);
+        rtPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
+        rtPipeline.setStorageBuffer(49, sortCounterBuf);
 
         // Primary-hit kernel (kernel split step 1).  Same shader source, different
         // entry point — so the full bind group layout matches rtPipeline.  Most
@@ -570,6 +586,10 @@ struct WgpuPathTracer::Impl {
         primaryPipeline.setStorageBuffer(43, alive1QueueBuf);
         primaryPipeline.setStorageBuffer(44, alive1CountBuf);
         primaryPipeline.setStorageBuffer(45, accumCounterBuf);
+        primaryPipeline.setStorageBuffer(46, matBucketCountBuf);
+        primaryPipeline.setStorageBuffer(47, matBucketOffsetBuf);
+        primaryPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
+        primaryPipeline.setStorageBuffer(49, sortCounterBuf);
 
         // Bounces kernel (bounce-split step 3).  Full mirror of rtPipeline's
         // bindings because runBounces + accumulation touches the same resources.
@@ -621,6 +641,10 @@ struct WgpuPathTracer::Impl {
         bouncesPipeline.setStorageBuffer(43, alive1QueueBuf);
         bouncesPipeline.setStorageBuffer(44, alive1CountBuf);
         bouncesPipeline.setStorageBuffer(45, accumCounterBuf);
+        bouncesPipeline.setStorageBuffer(46, matBucketCountBuf);
+        bouncesPipeline.setStorageBuffer(47, matBucketOffsetBuf);
+        bouncesPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
+        bouncesPipeline.setStorageBuffer(49, sortCounterBuf);
 
         // Compaction kernel (Stage F1).  Full bind-group mirror because it
         // uses the same shader source as primary/rt/bounces — bind-group layout
@@ -673,6 +697,10 @@ struct WgpuPathTracer::Impl {
         compactPipeline.setStorageBuffer(43, alive1QueueBuf);
         compactPipeline.setStorageBuffer(44, alive1CountBuf);
         compactPipeline.setStorageBuffer(45, accumCounterBuf);
+        compactPipeline.setStorageBuffer(46, matBucketCountBuf);
+        compactPipeline.setStorageBuffer(47, matBucketOffsetBuf);
+        compactPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
+        compactPipeline.setStorageBuffer(49, sortCounterBuf);
 
         // F2a: rt_bounce1_main processes bounce 1 (i=1) as a separate kernel.
         // Full bind-group mirror (same shader source, different entry point).
@@ -722,6 +750,10 @@ struct WgpuPathTracer::Impl {
         bounce1Pipeline.setStorageBuffer(43, alive1QueueBuf);
         bounce1Pipeline.setStorageBuffer(44, alive1CountBuf);
         bounce1Pipeline.setStorageBuffer(45, accumCounterBuf);
+        bounce1Pipeline.setStorageBuffer(46, matBucketCountBuf);
+        bounce1Pipeline.setStorageBuffer(47, matBucketOffsetBuf);
+        bounce1Pipeline.setStorageBuffer(48, sortedAliveQueueBuf);
+        bounce1Pipeline.setStorageBuffer(49, sortCounterBuf);
 
         // F2b: rt_accum_main runs the accumulation / temporal-reprojection
         // pipeline over aliveQueue.  Reads PathStateEntry (final radiance +
@@ -773,6 +805,115 @@ struct WgpuPathTracer::Impl {
         accumPipeline.setStorageBuffer(43, alive1QueueBuf);
         accumPipeline.setStorageBuffer(44, alive1CountBuf);
         accumPipeline.setStorageBuffer(45, accumCounterBuf);
+        accumPipeline.setStorageBuffer(46, matBucketCountBuf);
+        accumPipeline.setStorageBuffer(47, matBucketOffsetBuf);
+        accumPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
+        accumPipeline.setStorageBuffer(49, sortCounterBuf);
+
+        // F2c: rt_sort_prefix_main runs a tiny 1-thread prefix sum over
+        // matBucketCount.  Full bind-group mirror — WebGPU layout validation.
+        sortPrefixPipeline.setUniformBuffer(0, rtUniformBuf);
+        sortPrefixPipeline.setTexture(1, *accum.read);
+        sortPrefixPipeline.setStorageTexture(2, *accum.write);
+        sortPrefixPipeline.setStorageBufferRead(3, bvhNodeBuf);
+        sortPrefixPipeline.setTexture(4, matTex);
+        sortPrefixPipeline.setTexture(5, triTex);
+        sortPrefixPipeline.setTexture(6, texAtlasTex);
+        sortPrefixPipeline.setTexture(7, *hitMesh.read);
+        sortPrefixPipeline.setStorageTexture(8, *hitMesh.write);
+        sortPrefixPipeline.setTexture(9, envTexGpu);
+        sortPrefixPipeline.setStorageTexture(10, *gBuf.read);
+        sortPrefixPipeline.setStorageBufferRead(11, emissiveTriBuf);
+        sortPrefixPipeline.setTexture(12, envCdfTex);
+        sortPrefixPipeline.setTexture(13, envMargTex);
+        sortPrefixPipeline.setStorageTexture(14, albedoTex);
+        sortPrefixPipeline.setTexture(15, *gBuf.write);
+        sortPrefixPipeline.setTexture(16, bgTexGpu);
+        sortPrefixPipeline.setTexture(17, *reservoir.read);
+        sortPrefixPipeline.setStorageTexture(18, *reservoir.write);
+        sortPrefixPipeline.setTexture(19, *reservoirW.read);
+        sortPrefixPipeline.setStorageTexture(20, *reservoirW.write);
+        sortPrefixPipeline.setTexture(21, *moments.read);
+        sortPrefixPipeline.setStorageTexture(22, *moments.write);
+        sortPrefixPipeline.setTexture(23, *diffAccum.read);
+        sortPrefixPipeline.setStorageTexture(24, *diffAccum.write);
+        sortPrefixPipeline.setTexture(25, *specAccum.read);
+        sortPrefixPipeline.setStorageTexture(26, *specAccum.write);
+        sortPrefixPipeline.setStorageBufferRead(27, motionMatBuf);
+        sortPrefixPipeline.setTexture(28, *giRes.read);
+        sortPrefixPipeline.setStorageTexture(29, *giRes.write);
+        sortPrefixPipeline.setTexture(30, *giResW.read);
+        sortPrefixPipeline.setStorageTexture(31, *giResW.write);
+        sortPrefixPipeline.setTexture(32, *giResLo.read);
+        sortPrefixPipeline.setStorageTexture(33, *giResLo.write);
+        sortPrefixPipeline.setStorageBuffer(34, pathCounterBuf);
+        sortPrefixPipeline.setStorageBuffer(35, primaryHitBuf);
+        sortPrefixPipeline.setStorageBuffer(36, primaryCounterBuf);
+        sortPrefixPipeline.setStorageBuffer(37, pathStateBuf);
+        sortPrefixPipeline.setStorageBuffer(38, bounceCounterBuf);
+        sortPrefixPipeline.setStorageBuffer(39, aliveQueueBuf);
+        sortPrefixPipeline.setStorageBuffer(40, aliveCountBuf);
+        sortPrefixPipeline.setStorageBuffer(41, compactCounterBuf);
+        sortPrefixPipeline.setStorageBuffer(42, bounce1CounterBuf);
+        sortPrefixPipeline.setStorageBuffer(43, alive1QueueBuf);
+        sortPrefixPipeline.setStorageBuffer(44, alive1CountBuf);
+        sortPrefixPipeline.setStorageBuffer(45, accumCounterBuf);
+        sortPrefixPipeline.setStorageBuffer(46, matBucketCountBuf);
+        sortPrefixPipeline.setStorageBuffer(47, matBucketOffsetBuf);
+        sortPrefixPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
+        sortPrefixPipeline.setStorageBuffer(49, sortCounterBuf);
+
+        // F2c: rt_sort_scatter_main bucket-scatters aliveQueue → sortedAliveQueue.
+        sortScatterPipeline.setUniformBuffer(0, rtUniformBuf);
+        sortScatterPipeline.setTexture(1, *accum.read);
+        sortScatterPipeline.setStorageTexture(2, *accum.write);
+        sortScatterPipeline.setStorageBufferRead(3, bvhNodeBuf);
+        sortScatterPipeline.setTexture(4, matTex);
+        sortScatterPipeline.setTexture(5, triTex);
+        sortScatterPipeline.setTexture(6, texAtlasTex);
+        sortScatterPipeline.setTexture(7, *hitMesh.read);
+        sortScatterPipeline.setStorageTexture(8, *hitMesh.write);
+        sortScatterPipeline.setTexture(9, envTexGpu);
+        sortScatterPipeline.setStorageTexture(10, *gBuf.read);
+        sortScatterPipeline.setStorageBufferRead(11, emissiveTriBuf);
+        sortScatterPipeline.setTexture(12, envCdfTex);
+        sortScatterPipeline.setTexture(13, envMargTex);
+        sortScatterPipeline.setStorageTexture(14, albedoTex);
+        sortScatterPipeline.setTexture(15, *gBuf.write);
+        sortScatterPipeline.setTexture(16, bgTexGpu);
+        sortScatterPipeline.setTexture(17, *reservoir.read);
+        sortScatterPipeline.setStorageTexture(18, *reservoir.write);
+        sortScatterPipeline.setTexture(19, *reservoirW.read);
+        sortScatterPipeline.setStorageTexture(20, *reservoirW.write);
+        sortScatterPipeline.setTexture(21, *moments.read);
+        sortScatterPipeline.setStorageTexture(22, *moments.write);
+        sortScatterPipeline.setTexture(23, *diffAccum.read);
+        sortScatterPipeline.setStorageTexture(24, *diffAccum.write);
+        sortScatterPipeline.setTexture(25, *specAccum.read);
+        sortScatterPipeline.setStorageTexture(26, *specAccum.write);
+        sortScatterPipeline.setStorageBufferRead(27, motionMatBuf);
+        sortScatterPipeline.setTexture(28, *giRes.read);
+        sortScatterPipeline.setStorageTexture(29, *giRes.write);
+        sortScatterPipeline.setTexture(30, *giResW.read);
+        sortScatterPipeline.setStorageTexture(31, *giResW.write);
+        sortScatterPipeline.setTexture(32, *giResLo.read);
+        sortScatterPipeline.setStorageTexture(33, *giResLo.write);
+        sortScatterPipeline.setStorageBuffer(34, pathCounterBuf);
+        sortScatterPipeline.setStorageBuffer(35, primaryHitBuf);
+        sortScatterPipeline.setStorageBuffer(36, primaryCounterBuf);
+        sortScatterPipeline.setStorageBuffer(37, pathStateBuf);
+        sortScatterPipeline.setStorageBuffer(38, bounceCounterBuf);
+        sortScatterPipeline.setStorageBuffer(39, aliveQueueBuf);
+        sortScatterPipeline.setStorageBuffer(40, aliveCountBuf);
+        sortScatterPipeline.setStorageBuffer(41, compactCounterBuf);
+        sortScatterPipeline.setStorageBuffer(42, bounce1CounterBuf);
+        sortScatterPipeline.setStorageBuffer(43, alive1QueueBuf);
+        sortScatterPipeline.setStorageBuffer(44, alive1CountBuf);
+        sortScatterPipeline.setStorageBuffer(45, accumCounterBuf);
+        sortScatterPipeline.setStorageBuffer(46, matBucketCountBuf);
+        sortScatterPipeline.setStorageBuffer(47, matBucketOffsetBuf);
+        sortScatterPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
+        sortScatterPipeline.setStorageBuffer(49, sortCounterBuf);
 
         // Spatial filter — set ALL bindings upfront
         atrousPipeline.setUniformBuffer(0, atrousUniBuf);
@@ -927,31 +1068,49 @@ struct WgpuPathTracer::Impl {
                                         WgpuBuffer::Usage::Storage);
             alive1QueueBuf = WgpuBuffer(renderer, static_cast<size_t>(newPixels) * sizeof(uint32_t),
                                          WgpuBuffer::Usage::Storage);
-            // Re-bind on all six pipelines — buffer object identities changed.
+            sortedAliveQueueBuf = WgpuBuffer(renderer, static_cast<size_t>(newPixels) * sizeof(uint32_t),
+                                              WgpuBuffer::Usage::Storage);
+            // Re-bind on all eight pipelines — buffer object identities changed.
             primaryPipeline.setStorageBuffer(35, primaryHitBuf);
             rtPipeline.setStorageBuffer(35, primaryHitBuf);
             bouncesPipeline.setStorageBuffer(35, primaryHitBuf);
             compactPipeline.setStorageBuffer(35, primaryHitBuf);
             bounce1Pipeline.setStorageBuffer(35, primaryHitBuf);
             accumPipeline.setStorageBuffer(35, primaryHitBuf);
+            sortPrefixPipeline.setStorageBuffer(35, primaryHitBuf);
+            sortScatterPipeline.setStorageBuffer(35, primaryHitBuf);
             primaryPipeline.setStorageBuffer(37, pathStateBuf);
             rtPipeline.setStorageBuffer(37, pathStateBuf);
             bouncesPipeline.setStorageBuffer(37, pathStateBuf);
             compactPipeline.setStorageBuffer(37, pathStateBuf);
             bounce1Pipeline.setStorageBuffer(37, pathStateBuf);
             accumPipeline.setStorageBuffer(37, pathStateBuf);
+            sortPrefixPipeline.setStorageBuffer(37, pathStateBuf);
+            sortScatterPipeline.setStorageBuffer(37, pathStateBuf);
             primaryPipeline.setStorageBuffer(39, aliveQueueBuf);
             rtPipeline.setStorageBuffer(39, aliveQueueBuf);
             bouncesPipeline.setStorageBuffer(39, aliveQueueBuf);
             compactPipeline.setStorageBuffer(39, aliveQueueBuf);
             bounce1Pipeline.setStorageBuffer(39, aliveQueueBuf);
             accumPipeline.setStorageBuffer(39, aliveQueueBuf);
+            sortPrefixPipeline.setStorageBuffer(39, aliveQueueBuf);
+            sortScatterPipeline.setStorageBuffer(39, aliveQueueBuf);
             primaryPipeline.setStorageBuffer(43, alive1QueueBuf);
             rtPipeline.setStorageBuffer(43, alive1QueueBuf);
             bouncesPipeline.setStorageBuffer(43, alive1QueueBuf);
             compactPipeline.setStorageBuffer(43, alive1QueueBuf);
             bounce1Pipeline.setStorageBuffer(43, alive1QueueBuf);
             accumPipeline.setStorageBuffer(43, alive1QueueBuf);
+            sortPrefixPipeline.setStorageBuffer(43, alive1QueueBuf);
+            sortScatterPipeline.setStorageBuffer(43, alive1QueueBuf);
+            primaryPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
+            rtPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
+            bouncesPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
+            compactPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
+            bounce1Pipeline.setStorageBuffer(48, sortedAliveQueueBuf);
+            accumPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
+            sortPrefixPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
+            sortScatterPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         }
 
         accum.a = WgpuTexture(renderer, uw, uh, fmt);
@@ -1189,6 +1348,57 @@ struct WgpuPathTracer::Impl {
         accumPipeline.setStorageTexture(31, *giResW.write);
         accumPipeline.setTexture(32, *giResLo.read);
         accumPipeline.setStorageTexture(33, *giResLo.write);
+
+        // Mirror texture re-bindings on sort pipelines (F2c).
+        sortPrefixPipeline.setTexture(1, *accum.read);
+        sortPrefixPipeline.setStorageTexture(2, *accum.write);
+        sortPrefixPipeline.setTexture(7, *hitMesh.read);
+        sortPrefixPipeline.setStorageTexture(8, *hitMesh.write);
+        sortPrefixPipeline.setStorageTexture(10, *gBuf.read);
+        sortPrefixPipeline.setTexture(15, *gBuf.write);
+        sortPrefixPipeline.setStorageTexture(14, albedoTex);
+        sortPrefixPipeline.setTexture(17, *reservoir.read);
+        sortPrefixPipeline.setStorageTexture(18, *reservoir.write);
+        sortPrefixPipeline.setTexture(19, *reservoirW.read);
+        sortPrefixPipeline.setStorageTexture(20, *reservoirW.write);
+        sortPrefixPipeline.setTexture(21, *moments.read);
+        sortPrefixPipeline.setStorageTexture(22, *moments.write);
+        sortPrefixPipeline.setTexture(23, *diffAccum.read);
+        sortPrefixPipeline.setStorageTexture(24, *diffAccum.write);
+        sortPrefixPipeline.setTexture(25, *specAccum.read);
+        sortPrefixPipeline.setStorageTexture(26, *specAccum.write);
+        sortPrefixPipeline.setStorageBufferRead(27, motionMatBuf);
+        sortPrefixPipeline.setTexture(28, *giRes.read);
+        sortPrefixPipeline.setStorageTexture(29, *giRes.write);
+        sortPrefixPipeline.setTexture(30, *giResW.read);
+        sortPrefixPipeline.setStorageTexture(31, *giResW.write);
+        sortPrefixPipeline.setTexture(32, *giResLo.read);
+        sortPrefixPipeline.setStorageTexture(33, *giResLo.write);
+
+        sortScatterPipeline.setTexture(1, *accum.read);
+        sortScatterPipeline.setStorageTexture(2, *accum.write);
+        sortScatterPipeline.setTexture(7, *hitMesh.read);
+        sortScatterPipeline.setStorageTexture(8, *hitMesh.write);
+        sortScatterPipeline.setStorageTexture(10, *gBuf.read);
+        sortScatterPipeline.setTexture(15, *gBuf.write);
+        sortScatterPipeline.setStorageTexture(14, albedoTex);
+        sortScatterPipeline.setTexture(17, *reservoir.read);
+        sortScatterPipeline.setStorageTexture(18, *reservoir.write);
+        sortScatterPipeline.setTexture(19, *reservoirW.read);
+        sortScatterPipeline.setStorageTexture(20, *reservoirW.write);
+        sortScatterPipeline.setTexture(21, *moments.read);
+        sortScatterPipeline.setStorageTexture(22, *moments.write);
+        sortScatterPipeline.setTexture(23, *diffAccum.read);
+        sortScatterPipeline.setStorageTexture(24, *diffAccum.write);
+        sortScatterPipeline.setTexture(25, *specAccum.read);
+        sortScatterPipeline.setStorageTexture(26, *specAccum.write);
+        sortScatterPipeline.setStorageBufferRead(27, motionMatBuf);
+        sortScatterPipeline.setTexture(28, *giRes.read);
+        sortScatterPipeline.setStorageTexture(29, *giRes.write);
+        sortScatterPipeline.setTexture(30, *giResW.read);
+        sortScatterPipeline.setStorageTexture(31, *giResW.write);
+        sortScatterPipeline.setTexture(32, *giResLo.read);
+        sortScatterPipeline.setStorageTexture(33, *giResLo.write);
 
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(6, *moments.read);
@@ -1833,6 +2043,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.compactPipeline.setTexture(5, d.triTex);
             d.bounce1Pipeline.setTexture(5, d.triTex);
             d.accumPipeline.setTexture(5, d.triTex);
+            d.sortPrefixPipeline.setTexture(5, d.triTex);
+            d.sortScatterPipeline.setTexture(5, d.triTex);
         }
 
         // Size emissiveTriBuf to the ACTUAL emissive-tri count (was previously
@@ -1857,6 +2069,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.compactPipeline.setStorageBufferRead(11, d.emissiveTriBuf);
             d.bounce1Pipeline.setStorageBufferRead(11, d.emissiveTriBuf);
             d.accumPipeline.setStorageBufferRead(11, d.emissiveTriBuf);
+            d.sortPrefixPipeline.setStorageBufferRead(11, d.emissiveTriBuf);
+            d.sortScatterPipeline.setStorageBufferRead(11, d.emissiveTriBuf);
         }
         if (r.bvhCapacity != d.bvhCapacity_) {
             d.bvhCapacity_ = r.bvhCapacity;
@@ -1876,6 +2090,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.compactPipeline.setStorageBufferRead(3, d.bvhNodeBuf);
             d.bounce1Pipeline.setStorageBufferRead(3, d.bvhNodeBuf);
             d.accumPipeline.setStorageBufferRead(3, d.bvhNodeBuf);
+            d.sortPrefixPipeline.setStorageBufferRead(3, d.bvhNodeBuf);
+            d.sortScatterPipeline.setStorageBufferRead(3, d.bvhNodeBuf);
         }
         if (r.matCapacity != d.matCapacity_) {
             d.matCapacity_ = r.matCapacity;
@@ -1888,6 +2104,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.compactPipeline.setTexture(4, d.matTex);
             d.bounce1Pipeline.setTexture(4, d.matTex);
             d.accumPipeline.setTexture(4, d.matTex);
+            d.sortPrefixPipeline.setTexture(4, d.matTex);
+            d.sortScatterPipeline.setTexture(4, d.matTex);
         }
         if (r.meshCapacity != d.meshCapacity_) {
             d.meshCapacity_ = r.meshCapacity;
@@ -1902,6 +2120,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.compactPipeline.setStorageBufferRead(27, d.motionMatBuf);
             d.bounce1Pipeline.setStorageBufferRead(27, d.motionMatBuf);
             d.accumPipeline.setStorageBufferRead(27, d.motionMatBuf);
+            d.sortPrefixPipeline.setStorageBufferRead(27, d.motionMatBuf);
+            d.sortScatterPipeline.setStorageBufferRead(27, d.motionMatBuf);
         }
 
         // Upload atlas
@@ -1923,6 +2143,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.compactPipeline.setTexture(6, d.texAtlasTex);
             d.bounce1Pipeline.setTexture(6, d.texAtlasTex);
             d.accumPipeline.setTexture(6, d.texAtlasTex);
+            d.sortPrefixPipeline.setTexture(6, d.texAtlasTex);
+            d.sortScatterPipeline.setTexture(6, d.texAtlasTex);
         }
         // Upload atlas layers
         const size_t layerBytes = static_cast<size_t>(d.atlasCols_ * d.tileSize_) * (d.atlasCols_ * d.tileSize_) * 4;
@@ -1975,6 +2197,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.compactPipeline.startAsyncBuild();
         d.bounce1Pipeline.startAsyncBuild();
         d.accumPipeline.startAsyncBuild();
+        d.sortPrefixPipeline.startAsyncBuild();
+        d.sortScatterPipeline.startAsyncBuild();
         // Mark that triTex has not yet been populated via the VT pass.
         // The first real dispatch must run the VT pass even if no mesh moved.
         d.firstDispatchPending_ = true;
@@ -2184,6 +2408,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 d.compactPipeline.setTexture(9, d.envTexGpu);
                 d.bounce1Pipeline.setTexture(9, d.envTexGpu);
                 d.accumPipeline.setTexture(9, d.envTexGpu);
+                d.sortPrefixPipeline.setTexture(9, d.envTexGpu);
+                d.sortScatterPipeline.setTexture(9, d.envTexGpu);
 
                 // Build env CDF for importance sampling.
                 auto& img = envTex->image();
@@ -2216,6 +2442,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                     d.compactPipeline.setTexture(12, d.envCdfTex);
                     d.bounce1Pipeline.setTexture(12, d.envCdfTex);
                     d.accumPipeline.setTexture(12, d.envCdfTex);
+                    d.sortPrefixPipeline.setTexture(12, d.envCdfTex);
+                    d.sortScatterPipeline.setTexture(12, d.envCdfTex);
                     d.envMargTex = WgpuTexture(d.renderer,
                                                static_cast<uint32_t>(cdf.height), 1u,
                                                WgpuTexture::Format::R32Float,
@@ -2227,6 +2455,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                     d.compactPipeline.setTexture(13, d.envMargTex);
                     d.bounce1Pipeline.setTexture(13, d.envMargTex);
                     d.accumPipeline.setTexture(13, d.envMargTex);
+                    d.sortPrefixPipeline.setTexture(13, d.envMargTex);
+                    d.sortScatterPipeline.setTexture(13, d.envMargTex);
                     if (!d.shaderHasEnvCdf_) {
                         d.rtPipeline.replaceShader(buildRtShader(true));
                         d.primaryPipeline.replaceShader(buildRtShader(true));
@@ -2234,6 +2464,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                         d.compactPipeline.replaceShader(buildRtShader(true));
                         d.bounce1Pipeline.replaceShader(buildRtShader(true));
                         d.accumPipeline.replaceShader(buildRtShader(true));
+                        d.sortPrefixPipeline.replaceShader(buildRtShader(true));
+                        d.sortScatterPipeline.replaceShader(buildRtShader(true));
                         d.shaderHasEnvCdf_ = true;
                     }
 #else
@@ -2268,6 +2500,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                     d.compactPipeline.replaceShader(buildRtShader(false));
                     d.bounce1Pipeline.replaceShader(buildRtShader(false));
                     d.accumPipeline.replaceShader(buildRtShader(false));
+                    d.sortPrefixPipeline.replaceShader(buildRtShader(false));
+                    d.sortScatterPipeline.replaceShader(buildRtShader(false));
                     d.shaderHasEnvCdf_ = false;
                 }
             }
@@ -2285,6 +2519,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 d.compactPipeline.setTexture(16, d.bgTexGpu);
                 d.bounce1Pipeline.setTexture(16, d.bgTexGpu);
                 d.accumPipeline.setTexture(16, d.bgTexGpu);
+                d.sortPrefixPipeline.setTexture(16, d.bgTexGpu);
+                d.sortScatterPipeline.setTexture(16, d.bgTexGpu);
                 d.prevBgTex_ = bgTex;
             }
             u.bgColor[3] = 2.f;
@@ -2315,6 +2551,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.compactPipeline.setTexture(12, d.envCdfTex);
         d.bounce1Pipeline.setTexture(12, d.envCdfTex);
         d.accumPipeline.setTexture(12, d.envCdfTex);
+        d.sortPrefixPipeline.setTexture(12, d.envCdfTex);
+        d.sortScatterPipeline.setTexture(12, d.envCdfTex);
         d.envMargTex = WgpuTexture(d.renderer,
                                    static_cast<uint32_t>(cdf.height), 1u,
                                    WgpuTexture::Format::R32Float,
@@ -2326,6 +2564,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.compactPipeline.setTexture(13, d.envMargTex);
         d.bounce1Pipeline.setTexture(13, d.envMargTex);
         d.accumPipeline.setTexture(13, d.envMargTex);
+        d.sortPrefixPipeline.setTexture(13, d.envMargTex);
+        d.sortScatterPipeline.setTexture(13, d.envMargTex);
         // Swap to env CDF shader variant
         if (!d.shaderHasEnvCdf_) {
             d.rtPipeline.replaceShader(buildRtShader(true));
@@ -2334,6 +2574,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.compactPipeline.replaceShader(buildRtShader(true));
             d.bounce1Pipeline.replaceShader(buildRtShader(true));
             d.accumPipeline.replaceShader(buildRtShader(true));
+            d.sortPrefixPipeline.replaceShader(buildRtShader(true));
+            d.sortScatterPipeline.replaceShader(buildRtShader(true));
             d.shaderHasEnvCdf_ = true;
         }
     }
@@ -2440,7 +2682,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
     // Skip RT dispatch if either pipeline is still compiling asynchronously.
     // On cold shader cache (first launch / code change) this can take 10-30 seconds.
-    if (!activePipeline.isReady() || !d.primaryPipeline.isReady() || !d.bouncesPipeline.isReady() || !d.compactPipeline.isReady() || !d.bounce1Pipeline.isReady() || !d.accumPipeline.isReady()) {
+    if (!activePipeline.isReady() || !d.primaryPipeline.isReady() || !d.bouncesPipeline.isReady() || !d.compactPipeline.isReady() || !d.bounce1Pipeline.isReady() || !d.accumPipeline.isReady() || !d.sortPrefixPipeline.isReady() || !d.sortScatterPipeline.isReady()) {
         ++d.shaderWaitFrames_;
         if (d.shaderWaitFrames_ == 1) {
             std::cerr << "[PathTracer] Compiling RT shaders — first launch may take 10-30s "
@@ -2462,6 +2704,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.compactPipeline.forceFinishBuild();
             d.bounce1Pipeline.forceFinishBuild();
             d.accumPipeline.forceFinishBuild();
+            d.sortPrefixPipeline.forceFinishBuild();
+            d.sortScatterPipeline.forceFinishBuild();
             d.shaderWaitFrames_ = 0;
             // Fall through: isReady() now returns true; encode() will do the fast sync rebuild.
         } else {
@@ -2528,6 +2772,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.accumPipeline.setStorageTexture(2, *d.accum.write);
         d.accumPipeline.setTexture(7, *d.hitMesh.read);
         d.accumPipeline.setStorageTexture(8, *d.hitMesh.write);
+        d.sortPrefixPipeline.setTexture(1, *d.accum.read);
+        d.sortPrefixPipeline.setStorageTexture(2, *d.accum.write);
+        d.sortPrefixPipeline.setTexture(7, *d.hitMesh.read);
+        d.sortPrefixPipeline.setStorageTexture(8, *d.hitMesh.write);
+        d.sortScatterPipeline.setTexture(1, *d.accum.read);
+        d.sortScatterPipeline.setStorageTexture(2, *d.accum.write);
+        d.sortScatterPipeline.setTexture(7, *d.hitMesh.read);
+        d.sortScatterPipeline.setStorageTexture(8, *d.hitMesh.write);
 
         // GPU dispatch
         {
@@ -2571,6 +2823,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.bounce1CounterBuf.write(&counterZero, sizeof(counterZero));
             d.alive1CountBuf.write(&counterZero, sizeof(counterZero));
             d.accumCounterBuf.write(&counterZero, sizeof(counterZero));
+            d.sortCounterBuf.write(&counterZero, sizeof(counterZero));
+            // F2c: zero all 256 bucket counts each frame.
+            static const uint32_t bucketZeros[256] = {};
+            d.matBucketCountBuf.write(bucketZeros, sizeof(bucketZeros));
 
             // Kernel split — step 1: primary BVH traversal → primaryHitBuf.
             passDesc.label = WGPUStringView{"rt_primary_pass", WGPU_STRLEN};
@@ -2587,11 +2843,27 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             wgpuComputePassEncoderRelease(pass);
 
             // Kernel split — step 2.5 (F1): compact non-skipAccum pixels into aliveQueue.
+            // Also counts per-material buckets for F2c sort.
             passDesc.label = WGPUStringView{"rt_compact_pass", WGPU_STRLEN};
             WGPUComputePassEncoder compactPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
             d.compactPipeline.encode(compactPass, rtWorkgroups, 1u);
             wgpuComputePassEncoderEnd(compactPass);
             wgpuComputePassEncoderRelease(compactPass);
+
+            // Kernel split — step 2.6 (F2c): exclusive prefix sum over matBucketCount.
+            // 1 workgroup × 1 thread over 256 buckets — trivial cost.
+            passDesc.label = WGPUStringView{"rt_sort_prefix_pass", WGPU_STRLEN};
+            WGPUComputePassEncoder sortPrefixPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
+            d.sortPrefixPipeline.encode(sortPrefixPass, 1u, 1u);
+            wgpuComputePassEncoderEnd(sortPrefixPass);
+            wgpuComputePassEncoderRelease(sortPrefixPass);
+
+            // Kernel split — step 2.7 (F2c): bucket-scatter aliveQueue → sortedAliveQueue.
+            passDesc.label = WGPUStringView{"rt_sort_scatter_pass", WGPU_STRLEN};
+            WGPUComputePassEncoder sortScatterPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
+            d.sortScatterPipeline.encode(sortScatterPass, rtWorkgroups, 1u);
+            wgpuComputePassEncoderEnd(sortScatterPass);
+            wgpuComputePassEncoderRelease(sortScatterPass);
 
             passDesc.label = WGPUStringView{"rt_bounce1_pass", WGPU_STRLEN};
             WGPUComputePassEncoder bounce1Pass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
@@ -2778,6 +3050,53 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.accumPipeline.setStorageTexture(31, *d.giResW.write);
         d.accumPipeline.setTexture(32, *d.giResLo.read);
         d.accumPipeline.setStorageTexture(33, *d.giResLo.write);
+
+        // Mirror all ping-pong rebindings on sort pipelines (F2c).
+        d.sortPrefixPipeline.setTexture(1, *d.accum.read);
+        d.sortPrefixPipeline.setStorageTexture(2, *d.accum.write);
+        d.sortPrefixPipeline.setTexture(7, *d.hitMesh.read);
+        d.sortPrefixPipeline.setStorageTexture(8, *d.hitMesh.write);
+        d.sortPrefixPipeline.setStorageTexture(10, *d.gBuf.read);
+        d.sortPrefixPipeline.setTexture(15, *d.gBuf.write);
+        d.sortPrefixPipeline.setTexture(17, *d.reservoir.read);
+        d.sortPrefixPipeline.setStorageTexture(18, *d.reservoir.write);
+        d.sortPrefixPipeline.setTexture(19, *d.reservoirW.read);
+        d.sortPrefixPipeline.setStorageTexture(20, *d.reservoirW.write);
+        d.sortPrefixPipeline.setTexture(21, *d.moments.read);
+        d.sortPrefixPipeline.setStorageTexture(22, *d.moments.write);
+        d.sortPrefixPipeline.setTexture(23, *d.diffAccum.read);
+        d.sortPrefixPipeline.setStorageTexture(24, *d.diffAccum.write);
+        d.sortPrefixPipeline.setTexture(25, *d.specAccum.read);
+        d.sortPrefixPipeline.setStorageTexture(26, *d.specAccum.write);
+        d.sortPrefixPipeline.setTexture(28, *d.giRes.read);
+        d.sortPrefixPipeline.setStorageTexture(29, *d.giRes.write);
+        d.sortPrefixPipeline.setTexture(30, *d.giResW.read);
+        d.sortPrefixPipeline.setStorageTexture(31, *d.giResW.write);
+        d.sortPrefixPipeline.setTexture(32, *d.giResLo.read);
+        d.sortPrefixPipeline.setStorageTexture(33, *d.giResLo.write);
+
+        d.sortScatterPipeline.setTexture(1, *d.accum.read);
+        d.sortScatterPipeline.setStorageTexture(2, *d.accum.write);
+        d.sortScatterPipeline.setTexture(7, *d.hitMesh.read);
+        d.sortScatterPipeline.setStorageTexture(8, *d.hitMesh.write);
+        d.sortScatterPipeline.setStorageTexture(10, *d.gBuf.read);
+        d.sortScatterPipeline.setTexture(15, *d.gBuf.write);
+        d.sortScatterPipeline.setTexture(17, *d.reservoir.read);
+        d.sortScatterPipeline.setStorageTexture(18, *d.reservoir.write);
+        d.sortScatterPipeline.setTexture(19, *d.reservoirW.read);
+        d.sortScatterPipeline.setStorageTexture(20, *d.reservoirW.write);
+        d.sortScatterPipeline.setTexture(21, *d.moments.read);
+        d.sortScatterPipeline.setStorageTexture(22, *d.moments.write);
+        d.sortScatterPipeline.setTexture(23, *d.diffAccum.read);
+        d.sortScatterPipeline.setStorageTexture(24, *d.diffAccum.write);
+        d.sortScatterPipeline.setTexture(25, *d.specAccum.read);
+        d.sortScatterPipeline.setStorageTexture(26, *d.specAccum.write);
+        d.sortScatterPipeline.setTexture(28, *d.giRes.read);
+        d.sortScatterPipeline.setStorageTexture(29, *d.giRes.write);
+        d.sortScatterPipeline.setTexture(30, *d.giResW.read);
+        d.sortScatterPipeline.setStorageTexture(31, *d.giResW.write);
+        d.sortScatterPipeline.setTexture(32, *d.giResLo.read);
+        d.sortScatterPipeline.setStorageTexture(33, *d.giResLo.write);
     }
 
     // Update denoiser's moments reference (reads converged moments)
