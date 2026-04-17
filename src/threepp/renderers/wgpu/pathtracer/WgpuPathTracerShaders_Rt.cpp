@@ -95,6 +95,72 @@ struct Bvh4NodeGpu {
 // work unit rather than idling for warp-mates tracing long paths.
 @group(0) @binding(34) var<storage, read_write> pathCounter: atomic<u32>;
 
+// Kernel-split primary-hit buffer.  The primary kernel (rt_primary_main) does
+// BVH traversal for the camera ray and writes the minimal RawHit payload here.
+// The shading kernel (rt_main) reads it, reconstructs the full Hit via
+// loadHitMaterial, and continues with shading/NEE/ReSTIR/bounces — splitting
+// register pressure across two smaller kernels rather than one megakernel.
+struct PrimaryHitPacked {
+    triIdx: i32,  // -1 = miss (sky/env)
+    t:      f32,
+    u:      f32,
+    v:      f32,
+}
+@group(0) @binding(35) var<storage, read_write> primaryHitBuf: array<PrimaryHitPacked>;
+
+// Dedicated work-queue counter for the primary kernel.  Both primary and rt
+// need to traverse all pixels, but they share a command encoder — and GPU-side
+// queue.writeBuffer calls to reset a shared counter only land BEFORE the
+// encoder executes (not between passes), so a single counter would be
+// consumed by the primary pass leaving the rt pass with no work.
+@group(0) @binding(36) var<storage, read_write> primaryCounter: atomic<u32>;
+
+// Kernel-split bounce state.
+// Written by primaryShade (inline in rt_main), read by rt_bounces_main.  Carries all live state across the primary→bounce kernel
+// boundary: the next ray, throughput, accumulated radiance, MIS context,
+// adaptive bounce cap, and the bounce-0 surface properties needed by ReSTIR
+// GI at bounce 1.  12 vec4s = 192 bytes per pixel.
+//
+// Packing legend (indices = element .x/.y/.z/.w):
+//   [0] rayOrigin.xyz, seed (bitcast u32)
+//   [1] rayDir.xyz,    effectiveBounces (bitcast i32)
+//   [2] throughput.xyz, flags (bitcast u32:
+//                                bit 0 firstBounceSpec
+//                                bit 1 afterTransmission
+//                                bit 2 touchedMoved
+//                                bit 3 pathAlive
+//                                bit 4 giResStored
+//                                bit 5 skipAccum — foveated/sky/AOV early-exit wrote accum already)
+//   [3] diffRad.xyz,   prevMetalness
+//   [4] specRad.xyz,   prevAlpha
+//   [5] prevNormal.xyz, primaryDepth   (Stage D: accumulation reprojection input)
+//   [6] prevWo.xyz,    _unused
+//   [7] b0Point.xyz,   b0Alpha
+//   [8] b0Normal.xyz,  b0Metal
+//   [9] b0Wo.xyz,      b0MeshIdx (bitcast i32, -1 = no bounce-0)
+//   [10] b0Albedo.xyz, primaryMatIdx (bitcast i32 — Stage D: hitMesh.g channel)
+//   [11] b0F0.xyz,     _unused
+struct PathStateEntry {
+    w0:  vec4<f32>,
+    w1:  vec4<f32>,
+    w2:  vec4<f32>,
+    w3:  vec4<f32>,
+    w4:  vec4<f32>,
+    w5:  vec4<f32>,
+    w6:  vec4<f32>,
+    w7:  vec4<f32>,
+    w8:  vec4<f32>,
+    w9:  vec4<f32>,
+    w10: vec4<f32>,
+    w11: vec4<f32>,
+}
+@group(0) @binding(37) var<storage, read_write> pathStateBuf: array<PathStateEntry>;
+
+// Dedicated work-queue counter for rt_bounces_main.  Same reasoning as
+// primaryCounter: CPU-side atomic resets can't interleave with compute passes in
+// one encoder, so each kernel in the sample dispatch chain needs its own counter.
+@group(0) @binding(38) var<storage, read_write> bounceCounter: atomic<u32>;
+
 const MAX_TEX_SLOTS: i32 = 1024;
 const EMPTY_CHILD: i32 = -2147483648;  // INT_MIN — sentinel for unused BVH4 child slots
 
@@ -1498,83 +1564,93 @@ fn reconnJacobian(secPos: vec3<f32>, secNorm: vec3<f32>,
 }
 
 struct SplitRadiance { diff: vec3<f32>, spec: vec3<f32> }
+
+// PrimaryShadeResult: all state that flows from primaryShade (bounce-0) into
+// runBounces (bounces 1..N).  Serialized to pathStateBuf at the kernel boundary
+// between rt_main and rt_bounces_main — keep field set in sync with that layout.
+struct PrimaryShadeResult {
+    rayOrigin:         vec3<f32>,
+    rayDir:            vec3<f32>,
+    throughput:        vec3<f32>,
+    diffRad:           vec3<f32>,  // radiance accumulated during primaryShade
+    specRad:           vec3<f32>,
+    prevNormal:        vec3<f32>,
+    prevWo:            vec3<f32>,
+    prevAlpha:         f32,
+    prevMetalness:     f32,
+    afterTransmission: bool,
+    firstBounceSpec:   bool,
+    effectiveBounces:  i32,
+    // Bounce-0 surface snapshot — consumed by ReSTIR GI at bounce 1 inside runBounces.
+    b0Point:   vec3<f32>,
+    b0Normal:  vec3<f32>,
+    b0Wo:      vec3<f32>,
+    b0Albedo:  vec3<f32>,
+    b0F0:      vec3<f32>,
+    b0Metal:   f32,
+    b0Alpha:   f32,
+    b0MeshIdx: i32,
+    giResStored: bool,
+    // false = primaryShade terminated the path (miss/unlit/backface/RR) and
+    // runBounces must be skipped.  Callers should return diffRad+specRad directly.
+    pathAlive: bool,
+    // Primary-hit metadata needed by rt_bounces_main's accumulation.
+    // primaryDepth == 0.0 for sky/miss (denoiser sentinel).  primaryMatIdx is
+    // propagated to hitMesh.g channel.
+    primaryDepth:  f32,
+    primaryMatIdx: i32,
+}
 )";
 
-// Second half of the path trace shader (split for MSVC 16380-byte string literal limit)
-const char* const csPathTraceWGSL2 = R"(
-fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
-             pixel: vec2<i32>,
-             maxBounces:     i32,
-             primaryMeshIdx: ptr<function, u32>,
-             primaryNormal:  ptr<function, vec3<f32>>,
-             primaryDepth:   ptr<function, f32>,
-             primaryAlbedo:  ptr<function, vec3<f32>>,
-             primaryRough:   ptr<function, f32>,
-             primaryMatIdx:  ptr<function, i32>,
-             primaryTriIdx:  ptr<function, i32>,
-             touchedMoved:   ptr<function, bool>) -> SplitRadiance {
-    *primaryMeshIdx = 128u;
-    *primaryNormal  = vec3<f32>(0.0);
-    *primaryDepth   = 0.0;  // 0 = sky/no-hit sentinel for denoiser
-    *primaryAlbedo  = vec3<f32>(1.0);  // default white (sky/miss: no demodulation)
-    *primaryRough   = 1.0;  // sky: treat as fully rough (max history)
-    *primaryMatIdx  = -1;   // sky: no material
-    *primaryTriIdx  = -1;   // sky: no triangle
-    *touchedMoved   = false;
-    var ray        = ray_in;
-    var throughput = vec3<f32>(1.0);
-    var diffRad    = vec3<f32>(0.0);
-    var specRad    = vec3<f32>(0.0);
-    var firstBounceSpec = false;  // determines routing for bounces > 0
+// runBounces (bounce split, Stage B): executes the i>=1 tail of the original
+// pathTrace loop as a standalone function.  Called from pathTrace's wrapper
+// after primaryShade completes bounce 0.  Structurally identical to the tail
+// of the old loop — only i==0 branches are removed.  Split into two string
+// literals for the MSVC 16380-byte limit.
+const char* const csRunBouncesWGSL1 = R"(
+fn runBounces(state:           PrimaryShadeResult,
+              seed:             ptr<function, u32>,
+              pixel:            vec2<i32>,
+              primaryMeshIdx:   u32,
+              touchedMoved:     ptr<function, bool>) -> SplitRadiance {
+    // Reconstruct loop locals from primaryShade state.
+    var ray: Ray;
+    ray.origin = state.rayOrigin;
+    ray.dir    = state.rayDir;
+    var throughput    = state.throughput;
+    // runBounces returns the BOUNCE contribution only; caller sums with state.diffRad/specRad.
+    var diffRad       = vec3<f32>(0.0);
+    var specRad       = vec3<f32>(0.0);
+    var firstBounceSpec  = state.firstBounceSpec;
+    var prevNormal       = state.prevNormal;
+    var prevAlpha        = state.prevAlpha;
+    var prevMetalness    = state.prevMetalness;
+    var prevWo           = state.prevWo;
+    var afterTransmission = state.afterTransmission;
+    let effectiveBounces = state.effectiveBounces;
+    let b0Point    = state.b0Point;
+    let b0Normal   = state.b0Normal;
+    let b0Wo       = state.b0Wo;
+    let b0Albedo   = state.b0Albedo;
+    let b0F0       = state.b0F0;
+    let b0Metal    = state.b0Metal;
+    let b0Alpha    = state.b0Alpha;
+    let b0MeshIdx  = state.b0MeshIdx;
+    var giResStored = state.giResStored;
 
-    // Previous-bounce surface properties for MIS weighting
-    var prevNormal    = vec3<f32>(0.0, 1.0, 0.0);
-    var prevAlpha     = 0.0;
-    var prevMetalness = 0.0;
-    var prevWo        = vec3<f32>(0.0);
-    var afterTransmission = false;
-    var effectiveBounces = maxBounces;
-
-    // Bounce-0 surface data for ReSTIR GI (captured at i==0, used at i==1)
-    var b0Point  = vec3<f32>(0.0);
-    var b0Normal = vec3<f32>(0.0, 1.0, 0.0);
-    var b0Wo     = vec3<f32>(0.0);
-    var b0Albedo = vec3<f32>(1.0);
-    var b0F0     = vec3<f32>(0.04);
-    var b0Metal  = 0.0;
-    var b0Alpha  = 1.0;
-    var b0MeshIdx = -1;
-    var giResStored = false;
-
-    for (var i = 0; i < maxBounces; i++) {
-        if (i >= effectiveBounces) { break; }
+    for (var i = 1; i < effectiveBounces; i++) {
         var h = sceneHit(ray);
         if (h.t >= 1e29) {
-            // Primary ray miss: show background.  Bounced misses: use env IBL.
-            if (i == 0) {
-                diffRad += throughput * sampleBackground(ray.dir);
-                // Store empty reservoir on primary miss
-                if (rt.restirParams.x > 0.5) {
-                    textureStore(reservoirWrite, pixel, vec4<f32>(0.0));
-                    textureStore(reservoirWWrite, pixel, vec4<f32>(0.0));
-                }
-                if (rt.spp.x > 0.5) {
-                    textureStore(giResWrite,   pixel, vec4<f32>(0.0));
-                    textureStore(giResWWrite,  pixel, vec4<f32>(0.0));
-                    textureStore(giResLoWrite, pixel, vec4<f32>(0.0));
-                }
-            } else {
-                var envMisW = 1.0;
-                if (HAS_ENV_CDF && rt.envColor.w > 1.5 && prevAlpha > 0.01) {
-                    let pdf_env  = envImportancePdf(ray.dir);
-                    let pdf_brdf = brdfPdf(prevWo, normalize(ray.dir), prevNormal, prevAlpha, prevMetalness);
-                    envMisW = pdf_brdf / max(pdf_brdf + pdf_env, 1e-8);
-                }
-                addSplit(&diffRad, &specRad,
-                    throughput * sampleEnv(ray.dir) * rt.envIntensity.x * envMisW,
-                    rt.emissiveInfo.z, i, firstBounceSpec);
+            // Bounced miss: env IBL with MIS complement to BRDF env-importance NEE.
+            var envMisW = 1.0;
+            if (HAS_ENV_CDF && rt.envColor.w > 1.5 && prevAlpha > 0.01) {
+                let pdf_env  = envImportancePdf(ray.dir);
+                let pdf_brdf = brdfPdf(prevWo, normalize(ray.dir), prevNormal, prevAlpha, prevMetalness);
+                envMisW = pdf_brdf / max(pdf_brdf + pdf_env, 1e-8);
             }
-            // Empty GI reservoir on miss at bounce 1
+            addSplit(&diffRad, &specRad,
+                throughput * sampleEnv(ray.dir) * rt.envIntensity.x * envMisW,
+                rt.emissiveInfo.z, i, firstBounceSpec);
             if (i == 1 && rt.spp.x > 0.5 && !giResStored) {
                 textureStore(giResWrite,   pixel, vec4<f32>(0.0));
                 textureStore(giResWWrite,  pixel, vec4<f32>(0.0));
@@ -1583,61 +1659,26 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             }
             break;
         }
-        if (i == 0) {
-            *primaryMeshIdx = u32(h.meshIdx);
-            *primaryNormal  = h.normal;
-            *primaryDepth   = h.t;
-            *primaryRough   = sqrt(h.shininess);  // linear roughness (denoiser consumes via .w)
-            *primaryMatIdx  = h.matIdx;
-            *primaryTriIdx  = h.triIdx;
-
-            // Adaptive bounce cap — reduce bounces for diffuse/glossy surfaces.
-            {
-                let isGlass  = h.transmission > 0.05;
-                let isMetal  = h.metalness > 0.5;
-                let isMirror = h.shininess < 0.05;
-                let isGlossy = h.shininess < 0.25;
-                if (!isGlass && !isMetal && !isMirror) {
-                    if (isGlossy) {
-                        effectiveBounces = min(maxBounces, 4);
-                    } else {
-                        effectiveBounces = min(maxBounces, 3);
-                    }
-                }
-            }
-        } else if (isMeshMoved(h.meshIdx) && u32(h.meshIdx) != *primaryMeshIdx) {
-            // Only flag "touched moved" when the secondary bounce lands on a
-            // DIFFERENT moved mesh than the primary — in that case relative
-            // motion between two independently-moving meshes cannot be
-            // reprojected.  If primary and secondary are on the same moved
-            // mesh, the mesh's own motion matrix already reprojects the whole
-            // rigid interaction correctly → no cap needed.
+        // Secondary bounce landed on a DIFFERENT moved mesh than primary — flag for
+        // temporal-reprojection anti-lag so the denoiser won't trust history here.
+        if (isMeshMoved(h.meshIdx) && u32(h.meshIdx) != primaryMeshIdx) {
             *touchedMoved = true;
         }
 
         let emTriCount = i32(rt.emissiveInfo.x);
         let totalPower = rt.emissiveInfo.y;
 
-        // Emissive hit with MIS balance heuristic
+        // Emissive MIS at bounce >= 1.
         if (length(h.emissive) > 0.0) {
-            if (i == 0 || emTriCount == 0 || afterTransmission) {
-                // Primary ray, no NEE available, or after transmission: full weight
-                if (i == 0) {
-                    diffRad += throughput * h.emissive;  // primary: physically correct, don't clamp
-                } else {
-                    addSplit(&diffRad, &specRad, throughput * h.emissive,
-                             rt.emissiveInfo.z, i, firstBounceSpec);
-                }
+            if (emTriCount == 0 || afterTransmission) {
+                // No NEE available, or after transmission: full weight to this path.
+                addSplit(&diffRad, &specRad, throughput * h.emissive,
+                         rt.emissiveInfo.z, i, firstBounceSpec);
             } else if (i == 1 && rt.restirParams.x > 0.5 && !firstBounceSpec) {
-                // Bounce 0 was diffuse and used ReSTIR DI, which samples emissive triangles
-                // and already produced an unbiased estimate of the full direct illumination.
-                // Adding the BRDF-sampled emissive here would double-count: ReSTIR gives I,
-                // and this MIS branch would add w_brdf*I on top → (1+w_brdf)*I overcounting.
-                // Skip for diffuse bounce 0 only — specular reflections MUST keep their
-                // bounce-1 emissive contribution because pdf_brdf >> pdf_nee there and
-                // the mirror reflection of a light is almost entirely BRDF-driven.
+                // Diffuse bounce-0 used ReSTIR DI which already produced unbiased direct;
+                // adding BRDF-sampled emissive here would double-count.  Specular bounce-0
+                // still needs this contribution (handled via firstBounceSpec == true else).
             } else {
-                // MIS: BRDF sampling hit emissive — weight by balance heuristic
                 let cosLight = abs(dot(h.geoNormal, -ray.dir));
                 if (cosLight > 1e-6) {
                     let emLum = 0.2126 * h.emissive.r + 0.7152 * h.emissive.g + 0.0722 * h.emissive.b;
@@ -1655,16 +1696,10 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         var albedo = h.albedo;
         if (h.texSlot >= 0.0) { albedo = srgbToLinear(sampleAtlas(h.uv, h.texSlot)); }
 
-        if (i == 0) { *primaryAlbedo = albedo; }
-
-        // Unlit: return flat color, no bouncing
+        // Unlit: flat colour, no bouncing.  No i==0 reservoir-zero branch here.
         if (h.shininess < 0.0) {
             diffRad += throughput * albedo;
-            if (i == 0 && rt.restirParams.x > 0.5) {
-                textureStore(reservoirWrite, pixel, vec4<f32>(0.0));
-                textureStore(reservoirWWrite, pixel, vec4<f32>(0.0));
-            }
-            if (i <= 1 && rt.spp.x > 0.5 && !giResStored) {
+            if (i == 1 && rt.spp.x > 0.5 && !giResStored) {
                 textureStore(giResWrite,   pixel, vec4<f32>(0.0));
                 textureStore(giResWWrite,  pixel, vec4<f32>(0.0));
                 textureStore(giResLoWrite, pixel, vec4<f32>(0.0));
@@ -1676,303 +1711,16 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         let wo = normalize(-ray.dir);
         let F0_h = computeF0(albedo, h.metalness, h.specularColor, h.specularIntensity);
 
-        // Capture bounce-0 surface data for ReSTIR GI
-        if (i == 0) {
-            b0Point  = h.point;
-            b0Normal = h.normal;
-            b0Wo     = wo;
-            b0Albedo = albedo;
-            b0F0     = F0_h;
-            b0Metal  = h.metalness;
-            b0Alpha  = h.shininess;
-            b0MeshIdx = h.meshIdx;
-        }
-
-        // ReSTIR GI for diffuse/glossy surfaces. Metals need higher roughness
-        // threshold — narrow specular lobe causes BRDF eval spikes in GI shading.
+        // ReSTIR GI gating: fires only at the first secondary hit (i == 1).
         let giAlphaMin = select(0.01, 0.1, b0Metal > 0.5);
         let useReSTIRGI = i == 1 && rt.spp.x > 0.5 && !afterTransmission
                           && h.transmission < 0.05 && b0Alpha > giAlphaMin;
         var giLo = vec3<f32>(0.0);
 
-        // --- NEE: ReSTIR DI at bounce 0, classic NEE at deeper bounces ---
+        // ==== Classic NEE ==== (useReSTIR is i==0-only, so always false here.)
         let lcount = i32(rt.lightCount.x);
-        // Skip ReSTIR for transmissive/glass surfaces — direct illumination is
-        // mostly irrelevant there (primary interaction is transmission, not reflection).
-        // Applying ReSTIR NEE to a glass surface over-brightens it and makes it
-        // appear opaque. Fall back to classic NEE for those hits.
-        // Skip ReSTIR for near-mirror surfaces (alpha < 0.05 ≈ roughness < 0.22).
-        // The target PDF is an extreme spike around the reflection direction that
-        // the reservoir can't sample — results oscillate between bright/black.
-        // Classic NEE + bounce-1 BRDF hit handles specular reflections correctly.
-        let useReSTIR = i == 0 && rt.restirParams.x > 0.5
-                        && h.transmission < 0.05;
 
-        if (useReSTIR) {
-            // ======= ReSTIR DI: Initial candidate generation =======
-            var reservoir = emptyReservoir();
-
-            // 1. Analytical lights — evaluate ALL (typically 1-4, cheap).
-            // Sampling only one caused visible flicker during camera motion
-            // when temporal reuse breaks and each frame randomly picks a different light.
-            {
-                let p_source_a = 1.0 / max(f32(lcount), 1.0);
-                for (var li = 0; li < 4; li++) {
-                    if (li >= lcount) { break; }
-                    let le = evalAnalyticalLight(li, h.point);
-                    let lightP = rt.lightPos[li].xyz;
-                    let p_hat_a = restirTargetPdf(h.point, h.normal, wo, albedo, h.metalness, h.shininess, F0_h,
-                                                  lightP, f32(li), le.color);
-                    reservoir.M += 1.0;
-                    if (p_hat_a > 0.0) {
-                        let w = p_hat_a / p_source_a;
-                        reservoir.W_sum += w;
-                        if (rand(seed) < w / max(reservoir.W_sum, 1e-20)) {
-                            reservoir.lightPos  = lightP;
-                            reservoir.lightType = f32(li);
-                            reservoir.p_hat     = p_hat_a;
-                        }
-                    }
-                }
-            }
-)"
-R"(
-            // 2. Emissive triangles — CDF samples
-            if (emTriCount > 0 && totalPower > 0.0) {
-                for (var ei = 0; ei < 4; ei++) {
-                    let es = sampleEmissiveTriCdf(seed, totalPower, emTriCount);
-                    let toLight = es.point - h.point;
-                    let dist = length(toLight);
-                    let ln_e = toLight / dist;
-                    let cosLight = abs(dot(es.normal, -ln_e));
-                    let NdotL_e = dot(h.normal, ln_e);
-                    // Always count in M for correct RIS normalization.
-                    reservoir.M += 1.0;
-                    if (NdotL_e > 0.0 && cosLight > 1e-6) {
-                        let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
-                        let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
-                        let p_hat_e = restirTargetPdf(h.point, h.normal, wo, albedo, h.metalness, h.shininess, F0_h,
-                                                      es.point, 1000.0 + f32(es.triIdx), emColor);
-                        if (p_hat_e > 0.0) {
-                            let p_source_e = (es.power / totalPower) * (dist * dist) / (es.area * cosLight);
-                            let w = p_hat_e / p_source_e;
-                            reservoir.W_sum += w;
-                            if (rand(seed) < w / max(reservoir.W_sum, 1e-20)) {
-                                reservoir.lightPos  = es.point;
-                                reservoir.lightType = 1000.0 + f32(es.triIdx);
-                                reservoir.p_hat     = p_hat_e;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 3. Environment — NOT sampled via reservoir.
-            // Env lighting is handled by the explicit env NEE block that runs unconditionally
-            // after the ReSTIR/classic if-else, paired with the BRDF env-miss MIS complement.
-            // Including env here caused double-counting: reservoir estimated direct env AND
-            // the BRDF miss at bounce 1 added its MIS complement on top.
-
-            finalizeReservoir(&reservoir);
-)"
-R"(
-            // === TEMPORAL REUSE ===
-            if (rt.frameCount.x > 0.0) {
-                // Motion-vector reprojection: transform the current hit point back into
-                // the PREVIOUS frame's world space when the hit mesh moved (rotated/translated).
-                // Without this the reservoir temporal reuse fails on moving meshes — we'd
-                // sample the wrong pixel's reservoir and the validation check would reject it,
-                // forcing reservoir restart every frame → visible light-sampling noise.
-                let primaryMoved = h.meshIdx >= 0 && h.meshIdx < 128 && isMeshMoved(h.meshIdx);
-                var reprojPoint = h.point;
-                var expectedPrevN = h.normal;
-                if (primaryMoved) {
-                    let M = rtMotionMats[h.meshIdx];
-                    reprojPoint = (M * vec4<f32>(h.point, 1.0)).xyz;
-                    // Rotate normal via 3x3 part (assumes rigid motion — uniform scale).
-                    expectedPrevN = normalize((M * vec4<f32>(h.normal, 0.0)).xyz);
-                }
-                // Reproject current hit to previous frame pixel
-                let relP = reprojPoint - vec3<f32>(rt.prevCamOri.x, rt.prevCamOri.y, rt.prevCamOri.z);
-                let prevFwd = vec3<f32>(rt.prevCamFwd.x, rt.prevCamFwd.y, rt.prevCamFwd.z);
-                let prevRgt = vec3<f32>(rt.prevCamRgt.x, rt.prevCamRgt.y, rt.prevCamRgt.z);
-                let prevUp  = vec3<f32>(rt.prevCamUp.x, rt.prevCamUp.y, rt.prevCamUp.z);
-                let dz = dot(relP, prevFwd);
-                if (dz > 0.0) {
-                    let dx = dot(relP, prevRgt);
-                    let dy = dot(relP, prevUp);
-                    let thf = rt.tanHalfFov.x;
-                    let aspect = rt.iRes.x / rt.iRes.y;
-                    let ndcX = dx / (dz * thf * aspect);
-                    let ndcY = dy / (dz * thf);
-                    let prevU = (ndcX * 0.5 + 0.5) * rt.iRes.x;
-                    let prevV = (0.5 - ndcY * 0.5) * rt.iRes.y;
-                    // Primary rays are jittered within ±0.375 of pixel centre;
-                    // prevU/V land near (i + 0.5 ± 0.375). floor() rounds to the
-                    // nearest pixel index below that — correct in all cases since
-                    // jitter never pushes prevU across an integer boundary.
-                    let prevPx = vec2<i32>(i32(floor(prevU)), i32(floor(prevV)));
-
-                    if (prevPx.x >= 0 && prevPx.y >= 0 &&
-                        prevPx.x < i32(rt.iRes.x) && prevPx.y < i32(rt.iRes.y)) {
-
-                        // Use stable (unjittered) g-buffer for validation — jittered
-                        // normals/depth flip at silhouette edges causing reservoir
-                        // resets every frame → noise spikes during motion.
-                        let prevSGB = textureLoad(gBufRead, prevPx, 0);
-                        let prevN = prevSGB.xyz;
-                        let prevD = prevSGB.w;
-                        // Compare prev-camera distance to reprojected point, not h.t
-                        // (h.t is distance from current camera, but prevD is stored
-                        // from previous camera's viewpoint).
-                        let curD = length(relP);
-                        let valid = dot(expectedPrevN, prevN) > 0.9 &&
-                                    abs(curD - prevD) / max(curD, 1e-6) < 0.1;
-
-                        if (valid) {
-                            let prevSample = textureLoad(reservoirRead, prevPx, 0);
-                            let prevWeight = textureLoad(reservoirWRead, prevPx, 0);
-
-                            var rPrev: Reservoir;
-                            rPrev.lightPos  = prevSample.xyz;
-                            rPrev.lightType = prevSample.w;
-                            rPrev.W_sum = prevWeight.x;
-                            rPrev.M     = min(prevWeight.y, rt.restirParams.y) * 0.8;
-                            rPrev.W     = prevWeight.z;
-                            rPrev.p_hat = prevWeight.w;
-
-                            // Re-evaluate prev sample's target PDF at current shading point
-                            let prevLe = evalLightRadiance(rPrev.lightPos, rPrev.lightType, h.point);
-                            let p_hat_prev = restirTargetPdf(h.point, h.normal, wo, albedo,
-                                                             h.metalness, h.shininess, F0_h,
-                                                             rPrev.lightPos, rPrev.lightType, prevLe);
-                            if (p_hat_prev > 0.0 && rPrev.W > 0.0) {
-                                let w_prev = p_hat_prev * rPrev.M * rPrev.W;
-                                reservoir.W_sum += w_prev;
-                                reservoir.M += rPrev.M;
-                                if (rand(seed) < w_prev / max(reservoir.W_sum, 1e-20)) {
-                                    reservoir.lightPos  = rPrev.lightPos;
-                                    reservoir.lightType = rPrev.lightType;
-                                    reservoir.p_hat     = p_hat_prev;
-                                }
-                                finalizeReservoir(&reservoir);
-                            }
-                        }
-                    }
-                }
-            }
-)"
-R"(
-            // Snapshot reservoir before spatial reuse — stored for next-frame temporal reuse.
-            // Spatial reuse is used for shading only; if we stored the post-spatial reservoir
-            // a shadowed pixel that borrows a lit neighbour's light would keep failing visibility
-            // and permanently accumulate W=0 (feedback loop → fades to black).
-            let preSpReservoir = reservoir;
-
-            // === SPATIAL REUSE — random neighbours from previous frame ===
-            // Reads last-frame reservoirs from a disk of radius ~20 px.
-            // Geometry check (normal, depth) prevents bleeding across surfaces.
-            // Uses one-frame-lagged neighbours — avoids a second dispatch and is
-            // visually indistinguishable from same-frame spatial reuse.
-            // Reduce iterations during camera motion: previous-frame neighbours
-            // are stale (geometry checks reject most), wasting GPU cycles that
-            // foveated rendering is trying to save.
-            {
-                let camMoving = (u32(rt.params.w) & 2u) != 0u;
-                let spMax = select(5u, 2u, camMoving);
-                let mTarget = 20.0; // stop borrowing once we have enough confidence
-                for (var spI = 0u; spI < spMax; spI++) {
-                    if (reservoir.M >= mTarget) { break; }
-                    let spAngle = rand(seed) * 2.0 * PI;
-                    let spR     = sqrt(rand(seed)) * 20.0;
-                    let spOff   = vec2<i32>(i32(spR * cos(spAngle)), i32(spR * sin(spAngle)));
-                    if (all(spOff == vec2<i32>(0))) { continue; }
-                    let spPx = clamp(pixel + spOff,
-                                     vec2<i32>(0),
-                                     vec2<i32>(i32(rt.iRes.x) - 1, i32(rt.iRes.y) - 1));
-
-                    // Reject across surface boundaries — use stable g-buffer for
-                    // consistent validation regardless of sub-pixel jitter.
-                    let spSGB = textureLoad(gBufRead, spPx, 0);
-                    if (dot(h.normal, spSGB.xyz) < 0.906 ||
-                        abs(h.t - spSGB.w) / max(h.t, 1e-3) > 0.1) { continue; }
-
-                    let spSmp = textureLoad(reservoirRead,  spPx, 0);
-                    let spWt  = textureLoad(reservoirWRead, spPx, 0);
-                    var rSp: Reservoir;
-                    rSp.lightPos  = spSmp.xyz;
-                    rSp.lightType = spSmp.w;
-                    rSp.W_sum = spWt.x;
-                    rSp.M     = min(spWt.y, 4.0); // low cap: spatial neighbours must not drown out this pixel's own candidates
-                    rSp.W     = spWt.z;
-                    rSp.p_hat = spWt.w;
-                    if (rSp.W <= 0.0 || rSp.M <= 0.0) { continue; }
-
-                    // Re-evaluate neighbour's chosen light at the CURRENT shading point
-                    let spLe = evalLightRadiance(rSp.lightPos, rSp.lightType, h.point);
-                    let p_hat_sp = restirTargetPdf(h.point, h.normal, wo, albedo,
-                                                    h.metalness, h.shininess, F0_h,
-                                                    rSp.lightPos, rSp.lightType, spLe);
-                    if (p_hat_sp > 0.0) {
-
-                        let w_sp = p_hat_sp * rSp.M * rSp.W;
-                        reservoir.W_sum += w_sp;
-                        reservoir.M     += rSp.M;
-                        if (rand(seed) < w_sp / max(reservoir.W_sum, 1e-20)) {
-                            reservoir.lightPos  = rSp.lightPos;
-                            reservoir.lightType = rSp.lightType;
-                            reservoir.p_hat     = p_hat_sp;
-                        }
-                    }
-                }
-                finalizeReservoir(&reservoir);
-            }
-            reservoir.W = min(reservoir.W, 5.0);
-
-            // === VISIBILITY TEST — shadow ray from shading point ===
-            var reservoirShadowAtten = vec3<f32>(0.0);
-            if (reservoir.p_hat > 0.0 && reservoir.W > 0.0) {
-                let rd = reservoirLightDir(reservoir.lightPos, reservoir.lightType, h.point);
-                reservoirShadowAtten = traceShadowRay(h.point, h.normal, rd.dir, rd.maxDist, 4);
-            }
-
-            // === SHADE FROM RESERVOIR (split diffuse/specular) ===
-            if (reservoirShadowAtten.x + reservoirShadowAtten.y + reservoirShadowAtten.z > 0.001) {
-                let rd = reservoirLightDir(reservoir.lightPos, reservoir.lightType, h.point);
-                let rLe = evalLightRadiance(reservoir.lightPos, reservoir.lightType, h.point);
-                let rNdotL = max(dot(h.normal, rd.dir), 0.0);
-                let rSplit = evalBrdfFullSplit(wo, rd.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
-                                              h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                let cap = rt.emissiveInfo.z;
-                let shade = throughput * reservoirShadowAtten * reservoir.W * rNdotL * rLe;
-                addSplit(&diffRad, &specRad, shade * rSplit.diff, cap, 0, false);
-                addSplit(&diffRad, &specRad, shade * rSplit.spec, cap, 1, true);
-            }
-            // === STORE RESERVOIR ===
-            // If visibility failed, reset M and W to 0 so next frame does not inherit
-            // an occluded sample via temporal reuse.  This eliminates the "smeared shadow"
-            // bias where high-p̂ but occluded samples propagate indefinitely through the
-            // temporal reservoir.  Lit pixels accumulate M normally; shadowed pixels
-            // restart fresh each frame (path-tracer accumulation still converges them).
-            let visible = reservoirShadowAtten.x + reservoirShadowAtten.y + reservoirShadowAtten.z > 0.001;
-            // Store pre-spatial reservoir so temporal reuse next frame reflects what
-            // THIS pixel actually selected (with known good visibility), not what a
-            // neighbour selected that may be occluded here.
-            let rW = select(0.0, select(0.0, preSpReservoir.W, preSpReservoir.W == preSpReservoir.W), visible);
-            let rM = select(0.0, preSpReservoir.M, visible);
-            textureStore(reservoirWrite, pixel,
-                vec4<f32>(preSpReservoir.lightPos, preSpReservoir.lightType));
-            textureStore(reservoirWWrite, pixel,
-                vec4<f32>(preSpReservoir.W_sum, rM, rW, preSpReservoir.p_hat));
-
-        } else {
-)";
-
-// Fourth part: classic NEE + bounce loop tail + rt_main accumulation
-const char* const csPathTraceWGSL2b = R"(
-        // ======= Classic NEE (bounces > 0 or ReSTIR disabled) =======
-
-        // --- Analytical light NEE ---
+        // Analytical lights
         for (var li = 0; li < 4; li++) {
             if (li >= lcount) { break; }
             let le = evalAnalyticalLight(li, h.point);
@@ -1981,27 +1729,18 @@ const char* const csPathTraceWGSL2b = R"(
             let shadowAtten = traceShadowRay(h.point, h.normal, le.dir, le.dist - 1e-3, 4);
             if (shadowAtten.x + shadowAtten.y + shadowAtten.z > 0.001) {
                 let cap = rt.emissiveInfo.z;
-                if (i == 0) {
-                    let bs = evalBrdfFullSplit(wo, le.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
-                                              h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                    let shade = throughput * shadowAtten * NdotL * le.color;
-                    addSplit(&diffRad, &specRad, shade * bs.diff, cap, 0, false);
-                    addSplit(&diffRad, &specRad, shade * bs.spec, cap, 1, true);
+                let lobeSum = evalBrdfFull(wo, le.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                           h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+                let neeContrib = shadowAtten * lobeSum * NdotL * le.color;
+                if (useReSTIRGI && !giResStored) {
+                    giLo += neeContrib;
                 } else {
-                    let lobeSum = evalBrdfFull(wo, le.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
-                                               h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                    let neeContrib = shadowAtten * lobeSum * NdotL * le.color;
-                    if (useReSTIRGI && !giResStored) {
-                        giLo += neeContrib;
-                    } else {
-                        addSplit(&diffRad, &specRad, throughput * neeContrib, cap, i, firstBounceSpec);
-                    }
+                    addSplit(&diffRad, &specRad, throughput * neeContrib, cap, i, firstBounceSpec);
                 }
             }
         }
-)"
-R"(
-        // --- Emissive surface NEE (power-weighted CDF sampling) ---
+
+        // Emissive triangle NEE (power-weighted CDF)
         if (emTriCount > 0) {
             let totalPower2 = rt.emissiveInfo.y;
             let es = sampleEmissiveTriCdf(seed, totalPower2, emTriCount);
@@ -2010,7 +1749,6 @@ R"(
             let ln      = toLight / dist;
             let NdotL   = dot(h.normal, ln);
             let cosLight = abs(dot(es.normal, -ln));
-
             if (NdotL > 0.0 && cosLight > 1e-6) {
                 let emAtten = traceShadowRay(h.point, h.normal, ln, dist - 1e-2, 4);
                 if (emAtten.x + emAtten.y + emAtten.z > 0.001) {
@@ -2020,34 +1758,19 @@ R"(
                     let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
                     let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);
                     let cap = rt.emissiveInfo.z;
-                    if (i == 0) {
-                        let bs = evalBrdfFullSplit(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h,
-                                                   h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                        let shade = throughput * emAtten * NdotL * emColor * w_light / pdf;
-                        addSplit(&diffRad, &specRad, shade * bs.diff, cap, 0, false);
-                        addSplit(&diffRad, &specRad, shade * bs.spec, cap, 1, true);
+                    let lobeSum3 = evalBrdfFull(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                                 h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+                    let emNeeContrib = emAtten * lobeSum3 * NdotL * emColor * w_light / pdf;
+                    if (useReSTIRGI && !giResStored) {
+                        giLo += emNeeContrib;
                     } else {
-                        let lobeSum3 = evalBrdfFull(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h,
-                                                     h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                        let emNeeContrib = emAtten * lobeSum3 * NdotL * emColor * w_light / pdf;
-                        if (useReSTIRGI && !giResStored) {
-                            giLo += emNeeContrib;
-                        } else {
-                            addSplit(&diffRad, &specRad, throughput * emNeeContrib, cap, i, firstBounceSpec);
-                        }
+                        addSplit(&diffRad, &specRad, throughput * emNeeContrib, cap, i, firstBounceSpec);
                     }
                 }
             }
         }
 
-        } // end ReSTIR vs classic NEE
-
-        // --- Environment map NEE (importance-sampled, always runs regardless of ReSTIR) ---
-        // Placed outside the ReSTIR/classic if-else so it executes at every bounce for
-        // every code path.  The BRDF env-miss at bounce i+1 is its MIS complement —
-        // no special handling needed when ReSTIR is active because env is never put
-        // into the reservoir (see candidate section 3, removed), so there is no
-        // double-counting risk here.
+        // Env map NEE (importance-sampled).
         if (HAS_ENV_CDF && rt.envColor.w > 1.5 && h.shininess > 0.01 && i < 4) {
             let envSample = sampleEnvImportance(seed);
             let envDir    = envSample.xyz;
@@ -2060,50 +1783,34 @@ R"(
                     let pdf_brdf_env = brdfPdf(wo, envDir, h.normal, h.shininess, h.metalness);
                     let w_env = envPdf / max(envPdf + pdf_brdf_env, 1e-8);
                     let cap = rt.emissiveInfo.z;
-                    if (i == 0) {
-                        let bs = evalBrdfFullSplit(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h,
-                                                   h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                        let shade = throughput * envAtten * envNdotL * envCol * w_env / envPdf;
-                        addSplit(&diffRad, &specRad, shade * bs.diff, cap, 0, false);
-                        addSplit(&diffRad, &specRad, shade * bs.spec, cap, 1, true);
+                    let lobeSum4 = evalBrdfFull(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                                 h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+                    let envNeeContrib = envAtten * lobeSum4 * envNdotL * envCol * w_env / envPdf;
+                    if (useReSTIRGI && !giResStored) {
+                        giLo += envNeeContrib;
                     } else {
-                        let lobeSum4 = evalBrdfFull(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h,
-                                                     h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                        let envNeeContrib = envAtten * lobeSum4 * envNdotL * envCol * w_env / envPdf;
-                        if (useReSTIRGI && !giResStored) {
-                            giLo += envNeeContrib;
-                        } else {
-                            addSplit(&diffRad, &specRad, throughput * envNeeContrib, cap, i, firstBounceSpec);
-                        }
+                        addSplit(&diffRad, &specRad, throughput * envNeeContrib, cap, i, firstBounceSpec);
                     }
                 }
             }
         }
+)";
 
-        // When ReSTIR is globally enabled but was skipped for this pixel (glass /
-        // high-transmission surface), zero out the reservoir so stale data from a
-        // prior opaque frame at the same pixel location never bleeds into temporal reuse.
-        if (i == 0 && rt.restirParams.x > 0.5 && !useReSTIR) {
-            textureStore(reservoirWrite,  pixel, vec4<f32>(0.0));
-            textureStore(reservoirWWrite, pixel, vec4<f32>(0.0));
-        }
-
-        // ======= ReSTIR GI: Build reservoir, temporal reuse, shade, store =======
-        // Skip when secondary hit is too close to primary (seam geometry → G factor spike)
+// Second chunk of runBounces: ReSTIR GI block + Russian roulette + lobes + BRDF sample.
+const char* const csRunBouncesWGSL2 = R"(
+        // ==== ReSTIR GI reservoir (runs only at i==1 when useReSTIRGI) ====
         let giSecDist2 = dot(h.point - b0Point, h.point - b0Point);
         if (useReSTIRGI && !giResStored && giSecDist2 > 0.04) {
-            // --- Build 1-sample reservoir from captured Lo ---
             let giP_hat = giTargetPdf(b0Point, b0Normal, b0Wo, b0Albedo, b0Metal, b0Alpha, b0F0,
                                        h.point, h.normal, giLo);
-            var giW_sum = giP_hat;  // w = p_hat / p_source; p_source = 1 → w = p_hat
+            var giW_sum = giP_hat;
             var giM = 1.0;
             var giSecPos  = h.point;
             var giSecNorm = h.normal;
             var giLoRes   = giLo;
             var giPhat    = giP_hat;
-)"
-R"(
-            // --- Temporal reuse ---
+
+            // Temporal reuse of previous-frame GI reservoir.
             if (rt.frameCount.x > 0.0) {
                 let giMeshMoved = b0MeshIdx >= 0 && b0MeshIdx < 128 && isMeshMoved(b0MeshIdx);
                 var giReprojPt = b0Point;
@@ -2147,14 +1854,11 @@ R"(
                             let prevSecPos  = prevGiSample.xyz;
                             let prevSecNorm = unpackOctNormal(prevGiSample.w);
                             let prevW_sum = prevGiWeight.x;
-                            let prevM     = min(prevGiWeight.y, 20.0);  // M clamp
+                            let prevM     = min(prevGiWeight.y, 20.0);
                             let prevW     = prevGiWeight.z;
                             let prevPhat  = prevGiWeight.w;
-)"
-R"(
-                            // Reject prev reservoir if its secondary hit is too close to current primary
+
                             let prevSecDist2 = dot(prevSecPos - b0Point, prevSecPos - b0Point);
-                            // Re-evaluate prev sample's GI target PDF at current primary surface
                             let giPhatPrev = select(0.0,
                                 giTargetPdf(b0Point, b0Normal, b0Wo, b0Albedo, b0Metal, b0Alpha, b0F0,
                                             prevSecPos, prevSecNorm, prevGiLo),
@@ -2176,16 +1880,15 @@ R"(
                 }
             }
 
-            // --- Snapshot pre-spatial reservoir (stored for next-frame temporal reuse) ---
+            // Snapshot pre-spatial reservoir (stored for next-frame temporal reuse).
             let giPreSpW_sum = giW_sum;
             let giPreSpM     = giM;
             let giPreSpPhat  = giPhat;
             let giPreSpSecPos  = giSecPos;
             let giPreSpSecNorm = giSecNorm;
             let giPreSpLoRes   = giLoRes;
-)"
-R"(
-            // --- Spatial reuse: 4 neighbours from 20px disk ---
+
+            // Spatial reuse from 4 random neighbours (20px disk).
             {
                 for (var spI = 0u; spI < 4u; spI++) {
                     let spAngle = rand(seed) * 2.0 * PI;
@@ -2196,7 +1899,6 @@ R"(
                                      vec2<i32>(0),
                                      vec2<i32>(i32(rt.iRes.x) - 1, i32(rt.iRes.y) - 1));
 
-                    // Geometry validation via stable g-buffer + mesh ID
                     let spSGB = textureLoad(gBufRead, spPx, 0);
                     let spMesh = i32(textureLoad(hitMeshRead, spPx, 0).r);
                     let b0Depth = length(b0Point - vec3<f32>(rt.camOri.x, rt.camOri.y, rt.camOri.z));
@@ -2204,7 +1906,6 @@ R"(
                         abs(b0Depth - spSGB.w) / max(b0Depth, 1e-3) > 0.05 ||
                         spMesh != b0MeshIdx) { continue; }
 
-                    // Reconstruct neighbour's previous-frame primary point for Jacobian
                     let spNdc = vec2<f32>(
                         (f32(spPx.x) + 0.5) / rt.iRes.x * 2.0 - 1.0,
                         1.0 - (f32(spPx.y) + 0.5) / rt.iRes.y * 2.0);
@@ -2220,11 +1921,10 @@ R"(
 
                     let spSecPos  = spGiSample.xyz;
                     let spSecNorm = unpackOctNormal(spGiSample.w);
-                    let spM = min(spGiWeight.y, 4.0);  // spatial M cap
+                    let spM = min(spGiWeight.y, 4.0);
                     let spW = spGiWeight.z;
                     if (spW <= 0.0 || spM <= 0.0) { continue; }
 
-                    // Reject if neighbour's secondary hit too close to our primary
                     let spSecDist2 = dot(spSecPos - b0Point, spSecPos - b0Point);
                     if (spSecDist2 < 0.04) { continue; }
 
@@ -2244,12 +1944,12 @@ R"(
                     }
                 }
             }
-
-            // --- Finalize reservoir weight ---
+)"
+R"(
+            // Finalize + visibility + shade + store pre-spatial reservoir.
             var giW = select(0.0, giW_sum / max(giM * giPhat, 1e-20), giPhat > 0.0);
             giW = min(giW, 3.0);
 
-            // --- Visibility test: shadow ray from primary hit to secondary hit ---
             let giWi = normalize(giSecPos - b0Point);
             let giNdotL = max(dot(b0Normal, giWi), 0.0);
             var giVisAtten = vec3<f32>(0.0);
@@ -2258,7 +1958,6 @@ R"(
                 giVisAtten = traceShadowRay(b0Point, b0Normal, giWi, giDist - 1e-3, 4);
             }
 
-            // --- Shade from GI reservoir ---
             if (giVisAtten.x + giVisAtten.y + giVisAtten.z > 0.001 && giNdotL > 0.0) {
                 let giDelta = giSecPos - b0Point;
                 let giDist2 = dot(giDelta, giDelta);
@@ -2267,7 +1966,6 @@ R"(
                 let giBrdf = evalBrdfFullSplit(b0Wo, giWi, b0Normal, b0Albedo, b0Metal, b0Alpha, b0F0,
                                                 vec3<f32>(0.0), 0.0, 0.0, 0.0);
                 let giShade = giVisAtten * giW * giNdotL * giLoRes * giG;
-                // Hard luminance cap on GI contribution to prevent seam/firefly spikes
                 let giCap = rt.emissiveInfo.z;
                 var giContribD = giShade * giBrdf.diff;
                 var giContribS = giShade * giBrdf.spec;
@@ -2282,9 +1980,6 @@ R"(
                 addSplit(&diffRad, &specRad, giContribS, giCap, 1, true);
             }
 
-            // --- Store PRE-SPATIAL reservoir (visibility-gated) ---
-            // Same as DI: store what this pixel selected before spatial reuse.
-            // Prevents feedback loops where a shadowed pixel borrows a lit neighbour.
             let giVisible = giVisAtten.x + giVisAtten.y + giVisAtten.z > 0.001;
             let giStoreW_f = select(0.0, select(0.0, giPreSpW_sum / max(giPreSpM * giPreSpPhat, 1e-20), giPreSpPhat > 0.0), giVisible);
             let giStoreM_f = select(0.0, giPreSpM, giVisible);
@@ -2293,16 +1988,13 @@ R"(
             textureStore(giResLoWrite, pixel, vec4<f32>(giPreSpLoRes, 0.0));
             giResStored = true;
         }
-        // Fallback: if GI was active (Lo captured) but reservoir skipped (close hit),
-        // add the captured Lo back via classic accumulation so energy isn't lost.
+        // GI fallback — add captured Lo back if reservoir was skipped (close hit).
         if (useReSTIRGI && !giResStored && luminance(giLo) > 0.0) {
             addSplit(&diffRad, &specRad, throughput * giLo, rt.emissiveInfo.z, 1, firstBounceSpec);
         }
 
-        if (i > 0) {
-            // Roughness-weighted Russian roulette — smoother surfaces survive longer.
-            // Starts at i > 0 (after primary) so dim throughputs in enclosed scenes
-            // terminate fast instead of burning the full bounce budget.
+        // Russian roulette (i > 0 branch — always true in runBounces).
+        {
             let p_base = max(max(throughput.r, throughput.g), throughput.b);
             let rough  = sqrt(h.shininess);
             let weight = mix(0.25, 1.0, 1.0 - rough);
@@ -2311,15 +2003,12 @@ R"(
             throughput /= p;
         }
 
-        // Clearcoat lobe: dielectric specular layer on top of base material.
-        // Skip on transmissive surfaces (clearcoat on glass is not physical).
+        // Clearcoat lobe.
         if (h.clearcoat > 0.0 && h.transmission < 0.01) {
-            let ccF0 = 0.04;  // dielectric IOR ~1.5
+            let ccF0 = 0.04;
             let ccCos = max(0.0, dot(wo, h.normal));
             let ccFresnel = ccF0 + (1.0 - ccF0) * pow(1.0 - ccCos, 5.0);
             let ccWeight = h.clearcoat * ccFresnel;
-            // Sampling probability: clamp above 0.15 to bound variance on dark surfaces
-            // where base contributes little and clearcoat reflection dominates visually.
             let ccProb = max(ccWeight, 0.15 * h.clearcoat);
             if (rand(seed) < ccProb) {
                 let wi_cc = sampleVNDF(wo, h.normal, h.clearcoatAlpha, seed);
@@ -2336,34 +2025,24 @@ R"(
                 ray.dir    = wi_cc;
                 continue;
             }
-            // Passed through clearcoat — attenuate base by energy not reflected
             throughput *= (1.0 - ccWeight) / (1.0 - ccProb);
         }
 
-        // Sheen lobe: soft velvet-like reflection at grazing angles
+        // Sheen.
         let sheenLumPT = dot(h.sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
         if (sheenLumPT > 0.001 && h.transmission < 0.01) {
             let sheenAlpha = max(h.sheenRoughness * h.sheenRoughness, 1e-4);
-            // Approximate sheen reflectance at grazing angle for energy conservation
             let NdotV_sh = max(0.001, dot(wo, h.normal));
             let sheenFresnel = sheenLumPT * pow(1.0 - NdotV_sh, 3.0);
-            // Attenuate base layer by sheen energy
             throughput *= (1.0 - sheenFresnel);
         }
 
-        // Transmission lobe: refract through transmissive surfaces
+        // Transmission.
         if (h.transmission > 0.0 && rand(seed) < h.transmission) {
             let entering = h.frontFace > 0.5;
-
-            // Dispersion: stochastic wavelength selection.
-            // Pick one of R/G/B, compute per-channel IOR via Cauchy-like model,
-            // and weight throughput by 3x for the selected channel.
-            // Load attenuation on demand — only needed for transmissive hits (~5%).
-            // Saves 1 textureLoad (mat4) for the 95% non-transmissive case.
             let tMat4 = textureLoad(matData, vec2<i32>(h.matIdx, 4), 0);
             let tAttColor = tMat4.xyz;
             let tAttDist  = tMat4.w;
-
             var channelMask = vec3<f32>(1.0);
             var ior_eff = h.ior;
             if (h.dispersion > 0.0) {
@@ -2376,9 +2055,7 @@ R"(
                 channelMask = vec3<f32>(0.0);
                 channelMask[ch] = 3.0;
             }
-
             let eta = select(ior_eff, 1.0 / ior_eff, entering);
-
             var tNorm = h.normal;
             var usedMicrofacet = false;
             if (h.shininess > 1e-3) {
@@ -2386,21 +2063,13 @@ R"(
                 let hm = sampleVNDF(wo_t, h.normal, h.shininess, seed);
                 if (dot(hm, h.normal) > 0.0) { tNorm = hm; usedMicrofacet = true; }
             }
-
             let cosI = abs(dot(normalize(ray.dir), tNorm));
             let r0   = pow((1.0 - ior_eff) / (1.0 + ior_eff), 2.0);
-            // Schlick's approximation is derived for the less-dense side of the
-            // interface. When entering (air→glass) that is cosI. When exiting
-            // (glass→air), the correct angle is cosT — the transmitted angle in
-            // air — computed via Snell's law. This gives accurate Fresnel values
-            // as the critical angle is approached and automatically drives
-            // reflectance to 1 at TIR onset (imaginary cosT → clamped 0 → fresnel = 1).
             let sin2I = max(0.0, 1.0 - cosI * cosI);
             let cosSchlick = select(cosI,
                 sqrt(max(0.0, 1.0 - ior_eff * ior_eff * sin2I)),
                 !entering);
             let fresnel = r0 + (1.0 - r0) * pow(1.0 - cosSchlick, 5.0);
-
             var wi_t: vec3<f32>;
             var didRefract = false;
             if (rand(seed) < fresnel) {
@@ -2430,11 +2099,8 @@ R"(
                     let pathLen = select(h.t, h.thickness, h.t < 1e-2 && h.thickness > 0.0);
                     volAtten = exp(-absorbCoeff * pathLen);
                 }
-                // Non-symmetry correction: BTDF includes (η_t/η_i)² = 1/η² to account
-                // for solid angle change at refractive interface.
                 throughput *= glassTint * volAtten / (eta * eta) * channelMask;
             } else {
-                // Fresnel reflection: no volume interaction, just surface bounce
                 throughput *= vec3<f32>(microWeight) * channelMask;
             }
             afterTransmission = true;
@@ -2442,13 +2108,11 @@ R"(
             continue;
         }
 
+        // BRDF sample — firstBounceSpec is i==0-only in the original, so no update here.
         let F0_b = F0_h;
         var wi_b: vec3<f32>;
         let p_spec = mix(0.5, 0.98, h.metalness);
         let isSpecBounce = rand(seed) < p_spec;
-        if (i == 0) { firstBounceSpec = isSpecBounce; }
-        // Transmission at bounce 0 also counts as specular for routing
-        if (i == 0 && afterTransmission) { firstBounceSpec = true; }
         if (isSpecBounce) {
             wi_b = sampleVNDF(wo, h.normal, h.shininess, seed);
             let cos_b = dot(h.normal, wi_b);
@@ -2471,13 +2135,708 @@ R"(
         ray.origin = h.point + h.normal * 1e-3;
         ray.dir    = wi_b;
     }
-    // Safety net: if GI enabled but no reservoir was stored (e.g. maxBounces < 2), write empty
+
+    // Safety net: write empty GI reservoir if none of the paths above stored one.
     if (rt.spp.x > 0.5 && !giResStored) {
         textureStore(giResWrite,   pixel, vec4<f32>(0.0));
         textureStore(giResWWrite,  pixel, vec4<f32>(0.0));
         textureStore(giResLoWrite, pixel, vec4<f32>(0.0));
     }
+
     return SplitRadiance(diffRad, specRad);
+}
+)";
+
+// primaryShade (bounce split, Stage B): the i==0 iteration of the original
+// pathTrace loop extracted as a standalone function.  Responsibilities:
+//   - Consume the pre-computed primary hit from the primary kernel.
+//   - Handle primary miss (background), emissive, unlit, and adaptive bounce cap.
+//   - Capture bounce-0 surface state for ReSTIR GI (b0*).
+//   - Run ReSTIR DI (or classic NEE at i==0) + env NEE.
+//   - Sample the first BRDF bounce (firstBounceSpec, outgoing ray).
+// `continue` in the original loop becomes "return pathAlive=true with outgoing
+// ray/throughput set"; `break` becomes "return pathAlive=false".  The caller
+// (pathTrace wrapper) either returns primaryShade's radiance directly (dead) or
+// invokes runBounces to continue the path.
+// Split across three R-literals for the MSVC 16380-byte limit.
+const char* const csPrimaryShadeWGSL1 = R"(
+fn primaryShade(primaryHit:     Hit,
+                ray_in:         Ray,
+                seed:           ptr<function, u32>,
+                pixel:          vec2<i32>,
+                maxBounces:     i32,
+                primaryMeshIdx: ptr<function, u32>,
+                primaryNormal:  ptr<function, vec3<f32>>,
+                primaryDepth:   ptr<function, f32>,
+                primaryAlbedo:  ptr<function, vec3<f32>>,
+                primaryRough:   ptr<function, f32>,
+                primaryMatIdx:  ptr<function, i32>,
+                primaryTriIdx:  ptr<function, i32>) -> PrimaryShadeResult {
+    // primary* out-param defaults (match original pathTrace for sky/miss case).
+    *primaryMeshIdx = 128u;
+    *primaryNormal  = vec3<f32>(0.0);
+    *primaryDepth   = 0.0;
+    *primaryAlbedo  = vec3<f32>(1.0);
+    *primaryRough   = 1.0;
+    *primaryMatIdx  = -1;
+    *primaryTriIdx  = -1;
+
+    var result: PrimaryShadeResult;
+    result.rayOrigin        = ray_in.origin;
+    result.rayDir           = ray_in.dir;
+    result.throughput       = vec3<f32>(1.0);
+    result.diffRad          = vec3<f32>(0.0);
+    result.specRad          = vec3<f32>(0.0);
+    result.prevNormal       = vec3<f32>(0.0, 1.0, 0.0);
+    result.prevWo           = vec3<f32>(0.0);
+    result.prevAlpha        = 0.0;
+    result.prevMetalness    = 0.0;
+    result.afterTransmission = false;
+    result.firstBounceSpec  = false;
+    result.effectiveBounces = maxBounces;
+    result.b0Point   = vec3<f32>(0.0);
+    result.b0Normal  = vec3<f32>(0.0, 1.0, 0.0);
+    result.b0Wo      = vec3<f32>(0.0);
+    result.b0Albedo  = vec3<f32>(1.0);
+    result.b0F0      = vec3<f32>(0.04);
+    result.b0Metal   = 0.0;
+    result.b0Alpha   = 1.0;
+    result.b0MeshIdx = -1;
+    result.giResStored = false;
+    result.pathAlive   = false;
+    result.primaryDepth  = 0.0;   // sentinel for sky/miss (matches *primaryDepth default)
+    result.primaryMatIdx = -1;
+
+    var ray        = ray_in;
+    var throughput = vec3<f32>(1.0);
+    var diffRad    = vec3<f32>(0.0);
+    var specRad    = vec3<f32>(0.0);
+
+    let h = primaryHit;
+    if (h.t >= 1e29) {
+        // Primary ray miss: show background.
+        diffRad += throughput * sampleBackground(ray.dir);
+        if (rt.restirParams.x > 0.5) {
+            textureStore(reservoirWrite,  pixel, vec4<f32>(0.0));
+            textureStore(reservoirWWrite, pixel, vec4<f32>(0.0));
+        }
+        if (rt.spp.x > 0.5) {
+            textureStore(giResWrite,   pixel, vec4<f32>(0.0));
+            textureStore(giResWWrite,  pixel, vec4<f32>(0.0));
+            textureStore(giResLoWrite, pixel, vec4<f32>(0.0));
+            result.giResStored = true;
+        }
+        result.diffRad = diffRad;
+        result.specRad = specRad;
+        result.pathAlive = false;
+        return result;
+    }
+
+    // Primary hit: fill out-params + adaptive bounce cap.
+    *primaryMeshIdx = u32(h.meshIdx);
+    *primaryNormal  = h.normal;
+    *primaryDepth   = h.t;
+    *primaryRough   = sqrt(h.shininess);
+    *primaryMatIdx  = h.matIdx;
+    *primaryTriIdx  = h.triIdx;
+    // Mirror primary metadata into result so rt_bounces_main reads without out-params.
+    result.primaryDepth  = h.t;
+    result.primaryMatIdx = h.matIdx;
+    // Capture b0MeshIdx/b0Alpha/b0Point/b0Normal EARLY so unlit early-exit paths
+    // still propagate valid primary-hit metadata to the accumulation stage.  The
+    // other b0* fields (b0Wo/b0Albedo/b0F0/b0Metal) depend on wo/albedo computed
+    // below and are captured there.  Unlit paths don't need them — runBounces
+    // isn't called, and the accumulation stage only reads b0Point/b0Normal/b0Alpha.
+    result.b0MeshIdx = h.meshIdx;
+    result.b0Alpha   = h.shininess;
+    result.b0Point   = h.point;
+    result.b0Normal  = h.normal;
+
+    var effectiveBounces = maxBounces;
+    {
+        let isGlass  = h.transmission > 0.05;
+        let isMetal  = h.metalness > 0.5;
+        let isMirror = h.shininess < 0.05;
+        let isGlossy = h.shininess < 0.25;
+        if (!isGlass && !isMetal && !isMirror) {
+            if (isGlossy) {
+                effectiveBounces = min(maxBounces, 4);
+            } else {
+                effectiveBounces = min(maxBounces, 3);
+            }
+        }
+    }
+    result.effectiveBounces = effectiveBounces;
+
+    let emTriCount = i32(rt.emissiveInfo.x);
+    let totalPower = rt.emissiveInfo.y;
+
+    // Emissive at bounce 0 — full weight, no clamp (primary ray is physically correct).
+    if (length(h.emissive) > 0.0) {
+        diffRad += throughput * h.emissive;
+    }
+
+    var albedo = h.albedo;
+    if (h.texSlot >= 0.0) { albedo = srgbToLinear(sampleAtlas(h.uv, h.texSlot)); }
+    *primaryAlbedo = albedo;
+
+    // Unlit: flat colour, no bouncing.
+    if (h.shininess < 0.0) {
+        diffRad += throughput * albedo;
+        if (rt.restirParams.x > 0.5) {
+            textureStore(reservoirWrite,  pixel, vec4<f32>(0.0));
+            textureStore(reservoirWWrite, pixel, vec4<f32>(0.0));
+        }
+        if (rt.spp.x > 0.5) {
+            textureStore(giResWrite,   pixel, vec4<f32>(0.0));
+            textureStore(giResWWrite,  pixel, vec4<f32>(0.0));
+            textureStore(giResLoWrite, pixel, vec4<f32>(0.0));
+            result.giResStored = true;
+        }
+        result.diffRad = diffRad;
+        result.specRad = specRad;
+        result.pathAlive = false;
+        return result;
+    }
+
+    let wo   = normalize(-ray.dir);
+    let F0_h = computeF0(albedo, h.metalness, h.specularColor, h.specularIntensity);
+
+    // Capture bounce-0 surface fields that require wo/F0 (remaining b0* captures;
+    // b0MeshIdx/b0Alpha/b0Point/b0Normal were set earlier for unlit compatibility).
+    result.b0Wo      = wo;
+    result.b0Albedo  = albedo;
+    result.b0F0      = F0_h;
+    result.b0Metal   = h.metalness;
+
+    let lcount    = i32(rt.lightCount.x);
+    // ReSTIR DI gating at bounce 0: skip for transmissive and near-mirror surfaces.
+    let useReSTIR = rt.restirParams.x > 0.5 && h.transmission < 0.05;
+
+    if (useReSTIR) {
+        // ======= ReSTIR DI: Initial candidate generation =======
+        var reservoir = emptyReservoir();
+
+        // 1. Analytical lights
+        {
+            let p_source_a = 1.0 / max(f32(lcount), 1.0);
+            for (var li = 0; li < 4; li++) {
+                if (li >= lcount) { break; }
+                let le = evalAnalyticalLight(li, h.point);
+                let lightP = rt.lightPos[li].xyz;
+                let p_hat_a = restirTargetPdf(h.point, h.normal, wo, albedo, h.metalness, h.shininess, F0_h,
+                                              lightP, f32(li), le.color);
+                reservoir.M += 1.0;
+                if (p_hat_a > 0.0) {
+                    let w = p_hat_a / p_source_a;
+                    reservoir.W_sum += w;
+                    if (rand(seed) < w / max(reservoir.W_sum, 1e-20)) {
+                        reservoir.lightPos  = lightP;
+                        reservoir.lightType = f32(li);
+                        reservoir.p_hat     = p_hat_a;
+                    }
+                }
+            }
+        }
+
+        // 2. Emissive triangles — CDF samples
+        if (emTriCount > 0 && totalPower > 0.0) {
+            for (var ei = 0; ei < 4; ei++) {
+                let es = sampleEmissiveTriCdf(seed, totalPower, emTriCount);
+                let toLight = es.point - h.point;
+                let dist = length(toLight);
+                let ln_e = toLight / dist;
+                let cosLight = abs(dot(es.normal, -ln_e));
+                let NdotL_e = dot(h.normal, ln_e);
+                reservoir.M += 1.0;
+                if (NdotL_e > 0.0 && cosLight > 1e-6) {
+                    let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
+                    let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
+                    let p_hat_e = restirTargetPdf(h.point, h.normal, wo, albedo, h.metalness, h.shininess, F0_h,
+                                                  es.point, 1000.0 + f32(es.triIdx), emColor);
+                    if (p_hat_e > 0.0) {
+                        let p_source_e = (es.power / totalPower) * (dist * dist) / (es.area * cosLight);
+                        let w = p_hat_e / p_source_e;
+                        reservoir.W_sum += w;
+                        if (rand(seed) < w / max(reservoir.W_sum, 1e-20)) {
+                            reservoir.lightPos  = es.point;
+                            reservoir.lightType = 1000.0 + f32(es.triIdx);
+                            reservoir.p_hat     = p_hat_e;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Env — NOT sampled via reservoir (handled unconditionally by env NEE below).
+        finalizeReservoir(&reservoir);
+)"
+R"(
+        // === TEMPORAL REUSE ===
+        if (rt.frameCount.x > 0.0) {
+            let primaryMoved = h.meshIdx >= 0 && h.meshIdx < 128 && isMeshMoved(h.meshIdx);
+            var reprojPoint = h.point;
+            var expectedPrevN = h.normal;
+            if (primaryMoved) {
+                let M = rtMotionMats[h.meshIdx];
+                reprojPoint = (M * vec4<f32>(h.point, 1.0)).xyz;
+                expectedPrevN = normalize((M * vec4<f32>(h.normal, 0.0)).xyz);
+            }
+            let relP = reprojPoint - vec3<f32>(rt.prevCamOri.x, rt.prevCamOri.y, rt.prevCamOri.z);
+            let prevFwd = vec3<f32>(rt.prevCamFwd.x, rt.prevCamFwd.y, rt.prevCamFwd.z);
+            let prevRgt = vec3<f32>(rt.prevCamRgt.x, rt.prevCamRgt.y, rt.prevCamRgt.z);
+            let prevUp  = vec3<f32>(rt.prevCamUp.x, rt.prevCamUp.y, rt.prevCamUp.z);
+            let dz = dot(relP, prevFwd);
+            if (dz > 0.0) {
+                let dx = dot(relP, prevRgt);
+                let dy = dot(relP, prevUp);
+                let thf = rt.tanHalfFov.x;
+                let aspect = rt.iRes.x / rt.iRes.y;
+                let ndcX = dx / (dz * thf * aspect);
+                let ndcY = dy / (dz * thf);
+                let prevU = (ndcX * 0.5 + 0.5) * rt.iRes.x;
+                let prevV = (0.5 - ndcY * 0.5) * rt.iRes.y;
+                let prevPx = vec2<i32>(i32(floor(prevU)), i32(floor(prevV)));
+
+                if (prevPx.x >= 0 && prevPx.y >= 0 &&
+                    prevPx.x < i32(rt.iRes.x) && prevPx.y < i32(rt.iRes.y)) {
+
+                    let prevSGB = textureLoad(gBufRead, prevPx, 0);
+                    let prevN = prevSGB.xyz;
+                    let prevD = prevSGB.w;
+                    let curD = length(relP);
+                    let valid = dot(expectedPrevN, prevN) > 0.9 &&
+                                abs(curD - prevD) / max(curD, 1e-6) < 0.1;
+
+                    if (valid) {
+                        let prevSample = textureLoad(reservoirRead, prevPx, 0);
+                        let prevWeight = textureLoad(reservoirWRead, prevPx, 0);
+
+                        var rPrev: Reservoir;
+                        rPrev.lightPos  = prevSample.xyz;
+                        rPrev.lightType = prevSample.w;
+                        rPrev.W_sum = prevWeight.x;
+                        rPrev.M     = min(prevWeight.y, rt.restirParams.y) * 0.8;
+                        rPrev.W     = prevWeight.z;
+                        rPrev.p_hat = prevWeight.w;
+
+                        let prevLe = evalLightRadiance(rPrev.lightPos, rPrev.lightType, h.point);
+                        let p_hat_prev = restirTargetPdf(h.point, h.normal, wo, albedo,
+                                                         h.metalness, h.shininess, F0_h,
+                                                         rPrev.lightPos, rPrev.lightType, prevLe);
+                        if (p_hat_prev > 0.0 && rPrev.W > 0.0) {
+                            let w_prev = p_hat_prev * rPrev.M * rPrev.W;
+                            reservoir.W_sum += w_prev;
+                            reservoir.M += rPrev.M;
+                            if (rand(seed) < w_prev / max(reservoir.W_sum, 1e-20)) {
+                                reservoir.lightPos  = rPrev.lightPos;
+                                reservoir.lightType = rPrev.lightType;
+                                reservoir.p_hat     = p_hat_prev;
+                            }
+                            finalizeReservoir(&reservoir);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Snapshot reservoir before spatial reuse.
+        let preSpReservoir = reservoir;
+
+        // === SPATIAL REUSE — random neighbours from previous frame ===
+        {
+            let camMoving = (u32(rt.params.w) & 2u) != 0u;
+            let spMax = select(5u, 2u, camMoving);
+            let mTarget = 20.0;
+            for (var spI = 0u; spI < spMax; spI++) {
+                if (reservoir.M >= mTarget) { break; }
+                let spAngle = rand(seed) * 2.0 * PI;
+                let spR     = sqrt(rand(seed)) * 20.0;
+                let spOff   = vec2<i32>(i32(spR * cos(spAngle)), i32(spR * sin(spAngle)));
+                if (all(spOff == vec2<i32>(0))) { continue; }
+                let spPx = clamp(pixel + spOff,
+                                 vec2<i32>(0),
+                                 vec2<i32>(i32(rt.iRes.x) - 1, i32(rt.iRes.y) - 1));
+
+                let spSGB = textureLoad(gBufRead, spPx, 0);
+                if (dot(h.normal, spSGB.xyz) < 0.906 ||
+                    abs(h.t - spSGB.w) / max(h.t, 1e-3) > 0.1) { continue; }
+
+                let spSmp = textureLoad(reservoirRead,  spPx, 0);
+                let spWt  = textureLoad(reservoirWRead, spPx, 0);
+                var rSp: Reservoir;
+                rSp.lightPos  = spSmp.xyz;
+                rSp.lightType = spSmp.w;
+                rSp.W_sum = spWt.x;
+                rSp.M     = min(spWt.y, 4.0);
+                rSp.W     = spWt.z;
+                rSp.p_hat = spWt.w;
+                if (rSp.W <= 0.0 || rSp.M <= 0.0) { continue; }
+
+                let spLe = evalLightRadiance(rSp.lightPos, rSp.lightType, h.point);
+                let p_hat_sp = restirTargetPdf(h.point, h.normal, wo, albedo,
+                                                h.metalness, h.shininess, F0_h,
+                                                rSp.lightPos, rSp.lightType, spLe);
+                if (p_hat_sp > 0.0) {
+                    let w_sp = p_hat_sp * rSp.M * rSp.W;
+                    reservoir.W_sum += w_sp;
+                    reservoir.M     += rSp.M;
+                    if (rand(seed) < w_sp / max(reservoir.W_sum, 1e-20)) {
+                        reservoir.lightPos  = rSp.lightPos;
+                        reservoir.lightType = rSp.lightType;
+                        reservoir.p_hat     = p_hat_sp;
+                    }
+                }
+            }
+            finalizeReservoir(&reservoir);
+        }
+        reservoir.W = min(reservoir.W, 5.0);
+
+        // === VISIBILITY TEST ===
+        var reservoirShadowAtten = vec3<f32>(0.0);
+        if (reservoir.p_hat > 0.0 && reservoir.W > 0.0) {
+            let rd = reservoirLightDir(reservoir.lightPos, reservoir.lightType, h.point);
+            reservoirShadowAtten = traceShadowRay(h.point, h.normal, rd.dir, rd.maxDist, 4);
+        }
+
+        // === SHADE FROM RESERVOIR (split diffuse/specular) ===
+        if (reservoirShadowAtten.x + reservoirShadowAtten.y + reservoirShadowAtten.z > 0.001) {
+            let rd = reservoirLightDir(reservoir.lightPos, reservoir.lightType, h.point);
+            let rLe = evalLightRadiance(reservoir.lightPos, reservoir.lightType, h.point);
+            let rNdotL = max(dot(h.normal, rd.dir), 0.0);
+            let rSplit = evalBrdfFullSplit(wo, rd.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                          h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+            let cap = rt.emissiveInfo.z;
+            let shade = throughput * reservoirShadowAtten * reservoir.W * rNdotL * rLe;
+            addSplit(&diffRad, &specRad, shade * rSplit.diff, cap, 0, false);
+            addSplit(&diffRad, &specRad, shade * rSplit.spec, cap, 1, true);
+        }
+
+        // === STORE RESERVOIR (pre-spatial, visibility-gated) ===
+        let visible = reservoirShadowAtten.x + reservoirShadowAtten.y + reservoirShadowAtten.z > 0.001;
+        let rW = select(0.0, select(0.0, preSpReservoir.W, preSpReservoir.W == preSpReservoir.W), visible);
+        let rM = select(0.0, preSpReservoir.M, visible);
+        textureStore(reservoirWrite, pixel,
+            vec4<f32>(preSpReservoir.lightPos, preSpReservoir.lightType));
+        textureStore(reservoirWWrite, pixel,
+            vec4<f32>(preSpReservoir.W_sum, rM, rW, preSpReservoir.p_hat));
+
+    } else {
+)";
+
+// Second chunk of primaryShade: classic NEE (non-ReSTIR branch) + env NEE + reservoir zero-out.
+const char* const csPrimaryShadeWGSL2 = R"(
+        // ======= Classic NEE (ReSTIR disabled or skipped) =======
+        // Analytical lights
+        for (var li = 0; li < 4; li++) {
+            if (li >= lcount) { break; }
+            let le = evalAnalyticalLight(li, h.point);
+            let NdotL = dot(h.normal, le.dir);
+            if (NdotL <= 0.0) { continue; }
+            let shadowAtten = traceShadowRay(h.point, h.normal, le.dir, le.dist - 1e-3, 4);
+            if (shadowAtten.x + shadowAtten.y + shadowAtten.z > 0.001) {
+                let cap = rt.emissiveInfo.z;
+                let bs = evalBrdfFullSplit(wo, le.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                          h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+                let shade = throughput * shadowAtten * NdotL * le.color;
+                addSplit(&diffRad, &specRad, shade * bs.diff, cap, 0, false);
+                addSplit(&diffRad, &specRad, shade * bs.spec, cap, 1, true);
+            }
+        }
+
+        // Emissive surface NEE
+        if (emTriCount > 0) {
+            let totalPower2 = rt.emissiveInfo.y;
+            let es = sampleEmissiveTriCdf(seed, totalPower2, emTriCount);
+            let toLight = es.point - h.point;
+            let dist    = length(toLight);
+            let ln      = toLight / dist;
+            let NdotL   = dot(h.normal, ln);
+            let cosLight = abs(dot(es.normal, -ln));
+            if (NdotL > 0.0 && cosLight > 1e-6) {
+                let emAtten = traceShadowRay(h.point, h.normal, ln, dist - 1e-2, 4);
+                if (emAtten.x + emAtten.y + emAtten.z > 0.001) {
+                    let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
+                    let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
+                    let pdf = (es.power * dist * dist) / (totalPower2 * es.area * cosLight);
+                    let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
+                    let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);
+                    let cap = rt.emissiveInfo.z;
+                    let bs = evalBrdfFullSplit(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                               h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+                    let shade = throughput * emAtten * NdotL * emColor * w_light / pdf;
+                    addSplit(&diffRad, &specRad, shade * bs.diff, cap, 0, false);
+                    addSplit(&diffRad, &specRad, shade * bs.spec, cap, 1, true);
+                }
+            }
+        }
+
+    } // end ReSTIR vs classic NEE
+
+    // Env NEE (always runs at bounce 0 regardless of ReSTIR).
+    if (HAS_ENV_CDF && rt.envColor.w > 1.5 && h.shininess > 0.01) {
+        let envSample = sampleEnvImportance(seed);
+        let envDir    = envSample.xyz;
+        let envPdf    = envSample.w;
+        let envNdotL  = dot(h.normal, envDir);
+        if (envNdotL > 0.0 && envPdf > 1e-8) {
+            let envAtten = traceShadowRay(h.point, h.normal, envDir, 1e30, 4);
+            if (envAtten.x + envAtten.y + envAtten.z > 0.001) {
+                let envCol = sampleEnv(envDir) * rt.envIntensity.x;
+                let pdf_brdf_env = brdfPdf(wo, envDir, h.normal, h.shininess, h.metalness);
+                let w_env = envPdf / max(envPdf + pdf_brdf_env, 1e-8);
+                let cap = rt.emissiveInfo.z;
+                let bs = evalBrdfFullSplit(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h,
+                                           h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
+                let shade = throughput * envAtten * envNdotL * envCol * w_env / envPdf;
+                addSplit(&diffRad, &specRad, shade * bs.diff, cap, 0, false);
+                addSplit(&diffRad, &specRad, shade * bs.spec, cap, 1, true);
+            }
+        }
+    }
+
+    // Zero out reservoir when ReSTIR was globally enabled but skipped (glass/etc).
+    if (rt.restirParams.x > 0.5 && !useReSTIR) {
+        textureStore(reservoirWrite,  pixel, vec4<f32>(0.0));
+        textureStore(reservoirWWrite, pixel, vec4<f32>(0.0));
+    }
+
+    // NOTE: ReSTIR GI block (i==1) and Russian roulette (i>0) are NOT present at bounce 0.
+
+    // Clearcoat lobe.
+    if (h.clearcoat > 0.0 && h.transmission < 0.01) {
+        let ccF0 = 0.04;
+        let ccCos = max(0.0, dot(wo, h.normal));
+        let ccFresnel = ccF0 + (1.0 - ccF0) * pow(1.0 - ccCos, 5.0);
+        let ccWeight = h.clearcoat * ccFresnel;
+        let ccProb = max(ccWeight, 0.15 * h.clearcoat);
+        if (rand(seed) < ccProb) {
+            let wi_cc = sampleVNDF(wo, h.normal, h.clearcoatAlpha, seed);
+            let cos_cc = dot(h.normal, wi_cc);
+            if (cos_cc <= 0.0) {
+                // Original: `break` — safety net writes empty GI.
+                if (rt.spp.x > 0.5 && !result.giResStored) {
+                    textureStore(giResWrite,   pixel, vec4<f32>(0.0));
+                    textureStore(giResWWrite,  pixel, vec4<f32>(0.0));
+                    textureStore(giResLoWrite, pixel, vec4<f32>(0.0));
+                    result.giResStored = true;
+                }
+                result.diffRad = diffRad;
+                result.specRad = specRad;
+                result.pathAlive = false;
+                return result;
+            }
+            let G1_cc = ggxG1(cos_cc, h.clearcoatAlpha);
+            throughput *= vec3<f32>(ccWeight * G1_cc / ccProb);
+            result.prevWo        = wo;
+            result.prevNormal    = h.normal;
+            result.prevAlpha     = h.clearcoatAlpha;
+            result.prevMetalness = 0.0;
+            result.afterTransmission = false;
+            ray.origin = h.point + h.normal * 1e-3;
+            ray.dir    = wi_cc;
+            // Original `continue` — hand off to runBounces with outgoing ray set.
+            result.rayOrigin  = ray.origin;
+            result.rayDir     = ray.dir;
+            result.throughput = throughput;
+            result.diffRad    = diffRad;
+            result.specRad    = specRad;
+            result.pathAlive  = true;
+            return result;
+        }
+        throughput *= (1.0 - ccWeight) / (1.0 - ccProb);
+    }
+
+    // Sheen.
+    let sheenLumPT = dot(h.sheenColor, vec3<f32>(0.2126, 0.7152, 0.0722));
+    if (sheenLumPT > 0.001 && h.transmission < 0.01) {
+        let sheenAlpha = max(h.sheenRoughness * h.sheenRoughness, 1e-4);
+        let NdotV_sh = max(0.001, dot(wo, h.normal));
+        let sheenFresnel = sheenLumPT * pow(1.0 - NdotV_sh, 3.0);
+        throughput *= (1.0 - sheenFresnel);
+    }
+)";
+
+// Third chunk of primaryShade: transmission lobe + BRDF sample + final return.
+const char* const csPrimaryShadeWGSL3 = R"(
+    // Transmission lobe.
+    if (h.transmission > 0.0 && rand(seed) < h.transmission) {
+        let entering = h.frontFace > 0.5;
+        let tMat4 = textureLoad(matData, vec2<i32>(h.matIdx, 4), 0);
+        let tAttColor = tMat4.xyz;
+        let tAttDist  = tMat4.w;
+        var channelMask = vec3<f32>(1.0);
+        var ior_eff = h.ior;
+        if (h.dispersion > 0.0) {
+            let lambda = array<f32, 3>(0.6563, 0.55, 0.4861);
+            let ref_inv_sq = 1.0 / (0.5893 * 0.5893);
+            let ch = u32(rand(seed) * 3.0) % 3u;
+            let inv_sq = 1.0 / (lambda[ch] * lambda[ch]);
+            let B = (h.ior - 1.0) * h.dispersion / 38.2;
+            ior_eff = h.ior + B * (inv_sq - ref_inv_sq);
+            channelMask = vec3<f32>(0.0);
+            channelMask[ch] = 3.0;
+        }
+        let eta = select(ior_eff, 1.0 / ior_eff, entering);
+        var tNorm = h.normal;
+        var usedMicrofacet = false;
+        if (h.shininess > 1e-3) {
+            let wo_t = normalize(-ray.dir);
+            let hm = sampleVNDF(wo_t, h.normal, h.shininess, seed);
+            if (dot(hm, h.normal) > 0.0) { tNorm = hm; usedMicrofacet = true; }
+        }
+        let cosI = abs(dot(normalize(ray.dir), tNorm));
+        let r0   = pow((1.0 - ior_eff) / (1.0 + ior_eff), 2.0);
+        let sin2I = max(0.0, 1.0 - cosI * cosI);
+        let cosSchlick = select(cosI,
+            sqrt(max(0.0, 1.0 - ior_eff * ior_eff * sin2I)),
+            !entering);
+        let fresnel = r0 + (1.0 - r0) * pow(1.0 - cosSchlick, 5.0);
+        var wi_t: vec3<f32>;
+        var didRefract = false;
+        if (rand(seed) < fresnel) {
+            wi_t = reflect(ray.dir, tNorm);
+            ray.origin = h.point + h.normal * 1e-3;
+        } else {
+            let refracted = refract(normalize(ray.dir), tNorm, eta);
+            if (length(refracted) < 0.001) {
+                wi_t = reflect(ray.dir, tNorm);
+                ray.origin = h.point + h.normal * 1e-3;
+            } else {
+                wi_t = refracted;
+                ray.origin = h.point - h.normal * 1e-3;
+                didRefract = true;
+            }
+        }
+        var microWeight = 1.0;
+        if (usedMicrofacet) {
+            let cosOut = abs(dot(wi_t, h.normal));
+            microWeight = ggxG1(cosOut, h.shininess);
+        }
+        if (didRefract) {
+            let glassTint = mix(albedo, vec3<f32>(1.0), h.transmission) * microWeight;
+            var volAtten = vec3<f32>(1.0);
+            if (tAttDist > 0.0 && !entering) {
+                let absorbCoeff = -log(max(tAttColor, vec3<f32>(1e-6))) / tAttDist;
+                let pathLen = select(h.t, h.thickness, h.t < 1e-2 && h.thickness > 0.0);
+                volAtten = exp(-absorbCoeff * pathLen);
+            }
+            throughput *= glassTint * volAtten / (eta * eta) * channelMask;
+        } else {
+            throughput *= vec3<f32>(microWeight) * channelMask;
+        }
+        ray.dir = wi_t;
+        // Original: set afterTransmission=true then `continue`.  Hand off to runBounces.
+        result.afterTransmission = true;
+        result.rayOrigin  = ray.origin;
+        result.rayDir     = ray.dir;
+        result.throughput = throughput;
+        result.diffRad    = diffRad;
+        result.specRad    = specRad;
+        // NOTE: prevNormal/prevAlpha/prevMetalness/prevWo left at struct defaults
+        // here — matches original, which also doesn't update prev* on the transmission
+        // `continue` branch at i==0.  firstBounceSpec also stays false; see pathTrace
+        // comment "Transmission at bounce 0 also counts as specular for routing" —
+        // that code path is unreachable in the original due to the `continue` above
+        // the BRDF-sample `if (i == 0 && afterTransmission)` line, so we preserve
+        // that behaviour verbatim.
+        result.pathAlive = true;
+        return result;
+    }
+
+    // BRDF sample (non-transmission path).
+    let F0_b = F0_h;
+    var wi_b: vec3<f32>;
+    let p_spec = mix(0.5, 0.98, h.metalness);
+    let isSpecBounce = rand(seed) < p_spec;
+    result.firstBounceSpec = isSpecBounce;
+    // Note: `if (i == 0 && afterTransmission)` from original is unreachable here (see
+    // transmission return above), so we don't replicate that assignment.
+    if (isSpecBounce) {
+        wi_b = sampleVNDF(wo, h.normal, h.shininess, seed);
+        let cos_b = dot(h.normal, wi_b);
+        if (cos_b <= 0.0) {
+            if (rt.spp.x > 0.5 && !result.giResStored) {
+                textureStore(giResWrite,   pixel, vec4<f32>(0.0));
+                textureStore(giResWWrite,  pixel, vec4<f32>(0.0));
+                textureStore(giResLoWrite, pixel, vec4<f32>(0.0));
+                result.giResStored = true;
+            }
+            result.diffRad = diffRad;
+            result.specRad = specRad;
+            result.pathAlive = false;
+            return result;
+        }
+        let hb  = normalize(wo + wi_b);
+        let Fb  = schlick(max(0.0, dot(wo, hb)), F0_b);
+        let G1L = ggxG1(cos_b, h.shininess);
+        throughput *= Fb * G1L / p_spec;
+    } else {
+        wi_b = cosineHemisphere(h.normal, seed);
+        let cos_b = dot(h.normal, wi_b);
+        if (cos_b <= 0.0) {
+            if (rt.spp.x > 0.5 && !result.giResStored) {
+                textureStore(giResWrite,   pixel, vec4<f32>(0.0));
+                textureStore(giResWWrite,  pixel, vec4<f32>(0.0));
+                textureStore(giResLoWrite, pixel, vec4<f32>(0.0));
+                result.giResStored = true;
+            }
+            result.diffRad = diffRad;
+            result.specRad = specRad;
+            result.pathAlive = false;
+            return result;
+        }
+        throughput *= albedo * (1.0 - h.metalness) / (1.0 - p_spec);
+    }
+    result.prevWo        = wo;
+    result.prevNormal    = h.normal;
+    result.prevAlpha     = h.shininess;
+    result.prevMetalness = h.metalness;
+    result.afterTransmission = false;
+    ray.origin = h.point + h.normal * 1e-3;
+    ray.dir    = wi_b;
+
+    result.rayOrigin  = ray.origin;
+    result.rayDir     = ray.dir;
+    result.throughput = throughput;
+    result.diffRad    = diffRad;
+    result.specRad    = specRad;
+    result.pathAlive  = true;
+    return result;
+}
+)";
+
+// pathTrace wrapper (bounce split, Stage B): replaces the old monolithic loop.
+// Calls primaryShade for bounce 0, then if the path is still alive, runBounces for
+// bounces 1..maxBounces.  Signature is UNCHANGED so rt_main continues to call this
+// without modification.  Note: rt_main no longer calls this wrapper — it inlines
+// primaryShade + serialize then dispatches to rt_bounces_main for runBounces.
+// The wrapper is kept as a reference implementation / fallback that proves the
+// two helpers compose correctly when called together.
+const char* const csPathTraceWGSL2 = R"(
+fn pathTrace(ray_in: Ray,
+             primaryHit: Hit,  // pre-computed by rt_primary_main; skip BVH for i==0
+             seed: ptr<function, u32>,
+             pixel: vec2<i32>,
+             maxBounces:     i32,
+             primaryMeshIdx: ptr<function, u32>,
+             primaryNormal:  ptr<function, vec3<f32>>,
+             primaryDepth:   ptr<function, f32>,
+             primaryAlbedo:  ptr<function, vec3<f32>>,
+             primaryRough:   ptr<function, f32>,
+             primaryMatIdx:  ptr<function, i32>,
+             primaryTriIdx:  ptr<function, i32>,
+             touchedMoved:   ptr<function, bool>) -> SplitRadiance {
+    *touchedMoved = false;
+    let result = primaryShade(primaryHit, ray_in, seed, pixel, maxBounces,
+                              primaryMeshIdx, primaryNormal, primaryDepth,
+                              primaryAlbedo, primaryRough, primaryMatIdx, primaryTriIdx);
+    if (!result.pathAlive) {
+        return SplitRadiance(result.diffRad, result.specRad);
+    }
+    let bouncesResult = runBounces(result, seed, pixel, *primaryMeshIdx, touchedMoved);
+    return SplitRadiance(result.diffRad + bouncesResult.diff,
+                         result.specRad + bouncesResult.spec);
 }
 )";
 
@@ -2489,8 +2848,9 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let totalPixels = u32(res.x) * u32(res.y);
     let resXu = u32(res.x);
     // Persistent-thread work-stealing loop.  Each iteration claims one pixel
-    // from the global queue.  Replaces the previous 1-thread-per-pixel mapping
-    // where a thread tracing a short path idled while warp-mates continued.
+    // from the global queue.  Batch-pull (N=8) was tried and found slower —
+    // atomic contention wasn't the bottleneck; losing per-pixel work-stealing
+    // granularity cost more than the saved atomic traffic.
     loop {
         let pixelIdx = atomicAdd(&pathCounter, 1u);
         if (pixelIdx >= totalPixels) { break; }
@@ -2630,6 +2990,27 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             textureStore(reservoirWrite,  pixel, textureLoad(reservoirRead,  src, 0));
             textureStore(reservoirWWrite, pixel, textureLoad(reservoirWRead, src, 0));
         }
+        // Mark this pixel as skipAccum so rt_bounces_main doesn't re-accumulate
+        // on top of the leader-copied values.  Only the flag bits matter; other
+        // PathStateEntry fields are left zero (harmless because skipAccum
+        // short-circuits the bounce + accumulation path).
+        {
+            var entry: PathStateEntry;
+            let flagBits = 32u;  // bit 5 = skipAccum
+            entry.w0 = vec4<f32>(0.0);
+            entry.w1 = vec4<f32>(0.0);
+            entry.w2 = vec4<f32>(0.0, 0.0, 0.0, bitcast<f32>(flagBits));
+            entry.w3 = vec4<f32>(0.0);
+            entry.w4 = vec4<f32>(0.0);
+            entry.w5 = vec4<f32>(0.0);
+            entry.w6 = vec4<f32>(0.0);
+            entry.w7 = vec4<f32>(0.0);
+            entry.w8 = vec4<f32>(0.0);
+            entry.w9 = vec4<f32>(0.0);
+            entry.w10 = vec4<f32>(0.0);
+            entry.w11 = vec4<f32>(0.0);
+            pathStateBuf[pixelIdx] = entry;
+        }
         if (rt.spp.x > 0.5) {
             textureStore(giResWrite,   pixel, textureLoad(giResRead,   src, 0));
             textureStore(giResWWrite,  pixel, textureLoad(giResWRead,  src, 0));
@@ -2672,6 +3053,88 @@ R"(
     var seed = pcg(pcg(u32(pixel.x) + u32(pixel.y) * 65537u) + fc * 12979u);
 
     let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5 + jx, f32(pixel.y) + 0.5 + jy), res);
+
+    // Read the primary hit from the buffer populated by rt_primary_main.
+    let packed = primaryHitBuf[pixelIdx];
+
+    // Sky fast-path (kernel-split optimisation): skip pathTrace entirely for
+    // primary-miss pixels.  A full pathTrace call for a miss costs ~function
+    // call + loop setup + default-Hit construction + miss branch + output-param
+    // writes.  Handling it inline saves register allocation for the function-
+    // scope Hit struct (~20 vec/scalar fields) and lets the thread pull the
+    // next queued pixel sooner.
+    //
+    // This also handles AOV modes for sky (aovColor is black/zero for all
+    // modes since there's no geometry).  The full AOV write path below is
+    // skipped in favour of a minimal sentinel write set.
+    if (packed.triIdx < 0) {
+        let bgColor = sampleBackground(ray.dir);
+        let lum3    = vec3<f32>(0.2126, 0.7152, 0.0722);
+        // NaN guard
+        let bgClean = select(vec3<f32>(0.0), bgColor, bgColor.x == bgColor.x);
+        let bgLum   = dot(bgClean, lum3);
+
+        // Progressive accumulation (same math as the non-miss tail below).
+        let prev   = textureLoad(accumRead, pixel, 0);
+        let old    = prev.xyz;
+        var pxFC   = prev.w;
+        let forceRst = (u32(rt.params.w) & 1u) != 0u;
+        if (forceRst) { pxFC = 0.0; }
+        let alpha = 1.0 / (pxFC + 1.0);
+        var blended: vec3<f32>;
+        var newFC:   f32;
+        if (pxFC < 1024.0) {
+            blended = old * (1.0 - alpha) + bgClean * alpha;
+            newFC   = pxFC + 1.0;
+        } else {
+            blended = old;
+            newFC   = pxFC;
+        }
+        // Sky is all diffuse (no specular component).
+        textureStore(accumWrite,     pixel, vec4<f32>(blended, newFC));
+        textureStore(diffAccumWrite, pixel, vec4<f32>(blended, newFC));
+        textureStore(specAccumWrite, pixel, vec4<f32>(vec3<f32>(0.0), newFC));
+        textureStore(momentsWrite,   pixel, vec4<f32>(bgLum, bgLum * bgLum, 0.0, 0.0));
+
+        // Sentinel metadata — matches what pathTrace would write for a miss.
+        textureStore(hitMeshWrite, pixel, vec4<f32>(128.0, -1.0, 0.0, 0.0));
+        textureStore(albedoWrite,  pixel, vec4<f32>(1.0, 1.0, 1.0, 1.0));
+        textureStore(gBufWrite,    pixel, vec4<f32>(0.0, 0.0, 0.0, 0.0));
+
+        // Clear reservoirs on miss (mirrors pathTrace's i==0 miss handling).
+        if (rt.restirParams.x > 0.5) {
+            textureStore(reservoirWrite,  pixel, vec4<f32>(0.0));
+            textureStore(reservoirWWrite, pixel, vec4<f32>(0.0));
+        }
+        if (rt.spp.x > 0.5) {
+            textureStore(giResWrite,   pixel, vec4<f32>(0.0));
+            textureStore(giResWWrite,  pixel, vec4<f32>(0.0));
+            textureStore(giResLoWrite, pixel, vec4<f32>(0.0));
+        }
+        // Sky fast-path wrote accum itself — mark skipAccum for rt_bounces_main.
+        {
+            var entry: PathStateEntry;
+            let flagBits = 32u;  // bit 5 = skipAccum
+            entry.w0 = vec4<f32>(0.0);
+            entry.w1 = vec4<f32>(0.0);
+            entry.w2 = vec4<f32>(0.0, 0.0, 0.0, bitcast<f32>(flagBits));
+            entry.w3 = vec4<f32>(0.0);
+            entry.w4 = vec4<f32>(0.0);
+            entry.w5 = vec4<f32>(0.0);
+            entry.w6 = vec4<f32>(0.0);
+            entry.w7 = vec4<f32>(0.0);
+            entry.w8 = vec4<f32>(0.0);
+            entry.w9 = vec4<f32>(0.0);
+            entry.w10 = vec4<f32>(0.0);
+            entry.w11 = vec4<f32>(0.0);
+            pathStateBuf[pixelIdx] = entry;
+        }
+        continue;
+    }
+
+    let rh = RawHit(packed.t, packed.triIdx, packed.u, packed.v);
+    var primaryHit = loadHitMaterial(rh, ray);
+
     var primaryMeshIdx: u32;
     var primaryNormal:  vec3<f32>;
     var primaryDepth:   f32;
@@ -2679,9 +3142,44 @@ R"(
     var primaryRough:   f32;
     var primaryMatIdx:  i32;
     var primaryTriIdx:  i32;
-    var touchedMoved:   bool;
-    var ptResult = pathTrace(ray, &seed, pixel, varianceReducedBounces, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &primaryRough, &primaryMatIdx, &primaryTriIdx, &touchedMoved);
-    var sample = ptResult.diff + ptResult.spec;
+    var touchedMoved:   bool = false;
+
+    // Run primary shading (bounce 0 NEE/ReSTIR DI + first BRDF sample).
+    let shadeResult = primaryShade(primaryHit, ray, &seed, pixel, varianceReducedBounces,
+                                   &primaryMeshIdx, &primaryNormal, &primaryDepth,
+                                   &primaryAlbedo, &primaryRough, &primaryMatIdx, &primaryTriIdx);
+
+    // Serialize PrimaryShadeResult -> PathStateEntry for rt_bounces_main.  Packed
+    // per the layout declared at binding 37.  Seed captured AFTER primaryShade so
+    // rt_bounces_main resumes from the same PCG state primaryShade left behind.
+    // touchedMoved is initialized here (primary never sets it) and updated
+    // in-place in rt_bounces_main via bit 2 of the flags word.
+    {
+        let flagBits = (select(0u, 1u, shadeResult.firstBounceSpec))
+                     | (select(0u, 2u, shadeResult.afterTransmission))
+                     | (select(0u, 4u, touchedMoved))
+                     | (select(0u, 8u, shadeResult.pathAlive))
+                     | (select(0u, 16u, shadeResult.giResStored));
+        var entry: PathStateEntry;
+        entry.w0  = vec4<f32>(shadeResult.rayOrigin, bitcast<f32>(seed));
+        entry.w1  = vec4<f32>(shadeResult.rayDir,    bitcast<f32>(shadeResult.effectiveBounces));
+        entry.w2  = vec4<f32>(shadeResult.throughput, bitcast<f32>(flagBits));
+        entry.w3  = vec4<f32>(shadeResult.diffRad,    shadeResult.prevMetalness);
+        entry.w4  = vec4<f32>(shadeResult.specRad,    shadeResult.prevAlpha);
+        entry.w5  = vec4<f32>(shadeResult.prevNormal, shadeResult.primaryDepth);
+        entry.w6  = vec4<f32>(shadeResult.prevWo,     0.0);
+        entry.w7  = vec4<f32>(shadeResult.b0Point,    shadeResult.b0Alpha);
+        entry.w8  = vec4<f32>(shadeResult.b0Normal,   shadeResult.b0Metal);
+        entry.w9  = vec4<f32>(shadeResult.b0Wo,       bitcast<f32>(shadeResult.b0MeshIdx));
+        entry.w10 = vec4<f32>(shadeResult.b0Albedo,   bitcast<f32>(shadeResult.primaryMatIdx));
+        entry.w11 = vec4<f32>(shadeResult.b0F0,       0.0);
+        pathStateBuf[pixelIdx] = entry;
+    }
+
+    // runBounces + radiance accumulation live in rt_bounces_main.  rt_main's
+    // responsibility ends with serialize + primary-metadata texture writes.
+    // AOV / sky / foveated paths short-circuit earlier because they need
+    // primary-derived data (primaryDepth/etc) that are rt_main locals.
 )"
 R"(
     // AOV visualization mode — write noise-free primary-hit data and return early.
@@ -2710,286 +3208,344 @@ R"(
         textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), 0.0, 0.0));
         textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
         textureStore(albedoWrite, pixel, vec4<f32>(primaryAlbedo, primaryRough));
+        // AOV already wrote accum — OR skipAccum into the flags word written by
+        // the earlier serialize.  Direct overwrite of pathStateBuf[pixelIdx].w2.w
+        // preserves other bits we don't care about (path terminates at AOV).
+        {
+            let prevFlags = bitcast<u32>(pathStateBuf[pixelIdx].w2.w);
+            pathStateBuf[pixelIdx].w2.w = bitcast<f32>(prevFlags | 32u);
+        }
         continue;
     }
 
-    let prev     = textureLoad(accumRead, pixel, 0);
-    var old      = prev.xyz;
-    var pixelFC  = prev.w;
-
-    // Split accum old values — read from current pixel, overridden by reprojection block
-    let prevDiffRaw = textureLoad(diffAccumRead, pixel, 0).xyz;
-    let prevSpecRaw = textureLoad(specAccumRead, pixel, 0).xyz;
-    var oldDiff = select(vec3<f32>(0.0), prevDiffRaw, prevDiffRaw.x == prevDiffRaw.x);
-    var oldSpec = select(vec3<f32>(0.0), prevSpecRaw, prevSpecRaw.x == prevSpecRaw.x);
-    // Moments reprojected from same position as color — set inside reprojection block.
-    // Falls back to current-pixel read if reprojection fails.
-    let prevMom = textureLoad(momentsRead, pixel, 0);
-    var prevMomM1 = prevMom.x;
-    var prevMomM2 = prevMom.y;
-
-    // params.w encodes: 1.0=forceReset, 2.0=camMoved, 3.0=both
-    let forceReset = (u32(rt.params.w) & 1u) != 0u;
-    let camMovedFlag = (u32(rt.params.w) & 2u) != 0u;
-    if (forceReset) { pixelFC = 0.0; }
-)"
-R"(
-    // Reproject accumulation buffer across camera/mesh motion using motion vectors.
-    // Two reprojection cases, unified through the same math:
-    //   (A) Primary ray hits a moved mesh: transform worldPos by the mesh's
-    //       motion matrix to find where this surface point was last frame,
-    //       then project into the prev camera's screen space. Lets the EMA
-    //       history follow rotating/translating meshes instead of resetting.
-    //   (B) Camera moved (camMovedFlag), primary hit a static surface: worldPos is
-    //       already in the prev frame's world space, so identity-transform
-    //       before prev-camera reprojection.
-    // Without the motion-matrix branch, rotating meshes (e.g. a car) get
-    // pixelFC=0 every frame → 1 spp visible noise. With it, their accumulation
-    // follows the surface and converges like static geometry.
-    let prevMeshU = u32(textureLoad(hitMeshRead, pixel, 0).r);
-    let primaryMoved = primaryMeshIdx < 128u && isMeshMoved(i32(primaryMeshIdx));
-
-    // Disocclusion: moved mesh LEFT this pixel (was here last frame, gone now)
-    // → history is stale regardless of what's here now.
-    if (primaryMeshIdx != prevMeshU && prevMeshU < 128u && isMeshMoved(i32(prevMeshU))) {
-        pixelFC = 0.0;
-    }
-    // Secondary bounce hit a moved mesh — cap rather than reset so static
-    // surfaces can still converge while indirect lighting refreshes.
-    // If the moved mesh is itself an emissive source, use a much tighter cap (2 frames)
-    // so that reflections/shadows of moving lights clear in ~33ms rather than ~133ms.
-    if (touchedMoved) {
-        let emissiveMoved = rt.restirParams.z > 0.5;
-        pixelFC = min(pixelFC, select(8.0, 2.0, emissiveMoved));
-    }
-
-    // Unified motion-vector reprojection.  Runs when either the camera moved
-    // (camMovedFlag) OR the primary-hit mesh moved.  Handles both together: if the
-    // car rotates AND the camera moves, we compose mesh motion (motionMats)
-    // with camera motion (prevCam*) in a single reprojection.
-    if (primaryMoved || camMovedFlag) {
-        var reprojOk = false;
-        if (pixelFC > 0.0 && primaryDepth > 0.0) {
-            let worldPos = rt.camOri.xyz + ray.dir * primaryDepth;
-            // For moved meshes: transform curWorld→prevWorld using the mesh's
-            // motion matrix (prevWorld * inverse(curWorld)).  For static surfaces,
-            // prevWorld == worldPos.
-            var prevWorldPos = worldPos;
-            if (primaryMoved) {
-                prevWorldPos = (rtMotionMats[primaryMeshIdx] * vec4<f32>(worldPos, 1.0)).xyz;
-            }
-            let toPoint = prevWorldPos - rt.prevCamOri.xyz;
-            let prevZ   = dot(toPoint, rt.prevCamFwd.xyz);
-            if (prevZ > 0.001) {
-                let aspect   = res.x / res.y;
-                let prevNdcX = dot(toPoint, rt.prevCamRgt.xyz) / (prevZ * rt.tanHalfFov.x * aspect);
-                let prevNdcY = dot(toPoint, rt.prevCamUp.xyz)  / (prevZ * rt.tanHalfFov.x);
-                // Path tracer uses pixel-CORNER ray convention
-                // (ray target = pixel.xy + jitter, jitter ∈ [-0.5,0.5] with
-                // mean 0 → mean ray target is pixel corner, not centre).
-                // So prevNdcX maps directly to pixel coordinate — no -0.5
-                // offset.
-                let prevU = (prevNdcX + 1.0) * 0.5 * res.x;
-                let prevV = (1.0 - prevNdcY) * 0.5 * res.y;
-                let pxBase = vec2<i32>(i32(floor(prevU)), i32(floor(prevV)));
-                // Need full 2×2 footprint in bounds for bilinear
-                if (pxBase.x >= 0 && pxBase.x + 1 < i32(res.x) &&
-                    pxBase.y >= 0 && pxBase.y + 1 < i32(res.y)) {
-                    let fx = prevU - f32(pxBase.x);
-                    let fy = prevV - f32(pxBase.y);
-                    // Bilinear weights for the 4 corners
-                    let w00 = (1.0 - fx) * (1.0 - fy);
-                    let w10 = fx         * (1.0 - fy);
-                    let w01 = (1.0 - fx) *         fy;
-                    let w11 = fx         *         fy;
-                    // Validate each corner: only blend from corners that
-                    // belong to the same mesh as the current pixel. Corners
-                    // on different meshes (disocclusion / silhouette) are
-                    // dropped and weights renormalised.
-                    let p00 = pxBase;
-                    let p10 = pxBase + vec2<i32>(1, 0);
-                    let p01 = pxBase + vec2<i32>(0, 1);
-                    let p11 = pxBase + vec2<i32>(1, 1);
-                    let m00 = u32(textureLoad(hitMeshRead, p00, 0).r);
-                    let m10 = u32(textureLoad(hitMeshRead, p10, 0).r);
-                    let m01 = u32(textureLoad(hitMeshRead, p01, 0).r);
-                    let m11 = u32(textureLoad(hitMeshRead, p11, 0).r);
-                    let v00 = select(0.0, w00, m00 == primaryMeshIdx);
-                    let v10 = select(0.0, w10, m10 == primaryMeshIdx);
-                    let v01 = select(0.0, w01, m01 == primaryMeshIdx);
-                    let v11 = select(0.0, w11, m11 == primaryMeshIdx);
-                    let wSum = v00 + v10 + v01 + v11;
-                    if (wSum > 1e-4) {
-                        let a00 = textureLoad(accumRead, p00, 0);
-                        let a10 = textureLoad(accumRead, p10, 0);
-                        let a01 = textureLoad(accumRead, p01, 0);
-                        let a11 = textureLoad(accumRead, p11, 0);
-                        let inv = 1.0 / wSum;
-                        old = (a00.xyz * v00 + a10.xyz * v10
-                             + a01.xyz * v01 + a11.xyz * v11) * inv;
-                        let prevFC = (a00.w * v00 + a10.w * v10
-                                    + a01.w * v01 + a11.w * v11) * inv;
-                        // Reproject split accum from same reprojected position
-                        let d00 = textureLoad(diffAccumRead, p00, 0).xyz;
-                        let d10 = textureLoad(diffAccumRead, p10, 0).xyz;
-                        let d01 = textureLoad(diffAccumRead, p01, 0).xyz;
-                        let d11 = textureLoad(diffAccumRead, p11, 0).xyz;
-                        oldDiff = (d00 * v00 + d10 * v10 + d01 * v01 + d11 * v11) * inv;
-                        let s00 = textureLoad(specAccumRead, p00, 0).xyz;
-                        let s10 = textureLoad(specAccumRead, p10, 0).xyz;
-                        let s01 = textureLoad(specAccumRead, p01, 0).xyz;
-                        let s11 = textureLoad(specAccumRead, p11, 0).xyz;
-                        oldSpec = (s00 * v00 + s10 * v10 + s01 * v01 + s11 * v11) * inv;
-                        // Reproject moments from same reprojected position as color
-                        let mom00 = textureLoad(momentsRead, p00, 0).xy;
-                        let mom10 = textureLoad(momentsRead, p10, 0).xy;
-                        let mom01 = textureLoad(momentsRead, p01, 0).xy;
-                        let mom11 = textureLoad(momentsRead, p11, 0).xy;
-                        prevMomM1 = (mom00.x*v00 + mom10.x*v10 + mom01.x*v01 + mom11.x*v11) * inv;
-                        prevMomM2 = (mom00.y*v00 + mom10.y*v10 + mom01.y*v01 + mom11.y*v11) * inv;
-                        // Roughness-adaptive history cap.
-                        //   Diffuse/matte (rough≈1): no view-dependent shading,
-                        //     history stays valid as long as reprojection is
-                        //     accurate → cap at 256 (√256 = 16× noise drop).
-                        //   Mirror/metal (rough≈0): specular lobe is view-
-                        //     dependent, history goes stale → cap tight at 8
-                        //     so reflections refresh as camera moves.
-                        //   primaryRough (= sqrt(alpha)) comes from pathTrace.
-                        // Moving meshes: per-mesh motion reprojection compounds
-                        // sub-pixel bilinear blur every frame, so cap tighter
-                        // (32 diffuse / 4 mirror) to shed history faster and
-                        // avoid motion smear on rotating/translating geometry.
-                        let staticCap = mix(8.0, 256.0,
-                                            smoothstep(0.15, 0.7, primaryRough));
-                        let movingCap = mix(8.0, 64.0,
-                                            smoothstep(0.15, 0.7, primaryRough));
-                        if (primaryMoved) {
-                            pixelFC = min(prevFC * 0.5, movingCap);
-                        } else {
-                            // Pure camera reprojection (static mesh): halve
-                            // to absorb any residual sub-pixel drift.
-                            pixelFC = min(prevFC * 0.5, staticCap);
-                        }
-                        reprojOk = true;
-                    }
-                }
-            }
-        }
-        if (!reprojOk) {
-            pixelFC = 0.0;
-            oldDiff = vec3<f32>(0.0);
-            oldSpec = vec3<f32>(0.0);
-        }
-    }
-)"
-    R"(
-    // NaN guard: reject corrupted samples to prevent permanent accumulation damage
-    let sampleClean = select(vec3<f32>(0.0), sample, sample.x == sample.x);
-    let oldClean    = select(vec3<f32>(0.0), old,    old.x == old.x);
-
-    // Adaptive outlier rejection: clamp sample relative to running average.
-    // Hard cap first (catches extreme fireflies regardless of history).
-    let lum3 = vec3<f32>(0.2126, 0.7152, 0.0722);
-    var clamped = sampleClean;
-    let rawLum = dot(sampleClean, lum3);
-    let hardCap = 12.0;
-    if (rawLum > hardCap) {
-        clamped = sampleClean * (hardCap / rawLum);
-    }
-    // Relative clamp: only once history is reliable (≥8 frames), 7× running average.
-    // Do NOT start earlier — moving emissives land on pixels with dark history,
-    // making avgLum artificially low and crushing legitimate bright samples.
-    if (pixelFC > 8.0) {
-        let avgLum = max(dot(oldClean, lum3), 0.05);
-        let smpLum = dot(clamped, lum3);
-        let maxLum = avgLum * 7.0;
-        if (smpLum > maxLum) {
-            clamped = clamped * (maxLum / smpLum);
-        }
-    }
-
-    // Stop accumulating once float16 precision is exhausted (~1024 frames)
-    let alpha = 1.0 / (pixelFC + 1.0);
-    if (pixelFC < 1024.0) {
-        var blended = oldClean * (1.0 - alpha) + clamped * alpha;
-        // DEBUG: flip to true to visualize pixelFC (history length) instead of radiance.
-        // log2 ramp covers the full 0..256 range:
-        //   black = 0,  red ≈ 8,  orange ≈ 32,  yellow ≈ 128,  white ≥ 256.
-        // Diffuse-capped (roughCap=256) surfaces should converge to white.
-        // Specular-capped (roughCap=8) surfaces stay red.
-        const DEBUG_VIS_PIXEL_FC = false;
-        if (DEBUG_VIS_PIXEL_FC) {
-            // log2(pixelFC+1)/8 maps pixelFC=0→0, 8→~0.39, 32→~0.63, 256→1.0
-            let fcN = clamp(log2(pixelFC + 1.0) / 8.0, 0.0, 1.0);
-            blended = vec3<f32>(fcN, fcN * fcN, fcN * fcN * fcN);
-        }
-        // DEBUG: flip to true to visualize RAW single-sample path trace output
-        // (bypasses all accumulation). If fireflies are visible in this view,
-        // they originate in the path tracer itself. If NOT visible here but
-        // visible in the accumulated output, accumulation logic is injecting
-        // noise (e.g. reprojection returning bad history, outlier rejection
-        // not firing). Tonemap the sample so extreme fireflies don't just
-        // paint the screen white.
-        const DEBUG_VIS_RAW_SAMPLE = false;
-        if (DEBUG_VIS_RAW_SAMPLE) {
-            // Simple Reinhard to compress fireflies into [0,1] while
-            // keeping relative brightness visible.
-            blended = sampleClean / (sampleClean + vec3<f32>(1.0));
-        }
-        textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
-    } else {
-        textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
-    }
-
-    // Temporal variance tracking: accumulate 1st and 2nd moments of luminance.
-    // Use post-hard-cap, pre-relative-clamp luminance so variance reflects true
-    // sample spread (relative clamp would artificially suppress it).
-    let sampleLum = dot(clamped, lum3);
-    // Use reprojected moments (prevMomM1/M2) set in the reprojection block above.
-    // Floor alpha at 0.1 so variance stays responsive even at convergence.
-    let momAlpha = max(alpha, 0.1);
-    var m1 = prevMomM1;
-    var m2 = prevMomM2;
-    if (pixelFC < 1.0) { m1 = sampleLum; m2 = sampleLum * sampleLum; }
-    else {
-        m1 = m1 * (1.0 - momAlpha) + sampleLum * momAlpha;
-        m2 = m2 * (1.0 - momAlpha) + sampleLum * sampleLum * momAlpha;
-    }
-    textureStore(momentsWrite, pixel, vec4<f32>(m1, m2, 0.0, 0.0));
-
-    // --- Diffuse/specular split accumulation ---
-    // oldDiff/oldSpec are already reprojected (bilinear from previous frame's position)
-    {
-        let diffSample = select(vec3<f32>(0.0), ptResult.diff, ptResult.diff.x == ptResult.diff.x);
-        let specSample = select(vec3<f32>(0.0), ptResult.spec, ptResult.spec.x == ptResult.spec.x);
-        // Diffuse: same hard cap as combined (diffuse has low variance)
-        var dClamped = diffSample;
-        let dLum = dot(diffSample, lum3);
-        if (dLum > hardCap) { dClamped = diffSample * (hardCap / dLum); }
-        // Specular: tighter roughness-adaptive cap.
-        // Glossy/mirror (rough≈0): cap=3 — specular has extreme variance from
-        // bright point reflections, aggressive clamping needed.
-        // Rough metal (rough≈1): cap=8 — wider lobe averages over more surface,
-        // less variance per sample.
-        let specHardCap = mix(3.0, 8.0, primaryRough);
-        var sClamped = specSample;
-        let sLum = dot(specSample, lum3);
-        if (sLum > specHardCap) { sClamped = specSample * (specHardCap / sLum); }
-        if (pixelFC < 1024.0) {
-            textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff * (1.0 - alpha) + dClamped * alpha, pixelFC + 1.0));
-            textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec * (1.0 - alpha) + sClamped * alpha, pixelFC + 1.0));
-        } else {
-            textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff, pixelFC));
-            textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec, pixelFC));
-        }
-    }
-
-    textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), select(0.0, 1.0, touchedMoved), 0.0));
+    // accumulation + hitMesh write live in rt_bounces_main (hitMesh depends on
+    // touchedMoved).  rt_main still writes primary-only metadata here.
     textureStore(albedoWrite,  pixel, vec4<f32>(primaryAlbedo, primaryRough));
 
     textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
     }  // end of work-stealing loop
 }
+
+// ---------------------------------------------------------------------------
+// Primary-hit kernel (kernel split, step 1 of 2).
+// Traces the camera ray through the BVH and writes a compact RawHit record
+// (triIdx, t, u, v) to primaryHitBuf.  No material lookup, no shading, no
+// bounces — those happen in rt_main, which reconstructs the full Hit via
+// loadHitMaterial.  Splitting primary traversal off the megakernel reduces
+// register pressure in both halves: this kernel has only BVH state (~50
+// registers), and rt_main no longer needs to carry primary-traversal
+// locals alongside its shading/bounce state.
+//
+// Seeding note: this kernel consumes one bnNext2d() for camera jitter and may
+// consume PCG randomness inside stochastic alpha tests in testTriangle().
+// rt_main re-seeds from the same pixel+frame values (same initial seed) and
+// re-derives the same ray — the primary is NOT re-traced, so correlation is
+// inert.  See bnInit/seed setup in rt_main for the matching convention.
+// ---------------------------------------------------------------------------
+@compute @workgroup_size(8, 8)
+fn rt_primary_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let res   = rt.iRes.xy;
+    let totalPixels = u32(res.x) * u32(res.y);
+    let resXu = u32(res.x);
+    loop {
+        let pixelIdx = atomicAdd(&primaryCounter, 1u);
+        if (pixelIdx >= totalPixels) { break; }
+        let pixel = vec2<i32>(i32(pixelIdx % resXu), i32(pixelIdx / resXu));
+
+        let fc = u32(rt.frameCount.x);
+        // Jitter derivation must match rt_main exactly so both kernels trace the
+        // same camera ray for this pixel.  sceneHitRaw's stochastic alpha uses
+        // its own PCG seeded from (triIdx, frame, t) — it doesn't consume any
+        // thread-local seed, so no seed variable is needed in this kernel.
+        bnInit(u32(pixel.x), u32(pixel.y), fc);
+        let camBn = bnNext2d();
+        let jx = (camBn.x - 0.5) * 0.75;
+        let jy = (camBn.y - 0.5) * 0.75;
+
+        let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5 + jx, f32(pixel.y) + 0.5 + jy), res);
+        let rh = sceneHitRaw(ray, 1e30);
+
+        var packed: PrimaryHitPacked;
+        packed.triIdx = rh.triIdx;
+        packed.t      = rh.t;
+        packed.u      = rh.u;
+        packed.v      = rh.v;
+        primaryHitBuf[pixelIdx] = packed;
+
+        // Vestigial: keeps binding 37 (pathStateBuf) in primaryPipeline's
+        // bind-group layout so C++ setStorageBuffer(37, ...) stays valid for the
+        // shared bind-group helpers.  rt_main overwrites this entry immediately
+        // in the next pass, so the value doesn't matter.
+        pathStateBuf[pixelIdx].w0 = vec4<f32>(0.0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// rt_bounces_main (bounce split, Stage D).
+// Consumes pathStateBuf entries written by primaryShade-in-rt_main, runs the
+// bounce loop (runBounces), and performs the full accumulation / reprojection
+// pipeline that previously lived inline at the end of rt_main.  Splits the
+// megakernel into primary / shade / bounce phases, reducing register pressure
+// in each and enabling future material-sorting optimisations (wavefront).
+//
+// skipAccum short-circuit: pixels handled by foveated/checker copy, sky fast-
+// path, or AOV modes write their own accum and set bit 5 of the flags word
+// so this kernel treats them as no-ops.
+// ---------------------------------------------------------------------------
+@compute @workgroup_size(8, 8)
+fn rt_bounces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let res = rt.iRes.xy;
+    let totalPixels = u32(res.x) * u32(res.y);
+    let resXu = u32(res.x);
+    loop {
+        let pixelIdx = atomicAdd(&bounceCounter, 1u);
+        if (pixelIdx >= totalPixels) { break; }
+        let pixel = vec2<i32>(i32(pixelIdx % resXu), i32(pixelIdx / resXu));
+
+        let entry = pathStateBuf[pixelIdx];
+        let flagBits = bitcast<u32>(entry.w2.w);
+        let skipAccum = (flagBits & 32u) != 0u;
+        if (skipAccum) { continue; }
+
+        // Deserialize PrimaryShadeResult from PathStateEntry (see packing legend
+        // at struct declaration above).
+        var state: PrimaryShadeResult;
+        state.rayOrigin        = entry.w0.xyz;
+        var seed               = bitcast<u32>(entry.w0.w);
+        state.rayDir           = entry.w1.xyz;
+        state.effectiveBounces = bitcast<i32>(entry.w1.w);
+        state.throughput       = entry.w2.xyz;
+        state.firstBounceSpec  = (flagBits & 1u)  != 0u;
+        state.afterTransmission = (flagBits & 2u) != 0u;
+        var touchedMoved       = (flagBits & 4u)  != 0u;
+        state.pathAlive        = (flagBits & 8u)  != 0u;
+        state.giResStored      = (flagBits & 16u) != 0u;
+        state.diffRad          = entry.w3.xyz;
+        state.prevMetalness    = entry.w3.w;
+        state.specRad          = entry.w4.xyz;
+        state.prevAlpha        = entry.w4.w;
+        state.prevNormal       = entry.w5.xyz;
+        state.primaryDepth     = entry.w5.w;
+        state.prevWo           = entry.w6.xyz;
+        state.b0Point          = entry.w7.xyz;
+        state.b0Alpha          = entry.w7.w;
+        state.b0Normal         = entry.w8.xyz;
+        state.b0Metal          = entry.w8.w;
+        state.b0Wo             = entry.w9.xyz;
+        state.b0MeshIdx        = bitcast<i32>(entry.w9.w);
+        state.b0Albedo         = entry.w10.xyz;
+        state.primaryMatIdx    = bitcast<i32>(entry.w10.w);
+        state.b0F0             = entry.w11.xyz;
+
+        // Run bounces if path survived primaryShade, otherwise fall through with
+        // primary-only radiance.
+        var ptResult: SplitRadiance;
+        let primaryMeshIdx_u   = u32(state.b0MeshIdx);
+        if (state.pathAlive) {
+            let bouncesResult = runBounces(state, &seed, pixel, primaryMeshIdx_u, &touchedMoved);
+            ptResult = SplitRadiance(state.diffRad + bouncesResult.diff,
+                                     state.specRad + bouncesResult.spec);
+        } else {
+            ptResult = SplitRadiance(state.diffRad, state.specRad);
+        }
+        var sample = ptResult.diff + ptResult.spec;
+
+        // Derived values (aliases for readability in the preserved accumulation
+        // block below).  Uses b0* captured early in primaryShade (valid for all
+        // primary hits, including unlit which leaves pathAlive=false).
+        let primaryMeshIdx = primaryMeshIdx_u;
+        let primaryDepth   = state.primaryDepth;
+        let primaryRough   = sqrt(state.b0Alpha);
+
+        // === Accumulation + reprojection (moved verbatim from rt_main) ===
+        let prev    = textureLoad(accumRead, pixel, 0);
+        var old     = prev.xyz;
+        var pixelFC = prev.w;
+
+        let prevDiffRaw = textureLoad(diffAccumRead, pixel, 0).xyz;
+        let prevSpecRaw = textureLoad(specAccumRead, pixel, 0).xyz;
+        var oldDiff = select(vec3<f32>(0.0), prevDiffRaw, prevDiffRaw.x == prevDiffRaw.x);
+        var oldSpec = select(vec3<f32>(0.0), prevSpecRaw, prevSpecRaw.x == prevSpecRaw.x);
+        let prevMom = textureLoad(momentsRead, pixel, 0);
+        var prevMomM1 = prevMom.x;
+        var prevMomM2 = prevMom.y;
+
+        let forceReset   = (u32(rt.params.w) & 1u) != 0u;
+        let camMovedFlag = (u32(rt.params.w) & 2u) != 0u;
+        if (forceReset) { pixelFC = 0.0; }
+
+        let prevMeshU = u32(textureLoad(hitMeshRead, pixel, 0).r);
+        let primaryMoved = primaryMeshIdx < 128u && isMeshMoved(i32(primaryMeshIdx));
+
+        if (primaryMeshIdx != prevMeshU && prevMeshU < 128u && isMeshMoved(i32(prevMeshU))) {
+            pixelFC = 0.0;
+        }
+        if (touchedMoved) {
+            let emissiveMoved = rt.restirParams.z > 0.5;
+            pixelFC = min(pixelFC, select(8.0, 2.0, emissiveMoved));
+        }
+)"
+R"(
+        if (primaryMoved || camMovedFlag) {
+            var reprojOk = false;
+            if (pixelFC > 0.0 && primaryDepth > 0.0) {
+                // b0Point == rt.camOri + cameraRayDir * primaryDepth (captured from
+                // h.point at primary hit), so we read it directly instead of
+                // reconstructing the camera ray.
+                let worldPos = state.b0Point;
+                var prevWorldPos = worldPos;
+                if (primaryMoved) {
+                    prevWorldPos = (rtMotionMats[primaryMeshIdx] * vec4<f32>(worldPos, 1.0)).xyz;
+                }
+                let toPoint = prevWorldPos - rt.prevCamOri.xyz;
+                let prevZ   = dot(toPoint, rt.prevCamFwd.xyz);
+                if (prevZ > 0.001) {
+                    let aspect   = res.x / res.y;
+                    let prevNdcX = dot(toPoint, rt.prevCamRgt.xyz) / (prevZ * rt.tanHalfFov.x * aspect);
+                    let prevNdcY = dot(toPoint, rt.prevCamUp.xyz)  / (prevZ * rt.tanHalfFov.x);
+                    let prevU = (prevNdcX + 1.0) * 0.5 * res.x;
+                    let prevV = (1.0 - prevNdcY) * 0.5 * res.y;
+                    let pxBase = vec2<i32>(i32(floor(prevU)), i32(floor(prevV)));
+                    if (pxBase.x >= 0 && pxBase.x + 1 < i32(res.x) &&
+                        pxBase.y >= 0 && pxBase.y + 1 < i32(res.y)) {
+                        let fx = prevU - f32(pxBase.x);
+                        let fy = prevV - f32(pxBase.y);
+                        let w00 = (1.0 - fx) * (1.0 - fy);
+                        let w10 = fx         * (1.0 - fy);
+                        let w01 = (1.0 - fx) *         fy;
+                        let w11 = fx         *         fy;
+                        let p00 = pxBase;
+                        let p10 = pxBase + vec2<i32>(1, 0);
+                        let p01 = pxBase + vec2<i32>(0, 1);
+                        let p11 = pxBase + vec2<i32>(1, 1);
+                        let m00 = u32(textureLoad(hitMeshRead, p00, 0).r);
+                        let m10 = u32(textureLoad(hitMeshRead, p10, 0).r);
+                        let m01 = u32(textureLoad(hitMeshRead, p01, 0).r);
+                        let m11 = u32(textureLoad(hitMeshRead, p11, 0).r);
+                        let v00 = select(0.0, w00, m00 == primaryMeshIdx);
+                        let v10 = select(0.0, w10, m10 == primaryMeshIdx);
+                        let v01 = select(0.0, w01, m01 == primaryMeshIdx);
+                        let v11 = select(0.0, w11, m11 == primaryMeshIdx);
+                        let wSum = v00 + v10 + v01 + v11;
+                        if (wSum > 1e-4) {
+                            let a00 = textureLoad(accumRead, p00, 0);
+                            let a10 = textureLoad(accumRead, p10, 0);
+                            let a01 = textureLoad(accumRead, p01, 0);
+                            let a11 = textureLoad(accumRead, p11, 0);
+                            let inv = 1.0 / wSum;
+                            old = (a00.xyz * v00 + a10.xyz * v10
+                                 + a01.xyz * v01 + a11.xyz * v11) * inv;
+                            let prevFC = (a00.w * v00 + a10.w * v10
+                                        + a01.w * v01 + a11.w * v11) * inv;
+                            let d00 = textureLoad(diffAccumRead, p00, 0).xyz;
+                            let d10 = textureLoad(diffAccumRead, p10, 0).xyz;
+                            let d01 = textureLoad(diffAccumRead, p01, 0).xyz;
+                            let d11 = textureLoad(diffAccumRead, p11, 0).xyz;
+                            oldDiff = (d00 * v00 + d10 * v10 + d01 * v01 + d11 * v11) * inv;
+                            let s00 = textureLoad(specAccumRead, p00, 0).xyz;
+                            let s10 = textureLoad(specAccumRead, p10, 0).xyz;
+                            let s01 = textureLoad(specAccumRead, p01, 0).xyz;
+                            let s11 = textureLoad(specAccumRead, p11, 0).xyz;
+                            oldSpec = (s00 * v00 + s10 * v10 + s01 * v01 + s11 * v11) * inv;
+                            let mom00 = textureLoad(momentsRead, p00, 0).xy;
+                            let mom10 = textureLoad(momentsRead, p10, 0).xy;
+                            let mom01 = textureLoad(momentsRead, p01, 0).xy;
+                            let mom11 = textureLoad(momentsRead, p11, 0).xy;
+                            prevMomM1 = (mom00.x*v00 + mom10.x*v10 + mom01.x*v01 + mom11.x*v11) * inv;
+                            prevMomM2 = (mom00.y*v00 + mom10.y*v10 + mom01.y*v01 + mom11.y*v11) * inv;
+                            let staticCap = mix(8.0, 256.0, smoothstep(0.15, 0.7, primaryRough));
+                            let movingCap = mix(8.0, 64.0,  smoothstep(0.15, 0.7, primaryRough));
+                            if (primaryMoved) {
+                                pixelFC = min(prevFC * 0.5, movingCap);
+                            } else {
+                                pixelFC = min(prevFC * 0.5, staticCap);
+                            }
+                            reprojOk = true;
+                        }
+                    }
+                }
+            }
+            if (!reprojOk) {
+                pixelFC = 0.0;
+                oldDiff = vec3<f32>(0.0);
+                oldSpec = vec3<f32>(0.0);
+            }
+        }
+)"
+R"(
+        // NaN guard + hard/relative clamp.
+        let sampleClean = select(vec3<f32>(0.0), sample, sample.x == sample.x);
+        let oldClean    = select(vec3<f32>(0.0), old,    old.x == old.x);
+        let lum3 = vec3<f32>(0.2126, 0.7152, 0.0722);
+        var clamped = sampleClean;
+        let rawLum = dot(sampleClean, lum3);
+        let hardCap = 12.0;
+        if (rawLum > hardCap) {
+            clamped = sampleClean * (hardCap / rawLum);
+        }
+        if (pixelFC > 8.0) {
+            let avgLum = max(dot(oldClean, lum3), 0.05);
+            let smpLum = dot(clamped, lum3);
+            let maxLum = avgLum * 7.0;
+            if (smpLum > maxLum) {
+                clamped = clamped * (maxLum / smpLum);
+            }
+        }
+
+        let alpha = 1.0 / (pixelFC + 1.0);
+        if (pixelFC < 1024.0) {
+            var blended = oldClean * (1.0 - alpha) + clamped * alpha;
+            const DEBUG_VIS_PIXEL_FC = false;
+            if (DEBUG_VIS_PIXEL_FC) {
+                let fcN = clamp(log2(pixelFC + 1.0) / 8.0, 0.0, 1.0);
+                blended = vec3<f32>(fcN, fcN * fcN, fcN * fcN * fcN);
+            }
+            const DEBUG_VIS_RAW_SAMPLE = false;
+            if (DEBUG_VIS_RAW_SAMPLE) {
+                blended = sampleClean / (sampleClean + vec3<f32>(1.0));
+            }
+            textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
+        } else {
+            textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
+        }
+
+        // Moments
+        let sampleLum = dot(clamped, lum3);
+        let momAlpha = max(alpha, 0.1);
+        var m1 = prevMomM1;
+        var m2 = prevMomM2;
+        if (pixelFC < 1.0) { m1 = sampleLum; m2 = sampleLum * sampleLum; }
+        else {
+            m1 = m1 * (1.0 - momAlpha) + sampleLum * momAlpha;
+            m2 = m2 * (1.0 - momAlpha) + sampleLum * sampleLum * momAlpha;
+        }
+        textureStore(momentsWrite, pixel, vec4<f32>(m1, m2, 0.0, 0.0));
+
+        // Split accum (diffuse/specular)
+        {
+            let diffSample = select(vec3<f32>(0.0), ptResult.diff, ptResult.diff.x == ptResult.diff.x);
+            let specSample = select(vec3<f32>(0.0), ptResult.spec, ptResult.spec.x == ptResult.spec.x);
+            var dClamped = diffSample;
+            let dLum = dot(diffSample, lum3);
+            if (dLum > hardCap) { dClamped = diffSample * (hardCap / dLum); }
+            let specHardCap = mix(3.0, 8.0, primaryRough);
+            var sClamped = specSample;
+            let sLum = dot(specSample, lum3);
+            if (sLum > specHardCap) { sClamped = specSample * (specHardCap / sLum); }
+            if (pixelFC < 1024.0) {
+                textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff * (1.0 - alpha) + dClamped * alpha, pixelFC + 1.0));
+                textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec * (1.0 - alpha) + sClamped * alpha, pixelFC + 1.0));
+            } else {
+                textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff, pixelFC));
+                textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec, pixelFC));
+            }
+        }
+
+        // hitMesh includes touchedMoved — written here since it depends on runBounces output.
+        textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(state.primaryMatIdx), select(0.0, 1.0, touchedMoved), 0.0));
+    }
+}
+
 )";
 
 // Build a raycaster or path tracer shader by concatenating common + specific code.
@@ -2997,8 +3553,12 @@ std::string buildRtShader(bool hasEnvCdf) {
     std::string src = std::string(csSharedDefsWGSL) + "\n" +
                       csCommonWGSL + "\n" +
                       csPathTraceWGSL + "\n" +
+                      csRunBouncesWGSL1 + "\n" +
+                      csRunBouncesWGSL2 + "\n" +
+                      csPrimaryShadeWGSL1 + "\n" +
+                      csPrimaryShadeWGSL2 + "\n" +
+                      csPrimaryShadeWGSL3 + "\n" +
                       csPathTraceWGSL2 + "\n" +
-                      csPathTraceWGSL2b + "\n" +
                       csPathTraceWGSL3;
     const std::string marker = "/*ENV_CDF_FLAG*/false";
     auto pos = src.find(marker);
