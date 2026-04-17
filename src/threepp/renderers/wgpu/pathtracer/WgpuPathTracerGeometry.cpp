@@ -37,8 +37,9 @@ int buildGeometryBuffers(
     int matCount = matOffset;
     int meshCount = meshOffset;
 
-    // Track which Mesh* has already had its material written
-    std::unordered_map<Mesh*, int> meshToMatIdx;
+    // Deduplicate by Material* so meshes sharing the same material get the same matIdx,
+    // enabling the denoiser to share samples across them.
+    std::unordered_map<Material*, int> meshToMatIdx;
 
     auto setTexel = [&](std::vector<float>& buf, int width, int col, int row,
                         float x, float y, float z, float w) {
@@ -63,15 +64,14 @@ int buildGeometryBuffers(
     for (auto& entry : entries) {
         if (triCount >= maxTris || meshCount >= maxMeshes) break;
 
-        // Deduplicate material: write once per unique Mesh*
         int matIdx;
-        auto matIt = meshToMatIdx.find(entry.mesh);
+        auto matIt = meshToMatIdx.find(entry.mesh->material().get());
         if (matIt != meshToMatIdx.end()) {
             matIdx = matIt->second;
         } else {
             if (matCount >= maxMats) continue;
             matIdx = matCount++;
-            meshToMatIdx[entry.mesh] = matIdx;
+            meshToMatIdx[entry.mesh->material().get()] = matIdx;
 
             auto em = extractMaterial(entry.mesh->material().get());
             setTexel(matBuffer, maxMats, matIdx, 0,

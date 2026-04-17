@@ -3054,7 +3054,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let flagBits = 32u;  // bit 5 = skipAccum
             entry.w0 = vec4<f32>(0.0);
             entry.w1 = vec4<f32>(0.0);
-            entry.w2 = vec4<f32>(0.0, 0.0, 0.0, bitcast<f32>(flagBits));
+            entry.w2 = vec4<f32>(0.0, 0.0, 0.0, f32(flagBits));
             entry.w3 = vec4<f32>(0.0);
             entry.w4 = vec4<f32>(0.0);
             entry.w5 = vec4<f32>(0.0);
@@ -3188,7 +3188,7 @@ R"(
             let flagBits = 32u;  // bit 5 = skipAccum
             entry.w0 = vec4<f32>(0.0);
             entry.w1 = vec4<f32>(0.0);
-            entry.w2 = vec4<f32>(0.0, 0.0, 0.0, bitcast<f32>(flagBits));
+            entry.w2 = vec4<f32>(0.0, 0.0, 0.0, f32(flagBits));
             entry.w3 = vec4<f32>(0.0);
             entry.w4 = vec4<f32>(0.0);
             entry.w5 = vec4<f32>(0.0);
@@ -3233,16 +3233,21 @@ R"(
                      | (select(0u, 16u, shadeResult.giResStored));
         var entry: PathStateEntry;
         entry.w0  = vec4<f32>(shadeResult.rayOrigin, bitcast<f32>(seed));
-        entry.w1  = vec4<f32>(shadeResult.rayDir,    bitcast<f32>(shadeResult.effectiveBounces));
-        entry.w2  = vec4<f32>(shadeResult.throughput, bitcast<f32>(flagBits));
+        // Small positive ints bitcast to f32 produce subnormals (e.g., matIdx=2 →
+        // 2.8e-45).  Some WebGPU drivers flush subnormals to zero in storage
+        // buffer ops, causing matIdx/meshIdx/effectiveBounces/flagBits to read
+        // back as 0.  Use plain f32 cast for small ints; reserve bitcast for
+        // seeds (full 32-bit u32).
+        entry.w1  = vec4<f32>(shadeResult.rayDir,    f32(shadeResult.effectiveBounces));
+        entry.w2  = vec4<f32>(shadeResult.throughput, f32(flagBits));
         entry.w3  = vec4<f32>(shadeResult.diffRad,    shadeResult.prevMetalness);
         entry.w4  = vec4<f32>(shadeResult.specRad,    shadeResult.prevAlpha);
         entry.w5  = vec4<f32>(shadeResult.prevNormal, shadeResult.primaryDepth);
         entry.w6  = vec4<f32>(shadeResult.prevWo,     0.0);
         entry.w7  = vec4<f32>(shadeResult.b0Point,    shadeResult.b0Alpha);
         entry.w8  = vec4<f32>(shadeResult.b0Normal,   shadeResult.b0Metal);
-        entry.w9  = vec4<f32>(shadeResult.b0Wo,       bitcast<f32>(shadeResult.b0MeshIdx));
-        entry.w10 = vec4<f32>(shadeResult.b0Albedo,   bitcast<f32>(shadeResult.primaryMatIdx));
+        entry.w9  = vec4<f32>(shadeResult.b0Wo,       f32(shadeResult.b0MeshIdx));
+        entry.w10 = vec4<f32>(shadeResult.b0Albedo,   f32(shadeResult.primaryMatIdx));
         entry.w11 = vec4<f32>(shadeResult.b0F0,       0.0);
         pathStateBuf[pixelIdx] = entry;
     }
@@ -3255,7 +3260,9 @@ R"(
 R"(
     // AOV visualization mode — write noise-free primary-hit data and return early.
     // Writes to diffAccumWrite (display shader reads diffTex + specTex).
-    if (aovMode > 0) {
+    // Modes 10+ are POST-bounce diagnostic AOVs handled in rt_accum_main — let
+    // those flow through the normal pipeline.
+    if (aovMode > 0 && aovMode < 10) {
         var aovColor = vec3<f32>(0.0);
         if (aovMode == 1)      { aovColor = vec3<f32>(primaryDepth / (primaryDepth + 1.0)); }
         else if (aovMode == 2) { aovColor = primaryNormal * 0.5 + 0.5; }
@@ -3283,8 +3290,8 @@ R"(
         // the earlier serialize.  Direct overwrite of pathStateBuf[pixelIdx].w2.w
         // preserves other bits we don't care about (path terminates at AOV).
         {
-            let prevFlags = bitcast<u32>(pathStateBuf[pixelIdx].w2.w);
-            pathStateBuf[pixelIdx].w2.w = bitcast<f32>(prevFlags | 32u);
+            let prevFlags = u32(pathStateBuf[pixelIdx].w2.w);
+            pathStateBuf[pixelIdx].w2.w = f32(prevFlags | 32u);
         }
         continue;
     }
@@ -3370,7 +3377,7 @@ fn rt_compact_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let pixelIdx = atomicAdd(&compactCounter, 1u);
         if (pixelIdx >= totalPixels) { break; }
         let entry = pathStateBuf[pixelIdx];
-        let flagBits = bitcast<u32>(entry.w2.w);
+        let flagBits = u32(entry.w2.w);
         let skipAccum = (flagBits & 32u) != 0u;
         if (!skipAccum) {
             let slot = atomicAdd(&aliveCount, 1u);
@@ -3380,7 +3387,7 @@ fn rt_compact_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // 256 buckets.  Dead-at-primary pixels get counted too and end
             // up grouped together in the sorted queue — bounce1 early-exits
             // on them so coherent grouping is a net win.
-            let matIdx = bitcast<i32>(entry.w10.w);
+            let matIdx = i32(entry.w10.w);
             let bucket = u32(matIdx) & 0xFFu;
             atomicAdd(&matBucketCount[bucket], 1u);
         }
@@ -3418,7 +3425,7 @@ fn rt_sort_scatter_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let slot = atomicAdd(&sortCounter, 1u);
         if (slot >= aliveTotal) { break; }
         let pixelIdx = aliveQueue[slot];
-        let matIdx = bitcast<i32>(pathStateBuf[pixelIdx].w10.w);
+        let matIdx = i32(pathStateBuf[pixelIdx].w10.w);
         let bucket = u32(matIdx) & 0xFFu;
         let outSlot = matBucketOffset[bucket] + atomicAdd(&matBucketCount[bucket], 1u);
         sortedAliveQueue[outSlot] = pixelIdx;
@@ -3450,7 +3457,7 @@ fn rt_bounces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let pixel = vec2<i32>(i32(pixelIdx % resXu), i32(pixelIdx / resXu));
 
         let entry = pathStateBuf[pixelIdx];
-        let flagBits = bitcast<u32>(entry.w2.w);
+        let flagBits = u32(entry.w2.w);
 
         // Deserialize PrimaryShadeResult from PathStateEntry.  All paths in
         // alive1Queue have pathAlive=true (bounce1 kernel only appends survivors),
@@ -3459,7 +3466,7 @@ fn rt_bounces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         state.rayOrigin        = entry.w0.xyz;
         var seed               = bitcast<u32>(entry.w0.w);
         state.rayDir           = entry.w1.xyz;
-        state.effectiveBounces = bitcast<i32>(entry.w1.w);
+        state.effectiveBounces = i32(entry.w1.w);
         state.throughput       = entry.w2.xyz;
         state.firstBounceSpec  = (flagBits & 1u)  != 0u;
         state.afterTransmission = (flagBits & 2u) != 0u;
@@ -3478,9 +3485,9 @@ fn rt_bounces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         state.b0Normal         = entry.w8.xyz;
         state.b0Metal          = entry.w8.w;
         state.b0Wo             = entry.w9.xyz;
-        state.b0MeshIdx        = bitcast<i32>(entry.w9.w);
+        state.b0MeshIdx        = i32(entry.w9.w);
         state.b0Albedo         = entry.w10.xyz;
-        state.primaryMatIdx    = bitcast<i32>(entry.w10.w);
+        state.primaryMatIdx    = i32(entry.w10.w);
         state.b0F0             = entry.w11.xyz;
 
         // Run bounces 2..N.  runBounces' for-loop starts at i=2 post-F2a.
@@ -3497,7 +3504,7 @@ fn rt_bounces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (touchedMoved) { flagBitsOut |= 4u; }
 
         var newEntry = entry;
-        newEntry.w2 = vec4<f32>(entry.w2.xyz, bitcast<f32>(flagBitsOut));
+        newEntry.w2 = vec4<f32>(entry.w2.xyz, f32(flagBitsOut));
         newEntry.w3 = vec4<f32>(finalDiff, entry.w3.w);
         newEntry.w4 = vec4<f32>(finalSpec, entry.w4.w);
         pathStateBuf[pixelIdx] = newEntry;
@@ -3537,7 +3544,7 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let pixel = vec2<i32>(i32(pixelIdx % resXu), i32(pixelIdx / resXu));
 
         let entry = pathStateBuf[pixelIdx];
-        let flagBitsIn = bitcast<u32>(entry.w2.w);
+        let flagBitsIn = u32(entry.w2.w);
         let pathAliveIn = (flagBitsIn & 8u) != 0u;
         if (!pathAliveIn) { continue; }
 
@@ -3566,7 +3573,7 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let b0Normal = entry.w8.xyz;
         let b0Metal = entry.w8.w;
         let b0Wo = entry.w9.xyz;
-        let b0MeshIdx = bitcast<i32>(entry.w9.w);
+        let b0MeshIdx = i32(entry.w9.w);
         let b0Albedo = entry.w10.xyz;
         let b0F0 = entry.w11.xyz;
 
@@ -4102,7 +4109,7 @@ R"(
 )"
 R"(
         newEntry.w1 = vec4<f32>(ray.dir, entry.w1.w);
-        newEntry.w2 = vec4<f32>(throughput, bitcast<f32>(flagBitsOut));
+        newEntry.w2 = vec4<f32>(throughput, f32(flagBitsOut));
         newEntry.w3 = vec4<f32>(diffRadAcc + diffRad, prevMetalness);
         newEntry.w4 = vec4<f32>(specRadAcc + specRad, prevAlpha);
         newEntry.w5 = vec4<f32>(prevNormal, entry.w5.w);
@@ -4146,7 +4153,7 @@ fn rt_accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let pixel = vec2<i32>(i32(pixelIdx % resXu), i32(pixelIdx / resXu));
 
         let entry = pathStateBuf[pixelIdx];
-        let flagBits = bitcast<u32>(entry.w2.w);
+        let flagBits = u32(entry.w2.w);
 
         // Deserialize only what the accumulation block needs.
         let diffRadFinal   = entry.w3.xyz;
@@ -4154,8 +4161,8 @@ fn rt_accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let touchedMoved   = (flagBits & 4u) != 0u;
         let b0Point        = entry.w7.xyz;
         let b0Alpha        = entry.w7.w;
-        let b0MeshIdx      = bitcast<i32>(entry.w9.w);
-        let primaryMatIdx  = bitcast<i32>(entry.w10.w);
+        let b0MeshIdx      = i32(entry.w9.w);
+        let primaryMatIdx  = i32(entry.w10.w);
         let primaryDepth   = entry.w5.w;
         let primaryMeshIdx = u32(b0MeshIdx);
         let primaryRough   = sqrt(b0Alpha);
@@ -4163,6 +4170,59 @@ fn rt_accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let ptDiff = diffRadFinal;
         let ptSpec = specRadFinal;
         var sample = ptDiff + ptSpec;
+
+        // ---------------------------------------------------------------
+        // DIAG AOV modes 10+: dump specific pathStateBuf fields to accum
+        // for per-pixel visual inspection.  Per-mesh banding in these
+        // overlays tells us which field has mesh-dependent divergence.
+        //   10: diffRadFinal (entry.w3.xyz)     — total diffuse radiance
+        //   11: specRadFinal (entry.w4.xyz)     — total specular radiance
+        //   12: touchedMoved bit                 — red = bit set
+        //   13: flagBits split into RGB          — bits 0-2 / 3-5 / 6-8
+        //   14: b0Point magnitude (mod 1)        — diag for primary hit pos
+        //   15: primaryDepth normalized
+        //   16: primaryMeshIdx as color
+        //   17: primaryMatIdx as color
+        //   18: b0Alpha (roughness²)
+        {
+            let aovMode = i32(rt.emissiveInfo.w);
+            if (aovMode >= 10) {
+                var dbg = vec3<f32>(0.0);
+                if (aovMode == 10) {
+                    dbg = diffRadFinal;
+                } else if (aovMode == 11) {
+                    dbg = specRadFinal;
+                } else if (aovMode == 12) {
+                    dbg = select(vec3<f32>(0.1, 0.1, 0.1), vec3<f32>(1.0, 0.0, 0.0), touchedMoved);
+                } else if (aovMode == 13) {
+                    dbg = vec3<f32>(
+                        f32(flagBits & 7u) / 7.0,
+                        f32((flagBits >> 3u) & 7u) / 7.0,
+                        f32((flagBits >> 6u) & 7u) / 7.0);
+                } else if (aovMode == 14) {
+                    dbg = fract(abs(b0Point));
+                } else if (aovMode == 15) {
+                    dbg = vec3<f32>(primaryDepth / (primaryDepth + 10.0));
+                } else if (aovMode == 16) {
+                    dbg = vec3<f32>(
+                        f32(primaryMeshIdx % 7u) / 7.0,
+                        f32((primaryMeshIdx * 5u) % 11u) / 11.0,
+                        f32((primaryMeshIdx * 11u) % 13u) / 13.0);
+                } else if (aovMode == 17) {
+                    dbg = vec3<f32>(
+                        f32(u32(primaryMatIdx) % 7u) / 7.0,
+                        f32((u32(primaryMatIdx) * 5u) % 11u) / 11.0,
+                        f32((u32(primaryMatIdx) * 11u) % 13u) / 13.0);
+                } else if (aovMode == 18) {
+                    dbg = vec3<f32>(sqrt(b0Alpha));
+                }
+                textureStore(accumWrite,     pixel, vec4<f32>(dbg, 1.0));
+                textureStore(diffAccumWrite, pixel, vec4<f32>(dbg, 1.0));
+                textureStore(specAccumWrite, pixel, vec4<f32>(0.0));
+                textureStore(hitMeshWrite,   pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), 0.0, 0.0));
+                continue;
+            }
+        }
 
         // === Accumulation + reprojection (moved verbatim from rt_bounces_main) ===
         let prev    = textureLoad(accumRead, pixel, 0);

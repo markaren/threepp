@@ -3414,7 +3414,7 @@ float WgpuPathTracer::fireflyClamp() const {
 }
 
 void WgpuPathTracer::setAOVMode(int mode) {
-    mode = std::max(0, std::min(mode, 6));
+    // mode = std::max(0, std::min(mode, 6));
     if (pimpl_->aovMode_ != mode) {
         pimpl_->aovMode_ = mode;
         pimpl_->frameCount_ = 0.f;

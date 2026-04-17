@@ -363,6 +363,7 @@ int main() {
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
     float pixelScale = pathTracer.pixelScale();
+    int aovMode = pathTracer.aovMode();
     float fps = 0.f;
     float fpsAccum = 0.f;
     int fpsFrames = 0;
@@ -403,6 +404,37 @@ int main() {
                 pathTracer.setReSTIRGIEnabled(restirGiOn);
             if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 6))
                 pathTracer.setMaxBounces(maxBounces);
+
+            ImGui::Separator();
+            ImGui::TextUnformatted("AOV debug");
+            // Labels align with WgpuPathTracerShaders_Rt.cpp aovMode handling.
+            static const char* kAovLabels[] = {
+                "Off",                   //  0
+                "Depth",                 //  1
+                "Normals",               //  2
+                "Albedo",                //  3
+                "Instance ID",           //  4
+                "Roughness",             //  5
+                "Adaptive bounce",       //  6
+                "(reserved 7)",          //  7
+                "(reserved 8)",          //  8
+                "(reserved 9)",          //  9
+                "diffRadFinal (w3.xyz)", // 10
+                "specRadFinal (w4.xyz)", // 11
+                "touchedMoved bit",      // 12
+                "flagBits (RGB)",        // 13
+                "b0Point fract",         // 14
+                "primaryDepth norm",     // 15
+                "primaryMeshIdx",        // 16
+                "primaryMatIdx",         // 17
+                "b0Alpha (rough²)",      // 18
+            };
+            constexpr int kNumAov = std::size(kAovLabels);
+            if (aovMode < 0) aovMode = 0;
+            if (aovMode >= kNumAov) aovMode = 0;
+            if (ImGui::Combo("AOV", &aovMode, kAovLabels, kNumAov)) {
+                pathTracer.setAOVMode(aovMode);
+            }
         }
 
         ImGui::End();
@@ -410,6 +442,8 @@ int main() {
 
     IOCapture ioCapture;
     ioCapture.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
+    ioCapture.preventScrollEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
+    ioCapture.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
     canvas.setIOCapture(&ioCapture);
 
     canvas.onWindowResize([&](const WindowSize& ns) {
