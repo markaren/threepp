@@ -2863,7 +2863,17 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // and skipping creates visible zone boundaries in uniform backgrounds.
     // Use previous frame's gBuf depth: env/sky pixels have depth <= 0.
     let prevDepth = textureLoad(gBufRead, pixel, 0).w;
-    let isEnvPixel = prevDepth <= 0.0;
+    let prevWasEnv = prevDepth <= 0.0;
+    // Peek at this frame's primary hit result — needed BEFORE the checker/
+    // foveated-skip decision so we can disable those skips on pixels that
+    // transitioned from object (prev) to sky (current).  Without this check,
+    // the skip path copies the leader's OBJECT radiance into a pixel whose
+    // primary ray missed → visible "eraser mark" trail along moving silhouettes.
+    let primaryMissThisFrame = primaryHitBuf[pixelIdx].triIdx < 0;
+    // isEnvPixel is the "skip-foveated-and-checker" predicate: treat both
+    // persistent-sky pixels and object→sky transitions as env-like so neither
+    // skip fires on them.
+    let isEnvPixel = prevWasEnv || primaryMissThisFrame;
 
     // --- Material classification from previous frame's G-buffer ---
     // Used for material-aware bounce cap (camera motion) and foveated scheduling.
@@ -3074,22 +3084,38 @@ R"(
         let bgClean = select(vec3<f32>(0.0), bgColor, bgColor.x == bgColor.x);
         let bgLum   = dot(bgClean, lum3);
 
-        // Progressive accumulation (same math as the non-miss tail below).
+        // Progressive accumulation for sky.  Differs from the general accum
+        // path because the sky fast-path doesn't reproject — it blends current
+        // bgColor into prev-pixel's stale radiance.  Several things conspire
+        // against naive progressive blend here:
+        //
+        //   1. Disocclusion (prev=object, now=sky): old contains object color,
+        //      blending at alpha=1/(pxFC+1) leaves a slow-fading object ghost.
+        //      Fix: reset pxFC when prev gBuf depth was > 0.
+        //
+        //   2. Camera rotation: sky fast-path doesn't reproject, so old is the
+        //      env radiance along the PREV camera's ray through this pixel, not
+        //      this pixel's current ray direction.  Blending two different env
+        //      directions smears the sky.  Fix: reset pxFC when camera moved.
+        //
+        //   3. Historical contamination: if the accum buffer already has ghost
+        //      baked in (from an earlier bug or cold-start warmup), fading at
+        //      alpha=1/1025 takes thousands of frames.  Fix: cap sky pxFC at 32
+        //      so any stale value decays within ~1s at 30fps.  Sky is
+        //      deterministic modulo sub-pixel jitter; 32 samples is plenty for
+        //      env-map jitter anti-aliasing.
         let prev   = textureLoad(accumRead, pixel, 0);
         let old    = prev.xyz;
         var pxFC   = prev.w;
         let forceRst = (u32(rt.params.w) & 1u) != 0u;
+        let camMovedFlag = (u32(rt.params.w) & 2u) != 0u;
         if (forceRst) { pxFC = 0.0; }
+        if (!prevWasEnv) { pxFC = 0.0; }   // (1) object → sky disocclusion
+        if (camMovedFlag) { pxFC = 0.0; }  // (2) no reprojection → stale env direction
+        pxFC = min(pxFC, 32.0);            // (3) cap so historical ghost decays fast
         let alpha = 1.0 / (pxFC + 1.0);
-        var blended: vec3<f32>;
-        var newFC:   f32;
-        if (pxFC < 1024.0) {
-            blended = old * (1.0 - alpha) + bgClean * alpha;
-            newFC   = pxFC + 1.0;
-        } else {
-            blended = old;
-            newFC   = pxFC;
-        }
+        let blended = old * (1.0 - alpha) + bgClean * alpha;
+        let newFC   = min(pxFC + 1.0, 32.0);
         // Sky is all diffuse (no specular component).
         textureStore(accumWrite,     pixel, vec4<f32>(blended, newFC));
         textureStore(diffAccumWrite, pixel, vec4<f32>(blended, newFC));
