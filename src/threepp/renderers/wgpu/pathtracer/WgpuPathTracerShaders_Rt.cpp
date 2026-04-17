@@ -2851,13 +2851,12 @@ const char* const csPrimaryShadeWGSL3 = R"(
 }
 )";
 
-// pathTrace wrapper (bounce split, Stage B): replaces the old monolithic loop.
-// Calls primaryShade for bounce 0, then if the path is still alive, runBounces for
-// bounces 1..maxBounces.  Signature is UNCHANGED so rt_main continues to call this
-// without modification.  Note: rt_main no longer calls this wrapper — it inlines
-// primaryShade + serialize then dispatches to rt_bounces_main for runBounces.
-// The wrapper is kept as a reference implementation / fallback that proves the
-// two helpers compose correctly when called together.
+// pathTrace wrapper — VESTIGIAL, NOT CALLED.  Do not use for testing or comparison.
+// After F2a, runBounces starts at i=2 (bounce 1 moved to rt_bounce1_main), so this
+// wrapper silently skips bounce 1 and produces ~half the indirect illumination of
+// the real wavefront pipeline.  Kept only to avoid breaking compilation of any
+// tooling that references the symbol.  rt_main inlines primaryShade + serialize
+// and dispatches to the separate bounce/accum kernels instead.
 const char* const csPathTraceWGSL2 = R"(
 fn pathTrace(ray_in: Ray,
              primaryHit: Hit,  // pre-computed by rt_primary_main; skip BVH for i==0
@@ -3232,12 +3231,16 @@ R"(
                      | (select(0u, 8u, shadeResult.pathAlive))
                      | (select(0u, 16u, shadeResult.giResStored));
         var entry: PathStateEntry;
-        entry.w0  = vec4<f32>(shadeResult.rayOrigin, bitcast<f32>(seed));
+        // seed | 0x00800000u forces the lowest exponent bit set so the stored f32
+        // is never subnormal — drivers that flush-denormals-to-zero in storage ops
+        // would otherwise zero it out for ~0.2% of seeds.  Recovered on read with
+        // the same OR (idempotent: the bit is always 1 in both store and load).
+        entry.w0  = vec4<f32>(shadeResult.rayOrigin, bitcast<f32>(seed | 0x00800000u));
         // Small positive ints bitcast to f32 produce subnormals (e.g., matIdx=2 →
         // 2.8e-45).  Some WebGPU drivers flush subnormals to zero in storage
         // buffer ops, causing matIdx/meshIdx/effectiveBounces/flagBits to read
         // back as 0.  Use plain f32 cast for small ints; reserve bitcast for
-        // seeds (full 32-bit u32).
+        // seeds (full 32-bit u32 with subnormal guard applied above).
         entry.w1  = vec4<f32>(shadeResult.rayDir,    f32(shadeResult.effectiveBounces));
         entry.w2  = vec4<f32>(shadeResult.throughput, f32(flagBits));
         entry.w3  = vec4<f32>(shadeResult.diffRad,    shadeResult.prevMetalness);
@@ -3459,7 +3462,10 @@ fn rt_bounces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // dispatch starts with bnPx=bnPy=bnFc=0, so without this call, runBounces'
         // sampleEmissiveTriCdf/cosineHemisphere would use identical samples for
         // every pixel every frame).
+        // bnDim=16: skip primary's ~7 dims + bounce1's ~8 dims so bounce2's samples
+        // don't alias earlier bounces' sample dimensions.
         bnInit(u32(pixel.x), u32(pixel.y), u32(rt.frameCount.x));
+        bnDim = 16u;
 
         let entry = pathStateBuf[pixelIdx];
         let flagBits = u32(entry.w2.w);
@@ -3469,7 +3475,7 @@ fn rt_bounces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // so no pathAlive guard needed here.
         var state: PrimaryShadeResult;
         state.rayOrigin        = entry.w0.xyz;
-        var seed               = bitcast<u32>(entry.w0.w);
+        var seed               = bitcast<u32>(entry.w0.w) | 0x00800000u;
         state.rayDir           = entry.w1.xyz;
         state.effectiveBounces = i32(entry.w1.w);
         state.throughput       = entry.w2.xyz;
@@ -3552,18 +3558,28 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let flagBitsIn = u32(entry.w2.w);
         let pathAliveIn = (flagBitsIn & 8u) != 0u;
         if (!pathAliveIn) { continue; }
+        // Skip paths where primaryShade capped effectiveBounces to 1 (rough diffuse
+        // on fc==0).  Without this guard, bounce1 fires an extra bounce that the
+        // megakernel never would, biasing the temporal accumulator's first frame.
+        let effectiveBounces1 = i32(entry.w1.w);
+        if (effectiveBounces1 <= 1) { continue; }
         // Restore per-pixel BN state so NEE and BRDF samples have the correct
         // spatial blue-noise offset and temporal variation.  Without this, all
         // threads start with bnPx=bnPy=bnFc=0 → identical samples for all
         // pixels → biased NEE (always triangle 0) and correlated BRDF directions.
+        // bnDim=8: skip the ~7 dimensions consumed by primary (jitter + NEE + BRDF
+        // sample) so bounce1's samples don't alias primary's sample dimensions.
         bnInit(u32(pixel.x), u32(pixel.y), u32(rt.frameCount.x));
+        bnDim = 8u;
 
         // Deserialize state from PathStateEntry.  Matches runBounces' local-var
         // initialization from PrimaryShadeResult, but pulled straight from the
         // persistent buffer.
         var ray: Ray;
         ray.origin = entry.w0.xyz;
-        var seed = bitcast<u32>(entry.w0.w);
+        // seed | 0x00800000u forces the lowest exponent bit set → never subnormal,
+        // never flushed to zero by drivers that flush-denormals-to-zero in storage ops.
+        var seed = bitcast<u32>(entry.w0.w) | 0x00800000u;
         ray.dir = entry.w1.xyz;
         var throughput = entry.w2.xyz;
         let firstBounceSpec = (flagBitsIn & 1u) != 0u;
@@ -3755,6 +3771,8 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
 
             // ==== ReSTIR GI reservoir (runs only at i==1 when useReSTIRGI) ====
+)"
+R"(
             let giSecDist2 = dot(h.point - b0Point, h.point - b0Point);
             if (useReSTIRGI && !giResStored && giSecDist2 > 0.04) {
                 let giP_hat = giTargetPdf(b0Point, b0Normal, b0Wo, b0Albedo, b0Metal, b0Alpha, b0F0,
@@ -4114,7 +4132,7 @@ R"(
         if (giResStored)       { flagBitsOut |= 16u; }
 
         var newEntry = entry;
-        newEntry.w0 = vec4<f32>(ray.origin, bitcast<f32>(seed));
+        newEntry.w0 = vec4<f32>(ray.origin, bitcast<f32>(seed | 0x00800000u));
 
 )"
 R"(
