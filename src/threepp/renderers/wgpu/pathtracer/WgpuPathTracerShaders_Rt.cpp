@@ -162,6 +162,19 @@ struct PathStateEntry {
 
 @group(0) @binding(38) var<storage, read_write> bounceCounter: atomic<u32>;
 
+// Stage F1 (wavefront prep): dead-lane compaction.  A separate compaction kernel
+// (rt_compact_main) scans pathStateBuf after rt_main and writes pixel indices of
+// paths that need bounce+accumulation work into aliveQueue.  rt_bounces_main then
+// pulls from aliveQueue[i] instead of iterating all pixels, so warps are packed
+// with live work instead of ~30% skipAccum lanes.
+@group(0) @binding(39) var<storage, read_write> aliveQueue: array<u32>;
+@group(0) @binding(40) var<storage, read_write> aliveCount: atomic<u32>;
+// Dedicated work-queue counter for rt_compact_main.  Can't share with
+// bounceCounter because a CPU-side reset between the two passes can't
+// interleave with GPU work inside the same command encoder.
+@group(0) @binding(41) var<storage, read_write> compactCounter: atomic<u32>;
+
+
 const MAX_TEX_SLOTS: i32 = 1024;
 const EMPTY_CHILD: i32 = -2147483648;  // INT_MIN — sentinel for unused BVH4 child slots
 
@@ -3308,31 +3321,60 @@ fn rt_primary_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // ---------------------------------------------------------------------------
-// rt_bounces_main (bounce split, Stage D).
+// rt_compact_main (Stage F1).
+// Reads pathStateBuf flags, writes pixel indices of non-skipAccum paths to
+// aliveQueue via atomic append.  rt_bounces_main then iterates aliveQueue
+// instead of all pixels — warps are packed with live work, no wasted lanes
+// on skipAccum pixels (foveated/checker/sky fast-path/AOV already wrote their
+// own accum in rt_main and don't need any further work).
+//
+// Persistent-thread pattern: same as rt_main.  Uses compactCounter to pull
+// work (atomic input-steal) and aliveCount to append (atomic output).
+// ---------------------------------------------------------------------------
+@compute @workgroup_size(8, 8)
+fn rt_compact_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let res = rt.iRes.xy;
+    let totalPixels = u32(res.x) * u32(res.y);
+    loop {
+        let pixelIdx = atomicAdd(&compactCounter, 1u);
+        if (pixelIdx >= totalPixels) { break; }
+        let flagBits = bitcast<u32>(pathStateBuf[pixelIdx].w2.w);
+        let skipAccum = (flagBits & 32u) != 0u;
+        if (!skipAccum) {
+            let slot = atomicAdd(&aliveCount, 1u);
+            aliveQueue[slot] = pixelIdx;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// rt_bounces_main (bounce split, Stage D; wavefront compaction from F1).
 // Consumes pathStateBuf entries written by primaryShade-in-rt_main, runs the
 // bounce loop (runBounces), and performs the full accumulation / reprojection
 // pipeline that previously lived inline at the end of rt_main.  Splits the
 // megakernel into primary / shade / bounce phases, reducing register pressure
 // in each and enabling future material-sorting optimisations (wavefront).
 //
-// skipAccum short-circuit: pixels handled by foveated/checker copy, sky fast-
-// path, or AOV modes write their own accum and set bit 5 of the flags word
-// so this kernel treats them as no-ops.
+// Reads pixel indices from aliveQueue (written by rt_compact_main).  skipAccum
+// pixels are already filtered out — this kernel only sees work that needs
+// runBounces (possibly with pathAlive=false) + accumulation.
 // ---------------------------------------------------------------------------
 @compute @workgroup_size(8, 8)
 fn rt_bounces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res = rt.iRes.xy;
-    let totalPixels = u32(res.x) * u32(res.y);
+    let aliveTotal = atomicLoad(&aliveCount);
     let resXu = u32(res.x);
     loop {
-        let pixelIdx = atomicAdd(&bounceCounter, 1u);
-        if (pixelIdx >= totalPixels) { break; }
+        // Pull from the compacted work queue.  Stop once we've processed every
+        // entry compaction appended.  (Other threads will also hit this
+        // termination; the last-writer-wins counter bump is harmless.)
+        let slot = atomicAdd(&bounceCounter, 1u);
+        if (slot >= aliveTotal) { break; }
+        let pixelIdx = aliveQueue[slot];
         let pixel = vec2<i32>(i32(pixelIdx % resXu), i32(pixelIdx / resXu));
 
         let entry = pathStateBuf[pixelIdx];
         let flagBits = bitcast<u32>(entry.w2.w);
-        let skipAccum = (flagBits & 32u) != 0u;
-        if (skipAccum) { continue; }
 
         // Deserialize PrimaryShadeResult from PathStateEntry (see packing legend
         // at struct declaration above).
