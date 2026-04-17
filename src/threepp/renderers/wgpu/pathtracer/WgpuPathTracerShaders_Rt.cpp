@@ -159,6 +159,7 @@ struct PathStateEntry {
 // Dedicated work-queue counter for rt_bounces_main.  Same reasoning as
 // primaryCounter: CPU-side atomic resets can't interleave with compute passes in
 // one encoder, so each kernel in the sample dispatch chain needs its own counter.
+
 @group(0) @binding(38) var<storage, read_write> bounceCounter: atomic<u32>;
 
 const MAX_TEX_SLOTS: i32 = 1024;

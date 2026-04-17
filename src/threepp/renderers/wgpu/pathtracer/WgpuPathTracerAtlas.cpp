@@ -39,8 +39,7 @@ std::vector<RtMeshEntry> expandMeshEntries(const std::vector<Mesh*>& meshes) {
 std::tuple<std::vector<unsigned char>, int, int, int> buildAtlas(
         const std::vector<Mesh*>& meshes,
         std::unordered_map<Texture*, int>& texSlotMap,
-        int TILE_SIZE) {
-    const int ATLAS_COLS = ATLAS_WIDTH / TILE_SIZE;
+        int TILE_SIZE_HINT) {
     // First pass: count unique textures to determine atlas size.
     int slotCount = 0;
     std::unordered_set<Texture*> seen;
@@ -67,8 +66,26 @@ std::tuple<std::vector<unsigned char>, int, int, int> buildAtlas(
             countTex(mwa->aoMap.get());
     }
 
-    // Layout: 8×8 grid of 1024px tiles per layer (8192×8192), multiple layers for >64 textures
-    const int slotsPerLayer = ATLAS_COLS * ATLAS_COLS; // 64
+    // Auto-shrink: TILE_SIZE_HINT is a MAX; halve down while the texture set
+    // would need more than one layer AND the tile is still ≥ TILE_SIZE_MIN.
+    // Single-layer atlases save up to ~512 MB on texture-heavy scenes (Bistro:
+    // 582 textures × 3 layers at 512px → 1 layer at 256px).  Per-texture
+    // resolution halves when shrink kicks in, but every layer saved is a full
+    // 256 MB of VRAM, so this is the right default tradeoff for VRAM-bound
+    // scenes.  User can still force a specific tile size via
+    // WgpuPathTracer::setTextureResolution if they want sharper textures on
+    // scenes with fewer-but-more-detailed assets.
+    constexpr int TILE_SIZE_MIN = 128;
+    int TILE_SIZE = TILE_SIZE_HINT;
+    while (TILE_SIZE > TILE_SIZE_MIN) {
+        const int cols       = ATLAS_WIDTH / TILE_SIZE;
+        const int slotsHere  = cols * cols;
+        if (slotCount <= slotsHere) break;  // already fits in 1 layer
+        TILE_SIZE /= 2;
+    }
+    const int ATLAS_COLS = ATLAS_WIDTH / TILE_SIZE;
+
+    const int slotsPerLayer = ATLAS_COLS * ATLAS_COLS;
     const int numLayers = std::max(1, (slotCount + slotsPerLayer - 1) / slotsPerLayer);
     const int atlasW = ATLAS_COLS * TILE_SIZE;
     const int atlasH = ATLAS_COLS * TILE_SIZE;

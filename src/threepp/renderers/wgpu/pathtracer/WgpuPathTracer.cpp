@@ -39,6 +39,7 @@
 #include <climits>
 #include <cmath>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #ifndef __EMSCRIPTEN__
 #include <future>
@@ -148,6 +149,7 @@ struct WgpuPathTracer::Impl {
     int matCapacity_  = INIT_MAT_CAP;
     int meshCapacity_ = INIT_MESH_CAP;
     int bvhCapacity_  = 2 * INIT_TRI_CAP - 1;
+    int emissiveTriCapacity_ = 1;  // currently-allocated emissiveTriBuf capacity (tri entries)
 
     // Actual scene counts (distinct from capacity which includes headroom)
     int matCount_  = 0;  // number of unique materials/meshes in use
@@ -1264,11 +1266,18 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             std::cerr << "[PathTracer] Warning: scene has " << totalTris
                       << " tris, capped to " << maxTotalTris << " (2x GPU buffer limit)\n";
         }
-        // Reserve 50% headroom so append-only topology changes don't require buffer recreation
-        r.triCapacity  = std::min(rawTriCap + rawTriCap / 2, maxTotalTris);
+        // Headroom so append-only topology changes don't force buffer recreation.
+        // Capped absolutely — the old "50%" formula wasted ~2 MB on a 10k-tri scene
+        // (fine) but ~250 MB on a 4M-tri scene (Bistro → OOM).  Typical appends
+        // are 10s to low-thousands of tris; 64k absorbs dozens of such appends.
+        constexpr int TRI_APPEND_HEADROOM  = 64 * 1024;
+        constexpr int MAT_APPEND_HEADROOM  = 16;
+        constexpr int MESH_APPEND_HEADROOM = 16;
+        r.triCapacity  = std::min(rawTriCap + std::min(rawTriCap / 2, TRI_APPEND_HEADROOM),
+                                   maxTotalTris);
         r.objTriSplit = std::min(r.triCapacity, triCap);  // first buffer holds up to triCap
-        r.matCapacity  = std::max(matCount * 2, 1);    // 2× headroom for new materials on append
-        r.meshCapacity = std::max(meshCount * 2, 1);   // 2× headroom for new meshes on append
+        r.matCapacity  = std::max(matCount  + std::min(matCount,  MAT_APPEND_HEADROOM),  1);
+        r.meshCapacity = std::max(meshCount + std::min(meshCount, MESH_APPEND_HEADROOM), 1);
 
         const int pages = triTexPages(r.triCapacity);
         r.triBuffer.resize(static_cast<size_t>(TEX_PAGE_WIDTH) * TRI_TEX_HEIGHT * pages * 4, 0.f);
@@ -1282,8 +1291,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.meshCount = meshCount;  // number of expanded mesh entries (instances)
         buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
         r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
-        // Reserve 2× BVH nodes so overlay BVH can be appended without buffer recreation
-        r.bvhCapacity = std::max(r.numBvhNodes * 2, 1);
+        // BVH headroom: same philosophy as triCapacity — capped absolute, not 2×.
+        // Typical overlay BVH append adds a few hundred nodes; 32k headroom absorbs
+        // many such appends without touching the saved VRAM on large scenes.
+        constexpr int BVH_APPEND_HEADROOM = 32 * 1024;
+        r.bvhCapacity = std::max(r.numBvhNodes + std::min(r.numBvhNodes, BVH_APPEND_HEADROOM), 1);
         r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_U32S, 0u);
         packBvh4Buffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
         r.refitMetaCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_REFIT_INTS, 0);
@@ -1362,11 +1374,18 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             std::cerr << "[PathTracer] Warning: scene has " << totalTris
                       << " tris, capped to " << maxTotalTris << " (2x GPU buffer limit)\n";
         }
-        // Reserve 50% headroom so append-only topology changes don't require buffer recreation
-        r.triCapacity  = std::min(rawTriCap + rawTriCap / 2, maxTotalTris);
+        // Headroom so append-only topology changes don't force buffer recreation.
+        // Capped absolutely — the old "50%" formula wasted ~2 MB on a 10k-tri scene
+        // (fine) but ~250 MB on a 4M-tri scene (Bistro → OOM).  Typical appends
+        // are 10s to low-thousands of tris; 64k absorbs dozens of such appends.
+        constexpr int TRI_APPEND_HEADROOM  = 64 * 1024;
+        constexpr int MAT_APPEND_HEADROOM  = 16;
+        constexpr int MESH_APPEND_HEADROOM = 16;
+        r.triCapacity  = std::min(rawTriCap + std::min(rawTriCap / 2, TRI_APPEND_HEADROOM),
+                                   maxTotalTris);
         r.objTriSplit = std::min(r.triCapacity, triCap);  // first buffer holds up to triCap
-        r.matCapacity  = std::max(matCount * 2, 1);    // 2× headroom for new materials on append
-        r.meshCapacity = std::max(meshCount * 2, 1);   // 2× headroom for new meshes on append
+        r.matCapacity  = std::max(matCount  + std::min(matCount,  MAT_APPEND_HEADROOM),  1);
+        r.meshCapacity = std::max(meshCount + std::min(meshCount, MESH_APPEND_HEADROOM), 1);
 
         const int pages = triTexPages(r.triCapacity);
         r.triBuffer.resize(static_cast<size_t>(TEX_PAGE_WIDTH) * TRI_TEX_HEIGHT * pages * 4, 0.f);
@@ -1380,8 +1399,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.meshCount = meshCount;  // number of expanded mesh entries (instances)
         buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
         r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
-        // Reserve 2× BVH nodes so overlay BVH can be appended without buffer recreation
-        r.bvhCapacity = std::max(r.numBvhNodes * 2, 1);
+        // BVH headroom: same philosophy as triCapacity — capped absolute, not 2×.
+        // Typical overlay BVH append adds a few hundred nodes; 32k headroom absorbs
+        // many such appends without touching the saved VRAM on large scenes.
+        constexpr int BVH_APPEND_HEADROOM = 32 * 1024;
+        r.bvhCapacity = std::max(r.numBvhNodes + std::min(r.numBvhNodes, BVH_APPEND_HEADROOM), 1);
         r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_U32S, 0u);
         packBvh4Buffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
         r.refitMetaCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * BVH4_REFIT_INTS, 0);
@@ -1450,6 +1472,38 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                   << r.numBvhNodes << " BVH nodes, "
                   << r.matCapacity << " materials, "
                   << r.meshCapacity << " meshes" << std::endl;
+
+        // Dump major-allocation footprint so VRAM pressure on huge scenes is visible.
+        // All numbers are CAPACITY-based (what wgpu allocated) not utilization.
+        auto mb = [](size_t bytes) { return static_cast<double>(bytes) / (1024.0 * 1024.0); };
+        const size_t atlasBytes   = static_cast<size_t>(r.atlasLayers) * r.atlasCols * r.tileSize * r.atlasCols * r.tileSize * 4u;
+        const size_t triTexBytes  = static_cast<size_t>(TEX_PAGE_WIDTH) * (TRI_TEX_HEIGHT * triTexPages(r.triCapacity)) * 16u;
+        const size_t matTexBytes  = static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 16u;
+        const size_t bvhBytes     = static_cast<size_t>(r.bvhCapacity) * BVH4_GPU_U32S * sizeof(uint32_t);
+        const size_t refitBytes   = static_cast<size_t>(r.bvhCapacity) * BVH4_REFIT_INTS * sizeof(int32_t);
+        const size_t objTriBytes  = static_cast<size_t>(r.triCapacity) * BYTES_PER_TRI;
+        const size_t leafBytes    = static_cast<size_t>(r.triCapacity) * sizeof(int);
+        const size_t emTriBytes   = static_cast<size_t>(std::max(1, r.emissiveTriCount)) * 4u * sizeof(float);
+        const size_t pathStateBytes = static_cast<size_t>(d.primaryHitBufPixels_) * 192u;
+        const size_t primHitBytes = static_cast<size_t>(d.primaryHitBufPixels_) * 16u;
+        const size_t total = atlasBytes + triTexBytes + matTexBytes + bvhBytes + refitBytes
+                           + objTriBytes + leafBytes + emTriBytes + pathStateBytes + primHitBytes;
+        std::cerr << "[PathTracer] VRAM breakdown (capacity, main buffers):\n"
+                  << "  atlas        " << std::fixed << std::setprecision(1) << mb(atlasBytes) << " MB  ("
+                  << r.atlasLayers << " layers x " << (r.atlasCols * r.tileSize) << "^2 RGBA8)\n"
+                  << "  triTex       " << mb(triTexBytes) << " MB  ("
+                  << triTexPages(r.triCapacity) << " page(s), RGBA32F)\n"
+                  << "  objTriBuf    " << mb(objTriBytes) << " MB  (" << r.triCapacity << " tris x 128 B)\n"
+                  << "  emissiveTri  " << mb(emTriBytes) << " MB  (" << r.emissiveTriCount << " emissive tris)\n"
+                  << "  bvhNodeBuf   " << mb(bvhBytes) << " MB  (" << r.bvhCapacity << " nodes x 112 B)\n"
+                  << "  pathStateBuf " << mb(pathStateBytes) << " MB  (" << d.primaryHitBufPixels_ << " px x 192 B)\n"
+                  << "  primaryHit   " << mb(primHitBytes) << " MB\n"
+                  << "  refitMeta    " << mb(refitBytes) << " MB\n"
+                  << "  matTex       " << mb(matTexBytes) << " MB\n"
+                  << "  leafIndex    " << mb(leafBytes) << " MB\n"
+                  << "  ------------ ----------\n"
+                  << "  subtotal     " << mb(total) << " MB  (excluding per-viewport accum / reservoir / gBuf textures)\n"
+                  << std::endl;
         d.emissiveTotalArea_ = r.emissiveTotalArea;
         d.emissiveTotalPower_ = r.emissiveTotalPower;
 
@@ -1469,18 +1523,34 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                                        WgpuBuffer::Usage::Storage);
             d.leafIndexBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.triCapacity) * sizeof(int),
                                          WgpuBuffer::Usage::Storage);
-            d.emissiveTriBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.triCapacity) * 4 * sizeof(float),
-                                           WgpuBuffer::Usage::Storage);
             d.vtPipeline.setStorageBufferRead(0, d.objTriBuf);
             d.vtPipeline.setStorageTexture(2, d.triTex);
             d.vtPipeline.setStorageBufferRead(4, d.objTriBuf2);
             d.refitPipeline.setTexture(0, d.triTex);
             d.refitPipeline.setStorageBufferRead(3, d.leafIndexBuf);
             d.rtPipeline.setTexture(5, d.triTex);
-            d.rtPipeline.setStorageBufferRead(11, d.emissiveTriBuf);
             d.primaryPipeline.setTexture(5, d.triTex);
-            d.primaryPipeline.setStorageBufferRead(11, d.emissiveTriBuf);
             d.bouncesPipeline.setTexture(5, d.triTex);
+        }
+
+        // Size emissiveTriBuf to the ACTUAL emissive-tri count (was previously
+        // sized to r.triCapacity, wasting ~63 MB on a 4M-tri scene with <1%
+        // emissives).  Reallocate on ANY change in normalized capacity so
+        // scene reloads to smaller light counts actually free VRAM.
+        //
+        // Floor at 1 so the buffer has a non-zero size even in scenes with no
+        // emissives.  WebGPU requires non-zero storage buffer sizes, and
+        // the shader reads are guarded by `emTriCount > 0` so contents don't
+        // matter.  Comparison uses the normalized value so a 0→0 case doesn't
+        // trigger re-realloc every frame (raw count of 0 != stored cap of 1).
+        const int wantEmCap = std::max(1, r.emissiveTriCount);
+        if (wantEmCap != d.emissiveTriCapacity_) {
+            d.emissiveTriCapacity_ = wantEmCap;
+            d.emissiveTriBuf = WgpuBuffer(d.renderer,
+                static_cast<size_t>(d.emissiveTriCapacity_) * 4u * sizeof(float),
+                WgpuBuffer::Usage::Storage);
+            d.rtPipeline.setStorageBufferRead(11, d.emissiveTriBuf);
+            d.primaryPipeline.setStorageBufferRead(11, d.emissiveTriBuf);
             d.bouncesPipeline.setStorageBufferRead(11, d.emissiveTriBuf);
         }
         if (r.bvhCapacity != d.bvhCapacity_) {
