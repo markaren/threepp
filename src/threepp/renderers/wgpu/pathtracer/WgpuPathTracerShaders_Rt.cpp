@@ -3455,6 +3455,11 @@ fn rt_bounces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (slot >= aliveTotal) { break; }
         let pixelIdx = alive1Queue[slot];
         let pixel = vec2<i32>(i32(pixelIdx % resXu), i32(pixelIdx / resXu));
+        // Restore per-pixel BN state (same reason as rt_bounce1_main: each kernel
+        // dispatch starts with bnPx=bnPy=bnFc=0, so without this call, runBounces'
+        // sampleEmissiveTriCdf/cosineHemisphere would use identical samples for
+        // every pixel every frame).
+        bnInit(u32(pixel.x), u32(pixel.y), u32(rt.frameCount.x));
 
         let entry = pathStateBuf[pixelIdx];
         let flagBits = u32(entry.w2.w);
@@ -3547,6 +3552,11 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let flagBitsIn = u32(entry.w2.w);
         let pathAliveIn = (flagBitsIn & 8u) != 0u;
         if (!pathAliveIn) { continue; }
+        // Restore per-pixel BN state so NEE and BRDF samples have the correct
+        // spatial blue-noise offset and temporal variation.  Without this, all
+        // threads start with bnPx=bnPy=bnFc=0 → identical samples for all
+        // pixels → biased NEE (always triangle 0) and correlated BRDF directions.
+        bnInit(u32(pixel.x), u32(pixel.y), u32(rt.frameCount.x));
 
         // Deserialize state from PathStateEntry.  Matches runBounces' local-var
         // initialization from PrimaryShadeResult, but pulled straight from the
