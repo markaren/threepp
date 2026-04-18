@@ -22,6 +22,7 @@
 #include "threepp/renderers/common/ShadowConfig.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
+#include "threepp/canvas/Canvas.hpp"
 #include "threepp/canvas/Monitor.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
 
@@ -1336,14 +1337,15 @@ struct GLRenderer::Impl {
     friend struct gl::GLShadowMap;
 };
 
+GLRenderer::GLRenderer(Canvas& canvas, const Parameters& parameters) {
 
-GLRenderer::GLRenderer(std::pair<int, int> size, const Parameters& parameters) {
+    canvas.initWindow(GraphicsAPI::OpenGL);
 
 #ifndef __EMSCRIPTEN__
-    loadGlad();// if Glad has yet to be loaded, do it now
+    loadGlad();
 #endif
 
-    pimpl_ = std::make_unique<Impl>(*this, size, parameters);
+    pimpl_ = std::make_unique<Impl>(*this, canvas.size(), parameters);
 }
 
 

@@ -8,7 +8,7 @@ using namespace threepp;
 
 int main() {
     Canvas canvas("USD loader example");
-    GLRenderer renderer{canvas.size()};
+    GLRenderer renderer{canvas};
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;

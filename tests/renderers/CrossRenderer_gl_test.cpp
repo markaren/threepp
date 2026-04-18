@@ -4,7 +4,7 @@
 #include "CrossRenderer_helpers.hpp"
 
 TEST_CASE("GL: clear color produces expected pixels") {
-    GLRenderer renderer(glCanvas().size());
+    GLRenderer renderer(glCanvas());
     renderer.setClearColor(Color(1.0f, 0.0f, 0.0f));
 
     auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});
@@ -23,7 +23,7 @@ TEST_CASE("GL: clear color produces expected pixels") {
 }
 
 TEST_CASE("GL: readback dimensions match render target") {
-    GLRenderer renderer(glCanvas().size());
+    GLRenderer renderer(glCanvas());
 
     auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});
     renderer.setRenderTarget(target.get());
@@ -435,7 +435,7 @@ TEST_CASE("GL: InstancedMesh renders multiple instances") {
     camera->position.z = 5;
 
     // Use dedicated renderer to avoid sharing state
-    GLRenderer renderer(glCanvas().size());
+    GLRenderer renderer(glCanvas());
     renderer.setClearColor(Color(0x000000));
     auto target = GLRenderTarget::create(RT_WIDTH, RT_HEIGHT, GLRenderTarget::Options{});
     renderer.setRenderTarget(target.get());
@@ -590,7 +590,7 @@ TEST_CASE("GL: object hierarchy applies parent transform") {
 
 TEST_CASE("GL: setScissorTest API works") {
     // Verify that scissor test can be enabled/disabled without crashing
-    GLRenderer renderer(glCanvas().size());
+    GLRenderer renderer(glCanvas());
 
     auto scene = Scene::create();
     auto geometry = BoxGeometry::create(2, 2, 2);

@@ -1394,7 +1394,7 @@ TEST_CASE("Cross: clipping plane produces similar cut", "[wgpu]") {
 
     // GL with clipping
     {
-        GLRenderer glRenderer(glCanvas().size());
+        GLRenderer glRenderer(glCanvas());
         glRenderer.setClearColor(clearColor);
         glRenderer.localClippingEnabled = true;
         auto target = GLRenderTarget::create(RT_WIDTH, RT_HEIGHT, GLRenderTarget::Options{});

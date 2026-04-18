@@ -20,6 +20,9 @@ namespace threepp {
         WebGPU
     };
 
+    class WgpuRenderer;
+    class GLRenderer;
+
     class Canvas: public PeripheralsEventSource {
 
     public:
@@ -75,6 +78,11 @@ namespace threepp {
         ~Canvas() override;
 
     private:
+        void initWindow(GraphicsAPI api);
+
+        friend class WgpuRenderer;
+        friend class GLRenderer;
+
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
 
@@ -117,6 +125,7 @@ namespace threepp {
             std::optional<std::filesystem::path> favicon_;
 
             friend struct Impl;
+            friend class Canvas;
         };
     };
 

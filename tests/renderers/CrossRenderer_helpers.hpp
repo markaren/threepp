@@ -237,7 +237,7 @@ namespace crosstest {
 
     // Render with GL, return pixel data
     inline std::vector<unsigned char> renderWithGL(Object3D& scene, Camera& camera, const Color& clearColor) {
-        GLRenderer renderer(glCanvas().size());
+        GLRenderer renderer(glCanvas());
         renderer.setClearColor(clearColor);
 
         auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});

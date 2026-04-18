@@ -12,6 +12,7 @@
 namespace threepp {
 
     class Camera;
+    class Canvas;
     class Scene;
     class BufferGeometry;
     class Object3D;
@@ -30,7 +31,10 @@ namespace threepp {
             bool premultipliedAlpha;
         };
 
-        explicit GLRenderer(std::pair<int, int> size = {}, const Parameters& parameters = {});
+        /// Canvas-aware constructor: initialises the OpenGL window on `canvas`
+        /// and derives the viewport size from it. Preferred over the size-only
+        /// constructor when using Canvas, as it handles lazy window init.
+        explicit GLRenderer(Canvas& canvas, const Parameters& parameters = {});
 
         GLRenderer(GLRenderer&&) = delete;
         GLRenderer(const GLRenderer&) = delete;

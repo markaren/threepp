@@ -20,7 +20,7 @@ namespace threepp {
             throw std::runtime_error("WebGPU/Wgpu renderer not available (build with -DTHREEPP_WITH_WGPU=ON)");
 #endif
         }
-        return std::make_unique<GLRenderer>(canvas.size());
+        return std::make_unique<GLRenderer>(canvas);
     }
 
 }// namespace threepp

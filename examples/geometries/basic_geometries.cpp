@@ -30,7 +30,7 @@ namespace {
 int main() {
 
     Canvas canvas("Geometries", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
+    GLRenderer renderer(canvas);
 
     const auto scene = Scene::create();
     scene->background = Color::blue;

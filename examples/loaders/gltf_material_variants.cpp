@@ -8,7 +8,7 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("glTF Material Variants", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas.size());
+    GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();

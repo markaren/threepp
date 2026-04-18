@@ -11,7 +11,7 @@ int main(int argc, char* argv[]) {
     const std::string fbxPath = argc > 1 ? argv[1] : defaultPath;
 
     Canvas canvas("FBX loader example");
-    GLRenderer renderer{canvas.size()};
+    GLRenderer renderer{canvas};
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;

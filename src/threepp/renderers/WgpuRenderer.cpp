@@ -3002,10 +3002,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
 // --- WgpuRenderer public API ---
 
-WgpuRenderer::WgpuRenderer(Canvas& canvas)
-    : pimpl_(std::make_unique<Impl>(*this, canvas)) {
-    // Register frame-end callback so the Canvas presents the surface texture
-    // after the user's animate callback, analogous to glfwSwapBuffers for GL.
+WgpuRenderer::WgpuRenderer(Canvas& canvas) {
+    canvas.initWindow(GraphicsAPI::WebGPU);
+    pimpl_ = std::make_unique<Impl>(*this, canvas);
     canvas.setFrameEndCallback([this] { pimpl_->endFrame(); });
 }
 

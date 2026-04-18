@@ -8,7 +8,7 @@ using namespace threepp;
 
 int main() {
     Canvas canvas("Collada Demo");
-    GLRenderer renderer{canvas.size()};
+    GLRenderer renderer{canvas};
     renderer.shadowMap().enabled = true;
 
     auto scene = Scene::create();
