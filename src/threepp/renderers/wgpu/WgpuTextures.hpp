@@ -54,6 +54,7 @@ namespace threepp::wgpu {
             WGPUTexture texture;
             uint32_t width, height, mipLevels;
             bool isCube;
+            WGPUTextureFormat format;
         };
         WgpuState& state_;
         WgpuMipmapGenerator mipmapGen_;

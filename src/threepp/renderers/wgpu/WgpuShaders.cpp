@@ -181,7 +181,7 @@ struct MaterialUniforms {
         s << "@group(0) @binding(31) var s_displacementMap: sampler;\n";
     }
     if (features & ShaderFeatures::EnvMap) {
-        s << "@group(0) @binding(32) var t_envMap: texture_cube<f32>;\n";
+        s << "@group(0) @binding(32) var t_envMap: texture_2d<f32>;\n";
         s << "@group(0) @binding(33) var s_envMap: sampler;\n";
     }
     if (features & ShaderFeatures::Transmission) {
@@ -733,8 +733,12 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
             s << "    let F0 = mix(vec3<f32>(0.04), baseColor, metalness);\n";
             if (features & ShaderFeatures::EnvMap) {
                 s << "    let R = reflect(-V, N);\n";
-                s << "    let envColor = textureSample(t_envMap, s_envMap, R).rgb;\n";
-                s << "    let ambientSpecular = F0 * envColor * material.emissive.w;\n";
+                s << "    let envPhi   = atan2(R.x, R.z) * 0.15915494 + 0.5;\n";  // 1/(2π)
+                s << "    let envTheta = asin(clamp(R.y, -1.0, 1.0)) * 0.31830989 + 0.5;\n";  // 1/π
+                s << "    let envMip   = roughness * f32(textureNumLevels(t_envMap) - 1u);\n";
+                s << "    let envColor = textureSampleLevel(t_envMap, s_envMap, vec2<f32>(envPhi, 1.0 - envTheta), envMip).rgb;\n";
+                s << "    let envFresnel = F0 + (1.0 - F0) * pow(1.0 - max(dot(N, V), 0.0), 5.0);\n";
+                s << "    let ambientSpecular = envFresnel * envColor * material.emissive.w;\n";
             } else {
                 s << "    let ambientSpecular = F0 * lights.ambient * (1.0 - roughness);\n";
             }

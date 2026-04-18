@@ -25,7 +25,7 @@ using namespace threepp::wgpu;
 
 namespace threepp::wgpu {
 
-MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry) {
+MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry, Texture* sceneEnvFallback) {
     MaterialParams p;
     p.opacity = rawMat->opacity;
 
@@ -52,6 +52,7 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry)
         if (m->bumpMap) { p.bumpMap = m->bumpMap.get(); p.bumpScale = m->bumpScale; p.features |= ShaderFeatures::BumpMap; }
         if (m->displacementMap) { p.displacementMap = m->displacementMap.get(); p.displacementScale = m->displacementScale; p.features |= ShaderFeatures::DisplacementMap; }
         if (m->envMap) { p.envMap = m->envMap.get(); p.envMapIntensity = m->envMapIntensity; p.features |= ShaderFeatures::EnvMap; }
+        else if (sceneEnvFallback && m->metalness > 0.0f) { p.envMap = sceneEnvFallback; p.envMapIntensity = 1.0f; p.features |= ShaderFeatures::EnvMap; }
         if (auto t = dynamic_cast<MeshPhysicalMaterial*>(rawMat)) {
             p.transmission = t->transmission;
             p.ior = t->ior;

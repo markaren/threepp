@@ -39,7 +39,7 @@ int main() {
 
     auto enclosingBox = Mesh::create(
             BoxGeometry::create(),
-            MeshStandardMaterial::create({{"color", Color::black}, {"roughness", 0.9f}, {"side", Side::Back}}));
+            MeshBasicMaterial::create({{"color", Color::black},  {"side", Side::Back}}));
     enclosingBox->scale *= 200;
 
     auto sphere1 = Mesh::create(

@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <variant>
 #include <webgpu/webgpu.h>
 #include "threepp/constants.hpp"
 #include "threepp/textures/Texture.hpp"
@@ -11,6 +13,16 @@ using namespace threepp;
 using namespace threepp::wgpu;
 
 namespace {
+    uint16_t f32_to_f16(float f) {
+        uint32_t x; std::memcpy(&x, &f, 4);
+        uint16_t sign = static_cast<uint16_t>((x >> 31) << 15);
+        int32_t  exp  = static_cast<int32_t>((x >> 23) & 0xFFu) - 127 + 15;
+        uint32_t mant = x & 0x7FFFFFu;
+        if (exp <= 0) return sign;
+        if (exp >= 31) return sign | 0x7C00u;
+        return sign | static_cast<uint16_t>(exp << 10) | static_cast<uint16_t>(mant >> 13);
+    }
+
     // Returns the number of mip levels for a texture of the given dimensions.
     uint32_t calcMipLevels(uint32_t w, uint32_t h) {
         return static_cast<uint32_t>(std::floor(std::log2(static_cast<float>(std::max(w, h))))) + 1u;
@@ -137,50 +149,70 @@ TextureEntry& WgpuTextures::getOrCreateTexture(Texture* tex) {
     auto h = img.height;
     if (w == 0 || h == 0) return dummyTexture_;
 
-    auto& data = img.data<unsigned char>();
-    if (data.empty()) return dummyTexture_; // e.g. render target texture with no CPU-side data
+    // Detect float (HDR) vs byte data
+    bool isHdr = false;
+    try { (void)img.data<float>(); isHdr = true; }
+    catch (const std::bad_variant_access&) {}
 
     const bool needsMips = tex->generateMipmaps && filterUsesMips(tex->minFilter);
     const uint32_t mipLevels = needsMips ? calcMipLevels(w, h) : 1u;
 
     WGPUTextureDescriptor td{};
-    td.label = WGPUStringView{"user_tex", WGPU_STRLEN} ;
+    td.label = WGPUStringView{"user_tex", WGPU_STRLEN};
     td.size = {w, h, 1};
     td.mipLevelCount = mipLevels;
     td.sampleCount = 1;
     td.dimension = WGPUTextureDimension_2D;
-    td.format = WGPUTextureFormat_RGBA8Unorm;
     td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst
              | (needsMips ? WGPUTextureUsage_RenderAttachment : 0u);
-    entry.texture = wgpuDeviceCreateTexture(state_.device, &td);
-    entry.view = wgpuTextureCreateView(entry.texture, nullptr);
-
-    // Convert RGB to RGBA if needed
-    std::vector<unsigned char> rgba;
-    const unsigned char* srcData = data.data();
-    size_t srcSize = data.size();
-    if (data.size() == static_cast<size_t>(w) * h * 3) {
-        rgba.resize(static_cast<size_t>(w) * h * 4);
-        for (size_t i = 0; i < static_cast<size_t>(w) * h; i++) {
-            rgba[i * 4 + 0] = data[i * 3 + 0];
-            rgba[i * 4 + 1] = data[i * 3 + 1];
-            rgba[i * 4 + 2] = data[i * 3 + 2];
-            rgba[i * 4 + 3] = 255;
-        }
-        srcData = rgba.data();
-        srcSize = rgba.size();
-    }
 
     WGPUTexelCopyTextureInfo dst{};
-    dst.texture = entry.texture;
     WGPUTexelCopyBufferLayout layout{};
-    layout.bytesPerRow = w * 4;
-    layout.rowsPerImage = h;
     WGPUExtent3D extent = {w, h, 1};
-    wgpuQueueWriteTexture(state_.queue, &dst, srcData, srcSize, &layout, &extent);
+
+    if (isHdr) {
+        auto& data = img.data<float>();
+        if (data.empty()) return dummyTexture_;
+        td.format = WGPUTextureFormat_RGBA16Float;  // filterable; RGBA32Float requires extra device feature
+        entry.texture = wgpuDeviceCreateTexture(state_.device, &td);
+        entry.view = wgpuTextureCreateView(entry.texture, nullptr);
+        std::vector<uint16_t> f16(data.size());
+        for (size_t i = 0; i < data.size(); ++i) f16[i] = f32_to_f16(data[i]);
+        dst.texture = entry.texture;
+        layout.bytesPerRow = w * 4 * sizeof(uint16_t);
+        layout.rowsPerImage = h;
+        wgpuQueueWriteTexture(state_.queue, &dst, f16.data(), f16.size() * sizeof(uint16_t), &layout, &extent);
+    } else {
+        auto& data = img.data<unsigned char>();
+        if (data.empty()) return dummyTexture_; // render target or uninitialized
+        td.format = WGPUTextureFormat_RGBA8Unorm;
+        entry.texture = wgpuDeviceCreateTexture(state_.device, &td);
+        entry.view = wgpuTextureCreateView(entry.texture, nullptr);
+
+        // Convert RGB→RGBA if needed
+        std::vector<unsigned char> rgba;
+        const unsigned char* srcData = data.data();
+        size_t srcSize = data.size();
+        if (data.size() == static_cast<size_t>(w) * h * 3) {
+            rgba.resize(static_cast<size_t>(w) * h * 4);
+            for (size_t i = 0; i < static_cast<size_t>(w) * h; i++) {
+                rgba[i * 4 + 0] = data[i * 3 + 0];
+                rgba[i * 4 + 1] = data[i * 3 + 1];
+                rgba[i * 4 + 2] = data[i * 3 + 2];
+                rgba[i * 4 + 3] = 255;
+            }
+            srcData = rgba.data();
+            srcSize = rgba.size();
+        }
+        dst.texture = entry.texture;
+        layout.bytesPerRow = w * 4;
+        layout.rowsPerImage = h;
+        wgpuQueueWriteTexture(state_.queue, &dst, srcData, srcSize, &layout, &extent);
+    }
 
     if (needsMips) {
-        pendingMipmaps_.push_back({entry.texture, w, h, mipLevels, false});
+        const auto fmt = isHdr ? WGPUTextureFormat_RGBA16Float : WGPUTextureFormat_RGBA8Unorm;
+        pendingMipmaps_.push_back({entry.texture, w, h, mipLevels, false, fmt});
     }
 
     WGPUSamplerDescriptor sd{};
@@ -278,7 +310,7 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
     }
 
     if (needsMips) {
-        pendingMipmaps_.push_back({entry.texture, w, h, mipLevels, true});
+        pendingMipmaps_.push_back({entry.texture, w, h, mipLevels, true, WGPUTextureFormat_RGBA8Unorm});
     }
 
     WGPUTextureViewDescriptor vd{};
@@ -312,9 +344,9 @@ void WgpuTextures::flushPendingMipmaps() {
     if (pendingMipmaps_.empty()) return;
     for (auto& pm : pendingMipmaps_) {
         if (pm.isCube) {
-            mipmapGen_.generateCube(pm.texture, pm.width, pm.mipLevels, WGPUTextureFormat_RGBA8Unorm);
+            mipmapGen_.generateCube(pm.texture, pm.width, pm.mipLevels, pm.format);
         } else {
-            mipmapGen_.generate2D(pm.texture, pm.width, pm.height, pm.mipLevels, WGPUTextureFormat_RGBA8Unorm);
+            mipmapGen_.generate2D(pm.texture, pm.width, pm.height, pm.mipLevels, pm.format);
         }
     }
     pendingMipmaps_.clear();

@@ -398,6 +398,7 @@ struct WgpuRenderer::Impl {
     // intermediate color texture gives us a COPY_SRC source for the retain copy,
     // since surface textures only carry RENDER_ATTACHMENT usage.
     bool hasTransmissive_ = false;
+    Texture* currentSceneEnv_ = nullptr;  // scene.environment for the current render call
 
     bool needsToneMapPass() const {
         return scope.toneMapping != ToneMapping::None ||
@@ -1887,6 +1888,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
         // Determine clear color
         auto* sceneObj = scene.as<Scene>();
+        currentSceneEnv_ = sceneObj ? sceneObj->environment.get() : nullptr;
         Color effectiveClearColor = clearColor_;
         float effectiveClearAlpha = clearAlpha_;
         if (sceneObj && sceneObj->background.isColor()) {
@@ -2433,7 +2435,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         if (!object || !rawMat || !geometry) return;
 
         // Extract material parameters via WgpuMaterials subsystem
-        auto params = wgpu::extractMaterialParams(rawMat, geometry);
+        auto params = wgpu::extractMaterialParams(rawMat, geometry, currentSceneEnv_);
         if (params.skip) return;
 
         // Custom WGSL shader path (ShaderMaterial)

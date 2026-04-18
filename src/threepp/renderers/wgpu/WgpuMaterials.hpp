@@ -89,7 +89,7 @@ namespace threepp::wgpu {
     // Extract material parameters and compute the base feature bitmask
     // from a Material subclass. Does not include object-level features
     // (instancing, skinning, topology) — those are added by the caller.
-    MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry);
+    MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry, Texture* sceneEnvFallback = nullptr);
 
     // Pack material parameters into the GPU uniform buffer layout.
     // The output buffer must be at least MATERIAL_UNIFORM_SIZE bytes.
