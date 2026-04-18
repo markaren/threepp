@@ -36,6 +36,10 @@ namespace threepp {
 
         void _deactivateAction(const std::shared_ptr<AnimationAction>& action) const;
 
+        std::shared_ptr<Interpolant> _lendControlInterpolant() const;
+
+        void _takeBackControlInterpolant(const std::shared_ptr<Interpolant>& interpolant) const;
+
         friend class AnimationAction;
     };
 

@@ -5,6 +5,9 @@
 #include "threepp/animation/AnimationClip.hpp"
 #include "threepp/animation/PropertyMixer.hpp"
 #include "threepp/constants.hpp"
+#include "threepp/math/interpolants/LinearInterpolant.hpp"
+
+#include <algorithm>
 
 using namespace threepp;
 
@@ -28,6 +31,7 @@ struct AnimationMixer::Impl {
 
     std::vector<std::shared_ptr<PropertyMixer>> _bindings;
     std::vector<std::shared_ptr<AnimationAction>> _actions;
+    std::vector<std::shared_ptr<Interpolant>> _controlInterpolants;
     std::unordered_map<std::string, ClipAction> _actionsByClip;
     std::unordered_map<std::string, std::unordered_map<std::string, std::shared_ptr<PropertyMixer>>> _bindingsByRootAndName;
 
@@ -96,25 +100,45 @@ struct AnimationMixer::Impl {
         }
     }
 
+    std::shared_ptr<Interpolant> _lendControlInterpolant() {
+
+        auto& pool = this->_controlInterpolants;
+        const auto lastActiveIndex = this->_nActiveControlInterpolants++;
+
+        if (lastActiveIndex >= static_cast<int>(pool.size())) {
+            // Allocate a new 2-point linear interpolant for weight/timeScale control
+            Sample times = {0.f, 1.f};
+            Sample values = {0.f, 0.f};
+            auto interp = std::make_shared<LinearInterpolant>(times, values, 1, nullptr);
+            pool.push_back(interp);
+        }
+
+        return pool[lastActiveIndex];
+    }
+
+    void _takeBackControlInterpolant(const std::shared_ptr<Interpolant>& interpolant) {
+
+        auto& pool = this->_controlInterpolants;
+        const auto firstInactiveIndex = --this->_nActiveControlInterpolants;
+
+        auto it = std::find(pool.begin(), pool.begin() + firstInactiveIndex + 1, interpolant);
+        if (it != pool.begin() + firstInactiveIndex + 1) {
+            std::iter_swap(it, pool.begin() + firstInactiveIndex);
+        }
+    }
+
     void _initMemoryManager() {
         this->_actions.clear();// 'nActiveActions' followed by inactive ones
         this->_nActiveActions = 0;
 
         this->_actionsByClip = {};
-        // inside:
-        // {
-        // 	knownActions: Array< AnimationAction > - used as prototypes
-        // 	actionByRoot: AnimationAction - lookup
-        // }
-
 
         this->_bindings = {};// 'nActiveBindings' followed by inactive ones
         this->_nActiveBindings = 0;
 
         this->_bindingsByRootAndName = {};// inside: Map< name, PropertyMixer >
 
-
-        //                this->_controlInterpolants = {};// same game as above
+        this->_controlInterpolants.clear();
         this->_nActiveControlInterpolants = 0;
     }
 
@@ -522,6 +546,16 @@ void AnimationMixer::_activateAction(const std::shared_ptr<AnimationAction>& act
 void AnimationMixer::_deactivateAction(const std::shared_ptr<AnimationAction>& action) const {
 
     pimpl_->_deactivateAction(action);
+}
+
+std::shared_ptr<Interpolant> AnimationMixer::_lendControlInterpolant() const {
+
+    return pimpl_->_lendControlInterpolant();
+}
+
+void AnimationMixer::_takeBackControlInterpolant(const std::shared_ptr<Interpolant>& interpolant) const {
+
+    pimpl_->_takeBackControlInterpolant(interpolant);
 }
 
 AnimationMixer::~AnimationMixer() = default;

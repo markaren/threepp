@@ -25,6 +25,8 @@ namespace threepp {
 
         [[nodiscard]] std::string uuid() const;
 
+        [[nodiscard]] std::string name() const { return name_; }
+
         void resetDuration();
 
         static std::shared_ptr<AnimationClip> findByName(const Object3D& object, const std::string& name);
@@ -33,7 +35,7 @@ namespace threepp {
     private:
         std::string uuid_{math::generateUUID()};
 
-        std::string name;
+        std::string name_;
         std::vector<std::shared_ptr<KeyframeTrack>> tracks;
         float duration;
 

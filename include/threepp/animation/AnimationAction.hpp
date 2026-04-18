@@ -48,6 +48,12 @@ namespace threepp {
         // return the weight considering fading and .enabled
         [[nodiscard]] float getEffectiveWeight() const;
 
+        AnimationAction& fadeIn(float duration);
+
+        AnimationAction& fadeOut(float duration);
+
+        AnimationAction& crossFadeTo(AnimationAction* other, float duration, bool warp = false);
+
         AnimationAction& stopFading();
 
         // Time Scale Control
@@ -115,6 +121,8 @@ namespace threepp {
         bool zeroSlopeAtEnd = true;  // clips for start, loop and end
 
         void _update(float time, float deltaTime, int timeDirection, int accuIndex);
+
+        AnimationAction& _scheduleFading(float duration, float weightNow, float weightThen);
 
         float _updateWeight(float time);
 

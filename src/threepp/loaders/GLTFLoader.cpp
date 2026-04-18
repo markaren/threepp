@@ -12,6 +12,10 @@
 #include <unordered_map>
 #include <vector>
 
+#include <threepp/animation/AnimationClip.hpp>
+#include <threepp/animation/tracks/NumberKeyframeTrack.hpp>
+#include <threepp/animation/tracks/QuaternionKeyframeTrack.hpp>
+#include <threepp/animation/tracks/VectorKeyframeTrack.hpp>
 #include <threepp/lights/DirectionalLight.hpp>
 #include <threepp/lights/PointLight.hpp>
 #include <threepp/lights/SpotLight.hpp>
@@ -938,6 +942,7 @@ namespace threepp {
                     result.scene = Group::create();
                 }
 
+                result.animations = loadAnimations();
                 resolveVariants(result);
                 return result;
             }
@@ -1009,8 +1014,124 @@ namespace threepp {
                     result.scene = Group::create();
                 }
 
+                result.animations = loadAnimations();
                 resolveVariants(result);
                 return result;
+            }
+
+            // -----------------------------------------------------------------------
+            //  Animation
+            // -----------------------------------------------------------------------
+
+            std::vector<std::shared_ptr<AnimationClip>> loadAnimations() {
+                if (!gltf.contains("animations")) return {};
+
+                std::vector<std::shared_ptr<AnimationClip>> clips;
+
+                for (size_t animIdx = 0; animIdx < gltf["animations"].size(); ++animIdx) {
+                    const auto& animDef = gltf["animations"][animIdx];
+
+                    std::string animName = animDef.value("name", "animation_" + std::to_string(animIdx));
+
+                    if (!animDef.contains("channels") || !animDef.contains("samplers")) continue;
+
+                    const auto& channels = animDef["channels"];
+                    const auto& samplers = animDef["samplers"];
+
+                    std::vector<std::shared_ptr<KeyframeTrack>> tracks;
+
+                    for (const auto& channel : channels) {
+                        if (!channel.contains("sampler") || !channel.contains("target")) continue;
+
+                        const auto& target = channel["target"];
+                        int nodeIdx = target.value("node", -1);
+                        std::string path = target.value("path", "");
+
+                        if (nodeIdx < 0 || path.empty()) continue;
+
+                        int samplerIdx = channel["sampler"].get<int>();
+                        if (samplerIdx < 0 || samplerIdx >= static_cast<int>(samplers.size())) continue;
+
+                        const auto& samplerDef = samplers[samplerIdx];
+                        int inputAccIdx = samplerDef["input"].get<int>();
+                        int outputAccIdx = samplerDef["output"].get<int>();
+                        std::string interpolation = samplerDef.value("interpolation", "LINEAR");
+
+                        auto times = readFloats(inputAccIdx);
+                        auto values = readFloats(outputAccIdx);
+
+                        if (times.empty()) continue;
+
+                        // CUBICSPLINE: strip in/out tangents, keep only the spline vertex (middle value)
+                        if (interpolation == "CUBICSPLINE") {
+                            int nFrames = static_cast<int>(times.size());
+                            int totalComponents = static_cast<int>(values.size()) / (3 * nFrames);
+                            if (totalComponents > 0) {
+                                std::vector<float> stripped;
+                                stripped.reserve(nFrames * totalComponents);
+                                for (int f = 0; f < nFrames; ++f) {
+                                    int base = f * 3 * totalComponents + totalComponents;// skip in-tangent
+                                    for (int c = 0; c < totalComponents; ++c)
+                                        stripped.push_back(values[base + c]);
+                                }
+                                values = std::move(stripped);
+                            }
+                            interpolation = "LINEAR";
+                        }
+
+                        Interpolation interp = Interpolation::Linear;
+                        if (interpolation == "STEP") interp = Interpolation::Discrete;
+
+                        // Resolve node name for track path
+                        std::string nodeName;
+                        auto nit = nodeObjects.find(nodeIdx);
+                        if (nit != nodeObjects.end()) {
+                            nodeName = nit->second->name;
+                            if (nodeName.empty()) nodeName = "node_" + std::to_string(nodeIdx);
+                        } else {
+                            nodeName = "node_" + std::to_string(nodeIdx);
+                        }
+
+                        std::shared_ptr<KeyframeTrack> track;
+
+                        if (path == "translation") {
+                            track = std::make_shared<VectorKeyframeTrack>(
+                                    nodeName + ".position", times, values, interp);
+                        } else if (path == "rotation") {
+                            track = std::make_shared<QuaternionKeyframeTrack>(
+                                    nodeName + ".quaternion", times, values);
+                        } else if (path == "scale") {
+                            track = std::make_shared<VectorKeyframeTrack>(
+                                    nodeName + ".scale", times, values, interp);
+                        } else if (path == "weights") {
+                            // Morph target weights: one NumberKeyframeTrack per morph target
+                            // The values interleave weights for all morph targets per frame
+                            int nFrames = static_cast<int>(times.size());
+                            int nTargets = (nFrames > 0) ? static_cast<int>(values.size()) / nFrames : 0;
+                            for (int t = 0; t < nTargets; ++t) {
+                                std::vector<float> targetValues;
+                                targetValues.reserve(nFrames);
+                                for (int f = 0; f < nFrames; ++f)
+                                    targetValues.push_back(values[f * nTargets + t]);
+                                auto weightTrack = std::make_shared<NumberKeyframeTrack>(
+                                        nodeName + ".morphTargetInfluences[" + std::to_string(t) + "]",
+                                        times, targetValues, interp);
+                                tracks.push_back(weightTrack);
+                            }
+                            continue;
+                        }
+
+                        if (track) tracks.push_back(track);
+                    }
+
+                    if (tracks.empty()) continue;
+
+                    auto clip = std::make_shared<AnimationClip>(animName, -1.f, tracks);
+                    clip->resetDuration();
+                    clips.push_back(clip);
+                }
+
+                return clips;
             }
 
             void resolveVariants(GLTFResult& result) {
