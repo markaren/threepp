@@ -9,10 +9,10 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("Transmission", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.toneMapping = ToneMapping::ACESFilmic;
-    renderer.toneMappingExposure = 1.0f;
+    Canvas canvas("Transmission", {{"graphicsApi", GraphicsAPI::OpenGL}});
+    auto renderer = createRenderer(canvas);
+    renderer->toneMapping = ToneMapping::ACESFilmic;
+    renderer->toneMappingExposure = 1.0f;
 
     auto scene = Scene::create();
 
@@ -67,9 +67,9 @@ int main() {
     float thickness = glassMat->thickness;
     float attenuationDistance = glassMat->attenuationDistance;
     std::array<float, 3> attenuationColor = {1.f, 1.f, 1.f};
-    float exposure = renderer.toneMappingExposure;
+    float exposure = renderer->toneMappingExposure;
 
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({250 * ui.dpiScale(), 0}, 0);
         ImGui::Begin("Transmission");
@@ -104,7 +104,7 @@ int main() {
         }
         ImGui::Separator();
         if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 3.f)) {
-            renderer.toneMappingExposure = exposure;
+            renderer->toneMappingExposure = exposure;
         }
 
         ImGui::End();
@@ -119,7 +119,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -129,7 +129,7 @@ int main() {
             float angle = static_cast<float>(i) / 6.f * math::TWO_PI + t * 0.3f;
             boxes[i]->position.set(std::cos(angle) * 3.0f, std::sin(angle) * 3.0f, -2.0f);
         }
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
         ui.render();
     });
 }
