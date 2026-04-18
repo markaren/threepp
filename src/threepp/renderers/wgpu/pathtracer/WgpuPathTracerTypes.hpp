@@ -82,8 +82,9 @@ namespace threepp::wgpu_pt {
         float    emissiveInfo[4];   // x = emissive tri count, y = total emissive power, z = fireflyCap
         float    restirParams[4];   // x = enabled, y = M_clamp, z = reserved, w = reserved
         std::uint32_t bvhAux[4];    // [0] = bvhRootIdx (0 = normal root, >0 = overlay combined root)
+        float lens[4];              // [0]=fStop (0=pinhole), [1]=focusDistance, [2]=blades, [3]=apertureRotation
     };
-    static_assert(sizeof(RtGpuUniforms) == 624, "RtGpuUniforms must be 624 bytes");
+    static_assert(sizeof(RtGpuUniforms) == 640, "RtGpuUniforms must be 640 bytes");
 
     struct alignas(16) VtGpuUniforms {
         std::uint32_t triCount, groupsX, splitAt, _p1;

@@ -44,6 +44,7 @@ struct RtUniforms {
     emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive power, z = fireflyCap
     restirParams:  vec4<f32>,  // x = enabled, y = M_clamp, z = emissiveMoved, w = reserved
     bvhAux:        vec4<u32>,  // .x = bvhRootIdx (0 = normal root, >0 = overlay combined root)
+    lens:          vec4<f32>,  // x = fStop (0=pinhole), y = focusDistance, z = blades (f32), w = apertureRotation
 };
 
 struct Bvh4NodeGpu {
@@ -1021,7 +1022,7 @@ fn sceneHitShadow(ray: Ray, maxDist: f32) -> ShadowHit {
     return loadShadowHitMaterial(rh, ray);
 }
 
-fn makeRay(px: vec2<f32>, res: vec2<f32>) -> Ray {
+fn makeRay(px: vec2<f32>, res: vec2<f32>, apBn: vec2<f32>) -> Ray {
     let aspect = res.x / res.y;
     let ndc = vec2<f32>((px.x / res.x) * 2.0 - 1.0,
                          1.0 - (px.y / res.y) * 2.0);
@@ -1030,6 +1031,39 @@ fn makeRay(px: vec2<f32>, res: vec2<f32>) -> Ray {
     ray.dir    = normalize(rt.camFwd.xyz
                          + rt.camRgt.xyz * (ndc.x * rt.tanHalfFov.x * aspect)
                          + rt.camUp.xyz  * (ndc.y * rt.tanHalfFov.x));
+
+    let fStop = rt.lens.x;
+    if (fStop <= 0.0) { return ray; }
+
+    let apertureRadius = (rt.tanHalfFov.x / fStop) * 0.5;
+    let focusDist      = rt.lens.y;
+    let blades         = i32(rt.lens.z);
+    let rot            = rt.lens.w;
+
+    var apOffset: vec2<f32>;
+    if (blades < 3) {
+        let r   = apertureRadius * sqrt(apBn.x);
+        let phi = 6.2831853 * apBn.y;
+        apOffset = vec2<f32>(r * cos(phi), r * sin(phi));
+    } else {
+        let n      = f32(blades);
+        let sector = floor(apBn.x * n);
+        let u      = fract(apBn.x * n);
+        var a      = u;
+        var b      = apBn.y;
+        if (a + b > 1.0) { a = 1.0 - a; b = 1.0 - b; }
+        let t0 = 6.2831853 * sector / n + rot;
+        let t1 = 6.2831853 * (sector + 1.0) / n + rot;
+        let p0 = vec2<f32>(cos(t0), sin(t0));
+        let p1 = vec2<f32>(cos(t1), sin(t1));
+        apOffset = apertureRadius * (a * p0 + b * p1);
+    }
+
+    let cosFwd     = max(dot(ray.dir, rt.camFwd.xyz), 1e-6);
+    let focalPoint = ray.origin + ray.dir * (focusDist / cosFwd);
+    let newOrigin  = ray.origin + rt.camRgt.xyz * apOffset.x + rt.camUp.xyz * apOffset.y;
+    ray.origin = newOrigin;
+    ray.dir    = normalize(focalPoint - newOrigin);
     return ray;
 }
 
@@ -3106,7 +3140,8 @@ R"(
     // (RR termination, lobe selection, ReSTIR M-sampling, etc.).
     var seed = pcg(pcg(u32(pixel.x) + u32(pixel.y) * 65537u) + fc * 12979u);
 
-    let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5 + jx, f32(pixel.y) + 0.5 + jy), res);
+    let apBn = bnNext2d();
+    let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5 + jx, f32(pixel.y) + 0.5 + jy), res, apBn);
 
     // Read the primary hit from the buffer populated by rt_primary_main.
     let packed = primaryHitBuf[pixelIdx];
@@ -3343,7 +3378,8 @@ fn rt_primary_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let jx = (camBn.x - 0.5) * 0.75;
         let jy = (camBn.y - 0.5) * 0.75;
 
-        let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5 + jx, f32(pixel.y) + 0.5 + jy), res);
+        let apBn = bnNext2d();
+        let ray = makeRay(vec2<f32>(f32(pixel.x) + 0.5 + jx, f32(pixel.y) + 0.5 + jy), res, apBn);
         let rh = sceneHitRaw(ray, 1e30);
 
         var packed: PrimaryHitPacked;

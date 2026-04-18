@@ -12,6 +12,13 @@ namespace threepp {
 
     /// GPU path tracer / ray tracer built on WebGPU compute shaders.
     /// Wraps a WgpuRenderer for device access and final display blit.
+    struct LensSettings {
+        float fStop = 0.0f;             // <= 0 disables DOF (pinhole)
+        float focusDistance = 5.0f;     // world units
+        int   apertureBlades = 0;       // 0 = circular, 3..8 = polygonal bokeh
+        float apertureRotation = 0.0f;  // radians
+    };
+
     class WgpuPathTracer {
 
     public:
@@ -108,6 +115,14 @@ namespace threepp {
 
         /// Force a full scene rebuild (geometry + materials) on the next render call.
         void markDirty();
+
+        /// Physical camera lens settings. fStop <= 0 produces a pinhole camera (default).
+        /// Any change resets accumulation.
+        void setLens(const LensSettings& lens);
+        [[nodiscard]] const LensSettings& lens() const;
+
+        /// Convenience: set focusDistance to the world-space distance from camera to target.
+        void focusOn(const Camera& camera, const Object3D& target);
 
         void dispose();
 

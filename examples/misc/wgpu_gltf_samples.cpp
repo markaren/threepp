@@ -193,6 +193,13 @@ int main(int argc, char** argv) {
     int aovMode = pathTracer.aovMode();
     bool foveatOn = pathTracer.foveatedRendering();
 
+    bool   dofEnabled    = false;
+    float  lensFStop     = 2.8f;
+    float  lensFocusDist = 5.0f;
+    int    lensBlades    = 0;
+    float  lensRotation  = 0.0f;
+    bool   autofocus     = false;
+
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::T) {
             raster = !raster;
@@ -257,6 +264,39 @@ int main(int argc, char** argv) {
             const char* aovItems[] = { "Off", "Depth", "Normals", "Albedo", "Instance ID", "Roughness", "Adaptive Bounce" };
             if (ImGui::Combo("AOV", &aovMode, aovItems, IM_ARRAYSIZE(aovItems)))
                 pathTracer.setAOVMode(aovMode);
+
+            ImGui::Separator();
+            if (ImGui::CollapsingHeader("Lens / DOF")) {
+                bool lensChanged = false;
+                lensChanged |= ImGui::Checkbox("Enable DOF", &dofEnabled);
+                if (dofEnabled) {
+                    lensChanged |= ImGui::SliderFloat("f-Stop", &lensFStop, 0.7f, 22.0f, "f/%.1f");
+                    lensChanged |= ImGui::SliderFloat("Focus Distance", &lensFocusDist, 0.1f, 50.0f, "%.2f m");
+                    const char* bladeItems[] = { "Circular", "3", "4", "5", "6", "7", "8" };
+                    int bladeSel = (lensBlades < 3) ? 0 : (lensBlades - 2);
+                    if (ImGui::Combo("Aperture Shape", &bladeSel, bladeItems, IM_ARRAYSIZE(bladeItems))) {
+                        lensBlades = (bladeSel == 0) ? 0 : (bladeSel + 2);
+                        lensChanged = true;
+                    }
+                    if (lensBlades >= 3)
+                        lensChanged |= ImGui::SliderAngle("Aperture Rotation", &lensRotation, -180.f, 180.f);
+                    lensChanged |= ImGui::Checkbox("Autofocus", &autofocus);
+                    if (!autofocus && loadedModel && ImGui::Button("Focus on model")) {
+                        pathTracer.focusOn(camera, *loadedModel);
+                        lensFocusDist = pathTracer.lens().focusDistance;
+                    }
+                    if (autofocus)
+                        ImGui::TextDisabled("Tracking orbit target");
+                }
+                if (lensChanged) {
+                    pathTracer.setLens({
+                        dofEnabled ? lensFStop : 0.0f,
+                        lensFocusDist,
+                        lensBlades,
+                        lensRotation
+                    });
+                }
+            }
         }
 
         ImGui::End();
@@ -308,6 +348,14 @@ int main(int argc, char** argv) {
         }
 
         controls.update();
+
+        if (dofEnabled && autofocus) {
+            const float targetDist = camera.position.distanceTo(controls.target);
+            if (std::abs(targetDist - lensFocusDist) > 0.01f * lensFocusDist) {
+                lensFocusDist = targetDist;
+                pathTracer.setLens({lensFStop, lensFocusDist, lensBlades, lensRotation});
+            }
+        }
 
         if (raster) {
             renderer.render(scene, camera);

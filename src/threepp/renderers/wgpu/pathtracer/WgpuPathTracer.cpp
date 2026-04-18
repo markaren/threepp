@@ -143,6 +143,7 @@ struct WgpuPathTracer::Impl {
     // validation). Primary-ray emissive hits are never clamped.
     float fireflyCap_ = 8.0f;
     int aovMode_ = 0;  // 0=off, 1=depth, 2=normals, 3=albedo, 4=instanceId, 5=roughness, 6=adaptiveBounce
+    LensSettings lens_{};
 
     // Dynamic capacity tracking — buffers grow as scenes demand more
     int triCapacity_  = INIT_TRI_CAP;
@@ -2615,6 +2616,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
     u.restirParams[3] = 0.f;  // reserved (was rawMode/temporal denoiser flag)
     u.bvhAux[0] = static_cast<uint32_t>(d.bvhRootIdx_);  // traversal root (0=normal, >0=overlay)
+    u.lens[0] = d.lens_.fStop;
+    u.lens[1] = d.lens_.focusDistance;
+    u.lens[2] = static_cast<float>(d.lens_.apertureBlades);
+    u.lens[3] = d.lens_.apertureRotation;
 
     int nLights = 0;
     auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
@@ -3493,6 +3498,20 @@ int WgpuPathTracer::textureResolution() const {
 void WgpuPathTracer::markDirty() {
     pimpl_->prevMeshes.clear();
     pimpl_->prevEntryCount_ = 0;
+}
+
+void WgpuPathTracer::setLens(const LensSettings& lens) {
+    pimpl_->lens_ = lens;
+    resetAccumulation();
+}
+
+const LensSettings& WgpuPathTracer::lens() const {
+    return pimpl_->lens_;
+}
+
+void WgpuPathTracer::focusOn(const Camera& camera, const Object3D& target) {
+    pimpl_->lens_.focusDistance = camera.position.distanceTo(target.position);
+    resetAccumulation();
 }
 
 void WgpuPathTracer::dispose() {
