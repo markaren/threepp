@@ -87,6 +87,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
@@ -1021,6 +1022,14 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
 
         WGPURequestAdapterOptions options{};
         options.compatibleSurface = surface; // nullptr in headless mode
+        if (const char* backendEnv = std::getenv("WGPU_BACKEND")) {
+            std::string b = backendEnv;
+            if      (b == "vulkan"  || b == "Vulkan")  options.backendType = WGPUBackendType_Vulkan;
+            else if (b == "dx12"    || b == "D3D12")   options.backendType = WGPUBackendType_D3D12;
+            else if (b == "dx11"    || b == "D3D11")   options.backendType = WGPUBackendType_D3D11;
+            else if (b == "metal"   || b == "Metal")   options.backendType = WGPUBackendType_Metal;
+            else if (b == "opengl"  || b == "OpenGL")  options.backendType = WGPUBackendType_OpenGL;
+        }
 
         WGPURequestAdapterCallbackInfo callbackInfo{};
         callbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
@@ -1118,6 +1127,22 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
         }
         device = userData.device;
 
+        WGPUAdapterInfo info{};
+        wgpuAdapterGetInfo(adapter, &info);
+        const char* backendName = "Unknown";
+        switch (info.backendType) {
+            case WGPUBackendType_Vulkan:    backendName = "Vulkan";  break;
+            case WGPUBackendType_Metal:     backendName = "Metal";   break;
+            case WGPUBackendType_D3D12:     backendName = "D3D12";   break;
+            case WGPUBackendType_D3D11:     backendName = "D3D11";   break;
+            case WGPUBackendType_OpenGL:    backendName = "OpenGL";  break;
+            case WGPUBackendType_OpenGLES:  backendName = "OpenGLES"; break;
+            default: break;
+        }
+        std::cout << "WgpuRenderer: backend=" << backendName
+                  << " adapter=\"" << std::string_view(info.device.data, info.device.length) << "\""
+                  << std::endl;
+        wgpuAdapterInfoFreeMembers(info);
     }
 
     void configureSurface() {
