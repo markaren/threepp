@@ -6,10 +6,10 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("HDR Environment Map");
-    GLRenderer renderer(canvas.size());
-    renderer.toneMapping = ToneMapping::ACESFilmic;
-    renderer.toneMappingExposure = 1.0f;
+    Canvas canvas("HDR Environment Map", {{"graphicsApi", GraphicsAPI::OpenGL}});
+    auto renderer = createRenderer(canvas);
+    renderer->toneMapping = ToneMapping::ACESFilmic;
+    renderer->toneMappingExposure = 1.0f;
 
     auto scene = Scene::create();
 
@@ -36,10 +36,10 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     canvas.animate([&] {
-        renderer.render(*scene, camera);
+        renderer->render(*scene, camera);
     });
 }
