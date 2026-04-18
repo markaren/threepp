@@ -237,11 +237,17 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (resLum > fireflyCeil) {
         spatialResult = spatialResult * (fireflyCeil / resLum);
     }
+    // Fade filter strength with accumulated frame count. At low FC the
+    // accumulation is noisy and spatial filtering is essential. At high FC
+    // the accumulation has converged; the filter's G-buffer-driven edge weights
+    // vary each frame due to subpixel jitter and cause shimmer. Fading to the
+    // raw accumulation at convergence eliminates that shimmer.
+    let fcFade = 1.0 - smoothstep(16.0, 64.0, cFC);
     // Roughness-driven blend for specular: smooth metals (low roughness)
     // have clean reflections — don't blur them. Rough surfaces benefit
     // from spatial filtering. Diffuse always gets full filtering.
     let specRoughBlend = smoothstep(0.05, 0.3, cRough);
-    let filterBlend = select(1.0, specRoughBlend, isSpec);
+    let filterBlend = select(1.0, specRoughBlend, isSpec) * fcFade;
     let result = mix(cColor, spatialResult, filterBlend);
     textureStore(colorOut, pixel, vec4<f32>(result, cFC));
 }
