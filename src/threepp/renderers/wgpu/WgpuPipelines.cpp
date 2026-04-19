@@ -364,7 +364,9 @@ namespace threepp::wgpu {
         depthStencil.depthWriteEnabled = (features & ShaderFeatures::DepthWriteOff)
                                               ? WGPUOptionalBool_False
                                               : WGPUOptionalBool_True;
-        depthStencil.depthCompare = WGPUCompareFunction_LessEqual;
+        depthStencil.depthCompare = (features & ShaderFeatures::DepthTestOff)
+                                          ? WGPUCompareFunction_Always
+                                          : WGPUCompareFunction_LessEqual;
 
         WGPURenderPipelineDescriptor pipelineDesc{};
         pipelineDesc.label = WGPUStringView{"wgpu_pipeline", WGPU_STRLEN} ;

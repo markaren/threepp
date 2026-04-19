@@ -103,6 +103,9 @@ namespace threepp::wgpu {
         // Transmission (bit 41): screen-space refraction for transmissive materials
         constexpr uint64_t Transmission    = 1ULL << 41;
 
+        // DepthTestOff (bit 42): material has depthTest=false → WGPUCompareFunction_Always
+        constexpr uint64_t DepthTestOff    = 1ULL << 42;
+
         // Convenience: test if shader needs lighting calculations.
         inline bool isLit(uint64_t features) {
             return (features & (Lighting | Specular | PBR)) != 0;
