@@ -2521,7 +2521,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         else if (blendVal == 3)         features |= SF::BlendSubtractive;
         else if (blendVal == 4)         features |= SF::BlendMultiply;
         else                            features |= SF::BlendNormal;
-        if (rawMat->transparent) {
+        if (!rawMat->depthWrite) {
             features |= SF::DepthWriteOff;
         }
 
