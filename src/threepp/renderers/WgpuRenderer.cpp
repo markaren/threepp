@@ -3275,6 +3275,20 @@ void WgpuRenderer::resetState() {
 std::vector<unsigned char> WgpuRenderer::readRGBPixels() {
     if (!pimpl_->initialized || !pimpl_->currentRenderTarget_) return {};
 
+    // When rendering to a RenderTarget (headless or nested), endFrame() is not
+    // called via the canvas frame-end callback, so the command encoder may still
+    // be pending. Submit it now so the GPU has finished writing the texture before
+    // the readback copy encoder runs.
+    if (pimpl_->renderEncoder_ && !pimpl_->frame_.active) {
+        WGPUCommandBufferDescriptor cbd{};
+        cbd.label = WGPUStringView{"rt_flush", sizeof("rt_flush") - 1};
+        WGPUCommandBuffer cb = wgpuCommandEncoderFinish(pimpl_->renderEncoder_, &cbd);
+        wgpuQueueSubmit(pimpl_->queue, 1, &cb);
+        wgpuCommandBufferRelease(cb);
+        wgpuCommandEncoderRelease(pimpl_->renderEncoder_);
+        pimpl_->renderEncoder_ = nullptr;
+    }
+
     auto& rt = pimpl_->renderTargets->getOrCreate(pimpl_->currentRenderTarget_, pimpl_->sampleCount_);
     return wgpu::readRGBPixels(pimpl_->device, pimpl_->queue, rt.colorTexture, rt.width, rt.height);
 }
