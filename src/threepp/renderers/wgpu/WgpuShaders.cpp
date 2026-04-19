@@ -38,6 +38,7 @@ std::string ShaderFeatures::describe(uint64_t features) {
     if (features & BumpMap)         append("BumpMap");
     if (features & GradientMap)     append("GradientMap");
     if (features & EnvMap)          append("EnvMap");
+    if (features & EnvMapCube)      append("EnvMapCube");
     if (features & Skinning)        append("Skinning");
     if (features & ShadowMat)       append("ShadowMat");
     if (features & LineDashed)      append("LineDashed");
@@ -182,6 +183,10 @@ struct MaterialUniforms {
     }
     if (features & ShaderFeatures::EnvMap) {
         s << "@group(0) @binding(32) var t_envMap: texture_2d<f32>;\n";
+        s << "@group(0) @binding(33) var s_envMap: sampler;\n";
+    }
+    if (features & ShaderFeatures::EnvMapCube) {
+        s << "@group(0) @binding(32) var t_envMap: texture_cube<f32>;\n";
         s << "@group(0) @binding(33) var s_envMap: sampler;\n";
     }
     if (features & ShaderFeatures::Transmission) {
@@ -731,20 +736,43 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
 
         if (features & ShaderFeatures::PBR) {
             s << "    let F0 = mix(vec3<f32>(0.04), baseColor, metalness);\n";
-            if (features & ShaderFeatures::EnvMap) {
+            if (features & (ShaderFeatures::EnvMap | ShaderFeatures::EnvMapCube)) {
                 s << "    let R = reflect(-V, N);\n";
-                s << "    let envPhi   = atan2(R.x, R.z) * 0.15915494 + 0.5;\n";  // 1/(2π)
-                s << "    let envTheta = asin(clamp(R.y, -1.0, 1.0)) * 0.31830989 + 0.5;\n";  // 1/π
-                s << "    let envMip   = roughness * f32(textureNumLevels(t_envMap) - 1u);\n";
-                s << "    let envColor = textureSampleLevel(t_envMap, s_envMap, vec2<f32>(envPhi, 1.0 - envTheta), envMip).rgb;\n";
-                s << "    let envFresnel = F0 + (1.0 - F0) * pow(1.0 - max(dot(N, V), 0.0), 5.0);\n";
-                s << "    let ambientSpecular = envFresnel * envColor * material.emissive.w;\n";
+                s << "    let maxMip    = f32(textureNumLevels(t_envMap) - 1u);\n";
+                s << "    let envMip    = roughness * maxMip;\n";
+                if (features & ShaderFeatures::EnvMapCube) {
+                    s << "    let envColor  = textureSampleLevel(t_envMap, s_envMap, R, envMip).rgb;\n";
+                    s << "    let envDiff   = textureSampleLevel(t_envMap, s_envMap, N, maxMip).rgb;\n";
+                } else {
+                    s << "    let envPhi    = atan2(R.x, R.z) * 0.15915494 + 0.5;\n";  // 1/(2π)
+                    s << "    let envTheta  = asin(clamp(R.y, -1.0, 1.0)) * 0.31830989 + 0.5;\n";  // 1/π
+                    s << "    let envColor  = textureSampleLevel(t_envMap, s_envMap, vec2<f32>(envPhi, 1.0 - envTheta), envMip).rgb;\n";
+                    s << "    let nPhi      = atan2(N.x, N.z) * 0.15915494 + 0.5;\n";
+                    s << "    let nTheta    = asin(clamp(N.y, -1.0, 1.0)) * 0.31830989 + 0.5;\n";
+                    s << "    let envDiff   = textureSampleLevel(t_envMap, s_envMap, vec2<f32>(nPhi, 1.0 - nTheta), maxMip).rgb;\n";
+                }
+                s << "    let envFresnel   = F0 + (1.0 - F0) * pow(1.0 - max(dot(N, V), 0.0), 5.0);\n";
+                s << "    let indirSpec    = envFresnel * envColor;\n";
+                s << "    let indirDiff    = envDiff * baseColor * (1.0 - metalness);\n";
+                s << "    let ambientSpecular = (indirSpec + indirDiff) * material.emissive.w;\n";
             } else {
                 s << "    let ambientSpecular = F0 * lights.ambient * (1.0 - roughness);\n";
             }
             s << "    baseColor = baseColor * (1.0 - metalness) * diffuseLight + specularLight + ambientSpecular + emissiveColor;\n";
         } else {
-            s << "    baseColor = baseColor * diffuseLight + specularLight + emissiveColor;\n";
+            if (features & (ShaderFeatures::EnvMap | ShaderFeatures::EnvMapCube)) {
+                s << "    let R = reflect(-V, N);\n";
+                if (features & ShaderFeatures::EnvMapCube) {
+                    s << "    let envColor = textureSample(t_envMap, s_envMap, R).rgb;\n";
+                } else {
+                    s << "    let envPhi   = atan2(R.x, R.z) * 0.15915494 + 0.5;\n";
+                    s << "    let envTheta = asin(clamp(R.y, -1.0, 1.0)) * 0.31830989 + 0.5;\n";
+                    s << "    let envColor = textureSample(t_envMap, s_envMap, vec2<f32>(envPhi, 1.0 - envTheta)).rgb;\n";
+                }
+                s << "    baseColor = baseColor * diffuseLight + specularLight + emissiveColor + envColor * material.emissive.w;\n";
+            } else {
+                s << "    baseColor = baseColor * diffuseLight + specularLight + emissiveColor;\n";
+            }
         }
 
         // LightMap

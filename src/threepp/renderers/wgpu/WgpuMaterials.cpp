@@ -51,8 +51,17 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry,
         if (m->lightMap) { p.lightMap = m->lightMap.get(); p.features |= ShaderFeatures::LightMap; }
         if (m->bumpMap) { p.bumpMap = m->bumpMap.get(); p.bumpScale = m->bumpScale; p.features |= ShaderFeatures::BumpMap; }
         if (m->displacementMap) { p.displacementMap = m->displacementMap.get(); p.displacementScale = m->displacementScale; p.features |= ShaderFeatures::DisplacementMap; }
-        if (m->envMap) { p.envMap = m->envMap.get(); p.envMapIntensity = m->envMapIntensity; p.features |= ShaderFeatures::EnvMap; }
-        else if (sceneEnvFallback && m->metalness > 0.0f) { p.envMap = sceneEnvFallback; p.envMapIntensity = 1.0f; p.features |= ShaderFeatures::EnvMap; }
+        if (m->envMap) {
+            p.envMap = m->envMap.get();
+            p.envMapIntensity = m->envMapIntensity;
+            const bool isCube = m->envMap->mapping == Mapping::CubeReflection || m->envMap->mapping == Mapping::CubeRefraction;
+            p.features |= isCube ? ShaderFeatures::EnvMapCube : ShaderFeatures::EnvMap;
+        } else if (sceneEnvFallback && m->metalness > 0.0f) {
+            p.envMap = sceneEnvFallback;
+            p.envMapIntensity = 1.0f;
+            const bool isCube = sceneEnvFallback->mapping == Mapping::CubeReflection || sceneEnvFallback->mapping == Mapping::CubeRefraction;
+            p.features |= isCube ? ShaderFeatures::EnvMapCube : ShaderFeatures::EnvMap;
+        }
         if (auto t = dynamic_cast<MeshPhysicalMaterial*>(rawMat)) {
             p.transmission = t->transmission;
             p.ior = t->ior;
@@ -95,6 +104,12 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry,
                            m->emissive.g * m->emissiveIntensity,
                            m->emissive.b * m->emissiveIntensity);
         if (m->map) { p.diffuseMap = m->map.get(); p.features |= ShaderFeatures::Texture; }
+        if (m->envMap) {
+            p.envMap = m->envMap.get();
+            p.envMapIntensity = m->envMapIntensity;
+            const bool isCube = m->envMap->mapping == Mapping::CubeReflection || m->envMap->mapping == Mapping::CubeRefraction;
+            p.features |= isCube ? ShaderFeatures::EnvMapCube : ShaderFeatures::EnvMap;
+        }
     } else if (dynamic_cast<MeshNormalMaterial*>(rawMat)) {
         p.features |= ShaderFeatures::NormalVis;
     } else if (dynamic_cast<MeshDepthMaterial*>(rawMat)) {

@@ -187,14 +187,16 @@ namespace threepp::wgpu {
             }
         }
 
-        // Binding 32-33: environment map (equirect 2D)
-        if (features & ShaderFeatures::EnvMap) {
+        // Binding 32-33: environment map (equirect 2D or cube)
+        if (features & (ShaderFeatures::EnvMap | ShaderFeatures::EnvMapCube)) {
             {
                 WGPUBindGroupLayoutEntry e{};
                 e.binding = 32;
                 e.visibility = WGPUShaderStage_Fragment;
                 e.texture.sampleType = WGPUTextureSampleType_Float;
-                e.texture.viewDimension = WGPUTextureViewDimension_2D;
+                e.texture.viewDimension = (features & ShaderFeatures::EnvMapCube)
+                    ? WGPUTextureViewDimension_Cube
+                    : WGPUTextureViewDimension_2D;
                 entries.push_back(e);
             }
             {

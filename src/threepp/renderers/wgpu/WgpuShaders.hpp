@@ -106,6 +106,9 @@ namespace threepp::wgpu {
         // DepthTestOff (bit 42): material has depthTest=false → WGPUCompareFunction_Always
         constexpr uint64_t DepthTestOff    = 1ULL << 42;
 
+        // EnvMapCube (bit 43): environment map is a cube texture (CubeReflection/CubeRefraction mapping)
+        constexpr uint64_t EnvMapCube      = 1ULL << 43;
+
         // Convenience: test if shader needs lighting calculations.
         inline bool isLit(uint64_t features) {
             return (features & (Lighting | Specular | PBR)) != 0;

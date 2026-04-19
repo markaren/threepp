@@ -27,9 +27,11 @@ int main() {
 
     Scene scene;
     scene.background = reflectionCube;
+    scene.environment = reflectionCube;
 
-    auto material = MeshLambertMaterial::create();
-    material->envMap = reflectionCube;
+    auto material = MeshStandardMaterial::create();
+    material->metalness = 0.9;
+    material->roughness = 0.1;
     auto mesh = Mesh::create(SphereGeometry::create(0.5), material);
     scene.add(mesh);
 

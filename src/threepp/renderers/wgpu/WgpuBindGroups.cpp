@@ -79,9 +79,14 @@ const std::vector<WGPUBindGroupEntry>& WgpuBindGroups::buildStandard(const BindG
     if (features & SF::GradientMap)     addTexEntries(26, 27, inputs.params.gradientMap);
     if (features & SF::DisplacementMap) addTexEntries(30, 31, inputs.params.displacementMap);
 
-    // Binding 32-33: environment map (equirect 2D)
-    if (features & SF::EnvMap) {
-        auto* te = inputs.params.envMap ? &inputs.textures.getOrCreateTexture(inputs.params.envMap) : &inputs.textures.getDummyTexture();
+    // Binding 32-33: environment map (equirect 2D or cube)
+    if (features & (SF::EnvMap | SF::EnvMapCube)) {
+        const TextureEntry* te;
+        if (features & SF::EnvMapCube) {
+            te = inputs.params.envMap ? &inputs.textures.getOrCreateCubeTexture(inputs.params.envMap) : &inputs.textures.getDummyCubeTexture();
+        } else {
+            te = inputs.params.envMap ? &inputs.textures.getOrCreateTexture(inputs.params.envMap) : &inputs.textures.getDummyTexture();
+        }
         { WGPUBindGroupEntry e{}; e.binding = 32; e.textureView = te->view; entries_.push_back(e); }
         { WGPUBindGroupEntry e{}; e.binding = 33; e.sampler = te->sampler; entries_.push_back(e); }
     }
