@@ -27,7 +27,7 @@ namespace threepp {
 
     public:
         struct Parameters;
-        typedef std::variant<bool, int, std::string, WindowSize, GraphicsAPI> ParameterValue;
+        typedef std::variant<bool, int, std::string, WindowSize> ParameterValue;
 
         explicit Canvas(const Parameters& params = Parameters());
 

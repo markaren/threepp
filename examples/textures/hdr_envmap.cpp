@@ -6,7 +6,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("HDR Environment Map", {{"graphicsApi", GraphicsAPI::OpenGL}});
+    Canvas canvas("HDR Environment Map");
     auto renderer = createRenderer(canvas);
     renderer->toneMapping = ToneMapping::ACESFilmic;
     renderer->toneMappingExposure = 1.0f;

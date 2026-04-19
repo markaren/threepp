@@ -57,7 +57,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("DirectionalLight", {{"aa", 4}, {"graphicsApi", GraphicsAPI::WebGPU}});
+    Canvas canvas("DirectionalLight", {{"aa", 4}});
     auto renderer = createRenderer(canvas);
     renderer->shadowMap().enabled = true;
     renderer->shadowMap().type = ShadowMap::PFCSoft;

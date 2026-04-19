@@ -9,7 +9,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("Transmission", {{"graphicsApi", GraphicsAPI::OpenGL}});
+    Canvas canvas("Transmission");
     auto renderer = createRenderer(canvas);
     renderer->toneMapping = ToneMapping::ACESFilmic;
     renderer->toneMappingExposure = 1.0f;

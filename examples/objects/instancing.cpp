@@ -42,7 +42,7 @@ int main() {
     int amount = 10;
     constexpr int maxAmount = 25;
 
-    Canvas canvas("Instancing", {{"aa", 4}, {"vsync", false}, {"graphicsApi", GraphicsAPI::WebGPU}});
+    Canvas canvas("Instancing", {{"aa", 4}, {"vsync", false}});
     auto renderer = createRenderer(canvas);
     renderer->autoClear = false;
     renderer->setClearColor(Color::aliceblue);

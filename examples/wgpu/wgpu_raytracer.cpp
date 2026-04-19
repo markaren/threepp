@@ -14,8 +14,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("Wgpu Path Tracer",
-                  {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
+    Canvas canvas("Wgpu Path Tracer", {{"vsync", false}});
 
     WgpuRenderer renderer(canvas);
     renderer.outputEncoding = Encoding::sRGB;

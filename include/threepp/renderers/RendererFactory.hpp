@@ -5,12 +5,13 @@
 #include "threepp/renderers/Renderer.hpp"
 
 #include <memory>
+#include <optional>
 
 namespace threepp {
 
     class Canvas;
 
-    std::unique_ptr<Renderer> createRenderer(Canvas& canvas);
+    std::unique_ptr<Renderer> createRenderer(Canvas& canvas, std::optional<GraphicsAPI> api = std::nullopt);
 
 }// namespace threepp
 

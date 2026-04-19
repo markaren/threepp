@@ -234,8 +234,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("Material Gallery",
-                  {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
+    Canvas canvas("Material Gallery", {{"vsync", false}});
 
     WgpuRenderer renderer(canvas);
     renderer.outputEncoding = Encoding::sRGB;

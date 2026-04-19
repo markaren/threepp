@@ -10,7 +10,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("GLTF Animation", {{"aa", 4}, {"graphicsApi", GraphicsAPI::OpenGL}});
+    Canvas canvas("GLTF Animation", {{"aa", 4}});
     auto renderer = createRenderer(canvas);
     renderer->shadowMap().enabled = true;
 

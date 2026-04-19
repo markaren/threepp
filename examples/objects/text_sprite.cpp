@@ -7,7 +7,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("TextSprite", {{"aa", 4}, {"vsync", false}, {"graphicsApi", GraphicsAPI::WebGPU}});
+    Canvas canvas("TextSprite", {{"aa", 4}, {"vsync", false}});
     auto renderer = createRenderer(canvas);
 
     Scene scene;

@@ -78,8 +78,7 @@ int main(int argc, char** argv) {
     std::cout << "Found " << models.size() << " models" << std::endl;
 
     // ---- Window & Renderer ----
-    Canvas canvas("GLTF Samples",
-                  {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
+    Canvas canvas("GLTF Samples", {{"vsync", false}});
 
     WgpuRenderer renderer(canvas);
     renderer.outputEncoding = Encoding::sRGB;

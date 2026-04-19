@@ -571,10 +571,6 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
             headless(std::get<bool>(value));
             used = true;
 
-        } else if (key == "graphicsApi") {
-
-            graphicsApi(std::get<GraphicsAPI>(value));
-            used = true;
         }
 
         if (!used) {
