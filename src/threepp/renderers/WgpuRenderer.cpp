@@ -929,6 +929,13 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
             wgpuSurfaceGetCapabilities(surface, adapter, &caps);
             if (caps.formatCount > 0 && caps.formats) {
                 surfaceFormat = caps.formats[0];
+                // Strip sRGB suffix: use the linear equivalent so that RTs and pipelines
+                // are always in linear space. sRGB encoding is applied explicitly by the
+                // tone-map blit when outputEncoding == Encoding::sRGB — exactly like GL.
+                if (surfaceFormat == WGPUTextureFormat_BGRA8UnormSrgb)
+                    surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
+                else if (surfaceFormat == WGPUTextureFormat_RGBA8UnormSrgb)
+                    surfaceFormat = WGPUTextureFormat_RGBA8Unorm;
             }
             wgpuSurfaceCapabilitiesFreeMembers(caps);
 
@@ -1330,12 +1337,28 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 s << "    let x = max(vec3<f32>(0.0), rgb - vec3<f32>(0.004));\n";
                 s << "    rgb = (x * (6.2 * x + vec3<f32>(0.5))) / (x * (6.2 * x + vec3<f32>(1.7)) + vec3<f32>(0.06));\n";
                 break;
-            case ToneMapping::ACESFilmic:
-                s << "    rgb = rgb * exposure;\n";
-                s << "    let a = rgb * (rgb * 2.51 + vec3<f32>(0.03));\n";
-                s << "    let b = rgb * (rgb * 2.43 + vec3<f32>(0.59)) + vec3<f32>(0.14);\n";
-                s << "    rgb = clamp(a / b, vec3<f32>(0.0), vec3<f32>(1.0));\n";
+            case ToneMapping::ACESFilmic: {
+                // Full three.js ACES: sRGB→AP1→RRT+ODT→sRGB, scaled by exposure/0.6.
+                // Matches GLRenderer's ACESFilmicToneMapping() exactly.
+                s << "    {\n"
+                  << "        let acesIn = mat3x3<f32>(\n"
+                  << "            vec3<f32>(0.59719, 0.07600, 0.02840),\n"
+                  << "            vec3<f32>(0.35458, 0.90834, 0.13383),\n"
+                  << "            vec3<f32>(0.04823, 0.01566, 0.83777));\n"
+                  << "        let acesOut = mat3x3<f32>(\n"
+                  << "            vec3<f32>( 1.60475, -0.10208, -0.00327),\n"
+                  << "            vec3<f32>(-0.53108,  1.10813, -0.07276),\n"
+                  << "            vec3<f32>(-0.07367, -0.00605,  1.07602));\n"
+                  << "        rgb = rgb * (exposure / 0.6);\n"
+                  << "        rgb = acesIn * rgb;\n"
+                  << "        let ra = rgb * (rgb + vec3<f32>(0.0245786)) - vec3<f32>(0.000090537);\n"
+                  << "        let rb = rgb * (0.983729 * rgb + vec3<f32>(0.4329510)) + vec3<f32>(0.238081);\n"
+                  << "        rgb = ra / rb;\n"
+                  << "        rgb = acesOut * rgb;\n"
+                  << "        rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));\n"
+                  << "    }\n";
                 break;
+            }
             default:
                 break;
         }
