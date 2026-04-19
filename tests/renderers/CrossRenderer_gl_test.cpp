@@ -628,7 +628,7 @@ TEST_CASE("GL: combined ambient + directional + point lights are brighter than s
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 3;
 
-    auto makeSingleLightScene = []() {
+    auto makeSingleLightScene = [] {
         auto scene = Scene::create();
         auto dirLight = DirectionalLight::create(Color(0xffffff), 0.5f);
         dirLight->position.set(0, 0, 1);
@@ -640,7 +640,7 @@ TEST_CASE("GL: combined ambient + directional + point lights are brighter than s
         return scene;
     };
 
-    auto makeMultiLightScene = []() {
+    auto makeMultiLightScene = [] {
         auto scene = Scene::create();
         auto ambient = AmbientLight::create(Color(0x404040));
         scene->add(ambient);

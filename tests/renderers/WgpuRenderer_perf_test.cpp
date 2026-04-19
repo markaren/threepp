@@ -80,15 +80,12 @@ TEST_CASE("WgpuRenderer performance baseline", "[wgpu][perf]") {
     camera->lookAt({0, 0, 0});
 
     // --- Create Wgpu renderer and render target ---
-    static Canvas* perfCanvas = nullptr;
-    if (!perfCanvas) {
-        perfCanvas = new Canvas(Canvas::Parameters()
+    Canvas perfCanvas(Canvas::Parameters()
             .size(PERF_RT_WIDTH, PERF_RT_HEIGHT)
-            .headless(true)
-            .graphicsApi(GraphicsAPI::WebGPU));
-    }
+            .headless(true));
 
-    WgpuRenderer renderer(*perfCanvas);
+
+    WgpuRenderer renderer(perfCanvas);
     renderer.setClearColor(Color(0.1f, 0.1f, 0.15f));
 
     auto target = RenderTarget::create(PERF_RT_WIDTH, PERF_RT_HEIGHT, RenderTarget::Options{});

@@ -9,13 +9,12 @@ int main() {
 
     Canvas::Parameters params;
     params.title("Wgpu Lit Scene")
-          .size(800, 600)
-          .graphicsApi(GraphicsAPI::WebGPU);
+          .size(800, 600);
 
     Canvas canvas(params);
 
     WgpuRenderer renderer(canvas);
-    renderer.setClearColor(Color(0x1a1a2e));
+    renderer.setClearColor(0x1a1a2e);
 
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100.f);
     camera->position.z = 5;

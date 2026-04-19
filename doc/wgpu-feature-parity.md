@@ -2,7 +2,7 @@
 
 Comparison of WgpuRenderer (WebGPU/wgpu-native) vs GLRenderer (OpenGL 3.3) feature coverage.
 
-Last updated: 2026-03-21
+Last updated: 2026-04-19
 
 
 ## Legend
@@ -133,6 +133,7 @@ Last updated: 2026-03-21
 | Face culling                     | Y   | Y    | Front/Back/None                       |
 | Blending modes                   | Y   | Y    | Normal/Additive/Subtractive/Multiply  |
 | Depth write control              | Y   | Y    |                                       |
+| Depth test control               | Y   | Y    |                                       |
 | Scissor test                     | Y   | Y    |                                       |
 | Viewport control                 | Y   | Y    |                                       |
 | Clear color/alpha                | Y   | Y    |                                       |
@@ -224,18 +225,18 @@ Last updated: 2026-03-21
 ## Platform Support
 
 
-| Platform                | GL  | Wgpu | Notes                                          |
-| ----------------------- | --- | ---- | ---------------------------------------------- |
-| Windows                 | Y   | Y    | Vulkan backend via wgpu-native                 |
-| macOS                   | Y   | Y    | Metal backend via wgpu-native                  |
-| Linux                   | Y   | Y    | Vulkan backend via wgpu-native                 |
-| Emscripten (WebAssembly)| N   | Y    | Direct browser WebGPU; no wgpu-native needed   |
+| Platform                | GL | Wgpu | Notes                                          |
+| ----------------------- |----| ---- | ---------------------------------------------- |
+| Windows                 | Y  | Y    | Vulkan backend via wgpu-native                 |
+| macOS                   | Y  | Y    | Metal backend via wgpu-native                  |
+| Linux                   | Y  | Y    | Vulkan backend via wgpu-native                 |
+| Emscripten (WebAssembly)| Y  | Y    | Direct browser WebGPU; no wgpu-native needed   |
 
 
 ## Shader Feature Flags (Dynamic WGSL Generation)
 
 The Wgpu shader generator uses a 64-bit feature bitmask to select shader variants.
-41 flags control material model, topology, maps, effects, and rendering modes:
+42 flags control material model, topology, maps, effects, and rendering modes:
 
 | Category        | Flags                                                              |
 | --------------- | ------------------------------------------------------------------ |
@@ -245,13 +246,13 @@ The Wgpu shader generator uses a 64-bit feature bitmask to select shader variant
 | Instance/morph  | Instanced, InstanceColor, MorphTargets, Skinning                  |
 | Visualisation   | NormalVis, DepthVis                                               |
 | Effects         | FogLinear, FogExp2, Shadow, ShadowMat, LineDashed                 |
-| Rendering       | SRGBOutput, VertexColors, DepthWriteOff, Wireframe                |
+| Rendering       | SRGBOutput, VertexColors, DepthWriteOff, DepthTestOff, Wireframe  |
 | Config          | CullMode (2 bits), BlendMode (3 bits), ToneMapping (3 bits)       |
 
 
 ## Test Coverage
 
-- **95 Wgpu-specific test cases** in `CrossRenderer_wgpu_test` (204 assertions)
-- **Cross-renderer parity tests** in `CrossRenderer_parity_test` validating GL↔Wgpu consistency
+- **105 Wgpu-specific test cases** in `CrossRenderer_wgpu_test` (324+ assertions)
+- **42 cross-renderer parity tests** in `CrossRenderer_parity_test` (182 assertions) validating GL↔Wgpu consistency
 - **Performance tests** in `WgpuRenderer_perf_test`
-- **32 total CTest targets** across the project, all passing
+- **23 total CTest targets** across the project

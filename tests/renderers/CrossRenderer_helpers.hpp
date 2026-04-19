@@ -253,12 +253,9 @@ namespace crosstest {
     // Render with Wgpu, return pixel data
     inline std::vector<unsigned char> renderWithWgpu(Object3D& scene, Camera& camera, const Color& clearColor) {
         // Wgpu canvas is created on demand (only when Wgpu is available)
-        static Canvas* wgpuCanvasPtr = nullptr;
-        if (!wgpuCanvasPtr) {
-            wgpuCanvasPtr = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-        }
+        Canvas wgpuCanvasPtr(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true));
 
-        WgpuRenderer renderer(*wgpuCanvasPtr);
+        WgpuRenderer renderer(wgpuCanvasPtr);
         renderer.setClearColor(clearColor);
 
         auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});

@@ -4221,3 +4221,58 @@ TEST_CASE("Wgpu: windowed surface resize with MSAA does not crash", "[wgpu][surf
     CHECK(true);
     renderer.dispose();
 }
+
+TEST_CASE("Wgpu: depthTest=false renders on top of occluding geometry", "[wgpu]") {
+    REQUIRE_WGPU();
+
+    // A red sphere sits in front of (occluding) where a blue plane would appear.
+    // With depthTest=true the blue plane is hidden. With depthTest=false it renders on top.
+
+    auto makeScene = [](bool noDepthTest) {
+        auto scene = Scene::create();
+        auto ambient = AmbientLight::create(Color(0xffffff));
+        scene->add(ambient);
+
+        // Red sphere at z=0 — occludes anything behind it from camera at z=5
+        auto sphereGeo = SphereGeometry::create(1.5f, 16, 8);
+        auto sphereMat = MeshBasicMaterial::create();
+        sphereMat->color = Color(0xff0000);
+        scene->add(Mesh::create(sphereGeo, sphereMat));
+
+        // Blue plane behind the sphere
+        auto planeGeo = PlaneGeometry::create(4.0f, 4.0f);
+        auto planeMat = MeshBasicMaterial::create();
+        planeMat->color = Color(0x0000ff);
+        planeMat->depthTest = !noDepthTest;
+        planeMat->depthWrite = false;
+        planeMat->transparent = true;
+        auto plane = Mesh::create(planeGeo, planeMat);
+        plane->position.z = -0.5f;
+        scene->add(plane);
+
+        return scene;
+    };
+
+    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
+    camera->position.z = 5;
+    Color clearColor(0x000000);
+
+    auto depthTestPixels   = renderWithWgpu(*makeScene(false), *camera, clearColor);
+    auto noDepthTestPixels = renderWithWgpu(*makeScene(true),  *camera, clearColor);
+
+    // Count blue-dominant pixels (b > r && b > 10)
+    auto countBlueDominant = [](const std::vector<uint8_t>& px) {
+        int n = 0;
+        for (size_t i = 0; i + 2 < px.size(); i += 3) {
+            if (px[i + 2] > px[i] && px[i + 2] > 10) ++n;
+        }
+        return n;
+    };
+
+    int blueDT   = countBlueDominant(depthTestPixels);
+    int blueNoDT = countBlueDominant(noDepthTestPixels);
+
+    // depthTest=true: blue plane hidden behind red sphere — few or no blue pixels at center
+    // depthTest=false: blue plane ignores depth and draws on top — more blue pixels visible
+    CHECK(blueNoDT > blueDT);
+}
