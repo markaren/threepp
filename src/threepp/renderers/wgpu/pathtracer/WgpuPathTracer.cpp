@@ -2744,6 +2744,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // while warp-mates continue tracing long paths, reducing idle lanes.
     constexpr uint32_t rtWorkgroups = 1024u;
 
+    // F0 (rt_primary_main) and F1a (rt_main) use direct 2-D tiled dispatch: one
+    // thread per pixel, @workgroup_size(8,8).  No compaction has happened yet
+    // there — every pixel must be processed, so atomic work-stealing added
+    // contention without load-balancing gain.  Tiled dispatch also preserves
+    // spatial coherence for BVH traversal and material fetches.
+    const uint32_t tileDispX = (d.width_  + 7u) / 8u;
+    const uint32_t tileDispY = (d.height_ + 7u) / 8u;
+
     for (int sampleIdx = 0; sampleIdx < d.spp_; ++sampleIdx) {
 
         // Update frame count in uniforms for each sample (different random seed)
@@ -2836,14 +2844,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             // Kernel split — step 1: primary BVH traversal → primaryHitBuf.
             passDesc.label = WGPUStringView{"rt_primary_pass", WGPU_STRLEN};
             WGPUComputePassEncoder primaryPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
-            d.primaryPipeline.encode(primaryPass, rtWorkgroups, 1u);
+            d.primaryPipeline.encode(primaryPass, tileDispX, tileDispY);
             wgpuComputePassEncoderEnd(primaryPass);
             wgpuComputePassEncoderRelease(primaryPass);
 
             // Kernel split — step 2: primaryShade + NEE + ReSTIR DI + serialize → pathStateBuf.
             passDesc.label = WGPUStringView{"rt_pass", WGPU_STRLEN};
             WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
-            activePipeline.encode(pass, rtWorkgroups, 1u);
+            activePipeline.encode(pass, tileDispX, tileDispY);
             wgpuComputePassEncoderEnd(pass);
             wgpuComputePassEncoderRelease(pass);
 

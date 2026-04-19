@@ -2923,17 +2923,14 @@ const char* const csPathTraceWGSL3 = R"(
 @compute @workgroup_size(8, 8)
 fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res   = rt.iRes.xy;
-    let totalPixels = u32(res.x) * u32(res.y);
     let resXu = u32(res.x);
-    // Persistent-thread work-stealing loop.  Each iteration claims one pixel
-    // from the global queue.  Batch-pull (N=8) was tried and found slower —
-    // atomic contention wasn't the bottleneck; losing per-pixel work-stealing
-    // granularity cost more than the saved atomic traffic.
-    loop {
-        let pixelIdx = atomicAdd(&pathCounter, 1u);
-        if (pixelIdx >= totalPixels) { break; }
-        let pixel = vec2<i32>(i32(pixelIdx % resXu), i32(pixelIdx / resXu));
-
+    // Direct pixel assignment: no compaction has happened yet, every pixel needs
+    // shading.  2-D tiled dispatch keeps adjacent pixels in the same workgroup
+    // → coherent material/texture access.
+    let pixel = vec2<i32>(gid.xy);
+    if (pixel.x >= i32(res.x) || pixel.y >= i32(res.y)) { return; }
+    let pixelIdx = u32(pixel.y) * resXu + u32(pixel.x);
+    {
         let fc         = u32(rt.frameCount.x);
         let foveatedOn = rt.params.z > 0.5;
 
@@ -3104,7 +3101,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             textureStore(giResWWrite,  pixel, textureLoad(giResWRead,  src, 0));
             textureStore(giResLoWrite, pixel, textureLoad(giResLoRead, src, 0));
         }
-        continue;
+        return;
     }
 )"
 R"(
@@ -3234,7 +3231,7 @@ R"(
             entry.w11 = vec4<f32>(0.0);
             pathStateBuf[pixelIdx] = entry;
         }
-        continue;
+        return;
     }
 
     let rh = RawHit(packed.t, packed.triIdx, packed.u, packed.v);
@@ -3331,7 +3328,7 @@ R"(
             let prevFlags = u32(pathStateBuf[pixelIdx].w2.w);
             pathStateBuf[pixelIdx].w2.w = f32(prevFlags | 32u);
         }
-        continue;
+        return;
     }
 
     // accumulation + hitMesh write live in rt_bounces_main (hitMesh depends on
@@ -3339,7 +3336,7 @@ R"(
     textureStore(albedoWrite,  pixel, vec4<f32>(primaryAlbedo, primaryRough));
 
     textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
-    }  // end of work-stealing loop
+    }  // end of per-pixel block
 }
 
 // ---------------------------------------------------------------------------
@@ -3361,13 +3358,14 @@ R"(
 @compute @workgroup_size(8, 8)
 fn rt_primary_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let res   = rt.iRes.xy;
-    let totalPixels = u32(res.x) * u32(res.y);
     let resXu = u32(res.x);
-    loop {
-        let pixelIdx = atomicAdd(&primaryCounter, 1u);
-        if (pixelIdx >= totalPixels) { break; }
-        let pixel = vec2<i32>(i32(pixelIdx % resXu), i32(pixelIdx / resXu));
-
+    // Direct pixel assignment: no compaction has happened yet, every pixel needs
+    // tracing.  2-D tiled dispatch (ceil(w/8), ceil(h/8)) gives each workgroup an
+    // 8×8 tile → BVH traversal shares cache across adjacent rays.
+    let pixel = vec2<i32>(gid.xy);
+    if (pixel.x >= i32(res.x) || pixel.y >= i32(res.y)) { return; }
+    let pixelIdx = u32(pixel.y) * resXu + u32(pixel.x);
+    {
         let fc = u32(rt.frameCount.x);
         // Jitter derivation must match rt_main exactly so both kernels trace the
         // same camera ray for this pixel.  sceneHitRaw's stochastic alpha uses
