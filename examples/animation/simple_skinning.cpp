@@ -1,7 +1,8 @@
 #include "threepp/animation/AnimationMixer.hpp"
 #include "threepp/helpers/SkeletonHelper.hpp"
-#include "threepp/loaders/AssimpLoader.hpp"
+#include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -49,18 +50,16 @@ int main() {
 
     //
 
-    AssimpLoader loader;
+    ModelLoader loader;
 
     auto model = loader.load(std::string(DATA_FOLDER) + "/models/gltf/SimpleSkinning.gltf");
     model->traverseType<SkinnedMesh>([](auto& m) {
-
         m.receiveShadow = true;
         m.castShadow = true;
-
     });
     scene.add(model);
 
-    auto mixer = AnimationMixer(*model);
+    AnimationMixer mixer = AnimationMixer(*model);
     mixer.clipAction(AnimationClip::findByName(model->animations, "Take 01"))->play();
 
     auto skeletonHelper = SkeletonHelper::create(*model);

@@ -27,6 +27,8 @@ namespace threepp {
 
         [[nodiscard]] std::string name() const { return name_; }
 
+        [[nodiscard]] float getDuration() const { return duration; }
+
         void resetDuration();
 
         static std::shared_ptr<AnimationClip> findByName(const Object3D& object, const std::string& name);

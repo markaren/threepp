@@ -40,7 +40,11 @@ std::shared_ptr<Group> ModelLoader::load(const std::filesystem::path& path) {
     if (ext == ".gltf" || ext == ".glb") {
         thread_local GLTFLoader loader;
         auto result = loader.load(path);
-        if (result) return result->scene;
+        if (result) {
+            auto scene = result->scene;
+            scene->animations = result->animations;
+            return scene;
+        }
         std::cerr << "[ModelLoader] GLTFLoader returned no result for '" << path << "'." << std::endl;
         return nullptr;
     }
