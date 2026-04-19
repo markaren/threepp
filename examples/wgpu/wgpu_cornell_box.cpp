@@ -123,9 +123,10 @@ namespace {
 int main() {
 
     Canvas canvas("Cornell Box",
-                  {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
+                  { {"vsync", false}});
 
     WgpuRenderer renderer(canvas);
+    renderer.outputEncoding = Encoding::sRGB;
     renderer.shadowMap().enabled = true;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());

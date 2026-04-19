@@ -361,9 +361,10 @@ namespace {
 int main() {
 
     Canvas canvas("WgpuPathTracer — The Jewel Room",
-                  {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
+                  { {"vsync", false}});
 
     WgpuRenderer renderer(canvas);
+    renderer.outputEncoding = Encoding::sRGB;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
     pathTracer.setMaxBounces(4);

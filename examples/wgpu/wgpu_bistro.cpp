@@ -28,9 +28,10 @@ int main(int argc, char** argv) {
 
     // ---- Window & Renderer ----
     Canvas canvas("Bistro scene",
-                  {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
+                  { {"vsync", false}});
 
     WgpuRenderer renderer(canvas);
+    renderer.outputEncoding = Encoding::sRGB;
     renderer.shadowMap().enabled = true;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());

@@ -125,8 +125,8 @@ Last updated: 2026-04-19
 | Tone mapping (Linear)            | Y   | Y    |                                       |
 | Tone mapping (Reinhard)          | Y   | Y    |                                       |
 | Tone mapping (Cineon)            | Y   | Y    |                                       |
-| Tone mapping (ACESFilmic)        | Y   | Y    |                                       |
-| sRGB output encoding             | Y   | Y    |                                       |
+| Tone mapping (ACESFilmic)        | Y   | Y    | Full matrix ACES (matches GL); post-process blit per RT |
+| sRGB output encoding             | Y   | Y    | Applied explicitly in blit; linear surfaceFormat used  |
 | MSAA                             | Y   | P    | Wgpu supports 1x or 4x only          |
 | Render targets (RTT)             | Y   | Y    |                                       |
 | Pixel readback                   | Y   | Y    | BGRA8 → RGB8 conversion              |

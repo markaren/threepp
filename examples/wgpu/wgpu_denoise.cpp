@@ -96,9 +96,10 @@ namespace {
 int main() {
 
     Canvas canvas("Hybrid Deferred Showcase",
-                  {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
+                  {{"vsync", false}});
 
     WgpuRenderer renderer(canvas);
+    renderer.outputEncoding = Encoding::sRGB;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
     pathTracer.setEnvIntensity(0.0f);

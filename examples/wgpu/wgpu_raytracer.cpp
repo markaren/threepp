@@ -18,6 +18,7 @@ int main() {
                   {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
 
     WgpuRenderer renderer(canvas);
+    renderer.outputEncoding = Encoding::sRGB;
     renderer.shadowMap().enabled = true;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
