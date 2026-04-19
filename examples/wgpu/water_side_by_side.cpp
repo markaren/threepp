@@ -103,8 +103,7 @@ int main() {
     // Headless Wgpu canvas for offscreen rendering
     Canvas wgpuCanvas(Canvas::Parameters()
                               .size(halfW, halfH)
-                              .headless(true)
-                              .graphicsApi(GraphicsAPI::WebGPU));
+                              .headless(true));
     WgpuRenderer wgpuRenderer(wgpuCanvas);
     wgpuRenderer.checkShaderErrors = true;
     wgpuRenderer.toneMapping = ToneMapping::ACESFilmic;

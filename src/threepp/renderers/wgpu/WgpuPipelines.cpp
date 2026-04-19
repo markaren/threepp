@@ -255,9 +255,11 @@ namespace threepp::wgpu {
     PipelineEntry& WgpuPipelines::getOrCreatePipeline(uint64_t features,
                                                        WGPUTextureFormat surfaceFormat,
                                                        uint32_t sampleCount) {
-        // Encode sampleCount in bit 62 so pipelines compiled for different MSAA
-        // counts are cached separately and never used in a mismatched render pass.
-        const uint64_t cacheKey = features | (sampleCount > 1 ? (1ULL << 62) : 0ULL);
+        // Encode sampleCount in bit 62 and RGBA16Float format in bit 61 so pipelines
+        // compiled for different MSAA counts or target formats are cached separately.
+        const uint64_t cacheKey = features
+                                | (sampleCount > 1 ? (1ULL << 62) : 0ULL)
+                                | (surfaceFormat == WGPUTextureFormat_RGBA16Float ? (1ULL << 61) : 0ULL);
         auto it = pipelineCache_.find(cacheKey);
         if (it != pipelineCache_.end()) return it->second;
 
@@ -427,9 +429,10 @@ namespace threepp::wgpu {
         const bool isGlsl = sm->vertexShader.find("gl_Position") != std::string::npos ||
                              sm->fragmentShader.find("gl_FragColor") != std::string::npos;
 
-        // Encode sampleCount in bit 32 so MSAA and non-MSAA variants are cached separately.
+        // Encode sampleCount in bit 32 and RGBA16Float in bit 33 for separate cache entries.
         const uint64_t customCacheKey = static_cast<uint64_t>(sm->id)
-                                      | (sampleCount > 1 ? (1ULL << 32) : 0ULL);
+                                      | (sampleCount > 1 ? (1ULL << 32) : 0ULL)
+                                      | (surfaceFormat == WGPUTextureFormat_RGBA16Float ? (1ULL << 33) : 0ULL);
 
 #ifndef THREEPP_WGPU_GLSL_COMPAT
         if (isGlsl) {

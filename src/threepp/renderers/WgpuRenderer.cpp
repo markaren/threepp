@@ -202,6 +202,10 @@ struct WgpuRenderer::Impl {
     // Effective sample count for the current render pass (may be 1 when
     // rendering to the non-MSAA tone mapping intermediate RT).
     uint32_t effectiveSampleCount_ = 1;
+    // Color format of the current render pass color attachment.
+    // RGBA16Float when routing through the HDR intermediate (tone mapping active);
+    // surfaceFormat (BGRA8Unorm) otherwise.
+    WGPUTextureFormat activeColorFormat_ = WGPUTextureFormat_BGRA8Unorm;
 
     // Single command encoder for the entire frame.  All render passes recorded
     // within one animation frame — including nested mirror renders, the tone-map
@@ -1490,14 +1494,16 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         toneMap_.width = w;
         toneMap_.height = h;
 
-        // Color texture (non-MSAA, used as texture binding source)
+        // Color texture (non-MSAA, used as texture binding source).
+        // RGBA16Float preserves HDR values >1.0 so tone mapping in the blit
+        // can correctly compress the full dynamic range.
         WGPUTextureDescriptor td{};
         td.label = WGPUStringView{"tonemap_color", sizeof("tonemap_color") - 1};
         td.size = {w, h, 1};
         td.mipLevelCount = 1;
         td.sampleCount = 1;
         td.dimension = WGPUTextureDimension_2D;
-        td.format = surfaceFormat;
+        td.format = WGPUTextureFormat_RGBA16Float;
         td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopySrc;
         toneMap_.colorTexture = wgpuDeviceCreateTexture(device, &td);
         toneMap_.colorView = wgpuTextureCreateView(toneMap_.colorTexture, nullptr);
@@ -1601,6 +1607,70 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         wgpuTextureViewRelease(surfaceColorView);
 #endif
         // toneMap_.uniformBuf, cachedInputView, cachedBindGroup are persistent — not released here
+    }
+
+    // Blit toneMap_.colorTexture (RGBA16Float HDR) into an arbitrary BGRA8Unorm destination
+    // texture with tone mapping applied. Used after rendering a user RT to the RGBA16Float
+    // intermediate so the final RT contains correctly tone-mapped SDR pixels.
+    void toneMapBlitToTexture(WGPUTexture dstTexture, uint32_t w, uint32_t h) {
+        ensureToneMapResources();
+
+        int idx = toneMapPipelineIndex();
+        if (!toneMap_.pipelines[idx]) return;
+
+        const float exposure = scope.toneMappingExposure;
+        if (exposure != toneMap_.lastExposure) {
+            float params[4] = {exposure, 0, 0, 0};
+            wgpuQueueWriteBuffer(queue, toneMap_.uniformBuf, 0, params, 16);
+            toneMap_.lastExposure = exposure;
+        }
+
+        // Build a fresh bind group pointing at the RGBA16Float source texture.
+        WGPUTextureView srcView = wgpuTextureCreateView(toneMap_.colorTexture, nullptr);
+
+        WGPUBindGroupEntry bgEntries[3]{};
+        bgEntries[0].binding = 0; bgEntries[0].textureView = srcView;
+        bgEntries[1].binding = 1; bgEntries[1].sampler = toneMap_.sampler;
+        bgEntries[2].binding = 2; bgEntries[2].buffer = toneMap_.uniformBuf; bgEntries[2].size = 16;
+
+        WGPUBindGroupDescriptor bgDesc{};
+        bgDesc.layout = toneMap_.bindGroupLayout;
+        bgDesc.entryCount = 3;
+        bgDesc.entries = bgEntries;
+        WGPUBindGroup bg = wgpuDeviceCreateBindGroup(device, &bgDesc);
+
+        // The destination texture (RT.colorTexture) is BGRA8Unorm — use surfaceFormat view.
+        WGPUTextureViewDescriptor vd{};
+        vd.format = surfaceFormat;
+        vd.dimension = WGPUTextureViewDimension_2D;
+        vd.mipLevelCount = 1; vd.arrayLayerCount = 1;
+        vd.aspect = WGPUTextureAspect_All;
+        WGPUTextureView dstView = wgpuTextureCreateView(dstTexture, &vd);
+
+        WGPURenderPassColorAttachment ca{};
+        ca.view = dstView;
+        ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+        ca.loadOp = WGPULoadOp_Clear;
+        ca.storeOp = WGPUStoreOp_Store;
+        ca.clearValue = {0, 0, 0, 1};
+
+        WGPURenderPassDescriptor rpDesc{};
+        rpDesc.label = WGPUStringView{"tonemap_rt_blit", sizeof("tonemap_rt_blit") - 1};
+        rpDesc.colorAttachmentCount = 1;
+        rpDesc.colorAttachments = &ca;
+
+        WGPURenderPassEncoder rp = wgpuCommandEncoderBeginRenderPass(renderEncoder_, &rpDesc);
+        wgpuRenderPassEncoderSetPipeline(rp, toneMap_.pipelines[idx]);
+        wgpuRenderPassEncoderSetBindGroup(rp, 0, bg, 0, nullptr);
+        wgpuRenderPassEncoderDraw(rp, 3, 1, 0, 0);
+        wgpuRenderPassEncoderEnd(rp);
+        wgpuRenderPassEncoderRelease(rp);
+
+#ifndef __EMSCRIPTEN__
+        wgpuTextureViewRelease(dstView);
+        wgpuTextureViewRelease(srcView);
+#endif
+        wgpuBindGroupRelease(bg);
     }
 
     // Render the ImGui overlay directly to the surface (after tone map blit).
@@ -1892,16 +1962,19 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             if (!acquireFrame()) return;
 
             if (needsToneMapPass()) {
-                // Redirect to intermediate RT; endFrame() will blit with tone mapping
+                // Redirect to RGBA16Float intermediate; endFrame() blits with tone mapping.
+                // The HDR intermediate preserves values >1.0 so ACES operates on full range.
                 ensureToneMapRT(frame_.width, frame_.height);
                 colorView = toneMap_.colorView;
                 depthView = toneMap_.depthView;
                 resolveView = nullptr; // No MSAA on the intermediate RT
                 effectiveSampleCount_ = 1;
+                activeColorFormat_ = WGPUTextureFormat_RGBA16Float;
             } else {
                 colorView = frame_.colorView;
                 depthView = frame_.depthView;
                 resolveView = frame_.resolveView;
+                activeColorFormat_ = surfaceFormat;
             }
             attachW = frame_.width;
             attachH = frame_.height;
@@ -1909,13 +1982,25 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             auto& rt = renderTargets->getOrCreate(currentRenderTarget_, sampleCount_);
             attachW = rt.width;
             attachH = rt.height;
-            depthView = rt.depthView;
-            if (sampleCount_ > 1 && rt.msaaColorView) {
-                colorView = rt.msaaColorView;
-                resolveView = rt.colorView;
+            if (needsToneMapPass()) {
+                // Redirect scene through RGBA16Float intermediate so HDR values >1.0 are
+                // preserved. After the render pass, toneMapBlitToTexture() compresses to
+                // the BGRA8Unorm RT — same pattern as the surface path.
+                ensureToneMapRT(rt.width, rt.height);
+                colorView = toneMap_.colorView;
+                depthView = toneMap_.depthView;
+                effectiveSampleCount_ = 1;
+                activeColorFormat_ = WGPUTextureFormat_RGBA16Float;
             } else {
-                colorView = rt.colorView;
-                effectiveSampleCount_ = 1; // RT has no MSAA; use 1-sample pipelines
+                depthView = rt.depthView;
+                if (sampleCount_ > 1 && rt.msaaColorView) {
+                    colorView = rt.msaaColorView;
+                    resolveView = rt.colorView;
+                } else {
+                    colorView = rt.colorView;
+                    effectiveSampleCount_ = 1; // RT has no MSAA; use 1-sample pipelines
+                }
+                activeColorFormat_ = surfaceFormat;
             }
         }
 
@@ -2023,7 +2108,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         // Draw a fullscreen triangle at z=1 with the clear color to fill only the scissored region.
         if (scissoredClear) {
             drawScissoredClear(pass, effectiveClearColor, effectiveClearAlpha,
-                               surfaceFormat, effectiveSampleCount_);
+                               activeColorFormat_, effectiveSampleCount_);
         }
 
         // Draw environment map background (equirectangular) when available.
@@ -2034,7 +2119,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             Matrix4 invVP;
             invVP.copy(vp).invert();
             drawEnvBackground(pass, invVP, sceneObj->environment.get(),
-                              surfaceFormat, effectiveSampleCount_);
+                              activeColorFormat_, effectiveSampleCount_);
         }
 
         // Build per-frame rendering context
@@ -2051,11 +2136,12 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 frameCtx.fogBits = SF::FogExp2;
             }
         }
-        // When rendering to a render target, apply tone mapping per-object
-        // in shaders (the post-process blit only applies to surface rendering).
-        // When rendering to the surface, leave bits at zero — endFrame() handles it.
+        // Tone mapping is handled by the post-process blit when RGBA16Float intermediate
+        // is active (both surface path and RT path with needsToneMapPass()).
+        // Per-object shader bits are only needed when rendering directly to BGRA8Unorm
+        // without an intermediate (e.g. RT renders with ToneMapping::None).
         frameCtx.toneMappingExposure = scope.toneMappingExposure;
-        if (currentRenderTarget_) {
+        if (currentRenderTarget_ && activeColorFormat_ != WGPUTextureFormat_RGBA16Float) {
             switch (scope.toneMapping) {
                 case ToneMapping::Linear:    frameCtx.tonemapBits = SF::TonemapLinear; break;
                 case ToneMapping::Reinhard:  frameCtx.tonemapBits = SF::TonemapReinhard; break;
@@ -2170,6 +2256,14 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         wgpuRenderPassEncoderEnd(pass);
         wgpuRenderPassEncoderRelease(pass);
 
+        // When rendering to a user RT through the RGBA16Float intermediate, blit
+        // the HDR intermediate into the final BGRA8Unorm RT with tone mapping applied.
+        // The encoder must be active (it is — submission is deferred to endFrame).
+        if (!useSurface && currentRenderTarget_ && activeColorFormat_ == WGPUTextureFormat_RGBA16Float) {
+            auto& rt = renderTargets->getOrCreate(currentRenderTarget_, sampleCount_);
+            toneMapBlitToTexture(rt.colorTexture, rt.width, rt.height);
+        }
+
 #ifndef __EMSCRIPTEN__
         // Retain framebuffer for copyFramebufferToTexture if requested
         if (retainFramebuffer && useSurface) {
@@ -2258,7 +2352,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             trackedMaterials_.insert(sm);
         }
 
-        auto& pe = pipelines->getOrCreateCustomPipeline(sm, surfaceFormat, effectiveSampleCount_);
+        auto& pe = pipelines->getOrCreateCustomPipeline(sm, activeColorFormat_, effectiveSampleCount_);
         if (!pe.pipeline) return;
 
         // Create per-draw transform buffer
@@ -2591,7 +2685,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         }
 
         // Get/create pipeline
-        auto& pe = pipelines->getOrCreatePipeline(features, surfaceFormat, effectiveSampleCount_);
+        auto& pe = pipelines->getOrCreatePipeline(features, activeColorFormat_, effectiveSampleCount_);
         if (!pe.pipeline) return;
 
         // Upload transform uniforms
