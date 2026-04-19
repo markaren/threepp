@@ -51,8 +51,7 @@ int main() {
 
     // Create window and renderer
     Canvas::Parameters params;
-    params.title("WebTide Ocean")
-            .graphicsApi(GraphicsAPI::WebGPU);
+    params.title("WebTide Ocean");
 
     Canvas canvas(params);
     WgpuRenderer renderer(canvas);

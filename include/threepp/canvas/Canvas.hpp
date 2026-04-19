@@ -111,8 +111,6 @@ namespace threepp {
 
             Parameters& headless(bool flag);
 
-            Parameters& graphicsApi(GraphicsAPI api);
-
         private:
             std::optional<WindowSize> size_;
             int antialiasing_{4};

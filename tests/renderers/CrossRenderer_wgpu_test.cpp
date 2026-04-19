@@ -121,10 +121,10 @@ TEST_CASE("Wgpu: textured box uses diffuse map", "[wgpu]") {
 
     // Create a 2x2 checkerboard texture procedurally
     std::vector<unsigned char> texData = {
-        255, 0, 0, 255,   // red
-        0, 255, 0, 255,   // green
-        0, 255, 0, 255,   // green
-        255, 0, 0, 255    // red
+            255, 0, 0, 255,// red
+            0, 255, 0, 255,// green
+            0, 255, 0, 255,// green
+            255, 0, 0, 255 // red
     };
     Image image(texData, 2, 2);
 
@@ -184,12 +184,8 @@ TEST_CASE("Wgpu: opacity affects brightness", "[wgpu]") {
 TEST_CASE("Wgpu: setSize reconfigures surface", "[wgpu]") {
     REQUIRE_WGPU();
 
-    static Canvas* canvas = nullptr;
-    if (!canvas) {
-        canvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
 
-    WgpuRenderer renderer(*canvas);
+    WgpuRenderer renderer(wgpuCanvas());
 
     // setSize should not crash and should update reported size
     renderer.setSize({32, 32});
@@ -209,12 +205,7 @@ TEST_CASE("Wgpu: setSize reconfigures surface", "[wgpu]") {
 TEST_CASE("Wgpu: setPixelRatio updates ratio", "[wgpu]") {
     REQUIRE_WGPU();
 
-    static Canvas* canvas = nullptr;
-    if (!canvas) {
-        canvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*canvas);
+    WgpuRenderer renderer(wgpuCanvas());
 
     CHECK(renderer.getTargetPixelRatio() == 1.0f);
 
@@ -257,12 +248,7 @@ TEST_CASE("Wgpu: viewport restricts rendering region", "[wgpu]") {
     auto mesh = Mesh::create(geometry, material);
     scene->add(mesh);
 
-    static Canvas* canvas = nullptr;
-    if (!canvas) {
-        canvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*canvas);
+    WgpuRenderer renderer(wgpuCanvas());
     renderer.setClearColor(Color(0x000000));
 
     auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});
@@ -290,12 +276,7 @@ TEST_CASE("Wgpu: viewport restricts rendering region", "[wgpu]") {
 TEST_CASE("Wgpu: dispose does not crash on repeated calls", "[wgpu]") {
     REQUIRE_WGPU();
 
-    static Canvas* canvas = nullptr;
-    if (!canvas) {
-        canvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*canvas);
+    WgpuRenderer renderer(wgpuCanvas());
     renderer.dispose();
     // Second dispose should not crash
     renderer.dispose();
@@ -485,12 +466,7 @@ TEST_CASE("Wgpu: additive blending brightens", "[wgpu]") {
 TEST_CASE("Wgpu: getClearColor/Alpha round-trips", "[wgpu]") {
     REQUIRE_WGPU();
 
-    static Canvas* canvas = nullptr;
-    if (!canvas) {
-        canvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*canvas);
+    WgpuRenderer renderer(wgpuCanvas());
 
     renderer.setClearColor(Color(0.2f, 0.4f, 0.6f), 0.8f);
 
@@ -511,12 +487,7 @@ TEST_CASE("Wgpu: getClearColor/Alpha round-trips", "[wgpu]") {
 TEST_CASE("Wgpu: getViewport round-trips", "[wgpu]") {
     REQUIRE_WGPU();
 
-    static Canvas* canvas = nullptr;
-    if (!canvas) {
-        canvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*canvas);
+    WgpuRenderer renderer(wgpuCanvas());
     renderer.setViewport(10, 20, 30, 40);
 
     Vector4 vp;
@@ -532,12 +503,7 @@ TEST_CASE("Wgpu: getViewport round-trips", "[wgpu]") {
 TEST_CASE("Wgpu: scissor test round-trips", "[wgpu]") {
     REQUIRE_WGPU();
 
-    static Canvas* canvas = nullptr;
-    if (!canvas) {
-        canvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*canvas);
+    WgpuRenderer renderer(wgpuCanvas());
 
     CHECK(renderer.getScissorTest() == false);
     renderer.setScissorTest(true);
@@ -572,19 +538,14 @@ TEST_CASE("Wgpu: render info tracks draw calls", "[wgpu]") {
     mesh2->position.x = 1;
     scene->add(mesh2);
 
-    static Canvas* canvas = nullptr;
-    if (!canvas) {
-        canvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*canvas);
+    WgpuRenderer renderer(wgpuCanvas());
     renderer.setClearColor(Color(0x000000));
 
     auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});
     renderer.setRenderTarget(target.get());
     renderer.render(*scene, *camera);
 
-    auto& info = renderer.info();
+    const auto& info = renderer.info();
     CHECK(info.render.calls >= 2);
     CHECK(info.render.triangles > 0);
     CHECK(info.render.frame > 0);
@@ -595,12 +556,7 @@ TEST_CASE("Wgpu: render info tracks draw calls", "[wgpu]") {
 TEST_CASE("Wgpu: getActiveCubeFace and getActiveMipmapLevel", "[wgpu]") {
     REQUIRE_WGPU();
 
-    static Canvas* canvas = nullptr;
-    if (!canvas) {
-        canvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*canvas);
+    WgpuRenderer renderer(wgpuCanvas());
 
     auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});
     renderer.setRenderTarget(target.get(), 2, 3);
@@ -614,13 +570,8 @@ TEST_CASE("Wgpu: getActiveCubeFace and getActiveMipmapLevel", "[wgpu]") {
 TEST_CASE("Wgpu: resetState does not crash", "[wgpu]") {
     REQUIRE_WGPU();
 
-    static Canvas* canvas = nullptr;
-    if (!canvas) {
-        canvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*canvas);
-    renderer.resetState(); // Should be a no-op
+    WgpuRenderer renderer(wgpuCanvas());
+    renderer.resetState();// Should be a no-op
     renderer.dispose();
 }
 
@@ -823,10 +774,14 @@ TEST_CASE("Wgpu: InstancedMesh renders multiple instances", "[wgpu]") {
 
     auto im = InstancedMesh::create(geometry, material, 4);
     Matrix4 m;
-    m.setPosition(Vector3(-0.8f, -0.8f, 0)); im->setMatrixAt(0, m);
-    m.setPosition(Vector3( 0.8f, -0.8f, 0)); im->setMatrixAt(1, m);
-    m.setPosition(Vector3(-0.8f,  0.8f, 0)); im->setMatrixAt(2, m);
-    m.setPosition(Vector3( 0.8f,  0.8f, 0)); im->setMatrixAt(3, m);
+    m.setPosition(Vector3(-0.8f, -0.8f, 0));
+    im->setMatrixAt(0, m);
+    m.setPosition(Vector3(0.8f, -0.8f, 0));
+    im->setMatrixAt(1, m);
+    m.setPosition(Vector3(-0.8f, 0.8f, 0));
+    im->setMatrixAt(2, m);
+    m.setPosition(Vector3(0.8f, 0.8f, 0));
+    im->setMatrixAt(3, m);
     scene->add(im);
 
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
@@ -862,7 +817,7 @@ TEST_CASE("Wgpu: vertex colors tint geometry", "[wgpu]") {
     int vertexCount = static_cast<int>(posAttr->count());
     std::vector<float> colors(vertexCount * 3, 0.0f);
     for (int i = 0; i < vertexCount; i++) {
-        colors[i * 3 + 0] = 1.0f; // red
+        colors[i * 3 + 0] = 1.0f;// red
     }
     geometry->setAttribute("color", FloatBufferAttribute::create(colors, 3));
 
@@ -1111,12 +1066,7 @@ TEST_CASE("Wgpu: scissor test clips rendering", "[wgpu]") {
 
     // Scissored render — only top-left quarter
     // We need manual Wgpu renderer setup for scissor
-    static Canvas* wgpuScissorCanvas = nullptr;
-    if (!wgpuScissorCanvas) {
-        wgpuScissorCanvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*wgpuScissorCanvas);
+    WgpuRenderer renderer(wgpuCanvas());
     renderer.setClearColor(Color(0x000000));
     renderer.setScissor(0, 0, RT_WIDTH / 2, RT_HEIGHT / 2);
     renderer.setScissorTest(true);
@@ -1397,7 +1347,7 @@ TEST_CASE("Wgpu: roughnessMap affects specular highlights", "[wgpu]") {
         auto material = MeshStandardMaterial::create();
         material->color = Color(0xffffff);
         material->metalness = 0.0f;
-        material->roughness = 0.1f; // smooth base
+        material->roughness = 0.1f;// smooth base
 
         if (useRoughnessMap) {
             // Dark green channel (26/255 ~ 0.1): roughness = 0.1 * 0.1 = 0.01 (very smooth)
@@ -1438,7 +1388,7 @@ TEST_CASE("Wgpu: metalnessMap affects metallic appearance", "[wgpu]") {
         auto material = MeshStandardMaterial::create();
         material->color = Color(0xcccccc);
         material->roughness = 0.3f;
-        material->metalness = 0.5f; // base semi-metallic (scaled by map)
+        material->metalness = 0.5f;// base semi-metallic (scaled by map)
 
         if (useMetalnessMap) {
             // metalnessMap blue channel scales metalness: 0.5 * 1.0 = 0.5
@@ -1482,9 +1432,8 @@ TEST_CASE("Wgpu: emissiveMap produces glow pattern", "[wgpu]") {
     material->emissiveIntensity = 1.0f;
     // Emissive map: half bright, half dark
     material->emissiveMap = makeProceduralTexture(
-        255, 0, 0,   0, 0, 0,
-        255, 0, 0,   0, 0, 0
-    );
+            255, 0, 0, 0, 0, 0,
+            255, 0, 0, 0, 0, 0);
     auto mesh = Mesh::create(geometry, material);
     scene->add(mesh);
 
@@ -1512,7 +1461,7 @@ TEST_CASE("Wgpu: aoMap darkens occluded areas", "[wgpu]") {
         auto uvAttr = geometry->getAttribute<float>("uv");
         auto& uvArr = uvAttr->array();
         geometry->setAttribute("uv2", FloatBufferAttribute::create(
-            std::vector<float>(uvArr.begin(), uvArr.begin() + static_cast<long>(uvAttr->count() * 2)), 2));
+                                              std::vector<float>(uvArr.begin(), uvArr.begin() + static_cast<long>(uvAttr->count() * 2)), 2));
 
         auto material = MeshStandardMaterial::create();
         material->color = Color(0xffffff);
@@ -1642,7 +1591,7 @@ TEST_CASE("Wgpu: lightMap adds baked illumination", "[wgpu]") {
         auto uvAttr = geometry->getAttribute<float>("uv");
         auto& uvArr = uvAttr->array();
         geometry->setAttribute("uv2", FloatBufferAttribute::create(
-            std::vector<float>(uvArr.begin(), uvArr.begin() + static_cast<long>(uvAttr->count() * 2)), 2));
+                                              std::vector<float>(uvArr.begin(), uvArr.begin() + static_cast<long>(uvAttr->count() * 2)), 2));
 
         auto material = MeshStandardMaterial::create();
         material->color = Color(0xffffff);
@@ -1691,9 +1640,8 @@ TEST_CASE("Wgpu: bumpMap perturbs surface shading", "[wgpu]") {
         if (useBumpMap) {
             // Checkerboard-style bump — should create shading variation
             material->bumpMap = makeProceduralTexture(
-                255, 255, 255,  0, 0, 0,
-                0, 0, 0,        255, 255, 255
-            );
+                    255, 255, 255, 0, 0, 0,
+                    0, 0, 0, 255, 255, 255);
             material->bumpScale = 1.0f;
         }
 
@@ -1815,7 +1763,7 @@ TEST_CASE("Wgpu: envMap adds reflections to standard material", "[wgpu]") {
 
     // Env map on a metallic surface should make it brighter/more colored
     auto envAvg = averageColor(envPixels);
-    CHECK(envAvg.r > 5.0); // Should pick up red from env map
+    CHECK(envAvg.r > 5.0);// Should pick up red from env map
 }
 
 // WgpuRenderer: envMap / CubeTexture not yet implemented
@@ -1892,7 +1840,7 @@ TEST_CASE("Wgpu: SkinnedMesh with skeleton renders correctly", "[wgpu]") {
     for (int i = 0; i < vertexCount; i++) {
         float y = posAttr->getY(i);
         // Blend between bone 0 (bottom) and bone 1 (top)
-        float weight = (y + 1.0f) / 2.0f; // normalize from [-1,1] to [0,1]
+        float weight = (y + 1.0f) / 2.0f;// normalize from [-1,1] to [0,1]
         skinWeights[i * 4 + 0] = 1.0f - weight;
         skinWeights[i * 4 + 1] = weight;
         skinIndices[i * 4 + 0] = 0.0f;
@@ -2028,17 +1976,12 @@ TEST_CASE("Wgpu: clipping plane cuts geometry", "[wgpu]") {
     Color clearColor(0x000000);
 
     // Need to enable local clipping on the Wgpu renderer
-    static Canvas* wgpuClipCanvas = nullptr;
-    if (!wgpuClipCanvas) {
-        wgpuClipCanvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
     // Render without clipping
     auto fullPixels = renderWithWgpu(*makeScene(false), *camera, clearColor);
 
     // Render with clipping — need renderer with localClippingEnabled
     {
-        WgpuRenderer renderer(*wgpuClipCanvas);
+        WgpuRenderer renderer(wgpuCanvas());
         renderer.setClearColor(clearColor);
         renderer.localClippingEnabled = true;
 
@@ -2081,13 +2024,8 @@ TEST_CASE("Wgpu: tone mapping affects output brightness", "[wgpu]") {
     camera->position.z = 3;
 
     // Render with no tone mapping
-    static Canvas* wgpuTmCanvas = nullptr;
-    if (!wgpuTmCanvas) {
-        wgpuTmCanvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
     auto renderWithToneMapping = [&](ToneMapping tm, float exposure) {
-        WgpuRenderer renderer(*wgpuTmCanvas);
+        WgpuRenderer renderer(wgpuCanvas());
         renderer.setClearColor(Color(0x000000));
         renderer.toneMapping = tm;
         renderer.toneMappingExposure = exposure;
@@ -2138,13 +2076,8 @@ TEST_CASE("Wgpu: toneMappingExposure scales brightness", "[wgpu]") {
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 3;
 
-    static Canvas* wgpuExpCanvas = nullptr;
-    if (!wgpuExpCanvas) {
-        wgpuExpCanvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
     auto renderWithExposure = [&](float exposure) {
-        WgpuRenderer renderer(*wgpuExpCanvas);
+        WgpuRenderer renderer(wgpuCanvas());
         renderer.setClearColor(Color(0x000000));
         renderer.toneMapping = ToneMapping::Reinhard;
         renderer.toneMappingExposure = exposure;
@@ -2180,20 +2113,15 @@ TEST_CASE("Wgpu: sRGB output encoding differs from linear", "[wgpu]") {
 
     auto geometry = SphereGeometry::create(1.0f, 16, 8);
     auto material = MeshBasicMaterial::create();
-    material->color = Color(0x808080); // mid-grey
+    material->color = Color(0x808080);// mid-grey
     auto mesh = Mesh::create(geometry, material);
     scene->add(mesh);
 
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 3;
 
-    static Canvas* wgpuEncCanvas = nullptr;
-    if (!wgpuEncCanvas) {
-        wgpuEncCanvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
     auto renderWithEncoding = [&](Encoding enc) {
-        WgpuRenderer renderer(*wgpuEncCanvas);
+        WgpuRenderer renderer(wgpuCanvas());
         renderer.setClearColor(Color(0x000000));
         renderer.outputEncoding = enc;
 
@@ -2414,7 +2342,7 @@ TEST_CASE("Wgpu: map (diffuse texture) tints geometry", "[wgpu]") {
 
     auto geometry = PlaneGeometry::create(2, 2);
     auto material = MeshBasicMaterial::create();
-    material->map = makeUniformTexture(255, 0, 0); // Red texture
+    material->map = makeUniformTexture(255, 0, 0);// Red texture
     material->side = Side::Double;
 
     auto mesh = Mesh::create(geometry, material);
@@ -2474,7 +2402,7 @@ TEST_CASE("Wgpu: MSAA 4x produces more intermediate edge pixels than 1x", "[wgpu
         auto material = MeshBasicMaterial::create();
         material->color = Color(0xffffff);
         auto mesh = Mesh::create(geometry, material);
-        mesh->rotation.z = math::PI / 6; // 30 degrees — creates diagonal edges
+        mesh->rotation.z = math::PI / 6;// 30 degrees — creates diagonal edges
         scene->add(mesh);
         return scene;
     };
@@ -2483,14 +2411,9 @@ TEST_CASE("Wgpu: MSAA 4x produces more intermediate edge pixels than 1x", "[wgpu
     camera->position.z = 4;
     Color clearColor(0x000000);
 
-    static Canvas* msaaCanvas = nullptr;
-    if (!msaaCanvas) {
-        msaaCanvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
     std::vector<unsigned char> pixelsNoMSAA;
     {
-        WgpuRenderer renderer(*msaaCanvas);
+        WgpuRenderer renderer(wgpuCanvas());
         renderer.setSampleCount(1);
         renderer.setClearColor(clearColor);
         auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});
@@ -2504,7 +2427,7 @@ TEST_CASE("Wgpu: MSAA 4x produces more intermediate edge pixels than 1x", "[wgpu
 
     std::vector<unsigned char> pixelsMSAA;
     {
-        WgpuRenderer renderer(*msaaCanvas);
+        WgpuRenderer renderer(wgpuCanvas());
         renderer.setSampleCount(4);
         renderer.setClearColor(clearColor);
         auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});
@@ -2542,14 +2465,9 @@ TEST_CASE("Wgpu: MSAA brightness variance differs at edges", "[wgpu]") {
     camera->position.z = 4;
     Color clearColor(0x000000);
 
-    static Canvas* msaaCanvas2 = nullptr;
-    if (!msaaCanvas2) {
-        msaaCanvas2 = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
     std::vector<unsigned char> pixelsNoMSAA;
     {
-        WgpuRenderer renderer(*msaaCanvas2);
+        WgpuRenderer renderer(wgpuCanvas());
         renderer.setSampleCount(1);
         renderer.setClearColor(clearColor);
         auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});
@@ -2563,7 +2481,7 @@ TEST_CASE("Wgpu: MSAA brightness variance differs at edges", "[wgpu]") {
 
     std::vector<unsigned char> pixelsMSAA;
     {
-        WgpuRenderer renderer(*msaaCanvas2);
+        WgpuRenderer renderer(wgpuCanvas());
         renderer.setSampleCount(4);
         renderer.setClearColor(clearColor);
         auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});
@@ -2583,12 +2501,7 @@ TEST_CASE("Wgpu: MSAA brightness variance differs at edges", "[wgpu]") {
 TEST_CASE("Wgpu: MSAA sample count round-trips", "[wgpu]") {
     REQUIRE_WGPU();
 
-    static Canvas* msaaCanvas3 = nullptr;
-    if (!msaaCanvas3) {
-        msaaCanvas3 = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*msaaCanvas3);
+    WgpuRenderer renderer(wgpuCanvas());
     renderer.setSampleCount(4);
     CHECK(renderer.getSampleCount() == 4);
     renderer.setSampleCount(1);
@@ -2617,14 +2530,9 @@ TEST_CASE("Wgpu: MSAA render still produces correct average color", "[wgpu]") {
     camera->position.z = 4;
     Color clearColor(0x000000);
 
-    static Canvas* msaaCanvas4 = nullptr;
-    if (!msaaCanvas4) {
-        msaaCanvas4 = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
     std::vector<unsigned char> pixelsNoMSAA;
     {
-        WgpuRenderer renderer(*msaaCanvas4);
+        WgpuRenderer renderer(wgpuCanvas());
         renderer.setSampleCount(1);
         renderer.setClearColor(clearColor);
         auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});
@@ -2638,7 +2546,7 @@ TEST_CASE("Wgpu: MSAA render still produces correct average color", "[wgpu]") {
 
     std::vector<unsigned char> pixelsMSAA;
     {
-        WgpuRenderer renderer(*msaaCanvas4);
+        WgpuRenderer renderer(wgpuCanvas());
         renderer.setSampleCount(4);
         renderer.setClearColor(clearColor);
         auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});
@@ -3041,10 +2949,14 @@ TEST_CASE("Wgpu: shadow + texture + instancing combination renders", "[wgpu]") {
 
     auto im = InstancedMesh::create(geom, mat, 4);
     Matrix4 m;
-    m.setPosition(Vector3(-0.8f, 1.5f, 0)); im->setMatrixAt(0, m);
-    m.setPosition(Vector3(0.8f, 1.5f, 0));  im->setMatrixAt(1, m);
-    m.setPosition(Vector3(-0.8f, 2.5f, 0)); im->setMatrixAt(2, m);
-    m.setPosition(Vector3(0.8f, 2.5f, 0));  im->setMatrixAt(3, m);
+    m.setPosition(Vector3(-0.8f, 1.5f, 0));
+    im->setMatrixAt(0, m);
+    m.setPosition(Vector3(0.8f, 1.5f, 0));
+    im->setMatrixAt(1, m);
+    m.setPosition(Vector3(-0.8f, 2.5f, 0));
+    im->setMatrixAt(2, m);
+    m.setPosition(Vector3(0.8f, 2.5f, 0));
+    im->setMatrixAt(3, m);
     im->castShadow = true;
     scene->add(im);
 
@@ -3255,10 +3167,14 @@ TEST_CASE("Wgpu: instancing + vertex colors combination", "[wgpu]") {
 
     auto im = InstancedMesh::create(geometry, material, 4);
     Matrix4 m;
-    m.setPosition(Vector3(-0.8f, -0.8f, 0)); im->setMatrixAt(0, m);
-    m.setPosition(Vector3(0.8f, -0.8f, 0));  im->setMatrixAt(1, m);
-    m.setPosition(Vector3(-0.8f, 0.8f, 0));  im->setMatrixAt(2, m);
-    m.setPosition(Vector3(0.8f, 0.8f, 0));   im->setMatrixAt(3, m);
+    m.setPosition(Vector3(-0.8f, -0.8f, 0));
+    im->setMatrixAt(0, m);
+    m.setPosition(Vector3(0.8f, -0.8f, 0));
+    im->setMatrixAt(1, m);
+    m.setPosition(Vector3(-0.8f, 0.8f, 0));
+    im->setMatrixAt(2, m);
+    m.setPosition(Vector3(0.8f, 0.8f, 0));
+    im->setMatrixAt(3, m);
     scene->add(im);
 
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
@@ -3306,14 +3222,9 @@ TEST_CASE("Wgpu: displacement map + clipping plane combination", "[wgpu]") {
 
     auto fullPixels = renderWithWgpu(*makeScene(false), *camera, clearColor);
 
-    static Canvas* dispClipCanvas = nullptr;
-    if (!dispClipCanvas) {
-        dispClipCanvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
     std::vector<unsigned char> clippedPixels;
     {
-        WgpuRenderer renderer(*dispClipCanvas);
+        WgpuRenderer renderer(wgpuCanvas());
         renderer.setClearColor(clearColor);
         renderer.localClippingEnabled = true;
 
@@ -3344,7 +3255,7 @@ TEST_CASE("Wgpu: displacement map + clipping plane combination", "[wgpu]") {
 //   class EffectComposer { EffectComposer(WgpuRenderer&); addPass(); render(); readRGBPixels(); };
 // =============================================================================
 
-#if 1 // Enable when EffectComposer and ShaderPass are implemented
+#if 1// Enable when EffectComposer and ShaderPass are implemented
 
 #include "threepp/renderers/wgpu/EffectComposer.hpp"
 #include "threepp/renderers/wgpu/ShaderPass.hpp"
@@ -3445,7 +3356,7 @@ struct VertexOutput {
     return vec4f(clamp(c.rgb * 1.5, vec3f(0.0), vec3f(1.0)), c.a);
 }
 )";
-} // namespace
+}// namespace
 
 TEST_CASE("Wgpu: identity post-process pass matches non-post-processed output", "[wgpu]") {
     REQUIRE_WGPU();
@@ -3466,12 +3377,7 @@ TEST_CASE("Wgpu: identity post-process pass matches non-post-processed output", 
 
     auto directPixels = renderWithWgpu(*scene, *camera, clearColor);
 
-    static Canvas* postCanvas = nullptr;
-    if (!postCanvas) {
-        postCanvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*postCanvas);
+    WgpuRenderer renderer(wgpuCanvas());
     EffectComposer composer(renderer);
     composer.addPass(ShaderPass::create(identityWGSL));
 
@@ -3527,12 +3433,7 @@ TEST_CASE("Wgpu: grayscale post-process produces equal RGB channels", "[wgpu]") 
                         (std::abs(origAvg.r - origAvg.b) > 10);
     CHECK(channelsVary);
 
-    static Canvas* gsCanvas = nullptr;
-    if (!gsCanvas) {
-        gsCanvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*gsCanvas);
+    WgpuRenderer renderer(wgpuCanvas());
     EffectComposer composer(renderer);
     composer.addPass(ShaderPass::create(grayscaleWGSL));
 
@@ -3569,12 +3470,7 @@ TEST_CASE("Wgpu: invert post-process inverts colors", "[wgpu]") {
 
     auto originalPixels = renderWithWgpu(*scene, *camera, clearColor);
 
-    static Canvas* invCanvas = nullptr;
-    if (!invCanvas) {
-        invCanvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*invCanvas);
+    WgpuRenderer renderer(wgpuCanvas());
     EffectComposer composer(renderer);
     composer.addPass(ShaderPass::create(invertWGSL));
 
@@ -3612,12 +3508,7 @@ TEST_CASE("Wgpu: double invert post-process restores original", "[wgpu]") {
 
     auto originalPixels = renderWithWgpu(*scene, *camera, clearColor);
 
-    static Canvas* dblInvCanvas = nullptr;
-    if (!dblInvCanvas) {
-        dblInvCanvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*dblInvCanvas);
+    WgpuRenderer renderer(wgpuCanvas());
     EffectComposer composer(renderer);
     composer.addPass(ShaderPass::create(invertWGSL));
     composer.addPass(ShaderPass::create(invertWGSL));
@@ -3662,12 +3553,7 @@ TEST_CASE("Wgpu: brightness post-process increases average brightness", "[wgpu]"
     double origBright = avgBrightness(originalPixels);
     CHECK(origBright > 10.0);
 
-    static Canvas* brightCanvas = nullptr;
-    if (!brightCanvas) {
-        brightCanvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*brightCanvas);
+    WgpuRenderer renderer(wgpuCanvas());
     EffectComposer composer(renderer);
     composer.addPass(ShaderPass::create(brightnessWGSL));
 
@@ -3707,12 +3593,7 @@ TEST_CASE("Wgpu: post-process works with render targets", "[wgpu]") {
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 4;
 
-    static Canvas* rtCanvas = nullptr;
-    if (!rtCanvas) {
-        rtCanvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
-
-    WgpuRenderer renderer(*rtCanvas);
+    WgpuRenderer renderer(wgpuCanvas());
     EffectComposer composer(renderer);
     composer.addPass(ShaderPass::create(grayscaleWGSL));
 
@@ -3730,7 +3611,7 @@ TEST_CASE("Wgpu: post-process works with render targets", "[wgpu]") {
     CHECK(std::abs(avg.r - avg.b) < 10);
 }
 
-#endif // Post-processing API guard
+#endif// Post-processing API guard
 
 // =============================================================================
 // Section: Resize robustness tests
@@ -3754,21 +3635,26 @@ TEST_CASE("Wgpu: rapid resize smaller via setSize with render targets", "[wgpu]"
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 3;
 
-    static Canvas* canvas1 = nullptr;
-    if (!canvas1) {
-        canvas1 = new Canvas(Canvas::Parameters().size(512, 512).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
+    Canvas canvas1(Canvas::Parameters().size(512, 512).headless(true));
 
-    WgpuRenderer renderer(*canvas1);
+    WgpuRenderer renderer(canvas1);
     renderer.setClearColor(Color(0x000000));
 
     // Simulate rapid window resize: large → small → large → very small
     // Each step renders to a differently-sized render target after calling
     // setSize, which updates viewport/scissor to the new canvas dimensions.
-    struct SizeStep { int w, h; };
+    struct SizeStep {
+        int w, h;
+    };
     SizeStep sizes[] = {
-        {512, 512}, {256, 256}, {400, 300}, {128, 64},
-        {512, 512}, {64, 64}, {300, 500}, {100, 100},
+            {512, 512},
+            {256, 256},
+            {400, 300},
+            {128, 64},
+            {512, 512},
+            {64, 64},
+            {300, 500},
+            {100, 100},
     };
 
     for (auto& [sw, sh] : sizes) {
@@ -3798,12 +3684,9 @@ TEST_CASE("Wgpu: resize smaller with stale scissor does not crash", "[wgpu]") {
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 3;
 
-    static Canvas* canvas2 = nullptr;
-    if (!canvas2) {
-        canvas2 = new Canvas(Canvas::Parameters().size(256, 256).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
+    Canvas canvas2(Canvas::Parameters().size(256, 256).headless(true));
 
-    WgpuRenderer renderer(*canvas2);
+    WgpuRenderer renderer(canvas2);
     renderer.setClearColor(Color(0x000000));
 
     // Render at large size with scissor test enabled
@@ -3839,12 +3722,9 @@ TEST_CASE("Wgpu: resize smaller with stale viewport does not crash", "[wgpu]") {
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 3;
 
-    static Canvas* canvas3 = nullptr;
-    if (!canvas3) {
-        canvas3 = new Canvas(Canvas::Parameters().size(256, 256).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
+    Canvas canvas3(Canvas::Parameters().size(256, 256).headless(true));
 
-    WgpuRenderer renderer(*canvas3);
+    WgpuRenderer renderer(canvas3);
     renderer.setClearColor(Color(0x000000));
 
     // Set an explicit viewport at the large size
@@ -3884,14 +3764,11 @@ TEST_CASE("Wgpu: setSize shrink then render to RT simulates window drag", "[wgpu
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 3;
 
-    static Canvas* canvas4 = nullptr;
-    if (!canvas4) {
-        canvas4 = new Canvas(Canvas::Parameters().size(512, 512).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
+    Canvas canvas4(Canvas::Parameters().size(512, 512).headless(true));
 
-    WgpuRenderer renderer(*canvas4);
+    WgpuRenderer renderer(canvas4);
     renderer.setClearColor(Color(0x000000));
-    renderer.setSampleCount(4); // MSAA like the water example
+    renderer.setSampleCount(4);// MSAA like the water example
 
     // Render at initial size
     auto rt1 = RenderTarget::create(512, 512, RenderTarget::Options{});
@@ -3943,12 +3820,9 @@ TEST_CASE("Wgpu: render target size mismatch with renderer size", "[wgpu]") {
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 3;
 
-    static Canvas* canvas5 = nullptr;
-    if (!canvas5) {
-        canvas5 = new Canvas(Canvas::Parameters().size(512, 512).headless(true).graphicsApi(GraphicsAPI::WebGPU));
-    }
+    Canvas canvas5(Canvas::Parameters().size(512, 512).headless(true));
 
-    WgpuRenderer renderer(*canvas5);
+    WgpuRenderer renderer(canvas5);
     renderer.setClearColor(Color(0x000000));
 
     // Renderer is sized at 512x512, but render target is much smaller.
@@ -3980,17 +3854,15 @@ TEST_CASE("Wgpu: surface reconfigured smaller behind renderer's back", "[wgpu][s
     // We simulate this by calling wgpuSurfaceConfigure directly via the
     // nativeSurface() accessor, bypassing the renderer's resize detection.
 
-    static Canvas* sneakyCanvas = nullptr;
-    if (!sneakyCanvas) {
-        sneakyCanvas = new Canvas(Canvas::Parameters()
-            .size(800, 600)
-            .title("sneaky_resize_test")
-            .graphicsApi(GraphicsAPI::WebGPU));
-    } else {
-        sneakyCanvas->setSize({800, 600});
-    }
+    Canvas sneakyCanvas(Canvas::Parameters()
+                                .size(800, 600)
+                                .headless(true)
+                                .title("sneaky_resize_test"));
 
-    WgpuRenderer renderer(*sneakyCanvas);
+    sneakyCanvas.setSize({800, 600});
+
+
+    WgpuRenderer renderer(sneakyCanvas);
     renderer.setClearColor(Color(0x000000));
 
     auto scene = Scene::create();
@@ -4006,7 +3878,7 @@ TEST_CASE("Wgpu: surface reconfigured smaller behind renderer's back", "[wgpu][s
 
     // Render at initial 800x600 — establishes viewport/scissor at 800x600
     renderer.render(*scene, *camera);
-    renderer.endFrame(); // Release surface texture before reconfiguring
+    renderer.endFrame();// Release surface texture before reconfiguring
 
     // Reconfigure the surface to a SMALLER size directly, without telling
     // the renderer. The renderer's viewport/scissor/size_ remain at 800x600,
@@ -4029,7 +3901,7 @@ TEST_CASE("Wgpu: surface reconfigured smaller behind renderer's back", "[wgpu][s
     // Without the fix, this crashes with: "Scissor Rect { w: 800, h: 600 }
     // is not contained in the render target (400, 300, 1)"
     renderer.render(*scene, *camera);
-    renderer.endFrame(); // Release surface texture before reconfiguring
+    renderer.endFrame();// Release surface texture before reconfiguring
 
     // Even more extreme: shrink to tiny
     config.width = 200;
@@ -4047,18 +3919,16 @@ TEST_CASE("Wgpu: surface reconfigured smaller with MSAA", "[wgpu][surface]") {
 
     // Same scenario with MSAA 4x — matches the water example exactly.
 
-    static Canvas* sneakyMsaaCanvas = nullptr;
-    if (!sneakyMsaaCanvas) {
-        sneakyMsaaCanvas = new Canvas(Canvas::Parameters()
-            .size(800, 600)
-            .title("sneaky_msaa_resize_test")
-            .antialiasing(4)
-            .graphicsApi(GraphicsAPI::WebGPU));
-    } else {
-        sneakyMsaaCanvas->setSize({800, 600});
-    }
+    Canvas sneakyMsaaCanvas(Canvas::Parameters()
+                                    .size(800, 600)
+                                    .headless((true))
+                                    .title("sneaky_msaa_resize_test")
+                                    .antialiasing(4));
 
-    WgpuRenderer renderer(*sneakyMsaaCanvas);
+    sneakyMsaaCanvas.setSize({800, 600});
+
+
+    WgpuRenderer renderer(sneakyMsaaCanvas);
     renderer.setClearColor(Color(0x000000));
 
     auto scene = Scene::create();
@@ -4074,7 +3944,7 @@ TEST_CASE("Wgpu: surface reconfigured smaller with MSAA", "[wgpu][surface]") {
 
     // Render at initial 800x600
     renderer.render(*scene, *camera);
-    renderer.endFrame(); // Release surface texture before reconfiguring
+    renderer.endFrame();// Release surface texture before reconfiguring
 
     // Reconfigure surface smaller behind the renderer's back — with MSAA
     auto* wgpuSurface = static_cast<WGPUSurface>(renderer.nativeSurface());
@@ -4109,17 +3979,13 @@ TEST_CASE("Wgpu: windowed surface resize does not crash", "[wgpu][surface]") {
     // Programmatic setSize triggers GLFW's window_size_callback synchronously
     // on Windows, updating canvas.size() — reproducing the live drag scenario.
 
-    static Canvas* surfaceCanvas = nullptr;
-    if (!surfaceCanvas) {
-        surfaceCanvas = new Canvas(Canvas::Parameters()
-            .size(800, 600)
-            .title("resize_test")
-            .graphicsApi(GraphicsAPI::WebGPU));
-    } else {
-        surfaceCanvas->setSize({800, 600});
-    }
+    Canvas surfaceCanvas(Canvas::Parameters()
+                                 .size(800, 600)
+                                 .title("resize_test"));
 
-    WgpuRenderer renderer(*surfaceCanvas);
+    surfaceCanvas.setSize({800, 600});
+
+    WgpuRenderer renderer(surfaceCanvas);
     renderer.setClearColor(Color(0x000000));
 
     auto scene = Scene::create();
@@ -4140,31 +4006,31 @@ TEST_CASE("Wgpu: windowed surface resize does not crash", "[wgpu][surface]") {
 
     // Shrink the window — triggers glfwSetWindowSize which fires the
     // window_size_callback synchronously, updating canvas.size().
-    surfaceCanvas->setSize({400, 300});
+    surfaceCanvas.setSize({400, 300});
     for (int i = 0; i < 3; i++) {
         renderer.render(*scene, *camera);
     }
 
     // Shrink further
-    surfaceCanvas->setSize({200, 150});
+    surfaceCanvas.setSize({200, 150});
     for (int i = 0; i < 3; i++) {
         renderer.render(*scene, *camera);
     }
 
     // Grow back
-    surfaceCanvas->setSize({800, 600});
+    surfaceCanvas.setSize({800, 600});
     for (int i = 0; i < 3; i++) {
         renderer.render(*scene, *camera);
     }
 
     // Rapid resize sequence — simulates a fast window drag
-    surfaceCanvas->setSize({700, 500});
+    surfaceCanvas.setSize({700, 500});
     renderer.render(*scene, *camera);
-    surfaceCanvas->setSize({500, 350});
+    surfaceCanvas.setSize({500, 350});
     renderer.render(*scene, *camera);
-    surfaceCanvas->setSize({300, 200});
+    surfaceCanvas.setSize({300, 200});
     renderer.render(*scene, *camera);
-    surfaceCanvas->setSize({150, 100});
+    surfaceCanvas.setSize({150, 100});
     renderer.render(*scene, *camera);
 
     CHECK(true);
@@ -4175,19 +4041,15 @@ TEST_CASE("Wgpu: windowed surface resize with MSAA does not crash", "[wgpu][surf
     REQUIRE_WGPU();
 
     // Same as above but with MSAA 4x — matches the water example exactly.
+    Canvas msaaCanvas(Canvas::Parameters()
+                              .size(800, 600)
+                              .title("resize_msaa_test")
+                              .antialiasing(4));
 
-    static Canvas* msaaCanvas = nullptr;
-    if (!msaaCanvas) {
-        msaaCanvas = new Canvas(Canvas::Parameters()
-            .size(800, 600)
-            .title("resize_msaa_test")
-            .antialiasing(4)
-            .graphicsApi(GraphicsAPI::WebGPU));
-    } else {
-        msaaCanvas->setSize({800, 600});
-    }
+    msaaCanvas.setSize({800, 600});
 
-    WgpuRenderer renderer(*msaaCanvas);
+
+    WgpuRenderer renderer(msaaCanvas);
     renderer.setClearColor(Color(0x000000));
 
     auto scene = Scene::create();
@@ -4207,15 +4069,15 @@ TEST_CASE("Wgpu: windowed surface resize with MSAA does not crash", "[wgpu][surf
     }
 
     // Rapid shrink sequence with MSAA
-    msaaCanvas->setSize({600, 400});
+    msaaCanvas.setSize({600, 400});
     renderer.render(*scene, *camera);
-    msaaCanvas->setSize({400, 300});
+    msaaCanvas.setSize({400, 300});
     renderer.render(*scene, *camera);
-    msaaCanvas->setSize({200, 150});
+    msaaCanvas.setSize({200, 150});
     renderer.render(*scene, *camera);
 
     // Grow back
-    msaaCanvas->setSize({800, 600});
+    msaaCanvas.setSize({800, 600});
     renderer.render(*scene, *camera);
 
     CHECK(true);
@@ -4257,8 +4119,8 @@ TEST_CASE("Wgpu: depthTest=false renders on top of occluding geometry", "[wgpu]"
     camera->position.z = 5;
     Color clearColor(0x000000);
 
-    auto depthTestPixels   = renderWithWgpu(*makeScene(false), *camera, clearColor);
-    auto noDepthTestPixels = renderWithWgpu(*makeScene(true),  *camera, clearColor);
+    auto depthTestPixels = renderWithWgpu(*makeScene(false), *camera, clearColor);
+    auto noDepthTestPixels = renderWithWgpu(*makeScene(true), *camera, clearColor);
 
     // Count blue-dominant pixels (b > r && b > 10)
     auto countBlueDominant = [](const std::vector<uint8_t>& px) {
@@ -4269,7 +4131,7 @@ TEST_CASE("Wgpu: depthTest=false renders on top of occluding geometry", "[wgpu]"
         return n;
     };
 
-    int blueDT   = countBlueDominant(depthTestPixels);
+    int blueDT = countBlueDominant(depthTestPixels);
     int blueNoDT = countBlueDominant(noDepthTestPixels);
 
     // depthTest=true: blue plane hidden behind red sphere — few or no blue pixels at center

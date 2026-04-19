@@ -240,22 +240,21 @@ namespace crosstest {
         GLRenderer renderer(glCanvas());
         renderer.setClearColor(clearColor);
 
-        auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});
-        renderer.setRenderTarget(target.get());
         renderer.render(scene, camera);
 
         auto pixels = renderer.readRGBPixels();
-        renderer.setRenderTarget(nullptr);
-        renderer.dispose();
         return pixels;
+    }
+
+    // Persistent Wgpu canvas — same lifetime as glCanvas() to avoid GLFW re-init between tests
+    inline Canvas& wgpuCanvas() {
+        static Canvas c(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true));
+        return c;
     }
 
     // Render with Wgpu, return pixel data
     inline std::vector<unsigned char> renderWithWgpu(Object3D& scene, Camera& camera, const Color& clearColor) {
-        // Wgpu canvas is created on demand (only when Wgpu is available)
-        Canvas wgpuCanvasPtr(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true));
-
-        WgpuRenderer renderer(wgpuCanvasPtr);
+        WgpuRenderer renderer(wgpuCanvas());
         renderer.setClearColor(clearColor);
 
         auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});

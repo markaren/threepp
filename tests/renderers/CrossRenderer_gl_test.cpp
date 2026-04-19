@@ -3,6 +3,8 @@
 
 #include "CrossRenderer_helpers.hpp"
 
+#include <iostream>
+
 TEST_CASE("GL: clear color produces expected pixels") {
     GLRenderer renderer(glCanvas());
     renderer.setClearColor(Color(1.0f, 0.0f, 0.0f));
@@ -665,6 +667,7 @@ TEST_CASE("GL: combined ambient + directional + point lights are brighter than s
     double multiBright = avgBrightness(multiPixels);
 
     CHECK(multiBright > singleBright);
+
 }
 
 

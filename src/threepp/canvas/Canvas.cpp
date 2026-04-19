@@ -151,17 +151,23 @@ namespace {
         std::cerr << "Error: " << description << std::endl;
     }
 
+    static int& glfwRefCount() {
+        static int count = 0;
+        return count;
+    }
+
     void initGLfw() {
-        static bool initialized = false;
-
-        if (!initialized) {
-            initialized = true;
-
+        if (glfwRefCount()++ == 0) {
             glfwSetErrorCallback(error_callback);
-
             if (!glfwInit()) {
                 exit(EXIT_FAILURE);
             }
+        }
+    }
+
+    void termGLfw() {
+        if (--glfwRefCount() == 0) {
+            glfwTerminate();
         }
     }
 
@@ -224,7 +230,7 @@ struct Canvas::Impl {
 
         window = glfwCreateWindow(size_.width(), size_.height(), params_.title_.c_str(), nullptr, nullptr);
         if (!window) {
-            glfwTerminate();
+            termGLfw();
             exit(EXIT_FAILURE);
         }
 
@@ -270,7 +276,12 @@ struct Canvas::Impl {
         return size_;
     }
 
-    void setSize(std::pair<int, int> size) const {
+    void setSize(std::pair<int, int> size) {
+
+        if (!window) {
+            params_.size(size);
+            return;
+        }
 
         glfwSetWindowSize(window, size.first, size.second);
     }
@@ -322,7 +333,7 @@ struct Canvas::Impl {
 
     ~Impl() {
         if (window) glfwDestroyWindow(window);
-        glfwTerminate();
+        termGLfw();
     }
 
 
@@ -648,14 +659,6 @@ Canvas::Parameters& Canvas::Parameters::headless(bool flag) {
 
     return *this;
 }
-
-Canvas::Parameters& Canvas::Parameters::graphicsApi(GraphicsAPI api) {
-
-    graphicsApi_ = api;
-
-    return *this;
-}
-
 
 WindowSize monitor::monitorSize(int monitor) {
 

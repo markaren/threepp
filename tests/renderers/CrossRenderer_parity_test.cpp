@@ -1408,7 +1408,7 @@ TEST_CASE("Cross: clipping plane produces similar cut", "[wgpu]") {
         // Wgpu with clipping
         static Canvas* wgpuClipCross = nullptr;
         if (!wgpuClipCross) {
-            wgpuClipCross = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
+            wgpuClipCross = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true));
         }
         WgpuRenderer wgpuRenderer(*wgpuClipCross);
         wgpuRenderer.setClearColor(clearColor);
