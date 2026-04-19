@@ -21,6 +21,10 @@ add_subdirectory(objects)
 add_subdirectory(shaders)
 add_subdirectory(textures)
 
+if (THREEPP_WITH_WGPU)
+    add_subdirectory(wgpu)
+endif ()
+
 if (THREEPP_BUILD_EXAMPLE_PROJECTS)
     add_subdirectory(projects)
 endif ()
