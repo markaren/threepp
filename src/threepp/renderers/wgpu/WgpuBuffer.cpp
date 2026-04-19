@@ -17,6 +17,7 @@ WgpuBuffer::WgpuBuffer(WgpuRenderer& renderer, size_t size, Usage usage)
     WGPUBufferUsage baseUsage = WGPUBufferUsage_Uniform;
     switch (usage) {
         case Usage::Storage: baseUsage = WGPUBufferUsage_Storage; break;
+        case Usage::StorageReadback: baseUsage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc; break;
         case Usage::Vertex:  baseUsage = WGPUBufferUsage_Vertex;  break;
         case Usage::Uniform: baseUsage = WGPUBufferUsage_Uniform; break;
     }

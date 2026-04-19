@@ -1,0 +1,470 @@
+WgpuRenderer: WebGPU initialized successfully
+RtDetr::loadWeights: 1230 GPU tensors (folded 122 BN blocks, fp16-packed 247 conv weights)
+
+model.11.* weights:
+  model.11.fc1.bias  [1024]
+  model.11.fc1.weight  [1024,256]
+  model.11.fc2.bias  [256]
+  model.11.fc2.weight  [256,1024]
+  model.11.ma.in_proj_bias  [768]
+  model.11.ma.in_proj_weight  [768,256]
+  model.11.ma.out_proj.bias  [256]
+  model.11.ma.out_proj.weight  [256,256]
+  model.11.norm1.bias  [256]
+  model.11.norm1.weight  [256]
+  model.11.norm2.bias  [256]
+  model.11.norm2.weight  [256]
+
+model.12..29 fused weight tops (per-module):
+  model.12:
+    model.12.conv.weight  [256,256,1,1]
+    model.12.fused.bias  [256]
+    model.12.fused.weight  [256,256,1,1]
+  model.14:
+    model.14.conv.weight  [256,1024,1,1]
+    model.14.fused.bias  [256]
+    model.14.fused.weight  [256,1024,1,1]
+  model.16:
+    model.16.cv1.conv.weight  [256,512,1,1]
+    model.16.cv1.fused.bias  [256]
+    model.16.cv1.fused.weight  [256,512,1,1]
+    model.16.cv2.conv.weight  [256,512,1,1]
+    model.16.cv2.fused.bias  [256]
+    model.16.cv2.fused.weight  [256,512,1,1]
+    model.16.m.0.conv1.conv.weight  [256,256,3,3]
+    model.16.m.0.conv1.fused.bias  [256]
+    model.16.m.0.conv1.fused.weight  [256,256,3,3]
+    model.16.m.0.conv2.conv.weight  [256,256,1,1]
+    model.16.m.0.conv2.fused.bias  [256]
+    model.16.m.0.conv2.fused.weight  [256,256,1,1]
+    model.16.m.1.conv1.conv.weight  [256,256,3,3]
+    model.16.m.1.conv1.fused.bias  [256]
+    model.16.m.1.conv1.fused.weight  [256,256,3,3]
+    model.16.m.1.conv2.conv.weight  [256,256,1,1]
+    model.16.m.1.conv2.fused.bias  [256]
+    model.16.m.1.conv2.fused.weight  [256,256,1,1]
+    model.16.m.2.conv1.conv.weight  [256,256,3,3]
+    model.16.m.2.conv1.fused.bias  [256]
+    model.16.m.2.conv1.fused.weight  [256,256,3,3]
+    model.16.m.2.conv2.conv.weight  [256,256,1,1]
+    model.16.m.2.conv2.fused.bias  [256]
+    model.16.m.2.conv2.fused.weight  [256,256,1,1]
+  model.17:
+    model.17.conv.weight  [256,256,1,1]
+    model.17.fused.bias  [256]
+    model.17.fused.weight  [256,256,1,1]
+  model.19:
+    model.19.conv.weight  [256,512,1,1]
+    model.19.fused.bias  [256]
+    model.19.fused.weight  [256,512,1,1]
+  model.21:
+    model.21.cv1.conv.weight  [256,512,1,1]
+    model.21.cv1.fused.bias  [256]
+    model.21.cv1.fused.weight  [256,512,1,1]
+    model.21.cv2.conv.weight  [256,512,1,1]
+    model.21.cv2.fused.bias  [256]
+    model.21.cv2.fused.weight  [256,512,1,1]
+    model.21.m.0.conv1.conv.weight  [256,256,3,3]
+    model.21.m.0.conv1.fused.bias  [256]
+    model.21.m.0.conv1.fused.weight  [256,256,3,3]
+    model.21.m.0.conv2.conv.weight  [256,256,1,1]
+    model.21.m.0.conv2.fused.bias  [256]
+    model.21.m.0.conv2.fused.weight  [256,256,1,1]
+    model.21.m.1.conv1.conv.weight  [256,256,3,3]
+    model.21.m.1.conv1.fused.bias  [256]
+    model.21.m.1.conv1.fused.weight  [256,256,3,3]
+    model.21.m.1.conv2.conv.weight  [256,256,1,1]
+    model.21.m.1.conv2.fused.bias  [256]
+    model.21.m.1.conv2.fused.weight  [256,256,1,1]
+    model.21.m.2.conv1.conv.weight  [256,256,3,3]
+    model.21.m.2.conv1.fused.bias  [256]
+    model.21.m.2.conv1.fused.weight  [256,256,3,3]
+    model.21.m.2.conv2.conv.weight  [256,256,1,1]
+    model.21.m.2.conv2.fused.bias  [256]
+    model.21.m.2.conv2.fused.weight  [256,256,1,1]
+  model.22:
+    model.22.conv.weight  [256,256,3,3]
+    model.22.fused.bias  [256]
+    model.22.fused.weight  [256,256,3,3]
+  model.24:
+    model.24.cv1.conv.weight  [256,512,1,1]
+    model.24.cv1.fused.bias  [256]
+    model.24.cv1.fused.weight  [256,512,1,1]
+    model.24.cv2.conv.weight  [256,512,1,1]
+    model.24.cv2.fused.bias  [256]
+    model.24.cv2.fused.weight  [256,512,1,1]
+    model.24.m.0.conv1.conv.weight  [256,256,3,3]
+    model.24.m.0.conv1.fused.bias  [256]
+    model.24.m.0.conv1.fused.weight  [256,256,3,3]
+    model.24.m.0.conv2.conv.weight  [256,256,1,1]
+    model.24.m.0.conv2.fused.bias  [256]
+    model.24.m.0.conv2.fused.weight  [256,256,1,1]
+    model.24.m.1.conv1.conv.weight  [256,256,3,3]
+    model.24.m.1.conv1.fused.bias  [256]
+    model.24.m.1.conv1.fused.weight  [256,256,3,3]
+    model.24.m.1.conv2.conv.weight  [256,256,1,1]
+    model.24.m.1.conv2.fused.bias  [256]
+    model.24.m.1.conv2.fused.weight  [256,256,1,1]
+    model.24.m.2.conv1.conv.weight  [256,256,3,3]
+    model.24.m.2.conv1.fused.bias  [256]
+    model.24.m.2.conv1.fused.weight  [256,256,3,3]
+    model.24.m.2.conv2.conv.weight  [256,256,1,1]
+    model.24.m.2.conv2.fused.bias  [256]
+    model.24.m.2.conv2.fused.weight  [256,256,1,1]
+  model.25:
+    model.25.conv.weight  [256,256,3,3]
+    model.25.fused.bias  [256]
+    model.25.fused.weight  [256,256,3,3]
+  model.27:
+    model.27.cv1.conv.weight  [256,512,1,1]
+    model.27.cv1.fused.bias  [256]
+    model.27.cv1.fused.weight  [256,512,1,1]
+    model.27.cv2.conv.weight  [256,512,1,1]
+    model.27.cv2.fused.bias  [256]
+    model.27.cv2.fused.weight  [256,512,1,1]
+    model.27.m.0.conv1.conv.weight  [256,256,3,3]
+    model.27.m.0.conv1.fused.bias  [256]
+    model.27.m.0.conv1.fused.weight  [256,256,3,3]
+    model.27.m.0.conv2.conv.weight  [256,256,1,1]
+    model.27.m.0.conv2.fused.bias  [256]
+    model.27.m.0.conv2.fused.weight  [256,256,1,1]
+    model.27.m.1.conv1.conv.weight  [256,256,3,3]
+    model.27.m.1.conv1.fused.bias  [256]
+    model.27.m.1.conv1.fused.weight  [256,256,3,3]
+    model.27.m.1.conv2.conv.weight  [256,256,1,1]
+    model.27.m.1.conv2.fused.bias  [256]
+    model.27.m.1.conv2.fused.weight  [256,256,1,1]
+    model.27.m.2.conv1.conv.weight  [256,256,3,3]
+    model.27.m.2.conv1.fused.bias  [256]
+    model.27.m.2.conv1.fused.weight  [256,256,3,3]
+    model.27.m.2.conv2.conv.weight  [256,256,1,1]
+    model.27.m.2.conv2.fused.bias  [256]
+    model.27.m.2.conv2.fused.weight  [256,256,1,1]
+  model.28:
+    model.28.dec_bbox_head.0.layers.0.weight  [256,256]
+    model.28.dec_bbox_head.0.layers.1.weight  [256,256]
+    model.28.dec_bbox_head.0.layers.2.weight  [4,256]
+    model.28.dec_bbox_head.0.layers.conv.weight  [256,256]
+    model.28.dec_bbox_head.1.layers.0.weight  [256,256]
+    model.28.dec_bbox_head.1.layers.1.weight  [256,256]
+    model.28.dec_bbox_head.1.layers.2.weight  [4,256]
+    model.28.dec_bbox_head.1.layers.conv.weight  [256,256]
+    model.28.dec_bbox_head.2.layers.0.weight  [256,256]
+    model.28.dec_bbox_head.2.layers.1.weight  [256,256]
+    model.28.dec_bbox_head.2.layers.2.weight  [4,256]
+    model.28.dec_bbox_head.2.layers.conv.weight  [256,256]
+    model.28.dec_bbox_head.3.layers.0.weight  [256,256]
+    model.28.dec_bbox_head.3.layers.1.weight  [256,256]
+    model.28.dec_bbox_head.3.layers.2.weight  [4,256]
+    model.28.dec_bbox_head.3.layers.conv.weight  [256,256]
+    model.28.dec_bbox_head.4.layers.0.weight  [256,256]
+    model.28.dec_bbox_head.4.layers.1.weight  [256,256]
+    model.28.dec_bbox_head.4.layers.2.weight  [4,256]
+    model.28.dec_bbox_head.4.layers.conv.weight  [256,256]
+    model.28.dec_bbox_head.5.layers.0.weight  [256,256]
+    model.28.dec_bbox_head.5.layers.1.weight  [256,256]
+    model.28.dec_bbox_head.5.layers.2.weight  [4,256]
+    model.28.dec_bbox_head.5.layers.conv.weight  [256,256]
+    model.28.dec_score_head.0.weight  [80,256]
+    model.28.dec_score_head.1.weight  [80,256]
+    model.28.dec_score_head.2.weight  [80,256]
+    model.28.dec_score_head.3.weight  [80,256]
+    model.28.dec_score_head.4.weight  [80,256]
+    model.28.dec_score_head.5.weight  [80,256]
+    model.28.dec_score_head.conv.weight  [80,256]
+    model.28.decoder.layers.0.cross_attn.attention_weights.weight  [96,256]
+    model.28.decoder.layers.0.cross_attn.output_proj.weight  [256,256]
+    model.28.decoder.layers.0.cross_attn.sampling_offsets.weight  [192,256]
+    model.28.decoder.layers.0.cross_attn.value_proj.weight  [256,256]
+    model.28.decoder.layers.0.linear1.weight  [1024,256]
+    model.28.decoder.layers.0.linear2.weight  [256,1024]
+    model.28.decoder.layers.0.norm1.weight  [256]
+    model.28.decoder.layers.0.norm2.weight  [256]
+    model.28.decoder.layers.0.norm3.weight  [256]
+    model.28.decoder.layers.0.self_attn.out_proj.weight  [256,256]
+    model.28.decoder.layers.1.cross_attn.attention_weights.weight  [96,256]
+    model.28.decoder.layers.1.cross_attn.output_proj.weight  [256,256]
+    model.28.decoder.layers.1.cross_attn.sampling_offsets.weight  [192,256]
+    model.28.decoder.layers.1.cross_attn.value_proj.weight  [256,256]
+    model.28.decoder.layers.1.linear1.weight  [1024,256]
+    model.28.decoder.layers.1.linear2.weight  [256,1024]
+    model.28.decoder.layers.1.norm1.weight  [256]
+    model.28.decoder.layers.1.norm2.weight  [256]
+    model.28.decoder.layers.1.norm3.weight  [256]
+    model.28.decoder.layers.1.self_attn.out_proj.weight  [256,256]
+    model.28.decoder.layers.2.cross_attn.attention_weights.weight  [96,256]
+    model.28.decoder.layers.2.cross_attn.output_proj.weight  [256,256]
+    model.28.decoder.layers.2.cross_attn.sampling_offsets.weight  [192,256]
+    model.28.decoder.layers.2.cross_attn.value_proj.weight  [256,256]
+    model.28.decoder.layers.2.linear1.weight  [1024,256]
+    model.28.decoder.layers.2.linear2.weight  [256,1024]
+    model.28.decoder.layers.2.norm1.weight  [256]
+    model.28.decoder.layers.2.norm2.weight  [256]
+    model.28.decoder.layers.2.norm3.weight  [256]
+    model.28.decoder.layers.2.self_attn.out_proj.weight  [256,256]
+    model.28.decoder.layers.3.cross_attn.attention_weights.weight  [96,256]
+    model.28.decoder.layers.3.cross_attn.output_proj.weight  [256,256]
+    model.28.decoder.layers.3.cross_attn.sampling_offsets.weight  [192,256]
+    model.28.decoder.layers.3.cross_attn.value_proj.weight  [256,256]
+    model.28.decoder.layers.3.linear1.weight  [1024,256]
+    model.28.decoder.layers.3.linear2.weight  [256,1024]
+    model.28.decoder.layers.3.norm1.weight  [256]
+    model.28.decoder.layers.3.norm2.weight  [256]
+    model.28.decoder.layers.3.norm3.weight  [256]
+    model.28.decoder.layers.3.self_attn.out_proj.weight  [256,256]
+    model.28.decoder.layers.4.cross_attn.attention_weights.weight  [96,256]
+    model.28.decoder.layers.4.cross_attn.output_proj.weight  [256,256]
+    model.28.decoder.layers.4.cross_attn.sampling_offsets.weight  [192,256]
+    model.28.decoder.layers.4.cross_attn.value_proj.weight  [256,256]
+    model.28.decoder.layers.4.linear1.weight  [1024,256]
+    model.28.decoder.layers.4.linear2.weight  [256,1024]
+    model.28.decoder.layers.4.norm1.weight  [256]
+    model.28.decoder.layers.4.norm2.weight  [256]
+    model.28.decoder.layers.4.norm3.weight  [256]
+    model.28.decoder.layers.4.self_attn.out_proj.weight  [256,256]
+    model.28.decoder.layers.5.cross_attn.attention_weights.weight  [96,256]
+    model.28.decoder.layers.5.cross_attn.output_proj.weight  [256,256]
+    model.28.decoder.layers.5.cross_attn.sampling_offsets.weight  [192,256]
+    model.28.decoder.layers.5.cross_attn.value_proj.weight  [256,256]
+    model.28.decoder.layers.5.linear1.weight  [1024,256]
+    model.28.decoder.layers.5.linear2.weight  [256,1024]
+    model.28.decoder.layers.5.norm1.weight  [256]
+    model.28.decoder.layers.5.norm2.weight  [256]
+    model.28.decoder.layers.5.norm3.weight  [256]
+    model.28.decoder.layers.5.self_attn.out_proj.weight  [256,256]
+    model.28.denoising_class_embed.weight  [80,256]
+    model.28.enc_bbox_head.layers.0.weight  [256,256]
+    model.28.enc_bbox_head.layers.1.weight  [256,256]
+    model.28.enc_bbox_head.layers.2.weight  [4,256]
+    model.28.enc_bbox_head.layers.conv.weight  [256,256]
+    model.28.enc_output.0.weight  [256,256]
+    model.28.enc_output.1.weight  [256]
+    model.28.enc_output.conv.weight  [256,256]
+    model.28.enc_score_head.weight  [80,256]
+    model.28.input_proj.0.0.weight  [256,256,1,1]
+    model.28.input_proj.0.1.weight  [256]
+    model.28.input_proj.0.conv.weight  [256,256,1,1]
+    model.28.input_proj.0.fused.bias  [256]
+    model.28.input_proj.0.fused.weight  [256,256,1,1]
+    model.28.input_proj.1.0.weight  [256,256,1,1]
+    model.28.input_proj.1.1.weight  [256]
+    model.28.input_proj.1.conv.weight  [256,256,1,1]
+    model.28.input_proj.1.fused.bias  [256]
+    model.28.input_proj.1.fused.weight  [256,256,1,1]
+    model.28.input_proj.2.0.weight  [256,256,1,1]
+    model.28.input_proj.2.1.weight  [256]
+    model.28.input_proj.2.conv.weight  [256,256,1,1]
+    model.28.input_proj.2.fused.bias  [256]
+    model.28.input_proj.2.fused.weight  [256,256,1,1]
+    model.28.query_pos_head.layers.0.weight  [512,4]
+    model.28.query_pos_head.layers.1.weight  [256,512]
+    model.28.query_pos_head.layers.conv.weight  [512,4]
+
+model.10 fused weights:
+  model.10.fused.bias  [256]
+  model.10.fused.weight  [256,2048,1,1]
+
+Milestone 2 — DWConv analytical test ('model.2.fused.weight')
+  input  shape: (128,16,16) all ones
+  output shape: (128,8,8)
+  stride/pad  : s=2 p=1  kernel      : 3x3
+  interior px checked : 6272
+  interior px mismatch: 0
+  max abs error       : 0.000e+00
+
+  Sample values (c, y, x) -> got / expected:
+    (  0,3,3) ->    2.86669 /    2.86669  (err=0.00e+00)
+    (  1,4,4) ->   -1.71316 /   -1.71316  (err=0.00e+00)
+    (  7,5,5) ->   -0.14274 /   -0.14274  (err=0.00e+00)
+    ( 42,6,6) ->    1.66275 /    1.66275  (err=0.00e+00)
+    (127,3,5) ->    1.47735 /    1.47735  (err=0.00e+00)
+
+  RESULT: PASS
+
+Milestone 3a - Conv2D analytical test ('model.0.stem1.fused.weight')
+  input  shape: (3,32,32) all ones
+  output shape: (32,16,16)
+  stride/pad  : s=2 p=1  kernel      : 3x3
+  interior px checked : 7200
+  interior px mismatch: 0
+  max abs error       : 0.000e+00
+
+  Sample values (c, y, x) -> got / expected:
+    (  0,4,4) ->    0.03567 /    0.03567  (err=0.00e+00)
+    (  5,6,6) ->    0.19897 /    0.19897  (err=0.00e+00)
+    ( 13,8,8) ->   -0.01432 /   -0.01432  (err=0.00e+00)
+    ( 20,5,10) ->    0.13719 /    0.13719  (err=0.00e+00)
+    ( 31,7,7) ->    0.23998 /    0.23998  (err=0.00e+00)
+
+  RESULT: PASS
+
+Milestone 3b - MaxPool (k=2 s=1 p=0)
+  input  (4,8,8) in[c,y,x]=y*W+x
+  output (4,7,7)
+  checked/mismatch: 196/0  max err: 0
+  (0,3,3) got=36 exp=36
+  RESULT: PASS
+
+Milestone 3b - MaxPool asymmetric pad [0,0,1,1]
+  output (8,8) (expect 8,8)
+  bottom-right got=63 exp=63
+  RESULT: PASS
+
+Milestone 3c - concatC(A[3,4,4], B[2,4,4])
+  output shape (5,4,4)
+  per-channel values: 10 11 12 1e+02 1e+02 
+  RESULT: PASS
+
+Milestone 3d - HGStem end-to-end (input [3,64,64] all ones)
+  output shape (48,16,16) (expect 48,16,16)
+  interior px checked : 6912
+  interior px mismatch: 0
+  max abs error       : 1.192e-06  max rel error       : 2.692e-05
+  Sample (c, y, x) -> got / expected:
+    (  0,8,8) ->    0.39411 /    0.39411  (err=1.19e-07)
+    (  5,7,7) ->    0.44738 /    0.44738  (err=2.98e-08)
+    ( 20,9,6) ->    0.45218 /    0.45218  (err=2.09e-07)
+    ( 35,8,10) ->    0.51261 /    0.51261  (err=4.77e-07)
+    ( 47,6,8) ->    0.28226 /    0.28226  (err=2.98e-08)
+  RESULT: PASS
+
+Milestone 4 - HGBlock (model.1, n=6, k=3)  input [48,24,24] all ones
+  output shape (128,24,24) (expect 128,24,24)
+  interior px checked : 12800
+  interior px mismatch: 0
+  max abs error       : 5.960e-06
+  Sample (c, y, x) -> got / expected:
+    (  0,12,12) ->    0.00000 /    0.00000  (err=0.00e+00)
+    ( 31,10,14) ->    0.00000 /    0.00000  (err=0.00e+00)
+    ( 63,13,11) ->    0.00000 /    0.00000  (err=0.00e+00)
+    (100,12,12) ->    0.00000 /    0.00000  (err=0.00e+00)
+    (127,11,13) ->    0.00000 /    0.00000  (err=0.00e+00)
+  RESULT: PASS
+
+Milestone 5a - LightConv (model.5.m.0, k=5)  input [512,20,20] all ones
+  output shape (192,20,20)
+  interior px checked : 37632
+  interior px mismatch: 0
+  max abs error       : 4.768e-07
+  Sample (c, y, x) -> got / expected:
+    (  0,10,10) ->    0.00000 /    0.00000  (err=0.00e+00)
+    ( 37,9,11) ->    0.00000 /    0.00000  (err=0.00e+00)
+    (100,11,9) ->    1.02511 /    1.02511  (err=1.19e-07)
+    (150,10,10) ->    0.64667 /    0.64667  (err=0.00e+00)
+    (191,8,12) ->    0.00000 /    0.00000  (err=0.00e+00)
+  RESULT: PASS
+
+Milestone 5b - HGBlockLight (model.5, n=6 k=5, no shortcut)  input [512,32,32]
+  output shape (1024,32,32) (expect OC=1024)
+  checked/mismatch: 36864/0   max abs err: 1.609e-06
+    c=14  got=0.23742 exp=0.23741  err=7.75e-07
+    c=16  got=0.25872 exp=0.25872  err=4.77e-07
+    c=20  got=1.00287 exp=1.00287  err=2.38e-07
+    c=68  got=0.88175 exp=0.88175  err=7.15e-07
+    c=81  got=0.30466 exp=0.30467  err=1.07e-06
+  RESULT: PASS
+
+Milestone 5b - HGBlockLight (model.6, n=6 k=5, SHORTCUT)  input [1024,32,32]
+  output shape (1024,32,32) (expect OC=1024)
+  checked/mismatch: 36864/0   max abs err: 3.815e-06
+    c=0  got=1.00000 exp=1.00000  err=0.00e+00
+    c=1  got=1.00000 exp=1.00000  err=0.00e+00
+    c=2  got=1.00000 exp=1.00000  err=0.00e+00
+    c=3  got=1.00000 exp=1.00000  err=0.00e+00
+    c=4  got=1.00000 exp=1.00000  err=0.00e+00
+  RESULT: PASS
+
+Milestone 6a - Linear/GEMM (model.11.fc1)  [1,256] @ [1024,256]^T
+  N=1024  K=256  fail=0  maxAbs=1.192e-07
+  RESULT: PASS
+
+Milestone 6b - LayerNorm (model.11.norm1)  all-ones [1,256]
+  D=256  fail=0  maxAbs=0.000e+00
+  RESULT: PASS
+
+Milestone 6c - Softmax  [3, 400] all ones
+  expected=0.0025  fail=0  maxAbs=0.000e+00
+  RESULT: PASS
+
+Milestone 6d - GELU at x in {-2,-1,0,1,2}
+  gelu(-2) = -0.0455  (ref -0.0455)
+  gelu(-1) = -0.159  (ref -0.159)
+  gelu(0) = 0  (ref 0)
+  gelu(1) = 0.841  (ref 0.841)
+  gelu(2) = 1.95  (ref 1.95)
+  maxAbs=1.192e-07
+  RESULT: PASS
+
+Milestone 5d - Strict PyTorch reference comparison
+  ref: C:\dev\threepp\scripts\rtdetr_l_ref.bin
+  ref loaded, tensors=35
+  uploading input...
+  running backbone...
+  backbone done, reading back...
+  p3 read
+  p4 read
+  p5 read
+  p3g.size=3276800  ref.model.3.size=3276800
+  P3 vs model.3   N=3276800  fail=5238  maxAbs=5.990e-02  meanAbs=1.098e-03  maxRel=1.359e+04
+      got range [0, 16]  exp range [0, 16.1]
+  P3 diff done
+  P4 vs model.7   N=1638400  fail=27988  maxAbs=2.288e-01  meanAbs=2.246e-03  maxRel=6.447e+04
+      got range [0, 22.9]  exp range [0, 22.9]
+  P4 diff done
+  P5 vs model.10  N=102400  fail=252  maxAbs=6.241e-02  meanAbs=2.448e-03  maxRel=1.425e+02
+      got range [-2.43, 2.14]  exp range [-2.38, 2.15]
+  P5 diff done
+  RESULT: FAIL
+
+Milestone 6e - AIFI (model.11) strict ref comparison
+  upload m10...
+  run aifi...
+  aifi done, readback...
+  diff...
+  AIFI vs model.11  N=102400  fail=0  maxAbs=2.146e-06  meanAbs=2.820e-07  maxRel=9.143e-03
+      got range [-3.67, 3.79]  exp range [-3.67, 3.79]
+  RESULT: PASS
+
+Milestone 7 - CCFM neck (modules 12..27) strict ref comparison
+  uploading p3/p4/f5...
+  m12 (Conv 1x1 SiLU)  N=102400  fail=0  maxAbs=2.135e-03  meanAbs=2.722e-04  maxRel=9.718e+01
+      got range [-0.278, 3.73]  exp range [-0.278, 3.73]
+  m14 (Conv 1x1 noAct)  N=409600  fail=0  maxAbs=2.718e-03  meanAbs=2.158e-04  maxRel=3.823e+02
+      got range [-6.74, 7.54]  exp range [-6.74, 7.54]
+  m19 (Conv 1x1 noAct)  N=1638400  fail=0  maxAbs=4.088e-03  meanAbs=3.665e-04  maxRel=4.092e+02
+      got range [-9.3, 7.6]  exp range [-9.3, 7.6]
+  running ccfm_()...
+  ccfm done; readback s3...
+  s3 read
+  s4 read
+  s5 read
+  S3 vs model.21  N=1638400  fail=0  maxAbs=2.690e-02  meanAbs=6.954e-04  maxRel=1.004e+03
+      got range [-0.557, 13]  exp range [-0.557, 13]
+  S4 vs model.24  N=409600  fail=0  maxAbs=4.014e-02  meanAbs=9.031e-04  maxRel=1.323e+03
+      got range [-0.557, 15.8]  exp range [-0.557, 15.8]
+  S5 vs model.27  N=102400  fail=0  maxAbs=1.906e-02  meanAbs=7.194e-04  maxRel=1.300e+03
+      got range [-0.557, 9.07]  exp range [-0.557, 9.09]
+  RESULT: PASS
+
+Milestone 8a - RTDETRDecoder weight inventory preflight
+  checked=212  missing=0  badShape=0
+  RESULT: PASS
+
+Milestone 8c - memory assembly + enc_output (Linear + LN)
+  memory (tokens)  N=2150400  fail=0  maxAbs=0.000e+00  meanAbs=0.000e+00  maxRel=0.000e+00
+      got range [-1.87, 2.6]  exp range [-1.87, 2.6]
+    mem[0,0..2] got=0,0,0  exp=-0,0,0
+    mem[6400,0..2] got=-0.474,1.79  exp=-0.474,1.79
+    mem[8000,0..2] got=-0.204,0.332  exp=-0.204,0.332
+  enc_output  N=2150400  fail=0  maxAbs=2.384e-06  meanAbs=5.709e-08  maxRel=6.799e-02
+      got range [-5.42, 5.17]  exp range [-5.42, 5.17]
+  RESULT: PASS
+
+Milestone 8b - input_proj (Conv1x1 + BN) strict ref
+  input_proj.0  N=1638400  fail=0  maxAbs=1.245e-03  meanAbs=5.952e-05  maxRel=1.395e+02
+      got range [-2.82, 2.52]  exp range [-2.82, 2.52]
+  input_proj.1  N=409600  fail=0  maxAbs=1.004e-03  meanAbs=4.749e-05  maxRel=2.850e+01
+      got range [-1.87, 2.6]  exp range [-1.87, 2.6]
+  input_proj.2  N=102400  fail=0  maxAbs=8.235e-04  meanAbs=8.124e-05  maxRel=2.657e+01
+      got range [-1.73, 1.61]  exp range [-1.73, 1.61]
+  RESULT: PASS
