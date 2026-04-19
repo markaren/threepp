@@ -60,8 +60,7 @@ int main(int argc, char** argv) {
 
     Canvas::Parameters p;
     p.title("RT-DETR-L WebGPU Inference")
-     .size(640, 640)
-     .graphicsApi(GraphicsAPI::WebGPU);
+     .size(640, 640);
 
     Canvas canvas(p);
     WgpuRenderer renderer(canvas);

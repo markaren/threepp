@@ -1,12 +1,14 @@
-/// RT-DETR-L WebGPU Object Detection Inference
+/// YOLOv8n WebGPU Object Detection Inference Example
 ///
-/// Usage: rtdetr_inference [image_path]
-///   image_path   - JPEG/PNG input image (default: data/bus.jpg)
+/// Usage: yolov8_inference [image_path] [weights_path]
+///   image_path   – JPEG/PNG input image (default: data/textures/uv_grid_opengl.jpg)
+///   weights_path – .bin file exported by scripts/export_yolov8n_weights.py
+///                  (default: yolov8n.bin next to the executable)
 ///
 /// Workflow:
 ///   1. Load image from disk via ImageLoader (RGBA, stb_image)
 ///   2. Load pre-trained weights from binary file into GPU buffers
-///   3. Run full RT-DETR-L forward pass on GPU using WGSL compute shaders
+///   3. Run full YOLOv8n forward pass on GPU using WGSL compute shaders
 ///   4. Display the input image with detection bounding box overlays
 
 #include "threepp/threepp.hpp"
@@ -16,7 +18,7 @@
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/core/BufferAttribute.hpp"
 
-#include "rtdetr/RtDetr.hpp"
+#include "yolov8/YoloV8n.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -44,9 +46,11 @@ static const char* kCocoNames[80] = {
 };
 
 /// Build a LineSegments object drawing 4 edges of a 2D bounding box.
+/// Coordinates are in 2D (Z=0). The box is axis-aligned.
 static std::shared_ptr<LineSegments> makeBoxLines(
         float x1, float y1, float x2, float y2, const Color& col) {
 
+    // 4 edges × 2 vertices each = 8 vertices
     std::vector<float> positions = {
         x1, y1, 0,  x2, y1, 0,   // top edge
         x2, y1, 0,  x2, y2, 0,   // right edge
@@ -71,6 +75,10 @@ int main(int argc, char** argv) {
     if (argc > 1) imgPath     = argv[1];
     if (argc > 2) weightsPath = argv[2];
 
+    if (imgPath.empty() || weightsPath.empty()) {
+        std::cerr << "Usage: " << argv[0] << " imgPath weightsPath\n";
+    }
+
     // ----------------------------------------------------------------
     // Load input image on CPU
     // ----------------------------------------------------------------
@@ -81,34 +89,37 @@ int main(int argc, char** argv) {
         return 1;
     }
     auto& img = *imgOpt;
-    std::cout << "Loaded image: " << img.width << "x" << img.height << "\n";
+    std::cout << "Loaded image: " << img.width << "×" << img.height << "\n";
 
     // ----------------------------------------------------------------
     // Setup WebGPU window
     // ----------------------------------------------------------------
     const int WIN = 900;
     Canvas::Parameters params;
-    params.title("RT-DETR-L WebGPU Inference")
-          .size(WIN, WIN)
-          .graphicsApi(GraphicsAPI::WebGPU);
+    params.title("YOLOv8n WebGPU Inference")
+          .size(WIN, WIN);
 
     Canvas canvas(params);
     WgpuRenderer renderer(canvas);
     renderer.setClearColor(Color(0x1a1a2e));
 
     // ----------------------------------------------------------------
-    // Run inference
+    // Run inference (before the render loop, can take several seconds
+    // on first run due to WGSL shader compilation)
     // ----------------------------------------------------------------
     std::cout << "Loading weights from '" << weightsPath << "' ...\n";
 
     using clk = std::chrono::steady_clock;
+    auto ms = [](clk::duration d) {
+        return std::chrono::duration<double, std::milli>(d).count();
+    };
 
-    std::vector<rtdetr::RtDetr::Detection> detections;
+    std::vector<yolo::Detection> detections;
     {
         const int WARMUP = 3;
-        const int RUNS   = 10;
+        const int RUNS   = 50;
 
-        rtdetr::RtDetr model(renderer);
+        yolo::YoloV8n model(renderer);
         model.loadWeights(weightsPath);
 
         auto& rgba = img.data<unsigned char>();
@@ -118,7 +129,7 @@ int main(int argc, char** argv) {
 
         std::string bar(52, '=');
         std::cout << "\n" << bar << "\n"
-                  << "  RT-DETR-L WebGPU Inference Benchmark\n"
+                  << "  YOLOv8n WebGPU Inference Benchmark\n"
                   << bar << "\n"
                   << "  Image  : " << imgFs.filename().string()
                   << " (" << std::fixed << std::setprecision(1) << imgKB << " KB)\n"
@@ -138,12 +149,17 @@ int main(int argc, char** argv) {
             auto ta = clk::now();
             detections = model.infer(rgba.data(), int(img.width), int(img.height));
             auto tb = clk::now();
-            double dt = std::chrono::duration<double, std::milli>(tb - ta).count();
+            double dt = ms(tb - ta);
             times_ms.push_back(dt);
 
             std::cout << "  Run " << std::setw(2) << (i + 1) << "/" << RUNS << "  "
                       << std::fixed << std::setprecision(2) << std::setw(7) << dt
                       << " ms   detections: " << detections.size() << "\n";
+            for (auto& d : detections) {
+                const char* name = (d.cls_id >= 0 && d.cls_id < 80) ? kCocoNames[d.cls_id] : "unknown";
+                std::cout << "             > " << std::left << std::setw(20) << name << std::right
+                          << "  conf: " << std::fixed << std::setprecision(3) << d.conf << "\n";
+            }
         }
 
         // Stats
@@ -157,7 +173,7 @@ int main(int argc, char** argv) {
             : 0.5 * (sorted[RUNS / 2 - 1] + sorted[RUNS / 2]);
         double sq = 0.0;
         for (double v : times_ms) sq += (v - mean) * (v - mean);
-        double stdev = std::sqrt(sq / std::max(1, RUNS - 1));
+        double stdev = std::sqrt(sq / (RUNS - 1));   // sample stdev
         double mn = sorted.front(), mx = sorted.back();
 
         std::string sep(52, '-');
@@ -172,36 +188,26 @@ int main(int argc, char** argv) {
                   << "  Min    : " << std::setw(8) << mn << " ms\n"
                   << "  Max    : " << std::setw(8) << mx << " ms\n"
                   << bar << "\n\n";
-
-        // Print detections
-        std::cout << "Detections (" << detections.size() << "):\n";
-        for (size_t i = 0; i < detections.size(); ++i) {
-            auto& d = detections[i];
-            const char* name = (d.classId >= 0 && d.classId < 80)
-                ? kCocoNames[d.classId] : "unknown";
-            std::cout << "  [" << i << "] " << std::left << std::setw(18) << name
-                      << std::right << std::fixed
-                      << "  conf=" << std::setprecision(3) << d.confidence
-                      << "  box=(" << std::setprecision(1)
-                      << d.x1 << "," << d.y1 << ","
-                      << d.x2 << "," << d.y2 << ")\n";
-        }
     }
 
     // ----------------------------------------------------------------
     // Scene: display image + bounding boxes with an orthographic camera
+    // Camera: (0,0) = top-left, (640,640) = bottom-right (matches YOLO space)
     // ----------------------------------------------------------------
     auto scene = Scene::create();
 
     // Orthographic camera: (left, right, top, bottom, near, far).
-    // top=640 = screen top, bottom=0 = screen bottom.
+    // top=640 means world y=640 maps to screen top, bottom=0 means y=0 = screen bottom.
+    // Image loaded with flipY=true so image top appears at screen top.
+    // YOLO box y coords (image space, 0=top) must be flipped: screen_y = 640 - image_y.
     auto camera = OrthographicCamera::create(0, 640, 640, 0, -1, 1);
 
-    // Upload image as texture
+    // Upload image as texture (resize to 640×640 display by placing it on a plane)
+    // Use TextureLoader to create a displayable texture
     TextureLoader texLoader;
-    auto displayTex = texLoader.load(imgPath, true);  // flipY for correct orientation
+    auto displayTex = texLoader.load(imgPath, true);  // flipY=true: correct OpenGL orientation
 
-    // Plane covering [0,640] x [0,640]
+    // Plane covering [0,640] × [0,640]: centre at (320,320), size 640×640
     auto planeGeo = PlaneGeometry::create(640, 640);
     auto planeMat = MeshBasicMaterial::create();
     planeMat->map = displayTex;
@@ -209,26 +215,28 @@ int main(int argc, char** argv) {
 
     auto quad = Mesh::create(planeGeo, planeMat);
     quad->position.set(320, 320, 0);
+    // PlaneGeometry is in XY, faces -Z by default (normal +Z).
+    // No rotation needed for ortho camera looking at -Z.
     scene->add(quad);
 
-    // Detection colour palette
+    // Detection colour palette (one colour per class mod 6)
     static const Color kPalette[] = {
         Color(0xff3333), Color(0x33ff33), Color(0x3333ff),
         Color(0xffff33), Color(0xff33ff), Color(0x33ffff)
     };
 
-    // Map detections from original-image pixel space onto the 640x640 display
+    // Detections are in original-image pixel space; map them onto the 640×640 display plane.
     const float sx = 640.f / float(img.width);
     const float sy = 640.f / float(img.height);
     for (auto& d : detections) {
         float x1 = std::max(0.f, d.x1 * sx), y1 = std::max(0.f, d.y1 * sy);
         float x2 = std::min(640.f, d.x2 * sx), y2 = std::min(640.f, d.y2 * sy);
 
-        // Flip y: image y=0 is top -> world y=640 (screen top)
+        // Flip y: image y=0 is top → world y=640 (screen top)
         float sy1 = 640.f - y2;
         float sy2 = 640.f - y1;
 
-        Color col = kPalette[d.classId % 6];
+        Color col = kPalette[d.cls_id % 6];
         auto box = makeBoxLines(x1, sy1, x2, sy2, col);
         scene->add(box);
     }
