@@ -28,6 +28,8 @@ however much remains to be done.. Nevertheless, the library is **very** usable f
 * Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
+* OpenGL and WebGPU backends
+* Real-time pathtracing (on WebGPU backend)
 
 Builds on Windows, Linux, MacOS, MinGW and with Emscripten.
 
