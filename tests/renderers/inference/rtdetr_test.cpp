@@ -76,7 +76,7 @@ struct TestCtx {
     bool weightsLoaded = false;
 
     TestCtx()
-        : canvas([]{ Canvas::Parameters p; p.title("rtdetr_test").size(640, 640); return p; }())
+        : canvas(Canvas::Parameters() .title("rtdetr_test").size(640, 640).headless(true))
         , renderer(canvas)
         , model(renderer)
     {
@@ -173,8 +173,8 @@ std::vector<float> cpuHGBlock(const rtdetr::RtDetr& m,
                                                   mp + ".fused.bias", true));
         prev = &branches.back();
     }
-    uint32_t cIn = uint32_t(vIn.size());
-    uint32_t cBr = uint32_t(branches[0].size());
+    uint32_t cIn = static_cast<uint32_t>(vIn.size());
+    uint32_t cBr = static_cast<uint32_t>(branches[0].size());
     std::vector<float> cat(cIn + n * cBr);
     std::copy(vIn.begin(), vIn.end(), cat.begin());
     for (int i = 0; i < n; ++i)

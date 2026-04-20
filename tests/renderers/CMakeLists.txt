@@ -29,12 +29,7 @@ if (THREEPP_WITH_WGPU)
     add_cross_renderer_test(CrossRenderer_parity_test CrossRenderer_parity_test.cpp)
     add_cross_renderer_test(WgpuRenderer_perf_test WgpuRenderer_perf_test.cpp)
 
-    add_cross_renderer_test(rtdetr_test rtdetr_test.cpp)
-    target_sources(rtdetr_test PRIVATE
-        "${PROJECT_SOURCE_DIR}/examples/wgpu/rtdetr/RtDetr.cpp"
-        "${PROJECT_SOURCE_DIR}/examples/wgpu/rtdetr/WeightLoader.cpp"
-    )
-    target_include_directories(rtdetr_test PRIVATE
-        "${PROJECT_SOURCE_DIR}/examples/wgpu"
-    )
+    if (THREEPP_WITH_INFERENCE)
+        add_subdirectory(inference)
+    endif ()
 endif ()
