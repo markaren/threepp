@@ -73,16 +73,14 @@ fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
     return transform.proj * transform.view * transform.model * vec4<f32>(position, 1.0);
 }
 
-// This shader outputs linear HDR radiance (× exposure). Tone mapping and sRGB
-// encoding are applied by the WgpuRenderer post-process pass based on the
-// renderer's `toneMapping` and `outputEncoding` settings — doing it here would
-// double-correct. Background/sky pixels (s.w < 0) skip the exposure multiply
-// so a clamped ACES on the renderer side doesn't blow out the sky.
-fn upscaleAt(p: vec2<i32>, sz: vec2<i32>, expo: f32) -> vec3<f32> {
+// This shader outputs raw linear HDR radiance. Exposure, tone mapping, and
+// sRGB encoding are all applied by the WgpuRenderer post-process pass based
+// on the renderer's `toneMappingExposure`, `toneMapping`, and `outputEncoding`
+// settings — applying any of them here would double up with that pass.
+fn upscaleAt(p: vec2<i32>, sz: vec2<i32>) -> vec3<f32> {
     let pc = clamp(p, vec2<i32>(0), sz - vec2<i32>(1, 1));
     let s  = textureLoad(upscaleTex, pc, 0);
-    if (s.w < 0.0) { return max(s.xyz, vec3<f32>(0.0)); }
-    return max(s.xyz * expo, vec3<f32>(0.0));
+    return max(s.xyz, vec3<f32>(0.0));
 }
 
 @fragment
@@ -95,7 +93,6 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     let aovMode   = i32(rawPad / 10.0);
     let pixScale  = max(rawPad - f32(aovMode) * 10.0, 0.01);
     let accumSize = vec2<i32>(textureDimensions(accumTex, 0));
-    let exposure  = transform.cameraPos.z;
 
     // AOV mode: direct passthrough of diffTex as linear radiance.
     // Renderer post-process handles sRGB encoding.
@@ -109,7 +106,7 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     let upscaleSize = vec2<i32>(textureDimensions(upscaleTex, 0));
     if (upscaleSize.x > 1) {
         let px = vec2<i32>(i32(fragPos.x), i32(fragPos.y));
-        return vec4<f32>(upscaleAt(px, upscaleSize, exposure), 1.0);
+        return vec4<f32>(upscaleAt(px, upscaleSize), 1.0);
     }
 
     // When rendering at reduced resolution (pixelScale < 1), use joint bilateral
@@ -130,8 +127,7 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
         let nRef = gRef.xyz;
         let dRef = gRef.w;
 
-        // Background: skip bilateral, just nearest-neighbor. Skip exposure —
-        // renderer post-process handles tonemap/sRGB.
+        // Background: skip bilateral, just nearest-neighbor.
         if (dRef <= 0.0) {
             let col = textureLoad(diffTex, pNearest, 0).xyz + textureLoad(specTex, pNearest, 0).xyz;
             return vec4<f32>(max(col, vec3<f32>(0.0)), 1.0);
@@ -178,17 +174,14 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
             col = textureLoad(diffTex, pNearest, 0).xyz + textureLoad(specTex, pNearest, 0).xyz;
         }
 
-        return vec4<f32>(max(col * exposure, vec3<f32>(0.0)), 1.0);
+        return vec4<f32>(max(col, vec3<f32>(0.0)), 1.0);
     }
 
     // Native resolution — output linear HDR radiance; renderer post-process
-    // applies tonemap and sRGB encoding.
+    // applies exposure, tonemap, and sRGB encoding.
     let px  = clamp(vec2<i32>(fragPos.xy * pixScale), vec2<i32>(0), accumSize - 1);
     let col = textureLoad(diffTex, px, 0).xyz + textureLoad(specTex, px, 0).xyz;
-    if (textureLoad(gBufTex, px, 0).w <= 0.0) {
-        return vec4<f32>(max(col, vec3<f32>(0.0)), 1.0);
-    }
-    return vec4<f32>(max(col * exposure, vec3<f32>(0.0)), 1.0);
+    return vec4<f32>(max(col, vec3<f32>(0.0)), 1.0);
 }
 )";
 

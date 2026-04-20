@@ -59,15 +59,18 @@ namespace {
             float rough, metal;
             float rx, ry;    // euler rotation
             float px, py, pz;// position
+            bool backSide = false;
         };
 
-        const std::array<Wall, 5> walls = {{
+        const std::array<Wall, 6> walls = {{
                 // floor — polished obsidian
                 {W, W, Color(0.04f, 0.04f, 0.05f), 0.04f, 0.7f, -math::PI / 2, 0, 0, 0, 0},
                 // ceiling — matte charcoal
                 {W, W, Color(0.03f, 0.03f, 0.03f), 1.f, 0.f, math::PI / 2, 0, 0, H, 0},
                 // back wall — neutral dark
                 {W, H, Color(0.11f, 0.11f, 0.13f), 0.88f, 0.f, 0, 0, 0, H / 2, -W / 2},
+                // front wall — neutral dark
+                {W, H, Color(0.11f, 0.11f, 0.13f), 0.88f, 0.f, 0, 0, 0, H / 2, W / 2, true},
                 // left wall — deep crimson (colour bleeding)
                 {W, H, Color(0.30f, 0.03f, 0.03f), 0.85f, 0.f, 0, math::PI / 2, -W / 2, H / 2, 0},
                 // right wall — deep cobalt
@@ -78,6 +81,7 @@ namespace {
             auto mat = MeshStandardMaterial::create({{"color", w.col},
                                                      {"roughness", w.rough},
                                                      {"metalness", w.metal}});
+            mat->side = w.backSide ? Side::Back : Side::Front;
             auto m = Mesh::create(PlaneGeometry::create(w.pw, w.ph), mat);
             m->rotation.x = w.rx;
             m->rotation.y = w.ry;
@@ -116,10 +120,10 @@ namespace {
             float intensity;
         };
         const std::array<Strip, 4> strips = {{
-                {-8.0f, Color(1.f, 0.92f, 0.70f), 1.f}, // warm white
-                {-1.5f, Color(0.25f, 0.55f, 1.f), 1.f}, // cool blue
-                {4.0f, Color(1.f, 0.52f, 0.08f), 1.f},  // amber
-                {9.5f, Color(0.22f, 0.90f, 0.38f), 1.f},// green
+                {-8.0f, Color(1.f, 0.92f, 0.70f), 30.f}, // warm white
+                {-1.5f, Color(0.25f, 0.55f, 1.f), 30.f}, // cool blue
+                {4.0f, Color(1.f, 0.52f, 0.08f), 30.f},  // amber
+                {9.5f, Color(0.22f, 0.90f, 0.38f), 30.f},// green
         }};
 
         for (auto& s : strips) {
@@ -365,6 +369,7 @@ int main() {
 
     WgpuRenderer renderer(canvas);
     renderer.outputEncoding = Encoding::sRGB;
+    renderer.toneMapping = ToneMapping::ACESFilmic;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
     pathTracer.setMaxBounces(4);
@@ -375,7 +380,7 @@ int main() {
 
     // ── Scene ──────────────────────────────────────────────────────────────────
     Scene scene;
-    scene.background = Color(0.01f, 0.01f, 0.02f);
+    scene.background = Color::aliceblue;
 
     buildRoom(scene);
     buildPillars(scene);

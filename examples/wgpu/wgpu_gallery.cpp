@@ -153,7 +153,7 @@ namespace {
 
         // Bright emissive panel filling the window opening (flush with wall)
         auto sunPanel = Mesh::create(PlaneGeometry::create(winW + 2, winH + 2),
-                                     matEmissive(Color(1.0f, 0.95f, 0.8f), 10.0f));
+                                     matEmissive(Color(1.0f, 0.95f, 0.8f), 50.0f));
         sunPanel->rotation.y = math::PI / 2.f;
         sunPanel->position.set(-W / 2.f - 0.1f, winCY, winCZ);
         windowGroup->add(sunPanel);
@@ -238,6 +238,7 @@ int main() {
 
     WgpuRenderer renderer(canvas);
     renderer.outputEncoding = Encoding::sRGB;
+    renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.shadowMap().enabled = true;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
@@ -315,7 +316,7 @@ int main() {
     scene.add(trooper);
 
     // Emissive orb (floating, back-left)
-    auto emOrb = Mesh::create(BoxGeometry::create(), matEmissive(Color(0.2f, 1.0f, 0.6f), 2.f));
+    auto emOrb = Mesh::create(BoxGeometry::create(), matEmissive(Color(0.2f, 1.0f, 0.6f), 5.f));
     emOrb->rotateY(math::degToRad(45));
     emOrb->position.set(-9.f, 0.5f, -9.f);
     scene.add(emOrb);

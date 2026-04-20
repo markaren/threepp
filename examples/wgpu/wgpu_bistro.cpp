@@ -32,6 +32,7 @@ int main(int argc, char** argv) {
 
     WgpuRenderer renderer(canvas);
     renderer.outputEncoding = Encoding::sRGB;
+    renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.shadowMap().enabled = true;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());

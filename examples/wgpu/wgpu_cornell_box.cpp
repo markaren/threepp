@@ -20,7 +20,7 @@ namespace {
         auto mat = MeshStandardMaterial::create({
                 {"color", Color::white},
                 {"emissive", Color::white},
-                {"emissiveIntensity", 4.0f},
+                {"emissiveIntensity", 16.0f},
                 {"roughness", 1.0f},
         });
         auto mesh = Mesh::create(PlaneGeometry::create(2.6f, 2.6f), mat);
@@ -127,6 +127,7 @@ int main() {
 
     WgpuRenderer renderer(canvas);
     renderer.outputEncoding = Encoding::sRGB;
+    renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.shadowMap().enabled = true;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());

@@ -337,6 +337,7 @@ int main(int argc, char** argv) {
             fpsFrames = 0;
         }
 
+        light->intensity = raster ? 1.0f : 10.0f;
         light->visible = dirLight || raster;
 
         // Check async model load

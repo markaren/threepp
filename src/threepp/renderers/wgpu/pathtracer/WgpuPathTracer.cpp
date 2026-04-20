@@ -135,7 +135,6 @@ struct WgpuPathTracer::Impl {
     int spp_ = 1;
     float envIntensity_ = 0.5f;
     int maxBounces_ = 4;
-    float exposure_ = 1.0f;
     // Per-contribution firefly clamp (luminance cap) on indirect MIS paths.
     // Default 8.0 matches production renderers (Arnold/Cycles/RenderMan).
     // Set to a very large value (e.g. 1e30f) to disable clipping when
@@ -3216,10 +3215,9 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     d.displayMat->uniformsNeedUpdate = true;
     d.frameCount_ += 1.f;
 
-    // Pass exposure via camera z (transform.cameraPos.z); always positive so the display quad
-    // stays in front of the near plane.  AOV mode is encoded in _pad: _pad = pixelScale + aovMode*10,
-    // allowing the display shader to extract both pixelScale and aovMode from a single float.
-    d.displayCam.position.z = d.exposure_;
+    // AOV mode is encoded in _pad: _pad = pixelScale + aovMode*10, allowing the display
+    // shader to extract both pixelScale and aovMode from a single float.
+    // Exposure/tonemap/sRGB are applied by the renderer's post-process pass.
     d.renderer.setPixelRatioHint(d.pixelScale_ + static_cast<float>(d.aovMode_) * 10.f);
 
     // Blit to screen
@@ -3375,11 +3373,11 @@ int WgpuPathTracer::maxBounces() const {
 }
 
 void WgpuPathTracer::setExposure(float exposure) {
-    pimpl_->exposure_ = exposure;
+    pimpl_->renderer.toneMappingExposure = exposure;
 }
 
 float WgpuPathTracer::exposure() const {
-    return pimpl_->exposure_;
+    return pimpl_->renderer.toneMappingExposure;
 }
 
 void WgpuPathTracer::setDenoiserEnabled(bool enabled) {
