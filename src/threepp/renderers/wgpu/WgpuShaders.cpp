@@ -758,7 +758,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
             } else {
                 s << "    let ambientSpecular = F0 * lights.ambient * (1.0 - roughness);\n";
             }
-            s << "    baseColor = baseColor * (1.0 - metalness) * diffuseLight + specularLight + ambientSpecular + emissiveColor;\n";
+            s << "    baseColor = baseColor * (1.0 - metalness) * diffuseLight + specularLight + ambientSpecular;\n";
         } else {
             if (features & (ShaderFeatures::EnvMap | ShaderFeatures::EnvMapCube)) {
                 s << "    let R = reflect(-V, N);\n";
@@ -769,9 +769,9 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
                     s << "    let envTheta = asin(clamp(R.y, -1.0, 1.0)) * 0.31830989 + 0.5;\n";
                     s << "    let envColor = textureSample(t_envMap, s_envMap, vec2<f32>(envPhi, 1.0 - envTheta)).rgb;\n";
                 }
-                s << "    baseColor = baseColor * diffuseLight + specularLight + emissiveColor + envColor * material.emissive.w;\n";
+                s << "    baseColor = baseColor * diffuseLight + specularLight + envColor * material.emissive.w;\n";
             } else {
-                s << "    baseColor = baseColor * diffuseLight + specularLight + emissiveColor;\n";
+                s << "    baseColor = baseColor * diffuseLight + specularLight;\n";
             }
         }
 
@@ -822,7 +822,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
 )";
         }
 
-        // AO map
+        // AO map — applied before emissive so emissive is not darkened by occlusion
         if (features & ShaderFeatures::AOMap) {
             s << "    {\n";
             s << "        let ao = textureSample(t_aoMap, s_aoMap, in.uv).r;\n";
@@ -830,6 +830,9 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
             s << "        baseColor = baseColor * mix(1.0, ao, aoIntensity);\n";
             s << "    }\n";
         }
+
+        // Add emissive after AO (matches three.js outgoingLight composition)
+        s << "    baseColor = baseColor + emissiveColor;\n";
     } else {
         // Unlit path
         if (features & ShaderFeatures::EmissiveMap) {
