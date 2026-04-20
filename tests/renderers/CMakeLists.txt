@@ -1,7 +1,7 @@
 
 add_subdirectory(gl)
 
-if (THREEPP_WITH_WGPU)
+if (THREEPP_WITH_WGPU AND THREEPP_WITH_GLFW)
     # Helper function to create a cross-renderer test target with Wgpu/WebGPU support.
     function(add_cross_renderer_test name source)
         add_executable(${name} ${source})
@@ -22,6 +22,12 @@ if (THREEPP_WITH_WGPU)
         else ()
             add_test(NAME ${name} COMMAND ${name})
         endif ()
+
+        # CI runners without a GPU/GL driver cause all tests to skip (or Canvas
+        # construction to throw on Windows WGL). Mark as skipped rather than failed.
+        set_tests_properties(${name} PROPERTIES
+            SKIP_REGULAR_EXPRESSION "No GPU backend available for Wgpu;WGL: The driver does not appear to support OpenGL"
+        )
     endfunction()
 
     add_cross_renderer_test(CrossRenderer_gl_test CrossRenderer_gl_test.cpp)

@@ -138,6 +138,17 @@ jobs:
           libglu1-mesa-dev \
           pkg-config
 
+      - name: Cache naga-cli
+        id: cache-naga
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/naga
+          key: naga-cli-${{ runner.os }}-v1
+
+      - name: Install naga-cli
+        if: steps.cache-naga.outputs.cache-hit != 'true'
+        run: cargo install naga-cli --locked
+
       - uses: mymindstorm/setup-emsdk@v14
         with:
           version: 3.1.71

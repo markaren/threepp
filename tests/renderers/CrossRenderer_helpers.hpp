@@ -47,10 +47,6 @@ namespace crosstest {
         static int cached = -1;
         if (cached >= 0) return cached != 0;
 
-        // The GL canvas must exist first to establish a GL context,
-        // which wgpu-native's GL backend needs.
-        (void)glCanvas();
-
         // Use only primary backends (Vulkan/Metal/DX12) to avoid EGL conflicts
         // with GLFW's GL context when the GL backend is also enabled.
         WGPUInstanceExtras instanceExtras{};
@@ -109,8 +105,6 @@ namespace crosstest {
             cached = 0;
             return false;
         }
-
-        (void)glCanvas();
 
         WGPUInstanceExtras instanceExtras{};
         instanceExtras.chain.sType = static_cast<WGPUSType>(WGPUSType_InstanceExtras);

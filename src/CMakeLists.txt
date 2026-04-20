@@ -677,7 +677,7 @@ if (THREEPP_WITH_AUDIO)
 endif ()
 
 if (THREEPP_WITH_USD)
-    message("Using tinyusdz: "${tinyusdz_SOURCE_DIR}"")
+    message("Using tinyusdz: ${tinyusdz_SOURCE_DIR}")
     target_link_libraries(threepp PRIVATE tinyusdz_static)
     target_include_directories(threepp PRIVATE
             "${tinyusdz_SOURCE_DIR}/src"
@@ -753,12 +753,15 @@ if (THREEPP_WITH_WGPU)
             target_link_libraries(threepp PRIVATE "-framework QuartzCore" "-framework Metal")
         endif ()
 
-        # Copy wgpu_native.dll next to executables so they can find it at runtime
+        # Copy wgpu_native.dll next to executables so they can find it at runtime.
+        # Uses $<TARGET_FILE_DIR:threepp> (rather than CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+        # so multi-config generators like Visual Studio pick up the per-config subdir
+        # (e.g. build/bin/Release/) where executables actually land.
         if (WIN32 AND WGPU_NATIVE_DLL)
             add_custom_command(TARGET threepp POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${WGPU_NATIVE_DLL}"
-                    "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/wgpu_native.dll"
+                    "$<TARGET_FILE_DIR:threepp>/wgpu_native.dll"
                 COMMENT "Copying wgpu_native.dll to output directory"
             )
         endif ()
