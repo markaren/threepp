@@ -2,6 +2,8 @@
 // Split from CrossRenderer_test.cpp for maintainability.
 
 #include "CrossRenderer_helpers.hpp"
+#include "threepp/materials/ShaderMaterial.hpp"
+#include "threepp/textures/CubeTexture.hpp"
 
 TEST_CASE("Cross: clear color matches between GL and Wgpu", "[wgpu]") {
     REQUIRE_WGPU();
@@ -1120,7 +1122,7 @@ TEST_CASE("Cross: normal-mapped sphere matches", "[wgpu]") {
 TEST_CASE("Cross: ShaderMaterial produces similar result", "[wgpu]") {
     REQUIRE_WGPU();
 
-    auto makeScene = []() {
+    auto makeScene = [] {
         auto scene = Scene::create();
         auto geometry = PlaneGeometry::create(2, 2);
         auto material = ShaderMaterial::create();

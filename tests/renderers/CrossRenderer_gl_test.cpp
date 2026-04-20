@@ -2,6 +2,8 @@
 // Split from CrossRenderer_test.cpp for maintainability.
 
 #include "CrossRenderer_helpers.hpp"
+#include "threepp/geometries/TorusKnotGeometry.hpp"
+#include "threepp/materials/MeshDepthMaterial.hpp"
 
 #include <iostream>
 
