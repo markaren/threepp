@@ -39,6 +39,7 @@ std::string ShaderFeatures::describe(uint64_t features) {
     if (features & GradientMap)     append("GradientMap");
     if (features & EnvMap)          append("EnvMap");
     if (features & EnvMapCube)      append("EnvMapCube");
+    if (features & Sheen)           append("Sheen");
     if (features & Skinning)        append("Skinning");
     if (features & ShadowMat)       append("ShadowMat");
     if (features & LineDashed)      append("LineDashed");
@@ -111,6 +112,7 @@ struct MaterialUniforms {
     clipPlane: vec4<f32>,
     transmissionParams: vec4<f32>,  // x=transmission, y=ior, z=thickness, w=samplerW
     attenuationParams: vec4<f32>,   // xyz=attenuationColor, w=attenuationDistance
+    sheenColorAndRoughness: vec4<f32>, // xyz=sheenColor, w=sheenRoughness
 };
 @group(0) @binding(1) var<uniform> material: MaterialUniforms;
 )";
@@ -585,6 +587,13 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         s << R"(
     var diffuseLight = lights.ambient;
     var specularLight = vec3<f32>(0.0, 0.0, 0.0);
+)";
+        if (features & ShaderFeatures::Sheen) {
+            s << "    var sheenLight = vec3<f32>(0.0, 0.0, 0.0);\n";
+            s << "    let sheenColor = material.sheenColorAndRoughness.rgb;\n";
+            s << "    let sheenAlpha = max(material.sheenColorAndRoughness.w * material.sheenColorAndRoughness.w, 0.0049);\n";
+        }
+        s << R"(
     for (var i = 0u; i < lights.numDir; i++) {
         let L = normalize(lights.directional[i].direction);
         var NdotL = max(dot(N, L), 0.0);
@@ -621,6 +630,19 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
                 s << "          specularLight += lights.directional[i].color * F * D * NdotL * dirShadow; }\n";
             } else {
                 s << "          specularLight += lights.directional[i].color * F * D * NdotL; }\n";
+            }
+        }
+        if (features & ShaderFeatures::Sheen) {
+            s << "        { let H = normalize(L + V); let NdotH = max(dot(N, H), 0.0);\n";
+            s << "          let NdotV = max(dot(N, V), 0.001);\n";
+            s << "          let oneMinusNdotH2 = max(1.0 - NdotH * NdotH, 0.0);\n";
+            s << "          let Ds = (2.0 + 1.0 / sheenAlpha) * pow(oneMinusNdotH2, 0.5 / sheenAlpha) * 0.15915494;\n"; // /(2π)
+            s << "          let Vs = 1.0 / (4.0 * (NdotL + NdotV - NdotL * NdotV + 0.0001));\n";
+            s << "          let sTerm = sheenColor * Ds * Vs * NdotL;\n";
+            if (features & ShaderFeatures::Shadow) {
+                s << "          sheenLight += lights.directional[i].color * sTerm * dirShadow; }\n";
+            } else {
+                s << "          sheenLight += lights.directional[i].color * sTerm; }\n";
             }
         }
         s << "    }\n";
@@ -666,6 +688,19 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
                 s << "          specularLight += lights.point[i].color * F * D * NdotL * att * ptShadow; }\n";
             } else {
                 s << "          specularLight += lights.point[i].color * F * D * NdotL * att; }\n";
+            }
+        }
+        if (features & ShaderFeatures::Sheen) {
+            s << "        { let H = normalize(L + V); let NdotH = max(dot(N, H), 0.0);\n";
+            s << "          let NdotV = max(dot(N, V), 0.001);\n";
+            s << "          let oneMinusNdotH2 = max(1.0 - NdotH * NdotH, 0.0);\n";
+            s << "          let Ds = (2.0 + 1.0 / sheenAlpha) * pow(oneMinusNdotH2, 0.5 / sheenAlpha) * 0.15915494;\n";
+            s << "          let Vs = 1.0 / (4.0 * (NdotL + NdotV - NdotL * NdotV + 0.0001));\n";
+            s << "          let sTerm = sheenColor * Ds * Vs * NdotL;\n";
+            if (features & ShaderFeatures::Shadow) {
+                s << "          sheenLight += lights.point[i].color * sTerm * att * ptShadow; }\n";
+            } else {
+                s << "          sheenLight += lights.point[i].color * sTerm * att; }\n";
             }
         }
         s << "    }\n";
@@ -715,6 +750,19 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
                 s << "          specularLight += lights.spot[i].color * F * D * NdotL * att; }\n";
             }
         }
+        if (features & ShaderFeatures::Sheen) {
+            s << "        { let H = normalize(L + V); let NdotH = max(dot(N, H), 0.0);\n";
+            s << "          let NdotV = max(dot(N, V), 0.001);\n";
+            s << "          let oneMinusNdotH2 = max(1.0 - NdotH * NdotH, 0.0);\n";
+            s << "          let Ds = (2.0 + 1.0 / sheenAlpha) * pow(oneMinusNdotH2, 0.5 / sheenAlpha) * 0.15915494;\n";
+            s << "          let Vs = 1.0 / (4.0 * (NdotL + NdotV - NdotL * NdotV + 0.0001));\n";
+            s << "          let sTerm = sheenColor * Ds * Vs * NdotL;\n";
+            if (features & ShaderFeatures::Shadow) {
+                s << "          sheenLight += lights.spot[i].color * sTerm * att * spotShadow; }\n";
+            } else {
+                s << "          sheenLight += lights.spot[i].color * sTerm * att; }\n";
+            }
+        }
         s << R"(
     }
     for (var i = 0u; i < lights.numHemi; i++) {
@@ -739,7 +787,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
             if (features & (ShaderFeatures::EnvMap | ShaderFeatures::EnvMapCube)) {
                 s << "    let R = reflect(-V, N);\n";
                 s << "    let maxMip    = f32(textureNumLevels(t_envMap) - 1u);\n";
-                s << "    let envMip    = roughness * maxMip;\n";
+                s << "    let envMip    = clamp(roughness * maxMip, 0.0, maxMip);\n";
                 if (features & ShaderFeatures::EnvMapCube) {
                     s << "    let envColor  = textureSampleLevel(t_envMap, s_envMap, R, envMip).rgb;\n";
                     s << "    let envDiff   = textureSampleLevel(t_envMap, s_envMap, N, maxMip).rgb;\n";
@@ -755,10 +803,20 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
                 s << "    let indirSpec    = envFresnel * envColor;\n";
                 s << "    let indirDiff    = envDiff * baseColor * (1.0 - metalness);\n";
                 s << "    let ambientSpecular = (indirSpec + indirDiff) * material.emissive.w;\n";
+                if (features & ShaderFeatures::Sheen) {
+                    s << "    let sheenIBL = envDiff * sheenColor * material.emissive.w;\n";
+                    s << "    sheenLight += sheenIBL;\n";
+                }
             } else {
                 s << "    let ambientSpecular = F0 * lights.ambient * (1.0 - roughness);\n";
             }
-            s << "    baseColor = baseColor * (1.0 - metalness) * diffuseLight + specularLight + ambientSpecular;\n";
+            if (features & ShaderFeatures::Sheen) {
+                s << "    let sheenScale = max(max(sheenColor.r, sheenColor.g), sheenColor.b);\n";
+                s << "    let sheenAtt = clamp(1.0 - 0.157 * sheenScale, 0.0, 1.0);\n";
+                s << "    baseColor = (baseColor * (1.0 - metalness) * diffuseLight + specularLight + ambientSpecular) * sheenAtt + sheenLight;\n";
+            } else {
+                s << "    baseColor = baseColor * (1.0 - metalness) * diffuseLight + specularLight + ambientSpecular;\n";
+            }
         } else {
             if (features & (ShaderFeatures::EnvMap | ShaderFeatures::EnvMapCube)) {
                 s << "    let R = reflect(-V, N);\n";

@@ -90,6 +90,7 @@ struct EffectComposer::Impl {
         sd.addressModeU = WGPUAddressMode_ClampToEdge;
         sd.addressModeV = WGPUAddressMode_ClampToEdge;
         sd.addressModeW = WGPUAddressMode_ClampToEdge;
+        sd.lodMaxClamp = 32.0f;
         sd.maxAnisotropy = 1;
         sampler = wgpuDeviceCreateSampler(device, &sd);
     }

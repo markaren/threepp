@@ -150,6 +150,7 @@ void WgpuShadowMap::init() {
     sd.magFilter = WGPUFilterMode_Linear;
     sd.minFilter = WGPUFilterMode_Linear;
     sd.compare = WGPUCompareFunction_Less;
+    sd.lodMaxClamp = 32.0f;
     sd.maxAnisotropy = 1;
     comparisonSampler_ = wgpuDeviceCreateSampler(state_.device, &sd);
 

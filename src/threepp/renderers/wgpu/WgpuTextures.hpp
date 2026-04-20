@@ -4,6 +4,7 @@
 #define THREEPP_WGPUTEXTURES_HPP
 
 #include "WgpuMipmapGenerator.hpp"
+#include "WgpuPMREM.hpp"
 #include "WgpuState.hpp"
 
 #include <unordered_map>
@@ -33,6 +34,11 @@ namespace threepp::wgpu {
 
         TextureEntry& getOrCreateCubeTexture(Texture* tex);
 
+        // Same as getOrCreateTexture, but generates mipmaps via GGX-prefiltered
+        // convolution (PMREM) instead of box filter. Use for environment maps
+        // so rough materials sample properly blurred radiance at high roughness.
+        TextureEntry& getOrCreateEnvTexture2D(Texture* tex);
+
         [[nodiscard]] const TextureEntry& getDummyTexture() const { return dummyTexture_; }
         [[nodiscard]] const TextureEntry& getDummyCubeTexture() const { return dummyCubeTexture_; }
 
@@ -54,11 +60,14 @@ namespace threepp::wgpu {
             WGPUTexture texture;
             uint32_t width, height, mipLevels;
             bool isCube;
+            bool prefiltered;
             WGPUTextureFormat format;
         };
         WgpuState& state_;
         WgpuMipmapGenerator mipmapGen_;
+        WgpuPMREM pmrem_;
         std::vector<PendingMipmap> pendingMipmaps_;
+        std::unordered_map<unsigned int, TextureEntry> envCache2D_;
         std::unordered_map<unsigned int, TextureEntry> cache_;
         std::unordered_map<unsigned int, TextureEntry> cubeCache_;
         TextureEntry dummyTexture_;

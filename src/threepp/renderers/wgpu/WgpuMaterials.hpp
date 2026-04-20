@@ -61,6 +61,9 @@ namespace threepp::wgpu {
         float attenuationDistance = 0.0f;
         Color attenuationColor{1, 1, 1};
 
+        Color sheenColor{0, 0, 0};
+        float sheenRoughness = 1.0f;
+
         // True if this material is a ShaderMaterial with custom WGSL shaders
         bool isCustomShader = false;
         // True if this material should be skipped entirely (e.g. ShadowMaterial)

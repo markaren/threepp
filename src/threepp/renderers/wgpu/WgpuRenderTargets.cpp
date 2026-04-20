@@ -55,6 +55,7 @@ RTEntry& WgpuRenderTargets::getOrCreate(threepp::RenderTarget* rt, uint32_t samp
     sd.addressModeU = WGPUAddressMode_ClampToEdge;
     sd.addressModeV = WGPUAddressMode_ClampToEdge;
     sd.addressModeW = WGPUAddressMode_ClampToEdge;
+    sd.lodMaxClamp = 32.0f;
     sd.maxAnisotropy = 1;
     entry.colorSampler = wgpuDeviceCreateSampler(state_.device, &sd);
 

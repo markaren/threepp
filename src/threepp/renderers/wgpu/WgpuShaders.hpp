@@ -109,6 +109,9 @@ namespace threepp::wgpu {
         // EnvMapCube (bit 43): environment map is a cube texture (CubeReflection/CubeRefraction mapping)
         constexpr uint64_t EnvMapCube      = 1ULL << 43;
 
+        // Sheen (bit 44): MeshPhysicalMaterial sheen lobe (Charlie/Neubelt BRDF + sheen IBL)
+        constexpr uint64_t Sheen           = 1ULL << 44;
+
         // Convenience: test if shader needs lighting calculations.
         inline bool isLit(uint64_t features) {
             return (features & (Lighting | Specular | PBR)) != 0;
@@ -129,8 +132,8 @@ namespace threepp::wgpu {
     constexpr size_t TRANSFORM_UNIFORM_SIZE = 256;
     // Material: diffuse(16) + specular(16) + roughnessMetalnessOpacity(16) + emissive(16)
     //         + flags(16) + fogColor(16) + fogParams(16) + clipPlane(16)
-    //         + transmissionParams(16) + attenuationParams(16) = 160
-    constexpr size_t MATERIAL_UNIFORM_SIZE = 160;
+    //         + transmissionParams(16) + attenuationParams(16) + sheenColorRoughness(16) = 176
+    constexpr size_t MATERIAL_UNIFORM_SIZE = 176;
 
     struct LightLimits;
     struct ShadowLimits;

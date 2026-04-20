@@ -85,7 +85,7 @@ const std::vector<WGPUBindGroupEntry>& WgpuBindGroups::buildStandard(const BindG
         if (features & SF::EnvMapCube) {
             te = inputs.params.envMap ? &inputs.textures.getOrCreateCubeTexture(inputs.params.envMap) : &inputs.textures.getDummyCubeTexture();
         } else {
-            te = inputs.params.envMap ? &inputs.textures.getOrCreateTexture(inputs.params.envMap) : &inputs.textures.getDummyTexture();
+            te = inputs.params.envMap ? &inputs.textures.getOrCreateEnvTexture2D(inputs.params.envMap) : &inputs.textures.getDummyTexture();
         }
         { WGPUBindGroupEntry e{}; e.binding = 32; e.textureView = te->view; entries_.push_back(e); }
         { WGPUBindGroupEntry e{}; e.binding = 33; e.sampler = te->sampler; entries_.push_back(e); }

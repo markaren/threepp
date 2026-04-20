@@ -481,6 +481,7 @@ struct V { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
         sd.mipmapFilter = WGPUMipmapFilterMode_Nearest;
         sd.addressModeU = WGPUAddressMode_ClampToEdge;
         sd.addressModeV = WGPUAddressMode_ClampToEdge;
+        sd.lodMaxClamp = 32.0f;
         sd.maxAnisotropy = 1;
         retainBlit_.sampler = wgpuDeviceCreateSampler(device, &sd);
 
@@ -642,7 +643,7 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
     let clip = vec4<f32>(v.ndc, 1.0, 1.0);
     let world = u.invVP * clip;
     let dir = normalize(world.xyz / world.w);
-    let phi = atan2(dir.z, dir.x);
+    let phi = atan2(dir.x, dir.z);
     let theta = asin(clamp(dir.y, -1.0, 1.0));
     let uv = vec2<f32>(0.5 + phi / (2.0 * PI), 0.5 - theta / PI);
     let sz = vec2<f32>(textureDimensions(envTex, 0));
@@ -956,6 +957,7 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
         sd.mipmapFilter = WGPUMipmapFilterMode_Linear;
         sd.addressModeU = WGPUAddressMode_ClampToEdge;
         sd.addressModeV = WGPUAddressMode_ClampToEdge;
+        sd.lodMaxClamp = 32.0f;
         sd.maxAnisotropy = 1;
         transmissionSampler_ = wgpuDeviceCreateSampler(device, &sd);
 
@@ -1537,6 +1539,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             sd.addressModeU = WGPUAddressMode_ClampToEdge;
             sd.addressModeV = WGPUAddressMode_ClampToEdge;
             sd.addressModeW = WGPUAddressMode_ClampToEdge;
+            sd.lodMaxClamp = 32.0f;
             sd.maxAnisotropy = 1;
             toneMap_.sampler = wgpuDeviceCreateSampler(device, &sd);
 

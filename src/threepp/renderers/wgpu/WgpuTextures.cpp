@@ -51,7 +51,7 @@ namespace {
 }
 
 WgpuTextures::WgpuTextures(WgpuState& state)
-    : state_(state), mipmapGen_(state) {}
+    : state_(state), mipmapGen_(state), pmrem_(state) {}
 
 void WgpuTextures::createDummyTexture() {
     WGPUTextureDescriptor td{};
@@ -81,6 +81,7 @@ void WgpuTextures::createDummyTexture() {
     sd.addressModeU = WGPUAddressMode_Repeat;
     sd.addressModeV = WGPUAddressMode_Repeat;
     sd.addressModeW = WGPUAddressMode_Repeat;
+    sd.lodMaxClamp = 32.0f;
     sd.maxAnisotropy = 1;
     dummyTexture_.sampler = wgpuDeviceCreateSampler(state_.device, &sd);
 
@@ -125,6 +126,7 @@ void WgpuTextures::createDummyTexture() {
         csd.addressModeU = WGPUAddressMode_ClampToEdge;
         csd.addressModeV = WGPUAddressMode_ClampToEdge;
         csd.addressModeW = WGPUAddressMode_ClampToEdge;
+        csd.lodMaxClamp = 32.0f;
         csd.maxAnisotropy = 1;
         dummyCubeTexture_.sampler = wgpuDeviceCreateSampler(state_.device, &csd);
     }
@@ -212,7 +214,7 @@ TextureEntry& WgpuTextures::getOrCreateTexture(Texture* tex) {
 
     if (needsMips) {
         const auto fmt = isHdr ? WGPUTextureFormat_RGBA16Float : WGPUTextureFormat_RGBA8Unorm;
-        pendingMipmaps_.push_back({entry.texture, w, h, mipLevels, false, fmt});
+        pendingMipmaps_.push_back({entry.texture, w, h, mipLevels, false, false, fmt});
     }
 
     WGPUSamplerDescriptor sd{};
@@ -231,6 +233,7 @@ TextureEntry& WgpuTextures::getOrCreateTexture(Texture* tex) {
     sd.addressModeU = mapWrap(tex->wrapS);
     sd.addressModeV = mapWrap(tex->wrapT);
     sd.addressModeW = WGPUAddressMode_ClampToEdge;
+    sd.lodMaxClamp = 32.0f;
     // Anisotropic filtering: requires linear min+mag and mipmaps to be meaningful.
     {
         auto aniso = static_cast<uint32_t>(tex->anisotropy);
@@ -310,7 +313,7 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
     }
 
     if (needsMips) {
-        pendingMipmaps_.push_back({entry.texture, w, h, mipLevels, true, WGPUTextureFormat_RGBA8Unorm});
+        pendingMipmaps_.push_back({entry.texture, w, h, mipLevels, true, false, WGPUTextureFormat_RGBA8Unorm});
     }
 
     WGPUTextureViewDescriptor vd{};
@@ -332,6 +335,7 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
     sd.addressModeU = WGPUAddressMode_ClampToEdge;
     sd.addressModeV = WGPUAddressMode_ClampToEdge;
     sd.addressModeW = WGPUAddressMode_ClampToEdge;
+    sd.lodMaxClamp = 32.0f;
     sd.maxAnisotropy = 1;
     entry.sampler = wgpuDeviceCreateSampler(state_.device, &sd);
 
@@ -343,13 +347,128 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
 void WgpuTextures::flushPendingMipmaps() {
     if (pendingMipmaps_.empty()) return;
     for (auto& pm : pendingMipmaps_) {
-        if (pm.isCube) {
+        if (pm.prefiltered && !pm.isCube) {
+            // Need mip 0 populated first via box-filter down-chain — then overwrite mips 1..N-1
+            // with GGX-convolved versions. Simpler: just run PMREM, which writes mips 1..N-1
+            // directly from mip 0 (no mip-0 copy needed; mip 0 already has source data).
+            pmrem_.prefilter2D(pm.texture, pm.width, pm.height, pm.mipLevels, pm.format);
+        } else if (pm.isCube) {
             mipmapGen_.generateCube(pm.texture, pm.width, pm.mipLevels, pm.format);
         } else {
             mipmapGen_.generate2D(pm.texture, pm.width, pm.height, pm.mipLevels, pm.format);
         }
     }
     pendingMipmaps_.clear();
+}
+
+TextureEntry& WgpuTextures::getOrCreateEnvTexture2D(Texture* tex) {
+    auto it = envCache2D_.find(tex->id);
+    if (it != envCache2D_.end() && it->second.version == tex->version()) {
+        return it->second;
+    }
+
+    if (it != envCache2D_.end()) {
+        if (it->second.view) wgpuTextureViewRelease(it->second.view);
+        if (it->second.texture) wgpuTextureRelease(it->second.texture);
+        if (it->second.sampler) wgpuSamplerRelease(it->second.sampler);
+    }
+
+    TextureEntry entry{};
+    auto& img = tex->image();
+    auto w = img.width;
+    auto h = img.height;
+    if (w == 0 || h == 0) return dummyTexture_;
+
+    bool isHdr = false;
+    try { (void)img.data<float>(); isHdr = true; }
+    catch (const std::bad_variant_access&) {}
+
+    // Always generate a full mip chain for env maps so roughness-indexed sampling works.
+    const uint32_t mipLevels = calcMipLevels(w, h);
+
+    WGPUTextureDescriptor td{};
+    td.label = WGPUStringView{"env_tex", WGPU_STRLEN};
+    td.size = {w, h, 1};
+    td.mipLevelCount = mipLevels;
+    td.sampleCount = 1;
+    td.dimension = WGPUTextureDimension_2D;
+    td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment;
+
+    WGPUTexelCopyTextureInfo dst{};
+    WGPUTexelCopyBufferLayout layout{};
+    WGPUExtent3D extent = {w, h, 1};
+
+    if (isHdr) {
+        auto& data = img.data<float>();
+        if (data.empty()) return dummyTexture_;
+        td.format = WGPUTextureFormat_RGBA16Float;
+        entry.texture = wgpuDeviceCreateTexture(state_.device, &td);
+        std::vector<uint16_t> f16(data.size());
+        for (size_t i = 0; i < data.size(); ++i) f16[i] = f32_to_f16(data[i]);
+        dst.texture = entry.texture;
+        layout.bytesPerRow = w * 4 * sizeof(uint16_t);
+        layout.rowsPerImage = h;
+        wgpuQueueWriteTexture(state_.queue, &dst, f16.data(), f16.size() * sizeof(uint16_t), &layout, &extent);
+    } else {
+        auto& data = img.data<unsigned char>();
+        if (data.empty()) return dummyTexture_;
+        td.format = WGPUTextureFormat_RGBA8Unorm;
+        entry.texture = wgpuDeviceCreateTexture(state_.device, &td);
+
+        std::vector<unsigned char> rgba;
+        const unsigned char* srcData = data.data();
+        size_t srcSize = data.size();
+        if (data.size() == static_cast<size_t>(w) * h * 3) {
+            rgba.resize(static_cast<size_t>(w) * h * 4);
+            for (size_t i = 0; i < static_cast<size_t>(w) * h; i++) {
+                rgba[i * 4 + 0] = data[i * 3 + 0];
+                rgba[i * 4 + 1] = data[i * 3 + 1];
+                rgba[i * 4 + 2] = data[i * 3 + 2];
+                rgba[i * 4 + 3] = 255;
+            }
+            srcData = rgba.data();
+            srcSize = rgba.size();
+        }
+        dst.texture = entry.texture;
+        layout.bytesPerRow = w * 4;
+        layout.rowsPerImage = h;
+        wgpuQueueWriteTexture(state_.queue, &dst, srcData, srcSize, &layout, &extent);
+    }
+
+    const auto fmt = isHdr ? WGPUTextureFormat_RGBA16Float : WGPUTextureFormat_RGBA8Unorm;
+
+    // Create an explicit full-mip-chain view. Passing nullptr gives a default
+    // view whose mipLevelCount behaviour varies by backend/wgpu-native version —
+    // some return only 1 to the shader's textureNumLevels(), which defeats the
+    // roughness → mip mapping used for PMREM sampling.
+    WGPUTextureViewDescriptor vd{};
+    vd.label = WGPUStringView{"env_tex_view", WGPU_STRLEN};
+    vd.format = fmt;
+    vd.dimension = WGPUTextureViewDimension_2D;
+    vd.baseMipLevel = 0;
+    vd.mipLevelCount = mipLevels;
+    vd.baseArrayLayer = 0;
+    vd.arrayLayerCount = 1;
+    vd.aspect = WGPUTextureAspect_All;
+    entry.view = wgpuTextureCreateView(entry.texture, &vd);
+
+    pendingMipmaps_.push_back({entry.texture, w, h, mipLevels, false, true, fmt});
+
+    WGPUSamplerDescriptor sd{};
+    sd.label = WGPUStringView{"env_sampler", WGPU_STRLEN};
+    sd.magFilter = WGPUFilterMode_Linear;
+    sd.minFilter = WGPUFilterMode_Linear;
+    sd.mipmapFilter = WGPUMipmapFilterMode_Linear;
+    sd.addressModeU = WGPUAddressMode_Repeat;
+    sd.addressModeV = WGPUAddressMode_ClampToEdge;
+    sd.addressModeW = WGPUAddressMode_ClampToEdge;
+    sd.lodMaxClamp = 32.0f;
+    sd.maxAnisotropy = 1;
+    entry.sampler = wgpuDeviceCreateSampler(state_.device, &sd);
+
+    entry.version = tex->version();
+    envCache2D_[tex->id] = entry;
+    return envCache2D_[tex->id];
 }
 
 const TextureEntry* WgpuTextures::findTexture(unsigned int id) const {
@@ -371,6 +490,13 @@ void WgpuTextures::dispose() {
         if (te.sampler) wgpuSamplerRelease(te.sampler);
     }
     cubeCache_.clear();
+
+    for (auto& [id, te] : envCache2D_) {
+        if (te.view) wgpuTextureViewRelease(te.view);
+        if (te.texture) wgpuTextureRelease(te.texture);
+        if (te.sampler) wgpuSamplerRelease(te.sampler);
+    }
+    envCache2D_.clear();
 
     if (dummyTexture_.view) wgpuTextureViewRelease(dummyTexture_.view);
     if (dummyTexture_.texture) wgpuTextureRelease(dummyTexture_.texture);

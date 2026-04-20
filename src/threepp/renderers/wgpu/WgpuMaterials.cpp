@@ -56,7 +56,7 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry,
             p.envMapIntensity = m->envMapIntensity;
             const bool isCube = m->envMap->mapping == Mapping::CubeReflection || m->envMap->mapping == Mapping::CubeRefraction;
             p.features |= isCube ? ShaderFeatures::EnvMapCube : ShaderFeatures::EnvMap;
-        } else if (sceneEnvFallback && m->metalness > 0.0f) {
+        } else if (sceneEnvFallback) {
             p.envMap = sceneEnvFallback;
             p.envMapIntensity = 1.0f;
             const bool isCube = sceneEnvFallback->mapping == Mapping::CubeReflection || sceneEnvFallback->mapping == Mapping::CubeRefraction;
@@ -69,6 +69,12 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry,
             p.attenuationDistance = t->attenuationDistance;
             p.attenuationColor = t->attenuationColor;
             if (p.transmission > 0.0f) p.features |= ShaderFeatures::Transmission;
+
+            p.sheenColor = t->sheen.value_or(t->sheenColor);
+            p.sheenRoughness = t->sheenRoughness;
+            if (p.sheenColor.r > 0.0f || p.sheenColor.g > 0.0f || p.sheenColor.b > 0.0f) {
+                p.features |= ShaderFeatures::Sheen;
+            }
         }
     } else if (auto m = dynamic_cast<MeshPhongMaterial*>(rawMat)) {
         p.features |= ShaderFeatures::Lighting | ShaderFeatures::Specular;
@@ -244,6 +250,12 @@ void packMaterialUniforms(float* data, const MaterialParams& params,
     data[37] = params.attenuationColor.g;
     data[38] = params.attenuationColor.b;
     data[39] = params.attenuationDistance;
+
+    // sheenColorAndRoughness (vec4, offset 40): sheenColor.rgb, sheenRoughness
+    data[40] = params.sheenColor.r;
+    data[41] = params.sheenColor.g;
+    data[42] = params.sheenColor.b;
+    data[43] = params.sheenRoughness;
 }
 
 }// namespace threepp::wgpu

@@ -95,6 +95,7 @@ WgpuTexture::WgpuTexture(WgpuRenderer& renderer, uint32_t width, uint32_t height
     samplerDesc.magFilter = filter;
     samplerDesc.minFilter = filter;
     samplerDesc.mipmapFilter = WGPUMipmapFilterMode_Nearest;
+    samplerDesc.lodMaxClamp = 32.0f;
     samplerDesc.maxAnisotropy = 1;
     sampler_ = wgpuDeviceCreateSampler(device_, &samplerDesc);
 }
@@ -144,6 +145,7 @@ WgpuTexture::WgpuTexture(WgpuRenderer& renderer, uint32_t width, uint32_t height
     samplerDesc.magFilter = WGPUFilterMode_Linear;
     samplerDesc.minFilter = WGPUFilterMode_Linear;
     samplerDesc.mipmapFilter = WGPUMipmapFilterMode_Nearest;
+    samplerDesc.lodMaxClamp = 32.0f;
     samplerDesc.maxAnisotropy = 1;
     sampler_ = wgpuDeviceCreateSampler(device_, &samplerDesc);
 }

@@ -78,6 +78,7 @@ struct V { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
     sd.mipmapFilter = WGPUMipmapFilterMode_Nearest;
     sd.addressModeU = WGPUAddressMode_ClampToEdge;
     sd.addressModeV = WGPUAddressMode_ClampToEdge;
+    sd.lodMaxClamp = 32.0f;
     sd.maxAnisotropy = 1;
     sampler_ = wgpuDeviceCreateSampler(state_.device, &sd);
 
