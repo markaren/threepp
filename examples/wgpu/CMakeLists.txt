@@ -8,6 +8,7 @@ add_example(NAME "water_side_by_side" LINK_IMGUI)
 add_example(NAME "wgpu_restir_test" LINK_IMGUI)
 add_example(NAME "wgpu_denoise" LINK_IMGUI)
 add_example(NAME "wgpu_bistro" LINK_IMGUI)
+add_example(NAME "wgpu_postprocess")
 
 if (THREEPP_WITH_INFERENCE)
     add_example(NAME "yolov8_inference"

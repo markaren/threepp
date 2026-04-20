@@ -1,6 +1,7 @@
 #ifndef THREEPP_EFFECTCOMPOSER_HPP
 #define THREEPP_EFFECTCOMPOSER_HPP
 
+#include <filesystem>
 #include <memory>
 #include <vector>
 
@@ -27,6 +28,9 @@ namespace threepp {
         void render(Object3D& scene, Camera& camera);
 
         std::vector<unsigned char> readRGBPixels();
+
+        /// Write the final composed image to disk. Supports .png, .jpg/.jpeg, .bmp.
+        void writeFramebuffer(const std::filesystem::path& filename);
 
     private:
         struct Impl;

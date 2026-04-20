@@ -6,7 +6,11 @@
 
 #include "WgpuReadback.hpp"
 
+#include "stb_image_write.h"
+
+#include <algorithm>
 #include <iostream>
+#include <stdexcept>
 
 using namespace threepp;
 
@@ -149,6 +153,9 @@ struct EffectComposer::Impl {
         renderer.setRenderTarget(sceneRT.get());
         renderer.render(scene, camera);
 
+        // Submit scene commands so post passes read a finished texture.
+        renderer.flush();
+
         // Get the scene texture from the render target
         void* nativeTex = renderer.nativeRenderTargetTexture();
         if (!nativeTex) {
@@ -251,4 +258,36 @@ void EffectComposer::render(Object3D& scene, Camera& camera) {
 std::vector<unsigned char> EffectComposer::readRGBPixels() {
     if (!pimpl_->finalOutputTexture || pimpl_->width == 0 || pimpl_->height == 0) return {};
     return wgpu::readRGBPixels(pimpl_->device, pimpl_->queue, pimpl_->finalOutputTexture, pimpl_->width, pimpl_->height);
+}
+
+void EffectComposer::writeFramebuffer(const std::filesystem::path& filename) {
+    auto ext = filename.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+    if (ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".bmp") {
+        throw std::runtime_error("EffectComposer::writeFramebuffer: unsupported format " + ext);
+    }
+
+    auto pixels = readRGBPixels();
+    if (pixels.empty()) return;
+
+    const int w = static_cast<int>(pimpl_->width);
+    const int h = static_cast<int>(pimpl_->height);
+
+    if (filename.has_parent_path() && !std::filesystem::exists(filename.parent_path())) {
+        std::error_code ec;
+        std::filesystem::create_directories(filename.parent_path(), ec);
+    }
+
+    bool success = false;
+    if (ext == ".png") {
+        success = stbi_write_png(filename.string().c_str(), w, h, 3, pixels.data(), w * 3);
+    } else if (ext == ".jpg" || ext == ".jpeg") {
+        success = stbi_write_jpg(filename.string().c_str(), w, h, 3, pixels.data(), 100);
+    } else if (ext == ".bmp") {
+        success = stbi_write_bmp(filename.string().c_str(), w, h, 3, pixels.data());
+    }
+    if (!success) {
+        throw std::runtime_error("EffectComposer::writeFramebuffer: failed to write " + filename.string());
+    }
 }

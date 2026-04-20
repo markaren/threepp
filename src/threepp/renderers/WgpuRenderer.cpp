@@ -3522,6 +3522,20 @@ void WgpuRenderer::resetState() {
     // Wgpu manages its own state; this is a no-op for API compatibility
 }
 
+void WgpuRenderer::flush() {
+    if (!pimpl_->initialized) return;
+    if (pimpl_->frame_.active) return;
+    if (!pimpl_->renderEncoder_) return;
+
+    WGPUCommandBufferDescriptor cbd{};
+    cbd.label = WGPUStringView{"rt_flush", sizeof("rt_flush") - 1};
+    WGPUCommandBuffer cb = wgpuCommandEncoderFinish(pimpl_->renderEncoder_, &cbd);
+    wgpuQueueSubmit(pimpl_->queue, 1, &cb);
+    wgpuCommandBufferRelease(cb);
+    wgpuCommandEncoderRelease(pimpl_->renderEncoder_);
+    pimpl_->renderEncoder_ = nullptr;
+}
+
 std::vector<unsigned char> WgpuRenderer::readRGBPixels() {
     if (!pimpl_->initialized || !pimpl_->currentRenderTarget_) return {};
 

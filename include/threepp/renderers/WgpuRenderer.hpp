@@ -142,6 +142,12 @@ namespace threepp {
         /// reconfiguring the surface.
         void endFrame();
 
+        /// Submit any pending render commands to the GPU queue. No-op when a
+        /// canvas frame is active (commands are batched until endFrame()).
+        /// Call between render-target renders and subsequent GPU reads
+        /// (e.g. post-processing passes) to ensure proper ordering.
+        void flush();
+
         void resetState();
         void dispose() override;
 
