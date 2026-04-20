@@ -2295,7 +2295,11 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             // so toneMap_.colorTexture is always the active color target here).
             WGPUTexture srcTex = toneMap_.colorTexture;
 
-            ensureTransmissionRT(attachW, attachH, surfaceFormat);
+            // Transmission RT must match the source format (RGBA16Float HDR).
+            // Passing surfaceFormat here causes a CopyTextureToTexture validation
+            // error on Windows (Rgba16Float vs Bgra8Unorm not copy-compatible).
+            const WGPUTextureFormat transmissionFmt = WGPUTextureFormat_RGBA16Float;
+            ensureTransmissionRT(attachW, attachH, transmissionFmt);
 
             // Copy the opaque framebuffer to the transmission texture
             WGPUTexelCopyTextureInfo src{};
@@ -2316,7 +2320,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             // Generate mipmaps (submits its own command buffer)
             {
                 uint32_t mipLevels = static_cast<uint32_t>(std::floor(std::log2(static_cast<float>((std::max)(attachW, attachH))))) + 1u;
-                textures->mipmapGen().generate2D(transmissionTex_, attachW, attachH, mipLevels, surfaceFormat);
+                textures->mipmapGen().generate2D(transmissionTex_, attachW, attachH, mipLevels, transmissionFmt);
             }
 
             // Create a fresh encoder for the rest of the frame
