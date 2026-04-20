@@ -49,6 +49,12 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
     if (auto* cubeBackground = dynamic_cast<CubeTexture*>(resolvedBackground)) {
 
         auto tex = background->texture();
+        // Wrap the resolved cube texture in a non-owning shared_ptr so we can assign it to
+        // MaterialWithEnvMap::envMap. This matches three.js WebGLBackground: the material's
+        // envMap points at the *resolved* cube texture, so WebGLPrograms/GLRenderer reads
+        // CubeReflection mapping and compiles ENVMAP_TYPE_CUBE (samplerCube), which matches
+        // the uniform bound below. Storage still lives in GLCubeMaps.
+        auto resolvedShared = std::shared_ptr<Texture>(cubeBackground, [](Texture*) {});
 
         if (!boxMesh) {
             auto shaderMaterial = ShaderMaterial::create();
@@ -75,8 +81,9 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
         }
 
         auto shaderMaterial = boxMesh->material()->as<ShaderMaterial>();
-        // envMap must be non-null for USE_ENVMAP to be compiled in; the uniform carries the actual ptr.
-        shaderMaterial->envMap = tex;
+        // Point envMap at the *resolved* cube texture so ProgramParameters reads
+        // CubeReflection mapping (samplerCube path). The uniform carries the same ptr.
+        shaderMaterial->envMap = resolvedShared;
         shaderMaterial->uniforms.at("envMap").setValue(cubeBackground);
         shaderMaterial->uniforms.at("flipEnvMap").setValue(cubeBackground->_needsFlipEnvMap);
 

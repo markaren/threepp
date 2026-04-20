@@ -429,7 +429,7 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Tex
         state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, glInternalFormat, image.width, image.height, glFormat, glType, image.data().data());
 
         for (unsigned j = 0; j < mipmaps.size(); j++) {
-            state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, j + i, glInternalFormat, image.width, image.height, glFormat, glType, mipmaps[j].data().data());
+            state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, j + 1, glInternalFormat, image.width, image.height, glFormat, glType, mipmaps[j].data().data());
         }
     }
 
@@ -572,6 +572,7 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
     GLuint glTexture;
     glGenTextures(1, &glTexture);
     textureProperties->glTexture = glTexture;
+    textureProperties->glInit = true;
     textureProperties->version = texture->version();
     info->memory.textures++;
 

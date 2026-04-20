@@ -46,7 +46,8 @@ namespace threepp {
                     const Lights::LightState& lights,
                     size_t numShadows,
                     Scene* scene,
-                    Object3D* object);
+                    Object3D* object,
+                    Texture* resolvedEnvMap);
 
             static std::string getProgramCacheKey(const GLRenderer& renderer, const ProgramParameters& parameters);
 

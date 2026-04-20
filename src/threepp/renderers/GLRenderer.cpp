@@ -669,21 +669,23 @@ struct GLRenderer::Impl {
         caps.logarithmicDepthBuffer = glCaps.logarithmicDepthBuffer;
         caps.maxVertexUniforms = glCaps.maxVertexUniforms;
 
-        auto parameters = gl::GLPrograms::getParameters(scope, shadowCfg, caps, clipping, material, lights.state, shadowsArray.size(), scene, object);
-        auto programCacheKey = gl::GLPrograms::getProgramCacheKey(scope, parameters);
-
-        auto& programs = materialProperties->programs;
-
-        // always update environment and fog - changing these trigger an getProgram call, but it's possible that the program doesn't change
-
+        // Resolve envMap through the PMREM pipeline BEFORE building program parameters.
+        // Mirrors three.js WebGLPrograms, which calls cubeuvmaps.get() inline when reading
+        // material.envMap — so parameters.envMapMode reflects the *resolved* mapping
+        // (e.g. CubeUVReflection for equirect sources), not the source equirect mapping.
         materialProperties->environment = material->is<MeshStandardMaterial>() ? scene->environment.get() : nullptr;
         materialProperties->fog = scene->fog;
         auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
         if (materialWithEnvMap && materialWithEnvMap->envMap) {
-            materialProperties->envMap = cubemaps.get(materialWithEnvMap->envMap.get());
+            materialProperties->envMap = cubemaps.getPMREM(materialWithEnvMap->envMap.get());
         } else {
-            materialProperties->envMap = cubemaps.get(materialProperties->environment);
+            materialProperties->envMap = cubemaps.getPMREM(materialProperties->environment);
         }
+
+        auto parameters = gl::GLPrograms::getParameters(scope, shadowCfg, caps, clipping, material, lights.state, shadowsArray.size(), scene, object, materialProperties->envMap);
+        auto programCacheKey = gl::GLPrograms::getProgramCacheKey(scope, parameters);
+
+        auto& programs = materialProperties->programs;
 
         if (programs.empty()) {
 
@@ -799,9 +801,9 @@ struct GLRenderer::Impl {
         Texture* envMap;
         auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
         if (materialWithEnvMap && materialWithEnvMap->envMap) {
-            envMap = cubemaps.get(materialWithEnvMap->envMap.get());
+            envMap = cubemaps.getPMREM(materialWithEnvMap->envMap.get());
         } else {
-            envMap = cubemaps.get(environment.get());
+            envMap = cubemaps.getPMREM(environment.get());
         }
         bool vertexAlphas = material->vertexColors &&
                             object->geometry() &&

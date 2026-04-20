@@ -16,6 +16,7 @@ namespace threepp {
 
     class Scene;
     class Renderer;
+    class Texture;
 
     namespace gl {
 
@@ -139,6 +140,7 @@ namespace threepp {
                     Object3D* object,
                     Scene* scene,
                     Material* material,
+                    Texture* resolvedEnvMap,
                     const std::unordered_map<std::string, std::string>& shaderIDs);
 
             [[nodiscard]] std::string hash() const;

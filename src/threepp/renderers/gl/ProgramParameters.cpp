@@ -34,6 +34,7 @@ ProgramParameters::ProgramParameters(
         Object3D* object,
         Scene* scene,
         Material* material,
+        Texture* resolvedEnvMap,
         const std::unordered_map<std::string, std::string>& shaderIDs) {
 
     auto mapMaterial = dynamic_cast<MaterialWithMap*>(material);
@@ -99,24 +100,14 @@ ProgramParameters::ProgramParameters(
     mapEncoding = getTextureEncodingFromMap(map ? mapMaterial->map : nullptr);
     matcap = matcapMaterial && matcapMaterial->matcap;
     matcapEncoding = getTextureEncodingFromMap(matcap ? matcapMaterial->matcap : nullptr);
-    // For MeshStandardMaterial, scene.environment is the implicit IBL source when
-    // no explicit envMap is set — mirrors three.js WebGLPrograms.getParameters().
-    Texture* effectiveEnvMap = (envmapMaterial && envmapMaterial->envMap)
-                                       ? envmapMaterial->envMap.get()
-                                       : (material->is<MeshStandardMaterial>() ? scene->environment.get() : nullptr);
+    // Pure three.js port: WebGLPrograms calls `cubeuvmaps.get( material.envMap || environment )`
+    // and reads `.mapping` from the *resolved* texture (PMREM atlas for equirect sources).
+    // The caller threads the resolved envMap in via `resolvedEnvMap`.
+    Texture* effectiveEnvMap = resolvedEnvMap;
 
     envMap = effectiveEnvMap != nullptr;
     if (envMap) {
-        // Equirectangular sources are always converted to a regular cubemap at runtime.
-        const auto srcMapping = effectiveEnvMap->mapping;
-        const bool isEquirect = srcMapping == Mapping::EquirectangularReflection ||
-                                srcMapping == Mapping::EquirectangularRefraction;
-        const bool isRefract = srcMapping == Mapping::EquirectangularRefraction ||
-                               srcMapping == Mapping::CubeRefraction;
-        const auto resolvedMapping = isEquirect
-                                             ? (isRefract ? Mapping::CubeRefraction : Mapping::CubeReflection)
-                                             : srcMapping;
-        envMapMode = as_integer(resolvedMapping);
+        envMapMode = as_integer(effectiveEnvMap->mapping);
     }
     envMapEncoding = effectiveEnvMap ? effectiveEnvMap->encoding : Encoding::Linear;
     envMapCubeUV = envMapMode != 0 &&
