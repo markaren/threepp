@@ -18,7 +18,7 @@ int main() {
 
     RGBELoader hdrLoader;
 
-    if (auto hdrTexture = hdrLoader.load(std::string(DATA_FOLDER) + "/textures/env/san_giuseppe_bridge/san_giuseppe_bridge_4k.hdr")) {
+    if (auto hdrTexture = hdrLoader.load(std::string(DATA_FOLDER) + "/textures/env/san_giuseppe_bridge/san_giuseppe_bridge_4k.hdr", canvas.graphicsApi() == GraphicsAPI::OpenGL)) {
         scene->background = hdrTexture;
         scene->environment = hdrTexture;
     }
@@ -27,7 +27,7 @@ int main() {
     auto sphereGeo = SphereGeometry::create(1.0f, 64, 32);
     auto sphereMat = MeshStandardMaterial::create();
     sphereMat->metalness = 1.0f;
-    sphereMat->roughness = 0.0f;
+    sphereMat->roughness = 0.2f;
     auto sphere = Mesh::create(sphereGeo, sphereMat);
     scene->add(sphere);
 
