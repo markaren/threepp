@@ -754,14 +754,18 @@ if (THREEPP_WITH_WGPU)
         endif ()
 
         # Copy wgpu_native.dll next to executables so they can find it at runtime.
-        # Uses $<TARGET_FILE_DIR:threepp> (rather than CMAKE_RUNTIME_OUTPUT_DIRECTORY)
-        # so multi-config generators like Visual Studio pick up the per-config subdir
-        # (e.g. build/bin/Release/) where executables actually land.
+        # Multi-config generators (Visual Studio) put EXEs in CMAKE_RUNTIME_OUTPUT_DIRECTORY/$<CONFIG>/,
+        # while single-config generators put them directly in CMAKE_RUNTIME_OUTPUT_DIRECTORY.
         if (WIN32 AND WGPU_NATIVE_DLL)
+            if (CMAKE_CONFIGURATION_TYPES)
+                set(_wgpu_dll_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>")
+            else ()
+                set(_wgpu_dll_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+            endif ()
             add_custom_command(TARGET threepp POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${WGPU_NATIVE_DLL}"
-                    "$<TARGET_FILE_DIR:threepp>/wgpu_native.dll"
+                    "${_wgpu_dll_dest}/wgpu_native.dll"
                 COMMENT "Copying wgpu_native.dll to output directory"
             )
         endif ()
