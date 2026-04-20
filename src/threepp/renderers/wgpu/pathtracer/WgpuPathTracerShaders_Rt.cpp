@@ -418,6 +418,28 @@ fn equirectUV(d: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(0.5 + phi / (2.0 * PI), 0.5 - theta / PI);
 }
 
+// Bilinear equirect lookup: wrap X (periodic), clamp Y (poles).
+// Nearest-neighbor caused sub-pixel jitter shimmer on primary-ray sky samples,
+// since pxFC caps at 32 (alpha = 1/33) and can't fully smooth per-frame
+// texel hopping on HDR skies with bright regions.
+fn sampleEquirectBilinear(tex: texture_2d<f32>, uv: vec2<f32>) -> vec3<f32> {
+    let sz    = vec2<f32>(textureDimensions(tex, 0));
+    let texel = uv * sz - vec2<f32>(0.5);
+    let t0    = floor(texel);
+    let f     = texel - t0;
+    let sx    = i32(sz.x);
+    let sy    = i32(sz.y);
+    let ix0   = ((i32(t0.x) % sx) + sx) % sx;
+    let ix1   = (ix0 + 1) % sx;
+    let iy0   = clamp(i32(t0.y),     0, sy - 1);
+    let iy1   = clamp(i32(t0.y) + 1, 0, sy - 1);
+    let c00   = textureLoad(tex, vec2<i32>(ix0, iy0), 0).xyz;
+    let c10   = textureLoad(tex, vec2<i32>(ix1, iy0), 0).xyz;
+    let c01   = textureLoad(tex, vec2<i32>(ix0, iy1), 0).xyz;
+    let c11   = textureLoad(tex, vec2<i32>(ix1, iy1), 0).xyz;
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
 // IBL environment lighting (scene.environment).  Returns BLACK when no environment is set.
 // Callers apply rt.envIntensity.x themselves.
 fn sampleEnv(d: vec3<f32>) -> vec3<f32> {
@@ -425,11 +447,7 @@ fn sampleEnv(d: vec3<f32>) -> vec3<f32> {
     if (mode == 1) {
         return rt.envColor.xyz;
     } else if (mode == 2) {
-        let uv = equirectUV(d);
-        let sz = vec2<f32>(textureDimensions(envTex, 0));
-        let px = vec2<i32>(i32(uv.x * sz.x) % i32(sz.x),
-                           clamp(i32(uv.y * sz.y), 0, i32(sz.y) - 1));
-        return textureLoad(envTex, px, 0).xyz;
+        return sampleEquirectBilinear(envTex, equirectUV(d));
     }
     return vec3<f32>(0.0);  // no environment = no IBL
 }
@@ -440,11 +458,7 @@ fn sampleBackground(d: vec3<f32>) -> vec3<f32> {
     if (mode == 1) {
         return rt.bgColor.xyz;
     } else if (mode == 2) {
-        let uv = equirectUV(d);
-        let sz = vec2<f32>(textureDimensions(bgTex, 0));
-        let px = vec2<i32>(i32(uv.x * sz.x) % i32(sz.x),
-                           clamp(i32(uv.y * sz.y), 0, i32(sz.y) - 1));
-        return textureLoad(bgTex, px, 0).xyz;
+        return sampleEquirectBilinear(bgTex, equirectUV(d));
     }
     // Default: procedural sky gradient
     let t = clamp(0.5 * (normalize(d).y + 1.0), 0.0, 1.0);
