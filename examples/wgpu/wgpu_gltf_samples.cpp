@@ -1,4 +1,5 @@
 
+#include "threepp/animation/AnimationMixer.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
@@ -116,10 +117,17 @@ int main(int argc, char** argv) {
     controls.update();
 
     // ---- Async model loading ----
-    ModelLoader loader;
+    struct LoadedGltf {
+        std::shared_ptr<Group> scene;
+        std::vector<std::shared_ptr<AnimationClip>> animations;
+    };
+
+    GLTFLoader loader;
     int currentModel = -1;
     std::shared_ptr<Group> loadedModel;
-    std::future<std::shared_ptr<Group>> modelFuture;
+    std::unique_ptr<AnimationMixer> mixer;
+    std::vector<std::shared_ptr<AnimationClip>> clips;
+    std::future<LoadedGltf> modelFuture;
     bool loadPending = false;
 
     auto loadModel = [&](int idx) {
@@ -131,30 +139,32 @@ int main(int argc, char** argv) {
         auto path = models[idx].path;
         std::cout << "Loading: " << models[idx].name << " (" << path << ")" << std::endl;
 
-        modelFuture = std::async(std::launch::async, [&loader, path, name = models[idx].name]() -> std::shared_ptr<Group> {
+        modelFuture = std::async(std::launch::async, [&loader, path, name = models[idx].name]() -> LoadedGltf {
             try {
-                auto result = loader.load(path.string());
-                result->receiveShadow = true;
-                result->castShadow = true;
-                // Verify it has renderable geometry
-                bool hasMesh = false;
-                if (result) {
-                    result->traverseType<Mesh>([&](Mesh&) {
-                        hasMesh = true;
-                    });
-                    result->traverseType<Light>([&](Light& l) {
-                        l.visible = false;
-                        l.intensity = std::max(l.intensity, 1.0f);
-                    });
+                auto result = loader.load(path);
+                if (!result || !result->scene) {
+                    std::cerr << "Load failed '" << name << "'" << std::endl;
+                    return {};
                 }
+                auto& root = result->scene;
+                root->receiveShadow = true;
+                root->castShadow = true;
+                bool hasMesh = false;
+                root->traverseType<Mesh>([&](Mesh&) {
+                    hasMesh = true;
+                });
+                root->traverseType<Light>([&](Light& l) {
+                    l.visible = false;
+                    l.intensity = std::max(l.intensity, 1.0f);
+                });
                 if (!hasMesh) {
                     std::cerr << "Skipping '" << name << "': no mesh geometry" << std::endl;
-                    return nullptr;
+                    return {};
                 }
-                return result;
+                return {root, std::move(result->animations)};
             } catch (const std::exception& e) {
                 std::cerr << "Load failed '" << name << "': " << e.what() << std::endl;
-                return nullptr;
+                return {};
             }
         });
     };
@@ -332,19 +342,32 @@ int main(int argc, char** argv) {
         // Check async model load
         if (loadPending && modelFuture.valid() &&
             modelFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            auto newModel = modelFuture.get();
+            auto loaded = modelFuture.get();
             loadPending = false;
             if (loadedModel) {
                 scene.remove(*loadedModel);
                 loadedModel.reset();
             }
-            loadedModel = newModel;
+            mixer.reset();
+            clips.clear();
+            loadedModel = loaded.scene;
             if (loadedModel) {
                 scene.add(loadedModel);
                 fitCamera(*loadedModel);
+                clips = std::move(loaded.animations);
+                if (!clips.empty()) {
+                    mixer = std::make_unique<AnimationMixer>(*loadedModel);
+                    mixer->clipAction(clips.front())->play();
+                    std::cout << "Playing animation: " << clips.front()->name()
+                              << " (" << clips.size() << " clip(s))" << std::endl;
+                }
                 pathTracer.markDirty();
                 std::cout << "Loaded: " << models[currentModel].name << std::endl;
             }
+        }
+
+        if (mixer) {
+            mixer->update(dt);
         }
 
         controls.update();
