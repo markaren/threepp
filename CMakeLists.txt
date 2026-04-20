@@ -12,7 +12,7 @@ option(THREEPP_WITH_FBX "Build with FBXLoader (OpenFBX)" OFF)
 option(THREEPP_WITH_USD "Build with USDLoader (tinyusdz)" OFF)
 
 option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
-option(THREEPP_WITH_WGPU "Build with WebGPU backend (via wgpu-native)" ON)
+option(THREEPP_WITH_WGPU "Build with WebGPU backend (via wgpu-native)" OFF)
 cmake_dependent_option(THREEPP_WGPU_GLSL_COMPAT
     "Enable GLSL->SPIR-V translation for ShaderMaterial on the Wgpu backend (requires glslang)"
     ON "THREEPP_WITH_WGPU" OFF)
