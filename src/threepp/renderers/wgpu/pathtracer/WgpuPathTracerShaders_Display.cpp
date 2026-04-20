@@ -44,7 +44,8 @@ struct DepthFillUniforms {
 )";
 
 // ---------------------------------------------------------------------------
-// WGSL display shader — blit accumulated texture to screen with ACES + gamma
+// WGSL display shader — blit accumulated texture as linear HDR radiance.
+// Tonemap + sRGB encoding are applied by WgpuRenderer's post-process pass.
 // ---------------------------------------------------------------------------
 const char* const displayWGSL = R"(
 struct TransformUniforms {
@@ -72,18 +73,16 @@ fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
     return transform.proj * transform.view * transform.model * vec4<f32>(position, 1.0);
 }
 
-fn aces(x: vec3<f32>) -> vec3<f32> {
-    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14),
-                 vec3<f32>(0.0), vec3<f32>(1.0));
-}
-
-// Tonemap + gamma-correct a full-res TAAU pixel.
-// histLen < 0 means sky sentinel — apply gamma but no ACES.
-fn tonemapUpscaleAt(p: vec2<i32>, sz: vec2<i32>, expo: f32) -> vec3<f32> {
+// This shader outputs linear HDR radiance (× exposure). Tone mapping and sRGB
+// encoding are applied by the WgpuRenderer post-process pass based on the
+// renderer's `toneMapping` and `outputEncoding` settings — doing it here would
+// double-correct. Background/sky pixels (s.w < 0) skip the exposure multiply
+// so a clamped ACES on the renderer side doesn't blow out the sky.
+fn upscaleAt(p: vec2<i32>, sz: vec2<i32>, expo: f32) -> vec3<f32> {
     let pc = clamp(p, vec2<i32>(0), sz - vec2<i32>(1, 1));
     let s  = textureLoad(upscaleTex, pc, 0);
-    if (s.w < 0.0) { return pow(max(s.xyz, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)); }
-    return pow(aces(s.xyz * expo), vec3<f32>(1.0 / 2.2));
+    if (s.w < 0.0) { return max(s.xyz, vec3<f32>(0.0)); }
+    return max(s.xyz * expo, vec3<f32>(0.0));
 }
 
 @fragment
@@ -98,18 +97,19 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     let accumSize = vec2<i32>(textureDimensions(accumTex, 0));
     let exposure  = transform.cameraPos.z;
 
-    // AOV mode: direct passthrough of diffTex, gamma only (no tone mapping)
+    // AOV mode: direct passthrough of diffTex as linear radiance.
+    // Renderer post-process handles sRGB encoding.
     if (aovMode > 0) {
         let px = clamp(vec2<i32>(fragPos.xy * pixScale), vec2<i32>(0), accumSize - 1);
         let col = textureLoad(diffTex, px, 0).xyz;
-        return vec4<f32>(pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)), 1.0);
+        return vec4<f32>(max(col, vec3<f32>(0.0)), 1.0);
     }
 
     // Temporal upscale path: if upscaleTex is full-res (> 1×1), TAAU is active.
     let upscaleSize = vec2<i32>(textureDimensions(upscaleTex, 0));
     if (upscaleSize.x > 1) {
         let px = vec2<i32>(i32(fragPos.x), i32(fragPos.y));
-        return vec4<f32>(tonemapUpscaleAt(px, upscaleSize, exposure), 1.0);
+        return vec4<f32>(upscaleAt(px, upscaleSize, exposure), 1.0);
     }
 
     // When rendering at reduced resolution (pixelScale < 1), use joint bilateral
@@ -130,10 +130,11 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
         let nRef = gRef.xyz;
         let dRef = gRef.w;
 
-        // Background: skip bilateral, just nearest-neighbor
+        // Background: skip bilateral, just nearest-neighbor. Skip exposure —
+        // renderer post-process handles tonemap/sRGB.
         if (dRef <= 0.0) {
             let col = textureLoad(diffTex, pNearest, 0).xyz + textureLoad(specTex, pNearest, 0).xyz;
-            return vec4<f32>(pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)), 1.0);
+            return vec4<f32>(max(col, vec3<f32>(0.0)), 1.0);
         }
 
         // Low-res 2×2 footprint for bilateral interpolation
@@ -177,17 +178,17 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
             col = textureLoad(diffTex, pNearest, 0).xyz + textureLoad(specTex, pNearest, 0).xyz;
         }
 
-        let gc = pow(aces(col * exposure), vec3<f32>(1.0 / 2.2));
-        return vec4<f32>(gc, 1.0);
+        return vec4<f32>(max(col * exposure, vec3<f32>(0.0)), 1.0);
     }
 
-    // Native resolution — tonemap and gamma correct.
+    // Native resolution — output linear HDR radiance; renderer post-process
+    // applies tonemap and sRGB encoding.
     let px  = clamp(vec2<i32>(fragPos.xy * pixScale), vec2<i32>(0), accumSize - 1);
     let col = textureLoad(diffTex, px, 0).xyz + textureLoad(specTex, px, 0).xyz;
     if (textureLoad(gBufTex, px, 0).w <= 0.0) {
-        return vec4<f32>(pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)), 1.0);
+        return vec4<f32>(max(col, vec3<f32>(0.0)), 1.0);
     }
-    return vec4<f32>(pow(aces(col * exposure), vec3<f32>(1.0 / 2.2)), 1.0);
+    return vec4<f32>(max(col * exposure, vec3<f32>(0.0)), 1.0);
 }
 )";
 
