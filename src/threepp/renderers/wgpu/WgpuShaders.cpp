@@ -522,11 +522,11 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         return s.str();
     }
 
-    // MeshDepthMaterial: map clip-space depth to brightness
+    // MeshDepthMaterial: map framebuffer depth to brightness.
+    // In the fragment stage @builtin(position).z is already the [0,1]
+    // framebuffer depth — dividing by .w (which is 1/clip.w) is wrong.
     if (features & ShaderFeatures::DepthVis) {
-        // in.clipPos.z / in.clipPos.w gives NDC depth in [0,1] for WebGPU
-        s << "    let depth = in.clipPos.z / in.clipPos.w;\n";
-        s << "    let brightness = 1.0 - depth;\n";
+        s << "    let brightness = 1.0 - in.clipPos.z;\n";
         s << "    baseColor = vec3<f32>(brightness);\n";
         s << "    return vec4<f32>(baseColor, opacity);\n}\n";
         return s.str();
