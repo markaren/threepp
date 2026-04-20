@@ -14,32 +14,9 @@
 #include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/textures/Texture.hpp"
 
-#include "threepp/objects/Line.hpp"
-#include "threepp/objects/LineSegments.hpp"
-#include "threepp/objects/Points.hpp"
-#include "threepp/objects/Sprite.hpp"
-#include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/materials/MeshToonMaterial.hpp"
-#include "threepp/materials/MeshDepthMaterial.hpp"
-#include "threepp/materials/MeshNormalMaterial.hpp"
-#include "threepp/materials/MeshMatcapMaterial.hpp"
-#include "threepp/materials/LineBasicMaterial.hpp"
-#include "threepp/materials/LineDashedMaterial.hpp"
-#include "threepp/materials/PointsMaterial.hpp"
-#include "threepp/materials/SpriteMaterial.hpp"
-#include "threepp/scenes/Fog.hpp"
-#include "threepp/scenes/FogExp2.hpp"
-#include "threepp/geometries/TorusKnotGeometry.hpp"
-#include "threepp/geometries/RingGeometry.hpp"
-#include "threepp/geometries/ConeGeometry.hpp"
-#include "threepp/geometries/CapsuleGeometry.hpp"
 
-#include "threepp/materials/ShaderMaterial.hpp"
-#include "threepp/materials/ShadowMaterial.hpp"
-#include "threepp/objects/SkinnedMesh.hpp"
-#include "threepp/objects/Bone.hpp"
-#include "threepp/objects/Skeleton.hpp"
-#include "threepp/textures/CubeTexture.hpp"
+#include "threepp/scenes/Fog.hpp"
 
 #include <webgpu/webgpu.h>
 #include <webgpu/wgpu.h>

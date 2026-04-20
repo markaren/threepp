@@ -2,6 +2,14 @@
 // Split from CrossRenderer_test.cpp for maintainability.
 
 #include "CrossRenderer_helpers.hpp"
+#include "threepp/geometries/TorusKnotGeometry.hpp"
+#include "threepp/materials/MeshDepthMaterial.hpp"
+#include "threepp/materials/MeshMatcapMaterial.hpp"
+#include "threepp/materials/ShaderMaterial.hpp"
+#include "threepp/objects/Bone.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
+#include "threepp/textures/CubeTexture.hpp"
+
 #include <webgpu/webgpu.h>
 
 TEST_CASE("Wgpu: clear color produces expected pixels", "[wgpu]") {
