@@ -1,7 +1,10 @@
 
 #include "threepp/utils/BufferGeometryUtils.hpp"
 
+#include <cmath>
 #include <iostream>
+#include <limits>
+#include <string>
 
 using namespace threepp;
 
@@ -193,4 +196,134 @@ std::shared_ptr<BufferGeometry> threepp::mergeBufferGeometries(const std::vector
     }
 
     return mergeBufferGeometries(arr, useGroups);
+}
+
+std::shared_ptr<BufferGeometry> threepp::mergeVertices(const BufferGeometry& geometry, float tolerance) {
+
+    tolerance = std::max(tolerance, std::numeric_limits<float>::epsilon());
+
+    const auto* positionAttr = geometry.getAttribute<float>("position");
+    if (!positionAttr) {
+
+        std::cerr << "THREE.BufferGeometryUtils: .mergeVertices() failed. Geometry is missing a position attribute." << std::endl;
+        return nullptr;
+    }
+
+    const auto* index = geometry.getIndex();
+    const unsigned int vertexCount = index ? index->count() : positionAttr->count();
+
+    const auto& srcAttributes = geometry.getAttributes();
+
+    std::unordered_map<std::string, std::vector<float>> floatArrays;
+    std::unordered_map<std::string, std::vector<unsigned int>> uintArrays;
+    std::unordered_map<std::string, int> itemSizes;
+    std::unordered_map<std::string, bool> normalizeds;
+
+    for (const auto& [name, attr] : srcAttributes) {
+
+        itemSizes[name] = attr->itemSize();
+        normalizeds[name] = attr->normalized();
+
+        if (attr->typed<float>()) {
+            floatArrays[name] = {};
+        } else if (attr->typed<unsigned int>()) {
+            uintArrays[name] = {};
+        } else {
+
+            std::cerr << "THREE.BufferGeometryUtils: .mergeVertices() failed. Unsupported attribute type for \"" << name << "\"." << std::endl;
+            return nullptr;
+        }
+    }
+
+    const double shiftMultiplier = std::pow(10.0, std::log10(1.0 / static_cast<double>(tolerance)));
+
+    std::unordered_map<std::string, unsigned int> hashToIndex;
+    std::vector<unsigned int> newIndices;
+    newIndices.reserve(vertexCount);
+    unsigned int nextIndex = 0;
+
+    std::string hash;
+
+    for (unsigned int i = 0; i < vertexCount; ++i) {
+
+        const unsigned int srcIndex = index ? static_cast<unsigned int>(index->getX(i)) : i;
+
+        hash.clear();
+
+        for (const auto& [name, attr] : srcAttributes) {
+
+            const int itemSize = itemSizes[name];
+
+            if (auto fAttr = attr->typed<float>()) {
+
+                const auto& arr = fAttr->array();
+                for (int k = 0; k < itemSize; ++k) {
+                    const double v = static_cast<double>(arr[srcIndex * itemSize + k]) * shiftMultiplier;
+                    hash += std::to_string(static_cast<long long>(v));
+                    hash += ',';
+                }
+
+            } else if (auto uAttr = attr->typed<unsigned int>()) {
+
+                const auto& arr = uAttr->array();
+                for (int k = 0; k < itemSize; ++k) {
+                    hash += std::to_string(arr[srcIndex * itemSize + k]);
+                    hash += ',';
+                }
+            }
+        }
+
+        auto it = hashToIndex.find(hash);
+        if (it != hashToIndex.end()) {
+
+            newIndices.emplace_back(it->second);
+
+        } else {
+
+            for (const auto& [name, attr] : srcAttributes) {
+
+                const int itemSize = itemSizes[name];
+
+                if (auto fAttr = attr->typed<float>()) {
+
+                    const auto& src = fAttr->array();
+                    auto& dst = floatArrays[name];
+                    for (int k = 0; k < itemSize; ++k) {
+                        dst.emplace_back(src[srcIndex * itemSize + k]);
+                    }
+
+                } else if (auto uAttr = attr->typed<unsigned int>()) {
+
+                    const auto& src = uAttr->array();
+                    auto& dst = uintArrays[name];
+                    for (int k = 0; k < itemSize; ++k) {
+                        dst.emplace_back(src[srcIndex * itemSize + k]);
+                    }
+                }
+            }
+
+            hashToIndex[hash] = nextIndex;
+            newIndices.emplace_back(nextIndex);
+            ++nextIndex;
+        }
+    }
+
+    auto result = BufferGeometry::create();
+
+    for (const auto& [name, attr] : srcAttributes) {
+
+        if (attr->typed<float>()) {
+            result->setAttribute(name, TypedBufferAttribute<float>::create(floatArrays[name], itemSizes[name], normalizeds[name]));
+        } else if (attr->typed<unsigned int>()) {
+            result->setAttribute(name, TypedBufferAttribute<unsigned int>::create(uintArrays[name], itemSizes[name], normalizeds[name]));
+        }
+    }
+
+    result->setIndex(newIndices);
+
+    for (const auto& group : geometry.groups) {
+        result->addGroup(group.start, group.count, group.materialIndex);
+    }
+
+    return result;
 }

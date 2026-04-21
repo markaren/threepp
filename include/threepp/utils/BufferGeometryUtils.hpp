@@ -13,6 +13,8 @@ namespace threepp {
 
     std::shared_ptr<BufferGeometry> mergeBufferGeometries(const std::vector<std::shared_ptr<BufferGeometry>>& geometries, bool useGroups = false);
 
+    std::shared_ptr<BufferGeometry> mergeVertices(const BufferGeometry& geometry, float tolerance = 1e-4f);
+
 
 }// namespace threepp
 
