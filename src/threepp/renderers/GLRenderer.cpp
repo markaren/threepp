@@ -1090,6 +1090,7 @@ struct GLRenderer::Impl {
         bool isMeshToonMaterial = material->type() == "MeshToonMaterial";
         bool isMeshPhongMaterial = material->type() == "MeshPhongMaterial";
         bool isMeshStandardMaterial = material->type() == "MeshStandardMaterial";
+        bool isMeshPhysicalMaterial = material->type() == "MeshPhysicalMaterial";
         bool isShadowMaterial = material->type() == "ShadowMaterial";
         bool isShaderMaterial = material->is<ShaderMaterial>();
         bool lights = false;
@@ -1099,7 +1100,7 @@ struct GLRenderer::Impl {
         }
 
         return isMeshLambertMaterial || isMeshToonMaterial || isMeshPhongMaterial ||
-               isMeshStandardMaterial || isShadowMaterial ||
+               isMeshStandardMaterial || isMeshPhysicalMaterial || isShadowMaterial ||
                (isShaderMaterial && lights);
     }
 
