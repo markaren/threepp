@@ -613,7 +613,7 @@ if (THREEPP_WITH_AUDIO)
 endif ()
 
 if (THREEPP_WITH_USD)
-    message("Using tinyusdz: "${tinyusdz_SOURCE_DIR}"")
+    message("Using tinyusdz: ${tinyusdz_SOURCE_DIR}")
     target_link_libraries(threepp PRIVATE tinyusdz_static)
     target_include_directories(threepp PRIVATE
             "${tinyusdz_SOURCE_DIR}/src"
