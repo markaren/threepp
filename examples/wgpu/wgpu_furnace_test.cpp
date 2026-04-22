@@ -71,10 +71,12 @@ namespace {
         int samples = 0;   // foreground pixels counted
     };
 
-    // Compute stats over foreground pixels only (luminance > bgThreshold).
-    // Skipping near-black pixels handles views where part of the frame is
-    // background (camera outside the box, ImGui panel, etc.).
-    Stats computeStats(const std::vector<unsigned char>& px, float bgThreshold = 0.01f) {
+    // Compute stats over ALL pixels. A bgThreshold filter here is a trap: dim
+    // pixels that gradually cross the threshold as accumulation progresses get
+    // folded into the average mid-run, dragging the reported mean downward
+    // even though the image itself isn't changing. For an enclosed cavity the
+    // whole frame is foreground anyway.
+    Stats computeStats(const std::vector<unsigned char>& px) {
         Stats s{};
         if (px.empty()) return s;
         const size_t n = px.size() / 3;
@@ -85,7 +87,6 @@ namespace {
             const double g = px[3 * i + 1] / 255.0;
             const double b = px[3 * i + 2] / 255.0;
             const double l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-            if (l < bgThreshold) continue;
             sr += r;
             sg += g;
             sb += b;
