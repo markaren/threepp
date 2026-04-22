@@ -10,6 +10,7 @@
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBvh.hpp"
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerEnvCdf.hpp"
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerGeometry.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerGgxLut.hpp"
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders.hpp"
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerTypes.hpp"
 
@@ -87,6 +88,7 @@ struct WgpuPathTracer::Impl {
     WgpuTexture bgTexGpu;   // equirectangular background for ray misses (1x1 placeholder when unused)
     WgpuTexture envCdfTex;  // conditional CDF (width × height), R32Float
     WgpuTexture envMargTex; // marginal CDF (height × 1), R32Float
+    WgpuTexture ggxELutTex_;// 32×32 R32Float white-furnace E(cos_o, α) for MS compensation
     float       envLumSum_ = 0.f;  // total luminance sum for PDF normalization
     Texture*    prevEnvTex_ = nullptr;
     Texture*    prevBgTex_  = nullptr;
@@ -361,6 +363,8 @@ struct WgpuPathTracer::Impl {
                     WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           envMargTex(r, 1u, 1u, WgpuTexture::Format::R32Float,
                      WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
+          ggxELutTex_(r, 32u, 32u, WgpuTexture::Format::R32Float,
+                      WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           // Albedo buffer for demodulation
           albedoTex(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                     WgpuTexture::Format::RGBA16Float),
@@ -472,6 +476,15 @@ struct WgpuPathTracer::Impl {
         upscale.b    = WgpuTexture(r, ww, wh, F::RGBA16Float, STB);
         // read/write pointers default to &a / &b — no explicit init needed
 
+        // Precompute the GGX white-furnace response E(cos_o, α) for Turquin-2018
+        // multi-scattering energy compensation in the specular BRDF branch.
+        // Without it, rough GGX loses ~30% of its energy at α=1 because VNDF
+        // samples can fall below the horizon and get dropped.
+        {
+            auto lut = buildGgxELut(32, 1024);
+            ggxELutTex_.write(lut.data(), lut.size() * sizeof(float));
+        }
+
         // Wire compute pipeline bindings
         vtPipeline.setStorageBufferRead(0, objTriBuf);
         vtPipeline.setStorageBufferRead(1, matrixBuf);
@@ -536,6 +549,7 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageBuffer(47, matBucketOffsetBuf);
         rtPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         rtPipeline.setStorageBuffer(49, sortCounterBuf);
+        rtPipeline.setTexture(50, ggxELutTex_);
 
         // Primary-hit kernel (kernel split step 1).  Same shader source, different
         // entry point — so the full bind group layout matches rtPipeline.  Most
@@ -590,6 +604,7 @@ struct WgpuPathTracer::Impl {
         primaryPipeline.setStorageBuffer(47, matBucketOffsetBuf);
         primaryPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         primaryPipeline.setStorageBuffer(49, sortCounterBuf);
+        primaryPipeline.setTexture(50, ggxELutTex_);
 
         // Bounces kernel (bounce-split step 3).  Full mirror of rtPipeline's
         // bindings because runBounces + accumulation touches the same resources.
@@ -645,6 +660,7 @@ struct WgpuPathTracer::Impl {
         bouncesPipeline.setStorageBuffer(47, matBucketOffsetBuf);
         bouncesPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         bouncesPipeline.setStorageBuffer(49, sortCounterBuf);
+        bouncesPipeline.setTexture(50, ggxELutTex_);
 
         // Compaction kernel (Stage F1).  Full bind-group mirror because it
         // uses the same shader source as primary/rt/bounces — bind-group layout
@@ -701,6 +717,7 @@ struct WgpuPathTracer::Impl {
         compactPipeline.setStorageBuffer(47, matBucketOffsetBuf);
         compactPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         compactPipeline.setStorageBuffer(49, sortCounterBuf);
+        compactPipeline.setTexture(50, ggxELutTex_);
 
         // F2a: rt_bounce1_main processes bounce 1 (i=1) as a separate kernel.
         // Full bind-group mirror (same shader source, different entry point).
@@ -754,6 +771,7 @@ struct WgpuPathTracer::Impl {
         bounce1Pipeline.setStorageBuffer(47, matBucketOffsetBuf);
         bounce1Pipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         bounce1Pipeline.setStorageBuffer(49, sortCounterBuf);
+        bounce1Pipeline.setTexture(50, ggxELutTex_);
 
         // F2b: rt_accum_main runs the accumulation / temporal-reprojection
         // pipeline over aliveQueue.  Reads PathStateEntry (final radiance +
@@ -809,6 +827,7 @@ struct WgpuPathTracer::Impl {
         accumPipeline.setStorageBuffer(47, matBucketOffsetBuf);
         accumPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         accumPipeline.setStorageBuffer(49, sortCounterBuf);
+        accumPipeline.setTexture(50, ggxELutTex_);
 
         // F2c: rt_sort_prefix_main runs a tiny 1-thread prefix sum over
         // matBucketCount.  Full bind-group mirror — WebGPU layout validation.
@@ -862,6 +881,7 @@ struct WgpuPathTracer::Impl {
         sortPrefixPipeline.setStorageBuffer(47, matBucketOffsetBuf);
         sortPrefixPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         sortPrefixPipeline.setStorageBuffer(49, sortCounterBuf);
+        sortPrefixPipeline.setTexture(50, ggxELutTex_);
 
         // F2c: rt_sort_scatter_main bucket-scatters aliveQueue → sortedAliveQueue.
         sortScatterPipeline.setUniformBuffer(0, rtUniformBuf);
@@ -914,6 +934,7 @@ struct WgpuPathTracer::Impl {
         sortScatterPipeline.setStorageBuffer(47, matBucketOffsetBuf);
         sortScatterPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         sortScatterPipeline.setStorageBuffer(49, sortCounterBuf);
+        sortScatterPipeline.setTexture(50, ggxELutTex_);
 
         // Spatial filter — set ALL bindings upfront
         atrousPipeline.setUniformBuffer(0, atrousUniBuf);

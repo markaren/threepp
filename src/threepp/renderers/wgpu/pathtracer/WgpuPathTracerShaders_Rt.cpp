@@ -332,6 +332,46 @@ fn schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
 }
 )"
 R"(
+// Turquin 2018 / Kulla-Conty 2017 multi-scattering energy compensation LUT.
+// 32×32 R32Float: u = cos θ_o in (0,1], v = α = roughness² in (0,1].
+// Stored value is E(cos_o, α) with F0=1 — the single-scattering energy
+// retained by the VNDF-sampled GGX estimator (see WgpuPathTracerGgxLut.hpp).
+@group(0) @binding(50) var ggxELut: texture_2d<f32>;
+
+// Bilinear sample of the GGX LUT.  cos_o and alpha are clamped to (0,1].
+// The CPU builder places cells at (i+0.5)/N for cos_o (column) and (i+1)/N
+// for α (row), so we align UV to those centers before interpolating.
+fn sampleGgxELut(cos_o: f32, alpha: f32) -> f32 {
+    let N: f32 = 32.0;
+    let co = clamp(cos_o, 1e-3, 1.0);
+    let al = clamp(alpha, 1e-3, 1.0);
+    let fx = clamp(co * N - 0.5, 0.0, N - 1.0);
+    let fy = clamp(al * N - 1.0, 0.0, N - 1.0);
+    let x0 = i32(floor(fx));
+    let y0 = i32(floor(fy));
+    let x1 = min(x0 + 1, 31);
+    let y1 = min(y0 + 1, 31);
+    let tx = fx - f32(x0);
+    let ty = fy - f32(y0);
+    let e00 = textureLoad(ggxELut, vec2<i32>(x0, y0), 0).r;
+    let e10 = textureLoad(ggxELut, vec2<i32>(x1, y0), 0).r;
+    let e01 = textureLoad(ggxELut, vec2<i32>(x0, y1), 0).r;
+    let e11 = textureLoad(ggxELut, vec2<i32>(x1, y1), 0).r;
+    return mix(mix(e00, e10, tx), mix(e01, e11, tx), ty);
+}
+
+// Turquin 2018 multi-scattering compensation factor.
+// Given E from the LUT and F_avg ≈ (20·F0 + 1)/21 (Kulla-Conty closed form),
+// restores the missing (1-E) energy via (1 + F_avg * (1-E)/E).
+fn msCompensation(F0: vec3<f32>, cos_o: f32, alpha: f32) -> vec3<f32> {
+    let E = sampleGgxELut(cos_o, alpha);
+    let invE = 1.0 / max(E, 1e-3);
+    let F_avg = (20.0 * F0 + vec3<f32>(1.0)) / 21.0;
+    let comp = vec3<f32>(1.0) + F_avg * (max(0.0, 1.0 - E) * invE);
+    return clamp(comp, vec3<f32>(1.0), vec3<f32>(2.0));
+}
+)"
+R"(
 // sRGB → linear conversion (for baseColor and emissive textures)
 fn srgbToLinear(c: vec3<f32>) -> vec3<f32> {
     return select(
@@ -1205,6 +1245,10 @@ fn evalBrdfFull(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
                 sheenColor: vec3<f32>, sheenRoughness: f32,
                 clearcoat: f32, clearcoatAlpha: f32) -> vec3<f32> {
     let brdf = evalBrdf(wo, wi, n, albedo, metalness, alpha, F0);
+    // Turquin 2018 MS compensation on the specular lobe (Kulla-Conty) —
+    // restores the energy lost by single-scattering GGX so NEE matches the
+    // energy conservation applied at the BRDF-sampling site.
+    let msC = msCompensation(F0, max(1e-4, dot(n, wo)), alpha);
     // Clearcoat Fresnel attenuation of the base layer. ccF0 = 0.04 (dielectric IOR ~1.5).
     // Mirrors the stochastic split in the BRDF-sampling path: base lobes receive
     // (1 - ccWeight) of the energy; clearcoat receives ccWeight.
@@ -1215,7 +1259,7 @@ fn evalBrdfFull(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
         let ccFresnel = ccF0 + (1.0 - ccF0) * pow(1.0 - NdotV_cc, 5.0);
         ccWeight = clearcoat * ccFresnel;
     }
-    var lobeSum = (brdf.f_diff + brdf.f_spec) * (1.0 - ccWeight);
+    var lobeSum = (brdf.f_diff + brdf.f_spec * msC) * (1.0 - ccWeight);
     if (ccWeight > 0.0) {
         lobeSum += vec3<f32>(evalClearcoat(wo, wi, n, ccWeight, clearcoatAlpha));
     }
@@ -1233,6 +1277,8 @@ fn evalBrdfFullSplit(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
                      sheenColor: vec3<f32>, sheenRoughness: f32,
                      clearcoat: f32, clearcoatAlpha: f32) -> BrdfSplit {
     let brdf = evalBrdf(wo, wi, n, albedo, metalness, alpha, F0);
+    // Turquin 2018 MS compensation on the specular lobe (see evalBrdfFull).
+    let msC = msCompensation(F0, max(1e-4, dot(n, wo)), alpha);
     var ccWeight = 0.0;
     if (clearcoat > 0.0) {
         let ccF0 = 0.04;
@@ -1241,7 +1287,7 @@ fn evalBrdfFullSplit(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
         ccWeight = clearcoat * ccFresnel;
     }
     var d = brdf.f_diff * (1.0 - ccWeight);
-    var s = brdf.f_spec * (1.0 - ccWeight);
+    var s = brdf.f_spec * msC * (1.0 - ccWeight);
     if (ccWeight > 0.0) {
         s += vec3<f32>(evalClearcoat(wo, wi, n, ccWeight, clearcoatAlpha));
     }
@@ -2213,7 +2259,8 @@ R"(
             let hb  = normalize(wo + wi_b);
             let Fb  = schlick(max(0.0, dot(wo, hb)), F0_b);
             let G1L = ggxG1(cos_b, h.shininess);
-            throughput *= Fb * G1L / p_spec;
+            let msC = msCompensation(F0_b, max(1e-4, dot(h.normal, wo)), h.shininess);
+            throughput *= Fb * G1L * msC / p_spec;
         } else {
             wi_b = cosineHemisphere(h.normal, seed);
             let cos_b = dot(h.normal, wi_b);
@@ -2863,7 +2910,8 @@ const char* const csPrimaryShadeWGSL3 = R"(
         let hb  = normalize(wo + wi_b);
         let Fb  = schlick(max(0.0, dot(wo, hb)), F0_b);
         let G1L = ggxG1(cos_b, h.shininess);
-        throughput *= Fb * G1L / p_spec;
+        let msC = msCompensation(F0_b, max(1e-4, dot(h.normal, wo)), h.shininess);
+        throughput *= Fb * G1L * msC / p_spec;
     } else {
         wi_b = cosineHemisphere(h.normal, seed);
         let cos_b = dot(h.normal, wi_b);
@@ -4142,7 +4190,8 @@ R"(
                 let hb  = normalize(wo + wi_b);
                 let Fb  = schlick(max(0.0, dot(wo, hb)), F0_b);
                 let G1L = ggxG1(cos_b, h.shininess);
-                throughput *= Fb * G1L / p_spec;
+                let msC = msCompensation(F0_b, max(1e-4, dot(h.normal, wo)), h.shininess);
+                throughput *= Fb * G1L * msC / p_spec;
             } else {
                 wi_b = cosineHemisphere(h.normal, &seed);
                 let cos_b = dot(h.normal, wi_b);
