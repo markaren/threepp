@@ -368,7 +368,10 @@ fn msCompensation(F0: vec3<f32>, cos_o: f32, alpha: f32) -> vec3<f32> {
     let invE = 1.0 / max(E, 1e-3);
     let F_avg = (20.0 * F0 + vec3<f32>(1.0)) / 21.0;
     let comp = vec3<f32>(1.0) + F_avg * (max(0.0, 1.0 - E) * invE);
-    return clamp(comp, vec3<f32>(1.0), vec3<f32>(2.0));
+    // Upper bound protects against LUT noise at extreme grazing angles.
+    // 2.0 was too tight: at α=1 and cos_o < ~0.3, legitimate comp exceeds 2
+    // and got clipped, costing ~20% on rough-metal furnace.
+    return clamp(comp, vec3<f32>(1.0), vec3<f32>(4.0));
 }
 )"
 R"(
@@ -1590,36 +1593,40 @@ fn sampleEnvImportance(seed: ptr<function, u32>) -> vec4<f32> {
     let xi_u = rand(seed);
     let col  = cdfSearch(envCdfTex, row, envW, xi_u);
 
-    // 3) Convert to UV with sub-pixel centering
-    let u = (f32(col) + 0.5) / f32(envW);
-    let v = (f32(row) + 0.5) / f32(envH);
+    // 3) Convert to UV with sub-pixel JITTER (not center snap). The pdf below
+    // treats the density as uniform-within-pixel (pdf_uv * W * H). Snapping to
+    // centers turns this into a Riemann midpoint rule and biases smooth BRDF
+    // integrands — the white-furnace env test saw a ~7% deficit at 8×4 env.
+    let ju = rand(seed);
+    let jv = rand(seed);
+    let u = (f32(col) + ju) / f32(envW);
+    let v = (f32(row) + jv) / f32(envH);
     let dir = uvToDir(vec2<f32>(u, v));
 
-    // 4) Compute PDF = luminance(pixel) / totalLuminance, converted to solid angle
+    // 4) Compute PDF = luminance(pixel) / totalLuminance, converted to solid angle.
+    // totalSum is Σ lum*cos(lat) (see buildEnvCdf), so p(pixel) = lum*cos/totalSum
+    // and pdf_uv = lum*cos*W*H/totalSum. The equirect Jacobian 2π²*cos(lat) in the
+    // uv→ω conversion cancels the cos(lat) in pdf_uv exactly, so pdf_ω is just
+    // lum*W*H / (2π²*totalSum). Writing the cos factor on both sides and then
+    // cancelling was a bug — the stray 1/cos made polar samples badly weighted.
     let envCol = textureLoad(envTex, vec2<i32>(col, row), 0).xyz;
     let lum = 0.2126 * envCol.r + 0.7152 * envCol.g + 0.0722 * envCol.b + 1e-10;
-
-    let theta = (0.5 - v) * PI;
-    let sinTheta = max(abs(sin(theta)), 1e-6);
     let totalSum = rt.envIntensity.w;
-    let pdf_uv = lum / max(totalSum, 1e-10);
-    let pdf = pdf_uv * f32(envW * envH) / (2.0 * PI * PI * sinTheta);
+    let pdf = lum * f32(envW * envH) / (2.0 * PI * PI * max(totalSum, 1e-10));
 
     return vec4<f32>(dir, pdf);
 }
 
 // PDF for a given direction under env importance sampling (for MIS).
+// Matches sampleEnvImportance — cos(lat) in pdf_uv numerator cancels the
+// equirect Jacobian's cos(lat), so pdf_ω = lum*W*H / (2π²*totalSum).
 fn envImportancePdf(d: vec3<f32>) -> f32 {
     let envW = i32(rt.envIntensity.y);
     let envH = i32(rt.envIntensity.z);
-    let uv = dirToUV(d);
     let envCol = sampleEnv(d);
     let lum = 0.2126 * envCol.r + 0.7152 * envCol.g + 0.0722 * envCol.b + 1e-10;
-    let theta = (0.5 - uv.y) * PI;
-    let sinTheta = max(abs(sin(theta)), 1e-6);
     let totalSum = rt.envIntensity.w;
-    let pdf_uv = lum / max(totalSum, 1e-10);
-    return pdf_uv * f32(envW * envH) / (2.0 * PI * PI * sinTheta);
+    return lum * f32(envW * envH) / (2.0 * PI * PI * max(totalSum, 1e-10));
 }
 
 // Per-contribution firefly clamp for injection-time MIS spikes.
@@ -2250,6 +2257,9 @@ R"(
         // BRDF sample — firstBounceSpec is i==0-only in the original, so no update here.
         let F0_b = F0_h;
         var wi_b: vec3<f32>;
+        // p_spec must match brdfPdf() exactly — MIS balance heuristic requires the
+        // pdf used in weighting to equal the pdf used in sampling, or contributions
+        // miscalibrate.
         let p_spec = mix(0.5, 0.98, h.metalness);
         let isSpecBounce = rand(seed) < p_spec;
         if (isSpecBounce) {
@@ -2265,7 +2275,10 @@ R"(
             wi_b = cosineHemisphere(h.normal, seed);
             let cos_b = dot(h.normal, wi_b);
             if (cos_b <= 0.0) { break; }
-            throughput *= albedo * (1.0 - h.metalness) / (1.0 - p_spec);
+            // Match evalBrdf: diffuse is attenuated by (1-F). Using F at NdotV as
+            // a Disney-style proxy (no half vector for cosine-hemisphere sampling).
+            let F_view = schlick(max(0.0, dot(h.normal, wo)), F0_b);
+            throughput *= (vec3<f32>(1.0) - F_view) * albedo * (1.0 - h.metalness) / (1.0 - p_spec);
         }
         prevWo        = wo;
         prevNormal    = h.normal;

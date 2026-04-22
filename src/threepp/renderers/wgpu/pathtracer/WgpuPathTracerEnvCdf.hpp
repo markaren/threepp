@@ -35,11 +35,15 @@ namespace threepp::wgpu_pt {
         r.conditional.resize(static_cast<std::size_t>(w) * h);
         r.marginal.resize(h);
 
-        // Row luminance sums (weighted by sin(theta) for solid angle)
+        // Row luminance sums, weighted by the equirect solid-angle Jacobian.
+        // theta here is LATITUDE (0 at equator, ±π/2 at poles), so the Jacobian
+        // is cos(theta), not sin(theta). Using sin here was a bug that swapped
+        // equator/pole weights and caused ~15% furnace deviation on diffuse
+        // dielectrics (plus visible banding on glossy reflections).
         for (int y = 0; y < h; ++y) {
             const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(h);
             const float theta = (0.5f - v) * 3.14159265359f;
-            const float sinTheta = std::max(std::abs(std::sin(theta)), 1e-6f);
+            const float cosTheta = std::max(std::abs(std::cos(theta)), 1e-6f);
 
             float rowSum = 0.f;
             for (int x = 0; x < w; ++x) {
@@ -50,7 +54,7 @@ namespace threepp::wgpu_pt {
                 } else {
                     rf = pixels[idx] / 255.f; gf = pixels[idx + 1] / 255.f; bf = pixels[idx + 2] / 255.f;
                 }
-                const float lum = (0.2126f * rf + 0.7152f * gf + 0.0722f * bf) * sinTheta;
+                const float lum = (0.2126f * rf + 0.7152f * gf + 0.0722f * bf) * cosTheta;
                 rowSum += lum;
                 r.conditional[static_cast<std::size_t>(y) * w + x] = rowSum;
             }
