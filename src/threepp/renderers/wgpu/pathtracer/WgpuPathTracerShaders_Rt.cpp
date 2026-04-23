@@ -2101,7 +2101,7 @@ const char* const csRunBouncesWGSL2 = R"(
 R"(
             // Finalize + visibility + shade + store pre-spatial reservoir.
             var giW = select(0.0, giW_sum / max(giM * giPhat, 1e-20), giPhat > 0.0);
-            giW = min(giW, 3.0);
+            if (rt.emissiveInfo.z < 1e20) { giW = min(giW, 3.0); }
 
             let giWi = normalize(giSecPos - b0Point);
             let giNdotL = max(dot(b0Normal, giWi), 0.0);
@@ -2655,7 +2655,7 @@ R"(
             }
             finalizeReservoir(&reservoir);
         }
-        reservoir.W = min(reservoir.W, 5.0);
+        if (rt.emissiveInfo.z < 1e20) { reservoir.W = min(reservoir.W, 5.0); }
 
         // === VISIBILITY TEST ===
         var reservoirShadowAtten = vec3<f32>(0.0);
