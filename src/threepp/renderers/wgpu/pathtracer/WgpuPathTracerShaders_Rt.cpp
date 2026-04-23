@@ -59,7 +59,7 @@ struct Bvh4NodeGpu {
 
 @group(0) @binding(0) var<uniform> rt:          RtUniforms;
 @group(0) @binding(1) var accumRead:  texture_2d<f32>;
-@group(0) @binding(2) var accumWrite: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var accumWrite: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(3) var<storage, read> bvhNodes: array<Bvh4NodeGpu>;
 @group(0) @binding(4) var matData:    texture_2d<f32>;
 @group(0) @binding(5) var triData:       texture_2d<f32>;

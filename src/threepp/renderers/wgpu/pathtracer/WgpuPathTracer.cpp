@@ -473,8 +473,8 @@ struct WgpuPathTracer::Impl {
         using F = WgpuTexture::Format;
         constexpr uint32_t STB = WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst;
         constexpr uint32_t STBR = STB | WgpuTexture::RenderAttachment;
-        accum.a      = WgpuTexture(r, ww, wh, F::RGBA16Float);
-        accum.b      = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        accum.a      = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        accum.b      = WgpuTexture(r, ww, wh, F::RGBA32Float);
         hitMesh.a    = WgpuTexture(r, ww, wh, F::RGBA16Float);
         hitMesh.b    = WgpuTexture(r, ww, wh, F::RGBA16Float);
         gBuf.a       = WgpuTexture(r, ww, wh, F::RGBA16Float, STBR);
@@ -969,7 +969,9 @@ struct WgpuPathTracer::Impl {
         // Spatial filter — set ALL bindings upfront
         atrousPipeline.setUniformBuffer(0, atrousUniBuf);
         atrousPipeline.setTexture(1, *accum.read);
-        atrousPipeline.setStorageTexture(2, *accum.write);
+        // binding 2 is declared rgba16float in the shader; accum is rgba32float now,
+        // so seed the BGL with an rgba16float target. Rebound per-pass at render time.
+        atrousPipeline.setStorageTexture(2, filtered.a);
         atrousPipeline.setTexture(3, *gBuf.write);
         atrousPipeline.setTexture(4, albedoTex);
         atrousPipeline.setTexture(5, *hitMesh.read);
@@ -1164,8 +1166,12 @@ struct WgpuPathTracer::Impl {
             sortScatterPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         }
 
-        accum.a = WgpuTexture(renderer, uw, uh, fmt);
-        accum.b = WgpuTexture(renderer, uw, uh, fmt);
+        // Main color accumulator: fp32 to preserve precision under long static
+        // accumulation. fp16 loses the (1-alpha) decay term once alpha < ~5e-4,
+        // at which point samples add without decaying and the buffer drifts
+        // upward. fp32 granularity (~1e-7) stays safe even at FC=1e6.
+        accum.a = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float);
+        accum.b = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float);
         accum.read = &accum.a;
         accum.write = &accum.b;
 
