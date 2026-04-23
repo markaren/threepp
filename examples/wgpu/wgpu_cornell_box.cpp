@@ -136,7 +136,9 @@ int main() {
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setMaxBounces(6);
     pathTracer.setReSTIREnabled(true);
+    pathTracer.setReSTIRGIEnabled(false);
     pathTracer.setFoveatedRendering(false);
+    pathTracer.setFireflyClamp(0);
 
     // ---- Scene ----
     Scene scene;
@@ -167,6 +169,7 @@ int main() {
     bool raster = false;
     bool denoiserOn = pathTracer.denoiserEnabled();
     bool restdirOn = pathTracer.restirEnabled();
+    bool restirGIOn = pathTracer.restirGiEnabled();
     bool foveatOn = pathTracer.foveatedRendering();
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
@@ -194,8 +197,10 @@ int main() {
                 pathTracer.setExposure(exposure);
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);
-            if (ImGui::Checkbox("ReSTIR", &restdirOn))
+            if (ImGui::Checkbox("ReSTIR DI", &restdirOn))
                 pathTracer.setReSTIREnabled(restdirOn);
+            if (ImGui::Checkbox("ReSTIR GI", &restirGIOn))
+                pathTracer.setReSTIRGIEnabled(restirGIOn);
             if (ImGui::Checkbox("Foveated", &foveatOn))
                 pathTracer.setFoveatedRendering(foveatOn);
             if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8))
