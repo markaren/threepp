@@ -96,8 +96,11 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     {
         let w_s0      = kw[2] * kw[2];
         let cIrrDemod = demod(cColor, cAlbedo);  // consistent with loop: always demodulate
-        let specCap0  = mix(6.0, 16.0, cRough);
-        let filterCap0 = select(20.0, specCap0, isSpec);
+        // Narkowicz ACES in the display used to hard-clamp anything >~5 to white,
+        // hiding firefly leakage. Full three.js ACES (now in renderer post-process)
+        // has a rolloff that preserves bright variation, so caps must be tighter.
+        let specCap0  = mix(4.0, 10.0, cRough);
+        let filterCap0 = select(10.0, specCap0, isSpec);
         let cIrrLum   = luminance(cIrrDemod);
         let cColLum   = luminance(cColor);
         var cIrrC  = cIrrDemod;
@@ -176,8 +179,8 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // The spatial filter is the only smoothing the specular channel gets,
             // so aggressive per-sample clamping is critical to kill fireflies before
             // the kernel averages them in.
-            let specCap = mix(6.0, 16.0, cRough);
-            let filterCap = select(20.0, specCap, isSpec);
+            let specCap = mix(4.0, 10.0, cRough);
+            let filterCap = select(10.0, specCap, isSpec);
             if (sIrrLum > filterCap) { sIrrClamped  = sIrr  * (filterCap / sIrrLum); }
             if (sColLum > filterCap) { sColorClamped = sColor * (filterCap / sColLum); }
 
@@ -233,7 +236,7 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // legitimate bright sample survives but a 10-100× firefly is pulled back.
     let resLum = luminance(spatialResult);
     let neighborMeanLum = luminance(filteredRaw);
-    let fireflyCeil = max(neighborMeanLum * 3.0, 0.5);
+    let fireflyCeil = max(neighborMeanLum * 2.0, 0.3);
     if (resLum > fireflyCeil) {
         spatialResult = spatialResult * (fireflyCeil / resLum);
     }

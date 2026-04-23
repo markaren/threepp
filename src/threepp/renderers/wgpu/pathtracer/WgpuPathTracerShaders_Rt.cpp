@@ -4566,7 +4566,9 @@ R"(
             var dClamped = diffSample;
             let dLum = dot(diffSample, lum3);
             if (clampsOn && dLum > hardCap) { dClamped = diffSample * (hardCap / dLum); }
-            let specHardCap = mix(3.0, 8.0, primaryRough);
+            // Mirror-like spec bypasses the atrous filter (specRoughBlend → 0 at
+            // roughness < 0.05), so this cap is the only firefly gate for them.
+            let specHardCap = mix(2.0, 5.0, primaryRough);
             var sClamped = specSample;
             let sLum = dot(specSample, lum3);
             if (clampsOn && sLum > specHardCap) { sClamped = specSample * (specHardCap / sLum); }
