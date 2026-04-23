@@ -84,7 +84,6 @@ struct WgpuPathTracer::Impl {
     int atlasCols_ = ATLAS_WIDTH / DEFAULT_TILE_SIZE;
     int tileSize_ = DEFAULT_TILE_SIZE;
     int textureResolution_ = DEFAULT_TILE_SIZE;  // user config: 1024 or 2048
-    PingPong accum;
     PingPong hitMesh;
     WgpuTexture envTexGpu;   // equirectangular env map for IBL (1x1 placeholder when unused)
     WgpuTexture bgTexGpu;   // equirectangular background for ray misses (1x1 placeholder when unused)
@@ -477,8 +476,6 @@ struct WgpuPathTracer::Impl {
         using F = WgpuTexture::Format;
         constexpr uint32_t STB = WgpuTexture::Storage | WgpuTexture::TextureBinding | WgpuTexture::CopyDst;
         constexpr uint32_t STBR = STB | WgpuTexture::RenderAttachment;
-        accum.a      = WgpuTexture(r, ww, wh, F::RGBA32Float);
-        accum.b      = WgpuTexture(r, ww, wh, F::RGBA32Float);
         hitMesh.a    = WgpuTexture(r, ww, wh, F::RGBA16Float);
         hitMesh.b    = WgpuTexture(r, ww, wh, F::RGBA16Float);
         gBuf.a       = WgpuTexture(r, ww, wh, F::RGBA16Float, STBR);
@@ -539,8 +536,6 @@ struct WgpuPathTracer::Impl {
 
         // RT pipelines — set ALL bindings upfront (per-frame ones get overwritten)
         rtPipeline.setUniformBuffer(0, rtUniformBuf);
-        rtPipeline.setTexture(1, *accum.read);
-        rtPipeline.setStorageTexture(2, *accum.write);
         rtPipeline.setStorageBufferRead(3, bvhNodeBuf);
         rtPipeline.setTexture(4, matTex);
         rtPipeline.setTexture(5, triTex);
@@ -594,8 +589,6 @@ struct WgpuPathTracer::Impl {
         // bindings are unused by rt_primary_main but WebGPU still requires them
         // bound because they're declared in the module.
         primaryPipeline.setUniformBuffer(0, rtUniformBuf);
-        primaryPipeline.setTexture(1, *accum.read);
-        primaryPipeline.setStorageTexture(2, *accum.write);
         primaryPipeline.setStorageBufferRead(3, bvhNodeBuf);
         primaryPipeline.setTexture(4, matTex);
         primaryPipeline.setTexture(5, triTex);
@@ -649,8 +642,6 @@ struct WgpuPathTracer::Impl {
         // Adds binding 38 (bounceCounter) — not referenced by the other entry
         // points, so bound only here.
         bouncesPipeline.setUniformBuffer(0, rtUniformBuf);
-        bouncesPipeline.setTexture(1, *accum.read);
-        bouncesPipeline.setStorageTexture(2, *accum.write);
         bouncesPipeline.setStorageBufferRead(3, bvhNodeBuf);
         bouncesPipeline.setTexture(4, matTex);
         bouncesPipeline.setTexture(5, triTex);
@@ -706,8 +697,6 @@ struct WgpuPathTracer::Impl {
         // rt_compact_main (pathStateBuf at 37, aliveQueue/Count/compactCounter
         // at 39-41), but WebGPU validates the complete layout.
         compactPipeline.setUniformBuffer(0, rtUniformBuf);
-        compactPipeline.setTexture(1, *accum.read);
-        compactPipeline.setStorageTexture(2, *accum.write);
         compactPipeline.setStorageBufferRead(3, bvhNodeBuf);
         compactPipeline.setTexture(4, matTex);
         compactPipeline.setTexture(5, triTex);
@@ -760,8 +749,6 @@ struct WgpuPathTracer::Impl {
         // F2a: rt_bounce1_main processes bounce 1 (i=1) as a separate kernel.
         // Full bind-group mirror (same shader source, different entry point).
         bounce1Pipeline.setUniformBuffer(0, rtUniformBuf);
-        bounce1Pipeline.setTexture(1, *accum.read);
-        bounce1Pipeline.setStorageTexture(2, *accum.write);
         bounce1Pipeline.setStorageBufferRead(3, bvhNodeBuf);
         bounce1Pipeline.setTexture(4, matTex);
         bounce1Pipeline.setTexture(5, triTex);
@@ -816,8 +803,6 @@ struct WgpuPathTracer::Impl {
         // touchedMoved + primary hit info) from pathStateBuf written by
         // primaryShade, bounce1, and bounces.  Full bind-group mirror.
         accumPipeline.setUniformBuffer(0, rtUniformBuf);
-        accumPipeline.setTexture(1, *accum.read);
-        accumPipeline.setStorageTexture(2, *accum.write);
         accumPipeline.setStorageBufferRead(3, bvhNodeBuf);
         accumPipeline.setTexture(4, matTex);
         accumPipeline.setTexture(5, triTex);
@@ -870,8 +855,6 @@ struct WgpuPathTracer::Impl {
         // F2c: rt_sort_prefix_main runs a tiny 1-thread prefix sum over
         // matBucketCount.  Full bind-group mirror — WebGPU layout validation.
         sortPrefixPipeline.setUniformBuffer(0, rtUniformBuf);
-        sortPrefixPipeline.setTexture(1, *accum.read);
-        sortPrefixPipeline.setStorageTexture(2, *accum.write);
         sortPrefixPipeline.setStorageBufferRead(3, bvhNodeBuf);
         sortPrefixPipeline.setTexture(4, matTex);
         sortPrefixPipeline.setTexture(5, triTex);
@@ -923,8 +906,6 @@ struct WgpuPathTracer::Impl {
 
         // F2c: rt_sort_scatter_main bucket-scatters aliveQueue → sortedAliveQueue.
         sortScatterPipeline.setUniformBuffer(0, rtUniformBuf);
-        sortScatterPipeline.setTexture(1, *accum.read);
-        sortScatterPipeline.setStorageTexture(2, *accum.write);
         sortScatterPipeline.setStorageBufferRead(3, bvhNodeBuf);
         sortScatterPipeline.setTexture(4, matTex);
         sortScatterPipeline.setTexture(5, triTex);
@@ -974,11 +955,13 @@ struct WgpuPathTracer::Impl {
         sortScatterPipeline.setStorageBuffer(49, sortCounterBuf);
         sortScatterPipeline.setTexture(50, ggxELutTex_);
 
-        // Spatial filter — set ALL bindings upfront
+        // Spatial filter — set ALL bindings upfront.
+        // Binding 1 (colorIn) and binding 2 (colorOut) are rebound per-pass; seed
+        // both with rgba32float textures so the BGL sampleType/format classification
+        // matches the per-pass textures (diffAccum/specAccum/filtered/denoised are
+        // all rgba32float — see feedback_atrous_format_consistency).
         atrousPipeline.setUniformBuffer(0, atrousUniBuf);
-        atrousPipeline.setTexture(1, *accum.read);
-        // binding 2 is declared rgba16float in the shader; accum is rgba32float now,
-        // so seed the BGL with an rgba16float target. Rebound per-pass at render time.
+        atrousPipeline.setTexture(1, diffAccum.a);
         atrousPipeline.setStorageTexture(2, filtered.a);
         atrousPipeline.setTexture(3, *gBuf.write);
         atrousPipeline.setTexture(4, albedoTex);
@@ -1008,8 +991,6 @@ struct WgpuPathTracer::Impl {
         // Zero-fill accumulators and SVGF textures
         {
             std::vector<float> zeros(w * h * 4, 0.f);
-            accum.a.write(zeros.data(), zeros.size() * sizeof(float));
-            accum.b.write(zeros.data(), zeros.size() * sizeof(float));
             gBuf.a.write(zeros.data(), zeros.size() * sizeof(float));
             gBuf.b.write(zeros.data(), zeros.size() * sizeof(float));
             moments.a.write(zeros.data(), zeros.size() * sizeof(float));
@@ -1032,7 +1013,6 @@ struct WgpuPathTracer::Impl {
         displayMat = ShaderMaterial::create();
         displayMat->vertexShader = displayWGSL;
         displayMat->fragmentShader = displayWGSL;
-        displayMat->customTextures["accumTex"] = accum.read;
         displayMat->customTextures["gBufTex"]  = gBuf.write;
         displayMat->customTextures["diffTex"]      = diffAccum.read;
         displayMat->customTextures["specTex"]      = specAccum.read;
@@ -1178,11 +1158,6 @@ struct WgpuPathTracer::Impl {
         // accumulation. fp16 loses the (1-alpha) decay term once alpha < ~5e-4,
         // at which point samples add without decaying and the buffer drifts
         // upward. fp32 granularity (~1e-7) stays safe even at FC=1e6.
-        accum.a = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float);
-        accum.b = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float);
-        accum.read = &accum.a;
-        accum.write = &accum.b;
-
         hitMesh.a = WgpuTexture(renderer, uw, uh, fmt);
         hitMesh.b = WgpuTexture(renderer, uw, uh, fmt);
         hitMesh.read  = &hitMesh.a;
@@ -1243,8 +1218,6 @@ struct WgpuPathTracer::Impl {
         denoisedSpec = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float);
 
         std::vector<float> zeros(w * h * 4, 0.f);
-        accum.a.write(zeros.data(), zeros.size() * sizeof(float));
-        accum.b.write(zeros.data(), zeros.size() * sizeof(float));
         gBuf.a.write(zeros.data(), zeros.size() * sizeof(float));
         gBuf.b.write(zeros.data(), zeros.size() * sizeof(float));
         moments.a.write(zeros.data(), zeros.size() * sizeof(float));
@@ -1285,8 +1258,6 @@ struct WgpuPathTracer::Impl {
         // Mirror texture re-bindings on primaryPipeline so its bind-group layout
         // picks up the new texture object identities.  Primary only consumes a
         // handful of these at runtime but WebGPU requires them all bound.
-        primaryPipeline.setTexture(1, *accum.read);
-        primaryPipeline.setStorageTexture(2, *accum.write);
         primaryPipeline.setTexture(7, *hitMesh.read);
         primaryPipeline.setStorageTexture(8, *hitMesh.write);
         primaryPipeline.setStorageTexture(10, *gBuf.read);
@@ -1312,8 +1283,6 @@ struct WgpuPathTracer::Impl {
 
         // Mirror texture re-bindings on bouncesPipeline.  Bounces kernel
         // consumes almost the same resources as rtPipeline, so mirror the full set.
-        bouncesPipeline.setTexture(1, *accum.read);
-        bouncesPipeline.setStorageTexture(2, *accum.write);
         bouncesPipeline.setTexture(7, *hitMesh.read);
         bouncesPipeline.setStorageTexture(8, *hitMesh.write);
         bouncesPipeline.setStorageTexture(10, *gBuf.read);
@@ -1340,8 +1309,6 @@ struct WgpuPathTracer::Impl {
         // Mirror texture re-bindings on compactPipeline (F1).  Not consumed by
         // rt_compact_main at runtime but WebGPU bind-group validation requires
         // current texture identities across the whole layout.
-        compactPipeline.setTexture(1, *accum.read);
-        compactPipeline.setStorageTexture(2, *accum.write);
         compactPipeline.setTexture(7, *hitMesh.read);
         compactPipeline.setStorageTexture(8, *hitMesh.write);
         compactPipeline.setStorageTexture(10, *gBuf.read);
@@ -1366,8 +1333,6 @@ struct WgpuPathTracer::Impl {
         compactPipeline.setStorageTexture(33, *giResLo.write);
 
         // Mirror texture re-bindings on bounce1Pipeline (F2a).
-        bounce1Pipeline.setTexture(1, *accum.read);
-        bounce1Pipeline.setStorageTexture(2, *accum.write);
         bounce1Pipeline.setTexture(7, *hitMesh.read);
         bounce1Pipeline.setStorageTexture(8, *hitMesh.write);
         bounce1Pipeline.setStorageTexture(10, *gBuf.read);
@@ -1392,8 +1357,6 @@ struct WgpuPathTracer::Impl {
         bounce1Pipeline.setStorageTexture(33, *giResLo.write);
 
         // Mirror texture re-bindings on accumPipeline (F2b).
-        accumPipeline.setTexture(1, *accum.read);
-        accumPipeline.setStorageTexture(2, *accum.write);
         accumPipeline.setTexture(7, *hitMesh.read);
         accumPipeline.setStorageTexture(8, *hitMesh.write);
         accumPipeline.setStorageTexture(10, *gBuf.read);
@@ -1418,8 +1381,6 @@ struct WgpuPathTracer::Impl {
         accumPipeline.setStorageTexture(33, *giResLo.write);
 
         // Mirror texture re-bindings on sort pipelines (F2c).
-        sortPrefixPipeline.setTexture(1, *accum.read);
-        sortPrefixPipeline.setStorageTexture(2, *accum.write);
         sortPrefixPipeline.setTexture(7, *hitMesh.read);
         sortPrefixPipeline.setStorageTexture(8, *hitMesh.write);
         sortPrefixPipeline.setStorageTexture(10, *gBuf.read);
@@ -1443,8 +1404,6 @@ struct WgpuPathTracer::Impl {
         sortPrefixPipeline.setTexture(32, *giResLo.read);
         sortPrefixPipeline.setStorageTexture(33, *giResLo.write);
 
-        sortScatterPipeline.setTexture(1, *accum.read);
-        sortScatterPipeline.setStorageTexture(2, *accum.write);
         sortScatterPipeline.setTexture(7, *hitMesh.read);
         sortScatterPipeline.setStorageTexture(8, *hitMesh.write);
         sortScatterPipeline.setStorageTexture(10, *gBuf.read);
@@ -2274,7 +2233,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
     // Before first build, skip RT dispatch
     if (d.triCount_ == 0) {
-        d.displayMat->customTextures["accumTex"] = d.accum.read;
         d.displayMat->customTextures["gBufTex"]  = d.gBuf.write;
         d.displayMat->customTextures["diffTex"]  = d.diffAccum.read;
         d.displayMat->customTextures["specTex"]  = d.specAccum.read;
@@ -2781,7 +2739,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.shaderWaitFrames_ = 0;
             // Fall through: isReady() now returns true; encode() will do the fast sync rebuild.
         } else {
-            d.displayMat->customTextures["accumTex"] = d.accum.read;
             d.displayMat->customTextures["gBufTex"]  = d.gBuf.write;
             d.displayMat->uniformsNeedUpdate = true;
             d.renderer.render(d.displayScene, d.displayCam);
@@ -2828,36 +2785,20 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.rtUniformBuf.write(&u, sizeof(u));
         }
 
-        activePipeline.setTexture(1, *d.accum.read);
-        activePipeline.setStorageTexture(2, *d.accum.write);
         activePipeline.setTexture(7, *d.hitMesh.read);
         activePipeline.setStorageTexture(8, *d.hitMesh.write);
-        d.primaryPipeline.setTexture(1, *d.accum.read);
-        d.primaryPipeline.setStorageTexture(2, *d.accum.write);
         d.primaryPipeline.setTexture(7, *d.hitMesh.read);
         d.primaryPipeline.setStorageTexture(8, *d.hitMesh.write);
-        d.bouncesPipeline.setTexture(1, *d.accum.read);
-        d.bouncesPipeline.setStorageTexture(2, *d.accum.write);
         d.bouncesPipeline.setTexture(7, *d.hitMesh.read);
         d.bouncesPipeline.setStorageTexture(8, *d.hitMesh.write);
-        d.compactPipeline.setTexture(1, *d.accum.read);
-        d.compactPipeline.setStorageTexture(2, *d.accum.write);
         d.compactPipeline.setTexture(7, *d.hitMesh.read);
         d.compactPipeline.setStorageTexture(8, *d.hitMesh.write);
-        d.bounce1Pipeline.setTexture(1, *d.accum.read);
-        d.bounce1Pipeline.setStorageTexture(2, *d.accum.write);
         d.bounce1Pipeline.setTexture(7, *d.hitMesh.read);
         d.bounce1Pipeline.setStorageTexture(8, *d.hitMesh.write);
-        d.accumPipeline.setTexture(1, *d.accum.read);
-        d.accumPipeline.setStorageTexture(2, *d.accum.write);
         d.accumPipeline.setTexture(7, *d.hitMesh.read);
         d.accumPipeline.setStorageTexture(8, *d.hitMesh.write);
-        d.sortPrefixPipeline.setTexture(1, *d.accum.read);
-        d.sortPrefixPipeline.setStorageTexture(2, *d.accum.write);
         d.sortPrefixPipeline.setTexture(7, *d.hitMesh.read);
         d.sortPrefixPipeline.setStorageTexture(8, *d.hitMesh.write);
-        d.sortScatterPipeline.setTexture(1, *d.accum.read);
-        d.sortScatterPipeline.setStorageTexture(2, *d.accum.write);
         d.sortScatterPipeline.setTexture(7, *d.hitMesh.read);
         d.sortScatterPipeline.setStorageTexture(8, *d.hitMesh.write);
 
@@ -3100,7 +3041,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
 
         // Swap all ping-pong buffers so next sample reads this sample's output
-        d.accum.swap();
         d.hitMesh.swap();
         d.diffAccum.swap();
         d.specAccum.swap();
@@ -3137,8 +3077,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         // Mirror all ping-pong rebindings on primaryPipeline — most are unused
         // by rt_primary_main but WebGPU's bind-group validation requires current
         // texture identities across the whole layout.
-        d.primaryPipeline.setTexture(1, *d.accum.read);
-        d.primaryPipeline.setStorageTexture(2, *d.accum.write);
         d.primaryPipeline.setTexture(7, *d.hitMesh.read);
         d.primaryPipeline.setStorageTexture(8, *d.hitMesh.write);
         d.primaryPipeline.setStorageTexture(10, *d.gBuf.read);
@@ -3161,8 +3099,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.primaryPipeline.setStorageTexture(33, *d.giResLo.write);
 
         // Mirror all ping-pong rebindings on bouncesPipeline.
-        d.bouncesPipeline.setTexture(1, *d.accum.read);
-        d.bouncesPipeline.setStorageTexture(2, *d.accum.write);
         d.bouncesPipeline.setTexture(7, *d.hitMesh.read);
         d.bouncesPipeline.setStorageTexture(8, *d.hitMesh.write);
         d.bouncesPipeline.setStorageTexture(10, *d.gBuf.read);
@@ -3185,8 +3121,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.bouncesPipeline.setStorageTexture(33, *d.giResLo.write);
 
         // Mirror all ping-pong rebindings on compactPipeline (F1).
-        d.compactPipeline.setTexture(1, *d.accum.read);
-        d.compactPipeline.setStorageTexture(2, *d.accum.write);
         d.compactPipeline.setTexture(7, *d.hitMesh.read);
         d.compactPipeline.setStorageTexture(8, *d.hitMesh.write);
         d.compactPipeline.setStorageTexture(10, *d.gBuf.read);
@@ -3209,8 +3143,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.compactPipeline.setStorageTexture(33, *d.giResLo.write);
 
         // Mirror all ping-pong rebindings on bounce1Pipeline (F2a).
-        d.bounce1Pipeline.setTexture(1, *d.accum.read);
-        d.bounce1Pipeline.setStorageTexture(2, *d.accum.write);
         d.bounce1Pipeline.setTexture(7, *d.hitMesh.read);
         d.bounce1Pipeline.setStorageTexture(8, *d.hitMesh.write);
         d.bounce1Pipeline.setStorageTexture(10, *d.gBuf.read);
@@ -3233,8 +3165,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.bounce1Pipeline.setStorageTexture(33, *d.giResLo.write);
 
         // Mirror all ping-pong rebindings on accumPipeline (F2b).
-        d.accumPipeline.setTexture(1, *d.accum.read);
-        d.accumPipeline.setStorageTexture(2, *d.accum.write);
         d.accumPipeline.setTexture(7, *d.hitMesh.read);
         d.accumPipeline.setStorageTexture(8, *d.hitMesh.write);
         d.accumPipeline.setStorageTexture(10, *d.gBuf.read);
@@ -3257,8 +3187,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.accumPipeline.setStorageTexture(33, *d.giResLo.write);
 
         // Mirror all ping-pong rebindings on sort pipelines (F2c).
-        d.sortPrefixPipeline.setTexture(1, *d.accum.read);
-        d.sortPrefixPipeline.setStorageTexture(2, *d.accum.write);
         d.sortPrefixPipeline.setTexture(7, *d.hitMesh.read);
         d.sortPrefixPipeline.setStorageTexture(8, *d.hitMesh.write);
         d.sortPrefixPipeline.setStorageTexture(10, *d.gBuf.read);
@@ -3280,8 +3208,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.sortPrefixPipeline.setTexture(32, *d.giResLo.read);
         d.sortPrefixPipeline.setStorageTexture(33, *d.giResLo.write);
 
-        d.sortScatterPipeline.setTexture(1, *d.accum.read);
-        d.sortScatterPipeline.setStorageTexture(2, *d.accum.write);
         d.sortScatterPipeline.setTexture(7, *d.hitMesh.read);
         d.sortScatterPipeline.setStorageTexture(8, *d.hitMesh.write);
         d.sortScatterPipeline.setStorageTexture(10, *d.gBuf.read);
@@ -3311,7 +3237,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // split diffuse/specular channels independently. Each channel gets its own
     // mode (diffuse=0, specular=1) with roughness-adaptive edge-stopping.
     // 5 cascade passes with step sizes 1, 2, 4, 8, 16 give effective 32-pixel radius.
-    WgpuTexture* displayTex = d.accum.read;
     WgpuTexture* displayDiff = d.diffAccum.read;
     WgpuTexture* displaySpec = d.specAccum.read;
     const bool hasMotion = (movedBits[0] | movedBits[1] | movedBits[2] | movedBits[3]) != 0u;
@@ -3401,7 +3326,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     d.prevCamRgt_[0] = rgt.x;    d.prevCamRgt_[1] = rgt.y;    d.prevCamRgt_[2] = rgt.z;
     d.prevCamUp_[0]  = up.x;     d.prevCamUp_[1]  = up.y;     d.prevCamUp_[2]  = up.z;
 
-    d.displayMat->customTextures["accumTex"] = displayTex;
     d.displayMat->customTextures["gBufTex"]  = d.gBuf.write;
     d.displayMat->customTextures["diffTex"]  = displayDiff;
     d.displayMat->customTextures["specTex"]  = displaySpec;

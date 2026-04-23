@@ -59,14 +59,17 @@ struct TransformUniforms {
     _pad:       f32,
 };
 @group(0) @binding(0) var<uniform> transform: TransformUniforms;
-@group(0) @binding(2) var accumTex: texture_2d<f32>;
-// binding 3 = accumTex sampler (unused)
-@group(0) @binding(4) var diffTex:  texture_2d<f32>;   // diffuse radiance
-// binding 5 = diffTex sampler (unused)
-@group(0) @binding(6) var gBufTex:  texture_2d<f32>;  // gBuf: .w = primary hit t, 0 = background
-// binding 7 = gBufTex sampler (unused)
-@group(0) @binding(8) var specTex:     texture_2d<f32>;   // specular radiance
-@group(0) @binding(10) var upscaleTex: texture_2d<f32>;   // TAAU full-res output (1×1 dummy when inactive)
+// 2026-04-23: accumTex removed. Bindings renumbered to stay dense since the
+// WgpuMaterial pipeline-layout builder assigns texture+sampler slots
+// sequentially from sorted customTextures (diffTex, gBufTex, specTex,
+// upscaleTex → 2/4, 4/5, 6/7, 8/9 with unused samplers at odd slots).
+@group(0) @binding(2) var diffTex:     texture_2d<f32>;   // diffuse radiance
+// binding 3 = diffTex sampler (unused)
+@group(0) @binding(4) var gBufTex:     texture_2d<f32>;  // gBuf: .w = primary hit t, 0 = background
+// binding 5 = gBufTex sampler (unused)
+@group(0) @binding(6) var specTex:     texture_2d<f32>;   // specular radiance
+// binding 7 = specTex sampler (unused)
+@group(0) @binding(8) var upscaleTex:  texture_2d<f32>;   // TAAU full-res output (1×1 dummy when inactive)
 
 @vertex
 fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
@@ -92,7 +95,7 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     let rawPad    = transform._pad;
     let aovMode   = i32(rawPad / 10.0);
     let pixScale  = max(rawPad - f32(aovMode) * 10.0, 0.01);
-    let accumSize = vec2<i32>(textureDimensions(accumTex, 0));
+    let accumSize = vec2<i32>(textureDimensions(diffTex, 0));
 
     // AOV mode: direct passthrough of diffTex as linear radiance.
     // Renderer post-process handles sRGB encoding.

@@ -58,8 +58,10 @@ struct Bvh4NodeGpu {
 }
 
 @group(0) @binding(0) var<uniform> rt:          RtUniforms;
-@group(0) @binding(1) var accumRead:  texture_2d<f32>;
-@group(0) @binding(2) var accumWrite: texture_storage_2d<rgba32float, write>;
+// bindings 1 and 2 were the combined main accum (read/write). Removed 2026-04-23
+// — normal display reads diffAccum+specAccum directly; combined accum was dead
+// bandwidth + 64MB VRAM at 1080p. Sky/AOV/rt_accum_main now operate only on the
+// split pair.
 @group(0) @binding(3) var<storage, read> bvhNodes: array<Bvh4NodeGpu>;
 @group(0) @binding(4) var matData:    texture_2d<f32>;
 @group(0) @binding(5) var triData:       texture_2d<f32>;
@@ -3151,11 +3153,9 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // sample only ~0.4% weight at the moment motion ends, burning in whatever
         // noisy value the last foveated leader produced.  Cap to 4 so the first
         // post-motion sample gets ~20% weight and any outlier decays in ~20 frames.
-        let leaderAccum = textureLoad(accumRead, src, 0);
         let leaderDiff  = textureLoad(diffAccumRead, src, 0);
         let leaderSpec  = textureLoad(specAccumRead, src, 0);
         let histCap = 4.0;
-        textureStore(accumWrite,     pixel, vec4<f32>(leaderAccum.xyz, min(leaderAccum.w, histCap)));
         textureStore(diffAccumWrite, pixel, vec4<f32>(leaderDiff.xyz,  min(leaderDiff.w,  histCap)));
         textureStore(specAccumWrite, pixel, vec4<f32>(leaderSpec.xyz,  min(leaderSpec.w,  histCap)));
         textureStore(hitMeshWrite, pixel, textureLoad(hitMeshRead, src, 0));
@@ -3204,7 +3204,7 @@ R"(
 
     // pixelHistory and camMovedNow are consumed by the AOV mode 6 eligibility
     // check below.
-    let pixelHistory = textureLoad(accumRead, pixel, 0).w;
+    let pixelHistory = textureLoad(diffAccumRead, pixel, 0).w;
     let camMovedNow  = (u32(rt.params.w) & 2u) != 0u;
 
     // Spatio-temporal blue noise (Heitz & Belcour 2019).
@@ -3271,7 +3271,7 @@ R"(
         //      so any stale value decays within ~1s at 30fps.  Sky is
         //      deterministic modulo sub-pixel jitter; 32 samples is plenty for
         //      env-map jitter anti-aliasing.
-        let prev   = textureLoad(accumRead, pixel, 0);
+        let prev   = textureLoad(diffAccumRead, pixel, 0);
         let old    = prev.xyz;
         var pxFC   = prev.w;
         let forceRst = (u32(rt.params.w) & 1u) != 0u;
@@ -3294,7 +3294,6 @@ R"(
         let blended = old * (1.0 - alpha) + bgClean * alpha;
         let newFC   = pxFC + 1.0;
         // Sky is all diffuse (no specular component).
-        textureStore(accumWrite,     pixel, vec4<f32>(blended, newFC));
         textureStore(diffAccumWrite, pixel, vec4<f32>(blended, newFC));
         textureStore(specAccumWrite, pixel, vec4<f32>(vec3<f32>(0.0), newFC));
         textureStore(momentsWrite,   pixel, vec4<f32>(bgLum, bgLum * bgLum, 0.0, 0.0));
@@ -3414,11 +3413,10 @@ R"(
             let isEligible = primaryRough > 0.224 && primaryDepth > 0.0 && !camMovedNow;
             aovColor = select(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(1.0, 0.0, 0.0), isEligible);
         }
-        textureStore(diffAccumWrite, pixel, vec4<f32>(aovColor, pixelHistory + 1.0));
-        textureStore(specAccumWrite, pixel, vec4<f32>(0.0, 0.0, 0.0, pixelHistory));
         // Preserve pixelHistory in .w so adaptive bounce reduction keeps accumulating
         // across AOV mode 6 frames and doesn't reset to 1 each frame.
-        textureStore(accumWrite, pixel, vec4<f32>(aovColor, pixelHistory + 1.0));
+        textureStore(diffAccumWrite, pixel, vec4<f32>(aovColor, pixelHistory + 1.0));
+        textureStore(specAccumWrite, pixel, vec4<f32>(0.0, 0.0, 0.0, pixelHistory));
         textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), 0.0, 0.0));
         textureStore(gBufWrite, pixel, vec4<f32>(primaryNormal, primaryDepth));
         textureStore(albedoWrite, pixel, vec4<f32>(primaryAlbedo, primaryRough));
@@ -4393,7 +4391,6 @@ fn rt_accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 } else if (aovMode == 18) {
                     dbg = vec3<f32>(sqrt(b0Alpha));
                 }
-                textureStore(accumWrite,     pixel, vec4<f32>(dbg, 1.0));
                 textureStore(diffAccumWrite, pixel, vec4<f32>(dbg, 1.0));
                 textureStore(specAccumWrite, pixel, vec4<f32>(0.0));
                 textureStore(hitMeshWrite,   pixel, vec4<f32>(f32(primaryMeshIdx), f32(primaryMatIdx), 0.0, 0.0));
@@ -4402,12 +4399,10 @@ fn rt_accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         // === Accumulation + reprojection (moved verbatim from rt_bounces_main) ===
-        let prev    = textureLoad(accumRead, pixel, 0);
-        var old     = prev.xyz;
-        var pixelFC = prev.w;
-
-        let prevDiffRaw = textureLoad(diffAccumRead, pixel, 0).xyz;
-        let prevSpecRaw = textureLoad(specAccumRead, pixel, 0).xyz;
+        let prevDiffRaw4 = textureLoad(diffAccumRead, pixel, 0);
+        let prevSpecRaw  = textureLoad(specAccumRead, pixel, 0).xyz;
+        let prevDiffRaw  = prevDiffRaw4.xyz;
+        var pixelFC      = prevDiffRaw4.w;
         var oldDiff = select(vec3<f32>(0.0), prevDiffRaw, prevDiffRaw.x == prevDiffRaw.x);
         var oldSpec = select(vec3<f32>(0.0), prevSpecRaw, prevSpecRaw.x == prevSpecRaw.x);
         let prevMom = textureLoad(momentsRead, pixel, 0);
@@ -4469,20 +4464,16 @@ R"(
                         let v11 = select(0.0, w11, m11 == primaryMeshIdx);
                         let wSum = v00 + v10 + v01 + v11;
                         if (wSum > 1e-4) {
-                            let a00 = textureLoad(accumRead, p00, 0);
-                            let a10 = textureLoad(accumRead, p10, 0);
-                            let a01 = textureLoad(accumRead, p01, 0);
-                            let a11 = textureLoad(accumRead, p11, 0);
+                            let d00 = textureLoad(diffAccumRead, p00, 0);
+                            let d10 = textureLoad(diffAccumRead, p10, 0);
+                            let d01 = textureLoad(diffAccumRead, p01, 0);
+                            let d11 = textureLoad(diffAccumRead, p11, 0);
                             let inv = 1.0 / wSum;
-                            old = (a00.xyz * v00 + a10.xyz * v10
-                                 + a01.xyz * v01 + a11.xyz * v11) * inv;
-                            let prevFC = (a00.w * v00 + a10.w * v10
-                                        + a01.w * v01 + a11.w * v11) * inv;
-                            let d00 = textureLoad(diffAccumRead, p00, 0).xyz;
-                            let d10 = textureLoad(diffAccumRead, p10, 0).xyz;
-                            let d01 = textureLoad(diffAccumRead, p01, 0).xyz;
-                            let d11 = textureLoad(diffAccumRead, p11, 0).xyz;
-                            oldDiff = (d00 * v00 + d10 * v10 + d01 * v01 + d11 * v11) * inv;
+                            oldDiff = (d00.xyz * v00 + d10.xyz * v10
+                                     + d01.xyz * v01 + d11.xyz * v11) * inv;
+                            // FC is stored in diffAccum.w (spec has same value).
+                            let prevFC = (d00.w * v00 + d10.w * v10
+                                        + d01.w * v01 + d11.w * v11) * inv;
                             let s00 = textureLoad(specAccumRead, p00, 0).xyz;
                             let s10 = textureLoad(specAccumRead, p10, 0).xyz;
                             let s01 = textureLoad(specAccumRead, p01, 0).xyz;
@@ -4514,41 +4505,15 @@ R"(
         }
 )"
 R"(
-        // NaN guard + hard/relative clamp.
+        // NaN guard. Firefly clamps are per-channel below (on diff/spec).
         let sampleClean = select(vec3<f32>(0.0), sample, sample.x == sample.x);
-        let oldClean    = select(vec3<f32>(0.0), old,    old.x == old.x);
         let lum3 = vec3<f32>(0.2126, 0.7152, 0.0722);
-        var clamped = sampleClean;
         let clampsOn = rt.emissiveInfo.z < 1e20;
-        let rawLum = dot(sampleClean, lum3);
         let hardCap = 12.0;
-        if (clampsOn && rawLum > hardCap) {
-            clamped = sampleClean * (hardCap / rawLum);
-        }
-        if (clampsOn && pixelFC > 8.0) {
-            let avgLum = max(dot(oldClean, lum3), 0.05);
-            let smpLum = dot(clamped, lum3);
-            let maxLum = avgLum * 7.0;
-            if (smpLum > maxLum) {
-                clamped = clamped * (maxLum / smpLum);
-            }
-        }
-
         let alpha = 1.0 / (pixelFC + 1.0);
-        var blended = oldClean * (1.0 - alpha) + clamped * alpha;
-        const DEBUG_VIS_PIXEL_FC = false;
-        if (DEBUG_VIS_PIXEL_FC) {
-            let fcN = clamp(log2(pixelFC + 1.0) / 8.0, 0.0, 1.0);
-            blended = vec3<f32>(fcN, fcN * fcN, fcN * fcN * fcN);
-        }
-        const DEBUG_VIS_RAW_SAMPLE = false;
-        if (DEBUG_VIS_RAW_SAMPLE) {
-            blended = sampleClean / (sampleClean + vec3<f32>(1.0));
-        }
-        textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
 
-        // Moments
-        let sampleLum = dot(clamped, lum3);
+        // Moments — driven by the per-channel-clamped sample luminance.
+        let sampleLum = dot(sampleClean, lum3);
         let momAlpha = max(alpha, 0.1);
         var m1 = prevMomM1;
         var m2 = prevMomM2;
