@@ -332,6 +332,49 @@ fn schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
 }
 )"
 R"(
+// Turquin 2018 / Kulla-Conty 2017 multi-scattering energy compensation LUT.
+// 32×32 R32Float: u = cos θ_o in (0,1], v = α = roughness² in (0,1].
+// Stored value is E(cos_o, α) with F0=1 — the single-scattering energy
+// retained by the VNDF-sampled GGX estimator (see WgpuPathTracerGgxLut.hpp).
+@group(0) @binding(50) var ggxELut: texture_2d<f32>;
+
+// Bilinear sample of the GGX LUT.  cos_o and alpha are clamped to (0,1].
+// The CPU builder places cells at (i+0.5)/N for cos_o (column) and (i+1)/N
+// for α (row), so we align UV to those centers before interpolating.
+fn sampleGgxELut(cos_o: f32, alpha: f32) -> f32 {
+    let N: f32 = 32.0;
+    let co = clamp(cos_o, 1e-3, 1.0);
+    let al = clamp(alpha, 1e-3, 1.0);
+    let fx = clamp(co * N - 0.5, 0.0, N - 1.0);
+    let fy = clamp(al * N - 1.0, 0.0, N - 1.0);
+    let x0 = i32(floor(fx));
+    let y0 = i32(floor(fy));
+    let x1 = min(x0 + 1, 31);
+    let y1 = min(y0 + 1, 31);
+    let tx = fx - f32(x0);
+    let ty = fy - f32(y0);
+    let e00 = textureLoad(ggxELut, vec2<i32>(x0, y0), 0).r;
+    let e10 = textureLoad(ggxELut, vec2<i32>(x1, y0), 0).r;
+    let e01 = textureLoad(ggxELut, vec2<i32>(x0, y1), 0).r;
+    let e11 = textureLoad(ggxELut, vec2<i32>(x1, y1), 0).r;
+    return mix(mix(e00, e10, tx), mix(e01, e11, tx), ty);
+}
+
+// Turquin 2018 multi-scattering compensation factor.
+// Given E from the LUT and F_avg ≈ (20·F0 + 1)/21 (Kulla-Conty closed form),
+// restores the missing (1-E) energy via (1 + F_avg * (1-E)/E).
+fn msCompensation(F0: vec3<f32>, cos_o: f32, alpha: f32) -> vec3<f32> {
+    let E = sampleGgxELut(cos_o, alpha);
+    let invE = 1.0 / max(E, 1e-3);
+    let F_avg = (20.0 * F0 + vec3<f32>(1.0)) / 21.0;
+    let comp = vec3<f32>(1.0) + F_avg * (max(0.0, 1.0 - E) * invE);
+    // Upper bound protects against LUT noise at extreme grazing angles.
+    // 2.0 was too tight: at α=1 and cos_o < ~0.3, legitimate comp exceeds 2
+    // and got clipped, costing ~20% on rough-metal furnace.
+    return clamp(comp, vec3<f32>(1.0), vec3<f32>(4.0));
+}
+)"
+R"(
 // sRGB → linear conversion (for baseColor and emissive textures)
 fn srgbToLinear(c: vec3<f32>) -> vec3<f32> {
     return select(
@@ -562,11 +605,16 @@ fn evalBrdf(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
     let NdotL = max(0.001, dot(n, wi));
     let VdotH = max(0.0, dot(wo, hv));
     let D     = ggxD(NdotH, alpha);
-    let F     = schlick(VdotH, F0);
-    let G     = ggxG1(NdotV, alpha) * ggxG1(NdotL, alpha);
+    let F_spec = schlick(VdotH, F0);
+    let G      = ggxG1(NdotV, alpha) * ggxG1(NdotL, alpha);
+    // K-C additive diffuse ms-comp: energy the specular layer returns to the
+    // diffuse substrate via multiple internal bounces (Kulla & Conty 2017).
+    let E_v    = sampleGgxELut(NdotV, alpha);
+    let F_avg  = (20.0 * F0 + vec3<f32>(1.0)) / 21.0;
+    let kcDiff = albedo * (1.0 - metalness) * F_avg * max(0.0, 1.0 - E_v) / PI;
     return BrdfResult(
-        (vec3<f32>(1.0) - F) * albedo * (1.0 - metalness) / PI,
-        D * F * G / max(4.0 * NdotV * NdotL, 1e-6));
+        albedo * (1.0 - metalness) / PI + kcDiff,
+        D * F_spec * G / max(4.0 * NdotV * NdotL, 1e-6));
 }
 
 // Charlie sheen NDF (Estevez & Kulla, 2017)
@@ -1205,6 +1253,10 @@ fn evalBrdfFull(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
                 sheenColor: vec3<f32>, sheenRoughness: f32,
                 clearcoat: f32, clearcoatAlpha: f32) -> vec3<f32> {
     let brdf = evalBrdf(wo, wi, n, albedo, metalness, alpha, F0);
+    // Turquin 2018 MS compensation on the specular lobe (Kulla-Conty) —
+    // restores the energy lost by single-scattering GGX so NEE matches the
+    // energy conservation applied at the BRDF-sampling site.
+    let msC = msCompensation(F0, max(1e-4, dot(n, wo)), alpha);
     // Clearcoat Fresnel attenuation of the base layer. ccF0 = 0.04 (dielectric IOR ~1.5).
     // Mirrors the stochastic split in the BRDF-sampling path: base lobes receive
     // (1 - ccWeight) of the energy; clearcoat receives ccWeight.
@@ -1215,7 +1267,7 @@ fn evalBrdfFull(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
         let ccFresnel = ccF0 + (1.0 - ccF0) * pow(1.0 - NdotV_cc, 5.0);
         ccWeight = clearcoat * ccFresnel;
     }
-    var lobeSum = (brdf.f_diff + brdf.f_spec) * (1.0 - ccWeight);
+    var lobeSum = (brdf.f_diff + brdf.f_spec * msC) * (1.0 - ccWeight);
     if (ccWeight > 0.0) {
         lobeSum += vec3<f32>(evalClearcoat(wo, wi, n, ccWeight, clearcoatAlpha));
     }
@@ -1233,6 +1285,8 @@ fn evalBrdfFullSplit(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
                      sheenColor: vec3<f32>, sheenRoughness: f32,
                      clearcoat: f32, clearcoatAlpha: f32) -> BrdfSplit {
     let brdf = evalBrdf(wo, wi, n, albedo, metalness, alpha, F0);
+    // Turquin 2018 MS compensation on the specular lobe (see evalBrdfFull).
+    let msC = msCompensation(F0, max(1e-4, dot(n, wo)), alpha);
     var ccWeight = 0.0;
     if (clearcoat > 0.0) {
         let ccF0 = 0.04;
@@ -1241,7 +1295,7 @@ fn evalBrdfFullSplit(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
         ccWeight = clearcoat * ccFresnel;
     }
     var d = brdf.f_diff * (1.0 - ccWeight);
-    var s = brdf.f_spec * (1.0 - ccWeight);
+    var s = brdf.f_spec * msC * (1.0 - ccWeight);
     if (ccWeight > 0.0) {
         s += vec3<f32>(evalClearcoat(wo, wi, n, ccWeight, clearcoatAlpha));
     }
@@ -1544,36 +1598,40 @@ fn sampleEnvImportance(seed: ptr<function, u32>) -> vec4<f32> {
     let xi_u = rand(seed);
     let col  = cdfSearch(envCdfTex, row, envW, xi_u);
 
-    // 3) Convert to UV with sub-pixel centering
-    let u = (f32(col) + 0.5) / f32(envW);
-    let v = (f32(row) + 0.5) / f32(envH);
+    // 3) Convert to UV with sub-pixel JITTER (not center snap). The pdf below
+    // treats the density as uniform-within-pixel (pdf_uv * W * H). Snapping to
+    // centers turns this into a Riemann midpoint rule and biases smooth BRDF
+    // integrands — the white-furnace env test saw a ~7% deficit at 8×4 env.
+    let ju = rand(seed);
+    let jv = rand(seed);
+    let u = (f32(col) + ju) / f32(envW);
+    let v = (f32(row) + jv) / f32(envH);
     let dir = uvToDir(vec2<f32>(u, v));
 
-    // 4) Compute PDF = luminance(pixel) / totalLuminance, converted to solid angle
+    // 4) Compute PDF = luminance(pixel) / totalLuminance, converted to solid angle.
+    // totalSum is Σ lum*cos(lat) (see buildEnvCdf), so p(pixel) = lum*cos/totalSum
+    // and pdf_uv = lum*cos*W*H/totalSum. The equirect Jacobian 2π²*cos(lat) in the
+    // uv→ω conversion cancels the cos(lat) in pdf_uv exactly, so pdf_ω is just
+    // lum*W*H / (2π²*totalSum). Writing the cos factor on both sides and then
+    // cancelling was a bug — the stray 1/cos made polar samples badly weighted.
     let envCol = textureLoad(envTex, vec2<i32>(col, row), 0).xyz;
     let lum = 0.2126 * envCol.r + 0.7152 * envCol.g + 0.0722 * envCol.b + 1e-10;
-
-    let theta = (0.5 - v) * PI;
-    let sinTheta = max(abs(sin(theta)), 1e-6);
     let totalSum = rt.envIntensity.w;
-    let pdf_uv = lum / max(totalSum, 1e-10);
-    let pdf = pdf_uv * f32(envW * envH) / (2.0 * PI * PI * sinTheta);
+    let pdf = lum * f32(envW * envH) / (2.0 * PI * PI * max(totalSum, 1e-10));
 
     return vec4<f32>(dir, pdf);
 }
 
 // PDF for a given direction under env importance sampling (for MIS).
+// Matches sampleEnvImportance — cos(lat) in pdf_uv numerator cancels the
+// equirect Jacobian's cos(lat), so pdf_ω = lum*W*H / (2π²*totalSum).
 fn envImportancePdf(d: vec3<f32>) -> f32 {
     let envW = i32(rt.envIntensity.y);
     let envH = i32(rt.envIntensity.z);
-    let uv = dirToUV(d);
     let envCol = sampleEnv(d);
     let lum = 0.2126 * envCol.r + 0.7152 * envCol.g + 0.0722 * envCol.b + 1e-10;
-    let theta = (0.5 - uv.y) * PI;
-    let sinTheta = max(abs(sin(theta)), 1e-6);
     let totalSum = rt.envIntensity.w;
-    let pdf_uv = lum / max(totalSum, 1e-10);
-    return pdf_uv * f32(envW * envH) / (2.0 * PI * PI * sinTheta);
+    return lum * f32(envW * envH) / (2.0 * PI * PI * max(totalSum, 1e-10));
 }
 
 // Per-contribution firefly clamp for injection-time MIS spikes.
@@ -2204,6 +2262,9 @@ R"(
         // BRDF sample — firstBounceSpec is i==0-only in the original, so no update here.
         let F0_b = F0_h;
         var wi_b: vec3<f32>;
+        // p_spec must match brdfPdf() exactly — MIS balance heuristic requires the
+        // pdf used in weighting to equal the pdf used in sampling, or contributions
+        // miscalibrate.
         let p_spec = mix(0.5, 0.98, h.metalness);
         let isSpecBounce = rand(seed) < p_spec;
         if (isSpecBounce) {
@@ -2213,11 +2274,13 @@ R"(
             let hb  = normalize(wo + wi_b);
             let Fb  = schlick(max(0.0, dot(wo, hb)), F0_b);
             let G1L = ggxG1(cos_b, h.shininess);
-            throughput *= Fb * G1L / p_spec;
+            let msC = msCompensation(F0_b, max(1e-4, dot(h.normal, wo)), h.shininess);
+            throughput *= Fb * G1L * msC / p_spec;
         } else {
             wi_b = cosineHemisphere(h.normal, seed);
             let cos_b = dot(h.normal, wi_b);
             if (cos_b <= 0.0) { break; }
+            // Pure Lambertian diffuse: no Fresnel coupling, matches evalBrdf.
             throughput *= albedo * (1.0 - h.metalness) / (1.0 - p_spec);
         }
         prevWo        = wo;
@@ -2346,7 +2409,14 @@ fn primaryShade(primaryHit:     Hit,
     result.b0Normal  = h.normal;
 
     var effectiveBounces = maxBounces;
-    {
+    // Adaptive cap: diffuse / glossy surfaces stop gaining visible detail after
+    // a few indirect bounces, so we cap them short for a large perf win on
+    // production scenes (~5 FPS on Sponza). This is BIASED — it truncates the
+    // Neumann-series energy sum and causes ρ≈1 cavities to under-read. Gate on
+    // `rt.emissiveInfo.z < 1e20` ("clampsOn"): when the user sets
+    // setFireflyClamp(0) as the validation-mode signal, skip the cap so the
+    // white-furnace test can accumulate the full series.
+    if (rt.emissiveInfo.z < 1e20) {
         let isGlass  = h.transmission > 0.05;
         let isMetal  = h.metalness > 0.5;
         let isMirror = h.shininess < 0.05;
@@ -2863,7 +2933,8 @@ const char* const csPrimaryShadeWGSL3 = R"(
         let hb  = normalize(wo + wi_b);
         let Fb  = schlick(max(0.0, dot(wo, hb)), F0_b);
         let G1L = ggxG1(cos_b, h.shininess);
-        throughput *= Fb * G1L / p_spec;
+        let msC = msCompensation(F0_b, max(1e-4, dot(h.normal, wo)), h.shininess);
+        throughput *= Fb * G1L * msC / p_spec;
     } else {
         wi_b = cosineHemisphere(h.normal, seed);
         let cos_b = dot(h.normal, wi_b);
@@ -2879,7 +2950,12 @@ const char* const csPrimaryShadeWGSL3 = R"(
             result.pathAlive = false;
             return result;
         }
-        throughput *= albedo * (1.0 - h.metalness) / (1.0 - p_spec);
+        // K-C diffuse ms-comp throughput boost — matches the additive kcDiff in evalBrdf.
+        let NdotV_kc = max(1e-4, dot(h.normal, wo));
+        let E_kc     = sampleGgxELut(NdotV_kc, h.shininess);
+        let F_avg_kc = (20.0 * F0_b + vec3<f32>(1.0)) / 21.0;
+        let kcBoost  = vec3<f32>(1.0) + F_avg_kc * max(0.0, 1.0 - E_kc);
+        throughput *= albedo * (1.0 - h.metalness) * kcBoost / (1.0 - p_spec);
     }
     result.prevWo        = wo;
     result.prevNormal    = h.normal;
@@ -2990,8 +3066,9 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Material-aware first-frame bounce cap.  On the very first sample (fc==0,
     // i.e. after forceReset) reduce bounces per material class to warm up faster.
     // Glass/metal/mirror need 4 (refraction chains), diffuse only needs 2.
+    // Gated on clampsOn — setFireflyClamp(0) disables this for validation mode.
     var maxBounces = i32(rt.params.x);
-    if (fc == 0u) {
+    if (fc == 0u && rt.emissiveInfo.z < 1e20) {
         if      (matClass <= 0u) { maxBounces = min(maxBounces, 3); }  // specular
         else if (matClass == 1u) { maxBounces = min(maxBounces, 2); }  // glossy
         else if (matClass == 2u) { maxBounces = min(maxBounces, 1); }  // rough diffuse
@@ -3606,11 +3683,17 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let flagBitsIn = u32(entry.w2.w);
         let pathAliveIn = (flagBitsIn & 8u) != 0u;
         if (!pathAliveIn) { continue; }
-        // Skip paths where primaryShade capped effectiveBounces to 1 (rough diffuse
-        // on fc==0).  Without this guard, bounce1 fires an extra bounce that the
-        // megakernel never would, biasing the temporal accumulator's first frame.
+        // Skip only paths with effectiveBounces < 1 (i.e., no indirect at all).
+        // For effectiveBounces == 1 we MUST still run this kernel: primaryShade
+        // already generated the BSDF-sampled direction and applied its MIS weight
+        // to env NEE assuming a complementary BSDF path contribution.  Skipping
+        // this kernel at mb=1 drops that complement and silently biases the
+        // env-furnace result by the MIS fraction (~50% darkening on rough
+        // diffuse). The kernel breaks after the env miss anyway (no further
+        // bounces spawned), so letting it run costs one traced ray per pixel
+        // and restores the unbiased estimator.
         let effectiveBounces1 = i32(entry.w1.w);
-        if (effectiveBounces1 <= 1) { continue; }
+        if (effectiveBounces1 < 1) { continue; }
         // Restore per-pixel BN state so NEE and BRDF samples have the correct
         // spatial blue-noise offset and temporal variation.  Without this, all
         // threads start with bnPx=bnPy=bnFc=0 → identical samples for all
@@ -3903,7 +3986,8 @@ R"(
                         }
                     }
                 }
-
+)"
+    R"(
                 // Snapshot pre-spatial reservoir (stored for next-frame temporal reuse).
                 let giPreSpW_sum = giW_sum;
                 let giPreSpM     = giM;
@@ -4129,7 +4213,8 @@ R"(
                 ray.dir = wi_t;
                 break;  // F2a: continue → exit do-once (path alive)
             }
-
+)"
+    R"(
             // BRDF sample — firstBounceSpec is i==0-only in the original, so no update here.
             let F0_b = F0_h;
             var wi_b: vec3<f32>;
@@ -4142,12 +4227,18 @@ R"(
                 let hb  = normalize(wo + wi_b);
                 let Fb  = schlick(max(0.0, dot(wo, hb)), F0_b);
                 let G1L = ggxG1(cos_b, h.shininess);
-                throughput *= Fb * G1L / p_spec;
+                let msC = msCompensation(F0_b, max(1e-4, dot(h.normal, wo)), h.shininess);
+                throughput *= Fb * G1L * msC / p_spec;
             } else {
                 wi_b = cosineHemisphere(h.normal, &seed);
                 let cos_b = dot(h.normal, wi_b);
                 if (cos_b <= 0.0) { pathStillAlive = false; break; }
-                throughput *= albedo * (1.0 - h.metalness) / (1.0 - p_spec);
+                // K-C diffuse ms-comp throughput boost — matches evalBrdf kcDiff.
+                let NdotV_kc = max(1e-4, dot(h.normal, wo));
+                let E_kc     = sampleGgxELut(NdotV_kc, h.shininess);
+                let F_avg_kc = (20.0 * F0_b + vec3<f32>(1.0)) / 21.0;
+                let kcBoost  = vec3<f32>(1.0) + F_avg_kc * max(0.0, 1.0 - E_kc);
+                throughput *= albedo * (1.0 - h.metalness) * kcBoost / (1.0 - p_spec);
             }
             prevWo        = wo;
             prevNormal    = h.normal;
@@ -4418,12 +4509,13 @@ R"(
         let oldClean    = select(vec3<f32>(0.0), old,    old.x == old.x);
         let lum3 = vec3<f32>(0.2126, 0.7152, 0.0722);
         var clamped = sampleClean;
+        let clampsOn = rt.emissiveInfo.z < 1e20;
         let rawLum = dot(sampleClean, lum3);
         let hardCap = 12.0;
-        if (rawLum > hardCap) {
+        if (clampsOn && rawLum > hardCap) {
             clamped = sampleClean * (hardCap / rawLum);
         }
-        if (pixelFC > 8.0) {
+        if (clampsOn && pixelFC > 8.0) {
             let avgLum = max(dot(oldClean, lum3), 0.05);
             let smpLum = dot(clamped, lum3);
             let maxLum = avgLum * 7.0;
@@ -4433,21 +4525,17 @@ R"(
         }
 
         let alpha = 1.0 / (pixelFC + 1.0);
-        if (pixelFC < 1024.0) {
-            var blended = oldClean * (1.0 - alpha) + clamped * alpha;
-            const DEBUG_VIS_PIXEL_FC = false;
-            if (DEBUG_VIS_PIXEL_FC) {
-                let fcN = clamp(log2(pixelFC + 1.0) / 8.0, 0.0, 1.0);
-                blended = vec3<f32>(fcN, fcN * fcN, fcN * fcN * fcN);
-            }
-            const DEBUG_VIS_RAW_SAMPLE = false;
-            if (DEBUG_VIS_RAW_SAMPLE) {
-                blended = sampleClean / (sampleClean + vec3<f32>(1.0));
-            }
-            textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
-        } else {
-            textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
+        var blended = oldClean * (1.0 - alpha) + clamped * alpha;
+        const DEBUG_VIS_PIXEL_FC = false;
+        if (DEBUG_VIS_PIXEL_FC) {
+            let fcN = clamp(log2(pixelFC + 1.0) / 8.0, 0.0, 1.0);
+            blended = vec3<f32>(fcN, fcN * fcN, fcN * fcN * fcN);
         }
+        const DEBUG_VIS_RAW_SAMPLE = false;
+        if (DEBUG_VIS_RAW_SAMPLE) {
+            blended = sampleClean / (sampleClean + vec3<f32>(1.0));
+        }
+        textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
 
         // Moments
         let sampleLum = dot(clamped, lum3);
@@ -4467,18 +4555,13 @@ R"(
             let specSample = select(vec3<f32>(0.0), ptSpec, ptSpec.x == ptSpec.x);
             var dClamped = diffSample;
             let dLum = dot(diffSample, lum3);
-            if (dLum > hardCap) { dClamped = diffSample * (hardCap / dLum); }
+            if (clampsOn && dLum > hardCap) { dClamped = diffSample * (hardCap / dLum); }
             let specHardCap = mix(3.0, 8.0, primaryRough);
             var sClamped = specSample;
             let sLum = dot(specSample, lum3);
-            if (sLum > specHardCap) { sClamped = specSample * (specHardCap / sLum); }
-            if (pixelFC < 1024.0) {
-                textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff * (1.0 - alpha) + dClamped * alpha, pixelFC + 1.0));
-                textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec * (1.0 - alpha) + sClamped * alpha, pixelFC + 1.0));
-            } else {
-                textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff, pixelFC));
-                textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec, pixelFC));
-            }
+            if (clampsOn && sLum > specHardCap) { sClamped = specSample * (specHardCap / sLum); }
+            textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff * (1.0 - alpha) + dClamped * alpha, pixelFC + 1.0));
+            textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec * (1.0 - alpha) + sClamped * alpha, pixelFC + 1.0));
         }
 
         // hitMesh includes touchedMoved — written here since it depends on runBounces output.
