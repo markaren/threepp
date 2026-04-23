@@ -1682,6 +1682,13 @@ fn unpackOctNormal(p: f32) -> vec3<f32> {
 fn giTargetPdf(point: vec3<f32>, normal: vec3<f32>, wo: vec3<f32>,
                albedo: vec3<f32>, metalness: f32, alpha: f32, F0: vec3<f32>,
                secHitPos: vec3<f32>, secHitNorm: vec3<f32>, Lo: vec3<f32>) -> f32 {
+    // Importance-sampling p_hat — only proportionality to true contribution
+    // matters, not physical accuracy. The final GI shade (~line 2119) uses the
+    // real evalBrdfFullSplit; W's `W_sum / (M * p_hat_chosen)` cancels the
+    // proxy provided source + reuse use the same proxy consistently.
+    // Proxy: lambertian reflectance (albedo for dielectrics, F0 for metals)
+    // times NdotL times geometry term. Drops GGX D/G/F + LUT fetch — ~30 FLOPs
+    // + 1 texture sample saved per call, 5 calls per primary pixel for GI.
     let wi = normalize(secHitPos - point);
     let NdotL = dot(normal, wi);
     if (NdotL <= 0.0) { return 0.0; }
@@ -1689,8 +1696,8 @@ fn giTargetPdf(point: vec3<f32>, normal: vec3<f32>, wo: vec3<f32>,
     let dist2 = dot(delta, delta);
     let cosTheta2 = max(dot(secHitNorm, -wi), 0.0);
     let G = cosTheta2 / max(dist2, 0.01);
-    let brdf = evalBrdf(wo, wi, normal, albedo, metalness, max(alpha, 0.1), F0);
-    return luminance((brdf.f_diff + brdf.f_spec) * NdotL * Lo * G);
+    let rhoProxy = albedo * (1.0 - metalness) + F0 * metalness;
+    return luminance(rhoProxy * Lo) * NdotL * G;
 }
 
 // Jacobian of the reconnection shift: ratio of differential solid angles subtended
