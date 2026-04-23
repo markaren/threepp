@@ -3382,7 +3382,7 @@ float WgpuPathTracer::envIntensity() const {
 }
 
 void WgpuPathTracer::setMaxBounces(int bounces) {
-    bounces = std::max(1, std::min(bounces, 16));
+    bounces = std::max(1, std::min(bounces, 128));
     if (pimpl_->maxBounces_ != bounces) {
         pimpl_->maxBounces_ = bounces;
         pimpl_->frameCount_ = 0.f;

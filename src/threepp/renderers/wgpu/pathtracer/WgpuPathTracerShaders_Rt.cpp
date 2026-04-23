@@ -605,11 +605,16 @@ fn evalBrdf(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>,
     let NdotL = max(0.001, dot(n, wi));
     let VdotH = max(0.0, dot(wo, hv));
     let D     = ggxD(NdotH, alpha);
-    let F     = schlick(VdotH, F0);
-    let G     = ggxG1(NdotV, alpha) * ggxG1(NdotL, alpha);
+    let F_spec = schlick(VdotH, F0);
+    let G      = ggxG1(NdotV, alpha) * ggxG1(NdotL, alpha);
+    // K-C additive diffuse ms-comp: energy the specular layer returns to the
+    // diffuse substrate via multiple internal bounces (Kulla & Conty 2017).
+    let E_v    = sampleGgxELut(NdotV, alpha);
+    let F_avg  = (20.0 * F0 + vec3<f32>(1.0)) / 21.0;
+    let kcDiff = albedo * (1.0 - metalness) * F_avg * max(0.0, 1.0 - E_v) / PI;
     return BrdfResult(
-        (vec3<f32>(1.0) - F) * albedo * (1.0 - metalness) / PI,
-        D * F * G / max(4.0 * NdotV * NdotL, 1e-6));
+        albedo * (1.0 - metalness) / PI + kcDiff,
+        D * F_spec * G / max(4.0 * NdotV * NdotL, 1e-6));
 }
 
 // Charlie sheen NDF (Estevez & Kulla, 2017)
@@ -2275,10 +2280,8 @@ R"(
             wi_b = cosineHemisphere(h.normal, seed);
             let cos_b = dot(h.normal, wi_b);
             if (cos_b <= 0.0) { break; }
-            // Match evalBrdf: diffuse is attenuated by (1-F). Using F at NdotV as
-            // a Disney-style proxy (no half vector for cosine-hemisphere sampling).
-            let F_view = schlick(max(0.0, dot(h.normal, wo)), F0_b);
-            throughput *= (vec3<f32>(1.0) - F_view) * albedo * (1.0 - h.metalness) / (1.0 - p_spec);
+            // Pure Lambertian diffuse: no Fresnel coupling, matches evalBrdf.
+            throughput *= albedo * (1.0 - h.metalness) / (1.0 - p_spec);
         }
         prevWo        = wo;
         prevNormal    = h.normal;
@@ -2406,7 +2409,14 @@ fn primaryShade(primaryHit:     Hit,
     result.b0Normal  = h.normal;
 
     var effectiveBounces = maxBounces;
-    {
+    // Adaptive cap: diffuse / glossy surfaces stop gaining visible detail after
+    // a few indirect bounces, so we cap them short for a large perf win on
+    // production scenes (~5 FPS on Sponza). This is BIASED — it truncates the
+    // Neumann-series energy sum and causes ρ≈1 cavities to under-read. Gate on
+    // `rt.emissiveInfo.z < 1e20` ("clampsOn"): when the user sets
+    // setFireflyClamp(0) as the validation-mode signal, skip the cap so the
+    // white-furnace test can accumulate the full series.
+    if (rt.emissiveInfo.z < 1e20) {
         let isGlass  = h.transmission > 0.05;
         let isMetal  = h.metalness > 0.5;
         let isMirror = h.shininess < 0.05;
@@ -2940,7 +2950,12 @@ const char* const csPrimaryShadeWGSL3 = R"(
             result.pathAlive = false;
             return result;
         }
-        throughput *= albedo * (1.0 - h.metalness) / (1.0 - p_spec);
+        // K-C diffuse ms-comp throughput boost — matches the additive kcDiff in evalBrdf.
+        let NdotV_kc = max(1e-4, dot(h.normal, wo));
+        let E_kc     = sampleGgxELut(NdotV_kc, h.shininess);
+        let F_avg_kc = (20.0 * F0_b + vec3<f32>(1.0)) / 21.0;
+        let kcBoost  = vec3<f32>(1.0) + F_avg_kc * max(0.0, 1.0 - E_kc);
+        throughput *= albedo * (1.0 - h.metalness) * kcBoost / (1.0 - p_spec);
     }
     result.prevWo        = wo;
     result.prevNormal    = h.normal;
@@ -3051,8 +3066,9 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Material-aware first-frame bounce cap.  On the very first sample (fc==0,
     // i.e. after forceReset) reduce bounces per material class to warm up faster.
     // Glass/metal/mirror need 4 (refraction chains), diffuse only needs 2.
+    // Gated on clampsOn — setFireflyClamp(0) disables this for validation mode.
     var maxBounces = i32(rt.params.x);
-    if (fc == 0u) {
+    if (fc == 0u && rt.emissiveInfo.z < 1e20) {
         if      (matClass <= 0u) { maxBounces = min(maxBounces, 3); }  // specular
         else if (matClass == 1u) { maxBounces = min(maxBounces, 2); }  // glossy
         else if (matClass == 2u) { maxBounces = min(maxBounces, 1); }  // rough diffuse
@@ -3667,11 +3683,17 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let flagBitsIn = u32(entry.w2.w);
         let pathAliveIn = (flagBitsIn & 8u) != 0u;
         if (!pathAliveIn) { continue; }
-        // Skip paths where primaryShade capped effectiveBounces to 1 (rough diffuse
-        // on fc==0).  Without this guard, bounce1 fires an extra bounce that the
-        // megakernel never would, biasing the temporal accumulator's first frame.
+        // Skip only paths with effectiveBounces < 1 (i.e., no indirect at all).
+        // For effectiveBounces == 1 we MUST still run this kernel: primaryShade
+        // already generated the BSDF-sampled direction and applied its MIS weight
+        // to env NEE assuming a complementary BSDF path contribution.  Skipping
+        // this kernel at mb=1 drops that complement and silently biases the
+        // env-furnace result by the MIS fraction (~50% darkening on rough
+        // diffuse). The kernel breaks after the env miss anyway (no further
+        // bounces spawned), so letting it run costs one traced ray per pixel
+        // and restores the unbiased estimator.
         let effectiveBounces1 = i32(entry.w1.w);
-        if (effectiveBounces1 <= 1) { continue; }
+        if (effectiveBounces1 < 1) { continue; }
         // Restore per-pixel BN state so NEE and BRDF samples have the correct
         // spatial blue-noise offset and temporal variation.  Without this, all
         // threads start with bnPx=bnPy=bnFc=0 → identical samples for all
@@ -3964,7 +3986,8 @@ R"(
                         }
                     }
                 }
-
+)"
+    R"(
                 // Snapshot pre-spatial reservoir (stored for next-frame temporal reuse).
                 let giPreSpW_sum = giW_sum;
                 let giPreSpM     = giM;
@@ -4190,7 +4213,8 @@ R"(
                 ray.dir = wi_t;
                 break;  // F2a: continue → exit do-once (path alive)
             }
-
+)"
+    R"(
             // BRDF sample — firstBounceSpec is i==0-only in the original, so no update here.
             let F0_b = F0_h;
             var wi_b: vec3<f32>;
@@ -4209,7 +4233,12 @@ R"(
                 wi_b = cosineHemisphere(h.normal, &seed);
                 let cos_b = dot(h.normal, wi_b);
                 if (cos_b <= 0.0) { pathStillAlive = false; break; }
-                throughput *= albedo * (1.0 - h.metalness) / (1.0 - p_spec);
+                // K-C diffuse ms-comp throughput boost — matches evalBrdf kcDiff.
+                let NdotV_kc = max(1e-4, dot(h.normal, wo));
+                let E_kc     = sampleGgxELut(NdotV_kc, h.shininess);
+                let F_avg_kc = (20.0 * F0_b + vec3<f32>(1.0)) / 21.0;
+                let kcBoost  = vec3<f32>(1.0) + F_avg_kc * max(0.0, 1.0 - E_kc);
+                throughput *= albedo * (1.0 - h.metalness) * kcBoost / (1.0 - p_spec);
             }
             prevWo        = wo;
             prevNormal    = h.normal;
@@ -4480,12 +4509,13 @@ R"(
         let oldClean    = select(vec3<f32>(0.0), old,    old.x == old.x);
         let lum3 = vec3<f32>(0.2126, 0.7152, 0.0722);
         var clamped = sampleClean;
+        let clampsOn = rt.emissiveInfo.z < 1e20;
         let rawLum = dot(sampleClean, lum3);
         let hardCap = 12.0;
-        if (rawLum > hardCap) {
+        if (clampsOn && rawLum > hardCap) {
             clamped = sampleClean * (hardCap / rawLum);
         }
-        if (pixelFC > 8.0) {
+        if (clampsOn && pixelFC > 8.0) {
             let avgLum = max(dot(oldClean, lum3), 0.05);
             let smpLum = dot(clamped, lum3);
             let maxLum = avgLum * 7.0;
@@ -4495,21 +4525,17 @@ R"(
         }
 
         let alpha = 1.0 / (pixelFC + 1.0);
-        if (pixelFC < 1024.0) {
-            var blended = oldClean * (1.0 - alpha) + clamped * alpha;
-            const DEBUG_VIS_PIXEL_FC = false;
-            if (DEBUG_VIS_PIXEL_FC) {
-                let fcN = clamp(log2(pixelFC + 1.0) / 8.0, 0.0, 1.0);
-                blended = vec3<f32>(fcN, fcN * fcN, fcN * fcN * fcN);
-            }
-            const DEBUG_VIS_RAW_SAMPLE = false;
-            if (DEBUG_VIS_RAW_SAMPLE) {
-                blended = sampleClean / (sampleClean + vec3<f32>(1.0));
-            }
-            textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
-        } else {
-            textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
+        var blended = oldClean * (1.0 - alpha) + clamped * alpha;
+        const DEBUG_VIS_PIXEL_FC = false;
+        if (DEBUG_VIS_PIXEL_FC) {
+            let fcN = clamp(log2(pixelFC + 1.0) / 8.0, 0.0, 1.0);
+            blended = vec3<f32>(fcN, fcN * fcN, fcN * fcN * fcN);
         }
+        const DEBUG_VIS_RAW_SAMPLE = false;
+        if (DEBUG_VIS_RAW_SAMPLE) {
+            blended = sampleClean / (sampleClean + vec3<f32>(1.0));
+        }
+        textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
 
         // Moments
         let sampleLum = dot(clamped, lum3);
@@ -4529,18 +4555,13 @@ R"(
             let specSample = select(vec3<f32>(0.0), ptSpec, ptSpec.x == ptSpec.x);
             var dClamped = diffSample;
             let dLum = dot(diffSample, lum3);
-            if (dLum > hardCap) { dClamped = diffSample * (hardCap / dLum); }
+            if (clampsOn && dLum > hardCap) { dClamped = diffSample * (hardCap / dLum); }
             let specHardCap = mix(3.0, 8.0, primaryRough);
             var sClamped = specSample;
             let sLum = dot(specSample, lum3);
-            if (sLum > specHardCap) { sClamped = specSample * (specHardCap / sLum); }
-            if (pixelFC < 1024.0) {
-                textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff * (1.0 - alpha) + dClamped * alpha, pixelFC + 1.0));
-                textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec * (1.0 - alpha) + sClamped * alpha, pixelFC + 1.0));
-            } else {
-                textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff, pixelFC));
-                textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec, pixelFC));
-            }
+            if (clampsOn && sLum > specHardCap) { sClamped = specSample * (specHardCap / sLum); }
+            textureStore(diffAccumWrite, pixel, vec4<f32>(oldDiff * (1.0 - alpha) + dClamped * alpha, pixelFC + 1.0));
+            textureStore(specAccumWrite, pixel, vec4<f32>(oldSpec * (1.0 - alpha) + sClamped * alpha, pixelFC + 1.0));
         }
 
         // hitMesh includes touchedMoved — written here since it depends on runBounces output.

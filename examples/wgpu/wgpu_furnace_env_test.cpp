@@ -63,37 +63,86 @@ namespace {
         float mean = 0.f;
         float stddev = 0.f;
         int samples = 0;
+        // Center-crop stats: pixels within 15% of min(w,h) radius from image center.
+        // This circle is always inside the sphere's projection, so it's uncontaminated
+        // by background env pixels (which sit around the sphere's perimeter).
+        float cropMean = 0.f;
+        float cropStddev = 0.f;
+        int cropSamples = 0;
+        // Single center pixel luminance — the purest single-point measurement.
+        float centerLum = -1.f;
     };
 
-    // Foreground = pixels with luminance > bgThreshold. This skips the black
-    // background (outside-the-sphere pixels) so we measure only the sphere.
-    Stats computeStats(const std::vector<unsigned char>& px, float bgThreshold = 0.01f) {
+    // All pixels with luminance > bgThreshold (includes sphere + env background at 1.0).
+    // bgMean is contaminated upward by background; use cropMean for clean sphere measurement.
+    Stats computeStats(const std::vector<unsigned char>& px, int w, int h, float bgThreshold = 0.01f) {
         Stats s{};
-        if (px.empty()) return s;
-        const size_t n = px.size() / 3;
+        if (px.empty() || w <= 0 || h <= 0) return s;
+
+        // Center-crop radius: 15% of min dimension. Sphere projected radius is ~80%
+        // of half-height, so r=0.15 is well inside and never clips background pixels.
+        const float cropR = 0.15f * static_cast<float>(std::min(w, h));
+        const float cropR2 = cropR * cropR;
+        const float cx = (w - 1) * 0.5f;
+        const float cy = (h - 1) * 0.5f;
+
+        // Center pixel.
+        {
+            const int px_x = w / 2;
+            const int px_y = h / 2;
+            const size_t idx = (static_cast<size_t>(px_y) * w + px_x) * 3;
+            if (idx + 2 < px.size()) {
+                const double r = px[idx + 0] / 255.0;
+                const double g = px[idx + 1] / 255.0;
+                const double b = px[idx + 2] / 255.0;
+                s.centerLum = static_cast<float>(0.2126 * r + 0.7152 * g + 0.0722 * b);
+            }
+        }
+
         double sr = 0, sg = 0, sb = 0, sl = 0, sl2 = 0;
         size_t kept = 0;
+        double csl = 0, csl2 = 0;
+        size_t ckept = 0;
+
+        const size_t n = px.size() / 3;
         for (size_t i = 0; i < n; ++i) {
             const double r = px[3 * i + 0] / 255.0;
             const double g = px[3 * i + 1] / 255.0;
             const double b = px[3 * i + 2] / 255.0;
             const double l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-            if (l < bgThreshold) continue;
-            sr += r;
-            sg += g;
-            sb += b;
-            sl += l;
-            sl2 += l * l;
-            ++kept;
+
+            // All-pixel stats (contaminated by background).
+            if (l >= bgThreshold) {
+                sr += r; sg += g; sb += b; sl += l; sl2 += l * l;
+                ++kept;
+            }
+
+            // Center-crop stats (sphere-only, no background contamination).
+            const float px_x = static_cast<float>(i % w);
+            const float px_y = static_cast<float>(i / w);
+            const float dx = px_x - cx;
+            const float dy = px_y - cy;
+            if (dx * dx + dy * dy <= cropR2) {
+                csl += l; csl2 += l * l;
+                ++ckept;
+            }
         }
-        if (kept == 0) return s;
-        s.meanR = static_cast<float>(sr / kept);
-        s.meanG = static_cast<float>(sg / kept);
-        s.meanB = static_cast<float>(sb / kept);
-        s.mean = static_cast<float>(sl / kept);
-        const double var = sl2 / kept - (sl / kept) * (sl / kept);
-        s.stddev = static_cast<float>(std::sqrt(std::max(0.0, var)));
-        s.samples = static_cast<int>(kept);
+
+        if (kept > 0) {
+            s.meanR = static_cast<float>(sr / kept);
+            s.meanG = static_cast<float>(sg / kept);
+            s.meanB = static_cast<float>(sb / kept);
+            s.mean  = static_cast<float>(sl / kept);
+            const double var = sl2 / kept - (sl / kept) * (sl / kept);
+            s.stddev = static_cast<float>(std::sqrt(std::max(0.0, var)));
+            s.samples = static_cast<int>(kept);
+        }
+        if (ckept > 0) {
+            s.cropMean   = static_cast<float>(csl / ckept);
+            const double cvar = csl2 / ckept - (csl / ckept) * (csl / ckept);
+            s.cropStddev = static_cast<float>(std::sqrt(std::max(0.0, cvar)));
+            s.cropSamples = static_cast<int>(ckept);
+        }
         return s;
     }
 
@@ -113,7 +162,7 @@ int main() {
     pathTracer.setReSTIREnabled(true);
     pathTracer.setFoveatedRendering(false);
     pathTracer.setEnvIntensity(1.f);
-    pathTracer.setFireflyClamp(0.f);
+    pathTracer.setFireflyClamp(0);// 0 → 1e30 sentinel: no cap during furnace validation
     pathTracer.setExposure(1.f);
 
     // ── Offscreen target + preview quad ──
@@ -122,7 +171,7 @@ int main() {
                                    static_cast<unsigned>(ch),
                                    RenderTarget::Options{});
     auto previewTex = DataTexture::create(3, cw, ch);
-    previewTex->format = Format::RGB;
+    previewTex->format = Format::RGBA;
     previewTex->magFilter = Filter::Linear;
     previewTex->minFilter = Filter::Linear;
 
@@ -198,14 +247,38 @@ int main() {
             ImGui::TextDisabled("(accumulating... stats update every %d frames)", measureEveryN);
         } else {
             constexpr float tgt = 1.0f;
-            const float devPct = 100.f * (stats.mean - tgt) / tgt;
-            ImGui::Text("Mean RGB: (%.4f, %.4f, %.4f)", stats.meanR, stats.meanG, stats.meanB);
-            ImGui::Text("Luminance mean: %.4f", stats.mean);
-            ImVec4 col = (std::abs(devPct) < 1.f)   ? ImVec4(0.4f, 1.f, 0.4f, 1.f)
-                         : (std::abs(devPct) < 3.f) ? ImVec4(1.f, 1.f, 0.4f, 1.f)
+
+            // ── Center pixel (single unambiguous sphere measurement) ──
+            if (stats.centerLum >= 0.f) {
+                const float cDev = 100.f * (stats.centerLum - tgt) / tgt;
+                ImVec4 cc = (std::abs(cDev) < 1.f)  ? ImVec4(0.4f, 1.f, 0.4f, 1.f)
+                           : (std::abs(cDev) < 5.f) ? ImVec4(1.f, 1.f, 0.4f, 1.f)
                                                     : ImVec4(1.f, 0.4f, 0.4f, 1.f);
-            ImGui::TextColored(col, "Deviation: %+.2f%%", devPct);
-            ImGui::Text("Stddev: %.4f", stats.stddev);
+                ImGui::Text("Center pixel lum: %.4f", stats.centerLum);
+                ImGui::TextColored(cc, "  Deviation: %+.2f%%", cDev);
+            }
+
+            ImGui::Separator();
+
+            // ── Center-crop (15%% radius, sphere-only, uncontaminated) ──
+            ImGui::Text("Center-crop mean (sphere-only, n=%d):", stats.cropSamples);
+            if (stats.cropSamples > 0) {
+                const float crDev = 100.f * (stats.cropMean - tgt) / tgt;
+                ImVec4 crc = (std::abs(crDev) < 1.f)  ? ImVec4(0.4f, 1.f, 0.4f, 1.f)
+                             : (std::abs(crDev) < 5.f) ? ImVec4(1.f, 1.f, 0.4f, 1.f)
+                                                       : ImVec4(1.f, 0.4f, 0.4f, 1.f);
+                ImGui::Text("  Lum %.4f  stddev %.4f", stats.cropMean, stats.cropStddev);
+                ImGui::TextColored(crc, "  Deviation: %+.2f%%", crDev);
+            }
+
+            ImGui::Separator();
+
+            // ── All-pixel mean (contaminated by bg env at 1.0, shown for reference) ──
+            const float devPct = 100.f * (stats.mean - tgt) / tgt;
+            ImGui::TextDisabled("All-pixel mean (bg-contaminated, n=%d): %.4f  (%+.2f%%)",
+                                stats.samples, stats.mean, devPct);
+            ImGui::TextDisabled("Mean RGB: (%.4f, %.4f, %.4f)", stats.meanR, stats.meanG, stats.meanB);
+            ImGui::TextDisabled("Stddev: %.4f", stats.stddev);
         }
         ImGui::Separator();
 
@@ -309,7 +382,7 @@ int main() {
 
             const int fc = pathTracer.frameCount();
             if (fc > 0 && fc >= measureEveryN && (fc % measureEveryN == 0) && fc != statsFrame) {
-                stats = computeStats(pixels);
+                stats = computeStats(pixels, w, h);
                 statsFrame = fc;
                 fresh = false;
             }
