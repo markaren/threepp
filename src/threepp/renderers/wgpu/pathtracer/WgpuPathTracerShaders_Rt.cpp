@@ -3277,12 +3277,22 @@ R"(
         let forceRst = (u32(rt.params.w) & 1u) != 0u;
         let camMovedFlag = (u32(rt.params.w) & 2u) != 0u;
         if (forceRst) { pxFC = 0.0; }
-        if (!prevWasEnv) { pxFC = 0.0; }   // (1) object → sky disocclusion
+        // (1) object → sky transition.
+        // Reset ONLY when the leaving object was moving (real disocclusion).
+        // For static-scene silhouette jitter (prev object static, current ray
+        // missed by sub-pixel displacement), do NOT reset — both outcomes are
+        // valid sub-samples of a pixel whose true color is a mix. Letting FC
+        // grow lets alpha shrink, and the running average converges to the
+        // true sub-pixel coverage. The historical-contamination concern from
+        // the old unconditional reset is superseded by forceReset (manual
+        // clear) and camMovedFlag / mesh-moved gating.
+        let prevMeshSky = u32(textureLoad(hitMeshRead, pixel, 0).r);
+        let prevMovedSky = prevMeshSky < 128u && isMeshMoved(i32(prevMeshSky));
+        if (!prevWasEnv && prevMovedSky) { pxFC = 0.0; }
         if (camMovedFlag) { pxFC = 0.0; }  // (2) no reprojection → stale env direction
-        pxFC = min(pxFC, 32.0);            // (3) cap so historical ghost decays fast
         let alpha = 1.0 / (pxFC + 1.0);
         let blended = old * (1.0 - alpha) + bgClean * alpha;
-        let newFC   = min(pxFC + 1.0, 32.0);
+        let newFC   = pxFC + 1.0;
         // Sky is all diffuse (no specular component).
         textureStore(accumWrite,     pixel, vec4<f32>(blended, newFC));
         textureStore(diffAccumWrite, pixel, vec4<f32>(blended, newFC));
