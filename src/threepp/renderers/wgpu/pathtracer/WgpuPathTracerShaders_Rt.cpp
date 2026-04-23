@@ -1900,8 +1900,18 @@ fn runBounces(state:           PrimaryShadeResult,
             }
         }
 
-        // Emissive triangle NEE (power-weighted CDF)
-        if (emTriCount > 0) {
+        // Emissive-triangle vs env NEE — stochastic 50/50 pick when both
+        // are available. Cuts one shadow-ray BVH traversal per pixel on
+        // emissive+env scenes (Bistro-class). Unbiased: contribution scaled
+        // by 2 preserves expectation, variance absorbed by temporal denoiser.
+        let hasEm  = emTriCount > 0;
+        let hasEnv = HAS_ENV_CDF && rt.envColor.w > 1.5 && h.shininess > 0.01 && i < 4;
+        let both   = hasEm && hasEnv;
+        let doEm   = hasEm && (!both || rand(seed) < 0.5);
+        let doEnv  = hasEnv && !doEm;
+        let neeScale = select(1.0, 2.0, both);
+
+        if (doEm) {
             let totalPower2 = rt.emissiveInfo.y;
             let es = sampleEmissiveTriCdf(seed, totalPower2, emTriCount);
             let toLight = es.point - h.point;
@@ -1920,7 +1930,7 @@ fn runBounces(state:           PrimaryShadeResult,
                     let cap = rt.emissiveInfo.z;
                     let lobeSum3 = evalBrdfFull(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h,
                                                  h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                    let emNeeContrib = emAtten * lobeSum3 * NdotL * emColor * w_light / pdf;
+                    let emNeeContrib = emAtten * lobeSum3 * NdotL * emColor * w_light / pdf * neeScale;
                     if (useReSTIRGI && !giResStored) {
                         giLo += emNeeContrib;
                     } else {
@@ -1930,8 +1940,7 @@ fn runBounces(state:           PrimaryShadeResult,
             }
         }
 
-        // Env map NEE (importance-sampled).
-        if (HAS_ENV_CDF && rt.envColor.w > 1.5 && h.shininess > 0.01 && i < 4) {
+        if (doEnv) {
             let envSample = sampleEnvImportance(seed);
             let envDir    = envSample.xyz;
             let envPdf    = envSample.w;
@@ -1945,7 +1954,7 @@ fn runBounces(state:           PrimaryShadeResult,
                     let cap = rt.emissiveInfo.z;
                     let lobeSum4 = evalBrdfFull(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h,
                                                  h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                    let envNeeContrib = envAtten * lobeSum4 * envNdotL * envCol * w_env / envPdf;
+                    let envNeeContrib = envAtten * lobeSum4 * envNdotL * envCol * w_env / envPdf * neeScale;
                     if (useReSTIRGI && !giResStored) {
                         giLo += envNeeContrib;
                     } else {
@@ -3869,8 +3878,17 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
 
-            // Emissive triangle NEE (power-weighted CDF)
-            if (emTriCount > 0) {
+            // Emissive-triangle vs env NEE — stochastic 50/50 pick (see
+            // runBounces for MC reasoning). Saves one shadow-ray BVH
+            // traversal per pixel on emissive+env scenes.
+            let hasEm  = emTriCount > 0;
+            let hasEnv = HAS_ENV_CDF && rt.envColor.w > 1.5 && h.shininess > 0.01 && i < 4;
+            let bothNee = hasEm && hasEnv;
+            let doEm    = hasEm && (!bothNee || rand(&seed) < 0.5);
+            let doEnv   = hasEnv && !doEm;
+            let neeScale = select(1.0, 2.0, bothNee);
+
+            if (doEm) {
                 let totalPower2 = rt.emissiveInfo.y;
                 let es = sampleEmissiveTriCdf(&seed, totalPower2, emTriCount);
                 let toLight = es.point - h.point;
@@ -3889,7 +3907,7 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                         let cap = rt.emissiveInfo.z;
                         let lobeSum3 = evalBrdfFull(wo, ln, h.normal, albedo, h.metalness, h.shininess, F0_h,
                                                      h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                        let emNeeContrib = emAtten * lobeSum3 * NdotL * emColor * w_light / pdf;
+                        let emNeeContrib = emAtten * lobeSum3 * NdotL * emColor * w_light / pdf * neeScale;
                         if (useReSTIRGI && !giResStored) {
                             giLo += emNeeContrib;
                         } else {
@@ -3899,8 +3917,7 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
 
-            // Env map NEE (importance-sampled).
-            if (HAS_ENV_CDF && rt.envColor.w > 1.5 && h.shininess > 0.01 && i < 4) {
+            if (doEnv) {
                 let envSample = sampleEnvImportance(&seed);
                 let envDir    = envSample.xyz;
                 let envPdf    = envSample.w;
@@ -3914,7 +3931,7 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                         let cap = rt.emissiveInfo.z;
                         let lobeSum4 = evalBrdfFull(wo, envDir, h.normal, albedo, h.metalness, h.shininess, F0_h,
                                                      h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                        let envNeeContrib = envAtten * lobeSum4 * envNdotL * envCol * w_env / envPdf;
+                        let envNeeContrib = envAtten * lobeSum4 * envNdotL * envCol * w_env / envPdf * neeScale;
                         if (useReSTIRGI && !giResStored) {
                             giLo += envNeeContrib;
                         } else {
