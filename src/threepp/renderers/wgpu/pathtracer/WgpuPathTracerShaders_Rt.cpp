@@ -75,7 +75,7 @@ struct Bvh4NodeGpu {
 @group(0) @binding(17) var reservoirRead:   texture_2d<f32>;
 @group(0) @binding(18) var reservoirWrite:  texture_storage_2d<rgba32float, write>;
 @group(0) @binding(19) var reservoirWRead:  texture_2d<f32>;
-@group(0) @binding(20) var reservoirWWrite: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(20) var reservoirWWrite: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(21) var momentsRead:     texture_2d<f32>;
 @group(0) @binding(22) var momentsWrite:    texture_storage_2d<rgba16float, write>;
 @group(0) @binding(23) var diffAccumRead:   texture_2d<f32>;
@@ -86,7 +86,7 @@ struct Bvh4NodeGpu {
 @group(0) @binding(28) var giResRead:    texture_2d<f32>;
 @group(0) @binding(29) var giResWrite:   texture_storage_2d<rgba32float, write>;
 @group(0) @binding(30) var giResWRead:   texture_2d<f32>;
-@group(0) @binding(31) var giResWWrite:  texture_storage_2d<rgba32float, write>;
+@group(0) @binding(31) var giResWWrite:  texture_storage_2d<rgba16float, write>;
 @group(0) @binding(32) var giResLoRead:  texture_2d<f32>;
 @group(0) @binding(33) var giResLoWrite: texture_storage_2d<rgba16float, write>;
 // Persistent-thread work queue: one atomic<u32> counter.  Threads pull pixel

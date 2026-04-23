@@ -96,11 +96,11 @@ struct WgpuPathTracer::Impl {
 
     // ReSTIR DI reservoir ping-pong
     PingPong reservoir;   // rgba32float — lightPos.xyz + encoded type/index
-    PingPong reservoirW;  // rgba32float — W_sum, M, W, p_hat
+    PingPong reservoirW;  // rgba16float — W_sum, M, W, p_hat (tier-1 compressed)
 
     // ReSTIR GI reservoir ping-pong
     PingPong giRes;    // rgba32float — secHitPos.xyz + octahedral-packed normal
-    PingPong giResW;   // rgba32float — W_sum, M, W, p_hat
+    PingPong giResW;   // rgba16float — W_sum, M, W, p_hat (tier-1 compressed)
     PingPong giResLo;  // rgba16float — Lo radiance at secondary hit
 
     // Albedo buffer (primary-hit albedo for demodulation/remodulation)
@@ -452,12 +452,12 @@ struct WgpuPathTracer::Impl {
         gBuf.b       = WgpuTexture(r, ww, wh, F::RGBA16Float, STBR);
         reservoir.a  = WgpuTexture(r, ww, wh, F::RGBA32Float);
         reservoir.b  = WgpuTexture(r, ww, wh, F::RGBA32Float);
-        reservoirW.a = WgpuTexture(r, ww, wh, F::RGBA32Float);
-        reservoirW.b = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        reservoirW.a = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        reservoirW.b = WgpuTexture(r, ww, wh, F::RGBA16Float);
         giRes.a      = WgpuTexture(r, ww, wh, F::RGBA32Float);
         giRes.b      = WgpuTexture(r, ww, wh, F::RGBA32Float);
-        giResW.a     = WgpuTexture(r, ww, wh, F::RGBA32Float);
-        giResW.b     = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        giResW.a     = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        giResW.b     = WgpuTexture(r, ww, wh, F::RGBA16Float);
         giResLo.a    = WgpuTexture(r, ww, wh, F::RGBA16Float);
         giResLo.b    = WgpuTexture(r, ww, wh, F::RGBA16Float);
         moments.a    = WgpuTexture(r, ww, wh, F::RGBA16Float);
@@ -1131,10 +1131,11 @@ struct WgpuPathTracer::Impl {
         gBuf.write = &gBuf.b;
 
         auto fmt32 = WgpuTexture::Format::RGBA32Float;
+        auto fmt16 = WgpuTexture::Format::RGBA16Float;
         reservoir.a  = WgpuTexture(renderer, uw, uh, fmt32);
         reservoir.b  = WgpuTexture(renderer, uw, uh, fmt32);
-        reservoirW.a = WgpuTexture(renderer, uw, uh, fmt32);
-        reservoirW.b = WgpuTexture(renderer, uw, uh, fmt32);
+        reservoirW.a = WgpuTexture(renderer, uw, uh, fmt16);
+        reservoirW.b = WgpuTexture(renderer, uw, uh, fmt16);
         reservoir.read   = &reservoir.a;
         reservoir.write  = &reservoir.b;
         reservoirW.read  = &reservoirW.a;
@@ -1142,8 +1143,8 @@ struct WgpuPathTracer::Impl {
 
         giRes.a  = WgpuTexture(renderer, uw, uh, fmt32);
         giRes.b  = WgpuTexture(renderer, uw, uh, fmt32);
-        giResW.a = WgpuTexture(renderer, uw, uh, fmt32);
-        giResW.b = WgpuTexture(renderer, uw, uh, fmt32);
+        giResW.a = WgpuTexture(renderer, uw, uh, fmt16);
+        giResW.b = WgpuTexture(renderer, uw, uh, fmt16);
         giResLo.a = WgpuTexture(renderer, uw, uh, fmt);
         giResLo.b = WgpuTexture(renderer, uw, uh, fmt);
         giRes.read   = &giRes.a;
