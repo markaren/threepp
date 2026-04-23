@@ -2609,11 +2609,19 @@ R"(
         let preSpReservoir = reservoir;
 
         // === SPATIAL REUSE — random neighbours from previous frame ===
+        // Skip entirely once the pixel is well-converged: past FC≈48 the denoiser
+        // atrous filter has already faded to zero (see feedback_denoiser_fc_fade),
+        // and neighbour reservoirs carry strictly more variance than this pixel's
+        // own. pixelFC resets to 0 on camera motion / disocclusion in rt_accum_main,
+        // so this check self-gates on motion.
+        let pixelFC_prev = textureLoad(diffAccumRead, pixel, 0).w;
         {
             let camMoving = (u32(rt.params.w) & 2u) != 0u;
             let spMax = select(5u, 2u, camMoving);
             let mTarget = 20.0;
+            let skipSpatial = pixelFC_prev > 48.0;
             for (var spI = 0u; spI < spMax; spI++) {
+                if (skipSpatial) { break; }
                 if (reservoir.M >= mTarget) { break; }
                 let spAngle = rand(seed) * 2.0 * PI;
                 let spR     = sqrt(rand(seed)) * 20.0;
