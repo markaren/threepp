@@ -55,6 +55,34 @@ namespace threepp {
 
         constexpr auto kDecodeTable = buildDecodeTable();
 
+        // Percent-decode a glTF URI (RFC 3986). glTF texture URIs with spaces or
+        // other reserved chars arrive as e.g. "Base%20Color.jpg"; we must decode
+        // before using them as filesystem paths. Data URIs are handled separately
+        // and must NOT be passed here.
+        std::string percentDecode(const std::string& uri) {
+            std::string out;
+            out.reserve(uri.size());
+            auto hex = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+                if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+                return -1;
+            };
+            for (size_t i = 0; i < uri.size(); ++i) {
+                if (uri[i] == '%' && i + 2 < uri.size()) {
+                    int hi = hex(uri[i + 1]);
+                    int lo = hex(uri[i + 2]);
+                    if (hi >= 0 && lo >= 0) {
+                        out.push_back(static_cast<char>((hi << 4) | lo));
+                        i += 2;
+                        continue;
+                    }
+                }
+                out.push_back(uri[i]);
+            }
+            return out;
+        }
+
         std::vector<uint8_t> base64Decode(const std::string& encoded) {
             std::vector<uint8_t> out;
             out.reserve(encoded.size() * 3 / 4);
@@ -163,7 +191,7 @@ namespace threepp {
                     auto comma = uri.find(',');
                     buffers[idx] = base64Decode(uri.substr(comma + 1));
                 } else {
-                    fs::path p = basePath / uri;
+                    fs::path p = basePath / percentDecode(uri);
                     std::ifstream f(p, std::ios::binary);
                     if (!f) throw std::runtime_error("Cannot open buffer file: " + p.string());
                     buffers[idx].assign(std::istreambuf_iterator<char>(f), {});
@@ -402,7 +430,7 @@ namespace threepp {
                         auto comma = uri.find(',');
                         raw = base64Decode(uri.substr(comma + 1));
                     } else {
-                        fs::path p = basePath / uri;
+                        fs::path p = basePath / percentDecode(uri);
                         std::ifstream f(p, std::ios::binary);
                         if (!f) throw std::runtime_error("Cannot open image: " + p.string());
                         raw.assign(std::istreambuf_iterator<char>(f), {});
@@ -862,7 +890,7 @@ namespace threepp {
                         std::shared_ptr<Light> light;
                         if (ltype == "directional") {
                             light = DirectionalLight::create(color, intensity);
-                        } else if (ltype == "spot") {
+                        } else if (ltype == "spots") {
                             float innerCone = lightDef.value("innerConeAngle", 0.0f);
                             float outerCone = lightDef.value("outerConeAngle", math::PI / 4.f);
                             float penumbra = (outerCone > 0.f) ? (1.f - innerCone / outerCone) : 0.f;

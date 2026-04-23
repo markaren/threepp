@@ -40,6 +40,14 @@ namespace threepp {
         void setEnvIntensity(float intensity);
         [[nodiscard]] float envIntensity() const;
 
+        /// Scene-wide multiplier applied to every emissive material's output.
+        /// Default: 1.0. Useful for quickly brightening/dimming all area lights
+        /// (e.g. RectAreaLight quads + emissive meshes) in an indoor PT scene
+        /// without touching individual material values. Unbiased — scales the
+        /// per-hit emissive contribution; CDF probabilities are unaffected.
+        void setEmissiveIntensity(float intensity);
+        [[nodiscard]] float emissiveIntensity() const;
+
         /// Maximum number of bounces for path tracing. Default: 8.
         /// Higher values improve light transport accuracy at the cost of performance.
         void setMaxBounces(int bounces);

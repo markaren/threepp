@@ -42,7 +42,7 @@ struct RtUniforms {
     bgColor:       vec4<f32>,  // xyz = color, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex (bgTex)
     params:        vec4<f32>,  // x = maxBounces
     emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive power, z = fireflyCap
-    restirParams:  vec4<f32>,  // x = enabled, y = M_clamp, z = emissiveMoved, w = reserved
+    restirParams:  vec4<f32>,  // x = enabled, y = M_clamp, z = emissiveMoved, w = emissive intensity multiplier
     bvhAux:        vec4<u32>,  // .x = bvhRootIdx (0 = normal root, >0 = overlay combined root)
     lens:          vec4<f32>,  // x = fStop (0=pinhole), y = focusDistance, z = blades (f32), w = apertureRotation
 };
@@ -864,7 +864,7 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     if (emissiveSlot >= 0.0) {
         emissive *= srgbToLinear(sampleAtlas(emUV, emissiveSlot));
     }
-    h.emissive = emissive;
+    h.emissive = emissive * rt.restirParams.w;
 
     // Advanced PBR features (sheen, specular extension, dispersion, thickness)
     // Skip 2 matData reads when material uses defaults — most common case.
@@ -1935,7 +1935,7 @@ fn runBounces(state:           PrimaryShadeResult,
                 let emAtten = traceShadowRay(h.point, h.normal, ln, dist - 1e-2, 4);
                 if (emAtten.x + emAtten.y + emAtten.z > 0.001) {
                     let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
-                    let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
+                    let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz * rt.restirParams.w;
                     let pdf = (es.power * dist * dist) / (totalPower2 * es.area * cosLight);
                     let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
                     let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);
@@ -2544,7 +2544,7 @@ fn primaryShade(primaryHit:     Hit,
                 reservoir.M += 1.0;
                 if (NdotL_e > 0.0 && cosLight > 1e-6) {
                     let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
-                    let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
+                    let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz * rt.restirParams.w;
                     let p_hat_e = restirTargetPdf(h.point, h.normal, wo, albedo, h.metalness, h.shininess, F0_h,
                                                   es.point, 1000.0 + f32(es.triIdx), emColor);
                     if (p_hat_e > 0.0) {
@@ -2768,7 +2768,7 @@ const char* const csPrimaryShadeWGSL2 = R"(
                 let emAtten = traceShadowRay(h.point, h.normal, ln, dist - 1e-2, 4);
                 if (emAtten.x + emAtten.y + emAtten.z > 0.001) {
                     let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
-                    let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
+                    let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz * rt.restirParams.w;
                     let pdf = (es.power * dist * dist) / (totalPower2 * es.area * cosLight);
                     let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
                     let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);
@@ -3932,7 +3932,7 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let emAtten = traceShadowRay(h.point, h.normal, ln, dist - 1e-2, 4);
                     if (emAtten.x + emAtten.y + emAtten.z > 0.001) {
                         let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
-                        let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
+                        let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz * rt.restirParams.w;
                         let pdf = (es.power * dist * dist) / (totalPower2 * es.area * cosLight);
                         let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
                         let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);

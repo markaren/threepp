@@ -80,7 +80,7 @@ namespace threepp::wgpu_pt {
         float    bgColor[4];        // xyz = color, w = mode (0=sky gradient, 1=solid color, 2=equirect bgTex)
         float    params[4];         // x = maxBounces
         float    emissiveInfo[4];   // x = emissive tri count, y = total emissive power, z = fireflyCap
-        float    restirParams[4];   // x = enabled, y = M_clamp, z = reserved, w = reserved
+        float    restirParams[4];   // x = enabled, y = M_clamp, z = emissiveMoved, w = scene-wide emissive intensity multiplier
         std::uint32_t bvhAux[4];    // [0] = bvhRootIdx (0 = normal root, >0 = overlay combined root)
         float lens[4];              // [0]=fStop (0=pinhole), [1]=focusDistance, [2]=blades, [3]=apertureRotation
     };

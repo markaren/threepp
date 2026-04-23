@@ -211,6 +211,7 @@ set(publicHeaders
         "threepp/lights/LightShadow.hpp"
         "threepp/lights/PointLight.hpp"
         "threepp/lights/PointLightShadow.hpp"
+        "threepp/lights/RectAreaLight.hpp"
         "threepp/lights/SpotLight.hpp"
         "threepp/lights/SpotLightShadow.hpp"
 
@@ -424,6 +425,7 @@ set(sources
         "threepp/lights/LightShadow.cpp"
         "threepp/lights/PointLight.cpp"
         "threepp/lights/PointLightShadow.cpp"
+        "threepp/lights/RectAreaLight.cpp"
         "threepp/lights/SpotLight.cpp"
         "threepp/lights/SpotLightShadow.cpp"
 
