@@ -1880,10 +1880,22 @@ fn runBounces(state:           PrimaryShadeResult,
         // ==== Classic NEE ==== (useReSTIR is i==0-only, so always false here.)
         let lcount = i32(rt.lightCount.x);
 
-        // Analytical lights
+        // Analytical lights — stochastic pick when lcount >= 2 (saves
+        // lcount-1 shadow rays, +20% on 3-light scenes). Deterministic
+        // loop at lcount <= 1 so lcount=0 pays zero rand() cost.
+        let useStochLights = lcount >= 2;
+        var pickedLi = 0;
+        var analScale = 1.0;
+        var analLiMax = lcount;
+        if (useStochLights) {
+            pickedLi = min(i32(rand(seed) * f32(lcount)), lcount - 1);
+            analScale = f32(lcount);
+            analLiMax = 1;
+        }
         for (var li = 0; li < 4; li++) {
-            if (li >= lcount) { break; }
-            let le = evalAnalyticalLight(li, h.point);
+            if (li >= analLiMax) { break; }
+            let actualLi = select(li, pickedLi, useStochLights);
+            let le = evalAnalyticalLight(actualLi, h.point);
             let NdotL = dot(h.normal, le.dir);
             if (NdotL <= 0.0) { continue; }
             let shadowAtten = traceShadowRay(h.point, h.normal, le.dir, le.dist - 1e-3, 4);
@@ -1891,7 +1903,7 @@ fn runBounces(state:           PrimaryShadeResult,
                 let cap = rt.emissiveInfo.z;
                 let lobeSum = evalBrdfFull(wo, le.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
                                            h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                let neeContrib = shadowAtten * lobeSum * NdotL * le.color;
+                let neeContrib = shadowAtten * lobeSum * NdotL * le.color * analScale;
                 if (useReSTIRGI && !giResStored) {
                     giLo += neeContrib;
                 } else {
@@ -2716,10 +2728,20 @@ R"(
 // Second chunk of primaryShade: classic NEE (non-ReSTIR branch) + env NEE + reservoir zero-out.
 const char* const csPrimaryShadeWGSL2 = R"(
         // ======= Classic NEE (ReSTIR disabled or skipped) =======
-        // Analytical lights
+        // Analytical lights — stochastic pick when lcount >= 2
+        let useStochLights = lcount >= 2;
+        var pickedLi = 0;
+        var analScale = 1.0;
+        var analLiMax = lcount;
+        if (useStochLights) {
+            pickedLi = min(i32(rand(seed) * f32(lcount)), lcount - 1);
+            analScale = f32(lcount);
+            analLiMax = 1;
+        }
         for (var li = 0; li < 4; li++) {
-            if (li >= lcount) { break; }
-            let le = evalAnalyticalLight(li, h.point);
+            if (li >= analLiMax) { break; }
+            let actualLi = select(li, pickedLi, useStochLights);
+            let le = evalAnalyticalLight(actualLi, h.point);
             let NdotL = dot(h.normal, le.dir);
             if (NdotL <= 0.0) { continue; }
             let shadowAtten = traceShadowRay(h.point, h.normal, le.dir, le.dist - 1e-3, 4);
@@ -2727,7 +2749,7 @@ const char* const csPrimaryShadeWGSL2 = R"(
                 let cap = rt.emissiveInfo.z;
                 let bs = evalBrdfFullSplit(wo, le.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
                                           h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                let shade = throughput * shadowAtten * NdotL * le.color;
+                let shade = throughput * shadowAtten * NdotL * le.color * analScale;
                 addSplit(&diffRad, &specRad, shade * bs.diff, cap, 0, false);
                 addSplit(&diffRad, &specRad, shade * bs.spec, cap, 1, true);
             }
@@ -3858,10 +3880,20 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // ==== Classic NEE ==== (useReSTIR is i==0-only, so always false here.)
             let lcount = i32(rt.lightCount.x);
 
-            // Analytical lights
+            // Analytical lights — stochastic pick when lcount >= 2
+            let useStochLights = lcount >= 2;
+            var pickedLi = 0;
+            var analScale = 1.0;
+            var analLiMax = lcount;
+            if (useStochLights) {
+                pickedLi = min(i32(rand(&seed) * f32(lcount)), lcount - 1);
+                analScale = f32(lcount);
+                analLiMax = 1;
+            }
             for (var li = 0; li < 4; li++) {
-                if (li >= lcount) { break; }  // inner break — exits the for-loop only
-                let le = evalAnalyticalLight(li, h.point);
+                if (li >= analLiMax) { break; }
+                let actualLi = select(li, pickedLi, useStochLights);
+                let le = evalAnalyticalLight(actualLi, h.point);
                 let NdotL = dot(h.normal, le.dir);
                 if (NdotL <= 0.0) { continue; }
                 let shadowAtten = traceShadowRay(h.point, h.normal, le.dir, le.dist - 1e-3, 4);
@@ -3869,7 +3901,7 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let cap = rt.emissiveInfo.z;
                     let lobeSum = evalBrdfFull(wo, le.dir, h.normal, albedo, h.metalness, h.shininess, F0_h,
                                                h.sheenColor, h.sheenRoughness, h.clearcoat, h.clearcoatAlpha);
-                    let neeContrib = shadowAtten * lobeSum * NdotL * le.color;
+                    let neeContrib = shadowAtten * lobeSum * NdotL * le.color * analScale;
                     if (useReSTIRGI && !giResStored) {
                         giLo += neeContrib;
                     } else {
