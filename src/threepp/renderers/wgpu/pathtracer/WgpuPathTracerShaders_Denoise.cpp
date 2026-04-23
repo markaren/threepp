@@ -14,7 +14,7 @@ struct AtrousUni { stepSize: u32, mode: u32, frameCount: f32, _p1: f32, }
 
 @group(0) @binding(0) var<uniform> uni:      AtrousUni;
 @group(0) @binding(1) var colorIn:  texture_2d<f32>;
-@group(0) @binding(2) var colorOut: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var colorOut: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(3) var gBuf:     texture_2d<f32>;
 @group(0) @binding(4) var albedoBuf: texture_2d<f32>;
 @group(0) @binding(5) var hitMeshBuf: texture_2d<f32>;

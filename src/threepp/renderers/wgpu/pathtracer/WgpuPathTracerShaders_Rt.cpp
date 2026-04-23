@@ -79,9 +79,9 @@ struct Bvh4NodeGpu {
 @group(0) @binding(21) var momentsRead:     texture_2d<f32>;
 @group(0) @binding(22) var momentsWrite:    texture_storage_2d<rgba16float, write>;
 @group(0) @binding(23) var diffAccumRead:   texture_2d<f32>;
-@group(0) @binding(24) var diffAccumWrite:  texture_storage_2d<rgba16float, write>;
+@group(0) @binding(24) var diffAccumWrite:  texture_storage_2d<rgba32float, write>;
 @group(0) @binding(25) var specAccumRead:   texture_2d<f32>;
-@group(0) @binding(26) var specAccumWrite:  texture_storage_2d<rgba16float, write>;
+@group(0) @binding(26) var specAccumWrite:  texture_storage_2d<rgba32float, write>;
 @group(0) @binding(27) var<storage, read> rtMotionMats: array<mat4x4<f32>>;  // prevWorld * inverse(curWorld) per mesh
 @group(0) @binding(28) var giResRead:    texture_2d<f32>;
 @group(0) @binding(29) var giResWrite:   texture_storage_2d<rgba32float, write>;

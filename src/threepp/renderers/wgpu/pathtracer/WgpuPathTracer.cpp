@@ -393,10 +393,14 @@ struct WgpuPathTracer::Impl {
           // Albedo buffer for demodulation
           albedoTex(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                     WgpuTexture::Format::RGBA16Float),
+          // fp32 so the à-trous cascade never flips sampleType mid-pass.
+          // Pass 0 reads diff/specAccum (rgba32float), pass 1+ reads these
+          // scratch targets. Mixing rgba16/rgba32 would force a BGL rebuild
+          // between passes and crash mid-dispatch.
           denoisedDiff(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                       WgpuTexture::Format::RGBA16Float),
+                       WgpuTexture::Format::RGBA32Float),
           denoisedSpec(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                       WgpuTexture::Format::RGBA16Float),
+                       WgpuTexture::Format::RGBA32Float),
           zeroTex(r, 1u, 1u,
                   WgpuTexture::Format::RGBA16Float,
                   WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
@@ -491,12 +495,16 @@ struct WgpuPathTracer::Impl {
         giResLo.b    = WgpuTexture(r, ww, wh, F::RGBA16Float);
         moments.a    = WgpuTexture(r, ww, wh, F::RGBA16Float);
         moments.b    = WgpuTexture(r, ww, wh, F::RGBA16Float);
-        diffAccum.a  = WgpuTexture(r, ww, wh, F::RGBA16Float);
-        diffAccum.b  = WgpuTexture(r, ww, wh, F::RGBA16Float);
-        specAccum.a  = WgpuTexture(r, ww, wh, F::RGBA16Float);
-        specAccum.b  = WgpuTexture(r, ww, wh, F::RGBA16Float);
-        filtered.a   = WgpuTexture(r, ww, wh, F::RGBA16Float);
-        filtered.b   = WgpuTexture(r, ww, wh, F::RGBA16Float);
+        // fp32 to preserve precision under long static accumulation (same
+        // reason the main accum is fp32 — fp16 EMA biases with high-variance
+        // samples once alpha < ~1e-3, i.e. FC > ~1000).
+        diffAccum.a  = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        diffAccum.b  = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        specAccum.a  = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        specAccum.b  = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        // fp32 — see denoisedDiff/Spec comment.
+        filtered.a   = WgpuTexture(r, ww, wh, F::RGBA32Float);
+        filtered.b   = WgpuTexture(r, ww, wh, F::RGBA32Float);
         upscale.a    = WgpuTexture(r, ww, wh, F::RGBA16Float, STB);
         upscale.b    = WgpuTexture(r, ww, wh, F::RGBA16Float, STB);
         // read/write pointers default to &a / &b — no explicit init needed
@@ -1218,19 +1226,21 @@ struct WgpuPathTracer::Impl {
         moments.read  = &moments.a;
         moments.write = &moments.b;
 
-        diffAccum.a = WgpuTexture(renderer, uw, uh, fmt);
-        diffAccum.b = WgpuTexture(renderer, uw, uh, fmt);
+        // fp32 — see constructor comment on same pair.
+        diffAccum.a = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float);
+        diffAccum.b = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float);
         diffAccum.read  = &diffAccum.a;
         diffAccum.write = &diffAccum.b;
-        specAccum.a = WgpuTexture(renderer, uw, uh, fmt);
-        specAccum.b = WgpuTexture(renderer, uw, uh, fmt);
+        specAccum.a = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float);
+        specAccum.b = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float);
         specAccum.read  = &specAccum.a;
         specAccum.write = &specAccum.b;
 
-        filtered.a = WgpuTexture(renderer, uw, uh, fmt);
-        filtered.b = WgpuTexture(renderer, uw, uh, fmt);
-        denoisedDiff = WgpuTexture(renderer, uw, uh, fmt);
-        denoisedSpec = WgpuTexture(renderer, uw, uh, fmt);
+        // fp32 — see constructor comment on denoisedDiff/Spec.
+        filtered.a = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float);
+        filtered.b = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float);
+        denoisedDiff = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float);
+        denoisedSpec = WgpuTexture(renderer, uw, uh, WgpuTexture::Format::RGBA32Float);
 
         std::vector<float> zeros(w * h * 4, 0.f);
         accum.a.write(zeros.data(), zeros.size() * sizeof(float));
