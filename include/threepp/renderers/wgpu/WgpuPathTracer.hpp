@@ -45,6 +45,15 @@ namespace threepp {
         void setMaxBounces(int bounces);
         [[nodiscard]] int maxBounces() const;
 
+        /// Enable CPU-side wall-clock timings for the path tracer frame.
+        /// When enabled, the renderer serializes CPU and GPU via wgpuDevicePoll
+        /// between submits to measure per-stage cost (pre / bounces / post).
+        /// Prints a rolling 60-frame summary to stderr.  Adds ~0.5 ms overhead
+        /// per submit — use for diagnostics, not production.
+        /// Also togglable via env var WGPU_PATHTRACER_TIMINGS=1.
+        void setTimingsEnabled(bool enabled);
+        [[nodiscard]] bool timingsEnabled() const;
+
         /// Exposure multiplier applied during tone mapping. Default: 1.0.
         /// Adjusting this does not reset accumulation.
         void setExposure(float exposure);

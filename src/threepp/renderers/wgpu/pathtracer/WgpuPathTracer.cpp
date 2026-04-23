@@ -37,8 +37,10 @@
 #include <webgpu/webgpu.h>
 
 #include <algorithm>
+#include <chrono>
 #include <climits>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
@@ -137,6 +139,29 @@ struct WgpuPathTracer::Impl {
     int spp_ = 1;
     float envIntensity_ = 0.5f;
     int maxBounces_ = 4;
+    // Timings diagnostic (opt-in).  CPU-side wall-clock measurement of the
+    // full pt frame, plus a pre/bounces/post split when enabled.  Uses
+    // wgpuDevicePoll(device, true, nullptr) between submits to serialize CPU
+    // and GPU — this is proven-safe in the codebase (see WgpuReadback.cpp).
+    // No GPU timestamp-query features requested — those require device-creation
+    // time opt-in and can crash on wgpu-native Windows if misconfigured.
+    //
+    // Enable via setTimingsEnabled(true) or env var WGPU_PATHTRACER_TIMINGS=1.
+    // Warning: serializing adds ~0.5 ms overhead per submit, so timed frames
+    // run slower than untimed — treat numbers as "relative cost per pass",
+    // not "actual FPS when timings off".
+    bool  timingsEnabled_ = false;
+    static constexpr int TIMINGS_WINDOW = 60;
+    double timTotalMs_[TIMINGS_WINDOW]   = {};
+    double timGeomMs_[TIMINGS_WINDOW]    = {};  // vt+refit+counters+primary BVH
+    double timShadeMs_[TIMINGS_WINDOW]   = {};  // rt_main (primaryShade + ReSTIR DI)
+    double timCompSortMs_[TIMINGS_WINDOW] = {}; // compact + sort_prefix + sort_scatter
+    double timBounce1Ms_[TIMINGS_WINDOW] = {};  // rt_bounce1_main
+    double timBouncesMs_[TIMINGS_WINDOW] = {};  // rt_bounces_main
+    double timPostMs_[TIMINGS_WINDOW]    = {};  // rt_accum_main
+    int    timSlot_       = 0;
+    int    timFilled_     = 0;
+
     // Per-contribution firefly clamp (luminance cap) on indirect MIS paths.
     // Default 8.0 matches production renderers (Arnold/Cycles/RenderMan).
     // Set to a very large value (e.g. 1e30f) to disable clipping when
@@ -483,6 +508,11 @@ struct WgpuPathTracer::Impl {
         {
             auto lut = buildGgxELut(32, 1024);
             ggxELutTex_.write(lut.data(), lut.size() * sizeof(float));
+        }
+
+        // Opt-in diagnostic: WGPU_PATHTRACER_TIMINGS=1 enables CPU wall-clock timings.
+        if (const char* env = std::getenv("WGPU_PATHTRACER_TIMINGS")) {
+            if (env[0] == '1') timingsEnabled_ = true;
         }
 
         // Wire compute pipeline bindings
@@ -2635,7 +2665,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.restirParams[0] = d.restirEnabled_ ? 1.f : 0.f;
     u.restirParams[1] = camMoved ? 5.f : 20.f;  // M clamp — low during motion to flush stale reservoirs
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
-    u.restirParams[3] = 0.f;  // reserved (was rawMode/temporal denoiser flag)
+    u.restirParams[3] = 0.f;  // reserved
     u.bvhAux[0] = static_cast<uint32_t>(d.bvhRootIdx_);  // traversal root (0=normal, >0=overlay)
     u.lens[0] = d.lens_.fStop;
     u.lens[1] = d.lens_.focusDistance;
@@ -2823,6 +2853,26 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
             WGPUComputePassDescriptor passDesc{};
 
+            // Timings helper — when enabled, finish+submit the current encoder,
+            // block on GPU via wgpuDevicePoll, record elapsed ms into `out`, and
+            // start a fresh encoder.  No-op when timings disabled (passes keep
+            // accumulating into the single encoder as before).
+            WGPUCommandBufferDescriptor cmdDescSplit{};
+            using Clock = std::chrono::steady_clock;
+            Clock::time_point tSplitStamp = Clock::now();
+            auto splitAndMeasure = [&](const char* label, double* outMs) {
+                if (!d.timingsEnabled_) return;
+                cmdDescSplit.label = WGPUStringView{label, WGPU_STRLEN};
+                WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDescSplit);
+                wgpuQueueSubmit(d.queue, 1, &cmd);
+                wgpuCommandBufferRelease(cmd);
+                wgpuCommandEncoderRelease(encoder);
+                wgpuDevicePoll(d.device, true, nullptr);
+                *outMs = std::chrono::duration<double, std::milli>(Clock::now() - tSplitStamp).count();
+                tSplitStamp = Clock::now();
+                encoder = wgpuDeviceCreateCommandEncoder(d.device, &encDesc);
+            };
+
             // VT + BVH refit only on first sample (geometry doesn't change between samples)
             if (sampleIdx == 0 && anyMeshMoved) {
                 passDesc.label = WGPUStringView{"vt_pass", WGPU_STRLEN};
@@ -2869,12 +2919,20 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             wgpuComputePassEncoderEnd(primaryPass);
             wgpuComputePassEncoderRelease(primaryPass);
 
+            // Timing split — end of "geom" stage (vt + refit + counters + primary BVH).
+            double tGeomMs = 0.0;
+            splitAndMeasure("pt_cmd_geom", &tGeomMs);
+
             // Kernel split — step 2: primaryShade + NEE + ReSTIR DI + serialize → pathStateBuf.
             passDesc.label = WGPUStringView{"rt_pass", WGPU_STRLEN};
             WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
             activePipeline.encode(pass, tileDispX, tileDispY);
             wgpuComputePassEncoderEnd(pass);
             wgpuComputePassEncoderRelease(pass);
+
+            // Timing split — end of "shade" stage (rt_main: primaryShade + ReSTIR DI).
+            double tShadeMs = 0.0;
+            splitAndMeasure("pt_cmd_shade", &tShadeMs);
 
             // Kernel split — step 2.5 (F1): compact non-skipAccum pixels into aliveQueue.
             // Also counts per-material buckets for F2c sort.
@@ -2899,33 +2957,130 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             wgpuComputePassEncoderEnd(sortScatterPass);
             wgpuComputePassEncoderRelease(sortScatterPass);
 
+            // Timing split — end of "compact+sort" stage.  No-op when timings off.
+            double tCompSortMs = 0.0;
+            splitAndMeasure("pt_cmd_compact_sort", &tCompSortMs);
+
             passDesc.label = WGPUStringView{"rt_bounce1_pass", WGPU_STRLEN};
             WGPUComputePassEncoder bounce1Pass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
             d.bounce1Pipeline.encode(bounce1Pass, rtWorkgroups, 1u);
             wgpuComputePassEncoderEnd(bounce1Pass);
             wgpuComputePassEncoderRelease(bounce1Pass);
 
-            // Kernel split — step 3 (F2b): runBounces (i=2..N) on bounce1-survivors (alive1Queue).
-            passDesc.label = WGPUStringView{"rt_bounces_pass", WGPU_STRLEN};
-            WGPUComputePassEncoder bouncesPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
-            d.bouncesPipeline.encode(bouncesPass, rtWorkgroups, 1u);
-            wgpuComputePassEncoderEnd(bouncesPass);
-            wgpuComputePassEncoderRelease(bouncesPass);
-
-            // Kernel split — step 4 (F2b): accumulation over aliveQueue (all non-skipAccum pixels).
-            passDesc.label = WGPUStringView{"rt_accum_pass", WGPU_STRLEN};
-            WGPUComputePassEncoder accumPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
-            d.accumPipeline.encode(accumPass, rtWorkgroups, 1u);
-            wgpuComputePassEncoderEnd(accumPass);
-            wgpuComputePassEncoderRelease(accumPass);
-
             WGPUCommandBufferDescriptor cmdDesc{};
-            cmdDesc.label = WGPUStringView{"pt_cmd", WGPU_STRLEN};
-            WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
-            wgpuQueueSubmit(d.queue, 1, &cmd);
 
-            wgpuCommandBufferRelease(cmd);
-            wgpuCommandEncoderRelease(encoder);
+            // Timing scaffolding (only used when d.timingsEnabled_).  Measured
+            // against tSplitStamp — the lambda resets it to now() after each poll.
+            double tBounce1Ms = 0.0, tBouncesMs = 0.0, tPostMs = 0.0;
+
+            if (!d.timingsEnabled_) {
+                // Kernel split — step 3 (F2b): runBounces (i=2..N) on bounce1-survivors (alive1Queue).
+                passDesc.label = WGPUStringView{"rt_bounces_pass", WGPU_STRLEN};
+                WGPUComputePassEncoder bouncesPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
+                d.bouncesPipeline.encode(bouncesPass, rtWorkgroups, 1u);
+                wgpuComputePassEncoderEnd(bouncesPass);
+                wgpuComputePassEncoderRelease(bouncesPass);
+
+                // Kernel split — step 4 (F2b): accumulation over aliveQueue (all non-skipAccum pixels).
+                passDesc.label = WGPUStringView{"rt_accum_pass", WGPU_STRLEN};
+                WGPUComputePassEncoder accumPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
+                d.accumPipeline.encode(accumPass, rtWorkgroups, 1u);
+                wgpuComputePassEncoderEnd(accumPass);
+                wgpuComputePassEncoderRelease(accumPass);
+
+                cmdDesc.label = WGPUStringView{"pt_cmd", WGPU_STRLEN};
+                WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+                wgpuQueueSubmit(d.queue, 1, &cmd);
+                wgpuCommandBufferRelease(cmd);
+                wgpuCommandEncoderRelease(encoder);
+            } else {
+                // Timings-split path: separate submits for bounce1 / bounces / post
+                // so we can wgpuDevicePoll between them and measure each stage.
+
+                // Finalize bounce1 cmd buffer.  At this point the encoder contains
+                // compact+sort+bounce1 (geom and shade already submitted via
+                // splitAndMeasure).
+                splitAndMeasure("pt_cmd_bounce1", &tBounce1Ms);
+                // splitAndMeasure created a fresh (empty) encoder we won't use.
+                // Release it to avoid leaking.
+                wgpuCommandEncoderRelease(encoder);
+                encoder = nullptr;
+
+                // Bounces sub-dispatch as its own command buffer.
+                {
+                    WGPUCommandEncoder bEnc = wgpuDeviceCreateCommandEncoder(d.device, &encDesc);
+                    passDesc.label = WGPUStringView{"rt_bounces_pass", WGPU_STRLEN};
+                    WGPUComputePassEncoder bp = wgpuCommandEncoderBeginComputePass(bEnc, &passDesc);
+                    d.bouncesPipeline.encode(bp, rtWorkgroups, 1u);
+                    wgpuComputePassEncoderEnd(bp);
+                    wgpuComputePassEncoderRelease(bp);
+                    cmdDesc.label = WGPUStringView{"pt_cmd_bounce", WGPU_STRLEN};
+                    WGPUCommandBuffer bCmd = wgpuCommandEncoderFinish(bEnc, &cmdDesc);
+                    wgpuQueueSubmit(d.queue, 1, &bCmd);
+                    wgpuCommandBufferRelease(bCmd);
+                    wgpuCommandEncoderRelease(bEnc);
+                }
+                wgpuDevicePoll(d.device, true, nullptr);
+                tBouncesMs = std::chrono::duration<double, std::milli>(Clock::now() - tSplitStamp).count();
+                tSplitStamp = Clock::now();
+
+                // Final cmd buffer: accum pass.
+                WGPUCommandEncoder postEnc = wgpuDeviceCreateCommandEncoder(d.device, &encDesc);
+                passDesc.label = WGPUStringView{"rt_accum_pass", WGPU_STRLEN};
+                WGPUComputePassEncoder accumPass = wgpuCommandEncoderBeginComputePass(postEnc, &passDesc);
+                d.accumPipeline.encode(accumPass, rtWorkgroups, 1u);
+                wgpuComputePassEncoderEnd(accumPass);
+                wgpuComputePassEncoderRelease(accumPass);
+                cmdDesc.label = WGPUStringView{"pt_cmd_post", WGPU_STRLEN};
+                WGPUCommandBuffer postCmd = wgpuCommandEncoderFinish(postEnc, &cmdDesc);
+                wgpuQueueSubmit(d.queue, 1, &postCmd);
+                wgpuCommandBufferRelease(postCmd);
+                wgpuCommandEncoderRelease(postEnc);
+                wgpuDevicePoll(d.device, true, nullptr);
+                tPostMs = std::chrono::duration<double, std::milli>(Clock::now() - tSplitStamp).count();
+
+                const int slot = d.timSlot_;
+                d.timGeomMs_[slot]     = tGeomMs;
+                d.timShadeMs_[slot]    = tShadeMs;
+                d.timCompSortMs_[slot] = tCompSortMs;
+                d.timBounce1Ms_[slot]  = tBounce1Ms;
+                d.timBouncesMs_[slot]  = tBouncesMs;
+                d.timPostMs_[slot]     = tPostMs;
+                d.timTotalMs_[slot]    = tGeomMs + tShadeMs + tCompSortMs + tBounce1Ms + tBouncesMs + tPostMs;
+                d.timSlot_   = (slot + 1) % Impl::TIMINGS_WINDOW;
+                if (d.timFilled_ < Impl::TIMINGS_WINDOW) ++d.timFilled_;
+
+                // Print rolling summary every TIMINGS_WINDOW frames.
+                if (d.timSlot_ == 0 && d.timFilled_ == Impl::TIMINGS_WINDOW) {
+                    auto stats = [&](const double* buf) {
+                        double mn = buf[0], mx = buf[0], sum = 0.0;
+                        for (int i = 0; i < Impl::TIMINGS_WINDOW; ++i) {
+                            mn = std::min(mn, buf[i]);
+                            mx = std::max(mx, buf[i]);
+                            sum += buf[i];
+                        }
+                        return std::tuple<double, double, double>{mn, sum / Impl::TIMINGS_WINDOW, mx};
+                    };
+                    auto [geMn, geAv, geMx] = stats(d.timGeomMs_);
+                    auto [shMn, shAv, shMx] = stats(d.timShadeMs_);
+                    auto [csMn, csAv, csMx] = stats(d.timCompSortMs_);
+                    auto [b1Mn, b1Av, b1Mx] = stats(d.timBounce1Ms_);
+                    auto [bnMn, bnAv, bnMx] = stats(d.timBouncesMs_);
+                    auto [poMn, poAv, poMx] = stats(d.timPostMs_);
+                    auto [tMn,  tAv,  tMx ] = stats(d.timTotalMs_);
+                    std::cerr << "[PathTracer timings over " << Impl::TIMINGS_WINDOW << " frames]\n"
+                              << std::fixed << std::setprecision(2)
+                              << "  geom    : " << geMn << " / " << geAv << " / " << geMx << " ms (min/avg/max)  [vt+refit+primary BVH]\n"
+                              << "  shade   : " << shMn << " / " << shAv << " / " << shMx << " ms  [rt_main: primaryShade+ReSTIR DI]\n"
+                              << "  compSort: " << csMn << " / " << csAv << " / " << csMx << " ms  [rt_compact + rt_sort_prefix + rt_sort_scatter]\n"
+                              << "  bounce1 : " << b1Mn << " / " << b1Av << " / " << b1Mx << " ms  [rt_bounce1_main]\n"
+                              << "  bounces : " << bnMn << " / " << bnAv << " / " << bnMx << " ms  [rt_bounces_main]\n"
+                              << "  post    : " << poMn << " / " << poAv << " / " << poMx << " ms  [rt_accum_main]\n"
+                              << "  total   : " << tMn  << " / " << tAv  << " / " << tMx  << " ms"
+                              << " (" << (1000.0 / std::max(1e-3, tAv)) << " FPS equiv)"
+                              << std::endl;
+                }
+            }
         }
 
         // Swap all ping-pong buffers so next sample reads this sample's output
@@ -3392,6 +3547,16 @@ void WgpuPathTracer::setMaxBounces(int bounces) {
 
 int WgpuPathTracer::maxBounces() const {
     return pimpl_->maxBounces_;
+}
+
+void WgpuPathTracer::setTimingsEnabled(bool enabled) {
+    pimpl_->timingsEnabled_ = enabled;
+    pimpl_->timSlot_   = 0;
+    pimpl_->timFilled_ = 0;
+}
+
+bool WgpuPathTracer::timingsEnabled() const {
+    return pimpl_->timingsEnabled_;
 }
 
 void WgpuPathTracer::setExposure(float exposure) {

@@ -247,7 +247,6 @@ int main() {
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setReSTIREnabled(false);
     pathTracer.setMaxBounces(5);
-    pathTracer.setFireflyClamp(0);
 
     // ---- Scene ----
     Scene scene;
