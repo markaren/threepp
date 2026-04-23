@@ -1540,6 +1540,15 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         if (!isRtEligibleMaterial(m)) return;
         rtMeshes.push_back(&m);
     });
+    // Aggregate: does any rt mesh have transmissive material? Controls the
+    // shadow-ray fast path — when false, traceShadowRay uses pure any-hit BVH
+    // (early-exit, no material load) since no glass absorption can occur.
+    bool sceneHasTransmission = false;
+    for (auto* m : rtMeshes) {
+        auto* mat = m->material().get();
+        auto* mwt = dynamic_cast<MaterialWithTransmission*>(mat);
+        if (mwt && mwt->transmission > 0.f) { sceneHasTransmission = true; break; }
+    }
     // Build the set of meshes that are effectively visible (mesh.visible AND all
     // ancestors visible).  traverseVisible handles ancestor propagation for free.
     std::unordered_set<Mesh*> visibleMeshSet;
@@ -2639,7 +2648,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.restirParams[0] = d.restirEnabled_ ? 1.f : 0.f;
     u.restirParams[1] = camMoved ? 5.f : 20.f;  // M clamp — low during motion to flush stale reservoirs
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
-    u.restirParams[3] = 0.f;  // reserved
+    u.restirParams[3] = sceneHasTransmission ? 0.f : 1.f;  // 1 = shadow-ray any-hit fast path safe
     u.bvhAux[0] = static_cast<uint32_t>(d.bvhRootIdx_);  // traversal root (0=normal, >0=overlay)
     u.lens[0] = d.lens_.fStop;
     u.lens[1] = d.lens_.focusDistance;
