@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <threepp/animation/AnimationClip.hpp>
+#include <threepp/animation/MaterialAnimationProxy.hpp>
 #include <threepp/animation/tracks/NumberKeyframeTrack.hpp>
 #include <threepp/animation/tracks/QuaternionKeyframeTrack.hpp>
 #include <threepp/animation/tracks/VectorKeyframeTrack.hpp>
@@ -164,6 +165,10 @@ namespace threepp {
             std::unordered_map<int, std::shared_ptr<Object3D>> nodeObjects;
             std::unordered_map<int, std::shared_ptr<Skeleton>> skinCache;
             std::unordered_set<int> builtNodes;
+
+            // KHR_animation_pointer: one invisible proxy per animated material,
+            // attached to the scene root so the AnimationMixer can resolve it.
+            std::unordered_map<int, std::shared_ptr<MaterialAnimationProxy>> matAnimProxies;
 
             // KHR_materials_variants support
             std::vector<std::string> variantNames;
@@ -976,6 +981,9 @@ namespace threepp {
                 }
 
                 result.animations = loadAnimations();
+                for (auto& [_, proxy] : matAnimProxies) {
+                    if (proxy && result.scene) result.scene->add(proxy);
+                }
                 resolveVariants(result);
                 return result;
             }
@@ -1048,6 +1056,9 @@ namespace threepp {
                 }
 
                 result.animations = loadAnimations();
+                for (auto& [_, proxy] : matAnimProxies) {
+                    if (proxy && result.scene) result.scene->add(proxy);
+                }
                 resolveVariants(result);
                 return result;
             }
@@ -1080,7 +1091,15 @@ namespace threepp {
                         int nodeIdx = target.value("node", -1);
                         std::string path = target.value("path", "");
 
-                        if (nodeIdx < 0 || path.empty()) continue;
+                        // KHR_animation_pointer lives on target.extensions and
+                        // targets materials/cameras/etc. instead of a node.
+                        std::string ptr;
+                        if (path == "pointer" && target.contains("extensions") &&
+                            target["extensions"].contains("KHR_animation_pointer")) {
+                            ptr = target["extensions"]["KHR_animation_pointer"].value("pointer", "");
+                        }
+
+                        if (ptr.empty() && (nodeIdx < 0 || path.empty())) continue;
 
                         int samplerIdx = channel["sampler"].get<int>();
                         if (samplerIdx < 0 || samplerIdx >= static_cast<int>(samplers.size())) continue;
@@ -1126,6 +1145,50 @@ namespace threepp {
                         }
 
                         std::shared_ptr<KeyframeTrack> track;
+
+                        if (!ptr.empty()) {
+                            // Parse /materials/N/... pointers. Anything else
+                            // (cameras, lights, extensions on other types) is
+                            // unsupported and silently skipped.
+                            const std::string matPrefix = "/materials/";
+                            if (ptr.rfind(matPrefix, 0) != 0) continue;
+                            size_t slash = ptr.find('/', matPrefix.size());
+                            if (slash == std::string::npos) continue;
+                            int matIdx;
+                            try { matIdx = std::stoi(ptr.substr(matPrefix.size(), slash - matPrefix.size())); }
+                            catch (...) { continue; }
+                            std::string tail = ptr.substr(slash + 1);
+
+                            // Map glTF pointer tail -> our material property name + expected component count
+                            std::string propName;
+                            int expected = 0;
+                            if (tail == "pbrMetallicRoughness/baseColorFactor") { propName = "baseColorFactor"; expected = 4; }
+                            else if (tail == "pbrMetallicRoughness/metallicFactor")  { propName = "metalness"; expected = 1; }
+                            else if (tail == "pbrMetallicRoughness/roughnessFactor") { propName = "roughness"; expected = 1; }
+                            else if (tail == "emissiveFactor")                       { propName = "emissive"; expected = 3; }
+                            else if (tail == "alphaCutoff")                          { propName = "alphaTest"; expected = 1; }
+                            else continue;
+
+                            auto mat = loadMaterial(matIdx);
+                            if (!mat) continue;
+
+                            auto& proxy = matAnimProxies[matIdx];
+                            if (!proxy) {
+                                proxy = MaterialAnimationProxy::create(mat);
+                                proxy->name = "__matAnim_" + std::to_string(matIdx);
+                            }
+
+                            const std::string trackName = proxy->name + "." + propName;
+                            if (expected == 1) {
+                                track = std::make_shared<NumberKeyframeTrack>(trackName, times, values, interp);
+                            } else {
+                                // VectorKeyframeTrack handles any component size;
+                                // our material setter reads the expected count.
+                                track = std::make_shared<VectorKeyframeTrack>(trackName, times, values, interp);
+                            }
+                            if (track) tracks.push_back(track);
+                            continue;
+                        }
 
                         if (path == "translation") {
                             track = std::make_shared<VectorKeyframeTrack>(

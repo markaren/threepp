@@ -14,6 +14,10 @@ namespace threepp {
     class Texture;
 }
 
+namespace threepp {
+    class Material;
+}
+
 namespace threepp::wgpu_pt {
 
     struct RtMeshEntry;
@@ -70,6 +74,18 @@ namespace threepp::wgpu_pt {
             int meshIdx,
             float* dstObjTri,
             int maxTris);
+
+    /// Write the 19 matBuffer rows for a single material at column `matIdx`.
+    /// Used both during the initial geometry build and by the fast per-frame
+    /// material-only update path (KHR_animation_pointer / direct material
+    /// mutation) — when only material data changed, the caller can patch
+    /// these rows without rebuilding triangles or BVH.
+    void writeMaterialRows(
+            std::vector<float>& matBuffer,
+            int maxMats,
+            int matIdx,
+            Material* mat,
+            const std::unordered_map<Texture*, int>& texSlotMap);
 
 }// namespace threepp::wgpu_pt
 

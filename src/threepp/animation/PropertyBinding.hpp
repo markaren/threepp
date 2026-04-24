@@ -119,6 +119,11 @@ namespace threepp {
             that->targetObject->matrixWorldNeedsUpdate = true;
         }
 
+        // Material property setters/getters (for glTF KHR_animation_pointer).
+        // Defined in PropertyBinding.cpp; targetObject must be a MaterialAnimationProxy.
+        static void _setValue_material(PropertyBinding* that, const std::vector<float>& buffer, size_t offset);
+        static void _getValue_material(PropertyBinding* that, std::vector<float>& buffer, size_t offset);
+
         void bind();
 
         void unbind();

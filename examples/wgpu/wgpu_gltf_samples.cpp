@@ -190,7 +190,7 @@ int main(int argc, char** argv) {
     };
 
     // Load first model
-    loadModel(0);
+    loadModel(2);
 
     // ---- UI ----
     bool raster = false;

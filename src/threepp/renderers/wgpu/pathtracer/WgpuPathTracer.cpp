@@ -423,6 +423,14 @@ struct WgpuPathTracer::Impl {
     // Frame state
     std::unordered_map<Texture*, int> texSlotMap;
     std::vector<Mesh*> prevMeshes;
+    // Cached material->version at time of last matBuffer build. A bump means
+    // CPU-side edits (e.g. glTF KHR_animation_pointer setters) have mutated a
+    // property the shader reads — patch matBuffer rows in-place via matToIdx_.
+    std::unordered_map<Material*, unsigned int> matVersions_;
+    // Material* → matIdx (column in matBuffer / matTex) for the in-place fast
+    // path. Populated after each topology build and consulted when versions
+    // bump; if a mat is missing (brand-new mesh) we fall back to topology rebuild.
+    std::unordered_map<Material*, int> matToIdx_;
     int prevEntryCount_ = 0;
     std::vector<Matrix4> prevEntryMatrices;
     int triCount_ = 0;
@@ -1707,6 +1715,51 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         auto* mwt = dynamic_cast<MaterialWithTransmission*>(mat);
         if (mwt && mwt->transmission > 0.f) { sceneHasTransmission = true; break; }
     }
+
+    // Material-version dirty scan: CPU-side edits (glTF KHR_animation_pointer,
+    // direct user mutation) bump Material::version_. matBuffer is only written
+    // by buildGeometryBuffers, so a version bump has to force a rebuild by
+    // clearing prevMeshes — the topology-change branch below will pick it up.
+    {
+        std::vector<Material*> changedMats;
+        std::unordered_set<Material*> seen;
+        for (auto* m : rtMeshes) {
+            auto* mat = m->material().get();
+            if (!mat || !seen.insert(mat).second) continue;
+            auto it = d.matVersions_.find(mat);
+            if (it == d.matVersions_.end()) {
+                d.matVersions_[mat] = mat->version();
+            } else if (it->second != mat->version()) {
+                it->second = mat->version();
+                changedMats.push_back(mat);
+            }
+        }
+        if (!changedMats.empty()) {
+            // Fast path: patch matBuffer rows in place + reupload matTex.
+            // KHR_animation_pointer / direct material edits change a few floats
+            // in matBuffer; rebuilding triangles + BVH for that is wasteful.
+            // If a changed mat isn't in matToIdx_ (e.g. brand-new mesh whose
+            // build hasn't run yet) fall back to the topology rebuild.
+            bool allKnown = true;
+            for (auto* mat : changedMats) {
+                auto it = d.matToIdx_.find(mat);
+                if (it == d.matToIdx_.end()) { allKnown = false; break; }
+                wgpu_pt::writeMaterialRows(d.matBuffer, d.matCapacity_,
+                                           it->second, mat, d.texSlotMap);
+            }
+            if (allKnown && !d.matBuffer.empty()) {
+                // Patch matTex in place. Deliberately do NOT reset frameCount_:
+                // a global reset would throw away accumulation for every static
+                // mesh in the scene and make them shimmer just because some
+                // unrelated material is animating. Temporal accumulation will
+                // gradually track the new color — small lag, no shimmer.
+                d.matTex.write(d.matBuffer.data(), d.matBuffer.size() * sizeof(float));
+            } else {
+                d.prevMeshes.clear();
+                d.prevEntryCount_ = 0;
+            }
+        }
+    }
     // Build the set of meshes that are effectively visible (mesh.visible AND all
     // ancestors visible).  traverseVisible handles ancestor propagation for free.
     std::unordered_set<Mesh*> visibleMeshSet;
@@ -2250,6 +2303,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         // missing attributes) get a no-op cache entry.
         d.entryGeoCache.clear();
         d.entryGeoCache.reserve(r.entries.size());
+        d.matToIdx_.clear();
         for (std::size_t eIdx = 0; eIdx < r.entries.size(); ++eIdx) {
             const auto& entry = r.entries[eIdx];
             Impl::EntryGeoCache cache;
@@ -2284,6 +2338,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                     const float* t = d.rawObjTriBuf.data() + static_cast<size_t>(postIdx) * 32;
                     cache.matIdx  = static_cast<int>(t[3]);
                     cache.meshIdx = static_cast<int>(t[7]);
+                    if (entry.mesh) {
+                        if (auto* mat = entry.mesh->material().get()) {
+                            d.matToIdx_.emplace(mat, cache.matIdx);
+                        }
+                    }
                 }
             }
             d.entryGeoCache.push_back(cache);
@@ -4354,6 +4413,7 @@ int WgpuPathTracer::textureResolution() const {
 void WgpuPathTracer::markDirty() {
     pimpl_->prevMeshes.clear();
     pimpl_->prevEntryCount_ = 0;
+    pimpl_->matVersions_.clear();
 }
 
 void WgpuPathTracer::setLens(const LensSettings& lens) {
