@@ -144,6 +144,7 @@ struct WgpuPathTracer::Impl {
     int spp_ = 1;
     float envIntensity_ = 0.5f;
     float emissiveIntensity_ = 1.0f;  // Scene-wide multiplier applied to all emissive materials.
+    float fogAnisotropy_ = 0.0f;      // HG g: 0 isotropic, >0 forward (god rays), <0 back.
     int maxBounces_ = 4;
     // Timings diagnostic (opt-in).  CPU-side wall-clock measurement of the
     // full pt frame, plus a pre/bounces/post split when enabled.  Uses
@@ -3299,7 +3300,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             u.fog[0] = sigma; u.fog[1] = sigma; u.fog[2] = sigma;
             u.fog[3] = 1.f;  // enabled flag
             u.fogColor[0] = tint.r; u.fogColor[1] = tint.g; u.fogColor[2] = tint.b;
-            u.fogColor[3] = 0.f;  // g (HG asymmetry, unused in v1)
+            u.fogColor[3] = d.fogAnisotropy_;  // HG g for single-scattering phase
         }
     }
 
@@ -4169,6 +4170,18 @@ void WgpuPathTracer::setEmissiveIntensity(float intensity) {
 
 float WgpuPathTracer::emissiveIntensity() const {
     return pimpl_->emissiveIntensity_;
+}
+
+void WgpuPathTracer::setFogAnisotropy(float g) {
+    g = std::max(-0.95f, std::min(g, 0.95f));
+    if (g != pimpl_->fogAnisotropy_) {
+        pimpl_->fogAnisotropy_ = g;
+        pimpl_->frameCount_ = 0.f;
+    }
+}
+
+float WgpuPathTracer::fogAnisotropy() const {
+    return pimpl_->fogAnisotropy_;
 }
 
 void WgpuPathTracer::setMaxBounces(int bounces) {

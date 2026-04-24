@@ -48,6 +48,14 @@ namespace threepp {
         void setEmissiveIntensity(float intensity);
         [[nodiscard]] float emissiveIntensity() const;
 
+        /// Henyey-Greenstein anisotropy for volumetric fog single-scattering.
+        /// Range: [-0.95, 0.95]. 0 = isotropic (uniform glow), >0 = forward
+        /// scattering (god rays / light shafts when looking toward lights),
+        /// <0 = backward scattering. Default: 0. Only affects rendering when
+        /// Scene::fog is set (FogExp2 or Fog).
+        void setFogAnisotropy(float g);
+        [[nodiscard]] float fogAnisotropy() const;
+
         /// Maximum number of bounces for path tracing. Default: 8.
         /// Higher values improve light transport accuracy at the cost of performance.
         void setMaxBounces(int bounces);

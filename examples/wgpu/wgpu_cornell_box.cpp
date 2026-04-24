@@ -184,6 +184,7 @@ int main() {
     bool fogOn = false;
     float fogDensity = 0.08f;
     float fogColor[3] = {0.5f, 0.5f, 0.6f};
+    float fogG = 0.0f;  // HG anisotropy: >0 forward ("god rays"), <0 back
     float fps = 0.f;
     float fpsAccum = 0.f;
     int fpsFrames = 0;
@@ -231,6 +232,7 @@ int main() {
             if (fogOn) {
                 ImGui::SliderFloat("Fog density", &fogDensity, 0.001f, 0.5f, "%.3f", ImGuiSliderFlags_Logarithmic);
                 ImGui::ColorEdit3("Fog color", fogColor);
+                ImGui::SliderFloat("Fog anisotropy g", &fogG, -0.9f, 0.9f, "%.2f");
             }
         }
 
@@ -278,6 +280,7 @@ int main() {
 
         if (fogOn) {
             scene.fog = FogExp2(Color(fogColor[0], fogColor[1], fogColor[2]), fogDensity);
+            pathTracer.setFogAnisotropy(fogG);
         } else {
             scene.fog.reset();
         }

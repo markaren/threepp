@@ -1509,7 +1509,11 @@ fn traceShadowRay(origin: vec3<f32>, normal: vec3<f32>, dir: vec3<f32>,
     // Volumetric attenuation across the full shadow-ray path (Beer-Lambert).
     // The ray travels `maxDist` to reach the light; fog dims the light source
     // along the way. Short-circuited in the hit case above (atten already 0).
-    if (fogEnabled()) { atten *= fogTransmittance(maxDist); }
+    // Directional lights and env NEE use maxDist=1e30 as an "infinite-ray"
+    // sentinel — treat those sources as sitting beyond the fog volume (sun
+    // through atmosphere), otherwise fogTransmittance clamps to 1e6 and the
+    // exponent zeros out atten, killing god rays from distant lights.
+    if (fogEnabled() && maxDist < 1e20) { atten *= fogTransmittance(maxDist); }
     return atten;
 }
 
@@ -1642,68 +1646,6 @@ fn sampleEmissiveTriCdf(seed: ptr<function, u32>, totalPower: f32, emTriCount: i
     es.area   = emInfo.y;
     es.power  = emInfo.w;
     return es;
-}
-)"
-R"(
-
-// Single-scattering fog inscatter: samples a scatter point along the primary
-// ray (truncated free-flight) and does NEE to emissive triangles + analytical
-// lights so the volume lights up near real sources instead of showing a flat
-// ambient tint. Isotropic phase (1/4π); shadow rays pick up fog attenuation
-// via traceShadowRay so the light-up softens with distance automatically.
-fn volumeInscatter(rayOrigin: vec3<f32>, rayDir: vec3<f32>, maxT: f32,
-                   seed: ptr<function, u32>) -> vec3<f32> {
-    let sigmaT = rt.fog.x;
-    if (sigmaT <= 0.0) { return vec3<f32>(0.0); }
-    let tMax = min(maxT, 1e5);
-    let T_max = exp(-sigmaT * tMax);
-    let p1 = 1.0 - T_max;
-    if (p1 < 1e-4) { return vec3<f32>(0.0); }
-
-    // Truncated free-flight: sample t in [0, tMax] with p(t) = σ_t·e^(-σ_t·t)/p1.
-    let xi = rand(seed);
-    let tScatter = -log(max(1.0 - xi * p1, 1e-30)) / sigmaT;
-    let x = rayOrigin + rayDir * tScatter;
-
-    // Estimator factor: σ_s·T(t)/p(t) = (σ_s/σ_t)·(1 − T_max).
-    // rt.fogColor.xyz acts as the single-scattering albedo σ_s/σ_t.
-    let scatterFactor = rt.fogColor.xyz * p1;
-    let phase = 0.25 / PI;
-
-    var inscatter = vec3<f32>(0.0);
-
-    // --- NEE to emissive triangles (area-lit volumes like Cornell's panel) ---
-    let emTriCount = i32(rt.emissiveInfo.x);
-    let totalPower = rt.emissiveInfo.y;
-    if (emTriCount > 0 && totalPower > 0.0) {
-        let es = sampleEmissiveTriCdf(seed, totalPower, emTriCount);
-        let toL  = es.point - x;
-        let dist = max(length(toL), 1e-4);
-        let dir  = toL / dist;
-        let cosLight = max(0.0, dot(-dir, es.normal));
-        if (cosLight > 1e-4) {
-            let atten   = traceShadowRay(x, vec3<f32>(0.0), dir, dist - 1e-2, 4);
-            let pLight  = es.power / max(totalPower, 1e-6);
-            let pdfArea = pLight / max(es.area, 1e-6);
-            let pdfOmega = pdfArea * dist * dist / cosLight;
-            let matIdx   = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
-            let emission = textureLoad(matData, vec2<i32>(matIdx, 2), 0).xyz;
-            if (pdfOmega > 1e-10) {
-                inscatter += phase * emission * atten / pdfOmega;
-            }
-        }
-    }
-
-    // --- NEE to analytical lights (point/dir/spot) ---
-    let lcount = i32(rt.lightCount.x);
-    for (var li = 0; li < lcount; li++) {
-        let le = evalAnalyticalLight(li, x);
-        let shadowDist = select(le.dist - 1e-2, 1e30, le.dist >= 1e29);
-        let atten = traceShadowRay(x, vec3<f32>(0.0), le.dir, shadowDist, 4);
-        inscatter += phase * le.color * atten;
-    }
-
-    return inscatter * scatterFactor;
 }
 )";
 
@@ -1974,6 +1916,112 @@ fn envImportancePdf(d: vec3<f32>) -> f32 {
     let lum = 0.2126 * envCol.r + 0.7152 * envCol.g + 0.0722 * envCol.b + 1e-10;
     let totalSum = rt.envIntensity.w;
     return lum * f32(envW * envH) / (2.0 * PI * PI * max(totalSum, 1e-10));
+}
+
+// Henyey-Greenstein phase. g∈(-1,1): 0 isotropic, >0 forward (god rays), <0 back.
+fn phaseHG(cosTh: f32, g: f32) -> f32 {
+    let g2 = g * g;
+    let denom = 1.0 + g2 - 2.0 * g * cosTh;
+    return (1.0 - g2) / (4.0 * PI * max(denom * sqrt(max(denom, 1e-6)), 1e-6));
+}
+
+// Single-scattering fog inscatter: samples a scatter point along the primary
+// ray (truncated free-flight) and does NEE to emissive triangles, analytical
+// lights, and the env map so the volume lights up near real sources instead of
+// showing a flat ambient tint. Henyey-Greenstein phase (g=fogColor.w) gives
+// forward-scattering "god rays"; shadow rays pick up fog attenuation via
+// traceShadowRay so the light-up softens with distance automatically.
+fn volumeInscatter(rayOrigin: vec3<f32>, rayDir: vec3<f32>, maxT: f32,
+                   seed: ptr<function, u32>) -> vec3<f32> {
+    let sigmaT = rt.fog.x;
+    if (sigmaT <= 0.0) { return vec3<f32>(0.0); }
+    let tMax = min(maxT, 1e5);
+    let T_max = exp(-sigmaT * tMax);
+    let p1 = 1.0 - T_max;
+    if (p1 < 1e-4) { return vec3<f32>(0.0); }
+
+    // Estimator factor: σ_s·T(t)/p(t) = (σ_s/σ_t)·(1 − T_max).
+    // rt.fogColor.xyz acts as the single-scattering albedo σ_s/σ_t.
+    let scatterFactor = rt.fogColor.xyz * p1;
+    let g = clamp(rt.fogColor.w, -0.95, 0.95);
+
+    // N stratified depth samples per pixel. Beams come from spatial occlusion
+    // variation in the volume — stratifying t exposes lit/shadowed segments of
+    // the camera ray in a single frame, so "god rays" resolve 4× faster than
+    // with one independent sample per frame. Each stratum casts its own shadow
+    // rays since occlusion varies with scatter position.
+    const N: u32 = 4u;
+    var inscatter = vec3<f32>(0.0);
+    let envMode    = i32(rt.envColor.w);
+    let envI       = rt.envIntensity.x;
+    let lcount     = i32(rt.lightCount.x);
+    let emTriCount = i32(rt.emissiveInfo.x);
+    let totalPower = rt.emissiveInfo.y;
+
+    for (var i = 0u; i < N; i++) {
+        // Truncated free-flight, stratified: ξ ∈ [i/N, (i+1)/N).
+        // p(t) = σ_t·e^(-σ_t·t)/p1 over [0, tMax]; inverse CDF gives t.
+        let xi = (f32(i) + rand(seed)) / f32(N);
+        let tScatter = -log(max(1.0 - xi * p1, 1e-30)) / sigmaT;
+        let x = rayOrigin + rayDir * tScatter;
+
+        // --- NEE to emissive triangles ---
+        if (emTriCount > 0 && totalPower > 0.0) {
+            let es = sampleEmissiveTriCdf(seed, totalPower, emTriCount);
+            let toL  = es.point - x;
+            let dist = max(length(toL), 1e-4);
+            let dir  = toL / dist;
+            let cosLight = max(0.0, dot(-dir, es.normal));
+            if (cosLight > 1e-4) {
+                let atten   = traceShadowRay(x, vec3<f32>(0.0), dir, dist - 1e-2, 4);
+                let pLight  = es.power / max(totalPower, 1e-6);
+                let pdfArea = pLight / max(es.area, 1e-6);
+                let pdfOmega = pdfArea * dist * dist / cosLight;
+                let matIdx   = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
+                let emission = textureLoad(matData, vec2<i32>(matIdx, 2), 0).xyz;
+                let phE = phaseHG(dot(rayDir, dir), g);
+                if (pdfOmega > 1e-10) {
+                    inscatter += phE * emission * atten / pdfOmega;
+                }
+            }
+        }
+
+        // --- NEE to analytical lights (point/dir/spot) ---
+        for (var li = 0; li < lcount; li++) {
+            let le = evalAnalyticalLight(li, x);
+            let shadowDist = select(le.dist - 1e-2, 1e30, le.dist >= 1e29);
+            let atten = traceShadowRay(x, vec3<f32>(0.0), le.dir, shadowDist, 4);
+            let phA = phaseHG(dot(rayDir, le.dir), g);
+            inscatter += phA * le.color * atten;
+        }
+
+        // --- NEE to environment (sky) ---
+        if (envMode == 2 && envI > 0.0 && HAS_ENV_CDF) {
+            let es = sampleEnvImportance(seed);
+            let dirE = es.xyz;
+            let pdfE = es.w;
+            if (pdfE > 1e-10) {
+                let atten = traceShadowRay(x, vec3<f32>(0.0), dirE, 1e30, 4);
+                let Le = sampleEnv(dirE) * envI;
+                let phV = phaseHG(dot(rayDir, dirE), g);
+                inscatter += phV * Le * atten / pdfE;
+            }
+        } else if (envMode == 1 && envI > 0.0) {
+            let u1 = rand(seed);
+            let u2 = rand(seed);
+            let z  = 1.0 - 2.0 * u1;
+            let r  = sqrt(max(0.0, 1.0 - z * z));
+            let ph = 6.2831853 * u2;
+            let dirE = vec3<f32>(r * cos(ph), r * sin(ph), z);
+            let pdfE = 1.0 / (4.0 * PI);
+            let atten = traceShadowRay(x, vec3<f32>(0.0), dirE, 1e30, 4);
+            let Le = rt.envColor.xyz * envI;
+            let phV = phaseHG(dot(rayDir, dirE), g);
+            inscatter += phV * Le * atten / pdfE;
+        }
+    }
+
+    return inscatter * scatterFactor / f32(N);
 }
 
 // Per-contribution firefly clamp for injection-time MIS spikes.

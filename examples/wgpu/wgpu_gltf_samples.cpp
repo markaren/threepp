@@ -213,6 +213,17 @@ int main(int argc, char** argv) {
     float  lensRotation  = 0.0f;
     bool   autofocus     = false;
 
+    // Volumetric fog (single-scattering path tracer).
+    bool  fogOn       = false;
+    float fogDensity  = 0.05f;                   // moderate; let beams show through
+    float fogColor[3] = {0.90f, 0.92f, 1.00f};
+    float fogG        = 0.75f;                   // strong forward -> god rays
+    // Remember user's denoiser preference so we can flip it on with fog
+    // (single-sample volume NEE is noisy) and restore afterwards.
+    bool  fogSavedDenoiser = denoiserOn;
+    bool  fogSavedDirLight = dirLight;
+    bool  fogPrevOn        = false;
+
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::T) {
             raster = !raster;
@@ -279,6 +290,17 @@ int main(int argc, char** argv) {
             const char* aovItems[] = { "Off", "Depth", "Normals", "Albedo", "Instance ID", "Roughness", "Adaptive Bounce" };
             if (ImGui::Combo("AOV", &aovMode, aovItems, IM_ARRAYSIZE(aovItems)))
                 pathTracer.setAOVMode(aovMode);
+
+            ImGui::Separator();
+            if (ImGui::CollapsingHeader("Volumetric Fog", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox("Enable Fog", &fogOn);
+                if (fogOn) {
+                    ImGui::SliderFloat("Density", &fogDensity, 0.01f, 2.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
+                    ImGui::ColorEdit3("Color", fogColor);
+                    ImGui::SliderFloat("Anisotropy g", &fogG, -0.9f, 0.9f, "%.2f");
+                    ImGui::TextWrapped("DirLight auto-enabled for god rays. g>0 points beams toward the sun.");
+                }
+            }
 
             ImGui::Separator();
             if (ImGui::CollapsingHeader("Lens / DOF")) {
@@ -384,6 +406,30 @@ int main(int argc, char** argv) {
                 lensFocusDist = targetDist;
                 pathTracer.setLens({lensFStop, lensFocusDist, lensBlades, lensRotation});
             }
+        }
+
+        if (fogOn != fogPrevOn) {
+            if (fogOn) {
+                // Enabling fog: stash user's current denoiser/dirLight, force
+                // both on for a clear showcase (single-sample NEE is noisy).
+                fogSavedDenoiser = denoiserOn;
+                fogSavedDirLight = dirLight;
+                if (!denoiserOn) { denoiserOn = true; pathTracer.setDenoiserEnabled(true); }
+                if (!dirLight)   { dirLight = true;  light->visible = true; }
+            } else {
+                // Disabling fog: restore the saved state.
+                if (denoiserOn != fogSavedDenoiser) { denoiserOn = fogSavedDenoiser; pathTracer.setDenoiserEnabled(denoiserOn); }
+                dirLight = fogSavedDirLight;
+                light->visible = dirLight || raster;
+            }
+            fogPrevOn = fogOn;
+        }
+
+        if (fogOn) {
+            scene.fog = FogExp2(Color(fogColor[0], fogColor[1], fogColor[2]), fogDensity);
+            pathTracer.setFogAnisotropy(fogG);
+        } else {
+            scene.fog.reset();
         }
 
         if (raster) {
