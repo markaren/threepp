@@ -3274,6 +3274,35 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.lens[2] = static_cast<float>(d.lens_.apertureBlades);
     u.lens[3] = d.lens_.apertureRotation;
 
+    // --- Fog / volumetrics ---
+    // Homogeneous participating media: per-ray Beer-Lambert transmittance on
+    // primary rays + shadow rays, plus a simple inscattering term at the
+    // primary's hit distance. FogExp2.density maps directly to sigma_t (1/unit).
+    // Linear Fog near/far is converted to an equivalent density so the fog
+    // reaches ~63% extinction at farPlane.
+    u.fog[0] = 0.f; u.fog[1] = 0.f; u.fog[2] = 0.f; u.fog[3] = 0.f;  // disabled
+    u.fogColor[0] = 0.f; u.fogColor[1] = 0.f; u.fogColor[2] = 0.f; u.fogColor[3] = 0.f;
+    if (auto* sc = dynamic_cast<Scene*>(&scene); sc && sc->fog.has_value()) {
+        float sigma = 0.f;
+        Color tint{1.f, 1.f, 1.f};
+        if (std::holds_alternative<FogExp2>(*sc->fog)) {
+            const auto& f = std::get<FogExp2>(*sc->fog);
+            sigma = f.density;
+            tint  = f.color;
+        } else if (std::holds_alternative<Fog>(*sc->fog)) {
+            const auto& f = std::get<Fog>(*sc->fog);
+            const float span = std::max(1e-4f, f.farPlane - f.nearPlane);
+            sigma = 1.f / span;
+            tint  = f.color;
+        }
+        if (sigma > 0.f) {
+            u.fog[0] = sigma; u.fog[1] = sigma; u.fog[2] = sigma;
+            u.fog[3] = 1.f;  // enabled flag
+            u.fogColor[0] = tint.r; u.fogColor[1] = tint.g; u.fogColor[2] = tint.b;
+            u.fogColor[3] = 0.f;  // g (HG asymmetry, unused in v1)
+        }
+    }
+
     int nLights = 0;
     auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
         if (nLights >= 4) return;

@@ -83,8 +83,10 @@ namespace threepp::wgpu_pt {
         float    restirParams[4];   // x = enabled, y = M_clamp, z = emissiveMoved, w = scene-wide emissive intensity multiplier
         std::uint32_t bvhAux[4];    // [0] = bvhRootIdx (0 = normal root, >0 = overlay combined root)
         float lens[4];              // [0]=fStop (0=pinhole), [1]=focusDistance, [2]=blades, [3]=apertureRotation
+        float fog[4];               // xyz = sigma_t (per-channel extinction per unit length); w = enabled (1=on, 0=off)
+        float fogColor[4];          // xyz = inscatter tint (sRGB-linear); w = g (HG asymmetry, reserved)
     };
-    static_assert(sizeof(RtGpuUniforms) == 640, "RtGpuUniforms must be 640 bytes");
+    static_assert(sizeof(RtGpuUniforms) == 672, "RtGpuUniforms must be 672 bytes");
 
     struct alignas(16) VtGpuUniforms {
         std::uint32_t triCount, groupsX, splitAt, _p1;

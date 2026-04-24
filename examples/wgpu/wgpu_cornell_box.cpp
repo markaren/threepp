@@ -181,6 +181,9 @@ int main() {
     bool wobbleOn = false;
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
+    bool fogOn = false;
+    float fogDensity = 0.08f;
+    float fogColor[3] = {0.5f, 0.5f, 0.6f};
     float fps = 0.f;
     float fpsAccum = 0.f;
     int fpsFrames = 0;
@@ -223,6 +226,12 @@ int main() {
             ImGui::Checkbox("Wobble back wall", &wobbleOn);
             if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8))
                 pathTracer.setMaxBounces(maxBounces);
+            ImGui::Separator();
+            ImGui::Checkbox("Fog", &fogOn);
+            if (fogOn) {
+                ImGui::SliderFloat("Fog density", &fogDensity, 0.001f, 0.5f, "%.3f", ImGuiSliderFlags_Logarithmic);
+                ImGui::ColorEdit3("Fog color", fogColor);
+            }
         }
 
         ImGui::End();
@@ -266,6 +275,12 @@ int main() {
         }
 
         controls.update();
+
+        if (fogOn) {
+            scene.fog = FogExp2(Color(fogColor[0], fogColor[1], fogColor[2]), fogDensity);
+        } else {
+            scene.fog.reset();
+        }
 
         if (!raster) {
             pathTracer.render(scene, camera);

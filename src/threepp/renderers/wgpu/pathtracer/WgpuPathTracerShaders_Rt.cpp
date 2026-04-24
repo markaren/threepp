@@ -45,6 +45,8 @@ struct RtUniforms {
     restirParams:  vec4<f32>,  // x = enabled, y = M_clamp, z = emissiveMoved, w = emissive intensity multiplier
     bvhAux:        vec4<u32>,  // .x = bvhRootIdx (0 = normal root, >0 = overlay combined root)
     lens:          vec4<f32>,  // x = fStop (0=pinhole), y = focusDistance, z = blades (f32), w = apertureRotation
+    fog:           vec4<f32>,  // xyz = sigma_t (per-channel extinction); w = enabled (1=on, 0=off)
+    fogColor:      vec4<f32>,  // xyz = inscatter tint; w = g (HG asymmetry, reserved)
 };
 
 struct Bvh4NodeGpu {
@@ -235,6 +237,16 @@ const MAX_TEX_SLOTS: i32 = 1024;
 const EMPTY_CHILD: i32 = -2147483648;  // INT_MIN — sentinel for unused BVH4 child slots
 
 fn TILE_SIZE() -> i32 { return max(i32(rt.spp.y), 1); }
+
+// --- Fog / homogeneous participating media (v1: Beer-Lambert only) ---
+fn fogEnabled() -> bool { return rt.fog.w > 0.5; }
+fn fogTransmittance(dist: f32) -> vec3<f32> {
+    // exp(-sigma_t * dist); clamp dist to avoid overflow on 1e30 miss sentinels.
+    let d = min(max(dist, 0.0), 1e6);
+    return exp(-rt.fog.xyz * d);
+}
+)"
+R"(
 
 struct Ray  { origin: vec3<f32>, dir: vec3<f32> }
 struct Isect { t: f32, u: f32, v: f32 }
@@ -1494,6 +1506,10 @@ fn traceShadowRay(origin: vec3<f32>, normal: vec3<f32>, dir: vec3<f32>,
         }
         sr.origin = sh.point + sr.dir * 1e-3;
     }
+    // Volumetric attenuation across the full shadow-ray path (Beer-Lambert).
+    // The ray travels `maxDist` to reach the light; fog dims the light source
+    // along the way. Short-circuited in the hit case above (atten already 0).
+    if (fogEnabled()) { atten *= fogTransmittance(maxDist); }
     return atten;
 }
 
@@ -1626,6 +1642,68 @@ fn sampleEmissiveTriCdf(seed: ptr<function, u32>, totalPower: f32, emTriCount: i
     es.area   = emInfo.y;
     es.power  = emInfo.w;
     return es;
+}
+)"
+R"(
+
+// Single-scattering fog inscatter: samples a scatter point along the primary
+// ray (truncated free-flight) and does NEE to emissive triangles + analytical
+// lights so the volume lights up near real sources instead of showing a flat
+// ambient tint. Isotropic phase (1/4π); shadow rays pick up fog attenuation
+// via traceShadowRay so the light-up softens with distance automatically.
+fn volumeInscatter(rayOrigin: vec3<f32>, rayDir: vec3<f32>, maxT: f32,
+                   seed: ptr<function, u32>) -> vec3<f32> {
+    let sigmaT = rt.fog.x;
+    if (sigmaT <= 0.0) { return vec3<f32>(0.0); }
+    let tMax = min(maxT, 1e5);
+    let T_max = exp(-sigmaT * tMax);
+    let p1 = 1.0 - T_max;
+    if (p1 < 1e-4) { return vec3<f32>(0.0); }
+
+    // Truncated free-flight: sample t in [0, tMax] with p(t) = σ_t·e^(-σ_t·t)/p1.
+    let xi = rand(seed);
+    let tScatter = -log(max(1.0 - xi * p1, 1e-30)) / sigmaT;
+    let x = rayOrigin + rayDir * tScatter;
+
+    // Estimator factor: σ_s·T(t)/p(t) = (σ_s/σ_t)·(1 − T_max).
+    // rt.fogColor.xyz acts as the single-scattering albedo σ_s/σ_t.
+    let scatterFactor = rt.fogColor.xyz * p1;
+    let phase = 0.25 / PI;
+
+    var inscatter = vec3<f32>(0.0);
+
+    // --- NEE to emissive triangles (area-lit volumes like Cornell's panel) ---
+    let emTriCount = i32(rt.emissiveInfo.x);
+    let totalPower = rt.emissiveInfo.y;
+    if (emTriCount > 0 && totalPower > 0.0) {
+        let es = sampleEmissiveTriCdf(seed, totalPower, emTriCount);
+        let toL  = es.point - x;
+        let dist = max(length(toL), 1e-4);
+        let dir  = toL / dist;
+        let cosLight = max(0.0, dot(-dir, es.normal));
+        if (cosLight > 1e-4) {
+            let atten   = traceShadowRay(x, vec3<f32>(0.0), dir, dist - 1e-2, 4);
+            let pLight  = es.power / max(totalPower, 1e-6);
+            let pdfArea = pLight / max(es.area, 1e-6);
+            let pdfOmega = pdfArea * dist * dist / cosLight;
+            let matIdx   = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
+            let emission = textureLoad(matData, vec2<i32>(matIdx, 2), 0).xyz;
+            if (pdfOmega > 1e-10) {
+                inscatter += phase * emission * atten / pdfOmega;
+            }
+        }
+    }
+
+    // --- NEE to analytical lights (point/dir/spot) ---
+    let lcount = i32(rt.lightCount.x);
+    for (var li = 0; li < lcount; li++) {
+        let le = evalAnalyticalLight(li, x);
+        let shadowDist = select(le.dist - 1e-2, 1e30, le.dist >= 1e29);
+        let atten = traceShadowRay(x, vec3<f32>(0.0), le.dir, shadowDist, 4);
+        inscatter += phase * le.color * atten;
+    }
+
+    return inscatter * scatterFactor;
 }
 )";
 
@@ -4668,8 +4746,33 @@ fn rt_accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let primaryMeshIdx = u32(b0MeshIdx);
         let primaryRough   = sqrt(b0Alpha);
 
-        let ptDiff = diffRadFinal;
-        let ptSpec = specRadFinal;
+        // --- Fog application at primary-ray boundary ---
+        // L_pixel = T(t)·L_surface + single_scatter(t)
+        // Single-scattering samples a point in the volume and NEEs to lights so
+        // fog glows near real sources rather than carrying a flat ambient tint.
+        // Shadow rays pick up their own transmittance via traceShadowRay.
+        // Miss pixels use a bounded 1e4 "sky distance" so inscatter still fades.
+        var ptDiff = diffRadFinal;
+        var ptSpec = specRadFinal;
+        if (fogEnabled()) {
+            let fogDist = select(primaryDepth, 1e4, primaryDepth <= 0.0);
+            let T = fogTransmittance(fogDist);
+            // Reconstruct primary ray direction (cheap; matches makeRay()).
+            let aspect = res.x / res.y;
+            let ndcFog = vec2<f32>(
+                (f32(pixel.x) + 0.5) / res.x * 2.0 - 1.0,
+                 1.0 - (f32(pixel.y) + 0.5) / res.y * 2.0);
+            let rayDir = normalize(rt.camFwd.xyz
+                                 + rt.camRgt.xyz * (ndcFog.x * rt.tanHalfFov.x * aspect)
+                                 + rt.camUp.xyz  * (ndcFog.y * rt.tanHalfFov.x));
+            // sampleEmissiveTriCdf uses BN state — initialize it here.
+            bnInit(u32(pixel.x), u32(pixel.y), u32(rt.frameCount.x));
+            var fogSeed = pcg(pixelIdx ^ u32(rt.frameCount.x) * 2654435761u);
+            let volume = volumeInscatter(rt.camOri.xyz, rayDir, fogDist, &fogSeed);
+            // Inscatter lands on the diffuse channel (phase is broad / isotropic).
+            ptDiff = ptDiff * T + volume;
+            ptSpec = ptSpec * T;
+        }
         var sample = ptDiff + ptSpec;
 
         // ---------------------------------------------------------------
