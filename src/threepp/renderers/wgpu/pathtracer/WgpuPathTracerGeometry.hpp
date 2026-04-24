@@ -32,6 +32,12 @@ namespace threepp::wgpu_pt {
     /// `maxMats`, `maxMeshes` and stops cleanly at those caps.
     /// In append mode (any offset > 0) existing content is preserved.
     /// Returns the new total triangle count.
+    ///
+    /// If `entryTriRanges` is non-null it is resized to entries.size() and
+    /// populated with (triStart, triCount) pairs per entry (into triBuffer /
+    /// rawObjTriBuf). Entries skipped due to material/mesh/tri caps get a
+    /// zero-count range. Used by the TLAS/BLAS builder to locate each
+    /// entry's triangle slice for per-mesh BLAS construction.
     int buildGeometryBuffers(
             const std::vector<RtMeshEntry>& entries,
             const std::unordered_map<Texture*, int>& texSlotMap,
@@ -40,7 +46,8 @@ namespace threepp::wgpu_pt {
             std::vector<float>& rawObjTriBuf,
             std::vector<float>& matrixBuf,
             int maxTris, int maxMats, int maxMeshes,
-            int triOffset = 0, int matOffset = 0, int meshOffset = 0);
+            int triOffset = 0, int matOffset = 0, int meshOffset = 0,
+            std::vector<std::pair<int, int>>* entryTriRanges = nullptr);
 
 }// namespace threepp::wgpu_pt
 

@@ -1,5 +1,9 @@
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBvh.hpp"
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerAtlas.hpp"
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerGeometry.hpp"
+
+#include "threepp/math/Matrix4.hpp"
+#include "threepp/math/Vector3.hpp"
 
 #include <algorithm>
 #include <array>
@@ -319,8 +323,13 @@ void collapseBvh4(
 
     if (hasLeafChild) leafIndicesOut.push_back(wi);
 
-    // Recurse on internal children and patch their indices
-    for (int c = 0; c < w.childCount; c++) {
+    // Recurse on internal children and patch their indices.
+    // Iterate off `children` (a local vector) rather than `w.childCount` —
+    // the recursive call below does `wide.emplace_back()` which can reallocate
+    // `wide` and invalidate `w`.  Write-through `wide[wi]` re-resolves after
+    // each recursion so the patched child index is always valid.
+    const int childCount = static_cast<int>(children.size());
+    for (int c = 0; c < childCount; c++) {
         const auto& bn = bin[children[c].binIdx];
         if (bn.left >= 0) {
             int childWideIdx = static_cast<int>(wide.size());
@@ -432,7 +441,8 @@ void packRefitMetadata(const std::vector<Bvh4Node>& nodes, std::vector<int32_t>&
 void buildBVH(std::vector<float>& triBuffer, int triCount,
               std::vector<Bvh4Node>& wideNodes, std::vector<int>& indices,
               std::vector<int>& leafIndices,
-              std::vector<float>& rawObjTriBuf) {
+              std::vector<float>& rawObjTriBuf,
+              bool preserveObjTriOrder) {
     indices.resize(triCount);
     std::iota(indices.begin(), indices.end(), 0);
 
@@ -452,6 +462,11 @@ void buildBVH(std::vector<float>& triBuffer, int triCount,
     // Sort triangle data to match BVH index ordering.
     // Uses in-place cycle-following permutation to avoid allocating two full copies
     // (~1.2 GB for large scenes). Extra memory: O(n/8) for the visited bitmap + 2 tri temps.
+    //
+    // When `preserveObjTriOrder` is set, the TLAS/BLAS path has already built
+    // BLAS records that address `rawObjTriBuf` by its pre-sort (entry-contiguous)
+    // indices.  Reordering it here would silently invalidate those indices, so
+    // the secondary buffer is skipped and only `triBuffer` gets permuted.
     {
         std::vector<bool> visited(triCount, false);
         std::vector<float> tmpTri(TRI_TEX_HEIGHT * 4);   // one triangle's worth of triBuffer rows (8*4=32)
@@ -466,7 +481,9 @@ void buildBVH(std::vector<float>& triBuffer, int triCount,
             for (int row = 0; row < TRI_TEX_HEIGHT; row++)
                 for (int c = 0; c < 4; c++)
                     tmpTri[row * 4 + c] = triBuffer[pagedIdx(i, row) + c];
-            std::memcpy(tmpObj.data(), rawObjTriBuf.data() + i * 32, 32 * sizeof(float));
+            if (!preserveObjTriOrder) {
+                std::memcpy(tmpObj.data(), rawObjTriBuf.data() + i * 32, 32 * sizeof(float));
+            }
 
             int j = i;
             while (true) {
@@ -476,8 +493,10 @@ void buildBVH(std::vector<float>& triBuffer, int triCount,
                 for (int row = 0; row < TRI_TEX_HEIGHT; row++)
                     for (int c = 0; c < 4; c++)
                         triBuffer[pagedIdx(j, row) + c] = triBuffer[pagedIdx(k, row) + c];
-                std::memcpy(rawObjTriBuf.data() + j * 32,
-                            rawObjTriBuf.data() + k * 32, 32 * sizeof(float));
+                if (!preserveObjTriOrder) {
+                    std::memcpy(rawObjTriBuf.data() + j * 32,
+                                rawObjTriBuf.data() + k * 32, 32 * sizeof(float));
+                }
                 visited[k] = true;
                 j = k;
             }
@@ -485,7 +504,9 @@ void buildBVH(std::vector<float>& triBuffer, int triCount,
             for (int row = 0; row < TRI_TEX_HEIGHT; row++)
                 for (int c = 0; c < 4; c++)
                     triBuffer[pagedIdx(j, row) + c] = tmpTri[row * 4 + c];
-            std::memcpy(rawObjTriBuf.data() + j * 32, tmpObj.data(), 32 * sizeof(float));
+            if (!preserveObjTriOrder) {
+                std::memcpy(rawObjTriBuf.data() + j * 32, tmpObj.data(), 32 * sizeof(float));
+            }
         }
     }
 }
@@ -594,6 +615,191 @@ void buildOverlayBVH(
             for (int c = 0; c < 4; c++) triBuffer[gp + c] = localTriBuf[lp + c];
         }
         std::memcpy(rawObjTriBuf.data() + gi * 32, localObjBuf.data() + li * 32, 32 * sizeof(float));
+    }
+}
+
+BlasRecord buildBlas(
+        std::vector<float>& objTriBuf,
+        int triStartLocal,
+        int triCount,
+        std::vector<Bvh4Node>& blasNodes,
+        std::vector<int>& leafIndicesOut) {
+
+    BlasRecord rec{};
+    rec.triStart       = static_cast<std::uint32_t>(triStartLocal);
+    rec.triCount       = static_cast<std::uint32_t>(std::max(0, triCount));
+    rec.rootNodeOffset = static_cast<std::uint32_t>(blasNodes.size());
+    rec.nodeCount      = 0;
+    for (int c = 0; c < 3; c++) { rec.aabbMin[c] = 0.f; rec.aabbMax[c] = 0.f; }
+    rec.aabbMin[3] = rec.aabbMax[3] = 0.f;
+
+    if (triCount <= 0) return rec;
+
+    // Pack object-space vertex positions into a temporary paged buffer so the
+    // shared `buildBvhNode` code can read them via `triGet` without a second
+    // accessor.  Only rows 0/1/2 (the three vertex positions) are needed by
+    // the builder — normals/UVs don't affect tree shape.
+    const int localPages   = triTexPages(triCount);
+    const std::size_t localWords =
+            static_cast<std::size_t>(localPages) * TEX_PAGE_WIDTH * TRI_TEX_HEIGHT * 4;
+    std::vector<float> localPaged(localWords, 0.f);
+    for (int li = 0; li < triCount; li++) {
+        const int gi = triStartLocal + li;
+        const float* src = objTriBuf.data() + static_cast<std::size_t>(gi) * 32;
+        for (int row = 0; row < 3; row++) {
+            const int lp = ((li / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH
+                            + li % TEX_PAGE_WIDTH) * 4;
+            localPaged[lp + 0] = src[row * 4 + 0];
+            localPaged[lp + 1] = src[row * 4 + 1];
+            localPaged[lp + 2] = src[row * 4 + 2];
+        }
+    }
+
+    // Phase 1: binary BVH over local indices.
+    std::vector<int> localIdx(triCount);
+    std::iota(localIdx.begin(), localIdx.end(), 0);
+    std::vector<BvhNode> binNodes;
+    binNodes.reserve(static_cast<std::size_t>(triCount) * 2);
+    buildBvhNode(binNodes, localIdx, localPaged, 0, triCount, -1);
+
+    // Phase 2: collapse into the shared `blasNodes` buffer.  Because
+    // `collapseBvh4` uses `wide.size()` for self-indexing, child indices
+    // emitted into `blasNodes` are already absolute (they account for prior
+    // BLASes already in the buffer).  `leafIndicesOut` receives absolute
+    // indices by the same mechanism.
+    const std::size_t nodeBase = blasNodes.size();
+    if (!binNodes.empty()) {
+        collapseBvh4(binNodes, blasNodes, leafIndicesOut, 0, -1);
+    }
+    rec.nodeCount = static_cast<std::uint32_t>(blasNodes.size() - nodeBase);
+
+    // Offset leaf `triStart` values in the newly-emitted nodes from local
+    // (0..triCount-1) to global (triStartLocal + localStart), matching the
+    // overlay builder's convention.
+    for (std::size_t ni = nodeBase; ni < blasNodes.size(); ni++) {
+        auto& node = blasNodes[ni];
+        for (int c = 0; c < 4; c++) {
+            const int ci = node.childIdx[c];
+            if (ci >= 0 || ci == INT_MIN) continue;  // internal or empty
+            const int raw  = -ci;
+            const int lStart = (raw - 1) / MAX_LEAF_TRIS;
+            const int cnt    = ((raw - 1) % MAX_LEAF_TRIS) + 1;
+            node.childIdx[c] = -(((lStart + triStartLocal) * MAX_LEAF_TRIS) + cnt);
+        }
+    }
+
+    // Reorder the object-space triangle slice in `objTriBuf` into BVH leaf
+    // order.  Same cycle-permutation pattern as `buildBVH` / `buildOverlayBVH`
+    // but operating on the 32-float linear layout only (no paged world buf).
+    {
+        std::vector<bool> visited(triCount, false);
+        std::array<float, 32> tmp{};
+        for (int i = 0; i < triCount; i++) {
+            if (visited[i]) continue;
+            visited[i] = true;
+            if (localIdx[i] == i) continue;
+
+            std::memcpy(tmp.data(),
+                        objTriBuf.data() + static_cast<std::size_t>(triStartLocal + i) * 32,
+                        32 * sizeof(float));
+            int j = i;
+            while (true) {
+                const int k = localIdx[j];
+                if (k == i) break;
+                std::memcpy(objTriBuf.data() + static_cast<std::size_t>(triStartLocal + j) * 32,
+                            objTriBuf.data() + static_cast<std::size_t>(triStartLocal + k) * 32,
+                            32 * sizeof(float));
+                visited[k] = true;
+                j = k;
+            }
+            std::memcpy(objTriBuf.data() + static_cast<std::size_t>(triStartLocal + j) * 32,
+                        tmp.data(), 32 * sizeof(float));
+        }
+    }
+
+    // Root AABB — union of the root node's children.  Used later by the TLAS
+    // builder to produce each instance's world-space bounding box.
+    if (rec.nodeCount > 0) {
+        const auto& root = blasNodes[nodeBase];
+        float mnX = 1e30f, mnY = 1e30f, mnZ = 1e30f;
+        float mxX = -1e30f, mxY = -1e30f, mxZ = -1e30f;
+        for (int c = 0; c < root.childCount; c++) {
+            if (root.childIdx[c] == INT_MIN) continue;
+            mnX = std::min(mnX, root.childMinX[c]);
+            mnY = std::min(mnY, root.childMinY[c]);
+            mnZ = std::min(mnZ, root.childMinZ[c]);
+            mxX = std::max(mxX, root.childMaxX[c]);
+            mxY = std::max(mxY, root.childMaxY[c]);
+            mxZ = std::max(mxZ, root.childMaxZ[c]);
+        }
+        rec.aabbMin[0] = mnX; rec.aabbMin[1] = mnY; rec.aabbMin[2] = mnZ;
+        rec.aabbMax[0] = mxX; rec.aabbMax[1] = mxY; rec.aabbMax[2] = mxZ;
+    }
+
+    return rec;
+}
+
+void buildBlasesForEntries(
+        const std::vector<RtMeshEntry>& entries,
+        const std::vector<std::pair<int, int>>& entryTriRanges,
+        std::vector<float>& objTriBuf,
+        std::vector<Bvh4Node>& blasNodes,
+        std::vector<int>& blasLeafIndices,
+        std::vector<BlasRecord>& blasRecords,
+        std::vector<TlasInstance>& tlasInstances,
+        std::vector<std::uint32_t>& tlasToEntryIdx) {
+
+    auto writeMat3x4 = [](const Matrix4& m, float out[3][4]) {
+        const auto& e = m.elements;
+        for (int row = 0; row < 3; ++row) {
+            out[row][0] = e[row];
+            out[row][1] = e[4 + row];
+            out[row][2] = e[8 + row];
+            out[row][3] = e[12 + row];
+        }
+    };
+
+    const std::size_t n = std::min(entries.size(), entryTriRanges.size());
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto [triStart, triCount] = entryTriRanges[i];
+        if (triCount <= 0) continue;
+
+        const std::uint32_t blasIndex =
+                static_cast<std::uint32_t>(blasRecords.size());
+        BlasRecord rec = buildBlas(objTriBuf, triStart, triCount,
+                                   blasNodes, blasLeafIndices);
+        blasRecords.push_back(rec);
+
+        // Pull matIdx / meshIdx out of the first tri in the slice.  All tris
+        // in one entry share both, so any index in [triStart, triStart+triCount)
+        // is fine — and buildBlas only reorders within that slice.
+        const float* first = objTriBuf.data() + static_cast<std::size_t>(triStart) * 32;
+        const auto matIdx  = static_cast<std::uint32_t>(first[3]);   // field 0.w
+        const auto meshIdx = static_cast<std::uint32_t>(first[7]);   // field 1.w
+
+        TlasInstance inst{};
+        writeMat3x4(entries[i].worldMatrix, inst.objToWorld);
+        Matrix4 inv(entries[i].worldMatrix);
+        inv.invert();
+        writeMat3x4(inv, inst.worldToObj);
+        inst.blasIndex = blasIndex;
+        inst.matIdx    = matIdx;
+        inst.meshId    = meshIdx;
+
+        // Non-uniform scale flag (bit 0): compare basis-vector lengths from the
+        // 3x3 upper-left of the world matrix (column-major elements).
+        const auto& e = entries[i].worldMatrix.elements;
+        const Vector3 bx(e[0], e[1], e[2]);
+        const Vector3 by(e[4], e[5], e[6]);
+        const Vector3 bz(e[8], e[9], e[10]);
+        const float lx = bx.length(), ly = by.length(), lz = bz.length();
+        const float eps = 1e-4f * std::max({lx, ly, lz, 1.f});
+        const bool nonUniform =
+                std::abs(lx - ly) > eps || std::abs(ly - lz) > eps;
+        inst.flags = nonUniform ? 1u : 0u;
+
+        tlasInstances.push_back(inst);
+        tlasToEntryIdx.push_back(static_cast<std::uint32_t>(i));
     }
 }
 

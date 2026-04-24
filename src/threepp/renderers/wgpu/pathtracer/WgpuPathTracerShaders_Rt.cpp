@@ -57,6 +57,33 @@ struct Bvh4NodeGpu {
     cIdx:  vec4<u32>,  // child indices (bitcast to i32 for leaf encoding)
 }
 
+// PR2c.2b — TLAS/BLAS declarations + binding wiring.  Bindings are reachable
+// from `sceneHitRaw` through a runtime-gated branch (rt.bvhAux.y == 1u) so
+// naga keeps them alive in the bindgroup layout.  The branch is never taken
+// at runtime in this PR — traversal is still single-level.  The nested
+// TLAS->BLAS walk that actually uses these bindings lands in PR2c.2c.
+struct BlasRecord {
+    rootNodeOffset: u32,
+    nodeCount:      u32,
+    triStart:       u32,
+    triCount:       u32,
+    aabbMin:        vec4<f32>,
+    aabbMax:        vec4<f32>,
+};
+
+struct TlasInstance {
+    objToWorld_r0: vec4<f32>,
+    objToWorld_r1: vec4<f32>,
+    objToWorld_r2: vec4<f32>,
+    worldToObj_r0: vec4<f32>,
+    worldToObj_r1: vec4<f32>,
+    worldToObj_r2: vec4<f32>,
+    blasIndex:     u32,
+    matIdx:        u32,
+    meshId:        u32,
+    flags:         u32,
+};
+
 @group(0) @binding(0) var<uniform> rt:          RtUniforms;
 // bindings 1 and 2 were the combined main accum (read/write). Removed 2026-04-23
 // — normal display reads diffAccum+specAccum directly; combined accum was dead
@@ -339,6 +366,49 @@ R"(
 // Stored value is E(cos_o, α) with F0=1 — the single-scattering energy
 // retained by the VNDF-sampled GGX estimator (see WgpuPathTracerGgxLut.hpp).
 @group(0) @binding(50) var ggxELut: texture_2d<f32>;
+
+// PR2c.2b — TLAS/BLAS storage buffers.  `blasNodes` holds every BLAS's BVH4
+// nodes concatenated back-to-back; `blasRecords[i]` locates BLAS `i` inside
+// that buffer and gives its object-space AABB.  `tlasInstances[i]` carries
+// the world↔object 3x4 matrices and a pointer (blasIndex) to the BLAS this
+// instance uses.  Consumed by the nested traversal in PR2c.2c; this PR keeps
+// them live via a runtime-false branch in `sceneHitRaw` so naga retains them
+// in the pipeline layouts.
+@group(0) @binding(51) var<storage, read> blasNodes:     array<Bvh4NodeGpu>;
+@group(0) @binding(52) var<storage, read> blasRecords:   array<BlasRecord>;
+@group(0) @binding(53) var<storage, read> tlasInstances: array<TlasInstance>;
+
+// Object-space triangle data — mirrors the CPU `RawObjTri` record.  Populated
+// by buildGeometryBuffers into objTriBuf/objTriBuf2 (split to stay below the
+// WebGPU max-buffer limit); consumed by the VT pass (world-space triTex) and,
+// from PR2c.2c.ii on, by the BLAS leaf intersection in the TLAS traversal path.
+struct ObjTriData {
+    v0:   vec4<f32>,  // .xyz obj-space pos, .w matIdx
+    v1:   vec4<f32>,  // .xyz obj-space pos, .w meshIdx
+    v2:   vec4<f32>,  // .xyz obj-space pos, .w unused
+    n0:   vec4<f32>,
+    n1:   vec4<f32>,
+    n2:   vec4<f32>,
+    uv01: vec4<f32>,
+    uv2:  vec4<f32>,  // .w unused
+};
+
+// PR2c.2c.i — object-space triangle storage.  Split across two buffers
+// (`objTris` + `objTris2`) to stay below the WebGPU max-buffer limit; the
+// split point `objTriSplit` is delivered via `rt.bvhAux.w` at upload time.
+// Used by the nested BLAS traversal in PR2c.2c.ii for obj-space triangle
+// intersection.  Kept alive in this PR through the `sceneHitRaw` keepalive
+// branch so naga retains bindings 54/55 in the pipeline layouts.
+@group(0) @binding(54) var<storage, read> objTris:  array<ObjTriData>;
+@group(0) @binding(55) var<storage, read> objTris2: array<ObjTriData>;
+
+// Fetch an object-space triangle by global index, routing through the
+// primary/overflow buffer split.  Mirrors the VT compute shader's addressing.
+fn loadObjTri(ti: i32) -> ObjTriData {
+    let splitAt = i32(rt.bvhAux.w);
+    if (ti < splitAt) { return objTris[ti]; }
+    return objTris2[ti - splitAt];
+}
 
 // Bilinear sample of the GGX LUT.  cos_o and alpha are clamped to (0,1].
 // The CPU builder places cells at (i+0.5)/N for cos_o (column) and (i+1)/N
@@ -960,8 +1030,197 @@ fn loadShadowHitMaterial(rh: RawHit, ray: Ray) -> ShadowHit {
     return h;
 }
 
+// PR2c.2c.ii — TLAS-walking variants of sceneHitRaw / sceneAnyHit.
+// Enabled when `rt.bvhAux.y == 1u`, which also signals that the single-level
+// `bvhNodes` buffer wasn't built (see tlasEnabled_ in WgpuPathTracer).  The
+// traversal loops linearly over `tlasInstances`, transforms the world-space
+// ray into each instance's object space via worldToObj (3x4 rows), and walks
+// that instance's BLAS starting from `blasRecords[blasIndex].rootNodeOffset`.
+//
+// Ray parameter t is invariant under the (un-normalized) ray transform:
+// `t_obj == t_world`.  So we can compare and accumulate hits across instances
+// using the same `rh.t` without any remap — even under non-uniform scale.
+//
+// Hit triangles carry the GLOBAL triangle index, same convention as the
+// single-level path.  `loadHitMaterial` reads world-space data from the
+// triData texture which — under `preserveObjTriOrder=true` for tlasEnabled_ —
+// is populated by the VT pass in objTris-order, so triData[ti] is the
+// world-space version of the same triangle.
+
+fn testTriangleObj(ray: Ray, ti: i32, rh: ptr<function, RawHit>) {
+    let ot = loadObjTri(ti);
+    let v0 = ot.v0.xyz;
+    let v1 = ot.v1.xyz;
+    let v2 = ot.v2.xyz;
+    let isect = triIntersect(ray, v0, v1, v2);
+    if (isect.t >= (*rh).t) { return; }
+
+    let matIdx = i32(ot.v0.w);
+    let mat3   = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
+
+    let sideFlag = mat3.z;
+    if (sideFlag < 0.5) {
+        let geoNormal = cross(v1 - v0, v2 - v0);
+        if (dot(ray.dir, geoNormal) > 0.0) { return; }
+    } else if (sideFlag > 1.5) {
+        let geoNormal = cross(v1 - v0, v2 - v0);
+        if (dot(ray.dir, geoNormal) < 0.0) { return; }
+    }
+
+    let alphaTest = mat3.y;
+    let blendMode = mat3.w < 0.0;
+    let opacity   = abs(mat3.w);
+    let needsAlpha = alphaTest > 0.0 || blendMode;
+    if (needsAlpha) {
+        var alpha = opacity;
+        let mat1 = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
+        if (mat1.x >= 0.0) {
+            let w    = 1.0 - isect.u - isect.v;
+            let iuv0 = vec2<f32>(ot.uv01.x, ot.uv01.y) * w
+                     + vec2<f32>(ot.uv01.z, ot.uv01.w) * isect.u
+                     + ot.uv2.xy                       * isect.v;
+            let tuv  = transformUV(iuv0, iuv0, matIdx, 6);
+            alpha   *= sampleAtlasAlpha(tuv, mat1.x);
+        }
+        if (alphaTest > 0.0) {
+            if (alpha < alphaTest) { return; }
+        } else {
+            if (alpha >= 0.99) {
+                // accept
+            } else if (alpha <= 0.01) {
+                return;
+            } else {
+                let h = pcg(pcg(u32(ti) ^ u32(rt.params.y) * 2654435761u) ^ pcg(bitcast<u32>(isect.t)));
+                let rng = f32(h) / 4294967295.0;
+                if (rng > alpha) { return; }
+            }
+        }
+    }
+
+    (*rh).t = isect.t;
+    (*rh).triIdx = ti;
+    (*rh).u = isect.u;
+    (*rh).v = isect.v;
+}
+
+fn decodeLeafObj(ci: i32, ray: Ray, rh: ptr<function, RawHit>) {
+    let raw = -ci;
+    let triStart = (raw - 1) / MAX_LEAF_TRIS;
+    let triCount = ((raw - 1) % MAX_LEAF_TRIS) + 1;
+    for (var t = triStart; t < triStart + triCount; t++) {
+        testTriangleObj(ray, t, rh);
+    }
+}
+
+fn xformRay(inst: TlasInstance, ray: Ray) -> Ray {
+    var out: Ray;
+    out.origin = vec3<f32>(
+        dot(inst.worldToObj_r0.xyz, ray.origin) + inst.worldToObj_r0.w,
+        dot(inst.worldToObj_r1.xyz, ray.origin) + inst.worldToObj_r1.w,
+        dot(inst.worldToObj_r2.xyz, ray.origin) + inst.worldToObj_r2.w);
+    out.dir = vec3<f32>(
+        dot(inst.worldToObj_r0.xyz, ray.dir),
+        dot(inst.worldToObj_r1.xyz, ray.dir),
+        dot(inst.worldToObj_r2.xyz, ray.dir));
+    return out;
+}
+
+fn walkBlas(oRay: Ray, rootOffset: i32, rh: ptr<function, RawHit>) {
+    let invD = vec3<f32>(1.0) / oRay.dir;
+    var stack: array<i32, 32>;
+    var top: i32 = 0;
+    stack[0] = rootOffset; top = 1;
+    while (top > 0) {
+        top -= 1;
+        let nd = blasNodes[stack[top]];
+        let dists = aabbDist4(nd, oRay, invD, (*rh).t);
+        if (all(dists >= vec4<f32>(1e30))) { continue; }
+
+        let ci0 = bitcast<i32>(nd.cIdx.x);
+        let ci1 = bitcast<i32>(nd.cIdx.y);
+        let ci2 = bitcast<i32>(nd.cIdx.z);
+        let ci3 = bitcast<i32>(nd.cIdx.w);
+
+        if (dists.x < 1e30 && ci0 < 0 && ci0 != EMPTY_CHILD) { decodeLeafObj(ci0, oRay, rh); }
+        if (dists.y < 1e30 && ci1 < 0 && ci1 != EMPTY_CHILD) { decodeLeafObj(ci1, oRay, rh); }
+        if (dists.z < 1e30 && ci2 < 0 && ci2 != EMPTY_CHILD) { decodeLeafObj(ci2, oRay, rh); }
+        if (dists.w < 1e30 && ci3 < 0 && ci3 != EMPTY_CHILD) { decodeLeafObj(ci3, oRay, rh); }
+
+        var n0 = dists.x; var n1 = dists.y; var n2 = dists.z; var n3 = dists.w;
+        var k0 = ci0; var k1 = ci1; var k2 = ci2; var k3 = ci3;
+        if (k0 < 0) { n0 = 1e30; } if (k1 < 0) { n1 = 1e30; }
+        if (k2 < 0) { n2 = 1e30; } if (k3 < 0) { n3 = 1e30; }
+        var c: bool; var tn: f32; var tk: i32;
+        c=n0<n1; tn=select(n0,n1,c); n1=select(n1,n0,c); n0=tn; tk=select(k0,k1,c); k1=select(k1,k0,c); k0=tk;
+        c=n2<n3; tn=select(n2,n3,c); n3=select(n3,n2,c); n2=tn; tk=select(k2,k3,c); k3=select(k3,k2,c); k2=tk;
+        c=n0<n2; tn=select(n0,n2,c); n2=select(n2,n0,c); n0=tn; tk=select(k0,k2,c); k2=select(k2,k0,c); k0=tk;
+        c=n1<n3; tn=select(n1,n3,c); n3=select(n3,n1,c); n1=tn; tk=select(k1,k3,c); k3=select(k3,k1,c); k1=tk;
+        c=n1<n2; tn=select(n1,n2,c); n2=select(n2,n1,c); n1=tn; tk=select(k1,k2,c); k2=select(k2,k1,c); k1=tk;
+        if (n0 < 1e30) { stack[top] = k0; top++; }
+        if (n1 < 1e30) { stack[top] = k1; top++; }
+        if (n2 < 1e30) { stack[top] = k2; top++; }
+        if (n3 < 1e30) { stack[top] = k3; top++; }
+    }
+}
+
+fn walkBlasAny(oRay: Ray, rootOffset: i32, rh: ptr<function, RawHit>) {
+    let invD = vec3<f32>(1.0) / oRay.dir;
+    var stack: array<i32, 32>;
+    var top: i32 = 0;
+    stack[0] = rootOffset; top = 1;
+    while (top > 0) {
+        top -= 1;
+        let nd = blasNodes[stack[top]];
+        let dists = aabbDist4(nd, oRay, invD, (*rh).t);
+        if (all(dists >= vec4<f32>(1e30))) { continue; }
+
+        let ci0 = bitcast<i32>(nd.cIdx.x);
+        let ci1 = bitcast<i32>(nd.cIdx.y);
+        let ci2 = bitcast<i32>(nd.cIdx.z);
+        let ci3 = bitcast<i32>(nd.cIdx.w);
+
+        if (dists.x < 1e30 && ci0 < 0 && ci0 != EMPTY_CHILD) { decodeLeafObj(ci0, oRay, rh); if ((*rh).triIdx >= 0) { return; } }
+        if (dists.y < 1e30 && ci1 < 0 && ci1 != EMPTY_CHILD) { decodeLeafObj(ci1, oRay, rh); if ((*rh).triIdx >= 0) { return; } }
+        if (dists.z < 1e30 && ci2 < 0 && ci2 != EMPTY_CHILD) { decodeLeafObj(ci2, oRay, rh); if ((*rh).triIdx >= 0) { return; } }
+        if (dists.w < 1e30 && ci3 < 0 && ci3 != EMPTY_CHILD) { decodeLeafObj(ci3, oRay, rh); if ((*rh).triIdx >= 0) { return; } }
+
+        if (dists.x < 1e30 && ci0 >= 0) { stack[top] = ci0; top++; }
+        if (dists.y < 1e30 && ci1 >= 0) { stack[top] = ci1; top++; }
+        if (dists.z < 1e30 && ci2 >= 0) { stack[top] = ci2; top++; }
+        if (dists.w < 1e30 && ci3 >= 0) { stack[top] = ci3; top++; }
+    }
+}
+
+fn sceneHitRawTlas(ray: Ray, maxT: f32) -> RawHit {
+    var rh: RawHit; rh.t = maxT; rh.triIdx = -1;
+    let instCount = i32(rt.bvhAux.z);
+    for (var i: i32 = 0; i < instCount; i++) {
+        let inst = tlasInstances[i];
+        let oRay = xformRay(inst, ray);
+        let rec  = blasRecords[inst.blasIndex];
+        walkBlas(oRay, i32(rec.rootNodeOffset), &rh);
+    }
+    return rh;
+}
+
+fn sceneAnyHitTlas(ray: Ray, maxT: f32) -> RawHit {
+    var rh: RawHit; rh.t = maxT; rh.triIdx = -1;
+    let instCount = i32(rt.bvhAux.z);
+    for (var i: i32 = 0; i < instCount; i++) {
+        let inst = tlasInstances[i];
+        let oRay = xformRay(inst, ray);
+        let rec  = blasRecords[inst.blasIndex];
+        walkBlasAny(oRay, i32(rec.rootNodeOffset), &rh);
+        if (rh.triIdx >= 0) { return rh; }
+    }
+    return rh;
+}
+
 fn sceneHitRaw(ray: Ray, maxT: f32) -> RawHit {
     var rh: RawHit; rh.t = maxT; rh.triIdx = -1;
+    if (rt.bvhAux.y == 1u) {
+        return sceneHitRawTlas(ray, maxT);
+    }
     let invD = vec3<f32>(1.0) / ray.dir;
     var stack: array<i32, 32>;
     var top: i32 = 0;
@@ -1028,6 +1287,9 @@ R"(
 // No sorting, no closest-hit search. Much faster for large scenes.
 fn sceneAnyHit(ray: Ray, maxT: f32) -> RawHit {
     var rh: RawHit; rh.t = maxT; rh.triIdx = -1;
+    if (rt.bvhAux.y == 1u) {
+        return sceneAnyHitTlas(ray, maxT);
+    }
     let invD = vec3<f32>(1.0) / ray.dir;
     var stack: array<i32, 32>;
     var top: i32 = 0;

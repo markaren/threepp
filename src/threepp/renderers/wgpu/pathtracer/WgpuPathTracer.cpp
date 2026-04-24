@@ -135,6 +135,9 @@ struct WgpuPathTracer::Impl {
     bool denoiserEnabled_ = true;
     bool restirEnabled_ = true;
     bool restirGiEnabled_ = false;
+    // Two-level BVH (TLAS/BLAS) — plumbing only in PR1. When false (default)
+    // the path tracer uses the existing single-level BVH over world-space tris.
+    bool tlasEnabled_ = false;
     int spp_ = 1;
     float envIntensity_ = 0.5f;
     float emissiveIntensity_ = 1.0f;  // Scene-wide multiplier applied to all emissive materials.
@@ -178,6 +181,13 @@ struct WgpuPathTracer::Impl {
     int bvhCapacity_  = 2 * INIT_TRI_CAP - 1;
     int emissiveTriCapacity_ = 1;  // currently-allocated emissiveTriBuf capacity (tri entries)
 
+    // PR2c.1 — capacities for TLAS/BLAS GPU buffers.  Populated on topology
+    // rebuild when tlasEnabled_; allocated lazily so single-level builds pay
+    // nothing.  Shader does not yet consume these (PR2c.2 wires traversal).
+    int blasNodeCapacity_     = 0;
+    int blasRecordCapacity_   = 0;
+    int tlasInstanceCapacity_ = 0;
+
     // Actual scene counts (distinct from capacity which includes headroom)
     int matCount_  = 0;  // number of unique materials/meshes in use
     int meshCount_ = 0;  // number of mesh entries (instances) in use
@@ -200,6 +210,12 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer bvhNodeBuf;
     WgpuBuffer bvhCounterBuf;
     WgpuBuffer refitMetaBuf;
+    // PR2c.1 — BLAS/TLAS GPU buffers.  Allocated lazily (see
+    // blasNodeCapacity_ et al).  Kept unbound from pipelines in PR2c.1 —
+    // they become live once the shader traversal switches to TLAS in PR2c.2.
+    WgpuBuffer blasNodeBuf;
+    WgpuBuffer blasRecordBuf;
+    WgpuBuffer tlasInstanceBuf;
     WgpuBuffer pathCounterBuf;     // atomic<u32> work-queue head for rt_main (persistent-thread path regeneration)
     WgpuBuffer primaryCounterBuf;  // separate atomic<u32> for rt_primary_main — needed because CPU-side counter writes can't interleave with GPU compute passes
     WgpuBuffer bounceCounterBuf;   // atomic<u32> for rt_bounces_main
@@ -279,6 +295,19 @@ struct WgpuPathTracer::Impl {
     std::vector<int> bvhIndices;
     std::vector<int> leafIndices;
 
+    // PR2b plumbing — TLAS/BLAS CPU state. Populated only when tlasEnabled_.
+    // Not yet consumed by the shader (traversal rewrite lands in a later PR);
+    // holding it on Impl keeps subsequent refits / appends from rebuilding
+    // from scratch once the shader is switched over.
+    std::vector<Bvh4Node> blasNodes;
+    std::vector<int> blasLeafIndices;
+    std::vector<BlasRecord> blasRecords;
+    std::vector<TlasInstance> tlasInstances;
+    // Maps tlasInstances[j] back to rtEntries[i] so per-frame mesh-matrix
+    // updates can refresh each instance's objToWorld/worldToObj without
+    // re-walking expandMeshEntries + entryTriRanges.
+    std::vector<std::uint32_t> tlasToEntryIdx;
+
     // Async scene build result — CPU work done on background thread
     struct AsyncBuildResult {
         std::vector<unsigned char> atlasData;
@@ -312,6 +341,14 @@ struct WgpuPathTracer::Impl {
         int objTriSplit = 0;  // split point for two-buffer objTri scheme
         int matCount = 0;     // actual number of unique materials (matCapacity ≥ matCount)
         int meshCount = 0;    // actual number of mesh entries (meshCapacity ≥ meshCount)
+        // PR2b plumbing — populated when tlasEnabled_; consumed by the shader
+        // traversal in a later PR.  Empty for single-level BVH builds.
+        std::vector<Bvh4Node> blasNodes;
+        std::vector<int> blasLeafIndices;
+        std::vector<BlasRecord> blasRecords;
+        std::vector<TlasInstance> tlasInstances;
+        std::vector<std::uint32_t> tlasToEntryIdx;
+        std::vector<std::pair<int, int>> entryTriRanges;
     };
 #ifndef __EMSCRIPTEN__
     // Async env CDF build
@@ -418,6 +455,11 @@ struct WgpuPathTracer::Impl {
                         WgpuBuffer::Usage::Storage),
           refitMetaBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * BVH4_REFIT_INTS * sizeof(int32_t),
                        WgpuBuffer::Usage::Storage),
+          // PR2c.1 — 1-element stub allocations; grown on demand in the
+          // topology-change path when tlasEnabled_.
+          blasNodeBuf(r, BVH4_GPU_U32S * sizeof(uint32_t), WgpuBuffer::Usage::Storage),
+          blasRecordBuf(r, sizeof(BlasRecord), WgpuBuffer::Usage::Storage),
+          tlasInstanceBuf(r, sizeof(TlasInstance), WgpuBuffer::Usage::Storage),
           pathCounterBuf(r, sizeof(uint32_t), WgpuBuffer::Usage::Storage),
           primaryCounterBuf(r, sizeof(uint32_t), WgpuBuffer::Usage::Storage),
           bounceCounterBuf(r, sizeof(uint32_t), WgpuBuffer::Usage::Storage),
@@ -586,6 +628,11 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         rtPipeline.setStorageBuffer(49, sortCounterBuf);
         rtPipeline.setTexture(50, ggxELutTex_);
+        rtPipeline.setStorageBufferRead(51, blasNodeBuf);
+        rtPipeline.setStorageBufferRead(52, blasRecordBuf);
+        rtPipeline.setStorageBufferRead(53, tlasInstanceBuf);
+        rtPipeline.setStorageBufferRead(54, objTriBuf);
+        rtPipeline.setStorageBufferRead(55, objTriBuf2);
 
         // Primary-hit kernel (kernel split step 1).  Same shader source, different
         // entry point — so the full bind group layout matches rtPipeline.  Most
@@ -639,6 +686,11 @@ struct WgpuPathTracer::Impl {
         primaryPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         primaryPipeline.setStorageBuffer(49, sortCounterBuf);
         primaryPipeline.setTexture(50, ggxELutTex_);
+        primaryPipeline.setStorageBufferRead(51, blasNodeBuf);
+        primaryPipeline.setStorageBufferRead(52, blasRecordBuf);
+        primaryPipeline.setStorageBufferRead(53, tlasInstanceBuf);
+        primaryPipeline.setStorageBufferRead(54, objTriBuf);
+        primaryPipeline.setStorageBufferRead(55, objTriBuf2);
 
         // Bounces kernel (bounce-split step 3).  Full mirror of rtPipeline's
         // bindings because runBounces + accumulation touches the same resources.
@@ -693,6 +745,11 @@ struct WgpuPathTracer::Impl {
         bouncesPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         bouncesPipeline.setStorageBuffer(49, sortCounterBuf);
         bouncesPipeline.setTexture(50, ggxELutTex_);
+        bouncesPipeline.setStorageBufferRead(51, blasNodeBuf);
+        bouncesPipeline.setStorageBufferRead(52, blasRecordBuf);
+        bouncesPipeline.setStorageBufferRead(53, tlasInstanceBuf);
+        bouncesPipeline.setStorageBufferRead(54, objTriBuf);
+        bouncesPipeline.setStorageBufferRead(55, objTriBuf2);
 
         // Compaction kernel (Stage F1).  Full bind-group mirror because it
         // uses the same shader source as primary/rt/bounces — bind-group layout
@@ -748,6 +805,11 @@ struct WgpuPathTracer::Impl {
         compactPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         compactPipeline.setStorageBuffer(49, sortCounterBuf);
         compactPipeline.setTexture(50, ggxELutTex_);
+        compactPipeline.setStorageBufferRead(51, blasNodeBuf);
+        compactPipeline.setStorageBufferRead(52, blasRecordBuf);
+        compactPipeline.setStorageBufferRead(53, tlasInstanceBuf);
+        compactPipeline.setStorageBufferRead(54, objTriBuf);
+        compactPipeline.setStorageBufferRead(55, objTriBuf2);
 
         // F2a: rt_bounce1_main processes bounce 1 (i=1) as a separate kernel.
         // Full bind-group mirror (same shader source, different entry point).
@@ -800,6 +862,11 @@ struct WgpuPathTracer::Impl {
         bounce1Pipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         bounce1Pipeline.setStorageBuffer(49, sortCounterBuf);
         bounce1Pipeline.setTexture(50, ggxELutTex_);
+        bounce1Pipeline.setStorageBufferRead(51, blasNodeBuf);
+        bounce1Pipeline.setStorageBufferRead(52, blasRecordBuf);
+        bounce1Pipeline.setStorageBufferRead(53, tlasInstanceBuf);
+        bounce1Pipeline.setStorageBufferRead(54, objTriBuf);
+        bounce1Pipeline.setStorageBufferRead(55, objTriBuf2);
 
         // F2b: rt_accum_main runs the accumulation / temporal-reprojection
         // pipeline over aliveQueue.  Reads PathStateEntry (final radiance +
@@ -854,6 +921,11 @@ struct WgpuPathTracer::Impl {
         accumPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         accumPipeline.setStorageBuffer(49, sortCounterBuf);
         accumPipeline.setTexture(50, ggxELutTex_);
+        accumPipeline.setStorageBufferRead(51, blasNodeBuf);
+        accumPipeline.setStorageBufferRead(52, blasRecordBuf);
+        accumPipeline.setStorageBufferRead(53, tlasInstanceBuf);
+        accumPipeline.setStorageBufferRead(54, objTriBuf);
+        accumPipeline.setStorageBufferRead(55, objTriBuf2);
 
         // F2c: rt_sort_prefix_main runs a tiny 1-thread prefix sum over
         // matBucketCount.  Full bind-group mirror — WebGPU layout validation.
@@ -906,6 +978,11 @@ struct WgpuPathTracer::Impl {
         sortPrefixPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         sortPrefixPipeline.setStorageBuffer(49, sortCounterBuf);
         sortPrefixPipeline.setTexture(50, ggxELutTex_);
+        sortPrefixPipeline.setStorageBufferRead(51, blasNodeBuf);
+        sortPrefixPipeline.setStorageBufferRead(52, blasRecordBuf);
+        sortPrefixPipeline.setStorageBufferRead(53, tlasInstanceBuf);
+        sortPrefixPipeline.setStorageBufferRead(54, objTriBuf);
+        sortPrefixPipeline.setStorageBufferRead(55, objTriBuf2);
 
         // F2c: rt_sort_scatter_main bucket-scatters aliveQueue → sortedAliveQueue.
         sortScatterPipeline.setUniformBuffer(0, rtUniformBuf);
@@ -957,6 +1034,11 @@ struct WgpuPathTracer::Impl {
         sortScatterPipeline.setStorageBuffer(48, sortedAliveQueueBuf);
         sortScatterPipeline.setStorageBuffer(49, sortCounterBuf);
         sortScatterPipeline.setTexture(50, ggxELutTex_);
+        sortScatterPipeline.setStorageBufferRead(51, blasNodeBuf);
+        sortScatterPipeline.setStorageBufferRead(52, blasRecordBuf);
+        sortScatterPipeline.setStorageBufferRead(53, tlasInstanceBuf);
+        sortScatterPipeline.setStorageBufferRead(54, objTriBuf);
+        sortScatterPipeline.setStorageBufferRead(55, objTriBuf2);
 
         // Spatial filter — set ALL bindings upfront.
         // Binding 1 (colorIn) and binding 2 (colorOut) are rebound per-pass; seed
@@ -1832,12 +1914,26 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
         r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 32, 0.f);
         r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
+        std::vector<std::pair<int, int>>* triRangesOut =
+                d.tlasEnabled_ ? &r.entryTriRanges : nullptr;
         r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
                                            r.rawObjTriBuf, r.matrixCpuBuf,
-                                           r.triCapacity, r.matCapacity, r.meshCapacity);
+                                           r.triCapacity, r.matCapacity, r.meshCapacity,
+                                           0, 0, 0, triRangesOut);
         r.matCount  = matCount;   // upper-bound: number of unique meshes (some may share materials)
         r.meshCount = meshCount;  // number of expanded mesh entries (instances)
-        buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
+        // PR2b plumbing — when TLAS mode is on, build per-entry BLASes *before*
+        // the global single-level buildBVH reorders rawObjTriBuf.  BlasRecords
+        // are CPU-only in PR2b; the GPU shader keeps using the single-level BVH
+        // until the TLAS traversal shader lands in PR2c.
+        if (d.tlasEnabled_) {
+            buildBlasesForEntries(entries, r.entryTriRanges, r.rawObjTriBuf,
+                                  r.blasNodes, r.blasLeafIndices,
+                                  r.blasRecords, r.tlasInstances,
+                                  r.tlasToEntryIdx);
+        }
+        buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices,
+                 r.rawObjTriBuf, d.tlasEnabled_);
         r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
         // BVH headroom: same philosophy as triCapacity — capped absolute, not 2×.
         // Typical overlay BVH append adds a few hundred nodes; 32k headroom absorbs
@@ -1852,19 +1948,34 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.emissiveTriCount = 0;
         r.emissiveTotalArea = 0.f;
         r.emissiveTotalPower = 0.f;
+        // Enumerate emissive tris from rawObjTriBuf, not triBuffer.  At runtime
+        // `triData` (sampled by the WGSL emissive NEE) is the VT output of the
+        // obj-space tri buffer, so `ti` has to be in rawObjTriBuf order.  Under
+        // single-level BVH mode the two buffers are reordered in sync, so the
+        // result is identical; under TLAS mode they diverge (rawObjTriBuf stays
+        // in per-BLAS leaf order, triBuffer is reordered by the top-level
+        // single-level buildBVH) — and iterating triBuffer would record indices
+        // that point to the wrong triangle in `triData`.  Area is computed in
+        // world space by transforming obj-space vertices through the entry's
+        // worldMatrix so the emissive-power CDF matches the real scene scale.
         for (int ti = 0; ti < r.triCount; ti++) {
-            const int matIdx = static_cast<int>(r.triBuffer[pagedIdx(ti, 0) + 3]);
+            const float* t = r.rawObjTriBuf.data() + static_cast<size_t>(ti) * 32;
+            const int matIdx  = static_cast<int>(t[3]);
+            const int meshIdx = static_cast<int>(t[7]);
             const float er = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 0];
             const float eg = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 1];
             const float eb = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 2];
             const float luminance = 0.2126f * er + 0.7152f * eg + 0.0722f * eb;
             if (luminance > 0.001f) {
-                const float* v0p = r.triBuffer.data() + pagedIdx(ti, 0);
-                const float* v1p = r.triBuffer.data() + pagedIdx(ti, 1);
-                const float* v2p = r.triBuffer.data() + pagedIdx(ti, 2);
-                Vector3 v0(v0p[0], v0p[1], v0p[2]);
-                Vector3 v1(v1p[0], v1p[1], v1p[2]);
-                Vector3 v2(v2p[0], v2p[1], v2p[2]);
+                Vector3 v0(t[0], t[1], t[2]);
+                Vector3 v1(t[4], t[5], t[6]);
+                Vector3 v2(t[8], t[9], t[10]);
+                if (meshIdx >= 0 && meshIdx < static_cast<int>(entries.size())) {
+                    const Matrix4& world = entries[meshIdx].worldMatrix;
+                    v0.applyMatrix4(world);
+                    v1.applyMatrix4(world);
+                    v2.applyMatrix4(world);
+                }
                 Vector3 cross;
                 cross.crossVectors(v1 - v0, v2 - v0);
                 const float area = cross.length() * 0.5f;
@@ -1877,8 +1988,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                     r.emissiveTriCpu.push_back(r.emissiveTotalPower);
                     r.emissiveTriCpu.push_back(power);
                     r.emissiveTriCount++;
-                    // Record which mesh this emissive tri belongs to (triData row1.w = meshIdx)
-                    r.emissiveMeshSet.insert(static_cast<int>(v1p[3]));
+                    r.emissiveMeshSet.insert(meshIdx);
                 }
             }
         }
@@ -1940,12 +2050,23 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
         r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 32, 0.f);
         r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
+        std::vector<std::pair<int, int>>* triRangesOut =
+                d.tlasEnabled_ ? &r.entryTriRanges : nullptr;
         r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
                                            r.rawObjTriBuf, r.matrixCpuBuf,
-                                           r.triCapacity, r.matCapacity, r.meshCapacity);
+                                           r.triCapacity, r.matCapacity, r.meshCapacity,
+                                           0, 0, 0, triRangesOut);
         r.matCount  = matCount;   // upper-bound: number of unique meshes (some may share materials)
         r.meshCount = meshCount;  // number of expanded mesh entries (instances)
-        buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
+        // PR2b plumbing — see emscripten branch above for rationale.
+        if (d.tlasEnabled_) {
+            buildBlasesForEntries(entries, r.entryTriRanges, r.rawObjTriBuf,
+                                  r.blasNodes, r.blasLeafIndices,
+                                  r.blasRecords, r.tlasInstances,
+                                  r.tlasToEntryIdx);
+        }
+        buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices,
+                 r.rawObjTriBuf, d.tlasEnabled_);
         r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
         // BVH headroom: same philosophy as triCapacity — capped absolute, not 2×.
         // Typical overlay BVH append adds a few hundred nodes; 32k headroom absorbs
@@ -1960,19 +2081,26 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.emissiveTriCount = 0;
         r.emissiveTotalArea = 0.f;
         r.emissiveTotalPower = 0.f;
+        // Enumerate emissive tris from rawObjTriBuf, not triBuffer.  See
+        // emscripten branch above for full rationale.
         for (int ti = 0; ti < r.triCount; ti++) {
-            const int matIdx = static_cast<int>(r.triBuffer[pagedIdx(ti, 0) + 3]);
+            const float* t = r.rawObjTriBuf.data() + static_cast<size_t>(ti) * 32;
+            const int matIdx  = static_cast<int>(t[3]);
+            const int meshIdx = static_cast<int>(t[7]);
             const float er = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 0];
             const float eg = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 1];
             const float eb = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 2];
             const float luminance = 0.2126f * er + 0.7152f * eg + 0.0722f * eb;
             if (luminance > 0.001f) {
-                const float* v0p = r.triBuffer.data() + pagedIdx(ti, 0);
-                const float* v1p = r.triBuffer.data() + pagedIdx(ti, 1);
-                const float* v2p = r.triBuffer.data() + pagedIdx(ti, 2);
-                Vector3 v0(v0p[0], v0p[1], v0p[2]);
-                Vector3 v1(v1p[0], v1p[1], v1p[2]);
-                Vector3 v2(v2p[0], v2p[1], v2p[2]);
+                Vector3 v0(t[0], t[1], t[2]);
+                Vector3 v1(t[4], t[5], t[6]);
+                Vector3 v2(t[8], t[9], t[10]);
+                if (meshIdx >= 0 && meshIdx < static_cast<int>(entries.size())) {
+                    const Matrix4& world = entries[meshIdx].worldMatrix;
+                    v0.applyMatrix4(world);
+                    v1.applyMatrix4(world);
+                    v2.applyMatrix4(world);
+                }
                 Vector3 cross;
                 cross.crossVectors(v1 - v0, v2 - v0);
                 const float area = cross.length() * 0.5f;
@@ -1985,7 +2113,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                     r.emissiveTriCpu.push_back(r.emissiveTotalPower);
                     r.emissiveTriCpu.push_back(power);
                     r.emissiveTriCount++;
-                    r.emissiveMeshSet.insert(static_cast<int>(v1p[3]));
+                    r.emissiveMeshSet.insert(meshIdx);
                 }
             }
         }
@@ -2002,6 +2130,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.bvhNodes = std::move(r.bvhNodes);
         d.bvhIndices = std::move(r.bvhIndices);
         d.leafIndices = std::move(r.leafIndices);
+        d.blasNodes = std::move(r.blasNodes);
+        d.blasLeafIndices = std::move(r.blasLeafIndices);
+        d.blasRecords = std::move(r.blasRecords);
+        d.tlasInstances = std::move(r.tlasInstances);
+        d.tlasToEntryIdx = std::move(r.tlasToEntryIdx);
         d.bvhNodeCpuBuf = std::move(r.bvhNodeCpuBuf);
         d.refitMetaCpuBuf = std::move(r.refitMetaCpuBuf);
         d.emissiveTriCpu = std::move(r.emissiveTriCpu);
@@ -2084,6 +2217,26 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.accumPipeline.setTexture(5, d.triTex);
             d.sortPrefixPipeline.setTexture(5, d.triTex);
             d.sortScatterPipeline.setTexture(5, d.triTex);
+            // PR2c.2c.i — rebind objTriBuf/objTriBuf2 on all rt-family pipelines.
+            // PR2c.2c.ii's TLAS traversal reads object-space triangles from these
+            // bindings; in this PR they're only touched by the sceneHitRaw
+            // keepalive branch, which is never taken at runtime.
+            d.rtPipeline.setStorageBufferRead(54, d.objTriBuf);
+            d.rtPipeline.setStorageBufferRead(55, d.objTriBuf2);
+            d.primaryPipeline.setStorageBufferRead(54, d.objTriBuf);
+            d.primaryPipeline.setStorageBufferRead(55, d.objTriBuf2);
+            d.bouncesPipeline.setStorageBufferRead(54, d.objTriBuf);
+            d.bouncesPipeline.setStorageBufferRead(55, d.objTriBuf2);
+            d.compactPipeline.setStorageBufferRead(54, d.objTriBuf);
+            d.compactPipeline.setStorageBufferRead(55, d.objTriBuf2);
+            d.bounce1Pipeline.setStorageBufferRead(54, d.objTriBuf);
+            d.bounce1Pipeline.setStorageBufferRead(55, d.objTriBuf2);
+            d.accumPipeline.setStorageBufferRead(54, d.objTriBuf);
+            d.accumPipeline.setStorageBufferRead(55, d.objTriBuf2);
+            d.sortPrefixPipeline.setStorageBufferRead(54, d.objTriBuf);
+            d.sortPrefixPipeline.setStorageBufferRead(55, d.objTriBuf2);
+            d.sortScatterPipeline.setStorageBufferRead(54, d.objTriBuf);
+            d.sortScatterPipeline.setStorageBufferRead(55, d.objTriBuf2);
         }
 
         // Size emissiveTriBuf to the ACTUAL emissive-tri count (was previously
@@ -2161,6 +2314,90 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.accumPipeline.setStorageBufferRead(27, d.motionMatBuf);
             d.sortPrefixPipeline.setStorageBufferRead(27, d.motionMatBuf);
             d.sortScatterPipeline.setStorageBufferRead(27, d.motionMatBuf);
+        }
+
+        // PR2c.2b — upload BLAS/TLAS CPU state to GPU when tlasEnabled_, and
+        // rebind all 8 rt-family pipelines if any buffer was reallocated.  The
+        // bindings themselves are declared in the shader at slots 51/52/53 and
+        // kept alive by a runtime-false branch in `sceneHitRaw` (rt.bvhAux.y is
+        // never set to 1 in this PR).  The nested TLAS->BLAS walk lands in
+        // PR2c.2c; this PR just ensures the plumbing is ready end-to-end.
+        if (d.tlasEnabled_) {
+            const int blasNodeCount     = static_cast<int>(d.blasNodes.size());
+            const int blasRecordCount   = static_cast<int>(d.blasRecords.size());
+            const int tlasInstanceCount = static_cast<int>(d.tlasInstances.size());
+
+            bool rebindBlasNodes     = false;
+            bool rebindBlasRecords   = false;
+            bool rebindTlasInstances = false;
+            if (blasNodeCount > d.blasNodeCapacity_) {
+                d.blasNodeCapacity_ = std::max(blasNodeCount, 1);
+                d.blasNodeBuf = WgpuBuffer(d.renderer,
+                        static_cast<size_t>(d.blasNodeCapacity_) * BVH4_GPU_U32S * sizeof(uint32_t),
+                        WgpuBuffer::Usage::Storage);
+                rebindBlasNodes = true;
+            }
+            if (blasRecordCount > d.blasRecordCapacity_) {
+                d.blasRecordCapacity_ = std::max(blasRecordCount, 1);
+                d.blasRecordBuf = WgpuBuffer(d.renderer,
+                        static_cast<size_t>(d.blasRecordCapacity_) * sizeof(BlasRecord),
+                        WgpuBuffer::Usage::Storage);
+                rebindBlasRecords = true;
+            }
+            if (tlasInstanceCount > d.tlasInstanceCapacity_) {
+                d.tlasInstanceCapacity_ = std::max(tlasInstanceCount, 1);
+                d.tlasInstanceBuf = WgpuBuffer(d.renderer,
+                        static_cast<size_t>(d.tlasInstanceCapacity_) * sizeof(TlasInstance),
+                        WgpuBuffer::Usage::Storage);
+                rebindTlasInstances = true;
+            }
+
+            if (rebindBlasNodes) {
+                d.rtPipeline.setStorageBufferRead(51, d.blasNodeBuf);
+                d.primaryPipeline.setStorageBufferRead(51, d.blasNodeBuf);
+                d.bouncesPipeline.setStorageBufferRead(51, d.blasNodeBuf);
+                d.compactPipeline.setStorageBufferRead(51, d.blasNodeBuf);
+                d.bounce1Pipeline.setStorageBufferRead(51, d.blasNodeBuf);
+                d.accumPipeline.setStorageBufferRead(51, d.blasNodeBuf);
+                d.sortPrefixPipeline.setStorageBufferRead(51, d.blasNodeBuf);
+                d.sortScatterPipeline.setStorageBufferRead(51, d.blasNodeBuf);
+            }
+            if (rebindBlasRecords) {
+                d.rtPipeline.setStorageBufferRead(52, d.blasRecordBuf);
+                d.primaryPipeline.setStorageBufferRead(52, d.blasRecordBuf);
+                d.bouncesPipeline.setStorageBufferRead(52, d.blasRecordBuf);
+                d.compactPipeline.setStorageBufferRead(52, d.blasRecordBuf);
+                d.bounce1Pipeline.setStorageBufferRead(52, d.blasRecordBuf);
+                d.accumPipeline.setStorageBufferRead(52, d.blasRecordBuf);
+                d.sortPrefixPipeline.setStorageBufferRead(52, d.blasRecordBuf);
+                d.sortScatterPipeline.setStorageBufferRead(52, d.blasRecordBuf);
+            }
+            if (rebindTlasInstances) {
+                d.rtPipeline.setStorageBufferRead(53, d.tlasInstanceBuf);
+                d.primaryPipeline.setStorageBufferRead(53, d.tlasInstanceBuf);
+                d.bouncesPipeline.setStorageBufferRead(53, d.tlasInstanceBuf);
+                d.compactPipeline.setStorageBufferRead(53, d.tlasInstanceBuf);
+                d.bounce1Pipeline.setStorageBufferRead(53, d.tlasInstanceBuf);
+                d.accumPipeline.setStorageBufferRead(53, d.tlasInstanceBuf);
+                d.sortPrefixPipeline.setStorageBufferRead(53, d.tlasInstanceBuf);
+                d.sortScatterPipeline.setStorageBufferRead(53, d.tlasInstanceBuf);
+            }
+
+            if (blasNodeCount > 0) {
+                std::vector<uint32_t> blasPacked(
+                        static_cast<size_t>(d.blasNodeCapacity_) * BVH4_GPU_U32S, 0u);
+                packBvh4Buffer(d.blasNodes, blasPacked, d.blasNodeCapacity_);
+                d.blasNodeBuf.write(blasPacked.data(),
+                        static_cast<size_t>(blasNodeCount) * BVH4_GPU_U32S * sizeof(uint32_t));
+            }
+            if (blasRecordCount > 0) {
+                d.blasRecordBuf.write(d.blasRecords.data(),
+                        static_cast<size_t>(blasRecordCount) * sizeof(BlasRecord));
+            }
+            if (tlasInstanceCount > 0) {
+                d.tlasInstanceBuf.write(d.tlasInstances.data(),
+                        static_cast<size_t>(tlasInstanceCount) * sizeof(TlasInstance));
+            }
         }
 
         // Upload atlas
@@ -2339,6 +2576,47 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             }
         }
         d.matrixBuf.write(d.matrixCpuBuf.data(), static_cast<size_t>(d.meshCapacity_) * 32 * sizeof(float));
+
+        // Per-frame TLAS instance refresh.  tlasInstances[] is populated only
+        // at scene build time; without this refresh the ray traversal would
+        // keep transforming rays with stale object->world matrices, so moving
+        // meshes would render at their original position even though the
+        // single-level BVH refit + VT keep the emissive / shadow paths current
+        // (which is exactly the "shadow moves, mesh doesn't" symptom).
+        if (d.tlasEnabled_ && !topoChanged
+            && !d.tlasInstances.empty()
+            && d.tlasToEntryIdx.size() == d.tlasInstances.size()) {
+            auto writeMat3x4 = [](const Matrix4& m, float out[3][4]) {
+                const auto& e = m.elements;
+                for (int row = 0; row < 3; ++row) {
+                    out[row][0] = e[row];
+                    out[row][1] = e[4 + row];
+                    out[row][2] = e[8 + row];
+                    out[row][3] = e[12 + row];
+                }
+            };
+            for (size_t j = 0; j < d.tlasInstances.size(); ++j) {
+                const uint32_t ei = d.tlasToEntryIdx[j];
+                if (ei >= rtEntries.size()) continue;
+                const Matrix4& w = rtEntries[ei].worldMatrix;
+                auto& inst = d.tlasInstances[j];
+                writeMat3x4(w, inst.objToWorld);
+                Matrix4 inv(w);
+                inv.invert();
+                writeMat3x4(inv, inst.worldToObj);
+                const auto& e = w.elements;
+                const Vector3 bx(e[0], e[1], e[2]);
+                const Vector3 by(e[4], e[5], e[6]);
+                const Vector3 bz(e[8], e[9], e[10]);
+                const float lx = bx.length(), ly = by.length(), lz = bz.length();
+                const float eps = 1e-4f * std::max({lx, ly, lz, 1.f});
+                const bool nonUniform =
+                        std::abs(lx - ly) > eps || std::abs(ly - lz) > eps;
+                inst.flags = nonUniform ? 1u : 0u;
+            }
+            d.tlasInstanceBuf.write(d.tlasInstances.data(),
+                    d.tlasInstances.size() * sizeof(TlasInstance));
+        }
 
         // Compute 2D dispatch dimensions (WebGPU max per-dimension is 65535)
         const uint32_t vtTotal = (static_cast<uint32_t>(d.triCount_) + 63u) / 64u;
@@ -2653,6 +2931,12 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
     u.restirParams[3] = d.emissiveIntensity_;  // scene-wide multiplier applied to h.emissive on hit
     u.bvhAux[0] = static_cast<uint32_t>(d.bvhRootIdx_);  // traversal root (0=normal, >0=overlay)
+    // .y = tlas_enabled flag (selects the nested TLAS->BLAS walk in the shader).
+    // .z = tlasInstanceCount — consumed by sceneHitRawTlas / sceneAnyHitTlas.
+    // .w = objTriSplit for loadObjTri's buf1/buf2 routing.
+    u.bvhAux[1] = d.tlasEnabled_ ? 1u : 0u;
+    u.bvhAux[2] = static_cast<uint32_t>(d.tlasInstances.size());
+    u.bvhAux[3] = static_cast<uint32_t>(d.objTriSplit_);
     u.lens[0] = d.lens_.fStop;
     u.lens[1] = d.lens_.focusDistance;
     u.lens[2] = static_cast<float>(d.lens_.apertureBlades);
@@ -3566,6 +3850,21 @@ void WgpuPathTracer::setReSTIRGIEnabled(bool enabled) {
 
 bool WgpuPathTracer::restirGiEnabled() const {
     return pimpl_->restirGiEnabled_;
+}
+
+void WgpuPathTracer::setTlasEnabled(bool enabled) {
+    if (pimpl_->tlasEnabled_ == enabled) return;
+    pimpl_->frameCount_ = 0.f;
+    pimpl_->tlasEnabled_ = enabled;
+    // Force a fresh topology build so tlasInstances/blasRecords are rebuilt
+    // (toggling on) or freshly invalidated (toggling off).  Without this the
+    // shader's TLAS branch would run against whatever stale state the flag
+    // was last built for — at best rendering the scene as background.
+    pimpl_->prevMeshes.clear();
+}
+
+bool WgpuPathTracer::tlasEnabled() const {
+    return pimpl_->tlasEnabled_;
 }
 
 void WgpuPathTracer::setSamplesPerPixel(int spp) {

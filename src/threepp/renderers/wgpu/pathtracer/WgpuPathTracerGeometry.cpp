@@ -24,7 +24,8 @@ int buildGeometryBuffers(
         std::vector<float>& rawObjTriBuf,
         std::vector<float>& matrixBuf,
         int maxTris, int maxMats, int maxMeshes,
-        int triOffset, int matOffset, int meshOffset) {
+        int triOffset, int matOffset, int meshOffset,
+        std::vector<std::pair<int, int>>* entryTriRanges) {
     // Full build: clear everything.  Append mode (offsets > 0): preserve existing data.
     if (triOffset == 0 && matOffset == 0 && meshOffset == 0) {
         std::ranges::fill(triBuffer, 0.f);
@@ -36,6 +37,10 @@ int buildGeometryBuffers(
     int triCount = triOffset;
     int matCount = matOffset;
     int meshCount = meshOffset;
+
+    if (entryTriRanges) {
+        entryTriRanges->assign(entries.size(), {triCount, 0});
+    }
 
     // Deduplicate by Material* so meshes sharing the same material get the same matIdx,
     // enabling the denoiser to share samples across them.
@@ -61,7 +66,12 @@ int buildGeometryBuffers(
         p[0] = x; p[1] = y; p[2] = z; p[3] = w;
     };
 
-    for (auto& entry : entries) {
+    for (std::size_t eIdx = 0; eIdx < entries.size(); ++eIdx) {
+        auto& entry = entries[eIdx];
+        const int entryTriStart = triCount;
+        if (entryTriRanges) {
+            (*entryTriRanges)[eIdx] = {entryTriStart, 0};
+        }
         if (triCount >= maxTris || meshCount >= maxMeshes) break;
 
         int matIdx;
@@ -310,6 +320,10 @@ int buildGeometryBuffers(
             setObj(triCount, 7, u2, v2uv, 0.f, 0.f);
 
             ++triCount;
+        }
+
+        if (entryTriRanges) {
+            (*entryTriRanges)[eIdx] = {entryTriStart, triCount - entryTriStart};
         }
     }
     return triCount;
