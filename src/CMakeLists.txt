@@ -212,6 +212,7 @@ set(publicHeaders
         "threepp/lights/PointLight.hpp"
         "threepp/lights/PointLightShadow.hpp"
         "threepp/lights/RectAreaLight.hpp"
+        "threepp/lights/RectAreaLightUniformsLib.hpp"
         "threepp/lights/SpotLight.hpp"
         "threepp/lights/SpotLightShadow.hpp"
 
@@ -426,6 +427,8 @@ set(sources
         "threepp/lights/PointLight.cpp"
         "threepp/lights/PointLightShadow.cpp"
         "threepp/lights/RectAreaLight.cpp"
+        "threepp/lights/RectAreaLightUniformsLib.cpp"
+        "threepp/lights/ltc/ltc_data.cpp"
         "threepp/lights/SpotLight.cpp"
         "threepp/lights/SpotLightShadow.cpp"
 

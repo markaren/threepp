@@ -59,6 +59,14 @@ namespace threepp {
                         {"direction", Vector3()},
                         {"skyColor", Color()},
                         {"groundColor", Color()}};
+
+            } else if (type == "RectAreaLight") {
+
+                uniforms = {
+                        {"color", Color()},
+                        {"position", Vector3()},
+                        {"halfWidth", Vector3()},
+                        {"halfHeight", Vector3()}};
             }
 
             lights[light.id] = LightUniforms(uniforms);
@@ -127,6 +135,7 @@ namespace threepp {
                 int directionalLength = -1;
                 int pointLength = -1;
                 int spotLength = -1;
+                int rectAreaLength = -1;
                 int hemiLength = -1;
 
                 int numDirectionalShadows = -1;
@@ -152,6 +161,7 @@ namespace threepp {
             std::vector<LightUniforms*> pointShadow;
             std::vector<Texture*> pointShadowMap;
             std::vector<Matrix4*> pointShadowMatrix;
+            std::vector<LightUniforms*> rectArea;
             std::vector<LightUniforms*> hemi;
         };
 

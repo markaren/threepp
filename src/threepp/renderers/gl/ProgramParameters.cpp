@@ -177,7 +177,7 @@ ProgramParameters::ProgramParameters(
     numDirLights = lights.directional.size();
     numPointLights = lights.point.size();
     numSpotLights = lights.spot.size();
-    numRectAreaLights = 0;
+    numRectAreaLights = lights.rectArea.size();
     numHemiLights = lights.hemi.size();
 
     numDirLightShadows = lights.directionalShadowMap.size();

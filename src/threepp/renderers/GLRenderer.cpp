@@ -24,6 +24,7 @@
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/canvas/Monitor.hpp"
+#include "threepp/lights/RectAreaLightUniformsLib.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
 
 #include "threepp/objects/Group.hpp"
@@ -747,6 +748,7 @@ struct GLRenderer::Impl {
             uniforms.at("spotLightShadows").setValue(lights.state.spotShadow);
             uniforms.at("pointLights").setValue(lights.state.point);
             uniforms.at("pointLightShadows").setValue(lights.state.pointShadow);
+            uniforms.at("rectAreaLights").setValue(lights.state.rectArea);
             uniforms.at("hemisphereLights").setValue(lights.state.hemi);
 
             uniforms.at("directionalShadowMap").setValue(lights.state.directionalShadowMap);
@@ -755,6 +757,13 @@ struct GLRenderer::Impl {
             uniforms.at("spotShadowMatrix").setValue(lights.state.spotShadowMatrix);
             uniforms.at("pointShadowMap").setValue(lights.state.pointShadowMap);
             uniforms.at("pointShadowMatrix").setValue(lights.state.pointShadowMatrix);
+
+            if (!lights.state.rectArea.empty()) {
+                auto& ltcLib = RectAreaLightUniformsLib::instance();
+                ltcLib.init();
+                uniforms.at("ltc_1").setValue(ltcLib.ltc_1().get());
+                uniforms.at("ltc_2").setValue(ltcLib.ltc_2().get());
+            }
         }
 
         auto progUniforms = program->getUniforms();
@@ -1082,6 +1091,7 @@ struct GLRenderer::Impl {
         uniforms.at("pointLightShadows").needsUpdate = value;
         uniforms.at("spotLights").needsUpdate = value;
         uniforms.at("spotLightShadows").needsUpdate = value;
+        uniforms.at("rectAreaLights").needsUpdate = value;
         uniforms.at("hemisphereLights").needsUpdate = value;
     }
 

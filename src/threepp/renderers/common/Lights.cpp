@@ -39,6 +39,7 @@ void Lights::setup(std::vector<Light*>& lights) {
     int directionalLength = 0;
     int pointLength = 0;
     int spotLength = 0;
+    int rectAreaLength = 0;
     int hemiLength = 0;
 
     int numDirectionalShadows = 0;
@@ -172,6 +173,17 @@ void Lights::setup(std::vector<Light*>& lights) {
 
             ++pointLength;
 
+        } else if (auto rectAreaLight = light->as<RectAreaLight>()) {
+
+            const auto uniforms = cache_.get(*light);
+
+            std::get<Color>(uniforms->at("color")).copy(light->color).multiplyScalar(light->intensity);
+
+            ensureCapacity(state.rectArea, rectAreaLength + 1);
+            state.rectArea[rectAreaLength] = uniforms;
+
+            ++rectAreaLength;
+
         } else if (auto hemisphereLight = light->as<HemisphereLight>()) {
 
             const auto uniforms = cache_.get(*light);
@@ -193,6 +205,7 @@ void Lights::setup(std::vector<Light*>& lights) {
     if (hash.directionalLength != directionalLength ||
         hash.pointLength != pointLength ||
         hash.spotLength != spotLength ||
+        hash.rectAreaLength != rectAreaLength ||
         hash.hemiLength != hemiLength ||
         hash.numDirectionalShadows != numDirectionalShadows ||
         hash.numPointShadows != numPointShadows ||
@@ -201,6 +214,7 @@ void Lights::setup(std::vector<Light*>& lights) {
         state.directional.resize(directionalLength);
         state.spot.resize(spotLength);
         state.point.resize(pointLength);
+        state.rectArea.resize(rectAreaLength);
         state.hemi.resize(hemiLength);
 
         state.directionalShadow.resize(numDirectionalShadows);
@@ -216,6 +230,7 @@ void Lights::setup(std::vector<Light*>& lights) {
         hash.directionalLength = directionalLength;
         hash.pointLength = pointLength;
         hash.spotLength = spotLength;
+        hash.rectAreaLength = rectAreaLength;
         hash.hemiLength = hemiLength;
 
         hash.numDirectionalShadows = numDirectionalShadows;
@@ -231,6 +246,7 @@ void Lights::setupView(std::vector<Light*>& lights, Camera* camera) {
     int directionalLength = 0;
     int pointLength = 0;
     int spotLength = 0;
+    int rectAreaLength = 0;
     int hemiLength = 0;
 
     const auto& viewMatrix = camera->matrixWorldInverse;
@@ -283,6 +299,34 @@ void Lights::setupView(std::vector<Light*>& lights, Camera* camera) {
             position.applyMatrix4(viewMatrix);
 
             ++pointLength;
+
+        } else if (auto rectAreaLight = light->as<RectAreaLight>()) {
+
+            auto& uniforms = state.rectArea.at(rectAreaLength);
+
+            auto& position = std::get<Vector3>(uniforms->at("position"));
+            auto& halfWidth = std::get<Vector3>(uniforms->at("halfWidth"));
+            auto& halfHeight = std::get<Vector3>(uniforms->at("halfHeight"));
+
+            position.setFromMatrixPosition(*rectAreaLight->matrixWorld);
+            position.applyMatrix4(viewMatrix);
+
+            // Local quad lies in the XY plane (emissive face toward -Z);
+            // width spans ±X, height spans ±Y. Transform those half-axes into
+            // view space using only the rotation of the light's world * view
+            // matrix — applyMatrix4 on a pure-rotation matrix leaves vectors
+            // without picking up translation.
+            Matrix4 rotation;
+            Matrix4 lightToView;
+            lightToView.multiplyMatrices(viewMatrix, *rectAreaLight->matrixWorld);
+            rotation.extractRotation(lightToView);
+
+            halfWidth.set(rectAreaLight->width * 0.5f, 0.f, 0.f);
+            halfHeight.set(0.f, rectAreaLight->height * 0.5f, 0.f);
+            halfWidth.applyMatrix4(rotation);
+            halfHeight.applyMatrix4(rotation);
+
+            ++rectAreaLength;
 
         } else if (light->as<HemisphereLight>()) {
 
