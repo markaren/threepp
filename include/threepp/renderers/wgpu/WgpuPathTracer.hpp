@@ -131,7 +131,8 @@ namespace threepp {
         [[nodiscard]] int overlayLayer() const;
 
         /// AOV visualization mode. 0=off (normal rendering), 1=depth, 2=normals,
-        /// 3=albedo, 4=instance ID, 5=roughness, 6=adaptive bounce (red=reduced, blue=full).
+        /// 3=albedo, 4=instance ID, 5=roughness, 6=adaptive bounce (red=reduced, blue=full),
+        /// 7=focus plane (green=at focal plane, red=closer than focus, blue=farther).
         /// 10+: post-bounce diagnostic AOVs read from pathStateBuf by rt_accum_main.
         ///   10=diffRadFinal, 11=specRadFinal, 12=touchedMoved, 13=flagBits(RGB),
         ///   14=b0Point.fract, 15=primaryDepth, 16=primaryMeshIdx, 17=primaryMatIdx,
@@ -154,6 +155,12 @@ namespace threepp {
 
         /// Convenience: set focusDistance to the world-space distance from camera to target.
         void focusOn(const Camera& camera, const Object3D& target);
+
+        /// Click-to-focus: shoot a primary ray through the scene at NDC coords
+        /// (x,y in [-1,1], y-up) and set focusDistance to the first hit. Returns
+        /// true on hit (false on miss — focus unchanged). Uses the CPU raycaster
+        /// and costs one BVH traversal.
+        bool pickFocusDistance(Object3D& scene, Camera& camera, float ndcX, float ndcY);
 
         void dispose();
 

@@ -212,6 +212,8 @@ int main(int argc, char** argv) {
     int    lensBlades    = 0;
     float  lensRotation  = 0.0f;
     bool   autofocus     = false;
+    bool   pickFocusMode = false;        // next click sets focus distance
+    bool   showFocusPlane = false;       // AOV tint for focal-plane tuning
 
     // Volumetric fog (single-scattering path tracer).
     bool  fogOn       = false;
@@ -322,6 +324,15 @@ int main(int argc, char** argv) {
                         pathTracer.focusOn(camera, *loadedModel);
                         lensFocusDist = pathTracer.lens().focusDistance;
                     }
+                    if (!autofocus) {
+                        ImGui::SameLine();
+                        if (ImGui::Button(pickFocusMode ? "(click scene...)" : "Click to focus")) {
+                            pickFocusMode = !pickFocusMode;
+                        }
+                    }
+                    if (ImGui::Checkbox("Show focus plane", &showFocusPlane)) {
+                        pathTracer.setAOVMode(showFocusPlane ? 7 : 0);
+                    }
                     if (autofocus)
                         ImGui::TextDisabled("Tracking orbit target");
                 }
@@ -344,6 +355,22 @@ int main(int argc, char** argv) {
     ioCapture.preventScrollEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
     ioCapture.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
     canvas.setIOCapture(&ioCapture);
+
+    MouseDownListener pickListener([&](int button, const Vector2& pos) {
+        if (!pickFocusMode || button != 0) return;
+        const auto ws = canvas.size();
+        const float ndcX =  (pos.x / float(ws.width()))  * 2.f - 1.f;
+        const float ndcY = -(pos.y / float(ws.height())) * 2.f + 1.f;
+        if (pathTracer.pickFocusDistance(scene, camera, ndcX, ndcY)) {
+            lensFocusDist = pathTracer.lens().focusDistance;
+            if (!dofEnabled) {
+                dofEnabled = true;
+                pathTracer.setLens({lensFStop, lensFocusDist, lensBlades, lensRotation});
+            }
+        }
+        pickFocusMode = false;
+    });
+    canvas.addMouseListener(pickListener);
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);

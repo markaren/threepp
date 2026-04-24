@@ -3847,6 +3847,17 @@ R"(
             let isEligible = primaryRough > 0.224 && primaryDepth > 0.0 && !camMovedNow;
             aovColor = select(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(1.0, 0.0, 0.0), isEligible);
         }
+        else if (aovMode == 7) {
+            // Focus-plane visualization: green at the focal plane, red in front
+            // (closer than focus), blue behind. Makes DOF tuning a visual task —
+            // slide focusDistance until the subject glows green.
+            let focusDist = rt.lens.y;
+            let rel = (primaryDepth - focusDist) / max(focusDist, 0.01);
+            let r   = clamp(-rel, 0.0, 1.0);
+            let b   = clamp( rel, 0.0, 1.0);
+            let g   = 1.0 - min(abs(rel), 1.0);
+            aovColor = select(vec3<f32>(r, g, b), vec3<f32>(0.0), primaryDepth <= 0.0);
+        }
         // Preserve pixelHistory in .w so adaptive bounce reduction keeps accumulating
         // across AOV mode 6 frames and doesn't reset to 1 each frame.
         textureStore(diffAccumWrite, pixel, vec4<f32>(aovColor, pixelHistory + 1.0));

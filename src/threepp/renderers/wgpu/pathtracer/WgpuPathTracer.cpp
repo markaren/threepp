@@ -19,6 +19,7 @@
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/core/Object3D.hpp"
+#include "threepp/core/Raycaster.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/lights/PointLight.hpp"
@@ -4367,6 +4368,16 @@ const LensSettings& WgpuPathTracer::lens() const {
 void WgpuPathTracer::focusOn(const Camera& camera, const Object3D& target) {
     pimpl_->lens_.focusDistance = camera.position.distanceTo(target.position);
     resetAccumulation();
+}
+
+bool WgpuPathTracer::pickFocusDistance(Object3D& scene, Camera& camera, float ndcX, float ndcY) {
+    Raycaster rc;
+    rc.setFromCamera({ndcX, ndcY}, camera);
+    auto hits = rc.intersectObject(scene, true);
+    if (hits.empty()) return false;
+    pimpl_->lens_.focusDistance = hits.front().distance;
+    resetAccumulation();
+    return true;
 }
 
 void WgpuPathTracer::dispose() {
