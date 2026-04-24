@@ -61,7 +61,8 @@ static std::vector<ModelEntry> scanModels(const fs::path& root) {
 int main(int argc, char** argv) {
 
     if (argc != 2) {
-        std::cout << "Usage: " << argv[0] << " <path_to_gltf_sample_folder>" << std::endl;
+        // https://github.com/KhronosGroup/glTF-Sample-Assets
+        std::cout << "Usage: " << argv[0] << " <path_to_gltf_Models_folder>" << std::endl;
         return 1;
     }
 
