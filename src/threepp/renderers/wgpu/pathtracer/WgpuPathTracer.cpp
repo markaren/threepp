@@ -28,9 +28,12 @@
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Matrix4.hpp"
+#include "threepp/objects/Bone.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Skeleton.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/Texture.hpp"
 
@@ -339,6 +342,11 @@ struct WgpuPathTracer::Impl {
         int triCount         = 0;
         int matIdx           = 0;
         int meshIdx          = 0;
+        // SkinnedMesh bone-state tracking.  Flat copy of all bone matrixWorld
+        // floats from last frame; dirty-scan compares against the current state
+        // to trigger CPU-skinning + repack when the skeleton animates.
+        const void* skeleton = nullptr;    // Skeleton* — detect swaps
+        std::vector<float> prevBoneMats;
     };
     std::vector<EntryGeoCache> entryGeoCache;
     // Reused across frames — staging for a single dirty entry's repacked tris.
@@ -2744,9 +2752,40 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             const unsigned int curPosVer = pos ? pos->version : 0u;
             const unsigned int curNrmVer = nrm ? nrm->version : 0u;
             const unsigned int curIdxVer = idx ? idx->version : 0u;
+
+            // SkinnedMesh: additionally check if any bone's matrixWorld has
+            // changed since last frame.  Skinning is GPU-only in the raster
+            // path, so position/normal attribute versions never change as the
+            // skeleton animates — without this check the path tracer would
+            // see a frozen bind-pose.
+            bool skinDirty = false;
+            Skeleton* curSkel = nullptr;
+            if (auto* sm = dynamic_cast<SkinnedMesh*>(mesh); sm && sm->skeleton) {
+                curSkel = sm->skeleton.get();
+                const auto& bones = curSkel->bones;
+                const size_t needFloats = bones.size() * 16;
+                if (cache.skeleton != curSkel || cache.prevBoneMats.size() != needFloats) {
+                    skinDirty = true;
+                } else {
+                    static const Matrix4 kIdentity;
+                    for (size_t b = 0; b < bones.size(); ++b) {
+                        const auto& e = bones[b] ? bones[b]->matrixWorld->elements
+                                                 : kIdentity.elements;
+                        for (int k = 0; k < 16; ++k) {
+                            if (cache.prevBoneMats[b * 16 + k] != e[k]) {
+                                skinDirty = true;
+                                break;
+                            }
+                        }
+                        if (skinDirty) break;
+                    }
+                }
+            }
+
             if (curPosVer == cache.posVer
                 && curNrmVer == cache.nrmVer
-                && curIdxVer == cache.idxVer) continue;
+                && curIdxVer == cache.idxVer
+                && !skinDirty) continue;
 
             // Dirty — repack this entry's tris into a reused staging vector.
             const size_t needFloats = static_cast<size_t>(cache.triCount) * 32;
@@ -2755,6 +2794,19 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                                                 cache.matIdx, cache.meshIdx,
                                                 d.dirtyStaging_.data(), cache.triCount);
             if (wrote <= 0) continue;
+
+            // Snapshot bone state for next-frame comparison.
+            if (curSkel) {
+                static const Matrix4 kIdentity;
+                cache.skeleton = curSkel;
+                const auto& bones = curSkel->bones;
+                cache.prevBoneMats.resize(bones.size() * 16);
+                for (size_t b = 0; b < bones.size(); ++b) {
+                    const auto& e = bones[b] ? bones[b]->matrixWorld->elements
+                                             : kIdentity.elements;
+                    std::memcpy(cache.prevBoneMats.data() + b * 16, e.data(), 16 * sizeof(float));
+                }
+            }
 
             // Fan out into rawObjTriBuf at each tri's POST-reorder position.
             // For TLAS mode triInvPerm_ is identity → copy is contiguous.

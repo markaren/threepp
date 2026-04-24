@@ -7,10 +7,14 @@
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
+#include "threepp/objects/Bone.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Skeleton.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/textures/Texture.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <utility>
 
@@ -350,22 +354,136 @@ int repackEntryObjTri(
         return {uvs->getX(i), uvs->getY(i)};
     };
 
+    // SkinnedMesh: pre-compute CPU-skinned positions + normals once per vertex.
+    // Output is mesh-local space (bindMatrixInverse applied at the end), so the
+    // VT pass's `mesh.matrixWorld` multiply lifts it correctly to world space.
+    auto* skinnedMesh = dynamic_cast<SkinnedMesh*>(entry.mesh);
+    const bool doSkin = skinnedMesh != nullptr
+                        && skinnedMesh->skeleton != nullptr
+                        && !skinnedMesh->skeleton->bones.empty();
+    std::vector<Vector3> skinnedPos, skinnedNrm;
+    if (doSkin) {
+        auto* skinIdxAttr = geo->getAttribute<float>("skinIndex");
+        auto* skinWAttr   = geo->getAttribute<float>("skinWeight");
+        if (!skinIdxAttr || !skinWAttr) {
+            // Missing skin attributes — fall back to static positions.
+            // (shouldn't happen for properly built SkinnedMesh)
+        } else {
+            const int vtxCount = static_cast<int>(pos->count());
+            skinnedPos.assign(vtxCount, Vector3{});
+            if (nrm) skinnedNrm.assign(vtxCount, Vector3{});
+
+            const auto& skel = *skinnedMesh->skeleton;
+            const Matrix4& bindMat    = skinnedMesh->bindMatrix;
+            const Matrix4& bindMatInv = skinnedMesh->bindMatrixInverse;
+            const int boneCount = static_cast<int>(skel.bones.size());
+
+            // Pre-compute per-bone skinning matrices: matrixWorld * boneInverse
+            std::vector<Matrix4> boneMats(boneCount);
+            for (int b = 0; b < boneCount; ++b) {
+                if (skel.bones[b]) {
+                    boneMats[b].multiplyMatrices(*skel.bones[b]->matrixWorld, skel.boneInverses[b]);
+                }
+            }
+
+            Vector4 sIdx, sW;
+            for (int i = 0; i < vtxCount; ++i) {
+                skinIdxAttr->setFromBufferAttribute(sIdx, i);
+                skinWAttr->setFromBufferAttribute(sW, i);
+
+                // bindMatrix * position (point, w=1)
+                Vector3 bindPos(pos->getX(i), pos->getY(i), pos->getZ(i));
+                bindPos.applyMatrix4(bindMat);
+
+                // bindMatrix * normal (direction, use upper 3x3 — no translation, no normalize yet)
+                Vector3 bindNrm;
+                if (nrm) {
+                    bindNrm.set(nrm->getX(i), nrm->getY(i), nrm->getZ(i));
+                    const auto& e = bindMat.elements;
+                    Vector3 t;
+                    t.x = e[0] * bindNrm.x + e[4] * bindNrm.y + e[8]  * bindNrm.z;
+                    t.y = e[1] * bindNrm.x + e[5] * bindNrm.y + e[9]  * bindNrm.z;
+                    t.z = e[2] * bindNrm.x + e[6] * bindNrm.y + e[10] * bindNrm.z;
+                    bindNrm = t;
+                }
+
+                Vector3 accPos(0.f, 0.f, 0.f);
+                Vector3 accNrm(0.f, 0.f, 0.f);
+                for (unsigned b = 0; b < 4; ++b) {
+                    const float w = sW[b];
+                    if (w == 0.f) continue;
+                    const int bIdx = static_cast<int>(sIdx[b]);
+                    if (bIdx < 0 || bIdx >= boneCount) continue;
+                    const Matrix4& m = boneMats[bIdx];
+
+                    // m * bindPos
+                    Vector3 bp = bindPos;
+                    bp.applyMatrix4(m);
+                    accPos.addScaledVector(bp, w);
+
+                    if (nrm) {
+                        // m (3x3 only) * bindNrm
+                        const auto& e = m.elements;
+                        Vector3 bn;
+                        bn.x = e[0] * bindNrm.x + e[4] * bindNrm.y + e[8]  * bindNrm.z;
+                        bn.y = e[1] * bindNrm.x + e[5] * bindNrm.y + e[9]  * bindNrm.z;
+                        bn.z = e[2] * bindNrm.x + e[6] * bindNrm.y + e[10] * bindNrm.z;
+                        accNrm.addScaledVector(bn, w);
+                    }
+                }
+
+                // bindMatrixInverse applied to both (the shader does this via
+                // bindMatrixInverse * skinnedPos and bindMatrixInverse * (skinnedNormal,0))
+                accPos.applyMatrix4(bindMatInv);
+                skinnedPos[i] = accPos;
+
+                if (nrm) {
+                    const auto& e = bindMatInv.elements;
+                    Vector3 t;
+                    t.x = e[0] * accNrm.x + e[4] * accNrm.y + e[8]  * accNrm.z;
+                    t.y = e[1] * accNrm.x + e[5] * accNrm.y + e[9]  * accNrm.z;
+                    t.z = e[2] * accNrm.x + e[6] * accNrm.y + e[10] * accNrm.z;
+                    const float len = std::sqrt(t.x * t.x + t.y * t.y + t.z * t.z);
+                    if (len > 0.f) {
+                        const float inv = 1.f / len;
+                        t.x *= inv; t.y *= inv; t.z *= inv;
+                    }
+                    skinnedNrm[i] = t;
+                }
+            }
+        }
+    }
+
+    auto getPos = [&](int i, float& x, float& y, float& z) {
+        if (!skinnedPos.empty()) {
+            x = skinnedPos[i].x; y = skinnedPos[i].y; z = skinnedPos[i].z;
+        } else {
+            x = pos->getX(i); y = pos->getY(i); z = pos->getZ(i);
+        }
+    };
+    auto getNrm = [&](int i, float& x, float& y, float& z) {
+        if (!skinnedNrm.empty()) {
+            x = skinnedNrm[i].x; y = skinnedNrm[i].y; z = skinnedNrm[i].z;
+        } else if (nrm) {
+            x = nrm->getX(i); y = nrm->getY(i); z = nrm->getZ(i);
+        } else {
+            x = 0.f; y = 1.f; z = 0.f;
+        }
+    };
+
     const int nTris = idx ? static_cast<int>(idx->count()) / 3
                           : static_cast<int>(pos->count()) / 3;
     const int writeCount = std::min(nTris, maxTris);
     for (int ti = 0; ti < writeCount; ++ti) {
         const int i0 = vi(ti, 0), i1 = vi(ti, 1), i2 = vi(ti, 2);
-        const float x0 = pos->getX(i0), y0 = pos->getY(i0), z0 = pos->getZ(i0);
-        const float x1 = pos->getX(i1), y1 = pos->getY(i1), z1 = pos->getZ(i1);
-        const float x2 = pos->getX(i2), y2 = pos->getY(i2), z2 = pos->getZ(i2);
-        float nx0 = 0.f, ny0 = 1.f, nz0 = 0.f;
-        float nx1 = 0.f, ny1 = 1.f, nz1 = 0.f;
-        float nx2 = 0.f, ny2 = 1.f, nz2 = 0.f;
-        if (nrm) {
-            nx0 = nrm->getX(i0); ny0 = nrm->getY(i0); nz0 = nrm->getZ(i0);
-            nx1 = nrm->getX(i1); ny1 = nrm->getY(i1); nz1 = nrm->getZ(i1);
-            nx2 = nrm->getX(i2); ny2 = nrm->getY(i2); nz2 = nrm->getZ(i2);
-        }
+        float x0, y0, z0, x1, y1, z1, x2, y2, z2;
+        getPos(i0, x0, y0, z0);
+        getPos(i1, x1, y1, z1);
+        getPos(i2, x2, y2, z2);
+        float nx0, ny0, nz0, nx1, ny1, nz1, nx2, ny2, nz2;
+        getNrm(i0, nx0, ny0, nz0);
+        getNrm(i1, nx1, ny1, nz1);
+        getNrm(i2, nx2, ny2, nz2);
         const auto [u0, v0uv] = uv(i0);
         const auto [u1, v1uv] = uv(i1);
         const auto [u2, v2uv] = uv(i2);
