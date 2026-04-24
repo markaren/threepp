@@ -320,8 +320,10 @@ struct WgpuPathTracer::Impl {
 #endif
     bool shaderHasEnvCdf_ = false;  // tracks which shader variant is active
 
-    // Shader compilation wait tracking
-    uint32_t shaderWaitFrames_ = 0;
+    // Shader compilation wait tracking (wall-clock, not frame count — during
+    // async compile the render loop runs at an unpredictable rate).
+    std::chrono::steady_clock::time_point shaderWaitStart_{};
+    int shaderWaitLastLoggedSec_ = 0;
     // True from when RT async build starts until the very first dispatch completes.
     // Ensures the VT pass (objTriBuf → triTex) runs on first dispatch even if no mesh moved.
     bool firstDispatchPending_ = false;
@@ -2723,21 +2725,26 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // Skip RT dispatch if either pipeline is still compiling asynchronously.
     // On cold shader cache (first launch / code change) this can take 10-30 seconds.
     if (!activePipeline.isReady() || !d.primaryPipeline.isReady() || !d.bouncesPipeline.isReady() || !d.compactPipeline.isReady() || !d.bounce1Pipeline.isReady() || !d.accumPipeline.isReady() || !d.sortPrefixPipeline.isReady() || !d.sortScatterPipeline.isReady()) {
-        ++d.shaderWaitFrames_;
-        if (d.shaderWaitFrames_ == 1) {
-            std::cerr << "[PathTracer] Compiling RT shaders — first launch may take 10-30s "
+        auto nowTp = std::chrono::steady_clock::now();
+        if (d.shaderWaitStart_.time_since_epoch().count() == 0) {
+            d.shaderWaitStart_ = nowTp;
+            d.shaderWaitLastLoggedSec_ = 0;
+            std::cerr << "[PathTracer] Compiling RT shaders - first launch may take 10-30s "
                          "(subsequent launches are instant via driver cache)." << std::endl;
-        } else if (d.shaderWaitFrames_ % 180 == 0) {
+        }
+        int elapsedSec = (int) std::chrono::duration_cast<std::chrono::seconds>(nowTp - d.shaderWaitStart_).count();
+        if (elapsedSec >= d.shaderWaitLastLoggedSec_ + 3) {
+            d.shaderWaitLastLoggedSec_ = elapsedSec;
             std::cerr << "[PathTracer] Still compiling shaders... ("
-                      << (d.shaderWaitFrames_ / 60) << "s elapsed)" << std::endl;
+                      << elapsedSec << "s elapsed)" << std::endl;
         }
         // Tick the device so backends that need main-thread event processing make progress.
         wgpuDevicePoll(d.device, false, nullptr);
         // Safety net: after ~60 seconds still black, force-block until async finishes.
         // This prevents a permanent black screen if something prevents the future from
         // being polled to completion in the normal render loop.
-        if (d.shaderWaitFrames_ >= 3600) {
-            std::cerr << "[PathTracer] 60s timeout — force-completing shader compilation." << std::endl;
+        if (elapsedSec >= 60) {
+            std::cerr << "[PathTracer] 60s timeout - force-completing shader compilation." << std::endl;
             activePipeline.forceFinishBuild();
             d.primaryPipeline.forceFinishBuild();
             d.bouncesPipeline.forceFinishBuild();
@@ -2746,7 +2753,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.accumPipeline.forceFinishBuild();
             d.sortPrefixPipeline.forceFinishBuild();
             d.sortScatterPipeline.forceFinishBuild();
-            d.shaderWaitFrames_ = 0;
+            d.shaderWaitStart_ = {};
+            d.shaderWaitLastLoggedSec_ = 0;
             // Fall through: isReady() now returns true; encode() will do the fast sync rebuild.
         } else {
             d.displayMat->customTextures["gBufTex"]  = d.gBuf.write;
@@ -2755,10 +2763,13 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             return;
         }
     }
-    if (d.shaderWaitFrames_ > 0) {
+    if (d.shaderWaitStart_.time_since_epoch().count() != 0) {
+        int elapsedSec = (int) std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - d.shaderWaitStart_).count();
         std::cerr << "[PathTracer] RT shaders ready after "
-                  << (d.shaderWaitFrames_ / 60) << "s — rendering started." << std::endl;
-        d.shaderWaitFrames_ = 0;
+                  << elapsedSec << "s - rendering started." << std::endl;
+        d.shaderWaitStart_ = {};
+        d.shaderWaitLastLoggedSec_ = 0;
     }
     // First dispatch after async shader compilation: triTex has never been written by the VT
     // pass (every prior frame returned early).  Force the VT pass to run now so the RT shader
