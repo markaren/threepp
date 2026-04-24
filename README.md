@@ -15,16 +15,15 @@ however much remains to be done.. Nevertheless, the library is **very** usable f
 
 * Line, Points, Mesh, InstancedMesh
 * Geometries [Box, Sphere, Plane, Cylindrical, Capsule, Tube, ++]  
-* Lights [Ambient, Directional, Point, Spot, Hemi]
+* Lights [Ambient, Directional, Point, Spot, Hemi, RectArea]
 * Raycasting [Mesh, Line, Points]
 * 2D/3D Textures, 3D text, Sprites, RenderTarget, CubeMaps
-* Transparency, Shadows
-* Morphtargets, Bones
+* Transparency, Trasnmission, Shadows
+* Animation, Morphtargets, Bones
 * Controls [Orbit, Fly, Drag, Transform]
 * Water and Sky shaders
 * Built-in text rendering and font loading [typeface.json, TTF]
 * Built-in model loaders [Binary STL, OBJ/MTL, GLTF, COLLADA, USD, FBX, SVG, URDF]
-* Animations (limited to transforms)
 * Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
@@ -37,7 +36,7 @@ Builds on Windows, Linux, MacOS, MinGW and with Emscripten.
 
 ### But, but why?
 
-Because C++ deserves nice things too. And this one delivers.
+Because C++ deserves nice things too.
 
 Also, because fun.
 
