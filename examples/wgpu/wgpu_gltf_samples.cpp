@@ -83,6 +83,7 @@ int main(int argc, char** argv) {
 
     WgpuRenderer renderer(canvas);
     renderer.outputEncoding = Encoding::sRGB;
+    renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.shadowMap().enabled = true;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
@@ -93,7 +94,7 @@ int main(int argc, char** argv) {
     pathTracer.setReSTIREnabled(false);
     pathTracer.setMaxBounces(4);
     pathTracer.setFoveatedRendering(false);
-    pathTracer.setTlasEnabled(true);
+    pathTracer.setTlasEnabled(false);
 
     RGBELoader imgLoader;
     auto env = imgLoader.load(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr", false);
@@ -250,11 +251,11 @@ int main(int argc, char** argv) {
 
         ImGui::Separator();
 
+        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
+            pathTracer.setExposure(exposure);
 
         if (!raster && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
 
-            if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
-                pathTracer.setExposure(exposure);
             if (ImGui::SliderFloat("EnvIntensity", &envIntensity, 0.0f, 1.0f))
                 pathTracer.setEnvIntensity(envIntensity);
             if (ImGui::SliderFloat("Pixel Scale", &pixelScale, 0.25f, 1.2f, "%.2f"))
