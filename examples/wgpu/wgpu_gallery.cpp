@@ -311,7 +311,8 @@ int main() {
         m.receiveShadow = true;
     });
     trooper->position.set(6.f, 0.f, -6.f);
-    trooper->rotation.y = -0.5f;
+    trooper->rotation.z = 5 * math::PI / 6.f;
+    trooper->scale *= 0.8;
     scene.add(trooper);
 
     // Emissive orb (floating, back-left)
@@ -409,25 +410,25 @@ int main() {
             ImGui::TextUnformatted("AOV debug");
             // Labels align with WgpuPathTracerShaders_Rt.cpp aovMode handling.
             static const char* kAovLabels[] = {
-                "Off",                   //  0
-                "Depth",                 //  1
-                "Normals",               //  2
-                "Albedo",                //  3
-                "Instance ID",           //  4
-                "Roughness",             //  5
-                "Adaptive bounce",       //  6
-                "(reserved 7)",          //  7
-                "(reserved 8)",          //  8
-                "(reserved 9)",          //  9
-                "diffRadFinal (w3.xyz)", // 10
-                "specRadFinal (w4.xyz)", // 11
-                "touchedMoved bit",      // 12
-                "flagBits (RGB)",        // 13
-                "b0Point fract",         // 14
-                "primaryDepth norm",     // 15
-                "primaryMeshIdx",        // 16
-                "primaryMatIdx",         // 17
-                "b0Alpha (rough²)",      // 18
+                    "Off",                  //  0
+                    "Depth",                //  1
+                    "Normals",              //  2
+                    "Albedo",               //  3
+                    "Instance ID",          //  4
+                    "Roughness",            //  5
+                    "Adaptive bounce",      //  6
+                    "(reserved 7)",         //  7
+                    "(reserved 8)",         //  8
+                    "(reserved 9)",         //  9
+                    "diffRadFinal (w3.xyz)",// 10
+                    "specRadFinal (w4.xyz)",// 11
+                    "touchedMoved bit",     // 12
+                    "flagBits (RGB)",       // 13
+                    "b0Point fract",        // 14
+                    "primaryDepth norm",    // 15
+                    "primaryMeshIdx",       // 16
+                    "primaryMatIdx",        // 17
+                    "b0Alpha (rough²)",     // 18
             };
             constexpr int kNumAov = std::size(kAovLabels);
             if (aovMode < 0) aovMode = 0;
