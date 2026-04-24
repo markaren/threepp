@@ -26,8 +26,10 @@ namespace threepp::wgpu_pt {
     extern const char* const csSharedDefsWGSL;
     extern const char* const vtWGSL_;
     extern const char* const refitWGSL_;
+    extern const char* const blasRefitWGSL_;
     std::string buildVtShader();
     std::string buildRefitShader();
+    std::string buildBlasRefitShader();
 
     // -- Denoiser pipeline fragments -------------------------------------------
     extern const char* const svgfAtrousWGSL;

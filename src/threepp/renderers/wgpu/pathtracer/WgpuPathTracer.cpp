@@ -216,6 +216,13 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer blasNodeBuf;
     WgpuBuffer blasRecordBuf;
     WgpuBuffer tlasInstanceBuf;
+    // BLAS refit — object-space version of the BVH refit pipeline.  Reads
+    // deformed obj-space triangles from objTriBuf/objTriBuf2, updates BLAS
+    // leaf AABBs, propagates up per-BLAS parent chains (stops at parent=-1).
+    WgpuBuffer blasRefitMetaBuf;
+    WgpuBuffer blasRefitCounterBuf;
+    WgpuBuffer blasLeafIndexBuf;
+    WgpuBuffer blasRefitUniBuf;
     WgpuBuffer pathCounterBuf;     // atomic<u32> work-queue head for rt_main (persistent-thread path regeneration)
     WgpuBuffer primaryCounterBuf;  // separate atomic<u32> for rt_primary_main — needed because CPU-side counter writes can't interleave with GPU compute passes
     WgpuBuffer bounceCounterBuf;   // atomic<u32> for rt_bounces_main
@@ -258,6 +265,7 @@ struct WgpuPathTracer::Impl {
     // Compute pipelines
     WgpuComputePipeline vtPipeline;
     WgpuComputePipeline refitPipeline;
+    WgpuComputePipeline blasRefitPipeline;   // TLAS mode: refits BLAS AABBs from objTri when geometry deforms
     WgpuComputePipeline primaryPipeline;  // kernel-split step 1: BVH primary traversal → primaryHitBuf
     WgpuComputePipeline rtPipeline;       // kernel-split step 2: primaryShade + serialize to pathStateBuf
     WgpuComputePipeline bouncesPipeline;  // kernel-split step 3: runBounces + accumulation
@@ -307,6 +315,43 @@ struct WgpuPathTracer::Impl {
     // updates can refresh each instance's objToWorld/worldToObj without
     // re-walking expandMeshEntries + entryTriRanges.
     std::vector<std::uint32_t> tlasToEntryIdx;
+
+    // Per-entry cache used by the per-frame dirty-geometry fast path.
+    // Populated at topology commit from the AsyncBuildResult; indexed by
+    // expanded entry index (same ordering as rtEntries from expandMeshEntries).
+    //
+    // Each frame we compare `posVer` / `nrmVer` / `idxVer` against the entry's
+    // live BufferAttribute versions.  Entries whose versions bumped without a
+    // topology change are "dirty"; we repack their slice of the object-space
+    // tri buffer into a small CPU staging vector, partial-upload into
+    // `objTriBuf` / `objTriBuf2`, and set anyMeshMoved = true so the existing
+    // VT + BVH refit pipelines regenerate triTex + AABBs.  This keeps skinned
+    // / morph-target meshes fast (sub-ms) without a full rebuild.
+    struct EntryGeoCache {
+        const void* geometry = nullptr;   // BufferGeometry* — detect swaps
+        const void* posAttr  = nullptr;   // BufferAttribute* — detect swaps
+        const void* nrmAttr  = nullptr;
+        const void* idxAttr  = nullptr;
+        unsigned int posVer  = 0;
+        unsigned int nrmVer  = 0;
+        unsigned int idxVer  = 0;
+        int triStart         = 0;         // global tri offset in objTriBuf
+        int triCount         = 0;
+        int matIdx           = 0;
+        int meshIdx          = 0;
+    };
+    std::vector<EntryGeoCache> entryGeoCache;
+    // Reused across frames — staging for a single dirty entry's repacked tris.
+    std::vector<float> dirtyStaging_;
+    // Per-tri inverse permutation from buildBVH.  triInvPerm_[preIdx] = postIdx
+    // i.e. "entry-order tri preIdx lives at position postIdx in rawObjTriBuf
+    // post-reorder".  Identity when rawObjTriBuf was not reordered (TLAS mode).
+    // Empty when the scene has no tris yet.
+    std::vector<int> triInvPerm_;
+    // Per-entry (triStart, triCount) slice within rawObjTriBuf in ENTRY order.
+    // For TLAS this matches rawObjTriBuf's physical layout; for non-TLAS use
+    // triInvPerm_ to map entry-order tris to their post-reorder positions.
+    std::vector<std::pair<int, int>> entryTriRanges_;
 
     // Async scene build result — CPU work done on background thread
     struct AsyncBuildResult {
@@ -374,6 +419,9 @@ struct WgpuPathTracer::Impl {
     int numBvhNodes_ = 0;
     uint32_t vtDispatchX_ = 1, vtDispatchY_ = 1;
     uint32_t rfDispatchX_ = 1, rfDispatchY_ = 1;
+    uint32_t blasRfDispatchX_ = 1, blasRfDispatchY_ = 1;
+    std::vector<uint32_t> blasRefitCounterZeros;  // zeroed each BLAS-refit dispatch (atomics scratch)
+    bool geometryDirtyThisFrame_ = false;         // set by dirty-scan; gates BLAS refit dispatch
     float frameCount_ = 0.f;
     uint32_t globalFrameCounter_ = 0;
     int prevNLights_ = -1;
@@ -460,6 +508,11 @@ struct WgpuPathTracer::Impl {
           blasNodeBuf(r, BVH4_GPU_U32S * sizeof(uint32_t), WgpuBuffer::Usage::Storage),
           blasRecordBuf(r, sizeof(BlasRecord), WgpuBuffer::Usage::Storage),
           tlasInstanceBuf(r, sizeof(TlasInstance), WgpuBuffer::Usage::Storage),
+          // BLAS refit placeholders — grown when tlasEnabled_ + blasNodes exist.
+          blasRefitMetaBuf(r, BVH4_REFIT_INTS * sizeof(int32_t), WgpuBuffer::Usage::Storage),
+          blasRefitCounterBuf(r, sizeof(uint32_t), WgpuBuffer::Usage::Storage),
+          blasLeafIndexBuf(r, sizeof(int), WgpuBuffer::Usage::Storage),
+          blasRefitUniBuf(r, sizeof(RefitGpuUniforms)),
           pathCounterBuf(r, sizeof(uint32_t), WgpuBuffer::Usage::Storage),
           primaryCounterBuf(r, sizeof(uint32_t), WgpuBuffer::Usage::Storage),
           bounceCounterBuf(r, sizeof(uint32_t), WgpuBuffer::Usage::Storage),
@@ -498,6 +551,7 @@ struct WgpuPathTracer::Impl {
           // commit with the env-CDF flag; here we construct with false.
           vtPipeline(r, buildVtShader(), "vt_main"),
           refitPipeline(r, buildRefitShader(), "bvh_refit"),
+          blasRefitPipeline(r, buildBlasRefitShader(), "blas_refit"),
           primaryPipeline(r, buildRtShader(false), "rt_primary_main"),
           rtPipeline(r, buildRtShader(false), "rt_main"),
           bouncesPipeline(r, buildRtShader(false), "rt_bounces_main"),
@@ -578,6 +632,14 @@ struct WgpuPathTracer::Impl {
         refitPipeline.setStorageBufferRead(3, leafIndexBuf);
         refitPipeline.setUniformBuffer(4, refitUniBuf);
         refitPipeline.setStorageBufferRead(5, refitMetaBuf);
+
+        blasRefitPipeline.setStorageBufferRead(0, objTriBuf);
+        blasRefitPipeline.setStorageBufferRead(1, objTriBuf2);
+        blasRefitPipeline.setStorageBuffer(2, blasNodeBuf);
+        blasRefitPipeline.setStorageBuffer(3, blasRefitCounterBuf);
+        blasRefitPipeline.setStorageBufferRead(4, blasLeafIndexBuf);
+        blasRefitPipeline.setUniformBuffer(5, blasRefitUniBuf);
+        blasRefitPipeline.setStorageBufferRead(6, blasRefitMetaBuf);
 
         // RT pipelines — set ALL bindings upfront (per-frame ones get overwritten)
         rtPipeline.setUniformBuffer(0, rtUniformBuf);
@@ -1069,6 +1131,7 @@ struct WgpuPathTracer::Impl {
         // rebuilt synchronously on the main thread a second time.
         vtPipeline.startAsyncBuild();
         refitPipeline.startAsyncBuild();
+        blasRefitPipeline.startAsyncBuild();
         atrousPipeline.startAsyncBuild();
         upscalePipeline.startAsyncBuild();
         std::cerr << "[PathTracer] Async shader compilation started for helper pipelines" << std::endl;
@@ -1914,12 +1977,13 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
         r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 32, 0.f);
         r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
-        std::vector<std::pair<int, int>>* triRangesOut =
-                d.tlasEnabled_ ? &r.entryTriRanges : nullptr;
+        // Always populate entryTriRanges — the TLAS/BLAS builder needs it in
+        // TLAS mode, and the per-frame dirty-geometry fast path needs it in
+        // both modes to locate each entry's slice in rawObjTriBuf.
         r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
                                            r.rawObjTriBuf, r.matrixCpuBuf,
                                            r.triCapacity, r.matCapacity, r.meshCapacity,
-                                           0, 0, 0, triRangesOut);
+                                           0, 0, 0, &r.entryTriRanges);
         r.matCount  = matCount;   // upper-bound: number of unique meshes (some may share materials)
         r.meshCount = meshCount;  // number of expanded mesh entries (instances)
         // PR2b plumbing — when TLAS mode is on, build per-entry BLASes *before*
@@ -2050,12 +2114,13 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
         r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 32, 0.f);
         r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
-        std::vector<std::pair<int, int>>* triRangesOut =
-                d.tlasEnabled_ ? &r.entryTriRanges : nullptr;
+        // Always populate entryTriRanges — the TLAS/BLAS builder needs it in
+        // TLAS mode, and the per-frame dirty-geometry fast path needs it in
+        // both modes to locate each entry's slice in rawObjTriBuf.
         r.triCount = buildGeometryBuffers(entries, r.texSlotMap, r.triBuffer, r.matBuffer,
                                            r.rawObjTriBuf, r.matrixCpuBuf,
                                            r.triCapacity, r.matCapacity, r.meshCapacity,
-                                           0, 0, 0, triRangesOut);
+                                           0, 0, 0, &r.entryTriRanges);
         r.matCount  = matCount;   // upper-bound: number of unique meshes (some may share materials)
         r.meshCount = meshCount;  // number of expanded mesh entries (instances)
         // PR2b plumbing — see emscripten branch above for rationale.
@@ -2135,6 +2200,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.blasRecords = std::move(r.blasRecords);
         d.tlasInstances = std::move(r.tlasInstances);
         d.tlasToEntryIdx = std::move(r.tlasToEntryIdx);
+        d.entryTriRanges_ = std::move(r.entryTriRanges);
         d.bvhNodeCpuBuf = std::move(r.bvhNodeCpuBuf);
         d.refitMetaCpuBuf = std::move(r.refitMetaCpuBuf);
         d.emissiveTriCpu = std::move(r.emissiveTriCpu);
@@ -2148,6 +2214,70 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.bvhRootIdx_ = 0;          // fresh build always resets to root = node 0
         d.pendingConsolidation_ = false;
         d.stableFramesSinceAppend_ = 0;
+
+        // Build inverse-permutation (entry-order tri → post-reorder position).
+        // For TLAS mode (preserveObjTriOrder=true), rawObjTriBuf is NOT reordered
+        // so inv_perm is identity; we store it anyway to unify the dirty-repack
+        // code path in both modes.
+        d.triInvPerm_.assign(d.triCount_, 0);
+        if (d.tlasEnabled_) {
+            for (int i = 0; i < d.triCount_; ++i) d.triInvPerm_[i] = i;
+        } else {
+            // d.bvhIndices[j] is the pre-reorder index of the tri now at j.
+            // Inverse: invPerm[preIdx] = j.
+            const int n = static_cast<int>(d.bvhIndices.size());
+            for (int j = 0; j < n; ++j) {
+                const int pre = d.bvhIndices[j];
+                if (pre >= 0 && pre < d.triCount_) d.triInvPerm_[pre] = j;
+            }
+        }
+
+        // Populate per-entry geometry cache for the per-frame dirty-scan.
+        // Indexed by expanded entry index — parallel to expandMeshEntries().
+        // Reads matIdx/meshIdx out of the freshly packed rawObjTriBuf at each
+        // entry's triStart (they were encoded into field 0.w / 1.w by
+        // buildGeometryBuffers).  Zero-tri entries (skipped due to caps or
+        // missing attributes) get a no-op cache entry.
+        d.entryGeoCache.clear();
+        d.entryGeoCache.reserve(r.entries.size());
+        for (std::size_t eIdx = 0; eIdx < r.entries.size(); ++eIdx) {
+            const auto& entry = r.entries[eIdx];
+            Impl::EntryGeoCache cache;
+            cache.geometry = entry.mesh ? entry.mesh->geometry().get() : nullptr;
+            if (cache.geometry) {
+                auto* geo = entry.mesh->geometry().get();
+                auto* pos = geo->getAttribute<float>("position");
+                auto* nrm = geo->getAttribute<float>("normal");
+                auto* idx = geo->getIndex();
+                cache.posAttr = pos;
+                cache.nrmAttr = nrm;
+                cache.idxAttr = idx;
+                cache.posVer = pos ? pos->version : 0u;
+                cache.nrmVer = nrm ? nrm->version : 0u;
+                cache.idxVer = idx ? idx->version : 0u;
+            }
+            if (eIdx < d.entryTriRanges_.size()) {
+                cache.triStart = d.entryTriRanges_[eIdx].first;
+                cache.triCount = d.entryTriRanges_[eIdx].second;
+            }
+            // cache.triStart is the PRE-reorder index; rawObjTriBuf is
+            // POST-reorder in single-level mode (identity in TLAS mode).
+            // Look up the current physical location via triInvPerm_ before
+            // reading matIdx / meshIdx, otherwise we'd read some other
+            // triangle's IDs and the per-frame repack would transform this
+            // entry's tris with the wrong mesh matrix.
+            if (cache.triCount > 0 && cache.triStart >= 0
+                && static_cast<size_t>(cache.triStart) < d.triInvPerm_.size()) {
+                const int postIdx = d.triInvPerm_[cache.triStart];
+                if (postIdx >= 0
+                    && static_cast<size_t>(postIdx) * 32 + 8 <= d.rawObjTriBuf.size()) {
+                    const float* t = d.rawObjTriBuf.data() + static_cast<size_t>(postIdx) * 32;
+                    cache.matIdx  = static_cast<int>(t[3]);
+                    cache.meshIdx = static_cast<int>(t[7]);
+                }
+            }
+            d.entryGeoCache.push_back(cache);
+        }
 
         std::cerr << "[PathTracer] Scene: " << r.triCount << " tris, "
                   << r.numBvhNodes << " BVH nodes, "
@@ -2209,6 +2339,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.vtPipeline.setStorageBufferRead(4, d.objTriBuf2);
             d.refitPipeline.setTexture(0, d.triTex);
             d.refitPipeline.setStorageBufferRead(3, d.leafIndexBuf);
+            d.blasRefitPipeline.setStorageBufferRead(0, d.objTriBuf);
+            d.blasRefitPipeline.setStorageBufferRead(1, d.objTriBuf2);
             d.rtPipeline.setTexture(5, d.triTex);
             d.primaryPipeline.setTexture(5, d.triTex);
             d.bouncesPipeline.setTexture(5, d.triTex);
@@ -2398,6 +2530,58 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 d.tlasInstanceBuf.write(d.tlasInstances.data(),
                         static_cast<size_t>(tlasInstanceCount) * sizeof(TlasInstance));
             }
+
+            // BLAS refit GPU resources — grown alongside blasNodeCapacity_ / blasLeafIndices.
+            // On grow, reallocate + rebind; always re-upload refit metadata & leaf indices
+            // since blasNodes content changed during this topology commit.
+            if (blasNodeCount > 0) {
+                const int blasLeafCount = static_cast<int>(d.blasLeafIndices.size());
+                const size_t metaBytes    = static_cast<size_t>(d.blasNodeCapacity_) * BVH4_REFIT_INTS * sizeof(int32_t);
+                const size_t counterBytes = static_cast<size_t>(d.blasNodeCapacity_) * sizeof(uint32_t);
+                const size_t leafBytes    = static_cast<size_t>(std::max(blasLeafCount, 1)) * sizeof(int);
+                // We key the grow on blasNodeCapacity_ for meta/counter buffers and on
+                // leafCount for the leaf-index buffer. Reallocate eagerly — BLAS topology
+                // rebuilds are infrequent (only on true scene-level changes).
+                d.blasRefitMetaBuf = WgpuBuffer(d.renderer, metaBytes, WgpuBuffer::Usage::Storage);
+                d.blasRefitCounterBuf = WgpuBuffer(d.renderer, counterBytes, WgpuBuffer::Usage::Storage);
+                d.blasLeafIndexBuf = WgpuBuffer(d.renderer, leafBytes, WgpuBuffer::Usage::Storage);
+                d.blasRefitCounterZeros.assign(d.blasNodeCapacity_, 0u);
+
+                // Rebind BLAS refit pipeline to new buffers.  objTri / objTri2 bindings
+                // are refreshed below if those buffers were also resized.
+                d.blasRefitPipeline.setStorageBuffer(2, d.blasNodeBuf);
+                d.blasRefitPipeline.setStorageBuffer(3, d.blasRefitCounterBuf);
+                d.blasRefitPipeline.setStorageBufferRead(4, d.blasLeafIndexBuf);
+                d.blasRefitPipeline.setStorageBufferRead(6, d.blasRefitMetaBuf);
+
+                // Pack refit metadata from blasNodes (parent absolute, childCount,
+                // numInternal, 0) — identical to single-level.  BLAS roots carry
+                // parent = -1 so the shader's propagate-up loop stops there.
+                std::vector<int32_t> blasRefitMetaCpu(
+                        static_cast<size_t>(d.blasNodeCapacity_) * BVH4_REFIT_INTS, 0);
+                packRefitMetadata(d.blasNodes, blasRefitMetaCpu, d.blasNodeCapacity_);
+                d.blasRefitMetaBuf.write(blasRefitMetaCpu.data(),
+                        static_cast<size_t>(blasNodeCount) * BVH4_REFIT_INTS * sizeof(int32_t));
+
+                if (blasLeafCount > 0) {
+                    d.blasLeafIndexBuf.write(d.blasLeafIndices.data(),
+                            static_cast<size_t>(blasLeafCount) * sizeof(int));
+                }
+
+                const uint32_t blasRfTotal = (static_cast<uint32_t>(blasLeafCount) + 63u) / 64u;
+                const uint32_t blasRfGx = (std::min)(std::max(blasRfTotal, 1u), 65535u);
+                const uint32_t blasRfGy = (std::max(blasRfTotal, 1u) + blasRfGx - 1u) / blasRfGx;
+                d.blasRfDispatchX_ = blasRfGx;
+                d.blasRfDispatchY_ = blasRfGy;
+
+                RefitGpuUniforms blasRfU{};
+                blasRfU.leafCount = static_cast<uint32_t>(blasLeafCount);
+                blasRfU.groupsX   = blasRfGx;
+                // splitAt lives in _p[0] — reused for the objTri split index.
+                blasRfU._p[0]     = static_cast<uint32_t>(d.objTriSplit_);
+                blasRfU._p[1]     = 0;
+                d.blasRefitUniBuf.write(&blasRfU, sizeof(blasRfU));
+            }
         }
 
         // Upload atlas
@@ -2453,8 +2637,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         // Free large CPU-side build buffers now that data lives on GPU.
         // matBuffer and matrixCpuBuf are kept alive — they're small (~KB) and needed for
         // the append-only fast path to write new material/mesh-matrix rows.
+        // rawObjTriBuf is kept alive — the per-frame dirty-geometry fast path
+        // repacks changed entries in place here and partial-uploads to the GPU
+        // objTriBuf SSBOs.  Cost: ~128 B per tri (~12 MB for a 100k-tri scene).
         { std::vector<float>().swap(d.triBuffer); }
-        { std::vector<float>().swap(d.rawObjTriBuf); }
         { std::vector<uint32_t>().swap(d.bvhNodeCpuBuf); }
         { std::vector<int32_t>().swap(d.refitMetaCpuBuf); }
         { std::vector<float>().swap(d.emissiveTriCpu); }
@@ -2501,6 +2687,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // anyMeshMoved drives the vertex-transform and BVH-refit pipelines.
     uint32_t movedBits[4] = {0u, 0u, 0u, 0u};
     bool anyMeshMoved = (d.prevEntryMatrices.size() != rtEntries.size());
+    d.geometryDirtyThisFrame_ = false;
 
     if (topoJustFinished) {
         // Topology change: all pixels need to re-accumulate (mesh-to-triangle mapping changed)
@@ -2518,6 +2705,99 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
     }
     // Note: camMoved triggers per-pixel reprojection via camMovedFlag (params.w bit 1); no movedBits needed for that.
+
+    // --- Per-frame dirty-geometry fast path ---------------------------------
+    // Detect meshes whose position/normal/index BufferAttribute.version
+    // changed without a topology change (rtMeshes/entry count identical).
+    // For each dirty entry we repack its triangles into `rawObjTriBuf` at
+    // their existing post-reorder positions, then partial-upload to
+    // objTriBuf/objTriBuf2 and set `anyMeshMoved = true` so the existing
+    // VT + BVH-refit pipelines regenerate triTex and BVH AABBs.
+    //
+    // This keeps skinned / morph-target / CPU-deforming meshes fast (sub-ms
+    // for typical cases) without the full rebuild cost.
+    // Skip while a fast-append consolidation is pending — fast-append uploaded
+    // new tris straight to GPU without touching the CPU rawObjTriBuf, so the
+    // CPU buffer is stale in the appended region.  Full upload would zero that
+    // region out.  After consolidation (~120 stable frames), the rebuild
+    // refreshes rawObjTriBuf + entryGeoCache and the fast path resumes.
+    if (!topoJustFinished
+        && !d.pendingConsolidation_
+        && d.triCount_ > 0
+        && !d.rawObjTriBuf.empty()
+        && rtEntries.size() == d.entryGeoCache.size()) {
+        bool anyGeoDirty = false;
+        for (std::size_t eIdx = 0; eIdx < rtEntries.size(); ++eIdx) {
+            auto& cache = d.entryGeoCache[eIdx];
+            if (cache.triCount <= 0) continue;
+            auto* mesh = rtEntries[eIdx].mesh;
+            if (!mesh) continue;
+            auto* geo = mesh->geometry().get();
+            // Geometry or attribute swap is a topology change; let the next
+            // frame's topoChanged scan rebuild from scratch.
+            if (geo != cache.geometry) continue;
+            auto* pos = geo->getAttribute<float>("position");
+            auto* nrm = geo->getAttribute<float>("normal");
+            auto* idx = geo->getIndex();
+            if (pos != cache.posAttr || nrm != cache.nrmAttr || idx != cache.idxAttr) continue;
+
+            const unsigned int curPosVer = pos ? pos->version : 0u;
+            const unsigned int curNrmVer = nrm ? nrm->version : 0u;
+            const unsigned int curIdxVer = idx ? idx->version : 0u;
+            if (curPosVer == cache.posVer
+                && curNrmVer == cache.nrmVer
+                && curIdxVer == cache.idxVer) continue;
+
+            // Dirty — repack this entry's tris into a reused staging vector.
+            const size_t needFloats = static_cast<size_t>(cache.triCount) * 32;
+            if (d.dirtyStaging_.size() < needFloats) d.dirtyStaging_.assign(needFloats, 0.f);
+            const int wrote = repackEntryObjTri(rtEntries[eIdx],
+                                                cache.matIdx, cache.meshIdx,
+                                                d.dirtyStaging_.data(), cache.triCount);
+            if (wrote <= 0) continue;
+
+            // Fan out into rawObjTriBuf at each tri's POST-reorder position.
+            // For TLAS mode triInvPerm_ is identity → copy is contiguous.
+            const int n = std::min(wrote, cache.triCount);
+            for (int k = 0; k < n; ++k) {
+                const int preIdx = cache.triStart + k;
+                if (preIdx < 0 || static_cast<size_t>(preIdx) >= d.triInvPerm_.size()) continue;
+                const int postIdx = d.triInvPerm_[preIdx];
+                if (postIdx < 0
+                    || static_cast<size_t>(postIdx) * 32 + 32 > d.rawObjTriBuf.size()) continue;
+                std::memcpy(d.rawObjTriBuf.data() + static_cast<size_t>(postIdx) * 32,
+                            d.dirtyStaging_.data() + static_cast<size_t>(k) * 32,
+                            32 * sizeof(float));
+            }
+
+            cache.posVer = curPosVer;
+            cache.nrmVer = curNrmVer;
+            cache.idxVer = curIdxVer;
+            anyGeoDirty = true;
+            // Treat this entry as "moved" for per-pixel accumulation reset —
+            // its surfaces have effectively changed position in screen space.
+            if (eIdx < 128u) movedBits[eIdx >> 5u] |= (1u << (eIdx & 31u));
+        }
+        if (anyGeoDirty) {
+            anyMeshMoved = true;
+            d.geometryDirtyThisFrame_ = true;
+            // v1 upload strategy: re-push the entire rawObjTriBuf.  Simple and
+            // correct; the async queue write overlaps with compute on modern
+            // drivers.  A future optimisation can compress to contiguous dirty
+            // ranges via post-reorder run detection.
+            const size_t splitAt = static_cast<size_t>(d.objTriSplit_);
+            const size_t totalTris = static_cast<size_t>(d.triCount_);
+            const size_t buf1Tris = std::min(totalTris, splitAt);
+            const size_t buf2Tris = totalTris > splitAt ? totalTris - splitAt : 0;
+            if (buf1Tris > 0) {
+                d.objTriBuf.write(d.rawObjTriBuf.data(), buf1Tris * BYTES_PER_TRI);
+            }
+            if (buf2Tris > 0) {
+                d.objTriBuf2.write(d.rawObjTriBuf.data() + splitAt * 32,
+                                   buf2Tris * BYTES_PER_TRI);
+            }
+        }
+    }
 
     // --- Consolidation rebuild: after a fast-append the BVH has an overlay combined-root.
     // Once the scene has been stable (no topology or matrix changes) for 120 frames (~2 s at
@@ -3149,6 +3429,22 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                     d.refitPipeline.encode(rfPass, d.rfDispatchX_, d.rfDispatchY_);
                     wgpuComputePassEncoderEnd(rfPass);
                     wgpuComputePassEncoderRelease(rfPass);
+                }
+
+                // BLAS refit — only in TLAS mode and only when object-space geometry
+                // actually deformed this frame (matrix-only moves leave BLAS AABBs
+                // valid since BLAS is object-space).  Zero the atomic counter first.
+                if (d.tlasEnabled_ && d.geometryDirtyThisFrame_
+                    && !topoJustFinished
+                    && !d.blasLeafIndices.empty()
+                    && d.blasNodeCapacity_ > 0) {
+                    d.blasRefitCounterBuf.write(d.blasRefitCounterZeros.data(),
+                            static_cast<size_t>(d.blasNodeCapacity_) * sizeof(uint32_t));
+                    passDesc.label = WGPUStringView{"blas_rf_pass", WGPU_STRLEN};
+                    WGPUComputePassEncoder brfPass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
+                    d.blasRefitPipeline.encode(brfPass, d.blasRfDispatchX_, d.blasRfDispatchY_);
+                    wgpuComputePassEncoderEnd(brfPass);
+                    wgpuComputePassEncoderRelease(brfPass);
                 }
             }
 

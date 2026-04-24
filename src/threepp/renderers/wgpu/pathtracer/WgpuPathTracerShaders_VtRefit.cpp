@@ -193,7 +193,150 @@ fn bvh_refit(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 )";
 
+// ---------------------------------------------------------------------------
+// WGSL BLAS refit compute shader (TLAS mode)
+// ---------------------------------------------------------------------------
+// Refits BLAS leaf AABBs from object-space triangles in `objTris`/`objTris2`,
+// then propagates up parent AABBs within each BLAS sub-tree.  Propagation
+// terminates at BLAS roots (parent == -1), so the single flat `blasNodes`
+// buffer is walked correctly without crossing BLAS boundaries.
+//
+// Separate pipeline from bvh_refit because:
+//   - reads object-space tri vertices (not the world-space triTex)
+//   - writes to the `blasNodes` buffer (not `bvhNodes`)
+//   - needs its own atomic counter + leaf-index + refit-metadata buffers
+const char* const blasRefitWGSL_ = R"(
+struct ObjTriData {
+    v0:   vec4<f32>,
+    v1:   vec4<f32>,
+    v2:   vec4<f32>,
+    n0:   vec4<f32>,
+    n1:   vec4<f32>,
+    n2:   vec4<f32>,
+    uv01: vec4<f32>,
+    uv2:  vec4<f32>,
+}
+struct Bvh4NodeGpu {
+    cMinX: vec4<f32>,
+    cMinY: vec4<f32>,
+    cMinZ: vec4<f32>,
+    cMaxX: vec4<f32>,
+    cMaxY: vec4<f32>,
+    cMaxZ: vec4<f32>,
+    cIdx:  vec4<u32>,
+}
+struct BlasRefitUniforms {
+    leafCount: u32,
+    groupsX:   u32,
+    splitAt:   u32,   // objTri split point (in tris); tis < splitAt read objTris, else objTris2
+    _p:        u32,
+}
+
+@group(0) @binding(0) var<storage, read>       objTris:    array<ObjTriData>;
+@group(0) @binding(1) var<storage, read>       objTris2:   array<ObjTriData>;
+@group(0) @binding(2) var<storage, read_write> blasNodes:  array<Bvh4NodeGpu>;
+@group(0) @binding(3) var<storage, read_write> blasCtrs:   array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read>       leafIdxBuf: array<i32>;
+@group(0) @binding(5) var<uniform>             refitUni:   BlasRefitUniforms;
+@group(0) @binding(6) var<storage, read>       refitMeta:  array<vec4<i32>>;
+
+fn loadObjTri(ti: i32) -> ObjTriData {
+    let splitAt = i32(refitUni.splitAt);
+    if (ti < splitAt) { return objTris[ti]; }
+    return objTris2[ti - splitAt];
+}
+
+fn writeChildAABB(ni: i32, c: i32, bmin: vec3<f32>, bmax: vec3<f32>) {
+    let extent = max(abs(bmin), abs(bmax));
+    let E = max(extent * vec3<f32>(1e-5), vec3<f32>(1e-6));
+    var n = blasNodes[ni];
+    n.cMinX[c] = bmin.x - E.x;
+    n.cMinY[c] = bmin.y - E.y;
+    n.cMinZ[c] = bmin.z - E.z;
+    n.cMaxX[c] = bmax.x + E.x;
+    n.cMaxY[c] = bmax.y + E.y;
+    n.cMaxZ[c] = bmax.z + E.z;
+    blasNodes[ni] = n;
+}
+
+@compute @workgroup_size(64)
+fn blas_refit(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let linearId = gid.x + gid.y * refitUni.groupsX * 64u;
+    if (linearId >= refitUni.leafCount) { return; }
+    let wideNi = leafIdxBuf[i32(linearId)];
+    let nfo = refitMeta[wideNi];
+    let childCount = nfo.y;
+
+    let cIdxVec = blasNodes[wideNi].cIdx;
+    let leafIdx = array<i32, 4>(bitcast<i32>(cIdxVec.x), bitcast<i32>(cIdxVec.y),
+                                 bitcast<i32>(cIdxVec.z), bitcast<i32>(cIdxVec.w));
+
+    for (var c: i32 = 0; c < childCount; c++) {
+        let ci = leafIdx[c];
+        if (ci >= 0) { continue; }
+
+        let raw = -ci;
+        let triStart = (raw - 1) / MAX_LEAF_TRIS;
+        let triCount = ((raw - 1) % MAX_LEAF_TRIS) + 1;
+
+        var bmin = vec3<f32>(1e30);
+        var bmax = vec3<f32>(-1e30);
+        for (var ti = triStart; ti < triStart + triCount; ti++) {
+            let ot = loadObjTri(ti);
+            bmin = min(bmin, ot.v0.xyz); bmax = max(bmax, ot.v0.xyz);
+            bmin = min(bmin, ot.v1.xyz); bmax = max(bmax, ot.v1.xyz);
+            bmin = min(bmin, ot.v2.xyz); bmax = max(bmax, ot.v2.xyz);
+        }
+        writeChildAABB(wideNi, c, bmin, bmax);
+    }
+
+    let numInternal = nfo.z;
+    if (numInternal > 0) {
+        let cnt = atomicAdd(&blasCtrs[wideNi], 1u);
+        if (cnt < u32(numInternal)) { return; }
+    }
+
+    // Propagate up to parent — parent == -1 is the BLAS root, stop there.
+    var curNi = nfo.x;
+    loop {
+        if (curNi < 0) { break; }
+        let curNfo = refitMeta[curNi];
+        let numInt = u32(curNfo.z);
+        let cnt = atomicAdd(&blasCtrs[curNi], 1u);
+        let curChildCount = curNfo.y;
+        let hasLeaves = u32(curChildCount) > numInt;
+        let expected = select(numInt - 1u, numInt, hasLeaves);
+        if (cnt < expected) { break; }
+
+        let pIdxVec = blasNodes[curNi].cIdx;
+        let pIdx = array<i32, 4>(bitcast<i32>(pIdxVec.x), bitcast<i32>(pIdxVec.y),
+                                  bitcast<i32>(pIdxVec.z), bitcast<i32>(pIdxVec.w));
+        for (var c: i32 = 0; c < curChildCount; c++) {
+            let ci = pIdx[c];
+            if (ci < 0) { continue; }
+            let child = blasNodes[ci];
+            let cc = refitMeta[ci].y;
+            var bmin = vec3<f32>(1e30);
+            var bmax = vec3<f32>(-1e30);
+            let cMinXa = array<f32, 4>(child.cMinX.x, child.cMinX.y, child.cMinX.z, child.cMinX.w);
+            let cMinYa = array<f32, 4>(child.cMinY.x, child.cMinY.y, child.cMinY.z, child.cMinY.w);
+            let cMinZa = array<f32, 4>(child.cMinZ.x, child.cMinZ.y, child.cMinZ.z, child.cMinZ.w);
+            let cMaxXa = array<f32, 4>(child.cMaxX.x, child.cMaxX.y, child.cMaxX.z, child.cMaxX.w);
+            let cMaxYa = array<f32, 4>(child.cMaxY.x, child.cMaxY.y, child.cMaxY.z, child.cMaxY.w);
+            let cMaxZa = array<f32, 4>(child.cMaxZ.x, child.cMaxZ.y, child.cMaxZ.z, child.cMaxZ.w);
+            for (var gc: i32 = 0; gc < cc; gc++) {
+                bmin = min(bmin, vec3<f32>(cMinXa[gc], cMinYa[gc], cMinZa[gc]));
+                bmax = max(bmax, vec3<f32>(cMaxXa[gc], cMaxYa[gc], cMaxZa[gc]));
+            }
+            writeChildAABB(curNi, c, bmin, bmax);
+        }
+        curNi = curNfo.x;
+    }
+}
+)";
+
 std::string buildVtShader() { return std::string(csSharedDefsWGSL) + "\n" + vtWGSL_; }
 std::string buildRefitShader() { return std::string(csSharedDefsWGSL) + "\n" + refitWGSL_; }
+std::string buildBlasRefitShader() { return std::string(csSharedDefsWGSL) + "\n" + blasRefitWGSL_; }
 
 }// namespace threepp::wgpu_pt

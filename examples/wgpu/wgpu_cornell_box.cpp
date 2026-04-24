@@ -29,8 +29,14 @@ namespace {
         return mesh;
     }
 
-    // Floor, ceiling, back wall (white)
-    auto makeRoom() {
+    // Floor, ceiling, back wall (white).  Returns the back wall separately so
+    // the animate loop can wobble its vertices to exercise the path tracer's
+    // per-frame geometry-change fast path.
+    struct Room {
+        std::shared_ptr<Group> group;
+        std::shared_ptr<Mesh> backWall;
+    };
+    Room makeRoom() {
         auto group = Group::create();
         constexpr float S = 10.f;
 
@@ -46,8 +52,8 @@ namespace {
         ceiling->position.y = S;
         group->add(ceiling);
 
-        // Back wall
-        auto back = Mesh::create(PlaneGeometry::create(S, S), whiteMat());
+        // Back wall — subdivided so per-vertex wobble is visible.
+        auto back = Mesh::create(PlaneGeometry::create(S, S, 40, 40), whiteMat());
         back->position.set(0.f, S / 2.f, -S / 2.f);
         group->add(back);
 
@@ -65,7 +71,7 @@ namespace {
         right->position.set(S / 2.f, S / 2.f, 0.f);
         group->add(right);
 
-        return group;
+        return {group, back};
     }
 
     // Tall box (white, slightly rotated)
@@ -145,7 +151,7 @@ int main() {
     scene.background = Color::black;
 
     auto room = makeRoom();
-    scene.add(room);
+    scene.add(room.group);
     scene.add(makeLightPanel());
     scene.add(makeTallBox());
     scene.add(makeShortBox());
@@ -171,11 +177,20 @@ int main() {
     bool restdirOn = pathTracer.restirEnabled();
     bool restirGIOn = pathTracer.restirGiEnabled();
     bool foveatOn = pathTracer.foveatedRendering();
+    bool tlasOn = pathTracer.tlasEnabled();
+    bool wobbleOn = false;
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
     float fps = 0.f;
     float fpsAccum = 0.f;
     int fpsFrames = 0;
+
+    // Snapshot the back wall's original z positions so per-frame wobble stays
+    // bounded and can be toggled off to restore rest pose.
+    auto backPos = room.backWall->geometry()->getAttribute<float>("position");
+    std::vector<float> backWallZ0(backPos->count());
+    for (auto i = 0; i < backPos->count(); ++i) backWallZ0[i] = backPos->getZ(i);
+    float wobbleT = 0.f;
 
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::T) {
@@ -203,6 +218,9 @@ int main() {
                 pathTracer.setReSTIRGIEnabled(restirGIOn);
             if (ImGui::Checkbox("Foveated", &foveatOn))
                 pathTracer.setFoveatedRendering(foveatOn);
+            if (ImGui::Checkbox("TLAS", &tlasOn))
+                pathTracer.setTlasEnabled(tlasOn);
+            ImGui::Checkbox("Wobble back wall", &wobbleOn);
             if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8))
                 pathTracer.setMaxBounces(maxBounces);
         }
@@ -234,6 +252,17 @@ int main() {
             fps = fpsFrames / fpsAccum;
             fpsAccum = 0.f;
             fpsFrames = 0;
+        }
+
+        // Animate back wall vertices — exercises the path tracer's per-frame
+        // geometry fast path (CPU repack + partial upload + BVH/BLAS refit).
+        if (wobbleOn) {
+            wobbleT += dt;
+            const float wave = std::sin(math::TWO_PI * 0.5f * wobbleT);
+            for (auto i = 0; i < backPos->count(); ++i) {
+                backPos->setZ(i, backWallZ0[i] + 0.3f * wave * std::sin(i * 0.3f));
+            }
+            backPos->needsUpdate();
         }
 
         controls.update();

@@ -329,4 +329,63 @@ int buildGeometryBuffers(
     return triCount;
 }
 
+int repackEntryObjTri(
+        const RtMeshEntry& entry,
+        int matIdx,
+        int meshIdx,
+        float* dstObjTri,
+        int maxTris) {
+    auto* geo = entry.mesh->geometry().get();
+    auto* pos = geo->getAttribute<float>("position");
+    if (!pos || maxTris <= 0) return 0;
+    auto* nrm = geo->getAttribute<float>("normal");
+    auto* uvs = geo->getAttribute<float>("uv");
+    auto* idx = geo->getIndex();
+
+    auto vi = [&](int tri, int corner) -> int {
+        return idx ? static_cast<int>(idx->getX(tri * 3 + corner)) : tri * 3 + corner;
+    };
+    auto uv = [&](int i) -> std::pair<float, float> {
+        if (!uvs) return {0.f, 0.f};
+        return {uvs->getX(i), uvs->getY(i)};
+    };
+
+    const int nTris = idx ? static_cast<int>(idx->count()) / 3
+                          : static_cast<int>(pos->count()) / 3;
+    const int writeCount = std::min(nTris, maxTris);
+    for (int ti = 0; ti < writeCount; ++ti) {
+        const int i0 = vi(ti, 0), i1 = vi(ti, 1), i2 = vi(ti, 2);
+        const float x0 = pos->getX(i0), y0 = pos->getY(i0), z0 = pos->getZ(i0);
+        const float x1 = pos->getX(i1), y1 = pos->getY(i1), z1 = pos->getZ(i1);
+        const float x2 = pos->getX(i2), y2 = pos->getY(i2), z2 = pos->getZ(i2);
+        float nx0 = 0.f, ny0 = 1.f, nz0 = 0.f;
+        float nx1 = 0.f, ny1 = 1.f, nz1 = 0.f;
+        float nx2 = 0.f, ny2 = 1.f, nz2 = 0.f;
+        if (nrm) {
+            nx0 = nrm->getX(i0); ny0 = nrm->getY(i0); nz0 = nrm->getZ(i0);
+            nx1 = nrm->getX(i1); ny1 = nrm->getY(i1); nz1 = nrm->getZ(i1);
+            nx2 = nrm->getX(i2); ny2 = nrm->getY(i2); nz2 = nrm->getZ(i2);
+        }
+        const auto [u0, v0uv] = uv(i0);
+        const auto [u1, v1uv] = uv(i1);
+        const auto [u2, v2uv] = uv(i2);
+
+        float* p = dstObjTri + static_cast<size_t>(ti) * 32;
+        // Field 0: v0, matIdx
+        p[0]  = x0; p[1]  = y0; p[2]  = z0; p[3]  = static_cast<float>(matIdx);
+        // Field 1: v1, meshIdx
+        p[4]  = x1; p[5]  = y1; p[6]  = z1; p[7]  = static_cast<float>(meshIdx);
+        // Field 2: v2
+        p[8]  = x2; p[9]  = y2; p[10] = z2; p[11] = 0.f;
+        // Field 3..5: object-space normals
+        p[12] = nx0; p[13] = ny0; p[14] = nz0; p[15] = 0.f;
+        p[16] = nx1; p[17] = ny1; p[18] = nz1; p[19] = 0.f;
+        p[20] = nx2; p[21] = ny2; p[22] = nz2; p[23] = 0.f;
+        // Field 6..7: UVs
+        p[24] = u0;  p[25] = v0uv; p[26] = u1;  p[27] = v1uv;
+        p[28] = u2;  p[29] = v2uv; p[30] = 0.f; p[31] = 0.f;
+    }
+    return writeCount;
+}
+
 }// namespace threepp::wgpu_pt

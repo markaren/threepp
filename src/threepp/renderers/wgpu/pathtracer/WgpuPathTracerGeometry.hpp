@@ -49,6 +49,28 @@ namespace threepp::wgpu_pt {
             int triOffset = 0, int matOffset = 0, int meshOffset = 0,
             std::vector<std::pair<int, int>>* entryTriRanges = nullptr);
 
+    /// Fast per-frame re-pack of a single entry's object-space triangles into a
+    /// staging buffer.  Writes `entry`'s triangles into `dstObjTri` as the same
+    /// 32-float-per-tri layout used in `rawObjTriBuf`: 8 × vec4 per tri, where
+    /// v0.w = matIdx, v1.w = meshIdx, and u/v/normal layout matches setObj in
+    /// buildGeometryBuffers.
+    ///
+    /// `dstObjTri` must be sized to at least `maxTris * 32` floats; only the
+    /// first `min(geometryTris, maxTris)` triangles are written.  Returns the
+    /// number of triangles actually written.
+    ///
+    /// Used by the per-frame dirty-geometry fast path: when a mesh's position
+    /// / normal / index attribute `version` changes without a topology change
+    /// we repack just that entry's slice and upload the result partially into
+    /// the `objTriBuf`/`objTriBuf2` SSBO — the VT + refit pipelines then
+    /// regenerate `triTex` + BVH AABBs as if the mesh had moved.
+    int repackEntryObjTri(
+            const RtMeshEntry& entry,
+            int matIdx,
+            int meshIdx,
+            float* dstObjTri,
+            int maxTris);
+
 }// namespace threepp::wgpu_pt
 
 #endif//THREEPP_WGPUPATHTRACERGEOMETRY_HPP
