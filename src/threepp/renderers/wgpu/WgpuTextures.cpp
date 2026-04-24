@@ -1,6 +1,8 @@
 
 #include "WgpuTextures.hpp"
 
+#include "threepp/lights/ltc/ltc_data.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -476,6 +478,65 @@ const TextureEntry* WgpuTextures::findTexture(unsigned int id) const {
     return it != cache_.end() ? &it->second : nullptr;
 }
 
+namespace {
+    // Upload a 64x64 RGBA16Float LTC LUT. RGBA16Float supports linear filtering
+    // by default in WebGPU core; RGBA32Float requires the float32-filterable feature.
+    void buildLtcTexture(WGPUDevice device, WGPUQueue queue,
+                         const std::array<float, threepp::ltc::LUT_ELEMENTS>& data,
+                         const char* label,
+                         WGPUTexture& outTex, WGPUTextureView& outView) {
+        std::vector<uint16_t> half(data.size());
+        for (size_t i = 0; i < data.size(); ++i) half[i] = f32_to_f16(data[i]);
+
+        WGPUTextureDescriptor td{};
+        td.label = WGPUStringView{label, WGPU_STRLEN} ;
+        td.size = {threepp::ltc::LUT_SIZE, threepp::ltc::LUT_SIZE, 1};
+        td.mipLevelCount = 1;
+        td.sampleCount = 1;
+        td.dimension = WGPUTextureDimension_2D;
+        td.format = WGPUTextureFormat_RGBA16Float;
+        td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
+        outTex = wgpuDeviceCreateTexture(device, &td);
+        outView = wgpuTextureCreateView(outTex, nullptr);
+
+        WGPUTexelCopyTextureInfo dst{};
+        dst.texture = outTex;
+        WGPUTexelCopyBufferLayout layout{};
+        layout.bytesPerRow = threepp::ltc::LUT_SIZE * 4 * sizeof(uint16_t);
+        layout.rowsPerImage = threepp::ltc::LUT_SIZE;
+        WGPUExtent3D extent = {threepp::ltc::LUT_SIZE, threepp::ltc::LUT_SIZE, 1};
+        wgpuQueueWriteTexture(queue, &dst, half.data(),
+                              half.size() * sizeof(uint16_t),
+                              &layout, &extent);
+    }
+}
+
+const TextureEntry& WgpuTextures::getOrCreateLtc1() {
+    if (!ltc1_.texture) {
+        buildLtcTexture(state_.device, state_.queue, threepp::ltc::LTC_MAT_1,
+                        "ltc_1", ltc1_.texture, ltc1_.view);
+        WGPUSamplerDescriptor sd{};
+        sd.label = WGPUStringView{"ltc_sampler", WGPU_STRLEN} ;
+        sd.magFilter = WGPUFilterMode_Linear;
+        sd.minFilter = WGPUFilterMode_Linear;
+        sd.addressModeU = WGPUAddressMode_ClampToEdge;
+        sd.addressModeV = WGPUAddressMode_ClampToEdge;
+        sd.addressModeW = WGPUAddressMode_ClampToEdge;
+        sd.lodMaxClamp = 0.0f;
+        sd.maxAnisotropy = 1;
+        ltc1_.sampler = wgpuDeviceCreateSampler(state_.device, &sd);
+    }
+    return ltc1_;
+}
+
+const TextureEntry& WgpuTextures::getOrCreateLtc2() {
+    if (!ltc2_.texture) {
+        buildLtcTexture(state_.device, state_.queue, threepp::ltc::LTC_MAT_2,
+                        "ltc_2", ltc2_.texture, ltc2_.view);
+    }
+    return ltc2_;
+}
+
 void WgpuTextures::dispose() {
     for (auto& [id, te] : cache_) {
         if (te.view) wgpuTextureViewRelease(te.view);
@@ -507,4 +568,13 @@ void WgpuTextures::dispose() {
     if (dummyCubeTexture_.texture) wgpuTextureRelease(dummyCubeTexture_.texture);
     if (dummyCubeTexture_.sampler) wgpuSamplerRelease(dummyCubeTexture_.sampler);
     dummyCubeTexture_ = {};
+
+    auto releaseLtc = [](TextureEntry& t) {
+        if (t.view) wgpuTextureViewRelease(t.view);
+        if (t.texture) wgpuTextureRelease(t.texture);
+        if (t.sampler) wgpuSamplerRelease(t.sampler);
+        t = {};
+    };
+    releaseLtc(ltc1_);
+    releaseLtc(ltc2_);
 }

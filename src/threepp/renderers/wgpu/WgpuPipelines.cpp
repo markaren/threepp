@@ -251,6 +251,33 @@ namespace threepp::wgpu {
             addTexSamplerBindings(38, 39);
         }
 
+        // Bindings 40-42: RectAreaLight LTC lookup textures (shared sampler).
+        if (features & ShaderFeatures::RectAreaLights) {
+            {
+                WGPUBindGroupLayoutEntry e{};
+                e.binding = 40;
+                e.visibility = WGPUShaderStage_Fragment;
+                e.texture.sampleType = WGPUTextureSampleType_Float;
+                e.texture.viewDimension = WGPUTextureViewDimension_2D;
+                entries.push_back(e);
+            }
+            {
+                WGPUBindGroupLayoutEntry e{};
+                e.binding = 41;
+                e.visibility = WGPUShaderStage_Fragment;
+                e.texture.sampleType = WGPUTextureSampleType_Float;
+                e.texture.viewDimension = WGPUTextureViewDimension_2D;
+                entries.push_back(e);
+            }
+            {
+                WGPUBindGroupLayoutEntry e{};
+                e.binding = 42;
+                e.visibility = WGPUShaderStage_Fragment;
+                e.sampler.type = WGPUSamplerBindingType_Filtering;
+                entries.push_back(e);
+            }
+        }
+
         return entries;
     }
 

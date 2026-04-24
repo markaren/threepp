@@ -109,6 +109,15 @@ const std::vector<WGPUBindGroupEntry>& WgpuBindGroups::buildStandard(const BindG
         { WGPUBindGroupEntry e{}; e.binding = 39; e.sampler = inputs.transmissionSampler; entries_.push_back(e); }
     }
 
+    // Bindings 40-42: RectAreaLight LTC LUTs (shared sampler on ltc1).
+    if (features & SF::RectAreaLights) {
+        const auto& l1 = inputs.textures.getOrCreateLtc1();
+        const auto& l2 = inputs.textures.getOrCreateLtc2();
+        { WGPUBindGroupEntry e{}; e.binding = 40; e.textureView = l1.view; entries_.push_back(e); }
+        { WGPUBindGroupEntry e{}; e.binding = 41; e.textureView = l2.view; entries_.push_back(e); }
+        { WGPUBindGroupEntry e{}; e.binding = 42; e.sampler = l1.sampler; entries_.push_back(e); }
+    }
+
     // Binding 34-35: skinning data buffers
     if (inputs.skinBuffer) {
         { WGPUBindGroupEntry e{}; e.binding = 34; e.buffer = inputs.skinBuffer; e.offset = 0; e.size = inputs.skinSize;

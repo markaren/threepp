@@ -112,6 +112,9 @@ namespace threepp::wgpu {
         // Sheen (bit 44): MeshPhysicalMaterial sheen lobe (Charlie/Neubelt BRDF + sheen IBL)
         constexpr uint64_t Sheen           = 1ULL << 44;
 
+        // RectAreaLights (bit 45): scene has RectAreaLights — enables LTC binding + eval path
+        constexpr uint64_t RectAreaLights  = 1ULL << 45;
+
         // Convenience: test if shader needs lighting calculations.
         inline bool isLit(uint64_t features) {
             return (features & (Lighting | Specular | PBR)) != 0;

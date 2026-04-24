@@ -61,10 +61,11 @@ int main() {
     scene->background = Color(0x101016);
 
     auto camera = PerspectiveCamera::create(45, canvas.aspect(), 0.1f, 100);
-    camera->position.set(0, 6, -116);
+    camera->position.set(0, 6, -16);
 
     OrbitControls controls{*camera, canvas};
     controls.target.set(0, 2, 0);
+    controls.update();
 
     scene->add(AmbientLight::create(0xffffff, 0.02f));
 

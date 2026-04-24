@@ -123,13 +123,15 @@ struct MaterialUniforms {
         s << "struct PointLightGPU { position: vec3<f32>, _p0: f32, color: vec3<f32>, distance: f32, decay: f32, _p1: f32, _p2: f32, _p3: f32, };\n";
         s << "struct SpotLightGPU { position: vec3<f32>, _p0: f32, direction: vec3<f32>, _p1: f32, color: vec3<f32>, distance: f32, decay: f32, coneCos: f32, penumbraCos: f32, _p2: f32, };\n";
         s << "struct HemisphereLightGPU { direction: vec3<f32>, _p0: f32, skyColor: vec3<f32>, _p1: f32, groundColor: vec3<f32>, _p2: f32, };\n";
+        s << "struct RectAreaLightGPU { position: vec3<f32>, _p0: f32, color: vec3<f32>, _p1: f32, halfWidth: vec3<f32>, _p2: f32, halfHeight: vec3<f32>, _p3: f32, };\n";
         s << "struct LightData {\n";
         s << "  numDir: u32, numPoint: u32, numSpot: u32, numHemi: u32,\n";
-        s << "  ambient: vec3<f32>, _pad: f32,\n";
+        s << "  ambient: vec3<f32>, numRect: u32,\n";
         s << "  directional: array<DirectionalLightGPU, " << limits.maxDirLights << ">,\n";
         s << "  point: array<PointLightGPU, " << limits.maxPointLights << ">,\n";
         s << "  spot: array<SpotLightGPU, " << limits.maxSpotLights << ">,\n";
         s << "  hemi: array<HemisphereLightGPU, " << limits.maxHemiLights << ">,\n";
+        s << "  rect: array<RectAreaLightGPU, " << limits.maxRectAreaLights << ">,\n";
         s << "};\n";
         s << "@group(0) @binding(2) var<uniform> lights: LightData;\n";
     }
@@ -194,6 +196,11 @@ struct MaterialUniforms {
     if (features & ShaderFeatures::Transmission) {
         s << "@group(0) @binding(38) var t_transmissionMap: texture_2d<f32>;\n";
         s << "@group(0) @binding(39) var s_transmissionMap: sampler;\n";
+    }
+    if (features & ShaderFeatures::RectAreaLights) {
+        s << "@group(0) @binding(40) var t_ltc_1: texture_2d<f32>;\n";
+        s << "@group(0) @binding(41) var t_ltc_2: texture_2d<f32>;\n";
+        s << "@group(0) @binding(42) var s_ltc: sampler;\n";
     }
 
     if (features & ShaderFeatures::Instanced) {
@@ -341,6 +348,65 @@ fn samplePointShadow(pi: u32, worldPos: vec3<f32>) -> f32 {
         }
     }
     return shadow_sum / 9.0;
+}
+)";
+    }
+
+    // LTC helper functions for RectAreaLight (Heitz/Hill 2016).
+    if (features & ShaderFeatures::RectAreaLights) {
+        s << R"(
+fn ltc_edgeVectorFormFactor(v1: vec3<f32>, v2: vec3<f32>) -> vec3<f32> {
+    let x = dot(v1, v2);
+    let y = abs(x);
+    let a = 0.8543985 + (0.4965155 + 0.0145206 * y) * y;
+    let b = 3.4175940 + (4.1616724 + y) * y;
+    let v = a / b;
+    var theta_sintheta: f32;
+    if (x > 0.0) {
+        theta_sintheta = v;
+    } else {
+        theta_sintheta = 0.5 * inverseSqrt(max(1.0 - x * x, 1e-7)) - v;
+    }
+    return cross(v1, v2) * theta_sintheta;
+}
+
+fn ltc_clippedSphereFormFactor(f: vec3<f32>) -> f32 {
+    let l = length(f);
+    return max((l * l + f.z) / (l + 1.0), 0.0);
+}
+
+fn ltc_evaluate(N: vec3<f32>, V: vec3<f32>, P: vec3<f32>, mInv: mat3x3<f32>, rectCoords: array<vec3<f32>, 4>) -> vec3<f32> {
+    // bail if point is on the back side of the light plane (CCW winding)
+    let v1 = rectCoords[1] - rectCoords[0];
+    let v2 = rectCoords[3] - rectCoords[0];
+    let lightNormal = cross(v1, v2);
+    if (dot(lightNormal, P - rectCoords[0]) < 0.0) {
+        return vec3<f32>(0.0);
+    }
+
+    // orthonormal basis around N
+    let T1 = normalize(V - N * dot(V, N));
+    let T2 = -cross(N, T1);
+
+    // world -> cosine-space transform
+    let tbn = mat3x3<f32>(T1, T2, N);
+    // transpose(tbn) = inverse(tbn) since it's orthonormal.
+    let mat = mInv * transpose(tbn);
+
+    var coords: array<vec3<f32>, 4>;
+    coords[0] = normalize(mat * (rectCoords[0] - P));
+    coords[1] = normalize(mat * (rectCoords[1] - P));
+    coords[2] = normalize(mat * (rectCoords[2] - P));
+    coords[3] = normalize(mat * (rectCoords[3] - P));
+
+    var vff = vec3<f32>(0.0);
+    vff += ltc_edgeVectorFormFactor(coords[0], coords[1]);
+    vff += ltc_edgeVectorFormFactor(coords[1], coords[2]);
+    vff += ltc_edgeVectorFormFactor(coords[2], coords[3]);
+    vff += ltc_edgeVectorFormFactor(coords[3], coords[0]);
+
+    let result = ltc_clippedSphereFormFactor(vff);
+    return vec3<f32>(result);
 }
 )";
     }
@@ -770,6 +836,44 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         diffuseLight += mix(lights.hemi[i].groundColor, lights.hemi[i].skyColor, w);
     }
 )";
+        // RectAreaLight LTC evaluation (Heitz/Hill 2016). Requires PBR.
+        if ((features & ShaderFeatures::RectAreaLights) && (features & ShaderFeatures::PBR)) {
+            s << R"(
+    for (var i = 0u; i < lights.numRect; i++) {
+        let lightPos = lights.rect[i].position;
+        let halfW = lights.rect[i].halfWidth;
+        let halfH = lights.rect[i].halfHeight;
+        let lightColor = lights.rect[i].color;
+
+        // CCW winding; emissive face points -Z in local space
+        var rectCoords: array<vec3<f32>, 4>;
+        rectCoords[0] = lightPos + halfW - halfH;
+        rectCoords[1] = lightPos - halfW - halfH;
+        rectCoords[2] = lightPos - halfW + halfH;
+        rectCoords[3] = lightPos + halfW + halfH;
+
+        let dotNV = clamp(dot(N, V), 0.0, 1.0);
+        let lutUV = vec2<f32>(roughness, sqrt(1.0 - dotNV)) * (63.0 / 64.0) + vec2<f32>(0.5 / 64.0);
+        let t1 = textureSampleLevel(t_ltc_1, s_ltc, lutUV, 0.0);
+        let t2 = textureSampleLevel(t_ltc_2, s_ltc, lutUV, 0.0);
+
+        let mInv = mat3x3<f32>(
+            vec3<f32>(t1.x, 0.0, t1.y),
+            vec3<f32>(0.0,  1.0, 0.0 ),
+            vec3<f32>(t1.z, 0.0, t1.w)
+        );
+
+        let F0 = mix(vec3<f32>(0.04), baseColor, metalness);
+        let ltcFresnel = F0 * t2.x + (vec3<f32>(1.0) - F0) * t2.y;
+
+        let ltcSpec = ltc_evaluate(N, V, in.worldPos, mInv, rectCoords);
+        let ltcDiff = ltc_evaluate(N, V, in.worldPos, mat3x3<f32>(1.0,0.0,0.0, 0.0,1.0,0.0, 0.0,0.0,1.0), rectCoords);
+
+        specularLight += lightColor * ltcFresnel * ltcSpec;
+        diffuseLight  += lightColor * (1.0 - metalness) * ltcDiff;
+    }
+)";
+        }
         // Emissive
         if (features & ShaderFeatures::EmissiveMap) {
             s << "    var emissiveColor = material.emissive.rgb * textureSample(t_emissiveMap, s_emissiveMap, in.uv).rgb;\n";

@@ -85,6 +85,7 @@ namespace threepp::wgpu {
         bool srgbOutput = false;
         bool localClippingEnabled = false;
         bool shadowActive = false;
+        bool rectAreaActive = false;
         float transmissionTexW = 0;
         float transmissionTexH = 0;
     };

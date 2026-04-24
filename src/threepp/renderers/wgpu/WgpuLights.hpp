@@ -38,6 +38,10 @@ namespace threepp::wgpu {
         // Recreate the GPU buffer after light limits have changed.
         void recreateBuffer();
 
+        // True if the last update() collected at least one RectAreaLight.
+        // Used by the renderer to feature-gate LTC bindings + shader path.
+        [[nodiscard]] bool hasRectAreaLights() const { return hasRectAreaLights_; }
+
         void dispose();
 
     private:
@@ -45,6 +49,7 @@ namespace threepp::wgpu {
         WGPUBuffer lightBuffer_ = nullptr;
         std::vector<float> scratch_;   // reused scratch buffer — avoids per-frame heap alloc
         std::vector<float> uploaded_;  // last-uploaded data — skip GPU write when unchanged
+        bool hasRectAreaLights_ = false;
     };
 
 }// namespace threepp::wgpu

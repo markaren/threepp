@@ -2283,6 +2283,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         }
         frameCtx.localClippingEnabled = scope.localClippingEnabled;
         frameCtx.shadowActive = shadowMap->isActive();
+        frameCtx.rectAreaActive = lights->hasRectAreaLights();
 
         // Render opaque objects (front-to-back, depth write on)
         for (auto* item : renderList_.opaque) {
@@ -2804,6 +2805,11 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         if (isMesh && frameCtx.shadowActive && object->receiveShadow &&
             SF::isLit(features)) {
             features |= SF::Shadow;
+        }
+
+        // RectAreaLight (LTC) — PBR-only.
+        if (frameCtx.rectAreaActive && (features & SF::PBR)) {
+            features |= SF::RectAreaLights;
         }
 
         // Fog, tone mapping, output encoding

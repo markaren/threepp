@@ -42,6 +42,12 @@ namespace threepp::wgpu {
         [[nodiscard]] const TextureEntry& getDummyTexture() const { return dummyTexture_; }
         [[nodiscard]] const TextureEntry& getDummyCubeTexture() const { return dummyCubeTexture_; }
 
+        // RectAreaLight LTC (Linearly Transformed Cosines) lookup textures.
+        // Built lazily on first call; both share a single sampler
+        // (ltc_1.sampler). 64x64 RGBA float2 data embedded from three.js.
+        [[nodiscard]] const TextureEntry& getOrCreateLtc1();
+        [[nodiscard]] const TextureEntry& getOrCreateLtc2();
+
         [[nodiscard]] const TextureEntry* findTexture(unsigned int id) const;
 
         // Flush any pending mipmap generation work.
@@ -72,6 +78,8 @@ namespace threepp::wgpu {
         std::unordered_map<unsigned int, TextureEntry> cubeCache_;
         TextureEntry dummyTexture_;
         TextureEntry dummyCubeTexture_;
+        TextureEntry ltc1_;
+        TextureEntry ltc2_;
     };
 
 }// namespace threepp::wgpu
