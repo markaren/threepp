@@ -366,7 +366,12 @@ namespace threepp {
                         obj = Bone::create();
                     else
                         obj = Group::create();
-                    obj->name = nodeDef.value("name", "");
+                    // Fall back to a synthetic "node_N" name for unnamed glTF nodes
+                    // (e.g. BrainStem). Animation tracks also use this synthetic
+                    // name (see loadAnimations), so PropertyBinding::findNode
+                    // resolves bones by matching names instead of defaulting to
+                    // root and silently losing the animation.
+                    obj->name = nodeDef.value("name", "node_" + std::to_string(i));
                     applyNodeTransform(obj, nodeDef);
                     nodeObjects[i] = obj;
                 }
