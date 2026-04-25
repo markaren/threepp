@@ -1,5 +1,6 @@
 // GPU path tracer example using WgpuPathTracer.
 
+#include "threepp/animation/AnimationMixer.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
@@ -101,13 +102,22 @@ int main() {
     scene.add(grid);
 
     ModelLoader loader;
-    auto obj = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
-    obj->traverseType<Mesh>([&](Mesh& m) {
+    auto stormTrooper = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
+    stormTrooper->traverseType<Mesh>([&](Mesh& m) {
         m.castShadow = true;
     });
-    obj->position.z = -4.f;
-    obj->position.y = -1.f;
-    scene.add(obj);
+    stormTrooper->rotation.z = -math::PI;
+    stormTrooper->position.z = -4.f;
+    stormTrooper->position.y = -1.f;
+    stormTrooper->scale *= 0.8;
+    scene.add(stormTrooper);
+
+    std::unique_ptr<AnimationMixer> mixer;
+    if (!stormTrooper->animations.empty()) {
+        std::cout << "Loaded " << stormTrooper->animations.size() << " animation clip(s)." << std::endl;
+        mixer = std::make_unique<AnimationMixer>(*stormTrooper);
+        mixer->clipAction(stormTrooper->animations.front())->play();
+    }
 
     // ---- Lights ----
     auto pointLight = PointLight::create(Color::white, 0.9f);
@@ -130,7 +140,7 @@ int main() {
     bool denoiserOn = pathTracer.denoiserEnabled();
     bool restirOn = pathTracer.restirEnabled();
     bool restirGIOn = pathTracer.restirGiEnabled();
-    bool animateBox = true;
+    bool animate = true;
     bool showEnclosingBox = true;
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
@@ -156,7 +166,7 @@ int main() {
         if (pathTracerOn) ImGui::Text("Frames: %d", pathTracer.frameCount());
         ImGui::Separator();
 
-        ImGui::Checkbox("AnimateBox", &animateBox);
+        ImGui::Checkbox("AnimateBox", &animate);
 
         if (ImGui::Checkbox("EnclosingBox", &showEnclosingBox)) {
             pathTracer.resetAccumulation();
@@ -210,7 +220,9 @@ int main() {
             fpsFrames = 0;
         }
 
-        if (animateBox) {
+        if (animate) {
+            if (mixer) mixer->update(dt);
+
             boxMesh->rotation.y += dt * 0.6f;
             boxMesh->rotation.x += dt * 0.3f;
         }
