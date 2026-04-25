@@ -32,6 +32,7 @@ namespace {
             pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(values));
         }
 
+    protected:
         void onRender() override {
 
             ImGui::SetNextWindowPos({}, 0, {});
@@ -65,7 +66,6 @@ namespace {
             ImGui::End();
         }
     };
-
 
     void setupLights(Scene& scene) {
         auto light1 = DirectionalLight::create(0xffffff, 1.f);
