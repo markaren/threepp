@@ -2997,7 +2997,7 @@ R"(
                         rPrev.lightPos  = prevSample.xyz;
                         rPrev.lightType = prevSample.w;
                         rPrev.W_sum = prevWeight.x;
-                        rPrev.M     = min(prevWeight.y, rt.restirParams.y) * 0.8;
+                        rPrev.M     = min(prevWeight.y, rt.restirParams.y);
                         rPrev.W     = prevWeight.z;
                         rPrev.p_hat = prevWeight.w;
 
@@ -3101,14 +3101,12 @@ R"(
             addSplit(&diffRad, &specRad, shade * rSplit.spec, cap, 1, true);
         }
 
-        // === STORE RESERVOIR (pre-spatial, visibility-gated) ===
-        let visible = reservoirShadowAtten.x + reservoirShadowAtten.y + reservoirShadowAtten.z > 0.001;
-        let rW = select(0.0, select(0.0, preSpReservoir.W, preSpReservoir.W == preSpReservoir.W), visible);
-        let rM = select(0.0, preSpReservoir.M, visible);
+        // === STORE RESERVOIR (pre-spatial; RTXDI-style — no post-spatial visibility gate) ===
+        let rW = select(0.0, preSpReservoir.W, preSpReservoir.W == preSpReservoir.W);
         textureStore(reservoirWrite, pixel,
             vec4<f32>(preSpReservoir.lightPos, preSpReservoir.lightType));
         textureStore(reservoirWWrite, pixel,
-            vec4<f32>(preSpReservoir.W_sum, rM, rW, preSpReservoir.p_hat));
+            vec4<f32>(preSpReservoir.W_sum, preSpReservoir.M, rW, preSpReservoir.p_hat));
 
     } else {
 )";
