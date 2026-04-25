@@ -2034,6 +2034,20 @@ fn addClamped(rad: ptr<function, vec3<f32>>, contrib: vec3<f32>, cap: f32) {
     else           { *rad += contrib; }
 }
 
+// Finite check on all 3 channels — catches both NaN (x != x) and Inf
+// (abs(x) > 1e30). Existing accumulator guards used `select(0, v, v.x == v.x)`
+// which only catches NaN on the x channel; an Inf in any channel or a NaN in
+// y/z slipped through, then a single bilinear-reproj sample at camera motion
+// spread the bad value across the scene as ever more pixels reprojected onto
+// the contaminated tap.
+fn finite3(v: vec3<f32>) -> bool {
+    return v.x == v.x && v.y == v.y && v.z == v.z &&
+           abs(v.x) < 1e30 && abs(v.y) < 1e30 && abs(v.z) < 1e30;
+}
+fn cleanFinite3(v: vec3<f32>) -> vec3<f32> {
+    return select(vec3<f32>(0.0), v, finite3(v));
+}
+
 fn isMeshMoved(idx: i32) -> bool {
     if (idx < 0 || idx >= 128) { return false; }
     let ui  = u32(idx);
@@ -4889,8 +4903,8 @@ fn rt_accum_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let prevSpecRaw  = textureLoad(specAccumRead, pixel, 0).xyz;
         let prevDiffRaw  = prevDiffRaw4.xyz;
         var pixelFC      = prevDiffRaw4.w;
-        var oldDiff = select(vec3<f32>(0.0), prevDiffRaw, prevDiffRaw.x == prevDiffRaw.x);
-        var oldSpec = select(vec3<f32>(0.0), prevSpecRaw, prevSpecRaw.x == prevSpecRaw.x);
+        var oldDiff = cleanFinite3(prevDiffRaw);
+        var oldSpec = cleanFinite3(prevSpecRaw);
         let prevMom = textureLoad(momentsRead, pixel, 0);
         var prevMomM1 = prevMom.x;
         var prevMomM2 = prevMom.y;
@@ -4950,21 +4964,30 @@ R"(
                         let v11 = select(0.0, w11, m11 == primaryMeshIdx);
                         let wSum = v00 + v10 + v01 + v11;
                         if (wSum > 1e-4) {
+                            // Sanitize each tap before blending — a single NaN/Inf
+                            // tap (from a prior pathological accum write) otherwise
+                            // poisons the bilinear sum, then propagates outward as
+                            // each subsequent camera step reprojects more pixels
+                            // onto the contaminated location.
                             let d00 = textureLoad(diffAccumRead, p00, 0);
                             let d10 = textureLoad(diffAccumRead, p10, 0);
                             let d01 = textureLoad(diffAccumRead, p01, 0);
                             let d11 = textureLoad(diffAccumRead, p11, 0);
+                            let d00x = cleanFinite3(d00.xyz);
+                            let d10x = cleanFinite3(d10.xyz);
+                            let d01x = cleanFinite3(d01.xyz);
+                            let d11x = cleanFinite3(d11.xyz);
                             let inv = 1.0 / wSum;
-                            oldDiff = (d00.xyz * v00 + d10.xyz * v10
-                                     + d01.xyz * v01 + d11.xyz * v11) * inv;
+                            oldDiff = cleanFinite3((d00x * v00 + d10x * v10
+                                     + d01x * v01 + d11x * v11) * inv);
                             // FC is stored in diffAccum.w (spec has same value).
                             let prevFC = (d00.w * v00 + d10.w * v10
                                         + d01.w * v01 + d11.w * v11) * inv;
-                            let s00 = textureLoad(specAccumRead, p00, 0).xyz;
-                            let s10 = textureLoad(specAccumRead, p10, 0).xyz;
-                            let s01 = textureLoad(specAccumRead, p01, 0).xyz;
-                            let s11 = textureLoad(specAccumRead, p11, 0).xyz;
-                            oldSpec = (s00 * v00 + s10 * v10 + s01 * v01 + s11 * v11) * inv;
+                            let s00 = cleanFinite3(textureLoad(specAccumRead, p00, 0).xyz);
+                            let s10 = cleanFinite3(textureLoad(specAccumRead, p10, 0).xyz);
+                            let s01 = cleanFinite3(textureLoad(specAccumRead, p01, 0).xyz);
+                            let s11 = cleanFinite3(textureLoad(specAccumRead, p11, 0).xyz);
+                            oldSpec = cleanFinite3((s00 * v00 + s10 * v10 + s01 * v01 + s11 * v11) * inv);
                             let mom00 = textureLoad(momentsRead, p00, 0).xy;
                             let mom10 = textureLoad(momentsRead, p10, 0).xy;
                             let mom01 = textureLoad(momentsRead, p01, 0).xy;
@@ -4991,8 +5014,8 @@ R"(
         }
 )"
 R"(
-        // NaN guard. Firefly clamps are per-channel below (on diff/spec).
-        let sampleClean = select(vec3<f32>(0.0), sample, sample.x == sample.x);
+        // NaN+Inf guard. Firefly clamps are per-channel below (on diff/spec).
+        let sampleClean = cleanFinite3(sample);
         let lum3 = vec3<f32>(0.2126, 0.7152, 0.0722);
         let clampsOn = rt.emissiveInfo.z < 1e20;
         let hardCap = 12.0;
@@ -5012,8 +5035,8 @@ R"(
 
         // Split accum (diffuse/specular)
         {
-            let diffSample = select(vec3<f32>(0.0), ptDiff, ptDiff.x == ptDiff.x);
-            let specSample = select(vec3<f32>(0.0), ptSpec, ptSpec.x == ptSpec.x);
+            let diffSample = cleanFinite3(ptDiff);
+            let specSample = cleanFinite3(ptSpec);
             var dClamped = diffSample;
             let dLum = dot(diffSample, lum3);
             if (clampsOn && dLum > hardCap) { dClamped = diffSample * (hardCap / dLum); }
