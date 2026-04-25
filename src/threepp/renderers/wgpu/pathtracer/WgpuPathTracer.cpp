@@ -419,6 +419,15 @@ struct WgpuPathTracer::Impl {
     // True from when RT async build starts until the very first dispatch completes.
     // Ensures the VT pass (objTriBuf → triTex) runs on first dispatch even if no mesh moved.
     bool firstDispatchPending_ = false;
+    // Set true on the frame we transition from "isReady=false" to "isReady=true".
+    // The first dispatch incurs a multi-second stall on NVIDIA/Vulkan because the
+    // driver defers SPIR-V → GPU ISA compilation to first use, even though wgpu's
+    // CreateComputePipelineAsync claimed the pipeline was ready. We wait for the
+    // GPU work to actually finish at the end of this frame and only then log
+    // "rendering started" — otherwise the message races ~17s ahead of the visible
+    // scene.
+    bool firstDispatchBlockUntilDone_ = false;
+    std::chrono::steady_clock::time_point firstDispatchStart_{};
 
     // Frame state
     std::unordered_map<Texture*, int> texSlotMap;
@@ -3472,10 +3481,12 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     if (d.shaderWaitStart_.time_since_epoch().count() != 0) {
         int elapsedSec = (int) std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::steady_clock::now() - d.shaderWaitStart_).count();
-        std::cerr << "[PathTracer] RT shaders ready after "
-                  << elapsedSec << "s - rendering started." << std::endl;
+        std::cerr << "[PathTracer] RT shaders compiled after " << elapsedSec
+                  << "s - running first dispatch (driver may compile pipelines on first use)..." << std::endl;
         d.shaderWaitStart_ = {};
         d.shaderWaitLastLoggedSec_ = 0;
+        d.firstDispatchBlockUntilDone_ = true;
+        d.firstDispatchStart_ = std::chrono::steady_clock::now();
     }
     // First dispatch after async shader compilation: triTex has never been written by the VT
     // pass (every prior frame returned early).  Force the VT pass to run now so the RT shader
@@ -4206,6 +4217,21 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
 
         for (auto& e : hidden) e.obj->visible = e.wasVisible;
+    }
+
+    // First-dispatch barrier: when wgpu's async pipeline build reports ready,
+    // the SPIR-V is compiled but the Vulkan/Metal/D3D driver typically defers
+    // GPU-ISA compilation until first dispatch (~10-20s on NVIDIA cold cache).
+    // Block here so the "rendering started" log lines up with the actually-
+    // visible scene rather than racing ~17s ahead. Subsequent frames don't
+    // pay this cost — the driver caches the ISA after first use.
+    if (d.firstDispatchBlockUntilDone_) {
+        d.firstDispatchBlockUntilDone_ = false;
+        wgpuDevicePoll(d.device, true, nullptr);
+        const double elapsedMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - d.firstDispatchStart_).count();
+        std::cerr << "[PathTracer] First dispatch complete (" << std::fixed
+                  << std::setprecision(1) << elapsedMs << " ms) - rendering started." << std::endl;
     }
 }
 
