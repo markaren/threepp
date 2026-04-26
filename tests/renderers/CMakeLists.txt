@@ -33,6 +33,7 @@ if (THREEPP_WITH_WGPU AND THREEPP_WITH_GLFW)
     add_cross_renderer_test(CrossRenderer_gl_test CrossRenderer_gl_test.cpp)
     add_cross_renderer_test(CrossRenderer_wgpu_test CrossRenderer_wgpu_test.cpp)
     add_cross_renderer_test(CrossRenderer_parity_test CrossRenderer_parity_test.cpp)
+    add_cross_renderer_test(CrossRenderer_furnace_test CrossRenderer_furnace_test.cpp)
     add_cross_renderer_test(WgpuRenderer_perf_test WgpuRenderer_perf_test.cpp)
 
     if (THREEPP_WITH_INFERENCE)

@@ -2089,14 +2089,27 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         }
         WGPUCommandEncoder encoder = renderEncoder_;
 
+        // Resolve scene env *before* flushPendingMipmaps so that pre-warming the
+        // env texture below queues its PMREM mips into the same flush. Otherwise
+        // first-frame IBL samples uninitialised mips → black sphere in furnace test.
+        auto* sceneObj = scene.as<Scene>();
+        currentSceneEnv_ = sceneObj ? sceneObj->environment.get() : nullptr;
+        if (currentSceneEnv_) {
+            const bool isCube = currentSceneEnv_->mapping == Mapping::CubeReflection ||
+                                currentSceneEnv_->mapping == Mapping::CubeRefraction;
+            if (isCube) {
+                textures->getOrCreateCubeTexture(currentSceneEnv_);
+            } else {
+                textures->getOrCreateEnvTexture2D(currentSceneEnv_);
+            }
+        }
+
         // Flush any pending mipmap generation before the render pass begins.
         // Mipmap command buffers must be submitted while no render pass is active
         // to avoid wgpu-native validation errors with MSAA render passes.
         textures->flushPendingMipmaps();
 
         // Determine clear color
-        auto* sceneObj = scene.as<Scene>();
-        currentSceneEnv_ = sceneObj ? sceneObj->environment.get() : nullptr;
         Color effectiveClearColor = clearColor_;
         float effectiveClearAlpha = clearAlpha_;
         if (sceneObj && sceneObj->background.isColor()) {
