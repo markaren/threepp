@@ -71,6 +71,7 @@ namespace {
 
         explicit MyGui(const Canvas& canvas, Renderer& renderer): ImguiContext(canvas, renderer) {}
 
+    protected:
         void onRender() override {
 
             ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
@@ -88,11 +89,11 @@ namespace {
         const auto light = AmbientLight::create(0x443333, 0.8f);
         scene.add(light);
 
-        const auto light2 = DirectionalLight::create(0xffddcc, 1.f);
+        const auto light2 = DirectionalLight::create(0xffddcc, 1.4f);
         light2->position.set(1, 0.75, 0.5);
         scene.add(light2);
 
-        const auto light3 = DirectionalLight::create(0xccccff, 1.f);
+        const auto light3 = DirectionalLight::create(0xccccff, 1.4f);
         light3->position.set(-1, 0.75, -0.5);
         scene.add(light3);
     }

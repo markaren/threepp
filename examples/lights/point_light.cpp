@@ -36,19 +36,19 @@ namespace {
     }
 
     auto addLights(Scene& scene) {
-        const auto light1 = PointLight::create(Color::yellow);
+        const auto light1 = PointLight::create(Color::yellow, 2.5f);
         light1->castShadow = true;
         light1->shadow->bias = -0.005f;
         light1->distance = 8;
         light1->position.y = 4;
 
-        const auto light2 = PointLight::create(Color::white);
+        const auto light2 = PointLight::create(Color::white, 2.5f);
         light2->castShadow = true;
         light2->shadow->bias = -0.005f;
         light2->distance = 8;
         light2->position.y = 4;
 
-        const auto light3 = PointLight::create(Color::purple);
+        const auto light3 = PointLight::create(Color::purple, 2.5f, 0, 1);
         light3->castShadow = true;
         light3->shadow->bias = -0.005f;
         light3->distance = 10;

@@ -15,11 +15,11 @@ int main() {
     PerspectiveCamera camera(45, canvas.size().aspect(), 0.2f, 100.f);
     camera.position.set(0, 5, 5);
 
-    auto light1 = PointLight::create(0xff2200, 0.7f);
+    auto light1 = PointLight::create(0xff2200, 1.2f, 0, 0);
     light1->position.set(100, 100, 100);
     scene.add(light1);
 
-    auto light2 = PointLight::create(0x22ff00, 0.7f);
+    auto light2 = PointLight::create(0x22ff00, 1.2f, 0, 0);
     light2->position.set(-100, -100, -100);
     scene.add(light2);
 

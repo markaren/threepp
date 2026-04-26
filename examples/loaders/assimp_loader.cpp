@@ -37,15 +37,15 @@ namespace {
     }
 
     auto addLights(Scene& scene) {
-        auto light1 = PointLight::create(0xffffff, 0.5f);
+        auto light1 = PointLight::create(0xffffff, 1.f, 0, 0);
         light1->position.set(45, 115, 25);
         scene.add(light1);
 
-        auto light2 = PointLight::create(0xffffff, 0.5f);
+        auto light2 = PointLight::create(0xffffff, 1.f, 0, 0);
         light2->position.set(-45, 115, 125);
         scene.add(light2);
 
-        auto light3 = PointLight::create(0xffffff, 0.5f);
+        auto light3 = PointLight::create(0xffffff, 1.f, 0, 0);
         light3->position.set(0, 25, -30);
         scene.add(light3);
     }

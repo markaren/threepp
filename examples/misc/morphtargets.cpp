@@ -58,7 +58,7 @@ int main() {
 
     scene->add(AmbientLight::create(0x8FBCD4, 0.4f));
 
-    auto pointLight = PointLight::create(0xffffff, 1.f);
+    auto pointLight = PointLight::create(0xffffff, 1.f, 0, 0);
     camera->add(pointLight);
 
     auto geometry = createGeometry();

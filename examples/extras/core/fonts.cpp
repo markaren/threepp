@@ -81,6 +81,7 @@ namespace {
     auto createAndAddLights(Scene& scene) {
 
         auto light = DirectionalLight::create();
+        light->intensity = 1.5f;
         light->position.set(15, 5, 15);
         light->lookAt(Vector3::ZEROS());
         light->castShadow = true;
@@ -90,7 +91,7 @@ namespace {
         scene.add(light);
 
         auto pointLight = PointLight::create();
-        pointLight->intensity = 0.2f;
+        pointLight->intensity = 0.3f;
         pointLight->position.set(0, 2, 10);
         scene.add(pointLight);
     }
@@ -119,7 +120,7 @@ int main() {
     FontLoader loader;
     auto font = loader.load(getFontPath(fonts.front()));
 
-    float textSize = 10;
+    constexpr float textSize = 10;
     std::shared_ptr<Text3D> textMesh3d;
     std::shared_ptr<Text2D> textMesh2d;
 

@@ -17,12 +17,12 @@ int main() {
 
     auto scene = Scene::create();
 
-    auto camera = PerspectiveCamera::create(36, canvas.size().aspect(), 0.25, 16);
+    auto camera = PerspectiveCamera::create(36, canvas.size().aspect(), 0.25f, 16.f);
     camera->position.set(0, 1.3, 3);
 
     scene->add(AmbientLight::create(0x505050));
 
-    auto spotLight = SpotLight::create(0xffffff);
+    auto spotLight = SpotLight::create(0xffffff, 1.5f, 0, 0);
     spotLight->angle = math::PI / 5;
     spotLight->penumbra = 0.2;
     spotLight->position.set(2, 3, 3);
@@ -33,7 +33,7 @@ int main() {
     spotLight->shadow->mapSize.y = 1024;
     scene->add(spotLight);
 
-    auto dirLight = DirectionalLight::create(0x55505a, 1.f);
+    auto dirLight = DirectionalLight::create(0x55505a, 1.5f);
     dirLight->position.set(0, 3, 0);
     dirLight->castShadow = true;
     dirLight->shadow->camera->nearPlane = 1;
