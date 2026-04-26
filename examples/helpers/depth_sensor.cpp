@@ -74,7 +74,7 @@ namespace {
 int main() {
 
     Canvas canvas("Depth sensor", {{"antialiasing", 4}});
-    auto renderer = createRenderer(canvas);
+    auto renderer = GLRenderer(canvas);
 
     auto scene = Scene::create();
     scene->background = Color(0x111122);
@@ -132,7 +132,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer->setSize(size);
+        renderer.setSize(size);
     });
 
     Clock clock;
@@ -168,7 +168,7 @@ int main() {
             camera->layers.enableAll();
         }
 
-        renderer->render(*scene, *camera);
+        renderer.render(*scene, *camera);
         ui.render();
     });
 }

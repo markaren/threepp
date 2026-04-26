@@ -13,8 +13,8 @@ int main() {
 
     Canvas canvas("Raw Shader demo");
 
-    auto renderer = createRenderer(canvas);
-    renderer->checkShaderErrors = true;
+    auto renderer = GLRenderer(canvas);
+    renderer.checkShaderErrors = true;
 
     auto scene = Scene::create();
 
@@ -54,7 +54,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer->setSize(size);
+        renderer.setSize(size);
     });
 
     Clock clock;
@@ -64,7 +64,7 @@ int main() {
         mesh->rotation.y = t * 0.5f;
         material->uniforms["time"].setValue(t * 5);
 
-        renderer->render(*scene, *camera);
+        renderer.render(*scene, *camera);
     });
 }
 

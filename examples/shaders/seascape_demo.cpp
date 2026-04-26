@@ -14,8 +14,8 @@ int main() {
 
     Canvas canvas("Seascape demo", {{"antialiasing", 4}});
 
-    auto renderer = createRenderer(canvas);
-    renderer->checkShaderErrors = true;
+    auto renderer = GLRenderer(canvas);
+    renderer.checkShaderErrors = true;
 
     auto scene = Scene::create();
 
@@ -36,7 +36,7 @@ int main() {
     scene->add(mesh);
 
     canvas.onWindowResize([&](WindowSize size) {
-        renderer->setSize(size);
+        renderer.setSize(size);
         material->uniforms.at("iResolution").value<Vector2>().set(size.width(), size.height());
     });
 
@@ -47,7 +47,7 @@ int main() {
         mesh->rotation.y = t;
         material->uniforms.at("iTime").setValue(t);
 
-        renderer->render(*scene, *camera);
+        renderer.render(*scene, *camera);
     });
 }
 
