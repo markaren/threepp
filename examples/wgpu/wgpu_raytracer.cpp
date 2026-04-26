@@ -83,11 +83,11 @@ int main() {
     floor->receiveShadow = true;
 
     RGBELoader imgLoader;
-    auto img = imgLoader.load(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr", false);
+    auto envMap = imgLoader.load(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr", false);
 
     Scene scene;
-    scene.background = img;
-    scene.environment = img;
+    scene.background = envMap;
+    scene.environment = envMap;
 
     scene.add(boxMesh);
     scene.add(sphere1);
