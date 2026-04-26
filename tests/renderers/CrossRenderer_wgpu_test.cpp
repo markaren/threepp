@@ -3088,7 +3088,11 @@ TEST_CASE("Wgpu: toon material with gradient map renders stepped lighting", "[wg
 
     CHECK(countNonBlack(pixels) > PIXEL_COUNT / 16);
     auto avg = averageColor(pixels);
-    CHECK(avg.r + avg.g + avg.b > 30);
+    // Threshold lowered from 30 after Phase 4 made useLegacyLights=false default:
+    // toon BRDF now correctly applies the 1/π Lambert divisor that legacy used to
+    // cancel via a hidden π pre-multiplier on the light. Same scene is ~π× dimmer
+    // by design (matches three.js r166 BRDF_Lambertian).
+    CHECK(avg.r + avg.g + avg.b > 20);
 }
 
 TEST_CASE("Wgpu: morph targets + skinning combined", "[wgpu]") {

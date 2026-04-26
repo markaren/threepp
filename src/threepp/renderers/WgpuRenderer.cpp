@@ -373,12 +373,15 @@ struct WgpuRenderer::Impl {
     // intermediate RT instead of the surface. endFrame() blits to the surface
     // with tone mapping + sRGB conversion applied via a fullscreen pass.
     struct ToneMapState {
-        WGPUTexture colorTexture = nullptr;
+        WGPUTexture colorTexture = nullptr;       // single-sample (binding source / MSAA resolve target)
         WGPUTextureView colorView = nullptr;
-        WGPUTexture depthTexture = nullptr;
+        WGPUTexture depthTexture = nullptr;       // matches sampleCount
         WGPUTextureView depthView = nullptr;
+        WGPUTexture msaaColorTexture = nullptr;   // sampleCount>1 only — render attachment
+        WGPUTextureView msaaColorView = nullptr;
         uint32_t width = 0;
         uint32_t height = 0;
+        uint32_t sampleCount = 1;
 
         WGPUBindGroupLayout bindGroupLayout = nullptr;
         WGPUPipelineLayout pipelineLayout = nullptr;
@@ -1554,8 +1557,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
     }
 
     // Ensure the intermediate RT for tone mapping is the right size.
-    void ensureToneMapRT(uint32_t w, uint32_t h) {
-        if (toneMap_.width == w && toneMap_.height == h && toneMap_.colorTexture) return;
+    void ensureToneMapRT(uint32_t w, uint32_t h, uint32_t sampleCount) {
+        if (toneMap_.width == w && toneMap_.height == h
+            && toneMap_.sampleCount == sampleCount && toneMap_.colorTexture) return;
 
         // Release old
         if (toneMap_.cachedBindGroup)  { wgpuBindGroupRelease(toneMap_.cachedBindGroup);  toneMap_.cachedBindGroup  = nullptr; }
@@ -1563,15 +1567,18 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         toneMap_.lastExposure = -1.f;
         if (toneMap_.colorView) wgpuTextureViewRelease(toneMap_.colorView);
         if (toneMap_.colorTexture) wgpuTextureRelease(toneMap_.colorTexture);
+        if (toneMap_.msaaColorView) { wgpuTextureViewRelease(toneMap_.msaaColorView); toneMap_.msaaColorView = nullptr; }
+        if (toneMap_.msaaColorTexture) { wgpuTextureRelease(toneMap_.msaaColorTexture); toneMap_.msaaColorTexture = nullptr; }
         if (toneMap_.depthView) wgpuTextureViewRelease(toneMap_.depthView);
         if (toneMap_.depthTexture) wgpuTextureRelease(toneMap_.depthTexture);
 
         toneMap_.width = w;
         toneMap_.height = h;
+        toneMap_.sampleCount = sampleCount;
 
-        // Color texture (non-MSAA, used as texture binding source).
-        // RGBA16Float preserves HDR values >1.0 so tone mapping in the blit
-        // can correctly compress the full dynamic range.
+        // Single-sample color texture — bind source for the blit and (when sampleCount>1)
+        // the MSAA resolve target. RGBA16Float preserves HDR values >1.0 so tone mapping
+        // in the blit operates on the full dynamic range.
         WGPUTextureDescriptor td{};
         td.label = WGPUStringView{"tonemap_color", sizeof("tonemap_color") - 1};
         td.size = {w, h, 1};
@@ -1583,12 +1590,29 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         toneMap_.colorTexture = wgpuDeviceCreateTexture(device, &td);
         toneMap_.colorView = wgpuTextureCreateView(toneMap_.colorTexture, nullptr);
 
-        // Depth texture
+        // MSAA color attachment (resolves into colorTexture). Without this, redirecting
+        // the scene through the tone-map intermediate would force effectiveSampleCount=1
+        // on every render that triggers needsToneMapPass(), which is the new default after
+        // Phase 4 (sRGB output) — so MSAA would silently disable on RT and surface alike.
+        if (sampleCount > 1) {
+            WGPUTextureDescriptor mtd{};
+            mtd.label = WGPUStringView{"tonemap_msaa_color", sizeof("tonemap_msaa_color") - 1};
+            mtd.size = {w, h, 1};
+            mtd.mipLevelCount = 1;
+            mtd.sampleCount = sampleCount;
+            mtd.dimension = WGPUTextureDimension_2D;
+            mtd.format = WGPUTextureFormat_RGBA16Float;
+            mtd.usage = WGPUTextureUsage_RenderAttachment;
+            toneMap_.msaaColorTexture = wgpuDeviceCreateTexture(device, &mtd);
+            toneMap_.msaaColorView = wgpuTextureCreateView(toneMap_.msaaColorTexture, nullptr);
+        }
+
+        // Depth texture matches the color attachment's sample count (1 or sampleCount).
         WGPUTextureDescriptor dtd{};
         dtd.label = WGPUStringView{"tonemap_depth", sizeof("tonemap_depth") - 1};
         dtd.size = {w, h, 1};
         dtd.mipLevelCount = 1;
-        dtd.sampleCount = 1;
+        dtd.sampleCount = sampleCount;
         dtd.dimension = WGPUTextureDimension_2D;
         dtd.format = WGPUTextureFormat_Depth24Plus;
         dtd.usage = WGPUTextureUsage_RenderAttachment;
@@ -1829,8 +1853,13 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         if (useSurface) {
             if (!acquireFrame()) return;
             if (needsToneMapPass()) {
-                ensureToneMapRT(frame_.width, frame_.height);
-                colorView = toneMap_.colorView;
+                ensureToneMapRT(frame_.width, frame_.height, sampleCount_);
+                if (sampleCount_ > 1) {
+                    colorView = toneMap_.msaaColorView;
+                    resolveView = toneMap_.colorView;
+                } else {
+                    colorView = toneMap_.colorView;
+                }
                 depthView = toneMap_.depthView;
             } else {
                 colorView = frame_.colorView;
@@ -1843,12 +1872,23 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             auto& rt = renderTargets->getOrCreate(currentRenderTarget_, sampleCount_);
             attachW = rt.width;
             attachH = rt.height;
-            depthView = rt.depthView;
-            if (sampleCount_ > 1 && rt.msaaColorView) {
-                colorView = rt.msaaColorView;
-                resolveView = rt.colorView;
+            if (needsToneMapPass()) {
+                ensureToneMapRT(rt.width, rt.height, sampleCount_);
+                if (sampleCount_ > 1) {
+                    colorView = toneMap_.msaaColorView;
+                    resolveView = toneMap_.colorView;
+                } else {
+                    colorView = toneMap_.colorView;
+                }
+                depthView = toneMap_.depthView;
             } else {
-                colorView = rt.colorView;
+                depthView = rt.depthView;
+                if (sampleCount_ > 1 && rt.msaaColorView) {
+                    colorView = rt.msaaColorView;
+                    resolveView = rt.colorView;
+                } else {
+                    colorView = rt.colorView;
+                }
             }
         }
 
@@ -2039,11 +2079,18 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             if (needsToneMapPass()) {
                 // Redirect to RGBA16Float intermediate; endFrame() blits with tone mapping.
                 // The HDR intermediate preserves values >1.0 so ACES operates on full range.
-                ensureToneMapRT(frame_.width, frame_.height);
-                colorView = toneMap_.colorView;
+                // When sampleCount_>1, attach the MSAA color/depth and resolve into the
+                // single-sample colorTexture (the blit's bind source). This preserves
+                // anti-aliasing through the tone-map redirect introduced by Phase 4.
+                ensureToneMapRT(frame_.width, frame_.height, sampleCount_);
+                if (sampleCount_ > 1) {
+                    colorView = toneMap_.msaaColorView;
+                    resolveView = toneMap_.colorView;
+                } else {
+                    colorView = toneMap_.colorView;
+                    resolveView = nullptr;
+                }
                 depthView = toneMap_.depthView;
-                resolveView = nullptr; // No MSAA on the intermediate RT
-                effectiveSampleCount_ = 1;
                 activeColorFormat_ = WGPUTextureFormat_RGBA16Float;
             } else {
                 colorView = frame_.colorView;
@@ -2061,10 +2108,16 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 // Redirect scene through RGBA16Float intermediate so HDR values >1.0 are
                 // preserved. After the render pass, toneMapBlitToTexture() compresses to
                 // the BGRA8Unorm RT — same pattern as the surface path.
-                ensureToneMapRT(rt.width, rt.height);
-                colorView = toneMap_.colorView;
+                // When sampleCount_>1, attach the MSAA color/depth and resolve into the
+                // single-sample colorTexture so MSAA still applies on RT renders.
+                ensureToneMapRT(rt.width, rt.height, sampleCount_);
+                if (sampleCount_ > 1) {
+                    colorView = toneMap_.msaaColorView;
+                    resolveView = toneMap_.colorView;
+                } else {
+                    colorView = toneMap_.colorView;
+                }
                 depthView = toneMap_.depthView;
-                effectiveSampleCount_ = 1;
                 activeColorFormat_ = WGPUTextureFormat_RGBA16Float;
             } else {
                 depthView = rt.depthView;
@@ -3203,6 +3256,8 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         releaseCachedFrameTextures();
         if (toneMap_.colorView) wgpuTextureViewRelease(toneMap_.colorView);
         if (toneMap_.colorTexture) wgpuTextureRelease(toneMap_.colorTexture);
+        if (toneMap_.msaaColorView) wgpuTextureViewRelease(toneMap_.msaaColorView);
+        if (toneMap_.msaaColorTexture) wgpuTextureRelease(toneMap_.msaaColorTexture);
         if (toneMap_.depthView) wgpuTextureViewRelease(toneMap_.depthView);
         if (toneMap_.depthTexture) wgpuTextureRelease(toneMap_.depthTexture);
         if (toneMap_.cachedBindGroup)  { wgpuBindGroupRelease(toneMap_.cachedBindGroup);  }
@@ -3447,7 +3502,9 @@ void* WgpuRenderer::nativeFrameDepthView() const {
 
 uint32_t WgpuRenderer::nativeFrameDepthSampleCount() const {
     if (!pimpl_->frame_.active) return 1;
-    return pimpl_->needsToneMapPass() ? 1u : pimpl_->sampleCount_;
+    // The tone-map intermediate now allocates its depth at sampleCount_, so the
+    // active depth attachment matches sampleCount_ regardless of which path is in use.
+    return pimpl_->sampleCount_;
 }
 
 void* WgpuRenderer::nativeRenderCommandEncoder() const {

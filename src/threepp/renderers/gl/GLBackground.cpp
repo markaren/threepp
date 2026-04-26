@@ -3,11 +3,27 @@
 #include "threepp/renderers/gl/GLCubeMaps.hpp"
 #include "threepp/renderers/gl/GLObjects.hpp"
 #include "threepp/renderers/gl/GLRenderLists.hpp"
+#include "threepp/renderers/Renderer.hpp"
 
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 using namespace threepp::gl;
+
+namespace {
+    // sRGB OETF (linear → sRGB-encoded), piecewise. Mirrors three.js sRGBTransferOETF
+    // and WGPU's tone-map blit so that clear bytes match between GL and WGPU when
+    // outputColorSpace == sRGB. Without this, glClear bypasses any encoding and
+    // GL leaves linear bytes in the framebuffer while WGPU's blit encodes the
+    // entire intermediate, including cleared regions.
+    inline float linearToSRGB(float x) {
+        if (x <= 0.0f) return 0.0f;
+        if (x <= 0.0031308f) return 12.92f * x;
+        return 1.055f * std::pow(x, 1.0f / 2.4f) - 0.055f;
+    }
+}
 
 GLBackground::GLBackground(GLRenderer& renderer, GLCubeMaps& cubemaps, GLState& state, GLObjects& objects, bool premultipliedAlpha)
     : renderer(renderer), cubemaps(cubemaps), state(state), objects(objects), premultipliedAlpha(premultipliedAlpha) {}
@@ -125,5 +141,11 @@ void GLBackground::setClearAlpha(float alpha) {
 
 void GLBackground::setClear(const Color& color, float alpha) {
 
-    state.colorBuffer.setClear(color.r, color.g, color.b, alpha, premultipliedAlpha);
+    Color encoded = color;
+    if (renderer.outputColorSpace == ColorSpace::sRGB) {
+        encoded.r = linearToSRGB(color.r);
+        encoded.g = linearToSRGB(color.g);
+        encoded.b = linearToSRGB(color.b);
+    }
+    state.colorBuffer.setClear(encoded.r, encoded.g, encoded.b, alpha, premultipliedAlpha);
 }
