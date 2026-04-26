@@ -330,6 +330,9 @@ struct TransformUniforms {
 struct LightData {
     numDir: u32, numPoint: u32, numSpot: u32, numHemi: u32,
     ambient: vec3<f32>, _pad: f32,
+    // Phase 1: useLegacyLights flag + 12 bytes pad inserted into the lights
+    // uniform header. dirDirection0 must stay at byte offset 48.
+    useLegacyLights: u32, _pdUL0: u32, _pdUL1: u32, _pdUL2: u32,
     dirDirection0: vec3<f32>, _pd0: f32,
     dirColor0: vec3<f32>, _pd1: f32,
 };
@@ -478,6 +481,9 @@ struct TransformUniforms {
 struct LightData {
     numDir: u32, numPoint: u32, numSpot: u32, numHemi: u32,
     ambient: vec3<f32>, _pad: f32,
+    // Phase 1: useLegacyLights flag + 12 bytes pad inserted into the lights
+    // uniform header. dirDirection0 must stay at byte offset 48.
+    useLegacyLights: u32, _pdUL0: u32, _pdUL1: u32, _pdUL2: u32,
     dirDirection0: vec3<f32>, _pd0: f32,
     dirColor0: vec3<f32>, _pd1: f32,
 };
@@ -965,6 +971,9 @@ struct TransformUniforms {
 struct LightData {
     numDir: u32, numPoint: u32, numSpot: u32, numHemi: u32,
     ambient: vec3<f32>, _pad: f32,
+    // Phase 1: useLegacyLights flag + 12 bytes pad inserted into the lights
+    // uniform header. dirDirection0 must stay at byte offset 48.
+    useLegacyLights: u32, _pdUL0: u32, _pdUL1: u32, _pdUL2: u32,
     dirDirection0: vec3<f32>, _pd0: f32,
     dirColor0:     vec3<f32>, _pd1: f32,
 };
