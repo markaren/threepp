@@ -23,7 +23,6 @@ int main() {
     renderer.shadowMap().enabled = true;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
-    pathTracer.setEnvIntensity(0.5f);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setFoveatedRendering(false);
     pathTracer.setReSTIREnabled(true);
@@ -144,7 +143,6 @@ int main() {
     bool showEnclosingBox = true;
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
-    float envIntensity = pathTracer.envIntensity();
     float fps = 0.f;
     float fpsAccum = 0.f;
     int fpsFrames = 0;
@@ -175,8 +173,6 @@ int main() {
         if (pathTracerOn && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
                 pathTracer.setExposure(exposure);
-            if (ImGui::SliderFloat("EnvIntensity", &envIntensity, 0.1f, 5.0f))
-                pathTracer.setEnvIntensity(envIntensity);
 
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
                 pathTracer.setDenoiserEnabled(denoiserOn);

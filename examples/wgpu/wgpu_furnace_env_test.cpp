@@ -37,8 +37,8 @@ using namespace threepp;
 namespace {
 
     // Tiny equirect HDR texture with every texel = (1,1,1,1).
-    // scene.environment feeds the IBL sampling path; the magnitude is multiplied
-    // by pathTracer.setEnvIntensity(...), so final L_env = envIntensity.
+    // scene.environment feeds the IBL sampling path at full strength,
+    // so final L_env = 1.0 (per-texel value).
     std::shared_ptr<Texture> makeConstantEnv() {
         constexpr int W = 8, H = 4;// 2:1 equirect aspect
         std::vector<float> data(W * H * 4);
@@ -161,7 +161,6 @@ int main() {
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setReSTIREnabled(true);
     pathTracer.setFoveatedRendering(false);
-    pathTracer.setEnvIntensity(1.f);
     pathTracer.setFireflyClamp(0);// 0 → 1e30 sentinel: no cap during furnace validation
     pathTracer.setExposure(1.f);
 

@@ -137,7 +137,6 @@ int main() {
     renderer.shadowMap().enabled = true;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
-    pathTracer.setEnvIntensity(0.0f);
     pathTracer.setExposure(0.8f);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setMaxBounces(6);

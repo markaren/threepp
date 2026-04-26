@@ -35,19 +35,6 @@ namespace threepp {
         /// Trace / accumulate one frame and blit to screen.
         void render(Object3D& scene, Camera& camera);
 
-        /// Scale applied to environment/sky light contribution. Default: 1.0.
-        /// Set < 1.0 to reduce env light influence on path-traced results.
-        void setEnvIntensity(float intensity);
-        [[nodiscard]] float envIntensity() const;
-
-        /// Scene-wide multiplier applied to every emissive material's output.
-        /// Default: 1.0. Useful for quickly brightening/dimming all area lights
-        /// (e.g. RectAreaLight quads + emissive meshes) in an indoor PT scene
-        /// without touching individual material values. Unbiased — scales the
-        /// per-hit emissive contribution; CDF probabilities are unaffected.
-        void setEmissiveIntensity(float intensity);
-        [[nodiscard]] float emissiveIntensity() const;
-
         /// Henyey-Greenstein anisotropy for volumetric fog single-scattering.
         /// Range: [-0.95, 0.95]. 0 = isotropic (uniform glow), >0 = forward
         /// scattering (god rays / light shafts when looking toward lights),

@@ -120,7 +120,6 @@ int main() {
     pathTracer.setDenoiserEnabled(false);  // raw signal — no spatial smoothing
     pathTracer.setReSTIREnabled(true);
     pathTracer.setFoveatedRendering(false);// uniform quality across screen
-    pathTracer.setEnvIntensity(0.f);       // no env contribution
     pathTracer.setFireflyClamp(0.f);       // disable clamp — unbiased HDR
     pathTracer.setExposure(1.f);
 

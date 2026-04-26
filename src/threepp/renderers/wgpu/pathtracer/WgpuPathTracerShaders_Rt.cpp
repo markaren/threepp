@@ -38,11 +38,11 @@ struct RtUniforms {
     spp:          vec4<f32>,
     movedMeshBits: vec4<u32>,  // bit i = mesh i moved (4 words cover meshes 0-127)
     envColor:      vec4<f32>,  // xyz = color/tint, w = mode: 0=none, 1=solid color, 2=equirect tex
-    envIntensity:  vec4<f32>,  // x = intensity scale, y = envWidth, z = envHeight, w = hasEnvCDF
+    envIntensity:  vec4<f32>,  // x = unused (always 1.0), y = envWidth, z = envHeight, w = hasEnvCDF
     bgColor:       vec4<f32>,  // xyz = color, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex (bgTex)
     params:        vec4<f32>,  // x = maxBounces
     emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive power, z = fireflyCap
-    restirParams:  vec4<f32>,  // x = enabled, y = M_clamp, z = emissiveMoved, w = emissive intensity multiplier
+    restirParams:  vec4<f32>,  // x = enabled, y = M_clamp, z = emissiveMoved, w = unused (always 1.0)
     bvhAux:        vec4<u32>,  // .x = bvhRootIdx (0 = normal root, >0 = overlay combined root)
     lens:          vec4<f32>,  // x = fStop (0=pinhole), y = focusDistance, z = blades (f32), w = apertureRotation
     fog:           vec4<f32>,  // xyz = sigma_t (per-channel extinction); w = enabled (1=on, 0=off)
@@ -568,7 +568,6 @@ fn sampleEquirectBilinear(tex: texture_2d<f32>, uv: vec2<f32>) -> vec3<f32> {
 }
 
 // IBL environment lighting (scene.environment).  Returns BLACK when no environment is set.
-// Callers apply rt.envIntensity.x themselves.
 fn sampleEnv(d: vec3<f32>) -> vec3<f32> {
     let mode = i32(rt.envColor.w);
     if (mode == 1) {
@@ -946,7 +945,7 @@ fn loadHitMaterial(rh: RawHit, ray: Ray) -> Hit {
     if (emissiveSlot >= 0.0) {
         emissive *= srgbToLinear(sampleAtlas(emUV, emissiveSlot));
     }
-    h.emissive = emissive * rt.restirParams.w;
+    h.emissive = emissive;
 
     // Advanced PBR features (sheen, specular extension, dispersion, thickness)
     // Skip 2 matData reads when material uses defaults — most common case.
@@ -1449,7 +1448,7 @@ fn evalAnalyticalLight(li: i32, point: vec3<f32>) -> LightEval {
 fn evalLightRadiance(lightPos: vec3<f32>, lightType: f32, point: vec3<f32>) -> vec3<f32> {
     let typeCode = i32(lightType);
     if (typeCode < 0) {
-        return sampleEnv(lightPos) * rt.envIntensity.x;
+        return sampleEnv(lightPos);
     } else if (typeCode >= 1000) {
         let eTi = typeCode - 1000;
         let eMatIdx = i32(textureLoad(triData, triCoord(eTi, 0), 0).w);
@@ -1953,7 +1952,6 @@ fn volumeInscatter(rayOrigin: vec3<f32>, rayDir: vec3<f32>, maxT: f32,
     const N: u32 = 4u;
     var inscatter = vec3<f32>(0.0);
     let envMode    = i32(rt.envColor.w);
-    let envI       = rt.envIntensity.x;
     let lcount     = i32(rt.lightCount.x);
     let emTriCount = i32(rt.emissiveInfo.x);
     let totalPower = rt.emissiveInfo.y;
@@ -1996,17 +1994,17 @@ fn volumeInscatter(rayOrigin: vec3<f32>, rayDir: vec3<f32>, maxT: f32,
         }
 
         // --- NEE to environment (sky) ---
-        if (envMode == 2 && envI > 0.0 && HAS_ENV_CDF) {
+        if (envMode == 2 && HAS_ENV_CDF) {
             let es = sampleEnvImportance(seed);
             let dirE = es.xyz;
             let pdfE = es.w;
             if (pdfE > 1e-10) {
                 let atten = traceShadowRay(x, vec3<f32>(0.0), dirE, 1e30, 4);
-                let Le = sampleEnv(dirE) * envI;
+                let Le = sampleEnv(dirE);
                 let phV = phaseHG(dot(rayDir, dirE), g);
                 inscatter += phV * Le * atten / pdfE;
             }
-        } else if (envMode == 1 && envI > 0.0) {
+        } else if (envMode == 1) {
             let u1 = rand(seed);
             let u2 = rand(seed);
             let z  = 1.0 - 2.0 * u1;
@@ -2015,7 +2013,7 @@ fn volumeInscatter(rayOrigin: vec3<f32>, rayDir: vec3<f32>, maxT: f32,
             let dirE = vec3<f32>(r * cos(ph), r * sin(ph), z);
             let pdfE = 1.0 / (4.0 * PI);
             let atten = traceShadowRay(x, vec3<f32>(0.0), dirE, 1e30, 4);
-            let Le = rt.envColor.xyz * envI;
+            let Le = rt.envColor.xyz;
             let phV = phaseHG(dot(rayDir, dirE), g);
             inscatter += phV * Le * atten / pdfE;
         }
@@ -2211,7 +2209,7 @@ fn runBounces(state:           PrimaryShadeResult,
                 envMisW = pdf_brdf / max(pdf_brdf + pdf_env, 1e-8);
             }
             addSplit(&diffRad, &specRad,
-                throughput * sampleEnv(ray.dir) * rt.envIntensity.x * envMisW,
+                throughput * sampleEnv(ray.dir) * envMisW,
                 rt.emissiveInfo.z, i, firstBounceSpec);
             if (i == 1 && rt.spp.x > 0.5 && !giResStored) {
                 textureStore(giResWrite,   pixel, vec4<f32>(0.0));
@@ -2337,7 +2335,7 @@ fn runBounces(state:           PrimaryShadeResult,
                 let emAtten = traceShadowRay(h.point, h.normal, ln, dist - 1e-2, 4);
                 if (emAtten.x + emAtten.y + emAtten.z > 0.001) {
                     let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
-                    let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz * rt.restirParams.w;
+                    let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
                     let pdf = (es.power * dist * dist) / (totalPower2 * es.area * cosLight);
                     let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
                     let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);
@@ -2362,7 +2360,7 @@ fn runBounces(state:           PrimaryShadeResult,
             if (envNdotL > 0.0 && envPdf > 1e-8) {
                 let envAtten = traceShadowRay(h.point, h.normal, envDir, 1e30, 4);
                 if (envAtten.x + envAtten.y + envAtten.z > 0.001) {
-                    let envCol = sampleEnv(envDir) * rt.envIntensity.x;
+                    let envCol = sampleEnv(envDir);
                     let pdf_brdf_env = brdfPdf(wo, envDir, h.normal, h.shininess, h.metalness);
                     let w_env = envPdf / max(envPdf + pdf_brdf_env, 1e-8);
                     let cap = rt.emissiveInfo.z;
@@ -2946,7 +2944,7 @@ fn primaryShade(primaryHit:     Hit,
                 reservoir.M += 1.0;
                 if (NdotL_e > 0.0 && cosLight > 1e-6) {
                     let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
-                    let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz * rt.restirParams.w;
+                    let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
                     let p_hat_e = restirTargetPdf(h.point, h.normal, wo, albedo, h.metalness, h.shininess, F0_h,
                                                   es.point, 1000.0 + f32(es.triIdx), emColor);
                     if (p_hat_e > 0.0) {
@@ -3168,7 +3166,7 @@ const char* const csPrimaryShadeWGSL2 = R"(
                 let emAtten = traceShadowRay(h.point, h.normal, ln, dist - 1e-2, 4);
                 if (emAtten.x + emAtten.y + emAtten.z > 0.001) {
                     let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
-                    let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz * rt.restirParams.w;
+                    let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
                     let pdf = (es.power * dist * dist) / (totalPower2 * es.area * cosLight);
                     let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
                     let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);
@@ -3193,7 +3191,7 @@ const char* const csPrimaryShadeWGSL2 = R"(
         if (envNdotL > 0.0 && envPdf > 1e-8) {
             let envAtten = traceShadowRay(h.point, h.normal, envDir, 1e30, 4);
             if (envAtten.x + envAtten.y + envAtten.z > 0.001) {
-                let envCol = sampleEnv(envDir) * rt.envIntensity.x;
+                let envCol = sampleEnv(envDir);
                 let pdf_brdf_env = brdfPdf(wo, envDir, h.normal, h.shininess, h.metalness);
                 let w_env = envPdf / max(envPdf + pdf_brdf_env, 1e-8);
                 let cap = rt.emissiveInfo.z;
@@ -4220,7 +4218,7 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     envMisW = pdf_brdf / max(pdf_brdf + pdf_env, 1e-8);
                 }
                 addSplit(&diffRad, &specRad,
-                    throughput * sampleEnv(ray.dir) * rt.envIntensity.x * envMisW,
+                    throughput * sampleEnv(ray.dir) * envMisW,
                     rt.emissiveInfo.z, i, firstBounceSpec);
                 if (i == 1 && rt.spp.x > 0.5 && !giResStored) {
                     textureStore(giResWrite,   pixel, vec4<f32>(0.0));
@@ -4343,7 +4341,7 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let emAtten = traceShadowRay(h.point, h.normal, ln, dist - 1e-2, 4);
                     if (emAtten.x + emAtten.y + emAtten.z > 0.001) {
                         let eMatIdx = i32(textureLoad(triData, triCoord(es.triIdx, 0), 0).w);
-                        let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz * rt.restirParams.w;
+                        let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
                         let pdf = (es.power * dist * dist) / (totalPower2 * es.area * cosLight);
                         let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
                         let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);
@@ -4368,7 +4366,7 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if (envNdotL > 0.0 && envPdf > 1e-8) {
                     let envAtten = traceShadowRay(h.point, h.normal, envDir, 1e30, 4);
                     if (envAtten.x + envAtten.y + envAtten.z > 0.001) {
-                        let envCol = sampleEnv(envDir) * rt.envIntensity.x;
+                        let envCol = sampleEnv(envDir);
                         let pdf_brdf_env = brdfPdf(wo, envDir, h.normal, h.shininess, h.metalness);
                         let w_env = envPdf / max(envPdf + pdf_brdf_env, 1e-8);
                         let cap = rt.emissiveInfo.z;

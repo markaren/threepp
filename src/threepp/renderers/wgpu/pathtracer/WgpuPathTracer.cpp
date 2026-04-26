@@ -143,8 +143,6 @@ struct WgpuPathTracer::Impl {
     // the path tracer uses the existing single-level BVH over world-space tris.
     bool tlasEnabled_ = false;
     int spp_ = 1;
-    float envIntensity_ = 0.5f;
-    float emissiveIntensity_ = 1.0f;  // Scene-wide multiplier applied to all emissive materials.
     float fogAnisotropy_ = 0.0f;      // HG g: 0 isotropic, >0 forward (god rays), <0 back.
     int maxBounces_ = 4;
     // Timings diagnostic (opt-in).  CPU-side wall-clock measurement of the
@@ -3299,7 +3297,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     }
 #endif
 
-    u.envIntensity[0] = d.envIntensity_;
+    u.envIntensity[0] = 1.0f;  // unused — multiplier removed (Phase 2 unification)
     // Pass envmap dimensions and total luminance sum for importance sampling
     if (d.envLumSum_ > 0.f && d.prevEnvTex_) {
         auto& eImg = d.prevEnvTex_->image();
@@ -3331,7 +3329,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.restirParams[0] = d.restirEnabled_ ? 1.f : 0.f;
     u.restirParams[1] = camMoved ? 5.f : 20.f;  // M clamp — low during motion to flush stale reservoirs
     u.restirParams[2] = anyEmissiveMoved ? 1.f : 0.f;  // emissive source moved → tight accum cap
-    u.restirParams[3] = d.emissiveIntensity_;  // scene-wide multiplier applied to h.emissive on hit
+    u.restirParams[3] = 1.0f;  // unused — emissive multiplier removed; per-material emissiveIntensity is pre-baked in the material atlas
     u.bvhAux[0] = static_cast<uint32_t>(d.bvhRootIdx_);  // traversal root (0=normal, >0=overlay)
     // .y = tlas_enabled flag (selects the nested TLAS->BLAS walk in the shader).
     // .z = tlasInstanceCount — consumed by sceneHitRawTlas / sceneAnyHitTlas.
@@ -4233,29 +4231,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         std::cerr << "[PathTracer] First dispatch complete (" << std::fixed
                   << std::setprecision(1) << elapsedMs << " ms) - rendering started." << std::endl;
     }
-}
-
-void WgpuPathTracer::setEnvIntensity(float intensity) {
-    if (intensity != pimpl_->envIntensity_) {
-        pimpl_->envIntensity_ = intensity;
-        pimpl_->frameCount_ = 0.f;
-    }
-}
-
-float WgpuPathTracer::envIntensity() const {
-    return pimpl_->envIntensity_;
-}
-
-void WgpuPathTracer::setEmissiveIntensity(float intensity) {
-    intensity = std::max(0.f, intensity);
-    if (intensity != pimpl_->emissiveIntensity_) {
-        pimpl_->emissiveIntensity_ = intensity;
-        pimpl_->frameCount_ = 0.f;
-    }
-}
-
-float WgpuPathTracer::emissiveIntensity() const {
-    return pimpl_->emissiveIntensity_;
 }
 
 void WgpuPathTracer::setFogAnisotropy(float g) {

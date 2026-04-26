@@ -103,7 +103,6 @@ int main() {
     renderer.toneMapping = ToneMapping::ACESFilmic;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
-    pathTracer.setEnvIntensity(0.0f);
     pathTracer.setExposure(1.0f);
     pathTracer.setDenoiserEnabled(true);
     pathTracer.setMaxBounces(4);

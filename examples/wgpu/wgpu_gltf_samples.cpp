@@ -88,7 +88,6 @@ int main(int argc, char** argv) {
     renderer.shadowMap().enabled = true;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
-    pathTracer.setEnvIntensity(1.0f);
     pathTracer.setExposure(1.0f);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setFoveatedRendering(false);
@@ -199,7 +198,6 @@ int main(int argc, char** argv) {
     bool restdirOn = pathTracer.restirEnabled();
     bool restdirGIOn = pathTracer.restirGiEnabled();
     float exposure = pathTracer.exposure();
-    float envIntensity = pathTracer.envIntensity();
     float fps = 0.f, fpsAccum = 0.f;
     float pixelScale = pathTracer.pixelScale();
     int fpsFrames = 0;
@@ -270,8 +268,6 @@ int main(int argc, char** argv) {
 
         if (!raster && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
 
-            if (ImGui::SliderFloat("EnvIntensity", &envIntensity, 0.0f, 1.0f))
-                pathTracer.setEnvIntensity(envIntensity);
             if (ImGui::SliderFloat("Pixel Scale", &pixelScale, 0.25f, 1.2f, "%.2f"))
                 pathTracer.setPixelScale(pixelScale);
 
