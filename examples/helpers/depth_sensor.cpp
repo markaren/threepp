@@ -151,9 +151,9 @@ int main() {
         points->visible = false;
         if (!withColors) {
             colors.clear();
-            lidar.scan(*renderer, *scene, cloud);
+            lidar.scan(renderer, *scene, cloud);
         } else {
-            lidar.scan(*renderer, *scene, cloud, colors);
+            lidar.scan(renderer, *scene, cloud, colors);
         }
         points->visible = true;
         helper->visible = wasHelperVisible;
