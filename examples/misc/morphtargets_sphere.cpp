@@ -33,7 +33,7 @@ int main() {
     pointsMaterial->size = 10;
     pointsMaterial->sizeAttenuation = false;
     pointsMaterial->alphaTest = 0.5;
-    pointsMaterial->map = TextureLoader().load(std::string(DATA_FOLDER) + "/textures/sprites/disc.png");
+    pointsMaterial->map = TextureLoader().load(std::string(DATA_FOLDER) + "/textures/sprites/disc.png", ColorSpace::sRGB);
     pointsMaterial->morphTargets = true;
 
     Mesh* mesh;

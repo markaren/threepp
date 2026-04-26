@@ -245,7 +245,7 @@ int main() {
     // Try to load sand texture
     TextureLoader textureLoader;
     try {
-        auto sandTex = textureLoader.load(std::string(DATA_FOLDER) + "/textures/sand.jpg");
+        auto sandTex = textureLoader.load(std::string(DATA_FOLDER) + "/textures/sand.jpg", ColorSpace::sRGB);
         if (sandTex) {
             groundMat->map = sandTex;
         }

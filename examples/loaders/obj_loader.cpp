@@ -32,7 +32,7 @@ int main() {
     scene->add(obj1);
 
     TextureLoader tl;
-    auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/uv_grid_opengl.jpg");
+    auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/uv_grid_opengl.jpg", ColorSpace::sRGB);
     auto obj2 = loader.load(std::string(DATA_FOLDER) + "/models/obj/female02/female02.obj", false);
     obj2->position.x = 30;
     obj2->traverseType<Mesh>([tex](Mesh& child) {

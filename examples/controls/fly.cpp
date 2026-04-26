@@ -7,9 +7,9 @@ namespace {
 
     auto createEarth(float radius) {
         TextureLoader loader;
-        const auto map = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_atmos_2048.jpg");
-        const auto specular = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_atmos_2048.jpg");
-        const auto normal = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_normal_2048.jpg");
+        const auto map = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_atmos_2048.jpg", ColorSpace::sRGB);
+        const auto specular = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_atmos_2048.jpg", ColorSpace::sRGB);
+        const auto normal = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_normal_2048.jpg", ColorSpace::NoColorSpace);
         const auto materialNormalMap = MeshPhongMaterial::create(
                 {{"specular", 0x333333},
                  {"shininess", 10.f},
@@ -29,7 +29,7 @@ namespace {
 
     auto createMoon(float radius, float moonScale) {
         TextureLoader loader;
-        const auto tex = loader.load(std::string(DATA_FOLDER) + "/textures/planets/moon_1024.jpg");
+        const auto tex = loader.load(std::string(DATA_FOLDER) + "/textures/planets/moon_1024.jpg", ColorSpace::sRGB);
         const auto materialMoon = MeshPhongMaterial::create({
                 {"map", tex},
         });
@@ -46,7 +46,7 @@ namespace {
 
     auto createClouds(float radius) {
         TextureLoader loader;
-        const auto tex = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_clouds_1024.png");
+        const auto tex = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_clouds_1024.png", ColorSpace::sRGB);
         const auto materialMoon = MeshLambertMaterial::create(
                 {{"map", tex},
                  {"transparent", true}});

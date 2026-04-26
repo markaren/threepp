@@ -107,7 +107,7 @@ void initFountain(ParticleSystem::Settings& settings) {
             .setSizeTween({0, 1}, {0.1, 2});
 
     TextureLoader tl;
-    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/star.png");
+    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/star.png", ColorSpace::sRGB);
 }
 
 void initSmoke(ParticleSystem::Settings& settings) {
@@ -137,7 +137,7 @@ void initSmoke(ParticleSystem::Settings& settings) {
             .setSizeTween({0, 1}, {1, 10});
 
     TextureLoader tl;
-    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png");
+    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png", ColorSpace::sRGB);
 }
 
 void initFireball(ParticleSystem::Settings& settings) {
@@ -163,7 +163,7 @@ void initFireball(ParticleSystem::Settings& settings) {
             .setSizeTween({0, 1}, {0.1, 15});
 
     TextureLoader tl;
-    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png");
+    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png", ColorSpace::sRGB);
 }
 
 void initFirework(ParticleSystem::Settings& settings) {
@@ -192,5 +192,5 @@ void initFirework(ParticleSystem::Settings& settings) {
             .setSizeTween({0.3, 0.6, 1.3}, {0.5, 4, 0.1});
 
     TextureLoader tl;
-    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/spark.png");
+    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/spark.png", ColorSpace::sRGB);
 }

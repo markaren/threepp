@@ -31,7 +31,7 @@ int main() {
 
     // ---- Scene objects ----
     TextureLoader tl;
-    auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/uv_grid_opengl.jpg");
+    auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/uv_grid_opengl.jpg", ColorSpace::sRGB);
 
     auto boxMesh = Mesh::create(
             BoxGeometry::create(1.5f, 1.5f, 1.5f),

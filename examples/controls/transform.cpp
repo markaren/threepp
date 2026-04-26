@@ -41,7 +41,7 @@ int main() {
     scene.add(AmbientLight::create(0xaaaaaa));
 
     TextureLoader tl;
-    auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/crate.gif");
+    auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/crate.gif", ColorSpace::sRGB);
 
     auto material = MeshBasicMaterial::create();
     material->map = tex;

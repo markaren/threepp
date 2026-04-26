@@ -15,8 +15,8 @@ namespace {
         TextureLoader tl;
         auto decalMaterial = MeshPhongMaterial::create();
         decalMaterial->specular = 0x444444;
-        decalMaterial->map = tl.load(std::string(DATA_FOLDER) + "/textures/decal/decal-diffuse.png");
-        decalMaterial->normalMap = tl.load(std::string(DATA_FOLDER) + "/textures/decal/decal-normal.jpg");
+        decalMaterial->map = tl.load(std::string(DATA_FOLDER) + "/textures/decal/decal-diffuse.png", ColorSpace::sRGB);
+        decalMaterial->normalMap = tl.load(std::string(DATA_FOLDER) + "/textures/decal/decal-normal.jpg", ColorSpace::NoColorSpace);
         decalMaterial->normalScale.set(1, 1);
         decalMaterial->shininess = 30;
         decalMaterial->depthTest = true;
@@ -120,9 +120,9 @@ int main() {
     model->traverseType<Mesh>([&](Mesh& _) {
         mesh = &_;
         const auto mat = MeshPhongMaterial::create({{
-                {"map", tl.load(folder / "Map-COL.jpg")},
-                {"specularMap", tl.load(folder / "Map-SPEC.jpg")},
-                {"normalMap", tl.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg")},
+                {"map", tl.load(folder / "Map-COL.jpg", ColorSpace::sRGB)},
+                {"specularMap", tl.load(folder / "Map-SPEC.jpg", ColorSpace::NoColorSpace)},
+                {"normalMap", tl.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", ColorSpace::NoColorSpace)},
                 {"shininess", 25.f},
         }});
         mesh->setMaterial(mat);

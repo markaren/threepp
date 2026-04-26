@@ -124,12 +124,12 @@ std::shared_ptr<Texture> TextureLoader::load(const std::filesystem::path& path, 
 
 std::shared_ptr<Texture> TextureLoader::load(const std::filesystem::path& path, bool flipY) {
 
-    return pimpl_->load(path, ColorSpace::sRGB, flipY);
+    return pimpl_->load(path, ColorSpace::NoColorSpace, flipY);
 }
 
 std::shared_ptr<Texture> TextureLoader::loadFromMemory(const std::string& name, const std::vector<unsigned char>& data, bool flipY) {
 
-    return pimpl_->loadFromMemory(name, data, ColorSpace::sRGB, flipY);
+    return pimpl_->loadFromMemory(name, data, ColorSpace::NoColorSpace, flipY);
 }
 
 std::shared_ptr<Texture> TextureLoader::loadFromMemory(const std::string& name, const std::vector<unsigned char>& data,
