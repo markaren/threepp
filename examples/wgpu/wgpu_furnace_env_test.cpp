@@ -52,7 +52,7 @@ namespace {
         auto tex = Texture::create(img);
         tex->format = Format::RGBA;
         tex->type = Type::Float;
-        tex->encoding = Encoding::Linear;
+        tex->colorSpace = ColorSpace::Linear;
         tex->mapping = Mapping::EquirectangularReflection;
         tex->needsUpdate();
         return tex;
@@ -152,7 +152,7 @@ int main() {
     Canvas canvas("WgpuPathTracer — White Furnace (Env-only)", {{"vsync", false}});
 
     WgpuRenderer renderer(canvas);
-    renderer.outputEncoding = Encoding::Linear;
+    renderer.outputColorSpace = ColorSpace::Linear;
     renderer.toneMapping = ToneMapping::None;
     renderer.toneMappingExposure = 1.0f;
 

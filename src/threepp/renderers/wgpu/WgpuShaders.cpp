@@ -1067,8 +1067,15 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
     }
 
     // Per-object sRGB output — used when rendering to a render target.
+    // Use the proper piecewise sRGB OETF (matches GL's LinearTosRGB) — gamma 2.2 is
+    // brighter in midtones and would diverge from GL.
     if (features & ShaderFeatures::SRGBOutput) {
-        s << "    baseColor = pow(baseColor, vec3<f32>(1.0 / 2.2));\n";
+        s << "    {\n"
+          << "        let bcClamped = max(baseColor, vec3<f32>(0.0));\n"
+          << "        let bcLo = bcClamped * 12.92;\n"
+          << "        let bcHi = pow(bcClamped, vec3<f32>(1.0 / 2.4)) * 1.055 - vec3<f32>(0.055);\n"
+          << "        baseColor = select(bcHi, bcLo, bcClamped <= vec3<f32>(0.0031308));\n"
+          << "    }\n";
     }
 
     s << "    return vec4<f32>(baseColor, opacity);\n}\n";

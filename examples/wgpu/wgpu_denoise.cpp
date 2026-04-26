@@ -99,7 +99,7 @@ int main() {
                   {{"vsync", false}});
 
     WgpuRenderer renderer(canvas);
-    renderer.outputEncoding = Encoding::sRGB;
+    renderer.outputColorSpace = ColorSpace::sRGB;
     renderer.toneMapping = ToneMapping::ACESFilmic;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());

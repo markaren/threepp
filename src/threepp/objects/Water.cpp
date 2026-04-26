@@ -127,6 +127,7 @@ namespace {
                     vec3 outgoingLight = albedo;
                     gl_FragColor = vec4( outgoingLight, alpha );
                     #include <tonemapping_fragment>
+                    #include <encodings_fragment>
                     #include <fog_fragment>
                 })"
 #endif

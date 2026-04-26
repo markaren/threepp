@@ -1,6 +1,6 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
-#include "threepp/textures/DataTexture.hpp"
+#include "threepp/textures/FramebufferTexture.hpp"
 #include "threepp/threepp.hpp"
 
 #pragma warning(disable : 4312) // cast from unsigned int to void*
@@ -23,10 +23,7 @@ int main() {
     scene.add(sphere);
 
     unsigned int textureSizeXY = 256;
-    auto texture = DataTexture::create(3, textureSizeXY, textureSizeXY);
-    texture->format = Format::RGB;
-    texture->minFilter = Filter::Nearest;
-    texture->magFilter = Filter::Nearest;
+    auto texture = FramebufferTexture::create(textureSizeXY, textureSizeXY);
 
     OrbitControls controls{camera, canvas};
 

@@ -193,6 +193,7 @@ set(publicHeaders
         "threepp/textures/DataTexture.hpp"
         "threepp/textures/DataTexture3D.hpp"
         "threepp/textures/DepthTexture.hpp"
+        "threepp/textures/FramebufferTexture.hpp"
         "threepp/textures/Image.hpp"
         "threepp/textures/Texture.hpp"
 

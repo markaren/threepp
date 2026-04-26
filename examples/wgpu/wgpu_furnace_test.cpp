@@ -111,7 +111,7 @@ int main() {
     Canvas canvas("WgpuPathTracer — White Furnace Energy Test", {{"vsync", false}});
 
     WgpuRenderer renderer(canvas);
-    renderer.outputEncoding = Encoding::Linear;// raw linear readback
+    renderer.outputColorSpace = ColorSpace::Linear;// raw linear readback
     renderer.toneMapping = ToneMapping::None;  // no tonemap squish
     renderer.toneMappingExposure = 1.0f;
 

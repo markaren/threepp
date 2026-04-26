@@ -65,9 +65,6 @@ namespace threepp {
         // to trigger a recompile.
         ColorSpace colorSpace{ColorSpace::NoColorSpace};
 
-        // Deprecated source-compat alias — same storage. Will be removed.
-        [[deprecated("Use colorSpace")]] ColorSpace& encoding{colorSpace};
-
         Texture(const Texture&) = delete;
         Texture& operator=(const Texture&) = delete;
         Texture(Texture&&) = delete;

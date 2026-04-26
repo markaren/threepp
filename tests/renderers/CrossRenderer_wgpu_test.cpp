@@ -2128,10 +2128,10 @@ TEST_CASE("Wgpu: sRGB output encoding differs from linear", "[wgpu]") {
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 3;
 
-    auto renderWithEncoding = [&](Encoding enc) {
+    auto renderWithEncoding = [&](ColorSpace cs) {
         WgpuRenderer renderer(wgpuCanvas());
         renderer.setClearColor(Color(0x000000));
-        renderer.outputEncoding = enc;
+        renderer.outputColorSpace = cs;
 
         auto target = GLRenderTarget::create(RT_WIDTH, RT_HEIGHT, GLRenderTarget::Options{});
         renderer.setRenderTarget(target.get());
@@ -2142,8 +2142,8 @@ TEST_CASE("Wgpu: sRGB output encoding differs from linear", "[wgpu]") {
         return pixels;
     };
 
-    auto linearPixels = renderWithEncoding(Encoding::Linear);
-    auto srgbPixels = renderWithEncoding(Encoding::sRGB);
+    auto linearPixels = renderWithEncoding(ColorSpace::Linear);
+    auto srgbPixels = renderWithEncoding(ColorSpace::sRGB);
 
     CHECK(countNonBlack(linearPixels) > PIXEL_COUNT / 8);
     CHECK(countNonBlack(srgbPixels) > PIXEL_COUNT / 8);

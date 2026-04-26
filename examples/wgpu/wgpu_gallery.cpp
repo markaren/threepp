@@ -237,7 +237,7 @@ int main() {
     Canvas canvas("Material Gallery", {{"vsync", false}});
 
     WgpuRenderer renderer(canvas);
-    renderer.outputEncoding = Encoding::sRGB;
+    renderer.outputColorSpace = ColorSpace::sRGB;
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.shadowMap().enabled = true;
 

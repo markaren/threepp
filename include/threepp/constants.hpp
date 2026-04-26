@@ -191,8 +191,6 @@ namespace threepp {
     const int TriangleFanDrawMode = 2;
 
     // Color space tag for textures and renderer output.
-    // Values match the legacy `Encoding` enum bit-for-bit so the two are
-    // ABI-compatible — Encoding is now a deprecated alias for ColorSpace.
     // NoColorSpace (-1) means "raw data, no transform" — used for normal maps,
     // metallic/roughness, occlusion, and other non-color inputs.
     enum class ColorSpace : int {
@@ -213,10 +211,6 @@ namespace threepp {
     inline constexpr auto LinearSRGBColorSpace = ColorSpace::Linear;
     inline constexpr auto SRGBColorSpace      = ColorSpace::sRGB;
     inline constexpr auto RGBEColorSpace      = ColorSpace::RGBE;
-
-    // Deprecated alias — Encoding::Linear/sRGB/etc. still compile and have
-    // identical integer values, but new code should use ColorSpace.
-    using Encoding [[deprecated("Use ColorSpace")]] = ColorSpace;
 
     enum class DepthPacking {
         Basic = 3200,

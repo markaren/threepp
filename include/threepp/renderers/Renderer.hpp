@@ -56,29 +56,6 @@ namespace threepp {
         // pipeline. Default matches three.js r166+ (`useLegacyLights = false`).
         bool useLegacyLights = false;
 
-        // ── Deprecated source-compat aliases ───────────────────────────────
-        // Kept so existing user code (`renderer.outputEncoding = ...`,
-        // `renderer.physicallyCorrectLights = true`) continues to compile.
-        // Both reference the same storage as the primary fields above.
-        // Remove in a future release.
-
-        [[deprecated("Use outputColorSpace")]] ColorSpace& outputEncoding{outputColorSpace};
-
-    private:
-        // Proxy: physicallyCorrectLights == !useLegacyLights. Inverts on
-        // both read (operator bool) and write (operator=).
-        struct LegacyLightsRef {
-            bool& storage;
-            constexpr operator bool() const noexcept { return !storage; }
-            LegacyLightsRef& operator=(bool v) noexcept {
-                storage = !v;
-                return *this;
-            }
-        };
-
-    public:
-        [[deprecated("Use !useLegacyLights")]] LegacyLightsRef physicallyCorrectLights{useLegacyLights};
-
         ToneMapping toneMapping{ToneMapping::None};
         float toneMappingExposure = 1.0f;
 

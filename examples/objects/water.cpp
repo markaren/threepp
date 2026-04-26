@@ -15,6 +15,7 @@ int main() {
     auto renderer = createRenderer(canvas);
     renderer->checkShaderErrors = true;
     renderer->toneMapping = ToneMapping::ACESFilmic;
+    renderer->toneMappingExposure = 0.5f;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(55, canvas.aspect(), 1, 2000);

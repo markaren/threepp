@@ -8,6 +8,8 @@
 #include "threepp/renderers/RenderTarget.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/textures/FramebufferTexture.hpp"
+
 #include <cmath>
 #include <cstring>
 
@@ -95,10 +97,11 @@ int main() {
                           .title("Water — OpenGL (left) vs WebGPU/Wgpu (right)")
                           .size(halfW * 2, halfH)
                           .antialiasing(4));
-    auto glRenderer = createRenderer(canvas);
-    glRenderer->checkShaderErrors = true;
-    glRenderer->toneMapping = ToneMapping::ACESFilmic;
-    glRenderer->setScissorTest(true);
+    auto glRenderer = GLRenderer(canvas);
+    glRenderer.checkShaderErrors = true;
+    glRenderer.toneMapping = ToneMapping::ACESFilmic;
+    glRenderer.toneMappingExposure = 0.5f;
+    glRenderer.setScissorTest(true);
 
     // Headless Wgpu canvas for offscreen rendering
     Canvas wgpuCanvas(Canvas::Parameters()
@@ -107,12 +110,13 @@ int main() {
     WgpuRenderer wgpuRenderer(wgpuCanvas);
     wgpuRenderer.checkShaderErrors = true;
     wgpuRenderer.toneMapping = ToneMapping::ACESFilmic;
+    wgpuRenderer.toneMappingExposure = 0.5f;
 
     // Wgpu render target for offscreen rendering + readback
     auto wgpuRT = RenderTarget::create(halfW, halfH, RenderTarget::Options{});
 
     // DataTexture to receive Wgpu readback pixels, displayed on right half
-    auto wgpuTex = DataTexture::create(3, halfW, halfH);
+    auto wgpuTex = FramebufferTexture::create(halfW, halfH);
     wgpuTex->format = Format::RGB;
     wgpuTex->magFilter = Filter::Linear;
     wgpuTex->minFilter = Filter::Linear;
@@ -163,7 +167,7 @@ int main() {
         suWgpu.at("mieDirectionalG").value<float>() = suGL.at("mieDirectionalG").value<float>();
     };
 
-    ImguiFunctionalContext ui(canvas, *glRenderer, [&] {
+    ImguiFunctionalContext ui(canvas, glRenderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({0, 0}, 0);
         ImGui::Begin("Controls");
@@ -189,7 +193,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = static_cast<float>(size.width() / 2) / size.height();
         camera->updateProjectionMatrix();
-        glRenderer->setSize(size);
+        glRenderer.setSize(size);
     });
 
     Clock clock;
@@ -222,22 +226,22 @@ int main() {
         }
 
         // --- GL left half: render scene directly ---
-        glRenderer->setViewport(0, 0, hw, h);
-        glRenderer->setScissor(0, 0, hw, h);
-        glRenderer->render(*sceneGL.scene, *camera);
+        glRenderer.setViewport(0, 0, hw, h);
+        glRenderer.setScissor(0, 0, hw, h);
+        glRenderer.render(*sceneGL.scene, *camera);
 
         // --- GL right half: display Wgpu readback texture ---
         // Disable tone mapping — the Wgpu render already applied it.
-        auto savedToneMapping = glRenderer->toneMapping;
-        glRenderer->toneMapping = ToneMapping::None;
-        glRenderer->setViewport(hw, 0, hw, h);
-        glRenderer->setScissor(hw, 0, hw, h);
-        glRenderer->render(*previewScene, *previewCam);
-        glRenderer->toneMapping = savedToneMapping;
+        auto savedToneMapping = glRenderer.toneMapping;
+        glRenderer.toneMapping = ToneMapping::None;
+        glRenderer.setViewport(hw, 0, hw, h);
+        glRenderer.setScissor(hw, 0, hw, h);
+        glRenderer.render(*previewScene, *previewCam);
+        glRenderer.toneMapping = savedToneMapping;
 
         // ImGui overlay (drawn over the full window after scissor reset)
-        glRenderer->setViewport(0, 0, size.width(), h);
-        glRenderer->setScissor(0, 0, size.width(), h);
+        glRenderer.setViewport(0, 0, size.width(), h);
+        glRenderer.setScissor(0, 0, size.width(), h);
         ui.render();
     });
 }

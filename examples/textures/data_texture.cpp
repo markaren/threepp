@@ -1,5 +1,5 @@
 
-#include "threepp/textures/DataTexture.hpp"
+#include "threepp/textures/FramebufferTexture.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -55,10 +55,7 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     unsigned int textureSize = 128;
-    auto texture = DataTexture::create(3, textureSize, textureSize);
-    texture->format = Format::RGB;
-    texture->minFilter = Filter::Nearest;
-    texture->magFilter = Filter::Nearest;
+    auto texture = FramebufferTexture::create(textureSize, textureSize);
 
     auto spriteMaterial = SpriteMaterial::create({{"map", texture}});
     spriteMaterial->map->offset.set(0.5, 0.5);
