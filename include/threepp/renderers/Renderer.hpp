@@ -44,9 +44,43 @@ namespace threepp {
         bool localClippingEnabled = false;
 
         float gammaFactor = 2.0f;
-        Encoding outputEncoding{Encoding::Linear};
 
-        bool physicallyCorrectLights = false;
+        // Color space of the final output (post tone mapping). SRGBColorSpace
+        // applies the linear→sRGB encode for display. LinearSRGBColorSpace
+        // emits raw linear values (used by HDR / readback pipelines and the
+        // furnace tests).
+        // Default flips to SRGBColorSpace in Phase 4 (matches three.js r166+).
+        ColorSpace outputColorSpace{ColorSpace::Linear};
+
+        // When true (default in this transitional release), lights match the
+        // legacy GL pipeline: irradiance multiplied by π, distance falloff
+        // `pow(saturate(-d/cutoff + 1), decay)`. When false, lights are
+        // physically correct (no π, Frostbite punctual falloff). Default
+        // flips to `false` in Phase 4.
+        bool useLegacyLights = true;
+
+        // ── Deprecated source-compat aliases ───────────────────────────────
+        // Kept so existing user code (`renderer.outputEncoding = ...`,
+        // `renderer.physicallyCorrectLights = true`) continues to compile.
+        // Both reference the same storage as the primary fields above.
+        // Remove in a future release.
+
+        [[deprecated("Use outputColorSpace")]] ColorSpace& outputEncoding{outputColorSpace};
+
+    private:
+        // Proxy: physicallyCorrectLights == !useLegacyLights. Inverts on
+        // both read (operator bool) and write (operator=).
+        struct LegacyLightsRef {
+            bool& storage;
+            constexpr operator bool() const noexcept { return !storage; }
+            LegacyLightsRef& operator=(bool v) noexcept {
+                storage = !v;
+                return *this;
+            }
+        };
+
+    public:
+        [[deprecated("Use !useLegacyLights")]] LegacyLightsRef physicallyCorrectLights{useLegacyLights};
 
         ToneMapping toneMapping{ToneMapping::None};
         float toneMappingExposure = 1.0f;

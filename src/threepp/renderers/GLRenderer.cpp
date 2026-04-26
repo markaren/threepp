@@ -805,7 +805,7 @@ struct GLRenderer::Impl {
 
         auto& fog = scene->fog;
         auto environment = isMeshStandardMaterial ? scene->environment : nullptr;
-        Encoding encoding = (_currentRenderTarget == nullptr) ? scope.outputEncoding : _currentRenderTarget->texture->encoding;
+        ColorSpace encoding = (_currentRenderTarget == nullptr) ? scope.outputColorSpace : _currentRenderTarget->texture->colorSpace;
 
         Texture* envMap;
         auto materialWithEnvMap = material->as<MaterialWithEnvMap>();

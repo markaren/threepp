@@ -17,9 +17,9 @@ using namespace threepp::gl;
 
 namespace {
 
-    Encoding getTextureEncodingFromMap(const std::shared_ptr<Texture>& map) {
+    ColorSpace getTextureEncodingFromMap(const std::shared_ptr<Texture>& map) {
 
-        return map ? map->encoding : Encoding::Linear;
+        return map ? map->colorSpace : ColorSpace::Linear;
     }
 
 }// namespace
@@ -94,7 +94,7 @@ ProgramParameters::ProgramParameters(
     instancingColor = instancedMesh != nullptr && instancedMesh->instanceColor() != nullptr;
 
     supportsVertexTextures = capabilities.vertexTextures;
-    outputEncoding = renderer.outputEncoding;
+    outputEncoding = renderer.outputColorSpace;
 
     map = mapMaterial && mapMaterial->map;
     mapEncoding = getTextureEncodingFromMap(map ? mapMaterial->map : nullptr);
@@ -109,7 +109,7 @@ ProgramParameters::ProgramParameters(
     if (envMap) {
         envMapMode = as_integer(effectiveEnvMap->mapping);
     }
-    envMapEncoding = effectiveEnvMap ? effectiveEnvMap->encoding : Encoding::Linear;
+    envMapEncoding = effectiveEnvMap ? effectiveEnvMap->colorSpace : ColorSpace::Linear;
     envMapCubeUV = envMapMode != 0 &&
                    (static_cast<Mapping>(envMapMode) == Mapping::CubeUVReflection ||
                     static_cast<Mapping>(envMapMode) == Mapping::CubeUVRefraction);
@@ -193,7 +193,7 @@ ProgramParameters::ProgramParameters(
     shadowMapType = shadowConfig.type;
 
     toneMapping = material->toneMapped ? renderer.toneMapping : ToneMapping::None;
-    physicallyCorrectLights = renderer.physicallyCorrectLights;
+    physicallyCorrectLights = !renderer.useLegacyLights;
 
     premultipliedAlpha = material->premultipliedAlpha;
 

@@ -192,7 +192,7 @@ TextureEntry& WgpuTextures::getOrCreateTexture(Texture* tex) {
         // Hardware sRGB sampling: when a texture is tagged sRGB, allocate
         // RGBA8UnormSrgb so textureSample decodes to linear automatically.
         // Mirrors three.js r166 — color textures sample as linear.
-        const bool isSrgb = (tex->encoding == Encoding::sRGB);
+        const bool isSrgb = (tex->colorSpace == ColorSpace::sRGB);
         td.format = isSrgb ? WGPUTextureFormat_RGBA8UnormSrgb : WGPUTextureFormat_RGBA8Unorm;
         entry.texture = wgpuDeviceCreateTexture(state_.device, &td);
         entry.view = wgpuTextureCreateView(entry.texture, nullptr);
@@ -223,7 +223,7 @@ TextureEntry& WgpuTextures::getOrCreateTexture(Texture* tex) {
         if (isHdr) {
             fmt = WGPUTextureFormat_RGBA16Float;
         } else {
-            fmt = (tex->encoding == Encoding::sRGB)
+            fmt = (tex->colorSpace == ColorSpace::sRGB)
                 ? WGPUTextureFormat_RGBA8UnormSrgb
                 : WGPUTextureFormat_RGBA8Unorm;
         }
@@ -285,7 +285,7 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
 
     // Hardware sRGB sampling for color cubes (env color cubes typically
     // sample-time decode), matches three.js r166 behavior.
-    const bool isSrgb = (tex->encoding == Encoding::sRGB);
+    const bool isSrgb = (tex->colorSpace == ColorSpace::sRGB);
     const WGPUTextureFormat cubeFormat = isSrgb
         ? WGPUTextureFormat_RGBA8UnormSrgb
         : WGPUTextureFormat_RGBA8Unorm;

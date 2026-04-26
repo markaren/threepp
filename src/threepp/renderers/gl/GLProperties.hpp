@@ -50,7 +50,7 @@ namespace threepp::gl {
         Texture* envMap;
         Texture* environment;
 
-        std::optional<Encoding> outputEncoding;
+        std::optional<ColorSpace> outputEncoding;
         bool instancing{};
         bool skinning{};
         bool vertexAlphas{};

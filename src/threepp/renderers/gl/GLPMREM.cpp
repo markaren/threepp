@@ -186,7 +186,7 @@ std::unique_ptr<RenderTarget> GLPMREM::fromEquirectangular(Texture& equirect) {
     RenderTarget::Options options;
     options.type = Type::HalfFloat;
     options.format = Format::RGBA;
-    options.encoding = Encoding::Linear;
+    options.encoding = ColorSpace::Linear;
     // NearestFilter — cube_uv_reflection_fragment.glsl does its own manual
     // 4-tap bilinear via 4 textureLod reads with +texelSize offsets, so GL
     // must not filter or we'd double-filter across face seams.

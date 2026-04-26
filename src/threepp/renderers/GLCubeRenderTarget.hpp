@@ -26,7 +26,7 @@ namespace threepp {
             if (options.format) this->texture->format = *options.format;
             if (options.type) this->texture->type = *options.type;
             if (options.anisotropy) this->texture->anisotropy = *options.anisotropy;
-            if (options.encoding) this->texture->encoding = *options.encoding;
+            if (options.encoding) this->texture->colorSpace = *options.encoding;
 
             this->texture->generateMipmaps = options.generateMipmaps;
             this->texture->minFilter = options.minFilter.value_or(Filter::Linear);
@@ -36,7 +36,7 @@ namespace threepp {
 
             this->texture->type = texture.type;
             this->texture->format = Format::RGBA;// see #18859
-            this->texture->encoding = texture.encoding;
+            this->texture->colorSpace = texture.colorSpace;
 
             this->texture->generateMipmaps = texture.generateMipmaps;
             this->texture->minFilter = texture.minFilter;

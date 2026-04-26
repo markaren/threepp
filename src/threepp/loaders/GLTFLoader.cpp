@@ -453,9 +453,16 @@ namespace threepp {
                 return loader.load(raw, 4, false);
             }
 
-            std::shared_ptr<Texture> loadTexture(int texIdx) {
+            std::shared_ptr<Texture> loadTexture(int texIdx, ColorSpace cs = ColorSpace::sRGB) {
                 auto it = textureCache.find(texIdx);
-                if (it != textureCache.end()) return it->second;
+                if (it != textureCache.end()) {
+                    auto cached = it->second;
+                    if (cached && cached->colorSpace == cs) return cached;
+                    // Same image used in a different role (e.g. color + data) → clone with new tag
+                    auto clone = cached->clone();
+                    clone->colorSpace = cs;
+                    return clone;
+                }
 
                 const auto& texDef = gltf["textures"][texIdx];
                 int imageIdx = texDef.value("source", -1);
@@ -464,6 +471,7 @@ namespace threepp {
                 auto image = loadImageData(imageIdx);
 
                 auto tex = Texture::create(*image);
+                tex->colorSpace = cs;
                 tex->needsUpdate();
 
                 // Apply sampler settings if present
@@ -608,7 +616,7 @@ namespace threepp {
                     // Metallic-roughness texture (G=roughness, B=metalness per spec)
                     if (pbr.contains("metallicRoughnessTexture")) {
                         int ti = pbr["metallicRoughnessTexture"]["index"].get<int>();
-                        auto tex = applyTextureTransform(pbr["metallicRoughnessTexture"], loadTexture(ti));
+                        auto tex = applyTextureTransform(pbr["metallicRoughnessTexture"], loadTexture(ti, ColorSpace::Linear));
                         mat->metalnessMap = tex;
                         mat->roughnessMap = tex;
                     }
@@ -617,7 +625,7 @@ namespace threepp {
                 // Normal map
                 if (matDef.contains("normalTexture")) {
                     int ti = matDef["normalTexture"]["index"].get<int>();
-                    mat->normalMap = applyTextureTransform(matDef["normalTexture"], loadTexture(ti));
+                    mat->normalMap = applyTextureTransform(matDef["normalTexture"], loadTexture(ti, ColorSpace::Linear));
                     float scale = matDef["normalTexture"].value("scale", 1.0f);
                     mat->normalScale = Vector2{scale, scale};
                 }
@@ -625,7 +633,7 @@ namespace threepp {
                 // Occlusion map
                 if (matDef.contains("occlusionTexture")) {
                     int ti = matDef["occlusionTexture"]["index"].get<int>();
-                    mat->aoMap = applyTextureTransform(matDef["occlusionTexture"], loadTexture(ti));
+                    mat->aoMap = applyTextureTransform(matDef["occlusionTexture"], loadTexture(ti, ColorSpace::Linear));
                     mat->aoMapIntensity = matDef["occlusionTexture"].value("strength", 1.0f);
                 }
 
@@ -662,7 +670,7 @@ namespace threepp {
                         physMat->transmission = tr.value("transmissionFactor", 0.0f);
                         if (tr.contains("transmissionTexture")) {
                             int ti = tr["transmissionTexture"]["index"].get<int>();
-                            physMat->transmissionMap = loadTexture(ti);
+                            physMat->transmissionMap = loadTexture(ti, ColorSpace::Linear);
                         }
                     }
 
@@ -721,16 +729,16 @@ namespace threepp {
                         physMat->clearcoat = cc.value("clearcoatFactor", 0.0f);
                         if (cc.contains("clearcoatTexture")) {
                             int ti = cc["clearcoatTexture"]["index"].get<int>();
-                            physMat->clearcoatMap = loadTexture(ti);
+                            physMat->clearcoatMap = loadTexture(ti, ColorSpace::Linear);
                         }
                         physMat->clearcoatRoughness = cc.value("clearcoatRoughnessFactor", 0.0f);
                         if (cc.contains("clearcoatRoughnessTexture")) {
                             int ti = cc["clearcoatRoughnessTexture"]["index"].get<int>();
-                            physMat->clearcoatRoughnessMap = loadTexture(ti);
+                            physMat->clearcoatRoughnessMap = loadTexture(ti, ColorSpace::Linear);
                         }
                         if (cc.contains("clearcoatNormalTexture")) {
                             int ti = cc["clearcoatNormalTexture"]["index"].get<int>();
-                            physMat->clearcoatNormalMap = loadTexture(ti);
+                            physMat->clearcoatNormalMap = loadTexture(ti, ColorSpace::Linear);
                             float scale = cc["clearcoatNormalTexture"].value("scale", 1.0f);
                             physMat->clearcoatNormalScale = Vector2{scale, scale};
                         }

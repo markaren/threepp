@@ -54,11 +54,19 @@ namespace threepp {
         bool premultiplyAlpha = false;
         int unpackAlignment = 4;// valid values: 1, 2, 4, 8 (see http://www.khronos.org/opengles/sdk/docs/man/xhtml/glPixelStorei.xml)
 
-        // Values of encoding !== THREE.LinearEncoding only supported on map, envMap and emissiveMap.
+        // Color space tag for this texture's pixel data. Color/albedo and
+        // emissive maps are typically tagged SRGBColorSpace; normal maps,
+        // metallic/roughness, occlusion, and other data textures stay
+        // LinearSRGBColorSpace (or NoColorSpace once Phase 4 lands).
+        // HDR loaders set RGBEColorSpace.
         //
-        // Also changing the encoding after already used by a Material will not automatically make the Material
-        // update. You need to explicitly call Material.needsUpdate to trigger it to recompile.
-        Encoding encoding{Encoding::Linear};
+        // Changing this after the texture is already used by a material does
+        // not automatically rebuild the material; call Material::needsUpdate
+        // to trigger a recompile.
+        ColorSpace colorSpace{ColorSpace::Linear};
+
+        // Deprecated source-compat alias — same storage. Will be removed.
+        [[deprecated("Use colorSpace")]] ColorSpace& encoding{colorSpace};
 
         Texture(const Texture&) = delete;
         Texture& operator=(const Texture&) = delete;

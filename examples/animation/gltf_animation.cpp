@@ -13,7 +13,6 @@ int main() {
     Canvas canvas("GLTF Animation", {{"aa", 4}});
     auto renderer = createRenderer(canvas);
     renderer->shadowMap().enabled = true;
-    renderer->physicallyCorrectLights = true;
 
     PerspectiveCamera camera(45, canvas.aspect(), 0.1f, 100.f);
     camera.position.set(0, 2, -5);

@@ -27,7 +27,7 @@ namespace threepp {
             std::optional<Format> format;
             std::optional<Type> type;
             std::optional<int> anisotropy;
-            std::optional<Encoding> encoding;
+            std::optional<ColorSpace> encoding;
 
             bool generateMipmaps{false};
             bool depthBuffer{true};

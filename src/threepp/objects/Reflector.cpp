@@ -154,7 +154,7 @@ struct Reflector::Impl {
                 e[13] = e[15] - e[13];
             }
 
-            renderTarget->texture->encoding = _renderer->outputEncoding;
+            renderTarget->texture->colorSpace = _renderer->outputColorSpace;
             reflector_.visible = false;
             const auto currentRenderTarget = _renderer->getRenderTarget();
             const auto currentShadowAutoUpdate = _renderer->shadowMapAutoUpdate;

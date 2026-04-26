@@ -38,20 +38,20 @@ namespace threepp {
             bool instancingColor{};
 
             bool supportsVertexTextures;
-            Encoding outputEncoding{};
+            ColorSpace outputEncoding{};
             bool map{};
-            Encoding mapEncoding{};
+            ColorSpace mapEncoding{};
             bool matcap{};
-            Encoding matcapEncoding{};
+            ColorSpace matcapEncoding{};
             bool envMap{};
             int envMapMode{};
-            Encoding envMapEncoding{};
+            ColorSpace envMapEncoding{};
             bool envMapCubeUV{};
             bool lightMap{};
-            Encoding lightMapEncoding{};
+            ColorSpace lightMapEncoding{};
             bool aoMap{};
             bool emissiveMap{};
-            Encoding emissiveMapEncoding{};
+            ColorSpace emissiveMapEncoding{};
             bool bumpMap{};
             bool normalMap{};
             bool objectSpaceNormalMap{};

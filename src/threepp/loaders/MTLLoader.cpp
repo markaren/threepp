@@ -215,6 +215,12 @@ void MaterialCreator::createMaterial(const std::string& materialName) {
         auto texParams = getTextureParams(value, *params);
         auto map = loadTexture(baseUrl / texParams.url);
 
+        // Color/emissive maps stay sRGB (the default); data textures are Linear.
+        if (mapType == "normalMap" || mapType == "bumpMap" ||
+            mapType == "specularMap" || mapType == "alphaMap") {
+            map->colorSpace = ColorSpace::Linear;
+        }
+
         map->repeat.copy(texParams.scale);
         map->offset.copy(texParams.offset);
         map->wrapS = wrap;

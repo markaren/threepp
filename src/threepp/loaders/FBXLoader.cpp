@@ -170,11 +170,12 @@ namespace threepp {
         // and return it.  Returns nullptr if the slot is empty or unsupported.
         std::shared_ptr<Texture> loadTex(const ofbx::Texture* slot,
                                          const std::filesystem::path& baseDir,
-                                         TextureLoader& texLoader) {
+                                         TextureLoader& texLoader,
+                                         ColorSpace cs = ColorSpace::sRGB) {
             if (!slot) return nullptr;
             auto p = resolveTexturePath(slot, baseDir);
             if (p.empty() || !isSupportedImageFormat(p)) return nullptr;
-            auto tex = texLoader.load(p);
+            auto tex = texLoader.load(p, cs);
             if (tex) {
                 tex->wrapS = TextureWrapping::Repeat;
                 tex->wrapT = TextureWrapping::Repeat;
@@ -212,7 +213,7 @@ namespace threepp {
         void applyCommon(M& m, const ofbx::Material* mat,
                          const std::filesystem::path& baseDir,
                          TextureLoader& texLoader) {
-            if (auto tex = loadTex(mat->getTexture(ofbx::Texture::NORMAL), baseDir, texLoader)) {
+            if (auto tex = loadTex(mat->getTexture(ofbx::Texture::NORMAL), baseDir, texLoader, ColorSpace::Linear)) {
                 m.normalMap   = tex;
                 m.normalScale = {1.0f, -1.0f};  // DirectX → OpenGL Y-flip
             }
@@ -249,7 +250,7 @@ namespace threepp {
                     m->map = tex;
                     m->color.setHex(0xffffff);
                 }
-                if (auto tex = texLoader.load(specPath)) {
+                if (auto tex = texLoader.load(specPath, ColorSpace::Linear)) {
                     tex->wrapS = TextureWrapping::Repeat;
                     tex->wrapT = TextureWrapping::Repeat;
                     tex->needsUpdate();
@@ -290,7 +291,7 @@ namespace threepp {
                 m->specular.setRGB(sc.r, sc.g, sc.b);
                 const double shin = mat->getShininess();
                 if (shin > 0.0) m->shininess = static_cast<float>(shin);
-                if (auto tex = loadTex(specSlot, baseDir, texLoader))
+                if (auto tex = loadTex(specSlot, baseDir, texLoader, ColorSpace::Linear))
                     m->specularMap = tex;
                 applyCommon(*m, mat, baseDir, texLoader);
                 if (opacity < 0.99f) {

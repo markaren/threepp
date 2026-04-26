@@ -46,7 +46,7 @@ std::shared_ptr<Texture> RGBELoader::load(const std::filesystem::path& path, boo
     texture->name = path.stem().string();
     texture->format = Format::RGBA;
     texture->type = Type::Float;
-    texture->encoding = Encoding::Linear;// stbi_loadf already decoded RGBE → linear floats
+    texture->colorSpace = ColorSpace::Linear;// stbi_loadf already decoded RGBE → linear floats
     texture->mapping = Mapping::EquirectangularReflection;
     texture->needsUpdate();
 

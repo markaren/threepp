@@ -191,7 +191,7 @@ Texture& Texture::copy(const Texture& source) {
     this->generateMipmaps = source.generateMipmaps;
     this->premultiplyAlpha = source.premultiplyAlpha;
     this->unpackAlignment = source.unpackAlignment;
-    this->encoding = source.encoding;
+    this->colorSpace = source.colorSpace;
 
     return *this;
 }

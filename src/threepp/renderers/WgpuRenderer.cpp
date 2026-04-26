@@ -407,7 +407,7 @@ struct WgpuRenderer::Impl {
 
     bool needsToneMapPass() const {
         return scope.toneMapping != ToneMapping::None ||
-               scope.outputEncoding == Encoding::sRGB ||
+               scope.outputColorSpace == ColorSpace::sRGB ||
                retainFramebuffer ||
                hasTransmissive_;
     }
@@ -1052,7 +1052,7 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
                 surfaceFormat = caps.formats[0];
                 // Strip sRGB suffix: use the linear equivalent so that RTs and pipelines
                 // are always in linear space. sRGB encoding is applied explicitly by the
-                // tone-map blit when outputEncoding == Encoding::sRGB — exactly like GL.
+                // tone-map blit when outputColorSpace == ColorSpace::sRGB — exactly like GL.
                 if (surfaceFormat == WGPUTextureFormat_BGRA8UnormSrgb)
                     surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
                 else if (surfaceFormat == WGPUTextureFormat_RGBA8UnormSrgb)
@@ -1555,7 +1555,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         // Ensure the pipeline for the current tone mapping mode exists
         int idx = toneMapPipelineIndex();
         if (!toneMap_.pipelines[idx]) {
-            bool srgb = (scope.outputEncoding == Encoding::sRGB);
+            bool srgb = (scope.outputColorSpace == ColorSpace::sRGB);
             auto wgsl = buildToneMapWGSL(scope.toneMapping, srgb);
 
             WGPUShaderSourceWGSL wgslSrc{};
@@ -1996,7 +1996,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         // (e.g. the HUD scene which has no lights) would overwrite it with zeros before the
         // GPU runs the earlier passes.  Acquiring a unique pool buffer per render() call
         // ensures each render pass sees its own correct light data.
-        lights->update(scene, !scope.physicallyCorrectLights);
+        lights->update(scene, scope.useLegacyLights);
         {
             constexpr auto kLightUsage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
             renderLightBuffer_ = bufferPool->acquire(
@@ -2277,7 +2277,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 case ToneMapping::ACESFilmic:frameCtx.tonemapBits = SF::TonemapACES; break;
                 default: break;
             }
-            if (scope.outputEncoding == Encoding::sRGB) {
+            if (scope.outputColorSpace == ColorSpace::sRGB) {
                 frameCtx.srgbOutput = true;
             }
         }
