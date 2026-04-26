@@ -18,7 +18,7 @@ void RE_Direct_Toon( const in IncidentLight directLight, const in GeometricConte
 
 	vec3 irradiance = getGradientIrradiance( geometry.normal, directLight.direction ) * directLight.color;
 
-	#ifndef PHYSICALLY_CORRECT_LIGHTS
+	#ifdef USE_LEGACY_LIGHTS
 
 		irradiance *= PI; // punctual light
 

@@ -73,7 +73,7 @@ void RE_Direct_Physical( const in IncidentLight directLight, const in GeometricC
 
 	vec3 irradiance = dotNL * directLight.color;
 
-	#ifndef PHYSICALLY_CORRECT_LIGHTS
+	#ifdef USE_LEGACY_LIGHTS
 
 		irradiance *= PI; // punctual light
 
@@ -85,7 +85,7 @@ void RE_Direct_Physical( const in IncidentLight directLight, const in GeometricC
 
 		vec3 ccIrradiance = ccDotNL * directLight.color;
 
-		#ifndef PHYSICALLY_CORRECT_LIGHTS
+		#ifdef USE_LEGACY_LIGHTS
 
 			ccIrradiance *= PI; // punctual light
 

@@ -22,7 +22,7 @@ void RE_Direct_BlinnPhong( const in IncidentLight directLight, const in Geometri
 	float dotNL = saturate( dot( geometry.normal, directLight.direction ) );
 	vec3 irradiance = dotNL * directLight.color;
 
-	#ifndef PHYSICALLY_CORRECT_LIGHTS
+	#ifdef USE_LEGACY_LIGHTS
 
 		irradiance *= PI; // punctual light
 

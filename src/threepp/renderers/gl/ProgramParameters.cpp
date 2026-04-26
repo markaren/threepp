@@ -193,7 +193,7 @@ ProgramParameters::ProgramParameters(
     shadowMapType = shadowConfig.type;
 
     toneMapping = material->toneMapped ? renderer.toneMapping : ToneMapping::None;
-    physicallyCorrectLights = !renderer.useLegacyLights;
+    useLegacyLights = renderer.useLegacyLights;
 
     premultipliedAlpha = material->premultipliedAlpha;
 
@@ -298,7 +298,7 @@ std::string ProgramParameters::hash() const {
     s << std::to_string(as_integer(shadowMapType)) << '\n';
 
     s << std::to_string(as_integer(toneMapping)) << '\n';
-    s << std::to_string(physicallyCorrectLights) << '\n';
+    s << std::to_string(useLegacyLights) << '\n';
 
     s << std::to_string(premultipliedAlpha) << '\n';
 

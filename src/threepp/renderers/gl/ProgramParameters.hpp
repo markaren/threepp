@@ -116,7 +116,7 @@ namespace threepp {
             ShadowMap shadowMapType{};
 
             ToneMapping toneMapping{};
-            bool physicallyCorrectLights{};
+            bool useLegacyLights{};
 
             bool premultipliedAlpha{};
 

@@ -6,7 +6,7 @@
 		vec4 lightMapTexel= texture2D( lightMap, vUv2 );
 		vec3 lightMapIrradiance = lightMapTexelToLinear( lightMapTexel ).rgb * lightMapIntensity;
 
-		#ifndef PHYSICALLY_CORRECT_LIGHTS
+		#ifdef USE_LEGACY_LIGHTS
 
 			lightMapIrradiance *= PI; // factor of PI should not be present; included here to prevent breakage
 

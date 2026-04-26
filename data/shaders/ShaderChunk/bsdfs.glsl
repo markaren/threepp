@@ -19,7 +19,7 @@ vec2 integrateSpecularBRDF( const in float dotNV, const in float roughness ) {
 
 float punctualLightIntensityToIrradianceFactor( const in float lightDistance, const in float cutoffDistance, const in float decayExponent ) {
 
-#if defined ( PHYSICALLY_CORRECT_LIGHTS )
+#if !defined ( USE_LEGACY_LIGHTS )
 
 	// based upon Frostbite 3 Moving to Physically-based Rendering
 	// page 32, equation 26: E[window1]

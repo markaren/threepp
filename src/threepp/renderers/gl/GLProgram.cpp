@@ -40,6 +40,8 @@ namespace {
 
         switch (encoding) {
 
+            case ColorSpace::NoColorSpace:
+                return {"Linear", "( value )"};
             case ColorSpace::Linear:
                 return {"Linear", "( value )"};
             case ColorSpace::sRGB:
@@ -599,7 +601,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
 
                     parameters->premultipliedAlpha ? "#define PREMULTIPLIED_ALPHA" : "",
 
-                    parameters->physicallyCorrectLights ? "#define PHYSICALLY_CORRECT_LIGHTS" : "",
+                    parameters->useLegacyLights ? "#define USE_LEGACY_LIGHTS" : "",
 
                     parameters->logarithmicDepthBuffer ? "#define USE_LOGDEPTHBUF" : "",
 
