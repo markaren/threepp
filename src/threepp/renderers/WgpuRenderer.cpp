@@ -1996,7 +1996,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         // (e.g. the HUD scene which has no lights) would overwrite it with zeros before the
         // GPU runs the earlier passes.  Acquiring a unique pool buffer per render() call
         // ensures each render pass sees its own correct light data.
-        lights->update(scene);
+        lights->update(scene, !scope.physicallyCorrectLights);
         {
             constexpr auto kLightUsage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
             renderLightBuffer_ = bufferPool->acquire(

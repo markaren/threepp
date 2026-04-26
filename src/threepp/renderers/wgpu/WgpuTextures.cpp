@@ -189,7 +189,11 @@ TextureEntry& WgpuTextures::getOrCreateTexture(Texture* tex) {
     } else {
         auto& data = img.data<unsigned char>();
         if (data.empty()) return dummyTexture_; // render target or uninitialized
-        td.format = WGPUTextureFormat_RGBA8Unorm;
+        // Hardware sRGB sampling: when a texture is tagged sRGB, allocate
+        // RGBA8UnormSrgb so textureSample decodes to linear automatically.
+        // Mirrors three.js r166 — color textures sample as linear.
+        const bool isSrgb = (tex->encoding == Encoding::sRGB);
+        td.format = isSrgb ? WGPUTextureFormat_RGBA8UnormSrgb : WGPUTextureFormat_RGBA8Unorm;
         entry.texture = wgpuDeviceCreateTexture(state_.device, &td);
         entry.view = wgpuTextureCreateView(entry.texture, nullptr);
 
@@ -215,7 +219,14 @@ TextureEntry& WgpuTextures::getOrCreateTexture(Texture* tex) {
     }
 
     if (needsMips) {
-        const auto fmt = isHdr ? WGPUTextureFormat_RGBA16Float : WGPUTextureFormat_RGBA8Unorm;
+        WGPUTextureFormat fmt;
+        if (isHdr) {
+            fmt = WGPUTextureFormat_RGBA16Float;
+        } else {
+            fmt = (tex->encoding == Encoding::sRGB)
+                ? WGPUTextureFormat_RGBA8UnormSrgb
+                : WGPUTextureFormat_RGBA8Unorm;
+        }
         pendingMipmaps_.push_back({entry.texture, w, h, mipLevels, false, false, fmt});
     }
 
@@ -272,13 +283,20 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
     const bool needsMips = tex->generateMipmaps && filterUsesMips(tex->minFilter);
     const uint32_t mipLevels = needsMips ? calcMipLevels(w, h) : 1u;
 
+    // Hardware sRGB sampling for color cubes (env color cubes typically
+    // sample-time decode), matches three.js r166 behavior.
+    const bool isSrgb = (tex->encoding == Encoding::sRGB);
+    const WGPUTextureFormat cubeFormat = isSrgb
+        ? WGPUTextureFormat_RGBA8UnormSrgb
+        : WGPUTextureFormat_RGBA8Unorm;
+
     WGPUTextureDescriptor td{};
     td.label = WGPUStringView{"cube_tex", WGPU_STRLEN} ;
     td.size = {w, h, 6};
     td.mipLevelCount = mipLevels;
     td.sampleCount = 1;
     td.dimension = WGPUTextureDimension_2D;
-    td.format = WGPUTextureFormat_RGBA8Unorm;
+    td.format = cubeFormat;
     td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst
              | (needsMips ? WGPUTextureUsage_RenderAttachment : 0u);
     entry.texture = wgpuDeviceCreateTexture(state_.device, &td);
@@ -315,12 +333,12 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
     }
 
     if (needsMips) {
-        pendingMipmaps_.push_back({entry.texture, w, h, mipLevels, true, false, WGPUTextureFormat_RGBA8Unorm});
+        pendingMipmaps_.push_back({entry.texture, w, h, mipLevels, true, false, cubeFormat});
     }
 
     WGPUTextureViewDescriptor vd{};
     vd.label = WGPUStringView{"cube_view", WGPU_STRLEN} ;
-    vd.format = WGPUTextureFormat_RGBA8Unorm;
+    vd.format = cubeFormat;
     vd.dimension = WGPUTextureViewDimension_Cube;
     vd.baseMipLevel = 0;
     vd.mipLevelCount = mipLevels;

@@ -127,6 +127,7 @@ struct MaterialUniforms {
         s << "struct LightData {\n";
         s << "  numDir: u32, numPoint: u32, numSpot: u32, numHemi: u32,\n";
         s << "  ambient: vec3<f32>, numRect: u32,\n";
+        s << "  useLegacyLights: u32, _padHdr0: u32, _padHdr1: u32, _padHdr2: u32,\n";
         s << "  directional: array<DirectionalLightGPU, " << limits.maxDirLights << ">,\n";
         s << "  point: array<PointLightGPU, " << limits.maxPointLights << ">,\n";
         s << "  spot: array<SpotLightGPU, " << limits.maxSpotLights << ">,\n";
@@ -718,9 +719,21 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         let lv = lights.point[i].position - in.worldPos;
         let d = length(lv); let L = normalize(lv);
         var NdotL = max(dot(N, L), 0.0);
+        // Distance falloff: legacy = pow(saturate(1 - d/cutoff), decay);
+        // physical = Frostbite 1/d^decay * smooth window.
         var att = 1.0;
-        if (lights.point[i].distance > 0.0) {
-            att = pow(max(1.0 - d / lights.point[i].distance, 0.0), lights.point[i].decay);
+        if (lights.useLegacyLights == 1u) {
+            if (lights.point[i].distance > 0.0 && lights.point[i].decay > 0.0) {
+                att = pow(saturate(-d / lights.point[i].distance + 1.0), lights.point[i].decay);
+            }
+        } else {
+            att = 1.0 / max(pow(d, lights.point[i].decay), 0.01);
+            if (lights.point[i].distance > 0.0) {
+                let r = d / lights.point[i].distance;
+                let r4 = r * r * r * r;
+                let w = saturate(1.0 - r4);
+                att = att * (w * w);
+            }
         }
 )";
         if (features & ShaderFeatures::GradientMap) {
@@ -779,8 +792,20 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         let ac = dot(L, lights.spot[i].direction);
         let se = smoothstep(lights.spot[i].coneCos, lights.spot[i].penumbraCos, ac);
         var att = se;
-        if (lights.spot[i].distance > 0.0) {
-            att = att * pow(max(1.0 - d / lights.spot[i].distance, 0.0), lights.spot[i].decay);
+        // Distance falloff: same legacy/physical branch as point lights.
+        if (lights.useLegacyLights == 1u) {
+            if (lights.spot[i].distance > 0.0 && lights.spot[i].decay > 0.0) {
+                att = att * pow(saturate(-d / lights.spot[i].distance + 1.0), lights.spot[i].decay);
+            }
+        } else {
+            var dFall = 1.0 / max(pow(d, lights.spot[i].decay), 0.01);
+            if (lights.spot[i].distance > 0.0) {
+                let r = d / lights.spot[i].distance;
+                let r4 = r * r * r * r;
+                let w = saturate(1.0 - r4);
+                dFall = dFall * (w * w);
+            }
+            att = att * dFall;
         }
 )";
         if (features & ShaderFeatures::GradientMap) {
@@ -874,6 +899,10 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
     }
 )";
         }
+        // Apply Lambert /π divisor to direct + ambient diffuse light in
+        // physical mode. Legacy mode keeps the historical no-divisor scale.
+        // Mirrors three.js BRDF_Lambertian = diffuseColor / π.
+        s << "    diffuseLight = diffuseLight * select(0.31830989, 1.0, lights.useLegacyLights == 1u);\n";
         // Emissive
         if (features & ShaderFeatures::EmissiveMap) {
             s << "    var emissiveColor = material.emissive.rgb * textureSample(t_emissiveMap, s_emissiveMap, in.uv).rgb;\n";

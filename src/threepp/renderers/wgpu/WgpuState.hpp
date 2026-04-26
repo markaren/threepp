@@ -18,9 +18,10 @@ namespace threepp::wgpu {
         int maxRectAreaLights = 4;
 
         // Compute the light uniform buffer size in bytes from current limits.
-        // Layout: header(32) + dir(N*32) + point(N*48) + spot(N*64) + hemi(N*48) + rect(N*64)
+        // Layout: header(48) + dir(N*32) + point(N*48) + spot(N*64) + hemi(N*48) + rect(N*64)
+        // Header: 4 u32 counts (16) + ambient.vec3+numRect (16) + useLegacyLights u32+pad (16) = 48
         [[nodiscard]] size_t lightUniformSize() const {
-            return 32
+            return 48
                 + static_cast<size_t>(maxDirLights) * 32
                 + static_cast<size_t>(maxPointLights) * 48
                 + static_cast<size_t>(maxSpotLights) * 64

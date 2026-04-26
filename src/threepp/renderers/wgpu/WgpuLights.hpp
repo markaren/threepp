@@ -22,7 +22,11 @@ namespace threepp::wgpu {
         explicit WgpuLights(WgpuState& state);
 
         // Collect lights from the scene and upload to GPU buffer.
-        void update(Object3D& scene);
+        // useLegacyLights: when true, packs a flag the shader uses to skip the
+        // diffuse 1/PI divisor and use the legacy distance falloff (matches
+        // GL with PHYSICALLY_CORRECT_LIGHTS undefined). When false, shader
+        // applies physical Lambert + Frostbite distance falloff.
+        void update(Object3D& scene, bool useLegacyLights);
 
         // GPU buffer handle for bind group entries (binding 2).
         [[nodiscard]] WGPUBuffer uniformBuffer() const { return lightBuffer_; }

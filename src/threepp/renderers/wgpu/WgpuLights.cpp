@@ -28,7 +28,7 @@ WgpuLights::WgpuLights(WgpuState& state)
     lightBuffer_ = wgpuDeviceCreateBuffer(state_.device, &d);
 }
 
-void WgpuLights::update(Object3D& scene) {
+void WgpuLights::update(Object3D& scene, bool useLegacyLights) {
     auto& lim = state_.lightLimits;
     size_t bufSize = lim.lightUniformSize();
 
@@ -127,17 +127,22 @@ void WgpuLights::update(Object3D& scene) {
     u32[0] = nDir; u32[1] = nPt; u32[2] = nSp; u32[3] = nHm;
     data[4] = ambR; data[5] = ambG; data[6] = ambB;
     u32[7] = nRa;
+    // Header second half (offset 32, float index 8): useLegacyLights flag + 12 bytes pad
+    // to align the next array (DirectionalLightGPU has vec3 alignment of 16).
+    u32[8] = useLegacyLights ? 1u : 0u;
+    u32[9] = 0; u32[10] = 0; u32[11] = 0;
 
     // Floats per light type in the buffer layout:
     // DirLight: 8 floats, PointLight: 12 floats, SpotLight: 16 floats, HemiLight: 12 floats
-    size_t off = 8;
+    // Header is 12 floats (48 bytes); arrays start at float offset 12.
+    size_t off = 12;
     for (uint32_t i = 0; i < nDir; i++) {
         data[off+0] = dirs[i].dir.x; data[off+1] = dirs[i].dir.y; data[off+2] = dirs[i].dir.z; data[off+3] = 0;
         data[off+4] = dirs[i].col.r; data[off+5] = dirs[i].col.g; data[off+6] = dirs[i].col.b; data[off+7] = 0;
         off += 8;
     }
 
-    off = 8 + lim.maxDirLights * 8;
+    off = 12 + lim.maxDirLights * 8;
     for (uint32_t i = 0; i < nPt; i++) {
         data[off+0] = pts[i].pos.x; data[off+1] = pts[i].pos.y; data[off+2] = pts[i].pos.z; data[off+3] = 0;
         data[off+4] = pts[i].col.r; data[off+5] = pts[i].col.g; data[off+6] = pts[i].col.b; data[off+7] = pts[i].dist;
@@ -145,7 +150,7 @@ void WgpuLights::update(Object3D& scene) {
         off += 12;
     }
 
-    off = 8 + lim.maxDirLights * 8 + lim.maxPointLights * 12;
+    off = 12 + lim.maxDirLights * 8 + lim.maxPointLights * 12;
     for (uint32_t i = 0; i < nSp; i++) {
         data[off+0] = sps[i].pos.x; data[off+1] = sps[i].pos.y; data[off+2] = sps[i].pos.z; data[off+3] = 0;
         data[off+4] = sps[i].dir.x; data[off+5] = sps[i].dir.y; data[off+6] = sps[i].dir.z; data[off+7] = 0;
@@ -154,7 +159,7 @@ void WgpuLights::update(Object3D& scene) {
         off += 16;
     }
 
-    off = 8 + lim.maxDirLights * 8 + lim.maxPointLights * 12 + lim.maxSpotLights * 16;
+    off = 12 + lim.maxDirLights * 8 + lim.maxPointLights * 12 + lim.maxSpotLights * 16;
     for (uint32_t i = 0; i < nHm; i++) {
         data[off+0] = hms[i].dir.x; data[off+1] = hms[i].dir.y; data[off+2] = hms[i].dir.z; data[off+3] = 0;
         data[off+4] = hms[i].sky.r; data[off+5] = hms[i].sky.g; data[off+6] = hms[i].sky.b; data[off+7] = 0;
@@ -162,7 +167,7 @@ void WgpuLights::update(Object3D& scene) {
         off += 12;
     }
 
-    off = 8 + lim.maxDirLights * 8 + lim.maxPointLights * 12 + lim.maxSpotLights * 16 + lim.maxHemiLights * 12;
+    off = 12 + lim.maxDirLights * 8 + lim.maxPointLights * 12 + lim.maxSpotLights * 16 + lim.maxHemiLights * 12;
     for (uint32_t i = 0; i < nRa; i++) {
         data[off+0] = ras[i].pos.x; data[off+1] = ras[i].pos.y; data[off+2] = ras[i].pos.z; data[off+3] = 0;
         data[off+4] = ras[i].col.r; data[off+5] = ras[i].col.g; data[off+6] = ras[i].col.b; data[off+7] = 0;
