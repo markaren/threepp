@@ -70,6 +70,11 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry,
             p.attenuationColor = t->attenuationColor;
             if (p.transmission > 0.0f) p.features |= ShaderFeatures::Transmission;
 
+            // KHR_materials_specular: dielectric F0 = 0.04 * specularColor * specularIntensity.
+            // Reuses the specularAndShininess uniform slot (rgb = color, w = intensity).
+            p.specularColor = t->specularColor;
+            p.specularIntensity = t->specularIntensity;
+
             p.sheenColor = t->sheen.value_or(t->sheenColor);
             p.sheenRoughness = t->sheenRoughness;
             if (p.sheenColor.r > 0.0f || p.sheenColor.g > 0.0f || p.sheenColor.b > 0.0f) {
@@ -194,11 +199,11 @@ void packMaterialUniforms(float* data, const MaterialParams& params,
     data[2] = params.diffuse.b;
     data[3] = 1.0f;
 
-    // specular (vec4, offset 4): rgb + shininess
+    // specular (vec4, offset 4): rgb + (PBR: specularIntensity, else: shininess)
     data[4] = params.specularColor.r;
     data[5] = params.specularColor.g;
     data[6] = params.specularColor.b;
-    data[7] = params.shininess;
+    data[7] = (params.features & ShaderFeatures::PBR) ? params.specularIntensity : params.shininess;
 
     // roughnessMetalnessOpacity (vec4, offset 8): roughness, metalness, opacity, displacementScale
     data[8] = params.roughness;

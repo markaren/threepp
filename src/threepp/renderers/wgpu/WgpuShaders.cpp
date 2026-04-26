@@ -691,7 +691,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
             s << "          let a = r * r; let a2 = a * a;\n";
             s << "          let denom = NdotH * NdotH * (a2 - 1.0) + 1.0;\n";
             s << "          let D = a2 / (3.14159265 * denom * denom);\n";
-            s << "          let F0 = mix(vec3<f32>(0.04), baseColor, m);\n";
+            s << "          let F0 = mix(vec3<f32>(0.04) * material.specularAndShininess.rgb * material.specularAndShininess.w, baseColor, m);\n";
             s << "          let F = F0 + (1.0 - F0) * pow(1.0 - max(dot(H, V), 0.0), 5.0);\n";
             if (features & ShaderFeatures::Shadow) {
                 s << "          specularLight += lights.directional[i].color * F * D * NdotL * dirShadow; }\n";
@@ -761,7 +761,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
             s << "          let a = r * r; let a2 = a * a;\n";
             s << "          let denom = NdotH * NdotH * (a2 - 1.0) + 1.0;\n";
             s << "          let D = a2 / (3.14159265 * denom * denom);\n";
-            s << "          let F0 = mix(vec3<f32>(0.04), baseColor, m);\n";
+            s << "          let F0 = mix(vec3<f32>(0.04) * material.specularAndShininess.rgb * material.specularAndShininess.w, baseColor, m);\n";
             s << "          let F = F0 + (1.0 - F0) * pow(1.0 - max(dot(H, V), 0.0), 5.0);\n";
             if (features & ShaderFeatures::Shadow) {
                 s << "          specularLight += lights.point[i].color * F * D * NdotL * att * ptShadow; }\n";
@@ -833,7 +833,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
             s << "          let a = r * r; let a2 = a * a;\n";
             s << "          let denom = NdotH * NdotH * (a2 - 1.0) + 1.0;\n";
             s << "          let D = a2 / (3.14159265 * denom * denom);\n";
-            s << "          let F0 = mix(vec3<f32>(0.04), baseColor, m);\n";
+            s << "          let F0 = mix(vec3<f32>(0.04) * material.specularAndShininess.rgb * material.specularAndShininess.w, baseColor, m);\n";
             s << "          let F = F0 + (1.0 - F0) * pow(1.0 - max(dot(H, V), 0.0), 5.0);\n";
             if (features & ShaderFeatures::Shadow) {
                 s << "          specularLight += lights.spot[i].color * F * D * NdotL * att * spotShadow; }\n";
@@ -888,7 +888,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
             vec3<f32>(t1.z, 0.0, t1.w)
         );
 
-        let F0 = mix(vec3<f32>(0.04), baseColor, metalness);
+        let F0 = mix(vec3<f32>(0.04) * material.specularAndShininess.rgb * material.specularAndShininess.w, baseColor, metalness);
         let ltcFresnel = F0 * t2.x + (vec3<f32>(1.0) - F0) * t2.y;
 
         let ltcSpec = ltc_evaluate(N, V, in.worldPos, mInv, rectCoords);
@@ -916,7 +916,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         }
 
         if (features & ShaderFeatures::PBR) {
-            s << "    let F0 = mix(vec3<f32>(0.04), baseColor, metalness);\n";
+            s << "    let F0 = mix(vec3<f32>(0.04) * material.specularAndShininess.rgb * material.specularAndShininess.w, baseColor, metalness);\n";
             if (features & (ShaderFeatures::EnvMap | ShaderFeatures::EnvMapCube)) {
                 s << "    let R = reflect(-V, N);\n";
                 s << "    let maxMip    = f32(textureNumLevels(t_envMap) - 1u);\n";

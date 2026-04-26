@@ -31,6 +31,7 @@ namespace threepp::wgpu {
         float opacity = 1.0f;
         Color specularColor{0, 0, 0};
         float shininess = 30.0f;
+        float specularIntensity = 1.0f;
         float roughness = 0.5f;
         float metalness = 0.0f;
         Color emissive{0, 0, 0};
