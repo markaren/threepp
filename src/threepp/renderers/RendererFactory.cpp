@@ -5,6 +5,7 @@
 #include "threepp/renderers/GLRenderer.hpp"
 
 #ifdef THREEPP_WITH_WGPU
+#include "threepp/renderers/CrossRenderer.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
 #endif
 
@@ -19,10 +20,11 @@ namespace threepp {
 
 #ifdef THREEPP_WITH_WGPU
         if (!api.has_value()) {
-            std::cout << "Select renderer:\n  [1] OpenGL (default)\n  [2] WebGPU\n> ";
+            std::cout << "Select renderer:\n  [1] OpenGL (default)\n  [2] WebGPU\n  [3] Cross (WGPU rendering, GL display)\n> ";
             std::string line;
-            if (std::getline(std::cin, line) && line == "2") {
-                chosen = GraphicsAPI::WebGPU;
+            if (std::getline(std::cin, line)) {
+                if (line == "2") chosen = GraphicsAPI::WebGPU;
+                else if (line == "3") chosen = GraphicsAPI::Cross;
             }
         }
 #endif
@@ -30,16 +32,23 @@ namespace threepp {
         if (chosen == GraphicsAPI::WebGPU) {
 #ifdef THREEPP_WITH_WGPU
             std::cout << "Using WebGPU renderer\n";
-            auto renderer = std::make_unique<WgpuRenderer>(canvas);
-            return renderer;
+            return std::make_unique<WgpuRenderer>(canvas);
 #else
             throw std::runtime_error("WebGPU/Wgpu renderer not available (build with -DTHREEPP_WITH_WGPU=ON)");
 #endif
         }
 
+        if (chosen == GraphicsAPI::Cross) {
+#ifdef THREEPP_WITH_WGPU
+            std::cout << "Using Cross renderer (Split screen GL/WGPU rendering)\n";
+            return std::make_unique<CrossRenderer>(canvas);
+#else
+            throw std::runtime_error("Cross renderer requires WebGPU support (build with -DTHREEPP_WITH_WGPU=ON)");
+#endif
+        }
+
         std::cout << "Using OpenGL renderer\n";
-        auto renderer = std::make_unique<GLRenderer>(canvas);
-        return renderer;
+        return std::make_unique<GLRenderer>(canvas);
     }
 
 }// namespace threepp

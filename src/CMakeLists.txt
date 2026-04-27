@@ -221,6 +221,7 @@ set(publicHeaders
         "threepp/renderers/RendererFactory.hpp"
         "threepp/renderers/GLRenderer.hpp"
         "threepp/renderers/WgpuRenderer.hpp"
+        "threepp/renderers/CrossRenderer.hpp"
         "threepp/renderers/RenderTarget.hpp"
         "threepp/renderers/GLRenderTarget.hpp"
 
@@ -602,6 +603,7 @@ if (THREEPP_WITH_WGPU)
     )
     list(APPEND sources
             "threepp/renderers/WgpuRenderer.cpp"
+            "threepp/renderers/CrossRenderer.cpp"
             "threepp/renderers/wgpu/WgpuBindGroupCache.cpp"
             "threepp/renderers/wgpu/WgpuBindGroups.cpp"
             "threepp/renderers/wgpu/WgpuBufferPool.cpp"

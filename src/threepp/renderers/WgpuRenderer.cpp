@@ -1007,8 +1007,8 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
         bindGroupCache = std::make_unique<wgpu::WgpuBindGroupCache>(device);
 
         initialized = true;
-        std::cout << "WgpuRenderer: WebGPU initialized successfully"
-                  << (surface ? "" : " (headless, no surface)") << std::endl;
+        // std::cout << "WgpuRenderer: WebGPU initialized successfully"
+        //           << (surface ? "" : " (headless, no surface)") << std::endl;
     }
 
     void createSurface() {
@@ -1187,9 +1187,9 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
             case WGPUBackendType_OpenGLES:  backendName = "OpenGLES"; break;
             default: break;
         }
-        std::cout << "WgpuRenderer: backend=" << backendName
-                  << " adapter=\"" << std::string_view(info.device.data, info.device.length) << "\""
-                  << std::endl;
+        // std::cout << "WgpuRenderer: backend=" << backendName
+        //           << " adapter=\"" << std::string_view(info.device.data, info.device.length) << "\""
+        //           << std::endl;
         wgpuAdapterInfoFreeMembers(info);
     }
 

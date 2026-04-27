@@ -17,11 +17,16 @@ namespace threepp {
 
     enum class GraphicsAPI {
         OpenGL,
-        WebGPU
+        WebGPU,
+        // Hybrid renderer: WebGPU does scene rendering, OpenGL does display.
+        // Selected via createRenderer; the canvas itself is initialised as
+        // OpenGL by the wrapping CrossRenderer.
+        Cross
     };
 
     class WgpuRenderer;
     class GLRenderer;
+    class CrossRenderer;
 
     class Canvas: public PeripheralsEventSource {
 
