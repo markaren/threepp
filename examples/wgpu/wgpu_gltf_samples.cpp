@@ -95,6 +95,7 @@ int main(int argc, char** argv) {
     pathTracer.setMaxBounces(4);
     pathTracer.setFoveatedRendering(false);
     pathTracer.setTlasEnabled(false);
+    pathTracer.setTextureResolution(1024);
 
     RGBELoader imgLoader;
     auto env = imgLoader.load(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr", false);

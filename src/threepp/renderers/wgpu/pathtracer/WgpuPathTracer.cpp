@@ -4403,7 +4403,7 @@ int WgpuPathTracer::overlayLayer() const {
 }
 
 void WgpuPathTracer::setTextureResolution(int size) {
-    size = (size >= 2048) ? 2048 : 1024;
+    size = std::min(2048, size);
     pimpl_->textureResolution_ = size;
 }
 
