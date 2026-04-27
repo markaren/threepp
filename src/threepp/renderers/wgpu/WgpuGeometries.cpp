@@ -156,12 +156,18 @@ GeometryBuffers& WgpuGeometries::getOrCreateGeometryBuffers(BufferGeometry* geom
             auto posAttr = geometry->getAttribute<float>("position");
             uint32_t newCount = static_cast<uint32_t>(posAttr->count());
 
-            if (newCount != gb.vertexCount) {
+            if (newCount == 0) {
+                if (gb.vertexBuffer) {
+                    wgpuBufferRelease(gb.vertexBuffer);
+                    gb.vertexBuffer = nullptr;
+                }
+                gb.vertexCount = 0;
+            } else if (newCount != gb.vertexCount) {
                 if (gb.vertexBuffer) wgpuBufferRelease(gb.vertexBuffer);
                 auto interleaved = buildInterleavedVertexData(geometry, newCount);
                 auto byteSize = interleaved.size() * sizeof(float);
                 WGPUBufferDescriptor vbDesc{};
-                vbDesc.label = WGPUStringView{"vertex_buf", WGPU_STRLEN} ;
+                vbDesc.label = WGPUStringView{"vertex_buf", WGPU_STRLEN};
                 vbDesc.size = byteSize;
                 vbDesc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
                 gb.vertexBuffer = wgpuDeviceCreateBuffer(state_.device, &vbDesc);
@@ -179,22 +185,30 @@ GeometryBuffers& WgpuGeometries::getOrCreateGeometryBuffers(BufferGeometry* geom
         if (indexNeedsUpdate(geometry, gb)) {
             auto indexAttr = geometry->getIndex();
             auto& arr = indexAttr->array();
-            std::vector<uint32_t> indices(arr.size());
-            for (size_t i = 0; i < arr.size(); ++i) {
-                indices[i] = static_cast<uint32_t>(arr[i]);
-            }
-            auto byteSize = indices.size() * sizeof(uint32_t);
+            if (arr.empty()) {
+                if (gb.indexBuffer) {
+                    wgpuBufferRelease(gb.indexBuffer);
+                    gb.indexBuffer = nullptr;
+                }
+                gb.indexCount = 0;
+            } else {
+                std::vector<uint32_t> indices(arr.size());
+                for (size_t i = 0; i < arr.size(); ++i) {
+                    indices[i] = static_cast<uint32_t>(arr[i]);
+                }
+                auto byteSize = indices.size() * sizeof(uint32_t);
 
-            if (static_cast<uint32_t>(indices.size()) != gb.indexCount) {
-                if (gb.indexBuffer) wgpuBufferRelease(gb.indexBuffer);
-                WGPUBufferDescriptor ibDesc{};
-                ibDesc.label = WGPUStringView{"index_buf", WGPU_STRLEN} ;
-                ibDesc.size = byteSize;
-                ibDesc.usage = WGPUBufferUsage_Index | WGPUBufferUsage_CopyDst;
-                gb.indexBuffer = wgpuDeviceCreateBuffer(state_.device, &ibDesc);
-                gb.indexCount = static_cast<uint32_t>(indices.size());
+                if (static_cast<uint32_t>(indices.size()) != gb.indexCount) {
+                    if (gb.indexBuffer) wgpuBufferRelease(gb.indexBuffer);
+                    WGPUBufferDescriptor ibDesc{};
+                    ibDesc.label = WGPUStringView{"index_buf", WGPU_STRLEN};
+                    ibDesc.size = byteSize;
+                    ibDesc.usage = WGPUBufferUsage_Index | WGPUBufferUsage_CopyDst;
+                    gb.indexBuffer = wgpuDeviceCreateBuffer(state_.device, &ibDesc);
+                    gb.indexCount = static_cast<uint32_t>(indices.size());
+                }
+                wgpuQueueWriteBuffer(state_.queue, gb.indexBuffer, 0, indices.data(), byteSize);
             }
-            wgpuQueueWriteBuffer(state_.queue, gb.indexBuffer, 0, indices.data(), byteSize);
             gb.indexVersion = indexAttr->version;
         }
 
@@ -209,31 +223,35 @@ GeometryBuffers& WgpuGeometries::getOrCreateGeometryBuffers(BufferGeometry* geom
         uint32_t count = static_cast<uint32_t>(posAttr->count());
         gb.vertexCount = count;
 
-        auto interleaved = buildInterleavedVertexData(geometry, count);
-        auto byteSize = interleaved.size() * sizeof(float);
-        WGPUBufferDescriptor vbDesc{};
-        vbDesc.label = WGPUStringView{"vertex_buf", WGPU_STRLEN} ;
-        vbDesc.size = byteSize;
-        vbDesc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
-        gb.vertexBuffer = wgpuDeviceCreateBuffer(state_.device, &vbDesc);
-        wgpuQueueWriteBuffer(state_.queue, gb.vertexBuffer, 0, interleaved.data(), byteSize);
+        if (count > 0) {
+            auto interleaved = buildInterleavedVertexData(geometry, count);
+            auto byteSize = interleaved.size() * sizeof(float);
+            WGPUBufferDescriptor vbDesc{};
+            vbDesc.label = WGPUStringView{"vertex_buf", WGPU_STRLEN};
+            vbDesc.size = byteSize;
+            vbDesc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
+            gb.vertexBuffer = wgpuDeviceCreateBuffer(state_.device, &vbDesc);
+            wgpuQueueWriteBuffer(state_.queue, gb.vertexBuffer, 0, interleaved.data(), byteSize);
+        }
     }
 
     if (geometry->getIndex()) {
         auto indexAttr = geometry->getIndex();
         auto& arr = indexAttr->array();
-        std::vector<uint32_t> indices(arr.size());
-        for (size_t i = 0; i < arr.size(); ++i) {
-            indices[i] = static_cast<uint32_t>(arr[i]);
+        if (!arr.empty()) {
+            std::vector<uint32_t> indices(arr.size());
+            for (size_t i = 0; i < arr.size(); ++i) {
+                indices[i] = static_cast<uint32_t>(arr[i]);
+            }
+            auto byteSize = indices.size() * sizeof(uint32_t);
+            WGPUBufferDescriptor ibDesc{};
+            ibDesc.label = WGPUStringView{"index_buf", WGPU_STRLEN};
+            ibDesc.size = byteSize;
+            ibDesc.usage = WGPUBufferUsage_Index | WGPUBufferUsage_CopyDst;
+            gb.indexBuffer = wgpuDeviceCreateBuffer(state_.device, &ibDesc);
+            wgpuQueueWriteBuffer(state_.queue, gb.indexBuffer, 0, indices.data(), byteSize);
+            gb.indexCount = static_cast<uint32_t>(indices.size());
         }
-        auto byteSize = indices.size() * sizeof(uint32_t);
-        WGPUBufferDescriptor ibDesc{};
-        ibDesc.label = WGPUStringView{"index_buf", WGPU_STRLEN} ;
-        ibDesc.size = byteSize;
-        ibDesc.usage = WGPUBufferUsage_Index | WGPUBufferUsage_CopyDst;
-        gb.indexBuffer = wgpuDeviceCreateBuffer(state_.device, &ibDesc);
-        wgpuQueueWriteBuffer(state_.queue, gb.indexBuffer, 0, indices.data(), byteSize);
-        gb.indexCount = static_cast<uint32_t>(indices.size());
     }
 
     storeAttributeVersions(geometry, gb);

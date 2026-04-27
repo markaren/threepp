@@ -2664,7 +2664,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         wgpuRenderPassEncoderSetBindGroup(pass, 0, bg, 0, nullptr);
 
         auto& gb = geometries->getOrCreateGeometryBuffers(geometry.get());
-        if (gb.vertexBuffer) {
+        if (gb.vertexBuffer && gb.vertexCount > 0) {
             wgpuRenderPassEncoderSetVertexBuffer(pass, 0, gb.vertexBuffer, 0,
                                                   gb.vertexCount * wgpu::VERTEX_STRIDE);
             if (gb.indexBuffer) {
@@ -3141,7 +3141,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         wgpuRenderPassEncoderSetBindGroup(pass, 0, bg, 0, nullptr);
 
         auto& gb = geometries->getOrCreateGeometryBuffers(geometry);
-        if (gb.vertexBuffer) {
+        if (gb.vertexBuffer && gb.vertexCount > 0) {
             wgpuRenderPassEncoderSetVertexBuffer(pass, 0, gb.vertexBuffer, 0,
                                                      gb.vertexCount * wgpu::VERTEX_STRIDE);
 

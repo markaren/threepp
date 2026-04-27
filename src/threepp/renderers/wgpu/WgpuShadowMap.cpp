@@ -574,7 +574,7 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
                 }
 
                 auto& gb = geometries_.getOrCreateGeometryBuffers(mesh->geometry().get());
-                if (gb.vertexBuffer) {
+                if (gb.vertexBuffer && gb.vertexCount > 0) {
                     wgpuRenderPassEncoderSetVertexBuffer(pass, 0, gb.vertexBuffer, 0,
                                                          gb.vertexCount * VERTEX_STRIDE);
                     if (gb.indexBuffer) {
@@ -764,7 +764,7 @@ void WgpuShadowMap::renderPass(WGPUCommandEncoder encoder, Object3D& scene,
         }
 
         auto& gb = geometries_.getOrCreateGeometryBuffers(mesh->geometry().get());
-        if (gb.vertexBuffer) {
+        if (gb.vertexBuffer && gb.vertexCount > 0) {
             wgpuRenderPassEncoderSetVertexBuffer(pass, 0, gb.vertexBuffer, 0,
                                                  gb.vertexCount * VERTEX_STRIDE);
             if (gb.indexBuffer) {
