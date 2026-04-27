@@ -2639,9 +2639,10 @@ R"(
             let eta = select(ior_eff, 1.0 / ior_eff, entering);
             var tNorm = h.normal;
             var usedMicrofacet = false;
+            let wo_t = normalize(-ray.dir);
             if (h.shininess > 1e-3) {
-                let wo_t = normalize(-ray.dir);
-                let hm = sampleVNDF(wo_t, h.normal, h.shininess, seed);
+                let wi_micro = sampleVNDF(wo_t, h.normal, h.shininess, seed);
+                let hm = normalize(wo_t + wi_micro);
                 if (dot(hm, h.normal) > 0.0) { tNorm = hm; usedMicrofacet = true; }
             }
             let cosI = abs(dot(normalize(ray.dir), tNorm));
@@ -3289,9 +3290,10 @@ const char* const csPrimaryShadeWGSL3 = R"(
         let eta = select(ior_eff, 1.0 / ior_eff, entering);
         var tNorm = h.normal;
         var usedMicrofacet = false;
+        let wo_t = normalize(-ray.dir);
         if (h.shininess > 1e-3) {
-            let wo_t = normalize(-ray.dir);
-            let hm = sampleVNDF(wo_t, h.normal, h.shininess, seed);
+            let wi_micro = sampleVNDF(wo_t, h.normal, h.shininess, seed);
+            let hm = normalize(wo_t + wi_micro);
             if (dot(hm, h.normal) > 0.0) { tNorm = hm; usedMicrofacet = true; }
         }
         let cosI = abs(dot(normalize(ray.dir), tNorm));
@@ -4645,9 +4647,10 @@ R"(
                 let eta = select(ior_eff, 1.0 / ior_eff, entering);
                 var tNorm = h.normal;
                 var usedMicrofacet = false;
+                let wo_t = normalize(-ray.dir);
                 if (h.shininess > 1e-3) {
-                    let wo_t = normalize(-ray.dir);
-                    let hm = sampleVNDF(wo_t, h.normal, h.shininess, &seed);
+                    let wi_micro = sampleVNDF(wo_t, h.normal, h.shininess, &seed);
+                    let hm = normalize(wo_t + wi_micro);
                     if (dot(hm, h.normal) > 0.0) { tNorm = hm; usedMicrofacet = true; }
                 }
                 let cosI = abs(dot(normalize(ray.dir), tNorm));
