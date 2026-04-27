@@ -916,6 +916,9 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         }
 
         if (features & ShaderFeatures::PBR) {
+            if (features & ShaderFeatures::Transmission) {
+                s << "    let albedoTint = baseColor;\n";
+            }
             s << "    let F0 = mix(vec3<f32>(0.04) * material.specularAndShininess.rgb * material.specularAndShininess.w, baseColor, metalness);\n";
             if (features & (ShaderFeatures::EnvMap | ShaderFeatures::EnvMapCube)) {
                 s << "    let R = reflect(-V, N);\n";
@@ -1008,7 +1011,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         let f0_t = pow((ior - 1.0) / (ior + 1.0), 2.0);
         let fresnel_t = f0_t + (1.0 - f0_t) * pow(1.0 - NdotV_t, 5.0);
         let transmissionFactor = transmission * (1.0 - fresnel_t);
-        baseColor = mix(baseColor, transmittedLight * material.diffuse.rgb, transmissionFactor);
+        baseColor = mix(baseColor, transmittedLight * albedoTint, transmissionFactor);
     }
 )";
         }
