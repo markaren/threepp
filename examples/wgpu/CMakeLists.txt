@@ -24,10 +24,4 @@ if (THREEPP_WITH_INFERENCE)
             rtdetr/RtDetr.cpp
             rtdetr/WeightLoader.cpp)
     target_include_directories(rtdetr_inference PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${WGPU_INCLUDE_DIR})
-
-    add_example(NAME "rtdetr_tests"
-            SOURCES rtdetr_tests.cpp
-            rtdetr/RtDetr.cpp
-            rtdetr/WeightLoader.cpp)
-    target_include_directories(rtdetr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${WGPU_INCLUDE_DIR})
 endif ()
