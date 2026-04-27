@@ -206,15 +206,17 @@ namespace crosstest {
         return nonBlack;
     }
 
-    // Render with GL, return pixel data
+    // Render with GL, return pixel data. GLRenderer is constructed per call
+    // because GLFW makes a single OpenGL context current at a time — a
+    // persistent helper renderer would silently lose its context whenever a
+    // test constructs its own GLRenderer on a different canvas. GL init is
+    // also fast enough (<1 s for the whole gl test) that sharing wouldn't
+    // pay off the way it does for Wgpu.
     inline std::vector<unsigned char> renderWithGL(Object3D& scene, Camera& camera, const Color& clearColor) {
         GLRenderer renderer(glCanvas());
         renderer.setClearColor(clearColor);
-
         renderer.render(scene, camera);
-
-        auto pixels = renderer.readRGBPixels();
-        return pixels;
+        return renderer.readRGBPixels();
     }
 
     // Persistent Wgpu canvas — same lifetime as glCanvas() to avoid GLFW re-init between tests
@@ -223,18 +225,43 @@ namespace crosstest {
         return c;
     }
 
+    // Persistent Wgpu renderer + render target. Constructing a WgpuRenderer
+    // requests an adapter and creates a device/queue/pipeline cache — ~250 ms
+    // each on this hardware — so sharing a single instance across the ~106
+    // renderWithWgpu calls is a major speedup. Tests that need to mutate
+    // renderer-wide state (setSize, setPixelRatio, toneMapping, sampleCount,
+    // outputColorSpace) construct their own renderer; they don't touch this
+    // singleton, so cross-test state never leaks here.
+    //
+    // The renderer + canvas + target are intentionally leaked. Static
+    // destruction ordering between WGPU dispose, GLFW termination, and the
+    // canvas frame-end callback (which captures `this` from the renderer)
+    // segfaults at process exit. The parity-clipping test already uses the
+    // same leak pattern (see wgpuClipCross). The OS reclaims memory at exit.
+    //
+    // The persistent renderer gets its own dedicated canvas because each
+    // WgpuRenderer takes ownership of its canvas's WGPU surface — it can't
+    // share a canvas with direct-construction tests.
+    inline WgpuRenderer& wgpuRenderer() {
+        static WgpuRenderer* r = [] {
+            auto* canvas = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true));
+            return new WgpuRenderer(*canvas);
+        }();
+        return *r;
+    }
+
     // Render with Wgpu, return pixel data
     inline std::vector<unsigned char> renderWithWgpu(Object3D& scene, Camera& camera, const Color& clearColor) {
-        WgpuRenderer renderer(wgpuCanvas());
-        renderer.setClearColor(clearColor);
+        auto& renderer = wgpuRenderer();
+        // Same lifetime as the renderer — leaked, never disposed.
+        static RenderTarget* target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{}).release();
 
-        auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});
-        renderer.setRenderTarget(target.get());
+        renderer.setClearColor(clearColor);
+        renderer.setRenderTarget(target);
         renderer.render(scene, camera);
 
         auto pixels = renderer.readRGBPixels();
         renderer.setRenderTarget(nullptr);
-        renderer.dispose();
         return pixels;
     }
 
