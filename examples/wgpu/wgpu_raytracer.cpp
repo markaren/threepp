@@ -22,7 +22,7 @@ int main() {
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.shadowMap().enabled = true;
 
-    WgpuPathTracer pathTracer(renderer, canvas.size());
+    auto& pathTracer = renderer.pathTracer();
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setFoveatedRendering(false);
     pathTracer.setReSTIREnabled(true);
@@ -193,7 +193,6 @@ int main() {
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
-        pathTracer.setSize({ns.width(), ns.height()});
         rtCam.aspect = canvas.aspect();
         rtCam.updateProjectionMatrix();
     });
@@ -225,11 +224,8 @@ int main() {
 
         controls.update();
 
-        if (pathTracerOn) {
-            pathTracer.render(scene, rtCam);
-        } else {
-            renderer.render(scene, rtCam);
-        }
+        renderer.usePathTracer = pathTracerOn;
+        renderer.render(scene, rtCam);
 
         ui.render();
     });

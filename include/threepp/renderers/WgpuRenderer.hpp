@@ -11,6 +11,8 @@
 
 namespace threepp {
 
+    class WgpuPathTracer;
+
     struct WgpuInfo {
         struct {
             size_t geometries = 0;
@@ -29,9 +31,20 @@ namespace threepp {
     class WgpuRenderer : public Renderer {
 
     public:
+        /// When true, render() routes scene drawing through the embedded
+        /// WgpuPathTracer instead of the raster pipeline.  The path tracer is
+        /// lazily constructed on first use; toggle freely between frames.
+        /// Configure path-tracer-specific settings via pathTracer().
+        bool usePathTracer = false;
+
         explicit WgpuRenderer(Canvas& canvas);
 
         void render(Object3D& scene, Camera& camera) override;
+
+        /// Embedded path tracer.  Lazily constructed at the current renderer
+        /// size on first call.  Use this to set exposure, denoiser params,
+        /// max bounces, etc.  Toggle activation with usePathTracer.
+        WgpuPathTracer& pathTracer();
 
         [[nodiscard]] WindowSize size() const override;
         void setSize(const std::pair<int, int>& size) override;

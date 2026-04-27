@@ -156,7 +156,7 @@ int main() {
     renderer.toneMapping = ToneMapping::None;
     renderer.toneMappingExposure = 1.0f;
 
-    WgpuPathTracer pathTracer(renderer, canvas.size());
+    auto& pathTracer = renderer.pathTracer();
     pathTracer.setMaxBounces(4);// env-only — 1 bounce suffices, extra headroom is free
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setReSTIREnabled(true);
@@ -333,7 +333,6 @@ int main() {
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
-        pathTracer.setSize({ns.width(), ns.height()});
         camera.aspect = canvas.aspect();
         camera.updateProjectionMatrix();
         rt = RenderTarget::create(static_cast<unsigned>(ns.width()),
@@ -361,7 +360,8 @@ int main() {
         }
 
         renderer.setRenderTarget(rt.get());
-        pathTracer.render(scene, camera);
+        renderer.usePathTracer = true;
+        renderer.render(scene, camera);
 
         pixels = renderer.readRGBPixels();
         const auto sz = canvas.size();
@@ -388,6 +388,7 @@ int main() {
         }
 
         renderer.setRenderTarget(nullptr);
+        renderer.usePathTracer = false;
         renderer.render(*previewScene, *previewCam);
 
         ui.render();

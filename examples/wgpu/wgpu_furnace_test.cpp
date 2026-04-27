@@ -115,7 +115,7 @@ int main() {
     renderer.toneMapping = ToneMapping::None;  // no tonemap squish
     renderer.toneMappingExposure = 1.0f;
 
-    WgpuPathTracer pathTracer(renderer, canvas.size());
+    auto& pathTracer = renderer.pathTracer();
     pathTracer.setMaxBounces(64);          // albedo=1 needs many bounces to converge
     pathTracer.setDenoiserEnabled(false);  // raw signal — no spatial smoothing
     pathTracer.setReSTIREnabled(true);
@@ -245,7 +245,6 @@ int main() {
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
-        pathTracer.setSize({ns.width(), ns.height()});
         camera.aspect = canvas.aspect();
         camera.updateProjectionMatrix();
         // Recreate rt + preview texture at the new size.
@@ -276,7 +275,8 @@ int main() {
 
         // 1) Render pathtracer into the offscreen target.
         renderer.setRenderTarget(rt.get());
-        pathTracer.render(scene, camera);
+        renderer.usePathTracer = true;
+        renderer.render(scene, camera);
 
         // 2) Read back the target. readRGBPixels returns {} if no target is set.
         pixels = renderer.readRGBPixels();
@@ -306,6 +306,7 @@ int main() {
 
         // 3) Blit target → canvas via a fullscreen preview quad.
         renderer.setRenderTarget(nullptr);
+        renderer.usePathTracer = false;
         renderer.render(*previewScene, *previewCam);
 
         ui.render();
