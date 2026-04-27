@@ -134,6 +134,17 @@ namespace threepp {
             gl.localClippingEnabled  = outer.localClippingEnabled;
             gl.gammaFactor           = outer.gammaFactor;
             gl.checkShaderErrors     = outer.checkShaderErrors;
+
+            // Mirror shadow config so both halves render shadows consistently.
+            // Source of truth is wgpuRenderer's shadowMap (what shadowMap()
+            // accessor returns); GLShadowMap inherits ShadowMapConfig, so the
+            // base-slice assignment carries enabled/autoUpdate/needsUpdate/type.
+            const auto& src = wgpuRenderer->shadowMap();
+            auto& dst = gl.shadowMap();
+            dst.enabled     = src.enabled;
+            dst.autoUpdate  = src.autoUpdate;
+            dst.needsUpdate = src.needsUpdate;
+            dst.type        = src.type;
         }
     };
 
