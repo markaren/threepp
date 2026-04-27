@@ -95,7 +95,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("Hybrid Deferred Showcase",
+    Canvas canvas("PT Densoier Showcase",
                   {{"vsync", false}});
 
     WgpuRenderer renderer(canvas);
@@ -170,7 +170,7 @@ int main() {
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({});
         ImGui::SetNextWindowSize({});
-        ImGui::Begin("Hybrid Showcase");
+        ImGui::Begin("Denoiser example");
         ImGui::Text("FPS: %.1f", fps);
         ImGui::Text("Frames: %d", pathTracer.frameCount());
         ImGui::Separator();
