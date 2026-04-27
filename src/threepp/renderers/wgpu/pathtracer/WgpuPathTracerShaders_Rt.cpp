@@ -538,11 +538,12 @@ fn transformUV(uv0: vec2<f32>, uv1: vec2<f32>, matIdx: i32, channelRow: i32) -> 
 )"
 R"(
 // Equirectangular lookup helper (shared by sampleEnv and sampleBackground).
+// three.js / GL convention: u = atan2(z, x) / (2π) + 0.5; v = asin(y) / π + 0.5
 fn equirectUV(d: vec3<f32>) -> vec2<f32> {
     let nd  = normalize(d);
     let phi = atan2(nd.z, nd.x);
     let theta = asin(clamp(nd.y, -1.0, 1.0));
-    return vec2<f32>(0.5 + phi / (2.0 * PI), 0.5 - theta / PI);
+    return vec2<f32>(0.5 + phi / (2.0 * PI), 0.5 + theta / PI);
 }
 
 // Bilinear equirect lookup: wrap X (periodic), clamp Y (poles).
@@ -1856,13 +1857,13 @@ fn dirToUV(d: vec3<f32>) -> vec2<f32> {
     let nd = normalize(d);
     let phi   = atan2(nd.z, nd.x);
     let theta = asin(clamp(nd.y, -1.0, 1.0));
-    return vec2<f32>(0.5 + phi / (2.0 * PI), 0.5 - theta / PI);
+    return vec2<f32>(0.5 + phi / (2.0 * PI), 0.5 + theta / PI);
 }
 
 // UV → direction (inverse of dirToUV)
 fn uvToDir(uv: vec2<f32>) -> vec3<f32> {
     let phi   = (uv.x - 0.5) * 2.0 * PI;
-    let theta = (0.5 - uv.y) * PI;
+    let theta = (uv.y - 0.5) * PI;
     let ct = cos(theta);
     return vec3<f32>(ct * cos(phi), sin(theta), ct * sin(phi));
 }

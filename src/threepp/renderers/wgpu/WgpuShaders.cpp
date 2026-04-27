@@ -963,12 +963,12 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
                     s << "    let envColor  = textureSampleLevel(t_envMap, s_envMap, R, envMip).rgb;\n";
                     s << "    let envDiff   = textureSampleLevel(t_envMap, s_envMap, N, maxMip).rgb;\n";
                 } else {
-                    s << "    let envPhi    = atan2(R.x, R.z) * 0.15915494 + 0.5;\n";  // 1/(2π)
+                    s << "    let envPhi    = atan2(R.z, R.x) * 0.15915494 + 0.5;\n";  // 1/(2π), three.js convention: atan2(z, x)
                     s << "    let envTheta  = asin(clamp(R.y, -1.0, 1.0)) * 0.31830989 + 0.5;\n";  // 1/π
-                    s << "    let envColor  = textureSampleLevel(t_envMap, s_envMap, vec2<f32>(envPhi, 1.0 - envTheta), envMip).rgb;\n";
-                    s << "    let nPhi      = atan2(N.x, N.z) * 0.15915494 + 0.5;\n";
+                    s << "    let envColor  = textureSampleLevel(t_envMap, s_envMap, vec2<f32>(envPhi, envTheta), envMip).rgb;\n";
+                    s << "    let nPhi      = atan2(N.z, N.x) * 0.15915494 + 0.5;\n";
                     s << "    let nTheta    = asin(clamp(N.y, -1.0, 1.0)) * 0.31830989 + 0.5;\n";
-                    s << "    let envDiff   = textureSampleLevel(t_envMap, s_envMap, vec2<f32>(nPhi, 1.0 - nTheta), maxMip).rgb;\n";
+                    s << "    let envDiff   = textureSampleLevel(t_envMap, s_envMap, vec2<f32>(nPhi, nTheta), maxMip).rgb;\n";
                 }
                 s << "    let envFresnel   = F0 + (1.0 - F0) * pow(1.0 - max(dot(N, V), 0.0), 5.0);\n";
                 s << "    let indirSpec    = envFresnel * envColor;\n";
@@ -1008,9 +1008,9 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
                 if (features & ShaderFeatures::EnvMapCube) {
                     s << "    let envColor = textureSample(t_envMap, s_envMap, R).rgb;\n";
                 } else {
-                    s << "    let envPhi   = atan2(R.x, R.z) * 0.15915494 + 0.5;\n";
+                    s << "    let envPhi   = atan2(R.z, R.x) * 0.15915494 + 0.5;\n";  // three.js convention: atan2(z, x)
                     s << "    let envTheta = asin(clamp(R.y, -1.0, 1.0)) * 0.31830989 + 0.5;\n";
-                    s << "    let envColor = textureSample(t_envMap, s_envMap, vec2<f32>(envPhi, 1.0 - envTheta)).rgb;\n";
+                    s << "    let envColor = textureSample(t_envMap, s_envMap, vec2<f32>(envPhi, envTheta)).rgb;\n";
                 }
                 s << "    baseColor = baseColor * diffuseLight + specularLight + envColor * material.emissive.w;\n";
             } else {

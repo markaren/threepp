@@ -42,7 +42,7 @@ namespace threepp::wgpu_pt {
         // dielectrics (plus visible banding on glossy reflections).
         for (int y = 0; y < h; ++y) {
             const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(h);
-            const float theta = (0.5f - v) * 3.14159265359f;
+            const float theta = (v - 0.5f) * 3.14159265359f;  // matches uvToDir (v=0 → nadir, v=1 → zenith)
             const float cosTheta = std::max(std::abs(std::cos(theta)), 1e-6f);
 
             float rowSum = 0.f;

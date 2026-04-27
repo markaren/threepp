@@ -2,7 +2,6 @@
 #include "threepp/animation/AnimationMixer.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
-#include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
 #include "threepp/renderers/wgpu/WgpuPathTracer.hpp"
@@ -98,7 +97,7 @@ int main(int argc, char** argv) {
     pathTracer.setTextureResolution(1024);
 
     RGBELoader imgLoader;
-    auto env = imgLoader.load(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr", false);
+    auto env = imgLoader.load(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr");
 
     // ---- Scene ----
     Scene scene;

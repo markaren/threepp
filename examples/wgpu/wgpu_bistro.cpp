@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
     pathTracer.setMaxBounces(3);
 
     RGBELoader imgLoader;
-    auto env = imgLoader.load(modelFolder / "san_giuseppe_bridge_4k.hdr", false);
+    auto env = imgLoader.load(modelFolder / "san_giuseppe_bridge_4k.hdr");
 
     // ---- Scene ----
     Scene scene;

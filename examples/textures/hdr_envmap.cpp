@@ -18,7 +18,7 @@ int main() {
 
     RGBELoader hdrLoader;
 
-    if (auto hdrTexture = hdrLoader.load(std::string(DATA_FOLDER) + "/textures/env/san_giuseppe_bridge/san_giuseppe_bridge_4k.hdr", canvas.graphicsApi() == GraphicsAPI::OpenGL)) {
+    if (auto hdrTexture = hdrLoader.load(std::string(DATA_FOLDER) + "/textures/env/san_giuseppe_bridge/san_giuseppe_bridge_4k.hdr")) {
         scene->background = hdrTexture;
         scene->environment = hdrTexture;
     }

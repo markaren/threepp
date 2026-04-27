@@ -64,9 +64,10 @@ fn importanceSampleGGX(Xi: vec2<f32>, N: vec3<f32>, roughness: f32) -> vec3<f32>
 }
 
 fn sampleEquirect(dir: vec3<f32>) -> vec3<f32> {
-    let uPhi = atan2(dir.x, dir.z) * 0.15915494 + 0.5;
+    // three.js / GL convention: u = atan2(z, x) / (2π) + 0.5; v = asin(y) / π + 0.5
+    let uPhi = atan2(dir.z, dir.x) * 0.15915494 + 0.5;
     let vTheta = asin(clamp(dir.y, -1.0, 1.0)) * 0.31830989 + 0.5;
-    return textureSampleLevel(srcTex, srcSampler, vec2<f32>(uPhi, 1.0 - vTheta), 0.0).rgb;
+    return textureSampleLevel(srcTex, srcSampler, vec2<f32>(uPhi, vTheta), 0.0).rgb;
 }
 
 struct V {
@@ -85,12 +86,12 @@ struct V {
 
 @fragment fn fs(in: V) -> @location(0) vec4<f32> {
     // Invert the equirect projection used by sampleEquirect():
-    //   uv.x = atan2(dir.x, dir.z) / (2π) + 0.5
-    //   uv.y = 1 - (asin(dir.y) / π + 0.5)   =>  dir.y = cos(uv.y * π)
+    //   uv.x = atan2(dir.z, dir.x) / (2π) + 0.5   =>  atan2(z, x) = (uv.x - 0.5) · 2π
+    //   uv.y = asin(dir.y) / π + 0.5              =>  dir.y = sin((uv.y - 0.5) · π)
     let phiAz = (in.uv.x - 0.5) * 6.28318530718;
-    let thetaPol = in.uv.y * 3.14159265359;
-    let sinT = sin(thetaPol);
-    let N = vec3<f32>(sinT * sin(phiAz), cos(thetaPol), sinT * cos(phiAz));
+    let thetaAsin = (in.uv.y - 0.5) * 3.14159265359;
+    let cosT = cos(thetaAsin);
+    let N = vec3<f32>(cosT * cos(phiAz), sin(thetaAsin), cosT * sin(phiAz));
 
     // For roughness = 0 (mip 0 won't call this, but guard), return source directly.
     if (u.roughness <= 0.0) {
