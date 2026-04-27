@@ -6,6 +6,12 @@ build
 cmake-build-*
 compile_commands.json
 
+*.bin
+*.weights
+*.pt
+
+imgui.ini
+
 # wgpu-native is fetched at configure time via cmake/FetchWgpuNative.cmake
 src/external/wgpu-native/
 
