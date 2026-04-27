@@ -8,7 +8,7 @@ using namespace threepp;
 
 int main() {
     Canvas canvas("USD loader example");
-    GLRenderer renderer{canvas};
+    auto renderer= createRenderer(canvas);
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
@@ -53,14 +53,13 @@ int main() {
     scene->add(floor);
 
     canvas.onWindowResize([&](WindowSize newSize) {
-        renderer.setSize(newSize);
+        renderer->setSize(newSize);
         camera->aspect = newSize.aspect();
         camera->updateProjectionMatrix();
     });
 
     canvas.animate([&] {
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 
-    return 0;
 }
