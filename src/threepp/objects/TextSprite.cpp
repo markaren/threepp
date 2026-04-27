@@ -21,7 +21,6 @@ struct TextSprite::Impl {
 
         const auto material = that->material()->as<MaterialWithMap>();
         material->map = Texture::create({});
-        material->map->offset.set(0.5f, 0.5f);
     }
 
     void setText(const std::string& text) {

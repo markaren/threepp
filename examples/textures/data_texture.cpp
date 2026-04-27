@@ -58,7 +58,6 @@ int main() {
     auto texture = FramebufferTexture::create(textureSize, textureSize);
 
     auto spriteMaterial = SpriteMaterial::create({{"map", texture}});
-    spriteMaterial->map->offset.set(0.5, 0.5);
     Sprite sprite(spriteMaterial);
     sprite.scale.set(textureSize, textureSize, 1);
     orthoScene.add(sprite);

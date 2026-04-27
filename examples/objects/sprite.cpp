@@ -12,7 +12,6 @@ namespace {
         TextureLoader tl;
         const auto hudMaterial = SpriteMaterial::create();
         hudMaterial->map = tl.load(std::string(DATA_FOLDER) + "/textures/sprite0.png", ColorSpace::sRGB);
-        hudMaterial->map->offset.set(0.5, 0.5);
 
         const auto hudSprite1 = Sprite::create(hudMaterial);
         hudSprite1->center.set(0, 0);
@@ -76,7 +75,6 @@ int main() {
     TextureLoader loader;
     auto material = SpriteMaterial::create();
     material->map = loader.load(std::string(DATA_FOLDER) + "/textures/three.png", ColorSpace::sRGB);
-    material->map->offset.set(0.5, 0.5);
 
     auto pickMaterial = material->clone<SpriteMaterial>();
 
