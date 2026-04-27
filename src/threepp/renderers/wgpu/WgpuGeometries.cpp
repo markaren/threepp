@@ -18,9 +18,10 @@ std::vector<float> WgpuGeometries::buildInterleavedVertexData(BufferGeometry* ge
 
     const float* normalData = nullptr;
     const float* uvData = nullptr;
+    const float* uv2Data = nullptr;
     const float* colorData = nullptr;
     const float* lineDistData = nullptr;
-    int normalItemSize = 3, uvItemSize = 2, colorItemSize = 3;
+    int normalItemSize = 3, uvItemSize = 2, uv2ItemSize = 2, colorItemSize = 3;
 
     if (geometry->hasAttribute("normal")) {
         auto nAttr = geometry->getAttribute<float>("normal");
@@ -31,6 +32,11 @@ std::vector<float> WgpuGeometries::buildInterleavedVertexData(BufferGeometry* ge
         auto uvAttr = geometry->getAttribute<float>("uv");
         uvData = uvAttr->array().data();
         uvItemSize = static_cast<int>(uvAttr->itemSize());
+    }
+    if (geometry->hasAttribute("uv2")) {
+        auto uv2Attr = geometry->getAttribute<float>("uv2");
+        uv2Data = uv2Attr->array().data();
+        uv2ItemSize = static_cast<int>(uv2Attr->itemSize());
     }
     if (geometry->hasAttribute("color")) {
         auto cAttr = geometry->getAttribute<float>("color");
@@ -44,10 +50,10 @@ std::vector<float> WgpuGeometries::buildInterleavedVertexData(BufferGeometry* ge
         lineDistData = ldAttr->array().data();
     }
 
-    // 11 floats per vertex: pos(3) + normal(3) + uv(2) + color(3)
-    std::vector<float> interleaved(count * 11);
+    // 13 floats per vertex: pos(3) + normal(3) + uv(2) + color(3) + uv2(2)
+    std::vector<float> interleaved(count * 13);
     for (uint32_t i = 0; i < count; i++) {
-        size_t base = i * 11;
+        size_t base = i * 13;
         interleaved[base + 0] = posArr[i * posItemSize + 0];
         interleaved[base + 1] = posArr[i * posItemSize + 1];
         interleaved[base + 2] = (posItemSize > 2) ? posArr[i * posItemSize + 2] : 0.f;
@@ -83,6 +89,14 @@ std::vector<float> WgpuGeometries::buildInterleavedVertexData(BufferGeometry* ge
             interleaved[base + 9] = 1.f;
             interleaved[base + 10] = 1.f;
         }
+
+        if (uv2Data) {
+            interleaved[base + 11] = uv2Data[i * uv2ItemSize + 0];
+            interleaved[base + 12] = (uv2ItemSize > 1) ? uv2Data[i * uv2ItemSize + 1] : 0.f;
+        } else {
+            interleaved[base + 11] = 0.f;
+            interleaved[base + 12] = 0.f;
+        }
     }
     return interleaved;
 }
@@ -94,6 +108,8 @@ void WgpuGeometries::storeAttributeVersions(BufferGeometry* geometry, GeometryBu
         gb.normalVersion = geometry->getAttribute<float>("normal")->version;
     if (geometry->hasAttribute("uv"))
         gb.uvVersion = geometry->getAttribute<float>("uv")->version;
+    if (geometry->hasAttribute("uv2"))
+        gb.uv2Version = geometry->getAttribute<float>("uv2")->version;
     if (geometry->hasAttribute("color"))
         gb.colorVersion = geometry->getAttribute<float>("color")->version;
     if (geometry->hasAttribute("lineDistance"))
@@ -111,6 +127,9 @@ bool WgpuGeometries::geometryNeedsUpdate(BufferGeometry* geometry, const Geometr
         return true;
     if (geometry->hasAttribute("uv") &&
         geometry->getAttribute<float>("uv")->version > gb.uvVersion)
+        return true;
+    if (geometry->hasAttribute("uv2") &&
+        geometry->getAttribute<float>("uv2")->version > gb.uv2Version)
         return true;
     if (geometry->hasAttribute("color") &&
         geometry->getAttribute<float>("color")->version > gb.colorVersion)

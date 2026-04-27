@@ -136,7 +136,9 @@ namespace threepp::wgpu {
     // Material: diffuse(16) + specular(16) + roughnessMetalnessOpacity(16) + emissive(16)
     //         + flags(16) + fogColor(16) + fogParams(16) + clipPlane(16)
     //         + transmissionParams(16) + attenuationParams(16) + sheenColorRoughness(16) = 176
-    constexpr size_t MATERIAL_UNIFORM_SIZE = 176;
+    //         + 11 per-map UV transforms × 2 vec4 (32 each) = 352
+    //         Total = 528
+    constexpr size_t MATERIAL_UNIFORM_SIZE = 528;
 
     struct LightLimits;
     struct ShadowLimits;

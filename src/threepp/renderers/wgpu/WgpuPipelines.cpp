@@ -327,17 +327,18 @@ namespace threepp::wgpu {
         plDesc.bindGroupLayouts = &entry.bindGroupLayout;
         entry.layout = wgpuDeviceCreatePipelineLayout(state_.device, &plDesc);
 
-        // Vertex buffer layout: pos(vec3) + normal(vec3) + uv(vec2) + color(vec3) = 44 bytes
-        WGPUVertexAttribute attrs[4]{};
+        // Vertex buffer layout: pos(vec3) + normal(vec3) + uv(vec2) + color(vec3) + uv2(vec2) = 52 bytes
+        WGPUVertexAttribute attrs[5]{};
         attrs[0].format = WGPUVertexFormat_Float32x3; attrs[0].offset = 0;  attrs[0].shaderLocation = 0;
         attrs[1].format = WGPUVertexFormat_Float32x3; attrs[1].offset = 12; attrs[1].shaderLocation = 1;
         attrs[2].format = WGPUVertexFormat_Float32x2; attrs[2].offset = 24; attrs[2].shaderLocation = 2;
         attrs[3].format = WGPUVertexFormat_Float32x3; attrs[3].offset = 32; attrs[3].shaderLocation = 3;
+        attrs[4].format = WGPUVertexFormat_Float32x2; attrs[4].offset = 44; attrs[4].shaderLocation = 4;
 
         WGPUVertexBufferLayout vbLayout{};
         vbLayout.arrayStride = VERTEX_STRIDE;
         vbLayout.stepMode = WGPUVertexStepMode_Vertex;
-        vbLayout.attributeCount = 4;
+        vbLayout.attributeCount = 5;
         vbLayout.attributes = attrs;
 
         // Blend state from feature bits

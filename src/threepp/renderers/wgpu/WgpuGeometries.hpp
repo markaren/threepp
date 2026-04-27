@@ -17,8 +17,8 @@ namespace threepp {
 
 namespace threepp::wgpu {
 
-    // pos(12) + normal(12) + uv(8) + color(12) = 44 bytes per vertex
-    constexpr uint32_t VERTEX_STRIDE = 44;
+    // pos(12) + normal(12) + uv(8) + color(12) + uv2(8) = 52 bytes per vertex
+    constexpr uint32_t VERTEX_STRIDE = 52;
 
     struct GeometryBuffers {
         WGPUBuffer vertexBuffer = nullptr;
@@ -28,6 +28,7 @@ namespace threepp::wgpu {
         unsigned int positionVersion = 0;
         unsigned int normalVersion = 0;
         unsigned int uvVersion = 0;
+        unsigned int uv2Version = 0;
         unsigned int colorVersion = 0;
         unsigned int lineDistanceVersion = 0;
         unsigned int indexVersion = 0;

@@ -113,6 +113,20 @@ struct MaterialUniforms {
     transmissionParams: vec4<f32>,  // x=transmission, y=ior, z=thickness, w=samplerW
     attenuationParams: vec4<f32>,   // xyz=attenuationColor, w=attenuationDistance
     sheenColorAndRoughness: vec4<f32>, // xyz=sheenColor, w=sheenRoughness
+    // Per-map KHR_texture_transform. Each pair (T0, T1) holds row0/row1 of the
+    // 3x3 affine, so transformed UV = (dot(T0.xyz, vec3(uv,1)), dot(T1.xyz, vec3(uv,1))).
+    // Identity = T0=(1,0,0,0), T1=(0,1,0,0).
+    mapT0: vec4<f32>, mapT1: vec4<f32>,
+    normalMapT0: vec4<f32>, normalMapT1: vec4<f32>,
+    roughnessMapT0: vec4<f32>, roughnessMapT1: vec4<f32>,
+    metalnessMapT0: vec4<f32>, metalnessMapT1: vec4<f32>,
+    emissiveMapT0: vec4<f32>, emissiveMapT1: vec4<f32>,
+    aoMapT0: vec4<f32>, aoMapT1: vec4<f32>,
+    alphaMapT0: vec4<f32>, alphaMapT1: vec4<f32>,
+    lightMapT0: vec4<f32>, lightMapT1: vec4<f32>,
+    specularMapT0: vec4<f32>, specularMapT1: vec4<f32>,
+    bumpMapT0: vec4<f32>, bumpMapT1: vec4<f32>,
+    displacementMapT0: vec4<f32>, displacementMapT1: vec4<f32>,
 };
 @group(0) @binding(1) var<uniform> material: MaterialUniforms;
 )";
@@ -417,6 +431,7 @@ fn ltc_evaluate(N: vec3<f32>, V: vec3<f32>, P: vec3<f32>, mInv: mat3x3<f32>, rec
     s << "    @location(1) normal: vec3<f32>,\n";
     s << "    @location(2) uv: vec2<f32>,\n";
     s << "    @location(3) color: vec3<f32>,\n";
+    s << "    @location(4) uv2: vec2<f32>,\n";
     s << "};\n";
 
     s << "struct VertexOutput {\n";
@@ -424,6 +439,7 @@ fn ltc_evaluate(N: vec3<f32>, V: vec3<f32>, P: vec3<f32>, mInv: mat3x3<f32>, rec
     s << "    @location(0) worldPos: vec3<f32>,\n";
     s << "    @location(1) worldNormal: vec3<f32>,\n";
     s << "    @location(2) uv: vec2<f32>,\n";
+    s << "    @location(3) uv2: vec2<f32>,\n";
     if (features & ShaderFeatures::VertexColors) {
         s << "    @location(4) vertexColor: vec3<f32>,\n";
     }
@@ -460,7 +476,9 @@ fn ltc_evaluate(N: vec3<f32>, V: vec3<f32>, P: vec3<f32>, mInv: mat3x3<f32>, rec
     // Displacement map
     if (features & ShaderFeatures::DisplacementMap) {
         std::string posVar = (features & ShaderFeatures::MorphTargets) ? "morphedPos" : "in.position";
-        s << "    let dispAmount = textureSampleLevel(t_displacementMap, s_displacementMap, in.uv, 0.0).r;\n";
+        s << "    let _dispUv3 = vec3<f32>(select(in.uv, in.uv2, material.displacementMapT1.w > 0.5), 1.0);\n";
+        s << "    let _dispUv = vec2<f32>(dot(material.displacementMapT0.xyz, _dispUv3), dot(material.displacementMapT1.xyz, _dispUv3));\n";
+        s << "    let dispAmount = textureSampleLevel(t_displacementMap, s_displacementMap, _dispUv, 0.0).r;\n";
         s << "    let displacedPos = " << posVar << " + in.normal * dispAmount * material.roughnessMetalnessOpacity.w;\n";
     }
 
@@ -505,6 +523,7 @@ fn ltc_evaluate(N: vec3<f32>, V: vec3<f32>, P: vec3<f32>, mInv: mat3x3<f32>, rec
     }
     s << "    out.worldPos = worldPos4.xyz;\n";
     s << "    out.uv = in.uv;\n";
+    s << "    out.uv2 = in.uv2;\n";
     s << "    out.clipPos = transform.proj * transform.view * worldPos4;\n";
 
     if (features & ShaderFeatures::VertexColors) {
@@ -549,18 +568,26 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
     }
 
     if (features & ShaderFeatures::Texture) {
-        s << "    let texColor = textureSample(t_diffuse, s_diffuse, in.uv);\n";
+        s << "    let _mapSrc = vec3<f32>(select(in.uv, in.uv2, material.mapT1.w > 0.5), 1.0);\n";
+        s << "    let _mapUv = vec2<f32>(dot(material.mapT0.xyz, _mapSrc), dot(material.mapT1.xyz, _mapSrc));\n";
+        s << "    let texColor = textureSample(t_diffuse, s_diffuse, _mapUv);\n";
         s << "    baseColor = baseColor * texColor.rgb;\n";
         s << "    opacity = opacity * texColor.a;\n";
     }
     if (features & ShaderFeatures::RoughnessMap) {
-        s << "    roughness = roughness * textureSample(t_roughnessMap, s_roughnessMap, in.uv).g;\n";
+        s << "    let _roughSrc = vec3<f32>(select(in.uv, in.uv2, material.roughnessMapT1.w > 0.5), 1.0);\n";
+        s << "    let _roughUv = vec2<f32>(dot(material.roughnessMapT0.xyz, _roughSrc), dot(material.roughnessMapT1.xyz, _roughSrc));\n";
+        s << "    roughness = roughness * textureSample(t_roughnessMap, s_roughnessMap, _roughUv).g;\n";
     }
     if (features & ShaderFeatures::MetalnessMap) {
-        s << "    metalness = metalness * textureSample(t_metalnessMap, s_metalnessMap, in.uv).b;\n";
+        s << "    let _metalSrc = vec3<f32>(select(in.uv, in.uv2, material.metalnessMapT1.w > 0.5), 1.0);\n";
+        s << "    let _metalUv = vec2<f32>(dot(material.metalnessMapT0.xyz, _metalSrc), dot(material.metalnessMapT1.xyz, _metalSrc));\n";
+        s << "    metalness = metalness * textureSample(t_metalnessMap, s_metalnessMap, _metalUv).b;\n";
     }
     if (features & ShaderFeatures::AlphaMap) {
-        s << "    opacity = opacity * textureSample(t_alphaMap, s_alphaMap, in.uv).r;\n";
+        s << "    let _alphaSrc = vec3<f32>(select(in.uv, in.uv2, material.alphaMapT1.w > 0.5), 1.0);\n";
+        s << "    let _alphaUv = vec2<f32>(dot(material.alphaMapT0.xyz, _alphaSrc), dot(material.alphaMapT1.xyz, _alphaSrc));\n";
+        s << "    opacity = opacity * textureSample(t_alphaMap, s_alphaMap, _alphaUv).r;\n";
     }
 
     // ShadowMaterial: output shadow attenuation only, skip full lighting
@@ -605,15 +632,17 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         if (features & ShaderFeatures::NormalMap) {
             s << R"(
     // Screen-space normal map perturbation (no tangent attributes needed)
+    let _normalSrc = vec3<f32>(select(in.uv, in.uv2, material.normalMapT1.w > 0.5), 1.0);
+    let _normalUv = vec2<f32>(dot(material.normalMapT0.xyz, _normalSrc), dot(material.normalMapT1.xyz, _normalSrc));
     let dPdx = dpdx(in.worldPos);
     let dPdy = dpdy(in.worldPos);
-    let dUVdx = dpdx(in.uv);
-    let dUVdy = dpdy(in.uv);
+    let dUVdx = dpdx(_normalUv);
+    let dUVdy = dpdy(_normalUv);
     let T = normalize(dPdx * dUVdy.y - dPdy * dUVdx.y);
     let B = normalize(dPdy * dUVdx.x - dPdx * dUVdy.x);
     let geomN = normalize(in.worldNormal);
     let TBN = mat3x3<f32>(T, B, geomN);
-    let nmSample = textureSample(t_normalMap, s_normalMap, in.uv).rgb * 2.0 - vec3<f32>(1.0);
+    let nmSample = textureSample(t_normalMap, s_normalMap, _normalUv).rgb * 2.0 - vec3<f32>(1.0);
     let normalScale = material.flags.zw;
     let scaledNm = vec3<f32>(nmSample.xy * normalScale, nmSample.z);
     var N = normalize(TBN * scaledNm);
@@ -624,13 +653,15 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         }
         } else if (features & ShaderFeatures::BumpMap) {
             s << R"(
+    let _bumpSrc = vec3<f32>(select(in.uv, in.uv2, material.bumpMapT1.w > 0.5), 1.0);
+    let _bumpUv = vec2<f32>(dot(material.bumpMapT0.xyz, _bumpSrc), dot(material.bumpMapT1.xyz, _bumpSrc));
     let bmp_dPdx = dpdx(in.worldPos);
     let bmp_dPdy = dpdy(in.worldPos);
-    let bmp_dUVdx = dpdx(in.uv);
-    let bmp_dUVdy = dpdy(in.uv);
-    let Hll = textureSample(t_bumpMap, s_bumpMap, in.uv).r;
-    let dBx = textureSample(t_bumpMap, s_bumpMap, in.uv + bmp_dUVdx).r - Hll;
-    let dBy = textureSample(t_bumpMap, s_bumpMap, in.uv + bmp_dUVdy).r - Hll;
+    let bmp_dUVdx = dpdx(_bumpUv);
+    let bmp_dUVdy = dpdy(_bumpUv);
+    let Hll = textureSample(t_bumpMap, s_bumpMap, _bumpUv).r;
+    let dBx = textureSample(t_bumpMap, s_bumpMap, _bumpUv + bmp_dUVdx).r - Hll;
+    let dBy = textureSample(t_bumpMap, s_bumpMap, _bumpUv + bmp_dUVdy).r - Hll;
     let bumpScale = material.flags.y;
     let geomN = normalize(in.worldNormal);
     let crossX = cross(bmp_dPdy, geomN);
@@ -905,14 +936,18 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         s << "    diffuseLight = diffuseLight * select(0.31830989, 1.0, lights.useLegacyLights == 1u);\n";
         // Emissive
         if (features & ShaderFeatures::EmissiveMap) {
-            s << "    var emissiveColor = material.emissive.rgb * textureSample(t_emissiveMap, s_emissiveMap, in.uv).rgb;\n";
+            s << "    let _emissiveSrc = vec3<f32>(select(in.uv, in.uv2, material.emissiveMapT1.w > 0.5), 1.0);\n";
+            s << "    let _emissiveUv = vec2<f32>(dot(material.emissiveMapT0.xyz, _emissiveSrc), dot(material.emissiveMapT1.xyz, _emissiveSrc));\n";
+            s << "    var emissiveColor = material.emissive.rgb * textureSample(t_emissiveMap, s_emissiveMap, _emissiveUv).rgb;\n";
         } else {
             s << "    var emissiveColor = material.emissive.rgb;\n";
         }
 
         // SpecularMap
         if (features & ShaderFeatures::SpecularMap) {
-            s << "    specularLight = specularLight * textureSample(t_specularMap, s_specularMap, in.uv).rgb;\n";
+            s << "    let _specularSrc = vec3<f32>(select(in.uv, in.uv2, material.specularMapT1.w > 0.5), 1.0);\n";
+            s << "    let _specularUv = vec2<f32>(dot(material.specularMapT0.xyz, _specularSrc), dot(material.specularMapT1.xyz, _specularSrc));\n";
+            s << "    specularLight = specularLight * textureSample(t_specularMap, s_specularMap, _specularUv).rgb;\n";
         }
 
         if (features & ShaderFeatures::PBR) {
@@ -985,7 +1020,9 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
 
         // LightMap
         if (features & ShaderFeatures::LightMap) {
-            s << "    baseColor = baseColor + textureSample(t_lightMap, s_lightMap, in.uv).rgb;\n";
+            s << "    let _lightSrc = vec3<f32>(select(in.uv, in.uv2, material.lightMapT1.w > 0.5), 1.0);\n";
+            s << "    let _lightUv = vec2<f32>(dot(material.lightMapT0.xyz, _lightSrc), dot(material.lightMapT1.xyz, _lightSrc));\n";
+            s << "    baseColor = baseColor + textureSample(t_lightMap, s_lightMap, _lightUv).rgb;\n";
         }
 
         // Transmission: sample the opaque framebuffer copy through refraction
@@ -1033,7 +1070,9 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         // AO map — applied before emissive so emissive is not darkened by occlusion
         if (features & ShaderFeatures::AOMap) {
             s << "    {\n";
-            s << "        let ao = textureSample(t_aoMap, s_aoMap, in.uv).r;\n";
+            s << "        let _aoSrc = vec3<f32>(select(in.uv, in.uv2, material.aoMapT1.w > 0.5), 1.0);\n";
+            s << "        let _aoUv = vec2<f32>(dot(material.aoMapT0.xyz, _aoSrc), dot(material.aoMapT1.xyz, _aoSrc));\n";
+            s << "        let ao = textureSample(t_aoMap, s_aoMap, _aoUv).r;\n";
             s << "        let aoIntensity = material.flags.x;\n";
             s << "        baseColor = baseColor * mix(1.0, ao, aoIntensity);\n";
             s << "    }\n";
@@ -1044,7 +1083,9 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
     } else {
         // Unlit path
         if (features & ShaderFeatures::EmissiveMap) {
-            s << "    baseColor = baseColor + material.emissive.rgb * textureSample(t_emissiveMap, s_emissiveMap, in.uv).rgb;\n";
+            s << "    let _emissiveSrcU = vec3<f32>(select(in.uv, in.uv2, material.emissiveMapT1.w > 0.5), 1.0);\n";
+            s << "    let _emissiveUvU = vec2<f32>(dot(material.emissiveMapT0.xyz, _emissiveSrcU), dot(material.emissiveMapT1.xyz, _emissiveSrcU));\n";
+            s << "    baseColor = baseColor + material.emissive.rgb * textureSample(t_emissiveMap, s_emissiveMap, _emissiveUvU).rgb;\n";
         }
     }
 

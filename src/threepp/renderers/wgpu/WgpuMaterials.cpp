@@ -17,6 +17,7 @@
 #include "threepp/materials/ShadowMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/textures/Texture.hpp"
 
 #include <cstring>
 
@@ -261,6 +262,36 @@ void packMaterialUniforms(float* data, const MaterialParams& params,
     data[41] = params.sheenColor.g;
     data[42] = params.sheenColor.b;
     data[43] = params.sheenRoughness;
+
+    // Per-map UV transforms (vec4×2 each, offsets 44-131): KHR_texture_transform.
+    // Order matches the WGSL MaterialUniforms struct: map, normalMap, roughnessMap,
+    // metalnessMap, emissiveMap, aoMap, alphaMap, lightMap, specularMap, bumpMap,
+    // displacementMap. Each transform is row0/row1 of the 3x3 affine.
+    auto writeUvT = [&](size_t floatOff, Texture* tex) {
+        if (tex) {
+            if (tex->matrixAutoUpdate) tex->updateMatrix();
+            const auto& te = tex->matrix.elements;
+            // T1.w (floatOff+7) carries the texCoord channel index (0 = uv, 1 = uv2)
+            // for KHR_texture_transform texCoord override. Shader compares > 0.5.
+            float ch = (tex->texCoord >= 1) ? 1.0f : 0.0f;
+            data[floatOff + 0] = te[0]; data[floatOff + 1] = te[3]; data[floatOff + 2] = te[6]; data[floatOff + 3] = 0.0f;
+            data[floatOff + 4] = te[1]; data[floatOff + 5] = te[4]; data[floatOff + 6] = te[7]; data[floatOff + 7] = ch;
+        } else {
+            data[floatOff + 0] = 1.0f; data[floatOff + 1] = 0.0f; data[floatOff + 2] = 0.0f; data[floatOff + 3] = 0.0f;
+            data[floatOff + 4] = 0.0f; data[floatOff + 5] = 1.0f; data[floatOff + 6] = 0.0f; data[floatOff + 7] = 0.0f;
+        }
+    };
+    writeUvT(44,  params.diffuseMap);
+    writeUvT(52,  params.normalMap);
+    writeUvT(60,  params.roughnessMap);
+    writeUvT(68,  params.metalnessMap);
+    writeUvT(76,  params.emissiveMap);
+    writeUvT(84,  params.aoMap);
+    writeUvT(92,  params.alphaMap);
+    writeUvT(100, params.lightMap);
+    writeUvT(108, params.specularMap);
+    writeUvT(116, params.bumpMap);
+    writeUvT(124, params.displacementMap);
 }
 
 }// namespace threepp::wgpu
