@@ -474,6 +474,12 @@ namespace threepp {
                 tex->colorSpace = cs;
                 tex->needsUpdate();
 
+                // glTF 2.0 §3.8.4: when sampler is undefined, repeat wrapping
+                // and auto filtering must be used. Texture's C++ default is
+                // ClampToEdge, so always default to Repeat for glTF assets.
+                tex->wrapS = TextureWrapping::Repeat;
+                tex->wrapT = TextureWrapping::Repeat;
+
                 // Apply sampler settings if present
                 if (texDef.contains("sampler") && gltf.contains("samplers")) {
                     const auto& samp = gltf["samplers"][texDef["sampler"].get<int>()];
