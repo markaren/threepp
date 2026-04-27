@@ -1379,12 +1379,12 @@ TEST_CASE("Wgpu: roughnessMap affects specular highlights", "[wgpu]") {
     CHECK(countNonBlack(mapPixels) > PIXEL_COUNT / 8);
 }
 
-// WgpuRenderer: metalnessMap not yet sampled in shader
-
 TEST_CASE("Wgpu: metalnessMap affects metallic appearance", "[wgpu]") {
     REQUIRE_WGPU();
 
-    auto makeScene = [](bool useMetalnessMap) {
+    // Same base metalness in both scenes — only the map's blue channel differs.
+    // If the shader doesn't sample metalnessMap, the two renders are identical.
+    auto makeScene = [](bool whiteMap) {
         auto scene = Scene::create();
         auto dirLight = DirectionalLight::create(Color(0xffffff), 1.0f);
         dirLight->position.set(0, 0, 1);
@@ -1396,15 +1396,11 @@ TEST_CASE("Wgpu: metalnessMap affects metallic appearance", "[wgpu]") {
         auto material = MeshStandardMaterial::create();
         material->color = Color(0xcccccc);
         material->roughness = 0.3f;
-        material->metalness = 0.5f;// base semi-metallic (scaled by map)
+        material->metalness = 1.0f;// scaled by metalnessMap.b
 
-        if (useMetalnessMap) {
-            // metalnessMap blue channel scales metalness: 0.5 * 1.0 = 0.5
-            material->metalnessMap = makeUniformTexture(255, 255, 255);
-        } else {
-            // Without map, use non-metallic to see a difference
-            material->metalness = 0.0f;
-        }
+        material->metalnessMap = whiteMap
+                                         ? makeUniformTexture(255, 255, 255)// effective metalness = 1.0
+                                         : makeUniformTexture(0, 0, 0);     // effective metalness = 0.0
 
         auto mesh = Mesh::create(geometry, material);
         scene->add(mesh);
