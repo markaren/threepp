@@ -39,8 +39,8 @@ namespace {
 int main() {
 
     Canvas canvas("Depth texture");
-    auto renderer = createRenderer(canvas);
-    renderer->checkShaderErrors = true;
+    auto renderer = GLRenderer(canvas);
+    renderer.checkShaderErrors = true;
 
     PerspectiveCamera camera(70, canvas.aspect(), 0.01f, 50.f);
     camera.position.set(0, 0, 4);
@@ -116,21 +116,21 @@ int main() {
 
 
     canvas.onWindowResize([&](WindowSize size) {
-        renderer->setSize(size);
+        renderer.setSize(size);
         camera.aspect = canvas.aspect();
         camera.updateProjectionMatrix();
     });
 
     canvas.animate([&] {
-        renderer->setRenderTarget(&target);
-        renderer->render(scene, camera);
+        renderer.setRenderTarget(&target);
+        renderer.render(scene, camera);
 
         postMaterial->uniforms.at("tDiffuse").setValue(target.texture.get());
         postMaterial->uniforms.at("tDepth").setValue(target.depthTexture.get());
 
-        renderer->setRenderTarget(nullptr);
+        renderer.setRenderTarget(nullptr);
 
-        renderer->render(postScene, postCamera);
+        renderer.render(postScene, postCamera);
 
         controls.update();
     });

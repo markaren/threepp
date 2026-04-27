@@ -60,9 +60,9 @@ namespace {
 int main() {
 
     Canvas canvas("DataTexture3D", {{"aa", 4}});
-    auto renderer = createRenderer(canvas);
-    renderer->checkShaderErrors = true;
-    renderer->setClearColor(Color::blue);
+    auto renderer = GLRenderer(canvas);
+    renderer.checkShaderErrors = true;
+    renderer.setClearColor(Color::blue);
 
     Scene scene;
     scene.background = Color(0x1a1a2e);
@@ -88,7 +88,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer->setSize(size);
+        renderer.setSize(size);
     });
 
     // UI parameters mirroring the shader uniforms
@@ -136,7 +136,7 @@ int main() {
             mesh->rotation.x += 0.1f * dt;
         }
 
-        renderer->render(scene, camera);
+        renderer.render(scene, camera);
         ui.render();
     });
 }
