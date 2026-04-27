@@ -938,20 +938,34 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
                 s << "    let envFresnel   = F0 + (1.0 - F0) * pow(1.0 - max(dot(N, V), 0.0), 5.0);\n";
                 s << "    let indirSpec    = envFresnel * envColor;\n";
                 s << "    let indirDiff    = envDiff * baseColor * (1.0 - metalness);\n";
-                s << "    let ambientSpecular = (indirSpec + indirDiff) * material.emissive.w;\n";
+                s << "    let ambientSpecOnly = indirSpec * material.emissive.w;\n";
+                s << "    let ambientDiff     = indirDiff * material.emissive.w;\n";
                 if (features & ShaderFeatures::Sheen) {
                     s << "    let sheenIBL = envDiff * sheenColor * material.emissive.w;\n";
                     s << "    sheenLight += sheenIBL;\n";
                 }
             } else {
-                s << "    let ambientSpecular = F0 * lights.ambient * (1.0 - roughness);\n";
+                s << "    let ambientSpecOnly = F0 * lights.ambient * (1.0 - roughness);\n";
+                s << "    let ambientDiff     = vec3<f32>(0.0);\n";
             }
             if (features & ShaderFeatures::Sheen) {
                 s << "    let sheenScale = max(max(sheenColor.r, sheenColor.g), sheenColor.b);\n";
                 s << "    let sheenAtt = clamp(1.0 - 0.157 * sheenScale, 0.0, 1.0);\n";
-                s << "    baseColor = (baseColor * (1.0 - metalness) * diffuseLight + specularLight + ambientSpecular) * sheenAtt + sheenLight;\n";
+                if (features & ShaderFeatures::Transmission) {
+                    s << "    let totalDiffuse  = (baseColor * (1.0 - metalness) * diffuseLight + ambientDiff) * sheenAtt;\n";
+                    s << "    let totalSpecular = (specularLight + ambientSpecOnly) * sheenAtt + sheenLight;\n";
+                    s << "    baseColor = totalDiffuse + totalSpecular;\n";
+                } else {
+                    s << "    baseColor = (baseColor * (1.0 - metalness) * diffuseLight + specularLight + ambientSpecOnly + ambientDiff) * sheenAtt + sheenLight;\n";
+                }
             } else {
-                s << "    baseColor = baseColor * (1.0 - metalness) * diffuseLight + specularLight + ambientSpecular;\n";
+                if (features & ShaderFeatures::Transmission) {
+                    s << "    let totalDiffuse  = baseColor * (1.0 - metalness) * diffuseLight + ambientDiff;\n";
+                    s << "    let totalSpecular = specularLight + ambientSpecOnly;\n";
+                    s << "    baseColor = totalDiffuse + totalSpecular;\n";
+                } else {
+                    s << "    baseColor = baseColor * (1.0 - metalness) * diffuseLight + specularLight + ambientSpecOnly + ambientDiff;\n";
+                }
             }
         } else {
             if (features & (ShaderFeatures::EnvMap | ShaderFeatures::EnvMapCube)) {
@@ -1011,7 +1025,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         let f0_t = pow((ior - 1.0) / (ior + 1.0), 2.0);
         let fresnel_t = f0_t + (1.0 - f0_t) * pow(1.0 - NdotV_t, 5.0);
         let transmissionFactor = transmission * (1.0 - fresnel_t);
-        baseColor = mix(baseColor, transmittedLight * albedoTint, transmissionFactor);
+        baseColor = totalSpecular + mix(totalDiffuse, transmittedLight * albedoTint, transmissionFactor);
     }
 )";
         }
