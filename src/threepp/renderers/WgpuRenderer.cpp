@@ -2187,15 +2187,13 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         bool shouldClearColor = pendingClearColor_;
         bool shouldClearDepth = pendingClearDepth_;
 
-        if (useSurface) {
-            if (scope.autoClear) {
-                shouldClearColor |= scope.autoClearColor;
-                shouldClearDepth |= scope.autoClearDepth;
-            }
-        } else {
-            // Render target: always clear (matches previous behavior)
-            shouldClearColor = true;
-            shouldClearDepth = true;
+        // Same rule for surface and render targets: autoClear (or explicit clear())
+        // drives the load op. Force-clearing the RT path breaks multi-pass overlays
+        // (e.g. HUD.render() after the main render in CrossRenderer) by wiping the
+        // first render's content.
+        if (scope.autoClear) {
+            shouldClearColor |= scope.autoClearColor;
+            shouldClearDepth |= scope.autoClearDepth;
         }
 
         pendingClearColor_ = false;
