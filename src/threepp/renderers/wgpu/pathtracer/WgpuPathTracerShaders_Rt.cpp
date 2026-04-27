@@ -1492,7 +1492,7 @@ fn traceShadowRay(origin: vec3<f32>, normal: vec3<f32>, dir: vec3<f32>,
         if (sh.t >= maxDist) { break; }
         if (sh.transmission < 0.01) { return vec3<f32>(0.0); }
         var shAlbedo = sh.albedo;
-        if (sh.texSlot >= 0.0) { shAlbedo = srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
+        if (sh.texSlot >= 0.0) { shAlbedo *= srgbToLinear(sampleAtlas(sh.uv, sh.texSlot)); }
         atten *= shAlbedo * sh.transmission;
         if (sh.frontFace > 0.5) {
             glassAttCol = sh.attenuationColor;
@@ -2254,7 +2254,7 @@ fn runBounces(state:           PrimaryShadeResult,
         }
 
         var albedo = h.albedo;
-        if (h.texSlot >= 0.0) { albedo = srgbToLinear(sampleAtlas(h.uv, h.texSlot)); }
+        if (h.texSlot >= 0.0) { albedo *= srgbToLinear(sampleAtlas(h.uv, h.texSlot)); }
 
         // Unlit: flat colour, no bouncing.  No i==0 reservoir-zero branch here.
         if (h.shininess < 0.0) {
@@ -2673,7 +2673,7 @@ R"(
                 microWeight = ggxG1(cosOut, h.shininess);
             }
             if (didRefract) {
-                let glassTint = mix(albedo, vec3<f32>(1.0), h.transmission) * microWeight;
+                let glassTint = albedo * microWeight;
                 var volAtten = vec3<f32>(1.0);
                 if (tAttDist > 0.0 && !entering) {
                     let absorbCoeff = -log(max(tAttColor, vec3<f32>(1e-6))) / tAttDist;
@@ -2870,7 +2870,7 @@ fn primaryShade(primaryHit:     Hit,
     }
 
     var albedo = h.albedo;
-    if (h.texSlot >= 0.0) { albedo = srgbToLinear(sampleAtlas(h.uv, h.texSlot)); }
+    if (h.texSlot >= 0.0) { albedo *= srgbToLinear(sampleAtlas(h.uv, h.texSlot)); }
     *primaryAlbedo = albedo;
 
     // Unlit: flat colour, no bouncing.
@@ -3323,7 +3323,7 @@ const char* const csPrimaryShadeWGSL3 = R"(
             microWeight = ggxG1(cosOut, h.shininess);
         }
         if (didRefract) {
-            let glassTint = mix(albedo, vec3<f32>(1.0), h.transmission) * microWeight;
+            let glassTint = albedo * microWeight;
             var volAtten = vec3<f32>(1.0);
             if (tAttDist > 0.0 && !entering) {
                 let absorbCoeff = -log(max(tAttColor, vec3<f32>(1e-6))) / tAttDist;
@@ -4263,7 +4263,7 @@ fn rt_bounce1_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
 
             var albedo = h.albedo;
-            if (h.texSlot >= 0.0) { albedo = srgbToLinear(sampleAtlas(h.uv, h.texSlot)); }
+            if (h.texSlot >= 0.0) { albedo *= srgbToLinear(sampleAtlas(h.uv, h.texSlot)); }
 
             // Unlit: flat colour, no bouncing.  No i==0 reservoir-zero branch here.
             if (h.shininess < 0.0) {
@@ -4679,7 +4679,7 @@ R"(
                     microWeight = ggxG1(cosOut, h.shininess);
                 }
                 if (didRefract) {
-                    let glassTint = mix(albedo, vec3<f32>(1.0), h.transmission) * microWeight;
+                    let glassTint = albedo * microWeight;
                     var volAtten = vec3<f32>(1.0);
                     if (tAttDist > 0.0 && !entering) {
                         let absorbCoeff = -log(max(tAttColor, vec3<f32>(1e-6))) / tAttDist;
