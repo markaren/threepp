@@ -45,15 +45,15 @@ int main() {
     Canvas canvas("Instancing", {{"aa", 4}, {"vsync", false}});
     auto renderer = createRenderer(canvas);
     renderer->autoClear = false;
-    renderer->setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
+    scene->background = Color::aliceblue;
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 10000);
     camera->position.set(static_cast<float>(maxAmount), static_cast<float>(maxAmount), static_cast<float>(maxAmount));
 
     OrbitControls controls{*camera, canvas};
 
-    auto light = HemisphereLight::create(0xffffff, 0x888888);
+    auto light = HemisphereLight::create(0xffffff, 0x888888, 2.5f);
     light->position.set(0, 1, 0);
     scene->add(light);
 
