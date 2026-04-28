@@ -124,7 +124,6 @@ int main() {
     const auto font1 = fontLoader.defaultFont();
     const auto font2 = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/gentilis_regular.typeface.json");
 
-    TextGeometry::Options opts1(font1, 40 * monitor::contentScale().first);
     auto hudText1 = TextSprite(font1, 40 * monitor::contentScale().first);
     hudText1.setText("Hello World!");
     hudText1.setColor(Color::black);
