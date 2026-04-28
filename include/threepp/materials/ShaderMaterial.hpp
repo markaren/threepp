@@ -6,6 +6,8 @@
 #include "interfaces.hpp"
 #include "threepp/materials/Material.hpp"
 
+#include <unordered_map>
+
 namespace threepp {
 
     class ShaderMaterial: public virtual Material,
@@ -20,6 +22,10 @@ namespace threepp {
         std::string vertexShader;
         std::string fragmentShader;
         UniformMap uniforms;
+
+        /// Type-erased map for GPU-resident textures (e.g. WgpuTexture* for Wgpu).
+        /// Keys are shader binding names. Values are backend-specific texture pointers.
+        std::unordered_map<std::string, void*> customTextures;
 
         std::optional<std::string> index0AttributeName;
         bool uniformsNeedUpdate = false;

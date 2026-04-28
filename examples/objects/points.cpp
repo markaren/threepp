@@ -8,7 +8,7 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Points", {{"aa", 8}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     scene->background = 0x050505;
@@ -19,7 +19,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     constexpr std::pair minMaxParticles = {1000, 500000};
@@ -57,7 +57,7 @@ int main() {
     const auto points = Points::create(geometry, material);
     scene->add(points);
 
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({});
         ImGui::SetNextWindowSize({}, {});
 
@@ -87,7 +87,7 @@ int main() {
         points->rotation.x = t * 0.25f;
         points->rotation.y = t * 0.5f;
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
         ui.render();
     });

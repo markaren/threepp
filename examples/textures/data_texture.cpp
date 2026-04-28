@@ -1,5 +1,5 @@
 
-#include "threepp/textures/DataTexture.hpp"
+#include "threepp/textures/FramebufferTexture.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -39,9 +39,9 @@ int main() {
 
     Canvas canvas("Data texture", {{"aa", 4}});
     auto size = canvas.size();
-    GLRenderer renderer{size};
-    renderer.autoClear = false;
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
+    renderer->setClearColor(Color::aliceblue);
 
     Scene scene;
     Scene orthoScene;
@@ -55,13 +55,9 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     unsigned int textureSize = 128;
-    auto texture = DataTexture::create(3, textureSize, textureSize);
-    texture->format = Format::RGB;
-    texture->minFilter = Filter::Nearest;
-    texture->magFilter = Filter::Nearest;
+    auto texture = FramebufferTexture::create(textureSize, textureSize);
 
     auto spriteMaterial = SpriteMaterial::create({{"map", texture}});
-    spriteMaterial->map->offset.set(0.5, 0.5);
     Sprite sprite(spriteMaterial);
     sprite.scale.set(textureSize, textureSize, 1);
     orthoScene.add(sprite);
@@ -71,14 +67,14 @@ int main() {
     TextureLoader tl;
 
     const auto sphereGeometry = SphereGeometry::create(0.5f, 16, 16);
-    const auto sphereMaterial = MeshBasicMaterial::create({{"map", tl.load(std::string(DATA_FOLDER) + "/textures/checker.png")}});
+    const auto sphereMaterial = MeshBasicMaterial::create({{"map", tl.load(std::string(DATA_FOLDER) + "/textures/checker.png", ColorSpace::sRGB)}});
     Mesh sphere(sphereGeometry, sphereMaterial);
     sphere.position.x = 1;
     scene.add(sphere);
 
     const auto boxGeometry = BoxGeometry::create(1, 1, 1);
     const auto boxMaterial = MeshBasicMaterial::create(
-            {{"map", tl.load(std::string(DATA_FOLDER) + "/textures/crate.gif")}});
+            {{"map", tl.load(std::string(DATA_FOLDER) + "/textures/crate.gif", ColorSpace::sRGB)}});
     Mesh box(boxGeometry, boxMaterial);
     box.position.x = -1;
     scene.add(box);
@@ -95,7 +91,7 @@ int main() {
         orthoCamera.bottom = -newSize.height() / 2;
         orthoCamera.updateProjectionMatrix();
 
-        renderer.setSize(newSize);
+        renderer->setSize(newSize);
         size = newSize;
 
         updateSpritePosition(sprite, newSize, textureSize);
@@ -109,15 +105,15 @@ int main() {
         box.rotation.y += 0.5f * dt;
         sphere.rotation.x += 0.5f * dt;
 
-        renderer.clear();
-        renderer.render(scene, camera);
+        renderer->clear();
+        renderer->render(scene, camera);
 
         vector.x = (size.width() / 2) - (textureSize / 2);
         vector.y = (size.height() / 2) - (textureSize / 2);
 
-        renderer.copyFramebufferToTexture(vector, *texture);
+        renderer->copyFramebufferToTexture(vector, *texture);
 
-        renderer.clearDepth();
-        renderer.render(orthoScene, orthoCamera);
+        renderer->clearDepth();
+        renderer->render(orthoScene, orthoCamera);
     });
 }

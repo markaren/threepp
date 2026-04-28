@@ -12,17 +12,17 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Clipping", {{"aa", 6}});
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
 
     auto scene = Scene::create();
 
-    auto camera = PerspectiveCamera::create(36, canvas.size().aspect(), 0.25, 16);
+    auto camera = PerspectiveCamera::create(36, canvas.size().aspect(), 0.25f, 16.f);
     camera->position.set(0, 1.3, 3);
 
     scene->add(AmbientLight::create(0x505050));
 
-    auto spotLight = SpotLight::create(0xffffff);
+    auto spotLight = SpotLight::create(0xffffff, 1.5f, 0, 0);
     spotLight->angle = math::PI / 5;
     spotLight->penumbra = 0.2;
     spotLight->position.set(2, 3, 3);
@@ -33,7 +33,7 @@ int main() {
     spotLight->shadow->mapSize.y = 1024;
     scene->add(spotLight);
 
-    auto dirLight = DirectionalLight::create(0x55505a, 1.f);
+    auto dirLight = DirectionalLight::create(0x55505a, 1.5f);
     dirLight->position.set(0, 3, 0);
     dirLight->castShadow = true;
     dirLight->shadow->camera->nearPlane = 1;
@@ -74,15 +74,15 @@ int main() {
 
     // ***** Clipping setup (renderer): *****
     Plane globalPlane(Vector3(-1, 0, 0), 0.1);
-    renderer.localClippingEnabled = true;
+    renderer->localClippingEnabled = true;
 
-    bool globalClipping = !renderer.clippingPlanes.empty();
-    ImguiFunctionalContext ui(canvas, [&] {
+    bool globalClipping = !renderer->clippingPlanes.empty();
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230 * ui.dpiScale(), 0}, 0);
 
         ImGui::Begin("Local clipping");
-        ImGui::Checkbox("Enabled", &renderer.localClippingEnabled);
+        ImGui::Checkbox("Enabled", &renderer->localClippingEnabled);
         ImGui::Checkbox("Shadows", &material->clipShadows);
         ImGui::SliderFloat("Plane", &localPlane.constant, 0.3f, 1.25f);
         ImGui::End();
@@ -94,14 +94,14 @@ int main() {
         ImGui::Checkbox("Enabled", &globalClipping);
         if (ImGui::IsItemEdited()) {
             if (globalClipping) {
-                renderer.clippingPlanes.emplace_back(globalPlane);
+                renderer->clippingPlanes.emplace_back(globalPlane);
             } else {
-                renderer.clippingPlanes.clear();
+                renderer->clippingPlanes.clear();
             }
         }
         ImGui::SliderFloat("Plane", &globalPlane.constant, -0.4f, 3.f);
-        if (!renderer.clippingPlanes.empty() && ImGui::IsItemEdited()) {
-            renderer.clippingPlanes[0].copy(globalPlane);
+        if (!renderer->clippingPlanes.empty() && ImGui::IsItemEdited()) {
+            renderer->clippingPlanes[0].copy(globalPlane);
         }
         ImGui::End();
     });
@@ -121,7 +121,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -133,7 +133,7 @@ int main() {
         object->rotation.y = time * 0.2f;
         object->scale.setScalar(std::cos(time) * 0.125f + 0.875f);
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
         ui.render();
     });

@@ -8,18 +8,18 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Morphtargets - sphere", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
 
     PerspectiveCamera camera(45, canvas.size().aspect(), 0.2f, 100.f);
     camera.position.set(0, 5, 5);
 
-    auto light1 = PointLight::create(0xff2200, 0.7f);
+    auto light1 = PointLight::create(0xff2200, 1.2f, 0, 0);
     light1->position.set(100, 100, 100);
     scene.add(light1);
 
-    auto light2 = PointLight::create(0x22ff00, 0.7f);
+    auto light2 = PointLight::create(0x22ff00, 1.2f, 0, 0);
     light2->position.set(-100, -100, -100);
     scene.add(light2);
 
@@ -33,7 +33,7 @@ int main() {
     pointsMaterial->size = 10;
     pointsMaterial->sizeAttenuation = false;
     pointsMaterial->alphaTest = 0.5;
-    pointsMaterial->map = TextureLoader().load(std::string(DATA_FOLDER) + "/textures/sprites/disc.png");
+    pointsMaterial->map = TextureLoader().load(std::string(DATA_FOLDER) + "/textures/sprites/disc.png", ColorSpace::sRGB);
     pointsMaterial->morphTargets = true;
 
     Mesh* mesh;
@@ -55,7 +55,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     float sign = 1;
@@ -78,6 +78,6 @@ int main() {
             influence = std::clamp(influence, 0.01f, 0.99f);// avoid "locking"
         }
 
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
     });
 }

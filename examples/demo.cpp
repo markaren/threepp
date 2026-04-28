@@ -11,8 +11,8 @@ struct MyGui final: ImguiContext {
 
     bool colorChanged = false;
 
-    explicit MyGui(const Canvas& canvas, const MeshBasicMaterial& m)
-        : ImguiContext(canvas) {
+    explicit MyGui(const Canvas& canvas, Renderer& renderer, const MeshBasicMaterial& m)
+        : ImguiContext(canvas, renderer) {
         colorBuf_[0] = m.color.r;
         colorBuf_[1] = m.color.g;
         colorBuf_[2] = m.color.b;
@@ -101,8 +101,8 @@ auto createPlane() {
 int main() {
 
     Canvas canvas("threepp demo", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.autoClear = false;
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
@@ -119,12 +119,11 @@ int main() {
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
 
-    HUD hud(renderer);
+    HUD hud(*renderer);
     FontLoader fontLoader;
     const auto font1 = fontLoader.defaultFont();
     const auto font2 = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/gentilis_regular.typeface.json");
 
-    TextGeometry::Options opts1(font1, 40 * monitor::contentScale().first);
     auto hudText1 = TextSprite(font1, 40 * monitor::contentScale().first);
     hudText1.setText("Hello World!");
     hudText1.setColor(Color::black);
@@ -142,12 +141,13 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
+
+    MyGui ui(canvas, *renderer, *planeMaterial);
 
 
     Clock clock;
-    MyGui ui(canvas, *planeMaterial);
     canvas.animate([&] {
         const auto dt = clock.getDelta();
 
@@ -155,8 +155,8 @@ int main() {
 
         hudText2.setText("Delta=" + std::to_string(dt));
 
-        renderer.clear();
-        renderer.render(*scene, *camera);
+        renderer->clear();
+        renderer->render(*scene, *camera);
 
         hud.render();
         ui.render();

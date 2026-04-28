@@ -7,7 +7,7 @@
 #include "threepp/core/Raycaster.hpp"
 #include "threepp/math/Box3.hpp"
 #include "threepp/objects/TextSprite.hpp"
-#include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/Renderer.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #include <iostream>
@@ -65,7 +65,7 @@ struct HUD::Impl: MouseListener {
 
     Scene scene;
 
-    Impl(GLRenderer& renderer, PeripheralsEventSource* eventSource)
+    Impl(Renderer& renderer, PeripheralsEventSource* eventSource)
         : renderer_(&renderer),
           eventSource_(eventSource),
           camera_(0, static_cast<float>(renderer.size().first), static_cast<float>(renderer.size().second), 0, 0.1f, 10.f) {
@@ -102,7 +102,20 @@ struct HUD::Impl: MouseListener {
 
     Options& add(Object3D& object) {
         scene.add(object);
+        return registerAdded(object);
+    }
 
+    Options& add(const std::shared_ptr<Object3D>& object) {
+        scene.add(object);
+        return registerAdded(*object);
+    }
+
+    Options& registerAdded(Object3D& object) {
+        object.frustumCulled = false;
+        if (auto m = object.material()) {
+            m->depthWrite = false;
+            m->depthTest = false;
+        }
         auto& opts = *options_.emplace_back(std::make_unique<Options>());
         opts.object_ = &object;
 
@@ -114,20 +127,10 @@ struct HUD::Impl: MouseListener {
             }
             switch (ts->getHorizontalAlignment()) {
                 case TextSprite::HorizontalAlignment::Left:   opts.setHorizontalAlignment(HorizontalAlignment::LEFT);   break;
-                case TextSprite::HorizontalAlignment::Right:   opts.setHorizontalAlignment(HorizontalAlignment::RIGHT);   break;
-                case TextSprite::HorizontalAlignment::Center:   opts.setHorizontalAlignment(HorizontalAlignment::CENTER);   break;
+                case TextSprite::HorizontalAlignment::Right:  opts.setHorizontalAlignment(HorizontalAlignment::RIGHT);  break;
+                case TextSprite::HorizontalAlignment::Center: opts.setHorizontalAlignment(HorizontalAlignment::CENTER); break;
             }
         }
-
-
-        return opts;
-    }
-
-    Options& add(const std::shared_ptr<Object3D>& object) {
-        scene.add(object);
-
-        auto& opts = *options_.emplace_back(std::make_unique<Options>());
-        opts.object_ = object.get();
 
         return opts;
     }
@@ -162,7 +165,7 @@ struct HUD::Impl: MouseListener {
     }
 
 private:
-    GLRenderer* renderer_;
+    Renderer* renderer_;
     PeripheralsEventSource* eventSource_;
 
     std::pair<int, int> lastSize_;
@@ -210,7 +213,7 @@ private:
     }
 };
 
-HUD::HUD(GLRenderer& renderer, PeripheralsEventSource* eventSource)
+HUD::HUD(Renderer& renderer, PeripheralsEventSource* eventSource)
     : pimpl_(std::make_unique<Impl>(renderer, eventSource)) {}
 
 

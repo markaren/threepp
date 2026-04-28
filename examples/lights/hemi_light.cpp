@@ -30,7 +30,7 @@ namespace {
 int main() {
 
     Canvas canvas("HemisphereLight", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
@@ -56,7 +56,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -65,6 +65,6 @@ int main() {
 
         group->rotation.y += 0.5f * dt;
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

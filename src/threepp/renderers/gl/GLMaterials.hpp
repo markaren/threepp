@@ -10,7 +10,7 @@
 
 namespace threepp {
 
-    class GLRenderTarget;
+    class RenderTarget;
 
 }
 
@@ -24,7 +24,7 @@ namespace threepp::gl {
 
         void refreshFogUniforms(UniformMap& uniforms, FogVariant& fog);
 
-        void refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height, GLRenderTarget* transmissionRenderTarget = nullptr);
+        void refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height, RenderTarget* transmissionRenderTarget = nullptr);
 
         ~GLMaterials();
 

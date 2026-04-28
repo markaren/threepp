@@ -8,7 +8,7 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Cubemap");
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     PerspectiveCamera camera(50, canvas.aspect(), 0.1, 1000);
     camera.position.z = 10;
@@ -27,9 +27,11 @@ int main() {
 
     Scene scene;
     scene.background = reflectionCube;
+    scene.environment = reflectionCube;
 
-    auto material = MeshLambertMaterial::create();
-    material->envMap = reflectionCube;
+    auto material = MeshStandardMaterial::create();
+    material->metalness = 0.9;
+    material->roughness = 0.1;
     auto mesh = Mesh::create(SphereGeometry::create(0.5), material);
     scene.add(mesh);
 
@@ -46,10 +48,10 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
     });
 }

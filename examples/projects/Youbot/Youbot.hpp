@@ -69,7 +69,6 @@ public:
     static std::unique_ptr<Youbot> create(const std::filesystem::path& path) {
         ColladaLoader loader;
         const auto model = loader.load(path);
-        model->applyMatrix4(Matrix4().makeRotationAxis({1,0,0}, math::DEG2RAD * -90));
         model->scale.multiplyScalar(10);
 
         return std::unique_ptr<Youbot>(new Youbot(model));

@@ -60,8 +60,9 @@ namespace {
 int main() {
 
     Canvas canvas("DataTexture3D", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = GLRenderer(canvas);
     renderer.checkShaderErrors = true;
+    renderer.setClearColor(Color::blue);
 
     Scene scene;
     scene.background = Color(0x1a1a2e);

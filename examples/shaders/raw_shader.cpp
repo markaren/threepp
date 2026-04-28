@@ -13,7 +13,7 @@ int main() {
 
     Canvas canvas("Raw Shader demo");
 
-    GLRenderer renderer(canvas.size());
+    auto renderer = GLRenderer(canvas);
     renderer.checkShaderErrors = true;
 
     auto scene = Scene::create();

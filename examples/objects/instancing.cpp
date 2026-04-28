@@ -43,17 +43,17 @@ int main() {
     constexpr int maxAmount = 25;
 
     Canvas canvas("Instancing", {{"aa", 4}, {"vsync", false}});
-    GLRenderer renderer(canvas.size());
-    renderer.autoClear = false;
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
 
     auto scene = Scene::create();
+    scene->background = Color::aliceblue;
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 10000);
     camera->position.set(static_cast<float>(maxAmount), static_cast<float>(maxAmount), static_cast<float>(maxAmount));
 
     OrbitControls controls{*camera, canvas};
 
-    auto light = HemisphereLight::create(0xffffff, 0x888888);
+    auto light = HemisphereLight::create(0xffffff, 0x888888, 2.5f);
     light->position.set(0, 1, 0);
     scene->add(light);
 
@@ -66,7 +66,7 @@ int main() {
 
     std::unordered_map<int, bool> colorMap;
 
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         float width = 230 * ui.dpiScale();
         ImGui::SetNextWindowPos({float(canvas.size().width()) - width, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({width, 0}, 0);
@@ -87,7 +87,7 @@ int main() {
     };
     canvas.setIOCapture(&capture);
 
-    HUD hud(renderer);
+    HUD hud(*renderer);
     FontLoader fontLoader;
     const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/helvetiker_regular.typeface.json");
 
@@ -98,7 +98,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
@@ -132,8 +132,8 @@ int main() {
             handle.setText("FPS: " + std::to_string(counter.fps));
         }
 
-        renderer.clear();
-        renderer.render(*scene, *camera);
+        renderer->clear();
+        renderer->render(*scene, *camera);
 
         hud.render();
         ui.render();

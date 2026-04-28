@@ -15,8 +15,8 @@ namespace {
         TextureLoader tl;
         auto decalMaterial = MeshPhongMaterial::create();
         decalMaterial->specular = 0x444444;
-        decalMaterial->map = tl.load(std::string(DATA_FOLDER) + "/textures/decal/decal-diffuse.png");
-        decalMaterial->normalMap = tl.load(std::string(DATA_FOLDER) + "/textures/decal/decal-normal.jpg");
+        decalMaterial->map = tl.load(std::string(DATA_FOLDER) + "/textures/decal/decal-diffuse.png", ColorSpace::sRGB);
+        decalMaterial->normalMap = tl.load(std::string(DATA_FOLDER) + "/textures/decal/decal-normal.jpg", ColorSpace::NoColorSpace);
         decalMaterial->normalScale.set(1, 1);
         decalMaterial->shininess = 30;
         decalMaterial->depthTest = true;
@@ -69,8 +69,9 @@ namespace {
 
         bool clear = false;
 
-        explicit MyGui(const Canvas& canvas): ImguiContext(canvas) {}
+        explicit MyGui(const Canvas& canvas, Renderer& renderer): ImguiContext(canvas, renderer) {}
 
+    protected:
         void onRender() override {
 
             ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
@@ -88,11 +89,11 @@ namespace {
         const auto light = AmbientLight::create(0x443333, 0.8f);
         scene.add(light);
 
-        const auto light2 = DirectionalLight::create(0xffddcc, 1.f);
+        const auto light2 = DirectionalLight::create(0xffddcc, 1.4f);
         light2->position.set(1, 0.75, 0.5);
         scene.add(light2);
 
-        const auto light3 = DirectionalLight::create(0xccccff, 1.f);
+        const auto light3 = DirectionalLight::create(0xccccff, 1.4f);
         light3->position.set(-1, 0.75, -0.5);
         scene.add(light3);
     }
@@ -102,7 +103,7 @@ namespace {
 int main() {
 
     Canvas canvas{"Decals", {{"aa", 8}}};
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
@@ -120,9 +121,9 @@ int main() {
     model->traverseType<Mesh>([&](Mesh& _) {
         mesh = &_;
         const auto mat = MeshPhongMaterial::create({{
-                {"map", tl.load(folder / "Map-COL.jpg")},
-                {"specularMap", tl.load(folder / "Map-SPEC.jpg")},
-                {"normalMap", tl.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg")},
+                {"map", tl.load(folder / "Map-COL.jpg", ColorSpace::sRGB)},
+                {"specularMap", tl.load(folder / "Map-SPEC.jpg", ColorSpace::NoColorSpace)},
+                {"normalMap", tl.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", ColorSpace::NoColorSpace)},
                 {"shininess", 25.f},
         }});
         mesh->setMaterial(mat);
@@ -140,10 +141,10 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
-    MyGui ui(canvas);
+    MyGui ui(canvas, *renderer);
     std::vector<Mesh*> decals;
 
     IOCapture capture{};
@@ -193,7 +194,7 @@ int main() {
             }
         }
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
         if (ui.clear) {
             for (auto decal : decals) {

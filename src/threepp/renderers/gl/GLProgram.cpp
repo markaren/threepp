@@ -36,25 +36,27 @@ namespace {
         return shader;
     }
 
-    std::pair<std::string, std::string> getEncodingComponents(Encoding encoding) {
+    std::pair<std::string, std::string> getEncodingComponents(ColorSpace encoding) {
 
         switch (encoding) {
 
-            case Encoding::Linear:
+            case ColorSpace::NoColorSpace:
                 return {"Linear", "( value )"};
-            case Encoding::sRGB:
+            case ColorSpace::Linear:
+                return {"Linear", "( value )"};
+            case ColorSpace::sRGB:
                 return {"sRGB", "( value )"};
-            case Encoding::RGBE:
+            case ColorSpace::RGBE:
                 return {"RGBE", "( value )"};
-            case Encoding::RGBM7:
+            case ColorSpace::RGBM7:
                 return {"RGBM", "( value, 7.0 )"};
-            case Encoding::RGBM16:
+            case ColorSpace::RGBM16:
                 return {"RGBM", "( value, 16.0 )"};
-            case Encoding::RGBD:
+            case ColorSpace::RGBD:
                 return {"RGBD", "( value, 256.0 )"};
-            case Encoding::Gamma:
+            case ColorSpace::Gamma:
                 return {"Gamma", "( value, float( GAMMA_FACTOR ) )"};
-            case Encoding::LogLuv:
+            case ColorSpace::LogLuv:
                 return {"LogLuv", "( value )"};
             default:
                 std::cerr << "THREE.GLProgram: Unsupported encoding:" << as_integer(encoding) << std::endl;
@@ -81,13 +83,13 @@ namespace {
         return ss.str();
     }
 
-    std::string getTexelDecodingFunction(const std::string& functionName, Encoding encoding) {
+    std::string getTexelDecodingFunction(const std::string& functionName, ColorSpace encoding) {
 
         const auto components = getEncodingComponents(encoding);
         return "vec4 " + functionName + "( vec4 value ) { return " + components.first + "ToLinear" + components.second + "; }";
     }
 
-    std::string getTexelEncodingFunction(const std::string& functionName, Encoding encoding) {
+    std::string getTexelEncodingFunction(const std::string& functionName, ColorSpace encoding) {
 
         const auto components = getEncodingComponents(encoding);
         return "vec4 " + functionName + "( vec4 value ) { return LinearTo" + components.first + components.second + "; }";
@@ -599,7 +601,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
 
                     parameters->premultipliedAlpha ? "#define PREMULTIPLIED_ALPHA" : "",
 
-                    parameters->physicallyCorrectLights ? "#define PHYSICALLY_CORRECT_LIGHTS" : "",
+                    parameters->useLegacyLights ? "#define USE_LEGACY_LIGHTS" : "",
 
                     parameters->logarithmicDepthBuffer ? "#define USE_LOGDEPTHBUF" : "",
 

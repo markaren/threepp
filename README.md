@@ -5,8 +5,12 @@ Cross-platform C++20 port of the popular JavaScript 3D library [three.js](https:
 
 #### Current state of the project
 
-Most of the core library has been ported, including advanced rendering capabilities, 
-however much remains to be done.. Nevertheless, the library is **very** usable for a wide variety of rendering applications.
+The core library is mature and feature-complete, with advanced rendering capabilities including real-time path tracing on the WebGPU backend.
+It is usable for a wide variety of rendering applications, from interactive 3D apps to robotics and scientific visualisation.
+
+The high-level API is mostly in line with three.js r129 with changes from newer revisions in some areas.
+The OpenGL backend is a mechanical port of the WebGL renderer. The WebGPU renderer is mostly at feature parity with the GL backend, 
+but is not a direct port of the three.js WebGPU renderer. 
 
 > You get a scene graph, materials, lighting, cameras, render loop, controls, loaders, all composable, in a handful of lines.
 
@@ -15,19 +19,21 @@ however much remains to be done.. Nevertheless, the library is **very** usable f
 
 * Line, Points, Mesh, InstancedMesh
 * Geometries [Box, Sphere, Plane, Cylindrical, Capsule, Tube, ++]  
-* Lights [Ambient, Directional, Point, Spot, Hemi]
+* Lights [Ambient, Directional, Point, Spot, Hemi, RectArea]
 * Raycasting [Mesh, Line, Points]
-* 2D/3D Textures, 3D text, Sprites, RenderTarget, CubeMaps
-* Transparency, Shadows
-* Morphtargets, Bones
+* 2D/3D Textures, 2D/3D text, Sprites, RenderTarget, CubeMaps
+* Transparency, Transmission, Shadows
+* Environment maps, including PMREM
+* Animation, Morphtargets, Bones
 * Controls [Orbit, Fly, Drag, Transform]
 * Water and Sky shaders
 * Built-in text rendering and font loading [typeface.json, TTF]
 * Built-in model loaders [Binary STL, OBJ/MTL, GLTF, COLLADA, USD, FBX, SVG, URDF]
-* Animations (limited to transforms)
 * Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
+* OpenGL 3.3 and WebGPU backends
+* Real-time pathtracing (on WebGPU backend)
 
 Builds on Windows, Linux, MacOS, MinGW and with Emscripten.
 
@@ -35,7 +41,7 @@ Builds on Windows, Linux, MacOS, MinGW and with Emscripten.
 
 ### But, but why?
 
-Because C++ deserves nice things too. And this one delivers.
+Because C++ deserves nice things too.
 
 Also, because fun.
 
@@ -124,8 +130,8 @@ auto createPlane() {
 
 int main() {
 
-    Canvas canvas("Demo");
-    GLRenderer renderer{canvas.size()};
+    Canvas canvas{"Demo"};
+    GLRenderer renderer{canvas};
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
@@ -153,7 +159,7 @@ int main() {
     Clock clock;
     canvas.animate([&] {
         
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
         group->rotation.y += 1.f * dt;
 
         renderer.render(*scene, *camera);

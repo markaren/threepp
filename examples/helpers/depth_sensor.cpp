@@ -74,7 +74,7 @@ namespace {
 int main() {
 
     Canvas canvas("Depth sensor", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = GLRenderer(canvas);
 
     auto scene = Scene::create();
     scene->background = Color(0x111122);

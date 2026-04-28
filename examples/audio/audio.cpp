@@ -53,7 +53,7 @@ namespace {
 
 int main() {
     Canvas canvas("Audio demo");
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
 
@@ -76,7 +76,7 @@ int main() {
     std::array<float, 3> audioPos{};
     bool play = audio.isPlaying();
     float volume = listener.getMasterVolume();
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230 * ui.dpiScale(), 0}, 0);
         ImGui::Begin("Audio settings");
@@ -104,11 +104,11 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
 
         ui.render();
     });

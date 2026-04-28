@@ -8,10 +8,10 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("glTF Material Variants", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
+    scene->background = Color::aliceblue;
     auto camera = PerspectiveCamera::create(45, canvas.aspect(), 0.01f, 100.f);
     camera->position.set(0, 0.5f, 1.f);
 
@@ -41,7 +41,7 @@ int main() {
     // -------------------------------------------------------------------------
     //  ImGui panel
     // -------------------------------------------------------------------------
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Always);
         ImGui::SetNextWindowSize({220 * ui.dpiScale(), 0}, ImGuiCond_Always);
         ImGui::Begin("Material Variants", nullptr,
@@ -88,13 +88,13 @@ int main() {
     canvas.setIOCapture(&capture);
 
     canvas.onWindowResize([&](WindowSize size) {
-        renderer.setSize(size);
+        renderer->setSize(size);
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
     });
 
     canvas.animate([&] {
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
         ui.render();
     });
 }

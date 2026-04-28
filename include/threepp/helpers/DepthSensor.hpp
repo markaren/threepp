@@ -6,7 +6,7 @@
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/math/Color.hpp"
-#include "threepp/renderers/GLRenderTarget.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 
@@ -15,7 +15,7 @@
 namespace threepp {
 
     class ShaderMaterial;
-    class GLRenderer;
+    class Renderer;
 
     /**
      * Simulates a depth sensor using GPU depth rendering.
@@ -43,7 +43,7 @@ namespace threepp {
          *
          * The renderer's active render target is restored to nullptr after the scan.
          */
-        void scan(GLRenderer& renderer, Scene& scene, std::vector<Vector3>& cloud);
+        void scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud);
 
         /**
          * RGB-D scan: returns hit points in world space and their corresponding
@@ -51,7 +51,7 @@ namespace threepp {
          *
          * colors[i] matches cloud[i] — both vectors are cleared and filled together.
          */
-        void scan(GLRenderer& renderer, Scene& scene, std::vector<Vector3>& cloud, std::vector<Color>& colors);
+        void scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud, std::vector<Color>& colors);
 
         [[nodiscard]] unsigned int width() const { return width_; }
         [[nodiscard]] unsigned int height() const { return height_; }
@@ -68,8 +68,8 @@ namespace threepp {
         Scene postScene_;
         OrthographicCamera postCamera_;
         PerspectiveCamera camera_;
-        std::unique_ptr<GLRenderTarget> sceneTarget_;
-        std::unique_ptr<GLRenderTarget> readbackTarget_;
+        std::unique_ptr<RenderTarget> sceneTarget_;
+        std::unique_ptr<RenderTarget> readbackTarget_;
         std::shared_ptr<ShaderMaterial> postMaterial_;
 
         // Precomputed per-column and per-row view-space ray direction factors

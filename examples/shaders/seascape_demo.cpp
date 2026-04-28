@@ -14,7 +14,7 @@ int main() {
 
     Canvas canvas("Seascape demo", {{"antialiasing", 4}});
 
-    GLRenderer renderer(canvas.size());
+    auto renderer = GLRenderer(canvas);
     renderer.checkShaderErrors = true;
 
     auto scene = Scene::create();

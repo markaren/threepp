@@ -9,7 +9,7 @@ namespace {
     class MyUI: public ImguiContext {
 
     public:
-        explicit MyUI(const Canvas& canvas): ImguiContext(canvas) {}
+        explicit MyUI(const Canvas& canvas, Renderer& renderer): ImguiContext(canvas, renderer) {}
 
         [[nodiscard]] bool newSelection() const {
             return lastSelectedIndex != selectedIndex;
@@ -129,8 +129,8 @@ namespace {
 int main() {
 
     Canvas canvas("SVGLoader", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
@@ -146,12 +146,12 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     OrbitControls controls{*camera, canvas};
 
-    MyUI ui(canvas);
+    MyUI ui(canvas, *renderer);
 
     IOCapture capture{};
     capture.preventMouseEvent = [] {
@@ -172,7 +172,7 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
         if (ui.newSelection()) {
             if (svg) {

@@ -86,8 +86,8 @@ int main() {
 
     Canvas canvas("MotorController", {{"aa", 6}});
     const auto size = canvas.size();
-    GLRenderer renderer(size);
-    renderer.autoClear = false;
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
 
     Scene scene;
     scene.background = Color::white;
@@ -111,7 +111,7 @@ int main() {
     auto motorVisuals = VisualisationObject();
     scene.add(motorVisuals);
 
-    HUD hud(renderer);
+    HUD hud(*renderer);
 
     FontLoader fontLoader;
     auto font = fontLoader.defaultFont();
@@ -134,11 +134,11 @@ int main() {
         camera.top = frustumSize / 2;
         camera.bottom = -frustumSize / 2;
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     auto& params = controller.params();
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({}, 0, {});
         ImGui::SetNextWindowSize({150*ui.dpiScale(), 0}, 0);
         ImGui::Begin("Motor Controller");
@@ -171,8 +171,8 @@ int main() {
 
         motor.update(gain, dt);
 
-        renderer.clear();
-        renderer.render(scene, camera);
+        renderer->clear();
+        renderer->render(scene, camera);
         hud.render();
         ui.render();
 

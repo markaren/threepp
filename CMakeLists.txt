@@ -12,7 +12,12 @@ option(THREEPP_WITH_FBX "Build with FBXLoader (OpenFBX)" OFF)
 option(THREEPP_WITH_USD "Build with USDLoader (tinyusdz)" OFF)
 
 option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
+option(THREEPP_WITH_WGPU "Build with WebGPU backend (via wgpu-native)" OFF)
+cmake_dependent_option(THREEPP_WGPU_GLSL_COMPAT
+    "Enable GLSL->SPIR-V translation for ShaderMaterial on the Wgpu backend (requires glslang)"
+    ON "THREEPP_WITH_WGPU" OFF)
 
+cmake_dependent_option(THREEPP_WITH_INFERENCE "Build with Inference support" OFF "THREEPP_WITH_WGPU" OFF)
 
 # Force THREEPP_WITH_GLFW ON when targeting Emscripten
 cmake_dependent_option(THREEPP_WITH_GLFW "Build with GLFW frontend" ON "NOT DEFINED EMSCRIPTEN" ON)
@@ -103,6 +108,9 @@ install(
 
 if (BUILD_SHARED_LIBS AND NOT THREEPP_USE_EXTERNAL_GLFW)
     install(TARGETS glfw EXPORT threepp-targets)
+endif ()
+if (THREEPP_WGPU_GLSL_COMPAT AND NOT EMSCRIPTEN)
+    install(TARGETS glslang SPIRV glslang-default-resource-limits EXPORT threepp-targets)
 endif ()
 if (THREEPP_WITH_USD)
     install(TARGETS tinyusdz_static EXPORT threepp-targets)

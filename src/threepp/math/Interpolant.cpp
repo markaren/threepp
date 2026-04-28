@@ -25,10 +25,15 @@ Sample Interpolant::evaluate(float t) {
     float t0 = (i1 > 0 && i1 - 1 < pp.size()) ? pp[i1 - 1] : std::numeric_limits<float>::quiet_NaN();
 
     // Forward scan
+    bool needReverseScan = false;
     if (!(t < t1)) {
         for (size_t giveUpAt = i1 + 2;;) {
             if (std::isnan(t1)) {
-                if (t < t0) break;
+                // Cached index is past the end (sentinel). If t < t0 the clip
+                // wrapped around and we need the reverse-scan branch; without
+                // this, the binary-search-on-the-right fallback runs with an
+                // empty range and keeps returning the last sample forever.
+                if (t < t0) { needReverseScan = true; break; }
                 // after end
                 i1 = pp.size();
                 this->_cachedIndex = i1;
@@ -43,30 +48,32 @@ Sample Interpolant::evaluate(float t) {
                 return this->interpolate_(i1, t0, t, t1);
             }
         }
-        // Binary search on the right
-        size_t right = pp.size();
-        while (i1 < right) {
-            size_t mid = (i1 + right) >> 1;
-            if (t < pp[mid]) {
-                right = mid;
-            } else {
-                i1 = mid + 1;
+        if (!needReverseScan) {
+            // Binary search on the right
+            size_t right = pp.size();
+            while (i1 < right) {
+                size_t mid = (i1 + right) >> 1;
+                if (t < pp[mid]) {
+                    right = mid;
+                } else {
+                    i1 = mid + 1;
+                }
             }
-        }
-        t1 = (i1 < pp.size()) ? pp[i1] : std::numeric_limits<float>::quiet_NaN();
-        t0 = (i1 > 0 && i1 - 1 < pp.size()) ? pp[i1 - 1] : std::numeric_limits<float>::quiet_NaN();
-        if (std::isnan(t0)) {
-            this->_cachedIndex = 0;
-            return this->copySampleValue_(0);
-        }
-        if (std::isnan(t1)) {
-            i1 = pp.size();
+            t1 = (i1 < pp.size()) ? pp[i1] : std::numeric_limits<float>::quiet_NaN();
+            t0 = (i1 > 0 && i1 - 1 < pp.size()) ? pp[i1 - 1] : std::numeric_limits<float>::quiet_NaN();
+            if (std::isnan(t0)) {
+                this->_cachedIndex = 0;
+                return this->copySampleValue_(0);
+            }
+            if (std::isnan(t1)) {
+                i1 = pp.size();
+                this->_cachedIndex = i1;
+                return this->copySampleValue_(i1 - 1);
+            }
             this->_cachedIndex = i1;
-            return this->copySampleValue_(i1 - 1);
+            this->intervalChanged_(i1, t0, t1);
+            return this->interpolate_(i1, t0, t, t1);
         }
-        this->_cachedIndex = i1;
-        this->intervalChanged_(i1, t0, t1);
-        return this->interpolate_(i1, t0, t, t1);
     }
 
     // Reverse scan

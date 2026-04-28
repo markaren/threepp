@@ -27,8 +27,8 @@ struct CraneUI: ImguiContext {
     std::vector<KineLimit> limits;
     std::vector<float> values;
 
-    explicit CraneUI(const Canvas& canvas, Kine& kine)
-        : ImguiContext(canvas),
+    explicit CraneUI(const Canvas& canvas, Renderer& renderer, Kine& kine)
+        : ImguiContext(canvas,renderer),
           limits(kine.limits()),
           values(kine.meanAngles()) {
 
@@ -85,10 +85,10 @@ auto createGrid() {
 int main() {
 
     Canvas canvas{"Crane3R", {{"size", WindowSize{1280, 720}}, {"antialiasing", 8}}};
-    GLRenderer renderer{canvas.size()};
-    renderer.autoClear = false;
-    renderer.shadowMap().enabled = true;
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
+    renderer->shadowMap().enabled = true;
+    renderer->setClearColor(Color::aliceblue);
 
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.01, 100);
     camera->position.set(-15, 8, 15);
@@ -115,7 +115,7 @@ int main() {
     scene->add(light1);
     scene->add(light2);
 
-    HUD hud(renderer);
+    HUD hud(*renderer);
     FontLoader fontLoader;
     const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/helvetiker_regular.typeface.json");
 
@@ -167,7 +167,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     IOCapture capture{};
@@ -178,7 +178,7 @@ int main() {
 
     auto ikSolver = std::make_unique<CCDSolver>();
 
-    CraneUI ui(canvas, kine);
+    CraneUI ui(canvas, *renderer, kine);
 
     auto targetHelper = AxesHelper::create(2);
     targetHelper->visible = false;
@@ -202,8 +202,8 @@ int main() {
 
         transformControls.visible = targetHelper->visible;
 
-        renderer.clear();
-        renderer.render(*scene, *camera);
+        renderer->clear();
+        renderer->render(*scene, *camera);
 
         if (crane) {
 

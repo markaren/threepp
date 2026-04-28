@@ -11,10 +11,11 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("Water", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.checkShaderErrors = true;
-    renderer.toneMapping = ToneMapping::ACESFilmic;
+    Canvas canvas(Canvas::Parameters().title("Water").antialiasing(4));
+    auto renderer = createRenderer(canvas);
+    renderer->checkShaderErrors = true;
+    renderer->toneMapping = ToneMapping::ACESFilmic;
+    renderer->toneMappingExposure = 0.5f;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(55, canvas.aspect(), 1, 2000);
@@ -83,10 +84,10 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({0, 0}, 0);
         ImGui::Begin("Controls");
@@ -120,7 +121,7 @@ int main() {
 
         timeUniform.setValue(t);
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
         ui.render();
     });

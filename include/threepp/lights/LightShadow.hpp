@@ -12,7 +12,7 @@
 
 namespace threepp {
 
-    class GLRenderTarget;
+    class RenderTarget;
 
     class LightShadow {
 
@@ -25,8 +25,8 @@ namespace threepp {
 
         Vector2 mapSize{1024, 1024};
 
-        std::unique_ptr<GLRenderTarget> map;
-        std::unique_ptr<GLRenderTarget> mapPass;
+        std::unique_ptr<RenderTarget> map;
+        std::unique_ptr<RenderTarget> mapPass;
 
         Matrix4 matrix;
 

@@ -24,14 +24,15 @@ namespace {
         std::vector<KineLimit> limits;
         std::vector<float> values;
 
-        explicit YoubotUI(const Canvas& canvas, Kine& kine)
-            : ImguiContext(canvas),
+        explicit YoubotUI(const Canvas& canvas, Renderer& renderer, Kine& kine)
+            : ImguiContext(canvas, renderer),
               limits(kine.limits()),
               values(kine.meanAngles()) {
 
             pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(values));
         }
 
+    protected:
         void onRender() override {
 
             ImGui::SetNextWindowPos({}, 0, {});
@@ -66,7 +67,6 @@ namespace {
         }
     };
 
-
     void setupLights(Scene& scene) {
         auto light1 = DirectionalLight::create(0xffffff, 1.f);
         light1->position.set(1, 1, 1);
@@ -80,9 +80,9 @@ namespace {
 int main() {
 
     Canvas canvas{Canvas::Parameters().title("Youbot-kine").size({1280, 720}).antialiasing(8)};
-    GLRenderer renderer{canvas.size()};
-    renderer.autoClear = false;
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
+    renderer->setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
 
@@ -112,7 +112,7 @@ int main() {
     textHandle.setHorizontalAlignment(TextSprite::HorizontalAlignment::Center);
     textHandle.setWorldScale(20*monitor::contentScale().first);
 
-    HUD hud(renderer);
+    HUD hud(*renderer);
     hud.add(textHandle).setNormalizedPosition({0.5, 0.5});
 
     TaskManager tm;
@@ -143,7 +143,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     auto ikSolver = CCDSolver(1, 0.001f, 0.00001f);
@@ -161,7 +161,7 @@ int main() {
                         .addLink(Vector3(0, 1.225, 0))
                         .build();
 
-    YoubotUI ui(canvas, kine);
+    YoubotUI ui(canvas, *renderer, kine);
 
     IOCapture capture{};
     capture.preventMouseEvent = [] {
@@ -175,8 +175,8 @@ int main() {
 
         tm.handleTasks();
 
-        renderer.clear();
-        renderer.render(*scene, *camera);
+        renderer->clear();
+        renderer->render(*scene, *camera);
 
         if (youbot) {
 

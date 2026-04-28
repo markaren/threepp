@@ -7,9 +7,9 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("HDR Environment Map");
-    GLRenderer renderer(canvas.size());
-    renderer.toneMapping = ToneMapping::ACESFilmic;
-    renderer.toneMappingExposure = 1.0f;
+    auto renderer = createRenderer(canvas);
+    renderer->toneMapping = ToneMapping::ACESFilmic;
+    renderer->toneMappingExposure = 1.0f;
 
     auto scene = Scene::create();
 
@@ -27,7 +27,7 @@ int main() {
     auto sphereGeo = SphereGeometry::create(1.0f, 64, 32);
     auto sphereMat = MeshStandardMaterial::create();
     sphereMat->metalness = 1.0f;
-    sphereMat->roughness = 0.0f;
+    sphereMat->roughness = 0.2f;
     auto sphere = Mesh::create(sphereGeo, sphereMat);
     scene->add(sphere);
 
@@ -36,10 +36,10 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     canvas.animate([&] {
-        renderer.render(*scene, camera);
+        renderer->render(*scene, camera);
     });
 }

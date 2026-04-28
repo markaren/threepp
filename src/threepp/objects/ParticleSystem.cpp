@@ -6,7 +6,7 @@
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/math/Color.hpp"
 #include "threepp/math/MathUtils.hpp"
-#include "threepp/objects/Points.hpp"
+#include "threepp/objects/Mesh.hpp"
 #include "threepp/textures/Texture.hpp"
 
 #include <cmath>
@@ -22,53 +22,66 @@ namespace {
 
     /**
     * Original three.js code by Lee Stemkoski   http://www.adelphi.edu/~stemkoski/
+    * Rewritten to use billboard quads instead of GL points for WebGPU compatibility.
     */
-
-    ///////////////////////////////////////////////////////////////////////////////
 
     /////////////
     // SHADERS //
     /////////////
 
+    // Billboard quad vertex shader — works on both GL and WebGPU (no gl_PointSize).
+    // Uses only the 4 standard vertex attributes (position, normal, uv, color):
+    //   position = particle center (world space)
+    //   normal   = {size, angle, opacity}  (opacity=0 for invisible)
+    //   uv       = quad corner offset (-0.5 to 0.5)
+    //   color    = particle RGB color
     std::string particleVertexShader =
-
             R"(
-                in vec3  customColor;
-                in float customOpacity;
-                in float customSize;
-                in float customAngle;
-                in float customVisible;  // float used as boolean (0 = false, 1 = true)
-                out vec4  vColor;
-                out float vAngle;
+                varying vec4  vColor;
+                varying vec2  vUv;
+
                 void main()
                 {
-                    if ( customVisible > 0.5) 				                // true
-                        vColor = vec4( customColor, customOpacity ); //     set color associated to vertex; use later in fragment shader.
-                    else							                        // false
-                        vColor = vec4(0.0, 0.0, 0.0, 0.0); 		            //     make particle invisible.
+                    float pSize    = normal.x;
+                    float pAngle   = normal.y;
+                    float pOpacity = normal.z;
 
-                    vAngle = customAngle;
+                    vColor = vec4(color, pOpacity);
 
-                    vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
-                    gl_PointSize = customSize * ( 300.0 / length( mvPosition.xyz ) );     // scale particles as objects in 3D space
-                    gl_Position = projectionMatrix * mvPosition;
+                    // Rotate corner offset by particle angle
+                    float c = cos(pAngle);
+                    float s = sin(pAngle);
+                    vec2 rotated = vec2(
+                        c * uv.x - s * uv.y,
+                        s * uv.x + c * uv.y
+                    );
+
+                    // Billboard: transform particle center to clip space
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    vec4 clipPos = projectionMatrix * mvPosition;
+
+                    // Scale by size with distance attenuation, offset in clip space.
+                    // projectionMatrix[1][1] = 2/(top-bottom) ≈ 1/tan(fov/2),
+                    // so multiplying by it converts from world-like units to NDC.
+                    float scale = pSize * projectionMatrix[1][1] / length(mvPosition.xyz);
+                    clipPos.xy += rotated * scale * clipPos.w;
+
+                    gl_Position = clipPos;
+
+                    // Derive texture UV from corner offset
+                    vUv = uv + vec2(0.5);
                 })";
 
+    // Fragment shader — uses UV derived from quad corner offset.
     std::string particleFragmentShader =
             R"(
                 uniform sampler2D tex;
-                in vec4 vColor;
-                in float vAngle;
+                varying vec4 vColor;
+                varying vec2 vUv;
+
                 void main()
                 {
-                    gl_FragColor = vColor;
-
-                    float c = cos(vAngle);
-                    float s = sin(vAngle);
-                    vec2 rotatedUV = vec2(c * (gl_PointCoord.x - 0.5) + s * (gl_PointCoord.y - 0.5) + 0.5,
-                    c * (gl_PointCoord.y - 0.5) - s * (gl_PointCoord.x - 0.5) + 0.5);  // rotate UV coordinates to rotate texture
-                    vec4 rotatedTexture = texture2D( tex,  rotatedUV );
-                    gl_FragColor = gl_FragColor * rotatedTexture;    // sets an otherwise white particle texture to desired color
+                    gl_FragColor = vColor * texture2D(tex, vUv);
                 })";
 
     // helper functions for randomization
@@ -160,6 +173,15 @@ namespace {
             }
         }
     };
+
+    // Helper: set per-particle attribute data for all 4 quad vertices
+    inline void setQuadXYZ(FloatBufferAttribute* attr, unsigned particleIdx, float x, float y, float z) {
+        unsigned vi = particleIdx * 4;
+        attr->setXYZ(vi, x, y, z);
+        attr->setXYZ(vi + 1, x, y, z);
+        attr->setXYZ(vi + 2, x, y, z);
+        attr->setXYZ(vi + 3, x, y, z);
+    }
 
 }// namespace
 
@@ -257,14 +279,44 @@ struct ParticleSystem::Impl {
         particleMaterial->vertexShader = particleVertexShader;
         particleMaterial->fragmentShader = particleFragmentShader;
         particleMaterial->transparent = true;
+        particleMaterial->side = Side::Double;
+        particleMaterial->vertexColors = true;
+
+        // Build quad geometry: 4 vertices and 6 indices per particle.
+        // Standard vertex attributes are repurposed:
+        //   position(3) = particle center (world space)
+        //   normal(3)   = {size, angle, opacity}
+        //   uv(2)       = quad corner offset (-0.5 to 0.5)
+        //   color(3)    = particle RGB color
+        size_t vertCount = particleCount * 4;
+        std::vector<float> positions(vertCount * 3, 0.0f);
+        std::vector<float> normals(vertCount * 3, 0.0f);
+        std::vector<float> uvs(vertCount * 2);
+        std::vector<float> colors(vertCount * 3, 0.0f);
+        std::vector<int> indices(particleCount * 6);
+
+        // Corner offsets for each quad vertex
+        const float cu[] = {-0.5f, 0.5f, 0.5f, -0.5f};
+        const float cv[] = {-0.5f, -0.5f, 0.5f, 0.5f};
+
+        for (size_t i = 0; i < particleCount; i++) {
+            size_t vi = i * 4;
+            for (int j = 0; j < 4; j++) {
+                uvs[(vi + j) * 2 + 0] = cu[j];
+                uvs[(vi + j) * 2 + 1] = cv[j];
+            }
+            size_t ii = i * 6;
+            auto v = static_cast<int>(vi);
+            indices[ii + 0] = v;     indices[ii + 1] = v + 1; indices[ii + 2] = v + 2;
+            indices[ii + 3] = v;     indices[ii + 4] = v + 2; indices[ii + 5] = v + 3;
+        }
 
         particleGeometry = BufferGeometry::create();
-        particleGeometry->setAttribute("position", FloatBufferAttribute::create(std::vector<float>(particleCount * 3), 3));
-        particleGeometry->setAttribute("customVisible", FloatBufferAttribute::create(std::vector<float>(particleCount), 1));
-        particleGeometry->setAttribute("customAngle", FloatBufferAttribute::create(std::vector<float>(particleCount), 1));
-        particleGeometry->setAttribute("customSize", FloatBufferAttribute::create(std::vector<float>(particleCount), 1));
-        particleGeometry->setAttribute("customColor", FloatBufferAttribute::create(std::vector<float>(particleCount * 3), 3));
-        particleGeometry->setAttribute("customOpacity", FloatBufferAttribute::create(std::vector<float>(particleCount), 1));
+        particleGeometry->setAttribute("position", FloatBufferAttribute::create(positions, 3));
+        particleGeometry->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
+        particleGeometry->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
+        particleGeometry->setAttribute("color", FloatBufferAttribute::create(colors, 3));
+        particleGeometry->setIndex(indices);
 
         if (settings.texture) {
             particleMaterial->uniforms["tex"].setValue(settings.texture.get());
@@ -272,27 +324,17 @@ struct ParticleSystem::Impl {
         }
 
         // link particle data with geometry/material data
+        auto posAttr = particleGeometry->getAttribute<float>("position");
+        auto normalAttr = particleGeometry->getAttribute<float>("normal");
+        auto colorAttr = particleGeometry->getAttribute<float>("color");
         for (unsigned i = 0; i < particleCount; i++) {
-            // remove duplicate code somehow, here and in update function below.
             this->particleArray.emplace_back(createParticle());
+            auto& p = this->particleArray[i];
 
-            auto position = particleGeometry->getAttribute<float>("position");
-            position->setXYZ(i, this->particleArray[i].position.x, this->particleArray[i].position.y, this->particleArray[i].position.z);
-
-            auto customVisible = particleGeometry->getAttribute<float>("customVisible");
-            customVisible->setX(i, this->particleArray[i].alive);
-
-            auto customColor = particleGeometry->getAttribute<float>("customColor");
-            customColor->setXYZ(i, this->particleArray[i].color->r, this->particleArray[i].color->g, this->particleArray[i].color->b);
-
-            auto customOpacity = particleGeometry->getAttribute<float>("customOpacity");
-            customOpacity->setX(i, *this->particleArray[i].opacity);
-
-            auto customSize = particleGeometry->getAttribute<float>("customSize");
-            customSize->setX(i, this->particleArray[i].size);
-
-            auto customAngle = particleGeometry->getAttribute<float>("customAngle");
-            customAngle->setX(i, this->particleArray[i].angle);
+            float opacity = p.alive ? *p.opacity : 0.0f;
+            setQuadXYZ(posAttr, i, p.position.x, p.position.y, p.position.z);
+            setQuadXYZ(normalAttr, i, p.size, p.angle, opacity);
+            setQuadXYZ(colorAttr, i, p.color->r, p.color->g, p.color->b);
         }
 
         this->particleMaterial->blending = settings.blendStyle;
@@ -300,19 +342,16 @@ struct ParticleSystem::Impl {
             this->particleMaterial->depthTest = false;
         }
 
-        this->particleMesh = Points::create(this->particleGeometry, this->particleMaterial);
+        this->particleMesh = Mesh::create(this->particleGeometry, this->particleMaterial);
         scope.add(this->particleMesh);
     }
 
     void update(float dt) {
         std::vector<unsigned int> recycleIndices;
 
-        auto position = particleGeometry->getAttribute<float>("position");
-        auto customVisible = this->particleGeometry->getAttribute<float>("customVisible");
-        auto customOpacity = this->particleGeometry->getAttribute<float>("customOpacity");
-        auto customSize = this->particleGeometry->getAttribute<float>("customSize");
-        auto customAngle = this->particleGeometry->getAttribute<float>("customAngle");
-        auto customColor = this->particleGeometry->getAttribute<float>("customColor");
+        auto posAttr = particleGeometry->getAttribute<float>("position");
+        auto normalAttr = particleGeometry->getAttribute<float>("normal");
+        auto colorAttr = particleGeometry->getAttribute<float>("color");
 
         // update particle data
         for (unsigned i = 0; i < this->particleCount; i++) {
@@ -320,27 +359,23 @@ struct ParticleSystem::Impl {
                 this->particleArray[i].update(dt);
 
                 // check if particle should expire
-                // could also use: death by size<0 or alpha<0.
                 if (this->particleArray[i].age > settings.particleDeathAge) {
                     this->particleArray[i].alive = false;
                     recycleIndices.emplace_back(i);
                 }
-                // update particle properties in shader
 
-                position->setXYZ(i, this->particleArray[i].position.x, this->particleArray[i].position.y, this->particleArray[i].position.z);
-                customVisible->setX(i, this->particleArray[i].alive);
-                customOpacity->setX(i, *this->particleArray[i].opacity);
-                customSize->setX(i, this->particleArray[i].size);
-                customAngle->setX(i, this->particleArray[i].angle);
-                customColor->setXYZ(i, this->particleArray[i].color->r, this->particleArray[i].color->g, this->particleArray[i].color->b);
+                // update particle properties in shader (all 4 quad vertices)
+                auto& p = this->particleArray[i];
+                float opacity = p.alive ? *p.opacity : 0.0f;
+                setQuadXYZ(posAttr, i, p.position.x, p.position.y, p.position.z);
+                setQuadXYZ(normalAttr, i, p.size, p.angle, opacity);
+                setQuadXYZ(colorAttr, i, p.color->r, p.color->g, p.color->b);
             }
         }
 
-        customVisible->needsUpdate();
-        customOpacity->needsUpdate();
-        customSize->needsUpdate();
-        customAngle->needsUpdate();
-        customColor->needsUpdate();
+        posAttr->needsUpdate();
+        normalAttr->needsUpdate();
+        colorAttr->needsUpdate();
 
         // check if particle emitter is still running
         if (!this->emitterAlive) return;
@@ -358,13 +393,16 @@ struct ParticleSystem::Impl {
                 this->particleArray[i].alive = true;
         }
 
-        // if any particles have died while the emitter is still running, we imediately recycle them
+        // if any particles have died while the emitter is still running, we immediately recycle them
         for (unsigned int i : recycleIndices) {
             this->particleArray[i] = this->createParticle();
             this->particleArray[i].alive = true;// activate right away
-            position->setXYZ(i, this->particleArray[i].position.x, this->particleArray[i].position.y, this->particleArray[i].position.z);
+            auto& p = this->particleArray[i];
+            setQuadXYZ(posAttr, i, p.position.x, p.position.y, p.position.z);
+            setQuadXYZ(normalAttr, i, p.size, p.angle, *p.opacity);
+            setQuadXYZ(colorAttr, i, p.color->r, p.color->g, p.color->b);
         }
-        position->needsUpdate();
+        posAttr->needsUpdate();
 
         // stop emitter?
         this->emitterAge += dt;

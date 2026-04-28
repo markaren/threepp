@@ -25,12 +25,16 @@ namespace {
 #ifdef __EMSCRIPTEN__
     struct FunctionWrapper {
         std::function<void()> loopFunction;
+        std::function<void()> frameEndCallback;
 
-        explicit FunctionWrapper(std::function<void()> loopFunction)
-            : loopFunction(std::move(loopFunction)) {}
+        FunctionWrapper(std::function<void()> loopFunction, std::function<void()> frameEndCallback)
+            : loopFunction(std::move(loopFunction)), frameEndCallback(std::move(frameEndCallback)) {}
 
         void loop() {
             loopFunction();
+            if (frameEndCallback) {
+                frameEndCallback();
+            }
         }
     };
 
@@ -43,7 +47,7 @@ namespace {
     void setWindowIcon(GLFWwindow* window, std::optional<std::filesystem::path> customIcon) {
 
 #ifdef __APPLE__
-        return; // operation is not supported on macOS
+        return;// operation is not supported on macOS
 #endif
 
         ImageLoader imageLoader;
@@ -147,17 +151,23 @@ namespace {
         std::cerr << "Error: " << description << std::endl;
     }
 
+    static int& glfwRefCount() {
+        static int count = 0;
+        return count;
+    }
+
     void initGLfw() {
-        static bool initialized = false;
-
-        if (!initialized) {
-            initialized = true;
-
+        if (glfwRefCount()++ == 0) {
             glfwSetErrorCallback(error_callback);
-
             if (!glfwInit()) {
                 exit(EXIT_FAILURE);
             }
+        }
+    }
+
+    void termGLfw() {
+        if (--glfwRefCount() == 0) {
+            glfwTerminate();
         }
     }
 
@@ -166,19 +176,24 @@ namespace {
 struct Canvas::Impl {
 
     Canvas& scope;
-    GLFWwindow* window;
+    GLFWwindow* window{nullptr};
 
     WindowSize size_;
     Vector2 lastMousePos_;
 
     bool close_{false};
-    bool exitOnKeyEscape_;
+
+    // Retained for lazy window creation (initWindow called on first animate).
+    Parameters params_;
 
     std::vector<std::function<void(WindowSize)>> resizeListener;
     std::vector<std::function<void(int monitor)>> monitorChangesListener;
+    std::function<void()> frameEndCallback_;
+    bool insideAnimateLoop_{false};
 
     explicit Impl(Canvas& scope, const Parameters& params)
-        : scope(scope), exitOnKeyEscape_(params.exitOnKeyEscape_) {
+        : scope(scope),
+          params_(params) {
 
         initGLfw();
 
@@ -188,39 +203,48 @@ struct Canvas::Impl {
             const auto fullSize = monitor::monitorSize();
             size_ = {fullSize.width() / 2, fullSize.height() / 2};
         }
+    }
+
+    void initWindow(GraphicsAPI api) {
+        if (window) return; // already initialised
+        params_.graphicsApi_ = api;
 
 #ifndef __EMSCRIPTEN__
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-        glfwWindowHint(GLFW_RESIZABLE, params.resizable_);
-
-        glfwWindowHint(GLFW_VISIBLE, params.headless_ ? GLFW_FALSE : GLFW_TRUE);
-
+        if (api == GraphicsAPI::WebGPU) {
+            glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+        } else {
+            glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+            glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+            glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+            glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        }
+        glfwWindowHint(GLFW_RESIZABLE, params_.resizable_);
+        glfwWindowHint(GLFW_VISIBLE, params_.headless_ ? GLFW_FALSE : GLFW_TRUE);
+#else
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);// for WebGPU
 #endif
 
-        if (params.antialiasing_ > 0) {
-            glfwWindowHint(GLFW_SAMPLES, params.antialiasing_);
+        if (params_.antialiasing_ > 0) {
+            glfwWindowHint(GLFW_SAMPLES, params_.antialiasing_);
         }
 
-        window = glfwCreateWindow(size_.width(), size_.height(), params.title_.c_str(), nullptr, nullptr);
+        window = glfwCreateWindow(size_.width(), size_.height(), params_.title_.c_str(), nullptr, nullptr);
         if (!window) {
-            glfwTerminate();
+            termGLfw();
             exit(EXIT_FAILURE);
         }
 
 #ifdef __EMSCRIPTEN__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
-        EM_ASM({ document.title = UTF8ToString($0); }, params.title_.c_str());
+        EM_ASM({ document.title = UTF8ToString($0); }, params_.title_.c_str());
 #pragma GCC diagnostic pop
 #endif
 
         glfwSetWindowUserPointer(window, this);
 
 #ifndef __EMSCRIPTEN__
-        setWindowIcon(window, params.favicon_);
+        setWindowIcon(window, params_.favicon_);
 #endif
 
         glfwSetKeyCallback(window, key_callback);
@@ -231,18 +255,20 @@ struct Canvas::Impl {
         glfwSetWindowPosCallback(window, window_pos_callback);
         glfwSetDropCallback(window, drop_callback);
 
-        glfwMakeContextCurrent(window);
+        if (api == GraphicsAPI::OpenGL) {
+            glfwMakeContextCurrent(window);
 
 #ifndef __EMSCRIPTEN__
-        loadGlad();
-        glfwSwapInterval(params.vsync_ ? 1 : 0);
+            loadGlad();
+            glfwSwapInterval(params_.vsync_ ? 1 : 0);
 
-        if (params.antialiasing_ > 0) {
-            glEnable(GL_MULTISAMPLE);
-        }
+            if (params_.antialiasing_ > 0) {
+                glEnable(GL_MULTISAMPLE);
+            }
 
-        glEnable(GL_PROGRAM_POINT_SIZE);
+            glEnable(GL_PROGRAM_POINT_SIZE);
 #endif
+        }
     }
 
     [[nodiscard]] const WindowSize& getSize() const {
@@ -250,21 +276,34 @@ struct Canvas::Impl {
         return size_;
     }
 
-    void setSize(std::pair<int, int> size) const {
+    void setSize(std::pair<int, int> size) {
+
+        if (!window) {
+            params_.size(size);
+            return;
+        }
 
         glfwSetWindowSize(window, size.first, size.second);
     }
 
     bool animateOnce(const std::function<void()>& f) {
 
+        if (!window) initWindow(params_.graphicsApi_);
+
         if (close_ || glfwWindowShouldClose(window)) {
             close_ = true;
             return false;
         }
 
+        insideAnimateLoop_ = true;
         f();
+        insideAnimateLoop_ = false;
 
-        glfwSwapBuffers(window);
+        if (params_.graphicsApi_ == GraphicsAPI::OpenGL) {
+            glfwSwapBuffers(window);
+        } else if (frameEndCallback_) {
+            frameEndCallback_();
+        }
         glfwPollEvents();
 
         return true;
@@ -272,7 +311,7 @@ struct Canvas::Impl {
 
     void animate(const std::function<void()>& f) {
 #ifdef __EMSCRIPTEN__
-        FunctionWrapper wrapper(f);
+        FunctionWrapper wrapper(f, frameEndCallback_);
         emscripten_set_main_loop_arg(&emscriptenLoop, &wrapper, 0, true);
 #else
         while (animateOnce(f)) {}
@@ -293,8 +332,8 @@ struct Canvas::Impl {
     }
 
     ~Impl() {
-        glfwDestroyWindow(window);
-        glfwTerminate();
+        if (window) glfwDestroyWindow(window);
+        termGLfw();
     }
 
 
@@ -366,7 +405,7 @@ struct Canvas::Impl {
 
         const auto p = static_cast<Impl*>(glfwGetWindowUserPointer(w));
 
-        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS && p->exitOnKeyEscape_) {
+        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS && p->params_.exitOnKeyEscape_) {
             glfwSetWindowShouldClose(w, GLFW_TRUE);
             return;
         }
@@ -439,7 +478,7 @@ float Canvas::aspect() const {
 }
 
 void Canvas::exitOnKeyEscape(bool value) {
-    pimpl_->exitOnKeyEscape_ = value;
+    pimpl_->params_.exitOnKeyEscape_ = value;
 }
 
 void Canvas::setSize(std::pair<int, int> size) {
@@ -465,6 +504,34 @@ void Canvas::close() {
 void* Canvas::windowPtr() const {
 
     return pimpl_->window;
+}
+
+GraphicsAPI Canvas::graphicsApi() const {
+
+    return pimpl_->params_.graphicsApi_;
+}
+
+void Canvas::initWindow(GraphicsAPI api) {
+
+    pimpl_->initWindow(api);
+}
+
+bool Canvas::vsync() const {
+
+    return pimpl_->params_.vsync_;
+}
+
+int Canvas::samples() const {
+
+    return pimpl_->params_.antialiasing_;
+}
+
+void Canvas::setFrameEndCallback(std::function<void()> callback) {
+    pimpl_->frameEndCallback_ = std::move(callback);
+}
+
+bool Canvas::isInsideAnimateLoop() const {
+    return pimpl_->insideAnimateLoop_;
 }
 
 Canvas::~Canvas() = default;
@@ -514,6 +581,7 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
 
             headless(std::get<bool>(value));
             used = true;
+
         }
 
         if (!used) {
@@ -591,7 +659,6 @@ Canvas::Parameters& Canvas::Parameters::headless(bool flag) {
 
     return *this;
 }
-
 
 WindowSize monitor::monitorSize(int monitor) {
 

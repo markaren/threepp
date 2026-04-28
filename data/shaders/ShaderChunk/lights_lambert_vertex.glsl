@@ -42,7 +42,13 @@ vIndirectFront += getLightProbeIrradiance( lightProbe, geometry );
 		getPointDirectLightIrradiance( pointLights[ i ], geometry, directLight );
 
 		dotNL = dot( geometry.normal, directLight.direction );
-		directLightColor_Diffuse = PI * directLight.color;
+		directLightColor_Diffuse = directLight.color;
+
+		#ifdef USE_LEGACY_LIGHTS
+
+			directLightColor_Diffuse *= PI; // punctual light
+
+		#endif
 
 		vLightFront += saturate( dotNL ) * directLightColor_Diffuse;
 
@@ -65,7 +71,13 @@ vIndirectFront += getLightProbeIrradiance( lightProbe, geometry );
 		getSpotDirectLightIrradiance( spotLights[ i ], geometry, directLight );
 
 		dotNL = dot( geometry.normal, directLight.direction );
-		directLightColor_Diffuse = PI * directLight.color;
+		directLightColor_Diffuse = directLight.color;
+
+		#ifdef USE_LEGACY_LIGHTS
+
+			directLightColor_Diffuse *= PI; // punctual light
+
+		#endif
 
 		vLightFront += saturate( dotNL ) * directLightColor_Diffuse;
 
@@ -99,7 +111,13 @@ vIndirectFront += getLightProbeIrradiance( lightProbe, geometry );
 		getDirectionalDirectLightIrradiance( directionalLights[ i ], geometry, directLight );
 
 		dotNL = dot( geometry.normal, directLight.direction );
-		directLightColor_Diffuse = PI * directLight.color;
+		directLightColor_Diffuse = directLight.color;
+
+		#ifdef USE_LEGACY_LIGHTS
+
+			directLightColor_Diffuse *= PI; // punctual light
+
+		#endif
 
 		vLightFront += saturate( dotNL ) * directLightColor_Diffuse;
 

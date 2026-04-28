@@ -1,6 +1,6 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
-#include "threepp/textures/DataTexture.hpp"
+#include "threepp/textures/FramebufferTexture.hpp"
 #include "threepp/threepp.hpp"
 
 #pragma warning(disable : 4312) // cast from unsigned int to void*
@@ -10,7 +10,7 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Imgui framebuffer");
-    GLRenderer renderer(canvas.size());
+    GLRenderer renderer(canvas);
 
     Scene scene;
     PerspectiveCamera camera(60, canvas.aspect());
@@ -23,10 +23,7 @@ int main() {
     scene.add(sphere);
 
     unsigned int textureSizeXY = 256;
-    auto texture = DataTexture::create(3, textureSizeXY, textureSizeXY);
-    texture->format = Format::RGB;
-    texture->minFilter = Filter::Nearest;
-    texture->magFilter = Filter::Nearest;
+    auto texture = FramebufferTexture::create(textureSizeXY, textureSizeXY);
 
     OrbitControls controls{camera, canvas};
 
@@ -37,7 +34,7 @@ int main() {
     });
 
     bool imguiOnly = true;
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, renderer, [&] {
 
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({static_cast<float>(textureSizeXY), static_cast<float>(50 + textureSizeXY)}, 0);

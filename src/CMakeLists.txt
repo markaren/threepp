@@ -124,6 +124,7 @@ set(publicHeaders
         "threepp/loaders/TextureLoader.hpp"
         "threepp/loaders/URDFLoader.hpp"
 
+        "threepp/materials/LineDashedMaterial.hpp"
         "threepp/materials/Material.hpp"
         "threepp/materials/MeshBasicMaterial.hpp"
         "threepp/materials/MeshDepthMaterial.hpp"
@@ -192,6 +193,7 @@ set(publicHeaders
         "threepp/textures/DataTexture.hpp"
         "threepp/textures/DataTexture3D.hpp"
         "threepp/textures/DepthTexture.hpp"
+        "threepp/textures/FramebufferTexture.hpp"
         "threepp/textures/Image.hpp"
         "threepp/textures/Texture.hpp"
 
@@ -210,10 +212,17 @@ set(publicHeaders
         "threepp/lights/LightShadow.hpp"
         "threepp/lights/PointLight.hpp"
         "threepp/lights/PointLightShadow.hpp"
+        "threepp/lights/RectAreaLight.hpp"
+        "threepp/lights/RectAreaLightUniformsLib.hpp"
         "threepp/lights/SpotLight.hpp"
         "threepp/lights/SpotLightShadow.hpp"
 
+        "threepp/renderers/Renderer.hpp"
+        "threepp/renderers/RendererFactory.hpp"
         "threepp/renderers/GLRenderer.hpp"
+        "threepp/renderers/WgpuRenderer.hpp"
+        "threepp/renderers/CrossRenderer.hpp"
+        "threepp/renderers/RenderTarget.hpp"
         "threepp/renderers/GLRenderTarget.hpp"
 
         "threepp/renderers/gl/GLInfo.hpp"
@@ -240,6 +249,12 @@ set(privateHeaders
 
         "threepp/renderers/GLCubeRenderTarget.hpp"
 
+        "threepp/renderers/common/Lights.hpp"
+        "threepp/renderers/common/RenderLists.hpp"
+        "threepp/renderers/common/RenderStates.hpp"
+        "threepp/renderers/common/RendererCapabilities.hpp"
+        "threepp/renderers/common/ShadowConfig.hpp"
+
         "threepp/renderers/gl/Buffer.hpp"
         "threepp/renderers/gl/GLAttributes.hpp"
         "threepp/renderers/gl/GLBackground.hpp"
@@ -253,6 +268,7 @@ set(privateHeaders
         "threepp/renderers/gl/GLMaterials.hpp"
         "threepp/renderers/gl/GLMorphTargets.hpp"
         "threepp/renderers/gl/GLObjects.hpp"
+        "threepp/renderers/gl/GLPMREM.hpp"
         "threepp/renderers/gl/GLProperties.hpp"
         "threepp/renderers/gl/GLProgram.hpp"
         "threepp/renderers/gl/GLPrograms.hpp"
@@ -367,6 +383,7 @@ set(sources
         "threepp/loaders/URDFLoader.cpp"
 
         "threepp/materials/LineBasicMaterial.cpp"
+        "threepp/materials/LineDashedMaterial.cpp"
         "threepp/materials/Material.cpp"
         "threepp/materials/MeshBasicMaterial.cpp"
         "threepp/materials/MeshLambertMaterial.cpp"
@@ -411,6 +428,9 @@ set(sources
         "threepp/lights/LightShadow.cpp"
         "threepp/lights/PointLight.cpp"
         "threepp/lights/PointLightShadow.cpp"
+        "threepp/lights/RectAreaLight.cpp"
+        "threepp/lights/RectAreaLightUniformsLib.cpp"
+        "threepp/lights/ltc/ltc_data.cpp"
         "threepp/lights/SpotLight.cpp"
         "threepp/lights/SpotLightShadow.cpp"
 
@@ -447,7 +467,12 @@ set(sources
         "threepp/utils/TaskManager.cpp"
 
         "threepp/renderers/GLRenderer.cpp"
-        "threepp/renderers/GLRenderTarget.cpp"
+        "threepp/renderers/RenderTarget.cpp"
+        "threepp/renderers/RendererFactory.cpp"
+
+        "threepp/renderers/common/Lights.cpp"
+        "threepp/renderers/common/RenderLists.cpp"
+        "threepp/renderers/common/RenderStates.cpp"
 
         "threepp/renderers/gl/GLAttributes.cpp"
         "threepp/renderers/gl/GLBackground.cpp"
@@ -459,6 +484,7 @@ set(sources
         "threepp/renderers/gl/GLInfo.cpp"
         "threepp/renderers/gl/GLLights.cpp"
         "threepp/renderers/gl/GLObjects.cpp"
+        "threepp/renderers/gl/GLPMREM.cpp"
         "threepp/renderers/gl/GLProgram.cpp"
         "threepp/renderers/gl/GLPrograms.cpp"
         "threepp/renderers/gl/GLMaterials.cpp"
@@ -566,6 +592,55 @@ These can be installed on Ubuntu systems via sudo apt install libxinerama-dev li
     endif ()
 endif ()
 
+if (THREEPP_WITH_WGPU)
+    list(APPEND publicHeaders
+            "threepp/renderers/wgpu/WgpuBuffer.hpp"
+            "threepp/renderers/wgpu/WgpuTexture.hpp"
+            "threepp/renderers/wgpu/WgpuComputePipeline.hpp"
+            "threepp/renderers/wgpu/EffectComposer.hpp"
+            "threepp/renderers/wgpu/ShaderPass.hpp"
+            "threepp/renderers/wgpu/WgpuPathTracer.hpp"
+    )
+    list(APPEND sources
+            "threepp/renderers/WgpuRenderer.cpp"
+            "threepp/renderers/CrossRenderer.cpp"
+            "threepp/renderers/wgpu/WgpuBindGroupCache.cpp"
+            "threepp/renderers/wgpu/WgpuBindGroups.cpp"
+            "threepp/renderers/wgpu/WgpuBufferPool.cpp"
+            "threepp/renderers/wgpu/WgpuGeometries.cpp"
+            "threepp/renderers/wgpu/WgpuLights.cpp"
+            "threepp/renderers/wgpu/WgpuMaterials.cpp"
+            "threepp/renderers/wgpu/WgpuPipelines.cpp"
+            "threepp/renderers/wgpu/WgpuReadback.cpp"
+            "threepp/renderers/wgpu/WgpuRenderTargets.cpp"
+            "threepp/renderers/wgpu/WgpuShaders.cpp"
+            "threepp/renderers/wgpu/WgpuShadowMap.cpp"
+            "threepp/renderers/wgpu/WgpuMipmapGenerator.cpp"
+            "threepp/renderers/wgpu/WgpuPMREM.cpp"
+            "threepp/renderers/wgpu/WgpuTextures.cpp"
+            "threepp/renderers/wgpu/WgpuTexture.cpp"
+            "threepp/renderers/wgpu/WgpuBuffer.cpp"
+            "threepp/renderers/wgpu/WgpuComputePipeline.cpp"
+            "threepp/renderers/wgpu/EffectComposer.cpp"
+            "threepp/renderers/wgpu/ShaderPass.cpp"
+
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracer.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerAtlas.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerGeometry.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBvh.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders_Display.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders_Denoise.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders_VtRefit.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders_Rt.cpp"
+    )
+    if (APPLE)
+        list(APPEND sources
+                "threepp/renderers/WgpuSurfaceMacOS.mm"
+        )
+    endif ()
+endif ()
+
 if (NOT DEFINED EMSCRIPTEN)
     list(APPEND privateHeaders
             "threepp/utils/LoadGlad.hpp"
@@ -644,6 +719,68 @@ if (NOT DEFINED EMSCRIPTEN)
         endif ()
     endif ()
 
+endif ()
+
+
+if (THREEPP_WITH_WGPU)
+    target_compile_definitions(threepp PRIVATE THREEPP_WITH_WGPU=1)
+
+    if (DEFINED EMSCRIPTEN)
+        # Emscripten exposes the browser's native WebGPU — no wgpu-native needed.
+        target_compile_options(threepp PUBLIC "--use-port=emdawnwebgpu")
+
+        # Pre-translate GLSL shaders to WGSL via naga for browser deployment.
+        # Browsers only accept WGSL (WGPUSType_ShaderSourceSPIRV is not available).
+        include(${PROJECT_SOURCE_DIR}/cmake/FetchNaga.cmake)
+        include(${PROJECT_SOURCE_DIR}/cmake/EmbedWgslFromGlsl.cmake)
+
+        embed_wgsl_from_glsl(threepp water
+            "${PROJECT_SOURCE_DIR}/data/shaders/wgsl_input/water.vert"
+            "${PROJECT_SOURCE_DIR}/data/shaders/wgsl_input/water.frag"
+        )
+    else ()
+        include(${PROJECT_SOURCE_DIR}/cmake/FetchWgpuNative.cmake)
+
+        target_include_directories(threepp PRIVATE "${WGPU_INCLUDE_DIR}")
+        target_link_libraries(threepp PUBLIC ${WGPU_LIBRARY})
+
+        if (THREEPP_WGPU_GLSL_COMPAT)
+            message(STATUS "Wgpu GLSL compat: fetching glslang...")
+            include(${PROJECT_SOURCE_DIR}/cmake/FetchGlslang.cmake)
+
+            target_sources(threepp PRIVATE
+                "threepp/renderers/wgpu/WgpuShaderTranslator.cpp"
+            )
+            target_include_directories(threepp PRIVATE "${glslang_SOURCE_DIR}")
+            target_link_libraries(threepp PRIVATE
+                glslang
+                SPIRV
+                glslang-default-resource-limits
+            )
+            target_compile_definitions(threepp PRIVATE THREEPP_WGPU_GLSL_COMPAT=1)
+        endif()
+
+        if (APPLE)
+            target_link_libraries(threepp PRIVATE "-framework QuartzCore" "-framework Metal")
+        endif ()
+
+        # Copy wgpu_native.dll next to executables so they can find it at runtime.
+        # Multi-config generators (Visual Studio) put EXEs in CMAKE_RUNTIME_OUTPUT_DIRECTORY/$<CONFIG>/,
+        # while single-config generators put them directly in CMAKE_RUNTIME_OUTPUT_DIRECTORY.
+        if (WIN32 AND WGPU_NATIVE_DLL)
+            if (CMAKE_CONFIGURATION_TYPES)
+                set(_wgpu_dll_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>")
+            else ()
+                set(_wgpu_dll_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+            endif ()
+            add_custom_command(TARGET threepp POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${WGPU_NATIVE_DLL}"
+                    "${_wgpu_dll_dest}/wgpu_native.dll"
+                COMMENT "Copying wgpu_native.dll to output directory"
+            )
+        endif ()
+    endif ()
 endif ()
 
 

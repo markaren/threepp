@@ -28,8 +28,8 @@ namespace {
 int main() {
 
     Canvas canvas{"Camera helper"};
-    GLRenderer renderer(canvas.size());
-    renderer.autoClear = false;
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(60, 0.5f * canvas.aspect(), 1, 10);
@@ -52,24 +52,24 @@ int main() {
         camera->updateProjectionMatrix();
         camera2->aspect = 0.5f * size.aspect();
         camera2->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
     canvas.animate([&]() {
         const auto size = canvas.size();
 
-        renderer.clear();
+        renderer->clear();
 
         helper->visible = false;
 
-        renderer.setViewport({size.width() / 2, 0, size.width() / 2, size.height()});
-        renderer.render(*scene, *camera);
+        renderer->setViewport({size.width() / 2, 0, size.width() / 2, size.height()});
+        renderer->render(*scene, *camera);
 
         helper->visible = true;
 
-        renderer.setViewport({0, 0, size.width() / 2, size.height()});
-        renderer.render(*scene, *camera2);
+        renderer->setViewport({0, 0, size.width() / 2, size.height()});
+        renderer->render(*scene, *camera2);
 
         camera->position.z = 4 * std::sin(math::TWO_PI * 0.1f * clock.getElapsedTime());
     });

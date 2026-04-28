@@ -1,7 +1,8 @@
 #include "threepp/animation/AnimationMixer.hpp"
 #include "threepp/helpers/SkeletonHelper.hpp"
-#include "threepp/loaders/AssimpLoader.hpp"
+#include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -9,9 +10,9 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Simple skinning", {{"aa", 8}});
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = ShadowMap::PFCSoft;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
+    renderer->shadowMap().type = ShadowMap::PFCSoft;
 
     PerspectiveCamera camera(45, canvas.aspect(), 0.1, 10000);
     camera.position.set(0, 6, -15);
@@ -49,18 +50,16 @@ int main() {
 
     //
 
-    AssimpLoader loader;
+    ModelLoader loader;
 
     auto model = loader.load(std::string(DATA_FOLDER) + "/models/gltf/SimpleSkinning.gltf");
     model->traverseType<SkinnedMesh>([](auto& m) {
-
         m.receiveShadow = true;
         m.castShadow = true;
-
     });
     scene.add(model);
 
-    auto mixer = AnimationMixer(*model);
+    AnimationMixer mixer = AnimationMixer(*model);
     mixer.clipAction(AnimationClip::findByName(model->animations, "Take 01"))->play();
 
     auto skeletonHelper = SkeletonHelper::create(*model);
@@ -78,7 +77,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
 
@@ -88,6 +87,6 @@ int main() {
 
         mixer.update(dt);
 
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
     });
 }

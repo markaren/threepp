@@ -5,3 +5,7 @@ add_subdirectory(Snake)
 add_subdirectory(SpheroControl)
 add_subdirectory(Optimization)
 add_subdirectory(Youbot)
+
+if (THREEPP_WITH_WGPU)
+    add_subdirectory(WebTide)
+endif ()

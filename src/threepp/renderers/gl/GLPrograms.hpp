@@ -4,7 +4,6 @@
 #define THREEPP_GLPROGRAMS_HPP
 
 #include "GLClipping.hpp"
-#include "GLLights.hpp"
 #include "GLProgram.hpp"
 #include "ProgramParameters.hpp"
 
@@ -40,12 +39,15 @@ namespace threepp {
 
             static ProgramParameters getParameters(
                     const GLRenderer& renderer,
+                    const ShadowConfig& shadowConfig,
+                    const RendererCapabilities& capabilities,
                     const GLClipping& clipping,
                     Material* material,
-                    const GLLights::LightState& lights,
+                    const Lights::LightState& lights,
                     size_t numShadows,
                     Scene* scene,
-                    Object3D* object);
+                    Object3D* object,
+                    Texture* resolvedEnvMap);
 
             static std::string getProgramCacheKey(const GLRenderer& renderer, const ProgramParameters& parameters);
 

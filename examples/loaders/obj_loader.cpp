@@ -4,15 +4,18 @@
 using namespace threepp;
 
 void createAndAddLights(Scene& scene) {
-    auto light1 = PointLight::create(0xffffff, 1.f);
+    // intensity *= PI compensates the BRDF 1/π under physical lights;
+    // decay = 0 disables the new 1/d falloff so the lights behave like the
+    // pre-r166 legacy ones at distance=0 (no cutoff).
+    auto light1 = PointLight::create(0xffffff, 1.5f, 0.f, 0.f);
     light1->position.set(45, 115, 25);
     scene.add(light1);
 
-    auto light2 = PointLight::create(0xffffff, 1.f);
+    auto light2 = PointLight::create(0xffffff, 1.5f, 0.f, 0.f);
     light2->position.set(-45, 115, 125);
     scene.add(light2);
 
-    auto light3 = PointLight::create(0xffffff, 1.f);
+    auto light3 = PointLight::create(0xffffff, 1.5f, 0.f, 0.f);
     light3->position.set(0, 25, -30);
     scene.add(light3);
 }
@@ -20,7 +23,7 @@ void createAndAddLights(Scene& scene) {
 int main() {
 
     Canvas canvas{"OBJ loader", {{"aa", 8}}};
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
@@ -32,7 +35,7 @@ int main() {
     scene->add(obj1);
 
     TextureLoader tl;
-    auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/uv_grid_opengl.jpg");
+    auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/uv_grid_opengl.jpg", ColorSpace::sRGB);
     auto obj2 = loader.load(std::string(DATA_FOLDER) + "/models/obj/female02/female02.obj", false);
     obj2->position.x = 30;
     obj2->traverseType<Mesh>([tex](Mesh& child) {
@@ -47,7 +50,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -57,6 +60,6 @@ int main() {
         obj1->rotation.y += 1 * dt;
         obj2->rotation.y += 1 * dt;
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

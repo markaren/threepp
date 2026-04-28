@@ -6,7 +6,7 @@
 #include "Sphero.hpp"
 #include "SpheroKeyController.hpp"
 
-#include "threepp/renderers/GLRenderTarget.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/utils/ImageUtils.hpp"
 
 #include <iostream>
@@ -59,8 +59,8 @@ int main() {
 
     Canvas canvas("Sphero simulator", {{"aa", 8}});
     auto size = canvas.size();
-    GLRenderer renderer(size);
-    renderer.autoClear = false;
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
 
     Scene scene;
     scene.background = Color::aliceblue;
@@ -95,17 +95,17 @@ int main() {
     OrthographicCamera orthoCamera(-1, 1, 1, -1, 1, 10);
     orthoCamera.position.z = 1;
 
-    GLRenderTarget::Options opts;
+    RenderTarget::Options opts;
     opts.format = Format::RGB;
     opts.anisotropy = 16;
-    GLRenderTarget renderTarget(textureSize, textureSize, opts);
+    RenderTarget renderTarget(textureSize, textureSize, opts);
     orthoScene.add(createSprite(renderTarget.texture));
 
     canvas.onWindowResize([&](WindowSize newSize) {
         camera.aspect = newSize.aspect();
         camera.updateProjectionMatrix();
 
-        renderer.setSize(newSize);
+        renderer->setSize(newSize);
 
         size = newSize;
     });
@@ -124,24 +124,24 @@ int main() {
 
         target->position.x = 25 * std::sin(math::TWO_PI * 0.05f * clock1.elapsedTime);
 
-        renderer.clear();
+        renderer->clear();
         cameraHelper->visible = false;
-        renderer.setRenderTarget(&renderTarget);
-        renderer.render(scene, spheroCamera);
-        renderer.setRenderTarget(nullptr);
+        renderer->setRenderTarget(&renderTarget);
+        renderer->render(scene, spheroCamera);
+        renderer->setRenderTarget(nullptr);
 
-        renderer.clear();
+        renderer->clear();
         cameraHelper->visible = true;
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
 
-        renderer.clearDepth();
-        renderer.setViewport({0, 0}, {textureSize, textureSize});
-        renderer.render(orthoScene, orthoCamera);
-        renderer.setViewport({0, 0}, size);
+        renderer->clearDepth();
+        renderer->setViewport(0, 0, textureSize, textureSize);
+        renderer->render(orthoScene, orthoCamera);
+        renderer->setViewport(0, 0, size.width(), size.height());
 
         if (clock2.getElapsedTime() > imageRefreshInterval) {
 
-            renderer.copyTextureToImage(*renderTarget.texture);
+            renderer->copyTextureToImage(*renderTarget.texture);
             const auto pixels = renderTarget.texture->image().data();
             // Pixels can be used for stuff like OpenCV
 

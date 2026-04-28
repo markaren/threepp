@@ -111,7 +111,7 @@ namespace {
 int main() {
 
     Canvas canvas("Geometries", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 100);
@@ -119,7 +119,7 @@ int main() {
 
     TextureLoader tl;
     const auto material = MeshBasicMaterial::create();
-    material->map = tl.load(std::string(DATA_FOLDER) + "/textures/uv_grid_opengl.jpg");
+    material->map = tl.load(std::string(DATA_FOLDER) + "/textures/uv_grid_opengl.jpg", ColorSpace::sRGB);
     material->side = Side::Double;
 
     const auto lineMaterial = LineBasicMaterial::create();
@@ -163,7 +163,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -174,6 +174,6 @@ int main() {
             m->rotation.y += 1 * dt;
         }
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

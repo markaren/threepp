@@ -9,9 +9,9 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Drag controls");
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = ShadowMap::PFC;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
+    renderer->shadowMap().type = ShadowMap::PFC;
 
     PerspectiveCamera camera(60, canvas.aspect());
     camera.position.z = 25;
@@ -21,16 +21,14 @@ int main() {
 
     scene.add(AmbientLight::create(0xaaaaaa));
 
-    auto light = SpotLight::create(0xffffff, 1.f);
+    auto light = SpotLight::create(0xffffff, 2.f);
     light->position.set(0, 25, 50);
     light->angle = math::PI / 9;
-
     light->castShadow = true;
     light->shadow->camera->nearPlane = 10;
     light->shadow->camera->farPlane = 100;
     light->shadow->mapSize.x = 1024;
     light->shadow->mapSize.y = 1024;
-
     scene.add(light);
 
     auto group = Group::create();
@@ -103,12 +101,12 @@ int main() {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
 
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     std::cout << "Press 'm' to switch between translate and rotate mode" << std::endl;
 
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
     });
 }

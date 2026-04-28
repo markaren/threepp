@@ -94,6 +94,7 @@ void MeshStandardMaterial::copyInto(Material& material) const {
     m->flatShading = flatShading;
 
     m->vertexTangents = vertexTangents;
+
 }
 
 bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue& value) {
@@ -237,6 +238,7 @@ bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue&
 
         vertexTangents = std::get<bool>(value);
         return true;
+
     }
 
     return false;

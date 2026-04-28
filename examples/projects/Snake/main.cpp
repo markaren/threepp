@@ -12,8 +12,8 @@ int main() {
     Canvas canvas("Snake");
     int height = monitor::monitorSize().height() / 2;
     canvas.setSize({height, height});
-    GLRenderer renderer(canvas.size());
-    renderer.autoClear = false;
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
 
     auto scene = SnakeScene(game);
     canvas.addKeyListener(scene);
@@ -23,7 +23,7 @@ int main() {
         0, static_cast<float>(game.gridSize()));
     camera.position.z = 1;
 
-    HUD hud(renderer);
+    HUD hud(*renderer);
     FontLoader fontLoader;
     const auto font = fontLoader.defaultFont();
 
@@ -36,7 +36,10 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.right = static_cast<float>(game.gridSize()) * size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
+        camera.right = game.gridSize() * size.aspect();
+        camera.updateProjectionMatrix();
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -49,8 +52,8 @@ int main() {
             scene.update();
         }
 
-        renderer.clear();
-        renderer.render(scene, camera);
+        renderer->clear();
+        renderer->render(scene, camera);
         hud.render();
     });
 }

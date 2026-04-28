@@ -63,7 +63,7 @@ namespace {
 int main() {
 
     Canvas canvas("TubeGeometry", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
@@ -105,7 +105,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     auto collisions = InstancedMesh::create(
@@ -136,6 +136,6 @@ int main() {
             collisions->setCount(0);
         }
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

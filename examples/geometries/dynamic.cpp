@@ -29,7 +29,7 @@ namespace {
 int main() {
 
     Canvas canvas("PlaneGeometry - dynamic", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
@@ -44,7 +44,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -53,7 +53,7 @@ int main() {
     canvas.animate([&]() {
         const auto time = clock.getElapsedTime();
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
         for (auto i = 0; i < position->count(); i++) {
 

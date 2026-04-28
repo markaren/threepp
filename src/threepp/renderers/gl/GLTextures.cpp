@@ -340,7 +340,14 @@ void gl::GLTextures::setTexture2D(Texture& texture, GLuint slot) {
 
     const auto textureProperties = properties->textureProperties.get(&texture);
 
-    if (texture.version() > 0 && textureProperties->version != texture.version()) {
+    // Upload on first use (glInit==false) or when the CPU-side texture has
+    // been marked dirty via needsUpdate(). A freshly-created Texture has
+    // version()==0 — without the glInit branch we'd fall through to
+    // bindTexture() on an uninitialized glTexture handle.
+    const bool needsUpload = !textureProperties->glInit ||
+                             textureProperties->version != texture.version();
+
+    if (needsUpload) {
 
         const auto& image = texture.images();
 
@@ -363,7 +370,7 @@ void gl::GLTextures::setTexture2DArray(Texture& texture, GLuint slot) {
 
     auto textureProperties = properties->textureProperties.get(&texture);
 
-    if (texture.version() > 0 && textureProperties->version != texture.version()) {
+    if (!textureProperties->glInit || textureProperties->version != texture.version()) {
 
         uploadTexture(textureProperties, texture, slot);
         return;
@@ -377,7 +384,7 @@ void gl::GLTextures::setTexture3D(Texture& texture, GLuint slot) {
 
     auto textureProperties = properties->textureProperties.get(&texture);
 
-    if (texture.version() > 0 && textureProperties->version != texture.version()) {
+    if (!textureProperties->glInit || textureProperties->version != texture.version()) {
 
         uploadTexture(textureProperties, texture, slot);
         return;
@@ -391,7 +398,7 @@ void gl::GLTextures::setTextureCube(Texture& texture, GLuint slot) {
 
     auto textureProperties = properties->textureProperties.get(&texture);
 
-    if (texture.version() > 0 && textureProperties->version != texture.version()) {
+    if (!textureProperties->glInit || textureProperties->version != texture.version()) {
 
         uploadCubeTexture(textureProperties, texture, slot);
         return;
@@ -422,7 +429,7 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Tex
         state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, glInternalFormat, image.width, image.height, glFormat, glType, image.data().data());
 
         for (unsigned j = 0; j < mipmaps.size(); j++) {
-            state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, j + i, glInternalFormat, image.width, image.height, glFormat, glType, mipmaps[j].data().data());
+            state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, j + 1, glInternalFormat, image.width, image.height, glFormat, glType, mipmaps[j].data().data());
         }
     }
 
@@ -565,6 +572,7 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
     GLuint glTexture;
     glGenTextures(1, &glTexture);
     textureProperties->glTexture = glTexture;
+    textureProperties->glInit = true;
     textureProperties->version = texture->version();
     info->memory.textures++;
 

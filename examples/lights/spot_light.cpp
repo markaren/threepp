@@ -40,8 +40,8 @@ namespace {
 int main() {
 
     Canvas canvas("SpotLight", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
@@ -51,12 +51,13 @@ int main() {
 
     auto light = SpotLight::create(Color::peachpuff);
     light->distance = 30;
+    light->intensity = 2.f;
     light->angle = math::degToRad(20);
     light->position.set(10, 10, 0);
     light->castShadow = true;
     scene->add(light);
 
-    scene->add(AmbientLight::create(0xffffff, 0.1f));
+    scene->add(AmbientLight::create(0xffffff, 0.01f));
 
     auto helper = SpotLightHelper::create(*light);
     scene->add(helper);
@@ -74,7 +75,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -89,6 +90,6 @@ int main() {
 
         helper->update();
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

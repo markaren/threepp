@@ -27,10 +27,10 @@ int main() {
     Canvas canvas("Transform controls");
     canvas.exitOnKeyEscape(false);
 
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = ShadowMap::PFC;
-    renderer.autoClear = false;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
+    renderer->shadowMap().type = ShadowMap::PFC;
+    renderer->autoClear = false;
 
     PerspectiveCamera camera(60, canvas.aspect(), 0.1f, 1000.f);
     camera.position.set(0, 5, 5);
@@ -41,7 +41,7 @@ int main() {
     scene.add(AmbientLight::create(0xaaaaaa));
 
     TextureLoader tl;
-    auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/crate.gif");
+    auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/crate.gif", ColorSpace::sRGB);
 
     auto material = MeshBasicMaterial::create();
     material->map = tex;
@@ -69,7 +69,7 @@ int main() {
     canvas.addKeyListener(keyListener);
 
 
-    HUD hud(renderer);
+    HUD hud(*renderer);
     FontLoader fontLoader;
     TextSprite text(fontLoader.defaultFont(), 20.f * monitor::contentScale().first);
     text.setText("Press Q to toggle space, W/E/R to change mode, X/Y/Z to toggle axis, hold SHIFT for snapping");
@@ -84,12 +84,12 @@ int main() {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
 
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     canvas.animate([&] {
-        renderer.clear();
-        renderer.render(scene, camera);
+        renderer->clear();
+        renderer->render(scene, camera);
         hud.render();
     });
 }

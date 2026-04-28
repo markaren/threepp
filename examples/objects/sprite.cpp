@@ -11,8 +11,7 @@ namespace {
     void createHudSprites(HUD& hud) {
         TextureLoader tl;
         const auto hudMaterial = SpriteMaterial::create();
-        hudMaterial->map = tl.load(std::string(DATA_FOLDER) + "/textures/sprite0.png");
-        hudMaterial->map->offset.set(0.5, 0.5);
+        hudMaterial->map = tl.load(std::string(DATA_FOLDER) + "/textures/sprite0.png", ColorSpace::sRGB);
 
         const auto hudSprite1 = Sprite::create(hudMaterial);
         hudSprite1->center.set(0, 0);
@@ -63,9 +62,9 @@ int main() {
 
     Canvas canvas{"Sprite", {{"aa", 4}, {"favicon", std::string(DATA_FOLDER) + "/textures/three.png"s}}};
     auto size = canvas.size();
-    GLRenderer renderer(size);
-    renderer.autoClear = false;
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
+    renderer->setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, size.aspect(), 0.1f, 1000);
@@ -75,8 +74,7 @@ int main() {
 
     TextureLoader loader;
     auto material = SpriteMaterial::create();
-    material->map = loader.load(std::string(DATA_FOLDER) + "/textures/three.png");
-    material->map->offset.set(0.5, 0.5);
+    material->map = loader.load(std::string(DATA_FOLDER) + "/textures/three.png", ColorSpace::sRGB);
 
     auto pickMaterial = material->clone<SpriteMaterial>();
 
@@ -86,13 +84,13 @@ int main() {
     auto helper = Mesh::create(SphereGeometry::create(0.1));
     scene->add(helper);
 
-    HUD hud(renderer, &canvas);
+    HUD hud(*renderer, &canvas);
     createHudSprites(hud);
 
     canvas.onWindowResize([&](WindowSize newSize) {
         camera->aspect = newSize.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(newSize);
+        renderer->setSize(newSize);
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
@@ -127,8 +125,8 @@ int main() {
             lastPicked->scale.set(1.2, 1.2, 1.2);
         }
 
-        renderer.clear();
-        renderer.render(*scene, *camera);
+        renderer->clear();
+        renderer->render(*scene, *camera);
         hud.render();
     });
 }

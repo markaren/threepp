@@ -87,6 +87,8 @@ namespace threepp::gl {
                 return GL_UNSIGNED_INT;
             case Type::Float:
                 return GL_FLOAT;
+            case Type::HalfFloat:
+                return GL_HALF_FLOAT;
 
             case Type::UnsignedInt248:
                 return GL_UNSIGNED_INT_24_8;

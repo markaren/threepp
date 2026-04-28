@@ -8,7 +8,7 @@
 #include "GLUniforms.hpp"
 #include "threepp/core/Uniform.hpp"
 #include "threepp/materials/Material.hpp"
-#include "threepp/renderers/GLRenderTarget.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/textures/Texture.hpp"
 
 #include <array>
@@ -50,7 +50,7 @@ namespace threepp::gl {
         Texture* envMap;
         Texture* environment;
 
-        std::optional<Encoding> outputEncoding;
+        std::optional<ColorSpace> outputEncoding;
         bool instancing{};
         bool skinning{};
         bool vertexAlphas{};
@@ -94,7 +94,7 @@ namespace threepp::gl {
     public:
         GLTypeProperties<Texture, TextureProperties> textureProperties;
         GLTypeProperties<Material, MaterialProperties> materialProperties;
-        GLTypeProperties<GLRenderTarget, RenderTargetProperties> renderTargetProperties;
+        GLTypeProperties<RenderTarget, RenderTargetProperties> renderTargetProperties;
 
         void dispose() {
 

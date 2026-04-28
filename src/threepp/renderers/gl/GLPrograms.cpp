@@ -46,14 +46,17 @@ GLPrograms::GLPrograms(GLBindingStates& bindingStates, GLClipping& clipping)
 
 ProgramParameters GLPrograms::getParameters(
         const GLRenderer& renderer,
+        const ShadowConfig& shadowConfig,
+        const RendererCapabilities& capabilities,
         const GLClipping& clipping,
         Material* material,
-        const GLLights::LightState& lights,
+        const Lights::LightState& lights,
         size_t numShadows,
         Scene* scene,
-        Object3D* object) {
+        Object3D* object,
+        Texture* resolvedEnvMap) {
 
-    return {renderer, clipping, lights, numShadows, object, scene, material, shaderIDs};
+    return {renderer, shadowConfig, capabilities, clipping, lights, numShadows, object, scene, material, resolvedEnvMap, shaderIDs};
 }
 
 std::string GLPrograms::getProgramCacheKey(const GLRenderer& renderer, const ProgramParameters& parameters) {
@@ -87,7 +90,7 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer& renderer, const Pro
             array.emplace_back(value);
         }
 
-        array.emplace_back(std::to_string(as_integer(renderer.outputEncoding)));
+        array.emplace_back(std::to_string(as_integer(renderer.outputColorSpace)));
         array.emplace_back(std::to_string(renderer.gammaFactor));
     }
 

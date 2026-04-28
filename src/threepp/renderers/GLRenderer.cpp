@@ -1,7 +1,7 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
-#include "threepp/renderers/GLRenderTarget.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
 
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLBackground.hpp"
@@ -18,8 +18,13 @@
 #include "threepp/renderers/gl/GLTextures.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
 
+#include "threepp/renderers/common/RendererCapabilities.hpp"
+#include "threepp/renderers/common/ShadowConfig.hpp"
+
 #include "threepp/cameras/OrthographicCamera.hpp"
+#include "threepp/canvas/Canvas.hpp"
 #include "threepp/canvas/Monitor.hpp"
+#include "threepp/lights/RectAreaLightUniformsLib.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
 
 #include "threepp/objects/Group.hpp"
@@ -85,7 +90,7 @@ struct GLRenderer::Impl {
 
     int _currentActiveCubeFace = 0;
     int _currentActiveMipmapLevel = 0;
-    GLRenderTarget* _currentRenderTarget = nullptr;
+    RenderTarget* _currentRenderTarget = nullptr;
     std::optional<unsigned int> _currentMaterialId;
 
     Camera* _currentCamera = nullptr;
@@ -139,7 +144,7 @@ struct GLRenderer::Impl {
     gl::GLCubeMaps cubemaps;
     gl::GLBackground background;
 
-    std::unique_ptr<GLRenderTarget> _transmissionRenderTarget;
+    std::unique_ptr<RenderTarget> _transmissionRenderTarget;
 
     std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
     std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
@@ -267,7 +272,9 @@ struct GLRenderer::Impl {
 
         auto& shadowsArray = currentRenderState->getShadowsArray();
 
+        shadowMap.autoUpdate = scope.shadowMapAutoUpdate;
         shadowMap.render(scope, shadowsArray, scene, camera);
+        scope.shadowMapAutoUpdate = shadowMap.autoUpdate;
 
         currentRenderState->setupLights();
         currentRenderState->setupLightsView(camera);
@@ -584,14 +591,14 @@ struct GLRenderer::Impl {
 
         if (!_transmissionRenderTarget) {
 
-            GLRenderTarget::Options options;
+            RenderTarget::Options options;
             options.generateMipmaps = true;
             options.minFilter = Filter::LinearMipmapLinear;
             options.magFilter = Filter::Nearest;
             options.wrapS = TextureWrapping::ClampToEdge;
             options.wrapT = TextureWrapping::ClampToEdge;
 
-            _transmissionRenderTarget = GLRenderTarget::create(1024*2, 1024*2, options);
+            _transmissionRenderTarget = RenderTarget::create(1024*2, 1024*2, options);
         }
 
         auto currentRenderTarget = _currentRenderTarget;
@@ -655,21 +662,31 @@ struct GLRenderer::Impl {
 
         auto lightsStateVersion = lights.state.version;
 
-        auto parameters = gl::GLPrograms::getParameters(scope, clipping, material, lights.state, shadowsArray.size(), scene, object);
-        auto programCacheKey = gl::GLPrograms::getProgramCacheKey(scope, parameters);
+        ShadowConfig shadowCfg{shadowMap.enabled, shadowMap.type};
+        auto& glCaps = gl::GLCapabilities::instance();
+        RendererCapabilities caps;
+        caps.vertexTextures = glCaps.vertexTextures;
+        caps.floatVertexTextures = glCaps.floatVertexTextures;
+        caps.logarithmicDepthBuffer = glCaps.logarithmicDepthBuffer;
+        caps.maxVertexUniforms = glCaps.maxVertexUniforms;
 
-        auto& programs = materialProperties->programs;
-
-        // always update environment and fog - changing these trigger an getProgram call, but it's possible that the program doesn't change
-
+        // Resolve envMap through the PMREM pipeline BEFORE building program parameters.
+        // Mirrors three.js WebGLPrograms, which calls cubeuvmaps.get() inline when reading
+        // material.envMap — so parameters.envMapMode reflects the *resolved* mapping
+        // (e.g. CubeUVReflection for equirect sources), not the source equirect mapping.
         materialProperties->environment = material->is<MeshStandardMaterial>() ? scene->environment.get() : nullptr;
         materialProperties->fog = scene->fog;
         auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
         if (materialWithEnvMap && materialWithEnvMap->envMap) {
-            materialProperties->envMap = cubemaps.get(materialWithEnvMap->envMap.get());
+            materialProperties->envMap = cubemaps.getPMREM(materialWithEnvMap->envMap.get());
         } else {
-            materialProperties->envMap = cubemaps.get(materialProperties->environment);
+            materialProperties->envMap = cubemaps.getPMREM(materialProperties->environment);
         }
+
+        auto parameters = gl::GLPrograms::getParameters(scope, shadowCfg, caps, clipping, material, lights.state, shadowsArray.size(), scene, object, materialProperties->envMap);
+        auto programCacheKey = gl::GLPrograms::getProgramCacheKey(scope, parameters);
+
+        auto& programs = materialProperties->programs;
 
         if (programs.empty()) {
 
@@ -731,6 +748,7 @@ struct GLRenderer::Impl {
             uniforms.at("spotLightShadows").setValue(lights.state.spotShadow);
             uniforms.at("pointLights").setValue(lights.state.point);
             uniforms.at("pointLightShadows").setValue(lights.state.pointShadow);
+            uniforms.at("rectAreaLights").setValue(lights.state.rectArea);
             uniforms.at("hemisphereLights").setValue(lights.state.hemi);
 
             uniforms.at("directionalShadowMap").setValue(lights.state.directionalShadowMap);
@@ -739,6 +757,13 @@ struct GLRenderer::Impl {
             uniforms.at("spotShadowMatrix").setValue(lights.state.spotShadowMatrix);
             uniforms.at("pointShadowMap").setValue(lights.state.pointShadowMap);
             uniforms.at("pointShadowMatrix").setValue(lights.state.pointShadowMatrix);
+
+            if (!lights.state.rectArea.empty()) {
+                auto& ltcLib = RectAreaLightUniformsLib::instance();
+                ltcLib.init();
+                uniforms.at("ltc_1").setValue(ltcLib.ltc_1().get());
+                uniforms.at("ltc_2").setValue(ltcLib.ltc_2().get());
+            }
         }
 
         auto progUniforms = program->getUniforms();
@@ -780,14 +805,14 @@ struct GLRenderer::Impl {
 
         auto& fog = scene->fog;
         auto environment = isMeshStandardMaterial ? scene->environment : nullptr;
-        Encoding encoding = (_currentRenderTarget == nullptr) ? scope.outputEncoding : _currentRenderTarget->texture->encoding;
+        ColorSpace encoding = (_currentRenderTarget == nullptr) ? scope.outputColorSpace : _currentRenderTarget->texture->colorSpace;
 
         Texture* envMap;
         auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
         if (materialWithEnvMap && materialWithEnvMap->envMap) {
-            envMap = cubemaps.get(materialWithEnvMap->envMap.get());
+            envMap = cubemaps.getPMREM(materialWithEnvMap->envMap.get());
         } else {
-            envMap = cubemaps.get(environment.get());
+            envMap = cubemaps.getPMREM(environment.get());
         }
         bool vertexAlphas = material->vertexColors &&
                             object->geometry() &&
@@ -1066,6 +1091,7 @@ struct GLRenderer::Impl {
         uniforms.at("pointLightShadows").needsUpdate = value;
         uniforms.at("spotLights").needsUpdate = value;
         uniforms.at("spotLightShadows").needsUpdate = value;
+        uniforms.at("rectAreaLights").needsUpdate = value;
         uniforms.at("hemisphereLights").needsUpdate = value;
     }
 
@@ -1088,7 +1114,7 @@ struct GLRenderer::Impl {
                (isShaderMaterial && lights);
     }
 
-    void setRenderTarget(GLRenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
+    void setRenderTarget(RenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
 
         _currentRenderTarget = renderTarget;
         _currentActiveCubeFace = activeCubeFace;
@@ -1324,14 +1350,15 @@ struct GLRenderer::Impl {
     friend struct gl::GLShadowMap;
 };
 
+GLRenderer::GLRenderer(Canvas& canvas, const Parameters& parameters) {
 
-GLRenderer::GLRenderer(std::pair<int, int> size, const Parameters& parameters) {
+    canvas.initWindow(GraphicsAPI::OpenGL);
 
 #ifndef __EMSCRIPTEN__
-    loadGlad();// if Glad has yet to be loaded, do it now
+    loadGlad();
 #endif
 
-    pimpl_ = std::make_unique<Impl>(*this, size, parameters);
+    pimpl_ = std::make_unique<Impl>(*this, canvas.size(), parameters);
 }
 
 
@@ -1498,7 +1525,7 @@ void GLRenderer::renderBufferDirect(Camera* camera, Scene* scene, BufferGeometry
     pimpl_->renderBufferDirect(camera, scene, geometry, material, object, group);
 }
 
-void GLRenderer::setRenderTarget(GLRenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
+void GLRenderer::setRenderTarget(RenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
 
     pimpl_->setRenderTarget(renderTarget, activeCubeFace, activeMipmapLevel);
 }
@@ -1523,6 +1550,11 @@ void GLRenderer::copyTextureToImage(Texture& texture) {
     pimpl_->copyTextureToImage(texture);
 }
 
+void GLRenderer::setDepthMask(bool flag) {
+
+    pimpl_->state.depthBuffer.setMask(flag);
+}
+
 void GLRenderer::resetState() {
 
     pimpl_->reset();
@@ -1543,7 +1575,7 @@ int GLRenderer::getActiveMipmapLevel() const {
     return pimpl_->_currentActiveMipmapLevel;
 }
 
-GLRenderTarget* GLRenderer::getRenderTarget() {
+RenderTarget* GLRenderer::getRenderTarget() {
 
     return pimpl_->_currentRenderTarget;
 }

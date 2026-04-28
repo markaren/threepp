@@ -19,14 +19,7 @@ namespace threepp {
 
         class GLObjects;
 
-        struct GLShadowMap {
-
-            bool enabled = false;
-
-            bool autoUpdate = true;
-            bool needsUpdate = false;
-
-            ShadowMap type;
+        struct GLShadowMap : public ShadowMapConfig {
 
             explicit GLShadowMap(GLObjects& objects);
 

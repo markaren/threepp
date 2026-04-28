@@ -7,8 +7,8 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("TextSprite");
-    GLRenderer renderer(canvas.size());
+    Canvas canvas("TextSprite", {{"aa", 4}, {"vsync", false}});
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
     PerspectiveCamera camera(75, canvas.aspect(), 0.1f, 100);
@@ -29,7 +29,7 @@ int main() {
     auto grid = AxesHelper::create(1);
     scene.add(grid);
 
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({});
         ImGui::SetNextWindowSize({});
 
@@ -86,14 +86,14 @@ int main() {
     });
 
     canvas.onWindowResize([&](WindowSize newSize) {
-        renderer.setSize(newSize);
+        renderer->setSize(newSize);
         camera.aspect = canvas.aspect();
         camera.updateProjectionMatrix();
     });
 
     canvas.animate([&] {
 
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
         ui.render();
     });
 }

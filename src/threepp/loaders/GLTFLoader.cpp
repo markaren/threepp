@@ -12,7 +12,16 @@
 #include <unordered_map>
 #include <vector>
 
+#include <threepp/animation/AnimationClip.hpp>
+#include <threepp/animation/MaterialAnimationProxy.hpp>
+#include <threepp/animation/tracks/NumberKeyframeTrack.hpp>
+#include <threepp/animation/tracks/QuaternionKeyframeTrack.hpp>
+#include <threepp/animation/tracks/VectorKeyframeTrack.hpp>
+#include <threepp/lights/DirectionalLight.hpp>
+#include <threepp/lights/PointLight.hpp>
+#include <threepp/lights/SpotLight.hpp>
 #include <threepp/loaders/ImageLoader.hpp>
+#include <threepp/materials/MeshBasicMaterial.hpp>
 #include <threepp/materials/MeshPhysicalMaterial.hpp>
 #include <threepp/objects/Bone.hpp>
 #include <threepp/objects/ObjectWithMaterials.hpp>
@@ -46,6 +55,34 @@ namespace threepp {
         }
 
         constexpr auto kDecodeTable = buildDecodeTable();
+
+        // Percent-decode a glTF URI (RFC 3986). glTF texture URIs with spaces or
+        // other reserved chars arrive as e.g. "Base%20Color.jpg"; we must decode
+        // before using them as filesystem paths. Data URIs are handled separately
+        // and must NOT be passed here.
+        std::string percentDecode(const std::string& uri) {
+            std::string out;
+            out.reserve(uri.size());
+            auto hex = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+                if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+                return -1;
+            };
+            for (size_t i = 0; i < uri.size(); ++i) {
+                if (uri[i] == '%' && i + 2 < uri.size()) {
+                    int hi = hex(uri[i + 1]);
+                    int lo = hex(uri[i + 2]);
+                    if (hi >= 0 && lo >= 0) {
+                        out.push_back(static_cast<char>((hi << 4) | lo));
+                        i += 2;
+                        continue;
+                    }
+                }
+                out.push_back(uri[i]);
+            }
+            return out;
+        }
 
         std::vector<uint8_t> base64Decode(const std::string& encoded) {
             std::vector<uint8_t> out;
@@ -129,6 +166,10 @@ namespace threepp {
             std::unordered_map<int, std::shared_ptr<Skeleton>> skinCache;
             std::unordered_set<int> builtNodes;
 
+            // KHR_animation_pointer: one invisible proxy per animated material,
+            // attached to the scene root so the AnimationMixer can resolve it.
+            std::unordered_map<int, std::shared_ptr<MaterialAnimationProxy>> matAnimProxies;
+
             // KHR_materials_variants support
             std::vector<std::string> variantNames;
             struct PrimVariantMapping {
@@ -155,7 +196,7 @@ namespace threepp {
                     auto comma = uri.find(',');
                     buffers[idx] = base64Decode(uri.substr(comma + 1));
                 } else {
-                    fs::path p = basePath / uri;
+                    fs::path p = basePath / percentDecode(uri);
                     std::ifstream f(p, std::ios::binary);
                     if (!f) throw std::runtime_error("Cannot open buffer file: " + p.string());
                     buffers[idx].assign(std::istreambuf_iterator<char>(f), {});
@@ -330,7 +371,12 @@ namespace threepp {
                         obj = Bone::create();
                     else
                         obj = Group::create();
-                    obj->name = nodeDef.value("name", "");
+                    // Fall back to a synthetic "node_N" name for unnamed glTF nodes
+                    // (e.g. BrainStem). Animation tracks also use this synthetic
+                    // name (see loadAnimations), so PropertyBinding::findNode
+                    // resolves bones by matching names instead of defaulting to
+                    // root and silently losing the animation.
+                    obj->name = nodeDef.value("name", "node_" + std::to_string(i));
                     applyNodeTransform(obj, nodeDef);
                     nodeObjects[i] = obj;
                 }
@@ -394,7 +440,7 @@ namespace threepp {
                         auto comma = uri.find(',');
                         raw = base64Decode(uri.substr(comma + 1));
                     } else {
-                        fs::path p = basePath / uri;
+                        fs::path p = basePath / percentDecode(uri);
                         std::ifstream f(p, std::ios::binary);
                         if (!f) throw std::runtime_error("Cannot open image: " + p.string());
                         raw.assign(std::istreambuf_iterator<char>(f), {});
@@ -407,9 +453,16 @@ namespace threepp {
                 return loader.load(raw, 4, false);
             }
 
-            std::shared_ptr<Texture> loadTexture(int texIdx) {
+            std::shared_ptr<Texture> loadTexture(int texIdx, ColorSpace cs = ColorSpace::sRGB) {
                 auto it = textureCache.find(texIdx);
-                if (it != textureCache.end()) return it->second;
+                if (it != textureCache.end()) {
+                    auto cached = it->second;
+                    if (cached && cached->colorSpace == cs) return cached;
+                    // Same image used in a different role (e.g. color + data) → clone with new tag
+                    auto clone = cached->clone();
+                    clone->colorSpace = cs;
+                    return clone;
+                }
 
                 const auto& texDef = gltf["textures"][texIdx];
                 int imageIdx = texDef.value("source", -1);
@@ -418,7 +471,14 @@ namespace threepp {
                 auto image = loadImageData(imageIdx);
 
                 auto tex = Texture::create(*image);
+                tex->colorSpace = cs;
                 tex->needsUpdate();
+
+                // glTF 2.0 §3.8.4: when sampler is undefined, repeat wrapping
+                // and auto filtering must be used. Texture's C++ default is
+                // ClampToEdge, so always default to Repeat for glTF assets.
+                tex->wrapS = TextureWrapping::Repeat;
+                tex->wrapT = TextureWrapping::Repeat;
 
                 // Apply sampler settings if present
                 if (texDef.contains("sampler") && gltf.contains("samplers")) {
@@ -438,6 +498,41 @@ namespace threepp {
                 return tex;
             }
 
+            // Apply KHR_texture_transform from a textureInfo JSON node.
+            // Returns a (possibly cloned) texture with transform applied.
+            std::shared_ptr<Texture> applyTextureTransform(
+                    const json& texInfo, std::shared_ptr<Texture> tex) {
+                if (!tex) return tex;
+                int texCoordVal = texInfo.value("texCoord", 0);
+                bool hasTransform = false;
+                float offX = 0, offY = 0, scX = 1, scY = 1, rot = 0;
+                if (texInfo.contains("extensions") &&
+                    texInfo["extensions"].contains("KHR_texture_transform")) {
+                    hasTransform = true;
+                    const auto& tt = texInfo["extensions"]["KHR_texture_transform"];
+                    if (tt.contains("offset")) {
+                        offX = tt["offset"][0].get<float>();
+                        offY = tt["offset"][1].get<float>();
+                    }
+                    if (tt.contains("scale")) {
+                        scX = tt["scale"][0].get<float>();
+                        scY = tt["scale"][1].get<float>();
+                    }
+                    rot = tt.value("rotation", 0.0f);
+                    texCoordVal = tt.value("texCoord", texCoordVal);
+                }
+                if (!hasTransform && texCoordVal == 0) return tex;
+                // Clone to avoid sharing transforms between channels
+                auto clone = tex->clone();
+                clone->offset = {offX, offY};
+                clone->repeat = {scX, scY};
+                clone->rotation = rot;
+                clone->center = {0, 0};
+                clone->texCoord = texCoordVal;
+                clone->updateMatrix();
+                return clone;
+            }
+
             // -----------------------------------------------------------------------
             //  Material
             // -----------------------------------------------------------------------
@@ -448,13 +543,47 @@ namespace threepp {
 
                 const auto& matDef = gltf["materials"][matIdx];
 
+                // KHR_materials_unlit → MeshBasicMaterial
+                if (matDef.contains("extensions") &&
+                    matDef["extensions"].contains("KHR_materials_unlit")) {
+                    auto basicMat = MeshBasicMaterial::create();
+                    basicMat->name = matDef.value("name", "");
+                    if (matDef.contains("pbrMetallicRoughness")) {
+                        const auto& pbr = matDef["pbrMetallicRoughness"];
+                        if (pbr.contains("baseColorFactor")) {
+                            auto f = pbr["baseColorFactor"].get<std::vector<float>>();
+                            basicMat->color = Color(f[0], f[1], f[2]);
+                            if (f.size() > 3) basicMat->opacity = f[3];
+                        }
+                        if (pbr.contains("baseColorTexture")) {
+                            int ti = pbr["baseColorTexture"]["index"].get<int>();
+                            basicMat->map = applyTextureTransform(pbr["baseColorTexture"], loadTexture(ti));
+                        }
+                    }
+                    std::string alphaMode = matDef.value("alphaMode", "OPAQUE");
+                    if (alphaMode == "BLEND") {
+                        basicMat->transparent = true;
+                    } else if (alphaMode == "MASK") {
+                        basicMat->alphaTest = matDef.value("alphaCutoff", 0.5f);
+                    }
+                    if (matDef.value("doubleSided", false)) {
+                        basicMat->side = Side::Double;
+                    }
+                    materialCache[matIdx] = basicMat;
+                    return basicMat;
+                }
+
                 // Check if we need MeshPhysicalMaterial (for transmission, clearcoat, etc.)
                 bool needsPhysical = false;
                 if (matDef.contains("extensions")) {
                     const auto& ext = matDef["extensions"];
                     if (ext.contains("KHR_materials_transmission") ||
                         ext.contains("KHR_materials_clearcoat") ||
-                        ext.contains("KHR_materials_ior")) {
+                        ext.contains("KHR_materials_ior") ||
+                        ext.contains("KHR_materials_dispersion") ||
+                        ext.contains("KHR_materials_specular") ||
+                        ext.contains("KHR_materials_sheen") ||
+                        ext.contains("KHR_materials_volume")) {
                         needsPhysical = true;
                     }
                 }
@@ -483,7 +612,7 @@ namespace threepp {
                     // Base color texture
                     if (pbr.contains("baseColorTexture")) {
                         int ti = pbr["baseColorTexture"]["index"].get<int>();
-                        mat->map = loadTexture(ti);
+                        mat->map = applyTextureTransform(pbr["baseColorTexture"], loadTexture(ti));
                     }
 
                     // Metalness / roughness
@@ -493,7 +622,7 @@ namespace threepp {
                     // Metallic-roughness texture (G=roughness, B=metalness per spec)
                     if (pbr.contains("metallicRoughnessTexture")) {
                         int ti = pbr["metallicRoughnessTexture"]["index"].get<int>();
-                        auto tex = loadTexture(ti);
+                        auto tex = applyTextureTransform(pbr["metallicRoughnessTexture"], loadTexture(ti, ColorSpace::Linear));
                         mat->metalnessMap = tex;
                         mat->roughnessMap = tex;
                     }
@@ -502,7 +631,7 @@ namespace threepp {
                 // Normal map
                 if (matDef.contains("normalTexture")) {
                     int ti = matDef["normalTexture"]["index"].get<int>();
-                    mat->normalMap = loadTexture(ti);
+                    mat->normalMap = applyTextureTransform(matDef["normalTexture"], loadTexture(ti, ColorSpace::Linear));
                     float scale = matDef["normalTexture"].value("scale", 1.0f);
                     mat->normalScale = Vector2{scale, scale};
                 }
@@ -510,7 +639,7 @@ namespace threepp {
                 // Occlusion map
                 if (matDef.contains("occlusionTexture")) {
                     int ti = matDef["occlusionTexture"]["index"].get<int>();
-                    mat->aoMap = loadTexture(ti);
+                    mat->aoMap = applyTextureTransform(matDef["occlusionTexture"], loadTexture(ti, ColorSpace::Linear));
                     mat->aoMapIntensity = matDef["occlusionTexture"].value("strength", 1.0f);
                 }
 
@@ -521,7 +650,7 @@ namespace threepp {
                 }
                 if (matDef.contains("emissiveTexture")) {
                     int ti = matDef["emissiveTexture"]["index"].get<int>();
-                    mat->emissiveMap = loadTexture(ti);
+                    mat->emissiveMap = applyTextureTransform(matDef["emissiveTexture"], loadTexture(ti));
                 }
 
                 // Alpha mode
@@ -547,7 +676,7 @@ namespace threepp {
                         physMat->transmission = tr.value("transmissionFactor", 0.0f);
                         if (tr.contains("transmissionTexture")) {
                             int ti = tr["transmissionTexture"]["index"].get<int>();
-                            physMat->transmissionMap = loadTexture(ti);
+                            physMat->transmissionMap = loadTexture(ti, ColorSpace::Linear);
                         }
                     }
 
@@ -557,22 +686,65 @@ namespace threepp {
                         physMat->setIor(iorExt.value("ior", 1.5f));
                     }
 
+                    // KHR_materials_dispersion
+                    if (ext.contains("KHR_materials_dispersion")) {
+                        const auto& dispExt = ext["KHR_materials_dispersion"];
+                        physMat->dispersion = dispExt.value("dispersion", 0.0f);
+                    }
+
+                    // KHR_materials_emissive_strength
+                    if (ext.contains("KHR_materials_emissive_strength")) {
+                        float strength = ext["KHR_materials_emissive_strength"].value("emissiveStrength", 1.0f);
+                        mat->emissiveIntensity = strength;
+                    }
+
+                    // KHR_materials_sheen
+                    if (ext.contains("KHR_materials_sheen")) {
+                        const auto& sh = ext["KHR_materials_sheen"];
+                        if (sh.contains("sheenColorFactor")) {
+                            auto c = sh["sheenColorFactor"];
+                            physMat->sheenColor = Color(c[0].get<float>(), c[1].get<float>(), c[2].get<float>());
+                        }
+                        physMat->sheenRoughness = sh.value("sheenRoughnessFactor", 0.0f);
+                    }
+
+                    // KHR_materials_specular
+                    if (ext.contains("KHR_materials_specular")) {
+                        const auto& sp = ext["KHR_materials_specular"];
+                        physMat->specularIntensity = sp.value("specularFactor", 1.0f);
+                        if (sp.contains("specularColorFactor")) {
+                            auto c = sp["specularColorFactor"];
+                            physMat->specularColor = Color(c[0].get<float>(), c[1].get<float>(), c[2].get<float>());
+                        }
+                    }
+
+                    // KHR_materials_volume
+                    if (ext.contains("KHR_materials_volume")) {
+                        const auto& vol = ext["KHR_materials_volume"];
+                        physMat->attenuationDistance = vol.value("attenuationDistance", 0.0f);
+                        if (vol.contains("attenuationColor")) {
+                            auto c = vol["attenuationColor"];
+                            physMat->attenuationColor = Color(c[0].get<float>(), c[1].get<float>(), c[2].get<float>());
+                        }
+                        physMat->thickness = vol.value("thicknessFactor", 0.0f);
+                    }
+
                     // KHR_materials_clearcoat
                     if (ext.contains("KHR_materials_clearcoat")) {
                         const auto& cc = ext["KHR_materials_clearcoat"];
                         physMat->clearcoat = cc.value("clearcoatFactor", 0.0f);
                         if (cc.contains("clearcoatTexture")) {
                             int ti = cc["clearcoatTexture"]["index"].get<int>();
-                            physMat->clearcoatMap = loadTexture(ti);
+                            physMat->clearcoatMap = loadTexture(ti, ColorSpace::Linear);
                         }
                         physMat->clearcoatRoughness = cc.value("clearcoatRoughnessFactor", 0.0f);
                         if (cc.contains("clearcoatRoughnessTexture")) {
                             int ti = cc["clearcoatRoughnessTexture"]["index"].get<int>();
-                            physMat->clearcoatRoughnessMap = loadTexture(ti);
+                            physMat->clearcoatRoughnessMap = loadTexture(ti, ColorSpace::Linear);
                         }
                         if (cc.contains("clearcoatNormalTexture")) {
                             int ti = cc["clearcoatNormalTexture"]["index"].get<int>();
-                            physMat->clearcoatNormalMap = loadTexture(ti);
+                            physMat->clearcoatNormalMap = loadTexture(ti, ColorSpace::Linear);
                             float scale = cc["clearcoatNormalTexture"].value("scale", 1.0f);
                             physMat->clearcoatNormalScale = Vector2{scale, scale};
                         }
@@ -615,7 +787,14 @@ namespace threepp {
                     addFloatAttr("NORMAL", "normal", 3);
                     addFloatAttr("TEXCOORD_0", "uv", 2);
                     addFloatAttr("TEXCOORD_1", "uv2", 2);
-                    addFloatAttr("COLOR_0", "color", 4);// may be RGB or RGBA; 4 is safe
+                    // COLOR_0: use actual accessor component count (VEC3 or VEC4)
+                    if (attrs.contains("COLOR_0")) {
+                        int accIdx = attrs["COLOR_0"].get<int>();
+                        auto [ptr, stride, count, ct, nc] = getAccessor(accIdx);
+                        auto data = readFloats(accIdx);
+                        geometry->setAttribute("color",
+                                FloatBufferAttribute::create(std::move(data), nc));
+                    }
                     addFloatAttr("TANGENT", "tangent", 4);
 
                     if (hasSkin) {
@@ -715,6 +894,46 @@ namespace threepp {
                     obj->add(meshObj);
                 }
 
+                // KHR_lights_punctual: extract lights from glTF nodes
+                if (nodeDef.contains("extensions") &&
+                    nodeDef["extensions"].contains("KHR_lights_punctual")) {
+                    int lightIdx = nodeDef["extensions"]["KHR_lights_punctual"]["light"].get<int>();
+                    if (gltf.contains("extensions") &&
+                        gltf["extensions"].contains("KHR_lights_punctual") &&
+                        gltf["extensions"]["KHR_lights_punctual"].contains("lights")) {
+                        const auto& lightDef = gltf["extensions"]["KHR_lights_punctual"]["lights"][lightIdx];
+                        std::string ltype = lightDef.value("type", "point");
+                        float intensity = lightDef.value("intensity", 1.0f);
+                        Color color(1.f, 1.f, 1.f);
+                        if (lightDef.contains("color")) {
+                            auto c = lightDef["color"].get<std::vector<float>>();
+                            if (c.size() >= 3) color.setRGB(c[0], c[1], c[2]);
+                        }
+                        float range = lightDef.value("range", 0.0f);
+
+                        std::shared_ptr<Light> light;
+                        if (ltype == "directional") {
+                            light = DirectionalLight::create(color, intensity);
+                        } else if (ltype == "spots") {
+                            float innerCone = lightDef.value("innerConeAngle", 0.0f);
+                            float outerCone = lightDef.value("outerConeAngle", math::PI / 4.f);
+                            float penumbra = (outerCone > 0.f) ? (1.f - innerCone / outerCone) : 0.f;
+                            light = SpotLight::create(color, intensity, range, outerCone, penumbra);
+                        } else {
+                            // "point" or fallback
+                            light = PointLight::create(color, intensity, range);
+                        }
+                        if (light) {
+                            light->name = lightDef.value("name", "light_" + std::to_string(lightIdx));
+                            light->visible = false;  // hidden by default; user opts in
+                            obj->add(light);
+                            std::cerr << "[GLTFLoader] Light: " << light->name
+                                      << " type=" << ltype << " intensity=" << intensity
+                                      << " range=" << range << std::endl;
+                        }
+                    }
+                }
+
                 if (nodeDef.contains("children")) {
                     for (int ci : nodeDef["children"].get<std::vector<int>>())
                         obj->add(nodeObjects[ci]);
@@ -775,6 +994,10 @@ namespace threepp {
                     result.scene = Group::create();
                 }
 
+                result.animations = loadAnimations();
+                for (auto& [_, proxy] : matAnimProxies) {
+                    if (proxy && result.scene) result.scene->add(proxy);
+                }
                 resolveVariants(result);
                 return result;
             }
@@ -846,8 +1069,179 @@ namespace threepp {
                     result.scene = Group::create();
                 }
 
+                result.animations = loadAnimations();
+                for (auto& [_, proxy] : matAnimProxies) {
+                    if (proxy && result.scene) result.scene->add(proxy);
+                }
                 resolveVariants(result);
                 return result;
+            }
+
+            // -----------------------------------------------------------------------
+            //  Animation
+            // -----------------------------------------------------------------------
+
+            std::vector<std::shared_ptr<AnimationClip>> loadAnimations() {
+                if (!gltf.contains("animations")) return {};
+
+                std::vector<std::shared_ptr<AnimationClip>> clips;
+
+                for (size_t animIdx = 0; animIdx < gltf["animations"].size(); ++animIdx) {
+                    const auto& animDef = gltf["animations"][animIdx];
+
+                    std::string animName = animDef.value("name", "animation_" + std::to_string(animIdx));
+
+                    if (!animDef.contains("channels") || !animDef.contains("samplers")) continue;
+
+                    const auto& channels = animDef["channels"];
+                    const auto& samplers = animDef["samplers"];
+
+                    std::vector<std::shared_ptr<KeyframeTrack>> tracks;
+
+                    for (const auto& channel : channels) {
+                        if (!channel.contains("sampler") || !channel.contains("target")) continue;
+
+                        const auto& target = channel["target"];
+                        int nodeIdx = target.value("node", -1);
+                        std::string path = target.value("path", "");
+
+                        // KHR_animation_pointer lives on target.extensions and
+                        // targets materials/cameras/etc. instead of a node.
+                        std::string ptr;
+                        if (path == "pointer" && target.contains("extensions") &&
+                            target["extensions"].contains("KHR_animation_pointer")) {
+                            ptr = target["extensions"]["KHR_animation_pointer"].value("pointer", "");
+                        }
+
+                        if (ptr.empty() && (nodeIdx < 0 || path.empty())) continue;
+
+                        int samplerIdx = channel["sampler"].get<int>();
+                        if (samplerIdx < 0 || samplerIdx >= static_cast<int>(samplers.size())) continue;
+
+                        const auto& samplerDef = samplers[samplerIdx];
+                        int inputAccIdx = samplerDef["input"].get<int>();
+                        int outputAccIdx = samplerDef["output"].get<int>();
+                        std::string interpolation = samplerDef.value("interpolation", "LINEAR");
+
+                        auto times = readFloats(inputAccIdx);
+                        auto values = readFloats(outputAccIdx);
+
+                        if (times.empty()) continue;
+
+                        // CUBICSPLINE: strip in/out tangents, keep only the spline vertex (middle value)
+                        if (interpolation == "CUBICSPLINE") {
+                            int nFrames = static_cast<int>(times.size());
+                            int totalComponents = static_cast<int>(values.size()) / (3 * nFrames);
+                            if (totalComponents > 0) {
+                                std::vector<float> stripped;
+                                stripped.reserve(nFrames * totalComponents);
+                                for (int f = 0; f < nFrames; ++f) {
+                                    int base = f * 3 * totalComponents + totalComponents;// skip in-tangent
+                                    for (int c = 0; c < totalComponents; ++c)
+                                        stripped.push_back(values[base + c]);
+                                }
+                                values = std::move(stripped);
+                            }
+                            interpolation = "LINEAR";
+                        }
+
+                        Interpolation interp = Interpolation::Linear;
+                        if (interpolation == "STEP") interp = Interpolation::Discrete;
+
+                        // Resolve node name for track path
+                        std::string nodeName;
+                        auto nit = nodeObjects.find(nodeIdx);
+                        if (nit != nodeObjects.end()) {
+                            nodeName = nit->second->name;
+                            if (nodeName.empty()) nodeName = "node_" + std::to_string(nodeIdx);
+                        } else {
+                            nodeName = "node_" + std::to_string(nodeIdx);
+                        }
+
+                        std::shared_ptr<KeyframeTrack> track;
+
+                        if (!ptr.empty()) {
+                            // Parse /materials/N/... pointers. Anything else
+                            // (cameras, lights, extensions on other types) is
+                            // unsupported and silently skipped.
+                            const std::string matPrefix = "/materials/";
+                            if (ptr.rfind(matPrefix, 0) != 0) continue;
+                            size_t slash = ptr.find('/', matPrefix.size());
+                            if (slash == std::string::npos) continue;
+                            int matIdx;
+                            try { matIdx = std::stoi(ptr.substr(matPrefix.size(), slash - matPrefix.size())); }
+                            catch (...) { continue; }
+                            std::string tail = ptr.substr(slash + 1);
+
+                            // Map glTF pointer tail -> our material property name + expected component count
+                            std::string propName;
+                            int expected = 0;
+                            if (tail == "pbrMetallicRoughness/baseColorFactor") { propName = "baseColorFactor"; expected = 4; }
+                            else if (tail == "pbrMetallicRoughness/metallicFactor")  { propName = "metalness"; expected = 1; }
+                            else if (tail == "pbrMetallicRoughness/roughnessFactor") { propName = "roughness"; expected = 1; }
+                            else if (tail == "emissiveFactor")                       { propName = "emissive"; expected = 3; }
+                            else if (tail == "alphaCutoff")                          { propName = "alphaTest"; expected = 1; }
+                            else continue;
+
+                            auto mat = loadMaterial(matIdx);
+                            if (!mat) continue;
+
+                            auto& proxy = matAnimProxies[matIdx];
+                            if (!proxy) {
+                                proxy = MaterialAnimationProxy::create(mat);
+                                proxy->name = "__matAnim_" + std::to_string(matIdx);
+                            }
+
+                            const std::string trackName = proxy->name + "." + propName;
+                            if (expected == 1) {
+                                track = std::make_shared<NumberKeyframeTrack>(trackName, times, values, interp);
+                            } else {
+                                // VectorKeyframeTrack handles any component size;
+                                // our material setter reads the expected count.
+                                track = std::make_shared<VectorKeyframeTrack>(trackName, times, values, interp);
+                            }
+                            if (track) tracks.push_back(track);
+                            continue;
+                        }
+
+                        if (path == "translation") {
+                            track = std::make_shared<VectorKeyframeTrack>(
+                                    nodeName + ".position", times, values, interp);
+                        } else if (path == "rotation") {
+                            track = std::make_shared<QuaternionKeyframeTrack>(
+                                    nodeName + ".quaternion", times, values);
+                        } else if (path == "scale") {
+                            track = std::make_shared<VectorKeyframeTrack>(
+                                    nodeName + ".scale", times, values, interp);
+                        } else if (path == "weights") {
+                            // Morph target weights: one NumberKeyframeTrack per morph target
+                            // The values interleave weights for all morph targets per frame
+                            int nFrames = static_cast<int>(times.size());
+                            int nTargets = (nFrames > 0) ? static_cast<int>(values.size()) / nFrames : 0;
+                            for (int t = 0; t < nTargets; ++t) {
+                                std::vector<float> targetValues;
+                                targetValues.reserve(nFrames);
+                                for (int f = 0; f < nFrames; ++f)
+                                    targetValues.push_back(values[f * nTargets + t]);
+                                auto weightTrack = std::make_shared<NumberKeyframeTrack>(
+                                        nodeName + ".morphTargetInfluences[" + std::to_string(t) + "]",
+                                        times, targetValues, interp);
+                                tracks.push_back(weightTrack);
+                            }
+                            continue;
+                        }
+
+                        if (track) tracks.push_back(track);
+                    }
+
+                    if (tracks.empty()) continue;
+
+                    auto clip = std::make_shared<AnimationClip>(animName, -1.f, tracks);
+                    clip->resetDuration();
+                    clips.push_back(clip);
+                }
+
+                return clips;
             }
 
             void resolveVariants(GLTFResult& result) {

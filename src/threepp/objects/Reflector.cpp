@@ -6,8 +6,8 @@
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Reflector.hpp"
-#include "threepp/renderers/GLRenderTarget.hpp"
-#include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
+#include "threepp/renderers/Renderer.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 using namespace threepp;
@@ -67,12 +67,12 @@ struct Reflector::Impl {
         unsigned int textureHeight = (options.textureHeight) ? *options.textureHeight : 512;
         Shader shader = options.shader.value_or(reflectorShader());
 
-        GLRenderTarget::Options parameters;
+        RenderTarget::Options parameters;
         parameters.minFilter = Filter::Linear;
         parameters.magFilter = Filter::Linear;
         parameters.format = Format::RGBA;
 
-        renderTarget = std::make_unique<GLRenderTarget>(textureWidth, textureHeight, parameters);
+        renderTarget = std::make_unique<RenderTarget>(textureWidth, textureHeight, parameters);
 
         if (!math::isPowerOfTwo((int) textureWidth) || !math::isPowerOfTwo((int) textureHeight)) {
 
@@ -141,21 +141,32 @@ struct Reflector::Impl {
             projectionMatrix.elements[10] = clipPlane.z + 1.f - clipBias;
             projectionMatrix.elements[14] = clipPlane.w;// Render
 
-            auto _renderer = static_cast<GLRenderer*>(renderer);
+            auto _renderer = static_cast<Renderer*>(renderer);
 
-            renderTarget->texture->encoding = _renderer->outputEncoding;
+            // WebGPU render targets have UV (0,0) at top-left; GL has bottom-left.
+            // Flip the Y row of the textureMatrix: new_row1 = row3 - row1
+            // so that UV.y' / w = 1 - UV.y / w.
+            if (_renderer->renderTargetFlipY()) {
+                auto& e = textureMatrix.elements;
+                e[1]  = e[3]  - e[1];
+                e[5]  = e[7]  - e[5];
+                e[9]  = e[11] - e[9];
+                e[13] = e[15] - e[13];
+            }
+
+            renderTarget->texture->colorSpace = _renderer->outputColorSpace;
             reflector_.visible = false;
             const auto currentRenderTarget = _renderer->getRenderTarget();
-            const auto currentShadowAutoUpdate = _renderer->shadowMap().autoUpdate;
+            const auto currentShadowAutoUpdate = _renderer->shadowMapAutoUpdate;
 
-            _renderer->shadowMap().autoUpdate = false;// Avoid re-computing shadows
+            _renderer->shadowMapAutoUpdate = false;// Avoid re-computing shadows
 
             _renderer->setRenderTarget(renderTarget.get());
-            _renderer->state().depthBuffer.setMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
+            _renderer->setDepthMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
 
             if (!_renderer->autoClear) _renderer->clear();
             _renderer->render(*scene, virtualCamera);
-            _renderer->shadowMap().autoUpdate = currentShadowAutoUpdate;
+            _renderer->shadowMapAutoUpdate = currentShadowAutoUpdate;
             _renderer->setRenderTarget(currentRenderTarget);// Restore viewport
 
             reflector_.visible = true;
@@ -184,7 +195,7 @@ private:
     Matrix4 textureMatrix;
 
     PerspectiveCamera virtualCamera;
-    std::unique_ptr<GLRenderTarget> renderTarget;
+    std::unique_ptr<RenderTarget> renderTarget;
 };
 
 Reflector::Reflector(const std::shared_ptr<BufferGeometry>& geometry, Reflector::Options options)

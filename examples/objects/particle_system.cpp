@@ -15,8 +15,8 @@ void initFirework(ParticleSystem::Settings& settings);
 int main() {
 
     Canvas canvas("Particle system", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.checkShaderErrors = true;
+    auto renderer = createRenderer(canvas);
+    renderer->checkShaderErrors = true;
 
     Scene scene;
     scene.background = Color::gray;
@@ -38,7 +38,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     int selectedIndex = 0;
@@ -48,7 +48,7 @@ int main() {
             {"fireball", initFireball},
             {"firework", initFirework}};
 
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({0, 0}, 0);
         ImGui::Begin("Make selection");
@@ -73,7 +73,7 @@ int main() {
         const auto dt = clock.getDelta();
 
         engine.update(dt * 0.5f);
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
 
         ui.render();
     });
@@ -107,7 +107,7 @@ void initFountain(ParticleSystem::Settings& settings) {
             .setSizeTween({0, 1}, {0.1, 2});
 
     TextureLoader tl;
-    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/star.png");
+    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/star.png", ColorSpace::sRGB);
 }
 
 void initSmoke(ParticleSystem::Settings& settings) {
@@ -137,7 +137,7 @@ void initSmoke(ParticleSystem::Settings& settings) {
             .setSizeTween({0, 1}, {1, 10});
 
     TextureLoader tl;
-    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png");
+    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png", ColorSpace::sRGB);
 }
 
 void initFireball(ParticleSystem::Settings& settings) {
@@ -163,7 +163,7 @@ void initFireball(ParticleSystem::Settings& settings) {
             .setSizeTween({0, 1}, {0.1, 15});
 
     TextureLoader tl;
-    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png");
+    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png", ColorSpace::sRGB);
 }
 
 void initFirework(ParticleSystem::Settings& settings) {
@@ -192,5 +192,5 @@ void initFirework(ParticleSystem::Settings& settings) {
             .setSizeTween({0.3, 0.6, 1.3}, {0.5, 4, 0.1});
 
     TextureLoader tl;
-    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/spark.png");
+    settings.texture = tl.load(std::string(DATA_FOLDER) + "/textures/spark.png", ColorSpace::sRGB);
 }

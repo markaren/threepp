@@ -1,9 +1,7 @@
 
 #include "threepp/renderers/gl/ProgramParameters.hpp"
 
-#include "threepp/renderers/gl/GLCapabilities.hpp"
-
-#include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/Renderer.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
 #include "threepp/materials/RawShaderMaterial.hpp"
@@ -19,21 +17,24 @@ using namespace threepp::gl;
 
 namespace {
 
-    Encoding getTextureEncodingFromMap(const std::shared_ptr<Texture>& map) {
+    ColorSpace getTextureEncodingFromMap(const std::shared_ptr<Texture>& map) {
 
-        return map ? map->encoding : Encoding::Linear;
+        return map ? map->colorSpace : ColorSpace::Linear;
     }
 
 }// namespace
 
 ProgramParameters::ProgramParameters(
-        const GLRenderer& renderer,
+        const Renderer& renderer,
+        const ShadowConfig& shadowConfig,
+        const RendererCapabilities& capabilities,
         const GLClipping& clipping,
-        const GLLights::LightState& lights,
+        const Lights::LightState& lights,
         size_t numShadows,
         Object3D* object,
         Scene* scene,
         Material* material,
+        Texture* resolvedEnvMap,
         const std::unordered_map<std::string, std::string>& shaderIDs) {
 
     auto mapMaterial = dynamic_cast<MaterialWithMap*>(material);
@@ -92,33 +93,23 @@ ProgramParameters::ProgramParameters(
     instancing = instancedMesh != nullptr;
     instancingColor = instancedMesh != nullptr && instancedMesh->instanceColor() != nullptr;
 
-    supportsVertexTextures = GLCapabilities::instance().vertexTextures;
-    outputEncoding = renderer.outputEncoding;
+    supportsVertexTextures = capabilities.vertexTextures;
+    outputEncoding = renderer.outputColorSpace;
 
     map = mapMaterial && mapMaterial->map;
     mapEncoding = getTextureEncodingFromMap(map ? mapMaterial->map : nullptr);
     matcap = matcapMaterial && matcapMaterial->matcap;
     matcapEncoding = getTextureEncodingFromMap(matcap ? matcapMaterial->matcap : nullptr);
-    // For MeshStandardMaterial, scene.environment is the implicit IBL source when
-    // no explicit envMap is set — mirrors three.js WebGLPrograms.getParameters().
-    Texture* effectiveEnvMap = (envmapMaterial && envmapMaterial->envMap)
-                                       ? envmapMaterial->envMap.get()
-                                       : (material->is<MeshStandardMaterial>() ? scene->environment.get() : nullptr);
+    // Pure three.js port: WebGLPrograms calls `cubeuvmaps.get( material.envMap || environment )`
+    // and reads `.mapping` from the *resolved* texture (PMREM atlas for equirect sources).
+    // The caller threads the resolved envMap in via `resolvedEnvMap`.
+    Texture* effectiveEnvMap = resolvedEnvMap;
 
     envMap = effectiveEnvMap != nullptr;
     if (envMap) {
-        // Equirectangular sources are always converted to a regular cubemap at runtime.
-        const auto srcMapping = effectiveEnvMap->mapping;
-        const bool isEquirect = srcMapping == Mapping::EquirectangularReflection ||
-                                srcMapping == Mapping::EquirectangularRefraction;
-        const bool isRefract = srcMapping == Mapping::EquirectangularRefraction ||
-                               srcMapping == Mapping::CubeRefraction;
-        const auto resolvedMapping = isEquirect
-                                             ? (isRefract ? Mapping::CubeRefraction : Mapping::CubeReflection)
-                                             : srcMapping;
-        envMapMode = as_integer(resolvedMapping);
+        envMapMode = as_integer(effectiveEnvMap->mapping);
     }
-    envMapEncoding = effectiveEnvMap ? effectiveEnvMap->encoding : Encoding::Linear;
+    envMapEncoding = effectiveEnvMap ? effectiveEnvMap->colorSpace : ColorSpace::Linear;
     envMapCubeUV = envMapMode != 0 &&
                    (static_cast<Mapping>(envMapMode) == Mapping::CubeUVReflection ||
                     static_cast<Mapping>(envMapMode) == Mapping::CubeUVRefraction);
@@ -176,7 +167,7 @@ ProgramParameters::ProgramParameters(
 
     skinning = object->is<SkinnedMesh>();
     maxBones = 64;// TODO
-    useVertexTexture = GLCapabilities::instance().floatVertexTextures;
+    useVertexTexture = capabilities.floatVertexTextures;
 
     if (auto m = material->as<MaterialWithMorphTargets>()) {
         morphTargets = m->morphTargets;
@@ -186,7 +177,7 @@ ProgramParameters::ProgramParameters(
     numDirLights = lights.directional.size();
     numPointLights = lights.point.size();
     numSpotLights = lights.spot.size();
-    numRectAreaLights = 0;
+    numRectAreaLights = lights.rectArea.size();
     numHemiLights = lights.hemi.size();
 
     numDirLightShadows = lights.directionalShadowMap.size();
@@ -198,11 +189,11 @@ ProgramParameters::ProgramParameters(
 
     dithering = material->dithering;
 
-    shadowMapEnabled = renderer.shadowMap().enabled && numShadows > 0;
-    shadowMapType = renderer.shadowMap().type;
+    shadowMapEnabled = shadowConfig.enabled && numShadows > 0;
+    shadowMapType = shadowConfig.type;
 
     toneMapping = material->toneMapped ? renderer.toneMapping : ToneMapping::None;
-    physicallyCorrectLights = renderer.physicallyCorrectLights;
+    useLegacyLights = renderer.useLegacyLights;
 
     premultipliedAlpha = material->premultipliedAlpha;
 
@@ -307,7 +298,7 @@ std::string ProgramParameters::hash() const {
     s << std::to_string(as_integer(shadowMapType)) << '\n';
 
     s << std::to_string(as_integer(toneMapping)) << '\n';
-    s << std::to_string(physicallyCorrectLights) << '\n';
+    s << std::to_string(useLegacyLights) << '\n';
 
     s << std::to_string(premultipliedAlpha) << '\n';
 

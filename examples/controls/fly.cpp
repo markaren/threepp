@@ -7,9 +7,9 @@ namespace {
 
     auto createEarth(float radius) {
         TextureLoader loader;
-        const auto map = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_atmos_2048.jpg");
-        const auto specular = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_atmos_2048.jpg");
-        const auto normal = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_normal_2048.jpg");
+        const auto map = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_atmos_2048.jpg", ColorSpace::sRGB);
+        const auto specular = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_atmos_2048.jpg", ColorSpace::sRGB);
+        const auto normal = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_normal_2048.jpg", ColorSpace::NoColorSpace);
         const auto materialNormalMap = MeshPhongMaterial::create(
                 {{"specular", 0x333333},
                  {"shininess", 10.f},
@@ -29,7 +29,7 @@ namespace {
 
     auto createMoon(float radius, float moonScale) {
         TextureLoader loader;
-        const auto tex = loader.load(std::string(DATA_FOLDER) + "/textures/planets/moon_1024.jpg");
+        const auto tex = loader.load(std::string(DATA_FOLDER) + "/textures/planets/moon_1024.jpg", ColorSpace::sRGB);
         const auto materialMoon = MeshPhongMaterial::create({
                 {"map", tex},
         });
@@ -46,7 +46,7 @@ namespace {
 
     auto createClouds(float radius) {
         TextureLoader loader;
-        const auto tex = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_clouds_1024.png");
+        const auto tex = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_clouds_1024.png", ColorSpace::sRGB);
         const auto materialMoon = MeshLambertMaterial::create(
                 {{"map", tex},
                  {"transparent", true}});
@@ -131,7 +131,7 @@ int main() {
     constexpr float moonScale = 0.23f;
 
     Canvas canvas{"FlyControls", {{"aa", 6}}};
-    GLRenderer renderer{canvas.size()};
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
     scene.fog = FogExp2(0x000000, 0.00000025f);
@@ -164,7 +164,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -185,7 +185,7 @@ int main() {
                                     : (dPlanet - radius * 1.01f);
 
 
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
         controls.movementSpeed = 0.33f * d;
         controls.update(delta);
     });

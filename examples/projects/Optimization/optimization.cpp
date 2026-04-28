@@ -90,7 +90,7 @@ int main() {
     Lut::addColorMap("rainbow", {{0.f, 0x0000ff}, {0.001f, 0x00ffff}, {0.02f, 0xffff00}, {0.2f, 0xff0000}, {1.f, Color::darkred}});
 
     Canvas canvas("Optimization", {{"aa", 6}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
     scene.background = Color::aliceblue;
@@ -166,7 +166,7 @@ int main() {
 
 
     float searchSpeed = 0.7;
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({0, 0}, 0);
 
@@ -241,13 +241,13 @@ int main() {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
 
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Matrix4 tmp;
     Clock clock;
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
         ui.render();
 
         if (clock.getElapsedTime() > (1 - searchSpeed)) {

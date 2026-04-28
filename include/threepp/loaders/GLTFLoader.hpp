@@ -1,6 +1,7 @@
 #ifndef THREEPP_GLTFLOADER_HPP
 #define THREEPP_GLTFLOADER_HPP
 
+#include "threepp/animation/AnimationClip.hpp"
 #include "threepp/loaders/MaterialVariants.hpp"
 #include "threepp/threepp.hpp"
 
@@ -11,9 +12,10 @@
 namespace threepp {
 
     struct GLTFResult {
-        std::shared_ptr<Group> scene;               ///< Root node of the loaded model
-        std::vector<std::shared_ptr<Group>> scenes; ///< All scenes in the file
-        MaterialVariants variants;                  ///< Named material variants (empty if none)
+        std::shared_ptr<Group> scene;                          ///< Root node of the loaded model
+        std::vector<std::shared_ptr<Group>> scenes;            ///< All scenes in the file
+        std::vector<std::shared_ptr<AnimationClip>> animations;///< All animations in the file
+        MaterialVariants variants;                             ///< Named material variants (empty if none)
     };
 
     class GLTFLoader {

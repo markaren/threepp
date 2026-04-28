@@ -9,7 +9,7 @@
 using namespace threepp;
 
 AnimationClip::AnimationClip(std::string name, float duration, const std::vector<std::shared_ptr<KeyframeTrack>>& tracks, AnimationBlendMode blendMode)
-    : name(std::move(name)),
+    : name_(std::move(name)),
       tracks(tracks),
       duration(duration),
       blendMode(blendMode) {
@@ -30,7 +30,7 @@ std::shared_ptr<AnimationClip> AnimationClip::findByName(const std::vector<std::
 
     for (auto& clip : clipArray) {
 
-        if (clip->name == name) {
+        if (clip->name_ == name) {
 
             return clip;
         }
@@ -45,7 +45,7 @@ std::shared_ptr<AnimationClip> AnimationClip::findByName(const Object3D& object,
 
     for (auto& clip : object.animations) {
 
-        if (clip->name == name) {
+        if (clip->name_ == name) {
 
             return clip;
         }

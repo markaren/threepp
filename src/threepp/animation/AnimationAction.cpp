@@ -101,16 +101,39 @@ float AnimationAction::getEffectiveWeight() const {
     return this->_effectiveWeight;
 }
 
+AnimationAction& AnimationAction::fadeIn(float duration) {
+
+    return this->_scheduleFading(duration, 0, 1);
+}
+
+AnimationAction& AnimationAction::fadeOut(float duration) {
+
+    return this->_scheduleFading(duration, 1, 0);
+}
+
+AnimationAction& AnimationAction::crossFadeTo(AnimationAction* other, float duration, bool warp) {
+
+    other->fadeIn(duration);
+    this->fadeOut(duration);
+
+    if (warp) {
+
+        const float ratio = this->_clip->duration / other->_clip->duration;
+        this->warp(1.f, ratio, duration);
+        other->warp(1.f / ratio, 1.f, duration);
+    }
+
+    return *this;
+}
+
 AnimationAction& AnimationAction::stopFading() {
 
     const auto weightInterpolant = this->_weightInterpolant;
 
     if (weightInterpolant) {
 
-        // TODO
-
-        // this->_weightInterpolant = nullptr;
-        // this->_mixer._takeBackControlInterpolant(weightInterpolant);
+        this->_weightInterpolant = nullptr;
+        this->_mixer._takeBackControlInterpolant(weightInterpolant);
     }
 
     return *this;
@@ -155,12 +178,12 @@ AnimationAction& AnimationAction::warp(float startTimeScale, float endTimeScale,
     const auto now = mixer.time;
     const auto timeScale = this->timeScale;
 
-    const auto& interpolant = this->_timeScaleInterpolant;
+    auto interpolant = this->_timeScaleInterpolant;
 
     if (!interpolant) {
 
-        // interpolant = mixer._lendControlInterpolant();
-        //        this->_timeScaleInterpolant = interpolant;
+        interpolant = mixer._lendControlInterpolant();
+        this->_timeScaleInterpolant = interpolant;
     }
 
     auto& times = interpolant->parameterPositions;
@@ -172,18 +195,47 @@ AnimationAction& AnimationAction::warp(float startTimeScale, float endTimeScale,
     values[0] = startTimeScale / timeScale;
     values[1] = endTimeScale / timeScale;
 
+    interpolant->_cachedIndex = 0;// reset so evaluate starts from the beginning
+
     return *this;
 }
 
 AnimationAction& AnimationAction::stopWarping() {
 
-    const auto& timeScaleInterpolant = this->_timeScaleInterpolant;
+    const auto timeScaleInterpolant = this->_timeScaleInterpolant;
 
     if (timeScaleInterpolant) {
 
-        //        this->_timeScaleInterpolant = nullptr;
-        //        this->_mixer._takeBackControlInterpolant(timeScaleInterpolant);
+        this->_timeScaleInterpolant = nullptr;
+        this->_mixer._takeBackControlInterpolant(timeScaleInterpolant);
     }
+
+    return *this;
+}
+
+AnimationAction& AnimationAction::_scheduleFading(float duration, float weightNow, float weightThen) {
+
+    auto& mixer = this->_mixer;
+    const auto now = mixer.time;
+
+    auto interpolant = this->_weightInterpolant;
+
+    if (!interpolant) {
+
+        interpolant = mixer._lendControlInterpolant();
+        this->_weightInterpolant = interpolant;
+    }
+
+    auto& times = interpolant->parameterPositions;
+    auto& values = interpolant->sampleValues;
+
+    times[0] = now;
+    times[1] = now + duration;
+
+    values[0] = weightNow;
+    values[1] = weightThen;
+
+    interpolant->_cachedIndex = 0;// reset so evaluate starts from the beginning
 
     return *this;
 }

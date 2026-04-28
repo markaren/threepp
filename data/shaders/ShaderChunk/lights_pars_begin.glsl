@@ -44,7 +44,7 @@ vec3 getAmbientLightIrradiance( const in vec3 ambientLightColor ) {
 
 	vec3 irradiance = ambientLightColor;
 
-	#ifndef PHYSICALLY_CORRECT_LIGHTS
+	#ifdef USE_LEGACY_LIGHTS
 
 		irradiance *= PI;
 
@@ -180,7 +180,7 @@ vec3 getAmbientLightIrradiance( const in vec3 ambientLightColor ) {
 
 		vec3 irradiance = mix( hemiLight.groundColor, hemiLight.skyColor, hemiDiffuseWeight );
 
-		#ifndef PHYSICALLY_CORRECT_LIGHTS
+		#ifdef USE_LEGACY_LIGHTS
 
 			irradiance *= PI;
 

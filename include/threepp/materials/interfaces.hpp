@@ -198,6 +198,8 @@ namespace threepp {
     struct MaterialWithTransmission: virtual Material {
 
         float transmission = 0;
+        float ior = 1.5f;
+        float dispersion = 0;
         std::shared_ptr<Texture> transmissionMap;
     };
 
@@ -209,7 +211,15 @@ namespace threepp {
 
     struct MaterialWithSheen: virtual Material {
 
-        std::optional<Color> sheen;
+        Color sheenColor{0, 0, 0};
+        float sheenRoughness{0.f};
+        std::optional<Color> sheen;  // legacy
+    };
+
+    struct MaterialWithPbrSpecular: virtual Material {
+
+        float specularIntensity{1.f};
+        Color specularColor{1, 1, 1};
     };
 
     struct MaterialWithCombine: virtual Material {

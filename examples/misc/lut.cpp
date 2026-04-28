@@ -149,7 +149,7 @@ namespace {
 int main() {
 
     Canvas canvas("Lut", {{"aa", 6}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
     scene.background = Color::aliceblue;
@@ -197,7 +197,7 @@ int main() {
 
     changeFunction(functions.begin()->first);
 
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({0, 0}, 0);
 
@@ -262,11 +262,11 @@ int main() {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
 
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
         ui.render();
     });
 }

@@ -113,7 +113,7 @@ TEST_CASE("push") {
         CHECK(o->object == &objA);
         CHECK(o->geometry == &geoA);
         CHECK(o->material == &matA);
-        CHECK(o->program == &proA);
+        CHECK(o->programId == static_cast<uint64_t>(proA.id));
         CHECK(o->groupOrder == 0);
         CHECK(o->renderOrder == 0);
         CHECK_THAT(o->z, Catch::Matchers::WithinRel(0.5f));
@@ -131,7 +131,7 @@ TEST_CASE("push") {
         CHECK(o->object == &objB);
         CHECK(o->geometry == &geoB);
         CHECK(o->material == &matB);
-        CHECK(o->program == &proB);
+        CHECK(o->programId == static_cast<uint64_t>(proB.id));
         CHECK(o->groupOrder == 1);
         CHECK(o->renderOrder == 0);
         CHECK_THAT(o->z, Catch::Matchers::WithinRel(1.5f));
@@ -149,7 +149,7 @@ TEST_CASE("push") {
         CHECK(o->object == &objC);
         CHECK(o->geometry == &geoC);
         CHECK(o->material == &matC);
-        CHECK(o->program == &proC);
+        CHECK(o->programId == static_cast<uint64_t>(proC.id));
         CHECK(o->groupOrder == 2);
         CHECK(o->renderOrder == 0);
         CHECK_THAT(o->z, Catch::Matchers::WithinRel(2.5f));
@@ -167,7 +167,7 @@ TEST_CASE("push") {
         CHECK(o->object == &objD);
         CHECK(o->geometry == &geoD);
         CHECK(o->material == &matD);
-        CHECK(o->program == &proD);
+        CHECK(o->programId == static_cast<uint64_t>(proD.id));
         CHECK(o->groupOrder == 3);
         CHECK(o->renderOrder == 0);
         CHECK_THAT(o->z, Catch::Matchers::WithinRel(3.5f));

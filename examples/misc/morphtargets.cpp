@@ -45,8 +45,8 @@ namespace {
 int main() {
 
     Canvas canvas("Morphtargets");
-    GLRenderer renderer(canvas.size());
-    renderer.checkShaderErrors = true;
+    auto renderer = createRenderer(canvas);
+    renderer->checkShaderErrors = true;
 
     auto scene = Scene::create();
     scene->background = Color(0x8FBCD4);
@@ -58,7 +58,7 @@ int main() {
 
     scene->add(AmbientLight::create(0x8FBCD4, 0.4f));
 
-    auto pointLight = PointLight::create(0xffffff, 1.f);
+    auto pointLight = PointLight::create(0xffffff, 1.f, 0, 0);
     camera->add(pointLight);
 
     auto geometry = createGeometry();
@@ -84,7 +84,7 @@ int main() {
 
     OrbitControls controls{*camera, canvas};
 
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({0, 0}, 0);
 
@@ -103,7 +103,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
@@ -141,7 +141,7 @@ int main() {
             sphere->visible = true;
         }
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
         ui.render();
     });

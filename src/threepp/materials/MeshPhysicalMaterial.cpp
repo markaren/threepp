@@ -62,6 +62,7 @@ void MeshPhysicalMaterial::copyInto(Material& material) const {
 
     m->transmission = transmission;
     m->transmissionMap = transmissionMap;
+    m->dispersion = dispersion;
 
     m->thickness = thickness;
     m->thicknessMap = thicknessMap;
@@ -105,6 +106,11 @@ bool MeshPhysicalMaterial::setValue(const std::string& key, const MaterialValue&
     } else if (key == "clearcoatNormalMap") {
 
         clearcoatNormalMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "dispersion") {
+
+        dispersion = extractFloat(value);
         return true;
 
     } else if (key == "transmission") {

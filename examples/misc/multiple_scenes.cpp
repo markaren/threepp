@@ -76,15 +76,15 @@ int main() {
 
     OrbitControls controls(*camera, canvas);
 
-    GLRenderer renderer(canvas.size());
-    renderer.setScissorTest(true);
-    renderer.setClearAlpha(0);
-    renderer.setClearColor(0);
+    auto renderer = createRenderer(canvas);
+    renderer->setScissorTest(true);
+    renderer->setClearAlpha(0);
+    renderer->setClearColor(0);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     int sliderPos = canvas.size().width() / 2;
@@ -96,10 +96,10 @@ int main() {
     canvas.animate([&]() {
         const auto size = canvas.size();
 
-        renderer.setScissor(0, 0, sliderPos, size.height());
-        renderer.render(sceneLeft, *camera);
+        renderer->setScissor(0, 0, sliderPos, size.height());
+        renderer->render(sceneLeft, *camera);
 
-        renderer.setScissor(sliderPos, 0, size.width() - sliderPos, size.height());
-        renderer.render(sceneRight, *camera);
+        renderer->setScissor(sliderPos, 0, size.width() - sliderPos, size.height());
+        renderer->render(sceneRight, *camera);
     });
 }

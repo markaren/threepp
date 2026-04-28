@@ -34,7 +34,7 @@ namespace {
 int main() {
 
     Canvas canvas("threepp demo", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
+    GLRenderer renderer(canvas);
     renderer.autoClear = false;// hud
 
     auto camera = PerspectiveCamera::create(50, canvas.aspect());

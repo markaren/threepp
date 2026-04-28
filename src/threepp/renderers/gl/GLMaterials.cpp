@@ -10,7 +10,7 @@
 #include "threepp/materials/MeshToonMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/materials.hpp"
-#include "threepp/renderers/GLRenderTarget.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/textures/CubeTexture.hpp"
 
 using namespace threepp;
@@ -267,7 +267,7 @@ struct GLMaterials::Impl {
         }
     }
 
-    void refreshUniformsPhysical(UniformMap& uniforms, MeshPhysicalMaterial* material, GLRenderTarget* transmissionRenderTarget) {
+    void refreshUniformsPhysical(UniformMap& uniforms, MeshPhysicalMaterial* material, RenderTarget* transmissionRenderTarget) {
 
         refreshUniformsStandard(uniforms, material);
 
@@ -527,7 +527,7 @@ struct GLMaterials::Impl {
         }
     }
 
-    void refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height, GLRenderTarget* transmissionRenderTarget) {
+    void refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height, RenderTarget* transmissionRenderTarget) {
 
         const auto type = material->type();
 
@@ -618,7 +618,7 @@ void GLMaterials::refreshFogUniforms(UniformMap& uniforms, FogVariant& fog) {
     return pimpl_->refreshFogUniforms(uniforms, fog);
 }
 
-void GLMaterials::refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height, GLRenderTarget* transmissionRenderTarget) {
+void GLMaterials::refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height, RenderTarget* transmissionRenderTarget) {
 
     pimpl_->refreshMaterialUniforms(uniforms, material, pixelRatio, height, transmissionRenderTarget);
 }

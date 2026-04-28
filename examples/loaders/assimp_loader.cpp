@@ -37,15 +37,15 @@ namespace {
     }
 
     auto addLights(Scene& scene) {
-        auto light1 = PointLight::create(0xffffff, 0.5f);
+        auto light1 = PointLight::create(0xffffff, 1.f, 0, 0);
         light1->position.set(45, 115, 25);
         scene.add(light1);
 
-        auto light2 = PointLight::create(0xffffff, 0.5f);
+        auto light2 = PointLight::create(0xffffff, 1.f, 0, 0);
         light2->position.set(-45, 115, 125);
         scene.add(light2);
 
-        auto light3 = PointLight::create(0xffffff, 0.5f);
+        auto light3 = PointLight::create(0xffffff, 1.f, 0, 0);
         light3->position.set(0, 25, -30);
         scene.add(light3);
     }
@@ -55,8 +55,8 @@ namespace {
 int main() {
 
     Canvas canvas{"Assimp loader", {{"aa", 4}}};
-    GLRenderer renderer(canvas.size());
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
@@ -90,7 +90,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -102,6 +102,6 @@ int main() {
             child->rotation.y += 1 * dt;
         }
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

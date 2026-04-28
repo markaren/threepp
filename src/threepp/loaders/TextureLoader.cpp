@@ -47,7 +47,7 @@ struct TextureLoader::Impl {
         return tex;
     }
 
-    std::shared_ptr<Texture> load(const std::filesystem::path& path, bool flipY) {
+    std::shared_ptr<Texture> load(const std::filesystem::path& path, ColorSpace colorSpace, bool flipY) {
 
         if (auto cachedTexture = checkCache(path.string())) {
 
@@ -65,7 +65,10 @@ struct TextureLoader::Impl {
             if (ext == ".dds") {
                 DDSLoader ddsLoader;
                 auto texture = ddsLoader.load(path);
-                if (texture && useCache_) cache_[path.string()] = texture;
+                if (texture) {
+                    texture->colorSpace = colorSpace;
+                    if (useCache_) cache_[path.string()] = texture;
+                }
                 return texture;
             }
         }
@@ -78,6 +81,7 @@ struct TextureLoader::Impl {
         texture->name = path.stem().string();
 
         texture->format = isJPEG ? Format::RGB : Format::RGBA;
+        texture->colorSpace = colorSpace;
         texture->needsUpdate();
 
         if (useCache_) cache_[path.string()] = texture;
@@ -85,7 +89,8 @@ struct TextureLoader::Impl {
         return texture;
     }
 
-    std::shared_ptr<Texture> loadFromMemory(const std::string& name, const std::vector<unsigned char>& data, bool flipY) {
+    std::shared_ptr<Texture> loadFromMemory(const std::string& name, const std::vector<unsigned char>& data,
+                                            ColorSpace colorSpace, bool flipY) {
 
         if (auto cachedTexture = checkCache(name)) {
 
@@ -100,6 +105,7 @@ struct TextureLoader::Impl {
         texture->name = name;
 
         texture->format = isJPEG ? Format::RGB : Format::RGBA;
+        texture->colorSpace = colorSpace;
         texture->needsUpdate();
 
         if (useCache_) cache_[name] = texture;
@@ -111,14 +117,25 @@ struct TextureLoader::Impl {
 TextureLoader::TextureLoader(bool useCache)
     : pimpl_(std::make_unique<Impl>(useCache)) {}
 
+std::shared_ptr<Texture> TextureLoader::load(const std::filesystem::path& path, ColorSpace colorSpace, bool flipY) {
+
+    return pimpl_->load(path, colorSpace, flipY);
+}
+
 std::shared_ptr<Texture> TextureLoader::load(const std::filesystem::path& path, bool flipY) {
 
-    return pimpl_->load(path, flipY);
+    return pimpl_->load(path, ColorSpace::NoColorSpace, flipY);
 }
 
 std::shared_ptr<Texture> TextureLoader::loadFromMemory(const std::string& name, const std::vector<unsigned char>& data, bool flipY) {
 
-    return pimpl_->loadFromMemory(name, data, flipY);
+    return pimpl_->loadFromMemory(name, data, ColorSpace::NoColorSpace, flipY);
+}
+
+std::shared_ptr<Texture> TextureLoader::loadFromMemory(const std::string& name, const std::vector<unsigned char>& data,
+                                                       ColorSpace colorSpace, bool flipY) {
+
+    return pimpl_->loadFromMemory(name, data, colorSpace, flipY);
 }
 
 void TextureLoader::clearCache() {

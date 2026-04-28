@@ -290,15 +290,15 @@ namespace threepp {
             }
             // Normal map (linear, no flip needed for tangent-space normals)
             if (auto t = tryLoad("inputs:normalmap_texture", false)) {
-                t->encoding = Encoding::Linear;
+                t->colorSpace = ColorSpace::Linear;
                 mat->normalMap = t; anyTex = true;
             } else if (auto t2 = tryLoad("inputs:normal_texture", false)) {
-                t2->encoding = Encoding::Linear;
+                t2->colorSpace = ColorSpace::Linear;
                 mat->normalMap = t2; anyTex = true;
             }
             // ORM packed map (R=occlusion, G=roughness, B=metallic)
             if (auto t = tryLoad("inputs:ORM_texture", false)) {
-                t->encoding = Encoding::Linear;
+                t->colorSpace = ColorSpace::Linear;
                 mat->aoMap         = t;
                 mat->roughnessMap  = t;
                 mat->metalnessMap  = t;
@@ -421,7 +421,7 @@ namespace threepp {
             if (shader.normal.is_texture()) {
                 auto tex = getTex(shader.normal.texture_id);
                 if (tex) {
-                    tex->encoding = Encoding::Linear;
+                    tex->colorSpace = ColorSpace::Linear;
                     mat->normalMap = tex;
                 }
             }

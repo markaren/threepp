@@ -36,19 +36,19 @@ namespace {
     }
 
     auto addLights(Scene& scene) {
-        const auto light1 = PointLight::create(Color::yellow);
+        const auto light1 = PointLight::create(Color::yellow, 2.5f);
         light1->castShadow = true;
         light1->shadow->bias = -0.005f;
         light1->distance = 8;
         light1->position.y = 4;
 
-        const auto light2 = PointLight::create(Color::white);
+        const auto light2 = PointLight::create(Color::white, 2.5f);
         light2->castShadow = true;
         light2->shadow->bias = -0.005f;
         light2->distance = 8;
         light2->position.y = 4;
 
-        const auto light3 = PointLight::create(Color::purple);
+        const auto light3 = PointLight::create(Color::purple, 2.5f, 0, 1);
         light3->castShadow = true;
         light3->shadow->bias = -0.005f;
         light3->distance = 10;
@@ -76,8 +76,8 @@ namespace {
 int main() {
 
     Canvas canvas("PointLight", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
@@ -97,7 +97,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     auto light1 = scene->getObjectByName("light1");
@@ -116,6 +116,6 @@ int main() {
         light2->position.x = 5 * std::sin(t);
         light2->position.z = 1 * std::sin(t);
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

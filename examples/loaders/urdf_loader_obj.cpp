@@ -18,8 +18,8 @@ int main() {
     }
 
     Canvas canvas{"URDF loader", {{"aa", 4}}};
-    GLRenderer renderer(canvas.size());
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
@@ -67,7 +67,7 @@ int main() {
         labels.emplace_back("j" + std::to_string(i + 1));
     }
 
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({}, 0, {});
         ImGui::SetNextWindowSize({0, 0}, 0);
 
@@ -102,7 +102,7 @@ int main() {
     canvas.onWindowResize([&](const WindowSize& sz) {
         camera->aspect = sz.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(sz);
+        renderer->setSize(sz);
     });
 
     Clock clock;
@@ -118,7 +118,7 @@ int main() {
         axis->position.setFromMatrixPosition(m);
         axis->quaternion.setFromRotationMatrix(m);
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
         ui.render();
     });
 }

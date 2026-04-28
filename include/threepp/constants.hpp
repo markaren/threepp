@@ -28,6 +28,13 @@ namespace threepp {
         VSM
     };
 
+    struct ShadowMapConfig {
+        bool enabled = false;
+        bool autoUpdate = true;
+        bool needsUpdate = false;
+        ShadowMap type = ShadowMap::PFC;
+    };
+
     enum class Side {
         Front,
         Back,
@@ -183,7 +190,11 @@ namespace threepp {
     const int TriangleStripDrawMode = 1;
     const int TriangleFanDrawMode = 2;
 
-    enum class Encoding : int {
+    // Color space tag for textures and renderer output.
+    // NoColorSpace (-1) means "raw data, no transform" — used for normal maps,
+    // metallic/roughness, occlusion, and other non-color inputs.
+    enum class ColorSpace : int {
+        NoColorSpace = -1,
         Linear = 3000,
         sRGB = 3001,
         Gamma = 3007,
@@ -193,6 +204,13 @@ namespace threepp {
         RGBM16 = 3005,
         RGBD = 3006
     };
+
+    // three.js-style namespace constants for ergonomic use:
+    //   tex->colorSpace = SRGBColorSpace;
+    inline constexpr auto NoColorSpace        = ColorSpace::NoColorSpace;
+    inline constexpr auto LinearSRGBColorSpace = ColorSpace::Linear;
+    inline constexpr auto SRGBColorSpace      = ColorSpace::sRGB;
+    inline constexpr auto RGBEColorSpace      = ColorSpace::RGBE;
 
     enum class DepthPacking {
         Basic = 3200,
