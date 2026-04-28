@@ -2825,6 +2825,10 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         auto* instancedMesh = object->as<InstancedMesh>();
         auto* skinnedMesh = object->as<SkinnedMesh>();
 
+        // Skip empty instanced draws: a zero-instance buffer would produce a
+        // BufferBinding with size 0, which wgpu rejects with "invalid size".
+        if (instancedMesh && instancedMesh->count() == 0) return;
+
         // Topology
         bool isLineLoop = object->is<LineLoop>();
         if (isLine) {
