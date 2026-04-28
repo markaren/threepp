@@ -8,6 +8,7 @@ add_subdirectory(Youbot)
 
 if (TARGET unofficial::omniverse-physx-sdk::sdk)
     add_subdirectory(Physics)
+    add_subdirectory(Vehicle)
 endif ()
 
 if (THREEPP_WITH_WGPU)
