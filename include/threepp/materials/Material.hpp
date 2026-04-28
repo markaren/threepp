@@ -39,7 +39,10 @@ namespace threepp {
         std::optional<BlendEquation> blendEquationAlpha;
 
         DepthFunc depthFunc{DepthFunc::LessEqual};
+        // Whether to have depth test enabled when rendering this material. When the depth test is disabled, the depth write will also be implicitly disabled.
         bool depthTest = true;
+        // Whether rendering this material has any effect on the depth buffer.
+        // When drawing 2D overlays it can be useful to disable the depth writing in order to layer several things together without creating z-index artifacts.
         bool depthWrite = true;
 
         int stencilWriteMask = 0xff;
