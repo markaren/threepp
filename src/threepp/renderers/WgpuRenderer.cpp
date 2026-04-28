@@ -2168,6 +2168,48 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             }
         }
 
+        // Pre-warm material textures for the same reason as the scene env above:
+        // getOrCreateTexture only writes mip 0 and queues mip-chain generation
+        // into pendingMipmaps_, which is flushed below. If we left this until the
+        // first bind-group creation inside the render pass, the new texture's
+        // mips wouldn't be flushed until the *next* render() call — and for a
+        // texture invalidated every frame (e.g. TextSprite::setText in a HUD)
+        // mips >0 would never populate, so small-scale sampling reads undefined
+        // data and the sprite vanishes.
+        {
+            auto warmTex = [this](Texture* tex) {
+                if (!tex) return;
+                const bool isCube = tex->mapping == Mapping::CubeReflection ||
+                                    tex->mapping == Mapping::CubeRefraction;
+                if (isCube) {
+                    textures->getOrCreateCubeTexture(tex);
+                } else {
+                    textures->getOrCreateTexture(tex);
+                }
+            };
+            auto warmMaterial = [&](Material* mat) {
+                if (!mat) return;
+                if (auto* m = dynamic_cast<MaterialWithMap*>(mat))             warmTex(m->map.get());
+                if (auto* m = dynamic_cast<MaterialWithAlphaMap*>(mat))        warmTex(m->alphaMap.get());
+                if (auto* m = dynamic_cast<MaterialWithSpecularMap*>(mat))     warmTex(m->specularMap.get());
+                if (auto* m = dynamic_cast<MaterialWithEmissive*>(mat))        warmTex(m->emissiveMap.get());
+                if (auto* m = dynamic_cast<MaterialWithNormalMap*>(mat))       warmTex(m->normalMap.get());
+                if (auto* m = dynamic_cast<MaterialWithBumpMap*>(mat))         warmTex(m->bumpMap.get());
+                if (auto* m = dynamic_cast<MaterialWithDisplacementMap*>(mat)) warmTex(m->displacementMap.get());
+                if (auto* m = dynamic_cast<MaterialWithRoughness*>(mat))       warmTex(m->roughnessMap.get());
+                if (auto* m = dynamic_cast<MaterialWithMetalness*>(mat))       warmTex(m->metalnessMap.get());
+                if (auto* m = dynamic_cast<MaterialWithAoMap*>(mat))           warmTex(m->aoMap.get());
+                if (auto* m = dynamic_cast<MaterialWithLightMap*>(mat))        warmTex(m->lightMap.get());
+                if (auto* m = dynamic_cast<MaterialWithEnvMap*>(mat))          warmTex(m->envMap.get());
+                if (auto* m = dynamic_cast<MaterialWithMatCap*>(mat))          warmTex(m->matcap.get());
+                if (auto* m = dynamic_cast<MaterialWithGradientMap*>(mat))     warmTex(m->gradientMap.get());
+                if (auto* m = dynamic_cast<MaterialWithTransmission*>(mat))    warmTex(m->transmissionMap.get());
+            };
+            for (auto* item : renderList_.opaque)       warmMaterial(item->material);
+            for (auto* item : renderList_.transparent)  warmMaterial(item->material);
+            for (auto* item : renderList_.transmissive) warmMaterial(item->material);
+        }
+
         // Flush any pending mipmap generation before the render pass begins.
         // Mipmap command buffers must be submitted while no render pass is active
         // to avoid wgpu-native validation errors with MSAA render passes.
