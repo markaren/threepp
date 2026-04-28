@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <unordered_map>
+#include <vector>
 #include <webgpu/webgpu.h>
 
 namespace threepp::wgpu {
@@ -57,6 +58,7 @@ private:
     };
 
     std::unordered_map<Key, Entry, KeyHash> cache_;
+    std::vector<WGPUBindGroup> deferredRelease_;
 
     // FNV-1a hash over all handle/offset/size fields of the bind group entries.
     static size_t computeHash(WGPUBindGroupLayout layout,

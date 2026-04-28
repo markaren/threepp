@@ -4,6 +4,7 @@ namespace threepp::wgpu {
 
 WgpuBindGroupCache::WgpuBindGroupCache(WGPUDevice device) : device_(device) {
     cache_.reserve(256);
+    deferredRelease_.reserve(64);
 }
 
 WgpuBindGroupCache::~WgpuBindGroupCache() {
@@ -38,20 +39,8 @@ WGPUBindGroup WgpuBindGroupCache::get(const void* objectPtr, const void* materia
                                        WGPUBindGroupLayout layout,
                                        const WGPUBindGroupEntry* entries, uint32_t count,
                                        WGPUStringView label) {
-    const size_t h = computeHash(layout, entries, count);
-    const Key key{objectPtr, materialPtr};
-
-    auto it = cache_.find(key);
-    if (it != cache_.end()) {
-        auto& entry = it->second;
-        entry.lastUsed = frame_;
-        if (entry.contentHash == h) {
-            return entry.bg; // cache hit — same resources as last time
-        }
-        // Resources changed — release the stale bind group and recreate below.
-        wgpuBindGroupRelease(entry.bg);
-        entry.bg = nullptr;
-    }
+    (void)objectPtr;
+    (void)materialPtr;
 
     WGPUBindGroupDescriptor desc{};
     desc.label      = label;
@@ -60,11 +49,16 @@ WGPUBindGroup WgpuBindGroupCache::get(const void* objectPtr, const void* materia
     desc.entries    = entries;
     WGPUBindGroup bg = wgpuDeviceCreateBindGroup(device_, &desc);
 
-    cache_[key] = {bg, h, frame_};
+    if (bg) deferredRelease_.push_back(bg);
     return bg;
 }
 
 void WgpuBindGroupCache::beginFrame() {
+    for (auto bg : deferredRelease_) {
+        wgpuBindGroupRelease(bg);
+    }
+    deferredRelease_.clear();
+
     ++frame_;
     for (auto it = cache_.begin(); it != cache_.end(); ) {
         if (frame_ - it->second.lastUsed > 2) {
@@ -77,6 +71,11 @@ void WgpuBindGroupCache::beginFrame() {
 }
 
 void WgpuBindGroupCache::dispose() {
+    for (auto bg : deferredRelease_) {
+        wgpuBindGroupRelease(bg);
+    }
+    deferredRelease_.clear();
+
     for (auto& [key, entry] : cache_) {
         wgpuBindGroupRelease(entry.bg);
     }
