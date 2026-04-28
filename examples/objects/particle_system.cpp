@@ -69,7 +69,7 @@ int main() {
 
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto dt = clock.getDelta();
 
         engine.update(dt * 0.5f);

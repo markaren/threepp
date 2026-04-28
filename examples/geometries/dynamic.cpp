@@ -50,7 +50,7 @@ int main() {
     Clock clock;
     const auto position = plane->geometry()->getAttribute<float>("position");
     position->setUsage(DrawUsage::Dynamic);
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto time = clock.getElapsedTime();
 
         renderer->render(*scene, *camera);

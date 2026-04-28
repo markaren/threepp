@@ -56,7 +56,7 @@ int main() {
     });
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto dt = clock.getDelta();
 
         arrow->rotation.z += 0.5f * dt;

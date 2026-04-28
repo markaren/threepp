@@ -80,7 +80,7 @@ int main() {
     });
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto dt = clock.getDelta();
 
         convex->rotation.y += 0.2f * dt;

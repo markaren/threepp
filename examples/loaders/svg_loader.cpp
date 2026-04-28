@@ -171,7 +171,7 @@ int main() {
     Vector3 center;
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         renderer->render(*scene, *camera);
 
         if (ui.newSelection()) {

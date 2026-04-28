@@ -93,7 +93,7 @@ int main() {
     MyMouseListener listener{dragging, sliderPos, canvas, controls};
     canvas.addMouseListener(listener);
 
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto size = canvas.size();
 
         renderer->setScissor(0, 0, sliderPos, size.height());

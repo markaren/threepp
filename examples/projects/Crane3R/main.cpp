@@ -195,7 +195,7 @@ int main() {
     transformControls.addEventListener("dragging-changed", changeListener);
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto dt = clock.getDelta();
 
         tm.handleTasks();

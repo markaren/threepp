@@ -99,7 +99,7 @@ int main() {
 
     Clock clock;
     Vector2 vector;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto dt = clock.getDelta();
 
         box.rotation.y += 0.5f * dt;

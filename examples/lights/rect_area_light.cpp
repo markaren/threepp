@@ -94,7 +94,7 @@ int main() {
     });
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto dt = clock.getDelta();
         knot->rotation.y += 0.3f * dt;
         knot->rotation.x += 0.2f * dt;

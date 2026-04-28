@@ -170,7 +170,7 @@ int main() {
     canvas.setIOCapture(&capture);
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto dt = clock.getDelta();
 
         tm.handleTasks();

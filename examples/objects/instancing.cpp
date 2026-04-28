@@ -114,7 +114,7 @@ int main() {
     FPSCounter counter;
     Raycaster raycaster;
     long long it{0};
-    canvas.animate([&]() {
+    canvas.animate([&] {
         raycaster.setFromCamera(mouse, *camera);
         const auto intersects = raycaster.intersectObject(*mesh);
 

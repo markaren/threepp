@@ -117,7 +117,7 @@ int main() {
 
     Clock clock;
     const auto count = static_cast<float>(geometry1->getIndex()->count());
-    canvas.animate([&]() {
+    canvas.animate([&] {
         tube1->rotation.y += 1 * clock.getDelta();
 
         const auto map = math::mapLinear(std::sin(clock.elapsedTime), -1, 1, 0, count);

@@ -55,7 +55,7 @@ int main() {
     handle2.setColor(Color::gray);
     hud.add(handle2).setVerticalAlignment(HUD::VerticalAlignment::ABOVE);
 
-    canvas.animate([&]() {
+    canvas.animate([&] {
         handle1.setText("LOD1 level: " + std::to_string(lod1.getCurrentLevel()));
         handle2.setText("LOD2 level: " + std::to_string(lod2.getCurrentLevel()));
 

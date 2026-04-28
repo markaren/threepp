@@ -56,7 +56,7 @@ int main() {
     });
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto size = canvas.size();
 
         renderer->clear();

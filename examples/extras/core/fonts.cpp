@@ -153,7 +153,7 @@ int main() {
 
     MyUI ui(canvas, *renderer);
 
-    canvas.animate([&]() {
+    canvas.animate([&] {
         renderer->render(*scene, *camera);
 
         ui.render();

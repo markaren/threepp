@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
     });
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
 
         if (animate) {
             for (auto i = 0; i < robot->numDOF(); ++i) {
@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        auto m = robot->computeEndEffectorTransform(jointValues, true);
+        const auto m = robot->computeEndEffectorTransform(jointValues, true);
         axis->position.setFromMatrixPosition(m);
         axis->quaternion.setFromRotationMatrix(m);
 

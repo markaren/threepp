@@ -104,7 +104,7 @@ int main() {
     auto light2 = scene->getObjectByName("light2");
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto dt = clock.getDelta();
         const auto t = clock.elapsedTime;
 

@@ -125,7 +125,7 @@ int main() {
     canvas.setIOCapture(&capture);
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const float dt = clock.getDelta();
 
         material->uniforms.at("cameraPos").value<Vector3>().copy(camera.position);

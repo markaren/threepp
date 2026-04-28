@@ -106,7 +106,7 @@ int main() {
     });
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         if (animate) {
             for (auto i = 0; i < robot->numDOF(); ++i) {
                 jointValues[i] = robot->getJointValue(i, true);

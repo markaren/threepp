@@ -81,7 +81,7 @@ int main() {
     });
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto t = clock.getElapsedTime();
 
         points->rotation.x = t * 0.25f;

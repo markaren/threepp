@@ -67,7 +67,7 @@ int main() {
     });
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         const auto dt = clock.getDelta();
 
         lathe->rotation.y += 0.8f * dt;

@@ -104,7 +104,7 @@ int main() {
     Clock clock;
     Raycaster raycaster;
     Sprite* lastPicked = nullptr;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         if (lastPicked) {
             lastPicked->setMaterial(material);
             lastPicked->scale.set(1, 1, 1);

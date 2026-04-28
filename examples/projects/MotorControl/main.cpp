@@ -158,7 +158,7 @@ int main() {
 
     Clock clock;
     long long it{};
-    canvas.animate([&]() {
+    canvas.animate([&] {
         float dt = clock.getDelta();
         double measuredPosition = motor.getPosition();
 

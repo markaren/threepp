@@ -80,7 +80,7 @@ int main() {
     });
 
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         if (animate) {
             angle = robot->getJointValue(0, false);
             robot->setJointValue(0, robot->getJointRange(0).mid() + std::sin(clock.getElapsedTime()) * 0.5f);
