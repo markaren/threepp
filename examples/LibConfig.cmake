@@ -1,5 +1,6 @@
 
 find_package(assimp CONFIG QUIET)
+find_package(unofficial-omniverse-physx-sdk CONFIG QUIET)
 
 
 if (THREEPP_FETCH_ASSIMP AND (NOT TARGET assimp::assimp))

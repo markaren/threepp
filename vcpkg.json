@@ -17,6 +17,12 @@
       "dependencies": [
         "assimp"
       ]
+    },
+    "physx": {
+      "description": "Enable NVIDIA PhysX physics integration in examples",
+      "dependencies": [
+        "physx"
+      ]
     }
   }
 }

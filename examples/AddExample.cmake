@@ -1,7 +1,7 @@
 
 function(add_example)
 
-    set(flags LINK_IMGUI LINK_ASSIMP LINK_XML WEB)
+    set(flags LINK_IMGUI LINK_ASSIMP LINK_XML LINK_PHYSX WEB)
     set(oneValueArgs NAME)
     set(multiValueArgs SOURCES WEB_EMBED)
 
@@ -13,6 +13,11 @@ function(add_example)
 
     if (arg_LINK_ASSIMP AND (NOT TARGET assimp::assimp))
         message(AUTHOR_WARNING "assimp not found, skipping '${arg_NAME}' example..")
+        return()
+    endif ()
+
+    if (arg_LINK_PHYSX AND (NOT TARGET unofficial::omniverse-physx-sdk::sdk))
+        message(AUTHOR_WARNING "physx not found, skipping '${arg_NAME}' example..")
         return()
     endif ()
 
@@ -30,6 +35,22 @@ function(add_example)
 
     if (arg_LINK_ASSIMP)
         target_link_libraries("${arg_NAME}" PRIVATE assimp::assimp)
+    endif ()
+
+    if (arg_LINK_PHYSX)
+        target_link_libraries("${arg_NAME}" PRIVATE unofficial::omniverse-physx-sdk::sdk)
+        if (WIN32 AND TARGET unofficial::omniverse-physx-sdk::gpu-library)
+            add_custom_command(TARGET "${arg_NAME}" POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:unofficial::omniverse-physx-sdk::gpu-library>
+                    $<TARGET_FILE_DIR:${arg_NAME}>)
+        endif ()
+        if (WIN32 AND TARGET unofficial::omniverse-physx-sdk::gpu-device-library)
+            add_custom_command(TARGET "${arg_NAME}" POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:unofficial::omniverse-physx-sdk::gpu-device-library>
+                    $<TARGET_FILE_DIR:${arg_NAME}>)
+        endif ()
     endif ()
 
 
