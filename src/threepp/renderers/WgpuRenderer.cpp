@@ -92,6 +92,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -3202,15 +3203,35 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
             uint32_t instanceCount = instancedMesh ? static_cast<uint32_t>(instancedMesh->count()) : 1;
 
+            // Combine geometry->drawRange with item->group, mirroring GLRenderer.
+            // rangeFactor = 2 for wireframe (each tri index becomes ~2 line indices).
+            auto resolveRange = [&](uint32_t dataCount, int rangeFactor) -> std::pair<uint32_t, uint32_t> {
+                int64_t rangeStart = static_cast<int64_t>(geometry->drawRange.start) * rangeFactor;
+                int64_t rangeCount = static_cast<int64_t>(geometry->drawRange.count) * rangeFactor;
+                int64_t groupStart = item->group.has_value() ? static_cast<int64_t>(item->group->start) : 0;
+                int64_t groupCount = item->group.has_value()
+                        ? static_cast<int64_t>(item->group->count)
+                        : (std::numeric_limits<int64_t>::max)() / 2;
+                int64_t drawStart = std::max<int64_t>(rangeStart, groupStart);
+                int64_t drawEnd = std::min<int64_t>(static_cast<int64_t>(dataCount),
+                                                    std::min<int64_t>(rangeStart + rangeCount,
+                                                                      groupStart + groupCount)) - 1;
+                int64_t drawCount = std::max<int64_t>(0, drawEnd - drawStart + 1);
+                return {static_cast<uint32_t>(drawStart), static_cast<uint32_t>(drawCount)};
+            };
+
             if (useWireframe) {
                 auto& wb = geometries->getOrCreateWireframeBuffers(geometry);
                 if (wb.indexBuffer) {
-                    wgpuRenderPassEncoderSetIndexBuffer(pass, wb.indexBuffer,
-                                                         WGPUIndexFormat_Uint32, 0,
-                                                         wb.indexCount * sizeof(uint32_t));
-                    wgpuRenderPassEncoderDrawIndexed(pass, wb.indexCount, instanceCount, 0, 0, 0);
-                    renderInfo.calls++;
-                    renderInfo.lines += wb.indexCount / 2;
+                    auto [drawStart, drawCount] = resolveRange(wb.indexCount, 2);
+                    if (drawCount > 0) {
+                        wgpuRenderPassEncoderSetIndexBuffer(pass, wb.indexBuffer,
+                                                             WGPUIndexFormat_Uint32, 0,
+                                                             wb.indexCount * sizeof(uint32_t));
+                        wgpuRenderPassEncoderDrawIndexed(pass, drawCount, instanceCount, drawStart, 0, 0);
+                        renderInfo.calls++;
+                        renderInfo.lines += drawCount / 2;
+                    }
                 }
             } else if (isLineLoop) {
                 uint32_t n = gb.vertexCount;
@@ -3230,30 +3251,26 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 renderInfo.calls++;
                 renderInfo.lines += n;
             } else if (gb.indexBuffer) {
-                uint32_t drawStart = 0;
-                uint32_t drawCount = gb.indexCount;
-                if (item->group.has_value()) {
-                    drawStart = static_cast<uint32_t>(item->group->start);
-                    drawCount = static_cast<uint32_t>(item->group->count);
+                auto [drawStart, drawCount] = resolveRange(gb.indexCount, 1);
+                if (drawCount > 0) {
+                    wgpuRenderPassEncoderSetIndexBuffer(pass, gb.indexBuffer,
+                                                             WGPUIndexFormat_Uint32, 0,
+                                                             gb.indexCount * sizeof(uint32_t));
+                    wgpuRenderPassEncoderDrawIndexed(pass, drawCount, instanceCount, drawStart, 0, 0);
+                    renderInfo.calls++;
+                    if (isLine) renderInfo.lines += isLineSegments ? drawCount / 2 : (drawCount > 0 ? drawCount - 1 : 0);
+                    else if (isPoints) renderInfo.points += drawCount;
+                    else renderInfo.triangles += drawCount / 3;
                 }
-                wgpuRenderPassEncoderSetIndexBuffer(pass, gb.indexBuffer,
-                                                         WGPUIndexFormat_Uint32, 0,
-                                                         gb.indexCount * sizeof(uint32_t));
-                wgpuRenderPassEncoderDrawIndexed(pass, drawCount, instanceCount, drawStart, 0, 0);
-                renderInfo.calls++;
-                if (isLine) renderInfo.lines += isLineSegments ? drawCount / 2 : (drawCount > 0 ? drawCount - 1 : 0);
-                else if (isPoints) renderInfo.points += drawCount;
-                else renderInfo.triangles += drawCount / 3;
             } else {
-                uint32_t drawCount = gb.vertexCount;
-                if (item->group.has_value()) {
-                    drawCount = static_cast<uint32_t>(item->group->count);
+                auto [drawStart, drawCount] = resolveRange(gb.vertexCount, 1);
+                if (drawCount > 0) {
+                    wgpuRenderPassEncoderDraw(pass, drawCount, instanceCount, drawStart, 0);
+                    renderInfo.calls++;
+                    if (isLine) renderInfo.lines += isLineSegments ? drawCount / 2 : (drawCount > 0 ? drawCount - 1 : 0);
+                    else if (isPoints) renderInfo.points += drawCount;
+                    else renderInfo.triangles += drawCount / 3;
                 }
-                wgpuRenderPassEncoderDraw(pass, drawCount, instanceCount, 0, 0);
-                renderInfo.calls++;
-                if (isLine) renderInfo.lines += isLineSegments ? drawCount / 2 : (drawCount > 0 ? drawCount - 1 : 0);
-                else if (isPoints) renderInfo.points += drawCount;
-                else renderInfo.triangles += drawCount / 3;
             }
         }
 
