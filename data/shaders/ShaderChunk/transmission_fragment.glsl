@@ -22,8 +22,15 @@
 	vec3 f0 = vec3( pow( ior - 1.0, 2.0 ) / pow( ior + 1.0, 2.0 ) );
 	vec3 f90 = vec3( 1.0 );
 
+	// Per glTF KHR_materials_transmission, transmitted light is tinted by volume
+	// attenuation only. Some assets ship baseColor=(0,0,0) as "clear glass" relying
+	// on alphaMode=BLEND; lerp the albedo toward white when it is near-black so the
+	// refracted background still passes through.
+	float albedoLum = max( max( diffuseColor.r, diffuseColor.g ), diffuseColor.b );
+	vec3 transmissionAlbedo = mix( vec3( 1.0 ), diffuseColor.rgb, smoothstep( 0.0, 0.1, albedoLum ) );
+
 	vec3 f_transmission = getIBLVolumeRefraction(
-		normal, v, viewDir, roughnessFactor, diffuseColor.rgb, f0, f90,
+		normal, v, viewDir, roughnessFactor, transmissionAlbedo, f0, f90,
 		pos, modelMatrix, viewMatrix, projectionMatrix, ior, thicknessFactor,
 		attenuationColor, attenuationDistance);
 

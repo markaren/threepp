@@ -1067,7 +1067,17 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         let f0_t = pow((ior - 1.0) / (ior + 1.0), 2.0);
         let fresnel_t = f0_t + (1.0 - f0_t) * pow(1.0 - NdotV_t, 5.0);
         let transmissionFactor = transmission * (1.0 - fresnel_t);
-        baseColor = totalSpecular + mix(totalDiffuse, transmittedLight * albedoTint, transmissionFactor);
+        // Per glTF KHR_materials_transmission: transmitted light is tinted by volume
+        // attenuation only, NOT by base color. Lerp toward white when albedoTint is
+        // very dark so a black-baseColor glass (artist intent: "clear glass with low
+        // opacity") still passes the refracted background through.
+        let albedoLum = max(albedoTint.r, max(albedoTint.g, albedoTint.b));
+        let transmissionTint = mix(vec3<f32>(1.0), albedoTint, smoothstep(0.0, 0.1, albedoLum));
+        baseColor = totalSpecular + mix(totalDiffuse, transmittedLight * transmissionTint, transmissionFactor);
+        // The shader already composites the refracted background into baseColor;
+        // GPU alpha-blending on top would double-composite and dilute the result.
+        // Force opacity=1.0 so BlendNormal becomes effectively a replace.
+        opacity = 1.0;
     }
 )";
         }
