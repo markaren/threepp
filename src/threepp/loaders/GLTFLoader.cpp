@@ -891,6 +891,24 @@ namespace threepp {
                                 sm->bind(skel, Matrix4());
                         }
                     }
+
+                    // DCC tools (Blender, Maya, ...) put the user-facing object name on
+                    // the glTF node; the mesh name is the mesh-data name and is often
+                    // generic ("Object_0"). When the node has an explicit name, prefer
+                    // it on the mesh container so traversal-by-name finds Blender names.
+                    if (nodeDef.contains("name")) {
+                        const auto nodeName = nodeDef["name"].get<std::string>();
+                        meshObj->name = nodeName;
+                        // For multi-primitive meshes (Group containing several Meshes),
+                        // also propagate the name to inner primitives so they're findable.
+                        if (!meshObj->children.empty()) {
+                            int idx = 0;
+                            for (auto* child : meshObj->children) {
+                                child->name = nodeName + "_" + std::to_string(idx++);
+                            }
+                        }
+                    }
+
                     obj->add(meshObj);
                 }
 
@@ -952,6 +970,26 @@ namespace threepp {
                     for (int nodeIdx : sceneDef["nodes"].get<std::vector<int>>())
                         root->add(nodeObjects[nodeIdx]);
                 }
+
+                // Sketchfab/Blender exports often wrap a Mesh in a chain of named
+                // groups (e.g. "Cone_2" → "Object_8" → Mesh), where only the topmost
+                // wrapper carries the user-facing name. Walk up from each Mesh through
+                // single-child wrapper groups and adopt the topmost wrapper's name so
+                // traverseType<Mesh> / getObjectByName see Blender's names.
+                root->traverseType<Mesh>([](Mesh& m) {
+                    Object3D* candidate = &m;
+                    Object3D* cur = &m;
+                    while (cur->parent &&
+                           cur->parent->children.size() == 1 &&
+                           !dynamic_cast<Mesh*>(cur->parent)) {
+                        candidate = cur->parent;
+                        cur = cur->parent;
+                    }
+                    if (candidate != &m && !candidate->name.empty()) {
+                        m.name = candidate->name;
+                    }
+                });
+
                 return root;
             }
 
