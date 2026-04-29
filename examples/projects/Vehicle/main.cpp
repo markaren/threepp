@@ -108,8 +108,13 @@ int main() {
         return m.name.rfind("BarrierCylinder", 0) == 0;
     };
 
-    // Static colliders for everything except the filter.
-    world.addStaticTrimeshTree(*track, [&](const Mesh& m) { return !(isCone(m) || isBarrierCylinder(m) || isBarrier(m)); });
+    // Static colliders.
+    world.addStaticTrimeshTree(*track, [&](const Mesh& m) {
+        return m.name.rfind("Rails", 0) == 0
+        || m.name.rfind("Road", 0) == 0
+        || m.name.rfind("Object", 0) == 0
+        || m.name.rfind("Terrain", 0) == 0;
+    });
 
     // Cones become dynamic convex obstacles the car can knock around. Barrier
     // cylinders are tethered to a ground anchor with a D6 joint: linear DOFs
