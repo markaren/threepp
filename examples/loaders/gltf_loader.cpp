@@ -5,11 +5,14 @@
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/threepp.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
 #include <iostream>
 
 using namespace threepp;
 
-int main() {
+int main(int argc, char** argv) {
     Canvas canvas("GLTF Demo");
     auto renderer = createRenderer(canvas);
     renderer->shadowMap().enabled = true;
@@ -35,7 +38,21 @@ int main() {
     dirLight->castShadow = true;
     scene->add(dirLight);
 
-    const std::string modelPath = std::string(DATA_FOLDER) + "/models/gltf/Soldier.glb";
+    std::string modelPath = std::string(DATA_FOLDER) + "/models/gltf/Soldier.glb";
+    if (argc > 1) {
+        std::filesystem::path arg = argv[1];
+        if (std::filesystem::exists(arg) && std::filesystem::is_regular_file(arg)) {
+            auto ext = arg.extension().string();
+            std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return std::tolower(c); });
+            if (ext == ".gltf" || ext == ".glb") {
+                modelPath = arg.string();
+            } else {
+                std::cerr << "Ignoring argument (not a .gltf/.glb file): " << arg << "\n";
+            }
+        } else {
+            std::cerr << "Ignoring argument (file not found): " << arg << "\n";
+        }
+    }
     std::cout << "Loading: " << modelPath << "\n";
 
     GLTFLoader loader;
