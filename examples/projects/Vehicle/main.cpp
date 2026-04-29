@@ -7,6 +7,9 @@
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/extras/physx/PhysxVehicle.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
+#include "threepp/loaders/ModelLoader.hpp"
+#include "threepp/loaders/RGBELoader.hpp"
+#include "threepp/renderers/wgpu/WgpuPathTracer.hpp"
 
 #include <PxPhysicsAPI.h>
 
@@ -50,63 +53,68 @@ namespace {
         return mesh;
     }
 
-    std::shared_ptr<Mesh> makeRamp(const Vector3& position, float yawDeg) {
-        auto mat = MeshLambertMaterial::create();
-        mat->color = Color::tan;
-        auto mesh = Mesh::create(BoxGeometry::create(6, 0.4f, 4), mat);
-        mesh->position.copy(position);
-        mesh->rotation.set(math::degToRad(15.f), math::degToRad(yawDeg), 0);
-        return mesh;
-    }
-
 }// namespace
 
 int main() {
 
     Canvas canvas("PhysX Vehicle", {{"aa", 4}, {"vsync", true}});
     auto renderer = createRenderer(canvas);
-    renderer->autoClear = false;
+
+    if (auto wgpu = dynamic_cast<WgpuRenderer*>(renderer.get())) {
+        auto& pt = wgpu->pathTracer();
+        pt.setMaxBounces(2);
+        pt.setTlasEnabled(true);
+    }
 
     auto scene = Scene::create();
-    scene->background = Color::aliceblue;
+
+    RGBELoader hdrLoader;
+    if (auto hdrTexture = hdrLoader.load(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr")) {
+        scene->background = hdrTexture;
+        scene->environment = hdrTexture;
+    }
 
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 1000);
 
-    auto sun = DirectionalLight::create(0xffffff, 1.5f);
+    auto sun = DirectionalLight::create(0xffffff, 1.2f);
     sun->position.set(20, 30, 20);
     scene->add(sun);
-    scene->add(AmbientLight::create(0xffffff, 0.35f));
+    scene->add(AmbientLight::create(0xffffff, 0.1f));
 
     PhysxWorld world;
 
+    // Fallback ground far below the track to catch the car if it leaves the
+    // drivable surface — keeps the demo from spawning the vehicle into the void.
     auto groundMat = MeshLambertMaterial::create();
     groundMat->color = Color::darkolivegreen;
-    auto ground = Mesh::create(BoxGeometry::create(200, 1, 200), groundMat);
-    ground->position.y = -0.5f;
+    auto ground = Mesh::create(BoxGeometry::create(500, 1, 500), groundMat);
+    ground->position.y = -10.f;
     scene->add(ground);
     world.addStatic(*ground);
 
-    // A handful of static ramps + walls to drive over / around.
-    std::vector<std::shared_ptr<Mesh>> obstacles;
-    obstacles.push_back(makeRamp({15, 0.6f, 5}, 90.f));
-    obstacles.push_back(makeRamp({-15, 0.6f, -5}, -90.f));
-    obstacles.push_back(makeRamp({0, 0.6f, 25}, 0.f));
-    for (auto& ramp : obstacles) {
-        scene->add(ramp);
-        world.addStatic(*ramp);
-    }
+    // Race track: visual + trimesh collider per sub-mesh.
+    ModelLoader modelLoader;
+    auto track = modelLoader.load(std::string(DATA_FOLDER) + "/models/gltf/drift_track/drift_race_track_free.glb");
+    scene->add(track);
 
-    auto wallMat = MeshPhongMaterial::create();
-    wallMat->color = Color::saddlebrown;
-    for (int i = 0; i < 5; ++i) {
-        auto box = Mesh::create(BoxGeometry::create(1, 1, 1), wallMat);
-        box->position.set(-6.f + i * 1.05f, 0.5f, -12.f);
-        scene->add(box);
-        world.add(*box, 50.f);
-    }
+    auto isCone = [](const Mesh& m) {
+        return m.name.rfind("Cone", 0) == 0;
+    };
+
+    // Static colliders for everything except the cones.
+    world.addStaticTrimeshTree(*track, [&](const Mesh& m) { return !isCone(m); });
+
+    // Cones become dynamic convex obstacles the car can knock around.
+    track->traverseType<Mesh>([&](Mesh& m) {
+        m.material()->alphaTest = 0.5;
+        if (isCone(m)) {
+            world.addDynamicConvex(m, 5.f);
+        }
+    });
 
     PhysxVehicle::Settings settings;
-    settings.spawnPosition = {0, 1.2f, 0};
+    settings.spawnPosition = {20, 1.2f, -10};
+    settings.spawnRotation = Quaternion().setFromAxisAngle({0, 1, 0}, math::degToRad(90.f));
 
     PhysxVehicle vehicle(world, settings);
 
@@ -163,6 +171,7 @@ int main() {
 
     float steerCmd = 0.f, throttleCmd = 0.f, brakeCmd = 0.f;
 
+    bool pathTrace = false;
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
         const float w = 280 * ui.dpiScale();
         ImGui::SetNextWindowPos({static_cast<float>(canvas.size().width()) - w, 0}, 0, {0, 0});
@@ -184,6 +193,12 @@ int main() {
         ImGui::ProgressBar(brakeCmd, {-1, 0}, "Brake");
         ImGui::SliderFloat("Steer", &steerCmd, -1.f, 1.f, "%.2f");
         if (ImGui::Button("Respawn")) respawnPressed = true;
+        ImGui::Separator();
+        if (auto wgpu = dynamic_cast<WgpuRenderer*>(renderer.get())) {
+            if (ImGui::Checkbox("Pathtrace", &pathTrace)) {
+                wgpu->usePathTracer = pathTrace;
+            }
+        }
         ImGui::End();
     });
 
@@ -252,7 +267,6 @@ int main() {
         camera->position.copy(camPos);
         camera->lookAt(camTarget);
 
-        renderer->clear();
         renderer->render(*scene, *camera);
 
         ui.render();

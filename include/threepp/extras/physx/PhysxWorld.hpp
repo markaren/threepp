@@ -233,6 +233,138 @@ namespace threepp {
             return body;
         }
 
+        // Cook a triangle mesh from arbitrary indexed geometry and add it as a static
+        // collider. Returns nullptr if the geometry has no position attribute, fewer
+        // than 3 vertices, or a non-triangle index buffer. Trimesh colliders are valid
+        // only for static / kinematic actors — dynamics need a convex decomposition.
+        ::physx::PxRigidStatic* addStaticTrimesh(
+                const BufferGeometry& geometry,
+                const ::physx::PxTransform& tr = ::physx::PxTransform(::physx::PxIdentity),
+                const Vector3& scale = Vector3(1.f, 1.f, 1.f),
+                ::physx::PxMaterial* mat = nullptr) {
+            using namespace ::physx;
+            const auto* posAttr = geometry.getAttribute<float>("position");
+            if (!posAttr) return nullptr;
+            const auto& positions = posAttr->array();
+            const PxU32 vertCount = static_cast<PxU32>(posAttr->count());
+            if (vertCount < 3) return nullptr;
+
+            // Build a u32 index buffer (copied from geometry index, or 0..N-1 for unindexed).
+            std::vector<PxU32> indices;
+            const auto* idxAttr = geometry.getIndex();
+            if (idxAttr) {
+                const auto& src = idxAttr->array();
+                indices.assign(src.begin(), src.end());
+            } else {
+                indices.resize(vertCount);
+                for (PxU32 i = 0; i < vertCount; ++i) indices[i] = i;
+            }
+            if (indices.size() < 3 || indices.size() % 3 != 0) return nullptr;
+
+            PxTriangleMeshDesc desc;
+            desc.points.count = vertCount;
+            desc.points.stride = sizeof(float) * 3;
+            desc.points.data = positions.data();
+            desc.triangles.count = static_cast<PxU32>(indices.size() / 3);
+            desc.triangles.stride = sizeof(PxU32) * 3;
+            desc.triangles.data = indices.data();
+
+            PxCookingParams params(physics_->getTolerancesScale());
+            PxTriangleMesh* triMesh = PxCreateTriangleMesh(params, desc);
+            if (!triMesh) return nullptr;
+
+            if (!mat) mat = defaultMat_;
+            PxTriangleMeshGeometry geom(triMesh, PxMeshScale(toPxVec3(scale)));
+            PxRigidStatic* body = physics_->createRigidStatic(tr);
+            PxShape* shape = physics_->createShape(geom, *mat, true);
+            body->attachShape(*shape);
+            shape->release();
+            // Shape retains a reference; release our local one so the mesh is freed
+            // when the shape (and therefore actor) goes away.
+            triMesh->release();
+            scene_->addActor(*body);
+            return body;
+        }
+
+        // Build a static trimesh from mesh.geometry(); pose and scale come from
+        // mesh.matrixWorld (decomposed). Convenience wrapper around the geometry overload.
+        ::physx::PxRigidStatic* addStaticTrimesh(Mesh& mesh, ::physx::PxMaterial* mat = nullptr) {
+            auto* g = mesh.geometry().get();
+            if (!g) throw std::runtime_error("PhysxWorld::addStaticTrimesh: mesh has no geometry");
+            mesh.updateMatrixWorld();
+            Vector3 pos, scale;
+            Quaternion rot;
+            mesh.matrixWorld->decompose(pos, rot, scale);
+            return addStaticTrimesh(
+                    *g,
+                    ::physx::PxTransform(toPxVec3(pos), toPxQuat(rot)),
+                    scale,
+                    mat);
+        }
+
+        // Walk the subtree and add every Mesh as its own static trimesh. Useful for
+        // imported scenes (glTF tracks, environments) where the visual hierarchy is
+        // also the collision geometry. Returns the created actors.
+        // `filter` lets the caller skip meshes (e.g. dynamic obstacles); pass nullptr
+        // to accept all.
+        std::vector<::physx::PxRigidStatic*> addStaticTrimeshTree(
+                Object3D& root,
+                const std::function<bool(const Mesh&)>& filter = nullptr,
+                ::physx::PxMaterial* mat = nullptr) {
+            std::vector<::physx::PxRigidStatic*> out;
+            root.updateMatrixWorld();
+            root.traverseType<Mesh>([&](Mesh& m) {
+                if (filter && !filter(m)) return;
+                if (auto* body = addStaticTrimesh(m, mat)) out.push_back(body);
+            });
+            return out;
+        }
+
+        // Cook a convex hull from the mesh vertices and add it as a dynamic actor.
+        // PhysX dynamics require convex shapes — for non-convex visuals (a traffic
+        // cone, an L-bracket) the hull is the smallest convex envelope. Pose and
+        // scale come from mesh.matrixWorld; the mesh is bound to the new actor so
+        // it follows the simulation.
+        ::physx::PxRigidDynamic* addDynamicConvex(
+                Mesh& mesh, float density, ::physx::PxMaterial* mat = nullptr) {
+            using namespace ::physx;
+            auto* g = mesh.geometry().get();
+            if (!g) throw std::runtime_error("PhysxWorld::addDynamicConvex: mesh has no geometry");
+            const auto* posAttr = g->getAttribute<float>("position");
+            if (!posAttr) return nullptr;
+            const auto& positions = posAttr->array();
+            const PxU32 vertCount = static_cast<PxU32>(posAttr->count());
+            if (vertCount < 4) return nullptr;
+
+            PxConvexMeshDesc desc;
+            desc.points.count = vertCount;
+            desc.points.stride = sizeof(float) * 3;
+            desc.points.data = positions.data();
+            desc.flags = PxConvexFlag::eCOMPUTE_CONVEX;
+
+            PxCookingParams params(physics_->getTolerancesScale());
+            PxConvexMesh* convex = PxCreateConvexMesh(params, desc);
+            if (!convex) return nullptr;
+
+            if (!mat) mat = defaultMat_;
+            mesh.updateMatrixWorld();
+            Vector3 pos, scale;
+            Quaternion rot;
+            mesh.matrixWorld->decompose(pos, rot, scale);
+
+            PxConvexMeshGeometry geom(convex, PxMeshScale(toPxVec3(scale)));
+            PxRigidDynamic* body = physics_->createRigidDynamic(
+                    PxTransform(toPxVec3(pos), toPxQuat(rot)));
+            PxShape* shape = physics_->createShape(geom, *mat, true);
+            body->attachShape(*shape);
+            shape->release();
+            convex->release();
+            PxRigidBodyExt::updateMassAndInertia(*body, density);
+            scene_->addActor(*body);
+            bind(mesh, *body);
+            return body;
+        }
+
         // One PxRigidDynamic per instance. Initial pose taken from each instance matrix.
         std::vector<::physx::PxRigidActor*> add(InstancedMesh& mesh,
                                                 float density,
@@ -323,8 +455,24 @@ namespace threepp {
         void syncBindings() {
             for (auto& b : objBindings_) {
                 auto t = b.actor->getGlobalPose();
-                b.obj->position.copy(fromPxVec3(t.p));
-                b.obj->quaternion.copy(fromPxQuat(t.q));
+                const Vector3 worldPos = fromPxVec3(t.p);
+                const Quaternion worldRot = fromPxQuat(t.q);
+                if (auto* parent = b.obj->parent) {
+                    // Convert world pose into parent-local pose so the visual lands
+                    // correctly when the bound object is nested under transformed groups.
+                    parent->updateMatrixWorld();
+                    Matrix4 worldMat;
+                    worldMat.compose(worldPos, worldRot, Vector3(1.f, 1.f, 1.f));
+                    Matrix4 inverseParent;
+                    inverseParent.copy(*parent->matrixWorld).invert();
+                    Matrix4 localMat;
+                    localMat.multiplyMatrices(inverseParent, worldMat);
+                    Vector3 unusedScale;
+                    localMat.decompose(b.obj->position, b.obj->quaternion, unusedScale);
+                } else {
+                    b.obj->position.copy(worldPos);
+                    b.obj->quaternion.copy(worldRot);
+                }
             }
             for (auto& b : instBindings_) {
                 Matrix4 m;
