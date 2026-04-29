@@ -7,8 +7,10 @@
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/extras/physx/PhysxVehicle.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
+#include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
+#include "threepp/objects/Points.hpp"
 #include "threepp/renderers/wgpu/WgpuPathTracer.hpp"
 
 #include <PxPhysicsAPI.h>
@@ -122,8 +124,6 @@ int main() {
     track->traverseType<Mesh>([&](Mesh& m) {
         if (isCone(m)) {
             world.addDynamicConvex(m, 5.f);
-        }else if (isBarrier(m)) {
-            world.addDynamicConvex(m, 500.f);
         } else if (isBarrierCylinder(m)) {
             auto* dyn = world.addDynamicConvex(m, 100.f);
             if (!dyn) return;
@@ -149,6 +149,8 @@ int main() {
             joint->setDrive(PxD6Drive::eSWING, drive);
             joint->setDrive(PxD6Drive::eTWIST, drive);
             joint->setDrivePosition(PxTransform(PxIdentity));
+        } else if (isBarrier(m)) {
+            world.addDynamicConvex(m, 500.f);
         }
     });
 
@@ -369,6 +371,34 @@ int main() {
     } orbitMouse(orbitYaw, orbitPitch, orbitDist, orbiting, lastMousePos);
     canvas.addMouseListener(orbitMouse);
 
+    // Optional depth-sensor inset (GL only). DepthSensor scans the scene from
+    // a forward-facing camera mounted on the chassis, producing a 3D point
+    // cloud. The cloud is visualised as Points and rendered into the lower-left
+    // viewport from the sensor's POV.
+    auto* glRenderer = dynamic_cast<GLRenderer*>(renderer.get());
+    std::shared_ptr<DepthSensor> depthSensor;
+    std::shared_ptr<Points> depthPoints;
+    constexpr unsigned int kSensorW = 256, kSensorH = 192;
+    if (glRenderer) {
+        depthSensor = std::make_shared<DepthSensor>(60.f, kSensorW, kSensorH, 0.5f, 60.f);
+        depthSensor->position.set(0, 0.5f, 2.f);// nose-mounted, forward
+        depthSensor->rotation.y = math::degToRad(180.f);
+        chassisMesh->add(depthSensor);
+
+        const size_t maxPts = kSensorW * kSensorH;
+        auto pcGeom = BufferGeometry::create();
+        pcGeom->setAttribute("position", FloatBufferAttribute::create(std::vector<float>(maxPts * 3), 3));
+        pcGeom->setAttribute("color", FloatBufferAttribute::create(std::vector<float>(maxPts * 3), 3));
+        pcGeom->getAttribute<float>("position")->setUsage(DrawUsage::Dynamic);
+        pcGeom->getAttribute<float>("color")->setUsage(DrawUsage::Dynamic);
+
+        auto pcMat = PointsMaterial::create({{"size", 0.05f}, {"vertexColors", true}});
+        depthPoints = Points::create(pcGeom, pcMat);
+        depthPoints->frustumCulled = false;
+        depthPoints->layers.set(1);// hidden from the main camera; only the inset enables this layer
+        scene->add(depthPoints);
+    }
+
     constexpr float dt = 1.f / 60.f;
 
     canvas.animate([&] {
@@ -441,6 +471,49 @@ int main() {
         camera->lookAt(camTarget);
 
         renderer->render(*scene, *camera);
+
+        // Depth-sensor inset overlay (GL only). Scan from the chassis-mounted
+        // sensor, refresh the point cloud, then render an inset from the
+        // sensor's POV with layer 1 enabled so the points become visible.
+        if (glRenderer) {
+            static std::vector<Vector3> cloud;
+            cloud.clear();
+            depthPoints->visible = false;// hide cloud during scan to avoid feedback
+            depthSensor->scan(*renderer, *scene, cloud);
+            depthPoints->visible = true;
+
+            auto& geom = *depthPoints->geometry();
+            auto* posAttr = geom.getAttribute<float>("position");
+            auto* colAttr = geom.getAttribute<float>("color");
+            Vector3 sensorWorldPos;
+            depthSensor->getWorldPosition(sensorWorldPos);
+            const float maxDist = depthSensor->far();
+            Color c;
+            int idx = 0;
+            for (const auto& p : cloud) {
+                posAttr->setXYZ(idx, p.x, p.y, p.z);
+                const float t = std::min(p.distanceTo(sensorWorldPos) / maxDist, 1.f);
+                c.setHSL(0.33f * (1.f - t), 1.f, 0.5f);// near=green, far=red
+                colAttr->setXYZ(idx, c.r, c.g, c.b);
+                ++idx;
+            }
+            geom.setDrawRange(0, idx);
+            posAttr->needsUpdate();
+            colAttr->needsUpdate();
+
+            auto& sensorCam = depthSensor->getCamera();
+            sensorCam.layers.enableAll();// see the cloud (on layer 1) plus the world
+
+            const int w = 512, h = 480, margin = 5;
+            Vector4 oldVp;
+            glRenderer->getViewport(oldVp);
+            glRenderer->setScissorTest(true);
+            glRenderer->setViewport(margin, margin, w, h);
+            glRenderer->setScissor(margin, margin, w, h);
+            glRenderer->render(*scene, sensorCam);
+            glRenderer->setScissorTest(false);
+            glRenderer->setViewport(oldVp);
+        }
 
         ui.render();
     });
