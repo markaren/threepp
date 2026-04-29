@@ -29,6 +29,7 @@ namespace threepp::wgpu {
 MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry, Texture* sceneEnvFallback) {
     MaterialParams p;
     p.opacity = rawMat->opacity;
+    p.alphaTest = rawMat->alphaTest;
 
     if (auto m = dynamic_cast<MeshStandardMaterial*>(rawMat)) {
         p.features |= ShaderFeatures::Lighting | ShaderFeatures::PBR;
@@ -194,11 +195,11 @@ void packMaterialUniforms(float* data, const MaterialParams& params,
                           const FrameContext& ctx, Material* rawMat) {
     std::memset(data, 0, MATERIAL_UNIFORM_SIZE);
 
-    // diffuse (vec4, offset 0)
+    // diffuse (vec4, offset 0): rgb + alphaTest cutoff (0 = test disabled)
     data[0] = params.diffuse.r;
     data[1] = params.diffuse.g;
     data[2] = params.diffuse.b;
-    data[3] = 1.0f;
+    data[3] = params.alphaTest;
 
     // specular (vec4, offset 4): rgb + (PBR: specularIntensity, else: shininess)
     data[4] = params.specularColor.r;

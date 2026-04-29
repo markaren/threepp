@@ -102,7 +102,7 @@ struct TransformUniforms {
 @group(0) @binding(0) var<uniform> transform: TransformUniforms;
 
 struct MaterialUniforms {
-    diffuse: vec4<f32>,
+    diffuse: vec4<f32>,                 // rgb=diffuse color, w=alphaTest cutoff
     specularAndShininess: vec4<f32>,
     roughnessMetalnessOpacity: vec4<f32>,
     emissive: vec4<f32>,
@@ -589,6 +589,11 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         s << "    let _alphaUv = vec2<f32>(dot(material.alphaMapT0.xyz, _alphaSrc), dot(material.alphaMapT1.xyz, _alphaSrc));\n";
         s << "    opacity = opacity * textureSample(t_alphaMap, s_alphaMap, _alphaUv).r;\n";
     }
+
+    // Alpha test: glTF MASK mode and Material::alphaTest. Cutoff lives in
+    // diffuse.w (0 = disabled). Discard before lighting so transparent texels
+    // don't write depth or contribute color.
+    s << "    if (material.diffuse.w > 0.0 && opacity < material.diffuse.w) { discard; }\n";
 
     // ShadowMaterial: output shadow attenuation only, skip full lighting
     if (features & ShaderFeatures::ShadowMat) {

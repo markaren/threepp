@@ -1,7 +1,6 @@
 
-#include "threepp/loaders/AssimpLoader.hpp"
 #include "threepp/threepp.hpp"
-#include <iostream>
+
 
 using namespace threepp;
 
@@ -25,7 +24,7 @@ int main() {
 
     scene.add(AmbientLight::create(0x111111));
 
-    AssimpLoader loader;
+    ModelLoader loader;
     auto gltf = loader.load(std::string(DATA_FOLDER) + "/models/gltf/AnimatedMorphSphere/AnimatedMorphSphere.gltf");
     scene.add(gltf);
 
