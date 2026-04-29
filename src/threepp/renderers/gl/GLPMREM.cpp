@@ -80,11 +80,12 @@ void main() {
 }
 )";
 
-    // Pure port of three.js PMREMGenerator's equirect→cube fragment shader
-    // (_getEquirectShader). Direct, non-convolved sample — produces a sharp
-    // reflection at every LOD for now. GGX blur lives in three.js's _halfBlur
-    // pass, which can be added later without changing the atlas layout or
-    // consumer shader (cube_uv_reflection_fragment.glsl).
+    // GGX importance-sampled PMREM filter. For roughness == 0 (LOD 0) this
+    // collapses to a direct equirect sample. For roughness > 0 it accumulates
+    // hemispherical GGX samples around the output direction (= N for prefilter)
+    // weighted by NdotL — same approach WGPU PMREM uses (see WgpuPMREM.cpp).
+    // Without this the cubeUV atlas had sharp reflections at every roughness
+    // level, making GL look glossier than WGPU on identical scenes.
     const char* const FRAGMENT_SRC = R"(#version 330 core
 precision highp float;
 precision highp int;
@@ -93,9 +94,12 @@ in vec3 vOutputDirection;
 out vec4 fragColor;
 
 uniform sampler2D envMap;
+uniform float roughness;
+uniform int numSamples;
 
 #define RECIPROCAL_PI 0.31830988618
 #define RECIPROCAL_PI2 0.15915494
+#define PI2 6.28318530718
 
 vec2 equirectUv(in vec3 dir) {
     float u = atan(dir.z, dir.x) * RECIPROCAL_PI2 + 0.5;
@@ -103,10 +107,62 @@ vec2 equirectUv(in vec3 dir) {
     return vec2(u, v);
 }
 
+float vdc(uint bits) {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10;
+}
+
+vec2 hammersley(uint i, uint N) {
+    return vec2(float(i) / float(N), vdc(i));
+}
+
+vec3 importanceSampleGGX(vec2 Xi, vec3 N, float r) {
+    // Disney convention: GGX α = roughness², so the cosTheta formula needs
+    // (α² - 1) = (r⁴ - 1). Mirrors WgpuPMREM.cpp's importanceSampleGGX.
+    float a = r * r;
+    float phi = PI2 * Xi.x;
+    float cosTheta = sqrt(max((1.0 - Xi.y) / (1.0 + (a * a - 1.0) * Xi.y), 0.0));
+    float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
+    vec3 H_t = vec3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+    vec3 upN = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent = normalize(cross(upN, N));
+    vec3 bitangent = cross(N, tangent);
+    return normalize(tangent * H_t.x + bitangent * H_t.y + N * H_t.z);
+}
+
+vec3 sampleEquirect(vec3 dir) {
+    return texture(envMap, equirectUv(dir)).rgb;
+}
+
 void main() {
-    vec3 outputDirection = normalize(vOutputDirection);
-    vec2 uv = equirectUv(outputDirection);
-    fragColor = vec4(texture(envMap, uv).rgb, 1.0);
+    vec3 N = normalize(vOutputDirection);
+
+    if (roughness <= 0.0) {
+        fragColor = vec4(sampleEquirect(N), 1.0);
+        return;
+    }
+
+    vec3 accumColor = vec3(0.0);
+    float accumWeight = 0.0;
+    uint NS = uint(numSamples);
+    for (uint i = 0u; i < NS; i++) {
+        vec2 Xi = hammersley(i, NS);
+        vec3 H = importanceSampleGGX(Xi, N, roughness);
+        vec3 L = normalize(-N + 2.0 * dot(N, H) * H);
+        float NdotL = max(dot(N, L), 0.0);
+        if (NdotL > 0.0) {
+            // Clamp per-channel to suppress fireflies from ultra-bright HDR pixels
+            // (sun disk, specular highlights) and Inf from RGBE exponent overflow.
+            vec3 s = min(sampleEquirect(L), vec3(50.0));
+            accumColor += s * NdotL;
+            accumWeight += NdotL;
+        }
+    }
+    fragColor = vec4(accumColor / max(accumWeight, 0.001), 1.0);
 }
 )";
 

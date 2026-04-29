@@ -39,20 +39,22 @@
 
 		#endif
 
-		return PI * envMapColor.rgb * envMapIntensity;
+		// No PI multiplier here. Modern three.js / WGPU convention: PMREM at
+		// maxMip already stores the NdotL-weighted hemispheric mean, and the
+		// downstream BRDF_Lambert applies its own 1/π. A legacy `* PI` here
+		// cancelled with Lambert's 1/π, leaving GL π× brighter than WGPU on
+		// the same scene (light-gray floors went near-white once GLPMREM
+		// started filtering LOD 10 properly).
+		return envMapColor.rgb * envMapIntensity;
 
 	}
 
-	// Trowbridge-Reitz distribution to Mip level, following the logic of http://casual-effects.blogspot.ca/2011/08/plausible-environment-lighting-in-two.html
+	// Linear PMREM mapping (matches WGPU raster + three.js r155+ PMREMGenerator convention).
+	// The legacy log/sigma heuristic over-blurred mid-roughness reflections vs the WGPU path.
 	float getSpecularMIPLevel( const in float roughness, const in int maxMIPLevel ) {
 
 		float maxMIPLevelScalar = float( maxMIPLevel );
-
-		float sigma = PI * roughness * roughness / ( 1.0 + roughness );
-		float desiredMIPLevel = maxMIPLevelScalar + log2( sigma );
-
-		// clamp to allowable LOD ranges.
-		return clamp( desiredMIPLevel, 0.0, maxMIPLevelScalar );
+		return clamp( roughness * maxMIPLevelScalar, 0.0, maxMIPLevelScalar );
 
 	}
 
@@ -60,10 +62,10 @@
 
 		#ifdef ENVMAP_MODE_REFLECTION
 
+			// Pure mirror reflection. WGPU raster does the same; the prior
+			// roughness-bend mix toward the normal made GL sample sharper env
+			// regions on glossy/mid-rough surfaces, breaking parity.
 			vec3 reflectVec = reflect( -viewDir, normal );
-
-			// Mixing the reflection with the normal is more accurate and keeps rough objects from gathering light from behind their tangent plane.
-			reflectVec = normalize( mix( reflectVec, normal, roughness * roughness) );
 
 		#else
 

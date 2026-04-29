@@ -975,9 +975,23 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
                     s << "    let nTheta    = asin(clamp(N.y, -1.0, 1.0)) * 0.31830989 + 0.5;\n";
                     s << "    let envDiff   = textureSampleLevel(t_envMap, s_envMap, vec2<f32>(nPhi, nTheta), maxMip).rgb;\n";
                 }
-                s << "    let envFresnel   = F0 + (1.0 - F0) * pow(1.0 - max(dot(N, V), 0.0), 5.0);\n";
-                s << "    let indirSpec    = envFresnel * envColor;\n";
-                s << "    let indirDiff    = envDiff * baseColor * (1.0 - metalness);\n";
+                // Split-sum DFG approximation (Karis '13, UE4 mobile environmentBRDF).
+                // Mirrors GL's integrateSpecularBRDF (bsdfs.glsl:7) — roughness-aware
+                // BRDF integral. Plain Fresnel * envColor is far too bright on rough
+                // surfaces (e.g. terrain) because Fresnel doesn't account for the
+                // BRDF's roughness-dependent energy falloff.
+                s << "    let dotNV_ibl = max(dot(N, V), 0.0);\n";
+                s << "    let dfgC0 = vec4<f32>(-1.0, -0.0275, -0.572, 0.022);\n";
+                s << "    let dfgC1 = vec4<f32>( 1.0,  0.0425,  1.04 , -0.04);\n";
+                s << "    let dfgR  = roughness * dfgC0 + dfgC1;\n";
+                s << "    let dfgA  = min(dfgR.x * dfgR.x, exp2(-9.28 * dotNV_ibl)) * dfgR.x + dfgR.y;\n";
+                s << "    let dfg   = vec2<f32>(-1.04, 1.04) * dfgA + dfgR.zw;\n";
+                s << "    let indirSpec    = (F0 * dfg.x + dfg.y) * envColor;\n";
+                // 1/π is the Lambert BRDF normalization; mirrors GL's
+                // indirectDiffuse += irradiance * BRDF_Diffuse_Lambert(diffuseColor)
+                // (lights_physical_pars_fragment.glsl:120). Without it the env
+                // IBL diffuse is π× brighter than GL on the same scene.
+                s << "    let indirDiff    = envDiff * baseColor * (1.0 - metalness) * 0.31830989;\n";
                 s << "    let ambientSpecOnly = indirSpec * material.emissive.w;\n";
                 s << "    let ambientDiff     = indirDiff * material.emissive.w;\n";
                 if (features & ShaderFeatures::Sheen) {
