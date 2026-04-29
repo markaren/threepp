@@ -806,6 +806,29 @@ namespace threepp {
                         addFloatAttr("WEIGHTS_0", "skinWeight", 4);
                     }
 
+                    // --- Morph targets (POSITION/NORMAL deltas) ---
+                    // glTF morph targets are always relative (deltas from the base attribute).
+                    size_t numMorphTargets = 0;
+                    if (prim.contains("targets")) {
+                        const auto& targets = prim["targets"];
+                        numMorphTargets = targets.size();
+                        for (const auto& target : targets) {
+                            if (target.contains("POSITION")) {
+                                auto data = readFloats(target["POSITION"].get<int>());
+                                geometry->getOrCreateMorphAttribute("position")
+                                        ->emplace_back(FloatBufferAttribute::create(std::move(data), 3));
+                            }
+                            if (target.contains("NORMAL")) {
+                                auto data = readFloats(target["NORMAL"].get<int>());
+                                geometry->getOrCreateMorphAttribute("normal")
+                                        ->emplace_back(FloatBufferAttribute::create(std::move(data), 3));
+                            }
+                        }
+                        if (numMorphTargets > 0) {
+                            geometry->morphTargetsRelative = true;
+                        }
+                    }
+
                     // --- Indices ---
                     if (prim.contains("indices")) {
                         auto indices = readIndices(prim["indices"].get<int>());
@@ -831,6 +854,19 @@ namespace threepp {
                         mesh = SkinnedMesh::create(geometry, mat);
                     else
                         mesh = Mesh::create(geometry, mat);
+
+                    if (numMorphTargets > 0) {
+                        auto& influences = mesh->morphTargetInfluences();
+                        influences.assign(numMorphTargets, 0.0f);
+                        // Initial weights live on the mesh, not the primitive.
+                        if (meshDef.contains("weights")) {
+                            const auto& weights = meshDef["weights"];
+                            const size_t n = std::min(numMorphTargets, weights.size());
+                            for (size_t i = 0; i < n; ++i) {
+                                influences[i] = weights[i].get<float>();
+                            }
+                        }
+                    }
 
                     // Tag for KHR_materials_variants post-load resolution
                     mesh->userData["__gltfMeshIdx"] = meshIdx;
@@ -861,6 +897,12 @@ namespace threepp {
                     child->name = group->name;
                     auto cloned = child->clone();
                     cloned->userData = child->userData;// Object3D::copy() doesn't copy userData
+                    // Object3D::copy() doesn't copy morphTargetInfluences either
+                    if (auto* childMesh = child->as<Mesh>()) {
+                        if (auto* clonedMesh = cloned->as<Mesh>()) {
+                            clonedMesh->morphTargetInfluences() = childMesh->morphTargetInfluences();
+                        }
+                    }
                     return cloned;
                 }
                 return group;
