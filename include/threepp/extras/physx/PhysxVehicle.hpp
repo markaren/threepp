@@ -419,6 +419,14 @@ namespace threepp {
 
         void stepVehicle(float dt) {
             componentSequence_.update(dt, simContext_);
+            // PxVehicle's component sequence updates wheelLocalPoses_ but doesn't
+            // push them onto the chassis-attached wheel shapes — debug visualization
+            // would otherwise stay frozen at the initial rest pose. Sync explicitly.
+            for (::physx::PxU32 i = 0; i < 4; ++i) {
+                if (auto* shape = physxActor_.wheelShapes[i]) {
+                    shape->setLocalPose(wheelLocalPoses_[i].localPose);
+                }
+            }
         }
 
         // ---- Component getDataFor* overrides ----

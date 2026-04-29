@@ -5,6 +5,7 @@
 #include "threepp/threepp.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/extras/physx/PhysxDebugRenderer.hpp"
 #include "threepp/extras/physx/PhysxVehicle.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/helpers/DepthSensor.hpp"
@@ -121,6 +122,7 @@ int main() {
     // locked, angular DOFs free with a spring drive that returns them to
     // upright after the car bumps them.
     track->traverseType<Mesh>([&](Mesh& m) {
+
         if (isCone(m)) {
             world.addDynamicConvex(m, 5.f);
         } else if (isBarrierCylinder(m)) {
@@ -168,6 +170,10 @@ int main() {
     auto chassisMesh = Group::create();
     scene->add(chassisMesh);
     world.bind(*chassisMesh, *vehicle.chassisActor());
+
+    auto physxDebug = std::make_shared<PhysxDebugRenderer>(world);
+    physxDebug->enableDefaults();
+    scene->add(physxDebug);
 
     // Range Rover Evoque visual rig. The model's native units are roughly mm —
     // scale ×100 for meters. Its bottom (wheel contacts) sits at y=0 in model
@@ -321,6 +327,7 @@ int main() {
         ImGui::SliderFloat("Steer", &steerCmd, -1.f, 1.f, "%.2f");
         if (ImGui::Button("Respawn")) respawnPressed = true;
         ImGui::Separator();
+        ImGui::Checkbox("PhysX debug", &physxDebug->visible);
 
         ImGui::End();
     });
@@ -440,6 +447,7 @@ int main() {
         }
 
         world.step(dt);
+        physxDebug->update();
 
         // Drive wheel rigs from vehicle wheel local poses (chassis-space).
         for (int i = 0; i < 4; ++i) {
