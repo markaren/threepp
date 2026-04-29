@@ -92,40 +92,110 @@ int main() {
     scene->add(ground);
     world.addStatic(*ground);
 
-    // Race track: visual + trimesh collider per sub-mesh.
+    // Race track: visual + trimesh collider per sub-mesh. Native AABB is ~480m
+    // across, roughly 2× a real drift course — scale down so the car (real-world
+    // meters) reads correctly against it.
     ModelLoader modelLoader;
     auto track = modelLoader.load(std::string(DATA_FOLDER) + "/models/gltf/drift_track/drift_race_track_free.glb");
+    track->scale.set(0.5f, 0.5f, 0.5f);
     scene->add(track);
 
     auto isCone = [](const Mesh& m) {
         return m.name.rfind("Cone", 0) == 0;
     };
 
+    auto isBarrierCylinder = [](const Mesh& m) {
+        return m.name.rfind("BarrierCylinder", 0) == 0;
+    };
+
     // Static colliders for everything except the cones.
-    world.addStaticTrimeshTree(*track, [&](const Mesh& m) { return !isCone(m); });
+    world.addStaticTrimeshTree(*track, [&](const Mesh& m) { return !isCone(m) || !isBarrierCylinder(m); });
 
     // Cones become dynamic convex obstacles the car can knock around.
     track->traverseType<Mesh>([&](Mesh& m) {
-        m.material()->alphaTest = 0.5;
+        // m.material()->alphaTest = 0.5;
         if (isCone(m)) {
             world.addDynamicConvex(m, 5.f);
+        } else if (isBarrierCylinder(m)) {
+            world.addDynamicConvex(m, 100.f);
         }
     });
 
     PhysxVehicle::Settings settings;
+    // Match the Range Rover Evoque visual proportions (model is ~2.1×1.6×4.4 m).
+    settings.chassisWidth = 1.95f;
+    settings.chassisHeight = 1.4f;
+    settings.chassisLength = 4.4f;
+    settings.wheelbase = 2.66f;
+    settings.trackWidth = 1.65f;
     settings.spawnPosition = {20, 1.2f, -10};
-    settings.spawnRotation = Quaternion().setFromAxisAngle({0, 1, 0}, math::degToRad(90.f));
+    settings.spawnRotation = Quaternion().setFromAxisAngle({0, 1, 0}, math::degToRad(-90.f));
 
     PhysxVehicle vehicle(world, settings);
 
-    auto chassisMesh = makeChassisMesh(settings);
+    auto chassisMesh = Group::create();
     scene->add(chassisMesh);
     world.bind(*chassisMesh, *vehicle.chassisActor());
 
-    std::array<std::shared_ptr<Mesh>, 4> wheelMeshes;
+    // Range Rover Evoque visual rig. The model's native units are roughly mm —
+    // scale ×100 for meters. Its bottom (wheel contacts) sits at y=0 in model
+    // space; offset down so wheel contacts line up with the rest height of the
+    // PhysX chassis (chassis center is wheelRadius+|suspY| above contacts).
+    auto carBody = modelLoader.load(
+            std::string(DATA_FOLDER) + "/models/gltf/2015_land-rover_range_rover_evoque_coupe/scene.gltf");
+    carBody->scale.set(100.f, 100.f, 100.f);
+    carBody->position.y = -(settings.wheelRadius - settings.suspensionAttachmentY);
+    chassisMesh->add(carBody);
+
+    // Extract the model's wheels into PhysX-driven rigs. The .gltf's per-wheel
+    // "pivot" nodes have identity transforms — wheel positions are baked into
+    // the geometry — so we compute the hub from the combined AABB and clone
+    // each wheel mesh into a rig. The clone's local position and scale recenter
+    // the geometry on the hub and convert from native (mm) to meters; the rig
+    // itself is driven each frame by vehicle.wheelLocalPose(i).
+    //
+    // PhysX index → model tag (Settings::drivenWheels).
+    const char* wheelTag[4] = {"WheelFL", "WheelFR", "WheelBL", "WheelBR"};
+    std::array<std::vector<Mesh*>, 4> wheelParts;
+    carBody->traverseType<Mesh>([&](Mesh& m) {
+        for (int i = 0; i < 4; ++i) {
+            if (m.name.find(wheelTag[i]) != std::string::npos) {
+                wheelParts[i].push_back(&m);
+                return;
+            }
+        }
+    });
+
+    std::array<std::shared_ptr<Group>, 4> wheelRigs;
     for (int i = 0; i < 4; ++i) {
-        wheelMeshes[i] = makeWheelMesh(settings.wheelRadius, settings.wheelHalfWidth);
-        chassisMesh->add(wheelMeshes[i]);
+        wheelRigs[i] = Group::create();
+        chassisMesh->add(wheelRigs[i]);
+
+        if (wheelParts[i].empty()) continue;
+
+        // Combined hub center in carBody-local (mm) units.
+        Box3 combined;
+        combined.makeEmpty();
+        for (auto* part : wheelParts[i]) {
+            part->geometry()->computeBoundingBox();
+            const auto& b = *part->geometry()->boundingBox;
+            combined.expandByPoint(b.min());
+            combined.expandByPoint(b.max());
+        }
+        const Vector3 hub = combined.getCenter();
+
+        for (auto* part : wheelParts[i]) {
+            // Clone BEFORE hiding the original — Object3D::copy inherits `visible`.
+            auto cloned = std::dynamic_pointer_cast<Mesh>(part->clone());
+            part->visible = false;// hide the static original
+            if (!cloned) continue;
+            cloned->visible = true;
+            // Rig-local transform that bakes recenter + ×100 (mm→m): a vertex v
+            // ends up at 100*(v - hub) in rig space, so the hub sits at the rig
+            // origin and the geometry is in meters.
+            cloned->position.set(-hub.x, -hub.y, -hub.z);
+            wheelRigs[i]->add(cloned);
+        }
     }
 
     // Input state
@@ -136,15 +206,26 @@ int main() {
     auto keyToggle = [&](Key key, bool down) {
         switch (key) {
             case Key::W:
-            case Key::UP: throttleDown = down; break;
+            case Key::UP:
+                throttleDown = down;
+                break;
             case Key::S:
-            case Key::DOWN: brakeDown = down; break;
+            case Key::DOWN:
+                brakeDown = down;
+                break;
             case Key::A:
-            case Key::LEFT: steerLeftDown = down; break;
+            case Key::LEFT:
+                steerLeftDown = down;
+                break;
             case Key::D:
-            case Key::RIGHT: steerRightDown = down; break;
-            case Key::SPACE: handbrakeDown = down; break;
-            default: break;
+            case Key::RIGHT:
+                steerRightDown = down;
+                break;
+            case Key::SPACE:
+                handbrakeDown = down;
+                break;
+            default:
+                break;
         }
     };
 
@@ -185,9 +266,9 @@ int main() {
         ImGui::Separator();
         const float speedKmh = vehicle.forwardSpeed() * 3.6f;
         ImGui::Text("Speed   : %.1f km/h", speedKmh);
-        const char* gearTxt = vehicle.gear() == PhysxVehicle::Gear::Forward    ? "Forward"
-                              : vehicle.gear() == PhysxVehicle::Gear::Reverse  ? "Reverse"
-                                                                               : "Neutral";
+        const char* gearTxt = vehicle.gear() == PhysxVehicle::Gear::Forward   ? "Forward"
+                              : vehicle.gear() == PhysxVehicle::Gear::Reverse ? "Reverse"
+                                                                              : "Neutral";
         ImGui::Text("Gear    : %s", gearTxt);
         ImGui::ProgressBar(throttleCmd, {-1, 0}, "Throttle");
         ImGui::ProgressBar(brakeCmd, {-1, 0}, "Brake");
@@ -212,14 +293,61 @@ int main() {
     Vector3 camPos{0, 4, -10};
     Vector3 camTarget{0, 1, 0};
 
+    // Orbit overlay: left-drag rotates yaw/pitch, wheel zooms distance. While
+    // idle (no drag) the params lerp back toward the default chase (yaw=0 means
+    // directly behind the car, matching the original {0, 4, -10} offset).
+    constexpr float defaultPitch = 0.38f;// atan(4/10) — height/distance of original chase
+    constexpr float defaultDist = 10.77f;// sqrt(4*4 + 10*10)
+    float orbitYaw = 0.f;
+    float orbitPitch = defaultPitch;
+    float orbitDist = defaultDist;
+    bool orbiting = false;
+    Vector2 lastMousePos;
+
+    struct OrbitMouse: MouseListener {
+        float& yaw;
+        float& pitch;
+        float& dist;
+        bool& dragging;
+        Vector2& lastPos;
+        OrbitMouse(float& y, float& p, float& d, bool& dr, Vector2& lp)
+            : yaw(y), pitch(p), dist(d), dragging(dr), lastPos(lp) {}
+        void onMouseDown(int button, const Vector2& pos) override {
+            if (ImGui::GetIO().WantCaptureMouse) return;
+            if (button == 0) {
+                dragging = true;
+                lastPos = pos;
+            }
+        }
+        void onMouseUp(int button, const Vector2&) override {
+            if (button == 0) dragging = false;
+        }
+        void onMouseMove(const Vector2& pos) override {
+            if (!dragging) return;
+            const Vector2 d = pos - lastPos;
+            lastPos = pos;
+            yaw -= d.x * 0.01f;
+            pitch = std::clamp(pitch + d.y * 0.01f, 0.05f, 1.4f);
+        }
+        void onMouseWheel(const Vector2& delta) override {
+            if (ImGui::GetIO().WantCaptureMouse) return;
+            dist = std::clamp(dist - delta.y, 3.f, 40.f);
+        }
+    } orbitMouse(orbitYaw, orbitPitch, orbitDist, orbiting, lastMousePos);
+    canvas.addMouseListener(orbitMouse);
+
     constexpr float dt = 1.f / 60.f;
 
     canvas.animate([&] {
-
         // Build commands from keyboard.
         const float steerInput = (steerLeftDown ? 1.f : 0.f) - (steerRightDown ? 1.f : 0.f);
-        const float steerSlew = std::min(1.f, dt * 4.f);
-        steerCmd += (steerInput - steerCmd) * steerSlew;
+        // Speed-sensitive steering: full lock at standstill, attenuated at speed
+        // so the car doesn't snap-spin at highway pace. Real cars do this via EPS.
+        const float speedKmhAbs = std::abs(vehicle.forwardSpeed()) * 3.6f;
+        const float steerScale = 1.f / (1.f + speedKmhAbs * 0.015f);
+        // Slower slew (~0.5s to full lock) — the previous ~0.25s felt twitchy.
+        const float steerSlew = std::min(1.f, dt * 2.f);
+        steerCmd += (steerInput * steerScale - steerCmd) * steerSlew;
         throttleCmd = throttleDown ? 1.f : 0.f;
         brakeCmd = (brakeDown || handbrakeDown) ? 1.f : 0.f;
 
@@ -243,21 +371,33 @@ int main() {
 
         world.step(dt);
 
-        // Drive wheel meshes from vehicle wheel local poses (chassis-space).
+        // Drive wheel rigs from vehicle wheel local poses (chassis-space).
         for (int i = 0; i < 4; ++i) {
             const PxTransform wp = vehicle.wheelLocalPose(i);
-            wheelMeshes[i]->position.set(wp.p.x, wp.p.y, wp.p.z);
-            wheelMeshes[i]->quaternion.set(wp.q.x, wp.q.y, wp.q.z, wp.q.w);
+            wheelRigs[i]->position.set(wp.p.x, wp.p.y, wp.p.z);
+            wheelRigs[i]->quaternion.set(wp.q.x, wp.q.y, wp.q.z, wp.q.w);
         }
 
-        // Chase camera: lag behind chassis along its local -Z, slightly above.
+        // While idle, fade orbit params back toward the default chase view.
+        if (!orbiting) {
+            const float fade = std::min(1.f, dt * 1.5f);
+            orbitYaw += (0.f - orbitYaw) * fade;
+            orbitPitch += (defaultPitch - orbitPitch) * fade;
+            orbitDist += (defaultDist - orbitDist) * fade;
+        }
+
+        // Build chase/orbit camera in chassis-local space, then transform to world.
         const PxTransform pose = vehicle.chassisPose();
         Matrix4 chassisMat;
         chassisMat.compose(
                 Vector3(pose.p.x, pose.p.y, pose.p.z),
                 Quaternion(pose.q.x, pose.q.y, pose.q.z, pose.q.w),
                 Vector3(1, 1, 1));
-        Vector3 desiredCam{0, 4.f, -10.f};
+        const float cosP = std::cos(orbitPitch);
+        Vector3 desiredCam(
+                orbitDist * std::sin(orbitYaw) * cosP,
+                orbitDist * std::sin(orbitPitch),
+                -orbitDist * std::cos(orbitYaw) * cosP);
         desiredCam.applyMatrix4(chassisMat);
         Vector3 desiredTarget{0, 1.f, 2.f};
         desiredTarget.applyMatrix4(chassisMat);
