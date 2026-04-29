@@ -1,0 +1,11 @@
+Model Information:
+* title:	2015 Land-Rover Range Rover Evoque Coupe
+* source:	https://sketchfab.com/3d-models/2015-land-rover-range-rover-evoque-coupe-23ef38b95ebb4d6fb679248817e8b211
+* author:	Ddiaz Design (https://sketchfab.com/ddiaz-design)
+
+Model License:
+* license type:	CC-BY-NC-SA-4.0 (http://creativecommons.org/licenses/by-nc-sa/4.0/)
+* requirements:	Author must be credited. No commercial use. Modified versions must have the same license.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "2015 Land-Rover Range Rover Evoque Coupe" (https://sketchfab.com/3d-models/2015-land-rover-range-rover-evoque-coupe-23ef38b95ebb4d6fb679248817e8b211) by Ddiaz Design (https://sketchfab.com/ddiaz-design) licensed under CC-BY-NC-SA-4.0 (http://creativecommons.org/licenses/by-nc-sa/4.0/)
