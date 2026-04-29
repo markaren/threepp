@@ -73,6 +73,15 @@ int main() {
 
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 1000);
 
+    // Driver POV camera, parented to the chassis so it tracks the body. Will
+    // be added to chassisMesh once that exists below. The local pose puts the
+    // eyepoint roughly where a driver sits (left side, eye height, just behind
+    // the firewall) and faces +Z (PhysX vehicle forward).
+    auto povCamera = PerspectiveCamera::create(70, canvas.aspect(), 0.05f, 1000);
+    povCamera->position.set(0.4f, 0.4f, -0.1f);
+    // Camera default forward is -Z; chassis forward is +Z. Flip so POV faces ahead.
+    povCamera->rotation.y = math::PI;
+
     auto sun = DirectionalLight::create(0xffffff, 1.2f);
     sun->position.set(20, 30, 20);
     scene->add(sun);
@@ -162,6 +171,18 @@ int main() {
     settings.chassisLength = 4.4f;
     settings.wheelbase = 2.66f;
     settings.trackWidth = 1.65f;
+    // 4WD splits drive torque across all four wheels — twice the grip envelope
+    // before tires break loose at low speed. The Evoque is AWD anyway.
+    settings.drivenWheels = {true, true, true, true};
+    // Direct-drive (no gearbox) means torque has to do all the work itself —
+    // bump up. Damping was high to fight wheelspin; with 4WD + better grip we
+    // can lower it.
+    settings.maxThrottleTorque = 1500.f;
+    settings.wheelDampingRate = 1.5f;
+    // Slightly stickier tires + more longitudinal stiffness so the contact
+    // patch transmits force faster than the engine can spin the wheel.
+    settings.tireFriction = 2.0f;
+    settings.longitudinalStiffness = 100'000.f;
     settings.spawnPosition = {20, 1.2f, -10};
     settings.spawnRotation = Quaternion().setFromAxisAngle({0, 1, 0}, math::degToRad(-90.f));
 
@@ -170,6 +191,7 @@ int main() {
     auto chassisMesh = Group::create();
     scene->add(chassisMesh);
     world.bind(*chassisMesh, *vehicle.chassisActor());
+    chassisMesh->add(povCamera);
 
     auto physxDebug = std::make_shared<PhysxDebugRenderer>(world);
     physxDebug->enableDefaults();
@@ -191,10 +213,22 @@ int main() {
     // G=rough, B=metal). If R wasn't authored, GL's aoMap reads it as 0
     // (full occlusion) and the body goes dark; WGPU evidently doesn't apply
     // AO from this texture. Drop the aoMap to match.
-    carBody->traverseType<Mesh>([](Mesh& m) {
-        if (auto* phys = m.material()->as<MeshPhysicalMaterial>()) {
-            phys->aoMap = nullptr;
-        } else if (auto* std = m.material()->as<MeshStandardMaterial>()) {
+    // GL doesn't implement KHR_materials_transmission; the gltf's glass material
+    // is roughness=0 (perfect mirror) so it reflects the HDR sky and reads as
+    // opaque. WGPU handles transmission natively. Swap glass → MeshBasicMaterial
+    // for GL only.
+    const bool isGL = dynamic_cast<WgpuRenderer*>(renderer.get()) == nullptr;
+    carBody->traverseType<Mesh>([isGL](Mesh& m) {
+        if (isGL && m.name.rfind("car_range_rover_evoque:glasses_glass_windows_glasses_glass_windows_None", 0) == 0) {
+            auto basic = MeshBasicMaterial::create();
+            basic->color = Color(0x111122);
+            basic->opacity = 0.15f;
+            basic->transparent = true;
+            basic->depthWrite = false;
+            basic->side = Side::Double;
+            m.setMaterial(basic);
+        }
+        if (auto* std = m.material()->as<MeshStandardMaterial>()) {
             std->aoMap = nullptr;
         }
     });
@@ -252,6 +286,7 @@ int main() {
 
     // Input state
     bool throttleDown = false, brakeDown = false, handbrakeDown = false;
+    bool driverView = false;
     bool steerLeftDown = false, steerRightDown = false;
     bool respawnPressed = false;
 
@@ -288,6 +323,7 @@ int main() {
                                     ? PhysxVehicle::Gear::Reverse
                                     : PhysxVehicle::Gear::Forward);
         }
+        if (evt.key == Key::V) driverView = !driverView;
         if (evt.key == Key::BACKSPACE) respawnPressed = true;
         keyToggle(evt.key, true);
     });
@@ -328,6 +364,7 @@ int main() {
         if (ImGui::Button("Respawn")) respawnPressed = true;
         ImGui::Separator();
         ImGui::Checkbox("PhysX debug", &physxDebug->visible);
+        ImGui::Checkbox("Driver view (V)", &driverView);
 
         ImGui::End();
     });
@@ -335,6 +372,8 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
+        povCamera->aspect = size.aspect();
+        povCamera->updateProjectionMatrix();
         renderer->setSize(size);
     });
 
@@ -485,7 +524,8 @@ int main() {
         camera->position.copy(camPos);
         camera->lookAt(camTarget);
 
-        renderer->render(*scene, *camera);
+        Camera& activeCamera = driverView ? static_cast<Camera&>(*povCamera) : static_cast<Camera&>(*camera);
+        renderer->render(*scene, activeCamera);
 
         // Depth-sensor inset overlay (GL only). Scan from the chassis-mounted
         // sensor, refresh the point cloud, then render an inset from the
