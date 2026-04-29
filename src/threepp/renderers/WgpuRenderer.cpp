@@ -2860,13 +2860,13 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             }
         }
 
-        // Blend mode
+        // Blend mode (matches three.js: blending only takes effect when transparent==true)
         auto blendVal = static_cast<int>(rawMat->blending);
-        if (blendVal == 0)              features |= SF::BlendDisabled;
-        else if (blendVal == 2)         features |= SF::BlendAdditive;
-        else if (blendVal == 3)         features |= SF::BlendSubtractive;
-        else if (blendVal == 4)         features |= SF::BlendMultiply;
-        else                            features |= SF::BlendNormal;
+        if (!rawMat->transparent || blendVal == 0)  features |= SF::BlendDisabled;
+        else if (blendVal == 2)                     features |= SF::BlendAdditive;
+        else if (blendVal == 3)                     features |= SF::BlendSubtractive;
+        else if (blendVal == 4)                     features |= SF::BlendMultiply;
+        else                                        features |= SF::BlendNormal;
         if (!rawMat->depthWrite) {
             features |= SF::DepthWriteOff;
         }
