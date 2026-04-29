@@ -29,6 +29,7 @@ namespace threepp::wgpu {
 
         Color diffuse{1, 1, 1};
         float opacity = 1.0f;
+        float alphaTest = 0.0f;
         Color specularColor{0, 0, 0};
         float shininess = 30.0f;
         float specularIntensity = 1.0f;
