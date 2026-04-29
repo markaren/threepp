@@ -62,12 +62,6 @@ int main() {
     Canvas canvas("PhysX Vehicle", {{"aa", 4}, {"vsync", true}});
     auto renderer = createRenderer(canvas);
 
-    if (auto wgpu = dynamic_cast<WgpuRenderer*>(renderer.get())) {
-        auto& pt = wgpu->pathTracer();
-        pt.setMaxBounces(2);
-        pt.setTlasEnabled(true);
-    }
-
     auto scene = Scene::create();
 
     RGBELoader hdrLoader;
@@ -181,6 +175,18 @@ int main() {
     // rigs. Tune by a few tenths if the chassis floats or clips.
     carBody->position.y = -1.f;
     chassisMesh->add(carBody);
+
+    // The .gltf packs AO and metalRoughness into the SAME texture (R=AO,
+    // G=rough, B=metal). If R wasn't authored, GL's aoMap reads it as 0
+    // (full occlusion) and the body goes dark; WGPU evidently doesn't apply
+    // AO from this texture. Drop the aoMap to match.
+    carBody->traverseType<Mesh>([](Mesh& m) {
+        if (auto* phys = m.material()->as<MeshPhysicalMaterial>()) {
+            phys->aoMap = nullptr;
+        } else if (auto* std = m.material()->as<MeshStandardMaterial>()) {
+            std->aoMap = nullptr;
+        }
+    });
 
     // Extract the model's wheels into PhysX-driven rigs. The .gltf's per-wheel
     // "pivot" nodes have identity transforms — wheel positions are baked into
@@ -310,11 +316,7 @@ int main() {
         ImGui::SliderFloat("Steer", &steerCmd, -1.f, 1.f, "%.2f");
         if (ImGui::Button("Respawn")) respawnPressed = true;
         ImGui::Separator();
-        if (auto wgpu = dynamic_cast<WgpuRenderer*>(renderer.get())) {
-            if (ImGui::Checkbox("Pathtrace", &pathTrace)) {
-                wgpu->usePathTracer = pathTrace;
-            }
-        }
+
         ImGui::End();
     });
 
