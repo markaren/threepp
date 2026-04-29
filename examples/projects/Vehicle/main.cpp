@@ -104,20 +104,51 @@ int main() {
         return m.name.rfind("Cone", 0) == 0;
     };
 
+    auto isBarrier = [](const Mesh& m) {
+        return m.name.rfind("Barrier", 0) == 0;
+    };
+
     auto isBarrierCylinder = [](const Mesh& m) {
         return m.name.rfind("BarrierCylinder", 0) == 0;
     };
 
-    // Static colliders for everything except the cones.
-    world.addStaticTrimeshTree(*track, [&](const Mesh& m) { return !isCone(m) || !isBarrierCylinder(m); });
+    // Static colliders for everything except the filter.
+    world.addStaticTrimeshTree(*track, [&](const Mesh& m) { return !(isCone(m) || isBarrierCylinder(m) || isBarrier(m)); });
 
-    // Cones become dynamic convex obstacles the car can knock around.
+    // Cones become dynamic convex obstacles the car can knock around. Barrier
+    // cylinders are tethered to a ground anchor with a D6 joint: linear DOFs
+    // locked, angular DOFs free with a spring drive that returns them to
+    // upright after the car bumps them.
     track->traverseType<Mesh>([&](Mesh& m) {
-        // m.material()->alphaTest = 0.5;
         if (isCone(m)) {
             world.addDynamicConvex(m, 5.f);
+        }else if (isBarrier(m)) {
+            world.addDynamicConvex(m, 500.f);
         } else if (isBarrierCylinder(m)) {
-            world.addDynamicConvex(m, 100.f);
+            auto* dyn = world.addDynamicConvex(m, 100.f);
+            if (!dyn) return;
+            const PxTransform pose = dyn->getGlobalPose();
+            auto* anchor = world.physics().createRigidStatic(pose);
+            world.scene().addActor(*anchor);
+
+            auto* joint = PxD6JointCreate(
+                    world.physics(),
+                    anchor, PxTransform(PxIdentity),
+                    dyn, PxTransform(PxIdentity));
+            // Position locked, rotation free. The spring drive then pulls the
+            // body back toward identity orientation.
+            joint->setMotion(PxD6Axis::eX, PxD6Motion::eLOCKED);
+            joint->setMotion(PxD6Axis::eY, PxD6Motion::eLOCKED);
+            joint->setMotion(PxD6Axis::eZ, PxD6Motion::eLOCKED);
+            joint->setMotion(PxD6Axis::eSWING1, PxD6Motion::eFREE);
+            joint->setMotion(PxD6Axis::eSWING2, PxD6Motion::eFREE);
+            joint->setMotion(PxD6Axis::eTWIST, PxD6Motion::eFREE);
+            // Stiffness / damping — tune for desired wobble. Acceleration mode
+            // (last arg true) makes the spring feel mass-independent.
+            const PxD6JointDrive drive(2000.f, 300.f, PX_MAX_F32, true);
+            joint->setDrive(PxD6Drive::eSWING, drive);
+            joint->setDrive(PxD6Drive::eTWIST, drive);
+            joint->setDrivePosition(PxTransform(PxIdentity));
         }
     });
 
@@ -144,7 +175,9 @@ int main() {
     auto carBody = modelLoader.load(
             std::string(DATA_FOLDER) + "/models/gltf/2015_land-rover_range_rover_evoque_coupe/scene.gltf");
     carBody->scale.set(100.f, 100.f, 100.f);
-    carBody->position.y = -(settings.wheelRadius - settings.suspensionAttachmentY);
+    // Drop the body slightly so its wheel wells line up with the PhysX wheel
+    // rigs. Tune by a few tenths if the chassis floats or clips.
+    carBody->position.y = -1.f;
     chassisMesh->add(carBody);
 
     // Extract the model's wheels into PhysX-driven rigs. The .gltf's per-wheel
