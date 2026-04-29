@@ -6,9 +6,12 @@ build
 cmake-build-*
 compile_commands.json
 
+
 *.bin
 *.weights
 *.pt
+
+!data/**/*.bin
 
 imgui.ini
 
