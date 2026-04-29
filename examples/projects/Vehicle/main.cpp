@@ -559,7 +559,10 @@ int main() {
             auto& sensorCam = depthSensor->getCamera();
             sensorCam.layers.enableAll();// see the cloud (on layer 1) plus the world
 
-            const int w = 512, h = 480, margin = 5;
+            const auto canvasSize = canvas.size();
+            const int w = canvasSize.width() / 5;
+            const int h = canvasSize.height() / 5;
+            const int margin = 5;
             Vector4 oldVp;
             glRenderer->getViewport(oldVp);
             glRenderer->setScissorTest(true);
