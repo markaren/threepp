@@ -64,6 +64,7 @@ int main() {
     auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
+    auto sensorScene = Scene::create();
 
     RGBELoader hdrLoader;
     if (auto hdrTexture = hdrLoader.load(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr")) {
@@ -219,17 +220,11 @@ int main() {
     // for GL only.
     const bool isGL = dynamic_cast<WgpuRenderer*>(renderer.get()) == nullptr;
     carBody->traverseType<Mesh>([isGL](Mesh& m) {
-        if (isGL && m.name.rfind("car_range_rover_evoque:glasses_glass_windows_glasses_glass_windows_None", 0) == 0) {
-            auto basic = MeshBasicMaterial::create();
-            basic->color = Color(0x111122);
-            basic->opacity = 0.15f;
-            basic->transparent = true;
-            basic->depthWrite = false;
-            basic->side = Side::Double;
-            m.setMaterial(basic);
-        }
-        if (auto* std = m.material()->as<MeshStandardMaterial>()) {
-            std->aoMap = nullptr;
+
+        if (isGL) {
+            if (auto* std = m.material()->as<MeshStandardMaterial>()) {
+                std->aoMap = nullptr;
+            }
         }
     });
 
@@ -429,14 +424,14 @@ int main() {
     // cloud. The cloud is visualised as Points and rendered into the lower-left
     // viewport from the sensor's POV.
     auto* glRenderer = dynamic_cast<GLRenderer*>(renderer.get());
-    std::shared_ptr<DepthSensor> depthSensor;
+    std::unique_ptr<DepthSensor> depthSensor;
     std::shared_ptr<Points> depthPoints;
     constexpr unsigned int kSensorW = 256, kSensorH = 192;
     if (glRenderer) {
-        depthSensor = std::make_shared<DepthSensor>(60.f, kSensorW, kSensorH, 0.5f, 60.f);
+        depthSensor = std::make_unique<DepthSensor>(60.f, kSensorW, kSensorH, 0.5f, 30.f);
         depthSensor->position.set(0, 0.5f, 2.f);// nose-mounted, forward
         depthSensor->rotation.y = math::degToRad(180.f);
-        chassisMesh->add(depthSensor);
+        chassisMesh->add(*depthSensor);
 
         const size_t maxPts = kSensorW * kSensorH;
         auto pcGeom = BufferGeometry::create();
@@ -449,7 +444,7 @@ int main() {
         depthPoints = Points::create(pcGeom, pcMat);
         depthPoints->frustumCulled = false;
         depthPoints->layers.set(1);// hidden from the main camera; only the inset enables this layer
-        scene->add(depthPoints);
+        sensorScene->add(*depthPoints);
     }
 
     constexpr float dt = 1.f / 60.f;
@@ -562,13 +557,13 @@ int main() {
             const auto canvasSize = canvas.size();
             const int w = canvasSize.width() / 5;
             const int h = canvasSize.height() / 5;
-            const int margin = 5;
+            constexpr int margin = 5;
             Vector4 oldVp;
             glRenderer->getViewport(oldVp);
             glRenderer->setScissorTest(true);
             glRenderer->setViewport(margin, margin, w, h);
             glRenderer->setScissor(margin, margin, w, h);
-            glRenderer->render(*scene, sensorCam);
+            glRenderer->render(*sensorScene, sensorCam);
             glRenderer->setScissorTest(false);
             glRenderer->setViewport(oldVp);
         }
