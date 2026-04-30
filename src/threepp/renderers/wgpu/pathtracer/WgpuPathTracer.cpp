@@ -1646,8 +1646,15 @@ WgpuPathTracer::~WgpuPathTracer() = default;
 void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     auto& d = *pimpl_;
 
+    // Update world matrices up front so a parented camera (e.g. driver POV
+    // attached to a chassis) has a current matrixWorld before we read its
+    // world position / direction. The later updateMatrixWorld at the start
+    // of the topology block stays for movement detection.
+    scene.updateMatrixWorld();
+
     // Derive camera vectors from camera world matrix (controller-agnostic)
-    const Vector3& camPos = camera.position;
+    Vector3 camPos;
+    camera.getWorldPosition(camPos);
     Vector3 fwd;
     camera.getWorldDirection(fwd);
     Vector3 rgt = Vector3(fwd).cross(Vector3(0.f, 1.f, 0.f)).normalize();
