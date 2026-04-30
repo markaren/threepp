@@ -20,6 +20,14 @@ void ObjectWithMaterials::setMaterial(const std::shared_ptr<Material>& material)
     setMaterials({material});
 }
 
+void ObjectWithMaterials::replaceMaterial(const std::shared_ptr<Material>& material) {
+
+    if (!materials_.empty() && materials_.front()) {
+        material->copyCompatibleFrom(*materials_.front());
+    }
+    setMaterials({material});
+}
+
 const std::vector<std::shared_ptr<Material>>& ObjectWithMaterials::materials() const {
 
     return materials_;
