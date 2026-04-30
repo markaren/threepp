@@ -1,6 +1,7 @@
 
 #include "threepp/materials/Material.hpp"
 
+#include "threepp/materials/interfaces.hpp"
 #include "threepp/math/MathUtils.hpp"
 
 #include <iostream>
@@ -103,6 +104,110 @@ void Material::copyInto(Material& m) const {
     m.visible = visible;
 
     m.toneMapped = toneMapped;
+}
+
+void Material::copyCompatibleFrom(const Material& other) {
+
+    // Base Material fields are present on every subclass — copy them via
+    // the base copyInto explicitly to bypass virtual dispatch (a sibling
+    // override would assume same-type and crash via as<T>()).
+    other.Material::copyInto(*this);
+
+    auto& dst = *this;
+
+#define TPP_COPY_MIXIN(MIXIN, BODY)                                    \
+    do {                                                               \
+        const auto* s = dynamic_cast<const MIXIN*>(&other);            \
+        auto* d = dynamic_cast<MIXIN*>(&dst);                          \
+        if (s && d) { BODY }                                           \
+    } while (0)
+
+    TPP_COPY_MIXIN(MaterialWithColor, d->color = s->color;);
+    TPP_COPY_MIXIN(MaterialWithRotation, d->rotation = s->rotation;);
+    TPP_COPY_MIXIN(MaterialWithClipping, d->clipping = s->clipping;);
+    TPP_COPY_MIXIN(MaterialWithLights, d->lights = s->lights;);
+    TPP_COPY_MIXIN(MaterialWithSize,
+                   d->size = s->size;
+                   d->sizeAttenuation = s->sizeAttenuation;);
+    TPP_COPY_MIXIN(MaterialWithLineWidth, d->linewidth = s->linewidth;);
+    TPP_COPY_MIXIN(MaterialWithEmissive,
+                   d->emissive = s->emissive;
+                   d->emissiveIntensity = s->emissiveIntensity;
+                   d->emissiveMap = s->emissiveMap;);
+    TPP_COPY_MIXIN(MaterialWithSpecular,
+                   d->specular = s->specular;
+                   d->shininess = s->shininess;);
+    TPP_COPY_MIXIN(MaterialWithRefractionRatio, d->refractionRatio = s->refractionRatio;);
+    TPP_COPY_MIXIN(MaterialWithReflectivity, d->reflectivity = s->reflectivity;);
+    TPP_COPY_MIXIN(MaterialWithWireframe,
+                   d->wireframe = s->wireframe;
+                   d->wireframeLinewidth = s->wireframeLinewidth;);
+    TPP_COPY_MIXIN(MaterialWithMap, d->map = s->map;);
+    TPP_COPY_MIXIN(MaterialWithAlphaMap, d->alphaMap = s->alphaMap;);
+    TPP_COPY_MIXIN(MaterialWithSpecularMap, d->specularMap = s->specularMap;);
+    TPP_COPY_MIXIN(MaterialWithEnvMap,
+                   d->envMap = s->envMap;
+                   d->envMapIntensity = s->envMapIntensity;);
+    TPP_COPY_MIXIN(MaterialWithGradientMap, d->gradientMap = s->gradientMap;);
+    TPP_COPY_MIXIN(MaterialWithAoMap,
+                   d->aoMap = s->aoMap;
+                   d->aoMapIntensity = s->aoMapIntensity;);
+    TPP_COPY_MIXIN(MaterialWithBumpMap,
+                   d->bumpMap = s->bumpMap;
+                   d->bumpScale = s->bumpScale;);
+    TPP_COPY_MIXIN(MaterialWithLightMap,
+                   d->lightMap = s->lightMap;
+                   d->lightMapIntensity = s->lightMapIntensity;);
+    TPP_COPY_MIXIN(MaterialWithDisplacementMap,
+                   d->displacementMap = s->displacementMap;
+                   d->displacementScale = s->displacementScale;
+                   d->displacementBias = s->displacementBias;);
+    TPP_COPY_MIXIN(MaterialWithNormalMap,
+                   d->normalMap = s->normalMap;
+                   d->normalMapType = s->normalMapType;
+                   d->normalScale = s->normalScale;);
+    TPP_COPY_MIXIN(MaterialWithMatCap, d->matcap = s->matcap;);
+    TPP_COPY_MIXIN(MaterialWithRoughness,
+                   d->roughness = s->roughness;
+                   d->roughnessMap = s->roughnessMap;);
+    TPP_COPY_MIXIN(MaterialWithMetalness,
+                   d->metalness = s->metalness;
+                   d->metalnessMap = s->metalnessMap;);
+    TPP_COPY_MIXIN(MaterialWithThickness,
+                   d->thickness = s->thickness;
+                   d->thicknessMap = s->thicknessMap;);
+    TPP_COPY_MIXIN(MaterialWithClearcoat,
+                   d->clearcoat = s->clearcoat;
+                   d->clearcoatMap = s->clearcoatMap;
+                   d->clearcoatRoughness = s->clearcoatRoughness;
+                   d->clearcoatRoughnessMap = s->clearcoatRoughnessMap;
+                   d->clearcoatNormalScale = s->clearcoatNormalScale;
+                   d->clearcoatNormalMap = s->clearcoatNormalMap;);
+    TPP_COPY_MIXIN(MaterialWithTransmission,
+                   d->transmission = s->transmission;
+                   d->ior = s->ior;
+                   d->dispersion = s->dispersion;
+                   d->transmissionMap = s->transmissionMap;);
+    TPP_COPY_MIXIN(MaterialWithAttenuation,
+                   d->attenuationDistance = s->attenuationDistance;
+                   d->attenuationColor = s->attenuationColor;);
+    TPP_COPY_MIXIN(MaterialWithSheen,
+                   d->sheenColor = s->sheenColor;
+                   d->sheenRoughness = s->sheenRoughness;
+                   d->sheen = s->sheen;);
+    TPP_COPY_MIXIN(MaterialWithPbrSpecular,
+                   d->specularIntensity = s->specularIntensity;
+                   d->specularColor = s->specularColor;);
+    TPP_COPY_MIXIN(MaterialWithCombine, d->combine = s->combine;);
+    TPP_COPY_MIXIN(MaterialWithDepthPacking, d->depthPacking = s->depthPacking;);
+    TPP_COPY_MIXIN(MaterialWithFlatShading, d->flatShading = s->flatShading;);
+    TPP_COPY_MIXIN(MaterialWithVertexTangents, d->vertexTangents = s->vertexTangents;);
+    TPP_COPY_MIXIN(MaterialWithDefines, d->defines = s->defines;);
+    TPP_COPY_MIXIN(MaterialWithMorphTargets,
+                   d->morphTargets = s->morphTargets;
+                   d->morphNormals = s->morphNormals;);
+
+#undef TPP_COPY_MIXIN
 }
 
 Material::~Material() {

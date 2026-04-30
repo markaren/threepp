@@ -90,6 +90,8 @@ namespace threepp {
 
         void setValues(const std::unordered_map<std::string, MaterialValue>& values);
 
+        void copyCompatibleFrom(const Material& other);
+
         void dispose();
 
         void needsUpdate();
