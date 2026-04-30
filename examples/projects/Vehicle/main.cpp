@@ -26,16 +26,28 @@ int main() {
     Canvas canvas("PhysX Vehicle", {{"aa", 4}, {"vsync", true}});
     auto renderer = createRenderer(canvas);
 
+    if (false) {
+        if (auto wgpu = dynamic_cast<WgpuRenderer*>(renderer.get())) {
+            wgpu->usePathTracer = true;
+            auto& pt = wgpu->pathTracer();
+            pt.setTlasEnabled(false);
+            pt.setMaxBounces(1);
+            pt.setDenoiserEnabled(false);
+        }
+    }
+
     auto scene = Scene::create();
     auto sensorScene = Scene::create();
 
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 1000);
+    camera->layers.enableAll();
 
     // Driver POV camera, parented to the chassis so it tracks the body. Will
     // be added to chassisMesh once that exists below. The local pose puts the
     // eyepoint roughly where a driver sits (left side, eye height, just behind
     // the firewall) and faces +Z (PhysX vehicle forward).
     auto povCamera = PerspectiveCamera::create(70, canvas.aspect(), 0.05f, 1000);
+    povCamera->layers.enableAll();
     povCamera->position.set(0.4f, 0.4f, -0.1f);
     // Camera default forward is -Z; chassis forward is +Z. Flip so POV faces ahead.
     povCamera->rotation.y = math::PI;
@@ -93,10 +105,6 @@ int main() {
     // G=rough, B=metal). If R wasn't authored, GL's aoMap reads it as 0
     // (full occlusion) and the body goes dark; WGPU evidently doesn't apply
     // AO from this texture. Drop the aoMap to match.
-    // GL doesn't implement KHR_materials_transmission; the gltf's glass material
-    // is roughness=0 (perfect mirror) so it reflects the HDR sky and reads as
-    // opaque. WGPU handles transmission natively. Swap glass → MeshBasicMaterial
-    // for GL only.
     const bool isGL = dynamic_cast<WgpuRenderer*>(renderer.get()) == nullptr;
     carBody->traverseType<Mesh>([isGL](Mesh& m) {
 
@@ -322,7 +330,6 @@ int main() {
         auto pcMat = PointsMaterial::create({{"size", 0.05f}, {"vertexColors", true}});
         depthPoints = Points::create(pcGeom, pcMat);
         depthPoints->frustumCulled = false;
-        depthPoints->layers.set(1);// hidden from the main camera; only the inset enables this layer
         sensorScene->add(*depthPoints);
     }
 
@@ -431,7 +438,6 @@ int main() {
             colAttr->needsUpdate();
 
             auto& sensorCam = depthSensor->getCamera();
-            sensorCam.layers.enableAll();// see the cloud (on layer 1) plus the world
 
             const auto canvasSize = canvas.size();
             const int w = canvasSize.width() / 5;

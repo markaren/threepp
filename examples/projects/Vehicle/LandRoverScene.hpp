@@ -93,6 +93,14 @@ namespace threepp::landrover {
             } else if (isBarrier) {
                 world.addDynamicConvex(m, 500.f);
             }
+
+            if (m.name.rfind("Bush", 0) == 0 ) {
+                m.layers.set(9);
+            }
+
+            if (m.name.rfind("Road", 0) == 0 ) {
+                m.replaceMaterial(MeshBasicMaterial::create());
+            }
         });
     }
 
