@@ -20,44 +20,6 @@
 using namespace threepp;
 using namespace ::physx;
 
-namespace {
-
-    std::shared_ptr<Mesh> makeChassisMesh(const PhysxVehicle::Settings& s) {
-        auto mat = MeshPhongMaterial::create();
-        mat->color = Color::royalblue;
-        auto mesh = Mesh::create(
-                BoxGeometry::create(s.chassisWidth, s.chassisHeight, s.chassisLength),
-                mat);
-
-        auto roofMat = MeshPhongMaterial::create();
-        roofMat->color = Color::lightblue;
-        auto roof = Mesh::create(
-                BoxGeometry::create(s.chassisWidth * 0.85f, s.chassisHeight * 0.6f, s.chassisLength * 0.45f),
-                roofMat);
-        roof->position.set(0, s.chassisHeight * 0.5f + s.chassisHeight * 0.3f, -s.chassisLength * 0.05f);
-        mesh->add(roof);
-        return mesh;
-    }
-
-    std::shared_ptr<Mesh> makeWheelMesh(float radius, float halfWidth) {
-        auto mat = MeshPhongMaterial::create();
-        mat->color = Color::black;
-        auto geom = CylinderGeometry::create(radius, radius, halfWidth * 2.f, 24);
-        // Cylinder default axis is +Y. Rotate so the symmetry axis aligns with +X (lateral).
-        geom->rotateZ(math::PI / 2.f);
-        auto mesh = Mesh::create(geom, mat);
-
-        // Spoke marker so wheel rotation is visible.
-        auto spokeMat = MeshPhongMaterial::create();
-        spokeMat->color = Color::white;
-        auto spoke = Mesh::create(
-                BoxGeometry::create(halfWidth * 2.05f, radius * 0.15f, radius * 1.7f),
-                spokeMat);
-        mesh->add(spoke);
-        return mesh;
-    }
-
-}// namespace
 
 int main() {
 
