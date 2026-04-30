@@ -30,6 +30,7 @@ namespace threepp {
           public ::physx::vehicle2::PxVehicleDirectDrivetrainComponent,
           public ::physx::vehicle2::PxVehicleWheelComponent,
           public ::physx::vehicle2::PxVehicleRigidBodyComponent,
+          public ::physx::vehicle2::PxVehiclePhysXConstraintComponent,
           public ::physx::vehicle2::PxVehiclePhysXActorEndComponent {
 
     public:
@@ -120,6 +121,7 @@ namespace threepp {
             buildSimContext();
 
             createPhysxActor();
+            createPhysxConstraints();
             buildComponentSequence();
 
             stepCallback_ = [this](float dt) { stepVehicle(dt); };
@@ -129,6 +131,10 @@ namespace threepp {
         ~PhysxVehicle() {
             using namespace ::physx;
 
+            if (constraintsCreated_) {
+                ::physx::vehicle2::PxVehicleConstraintsDestroy(physxConstraints_);
+                constraintsCreated_ = false;
+            }
             if (chassisActor_) {
                 chassisActor_->getScene()->removeActor(*chassisActor_);
                 chassisActor_->release();
@@ -252,6 +258,14 @@ namespace threepp {
                 suspensionComplianceParams_[i].wheelCamberAngle.clear();
                 suspensionComplianceParams_[i].suspForceAppPoint.clear();
                 suspensionComplianceParams_[i].tireForceAppPoint.clear();
+
+                // Constraint params for the PhysXConstraintComponent. eROAD_GEOMETRY_NORMAL
+                // pushes wheels back to the ground along the road normal — recommended by the
+                // PhysX docs over eSUSPENSION (which can self-right the car when on its side).
+                // restitution=0 disables the velocity restitution model.
+                suspensionLimitParams_[i].restitution = 0.f;
+                suspensionLimitParams_[i].directionForSuspensionLimitConstraint =
+                        ::physx::vehicle2::PxVehiclePhysXSuspensionLimitConstraintParams::eROAD_GEOMETRY_NORMAL;
             }
 
             suspensionStateCalcParams_.suspensionJounceCalculationType =
@@ -403,6 +417,16 @@ namespace threepp {
             queryFilter_.ignored = chassisActor_;
         }
 
+        void createPhysxConstraints() {
+            // Sticky-tire + suspension-limit constraints. Without these, low-speed brake
+            // commands compute a tire sticky state but it is never applied to PhysX, so
+            // the car keeps slip-creeping under full brake. Must run after the chassis
+            // actor has been added to the scene (helper registers PxConstraints with it).
+            ::physx::vehicle2::PxVehicleConstraintsCreate(
+                    axleDesc_, world_->physics(), *chassisActor_, physxConstraints_);
+            constraintsCreated_ = true;
+        }
+
         void buildComponentSequence() {
             using namespace ::physx::vehicle2;
             componentSequence_.add(static_cast<PxVehiclePhysXActorBeginComponent*>(this));
@@ -414,6 +438,10 @@ namespace threepp {
             componentSequence_.add(static_cast<PxVehicleDirectDrivetrainComponent*>(this));
             componentSequence_.add(static_cast<PxVehicleWheelComponent*>(this));
             componentSequence_.add(static_cast<PxVehicleRigidBodyComponent*>(this));
+            // Convert sticky-tire + suspension-limit states into PxConstraint impulses.
+            // Goes after rigid-body update so it sees the up-to-date pose, before
+            // ActorEnd which writes velocities back onto the PxRigidBody.
+            componentSequence_.add(static_cast<PxVehiclePhysXConstraintComponent*>(this));
             componentSequence_.add(static_cast<PxVehiclePhysXActorEndComponent*>(this));
         }
 
@@ -644,6 +672,29 @@ namespace threepp {
             rigidBodyState = &rigidBodyState_;
         }
 
+        void getDataForPhysXConstraintComponent(
+                const ::physx::vehicle2::PxVehicleAxleDescription*& axleDescription,
+                const ::physx::vehicle2::PxVehicleRigidBodyState*& rigidBodyState,
+                ::physx::vehicle2::PxVehicleArrayData<const ::physx::vehicle2::PxVehicleSuspensionParams>& suspensionParams,
+                ::physx::vehicle2::PxVehicleArrayData<const ::physx::vehicle2::PxVehiclePhysXSuspensionLimitConstraintParams>& suspensionLimitParams,
+                ::physx::vehicle2::PxVehicleArrayData<const ::physx::vehicle2::PxVehicleSuspensionState>& suspensionStates,
+                ::physx::vehicle2::PxVehicleArrayData<const ::physx::vehicle2::PxVehicleSuspensionComplianceState>& suspensionComplianceStates,
+                ::physx::vehicle2::PxVehicleArrayData<const ::physx::vehicle2::PxVehicleRoadGeometryState>& wheelRoadGeomStates,
+                ::physx::vehicle2::PxVehicleArrayData<const ::physx::vehicle2::PxVehicleTireDirectionState>& tireDirectionStates,
+                ::physx::vehicle2::PxVehicleArrayData<const ::physx::vehicle2::PxVehicleTireStickyState>& tireStickyStates,
+                ::physx::vehicle2::PxVehiclePhysXConstraints*& constraints) override {
+            axleDescription = &axleDesc_;
+            rigidBodyState = &rigidBodyState_;
+            suspensionParams.setData(suspensionParams_.data());
+            suspensionLimitParams.setData(suspensionLimitParams_.data());
+            suspensionStates.setData(suspensionStates_.data());
+            suspensionComplianceStates.setData(suspensionComplianceStates_.data());
+            wheelRoadGeomStates.setData(roadGeometryStates_.data());
+            tireDirectionStates.setData(tireDirectionStates_.data());
+            tireStickyStates.setData(tireStickyStates_.data());
+            constraints = &physxConstraints_;
+        }
+
         void getDataForPhysXActorEndComponent(
                 const ::physx::vehicle2::PxVehicleAxleDescription*& axleDescription,
                 const ::physx::vehicle2::PxVehicleRigidBodyState*& rigidBodyState,
@@ -706,6 +757,7 @@ namespace threepp {
         std::array<::physx::vehicle2::PxVehicleSuspensionParams, 4> suspensionParams_{};
         std::array<::physx::vehicle2::PxVehicleSuspensionComplianceParams, 4> suspensionComplianceParams_{};
         std::array<::physx::vehicle2::PxVehicleSuspensionForceParams, 4> suspensionForceParams_{};
+        std::array<::physx::vehicle2::PxVehiclePhysXSuspensionLimitConstraintParams, 4> suspensionLimitParams_{};
         ::physx::vehicle2::PxVehicleSuspensionStateCalculationParams suspensionStateCalcParams_{};
         std::array<::physx::vehicle2::PxVehicleTireForceParams, 4> tireForceParams_{};
 
@@ -743,6 +795,7 @@ namespace threepp {
         ::physx::vehicle2::PxVehiclePhysXActor physxActor_{};
         ::physx::vehicle2::PxVehiclePhysXSteerState physxSteerState_{};
         ::physx::vehicle2::PxVehiclePhysXConstraints physxConstraints_{};
+        bool constraintsCreated_ = false;
         ::physx::vehicle2::PxVehiclePhysXRoadGeometryQueryParams physxRoadGeomQueryParams_;
         ::physx::vehicle2::PxVehiclePhysXMaterialFriction materialFriction_{};
         std::array<::physx::vehicle2::PxVehiclePhysXMaterialFrictionParams, 4> perWheelMaterialFriction_{};
