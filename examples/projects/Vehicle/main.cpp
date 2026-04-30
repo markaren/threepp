@@ -10,9 +10,10 @@
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
-#include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/objects/Points.hpp"
 #include "threepp/renderers/wgpu/WgpuPathTracer.hpp"
+
+#include "LandRoverScene.hpp"
 
 #include <PxPhysicsAPI.h>
 
@@ -66,12 +67,6 @@ int main() {
     auto scene = Scene::create();
     auto sensorScene = Scene::create();
 
-    RGBELoader hdrLoader;
-    if (auto hdrTexture = hdrLoader.load(std::string(DATA_FOLDER) + "/textures/env/citrus_orchard_road_puresky_2k.hdr")) {
-        scene->background = hdrTexture;
-        scene->environment = hdrTexture;
-    }
-
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 1000);
 
     // Driver POV camera, parented to the chassis so it tracks the body. Will
@@ -83,87 +78,8 @@ int main() {
     // Camera default forward is -Z; chassis forward is +Z. Flip so POV faces ahead.
     povCamera->rotation.y = math::PI;
 
-    auto sun = DirectionalLight::create(0xffffff, 1.2f);
-    sun->position.set(20, 30, 20);
-    scene->add(sun);
-    scene->add(AmbientLight::create(0xffffff, 0.1f));
-
     PhysxWorld world;
-
-    // Fallback ground far below the track to catch the car if it leaves the
-    // drivable surface — keeps the demo from spawning the vehicle into the void.
-    auto groundMat = MeshLambertMaterial::create();
-    groundMat->color = Color::darkolivegreen;
-    auto ground = Mesh::create(BoxGeometry::create(500, 1, 500), groundMat);
-    ground->position.y = -10.f;
-    scene->add(ground);
-    world.addStatic(*ground);
-
-    // Race track: visual + trimesh collider per sub-mesh. Native AABB is ~480m
-    // across, roughly 2× a real drift course — scale down so the car (real-world
-    // meters) reads correctly against it.
-    ModelLoader modelLoader;
-    auto track = modelLoader.load(std::string(DATA_FOLDER) + "/models/gltf/drift_track/drift_race_track_free.glb");
-    track->scale.set(0.5f, 0.5f, 0.5f);
-    scene->add(track);
-
-    auto isCone = [](const Mesh& m) {
-        return m.name.rfind("Cone", 0) == 0;
-    };
-
-    auto isBarrier = [](const Mesh& m) {
-        return m.name.rfind("Barrier", 0) == 0;
-    };
-
-    auto isBarrierCylinder = [](const Mesh& m) {
-        return m.name.rfind("BarrierCylinder", 0) == 0;
-    };
-
-    // Static colliders.
-    world.addStaticTrimeshTree(*track, [&](const Mesh& m) {
-        return m.name.rfind("Rails", 0) == 0
-        || m.name.rfind("Road", 0) == 0
-        || m.name.rfind("Object", 0) == 0
-        || m.name.rfind("Terrain", 0) == 0;
-    });
-
-    // Cones become dynamic convex obstacles the car can knock around. Barrier
-    // cylinders are tethered to a ground anchor with a D6 joint: linear DOFs
-    // locked, angular DOFs free with a spring drive that returns them to
-    // upright after the car bumps them.
-    track->traverseType<Mesh>([&](Mesh& m) {
-
-        if (isCone(m)) {
-            world.addDynamicConvex(m, 5.f);
-        } else if (isBarrierCylinder(m)) {
-            auto* dyn = world.addDynamicConvex(m, 100.f);
-            if (!dyn) return;
-            const PxTransform pose = dyn->getGlobalPose();
-            auto* anchor = world.physics().createRigidStatic(pose);
-            world.scene().addActor(*anchor);
-
-            auto* joint = PxD6JointCreate(
-                    world.physics(),
-                    anchor, PxTransform(PxIdentity),
-                    dyn, PxTransform(PxIdentity));
-            // Position locked, rotation free. The spring drive then pulls the
-            // body back toward identity orientation.
-            joint->setMotion(PxD6Axis::eX, PxD6Motion::eLOCKED);
-            joint->setMotion(PxD6Axis::eY, PxD6Motion::eLOCKED);
-            joint->setMotion(PxD6Axis::eZ, PxD6Motion::eLOCKED);
-            joint->setMotion(PxD6Axis::eSWING1, PxD6Motion::eFREE);
-            joint->setMotion(PxD6Axis::eSWING2, PxD6Motion::eFREE);
-            joint->setMotion(PxD6Axis::eTWIST, PxD6Motion::eFREE);
-            // Stiffness / damping — tune for desired wobble. Acceleration mode
-            // (last arg true) makes the spring feel mass-independent.
-            const PxD6JointDrive drive(2000.f, 300.f, PX_MAX_F32, true);
-            joint->setDrive(PxD6Drive::eSWING, drive);
-            joint->setDrive(PxD6Drive::eTWIST, drive);
-            joint->setDrivePosition(PxTransform(PxIdentity));
-        } else if (isBarrier(m)) {
-            world.addDynamicConvex(m, 500.f);
-        }
-    });
+    landrover::buildScene(*scene, world);
 
     PhysxVehicle::Settings settings;
     // Match the Range Rover Evoque visual proportions (model is ~2.1×1.6×4.4 m).
@@ -202,6 +118,7 @@ int main() {
     // scale ×100 for meters. Its bottom (wheel contacts) sits at y=0 in model
     // space; offset down so wheel contacts line up with the rest height of the
     // PhysX chassis (chassis center is wheelRadius+|suspY| above contacts).
+    ModelLoader modelLoader;
     auto carBody = modelLoader.load(
             std::string(DATA_FOLDER) + "/models/gltf/2015_land-rover_range_rover_evoque_coupe/scene.gltf");
     carBody->scale.set(100.f, 100.f, 100.f);
