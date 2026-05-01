@@ -82,11 +82,6 @@ int main() {
     ground->position.y = -1.5f;
     scene->add(ground);
 
-    // Real scene lights. Same setup any of the three threepp renderers would
-    // accept; physical-lights convention: intensity is irradiance, no 1/PI.
-    auto ambient = AmbientLight::create(Color(0xffffff), 0.2f);
-    scene->add(ambient);
-
     auto sun = DirectionalLight::create(Color(0xffffff), 3.0f);
     sun->position.set(0.4f, 1.0f, 0.3f);// matches the prior hard-coded sun
     scene->add(sun);

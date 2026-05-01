@@ -36,7 +36,6 @@
 #include "threepp/renderers/vulkan/shaders/raygen.rgen.spv.h"
 #include "threepp/renderers/vulkan/shaders/miss.rmiss.spv.h"
 #include "threepp/renderers/vulkan/shaders/shadow_miss.rmiss.spv.h"
-#include "threepp/renderers/vulkan/shaders/env_miss.rmiss.spv.h"
 #include "threepp/renderers/vulkan/shaders/closest_hit.rchit.spv.h"
 
 #include <GLFW/glfw3.h>
@@ -1109,11 +1108,10 @@ namespace threepp {
             VkShaderModule rgenMod  = loadModule(kRaygenRgenSpv,        sizeof(kRaygenRgenSpv));
             VkShaderModule missMod  = loadModule(kMissRmissSpv,         sizeof(kMissRmissSpv));
             VkShaderModule sMissMod = loadModule(kShadowMissRmissSpv,   sizeof(kShadowMissRmissSpv));
-            VkShaderModule eMissMod = loadModule(kEnvMissRmissSpv,      sizeof(kEnvMissRmissSpv));
             VkShaderModule chitMod  = loadModule(kClosestHitRchitSpv,   sizeof(kClosestHitRchitSpv));
 
-            // Stages: 0=rgen, 1=primary miss, 2=shadow miss, 3=env miss, 4=closest hit.
-            std::array<VkPipelineShaderStageCreateInfo, 5> stages{};
+            // Stages: 0=rgen, 1=primary miss, 2=shadow miss, 3=closest hit.
+            std::array<VkPipelineShaderStageCreateInfo, 4> stages{};
             for (auto& s : stages) {
                 s.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
                 s.pName = "main";
@@ -1124,13 +1122,11 @@ namespace threepp {
             stages[1].module = missMod;
             stages[2].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
             stages[2].module = sMissMod;
-            stages[3].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
-            stages[3].module = eMissMod;
-            stages[4].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            stages[4].module = chitMod;
+            stages[3].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            stages[3].module = chitMod;
 
-            // Groups: 0=rgen, 1=primary miss, 2=shadow miss, 3=env miss, 4=hit.
-            std::array<VkRayTracingShaderGroupCreateInfoKHR, 5> groups{};
+            // Groups: 0=rgen, 1=primary miss, 2=shadow miss, 3=hit.
+            std::array<VkRayTracingShaderGroupCreateInfoKHR, 4> groups{};
             for (auto& g : groups) {
                 g.sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
                 g.generalShader = VK_SHADER_UNUSED_KHR;
@@ -1144,10 +1140,8 @@ namespace threepp {
             groups[1].generalShader = 1;
             groups[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
             groups[2].generalShader = 2;
-            groups[3].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-            groups[3].generalShader = 3;
-            groups[4].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-            groups[4].closestHitShader = 4;
+            groups[3].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+            groups[3].closestHitShader = 3;
 
             VkRayTracingPipelineCreateInfoKHR rci{};
             rci.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
@@ -1166,7 +1160,6 @@ namespace threepp {
             vkDestroyShaderModule(ctx->device(), rgenMod,  nullptr);
             vkDestroyShaderModule(ctx->device(), missMod,  nullptr);
             vkDestroyShaderModule(ctx->device(), sMissMod, nullptr);
-            vkDestroyShaderModule(ctx->device(), eMissMod, nullptr);
             vkDestroyShaderModule(ctx->device(), chitMod,  nullptr);
         }
 
@@ -1177,9 +1170,9 @@ namespace threepp {
             const uint32_t baseAlignment = props.shaderGroupBaseAlignment;
             const uint32_t handleSizeAligned = alignUp(handleSize, handleAlignment);
 
-            // 5 groups: rgen, primary miss, shadow miss, env miss, hit.
-            // Miss region holds 3 records; rgen and hit hold 1 each.
-            constexpr uint32_t groupCount = 5;
+            // 4 groups: rgen, primary miss, shadow miss, hit.
+            // Miss region holds 2 records; rgen and hit hold 1 each.
+            constexpr uint32_t groupCount = 4;
             const uint32_t handlesDataSize = groupCount * handleSize;
             std::vector<uint8_t> handles(handlesDataSize);
             check(ctx->rt().getRayTracingShaderGroupHandles(
@@ -1190,7 +1183,7 @@ namespace threepp {
             // Per-region: base aligned to shaderGroupBaseAlignment, stride = aligned
             // handle size. Region size must be a multiple of stride and >= base alignment.
             const uint32_t rgenRegionBytes = alignUp(handleSizeAligned, baseAlignment);
-            const uint32_t missRegionBytes = alignUp(3 * handleSizeAligned, baseAlignment);
+            const uint32_t missRegionBytes = alignUp(2 * handleSizeAligned, baseAlignment);
             const uint32_t hitRegionBytes  = alignUp(handleSizeAligned, baseAlignment);
             const VkDeviceSize sbtSize =
                     static_cast<VkDeviceSize>(rgenRegionBytes) +
@@ -1213,16 +1206,14 @@ namespace threepp {
 
             // rgen at start of buffer.
             std::memcpy(dst, handles.data() + 0 * handleSize, handleSize);
-            // miss[0] = primary, miss[1] = shadow, miss[2] = env. Packed at handleSizeAligned stride.
+            // miss[0] = primary, miss[1] = shadow. Packed at handleSizeAligned stride.
             std::memcpy(dst + rgenRegionBytes + 0 * handleSizeAligned,
                         handles.data() + 1 * handleSize, handleSize);
             std::memcpy(dst + rgenRegionBytes + 1 * handleSizeAligned,
                         handles.data() + 2 * handleSize, handleSize);
-            std::memcpy(dst + rgenRegionBytes + 2 * handleSizeAligned,
-                        handles.data() + 3 * handleSize, handleSize);
             // hit follows the miss region.
             std::memcpy(dst + rgenRegionBytes + missRegionBytes,
-                        handles.data() + 4 * handleSize, handleSize);
+                        handles.data() + 3 * handleSize, handleSize);
             vmaUnmapMemory(ctx->allocator(), sbtBuffer.alloc);
 
             const VkDeviceAddress base = sbtBuffer.address;

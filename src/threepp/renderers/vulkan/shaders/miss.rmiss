@@ -5,9 +5,23 @@
 // rays that escape geometry pick up the sky / IBL background. If no env
 // texture is bound, a 1×1 black dummy is bound by the host so the sample
 // returns zero — same as the Phase 2 fallback.
+//
+// Phase 9: payload is now a struct shared with raygen + closest_hit. We
+// write the env radiance and set bit 0 of `flags` so raygen terminates the
+// path (no further bounce ray is launched).
+
+struct Payload {
+    vec3 radiance;
+    vec3 brdfWeight;
+    vec3 nextOrigin;
+    vec3 nextDir;
+    uint flags;
+    uint seed;
+};
+
 layout(set = 0, binding = 6) uniform sampler2D envTex;
 
-layout(location = 0) rayPayloadInEXT vec3 payload;
+layout(location = 0) rayPayloadInEXT Payload payload;
 
 const float PI = 3.14159265358979;
 const float TWO_PI = 6.28318530717958;
@@ -22,5 +36,6 @@ vec3 sampleEquirect(vec3 dir) {
 }
 
 void main() {
-    payload = sampleEquirect(normalize(gl_WorldRayDirectionEXT));
+    payload.radiance = sampleEquirect(normalize(gl_WorldRayDirectionEXT));
+    payload.flags |= 1u;// terminate path — no scatter beyond the env
 }

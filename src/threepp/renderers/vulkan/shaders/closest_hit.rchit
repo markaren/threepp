@@ -4,13 +4,29 @@
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
-// Phase 6b: per-mesh material driving Cook-Torrance (GGX D, Smith G, Schlick F)
-// + energy-conserving Lambert diffuse against scene lights uploaded by the
-// host. Each directional light is gated by a shadow ray (miss index 1) so
-// occluders cast hard shadows. AmbientLight + DirectionalLight are honored;
-// PointLight, SpotLight, and IBL come later. Material data (albedo /
-// roughness / metalness) lives in a `MaterialDesc` SSBO indexed by
-// gl_InstanceCustomIndexEXT, parallel to the GeometryDesc table from Phase 5a.
+// Phase 9: this shader fills a struct payload (radiance leaving the hit +
+// sampled bounce direction + throughput multiplier). raygen handles the
+// path loop; we just shade the hit and pick where the path goes next.
+//
+// Direct lighting: Cook-Torrance GGX for specular, energy-conserving
+// Lambert for diffuse, gated by per-light shadow rays. Specular env IBL
+// is sampled directly from the equirect at the reflection direction
+// (matches WGPU PT and standard raster IBL).
+//
+// Indirect bounce: cosine-weighted hemisphere sample. BRDF·cos/pdf for
+// Lambert collapses to `albedo·(1-metalness)`, so metals get throughput=0
+// and naturally do not contribute to diffuse GI. Specular indirect
+// (mirror reflections of nearby geometry) is a follow-up — for now metals
+// reflect the env map only.
+
+struct Payload {
+    vec3 radiance;
+    vec3 brdfWeight;
+    vec3 nextOrigin;
+    vec3 nextDir;
+    uint flags;
+    uint seed;
+};
 
 layout(buffer_reference, scalar) readonly buffer NormalBuf { float n[]; };
 layout(buffer_reference, scalar) readonly buffer IndexBuf  { uint  i[]; };
@@ -51,7 +67,7 @@ layout(set = 0, binding = 5, scalar) uniform LightsUbo {
 layout(set = 0, binding = 6) uniform sampler2D envTex;
 
 hitAttributeEXT vec2 attribs;
-layout(location = 0) rayPayloadInEXT vec3 payload;
+layout(location = 0) rayPayloadInEXT Payload payload;
 // Shadow visibility: 0 = occluded (default), 1 = clear (set by shadow_miss).
 layout(location = 1) rayPayloadEXT float shadowVisibility;
 
@@ -71,6 +87,32 @@ float geomSmithG1(float NdotX, float k) {
 
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// PCG XSH-RR. Cheap, well-mixed, single-uint state — perfect for shaders.
+uint pcgNext(inout uint state) {
+    state = state * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+float urand(inout uint state) {
+    return float(pcgNext(state)) / 4294967296.0;
+}
+
+// Tangent-space cosine-weighted hemisphere sample (Z up).
+vec3 cosineHemisphere(vec2 u) {
+    const float r = sqrt(u.x);
+    const float phi = TWO_PI * u.y;
+    return vec3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u.x)));
+}
+
+// Build an arbitrary orthonormal basis around N.
+mat3 makeTBN(vec3 N) {
+    const vec3 up = abs(N.z) < 0.99 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    const vec3 T = normalize(cross(up, N));
+    const vec3 B = cross(N, T);
+    return mat3(T, B, N);
 }
 
 void main() {
@@ -155,14 +197,13 @@ void main() {
     const vec3 ambient = albedo * (1.0 - metalness) * lights.ambient;
 
     // Phase 7: spec IBL by sampling the equirect env map at the reflection
-    // direction directly — no occlusion trace. Visibility-tested env reflection
-    // would zero out wherever R hits another scene object, and metals (no
-    // diffuse, no ambient) would go pure black. Standard raster / WGPU PT
-    // IBL samples unconditionally; we match that here. Without a roughness-
-    // prefiltered env we fade the contribution by (1 - roughness)^2 as a
-    // cheap stand-in: perfect mirror at roughness 0, ~zero at roughness 1,
-    // so the smooth metal box reflects the sky while the rough red box and
-    // rough ground stay matte.
+    // direction directly — no occlusion trace. Visibility-tested env
+    // reflection would zero out wherever R hits another scene object, and
+    // metals (no diffuse, no ambient) would go pure black. Standard raster
+    // / WGPU PT IBL samples unconditionally; we match that here. Without a
+    // roughness-prefiltered env we fade the contribution by (1-roughness)^2
+    // as a cheap stand-in: perfect mirror at roughness 0, ~zero at
+    // roughness 1.
     const vec3 R = reflect(-V, N);
     const float u = 0.5 + atan(R.z, R.x) / TWO_PI;
     const float vv = 0.5 + asin(clamp(R.y, -1.0, 1.0)) / PI;
@@ -172,5 +213,22 @@ void main() {
     const vec3  F_macro = fresnelSchlick(NdotV, F0);
     const vec3  envSpec = envProbe * F_macro * specEnvFade;
 
-    payload = ambient + lit + envSpec;
+    // Phase 9: sample a cosine-weighted hemisphere direction for the next
+    // bounce. BRDF·cos/pdf for Lambert simplifies to `diffuseAlbedo`, which
+    // is naturally zero for metals — they exit the bounce loop and rely on
+    // direct + envSpec only. (Spec-lobe importance sampling for metal
+    // indirect is a v2 follow-up.)
+    uint seed = payload.seed;
+    const vec2 u01 = vec2(urand(seed), urand(seed));
+    const vec3 localDir = cosineHemisphere(u01);
+    const mat3 tbn = makeTBN(N);
+    const vec3 bounceDir = normalize(tbn * localDir);
+    const vec3 diffuseAlbedo = albedo * (1.0 - metalness);
+
+    payload.radiance   = ambient + lit + envSpec;
+    payload.brdfWeight = diffuseAlbedo;
+    payload.nextOrigin = hitPos + N * 1e-3;
+    payload.nextDir    = bounceDir;
+    payload.flags      = 0u;
+    payload.seed       = seed;
 }
