@@ -46,11 +46,13 @@ struct MaterialDesc {
     float metalness;
     vec3  emissive;
     float emissiveIntensity;
-    int   albedoTexIndex;// -1 == no albedo texture
-    float alphaCutoff;   // <= 0 == disabled (used by the any-hit shader)
+    int   albedoTexIndex;   // -1 == no albedo texture
+    int   roughnessTexIndex;// -1 == no roughness texture; sampled .g
+    int   metalnessTexIndex;// -1 == no metalness texture; sampled .b
+    float alphaCutoff;      // <= 0 == disabled (used by the any-hit shader)
 };
 
-const uint kMaxMaterialTextures = 64;
+const uint kMaxMaterialTextures = 256;
 
 struct DirLight {
     vec3 direction;// world-space, toward the light
@@ -225,8 +227,23 @@ void main() {
         albedoSample = texture(albedoMaps[idxClamped], uv).rgb;
     }
     const vec3  albedo    = mdesc.albedo * albedoSample;
-    const float roughness = clamp(mdesc.roughness, 0.04, 1.0);
-    const float metalness = clamp(mdesc.metalness, 0.0,  1.0);
+
+    // glTF packs roughness in .g and metalness in .b; threepp's metalnessMap /
+    // roughnessMap typically point at the same packed texture, so the bindless
+    // cache dedupes to a single slot. Multiplicative — matches three.js.
+    float roughness = mdesc.roughness;
+    float metalness = mdesc.metalness;
+    if (mdesc.roughnessTexIndex >= 0) {
+        const int i = clamp(mdesc.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        roughness *= texture(albedoMaps[i], uv).g;
+    }
+    if (mdesc.metalnessTexIndex >= 0) {
+        const int i = clamp(mdesc.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        metalness *= texture(albedoMaps[i], uv).b;
+    }
+    roughness = clamp(roughness, 0.04, 1.0);
+    metalness = clamp(metalness, 0.0,  1.0);
+
     const vec3  F0        = mix(vec3(0.04), albedo, metalness);
     const float k         = (roughness + 1.0) * (roughness + 1.0) / 8.0;
 
@@ -275,22 +292,14 @@ void main() {
     // have no diffuse). No PI cancel under physical lights.
     const vec3 ambient = albedo * (1.0 - metalness) * lights.ambient;
 
-    // Phase 11: spec IBL via PMREM. We sample the GGX-prefiltered env at a
-    // roughness-derived LOD so the contribution naturally fades from a
-    // mirror at roughness 0 to fully blurred at roughness 1 — no (1-r)²
-    // fade hack. Mip 0 is the source mirror; α=roughness² scales linearly
-    // in mip index up to the last (most blurred) mip. As before, we sample
-    // unconditionally — visibility-testing env reflections would black out
-    // whenever R intersects scene geometry, which is wrong (and breaks
-    // metals that have no diffuse to fall back on).
-    const vec3 R = reflect(-V, N);
-    const float u = 0.5 + atan(R.z, R.x) / TWO_PI;
-    const float vv = 0.5 + asin(clamp(R.y, -1.0, 1.0)) / PI;
-    const float lodMax  = max(0.0, float(pc.envMipCount) - 1.0);
-    const float envLod  = roughness * lodMax;
-    const vec3  envProbe = textureLod(envTex, vec2(u, vv), envLod).rgb;
-    const vec3  F_macro = fresnelSchlick(NdotV, F0);
-    const vec3  envSpec = envProbe * F_macro;
+    // Env IBL spec contribution is handled entirely by the path bounce
+    // below (VNDF-sampled spec lobe → miss shader returns env radiance for
+    // rays that escape geometry). A split-sum probe lookup at primary
+    // shade would double-count and, with binary shadow-ray visibility,
+    // produce hard-edged "skylight squares" wherever R aligns with an
+    // opening. Keeping envSpec at zero lets the bounce integrate the
+    // GGX lobe softly and unbiasedly.
+    const vec3 envSpec = vec3(0.0);
 
     // Phase 9 v2: probabilistic spec/diffuse lobe selection so polished
     // metals reflect nearby geometry, not just the env probe. p_spec mirrors

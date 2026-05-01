@@ -11,6 +11,11 @@
 #include <threepp/renderers/WgpuRenderer.hpp>
 #endif
 
+#ifdef THREEPP_WITH_VULKAN
+#include <imgui_impl_vulkan.h>
+#include <threepp/renderers/VulkanRenderer.hpp>
+#endif
+
 #include <functional>
 #include <iostream>
 
@@ -48,6 +53,63 @@ public:
     ImguiContext(const threepp::Canvas& canvas, threepp::Renderer& renderer)
         : ImguiContext(canvas.windowPtr(), false) {
 
+#ifdef THREEPP_WITH_VULKAN
+        if (canvas.graphicsApi() == threepp::GraphicsAPI::Vulkan) {
+            vulkanRenderer_ = dynamic_cast<threepp::VulkanRenderer*>(&renderer);
+            if (vulkanRenderer_) {
+                auto device = static_cast<VkDevice>(vulkanRenderer_->nativeDevice());
+
+                // Small dedicated pool: a single combined-image-sampler is
+                // enough for the font atlas; ImGui_ImplVulkan_AddTexture grows
+                // it lazily for user textures.
+                VkDescriptorPoolSize poolSize{};
+                poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                poolSize.descriptorCount = 16;
+
+                VkDescriptorPoolCreateInfo poolInfo{};
+                poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+                poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+                poolInfo.maxSets = 16;
+                poolInfo.poolSizeCount = 1;
+                poolInfo.pPoolSizes = &poolSize;
+                vkCreateDescriptorPool(device, &poolInfo, nullptr, &vulkanDescriptorPool_);
+
+                VkFormat colorFormat = static_cast<VkFormat>(
+                        vulkanRenderer_->nativeSwapchainFormat());
+
+                VkPipelineRenderingCreateInfoKHR prCi{};
+                prCi.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
+                prCi.colorAttachmentCount = 1;
+                prCi.pColorAttachmentFormats = &colorFormat;
+
+                ImGui_ImplVulkan_InitInfo initInfo{};
+                initInfo.ApiVersion = VK_API_VERSION_1_3;
+                initInfo.Instance = static_cast<VkInstance>(vulkanRenderer_->nativeInstance());
+                initInfo.PhysicalDevice = static_cast<VkPhysicalDevice>(vulkanRenderer_->nativePhysicalDevice());
+                initInfo.Device = device;
+                initInfo.QueueFamily = vulkanRenderer_->graphicsQueueFamily();
+                initInfo.Queue = static_cast<VkQueue>(vulkanRenderer_->nativeGraphicsQueue());
+                initInfo.DescriptorPool = vulkanDescriptorPool_;
+                initInfo.MinImageCount = 2;
+                initInfo.ImageCount = vulkanRenderer_->imageCount();
+                initInfo.UseDynamicRendering = true;
+                initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+                initInfo.PipelineInfoMain.PipelineRenderingCreateInfo = prCi;
+
+                ImGui_ImplVulkan_Init(&initInfo);
+
+                vulkanRenderer_->setOverlayCallback([this](void* commandBuffer) {
+                    if (pendingDrawData_) {
+                        ImGui_ImplVulkan_RenderDrawData(
+                                pendingDrawData_,
+                                static_cast<VkCommandBuffer>(commandBuffer));
+                    }
+                });
+
+                vulkanInitialized_ = true;
+            }
+        } else
+#endif
         if (canvas.graphicsApi() != threepp::GraphicsAPI::WebGPU) {
             // GL path — reinitialize for OpenGL (undo the InitForOther from delegated ctor)
             ImGui_ImplGlfw_Shutdown();
@@ -102,7 +164,7 @@ public:
     ImguiContext& operator=(const ImguiContext&) = delete;
 
     void render() {
-        if (!glInitialized_ && !wgpuInitialized_) return;
+        if (!glInitialized_ && !wgpuInitialized_ && !vulkanInitialized_) return;
 
         if (!dpiAwareIsConfigured_) {
 
@@ -117,6 +179,9 @@ public:
         if (glInitialized_) ImGui_ImplOpenGL3_NewFrame();
 #ifdef THREEPP_WITH_WGPU
         if (wgpuInitialized_) ImGui_ImplWGPU_NewFrame();
+#endif
+#ifdef THREEPP_WITH_VULKAN
+        if (vulkanInitialized_) ImGui_ImplVulkan_NewFrame();
 #endif
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
@@ -133,6 +198,11 @@ public:
             pendingDrawData_ = ImGui::GetDrawData();
         }
 #endif
+#ifdef THREEPP_WITH_VULKAN
+        if (vulkanInitialized_) {
+            pendingDrawData_ = ImGui::GetDrawData();
+        }
+#endif
     }
 
     virtual ~ImguiContext() {
@@ -141,6 +211,20 @@ public:
         if (wgpuInitialized_) {
             if (wgpuRenderer_) wgpuRenderer_->setOverlayCallback(nullptr);
             ImGui_ImplWGPU_Shutdown();
+        }
+#endif
+#ifdef THREEPP_WITH_VULKAN
+        if (vulkanInitialized_) {
+            if (vulkanRenderer_) vulkanRenderer_->setOverlayCallback(nullptr);
+            // Drain any pending GPU work before tearing down ImGui's
+            // descriptor sets / pipelines.
+            vkDeviceWaitIdle(static_cast<VkDevice>(vulkanRenderer_->nativeDevice()));
+            ImGui_ImplVulkan_Shutdown();
+            if (vulkanDescriptorPool_) {
+                vkDestroyDescriptorPool(
+                        static_cast<VkDevice>(vulkanRenderer_->nativeDevice()),
+                        vulkanDescriptorPool_, nullptr);
+            }
         }
 #endif
         ImGui_ImplGlfw_Shutdown();
@@ -167,11 +251,16 @@ protected:
 private:
     bool glInitialized_ = false;
     bool wgpuInitialized_ = false;
+    bool vulkanInitialized_ = false;
     bool dpiAwareIsConfigured_ = true;
     float dpiScale_ = 1.f;
     ImDrawData* pendingDrawData_ = nullptr;
 #ifdef THREEPP_WITH_WGPU
     threepp::WgpuRenderer* wgpuRenderer_ = nullptr;
+#endif
+#ifdef THREEPP_WITH_VULKAN
+    threepp::VulkanRenderer* vulkanRenderer_ = nullptr;
+    VkDescriptorPool vulkanDescriptorPool_ = VK_NULL_HANDLE;
 #endif
 };
 

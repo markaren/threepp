@@ -14,6 +14,8 @@
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/renderers/Renderer.hpp"
 
+#include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace threepp {
@@ -56,6 +58,21 @@ namespace threepp {
         [[nodiscard]] std::vector<unsigned char> readRGBPixels() override;
 
         void dispose() override;
+
+        // ImGui integration handles. All Vulkan types are erased to void* /
+        // uint32_t so callers don't need <vulkan/vulkan.h> in this header.
+        [[nodiscard]] void* nativeInstance() const;
+        [[nodiscard]] void* nativePhysicalDevice() const;
+        [[nodiscard]] void* nativeDevice() const;
+        [[nodiscard]] void* nativeGraphicsQueue() const;
+        [[nodiscard]] uint32_t graphicsQueueFamily() const;
+        [[nodiscard]] uint32_t nativeSwapchainFormat() const;// cast to VkFormat
+        [[nodiscard]] uint32_t imageCount() const;            // swapchain image count
+
+        // Callback invoked once per frame inside the present render pass,
+        // after the path tracer has written the image. The argument is a
+        // VkCommandBuffer (type-erased). Set null to disable.
+        void setOverlayCallback(std::function<void(void*)> callback);
 
     private:
         struct Impl;

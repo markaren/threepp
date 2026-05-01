@@ -33,10 +33,12 @@ struct MaterialDesc {
     vec3  emissive;
     float emissiveIntensity;
     int   albedoTexIndex;
+    int   roughnessTexIndex;
+    int   metalnessTexIndex;
     float alphaCutoff;
 };
 
-const uint kMaxMaterialTextures = 64;
+const uint kMaxMaterialTextures = 256;
 
 layout(set = 0, binding = 3, scalar) readonly buffer GeomDescBuf {
     GeometryDesc geoms[];
