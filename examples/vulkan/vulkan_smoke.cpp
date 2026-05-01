@@ -7,9 +7,10 @@
 // and the closest-hit fires one mirror-reflection probe ray for spec IBL,
 // so the smooth metal box now reflects the sky.
 
-#include "threepp/canvas/Canvas.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
+#include "threepp/canvas/Canvas.hpp"
 #include "threepp/controls/OrbitControls.hpp"
+#include "threepp/core/Clock.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/lights/AmbientLight.hpp"
@@ -28,7 +29,7 @@ using namespace threepp;
 int main() {
 
     Canvas::Parameters params;
-    params.title("Vulkan smoke (Phase 7: env map + mirror IBL)")
+    params.title("Vulkan smoke (Phase 9 v2: PT + emissives + dynamic rebuild)")
             .size(800, 600);
 
     Canvas canvas(params);
@@ -82,6 +83,19 @@ int main() {
     ground->position.y = -1.5f;
     scene->add(ground);
 
+    // Small emissive cube floating above the ground — self-lit bright object
+    // independent of sun/env. Validates closest_hit's emissive contribution.
+    auto emissiveGeom = BoxGeometry::create(0.4f, 0.4f, 0.4f);
+    auto emissiveMat = MeshStandardMaterial::create();
+    emissiveMat->color.setHex(0x222222);
+    emissiveMat->roughness = 1.0f;
+    emissiveMat->metalness = 0.0f;
+    emissiveMat->emissive = Color::green;
+    emissiveMat->emissiveIntensity = 6.0f;
+    auto emissiveBox = Mesh::create(emissiveGeom, emissiveMat);
+    emissiveBox->position.set(0.0f, 0.6f, 0.0f);
+    scene->add(emissiveBox);
+
     auto sun = DirectionalLight::create(Color(0xffffff), 3.0f);
     sun->position.set(0.4f, 1.0f, 0.3f);// matches the prior hard-coded sun
     scene->add(sun);
@@ -97,9 +111,10 @@ int main() {
         camera->updateProjectionMatrix();
     });
 
-    std::cout << "[vulkan_smoke] expecting HDR sky background + sharp env reflection on the smooth blue-metal box" << std::endl;
-
+    Clock clock;
     canvas.animate([&] {
+        const auto dt = clock.getDelta();
+        // boxA->rotation.y += 0.1f * dt;
         renderer.render(*scene, *camera);
     });
 

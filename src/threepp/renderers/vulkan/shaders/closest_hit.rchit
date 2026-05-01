@@ -42,9 +42,8 @@ struct MaterialDesc {
     vec3  albedo;
     float roughness;
     float metalness;
-    float _pad0;
-    float _pad1;
-    float _pad2;
+    vec3  emissive;
+    float emissiveIntensity;
 };
 
 struct DirLight {
@@ -301,7 +300,8 @@ void main() {
         brdfWeight = albedo * (1.0 - metalness) / (1.0 - pSpec);
     }
 
-    payload.radiance   = ambient + lit + envSpec;
+    const vec3 emissiveOut = mdesc.emissive * mdesc.emissiveIntensity;
+    payload.radiance   = emissiveOut + ambient + lit + envSpec;
     payload.brdfWeight = brdfWeight;
     payload.nextOrigin = hitPos + N * 1e-3;
     payload.nextDir    = bounceDir;

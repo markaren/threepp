@@ -1,20 +1,26 @@
-// VulkanRenderer — Phase 7 (environment map background + spec IBL).
+// VulkanRenderer — hardware ray-traced renderer (Phase 9 v2 + dynamic
+// scene rebuild).
 //
-// On the first render() call we walk the scene, build one BLAS per unique
-// BufferGeometry, then build a TLAS containing one instance per Mesh whose
-// transform is its world matrix. Subsequent frames reuse the AS — for now
-// the scene is captured statically; dynamic mutations / animation are not
-// re-ingested (a later phase will refit / rebuild on demand).
+// On every render() we walk the scene and fingerprint each visible Mesh
+// (geometry/material identity + world matrix + PBR scalars). When the
+// fingerprint matches the previous frame we skip the rebuild and reuse
+// the existing TLAS / desc tables. When it differs we wait the GPU idle,
+// retire the TLAS + scene-side desc buffers, build fresh ones, and rewrite
+// bindings 0/3/4 across every descriptor set. BLAS records stay cached by
+// BufferGeometry pointer so static geometry is never re-traced.
 //
-// Phase 5 added Lambert + GGX direct shading against a hardcoded sun.
-// Phase 6a swapped the hardcoded sun for actual scene lights (AmbientLight +
-// DirectionalLight) uploaded to a per-frame UBO. Phase 6b added shadow rays
-// gating each light contribution. Phase 7 honors `scene.background` /
-// `scene.environment` HDR equirects: the primary miss samples the env for
-// background, and closest-hit fires one mirror-reflection probe ray (miss
-// index 2) to add a Schlick-Fresnel-weighted spec IBL term. Diffuse IBL
-// and roughness-blurred reflections come once Phase 8 adds progressive
-// accumulation — single-sample GGX would be too noisy at 1 spp.
+// Shading: Phase 5/6 do Lambert + GGX direct lighting against scene
+// AmbientLight + DirectionalLights with shadow rays. Phase 7 samples
+// `scene.environment` / `scene.background` HDR equirects for both the
+// background miss and the closest-hit env probe. Phase 8 adds progressive
+// accumulation (rgba32f persistent accum image) with sub-pixel jitter,
+// resetting on camera, env, or scene change. Phase 9 turns the ray pipe
+// into an iterative path tracer driven from raygen — each closest_hit
+// shade returns direct radiance + a sampled bounce direction; raygen
+// loops up to kMaxBounces and applies Russian Roulette after the first
+// indirect bounce. Phase 9 v2 swaps the cosine-only scatter for a
+// probabilistic spec/diffuse split (VNDF-sampled GGX for the spec lobe)
+// so polished metals reflect nearby geometry as well as the env.
 
 #define VMA_IMPLEMENTATION
 #include "vulkan/VulkanContext.hpp"
@@ -172,9 +178,8 @@ namespace threepp {
             float albedo[3];
             float roughness;
             float metalness;
-            float _pad0;
-            float _pad1;
-            float _pad2;
+            float emissive[3];
+            float emissiveIntensity;
         };
         Buffer geometryDescsBuffer;
         Buffer materialDescsBuffer;
@@ -215,6 +220,21 @@ namespace threepp {
         std::array<float, 32> prevCameraData{};
         bool prevCameraValid = false;
 
+        // Per-mesh fingerprint used to detect scene changes between frames.
+        // We capture the surface state ray tracing actually consumes:
+        //   - mesh / geometry / material identity (covers add/remove/swap)
+        //   - matrixWorld 16 floats (covers transform animation)
+        //   - PBR scalars (covers material slider tweaks)
+        // Anything not in this set won't trigger a rebuild; sufficient for
+        // the v1 feature set (no skinning, no per-vertex anim).
+        struct MeshFingerprint {
+            const void* mesh;
+            const void* geom;
+            const void* mat;
+            std::array<float, 16> matrix{};
+            std::array<float, 9>  pbr{};
+        };
+        std::vector<MeshFingerprint> prevSceneFingerprint;
         bool sceneBuilt_ = false;
 
         // Ray-tracing pipeline.
@@ -602,6 +622,8 @@ namespace threepp {
             d.albedo[0] = d.albedo[1] = d.albedo[2] = 0.8f;
             d.roughness = 0.5f;
             d.metalness = 0.0f;
+            d.emissive[0] = d.emissive[1] = d.emissive[2] = 0.0f;
+            d.emissiveIntensity = 1.0f;
             auto mat = m.material();
             if (!mat) return d;
             if (auto* col = dynamic_cast<MaterialWithColor*>(mat.get())) {
@@ -615,15 +637,26 @@ namespace threepp {
             if (auto* mt = dynamic_cast<MaterialWithMetalness*>(mat.get())) {
                 d.metalness = mt->metalness;
             }
+            if (auto* em = dynamic_cast<MaterialWithEmissive*>(mat.get())) {
+                d.emissive[0] = em->emissive.r;
+                d.emissive[1] = em->emissive.g;
+                d.emissive[2] = em->emissive.b;
+                d.emissiveIntensity = em->emissiveIntensity;
+            }
             return d;
         }
 
-        // Walk the scene once, build per-geometry BLASes, then a single TLAS
-        // with one instance per Mesh whose transform is its world matrix.
-        // Phase 4b is static: subsequent scene mutations are not re-ingested.
+        // Walk the scene each frame, fingerprint the meshes, and rebuild the
+        // TLAS + per-instance desc tables when anything that affects ray
+        // tracing changes (mesh added/removed, transform animated, material
+        // slider tweaked). BLAS records persist across rebuilds — keyed by
+        // BufferGeometry pointer — so static geometry isn't re-traced.
+        //
+        // Per-frame cost when nothing changes is: traverse + N MeshFingerprint
+        // compares. Cheap. The rare rebuild path waits the GPU idle, retires
+        // the TLAS + scene desc buffers, and rewrites bindings 0/3/4 across
+        // every descriptor set without re-allocating from the pool.
         void ensureSceneBuilt(Object3D& scene) {
-            if (sceneBuilt_) return;
-
             scene.updateMatrixWorld(true);
 
             std::vector<Mesh*> meshes;
@@ -632,8 +665,52 @@ namespace threepp {
                 if (!m || !m->visible) return;
                 auto geom = m->geometry();
                 if (!geom || !geom->hasAttribute("position")) return;
+                if (!geom->hasAttribute("normal")) return;
                 meshes.push_back(m);
             });
+
+            std::vector<MeshFingerprint> currFp;
+            currFp.reserve(meshes.size());
+            for (Mesh* m : meshes) {
+                MeshFingerprint fp{};
+                fp.mesh = m;
+                fp.geom = m->geometry().get();
+                fp.mat  = m->material().get();
+                const auto& e = m->matrixWorld->elements;
+                for (size_t i = 0; i < 16; ++i) fp.matrix[i] = e[i];
+                const MaterialDesc md = materialFromMesh(*m);
+                fp.pbr = {md.albedo[0], md.albedo[1], md.albedo[2],
+                          md.roughness, md.metalness,
+                          md.emissive[0], md.emissive[1], md.emissive[2],
+                          md.emissiveIntensity};
+                currFp.push_back(fp);
+            }
+
+            const bool unchanged = sceneBuilt_ &&
+                                   currFp.size() == prevSceneFingerprint.size() &&
+                                   std::memcmp(currFp.data(),
+                                               prevSceneFingerprint.data(),
+                                               currFp.size() * sizeof(MeshFingerprint)) == 0;
+            if (unchanged) return;
+
+            // Tear down anything in-flight references the old AS / scene-desc
+            // buffers via a descriptor set. vkDeviceWaitIdle is the simplest
+            // safe choice here; rebuilds are rare so the stall is acceptable.
+            if (sceneBuilt_) {
+                vkDeviceWaitIdle(ctx->device());
+                if (tlas) {
+                    ctx->rt().destroyAccelerationStructure(ctx->device(), tlas, nullptr);
+                    tlas = VK_NULL_HANDLE;
+                }
+                destroyBuffer(ctx->allocator(), tlasBuffer);
+                destroyBuffer(ctx->allocator(), tlasInstancesBuffer);
+                destroyBuffer(ctx->allocator(), geometryDescsBuffer);
+                destroyBuffer(ctx->allocator(), materialDescsBuffer);
+                tlasBuffer = {};
+                tlasInstancesBuffer = {};
+                geometryDescsBuffer = {};
+                materialDescsBuffer = {};
+            }
 
             std::vector<VkAccelerationStructureInstanceKHR> instances;
             std::vector<GeometryDesc> geomDescs;
@@ -681,7 +758,13 @@ namespace threepp {
             buildTlas(instances);
             uploadDescBuffer(geometryDescsBuffer, geomDescs);
             uploadDescBuffer(materialDescsBuffer, matDescs);
-            allocateAndUpdateDescriptors();
+            if (sceneBuilt_) {
+                rewriteSceneDescriptors();
+                sampleIndex = 0;// scene moved; restart accumulation
+            } else {
+                allocateAndUpdateDescriptors();
+            }
+            prevSceneFingerprint = std::move(currFp);
             sceneBuilt_ = true;
         }
 
@@ -1371,6 +1454,62 @@ namespace threepp {
                                            writes.data(), 0, nullptr);
                 }
             }
+        }
+
+        // Rewrite bindings 0 (TLAS), 3 (geom desc), 4 (mat desc) across every
+        // descriptor set. Used by ensureSceneBuilt's rebuild path so we don't
+        // have to reset the descriptor pool when the scene changes.
+        void rewriteSceneDescriptors() {
+            const uint32_t totalSets = imageCount_ * kFramesInFlight;
+
+            VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
+            asWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+            asWrite.accelerationStructureCount = 1;
+            asWrite.pAccelerationStructures = &tlas;
+
+            VkDescriptorBufferInfo geomInfo{};
+            geomInfo.buffer = geometryDescsBuffer.handle;
+            geomInfo.offset = 0;
+            geomInfo.range = VK_WHOLE_SIZE;
+
+            VkDescriptorBufferInfo matInfo{};
+            matInfo.buffer = materialDescsBuffer.handle;
+            matInfo.offset = 0;
+            matInfo.range = VK_WHOLE_SIZE;
+
+            std::vector<VkWriteDescriptorSet> writes;
+            writes.reserve(totalSets * 3);
+            for (uint32_t i = 0; i < totalSets; ++i) {
+                VkWriteDescriptorSet wAS{};
+                wAS.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                wAS.pNext = &asWrite;
+                wAS.dstSet = descriptorSets[i];
+                wAS.dstBinding = 0;
+                wAS.descriptorCount = 1;
+                wAS.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+                writes.push_back(wAS);
+
+                VkWriteDescriptorSet wGeom{};
+                wGeom.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                wGeom.dstSet = descriptorSets[i];
+                wGeom.dstBinding = 3;
+                wGeom.descriptorCount = 1;
+                wGeom.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                wGeom.pBufferInfo = &geomInfo;
+                writes.push_back(wGeom);
+
+                VkWriteDescriptorSet wMat{};
+                wMat.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                wMat.dstSet = descriptorSets[i];
+                wMat.dstBinding = 4;
+                wMat.descriptorCount = 1;
+                wMat.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                wMat.pBufferInfo = &matInfo;
+                writes.push_back(wMat);
+            }
+            vkUpdateDescriptorSets(ctx->device(),
+                                   static_cast<uint32_t>(writes.size()),
+                                   writes.data(), 0, nullptr);
         }
 
         // Phase 7: rewrite only binding 6 across every descriptor set (called
