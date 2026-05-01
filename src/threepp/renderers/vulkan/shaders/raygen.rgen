@@ -161,7 +161,11 @@ void main() {
         payload.brdfWeight = vec3(0.0);
         payload.nextOrigin = vec3(0.0);
         payload.nextDir    = vec3(0.0);
-        payload.flags      = 0u;
+        // Bit 1 = "suppress env on miss". Set on every non-primary bounce
+        // so env enters the path exclusively through closest_hit's NEE
+        // (avoids double-counting). Primary miss (b == 0) still returns
+        // env so the background is visible.
+        payload.flags      = (b > 0) ? 2u : 0u;
         payload.seed       = seed;
 
         // No OpaqueEXT — alpha-test materials need the any-hit shader to fire.

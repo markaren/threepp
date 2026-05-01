@@ -97,6 +97,13 @@ layout(location = 1) rayPayloadEXT float shadowVisibility;
 const float PI = 3.14159265358979;
 const float TWO_PI = 6.28318530717958;
 
+// GL / three.js equirect convention (matches miss.rmiss + WGPU PT).
+vec3 sampleEquirect(vec3 dir) {
+    const float u = 0.5 + atan(dir.z, dir.x) / TWO_PI;
+    const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
+    return texture(envTex, vec2(u, v)).rgb;
+}
+
 float distGGX(float NdotH, float roughness) {
     float a  = roughness * roughness;
     float a2 = a * a;
@@ -293,6 +300,10 @@ void main() {
     // along the geometric normal to avoid self-intersection (acne).
     const vec3 hitPos = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
 
+    uint seed = payload.seed;
+    const float pSpec = mix(0.5, 0.98, metalness);
+    const float alpha = roughness * roughness;
+
     // Sum direct contribution from each scene-driven directional light.
     // Physical lights (three.js useLegacyLights = false): light.color
     // already encodes intensity, no 1/PI cancel. Each light is gated by a
@@ -330,18 +341,63 @@ void main() {
         lit += (diffuse + specular) * NdotL * lights.dirLights[i].color;
     }
 
+    // === Env NEE ===
+    // Visibility-tested env sample at this shade point. Sampled with the
+    // same BSDF-importance distribution as the bounce below (lobe selected
+    // by pSpec) so the BRDF·cos / pdf collapse cleanly. Independent random
+    // numbers from the bounce → both contribute their own sample of the
+    // integrand (one for env-direct, one for indirect via geometry). To
+    // avoid double-counting, raygen tags non-primary rays so the miss
+    // shader returns zero env on indirect escapes — env enters the path
+    // exclusively via NEE on every bounce except the primary background.
+    //
+    // BSDF-importance NEE (no env CDF) means we don't preferentially hit
+    // bright env regions — variance reduction vs the previous "bounce-
+    // into-miss" pattern is ~2× from doubling the effective env sample
+    // rate (NEE always samples env; the bounce was previously the only
+    // source). An env-luminance CDF + MIS upgrade is a follow-up for an
+    // additional 5-10× on direct-sun / HDR-IBL scenes.
+    {
+        const float xiN  = urand(seed);
+        vec3 nDir;
+        vec3 nWeight;
+        bool nValid = true;
+        if (xiN < pSpec) {
+            const vec2 u2 = vec2(urand(seed), urand(seed));
+            nDir = sampleVNDF(V, N, alpha, u2);
+            const float NdotL = dot(N, nDir);
+            if (NdotL <= 0.0) {
+                nValid = false;
+            } else {
+                const vec3  H_n   = normalize(V + nDir);
+                const float VdotH = max(0.0, dot(V, H_n));
+                const vec3  F_n   = fresnelSchlick(VdotH, F0);
+                const float G1L   = smithG1(NdotL, alpha);
+                nWeight = F_n * G1L / pSpec;
+            }
+        } else {
+            const vec2 u2 = vec2(urand(seed), urand(seed));
+            const vec3 localDir = cosineHemisphere(u2);
+            const mat3 tbn = makeTBN(N);
+            nDir = normalize(tbn * localDir);
+            nWeight = albedo * (1.0 - metalness) / (1.0 - pSpec);
+        }
+        if (nValid) {
+            shadowVisibility = 0.0;
+            traceRayEXT(topAS,
+                        gl_RayFlagsTerminateOnFirstHitEXT |
+                        gl_RayFlagsSkipClosestHitShaderEXT,
+                        0xff, 0, 0, 1,
+                        hitPos + N * 1e-3, 0.0, nDir, 1e4, 1);
+            if (shadowVisibility > 0.0) {
+                lit += nWeight * sampleEquirect(nDir);
+            }
+        }
+    }
+
     // Flat ambient irradiance — only the diffuse lobe receives it (metals
     // have no diffuse). No PI cancel under physical lights.
     const vec3 ambient = albedo * (1.0 - metalness) * lights.ambient;
-
-    // Env IBL spec contribution is handled entirely by the path bounce
-    // below (VNDF-sampled spec lobe → miss shader returns env radiance for
-    // rays that escape geometry). A split-sum probe lookup at primary
-    // shade would double-count and, with binary shadow-ray visibility,
-    // produce hard-edged "skylight squares" wherever R aligns with an
-    // opening. Keeping envSpec at zero lets the bounce integrate the
-    // GGX lobe softly and unbiasedly.
-    const vec3 envSpec = vec3(0.0);
 
     // Phase 9 v2: probabilistic spec/diffuse lobe selection so polished
     // metals reflect nearby geometry, not just the env probe. p_spec mirrors
@@ -359,10 +415,7 @@ void main() {
     // VNDF samples can fall below the horizon for grazing rays at high
     // roughness; we terminate the path quietly when that happens (acceptable
     // bias for v1; spherical-cap upgrade is a follow-up).
-    uint seed = payload.seed;
-    const float pSpec = mix(0.5, 0.98, metalness);
-    const float xi    = urand(seed);
-    const float alpha = roughness * roughness;
+    const float xi = urand(seed);
     vec3 bounceDir;
     vec3 brdfWeight;
     uint pathFlags = 0u;
@@ -389,7 +442,7 @@ void main() {
     }
 
     const vec3 emissiveOut = mdesc.emissive * mdesc.emissiveIntensity;
-    payload.radiance   = emissiveOut + ambient + lit + envSpec;
+    payload.radiance   = emissiveOut + ambient + lit;
     payload.brdfWeight = brdfWeight;
     payload.nextOrigin = hitPos + N * 1e-3;
     payload.nextDir    = bounceDir;

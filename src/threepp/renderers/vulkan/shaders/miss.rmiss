@@ -36,6 +36,14 @@ vec3 sampleEquirect(vec3 dir) {
 }
 
 void main() {
-    payload.radiance = sampleEquirect(normalize(gl_WorldRayDirectionEXT));
+    // Bit 1 of flags is set by raygen on non-primary rays. Env is already
+    // accounted for at the previous shade event via closest_hit's NEE, so
+    // we return zero to avoid double-counting. Primary miss (bit 1 unset)
+    // still samples the env so the background is visible.
+    if ((payload.flags & 2u) != 0u) {
+        payload.radiance = vec3(0.0);
+    } else {
+        payload.radiance = sampleEquirect(normalize(gl_WorldRayDirectionEXT));
+    }
     payload.flags |= 1u;// terminate path — no scatter beyond the env
 }
