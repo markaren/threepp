@@ -177,7 +177,14 @@ void main() {
         traceRayEXT(topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
                     origin, 0.001, dir, 10000.0, 0);
 
-        radiance += throughput * payload.radiance;
+        vec3 hitRadiance = payload.radiance;
+        // Clamp indirect env hits (bounce into sky/sun disk) to prevent metallic
+        // surfaces from going white. Primary env (b==0) is the background — unclamped.
+        if (b > 0 && (payload.flags & 1u) != 0u) {
+            const float lum = dot(hitRadiance, vec3(0.2126, 0.7152, 0.0722));
+            if (lum > 20.0) hitRadiance *= 20.0 / lum;
+        }
+        radiance += throughput * hitRadiance;
         if ((payload.flags & 1u) != 0u) break;
 
         throughput *= payload.brdfWeight;

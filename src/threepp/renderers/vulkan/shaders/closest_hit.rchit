@@ -61,6 +61,13 @@ struct MaterialDesc {
     float clearcoatRoughness;// 0..1; clamped in shader to keep VNDF non-singular
     int   clearcoatTexIndex;          // -1 == none; sampled .r (glTF KHR_materials_clearcoat)
     int   clearcoatRoughnessTexIndex; // -1 == none; sampled .g
+    vec3  attenuationColor;   // Beer-Lambert tint per attenuationDistance (default white)
+    float attenuationDistance;// 0 = no Beer-Lambert; world-space mean-free path
+    int   emissiveTexIndex;   // -1 == no emissive map; sampled .rgb (sRGB decode via format)
+    float specularIntensity;  // KHR_materials_specular: scales dielectric F0 (default 1)
+    vec3  specularColor;      // KHR_materials_specular: tints dielectric F0 (default white)
+    vec3  sheenColor;         // KHR_materials_sheen: Charlie lobe color (default black = off)
+    float sheenRoughness;     // KHR_materials_sheen: Charlie roughness (default 0)
 };
 
 const uint kMaxMaterialTextures = 256;
@@ -152,6 +159,26 @@ float geomSmithG1(float NdotX, float k) {
 
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// KHR_materials_sheen: Charlie NDF, Neubelt visibility, and IBL energy approximation.
+// Matches three.js physical_pars_fragment.glsl.
+float D_Charlie(float NdotH, float roughness) {
+    float invAlpha = 1.0 / max(roughness * roughness, 1e-4);
+    float sin2h = max(1.0 - NdotH * NdotH, 1e-7);
+    return (2.0 + invAlpha) * pow(sin2h, invAlpha * 0.5) / (2.0 * PI);
+}
+float V_Neubelt(float NdotV, float NdotL) {
+    return clamp(1.0 / (4.0 * (NdotL + NdotV - NdotL * NdotV)), 0.0, 1.0);
+}
+float IBLSheenBRDF(float dotNV, float roughness) {
+    float r2 = roughness * roughness;
+    float a = roughness < 0.25 ? -339.2*r2 + 161.4*roughness - 25.9
+                                : -8.48*r2  + 14.3*roughness  - 9.95;
+    float b = roughness < 0.25 ?  44.0*r2  - 23.7*roughness  +  3.26
+                                :  1.97*r2  -  3.27*roughness  +  0.72;
+    float DG = exp(a * dotNV + b) + (roughness < 0.25 ? 0.0 : 0.1*(roughness - 0.25));
+    return clamp(DG / PI, 0.0, 1.0);
 }
 
 // PCG XSH-RR. Cheap, well-mixed, single-uint state — perfect for shaders.
@@ -331,7 +358,7 @@ void main() {
     roughness = clamp(roughness, 0.04, 1.0);
     metalness = clamp(metalness, 0.0,  1.0);
 
-    const vec3  F0        = mix(vec3(0.04), albedo, metalness);
+    const vec3  F0        = mix(vec3(0.04) * mdesc.specularIntensity * mdesc.specularColor, albedo, metalness);
     const float k         = (roughness + 1.0) * (roughness + 1.0) / 8.0;
 
     // World-space hit point, used as origin for the shadow rays. Offset
@@ -430,11 +457,26 @@ void main() {
             } else {
                 wDir    = normalize(refr);
                 wOrigin = hitPos - N * 1e-3;
-                tWeight = albedo / (eta * eta);
+                // Base color tints the transmitted light. G1 masking for the
+                // transmitted direction (matches WGPU PT: albedo * ggxG1(cosOut)).
+                const float cosOut = abs(dot(wDir, H));
+                const float G1out  = smithG1(cosOut, alpha);
+                vec3 glassTint = albedo * G1out;
+                if (mdesc.attenuationDistance > 0.0) {
+                    glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
+                                     vec3(gl_HitTEXT / mdesc.attenuationDistance));
+                }
+                tWeight = glassTint / (eta * eta);
             }
         }
 
-        const vec3 emissiveOut = mdesc.emissive * mdesc.emissiveIntensity;
+        vec3 emissiveOut = mdesc.emissive * mdesc.emissiveIntensity;
+        if (mdesc.emissiveTexIndex >= 0) {
+            const int ei = clamp(mdesc.emissiveTexIndex, 0, int(kMaxMaterialTextures) - 1);
+            emissiveOut *= texture(albedoMaps[ei], uv).rgb;
+        }
+        const float emLum0 = dot(emissiveOut, vec3(0.2126, 0.7152, 0.0722));
+        if (emLum0 > 20.0) emissiveOut *= 20.0 / emLum0;
         payload.radiance   = emissiveOut;
         payload.brdfWeight = tWeight;
         payload.nextOrigin = wOrigin;
@@ -450,6 +492,16 @@ void main() {
     // shadow ray; closest_hit is skipped on those rays so only the shadow
     // miss handler matters. Linear HDR radiance is returned to raygen,
     // which handles the sRGB encode.
+    // KHR_materials_sheen energy conservation: sheen absorbs some energy from the
+    // base BRDF. Scale factor is 1 - max(sheenColor) * IBL_sheen(NdotV, roughness).
+    const bool hasSheen = mdesc.sheenRoughness > 0.0 &&
+                          any(greaterThan(mdesc.sheenColor, vec3(0.0)));
+    float sheenScaling = 1.0;
+    if (hasSheen) {
+        const float sheenMax = max(mdesc.sheenColor.r, max(mdesc.sheenColor.g, mdesc.sheenColor.b));
+        sheenScaling = 1.0 - sheenMax * IBLSheenBRDF(NdotV, mdesc.sheenRoughness);
+    }
+
     vec3 lit = vec3(0.0);
     for (uint i = 0u; i < lights.dirCount; ++i) {
         const vec3 L = normalize(lights.dirLights[i].direction);
@@ -483,7 +535,11 @@ void main() {
         // Smith G is used for the cc lobe to stay consistent with the rest of
         // the dir-light eval — the bounce/NEE paths use analytic Smith G1
         // (matching VNDF's PDF), so dir-light eval is a stylistic shortcut.
-        vec3 perLight = (diffuse + specular) * baseScale;
+        vec3 perLight = (diffuse + specular) * baseScale * sheenScaling;
+        if (hasSheen) {
+            perLight += mdesc.sheenColor * D_Charlie(NdotH, mdesc.sheenRoughness)
+                                        * V_Neubelt(NdotV, NdotL);
+        }
         if (ccWeight > 0.0) {
             const float k_cc    = (ccRough + 1.0) * (ccRough + 1.0) / 8.0;
             const float D_cc    = distGGX(NdotH, ccRough);
@@ -527,7 +583,11 @@ void main() {
         const vec3  spec  = (D_p * G_p * F_p) / max(4.0 * NdotV * NdotL, 1e-4);
         const vec3  kd_p  = (vec3(1.0) - F_p) * (1.0 - metalness);
         const vec3  diff  = kd_p * albedo / PI;
-        vec3 perPt = (diff + spec) * baseScale;
+        vec3 perPt = (diff + spec) * baseScale * sheenScaling;
+        if (hasSheen) {
+            perPt += mdesc.sheenColor * D_Charlie(NdotH, mdesc.sheenRoughness)
+                                      * V_Neubelt(NdotV, NdotL);
+        }
         if (ccWeight > 0.0) {
             const float k_cc    = (ccRough + 1.0) * (ccRough + 1.0) / 8.0;
             const float D_cc    = distGGX(NdotH, ccRough);
@@ -578,7 +638,11 @@ void main() {
         const vec3  spec  = (D_s * G_s * F_s) / max(4.0 * NdotV * NdotL, 1e-4);
         const vec3  kd_s  = (vec3(1.0) - F_s) * (1.0 - metalness);
         const vec3  diff  = kd_s * albedo / PI;
-        vec3 perSp = (diff + spec) * baseScale;
+        vec3 perSp = (diff + spec) * baseScale * sheenScaling;
+        if (hasSheen) {
+            perSp += mdesc.sheenColor * D_Charlie(NdotH, mdesc.sheenRoughness)
+                                      * V_Neubelt(NdotV, NdotL);
+        }
         if (ccWeight > 0.0) {
             const float k_cc    = (ccRough + 1.0) * (ccRough + 1.0) / 8.0;
             const float D_cc    = distGGX(NdotH, ccRough);
@@ -712,7 +776,10 @@ void main() {
                         0xff, 0, 0, 1,
                         hitPos + N * 1e-3, 0.0, nDir, 1e4, 1);
             if (shadowVisibility > 0.0) {
-                lit += 0.5 * nWeight * sampleEquirect(nDir);
+                vec3 envSample = sampleEquirect(nDir);
+                const float envLum = dot(envSample, vec3(0.2126, 0.7152, 0.0722));
+                if (envLum > 20.0) envSample *= 20.0 / envLum;
+                lit += 0.5 * nWeight * envSample;
             }
         }
     }
@@ -780,7 +847,13 @@ void main() {
         }
     }
 
-    const vec3 emissiveOut = mdesc.emissive * mdesc.emissiveIntensity;
+    vec3 emissiveOut = mdesc.emissive * mdesc.emissiveIntensity;
+    if (mdesc.emissiveTexIndex >= 0) {
+        const int ei = clamp(mdesc.emissiveTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        emissiveOut *= texture(albedoMaps[ei], uv).rgb;
+    }
+    const float emLum1 = dot(emissiveOut, vec3(0.2126, 0.7152, 0.0722));
+    if (emLum1 > 20.0) emissiveOut *= 20.0 / emLum1;
     payload.radiance   = emissiveOut + ambient + lit;
     payload.brdfWeight = brdfWeight;
     payload.nextOrigin = hitPos + N * 1e-3;

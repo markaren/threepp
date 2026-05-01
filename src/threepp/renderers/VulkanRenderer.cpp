@@ -217,6 +217,13 @@ namespace threepp {
             float clearcoatRoughness; // 0..1; clamped to [0.04, 1] in shader to keep VNDF non-singular
             int32_t clearcoatTexIndex;          // -1 == none; sampled .r (glTF KHR_materials_clearcoat)
             int32_t clearcoatRoughnessTexIndex; // -1 == none; sampled .g
+            float attenuationColor[3]; // Beer-Lambert tint (default {1,1,1} = clear)
+            float attenuationDistance; // 0 = no Beer-Lambert; world-space mean-free path
+            int32_t emissiveTexIndex;  // -1 == no emissive map; sampled .rgb (sRGB)
+            float specularIntensity;   // KHR_materials_specular: default 1.0
+            float specularColor[3];    // KHR_materials_specular: default {1,1,1}
+            float sheenColor[3];       // KHR_materials_sheen: default {0,0,0}
+            float sheenRoughness;      // KHR_materials_sheen: default 0.0
         };
         Buffer geometryDescsBuffer;
         Buffer materialDescsBuffer;
@@ -332,6 +339,7 @@ namespace threepp {
             const void* transmissionTex;      // covers transmissionMap swap
             const void* clearcoatTex;         // covers clearcoatMap swap
             const void* clearcoatRoughnessTex;// covers clearcoatRoughnessMap swap
+            const void* emissiveTex;          // covers emissiveMap swap
             std::array<float, 16> matrix{};
             std::array<float, 15> pbr{};// + normalScale.xy + transmission/ior + clearcoat/roughness
         };
@@ -783,6 +791,13 @@ namespace threepp {
             d.clearcoatRoughness = 0.0f;
             d.clearcoatTexIndex = -1;
             d.clearcoatRoughnessTexIndex = -1;
+            d.attenuationColor[0] = d.attenuationColor[1] = d.attenuationColor[2] = 1.0f;
+            d.attenuationDistance = 0.0f;
+            d.emissiveTexIndex = -1;
+            d.specularIntensity = 1.0f;
+            d.specularColor[0] = d.specularColor[1] = d.specularColor[2] = 1.0f;
+            d.sheenColor[0] = d.sheenColor[1] = d.sheenColor[2] = 0.0f;
+            d.sheenRoughness = 0.0f;
             auto mat = m.material();
             if (!mat) return d;
             d.alphaCutoff = mat->alphaTest;
@@ -811,11 +826,46 @@ namespace threepp {
                 d.transmission = tr->transmission;
                 d.ior          = std::max(1.0f, tr->ior);
             }
+            // Alpha-blend transparency (transparent=true, opacity<1) has no
+            // physical analogue in a PT, so treat it as stochastic pass-through:
+            // with probability (1-opacity) the ray continues straight through
+            // (ior=1 → refract returns the incident direction unchanged, F=0).
+            if (d.transmission == 0.0f && mat->transparent && mat->opacity < 1.0f) {
+                d.transmission = 1.0f - mat->opacity;
+                d.ior          = 1.0f;
+            }
             if (auto* cc = dynamic_cast<MaterialWithClearcoat*>(mat.get())) {
                 d.clearcoat = cc->clearcoat;
                 d.clearcoatRoughness = cc->clearcoatRoughness;
             }
+            if (auto* att = dynamic_cast<MaterialWithAttenuation*>(mat.get())) {
+                d.attenuationColor[0] = att->attenuationColor.r;
+                d.attenuationColor[1] = att->attenuationColor.g;
+                d.attenuationColor[2] = att->attenuationColor.b;
+                d.attenuationDistance = att->attenuationDistance;
+            }
+            if (auto* sp = dynamic_cast<MaterialWithPbrSpecular*>(mat.get())) {
+                d.specularIntensity   = sp->specularIntensity;
+                d.specularColor[0]    = sp->specularColor.r;
+                d.specularColor[1]    = sp->specularColor.g;
+                d.specularColor[2]    = sp->specularColor.b;
+            }
+            if (auto* sh = dynamic_cast<MaterialWithSheen*>(mat.get())) {
+                d.sheenColor[0]  = sh->sheenColor.r;
+                d.sheenColor[1]  = sh->sheenColor.g;
+                d.sheenColor[2]  = sh->sheenColor.b;
+                d.sheenRoughness = sh->sheenRoughness;
+            }
             return d;
+        }
+
+        static std::shared_ptr<Texture> emissiveTexOf(const Mesh& m) {
+            auto mat = m.material();
+            if (!mat) return nullptr;
+            if (auto* em = dynamic_cast<MaterialWithEmissive*>(mat.get())) {
+                return em->emissiveMap;
+            }
+            return nullptr;
         }
 
         // Walk a material's chain for the albedo (`map`) texture.
@@ -920,6 +970,7 @@ namespace threepp {
                 fp.transmissionTex       = transmissionTexOf(*m).get();
                 fp.clearcoatTex          = clearcoatTexOf(*m).get();
                 fp.clearcoatRoughnessTex = clearcoatRoughnessTexOf(*m).get();
+                fp.emissiveTex           = emissiveTexOf(*m).get();
                 const auto& e = m->matrixWorld->elements;
                 for (size_t i = 0; i < 16; ++i) fp.matrix[i] = e[i];
                 const MaterialDesc md = materialFromMesh(*m);
@@ -1056,6 +1107,9 @@ namespace threepp {
                 }
                 if (auto tex = clearcoatRoughnessTexOf(*m)) {
                     md.clearcoatRoughnessTexIndex = ensureMaterialTexture(tex);
+                }
+                if (auto tex = emissiveTexOf(*m)) {
+                    md.emissiveTexIndex = ensureMaterialTexture(tex);
                 }
                 matDescs.push_back(md);
             }
