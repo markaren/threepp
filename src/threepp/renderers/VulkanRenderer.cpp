@@ -224,6 +224,7 @@ namespace threepp {
             float specularColor[3];    // KHR_materials_specular: default {1,1,1}
             float sheenColor[3];       // KHR_materials_sheen: default {0,0,0}
             float sheenRoughness;      // KHR_materials_sheen: default 0.0
+            int32_t doubleSided;       // 1 = shade both faces; 0 = pass through back-face hits
         };
         Buffer geometryDescsBuffer;
         Buffer materialDescsBuffer;
@@ -798,6 +799,7 @@ namespace threepp {
             d.specularColor[0] = d.specularColor[1] = d.specularColor[2] = 1.0f;
             d.sheenColor[0] = d.sheenColor[1] = d.sheenColor[2] = 0.0f;
             d.sheenRoughness = 0.0f;
+            d.doubleSided = 0;
             auto mat = m.material();
             if (!mat) return d;
             d.alphaCutoff = mat->alphaTest;
@@ -856,6 +858,7 @@ namespace threepp {
                 d.sheenColor[2]  = sh->sheenColor.b;
                 d.sheenRoughness = sh->sheenRoughness;
             }
+            d.doubleSided = (mat->side == Side::Double) ? 1 : 0;
             return d;
         }
 
@@ -1851,6 +1854,14 @@ namespace threepp {
             return out;
         }
 
+        static VkSamplerAddressMode wrapToVk(TextureWrapping w) {
+            switch (w) {
+                case TextureWrapping::ClampToEdge:    return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+                case TextureWrapping::MirroredRepeat: return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+                default:                              return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            }
+        }
+
         // Upload `tex` to the next bindless slot if not already cached. Returns
         // the slot index; -1 if upload fails or capacity is exhausted.
         int32_t ensureMaterialTexture(const std::shared_ptr<Texture>& texSp) {
@@ -1905,8 +1916,8 @@ namespace threepp {
                     w, h, fmt,
                     rgba.data(), rgba.size(),
                     VK_FILTER_LINEAR,
-                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                    VK_SAMPLER_ADDRESS_MODE_REPEAT);
+                    wrapToVk(tex->wrapS),
+                    wrapToVk(tex->wrapT));
             uint32_t slot;
             if (!freeTextureSlots.empty()) {
                 slot = freeTextureSlots.back();
@@ -2376,12 +2387,11 @@ namespace threepp {
         template <std::size_t N>
         void fillMaterialTextureInfos(std::array<VkDescriptorImageInfo, N>& infos) const {
             const VkImageView fallbackView = materialTextures[0].view;
+            const VkSampler   fallbackSampler = materialTextures[0].sampler;
             for (std::size_t i = 0; i < N; ++i) {
-                infos[i].sampler = textureSampler_;
-                VkImageView v = (i < materialTextures.size())
-                                        ? materialTextures[i].view
-                                        : VK_NULL_HANDLE;
-                infos[i].imageView   = v ? v : fallbackView;
+                const bool hasSlot = i < materialTextures.size() && materialTextures[i].view;
+                infos[i].sampler     = hasSlot ? materialTextures[i].sampler : fallbackSampler;
+                infos[i].imageView   = hasSlot ? materialTextures[i].view    : fallbackView;
                 infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             }
         }

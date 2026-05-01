@@ -68,6 +68,7 @@ struct MaterialDesc {
     vec3  specularColor;      // KHR_materials_specular: tints dielectric F0 (default white)
     vec3  sheenColor;         // KHR_materials_sheen: Charlie lobe color (default black = off)
     float sheenRoughness;     // KHR_materials_sheen: Charlie roughness (default 0)
+    int   doubleSided;        // 1 = shade both faces; 0 = pass through back-face hits
 };
 
 const uint kMaxMaterialTextures = 256;
@@ -282,6 +283,16 @@ void main() {
     const bool isFront = dot(Nworld, V) >= 0.0;
     vec3 N = isFront ? Nworld : -Nworld;// double-sided shading for thin meshes / cull-disabled
 
+    // Single-sided material hit from behind: pass the ray through unchanged.
+    if (!isFront && mdesc.doubleSided == 0 && mdesc.transmission <= 0.0) {
+        payload.radiance   = vec3(0.0);
+        payload.brdfWeight = vec3(1.0);
+        payload.nextOrigin = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * (gl_HitTEXT + 0.001);
+        payload.nextDir    = gl_WorldRayDirectionEXT;
+        payload.flags      = 4u;// transmission-like: no NEE, full env weight on next miss
+        return;
+    }
+
     // UV interpolation (only when the geometry has a uv attribute). The
     // outer fallback is vec2(0) — harmless for materials without an albedo
     // texture; the slot-0 white default would just sample (0,0) anyway.
@@ -457,11 +468,15 @@ void main() {
             } else {
                 wDir    = normalize(refr);
                 wOrigin = hitPos - N * 1e-3;
-                // Base color tints the transmitted light. G1 masking for the
-                // transmitted direction (matches WGPU PT: albedo * ggxG1(cosOut)).
-                const float cosOut = abs(dot(wDir, H));
-                const float G1out  = smithG1(cosOut, alpha);
-                vec3 glassTint = albedo * G1out;
+                // Base color tints transmitted light. Dark-albedo assets (clear
+                // glTF glass, BLEND-mode pass-throughs) use black baseColor by
+                // convention — smoothstep blends toward vec3(1) so the path
+                // transmits rather than dying. Matches WGPU PT + three.js raster.
+                const float cosOut   = abs(dot(wDir, H));
+                const float G1out    = smithG1(cosOut, alpha);
+                const float albedoLum = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
+                const vec3 tintBase  = mix(vec3(1.0), albedo, smoothstep(0.0, 0.1, albedoLum));
+                vec3 glassTint = tintBase * G1out;
                 if (mdesc.attenuationDistance > 0.0) {
                     glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
                                      vec3(gl_HitTEXT / mdesc.attenuationDistance));
