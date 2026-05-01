@@ -74,6 +74,15 @@ layout(set = 0, binding = 6) uniform sampler2D envTex;
 // the host's 1×1 white default, used implicitly via -1→0 fallback below.
 layout(set = 0, binding = 8) uniform sampler2D albedoMaps[kMaxMaterialTextures];
 
+// Phase 11: PMREM mip count comes via the same push-constant block used by
+// raygen. .x is raygen's sampleIndex (not read here); .y is envMipCount.
+layout(push_constant) uniform Pc {
+    uint sampleIndex;
+    uint envMipCount;
+    uint _pad1;
+    uint _pad2;
+} pc;
+
 hitAttributeEXT vec2 attribs;
 layout(location = 0) rayPayloadInEXT Payload payload;
 // Shadow visibility: 0 = occluded (default), 1 = clear (set by shadow_miss).
@@ -266,22 +275,22 @@ void main() {
     // have no diffuse). No PI cancel under physical lights.
     const vec3 ambient = albedo * (1.0 - metalness) * lights.ambient;
 
-    // Phase 7: spec IBL by sampling the equirect env map at the reflection
-    // direction directly — no occlusion trace. Visibility-tested env
-    // reflection would zero out wherever R hits another scene object, and
-    // metals (no diffuse, no ambient) would go pure black. Standard raster
-    // / WGPU PT IBL samples unconditionally; we match that here. Without a
-    // roughness-prefiltered env we fade the contribution by (1-roughness)^2
-    // as a cheap stand-in: perfect mirror at roughness 0, ~zero at
-    // roughness 1.
+    // Phase 11: spec IBL via PMREM. We sample the GGX-prefiltered env at a
+    // roughness-derived LOD so the contribution naturally fades from a
+    // mirror at roughness 0 to fully blurred at roughness 1 — no (1-r)²
+    // fade hack. Mip 0 is the source mirror; α=roughness² scales linearly
+    // in mip index up to the last (most blurred) mip. As before, we sample
+    // unconditionally — visibility-testing env reflections would black out
+    // whenever R intersects scene geometry, which is wrong (and breaks
+    // metals that have no diffuse to fall back on).
     const vec3 R = reflect(-V, N);
     const float u = 0.5 + atan(R.z, R.x) / TWO_PI;
     const float vv = 0.5 + asin(clamp(R.y, -1.0, 1.0)) / PI;
-    const vec3 envProbe = texture(envTex, vec2(u, vv)).rgb;
-    const float oneMinusR = 1.0 - roughness;
-    const float specEnvFade = oneMinusR * oneMinusR;
+    const float lodMax  = max(0.0, float(pc.envMipCount) - 1.0);
+    const float envLod  = roughness * lodMax;
+    const vec3  envProbe = textureLod(envTex, vec2(u, vv), envLod).rgb;
     const vec3  F_macro = fresnelSchlick(NdotV, F0);
-    const vec3  envSpec = envProbe * F_macro * specEnvFade;
+    const vec3  envSpec = envProbe * F_macro;
 
     // Phase 9 v2: probabilistic spec/diffuse lobe selection so polished
     // metals reflect nearby geometry, not just the env probe. p_spec mirrors

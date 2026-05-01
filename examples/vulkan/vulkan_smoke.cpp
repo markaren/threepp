@@ -1,11 +1,3 @@
-// Vulkan renderer smoke test (Phase 7: env map background + mirror IBL).
-//
-// Walks a real threepp Scene, builds one BLAS per BufferGeometry, and a TLAS
-// with one instance per Mesh. Closest-hit reads per-mesh material plus the
-// scene's AmbientLight + DirectionalLight from a per-frame UBO. Phase 7 adds
-// an HDR equirect environment: the primary miss samples it for backgrounds
-// and the closest-hit fires one mirror-reflection probe ray for spec IBL,
-// so the smooth metal box now reflects the sky.
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/canvas/Canvas.hpp"
@@ -13,8 +5,8 @@
 #include "threepp/core/Clock.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
-#include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -23,7 +15,6 @@
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/Scene.hpp"
 
-#include <iostream>
 
 using namespace threepp;
 
@@ -34,14 +25,11 @@ int main() {
             .size(800, 600);
 
     Canvas canvas(params);
-
     VulkanRenderer renderer(canvas);
 
     auto scene = Scene::create();
 
-    // Phase 7 — load an HDR equirect and assign it to both background (so
-    // primary misses sample it) and environment (so closest-hit's mirror IBL
-    // probe sees it). Same convention as wgpu_raytracer.cpp.
+
     RGBELoader rgbe;
     auto envMap = rgbe.load(std::string(DATA_FOLDER) +
                             "/textures/env/citrus_orchard_road_puresky_2k.hdr");
@@ -134,6 +122,13 @@ int main() {
     cutoutPlane->position.set(2.4f, -0.2f, 0.5f);
     cutoutPlane->rotation.y = -0.4f;
     scene->add(cutoutPlane);
+
+    ModelLoader modelLoader;
+    auto carBody = modelLoader.load(
+            std::string(DATA_FOLDER) + "/models/gltf/2015_land-rover_range_rover_evoque_coupe/scene.gltf");
+    carBody->scale.set(100.f, 100.f, 100.f);
+    carBody->position.z = 10;
+    scene->add(carBody);
 
     auto sun = DirectionalLight::create(Color(0xffffff), 3.0f);
     sun->position.set(0.4f, 1.0f, 0.3f);// matches the prior hard-coded sun

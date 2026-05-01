@@ -848,6 +848,10 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/closest_hit_alpha.rahit"
         kClosestHitAlphaRahitSpv
         _ahit_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/prefilter_env.comp"
+        kPrefilterEnvCompSpv
+        _prefilter_env_spv_h)
 endif ()
 
 
