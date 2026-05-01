@@ -1,15 +1,17 @@
-// Vulkan renderer smoke test (Phase 4b).
+// Vulkan renderer smoke test (Phase 6a: scene-driven lights).
 //
 // Walks a real threepp Scene, builds one BLAS per BufferGeometry, and a TLAS
-// with one instance per Mesh. The closest-hit shader still returns barycentric
-// RGB so each Mesh shows the standard tri-color gradient — Phase 5 will swap
-// in real shading. Rays come from a PerspectiveCamera UBO (Phase 4a), so
-// OrbitControls confirm world-space anchoring and per-instance transforms.
+// with one instance per Mesh. Closest-hit reads per-mesh material plus the
+// scene's AmbientLight + DirectionalLight from a per-frame UBO, so the look
+// matches what the GL / WGPU rasterizers and the WGPU PT show for the same
+// scene under physical-lights conventions (no 1/PI cancel, sRGB on output).
 
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/controls/OrbitControls.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
+#include "threepp/lights/AmbientLight.hpp"
+#include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -22,7 +24,7 @@ using namespace threepp;
 int main() {
 
     Canvas::Parameters params;
-    params.title("Vulkan smoke (Phase 4b: scene ingestion)")
+    params.title("Vulkan smoke (Phase 6a: scene-driven lights)")
             .size(800, 600);
 
     Canvas canvas(params);
@@ -55,6 +57,15 @@ int main() {
     boxB->rotation.set(0.4f, 0.8f, 0.0f);
     scene->add(boxB);
 
+    // Real scene lights. Same setup any of the three threepp renderers would
+    // accept; physical-lights convention: intensity is irradiance, no 1/PI.
+    auto ambient = AmbientLight::create(Color(0xffffff), 0.2f);
+    scene->add(ambient);
+
+    auto sun = DirectionalLight::create(Color(0xffffff), 3.0f);
+    sun->position.set(0.4f, 1.0f, 0.3f);// matches the prior hard-coded sun
+    scene->add(sun);
+
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100.f);
     camera->position.set(0, 1.5f, 4.f);
     camera->lookAt(0, 0, 0);
@@ -66,7 +77,7 @@ int main() {
         camera->updateProjectionMatrix();
     });
 
-    std::cout << "[vulkan_smoke] expecting rough red box (left) + smooth blue metal (right) under a fixed sun" << std::endl;
+    std::cout << "[vulkan_smoke] expecting rough red + smooth blue-metal box under scene-driven Ambient + DirectionalLight" << std::endl;
 
     canvas.animate([&] {
         renderer.render(*scene, *camera);

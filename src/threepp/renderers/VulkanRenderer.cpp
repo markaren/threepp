@@ -1,11 +1,16 @@
-// VulkanRenderer — Phase 4b (scene ingestion: per-Mesh BLAS, multi-instance TLAS).
+// VulkanRenderer — Phase 6a (scene-driven lights).
 //
 // On the first render() call we walk the scene, build one BLAS per unique
 // BufferGeometry, then build a TLAS containing one instance per Mesh whose
 // transform is its world matrix. Subsequent frames reuse the AS — for now
 // the scene is captured statically; dynamic mutations / animation are not
-// re-ingested (a later phase will refit / rebuild on demand). Phase 5 adds
-// shading (Lambert + GGX); for now closest-hit still returns barycentrics.
+// re-ingested (a later phase will refit / rebuild on demand).
+//
+// Phase 5 added Lambert + GGX direct shading against a hardcoded sun.
+// Phase 6a swaps the hardcoded sun for actual scene lights (AmbientLight +
+// DirectionalLight) uploaded to a per-frame UBO so the closest-hit shader
+// can iterate them. Direction is taken from each DirectionalLight's
+// world position relative to its target.
 
 #define VMA_IMPLEMENTATION
 #include "vulkan/VulkanContext.hpp"
@@ -13,9 +18,12 @@
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/core/Object3D.hpp"
+#include "threepp/lights/AmbientLight.hpp"
+#include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/materials/Material.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Matrix4.hpp"
+#include "threepp/math/Vector3.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 
@@ -144,6 +152,23 @@ namespace threepp {
         Buffer geometryDescsBuffer;
         Buffer materialDescsBuffer;
 
+        // Scene lights mirrored to a per-frame UBO. Layout uses scalar block
+        // layout in the shader so the C++ struct is naturally packed (no
+        // std140 vec3->vec4 padding). Capacity matches kMaxDirLights.
+        static constexpr uint32_t kMaxDirLights = 8;
+        struct GpuDirLight {
+            float direction[3];// world-space, toward the light
+            float color[3];    // already includes intensity
+        };
+        struct GpuLightsUbo {
+            float ambient[3];  // already includes intensity
+            uint32_t dirCount;
+            GpuDirLight dirLights[kMaxDirLights];
+        };
+        static_assert(sizeof(GpuDirLight) == 24, "GpuDirLight must be tightly packed");
+        static_assert(sizeof(GpuLightsUbo) == 16 + 24 * kMaxDirLights, "GpuLightsUbo must be tightly packed");
+        std::array<Buffer, kFramesInFlight> lightsUbos{};
+
         bool sceneBuilt_ = false;
 
         // Ray-tracing pipeline.
@@ -187,6 +212,7 @@ namespace threepp {
             // call. Everything below is scene-independent and safe at ctor time.
             createCommandResources();
             createCameraUbos();
+            createLightsUbos();
             createRtPipeline();
             createShaderBindingTable();
             createDescriptorPool();
@@ -225,6 +251,7 @@ namespace threepp {
             blasCache.clear();
 
             for (auto& b : cameraUbos) destroyBuffer(ctx->allocator(), b);
+            for (auto& b : lightsUbos) destroyBuffer(ctx->allocator(), b);
         }
 
         void createCommandResources() {
@@ -633,9 +660,68 @@ namespace threepp {
             vmaUnmapMemory(ctx->allocator(), cameraUbos[frame].alloc);
         }
 
+        void createLightsUbos() {
+            for (auto& b : lightsUbos) {
+                b = createBuffer(
+                        ctx->allocator(), ctx->device(),
+                        sizeof(GpuLightsUbo),
+                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            }
+        }
+
+        // Walk the scene each frame for AmbientLight + DirectionalLight; pack
+        // into the per-frame lights UBO. Direction is computed from the
+        // light's world-space position toward its (possibly defaulted) target,
+        // mirroring three.js's DirectionalLight.target convention. The shader
+        // expects the L vector (toward the light), so we negate.
+        void updateLightsUbo(uint32_t frame, Object3D& scene) {
+            scene.updateMatrixWorld(true);
+
+            GpuLightsUbo ubo{};
+            ubo.ambient[0] = ubo.ambient[1] = ubo.ambient[2] = 0.f;
+            ubo.dirCount = 0;
+
+            scene.traverse([&](Object3D& o) {
+                if (!o.visible) return;
+                if (auto* a = dynamic_cast<AmbientLight*>(&o)) {
+                    ubo.ambient[0] += a->color.r * a->intensity;
+                    ubo.ambient[1] += a->color.g * a->intensity;
+                    ubo.ambient[2] += a->color.b * a->intensity;
+                    return;
+                }
+                if (auto* dl = dynamic_cast<DirectionalLight*>(&o)) {
+                    if (ubo.dirCount >= kMaxDirLights) return;
+
+                    Vector3 lightPosWS, targetPosWS;
+                    dl->getWorldPosition(lightPosWS);
+                    const_cast<Object3D&>(dl->target()).getWorldPosition(targetPosWS);
+                    Vector3 toLight = lightPosWS.sub(targetPosWS);
+                    if (toLight.lengthSq() < 1e-12f) toLight.set(0.f, 1.f, 0.f);
+                    toLight.normalize();
+
+                    auto& g = ubo.dirLights[ubo.dirCount++];
+                    g.direction[0] = toLight.x;
+                    g.direction[1] = toLight.y;
+                    g.direction[2] = toLight.z;
+                    g.color[0] = dl->color.r * dl->intensity;
+                    g.color[1] = dl->color.g * dl->intensity;
+                    g.color[2] = dl->color.b * dl->intensity;
+                }
+            });
+
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), lightsUbos[frame].alloc, &mapped);
+            std::memcpy(mapped, &ubo, sizeof(ubo));
+            vmaUnmapMemory(ctx->allocator(), lightsUbos[frame].alloc);
+        }
+
         void createRtPipeline() {
-            // 0=TLAS, 1=storage image, 2=camera UBO, 3=geometry SSBO, 4=material SSBO.
-            std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
+            // 0=TLAS, 1=storage image, 2=camera UBO, 3=geometry SSBO,
+            // 4=material SSBO, 5=lights UBO.
+            std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -656,6 +742,10 @@ namespace threepp {
             bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[4].descriptorCount = 1;
             bindings[4].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[5].binding = 5;
+            bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            bindings[5].descriptorCount = 1;
+            bindings[5].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -793,7 +883,7 @@ namespace threepp {
             ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             ps[1].descriptorCount = totalSets;
             ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            ps[2].descriptorCount = totalSets;
+            ps[2].descriptorCount = totalSets * 2;// bindings 2 (camera) + 5 (lights)
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             ps[3].descriptorCount = totalSets * 2;// bindings 3 (geometry) + 4 (material)
 
@@ -882,7 +972,19 @@ namespace threepp {
                     wMat.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                     wMat.pBufferInfo = &matInfo;
 
-                    std::array<VkWriteDescriptorSet, 5> writes{wAS, wImg, wUbo, wGeom, wMat};
+                    VkDescriptorBufferInfo lightsInfo{};
+                    lightsInfo.buffer = lightsUbos[f].handle;
+                    lightsInfo.offset = 0;
+                    lightsInfo.range = VK_WHOLE_SIZE;
+                    VkWriteDescriptorSet wLights{};
+                    wLights.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wLights.dstSet = descriptorSets[idx];
+                    wLights.dstBinding = 5;
+                    wLights.descriptorCount = 1;
+                    wLights.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                    wLights.pBufferInfo = &lightsInfo;
+
+                    std::array<VkWriteDescriptorSet, 6> writes{wAS, wImg, wUbo, wGeom, wMat, wLights};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -960,7 +1062,7 @@ namespace threepp {
             check(vkEndCommandBuffer(cb), "vkEndCommandBuffer");
         }
 
-        void renderFrame(Camera& camera) {
+        void renderFrame(Object3D& scene, Camera& camera) {
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
 
@@ -976,6 +1078,7 @@ namespace threepp {
             }
 
             updateCameraUbo(currentFrame, camera);
+            updateLightsUbo(currentFrame, scene);
 
             vkResetFences(d, 1, &inFlight[currentFrame]);
             vkResetCommandBuffer(cmdBuffers[currentFrame], 0);
@@ -1040,7 +1143,7 @@ namespace threepp {
             pimpl_->needsResize = true;
         }
         pimpl_->ensureSceneBuilt(scene);
-        pimpl_->renderFrame(camera);
+        pimpl_->renderFrame(scene, camera);
     }
 
     WindowSize VulkanRenderer::size() const { return pimpl_->size; }
