@@ -115,6 +115,49 @@ mat3 makeTBN(vec3 N) {
     return mat3(T, B, N);
 }
 
+// Analytic Smith G1 for GGX (alpha = roughness²). Matches the form used
+// by VNDF importance sampling — must NOT be swapped with the Schlick-Smith
+// `geomSmithG1` above, which is a different approximation.
+float smithG1(float NdotX, float alpha) {
+    const float a2 = alpha * alpha;
+    return 2.0 * NdotX /
+           max(NdotX + sqrt(a2 + (1.0 - a2) * NdotX * NdotX), 1e-6);
+}
+
+// VNDF-sampled half-vector → reflected wi. Mirrors WgpuPathTracerShaders_Rt's
+// sampleVNDF so polished metals reflect nearby geometry the same way both
+// path tracers do. May produce below-horizon wi for grazing rays + high
+// roughness; the caller checks `dot(N, wi) > 0` and aborts the bounce.
+vec3 sampleVNDF(vec3 wo, vec3 n, float alpha, vec2 u) {
+    const vec3 nt  = abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0)
+                                     : vec3(1.0, 0.0, 0.0);
+    const vec3 t1  = normalize(cross(nt, n));
+    const vec3 t2  = cross(n, t1);
+    const vec3 woLocal = vec3(dot(wo, t1), dot(wo, t2), dot(wo, n));
+    const vec3 woStr   = normalize(vec3(alpha * woLocal.x,
+                                        alpha * woLocal.y,
+                                        woLocal.z));
+    const float lensq = woStr.x * woStr.x + woStr.y * woStr.y;
+    const vec3 T1 = lensq > 1e-7
+            ? vec3(-woStr.y, woStr.x, 0.0) / sqrt(lensq)
+            : vec3(1.0, 0.0, 0.0);
+    const vec3 T2 = cross(woStr, T1);
+
+    const float r   = sqrt(u.x);
+    const float phi = TWO_PI * u.y;
+    const float t1s = r * cos(phi);
+    const float s   = 0.5 * (1.0 + woStr.z);
+    const float t2s = mix(sqrt(max(0.0, 1.0 - t1s * t1s)),
+                          r * sin(phi), s);
+    const vec3 nhLocal = t1s * T1 + t2s * T2 +
+                         sqrt(max(0.0, 1.0 - t1s * t1s - t2s * t2s)) * woStr;
+    const vec3 hLocal = normalize(vec3(alpha * nhLocal.x,
+                                       alpha * nhLocal.y,
+                                       max(1e-6, nhLocal.z)));
+    const vec3 hm = hLocal.x * t1 + hLocal.y * t2 + hLocal.z * n;
+    return reflect(-wo, hm);
+}
+
 void main() {
     const float w = 1.0 - attribs.x - attribs.y;
 
@@ -213,22 +256,55 @@ void main() {
     const vec3  F_macro = fresnelSchlick(NdotV, F0);
     const vec3  envSpec = envProbe * F_macro * specEnvFade;
 
-    // Phase 9: sample a cosine-weighted hemisphere direction for the next
-    // bounce. BRDF·cos/pdf for Lambert simplifies to `diffuseAlbedo`, which
-    // is naturally zero for metals — they exit the bounce loop and rely on
-    // direct + envSpec only. (Spec-lobe importance sampling for metal
-    // indirect is a v2 follow-up.)
+    // Phase 9 v2: probabilistic spec/diffuse lobe selection so polished
+    // metals reflect nearby geometry, not just the env probe. p_spec mirrors
+    // the WGPU PT (mix(0.5, 0.98, metalness)). The selected lobe's BRDF·cos
+    // is divided by its sampling pdf and by p_spec / (1-p_spec) so the
+    // estimator stays unbiased.
+    //
+    //   spec branch — VNDF half-vector → reflect → wi.
+    //     BRDF·cos / vndfPdf collapses to F * G1(L);
+    //     final weight = F * G1(L) / p_spec.
+    //   diff branch — cosine-weighted hemisphere.
+    //     BRDF·cos / cosPdf for Lambert collapses to diffuseAlbedo;
+    //     final weight = diffuseAlbedo / (1 - p_spec).
+    //
+    // VNDF samples can fall below the horizon for grazing rays at high
+    // roughness; we terminate the path quietly when that happens (acceptable
+    // bias for v1; spherical-cap upgrade is a follow-up).
     uint seed = payload.seed;
-    const vec2 u01 = vec2(urand(seed), urand(seed));
-    const vec3 localDir = cosineHemisphere(u01);
-    const mat3 tbn = makeTBN(N);
-    const vec3 bounceDir = normalize(tbn * localDir);
-    const vec3 diffuseAlbedo = albedo * (1.0 - metalness);
+    const float pSpec = mix(0.5, 0.98, metalness);
+    const float xi    = urand(seed);
+    const float alpha = roughness * roughness;
+    vec3 bounceDir;
+    vec3 brdfWeight;
+    uint pathFlags = 0u;
+    if (xi < pSpec) {
+        const vec2 u2 = vec2(urand(seed), urand(seed));
+        bounceDir = sampleVNDF(V, N, alpha, u2);
+        const float NdotL = dot(N, bounceDir);
+        if (NdotL <= 0.0) {
+            brdfWeight = vec3(0.0);
+            pathFlags |= 1u;// kill path — VNDF sample dipped below horizon
+        } else {
+            const vec3  H_b   = normalize(V + bounceDir);
+            const float VdotH = max(0.0, dot(V, H_b));
+            const vec3  F_b   = fresnelSchlick(VdotH, F0);
+            const float G1L   = smithG1(NdotL, alpha);
+            brdfWeight = F_b * G1L / pSpec;
+        }
+    } else {
+        const vec2 u2 = vec2(urand(seed), urand(seed));
+        const vec3 localDir = cosineHemisphere(u2);
+        const mat3 tbn = makeTBN(N);
+        bounceDir = normalize(tbn * localDir);
+        brdfWeight = albedo * (1.0 - metalness) / (1.0 - pSpec);
+    }
 
     payload.radiance   = ambient + lit + envSpec;
-    payload.brdfWeight = diffuseAlbedo;
+    payload.brdfWeight = brdfWeight;
     payload.nextOrigin = hitPos + N * 1e-3;
     payload.nextDir    = bounceDir;
-    payload.flags      = 0u;
+    payload.flags      = pathFlags;
     payload.seed       = seed;
 }
