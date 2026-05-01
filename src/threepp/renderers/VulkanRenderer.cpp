@@ -30,6 +30,9 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/lights/PointLight.hpp"
+#include "threepp/lights/RectAreaLight.hpp"
+#include "threepp/lights/SpotLight.hpp"
 #include "threepp/materials/Material.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Matrix4.hpp"
@@ -49,6 +52,7 @@
 #include <GLFW/glfw3.h>
 
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -217,21 +221,50 @@ namespace threepp {
         Buffer geometryDescsBuffer;
         Buffer materialDescsBuffer;
 
-        // Scene lights mirrored to a per-frame UBO. Layout uses scalar block
-        // layout in the shader so the C++ struct is naturally packed (no
-        // std140 vec3->vec4 padding). Capacity matches kMaxDirLights.
-        static constexpr uint32_t kMaxDirLights = 8;
+        // Scene lights mirrored to a per-frame UBO. Scalar block layout means
+        // the C++ structs map directly (no std140 vec3→vec4 padding).
+        static constexpr uint32_t kMaxDirLights   = 8;
+        static constexpr uint32_t kMaxPointLights = 8;
+        static constexpr uint32_t kMaxSpotLights  = 8;
+        static constexpr uint32_t kMaxRectLights  = 4;
+
         struct GpuDirLight {
-            float direction[3];// world-space, toward the light
-            float color[3];    // already includes intensity
+            float direction[3];
+            float color[3];
+        };
+        struct GpuPointLight {
+            float position[3]; float range;
+            float color[3];    float decay;
+        };
+        struct GpuSpotLight {
+            float position[3];   float range;
+            float color[3];      float decay;
+            float direction[3];  // toward target (emission direction)
+            float cosAngleOuter; // cos(angle)
+            float cosAngleInner; // cos(angle * (1-penumbra))
+        };
+        struct GpuRectLight {
+            float position[3];
+            float halfU[3];  // world right  * width/2
+            float halfV[3];  // world up     * height/2
+            float normal[3]; // emission direction into scene
+            float color[3];
         };
         struct GpuLightsUbo {
-            float ambient[3];  // already includes intensity
-            uint32_t dirCount;
+            float       ambient[3];
+            uint32_t    dirCount;
             GpuDirLight dirLights[kMaxDirLights];
+            uint32_t    pointCount;
+            uint32_t    spotCount;
+            uint32_t    rectCount;
+            GpuPointLight pointLights[kMaxPointLights];
+            GpuSpotLight  spotLights[kMaxSpotLights];
+            GpuRectLight  rectLights[kMaxRectLights];
         };
-        static_assert(sizeof(GpuDirLight) == 24, "GpuDirLight must be tightly packed");
-        static_assert(sizeof(GpuLightsUbo) == 16 + 24 * kMaxDirLights, "GpuLightsUbo must be tightly packed");
+        static_assert(sizeof(GpuDirLight)   == 24);
+        static_assert(sizeof(GpuPointLight) == 32);
+        static_assert(sizeof(GpuSpotLight)  == 52);
+        static_assert(sizeof(GpuRectLight)  == 60);
         std::array<Buffer, kFramesInFlight> lightsUbos{};
 
         // Phase 7: environment equirect (HDR float) used by the primary miss
@@ -1093,8 +1126,6 @@ namespace threepp {
             scene.updateMatrixWorld(true);
 
             GpuLightsUbo ubo{};
-            ubo.ambient[0] = ubo.ambient[1] = ubo.ambient[2] = 0.f;
-            ubo.dirCount = 0;
 
             scene.traverse([&](Object3D& o) {
                 if (!o.visible) return;
@@ -1102,25 +1133,66 @@ namespace threepp {
                     ubo.ambient[0] += a->color.r * a->intensity;
                     ubo.ambient[1] += a->color.g * a->intensity;
                     ubo.ambient[2] += a->color.b * a->intensity;
-                    return;
-                }
-                if (auto* dl = dynamic_cast<DirectionalLight*>(&o)) {
+                } else if (auto* dl = dynamic_cast<DirectionalLight*>(&o)) {
                     if (ubo.dirCount >= kMaxDirLights) return;
-
-                    Vector3 lightPosWS, targetPosWS;
-                    dl->getWorldPosition(lightPosWS);
-                    const_cast<Object3D&>(dl->target()).getWorldPosition(targetPosWS);
-                    Vector3 toLight = lightPosWS.sub(targetPosWS);
+                    Vector3 lp, tp;
+                    dl->getWorldPosition(lp);
+                    const_cast<Object3D&>(dl->target()).getWorldPosition(tp);
+                    Vector3 toLight = lp.sub(tp);
                     if (toLight.lengthSq() < 1e-12f) toLight.set(0.f, 1.f, 0.f);
                     toLight.normalize();
-
                     auto& g = ubo.dirLights[ubo.dirCount++];
-                    g.direction[0] = toLight.x;
-                    g.direction[1] = toLight.y;
-                    g.direction[2] = toLight.z;
+                    g.direction[0] = toLight.x; g.direction[1] = toLight.y; g.direction[2] = toLight.z;
                     g.color[0] = dl->color.r * dl->intensity;
                     g.color[1] = dl->color.g * dl->intensity;
                     g.color[2] = dl->color.b * dl->intensity;
+                } else if (auto* pl = dynamic_cast<PointLight*>(&o)) {
+                    if (ubo.pointCount >= kMaxPointLights) return;
+                    Vector3 wp; pl->getWorldPosition(wp);
+                    auto& g = ubo.pointLights[ubo.pointCount++];
+                    g.position[0] = wp.x; g.position[1] = wp.y; g.position[2] = wp.z;
+                    g.range = pl->distance;
+                    g.color[0] = pl->color.r * pl->intensity;
+                    g.color[1] = pl->color.g * pl->intensity;
+                    g.color[2] = pl->color.b * pl->intensity;
+                    g.decay = pl->decay;
+                } else if (auto* sl = dynamic_cast<SpotLight*>(&o)) {
+                    if (ubo.spotCount >= kMaxSpotLights) return;
+                    Vector3 lp, tp;
+                    sl->getWorldPosition(lp);
+                    const_cast<Object3D&>(sl->target()).getWorldPosition(tp);
+                    Vector3 emDir = tp - lp;
+                    if (emDir.lengthSq() < 1e-12f) emDir.set(0.f, -1.f, 0.f);
+                    emDir.normalize();
+                    auto& g = ubo.spotLights[ubo.spotCount++];
+                    g.position[0] = lp.x; g.position[1] = lp.y; g.position[2] = lp.z;
+                    g.range = sl->distance;
+                    g.color[0] = sl->color.r * sl->intensity;
+                    g.color[1] = sl->color.g * sl->intensity;
+                    g.color[2] = sl->color.b * sl->intensity;
+                    g.decay = sl->decay;
+                    g.direction[0] = emDir.x; g.direction[1] = emDir.y; g.direction[2] = emDir.z;
+                    g.cosAngleOuter = std::cos(sl->angle);
+                    g.cosAngleInner = std::cos(sl->angle * (1.0f - sl->penumbra));
+                } else if (auto* rl = dynamic_cast<RectAreaLight*>(&o)) {
+                    if (ubo.rectCount >= kMaxRectLights) return;
+                    Vector3 wp; rl->getWorldPosition(wp);
+                    const auto& el = rl->matrixWorld->elements;
+                    // Column-major: col0=localX, col1=localY, col2=localZ (each with scale).
+                    Vector3 worldX(el[0], el[1], el[2]); worldX.normalize();
+                    Vector3 worldY(el[4], el[5], el[6]); worldY.normalize();
+                    Vector3 worldZ(el[8], el[9], el[10]); worldZ.normalize();
+                    auto& g = ubo.rectLights[ubo.rectCount++];
+                    g.position[0] = wp.x; g.position[1] = wp.y; g.position[2] = wp.z;
+                    const float hw = rl->width  * 0.5f;
+                    const float hh = rl->height * 0.5f;
+                    g.halfU[0] = worldX.x * hw; g.halfU[1] = worldX.y * hw; g.halfU[2] = worldX.z * hw;
+                    g.halfV[0] = worldY.x * hh; g.halfV[1] = worldY.y * hh; g.halfV[2] = worldY.z * hh;
+                    // RectAreaLight emits toward -Z in local space.
+                    g.normal[0] = -worldZ.x; g.normal[1] = -worldZ.y; g.normal[2] = -worldZ.z;
+                    g.color[0] = rl->color.r * rl->intensity;
+                    g.color[1] = rl->color.g * rl->intensity;
+                    g.color[2] = rl->color.b * rl->intensity;
                 }
             });
 

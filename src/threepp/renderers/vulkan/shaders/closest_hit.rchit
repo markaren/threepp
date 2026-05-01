@@ -66,8 +66,30 @@ struct MaterialDesc {
 const uint kMaxMaterialTextures = 256;
 
 struct DirLight {
-    vec3 direction;// world-space, toward the light
-    vec3 color;    // already includes intensity
+    vec3 direction;
+    vec3 color;
+};
+struct PointLight {
+    vec3  position;
+    float range;  // 0 = infinite
+    vec3  color;
+    float decay;
+};
+struct SpotLight {
+    vec3  position;
+    float range;
+    vec3  color;
+    float decay;
+    vec3  direction;      // toward target (emission direction)
+    float cosAngleOuter;  // cos(angle)          — hard cutoff
+    float cosAngleInner;  // cos(angle*(1-pen))  — full-brightness edge
+};
+struct RectLight {
+    vec3 position;
+    vec3 halfU;   // world right  * width/2
+    vec3 halfV;   // world up     * height/2
+    vec3 normal;  // emission direction into scene
+    vec3 color;
 };
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
@@ -78,9 +100,15 @@ layout(set = 0, binding = 4, scalar) readonly buffer MatDescBuf {
     MaterialDesc mats[];
 };
 layout(set = 0, binding = 5, scalar) uniform LightsUbo {
-    vec3     ambient;// already includes intensity
-    uint     dirCount;
-    DirLight dirLights[8];
+    vec3       ambient;
+    uint       dirCount;
+    DirLight   dirLights[8];
+    uint       pointCount;
+    uint       spotCount;
+    uint       rectCount;
+    PointLight pointLights[8];
+    SpotLight  spotLights[8];
+    RectLight  rectLights[4];
 } lights;
 layout(set = 0, binding = 6) uniform sampler2D envTex;
 // Bindless material albedo array. Indexed by mdesc.albedoTexIndex; slot 0 is
@@ -464,6 +492,155 @@ void main() {
             perLight += vec3(spec_cc * ccWeight);
         }
         lit += perLight * NdotL * lights.dirLights[i].color;
+    }
+
+    // === Point lights ===
+    for (uint i = 0u; i < lights.pointCount; ++i) {
+        vec3        toL  = lights.pointLights[i].position - hitPos;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float NdotL = max(dot(N, toL), 0.0);
+        if (NdotL <= 0.0) continue;
+
+        float atten = 1.0 / max(dist * dist, 0.01);
+        const float range = lights.pointLights[i].range;
+        if (range > 0.0) {
+            const float t = min(dist / range, 1.0);
+            atten *= (1.0 - t * t) * (1.0 - t * t);
+        }
+
+        shadowVisibility = 0.0;
+        traceRayEXT(topAS,
+                    gl_RayFlagsTerminateOnFirstHitEXT |
+                    gl_RayFlagsSkipClosestHitShaderEXT,
+                    0xff, 0, 0, 1,
+                    hitPos + N * 1e-3, 0.0, toL, dist - 1e-2, 1);
+        if (shadowVisibility <= 0.0) continue;
+
+        const vec3  H_p   = normalize(V + toL);
+        const float NdotH = max(dot(N, H_p), 0.0);
+        const float VdotH = max(dot(V, H_p), 0.0);
+        const vec3  F_p   = fresnelSchlick(VdotH, F0);
+        const float D_p   = distGGX(NdotH, roughness);
+        const float G_p   = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
+        const vec3  spec  = (D_p * G_p * F_p) / max(4.0 * NdotV * NdotL, 1e-4);
+        const vec3  kd_p  = (vec3(1.0) - F_p) * (1.0 - metalness);
+        const vec3  diff  = kd_p * albedo / PI;
+        vec3 perPt = (diff + spec) * baseScale;
+        if (ccWeight > 0.0) {
+            const float k_cc    = (ccRough + 1.0) * (ccRough + 1.0) / 8.0;
+            const float D_cc    = distGGX(NdotH, ccRough);
+            const float G_cc    = geomSmithG1(NdotV, k_cc) * geomSmithG1(NdotL, k_cc);
+            perPt += vec3((D_cc * G_cc) / max(4.0 * NdotV * NdotL, 1e-4) * ccWeight);
+        }
+        lit += perPt * NdotL * lights.pointLights[i].color * atten;
+    }
+
+    // === Spot lights ===
+    for (uint i = 0u; i < lights.spotCount; ++i) {
+        vec3        toL  = lights.spotLights[i].position - hitPos;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float NdotL = max(dot(N, toL), 0.0);
+        if (NdotL <= 0.0) continue;
+
+        // Cone check: dot(-toL, emissionDir) = cos of angle at light between hitPoint and target.
+        const float spotCos  = dot(-toL, lights.spotLights[i].direction);
+        const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
+                                           lights.spotLights[i].cosAngleInner,
+                                           spotCos);
+        if (spotAtten <= 0.0) continue;
+
+        float atten = 1.0 / max(dist * dist, 0.01);
+        const float range = lights.spotLights[i].range;
+        if (range > 0.0) {
+            const float t = min(dist / range, 1.0);
+            atten *= (1.0 - t * t) * (1.0 - t * t);
+        }
+        atten *= spotAtten;
+
+        shadowVisibility = 0.0;
+        traceRayEXT(topAS,
+                    gl_RayFlagsTerminateOnFirstHitEXT |
+                    gl_RayFlagsSkipClosestHitShaderEXT,
+                    0xff, 0, 0, 1,
+                    hitPos + N * 1e-3, 0.0, toL, dist - 1e-2, 1);
+        if (shadowVisibility <= 0.0) continue;
+
+        const vec3  H_s   = normalize(V + toL);
+        const float NdotH = max(dot(N, H_s), 0.0);
+        const float VdotH = max(dot(V, H_s), 0.0);
+        const vec3  F_s   = fresnelSchlick(VdotH, F0);
+        const float D_s   = distGGX(NdotH, roughness);
+        const float G_s   = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
+        const vec3  spec  = (D_s * G_s * F_s) / max(4.0 * NdotV * NdotL, 1e-4);
+        const vec3  kd_s  = (vec3(1.0) - F_s) * (1.0 - metalness);
+        const vec3  diff  = kd_s * albedo / PI;
+        vec3 perSp = (diff + spec) * baseScale;
+        if (ccWeight > 0.0) {
+            const float k_cc    = (ccRough + 1.0) * (ccRough + 1.0) / 8.0;
+            const float D_cc    = distGGX(NdotH, ccRough);
+            const float G_cc    = geomSmithG1(NdotV, k_cc) * geomSmithG1(NdotL, k_cc);
+            perSp += vec3((D_cc * G_cc) / max(4.0 * NdotV * NdotL, 1e-4) * ccWeight);
+        }
+        lit += perSp * NdotL * lights.spotLights[i].color * atten;
+    }
+
+    // === Rect area lights ===
+    // One random sample per light per hit. The Monte Carlo estimator divides
+    // out the pdf (1/area) and multiplies the geometric coupling term
+    // (cosEmitter/dist²) so this is unbiased in expectation.
+    for (uint i = 0u; i < lights.rectCount; ++i) {
+        // Sample uniform random point on the emitter rectangle.
+        const float ru = urand(seed) * 2.0 - 1.0;
+        const float rv = urand(seed) * 2.0 - 1.0;
+        const vec3 samplePos = lights.rectLights[i].position
+                             + ru * lights.rectLights[i].halfU
+                             + rv * lights.rectLights[i].halfV;
+
+        vec3        toL  = samplePos - hitPos;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float NdotL = max(dot(N, toL), 0.0);
+        if (NdotL <= 0.0) continue;
+
+        // Only the front face (normal pointing toward scene) emits.
+        const float cosEmitter = max(dot(-toL, lights.rectLights[i].normal), 0.0);
+        if (cosEmitter <= 0.0) continue;
+
+        shadowVisibility = 0.0;
+        traceRayEXT(topAS,
+                    gl_RayFlagsTerminateOnFirstHitEXT |
+                    gl_RayFlagsSkipClosestHitShaderEXT,
+                    0xff, 0, 0, 1,
+                    hitPos + N * 1e-3, 0.0, toL, dist - 1e-2, 1);
+        if (shadowVisibility <= 0.0) continue;
+
+        // area = |2·halfU × 2·halfV| = 4·|halfU × halfV|
+        const float area = length(cross(lights.rectLights[i].halfU,
+                                        lights.rectLights[i].halfV)) * 4.0;
+        const float geomTerm = cosEmitter * area / (dist * dist);
+
+        const vec3  H_r   = normalize(V + toL);
+        const float NdotH = max(dot(N, H_r), 0.0);
+        const float VdotH = max(dot(V, H_r), 0.0);
+        const vec3  F_r   = fresnelSchlick(VdotH, F0);
+        const float D_r   = distGGX(NdotH, roughness);
+        const float G_r   = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
+        const vec3  spec  = (D_r * G_r * F_r) / max(4.0 * NdotV * NdotL, 1e-4);
+        const vec3  kd_r  = (vec3(1.0) - F_r) * (1.0 - metalness);
+        const vec3  diff  = kd_r * albedo / PI;
+        vec3 perRect = (diff + spec) * baseScale;
+        if (ccWeight > 0.0) {
+            const float k_cc    = (ccRough + 1.0) * (ccRough + 1.0) / 8.0;
+            const float D_cc    = distGGX(NdotH, ccRough);
+            const float G_cc    = geomSmithG1(NdotV, k_cc) * geomSmithG1(NdotL, k_cc);
+            perRect += vec3((D_cc * G_cc) / max(4.0 * NdotV * NdotL, 1e-4) * ccWeight);
+        }
+        lit += perRect * NdotL * lights.rectLights[i].color * geomTerm;
     }
 
     // === Env NEE + MIS ===
