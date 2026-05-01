@@ -28,8 +28,9 @@ struct GeometryDesc {
 };
 
 // Must match the FULL MaterialDesc layout in closest_hit.rchit (440 bytes with
-// scalar block layout). Only alphaCutoff (offset 60) and albedoTexIndex (offset
-// 36) are accessed here; the rest is padding so mats[i] uses the correct stride.
+// scalar block layout). Fields beyond transmission are padding so mats[i] uses
+// the correct stride. Fields accessed: albedoTexIndex(36), alphaCutoff(60),
+// transmission(64).
 struct MaterialDesc {
     vec3  albedo;            // 12 (0)
     float roughness;         //  4 (12)
@@ -42,7 +43,8 @@ struct MaterialDesc {
     int   normalTexIndex;    //  4 (48)
     vec2  normalScale;       //  8 (52)
     float alphaCutoff;       //  4 (60) ← used
-    float _pad[94];          // 376 (64..440)
+    float transmission;      //  4 (64) ← used (shadow ray pass-through)
+    float _pad[93];          // 372 (68..440)
 };
 
 const uint kMaxMaterialTextures = 512;
@@ -59,6 +61,17 @@ hitAttributeEXT vec2 attribs;
 
 void main() {
     const MaterialDesc mdesc = mats[gl_InstanceCustomIndexEXT];
+
+    // Shadow rays (TerminateOnFirstHit set by closest_hit NEE traces):
+    // transmissive materials (glass or BLEND-mode alpha<0 sentinel) must not
+    // block light. Ignore the intersection so the shadow ray continues past
+    // the glass. Alpha-cutout materials fall through to the normal alpha test.
+    if ((gl_IncomingRayFlagsEXT & gl_RayFlagsTerminateOnFirstHitEXT) != 0u) {
+        if (mdesc.transmission > 0.0 || mdesc.alphaCutoff < 0.0) {
+            ignoreIntersectionEXT;
+        }
+        // Opaque or cutout: fall through — opaque accepts below, cutout tests alpha.
+    }
 
     // Opaque materials: nothing to do, accept the hit by returning. Most hits
     // hit this branch, so keep it cheap (one buffer load + compare).
