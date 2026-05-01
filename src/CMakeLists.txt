@@ -837,6 +837,10 @@ if (THREEPP_WITH_VULKAN)
         kMissRmissSpv
         _miss_spv_h)
     compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/shadow_miss.rmiss"
+        kShadowMissRmissSpv
+        _shadow_miss_spv_h)
+    compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/closest_hit.rchit"
         kClosestHitRchitSpv
         _chit_spv_h)

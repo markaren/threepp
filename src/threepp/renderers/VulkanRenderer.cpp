@@ -29,6 +29,7 @@
 
 #include "threepp/renderers/vulkan/shaders/raygen.rgen.spv.h"
 #include "threepp/renderers/vulkan/shaders/miss.rmiss.spv.h"
+#include "threepp/renderers/vulkan/shaders/shadow_miss.rmiss.spv.h"
 #include "threepp/renderers/vulkan/shaders/closest_hit.rchit.spv.h"
 
 #include <GLFW/glfw3.h>
@@ -725,7 +726,8 @@ namespace threepp {
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
-            bindings[0].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            bindings[0].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
+                                     VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;// shadow rays
             bindings[1].binding = 1;
             bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[1].descriptorCount = 1;
@@ -774,9 +776,11 @@ namespace threepp {
 
             VkShaderModule rgenMod = loadModule(kRaygenRgenSpv, sizeof(kRaygenRgenSpv));
             VkShaderModule missMod = loadModule(kMissRmissSpv, sizeof(kMissRmissSpv));
+            VkShaderModule sMissMod = loadModule(kShadowMissRmissSpv, sizeof(kShadowMissRmissSpv));
             VkShaderModule chitMod = loadModule(kClosestHitRchitSpv, sizeof(kClosestHitRchitSpv));
 
-            std::array<VkPipelineShaderStageCreateInfo, 3> stages{};
+            // Stages: 0=rgen, 1=primary miss, 2=shadow miss, 3=closest hit.
+            std::array<VkPipelineShaderStageCreateInfo, 4> stages{};
             for (auto& s : stages) {
                 s.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
                 s.pName = "main";
@@ -785,10 +789,13 @@ namespace threepp {
             stages[0].module = rgenMod;
             stages[1].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
             stages[1].module = missMod;
-            stages[2].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            stages[2].module = chitMod;
+            stages[2].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
+            stages[2].module = sMissMod;
+            stages[3].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            stages[3].module = chitMod;
 
-            std::array<VkRayTracingShaderGroupCreateInfoKHR, 3> groups{};
+            // Groups: 0=rgen, 1=primary miss, 2=shadow miss, 3=hit.
+            std::array<VkRayTracingShaderGroupCreateInfoKHR, 4> groups{};
             for (auto& g : groups) {
                 g.sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
                 g.generalShader = VK_SHADER_UNUSED_KHR;
@@ -800,8 +807,10 @@ namespace threepp {
             groups[0].generalShader = 0;
             groups[1].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
             groups[1].generalShader = 1;
-            groups[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-            groups[2].closestHitShader = 2;
+            groups[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+            groups[2].generalShader = 2;
+            groups[3].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+            groups[3].closestHitShader = 3;
 
             VkRayTracingPipelineCreateInfoKHR rci{};
             rci.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
@@ -809,7 +818,7 @@ namespace threepp {
             rci.pStages = stages.data();
             rci.groupCount = static_cast<uint32_t>(groups.size());
             rci.pGroups = groups.data();
-            rci.maxPipelineRayRecursionDepth = 1;
+            rci.maxPipelineRayRecursionDepth = 2;// primary + 1 shadow
             rci.layout = rtPipelineLayout;
 
             check(ctx->rt().createRayTracingPipelines(
@@ -819,6 +828,7 @@ namespace threepp {
 
             vkDestroyShaderModule(ctx->device(), rgenMod, nullptr);
             vkDestroyShaderModule(ctx->device(), missMod, nullptr);
+            vkDestroyShaderModule(ctx->device(), sMissMod, nullptr);
             vkDestroyShaderModule(ctx->device(), chitMod, nullptr);
         }
 
@@ -829,8 +839,9 @@ namespace threepp {
             const uint32_t baseAlignment = props.shaderGroupBaseAlignment;
             const uint32_t handleSizeAligned = alignUp(handleSize, handleAlignment);
 
-            // 3 groups (rgen, miss, hit), 1 record per group.
-            constexpr uint32_t groupCount = 3;
+            // 4 groups: rgen, primary miss, shadow miss, hit.
+            // Miss region holds 2 records (primary + shadow); rgen and hit hold 1 each.
+            constexpr uint32_t groupCount = 4;
             const uint32_t handlesDataSize = groupCount * handleSize;
             std::vector<uint8_t> handles(handlesDataSize);
             check(ctx->rt().getRayTracingShaderGroupHandles(
@@ -838,10 +849,15 @@ namespace threepp {
                           handlesDataSize, handles.data()),
                   "vkGetRayTracingShaderGroupHandlesKHR");
 
-            // SBT layout: 1 record per region, region base aligned to
-            // shaderGroupBaseAlignment, stride = aligned handle size.
-            const uint32_t regionStride = alignUp(handleSizeAligned, baseAlignment);
-            const VkDeviceSize sbtSize = static_cast<VkDeviceSize>(regionStride) * 3;
+            // Per-region: base aligned to shaderGroupBaseAlignment, stride = aligned
+            // handle size. Region size must be a multiple of stride and >= base alignment.
+            const uint32_t rgenRegionBytes = alignUp(handleSizeAligned, baseAlignment);
+            const uint32_t missRegionBytes = alignUp(2 * handleSizeAligned, baseAlignment);
+            const uint32_t hitRegionBytes  = alignUp(handleSizeAligned, baseAlignment);
+            const VkDeviceSize sbtSize =
+                    static_cast<VkDeviceSize>(rgenRegionBytes) +
+                    static_cast<VkDeviceSize>(missRegionBytes) +
+                    static_cast<VkDeviceSize>(hitRegionBytes);
 
             sbtBuffer = createBuffer(
                     ctx->allocator(), ctx->device(), sbtSize,
@@ -856,21 +872,29 @@ namespace threepp {
             vmaMapMemory(ctx->allocator(), sbtBuffer.alloc, &mapped);
             std::memset(mapped, 0, sbtSize);
             uint8_t* dst = static_cast<uint8_t*>(mapped);
-            for (uint32_t i = 0; i < groupCount; ++i) {
-                std::memcpy(dst + i * regionStride, handles.data() + i * handleSize, handleSize);
-            }
+
+            // rgen at start of buffer.
+            std::memcpy(dst, handles.data() + 0 * handleSize, handleSize);
+            // miss[0] = primary miss, miss[1] = shadow miss, packed at handleSizeAligned stride.
+            std::memcpy(dst + rgenRegionBytes,
+                        handles.data() + 1 * handleSize, handleSize);
+            std::memcpy(dst + rgenRegionBytes + handleSizeAligned,
+                        handles.data() + 2 * handleSize, handleSize);
+            // hit follows the miss region.
+            std::memcpy(dst + rgenRegionBytes + missRegionBytes,
+                        handles.data() + 3 * handleSize, handleSize);
             vmaUnmapMemory(ctx->allocator(), sbtBuffer.alloc);
 
             const VkDeviceAddress base = sbtBuffer.address;
-            rgenRegion.deviceAddress = base + 0 * regionStride;
-            rgenRegion.stride = regionStride;
-            rgenRegion.size   = regionStride;
-            missRegion.deviceAddress = base + 1 * regionStride;
-            missRegion.stride = regionStride;
-            missRegion.size   = regionStride;
-            hitRegion.deviceAddress = base + 2 * regionStride;
-            hitRegion.stride = regionStride;
-            hitRegion.size   = regionStride;
+            rgenRegion.deviceAddress = base;
+            rgenRegion.stride = rgenRegionBytes;
+            rgenRegion.size   = rgenRegionBytes;
+            missRegion.deviceAddress = base + rgenRegionBytes;
+            missRegion.stride = handleSizeAligned;
+            missRegion.size   = missRegionBytes;
+            hitRegion.deviceAddress = base + rgenRegionBytes + missRegionBytes;
+            hitRegion.stride = hitRegionBytes;
+            hitRegion.size   = hitRegionBytes;
             callRegion = {};
         }
 

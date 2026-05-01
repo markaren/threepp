@@ -10,9 +10,11 @@
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/controls/OrbitControls.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
+#include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/Scene.hpp"
@@ -56,6 +58,18 @@ int main() {
     boxB->position.set(1.0f, 0.0f, 0.0f);
     boxB->rotation.set(0.4f, 0.8f, 0.0f);
     scene->add(boxB);
+
+    // Ground plane catches shadows from both boxes so Phase 6b's shadow-ray
+    // path is obvious. Rough light-grey dielectric so contact shadows read clearly.
+    auto groundGeom = PlaneGeometry::create(20.0f, 20.0f);
+    auto groundMat = MeshStandardMaterial::create();
+    groundMat->color.setHex(0xaaaaaa);
+    groundMat->roughness = 0.9f;
+    groundMat->metalness = 0.0f;
+    auto ground = Mesh::create(groundGeom, groundMat);
+    ground->rotation.x = -math::PI / 2.0f;
+    ground->position.y = -1.5f;
+    scene->add(ground);
 
     // Real scene lights. Same setup any of the three threepp renderers would
     // accept; physical-lights convention: intensity is irradiance, no 1/PI.

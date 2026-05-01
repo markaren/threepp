@@ -4,12 +4,13 @@
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
-// Phase 6a: per-mesh material driving Cook-Torrance (GGX D, Smith G, Schlick F)
+// Phase 6b: per-mesh material driving Cook-Torrance (GGX D, Smith G, Schlick F)
 // + energy-conserving Lambert diffuse against scene lights uploaded by the
-// host. AmbientLight + DirectionalLight are honored; PointLight, SpotLight,
-// and IBL come later. Material data (albedo / roughness / metalness) lives
-// in a `MaterialDesc` SSBO indexed by gl_InstanceCustomIndexEXT, parallel
-// to the GeometryDesc table from Phase 5a.
+// host. Each directional light is gated by a shadow ray (miss index 1) so
+// occluders cast hard shadows. AmbientLight + DirectionalLight are honored;
+// PointLight, SpotLight, and IBL come later. Material data (albedo /
+// roughness / metalness) lives in a `MaterialDesc` SSBO indexed by
+// gl_InstanceCustomIndexEXT, parallel to the GeometryDesc table from Phase 5a.
 
 layout(buffer_reference, scalar) readonly buffer NormalBuf { float n[]; };
 layout(buffer_reference, scalar) readonly buffer IndexBuf  { uint  i[]; };
@@ -35,6 +36,7 @@ struct DirLight {
     vec3 color;    // already includes intensity
 };
 
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
 layout(set = 0, binding = 3, scalar) readonly buffer GeomDescBuf {
     GeometryDesc geoms[];
 };
@@ -49,6 +51,8 @@ layout(set = 0, binding = 5, scalar) uniform LightsUbo {
 
 hitAttributeEXT vec2 attribs;
 layout(location = 0) rayPayloadInEXT vec3 payload;
+// Shadow visibility: 0 = occluded (default), 1 = clear (set by shadow_miss).
+layout(location = 1) rayPayloadEXT float shadowVisibility;
 
 const float PI = 3.14159265358979;
 
@@ -103,15 +107,32 @@ void main() {
     const vec3  F0        = mix(vec3(0.04), albedo, metalness);
     const float k         = (roughness + 1.0) * (roughness + 1.0) / 8.0;
 
+    // World-space hit point, used as origin for the shadow rays. Offset
+    // along the geometric normal to avoid self-intersection (acne).
+    const vec3 hitPos = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
+
     // Sum direct contribution from each scene-driven directional light.
     // Physical lights (three.js useLegacyLights = false): light.color
-    // already encodes intensity, no 1/PI cancel. Linear HDR radiance is
-    // returned to raygen, which does the sRGB encode for display.
+    // already encodes intensity, no 1/PI cancel. Each light is gated by a
+    // shadow ray; closest_hit is skipped on those rays so only the shadow
+    // miss handler matters. Linear HDR radiance is returned to raygen,
+    // which handles the sRGB encode.
     vec3 lit = vec3(0.0);
     for (uint i = 0u; i < lights.dirCount; ++i) {
         const vec3 L = normalize(lights.dirLights[i].direction);
         const float NdotL = max(dot(N, L), 0.0);
         if (NdotL <= 0.0) continue;
+
+        // Shadow ray: any opaque hit within the scene blocks the light.
+        // Default visibility = 0; shadow_miss flips to 1 if the ray escapes.
+        shadowVisibility = 0.0;
+        traceRayEXT(topAS,
+                    gl_RayFlagsOpaqueEXT |
+                    gl_RayFlagsTerminateOnFirstHitEXT |
+                    gl_RayFlagsSkipClosestHitShaderEXT,
+                    0xff, 0, 0, 1,// missIndex = 1 (shadow miss)
+                    hitPos + N * 1e-3, 0.0, L, 1e4, 1);
+        if (shadowVisibility <= 0.0) continue;
 
         const vec3  H     = normalize(V + L);
         const float NdotH = max(dot(N, H), 0.0);
