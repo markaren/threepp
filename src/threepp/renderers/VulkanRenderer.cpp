@@ -274,7 +274,9 @@ namespace threepp {
         // texture is set or changed.
         Image2D envImage{};
         unsigned int envTextureIdUploaded = 0xFFFFFFFFu;
-        bool envIsDefault = true;
+        bool envIsDefault  = true;
+        bool envIsBgColor  = false;
+        Color envBgColor{0.f, 0.f, 0.f};
 
         // PMREM (Phase 11): GGX-prefiltered env mip chain. Built once per env
         // upload by dispatching prefilter_env.comp for each mip > 0; closest_hit
@@ -1401,6 +1403,7 @@ namespace threepp {
                     VK_SAMPLER_ADDRESS_MODE_REPEAT,
                     VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
             envIsDefault = true;
+            envIsBgColor = false;
             envTextureIdUploaded = 0xFFFFFFFFu;
         }
 
@@ -1876,12 +1879,33 @@ namespace threepp {
                 }
             }
             if (!tex) {
+                if (sc && sc->background.isColor()) {
+                    const Color& c = sc->background.color();
+                    if (envIsBgColor && envBgColor.r == c.r && envBgColor.g == c.g && envBgColor.b == c.b)
+                        return false;
+                    vkDeviceWaitIdle(ctx->device());
+                    destroyImage2D(ctx->allocator(), ctx->device(), envImage);
+                    const float px[4] = {c.r, c.g, c.b, 1.f};
+                    envImage = createSampledImage2D(
+                            1, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
+                            px, sizeof(px),
+                            VK_FILTER_NEAREST,
+                            VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                            VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+                    envIsDefault  = false;
+                    envIsBgColor  = true;
+                    envBgColor    = c;
+                    envTextureIdUploaded = 0xFFFFFFFFu;
+                    return true;
+                }
                 if (envIsDefault) return false;
                 vkDeviceWaitIdle(ctx->device());
                 destroyImage2D(ctx->allocator(), ctx->device(), envImage);
                 createDefaultEnvImage();
+                envIsBgColor = false;
                 return true;
             }
+            envIsBgColor = false;
             if (!envIsDefault && tex->id == envTextureIdUploaded) return false;
 
             // Phase 7 v1 supports HDR float equirects (RGBELoader output).
