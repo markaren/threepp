@@ -16,6 +16,7 @@
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
+#include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -29,7 +30,7 @@ using namespace threepp;
 int main() {
 
     Canvas::Parameters params;
-    params.title("Vulkan smoke (Phase 9 v2: PT + emissives + dynamic rebuild)")
+    params.title("Vulkan smoke (Phase 10: + alpha-test cutout)")
             .size(800, 600);
 
     Canvas canvas(params);
@@ -83,6 +84,22 @@ int main() {
     ground->position.y = -1.5f;
     scene->add(ground);
 
+    // Textured box behind the others — exercises the UV ingest path
+    // + bindless albedo sampler array. Loaded with SRGBColorSpace so the
+    // VK_FORMAT_R8G8B8A8_SRGB view does the linear decode in hardware.
+    TextureLoader texLoader;
+    auto albedoTex = texLoader.load(
+            std::string(DATA_FOLDER) + "/textures/uv_grid_opengl.jpg",
+            SRGBColorSpace);
+    auto texturedMat = MeshStandardMaterial::create();
+    texturedMat->color.setHex(0xffffff);// neutral so the texture reads cleanly
+    texturedMat->roughness = 0.6f;
+    texturedMat->metalness = 0.0f;
+    texturedMat->map = albedoTex;
+    auto texturedBox = Mesh::create(boxGeom, texturedMat);
+    texturedBox->position.set(0.0f, 0.0f, -1.5f);
+    scene->add(texturedBox);
+
     // Small emissive cube floating above the ground — self-lit bright object
     // independent of sun/env. Validates closest_hit's emissive contribution.
     auto emissiveGeom = BoxGeometry::create(0.4f, 0.4f, 0.4f);
@@ -95,6 +112,28 @@ int main() {
     auto emissiveBox = Mesh::create(emissiveGeom, emissiveMat);
     emissiveBox->position.set(0.0f, 0.6f, 0.0f);
     scene->add(emissiveBox);
+
+    // Alpha-test cutout — upright plane with a transparent-PNG texture
+    // exercises the any-hit shader. Cutout material drops every texel below
+    // alphaTest, so the three.js logo (alpha-blended in source) becomes a
+    // hard-edged silhouette through which both primary rays and shadow rays
+    // pass cleanly. Test the plane's shadow on the ground to confirm
+    // shadow-ray any-hit also fires.
+    auto cutoutTex = texLoader.load(
+            std::string(DATA_FOLDER) + "/textures/three.png",
+            SRGBColorSpace);
+    auto cutoutMat = MeshStandardMaterial::create();
+    cutoutMat->color.setHex(0xffffff);
+    cutoutMat->roughness = 0.6f;
+    cutoutMat->metalness = 0.0f;
+    cutoutMat->map = cutoutTex;
+    cutoutMat->alphaTest = 0.5f;
+    cutoutMat->side = Side::Double;// any-hit must fire from both sides
+    auto cutoutGeom = PlaneGeometry::create(1.6f, 1.6f);
+    auto cutoutPlane = Mesh::create(cutoutGeom, cutoutMat);
+    cutoutPlane->position.set(2.4f, -0.2f, 0.5f);
+    cutoutPlane->rotation.y = -0.4f;
+    scene->add(cutoutPlane);
 
     auto sun = DirectionalLight::create(Color(0xffffff), 3.0f);
     sun->position.set(0.4f, 1.0f, 0.3f);// matches the prior hard-coded sun

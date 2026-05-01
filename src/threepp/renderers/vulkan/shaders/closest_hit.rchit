@@ -30,10 +30,12 @@ struct Payload {
 
 layout(buffer_reference, scalar) readonly buffer NormalBuf { float n[]; };
 layout(buffer_reference, scalar) readonly buffer IndexBuf  { uint  i[]; };
+layout(buffer_reference, scalar) readonly buffer UvBuf     { float u[]; };
 
 struct GeometryDesc {
     uint64_t normalAddress;
     uint64_t indexAddress;
+    uint64_t uvAddress;// 0 == no UV attribute
     uint     indexed;
     uint     _pad;
 };
@@ -44,7 +46,11 @@ struct MaterialDesc {
     float metalness;
     vec3  emissive;
     float emissiveIntensity;
+    int   albedoTexIndex;// -1 == no albedo texture
+    float alphaCutoff;   // <= 0 == disabled (used by the any-hit shader)
 };
+
+const uint kMaxMaterialTextures = 64;
 
 struct DirLight {
     vec3 direction;// world-space, toward the light
@@ -64,6 +70,9 @@ layout(set = 0, binding = 5, scalar) uniform LightsUbo {
     DirLight dirLights[8];
 } lights;
 layout(set = 0, binding = 6) uniform sampler2D envTex;
+// Bindless material albedo array. Indexed by mdesc.albedoTexIndex; slot 0 is
+// the host's 1×1 white default, used implicitly via -1→0 fallback below.
+layout(set = 0, binding = 8) uniform sampler2D albedoMaps[kMaxMaterialTextures];
 
 hitAttributeEXT vec2 attribs;
 layout(location = 0) rayPayloadInEXT Payload payload;
@@ -187,7 +196,26 @@ void main() {
     if (dot(N, V) < 0.0) N = -N;// double-sided shading for thin meshes / cull-disabled
     const float NdotV = max(dot(N, V), 0.0);
 
-    const vec3  albedo    = mdesc.albedo;
+    // UV interpolation (only when the geometry has a uv attribute). The
+    // outer fallback is vec2(0) — harmless for materials without an albedo
+    // texture; the slot-0 white default would just sample (0,0) anyway.
+    vec2 uv = vec2(0.0);
+    if (gdesc.uvAddress != 0ul) {
+        UvBuf ub = UvBuf(gdesc.uvAddress);
+        const vec2 uv0 = vec2(ub.u[idx.x * 2 + 0], ub.u[idx.x * 2 + 1]);
+        const vec2 uv1 = vec2(ub.u[idx.y * 2 + 0], ub.u[idx.y * 2 + 1]);
+        const vec2 uv2 = vec2(ub.u[idx.z * 2 + 0], ub.u[idx.z * 2 + 1]);
+        uv = w * uv0 + attribs.x * uv1 + attribs.y * uv2;
+    }
+
+    // Albedo: scalar PBR colour modulated by the bound albedo map (sRGB
+    // decode is hardware-side via the VK_FORMAT_R8G8B8A8_SRGB view).
+    vec3 albedoSample = vec3(1.0);
+    if (mdesc.albedoTexIndex >= 0) {
+        const int idxClamped = clamp(mdesc.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        albedoSample = texture(albedoMaps[idxClamped], uv).rgb;
+    }
+    const vec3  albedo    = mdesc.albedo * albedoSample;
     const float roughness = clamp(mdesc.roughness, 0.04, 1.0);
     const float metalness = clamp(mdesc.metalness, 0.0,  1.0);
     const vec3  F0        = mix(vec3(0.04), albedo, metalness);
@@ -209,11 +237,11 @@ void main() {
         const float NdotL = max(dot(N, L), 0.0);
         if (NdotL <= 0.0) continue;
 
-        // Shadow ray: any opaque hit within the scene blocks the light.
-        // Default visibility = 0; shadow_miss flips to 1 if the ray escapes.
+        // Shadow ray: any non-alpha-tested hit blocks the light. Without
+        // OpaqueEXT the any-hit shader fires and lets cutout foliage etc.
+        // pass light through their transparent texels.
         shadowVisibility = 0.0;
         traceRayEXT(topAS,
-                    gl_RayFlagsOpaqueEXT |
                     gl_RayFlagsTerminateOnFirstHitEXT |
                     gl_RayFlagsSkipClosestHitShaderEXT,
                     0xff, 0, 0, 1,// missIndex = 1 (shadow miss)

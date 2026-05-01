@@ -43,6 +43,7 @@
 #include "threepp/renderers/vulkan/shaders/miss.rmiss.spv.h"
 #include "threepp/renderers/vulkan/shaders/shadow_miss.rmiss.spv.h"
 #include "threepp/renderers/vulkan/shaders/closest_hit.rchit.spv.h"
+#include "threepp/renderers/vulkan/shaders/closest_hit_alpha.rahit.spv.h"
 
 #include <GLFW/glfw3.h>
 
@@ -148,14 +149,18 @@ namespace threepp {
         std::unique_ptr<VulkanContext> ctx;
 
         // Per-geometry BLAS + the buffers that back its build inputs. Vertex /
-        // index / normal buffers are kept alive past the build so the closest-
-        // hit shader can sample them via buffer-reference pointers.
+        // index / normal / uv buffers are kept alive past the build so the
+        // closest-hit shader can sample them via buffer-reference pointers.
+        // `uv.handle == VK_NULL_HANDLE` for geometries without a UV attribute;
+        // the matching GeometryDesc.uvAddress is then 0 and closest_hit treats
+        // the surface as untextured.
         struct BlasRecord {
             VkAccelerationStructureKHR as = VK_NULL_HANDLE;
             Buffer storage;
             Buffer vertex;
             Buffer index;// .handle == VK_NULL_HANDLE for non-indexed geometry
             Buffer normal;
+            Buffer uv;   // .handle == VK_NULL_HANDLE if geometry has no "uv"
             VkDeviceAddress address = 0;
         };
         std::unordered_map<const BufferGeometry*, std::unique_ptr<BlasRecord>> blasCache;
@@ -171,6 +176,7 @@ namespace threepp {
         struct GeometryDesc {
             VkDeviceAddress normalAddress;
             VkDeviceAddress indexAddress;
+            VkDeviceAddress uvAddress;// 0 == no UV attribute
             uint32_t indexed;
             uint32_t _pad;
         };
@@ -180,6 +186,8 @@ namespace threepp {
             float metalness;
             float emissive[3];
             float emissiveIntensity;
+            int32_t albedoTexIndex;// -1 == no albedo texture, else slot in bindless array
+            float alphaCutoff;     // <= 0 == disabled; otherwise any-hit ignores hits with sampled alpha < cutoff
         };
         Buffer geometryDescsBuffer;
         Buffer materialDescsBuffer;
@@ -210,6 +218,18 @@ namespace threepp {
         unsigned int envTextureIdUploaded = 0xFFFFFFFFu;
         bool envIsDefault = true;
 
+        // Bindless material textures (albedo only for v1). The descriptor set
+        // exposes a fixed-size sampler2D[] at binding 8; closest_hit indexes
+        // into it via mdesc.albedoTexIndex. Slot 0 is a 1×1 white default so
+        // materials without an albedo map can still bind a valid descriptor.
+        // Cache key is Texture* — the same Texture across multiple meshes only
+        // uploads once. All material textures share textureSampler_ (linear,
+        // repeat); per-texture filter/wrap is a v2 concern.
+        static constexpr uint32_t kMaxMaterialTextures = 64;
+        std::vector<Image2D> materialTextures;// owns image + view (sampler is shared)
+        std::unordered_map<const Texture*, uint32_t> textureCache;
+        VkSampler textureSampler_ = VK_NULL_HANDLE;
+
         // Phase 8: progressive accumulation. accumImage stores the running
         // mean radiance (rgba32f, persistent in GENERAL layout). sampleIndex
         // counts how many samples are baked into accumImage for the current
@@ -231,6 +251,7 @@ namespace threepp {
             const void* mesh;
             const void* geom;
             const void* mat;
+            const void* albedoTex;// covers map swap on the same material
             std::array<float, 16> matrix{};
             std::array<float, 9>  pbr{};
         };
@@ -281,6 +302,8 @@ namespace threepp {
             createLightsUbos();
             createDefaultEnvImage();
             createAccumImage();
+            createTextureSampler();
+            createDefaultMaterialTexture();
             createRtPipeline();
             createShaderBindingTable();
             createDescriptorPool();
@@ -315,6 +338,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->vertex);
                 destroyBuffer(ctx->allocator(), rec->index);
                 destroyBuffer(ctx->allocator(), rec->normal);
+                destroyBuffer(ctx->allocator(), rec->uv);
             }
             blasCache.clear();
 
@@ -322,6 +346,9 @@ namespace threepp {
             for (auto& b : lightsUbos) destroyBuffer(ctx->allocator(), b);
             destroyImage2D(ctx->allocator(), d, envImage);
             destroyImage2D(ctx->allocator(), d, accumImage);
+            for (auto& img : materialTextures) destroyImage2D(ctx->allocator(), d, img);
+            materialTextures.clear();
+            if (textureSampler_) vkDestroySampler(d, textureSampler_, nullptr);
         }
 
         void createCommandResources() {
@@ -429,6 +456,25 @@ namespace threepp {
             std::memcpy(mapped, normals.data(), nbBytes);
             vmaUnmapMemory(ctx->allocator(), rec->normal.alloc);
 
+            // Optional UV attribute (TEXCOORD_0). closest_hit interpolates and
+            // samples albedo with these; absent → bindless texture is ignored.
+            if (auto* uvAttr = geom.getAttribute<float>("uv")) {
+                const auto& uvs = uvAttr->array();
+                if (uvAttr->count() == static_cast<int>(vertexCount) &&
+                    uvs.size() == vertexCount * 2) {
+                    const VkDeviceSize uvBytes = uvs.size() * sizeof(float);
+                    rec->uv = createBuffer(
+                            ctx->allocator(), ctx->device(), uvBytes,
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                            VMA_MEMORY_USAGE_AUTO,
+                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                    vmaMapMemory(ctx->allocator(), rec->uv.alloc, &mapped);
+                    std::memcpy(mapped, uvs.data(), uvBytes);
+                    vmaUnmapMemory(ctx->allocator(), rec->uv.alloc);
+                }
+            }
+
             if (indexed) {
                 const auto& indices = idxAttr->array();
                 const VkDeviceSize ibBytes = indices.size() * sizeof(unsigned int);
@@ -458,7 +504,12 @@ namespace threepp {
             blasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
             blasGeom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
             blasGeom.geometry.triangles = triData;
-            blasGeom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+            // No OPAQUE flag — that would suppress any-hit invocation per
+            // geometry regardless of the ray flags, breaking alpha-test. The
+            // any-hit shader short-circuits cheaply for materials with
+            // alphaCutoff <= 0, so the cost on truly opaque meshes is one
+            // buffer read + compare per hit candidate.
+            blasGeom.flags = 0;
 
             VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
             blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
@@ -546,7 +597,7 @@ namespace threepp {
             tlasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
             tlasGeom.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
             tlasGeom.geometry.instances = instData;
-            tlasGeom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+            tlasGeom.flags = 0;// per-instance opaque is on VkAccelerationStructureInstanceKHR.flags, not here
 
             VkAccelerationStructureBuildGeometryInfoKHR tlasBuild{};
             tlasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
@@ -616,7 +667,8 @@ namespace threepp {
 
         // Pull per-mesh PBR material params off the threepp Material chain.
         // Anything not satisfying the relevant interface gets a sensible
-        // default so meshes lacking a material still render.
+        // default so meshes lacking a material still render. albedoTexIndex
+        // stays at -1 here — caller patches it after `ensureMaterialTexture`.
         static MaterialDesc materialFromMesh(const Mesh& m) {
             MaterialDesc d{};
             d.albedo[0] = d.albedo[1] = d.albedo[2] = 0.8f;
@@ -624,8 +676,11 @@ namespace threepp {
             d.metalness = 0.0f;
             d.emissive[0] = d.emissive[1] = d.emissive[2] = 0.0f;
             d.emissiveIntensity = 1.0f;
+            d.albedoTexIndex = -1;
+            d.alphaCutoff = 0.0f;// disabled by default; any-hit short-circuits on alphaCutoff <= 0
             auto mat = m.material();
             if (!mat) return d;
+            d.alphaCutoff = mat->alphaTest;
             if (auto* col = dynamic_cast<MaterialWithColor*>(mat.get())) {
                 d.albedo[0] = col->color.r;
                 d.albedo[1] = col->color.g;
@@ -644,6 +699,17 @@ namespace threepp {
                 d.emissiveIntensity = em->emissiveIntensity;
             }
             return d;
+        }
+
+        // Walk a material's chain for the albedo (`map`) texture pointer.
+        // Returns nullptr if the material doesn't carry one.
+        static const Texture* albedoTexOf(const Mesh& m) {
+            auto mat = m.material();
+            if (!mat) return nullptr;
+            if (auto* mm = dynamic_cast<MaterialWithMap*>(mat.get())) {
+                return mm->map.get();
+            }
+            return nullptr;
         }
 
         // Walk the scene each frame, fingerprint the meshes, and rebuild the
@@ -676,6 +742,7 @@ namespace threepp {
                 fp.mesh = m;
                 fp.geom = m->geometry().get();
                 fp.mat  = m->material().get();
+                fp.albedoTex = albedoTexOf(*m);
                 const auto& e = m->matrixWorld->elements;
                 for (size_t i = 0; i < 16; ++i) fp.matrix[i] = e[i];
                 const MaterialDesc md = materialFromMesh(*m);
@@ -748,11 +815,16 @@ namespace threepp {
                 GeometryDesc gdesc{};
                 gdesc.normalAddress = it->second->normal.address;
                 gdesc.indexAddress  = it->second->index.address;
+                gdesc.uvAddress     = it->second->uv.address;// 0 if no UV attribute
                 gdesc.indexed = it->second->index.handle != VK_NULL_HANDLE ? 1u : 0u;
                 gdesc._pad = 0;
                 geomDescs.push_back(gdesc);
 
-                matDescs.push_back(materialFromMesh(*m));
+                MaterialDesc md = materialFromMesh(*m);
+                if (const Texture* tex = albedoTexOf(*m)) {
+                    md.albedoTexIndex = ensureMaterialTexture(tex);
+                }
+                matDescs.push_back(md);
             }
 
             buildTlas(instances);
@@ -1062,6 +1134,107 @@ namespace threepp {
             envTextureIdUploaded = 0xFFFFFFFFu;
         }
 
+        // Single shared sampler for every material texture in binding 8.
+        // Linear filter + REPEAT addressing matches the typical raster default;
+        // per-texture wrap/filter is a v2 concern.
+        void createTextureSampler() {
+            VkSamplerCreateInfo sci{};
+            sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            sci.magFilter = VK_FILTER_LINEAR;
+            sci.minFilter = VK_FILTER_LINEAR;
+            sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            sci.anisotropyEnable = VK_FALSE;
+            sci.maxAnisotropy = 1.0f;
+            sci.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+            sci.unnormalizedCoordinates = VK_FALSE;
+            sci.compareEnable = VK_FALSE;
+            sci.minLod = 0.0f;
+            sci.maxLod = 0.0f;
+            check(vkCreateSampler(ctx->device(), &sci, nullptr, &textureSampler_),
+                  "vkCreateSampler(material)");
+        }
+
+        // Slot 0 of the bindless array is a 1×1 white texel — used to fill the
+        // descriptor array padding so every slot has a valid view, and as the
+        // descriptor for materials whose albedoTexIndex stays at -1 (the
+        // shader still indexes safely; the multiply by 1.0 is a no-op).
+        void createDefaultMaterialTexture() {
+            const uint8_t white[4] = {255, 255, 255, 255};
+            Image2D tex = createSampledImage2D(
+                    1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+                    white, sizeof(white),
+                    VK_FILTER_NEAREST,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT);
+            // The Image2D's own sampler is unused (we share textureSampler_),
+            // but kept alive so destroyImage2D's clean-up still works.
+            materialTextures.push_back(tex);
+        }
+
+        // Upload `tex` to the next bindless slot if not already cached. Returns
+        // the slot index; -1 if upload fails or capacity is exhausted.
+        int32_t ensureMaterialTexture(const Texture* tex) {
+            if (!tex) return -1;
+            if (auto it = textureCache.find(tex); it != textureCache.end()) {
+                return static_cast<int32_t>(it->second);
+            }
+            if (materialTextures.size() >= kMaxMaterialTextures) {
+                std::cerr << "[VulkanRenderer] material texture slots exhausted ("
+                          << kMaxMaterialTextures << "); using -1 fallback\n";
+                return -1;
+            }
+            const Image& img = const_cast<Texture*>(tex)->image();
+            const uint32_t w = img.width;
+            const uint32_t h = img.height;
+            if (w == 0 || h == 0) return -1;
+
+            // Force RGBA8 — both UNORM and SRGB need 4 channels in this engine.
+            // stb_image's default load already produces RGBA, so we expect a
+            // tightly packed 4*w*h byte buffer.
+            std::vector<unsigned char> rgba;
+            try {
+                const auto& src = const_cast<Image&>(img).data<unsigned char>();
+                if (src.size() == w * h * 4) {
+                    rgba.assign(src.begin(), src.end());
+                } else if (src.size() == w * h * 3) {
+                    rgba.resize(w * h * 4);
+                    for (uint32_t i = 0; i < w * h; ++i) {
+                        rgba[i * 4 + 0] = src[i * 3 + 0];
+                        rgba[i * 4 + 1] = src[i * 3 + 1];
+                        rgba[i * 4 + 2] = src[i * 3 + 2];
+                        rgba[i * 4 + 3] = 255;
+                    }
+                } else {
+                    std::cerr << "[VulkanRenderer] unsupported pixel layout for material tex ("
+                              << src.size() << " bytes for " << w << "x" << h << ")\n";
+                    return -1;
+                }
+            } catch (const std::bad_variant_access&) {
+                std::cerr << "[VulkanRenderer] float-pixel material textures not yet supported\n";
+                return -1;
+            }
+
+            // sRGB tag → hardware decode at sample time. Loaders should mark
+            // albedo maps as SRGBColorSpace; legacy (untagged) textures fall
+            // through as UNORM so the shader sees raw channel values.
+            const VkFormat fmt = (tex->colorSpace == ColorSpace::sRGB)
+                                         ? VK_FORMAT_R8G8B8A8_SRGB
+                                         : VK_FORMAT_R8G8B8A8_UNORM;
+            Image2D out = createSampledImage2D(
+                    w, h, fmt,
+                    rgba.data(), rgba.size(),
+                    VK_FILTER_LINEAR,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT);
+            const uint32_t slot = static_cast<uint32_t>(materialTextures.size());
+            materialTextures.push_back(out);
+            textureCache.emplace(tex, slot);
+            return static_cast<int32_t>(slot);
+        }
+
         // Detect the active env texture (scene.environment, falling back to
         // scene.background.texture()) and upload it if it differs from the
         // currently bound one. Returns true when descriptors must be rewritten.
@@ -1116,8 +1289,8 @@ namespace threepp {
         void createRtPipeline() {
             // 0=TLAS, 1=storage image (swapchain), 2=camera UBO, 3=geometry SSBO,
             // 4=material SSBO, 5=lights UBO, 6=env equirect (Phase 7),
-            // 7=accumulation image (Phase 8).
-            std::array<VkDescriptorSetLayoutBinding, 8> bindings{};
+            // 7=accumulation image (Phase 8), 8=material texture array (textures).
+            std::array<VkDescriptorSetLayoutBinding, 9> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -1134,11 +1307,13 @@ namespace threepp {
             bindings[3].binding = 3;
             bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[3].descriptorCount = 1;
-            bindings[3].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[3].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                     VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
             bindings[4].binding = 4;
             bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[4].descriptorCount = 1;
-            bindings[4].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[4].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                     VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
             bindings[5].binding = 5;
             bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[5].descriptorCount = 1;
@@ -1152,6 +1327,14 @@ namespace threepp {
             bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[7].descriptorCount = 1;
             bindings[7].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            // Bindless material albedo array. Fixed-cap kMaxMaterialTextures
+            // so we can avoid VK_EXT_descriptor_indexing's variable-descriptor-
+            // count plumbing for v1; closest_hit indexes via mdesc.albedoTexIndex.
+            bindings[8].binding = 8;
+            bindings[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[8].descriptorCount = kMaxMaterialTextures;
+            bindings[8].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                     VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -1188,13 +1371,14 @@ namespace threepp {
                 return m;
             };
 
-            VkShaderModule rgenMod  = loadModule(kRaygenRgenSpv,        sizeof(kRaygenRgenSpv));
-            VkShaderModule missMod  = loadModule(kMissRmissSpv,         sizeof(kMissRmissSpv));
-            VkShaderModule sMissMod = loadModule(kShadowMissRmissSpv,   sizeof(kShadowMissRmissSpv));
-            VkShaderModule chitMod  = loadModule(kClosestHitRchitSpv,   sizeof(kClosestHitRchitSpv));
+            VkShaderModule rgenMod  = loadModule(kRaygenRgenSpv,            sizeof(kRaygenRgenSpv));
+            VkShaderModule missMod  = loadModule(kMissRmissSpv,             sizeof(kMissRmissSpv));
+            VkShaderModule sMissMod = loadModule(kShadowMissRmissSpv,       sizeof(kShadowMissRmissSpv));
+            VkShaderModule chitMod  = loadModule(kClosestHitRchitSpv,       sizeof(kClosestHitRchitSpv));
+            VkShaderModule ahitMod  = loadModule(kClosestHitAlphaRahitSpv,  sizeof(kClosestHitAlphaRahitSpv));
 
-            // Stages: 0=rgen, 1=primary miss, 2=shadow miss, 3=closest hit.
-            std::array<VkPipelineShaderStageCreateInfo, 4> stages{};
+            // Stages: 0=rgen, 1=primary miss, 2=shadow miss, 3=closest hit, 4=any-hit.
+            std::array<VkPipelineShaderStageCreateInfo, 5> stages{};
             for (auto& s : stages) {
                 s.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
                 s.pName = "main";
@@ -1207,8 +1391,12 @@ namespace threepp {
             stages[2].module = sMissMod;
             stages[3].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
             stages[3].module = chitMod;
+            stages[4].stage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+            stages[4].module = ahitMod;
 
-            // Groups: 0=rgen, 1=primary miss, 2=shadow miss, 3=hit.
+            // Groups: 0=rgen, 1=primary miss, 2=shadow miss, 3=hit (chit+ahit).
+            // The any-hit attaches to the same hit group as closest_hit so the
+            // SBT layout (one hit record) doesn't change. Phase 10: alpha-test.
             std::array<VkRayTracingShaderGroupCreateInfoKHR, 4> groups{};
             for (auto& g : groups) {
                 g.sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
@@ -1225,6 +1413,7 @@ namespace threepp {
             groups[2].generalShader = 2;
             groups[3].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
             groups[3].closestHitShader = 3;
+            groups[3].anyHitShader = 4;
 
             VkRayTracingPipelineCreateInfoKHR rci{};
             rci.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
@@ -1244,6 +1433,7 @@ namespace threepp {
             vkDestroyShaderModule(ctx->device(), missMod,  nullptr);
             vkDestroyShaderModule(ctx->device(), sMissMod, nullptr);
             vkDestroyShaderModule(ctx->device(), chitMod,  nullptr);
+            vkDestroyShaderModule(ctx->device(), ahitMod,  nullptr);
         }
 
         void createShaderBindingTable() {
@@ -1325,7 +1515,7 @@ namespace threepp {
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             ps[3].descriptorCount = totalSets * 2;// bindings 3 (geometry) + 4 (material)
             ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps[4].descriptorCount = totalSets;    // binding 6 (env equirect)
+            ps[4].descriptorCount = totalSets * (1 + kMaxMaterialTextures);// binding 6 (env) + binding 8 (material array)
 
             VkDescriptorPoolCreateInfo ci{};
             ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1447,8 +1637,22 @@ namespace threepp {
                     wAccum.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                     wAccum.pImageInfo = &accumInfo;
 
-                    std::array<VkWriteDescriptorSet, 8> writes{
-                            wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum};
+                    // Binding 8 — fill all kMaxMaterialTextures slots; unused
+                    // tail slots get the white default so the descriptor write
+                    // is always valid.
+                    std::array<VkDescriptorImageInfo, kMaxMaterialTextures> matTexInfos{};
+                    fillMaterialTextureInfos(matTexInfos);
+                    VkWriteDescriptorSet wMatTex{};
+                    wMatTex.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wMatTex.dstSet = descriptorSets[idx];
+                    wMatTex.dstBinding = 8;
+                    wMatTex.dstArrayElement = 0;
+                    wMatTex.descriptorCount = kMaxMaterialTextures;
+                    wMatTex.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wMatTex.pImageInfo = matTexInfos.data();
+
+                    std::array<VkWriteDescriptorSet, 9> writes{
+                            wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -1456,9 +1660,26 @@ namespace threepp {
             }
         }
 
-        // Rewrite bindings 0 (TLAS), 3 (geom desc), 4 (mat desc) across every
-        // descriptor set. Used by ensureSceneBuilt's rebuild path so we don't
-        // have to reset the descriptor pool when the scene changes.
+        // Populate `infos` with the current bindless material-texture array,
+        // padding any unused tail slots with the slot-0 white default.
+        template <std::size_t N>
+        void fillMaterialTextureInfos(std::array<VkDescriptorImageInfo, N>& infos) const {
+            const VkImageView fallbackView = materialTextures[0].view;
+            for (std::size_t i = 0; i < N; ++i) {
+                infos[i].sampler     = textureSampler_;
+                infos[i].imageView   = (i < materialTextures.size())
+                                               ? materialTextures[i].view
+                                               : fallbackView;
+                infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            }
+        }
+
+        // Rewrite bindings 0 (TLAS), 3 (geom desc), 4 (mat desc), 8 (material
+        // texture array) across every descriptor set. Used by ensureSceneBuilt's
+        // rebuild path so we don't have to reset the descriptor pool when the
+        // scene changes. Binding 8 is rewritten too because a rebuild may have
+        // added new material textures (kept-alive tail slots still point at
+        // the white default; harmless to redundantly re-bind).
         void rewriteSceneDescriptors() {
             const uint32_t totalSets = imageCount_ * kFramesInFlight;
 
@@ -1477,8 +1698,11 @@ namespace threepp {
             matInfo.offset = 0;
             matInfo.range = VK_WHOLE_SIZE;
 
+            std::array<VkDescriptorImageInfo, kMaxMaterialTextures> matTexInfos{};
+            fillMaterialTextureInfos(matTexInfos);
+
             std::vector<VkWriteDescriptorSet> writes;
-            writes.reserve(totalSets * 3);
+            writes.reserve(totalSets * 4);
             for (uint32_t i = 0; i < totalSets; ++i) {
                 VkWriteDescriptorSet wAS{};
                 wAS.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1506,6 +1730,16 @@ namespace threepp {
                 wMat.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                 wMat.pBufferInfo = &matInfo;
                 writes.push_back(wMat);
+
+                VkWriteDescriptorSet wMatTex{};
+                wMatTex.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                wMatTex.dstSet = descriptorSets[i];
+                wMatTex.dstBinding = 8;
+                wMatTex.dstArrayElement = 0;
+                wMatTex.descriptorCount = kMaxMaterialTextures;
+                wMatTex.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                wMatTex.pImageInfo = matTexInfos.data();
+                writes.push_back(wMatTex);
             }
             vkUpdateDescriptorSets(ctx->device(),
                                    static_cast<uint32_t>(writes.size()),

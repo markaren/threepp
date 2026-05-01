@@ -130,7 +130,9 @@ void main() {
         payload.flags      = 0u;
         payload.seed       = seed;
 
-        traceRayEXT(topAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0,
+        // No OpaqueEXT — alpha-test materials need the any-hit shader to fire.
+        // Materials with alphaCutoff <= 0 short-circuit in the any-hit shader.
+        traceRayEXT(topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
                     origin, 0.001, dir, 10000.0, 0);
 
         radiance += throughput * payload.radiance;

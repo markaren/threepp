@@ -1,0 +1,85 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// Phase 10: alpha-test any-hit. Bound to the same hit group as closest_hit,
+// fires for every triangle hit candidate before closest_hit. Materials with
+// alphaCutoff <= 0 short-circuit to accept; otherwise we sample the bound
+// albedo map at the interpolated UV and ignore the intersection when the
+// alpha falls below the cutoff. Matches three.js / WGPU PT alpha-test.
+//
+// The descriptor layout intentionally mirrors closest_hit's so the two
+// shaders share bindings 3, 4, and 8. The shadow ray (location = 1) and
+// path payload (location = 0) are NOT used here — rayPayloadInEXT is only
+// declared so the compiler matches the location 0 incoming payload.
+
+layout(buffer_reference, scalar) readonly buffer IndexBuf { uint  i[]; };
+layout(buffer_reference, scalar) readonly buffer UvBuf    { float u[]; };
+
+struct GeometryDesc {
+    uint64_t normalAddress;
+    uint64_t indexAddress;
+    uint64_t uvAddress;
+    uint     indexed;
+    uint     _pad;
+};
+
+struct MaterialDesc {
+    vec3  albedo;
+    float roughness;
+    float metalness;
+    vec3  emissive;
+    float emissiveIntensity;
+    int   albedoTexIndex;
+    float alphaCutoff;
+};
+
+const uint kMaxMaterialTextures = 64;
+
+layout(set = 0, binding = 3, scalar) readonly buffer GeomDescBuf {
+    GeometryDesc geoms[];
+};
+layout(set = 0, binding = 4, scalar) readonly buffer MatDescBuf {
+    MaterialDesc mats[];
+};
+layout(set = 0, binding = 8) uniform sampler2D albedoMaps[kMaxMaterialTextures];
+
+hitAttributeEXT vec2 attribs;
+
+void main() {
+    const MaterialDesc mdesc = mats[gl_InstanceCustomIndexEXT];
+
+    // Opaque materials: nothing to do, accept the hit by returning. Most hits
+    // hit this branch, so keep it cheap (one buffer load + compare).
+    if (mdesc.alphaCutoff <= 0.0 || mdesc.albedoTexIndex < 0) return;
+
+    const GeometryDesc gdesc = geoms[gl_InstanceCustomIndexEXT];
+    if (gdesc.uvAddress == 0ul) return;// no UV → cannot alpha-test
+
+    uvec3 idx;
+    if (gdesc.indexed != 0u) {
+        IndexBuf ib = IndexBuf(gdesc.indexAddress);
+        idx = uvec3(ib.i[gl_PrimitiveID * 3 + 0],
+                    ib.i[gl_PrimitiveID * 3 + 1],
+                    ib.i[gl_PrimitiveID * 3 + 2]);
+    } else {
+        idx = uvec3(gl_PrimitiveID * 3 + 0,
+                    gl_PrimitiveID * 3 + 1,
+                    gl_PrimitiveID * 3 + 2);
+    }
+
+    UvBuf ub = UvBuf(gdesc.uvAddress);
+    const vec2 uv0 = vec2(ub.u[idx.x * 2 + 0], ub.u[idx.x * 2 + 1]);
+    const vec2 uv1 = vec2(ub.u[idx.y * 2 + 0], ub.u[idx.y * 2 + 1]);
+    const vec2 uv2 = vec2(ub.u[idx.z * 2 + 0], ub.u[idx.z * 2 + 1]);
+    const float w = 1.0 - attribs.x - attribs.y;
+    const vec2 uv = w * uv0 + attribs.x * uv1 + attribs.y * uv2;
+
+    const int idxClamped = clamp(mdesc.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
+    const float alpha = texture(albedoMaps[idxClamped], uv).a;
+    if (alpha < mdesc.alphaCutoff) {
+        ignoreIntersectionEXT;
+    }
+}
