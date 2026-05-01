@@ -275,6 +275,7 @@ namespace threepp::vulkan {
         f12.bufferDeviceAddress = VK_TRUE;
         f12.descriptorIndexing = VK_TRUE;
         f12.runtimeDescriptorArray = VK_TRUE;
+        f12.scalarBlockLayout = VK_TRUE;// closest-hit reads GeometryDesc[] / normals via scalar layout
         f12.pNext = &f13;
 
         VkPhysicalDeviceAccelerationStructureFeaturesKHR fAS{};
@@ -292,6 +293,7 @@ namespace threepp::vulkan {
 
         VkPhysicalDeviceFeatures2 features2{};
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features2.features.shaderInt64 = VK_TRUE;// uint64_t buffer-reference addresses in rchit
         features2.pNext = rayTracingEnabled_ ? static_cast<void*>(&fAS) : static_cast<void*>(&f12);
 
         VkDeviceCreateInfo ci{};

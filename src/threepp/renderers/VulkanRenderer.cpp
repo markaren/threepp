@@ -13,6 +13,8 @@
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/core/Object3D.hpp"
+#include "threepp/materials/Material.hpp"
+#include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
@@ -105,13 +107,14 @@ namespace threepp {
         std::unique_ptr<VulkanContext> ctx;
 
         // Per-geometry BLAS + the buffers that back its build inputs. Vertex /
-        // index buffers are kept alive past the build so later phases can
-        // sample them in the closest-hit shader (normals, UVs, ...).
+        // index / normal buffers are kept alive past the build so the closest-
+        // hit shader can sample them via buffer-reference pointers.
         struct BlasRecord {
             VkAccelerationStructureKHR as = VK_NULL_HANDLE;
             Buffer storage;
             Buffer vertex;
             Buffer index;// .handle == VK_NULL_HANDLE for non-indexed geometry
+            Buffer normal;
             VkDeviceAddress address = 0;
         };
         std::unordered_map<const BufferGeometry*, std::unique_ptr<BlasRecord>> blasCache;
@@ -120,6 +123,27 @@ namespace threepp {
         VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
         Buffer tlasBuffer;
         Buffer tlasInstancesBuffer;
+
+        // Per-instance descriptor tables the closest-hit shader indexes by
+        // gl_InstanceCustomIndexEXT. Layout matches the matching shader
+        // structs in closest_hit.rchit.
+        struct GeometryDesc {
+            VkDeviceAddress normalAddress;
+            VkDeviceAddress indexAddress;
+            uint32_t indexed;
+            uint32_t _pad;
+        };
+        struct MaterialDesc {
+            float albedo[3];
+            float roughness;
+            float metalness;
+            float _pad0;
+            float _pad1;
+            float _pad2;
+        };
+        Buffer geometryDescsBuffer;
+        Buffer materialDescsBuffer;
+
         bool sceneBuilt_ = false;
 
         // Ray-tracing pipeline.
@@ -188,12 +212,15 @@ namespace threepp {
             if (tlas) ctx->rt().destroyAccelerationStructure(d, tlas, nullptr);
             destroyBuffer(ctx->allocator(), tlasBuffer);
             destroyBuffer(ctx->allocator(), tlasInstancesBuffer);
+            destroyBuffer(ctx->allocator(), geometryDescsBuffer);
+            destroyBuffer(ctx->allocator(), materialDescsBuffer);
 
             for (auto& [_, rec] : blasCache) {
                 if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
                 destroyBuffer(ctx->allocator(), rec->storage);
                 destroyBuffer(ctx->allocator(), rec->vertex);
                 destroyBuffer(ctx->allocator(), rec->index);
+                destroyBuffer(ctx->allocator(), rec->normal);
             }
             blasCache.clear();
 
@@ -262,9 +289,13 @@ namespace threepp {
         std::unique_ptr<BlasRecord> buildBlasFor(const BufferGeometry& geom) {
             auto* posAttr = geom.getAttribute<float>("position");
             if (!posAttr) return nullptr;
+            auto* normAttr = geom.getAttribute<float>("normal");
+            if (!normAttr) return nullptr;// Phase 5a requires per-vertex normals
             const auto& positions = posAttr->array();
+            const auto& normals = normAttr->array();
             const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
             if (vertexCount < 3) return nullptr;
+            if (normAttr->count() != static_cast<int>(vertexCount)) return nullptr;
 
             const auto* idxAttr = geom.getIndex();
             const bool indexed = idxAttr != nullptr;
@@ -289,6 +320,17 @@ namespace threepp {
             vmaMapMemory(ctx->allocator(), rec->vertex.alloc, &mapped);
             std::memcpy(mapped, positions.data(), vbBytes);
             vmaUnmapMemory(ctx->allocator(), rec->vertex.alloc);
+
+            const VkDeviceSize nbBytes = normals.size() * sizeof(float);
+            rec->normal = createBuffer(
+                    ctx->allocator(), ctx->device(), nbBytes,
+                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            vmaMapMemory(ctx->allocator(), rec->normal.alloc, &mapped);
+            std::memcpy(mapped, normals.data(), nbBytes);
+            vmaUnmapMemory(ctx->allocator(), rec->normal.alloc);
 
             if (indexed) {
                 const auto& indices = idxAttr->array();
@@ -457,6 +499,48 @@ namespace threepp {
             destroyBuffer(ctx->allocator(), scratch);
         }
 
+        template<typename DescT>
+        void uploadDescBuffer(Buffer& target, const std::vector<DescT>& descs) {
+            const VkDeviceSize bytes = std::max<VkDeviceSize>(
+                    descs.size() * sizeof(DescT), sizeof(DescT));
+            target = createBuffer(
+                    ctx->allocator(), ctx->device(), bytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            if (!descs.empty()) {
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), target.alloc, &mapped);
+                std::memcpy(mapped, descs.data(), descs.size() * sizeof(DescT));
+                vmaUnmapMemory(ctx->allocator(), target.alloc);
+            }
+        }
+
+        // Pull per-mesh PBR material params off the threepp Material chain.
+        // Anything not satisfying the relevant interface gets a sensible
+        // default so meshes lacking a material still render.
+        static MaterialDesc materialFromMesh(const Mesh& m) {
+            MaterialDesc d{};
+            d.albedo[0] = d.albedo[1] = d.albedo[2] = 0.8f;
+            d.roughness = 0.5f;
+            d.metalness = 0.0f;
+            auto mat = m.material();
+            if (!mat) return d;
+            if (auto* col = dynamic_cast<MaterialWithColor*>(mat.get())) {
+                d.albedo[0] = col->color.r;
+                d.albedo[1] = col->color.g;
+                d.albedo[2] = col->color.b;
+            }
+            if (auto* rg = dynamic_cast<MaterialWithRoughness*>(mat.get())) {
+                d.roughness = rg->roughness;
+            }
+            if (auto* mt = dynamic_cast<MaterialWithMetalness*>(mat.get())) {
+                d.metalness = mt->metalness;
+            }
+            return d;
+        }
+
         // Walk the scene once, build per-geometry BLASes, then a single TLAS
         // with one instance per Mesh whose transform is its world matrix.
         // Phase 4b is static: subsequent scene mutations are not re-ingested.
@@ -475,16 +559,19 @@ namespace threepp {
             });
 
             std::vector<VkAccelerationStructureInstanceKHR> instances;
+            std::vector<GeometryDesc> geomDescs;
+            std::vector<MaterialDesc> matDescs;
             instances.reserve(meshes.size());
+            geomDescs.reserve(meshes.size());
+            matDescs.reserve(meshes.size());
 
-            for (size_t i = 0; i < meshes.size(); ++i) {
-                Mesh* m = meshes[i];
+            for (Mesh* m : meshes) {
                 const BufferGeometry* geomKey = m->geometry().get();
 
                 auto it = blasCache.find(geomKey);
                 if (it == blasCache.end()) {
                     auto rec = buildBlasFor(*m->geometry());
-                    if (!rec) continue;// degenerate / empty geometry
+                    if (!rec) continue;// degenerate / unsupported geometry
                     it = blasCache.emplace(geomKey, std::move(rec)).first;
                 }
 
@@ -497,15 +584,26 @@ namespace threepp {
                         inst.transform.matrix[r][c] = e[c * 4 + r];
                     }
                 }
-                inst.instanceCustomIndex = static_cast<uint32_t>(i);
+                inst.instanceCustomIndex = static_cast<uint32_t>(geomDescs.size());
                 inst.mask = 0xFFu;
                 inst.instanceShaderBindingTableRecordOffset = 0;
                 inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
                 inst.accelerationStructureReference = it->second->address;
                 instances.push_back(inst);
+
+                GeometryDesc gdesc{};
+                gdesc.normalAddress = it->second->normal.address;
+                gdesc.indexAddress  = it->second->index.address;
+                gdesc.indexed = it->second->index.handle != VK_NULL_HANDLE ? 1u : 0u;
+                gdesc._pad = 0;
+                geomDescs.push_back(gdesc);
+
+                matDescs.push_back(materialFromMesh(*m));
             }
 
             buildTlas(instances);
+            uploadDescBuffer(geometryDescsBuffer, geomDescs);
+            uploadDescBuffer(materialDescsBuffer, matDescs);
             allocateAndUpdateDescriptors();
             sceneBuilt_ = true;
         }
@@ -536,8 +634,8 @@ namespace threepp {
         }
 
         void createRtPipeline() {
-            // Descriptor set layout: 0=TLAS, 1=storage image, 2=camera UBO.
-            std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+            // 0=TLAS, 1=storage image, 2=camera UBO, 3=geometry SSBO, 4=material SSBO.
+            std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -550,6 +648,14 @@ namespace threepp {
             bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[2].descriptorCount = 1;
             bindings[2].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            bindings[3].binding = 3;
+            bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[3].descriptorCount = 1;
+            bindings[3].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[4].binding = 4;
+            bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[4].descriptorCount = 1;
+            bindings[4].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -681,13 +787,15 @@ namespace threepp {
         void createDescriptorPool() {
             imageCount_ = static_cast<uint32_t>(ctx->swapchainImages().size());
             const uint32_t totalSets = imageCount_ * kFramesInFlight;
-            std::array<VkDescriptorPoolSize, 3> ps{};
+            std::array<VkDescriptorPoolSize, 4> ps{};
             ps[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             ps[0].descriptorCount = totalSets;
             ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             ps[1].descriptorCount = totalSets;
             ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             ps[2].descriptorCount = totalSets;
+            ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            ps[3].descriptorCount = totalSets * 2;// bindings 3 (geometry) + 4 (material)
 
             VkDescriptorPoolCreateInfo ci{};
             ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -750,7 +858,31 @@ namespace threepp {
                     wUbo.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
                     wUbo.pBufferInfo = &bufInfo;
 
-                    std::array<VkWriteDescriptorSet, 3> writes{wAS, wImg, wUbo};
+                    VkDescriptorBufferInfo geomInfo{};
+                    geomInfo.buffer = geometryDescsBuffer.handle;
+                    geomInfo.offset = 0;
+                    geomInfo.range = VK_WHOLE_SIZE;
+                    VkWriteDescriptorSet wGeom{};
+                    wGeom.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wGeom.dstSet = descriptorSets[idx];
+                    wGeom.dstBinding = 3;
+                    wGeom.descriptorCount = 1;
+                    wGeom.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    wGeom.pBufferInfo = &geomInfo;
+
+                    VkDescriptorBufferInfo matInfo{};
+                    matInfo.buffer = materialDescsBuffer.handle;
+                    matInfo.offset = 0;
+                    matInfo.range = VK_WHOLE_SIZE;
+                    VkWriteDescriptorSet wMat{};
+                    wMat.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wMat.dstSet = descriptorSets[idx];
+                    wMat.dstBinding = 4;
+                    wMat.descriptorCount = 1;
+                    wMat.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    wMat.pBufferInfo = &matInfo;
+
+                    std::array<VkWriteDescriptorSet, 5> writes{wAS, wImg, wUbo, wGeom, wMat};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
