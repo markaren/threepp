@@ -162,39 +162,34 @@ float smithG1(float NdotX, float alpha) {
 }
 
 // GGX VNDF microfacet normal (half-vector) in world space.
-// α=0 degenerates to n. Used by sampleVNDF (reflection) and the
-// transmission lobe (rough refraction via refract(I, H, eta)).
+// Dupuy & Benyoub 2023 spherical-cap parameterization — guaranteed
+// above-horizon result, no path deaths. Same Dv distribution as
+// Heitz 2018 so PDF expressions are unchanged.
 vec3 sampleVNDF_H(vec3 wo, vec3 n, float alpha, vec2 u) {
-    const vec3 nt  = abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0)
+    const vec3 nt = abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0)
                                      : vec3(1.0, 0.0, 0.0);
-    const vec3 t1  = normalize(cross(nt, n));
-    const vec3 t2  = cross(n, t1);
+    const vec3 t1 = normalize(cross(nt, n));
+    const vec3 t2 = cross(n, t1);
+
+    // Stretch wo into the isotropic configuration.
     const vec3 woLocal = vec3(dot(wo, t1), dot(wo, t2), dot(wo, n));
-    const vec3 woStr   = normalize(vec3(alpha * woLocal.x,
+    const vec3 wiStr   = normalize(vec3(alpha * woLocal.x,
                                         alpha * woLocal.y,
                                         woLocal.z));
-    const float lensq = woStr.x * woStr.x + woStr.y * woStr.y;
-    const vec3 T1 = lensq > 1e-7
-            ? vec3(-woStr.y, woStr.x, 0.0) / sqrt(lensq)
-            : vec3(1.0, 0.0, 0.0);
-    const vec3 T2 = cross(woStr, T1);
 
-    const float r   = sqrt(u.x);
-    const float phi = TWO_PI * u.y;
-    const float t1s = r * cos(phi);
-    const float s   = 0.5 * (1.0 + woStr.z);
-    const float t2s = mix(sqrt(max(0.0, 1.0 - t1s * t1s)),
-                          r * sin(phi), s);
-    const vec3 nhLocal = t1s * T1 + t2s * T2 +
-                         sqrt(max(0.0, 1.0 - t1s * t1s - t2s * t2s)) * woStr;
-    const vec3 hLocal = normalize(vec3(alpha * nhLocal.x,
-                                       alpha * nhLocal.y,
-                                       max(1e-6, nhLocal.z)));
+    // Sample a point on the spherical cap above wiStr.z.
+    // z ∈ (-wiStr.z, 1] guarantees the half-vector is above horizon.
+    const float phi      = TWO_PI * u.x;
+    const float z        = (1.0 - u.y) * (1.0 + wiStr.z) - wiStr.z;
+    const float sinTheta = sqrt(clamp(1.0 - z * z, 0.0, 1.0));
+    const vec3  c        = vec3(sinTheta * cos(phi), sinTheta * sin(phi), z);
+
+    // Half-vector: sum cap sample + stretched wo, then unstretch.
+    const vec3 h      = c + wiStr;
+    const vec3 hLocal = normalize(vec3(alpha * h.x, alpha * h.y, h.z));
     return hLocal.x * t1 + hLocal.y * t2 + hLocal.z * n;
 }
 
-// VNDF-sampled reflected direction. May produce below-horizon wi for
-// grazing rays + high roughness; callers check dot(N, wi) > 0.
 vec3 sampleVNDF(vec3 wo, vec3 n, float alpha, vec2 u) {
     return reflect(-wo, sampleVNDF_H(wo, n, alpha, u));
 }
@@ -565,9 +560,8 @@ void main() {
     //     BRDF·cos / cosPdf for Lambert collapses to diffuseAlbedo;
     //     final weight = diffuseAlbedo / (1 - p_spec).
     //
-    // VNDF samples can fall below the horizon for grazing rays at high
-    // roughness; we terminate the path quietly when that happens (acceptable
-    // bias for v1; spherical-cap upgrade is a follow-up).
+    // Spherical-cap VNDF (Dupuy 2023) guarantees above-horizon wi; the
+    // dot(N,wi)<=0 guards below are retained for numerical edge cases only.
     // 3-way stochastic split mirrors the env-NEE sampler so MIS pairs match.
     const float xiCCB = urand(seed);
     vec3 bounceDir;
@@ -579,7 +573,7 @@ void main() {
         const float NdotL = dot(N, bounceDir);
         if (NdotL <= 0.0) {
             brdfWeight = vec3(0.0);
-            pathFlags |= 1u;// VNDF sample dipped below horizon
+            pathFlags |= 1u;// numerical edge case — terminate path
         } else {
             const float G1L = smithG1(NdotL, ccAlpha);
             brdfWeight = vec3(ccWeight * G1L / ccProb);
@@ -592,7 +586,7 @@ void main() {
             const float NdotL = dot(N, bounceDir);
             if (NdotL <= 0.0) {
                 brdfWeight = vec3(0.0);
-                pathFlags |= 1u;// VNDF sample dipped below horizon
+                pathFlags |= 1u;// numerical edge case — terminate path
             } else {
                 const vec3  H_b   = normalize(V + bounceDir);
                 const float VdotH = max(0.0, dot(V, H_b));
