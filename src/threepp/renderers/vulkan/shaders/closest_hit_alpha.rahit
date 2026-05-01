@@ -27,28 +27,25 @@ struct GeometryDesc {
     uint     _pad;
 };
 
+// Must match the FULL MaterialDesc layout in closest_hit.rchit (440 bytes with
+// scalar block layout). Only alphaCutoff (offset 60) and albedoTexIndex (offset
+// 36) are accessed here; the rest is padding so mats[i] uses the correct stride.
 struct MaterialDesc {
-    vec3  albedo;
-    float roughness;
-    float metalness;
-    vec3  emissive;
-    float emissiveIntensity;
-    int   albedoTexIndex;
-    int   roughnessTexIndex;
-    int   metalnessTexIndex;
-    int   normalTexIndex;
-    vec2  normalScale;
-    float alphaCutoff;
-    float transmission;
-    float ior;
-    int   transmissionTexIndex;
-    float clearcoat;
-    float clearcoatRoughness;
-    int   clearcoatTexIndex;
-    int   clearcoatRoughnessTexIndex;
+    vec3  albedo;            // 12 (0)
+    float roughness;         //  4 (12)
+    float metalness;         //  4 (16)
+    vec3  emissive;          // 12 (20)
+    float emissiveIntensity; //  4 (32)
+    int   albedoTexIndex;    //  4 (36) ← used
+    int   roughnessTexIndex; //  4 (40)
+    int   metalnessTexIndex; //  4 (44)
+    int   normalTexIndex;    //  4 (48)
+    vec2  normalScale;       //  8 (52)
+    float alphaCutoff;       //  4 (60) ← used
+    float _pad[94];          // 376 (64..440)
 };
 
-const uint kMaxMaterialTextures = 256;
+const uint kMaxMaterialTextures = 512;
 
 layout(set = 0, binding = 3, scalar) readonly buffer GeomDescBuf {
     GeometryDesc geoms[];

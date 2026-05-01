@@ -80,7 +80,7 @@ struct MaterialDesc {
     mat3  uvTransformTransmission;  // for transmissionTexIndex
 };
 
-const uint kMaxMaterialTextures = 256;
+const uint kMaxMaterialTextures = 512;
 
 struct DirLight {
     vec3 direction;
@@ -428,6 +428,26 @@ void main() {
     // Inverse of the base-branch probability for the stochastic 3-way split
     // below; clamped to avoid blowups when ccProb → 1.
     const float invBaseProb = 1.0 / max(1.0 - ccProb, 1e-6);
+
+    // === BLEND mode (alphaCutoff == -1.0 sentinel) ===
+    // alphaMode=BLEND with opacity=1.0 uses the albedo texture's alpha channel
+    // for per-texel transparency. Stochastic: with probability (1-texAlpha) the
+    // ray passes straight through, contributing 0 radiance. Over many samples
+    // this converges to correct alpha blending. alphaCutoff=-1 is safe for the
+    // any-hit shader which already accepts all hits when alphaCutoff <= 0.
+    if (mdesc.alphaCutoff < 0.0 && mdesc.albedoTexIndex >= 0) {
+        const int bi = clamp(mdesc.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        const float texAlpha = texture(albedoMaps[bi], uvAlbedo).a;
+        if (urand(seed) >= texAlpha) {
+            payload.radiance   = vec3(0.0);
+            payload.brdfWeight = vec3(1.0);
+            payload.nextOrigin = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * (gl_HitTEXT + 0.001);
+            payload.nextDir    = gl_WorldRayDirectionEXT;
+            payload.flags      = 4u;
+            payload.seed       = seed;
+            return;
+        }
+    }
 
     // === Transmission lobe ===
     // Russian-roulette gate by mdesc.transmission: with probability `transmission`

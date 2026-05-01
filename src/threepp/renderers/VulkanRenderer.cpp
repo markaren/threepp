@@ -311,7 +311,7 @@ namespace threepp {
         // Cache key is Texture* — the same Texture across multiple meshes only
         // uploads once. All material textures share textureSampler_ (linear,
         // repeat); per-texture filter/wrap is a v2 concern.
-        static constexpr uint32_t kMaxMaterialTextures = 256;
+        static constexpr uint32_t kMaxMaterialTextures = 512;
         std::vector<Image2D> materialTextures;// owns image + view (sampler is shared)
         // Cache value pairs (weak_ptr, slot). The weak_ptr is the liveness tag —
         // when a Texture is destroyed (model unloaded), the entry is pruned in
@@ -808,7 +808,6 @@ namespace threepp {
             d.specularColor[0] = d.specularColor[1] = d.specularColor[2] = 1.0f;
             d.sheenColor[0] = d.sheenColor[1] = d.sheenColor[2] = 0.0f;
             d.sheenRoughness = 0.0f;
-            d.doubleSided = 0;
             d.occlusionTexIndex = -1;
             static constexpr float kIdent[9] = {1,0,0, 0,1,0, 0,0,1};
             std::copy(kIdent, kIdent+9, d.uvTransform);
@@ -854,6 +853,12 @@ namespace threepp {
             if (d.transmission == 0.0f && mat->transparent && mat->opacity < 1.0f) {
                 d.transmission = 1.0f - mat->opacity;
                 d.ior          = 1.0f;
+            }
+            // BLEND mode with texture alpha (alphaMode=BLEND, opacity=1.0):
+            // alphaCutoff=-1.0 sentinel triggers per-texel stochastic blend in
+            // closest_hit using the albedo texture's alpha channel.
+            if (mat->transparent && d.alphaCutoff == 0.0f && d.transmission == 0.0f) {
+                d.alphaCutoff = -1.0f;
             }
             if (auto* cc = dynamic_cast<MaterialWithClearcoat*>(mat.get())) {
                 d.clearcoat = cc->clearcoat;
