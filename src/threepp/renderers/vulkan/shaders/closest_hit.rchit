@@ -161,11 +161,10 @@ float smithG1(float NdotX, float alpha) {
            max(NdotX + sqrt(a2 + (1.0 - a2) * NdotX * NdotX), 1e-6);
 }
 
-// VNDF-sampled half-vector → reflected wi. Mirrors WgpuPathTracerShaders_Rt's
-// sampleVNDF so polished metals reflect nearby geometry the same way both
-// path tracers do. May produce below-horizon wi for grazing rays + high
-// roughness; the caller checks `dot(N, wi) > 0` and aborts the bounce.
-vec3 sampleVNDF(vec3 wo, vec3 n, float alpha, vec2 u) {
+// GGX VNDF microfacet normal (half-vector) in world space.
+// α=0 degenerates to n. Used by sampleVNDF (reflection) and the
+// transmission lobe (rough refraction via refract(I, H, eta)).
+vec3 sampleVNDF_H(vec3 wo, vec3 n, float alpha, vec2 u) {
     const vec3 nt  = abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0)
                                      : vec3(1.0, 0.0, 0.0);
     const vec3 t1  = normalize(cross(nt, n));
@@ -191,8 +190,13 @@ vec3 sampleVNDF(vec3 wo, vec3 n, float alpha, vec2 u) {
     const vec3 hLocal = normalize(vec3(alpha * nhLocal.x,
                                        alpha * nhLocal.y,
                                        max(1e-6, nhLocal.z)));
-    const vec3 hm = hLocal.x * t1 + hLocal.y * t2 + hLocal.z * n;
-    return reflect(-wo, hm);
+    return hLocal.x * t1 + hLocal.y * t2 + hLocal.z * n;
+}
+
+// VNDF-sampled reflected direction. May produce below-horizon wi for
+// grazing rays + high roughness; callers check dot(N, wi) > 0.
+vec3 sampleVNDF(vec3 wo, vec3 n, float alpha, vec2 u) {
+    return reflect(-wo, sampleVNDF_H(wo, n, alpha, u));
 }
 
 void main() {
@@ -353,8 +357,7 @@ void main() {
     // with the chosen bounce direction. Matches the WGPU PT pattern: no
     // 1/transmission inverse-prob scaling, so `transmission` doubles as a
     // stylised reflect-vs-transmit blend factor (artist control), not a physical
-    // mixing weight. Out-of-scope for v1: rough (microfacet) transmission,
-    // dispersion, Beer-Lambert volumetric attenuation, transmissionMap.
+    // mixing weight. Out-of-scope: dispersion, Beer-Lambert volumetric attenuation.
     //
     // The outgoing payload sets bit 2 ("NEE skipped at this hit") so raygen
     // doesn't half-weight the env on the next bounce-into-miss — the MIS
@@ -372,36 +375,38 @@ void main() {
         const float ior = max(mdesc.ior, 1.0);
         const float eta = isFront ? (1.0 / ior) : ior;
         const vec3  I    = gl_WorldRayDirectionEXT;
-        const float cosI = abs(dot(I, N));
 
-        // Schlick Fresnel; on exit we substitute the transmitted-side cosine
-        // (cosT) so total internal reflection raises F→1 smoothly as expected.
+        // Sample a GGX microfacet normal so roughness scatters the refracted
+        // ray. α=0 (smooth glass) degenerates to H=N (mirror). Fresnel and
+        // reflect/refract all use H rather than N.
+        const vec2  u2   = vec2(urand(seed), urand(seed));
+        const vec3  H    = sampleVNDF_H(V, N, alpha, u2);
+        const float cosH = max(dot(V, H), 0.0);
+
+        // Schlick Fresnel at the microfacet half-vector. On exit use the
+        // transmitted-side cosine so TIR raises F→1 smoothly.
         const float r0    = pow((1.0 - ior) / (1.0 + ior), 2.0);
-        const float sin2I = max(0.0, 1.0 - cosI * cosI);
+        const float sin2H = max(0.0, 1.0 - cosH * cosH);
         const float cosSchlick = isFront
-                ? cosI
-                : sqrt(max(0.0, 1.0 - ior * ior * sin2I));
+                ? cosH
+                : sqrt(max(0.0, 1.0 - ior * ior * sin2H));
         const float F = r0 + (1.0 - r0) * pow(1.0 - cosSchlick, 5.0);
 
         vec3 wDir;
         vec3 wOrigin;
         vec3 tWeight = vec3(1.0);
         if (urand(seed) < F) {
-            wDir    = reflect(I, N);
+            wDir    = reflect(I, H);
             wOrigin = hitPos + N * 1e-3;
         } else {
-            const vec3 refr = refract(I, N, eta);
+            const vec3 refr = refract(I, H, eta);
             if (dot(refr, refr) < 1e-6) {
-                // Total internal reflection — fall back to mirror reflect on
-                // the same side we came from.
-                wDir    = reflect(I, N);
+                // Total internal reflection — fall back to mirror reflect.
+                wDir    = reflect(I, H);
                 wOrigin = hitPos + N * 1e-3;
             } else {
                 wDir    = normalize(refr);
-                wOrigin = hitPos - N * 1e-3;// step into the medium we refract into
-                // Radiometric correction: refraction compresses solid angle by
-                // η², so transmitted radiance scales by 1/η². Albedo tints the
-                // refracted ray (matches three.js MeshPhysicalMaterial colour).
+                wOrigin = hitPos - N * 1e-3;
                 tWeight = albedo / (eta * eta);
             }
         }
