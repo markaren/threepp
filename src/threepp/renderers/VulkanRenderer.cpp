@@ -225,6 +225,15 @@ namespace threepp {
             float sheenColor[3];       // KHR_materials_sheen: default {0,0,0}
             float sheenRoughness;      // KHR_materials_sheen: default 0.0
             int32_t doubleSided;       // 1 = shade both faces; 0 = pass through back-face hits
+            float uvTransform[9];           // column-major Matrix3 for albedo channel
+            int32_t occlusionTexIndex;      // -1 = none; sampled .r (glTF occlusion)
+            float uvTransformNormal[9];     // for normalTexIndex
+            float uvTransformRoughMetal[9]; // for roughness + metalness textures
+            float uvTransformEmissive[9];   // for emissiveTexIndex
+            float uvTransformOcclusion[9];  // for occlusionTexIndex
+            float uvTransformClearcoat[9];  // for clearcoatTexIndex
+            float uvTransformClearcoatRough[9]; // for clearcoatRoughnessTexIndex
+            float uvTransformTransmission[9];   // for transmissionTexIndex
         };
         Buffer geometryDescsBuffer;
         Buffer materialDescsBuffer;
@@ -800,6 +809,16 @@ namespace threepp {
             d.sheenColor[0] = d.sheenColor[1] = d.sheenColor[2] = 0.0f;
             d.sheenRoughness = 0.0f;
             d.doubleSided = 0;
+            d.occlusionTexIndex = -1;
+            static constexpr float kIdent[9] = {1,0,0, 0,1,0, 0,0,1};
+            std::copy(kIdent, kIdent+9, d.uvTransform);
+            std::copy(kIdent, kIdent+9, d.uvTransformNormal);
+            std::copy(kIdent, kIdent+9, d.uvTransformRoughMetal);
+            std::copy(kIdent, kIdent+9, d.uvTransformEmissive);
+            std::copy(kIdent, kIdent+9, d.uvTransformOcclusion);
+            std::copy(kIdent, kIdent+9, d.uvTransformClearcoat);
+            std::copy(kIdent, kIdent+9, d.uvTransformClearcoatRough);
+            std::copy(kIdent, kIdent+9, d.uvTransformTransmission);
             auto mat = m.material();
             if (!mat) return d;
             d.alphaCutoff = mat->alphaTest;
@@ -869,6 +888,21 @@ namespace threepp {
                 return em->emissiveMap;
             }
             return nullptr;
+        }
+
+        static std::shared_ptr<Texture> occlusionTexOf(const Mesh& m) {
+            auto mat = m.material();
+            if (!mat) return nullptr;
+            if (auto* ao = dynamic_cast<MaterialWithAoMap*>(mat.get())) {
+                return ao->aoMap;
+            }
+            return nullptr;
+        }
+
+        static void copyTexUvTransform(float (&dst)[9], const std::shared_ptr<Texture>& tex) {
+            if (!tex) return;
+            if (tex->matrixAutoUpdate) tex->updateMatrix();
+            std::copy(tex->matrix.elements.begin(), tex->matrix.elements.end(), dst);
         }
 
         // Walk a material's chain for the albedo (`map`) texture.
@@ -1092,27 +1126,39 @@ namespace threepp {
                 MaterialDesc md = materialFromMesh(*m);
                 if (auto tex = albedoTexOf(*m)) {
                     md.albedoTexIndex = ensureMaterialTexture(tex);
+                    copyTexUvTransform(md.uvTransform, tex);
                 }
                 if (auto tex = roughnessTexOf(*m)) {
                     md.roughnessTexIndex = ensureMaterialTexture(tex);
+                    copyTexUvTransform(md.uvTransformRoughMetal, tex);
                 }
                 if (auto tex = metalnessTexOf(*m)) {
                     md.metalnessTexIndex = ensureMaterialTexture(tex);
+                    if (md.roughnessTexIndex < 0) copyTexUvTransform(md.uvTransformRoughMetal, tex);
                 }
                 if (auto tex = normalTexOf(*m)) {
                     md.normalTexIndex = ensureMaterialTexture(tex);
+                    copyTexUvTransform(md.uvTransformNormal, tex);
                 }
                 if (auto tex = transmissionTexOf(*m)) {
                     md.transmissionTexIndex = ensureMaterialTexture(tex);
+                    copyTexUvTransform(md.uvTransformTransmission, tex);
                 }
                 if (auto tex = clearcoatTexOf(*m)) {
                     md.clearcoatTexIndex = ensureMaterialTexture(tex);
+                    copyTexUvTransform(md.uvTransformClearcoat, tex);
                 }
                 if (auto tex = clearcoatRoughnessTexOf(*m)) {
                     md.clearcoatRoughnessTexIndex = ensureMaterialTexture(tex);
+                    copyTexUvTransform(md.uvTransformClearcoatRough, tex);
                 }
                 if (auto tex = emissiveTexOf(*m)) {
                     md.emissiveTexIndex = ensureMaterialTexture(tex);
+                    copyTexUvTransform(md.uvTransformEmissive, tex);
+                }
+                if (auto tex = occlusionTexOf(*m)) {
+                    md.occlusionTexIndex = ensureMaterialTexture(tex);
+                    copyTexUvTransform(md.uvTransformOcclusion, tex);
                 }
                 matDescs.push_back(md);
             }

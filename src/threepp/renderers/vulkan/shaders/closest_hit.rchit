@@ -69,6 +69,15 @@ struct MaterialDesc {
     vec3  sheenColor;         // KHR_materials_sheen: Charlie lobe color (default black = off)
     float sheenRoughness;     // KHR_materials_sheen: Charlie roughness (default 0)
     int   doubleSided;        // 1 = shade both faces; 0 = pass through back-face hits
+    mat3  uvTransform;              // albedo channel
+    int   occlusionTexIndex;        // -1 = none; sampled .r
+    mat3  uvTransformNormal;        // for normalTexIndex
+    mat3  uvTransformRoughMetal;    // for roughness + metalness
+    mat3  uvTransformEmissive;      // for emissiveTexIndex
+    mat3  uvTransformOcclusion;     // for occlusionTexIndex
+    mat3  uvTransformClearcoat;     // for clearcoatTexIndex
+    mat3  uvTransformClearcoatRough;// for clearcoatRoughnessTexIndex
+    mat3  uvTransformTransmission;  // for transmissionTexIndex
 };
 
 const uint kMaxMaterialTextures = 256;
@@ -296,13 +305,13 @@ void main() {
     // UV interpolation (only when the geometry has a uv attribute). The
     // outer fallback is vec2(0) — harmless for materials without an albedo
     // texture; the slot-0 white default would just sample (0,0) anyway.
-    vec2 uv = vec2(0.0);
+    vec2 rawUv = vec2(0.0);
     if (gdesc.uvAddress != 0ul) {
         UvBuf ub = UvBuf(gdesc.uvAddress);
         const vec2 uv0 = vec2(ub.u[idx.x * 2 + 0], ub.u[idx.x * 2 + 1]);
         const vec2 uv1 = vec2(ub.u[idx.y * 2 + 0], ub.u[idx.y * 2 + 1]);
         const vec2 uv2 = vec2(ub.u[idx.z * 2 + 0], ub.u[idx.z * 2 + 1]);
-        uv = w * uv0 + attribs.x * uv1 + attribs.y * uv2;
+        rawUv = w * uv0 + attribs.x * uv1 + attribs.y * uv2;
 
         // Tangent-space normal map (glTF convention). The TBN frame is
         // derived per-pixel from triangle position + UV deltas, so we don't
@@ -334,7 +343,7 @@ void main() {
                     const vec3 T = Tworld / Tlen;
                     const vec3 B = cross(N, T);
                     const int nidx = clamp(mdesc.normalTexIndex, 0, int(kMaxMaterialTextures) - 1);
-                    vec3 ns = texture(albedoMaps[nidx], uv).rgb * 2.0 - 1.0;
+                    vec3 ns = texture(albedoMaps[nidx], (mdesc.uvTransformNormal * vec3(rawUv, 1.0)).xy).rgb * 2.0 - 1.0;
                     ns.xy *= mdesc.normalScale;
                     ns.z = sqrt(max(0.0, 1.0 - dot(ns.xy, ns.xy)));
                     N = normalize(T * ns.x + B * ns.y + N * ns.z);
@@ -342,6 +351,15 @@ void main() {
             }
         }
     }
+    // Per-channel transformed UVs — applied to rawUv with each texture's own matrix.
+    const vec2 uvAlbedo         = (mdesc.uvTransform            * vec3(rawUv, 1.0)).xy;
+    const vec2 uvRoughMetal     = (mdesc.uvTransformRoughMetal  * vec3(rawUv, 1.0)).xy;
+    const vec2 uvEmissive       = (mdesc.uvTransformEmissive    * vec3(rawUv, 1.0)).xy;
+    const vec2 uvOcclusion      = (mdesc.uvTransformOcclusion   * vec3(rawUv, 1.0)).xy;
+    const vec2 uvClearcoat      = (mdesc.uvTransformClearcoat   * vec3(rawUv, 1.0)).xy;
+    const vec2 uvClearcoatRough = (mdesc.uvTransformClearcoatRough * vec3(rawUv, 1.0)).xy;
+    const vec2 uvTransmission   = (mdesc.uvTransformTransmission * vec3(rawUv, 1.0)).xy;
+
     const float NdotV = max(dot(N, V), 0.0);
 
     // Albedo: scalar PBR colour modulated by the bound albedo map (sRGB
@@ -349,7 +367,7 @@ void main() {
     vec3 albedoSample = vec3(1.0);
     if (mdesc.albedoTexIndex >= 0) {
         const int idxClamped = clamp(mdesc.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        albedoSample = texture(albedoMaps[idxClamped], uv).rgb;
+        albedoSample = texture(albedoMaps[idxClamped], uvAlbedo).rgb;
     }
     const vec3  albedo    = mdesc.albedo * albedoSample;
 
@@ -360,11 +378,11 @@ void main() {
     float metalness = mdesc.metalness;
     if (mdesc.roughnessTexIndex >= 0) {
         const int i = clamp(mdesc.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        roughness *= texture(albedoMaps[i], uv).g;
+        roughness *= texture(albedoMaps[i], uvRoughMetal).g;
     }
     if (mdesc.metalnessTexIndex >= 0) {
         const int i = clamp(mdesc.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        metalness *= texture(albedoMaps[i], uv).b;
+        metalness *= texture(albedoMaps[i], uvRoughMetal).b;
     }
     roughness = clamp(roughness, 0.04, 1.0);
     metalness = clamp(metalness, 0.0,  1.0);
@@ -393,11 +411,11 @@ void main() {
     float ccRough  = mdesc.clearcoatRoughness;
     if (mdesc.clearcoatTexIndex >= 0) {
         const int i = clamp(mdesc.clearcoatTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        ccScalar *= texture(albedoMaps[i], uv).r;
+        ccScalar *= texture(albedoMaps[i], uvClearcoat).r;
     }
     if (mdesc.clearcoatRoughnessTexIndex >= 0) {
         const int i = clamp(mdesc.clearcoatRoughnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        ccRough *= texture(albedoMaps[i], uv).g;
+        ccRough *= texture(albedoMaps[i], uvClearcoatRough).g;
     }
     ccScalar = clamp(ccScalar, 0.0, 1.0);
     ccRough  = clamp(ccRough,  0.04, 1.0);
@@ -430,7 +448,7 @@ void main() {
     float transmission = mdesc.transmission;
     if (mdesc.transmissionTexIndex >= 0) {
         const int i = clamp(mdesc.transmissionTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        transmission *= texture(albedoMaps[i], uv).r;
+        transmission *= texture(albedoMaps[i], uvTransmission).r;
     }
     if (transmission > 0.0 && urand(seed) < transmission) {
         const float ior = max(mdesc.ior, 1.0);
@@ -488,7 +506,7 @@ void main() {
         vec3 emissiveOut = mdesc.emissive * mdesc.emissiveIntensity;
         if (mdesc.emissiveTexIndex >= 0) {
             const int ei = clamp(mdesc.emissiveTexIndex, 0, int(kMaxMaterialTextures) - 1);
-            emissiveOut *= texture(albedoMaps[ei], uv).rgb;
+            emissiveOut *= texture(albedoMaps[ei], uvEmissive).rgb;
         }
         const float emLum0 = dot(emissiveOut, vec3(0.2126, 0.7152, 0.0722));
         if (emLum0 > 20.0) emissiveOut *= 20.0 / emLum0;
@@ -803,8 +821,13 @@ void main() {
     // have no diffuse). No PI cancel under physical lights. Scaled by the
     // base-layer fraction so a 100%-clearcoat surface only shows the cc
     // contribution (which is dir-light + env NEE only — no flat ambient
-    // term for clearcoat).
-    const vec3 ambient = albedo * (1.0 - metalness) * lights.ambient * baseScale;
+    // term for clearcoat). Occlusion map (.r channel) scales ambient.
+    float ao = 1.0;
+    if (mdesc.occlusionTexIndex >= 0) {
+        const int oi = clamp(mdesc.occlusionTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        ao = texture(albedoMaps[oi], uvOcclusion).r;
+    }
+    const vec3 ambient = albedo * (1.0 - metalness) * lights.ambient * baseScale * ao;
 
     // Phase 9 v2: probabilistic spec/diffuse lobe selection so polished
     // metals reflect nearby geometry, not just the env probe. p_spec mirrors
@@ -865,7 +888,7 @@ void main() {
     vec3 emissiveOut = mdesc.emissive * mdesc.emissiveIntensity;
     if (mdesc.emissiveTexIndex >= 0) {
         const int ei = clamp(mdesc.emissiveTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        emissiveOut *= texture(albedoMaps[ei], uv).rgb;
+        emissiveOut *= texture(albedoMaps[ei], uvEmissive).rgb;
     }
     const float emLum1 = dot(emissiveOut, vec3(0.2126, 0.7152, 0.0722));
     if (emLum1 > 20.0) emissiveOut *= 20.0 / emLum1;
