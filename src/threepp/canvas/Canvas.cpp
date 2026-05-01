@@ -210,7 +210,7 @@ struct Canvas::Impl {
         params_.graphicsApi_ = api;
 
 #ifndef __EMSCRIPTEN__
-        if (api == GraphicsAPI::WebGPU) {
+        if (api == GraphicsAPI::WebGPU || api == GraphicsAPI::Vulkan) {
             glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         } else {
             glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);

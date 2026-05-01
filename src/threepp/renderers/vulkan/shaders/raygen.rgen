@@ -1,0 +1,37 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+// Phase 4a: derive ray origin / direction from a real threepp Camera. The
+// host uploads camera.matrixWorld (viewInverse) and camera.projectionMatrixInverse
+// (projInverse). Ray construction follows the standard NV/Khronos pattern:
+// eye in view-space is (0,0,0); the pixel target in view-space comes from
+// projInverse * (ndc, 1, 1); both transform to world-space via viewInverse.
+//
+// Pixel (0,0) is top-left of the swapchain image, while NDC y = +1 is the
+// top of the projection frustum, so we flip y after the [-1,1] remap.
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D outImage;
+layout(set = 0, binding = 2) uniform CameraUbo {
+    mat4 viewInverse;
+    mat4 projInverse;
+} cam;
+
+layout(location = 0) rayPayloadEXT vec3 payload;
+
+void main() {
+    const vec2 pix = vec2(gl_LaunchIDEXT.xy) + 0.5;
+    const vec2 size = vec2(gl_LaunchSizeEXT.xy);
+    vec2 ndc = pix / size * 2.0 - 1.0;
+    ndc.y = -ndc.y;
+
+    const vec4 originWS = cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0);
+    const vec4 targetVS = cam.projInverse * vec4(ndc, 1.0, 1.0);
+    const vec3 dirVS = normalize(targetVS.xyz / targetVS.w);
+    const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
+
+    payload = vec3(0.0);
+    traceRayEXT(topAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0,
+                originWS.xyz, 0.001, dirWS, 10000.0, 0);
+    imageStore(outImage, ivec2(gl_LaunchIDEXT.xy), vec4(payload, 1.0));
+}

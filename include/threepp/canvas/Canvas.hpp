@@ -21,12 +21,14 @@ namespace threepp {
         // Hybrid renderer: WebGPU does scene rendering, OpenGL does display.
         // Selected via createRenderer; the canvas itself is initialised as
         // OpenGL by the wrapping CrossRenderer.
-        Cross
+        Cross,
+        Vulkan
     };
 
     class WgpuRenderer;
     class GLRenderer;
     class CrossRenderer;
+    class VulkanRenderer;
 
     class Canvas: public PeripheralsEventSource {
 
@@ -87,6 +89,7 @@ namespace threepp {
 
         friend class WgpuRenderer;
         friend class GLRenderer;
+        friend class VulkanRenderer;
 
         struct Impl;
         std::unique_ptr<Impl> pimpl_;

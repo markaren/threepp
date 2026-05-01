@@ -23,6 +23,18 @@
       "dependencies": [
         "physx"
       ]
+    },
+    "vulkan": {
+      "description": "Build with Vulkan backend (headers + loader + VMA + glslang). Validation layers still require a Vulkan SDK install.",
+      "dependencies": [
+        "vulkan-headers",
+        "vulkan-loader",
+        "vulkan-memory-allocator",
+        {
+          "name": "glslang",
+          "features": ["tools"]
+        }
+      ]
     }
   }
 }

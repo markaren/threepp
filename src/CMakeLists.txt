@@ -592,6 +592,19 @@ These can be installed on Ubuntu systems via sudo apt install libxinerama-dev li
     endif ()
 endif ()
 
+if (THREEPP_WITH_VULKAN)
+    list(APPEND publicHeaders
+            "threepp/renderers/VulkanRenderer.hpp"
+    )
+    list(APPEND privateHeaders
+            "threepp/renderers/vulkan/VulkanContext.hpp"
+    )
+    list(APPEND sources
+            "threepp/renderers/VulkanRenderer.cpp"
+            "threepp/renderers/vulkan/VulkanContext.cpp"
+    )
+endif ()
+
 if (THREEPP_WITH_WGPU)
     list(APPEND publicHeaders
             "threepp/renderers/wgpu/WgpuBuffer.hpp"
@@ -781,6 +794,52 @@ if (THREEPP_WITH_WGPU)
             )
         endif ()
     endif ()
+endif ()
+
+
+if (THREEPP_WITH_VULKAN)
+    find_package(Vulkan REQUIRED)
+    target_compile_definitions(threepp PRIVATE THREEPP_WITH_VULKAN=1)
+    target_link_libraries(threepp PUBLIC Vulkan::Vulkan)
+    message(STATUS "Vulkan SDK: ${Vulkan_VERSION} (${Vulkan_LIBRARY})")
+
+    # VMA single-header. SDK installs put it under <SDK>/Include/vma/, while
+    # vcpkg's vulkan-memory-allocator port installs it directly at the
+    # include root. Add the SDK's vma/ subdir if it exists so the source can
+    # use the bare include "vk_mem_alloc.h" path either way.
+    if (DEFINED ENV{VULKAN_SDK} AND EXISTS "$ENV{VULKAN_SDK}/Include/vma/vk_mem_alloc.h")
+        target_include_directories(threepp PRIVATE "$ENV{VULKAN_SDK}/Include/vma")
+        message(STATUS "VMA (SDK): $ENV{VULKAN_SDK}/Include/vma")
+    elseif (Vulkan_INCLUDE_DIR AND EXISTS "${Vulkan_INCLUDE_DIR}/vma/vk_mem_alloc.h")
+        target_include_directories(threepp PRIVATE "${Vulkan_INCLUDE_DIR}/vma")
+        message(STATUS "VMA (Vulkan_INCLUDE_DIR): ${Vulkan_INCLUDE_DIR}/vma")
+    else ()
+        # Fall back to expecting <vk_mem_alloc.h> on the default include path
+        # (vcpkg's vulkan-memory-allocator). find_path verifies it.
+        find_path(VMA_INCLUDE_DIR vk_mem_alloc.h)
+        if (NOT VMA_INCLUDE_DIR)
+            message(FATAL_ERROR
+                "Vulkan Memory Allocator (vk_mem_alloc.h) not found. "
+                "Install Vulkan SDK with the VMA component, or "
+                "`vcpkg install vulkan-memory-allocator`.")
+        endif ()
+        target_include_directories(threepp PRIVATE "${VMA_INCLUDE_DIR}")
+        message(STATUS "VMA: ${VMA_INCLUDE_DIR}")
+    endif ()
+
+    include(${PROJECT_SOURCE_DIR}/cmake/CompileVulkanShaders.cmake)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/raygen.rgen"
+        kRaygenRgenSpv
+        _rgen_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/miss.rmiss"
+        kMissRmissSpv
+        _miss_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/closest_hit.rchit"
+        kClosestHitRchitSpv
+        _chit_spv_h)
 endif ()
 
 

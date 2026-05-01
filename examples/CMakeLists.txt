@@ -25,6 +25,10 @@ if (THREEPP_WITH_WGPU)
     add_subdirectory(wgpu)
 endif ()
 
+if (THREEPP_WITH_VULKAN)
+    add_subdirectory(vulkan)
+endif ()
+
 if (THREEPP_BUILD_EXAMPLE_PROJECTS)
     add_subdirectory(projects)
 endif ()
