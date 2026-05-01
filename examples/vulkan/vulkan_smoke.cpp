@@ -1,10 +1,11 @@
-// Vulkan renderer smoke test (Phase 6a: scene-driven lights).
+// Vulkan renderer smoke test (Phase 7: env map background + mirror IBL).
 //
 // Walks a real threepp Scene, builds one BLAS per BufferGeometry, and a TLAS
 // with one instance per Mesh. Closest-hit reads per-mesh material plus the
-// scene's AmbientLight + DirectionalLight from a per-frame UBO, so the look
-// matches what the GL / WGPU rasterizers and the WGPU PT show for the same
-// scene under physical-lights conventions (no 1/PI cancel, sRGB on output).
+// scene's AmbientLight + DirectionalLight from a per-frame UBO. Phase 7 adds
+// an HDR equirect environment: the primary miss samples it for backgrounds
+// and the closest-hit fires one mirror-reflection probe ray for spec IBL,
+// so the smooth metal box now reflects the sky.
 
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
@@ -13,6 +14,7 @@
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -26,7 +28,7 @@ using namespace threepp;
 int main() {
 
     Canvas::Parameters params;
-    params.title("Vulkan smoke (Phase 6a: scene-driven lights)")
+    params.title("Vulkan smoke (Phase 7: env map + mirror IBL)")
             .size(800, 600);
 
     Canvas canvas(params);
@@ -34,6 +36,15 @@ int main() {
     VulkanRenderer renderer(canvas);
 
     auto scene = Scene::create();
+
+    // Phase 7 — load an HDR equirect and assign it to both background (so
+    // primary misses sample it) and environment (so closest-hit's mirror IBL
+    // probe sees it). Same convention as wgpu_raytracer.cpp.
+    RGBELoader rgbe;
+    auto envMap = rgbe.load(std::string(DATA_FOLDER) +
+                            "/textures/env/citrus_orchard_road_puresky_2k.hdr");
+    scene->background = envMap;
+    scene->environment = envMap;
 
     // One geometry, two instances at different world positions: confirms
     // both BLAS reuse (cache hit) and the per-instance transform path.
@@ -91,7 +102,7 @@ int main() {
         camera->updateProjectionMatrix();
     });
 
-    std::cout << "[vulkan_smoke] expecting rough red + smooth blue-metal box under scene-driven Ambient + DirectionalLight" << std::endl;
+    std::cout << "[vulkan_smoke] expecting HDR sky background + sharp env reflection on the smooth blue-metal box" << std::endl;
 
     canvas.animate([&] {
         renderer.render(*scene, *camera);

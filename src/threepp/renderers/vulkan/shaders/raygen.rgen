@@ -9,15 +9,42 @@
 //
 // Pixel (0,0) is top-left of the swapchain image, while NDC y = +1 is the
 // top of the projection frustum, so we flip y after the [-1,1] remap.
+//
+// Phase 8: progressive accumulation. Each frame we jitter the primary ray
+// inside its pixel (Halton 2,3) and average the result into a persistent
+// rgba32f accumulator (binding 7). The host resets `pc.sampleIndex` to 0
+// whenever the camera or env changes. The swapchain image (binding 1)
+// receives the running mean encoded to sRGB for display.
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D outImage;
+layout(set = 0, binding = 1, rgba8)   uniform writeonly image2D outImage;
 layout(set = 0, binding = 2) uniform CameraUbo {
     mat4 viewInverse;
     mat4 projInverse;
 } cam;
+layout(set = 0, binding = 7, rgba32f) uniform image2D accumImage;
+
+layout(push_constant) uniform Pc {
+    uint sampleIndex;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
+} pc;
 
 layout(location = 0) rayPayloadEXT vec3 payload;
+
+// Halton low-discrepancy sequence — base 2 / base 3 give the standard
+// (x, y) sub-pixel jitter pattern used by virtually every progressive PT.
+float halton(uint i, uint b) {
+    float f = 1.0;
+    float r = 0.0;
+    while (i > 0u) {
+        f /= float(b);
+        r += f * float(i % b);
+        i /= b;
+    }
+    return r;
+}
 
 // Swapchain is B8G8R8A8_UNORM but presented under SRGB_NONLINEAR — display
 // expects sRGB-encoded values. Closest-hit returns linear HDR radiance, so
@@ -31,7 +58,13 @@ vec3 linearToSRGB(vec3 x) {
 }
 
 void main() {
-    const vec2 pix = vec2(gl_LaunchIDEXT.xy) + 0.5;
+    // Halton(0) is 0, which would degenerate to no jitter. Index from 1 so
+    // even sample 0 already gets a non-trivial sub-pixel offset.
+    const uint sIdx = pc.sampleIndex + 1u;
+    const vec2 jitter = vec2(halton(sIdx, 2u) - 0.5,
+                             halton(sIdx, 3u) - 0.5);
+
+    const vec2 pix = vec2(gl_LaunchIDEXT.xy) + 0.5 + jitter;
     const vec2 size = vec2(gl_LaunchSizeEXT.xy);
     vec2 ndc = pix / size * 2.0 - 1.0;
     ndc.y = -ndc.y;
@@ -44,6 +77,18 @@ void main() {
     payload = vec3(0.0);
     traceRayEXT(topAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0,
                 originWS.xyz, 0.001, dirWS, 10000.0, 0);
-    const vec3 outColor = linearToSRGB(payload);
-    imageStore(outImage, ivec2(gl_LaunchIDEXT.xy), vec4(outColor, 1.0));
+
+    const ivec2 px = ivec2(gl_LaunchIDEXT.xy);
+    vec3 mean;
+    if (pc.sampleIndex == 0u) {
+        mean = payload;
+    } else {
+        const vec3 prev = imageLoad(accumImage, px).rgb;
+        const float n = float(pc.sampleIndex);
+        mean = (prev * n + payload) / (n + 1.0);
+    }
+    imageStore(accumImage, px, vec4(mean, 1.0));
+
+    const vec3 outColor = linearToSRGB(mean);
+    imageStore(outImage, px, vec4(outColor, 1.0));
 }

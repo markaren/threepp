@@ -48,6 +48,7 @@ layout(set = 0, binding = 5, scalar) uniform LightsUbo {
     uint     dirCount;
     DirLight dirLights[8];
 } lights;
+layout(set = 0, binding = 6) uniform sampler2D envTex;
 
 hitAttributeEXT vec2 attribs;
 layout(location = 0) rayPayloadInEXT vec3 payload;
@@ -55,6 +56,7 @@ layout(location = 0) rayPayloadInEXT vec3 payload;
 layout(location = 1) rayPayloadEXT float shadowVisibility;
 
 const float PI = 3.14159265358979;
+const float TWO_PI = 6.28318530717958;
 
 float distGGX(float NdotH, float roughness) {
     float a  = roughness * roughness;
@@ -152,5 +154,23 @@ void main() {
     // have no diffuse). No PI cancel under physical lights.
     const vec3 ambient = albedo * (1.0 - metalness) * lights.ambient;
 
-    payload = ambient + lit;
+    // Phase 7: spec IBL by sampling the equirect env map at the reflection
+    // direction directly — no occlusion trace. Visibility-tested env reflection
+    // would zero out wherever R hits another scene object, and metals (no
+    // diffuse, no ambient) would go pure black. Standard raster / WGPU PT
+    // IBL samples unconditionally; we match that here. Without a roughness-
+    // prefiltered env we fade the contribution by (1 - roughness)^2 as a
+    // cheap stand-in: perfect mirror at roughness 0, ~zero at roughness 1,
+    // so the smooth metal box reflects the sky while the rough red box and
+    // rough ground stay matte.
+    const vec3 R = reflect(-V, N);
+    const float u = 0.5 + atan(R.z, R.x) / TWO_PI;
+    const float vv = 0.5 + asin(clamp(R.y, -1.0, 1.0)) / PI;
+    const vec3 envProbe = texture(envTex, vec2(u, vv)).rgb;
+    const float oneMinusR = 1.0 - roughness;
+    const float specEnvFade = oneMinusR * oneMinusR;
+    const vec3  F_macro = fresnelSchlick(NdotV, F0);
+    const vec3  envSpec = envProbe * F_macro * specEnvFade;
+
+    payload = ambient + lit + envSpec;
 }

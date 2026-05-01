@@ -1,4 +1,4 @@
-// VulkanRenderer — Phase 6a (scene-driven lights).
+// VulkanRenderer — Phase 7 (environment map background + spec IBL).
 //
 // On the first render() call we walk the scene, build one BLAS per unique
 // BufferGeometry, then build a TLAS containing one instance per Mesh whose
@@ -7,10 +7,14 @@
 // re-ingested (a later phase will refit / rebuild on demand).
 //
 // Phase 5 added Lambert + GGX direct shading against a hardcoded sun.
-// Phase 6a swaps the hardcoded sun for actual scene lights (AmbientLight +
-// DirectionalLight) uploaded to a per-frame UBO so the closest-hit shader
-// can iterate them. Direction is taken from each DirectionalLight's
-// world position relative to its target.
+// Phase 6a swapped the hardcoded sun for actual scene lights (AmbientLight +
+// DirectionalLight) uploaded to a per-frame UBO. Phase 6b added shadow rays
+// gating each light contribution. Phase 7 honors `scene.background` /
+// `scene.environment` HDR equirects: the primary miss samples the env for
+// background, and closest-hit fires one mirror-reflection probe ray (miss
+// index 2) to add a Schlick-Fresnel-weighted spec IBL term. Diffuse IBL
+// and roughness-blurred reflections come once Phase 8 adds progressive
+// accumulation — single-sample GGX would be too noisy at 1 spp.
 
 #define VMA_IMPLEMENTATION
 #include "vulkan/VulkanContext.hpp"
@@ -26,10 +30,13 @@
 #include "threepp/math/Vector3.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/scenes/Scene.hpp"
+#include "threepp/textures/Texture.hpp"
 
 #include "threepp/renderers/vulkan/shaders/raygen.rgen.spv.h"
 #include "threepp/renderers/vulkan/shaders/miss.rmiss.spv.h"
 #include "threepp/renderers/vulkan/shaders/shadow_miss.rmiss.spv.h"
+#include "threepp/renderers/vulkan/shaders/env_miss.rmiss.spv.h"
 #include "threepp/renderers/vulkan/shaders/closest_hit.rchit.spv.h"
 
 #include <GLFW/glfw3.h>
@@ -101,6 +108,26 @@ namespace threepp {
             if (b.handle) vmaDestroyBuffer(alloc, b.handle, b.alloc);
             b = {};
         }
+
+        // Phase 7: minimal sampled-image record for the equirect environment
+        // map. Held alive for the lifetime of the renderer; recreated when the
+        // scene's env texture changes (compared by Texture::id).
+        struct Image2D {
+            VkImage       image  = VK_NULL_HANDLE;
+            VmaAllocation alloc  = VK_NULL_HANDLE;
+            VkImageView   view   = VK_NULL_HANDLE;
+            VkSampler     sampler = VK_NULL_HANDLE;
+            uint32_t      width  = 0;
+            uint32_t      height = 0;
+            VkFormat      format = VK_FORMAT_UNDEFINED;
+        };
+
+        void destroyImage2D(VmaAllocator alloc, VkDevice device, Image2D& img) {
+            if (img.sampler) vkDestroySampler(device, img.sampler, nullptr);
+            if (img.view)    vkDestroyImageView(device, img.view, nullptr);
+            if (img.image)   vmaDestroyImage(alloc, img.image, img.alloc);
+            img = {};
+        }
     }// namespace
 
     struct VulkanRenderer::Impl {
@@ -170,6 +197,25 @@ namespace threepp {
         static_assert(sizeof(GpuLightsUbo) == 16 + 24 * kMaxDirLights, "GpuLightsUbo must be tightly packed");
         std::array<Buffer, kFramesInFlight> lightsUbos{};
 
+        // Phase 7: environment equirect (HDR float) used by the primary miss
+        // for backgrounds and by closest-hit for a single mirror-reflection
+        // IBL probe. Default is a 1×1 black dummy so descriptors are always
+        // valid; replaced lazily when the scene's environment / background
+        // texture is set or changed.
+        Image2D envImage{};
+        unsigned int envTextureIdUploaded = 0xFFFFFFFFu;
+        bool envIsDefault = true;
+
+        // Phase 8: progressive accumulation. accumImage stores the running
+        // mean radiance (rgba32f, persistent in GENERAL layout). sampleIndex
+        // counts how many samples are baked into accumImage for the current
+        // camera; resets to 0 whenever the camera or env changes. Jittered
+        // sub-pixel sampling drives anti-aliasing without a separate AA pass.
+        Image2D accumImage{};
+        uint32_t sampleIndex = 0;
+        std::array<float, 32> prevCameraData{};
+        bool prevCameraValid = false;
+
         bool sceneBuilt_ = false;
 
         // Ray-tracing pipeline.
@@ -214,6 +260,8 @@ namespace threepp {
             createCommandResources();
             createCameraUbos();
             createLightsUbos();
+            createDefaultEnvImage();
+            createAccumImage();
             createRtPipeline();
             createShaderBindingTable();
             createDescriptorPool();
@@ -253,6 +301,8 @@ namespace threepp {
 
             for (auto& b : cameraUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : lightsUbos) destroyBuffer(ctx->allocator(), b);
+            destroyImage2D(ctx->allocator(), d, envImage);
+            destroyImage2D(ctx->allocator(), d, accumImage);
         }
 
         void createCommandResources() {
@@ -655,6 +705,15 @@ namespace threepp {
             std::memcpy(data + 0,  camera.matrixWorld->elements.data(),            64);
             std::memcpy(data + 16, camera.projectionMatrixInverse.elements.data(), 64);
 
+            // Phase 8: any camera movement (view or projection) invalidates
+            // the accumulator — convergence has to start over from sample 0.
+            if (!prevCameraValid ||
+                std::memcmp(data, prevCameraData.data(), sizeof(data)) != 0) {
+                sampleIndex = 0;
+                std::memcpy(prevCameraData.data(), data, sizeof(data));
+                prevCameraValid = true;
+            }
+
             void* mapped = nullptr;
             vmaMapMemory(ctx->allocator(), cameraUbos[frame].alloc, &mapped);
             std::memcpy(mapped, data, sizeof(data));
@@ -719,10 +778,264 @@ namespace threepp {
             vmaUnmapMemory(ctx->allocator(), lightsUbos[frame].alloc);
         }
 
+        // Phase 7: allocate, transition, and upload an Image2D from a tightly-
+        // packed CPU buffer. Pixel layout matches `format`. Caller owns the
+        // returned Image2D and must call destroyImage2D() on shutdown.
+        Image2D createSampledImage2D(uint32_t w, uint32_t h, VkFormat format,
+                                     const void* pixels, VkDeviceSize byteSize,
+                                     VkFilter filter, VkSamplerAddressMode addrU,
+                                     VkSamplerAddressMode addrV) {
+            Image2D out{};
+            out.width  = w;
+            out.height = h;
+            out.format = format;
+
+            VkImageCreateInfo ici{};
+            ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ici.imageType     = VK_IMAGE_TYPE_2D;
+            ici.format        = format;
+            ici.extent        = {w, h, 1};
+            ici.mipLevels     = 1;
+            ici.arrayLayers   = 1;
+            ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+            ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+            ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+            ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+            VmaAllocationCreateInfo aci{};
+            aci.usage = VMA_MEMORY_USAGE_AUTO;
+            check(vmaCreateImage(ctx->allocator(), &ici, &aci, &out.image, &out.alloc, nullptr),
+                  "vmaCreateImage(env)");
+
+            // Staging buffer with the source pixels.
+            Buffer staging = createBuffer(
+                    ctx->allocator(), ctx->device(), byteSize,
+                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), staging.alloc, &mapped);
+            std::memcpy(mapped, pixels, byteSize);
+            vmaUnmapMemory(ctx->allocator(), staging.alloc);
+
+            VkCommandBuffer cb = beginOneShot();
+
+            VkImageMemoryBarrier toDst{};
+            toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toDst.image = out.image;
+            toDst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            toDst.subresourceRange.levelCount = 1;
+            toDst.subresourceRange.layerCount = 1;
+            toDst.srcAccessMask = 0;
+            toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            vkCmdPipelineBarrier(cb,
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &toDst);
+
+            VkBufferImageCopy region{};
+            region.bufferOffset = 0;
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.layerCount = 1;
+            region.imageExtent = {w, h, 1};
+            vkCmdCopyBufferToImage(cb, staging.handle, out.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+            VkImageMemoryBarrier toRead = toDst;
+            toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cb,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                 0, 0, nullptr, 0, nullptr, 1, &toRead);
+
+            endAndSubmitOneShot(cb);
+            destroyBuffer(ctx->allocator(), staging);
+
+            VkImageViewCreateInfo vci{};
+            vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vci.image = out.image;
+            vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vci.format = format;
+            vci.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                              VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+            vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            vci.subresourceRange.levelCount = 1;
+            vci.subresourceRange.layerCount = 1;
+            check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
+                  "vkCreateImageView(env)");
+
+            VkSamplerCreateInfo sci{};
+            sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            sci.magFilter = filter;
+            sci.minFilter = filter;
+            sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            sci.addressModeU = addrU;
+            sci.addressModeV = addrV;
+            sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            sci.anisotropyEnable = VK_FALSE;
+            sci.maxAnisotropy = 1.0f;
+            sci.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+            sci.unnormalizedCoordinates = VK_FALSE;
+            sci.compareEnable = VK_FALSE;
+            sci.minLod = 0.0f;
+            sci.maxLod = 0.0f;
+            check(vkCreateSampler(ctx->device(), &sci, nullptr, &out.sampler),
+                  "vkCreateSampler(env)");
+
+            return out;
+        }
+
+        // Phase 8: storage-image (rgba32f, GENERAL layout) used as the
+        // progressive accumulation target. No staging upload — contents are
+        // initialised the first frame after sampleIndex resets to 0. The
+        // raygen reads/writes this every frame, so we transition once at
+        // creation and keep it in GENERAL forever after.
+        Image2D createStorageImage2D(uint32_t w, uint32_t h, VkFormat format) {
+            Image2D out{};
+            out.width  = w;
+            out.height = h;
+            out.format = format;
+
+            VkImageCreateInfo ici{};
+            ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ici.imageType     = VK_IMAGE_TYPE_2D;
+            ici.format        = format;
+            ici.extent        = {w, h, 1};
+            ici.mipLevels     = 1;
+            ici.arrayLayers   = 1;
+            ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+            ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+            ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT;
+            ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+            ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+            VmaAllocationCreateInfo aci{};
+            aci.usage = VMA_MEMORY_USAGE_AUTO;
+            check(vmaCreateImage(ctx->allocator(), &ici, &aci, &out.image, &out.alloc, nullptr),
+                  "vmaCreateImage(accum)");
+
+            VkCommandBuffer cb = beginOneShot();
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image = out.image;
+            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            b.subresourceRange.levelCount = 1;
+            b.subresourceRange.layerCount = 1;
+            b.srcAccessMask = 0;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            vkCmdPipelineBarrier(cb,
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+            endAndSubmitOneShot(cb);
+
+            VkImageViewCreateInfo vci{};
+            vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vci.image = out.image;
+            vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vci.format = format;
+            vci.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                              VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+            vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            vci.subresourceRange.levelCount = 1;
+            vci.subresourceRange.layerCount = 1;
+            check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
+                  "vkCreateImageView(accum)");
+
+            return out;
+        }
+
+        void createAccumImage() {
+            const VkExtent2D ext = ctx->swapchainExtent();
+            accumImage = createStorageImage2D(ext.width, ext.height,
+                                              VK_FORMAT_R32G32B32A32_SFLOAT);
+            sampleIndex = 0;
+        }
+
+        // 1×1 black RGBA32F dummy so the env-map binding is always populated.
+        // Replaced with the real scene environment by uploadEnvFromTexture()
+        // the first time render() sees a non-empty scene.environment / .background.
+        void createDefaultEnvImage() {
+            const float pixels[4] = {0.f, 0.f, 0.f, 1.f};
+            envImage = createSampledImage2D(
+                    1, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
+                    pixels, sizeof(pixels),
+                    VK_FILTER_NEAREST,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+            envIsDefault = true;
+            envTextureIdUploaded = 0xFFFFFFFFu;
+        }
+
+        // Detect the active env texture (scene.environment, falling back to
+        // scene.background.texture()) and upload it if it differs from the
+        // currently bound one. Returns true when descriptors must be rewritten.
+        bool refreshEnvTextureFromScene(Object3D& scene) {
+            auto* sc = dynamic_cast<Scene*>(&scene);
+            std::shared_ptr<Texture> tex;
+            if (sc) {
+                tex = sc->environment;
+                if (!tex && sc->background.isTexture()) {
+                    tex = sc->background.texture();
+                }
+            }
+            if (!tex) {
+                if (envIsDefault) return false;
+                vkDeviceWaitIdle(ctx->device());
+                destroyImage2D(ctx->allocator(), ctx->device(), envImage);
+                createDefaultEnvImage();
+                return true;
+            }
+            if (!envIsDefault && tex->id == envTextureIdUploaded) return false;
+
+            // Phase 7 v1 supports HDR float equirects (RGBELoader output).
+            // LDR backgrounds are not yet handled — fall through to default.
+            const auto& image = tex->image();
+            if (tex->type != Type::Float) {
+                std::cerr << "[VulkanRenderer] env texture is not float HDR; "
+                             "ignoring (Phase 7 v1 supports HDR equirect only)" << std::endl;
+                return false;
+            }
+            const auto& src = const_cast<Image&>(image).data<float>();
+            const uint32_t w = image.width;
+            const uint32_t h = image.height;
+            if (w == 0 || h == 0 || src.size() < 4u * w * h) {
+                std::cerr << "[VulkanRenderer] env texture has unexpected size; ignoring" << std::endl;
+                return false;
+            }
+
+            vkDeviceWaitIdle(ctx->device());
+            destroyImage2D(ctx->allocator(), ctx->device(), envImage);
+
+            envImage = createSampledImage2D(
+                    w, h, VK_FORMAT_R32G32B32A32_SFLOAT,
+                    src.data(), 4u * w * h * sizeof(float),
+                    VK_FILTER_LINEAR,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+            envIsDefault = false;
+            envTextureIdUploaded = tex->id;
+            return true;
+        }
+
         void createRtPipeline() {
-            // 0=TLAS, 1=storage image, 2=camera UBO, 3=geometry SSBO,
-            // 4=material SSBO, 5=lights UBO.
-            std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
+            // 0=TLAS, 1=storage image (swapchain), 2=camera UBO, 3=geometry SSBO,
+            // 4=material SSBO, 5=lights UBO, 6=env equirect (Phase 7),
+            // 7=accumulation image (Phase 8).
+            std::array<VkDescriptorSetLayoutBinding, 8> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -748,6 +1061,15 @@ namespace threepp {
             bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[5].descriptorCount = 1;
             bindings[5].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[6].binding = 6;
+            bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[6].descriptorCount = 1;
+            bindings[6].stageFlags = VK_SHADER_STAGE_MISS_BIT_KHR |
+                                     VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[7].binding = 7;
+            bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[7].descriptorCount = 1;
+            bindings[7].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -756,10 +1078,20 @@ namespace threepp {
             check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rtDsLayout),
                   "vkCreateDescriptorSetLayout(RT)");
 
+            // Phase 8: 16-byte push constant carries sampleIndex (.x). Width
+            // matches a uvec4 so future per-frame controls can land here
+            // without changing the pipeline layout.
+            VkPushConstantRange pcRange{};
+            pcRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            pcRange.offset = 0;
+            pcRange.size   = 16;
+
             VkPipelineLayoutCreateInfo plci{};
             plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
             plci.setLayoutCount = 1;
             plci.pSetLayouts = &rtDsLayout;
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges = &pcRange;
             check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &rtPipelineLayout),
                   "vkCreatePipelineLayout(RT)");
 
@@ -774,13 +1106,14 @@ namespace threepp {
                 return m;
             };
 
-            VkShaderModule rgenMod = loadModule(kRaygenRgenSpv, sizeof(kRaygenRgenSpv));
-            VkShaderModule missMod = loadModule(kMissRmissSpv, sizeof(kMissRmissSpv));
-            VkShaderModule sMissMod = loadModule(kShadowMissRmissSpv, sizeof(kShadowMissRmissSpv));
-            VkShaderModule chitMod = loadModule(kClosestHitRchitSpv, sizeof(kClosestHitRchitSpv));
+            VkShaderModule rgenMod  = loadModule(kRaygenRgenSpv,        sizeof(kRaygenRgenSpv));
+            VkShaderModule missMod  = loadModule(kMissRmissSpv,         sizeof(kMissRmissSpv));
+            VkShaderModule sMissMod = loadModule(kShadowMissRmissSpv,   sizeof(kShadowMissRmissSpv));
+            VkShaderModule eMissMod = loadModule(kEnvMissRmissSpv,      sizeof(kEnvMissRmissSpv));
+            VkShaderModule chitMod  = loadModule(kClosestHitRchitSpv,   sizeof(kClosestHitRchitSpv));
 
-            // Stages: 0=rgen, 1=primary miss, 2=shadow miss, 3=closest hit.
-            std::array<VkPipelineShaderStageCreateInfo, 4> stages{};
+            // Stages: 0=rgen, 1=primary miss, 2=shadow miss, 3=env miss, 4=closest hit.
+            std::array<VkPipelineShaderStageCreateInfo, 5> stages{};
             for (auto& s : stages) {
                 s.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
                 s.pName = "main";
@@ -791,11 +1124,13 @@ namespace threepp {
             stages[1].module = missMod;
             stages[2].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
             stages[2].module = sMissMod;
-            stages[3].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            stages[3].module = chitMod;
+            stages[3].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
+            stages[3].module = eMissMod;
+            stages[4].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            stages[4].module = chitMod;
 
-            // Groups: 0=rgen, 1=primary miss, 2=shadow miss, 3=hit.
-            std::array<VkRayTracingShaderGroupCreateInfoKHR, 4> groups{};
+            // Groups: 0=rgen, 1=primary miss, 2=shadow miss, 3=env miss, 4=hit.
+            std::array<VkRayTracingShaderGroupCreateInfoKHR, 5> groups{};
             for (auto& g : groups) {
                 g.sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
                 g.generalShader = VK_SHADER_UNUSED_KHR;
@@ -809,8 +1144,10 @@ namespace threepp {
             groups[1].generalShader = 1;
             groups[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
             groups[2].generalShader = 2;
-            groups[3].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-            groups[3].closestHitShader = 3;
+            groups[3].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+            groups[3].generalShader = 3;
+            groups[4].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+            groups[4].closestHitShader = 4;
 
             VkRayTracingPipelineCreateInfoKHR rci{};
             rci.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
@@ -826,10 +1163,11 @@ namespace threepp {
                           1, &rci, nullptr, &rtPipeline),
                   "vkCreateRayTracingPipelinesKHR");
 
-            vkDestroyShaderModule(ctx->device(), rgenMod, nullptr);
-            vkDestroyShaderModule(ctx->device(), missMod, nullptr);
+            vkDestroyShaderModule(ctx->device(), rgenMod,  nullptr);
+            vkDestroyShaderModule(ctx->device(), missMod,  nullptr);
             vkDestroyShaderModule(ctx->device(), sMissMod, nullptr);
-            vkDestroyShaderModule(ctx->device(), chitMod, nullptr);
+            vkDestroyShaderModule(ctx->device(), eMissMod, nullptr);
+            vkDestroyShaderModule(ctx->device(), chitMod,  nullptr);
         }
 
         void createShaderBindingTable() {
@@ -839,9 +1177,9 @@ namespace threepp {
             const uint32_t baseAlignment = props.shaderGroupBaseAlignment;
             const uint32_t handleSizeAligned = alignUp(handleSize, handleAlignment);
 
-            // 4 groups: rgen, primary miss, shadow miss, hit.
-            // Miss region holds 2 records (primary + shadow); rgen and hit hold 1 each.
-            constexpr uint32_t groupCount = 4;
+            // 5 groups: rgen, primary miss, shadow miss, env miss, hit.
+            // Miss region holds 3 records; rgen and hit hold 1 each.
+            constexpr uint32_t groupCount = 5;
             const uint32_t handlesDataSize = groupCount * handleSize;
             std::vector<uint8_t> handles(handlesDataSize);
             check(ctx->rt().getRayTracingShaderGroupHandles(
@@ -852,7 +1190,7 @@ namespace threepp {
             // Per-region: base aligned to shaderGroupBaseAlignment, stride = aligned
             // handle size. Region size must be a multiple of stride and >= base alignment.
             const uint32_t rgenRegionBytes = alignUp(handleSizeAligned, baseAlignment);
-            const uint32_t missRegionBytes = alignUp(2 * handleSizeAligned, baseAlignment);
+            const uint32_t missRegionBytes = alignUp(3 * handleSizeAligned, baseAlignment);
             const uint32_t hitRegionBytes  = alignUp(handleSizeAligned, baseAlignment);
             const VkDeviceSize sbtSize =
                     static_cast<VkDeviceSize>(rgenRegionBytes) +
@@ -875,14 +1213,16 @@ namespace threepp {
 
             // rgen at start of buffer.
             std::memcpy(dst, handles.data() + 0 * handleSize, handleSize);
-            // miss[0] = primary miss, miss[1] = shadow miss, packed at handleSizeAligned stride.
-            std::memcpy(dst + rgenRegionBytes,
+            // miss[0] = primary, miss[1] = shadow, miss[2] = env. Packed at handleSizeAligned stride.
+            std::memcpy(dst + rgenRegionBytes + 0 * handleSizeAligned,
                         handles.data() + 1 * handleSize, handleSize);
-            std::memcpy(dst + rgenRegionBytes + handleSizeAligned,
+            std::memcpy(dst + rgenRegionBytes + 1 * handleSizeAligned,
                         handles.data() + 2 * handleSize, handleSize);
+            std::memcpy(dst + rgenRegionBytes + 2 * handleSizeAligned,
+                        handles.data() + 3 * handleSize, handleSize);
             // hit follows the miss region.
             std::memcpy(dst + rgenRegionBytes + missRegionBytes,
-                        handles.data() + 3 * handleSize, handleSize);
+                        handles.data() + 4 * handleSize, handleSize);
             vmaUnmapMemory(ctx->allocator(), sbtBuffer.alloc);
 
             const VkDeviceAddress base = sbtBuffer.address;
@@ -901,15 +1241,17 @@ namespace threepp {
         void createDescriptorPool() {
             imageCount_ = static_cast<uint32_t>(ctx->swapchainImages().size());
             const uint32_t totalSets = imageCount_ * kFramesInFlight;
-            std::array<VkDescriptorPoolSize, 4> ps{};
+            std::array<VkDescriptorPoolSize, 5> ps{};
             ps[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             ps[0].descriptorCount = totalSets;
             ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            ps[1].descriptorCount = totalSets;
+            ps[1].descriptorCount = totalSets * 2;// bindings 1 (swapchain) + 7 (accum)
             ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             ps[2].descriptorCount = totalSets * 2;// bindings 2 (camera) + 5 (lights)
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             ps[3].descriptorCount = totalSets * 2;// bindings 3 (geometry) + 4 (material)
+            ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            ps[4].descriptorCount = totalSets;    // binding 6 (env equirect)
 
             VkDescriptorPoolCreateInfo ci{};
             ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -1008,7 +1350,31 @@ namespace threepp {
                     wLights.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
                     wLights.pBufferInfo = &lightsInfo;
 
-                    std::array<VkWriteDescriptorSet, 6> writes{wAS, wImg, wUbo, wGeom, wMat, wLights};
+                    VkDescriptorImageInfo envInfo{};
+                    envInfo.sampler     = envImage.sampler;
+                    envInfo.imageView   = envImage.view;
+                    envInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    VkWriteDescriptorSet wEnv{};
+                    wEnv.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wEnv.dstSet = descriptorSets[idx];
+                    wEnv.dstBinding = 6;
+                    wEnv.descriptorCount = 1;
+                    wEnv.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wEnv.pImageInfo = &envInfo;
+
+                    VkDescriptorImageInfo accumInfo{};
+                    accumInfo.imageView   = accumImage.view;
+                    accumInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wAccum{};
+                    wAccum.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wAccum.dstSet = descriptorSets[idx];
+                    wAccum.dstBinding = 7;
+                    wAccum.descriptorCount = 1;
+                    wAccum.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wAccum.pImageInfo = &accumInfo;
+
+                    std::array<VkWriteDescriptorSet, 8> writes{
+                            wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -1016,8 +1382,33 @@ namespace threepp {
             }
         }
 
+        // Phase 7: rewrite only binding 6 across every descriptor set (called
+        // when refreshEnvTextureFromScene replaces the env image). Avoids
+        // re-allocating the pool / sets.
+        void rewriteEnvDescriptors() {
+            const uint32_t totalSets = imageCount_ * kFramesInFlight;
+            std::vector<VkDescriptorImageInfo> infos(totalSets);
+            std::vector<VkWriteDescriptorSet>  writes(totalSets);
+            for (uint32_t i = 0; i < totalSets; ++i) {
+                infos[i].sampler     = envImage.sampler;
+                infos[i].imageView   = envImage.view;
+                infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[i].dstSet = descriptorSets[i];
+                writes[i].dstBinding = 6;
+                writes[i].descriptorCount = 1;
+                writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[i].pImageInfo = &infos[i];
+            }
+            vkUpdateDescriptorSets(ctx->device(),
+                                   static_cast<uint32_t>(writes.size()),
+                                   writes.data(), 0, nullptr);
+        }
+
         void recreateSwapchainAndDescriptors() {
             ctx->recreateSwapchain();
+            destroyImage2D(ctx->allocator(), ctx->device(), accumImage);
+            createAccumImage();// resets sampleIndex
             vkDestroyDescriptorPool(ctx->device(), descriptorPool, nullptr);
             descriptorPool = VK_NULL_HANDLE;
             descriptorSets.clear();
@@ -1050,10 +1441,29 @@ namespace threepp {
             toGeneral.subresourceRange.levelCount = 1;
             toGeneral.subresourceRange.layerCount = 1;
 
+            // Phase 8: ensure prior frame's accumulator writes are visible
+            // to this frame's read-modify-write. Layout stays in GENERAL.
+            VkImageMemoryBarrier2 accumBarrier{};
+            accumBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            accumBarrier.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+            accumBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            accumBarrier.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+            accumBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                         VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            accumBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            accumBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            accumBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            accumBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            accumBarrier.image = accumImage.image;
+            accumBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            accumBarrier.subresourceRange.levelCount = 1;
+            accumBarrier.subresourceRange.layerCount = 1;
+
+            std::array<VkImageMemoryBarrier2, 2> preBarriers{toGeneral, accumBarrier};
             VkDependencyInfo dep{};
             dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            dep.imageMemoryBarrierCount = 1;
-            dep.pImageMemoryBarriers = &toGeneral;
+            dep.imageMemoryBarrierCount = static_cast<uint32_t>(preBarriers.size());
+            dep.pImageMemoryBarriers = preBarriers.data();
             vkCmdPipelineBarrier2(cb, &dep);
 
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rtPipeline);
@@ -1061,6 +1471,12 @@ namespace threepp {
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
                                     rtPipelineLayout, 0, 1,
                                     &descriptorSets[setIdx], 0, nullptr);
+
+            // Phase 8: pass current sample index to raygen; .y/.z/.w reserved.
+            const uint32_t pc[4] = {sampleIndex, 0u, 0u, 0u};
+            vkCmdPushConstants(cb, rtPipelineLayout,
+                               VK_SHADER_STAGE_RAYGEN_BIT_KHR,
+                               0, sizeof(pc), pc);
 
             const VkExtent2D ext = ctx->swapchainExtent();
             ctx->rt().cmdTraceRays(cb, &rgenRegion, &missRegion, &hitRegion, &callRegion,
@@ -1080,6 +1496,7 @@ namespace threepp {
             toPresent.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             toPresent.subresourceRange.levelCount = 1;
             toPresent.subresourceRange.layerCount = 1;
+            dep.imageMemoryBarrierCount = 1;
             dep.pImageMemoryBarriers = &toPresent;
             vkCmdPipelineBarrier2(cb, &dep);
 
@@ -1103,6 +1520,10 @@ namespace threepp {
 
             updateCameraUbo(currentFrame, camera);
             updateLightsUbo(currentFrame, scene);
+            if (refreshEnvTextureFromScene(scene)) {
+                rewriteEnvDescriptors();
+                sampleIndex = 0;// env contributes to color; restart accumulation
+            }
 
             vkResetFences(d, 1, &inFlight[currentFrame]);
             vkResetCommandBuffer(cmdBuffers[currentFrame], 0);
@@ -1149,6 +1570,11 @@ namespace threepp {
             } else if (pr != VK_SUCCESS) {
                 check(pr, "vkQueuePresentKHR");
             }
+
+            // Phase 8: cap to keep 1/(N+1) blend in float precision and avoid
+            // overflow in the (prev*N + curr) scaling. ~65k samples is well
+            // beyond visual convergence for direct lighting.
+            if (sampleIndex < 65535u) ++sampleIndex;
 
             currentFrame = (currentFrame + 1) % kFramesInFlight;
         }
