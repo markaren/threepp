@@ -148,6 +148,13 @@ namespace threepp {
         Vector4 scissor;
         bool scissorTest = false;
 
+        // Mirrored from VulkanRenderer (Renderer base) at the start of each
+        // render() so the renderFrame path can read them without a pointer back
+        // into the public class. Synced unconditionally — toggling these never
+        // resets the accumulator (tone mapping is display-only).
+        ToneMapping toneMapping_ = ToneMapping::None;
+        float       toneMappingExposure_ = 1.f;
+
         std::unique_ptr<VulkanContext> ctx;
 
         // Per-geometry BLAS + the buffers that back its build inputs. Vertex /
@@ -2207,10 +2214,18 @@ namespace threepp {
                                     rtPipelineLayout, 0, 1,
                                     &descriptorSets[setIdx], 0, nullptr);
 
-            // Phase 8/11: .x = sampleIndex (raygen), .y = PMREM mip count
-            // (closest_hit), .z/.w reserved. Pushed to both stages so the
-            // single 16-byte block stays consistent across the pipeline.
-            const uint32_t pc[4] = {sampleIndex, envImage.mipLevels, 0u, 0u};
+            // Phase 8/11/12: .x = sampleIndex (raygen), .y = PMREM mip count
+            // (closest_hit), .z = ToneMapping enum, .w = exposure as float bits.
+            // Pushed to both stages so the single 16-byte block stays consistent.
+            const float exposure = toneMappingExposure_;
+            uint32_t exposureBits;
+            std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
+            const uint32_t pc[4] = {
+                    sampleIndex,
+                    envImage.mipLevels,
+                    static_cast<uint32_t>(toneMapping_),
+                    exposureBits,
+            };
             vkCmdPushConstants(cb, rtPipelineLayout,
                                VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                        VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
@@ -2330,6 +2345,11 @@ namespace threepp {
         if (cur.width() != pimpl_->size.width() || cur.height() != pimpl_->size.height()) {
             pimpl_->needsResize = true;
         }
+        // Mirror Renderer-base tone-mapping state into the Impl so renderFrame
+        // can push it as a single 16-byte block. Done every render() so users
+        // can flip toneMapping / toneMappingExposure freely between frames.
+        pimpl_->toneMapping_         = toneMapping;
+        pimpl_->toneMappingExposure_ = toneMappingExposure;
         pimpl_->ensureSceneBuilt(scene);
         pimpl_->renderFrame(scene, camera);
     }

@@ -26,6 +26,7 @@ int main() {
 
     Canvas canvas(params);
     VulkanRenderer renderer(canvas);
+    renderer.toneMapping = ToneMapping::ACESFilmic;
 
     auto scene = Scene::create();
 
@@ -127,7 +128,8 @@ int main() {
     auto carBody = modelLoader.load(
             std::string(DATA_FOLDER) + "/models/gltf/2015_land-rover_range_rover_evoque_coupe/scene.gltf");
     carBody->scale.set(100.f, 100.f, 100.f);
-    carBody->position.z = 10;
+    carBody->position.x = 5;
+    carBody->position.y = -1.5f;
     scene->add(carBody);
 
     auto sun = DirectionalLight::create(Color(0xffffff), 3.0f);
