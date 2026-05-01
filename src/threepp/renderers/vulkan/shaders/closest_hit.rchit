@@ -57,6 +57,10 @@ struct MaterialDesc {
     float transmission;     // 0..1 probability the bounce takes the transmission lobe
     float ior;              // index of refraction (only consulted when transmission > 0)
     int   transmissionTexIndex;// -1 == no transmission map; sampled .r (glTF KHR_materials_transmission)
+    float clearcoat;        // 0..1 layer intensity; ccF0 fixed at 0.04 (dielectric IOR ~1.5)
+    float clearcoatRoughness;// 0..1; clamped in shader to keep VNDF non-singular
+    int   clearcoatTexIndex;          // -1 == none; sampled .r (glTF KHR_materials_clearcoat)
+    int   clearcoatRoughnessTexIndex; // -1 == none; sampled .g
 };
 
 const uint kMaxMaterialTextures = 256;
@@ -311,6 +315,37 @@ void main() {
     const float pSpec = mix(0.5, 0.98, metalness);
     const float alpha = roughness * roughness;
 
+    // === Clearcoat layer params ===
+    // ccF0 fixed at 0.04 (dielectric IOR ≈ 1.5 — three.js / WGPU PT convention).
+    // ccWeight = clearcoat·F_cc(N·V) both attenuates the base layer (energy
+    // conservation: base receives 1−ccWeight) and weights the clearcoat GGX
+    // lobe in eval/sampling. ccProb floors the cc sampling rate at 0.15·cc so
+    // face-on viewing (where ccFresnel ≈ 0.04) doesn't starve the cc lobe of
+    // samples. Mutually exclusive with transmission via the early-return below.
+    // Out of scope for v1: separate clearcoatNormalMap — clearcoat uses the
+    // shading normal (post base normal-map), matching three.js raster.
+    float ccScalar = mdesc.clearcoat;
+    float ccRough  = mdesc.clearcoatRoughness;
+    if (mdesc.clearcoatTexIndex >= 0) {
+        const int i = clamp(mdesc.clearcoatTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        ccScalar *= texture(albedoMaps[i], uv).r;
+    }
+    if (mdesc.clearcoatRoughnessTexIndex >= 0) {
+        const int i = clamp(mdesc.clearcoatRoughnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        ccRough *= texture(albedoMaps[i], uv).g;
+    }
+    ccScalar = clamp(ccScalar, 0.0, 1.0);
+    ccRough  = clamp(ccRough,  0.04, 1.0);
+    const float ccF0       = 0.04;
+    const float ccFresnel  = ccF0 + (1.0 - ccF0) * pow(1.0 - NdotV, 5.0);
+    const float ccWeight   = ccScalar * ccFresnel;
+    const float ccAlpha    = ccRough * ccRough;
+    const float ccProb     = max(ccWeight, 0.15 * ccScalar);
+    const float baseScale  = 1.0 - ccWeight;
+    // Inverse of the base-branch probability for the stochastic 3-way split
+    // below; clamped to avoid blowups when ccProb → 1.
+    const float invBaseProb = 1.0 / max(1.0 - ccProb, 1e-6);
+
     // === Transmission lobe ===
     // Russian-roulette gate by mdesc.transmission: with probability `transmission`
     // this hit acts as a glass interface (Schlick-Fresnel weighted reflect /
@@ -415,7 +450,20 @@ void main() {
         const vec3  kd       = (vec3(1.0) - F) * (1.0 - metalness);
         const vec3  diffuse  = kd * albedo / PI;
 
-        lit += (diffuse + specular) * NdotL * lights.dirLights[i].color;
+        // Layered material: base lobes carry (1−ccWeight) of the energy and
+        // the clearcoat lobe contributes its own GGX. Single-scatter Schlick-
+        // Smith G is used for the cc lobe to stay consistent with the rest of
+        // the dir-light eval — the bounce/NEE paths use analytic Smith G1
+        // (matching VNDF's PDF), so dir-light eval is a stylistic shortcut.
+        vec3 perLight = (diffuse + specular) * baseScale;
+        if (ccWeight > 0.0) {
+            const float k_cc    = (ccRough + 1.0) * (ccRough + 1.0) / 8.0;
+            const float D_cc    = distGGX(NdotH, ccRough);
+            const float G_cc    = geomSmithG1(NdotV, k_cc) * geomSmithG1(NdotL, k_cc);
+            const float spec_cc = (D_cc * G_cc) / max(4.0 * NdotV * NdotL, 1e-4);
+            perLight += vec3(spec_cc * ccWeight);
+        }
+        lit += perLight * NdotL * lights.dirLights[i].color;
     }
 
     // === Env NEE + MIS ===
@@ -437,29 +485,47 @@ void main() {
     // CDF NEE upgrade lands; that path will pass bsdfPdf in the payload
     // so miss can compute pdf_env_at_dir and apply pdf-based weights.
     {
-        const float xiN  = urand(seed);
+        // 3-way stochastic lobe selection: clearcoat with prob ccProb, then
+        // base spec / base diffuse with the existing pSpec split inside the
+        // remaining (1−ccProb). The throughput multipliers absorb both the
+        // branch-selection inverse and the (1−ccWeight) energy split so the
+        // estimator stays unbiased and matches dir-light's analytic eval.
+        const float xiCC = urand(seed);
         vec3 nDir;
         vec3 nWeight;
         bool nValid = true;
-        if (xiN < pSpec) {
+        if (ccProb > 0.0 && xiCC < ccProb) {
             const vec2 u2 = vec2(urand(seed), urand(seed));
-            nDir = sampleVNDF(V, N, alpha, u2);
+            nDir = sampleVNDF(V, N, ccAlpha, u2);
             const float NdotL = dot(N, nDir);
             if (NdotL <= 0.0) {
                 nValid = false;
             } else {
-                const vec3  H_n   = normalize(V + nDir);
-                const float VdotH = max(0.0, dot(V, H_n));
-                const vec3  F_n   = fresnelSchlick(VdotH, F0);
-                const float G1L   = smithG1(NdotL, alpha);
-                nWeight = F_n * G1L / pSpec;
+                const float G1L = smithG1(NdotL, ccAlpha);
+                nWeight = vec3(ccWeight * G1L / ccProb);
             }
         } else {
-            const vec2 u2 = vec2(urand(seed), urand(seed));
-            const vec3 localDir = cosineHemisphere(u2);
-            const mat3 tbn = makeTBN(N);
-            nDir = normalize(tbn * localDir);
-            nWeight = albedo * (1.0 - metalness) / (1.0 - pSpec);
+            const float xiN = urand(seed);
+            if (xiN < pSpec) {
+                const vec2 u2 = vec2(urand(seed), urand(seed));
+                nDir = sampleVNDF(V, N, alpha, u2);
+                const float NdotL = dot(N, nDir);
+                if (NdotL <= 0.0) {
+                    nValid = false;
+                } else {
+                    const vec3  H_n   = normalize(V + nDir);
+                    const float VdotH = max(0.0, dot(V, H_n));
+                    const vec3  F_n   = fresnelSchlick(VdotH, F0);
+                    const float G1L   = smithG1(NdotL, alpha);
+                    nWeight = F_n * G1L * baseScale * invBaseProb / pSpec;
+                }
+            } else {
+                const vec2 u2 = vec2(urand(seed), urand(seed));
+                const vec3 localDir = cosineHemisphere(u2);
+                const mat3 tbn = makeTBN(N);
+                nDir = normalize(tbn * localDir);
+                nWeight = albedo * (1.0 - metalness) * baseScale * invBaseProb / (1.0 - pSpec);
+            }
         }
         if (nValid) {
             shadowVisibility = 0.0;
@@ -475,8 +541,11 @@ void main() {
     }
 
     // Flat ambient irradiance — only the diffuse lobe receives it (metals
-    // have no diffuse). No PI cancel under physical lights.
-    const vec3 ambient = albedo * (1.0 - metalness) * lights.ambient;
+    // have no diffuse). No PI cancel under physical lights. Scaled by the
+    // base-layer fraction so a 100%-clearcoat surface only shows the cc
+    // contribution (which is dir-light + env NEE only — no flat ambient
+    // term for clearcoat).
+    const vec3 ambient = albedo * (1.0 - metalness) * lights.ambient * baseScale;
 
     // Phase 9 v2: probabilistic spec/diffuse lobe selection so polished
     // metals reflect nearby geometry, not just the env probe. p_spec mirrors
@@ -494,30 +563,45 @@ void main() {
     // VNDF samples can fall below the horizon for grazing rays at high
     // roughness; we terminate the path quietly when that happens (acceptable
     // bias for v1; spherical-cap upgrade is a follow-up).
-    const float xi = urand(seed);
+    // 3-way stochastic split mirrors the env-NEE sampler so MIS pairs match.
+    const float xiCCB = urand(seed);
     vec3 bounceDir;
     vec3 brdfWeight;
     uint pathFlags = 0u;
-    if (xi < pSpec) {
+    if (ccProb > 0.0 && xiCCB < ccProb) {
         const vec2 u2 = vec2(urand(seed), urand(seed));
-        bounceDir = sampleVNDF(V, N, alpha, u2);
+        bounceDir = sampleVNDF(V, N, ccAlpha, u2);
         const float NdotL = dot(N, bounceDir);
         if (NdotL <= 0.0) {
             brdfWeight = vec3(0.0);
-            pathFlags |= 1u;// kill path — VNDF sample dipped below horizon
+            pathFlags |= 1u;// VNDF sample dipped below horizon
         } else {
-            const vec3  H_b   = normalize(V + bounceDir);
-            const float VdotH = max(0.0, dot(V, H_b));
-            const vec3  F_b   = fresnelSchlick(VdotH, F0);
-            const float G1L   = smithG1(NdotL, alpha);
-            brdfWeight = F_b * G1L / pSpec;
+            const float G1L = smithG1(NdotL, ccAlpha);
+            brdfWeight = vec3(ccWeight * G1L / ccProb);
         }
     } else {
-        const vec2 u2 = vec2(urand(seed), urand(seed));
-        const vec3 localDir = cosineHemisphere(u2);
-        const mat3 tbn = makeTBN(N);
-        bounceDir = normalize(tbn * localDir);
-        brdfWeight = albedo * (1.0 - metalness) / (1.0 - pSpec);
+        const float xi = urand(seed);
+        if (xi < pSpec) {
+            const vec2 u2 = vec2(urand(seed), urand(seed));
+            bounceDir = sampleVNDF(V, N, alpha, u2);
+            const float NdotL = dot(N, bounceDir);
+            if (NdotL <= 0.0) {
+                brdfWeight = vec3(0.0);
+                pathFlags |= 1u;// VNDF sample dipped below horizon
+            } else {
+                const vec3  H_b   = normalize(V + bounceDir);
+                const float VdotH = max(0.0, dot(V, H_b));
+                const vec3  F_b   = fresnelSchlick(VdotH, F0);
+                const float G1L   = smithG1(NdotL, alpha);
+                brdfWeight = F_b * G1L * baseScale * invBaseProb / pSpec;
+            }
+        } else {
+            const vec2 u2 = vec2(urand(seed), urand(seed));
+            const vec3 localDir = cosineHemisphere(u2);
+            const mat3 tbn = makeTBN(N);
+            bounceDir = normalize(tbn * localDir);
+            brdfWeight = albedo * (1.0 - metalness) * baseScale * invBaseProb / (1.0 - pSpec);
+        }
     }
 
     const vec3 emissiveOut = mdesc.emissive * mdesc.emissiveIntensity;

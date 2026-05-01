@@ -209,6 +209,10 @@ namespace threepp {
             float transmission;       // 0..1 probability the bounce takes the transmission lobe (glass)
             float ior;                // index of refraction; 1.5 default for glass
             int32_t transmissionTexIndex;// -1 == none; sampled .r (glTF KHR_materials_transmission)
+            float clearcoat;          // 0..1 layer intensity; ccF0 fixed at 0.04 (dielectric IOR ~1.5)
+            float clearcoatRoughness; // 0..1; clamped to [0.04, 1] in shader to keep VNDF non-singular
+            int32_t clearcoatTexIndex;          // -1 == none; sampled .r (glTF KHR_materials_clearcoat)
+            int32_t clearcoatRoughnessTexIndex; // -1 == none; sampled .g
         };
         Buffer geometryDescsBuffer;
         Buffer materialDescsBuffer;
@@ -286,13 +290,15 @@ namespace threepp {
             const void* mesh;
             const void* geom;
             const void* mat;
-            const void* albedoTex;     // covers map swap on the same material
-            const void* roughnessTex;  // covers roughnessMap swap
-            const void* metalnessTex;  // covers metalnessMap swap
-            const void* normalTex;     // covers normalMap swap
-            const void* transmissionTex;// covers transmissionMap swap
+            const void* albedoTex;            // covers map swap on the same material
+            const void* roughnessTex;         // covers roughnessMap swap
+            const void* metalnessTex;         // covers metalnessMap swap
+            const void* normalTex;            // covers normalMap swap
+            const void* transmissionTex;      // covers transmissionMap swap
+            const void* clearcoatTex;         // covers clearcoatMap swap
+            const void* clearcoatRoughnessTex;// covers clearcoatRoughnessMap swap
             std::array<float, 16> matrix{};
-            std::array<float, 13> pbr{};// + normalScale.xy + transmission + ior
+            std::array<float, 15> pbr{};// + normalScale.xy + transmission/ior + clearcoat/roughness
         };
         std::vector<MeshFingerprint> prevSceneFingerprint;
         bool sceneBuilt_ = false;
@@ -738,6 +744,10 @@ namespace threepp {
             d.transmission = 0.0f;// opaque by default
             d.ior          = 1.5f;// glass-typical default; only consulted when transmission > 0
             d.transmissionTexIndex = -1;
+            d.clearcoat = 0.0f;// no coat by default; lobe is skipped when clearcoat == 0
+            d.clearcoatRoughness = 0.0f;
+            d.clearcoatTexIndex = -1;
+            d.clearcoatRoughnessTexIndex = -1;
             auto mat = m.material();
             if (!mat) return d;
             d.alphaCutoff = mat->alphaTest;
@@ -765,6 +775,10 @@ namespace threepp {
             if (auto* tr = dynamic_cast<MaterialWithTransmission*>(mat.get())) {
                 d.transmission = tr->transmission;
                 d.ior          = std::max(1.0f, tr->ior);
+            }
+            if (auto* cc = dynamic_cast<MaterialWithClearcoat*>(mat.get())) {
+                d.clearcoat = cc->clearcoat;
+                d.clearcoatRoughness = cc->clearcoatRoughness;
             }
             return d;
         }
@@ -816,6 +830,24 @@ namespace threepp {
             return nullptr;
         }
 
+        static std::shared_ptr<Texture> clearcoatTexOf(const Mesh& m) {
+            auto mat = m.material();
+            if (!mat) return nullptr;
+            if (auto* cc = dynamic_cast<MaterialWithClearcoat*>(mat.get())) {
+                return cc->clearcoatMap;
+            }
+            return nullptr;
+        }
+
+        static std::shared_ptr<Texture> clearcoatRoughnessTexOf(const Mesh& m) {
+            auto mat = m.material();
+            if (!mat) return nullptr;
+            if (auto* cc = dynamic_cast<MaterialWithClearcoat*>(mat.get())) {
+                return cc->clearcoatRoughnessMap;
+            }
+            return nullptr;
+        }
+
         // Walk the scene each frame, fingerprint the meshes, and rebuild the
         // TLAS + per-instance desc tables when anything that affects ray
         // tracing changes (mesh added/removed, transform animated, material
@@ -846,11 +878,13 @@ namespace threepp {
                 fp.mesh = m;
                 fp.geom = m->geometry().get();
                 fp.mat  = m->material().get();
-                fp.albedoTex       = albedoTexOf(*m).get();
-                fp.roughnessTex    = roughnessTexOf(*m).get();
-                fp.metalnessTex    = metalnessTexOf(*m).get();
-                fp.normalTex       = normalTexOf(*m).get();
-                fp.transmissionTex = transmissionTexOf(*m).get();
+                fp.albedoTex             = albedoTexOf(*m).get();
+                fp.roughnessTex          = roughnessTexOf(*m).get();
+                fp.metalnessTex          = metalnessTexOf(*m).get();
+                fp.normalTex             = normalTexOf(*m).get();
+                fp.transmissionTex       = transmissionTexOf(*m).get();
+                fp.clearcoatTex          = clearcoatTexOf(*m).get();
+                fp.clearcoatRoughnessTex = clearcoatRoughnessTexOf(*m).get();
                 const auto& e = m->matrixWorld->elements;
                 for (size_t i = 0; i < 16; ++i) fp.matrix[i] = e[i];
                 const MaterialDesc md = materialFromMesh(*m);
@@ -859,7 +893,8 @@ namespace threepp {
                           md.emissive[0], md.emissive[1], md.emissive[2],
                           md.emissiveIntensity,
                           md.normalScale[0], md.normalScale[1],
-                          md.transmission, md.ior};
+                          md.transmission, md.ior,
+                          md.clearcoat, md.clearcoatRoughness};
                 currFp.push_back(fp);
             }
 
@@ -980,6 +1015,12 @@ namespace threepp {
                 }
                 if (auto tex = transmissionTexOf(*m)) {
                     md.transmissionTexIndex = ensureMaterialTexture(tex);
+                }
+                if (auto tex = clearcoatTexOf(*m)) {
+                    md.clearcoatTexIndex = ensureMaterialTexture(tex);
+                }
+                if (auto tex = clearcoatRoughnessTexOf(*m)) {
+                    md.clearcoatRoughnessTexIndex = ensureMaterialTexture(tex);
                 }
                 matDescs.push_back(md);
             }

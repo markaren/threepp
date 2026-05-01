@@ -42,6 +42,10 @@ struct MaterialDesc {
     float transmission;
     float ior;
     int   transmissionTexIndex;
+    float clearcoat;
+    float clearcoatRoughness;
+    int   clearcoatTexIndex;
+    int   clearcoatRoughnessTexIndex;
 };
 
 const uint kMaxMaterialTextures = 256;
