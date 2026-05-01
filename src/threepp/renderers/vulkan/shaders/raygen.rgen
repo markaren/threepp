@@ -54,7 +54,8 @@ layout(push_constant) uniform Pc {
 
 layout(location = 0) rayPayloadEXT Payload payload;
 
-const int kMaxBounces = 3;// primary + 2 indirect bounces
+const int kMaxBounces = 3; // max real scatter events (opaque shade + indirect)
+const int kMaxSteps   = 16;// hard cap including glass traversal (each glass layer = 2 steps)
 
 // Halton low-discrepancy sequence — base 2 / base 3 give the standard
 // (x, y) sub-pixel jitter pattern used by virtually every progressive PT.
@@ -160,7 +161,12 @@ void main() {
     // clear this so the env is read at full strength on the bounce-into-miss.
     bool prevRanNEE = false;
 
-    for (int b = 0; b < kMaxBounces; ++b) {
+    // scatter counts real shade events (non-transmission). Transmission hops
+    // (glass enter/exit, single-sided pass-through — flags bit 2) are free and
+    // don't consume the scatter budget, so multi-layer glass doesn't exhaust
+    // the bounce limit before reaching the surface behind it.
+    int scatter = 0;
+    for (int step = 0; step < kMaxSteps; ++step) {
         payload.radiance   = vec3(0.0);
         payload.brdfWeight = vec3(0.0);
         payload.nextOrigin = vec3(0.0);
@@ -179,8 +185,9 @@ void main() {
 
         vec3 hitRadiance = payload.radiance;
         // Clamp indirect env hits (bounce into sky/sun disk) to prevent metallic
-        // surfaces from going white. Primary env (b==0) is the background — unclamped.
-        if (b > 0 && (payload.flags & 1u) != 0u) {
+        // surfaces from going white. Env hits before any real scatter (scatter==0)
+        // are the background seen through glass — leave unclamped.
+        if (scatter > 0 && (payload.flags & 1u) != 0u) {
             const float lum = dot(hitRadiance, vec3(0.2126, 0.7152, 0.0722));
             if (lum > 20.0) hitRadiance *= 20.0 / lum;
         }
@@ -195,18 +202,26 @@ void main() {
         // Carry that into the next iteration's MIS gate.
         prevRanNEE = (payload.flags & 4u) == 0u;
 
-        // Russian Roulette: after the first indirect bounce, terminate paths
-        // stochastically based on remaining throughput. Survivors are scaled
-        // by 1/p_continue so the estimator stays unbiased. The 0.05 floor
-        // keeps the variance from the inverse-prob scale-up bounded; the
-        // 0.95 ceiling makes sure RR can still kill bright-but-fully-absorbed
-        // tail paths.
-        if (b >= 1) {
-            const float p = clamp(max(max(throughput.r, throughput.g),
-                                      throughput.b),
-                                  0.05, 0.95);
-            if (urand(seed) > p) break;
-            throughput /= p;
+        // Transmission/pass-through events (glass refraction, single-sided
+        // back-face, BLEND pass-through) do not count as scatter bounces.
+        const bool isPassThrough = (payload.flags & 4u) != 0u;
+        if (!isPassThrough) {
+            ++scatter;
+            if (scatter >= kMaxBounces) break;
+
+            // Russian Roulette: after the first indirect scatter, terminate paths
+            // stochastically based on remaining throughput. Survivors are scaled
+            // by 1/p_continue so the estimator stays unbiased. The 0.05 floor
+            // keeps the variance from the inverse-prob scale-up bounded; the
+            // 0.95 ceiling makes sure RR can still kill bright-but-fully-absorbed
+            // tail paths.
+            if (scatter >= 2) {
+                const float p = clamp(max(max(throughput.r, throughput.g),
+                                          throughput.b),
+                                      0.05, 0.95);
+                if (urand(seed) > p) break;
+                throughput /= p;
+            }
         }
 
         origin = payload.nextOrigin;

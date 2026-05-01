@@ -506,14 +506,21 @@ void main() {
             } else {
                 wDir    = normalize(refr);
                 wOrigin = hitPos - N * 1e-3;
-                // Base color tints transmitted light. Dark-albedo assets (clear
-                // glTF glass, BLEND-mode pass-throughs) use black baseColor by
-                // convention — smoothstep blends toward vec3(1) so the path
-                // transmits rather than dying. Matches WGPU PT + three.js raster.
-                const float cosOut   = abs(dot(wDir, H));
-                const float G1out    = smithG1(cosOut, alpha);
-                const float albedoLum = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
-                const vec3 tintBase  = mix(vec3(1.0), albedo, smoothstep(0.0, 0.1, albedoLum));
+                const float cosOut = abs(dot(wDir, H));
+                const float G1out  = smithG1(cosOut, alpha);
+                vec3 tintBase;
+                if (mdesc.ior <= 1.01) {
+                    // BLEND-mode pass-through (ior≈1): compat shim for assets that
+                    // use black baseColor to mean "clear glass".
+                    const float albedoLum = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
+                    tintBase = mix(vec3(1.0), albedo, smoothstep(0.0, 0.1, albedoLum));
+                } else {
+                    // Physical KHR_materials_transmission: tint at every hit so
+                    // both faces of a glass pane contribute (closed meshes apply
+                    // albedo twice giving albedo² — slightly conservative but
+                    // consistent from any viewing angle).
+                    tintBase = albedo;
+                }
                 vec3 glassTint = tintBase * G1out;
                 if (mdesc.attenuationDistance > 0.0) {
                     glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
