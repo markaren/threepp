@@ -36,14 +36,18 @@ vec3 sampleEquirect(vec3 dir) {
 }
 
 void main() {
-    // Bit 1 of flags is set by raygen on non-primary rays. Env is already
-    // accounted for at the previous shade event via closest_hit's NEE, so
-    // we return zero to avoid double-counting. Primary miss (bit 1 unset)
-    // still samples the env so the background is visible.
+    // Primary miss (bit 1 unset) returns the env at full strength so the
+    // background is visible. Non-primary miss (bit 1 set by raygen) is the
+    // BSDF half of an MIS pair: closest_hit's env NEE shot a shadow ray with
+    // BSDF-importance sampling at the previous shade point, so we'd double-
+    // count if we returned the full env here. With the same sampling
+    // distribution on both sides, the balance-heuristic weight is a constant
+    // 0.5 (see the closest_hit Env NEE + MIS comment). Apply it here.
+    const vec3 envR = sampleEquirect(normalize(gl_WorldRayDirectionEXT));
     if ((payload.flags & 2u) != 0u) {
-        payload.radiance = vec3(0.0);
+        payload.radiance = 0.5 * envR;
     } else {
-        payload.radiance = sampleEquirect(normalize(gl_WorldRayDirectionEXT));
+        payload.radiance = envR;
     }
     payload.flags |= 1u;// terminate path — no scatter beyond the env
 }

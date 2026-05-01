@@ -341,22 +341,24 @@ void main() {
         lit += (diffuse + specular) * NdotL * lights.dirLights[i].color;
     }
 
-    // === Env NEE ===
-    // Visibility-tested env sample at this shade point. Sampled with the
-    // same BSDF-importance distribution as the bounce below (lobe selected
-    // by pSpec) so the BRDF·cos / pdf collapse cleanly. Independent random
-    // numbers from the bounce → both contribute their own sample of the
-    // integrand (one for env-direct, one for indirect via geometry). To
-    // avoid double-counting, raygen tags non-primary rays so the miss
-    // shader returns zero env on indirect escapes — env enters the path
-    // exclusively via NEE on every bounce except the primary background.
+    // === Env NEE + MIS ===
+    // Visibility-tested env sample at this shade point, combined with the
+    // bounce-into-miss estimator via Multiple Importance Sampling. Both
+    // strategies currently use BSDF-importance sampling, so pdf_nee(x) ==
+    // pdf_bsdf(x) at every direction and the balance-heuristic weights
+    // collapse to a constant 0.5 / 0.5 split:
     //
-    // BSDF-importance NEE (no env CDF) means we don't preferentially hit
-    // bright env regions — variance reduction vs the previous "bounce-
-    // into-miss" pattern is ~2× from doubling the effective env sample
-    // rate (NEE always samples env; the bounce was previously the only
-    // source). An env-luminance CDF + MIS upgrade is a follow-up for an
-    // additional 5-10× on direct-sun / HDR-IBL scenes.
+    //   w_nee  = pdf_nee  / (pdf_nee + pdf_bsdf) = 0.5
+    //   w_bsdf = pdf_bsdf / (pdf_nee + pdf_bsdf) = 0.5
+    //
+    // The NEE term gets its 0.5 multiplier here; the bounce term gets it
+    // in miss.rmiss (gated on the non-primary flag). Variance vs the old
+    // "suppress env on miss" pattern is halved (~√2 std-dev reduction)
+    // since both estimators contribute independent samples averaged with
+    // equal weight. Cost is unchanged — same NEE shadow ray, same bounce
+    // ray. The constant 0.5 collapses out cleanly when an env-luminance
+    // CDF NEE upgrade lands; that path will pass bsdfPdf in the payload
+    // so miss can compute pdf_env_at_dir and apply pdf-based weights.
     {
         const float xiN  = urand(seed);
         vec3 nDir;
@@ -390,7 +392,7 @@ void main() {
                         0xff, 0, 0, 1,
                         hitPos + N * 1e-3, 0.0, nDir, 1e4, 1);
             if (shadowVisibility > 0.0) {
-                lit += nWeight * sampleEquirect(nDir);
+                lit += 0.5 * nWeight * sampleEquirect(nDir);
             }
         }
     }
