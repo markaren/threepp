@@ -19,6 +19,7 @@ layout(buffer_reference, scalar) readonly buffer IndexBuf { uint  i[]; };
 layout(buffer_reference, scalar) readonly buffer UvBuf    { float u[]; };
 
 struct GeometryDesc {
+    uint64_t vertexAddress;
     uint64_t normalAddress;
     uint64_t indexAddress;
     uint64_t uvAddress;
@@ -35,6 +36,8 @@ struct MaterialDesc {
     int   albedoTexIndex;
     int   roughnessTexIndex;
     int   metalnessTexIndex;
+    int   normalTexIndex;
+    vec2  normalScale;
     float alphaCutoff;
 };
 

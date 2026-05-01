@@ -187,6 +187,7 @@ namespace threepp {
         // gl_InstanceCustomIndexEXT. Layout matches the matching shader
         // structs in closest_hit.rchit.
         struct GeometryDesc {
+            VkDeviceAddress vertexAddress;// positions, used for per-pixel tangent derivation
             VkDeviceAddress normalAddress;
             VkDeviceAddress indexAddress;
             VkDeviceAddress uvAddress;// 0 == no UV attribute
@@ -202,6 +203,8 @@ namespace threepp {
             int32_t albedoTexIndex;   // -1 == no albedo texture, else slot in bindless array
             int32_t roughnessTexIndex;// -1 == no roughness texture; sampled .g (glTF convention)
             int32_t metalnessTexIndex;// -1 == no metalness texture; sampled .b (glTF convention)
+            int32_t normalTexIndex;   // -1 == no normal map; tangent-space, glTF convention
+            float normalScale[2];     // x/y scale applied to sampled (xy) before re-deriving z
             float alphaCutoff;        // <= 0 == disabled; otherwise any-hit ignores hits with sampled alpha < cutoff
         };
         Buffer geometryDescsBuffer;
@@ -283,8 +286,9 @@ namespace threepp {
             const void* albedoTex;   // covers map swap on the same material
             const void* roughnessTex;// covers roughnessMap swap
             const void* metalnessTex;// covers metalnessMap swap
+            const void* normalTex;   // covers normalMap swap
             std::array<float, 16> matrix{};
-            std::array<float, 9>  pbr{};
+            std::array<float, 11> pbr{};// + normalScale.xy
         };
         std::vector<MeshFingerprint> prevSceneFingerprint;
         bool sceneBuilt_ = false;
@@ -723,6 +727,9 @@ namespace threepp {
             d.albedoTexIndex = -1;
             d.roughnessTexIndex = -1;
             d.metalnessTexIndex = -1;
+            d.normalTexIndex = -1;
+            d.normalScale[0] = 1.0f;
+            d.normalScale[1] = 1.0f;
             d.alphaCutoff = 0.0f;// disabled by default; any-hit short-circuits on alphaCutoff <= 0
             auto mat = m.material();
             if (!mat) return d;
@@ -743,6 +750,10 @@ namespace threepp {
                 d.emissive[1] = em->emissive.g;
                 d.emissive[2] = em->emissive.b;
                 d.emissiveIntensity = em->emissiveIntensity;
+            }
+            if (auto* nm = dynamic_cast<MaterialWithNormalMap*>(mat.get())) {
+                d.normalScale[0] = nm->normalScale.x;
+                d.normalScale[1] = nm->normalScale.y;
             }
             return d;
         }
@@ -772,6 +783,15 @@ namespace threepp {
             if (!mat) return nullptr;
             if (auto* mt = dynamic_cast<MaterialWithMetalness*>(mat.get())) {
                 return mt->metalnessMap;
+            }
+            return nullptr;
+        }
+
+        static std::shared_ptr<Texture> normalTexOf(const Mesh& m) {
+            auto mat = m.material();
+            if (!mat) return nullptr;
+            if (auto* nm = dynamic_cast<MaterialWithNormalMap*>(mat.get())) {
+                return nm->normalMap;
             }
             return nullptr;
         }
@@ -809,13 +829,15 @@ namespace threepp {
                 fp.albedoTex    = albedoTexOf(*m).get();
                 fp.roughnessTex = roughnessTexOf(*m).get();
                 fp.metalnessTex = metalnessTexOf(*m).get();
+                fp.normalTex    = normalTexOf(*m).get();
                 const auto& e = m->matrixWorld->elements;
                 for (size_t i = 0; i < 16; ++i) fp.matrix[i] = e[i];
                 const MaterialDesc md = materialFromMesh(*m);
                 fp.pbr = {md.albedo[0], md.albedo[1], md.albedo[2],
                           md.roughness, md.metalness,
                           md.emissive[0], md.emissive[1], md.emissive[2],
-                          md.emissiveIntensity};
+                          md.emissiveIntensity,
+                          md.normalScale[0], md.normalScale[1]};
                 currFp.push_back(fp);
             }
 
@@ -913,6 +935,7 @@ namespace threepp {
                 instances.push_back(inst);
 
                 GeometryDesc gdesc{};
+                gdesc.vertexAddress = it->second->vertex.address;
                 gdesc.normalAddress = it->second->normal.address;
                 gdesc.indexAddress  = it->second->index.address;
                 gdesc.uvAddress     = it->second->uv.address;// 0 if no UV attribute
@@ -929,6 +952,9 @@ namespace threepp {
                 }
                 if (auto tex = metalnessTexOf(*m)) {
                     md.metalnessTexIndex = ensureMaterialTexture(tex);
+                }
+                if (auto tex = normalTexOf(*m)) {
+                    md.normalTexIndex = ensureMaterialTexture(tex);
                 }
                 matDescs.push_back(md);
             }
