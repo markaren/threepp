@@ -54,6 +54,9 @@ struct MaterialDesc {
     int   normalTexIndex;   // -1 == no normal map; tangent-space (glTF)
     vec2  normalScale;      // (sx, sy) applied to sampled XY before re-deriving Z
     float alphaCutoff;      // <= 0 == disabled (used by the any-hit shader)
+    float transmission;     // 0..1 probability the bounce takes the transmission lobe
+    float ior;              // index of refraction (only consulted when transmission > 0)
+    int   transmissionTexIndex;// -1 == no transmission map; sampled .r (glTF KHR_materials_transmission)
 };
 
 const uint kMaxMaterialTextures = 256;
@@ -212,10 +215,14 @@ void main() {
     const vec3 n2 = vec3(nb.n[idx.z * 3 + 0], nb.n[idx.z * 3 + 1], nb.n[idx.z * 3 + 2]);
 
     const vec3 nObj = normalize(w * n0 + attribs.x * n1 + attribs.y * n2);
-    vec3 N = normalize(transpose(mat3(gl_WorldToObjectEXT)) * nObj);
+    const vec3 Nworld = normalize(transpose(mat3(gl_WorldToObjectEXT)) * nObj);
 
     const vec3 V = normalize(-gl_WorldRayDirectionEXT);
-    if (dot(N, V) < 0.0) N = -N;// double-sided shading for thin meshes / cull-disabled
+    // Front-face = ray came from outside the surface (V on the same side as the
+    // outward normal). Captured before flipping so the transmission lobe below
+    // can pick the correct refraction η and origin offset on back-facing hits.
+    const bool isFront = dot(Nworld, V) >= 0.0;
+    vec3 N = isFront ? Nworld : -Nworld;// double-sided shading for thin meshes / cull-disabled
 
     // UV interpolation (only when the geometry has a uv attribute). The
     // outer fallback is vec2(0) — harmless for materials without an albedo
@@ -303,6 +310,76 @@ void main() {
     uint seed = payload.seed;
     const float pSpec = mix(0.5, 0.98, metalness);
     const float alpha = roughness * roughness;
+
+    // === Transmission lobe ===
+    // Russian-roulette gate by mdesc.transmission: with probability `transmission`
+    // this hit acts as a glass interface (Schlick-Fresnel weighted reflect /
+    // refract) and skips direct lighting + env NEE entirely. The path continues
+    // with the chosen bounce direction. Matches the WGPU PT pattern: no
+    // 1/transmission inverse-prob scaling, so `transmission` doubles as a
+    // stylised reflect-vs-transmit blend factor (artist control), not a physical
+    // mixing weight. Out-of-scope for v1: rough (microfacet) transmission,
+    // dispersion, Beer-Lambert volumetric attenuation, transmissionMap.
+    //
+    // The outgoing payload sets bit 2 ("NEE skipped at this hit") so raygen
+    // doesn't half-weight the env on the next bounce-into-miss — the MIS
+    // partner (NEE shadow ray) wasn't fired here, so the env at the next miss
+    // needs full weight to stay unbiased.
+    //
+    // glTF KHR_materials_transmission: scalar `transmission` is multiplied by
+    // the transmissionMap red channel (linear texture, no sRGB decode).
+    float transmission = mdesc.transmission;
+    if (mdesc.transmissionTexIndex >= 0) {
+        const int i = clamp(mdesc.transmissionTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        transmission *= texture(albedoMaps[i], uv).r;
+    }
+    if (transmission > 0.0 && urand(seed) < transmission) {
+        const float ior = max(mdesc.ior, 1.0);
+        const float eta = isFront ? (1.0 / ior) : ior;
+        const vec3  I    = gl_WorldRayDirectionEXT;
+        const float cosI = abs(dot(I, N));
+
+        // Schlick Fresnel; on exit we substitute the transmitted-side cosine
+        // (cosT) so total internal reflection raises F→1 smoothly as expected.
+        const float r0    = pow((1.0 - ior) / (1.0 + ior), 2.0);
+        const float sin2I = max(0.0, 1.0 - cosI * cosI);
+        const float cosSchlick = isFront
+                ? cosI
+                : sqrt(max(0.0, 1.0 - ior * ior * sin2I));
+        const float F = r0 + (1.0 - r0) * pow(1.0 - cosSchlick, 5.0);
+
+        vec3 wDir;
+        vec3 wOrigin;
+        vec3 tWeight = vec3(1.0);
+        if (urand(seed) < F) {
+            wDir    = reflect(I, N);
+            wOrigin = hitPos + N * 1e-3;
+        } else {
+            const vec3 refr = refract(I, N, eta);
+            if (dot(refr, refr) < 1e-6) {
+                // Total internal reflection — fall back to mirror reflect on
+                // the same side we came from.
+                wDir    = reflect(I, N);
+                wOrigin = hitPos + N * 1e-3;
+            } else {
+                wDir    = normalize(refr);
+                wOrigin = hitPos - N * 1e-3;// step into the medium we refract into
+                // Radiometric correction: refraction compresses solid angle by
+                // η², so transmitted radiance scales by 1/η². Albedo tints the
+                // refracted ray (matches three.js MeshPhysicalMaterial colour).
+                tWeight = albedo / (eta * eta);
+            }
+        }
+
+        const vec3 emissiveOut = mdesc.emissive * mdesc.emissiveIntensity;
+        payload.radiance   = emissiveOut;
+        payload.brdfWeight = tWeight;
+        payload.nextOrigin = wOrigin;
+        payload.nextDir    = wDir;
+        payload.flags      = 4u;// bit 2: NEE skipped — raygen must not half-weight the next env miss
+        payload.seed       = seed;
+        return;
+    }
 
     // Sum direct contribution from each scene-driven directional light.
     // Physical lights (three.js useLegacyLights = false): light.color

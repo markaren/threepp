@@ -39,6 +39,9 @@ struct MaterialDesc {
     int   normalTexIndex;
     vec2  normalScale;
     float alphaCutoff;
+    float transmission;
+    float ior;
+    int   transmissionTexIndex;
 };
 
 const uint kMaxMaterialTextures = 256;

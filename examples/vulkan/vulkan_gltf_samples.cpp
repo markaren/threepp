@@ -90,7 +90,6 @@ int main(int argc, char** argv) {
     auto sun = DirectionalLight::create(Color(0xffffff), 3.0f);
     sun->position.set(0.4f, 1.0f, 0.3f);
     scene.add(sun);
-    // scene.add(AmbientLight::create(0xffffff, 0.2f));
 
     PerspectiveCamera camera(50.f, canvas.aspect(), 0.01f, 1000.f);
     camera.position.set(0.f, 1.f, 3.f);

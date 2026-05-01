@@ -155,17 +155,21 @@ void main() {
     vec3 throughput = vec3(1.0);
     vec3 origin     = originWS.xyz;
     vec3 dir        = dirWS;
+    // True when the prior shade event ran env NEE — used to gate the MIS
+    // half-env weight on the next miss. Transmission events skip NEE and
+    // clear this so the env is read at full strength on the bounce-into-miss.
+    bool prevRanNEE = false;
 
     for (int b = 0; b < kMaxBounces; ++b) {
         payload.radiance   = vec3(0.0);
         payload.brdfWeight = vec3(0.0);
         payload.nextOrigin = vec3(0.0);
         payload.nextDir    = vec3(0.0);
-        // Bit 1 = "suppress env on miss". Set on every non-primary bounce
-        // so env enters the path exclusively through closest_hit's NEE
-        // (avoids double-counting). Primary miss (b == 0) still returns
-        // env so the background is visible.
-        payload.flags      = (b > 0) ? 2u : 0u;
+        // Bit 1 = "halve env on miss" (MIS partner of the prior NEE shadow ray).
+        // We only set it when the previous shade actually ran NEE; otherwise
+        // (primary, or after a transmission event) the next env miss must
+        // contribute at full weight to stay unbiased.
+        payload.flags      = prevRanNEE ? 2u : 0u;
         payload.seed       = seed;
 
         // No OpaqueEXT — alpha-test materials need the any-hit shader to fire.
@@ -180,6 +184,9 @@ void main() {
         if (max(max(throughput.r, throughput.g), throughput.b) < 1e-4) break;
 
         seed = payload.seed;
+        // Bit 2 set means the hit was a transmission event with NEE skipped.
+        // Carry that into the next iteration's MIS gate.
+        prevRanNEE = (payload.flags & 4u) == 0u;
 
         // Russian Roulette: after the first indirect bounce, terminate paths
         // stochastically based on remaining throughput. Survivors are scaled
