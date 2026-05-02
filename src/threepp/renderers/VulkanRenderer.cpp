@@ -465,6 +465,11 @@ namespace threepp {
             const void* clearcoatRoughnessTex;// covers clearcoatRoughnessMap swap
             const void* emissiveTex;          // covers emissiveMap swap
             uint32_t instanceIndex;// 0 for non-instanced; distinguishes sub-instances
+            unsigned int matVersion = 0;// Material::version() — bumped by needsUpdate(),
+                                        // KHR_animation_pointer, etc. Lets us skip the
+                                        // 8 texture-of dynamic_casts + materialFromMesh
+                                        // (~21 dynamic_casts/mesh) when nothing on the
+                                        // material has changed since last frame.
             std::array<float, 16> matrix{};
             std::array<float, 15> pbr{};// + normalScale.xy + transmission/ior + clearcoat/roughness
         };
@@ -1462,33 +1467,65 @@ namespace threepp {
                 }
             });
 
+            // Per-entry fingerprint construction. Hot path on big static scenes
+            // (Bistro): when mesh + mat + geom pointers all match prev frame
+            // AND mat->version() also matches, the 8 texture-of lookups and
+            // materialFromMesh (~21 dynamic_casts/mesh) all return identical
+            // results — copy them straight from prevSceneFingerprint[i] and
+            // only refresh the world matrix. Bistro has ~1500 meshes which
+            // would otherwise cost ~31k dynamic_casts/frame here alone.
             std::vector<MeshFingerprint> currFp;
-            currFp.reserve(entries.size());
-            for (const MeshEntry& en : entries) {
+            currFp.resize(entries.size());
+            const bool prevValid = sceneBuilt_ && prevSceneFingerprint.size() == entries.size();
+            for (size_t i = 0; i < entries.size(); ++i) {
+                const MeshEntry& en = entries[i];
                 Mesh* m = en.mesh;
-                MeshFingerprint fp{};
-                fp.mesh = m;
-                fp.geom = m->geometry().get();
-                fp.mat  = m->material().get();
-                fp.albedoTex             = albedoTexOf(*m).get();
-                fp.roughnessTex          = roughnessTexOf(*m).get();
-                fp.metalnessTex          = metalnessTexOf(*m).get();
-                fp.normalTex             = normalTexOf(*m).get();
-                fp.transmissionTex       = transmissionTexOf(*m).get();
-                fp.clearcoatTex          = clearcoatTexOf(*m).get();
-                fp.clearcoatRoughnessTex = clearcoatRoughnessTexOf(*m).get();
-                fp.emissiveTex           = emissiveTexOf(*m).get();
-                fp.instanceIndex         = en.instanceIndex;
-                fp.matrix                = en.worldMatrix;
-                const MaterialDesc md = materialFromMesh(*m);
-                fp.pbr = {md.albedo[0], md.albedo[1], md.albedo[2],
-                          md.roughness, md.metalness,
-                          md.emissive[0], md.emissive[1], md.emissive[2],
-                          md.emissiveIntensity,
-                          md.normalScale[0], md.normalScale[1],
-                          md.transmission, md.ior,
-                          md.clearcoat, md.clearcoatRoughness};
-                currFp.push_back(fp);
+                auto matSp = m->material();
+                const Material* matPtr = matSp.get();
+                const unsigned int matVer = matPtr ? matPtr->version() : 0u;
+                const void* geomPtr = m->geometry().get();
+
+                MeshFingerprint& fp = currFp[i];
+                bool fastPath = false;
+                if (prevValid) {
+                    const auto& p = prevSceneFingerprint[i];
+                    if (p.mesh == m && p.mat == matPtr && p.geom == geomPtr &&
+                        p.instanceIndex == en.instanceIndex &&
+                        p.matVersion == matVer) {
+                        // Texture pointers + pbr live on the material; matVersion
+                        // unchanged means none of them moved. Copy everything from
+                        // prev, then overwrite matrix (transform can change without
+                        // bumping mat version — Object3D xfm is independent).
+                        fp = p;
+                        fp.matrix = en.worldMatrix;
+                        fastPath = true;
+                    }
+                }
+
+                if (!fastPath) {
+                    fp.mesh = m;
+                    fp.geom = geomPtr;
+                    fp.mat  = matPtr;
+                    fp.matVersion = matVer;
+                    fp.albedoTex             = albedoTexOf(*m).get();
+                    fp.roughnessTex          = roughnessTexOf(*m).get();
+                    fp.metalnessTex          = metalnessTexOf(*m).get();
+                    fp.normalTex             = normalTexOf(*m).get();
+                    fp.transmissionTex       = transmissionTexOf(*m).get();
+                    fp.clearcoatTex          = clearcoatTexOf(*m).get();
+                    fp.clearcoatRoughnessTex = clearcoatRoughnessTexOf(*m).get();
+                    fp.emissiveTex           = emissiveTexOf(*m).get();
+                    fp.instanceIndex         = en.instanceIndex;
+                    fp.matrix                = en.worldMatrix;
+                    const MaterialDesc md = materialFromMesh(*m);
+                    fp.pbr = {md.albedo[0], md.albedo[1], md.albedo[2],
+                              md.roughness, md.metalness,
+                              md.emissive[0], md.emissive[1], md.emissive[2],
+                              md.emissiveIntensity,
+                              md.normalScale[0], md.normalScale[1],
+                              md.transmission, md.ior,
+                              md.clearcoat, md.clearcoatRoughness};
+                }
             }
 
             // Per-entry bone-dirty bits. SkinnedMesh poses change without
