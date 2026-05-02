@@ -86,6 +86,7 @@ struct MaterialDesc {
     float iridescence;              // KHR_materials_iridescence: 0..1 layer factor
     float iridescenceIOR;           // thin-film IOR (1.0..2.5; default 1.3)
     float iridescenceThicknessNm;   // thin-film thickness in nm (default 400)
+    float dispersion;               // KHR_materials_dispersion: 0 = off; ~0.05+ visible
 };
 
 const uint kMaxMaterialTextures = 2048;
@@ -661,9 +662,8 @@ void main() {
         // swings (CommercialRefrigerator). Skip the primary tag on refract so
         // raygen captures the inside-surface hit on the next iteration.
         bool wasReflect = false;
-        const float ior = max(mdesc.ior, 1.0);
-        const float eta = isFront ? (1.0 / ior) : ior;
-        const vec3  I    = gl_WorldRayDirectionEXT;
+        const float ior_base = max(mdesc.ior, 1.0);
+        const vec3  I        = gl_WorldRayDirectionEXT;
 
         // Sample a GGX microfacet normal so roughness scatters the refracted
         // ray. α=0 (smooth glass) degenerates to H=N (mirror). Fresnel and
@@ -672,26 +672,51 @@ void main() {
         const vec3  H    = sampleVNDF_H(V, N, alpha, u2);
         const float cosH = max(dot(V, H), 0.0);
 
-        // Schlick Fresnel at the microfacet half-vector. On exit use the
-        // transmitted-side cosine so TIR raises F→1 smoothly.
-        const float r0    = pow((1.0 - ior) / (1.0 + ior), 2.0);
+        // Schlick Fresnel at the microfacet half-vector. Uses base IOR so the
+        // reflect/refract branch decision is achromatic — chromatic Fresnel
+        // adds visible noise without much benefit at typical dispersion values.
+        // On exit use the transmitted-side cosine so TIR raises F→1 smoothly.
+        const float r0    = pow((1.0 - ior_base) / (1.0 + ior_base), 2.0);
         const float sin2H = max(0.0, 1.0 - cosH * cosH);
         const float cosSchlick = isFront
                 ? cosH
-                : sqrt(max(0.0, 1.0 - ior * ior * sin2H));
+                : sqrt(max(0.0, 1.0 - ior_base * ior_base * sin2H));
         const float F = r0 + (1.0 - r0) * pow(1.0 - cosSchlick, 5.0);
 
         vec3 wDir;
         vec3 wOrigin;
         vec3 tWeight = vec3(1.0);
         if (urand(seed) < F) {
+            // Reflect off glass: stays achromatic. Skipping the dispersion
+            // channelMask on the reflection branch trades a tiny bias for a
+            // huge variance reduction on reflection-heavy glass.
             wDir    = reflect(I, H);
             wOrigin = hitPos + N * 1e-3;
             wasReflect = true;
         } else {
+            // KHR_materials_dispersion: stochastic 3-channel Cauchy sampling
+            // applied only on the refract branch. Pick R/G/B (Hα/D/Hβ
+            // wavelengths), shift IOR per Cauchy approximation around sodium-D
+            // 589.3nm, and 3× the chosen throughput channel to compensate for
+            // the 1/3 probability. dispersion=0 is the fast path.
+            float ior = ior_base;
+            vec3 channelMask = vec3(1.0);
+            if (mdesc.dispersion > 0.0) {
+                const vec3  lambda    = vec3(0.6563, 0.5500, 0.4861);
+                const float refInvSq  = 1.0 / (0.5893 * 0.5893);
+                const uint  ch        = uint(urand(seed) * 3.0) % 3u;
+                const float invSq     = 1.0 / (lambda[ch] * lambda[ch]);
+                const float B         = (ior_base - 1.0) * mdesc.dispersion / 38.2;
+                ior = ior_base + B * (invSq - refInvSq);
+                channelMask = vec3(0.0);
+                channelMask[ch] = 3.0;
+            }
+            const float eta = isFront ? (1.0 / ior) : ior;
             const vec3 refr = refract(I, H, eta);
             if (dot(refr, refr) < 1e-6) {
                 // Total internal reflection — fall back to mirror reflect.
+                // Stays achromatic (no channelMask) for the same reason as the
+                // primary reflect branch above.
                 wDir    = reflect(I, H);
                 wOrigin = hitPos + N * 1e-3;
                 wasReflect = true;
@@ -725,7 +750,7 @@ void main() {
                     glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
                                      vec3(gl_HitTEXT / mdesc.attenuationDistance));
                 }
-                tWeight = glassTint / (eta * eta);
+                tWeight = glassTint * channelMask / (eta * eta);
             }
         }
 

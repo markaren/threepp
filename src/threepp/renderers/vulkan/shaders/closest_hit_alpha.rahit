@@ -33,7 +33,7 @@ struct GeometryDesc {
     uint     _pad;
 };
 
-// Must match the FULL MaterialDesc layout in closest_hit.rchit (452 bytes with
+// Must match the FULL MaterialDesc layout in closest_hit.rchit (456 bytes with
 // scalar block layout). Fields beyond transmission are padding so mats[i] uses
 // the correct stride. Fields accessed: albedoTexIndex(36), alphaCutoff(60),
 // transmission(64).
@@ -50,7 +50,7 @@ struct MaterialDesc {
     vec2  normalScale;       //  8 (52)
     float alphaCutoff;       //  4 (60) ← used
     float transmission;      //  4 (64) ← used (shadow ray pass-through)
-    float _pad[96];          // 384 (68..452)
+    float _pad[97];          // 388 (68..456)
 };
 
 const uint kMaxMaterialTextures = 2048;

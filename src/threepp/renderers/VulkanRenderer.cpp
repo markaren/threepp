@@ -261,6 +261,7 @@ namespace threepp {
             float iridescence;             // KHR_materials_iridescence: 0..1 layer factor
             float iridescenceIOR;          // thin-film IOR (1.0..2.5; default 1.3)
             float iridescenceThicknessNm;  // thin-film thickness in nm (default 400)
+            float dispersion;              // KHR_materials_dispersion: 0 = off; ~0.05+ visible; matches glTF spec
         };
         Buffer geometryDescsBuffer;
         Buffer materialDescsBuffer;
@@ -1239,6 +1240,7 @@ namespace threepp {
             d.iridescence = 0.0f;             // off by default; lobe is skipped when iridescence == 0
             d.iridescenceIOR = 1.3f;
             d.iridescenceThicknessNm = 400.0f;
+            d.dispersion = 0.0f;              // off by default; lobe is skipped when dispersion == 0
             d.occlusionTexIndex = -1;
             static constexpr float kIdent[9] = {1,0,0, 0,1,0, 0,0,1};
             std::copy(kIdent, kIdent+9, d.uvTransform);
@@ -1276,6 +1278,7 @@ namespace threepp {
             if (auto* tr = dynamic_cast<MaterialWithTransmission*>(mat.get())) {
                 d.transmission = tr->transmission;
                 d.ior          = std::max(1.0f, tr->ior);
+                d.dispersion   = std::max(0.0f, tr->dispersion);
             }
             // Alpha-blend transparency (transparent=true, opacity<1) has no
             // physical analogue in a PT, so treat it as stochastic pass-through:
