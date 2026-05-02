@@ -156,6 +156,16 @@ layout(set = 0, binding = 14, scalar) readonly buffer EmissiveTriBuf {
     EmTri emissiveTris[];
 };
 
+// Caustic photon map (photon_emit.rgen deposits, we gather here).
+// Grid constants must match photon_emit.rgen exactly.
+const uint  kPhotonGridBits = 16u;
+const uint  kPhotonGridSize = 1u << kPhotonGridBits; // 65536
+const uint  kPhotonsPerCell = 8u;
+const float kGatherRadius   = 0.15;
+
+layout(set = 0, binding = 15, std430) readonly buffer PhotonCountBuf { uint photonCounts[]; };
+layout(set = 0, binding = 16, scalar) readonly buffer PhotonDataBuf  { vec3 photonData[];   };
+
 // Phase 11: PMREM mip count comes via the same push-constant block used by
 // raygen. .x is raygen's sampleIndex (not read here); .y is envMipCount.
 layout(push_constant) uniform Pc {
@@ -185,6 +195,46 @@ vec3 sampleEquirect(vec3 dir) {
     const float u = 0.5 + atan(dir.z, dir.x) / TWO_PI;
     const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
     return texture(envTex, vec2(u, v)).rgb;
+}
+
+// FNV-1a hash on a 3-D cell coordinate — must match photon_emit.rgen.
+uint photonCellHash(ivec3 c) {
+    uint h = 2166136261u;
+    h = (h ^ uint(c.x)) * 16777619u;
+    h = (h ^ uint(c.y)) * 16777619u;
+    h = (h ^ uint(c.z)) * 16777619u;
+    return h & (kPhotonGridSize - 1u);
+}
+
+// Gather caustic photons within kGatherRadius of pos. Returns radiance from
+// Lambertian evaluation of the photon flux: flux * (albedo/π) * |N·(-dir)| / (π*r²).
+// Only called for diffuse-ish (roughness > 0.1) surfaces.
+vec3 gatherCaustics(vec3 pos, vec3 N, vec3 albedo, float roughness) {
+    if (roughness < 0.1) return vec3(0.0);
+    vec3 caustic = vec3(0.0);
+    const float r2       = kGatherRadius * kGatherRadius;
+    const float invDisk  = 1.0 / (PI * r2);
+    const ivec3 center   = ivec3(floor(pos / kGatherRadius));
+    for (int dx = -1; dx <= 1; dx++)
+    for (int dy = -1; dy <= 1; dy++)
+    for (int dz = -1; dz <= 1; dz++) {
+        const uint h     = photonCellHash(center + ivec3(dx, dy, dz));
+        const uint total = photonCounts[h];
+        const uint n     = min(total, kPhotonsPerCell);
+        // Cells that received more photons than kPhotonsPerCell only stored a
+        // subset; scale up so energy is conserved despite the cap.
+        const float overflow = (n > 0u) ? float(total) / float(n) : 0.0;
+        for (uint s = 0u; s < n; s++) {
+            const uint base  = (h * kPhotonsPerCell + s) * 3u;
+            const vec3 ppos  = photonData[base + 0u];
+            const vec3 pflux = photonData[base + 1u];
+            const vec3 pdir  = photonData[base + 2u]; // travel direction toward surface
+            if (dot(ppos - pos, ppos - pos) < r2) {
+                caustic += pflux * (albedo / PI) * max(dot(N, -pdir), 0.0) * invDisk * overflow;
+            }
+        }
+    }
+    return caustic;
 }
 
 float distGGX(float NdotH, float roughness) {
@@ -1292,6 +1342,7 @@ void main() {
     // after pass-through, and hits on frames with no emissive geometry keep
     // the term so the user can see directly-visible glowing surfaces.
     if ((payload.inFlags & 1u) != 0u) emissiveOut = vec3(0.0);
+    lit += gatherCaustics(hitPos, N, albedo, roughness);
     payload.radiance   = emissiveOut + ambient + lit;
     payload.brdfWeight = brdfWeight;
     payload.nextOrigin = hitPos + N * 1e-3;

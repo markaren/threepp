@@ -860,6 +860,18 @@ if (THREEPP_WITH_VULKAN)
         kShadowAnyhitRahitSpv
         _shadow_ahit_spv_h)
     compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/photon_emit.rgen"
+        kPhotonEmitRgenSpv
+        _photon_emit_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/photon_miss.rmiss"
+        kPhotonMissRmissSpv
+        _photon_miss_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/photon_chit.rchit"
+        kPhotonChitRchitSpv
+        _photon_chit_spv_h)
+    compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/prefilter_env.comp"
         kPrefilterEnvCompSpv
         _prefilter_env_spv_h)

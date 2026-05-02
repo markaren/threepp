@@ -1,0 +1,182 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_scalar_block_layout : require
+
+// Photon emission pass for caustic photon mapping.
+// Each invocation emits one photon path from a random analytic light source.
+// Photons that reach a diffuse surface after at least one specular (glass or
+// mirror) bounce are deposited into a spatial hash grid for gather in
+// closest_hit.rchit. Purely direct photons (no specular bounce) are discarded
+// to avoid double-counting with the path tracer's shadow rays.
+//
+// Grid constants must match closest_hit.rchit exactly.
+const uint  kGridBits     = 16u;
+const uint  kGridSize     = 1u << kGridBits; // 65536 cells
+const uint  kPerCell      = 8u;
+const float kGatherRadius = 0.15;            // world-space metres
+
+const float PI     = 3.14159265358979;
+const float TWO_PI = 6.28318530717958;
+
+struct PhotonPayload {
+    vec3  pos;
+    vec3  normal;
+    float roughness;
+    float metalness;
+    float transmission;
+    float ior;
+    uint  hitValid;
+};
+
+struct DirLight   { vec3 direction; vec3 color; };
+struct PointLight { vec3 position; float range; vec3 color; float decay; };
+struct SpotLight  {
+    vec3  position;  float range;
+    vec3  color;     float decay;
+    vec3  direction; float cosAngleOuter; float cosAngleInner;
+};
+struct RectLight  { vec3 position; vec3 halfU; vec3 halfV; vec3 normal; vec3 color; };
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
+layout(set = 0, binding = 5, scalar) uniform LightsUbo {
+    vec3       ambient;
+    uint       dirCount;
+    DirLight   dirLights[8];
+    uint       pointCount;
+    uint       spotCount;
+    uint       rectCount;
+    PointLight pointLights[8];
+    SpotLight  spotLights[8];
+    RectLight  rectLights[4];
+} lights;
+
+layout(set = 0, binding = 15, std430) buffer PhotonCountBuf { uint counts[]; };
+layout(set = 0, binding = 16, scalar) buffer PhotonDataBuf  { vec3 data[];   };
+
+layout(push_constant) uniform Pc {
+    uint sampleIndex;
+    uint _pad[10];
+} pc;
+
+layout(location = 2) rayPayloadEXT PhotonPayload pp;
+
+// PCG random — same as raygen.rgen
+uint pcgStep(inout uint s) {
+    s = s * 747796405u + 2891336453u;
+    return ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+}
+float rand01(inout uint s) { return float(pcgStep(s)) / 4294967296.0; }
+
+vec3 randOnSphere(inout uint s) {
+    float u = rand01(s), v = rand01(s);
+    float cosT = 1.0 - 2.0 * u;
+    float sinT = sqrt(max(0.0, 1.0 - cosT * cosT));
+    float phi  = TWO_PI * v;
+    return vec3(sinT * cos(phi), cosT, sinT * sin(phi));
+}
+
+// Refract or TIR-reflect. N must point toward the incoming ray side.
+vec3 refractOrTIR(vec3 d, vec3 N, float eta) {
+    float cosi = dot(-d, N);
+    float k    = 1.0 - eta * eta * (1.0 - cosi * cosi);
+    if (k < 0.0) return reflect(d, N);
+    return normalize(eta * d + (eta * cosi - sqrt(k)) * N);
+}
+
+// FNV-1a hash on a cell coordinate — must match gatherCaustics() in closest_hit.rchit.
+uint cellHash(ivec3 c) {
+    uint h = 2166136261u;
+    h = (h ^ uint(c.x)) * 16777619u;
+    h = (h ^ uint(c.y)) * 16777619u;
+    h = (h ^ uint(c.z)) * 16777619u;
+    return h & (kGridSize - 1u);
+}
+
+void depositPhoton(vec3 pos, vec3 flux, vec3 dir) {
+    const uint h    = cellHash(ivec3(floor(pos / kGatherRadius)));
+    const uint slot = atomicAdd(counts[h], 1u);
+    if (slot < kPerCell) {
+        const uint base = (h * kPerCell + slot) * 3u;
+        data[base + 0u] = pos;
+        data[base + 1u] = flux;
+        data[base + 2u] = dir; // photon travel direction (toward surface)
+    }
+}
+
+void main() {
+    const uint nPt   = lights.pointCount;
+    const uint nRect = lights.rectCount;
+    const uint nLights = nPt + nRect;
+    if (nLights == 0u) return;
+
+    // Per-invocation seed: unique across pixels and frames
+    uint seed = gl_LaunchIDEXT.x + gl_LaunchIDEXT.y * gl_LaunchSizeEXT.x;
+    seed = seed * 1664525u + pc.sampleIndex * 22695477u + 1013904223u;
+    pcgStep(seed); pcgStep(seed);
+
+    // Pick a light uniformly; weight flux to compensate.
+    const uint li = min(uint(rand01(seed) * float(nLights)), nLights - 1u);
+    const float N_photons = float(gl_LaunchSizeEXT.x * gl_LaunchSizeEXT.y);
+
+    vec3 origin, dir, flux;
+
+    if (li < nPt) {
+        const PointLight pl = lights.pointLights[li];
+        origin = pl.position;
+        dir    = randOnSphere(seed);
+        // Power ≈ color * 4π sr; divide by N to get per-photon flux.
+        flux = pl.color * (4.0 * PI * float(nLights)) / N_photons;
+    } else {
+        const RectLight rl = lights.rectLights[li - nPt];
+        const float s = rand01(seed) * 2.0 - 1.0;
+        const float t = rand01(seed) * 2.0 - 1.0;
+        origin = rl.position + s * rl.halfU + t * rl.halfV;
+        // Cosine-weighted hemisphere from rect surface normal.
+        const vec3  Tn  = normalize(rl.halfU);
+        const vec3  Bn  = cross(rl.normal, Tn);
+        const float r1  = rand01(seed);
+        const float phi = TWO_PI * rand01(seed);
+        const float sinT = sqrt(r1);
+        dir  = normalize(sinT * cos(phi) * Tn + sinT * sin(phi) * Bn + sqrt(1.0 - r1) * rl.normal);
+        const float area = 4.0 * length(rl.halfU) * length(rl.halfV);
+        flux = rl.color * (PI * area * float(nLights)) / N_photons;
+    }
+
+    bool throughSpecular = false;
+    const int kMaxBounces = 6;
+
+    for (int b = 0; b < kMaxBounces; b++) {
+        pp.hitValid = 0u;
+        traceRayEXT(topAS, gl_RayFlagsOpaqueEXT, 0xFF,
+                    0u, 1u, 0u,        // sbtRecordOffset, stride, missIndex
+                    origin, 1e-3, dir, 1e6,
+                    2);                // payload location 2
+
+        if (pp.hitValid == 0u) break;  // ray missed — photon escapes
+
+        if (pp.transmission > 0.5) {
+            // Glass: refract through (or TIR-reflect).
+            vec3 N = pp.normal;
+            const bool entering = dot(dir, N) < 0.0;
+            const float eta = entering ? (1.0 / pp.ior) : pp.ior;
+            if (!entering) N = -N;
+            dir = refractOrTIR(dir, N, eta);
+            origin = pp.pos + 1e-3 * dir;
+            throughSpecular = true;
+
+        } else if (pp.metalness > 0.8 && pp.roughness < 0.15) {
+            // Mirror-like metal: specular reflection.
+            dir = reflect(dir, pp.normal);
+            origin = pp.pos + 1e-3 * dir;
+            throughSpecular = true;
+
+        } else {
+            // Diffuse surface: deposit only if path went through at least one
+            // specular bounce (otherwise direct illumination handles it).
+            if (throughSpecular) {
+                depositPhoton(pp.pos, flux, dir);
+            }
+            break;
+        }
+    }
+}
