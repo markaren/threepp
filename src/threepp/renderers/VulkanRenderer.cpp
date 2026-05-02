@@ -54,6 +54,8 @@
 #include "threepp/renderers/vulkan/shaders/closest_hit_alpha.rahit.spv.h"
 #include "threepp/renderers/vulkan/shaders/prefilter_env.comp.spv.h"
 
+#include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.hpp"
+
 #include <GLFW/glfw3.h>
 
 #include <array>
@@ -333,7 +335,7 @@ namespace threepp {
         // Cache key is Texture* — the same Texture across multiple meshes only
         // uploads once. All material textures share textureSampler_ (linear,
         // repeat); per-texture filter/wrap is a v2 concern.
-        static constexpr uint32_t kMaxMaterialTextures = 512;
+        static constexpr uint32_t kMaxMaterialTextures = 2048;
         std::vector<Image2D> materialTextures;// owns image + view (sampler is shared)
         // Cache value pairs (weak_ptr, slot). The weak_ptr is the liveness tag —
         // when a Texture is destroyed (model unloaded), the entry is pruned in
@@ -3015,35 +3017,110 @@ namespace threepp {
                           << kMaxMaterialTextures << "); using -1 fallback\n";
                 return -1;
             }
-            const Image& img = const_cast<Texture*>(tex)->image();
+            Image& img = const_cast<Texture*>(tex)->image();
             const uint32_t w = img.width;
             const uint32_t h = img.height;
             if (w == 0 || h == 0) return -1;
 
-            // Force RGBA8 — both UNORM and SRGB need 4 channels in this engine.
-            // stb_image's default load already produces RGBA, so we expect a
-            // tightly packed 4*w*h byte buffer.
+            // Normalise everything to tightly-packed RGBA8. The pipeline
+            // treats the bindless array as a uniform u8x4 sampler set, so
+            // BCn blocks decompress, mono/dual-channel maps replicate or
+            // pad, and float defaults clamp+quantize.
+            const size_t pixels = static_cast<size_t>(w) * h;
             std::vector<unsigned char> rgba;
-            try {
-                const auto& src = const_cast<Image&>(img).data<unsigned char>();
-                if (src.size() == w * h * 4) {
-                    rgba.assign(src.begin(), src.end());
-                } else if (src.size() == w * h * 3) {
-                    rgba.resize(w * h * 4);
-                    for (uint32_t i = 0; i < w * h; ++i) {
-                        rgba[i * 4 + 0] = src[i * 3 + 0];
-                        rgba[i * 4 + 1] = src[i * 3 + 1];
-                        rgba[i * 4 + 2] = src[i * 3 + 2];
-                        rgba[i * 4 + 3] = 255;
-                    }
-                } else {
-                    std::cerr << "[VulkanRenderer] unsupported pixel layout for material tex ("
-                              << src.size() << " bytes for " << w << "x" << h << ")\n";
+            std::vector<std::uint8_t> bcnRgba;
+            const std::uint8_t* srcPtr = nullptr;
+            int channels = 0;
+
+            if (img.compressedFormat.has_value()) {
+                const auto& blocks = img.data<unsigned char>();
+                bcnRgba = wgpu_pt::bcnDecompress(
+                        blocks.data(),
+                        static_cast<int>(w),
+                        static_cast<int>(h),
+                        *img.compressedFormat);
+                if (bcnRgba.empty()) {
+                    std::cerr << "[VulkanRenderer] unsupported compressed format 0x"
+                              << std::hex << *img.compressedFormat << std::dec
+                              << " for material tex (" << w << "x" << h << ")\n";
                     return -1;
                 }
-            } catch (const std::bad_variant_access&) {
-                std::cerr << "[VulkanRenderer] float-pixel material textures not yet supported\n";
-                return -1;
+                srcPtr = bcnRgba.data();
+                channels = 4;
+            } else {
+                bool isU8 = true;
+                try {
+                    auto& src = img.data<unsigned char>();
+                    if (src.size() % pixels != 0) {
+                        std::cerr << "[VulkanRenderer] unsupported pixel layout for material tex ("
+                                  << src.size() << " bytes for " << w << "x" << h << ")\n";
+                        return -1;
+                    }
+                    channels = static_cast<int>(src.size() / pixels);
+                    if (channels < 1 || channels > 4) {
+                        std::cerr << "[VulkanRenderer] unsupported channel count " << channels
+                                  << " for material tex (" << w << "x" << h << ")\n";
+                        return -1;
+                    }
+                    srcPtr = src.data();
+                } catch (const std::bad_variant_access&) {
+                    isU8 = false;
+                }
+                if (!isU8) {
+                    // Float-pixel default (e.g. Bistro's 1×1 RGBA32F constants).
+                    // Quantise to u8 with sRGB-agnostic clamp; tiny default
+                    // textures only need the linear value, and HDR ranges are
+                    // expressed via material scalars instead.
+                    auto& srcF = img.data<float>();
+                    if (srcF.size() % pixels != 0) {
+                        std::cerr << "[VulkanRenderer] unsupported float-pixel layout for material tex ("
+                                  << srcF.size() * sizeof(float) << " bytes for "
+                                  << w << "x" << h << ")\n";
+                        return -1;
+                    }
+                    const int fch = static_cast<int>(srcF.size() / pixels);
+                    if (fch < 1 || fch > 4) {
+                        std::cerr << "[VulkanRenderer] unsupported float channel count " << fch
+                                  << " for material tex\n";
+                        return -1;
+                    }
+                    rgba.resize(pixels * 4);
+                    for (size_t i = 0; i < pixels; ++i) {
+                        float r = srcF[i * fch + 0];
+                        float g = (fch >= 2) ? srcF[i * fch + 1] : r;
+                        float b = (fch >= 3) ? srcF[i * fch + 2] : ((fch == 1) ? r : 0.f);
+                        float a = (fch >= 4) ? srcF[i * fch + 3] : 1.f;
+                        auto q = [](float v) {
+                            if (!(v == v)) v = 0.f;// NaN→0
+                            v = v < 0.f ? 0.f : (v > 1.f ? 1.f : v);
+                            return static_cast<unsigned char>(v * 255.f + 0.5f);
+                        };
+                        rgba[i * 4 + 0] = q(r);
+                        rgba[i * 4 + 1] = q(g);
+                        rgba[i * 4 + 2] = q(b);
+                        rgba[i * 4 + 3] = q(a);
+                    }
+                }
+            }
+
+            // Expand srcPtr (BCn or u8) into rgba; float branch already filled it.
+            if (rgba.empty()) {
+                rgba.resize(pixels * 4);
+                if (channels == 4) {
+                    std::memcpy(rgba.data(), srcPtr, pixels * 4);
+                } else {
+                    for (size_t i = 0; i < pixels; ++i) {
+                        const unsigned char r = srcPtr[i * channels + 0];
+                        const unsigned char g = (channels >= 2) ? srcPtr[i * channels + 1] : r;
+                        const unsigned char b = (channels >= 3) ? srcPtr[i * channels + 2]
+                                                                : ((channels == 1) ? r : 0);
+                        const unsigned char a = (channels >= 4) ? srcPtr[i * channels + 3] : 255u;
+                        rgba[i * 4 + 0] = r;
+                        rgba[i * 4 + 1] = g;
+                        rgba[i * 4 + 2] = b;
+                        rgba[i * 4 + 3] = a;
+                    }
+                }
             }
 
             // sRGB tag → hardware decode at sample time. Loaders should mark

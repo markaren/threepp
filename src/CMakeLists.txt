@@ -605,6 +605,14 @@ if (THREEPP_WITH_VULKAN)
     )
 endif ()
 
+# BCn / DXT software decoder is shared between the WGPU and Vulkan path
+# tracers; compile it whenever either backend is enabled.
+if (THREEPP_WITH_VULKAN OR THREEPP_WITH_WGPU)
+    list(APPEND sources
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.cpp"
+    )
+endif ()
+
 if (THREEPP_WITH_WGPU)
     list(APPEND publicHeaders
             "threepp/renderers/wgpu/WgpuBuffer.hpp"
@@ -638,7 +646,6 @@ if (THREEPP_WITH_WGPU)
             "threepp/renderers/wgpu/ShaderPass.cpp"
 
             "threepp/renderers/wgpu/pathtracer/WgpuPathTracer.cpp"
-            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.cpp"
             "threepp/renderers/wgpu/pathtracer/WgpuPathTracerAtlas.cpp"
             "threepp/renderers/wgpu/pathtracer/WgpuPathTracerGeometry.cpp"
             "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBvh.cpp"
