@@ -811,14 +811,16 @@ void main() {
         const float NdotL = max(dot(N, L), 0.0);
         if (NdotL <= 0.0) continue;
 
-        // Shadow ray: any non-alpha-tested hit blocks the light. Without
-        // OpaqueEXT the any-hit shader fires and lets cutout foliage etc.
-        // pass light through their transparent texels.
-        shadowVisibility = 0.0;
+        // Shadow ray via hit group 1 (shadow_anyhit.rahit). NoOpaqueEXT forces
+        // all geometry through the any-hit so glass/cutout can attenuate.
+        // shadowVisibility starts at 1.0; glass multiplies it down; opaque sets
+        // it to 0; miss is a no-op so the accumulated transmittance is the result.
+        shadowVisibility = 1.0;
         traceRayEXT(topAS,
                     gl_RayFlagsTerminateOnFirstHitEXT |
-                    gl_RayFlagsSkipClosestHitShaderEXT,
-                    0xff, 0, 0, 1,// missIndex = 1 (shadow miss)
+                    gl_RayFlagsSkipClosestHitShaderEXT |
+                    gl_RayFlagsNoOpaqueEXT,
+                    0xff, 1, 0, 1,// sbtOffset=1 → shadow hit group; missIndex=1
                     hitPos + N * 1e-3, 0.0, L, 1e4, 1);
         if (shadowVisibility <= 0.0) continue;
 
@@ -850,7 +852,7 @@ void main() {
             const float spec_cc = (D_cc * G_cc) / max(4.0 * NdotV * NdotL, 1e-4);
             perLight += vec3(spec_cc * ccWeight);
         }
-        lit += perLight * NdotL * lights.dirLights[i].color;
+        lit += perLight * NdotL * lights.dirLights[i].color * shadowVisibility;
     }
 
     // === Point lights ===
@@ -879,11 +881,12 @@ void main() {
             atten *= w * w;
         }
 
-        shadowVisibility = 0.0;
+        shadowVisibility = 1.0;
         traceRayEXT(topAS,
                     gl_RayFlagsTerminateOnFirstHitEXT |
-                    gl_RayFlagsSkipClosestHitShaderEXT,
-                    0xff, 0, 0, 1,
+                    gl_RayFlagsSkipClosestHitShaderEXT |
+                    gl_RayFlagsNoOpaqueEXT,
+                    0xff, 1, 0, 1,
                     hitPos + N * 1e-3, 0.0, toL, dist - 1e-2, 1);
         if (shadowVisibility <= 0.0) continue;
 
@@ -907,7 +910,7 @@ void main() {
             const float G_cc    = geomSmithG1(NdotV, k_cc) * geomSmithG1(NdotL, k_cc);
             perPt += vec3((D_cc * G_cc) / max(4.0 * NdotV * NdotL, 1e-4) * ccWeight);
         }
-        lit += perPt * NdotL * lights.pointLights[i].color * atten;
+        lit += perPt * NdotL * lights.pointLights[i].color * atten * shadowVisibility;
     }
 
     // === Spot lights ===
@@ -939,11 +942,12 @@ void main() {
         }
         atten *= spotAtten;
 
-        shadowVisibility = 0.0;
+        shadowVisibility = 1.0;
         traceRayEXT(topAS,
                     gl_RayFlagsTerminateOnFirstHitEXT |
-                    gl_RayFlagsSkipClosestHitShaderEXT,
-                    0xff, 0, 0, 1,
+                    gl_RayFlagsSkipClosestHitShaderEXT |
+                    gl_RayFlagsNoOpaqueEXT,
+                    0xff, 1, 0, 1,
                     hitPos + N * 1e-3, 0.0, toL, dist - 1e-2, 1);
         if (shadowVisibility <= 0.0) continue;
 
@@ -967,7 +971,7 @@ void main() {
             const float G_cc    = geomSmithG1(NdotV, k_cc) * geomSmithG1(NdotL, k_cc);
             perSp += vec3((D_cc * G_cc) / max(4.0 * NdotV * NdotL, 1e-4) * ccWeight);
         }
-        lit += perSp * NdotL * lights.spotLights[i].color * atten;
+        lit += perSp * NdotL * lights.spotLights[i].color * atten * shadowVisibility;
     }
 
     // === Rect area lights ===
@@ -993,11 +997,12 @@ void main() {
         const float cosEmitter = max(dot(-toL, lights.rectLights[i].normal), 0.0);
         if (cosEmitter <= 0.0) continue;
 
-        shadowVisibility = 0.0;
+        shadowVisibility = 1.0;
         traceRayEXT(topAS,
                     gl_RayFlagsTerminateOnFirstHitEXT |
-                    gl_RayFlagsSkipClosestHitShaderEXT,
-                    0xff, 0, 0, 1,
+                    gl_RayFlagsSkipClosestHitShaderEXT |
+                    gl_RayFlagsNoOpaqueEXT,
+                    0xff, 1, 0, 1,
                     hitPos + N * 1e-3, 0.0, toL, dist - 1e-2, 1);
         if (shadowVisibility <= 0.0) continue;
 
@@ -1022,7 +1027,7 @@ void main() {
             const float G_cc    = geomSmithG1(NdotV, k_cc) * geomSmithG1(NdotL, k_cc);
             perRect += vec3((D_cc * G_cc) / max(4.0 * NdotV * NdotL, 1e-4) * ccWeight);
         }
-        lit += perRect * NdotL * lights.rectLights[i].color * geomTerm;
+        lit += perRect * NdotL * lights.rectLights[i].color * geomTerm * shadowVisibility;
     }
 
     // === Emissive-mesh NEE ===
@@ -1072,11 +1077,12 @@ void main() {
                 const vec3 lN = lnRaw / lnLen;
                 const float cosLight = abs(dot(-toL, lN));
                 if (cosLight > 0.01 && t.v0.w > 1e-20 && t.v2.w > 0.0) {
-                    shadowVisibility = 0.0;
+                    shadowVisibility = 1.0;
                     traceRayEXT(topAS,
                                 gl_RayFlagsTerminateOnFirstHitEXT |
-                                gl_RayFlagsSkipClosestHitShaderEXT,
-                                0xff, 0, 0, 1,
+                                gl_RayFlagsSkipClosestHitShaderEXT |
+                                gl_RayFlagsNoOpaqueEXT,
+                                0xff, 1, 0, 1,
                                 hitPos + N * 1e-3, 0.0, toL, dist - 1e-2, 1);
                     if (shadowVisibility > 0.0) {
                         // Solid-angle pdf: (power/totalPower) * dist² / (area*cosLight)
@@ -1121,7 +1127,7 @@ void main() {
                         // will reinforce anyway.
                         const float emCLum = dot(emContrib, vec3(0.2126, 0.7152, 0.0722));
                         if (emCLum > 20.0) emContrib *= 20.0 / emCLum;
-                        lit += emContrib;
+                        lit += emContrib * shadowVisibility;
                     }
                 }
             }
@@ -1190,17 +1196,18 @@ void main() {
             }
         }
         if (nValid) {
-            shadowVisibility = 0.0;
+            shadowVisibility = 1.0;
             traceRayEXT(topAS,
                         gl_RayFlagsTerminateOnFirstHitEXT |
-                        gl_RayFlagsSkipClosestHitShaderEXT,
-                        0xff, 0, 0, 1,
+                        gl_RayFlagsSkipClosestHitShaderEXT |
+                        gl_RayFlagsNoOpaqueEXT,
+                        0xff, 1, 0, 1,
                         hitPos + N * 1e-3, 0.0, nDir, 1e4, 1);
             if (shadowVisibility > 0.0) {
                 vec3 envSample = sampleEquirect(nDir);
                 const float envLum = dot(envSample, vec3(0.2126, 0.7152, 0.0722));
                 if (envLum > 20.0) envSample *= 20.0 / envLum;
-                lit += 0.5 * nWeight * envSample;
+                lit += 0.5 * nWeight * envSample * shadowVisibility;
             }
         }
     }

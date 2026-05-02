@@ -52,6 +52,7 @@
 #include "threepp/renderers/vulkan/shaders/shadow_miss.rmiss.spv.h"
 #include "threepp/renderers/vulkan/shaders/closest_hit.rchit.spv.h"
 #include "threepp/renderers/vulkan/shaders/closest_hit_alpha.rahit.spv.h"
+#include "threepp/renderers/vulkan/shaders/shadow_anyhit.rahit.spv.h"
 #include "threepp/renderers/vulkan/shaders/prefilter_env.comp.spv.h"
 
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.hpp"
@@ -3496,14 +3497,16 @@ namespace threepp {
                 return m;
             };
 
-            VkShaderModule rgenMod  = loadModule(kRaygenRgenSpv,            sizeof(kRaygenRgenSpv));
-            VkShaderModule missMod  = loadModule(kMissRmissSpv,             sizeof(kMissRmissSpv));
-            VkShaderModule sMissMod = loadModule(kShadowMissRmissSpv,       sizeof(kShadowMissRmissSpv));
-            VkShaderModule chitMod  = loadModule(kClosestHitRchitSpv,       sizeof(kClosestHitRchitSpv));
-            VkShaderModule ahitMod  = loadModule(kClosestHitAlphaRahitSpv,  sizeof(kClosestHitAlphaRahitSpv));
+            VkShaderModule rgenMod    = loadModule(kRaygenRgenSpv,           sizeof(kRaygenRgenSpv));
+            VkShaderModule missMod    = loadModule(kMissRmissSpv,            sizeof(kMissRmissSpv));
+            VkShaderModule sMissMod   = loadModule(kShadowMissRmissSpv,      sizeof(kShadowMissRmissSpv));
+            VkShaderModule chitMod    = loadModule(kClosestHitRchitSpv,      sizeof(kClosestHitRchitSpv));
+            VkShaderModule ahitMod    = loadModule(kClosestHitAlphaRahitSpv, sizeof(kClosestHitAlphaRahitSpv));
+            VkShaderModule sahitMod   = loadModule(kShadowAnyhitRahitSpv,    sizeof(kShadowAnyhitRahitSpv));
 
-            // Stages: 0=rgen, 1=primary miss, 2=shadow miss, 3=closest hit, 4=any-hit.
-            std::array<VkPipelineShaderStageCreateInfo, 5> stages{};
+            // Stages: 0=rgen, 1=primary miss, 2=shadow miss, 3=path closest-hit,
+            //         4=path any-hit (alpha), 5=shadow any-hit (glass+cutout).
+            std::array<VkPipelineShaderStageCreateInfo, 6> stages{};
             for (auto& s : stages) {
                 s.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
                 s.pName = "main";
@@ -3518,11 +3521,18 @@ namespace threepp {
             stages[3].module = chitMod;
             stages[4].stage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
             stages[4].module = ahitMod;
+            stages[5].stage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+            stages[5].module = sahitMod;
 
-            // Groups: 0=rgen, 1=primary miss, 2=shadow miss, 3=hit (chit+ahit).
-            // The any-hit attaches to the same hit group as closest_hit so the
-            // SBT layout (one hit record) doesn't change. Phase 10: alpha-test.
-            std::array<VkRayTracingShaderGroupCreateInfoKHR, 4> groups{};
+            // Groups:
+            //   0 = rgen
+            //   1 = primary miss
+            //   2 = shadow miss
+            //   3 = path hit  (chit=3, ahit=4) — selected by sbtOffset=0
+            //   4 = shadow hit (chit=UNUSED, ahit=5) — selected by sbtOffset=1
+            //       NoOpaqueEXT on shadow rays forces all geometry through ahit=5;
+            //       opaque hits set shadow=0 and accept; glass multiplies and ignores.
+            std::array<VkRayTracingShaderGroupCreateInfoKHR, 5> groups{};
             for (auto& g : groups) {
                 g.sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
                 g.generalShader = VK_SHADER_UNUSED_KHR;
@@ -3539,6 +3549,8 @@ namespace threepp {
             groups[3].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
             groups[3].closestHitShader = 3;
             groups[3].anyHitShader = 4;
+            groups[4].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+            groups[4].anyHitShader = 5;// closestHitShader stays UNUSED
 
             VkRayTracingPipelineCreateInfoKHR rci{};
             rci.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
@@ -3559,6 +3571,7 @@ namespace threepp {
             vkDestroyShaderModule(ctx->device(), sMissMod, nullptr);
             vkDestroyShaderModule(ctx->device(), chitMod,  nullptr);
             vkDestroyShaderModule(ctx->device(), ahitMod,  nullptr);
+            vkDestroyShaderModule(ctx->device(), sahitMod, nullptr);
         }
 
         void createShaderBindingTable() {
@@ -3568,9 +3581,9 @@ namespace threepp {
             const uint32_t baseAlignment = props.shaderGroupBaseAlignment;
             const uint32_t handleSizeAligned = alignUp(handleSize, handleAlignment);
 
-            // 4 groups: rgen, primary miss, shadow miss, hit.
-            // Miss region holds 2 records; rgen and hit hold 1 each.
-            constexpr uint32_t groupCount = 4;
+            // 5 groups: rgen, primary miss, shadow miss, path hit, shadow hit.
+            // Miss region: 2 records. Hit region: 2 records (path=sbtOffset 0, shadow=sbtOffset 1).
+            constexpr uint32_t groupCount = 5;
             const uint32_t handlesDataSize = groupCount * handleSize;
             std::vector<uint8_t> handles(handlesDataSize);
             check(ctx->rt().getRayTracingShaderGroupHandles(
@@ -3582,7 +3595,7 @@ namespace threepp {
             // handle size. Region size must be a multiple of stride and >= base alignment.
             const uint32_t rgenRegionBytes = alignUp(handleSizeAligned, baseAlignment);
             const uint32_t missRegionBytes = alignUp(2 * handleSizeAligned, baseAlignment);
-            const uint32_t hitRegionBytes  = alignUp(handleSizeAligned, baseAlignment);
+            const uint32_t hitRegionBytes  = alignUp(2 * handleSizeAligned, baseAlignment);
             const VkDeviceSize sbtSize =
                     static_cast<VkDeviceSize>(rgenRegionBytes) +
                     static_cast<VkDeviceSize>(missRegionBytes) +
@@ -3609,9 +3622,11 @@ namespace threepp {
                         handles.data() + 1 * handleSize, handleSize);
             std::memcpy(dst + rgenRegionBytes + 1 * handleSizeAligned,
                         handles.data() + 2 * handleSize, handleSize);
-            // hit follows the miss region.
-            std::memcpy(dst + rgenRegionBytes + missRegionBytes,
+            // hit[0] = path hit group (sbtOffset=0), hit[1] = shadow hit group (sbtOffset=1).
+            std::memcpy(dst + rgenRegionBytes + missRegionBytes + 0 * handleSizeAligned,
                         handles.data() + 3 * handleSize, handleSize);
+            std::memcpy(dst + rgenRegionBytes + missRegionBytes + 1 * handleSizeAligned,
+                        handles.data() + 4 * handleSize, handleSize);
             vmaUnmapMemory(ctx->allocator(), sbtBuffer.alloc);
 
             const VkDeviceAddress base = sbtBuffer.address;
@@ -3622,7 +3637,7 @@ namespace threepp {
             missRegion.stride = handleSizeAligned;
             missRegion.size   = missRegionBytes;
             hitRegion.deviceAddress = base + rgenRegionBytes + missRegionBytes;
-            hitRegion.stride = hitRegionBytes;
+            hitRegion.stride = handleSizeAligned;
             hitRegion.size   = hitRegionBytes;
             callRegion = {};
         }
