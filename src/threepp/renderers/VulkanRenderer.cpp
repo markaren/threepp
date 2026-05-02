@@ -348,6 +348,19 @@ namespace threepp {
         // the visible static-scene wobble we observed when always reprojecting).
         bool motionThisFrame_ = false;
 
+        // Camera viewProj changed this frame — separate bit so the raygen can
+        // reproject all non-sky pixels for camera motion while leaving pixels
+        // whose mesh did not move at full FC. Without this split a single
+        // moving mesh anywhere in the scene would halve FC scene-wide
+        // (uniformly noisy background equilibrating at FC≈2).
+        bool cameraMovedThisFrame_ = false;
+
+        // Per-mesh "moved" bitmask, one bit per mesh up to 128. Bit i set when
+        // mesh i's worldMatrix changed since last frame. Mirrors WGPU's
+        // movedMeshBits — raygen indexes by primaryInstanceId-1 to make the
+        // FC-halving decision per-pixel instead of scene-wide.
+        uint32_t meshMovedBits_[4] = {0u, 0u, 0u, 0u};
+
         // Previous-frame camera (proj_prev * view_prev) for primary-hit
         // reprojection. One UBO per frame-in-flight so updates don't race the
         // GPU. Per-mesh motion matrices (prevWorld * inverse(curWorld)) live in
@@ -1095,6 +1108,8 @@ namespace threepp {
             // motion checks below + in updateCameraUbo OR true into this flag
             // before dispatch.
             motionThisFrame_ = false;
+            cameraMovedThisFrame_ = false;
+            meshMovedBits_[0] = meshMovedBits_[1] = meshMovedBits_[2] = meshMovedBits_[3] = 0u;
 
             std::vector<Mesh*> meshes;
             scene.traverse([&](Object3D& o) {
@@ -1142,8 +1157,18 @@ namespace threepp {
             // renderFrame so we can defer the host write past the fence wait.
             lastVisibleMeshes_ = meshes;
             if (sceneBuilt_ && currFp.size() == prevSceneFingerprint.size()) {
-                bool topologySame = true;
+                // Three classes of change:
+                //   structural    — pointers (mesh/geom/mat/textures): full rebuild.
+                //   matrices      — per-mesh world matrices: TLAS refit + bit set.
+                //   materialVals  — pbr floats (KHR_animation_pointer animates colors,
+                //                   roughness, etc): re-upload matDescs in place + bit set.
+                // Splitting matters: KHR_animation_pointer changes pbr every frame
+                // without changing any pointer or texture. Lumping it under
+                // structural caused full rebuild every frame, which reset the
+                // gbuf+sampleIndex globally and froze accumulation scene-wide.
+                bool structuralSame = true;
                 bool matricesSame = true;
+                bool materialValuesSame = true;
                 for (size_t i = 0; i < currFp.size(); ++i) {
                     const auto& a = currFp[i];
                     const auto& b = prevSceneFingerprint[i];
@@ -1153,19 +1178,27 @@ namespace threepp {
                         a.transmissionTex != b.transmissionTex ||
                         a.clearcoatTex != b.clearcoatTex ||
                         a.clearcoatRoughnessTex != b.clearcoatRoughnessTex ||
-                        a.emissiveTex != b.emissiveTex ||
-                        std::memcmp(a.pbr.data(), b.pbr.data(), sizeof(a.pbr)) != 0) {
-                        topologySame = false;
+                        a.emissiveTex != b.emissiveTex) {
+                        structuralSame = false;
                         break;
                     }
-                    if (std::memcmp(a.matrix.data(), b.matrix.data(), sizeof(a.matrix)) != 0) {
-                        matricesSame = false;
+                    const bool xfmChanged = std::memcmp(a.matrix.data(), b.matrix.data(), sizeof(a.matrix)) != 0;
+                    const bool matChanged = std::memcmp(a.pbr.data(),    b.pbr.data(),    sizeof(a.pbr))    != 0;
+                    if (xfmChanged) matricesSame = false;
+                    if (matChanged) materialValuesSame = false;
+                    // Both flavors of change invalidate this pixel's history,
+                    // so they share the same per-mesh bit. Reproject + FC-halve
+                    // is correct for either (geometry shifted OR same geometry
+                    // with new shading inputs).
+                    if ((xfmChanged || matChanged) && i < 128) {
+                        meshMovedBits_[i >> 5] |= (1u << (i & 31u));
                     }
                 }
-                if (topologySame) {
-                    if (!matricesSame) {
+                if (structuralSame) {
+                    if (!matricesSame || !materialValuesSame) {
                         motionThisFrame_ = true;
-                        sampleIndex = 0;
+                    }
+                    if (!matricesSame) {
                         // Transform-only update: refit TLAS with new transforms.
                         // BLAS handles + buffer addresses are unchanged so
                         // geomDescs / matDescs stay valid; we just rewrite the
@@ -1192,8 +1225,67 @@ namespace threepp {
                         }
                         refitTlas(instances);
                     }
+                    if (!materialValuesSame) {
+                        // Material-values-only update: rebuild MaterialDescs and
+                        // memcpy into the existing materialDescsBuffer. Pointers
+                        // and textures haven't changed, so the matDescs slot count
+                        // and texture indices stay valid; only the pbr floats need
+                        // to flow through. Wait the device idle since the buffer is
+                        // shared across frames-in-flight — without it we'd race a
+                        // previous frame's RT trace still reading the old contents.
+                        vkDeviceWaitIdle(ctx->device());
+                        std::vector<MaterialDesc> matDescs;
+                        matDescs.reserve(meshes.size());
+                        for (Mesh* m : meshes) {
+                            MaterialDesc md = materialFromMesh(*m);
+                            if (auto tex = albedoTexOf(*m)) {
+                                md.albedoTexIndex = ensureMaterialTexture(tex);
+                                copyTexUvTransform(md.uvTransform, tex);
+                            }
+                            if (auto tex = roughnessTexOf(*m)) {
+                                md.roughnessTexIndex = ensureMaterialTexture(tex);
+                                copyTexUvTransform(md.uvTransformRoughMetal, tex);
+                            }
+                            if (auto tex = metalnessTexOf(*m)) {
+                                md.metalnessTexIndex = ensureMaterialTexture(tex);
+                                if (md.roughnessTexIndex < 0) copyTexUvTransform(md.uvTransformRoughMetal, tex);
+                            }
+                            if (auto tex = normalTexOf(*m)) {
+                                md.normalTexIndex = ensureMaterialTexture(tex);
+                                copyTexUvTransform(md.uvTransformNormal, tex);
+                            }
+                            if (auto tex = transmissionTexOf(*m)) {
+                                md.transmissionTexIndex = ensureMaterialTexture(tex);
+                                copyTexUvTransform(md.uvTransformTransmission, tex);
+                            }
+                            if (auto tex = clearcoatTexOf(*m)) {
+                                md.clearcoatTexIndex = ensureMaterialTexture(tex);
+                                copyTexUvTransform(md.uvTransformClearcoat, tex);
+                            }
+                            if (auto tex = clearcoatRoughnessTexOf(*m)) {
+                                md.clearcoatRoughnessTexIndex = ensureMaterialTexture(tex);
+                                copyTexUvTransform(md.uvTransformClearcoatRough, tex);
+                            }
+                            if (auto tex = emissiveTexOf(*m)) {
+                                md.emissiveTexIndex = ensureMaterialTexture(tex);
+                                copyTexUvTransform(md.uvTransformEmissive, tex);
+                            }
+                            if (auto tex = occlusionTexOf(*m)) {
+                                md.occlusionTexIndex = ensureMaterialTexture(tex);
+                                copyTexUvTransform(md.uvTransformOcclusion, tex);
+                            }
+                            matDescs.push_back(md);
+                        }
+                        if (!matDescs.empty()) {
+                            void* mapped = nullptr;
+                            vmaMapMemory(ctx->allocator(), materialDescsBuffer.alloc, &mapped);
+                            std::memcpy(mapped, matDescs.data(),
+                                        matDescs.size() * sizeof(MaterialDesc));
+                            vmaUnmapMemory(ctx->allocator(), materialDescsBuffer.alloc);
+                        }
+                    }
                     // Update prevSceneFingerprint so later frames compare
-                    // against this frame's matrices, not stale ones.
+                    // against this frame's state, not stale.
                     prevSceneFingerprint = std::move(currFp);
                     return;
                 }
@@ -1586,7 +1678,11 @@ namespace threepp {
                     fx*fx + fy*fy + fz*fz > 1e-8f ||
                     sx*sx + sy*sy > 1e-10f) {
                     motionThisFrame_ = true;
-                    sampleIndex = 0;
+                    cameraMovedThisFrame_ = true;
+                    // sampleIndex must keep advancing — see comment in
+                    // ensureSceneBuilt's matrix-changed path. Per-pixel FC
+                    // halving handles convergence; freezing the seed kills
+                    // Monte Carlo variance reduction.
                 }
             }
 
@@ -2543,19 +2639,27 @@ namespace threepp {
             check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rtDsLayout),
                   "vkCreateDescriptorSetLayout(RT)");
 
-            // 20-byte push constant: .x sampleIndex, .y env mip count
-            // (closest_hit), .z toneMapping enum, .w exposure as float bits,
-            // .v[1] motionFlags (raygen): bit 0 = "motion happened this frame"
-            // (camera viewProj or any mesh transform differs from prev frame).
-            // Raygen uses this to default to a self-tap of accum/gbuf when
-            // unset, avoiding round-trip reproject precision drift on static
-            // scenes. Layout fits a uvec4 + uint, well under the 128-byte
-            // minimum push-constant guarantee.
+            // 36-byte push constant. Layout matches the host-side `pc[9]`
+            // assembled in renderFrame and the GLSL PushConstants struct in
+            // raygen.rgen / closest_hit.rchit. Well under the 128-byte minimum
+            // push-constant guarantee.
+            //
+            //   [0] sampleIndex            (raygen)
+            //   [1] env mip count          (closest_hit)
+            //   [2] toneMapping enum
+            //   [3] exposure as float bits
+            //   [4] motionFlags: bit 0 = any motion this frame (mesh or
+            //       camera), bit 1 = camera viewProj changed. Raygen takes a
+            //       self-tap of accum/gbuf when bit 0 is clear, avoiding
+            //       round-trip reproject precision drift on static scenes.
+            //   [5..8] meshMovedBits[4] — packed per-mesh moved bits (128
+            //       meshes). Lets raygen gate FC-halving per-pixel via
+            //       primaryInstanceId-1 instead of scene-wide.
             VkPushConstantRange pcRange{};
             pcRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                  VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
             pcRange.offset = 0;
-            pcRange.size   = 20;
+            pcRange.size   = 36;
 
             VkPipelineLayoutCreateInfo plci{};
             plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -3141,19 +3245,26 @@ namespace threepp {
                                     rtPipelineLayout, 0, 1,
                                     &descriptorSets[setIdx], 0, nullptr);
 
-            // .x = sampleIndex (raygen), .y = PMREM mip count (closest_hit),
-            // .z = ToneMapping enum, .w = exposure as float bits, .v[1] =
-            // motionFlags (bit 0 = camera or mesh motion this frame).
+            // [0] sampleIndex (raygen), [1] PMREM mip count (closest_hit),
+            // [2] ToneMapping enum, [3] exposure as float bits,
+            // [4] motionFlags (bit 0 = any motion, bit 1 = camera moved),
+            // [5..8] meshMovedBits[4] — see VkPushConstantRange comment above.
             const float exposure = toneMappingExposure_;
             uint32_t exposureBits;
             std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
-            const uint32_t motionFlags = motionThisFrame_ ? 1u : 0u;
-            const uint32_t pc[5] = {
+            const uint32_t motionFlags =
+                    (motionThisFrame_      ? 1u : 0u) |
+                    (cameraMovedThisFrame_ ? 2u : 0u);
+            const uint32_t pc[9] = {
                     sampleIndex,
                     envImage.mipLevels,
                     static_cast<uint32_t>(toneMapping_),
                     exposureBits,
                     motionFlags,
+                    meshMovedBits_[0],
+                    meshMovedBits_[1],
+                    meshMovedBits_[2],
+                    meshMovedBits_[3],
             };
             vkCmdPushConstants(cb, rtPipelineLayout,
                                VK_SHADER_STAGE_RAYGEN_BIT_KHR |

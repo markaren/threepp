@@ -1,5 +1,6 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
+#extension GL_EXT_scalar_block_layout : require
 
 // Phase 4a: derive ray origin / direction from a real threepp Camera. The
 // host uploads camera.matrixWorld (viewInverse) and camera.projectionMatrixInverse
@@ -67,17 +68,38 @@ layout(set = 0, binding = 13, rgba32f) uniform readonly image2D prevGbufImage;
 // .x sampleIndex, .y envMipCount (closest_hit), .z toneMapping enum
 // (None=0, Linear=1, Reinhard=2, Cineon=3, ACESFilmic=4, Custom=5),
 // .w toneMappingExposure as float-bits, .v[1] motionFlags
-// (bit 0 = "motion this frame": camera viewProj or any mesh transform
-// changed). When bit 0 is unset raygen takes the self-tap accumulation
+// (bit 0 = any motion this frame, bit 1 = camera viewProj changed).
+// meshMovedBits[4] is a 128-bit per-mesh moved bitmask; isMeshMoved()
+// queries by primaryInstanceId-1 so FC-halving is per-pixel rather than
+// scene-wide. When bit 0 is unset raygen takes the self-tap accumulation
 // path and skips the reproject math entirely — float-precision pixel-snap
 // drift on a static scene was visibly wobbly otherwise.
+// 4 separate uints (mb0..mb3) instead of an array — sidesteps any
+// std140/std430/scalar layout ambiguity; scalar uints pack tightly at 4-byte
+// offsets in every layout. Total block size 36 bytes, matches host pc[9].
 layout(push_constant) uniform Pc {
     uint sampleIndex;
     uint envMipCount;
     uint toneMapping;
     uint exposureBits;
     uint motionFlags;
+    uint mb0;
+    uint mb1;
+    uint mb2;
+    uint mb3;
 } pc;
+
+bool isMeshMoved(uint idx) {
+    if (idx >= 128u) return false;
+    const uint b = 1u << (idx & 31u);
+    const uint w = idx >> 5u;
+    uint v;
+    if      (w == 0u) v = pc.mb0;
+    else if (w == 1u) v = pc.mb1;
+    else if (w == 2u) v = pc.mb2;
+    else              v = pc.mb3;
+    return (v & b) != 0u;
+}
 
 layout(location = 0) rayPayloadEXT Payload payload;
 
@@ -273,21 +295,24 @@ void main() {
     }
 
     // ── history tap (mirrors WGPU PT design) ─────────────────────────────
-    // Two paths, matching the WGPU textureLoad-then-optional-reproject pattern:
+    // Per-pixel motion gating, matching WGPU's primaryMoved logic:
     //
-    //  Static frame (motionFlags==0):
-    //    Unconditional self-tap at the same pixel. No ID check, no reproject
-    //    math. FC accumulates unbounded → clean convergence. Host-side
-    //    clearGbufImages() + prevCameraValid=false handle scene/model changes.
+    //  Static frame OR foreign mesh moved (this pixel's mesh static, camera
+    //  static): self-tap. Bit-for-bit reuse of prev accum at the same pixel,
+    //  FC unchanged. A single moving rigid body no longer halves FC scene-wide;
+    //  background pixels accumulate cleanly even while another mesh animates.
     //
-    //  Motion frame (motionFlags bit 0, non-sky pixel):
+    //  This pixel's mesh moved OR camera moved (non-sky):
     //    Bilinear 4-tap reprojection. Each of the 4 bilinear corners is
     //    weighted by its bilinear fraction IF its prev-frame mesh-ID matches
     //    the current pixel's ID, otherwise zero weight. wSum > 1e-4 means at
     //    least one tap agreed → accept the weighted blend, halve FC so the
-    //    running mean re-locks to the new viewpoint in ~16 frames.
-    //    Sky pixels on a motion frame always cold-start (sky direction changed
-    //    with the camera; no valid prev-frame sky tap).
+    //    running mean re-locks to the new viewpoint in ~16 frames. motionMat
+    //    is identity for static meshes, so cam-only motion still reprojects
+    //    correctly via prevCam* without per-mesh transform.
+    //
+    //  Sky pixel + camera moved: histFc=0 → cold-start (sky dir changed).
+    //  Sky pixel + only foreign-mesh motion: self-tap above (sky unchanged).
     //
     // FC / mesh-ID packed as plain float in accum.w / gbuf.w. Small integers
     // (FC ≤ 4096, instance IDs ≤ 2^24) round-trip exactly through float32.
@@ -299,8 +324,12 @@ void main() {
     float histFc   = 0.0;
     vec3  histMean = vec3(0.0);
 
-    if ((pc.motionFlags & 1u) == 0u) {
-        // ── Static frame: unconditional self-tap ─────────────────────
+    const uint primaryMeshU = (primaryInstanceId != 0u) ? (primaryInstanceId - 1u) : 0xFFFFFFFFu;
+    const bool primaryMoved = isMeshMoved(primaryMeshU);
+    const bool camMoved     = (pc.motionFlags & 2u) != 0u;
+
+    if ((pc.motionFlags & 1u) == 0u || (!primaryMoved && !camMoved)) {
+        // ── Static for this pixel: self-tap ───────────────────────────
         const vec4 pa = imageLoad(prevAccumImage, px);
         const vec3 m  = pa.rgb;
         if (!any(isnan(m)) && !any(isinf(m))) {
@@ -309,7 +338,7 @@ void main() {
         }
 
     } else if (primaryInstanceId != 0u) {
-        // ── Motion frame, non-sky: bilinear 4-tap reprojection ───────
+        // ── This pixel moved (or camera moved): bilinear 4-tap reproject
         const mat4 motion = motionMat[primaryInstanceId - 1u];
         const vec3 prevWS = (motion * vec4(primaryWorldPos, 1.0)).xyz;
         const vec3  toPoint = prevWS - pcam.prevCamPosX.xyz;
@@ -355,7 +384,8 @@ void main() {
             }
         }
     }
-    // Sky on motion frame: histFc=0 → cold-start (sky dir changed with camera)
+    // Sky pixel with camMoved: falls through both branches → histFc=0 cold-start.
+    // Sky pixel with only foreign-mesh motion: self-tapped above (no change).
 
     const vec3  mean  = (histMean * histFc + radiance) / (histFc + 1.0);
     const float newFc = min(histFc + 1.0, 4096.0);

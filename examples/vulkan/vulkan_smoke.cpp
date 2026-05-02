@@ -150,7 +150,7 @@ int main() {
     Clock clock;
     canvas.animate([&] {
         const auto dt = clock.getDelta();
-        // boxA->rotation.y += 0.1f * dt;
+        boxA->rotation.y += 0.1f * dt;
         renderer.render(*scene, *camera);
     });
 
