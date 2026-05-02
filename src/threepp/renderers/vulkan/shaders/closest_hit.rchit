@@ -317,6 +317,37 @@ void main() {
         return;
     }
 
+    // MeshBasicMaterial: unlit early-out. Sentinel `roughness < 0` set on the
+    // host (VulkanRenderer.cpp materialFromMesh). Emit base color as direct
+    // radiance and terminate the path — no lighting, NEE, or bounce. Mirrors
+    // WGPU's `shininess == -1` unlit gate.
+    if (mdesc.roughness < 0.0) {
+        vec2 unlitUv = vec2(0.0);
+        if (gdesc.uvAddress != 0ul) {
+            UvBuf ub = UvBuf(gdesc.uvAddress);
+            const vec2 uv0 = vec2(ub.u[idx.x * 2 + 0], ub.u[idx.x * 2 + 1]);
+            const vec2 uv1 = vec2(ub.u[idx.y * 2 + 0], ub.u[idx.y * 2 + 1]);
+            const vec2 uv2 = vec2(ub.u[idx.z * 2 + 0], ub.u[idx.z * 2 + 1]);
+            unlitUv = w * uv0 + attribs.x * uv1 + attribs.y * uv2;
+        }
+        vec3 albedoSample = vec3(1.0);
+        if (mdesc.albedoTexIndex >= 0) {
+            const int idxClamped = clamp(mdesc.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
+            const vec2 uvA = (mdesc.uvTransform * vec3(unlitUv, 1.0)).xy;
+            albedoSample = texture(albedoMaps[idxClamped], uvA).rgb;
+        }
+        const vec3 hitPosUnlit = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
+        payload.radiance      = mdesc.albedo * albedoSample;
+        payload.brdfWeight    = vec3(0.0);
+        payload.nextOrigin    = vec3(0.0);
+        payload.nextDir       = vec3(0.0);
+        payload.flags         = 1u;// terminate
+        payload.hitWorldPos   = hitPosUnlit;
+        payload.hitInstanceId = uint(gl_InstanceCustomIndexEXT) + 1u;
+        payload.hitRoughness  = 1.0;
+        return;
+    }
+
     // UV interpolation (only when the geometry has a uv attribute). The
     // outer fallback is vec2(0) — harmless for materials without an albedo
     // texture; the slot-0 white default would just sample (0,0) anyway.
@@ -654,8 +685,13 @@ void main() {
         float atten = 1.0 / max(dist * dist, 0.01);
         const float range = lights.pointLights[i].range;
         if (range > 0.0) {
-            const float t = min(dist / range, 1.0);
-            atten *= (1.0 - t * t) * (1.0 - t * t);
+            // Three.js / KHR_lights_punctual smooth window: pow(saturate(1 - (d/r)^4), 2).
+            // Quartic interior (stays near 1.0 across most of the range)
+            // squared at the edge for a soft cutoff. Matches WGPU PT.
+            const float t  = dist / range;
+            const float t4 = t * t * t * t;
+            const float w  = max(1.0 - t4, 0.0);
+            atten *= w * w;
         }
 
         shadowVisibility = 0.0;
@@ -708,8 +744,11 @@ void main() {
         float atten = 1.0 / max(dist * dist, 0.01);
         const float range = lights.spotLights[i].range;
         if (range > 0.0) {
-            const float t = min(dist / range, 1.0);
-            atten *= (1.0 - t * t) * (1.0 - t * t);
+            // Three.js / KHR_lights_punctual smooth window: pow(saturate(1 - (d/r)^4), 2).
+            const float t  = dist / range;
+            const float t4 = t * t * t * t;
+            const float w  = max(1.0 - t4, 0.0);
+            atten *= w * w;
         }
         atten *= spotAtten;
 
