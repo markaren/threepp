@@ -392,13 +392,34 @@ void main() {
                 const float w01 = (1.0 - fx) *        fy;
                 const float w11 =        fx  *        fy;
 
-                // Zero weight for any tap whose prev mesh-ID doesn't match.
-                // Silhouette pixels get partial-weight blends from matching
-                // corners rather than a binary accept/reject.
-                const float v00 = (uint(imageLoad(prevGbufImage, b              ).w) == primaryInstanceId) ? w00 : 0.0;
-                const float v10 = (uint(imageLoad(prevGbufImage, b + ivec2(1,0)).w) == primaryInstanceId) ? w10 : 0.0;
-                const float v01 = (uint(imageLoad(prevGbufImage, b + ivec2(0,1)).w) == primaryInstanceId) ? w01 : 0.0;
-                const float v11 = (uint(imageLoad(prevGbufImage, b + ivec2(1,1)).w) == primaryInstanceId) ? w11 : 0.0;
+                // Zero weight for any tap whose prev mesh-ID doesn't match OR
+                // whose stored prev-frame world position is too far from the
+                // expected prevWS for this surface point. Mesh-ID alone is
+                // insufficient under sideways camera translation: a wall
+                // extending from near to far is one mesh, and a bilinear
+                // neighbor pixel that landed on the far end while the curr
+                // pixel is the near end would otherwise be accepted, ghosting
+                // old far-end radiance into the near-end accumulator.
+                //
+                // The depth tolerance scales with prev-camera-space Z so the
+                // pass band is a fixed angular cone rather than a fixed world
+                // distance. 5%·prevZ comfortably covers same-surface
+                // sub-pixel offsets (2-pixel bilinear span × per-pixel angle
+                // ≈ 0.002·prevZ) while rejecting depth jumps that produce
+                // sideways-motion smear.
+                const vec4  g00v = imageLoad(prevGbufImage, b              );
+                const vec4  g10v = imageLoad(prevGbufImage, b + ivec2(1,0));
+                const vec4  g01v = imageLoad(prevGbufImage, b + ivec2(0,1));
+                const vec4  g11v = imageLoad(prevGbufImage, b + ivec2(1,1));
+                const float dEps2 = (0.05 * prevZ) * (0.05 * prevZ);
+                const vec3 d00 = g00v.xyz - prevWS;
+                const vec3 d10 = g10v.xyz - prevWS;
+                const vec3 d01 = g01v.xyz - prevWS;
+                const vec3 d11 = g11v.xyz - prevWS;
+                const float v00 = (uint(g00v.w) == primaryInstanceId && dot(d00,d00) < dEps2) ? w00 : 0.0;
+                const float v10 = (uint(g10v.w) == primaryInstanceId && dot(d10,d10) < dEps2) ? w10 : 0.0;
+                const float v01 = (uint(g01v.w) == primaryInstanceId && dot(d01,d01) < dEps2) ? w01 : 0.0;
+                const float v11 = (uint(g11v.w) == primaryInstanceId && dot(d11,d11) < dEps2) ? w11 : 0.0;
                 const float wSum = v00 + v10 + v01 + v11;
 
                 if (wSum > 1e-4) {
@@ -434,12 +455,17 @@ void main() {
                         // mean anyway, and short enough on glossy that we don't
                         // smear specular highlights past where they belong.
                         const float roughT = smoothstep(0.15, 0.7, primaryRoughness);
+                        // cam-only-motion cap was 256 for rough surfaces; that
+                        // let any leftover bilinear-blend smear linger ~256 frames
+                        // under continuous translation. Tightening to 32 caps the
+                        // smear-decay to ~half a second @60 fps at the cost of
+                        // slower noise settle on rough surfaces during pans.
                         const float capUp  = primaryMoved
-                                ? mix(8.0, 64.0,  roughT)
-                                : mix(8.0, 256.0, roughT);
+                                ? mix(8.0, 64.0, roughT)
+                                : mix(8.0, 32.0, roughT);
                         const float capLo  = primaryMoved
-                                ? mix(2.0, 4.0,   roughT)
-                                : mix(2.0, 6.0,   roughT);
+                                ? mix(2.0, 4.0,  roughT)
+                                : mix(2.0, 6.0,  roughT);
                         histFc = clamp(bFc * 0.5, capLo, capUp);
                     }
                 }
