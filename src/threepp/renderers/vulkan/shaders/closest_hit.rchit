@@ -28,6 +28,7 @@ struct Payload {
     uint seed;
     vec3 hitWorldPos;  // world-space hit point (for primary-hit reprojection)
     uint hitInstanceId;// gl_InstanceCustomIndexEXT + 1; 0 == miss/sky/pass-through
+    float hitRoughness;// post-clamp surface roughness; primary-hit FC cap input
 };
 
 layout(buffer_reference, scalar) readonly buffer VertexBuf { float p[]; };
@@ -298,7 +299,10 @@ void main() {
     if (!isFront && mdesc.doubleSided == 0 && mdesc.transmission <= 0.0) {
         payload.radiance      = vec3(0.0);
         payload.brdfWeight    = vec3(1.0);
-        payload.nextOrigin    = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * (gl_HitTEXT + 0.001);
+        // No advance past hitT — raygen uses a 1e-4 tmin for pass-through
+        // bounces so the next ray sees a host surface sitting right behind
+        // the just-hit pass-through surface (decal-on-mesh case).
+        payload.nextOrigin    = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
         payload.nextDir       = gl_WorldRayDirectionEXT;
         payload.flags         = 4u;
         // Tag this surface so raygen can record it as the primary if nothing
@@ -306,6 +310,10 @@ void main() {
         // facing back-faces never accumulate history and stay permanently noisy.
         payload.hitWorldPos   = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
         payload.hitInstanceId = uint(gl_InstanceCustomIndexEXT) + 1u;
+        // Pass-through: no shading, so use the material's nominal roughness as
+        // a coarse-but-safe FC cap input. The next visible surface upstream
+        // overrides this if it lands as the primary hit.
+        payload.hitRoughness  = clamp(mdesc.roughness, 0.04, 1.0);
         return;
     }
 
@@ -436,27 +444,13 @@ void main() {
     // below; clamped to avoid blowups when ccProb → 1.
     const float invBaseProb = 1.0 / max(1.0 - ccProb, 1e-6);
 
-    // === BLEND mode (alphaCutoff == -1.0 sentinel) ===
-    // alphaMode=BLEND with opacity=1.0 uses the albedo texture's alpha channel
-    // for per-texel transparency. Stochastic: with probability (1-texAlpha) the
-    // ray passes straight through, contributing 0 radiance. Over many samples
-    // this converges to correct alpha blending. alphaCutoff=-1 is safe for the
-    // any-hit shader which already accepts all hits when alphaCutoff <= 0.
-    if (mdesc.alphaCutoff < 0.0 && mdesc.albedoTexIndex >= 0) {
-        const int bi = clamp(mdesc.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        const float texAlpha = texture(albedoMaps[bi], uvAlbedo).a;
-        if (urand(seed) >= texAlpha) {
-            payload.radiance      = vec3(0.0);
-            payload.brdfWeight    = vec3(1.0);
-            payload.nextOrigin    = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * (gl_HitTEXT + 0.001);
-            payload.nextDir       = gl_WorldRayDirectionEXT;
-            payload.flags         = 4u;
-            payload.seed          = seed;
-            payload.hitWorldPos   = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
-            payload.hitInstanceId = uint(gl_InstanceCustomIndexEXT) + 1u;
-            return;
-        }
-    }
+    // BLEND-mode (alphaCutoff < 0 sentinel) is now handled stochastically inside
+    // the any-hit shader: when the coin says "transparent", the BVH skips the
+    // candidate and continues past it. By the time we reach closest_hit on a
+    // BLEND material, the texel rolled "opaque" for this sample, so we shade
+    // the surface normally. The retrace approach used previously sat fireflies
+    // on top of decal-on-mesh setups (LeePerrySmith head decal); the in-BVH
+    // rejection mirrors WGPU PT's testTriangle() and converges cleanly.
 
     // === Transmission lobe ===
     // Russian-roulette gate by mdesc.transmission: with probability `transmission`
@@ -556,6 +550,7 @@ void main() {
         // exits to sky — otherwise glass-to-sky pixels accumulate nothing.
         payload.hitWorldPos   = hitPos;
         payload.hitInstanceId = uint(gl_InstanceCustomIndexEXT) + 1u;
+        payload.hitRoughness  = roughness;// glass: keep moving-cap conservative on sharp lenses
         return;
     }
 
@@ -944,4 +939,5 @@ void main() {
     // miss/sky after gl_InstanceCustomIndexEXT == 0.
     payload.hitWorldPos    = hitPos;
     payload.hitInstanceId  = uint(gl_InstanceCustomIndexEXT) + 1u;
+    payload.hitRoughness   = roughness;// post-clamp; raygen uses for FC cap on motion
 }

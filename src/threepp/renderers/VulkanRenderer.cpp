@@ -2714,7 +2714,8 @@ namespace threepp {
             //       primaryInstanceId-1 instead of scene-wide.
             VkPushConstantRange pcRange{};
             pcRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                 VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+                                 VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                 VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
             pcRange.offset = 0;
             pcRange.size   = 36;
 

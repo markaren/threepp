@@ -4,11 +4,17 @@
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
-// Phase 10: alpha-test any-hit. Bound to the same hit group as closest_hit,
-// fires for every triangle hit candidate before closest_hit. Materials with
-// alphaCutoff <= 0 short-circuit to accept; otherwise we sample the bound
-// albedo map at the interpolated UV and ignore the intersection when the
-// alpha falls below the cutoff. Matches three.js / WGPU PT alpha-test.
+// Phase 10: alpha-test + alpha-blend any-hit. Bound to the same hit group as
+// closest_hit, fires for every triangle hit candidate before closest_hit.
+//   - alphaCutoff > 0  (cutout)   : standard alpha test against the cutoff.
+//   - alphaCutoff < 0  (BLEND)    : stochastic rejection — sample texture
+//     alpha, draw a per-(pixel,sample,triangle) coin, ignore the hit when
+//     alpha < coin so the BVH continues past the decal/foliage/etc to find
+//     the host surface behind. Mirrors WGPU PT's testTriangle() approach
+//     (rejection during traversal) — doing the same trick in closest_hit
+//     and re-tracing was the previous approach and produced firefly noise
+//     where the decal sits coincident with the host mesh.
+//   - alphaCutoff == 0 (opaque)   : accept the hit (most-frequent path).
 //
 // The descriptor layout intentionally mirrors closest_hit's so the two
 // shaders share bindings 3, 4, and 8. The shadow ray (location = 1) and
@@ -57,25 +63,52 @@ layout(set = 0, binding = 4, scalar) readonly buffer MatDescBuf {
 };
 layout(set = 0, binding = 8) uniform sampler2D albedoMaps[kMaxMaterialTextures];
 
+// Push constants are shared with raygen + closest_hit; we only read
+// sampleIndex here for stochastic-blend hashing. The block size in the
+// pipeline layout is larger; declaring just the prefix is fine because
+// Vulkan only requires the offsets to match for the fields actually read.
+layout(push_constant) uniform Pc {
+    uint sampleIndex;
+} pc;
+
 hitAttributeEXT vec2 attribs;
+
+// Stable hash for the stochastic alpha-blend coin. Inputs must be invariant
+// across multiple any-hit invocations of the same triangle within one ray
+// (BVH may invoke any-hit on each candidate during traversal), so the seed
+// uses gl_LaunchIDEXT (pixel) + sampleIndex (frame) + InstanceCustomIndex +
+// PrimitiveID — all stable. Deliberately NOT mutating the path's RNG seed
+// in the payload: any-hit shouldn't have side-effects on the path state.
+float blendHash(uvec3 launch, uint sampleIndex, uint inst, uint prim) {
+    uint h = launch.x * 1973u + launch.y * 9277u + sampleIndex * 26699u
+           + inst * 73856093u + prim * 19349663u + 0x9e3779b9u;
+    h ^= h >> 16; h *= 0x7feb352du;
+    h ^= h >> 15; h *= 0x846ca68bu;
+    h ^= h >> 16;
+    return float(h) / 4294967296.0;
+}
 
 void main() {
     const MaterialDesc mdesc = mats[gl_InstanceCustomIndexEXT];
+    const bool isShadowRay = (gl_IncomingRayFlagsEXT & gl_RayFlagsTerminateOnFirstHitEXT) != 0u;
+    const bool isBlend  = mdesc.alphaCutoff < 0.0;
+    const bool isCutout = mdesc.alphaCutoff > 0.0;
 
     // Shadow rays (TerminateOnFirstHit set by closest_hit NEE traces):
-    // transmissive materials (glass or BLEND-mode alpha<0 sentinel) must not
-    // block light. Ignore the intersection so the shadow ray continues past
-    // the glass. Alpha-cutout materials fall through to the normal alpha test.
-    if ((gl_IncomingRayFlagsEXT & gl_RayFlagsTerminateOnFirstHitEXT) != 0u) {
-        if (mdesc.transmission > 0.0 || mdesc.alphaCutoff < 0.0) {
-            ignoreIntersectionEXT;
-        }
-        // Opaque or cutout: fall through — opaque accepts below, cutout tests alpha.
+    // transmissive materials and BLEND-mode surfaces must not block light.
+    // Ignore the intersection so the shadow ray continues past the glass.
+    // Alpha-cutout materials fall through to the normal alpha test.
+    if (isShadowRay && (mdesc.transmission > 0.0 || isBlend)) {
+        ignoreIntersectionEXT;
     }
 
-    // Opaque materials: nothing to do, accept the hit by returning. Most hits
-    // hit this branch, so keep it cheap (one buffer load + compare).
-    if (mdesc.alphaCutoff <= 0.0 || mdesc.albedoTexIndex < 0) return;
+    // Opaque (alphaCutoff == 0): accept by returning. Most hits land here.
+    if (!isBlend && !isCutout) return;
+
+    // Both blend and cutout need a texture to sample alpha from. Without one,
+    // BLEND with no map = fully opaque (accept), cutout with no map = nothing
+    // to test (also accept).
+    if (mdesc.albedoTexIndex < 0) return;
 
     const GeometryDesc gdesc = geoms[gl_InstanceCustomIndexEXT];
     if (gdesc.uvAddress == 0ul) return;// no UV → cannot alpha-test
@@ -101,7 +134,24 @@ void main() {
 
     const int idxClamped = clamp(mdesc.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
     const float alpha = texture(albedoMaps[idxClamped], uv).a;
-    if (alpha < mdesc.alphaCutoff) {
-        ignoreIntersectionEXT;
+
+    if (isBlend) {
+        // Stochastic alpha-blend: ignore with probability (1 - alpha) so the
+        // BVH continues past the decal/foliage to the host surface behind.
+        // The accepted-hit path in closest_hit then shades normally as if the
+        // material were opaque — the average over many samples converges to
+        // the alpha-weighted blend.
+        const float r = blendHash(uvec3(gl_LaunchIDEXT.xy, 0u),
+                                  pc.sampleIndex,
+                                  uint(gl_InstanceCustomIndexEXT),
+                                  uint(gl_PrimitiveID));
+        if (r >= alpha) {
+            ignoreIntersectionEXT;
+        }
+    } else {
+        // Cutout
+        if (alpha < mdesc.alphaCutoff) {
+            ignoreIntersectionEXT;
+        }
     }
 }

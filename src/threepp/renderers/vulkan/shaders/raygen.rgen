@@ -35,6 +35,7 @@ struct Payload {
     uint seed;         // PCG state threaded through bounces
     vec3 hitWorldPos;  // world-space hit point (for primary-hit reprojection)
     uint hitInstanceId;// gl_InstanceCustomIndexEXT + 1; 0 == miss/sky
+    float hitRoughness;// post-clamp surface roughness; primary-hit FC cap input
 };
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
@@ -215,12 +216,14 @@ void main() {
     // sky / miss — no reproject (env is camera-locked, accumulates naively).
     vec3 primaryWorldPos   = vec3(0.0);
     uint primaryInstanceId = 0u;
+    float primaryRoughness = 1.0;// default (most lenient cap) until first real shade event
 
     // scatter counts real shade events (non-transmission). Transmission hops
     // (glass enter/exit, single-sided pass-through — flags bit 2) are free and
     // don't consume the scatter budget, so multi-layer glass doesn't exhaust
     // the bounce limit before reaching the surface behind it.
     int scatter = 0;
+    bool prevPassThrough = false;
     for (int step = 0; step < kMaxSteps; ++step) {
         payload.radiance   = vec3(0.0);
         payload.brdfWeight = vec3(0.0);
@@ -234,11 +237,21 @@ void main() {
         payload.seed       = seed;
         payload.hitWorldPos    = vec3(0.0);
         payload.hitInstanceId  = 0u;
+        payload.hitRoughness   = 1.0;
+
+        // tmin selection: shaded bounces use 0.001 (1mm) to avoid self-
+        // intersection acne on the surface we just left. Pass-through hops
+        // (alpha-blend, alpha-test cutout, single-sided back-face) need a
+        // much smaller tmin — a decal sitting on a host mesh is sub-mm away,
+        // so 0.001 would skip the host and the pass-through rays would punch
+        // straight through the model into interior/sky, producing firefly
+        // splatter inside the decal silhouette.
+        const float tmin = prevPassThrough ? 1e-4 : 0.001;
 
         // No OpaqueEXT — alpha-test materials need the any-hit shader to fire.
         // Materials with alphaCutoff <= 0 short-circuit in the any-hit shader.
         traceRayEXT(topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
-                    origin, 0.001, dir, 10000.0, 0);
+                    origin, tmin, dir, 10000.0, 0);
 
         // Capture the primary hit (first iteration only) for reprojection.
         // Transmission hops and back-face pass-throughs aren't real shade
@@ -247,6 +260,7 @@ void main() {
         if (primaryInstanceId == 0u && payload.hitInstanceId != 0u) {
             primaryWorldPos   = payload.hitWorldPos;
             primaryInstanceId = payload.hitInstanceId;
+            primaryRoughness  = payload.hitRoughness;
         }
 
         vec3 hitRadiance = payload.radiance;
@@ -271,6 +285,7 @@ void main() {
         // Transmission/pass-through events (glass refraction, single-sided
         // back-face, BLEND pass-through) do not count as scatter bounces.
         const bool isPassThrough = (payload.flags & 4u) != 0u;
+        prevPassThrough = isPassThrough;
         if (!isPassThrough) {
             ++scatter;
             if (scatter >= kMaxBounces) break;
@@ -378,7 +393,17 @@ void main() {
                     const float bFc  = (a00.w  *v00 + a10.w  *v10 + a01.w  *v01 + a11.w  *v11) / wSum;
                     if (!any(isnan(bMean)) && !any(isinf(bMean))) {
                         histMean = bMean;
-                        histFc   = min(bFc * 0.5, 8.0); // halve FC on every motion tap
+                        // Roughness-aware FC cap (mirrors WGPU PT). A flat cap=8
+                        // makes diffuse moving pixels equilibrate near FC≈4 — far
+                        // too noisy. Diffuse/rough surfaces have view-independent
+                        // shading, so a stale-but-reprojected sample is still
+                        // close to correct → cap=64 retains ~6 bits of averaging.
+                        // Smooth/specular surfaces have view-dependent reflections
+                        // that change radically with motion → keep cap=8 so the
+                        // running mean re-locks fast and we don't drag a stale
+                        // highlight through the move.
+                        const float movingCap = mix(8.0, 64.0, smoothstep(0.15, 0.7, primaryRoughness));
+                        histFc   = min(bFc * 0.5, movingCap);
                     }
                 }
             }
