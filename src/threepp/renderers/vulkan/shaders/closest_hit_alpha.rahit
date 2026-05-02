@@ -53,7 +53,7 @@ struct MaterialDesc {
     float _pad[93];          // 372 (68..440)
 };
 
-const uint kMaxMaterialTextures = 512;
+const uint kMaxMaterialTextures = 2048;
 
 layout(set = 0, binding = 3, scalar) readonly buffer GeomDescBuf {
     GeometryDesc geoms[];

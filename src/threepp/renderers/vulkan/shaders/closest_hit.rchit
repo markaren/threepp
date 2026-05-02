@@ -85,7 +85,7 @@ struct MaterialDesc {
     mat3  uvTransformTransmission;  // for transmissionTexIndex
 };
 
-const uint kMaxMaterialTextures = 512;
+const uint kMaxMaterialTextures = 2048;
 
 struct DirLight {
     vec3 direction;

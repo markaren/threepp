@@ -430,6 +430,17 @@ namespace threepp {
         std::array<VkDeviceSize, kFramesInFlight> emissiveTriBufferCapacity{};
         uint32_t emissiveTriCountThisFrame_ = 0;
         float    emissiveTotalPowerThisFrame_ = 0.0f;
+        // Cached CDF blob (16 floats per tri) reused across frames when no
+        // emissive mesh moved + entries-list size unchanged. The CPU walk in
+        // buildAndUploadEmissiveTris is the dominant per-frame cost on
+        // texture-heavy scenes like Bistro; reusing the cache makes
+        // camera-only motion a memcpy instead of a re-trace of every tri.
+        std::vector<float> cachedEmissiveData_;
+        uint32_t cachedEmissiveTriCount_ = 0;
+        float    cachedEmissiveTotalPower_ = 0.0f;
+        size_t   cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
+        uint32_t cachedEmissiveVersion_ = 0;
+        std::array<uint32_t, kFramesInFlight> emissiveBufferVersion_{};
         std::unordered_map<EntryKey, std::array<float, 16>, EntryKeyHash> prevWorldMats;
 
         // Per-entry fingerprint used to detect scene changes between frames.
@@ -1679,6 +1690,11 @@ namespace threepp {
                 }
             }
 
+            // Structural change — invalidate the emissive-tri cache so next
+            // frame's buildAndUploadEmissiveTris does a full walk regardless
+            // of whether entries.size() happens to match.
+            cachedEmissiveEntryCount_ = static_cast<size_t>(-1);
+
             // Tear down anything in-flight references the old AS / scene-desc
             // buffers via a descriptor set. vkDeviceWaitIdle is the simplest
             // safe choice here; rebuilds are rare so the stall is acceptable.
@@ -2091,6 +2107,38 @@ namespace threepp {
             emissiveTriCountThisFrame_ = 0;
             emissiveTotalPowerThisFrame_ = 0.0f;
 
+            // Fast path: nothing that affects the world-space emissive CDF
+            // has changed since the last rebuild. World-space tri positions
+            // depend on mesh world matrices + emissive material values; both
+            // are tracked by meshMovedBits_ (set on xfm OR mat OR bone change).
+            // Camera motion does NOT invalidate. Bistro / Sponza static
+            // frames hit this path and skip the per-tri walk entirely; the
+            // walk is O(visible-emissive-meshes × tris) per frame and was
+            // CPU-bound on Bistro before this cache.
+            const bool anyMeshMoved =
+                    (meshMovedBits_[0] | meshMovedBits_[1] |
+                     meshMovedBits_[2] | meshMovedBits_[3]) != 0u;
+            const bool entriesUnchanged = (cachedEmissiveEntryCount_ == entries.size());
+            if (!anyMeshMoved && entriesUnchanged) {
+                emissiveTriCountThisFrame_   = cachedEmissiveTriCount_;
+                emissiveTotalPowerThisFrame_ = cachedEmissiveTotalPower_;
+                if (cachedEmissiveTriCount_ == 0) {
+                    return false;// no emissives → nothing to upload
+                }
+                if (emissiveBufferVersion_[frame] == cachedEmissiveVersion_) {
+                    // This frame's GPU buffer already holds the cached data.
+                    return false;
+                }
+                const bool grew = ensureEmissiveTriCapacity(frame, cachedEmissiveTriCount_);
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), emissiveTriBuffers[frame].alloc, &mapped);
+                std::memcpy(mapped, cachedEmissiveData_.data(),
+                            cachedEmissiveData_.size() * sizeof(float));
+                vmaUnmapMemory(ctx->allocator(), emissiveTriBuffers[frame].alloc);
+                emissiveBufferVersion_[frame] = cachedEmissiveVersion_;
+                return grew;
+            }
+
             std::vector<float> data;// 16 floats per tri
             data.reserve(64 * 16);
             float cumPower = 0.0f;
@@ -2176,14 +2224,28 @@ namespace threepp {
             const uint32_t triCount = static_cast<uint32_t>(data.size() / 16);
             emissiveTriCountThisFrame_ = triCount;
             emissiveTotalPowerThisFrame_ = cumPower;
+
+            // Update cache regardless — non-emissive scenes still want
+            // entriesUnchanged + 0-tri to short-circuit out of the walk.
+            cachedEmissiveData_           = std::move(data);
+            cachedEmissiveTriCount_       = triCount;
+            cachedEmissiveTotalPower_     = cumPower;
+            cachedEmissiveEntryCount_     = entries.size();
+            cachedEmissiveVersion_++;
+            // Force per-frame upload below; mark this slot as up-to-date
+            // after the memcpy, leaving the other slot stale until its turn.
+            for (auto& v : emissiveBufferVersion_) v = 0;
+
             if (triCount == 0) return false;
 
             const bool grew = ensureEmissiveTriCapacity(frame, triCount);
 
             void* mapped = nullptr;
             vmaMapMemory(ctx->allocator(), emissiveTriBuffers[frame].alloc, &mapped);
-            std::memcpy(mapped, data.data(), data.size() * sizeof(float));
+            std::memcpy(mapped, cachedEmissiveData_.data(),
+                        cachedEmissiveData_.size() * sizeof(float));
             vmaUnmapMemory(ctx->allocator(), emissiveTriBuffers[frame].alloc);
+            emissiveBufferVersion_[frame] = cachedEmissiveVersion_;
             return grew;
         }
 
