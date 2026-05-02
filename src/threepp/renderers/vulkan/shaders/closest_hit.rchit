@@ -637,7 +637,7 @@ void main() {
     // with the chosen bounce direction. Matches the WGPU PT pattern: no
     // 1/transmission inverse-prob scaling, so `transmission` doubles as a
     // stylised reflect-vs-transmit blend factor (artist control), not a physical
-    // mixing weight. Out-of-scope: dispersion, Beer-Lambert volumetric attenuation.
+    // mixing weight. Out-of-scope: dispersion, thin-wall thickness proxy.
     //
     // The outgoing payload sets bit 2 ("NEE skipped at this hit") so raygen
     // doesn't half-weight the env on the next bounce-into-miss — the MIS
@@ -714,7 +714,14 @@ void main() {
                     tintBase = albedo;
                 }
                 vec3 glassTint = tintBase * G1out;
-                if (mdesc.attenuationDistance > 0.0) {
+                // Beer-Lambert volumetric attenuation (KHR_materials_volume).
+                // Apply only on the exit hit (!isFront) where gl_HitTEXT is the
+                // distance traveled INSIDE the medium. Front-face refractions
+                // travel through air, not glass — gating prevents double-tinting.
+                // Single-sided "thin glass" meshes never produce a back-face hit
+                // and therefore stay un-attenuated; that path needs the
+                // `thickness` proxy, not yet wired here.
+                if (mdesc.attenuationDistance > 0.0 && !isFront) {
                     glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
                                      vec3(gl_HitTEXT / mdesc.attenuationDistance));
                 }
