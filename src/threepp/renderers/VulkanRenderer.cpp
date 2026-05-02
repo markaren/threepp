@@ -390,6 +390,16 @@ namespace threepp {
         // to make the FC-halving decision per-pixel instead of scene-wide.
         uint32_t meshMovedBits_[4] = {0u, 0u, 0u, 0u};
 
+        // FNV-1a 64-bit hash of the previous frame's GpuLightsUbo bytes. Used in
+        // updateLightsUbo to detect changes in analytic-light state (visibility,
+        // intensity, color, position, direction, range, decay, cone angles) and
+        // mark the frame as moved so the per-pixel reproject path halves FC and
+        // the new lighting is picked up quickly. RectAreaLight + emissive meshes
+        // already trigger a reset via the per-frame emissive-triangle CDF rebuild;
+        // this covers DirectionalLight / PointLight / SpotLight which only flow
+        // through the lights UBO and would otherwise leave stale accumulation.
+        uint64_t prevLightsHash_ = 0u;
+
         // Unit of work for ray tracing: a single TLAS instance. A regular Mesh
         // expands to one MeshEntry; an InstancedMesh expands to N entries (one
         // per sub-instance) all sharing the same Mesh*/BLAS but with distinct
@@ -2494,6 +2504,25 @@ namespace threepp {
                     g.color[2] = rl->color.b * rl->intensity;
                 }
             });
+
+            // FNV-1a 64-bit over the packed UBO. Counts + per-light state are
+            // both included, so a hidden light (filtered out by `if (!o.visible)
+            // return` above) zero-pads its slot and the hash flips. Any analytic-
+            // light change → flag the frame moved so raygen reprojects + halves
+            // FC. cameraMovedThisFrame_ is the right gate (not just
+            // motionThisFrame_) because lighting affects all non-sky pixels, not
+            // just pixels whose mesh moved.
+            uint64_t h = 0xcbf29ce484222325ull;
+            const auto* bytes = reinterpret_cast<const uint8_t*>(&ubo);
+            for (size_t i = 0; i < sizeof(ubo); ++i) {
+                h ^= bytes[i];
+                h *= 0x100000001b3ull;
+            }
+            if (h != prevLightsHash_) {
+                motionThisFrame_      = true;
+                cameraMovedThisFrame_ = true;
+                prevLightsHash_       = h;
+            }
 
             void* mapped = nullptr;
             vmaMapMemory(ctx->allocator(), lightsUbos[frame].alloc, &mapped);

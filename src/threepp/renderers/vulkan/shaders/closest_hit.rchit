@@ -862,7 +862,12 @@ void main() {
         const float NdotL = max(dot(N, toL), 0.0);
         if (NdotL <= 0.0) continue;
 
-        float atten = 1.0 / max(dist * dist, 0.01);
+        // Frostbite/three.js physical falloff: 1/d^decay. threepp's PointLight
+        // defaults decay=1 (linear); KHR_lights_punctual / modern three.js use
+        // decay=2 (inverse square). Hardcoding d² would clamp every PointLight
+        // to inverse-square and ignore the user's `pl->decay`. Matches WGPU PT.
+        const float decay = lights.pointLights[i].decay;
+        float atten = 1.0 / max(pow(dist, decay), 0.01);
         const float range = lights.pointLights[i].range;
         if (range > 0.0) {
             // Three.js / KHR_lights_punctual smooth window: pow(saturate(1 - (d/r)^4), 2).
@@ -921,7 +926,9 @@ void main() {
                                            spotCos);
         if (spotAtten <= 0.0) continue;
 
-        float atten = 1.0 / max(dist * dist, 0.01);
+        // Distance falloff matches PointLight: 1/d^decay (Frostbite physical).
+        const float decay = lights.spotLights[i].decay;
+        float atten = 1.0 / max(pow(dist, decay), 0.01);
         const float range = lights.spotLights[i].range;
         if (range > 0.0) {
             // Three.js / KHR_lights_punctual smooth window: pow(saturate(1 - (d/r)^4), 2).
