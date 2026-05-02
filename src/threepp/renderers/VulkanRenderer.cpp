@@ -34,6 +34,7 @@
 #include "threepp/lights/RectAreaLight.hpp"
 #include "threepp/lights/SpotLight.hpp"
 #include "threepp/materials/Material.hpp"
+#include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
@@ -1279,6 +1280,13 @@ namespace threepp {
                 d.sheenRoughness = sh->sheenRoughness;
             }
             d.doubleSided = (mat->side == Side::Double) ? 1 : 0;
+            // MeshBasicMaterial is unlit: emit base color directly with no
+            // PBR shading or bounce. Use roughness < 0 as the shader sentinel
+            // (avoids growing the MaterialDesc layout). Mirrors WGPU's
+            // shininess = -1 convention in WgpuPathTracerAtlas.cpp.
+            if (dynamic_cast<MeshBasicMaterial*>(mat.get())) {
+                d.roughness = -1.0f;
+            }
             return d;
         }
 
@@ -1402,6 +1410,14 @@ namespace threepp {
                 auto geom = m->geometry();
                 if (!geom || !geom->hasAttribute("position")) return;
                 if (!geom->hasAttribute("normal")) return;
+                // Wireframe meshes can't be path-traced — a triangle hit would
+                // shade the whole face. WGPU PT routes these to its raster
+                // overlay; until that lands in the Vulkan path, skip them so
+                // they don't show up as solid blobs. Helpers/debug visuals
+                // disappear, which matches WGPU+overlay-disabled.
+                if (auto mat = m->material()) {
+                    if (auto* wf = dynamic_cast<MaterialWithWireframe*>(mat.get()); wf && wf->wireframe) return;
+                }
                 if (auto* inst = dynamic_cast<InstancedMesh*>(m); inst && inst->count() > 0) {
                     Matrix4 instMat;
                     Matrix4 world;
