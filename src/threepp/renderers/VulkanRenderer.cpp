@@ -37,6 +37,7 @@
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
+#include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/Scene.hpp"
@@ -355,30 +356,59 @@ namespace threepp {
         // (uniformly noisy background equilibrating at FC≈2).
         bool cameraMovedThisFrame_ = false;
 
-        // Per-mesh "moved" bitmask, one bit per mesh up to 128. Bit i set when
-        // mesh i's worldMatrix changed since last frame. Mirrors WGPU's
-        // movedMeshBits — raygen indexes by primaryInstanceId-1 to make the
-        // FC-halving decision per-pixel instead of scene-wide.
+        // Per-entry "moved" bitmask, one bit per TLAS instance up to 128. Bit i
+        // set when entry i's effective worldMatrix changed since last frame
+        // (covers both regular meshes and individual InstancedMesh sub-instances).
+        // Mirrors WGPU's movedMeshBits — raygen indexes by primaryInstanceId-1
+        // to make the FC-halving decision per-pixel instead of scene-wide.
         uint32_t meshMovedBits_[4] = {0u, 0u, 0u, 0u};
+
+        // Unit of work for ray tracing: a single TLAS instance. A regular Mesh
+        // expands to one MeshEntry; an InstancedMesh expands to N entries (one
+        // per sub-instance) all sharing the same Mesh*/BLAS but with distinct
+        // worldMatrix = mesh->matrixWorld * instanceMatrix[i] (mirrors the WGPU
+        // PT's RtMeshEntry pattern in WgpuPathTracerAtlas.cpp).
+        struct MeshEntry {
+            Mesh*    mesh;
+            std::array<float, 16> worldMatrix;
+            uint32_t instanceIndex;// 0 for non-instanced
+        };
 
         // Previous-frame camera (proj_prev * view_prev) for primary-hit
         // reprojection. One UBO per frame-in-flight so updates don't race the
-        // GPU. Per-mesh motion matrices (prevWorld * inverse(curWorld)) live in
-        // a single SSBO indexed by gl_InstanceCustomIndexEXT; the host repacks
-        // the array each frame from prevWorldMats keyed by Mesh*. First-frame
-        // / first-seen-mesh entries are identity so reproject is a no-op.
+        // GPU. Per-instance motion matrices (prevWorld * inverse(curWorld)) live
+        // in a single SSBO indexed by gl_InstanceCustomIndexEXT; the host repacks
+        // the array each frame from prevWorldMats keyed by (Mesh*, instanceIndex)
+        // so each InstancedMesh sub-instance has its own motion delta. First-frame
+        // / first-seen entries are identity so reproject is a no-op.
+        struct EntryKey {
+            const Mesh* mesh;
+            uint32_t    instanceIndex;
+            bool operator==(const EntryKey& o) const noexcept {
+                return mesh == o.mesh && instanceIndex == o.instanceIndex;
+            }
+        };
+        struct EntryKeyHash {
+            size_t operator()(const EntryKey& k) const noexcept {
+                const auto h1 = std::hash<const void*>{}(k.mesh);
+                const auto h2 = std::hash<uint32_t>{}(k.instanceIndex);
+                return h1 ^ (h2 + 0x9e3779b9u + (h1 << 6) + (h1 >> 2));
+            }
+        };
         std::array<Buffer, kFramesInFlight> prevCameraUbos{};
         std::array<Buffer, kFramesInFlight> motionMatBuffers{};
         std::array<VkDeviceSize, kFramesInFlight> motionMatBufferCapacity{};
-        std::unordered_map<const Mesh*, std::array<float, 16>> prevWorldMats;
+        std::unordered_map<EntryKey, std::array<float, 16>, EntryKeyHash> prevWorldMats;
 
-        // Per-mesh fingerprint used to detect scene changes between frames.
+        // Per-entry fingerprint used to detect scene changes between frames.
         // We capture the surface state ray tracing actually consumes:
         //   - mesh / geometry / material identity (covers add/remove/swap)
-        //   - matrixWorld 16 floats (covers transform animation)
+        //   - effective worldMatrix 16 floats (covers transform animation
+        //     AND per-instance setMatrixAt; the matrix already incorporates
+        //     mesh->matrixWorld * instanceMatrix[i] for InstancedMesh)
         //   - PBR scalars (covers material slider tweaks)
-        // Anything not in this set won't trigger a rebuild; sufficient for
-        // the v1 feature set (no skinning, no per-vertex anim).
+        // Instance count change shows up as currFp.size() mismatch, forcing
+        // structural rebuild — correct since each instance is its own TLAS slot.
         struct MeshFingerprint {
             const void* mesh;
             const void* geom;
@@ -391,15 +421,16 @@ namespace threepp {
             const void* clearcoatTex;         // covers clearcoatMap swap
             const void* clearcoatRoughnessTex;// covers clearcoatRoughnessMap swap
             const void* emissiveTex;          // covers emissiveMap swap
+            uint32_t instanceIndex;// 0 for non-instanced; distinguishes sub-instances
             std::array<float, 16> matrix{};
             std::array<float, 15> pbr{};// + normalScale.xy + transmission/ior + clearcoat/roughness
         };
         std::vector<MeshFingerprint> prevSceneFingerprint;
-        // Mesh* in TLAS-instance order from the last ensureSceneBuilt call.
-        // renderFrame consumes this to compute per-instance motion matrices
+        // Per-entry record in TLAS-instance order from the last ensureSceneBuilt
+        // call. renderFrame consumes this to compute per-instance motion matrices
         // after the in-flight fence has been waited (safe to write the
         // motionMatBuffers[currentFrame] HOST_VISIBLE buffer).
-        std::vector<Mesh*> lastVisibleMeshes_;
+        std::vector<MeshEntry> lastVisibleEntries_;
         bool sceneBuilt_ = false;
 
         // Ray-tracing pipeline.
@@ -1111,19 +1142,42 @@ namespace threepp {
             cameraMovedThisFrame_ = false;
             meshMovedBits_[0] = meshMovedBits_[1] = meshMovedBits_[2] = meshMovedBits_[3] = 0u;
 
-            std::vector<Mesh*> meshes;
+            // Expand the visible scene into one MeshEntry per TLAS instance.
+            // Regular meshes contribute one entry; an InstancedMesh contributes
+            // count() entries each with worldMatrix = matrixWorld * instanceMat[i].
+            // Mirrors WGPU's expandMeshEntries (WgpuPathTracerAtlas.cpp:20).
+            std::vector<MeshEntry> entries;
             scene.traverse([&](Object3D& o) {
                 auto* m = dynamic_cast<Mesh*>(&o);
                 if (!m || !m->visible) return;
                 auto geom = m->geometry();
                 if (!geom || !geom->hasAttribute("position")) return;
                 if (!geom->hasAttribute("normal")) return;
-                meshes.push_back(m);
+                if (auto* inst = dynamic_cast<InstancedMesh*>(m); inst && inst->count() > 0) {
+                    Matrix4 instMat;
+                    Matrix4 world;
+                    for (size_t j = 0; j < inst->count(); ++j) {
+                        inst->getMatrixAt(j, instMat);
+                        world.multiplyMatrices(*m->matrixWorld, instMat);
+                        MeshEntry e{};
+                        e.mesh = m;
+                        e.instanceIndex = static_cast<uint32_t>(j);
+                        std::memcpy(e.worldMatrix.data(), world.elements.data(), 64);
+                        entries.push_back(e);
+                    }
+                } else {
+                    MeshEntry e{};
+                    e.mesh = m;
+                    e.instanceIndex = 0u;
+                    std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
+                    entries.push_back(e);
+                }
             });
 
             std::vector<MeshFingerprint> currFp;
-            currFp.reserve(meshes.size());
-            for (Mesh* m : meshes) {
+            currFp.reserve(entries.size());
+            for (const MeshEntry& en : entries) {
+                Mesh* m = en.mesh;
                 MeshFingerprint fp{};
                 fp.mesh = m;
                 fp.geom = m->geometry().get();
@@ -1136,8 +1190,8 @@ namespace threepp {
                 fp.clearcoatTex          = clearcoatTexOf(*m).get();
                 fp.clearcoatRoughnessTex = clearcoatRoughnessTexOf(*m).get();
                 fp.emissiveTex           = emissiveTexOf(*m).get();
-                const auto& e = m->matrixWorld->elements;
-                for (size_t i = 0; i < 16; ++i) fp.matrix[i] = e[i];
+                fp.instanceIndex         = en.instanceIndex;
+                fp.matrix                = en.worldMatrix;
                 const MaterialDesc md = materialFromMesh(*m);
                 fp.pbr = {md.albedo[0], md.albedo[1], md.albedo[2],
                           md.roughness, md.metalness,
@@ -1155,7 +1209,7 @@ namespace threepp {
             // We only have to detect the matrix-only case ahead of time;
             // motion matrices themselves are computed each frame in
             // renderFrame so we can defer the host write past the fence wait.
-            lastVisibleMeshes_ = meshes;
+            lastVisibleEntries_ = entries;
             if (sceneBuilt_ && currFp.size() == prevSceneFingerprint.size()) {
                 // Three classes of change:
                 //   structural    — pointers (mesh/geom/mat/textures): full rebuild.
@@ -1204,13 +1258,13 @@ namespace threepp {
                         // geomDescs / matDescs stay valid; we just rewrite the
                         // tlasInstancesBuffer in place and call MODE_UPDATE.
                         std::vector<VkAccelerationStructureInstanceKHR> instances;
-                        instances.reserve(meshes.size());
-                        for (Mesh* m : meshes) {
-                            const BufferGeometry* geomKey = m->geometry().get();
+                        instances.reserve(entries.size());
+                        for (const MeshEntry& en : entries) {
+                            const BufferGeometry* geomKey = en.mesh->geometry().get();
                             auto it = blasCache.find(geomKey);
                             if (it == blasCache.end()) continue;// shouldn't happen on transform-only
                             VkAccelerationStructureInstanceKHR inst{};
-                            const auto& e = m->matrixWorld->elements;
+                            const auto& e = en.worldMatrix;
                             for (int r = 0; r < 3; ++r) {
                                 for (int c = 0; c < 4; ++c) {
                                     inst.transform.matrix[r][c] = e[c * 4 + r];
@@ -1235,8 +1289,9 @@ namespace threepp {
                         // previous frame's RT trace still reading the old contents.
                         vkDeviceWaitIdle(ctx->device());
                         std::vector<MaterialDesc> matDescs;
-                        matDescs.reserve(meshes.size());
-                        for (Mesh* m : meshes) {
+                        matDescs.reserve(entries.size());
+                        for (const MeshEntry& en : entries) {
+                            Mesh* m = en.mesh;
                             MaterialDesc md = materialFromMesh(*m);
                             if (auto tex = albedoTexOf(*m)) {
                                 md.albedoTexIndex = ensureMaterialTexture(tex);
@@ -1346,11 +1401,12 @@ namespace threepp {
             std::vector<VkAccelerationStructureInstanceKHR> instances;
             std::vector<GeometryDesc> geomDescs;
             std::vector<MaterialDesc> matDescs;
-            instances.reserve(meshes.size());
-            geomDescs.reserve(meshes.size());
-            matDescs.reserve(meshes.size());
+            instances.reserve(entries.size());
+            geomDescs.reserve(entries.size());
+            matDescs.reserve(entries.size());
 
-            for (Mesh* m : meshes) {
+            for (const MeshEntry& en : entries) {
+                Mesh* m = en.mesh;
                 const BufferGeometry* geomKey = m->geometry().get();
 
                 auto it = blasCache.find(geomKey);
@@ -1363,8 +1419,9 @@ namespace threepp {
 
                 VkAccelerationStructureInstanceKHR inst{};
                 // VkTransformMatrixKHR is row-major 3x4; threepp Matrix4 is
-                // column-major 4x4 (elements[c*4 + r]).
-                const auto& e = m->matrixWorld->elements;
+                // column-major 4x4 (elements[c*4 + r]). For InstancedMesh the
+                // worldMatrix already incorporates the per-instance transform.
+                const auto& e = en.worldMatrix;
                 for (int r = 0; r < 3; ++r) {
                     for (int c = 0; c < 4; ++c) {
                         inst.transform.matrix[r][c] = e[c * 4 + r];
@@ -1580,24 +1637,25 @@ namespace threepp {
 
         // Compute per-instance motion matrices = prevWorld * inverse(curWorld)
         // and upload to motionMatBuffers[frame]. Identity for first-seen
-        // meshes (cold-start frame after a topology rebuild) so the reproject
-        // is a no-op until prevWorldMats picks up real history. Caller must
-        // have already waited the inFlight[frame] fence — we write a buffer
-        // the GPU may have been reading on the previous use of `frame`.
+        // entries (cold-start frame after a topology rebuild) so the reproject
+        // is a no-op until prevWorldMats picks up real history. Keying by
+        // (Mesh*, instanceIndex) so each InstancedMesh sub-instance carries
+        // its own motion delta. Caller must have already waited the
+        // inFlight[frame] fence — we write a buffer the GPU may have been
+        // reading on the previous use of `frame`.
         void computeAndUploadMotionMatrices(uint32_t frame,
-                                            const std::vector<Mesh*>& meshes) {
-            const uint32_t count = static_cast<uint32_t>(meshes.size());
+                                            const std::vector<MeshEntry>& entries) {
+            const uint32_t count = static_cast<uint32_t>(entries.size());
             if (count == 0) return;
 
-            // Worst case all motion matrices need writing — `count` mat4s.
             std::vector<float> data(count * 16);
             for (uint32_t i = 0; i < count; ++i) {
                 Matrix4 cur;
-                std::memcpy(cur.elements.data(),
-                            meshes[i]->matrixWorld->elements.data(), 64);
+                std::memcpy(cur.elements.data(), entries[i].worldMatrix.data(), 64);
 
                 Matrix4 motion;// identity by default
-                auto it = prevWorldMats.find(meshes[i]);
+                EntryKey key{entries[i].mesh, entries[i].instanceIndex};
+                auto it = prevWorldMats.find(key);
                 if (it != prevWorldMats.end()) {
                     Matrix4 prev;
                     std::memcpy(prev.elements.data(), it->second.data(), 64);
@@ -1614,12 +1672,11 @@ namespace threepp {
             vmaUnmapMemory(ctx->allocator(), motionMatBuffers[frame].alloc);
 
             // Record this frame's matrices for next frame's motion delta.
-            // Only update entries we just wrote; meshes removed from the
+            // Only update entries we just wrote; entries removed from the
             // scene are pruned naturally (full-rebuild path clears the map).
             for (uint32_t i = 0; i < count; ++i) {
-                std::array<float, 16> m{};
-                std::memcpy(m.data(), meshes[i]->matrixWorld->elements.data(), 64);
-                prevWorldMats[meshes[i]] = m;
+                EntryKey key{entries[i].mesh, entries[i].instanceIndex};
+                prevWorldMats[key] = entries[i].worldMatrix;
             }
         }
 
@@ -3375,7 +3432,7 @@ namespace threepp {
             // Safe to write motionMatBuffers[currentFrame] now that the
             // inFlight[currentFrame] fence has been signaled — the GPU has
             // finished its previous use of this slot.
-            computeAndUploadMotionMatrices(currentFrame, lastVisibleMeshes_);
+            computeAndUploadMotionMatrices(currentFrame, lastVisibleEntries_);
             if (refreshEnvTextureFromScene(scene)) {
                 rewriteEnvDescriptors();
                 // Env is a primary radiance source — can't reproject, so
