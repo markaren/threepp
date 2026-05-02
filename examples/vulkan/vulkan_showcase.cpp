@@ -8,11 +8,12 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/geometries/TorusKnotGeometry.hpp"
-#include "threepp/loaders/RGBELoader.hpp"
+#include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/threepp.hpp"
 
+#include <iostream>
 #include <string>
 
 using namespace threepp;
@@ -187,6 +188,35 @@ int main() {
     auto knot = Mesh::create(TorusKnotGeometry::create(0.55f, 0.18f, 128, 24), knotMat);
     knot->position.set(0.f, 4.5f, -1.0f);
     scene.add(knot);
+
+    // Suzanne — textured PBR (baseColor + metallicRoughness maps) exercises
+    // the bindless texture path that the abstract sphere materials skip.
+    // Tilted onto her left ear so she's lying on her side on a small pedestal.
+    GLTFLoader gltfLoader;
+    auto suzanneScene = gltfLoader.load(
+            std::string(DATA_FOLDER) + "/models/gltf/Suzanne/glTF/Suzanne.gltf");
+    if (suzanneScene && suzanneScene->scene) {
+        auto pedestal = Mesh::create(BoxGeometry::create(2.6f, 0.2f, 1.6f),
+                                     whiteWallMat());
+        pedestal->position.set(0.f, 0.1f, -2.0f);
+        scene.add(pedestal);
+
+        auto suz = suzanneScene->scene;
+        // +π/4 around Z bisects the (left-ear, chin) corner — head tilted
+        // 45° so both the side of the jaw and the ear contact the surface.
+        suz->rotation.z = math::PI / 4.f;
+        suz->position.set(0.f, 0.f, -2.f);
+        scene.add(suz);
+
+        // Snap the rolled bbox bottom onto the pedestal top so the ear
+        // touches the surface regardless of the asset's exact bbox.
+        Box3 bbox;
+        bbox.setFromObject(*suz);
+        const float pedestalTop = 0.2f;
+        suz->position.y += pedestalTop - bbox.min().y /2;
+    } else {
+        std::cerr << "Failed to load Suzanne model" << std::endl;
+    }
 
     // Alpha-test cutout — exercises the any-hit shader. The three.js logo
     // becomes a hard-edged silhouette with a clean ground shadow, since the
