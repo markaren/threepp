@@ -29,6 +29,8 @@ struct Payload {
     vec3 hitWorldPos;  // world-space hit point (for primary-hit reprojection)
     uint hitInstanceId;// gl_InstanceCustomIndexEXT + 1; 0 == miss/sky/pass-through
     float hitRoughness;// post-clamp surface roughness; primary-hit FC cap input
+    uint inFlags;      // raygen→here: bit 0 = scatter>0 (suppress emissive output;
+                       // emissive NEE on the prev shade already accounted for it)
 };
 
 layout(buffer_reference, scalar) readonly buffer VertexBuf { float p[]; };
@@ -135,6 +137,21 @@ layout(set = 0, binding = 6) uniform sampler2D envTex;
 // the host's 1×1 white default, used implicitly via -1→0 fallback below.
 layout(set = 0, binding = 8) uniform sampler2D albedoMaps[kMaxMaterialTextures];
 
+// Emissive-mesh NEE: each emissive triangle is packed as 4 vec4
+// (v0.xyz/area, v1.xyz/cumPower, v2.xyz/power, emission.rgb/_pad).
+// The host walks the scene each frame, transforms triangle vertices to
+// world space, computes per-triangle area + power = lum*area, and stores
+// a running CDF in v1.w (cumPower). Total power lives in pc.emissiveTotalPower.
+struct EmTri {
+    vec4 v0;        // xyz = pos, w = area
+    vec4 v1;        // xyz = pos, w = cumPower (running CDF of power)
+    vec4 v2;        // xyz = pos, w = power (per-triangle power = lum * area)
+    vec4 emission;  // xyz = emissive*intensity, w = unused
+};
+layout(set = 0, binding = 14, scalar) readonly buffer EmissiveTriBuf {
+    EmTri emissiveTris[];
+};
+
 // Phase 11: PMREM mip count comes via the same push-constant block used by
 // raygen. .x is raygen's sampleIndex (not read here); .y is envMipCount.
 layout(push_constant) uniform Pc {
@@ -142,6 +159,13 @@ layout(push_constant) uniform Pc {
     uint envMipCount;
     uint _pad1;
     uint _pad2;
+    uint motionFlags;       // unused in closest_hit
+    uint mb0;               // unused
+    uint mb1;               // unused
+    uint mb2;               // unused
+    uint mb3;               // unused
+    uint emissiveCount;     // # of EmTri entries
+    float emissiveTotalPower;// total CDF power (last entry's cumPower)
 } pc;
 
 hitAttributeEXT vec2 attribs;
@@ -172,6 +196,32 @@ float geomSmithG1(float NdotX, float k) {
 
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// VNDF pdf for a sampled wi given wo, n, alpha = roughness². Walter 2007:
+//   PDF_h = D · G1 · VdotH / NdotV
+// then Jacobian to wi via half-vector reflection: divide by 4·VdotH.
+// VdotH cancels → PDF_wi = D · G1 / (4 · NdotV).  Matches WGPU's vndfPdf.
+float vndfPdf(vec3 wo, vec3 wi, vec3 n, float roughness) {
+    const vec3 hm = normalize(wo + wi);
+    const float NdotH = max(0.0, dot(n, hm));
+    const float NdotV = max(1e-6, dot(n, wo));
+    const float D     = distGGX(NdotH, roughness);
+    const float k     = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    const float G1v   = geomSmithG1(NdotV, k);
+    return D * G1v / (4.0 * NdotV);
+}
+
+// Combined BRDF pdf — mixed VNDF spec + cosine diff with the same pSpec
+// that the BSDF sampler uses (mix(0.5, 0.98, metalness)).  Used for the MIS
+// balance heuristic in NEE.
+float brdfPdf(vec3 wo, vec3 wi, vec3 n, float roughness, float metalness) {
+    const float NdotL = dot(n, wi);
+    if (NdotL <= 0.0) return 0.0;
+    const float pSpec   = mix(0.5, 0.98, metalness);
+    const float specPdf = vndfPdf(wo, wi, n, roughness);
+    const float diffPdf = NdotL * (1.0 / PI);
+    return pSpec * specPdf + (1.0 - pSpec) * diffPdf;
 }
 
 // KHR_materials_sheen: Charlie NDF, Neubelt visibility, and IBL energy approximation.
@@ -582,6 +632,7 @@ void main() {
         }
         const float emLum0 = dot(emissiveOut, vec3(0.2126, 0.7152, 0.0722));
         if (emLum0 > 20.0) emissiveOut *= 20.0 / emLum0;
+        if ((payload.inFlags & 1u) != 0u) emissiveOut = vec3(0.0);
         payload.radiance      = emissiveOut;
         payload.brdfWeight    = tWeight;
         payload.nextOrigin    = wOrigin;
@@ -838,6 +889,109 @@ void main() {
         lit += perRect * NdotL * lights.rectLights[i].color * geomTerm;
     }
 
+    // === Emissive-mesh NEE ===
+    // Power-weighted picking from the per-frame emissive-triangle CDF, then
+    // uniform area sample on the chosen triangle. Mirrors WGPU's
+    // sampleEmissiveTriCdf (WgpuPathTracerShaders_Rt.cpp:1622). This shade's
+    // BSDF bounce will not double-count: raygen sets payload.inFlags bit 0 on
+    // the next iteration (when emissiveCount > 0), and the closest_hit zeros
+    // emissiveOut on that bit.
+    if (pc.emissiveCount > 0u && pc.emissiveTotalPower > 0.0) {
+        // Binary search the cumulative-power CDF (stored in v1.w of each tri).
+        const float xi = urand(seed) * pc.emissiveTotalPower;
+        uint lo = 0u;
+        uint hi = pc.emissiveCount - 1u;
+        for (int s = 0; s < 32; ++s) {
+            if (lo >= hi) break;
+            const uint mid = (lo + hi) >> 1u;
+            if (emissiveTris[mid].v1.w < xi) lo = mid + 1u;
+            else                              hi = mid;
+        }
+        const EmTri t = emissiveTris[lo];
+        // sqrt-barycentric for uniform-by-area sampling on the triangle.
+        const float r1 = urand(seed);
+        const float r2 = urand(seed);
+        const float su1 = sqrt(r1);
+        const float bA = 1.0 - su1;
+        const float bB = su1 * (1.0 - r2);
+        const float bC = su1 * r2;
+        const vec3 lp = bA * t.v0.xyz + bB * t.v1.xyz + bC * t.v2.xyz;
+        vec3 toL = lp - hitPos;
+        const float dist2 = dot(toL, toL);
+        const float dist  = sqrt(max(dist2, 1e-20));
+        if (dist > 1e-4) {
+            toL /= dist;
+            const float NdotLe = dot(N, toL);
+            // Triangle geometric normal (orientation as authored). Two-sided
+            // emitters by default — matches WGPU; cosLight uses |dot|.
+            const vec3 ge1 = t.v1.xyz - t.v0.xyz;
+            const vec3 ge2 = t.v2.xyz - t.v0.xyz;
+            const vec3 lnRaw = cross(ge1, ge2);
+            const float lnLen = length(lnRaw);
+            // Grazing receiver / emitter angles produce arbitrarily-large NEE
+            // contributions (small pdfOmega, nearly-zero BRDF cosine compensated
+            // by 1/cosLe denominator). Even with MIS these can leak fireflies
+            // through brdfPdf's G1V approximation; reject early instead.
+            if (NdotLe > 0.01 && lnLen > 1e-20) {
+                const vec3 lN = lnRaw / lnLen;
+                const float cosLight = abs(dot(-toL, lN));
+                if (cosLight > 0.01 && t.v0.w > 1e-20 && t.v2.w > 0.0) {
+                    shadowVisibility = 0.0;
+                    traceRayEXT(topAS,
+                                gl_RayFlagsTerminateOnFirstHitEXT |
+                                gl_RayFlagsSkipClosestHitShaderEXT,
+                                0xff, 0, 0, 1,
+                                hitPos + N * 1e-3, 0.0, toL, dist - 1e-2, 1);
+                    if (shadowVisibility > 0.0) {
+                        // Solid-angle pdf: (power/totalPower) * dist² / (area*cosLight)
+                        const float pickPdf = t.v2.w / pc.emissiveTotalPower;
+                        const float pdfOmega = pickPdf * dist2 / (t.v0.w * cosLight);
+                        // Cook-Torrance + Lambert + (optional) clearcoat at toL.
+                        const vec3  H_e   = normalize(V + toL);
+                        const float NdotH = max(dot(N, H_e), 0.0);
+                        const float VdotH = max(dot(V, H_e), 0.0);
+                        const vec3  F_e   = fresnelSchlick(VdotH, F0);
+                        const float D_e   = distGGX(NdotH, roughness);
+                        const float G_e   = geomSmithG1(NdotV, k) * geomSmithG1(NdotLe, k);
+                        const vec3  spec_e = (D_e * G_e * F_e) / max(4.0 * NdotV * NdotLe, 1e-4);
+                        const vec3  kd_e   = (vec3(1.0) - F_e) * (1.0 - metalness);
+                        const vec3  diff_e = kd_e * albedo / PI;
+                        vec3 perEm = (diff_e + spec_e) * baseScale;
+                        if (ccWeight > 0.0) {
+                            const float k_cc = (ccRough + 1.0) * (ccRough + 1.0) / 8.0;
+                            const float D_cc = distGGX(NdotH, ccRough);
+                            const float G_cc = geomSmithG1(NdotV, k_cc) * geomSmithG1(NdotLe, k_cc);
+                            perEm += vec3((D_cc * G_cc) / max(4.0 * NdotV * NdotLe, 1e-4) * ccWeight);
+                        }
+                        vec3 emCol = t.emission.rgb;
+                        const float emLumE = dot(emCol, vec3(0.2126, 0.7152, 0.0722));
+                        if (emLumE > 20.0) emCol *= 20.0 / emLumE;
+                        // MIS balance heuristic against the BSDF-sampled bounce
+                        // estimator. On glossy surfaces pdfBsdf >> pdfOmega →
+                        // w_light → 0 (NEE contributes nothing, the BSDF bounce
+                        // handles the spec lobe). On rough/diffuse pdfOmega
+                        // dominates → w_light → 1. Without this, NEE samples
+                        // landing inside a narrow spec lobe spike to enormous
+                        // values when divided by pdfOmega.
+                        const float pdfBsdfNee = brdfPdf(V, toL, N, roughness, metalness);
+                        const float wLight = pdfOmega / max(pdfOmega + pdfBsdfNee, 1e-8);
+                        vec3 emContrib = perEm * NdotLe * emCol * wLight / max(pdfOmega, 1e-8);
+                        // Per-contribution firefly clamp.  20 matches the
+                        // budget the bounce-radiance path elsewhere already
+                        // operates within (raygen line ~280, emission cap at
+                        // 20 luminance) — anything brighter than that on a
+                        // single NEE sample is either a numerical spike or a
+                        // legitimate direct-bright tap that the next sample
+                        // will reinforce anyway.
+                        const float emCLum = dot(emContrib, vec3(0.2126, 0.7152, 0.0722));
+                        if (emCLum > 20.0) emContrib *= 20.0 / emCLum;
+                        lit += emContrib;
+                    }
+                }
+            }
+        }
+    }
+
     // === Env NEE + MIS ===
     // Visibility-tested env sample at this shade point, combined with the
     // bounce-into-miss estimator via Multiple Importance Sampling. Both
@@ -990,6 +1144,11 @@ void main() {
     }
     const float emLum1 = dot(emissiveOut, vec3(0.2126, 0.7152, 0.0722));
     if (emLum1 > 20.0) emissiveOut *= 20.0 / emLum1;
+    // Suppress emission on indirect shading hits when the prior shade event
+    // already accounted for emissive triangles via NEE. Primary hits, hits
+    // after pass-through, and hits on frames with no emissive geometry keep
+    // the term so the user can see directly-visible glowing surfaces.
+    if ((payload.inFlags & 1u) != 0u) emissiveOut = vec3(0.0);
     payload.radiance   = emissiveOut + ambient + lit;
     payload.brdfWeight = brdfWeight;
     payload.nextOrigin = hitPos + N * 1e-3;

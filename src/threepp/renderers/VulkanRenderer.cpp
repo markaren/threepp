@@ -419,6 +419,15 @@ namespace threepp {
         std::array<Buffer, kFramesInFlight> prevCameraUbos{};
         std::array<Buffer, kFramesInFlight> motionMatBuffers{};
         std::array<VkDeviceSize, kFramesInFlight> motionMatBufferCapacity{};
+        // Per-frame emissive-triangle CDF buffer. Each entry is 4 vec4 (64 B):
+        //   v0.xyz/area, v1.xyz/cumPower, v2.xyz/power, emission.rgb/_pad.
+        // Built fresh each frame from the visible scene; size = numEmissiveTris.
+        // Capacity is grown 2× and a descriptor rewrite triggers when the
+        // VkBuffer handle changes. Uploaded by buildAndUploadEmissiveTris.
+        std::array<Buffer, kFramesInFlight> emissiveTriBuffers{};
+        std::array<VkDeviceSize, kFramesInFlight> emissiveTriBufferCapacity{};
+        uint32_t emissiveTriCountThisFrame_ = 0;
+        float    emissiveTotalPowerThisFrame_ = 0.0f;
         std::unordered_map<EntryKey, std::array<float, 16>, EntryKeyHash> prevWorldMats;
 
         // Per-entry fingerprint used to detect scene changes between frames.
@@ -561,6 +570,7 @@ namespace threepp {
             for (auto& b : prevCameraUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : lightsUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : motionMatBuffers) destroyBuffer(ctx->allocator(), b);
+            for (auto& b : emissiveTriBuffers) destroyBuffer(ctx->allocator(), b);
             destroyImage2D(ctx->allocator(), d, envImage);
             for (auto& img : accumImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), d, img);
@@ -1908,6 +1918,39 @@ namespace threepp {
                 std::memcpy(mapped, identity, sizeof(identity));
                 vmaUnmapMemory(ctx->allocator(), motionMatBuffers[f].alloc);
             }
+            // Seed emissive-tri buffers with capacity 1 so descriptor writes have
+            // a valid handle even before any emissive geometry exists. The shader
+            // reads it only when pc.emissiveCount > 0, so the dummy bytes are
+            // never sampled — but Vulkan requires valid resource bindings.
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                emissiveTriBuffers[f] = createBuffer(
+                        ctx->allocator(), ctx->device(),
+                        /*size*/ 64,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                emissiveTriBufferCapacity[f] = 1;
+            }
+        }
+
+        // Grow emissiveTriBuffers[frame] in-place if the current frame's
+        // emissive count exceeds capacity. Returns true when the buffer
+        // handle changed so the caller can rewrite binding 14. 2× headroom
+        // matches motionMatBuffers.
+        bool ensureEmissiveTriCapacity(uint32_t frame, uint32_t needed) {
+            if (needed <= emissiveTriBufferCapacity[frame]) return false;
+            const uint32_t newCap = std::max<uint32_t>(needed, emissiveTriBufferCapacity[frame] * 2u);
+            destroyBuffer(ctx->allocator(), emissiveTriBuffers[frame]);
+            emissiveTriBuffers[frame] = createBuffer(
+                    ctx->allocator(), ctx->device(),
+                    /*size*/ static_cast<VkDeviceSize>(newCap) * 64u,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            emissiveTriBufferCapacity[frame] = newCap;
+            return true;
         }
 
         // Clear both ping-pong gbuf images AND both accum images to
@@ -2027,6 +2070,143 @@ namespace threepp {
                 EntryKey key{entries[i].mesh, entries[i].instanceIndex};
                 prevWorldMats[key] = entries[i].worldMatrix;
             }
+        }
+
+        // Walk visible entries, gather emissive triangles in world space, and
+        // upload to emissiveTriBuffers[frame]. Per-tri 64-byte record:
+        //   v0.xyz = world pos0,    v0.w = triangle area
+        //   v1.xyz = world pos1,    v1.w = running cumPower (CDF)
+        //   v2.xyz = world pos2,    v2.w = per-tri power (lum * area)
+        //   emission.xyz = emissive*intensity, emission.w = unused
+        //
+        // Uniform-by-area within each tri × power-weighted picking across tris
+        // gives a constant area-weighted-luminance pdf for closest_hit's NEE.
+        //
+        // Returns true when the buffer handle changed (capacity grew); caller
+        // must then rewrite descriptor binding 14 for this frame's sets.
+        bool buildAndUploadEmissiveTris(uint32_t frame,
+                                        const std::vector<MeshEntry>& entries) {
+            emissiveTriCountThisFrame_ = 0;
+            emissiveTotalPowerThisFrame_ = 0.0f;
+
+            std::vector<float> data;// 16 floats per tri
+            data.reserve(64 * 16);
+            float cumPower = 0.0f;
+
+            for (const auto& en : entries) {
+                if (!en.mesh) continue;
+                auto matPtr = en.mesh->material();
+                if (!matPtr) continue;
+                auto* em = dynamic_cast<MaterialWithEmissive*>(matPtr.get());
+                if (!em) continue;
+                const float emR = em->emissive.r * em->emissiveIntensity;
+                const float emG = em->emissive.g * em->emissiveIntensity;
+                const float emB = em->emissive.b * em->emissiveIntensity;
+                const float emLum = 0.2126f * emR + 0.7152f * emG + 0.0722f * emB;
+                if (emLum < 1e-6f) continue;
+                // emissiveMap modulates per-texel; we don't sample textures here,
+                // so use the constant tint for power. Slightly under-samples
+                // bright textured emissives but keeps the build lightweight.
+
+                auto geomPtr = en.mesh->geometry();
+                if (!geomPtr) continue;
+                auto* posAttr = geomPtr->getAttribute<float>("position");
+                if (!posAttr) continue;
+                const auto& positions = posAttr->array();
+                const uint32_t vcount = static_cast<uint32_t>(posAttr->count());
+                if (vcount < 3) continue;
+
+                const auto* idxAttr = geomPtr->getIndex();
+                const bool indexed = idxAttr != nullptr;
+                const uint32_t triCount = indexed
+                        ? static_cast<uint32_t>(idxAttr->count() / 3)
+                        : vcount / 3;
+                if (triCount == 0) continue;
+
+                const float* M = en.worldMatrix.data();// column-major 4x4
+                auto xform = [&](float x, float y, float z, float& wx, float& wy, float& wz) {
+                    wx = M[0] * x + M[4] * y + M[8]  * z + M[12];
+                    wy = M[1] * x + M[5] * y + M[9]  * z + M[13];
+                    wz = M[2] * x + M[6] * y + M[10] * z + M[14];
+                };
+
+                const auto* indices = indexed ? idxAttr->array().data() : nullptr;
+                for (uint32_t t = 0; t < triCount; ++t) {
+                    uint32_t i0, i1, i2;
+                    if (indexed) {
+                        i0 = indices[t * 3 + 0];
+                        i1 = indices[t * 3 + 1];
+                        i2 = indices[t * 3 + 2];
+                    } else {
+                        i0 = t * 3 + 0;
+                        i1 = t * 3 + 1;
+                        i2 = t * 3 + 2;
+                    }
+                    if (i0 >= vcount || i1 >= vcount || i2 >= vcount) continue;
+                    float w0x, w0y, w0z, w1x, w1y, w1z, w2x, w2y, w2z;
+                    xform(positions[i0 * 3], positions[i0 * 3 + 1], positions[i0 * 3 + 2],
+                          w0x, w0y, w0z);
+                    xform(positions[i1 * 3], positions[i1 * 3 + 1], positions[i1 * 3 + 2],
+                          w1x, w1y, w1z);
+                    xform(positions[i2 * 3], positions[i2 * 3 + 1], positions[i2 * 3 + 2],
+                          w2x, w2y, w2z);
+                    const float ex = w1x - w0x, ey = w1y - w0y, ez = w1z - w0z;
+                    const float fx = w2x - w0x, fy = w2y - w0y, fz = w2z - w0z;
+                    const float cx = ey * fz - ez * fy;
+                    const float cy = ez * fx - ex * fz;
+                    const float cz = ex * fy - ey * fx;
+                    const float area = 0.5f * std::sqrt(cx * cx + cy * cy + cz * cz);
+                    if (!(area > 1e-8f)) continue;
+                    const float power = emLum * area;
+                    cumPower += power;
+
+                    data.push_back(w0x); data.push_back(w0y); data.push_back(w0z);
+                    data.push_back(area);
+                    data.push_back(w1x); data.push_back(w1y); data.push_back(w1z);
+                    data.push_back(cumPower);
+                    data.push_back(w2x); data.push_back(w2y); data.push_back(w2z);
+                    data.push_back(power);
+                    data.push_back(emR); data.push_back(emG); data.push_back(emB);
+                    data.push_back(0.0f);
+                }
+            }
+
+            const uint32_t triCount = static_cast<uint32_t>(data.size() / 16);
+            emissiveTriCountThisFrame_ = triCount;
+            emissiveTotalPowerThisFrame_ = cumPower;
+            if (triCount == 0) return false;
+
+            const bool grew = ensureEmissiveTriCapacity(frame, triCount);
+
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), emissiveTriBuffers[frame].alloc, &mapped);
+            std::memcpy(mapped, data.data(), data.size() * sizeof(float));
+            vmaUnmapMemory(ctx->allocator(), emissiveTriBuffers[frame].alloc);
+            return grew;
+        }
+
+        // Rewrite binding 14 (emissive-tri SSBO) across all sets for the given
+        // frame-in-flight. Called when buildAndUploadEmissiveTris reports the
+        // backing buffer was reallocated.
+        void rewriteEmissiveTriDescriptors(uint32_t frame) {
+            VkDescriptorBufferInfo bufInfo{};
+            bufInfo.buffer = emissiveTriBuffers[frame].handle;
+            bufInfo.offset = 0;
+            bufInfo.range  = VK_WHOLE_SIZE;
+            std::vector<VkWriteDescriptorSet> writes(imageCount_);
+            for (uint32_t k = 0; k < imageCount_; ++k) {
+                const uint32_t setIdx = frame * imageCount_ + k;
+                writes[k] = {};
+                writes[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[k].dstSet = descriptorSets[setIdx];
+                writes[k].dstBinding = 14;
+                writes[k].descriptorCount = 1;
+                writes[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                writes[k].pBufferInfo = &bufInfo;
+            }
+            vkUpdateDescriptorSets(ctx->device(),
+                                   static_cast<uint32_t>(writes.size()),
+                                   writes.data(), 0, nullptr);
         }
 
         // Grow motionMatBuffers[frame] in-place if the current scene's
@@ -2971,7 +3151,7 @@ namespace threepp {
             // 9=prev camera UBO (motion), 10=motion matrix SSBO (motion),
             // 11=prev accum read image (ping-pong), 12=gbuf write image
             // (ping-pong), 13=prev gbuf read image (ping-pong).
-            std::array<VkDescriptorSetLayoutBinding, 14> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 15> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -3037,6 +3217,13 @@ namespace threepp {
             bindings[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[13].descriptorCount = 1;
             bindings[13].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            // Binding 14 — per-frame emissive-triangle CDF (closest_hit reads
+            // it for emissive-mesh NEE). One slot per frame-in-flight; rewritten
+            // by rewriteEmissiveTriDescriptors when the buffer grows.
+            bindings[14].binding = 14;
+            bindings[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[14].descriptorCount = 1;
+            bindings[14].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -3045,7 +3232,7 @@ namespace threepp {
             check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rtDsLayout),
                   "vkCreateDescriptorSetLayout(RT)");
 
-            // 36-byte push constant. Layout matches the host-side `pc[9]`
+            // 44-byte push constant. Layout matches the host-side `pc[11]`
             // assembled in renderFrame and the GLSL PushConstants struct in
             // raygen.rgen / closest_hit.rchit. Well under the 128-byte minimum
             // push-constant guarantee.
@@ -3061,12 +3248,14 @@ namespace threepp {
             //   [5..8] meshMovedBits[4] — packed per-mesh moved bits (128
             //       meshes). Lets raygen gate FC-halving per-pixel via
             //       primaryInstanceId-1 instead of scene-wide.
+            //   [9]  emissiveCount       (closest_hit reads for NEE CDF)
+            //   [10] emissiveTotalPower  (float bits — CDF normalisation)
             VkPushConstantRange pcRange{};
             pcRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                  VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
                                  VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
             pcRange.offset = 0;
-            pcRange.size   = 36;
+            pcRange.size   = 44;
 
             VkPipelineLayoutCreateInfo plci{};
             plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -3230,7 +3419,7 @@ namespace threepp {
             ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             ps[2].descriptorCount = totalSets * 3;// bindings 2 (camera), 5 (lights), 9 (prevCamera)
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            ps[3].descriptorCount = totalSets * 3;// bindings 3 (geometry), 4 (material), 10 (motionMat)
+            ps[3].descriptorCount = totalSets * 4;// bindings 3 (geometry), 4 (material), 10 (motionMat), 14 (emissiveTris)
             ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             ps[4].descriptorCount = totalSets * (1 + kMaxMaterialTextures);// binding 6 (env) + binding 8 (material array)
 
@@ -3431,9 +3620,21 @@ namespace threepp {
                     wPrevGbuf.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                     wPrevGbuf.pImageInfo = &prevGbufInfo;
 
-                    std::array<VkWriteDescriptorSet, 14> writes{
+                    VkDescriptorBufferInfo emTriInfo{};
+                    emTriInfo.buffer = emissiveTriBuffers[f].handle;
+                    emTriInfo.offset = 0;
+                    emTriInfo.range  = VK_WHOLE_SIZE;
+                    VkWriteDescriptorSet wEmTri{};
+                    wEmTri.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wEmTri.dstSet = descriptorSets[idx];
+                    wEmTri.dstBinding = 14;
+                    wEmTri.descriptorCount = 1;
+                    wEmTri.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    wEmTri.pBufferInfo = &emTriInfo;
+
+                    std::array<VkWriteDescriptorSet, 15> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
-                            wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf};
+                            wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -3536,6 +3737,16 @@ namespace threepp {
                 motionInfos[f].offset = 0;
                 motionInfos[f].range  = VK_WHOLE_SIZE;
             }
+            // Binding 14 (emissive-tri SSBO) — same per-frame story as
+            // motion. Even though buildAndUploadEmissiveTris already triggers
+            // its own per-frame descriptor rewrite when it grows, refreshing
+            // here is harmless and keeps the rebuild path complete.
+            std::array<VkDescriptorBufferInfo, kFramesInFlight> emTriInfos{};
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                emTriInfos[f].buffer = emissiveTriBuffers[f].handle;
+                emTriInfos[f].offset = 0;
+                emTriInfos[f].range  = VK_WHOLE_SIZE;
+            }
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 for (uint32_t k = 0; k < imageCount_; ++k) {
                     const uint32_t setIdx = f * imageCount_ + k;
@@ -3547,6 +3758,15 @@ namespace threepp {
                     wMotion.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                     wMotion.pBufferInfo = &motionInfos[f];
                     writes.push_back(wMotion);
+
+                    VkWriteDescriptorSet wEmTri{};
+                    wEmTri.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wEmTri.dstSet = descriptorSets[setIdx];
+                    wEmTri.dstBinding = 14;
+                    wEmTri.descriptorCount = 1;
+                    wEmTri.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    wEmTri.pBufferInfo = &emTriInfos[f];
+                    writes.push_back(wEmTri);
                 }
             }
 
@@ -3656,13 +3876,16 @@ namespace threepp {
             // [2] ToneMapping enum, [3] exposure as float bits,
             // [4] motionFlags (bit 0 = any motion, bit 1 = camera moved),
             // [5..8] meshMovedBits[4] — see VkPushConstantRange comment above.
+            // [9] emissiveCount, [10] emissiveTotalPower (float bits).
             const float exposure = toneMappingExposure_;
             uint32_t exposureBits;
             std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
             const uint32_t motionFlags =
                     (motionThisFrame_      ? 1u : 0u) |
                     (cameraMovedThisFrame_ ? 2u : 0u);
-            const uint32_t pc[9] = {
+            uint32_t emPowerBits;
+            std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
+            const uint32_t pc[11] = {
                     sampleIndex,
                     envImage.mipLevels,
                     static_cast<uint32_t>(toneMapping_),
@@ -3672,6 +3895,8 @@ namespace threepp {
                     meshMovedBits_[1],
                     meshMovedBits_[2],
                     meshMovedBits_[3],
+                    emissiveTriCountThisFrame_,
+                    emPowerBits,
             };
             vkCmdPushConstants(cb, rtPipelineLayout,
                                VK_SHADER_STAGE_RAYGEN_BIT_KHR |
@@ -3783,6 +4008,12 @@ namespace threepp {
             // inFlight[currentFrame] fence has been signaled — the GPU has
             // finished its previous use of this slot.
             computeAndUploadMotionMatrices(currentFrame, lastVisibleEntries_);
+            // Same fence guarantees emissiveTriBuffers[currentFrame] is no
+            // longer in use; rebuild the per-frame CDF and rewrite binding 14
+            // if the buffer grew.
+            if (buildAndUploadEmissiveTris(currentFrame, lastVisibleEntries_)) {
+                rewriteEmissiveTriDescriptors(currentFrame);
+            }
             if (refreshEnvTextureFromScene(scene)) {
                 rewriteEnvDescriptors();
                 // Env is a primary radiance source — can't reproject, so

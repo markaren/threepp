@@ -36,6 +36,8 @@ struct Payload {
     vec3 hitWorldPos;  // world-space hit point (for primary-hit reprojection)
     uint hitInstanceId;// gl_InstanceCustomIndexEXT + 1; 0 == miss/sky
     float hitRoughness;// post-clamp surface roughness; primary-hit FC cap input
+    uint inFlags;      // raygen→closest_hit: bit 0 = scatter>0 (suppress emission;
+                       // NEE on the prev shade already covered emissive light at this hit)
 };
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
@@ -88,6 +90,8 @@ layout(push_constant) uniform Pc {
     uint mb1;
     uint mb2;
     uint mb3;
+    uint emissiveCount;       // # of emissive triangles (closest_hit reads this)
+    float emissiveTotalPower; // total power CDF max (closest_hit reads this)
 } pc;
 
 bool isMeshMoved(uint idx) {
@@ -238,6 +242,11 @@ void main() {
         payload.hitWorldPos    = vec3(0.0);
         payload.hitInstanceId  = 0u;
         payload.hitRoughness   = 1.0;
+        // bit 0 of inFlags: "this hit's surface emission was already covered
+        // by the prior shade's emissive-NEE shadow ray, so suppress it here".
+        // Cleared on primary (scatter==0) and after pass-through hops (those
+        // don't perform NEE, so the next shade event must keep emission).
+        payload.inFlags    = (scatter > 0 && !prevPassThrough && pc.emissiveCount > 0u) ? 1u : 0u;
 
         // tmin selection: shaded bounces use 0.001 (1mm) to avoid self-
         // intersection acne on the surface we just left. Pass-through hops
