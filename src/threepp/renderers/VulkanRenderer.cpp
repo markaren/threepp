@@ -37,8 +37,11 @@
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
+#include "threepp/objects/Bone.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Skeleton.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/Texture.hpp"
@@ -182,6 +185,23 @@ namespace threepp {
             std::weak_ptr<BufferGeometry> liveCheck;
         };
         std::unordered_map<const BufferGeometry*, std::unique_ptr<BlasRecord>> blasCache;
+
+        // Per-SkinnedMesh deformed-geometry BLAS. Unlike static meshes, skinned
+        // meshes can't share BLAS even when they share BufferGeometry — each
+        // instance has its own pose. Vertex/normal buffers are host-mapped and
+        // overwritten with CPU-skinned positions/normals each frame the bones
+        // change; the BLAS is then rebuilt in-place against the same AS handle
+        // (and storage) so its address — and the TLAS reference to it — remain
+        // valid. prevBoneMats is the dirty-detection key (memcmp against the
+        // current Skeleton::boneMatrices).
+        struct SkinnedMeshState {
+            std::unique_ptr<BlasRecord> blas;
+            std::vector<float> prevBoneMats;
+            std::vector<float> deformedPositions;
+            std::vector<float> deformedNormals;
+            std::weak_ptr<BufferGeometry> liveCheck;
+        };
+        std::unordered_map<const SkinnedMesh*, std::unique_ptr<SkinnedMeshState>> skinnedMeshStates;
 
         // Single TLAS over all mesh instances in the scene.
         VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
@@ -524,6 +544,18 @@ namespace threepp {
             }
             blasCache.clear();
 
+            for (auto& [_, st] : skinnedMeshStates) {
+                auto& rec = st->blas;
+                if (!rec) continue;
+                if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
+                destroyBuffer(ctx->allocator(), rec->storage);
+                destroyBuffer(ctx->allocator(), rec->vertex);
+                destroyBuffer(ctx->allocator(), rec->index);
+                destroyBuffer(ctx->allocator(), rec->normal);
+                destroyBuffer(ctx->allocator(), rec->uv);
+            }
+            skinnedMeshStates.clear();
+
             for (auto& b : cameraUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : prevCameraUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : lightsUbos) destroyBuffer(ctx->allocator(), b);
@@ -760,6 +792,223 @@ namespace threepp {
             rec->address = ctx->rt().getAccelerationStructureDeviceAddress(ctx->device(), &addrInfo);
 
             return rec;
+        }
+
+        // CPU linear-blend skin → outPos/outNorm in the SkinnedMesh's local
+        // frame (bindMatrixInverse applied at the end). Mirrors the WGPU PT
+        // path tracer's geometry-builder skinning at WgpuPathTracerGeometry.cpp.
+        // Caller is responsible for sizing prevBoneMats and copying skel.boneMatrices
+        // afterwards for next-frame dirty detection.
+        static void cpuSkin(SkinnedMesh& sm,
+                            std::vector<float>& outPos,
+                            std::vector<float>& outNorm) {
+            auto* posAttr = sm.geometry()->getAttribute<float>("position");
+            auto* nrmAttr = sm.geometry()->getAttribute<float>("normal");
+            auto* skinIdxAttr = sm.geometry()->getAttribute<float>("skinIndex");
+            auto* skinWAttr   = sm.geometry()->getAttribute<float>("skinWeight");
+            if (!posAttr || !nrmAttr || !skinIdxAttr || !skinWAttr || !sm.skeleton) return;
+
+            const int vtxCount = static_cast<int>(posAttr->count());
+            outPos.assign(vtxCount * 3, 0.f);
+            outNorm.assign(vtxCount * 3, 0.f);
+
+            const auto& skel = *sm.skeleton;
+            const Matrix4& bindMat    = sm.bindMatrix;
+            const Matrix4& bindMatInv = sm.bindMatrixInverse;
+            const int boneCount = static_cast<int>(skel.bones.size());
+
+            std::vector<Matrix4> boneMats(boneCount);
+            for (int b = 0; b < boneCount; ++b) {
+                if (skel.bones[b]) {
+                    boneMats[b].multiplyMatrices(*skel.bones[b]->matrixWorld, skel.boneInverses[b]);
+                }
+            }
+
+            Vector4 sIdx, sW;
+            for (int i = 0; i < vtxCount; ++i) {
+                skinIdxAttr->setFromBufferAttribute(sIdx, i);
+                skinWAttr->setFromBufferAttribute(sW, i);
+
+                Vector3 bindPos(posAttr->getX(i), posAttr->getY(i), posAttr->getZ(i));
+                bindPos.applyMatrix4(bindMat);
+
+                Vector3 bindNrm(nrmAttr->getX(i), nrmAttr->getY(i), nrmAttr->getZ(i));
+                {
+                    const auto& e = bindMat.elements;
+                    Vector3 t;
+                    t.x = e[0] * bindNrm.x + e[4] * bindNrm.y + e[8]  * bindNrm.z;
+                    t.y = e[1] * bindNrm.x + e[5] * bindNrm.y + e[9]  * bindNrm.z;
+                    t.z = e[2] * bindNrm.x + e[6] * bindNrm.y + e[10] * bindNrm.z;
+                    bindNrm = t;
+                }
+
+                Vector3 accPos(0.f, 0.f, 0.f);
+                Vector3 accNrm(0.f, 0.f, 0.f);
+                for (unsigned b = 0; b < 4; ++b) {
+                    const float w = sW[b];
+                    if (w == 0.f) continue;
+                    const int bIdx = static_cast<int>(sIdx[b]);
+                    if (bIdx < 0 || bIdx >= boneCount) continue;
+                    const Matrix4& m = boneMats[bIdx];
+
+                    Vector3 bp = bindPos;
+                    bp.applyMatrix4(m);
+                    accPos.addScaledVector(bp, w);
+
+                    const auto& e = m.elements;
+                    Vector3 bn;
+                    bn.x = e[0] * bindNrm.x + e[4] * bindNrm.y + e[8]  * bindNrm.z;
+                    bn.y = e[1] * bindNrm.x + e[5] * bindNrm.y + e[9]  * bindNrm.z;
+                    bn.z = e[2] * bindNrm.x + e[6] * bindNrm.y + e[10] * bindNrm.z;
+                    accNrm.addScaledVector(bn, w);
+                }
+
+                accPos.applyMatrix4(bindMatInv);
+                outPos[i * 3 + 0] = accPos.x;
+                outPos[i * 3 + 1] = accPos.y;
+                outPos[i * 3 + 2] = accPos.z;
+
+                {
+                    const auto& e = bindMatInv.elements;
+                    Vector3 t;
+                    t.x = e[0] * accNrm.x + e[4] * accNrm.y + e[8]  * accNrm.z;
+                    t.y = e[1] * accNrm.x + e[5] * accNrm.y + e[9]  * accNrm.z;
+                    t.z = e[2] * accNrm.x + e[6] * accNrm.y + e[10] * accNrm.z;
+                    const float len = std::sqrt(t.x * t.x + t.y * t.y + t.z * t.z);
+                    const float inv = (len > 0.f) ? (1.f / len) : 0.f;
+                    outNorm[i * 3 + 0] = t.x * inv;
+                    outNorm[i * 3 + 1] = t.y * inv;
+                    outNorm[i * 3 + 2] = t.z * inv;
+                }
+            }
+        }
+
+        // Allocate or look up the per-SkinnedMesh BLAS state. Builds the BLAS
+        // once with the current pose; subsequent dirty frames go through
+        // refreshSkinnedBlas which only re-skins + rebuilds in-place. Returns
+        // null if the geometry is unsupported (no position/normal/skin attrs).
+        SkinnedMeshState* ensureSkinnedBlas(SkinnedMesh& sm) {
+            auto it = skinnedMeshStates.find(&sm);
+            if (it != skinnedMeshStates.end()) return it->second.get();
+
+            auto* posAttr = sm.geometry()->getAttribute<float>("position");
+            auto* nrmAttr = sm.geometry()->getAttribute<float>("normal");
+            if (!posAttr || !nrmAttr) return nullptr;
+            if (!sm.skeleton || sm.skeleton->bones.empty()) return nullptr;
+            if (!sm.geometry()->hasAttribute("skinIndex") || !sm.geometry()->hasAttribute("skinWeight")) return nullptr;
+
+            // Build BLAS using the bind-pose positions/normals first so the AS
+            // sizes are determined and the storage is allocated. We then run a
+            // skin pass (immediate refresh below) so first-frame geometry is
+            // already deformed before any ray trace touches it.
+            auto rec = buildBlasFor(*sm.geometry());
+            if (!rec) return nullptr;
+            rec->liveCheck = sm.geometry();
+
+            auto state = std::make_unique<SkinnedMeshState>();
+            state->blas = std::move(rec);
+            state->liveCheck = sm.geometry();
+            state->prevBoneMats.assign(sm.skeleton->bones.size() * 16, 0.f);
+
+            auto* raw = state.get();
+            skinnedMeshStates.emplace(&sm, std::move(state));
+
+            // Initial skin so the BLAS reflects the current pose, not bind pose.
+            refreshSkinnedBlas(sm, *raw);
+            return raw;
+        }
+
+        // Re-skin the SkinnedMesh's vertices/normals on the CPU, copy them
+        // into the host-mapped vertex/normal buffers, and rebuild the BLAS in
+        // place (same AS handle and storage so the device address — and the
+        // TLAS reference to it — stay valid). The TLAS doesn't need refit
+        // for pose-only changes; the instance's transform is unchanged.
+        void refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState& st) {
+            cpuSkin(sm, st.deformedPositions, st.deformedNormals);
+            if (st.deformedPositions.empty() || !st.blas) return;
+
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), st.blas->vertex.alloc, &mapped);
+            std::memcpy(mapped, st.deformedPositions.data(),
+                        st.deformedPositions.size() * sizeof(float));
+            vmaUnmapMemory(ctx->allocator(), st.blas->vertex.alloc);
+
+            vmaMapMemory(ctx->allocator(), st.blas->normal.alloc, &mapped);
+            std::memcpy(mapped, st.deformedNormals.data(),
+                        st.deformedNormals.size() * sizeof(float));
+            vmaUnmapMemory(ctx->allocator(), st.blas->normal.alloc);
+
+            // Rebuild the BLAS contents in-place. We use BUILD (not UPDATE)
+            // because large pose changes can degrade an UPDATE'd BVH, and
+            // BUILD lets us treat each frame uniformly without tracking
+            // build-vs-update scratch sizes separately.
+            auto* posAttr = sm.geometry()->getAttribute<float>("position");
+            auto* idxAttr = sm.geometry()->getIndex();
+            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
+            const bool indexed = idxAttr != nullptr;
+            const uint32_t primitiveCount = indexed
+                    ? static_cast<uint32_t>(idxAttr->count() / 3)
+                    : vertexCount / 3;
+
+            VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+            triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+            triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            triData.vertexData.deviceAddress = st.blas->vertex.address;
+            triData.vertexStride = 3 * sizeof(float);
+            triData.maxVertex = vertexCount - 1;
+            if (indexed) {
+                triData.indexType = VK_INDEX_TYPE_UINT32;
+                triData.indexData.deviceAddress = st.blas->index.address;
+            } else {
+                triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+            }
+
+            VkAccelerationStructureGeometryKHR blasGeom{};
+            blasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            blasGeom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            blasGeom.geometry.triangles = triData;
+            blasGeom.flags = 0;
+
+            VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
+            blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+            blasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                              VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+            blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            blasBuild.geometryCount = 1;
+            blasBuild.pGeometries = &blasGeom;
+            blasBuild.dstAccelerationStructure = st.blas->as;
+
+            VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
+            blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+            ctx->rt().getAccelerationStructureBuildSizes(
+                    ctx->device(),
+                    VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                    &blasBuild, &primitiveCount, &blasSizes);
+
+            Buffer scratch = createBuffer(
+                    ctx->allocator(), ctx->device(), blasSizes.buildScratchSize,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO);
+            blasBuild.scratchData.deviceAddress = scratch.address;
+
+            VkAccelerationStructureBuildRangeInfoKHR range{};
+            range.primitiveCount = primitiveCount;
+            const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+
+            VkCommandBuffer cb = beginOneShot();
+            ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
+            endAndSubmitOneShot(cb);
+            destroyBuffer(ctx->allocator(), scratch);
+
+            // Cache the bone matrices for next frame's dirty detection.
+            const auto& bm = sm.skeleton->boneMatrices;
+            if (st.prevBoneMats.size() == bm.size()) {
+                std::memcpy(st.prevBoneMats.data(), bm.data(), bm.size() * sizeof(float));
+            } else {
+                st.prevBoneMats = bm;
+            }
         }
 
         // Build a TLAS over the supplied instance descriptors. Empty input is
@@ -1203,6 +1452,30 @@ namespace threepp {
                 currFp.push_back(fp);
             }
 
+            // Per-entry bone-dirty bits. SkinnedMesh poses change without
+            // touching the SkinnedMesh's worldMatrix, so the matrix-fingerprint
+            // misses them. We compare current Skeleton::boneMatrices against
+            // the cached prevBoneMats for each known SkinnedMesh; first-time
+            // skinned meshes mark dirty so the structural-rebuild path skins
+            // before its first ray trace.
+            std::vector<bool> entryBonesDirty(entries.size(), false);
+            for (size_t i = 0; i < entries.size(); ++i) {
+                auto* sm = dynamic_cast<SkinnedMesh*>(entries[i].mesh);
+                if (!sm || !sm->skeleton || sm->skeleton->bones.empty()) continue;
+                auto stIt = skinnedMeshStates.find(sm);
+                if (stIt == skinnedMeshStates.end()) {
+                    entryBonesDirty[i] = true;
+                    continue;
+                }
+                sm->skeleton->update();
+                const auto& bm = sm->skeleton->boneMatrices;
+                if (bm.size() != stIt->second->prevBoneMats.size() ||
+                    std::memcmp(bm.data(), stIt->second->prevBoneMats.data(),
+                                bm.size() * sizeof(float)) != 0) {
+                    entryBonesDirty[i] = true;
+                }
+            }
+
             // Continuous-motion fast path: when only the per-mesh matrices
             // changed (everything else — topology, materials, textures —
             // matches), refit the TLAS in place and let raygen reproject.
@@ -1223,6 +1496,7 @@ namespace threepp {
                 bool structuralSame = true;
                 bool matricesSame = true;
                 bool materialValuesSame = true;
+                bool bonesDirtyAny = false;
                 for (size_t i = 0; i < currFp.size(); ++i) {
                     const auto& a = currFp[i];
                     const auto& b = prevSceneFingerprint[i];
@@ -1236,33 +1510,64 @@ namespace threepp {
                         structuralSame = false;
                         break;
                     }
-                    const bool xfmChanged = std::memcmp(a.matrix.data(), b.matrix.data(), sizeof(a.matrix)) != 0;
-                    const bool matChanged = std::memcmp(a.pbr.data(),    b.pbr.data(),    sizeof(a.pbr))    != 0;
+                    const bool xfmChanged   = std::memcmp(a.matrix.data(), b.matrix.data(), sizeof(a.matrix)) != 0;
+                    const bool matChanged   = std::memcmp(a.pbr.data(),    b.pbr.data(),    sizeof(a.pbr))    != 0;
+                    const bool bonesChanged = entryBonesDirty[i];
                     if (xfmChanged) matricesSame = false;
                     if (matChanged) materialValuesSame = false;
-                    // Both flavors of change invalidate this pixel's history,
-                    // so they share the same per-mesh bit. Reproject + FC-halve
-                    // is correct for either (geometry shifted OR same geometry
-                    // with new shading inputs).
-                    if ((xfmChanged || matChanged) && i < 128) {
+                    if (bonesChanged) bonesDirtyAny = true;
+                    // Three flavors of change all invalidate this pixel's
+                    // history — share the same per-mesh bit. Reproject+halve
+                    // FC for any of: matrix shift, pbr shift, pose deformation.
+                    if ((xfmChanged || matChanged || bonesChanged) && i < 128) {
                         meshMovedBits_[i >> 5] |= (1u << (i & 31u));
                     }
                 }
                 if (structuralSame) {
-                    if (!matricesSame || !materialValuesSame) {
+                    if (!matricesSame || !materialValuesSame || bonesDirtyAny) {
                         motionThisFrame_ = true;
                     }
-                    if (!matricesSame) {
-                        // Transform-only update: refit TLAS with new transforms.
+                    if (bonesDirtyAny) {
+                        // Re-skin every SkinnedMesh whose pose changed and
+                        // rebuild its BLAS in place. The BLAS handle/address
+                        // stays valid, but the BLAS's wrapping AABB grows when
+                        // a pose pushes vertices outside the previous extents
+                        // — the TLAS caches that AABB at build/refit time, so
+                        // without a TLAS refit rays get culled before they
+                        // reach the BLAS, clipping the silhouette.
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            if (!entryBonesDirty[i]) continue;
+                            auto* sm = dynamic_cast<SkinnedMesh*>(entries[i].mesh);
+                            if (!sm) continue;
+                            auto stIt = skinnedMeshStates.find(sm);
+                            if (stIt == skinnedMeshStates.end()) continue;
+                            refreshSkinnedBlas(*sm, *stIt->second);
+                        }
+                    }
+                    if (!matricesSame || bonesDirtyAny) {
+                        // TLAS refit: needed when instance transforms change
+                        // (matricesSame=false) AND when any skinned BLAS was
+                        // just rebuilt — the TLAS's per-instance wrapped AABB
+                        // is recomputed from the current BLAS extents on
+                        // refit, picking up pose-deformed silhouettes that
+                        // would otherwise be clipped by the stale TLAS AABB.
                         // BLAS handles + buffer addresses are unchanged so
                         // geomDescs / matDescs stay valid; we just rewrite the
                         // tlasInstancesBuffer in place and call MODE_UPDATE.
                         std::vector<VkAccelerationStructureInstanceKHR> instances;
                         instances.reserve(entries.size());
                         for (const MeshEntry& en : entries) {
-                            const BufferGeometry* geomKey = en.mesh->geometry().get();
-                            auto it = blasCache.find(geomKey);
-                            if (it == blasCache.end()) continue;// shouldn't happen on transform-only
+                            VkDeviceAddress blasAddr = 0;
+                            if (auto* sm = dynamic_cast<SkinnedMesh*>(en.mesh); sm && sm->skeleton && !sm->skeleton->bones.empty()) {
+                                auto smIt = skinnedMeshStates.find(sm);
+                                if (smIt == skinnedMeshStates.end()) continue;
+                                blasAddr = smIt->second->blas->address;
+                            } else {
+                                const BufferGeometry* geomKey = en.mesh->geometry().get();
+                                auto it = blasCache.find(geomKey);
+                                if (it == blasCache.end()) continue;// shouldn't happen on transform-only
+                                blasAddr = it->second->address;
+                            }
                             VkAccelerationStructureInstanceKHR inst{};
                             const auto& e = en.worldMatrix;
                             for (int r = 0; r < 3; ++r) {
@@ -1274,7 +1579,7 @@ namespace threepp {
                             inst.mask = 0xFFu;
                             inst.instanceShaderBindingTableRecordOffset = 0;
                             inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-                            inst.accelerationStructureReference = it->second->address;
+                            inst.accelerationStructureReference = blasAddr;
                             instances.push_back(inst);
                         }
                         refitTlas(instances);
@@ -1383,6 +1688,22 @@ namespace threepp {
                         ++it;
                     }
                 }
+                for (auto it = skinnedMeshStates.begin(); it != skinnedMeshStates.end(); ) {
+                    if (it->second->liveCheck.expired()) {
+                        auto& rec = it->second->blas;
+                        if (rec) {
+                            if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);
+                            destroyBuffer(ctx->allocator(), rec->storage);
+                            destroyBuffer(ctx->allocator(), rec->vertex);
+                            destroyBuffer(ctx->allocator(), rec->index);
+                            destroyBuffer(ctx->allocator(), rec->normal);
+                            destroyBuffer(ctx->allocator(), rec->uv);
+                        }
+                        it = skinnedMeshStates.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
                 for (auto it = textureCache.begin(); it != textureCache.end(); ) {
                     if (it->second.first.expired()) {
                         const uint32_t slot = it->second.second;
@@ -1409,12 +1730,24 @@ namespace threepp {
                 Mesh* m = en.mesh;
                 const BufferGeometry* geomKey = m->geometry().get();
 
-                auto it = blasCache.find(geomKey);
-                if (it == blasCache.end()) {
-                    auto rec = buildBlasFor(*m->geometry());
-                    if (!rec) continue;// degenerate / unsupported geometry
-                    rec->liveCheck = m->geometry();
-                    it = blasCache.emplace(geomKey, std::move(rec)).first;
+                // Skinned meshes get a per-instance deformed BLAS rather than
+                // sharing the geometry-keyed cache. Two SkinnedMeshes loaded
+                // from the same glTF can share BufferGeometry but never share
+                // a pose, so they must not share a BLAS.
+                BlasRecord* recPtr = nullptr;
+                if (auto* sm = dynamic_cast<SkinnedMesh*>(m); sm && sm->skeleton && !sm->skeleton->bones.empty()) {
+                    auto* st = ensureSkinnedBlas(*sm);
+                    if (!st) continue;
+                    recPtr = st->blas.get();
+                } else {
+                    auto it = blasCache.find(geomKey);
+                    if (it == blasCache.end()) {
+                        auto rec = buildBlasFor(*m->geometry());
+                        if (!rec) continue;// degenerate / unsupported geometry
+                        rec->liveCheck = m->geometry();
+                        it = blasCache.emplace(geomKey, std::move(rec)).first;
+                    }
+                    recPtr = it->second.get();
                 }
 
                 VkAccelerationStructureInstanceKHR inst{};
@@ -1431,15 +1764,15 @@ namespace threepp {
                 inst.mask = 0xFFu;
                 inst.instanceShaderBindingTableRecordOffset = 0;
                 inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-                inst.accelerationStructureReference = it->second->address;
+                inst.accelerationStructureReference = recPtr->address;
                 instances.push_back(inst);
 
                 GeometryDesc gdesc{};
-                gdesc.vertexAddress = it->second->vertex.address;
-                gdesc.normalAddress = it->second->normal.address;
-                gdesc.indexAddress  = it->second->index.address;
-                gdesc.uvAddress     = it->second->uv.address;// 0 if no UV attribute
-                gdesc.indexed = it->second->index.handle != VK_NULL_HANDLE ? 1u : 0u;
+                gdesc.vertexAddress = recPtr->vertex.address;
+                gdesc.normalAddress = recPtr->normal.address;
+                gdesc.indexAddress  = recPtr->index.address;
+                gdesc.uvAddress     = recPtr->uv.address;// 0 if no UV attribute
+                gdesc.indexed = recPtr->index.handle != VK_NULL_HANDLE ? 1u : 0u;
                 gdesc._pad = 0;
                 geomDescs.push_back(gdesc);
 
