@@ -332,7 +332,12 @@ namespace threepp {
         std::array<Image2D, 2> gbufImagesPP{};
         uint32_t accumWriteIdx_ = 0;
         uint32_t sampleIndex = 0;
-        std::array<float, 32> prevCameraData{};
+        // Prev-frame camera packed as four vec4s (matches PrevCameraUbo):
+        //   [0..3]  = vec4(pos.xyz,  projScaleX)   → prevCamPosX
+        //   [4..7]  = vec4(fwd.xyz,  projScaleY)   → prevCamFwdY
+        //   [8..11] = vec4(rgt.xyz,  0)             → prevCamRgt
+        //   [12..15]= vec4(up.xyz,   0)             → prevCamUp
+        std::array<float, 16> prevCamBufData_{};
         bool prevCameraValid = false;
 
         // Set when this frame's camera viewProj or any mesh transform differs
@@ -1375,7 +1380,7 @@ namespace threepp {
             for (auto& b : prevCameraUbos) {
                 b = createBuffer(
                         ctx->allocator(), ctx->device(),
-                        /*size*/ 16 * sizeof(float),// viewProjPrev (single mat4)
+                        /*size*/ 16 * sizeof(float),// 4×vec4: posX, fwdY, rgt, up
                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
@@ -1552,47 +1557,48 @@ namespace threepp {
             std::memcpy(data + 0,  camera.matrixWorld->elements.data(),            64);
             std::memcpy(data + 16, camera.projectionMatrixInverse.elements.data(), 64);
 
-            // Camera-motion detection: epsilon on position (data[12..14]) and
-            // forward column (data[8..10]) instead of memcmp so orbit-control
-            // floating-point recompute doesn't fire false motion each frame.
+            // Build camera basis-vector buffer matching PrevCameraUbo layout.
+            // matrixWorld column-major: col0=right, col1=up, col2=backward(-fwd), col3=pos.
+            const auto& wm = camera.matrixWorld->elements;
+            const auto& pm = camera.projectionMatrix.elements;
+            float curBuf[16];
+            curBuf[0] = wm[12]; curBuf[1] = wm[13]; curBuf[2] = wm[14]; curBuf[3] = pm[0];
+            curBuf[4] =-wm[ 8]; curBuf[5] =-wm[ 9]; curBuf[6] =-wm[10]; curBuf[7] = pm[5];
+            curBuf[8] = wm[ 0]; curBuf[9] = wm[ 1]; curBuf[10]= wm[ 2]; curBuf[11]= 0.0f;
+            curBuf[12]= wm[ 4]; curBuf[13]= wm[ 5]; curBuf[14]= wm[ 6]; curBuf[15]= 0.0f;
+
+            // Camera-motion detection: position [0..2], forward [4..6], and
+            // projection scale [3]=projScaleX / [7]=projScaleY. The projection
+            // terms catch FOV and aspect-ratio changes that don't move the camera
+            // — without them a resize or FOV tweak would leave motionThisFrame_
+            // false and the shader would reuse prev-frame history with the old
+            // projection basis, producing incorrect reprojection for one frame.
             if (prevCameraValid) {
-                const float dx = data[12] - prevCameraData[12];
-                const float dy = data[13] - prevCameraData[13];
-                const float dz = data[14] - prevCameraData[14];
-                const float fx = data[8]  - prevCameraData[8];
-                const float fy = data[9]  - prevCameraData[9];
-                const float fz = data[10] - prevCameraData[10];
-                if (dx*dx + dy*dy + dz*dz > 1e-6f || fx*fx + fy*fy + fz*fz > 1e-8f) {
+                const float dx = curBuf[0] - prevCamBufData_[0];
+                const float dy = curBuf[1] - prevCamBufData_[1];
+                const float dz = curBuf[2] - prevCamBufData_[2];
+                const float fx = curBuf[4] - prevCamBufData_[4];
+                const float fy = curBuf[5] - prevCamBufData_[5];
+                const float fz = curBuf[6] - prevCamBufData_[6];
+                const float sx = curBuf[3] - prevCamBufData_[3];// projScaleX
+                const float sy = curBuf[7] - prevCamBufData_[7];// projScaleY
+                if (dx*dx + dy*dy + dz*dz > 1e-6f ||
+                    fx*fx + fy*fy + fz*fz > 1e-8f ||
+                    sx*sx + sy*sy > 1e-10f) {
                     motionThisFrame_ = true;
                     sampleIndex = 0;
                 }
             }
 
-            // Continuous-motion: previous-frame view-projection drives the
-            // primary-hit reprojection in raygen. On the very first frame we
-            // seed prev=current so the reproject is identity and history
-            // starts fresh without an artificial reset. We no longer touch
-            // sampleIndex on camera move — per-pixel FC packed in accum.w
-            // takes over that role and survives motion.
-            Matrix4 viewProj = camera.projectionMatrix;
-            if (prevCameraValid) {
-                Matrix4 prevView;// inverse(prevWorld) = view_prev
-                std::memcpy(prevView.elements.data(), prevCameraData.data(), 64);
-                prevView.invert();
-                Matrix4 prevProj;
-                Matrix4 prevProjInv;
-                std::memcpy(prevProjInv.elements.data(), prevCameraData.data() + 16, 64);
-                prevProj.copy(prevProjInv).invert();
-                viewProj.copy(prevProj).multiply(prevView);
-            } else {
-                viewProj.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse);
-            }
+            // Upload prev camera data. Self-seed on first frame so cold-start
+            // is a no-op reproject (same pixel, fc grows from 0 normally).
+            const float* toUpload = prevCameraValid ? prevCamBufData_.data() : curBuf;
             void* mappedPrev = nullptr;
             vmaMapMemory(ctx->allocator(), prevCameraUbos[frame].alloc, &mappedPrev);
-            std::memcpy(mappedPrev, viewProj.elements.data(), 64);
+            std::memcpy(mappedPrev, toUpload, 16 * sizeof(float));
             vmaUnmapMemory(ctx->allocator(), prevCameraUbos[frame].alloc);
 
-            std::memcpy(prevCameraData.data(), data, sizeof(data));
+            std::memcpy(prevCamBufData_.data(), curBuf, 16 * sizeof(float));
             prevCameraValid = true;
 
             void* mapped = nullptr;

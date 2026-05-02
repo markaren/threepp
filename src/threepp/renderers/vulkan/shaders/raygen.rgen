@@ -52,7 +52,10 @@ layout(set = 0, binding = 7, rgba32f) uniform image2D accumImage;
 // previous frame's writes; binding 7/12 write this frame's. Per-pixel
 // frameCount is stored directly in accumImage.w as a small float integer.
 layout(set = 0, binding = 9) uniform PrevCameraUbo {
-    mat4 viewProjPrev;
+    vec4 prevCamPosX;  // .xyz = world position,  .w = projScaleX = 1/(aspect*tanHalfFovY)
+    vec4 prevCamFwdY;  // .xyz = forward direction, .w = projScaleY = 1/tanHalfFovY
+    vec4 prevCamRgt;   // .xyz = right direction,   .w = unused
+    vec4 prevCamUp;    // .xyz = up direction,       .w = unused
 } pcam;
 layout(set = 0, binding = 10, std430) readonly buffer MotionMatBuf {
     mat4 motionMat[];
@@ -269,102 +272,90 @@ void main() {
         dir    = payload.nextDir;
     }
 
-    // ── history tap selection ─────────────────────────────────────────────
-    // Default path (no motion this frame): self-tap at the same pixel. With
-    // the mesh-ID guard this trivially produces a true running mean for a
-    // fully static frame — no float-precision round-trip through viewProj
-    // reprojection, no sub-pixel snap drift, no neighbour blend. Mirrors the
-    // WGPU PT pattern (textureLoad(diffAccumRead, pixel, 0) is the default,
-    // reprojection only kicks in when camera or mesh motion is signalled).
+    // ── history tap (mirrors WGPU PT design) ─────────────────────────────
+    // Two paths, matching the WGPU textureLoad-then-optional-reproject pattern:
     //
-    // Motion path (pc.motionFlags bit 0 set on camera or transform change):
-    // reproject this frame's primary world hit through the inverse motion of
-    // its mesh into the previous frame's world space, then through the prev
-    // viewProj back to a pixel coordinate. Mesh-ID guard at that prev pixel
-    // gates inheritance; OOB / mismatch / behind-camera / NaN-Inf all leave
-    // histFc=0 so disoccluded pixels reconverge instead of sticking to wrong
-    // history. FC is halved on motion taps so the running mean adapts to the
-    // new view within a few frames instead of being drowned by stale history.
+    //  Static frame (motionFlags==0):
+    //    Unconditional self-tap at the same pixel. No ID check, no reproject
+    //    math. FC accumulates unbounded → clean convergence. Host-side
+    //    clearGbufImages() + prevCameraValid=false handle scene/model changes.
+    //
+    //  Motion frame (motionFlags bit 0, non-sky pixel):
+    //    Bilinear 4-tap reprojection. Each of the 4 bilinear corners is
+    //    weighted by its bilinear fraction IF its prev-frame mesh-ID matches
+    //    the current pixel's ID, otherwise zero weight. wSum > 1e-4 means at
+    //    least one tap agreed → accept the weighted blend, halve FC so the
+    //    running mean re-locks to the new viewpoint in ~16 frames.
+    //    Sky pixels on a motion frame always cold-start (sky direction changed
+    //    with the camera; no valid prev-frame sky tap).
+    //
+    // FC / mesh-ID packed as plain float in accum.w / gbuf.w. Small integers
+    // (FC ≤ 4096, instance IDs ≤ 2^24) round-trip exactly through float32.
+    // Do NOT use uintBitsToFloat/floatBitsToUint — NVIDIA RT shaders flush
+    // subnormal bit patterns to zero, making the guard fail every frame.
     const ivec2 px = ivec2(gl_LaunchIDEXT.xy);
     const ivec2 sz = ivec2(gl_LaunchSizeEXT.xy);
 
-    ivec2 q = px;
-    // Sky pixels (primaryInstanceId==0) can't be reprojected (no world pos),
-    // so they always use self-tap. But on camera motion they see a new sky
-    // direction and must cold-start; inherit only when static.
-    bool tapValid   = (primaryInstanceId != 0u) ||
-                      ((pc.motionFlags & 1u) == 0u);
-    bool tapIsMotion = false;
-    if ((pc.motionFlags & 1u) != 0u && primaryInstanceId != 0u) {
-        tapValid = false;
-        const mat4 motion = motionMat[primaryInstanceId - 1u];
-        const vec4 prevWS = motion * vec4(primaryWorldPos, 1.0);
-        const vec4 prevCS = pcam.viewProjPrev * prevWS;
-        if (prevCS.w > 0.0) {
-            const vec3 prevNDC = prevCS.xyz / prevCS.w;
-            vec2 uv = prevNDC.xy * 0.5 + 0.5;
-            uv.y = 1.0 - uv.y;// match the y-flip in primary-ray construction
-            // Halton sub-pixel jitter is applied to the *current* primary ray
-            // (line ~162), so the world hit projects back to (px+0.5+jitter)
-            // in prev-frame screen space when nothing moved. For real motion
-            // the displacement dominates and the residual sub-pixel error is
-            // absorbed by the nearest-tap floor.
-            const vec2 prevPix = uv * vec2(sz) - jitter;
-            const ivec2 r = ivec2(floor(prevPix));
-            if (all(greaterThanEqual(r, ivec2(0))) && all(lessThan(r, sz))) {
-                q = r;
-                tapValid   = true;
-                // Only halve FC when the reprojected pixel is a different pixel
-                // (actual screen-space displacement). Sub-pixel camera movements
-                // quantize to the same pixel → effectively a self-tap → don't
-                // penalise with FC halving, which would prevent convergence
-                // during very slow camera panning and cause visible wobble from
-                // the mean oscillating between fc=32 and fc=33 each frame.
-                tapIsMotion = (r != px);
-            }
-        }
-    }
-
-    // FC + mesh-ID are stored as plain float (.w of accum / gbuf). Both are
-    // small integers (FC ≤ ~1024, mesh-ID = instanceCustomIndex+1 ≤ ~24bits)
-    // which round-trip exactly through float32. We deliberately avoid
-    // uintBitsToFloat/floatBitsToUint because those produce subnormal floats
-    // for small uints (1..~10⁶ are all denormal bit patterns), and NVIDIA
-    // flushes subnormals to zero in RT shaders by default. With the bit-cast
-    // encoding the mesh-ID guard read pmid==0 every frame → guard always
-    // failed → histFc reset to 0 → image never accumulated past sample 1.
-    // That's almost certainly the bug behind the persistent wobble + the
-    // "never converges after model change" observation.
-    // Sky pixels (primaryInstanceId==0) are also valid history taps.
-    // The gbuf stores 0 for sky; after clearGbufImages or on the first frame
-    // prevGbuf.w==0 matches current sky (both are 0) and we get a fresh start.
-    // Without this, every direct-sky pixel resets to 1 sample every frame and
-    // the env/sky contribution visibly wobbles even on a perfectly static camera.
     float histFc   = 0.0;
     vec3  histMean = vec3(0.0);
-    if (tapValid) {
-        const vec4 pg = imageLoad(prevGbufImage, q);
-        const uint pmid = uint(pg.w);
-        const bool idMatch = (pmid == primaryInstanceId);
-        // On static frames (tapIsMotion=false) q==px, so an ID mismatch is
-        // sub-pixel jitter at a silhouette — both outcomes are valid AA samples
-        // of the same pixel. Inherit history but cap FC so the mismatch doesn't
-        // lock the mean to a stale value.  On motion frames require exact match.
-        if (idMatch || !tapIsMotion) {
-            const vec4 pa = imageLoad(prevAccumImage, q);
-            const vec3 m = pa.rgb;
-            float fc = pa.w;
-            // No FC cap on static-frame mismatch: both outcomes are valid AA
-            // sub-samples of the same edge pixel; the running mean converges to
-            // the correct coverage blend.  Motion-frame disocclusion is handled
-            // separately via the tapIsMotion guard above.
-            if (tapIsMotion) fc = min(fc * 0.5, 8.0);
-            if (!any(isnan(m)) && !any(isinf(m))) {
-                histMean = m;
-                histFc   = fc;
+
+    if ((pc.motionFlags & 1u) == 0u) {
+        // ── Static frame: unconditional self-tap ─────────────────────
+        const vec4 pa = imageLoad(prevAccumImage, px);
+        const vec3 m  = pa.rgb;
+        if (!any(isnan(m)) && !any(isinf(m))) {
+            histMean = m;
+            histFc   = pa.w;
+        }
+
+    } else if (primaryInstanceId != 0u) {
+        // ── Motion frame, non-sky: bilinear 4-tap reprojection ───────
+        const mat4 motion = motionMat[primaryInstanceId - 1u];
+        const vec3 prevWS = (motion * vec4(primaryWorldPos, 1.0)).xyz;
+        const vec3  toPoint = prevWS - pcam.prevCamPosX.xyz;
+        const float prevZ   = dot(toPoint, pcam.prevCamFwdY.xyz);
+        if (prevZ > 0.001) {
+            const float ndcX  = dot(toPoint, pcam.prevCamRgt.xyz) * pcam.prevCamPosX.w / prevZ;
+            const float ndcY  = dot(toPoint, pcam.prevCamUp.xyz)  * pcam.prevCamFwdY.w / prevZ;
+            // Pixel-space reprojection (no jitter: prev-frame had independent jitter)
+            const float prevU = (ndcX * 0.5 + 0.5) * float(sz.x);
+            const float prevV = (0.5 - ndcY * 0.5) * float(sz.y);
+
+            const ivec2 b = ivec2(int(floor(prevU)), int(floor(prevV)));
+            if (b.x >= 0 && b.x + 1 < sz.x && b.y >= 0 && b.y + 1 < sz.y) {
+                // Bilinear weights
+                const float fx  = prevU - float(b.x);
+                const float fy  = prevV - float(b.y);
+                const float w00 = (1.0 - fx) * (1.0 - fy);
+                const float w10 =        fx  * (1.0 - fy);
+                const float w01 = (1.0 - fx) *        fy;
+                const float w11 =        fx  *        fy;
+
+                // Zero weight for any tap whose prev mesh-ID doesn't match.
+                // Silhouette pixels get partial-weight blends from matching
+                // corners rather than a binary accept/reject.
+                const float v00 = (uint(imageLoad(prevGbufImage, b              ).w) == primaryInstanceId) ? w00 : 0.0;
+                const float v10 = (uint(imageLoad(prevGbufImage, b + ivec2(1,0)).w) == primaryInstanceId) ? w10 : 0.0;
+                const float v01 = (uint(imageLoad(prevGbufImage, b + ivec2(0,1)).w) == primaryInstanceId) ? w01 : 0.0;
+                const float v11 = (uint(imageLoad(prevGbufImage, b + ivec2(1,1)).w) == primaryInstanceId) ? w11 : 0.0;
+                const float wSum = v00 + v10 + v01 + v11;
+
+                if (wSum > 1e-4) {
+                    const vec4 a00 = imageLoad(prevAccumImage, b              );
+                    const vec4 a10 = imageLoad(prevAccumImage, b + ivec2(1,0));
+                    const vec4 a01 = imageLoad(prevAccumImage, b + ivec2(0,1));
+                    const vec4 a11 = imageLoad(prevAccumImage, b + ivec2(1,1));
+                    const vec3 bMean = (a00.rgb*v00 + a10.rgb*v10 + a01.rgb*v01 + a11.rgb*v11) / wSum;
+                    const float bFc  = (a00.w  *v00 + a10.w  *v10 + a01.w  *v01 + a11.w  *v11) / wSum;
+                    if (!any(isnan(bMean)) && !any(isinf(bMean))) {
+                        histMean = bMean;
+                        histFc   = min(bFc * 0.5, 8.0); // halve FC on every motion tap
+                    }
+                }
             }
         }
     }
+    // Sky on motion frame: histFc=0 → cold-start (sky dir changed with camera)
 
     const vec3  mean  = (histMean * histFc + radiance) / (histFc + 1.0);
     const float newFc = min(histFc + 1.0, 4096.0);
