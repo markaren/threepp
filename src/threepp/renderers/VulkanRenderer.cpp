@@ -321,15 +321,38 @@ namespace threepp {
         std::vector<uint32_t> freeTextureSlots;// slots reclaimed by prune
         VkSampler textureSampler_ = VK_NULL_HANDLE;
 
-        // Phase 8: progressive accumulation. accumImage stores the running
-        // mean radiance (rgba32f, persistent in GENERAL layout). sampleIndex
-        // counts how many samples are baked into accumImage for the current
-        // camera; resets to 0 whenever the camera or env changes. Jittered
-        // sub-pixel sampling drives anti-aliasing without a separate AA pass.
-        Image2D accumImage{};
+        // Continuous-motion accumulation. Two ping-pong slots for the running
+        // mean (.rgb) plus per-pixel frame count (.w packed via uintBitsToFloat),
+        // and two ping-pong gbuf slots holding primary world hit (.xyz) plus
+        // mesh-ID guard (.w packed). At frame N the shader writes slot
+        // (N & 1) and reads slot ((N+1) & 1). sampleIndex now drives only the
+        // Halton jitter; per-pixel FC packed in accumImage.w replaces it as
+        // the accumulation count and survives camera / object motion.
+        std::array<Image2D, 2> accumImagesPP{};
+        std::array<Image2D, 2> gbufImagesPP{};
+        uint32_t accumWriteIdx_ = 0;
         uint32_t sampleIndex = 0;
         std::array<float, 32> prevCameraData{};
         bool prevCameraValid = false;
+
+        // Set when this frame's camera viewProj or any mesh transform differs
+        // from the previous frame. Forwarded to raygen via a push-constant bit
+        // so the shader only does reprojection math when motion actually
+        // occurred — static frames take the self-tap path and accumulate
+        // bit-for-bit with no float-precision pixel-snap drift (the cause of
+        // the visible static-scene wobble we observed when always reprojecting).
+        bool motionThisFrame_ = false;
+
+        // Previous-frame camera (proj_prev * view_prev) for primary-hit
+        // reprojection. One UBO per frame-in-flight so updates don't race the
+        // GPU. Per-mesh motion matrices (prevWorld * inverse(curWorld)) live in
+        // a single SSBO indexed by gl_InstanceCustomIndexEXT; the host repacks
+        // the array each frame from prevWorldMats keyed by Mesh*. First-frame
+        // / first-seen-mesh entries are identity so reproject is a no-op.
+        std::array<Buffer, kFramesInFlight> prevCameraUbos{};
+        std::array<Buffer, kFramesInFlight> motionMatBuffers{};
+        std::array<VkDeviceSize, kFramesInFlight> motionMatBufferCapacity{};
+        std::unordered_map<const Mesh*, std::array<float, 16>> prevWorldMats;
 
         // Per-mesh fingerprint used to detect scene changes between frames.
         // We capture the surface state ray tracing actually consumes:
@@ -354,6 +377,11 @@ namespace threepp {
             std::array<float, 15> pbr{};// + normalScale.xy + transmission/ior + clearcoat/roughness
         };
         std::vector<MeshFingerprint> prevSceneFingerprint;
+        // Mesh* in TLAS-instance order from the last ensureSceneBuilt call.
+        // renderFrame consumes this to compute per-instance motion matrices
+        // after the in-flight fence has been waited (safe to write the
+        // motionMatBuffers[currentFrame] HOST_VISIBLE buffer).
+        std::vector<Mesh*> lastVisibleMeshes_;
         bool sceneBuilt_ = false;
 
         // Ray-tracing pipeline.
@@ -448,9 +476,12 @@ namespace threepp {
             blasCache.clear();
 
             for (auto& b : cameraUbos) destroyBuffer(ctx->allocator(), b);
+            for (auto& b : prevCameraUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : lightsUbos) destroyBuffer(ctx->allocator(), b);
+            for (auto& b : motionMatBuffers) destroyBuffer(ctx->allocator(), b);
             destroyImage2D(ctx->allocator(), d, envImage);
-            destroyImage2D(ctx->allocator(), d, accumImage);
+            for (auto& img : accumImagesPP) destroyImage2D(ctx->allocator(), d, img);
+            for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : materialTextures) destroyImage2D(ctx->allocator(), d, img);
             materialTextures.clear();
             if (textureSampler_) vkDestroySampler(d, textureSampler_, nullptr);
@@ -625,7 +656,12 @@ namespace threepp {
             VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
             blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
             blasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-            blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+            // ALLOW_UPDATE so refitTlas's MODE_UPDATE on the TLAS still
+            // resolves to a valid build chain even if a future BLAS-level
+            // refit lands. PREFER_FAST_BUILD is intentionally not set —
+            // BLAS is still built once per geometry and queried-many.
+            blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                              VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
             blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
             blasBuild.geometryCount = 1;
             blasBuild.pGeometries = &blasGeom;
@@ -713,7 +749,8 @@ namespace threepp {
             VkAccelerationStructureBuildGeometryInfoKHR tlasBuild{};
             tlasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
             tlasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-            tlasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+            tlasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                              VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
             tlasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
             tlasBuild.geometryCount = 1;
             tlasBuild.pGeometries = &tlasGeom;
@@ -746,6 +783,67 @@ namespace threepp {
                     VMA_MEMORY_USAGE_AUTO);
 
             tlasBuild.dstAccelerationStructure = tlas;
+            tlasBuild.scratchData.deviceAddress = scratch.address;
+
+            VkAccelerationStructureBuildRangeInfoKHR range{};
+            range.primitiveCount = instanceCount;
+            const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+
+            VkCommandBuffer cb = beginOneShot();
+            ctx->rt().cmdBuildAccelerationStructures(cb, 1, &tlasBuild, &pRange);
+            endAndSubmitOneShot(cb);
+            destroyBuffer(ctx->allocator(), scratch);
+        }
+
+        // Refit the existing TLAS in-place with new instance transforms.
+        // Cheaper than a full rebuild and crucially leaves the TLAS handle
+        // unchanged so descriptor binding 0 keeps pointing at it. Caller
+        // must hold the same instance count as the previous build (only
+        // matrices may change) — topology growth requires a full rebuild.
+        void refitTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances) {
+            const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
+            if (instanceCount == 0 || tlas == VK_NULL_HANDLE) return;
+
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), tlasInstancesBuffer.alloc, &mapped);
+            std::memcpy(mapped, instances.data(),
+                        instanceCount * sizeof(VkAccelerationStructureInstanceKHR));
+            vmaUnmapMemory(ctx->allocator(), tlasInstancesBuffer.alloc);
+
+            VkAccelerationStructureGeometryInstancesDataKHR instData{};
+            instData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+            instData.arrayOfPointers = VK_FALSE;
+            instData.data.deviceAddress = tlasInstancesBuffer.address;
+
+            VkAccelerationStructureGeometryKHR tlasGeom{};
+            tlasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            tlasGeom.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+            tlasGeom.geometry.instances = instData;
+            tlasGeom.flags = 0;
+
+            VkAccelerationStructureBuildGeometryInfoKHR tlasBuild{};
+            tlasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+            tlasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+            tlasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                              VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+            tlasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+            tlasBuild.srcAccelerationStructure = tlas;
+            tlasBuild.dstAccelerationStructure = tlas;
+            tlasBuild.geometryCount = 1;
+            tlasBuild.pGeometries = &tlasGeom;
+
+            VkAccelerationStructureBuildSizesInfoKHR sizes{};
+            sizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+            ctx->rt().getAccelerationStructureBuildSizes(
+                    ctx->device(),
+                    VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                    &tlasBuild, &instanceCount, &sizes);
+
+            Buffer scratch = createBuffer(
+                    ctx->allocator(), ctx->device(), sizes.updateScratchSize,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO);
             tlasBuild.scratchData.deviceAddress = scratch.address;
 
             VkAccelerationStructureBuildRangeInfoKHR range{};
@@ -988,6 +1086,11 @@ namespace threepp {
         void ensureSceneBuilt(Object3D& scene) {
             scene.updateMatrixWorld(true);
 
+            // First call each render(): start with no motion. Camera + mesh
+            // motion checks below + in updateCameraUbo OR true into this flag
+            // before dispatch.
+            motionThisFrame_ = false;
+
             std::vector<Mesh*> meshes;
             scene.traverse([&](Object3D& o) {
                 auto* m = dynamic_cast<Mesh*>(&o);
@@ -1026,12 +1129,70 @@ namespace threepp {
                 currFp.push_back(fp);
             }
 
-            const bool unchanged = sceneBuilt_ &&
-                                   currFp.size() == prevSceneFingerprint.size() &&
-                                   std::memcmp(currFp.data(),
-                                               prevSceneFingerprint.data(),
-                                               currFp.size() * sizeof(MeshFingerprint)) == 0;
-            if (unchanged) return;
+            // Continuous-motion fast path: when only the per-mesh matrices
+            // changed (everything else — topology, materials, textures —
+            // matches), refit the TLAS in place and let raygen reproject.
+            // We only have to detect the matrix-only case ahead of time;
+            // motion matrices themselves are computed each frame in
+            // renderFrame so we can defer the host write past the fence wait.
+            lastVisibleMeshes_ = meshes;
+            if (sceneBuilt_ && currFp.size() == prevSceneFingerprint.size()) {
+                bool topologySame = true;
+                bool matricesSame = true;
+                for (size_t i = 0; i < currFp.size(); ++i) {
+                    const auto& a = currFp[i];
+                    const auto& b = prevSceneFingerprint[i];
+                    if (a.mesh != b.mesh || a.geom != b.geom || a.mat != b.mat ||
+                        a.albedoTex != b.albedoTex || a.roughnessTex != b.roughnessTex ||
+                        a.metalnessTex != b.metalnessTex || a.normalTex != b.normalTex ||
+                        a.transmissionTex != b.transmissionTex ||
+                        a.clearcoatTex != b.clearcoatTex ||
+                        a.clearcoatRoughnessTex != b.clearcoatRoughnessTex ||
+                        a.emissiveTex != b.emissiveTex ||
+                        std::memcmp(a.pbr.data(), b.pbr.data(), sizeof(a.pbr)) != 0) {
+                        topologySame = false;
+                        break;
+                    }
+                    if (std::memcmp(a.matrix.data(), b.matrix.data(), sizeof(a.matrix)) != 0) {
+                        matricesSame = false;
+                    }
+                }
+                if (topologySame) {
+                    if (!matricesSame) {
+                        motionThisFrame_ = true;
+                        sampleIndex = 0;
+                        // Transform-only update: refit TLAS with new transforms.
+                        // BLAS handles + buffer addresses are unchanged so
+                        // geomDescs / matDescs stay valid; we just rewrite the
+                        // tlasInstancesBuffer in place and call MODE_UPDATE.
+                        std::vector<VkAccelerationStructureInstanceKHR> instances;
+                        instances.reserve(meshes.size());
+                        for (Mesh* m : meshes) {
+                            const BufferGeometry* geomKey = m->geometry().get();
+                            auto it = blasCache.find(geomKey);
+                            if (it == blasCache.end()) continue;// shouldn't happen on transform-only
+                            VkAccelerationStructureInstanceKHR inst{};
+                            const auto& e = m->matrixWorld->elements;
+                            for (int r = 0; r < 3; ++r) {
+                                for (int c = 0; c < 4; ++c) {
+                                    inst.transform.matrix[r][c] = e[c * 4 + r];
+                                }
+                            }
+                            inst.instanceCustomIndex = static_cast<uint32_t>(instances.size());
+                            inst.mask = 0xFFu;
+                            inst.instanceShaderBindingTableRecordOffset = 0;
+                            inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+                            inst.accelerationStructureReference = it->second->address;
+                            instances.push_back(inst);
+                        }
+                        refitTlas(instances);
+                    }
+                    // Update prevSceneFingerprint so later frames compare
+                    // against this frame's matrices, not stale ones.
+                    prevSceneFingerprint = std::move(currFp);
+                    return;
+                }
+            }
 
             // Tear down anything in-flight references the old AS / scene-desc
             // buffers via a descriptor set. vkDeviceWaitIdle is the simplest
@@ -1171,9 +1332,29 @@ namespace threepp {
             buildTlas(instances);
             uploadDescBuffer(geometryDescsBuffer, geomDescs);
             uploadDescBuffer(materialDescsBuffer, matDescs);
+
+            // Topology rebuild: prev gbuf + accum hold mesh IDs from the old
+            // scene, but the gl_InstanceCustomIndexEXT space just changed
+            // meaning. Clearing the gbuf to 0 (mesh ID = 0 = sky) makes the
+            // reproject mesh-ID guard miss everywhere → histFc=0 globally
+            // on the very next frame, mirroring the old sampleIndex=0 reset
+            // without throwing away a valid history when meshes happen to
+            // re-shuffle into the same slots. We're already past
+            // vkDeviceWaitIdle so the clear is safely synchronous.
+            clearGbufImages();
+            sampleIndex = 0;
+            prevWorldMats.clear();
+
+            // Grow motion-mat buffers if the new instance count exceeds the
+            // current capacity. The descriptor write below (or the initial
+            // allocate, on first build) will pick up the new buffer handle.
+            const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                ensureMotionMatCapacity(f, std::max<uint32_t>(instanceCount, 1u));
+            }
+
             if (sceneBuilt_) {
                 rewriteSceneDescriptors();
-                sampleIndex = 0;// scene moved; restart accumulation
             } else {
                 allocateAndUpdateDescriptors();
             }
@@ -1191,6 +1372,177 @@ namespace threepp {
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                                 VMA_ALLOCATION_CREATE_MAPPED_BIT);
             }
+            for (auto& b : prevCameraUbos) {
+                b = createBuffer(
+                        ctx->allocator(), ctx->device(),
+                        /*size*/ 16 * sizeof(float),// viewProjPrev (single mat4)
+                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            }
+            // Initial cap = 1 identity matrix. ensureMotionMatCapacity grows
+            // and triggers a descriptor rewrite the first time a scene is
+            // built with > 1 instance.
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                motionMatBuffers[f] = createBuffer(
+                        ctx->allocator(), ctx->device(),
+                        /*size*/ 16 * sizeof(float),
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                motionMatBufferCapacity[f] = 1;
+                // Seed an identity so reads on the first frame (with descriptors
+                // already wired) get a sane answer even before any scene build.
+                static const float identity[16] = {
+                        1, 0, 0, 0,
+                        0, 1, 0, 0,
+                        0, 0, 1, 0,
+                        0, 0, 0, 1};
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), motionMatBuffers[f].alloc, &mapped);
+                std::memcpy(mapped, identity, sizeof(identity));
+                vmaUnmapMemory(ctx->allocator(), motionMatBuffers[f].alloc);
+            }
+        }
+
+        // Clear both ping-pong gbuf images AND both accum images to
+        // (0,0,0,0). gbuf.w == 0 (mesh-ID floatBitsToUint == 0u) is sky/no-hit
+        // so the raygen reproject mesh-ID guard misses on every subsequent
+        // reprojection — producing fresh accumulation everywhere on the next
+        // frame. We also clear accum so a stale tap that *does* slip past the
+        // guard (e.g. by undefined memory aliasing a real mesh-ID after image
+        // creation) returns 0 mean / 0 fc instead of garbage. Caller must
+        // hold the GPU idle (we don't issue our own barrier-into-TRANSFER_DST
+        // since the only legal layout transition path for an image being
+        // cleared is GENERAL → TRANSFER_DST → GENERAL).
+        void clearGbufImages() {
+            VkCommandBuffer cb = beginOneShot();
+
+            std::array<VkImage, 4> images = {
+                    gbufImagesPP[0].image, gbufImagesPP[1].image,
+                    accumImagesPP[0].image, accumImagesPP[1].image,
+            };
+
+            std::array<VkImageMemoryBarrier2, 4> toTransfer{};
+            for (size_t i = 0; i < images.size(); ++i) {
+                toTransfer[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                toTransfer[i].srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                toTransfer[i].srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                toTransfer[i].dstStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
+                toTransfer[i].dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                toTransfer[i].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                toTransfer[i].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                toTransfer[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toTransfer[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toTransfer[i].image = images[i];
+                toTransfer[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                toTransfer[i].subresourceRange.levelCount = 1;
+                toTransfer[i].subresourceRange.layerCount = 1;
+            }
+            VkDependencyInfo dep1{};
+            dep1.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dep1.imageMemoryBarrierCount = static_cast<uint32_t>(toTransfer.size());
+            dep1.pImageMemoryBarriers = toTransfer.data();
+            vkCmdPipelineBarrier2(cb, &dep1);
+
+            VkClearColorValue clear{};
+            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            for (VkImage img : images) {
+                vkCmdClearColorImage(cb, img,
+                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                     &clear, 1, &range);
+            }
+
+            std::array<VkImageMemoryBarrier2, 4> toGeneral{};
+            for (size_t i = 0; i < images.size(); ++i) {
+                toGeneral[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                toGeneral[i].srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
+                toGeneral[i].srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                toGeneral[i].dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                toGeneral[i].dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                toGeneral[i].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                toGeneral[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                toGeneral[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toGeneral[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toGeneral[i].image = images[i];
+                toGeneral[i].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                toGeneral[i].subresourceRange.levelCount = 1;
+                toGeneral[i].subresourceRange.layerCount = 1;
+            }
+            VkDependencyInfo dep2{};
+            dep2.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dep2.imageMemoryBarrierCount = static_cast<uint32_t>(toGeneral.size());
+            dep2.pImageMemoryBarriers = toGeneral.data();
+            vkCmdPipelineBarrier2(cb, &dep2);
+
+            endAndSubmitOneShot(cb);
+        }
+
+        // Compute per-instance motion matrices = prevWorld * inverse(curWorld)
+        // and upload to motionMatBuffers[frame]. Identity for first-seen
+        // meshes (cold-start frame after a topology rebuild) so the reproject
+        // is a no-op until prevWorldMats picks up real history. Caller must
+        // have already waited the inFlight[frame] fence — we write a buffer
+        // the GPU may have been reading on the previous use of `frame`.
+        void computeAndUploadMotionMatrices(uint32_t frame,
+                                            const std::vector<Mesh*>& meshes) {
+            const uint32_t count = static_cast<uint32_t>(meshes.size());
+            if (count == 0) return;
+
+            // Worst case all motion matrices need writing — `count` mat4s.
+            std::vector<float> data(count * 16);
+            for (uint32_t i = 0; i < count; ++i) {
+                Matrix4 cur;
+                std::memcpy(cur.elements.data(),
+                            meshes[i]->matrixWorld->elements.data(), 64);
+
+                Matrix4 motion;// identity by default
+                auto it = prevWorldMats.find(meshes[i]);
+                if (it != prevWorldMats.end()) {
+                    Matrix4 prev;
+                    std::memcpy(prev.elements.data(), it->second.data(), 64);
+                    Matrix4 curInv;
+                    curInv.copy(cur).invert();
+                    motion.multiplyMatrices(prev, curInv);
+                }
+                std::memcpy(&data[i * 16], motion.elements.data(), 64);
+            }
+
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), motionMatBuffers[frame].alloc, &mapped);
+            std::memcpy(mapped, data.data(), data.size() * sizeof(float));
+            vmaUnmapMemory(ctx->allocator(), motionMatBuffers[frame].alloc);
+
+            // Record this frame's matrices for next frame's motion delta.
+            // Only update entries we just wrote; meshes removed from the
+            // scene are pruned naturally (full-rebuild path clears the map).
+            for (uint32_t i = 0; i < count; ++i) {
+                std::array<float, 16> m{};
+                std::memcpy(m.data(), meshes[i]->matrixWorld->elements.data(), 64);
+                prevWorldMats[meshes[i]] = m;
+            }
+        }
+
+        // Grow motionMatBuffers[frame] in-place if the current scene's
+        // instance count exceeds capacity. Returns true when the buffer
+        // handle changed so the caller can rewrite binding 10. We grow with
+        // 2× headroom to avoid thrashing on incremental scene growth.
+        bool ensureMotionMatCapacity(uint32_t frame, uint32_t needed) {
+            if (needed <= motionMatBufferCapacity[frame]) return false;
+            const uint32_t newCap = std::max<uint32_t>(needed, motionMatBufferCapacity[frame] * 2u);
+            destroyBuffer(ctx->allocator(), motionMatBuffers[frame]);
+            motionMatBuffers[frame] = createBuffer(
+                    ctx->allocator(), ctx->device(),
+                    /*size*/ newCap * 16 * sizeof(float),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            motionMatBufferCapacity[frame] = newCap;
+            return true;
         }
 
         void updateCameraUbo(uint32_t frame, Camera& camera) {
@@ -1200,14 +1552,48 @@ namespace threepp {
             std::memcpy(data + 0,  camera.matrixWorld->elements.data(),            64);
             std::memcpy(data + 16, camera.projectionMatrixInverse.elements.data(), 64);
 
-            // Phase 8: any camera movement (view or projection) invalidates
-            // the accumulator — convergence has to start over from sample 0.
-            if (!prevCameraValid ||
-                std::memcmp(data, prevCameraData.data(), sizeof(data)) != 0) {
-                sampleIndex = 0;
-                std::memcpy(prevCameraData.data(), data, sizeof(data));
-                prevCameraValid = true;
+            // Camera-motion detection: epsilon on position (data[12..14]) and
+            // forward column (data[8..10]) instead of memcmp so orbit-control
+            // floating-point recompute doesn't fire false motion each frame.
+            if (prevCameraValid) {
+                const float dx = data[12] - prevCameraData[12];
+                const float dy = data[13] - prevCameraData[13];
+                const float dz = data[14] - prevCameraData[14];
+                const float fx = data[8]  - prevCameraData[8];
+                const float fy = data[9]  - prevCameraData[9];
+                const float fz = data[10] - prevCameraData[10];
+                if (dx*dx + dy*dy + dz*dz > 1e-6f || fx*fx + fy*fy + fz*fz > 1e-8f) {
+                    motionThisFrame_ = true;
+                    sampleIndex = 0;
+                }
             }
+
+            // Continuous-motion: previous-frame view-projection drives the
+            // primary-hit reprojection in raygen. On the very first frame we
+            // seed prev=current so the reproject is identity and history
+            // starts fresh without an artificial reset. We no longer touch
+            // sampleIndex on camera move — per-pixel FC packed in accum.w
+            // takes over that role and survives motion.
+            Matrix4 viewProj = camera.projectionMatrix;
+            if (prevCameraValid) {
+                Matrix4 prevView;// inverse(prevWorld) = view_prev
+                std::memcpy(prevView.elements.data(), prevCameraData.data(), 64);
+                prevView.invert();
+                Matrix4 prevProj;
+                Matrix4 prevProjInv;
+                std::memcpy(prevProjInv.elements.data(), prevCameraData.data() + 16, 64);
+                prevProj.copy(prevProjInv).invert();
+                viewProj.copy(prevProj).multiply(prevView);
+            } else {
+                viewProj.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse);
+            }
+            void* mappedPrev = nullptr;
+            vmaMapMemory(ctx->allocator(), prevCameraUbos[frame].alloc, &mappedPrev);
+            std::memcpy(mappedPrev, viewProj.elements.data(), 64);
+            vmaUnmapMemory(ctx->allocator(), prevCameraUbos[frame].alloc);
+
+            std::memcpy(prevCameraData.data(), data, sizeof(data));
+            prevCameraValid = true;
 
             void* mapped = nullptr;
             vmaMapMemory(ctx->allocator(), cameraUbos[frame].alloc, &mapped);
@@ -1494,9 +1880,24 @@ namespace threepp {
 
         void createAccumImage() {
             const VkExtent2D ext = ctx->swapchainExtent();
-            accumImage = createStorageImage2D(ext.width, ext.height,
-                                              VK_FORMAT_R32G32B32A32_SFLOAT);
+            for (auto& img : accumImagesPP) {
+                img = createStorageImage2D(ext.width, ext.height,
+                                           VK_FORMAT_R32G32B32A32_SFLOAT);
+            }
+            for (auto& img : gbufImagesPP) {
+                img = createStorageImage2D(ext.width, ext.height,
+                                           VK_FORMAT_R32G32B32A32_SFLOAT);
+            }
+            // Storage memory contents are undefined after vmaCreateImage —
+            // clear all four slots to 0 so the first frame's reproject sees
+            // mesh-ID 0 (= miss) and cold-starts with histFc=0 instead of
+            // reading garbage that may alias a real mesh-ID and pull in
+            // arbitrary mean / fc values.
+            clearGbufImages();
             sampleIndex = 0;
+            accumWriteIdx_ = 0;
+            prevCameraValid = false;
+            prevWorldMats.clear();
         }
 
         // 1×1 black RGBA32F dummy so the env-map binding is always populated.
@@ -2058,8 +2459,11 @@ namespace threepp {
         void createRtPipeline() {
             // 0=TLAS, 1=storage image (swapchain), 2=camera UBO, 3=geometry SSBO,
             // 4=material SSBO, 5=lights UBO, 6=env equirect (Phase 7),
-            // 7=accumulation image (Phase 8), 8=material texture array (textures).
-            std::array<VkDescriptorSetLayoutBinding, 9> bindings{};
+            // 7=accum write image (ping-pong), 8=material texture array,
+            // 9=prev camera UBO (motion), 10=motion matrix SSBO (motion),
+            // 11=prev accum read image (ping-pong), 12=gbuf write image
+            // (ping-pong), 13=prev gbuf read image (ping-pong).
+            std::array<VkDescriptorSetLayoutBinding, 14> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -2104,6 +2508,27 @@ namespace threepp {
             bindings[8].descriptorCount = kMaxMaterialTextures;
             bindings[8].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
                                      VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+            // Continuous-motion bindings.
+            bindings[9].binding = 9;
+            bindings[9].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            bindings[9].descriptorCount = 1;
+            bindings[9].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            bindings[10].binding = 10;
+            bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[10].descriptorCount = 1;
+            bindings[10].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            bindings[11].binding = 11;
+            bindings[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[11].descriptorCount = 1;
+            bindings[11].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            bindings[12].binding = 12;
+            bindings[12].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[12].descriptorCount = 1;
+            bindings[12].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            bindings[13].binding = 13;
+            bindings[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[13].descriptorCount = 1;
+            bindings[13].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -2112,15 +2537,19 @@ namespace threepp {
             check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rtDsLayout),
                   "vkCreateDescriptorSetLayout(RT)");
 
-            // Phase 8: 16-byte push constant carries sampleIndex (.x). Width
-            // matches a uvec4 so future per-frame controls can land here
-            // without changing the pipeline layout. Phase 11: .y carries the
-            // PMREM env mip count so closest_hit can map roughness → LOD.
+            // 20-byte push constant: .x sampleIndex, .y env mip count
+            // (closest_hit), .z toneMapping enum, .w exposure as float bits,
+            // .v[1] motionFlags (raygen): bit 0 = "motion happened this frame"
+            // (camera viewProj or any mesh transform differs from prev frame).
+            // Raygen uses this to default to a self-tap of accum/gbuf when
+            // unset, avoiding round-trip reproject precision drift on static
+            // scenes. Layout fits a uvec4 + uint, well under the 128-byte
+            // minimum push-constant guarantee.
             VkPushConstantRange pcRange{};
             pcRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                  VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
             pcRange.offset = 0;
-            pcRange.size   = 16;
+            pcRange.size   = 20;
 
             VkPipelineLayoutCreateInfo plci{};
             plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -2280,11 +2709,11 @@ namespace threepp {
             ps[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             ps[0].descriptorCount = totalSets;
             ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            ps[1].descriptorCount = totalSets * 2;// bindings 1 (swapchain) + 7 (accum)
+            ps[1].descriptorCount = totalSets * 5;// bindings 1, 7, 11, 12, 13
             ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            ps[2].descriptorCount = totalSets * 2;// bindings 2 (camera) + 5 (lights)
+            ps[2].descriptorCount = totalSets * 3;// bindings 2 (camera), 5 (lights), 9 (prevCamera)
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            ps[3].descriptorCount = totalSets * 2;// bindings 3 (geometry) + 4 (material)
+            ps[3].descriptorCount = totalSets * 3;// bindings 3 (geometry), 4 (material), 10 (motionMat)
             ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             ps[4].descriptorCount = totalSets * (1 + kMaxMaterialTextures);// binding 6 (env) + binding 8 (material array)
 
@@ -2397,8 +2826,14 @@ namespace threepp {
                     wEnv.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                     wEnv.pImageInfo = &envInfo;
 
+                    // Ping-pong: frame f writes slot (f & 1), reads (1 - (f & 1)).
+                    // Two frames in flight + two slots align perfectly: descriptors
+                    // are baked once and never need rewrite per frame.
+                    const uint32_t writeSlot = f & 1u;
+                    const uint32_t readSlot  = 1u - writeSlot;
+
                     VkDescriptorImageInfo accumInfo{};
-                    accumInfo.imageView   = accumImage.view;
+                    accumInfo.imageView   = accumImagesPP[writeSlot].view;
                     accumInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                     VkWriteDescriptorSet wAccum{};
                     wAccum.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -2422,8 +2857,66 @@ namespace threepp {
                     wMatTex.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                     wMatTex.pImageInfo = matTexInfos.data();
 
-                    std::array<VkWriteDescriptorSet, 9> writes{
-                            wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex};
+                    VkDescriptorBufferInfo prevCamInfo{};
+                    prevCamInfo.buffer = prevCameraUbos[f].handle;
+                    prevCamInfo.offset = 0;
+                    prevCamInfo.range  = VK_WHOLE_SIZE;
+                    VkWriteDescriptorSet wPrevCam{};
+                    wPrevCam.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wPrevCam.dstSet = descriptorSets[idx];
+                    wPrevCam.dstBinding = 9;
+                    wPrevCam.descriptorCount = 1;
+                    wPrevCam.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                    wPrevCam.pBufferInfo = &prevCamInfo;
+
+                    VkDescriptorBufferInfo motionInfo{};
+                    motionInfo.buffer = motionMatBuffers[f].handle;
+                    motionInfo.offset = 0;
+                    motionInfo.range  = VK_WHOLE_SIZE;
+                    VkWriteDescriptorSet wMotion{};
+                    wMotion.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wMotion.dstSet = descriptorSets[idx];
+                    wMotion.dstBinding = 10;
+                    wMotion.descriptorCount = 1;
+                    wMotion.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    wMotion.pBufferInfo = &motionInfo;
+
+                    VkDescriptorImageInfo prevAccumInfo{};
+                    prevAccumInfo.imageView   = accumImagesPP[readSlot].view;
+                    prevAccumInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wPrevAccum{};
+                    wPrevAccum.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wPrevAccum.dstSet = descriptorSets[idx];
+                    wPrevAccum.dstBinding = 11;
+                    wPrevAccum.descriptorCount = 1;
+                    wPrevAccum.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wPrevAccum.pImageInfo = &prevAccumInfo;
+
+                    VkDescriptorImageInfo gbufInfo{};
+                    gbufInfo.imageView   = gbufImagesPP[writeSlot].view;
+                    gbufInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wGbuf{};
+                    wGbuf.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wGbuf.dstSet = descriptorSets[idx];
+                    wGbuf.dstBinding = 12;
+                    wGbuf.descriptorCount = 1;
+                    wGbuf.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wGbuf.pImageInfo = &gbufInfo;
+
+                    VkDescriptorImageInfo prevGbufInfo{};
+                    prevGbufInfo.imageView   = gbufImagesPP[readSlot].view;
+                    prevGbufInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wPrevGbuf{};
+                    wPrevGbuf.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wPrevGbuf.dstSet = descriptorSets[idx];
+                    wPrevGbuf.dstBinding = 13;
+                    wPrevGbuf.descriptorCount = 1;
+                    wPrevGbuf.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wPrevGbuf.pImageInfo = &prevGbufInfo;
+
+                    std::array<VkWriteDescriptorSet, 14> writes{
+                            wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
+                            wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -2514,6 +3007,32 @@ namespace threepp {
                 wMatTex.pImageInfo = matTexInfos.data();
                 writes.push_back(wMatTex);
             }
+
+            // Binding 10 (motion matrix SSBO) may have grown during this
+            // rebuild — rewrite it across all sets so descriptor 10 references
+            // the (possibly new) buffer handle for each frame-in-flight.
+            // Storage outside the loop so the pBufferInfo pointers stay live
+            // through vkUpdateDescriptorSets.
+            std::array<VkDescriptorBufferInfo, kFramesInFlight> motionInfos{};
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                motionInfos[f].buffer = motionMatBuffers[f].handle;
+                motionInfos[f].offset = 0;
+                motionInfos[f].range  = VK_WHOLE_SIZE;
+            }
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                for (uint32_t k = 0; k < imageCount_; ++k) {
+                    const uint32_t setIdx = f * imageCount_ + k;
+                    VkWriteDescriptorSet wMotion{};
+                    wMotion.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wMotion.dstSet = descriptorSets[setIdx];
+                    wMotion.dstBinding = 10;
+                    wMotion.descriptorCount = 1;
+                    wMotion.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    wMotion.pBufferInfo = &motionInfos[f];
+                    writes.push_back(wMotion);
+                }
+            }
+
             vkUpdateDescriptorSets(ctx->device(),
                                    static_cast<uint32_t>(writes.size()),
                                    writes.data(), 0, nullptr);
@@ -2544,8 +3063,9 @@ namespace threepp {
 
         void recreateSwapchainAndDescriptors() {
             ctx->recreateSwapchain();
-            destroyImage2D(ctx->allocator(), ctx->device(), accumImage);
-            createAccumImage();// resets sampleIndex
+            for (auto& img : accumImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
+            for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
+            createAccumImage();// resets sampleIndex + clears prevWorldMats
             vkDestroyDescriptorPool(ctx->device(), descriptorPool, nullptr);
             descriptorPool = VK_NULL_HANDLE;
             descriptorSets.clear();
@@ -2578,25 +3098,31 @@ namespace threepp {
             toGeneral.subresourceRange.levelCount = 1;
             toGeneral.subresourceRange.layerCount = 1;
 
-            // Phase 8: ensure prior frame's accumulator writes are visible
-            // to this frame's read-modify-write. Layout stays in GENERAL.
-            VkImageMemoryBarrier2 accumBarrier{};
-            accumBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            accumBarrier.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-            accumBarrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            accumBarrier.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-            accumBarrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                         VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            accumBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            accumBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            accumBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            accumBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            accumBarrier.image = accumImage.image;
-            accumBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            accumBarrier.subresourceRange.levelCount = 1;
-            accumBarrier.subresourceRange.layerCount = 1;
+            // Ensure prior frames' accumulator + gbuf writes are visible to
+            // this frame's read-modify-write. We barrier both ping-pong slots
+            // since over consecutive frames the read-from / write-to roles
+            // alternate. Layout stays in GENERAL for all four storage images.
+            VkImageMemoryBarrier2 accumGbufTemplate{};
+            accumGbufTemplate.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            accumGbufTemplate.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+            accumGbufTemplate.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            accumGbufTemplate.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+            accumGbufTemplate.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                              VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            accumGbufTemplate.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            accumGbufTemplate.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            accumGbufTemplate.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            accumGbufTemplate.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            accumGbufTemplate.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            accumGbufTemplate.subresourceRange.levelCount = 1;
+            accumGbufTemplate.subresourceRange.layerCount = 1;
 
-            std::array<VkImageMemoryBarrier2, 2> preBarriers{toGeneral, accumBarrier};
+            std::array<VkImageMemoryBarrier2, 5> preBarriers{};
+            preBarriers[0] = toGeneral;
+            preBarriers[1] = accumGbufTemplate; preBarriers[1].image = accumImagesPP[0].image;
+            preBarriers[2] = accumGbufTemplate; preBarriers[2].image = accumImagesPP[1].image;
+            preBarriers[3] = accumGbufTemplate; preBarriers[3].image = gbufImagesPP[0].image;
+            preBarriers[4] = accumGbufTemplate; preBarriers[4].image = gbufImagesPP[1].image;
             VkDependencyInfo dep{};
             dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
             dep.imageMemoryBarrierCount = static_cast<uint32_t>(preBarriers.size());
@@ -2609,17 +3135,19 @@ namespace threepp {
                                     rtPipelineLayout, 0, 1,
                                     &descriptorSets[setIdx], 0, nullptr);
 
-            // Phase 8/11/12: .x = sampleIndex (raygen), .y = PMREM mip count
-            // (closest_hit), .z = ToneMapping enum, .w = exposure as float bits.
-            // Pushed to both stages so the single 16-byte block stays consistent.
+            // .x = sampleIndex (raygen), .y = PMREM mip count (closest_hit),
+            // .z = ToneMapping enum, .w = exposure as float bits, .v[1] =
+            // motionFlags (bit 0 = camera or mesh motion this frame).
             const float exposure = toneMappingExposure_;
             uint32_t exposureBits;
             std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
-            const uint32_t pc[4] = {
+            const uint32_t motionFlags = motionThisFrame_ ? 1u : 0u;
+            const uint32_t pc[5] = {
                     sampleIndex,
                     envImage.mipLevels,
                     static_cast<uint32_t>(toneMapping_),
                     exposureBits,
+                    motionFlags,
             };
             vkCmdPushConstants(cb, rtPipelineLayout,
                                VK_SHADER_STAGE_RAYGEN_BIT_KHR |
@@ -2727,9 +3255,18 @@ namespace threepp {
 
             updateCameraUbo(currentFrame, camera);
             updateLightsUbo(currentFrame, scene);
+            // Safe to write motionMatBuffers[currentFrame] now that the
+            // inFlight[currentFrame] fence has been signaled — the GPU has
+            // finished its previous use of this slot.
+            computeAndUploadMotionMatrices(currentFrame, lastVisibleMeshes_);
             if (refreshEnvTextureFromScene(scene)) {
                 rewriteEnvDescriptors();
-                sampleIndex = 0;// env contributes to color; restart accumulation
+                // Env is a primary radiance source — can't reproject, so
+                // wipe history. Clearing the gbuf alone makes the mesh-ID
+                // guard miss everywhere → next frame's reproject sets
+                // histFc=0 globally and we cold-start from sample 1.
+                vkDeviceWaitIdle(ctx->device());
+                clearGbufImages();
             }
 
             vkResetFences(d, 1, &inFlight[currentFrame]);

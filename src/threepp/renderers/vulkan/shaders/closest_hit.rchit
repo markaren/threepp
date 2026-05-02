@@ -26,6 +26,8 @@ struct Payload {
     vec3 nextDir;
     uint flags;
     uint seed;
+    vec3 hitWorldPos;  // world-space hit point (for primary-hit reprojection)
+    uint hitInstanceId;// gl_InstanceCustomIndexEXT + 1; 0 == miss/sky/pass-through
 };
 
 layout(buffer_reference, scalar) readonly buffer VertexBuf { float p[]; };
@@ -294,11 +296,16 @@ void main() {
 
     // Single-sided material hit from behind: pass the ray through unchanged.
     if (!isFront && mdesc.doubleSided == 0 && mdesc.transmission <= 0.0) {
-        payload.radiance   = vec3(0.0);
-        payload.brdfWeight = vec3(1.0);
-        payload.nextOrigin = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * (gl_HitTEXT + 0.001);
-        payload.nextDir    = gl_WorldRayDirectionEXT;
-        payload.flags      = 4u;// transmission-like: no NEE, full env weight on next miss
+        payload.radiance      = vec3(0.0);
+        payload.brdfWeight    = vec3(1.0);
+        payload.nextOrigin    = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * (gl_HitTEXT + 0.001);
+        payload.nextDir       = gl_WorldRayDirectionEXT;
+        payload.flags         = 4u;
+        // Tag this surface so raygen can record it as the primary if nothing
+        // opaque is found later (e.g. pass-through → sky). Without this, sky-
+        // facing back-faces never accumulate history and stay permanently noisy.
+        payload.hitWorldPos   = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
+        payload.hitInstanceId = uint(gl_InstanceCustomIndexEXT) + 1u;
         return;
     }
 
@@ -439,12 +446,14 @@ void main() {
         const int bi = clamp(mdesc.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
         const float texAlpha = texture(albedoMaps[bi], uvAlbedo).a;
         if (urand(seed) >= texAlpha) {
-            payload.radiance   = vec3(0.0);
-            payload.brdfWeight = vec3(1.0);
-            payload.nextOrigin = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * (gl_HitTEXT + 0.001);
-            payload.nextDir    = gl_WorldRayDirectionEXT;
-            payload.flags      = 4u;
-            payload.seed       = seed;
+            payload.radiance      = vec3(0.0);
+            payload.brdfWeight    = vec3(1.0);
+            payload.nextOrigin    = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * (gl_HitTEXT + 0.001);
+            payload.nextDir       = gl_WorldRayDirectionEXT;
+            payload.flags         = 4u;
+            payload.seed          = seed;
+            payload.hitWorldPos   = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
+            payload.hitInstanceId = uint(gl_InstanceCustomIndexEXT) + 1u;
             return;
         }
     }
@@ -537,12 +546,16 @@ void main() {
         }
         const float emLum0 = dot(emissiveOut, vec3(0.2126, 0.7152, 0.0722));
         if (emLum0 > 20.0) emissiveOut *= 20.0 / emLum0;
-        payload.radiance   = emissiveOut;
-        payload.brdfWeight = tWeight;
-        payload.nextOrigin = wOrigin;
-        payload.nextDir    = wDir;
-        payload.flags      = 4u;// bit 2: NEE skipped — raygen must not half-weight the next env miss
-        payload.seed       = seed;
+        payload.radiance      = emissiveOut;
+        payload.brdfWeight    = tWeight;
+        payload.nextOrigin    = wOrigin;
+        payload.nextDir       = wDir;
+        payload.flags         = 4u;
+        payload.seed          = seed;
+        // Tag glass surface so raygen records it as primary when the bounce
+        // exits to sky — otherwise glass-to-sky pixels accumulate nothing.
+        payload.hitWorldPos   = hitPos;
+        payload.hitInstanceId = uint(gl_InstanceCustomIndexEXT) + 1u;
         return;
     }
 
@@ -925,4 +938,10 @@ void main() {
     payload.nextDir    = bounceDir;
     payload.flags      = pathFlags;
     payload.seed       = seed;
+    // Tag this surface for raygen's primary-hit reprojection. Pass-through and
+    // transmission early-returns above leave hitInstanceId at 0 so raygen waits
+    // for the first real shade event to anchor history. +1 so 0 still means
+    // miss/sky after gl_InstanceCustomIndexEXT == 0.
+    payload.hitWorldPos    = hitPos;
+    payload.hitInstanceId  = uint(gl_InstanceCustomIndexEXT) + 1u;
 }

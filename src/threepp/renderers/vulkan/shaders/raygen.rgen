@@ -32,6 +32,8 @@ struct Payload {
     vec3 nextDir;      // world-space direction for the next bounce ray
     uint flags;        // bit 0: terminate path (env hit or no scatter)
     uint seed;         // PCG state threaded through bounces
+    vec3 hitWorldPos;  // world-space hit point (for primary-hit reprojection)
+    uint hitInstanceId;// gl_InstanceCustomIndexEXT + 1; 0 == miss/sky
 };
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
@@ -41,15 +43,37 @@ layout(set = 0, binding = 2) uniform CameraUbo {
     mat4 projInverse;
 } cam;
 layout(set = 0, binding = 7, rgba32f) uniform image2D accumImage;
+// Continuous-motion accumulation (Phase: motion). The previous frame's
+// view-projection matrix lets us reproject this frame's primary hit world
+// position back to the prior frame's pixel; the motion matrix per-instance
+// converts current-frame world space → previous-frame world space when the
+// hit object also moved. The gbuf images carry the primary world hit + a
+// mesh ID guard, ping-pong each frame in flight: binding 11/13 read the
+// previous frame's writes; binding 7/12 write this frame's. Per-pixel
+// frameCount is stored directly in accumImage.w as a small float integer.
+layout(set = 0, binding = 9) uniform PrevCameraUbo {
+    mat4 viewProjPrev;
+} pcam;
+layout(set = 0, binding = 10, std430) readonly buffer MotionMatBuf {
+    mat4 motionMat[];
+};
+layout(set = 0, binding = 11, rgba32f) uniform readonly image2D prevAccumImage;
+layout(set = 0, binding = 12, rgba32f) uniform writeonly image2D gbufImage;
+layout(set = 0, binding = 13, rgba32f) uniform readonly image2D prevGbufImage;
 
 // .x sampleIndex, .y envMipCount (closest_hit), .z toneMapping enum
 // (None=0, Linear=1, Reinhard=2, Cineon=3, ACESFilmic=4, Custom=5),
-// .w toneMappingExposure as float-bits.
+// .w toneMappingExposure as float-bits, .v[1] motionFlags
+// (bit 0 = "motion this frame": camera viewProj or any mesh transform
+// changed). When bit 0 is unset raygen takes the self-tap accumulation
+// path and skips the reproject math entirely — float-precision pixel-snap
+// drift on a static scene was visibly wobbly otherwise.
 layout(push_constant) uniform Pc {
     uint sampleIndex;
     uint envMipCount;
     uint toneMapping;
     uint exposureBits;
+    uint motionFlags;
 } pc;
 
 layout(location = 0) rayPayloadEXT Payload payload;
@@ -161,6 +185,12 @@ void main() {
     // clear this so the env is read at full strength on the bounce-into-miss.
     bool prevRanNEE = false;
 
+    // Captured the very first traceRayEXT below. Used after the loop to
+    // reproject this pixel's converged history. primaryInstanceId == 0 means
+    // sky / miss — no reproject (env is camera-locked, accumulates naively).
+    vec3 primaryWorldPos   = vec3(0.0);
+    uint primaryInstanceId = 0u;
+
     // scatter counts real shade events (non-transmission). Transmission hops
     // (glass enter/exit, single-sided pass-through — flags bit 2) are free and
     // don't consume the scatter budget, so multi-layer glass doesn't exhaust
@@ -177,11 +207,22 @@ void main() {
         // contribute at full weight to stay unbiased.
         payload.flags      = prevRanNEE ? 2u : 0u;
         payload.seed       = seed;
+        payload.hitWorldPos    = vec3(0.0);
+        payload.hitInstanceId  = 0u;
 
         // No OpaqueEXT — alpha-test materials need the any-hit shader to fire.
         // Materials with alphaCutoff <= 0 short-circuit in the any-hit shader.
         traceRayEXT(topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
                     origin, 0.001, dir, 10000.0, 0);
+
+        // Capture the primary hit (first iteration only) for reprojection.
+        // Transmission hops and back-face pass-throughs aren't real shade
+        // events — they don't tag a stable surface — so we wait until the
+        // first non-pass-through hit (or accept 0/sky if we never get one).
+        if (primaryInstanceId == 0u && payload.hitInstanceId != 0u) {
+            primaryWorldPos   = payload.hitWorldPos;
+            primaryInstanceId = payload.hitInstanceId;
+        }
 
         vec3 hitRadiance = payload.radiance;
         // Clamp indirect env hits (bounce into sky/sun disk) to prevent metallic
@@ -228,16 +269,107 @@ void main() {
         dir    = payload.nextDir;
     }
 
+    // ── history tap selection ─────────────────────────────────────────────
+    // Default path (no motion this frame): self-tap at the same pixel. With
+    // the mesh-ID guard this trivially produces a true running mean for a
+    // fully static frame — no float-precision round-trip through viewProj
+    // reprojection, no sub-pixel snap drift, no neighbour blend. Mirrors the
+    // WGPU PT pattern (textureLoad(diffAccumRead, pixel, 0) is the default,
+    // reprojection only kicks in when camera or mesh motion is signalled).
+    //
+    // Motion path (pc.motionFlags bit 0 set on camera or transform change):
+    // reproject this frame's primary world hit through the inverse motion of
+    // its mesh into the previous frame's world space, then through the prev
+    // viewProj back to a pixel coordinate. Mesh-ID guard at that prev pixel
+    // gates inheritance; OOB / mismatch / behind-camera / NaN-Inf all leave
+    // histFc=0 so disoccluded pixels reconverge instead of sticking to wrong
+    // history. FC is halved on motion taps so the running mean adapts to the
+    // new view within a few frames instead of being drowned by stale history.
     const ivec2 px = ivec2(gl_LaunchIDEXT.xy);
-    vec3 mean;
-    if (pc.sampleIndex == 0u) {
-        mean = radiance;
-    } else {
-        const vec3 prev = imageLoad(accumImage, px).rgb;
-        const float n = float(pc.sampleIndex);
-        mean = (prev * n + radiance) / (n + 1.0);
+    const ivec2 sz = ivec2(gl_LaunchSizeEXT.xy);
+
+    ivec2 q = px;
+    // Sky pixels (primaryInstanceId==0) can't be reprojected (no world pos),
+    // so they always use self-tap. But on camera motion they see a new sky
+    // direction and must cold-start; inherit only when static.
+    bool tapValid   = (primaryInstanceId != 0u) ||
+                      ((pc.motionFlags & 1u) == 0u);
+    bool tapIsMotion = false;
+    if ((pc.motionFlags & 1u) != 0u && primaryInstanceId != 0u) {
+        tapValid = false;
+        const mat4 motion = motionMat[primaryInstanceId - 1u];
+        const vec4 prevWS = motion * vec4(primaryWorldPos, 1.0);
+        const vec4 prevCS = pcam.viewProjPrev * prevWS;
+        if (prevCS.w > 0.0) {
+            const vec3 prevNDC = prevCS.xyz / prevCS.w;
+            vec2 uv = prevNDC.xy * 0.5 + 0.5;
+            uv.y = 1.0 - uv.y;// match the y-flip in primary-ray construction
+            // Halton sub-pixel jitter is applied to the *current* primary ray
+            // (line ~162), so the world hit projects back to (px+0.5+jitter)
+            // in prev-frame screen space when nothing moved. For real motion
+            // the displacement dominates and the residual sub-pixel error is
+            // absorbed by the nearest-tap floor.
+            const vec2 prevPix = uv * vec2(sz) - jitter;
+            const ivec2 r = ivec2(floor(prevPix));
+            if (all(greaterThanEqual(r, ivec2(0))) && all(lessThan(r, sz))) {
+                q = r;
+                tapValid   = true;
+                // Only halve FC when the reprojected pixel is a different pixel
+                // (actual screen-space displacement). Sub-pixel camera movements
+                // quantize to the same pixel → effectively a self-tap → don't
+                // penalise with FC halving, which would prevent convergence
+                // during very slow camera panning and cause visible wobble from
+                // the mean oscillating between fc=32 and fc=33 each frame.
+                tapIsMotion = (r != px);
+            }
+        }
     }
-    imageStore(accumImage, px, vec4(mean, 1.0));
+
+    // FC + mesh-ID are stored as plain float (.w of accum / gbuf). Both are
+    // small integers (FC ≤ ~1024, mesh-ID = instanceCustomIndex+1 ≤ ~24bits)
+    // which round-trip exactly through float32. We deliberately avoid
+    // uintBitsToFloat/floatBitsToUint because those produce subnormal floats
+    // for small uints (1..~10⁶ are all denormal bit patterns), and NVIDIA
+    // flushes subnormals to zero in RT shaders by default. With the bit-cast
+    // encoding the mesh-ID guard read pmid==0 every frame → guard always
+    // failed → histFc reset to 0 → image never accumulated past sample 1.
+    // That's almost certainly the bug behind the persistent wobble + the
+    // "never converges after model change" observation.
+    // Sky pixels (primaryInstanceId==0) are also valid history taps.
+    // The gbuf stores 0 for sky; after clearGbufImages or on the first frame
+    // prevGbuf.w==0 matches current sky (both are 0) and we get a fresh start.
+    // Without this, every direct-sky pixel resets to 1 sample every frame and
+    // the env/sky contribution visibly wobbles even on a perfectly static camera.
+    float histFc   = 0.0;
+    vec3  histMean = vec3(0.0);
+    if (tapValid) {
+        const vec4 pg = imageLoad(prevGbufImage, q);
+        const uint pmid = uint(pg.w);
+        const bool idMatch = (pmid == primaryInstanceId);
+        // On static frames (tapIsMotion=false) q==px, so an ID mismatch is
+        // sub-pixel jitter at a silhouette — both outcomes are valid AA samples
+        // of the same pixel. Inherit history but cap FC so the mismatch doesn't
+        // lock the mean to a stale value.  On motion frames require exact match.
+        if (idMatch || !tapIsMotion) {
+            const vec4 pa = imageLoad(prevAccumImage, q);
+            const vec3 m = pa.rgb;
+            float fc = pa.w;
+            // No FC cap on static-frame mismatch: both outcomes are valid AA
+            // sub-samples of the same edge pixel; the running mean converges to
+            // the correct coverage blend.  Motion-frame disocclusion is handled
+            // separately via the tapIsMotion guard above.
+            if (tapIsMotion) fc = min(fc * 0.5, 8.0);
+            if (!any(isnan(m)) && !any(isinf(m))) {
+                histMean = m;
+                histFc   = fc;
+            }
+        }
+    }
+
+    const vec3  mean  = (histMean * histFc + radiance) / (histFc + 1.0);
+    const float newFc = min(histFc + 1.0, 4096.0);
+    imageStore(accumImage, px, vec4(mean, newFc));
+    imageStore(gbufImage, px, vec4(primaryWorldPos, float(primaryInstanceId)));
 
     const float exposure = uintBitsToFloat(pc.exposureBits);
     const vec3  mapped   = toneMap(mean, pc.toneMapping, exposure);
