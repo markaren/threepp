@@ -258,6 +258,9 @@ namespace threepp {
             float uvTransformClearcoat[9];  // for clearcoatTexIndex
             float uvTransformClearcoatRough[9]; // for clearcoatRoughnessTexIndex
             float uvTransformTransmission[9];   // for transmissionTexIndex
+            float iridescence;             // KHR_materials_iridescence: 0..1 layer factor
+            float iridescenceIOR;          // thin-film IOR (1.0..2.5; default 1.3)
+            float iridescenceThicknessNm;  // thin-film thickness in nm (default 400)
         };
         Buffer geometryDescsBuffer;
         Buffer materialDescsBuffer;
@@ -1233,6 +1236,9 @@ namespace threepp {
             d.specularColor[0] = d.specularColor[1] = d.specularColor[2] = 1.0f;
             d.sheenColor[0] = d.sheenColor[1] = d.sheenColor[2] = 0.0f;
             d.sheenRoughness = 0.0f;
+            d.iridescence = 0.0f;             // off by default; lobe is skipped when iridescence == 0
+            d.iridescenceIOR = 1.3f;
+            d.iridescenceThicknessNm = 400.0f;
             d.occlusionTexIndex = -1;
             static constexpr float kIdent[9] = {1,0,0, 0,1,0, 0,0,1};
             std::copy(kIdent, kIdent+9, d.uvTransform);
@@ -1306,6 +1312,11 @@ namespace threepp {
                 d.sheenColor[1]  = sh->sheenColor.g;
                 d.sheenColor[2]  = sh->sheenColor.b;
                 d.sheenRoughness = sh->sheenRoughness;
+            }
+            if (auto* ir = dynamic_cast<MaterialWithIridescence*>(mat.get())) {
+                d.iridescence            = ir->iridescence;
+                d.iridescenceIOR         = std::max(1.0f, ir->iridescenceIOR);
+                d.iridescenceThicknessNm = std::max(0.0f, ir->iridescenceThicknessNm);
             }
             d.doubleSided = (mat->side == Side::Double) ? 1 : 0;
             // MeshBasicMaterial is unlit: emit base color directly with no

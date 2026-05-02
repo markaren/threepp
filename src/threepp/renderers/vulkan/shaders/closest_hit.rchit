@@ -83,6 +83,9 @@ struct MaterialDesc {
     mat3  uvTransformClearcoat;     // for clearcoatTexIndex
     mat3  uvTransformClearcoatRough;// for clearcoatRoughnessTexIndex
     mat3  uvTransformTransmission;  // for transmissionTexIndex
+    float iridescence;              // KHR_materials_iridescence: 0..1 layer factor
+    float iridescenceIOR;           // thin-film IOR (1.0..2.5; default 1.3)
+    float iridescenceThicknessNm;   // thin-film thickness in nm (default 400)
 };
 
 const uint kMaxMaterialTextures = 2048;
@@ -196,6 +199,91 @@ float geomSmithG1(float NdotX, float k) {
 
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// ── Thin-film iridescence (Belcour & Barla 2017, glTF reference) ────────────
+// Modulates dielectric F0 with wavelength-dependent thin-film interference.
+// Inputs:
+//   outsideIOR     : IOR of the medium above the film (air ≈ 1.0)
+//   eta2           : IOR of the thin film itself (mdesc.iridescenceIOR)
+//   cosTheta1      : cosine of the angle of incidence at the film top
+//   thicknessNm    : film thickness in nanometers (mdesc.iridescenceThicknessNm)
+//   baseF0         : F0 of the substrate underneath the film
+// Output: spectrally-integrated F0 (RGB) accounting for the thin-film phase
+// shifts. Mix with `baseF0` by mdesc.iridescence at the call site.
+//
+// Implementation matches three.js / Khronos glTF Sample Viewer line-for-line.
+vec3 iridFresnel0ToIor(vec3 F0) {
+    vec3 sqrtF0 = sqrt(F0);
+    return (vec3(1.0) + sqrtF0) / (vec3(1.0) - sqrtF0);
+}
+vec3 iridIorToFresnel0_v(vec3 transmittedIor, float incidentIor) {
+    return pow((transmittedIor - vec3(incidentIor)) / (transmittedIor + vec3(incidentIor)), vec3(2.0));
+}
+float iridIorToFresnel0_s(float transmittedIor, float incidentIor) {
+    return pow((transmittedIor - incidentIor) / (transmittedIor + incidentIor), 2.0);
+}
+// Spectral-to-RGB sensitivity from Belcour 2017 supplemental. Evaluated once
+// per Fourier order; `shift` is the per-RGB phase (vec3) since phi23 is
+// substrate-IOR dependent and varies between channels.
+vec3 iridSensitivity(float OPD, vec3 shift) {
+    float phase = 2.0 * PI * OPD * 1.0e-9;
+    vec3 val = vec3(5.4856e-13, 4.4201e-13, 5.2481e-13);
+    vec3 pos = vec3(1.6810e+06, 1.7953e+06, 2.2084e+06);
+    vec3 vr  = vec3(4.3278e+09, 9.3046e+09, 6.6121e+09);
+    vec3 xyz = val * sqrt(2.0 * PI * vr) * cos(pos * phase + shift) * exp(-(phase*phase) * vr);
+    xyz.x   += 9.7470e-14 * sqrt(2.0 * PI * 4.5282e+09) * cos(2.2399e+06 * phase + shift.x) * exp(-4.5282e+09 * (phase*phase));
+    xyz     /= 1.0685e-7;
+    // XYZ → linear sRGB (D65)
+    mat3 XYZ_TO_REC709 = mat3(
+         3.2404542, -0.9692660,  0.0556434,
+        -1.5371385,  1.8760108, -0.2040259,
+        -0.4985314,  0.0415560,  1.0572252);
+    return XYZ_TO_REC709 * xyz;
+}
+vec3 evalIridescence(float outsideIOR, float eta2, float cosTheta1,
+                     float thinFilmThickness, vec3 baseF0) {
+    // Force iridescenceIOR -> outsideIOR when thinFilmThickness == 0 → reduces to base F0.
+    float iridescenceIor = mix(outsideIOR, eta2, smoothstep(0.0, 0.03, thinFilmThickness));
+    // Snell to the angle inside the film.
+    float sinTheta2Sq = (outsideIOR / iridescenceIor) * (outsideIOR / iridescenceIor) *
+                       (1.0 - cosTheta1 * cosTheta1);
+    float cosTheta2Sq = 1.0 - sinTheta2Sq;
+    if (cosTheta2Sq < 0.0) return vec3(1.0);// total internal reflection at the film top
+    float cosTheta2 = sqrt(cosTheta2Sq);
+    // First interface (above the film).
+    float R0   = iridIorToFresnel0_s(iridescenceIor, outsideIOR);
+    float R12  = R0 + (1.0 - R0) * pow(1.0 - cosTheta1, 5.0);
+    float T121 = 1.0 - R12;
+    float phi12 = 0.0;
+    if (iridescenceIor < outsideIOR) phi12 = PI;
+    float phi21 = PI - phi12;
+    // Second interface (substrate). Recover the substrate's IOR from baseF0.
+    vec3 baseIOR = iridFresnel0ToIor(clamp(baseF0, vec3(0.0), vec3(0.9999)));
+    vec3 R1      = iridIorToFresnel0_v(baseIOR, iridescenceIor);
+    vec3 R23     = R1 + (vec3(1.0) - R1) * pow(1.0 - cosTheta2, 5.0);
+    vec3 phi23   = vec3(0.0);
+    if (baseIOR.x < iridescenceIor) phi23.x = PI;
+    if (baseIOR.y < iridescenceIor) phi23.y = PI;
+    if (baseIOR.z < iridescenceIor) phi23.z = PI;
+    // Optical path difference and phase.
+    float OPD     = 2.0 * iridescenceIor * thinFilmThickness * cosTheta2;
+    vec3  phi     = vec3(phi21) + phi23;
+    // Compound reflectance — exact formulas from Belcour 2017 §3.
+    vec3  R123    = clamp(R12 * R23, vec3(1e-5), vec3(0.9999));
+    vec3  r123    = sqrt(R123);
+    vec3  Rs      = (T121 * T121) * R23 / (vec3(1.0) - R123);
+    // First-order Fourier (m=0) — base reflectance.
+    vec3 C0 = R12 + Rs;
+    vec3 I  = C0;
+    // Higher-order Fourier terms: spectral cosine integrals (m=1,2).
+    vec3 Cm = Rs - T121;
+    for (int m = 1; m <= 2; ++m) {
+        Cm     *= r123;
+        vec3 Sm = 2.0 * iridSensitivity(float(m) * OPD, float(m) * phi);
+        I      += Cm * Sm;
+    }
+    return max(I, vec3(0.0));
 }
 
 // VNDF pdf for a sampled wi given wo, n, alpha = roughness². Walter 2007:
@@ -483,7 +571,16 @@ void main() {
     roughness = clamp(roughness, 0.04, 1.0);
     metalness = clamp(metalness, 0.0,  1.0);
 
-    const vec3  F0        = mix(vec3(0.04) * mdesc.specularIntensity * mdesc.specularColor, albedo, metalness);
+    vec3 F0 = mix(vec3(0.04) * mdesc.specularIntensity * mdesc.specularColor, albedo, metalness);
+    // Thin-film iridescence layer (KHR_materials_iridescence). Modulates F0
+    // with wavelength-dependent interference; lobe shape (GGX) is unchanged,
+    // only the Fresnel base shifts per channel. Skipped when factor == 0
+    // so non-iridescent materials pay nothing beyond the branch.
+    if (mdesc.iridescence > 0.0) {
+        const vec3 irid = evalIridescence(1.0, mdesc.iridescenceIOR, NdotV,
+                                          mdesc.iridescenceThicknessNm, F0);
+        F0 = mix(F0, irid, mdesc.iridescence);
+    }
     const float k         = (roughness + 1.0) * (roughness + 1.0) / 8.0;
 
     // World-space hit point, used as origin for the shadow rays. Offset

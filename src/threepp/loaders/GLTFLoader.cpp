@@ -583,7 +583,8 @@ namespace threepp {
                         ext.contains("KHR_materials_dispersion") ||
                         ext.contains("KHR_materials_specular") ||
                         ext.contains("KHR_materials_sheen") ||
-                        ext.contains("KHR_materials_volume")) {
+                        ext.contains("KHR_materials_volume") ||
+                        ext.contains("KHR_materials_iridescence")) {
                         needsPhysical = true;
                     }
                 }
@@ -748,6 +749,16 @@ namespace threepp {
                             float scale = cc["clearcoatNormalTexture"].value("scale", 1.0f);
                             physMat->clearcoatNormalScale = Vector2{scale, scale};
                         }
+                    }
+
+                    // KHR_materials_iridescence
+                    if (ext.contains("KHR_materials_iridescence")) {
+                        const auto& ir = ext["KHR_materials_iridescence"];
+                        physMat->iridescence = ir.value("iridescenceFactor", 0.0f);
+                        physMat->iridescenceIOR = ir.value("iridescenceIor", 1.3f);
+                        // Spec: thicknessMaximum is used as the constant thickness
+                        // when no thickness texture is present (which we don't sample yet).
+                        physMat->iridescenceThicknessNm = ir.value("iridescenceThicknessMaximum", 400.0f);
                     }
                 }
 

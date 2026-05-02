@@ -69,6 +69,10 @@ void MeshPhysicalMaterial::copyInto(Material& material) const {
 
     m->attenuationDistance = attenuationDistance;
     m->attenuationColor.copy(attenuationColor);
+
+    m->iridescence = iridescence;
+    m->iridescenceIOR = iridescenceIOR;
+    m->iridescenceThicknessNm = iridescenceThicknessNm;
 }
 
 bool MeshPhysicalMaterial::setValue(const std::string& key, const MaterialValue& value) {
@@ -141,6 +145,21 @@ bool MeshPhysicalMaterial::setValue(const std::string& key, const MaterialValue&
     } else if (key == "attenuationColor") {
 
         attenuationColor.copy(extractColor(value));
+        return true;
+
+    } else if (key == "iridescence") {
+
+        iridescence = extractFloat(value);
+        return true;
+
+    } else if (key == "iridescenceIOR") {
+
+        iridescenceIOR = extractFloat(value);
+        return true;
+
+    } else if (key == "iridescenceThicknessNm") {
+
+        iridescenceThicknessNm = extractFloat(value);
         return true;
     }
 

@@ -216,6 +216,13 @@ namespace threepp {
         std::optional<Color> sheen;  // legacy
     };
 
+    struct MaterialWithIridescence: virtual Material {
+
+        float iridescence = 0.f;            // 0..1 layer intensity
+        float iridescenceIOR = 1.3f;        // thin-film IOR (1.0..2.5 typical)
+        float iridescenceThicknessNm = 400.f;// thin-film thickness in nanometers
+    };
+
     struct MaterialWithPbrSpecular: virtual Material {
 
         float specularIntensity{1.f};
