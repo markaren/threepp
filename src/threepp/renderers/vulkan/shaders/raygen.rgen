@@ -393,17 +393,37 @@ void main() {
                     const float bFc  = (a00.w  *v00 + a10.w  *v10 + a01.w  *v01 + a11.w  *v11) / wSum;
                     if (!any(isnan(bMean)) && !any(isinf(bMean))) {
                         histMean = bMean;
-                        // Roughness-aware FC cap (mirrors WGPU PT). A flat cap=8
-                        // makes diffuse moving pixels equilibrate near FC≈4 — far
-                        // too noisy. Diffuse/rough surfaces have view-independent
-                        // shading, so a stale-but-reprojected sample is still
-                        // close to correct → cap=64 retains ~6 bits of averaging.
-                        // Smooth/specular surfaces have view-dependent reflections
-                        // that change radically with motion → keep cap=8 so the
-                        // running mean re-locks fast and we don't drag a stale
-                        // highlight through the move.
-                        const float movingCap = mix(8.0, 64.0, smoothstep(0.15, 0.7, primaryRoughness));
-                        histFc   = min(bFc * 0.5, movingCap);
+                        // Roughness-aware FC cap + floor.
+                        //
+                        // Cap (upper): split into movingCap (mesh self-moved) vs
+                        // staticCap (only camera moved). Static-mesh diffuse
+                        // shading barely changes with viewpoint, so cam-only
+                        // motion deserves a much higher cap (mirrors WGPU PT).
+                        //
+                        // Floor (lower): without a floor the halving every motion
+                        // frame drives FC to ~2 in continuous motion (geom-series
+                        // equilibrium of x = x/2 + 1). The cap only helps the
+                        // FIRST frame after a static→moving transition. A small
+                        // floor makes continuous-motion FC settle at floor+1
+                        // instead of 2 — that's the lever that actually cuts
+                        // moving-pixel noise and stops the bilinear-ringing shake
+                        // (per-sample variance shows up amplified when only a
+                        // handful of samples back the running mean).
+                        //
+                        // Floor is kept small so the post-motion ghost trail
+                        // decays in roughly floor·9 frames (~0.6s @ 60fps for
+                        // rough=4) — perceptually invisible on diffuse surfaces
+                        // where stale and fresh samples converge to the same
+                        // mean anyway, and short enough on glossy that we don't
+                        // smear specular highlights past where they belong.
+                        const float roughT = smoothstep(0.15, 0.7, primaryRoughness);
+                        const float capUp  = primaryMoved
+                                ? mix(8.0, 64.0,  roughT)
+                                : mix(8.0, 256.0, roughT);
+                        const float capLo  = primaryMoved
+                                ? mix(2.0, 4.0,   roughT)
+                                : mix(2.0, 6.0,   roughT);
+                        histFc = clamp(bFc * 0.5, capLo, capUp);
                     }
                 }
             }
