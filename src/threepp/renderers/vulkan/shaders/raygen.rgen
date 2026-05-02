@@ -361,9 +361,17 @@ void main() {
         if (prevZ > 0.001) {
             const float ndcX  = dot(toPoint, pcam.prevCamRgt.xyz) * pcam.prevCamPosX.w / prevZ;
             const float ndcY  = dot(toPoint, pcam.prevCamUp.xyz)  * pcam.prevCamFwdY.w / prevZ;
-            // Pixel-space reprojection (no jitter: prev-frame had independent jitter)
-            const float prevU = (ndcX * 0.5 + 0.5) * float(sz.x);
-            const float prevV = (0.5 - ndcY * 0.5) * float(sz.y);
+            // Pixel-space reprojection. The forward camera ray (line ~193) puts
+            // pixel (i,j)'s CENTER at NDC = ((i+0.5)/sx*2-1, ...). Reversing
+            // back gives prevU = i + 0.5 for the matching prev-frame pixel —
+            // i.e., integer-plus-half. Bilinear interpolation expects integer
+            // coords AT pixel centers, so we subtract 0.5 to put pixel i's
+            // center at prevU=i. Without this shift, an unmoved world point
+            // produces fx=fy=0.5 (all four bilinear weights = 0.25), smearing
+            // content half-a-pixel down-and-right; under camera motion it
+            // shows up as a diagonal drift overlaid on the real reproject.
+            const float prevU = (ndcX * 0.5 + 0.5) * float(sz.x) - 0.5;
+            const float prevV = (0.5 - ndcY * 0.5) * float(sz.y) - 0.5;
 
             const ivec2 b = ivec2(int(floor(prevU)), int(floor(prevV)));
             if (b.x >= 0 && b.x + 1 < sz.x && b.y >= 0 && b.y + 1 < sz.y) {
