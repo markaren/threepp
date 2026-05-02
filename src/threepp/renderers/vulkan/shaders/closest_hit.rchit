@@ -474,6 +474,15 @@ void main() {
         transmission *= texture(albedoMaps[i], uvTransmission).r;
     }
     if (transmission > 0.0 && urand(seed) < transmission) {
+        // Track which branch was picked below so we can decide whether to tag
+        // this hit as the "primary surface" (raygen reproject anchor). Reflect
+        // off glass: the visible content reprojects with the glass surface
+        // itself, so glass = primary. Refract through glass: the visible
+        // content lives BEHIND the glass and moves with parallax — tagging
+        // glass as primary makes the interior appear stuck to the door as it
+        // swings (CommercialRefrigerator). Skip the primary tag on refract so
+        // raygen captures the inside-surface hit on the next iteration.
+        bool wasReflect = false;
         const float ior = max(mdesc.ior, 1.0);
         const float eta = isFront ? (1.0 / ior) : ior;
         const vec3  I    = gl_WorldRayDirectionEXT;
@@ -500,12 +509,14 @@ void main() {
         if (urand(seed) < F) {
             wDir    = reflect(I, H);
             wOrigin = hitPos + N * 1e-3;
+            wasReflect = true;
         } else {
             const vec3 refr = refract(I, H, eta);
             if (dot(refr, refr) < 1e-6) {
                 // Total internal reflection — fall back to mirror reflect.
                 wDir    = reflect(I, H);
                 wOrigin = hitPos + N * 1e-3;
+                wasReflect = true;
             } else {
                 wDir    = normalize(refr);
                 wOrigin = hitPos - N * 1e-3;
@@ -546,11 +557,24 @@ void main() {
         payload.nextDir       = wDir;
         payload.flags         = 4u;
         payload.seed          = seed;
-        // Tag glass surface so raygen records it as primary when the bounce
-        // exits to sky — otherwise glass-to-sky pixels accumulate nothing.
-        payload.hitWorldPos   = hitPos;
-        payload.hitInstanceId = uint(gl_InstanceCustomIndexEXT) + 1u;
-        payload.hitRoughness  = roughness;// glass: keep moving-cap conservative on sharp lenses
+        if (wasReflect) {
+            // Reflect off glass: tag glass as primary so reproject follows the
+            // glass surface (content seen at this pixel is the env/scene
+            // reflected in glass, which is anchored to the glass position).
+            payload.hitWorldPos   = hitPos;
+            payload.hitInstanceId = uint(gl_InstanceCustomIndexEXT) + 1u;
+            payload.hitRoughness  = roughness;
+        } else {
+            // Refract through glass: skip the primary tag so raygen captures
+            // the surface BEHIND the glass on the next iteration. Otherwise
+            // interior content reprojects via the glass motion matrix and
+            // visibly slides with the door (CommercialRefrigerator). On a
+            // glass→sky path this leaves primary unset → cold-start, which is
+            // a small price for stable refraction reprojection.
+            payload.hitWorldPos   = vec3(0.0);
+            payload.hitInstanceId = 0u;
+            payload.hitRoughness  = 1.0;
+        }
         return;
     }
 
