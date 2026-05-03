@@ -336,6 +336,20 @@ EmissiveSample sampleEmissiveTriCdfFog(inout uint seed) {
     return es;
 }
 
+// Per-contribution firefly clamp for analytical-light inscatter. Stratified
+// scatter points that land near a point/spot light hit the 1/d² singularity
+// — even with the `pow(dist, decay)` floor, attenuation can spike to 100×.
+// Clamping per-sample luminance (matches closest_hit's emissive-NEE cap at
+// line ~1179) trades a small bias near sources for vastly fewer fireflies.
+// Cap chosen at 8.0: lower than the surface-NEE cap (20) because volumetric
+// samples are integrated over a much shorter "exposure" — N=4 stratified
+// taps per pixel vs the dense bounce coverage on surfaces.
+void addInscatter(inout vec3 sum, vec3 c) {
+    const float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    if (lum > 8.0) c *= 8.0 / lum;
+    sum += c;
+}
+
 // Single-scattering volumetric inscatter along the primary camera ray.
 // N=4 stratified depth samples + NEE to (a) emissive triangles, (b) analytical
 // lights (dir/point/spot/rect), (c) env (uniform-sphere fallback — Vulkan PT
@@ -378,28 +392,38 @@ vec3 volumeInscatter(vec3 rayOrigin, vec3 rayDir, float maxT, inout uint seed) {
                     const float pdfOmega = pdfArea * dist * dist / cosLight;
                     if (pdfOmega > 1e-10) {
                         const float ph = phaseHG(dot(rayDir, toL), g);
-                        inscatter += ph * es.emission * atten / pdfOmega;
+                        // Same firefly cap as analytic lights — emTri NEE
+                        // pdfOmega gets small for grazing emitter angles,
+                        // amplifying the contribution.
+                        addInscatter(inscatter, ph * es.emission * atten / pdfOmega);
                     }
                 }
             }
         }
 
         // (b) Analytical lights — dir / point / spot / rect
-        // DirLights — infinite distance sentinel
+        // DirLights — infinite distance sentinel. No 1/d² singularity here so
+        // skipping the firefly clamp would be safe, but keeping it uniform
+        // costs nothing and guards against pathological `intensity` values.
         for (uint li = 0u; li < lights.dirCount; ++li) {
             const vec3 L = normalize(lights.dirLights[li].direction);
             const vec3 atten = traceFogShadowRay(x, L, 1e30);
             const float ph = phaseHG(dot(rayDir, L), g);
-            inscatter += ph * lights.dirLights[li].color * atten;
+            addInscatter(inscatter, ph * lights.dirLights[li].color * atten);
         }
-        // PointLights — physical falloff matches closest_hit
+        // PointLights — physical falloff matches closest_hit. Stratified
+        // taps that land near the light source spike via 1/d²; addInscatter
+        // caps per-tap luminance to suppress fireflies. Floor of the pow()
+        // is also tightened to 0.1 (vs closest_hit's 0.01) — surface NEE
+        // averages over many paths, but volumetric is N=4/frame so the
+        // singularity is much more visible.
         for (uint li = 0u; li < lights.pointCount; ++li) {
             vec3 toL = lights.pointLights[li].position - x;
             const float dist = length(toL);
             if (dist < 1e-4) continue;
             toL /= dist;
             const float decay = lights.pointLights[li].decay;
-            float att = 1.0 / max(pow(dist, decay), 0.01);
+            float att = 1.0 / max(pow(dist, decay), 0.1);
             const float range = lights.pointLights[li].range;
             if (range > 0.0) {
                 const float t  = dist / range;
@@ -409,9 +433,9 @@ vec3 volumeInscatter(vec3 rayOrigin, vec3 rayDir, float maxT, inout uint seed) {
             }
             const vec3 atten = traceFogShadowRay(x, toL, dist - 1e-2);
             const float ph = phaseHG(dot(rayDir, toL), g);
-            inscatter += ph * lights.pointLights[li].color * att * atten;
+            addInscatter(inscatter, ph * lights.pointLights[li].color * att * atten);
         }
-        // SpotLights — cone window + falloff
+        // SpotLights — cone window + falloff (same near-source clamping).
         for (uint li = 0u; li < lights.spotCount; ++li) {
             vec3 toL = lights.spotLights[li].position - x;
             const float dist = length(toL);
@@ -423,7 +447,7 @@ vec3 volumeInscatter(vec3 rayOrigin, vec3 rayDir, float maxT, inout uint seed) {
                                                spotCos);
             if (spotAtten <= 0.0) continue;
             const float decay = lights.spotLights[li].decay;
-            float att = 1.0 / max(pow(dist, decay), 0.01);
+            float att = 1.0 / max(pow(dist, decay), 0.1);
             const float range = lights.spotLights[li].range;
             if (range > 0.0) {
                 const float t  = dist / range;
@@ -434,9 +458,11 @@ vec3 volumeInscatter(vec3 rayOrigin, vec3 rayDir, float maxT, inout uint seed) {
             att *= spotAtten;
             const vec3 atten = traceFogShadowRay(x, toL, dist - 1e-2);
             const float ph = phaseHG(dot(rayDir, toL), g);
-            inscatter += ph * lights.spotLights[li].color * att * atten;
+            addInscatter(inscatter, ph * lights.spotLights[li].color * att * atten);
         }
-        // RectLights — single random sample on the emitter rectangle
+        // RectLights — single random sample on the emitter rectangle.
+        // The geomTerm (cos/dist²) can also spike when the scatter point is
+        // close to and in front of the emitter face.
         for (uint li = 0u; li < lights.rectCount; ++li) {
             const float ru = urand(seed) * 2.0 - 1.0;
             const float rv = urand(seed) * 2.0 - 1.0;
@@ -451,10 +477,12 @@ vec3 volumeInscatter(vec3 rayOrigin, vec3 rayDir, float maxT, inout uint seed) {
             if (cosEmitter <= 0.0) continue;
             const float area = length(cross(lights.rectLights[li].halfU,
                                             lights.rectLights[li].halfV)) * 4.0;
-            const float geomTerm = cosEmitter * area / (dist * dist);
+            // Cap the inverse-square term at 1/0.01 so close, near-axis
+            // taps don't spike. Matches the spirit of closest_hit's pow floor.
+            const float geomTerm = cosEmitter * area / max(dist * dist, 0.01);
             const vec3 atten = traceFogShadowRay(x, toL, dist - 1e-2);
             const float ph = phaseHG(dot(rayDir, toL), g);
-            inscatter += ph * lights.rectLights[li].color * geomTerm * atten;
+            addInscatter(inscatter, ph * lights.rectLights[li].color * geomTerm * atten);
         }
 
         // (c) Env NEE — uniform sphere sample (no env CDF in Vulkan PT).
@@ -472,7 +500,9 @@ vec3 volumeInscatter(vec3 rayOrigin, vec3 rayDir, float maxT, inout uint seed) {
             const vec3 atten = traceFogShadowRay(x, dirE, 1e30);
             const vec3 Le    = sampleEquirectFog(dirE);
             const float phV  = phaseHG(dot(rayDir, dirE), g);
-            inscatter += phV * Le * atten / pdfE;
+            // 4π division can amplify bright HDR pixels (sun disk in env);
+            // cap matches the surface env-NEE clamp behavior.
+            addInscatter(inscatter, phV * Le * atten / pdfE);
         }
     }
 
@@ -564,15 +594,30 @@ void main() {
             primaryRoughness  = payload.hitRoughness;
         }
 
-        vec3 hitRadiance = payload.radiance;
-        // Clamp indirect env hits (bounce into sky/sun disk) to prevent metallic
-        // surfaces from going white. Env hits before any real scatter (scatter==0)
-        // are the background seen through glass — leave unclamped.
-        if (scatter > 0 && (payload.flags & 1u) != 0u) {
-            const float lum = dot(hitRadiance, vec3(0.2126, 0.7152, 0.0722));
-            if (lum > 20.0) hitRadiance *= 20.0 / lum;
+        // Per-bounce firefly clamp on the contribution that lands in the
+        // radiance accumulator. Two pre-existing failure modes drive the
+        // very bright spikes:
+        //   1. Russian Roulette can scale `throughput` up to ~20× to keep
+        //      survivors unbiased. A subsequent bounce hitting a bright
+        //      source (sun, near-source analytic-light NEE, emissive face)
+        //      splats throughput·radiance with luminance in the thousands —
+        //      one outlier sample dominates the running mean for many frames.
+        //   2. Narrow-lobe BSDF samples (rough ≈ 0, p_spec near 1) divide
+        //      F·cos by a tiny pdf, producing per-sample multipliers well
+        //      above 1 even before RR.
+        // Cap chosen at 50 luminance: low enough to crush ~1000-luminance
+        // fireflies (≥20× compression) but high enough to preserve the
+        // ~25-100 luminance values produced by legitimate bright
+        // highlights (chrome near a strong analytic light, glossy bounce
+        // off a sunlit surface). Primary view (scatter==0) is left
+        // unclamped so directly-visible emissive surfaces and the
+        // background-through-glass case stay at full intensity.
+        vec3 contribution = throughput * payload.radiance;
+        if (scatter > 0) {
+            const float lum = dot(contribution, vec3(0.2126, 0.7152, 0.0722));
+            if (lum > 50.0) contribution *= 50.0 / lum;
         }
-        radiance += throughput * hitRadiance;
+        radiance += contribution;
         if ((payload.flags & 1u) != 0u) break;
 
         throughput *= payload.brdfWeight;

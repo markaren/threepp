@@ -157,6 +157,7 @@ vec3 fogTransmittance(float dist) {
     const float d = clamp(dist, 0.0, 1e6);
     return exp(-fog.sigmaT * d);
 }
+
 // Bindless material albedo array. Indexed by mdesc.albedoTexIndex; slot 0 is
 // the host's 1×1 white default, used implicitly via -1→0 fallback below.
 layout(set = 0, binding = 8) uniform sampler2D albedoMaps[kMaxMaterialTextures];
