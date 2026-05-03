@@ -29,7 +29,9 @@ struct GeometryDesc {
 };
 
 // Minimal prefix of the full MaterialDesc (must match closest_hit.rchit layout
-// byte-for-byte — scalar block layout, no implicit padding).
+// byte-for-byte — scalar block layout, no implicit padding). uvTransform is
+// pulled in for the alpha-cutout sample so foliage shadow rays test the same
+// texel as the primary path's albedo sample.
 struct MaterialDesc {
     vec3  albedo;            // 12 (0)
     float roughness;         //  4 (12)
@@ -44,7 +46,9 @@ struct MaterialDesc {
     float alphaCutoff;       //  4 (60) — < 0: blend, > 0: cutout, 0: opaque
     float transmission;      //  4 (64) — glass probability
     float ior;               //  4 (68) — index of refraction (Fresnel)
-    float _pad[96];          // 384 (72..456)
+    float _pad1[19];         // 76 (72..148)
+    mat3  uvTransform;       // 36 (148..184) — albedo UV transform
+    float _pad2[68];         // 272 (184..456)
 };
 
 const uint kMaxMaterialTextures = 2048;
@@ -101,7 +105,10 @@ void main() {
             const vec2 uv1 = vec2(ub.u[idx.y * 2], ub.u[idx.y * 2 + 1]);
             const vec2 uv2 = vec2(ub.u[idx.z * 2], ub.u[idx.z * 2 + 1]);
             const float w  = 1.0 - attribs.x - attribs.y;
-            const vec2  uv = w * uv0 + attribs.x * uv1 + attribs.y * uv2;
+            const vec2  rawUv = w * uv0 + attribs.x * uv1 + attribs.y * uv2;
+            // Apply uvTransform — must match closest_hit's albedo sample so
+            // foliage shadows align with leaf silhouettes (atlased baseColor).
+            const vec2  uv = (mdesc.uvTransform * vec3(rawUv, 1.0)).xy;
             const int   ti = clamp(mdesc.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
             if (texture(albedoMaps[ti], uv).a < mdesc.alphaCutoff) {
                 ignoreIntersectionEXT;

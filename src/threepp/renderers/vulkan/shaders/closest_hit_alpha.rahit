@@ -34,9 +34,12 @@ struct GeometryDesc {
 };
 
 // Must match the FULL MaterialDesc layout in closest_hit.rchit (456 bytes with
-// scalar block layout). Fields beyond transmission are padding so mats[i] uses
-// the correct stride. Fields accessed: albedoTexIndex(36), alphaCutoff(60),
-// transmission(64).
+// scalar block layout). Fields not accessed are collapsed into padding blocks
+// so mats[i] uses the correct stride. Fields accessed:
+//   albedoTexIndex(36), alphaCutoff(60), transmission(64), uvTransform(148).
+// uvTransform is essential for foliage atlases — alpha test must sample the
+// same texel as closest_hit's color sample, otherwise leaf silhouettes don't
+// line up with the visible color and the host plane rectangle shows through.
 struct MaterialDesc {
     vec3  albedo;            // 12 (0)
     float roughness;         //  4 (12)
@@ -50,7 +53,10 @@ struct MaterialDesc {
     vec2  normalScale;       //  8 (52)
     float alphaCutoff;       //  4 (60) ← used
     float transmission;      //  4 (64) ← used (shadow ray pass-through)
-    float _pad[97];          // 388 (68..456)
+    float ior;               //  4 (68)
+    float _pad1[19];         // 76 (72..148)  ← transmissionTexIndex .. doubleSided
+    mat3  uvTransform;       // 36 (148..184) ← used (albedo UV transform)
+    float _pad2[68];         // 272 (184..456) ← occlusion/normal/...iridescence
 };
 
 const uint kMaxMaterialTextures = 2048;
@@ -130,7 +136,12 @@ void main() {
     const vec2 uv1 = vec2(ub.u[idx.y * 2 + 0], ub.u[idx.y * 2 + 1]);
     const vec2 uv2 = vec2(ub.u[idx.z * 2 + 0], ub.u[idx.z * 2 + 1]);
     const float w = 1.0 - attribs.x - attribs.y;
-    const vec2 uv = w * uv0 + attribs.x * uv1 + attribs.y * uv2;
+    const vec2 rawUv = w * uv0 + attribs.x * uv1 + attribs.y * uv2;
+    // Apply the SAME UV transform closest_hit uses for the albedo sample.
+    // Without this, foliage atlases (KHR_texture_transform on baseColor) test
+    // alpha at the wrong texel — the leaf cutout silhouette stops matching
+    // the visible color and the supporting plane rectangle shows through.
+    const vec2 uv = (mdesc.uvTransform * vec3(rawUv, 1.0)).xy;
 
     const int idxClamped = clamp(mdesc.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
     const float alpha = texture(albedoMaps[idxClamped], uv).a;
