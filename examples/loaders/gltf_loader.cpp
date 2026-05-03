@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
     dirLight->castShadow = true;
     scene->add(dirLight);
 
-    std::string modelPath = std::string(DATA_FOLDER) + "/models/gltf/porsche_911/scene.gltf";
+    std::string modelPath = std::string(DATA_FOLDER) + "/models/gltf/Soldier.glb";
     if (argc > 1) {
         std::filesystem::path arg = argv[1];
         if (std::filesystem::exists(arg) && std::filesystem::is_regular_file(arg)) {
