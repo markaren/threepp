@@ -316,6 +316,21 @@ namespace threepp {
         static_assert(sizeof(GpuRectLight)  == 60);
         std::array<Buffer, kFramesInFlight> lightsUbos{};
 
+        // Homogeneous fog (participating media). FogExp2.density maps directly
+        // to sigma_t; linear Fog (near/far) is converted to an equivalent
+        // density. Enabled flag = 0 short-circuits all fog work in the shaders.
+        // anisotropy is the Henyey-Greenstein g for single-scattering.
+        struct GpuFogUbo {
+            float sigmaT[3];     // per-channel extinction (1/world unit)
+            float enabled;       // 1.0 = fog active, 0.0 = disabled
+            float color[3];      // inscatter tint (sRGB-linear)
+            float anisotropy;    // HG g, clamped [-0.95, 0.95] by setFogAnisotropy
+        };
+        static_assert(sizeof(GpuFogUbo) == 32);
+        std::array<Buffer, kFramesInFlight> fogUbos{};
+        float    fogAnisotropy_ = 0.0f;
+        uint64_t prevFogHash_ = 0u;
+
         // Phase 7: environment equirect (HDR float) used by the primary miss
         // for backgrounds and by closest-hit for a single mirror-reflection
         // IBL probe. Default is a 1×1 black dummy so descriptors are always
@@ -565,6 +580,7 @@ namespace threepp {
             createCommandResources();
             createCameraUbos();
             createLightsUbos();
+            createFogUbos();
             createPrefilterPipeline();// must precede createDefaultEnvImage so PMREM is ready
             createDefaultEnvImage();
             createAccumImage();
@@ -630,6 +646,7 @@ namespace threepp {
             for (auto& b : cameraUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : prevCameraUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : lightsUbos) destroyBuffer(ctx->allocator(), b);
+            for (auto& b : fogUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : motionMatBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : emissiveTriBuffers) destroyBuffer(ctx->allocator(), b);
             destroyImage2D(ctx->allocator(), d, envImage);
@@ -2559,6 +2576,69 @@ namespace threepp {
             vmaUnmapMemory(ctx->allocator(), lightsUbos[frame].alloc);
         }
 
+        void createFogUbos() {
+            for (auto& b : fogUbos) {
+                b = createBuffer(
+                        ctx->allocator(), ctx->device(),
+                        sizeof(GpuFogUbo),
+                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            }
+        }
+
+        // Pack scene.fog (Fog/FogExp2 variant) into the per-frame fog UBO.
+        // Mirrors WgpuPathTracer.cpp:3352-3379 — FogExp2.density maps directly
+        // to sigma_t; linear Fog reaches ~63% extinction at farPlane via
+        // sigma = 1 / (far - near). Hash detect changes so the per-pixel motion
+        // path halves FC and the new fog state converges quickly.
+        void updateFogUbo(uint32_t frame, Object3D& scene) {
+            GpuFogUbo ubo{};
+
+            if (auto* sc = dynamic_cast<Scene*>(&scene); sc && sc->fog.has_value()) {
+                float sigma = 0.f;
+                Color tint{1.f, 1.f, 1.f};
+                if (std::holds_alternative<FogExp2>(*sc->fog)) {
+                    const auto& f = std::get<FogExp2>(*sc->fog);
+                    sigma = f.density;
+                    tint  = f.color;
+                } else if (std::holds_alternative<Fog>(*sc->fog)) {
+                    const auto& f = std::get<Fog>(*sc->fog);
+                    const float span = std::max(1e-4f, f.farPlane - f.nearPlane);
+                    sigma = 1.f / span;
+                    tint  = f.color;
+                }
+                if (sigma > 0.f) {
+                    ubo.sigmaT[0] = sigma;
+                    ubo.sigmaT[1] = sigma;
+                    ubo.sigmaT[2] = sigma;
+                    ubo.enabled   = 1.f;
+                    ubo.color[0]  = tint.r;
+                    ubo.color[1]  = tint.g;
+                    ubo.color[2]  = tint.b;
+                    ubo.anisotropy = fogAnisotropy_;
+                }
+            }
+
+            uint64_t h = 0xcbf29ce484222325ull;
+            const auto* bytes = reinterpret_cast<const uint8_t*>(&ubo);
+            for (size_t i = 0; i < sizeof(ubo); ++i) {
+                h ^= bytes[i];
+                h *= 0x100000001b3ull;
+            }
+            if (h != prevFogHash_) {
+                motionThisFrame_      = true;
+                cameraMovedThisFrame_ = true;
+                prevFogHash_          = h;
+            }
+
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), fogUbos[frame].alloc, &mapped);
+            std::memcpy(mapped, &ubo, sizeof(ubo));
+            vmaUnmapMemory(ctx->allocator(), fogUbos[frame].alloc);
+        }
+
         // Phase 7: allocate, transition, and upload an Image2D from a tightly-
         // packed CPU buffer. Pixel layout matches `format`. Caller owns the
         // returned Image2D and must call destroyImage2D() on shutdown.
@@ -3399,7 +3479,7 @@ namespace threepp {
             // 9=prev camera UBO (motion), 10=motion matrix SSBO (motion),
             // 11=prev accum read image (ping-pong), 12=gbuf write image
             // (ping-pong), 13=prev gbuf read image (ping-pong).
-            std::array<VkDescriptorSetLayoutBinding, 17> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 18> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -3426,12 +3506,17 @@ namespace threepp {
             bindings[5].binding = 5;
             bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[5].descriptorCount = 1;
-            bindings[5].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            // RAYGEN added so volumeInscatter can NEE to analytic lights from
+            // primary-ray scatter points.
+            bindings[5].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                     VK_SHADER_STAGE_RAYGEN_BIT_KHR;
             bindings[6].binding = 6;
             bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[6].descriptorCount = 1;
+            // RAYGEN added for volumeInscatter env-NEE (uniform-sphere fallback).
             bindings[6].stageFlags = VK_SHADER_STAGE_MISS_BIT_KHR |
-                                     VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+                                     VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                     VK_SHADER_STAGE_RAYGEN_BIT_KHR;
             bindings[7].binding = 7;
             bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[7].descriptorCount = 1;
@@ -3471,7 +3556,9 @@ namespace threepp {
             bindings[14].binding = 14;
             bindings[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[14].descriptorCount = 1;
-            bindings[14].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            // RAYGEN added for volumeInscatter emissive-tri NEE.
+            bindings[14].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                      VK_SHADER_STAGE_RAYGEN_BIT_KHR;
             // Binding 15 — photon count array (written by photon emit raygen,
             // read by closest_hit for caustic gather).
             bindings[15].binding = 15;
@@ -3484,6 +3571,15 @@ namespace threepp {
             bindings[16].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[16].descriptorCount = 1;
             bindings[16].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
+                                      VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            // Binding 17 — fog UBO (homogeneous participating media).
+            // Read by raygen (primary-ray transmittance + volumeInscatter) and
+            // closest_hit (per-light shadow-ray attenuation). Updated each frame
+            // by updateFogUbo from scene.fog.
+            bindings[17].binding = 17;
+            bindings[17].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            bindings[17].descriptorCount = 1;
+            bindings[17].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                       VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
@@ -3812,7 +3908,7 @@ namespace threepp {
             ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             ps[1].descriptorCount = totalSets * 5;// bindings 1, 7, 11, 12, 13
             ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            ps[2].descriptorCount = totalSets * 3;// bindings 2 (camera), 5 (lights), 9 (prevCamera)
+            ps[2].descriptorCount = totalSets * 4;// bindings 2 (camera), 5 (lights), 9 (prevCamera), 17 (fog)
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             ps[3].descriptorCount = totalSets * 6;// bindings 3,4,10,14 (existing) + 15,16 (photon)
             ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -4051,10 +4147,22 @@ namespace threepp {
                     wPhotonData.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                     wPhotonData.pBufferInfo = &photonDataInfo;
 
-                    std::array<VkWriteDescriptorSet, 17> writes{
+                    VkDescriptorBufferInfo fogInfo{};
+                    fogInfo.buffer = fogUbos[f].handle;
+                    fogInfo.offset = 0;
+                    fogInfo.range  = VK_WHOLE_SIZE;
+                    VkWriteDescriptorSet wFog{};
+                    wFog.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wFog.dstSet = descriptorSets[idx];
+                    wFog.dstBinding = 17;
+                    wFog.descriptorCount = 1;
+                    wFog.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                    wFog.pBufferInfo = &fogInfo;
+
+                    std::array<VkWriteDescriptorSet, 18> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
-                            wPhotonCnt, wPhotonData};
+                            wPhotonCnt, wPhotonData, wFog};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -4500,6 +4608,7 @@ namespace threepp {
 
             updateCameraUbo(currentFrame, camera);
             updateLightsUbo(currentFrame, scene);
+            updateFogUbo(currentFrame, scene);
             // Safe to write motionMatBuffers[currentFrame] now that the
             // inFlight[currentFrame] fence has been signaled — the GPU has
             // finished its previous use of this slot.
@@ -4660,6 +4769,23 @@ namespace threepp {
 
     void VulkanRenderer::setOverlayCallback(std::function<void(void*)> callback) {
         pimpl_->overlayCallback = std::move(callback);
+    }
+
+    void VulkanRenderer::setFogAnisotropy(float g) {
+        g = std::max(-0.95f, std::min(g, 0.95f));
+        if (g != pimpl_->fogAnisotropy_) {
+            pimpl_->fogAnisotropy_ = g;
+            // Force the per-pixel motion path to halve FC so the new phase
+            // function settles quickly. The fog UBO hash will catch this on
+            // the next updateFogUbo call too, but flagging here covers the
+            // case where setFogAnisotropy is invoked without changing density.
+            pimpl_->motionThisFrame_      = true;
+            pimpl_->cameraMovedThisFrame_ = true;
+        }
+    }
+
+    float VulkanRenderer::getFogAnisotropy() const {
+        return pimpl_->fogAnisotropy_;
     }
 
 }// namespace threepp

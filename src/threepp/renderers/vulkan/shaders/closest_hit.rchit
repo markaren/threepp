@@ -137,6 +137,26 @@ layout(set = 0, binding = 5, scalar) uniform LightsUbo {
     RectLight  rectLights[4];
 } lights;
 layout(set = 0, binding = 6) uniform sampler2D envTex;
+
+// Homogeneous fog (participating media). sigmaT.xyz = per-channel extinction
+// (1/world-unit), enabled = 1.0 when scene.fog is set. Mirrors the WGPU PT
+// uniform layout (WgpuPathTracerTypes.hpp: fog/fogColor vec4 pair).
+layout(set = 0, binding = 17) uniform FogUbo {
+    vec3  sigmaT;
+    float enabled;
+    vec3  color;
+    float anisotropy;
+} fog;
+
+// Beer-Lambert transmittance over a finite ray segment. Distance is clamped
+// to 1e6 to avoid overflow on directional / env "infinite ray" sentinels —
+// callers that pass maxDist >= 1e20 should skip fog attenuation entirely
+// (those sources sit "outside" the fog volume, i.e. sun through atmosphere).
+bool fogEnabled() { return fog.enabled > 0.5; }
+vec3 fogTransmittance(float dist) {
+    const float d = clamp(dist, 0.0, 1e6);
+    return exp(-fog.sigmaT * d);
+}
 // Bindless material albedo array. Indexed by mdesc.albedoTexIndex; slot 0 is
 // the host's 1×1 white default, used implicitly via -1→0 fallback below.
 layout(set = 0, binding = 8) uniform sampler2D albedoMaps[kMaxMaterialTextures];
@@ -865,13 +885,15 @@ void main() {
         // all geometry through the any-hit so glass/cutout can attenuate.
         // shadowVisibility starts at 1.0; glass multiplies it down; opaque sets
         // it to 0; miss is a no-op so the accumulated transmittance is the result.
+        // maxDist = 1e30 is the "infinite ray" sentinel (sun through atmosphere)
+        // so the fog attenuation below treats DirLight as outside the fog volume.
         shadowVisibility = 1.0;
         traceRayEXT(topAS,
                     gl_RayFlagsTerminateOnFirstHitEXT |
                     gl_RayFlagsSkipClosestHitShaderEXT |
                     gl_RayFlagsNoOpaqueEXT,
                     0xff, 1, 0, 1,// sbtOffset=1 → shadow hit group; missIndex=1
-                    hitPos + N * 1e-3, 0.0, L, 1e4, 1);
+                    hitPos + N * 1e-3, 0.0, L, 1e30, 1);
         if (shadowVisibility <= 0.0) continue;
 
         const vec3  H     = normalize(V + L);
@@ -902,6 +924,9 @@ void main() {
             const float spec_cc = (D_cc * G_cc) / max(4.0 * NdotV * NdotL, 1e-4);
             perLight += vec3(spec_cc * ccWeight);
         }
+        // DirLight uses 1e30 maxDist sentinel (above), so fogAtten is vec3(1)
+        // here — the sun is "outside" the fog. The volumeInscatter pass in
+        // raygen handles the camera-ray scattering of this light into haze.
         lit += perLight * NdotL * lights.dirLights[i].color * shadowVisibility;
     }
 
@@ -960,7 +985,8 @@ void main() {
             const float G_cc    = geomSmithG1(NdotV, k_cc) * geomSmithG1(NdotL, k_cc);
             perPt += vec3((D_cc * G_cc) / max(4.0 * NdotV * NdotL, 1e-4) * ccWeight);
         }
-        lit += perPt * NdotL * lights.pointLights[i].color * atten * shadowVisibility;
+        const vec3 fogAttenPt = fogEnabled() ? fogTransmittance(dist) : vec3(1.0);
+        lit += perPt * NdotL * lights.pointLights[i].color * atten * shadowVisibility * fogAttenPt;
     }
 
     // === Spot lights ===
@@ -1021,7 +1047,8 @@ void main() {
             const float G_cc    = geomSmithG1(NdotV, k_cc) * geomSmithG1(NdotL, k_cc);
             perSp += vec3((D_cc * G_cc) / max(4.0 * NdotV * NdotL, 1e-4) * ccWeight);
         }
-        lit += perSp * NdotL * lights.spotLights[i].color * atten * shadowVisibility;
+        const vec3 fogAttenSp = fogEnabled() ? fogTransmittance(dist) : vec3(1.0);
+        lit += perSp * NdotL * lights.spotLights[i].color * atten * shadowVisibility * fogAttenSp;
     }
 
     // === Rect area lights ===
@@ -1077,7 +1104,8 @@ void main() {
             const float G_cc    = geomSmithG1(NdotV, k_cc) * geomSmithG1(NdotL, k_cc);
             perRect += vec3((D_cc * G_cc) / max(4.0 * NdotV * NdotL, 1e-4) * ccWeight);
         }
-        lit += perRect * NdotL * lights.rectLights[i].color * geomTerm * shadowVisibility;
+        const vec3 fogAttenRect = fogEnabled() ? fogTransmittance(dist) : vec3(1.0);
+        lit += perRect * NdotL * lights.rectLights[i].color * geomTerm * shadowVisibility * fogAttenRect;
     }
 
     // === Emissive-mesh NEE ===
@@ -1177,7 +1205,8 @@ void main() {
                         // will reinforce anyway.
                         const float emCLum = dot(emContrib, vec3(0.2126, 0.7152, 0.0722));
                         if (emCLum > 20.0) emContrib *= 20.0 / emCLum;
-                        lit += emContrib * shadowVisibility;
+                        const vec3 fogAttenEm = fogEnabled() ? fogTransmittance(dist) : vec3(1.0);
+                        lit += emContrib * shadowVisibility * fogAttenEm;
                     }
                 }
             }
@@ -1247,12 +1276,15 @@ void main() {
         }
         if (nValid) {
             shadowVisibility = 1.0;
+            // 1e30 = "infinite" sentinel: env (sky) is treated as outside the
+            // fog volume (matches DirLight). volumeInscatter handles fog glow
+            // along the camera ray separately.
             traceRayEXT(topAS,
                         gl_RayFlagsTerminateOnFirstHitEXT |
                         gl_RayFlagsSkipClosestHitShaderEXT |
                         gl_RayFlagsNoOpaqueEXT,
                         0xff, 1, 0, 1,
-                        hitPos + N * 1e-3, 0.0, nDir, 1e4, 1);
+                        hitPos + N * 1e-3, 0.0, nDir, 1e30, 1);
             if (shadowVisibility > 0.0) {
                 vec3 envSample = sampleEquirect(nDir);
                 const float envLum = dot(envSample, vec3(0.2126, 0.7152, 0.0722));

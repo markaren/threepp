@@ -74,6 +74,13 @@ namespace threepp {
         // VkCommandBuffer (type-erased). Set null to disable.
         void setOverlayCallback(std::function<void(void*)> callback);
 
+        // Henyey-Greenstein anisotropy parameter for the fog phase function.
+        // g = 0 isotropic, >0 forward-scattering (sun god rays), <0 back-scatter.
+        // Clamped to [-0.95, 0.95] internally. No effect when scene.fog is unset.
+        // Mirrors WgpuPathTracer::setFogAnisotropy.
+        void setFogAnisotropy(float g);
+        [[nodiscard]] float getFogAnisotropy() const;
+
     private:
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
