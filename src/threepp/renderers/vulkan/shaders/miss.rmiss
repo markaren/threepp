@@ -20,9 +20,35 @@ struct Payload {
     vec3 hitWorldPos;  // unused by miss (kept for layout match with raygen/closest_hit)
     uint hitInstanceId;// must be 0 on miss so raygen sees sky/background as no-reproject
     float hitRoughness;// unused by miss (sky cold-starts on cam motion; cap doesn't apply)
+    uint inFlags;      // unused by miss (kept for layout match)
+    float hitMetalness;// unused by miss (kept for layout match)
+    float hitTransmission;// unused by miss (kept for layout match)
+    float bsdfPdf;     // pdf of the BSDF-sampled bounce direction (set by chit; used here for MIS)
 };
 
 layout(set = 0, binding = 6) uniform sampler2D envTex;
+// Env luminance CDF — bound 1×1 dummy with envCdfTotalSum=0 when env is
+// solid color or default. Used to compute pdf_env(rayDir) for the MIS
+// complement to chit's importance-sampled env NEE.
+layout(set = 0, binding = 18) uniform sampler2D envCdfTex;
+layout(set = 0, binding = 19) uniform sampler2D envMargTex;
+
+// Push-constant block must match raygen / closest_hit layout. Miss only reads
+// envCdfWidth/Height/TotalSum.
+layout(push_constant) uniform Pc {
+    uint sampleIndex;
+    uint envMipCount;
+    uint _pad1;
+    uint _pad2;
+    uint motionFlags;
+    uint mb0; uint mb1; uint mb2; uint mb3;
+    uint emissiveCount;
+    float emissiveTotalPower;
+    uint _padSpp;
+    uint envCdfWidth;
+    uint envCdfHeight;
+    float envCdfTotalSum;
+} pc;
 
 layout(location = 0) rayPayloadInEXT Payload payload;
 
@@ -38,17 +64,47 @@ vec3 sampleEquirect(vec3 dir) {
     return texture(envTex, vec2(u, v)).rgb;
 }
 
+vec2 dirToEquirectUV(vec3 dir) {
+    return vec2(0.5 + atan(dir.z, dir.x) / TWO_PI,
+                0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI);
+}
+
+// Mirror of closest_hit.rchit's envImportancePdf — same formula, but reading
+// the env CDF push-constant data from miss's own Pc block. Returns 0 when
+// CDF disabled (totalSum<=0); chit then falls back to constant 0.5 MIS.
+float envImportancePdf(vec3 dir) {
+    if (pc.envCdfTotalSum <= 0.0) return 0.0;
+    const int W = int(pc.envCdfWidth);
+    const int H = int(pc.envCdfHeight);
+    if (W <= 0 || H <= 0) return 0.0;
+    const vec2 uv = dirToEquirectUV(normalize(dir));
+    const int col = clamp(int(uv.x * float(W)), 0, W - 1);
+    const int row = clamp(int(uv.y * float(H)), 0, H - 1);
+    const vec3 envCol = texelFetch(envTex, ivec2(col, row), 0).rgb;
+    const float lum   = dot(envCol, vec3(0.2126, 0.7152, 0.0722)) + 1e-10;
+    return lum * float(W * H) / (2.0 * PI * PI * max(pc.envCdfTotalSum, 1e-10));
+}
+
 void main() {
+    const vec3 dir  = normalize(gl_WorldRayDirectionEXT);
+    const vec3 envR = sampleEquirect(dir);
     // Primary miss (bit 1 unset) returns the env at full strength so the
     // background is visible. Non-primary miss (bit 1 set by raygen) is the
-    // BSDF half of an MIS pair: closest_hit's env NEE shot a shadow ray with
-    // BSDF-importance sampling at the previous shade point, so we'd double-
-    // count if we returned the full env here. With the same sampling
-    // distribution on both sides, the balance-heuristic weight is a constant
-    // 0.5 (see the closest_hit Env NEE + MIS comment). Apply it here.
-    const vec3 envR = sampleEquirect(normalize(gl_WorldRayDirectionEXT));
+    // BSDF half of an MIS pair against chit's env NEE.
+    //   • envCdfTotalSum > 0 → chit used env importance sampling; MIS weight
+    //     here is pdf_brdf / (pdf_brdf + pdf_env). pdf_brdf is what chit
+    //     wrote into payload.bsdfPdf when sampling the bounce.
+    //   • envCdfTotalSum <= 0 → chit used BSDF-sampled env NEE; pdfs match
+    //     so the balance-heuristic weight collapses to 0.5.
     if ((payload.flags & 2u) != 0u) {
-        payload.radiance = 0.5 * envR;
+        if (pc.envCdfTotalSum > 0.0) {
+            const float pdfEnv  = envImportancePdf(dir);
+            const float pdfBrdf = payload.bsdfPdf;
+            const float wBrdf   = pdfBrdf / max(pdfBrdf + pdfEnv, 1e-8);
+            payload.radiance = wBrdf * envR;
+        } else {
+            payload.radiance = 0.5 * envR;
+        }
     } else {
         payload.radiance = envR;
     }

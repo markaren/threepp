@@ -33,6 +33,7 @@ struct Payload {
                        // emissive NEE on the prev shade already accounted for it)
     float hitMetalness;   // raygen uses for adaptive bounce classification
     float hitTransmission;// raygen uses for adaptive bounce classification
+    float bsdfPdf;        // chit→miss: pdf of the BSDF-sampled bounce direction
 };
 
 layout(buffer_reference, scalar) readonly buffer VertexBuf { float p[]; };
@@ -139,6 +140,10 @@ layout(set = 0, binding = 5, scalar) uniform LightsUbo {
     RectLight  rectLights[4];
 } lights;
 layout(set = 0, binding = 6) uniform sampler2D envTex;
+// Env luminance CDF (Phase A: importance-sample bright env features). Bound
+// as a 1×1 dummy with envCdfTotalSum=0 when env is solid color or default.
+layout(set = 0, binding = 18) uniform sampler2D envCdfTex;  // conditional, w×h
+layout(set = 0, binding = 19) uniform sampler2D envMargTex; // marginal, 1×h
 
 // Homogeneous fog (participating media). sigmaT.xyz = per-channel extinction
 // (1/world-unit), enabled = 1.0 when scene.fog is set. Mirrors the WGPU PT
@@ -204,6 +209,9 @@ layout(push_constant) uniform Pc {
     uint emissiveCount;     // # of EmTri entries
     float emissiveTotalPower;// total CDF power (last entry's cumPower)
     uint _padSpp;           // raygen spp (unused here)
+    uint envCdfWidth;       // env CDF dimensions (envCdfTotalSum > 0 to enable)
+    uint envCdfHeight;
+    float envCdfTotalSum;   // pdf normaliser; 0 disables env importance sampling
 } pc;
 
 hitAttributeEXT vec2 attribs;
@@ -219,6 +227,18 @@ vec3 sampleEquirect(vec3 dir) {
     const float u = 0.5 + atan(dir.z, dir.x) / TWO_PI;
     const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
     return texture(envTex, vec2(u, v)).rgb;
+}
+
+vec2 dirToEquirectUV(vec3 dir) {
+    return vec2(0.5 + atan(dir.z, dir.x) / TWO_PI,
+                0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI);
+}
+
+vec3 uvToEquirectDir(vec2 uv) {
+    const float phi   = (uv.x - 0.5) * TWO_PI;
+    const float theta = (uv.y - 0.5) * PI;
+    const float ct    = cos(theta);
+    return vec3(ct * cos(phi), sin(theta), ct * sin(phi));
 }
 
 // FNV-1a hash on a 3-D cell coordinate — must match photon_emit.rgen.
@@ -418,6 +438,25 @@ float brdfPdf(vec3 wo, vec3 wi, vec3 n, float roughness, float metalness) {
     return pSpec * specPdf + (1.0 - pSpec) * diffPdf;
 }
 
+// 3-lobe BSDF mixture pdf: base-spec + base-diff + clearcoat. Matches the
+// actual sampler in main()'s 3-way stochastic split. Used for env-CDF MIS
+// (chit's env NEE side and miss's BSDF→env complement). The 2-lobe brdfPdf
+// underestimates the mixture pdf on clearcoat materials — the cc lobe is a
+// sharp peak at glossy reflection angles — so MIS comes out skewed and
+// adds noise. ccProb=0 collapses this to brdfPdf.
+float brdfPdf3(vec3 wo, vec3 wi, vec3 n, float roughness, float metalness,
+               float ccProb, float ccRough) {
+    const float NdotL = dot(n, wi);
+    if (NdotL <= 0.0) return 0.0;
+    const float pSpec   = mix(0.5, 0.98, metalness);
+    const float specPdf = vndfPdf(wo, wi, n, roughness);
+    const float diffPdf = NdotL * (1.0 / PI);
+    const float basePdf = pSpec * specPdf + (1.0 - pSpec) * diffPdf;
+    if (ccProb <= 0.0) return basePdf;
+    const float ccPdf = vndfPdf(wo, wi, n, ccRough);
+    return ccProb * ccPdf + (1.0 - ccProb) * basePdf;
+}
+
 // KHR_materials_sheen: Charlie NDF, Neubelt visibility, and IBL energy approximation.
 // Matches three.js physical_pars_fragment.glsl.
 float D_Charlie(float NdotH, float roughness) {
@@ -447,6 +486,63 @@ uint pcgNext(inout uint state) {
 
 float urand(inout uint state) {
     return float(pcgNext(state)) / 4294967296.0;
+}
+
+// Binary search a 1-row CDF lookup. row=0 is used for the 1×h marginal CDF
+// (treated as a single column laid out top-to-bottom).
+int envCdfSearch(sampler2D tex, int row, int size, float xi) {
+    int lo = 0;
+    int hi = size - 1;
+    for (int it = 0; it < 16; ++it) {
+        if (lo >= hi) break;
+        const int mid = (lo + hi) >> 1;
+        const float v = texelFetch(tex, ivec2(mid, row), 0).x;
+        if (v < xi) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+}
+
+// Importance-sample the env by luminance. Returns vec4(dir, pdfOmega) where
+// pdfOmega = lum(pixel) · W·H / (2π² · totalSum). The 2π² factor is the
+// equirect uv→ω Jacobian (= 2π²·cos(lat)) cancelling with the cos(lat) in
+// the luminance weighting. totalSum is the host-built Σ lum·cos(lat).
+// Returns vec4(0) if no CDF is bound (totalSum <= 0).
+vec4 sampleEnvImportance(inout uint seed) {
+    if (pc.envCdfTotalSum <= 0.0) return vec4(0.0);
+    const int W = int(pc.envCdfWidth);
+    const int H = int(pc.envCdfHeight);
+    if (W <= 0 || H <= 0) return vec4(0.0);
+
+    const int row = envCdfSearch(envMargTex, 0, H, urand(seed));
+    const int col = envCdfSearch(envCdfTex, row, W, urand(seed));
+
+    // Sub-pixel jitter inside the chosen cell so pdf_uv = uniform-within-pixel
+    // matches the integrand exactly (cell-center snap biases smooth integrands
+    // by ~7% per WGPU memory).
+    const vec2 uv = vec2((float(col) + urand(seed)) / float(W),
+                         (float(row) + urand(seed)) / float(H));
+    const vec3 dir = normalize(uvToEquirectDir(uv));
+
+    const vec3 envCol = texelFetch(envTex, ivec2(col, row), 0).rgb;
+    const float lum   = dot(envCol, vec3(0.2126, 0.7152, 0.0722)) + 1e-10;
+    const float pdfOmega = lum * float(W * H) / (2.0 * PI * PI * max(pc.envCdfTotalSum, 1e-10));
+    return vec4(dir, pdfOmega);
+}
+
+// Solid-angle pdf for an arbitrary direction under the env CDF. Used for MIS
+// when a BSDF-sampled bounce hits the env — needs to know how likely env
+// importance sampling would have picked the same direction.
+float envImportancePdf(vec3 dir) {
+    if (pc.envCdfTotalSum <= 0.0) return 0.0;
+    const int W = int(pc.envCdfWidth);
+    const int H = int(pc.envCdfHeight);
+    if (W <= 0 || H <= 0) return 0.0;
+    const vec2 uv = dirToEquirectUV(normalize(dir));
+    const int col = clamp(int(uv.x * float(W)), 0, W - 1);
+    const int row = clamp(int(uv.y * float(H)), 0, H - 1);
+    const vec3 envCol = texelFetch(envTex, ivec2(col, row), 0).rgb;
+    const float lum   = dot(envCol, vec3(0.2126, 0.7152, 0.0722)) + 1e-10;
+    return lum * float(W * H) / (2.0 * PI * PI * max(pc.envCdfTotalSum, 1e-10));
 }
 
 // Tangent-space cosine-weighted hemisphere sample (Z up).
@@ -1257,29 +1353,61 @@ void main() {
     }
 
     // === Env NEE + MIS ===
-    // Visibility-tested env sample at this shade point, combined with the
-    // bounce-into-miss estimator via Multiple Importance Sampling. Both
-    // strategies currently use BSDF-importance sampling, so pdf_nee(x) ==
-    // pdf_bsdf(x) at every direction and the balance-heuristic weights
-    // collapse to a constant 0.5 / 0.5 split:
-    //
-    //   w_nee  = pdf_nee  / (pdf_nee + pdf_bsdf) = 0.5
-    //   w_bsdf = pdf_bsdf / (pdf_nee + pdf_bsdf) = 0.5
-    //
-    // The NEE term gets its 0.5 multiplier here; the bounce term gets it
-    // in miss.rmiss (gated on the non-primary flag). Variance vs the old
-    // "suppress env on miss" pattern is halved (~√2 std-dev reduction)
-    // since both estimators contribute independent samples averaged with
-    // equal weight. Cost is unchanged — same NEE shadow ray, same bounce
-    // ray. The constant 0.5 collapses out cleanly when an env-luminance
-    // CDF NEE upgrade lands; that path will pass bsdfPdf in the payload
-    // so miss can compute pdf_env_at_dir and apply pdf-based weights.
-    {
-        // 3-way stochastic lobe selection: clearcoat with prob ccProb, then
-        // base spec / base diffuse with the existing pSpec split inside the
-        // remaining (1−ccProb). The throughput multipliers absorb both the
-        // branch-selection inverse and the (1−ccWeight) energy split so the
-        // estimator stays unbiased and matches dir-light's analytic eval.
+    //   • envCdfTotalSum > 0  → importance-sample the env by luminance, eval
+    //     the BSDF at that direction, weight by w_env = pdf_env / (pdf_env +
+    //     pdf_brdf). The miss handler computes the BSDF→env complement using
+    //     payload.bsdfPdf and the same env CDF. Big variance reduction on
+    //     HDRI scenes with bright sun discs / sky bands.
+    //   • envCdfTotalSum <= 0 → fallback to BSDF-sampled env NEE with constant
+    //     0.5 MIS weight (matches miss's 0.5 in the same branch). Same
+    //     behavior as before this feature landed.
+    if (pc.envCdfTotalSum > 0.0) {
+        const vec4  envPick = sampleEnvImportance(seed);
+        const vec3  nDir    = envPick.xyz;
+        const float pdfEnv  = envPick.w;
+        const float NdotL_e = dot(N, nDir);
+        if (pdfEnv > 1e-10 && NdotL_e > 0.0) {
+            shadowVisibility = 1.0;
+            traceRayEXT(topAS,
+                        gl_RayFlagsTerminateOnFirstHitEXT |
+                        gl_RayFlagsSkipClosestHitShaderEXT |
+                        gl_RayFlagsNoOpaqueEXT,
+                        0xff, 1, 0, 1,
+                        hitPos + N * 1e-3, 0.0, nDir, 1e30, 1);
+            if (shadowVisibility > 0.0) {
+                // Eval BSDF at the env-importance-sampled direction (Cook-
+                // Torrance + Lambert + K-C ms-comp; clearcoat layer too).
+                const vec3  H_e   = normalize(V + nDir);
+                const float NdotH = max(dot(N, H_e), 0.0);
+                const float VdotH = max(dot(V, H_e), 0.0);
+                const vec3  F_e   = fresnelSchlick(VdotH, F0);
+                const float D_e   = distGGX(NdotH, roughness);
+                const float G_e   = geomSmithG1(NdotV, k) * geomSmithG1(NdotL_e, k);
+                const vec3  spec_e = (D_e * G_e * F_e) / max(4.0 * NdotV * NdotL_e, 1e-4);
+                const vec3  kd_e   = (vec3(1.0) - F_e) * (1.0 - metalness);
+                const vec3  diff_e = kd_e * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
+                vec3 lobeSum = (diff_e + spec_e) * baseScale;
+                if (ccWeight > 0.0) {
+                    const float k_cc = (ccRough + 1.0) * (ccRough + 1.0) / 8.0;
+                    const float D_cc = distGGX(NdotH, ccRough);
+                    const float G_cc = geomSmithG1(NdotV, k_cc) * geomSmithG1(NdotL_e, k_cc);
+                    lobeSum += vec3((D_cc * G_cc) / max(4.0 * NdotV * NdotL_e, 1e-4) * ccWeight);
+                }
+                vec3 envSample = sampleEquirect(nDir);
+                const float envLum = dot(envSample, vec3(0.2126, 0.7152, 0.0722));
+                if (envLum > 20.0) envSample *= 20.0 / envLum;
+                // 3-lobe pdf: matches the cc + base-spec + base-diff sampler
+                // in main()'s bounce direction selection. Clearcoat-aware so
+                // MIS doesn't add noise on clearcoat materials.
+                const float pdfBrdf = brdfPdf3(V, nDir, N, roughness, metalness, ccProb, ccRough);
+                const float wEnv    = pdfEnv / max(pdfEnv + pdfBrdf, 1e-8);
+                lit += wEnv * lobeSum * NdotL_e * envSample * shadowVisibility / max(pdfEnv, 1e-8);
+            }
+        }
+    } else {
+        // Fallback: BSDF-sampled env NEE with constant 0.5 MIS (no CDF). 3-way
+        // stochastic lobe selection mirrors the bounce sampler so the implicit
+        // pdfs match and the balance-heuristic weight collapses to 0.5 / 0.5.
         const float xiCC = urand(seed);
         vec3 nDir;
         vec3 nWeight;
@@ -1319,9 +1447,6 @@ void main() {
         }
         if (nValid) {
             shadowVisibility = 1.0;
-            // 1e30 = "infinite" sentinel: env (sky) is treated as outside the
-            // fog volume (matches DirLight). volumeInscatter handles fog glow
-            // along the camera ray separately.
             traceRayEXT(topAS,
                         gl_RayFlagsTerminateOnFirstHitEXT |
                         gl_RayFlagsSkipClosestHitShaderEXT |
@@ -1433,4 +1558,9 @@ void main() {
     payload.hitRoughness    = roughness;// post-clamp; raygen uses for FC cap on motion
     payload.hitMetalness    = metalness;
     payload.hitTransmission = mdesc.transmission;
+    // 3-lobe pdf at the chosen bounce direction (cc + base-spec + base-diff).
+    // Miss uses this for the BSDF→env MIS weight when env CDF is enabled. Must
+    // match the actual sampler mixture above, otherwise MIS over/underweights
+    // and adds noise on clearcoat.
+    payload.bsdfPdf = brdfPdf3(V, bounceDir, N, roughness, metalness, ccProb, ccRough);
 }

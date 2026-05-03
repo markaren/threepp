@@ -24,6 +24,7 @@
 
 #define VMA_IMPLEMENTATION
 #include "vulkan/VulkanContext.hpp"
+#include "wgpu/pathtracer/WgpuPathTracerEnvCdf.hpp"// reused: pure C++ template, no WGPU deps
 
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/canvas/Canvas.hpp"
@@ -342,6 +343,20 @@ namespace threepp {
         bool envIsBgColor  = false;
         Color envBgColor{0.f, 0.f, 0.f};
 
+        // Env luminance CDF (Phase A: env importance sampling).
+        // Conditional CDF: w×h R32F texture; row r holds the cumulative
+        // distribution over columns at that latitude.
+        // Marginal CDF: h×1 R32F texture; row r holds the cumulative marginal
+        // probability of picking row r (latitudes weighted by cos(latitude)).
+        // totalSum = Σ lum·cos(lat) — pdf normalisation.
+        // Rebuilt whenever the env texture changes; bound 1×1 dummy (totalSum=0)
+        // when env is solid color or default — chit gates env CDF on totalSum>0.
+        Image2D envCdfImage{};
+        Image2D envMargImage{};
+        uint32_t envCdfWidth_  = 1;
+        uint32_t envCdfHeight_ = 1;
+        float    envCdfTotalSum_ = 0.0f;
+
         // PMREM (Phase 11): GGX-prefiltered env mip chain. Built once per env
         // upload by dispatching prefilter_env.comp for each mip > 0; closest_hit
         // samples textureLod(envTex, dir, roughness * (mipCount - 1)).
@@ -587,6 +602,7 @@ namespace threepp {
             createFogUbos();
             createPrefilterPipeline();// must precede createDefaultEnvImage so PMREM is ready
             createDefaultEnvImage();
+            rebuildDefaultEnvCdfImages();// 1×1 dummy so descriptors are valid before any HDR upload
             createAccumImage();
             createTextureSampler();
             createDefaultMaterialTexture();
@@ -654,6 +670,8 @@ namespace threepp {
             for (auto& b : motionMatBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : emissiveTriBuffers) destroyBuffer(ctx->allocator(), b);
             destroyImage2D(ctx->allocator(), d, envImage);
+            destroyImage2D(ctx->allocator(), d, envCdfImage);
+            destroyImage2D(ctx->allocator(), d, envMargImage);
             for (auto& img : accumImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : materialTextures) destroyImage2D(ctx->allocator(), d, img);
@@ -3403,6 +3421,54 @@ namespace threepp {
             return static_cast<int32_t>(slot);
         }
 
+        // (Re)allocate envCdfImage / envMargImage from a built EnvCdfResult.
+        // Caller must vkDeviceWaitIdle and destroy old images first. When called
+        // with a degenerate 1×1 CDF (totalSum=0), the chit gates env importance
+        // sampling off and falls back to BSDF-sampled env NEE — same behavior
+        // as before this feature landed. envCdfWidth_/Height_/TotalSum_ are
+        // mirrored into the push constant on the next renderFrame.
+        void rebuildEnvCdfImages(const wgpu_pt::EnvCdfResult& cdf) {
+            destroyImage2D(ctx->allocator(), ctx->device(), envCdfImage);
+            destroyImage2D(ctx->allocator(), ctx->device(), envMargImage);
+            envCdfImage = createSampledImage2D(
+                    static_cast<uint32_t>(cdf.width),
+                    static_cast<uint32_t>(cdf.height),
+                    VK_FORMAT_R32_SFLOAT,
+                    cdf.conditional.data(),
+                    cdf.conditional.size() * sizeof(float),
+                    VK_FILTER_NEAREST,
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+            // Marginal is uploaded as h×1 (width=h, height=1) so the shader
+            // can fetch entry mid via `texelFetch(envMargTex, ivec2(mid, 0))`,
+            // matching WGPU's `cdfSearch(envMargTex, 0, envH, xi)` access
+            // pattern. width=1/height=h would route every binary-search lookup
+            // to texel (0,0) and silently break importance sampling.
+            envMargImage = createSampledImage2D(
+                    static_cast<uint32_t>(cdf.height),
+                    1u,
+                    VK_FORMAT_R32_SFLOAT,
+                    cdf.marginal.data(),
+                    cdf.marginal.size() * sizeof(float),
+                    VK_FILTER_NEAREST,
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+            envCdfWidth_    = static_cast<uint32_t>(cdf.width);
+            envCdfHeight_   = static_cast<uint32_t>(cdf.height);
+            envCdfTotalSum_ = cdf.totalSum;
+        }
+
+        // Build a degenerate 1×1 CDF (totalSum=0) for the case where the env is
+        // solid color or default. Shader uses totalSum=0 as the "no CDF" gate.
+        void rebuildDefaultEnvCdfImages() {
+            wgpu_pt::EnvCdfResult dummy;
+            dummy.width = 1; dummy.height = 1;
+            dummy.conditional = {1.0f};
+            dummy.marginal    = {1.0f};
+            dummy.totalSum    = 0.0f;
+            rebuildEnvCdfImages(dummy);
+        }
+
         // Detect the active env texture (scene.environment, falling back to
         // scene.background.texture()) and upload it if it differs from the
         // currently bound one. Returns true when descriptors must be rewritten.
@@ -3433,6 +3499,7 @@ namespace threepp {
                     envIsBgColor  = true;
                     envBgColor    = c;
                     envTextureIdUploaded = 0xFFFFFFFFu;
+                    rebuildDefaultEnvCdfImages();// no importance sampling on solid colors
                     return true;
                 }
                 if (envIsDefault) return false;
@@ -3440,6 +3507,7 @@ namespace threepp {
                 destroyImage2D(ctx->allocator(), ctx->device(), envImage);
                 createDefaultEnvImage();
                 envIsBgColor = false;
+                rebuildDefaultEnvCdfImages();
                 return true;
             }
             envIsBgColor = false;
@@ -3473,6 +3541,12 @@ namespace threepp {
                     w, h, src.data(), 4u * w * h * sizeof(float));
             envIsDefault = false;
             envTextureIdUploaded = tex->id;
+
+            // Build the luminance CDF from mip 0 (source equirect, RGBA float).
+            // Used by chit's env NEE to importance-sample bright HDRI features
+            // (sun discs, sky bands) via the marginal/conditional CDF pair.
+            const auto cdf = wgpu_pt::buildEnvCdf<float>(src, static_cast<int>(w), static_cast<int>(h));
+            rebuildEnvCdfImages(cdf);
             return true;
         }
 
@@ -3483,7 +3557,7 @@ namespace threepp {
             // 9=prev camera UBO (motion), 10=motion matrix SSBO (motion),
             // 11=prev accum read image (ping-pong), 12=gbuf write image
             // (ping-pong), 13=prev gbuf read image (ping-pong).
-            std::array<VkDescriptorSetLayoutBinding, 18> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 20> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -3585,6 +3659,22 @@ namespace threepp {
             bindings[17].descriptorCount = 1;
             bindings[17].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                       VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            // Binding 18 — env conditional luminance CDF (R32F, w×h). Row r holds
+            // cumulative distribution over columns at latitude r. Sampled in chit
+            // for env importance sampling (and in miss for the BRDF→env MIS
+            // complement at scattered miss, which needs envImportancePdf).
+            bindings[18].binding = 18;
+            bindings[18].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[18].descriptorCount = 1;
+            bindings[18].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                      VK_SHADER_STAGE_MISS_BIT_KHR;
+            // Binding 19 — env marginal luminance CDF (R32F, 1×h). Picks a row
+            // (latitude) before sampling the conditional row at that latitude.
+            bindings[19].binding = 19;
+            bindings[19].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[19].descriptorCount = 1;
+            bindings[19].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                      VK_SHADER_STAGE_MISS_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -3593,10 +3683,10 @@ namespace threepp {
             check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rtDsLayout),
                   "vkCreateDescriptorSetLayout(RT)");
 
-            // 48-byte push constant. Layout matches the host-side `pc[12]`
+            // 60-byte push constant. Layout matches the host-side `pc[15]`
             // assembled in renderFrame and the GLSL PushConstants struct in
-            // raygen.rgen / closest_hit.rchit. Well under the 128-byte minimum
-            // push-constant guarantee.
+            // raygen.rgen / closest_hit.rchit / miss.rmiss. Well under the
+            // 128-byte minimum push-constant guarantee.
             //
             //   [0] sampleIndex            (raygen)
             //   [1] env mip count          (closest_hit)
@@ -3613,12 +3703,16 @@ namespace threepp {
             //   [10] emissiveTotalPower  (float bits — CDF normalisation)
             //   [11] samplesPerPixel     (raygen — # of jittered primary rays
             //        per frame; in-frame samples are summed with weight `spp`)
+            //   [12] envCdfWidth         (closest_hit + miss — env importance sample)
+            //   [13] envCdfHeight        (closest_hit + miss — env importance sample)
+            //   [14] envCdfTotalSum bits (float — pdf normalisation; 0 disables CDF)
             VkPushConstantRange pcRange{};
             pcRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                  VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                 VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+                                 VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
+                                 VK_SHADER_STAGE_MISS_BIT_KHR;
             pcRange.offset = 0;
-            pcRange.size   = 48;
+            pcRange.size   = 60;
 
             VkPipelineLayoutCreateInfo plci{};
             plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -3918,7 +4012,7 @@ namespace threepp {
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             ps[3].descriptorCount = totalSets * 6;// bindings 3,4,10,14 (existing) + 15,16 (photon)
             ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps[4].descriptorCount = totalSets * (1 + kMaxMaterialTextures);// binding 6 (env) + binding 8 (material array)
+            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF)
 
             VkDescriptorPoolCreateInfo ci{};
             ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -4165,10 +4259,34 @@ namespace threepp {
                     wFog.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
                     wFog.pBufferInfo = &fogInfo;
 
-                    std::array<VkWriteDescriptorSet, 18> writes{
+                    VkDescriptorImageInfo envCdfInfo{};
+                    envCdfInfo.sampler     = envCdfImage.sampler;
+                    envCdfInfo.imageView   = envCdfImage.view;
+                    envCdfInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    VkWriteDescriptorSet wEnvCdf{};
+                    wEnvCdf.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wEnvCdf.dstSet = descriptorSets[idx];
+                    wEnvCdf.dstBinding = 18;
+                    wEnvCdf.descriptorCount = 1;
+                    wEnvCdf.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wEnvCdf.pImageInfo = &envCdfInfo;
+
+                    VkDescriptorImageInfo envMargInfo{};
+                    envMargInfo.sampler     = envMargImage.sampler;
+                    envMargInfo.imageView   = envMargImage.view;
+                    envMargInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    VkWriteDescriptorSet wEnvMarg{};
+                    wEnvMarg.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wEnvMarg.dstSet = descriptorSets[idx];
+                    wEnvMarg.dstBinding = 19;
+                    wEnvMarg.descriptorCount = 1;
+                    wEnvMarg.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wEnvMarg.pImageInfo = &envMargInfo;
+
+                    std::array<VkWriteDescriptorSet, 20> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
-                            wPhotonCnt, wPhotonData, wFog};
+                            wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -4314,18 +4432,30 @@ namespace threepp {
         // re-allocating the pool / sets.
         void rewriteEnvDescriptors() {
             const uint32_t totalSets = imageCount_ * kFramesInFlight;
-            std::vector<VkDescriptorImageInfo> infos(totalSets);
-            std::vector<VkWriteDescriptorSet>  writes(totalSets);
+            // Three writes per set: env image (binding 6) + env CDF (18) + env marg (19).
+            std::vector<VkDescriptorImageInfo> envInfos(totalSets);
+            std::vector<VkDescriptorImageInfo> cdfInfos(totalSets);
+            std::vector<VkDescriptorImageInfo> margInfos(totalSets);
+            std::vector<VkWriteDescriptorSet>  writes(totalSets * 3);
             for (uint32_t i = 0; i < totalSets; ++i) {
-                infos[i].sampler     = envImage.sampler;
-                infos[i].imageView   = envImage.view;
-                infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[i].dstSet = descriptorSets[i];
-                writes[i].dstBinding = 6;
-                writes[i].descriptorCount = 1;
-                writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                writes[i].pImageInfo = &infos[i];
+                envInfos[i].sampler     = envImage.sampler;
+                envInfos[i].imageView   = envImage.view;
+                envInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                cdfInfos[i].sampler     = envCdfImage.sampler;
+                cdfInfos[i].imageView   = envCdfImage.view;
+                cdfInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                margInfos[i].sampler     = envMargImage.sampler;
+                margInfos[i].imageView   = envMargImage.view;
+                margInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+                auto& wEnv  = writes[i * 3 + 0];
+                auto& wCdf  = writes[i * 3 + 1];
+                auto& wMarg = writes[i * 3 + 2];
+                wEnv.sType = wCdf.sType = wMarg.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                wEnv.dstSet = wCdf.dstSet = wMarg.dstSet = descriptorSets[i];
+                wEnv.dstBinding  = 6;  wEnv.descriptorCount  = 1; wEnv.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wEnv.pImageInfo  = &envInfos[i];
+                wCdf.dstBinding  = 18; wCdf.descriptorCount  = 1; wCdf.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wCdf.pImageInfo  = &cdfInfos[i];
+                wMarg.dstBinding = 19; wMarg.descriptorCount = 1; wMarg.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; wMarg.pImageInfo = &margInfos[i];
             }
             vkUpdateDescriptorSets(ctx->device(),
                                    static_cast<uint32_t>(writes.size()),
@@ -4439,17 +4569,21 @@ namespace threepp {
                         (cameraMovedThisFrame_ ? 2u : 0u);
                 uint32_t emPowerBits;
                 std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
-                const uint32_t ppc[12] = {
+                uint32_t envSumBitsPhoton;
+                std::memcpy(&envSumBitsPhoton, &envCdfTotalSum_, sizeof(envSumBitsPhoton));
+                const uint32_t ppc[15] = {
                         sampleIndex, envImage.mipLevels,
                         static_cast<uint32_t>(toneMapping_), exposureBits,
                         motionFlagsPhoton,
                         meshMovedBits_[0], meshMovedBits_[1], meshMovedBits_[2], meshMovedBits_[3],
                         emissiveTriCountThisFrame_, emPowerBits,
                         samplesPerPixel_,
+                        envCdfWidth_, envCdfHeight_, envSumBitsPhoton,
                 };
                 vkCmdPushConstants(cb, rtPipelineLayout,
                                    VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                           VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
+                                           VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                           VK_SHADER_STAGE_MISS_BIT_KHR,
                                    0, sizeof(ppc), ppc);
             }
             ctx->rt().cmdTraceRays(cb, &photonRgenRgn, &photonMissRgn, &photonHitRgn, &photonCallRgn,
@@ -4496,7 +4630,9 @@ namespace threepp {
                     (cameraMovedThisFrame_ ? 2u : 0u);
             uint32_t emPowerBits;
             std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
-            const uint32_t pc[12] = {
+            uint32_t envSumBits;
+            std::memcpy(&envSumBits, &envCdfTotalSum_, sizeof(envSumBits));
+            const uint32_t pc[15] = {
                     sampleIndex,
                     envImage.mipLevels,
                     static_cast<uint32_t>(toneMapping_),
@@ -4509,10 +4645,14 @@ namespace threepp {
                     emissiveTriCountThisFrame_,
                     emPowerBits,
                     samplesPerPixel_,
+                    envCdfWidth_,
+                    envCdfHeight_,
+                    envSumBits,
             };
             vkCmdPushConstants(cb, rtPipelineLayout,
                                VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                       VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
+                                       VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                       VK_SHADER_STAGE_MISS_BIT_KHR,
                                0, sizeof(pc), pc);
 
             const VkExtent2D ext = ctx->swapchainExtent();

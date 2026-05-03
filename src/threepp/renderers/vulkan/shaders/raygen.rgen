@@ -40,6 +40,8 @@ struct Payload {
                        // NEE on the prev shade already covered emissive light at this hit)
     float hitMetalness;   // post-clamp metalness; raygen uses for adaptive bounce cap
     float hitTransmission;// post-clamp transmission; raygen uses for adaptive bounce cap
+    float bsdfPdf;        // chit→miss: pdf of the BSDF-sampled bounce direction;
+                          //  miss uses for proper MIS env weight when env CDF is on
 };
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
@@ -179,6 +181,9 @@ layout(push_constant) uniform Pc {
     uint emissiveCount;       // # of emissive triangles (closest_hit reads this)
     float emissiveTotalPower; // total power CDF max (closest_hit reads this)
     uint samplesPerPixel;     // # of jittered primary rays per frame (>=1)
+    uint envCdfWidth;         // env CDF dims (closest_hit + miss; raygen ignores)
+    uint envCdfHeight;
+    float envCdfTotalSum;     // env importance pdf normaliser; 0 disables CDF
 } pc;
 
 bool isMeshMoved(uint idx) {
@@ -566,6 +571,10 @@ void main() {
         // the bounce limit before reaching the surface behind it.
         int scatter = 0;
         bool prevPassThrough = false;
+        // Init bsdfPdf once per sample. Persists across step iterations so the
+        // most recent shade event's pdf survives into the next step where miss
+        // (or chit) can read it for env CDF MIS weighting.
+        payload.bsdfPdf = 0.0;
         // Adaptive bounce cap: diffuse / glossy primary surfaces stop gaining
         // visible detail after a few indirect bounces, so cap them short for a
         // large perf win on production scenes (~5 FPS on Sponza per WGPU memory).
@@ -603,6 +612,12 @@ void main() {
         payload.hitRoughness   = 1.0;
         payload.hitMetalness   = 0.0;
         payload.hitTransmission = 0.0;
+        // NOTE: bsdfPdf is intentionally NOT reset here — it must persist from
+        // the previous step's chit (which wrote it for the bounce direction we
+        // are about to trace) so the miss handler can compute MIS for env CDF.
+        // Resetting to 0 every step zeros the env-via-bounce contribution and
+        // makes glass→sky / scattered→sky paths render too dark on HDRI scenes.
+        // Initialised once per sample below (before the inner step loop).
         // bit 0 of inFlags: "this hit's surface emission was already covered
         // by the prior shade's emissive-NEE shadow ray, so suppress it here".
         // Cleared on primary (scatter==0) and after pass-through hops (those
