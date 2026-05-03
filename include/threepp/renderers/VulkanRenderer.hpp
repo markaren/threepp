@@ -81,6 +81,13 @@ namespace threepp {
         void setFogAnisotropy(float g);
         [[nodiscard]] float getFogAnisotropy() const;
 
+        // Samples per pixel per frame for the path tracer. Default 2.
+        // Each sample is an independent jittered primary ray; in-frame samples
+        // are summed into the accumulator with weight `spp`, so per-pixel FC
+        // also advances by `spp`. Clamped to >= 1.
+        void setSamplesPerPixel(int spp);
+        [[nodiscard]] int samplesPerPixel() const;
+
     private:
         struct Impl;
         std::unique_ptr<Impl> pimpl_;

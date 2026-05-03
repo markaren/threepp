@@ -55,7 +55,7 @@ layout(set = 0, binding = 16, scalar) buffer PhotonDataBuf  { vec3 data[];   };
 
 layout(push_constant) uniform Pc {
     uint sampleIndex;
-    uint _pad[10];
+    uint _pad[11];
 } pc;
 
 layout(location = 2) rayPayloadEXT PhotonPayload pp;

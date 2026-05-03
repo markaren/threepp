@@ -38,6 +38,8 @@ struct Payload {
     float hitRoughness;// post-clamp surface roughness; primary-hit FC cap input
     uint inFlags;      // raygen→closest_hit: bit 0 = scatter>0 (suppress emission;
                        // NEE on the prev shade already covered emissive light at this hit)
+    float hitMetalness;   // post-clamp metalness; raygen uses for adaptive bounce cap
+    float hitTransmission;// post-clamp transmission; raygen uses for adaptive bounce cap
 };
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
@@ -176,6 +178,7 @@ layout(push_constant) uniform Pc {
     uint mb3;
     uint emissiveCount;       // # of emissive triangles (closest_hit reads this)
     float emissiveTotalPower; // total power CDF max (closest_hit reads this)
+    uint samplesPerPixel;     // # of jittered primary rays per frame (>=1)
 } pc;
 
 bool isMeshMoved(uint idx) {
@@ -196,8 +199,8 @@ layout(location = 0) rayPayloadEXT Payload payload;
 // shadow miss sets this to 1.0, shadow_anyhit multiplies it down through glass.
 layout(location = 1) rayPayloadEXT float shadowVisibility;
 
-const int kMaxBounces = 3; // max real scatter events (opaque shade + indirect)
-const int kMaxSteps   = 16;// hard cap including glass traversal (each glass layer = 2 steps)
+const int kMaxBounces = 6; // max real scatter events (opaque shade + indirect)
+const int kMaxSteps   = 24;// hard cap including glass traversal (each glass layer = 2 steps)
 
 // Halton low-discrepancy sequence — base 2 / base 3 give the standard
 // (x, y) sub-pixel jitter pattern used by virtually every progressive PT.
@@ -510,47 +513,81 @@ vec3 volumeInscatter(vec3 rayOrigin, vec3 rayDir, float maxT, inout uint seed) {
 }
 
 void main() {
-    // Halton(0) is 0, which would degenerate to no jitter. Index from 1 so
-    // even sample 0 already gets a non-trivial sub-pixel offset.
-    const uint sIdx = pc.sampleIndex + 1u;
-    const vec2 jitter = vec2(halton(sIdx, 2u) - 0.5,
-                             halton(sIdx, 3u) - 0.5);
+    const uint spp = max(pc.samplesPerPixel, 1u);
 
-    const vec2 pix = vec2(gl_LaunchIDEXT.xy) + 0.5 + jitter;
     const vec2 size = vec2(gl_LaunchSizeEXT.xy);
-    vec2 ndc = pix / size * 2.0 - 1.0;
-    ndc.y = -ndc.y;
-
     const vec4 originWS = cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0);
-    const vec4 targetVS = cam.projInverse * vec4(ndc, 1.0, 1.0);
-    const vec3 dirVS = normalize(targetVS.xyz / targetVS.w);
-    const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
 
-    uint seed = seedFor(gl_LaunchIDEXT.xy, pc.sampleIndex);
+    // Accumulator across in-frame samples. radianceSum is the SUM (not mean)
+    // of per-sample radiance; the history blend below treats it as `spp`
+    // effective samples (weight = spp), keeping FC arithmetic correct.
+    vec3 radianceSum = vec3(0.0);
 
-    vec3 radiance   = vec3(0.0);
-    vec3 throughput = vec3(1.0);
-    vec3 origin     = originWS.xyz;
-    vec3 dir        = dirWS;
-    // True when the prior shade event ran env NEE — used to gate the MIS
-    // half-env weight on the next miss. Transmission events skip NEE and
-    // clear this so the env is read at full strength on the bounce-into-miss.
-    bool prevRanNEE = false;
-
-    // Captured the very first traceRayEXT below. Used after the loop to
-    // reproject this pixel's converged history. primaryInstanceId == 0 means
-    // sky / miss — no reproject (env is camera-locked, accumulates naively).
+    // Captured the very first traceRayEXT of the FIRST sample. Used after the
+    // loop to reproject this pixel's converged history. primaryInstanceId == 0
+    // means sky / miss — no reproject (env is camera-locked, accumulates naively).
     vec3 primaryWorldPos   = vec3(0.0);
     uint primaryInstanceId = 0u;
-    float primaryRoughness = 1.0;// default (most lenient cap) until first real shade event
+    float primaryRoughness   = 1.0;// default (most lenient cap) until first real shade event
+    float primaryMetalness   = 0.0;
+    float primaryTransmission = 0.0;
 
-    // scatter counts real shade events (non-transmission). Transmission hops
-    // (glass enter/exit, single-sided pass-through — flags bit 2) are free and
-    // don't consume the scatter budget, so multi-layer glass doesn't exhaust
-    // the bounce limit before reaching the surface behind it.
-    int scatter = 0;
-    bool prevPassThrough = false;
-    for (int step = 0; step < kMaxSteps; ++step) {
+    for (uint s = 0u; s < spp; ++s) {
+        // Per-sample sub-frame index — each in-frame sample needs its own
+        // jitter and seed to actually decorrelate. Halton(0) is 0, which would
+        // degenerate to no jitter, so index from 1.
+        const uint subIdx = pc.sampleIndex * spp + s;
+        const uint sIdx   = subIdx + 1u;
+        const vec2 jitter = vec2(halton(sIdx, 2u) - 0.5,
+                                 halton(sIdx, 3u) - 0.5);
+
+        const vec2 pix = vec2(gl_LaunchIDEXT.xy) + 0.5 + jitter;
+        vec2 ndc = pix / size * 2.0 - 1.0;
+        ndc.y = -ndc.y;
+
+        const vec4 targetVS = cam.projInverse * vec4(ndc, 1.0, 1.0);
+        const vec3 dirVS = normalize(targetVS.xyz / targetVS.w);
+        const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
+
+        uint seed = seedFor(gl_LaunchIDEXT.xy, subIdx);
+
+        vec3 radiance   = vec3(0.0);
+        vec3 throughput = vec3(1.0);
+        vec3 origin     = originWS.xyz;
+        vec3 dir        = dirWS;
+        // True when the prior shade event ran env NEE — used to gate the MIS
+        // half-env weight on the next miss. Transmission events skip NEE and
+        // clear this so the env is read at full strength on the bounce-into-miss.
+        bool prevRanNEE = false;
+
+        // scatter counts real shade events (non-transmission). Transmission hops
+        // (glass enter/exit, single-sided pass-through — flags bit 2) are free and
+        // don't consume the scatter budget, so multi-layer glass doesn't exhaust
+        // the bounce limit before reaching the surface behind it.
+        int scatter = 0;
+        bool prevPassThrough = false;
+        // Adaptive bounce cap: diffuse / glossy primary surfaces stop gaining
+        // visible detail after a few indirect bounces, so cap them short for a
+        // large perf win on production scenes (~5 FPS on Sponza per WGPU memory).
+        // Re-evaluated each step since the FIRST step classifies primary into
+        // primaryRoughness/Metalness/Transmission. Mirror / metal / glass keep
+        // the full budget. Cap is BIASED — truncates the Neumann-series energy
+        // sum and causes ρ≈1 cavities to under-read; should gate on a "clamps
+        // on" flag once setFireflyClamp(0) is wired.
+        int effectiveBounces = kMaxBounces;
+        for (int step = 0; step < kMaxSteps; ++step) {
+            // Recompute each step — primary classification settles after first hit.
+            {
+                const bool isGlass  = primaryTransmission > 0.05;
+                const bool isMetal  = primaryMetalness    > 0.5;
+                const bool isMirror = primaryRoughness    < 0.22; // alpha≈0.05
+                const bool isGlossy = primaryRoughness    < 0.50; // alpha≈0.25
+                if (!isGlass && !isMetal && !isMirror) {
+                    effectiveBounces = isGlossy ? min(kMaxBounces, 4) : min(kMaxBounces, 3);
+                } else {
+                    effectiveBounces = kMaxBounces;
+                }
+            }
         payload.radiance   = vec3(0.0);
         payload.brdfWeight = vec3(0.0);
         payload.nextOrigin = vec3(0.0);
@@ -564,6 +601,8 @@ void main() {
         payload.hitWorldPos    = vec3(0.0);
         payload.hitInstanceId  = 0u;
         payload.hitRoughness   = 1.0;
+        payload.hitMetalness   = 0.0;
+        payload.hitTransmission = 0.0;
         // bit 0 of inFlags: "this hit's surface emission was already covered
         // by the prior shade's emissive-NEE shadow ray, so suppress it here".
         // Cleared on primary (scatter==0) and after pass-through hops (those
@@ -584,14 +623,17 @@ void main() {
         traceRayEXT(topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
                     origin, tmin, dir, 10000.0, 0);
 
-        // Capture the primary hit (first iteration only) for reprojection.
-        // Transmission hops and back-face pass-throughs aren't real shade
-        // events — they don't tag a stable surface — so we wait until the
-        // first non-pass-through hit (or accept 0/sky if we never get one).
+        // Capture the primary hit (first iteration only) for reprojection
+        // + adaptive bounce classification. Transmission hops and back-face
+        // pass-throughs aren't real shade events — they don't tag a stable
+        // surface — so we wait until the first non-pass-through hit (or
+        // accept 0/sky if we never get one).
         if (primaryInstanceId == 0u && payload.hitInstanceId != 0u) {
-            primaryWorldPos   = payload.hitWorldPos;
-            primaryInstanceId = payload.hitInstanceId;
-            primaryRoughness  = payload.hitRoughness;
+            primaryWorldPos     = payload.hitWorldPos;
+            primaryInstanceId   = payload.hitInstanceId;
+            primaryRoughness    = payload.hitRoughness;
+            primaryMetalness    = payload.hitMetalness;
+            primaryTransmission = payload.hitTransmission;
         }
 
         // Per-bounce firefly clamp on the contribution that lands in the
@@ -634,7 +676,7 @@ void main() {
         prevPassThrough = isPassThrough;
         if (!isPassThrough) {
             ++scatter;
-            if (scatter >= kMaxBounces) break;
+            if (scatter >= effectiveBounces) break;
 
             // Russian Roulette: after the first indirect scatter, terminate paths
             // stochastically based on remaining throughput. Survivors are scaled
@@ -653,23 +695,26 @@ void main() {
 
         origin = payload.nextOrigin;
         dir    = payload.nextDir;
-    }
+        }// end inner step loop
 
-    // ── fog at primary-ray boundary ──────────────────────────────────────
-    // L_pixel = T(t)·L_surface + L_inscatter(t).  Beer-Lambert dims the
-    // surface return; volumeInscatter adds single-scattering NEE so distant
-    // lights "glow" through the medium and god rays form near real sources.
-    // Sky pixels (primaryInstanceId==0) use a bounded sky distance so the
-    // inscatter still fades — matching WGPU rt_accum_main's primaryDepth<=0
-    // branch.
-    if (fogEnabled()) {
-        const float fogDist = (primaryInstanceId != 0u)
-                ? distance(originWS.xyz, primaryWorldPos)
-                : 1e4;
-        const vec3 T   = fogTransmittance(fogDist);
-        const vec3 vol = volumeInscatter(originWS.xyz, dirWS, fogDist, seed);
-        radiance = radiance * T + vol;
-    }
+        // ── fog at primary-ray boundary (per-sample) ────────────────────────
+        // L_pixel = T(t)·L_surface + L_inscatter(t).  Beer-Lambert dims the
+        // surface return; volumeInscatter adds single-scattering NEE so distant
+        // lights "glow" through the medium and god rays form near real sources.
+        // Sky pixels (primaryInstanceId==0) use a bounded sky distance so the
+        // inscatter still fades — matching WGPU rt_accum_main's primaryDepth<=0
+        // branch.
+        if (fogEnabled()) {
+            const float fogDist = (primaryInstanceId != 0u)
+                    ? distance(originWS.xyz, primaryWorldPos)
+                    : 1e4;
+            const vec3 T   = fogTransmittance(fogDist);
+            const vec3 vol = volumeInscatter(originWS.xyz, dirWS, fogDist, seed);
+            radiance = radiance * T + vol;
+        }
+
+        radianceSum += radiance;
+    }// end outer spp loop
 
     // ── history tap (mirrors WGPU PT design) ─────────────────────────────
     // Per-pixel motion gating, matching WGPU's primaryMoved logic:
@@ -808,17 +853,19 @@ void main() {
                         // mean anyway, and short enough on glossy that we don't
                         // smear specular highlights past where they belong.
                         const float roughT = smoothstep(0.15, 0.7, primaryRoughness);
-                        // cam-only-motion cap was 256 for rough surfaces; that
-                        // let any leftover bilinear-blend smear linger ~256 frames
-                        // under continuous translation. Tightening to 32 caps the
-                        // smear-decay to ~half a second @60 fps at the cost of
-                        // slower noise settle on rough surfaces during pans.
+                        // Caps + floors are tuned for the default spp=4. Caps
+                        // raised ~2× from the spp=1 values so high-spp budget
+                        // sticks at moving pixels; with FC advancing by spp/frame,
+                        // a cap of 128 still settles in ~32 frames (~½ s @60 fps).
+                        // Floors raised so the continuous-motion equilibrium
+                        // (x = x/2 + spp = 2·spp) doesn't collapse below the
+                        // intended sample count on smooth surfaces.
                         const float capUp  = primaryMoved
-                                ? mix(8.0, 64.0, roughT)
-                                : mix(8.0, 32.0, roughT);
+                                ? mix(16.0, 128.0, roughT)
+                                : mix(16.0,  96.0, roughT);
                         const float capLo  = primaryMoved
-                                ? mix(2.0, 4.0,  roughT)
-                                : mix(2.0, 6.0,  roughT);
+                                ? mix(4.0,  8.0, roughT)
+                                : mix(4.0, 12.0, roughT);
                         histFc = clamp(bFc * 0.5, capLo, capUp);
                     }
                 }
@@ -828,8 +875,13 @@ void main() {
     // Sky pixel with camMoved: falls through both branches → histFc=0 cold-start.
     // Sky pixel with only foreign-mesh motion: self-tapped above (no change).
 
-    const vec3  mean  = (histMean * histFc + radiance) / (histFc + 1.0);
-    const float newFc = min(histFc + 1.0, 4096.0);
+    // radianceSum is the SUM of `spp` per-sample radiance values. Treat each
+    // sample as one effective sample in the running mean: blend weight = spp,
+    // FC advances by spp. Equivalent to averaging then weighting by spp, but
+    // skips the divide.
+    const float sppF  = float(spp);
+    const vec3  mean  = (histMean * histFc + radianceSum) / (histFc + sppF);
+    const float newFc = min(histFc + sppF, 4096.0);
     imageStore(accumImage, px, vec4(mean, newFc));
     imageStore(gbufImage, px, vec4(primaryWorldPos, float(primaryInstanceId)));
 

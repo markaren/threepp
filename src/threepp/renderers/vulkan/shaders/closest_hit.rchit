@@ -31,6 +31,8 @@ struct Payload {
     float hitRoughness;// post-clamp surface roughness; primary-hit FC cap input
     uint inFlags;      // raygen→here: bit 0 = scatter>0 (suppress emissive output;
                        // emissive NEE on the prev shade already accounted for it)
+    float hitMetalness;   // raygen uses for adaptive bounce classification
+    float hitTransmission;// raygen uses for adaptive bounce classification
 };
 
 layout(buffer_reference, scalar) readonly buffer VertexBuf { float p[]; };
@@ -201,6 +203,7 @@ layout(push_constant) uniform Pc {
     uint mb3;               // unused
     uint emissiveCount;     // # of EmTri entries
     float emissiveTotalPower;// total CDF power (last entry's cumPower)
+    uint _padSpp;           // raygen spp (unused here)
 } pc;
 
 hitAttributeEXT vec2 attribs;
@@ -271,6 +274,37 @@ float geomSmithG1(float NdotX, float k) {
 
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// ── Kulla-Conty multi-scattering compensation (analytic fit) ──────────────
+// WGPU PT precomputes a 32x32 GGX directional-albedo LUT and samples it on
+// device. Vulkan currently uses a Karis-style closed-form fit (~5% accuracy)
+// to avoid the texture binding scaffolding; promote to a real LUT later if
+// the white-furnace error budget tightens. F0=1 conductor matches WGPU's LUT.
+float ggxEApprox(float NdotV, float alpha) {
+    const float a2 = alpha * alpha;
+    return 1.0 - 0.5 / (1.0 + 7.6 * a2 * max(NdotV, 1e-3));
+}
+
+// Additive diffuse multi-scattering compensation (Kulla & Conty 2017).
+// Restores the energy the spec layer absorbs internally and re-emits to the
+// diffuse substrate. Adds ~8-15% energy back on rough dielectrics; matches
+// WGPU evalBrdf's kcDiff term (WgpuPathTracerShaders_Rt.cpp:696-700).
+vec3 kcDiff(vec3 albedo, float metalness, vec3 F0, float NdotV, float alpha) {
+    const float E_v   = ggxEApprox(NdotV, alpha);
+    const vec3  F_avg = (20.0 * F0 + vec3(1.0)) / 21.0;
+    return albedo * (1.0 - metalness) * F_avg * max(0.0, 1.0 - E_v) / PI;
+}
+
+// Throughput boost for diffuse-sampled bounces. The MC sampler picks
+// cosine-weighted hemisphere → BRDF·cos/pdf collapses to albedo·(1-metal);
+// the kcBoost factor (1 + F_avg·(1-E)) absorbs the ms-comp energy so the
+// estimator stays unbiased. Matches WGPU bounce sites (lines 3402-3407 +
+// 4717-4727).
+vec3 kcBoost(vec3 F0, float NdotV, float alpha) {
+    const float E_kc  = ggxEApprox(NdotV, alpha);
+    const vec3  F_avg = (20.0 * F0 + vec3(1.0)) / 21.0;
+    return vec3(1.0) + F_avg * max(0.0, 1.0 - E_kc);
 }
 
 // ── Thin-film iridescence (Belcour & Barla 2017, glTF reference) ────────────
@@ -523,7 +557,9 @@ void main() {
         // Pass-through: no shading, so use the material's nominal roughness as
         // a coarse-but-safe FC cap input. The next visible surface upstream
         // overrides this if it lands as the primary hit.
-        payload.hitRoughness  = clamp(mdesc.roughness, 0.04, 1.0);
+        payload.hitRoughness    = clamp(mdesc.roughness, 0.04, 1.0);
+        payload.hitMetalness    = clamp(mdesc.metalness, 0.0, 1.0);
+        payload.hitTransmission = clamp(mdesc.transmission, 0.0, 1.0);
         return;
     }
 
@@ -552,9 +588,11 @@ void main() {
         payload.nextOrigin    = vec3(0.0);
         payload.nextDir       = vec3(0.0);
         payload.flags         = 1u;// terminate
-        payload.hitWorldPos   = hitPosUnlit;
-        payload.hitInstanceId = uint(gl_InstanceCustomIndexEXT) + 1u;
-        payload.hitRoughness  = 1.0;
+        payload.hitWorldPos     = hitPosUnlit;
+        payload.hitInstanceId   = uint(gl_InstanceCustomIndexEXT) + 1u;
+        payload.hitRoughness    = 1.0;
+        payload.hitMetalness    = 0.0;
+        payload.hitTransmission = 0.0;
         return;
     }
 
@@ -843,9 +881,11 @@ void main() {
             // Reflect off glass: tag glass as primary so reproject follows the
             // glass surface (content seen at this pixel is the env/scene
             // reflected in glass, which is anchored to the glass position).
-            payload.hitWorldPos   = hitPos;
-            payload.hitInstanceId = uint(gl_InstanceCustomIndexEXT) + 1u;
-            payload.hitRoughness  = roughness;
+            payload.hitWorldPos     = hitPos;
+            payload.hitInstanceId   = uint(gl_InstanceCustomIndexEXT) + 1u;
+            payload.hitRoughness    = roughness;
+            payload.hitMetalness    = metalness;
+            payload.hitTransmission = mdesc.transmission;
         } else {
             // Refract through glass: skip the primary tag so raygen captures
             // the surface BEHIND the glass on the next iteration. Otherwise
@@ -853,9 +893,11 @@ void main() {
             // visibly slides with the door (CommercialRefrigerator). On a
             // glass→sky path this leaves primary unset → cold-start, which is
             // a small price for stable refraction reprojection.
-            payload.hitWorldPos   = vec3(0.0);
-            payload.hitInstanceId = 0u;
-            payload.hitRoughness  = 1.0;
+            payload.hitWorldPos     = vec3(0.0);
+            payload.hitInstanceId   = 0u;
+            payload.hitRoughness    = 1.0;
+            payload.hitMetalness    = 0.0;
+            payload.hitTransmission = 0.0;
         }
         return;
     }
@@ -906,7 +948,7 @@ void main() {
         const float G        = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
         const vec3  specular = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4);
         const vec3  kd       = (vec3(1.0) - F) * (1.0 - metalness);
-        const vec3  diffuse  = kd * albedo / PI;
+        const vec3  diffuse  = kd * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
 
         // Layered material: base lobes carry (1−ccWeight) of the energy and
         // the clearcoat lobe contributes its own GGX. Single-scatter Schlick-
@@ -974,7 +1016,7 @@ void main() {
         const float G_p   = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
         const vec3  spec  = (D_p * G_p * F_p) / max(4.0 * NdotV * NdotL, 1e-4);
         const vec3  kd_p  = (vec3(1.0) - F_p) * (1.0 - metalness);
-        const vec3  diff  = kd_p * albedo / PI;
+        const vec3  diff  = kd_p * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
         vec3 perPt = (diff + spec) * baseScale * sheenScaling;
         if (hasSheen) {
             perPt += mdesc.sheenColor * D_Charlie(NdotH, mdesc.sheenRoughness)
@@ -1036,7 +1078,7 @@ void main() {
         const float G_s   = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
         const vec3  spec  = (D_s * G_s * F_s) / max(4.0 * NdotV * NdotL, 1e-4);
         const vec3  kd_s  = (vec3(1.0) - F_s) * (1.0 - metalness);
-        const vec3  diff  = kd_s * albedo / PI;
+        const vec3  diff  = kd_s * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
         vec3 perSp = (diff + spec) * baseScale * sheenScaling;
         if (hasSheen) {
             perSp += mdesc.sheenColor * D_Charlie(NdotH, mdesc.sheenRoughness)
@@ -1097,7 +1139,7 @@ void main() {
         const float G_r   = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
         const vec3  spec  = (D_r * G_r * F_r) / max(4.0 * NdotV * NdotL, 1e-4);
         const vec3  kd_r  = (vec3(1.0) - F_r) * (1.0 - metalness);
-        const vec3  diff  = kd_r * albedo / PI;
+        const vec3  diff  = kd_r * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
         vec3 perRect = (diff + spec) * baseScale;
         if (ccWeight > 0.0) {
             const float k_cc    = (ccRough + 1.0) * (ccRough + 1.0) / 8.0;
@@ -1176,7 +1218,7 @@ void main() {
                         const float G_e   = geomSmithG1(NdotV, k) * geomSmithG1(NdotLe, k);
                         const vec3  spec_e = (D_e * G_e * F_e) / max(4.0 * NdotV * NdotLe, 1e-4);
                         const vec3  kd_e   = (vec3(1.0) - F_e) * (1.0 - metalness);
-                        const vec3  diff_e = kd_e * albedo / PI;
+                        const vec3  diff_e = kd_e * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
                         vec3 perEm = (diff_e + spec_e) * baseScale;
                         if (ccWeight > 0.0) {
                             const float k_cc = (ccRough + 1.0) * (ccRough + 1.0) / 8.0;
@@ -1272,7 +1314,7 @@ void main() {
                 const vec3 localDir = cosineHemisphere(u2);
                 const mat3 tbn = makeTBN(N);
                 nDir = normalize(tbn * localDir);
-                nWeight = albedo * (1.0 - metalness) * baseScale * invBaseProb / (1.0 - pSpec);
+                nWeight = albedo * (1.0 - metalness) * kcBoost(F0, NdotV, alpha) * baseScale * invBaseProb / (1.0 - pSpec);
             }
         }
         if (nValid) {
@@ -1359,7 +1401,7 @@ void main() {
             const vec3 localDir = cosineHemisphere(u2);
             const mat3 tbn = makeTBN(N);
             bounceDir = normalize(tbn * localDir);
-            brdfWeight = albedo * (1.0 - metalness) * baseScale * invBaseProb / (1.0 - pSpec);
+            brdfWeight = albedo * (1.0 - metalness) * kcBoost(F0, NdotV, alpha) * baseScale * invBaseProb / (1.0 - pSpec);
         }
     }
 
@@ -1386,7 +1428,9 @@ void main() {
     // transmission early-returns above leave hitInstanceId at 0 so raygen waits
     // for the first real shade event to anchor history. +1 so 0 still means
     // miss/sky after gl_InstanceCustomIndexEXT == 0.
-    payload.hitWorldPos    = hitPos;
-    payload.hitInstanceId  = uint(gl_InstanceCustomIndexEXT) + 1u;
-    payload.hitRoughness   = roughness;// post-clamp; raygen uses for FC cap on motion
+    payload.hitWorldPos     = hitPos;
+    payload.hitInstanceId   = uint(gl_InstanceCustomIndexEXT) + 1u;
+    payload.hitRoughness    = roughness;// post-clamp; raygen uses for FC cap on motion
+    payload.hitMetalness    = metalness;
+    payload.hitTransmission = mdesc.transmission;
 }

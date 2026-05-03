@@ -385,6 +385,10 @@ namespace threepp {
         std::array<Image2D, 2> gbufImagesPP{};
         uint32_t accumWriteIdx_ = 0;
         uint32_t sampleIndex = 0;
+        // Samples per pixel per frame. Each sample is an independent
+        // jittered primary ray; raygen sums them and the accumulator
+        // advances FC by `spp` so the running mean stays correctly weighted.
+        uint32_t samplesPerPixel_ = 2;
         // Prev-frame camera packed as four vec4s (matches PrevCameraUbo):
         //   [0..3]  = vec4(pos.xyz,  projScaleX)   → prevCamPosX
         //   [4..7]  = vec4(fwd.xyz,  projScaleY)   → prevCamFwdY
@@ -3589,7 +3593,7 @@ namespace threepp {
             check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rtDsLayout),
                   "vkCreateDescriptorSetLayout(RT)");
 
-            // 44-byte push constant. Layout matches the host-side `pc[11]`
+            // 48-byte push constant. Layout matches the host-side `pc[12]`
             // assembled in renderFrame and the GLSL PushConstants struct in
             // raygen.rgen / closest_hit.rchit. Well under the 128-byte minimum
             // push-constant guarantee.
@@ -3607,12 +3611,14 @@ namespace threepp {
             //       primaryInstanceId-1 instead of scene-wide.
             //   [9]  emissiveCount       (closest_hit reads for NEE CDF)
             //   [10] emissiveTotalPower  (float bits — CDF normalisation)
+            //   [11] samplesPerPixel     (raygen — # of jittered primary rays
+            //        per frame; in-frame samples are summed with weight `spp`)
             VkPushConstantRange pcRange{};
             pcRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                  VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
                                  VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
             pcRange.offset = 0;
-            pcRange.size   = 44;
+            pcRange.size   = 48;
 
             VkPipelineLayoutCreateInfo plci{};
             plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -4433,12 +4439,13 @@ namespace threepp {
                         (cameraMovedThisFrame_ ? 2u : 0u);
                 uint32_t emPowerBits;
                 std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
-                const uint32_t ppc[11] = {
+                const uint32_t ppc[12] = {
                         sampleIndex, envImage.mipLevels,
                         static_cast<uint32_t>(toneMapping_), exposureBits,
                         motionFlagsPhoton,
                         meshMovedBits_[0], meshMovedBits_[1], meshMovedBits_[2], meshMovedBits_[3],
                         emissiveTriCountThisFrame_, emPowerBits,
+                        samplesPerPixel_,
                 };
                 vkCmdPushConstants(cb, rtPipelineLayout,
                                    VK_SHADER_STAGE_RAYGEN_BIT_KHR |
@@ -4489,7 +4496,7 @@ namespace threepp {
                     (cameraMovedThisFrame_ ? 2u : 0u);
             uint32_t emPowerBits;
             std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
-            const uint32_t pc[11] = {
+            const uint32_t pc[12] = {
                     sampleIndex,
                     envImage.mipLevels,
                     static_cast<uint32_t>(toneMapping_),
@@ -4501,6 +4508,7 @@ namespace threepp {
                     meshMovedBits_[3],
                     emissiveTriCountThisFrame_,
                     emPowerBits,
+                    samplesPerPixel_,
             };
             vkCmdPushConstants(cb, rtPipelineLayout,
                                VK_SHADER_STAGE_RAYGEN_BIT_KHR |
@@ -4786,6 +4794,15 @@ namespace threepp {
 
     float VulkanRenderer::getFogAnisotropy() const {
         return pimpl_->fogAnisotropy_;
+    }
+
+    void VulkanRenderer::setSamplesPerPixel(int spp) {
+        const uint32_t v = static_cast<uint32_t>(std::max(1, spp));
+        pimpl_->samplesPerPixel_ = v;
+    }
+
+    int VulkanRenderer::samplesPerPixel() const {
+        return static_cast<int>(pimpl_->samplesPerPixel_);
     }
 
 }// namespace threepp
