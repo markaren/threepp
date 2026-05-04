@@ -973,28 +973,32 @@ void main() {
         payload.nextDir       = wDir;
         payload.flags         = 4u;
         payload.seed          = seed;
-        if (wasReflect) {
-            // Reflect off glass: tag glass as primary so reproject follows the
-            // glass surface (content seen at this pixel is the env/scene
-            // reflected in glass, which is anchored to the glass position).
-            payload.hitWorldPos     = hitPos;
-            payload.hitInstanceId   = uint(gl_InstanceCustomIndexEXT) + 1u;
-            payload.hitRoughness    = roughness;
-            payload.hitMetalness    = metalness;
-            payload.hitTransmission = mdesc.transmission;
-        } else {
-            // Refract through glass: skip the primary tag so raygen captures
-            // the surface BEHIND the glass on the next iteration. Otherwise
-            // interior content reprojects via the glass motion matrix and
-            // visibly slides with the door (CommercialRefrigerator). On a
-            // glass→sky path this leaves primary unset → cold-start, which is
-            // a small price for stable refraction reprojection.
-            payload.hitWorldPos     = vec3(0.0);
-            payload.hitInstanceId   = 0u;
-            payload.hitRoughness    = 1.0;
-            payload.hitMetalness    = 0.0;
-            payload.hitTransmission = 0.0;
-        }
+        // Tag glass as primary on BOTH reflect and refract.
+        //
+        // Original behaviour skipped the primary tag on refract so the chit
+        // BEHIND the glass would anchor reproject — which kept content seen
+        // through glass spatially stable (CommercialRefrigerator interior
+        // shelves don't slide with the swinging door). The price was that
+        // glass→sky paths NEVER captured a primary surface (sky miss doesn't
+        // tag), so under camera motion those pixels cold-started every frame
+        // and the stochastic reflect/refract split desaturated the visible
+        // tint until motion stopped. On outdoor scenes with sky env this
+        // dominated the visible artifact.
+        //
+        // raygen's primary-capture only takes the FIRST non-zero hitInstanceId
+        // it sees (`if (primaryInstanceId == 0u && ...)` at raygen.rgen:646),
+        // so this tags the EXTERIOR glass surface as primary. Subsequent
+        // interior glass refractions don't overwrite. For a static glass
+        // sphere with the camera orbiting, anchoring to the exterior surface
+        // gives correct sky-at-infinity reprojection. For closed-glass-on-
+        // close-interior-geometry scenes the interior content will move
+        // slightly with the glass under motion — we accept that until/unless
+        // it becomes the dominant artifact in such a scene.
+        payload.hitWorldPos     = hitPos;
+        payload.hitInstanceId   = uint(gl_InstanceCustomIndexEXT) + 1u;
+        payload.hitRoughness    = roughness;
+        payload.hitMetalness    = metalness;
+        payload.hitTransmission = mdesc.transmission;
         return;
     }
 
