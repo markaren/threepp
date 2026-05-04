@@ -1,0 +1,103 @@
+#version 460
+
+// Multi-pass à-trous spatial denoiser pass. Reads from accumImage (pass 0)
+// or one of the ping-pong intermediates (pass 1, 2), applies a 5×5 edge-
+// aware atrous filter with the per-pass stride (1, 2, 4), writes to the
+// other ping-pong slot. The finalize stage (denoise.comp) reads filtered[0]
+// after the last pass and mixes by per-pixel FC, then tonemaps + sRGB-encodes
+// to the swap chain.
+//
+// Edge stops match the single-pass shader:
+//   1. Mesh ID (gbuf.w == instanceId+1; 0 = sky/miss)
+//   2. World-space depth — exp(-Δd / σd), σd scaled by center depth
+//   3. Luminance — exp(-Δl / σl)
+//
+// FC fade is NOT applied here — the finalize stage owns it. Atrous passes
+// produce a pure filtered radiance; the mix to raw happens once at the end.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 2) uniform CameraUbo {
+    mat4 viewInverse;
+    mat4 projInverse;
+} cam;
+layout(set = 0, binding = 7,  rgba32f) uniform readonly image2D accumImage;
+layout(set = 0, binding = 12, rgba32f) uniform readonly image2D gbufImage;
+layout(set = 0, binding = 20, rgba32f) uniform image2D filteredArray[2];
+
+layout(push_constant) uniform Pc {
+    uint stride;          // 1, 2, or 4 (binomial spacing)
+    uint readFromAccum;   // 1 = pass 0 reads accumImage; 0 = reads filteredArray[inputIdx]
+    uint inputIdx;        // 0 or 1 — which filteredArray slot to read (when readFromAccum==0)
+    uint outputIdx;       // 0 or 1 — which filteredArray slot to write
+} pc;
+
+float luminance(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+vec4 readSrc(ivec2 px) {
+    if (pc.readFromAccum != 0u) return imageLoad(accumImage, px);
+    return imageLoad(filteredArray[pc.inputIdx], px);
+}
+
+void main() {
+    const ivec2 size = imageSize(accumImage);
+    const ivec2 px   = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= size.x || px.y >= size.y) return;
+
+    const vec4 c = readSrc(px);
+    const vec4 g = imageLoad(gbufImage, px);
+
+    // Sky / miss pixel — pass through unchanged. Edge stops have no anchor.
+    if (g.w < 0.5) {
+        imageStore(filteredArray[pc.outputIdx], px, c);
+        return;
+    }
+
+    const vec3  camPos = cam.viewInverse[3].xyz;
+    const float depthC = length(g.xyz - camPos);
+    const float lumC   = luminance(c.rgb);
+
+    // Tight edge stops — the PT input is mostly clean (high FPS, fast FC
+    // climb), so the filter must not over-blur. Loose stops + multi-pass
+    // produced visibly soft surfaces. Tighten depth to 2% of center depth
+    // and luminance to 1.5 (was 5% / 4.0 in the initial multi-pass land).
+    const float sigmaDepth = max(depthC * 0.02, 1e-3);
+    const float sigmaLum   = 1.5;
+
+    // Binomial 1D kernel {1,4,6,4,1}/16 outer-product → standard à-trous.
+    const float k1d[5] = float[](1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
+    const int s = int(pc.stride);
+
+    vec3  sumColor = vec3(0.0);
+    float sumW     = 0.0;
+    for (int dy = -2; dy <= 2; ++dy) {
+        for (int dx = -2; dx <= 2; ++dx) {
+            const ivec2 q  = clamp(px + ivec2(dx * s, dy * s), ivec2(0), size - ivec2(1));
+            const vec4  cq = readSrc(q);
+            const vec4  gq = imageLoad(gbufImage, q);
+
+            // Mesh-ID stop — different mesh fully rejects. Catches silhouettes
+            // without needing a normal channel.
+            if (abs(gq.w - g.w) > 0.5) continue;
+
+            const float depthQ = length(gq.xyz - camPos);
+            const float lumQ   = luminance(cq.rgb);
+
+            const float wDepth = exp(-abs(depthQ - depthC) / sigmaDepth);
+            const float wLum   = exp(-abs(lumQ   - lumC)   / sigmaLum);
+            const float wKern  = k1d[dx + 2] * k1d[dy + 2];
+
+            const float w = wKern * wDepth * wLum;
+            sumColor += cq.rgb * w;
+            sumW     += w;
+        }
+    }
+
+    vec3 filteredColor = c.rgb;
+    if (sumW > 1e-5) filteredColor = sumColor / sumW;
+
+    // Carry FC through .a unchanged so the finalize stage can read it for
+    // fcFade if it wants. (Atrous shouldn't touch FC; it's a pure radiance
+    // filter.)
+    imageStore(filteredArray[pc.outputIdx], px, vec4(filteredColor, c.a));
+}
