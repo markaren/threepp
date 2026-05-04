@@ -1,0 +1,149 @@
+#version 460
+
+// Spatial denoiser for the Vulkan path tracer. Reads the per-pixel temporal
+// mean radiance (binding 7, accumImage written by raygen.rgen this frame)
+// and the primary-hit gbuf (binding 12, worldPos + instanceId), applies a
+// 5×5 à-trous edge-aware filter in linear HDR, then tonemaps + sRGB-encodes
+// into the swapchain (binding 1, outImage). Replaces the in-line tonemap
+// + imageStore at the tail of raygen.rgen.
+//
+// Edge stops:
+//   1. Mesh ID — different primary mesh fully rejects the tap. Catches
+//      silhouettes cheaply without a normal channel.
+//   2. World-space depth — exp(-Δd / σd), σd scales with center depth so
+//      the cutoff is roughly invariant under scene scale.
+//   3. Luminance — exp(-Δl / σl), suppresses leaking of bright fireflies
+//      onto neighboring dim pixels.
+//
+// FC fade (per `feedback_denoiser_fc_fade.md` from WGPU side): blend toward
+// raw radiance as the per-pixel frame count rises, reaching identity at
+// FC ≥ 64. Keeps converged regions sharp while filtering the noisy tail.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Shares set 0 with the RT pipeline. Only bindings actually read/written
+// by this shader are declared; the rest of the layout exists but compute
+// doesn't touch them.
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D outImage;
+layout(set = 0, binding = 2) uniform CameraUbo {
+    mat4 viewInverse;
+    mat4 projInverse;
+} cam;
+layout(set = 0, binding = 7, rgba32f) uniform readonly image2D accumImage;
+layout(set = 0, binding = 12, rgba32f) uniform readonly image2D gbufImage;
+
+layout(push_constant) uniform Pc {
+    uint toneMapping;     // matches raygen.rgen Pc.toneMapping enum
+    uint exposureBits;    // float-bits for exposure
+    uint denoiseEnabled;  // 0 = identity (tonemap + sRGB only), 1 = à-trous filter
+    uint _pad;
+} pc;
+
+// Tonemap helpers — duplicates the exact ladder from raygen.rgen so the
+// disabled path renders pixel-identical to the prior in-shader tonemap.
+vec3 linearToSRGB(vec3 x) {
+    const vec3 cutoff = vec3(lessThan(x, vec3(0.0031308)));
+    const vec3 lower  = 12.92 * x;
+    const vec3 higher = 1.055 * pow(max(x, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
+    return mix(higher, lower, cutoff);
+}
+vec3 reinhard(vec3 c) { return clamp(c / (vec3(1.0) + c), 0.0, 1.0); }
+vec3 cineon(vec3 c) {
+    c = max(vec3(0.0), c - 0.004);
+    return pow((c * (6.2 * c + 0.5)) / (c * (6.2 * c + 1.7) + 0.06), vec3(2.2));
+}
+vec3 acesFilmic(vec3 c) {
+    const mat3 inMat = mat3(
+            vec3(0.59719, 0.07600, 0.02840),
+            vec3(0.35458, 0.90834, 0.13383),
+            vec3(0.04823, 0.01566, 0.83777));
+    const mat3 outMat = mat3(
+            vec3( 1.60475, -0.10208, -0.00327),
+            vec3(-0.53108,  1.10813, -0.07276),
+            vec3(-0.07367, -0.00605,  1.07602));
+    c = inMat * c;
+    const vec3 a = c * (c + 0.0245786) - 0.000090537;
+    const vec3 b = c * (0.983729 * c + 0.4329510) + 0.238081;
+    return clamp(outMat * (a / b), 0.0, 1.0);
+}
+vec3 toneMap(vec3 c, uint mode, float exposure) {
+    if (mode == 1u) return c * exposure;                  // Linear
+    if (mode == 2u) return reinhard(c * exposure);        // Reinhard
+    if (mode == 3u) return cineon(c * exposure);          // OptimizedCineon
+    if (mode == 4u) return acesFilmic(c * (exposure / 0.6));// ACESFilmic
+    return c;// None / Custom — pass-through
+}
+
+float luminance(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+void main() {
+    const ivec2 size = imageSize(accumImage);
+    const ivec2 px   = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= size.x || px.y >= size.y) return;
+
+    const vec4 c = imageLoad(accumImage, px);    // xyz = mean radiance, w = FC
+    const vec4 g = imageLoad(gbufImage, px);     // xyz = worldPos, w = instanceId+1 (0 == sky)
+
+    vec3 color = c.rgb;
+
+    // Skip the filter on sky / miss pixels — gbuf has no surface to anchor
+    // edge stops, and env is already temporally accumulated.
+    if (pc.denoiseEnabled != 0u && g.w > 0.5) {
+        const float fc     = c.a;
+        // Fade filter strength to zero at FC=64. Below FC=64 the fade is
+        // (64-FC)/64 — full filter at FC=0, half at FC=32, off at FC≥64.
+        const float fcFade = clamp(1.0 - fc * (1.0 / 64.0), 0.0, 1.0);
+        if (fcFade > 0.001) {
+            const vec3  camPos = cam.viewInverse[3].xyz;
+            const float depthC = length(g.xyz - camPos);
+            const float lumC   = luminance(c.rgb);
+
+            // Edge-stop sigmas. Depth scales with center depth so the cutoff
+            // tracks scene scale (a 1cm shift on a 1m-deep pixel reads as a
+            // strong edge; same shift on a 100m-deep pixel does not).
+            const float sigmaDepth = max(depthC * 0.05, 1e-3);
+            const float sigmaLum   = 4.0;
+
+            // 5×5 à-trous with binomial kernel {1,4,6,4,1}/16.
+            const float k1d[5] = float[](1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
+
+            vec3  sumColor = vec3(0.0);
+            float sumW     = 0.0;
+            for (int dy = -2; dy <= 2; ++dy) {
+                for (int dx = -2; dx <= 2; ++dx) {
+                    const ivec2 q  = clamp(px + ivec2(dx, dy), ivec2(0), size - ivec2(1));
+                    const vec4  cq = imageLoad(accumImage, q);
+                    const vec4  gq = imageLoad(gbufImage,  q);
+
+                    // Mesh ID — silhouette stop. Tap from a different mesh
+                    // is fully rejected; catches the cases a normal channel
+                    // would catch without needing a separate buffer.
+                    if (abs(gq.w - g.w) > 0.5) continue;
+
+                    const float depthQ = length(gq.xyz - camPos);
+                    const float lumQ   = luminance(cq.rgb);
+
+                    const float wDepth = exp(-abs(depthQ - depthC) / sigmaDepth);
+                    const float wLum   = exp(-abs(lumQ   - lumC)   / sigmaLum);
+                    const float wKern  = k1d[dx + 2] * k1d[dy + 2];
+
+                    const float w = wKern * wDepth * wLum;
+                    sumColor += cq.rgb * w;
+                    sumW     += w;
+                }
+            }
+
+            if (sumW > 1e-5) {
+                const vec3 filtered = sumColor / sumW;
+                // Lerp from raw to filtered by FC fade so converged pixels
+                // pass through and noisy pixels get full filter.
+                color = mix(c.rgb, filtered, fcFade);
+            }
+        }
+    }
+
+    const float exposure = uintBitsToFloat(pc.exposureBits);
+    const vec3  mapped   = toneMap(color, pc.toneMapping, exposure);
+    const vec3  encoded  = linearToSRGB(mapped);
+    imageStore(outImage, px, vec4(encoded, 1.0));
+}

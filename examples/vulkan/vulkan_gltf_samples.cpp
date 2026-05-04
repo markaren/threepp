@@ -211,6 +211,10 @@ int main(int argc, char** argv) {
         if (ImGui::Checkbox("DirLight", &dirLight))
             sun->visible = dirLight;
 
+        bool denoise = renderer.denoise();
+        if (ImGui::Checkbox("Denoise", &denoise))
+            renderer.setDenoise(denoise);
+
         ImGui::End();
     });
 

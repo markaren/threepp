@@ -88,6 +88,13 @@ namespace threepp {
         void setSamplesPerPixel(int spp);
         [[nodiscard]] int samplesPerPixel() const;
 
+        // Spatial denoiser (5×5 à-trous edge-aware filter) applied to the
+        // temporally-accumulated radiance before tonemap + sRGB encode. Default
+        // on. When off, the compute pass still runs but acts as a tonemap-only
+        // pass-through (pixel-identical to the prior in-shader tonemap path).
+        void setDenoise(bool enabled);
+        [[nodiscard]] bool denoise() const;
+
     private:
         struct Impl;
         std::unique_ptr<Impl> pimpl_;

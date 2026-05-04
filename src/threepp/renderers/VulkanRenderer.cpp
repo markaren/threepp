@@ -58,6 +58,7 @@
 #include "threepp/renderers/vulkan/shaders/photon_miss.rmiss.spv.h"
 #include "threepp/renderers/vulkan/shaders/photon_chit.rchit.spv.h"
 #include "threepp/renderers/vulkan/shaders/prefilter_env.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/denoise.comp.spv.h"
 
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.hpp"
 
@@ -563,6 +564,13 @@ namespace threepp {
         Buffer photonCountBuf;
         Buffer photonDataBuf;
 
+        // Spatial denoiser compute pipeline. Reuses rtDsLayout (set 0) so the
+        // same per-frame descriptor set drives both the RT pass and the denoise
+        // pass. Own pipeline layout for the COMPUTE-stage push constant range.
+        VkPipelineLayout denoisePipelineLayout = VK_NULL_HANDLE;
+        VkPipeline       denoisePipeline       = VK_NULL_HANDLE;
+        bool             denoiseEnabled_       = true;
+
         // Per-frame-in-flight camera UBO (viewInverse + projInverse).
         // 2 mat4 packed back-to-back, std140 layout.
         std::array<Buffer, kFramesInFlight> cameraUbos{};
@@ -608,6 +616,7 @@ namespace threepp {
             createDefaultMaterialTexture();
             createRtPipeline();
             createShaderBindingTable();
+            createDenoisePipeline();// must follow createRtPipeline (shares rtDsLayout)
             createPhotonBuffers();
             createPhotonEmitPipeline();
             createPhotonSbt();
@@ -683,6 +692,9 @@ namespace threepp {
             if (prefilterDsLayout)        vkDestroyDescriptorSetLayout(d, prefilterDsLayout, nullptr);
             if (prefilterDescPool)        vkDestroyDescriptorPool(d, prefilterDescPool, nullptr);
             if (prefilterSrcSampler)      vkDestroySampler(d, prefilterSrcSampler, nullptr);
+
+            if (denoisePipeline)        vkDestroyPipeline(d, denoisePipeline, nullptr);
+            if (denoisePipelineLayout)  vkDestroyPipelineLayout(d, denoisePipelineLayout, nullptr);
         }
 
         void createCommandResources() {
@@ -3012,6 +3024,52 @@ namespace threepp {
                   "vkCreateDescriptorPool(prefilter)");
         }
 
+        // Spatial denoiser. One compute pipeline that reads accumImage (binding 7)
+        // + gbufImage (binding 12) + cam (binding 2) and writes outImage (binding 1)
+        // — all four bindings live in rtDsLayout (with COMPUTE_BIT added to their
+        // stageFlags). Push constant carries tonemap + exposure + enable flag.
+        void createDenoisePipeline() {
+            // Push constants: 4 × u32 = 16 bytes (toneMapping, exposureBits,
+            // denoiseEnabled, _pad). COMPUTE-only, separate from rtPipelineLayout's
+            // RGEN/CHIT/MISS push constant range.
+            VkPushConstantRange pcRange{};
+            pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            pcRange.offset = 0;
+            pcRange.size   = 16;
+
+            VkPipelineLayoutCreateInfo plci{};
+            plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            plci.setLayoutCount = 1;
+            plci.pSetLayouts = &rtDsLayout;// reuse the RT descriptor set layout
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges = &pcRange;
+            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &denoisePipelineLayout),
+                  "vkCreatePipelineLayout(denoise)");
+
+            VkShaderModuleCreateInfo smci{};
+            smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            smci.codeSize = sizeof(kDenoiseCompSpv);
+            smci.pCode    = kDenoiseCompSpv;
+            VkShaderModule mod = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &smci, nullptr, &mod),
+                  "vkCreateShaderModule(denoise)");
+
+            VkPipelineShaderStageCreateInfo stage{};
+            stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+            stage.module = mod;
+            stage.pName  = "main";
+
+            VkComputePipelineCreateInfo cpci{};
+            cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            cpci.stage  = stage;
+            cpci.layout = denoisePipelineLayout;
+            check(vkCreateComputePipelines(ctx->device(), VK_NULL_HANDLE, 1, &cpci, nullptr,
+                                           &denoisePipeline),
+                  "vkCreateComputePipelines(denoise)");
+            vkDestroyShaderModule(ctx->device(), mod, nullptr);
+        }
+
         // Allocate an env Image2D with a full GGX-prefiltered mip chain. Mip 0
         // holds the source equirect (uploaded from CPU); mips 1..N-1 are filled
         // by dispatching prefilter_env.comp once per mip. Roughness mapping is
@@ -3566,11 +3624,17 @@ namespace threepp {
             bindings[1].binding = 1;
             bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[1].descriptorCount = 1;
-            bindings[1].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            // outImage is now written by denoise.comp (compute), not raygen.
+            // RAYGEN flag retained so the descriptor layout stays valid for
+            // both pipelines that share rtDsLayout.
+            bindings[1].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
+                                     VK_SHADER_STAGE_COMPUTE_BIT;
             bindings[2].binding = 2;
             bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[2].descriptorCount = 1;
-            bindings[2].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            // Compute denoise reads cam.viewInverse for camera world pos.
+            bindings[2].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
+                                     VK_SHADER_STAGE_COMPUTE_BIT;
             bindings[3].binding = 3;
             bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[3].descriptorCount = 1;
@@ -3598,7 +3662,9 @@ namespace threepp {
             bindings[7].binding = 7;
             bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[7].descriptorCount = 1;
-            bindings[7].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            // Compute denoise reads accumImage radiance + per-pixel FC.
+            bindings[7].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
+                                     VK_SHADER_STAGE_COMPUTE_BIT;
             // Bindless material albedo array. Fixed-cap kMaxMaterialTextures
             // so we can avoid VK_EXT_descriptor_indexing's variable-descriptor-
             // count plumbing for v1; closest_hit indexes via mdesc.albedoTexIndex.
@@ -3623,7 +3689,9 @@ namespace threepp {
             bindings[12].binding = 12;
             bindings[12].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[12].descriptorCount = 1;
-            bindings[12].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            // Compute denoise reads gbuf for worldPos + mesh-ID edge stops.
+            bindings[12].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
+                                     VK_SHADER_STAGE_COMPUTE_BIT;
             bindings[13].binding = 13;
             bindings[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[13].descriptorCount = 1;
@@ -4659,12 +4727,58 @@ namespace threepp {
             ctx->rt().cmdTraceRays(cb, &rgenRegion, &missRegion, &hitRegion, &callRegion,
                                    ext.width, ext.height, 1);
 
+            // ── Spatial denoiser (à-trous) + tonemap + sRGB encode ───────────────
+            // RT writes accumImage + gbufImage; denoise reads them. RT does NOT
+            // write outImage anymore (raygen.rgen tail was stripped); denoise.comp
+            // owns that write. Need a memory barrier to make the RT writes visible
+            // to compute reads. outImage stays in GENERAL — same layout for both.
+            {
+                VkMemoryBarrier2 rtToCompute{};
+                rtToCompute.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                rtToCompute.srcStageMask  = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                rtToCompute.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                rtToCompute.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                rtToCompute.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+
+                VkDependencyInfo bdep{};
+                bdep.sType                = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                bdep.memoryBarrierCount   = 1;
+                bdep.pMemoryBarriers      = &rtToCompute;
+                vkCmdPipelineBarrier2(cb, &bdep);
+
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, denoisePipeline);
+                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                        denoisePipelineLayout, 0, 1,
+                                        &descriptorSets[setIdx], 0, nullptr);
+
+                // PC layout matches denoise.comp: toneMapping, exposureBits,
+                // denoiseEnabled, _pad. Same exposure/tonemap fields the RT pass
+                // pushed; denoiseEnabled gates the spatial filter (0 = identity
+                // tonemap+sRGB, mirrors the prior in-shader behaviour).
+                const uint32_t denoisePc[4] = {
+                        static_cast<uint32_t>(toneMapping_),
+                        exposureBits,
+                        denoiseEnabled_ ? 1u : 0u,
+                        0u,
+                };
+                vkCmdPushConstants(cb, denoisePipelineLayout,
+                                   VK_SHADER_STAGE_COMPUTE_BIT,
+                                   0, sizeof(denoisePc), denoisePc);
+
+                const uint32_t gx = (ext.width  + 7u) / 8u;
+                const uint32_t gy = (ext.height + 7u) / 8u;
+                vkCmdDispatch(cb, gx, gy, 1);
+            }
+            // ── End denoise ─────────────────────────────────────────────────────
+
             // If an overlay (ImGui) is registered, draw it on top of the
             // ray-traced image inside a dynamic render pass before presenting.
             if (overlayCallback) {
                 VkImageMemoryBarrier2 toColor{};
                 toColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                toColor.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                // outImage was last written by denoise.comp, not raygen.
+                toColor.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 toColor.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
                 toColor.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
                 toColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
@@ -4719,7 +4833,8 @@ namespace threepp {
             } else {
                 VkImageMemoryBarrier2 toPresent{};
                 toPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                toPresent.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                // outImage was last written by denoise.comp, not raygen.
+                toPresent.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 toPresent.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
                 toPresent.dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
                 toPresent.dstAccessMask = 0;
@@ -4943,6 +5058,14 @@ namespace threepp {
 
     int VulkanRenderer::samplesPerPixel() const {
         return static_cast<int>(pimpl_->samplesPerPixel_);
+    }
+
+    void VulkanRenderer::setDenoise(bool enabled) {
+        pimpl_->denoiseEnabled_ = enabled;
+    }
+
+    bool VulkanRenderer::denoise() const {
+        return pimpl_->denoiseEnabled_;
     }
 
 }// namespace threepp

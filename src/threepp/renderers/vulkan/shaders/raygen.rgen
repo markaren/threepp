@@ -45,7 +45,9 @@ struct Payload {
 };
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
-layout(set = 0, binding = 1, rgba8)   uniform writeonly image2D outImage;
+// Binding 1 (outImage, rgba8) is written by denoise.comp after the RT pass —
+// raygen no longer touches it. The descriptor remains in set 0 with a
+// COMPUTE_BIT stage flag so the same descriptor set drives both pipelines.
 layout(set = 0, binding = 2) uniform CameraUbo {
     mat4 viewInverse;
     mat4 projInverse;
@@ -899,9 +901,6 @@ void main() {
     const float newFc = min(histFc + sppF, 4096.0);
     imageStore(accumImage, px, vec4(mean, newFc));
     imageStore(gbufImage, px, vec4(primaryWorldPos, float(primaryInstanceId)));
-
-    const float exposure = uintBitsToFloat(pc.exposureBits);
-    const vec3  mapped   = toneMap(mean, pc.toneMapping, exposure);
-    const vec3 outColor = linearToSRGB(mapped);
-    imageStore(outImage, px, vec4(outColor, 1.0));
+    // Tonemap + sRGB encode + outImage write moved to denoise.comp so the
+    // spatial filter can run on linear HDR before display encode.
 }
