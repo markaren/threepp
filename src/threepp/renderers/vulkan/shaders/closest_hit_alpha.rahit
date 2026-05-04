@@ -152,12 +152,29 @@ void main() {
         // The accepted-hit path in closest_hit then shades normally as if the
         // material were opaque — the average over many samples converges to
         // the alpha-weighted blend.
-        const float r = blendHash(uvec3(gl_LaunchIDEXT.xy, 0u),
-                                  pc.sampleIndex,
-                                  uint(gl_InstanceCustomIndexEXT),
-                                  uint(gl_PrimitiveID));
-        if (r >= alpha) {
+        //
+        // Variance reduction (mirrors WGPU PT's WgpuPathTracerShaders_Rt.cpp
+        // ~line 793): for alpha ≈ 1.0 (effectively opaque) skip the coin flip
+        // entirely — one probabilistic pass-through per ~1000 frames is
+        // invisible and contributes zero variance. Symmetric early-out for
+        // alpha ≈ 0.0 (fully transparent). Without these thresholds, glTF
+        // materials with alpha-packed textures whose alpha sits at 0.98-1.00
+        // produce visible per-pixel firefly noise on the host surface — the
+        // exact symptom on the chronograph dial layers. For genuinely
+        // translucent regions (0.01 < alpha < 0.99) fall back to the
+        // unbiased stochastic coin flip.
+        if (alpha >= 0.99) {
+            // accept — effectively opaque, fall through to the implicit accept
+        } else if (alpha <= 0.01) {
             ignoreIntersectionEXT;
+        } else {
+            const float r = blendHash(uvec3(gl_LaunchIDEXT.xy, 0u),
+                                      pc.sampleIndex,
+                                      uint(gl_InstanceCustomIndexEXT),
+                                      uint(gl_PrimitiveID));
+            if (r >= alpha) {
+                ignoreIntersectionEXT;
+            }
         }
     } else {
         // Cutout
