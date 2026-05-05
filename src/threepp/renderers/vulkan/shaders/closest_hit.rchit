@@ -1096,9 +1096,9 @@ void main() {
         // decision is purely material-based:
         //   ior > 1.01: real glass — tag glass as primary. Reproject anchors
         //               on the glass surface, which gives stable sky/env
-        //               reflections under camera motion. Interior content
-        //               seen through refraction will move slightly with the
-        //               glass (acceptable for glass over close geometry).
+        //               reflections under camera motion (the fix the
+        //               vulkan-pt branch was carrying — original symptom:
+        //               glass tint disappearing during movement).
         //   ior ≈ 1.0:  alpha-blend / stochastic pass-through. Refraction
         //               returns the incident direction unchanged → the ray
         //               continues to the surface behind, which IS what

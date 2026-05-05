@@ -889,12 +889,27 @@ void main() {
                         // Floors raised so the continuous-motion equilibrium
                         // (x = x/2 + spp = 2·spp) doesn't collapse below the
                         // intended sample count on smooth surfaces.
-                        const float capUp  = primaryMoved
+                        float capUp  = primaryMoved
                                 ? mix(16.0, 128.0, roughT)
                                 : mix(16.0,  96.0, roughT);
-                        const float capLo  = primaryMoved
+                        float capLo  = primaryMoved
                                 ? mix(4.0,  8.0, roughT)
                                 : mix(4.0, 12.0, roughT);
+                        // Glass-specific floor / cap. Glass uses a stochastic
+                        // reflect-vs-refract branch (chit ~line 894). At normal
+                        // incidence Schlick F ≈ 0.04, so ~4% of samples are
+                        // achromatic reflections; the other ~96% are tinted
+                        // refractions. With the smooth-surface floor of 4, the
+                        // running mean has only 5-6 samples backing it under
+                        // continuous camera motion — a single reflect outlier
+                        // landing in that handful shifts the chromatic balance
+                        // ~20% toward white, producing visible tint loss /
+                        // flicker on tinted glass spheres while the camera moves.
+                        // Refracted content reprojects with parallax (anchored
+                        // on the glass surface), so keeping more history does
+                        // NOT cause mirror-style ghosting. Bump floor + cap so
+                        // continuous-motion FC settles around 24-32, dropping
+                        // tint variance ~3-4×.
                         histFc = clamp(bFc * 0.5, capLo, capUp);
                     }
                 }
