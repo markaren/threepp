@@ -319,6 +319,7 @@ namespace threepp {
             float iridescenceThicknessNm;  // thin-film thickness in nm (default 400)
             float dispersion;              // KHR_materials_dispersion: 0 = off; ~0.05+ visible; matches glTF spec
             float thickness;               // KHR_materials_volume: in-medium distance proxy for thin/open meshes; 0 = fall back to back-face actual ray distance
+            int32_t thinWalled;            // 1 = treat both faces as entry into a thin shell (eta=1/ior, BL proxy per-crossing); 0 = closed-mesh BSDF
         };
         Buffer geometryDescsBuffer;
         Buffer materialDescsBuffer;
@@ -1837,6 +1838,7 @@ namespace threepp {
             d.iridescenceThicknessNm = 400.0f;
             d.dispersion = 0.0f;              // off by default; lobe is skipped when dispersion == 0
             d.thickness = 0.0f;               // 0 = use back-face actual distance for Beer-Lambert (closed-mesh path)
+            d.thinWalled = 0;                 // 0 = closed-mesh BSDF; 1 = thin-shell BSDF (set explicitly via MaterialWithThickness::thinWalled)
             d.occlusionTexIndex = -1;
             static constexpr float kIdent[9] = {1,0,0, 0,1,0, 0,0,1};
             std::copy(kIdent, kIdent+9, d.uvTransform);
@@ -1901,7 +1903,8 @@ namespace threepp {
                 d.attenuationDistance = att->attenuationDistance;
             }
             if (auto* th = dynamic_cast<MaterialWithThickness*>(mat.get())) {
-                d.thickness = std::max(0.0f, th->thickness);
+                d.thickness  = std::max(0.0f, th->thickness);
+                d.thinWalled = th->thinWalled ? 1 : 0;
             }
             if (auto* sp = dynamic_cast<MaterialWithPbrSpecular*>(mat.get())) {
                 d.specularIntensity   = sp->specularIntensity;

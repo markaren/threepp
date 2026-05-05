@@ -91,6 +91,13 @@ namespace {
         // (~12 m here), which over-saturates to near-black.
         mat->side = Side::Double;
         mat->thickness = 2.0f;
+        // Opt this surface into the path tracer's thin-shell BSDF: a single
+        // FFT-displaced plane has no closed interior, so both faces should
+        // refract as entries and Beer-Lambert applies per-crossing using
+        // `thickness` as the in-medium proxy. Without this flag, the back-
+        // face hit (ray bouncing off sand) would refract using eta=ior with
+        // gl_HitTEXT = full water column → opaque deep blue, no see-through.
+        mat->thinWalled = true;
         mat->attenuationColor = Color(0.10f, 0.45f, 0.55f);
         mat->attenuationDistance = 3.0f;
         mat->clearcoat = 0.1;
@@ -112,7 +119,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("Vulkan PT — Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
+    Canvas canvas("Vulkan PT  Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
     VulkanRenderer renderer(canvas);
     renderer.setDenoise(true);
     renderer.toneMapping = ToneMapping::ACESFilmic;

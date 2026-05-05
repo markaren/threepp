@@ -183,6 +183,16 @@ namespace threepp {
 
         float thickness = 0;
         std::shared_ptr<Texture> thicknessMap;
+        // Path-tracer hint: this surface is a thin shell (e.g. a single
+        // FFT-displaced ocean plane, sunglasses lens, leaf), not a closed
+        // volume. Default false → closed-mesh BSDF (front=enter, back=exit,
+        // Beer-Lambert applied at the back-face exit using actual ray length).
+        // True → both faces refract as entries and Beer-Lambert is applied
+        // per-crossing using `thickness` as the in-medium proxy distance.
+        // Closed glass meshes that happen to also be doubleSided should leave
+        // this false; turning it on makes the back-face refraction direction
+        // wrong for them.
+        bool thinWalled = false;
     };
 
     struct MaterialWithClearcoat: virtual Material {

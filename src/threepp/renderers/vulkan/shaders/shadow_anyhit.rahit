@@ -49,7 +49,7 @@ struct MaterialDesc {
     float ior;               //  4 (68) — index of refraction (Fresnel)
     float _pad1[19];         // 76 (72..148)
     mat3  uvTransform;       // 36 (148..184) — albedo UV transform
-    float _pad2[69];         // 276 (184..460)
+    float _pad2[70];         // 280 (184..464)
 };
 
 const uint kMaxMaterialTextures = 2048;

@@ -93,6 +93,7 @@ struct MaterialDesc {
     float iridescenceThicknessNm;   // thin-film thickness in nm (default 400)
     float dispersion;               // KHR_materials_dispersion: 0 = off; ~0.05+ visible
     float thickness;                // KHR_materials_volume: in-medium distance proxy for thin/open meshes; 0 = fall back to back-face actual ray distance
+    int   thinWalled;               // 1 = treat both faces as entry (thin-shell BSDF); 0 = closed mesh
 };
 
 const uint kMaxMaterialTextures = 2048;
@@ -899,15 +900,15 @@ void main() {
         const vec3  H    = sampleVNDF_H(V, N, alpha, u2);
         const float cosH = max(dot(V, H), 0.0);
 
-        // Thin-shell heuristic: a doubleSided transmissive mesh is a thin
-        // sheet (sunglasses lens, leaf, glass pane). Back-face hits on such
-        // meshes are physically another entry into the medium, not an exit —
-        // without this, the back-side Schlick branch produces near-TIR
-        // mirror reflection when the lens is viewed from behind. Closed
-        // single-sided glass meshes (the common case) keep the original
-        // front=enter / back=exit semantics. doubleSided closed meshes are
-        // very rare; if you have one, prefer single-sided rendering.
-        const bool isThinShell = mdesc.doubleSided != 0;
+        // Thin-shell BSDF: explicit per-material opt-in via
+        // MaterialWithThickness::thinWalled. Examples: FFT-displaced ocean
+        // plane, sunglasses lens, leaf, single sheet of glass. Both faces
+        // of a thin shell are entries into the medium (no closed interior),
+        // so back-face hits use eta = 1/ior + Schlick's front-face cosine.
+        // Closed glass meshes (default) keep the standard front=enter /
+        // back=exit semantics — this used to auto-trigger off `doubleSided`,
+        // but doubleSided closed glass (test scenes etc.) was misclassified.
+        const bool isThinShell = mdesc.thinWalled != 0;
         const bool effFront = isFront || isThinShell;
 
         // Schlick Fresnel at the microfacet half-vector. Uses base IOR so the
@@ -922,37 +923,24 @@ void main() {
                 : sqrt(max(0.0, 1.0 - ior_base * ior_base * sin2H));
         const float F = r0 + (1.0 - r0) * pow(1.0 - cosSchlick, 5.0);
 
-        // === Deterministic reflect/refract split ===
-        // Standard PT picks reflect-or-refract via Russian roulette with prob F:
-        // expected radiance is correct but variance is binary. At low F (face-on
-        // water, F≈0.04) the rare bright sky-reflect samples produce fireflies
-        // against frequent dim-refract samples — the dominant noise source on
-        // transmissive surfaces. Splitting evaluates both lobes deterministically:
-        //   • reflect: F · env(reflectDir) · visibility   (delta lobe — analytic)
-        //   • refract: continues the path with weight (1−F) · glassTint
-        // The reflect ray is a shadow ray (any-hit only, NoOpaque) so it costs
-        // ~one BVH traversal. Variance from the Fresnel decision drops to zero;
-        // only the env-direction sampling and downstream path contribute noise.
-        // Net: ~10× lower variance on smooth water/glass at the cost of one
-        // extra shadow ray per transmission hit.
-        const vec3 reflectDir = reflect(I, H);
-        const vec3 reflectOrigin = hitPos + N * 1e-3;
-        shadowVisibility = 1.0;
-        traceRayEXT(topAS,
-                    gl_RayFlagsTerminateOnFirstHitEXT |
-                    gl_RayFlagsSkipClosestHitShaderEXT |
-                    gl_RayFlagsNoOpaqueEXT,
-                    0xff, 1, 0, 1,
-                    reflectOrigin, 0.0, reflectDir, 1e30, 1);
-        vec3 reflectEnv = vec3(0.0);
-        if (shadowVisibility > 0.0) {
-            reflectEnv = sampleEquirect(reflectDir);
-        }
-        const vec3 reflectContrib = F * reflectEnv * shadowVisibility;
-
-        // Refract branch — path continuation. Dispersion stays stochastic per
-        // wavelength (3-channel Cauchy) since refracting the three channels
-        // separately would cost three rays.
+        // === Reflect / refract — two strategies depending on geometry ===
+        // For THIN shells (isThinShell=true: ocean plane, sunglasses lens) we
+        // use a deterministic split: reflect lobe is evaluated analytically as
+        // F · env(reflectDir) · visibility via a shadow ray, refract continues
+        // the path with weight (1−F)·glassTint. Variance from the Fresnel pick
+        // drops to zero — major denoiser-off win on smooth water.
+        //
+        // For CLOSED glass (isThinShell=false: spheres, goblets, vases) we use
+        // the original stochastic split — pick reflect with prob F, refract
+        // with prob (1−F), single ray continues. The shadow-ray approximation
+        // only captures one straight-line through the glass to env, so for
+        // concave geometry where a ray TIRs and bounces multiple times inside
+        // the glass before exiting, multi-bounce energy is lost (manifests as
+        // black bands on goblet stems, etc.). The stochastic path traverses
+        // every internal bounce naturally and recovers that energy.
+        //
+        // Dispersion (KHR_materials_dispersion) stays stochastic per
+        // wavelength regardless of mode — three-channel sampling, ×3 boost.
         float ior = ior_base;
         vec3 channelMask = vec3(1.0);
         if (mdesc.dispersion > 0.0) {
@@ -969,42 +957,90 @@ void main() {
         const vec3 refr = refract(I, H, eta);
         const bool tir = (dot(refr, refr) < 1e-6);
 
-        vec3 wDir = vec3(0.0);
+        // Glass tint (used by both modes). Wraps Beer-Lambert in either the
+        // thin-shell proxy (per-crossing thickness) or the closed-mesh actual-
+        // distance branch.
+        const float cosOut = !tir ? abs(dot(normalize(refr), H)) : 1.0;
+        const float G1out  = smithG1(cosOut, alpha);
+        vec3 tintBase;
+        if (mdesc.ior <= 1.01) {
+            const float albedoLum = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
+            tintBase = mix(vec3(1.0), albedo, smoothstep(0.0, 0.1, albedoLum));
+        } else {
+            tintBase = albedo;
+        }
+        vec3 glassTint = tintBase * G1out;
+        if (mdesc.attenuationDistance > 0.0) {
+            if (isThinShell) {
+                // Thin-shell proxy — use the user-supplied `thickness` as
+                // in-medium distance. Applied at every entry crossing.
+                glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
+                                 vec3(mdesc.thickness / mdesc.attenuationDistance));
+            } else if (!effFront) {
+                // Closed-mesh actual ray distance through the medium —
+                // matches the original (pre-branch) behaviour. An earlier
+                // attempt added a `thickness` fallback when gl_HitTEXT < 1e-2
+                // (mirrored from WGPU); it misfired on thin-walled closed
+                // glass (goblet walls < 1 cm) by replacing the genuine 5 mm
+                // ray distance with an unrelated asset-thickness value, and
+                // over-darkened the glass into solid blue. Keep it simple.
+                glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
+                                 vec3(gl_HitTEXT / mdesc.attenuationDistance));
+            }
+        }
+
+        vec3 reflectContrib = vec3(0.0);
+        vec3 wDir    = vec3(0.0);
         vec3 wOrigin = vec3(0.0);
         vec3 tWeight = vec3(0.0);
-        if (!tir) {
-            wDir = normalize(refr);
-            wOrigin = hitPos - N * 1e-3;
-            const float cosOut = abs(dot(wDir, H));
-            const float G1out  = smithG1(cosOut, alpha);
-            vec3 tintBase;
-            if (mdesc.ior <= 1.01) {
-                // BLEND-mode pass-through (ior≈1): compat shim for assets that
-                // use black baseColor to mean "clear glass".
-                const float albedoLum = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
-                tintBase = mix(vec3(1.0), albedo, smoothstep(0.0, 0.1, albedoLum));
+        bool terminate = false;
+        bool wasReflect = false;
+
+        if (isThinShell) {
+            // ── Deterministic split (variance reduction for thin shells) ──
+            const vec3 reflectDir    = reflect(I, H);
+            const vec3 reflectOrigin = hitPos + N * 1e-3;
+            shadowVisibility = 1.0;
+            traceRayEXT(topAS,
+                        gl_RayFlagsTerminateOnFirstHitEXT |
+                        gl_RayFlagsSkipClosestHitShaderEXT |
+                        gl_RayFlagsNoOpaqueEXT,
+                        0xff, 1, 0, 1,
+                        reflectOrigin, 0.0, reflectDir, 1e30, 1);
+            vec3 reflectEnv = vec3(0.0);
+            if (shadowVisibility > 0.0) {
+                reflectEnv = sampleEquirect(reflectDir);
+            }
+            reflectContrib = F * reflectEnv * shadowVisibility;
+
+            if (!tir) {
+                wDir    = normalize(refr);
+                wOrigin = hitPos - N * 1e-3;
+                tWeight = (1.0 - F) * glassTint * channelMask / (eta * eta);
             } else {
-                tintBase = albedo;
+                // TIR — Schlick gave F=1 already, full reflection captured by
+                // reflectContrib. Terminate path.
+                terminate = true;
             }
-            vec3 glassTint = tintBase * G1out;
-            if (mdesc.attenuationDistance > 0.0) {
-                if (isThinShell) {
-                    glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
-                                     vec3(mdesc.thickness / mdesc.attenuationDistance));
-                } else if (!effFront) {
-                    const float pathLen = (gl_HitTEXT < 1e-2 && mdesc.thickness > 0.0)
-                            ? mdesc.thickness
-                            : gl_HitTEXT;
-                    glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
-                                     vec3(pathLen / mdesc.attenuationDistance));
-                }
+        } else {
+            // ── Stochastic split (original — multi-bounce intact for closed glass) ──
+            if (urand(seed) < F) {
+                wDir       = reflect(I, H);
+                wOrigin    = hitPos + N * 1e-3;
+                tWeight    = vec3(1.0);
+                wasReflect = true;
+            } else if (tir) {
+                // TIR — fall back to mirror reflect.
+                wDir       = reflect(I, H);
+                wOrigin    = hitPos + N * 1e-3;
+                tWeight    = vec3(1.0);
+                wasReflect = true;
+            } else {
+                wDir    = normalize(refr);
+                wOrigin = hitPos - N * 1e-3;
+                tWeight = glassTint * channelMask / (eta * eta);
             }
-            // (1−F) factor accounts for the energy already taken by the reflect
-            // lobe above. Without it we'd over-bright transmissive paths.
-            tWeight = (1.0 - F) * glassTint * channelMask / (eta * eta);
         }
-        // TIR: Schlick already returns F=1 here, so reflectContrib captured the
-        // full reflection. tWeight stays 0, path terminates after this hit.
 
         vec3 emissiveOut = mdesc.emissive * mdesc.emissiveIntensity;
         if (mdesc.emissiveTexIndex >= 0) {
@@ -1014,18 +1050,18 @@ void main() {
         const float emLum0 = dot(emissiveOut, vec3(0.2126, 0.7152, 0.0722));
         if (emLum0 > 20.0) emissiveOut *= 20.0 / emLum0;
         if ((payload.inFlags & 1u) != 0u) emissiveOut = vec3(0.0);
-        // radiance = emissive + analytic reflect-lobe contribution. raygen
-        // adds throughput * payload.radiance to the path total, so the
-        // reflect contribution is correctly scaled by the accumulated path
-        // throughput up to this hit.
+        // For thin-shell mode reflectContrib was captured analytically; for
+        // stochastic mode it stays vec3(0) and the reflect lobe's contribution
+        // arrives via path traversal. raygen adds throughput·radiance to the
+        // total each hit and multiplies throughput by brdfWeight.
         payload.radiance      = emissiveOut + reflectContrib;
         payload.brdfWeight    = tWeight;
         payload.nextOrigin    = wOrigin;
         payload.nextDir       = wDir;
-        // flags=1 terminates path (TIR — no refract direction); flags=4
-        // continues via refract. Reflect lobe was already captured above
-        // so termination doesn't lose energy.
-        payload.flags         = tir ? 1u : 4u;
+        // flags=1 terminates path (only thin-shell + TIR right now);
+        // flags=4 continues. Stochastic mode never terminates here (TIR
+        // falls back to reflect) so the path always continues.
+        payload.flags         = terminate ? 1u : 4u;
         payload.seed          = seed;
         // Primary-tag policy for transmission hits. With deterministic split,
         // every hit captures both reflect and refract contributions, so the
