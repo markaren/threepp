@@ -191,6 +191,7 @@ namespace threepp {
             Buffer index;// .handle == VK_NULL_HANDLE for non-indexed geometry
             Buffer normal;
             Buffer uv;   // .handle == VK_NULL_HANDLE if geometry has no "uv"
+            Buffer foam; // .handle == VK_NULL_HANDLE unless this is an FFT-displaced ocean mesh
             VkDeviceAddress address = 0;
             // Liveness tag: detects dangling-pointer reuse when a BufferGeometry
             // is destroyed (model unloaded) and the C++ allocator hands the
@@ -273,6 +274,7 @@ namespace threepp {
             VkDeviceAddress normalAddress;
             VkDeviceAddress indexAddress;
             VkDeviceAddress uvAddress;// 0 == no UV attribute
+            VkDeviceAddress foamAddress;// 0 == no foam attribute (per-vertex float, written by water_displace.comp)
             uint32_t indexed;
             uint32_t _pad;
         };
@@ -716,6 +718,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->index);
                 destroyBuffer(ctx->allocator(), rec->normal);
                 destroyBuffer(ctx->allocator(), rec->uv);
+                destroyBuffer(ctx->allocator(), rec->foam);
             }
             blasCache.clear();
 
@@ -728,6 +731,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->index);
                 destroyBuffer(ctx->allocator(), rec->normal);
                 destroyBuffer(ctx->allocator(), rec->uv);
+                destroyBuffer(ctx->allocator(), rec->foam);
             }
             skinnedMeshStates.clear();
 
@@ -740,6 +744,7 @@ namespace threepp {
                     destroyBuffer(ctx->allocator(), rec->index);
                     destroyBuffer(ctx->allocator(), rec->normal);
                     destroyBuffer(ctx->allocator(), rec->uv);
+                    destroyBuffer(ctx->allocator(), rec->foam);
                 }
                 if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->scratchA.view, nullptr);
                 if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
@@ -1253,6 +1258,17 @@ namespace threepp {
             if (!blas) return nullptr;
             blas->liveCheck = dm.geometry();
 
+            // Per-vertex foam coverage (1 float per vertex, [0..1]). Written
+            // by water_displace.comp via Jacobian of horizontal displacement;
+            // read by closest_hit.rchit to lerp roughness/albedo toward white
+            // where the surface is folding (= breaking-wave whitewater).
+            blas->foam = createBuffer(
+                    ctx->allocator(), ctx->device(),
+                    VkDeviceSize(vertexCount) * sizeof(float),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO);
+
             auto state = std::make_unique<DisplacedMeshState>();
             state->blas = std::move(blas);
             state->vertexCount = vertexCount;
@@ -1502,6 +1518,7 @@ namespace threepp {
             struct DisplacePc {
                 VkDeviceAddress posOut;
                 VkDeviceAddress normOut;
+                VkDeviceAddress foamOut;
                 uint32_t vertexCount;
                 uint32_t gridDim;
                 float    planeSize;
@@ -1514,6 +1531,7 @@ namespace threepp {
             } pc{};
             pc.posOut       = st.blas->vertex.address;
             pc.normOut      = st.blas->normal.address;
+            pc.foamOut      = st.blas->foam.address;// 0 if foam buffer not allocated → shader skips foam write
             pc.vertexCount  = st.vertexCount;
             pc.gridDim      = st.gridDim;
             pc.planeSize    = st.planeSize;
@@ -2392,6 +2410,7 @@ namespace threepp {
                         destroyBuffer(ctx->allocator(), rec->index);
                         destroyBuffer(ctx->allocator(), rec->normal);
                         destroyBuffer(ctx->allocator(), rec->uv);
+                        destroyBuffer(ctx->allocator(), rec->foam);
                         it = blasCache.erase(it);
                     } else {
                         ++it;
@@ -2407,6 +2426,7 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), rec->index);
                             destroyBuffer(ctx->allocator(), rec->normal);
                             destroyBuffer(ctx->allocator(), rec->uv);
+                            destroyBuffer(ctx->allocator(), rec->foam);
                         }
                         it = skinnedMeshStates.erase(it);
                     } else {
@@ -2424,6 +2444,7 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), rec->index);
                             destroyBuffer(ctx->allocator(), rec->normal);
                             destroyBuffer(ctx->allocator(), rec->uv);
+                            destroyBuffer(ctx->allocator(), rec->foam);
                         }
                         if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->scratchA.view, nullptr);
                         if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
@@ -2513,6 +2534,7 @@ namespace threepp {
                 gdesc.normalAddress = recPtr->normal.address;
                 gdesc.indexAddress  = recPtr->index.address;
                 gdesc.uvAddress     = recPtr->uv.address;// 0 if no UV attribute
+                gdesc.foamAddress   = recPtr->foam.address;// 0 unless this is an FFT-displaced ocean mesh
                 gdesc.indexed = recPtr->index.handle != VK_NULL_HANDLE ? 1u : 0u;
                 gdesc._pad = 0;
                 geomDescs.push_back(gdesc);
@@ -3677,11 +3699,11 @@ namespace threepp {
                   "vkCreateDescriptorSetLayout(displace)");
 
             // Push constants — match water_displace.comp's `Pc` struct:
-            //   2 × VkDeviceAddress (16) + 9 × u32/float (36) = 52 bytes.
+            //   3 × VkDeviceAddress (24) + 9 × u32/float (36) = 60 bytes.
             VkPushConstantRange pcr{};
             pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
             pcr.offset     = 0;
-            pcr.size       = 52;
+            pcr.size       = 60;
 
             VkPipelineLayoutCreateInfo plci{};
             plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;

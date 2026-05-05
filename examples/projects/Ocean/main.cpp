@@ -93,7 +93,7 @@ namespace {
         mat->thickness = 2.0f;
         mat->attenuationColor = Color(0.10f, 0.45f, 0.55f);
         mat->attenuationDistance = 3.0f;
-        // mat->clearcoat = 0.1;
+        mat->clearcoat = 0.1;
         // No clearcoat: with roughness=0 the base specular is already a clean
         // delta lobe and Fresnel handles reflect/refract via the transmission
         // BSDF. Stacking a clearcoat lobe on top was the dominant noise
@@ -114,7 +114,7 @@ int main() {
 
     Canvas canvas("Vulkan PT — Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
     VulkanRenderer renderer(canvas);
-    renderer.setDenoise(false);
+    renderer.setDenoise(true);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     // puresky_2k.hdr is a very bright daylight env. ACES desaturates strongly
     // at high luminance so the sand goes white-ish even at 0.5; 0.3 keeps

@@ -1,7 +1,8 @@
 #version 460
-#extension GL_EXT_scalar_block_layout    : require
-#extension GL_EXT_buffer_reference       : require
-#extension GL_EXT_buffer_reference2      : require
+#extension GL_EXT_scalar_block_layout                   : require
+#extension GL_EXT_buffer_reference                      : require
+#extension GL_EXT_buffer_reference2                     : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 // Writes displaced positions and normals for an FFT-driven ocean surface
 // directly into the BLAS vertex/normal buffers (host-mapped, same memory
@@ -36,10 +37,12 @@ layout(set = 0, binding = 5) uniform sampler2D displace2;
 
 layout(buffer_reference, scalar) buffer PosBuf  { float v[]; };
 layout(buffer_reference, scalar) buffer NormBuf { float v[]; };
+layout(buffer_reference, scalar) buffer FoamBuf { float v[]; };
 
 layout(push_constant, scalar) uniform Pc {
-    PosBuf  posOut;
-    NormBuf normOut;
+    PosBuf   posOut;
+    NormBuf  normOut;
+    uint64_t foamAddr;      // 0 = no foam buffer; non-zero is constructed into a FoamBuf below
     uint    vertexCount;
     uint    gridDim;        // sqrt(vertexCount), assumes square grid
     float   planeSize;      // total mesh edge length, world metres
@@ -109,15 +112,15 @@ void main() {
     const vec3 disp = sampleDisplacement(rest.xz);
     const vec3 outPos = rest + disp;
 
-    // Finite-difference normals on the displaced height field. Step is one
-    // texel of the inner cascade — small enough that aliasing is rare,
-    // large enough that single-precision noise doesn't dominate.
+    // Finite-difference samples at four neighbours. Reused for both the
+    // height-only normal computation (already there) and the Jacobian of
+    // the horizontal displacement (new — drives foam coverage).
     const float eps = pc.tileSize0 / 256.0;
-    const float hL = sampleDisplacement(rest.xz + vec2(-eps, 0.0)).y;
-    const float hR = sampleDisplacement(rest.xz + vec2( eps, 0.0)).y;
-    const float hD = sampleDisplacement(rest.xz + vec2(0.0, -eps)).y;
-    const float hU = sampleDisplacement(rest.xz + vec2(0.0,  eps)).y;
-    const vec3 n = normalize(vec3(hL - hR, 2.0 * eps, hD - hU));
+    const vec3 dL = sampleDisplacement(rest.xz + vec2(-eps, 0.0));
+    const vec3 dR = sampleDisplacement(rest.xz + vec2( eps, 0.0));
+    const vec3 dD = sampleDisplacement(rest.xz + vec2(0.0, -eps));
+    const vec3 dU = sampleDisplacement(rest.xz + vec2(0.0,  eps));
+    const vec3 n = normalize(vec3(dL.y - dR.y, 2.0 * eps, dD.y - dU.y));
 
     pc.posOut.v[i * 3u + 0u] = outPos.x;
     pc.posOut.v[i * 3u + 1u] = outPos.y;
@@ -126,4 +129,26 @@ void main() {
     pc.normOut.v[i * 3u + 0u] = n.x;
     pc.normOut.v[i * 3u + 1u] = n.y;
     pc.normOut.v[i * 3u + 2u] = n.z;
+
+    // Jacobian of the horizontal map (x, z) → (x + Dx, z + Dz). When the
+    // determinant goes below ~1, the surface is compressing — at and below 0
+    // it has folded over itself, the classic Tessendorf signature of a
+    // breaking wave / whitewater region.
+    //   J = (1 + ∂Dx/∂x)(1 + ∂Dz/∂z) − (∂Dx/∂z)(∂Dz/∂x)
+    // Foam coverage maps this onto [0..1] by remapping the band where J
+    // crosses 1: clamp((foamThresh − J) / foamWidth, 0, 1). Threshold and
+    // width are taste-tuned for "whitecaps on the steepest crests, not the
+    // entire surface". Closest_hit shader interpolates this per-fragment.
+    if (pc.foamAddr != 0ul) {
+        FoamBuf foamOut = FoamBuf(pc.foamAddr);
+        const float dDxDx = (dR.x - dL.x) * 0.5 / eps;
+        const float dDxDz = (dU.x - dD.x) * 0.5 / eps;
+        const float dDzDx = (dR.z - dL.z) * 0.5 / eps;
+        const float dDzDz = (dU.z - dD.z) * 0.5 / eps;
+        const float J = (1.0 + dDxDx) * (1.0 + dDzDz) - dDxDz * dDzDx;
+        const float foamThresh = 0.6;
+        const float foamWidth  = 0.6;
+        const float foam = clamp((foamThresh - J) / foamWidth, 0.0, 1.0);
+        foamOut.v[i] = foam;
+    }
 }

@@ -40,12 +40,14 @@ layout(buffer_reference, scalar) readonly buffer VertexBuf { float p[]; };
 layout(buffer_reference, scalar) readonly buffer NormalBuf  { float n[]; };
 layout(buffer_reference, scalar) readonly buffer IndexBuf   { uint  i[]; };
 layout(buffer_reference, scalar) readonly buffer UvBuf      { float u[]; };
+layout(buffer_reference, scalar) readonly buffer FoamBuf    { float f[]; };
 
 struct GeometryDesc {
     uint64_t vertexAddress;
     uint64_t normalAddress;
     uint64_t indexAddress;
     uint64_t uvAddress;// 0 == no UV attribute
+    uint64_t foamAddress;// 0 == no foam attribute (per-vertex float; written by water_displace.comp for ocean meshes)
     uint     indexed;
     uint     _pad;
 };
@@ -626,6 +628,19 @@ void main() {
     const vec3 n1 = vec3(nb.n[idx.y * 3 + 0], nb.n[idx.y * 3 + 1], nb.n[idx.y * 3 + 2]);
     const vec3 n2 = vec3(nb.n[idx.z * 3 + 0], nb.n[idx.z * 3 + 1], nb.n[idx.z * 3 + 2]);
 
+    // Per-vertex foam coverage [0..1] (FFT-Tessendorf Jacobian < 1 → folding
+    // → whitewater). Interpolated across the triangle and used downstream to
+    // bleach albedo and pin roughness toward 1 where the surface breaks. 0
+    // for any non-DisplacedMesh geometry (foamAddress is null).
+    float foamCoverage = 0.0;
+    if (gdesc.foamAddress != 0ul) {
+        FoamBuf fb = FoamBuf(gdesc.foamAddress);
+        const float f0 = fb.f[idx.x];
+        const float f1 = fb.f[idx.y];
+        const float f2 = fb.f[idx.z];
+        foamCoverage = clamp(w * f0 + attribs.x * f1 + attribs.y * f2, 0.0, 1.0);
+    }
+
     const vec3 nObj = normalize(w * n0 + attribs.x * n1 + attribs.y * n2);
     const vec3 Nworld = normalize(transpose(mat3(gl_WorldToObjectEXT)) * nObj);
 
@@ -760,7 +775,7 @@ void main() {
         const int idxClamped = clamp(mdesc.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
         albedoSample = texture(albedoMaps[idxClamped], uvAlbedo).rgb;
     }
-    const vec3  albedo    = mdesc.albedo * albedoSample;
+    vec3 albedo = mdesc.albedo * albedoSample;
 
     // glTF packs roughness in .g and metalness in .b; threepp's metalnessMap /
     // roughnessMap typically point at the same packed texture, so the bindless
@@ -777,6 +792,17 @@ void main() {
     }
     roughness = clamp(roughness, 0.04, 1.0);
     metalness = clamp(metalness, 0.0,  1.0);
+
+    // Foam application: folded-surface vertices (foamCoverage > 0, set by
+    // water_displace.comp via the Tessendorf Jacobian) bleach the albedo
+    // toward white and push roughness toward 1.0 (fully diffuse). The
+    // transmission lobe also reads `transmission` later in the shader; we
+    // suppress it on heavy foam so whitecaps read as opaque whitewater
+    // rather than tinted glass-foam. No-op when foamCoverage = 0.
+    if (foamCoverage > 0.0) {
+        albedo    = mix(albedo,    vec3(1.0), foamCoverage);
+        roughness = mix(roughness, 1.0,       foamCoverage);
+    }
 
     vec3 F0 = mix(vec3(0.04) * mdesc.specularIntensity * mdesc.specularColor, albedo, metalness);
     // Thin-film iridescence layer (KHR_materials_iridescence). Modulates F0
@@ -859,6 +885,9 @@ void main() {
         const int i = clamp(mdesc.transmissionTexIndex, 0, int(kMaxMaterialTextures) - 1);
         transmission *= texture(albedoMaps[i], uvTransmission).r;
     }
+    // Foam suppresses transmission so whitecaps read as opaque whitewater
+    // rather than tinted glass. mix toward 0 by foamCoverage.
+    transmission *= (1.0 - foamCoverage);
     if (transmission > 0.0 && urand(seed) < transmission) {
         const float ior_base = max(mdesc.ior, 1.0);
         const vec3  I        = gl_WorldRayDirectionEXT;
