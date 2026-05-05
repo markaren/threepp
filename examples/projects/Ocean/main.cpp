@@ -35,14 +35,11 @@ namespace {
         // Pure water has no diffuse pigment — the blue comes from Beer-Lambert
         // absorption through the medium, not albedo.
         mat->color = Color::white;
-        // Small roughness simulates the sub-pixel chop the FFT can't resolve
-        // (smallest resolved wavelength ≈ 6 m at 256² over 800 m, so anything
-        // finer is missing). A low microfacet roughness scatters a little
-        // around the perfect reflection direction → the bright sun smears
-        // into a "glitter path" across the wave field instead of a single
-        // hot pixel, which is the visual cue that sells "ocean" more than
-        // any other detail. Real-time games do exactly this.
-        mat->roughness = 0.04f;
+        // Small roughness simulates the sub-pixel chop the FFT can't resolve.
+        // 0.02 keeps the glitter tight (sharper specular highlights, fewer
+        // distributed sparkles) — denoiser-off output reads as "specular
+        // glints on water" rather than "scattered noise".
+        mat->roughness = 0.02f;
         mat->metalness = 0.0f;
         mat->setIor(1.33f);
         mat->transmission = 1.0f;
@@ -100,7 +97,7 @@ int main() {
     // CDF + MIS will importance-sample it), so the directional is mostly
     // here to drive the photon-mapping caustics pass — kept gentle so it
     // doesn't double up with the env's own sun on the surface.
-    auto sun = DirectionalLight::create(Color(1.0f, 0.95f, 0.85f), 2.5f);
+    auto sun = DirectionalLight::create(Color(1.0f, 0.95f, 0.85f), 1.0f);
     sun->position.set(2.f, 5.f, 2.f);
     Object3D sunTarget;
     sunTarget.position.set(0.f, 0.f, 0.f);
@@ -128,20 +125,17 @@ int main() {
     oceanGeo->rotateX(-math::PI / 2.f);
     auto oceanMat = makeOceanMaterial();
     auto ocean = DisplacedMesh::create(oceanGeo, oceanMat);
-    // Three-cascade FFT (WebTide-style):
+    // Two-cascade FFT (cascade 2 disabled):
     //   tileSize0 = 1000 m → big swells, dominant macro shapes.
     //   tileSize1 =  100 m → mid-frequency waves filling each swell face.
-    //   tileSize2 =    8 m → fine ripples / chop, the per-wave-face detail.
-    // Cascade 2's lower bound is set by the mesh resolving ability: at 1.95 m
-    // vertex spacing (512² mesh over 1000 m), 8 m wavelengths have ~4 mesh
-    // samples per wavelength — the alias floor. Going below ~6 m at this
-    // mesh density produces spike-crest aliasing.
-    // Each cascade is band-passed in k-space (PhillipsSpectrum.kMin/kMax)
-    // so they stack cleanly without double-counting wavelengths the
-    // adjacent band already covers.
+    // Cascade 2 was emitting wavelengths below the 1.95 m mesh resolving
+    // limit, which displayed as random per-vertex displacement noise that
+    // the denoiser couldn't filter (legitimately high-frequency, edge-
+    // preserving). Dropping it gives a cleaner raw image; the lost detail
+    // band is below where the mesh could honestly display it anyway.
     ocean->params.tileSize0   = kTileSize;
     ocean->params.tileSize1   = 100.0f;
-    ocean->params.tileSize2   = 8.0f;
+    ocean->params.tileSize2   = 0.0f;
     ocean->params.windTheta   = 0.6f;       // wind slightly off the X axis
     ocean->params.windSpeed   = 20.0f;      // fresh breeze tuned to the larger 1 km extent
     ocean->params.waveScale   = 1.0f;
