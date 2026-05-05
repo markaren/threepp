@@ -33,7 +33,14 @@ const float PI = 3.14159265358979;
 
 float phillips2D(vec2 k) {
     if (length(k) < 1e-4) return 0.0;
-    const float A = 1.0;
+    // Tessendorf "Phillips constant". Empirically calibrated; the literature
+    // values range 1e-4 to 1e-2 depending on how the rest of the chain
+    // (IFFT normalisation, displace `1/L` divisor) absorbs constants. With
+    // un-normalised radix-2 butterflies + `* invTile` in water_displace.comp,
+    // 1e-2 produces physically-scaled wave heights (Beaufort 4–5 wind →
+    // ~1–2 m waves). A = 1.0 was 100× too energetic in spectrum, ~10× too
+    // tall in amplitude — visible as gale-force waves at moderate wind.
+    const float A = 0.01;
     const vec2  windDir = vec2(cos(P.windTheta), sin(P.windTheta));
     const float g = 9.81;
     const float L = P.windSpeed * P.windSpeed / g;

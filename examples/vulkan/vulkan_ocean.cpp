@@ -182,8 +182,14 @@ int main() {
     ocean->params.tileSize1   = 100.0f;
     ocean->params.tileSize2   = 8.0f;
     ocean->params.windTheta   = 0.6f;       // wind slightly off the X axis
-    ocean->params.windSpeed   = 20.0f;      // fresh breeze tuned to the larger 1 km extent
-    ocean->params.waveScale   = 0.1f;
+    // windSpeed scales wave amplitude as V⁴ in Phillips, so it's the
+    // dominant lever for "how big is the sea": 20 m/s = gale (10 m mountain
+    // crests, dwarfs the boat), 8–10 = Beaufort 4–5 moderate sea (1–2 m
+    // waves, visible chop without overpowering geometry). waveScale should
+    // stay near 1 (physical) — keeping it at 0.1 just attenuates the entire
+    // multi-cascade detail and reads as a glassy lake.
+    ocean->params.windSpeed   = 10.0f;
+    ocean->params.waveScale   = 1.0f;
     ocean->params.choppiness  = 0.55f;      // sharper crests, more visible wave-folding
     ocean->params.textureSize = kFftSize;
     scene.add(ocean);
