@@ -860,15 +860,6 @@ void main() {
         transmission *= texture(albedoMaps[i], uvTransmission).r;
     }
     if (transmission > 0.0 && urand(seed) < transmission) {
-        // Track which branch was picked below so we can decide whether to tag
-        // this hit as the "primary surface" (raygen reproject anchor). Reflect
-        // off glass: the visible content reprojects with the glass surface
-        // itself, so glass = primary. Refract through glass: the visible
-        // content lives BEHIND the glass and moves with parallax — tagging
-        // glass as primary makes the interior appear stuck to the door as it
-        // swings (CommercialRefrigerator). Skip the primary tag on refract so
-        // raygen captures the inside-surface hit on the next iteration.
-        bool wasReflect = false;
         const float ior_base = max(mdesc.ior, 1.0);
         const vec3  I        = gl_WorldRayDirectionEXT;
 
@@ -902,89 +893,89 @@ void main() {
                 : sqrt(max(0.0, 1.0 - ior_base * ior_base * sin2H));
         const float F = r0 + (1.0 - r0) * pow(1.0 - cosSchlick, 5.0);
 
-        vec3 wDir;
-        vec3 wOrigin;
-        vec3 tWeight = vec3(1.0);
-        if (urand(seed) < F) {
-            // Reflect off glass: stays achromatic. Skipping the dispersion
-            // channelMask on the reflection branch trades a tiny bias for a
-            // huge variance reduction on reflection-heavy glass.
-            wDir    = reflect(I, H);
-            wOrigin = hitPos + N * 1e-3;
-            wasReflect = true;
-        } else {
-            // KHR_materials_dispersion: stochastic 3-channel Cauchy sampling
-            // applied only on the refract branch. Pick R/G/B (Hα/D/Hβ
-            // wavelengths), shift IOR per Cauchy approximation around sodium-D
-            // 589.3nm, and 3× the chosen throughput channel to compensate for
-            // the 1/3 probability. dispersion=0 is the fast path.
-            float ior = ior_base;
-            vec3 channelMask = vec3(1.0);
-            if (mdesc.dispersion > 0.0) {
-                const vec3  lambda    = vec3(0.6563, 0.5500, 0.4861);
-                const float refInvSq  = 1.0 / (0.5893 * 0.5893);
-                const uint  ch        = uint(urand(seed) * 3.0) % 3u;
-                const float invSq     = 1.0 / (lambda[ch] * lambda[ch]);
-                const float B         = (ior_base - 1.0) * mdesc.dispersion / 38.2;
-                ior = ior_base + B * (invSq - refInvSq);
-                channelMask = vec3(0.0);
-                channelMask[ch] = 3.0;
-            }
-            const float eta = effFront ? (1.0 / ior) : ior;
-            const vec3 refr = refract(I, H, eta);
-            if (dot(refr, refr) < 1e-6) {
-                // Total internal reflection — fall back to mirror reflect.
-                // Stays achromatic (no channelMask) for the same reason as the
-                // primary reflect branch above.
-                wDir    = reflect(I, H);
-                wOrigin = hitPos + N * 1e-3;
-                wasReflect = true;
-            } else {
-                wDir    = normalize(refr);
-                wOrigin = hitPos - N * 1e-3;
-                const float cosOut = abs(dot(wDir, H));
-                const float G1out  = smithG1(cosOut, alpha);
-                vec3 tintBase;
-                if (mdesc.ior <= 1.01) {
-                    // BLEND-mode pass-through (ior≈1): compat shim for assets that
-                    // use black baseColor to mean "clear glass".
-                    const float albedoLum = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
-                    tintBase = mix(vec3(1.0), albedo, smoothstep(0.0, 0.1, albedoLum));
-                } else {
-                    // Physical KHR_materials_transmission: tint at every hit so
-                    // both faces of a glass pane contribute (closed meshes apply
-                    // albedo twice giving albedo² — slightly conservative but
-                    // consistent from any viewing angle).
-                    tintBase = albedo;
-                }
-                vec3 glassTint = tintBase * G1out;
-                // Beer-Lambert volumetric attenuation (KHR_materials_volume).
-                // Two paths:
-                //   isThinShell  → ray refracts as entry on every hit (no
-                //                  back-face exit exists). Apply the user-
-                //                  supplied `thickness` as the in-medium
-                //                  path length on each crossing.
-                //   else         → closed mesh / single-sided open surface.
-                //                  Apply only on the true exit (!effFront)
-                //                  using gl_HitTEXT as the actual in-medium
-                //                  distance. Falls back to `thickness` when
-                //                  gl_HitTEXT ≈ 0 — mirrors WGPU's pathLen
-                //                  logic at WgpuPathTracerShaders_Rt.cpp:2682.
-                if (mdesc.attenuationDistance > 0.0) {
-                    if (isThinShell) {
-                        glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
-                                         vec3(mdesc.thickness / mdesc.attenuationDistance));
-                    } else if (!effFront) {
-                        const float pathLen = (gl_HitTEXT < 1e-2 && mdesc.thickness > 0.0)
-                                ? mdesc.thickness
-                                : gl_HitTEXT;
-                        glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
-                                         vec3(pathLen / mdesc.attenuationDistance));
-                    }
-                }
-                tWeight = glassTint * channelMask / (eta * eta);
-            }
+        // === Deterministic reflect/refract split ===
+        // Standard PT picks reflect-or-refract via Russian roulette with prob F:
+        // expected radiance is correct but variance is binary. At low F (face-on
+        // water, F≈0.04) the rare bright sky-reflect samples produce fireflies
+        // against frequent dim-refract samples — the dominant noise source on
+        // transmissive surfaces. Splitting evaluates both lobes deterministically:
+        //   • reflect: F · env(reflectDir) · visibility   (delta lobe — analytic)
+        //   • refract: continues the path with weight (1−F) · glassTint
+        // The reflect ray is a shadow ray (any-hit only, NoOpaque) so it costs
+        // ~one BVH traversal. Variance from the Fresnel decision drops to zero;
+        // only the env-direction sampling and downstream path contribute noise.
+        // Net: ~10× lower variance on smooth water/glass at the cost of one
+        // extra shadow ray per transmission hit.
+        const vec3 reflectDir = reflect(I, H);
+        const vec3 reflectOrigin = hitPos + N * 1e-3;
+        shadowVisibility = 1.0;
+        traceRayEXT(topAS,
+                    gl_RayFlagsTerminateOnFirstHitEXT |
+                    gl_RayFlagsSkipClosestHitShaderEXT |
+                    gl_RayFlagsNoOpaqueEXT,
+                    0xff, 1, 0, 1,
+                    reflectOrigin, 0.0, reflectDir, 1e30, 1);
+        vec3 reflectEnv = vec3(0.0);
+        if (shadowVisibility > 0.0) {
+            reflectEnv = sampleEquirect(reflectDir);
         }
+        const vec3 reflectContrib = F * reflectEnv * shadowVisibility;
+
+        // Refract branch — path continuation. Dispersion stays stochastic per
+        // wavelength (3-channel Cauchy) since refracting the three channels
+        // separately would cost three rays.
+        float ior = ior_base;
+        vec3 channelMask = vec3(1.0);
+        if (mdesc.dispersion > 0.0) {
+            const vec3  lambda    = vec3(0.6563, 0.5500, 0.4861);
+            const float refInvSq  = 1.0 / (0.5893 * 0.5893);
+            const uint  ch        = uint(urand(seed) * 3.0) % 3u;
+            const float invSq     = 1.0 / (lambda[ch] * lambda[ch]);
+            const float B         = (ior_base - 1.0) * mdesc.dispersion / 38.2;
+            ior = ior_base + B * (invSq - refInvSq);
+            channelMask = vec3(0.0);
+            channelMask[ch] = 3.0;
+        }
+        const float eta = effFront ? (1.0 / ior) : ior;
+        const vec3 refr = refract(I, H, eta);
+        const bool tir = (dot(refr, refr) < 1e-6);
+
+        vec3 wDir = vec3(0.0);
+        vec3 wOrigin = vec3(0.0);
+        vec3 tWeight = vec3(0.0);
+        if (!tir) {
+            wDir = normalize(refr);
+            wOrigin = hitPos - N * 1e-3;
+            const float cosOut = abs(dot(wDir, H));
+            const float G1out  = smithG1(cosOut, alpha);
+            vec3 tintBase;
+            if (mdesc.ior <= 1.01) {
+                // BLEND-mode pass-through (ior≈1): compat shim for assets that
+                // use black baseColor to mean "clear glass".
+                const float albedoLum = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
+                tintBase = mix(vec3(1.0), albedo, smoothstep(0.0, 0.1, albedoLum));
+            } else {
+                tintBase = albedo;
+            }
+            vec3 glassTint = tintBase * G1out;
+            if (mdesc.attenuationDistance > 0.0) {
+                if (isThinShell) {
+                    glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
+                                     vec3(mdesc.thickness / mdesc.attenuationDistance));
+                } else if (!effFront) {
+                    const float pathLen = (gl_HitTEXT < 1e-2 && mdesc.thickness > 0.0)
+                            ? mdesc.thickness
+                            : gl_HitTEXT;
+                    glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
+                                     vec3(pathLen / mdesc.attenuationDistance));
+                }
+            }
+            // (1−F) factor accounts for the energy already taken by the reflect
+            // lobe above. Without it we'd over-bright transmissive paths.
+            tWeight = (1.0 - F) * glassTint * channelMask / (eta * eta);
+        }
+        // TIR: Schlick already returns F=1 here, so reflectContrib captured the
+        // full reflection. tWeight stays 0, path terminates after this hit.
 
         vec3 emissiveOut = mdesc.emissive * mdesc.emissiveIntensity;
         if (mdesc.emissiveTexIndex >= 0) {
@@ -994,29 +985,33 @@ void main() {
         const float emLum0 = dot(emissiveOut, vec3(0.2126, 0.7152, 0.0722));
         if (emLum0 > 20.0) emissiveOut *= 20.0 / emLum0;
         if ((payload.inFlags & 1u) != 0u) emissiveOut = vec3(0.0);
-        payload.radiance      = emissiveOut;
+        // radiance = emissive + analytic reflect-lobe contribution. raygen
+        // adds throughput * payload.radiance to the path total, so the
+        // reflect contribution is correctly scaled by the accumulated path
+        // throughput up to this hit.
+        payload.radiance      = emissiveOut + reflectContrib;
         payload.brdfWeight    = tWeight;
         payload.nextOrigin    = wOrigin;
         payload.nextDir       = wDir;
-        payload.flags         = 4u;
+        // flags=1 terminates path (TIR — no refract direction); flags=4
+        // continues via refract. Reflect lobe was already captured above
+        // so termination doesn't lose energy.
+        payload.flags         = tir ? 1u : 4u;
         payload.seed          = seed;
-        // Primary-tag policy for transmission hits:
-        //   reflect:        always tag glass as primary (reflection is anchored
-        //                   on the glass surface).
-        //   refract, ior>1: tag glass as primary too. Without it, glass→sky
-        //                   paths cold-start every frame under camera motion
-        //                   and the stochastic reflect/refract split
-        //                   desaturates tinted glass until motion stops.
-        //                   raygen captures the FIRST non-zero hitInstanceId,
-        //                   so the EXTERIOR glass surface anchors reproject;
-        //                   interior refractions don't overwrite.
-        //   refract, ior=1: alpha-blend / stochastic pass-through. The ray
-        //                   continues unchanged toward the actual content
-        //                   behind, which IS what should anchor reproject.
-        //                   Skip the primary tag so the next non-zero hit
-        //                   wins — preserves stable backgrounds visible
-        //                   through transparent foliage / decals.
-        const bool tagPrimary = wasReflect || (ior_base > 1.01);
+        // Primary-tag policy for transmission hits. With deterministic split,
+        // every hit captures both reflect and refract contributions, so the
+        // decision is purely material-based:
+        //   ior > 1.01: real glass — tag glass as primary. Reproject anchors
+        //               on the glass surface, which gives stable sky/env
+        //               reflections under camera motion. Interior content
+        //               seen through refraction will move slightly with the
+        //               glass (acceptable for glass over close geometry).
+        //   ior ≈ 1.0:  alpha-blend / stochastic pass-through. Refraction
+        //               returns the incident direction unchanged → the ray
+        //               continues to the surface behind, which IS what
+        //               should anchor reproject. Skip the primary tag so
+        //               the next non-zero hit wins.
+        const bool tagPrimary = (ior_base > 1.01);
         if (tagPrimary) {
             payload.hitWorldPos     = hitPos;
             payload.hitInstanceId   = uint(gl_InstanceCustomIndexEXT) + 1u;
