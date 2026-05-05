@@ -1,0 +1,70 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+
+// Time-evolves the static h0(k) into ht(k, t), and emits the related
+// frequency-domain quantities the IFFT chain needs:
+//   ht           — height field spectrum (RG32F: real, imag)
+//   dht          — vertical-derivative spectrum (RG32F)
+//   displacement — packed horizontal displacement (RG32F: dx in .r, dz in .g
+//                  via the same complex trick — IFFT of this yields a vec2
+//                  per texel where .r=dx_spatial, .g=dz_spatial)
+//   jacDiag      — Jacobian diagonal spectrum (RG32F, used for foam input)
+//
+// Dispatched once per frame per cascade.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0)            uniform sampler2D H0;
+layout(set = 0, binding = 1, rg32f)     uniform writeonly image2D HT;
+layout(set = 0, binding = 2, rg32f)     uniform writeonly image2D DHT;
+layout(set = 0, binding = 3, rg32f)     uniform writeonly image2D Displacement;
+layout(set = 0, binding = 4, scalar) uniform Params {
+    uint  textureSize;
+    float tileSize;
+    float elapsedSeconds;
+} P;
+layout(set = 0, binding = 5, rg32f)     uniform writeonly image2D JacDiag;
+
+const float PI = 3.14159265358979;
+
+vec2 complexMul(vec2 a, vec2 b) {
+    return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+float omega(vec2 k) { return sqrt(length(k) * 9.81); }
+
+void main() {
+    const ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    if (id.x >= int(P.textureSize) || id.y >= int(P.textureSize)) return;
+
+    const float deltaK = 2.0 * PI / P.tileSize;
+    const float n = float(id.x) - float(P.textureSize) * 0.5;
+    const float m = float(id.y) - float(P.textureSize) * 0.5;
+    const vec2  k = vec2(n, m) * deltaK;
+
+    const float theta    = P.elapsedSeconds * omega(k);
+    const vec2  exponent = vec2(cos(theta), sin(theta));
+    const vec4  h0       = texelFetch(H0, id, 0);
+
+    // ht(k,t) = h0(k) * e^{i ω t} + conj(h0(-k)) * e^{-i ω t}
+    const vec2 h = complexMul(h0.xy, exponent)
+                 + complexMul(h0.zw, vec2(exponent.x, -exponent.y));
+
+    // i*h (90-degree phase shift used by the displacement and gradient terms).
+    const vec2 ih  = vec2(-h.y, h.x);
+    const vec2 ikh = complexMul(k, ih);
+
+    const float kLen = length(k) + 1e-3;
+    const vec2  displacement = ikh / kLen;
+
+    // Packed Jacobian diagonal spectrum: real part = (kx² Hx − kz² Hy)/|k|,
+    // imag part = (kx² Hy + kz² Hx)/|k|. IFFT yields (Jxx_spatial,
+    // Jzz_spatial) per texel. WebTide uses this as a foam-generation input.
+    const float jacR = (k.x * k.x * h.x - k.y * k.y * h.y) / kLen;
+    const float jacI = (k.x * k.x * h.y + k.y * k.y * h.x) / kLen;
+
+    imageStore(HT,           id, vec4(h,            0.0, 0.0));
+    imageStore(DHT,          id, vec4(ikh,          0.0, 0.0));
+    imageStore(Displacement, id, vec4(displacement, 0.0, 0.0));
+    imageStore(JacDiag,      id, vec4(jacR, jacI,   0.0, 0.0));
+}

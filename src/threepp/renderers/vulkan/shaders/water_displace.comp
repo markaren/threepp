@@ -1,0 +1,129 @@
+#version 460
+#extension GL_EXT_scalar_block_layout    : require
+#extension GL_EXT_buffer_reference       : require
+#extension GL_EXT_buffer_reference2      : require
+
+// Writes displaced positions and normals for an FFT-driven ocean surface
+// directly into the BLAS vertex/normal buffers (host-mapped, same memory
+// the AS build reads). The path tracer's BLAS-rebuild-in-place mechanism
+// (refreshSkinnedBlas in VulkanRenderer.cpp) then refits the AS against
+// these new positions and the TLAS sees an updated bounding volume.
+//
+// One thread per vertex. Vertex i is addressed by grid index (ix, iz) =
+// (i % gridDim, i / gridDim) — a regular tessellated PlaneGeometry is
+// assumed, rest position derived implicitly. This sidesteps the chicken-
+// and-egg problem of needing rest positions when the buffer we read is
+// also the buffer we write.
+//
+// Per cascade we sample TWO RG32F textures from the IFFT chain:
+//   heightN.r       = vertical displacement  (dy)
+//   displaceN.r/.g  = horizontal displacement (dx, dz)
+// Cascades that aren't bound on the host side are gated off by cascadeMask.
+//
+// Normals come from finite differences on the height field (4-tap central
+// difference). The path tracer's transmission Fresnel is sensitive to the
+// surface normal so we compute it from the same cascades that drove the
+// displacement — keeps the geometry and shading consistent.
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) uniform sampler2D height0;
+layout(set = 0, binding = 1) uniform sampler2D displace0;
+layout(set = 0, binding = 2) uniform sampler2D height1;
+layout(set = 0, binding = 3) uniform sampler2D displace1;
+layout(set = 0, binding = 4) uniform sampler2D height2;
+layout(set = 0, binding = 5) uniform sampler2D displace2;
+
+layout(buffer_reference, scalar) buffer PosBuf  { float v[]; };
+layout(buffer_reference, scalar) buffer NormBuf { float v[]; };
+
+layout(push_constant, scalar) uniform Pc {
+    PosBuf  posOut;
+    NormBuf normOut;
+    uint    vertexCount;
+    uint    gridDim;        // sqrt(vertexCount), assumes square grid
+    float   planeSize;      // total mesh edge length, world metres
+    float   tileSize0;      // FFT tile size for cascade 0, world metres
+    float   tileSize1;
+    float   tileSize2;
+    float   waveScale;      // global Y-displacement multiplier
+    float   choppiness;     // horizontal-displacement multiplier (0 = pure heightfield)
+    uint    cascadeMask;    // bit i = enable cascade i (0..2)
+} pc;
+
+vec3 sampleDisplacement(vec2 worldXZ) {
+    // Per-cascade amplitude normalization: divide by the cascade's tile size.
+    // Tessendorf's Phillips spectrum produces unnormalized IFFT output whose
+    // amplitude grows with the spatial scale; dividing by tileSize gives a
+    // physically-comparable wave height regardless of the cascade's k-range.
+    // Matches WebTide's vertex shader convention.
+    //
+    // Vertical (height) gets `waveScale`, horizontal gets `choppiness`. Choppy
+    // waves come from large horizontal displacement and produce sharp Gerstner-
+    // like crests when choppiness is too high — keep it ≤ ~0.6 for natural look.
+    vec3 d = vec3(0.0);
+    if ((pc.cascadeMask & 1u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize0;
+        const vec2 uv = worldXZ * invTile;
+        d.y += texture(height0,   uv).r * invTile;
+        const vec2 dxz = texture(displace0, uv).rg * invTile;
+        d.x += dxz.x;
+        d.z += dxz.y;
+    }
+    if ((pc.cascadeMask & 2u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize1;
+        const vec2 uv = worldXZ * invTile;
+        d.y += texture(height1,   uv).r * invTile;
+        const vec2 dxz = texture(displace1, uv).rg * invTile;
+        d.x += dxz.x;
+        d.z += dxz.y;
+    }
+    if ((pc.cascadeMask & 4u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize2;
+        const vec2 uv = worldXZ * invTile;
+        d.y += texture(height2,   uv).r * invTile;
+        const vec2 dxz = texture(displace2, uv).rg * invTile;
+        d.x += dxz.x;
+        d.z += dxz.y;
+    }
+    return vec3(d.x * pc.choppiness,
+                d.y * pc.waveScale,
+                d.z * pc.choppiness);
+}
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.vertexCount) return;
+
+    // Rest position from grid index. PlaneGeometry::create(planeSize, planeSize,
+    // gridDim-1, gridDim-1) followed by rotateX(-π/2) places vertices on the XZ
+    // plane with x ∈ [-planeSize/2, +planeSize/2], z ∈ [-planeSize/2, +planeSize/2].
+    // After rotateX, vertex i's z is FLIPPED relative to the unrotated plane;
+    // we mirror that here so the FFT texture aligns with mesh world space.
+    const float u = float(i % pc.gridDim) / float(pc.gridDim - 1u);
+    const float v = float(i / pc.gridDim) / float(pc.gridDim - 1u);
+    const vec3 rest = vec3((u - 0.5) * pc.planeSize,
+                           0.0,
+                           -(v - 0.5) * pc.planeSize);
+
+    const vec3 disp = sampleDisplacement(rest.xz);
+    const vec3 outPos = rest + disp;
+
+    // Finite-difference normals on the displaced height field. Step is one
+    // texel of the inner cascade — small enough that aliasing is rare,
+    // large enough that single-precision noise doesn't dominate.
+    const float eps = pc.tileSize0 / 256.0;
+    const float hL = sampleDisplacement(rest.xz + vec2(-eps, 0.0)).y;
+    const float hR = sampleDisplacement(rest.xz + vec2( eps, 0.0)).y;
+    const float hD = sampleDisplacement(rest.xz + vec2(0.0, -eps)).y;
+    const float hU = sampleDisplacement(rest.xz + vec2(0.0,  eps)).y;
+    const vec3 n = normalize(vec3(hL - hR, 2.0 * eps, hD - hU));
+
+    pc.posOut.v[i * 3u + 0u] = outPos.x;
+    pc.posOut.v[i * 3u + 1u] = outPos.y;
+    pc.posOut.v[i * 3u + 2u] = outPos.z;
+
+    pc.normOut.v[i * 3u + 0u] = n.x;
+    pc.normOut.v[i * 3u + 1u] = n.y;
+    pc.normOut.v[i * 3u + 2u] = n.z;
+}

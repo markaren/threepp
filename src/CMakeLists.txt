@@ -188,6 +188,7 @@ set(publicHeaders
         "threepp/objects/Text.hpp"
         "threepp/objects/TextSprite.hpp"
         "threepp/objects/Water.hpp"
+        "threepp/objects/DisplacedMesh.hpp"
 
         "threepp/textures/CubeTexture.hpp"
         "threepp/textures/DataTexture.hpp"
@@ -456,6 +457,7 @@ set(sources
         "threepp/objects/Reflector.cpp"
         "threepp/objects/TextSprite.cpp"
         "threepp/objects/Water.cpp"
+        "threepp/objects/DisplacedMesh.cpp"
 
         "threepp/textures/Texture.cpp"
         "threepp/textures/DataTexture3D.cpp"
@@ -598,10 +600,12 @@ if (THREEPP_WITH_VULKAN)
     )
     list(APPEND privateHeaders
             "threepp/renderers/vulkan/VulkanContext.hpp"
+            "threepp/renderers/vulkan/water/OceanFFT.hpp"
     )
     list(APPEND sources
             "threepp/renderers/VulkanRenderer.cpp"
             "threepp/renderers/vulkan/VulkanContext.cpp"
+            "threepp/renderers/vulkan/water/OceanFFT.cpp"
     )
 endif ()
 
@@ -883,6 +887,39 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/denoise_atrous.comp"
         kDenoiseAtrousCompSpv
         _denoise_atrous_spv_h)
+    # FFT-based ocean (DisplacedMesh): Phillips spectrum, time-evolution,
+    # IFFT (twiddle table + horizontal/vertical butterflies + permute) and
+    # a vertex-displacement compute that writes into the BLAS vertex buffer.
+    # Each shader is independent of the path tracer and only consumed by the
+    # OceanFFT host classes (src/threepp/renderers/vulkan/water/).
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/phillips_spectrum.comp"
+        kPhillipsSpectrumCompSpv
+        _phillips_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/dynamic_spectrum.comp"
+        kDynamicSpectrumCompSpv
+        _dynamic_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ifft_twiddle.comp"
+        kIfftTwiddleCompSpv
+        _ifft_twiddle_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ifft_horizontal.comp"
+        kIfftHorizontalCompSpv
+        _ifft_horizontal_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ifft_vertical.comp"
+        kIfftVerticalCompSpv
+        _ifft_vertical_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ifft_permute.comp"
+        kIfftPermuteCompSpv
+        _ifft_permute_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/water_displace.comp"
+        kWaterDisplaceCompSpv
+        _water_displace_spv_h)
 endif ()
 
 

@@ -1,0 +1,19 @@
+#version 460
+
+// Final IFFT sign-flip / permutation pass. The Cooley-Tukey butterflies leave
+// the result with an alternating sign pattern (every other texel negated)
+// from the [-N/2..N/2] frequency layout the dynamic-spectrum pass uses.
+// Multiplying by (-1)^(x+y) corrects this back into the natural spatial
+// layout. Dispatched ONCE per frame per cascade after all butterfly passes.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0)        uniform sampler2D InputBuffer;
+layout(set = 0, binding = 1, rg32f) uniform writeonly image2D OutputBuffer;
+
+void main() {
+    const ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    const vec4 v = texelFetch(InputBuffer, id, 0);
+    const float sign = 1.0 - 2.0 * float((id.x + id.y) & 1);
+    imageStore(OutputBuffer, id, v * sign);
+}

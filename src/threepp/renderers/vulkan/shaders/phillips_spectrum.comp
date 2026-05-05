@@ -1,0 +1,75 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+
+// Phillips spectrum h0(k) generator. Dispatched ONCE per cascade at startup
+// (or whenever wind/tile parameters change). Output is the frequency-domain
+// initial spectrum that DynamicSpectrum evolves over time.
+//
+// h0(k) is sampled from a complex Gaussian (texelFetch from `Noise`) scaled
+// by sqrt(P(k)/2). The packed RGBA32F output stores h0(k) in .rg and the
+// conjugate of h0(-k) in .ba so the dynamic-spectrum pass can build the
+// time-evolved field without re-fetching from the noise texture.
+//
+// Band-pass filter (kMin/kMax) lets one cascade cover only a wavenumber
+// range so multi-cascade ocean (ripples / chop / swell) stays free of
+// double-counted frequencies. kMax == 0 disables the upper bound.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D H0;
+layout(set = 0, binding = 1)          uniform sampler2D Noise;
+
+layout(set = 0, binding = 2, scalar) uniform Params {
+    uint  textureSize;
+    float tileSize;
+    float windTheta;
+    float windSpeed;
+    float smallWaveLengthCutoff;
+    float kMin;
+    float kMax;
+} P;
+
+const float PI = 3.14159265358979;
+
+float phillips2D(vec2 k) {
+    if (length(k) < 1e-4) return 0.0;
+    const float A = 1.0;
+    const vec2  windDir = vec2(cos(P.windTheta), sin(P.windTheta));
+    const float g = 9.81;
+    const float L = P.windSpeed * P.windSpeed / g;
+    const float k2 = dot(k, k);
+    const float kL2 = k2 * L * L;
+    const float k4 = k2 * k2;
+    float kw = dot(normalize(k), windDir);
+    kw *= kw;
+    const float l = P.smallWaveLengthCutoff;
+    return A * exp(-1.0 / kL2) * kw * exp(-k2 * l * l) / k4;
+}
+
+void main() {
+    const ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    if (id.x >= int(P.textureSize) || id.y >= int(P.textureSize)) return;
+
+    const float deltaK = 2.0 * PI / P.tileSize;
+    const float nx = float(id.x) - float(P.textureSize) * 0.5;
+    const float nz = float(id.y) - float(P.textureSize) * 0.5;
+    const vec2  k  = vec2(nx, nz) * deltaK;
+    const float kL = length(k);
+
+    if (kL < P.kMin || (P.kMax > 0.0 && kL > P.kMax)) {
+        imageStore(H0, id, vec4(0.0));
+        return;
+    }
+    const vec2 nk_pos = texelFetch(Noise, id, 0).xy;
+    const vec2 h0_pos = nk_pos * sqrt(phillips2D(k) * 0.5);
+
+    // Wrap-around fetch for h0(-k); ((N - id) mod N) places (0,0) onto itself
+    // so the DC term remains symmetric, matching the WGSL reference.
+    const ivec2 idNeg = ivec2((int(P.textureSize) - id.x) & (int(P.textureSize) - 1),
+                              (int(P.textureSize) - id.y) & (int(P.textureSize) - 1));
+    const vec2 nk_neg = texelFetch(Noise, idNeg, 0).xy;
+    const vec2 h0_neg = nk_neg * sqrt(phillips2D(-k) * 0.5);
+    const vec2 h0_neg_conj = vec2(h0_neg.x, -h0_neg.y);
+
+    imageStore(H0, id, vec4(h0_pos, h0_neg_conj));
+}

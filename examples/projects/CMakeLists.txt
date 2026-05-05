@@ -14,3 +14,7 @@ endif ()
 if (THREEPP_WITH_WGPU)
     add_subdirectory(WebTide)
 endif ()
+
+if (THREEPP_WITH_VULKAN)
+    add_subdirectory(Ocean)
+endif ()

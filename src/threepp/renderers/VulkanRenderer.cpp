@@ -40,11 +40,13 @@
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/objects/Bone.hpp"
+#include "threepp/objects/DisplacedMesh.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Skeleton.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/renderers/vulkan/water/OceanFFT.hpp"
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/Texture.hpp"
 
@@ -60,6 +62,7 @@
 #include "threepp/renderers/vulkan/shaders/prefilter_env.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/denoise.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/denoise_atrous.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/water_displace.comp.spv.h"
 
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.hpp"
 
@@ -212,6 +215,35 @@ namespace threepp {
             std::weak_ptr<BufferGeometry> liveCheck;
         };
         std::unordered_map<const SkinnedMesh*, std::unique_ptr<SkinnedMeshState>> skinnedMeshStates;
+
+        // Per-DisplacedMesh: BLAS (rebuilt-in-place each frame, same scheme as
+        // SkinnedMesh) plus a single-cascade FFT chain (Phillips/Dynamic/IFFT).
+        // The water_displace.comp pass reads the spatial-domain output images
+        // and writes positions+normals into the BLAS vertex/normal buffers.
+        struct DisplacedMeshState {
+            std::unique_ptr<BlasRecord> blas;
+            std::unique_ptr<water::PhillipsSpectrum> phillips;
+            std::unique_ptr<water::DynamicSpectrum>  dyn;
+            std::unique_ptr<water::IFFT>             ifft;
+            water::OceanImage scratchA;          // RG32F scratch for IFFT ping-pong
+            water::OceanImage scratchB;          // unused; reserved for multi-cascade
+            VkDescriptorSet displaceDS = VK_NULL_HANDLE;
+            uint32_t vertexCount = 0;
+            uint32_t gridDim     = 0;            // sqrt(vertexCount); validated at init
+            float    planeSize   = 0.f;
+            bool     phillipsRecorded = false;   // false until first frame triggers it
+            std::weak_ptr<BufferGeometry> liveCheck;
+        };
+        std::unordered_map<const DisplacedMesh*, std::unique_ptr<DisplacedMeshState>> displacedStates;
+
+        // Renderer-level water_displace pipeline. One compute pipeline shared
+        // across all DisplacedMesh instances; per-instance state owns its own
+        // descriptor set so binding multiple oceans in one scene is safe.
+        VkDescriptorSetLayout displaceDsLayout      = VK_NULL_HANDLE;
+        VkPipelineLayout      displacePipelineLayout = VK_NULL_HANDLE;
+        VkPipeline            displacePipeline       = VK_NULL_HANDLE;
+        VkDescriptorPool      displaceDescPool       = VK_NULL_HANDLE;
+        VkSampler             displaceSampler        = VK_NULL_HANDLE;
 
         // Single TLAS over all mesh instances in the scene.
         VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
@@ -630,6 +662,7 @@ namespace threepp {
             createPhotonBuffers();
             createPhotonEmitPipeline();
             createPhotonSbt();
+            createWaterDisplacePipeline();
             createDescriptorPool();
         }
 
@@ -682,6 +715,23 @@ namespace threepp {
             }
             skinnedMeshStates.clear();
 
+            for (auto& [_, st] : displacedStates) {
+                if (st->blas) {
+                    auto& rec = st->blas;
+                    if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
+                    destroyBuffer(ctx->allocator(), rec->storage);
+                    destroyBuffer(ctx->allocator(), rec->vertex);
+                    destroyBuffer(ctx->allocator(), rec->index);
+                    destroyBuffer(ctx->allocator(), rec->normal);
+                    destroyBuffer(ctx->allocator(), rec->uv);
+                }
+                if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->scratchA.view, nullptr);
+                if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
+                // PhillipsSpectrum / DynamicSpectrum / IFFT are RAII; their
+                // destructors handle their own VkImage / VkPipeline / DSet cleanup.
+            }
+            displacedStates.clear();
+
             for (auto& b : cameraUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : prevCameraUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : lightsUbos) destroyBuffer(ctx->allocator(), b);
@@ -707,6 +757,12 @@ namespace threepp {
             if (denoisePipeline)        vkDestroyPipeline(d, denoisePipeline, nullptr);
             if (denoiseAtrousPipeline)  vkDestroyPipeline(d, denoiseAtrousPipeline, nullptr);
             if (denoisePipelineLayout)  vkDestroyPipelineLayout(d, denoisePipelineLayout, nullptr);
+
+            if (displacePipeline)        vkDestroyPipeline(d, displacePipeline, nullptr);
+            if (displacePipelineLayout)  vkDestroyPipelineLayout(d, displacePipelineLayout, nullptr);
+            if (displaceDsLayout)        vkDestroyDescriptorSetLayout(d, displaceDsLayout, nullptr);
+            if (displaceDescPool)        vkDestroyDescriptorPool(d, displaceDescPool, nullptr);
+            if (displaceSampler)         vkDestroySampler(d, displaceSampler, nullptr);
         }
 
         void createCommandResources() {
@@ -1144,6 +1200,278 @@ namespace threepp {
             } else {
                 st.prevBoneMats = bm;
             }
+        }
+
+        // ── DisplacedMesh helpers ────────────────────────────────────────
+        // Lazy create + initialize the per-DisplacedMesh state. Builds the
+        // BLAS from the rest geometry (will get overwritten by the displace
+        // compute pass before the first ray-trace) and stands up the FFT
+        // cascade. Returns nullptr if the geometry is unsupported (must be a
+        // square indexed plane with N×N vertices for some power-of-two N).
+        DisplacedMeshState* ensureDisplacedState(DisplacedMesh& dm) {
+            auto it = displacedStates.find(&dm);
+            if (it != displacedStates.end()) return it->second.get();
+
+            auto* posAttr = dm.geometry()->getAttribute<float>("position");
+            if (!posAttr) return nullptr;
+            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
+            // Plane is gridDim × gridDim. PlaneGeometry(w, h, segX, segY)
+            // produces (segX+1)·(segY+1) verts; the demo is expected to call
+            // segX == segY == gridDim-1.
+            const uint32_t gridDim = static_cast<uint32_t>(std::round(std::sqrt(double(vertexCount))));
+            if (gridDim * gridDim != vertexCount) return nullptr;
+
+            // Plane edge length: derive from rest-position bbox extent in X.
+            float xMin = std::numeric_limits<float>::infinity();
+            float xMax = -std::numeric_limits<float>::infinity();
+            for (uint32_t i = 0; i < vertexCount; ++i) {
+                const float x = posAttr->getX(i);
+                if (x < xMin) xMin = x;
+                if (x > xMax) xMax = x;
+            }
+            const float planeSize = xMax - xMin;
+            if (!(planeSize > 0.f)) return nullptr;
+
+            auto blas = buildBlasFor(*dm.geometry());
+            if (!blas) return nullptr;
+            blas->liveCheck = dm.geometry();
+
+            auto state = std::make_unique<DisplacedMeshState>();
+            state->blas = std::move(blas);
+            state->vertexCount = vertexCount;
+            state->gridDim = gridDim;
+            state->planeSize = planeSize;
+            state->liveCheck = dm.geometry();
+
+            // FFT cascade — single-cascade Phase 1.
+            water::PhillipsSpectrum::Settings ps{};
+            ps.textureSize = dm.params.textureSize;
+            ps.tileSize    = dm.params.tileSize0;
+            ps.windTheta   = dm.params.windTheta;
+            ps.windSpeed   = dm.params.windSpeed;
+            // Suppress wavelengths shorter than ~5× the mesh sample spacing.
+            // Without it, single-cascade Phillips puts energy into bands the
+            // mesh can't resolve, producing the spike-crest aliasing we saw on
+            // first run.
+            ps.smallWaveCutoff = 5.f * dm.params.tileSize0 / float(dm.params.textureSize);
+            state->phillips = std::make_unique<water::PhillipsSpectrum>(*ctx, ps);
+            state->dyn      = std::make_unique<water::DynamicSpectrum>(
+                    *ctx, *state->phillips, dm.params.textureSize, dm.params.tileSize0);
+            state->ifft     = std::make_unique<water::IFFT>(*ctx, dm.params.textureSize);
+
+            // Scratch image for IFFT ping-pong (RG32F, same size as the dyn
+            // images). One is enough for Phase 1 — both IFFT calls in a
+            // frame can share since they run sequentially on the same queue.
+            // Use the same helper OceanFFT.cpp uses internally — create directly.
+            // (Kept duplicated rather than exposing OceanFFT's internal helpers.)
+            {
+                VkImageCreateInfo ici{};
+                ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+                ici.imageType     = VK_IMAGE_TYPE_2D;
+                ici.format        = VK_FORMAT_R32G32_SFLOAT;
+                ici.extent        = {dm.params.textureSize, dm.params.textureSize, 1};
+                ici.mipLevels     = 1;
+                ici.arrayLayers   = 1;
+                ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+                ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+                ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT |
+                                    VK_IMAGE_USAGE_SAMPLED_BIT |
+                                    VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+                ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+                ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                VmaAllocationCreateInfo aci{};
+                aci.usage = VMA_MEMORY_USAGE_AUTO;
+                check(vmaCreateImage(ctx->allocator(), &ici, &aci,
+                                     &state->scratchA.image, &state->scratchA.alloc, nullptr),
+                      "vmaCreateImage(displaceScratch)");
+                state->scratchA.format = VK_FORMAT_R32G32_SFLOAT;
+                state->scratchA.width  = dm.params.textureSize;
+                state->scratchA.height = dm.params.textureSize;
+                VkImageViewCreateInfo vci{};
+                vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                vci.image = state->scratchA.image;
+                vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                vci.format = VK_FORMAT_R32G32_SFLOAT;
+                vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                check(vkCreateImageView(ctx->device(), &vci, nullptr, &state->scratchA.view),
+                      "vkCreateImageView(displaceScratch)");
+            }
+
+            // Allocate this mesh's displace descriptor set + write bindings.
+            VkDescriptorSetAllocateInfo dai{};
+            dai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            dai.descriptorPool     = displaceDescPool;
+            dai.descriptorSetCount = 1;
+            dai.pSetLayouts        = &displaceDsLayout;
+            check(vkAllocateDescriptorSets(ctx->device(), &dai, &state->displaceDS),
+                  "vkAllocateDescriptorSets(displace)");
+
+            // Bind cascade-0 spatial images to all 6 binding slots — the shader
+            // gates which slots are sampled via cascadeMask, so duplicating
+            // views into the unused slots is harmless and avoids needing dummy
+            // 1×1 textures.
+            VkDescriptorImageInfo heightInfo{};
+            heightInfo.sampler     = displaceSampler;
+            heightInfo.imageView   = state->dyn->ht().view;
+            heightInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo dispInfo{};
+            dispInfo.sampler     = displaceSampler;
+            dispInfo.imageView   = state->dyn->displacement().view;
+            dispInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+            std::array<VkWriteDescriptorSet, 6> ws{};
+            for (uint32_t i = 0; i < 6; ++i) {
+                ws[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                ws[i].dstSet = state->displaceDS;
+                ws[i].dstBinding = i;
+                ws[i].descriptorCount = 1;
+                ws[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                ws[i].pImageInfo = (i % 2u == 0u) ? &heightInfo : &dispInfo;
+            }
+            vkUpdateDescriptorSets(ctx->device(), uint32_t(ws.size()), ws.data(), 0, nullptr);
+
+            auto* raw = state.get();
+            displacedStates.emplace(&dm, std::move(state));
+            return raw;
+        }
+
+        // Per-frame: run the FFT chain → water_displace → BLAS rebuild for
+        // one DisplacedMesh. Mirrors refreshSkinnedBlas's structure.
+        void refreshDisplacedBlas(DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds) {
+            VkCommandBuffer cb = beginOneShot();
+
+            // (1) On the very first refresh, dispatch the one-shot Phillips
+            // compute that fills h0_. Subsequent frames skip it.
+            if (!st.phillipsRecorded) {
+                st.phillips->recordCompute(cb);
+                st.phillipsRecorded = true;
+            }
+
+            // (2) Time-evolve the spectrum (frequency domain).
+            st.dyn->recordCompute(cb, elapsedSeconds);
+
+            // (3) IFFT the height + displacement spectra into spatial-domain
+            // images. After each call, the input image holds the spatial result.
+            // We use a single scratch image — both calls happen sequentially
+            // on the same queue so reuse is safe.
+            water::OceanImage ht  = st.dyn->ht();           // copy of the struct (holds VkImage handle)
+            water::OceanImage dsp = st.dyn->displacement();
+            ht.currentLayout  = VK_IMAGE_LAYOUT_GENERAL;
+            dsp.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+            st.scratchA.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+            st.ifft->recordApply(cb, ht,  st.scratchA);
+            st.ifft->recordApply(cb, dsp, st.scratchA);
+
+            // (4) Dispatch water_displace.comp → writes positions + normals
+            // into the BLAS vertex/normal buffers.
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, displacePipeline);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, displacePipelineLayout,
+                                    0, 1, &st.displaceDS, 0, nullptr);
+
+            struct DisplacePc {
+                VkDeviceAddress posOut;
+                VkDeviceAddress normOut;
+                uint32_t vertexCount;
+                uint32_t gridDim;
+                float    planeSize;
+                float    tileSize0;
+                float    tileSize1;
+                float    tileSize2;
+                float    waveScale;
+                float    choppiness;
+                uint32_t cascadeMask;
+            } pc{};
+            pc.posOut       = st.blas->vertex.address;
+            pc.normOut      = st.blas->normal.address;
+            pc.vertexCount  = st.vertexCount;
+            pc.gridDim      = st.gridDim;
+            pc.planeSize    = st.planeSize;
+            pc.tileSize0    = dm.params.tileSize0;
+            pc.tileSize1    = dm.params.tileSize1;
+            pc.tileSize2    = dm.params.tileSize2;
+            pc.waveScale    = dm.params.waveScale;
+            pc.choppiness   = dm.params.choppiness;
+            pc.cascadeMask  = 1u; // single cascade, Phase 1
+            vkCmdPushConstants(cb, displacePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(pc), &pc);
+            const uint32_t groups = (st.vertexCount + 63u) / 64u;
+            vkCmdDispatch(cb, groups, 1, 1);
+
+            // Buffer barrier: compute write → AS-build read on the vertex/normal buffers.
+            VkBufferMemoryBarrier bbs[2]{};
+            bbs[0].sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            bbs[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            bbs[0].dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+            bbs[0].buffer        = st.blas->vertex.handle;
+            bbs[0].size          = VK_WHOLE_SIZE;
+            bbs[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bbs[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bbs[1] = bbs[0];
+            bbs[1].buffer = st.blas->normal.handle;
+            vkCmdPipelineBarrier(cb,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                0, 0, nullptr, 2, bbs, 0, nullptr);
+
+            // (5) Rebuild the BLAS in-place (same buffers, same AS handle).
+            // Mirrors refreshSkinnedBlas — extracted into a helper would be
+            // nicer but the duplicated 70-line block is fine for a first cut.
+            auto* posAttr = dm.geometry()->getAttribute<float>("position");
+            auto* idxAttr = dm.geometry()->getIndex();
+            const uint32_t vc = static_cast<uint32_t>(posAttr->count());
+            const bool indexed = idxAttr != nullptr;
+            const uint32_t primCount = indexed ? static_cast<uint32_t>(idxAttr->count() / 3)
+                                               : vc / 3;
+
+            VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+            triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+            triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            triData.vertexData.deviceAddress = st.blas->vertex.address;
+            triData.vertexStride = 3 * sizeof(float);
+            triData.maxVertex = vc - 1;
+            if (indexed) {
+                triData.indexType = VK_INDEX_TYPE_UINT32;
+                triData.indexData.deviceAddress = st.blas->index.address;
+            } else {
+                triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+            }
+
+            VkAccelerationStructureGeometryKHR blasGeom{};
+            blasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            blasGeom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            blasGeom.geometry.triangles = triData;
+            blasGeom.flags = 0;
+
+            VkAccelerationStructureBuildGeometryInfoKHR build{};
+            build.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+            build.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            build.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                          VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+            build.mode  = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            build.geometryCount = 1;
+            build.pGeometries = &blasGeom;
+            build.dstAccelerationStructure = st.blas->as;
+
+            VkAccelerationStructureBuildSizesInfoKHR sizes{};
+            sizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+            ctx->rt().getAccelerationStructureBuildSizes(
+                    ctx->device(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                    &build, &primCount, &sizes);
+
+            Buffer scratch = createBuffer(
+                    ctx->allocator(), ctx->device(), sizes.buildScratchSize,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO);
+            build.scratchData.deviceAddress = scratch.address;
+
+            VkAccelerationStructureBuildRangeInfoKHR range{};
+            range.primitiveCount = primCount;
+            const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+            ctx->rt().cmdBuildAccelerationStructures(cb, 1, &build, &pRange);
+
+            endAndSubmitOneShot(cb);
+            destroyBuffer(ctx->allocator(), scratch);
         }
 
         // Build a TLAS over the supplied instance descriptors. Empty input is
@@ -1668,6 +1996,15 @@ namespace threepp {
                 }
             }
 
+            // DisplacedMesh — intrinsically dirty every frame (FFT spectrum
+            // advances continuously). Same per-entry-bool pattern as bones.
+            std::vector<bool> entryDisplacedDirty(entries.size(), false);
+            for (size_t i = 0; i < entries.size(); ++i) {
+                if (dynamic_cast<DisplacedMesh*>(entries[i].mesh)) {
+                    entryDisplacedDirty[i] = true;
+                }
+            }
+
             // Continuous-motion fast path: when only the per-mesh matrices
             // changed (everything else — topology, materials, textures —
             // matches), refit the TLAS in place and let raygen reproject.
@@ -1689,6 +2026,7 @@ namespace threepp {
                 bool matricesSame = true;
                 bool materialValuesSame = true;
                 bool bonesDirtyAny = false;
+                bool displacedDirtyAny = false;
                 for (size_t i = 0; i < currFp.size(); ++i) {
                     const auto& a = currFp[i];
                     const auto& b = prevSceneFingerprint[i];
@@ -1705,18 +2043,21 @@ namespace threepp {
                     const bool xfmChanged   = std::memcmp(a.matrix.data(), b.matrix.data(), sizeof(a.matrix)) != 0;
                     const bool matChanged   = std::memcmp(a.pbr.data(),    b.pbr.data(),    sizeof(a.pbr))    != 0;
                     const bool bonesChanged = entryBonesDirty[i];
+                    const bool dispChanged  = entryDisplacedDirty[i];
                     if (xfmChanged) matricesSame = false;
                     if (matChanged) materialValuesSame = false;
                     if (bonesChanged) bonesDirtyAny = true;
-                    // Three flavors of change all invalidate this pixel's
-                    // history — share the same per-mesh bit. Reproject+halve
-                    // FC for any of: matrix shift, pbr shift, pose deformation.
-                    if ((xfmChanged || matChanged || bonesChanged) && i < 128) {
+                    if (dispChanged)  displacedDirtyAny = true;
+                    // All flavors of change invalidate this pixel's history —
+                    // share the same per-mesh bit. Reproject+halve FC for any
+                    // of: matrix shift, pbr shift, pose deformation, ocean
+                    // surface displacement.
+                    if ((xfmChanged || matChanged || bonesChanged || dispChanged) && i < 128) {
                         meshMovedBits_[i >> 5] |= (1u << (i & 31u));
                     }
                 }
                 if (structuralSame) {
-                    if (!matricesSame || !materialValuesSame || bonesDirtyAny) {
+                    if (!matricesSame || !materialValuesSame || bonesDirtyAny || displacedDirtyAny) {
                         motionThisFrame_ = true;
                     }
                     if (bonesDirtyAny) {
@@ -1736,7 +2077,23 @@ namespace threepp {
                             refreshSkinnedBlas(*sm, *stIt->second);
                         }
                     }
-                    if (!matricesSame || bonesDirtyAny) {
+                    if (displacedDirtyAny) {
+                        // Re-displace every DisplacedMesh: run FFT chain →
+                        // water_displace.comp → BLAS rebuild in place. Same
+                        // TLAS-AABB caveat as SkinnedMesh: refit happens just
+                        // below.
+                        const float now = static_cast<float>(glfwGetTime());
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            if (!entryDisplacedDirty[i]) continue;
+                            auto* dm = dynamic_cast<DisplacedMesh*>(entries[i].mesh);
+                            if (!dm) continue;
+                            auto stIt = displacedStates.find(dm);
+                            if (stIt == displacedStates.end()) continue;
+                            refreshDisplacedBlas(*dm, *stIt->second, now);
+                            ++dm->frameTick;
+                        }
+                    }
+                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny) {
                         // TLAS refit: needed when instance transforms change
                         // (matricesSame=false) AND when any skinned BLAS was
                         // just rebuilt — the TLAS's per-instance wrapped AABB
@@ -1754,6 +2111,10 @@ namespace threepp {
                                 auto smIt = skinnedMeshStates.find(sm);
                                 if (smIt == skinnedMeshStates.end()) continue;
                                 blasAddr = smIt->second->blas->address;
+                            } else if (auto* dm = dynamic_cast<DisplacedMesh*>(en.mesh)) {
+                                auto dmIt = displacedStates.find(dm);
+                                if (dmIt == displacedStates.end()) continue;
+                                blasAddr = dmIt->second->blas->address;
                             } else {
                                 const BufferGeometry* geomKey = en.mesh->geometry().get();
                                 auto it = blasCache.find(geomKey);
@@ -1901,6 +2262,27 @@ namespace threepp {
                         ++it;
                     }
                 }
+                for (auto it = displacedStates.begin(); it != displacedStates.end(); ) {
+                    if (it->second->liveCheck.expired()) {
+                        auto& st = it->second;
+                        if (st->blas) {
+                            auto& rec = st->blas;
+                            if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);
+                            destroyBuffer(ctx->allocator(), rec->storage);
+                            destroyBuffer(ctx->allocator(), rec->vertex);
+                            destroyBuffer(ctx->allocator(), rec->index);
+                            destroyBuffer(ctx->allocator(), rec->normal);
+                            destroyBuffer(ctx->allocator(), rec->uv);
+                        }
+                        if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->scratchA.view, nullptr);
+                        if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
+                        // PhillipsSpectrum / DynamicSpectrum / IFFT destructors
+                        // run on unique_ptr reset.
+                        it = displacedStates.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
                 for (auto it = textureCache.begin(); it != textureCache.end(); ) {
                     if (it->second.first.expired()) {
                         const uint32_t slot = it->second.second;
@@ -1930,12 +2312,23 @@ namespace threepp {
                 // Skinned meshes get a per-instance deformed BLAS rather than
                 // sharing the geometry-keyed cache. Two SkinnedMeshes loaded
                 // from the same glTF can share BufferGeometry but never share
-                // a pose, so they must not share a BLAS.
+                // a pose, so they must not share a BLAS. DisplacedMesh follows
+                // the same per-instance BLAS rule (each ocean mesh has its
+                // own FFT cascade and its own continuously-rewritten vertex
+                // buffer).
                 BlasRecord* recPtr = nullptr;
                 if (auto* sm = dynamic_cast<SkinnedMesh*>(m); sm && sm->skeleton && !sm->skeleton->bones.empty()) {
                     auto* st = ensureSkinnedBlas(*sm);
                     if (!st) continue;
                     recPtr = st->blas.get();
+                } else if (auto* dm = dynamic_cast<DisplacedMesh*>(m)) {
+                    auto* st = ensureDisplacedState(*dm);
+                    if (!st) continue;
+                    recPtr = st->blas.get();
+                    // Trigger an initial FFT/displace dispatch so the BLAS
+                    // contents (rest grid right now) become the displaced
+                    // surface before the first ray-trace sees it.
+                    refreshDisplacedBlas(*dm, *st, static_cast<float>(glfwGetTime()));
                 } else {
                     auto it = blasCache.find(geomKey);
                     if (it == blasCache.end()) {
@@ -3109,6 +3502,93 @@ namespace threepp {
                                            &denoiseAtrousPipeline),
                   "vkCreateComputePipelines(denoise_atrous)");
             vkDestroyShaderModule(ctx->device(), amod, nullptr);
+        }
+
+        // Renderer-level water_displace.comp pipeline. Bindings 0..5 = three
+        // (height, displacement) pairs of combined-image-samplers, all RG32F
+        // spatial-domain images from the IFFT chain. The push constant carries
+        // the BLAS vertex/normal buffer device addresses + grid metadata.
+        // One pipeline shared across all DisplacedMesh instances; per-mesh
+        // descriptor sets bind the appropriate cascade images.
+        void createWaterDisplacePipeline() {
+            std::array<VkDescriptorSetLayoutBinding, 6> bb{};
+            for (uint32_t i = 0; i < bb.size(); ++i) {
+                bb[i].binding = i;
+                bb[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                bb[i].descriptorCount = 1;
+                bb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+            VkDescriptorSetLayoutCreateInfo dlci{};
+            dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            dlci.bindingCount = uint32_t(bb.size());
+            dlci.pBindings    = bb.data();
+            check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &displaceDsLayout),
+                  "vkCreateDescriptorSetLayout(displace)");
+
+            // Push constants — match water_displace.comp's `Pc` struct:
+            //   2 × VkDeviceAddress (16) + 9 × u32/float (36) = 52 bytes.
+            VkPushConstantRange pcr{};
+            pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            pcr.offset     = 0;
+            pcr.size       = 52;
+
+            VkPipelineLayoutCreateInfo plci{};
+            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            plci.setLayoutCount         = 1;
+            plci.pSetLayouts            = &displaceDsLayout;
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges    = &pcr;
+            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &displacePipelineLayout),
+                  "vkCreatePipelineLayout(displace)");
+
+            VkShaderModuleCreateInfo smci{};
+            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            smci.codeSize = sizeof(kWaterDisplaceCompSpv);
+            smci.pCode    = kWaterDisplaceCompSpv;
+            VkShaderModule mod = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &smci, nullptr, &mod),
+                  "vkCreateShaderModule(displace)");
+
+            VkPipelineShaderStageCreateInfo stage{};
+            stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+            stage.module = mod;
+            stage.pName  = "main";
+
+            VkComputePipelineCreateInfo cpci{};
+            cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            cpci.stage  = stage;
+            cpci.layout = displacePipelineLayout;
+            check(vkCreateComputePipelines(ctx->device(), VK_NULL_HANDLE, 1, &cpci, nullptr,
+                                           &displacePipeline),
+                  "vkCreateComputePipelines(displace)");
+            vkDestroyShaderModule(ctx->device(), mod, nullptr);
+
+            // Pool sized for up to 16 DisplacedMesh instances at once. Each
+            // takes 6 combined-image-samplers. Bump if scenes ever go beyond.
+            constexpr uint32_t kMaxOceans = 16;
+            VkDescriptorPoolSize ps{};
+            ps.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            ps.descriptorCount = 6 * kMaxOceans;
+            VkDescriptorPoolCreateInfo dpci{};
+            dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            dpci.maxSets       = kMaxOceans;
+            dpci.poolSizeCount = 1;
+            dpci.pPoolSizes    = &ps;
+            check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &displaceDescPool),
+                  "vkCreateDescriptorPool(displace)");
+
+            VkSamplerCreateInfo sci{};
+            sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            sci.magFilter    = VK_FILTER_LINEAR;
+            sci.minFilter    = VK_FILTER_LINEAR;
+            sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            sci.maxLod       = VK_LOD_CLAMP_NONE;
+            check(vkCreateSampler(ctx->device(), &sci, nullptr, &displaceSampler),
+                  "vkCreateSampler(displace)");
         }
 
         // Allocate an env Image2D with a full GGX-prefiltered mip chain. Mip 0
