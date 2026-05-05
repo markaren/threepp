@@ -24,6 +24,7 @@ struct Payload {
     float hitMetalness;// unused by miss (kept for layout match)
     float hitTransmission;// unused by miss (kept for layout match)
     float bsdfPdf;     // pdf of the BSDF-sampled bounce direction (set by chit; used here for MIS)
+    float currentIor;  // unused by miss (kept for layout match)
 };
 
 layout(set = 0, binding = 6) uniform sampler2D envTex;

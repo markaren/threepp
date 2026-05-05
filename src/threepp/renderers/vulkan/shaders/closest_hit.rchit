@@ -34,6 +34,7 @@ struct Payload {
     float hitMetalness;   // raygen uses for adaptive bounce classification
     float hitTransmission;// raygen uses for adaptive bounce classification
     float bsdfPdf;        // chit→miss: pdf of the BSDF-sampled bounce direction
+    float currentIor;     // medium-stack tracking; see raygen Payload for full description
 };
 
 layout(buffer_reference, scalar) readonly buffer VertexBuf { float p[]; };
@@ -903,22 +904,40 @@ void main() {
         // Thin-shell BSDF: explicit per-material opt-in via
         // MaterialWithThickness::thinWalled. Examples: FFT-displaced ocean
         // plane, sunglasses lens, leaf, single sheet of glass. Both faces
-        // of a thin shell are entries into the medium (no closed interior),
-        // so back-face hits use eta = 1/ior + Schlick's front-face cosine.
-        // Closed glass meshes (default) keep the standard front=enter /
-        // back=exit semantics — this used to auto-trigger off `doubleSided`,
-        // but doubleSided closed glass (test scenes etc.) was misclassified.
+        // are treated as "entering" — refract uses eta=1/ior on both sides
+        // — and the ray's medium isn't tracked through the surface (it
+        // "exits" instantly at the same point, conceptually).
         const bool isThinShell = mdesc.thinWalled != 0;
-        const bool effFront = isFront || isThinShell;
+
+        // Medium tracking — fixes camera-inside-closed-glass (e.g. windshield
+        // from cabin). Geometric isFront alone would misclassify a back-face
+        // hit as "exiting glass" when the ray was actually still in air. We
+        // instead determine entry/exit from the ray's current medium IOR
+        // carried in the payload: if we're already in this material's
+        // medium → exiting; otherwise → entering. For thin shells, force
+        // entering-on-both-faces and don't propagate the medium change.
+        const float currentIor = max(payload.currentIor, 1.0);
+        float targetIor;
+        bool isEntering;
+        if (isThinShell) {
+            targetIor   = ior_base;
+            isEntering  = true;
+        } else if (abs(currentIor - ior_base) < 1e-3) {
+            targetIor   = 1.0;        // exit to air (default outside medium)
+            isEntering  = false;
+        } else {
+            targetIor   = ior_base;
+            isEntering  = true;
+        }
 
         // Schlick Fresnel at the microfacet half-vector. Uses base IOR so the
         // reflect/refract branch decision is achromatic — chromatic Fresnel
         // adds visible noise without much benefit at typical dispersion values.
-        // On true exit (closed mesh, !effFront) use the transmitted-side cosine
-        // so TIR raises F→1 smoothly.
+        // Exiting-side path uses the transmitted-side cosine so TIR raises
+        // F→1 smoothly.
         const float r0    = pow((1.0 - ior_base) / (1.0 + ior_base), 2.0);
         const float sin2H = max(0.0, 1.0 - cosH * cosH);
-        const float cosSchlick = effFront
+        const float cosSchlick = isEntering
                 ? cosH
                 : sqrt(max(0.0, 1.0 - ior_base * ior_base * sin2H));
         const float F = r0 + (1.0 - r0) * pow(1.0 - cosSchlick, 5.0);
@@ -953,7 +972,10 @@ void main() {
             channelMask = vec3(0.0);
             channelMask[ch] = 3.0;
         }
-        const float eta = effFront ? (1.0 / ior) : ior;
+        // eta = currentIor / targetIor; for entering it reduces to (1/ior),
+        // for exiting to ior. Dispersion adjusts `ior` per channel above; the
+        // medium-tracking state itself uses the achromatic ior_base.
+        const float eta = isEntering ? (1.0 / ior) : ior;
         const vec3 refr = refract(I, H, eta);
         const bool tir = (dot(refr, refr) < 1e-6);
 
@@ -976,7 +998,7 @@ void main() {
                 // in-medium distance. Applied at every entry crossing.
                 glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
                                  vec3(mdesc.thickness / mdesc.attenuationDistance));
-            } else if (!effFront) {
+            } else if (!isEntering) {
                 // Closed-mesh actual ray distance through the medium —
                 // matches the original (pre-branch) behaviour. An earlier
                 // attempt added a `thickness` fallback when gl_HitTEXT < 1e-2
@@ -1039,6 +1061,12 @@ void main() {
                 wDir    = normalize(refr);
                 wOrigin = hitPos - N * 1e-3;
                 tWeight = glassTint * channelMask / (eta * eta);
+                // Closed-mesh refract — update the ray's current medium so
+                // the next bounce knows where it is (entering glass: medium
+                // becomes glass; exiting: medium becomes air). Reflect /
+                // TIR-fallback paths leave currentIor untouched (ray stays
+                // in the same medium).
+                payload.currentIor = targetIor;
             }
         }
 

@@ -42,6 +42,12 @@ struct Payload {
     float hitTransmission;// post-clamp transmission; raygen uses for adaptive bounce cap
     float bsdfPdf;        // chit→miss: pdf of the BSDF-sampled bounce direction;
                           //  miss uses for proper MIS env weight when env CDF is on
+    float currentIor;     // medium-stack tracking: the IOR of the medium the ray is currently
+                          //  travelling through (1.0 = air at primary). closest_hit's
+                          //  transmission lobe uses this to determine eta (currentIor/targetIor)
+                          //  and updates it on a refraction event. Fixes camera-inside-closed-glass
+                          //  (e.g. windshield from cabin) where geometric isFront alone misclassifies
+                          //  back-face hits as "exiting glass" when the ray was actually in air.
 };
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
@@ -577,6 +583,12 @@ void main() {
         // most recent shade event's pdf survives into the next step where miss
         // (or chit) can read it for env CDF MIS weighting.
         payload.bsdfPdf = 0.0;
+        // Camera ray starts in air (ior=1.0). Closed-glass refractions update
+        // this on the way in / out so the BSDF can compute eta from the actual
+        // current medium rather than guessing from geometric isFront. Assumes
+        // the camera origin is in air; if the user places the camera literally
+        // inside a glass volume, this is wrong (rare and out of scope here).
+        payload.currentIor = 1.0;
         // Adaptive bounce cap: diffuse / glossy primary surfaces stop gaining
         // visible detail after a few indirect bounces, so cap them short for a
         // large perf win on production scenes (~5 FPS on Sponza per WGPU memory).
