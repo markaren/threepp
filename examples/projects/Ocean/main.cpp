@@ -14,6 +14,7 @@
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/DisplacedMesh.hpp"
@@ -24,7 +25,7 @@ using namespace threepp;
 
 namespace {
 
-    constexpr float kTileSize    = 40.0f;   // metres — matches default DisplacedMesh::Params.tileSize0
+    constexpr float kTileSize    = 400.0f;   // metres — matches default DisplacedMesh::Params.tileSize0
     constexpr uint32_t kFftSize  = 256;
     constexpr float kPlaneEdge   = kTileSize;  // mesh extends one full FFT tile in X and Z
     constexpr int   kSubdiv      = static_cast<int>(kFftSize) - 1;
@@ -65,8 +66,13 @@ int main() {
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
 
+    RGBELoader rgbe;
+    auto env = rgbe.load(std::string(DATA_FOLDER) +
+                         "/textures/env/citrus_orchard_road_puresky_2k.hdr");
+
     Scene scene;
-    scene.background = Color(0.55f, 0.72f, 0.95f);
+    scene.background = env;
+    scene.environment = env;
 
     // Sun-like directional light. Photon mapping in the PT will produce focused
     // caustics on the sand floor as light refracts through wave crests.
@@ -78,7 +84,7 @@ int main() {
     scene.add(sun);
 
     auto ambient = AmbientLight::create(Color(0.55f, 0.72f, 0.95f), 0.25f);
-    scene.add(ambient);
+    // scene.add(ambient);
 
     // Sand floor several metres below the surface — gives the refracted path
     // something to land on AND enough water column for the absorption tint to
