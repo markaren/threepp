@@ -36,7 +36,7 @@ struct MaterialDesc {
     float alphaCutoff;       // 60:  4
     float transmission;      // 64:  4
     float ior;               // 68:  4
-    float _pad[96];          // 72: 384 — total 456 bytes
+    float _pad[97];          // 72: 388 — total 460 bytes
 };
 
 layout(set = 0, binding = 3, scalar) readonly buffer GeomDescBuf { GeometryDesc geoms[]; };

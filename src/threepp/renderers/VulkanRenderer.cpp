@@ -217,21 +217,28 @@ namespace threepp {
         std::unordered_map<const SkinnedMesh*, std::unique_ptr<SkinnedMeshState>> skinnedMeshStates;
 
         // Per-DisplacedMesh: BLAS (rebuilt-in-place each frame, same scheme as
-        // SkinnedMesh) plus a single-cascade FFT chain (Phillips/Dynamic/IFFT).
-        // The water_displace.comp pass reads the spatial-domain output images
-        // and writes positions+normals into the BLAS vertex/normal buffers.
+        // SkinnedMesh) plus up to three FFT cascades (Phillips/Dynamic/IFFT
+        // per cascade). The water_displace.comp pass reads the spatial-domain
+        // output images of all enabled cascades and writes positions+normals
+        // into the BLAS vertex/normal buffers. Cascades cover disjoint k-bands
+        // (band-passed via Phillips kMin/kMax) so the surface gains real
+        // multi-scale wave detail without double-counting energy.
         struct DisplacedMeshState {
             std::unique_ptr<BlasRecord> blas;
-            std::unique_ptr<water::PhillipsSpectrum> phillips;
-            std::unique_ptr<water::DynamicSpectrum>  dyn;
-            std::unique_ptr<water::IFFT>             ifft;
-            water::OceanImage scratchA;          // RG32F scratch for IFFT ping-pong
-            water::OceanImage scratchB;          // unused; reserved for multi-cascade
+            struct Cascade {
+                std::unique_ptr<water::PhillipsSpectrum> phillips;
+                std::unique_ptr<water::DynamicSpectrum>  dyn;
+                std::unique_ptr<water::IFFT>             ifft;
+                bool  phillipsRecorded = false;
+                float tileSize = 0.f;            // 0 = cascade not in use
+            };
+            std::array<Cascade, 3> cascades;
+            uint32_t cascadeMask = 0;            // bit i set = cascade i enabled
+            water::OceanImage scratchA;          // RG32F IFFT scratch — shared across cascades (sequential dispatch)
             VkDescriptorSet displaceDS = VK_NULL_HANDLE;
             uint32_t vertexCount = 0;
             uint32_t gridDim     = 0;            // sqrt(vertexCount); validated at init
             float    planeSize   = 0.f;
-            bool     phillipsRecorded = false;   // false until first frame triggers it
             std::weak_ptr<BufferGeometry> liveCheck;
         };
         std::unordered_map<const DisplacedMesh*, std::unique_ptr<DisplacedMeshState>> displacedStates;
@@ -301,6 +308,7 @@ namespace threepp {
             float iridescenceIOR;          // thin-film IOR (1.0..2.5; default 1.3)
             float iridescenceThicknessNm;  // thin-film thickness in nm (default 400)
             float dispersion;              // KHR_materials_dispersion: 0 = off; ~0.05+ visible; matches glTF spec
+            float thickness;               // KHR_materials_volume: in-medium distance proxy for thin/open meshes; 0 = fall back to back-face actual ray distance
         };
         Buffer geometryDescsBuffer;
         Buffer materialDescsBuffer;
@@ -727,7 +735,7 @@ namespace threepp {
                 }
                 if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->scratchA.view, nullptr);
                 if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
-                // PhillipsSpectrum / DynamicSpectrum / IFFT are RAII; their
+                // Per-cascade Phillips / DynamicSpectrum / IFFT are RAII; their
                 // destructors handle their own VkImage / VkPipeline / DSet cleanup.
             }
             displacedStates.clear();
@@ -1243,21 +1251,69 @@ namespace threepp {
             state->planeSize = planeSize;
             state->liveCheck = dm.geometry();
 
-            // FFT cascade — single-cascade Phase 1.
-            water::PhillipsSpectrum::Settings ps{};
-            ps.textureSize = dm.params.textureSize;
-            ps.tileSize    = dm.params.tileSize0;
-            ps.windTheta   = dm.params.windTheta;
-            ps.windSpeed   = dm.params.windSpeed;
-            // Suppress wavelengths shorter than ~5× the mesh sample spacing.
-            // Without it, single-cascade Phillips puts energy into bands the
-            // mesh can't resolve, producing the spike-crest aliasing we saw on
-            // first run.
-            ps.smallWaveCutoff = 5.f * dm.params.tileSize0 / float(dm.params.textureSize);
-            state->phillips = std::make_unique<water::PhillipsSpectrum>(*ctx, ps);
-            state->dyn      = std::make_unique<water::DynamicSpectrum>(
-                    *ctx, *state->phillips, dm.params.textureSize, dm.params.tileSize0);
-            state->ifft     = std::make_unique<water::IFFT>(*ctx, dm.params.textureSize);
+            // FFT cascades — one Phillips/Dynamic/IFFT chain per non-zero
+            // `tileSize` in DisplacedMesh::Params. Cascades are band-passed
+            // by k so each covers a disjoint wavenumber range:
+            //   cascade 0 (largest tile): 0 → kNyq of cascade 1
+            //   cascade 1 (middle):       kNyq of cascade 1 → kNyq of cascade 2
+            //   cascade 2 (smallest):     kNyq of cascade 2 → ∞
+            // where kNyq_i = π·N / tileSize_i. Cascade 0 is required;
+            // tileSize1/tileSize2 == 0 disable the corresponding band.
+            const float tileSizes[3] = {
+                    dm.params.tileSize0,
+                    dm.params.tileSize1,
+                    dm.params.tileSize2,
+            };
+            const float texN = float(dm.params.textureSize);
+            // Hand-off k between adjacent cascades = the SMALLER tile's lowest
+            // natural k = 2π / tileSize_(smaller). Each cascade then covers
+            // wavelengths between its own tile and the next-smaller tile:
+            //   cascade 0: λ ∈ [tileSize_1, tileSize_0]
+            //   cascade 1: λ ∈ [tileSize_2, tileSize_1]
+            //   cascade 2: λ ∈ [<tileSize_2]  (down to its own Nyquist)
+            //
+            // Why not split at the larger tile's Nyquist (k = π·N / L_larger)?
+            // Because that boundary is at the mesh's resolving limit — it
+            // hands all the mesh-resolvable wavelengths to cascade 0 alone,
+            // and cascades 1 and 2 emit only sub-mesh wavelengths that
+            // alias as displacement noise. The 2π/L_smaller scheme reserves
+            // a real, mesh-displayable band for each intermediate cascade.
+            constexpr float kTwoPi = 6.28318530717958647692f;
+            const float kHandoff01 = (tileSizes[0] > 0.f && tileSizes[1] > 0.f)
+                    ? kTwoPi / tileSizes[1] : 0.f;
+            const float kHandoff12 = (tileSizes[1] > 0.f && tileSizes[2] > 0.f)
+                    ? kTwoPi / tileSizes[2] : 0.f;
+            for (uint32_t i = 0; i < 3; ++i) {
+                if (!(tileSizes[i] > 0.f)) continue;
+                water::PhillipsSpectrum::Settings ps{};
+                ps.textureSize = dm.params.textureSize;
+                ps.tileSize    = tileSizes[i];
+                ps.windTheta   = dm.params.windTheta;
+                ps.windSpeed   = dm.params.windSpeed;
+                // Suppress wavelengths shorter than ~5× the cascade's sample
+                // spacing. Without this, single-cascade Phillips puts energy
+                // into bands the FFT can't resolve, producing spike-crest
+                // aliasing.
+                ps.smallWaveCutoff = 5.f * tileSizes[i] / texN;
+                if (i == 0) {
+                    ps.kMin = 0.f;
+                    ps.kMax = kHandoff01; // 0 if no cascade 1 → no upper bound
+                } else if (i == 1) {
+                    ps.kMin = kHandoff01;
+                    ps.kMax = kHandoff12; // 0 if no cascade 2 → no upper bound
+                } else {
+                    ps.kMin = kHandoff12;
+                    ps.kMax = 0.f;
+                }
+                auto& c = state->cascades[i];
+                c.tileSize = tileSizes[i];
+                c.phillips = std::make_unique<water::PhillipsSpectrum>(*ctx, ps);
+                c.dyn      = std::make_unique<water::DynamicSpectrum>(
+                        *ctx, *c.phillips, dm.params.textureSize, tileSizes[i]);
+                c.ifft     = std::make_unique<water::IFFT>(*ctx, dm.params.textureSize);
+                state->cascadeMask |= (1u << i);
+            }
+            if (state->cascadeMask == 0u) return nullptr; // no cascades → invalid setup
 
             // Scratch image for IFFT ping-pong (RG32F, same size as the dyn
             // images). One is enough for Phase 1 — both IFFT calls in a
@@ -1307,19 +1363,21 @@ namespace threepp {
             check(vkAllocateDescriptorSets(ctx->device(), &dai, &state->displaceDS),
                   "vkAllocateDescriptorSets(displace)");
 
-            // Bind cascade-0 spatial images to all 6 binding slots — the shader
-            // gates which slots are sampled via cascadeMask, so duplicating
-            // views into the unused slots is harmless and avoids needing dummy
-            // 1×1 textures.
-            VkDescriptorImageInfo heightInfo{};
-            heightInfo.sampler     = displaceSampler;
-            heightInfo.imageView   = state->dyn->ht().view;
-            heightInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            VkDescriptorImageInfo dispInfo{};
-            dispInfo.sampler     = displaceSampler;
-            dispInfo.imageView   = state->dyn->displacement().view;
-            dispInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
+            // Bind each enabled cascade's spatial images to its (height, displace)
+            // slot pair. Disabled cascades are filled with cascade 0's images
+            // so the shader's combined-image-sampler bindings are always valid;
+            // the shader gates which slots are actually sampled via cascadeMask.
+            std::array<VkDescriptorImageInfo, 6> imageInfos{};
+            for (uint32_t i = 0; i < 3; ++i) {
+                const uint32_t srcCascade = (state->cascadeMask & (1u << i)) ? i : 0u;
+                const auto& c = state->cascades[srcCascade];
+                imageInfos[i * 2 + 0].sampler     = displaceSampler;
+                imageInfos[i * 2 + 0].imageView   = c.dyn->ht().view;
+                imageInfos[i * 2 + 0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                imageInfos[i * 2 + 1].sampler     = displaceSampler;
+                imageInfos[i * 2 + 1].imageView   = c.dyn->displacement().view;
+                imageInfos[i * 2 + 1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            }
             std::array<VkWriteDescriptorSet, 6> ws{};
             for (uint32_t i = 0; i < 6; ++i) {
                 ws[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1327,7 +1385,7 @@ namespace threepp {
                 ws[i].dstBinding = i;
                 ws[i].descriptorCount = 1;
                 ws[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                ws[i].pImageInfo = (i % 2u == 0u) ? &heightInfo : &dispInfo;
+                ws[i].pImageInfo = &imageInfos[i];
             }
             vkUpdateDescriptorSets(ctx->device(), uint32_t(ws.size()), ws.data(), 0, nullptr);
 
@@ -1341,27 +1399,28 @@ namespace threepp {
         void refreshDisplacedBlas(DisplacedMesh& dm, DisplacedMeshState& st, float elapsedSeconds) {
             VkCommandBuffer cb = beginOneShot();
 
-            // (1) On the very first refresh, dispatch the one-shot Phillips
-            // compute that fills h0_. Subsequent frames skip it.
-            if (!st.phillipsRecorded) {
-                st.phillips->recordCompute(cb);
-                st.phillipsRecorded = true;
+            // (1)..(3) Run each enabled cascade's FFT chain in turn. Phillips
+            // is one-shot per cascade. DynamicSpectrum re-runs each frame.
+            // IFFT calls are sequential on the same queue so they can share
+            // the single scratch image. Cascades dispatch back-to-back; the
+            // Vulkan command buffer recording order plus the IFFT's internal
+            // image-layout barriers serialize the work correctly.
+            for (uint32_t i = 0; i < 3; ++i) {
+                if (!(st.cascadeMask & (1u << i))) continue;
+                auto& c = st.cascades[i];
+                if (!c.phillipsRecorded) {
+                    c.phillips->recordCompute(cb);
+                    c.phillipsRecorded = true;
+                }
+                c.dyn->recordCompute(cb, elapsedSeconds);
+                water::OceanImage ht  = c.dyn->ht();
+                water::OceanImage dsp = c.dyn->displacement();
+                ht.currentLayout  = VK_IMAGE_LAYOUT_GENERAL;
+                dsp.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+                st.scratchA.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+                c.ifft->recordApply(cb, ht,  st.scratchA);
+                c.ifft->recordApply(cb, dsp, st.scratchA);
             }
-
-            // (2) Time-evolve the spectrum (frequency domain).
-            st.dyn->recordCompute(cb, elapsedSeconds);
-
-            // (3) IFFT the height + displacement spectra into spatial-domain
-            // images. After each call, the input image holds the spatial result.
-            // We use a single scratch image — both calls happen sequentially
-            // on the same queue so reuse is safe.
-            water::OceanImage ht  = st.dyn->ht();           // copy of the struct (holds VkImage handle)
-            water::OceanImage dsp = st.dyn->displacement();
-            ht.currentLayout  = VK_IMAGE_LAYOUT_GENERAL;
-            dsp.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
-            st.scratchA.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
-            st.ifft->recordApply(cb, ht,  st.scratchA);
-            st.ifft->recordApply(cb, dsp, st.scratchA);
 
             // (4) Dispatch water_displace.comp → writes positions + normals
             // into the BLAS vertex/normal buffers.
@@ -1392,7 +1451,7 @@ namespace threepp {
             pc.tileSize2    = dm.params.tileSize2;
             pc.waveScale    = dm.params.waveScale;
             pc.choppiness   = dm.params.choppiness;
-            pc.cascadeMask  = 1u; // single cascade, Phase 1
+            pc.cascadeMask  = st.cascadeMask;
             vkCmdPushConstants(cb, displacePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                                0, sizeof(pc), &pc);
             const uint32_t groups = (st.vertexCount + 63u) / 64u;
@@ -1671,6 +1730,7 @@ namespace threepp {
             d.iridescenceIOR = 1.3f;
             d.iridescenceThicknessNm = 400.0f;
             d.dispersion = 0.0f;              // off by default; lobe is skipped when dispersion == 0
+            d.thickness = 0.0f;               // 0 = use back-face actual distance for Beer-Lambert (closed-mesh path)
             d.occlusionTexIndex = -1;
             static constexpr float kIdent[9] = {1,0,0, 0,1,0, 0,0,1};
             std::copy(kIdent, kIdent+9, d.uvTransform);
@@ -1733,6 +1793,9 @@ namespace threepp {
                 d.attenuationColor[1] = att->attenuationColor.g;
                 d.attenuationColor[2] = att->attenuationColor.b;
                 d.attenuationDistance = att->attenuationDistance;
+            }
+            if (auto* th = dynamic_cast<MaterialWithThickness*>(mat.get())) {
+                d.thickness = std::max(0.0f, th->thickness);
             }
             if (auto* sp = dynamic_cast<MaterialWithPbrSpecular*>(mat.get())) {
                 d.specularIntensity   = sp->specularIntensity;

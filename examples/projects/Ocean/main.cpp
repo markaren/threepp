@@ -25,35 +25,52 @@ using namespace threepp;
 
 namespace {
 
-    constexpr float kTileSize    = 400.0f;   // metres — matches default DisplacedMesh::Params.tileSize0
-    constexpr uint32_t kFftSize  = 256;
+    constexpr float kTileSize    = 1000.0f;  // metres — full mesh extent and cascade-0 tile
+    constexpr uint32_t kFftSize  = 512;      // 4× FFT compute vs 256² but halves vertex spacing
     constexpr float kPlaneEdge   = kTileSize;  // mesh extends one full FFT tile in X and Z
-    constexpr int   kSubdiv      = static_cast<int>(kFftSize) - 1;
+    constexpr int   kSubdiv      = static_cast<int>(kFftSize) - 1;  // 512² verts → 1.95 m spacing at 1000 m
 
     auto makeOceanMaterial() {
         auto mat = MeshPhysicalMaterial::create();
-        mat->color = Color(0.05f, 0.20f, 0.30f);
-        mat->roughness = 0.05f;
+        // Pure water has no diffuse pigment — the blue comes from Beer-Lambert
+        // absorption through the medium, not albedo.
+        mat->color = Color::white;
+        // Small roughness simulates the sub-pixel chop the FFT can't resolve
+        // (smallest resolved wavelength ≈ 6 m at 256² over 800 m, so anything
+        // finer is missing). A low microfacet roughness scatters a little
+        // around the perfect reflection direction → the bright sun smears
+        // into a "glitter path" across the wave field instead of a single
+        // hot pixel, which is the visual cue that sells "ocean" more than
+        // any other detail. Real-time games do exactly this.
+        mat->roughness = 0.04f;
         mat->metalness = 0.0f;
         mat->setIor(1.33f);
         mat->transmission = 1.0f;
-        mat->thickness = 0.5f;
-        // Aggressive absorption — open ocean visibility ~3 m. Without this the
-        // path tracer sees right through to the floor and the surface looks
-        // like a wet sand dune. Ocean-blue tint via attenuationColor (Beer-
-        // Lambert): light has to travel ~3 m through water before being tinted
-        // to half intensity at this wavelength.
+        // doubleSided + thickness opts this surface into the path tracer's
+        // thin-shell transmission path: every transmission crossing applies
+        // Beer-Lambert for `thickness` metres of in-medium depth. The down-
+        // crossing (camera → water) tints the refracted ray; the up-crossing
+        // (sand → camera, after bounce) tints again. 2 m × 2 ≈ 4 m of
+        // effective tint — a tropical-ocean blue that still shows refracted
+        // sand under the brightest crests. Without doubleSided the BSDF
+        // would need to use the actual ray distance through the medium
+        // (~12 m here), which over-saturates to near-black.
+        mat->side = Side::Double;
+        mat->thickness = 2.0f;
         mat->attenuationColor = Color(0.10f, 0.45f, 0.55f);
         mat->attenuationDistance = 3.0f;
-        mat->clearcoat = 1.0f;
-        mat->clearcoatRoughness = 0.05f;
+        // mat->clearcoat = 0.1;
+        // No clearcoat: with roughness=0 the base specular is already a clean
+        // delta lobe and Fresnel handles reflect/refract via the transmission
+        // BSDF. Stacking a clearcoat lobe on top was the dominant noise
+        // source on the surface (per-pixel variance from sampling both lobes).
         return mat;
     }
 
     auto makeSandMaterial() {
         return MeshStandardMaterial::create({
-                {"color", Color(0.78f, 0.68f, 0.45f)},
-                {"roughness", 0.95f},
+                {"color", Color::black},
+                {"roughness", 1.0f},
         });
     }
 
@@ -63,8 +80,13 @@ int main() {
 
     Canvas canvas("Vulkan PT — Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
     VulkanRenderer renderer(canvas);
+    renderer.setDenoise(false);
     renderer.toneMapping = ToneMapping::ACESFilmic;
-    renderer.toneMappingExposure = 1.0f;
+    // puresky_2k.hdr is a very bright daylight env. ACES desaturates strongly
+    // at high luminance so the sand goes white-ish even at 0.5; 0.3 keeps
+    // the sand in the saturated regime so its tan colour shows through and
+    // the water's blue-tinted depth gradient can be read against it.
+    renderer.toneMappingExposure = 0.5f;
 
     RGBELoader rgbe;
     auto env = rgbe.load(std::string(DATA_FOLDER) +
@@ -74,9 +96,11 @@ int main() {
     scene.background = env;
     scene.environment = env;
 
-    // Sun-like directional light. Photon mapping in the PT will produce focused
-    // caustics on the sand floor as light refracts through wave crests.
-    auto sun = DirectionalLight::create(Color(1.0f, 0.95f, 0.85f), 4.0f);
+    // Sun-like directional light. The HDR env already contains a sun (env
+    // CDF + MIS will importance-sample it), so the directional is mostly
+    // here to drive the photon-mapping caustics pass — kept gentle so it
+    // doesn't double up with the env's own sun on the surface.
+    auto sun = DirectionalLight::create(Color(1.0f, 0.95f, 0.85f), 2.5f);
     sun->position.set(2.f, 5.f, 2.f);
     Object3D sunTarget;
     sunTarget.position.set(0.f, 0.f, 0.f);
@@ -86,15 +110,15 @@ int main() {
     auto ambient = AmbientLight::create(Color(0.55f, 0.72f, 0.95f), 0.25f);
     // scene.add(ambient);
 
-    // Sand floor several metres below the surface — gives the refracted path
-    // something to land on AND enough water column for the absorption tint to
-    // build up. With 3 m attenuation distance and a 12 m column, light loses
-    // ~98% of its red component before hitting the floor → ocean blue.
-    // Slightly larger than the ocean tile so the rim doesn't escape.
-    auto floor = Mesh::create(PlaneGeometry::create(kPlaneEdge * 2.f, kPlaneEdge * 2.f),
+    // Sand floor sits directly under the ocean tile and matches its extent:
+    // making the floor larger leaves a visible sand frame around the water
+    // when viewed from above (the open-ocean illusion breaks). At the
+    // edges, rays going past the water plane just hit the env sky, which
+    // sells "horizon" better than visible beach.
+    auto floor = Mesh::create(PlaneGeometry::create(kPlaneEdge, kPlaneEdge),
                               makeSandMaterial());
     floor->rotation.x = -math::PI / 2.f;
-    floor->position.y = -12.f;
+    floor->position.y = -50.f;
     scene.add(floor);
 
     // Ocean surface. PlaneGeometry with kSubdiv segments → kFftSize²
@@ -104,17 +128,35 @@ int main() {
     oceanGeo->rotateX(-math::PI / 2.f);
     auto oceanMat = makeOceanMaterial();
     auto ocean = DisplacedMesh::create(oceanGeo, oceanMat);
+    // Three-cascade FFT (WebTide-style):
+    //   tileSize0 = 1000 m → big swells, dominant macro shapes.
+    //   tileSize1 =  100 m → mid-frequency waves filling each swell face.
+    //   tileSize2 =    8 m → fine ripples / chop, the per-wave-face detail.
+    // Cascade 2's lower bound is set by the mesh resolving ability: at 1.95 m
+    // vertex spacing (512² mesh over 1000 m), 8 m wavelengths have ~4 mesh
+    // samples per wavelength — the alias floor. Going below ~6 m at this
+    // mesh density produces spike-crest aliasing.
+    // Each cascade is band-passed in k-space (PhillipsSpectrum.kMin/kMax)
+    // so they stack cleanly without double-counting wavelengths the
+    // adjacent band already covers.
     ocean->params.tileSize0   = kTileSize;
+    ocean->params.tileSize1   = 100.0f;
+    ocean->params.tileSize2   = 8.0f;
     ocean->params.windTheta   = 0.6f;       // wind slightly off the X axis
-    ocean->params.windSpeed   = 14.0f;      // moderate breeze (m/s)
+    ocean->params.windSpeed   = 20.0f;      // fresh breeze tuned to the larger 1 km extent
     ocean->params.waveScale   = 1.0f;
+    ocean->params.choppiness  = 0.55f;      // sharper crests, more visible wave-folding
     ocean->params.textureSize = kFftSize;
     scene.add(ocean);
 
-    PerspectiveCamera camera(45.f, canvas.aspect(), 0.1f, 200.f);
-    camera.position.set(8.f, 4.f, 12.f);
+    // Far-clip raised so the horizon doesn't get cut at the elevated/distant
+    // camera. Position is "drone over open water" — well above the surface
+    // and far enough out that the rim of the water tile sits beyond the
+    // frustum, leaving sky/horizon to fill the upper half of the frame.
+    PerspectiveCamera camera(45.f, canvas.aspect(), 0.1f, 2000.f);
+    camera.position.set(60.f, 12.f, 100.f);
     OrbitControls controls{camera, canvas};
-    controls.target.set(0.f, 0.f, 0.f);
+    controls.target.set(-300.f, 1.f, -300.f);// look outward across the surface
     controls.update();
 
     float waveScale = ocean->params.waveScale;

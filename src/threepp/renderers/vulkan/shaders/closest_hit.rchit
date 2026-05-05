@@ -90,6 +90,7 @@ struct MaterialDesc {
     float iridescenceIOR;           // thin-film IOR (1.0..2.5; default 1.3)
     float iridescenceThicknessNm;   // thin-film thickness in nm (default 400)
     float dispersion;               // KHR_materials_dispersion: 0 = off; ~0.05+ visible
+    float thickness;                // KHR_materials_volume: in-medium distance proxy for thin/open meshes; 0 = fall back to back-face actual ray distance
 };
 
 const uint kMaxMaterialTextures = 2048;
@@ -843,7 +844,8 @@ void main() {
     // with the chosen bounce direction. Matches the WGPU PT pattern: no
     // 1/transmission inverse-prob scaling, so `transmission` doubles as a
     // stylised reflect-vs-transmit blend factor (artist control), not a physical
-    // mixing weight. Out-of-scope: dispersion, thin-wall thickness proxy.
+    // mixing weight. Dispersion is sampled per-channel below; thin-wall
+    // thickness proxy is wired through `mdesc.thickness` in the BL block.
     //
     // The outgoing payload sets bit 2 ("NEE skipped at this hit") so raygen
     // doesn't half-weight the env on the next bounce-into-miss — the MIS
@@ -877,13 +879,25 @@ void main() {
         const vec3  H    = sampleVNDF_H(V, N, alpha, u2);
         const float cosH = max(dot(V, H), 0.0);
 
+        // Thin-shell heuristic: a doubleSided transmissive mesh is a thin
+        // sheet (sunglasses lens, leaf, glass pane). Back-face hits on such
+        // meshes are physically another entry into the medium, not an exit —
+        // without this, the back-side Schlick branch produces near-TIR
+        // mirror reflection when the lens is viewed from behind. Closed
+        // single-sided glass meshes (the common case) keep the original
+        // front=enter / back=exit semantics. doubleSided closed meshes are
+        // very rare; if you have one, prefer single-sided rendering.
+        const bool isThinShell = mdesc.doubleSided != 0;
+        const bool effFront = isFront || isThinShell;
+
         // Schlick Fresnel at the microfacet half-vector. Uses base IOR so the
         // reflect/refract branch decision is achromatic — chromatic Fresnel
         // adds visible noise without much benefit at typical dispersion values.
-        // On exit use the transmitted-side cosine so TIR raises F→1 smoothly.
+        // On true exit (closed mesh, !effFront) use the transmitted-side cosine
+        // so TIR raises F→1 smoothly.
         const float r0    = pow((1.0 - ior_base) / (1.0 + ior_base), 2.0);
         const float sin2H = max(0.0, 1.0 - cosH * cosH);
-        const float cosSchlick = isFront
+        const float cosSchlick = effFront
                 ? cosH
                 : sqrt(max(0.0, 1.0 - ior_base * ior_base * sin2H));
         const float F = r0 + (1.0 - r0) * pow(1.0 - cosSchlick, 5.0);
@@ -916,7 +930,7 @@ void main() {
                 channelMask = vec3(0.0);
                 channelMask[ch] = 3.0;
             }
-            const float eta = isFront ? (1.0 / ior) : ior;
+            const float eta = effFront ? (1.0 / ior) : ior;
             const vec3 refr = refract(I, H, eta);
             if (dot(refr, refr) < 1e-6) {
                 // Total internal reflection — fall back to mirror reflect.
@@ -945,15 +959,28 @@ void main() {
                 }
                 vec3 glassTint = tintBase * G1out;
                 // Beer-Lambert volumetric attenuation (KHR_materials_volume).
-                // Apply only on the exit hit (!isFront) where gl_HitTEXT is the
-                // distance traveled INSIDE the medium. Front-face refractions
-                // travel through air, not glass — gating prevents double-tinting.
-                // Single-sided "thin glass" meshes never produce a back-face hit
-                // and therefore stay un-attenuated; that path needs the
-                // `thickness` proxy, not yet wired here.
-                if (mdesc.attenuationDistance > 0.0 && !isFront) {
-                    glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
-                                     vec3(gl_HitTEXT / mdesc.attenuationDistance));
+                // Two paths:
+                //   isThinShell  → ray refracts as entry on every hit (no
+                //                  back-face exit exists). Apply the user-
+                //                  supplied `thickness` as the in-medium
+                //                  path length on each crossing.
+                //   else         → closed mesh / single-sided open surface.
+                //                  Apply only on the true exit (!effFront)
+                //                  using gl_HitTEXT as the actual in-medium
+                //                  distance. Falls back to `thickness` when
+                //                  gl_HitTEXT ≈ 0 — mirrors WGPU's pathLen
+                //                  logic at WgpuPathTracerShaders_Rt.cpp:2682.
+                if (mdesc.attenuationDistance > 0.0) {
+                    if (isThinShell) {
+                        glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
+                                         vec3(mdesc.thickness / mdesc.attenuationDistance));
+                    } else if (!effFront) {
+                        const float pathLen = (gl_HitTEXT < 1e-2 && mdesc.thickness > 0.0)
+                                ? mdesc.thickness
+                                : gl_HitTEXT;
+                        glassTint *= pow(max(mdesc.attenuationColor, vec3(1e-6)),
+                                         vec3(pathLen / mdesc.attenuationDistance));
+                    }
                 }
                 tWeight = glassTint * channelMask / (eta * eta);
             }
@@ -973,22 +1000,30 @@ void main() {
         payload.nextDir       = wDir;
         payload.flags         = 4u;
         payload.seed          = seed;
-        if (wasReflect) {
-            // Reflect off glass: tag glass as primary so reproject follows the
-            // glass surface (content seen at this pixel is the env/scene
-            // reflected in glass, which is anchored to the glass position).
+        // Primary-tag policy for transmission hits:
+        //   reflect:        always tag glass as primary (reflection is anchored
+        //                   on the glass surface).
+        //   refract, ior>1: tag glass as primary too. Without it, glass→sky
+        //                   paths cold-start every frame under camera motion
+        //                   and the stochastic reflect/refract split
+        //                   desaturates tinted glass until motion stops.
+        //                   raygen captures the FIRST non-zero hitInstanceId,
+        //                   so the EXTERIOR glass surface anchors reproject;
+        //                   interior refractions don't overwrite.
+        //   refract, ior=1: alpha-blend / stochastic pass-through. The ray
+        //                   continues unchanged toward the actual content
+        //                   behind, which IS what should anchor reproject.
+        //                   Skip the primary tag so the next non-zero hit
+        //                   wins — preserves stable backgrounds visible
+        //                   through transparent foliage / decals.
+        const bool tagPrimary = wasReflect || (ior_base > 1.01);
+        if (tagPrimary) {
             payload.hitWorldPos     = hitPos;
             payload.hitInstanceId   = uint(gl_InstanceCustomIndexEXT) + 1u;
             payload.hitRoughness    = roughness;
             payload.hitMetalness    = metalness;
             payload.hitTransmission = mdesc.transmission;
         } else {
-            // Refract through glass: skip the primary tag so raygen captures
-            // the surface BEHIND the glass on the next iteration. Otherwise
-            // interior content reprojects via the glass motion matrix and
-            // visibly slides with the door (CommercialRefrigerator). On a
-            // glass→sky path this leaves primary unset → cold-start, which is
-            // a small price for stable refraction reprojection.
             payload.hitWorldPos     = vec3(0.0);
             payload.hitInstanceId   = 0u;
             payload.hitRoughness    = 1.0;

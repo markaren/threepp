@@ -56,7 +56,7 @@ struct MaterialDesc {
     float ior;               //  4 (68)
     float _pad1[19];         // 76 (72..148)  ← transmissionTexIndex .. doubleSided
     mat3  uvTransform;       // 36 (148..184) ← used (albedo UV transform)
-    float _pad2[68];         // 272 (184..456) ← occlusion/normal/...iridescence
+    float _pad2[69];         // 276 (184..460) ← occlusion/normal/...iridescence/thickness
 };
 
 const uint kMaxMaterialTextures = 2048;
