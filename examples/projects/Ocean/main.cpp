@@ -12,23 +12,60 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
+#include "threepp/input/KeyListener.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/math/Box3.hpp"
 #include "threepp/objects/DisplacedMesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/threepp.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <iostream>
 
 using namespace threepp;
 
 namespace {
 
+    // Boat input state — captured by KeyListener, polled each frame.
+    struct BoatInput : KeyListener {
+        bool W = false, A = false, S = false, D = false;
+        void onKeyPressed(KeyEvent e) override { update(e.key, true); }
+        void onKeyReleased(KeyEvent e) override { update(e.key, false); }
+        void update(Key k, bool down) {
+            if (k == Key::W || k == Key::UP)    W = down;
+            if (k == Key::S || k == Key::DOWN)  S = down;
+            if (k == Key::A || k == Key::LEFT)  A = down;
+            if (k == Key::D || k == Key::RIGHT) D = down;
+        }
+    };
+
+    // Persistent boat state. Position is world, yaw is rotation around +Y
+    // (heading); pitch and roll are read each frame from wave-surface tilt
+    // and aren't integrated. Forward speed is along +heading; max ~14 kn
+    // (~7 m/s) for a research vessel of Gunnerus's size.
+    struct BoatState {
+        Vector3 position{0.f, 0.f, 0.f};
+        float   yaw          = 0.f;       // radians
+        float   forwardSpeed = 0.f;       // m/s along +heading
+        float   smoothPitch  = 0.f;       // radians, low-passed from wave tilt
+        float   smoothRoll   = 0.f;       // radians
+        float   y            = 0.f;       // metres, spring-damped toward wave height
+        float   vY           = 0.f;       // m/s, heave velocity (state for the spring-damper)
+    };
+}// namespace
+
+namespace {
+
     constexpr float kTileSize    = 1000.0f;  // metres — full mesh extent and cascade-0 tile
-    constexpr uint32_t kFftSize  = 512;      // 4× FFT compute vs 256² but halves vertex spacing
+    constexpr uint32_t kFftSize  = 1024;     // 4× cost vs 512² → 0.98 m vertex spacing, resolves λ ≥ 2 m
     constexpr float kPlaneEdge   = kTileSize;  // mesh extends one full FFT tile in X and Z
-    constexpr int   kSubdiv      = static_cast<int>(kFftSize) - 1;  // 512² verts → 1.95 m spacing at 1000 m
+    constexpr int   kSubdiv      = static_cast<int>(kFftSize) - 1;  // 1024² verts ≈ 1 M; BLAS rebuild scales with this
 
     auto makeOceanMaterial() {
         auto mat = MeshPhysicalMaterial::create();
@@ -97,14 +134,14 @@ int main() {
     // CDF + MIS will importance-sample it), so the directional is mostly
     // here to drive the photon-mapping caustics pass — kept gentle so it
     // doesn't double up with the env's own sun on the surface.
-    auto sun = DirectionalLight::create(Color(1.0f, 0.95f, 0.85f), 1.0f);
+    auto sun = DirectionalLight::create(Color(1.0f, 0.95f, 0.85f), 2.0f);
     sun->position.set(2.f, 5.f, 2.f);
     Object3D sunTarget;
     sunTarget.position.set(0.f, 0.f, 0.f);
     sun->setTarget(sunTarget);
     scene.add(sun);
 
-    auto ambient = AmbientLight::create(Color(0.55f, 0.72f, 0.95f), 0.25f);
+    // auto ambient = AmbientLight::create(Color(0.55f, 0.72f, 0.95f), 0.25f);
     // scene.add(ambient);
 
     // Sand floor sits directly under the ocean tile and matches its extent:
@@ -125,32 +162,83 @@ int main() {
     oceanGeo->rotateX(-math::PI / 2.f);
     auto oceanMat = makeOceanMaterial();
     auto ocean = DisplacedMesh::create(oceanGeo, oceanMat);
-    // Two-cascade FFT (cascade 2 disabled):
+    // Three-cascade FFT:
     //   tileSize0 = 1000 m → big swells, dominant macro shapes.
     //   tileSize1 =  100 m → mid-frequency waves filling each swell face.
-    // Cascade 2 was emitting wavelengths below the 1.95 m mesh resolving
-    // limit, which displayed as random per-vertex displacement noise that
-    // the denoiser couldn't filter (legitimately high-frequency, edge-
-    // preserving). Dropping it gives a cleaner raw image; the lost detail
-    // band is below where the mesh could honestly display it anyway.
+    //   tileSize2 =    8 m → fine chop in the 4–8 m range (the rest aliases
+    //                        at 1.95 m mesh spacing, but Phillips 1/k⁴ puts
+    //                        most energy in the resolvable end).
+    // The band-pass scheme (PhillipsSpectrum.kMin/kMax in the renderer)
+    // keeps each cascade in its own k-range so they stack cleanly without
+    // double-counting wavelengths the adjacent band already covers.
     ocean->params.tileSize0   = kTileSize;
     ocean->params.tileSize1   = 100.0f;
-    ocean->params.tileSize2   = 0.0f;
+    ocean->params.tileSize2   = 8.0f;
     ocean->params.windTheta   = 0.6f;       // wind slightly off the X axis
     ocean->params.windSpeed   = 20.0f;      // fresh breeze tuned to the larger 1 km extent
-    ocean->params.waveScale   = 1.0f;
+    ocean->params.waveScale   = 0.1f;
     ocean->params.choppiness  = 0.55f;      // sharper crests, more visible wave-folding
     ocean->params.textureSize = kFftSize;
     scene.add(ocean);
 
+    // Gunnerus research vessel (~28 m × 9 m). Loaded synchronously at
+    // startup — 31 MB binary glTF takes ~1 s. Re-scaled to a known length so
+    // the hydrodynamic sample points (fore/aft/port/starboard) are
+    // physically meaningful regardless of the asset's source unit.
+    constexpr float kBoatLength = 28.0f;
+    constexpr float kBoatBeam   = 9.0f;
+    GLTFLoader gltfLoader;
+    auto gltf = gltfLoader.load(std::string(DATA_FOLDER) + "/models/gltf/Gunnerus.glb");
+    if (!gltf || !gltf->scene) {
+        std::cerr << "Failed to load Gunnerus.glb" << std::endl;
+        return 1;
+    }
+    // Wrap the asset in an outer Group so per-frame physics transforms
+    // (boat->position / rotation) live on the wrapper, while a one-time
+    // asset-orientation correction stays on the inner Group. Without the
+    // wrap, the per-frame `boat->rotation.set(...)` would overwrite the
+    // initial Y rotation we apply to align the asset's heading axis.
+    auto innerAsset = gltf->scene;
+    auto boat = Group::create();
+    boat->add(innerAsset);
+    {
+        Box3 bbox;
+        bbox.setFromObject(*innerAsset);
+        Vector3 size; bbox.getSize(size);
+        // If the asset is longer in X than Z, its longitudinal axis is +X
+        // not +Z. Rotate so its long axis aligns with Z to match our heading
+        // convention (yaw = 0 → translate along +Z).
+        if (size.x > size.z) {
+            innerAsset->rotateY(-math::PI / 2.f);
+            bbox.setFromObject(*innerAsset);
+            bbox.getSize(size);
+        }
+        // Bow direction can't be inferred from bbox alone — both ends of
+        // the longest axis look the same from outside. Empirically Gunnerus
+        // ends up with bow at −Z after the auto-rotation, so W key (which
+        // translates +Z) reads as "go backward". Add a 180° flip so the
+        // visual nose points along the heading direction. If you load a
+        // different asset whose bow ends up at +Z naturally, drop this.
+        innerAsset->rotateY(math::PI);
+        const float maxExtent = std::max({size.x, size.y, size.z});
+        if (maxExtent > 0.f) {
+            const float s = kBoatLength / maxExtent;
+            innerAsset->scale.set(s, s, s);
+        }
+    }
+    scene.add(boat);
+    BoatState bs;
+    BoatInput bi;
+    canvas.addKeyListener(bi);
+
     // Far-clip raised so the horizon doesn't get cut at the elevated/distant
-    // camera. Position is "drone over open water" — well above the surface
-    // and far enough out that the rim of the water tile sits beyond the
-    // frustum, leaving sky/horizon to fill the upper half of the frame.
+    // camera. Initial position is offset from the boat; OrbitControls'
+    // target is updated each frame to follow the boat so orbiting always
+    // happens around the vessel.
     PerspectiveCamera camera(45.f, canvas.aspect(), 0.1f, 2000.f);
-    camera.position.set(60.f, 12.f, 100.f);
+    camera.position.set(40.f, 18.f, 60.f);
     OrbitControls controls{camera, canvas};
-    controls.target.set(-300.f, 1.f, -300.f);// look outward across the surface
+    controls.target.set(0.f, 1.f, 0.f);
     controls.update();
 
     float waveScale = ocean->params.waveScale;
@@ -169,9 +257,15 @@ int main() {
         ImGui::Text("FPS: %.1f", fps);
         ImGui::Separator();
         ImGui::TextWrapped(
-            "FFT-displaced surface (single-cascade Phillips, %u² IFFT, "
-            "%.0f m tile). Path-traced refraction + photon-map caustics.",
+            "FFT-displaced surface (multi-cascade Phillips, %u² IFFT, "
+            "%.0f m tile). Path-traced refraction + photon-map caustics. "
+            "WASD = steer the Gunnerus.",
             kFftSize, kTileSize);
+        ImGui::Text("Speed: %.1f m/s   Heading: %.0f°", bs.forwardSpeed,
+                    bs.yaw * 180.f / 3.14159f);
+        ImGui::Text("Pos: %7.1f, %7.1f", bs.position.x, bs.position.z);
+        ImGui::Text("Keys  W:%d  A:%d  S:%d  D:%d",
+                    bi.W ? 1 : 0, bi.A ? 1 : 0, bi.S ? 1 : 0, bi.D ? 1 : 0);
         ImGui::Separator();
         if (ImGui::SliderFloat("Wave scale", &waveScale, 0.f, 3.f, "%.2f"))
             ocean->params.waveScale = waveScale;
@@ -205,7 +299,7 @@ int main() {
 
     Clock clock;
     canvas.animate([&] {
-        const float dt = clock.getDelta();
+        const float dt = std::min(clock.getDelta(), 0.1f);  // clamp dt — pause / breakpoints shouldn't teleport the boat
         fpsAccum += dt;
         ++fpsFrames;
         if (fpsAccum >= 0.5f) {
@@ -213,7 +307,91 @@ int main() {
             fpsAccum = 0.f;
             fpsFrames = 0;
         }
+
+        // === Boat steering integration ===
+        // Linear: W = forward thrust, S = reverse. Speed clamped to ±vMax;
+        // a linear drag (0.7/s) gives a coast-down once thrust released.
+        const float thrust = (bi.W ? 6.0f : 0.f) - (bi.S ? 4.0f : 0.f);
+        bs.forwardSpeed += thrust * dt;
+        bs.forwardSpeed -= bs.forwardSpeed * 0.5f * dt;
+        bs.forwardSpeed = std::clamp(bs.forwardSpeed, -4.f, 8.f);
+        // Yaw: A = left, D = right. Rate scales with speed (a stationary
+        // hull doesn't yaw easily). Min factor 0.1 keeps the rudder usable
+        // when nearly stopped.
+        const float yawInput = (bi.A ? 1.0f : 0.f) - (bi.D ? 1.0f : 0.f);
+        const float speedFactor = std::clamp(std::abs(bs.forwardSpeed) / 5.f, 0.1f, 1.0f);
+        bs.yaw += yawInput * 0.6f * speedFactor * dt;
+        // Position: boat moves along its heading. Convention: yaw=0 → +Z,
+        // matching the OrbitControls default forward.
+        const float cosY = std::cos(bs.yaw);
+        const float sinY = std::sin(bs.yaw);
+        bs.position.x += sinY * bs.forwardSpeed * dt;
+        bs.position.z += cosY * bs.forwardSpeed * dt;
+
+        // === Hydrodynamics from sampled wave surface ===
+        // Sample 5 points: centre + four corners of the bounding rectangle.
+        // Heave (Y) follows the centre; pitch comes from fore/aft height
+        // diff over hull length; roll from port/starboard diff over beam.
+        const float halfL = kBoatLength * 0.5f;
+        const float halfB = kBoatBeam   * 0.5f;
+        auto sampleH = [&](float dx, float dz) {
+            // Local (forward, right) → world via yaw rotation
+            const float wx = bs.position.x + sinY * dz + cosY * dx;
+            const float wz = bs.position.z + cosY * dz - sinY * dx;
+            return ocean->sampleHeight(wx, wz);
+        };
+        const float hCentre = sampleH(0.f,    0.f);
+        const float hBow    = sampleH(0.f,  +halfL);
+        const float hStern  = sampleH(0.f,  -halfL);
+        const float hPort   = sampleH(-halfB, 0.f);
+        const float hStbd   = sampleH(+halfB, 0.f);
+        // Positive pitch = bow up (right-hand rotation around local X).
+        const float pitch = std::atan2(hBow  - hStern, kBoatLength);
+        // Positive roll = starboard down (right-hand rotation around local Z,
+        // which under +Z forward convention means starboard side dips).
+        const float roll  = std::atan2(hStbd - hPort,  kBoatBeam);
+
+        // Pitch / roll: temporal low-pass at ~3 Hz so attitude rides the
+        // swells but ignores sub-metre chop. alpha = 1 − exp(−2π · cutoff · dt).
+        const float alpha = 1.f - std::exp(-2.f * 3.14159f * 3.f * dt);
+        bs.smoothPitch += (pitch - bs.smoothPitch) * alpha;
+        bs.smoothRoll  += (roll  - bs.smoothRoll)  * alpha;
+
+        // Heave: spring-damped follower instead of a 1:1 height tracker.
+        // A real hull's vertical motion is bounded by buoyancy + mass +
+        // hydrodynamic drag; tracking the wave surface exactly looked like
+        // a yo-yo riding the crests. Tuning: ω ≈ 0.8 Hz natural frequency
+        // (k = (2π·f)²), damping ratio ζ ≈ 0.7 (slightly under-damped → one
+        // gentle overshoot then settles). Yields a believable "settling on
+        // a wave" rhythm where the boat lags the surface a beat.
+        const float omega = 2.f * 3.14159f * 0.8f;
+        const float k     = omega * omega;
+        const float c     = 2.f * 0.7f * omega;
+        const float yErr  = hCentre - bs.y;
+        const float accel = yErr * k - bs.vY * c;
+        bs.vY += accel * dt;
+        bs.y  += bs.vY * dt;
+
+        // Apply transforms. Euler order YXZ — yaw first, then pitch about
+        // the post-yaw local X, then roll about the post-yaw-pitch local Z;
+        // i.e. the standard ship-attitude convention.
+        // Pitch is NEGATED: in three.js, positive Euler.x rotation around
+        // local +X tilts +Z forward toward −Y (bow DOWN) by right-hand
+        // rule. Our `pitch` is positive when bow is on a crest, so we want
+        // bow UP — flip the sign here.
+        // The +0.5 m bias raises the hull origin above the waterline so
+        // the deck reads above the wave surface (Gunnerus's bbox centres
+        // around the waterline).
+        boat->position.set(bs.position.x, bs.y - 0.2f, bs.position.z);
+        boat->rotation.set(-bs.smoothPitch, bs.yaw, bs.smoothRoll, Euler::YXZ);
+
+        // No camera follow — was making the boat read as "stuck" at the
+        // camera centre, since camera and target moved with it. Let the
+        // user orbit / zoom manually; the boat translates freely in world
+        // and the Pos readout in the UI shows actual coordinates.
+        controls.target.set(bs.position.x, bs.y, bs.position.z);
         controls.update();
+
         renderer.render(scene, camera);
         ui.render();
     });

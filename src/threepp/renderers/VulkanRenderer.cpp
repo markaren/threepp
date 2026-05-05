@@ -239,6 +239,14 @@ namespace threepp {
             uint32_t vertexCount = 0;
             uint32_t gridDim     = 0;            // sqrt(vertexCount); validated at init
             float    planeSize   = 0.f;
+            // Cascade-0 height readback for CPU-side wave sampling (boat
+            // hydrodynamics, IK targets, sound-on-impact, etc.). Host-mapped
+            // RG32F buffer of size textureSize²·8 bytes; populated after
+            // every IFFT pass via vkCmdCopyImageToBuffer. Cascade 0 only is
+            // sufficient for objects larger than ~10 m — the smaller cascades'
+            // fine ripple displacement is below typical hull-size sampling.
+            Buffer    heightReadback;
+            uint32_t  heightReadbackDim = 0;     // copy of textureSize for the staging buffer
             std::weak_ptr<BufferGeometry> liveCheck;
         };
         std::unordered_map<const DisplacedMesh*, std::unique_ptr<DisplacedMeshState>> displacedStates;
@@ -735,6 +743,7 @@ namespace threepp {
                 }
                 if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->scratchA.view, nullptr);
                 if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
+                destroyBuffer(ctx->allocator(), st->heightReadback);
                 // Per-cascade Phillips / DynamicSpectrum / IFFT are RAII; their
                 // destructors handle their own VkImage / VkPipeline / DSet cleanup.
             }
@@ -1315,6 +1324,22 @@ namespace threepp {
             }
             if (state->cascadeMask == 0u) return nullptr; // no cascades → invalid setup
 
+            // Cascade-0 height readback buffer (host-mapped). Sized for one
+            // RG32F texel per FFT cell; the renderer issues a
+            // vkCmdCopyImageToBuffer after each IFFT pass to fill it, then
+            // memcpys into DisplacedMesh.heightField for CPU-side wave
+            // sampling (boat hydrodynamics, etc.). Kept persistent so the
+            // mapping survives between frames.
+            const VkDeviceSize readbackBytes =
+                    VkDeviceSize(dm.params.textureSize) * VkDeviceSize(dm.params.textureSize) * 8u;
+            state->heightReadback = createBuffer(
+                    ctx->allocator(), ctx->device(), readbackBytes,
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            state->heightReadbackDim = dm.params.textureSize;
+
             // Scratch image for IFFT ping-pong (RG32F, same size as the dyn
             // images). One is enough for Phase 1 — both IFFT calls in a
             // frame can share since they run sequentially on the same queue.
@@ -1420,6 +1445,52 @@ namespace threepp {
                 st.scratchA.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
                 c.ifft->recordApply(cb, ht,  st.scratchA);
                 c.ifft->recordApply(cb, dsp, st.scratchA);
+
+                // Cascade 0 only: copy the spatial-domain height image into the
+                // host-mapped readback buffer. Same dispatch as the IFFT — by
+                // the time endAndSubmitOneShot returns, the buffer is filled.
+                // Image stays in GENERAL layout; we add a memory barrier so the
+                // copy reads what the IFFT wrote.
+                if (i == 0 && st.heightReadback.handle != VK_NULL_HANDLE) {
+                    VkImageMemoryBarrier imb{};
+                    imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                    imb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                    imb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                    imb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    imb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    imb.image = c.dyn->ht().image;
+                    imb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    vkCmdPipelineBarrier(cb,
+                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            0, 0, nullptr, 0, nullptr, 1, &imb);
+
+                    VkBufferImageCopy bic{};
+                    bic.bufferOffset = 0;
+                    bic.bufferRowLength = 0;     // tightly packed
+                    bic.bufferImageHeight = 0;
+                    bic.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    bic.imageOffset = {0, 0, 0};
+                    bic.imageExtent = {st.heightReadbackDim, st.heightReadbackDim, 1};
+                    vkCmdCopyImageToBuffer(cb, c.dyn->ht().image, VK_IMAGE_LAYOUT_GENERAL,
+                                           st.heightReadback.handle, 1, &bic);
+
+                    // Make the host-side memcpy after submit see the GPU writes.
+                    VkBufferMemoryBarrier bmb{};
+                    bmb.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                    bmb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    bmb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+                    bmb.buffer = st.heightReadback.handle;
+                    bmb.size   = VK_WHOLE_SIZE;
+                    bmb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    bmb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    vkCmdPipelineBarrier(cb,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_HOST_BIT,
+                            0, 0, nullptr, 1, &bmb, 0, nullptr);
+                }
             }
 
             // (4) Dispatch water_displace.comp → writes positions + normals
@@ -1531,6 +1602,23 @@ namespace threepp {
 
             endAndSubmitOneShot(cb);
             destroyBuffer(ctx->allocator(), scratch);
+
+            // Mirror cascade-0 height into DisplacedMesh's public field.
+            // endAndSubmit waits for completion, so the staging buffer is
+            // fully written by the time we get here. RG32F packed; user
+            // code samples via DisplacedMesh::sampleHeight(worldX, worldZ).
+            if (st.heightReadback.handle != VK_NULL_HANDLE && st.heightReadbackDim > 0) {
+                const size_t cells = size_t(st.heightReadbackDim) * size_t(st.heightReadbackDim);
+                if (dm.heightField.size() != cells * 2) {
+                    dm.heightField.assign(cells * 2, 0.f);
+                }
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), st.heightReadback.alloc, &mapped);
+                std::memcpy(dm.heightField.data(), mapped, cells * 2 * sizeof(float));
+                vmaUnmapMemory(ctx->allocator(), st.heightReadback.alloc);
+                dm.heightFieldDim      = st.heightReadbackDim;
+                dm.heightFieldTileSize = dm.params.tileSize0;
+            }
         }
 
         // Build a TLAS over the supplied instance descriptors. Empty input is
