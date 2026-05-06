@@ -3313,11 +3313,17 @@ namespace threepp {
             const float jy = halton_(hi, 3) - 0.5f;
             // Map sub-pixel offset to clip-space: one pixel spans 2/width of
             // NDC (NDC ∈ [-1, +1]), so a 1-pixel jitter is 2/width in clip x.
-            // Stage 1 has no TAA resolve, so applying jitter here would just
-            // shimmer the displayed image frame-to-frame. Gated off until
-            // TAA history+resolve lands. Halton counter still advances so
-            // we have valid sequence state when TAA wires it up.
-            constexpr bool kRasterJitterEnabled = false;
+            //
+            // Stage 1A: now that the PT primary trace is replaced by raster
+            // (deterministic per pixel for whatever surface the raster
+            // jittered onto), the chit's Monte Carlo primary jitter is gone
+            // and we can safely re-enable raster jitter. The PT temporal
+            // accumulator blends across frames — interior surfaces get
+            // sub-pixel-offset texture AA from the blend; silhouettes still
+            // depend on the existing mesh-ID guard. If silhouette flicker
+            // shows up, we'd need proper raster TAA with normal-aware
+            // history rejection on top.
+            constexpr bool kRasterJitterEnabled = true;
             const float jClipX = kRasterJitterEnabled ? 2.f * jx / float(ext.width)  : 0.f;
             const float jClipY = kRasterJitterEnabled ? 2.f * jy / float(ext.height) : 0.f;
 
