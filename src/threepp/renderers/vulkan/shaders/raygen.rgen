@@ -1,6 +1,9 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+#include "vulkan_shared.h"
 
 // Phase 4a: derive ray origin / direction from a real threepp Camera. The
 // host uploads camera.matrixWorld (viewInverse) and camera.projectionMatrixInverse
@@ -90,6 +93,21 @@ layout(set = 0, binding = 23) uniform sampler2D  gbufMotionTex;// rg = (prevNDC 
 layout(set = 0, binding = 24) uniform sampler2D  gbufDepthTex; // .r = depth (Vulkan NDC z, [0,1])
 layout(set = 0, binding = 25) uniform usampler2D gbufIdsTex;   // .x = instanceCustomIndex+1; 0 == sky/miss
 layout(set = 0, binding = 26) uniform sampler2D  gbufUvTex;    // .rg = material UV for texture sampling on hybrid primary
+
+// Stage 1A: shadePrimaryHitOpaque needs material + bindless texture access
+// to match what chit's primary hit would produce. Same VkBuffer/sampler
+// handles raygen's chit reads via the SBT — these declarations expose them
+// to raygen too.
+layout(set = 0, binding = 4, scalar) readonly buffer MatDescBuf {
+    MaterialDesc mats[];
+};
+layout(set = 0, binding = 8) uniform sampler2D albedoMaps[kMaxMaterialTextures];
+// Env luminance CDF — same buffers chit reads (rtDsLayout bindings 18/19).
+layout(set = 0, binding = 18) uniform sampler2D envCdfTex; // conditional CDF
+layout(set = 0, binding = 19) uniform sampler2D envMargTex;// marginal CDF
+
+const float PI     = 3.14159265358979;
+const float TWO_PI = 6.28318530717958;
 
 // ─── Fog (homogeneous participating media) ─────────────────────────────────
 // Bindings 5/6/14/17 are also bound to closest_hit; they're re-staged into
@@ -532,6 +550,11 @@ vec3 volumeInscatter(vec3 rayOrigin, vec3 rayDir, float maxT, inout uint seed) {
     return inscatter * scatterFactor / float(N);
 }
 
+// Stage 1A: hybrid primary-hit shader. Included near main() so all bindings
+// + helpers it depends on (mats/albedoMaps/lights/env/emissiveTris/fog/pc/
+// urand/pcgNext/Payload/shadowVisibility) are already declared.
+#include "shade_primary.glsl"
+
 void main() {
     const uint spp = max(pc.samplesPerPixel, 1u);
 
@@ -666,10 +689,68 @@ void main() {
         // splatter inside the decal silhouette.
         const float tmin = prevPassThrough ? 1e-4 : 0.001;
 
+        // Stage 1A: hybrid primary path. On the FIRST step (primary), if
+        // hybrid is on, read the raster gbuffer to determine hit/sky and
+        // either sample env directly or invoke shadePrimaryHitOpaque to
+        // populate the payload as if a chit had run. Skips the primary
+        // traceRayEXT entirely on the opaque-hit path. Transmissive surfaces
+        // (and any unsupported material classes) fall back to the regular
+        // traceRayEXT below.
+        bool primaryViaHybrid = false;
+        if (hybridOn && step == 0) {
+            const vec2 uv_screen = (vec2(gl_LaunchIDEXT.xy) + 0.5) / size;
+            const uvec4 idsTap = texture(gbufIdsTex, uv_screen);
+            const uint id1 = idsTap.x;// 0 == sky/miss
+            if (id1 == 0u) {
+                payload.radiance       = sampleEquirectFog(normalize(dir));
+                payload.brdfWeight     = vec3(0.0);
+                payload.nextOrigin     = vec3(0.0);
+                payload.nextDir        = vec3(0.0);
+                payload.flags          = 1u;// terminate
+                payload.hitWorldPos    = origin + dir * 1e6;
+                payload.hitInstanceId  = 0u;
+                payload.hitRoughness   = 1.0;
+                payload.hitMetalness   = 0.0;
+                payload.hitTransmission = 0.0;
+                payload.bsdfPdf        = 0.0;
+                payload.currentIor     = 1.0;
+                primaryViaHybrid = true;
+            } else {
+                // Reconstruct world pos: gbuffer was rasterized with Y-flipped
+                // gl_Position, so screen Y maps to Vulkan-NDC Y-down. Flip
+                // back to GL convention before applying the GL-form invProj.
+                const float depthV   = texture(gbufDepthTex, uv_screen).r;
+                const vec2  ndcVk    = uv_screen * 2.0 - 1.0;
+                const vec4  ndcH     = vec4(ndcVk.x, -ndcVk.y, depthV, 1.0);
+                const vec4  viewPos  = cam.projInverse * ndcH;
+                const vec4  worldH   = cam.viewInverse * viewPos;
+                const vec3  worldPos = worldH.xyz / worldH.w;
+
+                const vec3 normalEnc   = texture(gbufNormalTex, uv_screen).xyz;
+                const vec3 worldNormal = normalize(normalEnc * 2.0 - 1.0);
+                const vec2 matUv       = texture(gbufUvTex, uv_screen).rg;
+
+                HitContext hc;
+                hc.worldPos        = worldPos;
+                hc.worldNormalGeom = worldNormal;
+                hc.uv              = matUv;
+                hc.instanceId      = id1 - 1u;
+                hc.rayOrigin       = origin;
+                hc.rayDir          = normalize(dir);
+                hc.hitT            = length(worldPos - origin);
+
+                if (shadePrimaryHitOpaque(hc, seed)) {
+                    primaryViaHybrid = true;
+                }
+            }
+        }
+
         // No OpaqueEXT — alpha-test materials need the any-hit shader to fire.
         // Materials with alphaCutoff <= 0 short-circuit in the any-hit shader.
-        traceRayEXT(topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
-                    origin, tmin, dir, 10000.0, 0);
+        if (!primaryViaHybrid) {
+            traceRayEXT(topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
+                        origin, tmin, dir, 10000.0, 0);
+        }
 
         // Capture the primary hit (first iteration only) for reprojection
         // + adaptive bounce classification. Transmission hops and back-face
