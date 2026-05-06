@@ -584,6 +584,11 @@ namespace threepp {
         // after the in-flight fence has been waited (safe to write the
         // motionMatBuffers[currentFrame] HOST_VISIBLE buffer).
         std::vector<MeshEntry> lastVisibleEntries_;
+        // Per-entry cull flag cached from each upload of matDescs. Set when
+        // the material is double-sided OR transmissive (or thin-walled) —
+        // those classes need both faces rasterized in the gbuffer pass to
+        // match BVH/chit semantics. Indexed in lock-step with lastVisibleEntries_.
+        std::vector<uint8_t> lastVisibleNeedsNoCull_;
         bool sceneBuilt_ = false;
 
         // Ray-tracing pipeline.
@@ -2464,6 +2469,7 @@ namespace threepp {
                         for (const auto& md : matDescs) {
                             if (md.transmission > 0.0f) { sceneHasGlass_ = true; break; }
                         }
+                        cacheCullFlags(matDescs);
                     }
                     // Update prevSceneFingerprint so later frames compare
                     // against this frame's state, not stale.
@@ -2685,6 +2691,7 @@ namespace threepp {
             for (const auto& md : matDescs) {
                 if (md.transmission > 0.0f) { sceneHasGlass_ = true; break; }
             }
+            cacheCullFlags(matDescs);
 
             // Topology rebuild: prev gbuf + accum hold mesh IDs from the old
             // scene, but the gl_InstanceCustomIndexEXT space just changed
@@ -3242,6 +3249,24 @@ namespace threepp {
             return r;
         }
 
+        // Cache per-entry cull flags from a freshly-built matDescs array.
+        // Called wherever matDescs is uploaded so the gbuffer draw loop can
+        // pick BACK-cull (default fast path) vs NONE-cull (Side::Double).
+        //
+        // Only doubleSided triggers no-cull. Transmissive materials with
+        // proper outward winding (ocean, most glass viewed from outside)
+        // render correctly under BACK culling. Camera-inside-glass cases
+        // (windshield from cabin) are an artist content concern: mark the
+        // glass as Side::Double if you need interior viewing — chit's BVH
+        // path doesn't cull, but the raster prepass does, so unmarked
+        // single-sided glass shows the surface BEHIND it in the gbuffer.
+        void cacheCullFlags(const std::vector<MaterialDesc>& mds) {
+            lastVisibleNeedsNoCull_.resize(mds.size());
+            for (size_t i = 0; i < mds.size(); ++i) {
+                lastVisibleNeedsNoCull_[i] = (mds[i].doubleSided != 0) ? 1u : 0u;
+            }
+        }
+
         // Resolve the BlasRecord backing a given visible entry. The same
         // physical buffers feed BLAS and the raster prepass (VERTEX_BUFFER_BIT
         // was added at allocation), so this is a pure lookup, no upload.
@@ -3410,10 +3435,24 @@ namespace threepp {
                                     rasterPipelineLayout, 0, 1,
                                     &rasterDescSets[frame], 0, nullptr);
 
+            // Track currently-bound dynamic cull mode so we don't redundantly
+            // set it. Default 0xFFFFFFFF = "uninitialized; force first set".
+            uint32_t curCullMode = 0xFFFFFFFFu;
+
             for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
                 const auto& en = lastVisibleEntries_[i];
                 const BlasRecord* rec = resolveBlasForEntry(en);
                 if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
+
+                // Per-draw cull mode based on cached material flags.
+                const bool noCull = (i < lastVisibleNeedsNoCull_.size() &&
+                                     lastVisibleNeedsNoCull_[i] != 0u);
+                const VkCullModeFlags wantCull = noCull ? VK_CULL_MODE_NONE
+                                                        : VK_CULL_MODE_BACK_BIT;
+                if (wantCull != curCullMode) {
+                    vkCmdSetCullMode(cb, wantCull);
+                    curCullMode = wantCull;
+                }
 
                 // Push constants: 64B model matrix + 16B (instId/flags/pad/pad).
                 struct PC {
@@ -4267,8 +4306,14 @@ namespace threepp {
             VkPipelineRasterizationStateCreateInfo rs{};
             rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
             rs.polygonMode = VK_POLYGON_MODE_FILL;
+            // cullMode is set dynamically per-draw in recordRasterGbufPass —
+            // BACK by default (fast path, ~2× perf on dense meshes like
+            // ocean) and NONE for transmissive / doubleSided / thin-walled
+            // materials (so windshields/glass viewed from inside still
+            // rasterize the camera-facing back face). The static value
+            // here is overridden by the dynamic state, but Vulkan still
+            // wants a valid placeholder.
             rs.cullMode    = VK_CULL_MODE_BACK_BIT;
-            // threepp / GL-style winding: counter-clockwise faces are front.
             rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
             rs.lineWidth   = 1.0f;
 
@@ -4293,11 +4338,16 @@ namespace threepp {
             cb.attachmentCount = 4;
             cb.pAttachments    = cbas;
 
-            // Dynamic viewport + scissor — set per-recordCommandBuffer to track resize.
-            VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+            // Dynamic viewport + scissor + cullMode (Vulkan 1.3 core via
+            // extendedDynamicState). cullMode flips per-draw between BACK
+            // (opaque single-sided fast path) and NONE (transmissive /
+            // doubleSided / thin-walled).
+            VkDynamicState dynStates[3] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                           VK_DYNAMIC_STATE_SCISSOR,
+                                           VK_DYNAMIC_STATE_CULL_MODE};
             VkPipelineDynamicStateCreateInfo dyn{};
             dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-            dyn.dynamicStateCount = 2;
+            dyn.dynamicStateCount = 3;
             dyn.pDynamicStates    = dynStates;
 
             VkPushConstantRange pcRange{};

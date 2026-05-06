@@ -243,6 +243,10 @@ bool shadePrimaryHitOpaque(HitContext ctx, inout uint seed) {
     if (m.transmission > 0.05 || m.thinWalled != 0) return false;
     // Unlit MeshBasicMaterial — defer (chit emits the unlit early-out).
     if (m.roughness < 0.0) return false;
+    // Alpha-test cutout materials — the raster gbuffer pass doesn't
+    // discard on alpha yet, so its IDs are unreliable at supposed-to-be-
+    // transparent pixels. Defer to chit which has the alpha any-hit path.
+    if (m.alphaCutoff > 0.0) return false;
 
     // ── Material lookup with bindless textures ─────────────────────────────
     const vec2 uvAlbedo     = (m.uvTransform           * vec3(ctx.uv, 1.0)).xy;
