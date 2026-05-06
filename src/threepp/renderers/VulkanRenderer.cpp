@@ -632,6 +632,7 @@ namespace threepp {
             Image2D       normal;       // rgba16f — world-space normal in xyz, .w=0 (roughness in stage 2)
             Image2D       motion;       // rgba16f — NDC delta in .rg, .ba reserved
             Image2D       ids;          // rgba16ui — instanceCustomIndex/meshID/flags/reserved
+            Image2D       uv;           // rgba16f — material UV in .rg (raygen samples textures with this in hybrid stage 1A)
             Image2D       depth;        // d32_sfloat
             VkFramebuffer framebuffer = VK_NULL_HANDLE;
             uint32_t      width = 0;
@@ -664,6 +665,12 @@ namespace threepp {
         // Nearest avoids bilinear smearing of normal/motion/ids at silhouettes
         // — primary visibility from raster is already exact-pixel.
         VkSampler gbufSampler_ = VK_NULL_HANDLE;
+
+        // Fallback UV vertex buffer: 8 bytes of zeros, bound to vertex input
+        // location 2 when a mesh has no UV attribute (rec->uv.handle is null).
+        // Lets the gbuffer pipeline keep a fixed 3-binding layout regardless
+        // of per-mesh UV availability.
+        Buffer dummyUvBuffer_{};
 
         // Master toggle for the hybrid path. setHybridEnabled(true) flips it
         // on; off keeps the existing full-PT primary path. Stage 1 ships
@@ -859,6 +866,7 @@ namespace threepp {
             if (rasterDescPool)         vkDestroyDescriptorPool(d, rasterDescPool, nullptr);
             if (rasterGbufRenderPass)   vkDestroyRenderPass(d, rasterGbufRenderPass, nullptr);
             if (gbufSampler_)           vkDestroySampler(d, gbufSampler_, nullptr);
+            destroyBuffer(ctx->allocator(), dummyUvBuffer_);
         }
 
         void createCommandResources() {
@@ -3364,14 +3372,15 @@ namespace threepp {
             const auto& g = rasterGbufs[frame];
             if (g.framebuffer == VK_NULL_HANDLE) return;// not initialized
 
-            VkClearValue clears[4]{};
+            VkClearValue clears[5]{};
             clears[0].color = {{0.f, 0.f, 0.f, 0.f}};   // normal — sky/miss as zero
             clears[1].color = {{0.f, 0.f, 0.f, 0.f}};   // motion
             clears[2].color.uint32[0] = 0u;             // instanceID — 0 reserved as sky
             clears[2].color.uint32[1] = 0u;
             clears[2].color.uint32[2] = 0u;
             clears[2].color.uint32[3] = 0u;
-            clears[3].depthStencil = {1.f, 0u};
+            clears[3].color = {{0.f, 0.f, 0.f, 0.f}};   // uv — sky has no UV
+            clears[4].depthStencil = {1.f, 0u};
 
             VkRenderPassBeginInfo rpbi{};
             rpbi.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -3379,7 +3388,7 @@ namespace threepp {
             rpbi.framebuffer     = g.framebuffer;
             rpbi.renderArea.offset = {0, 0};
             rpbi.renderArea.extent = {g.width, g.height};
-            rpbi.clearValueCount = 4;
+            rpbi.clearValueCount = 5;
             rpbi.pClearValues    = clears;
             vkCmdBeginRenderPass(cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -3426,9 +3435,16 @@ namespace threepp {
                                    VK_SHADER_STAGE_VERTEX_BIT,
                                    0, sizeof(pc), &pc);
 
-                VkBuffer     vbufs[2] = {rec->vertex.handle, rec->normal.handle};
-                VkDeviceSize voffs[2] = {0, 0};
-                vkCmdBindVertexBuffers(cb, 0, 2, vbufs, voffs);
+                // Vertex inputs: position (binding 0), normal (binding 1),
+                // uv (binding 2). Meshes without a UV attribute fall back to
+                // the 8-byte dummy buffer of zeros so the gbuffer pipeline
+                // keeps a fixed 3-binding layout per draw.
+                VkBuffer uvBuf = (rec->uv.handle != VK_NULL_HANDLE)
+                                         ? rec->uv.handle
+                                         : dummyUvBuffer_.handle;
+                VkBuffer     vbufs[3] = {rec->vertex.handle, rec->normal.handle, uvBuf};
+                VkDeviceSize voffs[3] = {0, 0, 0};
+                vkCmdBindVertexBuffers(cb, 0, 3, vbufs, voffs);
 
                 if (rec->index.handle != VK_NULL_HANDLE) {
                     vkCmdBindIndexBuffer(cb, rec->index.handle, 0, VK_INDEX_TYPE_UINT32);
@@ -4000,6 +4016,7 @@ namespace threepp {
                 destroyImage2D(ctx->allocator(), d, g.normal);
                 destroyImage2D(ctx->allocator(), d, g.motion);
                 destroyImage2D(ctx->allocator(), d, g.ids);
+                destroyImage2D(ctx->allocator(), d, g.uv);
                 destroyImage2D(ctx->allocator(), d, g.depth);
                 g.width  = 0;
                 g.height = 0;
@@ -4007,7 +4024,7 @@ namespace threepp {
         }
 
         void createRasterGbufRenderPass() {
-            VkAttachmentDescription attachments[4]{};
+            VkAttachmentDescription attachments[5]{};
             // 0: world-space normal (rgba16f). FragShader writes; raygen samples.
             attachments[0].format         = VK_FORMAT_R16G16B16A16_SFLOAT;
             attachments[0].samples        = VK_SAMPLE_COUNT_1_BIT;
@@ -4022,23 +4039,25 @@ namespace threepp {
             // 2: per-pixel IDs + flags (rgba16ui).
             attachments[2] = attachments[0];
             attachments[2].format = VK_FORMAT_R16G16B16A16_UINT;
-            // 3: depth (d32_sfloat).
-            attachments[3]              = attachments[0];
-            attachments[3].format       = VK_FORMAT_D32_SFLOAT;
-            attachments[3].finalLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            // 3: material UV (rgba16f, only rg used). Stage 1A material lookup.
+            attachments[3] = attachments[0];
+            // 4: depth (d32_sfloat).
+            attachments[4]              = attachments[0];
+            attachments[4].format       = VK_FORMAT_D32_SFLOAT;
+            attachments[4].finalLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
-            VkAttachmentReference colorRefs[3]{};
-            for (uint32_t i = 0; i < 3; ++i) {
+            VkAttachmentReference colorRefs[4]{};
+            for (uint32_t i = 0; i < 4; ++i) {
                 colorRefs[i].attachment = i;
                 colorRefs[i].layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             }
             VkAttachmentReference depthRef{};
-            depthRef.attachment = 3;
+            depthRef.attachment = 4;
             depthRef.layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
             VkSubpassDescription subpass{};
             subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
-            subpass.colorAttachmentCount    = 3;
+            subpass.colorAttachmentCount    = 4;
             subpass.pColorAttachments       = colorRefs;
             subpass.pDepthStencilAttachment = &depthRef;
 
@@ -4067,7 +4086,7 @@ namespace threepp {
 
             VkRenderPassCreateInfo rpci{};
             rpci.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-            rpci.attachmentCount = 4;
+            rpci.attachmentCount = 5;
             rpci.pAttachments    = attachments;
             rpci.subpassCount    = 1;
             rpci.pSubpasses      = &subpass;
@@ -4092,14 +4111,17 @@ namespace threepp {
                                                    colorUsage, VK_IMAGE_ASPECT_COLOR_BIT);
                 g.ids    = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_UINT,
                                                    colorUsage, VK_IMAGE_ASPECT_COLOR_BIT);
+                g.uv     = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                   colorUsage, VK_IMAGE_ASPECT_COLOR_BIT);
                 g.depth  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
                                                    depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT);
 
-                VkImageView views[4] = {g.normal.view, g.motion.view, g.ids.view, g.depth.view};
+                VkImageView views[5] = {g.normal.view, g.motion.view, g.ids.view,
+                                        g.uv.view, g.depth.view};
                 VkFramebufferCreateInfo fci{};
                 fci.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
                 fci.renderPass      = rasterGbufRenderPass;
-                fci.attachmentCount = 4;
+                fci.attachmentCount = 5;
                 fci.pAttachments    = views;
                 fci.width           = w;
                 fci.height          = h;
@@ -4195,19 +4217,24 @@ namespace threepp {
             stages[1].module = fragModule;
             stages[1].pName  = "main";
 
-            // Vertex input mirrors the BLAS allocation layout: positions and
-            // normals are tightly packed R32G32B32_SFLOAT in two separate
-            // device buffers (no interleaving). buildBlasFor allocates them
-            // with VERTEX_BUFFER_BIT so we can bind them directly.
-            VkVertexInputBindingDescription vibs[2]{};
+            // Vertex input mirrors the BLAS allocation layout: positions /
+            // normals / uvs are tightly packed (R32G32B32_SFLOAT for pos+normal,
+            // R32G32_SFLOAT for uv) in three separate device buffers. The
+            // BLAS allocations have VERTEX_BUFFER_BIT so they bind directly.
+            // Meshes without a UV attribute bind dummyUvBuffer_ instead — see
+            // recordRasterGbufPass.
+            VkVertexInputBindingDescription vibs[3]{};
             vibs[0].binding   = 0;
             vibs[0].stride    = 3 * sizeof(float);
             vibs[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
             vibs[1].binding   = 1;
             vibs[1].stride    = 3 * sizeof(float);
             vibs[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            vibs[2].binding   = 2;
+            vibs[2].stride    = 2 * sizeof(float);
+            vibs[2].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-            VkVertexInputAttributeDescription vias[2]{};
+            VkVertexInputAttributeDescription vias[3]{};
             vias[0].location = 0;
             vias[0].binding  = 0;
             vias[0].format   = VK_FORMAT_R32G32B32_SFLOAT;
@@ -4216,12 +4243,16 @@ namespace threepp {
             vias[1].binding  = 1;
             vias[1].format   = VK_FORMAT_R32G32B32_SFLOAT;
             vias[1].offset   = 0;
+            vias[2].location = 2;
+            vias[2].binding  = 2;
+            vias[2].format   = VK_FORMAT_R32G32_SFLOAT;
+            vias[2].offset   = 0;
 
             VkPipelineVertexInputStateCreateInfo vi{};
             vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-            vi.vertexBindingDescriptionCount   = 2;
+            vi.vertexBindingDescriptionCount   = 3;
             vi.pVertexBindingDescriptions      = vibs;
-            vi.vertexAttributeDescriptionCount = 2;
+            vi.vertexAttributeDescriptionCount = 3;
             vi.pVertexAttributeDescriptions    = vias;
 
             VkPipelineInputAssemblyStateCreateInfo ia{};
@@ -4251,7 +4282,7 @@ namespace threepp {
             ds.depthWriteEnable = VK_TRUE;
             ds.depthCompareOp   = VK_COMPARE_OP_LESS;
 
-            VkPipelineColorBlendAttachmentState cbas[3]{};
+            VkPipelineColorBlendAttachmentState cbas[4]{};
             for (auto& a : cbas) {
                 a.blendEnable    = VK_FALSE;
                 a.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -4259,7 +4290,7 @@ namespace threepp {
             }
             VkPipelineColorBlendStateCreateInfo cb{};
             cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-            cb.attachmentCount = 3;
+            cb.attachmentCount = 4;
             cb.pAttachments    = cbas;
 
             // Dynamic viewport + scissor — set per-recordCommandBuffer to track resize.
@@ -4309,6 +4340,26 @@ namespace threepp {
         // Lazy bring-up: called at the start of each render() when hybrid is on.
         // Idempotent — handles both initial creation and post-resize reallocation.
         void ensureHybridResources() {
+            if (dummyUvBuffer_.handle == VK_NULL_HANDLE) {
+                // 1 MB of zeros = 131,072 vec2 vertices. Bound to vertex input
+                // 2 when a mesh has no UV attribute. Sized generously because
+                // the gbuffer pipeline's binding has fixed stride=8: the GPU
+                // reads `vertexCount * 8` bytes, so the dummy must cover the
+                // largest mesh's vertex count or we walk off the allocation.
+                // 1 MB covers virtually any real-world mesh; if you hit the
+                // limit, grow this on demand from ensureSceneBuilt.
+                constexpr VkDeviceSize kDummyUvBytes = 1u << 20;
+                dummyUvBuffer_ = createBuffer(
+                        ctx->allocator(), ctx->device(),
+                        kDummyUvBytes,
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), dummyUvBuffer_.alloc, &mapped);
+                std::memset(mapped, 0, kDummyUvBytes);
+                vmaUnmapMemory(ctx->allocator(), dummyUvBuffer_.alloc);
+            }
             if (gbufSampler_ == VK_NULL_HANDLE) {
                 VkSamplerCreateInfo sci{};
                 sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -5187,12 +5238,13 @@ namespace threepp {
             // 9=prev camera UBO (motion), 10=motion matrix SSBO (motion),
             // 11=prev accum read image (ping-pong), 12=gbuf write image
             // (ping-pong), 13=prev gbuf read image (ping-pong).
-            // Bindings 22-25: hybrid raster G-buffer attachments — read by
+            // Bindings 22-26: hybrid raster G-buffer attachments — read by
             // raygen for primary visibility (depth + worldPos reconstruction,
             // motion vector for reproject, normal for shading, instance ID
-            // for material lookup). Always present in the layout; raygen
-            // gates use on the hybrid push-constant bit.
-            std::array<VkDescriptorSetLayoutBinding, 26> bindings{};
+            // for material lookup, UV for texture sampling on the primary).
+            // Always present in the layout; raygen gates use on the hybrid
+            // push-constant bit.
+            std::array<VkDescriptorSetLayoutBinding, 27> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -5359,6 +5411,10 @@ namespace threepp {
             bindings[25].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[25].descriptorCount = 1;
             bindings[25].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            bindings[26].binding = 26;// material UV (rgba16f, only rg used)
+            bindings[26].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[26].descriptorCount = 1;
+            bindings[26].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -5696,7 +5752,7 @@ namespace threepp {
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             ps[3].descriptorCount = totalSets * 7;// bindings 3,4,10,14 (existing) + 15,16 (photon) + 21 (meshMovedBits)
             ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures + 4);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF) + bindings 22-25 (hybrid gbuffer attachments)
+            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures + 5);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF) + bindings 22-26 (hybrid gbuffer attachments incl. UV)
 
             VkDescriptorPoolCreateInfo ci{};
             ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -6048,12 +6104,24 @@ namespace threepp {
                     wGbufIds.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                     wGbufIds.pImageInfo = &gbufIdsInfo;
 
-                    std::array<VkWriteDescriptorSet, 26> writes{
+                    VkDescriptorImageInfo gbufUvInfo{};
+                    gbufUvInfo.sampler     = gbufSampler_;
+                    gbufUvInfo.imageView   = rasterGbufs[f].uv.view;
+                    gbufUvInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    VkWriteDescriptorSet wGbufUv{};
+                    wGbufUv.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wGbufUv.dstSet = descriptorSets[idx];
+                    wGbufUv.dstBinding = 26;
+                    wGbufUv.descriptorCount = 1;
+                    wGbufUv.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wGbufUv.pImageInfo = &gbufUvInfo;
+
+                    std::array<VkWriteDescriptorSet, 27> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
                             wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered,
                             wMeshMoved,
-                            wGbufNormal, wGbufMotion, wGbufDepth, wGbufIds};
+                            wGbufNormal, wGbufMotion, wGbufDepth, wGbufIds, wGbufUv};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);

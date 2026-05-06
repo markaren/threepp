@@ -235,6 +235,8 @@ int main() {
     Canvas canvas("Vulkan PT  Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
     VulkanRenderer renderer(canvas);
     renderer.setDenoise(true);
+    renderer.setHybridEnabled(true);
+    renderer.setHybridDebugView(0);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     // puresky_2k.hdr is a very bright daylight env. ACES desaturates strongly
     // at high luminance so the sand goes white-ish even at 0.5; 0.3 keeps

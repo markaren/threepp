@@ -38,12 +38,14 @@ layout(push_constant) uniform PC {
 
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inNormal;
+layout(location = 2) in vec2 inUv;// passthrough for raygen texture sampling
 
 layout(location = 0) out vec3 vWorldNormal;
 layout(location = 1) out vec4 vCurrClipUnjit;// motion-vec source — must not include jitter
 layout(location = 2) out vec4 vPrevClip;
 layout(location = 3) flat out uint vInstanceIdx;
 layout(location = 4) flat out uint vFlags;
+layout(location = 5) out vec2 vUv;
 
 void main() {
     vec4 worldPos     = pc.model * vec4(inPos, 1.0);
@@ -58,6 +60,7 @@ void main() {
     vPrevClip      = cam.prevVP           * prevWorldPos;
     vInstanceIdx   = pc.instanceCustomIndex;
     vFlags         = pc.flags;
+    vUv            = inUv;
 
     // threepp's projection matrix follows the GL convention (Y up in NDC).
     // Vulkan NDC has Y pointing down, so we negate Y at the gl_Position

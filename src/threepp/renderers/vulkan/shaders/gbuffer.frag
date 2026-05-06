@@ -14,6 +14,7 @@ layout(location = 1) in vec4 vCurrClipUnjit;
 layout(location = 2) in vec4 vPrevClip;
 layout(location = 3) flat in uint vInstanceIdx;
 layout(location = 4) flat in uint vFlags;
+layout(location = 5) in vec2 vUv;
 
 // Attachment 0: world-space normal (rgba16f). Stage 2 will pack roughness
 // into .w; stage 1 leaves it zero. rgba16f is necessary for ocean wave
@@ -35,6 +36,12 @@ layout(location = 1) out vec4 outMotion;
 //   .w = reserved
 layout(location = 2) out uvec4 outIds;
 
+// Attachment 3: material UV (rg16f, .b/.a unused). raygen samples the
+// bindless material texture array at this UV when hybrid mode skips the
+// primary traceRayEXT (Stage 1A) — chit normally interpolates UV from
+// triangle vertices; we precompute it here so raygen doesn't have to.
+layout(location = 3) out vec4 outUv;
+
 void main() {
     vec3 n = normalize(vWorldNormal);
     // Remap [-1, 1] → [0, 1] so negative components are visible in the
@@ -53,4 +60,6 @@ void main() {
     // +1 so the renderpass's clear-to-0 means "sky/no draw", matching
     // raygen's Payload.hitInstanceId convention exactly.
     outIds = uvec4(vInstanceIdx + 1u, vInstanceIdx + 1u, vFlags, 0u);
+
+    outUv = vec4(vUv, 0.0, 0.0);
 }

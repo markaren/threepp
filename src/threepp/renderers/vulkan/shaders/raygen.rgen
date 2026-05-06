@@ -89,6 +89,7 @@ layout(set = 0, binding = 22) uniform sampler2D  gbufNormalTex;// world normal i
 layout(set = 0, binding = 23) uniform sampler2D  gbufMotionTex;// rg = (prevNDC - currNDC) in GL convention
 layout(set = 0, binding = 24) uniform sampler2D  gbufDepthTex; // .r = depth (Vulkan NDC z, [0,1])
 layout(set = 0, binding = 25) uniform usampler2D gbufIdsTex;   // .x = instanceCustomIndex+1; 0 == sky/miss
+layout(set = 0, binding = 26) uniform sampler2D  gbufUvTex;    // .rg = material UV for texture sampling on hybrid primary
 
 // ─── Fog (homogeneous participating media) ─────────────────────────────────
 // Bindings 5/6/14/17 are also bound to closest_hit; they're re-staged into
@@ -552,12 +553,13 @@ void main() {
     float primaryTransmission = 0.0;
 
     // Hybrid mode (gbuffer drives primary visibility): primary-ray jitter is
-    // disabled because raster TAA owns AA on the primary now. With jitter on
-    // and no TAA resolve in stage 1, the gbuffer/PT primary would shimmer
-    // sub-pixel — which was the moving-object shake symptom that motivated
-    // the whole hybrid migration. Stage 1A will further skip the primary
-    // traceRayEXT entirely; this stage just nullifies the per-frame jitter
-    // and lets the gbuffer motion vector drive reproject.
+    // gated off — confirmed empirically (2026-05-06) that even with sub-pixel
+    // exact gbuffer motion vectors driving reproject, Monte Carlo primary
+    // visibility produces moving-object shake. The architectural answer is
+    // Stage 1A: raygen reads gbuffer for primary, skips primary traceRayEXT,
+    // raster TAA owns AA. Until that lands, we keep primary deterministic
+    // (no jitter, no shake, no AA) — the gbuffer motion vector still gives
+    // accurate temporal reproject for bounce-1+ history.
     const bool hybridOn = (pc.motionFlags & 8u) != 0u;
     for (uint s = 0u; s < spp; ++s) {
         // Per-sample sub-frame index — each in-frame sample needs its own
