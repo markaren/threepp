@@ -2,47 +2,37 @@
 //
 // Used by raygen.rgen when the hybrid push-constant bit is set: instead of
 // casting a primary traceRayEXT, raygen reads the raster G-buffer's hit
-// info and calls shadePrimaryHitOpaque() to produce the same payload outputs
-// chit's main() would have written. Bounce loop continues unchanged.
+// info and shades the primary surface here. Bounce loop continues unchanged.
 //
-// Stage 1A v1 scope:
+// Stage 1A v2: split into three entry points so spp gets cheaper —
+//   primaryShadeSetup()  : material + BSDF inputs (cheap, runs once / pixel)
+//   primaryShadeDirect() : NEE for env + analytic + emissive (runs once / pixel,
+//                          deterministic w.r.t. its seed). Saves spp×NEE shadow
+//                          rays vs. the v1 fused entry point.
+//   primaryShadeBounce() : per-sample 2-way BSDF split → payload.nextDir.
+//
+// Stage 1A v1 scope (kept for reference; same as v2):
 //   ✓ albedo/roughness/metalness lookup with bindless textures
 //   ✓ Cook-Torrance specular + Lambert diffuse
-//   ✓ Kulla-Conty multi-scatter compensation (matches chit)
-//   ✓ NEE for env (importance sampling via CDF when bound, uniform fallback)
+//   ✓ Kulla-Conty multi-scatter compensation
+//   ✓ NEE for env (importance sampled when CDF bound, uniform fallback)
 //   ✓ NEE for analytic lights (dirs, points, spots, rects) with shadow rays
 //   ✓ NEE for emissive triangles (CDF binary search)
-//   ✓ 3-way stochastic BSDF sample (clearcoat / spec / diff) for next bounce
-//   ✗ Iridescence / clearcoat / transmission / sheen (transmissive surfaces
-//      fall back to chit's primary trace; non-zero clearcoat/iridescence/
-//      sheen materials get slightly degraded primary, secondary bounces are
-//      handled correctly by chit on subsequent traces)
+//   ✓ 2-way stochastic BSDF sample (spec / diff) for next bounce
+//   ✗ Iridescence / clearcoat / transmission / sheen — transmissive surfaces
+//     fall back to chit's primary trace; cc/iridescence/sheen materials get
+//     slightly degraded primary, secondary bounces correct.
 //   ✗ Photon caustic gather (secondary bounces still gather via chit)
-//   ✗ Foam / FFT-water primary handling (water hits the transmission fallback)
 //
-// Includer must have declared:
-//   - PI / TWO_PI constants
-//   - struct Payload payload (rayPayloadEXT or rayPayloadInEXT)
-//   - layout(set=0, binding=0)  accelerationStructureEXT topAS
-//   - layout(set=0, binding=4)  MatDescBuf  { MaterialDesc mats[]; }
-//   - layout(set=0, binding=5)  LightsUbo  lights
-//   - layout(set=0, binding=6)  sampler2D  envTex
-//   - layout(set=0, binding=8)  sampler2D  albedoMaps[kMaxMaterialTextures]
-//   - layout(set=0, binding=14) EmissiveTriBuf { EmTri emissiveTris[]; }
-//   - layout(set=0, binding=18) sampler2D envCdfTex
-//   - layout(set=0, binding=19) sampler2D envMargTex
-//   - layout(push_constant) Pc with envCdfWidth/Height/TotalSum, fireflyClamp,
-//     emissiveCount, emissiveTotalPower
-//   - rayPayloadEXT float shadowVisibility @ location 1
-//   - urand(inout uint), pcgNext(inout uint) PRNG helpers
-//   - sampleEquirectFog(vec3) or equivalent envTex sampler
-//   - DirLight / PointLight / SpotLight / RectLight / EmTri struct definitions
-//   - kMaxMaterialTextures from vulkan_shared.h
+// Includer must have declared (see raygen.rgen for the pattern):
+//   PI / TWO_PI; struct Payload payload; topAS; mats[]; lights; envTex;
+//   albedoMaps[]; emissiveTris[]; envCdfTex/envMargTex; pc; shadowVisibility;
+//   urand/pcgNext; DirLight/PointLight/SpotLight/RectLight/EmTri.
 
 #ifndef THREEPP_VULKAN_SHADE_PRIMARY_GLSL
 #define THREEPP_VULKAN_SHADE_PRIMARY_GLSL
 
-// ── Hit context: caller fills before calling shadePrimaryHitOpaque ────────
+// ── Hit context: caller fills before calling primaryShadeSetup ────────────
 struct HitContext {
     vec3 worldPos;          // hit point in world space
     vec3 worldNormalGeom;   // geometric/interpolated normal (normalized)
@@ -51,6 +41,26 @@ struct HitContext {
     vec3 rayOrigin;         // hit ray origin (camera or prev hit)
     vec3 rayDir;            // hit ray direction (toward surface, normalized)
     float hitT;             // distance from rayOrigin to worldPos
+};
+
+// ── Cached primary surface state — produced by primaryShadeSetup, read by
+// primaryShadeDirect and primaryShadeBounce. Lets raygen amortize the
+// material lookup + BSDF input compute across a per-pixel direct call and
+// spp per-sample bounce calls.
+struct PrimaryShadeState {
+    vec3  albedo;
+    float roughness;
+    float metalness;
+    vec3  emissive;
+    vec3  F0;
+    vec3  N;
+    vec3  V;
+    float NdotV;
+    float k;
+    float alpha;
+    vec3  worldPos;
+    vec3  shadowOrigin;
+    uint  instanceId;
 };
 
 // ── BSDF math helpers (mirrored from closest_hit.rchit) ───────────────────
@@ -118,7 +128,6 @@ mat3 spMakeTBN(vec3 N) {
     return mat3(T, B, N);
 }
 
-// Spherical-cap VNDF (Dupuy 2023). Always above-horizon — no rejection retries.
 vec3 spSampleVNDF_H(vec3 wo, vec3 n, float alpha, vec2 u) {
     const vec3 nt = abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0)
                                     : vec3(1.0, 0.0, 0.0);
@@ -144,7 +153,6 @@ vec3 spSampleVNDF(vec3 wo, vec3 n, float alpha, vec2 u) {
     return reflect(-wo, h);
 }
 
-// ── Env importance sampling (mirror of chit) ──────────────────────────────
 vec2 spDirToEquirectUV(vec3 dir) {
     return vec2(0.5 + atan(dir.z, dir.x) / TWO_PI,
                 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI);
@@ -187,22 +195,6 @@ vec4 spSampleEnvImportance(inout uint seed) {
     return vec4(dir, pdfOmega);
 }
 
-float spEnvImportancePdf(vec3 dir) {
-    if (pc.envCdfTotalSum <= 0.0) return 0.0;
-    const int W = int(pc.envCdfWidth);
-    const int H = int(pc.envCdfHeight);
-    if (W <= 0 || H <= 0) return 0.0;
-    const vec2 uv = spDirToEquirectUV(normalize(dir));
-    const int col = clamp(int(uv.x * float(W)), 0, W - 1);
-    const int row = clamp(int(uv.y * float(H)), 0, H - 1);
-    const vec3 envCol = texelFetch(envTex, ivec2(col, row), 0).rgb;
-    const float lum   = dot(envCol, vec3(0.2126, 0.7152, 0.0722)) + 1e-10;
-    return lum * float(W * H) / (2.0 * PI * PI * max(pc.envCdfTotalSum, 1e-10));
-}
-
-// ── Shadow ray: returns 1.0 if light is unoccluded, 0.0 if occluded.
-// Reuses raygen's existing shadowVisibility payload at location 1.
-// maxDist = ray length (use 1e20 for directional / env "infinite" lights).
 float spShadowRay(vec3 origin, vec3 dir, float maxDist) {
     shadowVisibility = 0.0;
     traceRayEXT(topAS,
@@ -217,38 +209,23 @@ float spShadowRay(vec3 origin, vec3 dir, float maxDist) {
     return shadowVisibility;
 }
 
-// ── Sample a direction inside a uniform sphere octant, used for env NEE
-// fallback when no CDF is bound. Cosine-weighted on the upper hemisphere
-// gives less variance than uniform-sphere when the env is approximately
-// uniform; matches WGPU pattern.
-vec3 spSampleHemisphereCos(vec3 N, vec2 u, out float pdf) {
-    const vec3 d = spCosineHemisphere(u);
-    const mat3 tbn = spMakeTBN(N);
-    pdf = max(d.z, 0.0) / PI;
-    return tbn * d;
-}
+// ── primaryShadeSetup ────────────────────────────────────────────────────
+// Material lookup + BSDF inputs. Returns false if the material falls outside
+// this opaque-PBR path (transmissive, unlit, alpha-test). Caller falls back
+// to chit primary trace in that case.
+bool primaryShadeSetup(HitContext ctx, out PrimaryShadeState s) {
+    s.instanceId = ctx.instanceId;
+    s.worldPos   = ctx.worldPos;
 
-// ── Main entry point: shade a primary hit on an opaque surface ────────────
-// Caller fills HitContext from raster G-buffer reads, then invokes this.
-// Writes payload outputs (radiance/brdfWeight/nextOrigin/nextDir/etc.) so
-// raygen's bounce loop can continue from bounce 1 as if a chit had run.
-//
-// Returns false if the material is non-opaque (transmission > threshold) or
-// otherwise unsupported by this v1 path; caller should fall back to a real
-// primary traceRayEXT in that case.
-bool shadePrimaryHitOpaque(HitContext ctx, inout uint seed) {
     const MaterialDesc m = mats[ctx.instanceId];
 
-    // Transmissive materials (glass / water) — defer to existing chit path.
+    // Transmissive (glass / water): defer to chit.
     if (m.transmission > 0.05 || m.thinWalled != 0) return false;
-    // Unlit MeshBasicMaterial — defer (chit emits the unlit early-out).
+    // Unlit MeshBasicMaterial (sentinel: roughness < 0).
     if (m.roughness < 0.0) return false;
-    // Alpha-test cutout materials — the raster gbuffer pass doesn't
-    // discard on alpha yet, so its IDs are unreliable at supposed-to-be-
-    // transparent pixels. Defer to chit which has the alpha any-hit path.
+    // Alpha-test cutout: defer to chit (raster doesn't discard yet).
     if (m.alphaCutoff > 0.0) return false;
 
-    // ── Material lookup with bindless textures ─────────────────────────────
     const vec2 uvAlbedo     = (m.uvTransform           * vec3(ctx.uv, 1.0)).xy;
     const vec2 uvRoughMetal = (m.uvTransformRoughMetal * vec3(ctx.uv, 1.0)).xy;
     const vec2 uvEmissive   = (m.uvTransformEmissive   * vec3(ctx.uv, 1.0)).xy;
@@ -271,207 +248,145 @@ bool shadePrimaryHitOpaque(HitContext ctx, inout uint seed) {
     roughness = clamp(roughness, 0.04, 1.0);
     metalness = clamp(metalness, 0.0,  1.0);
 
-    // Emissive contribution (self-emission at the surface).
     vec3 emissive = m.emissive * m.emissiveIntensity;
     if (m.emissiveTexIndex >= 0) {
         const int i = clamp(m.emissiveTexIndex, 0, int(kMaxMaterialTextures) - 1);
         emissive *= texture(albedoMaps[i], uvEmissive).rgb;
     }
 
-    const vec3 N = ctx.worldNormalGeom;
-    const vec3 V = normalize(-ctx.rayDir);
-    const float NdotV = max(dot(N, V), 1e-3);
+    s.albedo    = albedo;
+    s.roughness = roughness;
+    s.metalness = metalness;
+    s.emissive  = emissive;
+    s.N         = ctx.worldNormalGeom;
+    s.V         = normalize(-ctx.rayDir);
+    s.NdotV     = max(dot(s.N, s.V), 1e-3);
+    s.F0        = mix(vec3(0.04) * m.specularIntensity * m.specularColor, albedo, metalness);
+    s.k         = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    s.alpha     = roughness * roughness;
+    // Bias along N so shadow rays don't self-intersect the source surface.
+    s.shadowOrigin = ctx.worldPos + s.N * 1e-3;
+    return true;
+}
 
-    const vec3 F0    = mix(vec3(0.04) * m.specularIntensity * m.specularColor, albedo, metalness);
-    const float k    = (roughness + 1.0) * (roughness + 1.0) / 8.0;
-    const float alpha = roughness * roughness;
+// Cook-Torrance + KC ms-comp for a single light direction, with firefly cap.
+// Helper used inside primaryShadeDirect — not part of the public API.
+vec3 spEvalLight(PrimaryShadeState s, vec3 L, float NdotL, vec3 lightCol, float fc) {
+    const vec3 H     = normalize(s.V + L);
+    const float NdotH = max(dot(s.N, H), 0.0);
+    const float VdotH = max(dot(s.V, H), 0.0);
+    const float D    = spDistGGX(NdotH, s.roughness);
+    const float G    = spGeomSmithG1(s.NdotV, s.k) * spGeomSmithG1(NdotL, s.k);
+    const vec3  F    = spFresnelSchlick(VdotH, s.F0);
+    const vec3  spec = D * G * F / max(4.0 * s.NdotV * NdotL, 1e-6);
+    const vec3  diff = s.albedo * (1.0 - s.metalness) * (vec3(1.0) - F) / PI;
+    vec3 contrib     = (diff + spec) * NdotL * lightCol;
+    contrib += spKcDiff(s.albedo, s.metalness, s.F0, s.NdotV, s.alpha) * NdotL * lightCol;
+    const float lum = dot(contrib, vec3(0.2126, 0.7152, 0.0722));
+    if (lum > fc) contrib *= fc / lum;
+    return contrib;
+}
 
-    // Shadow ray origin offset along N to avoid self-intersection.
-    const vec3 shadowOrigin = ctx.worldPos + N * 1e-3;
-
-    // ── Direct lighting: ambient + analytic NEE + emissive NEE + env NEE ──
-    vec3 direct = emissive + lights.ambient * albedo * (1.0 - metalness);
-
+// ── primaryShadeDirect ───────────────────────────────────────────────────
+// All NEE shadow rays at the primary surface — deterministic given (state,
+// seed). Run ONCE per pixel per frame (independent of spp) — that's the
+// optimization: spp samples share this contribution, save (spp-1)×NEE work.
+vec3 primaryShadeDirect(PrimaryShadeState s, inout uint seed) {
     const float fc = pc.fireflyClamp;
+    vec3 direct = s.emissive + lights.ambient * s.albedo * (1.0 - s.metalness);
 
-    // Helper: evaluate Cook-Torrance BSDF for a given light direction.
-    // Returns (diff + spec) · NdotL · light.color (caller applies).
-    // -- inlined per loop below --
-
-    // --- Directional lights ---
+    // Directional lights
     for (uint i = 0u; i < lights.dirCount; ++i) {
         const vec3  L     = -normalize(lights.dirLights[i].direction);
-        const float NdotL = dot(N, L);
+        const float NdotL = dot(s.N, L);
         if (NdotL <= 0.0) continue;
-        const float vis = spShadowRay(shadowOrigin, L, 1e20);
-        if (vis <= 0.0) continue;
-
-        const vec3 H     = normalize(V + L);
-        const float NdotH = max(dot(N, H), 0.0);
-        const float VdotH = max(dot(V, H), 0.0);
-        const float D    = spDistGGX(NdotH, roughness);
-        const float G    = spGeomSmithG1(NdotV, k) * spGeomSmithG1(NdotL, k);
-        const vec3  F    = spFresnelSchlick(VdotH, F0);
-        const vec3  spec = D * G * F / max(4.0 * NdotV * NdotL, 1e-6);
-        const vec3  diff = albedo * (1.0 - metalness) * (vec3(1.0) - F) / PI;
-        vec3 contrib     = (diff + spec) * NdotL * lights.dirLights[i].color;
-        // Add Kulla-Conty diffuse multi-scatter compensation (matches chit).
-        contrib += spKcDiff(albedo, metalness, F0, NdotV, alpha) * NdotL * lights.dirLights[i].color;
-        const float lum = dot(contrib, vec3(0.2126, 0.7152, 0.0722));
-        if (lum > fc) contrib *= fc / lum;
-        direct += contrib;
+        if (spShadowRay(s.shadowOrigin, L, 1e20) <= 0.0) continue;
+        direct += spEvalLight(s, L, NdotL, lights.dirLights[i].color, fc);
     }
 
-    // --- Point lights ---
+    // Point lights
     for (uint i = 0u; i < lights.pointCount; ++i) {
         const PointLight pl = lights.pointLights[i];
-        const vec3 toL  = pl.position - ctx.worldPos;
+        const vec3 toL  = pl.position - s.worldPos;
         const float dist = length(toL);
         if (dist < 1e-4) continue;
         const vec3 L = toL / dist;
-        const float NdotL = dot(N, L);
+        const float NdotL = dot(s.N, L);
         if (NdotL <= 0.0) continue;
-        const float vis = spShadowRay(shadowOrigin, L, dist - 1e-3);
-        if (vis <= 0.0) continue;
-
-        // Inverse-square attenuation with optional smooth range cutoff (matches three.js).
+        if (spShadowRay(s.shadowOrigin, L, dist - 1e-3) <= 0.0) continue;
         float atten = 1.0 / max(dist * dist, 1e-4);
         if (pl.range > 0.0) atten *= clamp(1.0 - pow(dist / pl.range, 4.0), 0.0, 1.0);
         if (pl.decay > 0.0) atten *= pow(max(dist, 1e-4), -pl.decay + 2.0);
-
-        const vec3 H     = normalize(V + L);
-        const float NdotH = max(dot(N, H), 0.0);
-        const float VdotH = max(dot(V, H), 0.0);
-        const float D    = spDistGGX(NdotH, roughness);
-        const float G    = spGeomSmithG1(NdotV, k) * spGeomSmithG1(NdotL, k);
-        const vec3  F    = spFresnelSchlick(VdotH, F0);
-        const vec3  spec = D * G * F / max(4.0 * NdotV * NdotL, 1e-6);
-        const vec3  diff = albedo * (1.0 - metalness) * (vec3(1.0) - F) / PI;
-        vec3 contrib = (diff + spec) * NdotL * pl.color * atten;
-        contrib += spKcDiff(albedo, metalness, F0, NdotV, alpha) * NdotL * pl.color * atten;
-        const float lum = dot(contrib, vec3(0.2126, 0.7152, 0.0722));
-        if (lum > fc) contrib *= fc / lum;
-        direct += contrib;
+        direct += spEvalLight(s, L, NdotL, pl.color * atten, fc);
     }
 
-    // --- Spot lights ---
+    // Spot lights
     for (uint i = 0u; i < lights.spotCount; ++i) {
         const SpotLight sl = lights.spotLights[i];
-        const vec3 toL = sl.position - ctx.worldPos;
+        const vec3 toL = sl.position - s.worldPos;
         const float dist = length(toL);
         if (dist < 1e-4) continue;
         const vec3 L = toL / dist;
-        const float NdotL = dot(N, L);
+        const float NdotL = dot(s.N, L);
         if (NdotL <= 0.0) continue;
-        // Cone falloff
         const float cosToLight = dot(-L, sl.direction);
         if (cosToLight < sl.cosAngleOuter) continue;
-        const float coneAtten = smoothstep(sl.cosAngleOuter, sl.cosAngleInner, cosToLight);
-
-        const float vis = spShadowRay(shadowOrigin, L, dist - 1e-3);
-        if (vis <= 0.0) continue;
-
+        if (spShadowRay(s.shadowOrigin, L, dist - 1e-3) <= 0.0) continue;
         float atten = 1.0 / max(dist * dist, 1e-4);
         if (sl.range > 0.0) atten *= clamp(1.0 - pow(dist / sl.range, 4.0), 0.0, 1.0);
         if (sl.decay > 0.0) atten *= pow(max(dist, 1e-4), -sl.decay + 2.0);
-        atten *= coneAtten;
-
-        const vec3 H     = normalize(V + L);
-        const float NdotH = max(dot(N, H), 0.0);
-        const float VdotH = max(dot(V, H), 0.0);
-        const float D    = spDistGGX(NdotH, roughness);
-        const float G    = spGeomSmithG1(NdotV, k) * spGeomSmithG1(NdotL, k);
-        const vec3  F    = spFresnelSchlick(VdotH, F0);
-        const vec3  spec = D * G * F / max(4.0 * NdotV * NdotL, 1e-6);
-        const vec3  diff = albedo * (1.0 - metalness) * (vec3(1.0) - F) / PI;
-        vec3 contrib = (diff + spec) * NdotL * sl.color * atten;
-        contrib += spKcDiff(albedo, metalness, F0, NdotV, alpha) * NdotL * sl.color * atten;
-        const float lum = dot(contrib, vec3(0.2126, 0.7152, 0.0722));
-        if (lum > fc) contrib *= fc / lum;
-        direct += contrib;
+        atten *= smoothstep(sl.cosAngleOuter, sl.cosAngleInner, cosToLight);
+        direct += spEvalLight(s, L, NdotL, sl.color * atten, fc);
     }
 
-    // --- Rect lights (sample a single point at the rect center for v1) ---
+    // Rect lights — random point sample for v1
     for (uint i = 0u; i < lights.rectCount; ++i) {
         const RectLight rl = lights.rectLights[i];
         const vec2 ru = vec2(urand(seed), urand(seed)) * 2.0 - 1.0;
         const vec3 lp = rl.position + ru.x * rl.halfU + ru.y * rl.halfV;
-        const vec3 toL = lp - ctx.worldPos;
+        const vec3 toL = lp - s.worldPos;
         const float dist = length(toL);
         if (dist < 1e-4) continue;
         const vec3 L = toL / dist;
-        const float NdotL = dot(N, L);
+        const float NdotL = dot(s.N, L);
         if (NdotL <= 0.0) continue;
         const float lightCos = max(dot(rl.normal, -L), 0.0);
-        if (lightCos <= 0.0) continue;// behind the emitter
-        const float vis = spShadowRay(shadowOrigin, L, dist - 1e-3);
-        if (vis <= 0.0) continue;
-
-        const float area = 4.0 * length(rl.halfU) * length(rl.halfV);
+        if (lightCos <= 0.0) continue;
+        if (spShadowRay(s.shadowOrigin, L, dist - 1e-3) <= 0.0) continue;
+        const float area  = 4.0 * length(rl.halfU) * length(rl.halfV);
         const float atten = (lightCos * area) / max(dist * dist, 1e-4);
-        const vec3 H     = normalize(V + L);
-        const float NdotH = max(dot(N, H), 0.0);
-        const float VdotH = max(dot(V, H), 0.0);
-        const float D    = spDistGGX(NdotH, roughness);
-        const float G    = spGeomSmithG1(NdotV, k) * spGeomSmithG1(NdotL, k);
-        const vec3  F    = spFresnelSchlick(VdotH, F0);
-        const vec3  spec = D * G * F / max(4.0 * NdotV * NdotL, 1e-6);
-        const vec3  diff = albedo * (1.0 - metalness) * (vec3(1.0) - F) / PI;
-        vec3 contrib = (diff + spec) * NdotL * rl.color * atten;
-        contrib += spKcDiff(albedo, metalness, F0, NdotV, alpha) * NdotL * rl.color * atten;
-        const float lum = dot(contrib, vec3(0.2126, 0.7152, 0.0722));
-        if (lum > fc) contrib *= fc / lum;
-        direct += contrib;
+        direct += spEvalLight(s, L, NdotL, rl.color * atten, fc);
     }
 
-    // --- Env NEE (importance sample if CDF is bound, else uniform hemisphere) ---
+    // Env NEE — importance sample if CDF bound, uniform sphere fallback
     {
         vec4 envSample = spSampleEnvImportance(seed);
         vec3 Lenv;
         float pdfEnv;
-        bool envValid = (envSample.w > 0.0);
-        if (envValid) {
+        if (envSample.w > 0.0) {
             Lenv = envSample.xyz;
             pdfEnv = envSample.w;
         } else {
-            // Uniform-sphere fallback
             float u1 = urand(seed), u2 = urand(seed);
             float cosTh = 1.0 - 2.0 * u1;
             float sinTh = sqrt(max(0.0, 1.0 - cosTh*cosTh));
             float phi = TWO_PI * u2;
             Lenv = vec3(sinTh * cos(phi), cosTh, sinTh * sin(phi));
             pdfEnv = 1.0 / (4.0 * PI);
-            envValid = true;
         }
-        const float NdotL = dot(N, Lenv);
-        if (NdotL > 0.0 && envValid) {
-            const float vis = spShadowRay(shadowOrigin, Lenv, 1e20);
-            if (vis > 0.0) {
-                const vec3 envCol = texture(envTex, spDirToEquirectUV(Lenv)).rgb;
-                const vec3 H     = normalize(V + Lenv);
-                const float NdotH = max(dot(N, H), 0.0);
-                const float VdotH = max(dot(V, H), 0.0);
-                const float D    = spDistGGX(NdotH, roughness);
-                const float G    = spGeomSmithG1(NdotV, k) * spGeomSmithG1(NdotL, k);
-                const vec3  F    = spFresnelSchlick(VdotH, F0);
-                const vec3  spec = D * G * F / max(4.0 * NdotV * NdotL, 1e-6);
-                const vec3  diff = albedo * (1.0 - metalness) * (vec3(1.0) - F) / PI;
-                // MIS weight: balance heuristic between env importance and BSDF.
-                const float bsdfPdf = spBrdfPdf(V, Lenv, N, roughness, metalness);
-                const float mis = pdfEnv / max(pdfEnv + bsdfPdf, 1e-6);
-                vec3 contrib = (diff + spec) * NdotL * envCol * mis / max(pdfEnv, 1e-6);
-                contrib += spKcDiff(albedo, metalness, F0, NdotV, alpha) * NdotL * envCol * mis / max(pdfEnv, 1e-6);
-                const float lum = dot(contrib, vec3(0.2126, 0.7152, 0.0722));
-                if (lum > fc) contrib *= fc / lum;
-                direct += contrib;
-            }
+        const float NdotL = dot(s.N, Lenv);
+        if (NdotL > 0.0 && spShadowRay(s.shadowOrigin, Lenv, 1e20) > 0.0) {
+            const vec3 envCol = texture(envTex, spDirToEquirectUV(Lenv)).rgb;
+            const float bsdfPdf = spBrdfPdf(s.V, Lenv, s.N, s.roughness, s.metalness);
+            const float mis = pdfEnv / max(pdfEnv + bsdfPdf, 1e-6);
+            const vec3 col = envCol * mis / max(pdfEnv, 1e-6);
+            direct += spEvalLight(s, Lenv, NdotL, col, fc);
         }
     }
 
-    // --- Emissive triangle NEE (CDF binary search, single sample) ---
+    // Emissive triangle NEE — single sample via CDF binary search
     if (pc.emissiveCount > 0u && pc.emissiveTotalPower > 0.0) {
         const float xi = urand(seed) * pc.emissiveTotalPower;
-        // Binary search for CDF row whose cumPower exceeds xi.
         int lo = 0, hi = int(pc.emissiveCount) - 1;
         for (int it = 0; it < 24; ++it) {
             if (lo >= hi) break;
@@ -480,107 +395,89 @@ bool shadePrimaryHitOpaque(HitContext ctx, inout uint seed) {
             if (cm < xi) lo = mid + 1; else hi = mid;
         }
         const EmTri et = emissiveTris[lo];
-        // Sample a point on the triangle (uniform area).
         float u1 = urand(seed), u2 = urand(seed);
         if (u1 + u2 > 1.0) { u1 = 1.0 - u1; u2 = 1.0 - u2; }
         const vec3 lp = et.v0.xyz + u1 * (et.v1.xyz - et.v0.xyz) + u2 * (et.v2.xyz - et.v0.xyz);
-        const vec3 toL = lp - ctx.worldPos;
+        const vec3 toL = lp - s.worldPos;
         const float dist = length(toL);
         if (dist > 1e-4) {
             const vec3 L = toL / dist;
-            const float NdotL = dot(N, L);
+            const float NdotL = dot(s.N, L);
             if (NdotL > 0.0) {
                 const vec3 triE = normalize(cross(et.v1.xyz - et.v0.xyz, et.v2.xyz - et.v0.xyz));
                 const float lightCos = max(dot(triE, -L), 0.0);
-                if (lightCos > 0.0) {
-                    const float vis = spShadowRay(shadowOrigin, L, dist - 1e-3);
-                    if (vis > 0.0) {
-                        const float power = et.v2.w;
-                        const float pickPdf = power / max(pc.emissiveTotalPower, 1e-10);
-                        const float areaPdf = 1.0 / max(et.v0.w, 1e-10);
-                        const float pdfOmega = pickPdf * areaPdf * dist * dist / max(lightCos, 1e-6);
-
-                        const vec3 H     = normalize(V + L);
-                        const float NdotH = max(dot(N, H), 0.0);
-                        const float VdotH = max(dot(V, H), 0.0);
-                        const float D    = spDistGGX(NdotH, roughness);
-                        const float G    = spGeomSmithG1(NdotV, k) * spGeomSmithG1(NdotL, k);
-                        const vec3  F    = spFresnelSchlick(VdotH, F0);
-                        const vec3  spec = D * G * F / max(4.0 * NdotV * NdotL, 1e-6);
-                        const vec3  diff = albedo * (1.0 - metalness) * (vec3(1.0) - F) / PI;
-                        vec3 contrib = (diff + spec) * NdotL * et.emission.rgb / max(pdfOmega, 1e-6);
-                        contrib += spKcDiff(albedo, metalness, F0, NdotV, alpha) * NdotL * et.emission.rgb / max(pdfOmega, 1e-6);
-                        const float lum = dot(contrib, vec3(0.2126, 0.7152, 0.0722));
-                        if (lum > fc) contrib *= fc / lum;
-                        direct += contrib;
-                    }
+                if (lightCos > 0.0 && spShadowRay(s.shadowOrigin, L, dist - 1e-3) > 0.0) {
+                    const float power     = et.v2.w;
+                    const float pickPdf   = power / max(pc.emissiveTotalPower, 1e-10);
+                    const float areaPdf   = 1.0 / max(et.v0.w, 1e-10);
+                    const float pdfOmega  = pickPdf * areaPdf * dist * dist / max(lightCos, 1e-6);
+                    const vec3 col = et.emission.rgb / max(pdfOmega, 1e-6);
+                    direct += spEvalLight(s, L, NdotL, col, fc);
                 }
             }
         }
     }
+    return direct;
+}
 
-    // ── Bounce sampling: 2-way stochastic split (spec / diff). Clearcoat/
-    // transmission lobes are out of scope for this opaque path. ────────────
-    const float pSpec = mix(0.5, 0.98, metalness);
-    vec3 nextDir;
-    vec3 brdfWeight;
-    float bsdfPdfOut;
-    const float xi = urand(seed);
+// ── primaryShadeBounce ───────────────────────────────────────────────────
+// Per-sample: pick the BSDF-sampled bounce direction, fill payload's bounce
+// fields. Doesn't touch payload.radiance — caller seeds that with the
+// per-pixel direct contribution (computed once via primaryShadeDirect).
+void primaryShadeBounce(PrimaryShadeState s, inout uint seed, inout Payload pay) {
+    pay.hitWorldPos     = s.worldPos;
+    pay.hitInstanceId   = s.instanceId + 1u;
+    pay.hitRoughness    = s.roughness;
+    pay.hitMetalness    = s.metalness;
+    pay.hitTransmission = 0.0;
+    pay.currentIor      = 1.0;
+    pay.flags           = 0u;
+    pay.nextOrigin      = s.shadowOrigin;
+
+    const float pSpec = mix(0.5, 0.98, s.metalness);
+    const float xi    = urand(seed);
     if (xi < pSpec) {
-        // Specular VNDF sample
-        nextDir = spSampleVNDF(V, N, alpha, vec2(urand(seed), urand(seed)));
-        const float NdotL = max(dot(N, nextDir), 0.0);
+        const vec3 nextDir = spSampleVNDF(s.V, s.N, s.alpha, vec2(urand(seed), urand(seed)));
+        const float NdotL  = max(dot(s.N, nextDir), 0.0);
         if (NdotL <= 0.0) {
-            // Below horizon — terminate path.
-            payload.radiance      = direct;
-            payload.brdfWeight    = vec3(0.0);
-            payload.nextOrigin    = shadowOrigin;
-            payload.nextDir       = N;
-            payload.flags         = 1u;// terminate
-            payload.hitWorldPos   = ctx.worldPos;
-            payload.hitInstanceId = ctx.instanceId + 1u;
-            payload.hitRoughness  = roughness;
-            payload.hitMetalness  = metalness;
-            payload.hitTransmission = 0.0;
-            payload.bsdfPdf       = 0.0;
-            payload.currentIor    = 1.0;
-            return true;
+            pay.brdfWeight = vec3(0.0);
+            pay.nextDir    = s.N;
+            pay.flags      = 1u;// terminate
+            pay.bsdfPdf    = 0.0;
+            return;
         }
-        const vec3 H = normalize(V + nextDir);
-        const float NdotH = max(dot(N, H), 0.0);
-        const float VdotH = max(dot(V, H), 0.0);
-        const float D = spDistGGX(NdotH, roughness);
-        const float G = spGeomSmithG1(NdotV, k) * spGeomSmithG1(NdotL, k);
-        const vec3 F = spFresnelSchlick(VdotH, F0);
-        const float specPdf = spVndfPdf(V, nextDir, N, roughness);
-        const vec3 specBrdf = D * G * F / max(4.0 * NdotV * NdotL, 1e-6);
-        // weight = brdf * NdotL / (pSpec * specPdf), spread across the mixture.
-        brdfWeight = specBrdf * NdotL / max(pSpec * specPdf, 1e-6);
-        bsdfPdfOut = pSpec * specPdf;
+        const vec3 H = normalize(s.V + nextDir);
+        const float NdotH = max(dot(s.N, H), 0.0);
+        const float VdotH = max(dot(s.V, H), 0.0);
+        const float D = spDistGGX(NdotH, s.roughness);
+        const float G = spGeomSmithG1(s.NdotV, s.k) * spGeomSmithG1(NdotL, s.k);
+        const vec3 F  = spFresnelSchlick(VdotH, s.F0);
+        const float specPdf = spVndfPdf(s.V, nextDir, s.N, s.roughness);
+        const vec3 specBrdf = D * G * F / max(4.0 * s.NdotV * NdotL, 1e-6);
+        pay.brdfWeight = specBrdf * NdotL / max(pSpec * specPdf, 1e-6);
+        pay.nextDir    = nextDir;
+        pay.bsdfPdf    = pSpec * specPdf;
     } else {
-        // Diffuse cosine-weighted sample
-        const mat3 tbn = spMakeTBN(N);
+        const mat3 tbn = spMakeTBN(s.N);
         const vec3 dLocal = spCosineHemisphere(vec2(urand(seed), urand(seed)));
-        nextDir = tbn * dLocal;
-        const float NdotL = max(dot(N, nextDir), 0.0);
+        const vec3 nextDir = tbn * dLocal;
+        const float NdotL = max(dot(s.N, nextDir), 0.0);
         const float diffPdf = NdotL / PI;
-        // Kulla-Conty boost so the additive ms-comp stays unbiased.
-        brdfWeight = albedo * (1.0 - metalness) * spKcBoost(F0, NdotV, alpha) / max(1.0 - pSpec, 1e-6);
-        bsdfPdfOut = (1.0 - pSpec) * diffPdf;
+        pay.brdfWeight = s.albedo * (1.0 - s.metalness) * spKcBoost(s.F0, s.NdotV, s.alpha) / max(1.0 - pSpec, 1e-6);
+        pay.nextDir    = nextDir;
+        pay.bsdfPdf    = (1.0 - pSpec) * diffPdf;
     }
+}
 
-    payload.radiance        = direct;
-    payload.brdfWeight      = brdfWeight;
-    payload.nextOrigin      = shadowOrigin;
-    payload.nextDir         = nextDir;
-    payload.flags           = 0u;
-    payload.hitWorldPos     = ctx.worldPos;
-    payload.hitInstanceId   = ctx.instanceId + 1u;
-    payload.hitRoughness    = roughness;
-    payload.hitMetalness    = metalness;
-    payload.hitTransmission = 0.0;
-    payload.bsdfPdf         = bsdfPdfOut;
-    payload.currentIor      = 1.0;
+// ── Combined entry point (kept for callers that don't split spp) ─────────
+// Fully equivalent to primaryShadeSetup → primaryShadeDirect → primaryShadeBounce
+// in one call. raygen now uses the split form to amortize NEE across spp.
+bool shadePrimaryHitOpaque(HitContext ctx, inout uint seed) {
+    PrimaryShadeState s;
+    if (!primaryShadeSetup(ctx, s)) return false;
+    const vec3 direct = primaryShadeDirect(s, seed);
+    primaryShadeBounce(s, seed, payload);
+    payload.radiance = direct;
     return true;
 }
 

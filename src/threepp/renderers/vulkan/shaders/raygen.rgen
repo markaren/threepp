@@ -575,15 +575,69 @@ void main() {
     float primaryMetalness   = 0.0;
     float primaryTransmission = 0.0;
 
-    // Hybrid mode (gbuffer drives primary visibility): primary-ray jitter is
-    // gated off — confirmed empirically (2026-05-06) that even with sub-pixel
-    // exact gbuffer motion vectors driving reproject, Monte Carlo primary
-    // visibility produces moving-object shake. The architectural answer is
-    // Stage 1A: raygen reads gbuffer for primary, skips primary traceRayEXT,
-    // raster TAA owns AA. Until that lands, we keep primary deterministic
-    // (no jitter, no shake, no AA) — the gbuffer motion vector still gives
-    // accurate temporal reproject for bounce-1+ history.
+    // Hybrid mode (gbuffer drives primary visibility): PT primary-ray jitter
+    // is gated off — confirmed empirically (2026-05-06) that Monte Carlo
+    // primary produces shake regardless of motion-vec accuracy. Stage 1A
+    // makes raster own primary visibility (raster jitter on for AA), PT
+    // skips primary trace.
     const bool hybridOn = (pc.motionFlags & 8u) != 0u;
+
+    // ── Hybrid primary cache: setup + direct lighting computed ONCE per
+    // pixel (independent of spp) so spp samples share the NEE result.
+    // Saves spp×(env + dir + point + spot + rect + emissive) shadow rays
+    // — ~major win on heavily-lit scenes with spp > 1. Only the bounce
+    // direction varies per-sample.
+    PrimaryShadeState primaryState;
+    vec3 primaryDirect      = vec3(0.0);
+    vec3 primarySkyEnv      = vec3(0.0);
+    bool primaryHybridValid = false;// setup succeeded → use primaryShadeBounce per sample
+    bool primaryHybridSky   = false;// gbuffer says sky → sample env, terminate
+    if (hybridOn) {
+        const vec2 uv_screen = (vec2(gl_LaunchIDEXT.xy) + 0.5) / size;
+        const uvec4 idsTap = texture(gbufIdsTex, uv_screen);
+        const uint id1 = idsTap.x;// 0 == sky/miss
+        // Primary ray direction at pixel center — used both for sky env tap
+        // and as HitContext.rayDir when feeding shadePrimaryHit.
+        vec2 ndcCenter = vec2(uv_screen.x * 2.0 - 1.0, -(uv_screen.y * 2.0 - 1.0));
+        const vec4 targetVS_c = cam.projInverse * vec4(ndcCenter, 1.0, 1.0);
+        const vec3 dirVS_c    = normalize(targetVS_c.xyz / targetVS_c.w);
+        const vec3 dirWS_c    = normalize((cam.viewInverse * vec4(dirVS_c, 0.0)).xyz);
+
+        if (id1 == 0u) {
+            primarySkyEnv    = sampleEquirectFog(dirWS_c);
+            primaryHybridSky = true;
+        } else {
+            const float depthV   = texture(gbufDepthTex, uv_screen).r;
+            const vec2  ndcVk    = uv_screen * 2.0 - 1.0;
+            const vec4  ndcH     = vec4(ndcVk.x, -ndcVk.y, depthV, 1.0);
+            const vec4  viewPos  = cam.projInverse * ndcH;
+            const vec4  worldH   = cam.viewInverse * viewPos;
+            const vec3  worldPos = worldH.xyz / worldH.w;
+            const vec3  normalEnc   = texture(gbufNormalTex, uv_screen).xyz;
+            const vec3  worldNormal = normalize(normalEnc * 2.0 - 1.0);
+            const vec2  matUv       = texture(gbufUvTex, uv_screen).rg;
+
+            HitContext hc;
+            hc.worldPos        = worldPos;
+            hc.worldNormalGeom = worldNormal;
+            hc.uv              = matUv;
+            hc.instanceId      = id1 - 1u;
+            hc.rayOrigin       = originWS.xyz;
+            hc.rayDir          = dirWS_c;
+            hc.hitT            = length(worldPos - originWS.xyz);
+
+            if (primaryShadeSetup(hc, primaryState)) {
+                // Use a frame-coherent seed (sample-index 0) so direct
+                // lighting is deterministic across the spp loop. The
+                // analytic-light NEE has no random component anyway; rect-
+                // light random sample, env CDF random sample, and emissive-
+                // tri random sample all draw from this seed.
+                uint directSeed = seedFor(gl_LaunchIDEXT.xy, pc.sampleIndex * spp);
+                primaryDirect = primaryShadeDirect(primaryState, directSeed);
+                primaryHybridValid = true;
+            }
+        }
+    }
     for (uint s = 0u; s < spp; ++s) {
         // Per-sample sub-frame index — each in-frame sample needs its own
         // jitter and seed to actually decorrelate. Halton(0) is 0, which would
@@ -689,59 +743,32 @@ void main() {
         // splatter inside the decal silhouette.
         const float tmin = prevPassThrough ? 1e-4 : 0.001;
 
-        // Stage 1A: hybrid primary path. On the FIRST step (primary), if
-        // hybrid is on, read the raster gbuffer to determine hit/sky and
-        // either sample env directly or invoke shadePrimaryHitOpaque to
-        // populate the payload as if a chit had run. Skips the primary
-        // traceRayEXT entirely on the opaque-hit path. Transmissive surfaces
-        // (and any unsupported material classes) fall back to the regular
-        // traceRayEXT below.
+        // Stage 1A v2: hybrid primary uses the per-pixel cache populated
+        // outside the spp loop. Sky → primarySkyEnv (terminate). Opaque
+        // hit → reuse primaryState + primaryDirect, only the bounce
+        // direction varies per-sample. Transmissive / unlit / alpha-test
+        // surfaces have primaryHybridValid==false and fall through to a
+        // regular primary traceRayEXT below.
         bool primaryViaHybrid = false;
         if (hybridOn && step == 0) {
-            const vec2 uv_screen = (vec2(gl_LaunchIDEXT.xy) + 0.5) / size;
-            const uvec4 idsTap = texture(gbufIdsTex, uv_screen);
-            const uint id1 = idsTap.x;// 0 == sky/miss
-            if (id1 == 0u) {
-                payload.radiance       = sampleEquirectFog(normalize(dir));
-                payload.brdfWeight     = vec3(0.0);
-                payload.nextOrigin     = vec3(0.0);
-                payload.nextDir        = vec3(0.0);
-                payload.flags          = 1u;// terminate
-                payload.hitWorldPos    = origin + dir * 1e6;
-                payload.hitInstanceId  = 0u;
-                payload.hitRoughness   = 1.0;
-                payload.hitMetalness   = 0.0;
+            if (primaryHybridSky) {
+                payload.radiance        = primarySkyEnv;
+                payload.brdfWeight      = vec3(0.0);
+                payload.nextOrigin      = vec3(0.0);
+                payload.nextDir         = vec3(0.0);
+                payload.flags           = 1u;
+                payload.hitWorldPos     = origin + dir * 1e6;
+                payload.hitInstanceId   = 0u;
+                payload.hitRoughness    = 1.0;
+                payload.hitMetalness    = 0.0;
                 payload.hitTransmission = 0.0;
-                payload.bsdfPdf        = 0.0;
-                payload.currentIor     = 1.0;
+                payload.bsdfPdf         = 0.0;
+                payload.currentIor      = 1.0;
                 primaryViaHybrid = true;
-            } else {
-                // Reconstruct world pos: gbuffer was rasterized with Y-flipped
-                // gl_Position, so screen Y maps to Vulkan-NDC Y-down. Flip
-                // back to GL convention before applying the GL-form invProj.
-                const float depthV   = texture(gbufDepthTex, uv_screen).r;
-                const vec2  ndcVk    = uv_screen * 2.0 - 1.0;
-                const vec4  ndcH     = vec4(ndcVk.x, -ndcVk.y, depthV, 1.0);
-                const vec4  viewPos  = cam.projInverse * ndcH;
-                const vec4  worldH   = cam.viewInverse * viewPos;
-                const vec3  worldPos = worldH.xyz / worldH.w;
-
-                const vec3 normalEnc   = texture(gbufNormalTex, uv_screen).xyz;
-                const vec3 worldNormal = normalize(normalEnc * 2.0 - 1.0);
-                const vec2 matUv       = texture(gbufUvTex, uv_screen).rg;
-
-                HitContext hc;
-                hc.worldPos        = worldPos;
-                hc.worldNormalGeom = worldNormal;
-                hc.uv              = matUv;
-                hc.instanceId      = id1 - 1u;
-                hc.rayOrigin       = origin;
-                hc.rayDir          = normalize(dir);
-                hc.hitT            = length(worldPos - origin);
-
-                if (shadePrimaryHitOpaque(hc, seed)) {
-                    primaryViaHybrid = true;
-                }
+            } else if (primaryHybridValid) {
+                primaryShadeBounce(primaryState, seed, payload);
+                payload.radiance = primaryDirect;
+                primaryViaHybrid = true;
             }
         }
 
