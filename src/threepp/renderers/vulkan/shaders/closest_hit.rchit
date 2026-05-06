@@ -207,10 +207,6 @@ layout(push_constant) uniform Pc {
     uint _pad1;
     uint _pad2;
     uint motionFlags;       // bit 2 = scene has any glass material (gates caustic gather)
-    uint mb0;               // unused
-    uint mb1;               // unused
-    uint mb2;               // unused
-    uint mb3;               // unused
     uint emissiveCount;     // # of EmTri entries
     float emissiveTotalPower;// total CDF power (last entry's cumPower)
     uint _padSpp;           // raygen spp (unused here)

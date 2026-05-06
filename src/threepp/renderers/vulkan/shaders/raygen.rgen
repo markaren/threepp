@@ -137,6 +137,13 @@ layout(set = 0, binding = 14, scalar) readonly buffer EmissiveTriBuf {
     EmTri emissiveTris[];
 };
 
+// Per-instance moved-bitmask: bit i of meshMovedBits[i>>5] is set when TLAS
+// instance i had any kind of change this frame (xfm, material, bones, displ).
+// Sized at scene rebuild to cover every visible instance.
+layout(set = 0, binding = 21, std430) readonly buffer MeshMovedBitsBuf {
+    uint meshMovedBits[];
+};
+
 layout(set = 0, binding = 17) uniform FogUbo {
     vec3  sigmaT;
     float enabled;
@@ -167,25 +174,19 @@ vec3 sampleEquirectFog(vec3 dir) {
 // .x sampleIndex, .y envMipCount (closest_hit), .z toneMapping enum
 // (None=0, Linear=1, Reinhard=2, Cineon=3, ACESFilmic=4, Custom=5),
 // .w toneMappingExposure as float-bits, .v[1] motionFlags
-// (bit 0 = any motion this frame, bit 1 = camera viewProj changed).
-// meshMovedBits[4] is a 128-bit per-mesh moved bitmask; isMeshMoved()
+// (bit 0 = any motion this frame, bit 1 = camera viewProj changed,
+//  bit 2 = scene has any glass material — gates caustic gather).
+// Per-instance moved bits live in the binding 21 SSBO; isMeshMoved()
 // queries by primaryInstanceId-1 so FC-halving is per-pixel rather than
-// scene-wide. When bit 0 is unset raygen takes the self-tap accumulation
-// path and skips the reproject math entirely — float-precision pixel-snap
-// drift on a static scene was visibly wobbly otherwise.
-// 4 separate uints (mb0..mb3) instead of an array — sidesteps any
-// std140/std430/scalar layout ambiguity; scalar uints pack tightly at 4-byte
-// offsets in every layout. Total block size 36 bytes, matches host pc[9].
+// scene-wide. When motionFlags bit 0 is unset raygen takes the self-tap
+// accumulation path and skips the reproject math entirely — float-precision
+// pixel-snap drift on a static scene was visibly wobbly otherwise.
 layout(push_constant) uniform Pc {
     uint sampleIndex;
     uint envMipCount;
     uint toneMapping;
     uint exposureBits;
     uint motionFlags;
-    uint mb0;
-    uint mb1;
-    uint mb2;
-    uint mb3;
     uint emissiveCount;       // # of emissive triangles (closest_hit reads this)
     float emissiveTotalPower; // total power CDF max (closest_hit reads this)
     uint samplesPerPixel;     // # of jittered primary rays per frame (>=1)
@@ -196,15 +197,9 @@ layout(push_constant) uniform Pc {
 } pc;
 
 bool isMeshMoved(uint idx) {
-    if (idx >= 128u) return false;
-    const uint b = 1u << (idx & 31u);
     const uint w = idx >> 5u;
-    uint v;
-    if      (w == 0u) v = pc.mb0;
-    else if (w == 1u) v = pc.mb1;
-    else if (w == 2u) v = pc.mb2;
-    else              v = pc.mb3;
-    return (v & b) != 0u;
+    if (w >= meshMovedBits.length()) return false;
+    return (meshMovedBits[w] & (1u << (idx & 31u))) != 0u;
 }
 
 layout(location = 0) rayPayloadEXT Payload payload;

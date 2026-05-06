@@ -68,6 +68,7 @@
 
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -496,12 +497,15 @@ namespace threepp {
         // (uniformly noisy background equilibrating at FC≈2).
         bool cameraMovedThisFrame_ = false;
 
-        // Per-entry "moved" bitmask, one bit per TLAS instance up to 128. Bit i
-        // set when entry i's effective worldMatrix changed since last frame
-        // (covers both regular meshes and individual InstancedMesh sub-instances).
-        // Mirrors WGPU's movedMeshBits — raygen indexes by primaryInstanceId-1
-        // to make the FC-halving decision per-pixel instead of scene-wide.
-        uint32_t meshMovedBits_[4] = {0u, 0u, 0u, 0u};
+        // Per-entry "moved" bitmask, one bit per TLAS instance. Bit i set when
+        // entry i's effective worldMatrix / pose / displacement changed since
+        // last frame. Sized to ceil(meshCount/32) words at scene rebuild;
+        // uploaded to meshMovedBitsBuffers[currentFrame] each frame so raygen
+        // can index by primaryInstanceId-1 to make the FC-halving decision
+        // per-pixel instead of scene-wide.
+        std::vector<uint32_t> meshMovedBits_;
+        std::array<Buffer, kFramesInFlight> meshMovedBitsBuffers{};
+        std::array<VkDeviceSize, kFramesInFlight> meshMovedBitsBufferCapacity{};
 
         // FNV-1a 64-bit hash of the previous frame's GpuLightsUbo bytes. Used in
         // updateLightsUbo to detect changes in analytic-light state (visibility,
@@ -590,14 +594,19 @@ namespace threepp {
             const void* mesh;
             const void* geom;
             const void* mat;
-            const void* albedoTex;            // covers map swap on the same material
-            const void* roughnessTex;         // covers roughnessMap swap
-            const void* metalnessTex;         // covers metalnessMap swap
-            const void* normalTex;            // covers normalMap swap
-            const void* transmissionTex;      // covers transmissionMap swap
-            const void* clearcoatTex;         // covers clearcoatMap swap
-            const void* clearcoatRoughnessTex;// covers clearcoatRoughnessMap swap
-            const void* emissiveTex;          // covers emissiveMap swap
+            // Texture fingerprint slots hold the shared_ptr (not just the raw
+            // pointer) so the comparison can't be fooled by an allocator
+            // recycling a freed Texture's address for a brand-new Texture: a
+            // held shared_ptr keeps the previous Texture alive long enough that
+            // no overlap can happen, and operator!= still compares get().
+            std::shared_ptr<Texture> albedoTex;            // covers map swap on the same material
+            std::shared_ptr<Texture> roughnessTex;         // covers roughnessMap swap
+            std::shared_ptr<Texture> metalnessTex;         // covers metalnessMap swap
+            std::shared_ptr<Texture> normalTex;            // covers normalMap swap
+            std::shared_ptr<Texture> transmissionTex;      // covers transmissionMap swap
+            std::shared_ptr<Texture> clearcoatTex;         // covers clearcoatMap swap
+            std::shared_ptr<Texture> clearcoatRoughnessTex;// covers clearcoatRoughnessMap swap
+            std::shared_ptr<Texture> emissiveTex;          // covers emissiveMap swap
             uint32_t instanceIndex;// 0 for non-instanced; distinguishes sub-instances
             unsigned int matVersion = 0;// Material::version() — bumped by needsUpdate(),
                                         // KHR_animation_pointer, etc. Lets us skip the
@@ -778,6 +787,7 @@ namespace threepp {
             for (auto& b : lightsUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : fogUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : motionMatBuffers) destroyBuffer(ctx->allocator(), b);
+            for (auto& b : meshMovedBitsBuffers) destroyBuffer(ctx->allocator(), b);
             for (auto& b : emissiveTriBuffers) destroyBuffer(ctx->allocator(), b);
             destroyImage2D(ctx->allocator(), d, envImage);
             destroyImage2D(ctx->allocator(), d, envCdfImage);
@@ -2059,7 +2069,7 @@ namespace threepp {
             // before dispatch.
             motionThisFrame_ = false;
             cameraMovedThisFrame_ = false;
-            meshMovedBits_[0] = meshMovedBits_[1] = meshMovedBits_[2] = meshMovedBits_[3] = 0u;
+            std::fill(meshMovedBits_.begin(), meshMovedBits_.end(), 0u);
 
             // Expand the visible scene into one MeshEntry per TLAS instance.
             // Regular meshes contribute one entry; an InstancedMesh contributes
@@ -2141,14 +2151,14 @@ namespace threepp {
                     fp.geom = geomPtr;
                     fp.mat  = matPtr;
                     fp.matVersion = matVer;
-                    fp.albedoTex             = albedoTexOf(*m).get();
-                    fp.roughnessTex          = roughnessTexOf(*m).get();
-                    fp.metalnessTex          = metalnessTexOf(*m).get();
-                    fp.normalTex             = normalTexOf(*m).get();
-                    fp.transmissionTex       = transmissionTexOf(*m).get();
-                    fp.clearcoatTex          = clearcoatTexOf(*m).get();
-                    fp.clearcoatRoughnessTex = clearcoatRoughnessTexOf(*m).get();
-                    fp.emissiveTex           = emissiveTexOf(*m).get();
+                    fp.albedoTex             = albedoTexOf(*m);
+                    fp.roughnessTex          = roughnessTexOf(*m);
+                    fp.metalnessTex          = metalnessTexOf(*m);
+                    fp.normalTex             = normalTexOf(*m);
+                    fp.transmissionTex       = transmissionTexOf(*m);
+                    fp.clearcoatTex          = clearcoatTexOf(*m);
+                    fp.clearcoatRoughnessTex = clearcoatRoughnessTexOf(*m);
+                    fp.emissiveTex           = emissiveTexOf(*m);
                     fp.instanceIndex         = en.instanceIndex;
                     fp.matrix                = en.worldMatrix;
                     const MaterialDesc md = materialFromMesh(*m);
@@ -2242,8 +2252,10 @@ namespace threepp {
                     // share the same per-mesh bit. Reproject+halve FC for any
                     // of: matrix shift, pbr shift, pose deformation, ocean
                     // surface displacement.
-                    if ((xfmChanged || matChanged || bonesChanged || dispChanged) && i < 128) {
-                        meshMovedBits_[i >> 5] |= (1u << (i & 31u));
+                    if (xfmChanged || matChanged || bonesChanged || dispChanged) {
+                        const size_t w = i >> 5;
+                        if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
+                        meshMovedBits_[w] |= (1u << (i & 31u));
                     }
                 }
                 if (structuralSame) {
@@ -2624,13 +2636,17 @@ namespace threepp {
             sampleIndex = 0;
             prevWorldMats.clear();
 
-            // Grow motion-mat buffers if the new instance count exceeds the
-            // current capacity. The descriptor write below (or the initial
-            // allocate, on first build) will pick up the new buffer handle.
+            // Grow motion-mat + mesh-moved-bits buffers if the new instance
+            // count exceeds the current capacity. The descriptor write below
+            // (or the initial allocate, on first build) will pick up the new
+            // buffer handles.
             const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
+            const uint32_t neededBitWords = std::max<uint32_t>((instanceCount + 31u) / 32u, 1u);
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 ensureMotionMatCapacity(f, std::max<uint32_t>(instanceCount, 1u));
+                ensureMeshMovedBitsCapacity(f, neededBitWords);
             }
+            meshMovedBits_.resize(neededBitWords, 0u);
 
             if (sceneBuilt_) {
                 rewriteSceneDescriptors();
@@ -2683,6 +2699,24 @@ namespace threepp {
                 vmaMapMemory(ctx->allocator(), motionMatBuffers[f].alloc, &mapped);
                 std::memcpy(mapped, identity, sizeof(identity));
                 vmaUnmapMemory(ctx->allocator(), motionMatBuffers[f].alloc);
+            }
+            // Seed mesh-moved-bits buffers with capacity 1 word (32 meshes worth)
+            // so descriptor writes have a valid handle before any scene build.
+            // ensureMeshMovedBitsCapacity grows in place when scenes need more.
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                meshMovedBitsBuffers[f] = createBuffer(
+                        ctx->allocator(), ctx->device(),
+                        /*size*/ sizeof(uint32_t),
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                meshMovedBitsBufferCapacity[f] = 1;
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), meshMovedBitsBuffers[f].alloc, &mapped);
+                const uint32_t zero = 0u;
+                std::memcpy(mapped, &zero, sizeof(zero));
+                vmaUnmapMemory(ctx->allocator(), meshMovedBitsBuffers[f].alloc);
             }
             // Seed emissive-tri buffers with capacity 1 so descriptor writes have
             // a valid handle even before any emissive geometry exists. The shader
@@ -2838,6 +2872,18 @@ namespace threepp {
             }
         }
 
+        // Upload meshMovedBits_ to meshMovedBitsBuffers[frame]. Caller must have
+        // already waited the inFlight[frame] fence.
+        void uploadMeshMovedBits(uint32_t frame) {
+            if (meshMovedBits_.empty()) return;
+            const VkDeviceSize bytes = meshMovedBits_.size() * sizeof(uint32_t);
+            const VkDeviceSize cap   = meshMovedBitsBufferCapacity[frame] * sizeof(uint32_t);
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), meshMovedBitsBuffers[frame].alloc, &mapped);
+            std::memcpy(mapped, meshMovedBits_.data(), std::min(bytes, cap));
+            vmaUnmapMemory(ctx->allocator(), meshMovedBitsBuffers[frame].alloc);
+        }
+
         // Walk visible entries, gather emissive triangles in world space, and
         // upload to emissiveTriBuffers[frame]. Per-tri 64-byte record:
         //   v0.xyz = world pos0,    v0.w = triangle area
@@ -2864,8 +2910,8 @@ namespace threepp {
             // walk is O(visible-emissive-meshes × tris) per frame and was
             // CPU-bound on Bistro before this cache.
             const bool anyMeshMoved =
-                    (meshMovedBits_[0] | meshMovedBits_[1] |
-                     meshMovedBits_[2] | meshMovedBits_[3]) != 0u;
+                    std::any_of(meshMovedBits_.begin(), meshMovedBits_.end(),
+                                [](uint32_t v) { return v != 0u; });
             const bool entriesUnchanged = (cachedEmissiveEntryCount_ == entries.size());
             if (!anyMeshMoved && entriesUnchanged) {
                 emissiveTriCountThisFrame_   = cachedEmissiveTriCount_;
@@ -3037,6 +3083,26 @@ namespace threepp {
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
             motionMatBufferCapacity[frame] = newCap;
+            return true;
+        }
+
+        // Same dance as ensureMotionMatCapacity, but for the per-mesh
+        // moved-bitmask SSBO at binding 21. `neededWords` is the number of
+        // 32-bit words required to address every visible TLAS instance.
+        bool ensureMeshMovedBitsCapacity(uint32_t frame, uint32_t neededWords) {
+            if (neededWords <= meshMovedBitsBufferCapacity[frame]) return false;
+            const uint32_t newCap = std::max<uint32_t>(
+                    neededWords,
+                    static_cast<uint32_t>(meshMovedBitsBufferCapacity[frame] * 2u));
+            destroyBuffer(ctx->allocator(), meshMovedBitsBuffers[frame]);
+            meshMovedBitsBuffers[frame] = createBuffer(
+                    ctx->allocator(), ctx->device(),
+                    /*size*/ newCap * sizeof(uint32_t),
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            meshMovedBitsBufferCapacity[frame] = newCap;
             return true;
         }
 
@@ -4338,7 +4404,7 @@ namespace threepp {
             // 9=prev camera UBO (motion), 10=motion matrix SSBO (motion),
             // 11=prev accum read image (ping-pong), 12=gbuf write image
             // (ping-pong), 13=prev gbuf read image (ping-pong).
-            std::array<VkDescriptorSetLayoutBinding, 21> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 22> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -4474,6 +4540,15 @@ namespace threepp {
             bindings[20].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[20].descriptorCount = 2;
             bindings[20].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            // Binding 21 — per-instance moved-bitmask SSBO (one bit per TLAS
+            // instance, packed into u32 words). Sized at scene rebuild via
+            // ensureMeshMovedBitsCapacity, uploaded per frame from
+            // meshMovedBits_. Read by raygen.isMeshMoved() to gate FC halving
+            // per-pixel under partial scene motion.
+            bindings[21].binding = 21;
+            bindings[21].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[21].descriptorCount = 1;
+            bindings[21].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -4482,10 +4557,11 @@ namespace threepp {
             check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rtDsLayout),
                   "vkCreateDescriptorSetLayout(RT)");
 
-            // 64-byte push constant. Layout matches the host-side `pc[16]`
+            // 48-byte push constant. Layout matches the host-side `pc[12]`
             // assembled in renderFrame and the GLSL PushConstants struct in
             // raygen.rgen / closest_hit.rchit / miss.rmiss. Well under the
-            // 128-byte minimum push-constant guarantee.
+            // 128-byte minimum push-constant guarantee. Per-instance moved
+            // bits moved out to the binding 21 SSBO (no longer 128-mesh capped).
             //
             //   [0] sampleIndex            (raygen)
             //   [1] env mip count          (closest_hit)
@@ -4496,24 +4572,21 @@ namespace threepp {
             //       has any glass material. Raygen takes a self-tap of
             //       accum/gbuf when bit 0 is clear, avoiding round-trip
             //       reproject precision drift on static scenes.
-            //   [5..8] meshMovedBits[4] — packed per-mesh moved bits (128
-            //       meshes). Lets raygen gate FC-halving per-pixel via
-            //       primaryInstanceId-1 instead of scene-wide.
-            //   [9]  emissiveCount       (closest_hit reads for NEE CDF)
-            //   [10] emissiveTotalPower  (float bits — CDF normalisation)
-            //   [11] samplesPerPixel     (raygen — # of jittered primary rays
+            //   [5]  emissiveCount       (closest_hit reads for NEE CDF)
+            //   [6]  emissiveTotalPower  (float bits — CDF normalisation)
+            //   [7]  samplesPerPixel     (raygen — # of jittered primary rays
             //        per frame; in-frame samples are summed with weight `spp`)
-            //   [12] envCdfWidth         (closest_hit + miss — env importance sample)
-            //   [13] envCdfHeight        (closest_hit + miss — env importance sample)
-            //   [14] envCdfTotalSum bits (float — pdf normalisation; 0 disables CDF)
-            //   [15] fireflyClamp bits   (float — per-NEE luminance cap; 1e30 disables)
+            //   [8]  envCdfWidth         (closest_hit + miss — env importance sample)
+            //   [9]  envCdfHeight        (closest_hit + miss — env importance sample)
+            //   [10] envCdfTotalSum bits (float — pdf normalisation; 0 disables CDF)
+            //   [11] fireflyClamp bits   (float — per-NEE luminance cap; 1e30 disables)
             VkPushConstantRange pcRange{};
             pcRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                  VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
                                  VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
                                  VK_SHADER_STAGE_MISS_BIT_KHR;
             pcRange.offset = 0;
-            pcRange.size   = 64;
+            pcRange.size   = 48;
 
             VkPipelineLayoutCreateInfo plci{};
             plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -4811,7 +4884,7 @@ namespace threepp {
             ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             ps[2].descriptorCount = totalSets * 4;// bindings 2 (camera), 5 (lights), 9 (prevCamera), 17 (fog)
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            ps[3].descriptorCount = totalSets * 6;// bindings 3,4,10,14 (existing) + 15,16 (photon)
+            ps[3].descriptorCount = totalSets * 7;// bindings 3,4,10,14 (existing) + 15,16 (photon) + 21 (meshMovedBits)
             ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF)
 
@@ -5101,10 +5174,23 @@ namespace threepp {
                     wFiltered.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                     wFiltered.pImageInfo = filteredInfos.data();
 
-                    std::array<VkWriteDescriptorSet, 21> writes{
+                    VkDescriptorBufferInfo meshMovedInfo{};
+                    meshMovedInfo.buffer = meshMovedBitsBuffers[f].handle;
+                    meshMovedInfo.offset = 0;
+                    meshMovedInfo.range  = VK_WHOLE_SIZE;
+                    VkWriteDescriptorSet wMeshMoved{};
+                    wMeshMoved.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wMeshMoved.dstSet = descriptorSets[idx];
+                    wMeshMoved.dstBinding = 21;
+                    wMeshMoved.descriptorCount = 1;
+                    wMeshMoved.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    wMeshMoved.pBufferInfo = &meshMovedInfo;
+
+                    std::array<VkWriteDescriptorSet, 22> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
-                            wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered};
+                            wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered,
+                            wMeshMoved};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -5217,6 +5303,14 @@ namespace threepp {
                 emTriInfos[f].offset = 0;
                 emTriInfos[f].range  = VK_WHOLE_SIZE;
             }
+            // Binding 21 (mesh-moved bits SSBO) — handle changed when
+            // ensureMeshMovedBitsCapacity grew the buffer.
+            std::array<VkDescriptorBufferInfo, kFramesInFlight> meshMovedInfos{};
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                meshMovedInfos[f].buffer = meshMovedBitsBuffers[f].handle;
+                meshMovedInfos[f].offset = 0;
+                meshMovedInfos[f].range  = VK_WHOLE_SIZE;
+            }
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 for (uint32_t k = 0; k < imageCount_; ++k) {
                     const uint32_t setIdx = f * imageCount_ + k;
@@ -5237,6 +5331,15 @@ namespace threepp {
                     wEmTri.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                     wEmTri.pBufferInfo = &emTriInfos[f];
                     writes.push_back(wEmTri);
+
+                    VkWriteDescriptorSet wMeshMoved{};
+                    wMeshMoved.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wMeshMoved.dstSet = descriptorSets[setIdx];
+                    wMeshMoved.dstBinding = 21;
+                    wMeshMoved.descriptorCount = 1;
+                    wMeshMoved.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    wMeshMoved.pBufferInfo = &meshMovedInfos[f];
+                    writes.push_back(wMeshMoved);
                 }
             }
 
@@ -5399,11 +5502,10 @@ namespace threepp {
                 std::memcpy(&envSumBitsPhoton, &envCdfTotalSum_, sizeof(envSumBitsPhoton));
                 uint32_t fireflyBitsPhoton;
                 std::memcpy(&fireflyBitsPhoton, &fireflyClamp_, sizeof(fireflyBitsPhoton));
-                const uint32_t ppc[16] = {
+                const uint32_t ppc[12] = {
                         sampleIndex, envImage.mipLevels,
                         static_cast<uint32_t>(toneMapping_), exposureBits,
                         motionFlagsPhoton,
-                        meshMovedBits_[0], meshMovedBits_[1], meshMovedBits_[2], meshMovedBits_[3],
                         emissiveTriCountThisFrame_, emPowerBits,
                         samplesPerPixel_,
                         envCdfWidth_, envCdfHeight_, envSumBitsPhoton,
@@ -5451,8 +5553,8 @@ namespace threepp {
             // [2] ToneMapping enum, [3] exposure as float bits,
             // [4] motionFlags (bit 0 = any motion, bit 1 = camera moved,
             //                  bit 2 = scene has any glass material),
-            // [5..8] meshMovedBits[4] — see VkPushConstantRange comment above.
-            // [9] emissiveCount, [10] emissiveTotalPower (float bits).
+            // [5] emissiveCount, [6] emissiveTotalPower (float bits).
+            // Per-instance moved bits live in the binding 21 SSBO.
             const float exposure = toneMappingExposure_;
             uint32_t exposureBits;
             std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
@@ -5466,16 +5568,12 @@ namespace threepp {
             std::memcpy(&envSumBits, &envCdfTotalSum_, sizeof(envSumBits));
             uint32_t fireflyBits;
             std::memcpy(&fireflyBits, &fireflyClamp_, sizeof(fireflyBits));
-            const uint32_t pc[16] = {
+            const uint32_t pc[12] = {
                     sampleIndex,
                     envImage.mipLevels,
                     static_cast<uint32_t>(toneMapping_),
                     exposureBits,
                     motionFlags,
-                    meshMovedBits_[0],
-                    meshMovedBits_[1],
-                    meshMovedBits_[2],
-                    meshMovedBits_[3],
                     emissiveTriCountThisFrame_,
                     emPowerBits,
                     samplesPerPixel_,
@@ -5683,6 +5781,7 @@ namespace threepp {
             // inFlight[currentFrame] fence has been signaled — the GPU has
             // finished its previous use of this slot.
             computeAndUploadMotionMatrices(currentFrame, lastVisibleEntries_);
+            uploadMeshMovedBits(currentFrame);
             // Same fence guarantees emissiveTriBuffers[currentFrame] is no
             // longer in use; rebuild the per-frame CDF and rewrite binding 14
             // if the buffer grew.

@@ -42,7 +42,6 @@ layout(push_constant) uniform Pc {
     uint _pad1;
     uint _pad2;
     uint motionFlags;
-    uint mb0; uint mb1; uint mb2; uint mb3;
     uint emissiveCount;
     float emissiveTotalPower;
     uint _padSpp;
