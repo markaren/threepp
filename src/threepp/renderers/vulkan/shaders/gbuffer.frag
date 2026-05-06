@@ -63,8 +63,14 @@ void main() {
     // as chit's per-triangle tangent (closest_hit.rchit:751-777), just
     // expressed via fragment-shader derivatives so we don't need triangle
     // vertex/UV data here.
+    //
+    // Skipped on water (is_water flag bit 0): the FFT cascade normal map
+    // is a chit-specific input applied as part of its water BSDF, not a
+    // generic surface perturbation — running it here would tile the foam
+    // normal across the wave geometry and produce visible cellular noise.
     const MaterialDesc m = gbufMats[vInstanceIdx];
-    if (m.normalTexIndex >= 0) {
+    const bool isWater = (vFlags & 1u) != 0u;
+    if (m.normalTexIndex >= 0 && !isWater) {
         const vec3 dpx = dFdx(vWorldPos);
         const vec3 dpy = dFdy(vWorldPos);
         const vec2 duvx = dFdx(vUv);

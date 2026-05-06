@@ -625,6 +625,7 @@ void main() {
             hc.rayOrigin       = originWS.xyz;
             hc.rayDir          = dirWS_c;
             hc.hitT            = length(worldPos - originWS.xyz);
+            hc.flags           = idsTap.z;// gbuffer flag bits (bit 0 = is_water)
 
             if (primaryShadeSetup(hc, primaryState)) {
                 // Use a frame-coherent seed (sample-index 0) so direct

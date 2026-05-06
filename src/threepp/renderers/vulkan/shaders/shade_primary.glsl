@@ -41,6 +41,7 @@ struct HitContext {
     vec3 rayOrigin;         // hit ray origin (camera or prev hit)
     vec3 rayDir;            // hit ray direction (toward surface, normalized)
     float hitT;             // distance from rayOrigin to worldPos
+    uint flags;             // bit 0 = is_water, bit 1 = transmissive, bit 2 = thinWalled
 };
 
 // ── Cached primary surface state — produced by primaryShadeSetup, read by
@@ -219,7 +220,13 @@ bool primaryShadeSetup(HitContext ctx, out PrimaryShadeState s) {
 
     const MaterialDesc m = mats[ctx.instanceId];
 
-    // Transmissive (glass / water): defer to chit.
+    // Water (DisplacedMesh, is_water flag): defer to chit unconditionally.
+    // The water material may not declare transmission > 0 explicitly, but
+    // chit applies the FFT cascade normal map, foam coverage, and the
+    // water-specific reflect+refract split — none of which this opaque
+    // path replicates.
+    if ((ctx.flags & 1u) != 0u) return false;
+    // Transmissive (glass): defer to chit.
     if (m.transmission > 0.05 || m.thinWalled != 0) return false;
     // Unlit MeshBasicMaterial (sentinel: roughness < 0).
     if (m.roughness < 0.0) return false;

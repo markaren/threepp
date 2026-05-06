@@ -4486,10 +4486,15 @@ namespace threepp {
 
         Image2D createTaaStorageSampled(uint32_t w, uint32_t h) {
             // Storage (denoise/TAA writes) + sampled (TAA reads of input/history).
+            // MUST match the swapchain format (BGRA8_UNORM): denoise wrote to
+            // the swapchain originally, with shader-side BGR component mapping
+            // baked into the format. vkCmdCopyImage to the swapchain is a
+            // byte-wise copy, so a format mismatch here produces visible R/B
+            // channel swap on display. See feedback_vulkan_swapchain_unorm_srgb_encode.
             Image2D out{};
             out.width  = w;
             out.height = h;
-            out.format = VK_FORMAT_R8G8B8A8_UNORM;// matches denoise's tonemapped sRGB-encoded write
+            out.format = VK_FORMAT_B8G8R8A8_UNORM;
 
             VkImageCreateInfo ici{};
             ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
