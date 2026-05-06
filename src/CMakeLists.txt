@@ -935,6 +935,13 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuffer.frag"
         kGbufferFragSpv
         _gbuffer_frag_spv_h)
+    # Hybrid raster TAA: post-denoise temporal resolve. Reads taaInput +
+    # history + gbufMotion → writes swapchain + new history. Runs only
+    # when hybridEnabled_; non-hybrid path copies taaInput → swapchain.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/taa_resolve.comp"
+        kTaaResolveCompSpv
+        _taa_resolve_spv_h)
 endif ()
 
 

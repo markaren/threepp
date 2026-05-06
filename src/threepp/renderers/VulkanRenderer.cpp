@@ -66,6 +66,7 @@
 #include "threepp/renderers/vulkan/shaders/water_displace.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/taa_resolve.comp.spv.h"
 
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.hpp"
 
@@ -677,6 +678,28 @@ namespace threepp {
         // of per-mesh UV availability.
         Buffer dummyUvBuffer_{};
 
+        // ── Raster TAA resolve (stage 1A.5) ────────────────────────────────
+        // Denoise writes its tonemapped sRGB output to taaInputImagesPP[f].
+        // When hybridEnabled_, taaResolvePipeline reads it + the previous
+        // frame's history (taaHistoryImagesPP[1-(f&1)]) + the gbuffer motion
+        // vector, neighborhood-clamps the reprojected history, blends, and
+        // writes the result to both swapchain (current frame) and
+        // taaHistoryImagesPP[f&1] (next frame's history). When hybrid is
+        // off, recordCommandBuffer falls back to vkCmdCopyImage from
+        // taaInput → swapchain — same image, just no temporal resolve.
+        std::array<Image2D, kFramesInFlight> taaInputImagesPP{};
+        std::array<Image2D, 2>               taaHistoryImagesPP{};// ping-pong, indexed (f & 1u)
+        VkDescriptorSetLayout taaDsLayout       = VK_NULL_HANDLE;
+        VkPipelineLayout      taaPipelineLayout = VK_NULL_HANDLE;
+        VkPipeline            taaResolvePipeline = VK_NULL_HANDLE;
+        VkDescriptorPool      taaDescPool       = VK_NULL_HANDLE;
+        // Per-(frame, swapchain image) descriptor set, sized like the RT pool.
+        std::vector<VkDescriptorSet> taaDescSets;
+        VkSampler             taaSampler        = VK_NULL_HANDLE;
+        // First frame's history is undefined. Set after first TAA write.
+        bool                  taaHistoryValid_  = false;
+        float                 taaBlendAlpha_    = 0.1f;// 10% current, 90% history
+
         // Master toggle for the hybrid path. setHybridEnabled(true) flips it
         // on; off keeps the existing full-PT primary path. Stage 1 ships
         // disabled by default so the raster prepass can land + be validated
@@ -753,7 +776,17 @@ namespace threepp {
             // bindings even when hybridEnabled_ stays false. Cheap: ~50MB
             // at 1080p for four attachments × two frames.
             ensureHybridResources();
+            // TAA images + pipeline. Allocated unconditionally so the RT
+            // descriptor's binding 1 (denoise output target) always has a
+            // valid view to point at. When hybridEnabled_ is false we copy
+            // taaInput → swapchain in place of the TAA dispatch.
+            {
+                const VkExtent2D ext = ctx->swapchainExtent();
+                createTaaImages(ext.width, ext.height);
+                createTaaPipeline();
+            }
             createDescriptorPool();
+            allocateTaaDescriptors();// independent of scene state, safe at ctor time
         }
 
         ~Impl() {
@@ -872,6 +905,14 @@ namespace threepp {
             if (rasterGbufRenderPass)   vkDestroyRenderPass(d, rasterGbufRenderPass, nullptr);
             if (gbufSampler_)           vkDestroySampler(d, gbufSampler_, nullptr);
             destroyBuffer(ctx->allocator(), dummyUvBuffer_);
+
+            if (taaResolvePipeline)     vkDestroyPipeline(d, taaResolvePipeline, nullptr);
+            if (taaPipelineLayout)      vkDestroyPipelineLayout(d, taaPipelineLayout, nullptr);
+            if (taaDsLayout)            vkDestroyDescriptorSetLayout(d, taaDsLayout, nullptr);
+            if (taaDescPool)            vkDestroyDescriptorPool(d, taaDescPool, nullptr);
+            if (taaSampler)             vkDestroySampler(d, taaSampler, nullptr);
+            for (auto& img : taaInputImagesPP)   destroyImage2D(ctx->allocator(), d, img);
+            for (auto& img : taaHistoryImagesPP) destroyImage2D(ctx->allocator(), d, img);
         }
 
         void createCommandResources() {
@@ -4393,6 +4434,241 @@ namespace threepp {
             vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
         }
 
+        // ── TAA resources ───────────────────────────────────────────────────
+        // Allocates taaInputImagesPP (denoise output target), taaHistoryImagesPP
+        // (ping-pong), taaSampler, descriptor layout/pool/pipeline. Idempotent.
+        // Resized via destroyTaaImages() + recreate on swapchain resize.
+        void destroyTaaImages() {
+            if (!ctx) return;
+            VkDevice d = ctx->device();
+            for (auto& img : taaInputImagesPP)   destroyImage2D(ctx->allocator(), d, img);
+            for (auto& img : taaHistoryImagesPP) destroyImage2D(ctx->allocator(), d, img);
+            taaHistoryValid_ = false;
+        }
+
+        Image2D createTaaStorageSampled(uint32_t w, uint32_t h) {
+            // Storage (denoise/TAA writes) + sampled (TAA reads of input/history).
+            Image2D out{};
+            out.width  = w;
+            out.height = h;
+            out.format = VK_FORMAT_R8G8B8A8_UNORM;// matches denoise's tonemapped sRGB-encoded write
+
+            VkImageCreateInfo ici{};
+            ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ici.imageType     = VK_IMAGE_TYPE_2D;
+            ici.format        = out.format;
+            ici.extent        = {w, h, 1};
+            ici.mipLevels     = 1;
+            ici.arrayLayers   = 1;
+            ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+            ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+            ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+            ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+            VmaAllocationCreateInfo aci{};
+            aci.usage = VMA_MEMORY_USAGE_AUTO;
+            check(vmaCreateImage(ctx->allocator(), &ici, &aci, &out.image, &out.alloc, nullptr),
+                  "vmaCreateImage(taa)");
+
+            // One-shot transition UNDEFINED → GENERAL so TAA writes/reads work
+            // without further layout management. Storage and sampled both
+            // accept GENERAL (vs SHADER_READ_ONLY_OPTIMAL for sampled-only).
+            VkCommandBuffer cb = beginOneShot();
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image = out.image;
+            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            b.subresourceRange.levelCount = 1;
+            b.subresourceRange.layerCount = 1;
+            b.srcAccessMask = 0;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            vkCmdPipelineBarrier(cb,
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+            endAndSubmitOneShot(cb);
+
+            VkImageViewCreateInfo vci{};
+            vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vci.image    = out.image;
+            vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vci.format   = out.format;
+            vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            vci.subresourceRange.levelCount = 1;
+            vci.subresourceRange.layerCount = 1;
+            check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
+                  "vkCreateImageView(taa)");
+            return out;
+        }
+
+        void createTaaImages(uint32_t w, uint32_t h) {
+            destroyTaaImages();
+            for (auto& img : taaInputImagesPP)   img = createTaaStorageSampled(w, h);
+            for (auto& img : taaHistoryImagesPP) img = createTaaStorageSampled(w, h);
+        }
+
+        void createTaaPipeline() {
+            if (taaSampler == VK_NULL_HANDLE) {
+                VkSamplerCreateInfo sci{};
+                sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+                // Linear filter on history reprojection so sub-pixel sampling
+                // stays smooth — the whole point of TAA is sub-pixel blending.
+                sci.magFilter    = VK_FILTER_LINEAR;
+                sci.minFilter    = VK_FILTER_LINEAR;
+                sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+                sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+                sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+                sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+                sci.maxLod = 0.f;
+                check(vkCreateSampler(ctx->device(), &sci, nullptr, &taaSampler),
+                      "vkCreateSampler(taa)");
+            }
+            // Layout: 5 bindings (input, historyRead, motion, swapOut, historyWrite).
+            // input + historyRead + motion = combined image samplers.
+            // swapOut + historyWrite = storage images.
+            VkDescriptorSetLayoutBinding bindings[5]{};
+            for (int i = 0; i < 3; ++i) {
+                bindings[i].binding         = i;
+                bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                bindings[i].descriptorCount = 1;
+                bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+            bindings[3].binding         = 3;
+            bindings[3].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[3].descriptorCount = 1;
+            bindings[3].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            bindings[4].binding         = 4;
+            bindings[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[4].descriptorCount = 1;
+            bindings[4].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+
+            VkDescriptorSetLayoutCreateInfo dlci{};
+            dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            dlci.bindingCount = 5;
+            dlci.pBindings    = bindings;
+            check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &taaDsLayout),
+                  "vkCreateDescriptorSetLayout(taa)");
+
+            VkPushConstantRange pcRange{};
+            pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            pcRange.offset     = 0;
+            pcRange.size       = 16;// blendAlpha + width + height + pad
+
+            VkPipelineLayoutCreateInfo plci{};
+            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            plci.setLayoutCount         = 1;
+            plci.pSetLayouts            = &taaDsLayout;
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges    = &pcRange;
+            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &taaPipelineLayout),
+                  "vkCreatePipelineLayout(taa)");
+
+            VkShaderModuleCreateInfo smci{};
+            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            smci.codeSize = sizeof(kTaaResolveCompSpv);
+            smci.pCode    = kTaaResolveCompSpv;
+            VkShaderModule mod = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &smci, nullptr, &mod),
+                  "vkCreateShaderModule(taa)");
+
+            VkPipelineShaderStageCreateInfo stage{};
+            stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+            stage.module = mod;
+            stage.pName  = "main";
+
+            VkComputePipelineCreateInfo cpci{};
+            cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            cpci.stage  = stage;
+            cpci.layout = taaPipelineLayout;
+            check(vkCreateComputePipelines(ctx->device(), VK_NULL_HANDLE, 1, &cpci, nullptr,
+                                           &taaResolvePipeline),
+                  "vkCreateComputePipelines(taa)");
+            vkDestroyShaderModule(ctx->device(), mod, nullptr);
+        }
+
+        void allocateTaaDescriptors() {
+            const uint32_t totalSets = imageCount_ * kFramesInFlight;
+            VkDescriptorPoolSize sizes[2]{};
+            sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            sizes[0].descriptorCount = totalSets * 3;// 3 sampled per set
+            sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            sizes[1].descriptorCount = totalSets * 2;// 2 storage per set
+
+            VkDescriptorPoolCreateInfo dpci{};
+            dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            dpci.maxSets       = totalSets;
+            dpci.poolSizeCount = 2;
+            dpci.pPoolSizes    = sizes;
+            check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &taaDescPool),
+                  "vkCreateDescriptorPool(taa)");
+
+            std::vector<VkDescriptorSetLayout> layouts(totalSets, taaDsLayout);
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool     = taaDescPool;
+            ai.descriptorSetCount = totalSets;
+            ai.pSetLayouts        = layouts.data();
+            taaDescSets.resize(totalSets);
+            check(vkAllocateDescriptorSets(ctx->device(), &ai, taaDescSets.data()),
+                  "vkAllocateDescriptorSets(taa)");
+
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                for (uint32_t i = 0; i < imageCount_; ++i) {
+                    const uint32_t idx = f * imageCount_ + i;
+                    const uint32_t readSlot  = 1u - (f & 1u);
+                    const uint32_t writeSlot = (f & 1u);
+
+                    VkDescriptorImageInfo inputI{};
+                    inputI.sampler     = taaSampler;
+                    inputI.imageView   = taaInputImagesPP[f].view;
+                    inputI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+                    VkDescriptorImageInfo histReadI{};
+                    histReadI.sampler     = taaSampler;
+                    histReadI.imageView   = taaHistoryImagesPP[readSlot].view;
+                    histReadI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+                    VkDescriptorImageInfo motionI{};
+                    motionI.sampler     = gbufSampler_;
+                    motionI.imageView   = rasterGbufs[f].motion.view;
+                    motionI.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+                    VkDescriptorImageInfo swapI{};
+                    swapI.imageView   = ctx->swapchainImageViews()[i];
+                    swapI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+                    VkDescriptorImageInfo histWriteI{};
+                    histWriteI.imageView   = taaHistoryImagesPP[writeSlot].view;
+                    histWriteI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+                    VkWriteDescriptorSet w[5]{};
+                    for (int b = 0; b < 5; ++b) {
+                        w[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                        w[b].dstSet          = taaDescSets[idx];
+                        w[b].dstBinding      = uint32_t(b);
+                        w[b].descriptorCount = 1;
+                    }
+                    w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    w[0].pImageInfo = &inputI;
+                    w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    w[1].pImageInfo = &histReadI;
+                    w[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    w[2].pImageInfo = &motionI;
+                    w[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    w[3].pImageInfo = &swapI;
+                    w[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    w[4].pImageInfo = &histWriteI;
+                    vkUpdateDescriptorSets(ctx->device(), 5, w, 0, nullptr);
+                }
+            }
+        }
+
         // Lazy bring-up: called at the start of each render() when hybrid is on.
         // Idempotent — handles both initial creation and post-resize reallocation.
         void ensureHybridResources() {
@@ -5848,8 +6124,13 @@ namespace threepp {
                     wAS.descriptorCount = 1;
                     wAS.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
 
+                    // Stage 1A.5: denoise's binding 1 output target is now
+                    // taaInputImagesPP[f] (was the swapchain image). The TAA
+                    // resolve pass reads it + history → writes the swapchain.
+                    // Per-frame, not per-image: TAA uses (f & 1) ping-pong
+                    // for history and the swapchain index for the final write.
                     VkDescriptorImageInfo imgInfo{};
-                    imgInfo.imageView = ctx->swapchainImageViews()[i];
+                    imgInfo.imageView = taaInputImagesPP[f].view;
                     imgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                     VkWriteDescriptorSet wImg{};
                     wImg.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -6381,11 +6662,24 @@ namespace threepp {
             // from the old extent need to be replaced before the new
             // descriptor sets capture them.
             ensureHybridResources();
+            // TAA images live at swapchain extent too; rebuild before any
+            // descriptor write captures their views (RT binding 1, all TAA
+            // descriptor sets).
+            {
+                const VkExtent2D ext = ctx->swapchainExtent();
+                createTaaImages(ext.width, ext.height);
+            }
             vkDestroyDescriptorPool(ctx->device(), descriptorPool, nullptr);
             descriptorPool = VK_NULL_HANDLE;
             descriptorSets.clear();
             createDescriptorPool();
             allocateAndUpdateDescriptors();
+            if (taaDescPool) {
+                vkDestroyDescriptorPool(ctx->device(), taaDescPool, nullptr);
+                taaDescPool = VK_NULL_HANDLE;
+                taaDescSets.clear();
+            }
+            allocateTaaDescriptors();
             size = WindowSize{static_cast<int>(ctx->swapchainExtent().width),
                               static_cast<int>(ctx->swapchainExtent().height)};
         }
@@ -6497,13 +6791,18 @@ namespace threepp {
 
             const VkImage img = ctx->swapchainImages()[imageIndex];
 
-            // UNDEFINED -> GENERAL for ray-gen storage write.
+            // UNDEFINED -> GENERAL. Swapchain is now written by either the
+            // TAA compute dispatch (post-denoise) or vkCmdCopyImage in the
+            // non-hybrid path; raygen no longer writes the swapchain
+            // directly (binding 1 was redirected to taaInputImagesPP).
             VkImageMemoryBarrier2 toGeneral{};
             toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
             toGeneral.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
             toGeneral.srcAccessMask = 0;
-            toGeneral.dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-            toGeneral.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            toGeneral.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                     VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            toGeneral.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                      VK_ACCESS_2_TRANSFER_WRITE_BIT;
             toGeneral.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
             toGeneral.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -6772,14 +7071,100 @@ namespace threepp {
             }
             // ── End denoise ─────────────────────────────────────────────────────
 
+            // ── Stage 1A.5: raster TAA ─────────────────────────────────────────
+            // Denoise wrote tonemapped sRGB to taaInputImagesPP[currentFrame].
+            // When hybridEnabled_, run taa_resolve to mix it with the previous
+            // frame's history (reprojected via gbuffer motion vec, neighborhood-
+            // clamped) and write the swapchain + new history. When hybrid is
+            // off, copy taaInput directly to the swapchain — TAA needs the
+            // raster motion vector to reproject, and that vector is invalid
+            // without the gbuffer pass.
+            {
+                // Barrier: taaInputImagesPP write → read; new history write
+                // → read on the OUTGOING-to-history pong slot just to be safe.
+                std::array<VkImageMemoryBarrier2, 3> taaPre{};
+                for (auto& b : taaPre) {
+                    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    b.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    b.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                      VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                      VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                      VK_ACCESS_2_TRANSFER_READ_BIT;
+                    b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    b.subresourceRange.levelCount = 1;
+                    b.subresourceRange.layerCount = 1;
+                }
+                taaPre[0].image = taaInputImagesPP[currentFrame].image;
+                taaPre[1].image = taaHistoryImagesPP[0].image;
+                taaPre[2].image = taaHistoryImagesPP[1].image;
+                VkDependencyInfo taaDep{};
+                taaDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                taaDep.imageMemoryBarrierCount = static_cast<uint32_t>(taaPre.size());
+                taaDep.pImageMemoryBarriers = taaPre.data();
+                vkCmdPipelineBarrier2(cb, &taaDep);
+
+                if (hybridEnabled_ && taaResolvePipeline != VK_NULL_HANDLE) {
+                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, taaResolvePipeline);
+                    const uint32_t taaIdx = currentFrame * imageCount_ + imageIndex;
+                    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                            taaPipelineLayout, 0, 1,
+                                            &taaDescSets[taaIdx], 0, nullptr);
+                    // First-frame history is undefined → force alpha=1 so the
+                    // resolved output is purely the current frame and we don't
+                    // bleed garbage into a permanent history. Subsequent
+                    // frames use taaBlendAlpha_ (10% by default).
+                    const float alpha = taaHistoryValid_ ? taaBlendAlpha_ : 1.0f;
+                    uint32_t alphaBits;
+                    std::memcpy(&alphaBits, &alpha, sizeof(alphaBits));
+                    const uint32_t taaPc[4] = {
+                            alphaBits,
+                            ext.width, ext.height, 0u,
+                    };
+                    vkCmdPushConstants(cb, taaPipelineLayout,
+                                       VK_SHADER_STAGE_COMPUTE_BIT,
+                                       0, sizeof(taaPc), taaPc);
+                    const uint32_t gxT = (ext.width  + 7u) / 8u;
+                    const uint32_t gyT = (ext.height + 7u) / 8u;
+                    vkCmdDispatch(cb, gxT, gyT, 1);
+                    taaHistoryValid_ = true;
+                } else {
+                    // Non-hybrid path: direct copy taaInput → swapchain.
+                    VkImageCopy region{};
+                    region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    region.srcSubresource.layerCount = 1;
+                    region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    region.dstSubresource.layerCount = 1;
+                    region.extent = {ext.width, ext.height, 1};
+                    vkCmdCopyImage(cb,
+                                   taaInputImagesPP[currentFrame].image,
+                                   VK_IMAGE_LAYOUT_GENERAL,
+                                   img,
+                                   VK_IMAGE_LAYOUT_GENERAL,
+                                   1, &region);
+                    // History stays unused/stale; reset valid so when hybrid
+                    // turns on later it cold-starts cleanly.
+                    taaHistoryValid_ = false;
+                }
+            }
+            // ── End raster TAA ─────────────────────────────────────────────────
+
             // If an overlay (ImGui) is registered, draw it on top of the
             // ray-traced image inside a dynamic render pass before presenting.
             if (overlayCallback) {
                 VkImageMemoryBarrier2 toColor{};
                 toColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                // outImage was last written by denoise.comp, not raygen.
-                toColor.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                toColor.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                // Swapchain was last written by either TAA dispatch (compute)
+                // or the non-hybrid fallback copy (transfer). Cover both.
+                toColor.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                       VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                toColor.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                        VK_ACCESS_2_TRANSFER_WRITE_BIT;
                 toColor.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
                 toColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
                                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
@@ -6833,9 +7218,12 @@ namespace threepp {
             } else {
                 VkImageMemoryBarrier2 toPresent{};
                 toPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                // outImage was last written by denoise.comp, not raygen.
-                toPresent.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                toPresent.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                // Swapchain was last written by either TAA dispatch (compute)
+                // or the non-hybrid fallback copy (transfer). Cover both.
+                toPresent.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                         VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                toPresent.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                          VK_ACCESS_2_TRANSFER_WRITE_BIT;
                 toPresent.dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
                 toPresent.dstAccessMask = 0;
                 toPresent.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
