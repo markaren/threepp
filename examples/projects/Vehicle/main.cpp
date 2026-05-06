@@ -30,7 +30,6 @@ int main() {
         if (auto wgpu = dynamic_cast<WgpuRenderer*>(renderer.get())) {
             wgpu->usePathTracer = true;
             auto& pt = wgpu->pathTracer();
-            pt.setTlasEnabled(false);
             pt.setMaxBounces(1);
             pt.setDenoiserEnabled(false);
         }

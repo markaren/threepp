@@ -93,7 +93,6 @@ int main(int argc, char** argv) {
     pathTracer.setReSTIREnabled(false);
     pathTracer.setMaxBounces(4);
     pathTracer.setFoveatedRendering(false);
-    pathTracer.setTlasEnabled(false);
     pathTracer.setTextureResolution(1024);
 
     RGBELoader imgLoader;
@@ -203,7 +202,6 @@ int main(int argc, char** argv) {
     int fpsFrames = 0;
     int aovMode = pathTracer.aovMode();
     bool foveatOn = pathTracer.foveatedRendering();
-    bool tlasOn = pathTracer.tlasEnabled();
 
     bool   dofEnabled    = false;
     float  lensFStop     = 2.8f;
@@ -279,8 +277,6 @@ int main(int argc, char** argv) {
                 pathTracer.setReSTIRGIEnabled(restdirGIOn);
             if (ImGui::Checkbox("Foveated Rendering", &foveatOn))
                 pathTracer.setFoveatedRendering(foveatOn);
-            if (ImGui::Checkbox("TLAS/BLAS", &tlasOn))
-                pathTracer.setTlasEnabled(tlasOn);
 
             if (ImGui::Checkbox("Show DirLight", &dirLight)) {
                 light->visible = dirLight;

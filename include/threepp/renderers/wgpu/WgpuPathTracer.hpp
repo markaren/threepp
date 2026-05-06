@@ -83,12 +83,6 @@ namespace threepp {
         void setReSTIRGIEnabled(bool enabled);
         [[nodiscard]] bool restirGiEnabled() const;
 
-        /// Enable/disable the two-level TLAS/BLAS acceleration structure. Default: false.
-        /// Experimental — plumbing only in the current build; single-level BVH remains
-        /// the active traversal path until the shader rewrite lands.
-        void setTlasEnabled(bool enabled);
-        [[nodiscard]] bool tlasEnabled() const;
-
         /// Samples per pixel per frame. Default: 1. Higher values reduce noise
         /// at the cost of proportionally more RT time per frame.
         void setSamplesPerPixel(int spp);

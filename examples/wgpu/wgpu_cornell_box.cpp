@@ -176,7 +176,6 @@ int main() {
     bool restdirOn = pathTracer.restirEnabled();
     bool restirGIOn = pathTracer.restirGiEnabled();
     bool foveatOn = pathTracer.foveatedRendering();
-    bool tlasOn = pathTracer.tlasEnabled();
     bool wobbleOn = false;
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
@@ -221,8 +220,6 @@ int main() {
                 pathTracer.setReSTIRGIEnabled(restirGIOn);
             if (ImGui::Checkbox("Foveated", &foveatOn))
                 pathTracer.setFoveatedRendering(foveatOn);
-            if (ImGui::Checkbox("TLAS", &tlasOn))
-                pathTracer.setTlasEnabled(tlasOn);
             ImGui::Checkbox("Wobble back wall", &wobbleOn);
             if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8))
                 pathTracer.setMaxBounces(maxBounces);
@@ -264,7 +261,7 @@ int main() {
         }
 
         // Animate back wall vertices — exercises the path tracer's per-frame
-        // geometry fast path (CPU repack + partial upload + BVH/BLAS refit).
+        // geometry fast path (CPU repack + partial upload + BVH refit).
         if (wobbleOn) {
             wobbleT += dt;
             const float wave = std::sin(math::TWO_PI * 0.5f * wobbleT);
