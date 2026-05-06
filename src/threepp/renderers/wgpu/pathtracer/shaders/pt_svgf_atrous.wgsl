@@ -1,14 +1,4 @@
-#include "WgpuPathTracerShaders.hpp"
 
-namespace threepp::wgpu_pt {
-
-// ---------------------------------------------------------------------------
-// WGSL variance-guided à-trous spatial filter
-// Uses the frame count (w channel) to adapt filter strength:
-//   low frame count → more aggressive blur to suppress MC noise
-//   high frame count → gentle filter to preserve converged detail
-// ---------------------------------------------------------------------------
-const char* const svgfAtrousWGSL = R"(
 struct AtrousUni { stepSize: u32, mode: u32, frameCount: f32, _p1: f32, }
 // mode: 0 = diffuse (wide kernel, relaxed), 1 = specular (tight, aggressive firefly clamp)
 
@@ -254,6 +244,3 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let result = mix(cColor, spatialResult, filterBlend);
     textureStore(colorOut, pixel, vec4<f32>(result, cFC));
 }
-)";
-
-}// namespace threepp::wgpu_pt

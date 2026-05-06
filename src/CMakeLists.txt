@@ -653,10 +653,7 @@ if (THREEPP_WITH_WGPU)
             "threepp/renderers/wgpu/pathtracer/WgpuPathTracerAtlas.cpp"
             "threepp/renderers/wgpu/pathtracer/WgpuPathTracerGeometry.cpp"
             "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBvh.cpp"
-            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders_Display.cpp"
-            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders_Denoise.cpp"
-            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders_VtRefit.cpp"
-            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders_Rt.cpp"
+            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders.cpp"
     )
     if (APPLE)
         list(APPEND sources
@@ -748,6 +745,13 @@ endif ()
 
 if (THREEPP_WITH_WGPU)
     target_compile_definitions(threepp PRIVATE THREEPP_WITH_WGPU=1)
+
+    # Embed the path tracer's .wgsl shader sources as chunked C++ raw string
+    # literals at build time. Source files live under
+    #   src/threepp/renderers/wgpu/pathtracer/shaders/
+    # and the generated .cpp is placed under ${CMAKE_BINARY_DIR}/generated/.
+    include(${PROJECT_SOURCE_DIR}/cmake/EmbedWgslPathTracer.cmake)
+    embed_wgsl_path_tracer(threepp)
 
     if (DEFINED EMSCRIPTEN)
         # Emscripten exposes the browser's native WebGPU — no wgpu-native needed.

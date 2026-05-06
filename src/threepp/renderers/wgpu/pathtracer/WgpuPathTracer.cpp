@@ -67,8 +67,10 @@ using namespace threepp::wgpu_pt;
 // Limits, atlas constants and small helpers (nextPow2, triTexPages) live in
 // WgpuPathTracerTypes.hpp and are imported via the using-directive above.
 
-// All embedded WGSL shader strings and shader builder helpers now live in
-// WgpuPathTracerShaders_{Rt,VtRefit,Denoise,Display}.cpp, declared in
+// WGSL shader sources live as .wgsl files under pathtracer/shaders/ and are
+// embedded as C++ raw string literals at build time
+// (cmake/EmbedWgslPathTracer.cmake -> WgpuPathTracerShadersGen.cpp). Shader
+// builder helpers live in WgpuPathTracerShaders.cpp; declarations in
 // WgpuPathTracerShaders.hpp. POD types (uniform structs, BvhNode, PingPong,
 // atlas constants) live in WgpuPathTracerTypes.hpp.
 
