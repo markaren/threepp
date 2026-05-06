@@ -704,7 +704,7 @@ namespace threepp {
         // on; off keeps the existing full-PT primary path. Stage 1 ships
         // disabled by default so the raster prepass can land + be validated
         // before becoming the default.
-        bool hybridEnabled_ = false;
+        bool hybridEnabled_ = true;
         // Sub-pixel jitter sequence index for raster TAA. Cycles within a
         // small period (16 frames) — long enough to look stable, short enough
         // to avoid ever-growing index drift.
@@ -719,7 +719,7 @@ namespace threepp {
             Depth  = 3,
             Ids    = 4,
         };
-        HybridDebugView hybridDebugView_ = HybridDebugView::Normal;
+        HybridDebugView hybridDebugView_ = HybridDebugView::Off;
 
         // Per-frame-in-flight camera UBO (viewInverse + projInverse).
         // 2 mat4 packed back-to-back, std140 layout.
@@ -3417,7 +3417,19 @@ namespace threepp {
             mmInfo.offset = 0;
             mmInfo.range  = VK_WHOLE_SIZE;
 
-            VkWriteDescriptorSet writes[2]{};
+            VkDescriptorBufferInfo matsInfo{};
+            matsInfo.buffer = materialDescsBuffer.handle;
+            matsInfo.offset = 0;
+            matsInfo.range  = VK_WHOLE_SIZE;
+
+            // Bindless material texture array — same VkImage/VkSampler
+            // handles raygen sees at its own binding 8. fillMaterialTextureInfos
+            // pads any unused slots with the white default so the array is
+            // always fully populated.
+            std::array<VkDescriptorImageInfo, kMaxMaterialTextures> matTexInfos{};
+            fillMaterialTextureInfos(matTexInfos);
+
+            VkWriteDescriptorSet writes[4]{};
             writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[0].dstSet          = rasterDescSets[frame];
             writes[0].dstBinding      = 0;
@@ -3430,7 +3442,20 @@ namespace threepp {
             writes[1].descriptorCount = 1;
             writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             writes[1].pBufferInfo     = &mmInfo;
-            vkUpdateDescriptorSets(ctx->device(), 2, writes, 0, nullptr);
+            writes[2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[2].dstSet          = rasterDescSets[frame];
+            writes[2].dstBinding      = 2;
+            writes[2].descriptorCount = 1;
+            writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[2].pBufferInfo     = &matsInfo;
+            writes[3].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[3].dstSet          = rasterDescSets[frame];
+            writes[3].dstBinding      = 3;
+            writes[3].dstArrayElement = 0;
+            writes[3].descriptorCount = kMaxMaterialTextures;
+            writes[3].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[3].pImageInfo      = matTexInfos.data();
+            vkUpdateDescriptorSets(ctx->device(), 4, writes, 0, nullptr);
         }
 
         // Begin the raster G-buffer render pass, iterate the visible-entry
@@ -4232,9 +4257,12 @@ namespace threepp {
         }
 
         void createRasterDsLayoutAndPool() {
-            // binding 0: per-frame CameraUbo. binding 1: motionMat[] (storage,
-            // points at the same VkBuffer raygen has at its own binding 10).
-            VkDescriptorSetLayoutBinding bindings[2]{};
+            // binding 0: per-frame CameraUbo (vertex)
+            // binding 1: motionMat[] storage (vertex; same VkBuffer as raygen's binding 10)
+            // binding 2: mats[] storage (fragment; for normal-map index + uvTransformNormal)
+            // binding 3: albedoMaps[] bindless sampler array (fragment;
+            //            same VkImage handles as raygen's binding 8)
+            VkDescriptorSetLayoutBinding bindings[4]{};
             bindings[0].binding         = 0;
             bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[0].descriptorCount = 1;
@@ -4243,24 +4271,34 @@ namespace threepp {
             bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[1].descriptorCount = 1;
             bindings[1].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT;
+            bindings[2].binding         = 2;
+            bindings[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[2].descriptorCount = 1;
+            bindings[2].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+            bindings[3].binding         = 3;
+            bindings[3].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[3].descriptorCount = kMaxMaterialTextures;
+            bindings[3].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            dlci.bindingCount = 2;
+            dlci.bindingCount = 4;
             dlci.pBindings    = bindings;
             check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rasterDsLayout),
                   "vkCreateDescriptorSetLayout(raster)");
 
-            VkDescriptorPoolSize sizes[2]{};
+            VkDescriptorPoolSize sizes[3]{};
             sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             sizes[0].descriptorCount = kFramesInFlight;
             sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            sizes[1].descriptorCount = kFramesInFlight;
+            sizes[1].descriptorCount = kFramesInFlight * 2;// motionMat + mats
+            sizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            sizes[2].descriptorCount = kFramesInFlight * kMaxMaterialTextures;
 
             VkDescriptorPoolCreateInfo dpci{};
             dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
             dpci.maxSets       = kFramesInFlight;
-            dpci.poolSizeCount = 2;
+            dpci.poolSizeCount = 3;
             dpci.pPoolSizes    = sizes;
             check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &rasterDescPool),
                   "vkCreateDescriptorPool(raster)");

@@ -46,6 +46,7 @@ layout(location = 2) out vec4 vPrevClip;
 layout(location = 3) flat out uint vInstanceIdx;
 layout(location = 4) flat out uint vFlags;
 layout(location = 5) out vec2 vUv;
+layout(location = 6) out vec3 vWorldPos;// for fragment-shader TBN via dFdx/dFdy
 
 void main() {
     vec4 worldPos     = pc.model * vec4(inPos, 1.0);
@@ -61,6 +62,7 @@ void main() {
     vInstanceIdx   = pc.instanceCustomIndex;
     vFlags         = pc.flags;
     vUv            = inUv;
+    vWorldPos      = worldPos.xyz;
 
     // threepp's projection matrix follows the GL convention (Y up in NDC).
     // Vulkan NDC has Y pointing down, so we negate Y at the gl_Position
