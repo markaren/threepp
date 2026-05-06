@@ -27,18 +27,21 @@ endif ()
 
 function(compile_vulkan_shader target shader_src var_name out_header_var)
     get_filename_component(_name "${shader_src}" NAME)
+    get_filename_component(_src_dir "${shader_src}" DIRECTORY)
     set(_gen_dir "${CMAKE_BINARY_DIR}/generated/threepp/renderers/vulkan/shaders")
     set(_out_header "${_gen_dir}/${_name}.spv.h")
+    set(_shared_header "${_src_dir}/vulkan_shared.h")
 
     file(MAKE_DIRECTORY "${_gen_dir}")
 
     add_custom_command(
         OUTPUT  "${_out_header}"
         COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.3
+                "-I${_src_dir}"
                 --vn "${var_name}"
                 "${shader_src}"
                 -o   "${_out_header}"
-        DEPENDS "${shader_src}"
+        DEPENDS "${shader_src}" "${_shared_header}"
         COMMENT "Compiling Vulkan shader ${_name} -> ${var_name}"
         VERBATIM)
 

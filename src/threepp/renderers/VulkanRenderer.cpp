@@ -24,6 +24,7 @@
 
 #define VMA_IMPLEMENTATION
 #include "vulkan/VulkanContext.hpp"
+#include "vulkan/shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
 #include "wgpu/pathtracer/WgpuPathTracerEnvCdf.hpp"// reused: pure C++ template, no WGPU deps
 
 #include "threepp/cameras/Camera.hpp"
@@ -279,49 +280,11 @@ namespace threepp {
             uint32_t indexed;
             uint32_t _pad;
         };
-        struct MaterialDesc {
-            float albedo[3];
-            float roughness;
-            float metalness;
-            float emissive[3];
-            float emissiveIntensity;
-            int32_t albedoTexIndex;   // -1 == no albedo texture, else slot in bindless array
-            int32_t roughnessTexIndex;// -1 == no roughness texture; sampled .g (glTF convention)
-            int32_t metalnessTexIndex;// -1 == no metalness texture; sampled .b (glTF convention)
-            int32_t normalTexIndex;   // -1 == no normal map; tangent-space, glTF convention
-            float normalScale[2];     // x/y scale applied to sampled (xy) before re-deriving z
-            float alphaCutoff;        // <= 0 == disabled; otherwise any-hit ignores hits with sampled alpha < cutoff
-            float transmission;       // 0..1 probability the bounce takes the transmission lobe (glass)
-            float ior;                // index of refraction; 1.5 default for glass
-            int32_t transmissionTexIndex;// -1 == none; sampled .r (glTF KHR_materials_transmission)
-            float clearcoat;          // 0..1 layer intensity; ccF0 fixed at 0.04 (dielectric IOR ~1.5)
-            float clearcoatRoughness; // 0..1; clamped to [0.04, 1] in shader to keep VNDF non-singular
-            int32_t clearcoatTexIndex;          // -1 == none; sampled .r (glTF KHR_materials_clearcoat)
-            int32_t clearcoatRoughnessTexIndex; // -1 == none; sampled .g
-            float attenuationColor[3]; // Beer-Lambert tint (default {1,1,1} = clear)
-            float attenuationDistance; // 0 = no Beer-Lambert; world-space mean-free path
-            int32_t emissiveTexIndex;  // -1 == no emissive map; sampled .rgb (sRGB)
-            float specularIntensity;   // KHR_materials_specular: default 1.0
-            float specularColor[3];    // KHR_materials_specular: default {1,1,1}
-            float sheenColor[3];       // KHR_materials_sheen: default {0,0,0}
-            float sheenRoughness;      // KHR_materials_sheen: default 0.0
-            int32_t doubleSided;       // 1 = shade both faces; 0 = pass through back-face hits
-            float uvTransform[9];           // column-major Matrix3 for albedo channel
-            int32_t occlusionTexIndex;      // -1 = none; sampled .r (glTF occlusion)
-            float uvTransformNormal[9];     // for normalTexIndex
-            float uvTransformRoughMetal[9]; // for roughness + metalness textures
-            float uvTransformEmissive[9];   // for emissiveTexIndex
-            float uvTransformOcclusion[9];  // for occlusionTexIndex
-            float uvTransformClearcoat[9];  // for clearcoatTexIndex
-            float uvTransformClearcoatRough[9]; // for clearcoatRoughnessTexIndex
-            float uvTransformTransmission[9];   // for transmissionTexIndex
-            float iridescence;             // KHR_materials_iridescence: 0..1 layer factor
-            float iridescenceIOR;          // thin-film IOR (1.0..2.5; default 1.3)
-            float iridescenceThicknessNm;  // thin-film thickness in nm (default 400)
-            float dispersion;              // KHR_materials_dispersion: 0 = off; ~0.05+ visible; matches glTF spec
-            float thickness;               // KHR_materials_volume: in-medium distance proxy for thin/open meshes; 0 = fall back to back-face actual ray distance
-            int32_t thinWalled;            // 1 = treat both faces as entry into a thin shell (eta=1/ior, BL proxy per-crossing); 0 = closed-mesh BSDF
-        };
+        // MaterialDesc layout lives in vulkan_shared.h (the same file the GLSL
+        // path-tracer shaders pull in via #include). Bringing it into Impl scope
+        // here keeps the existing `MaterialDesc md{};` call sites unchanged.
+        using MaterialDesc = threepp::vulkan_pt::MaterialDesc;
+
         Buffer geometryDescsBuffer;
         Buffer materialDescsBuffer;
 
@@ -438,13 +401,10 @@ namespace threepp {
         // Cache key is Texture* — the same Texture across multiple meshes only
         // uploads once. All material textures share textureSampler_ (linear,
         // repeat); per-texture filter/wrap is a v2 concern.
-        static constexpr uint32_t kMaxMaterialTextures = 2048;
-
-        // Photon-map grid constants (must match photon_emit.rgen + closest_hit.rchit).
-        static constexpr uint32_t kPhotonGridBits = 16;
-        static constexpr uint32_t kPhotonGridSize = 1u << kPhotonGridBits; // 65536
-        static constexpr uint32_t kPhotonsPerCell = 8;
-        static constexpr uint32_t kPhotonEmitDim  = 512; // 512×512 = 262 144 paths/frame
+        // kMaxMaterialTextures, kPhotonGridBits, kPhotonGridSize, kPhotonsPerCell,
+        // kPhotonEmitDim, and kGatherRadius all come from the shared header
+        // (vulkan_shared.h, included near the top of this file). Editing any of
+        // them there propagates to every shader on the next clean rebuild.
         std::vector<Image2D> materialTextures;// owns image + view (sampler is shared)
         // Cache value pairs (weak_ptr, slot). The weak_ptr is the liveness tag —
         // when a Texture is destroyed (model unloaded), the entry is pruned in

@@ -3,6 +3,9 @@
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive : enable
+
+#include "vulkan_shared.h"
 
 // Phase 9: this shader fills a struct payload (radiance leaving the hit +
 // sampled bounce direction + throughput multiplier). raygen handles the
@@ -52,52 +55,6 @@ struct GeometryDesc {
     uint     indexed;
     uint     _pad;
 };
-
-struct MaterialDesc {
-    vec3  albedo;
-    float roughness;
-    float metalness;
-    vec3  emissive;
-    float emissiveIntensity;
-    int   albedoTexIndex;   // -1 == no albedo texture
-    int   roughnessTexIndex;// -1 == no roughness texture; sampled .g
-    int   metalnessTexIndex;// -1 == no metalness texture; sampled .b
-    int   normalTexIndex;   // -1 == no normal map; tangent-space (glTF)
-    vec2  normalScale;      // (sx, sy) applied to sampled XY before re-deriving Z
-    float alphaCutoff;      // <= 0 == disabled (used by the any-hit shader)
-    float transmission;     // 0..1 probability the bounce takes the transmission lobe
-    float ior;              // index of refraction (only consulted when transmission > 0)
-    int   transmissionTexIndex;// -1 == no transmission map; sampled .r (glTF KHR_materials_transmission)
-    float clearcoat;        // 0..1 layer intensity; ccF0 fixed at 0.04 (dielectric IOR ~1.5)
-    float clearcoatRoughness;// 0..1; clamped in shader to keep VNDF non-singular
-    int   clearcoatTexIndex;          // -1 == none; sampled .r (glTF KHR_materials_clearcoat)
-    int   clearcoatRoughnessTexIndex; // -1 == none; sampled .g
-    vec3  attenuationColor;   // Beer-Lambert tint per attenuationDistance (default white)
-    float attenuationDistance;// 0 = no Beer-Lambert; world-space mean-free path
-    int   emissiveTexIndex;   // -1 == no emissive map; sampled .rgb (sRGB decode via format)
-    float specularIntensity;  // KHR_materials_specular: scales dielectric F0 (default 1)
-    vec3  specularColor;      // KHR_materials_specular: tints dielectric F0 (default white)
-    vec3  sheenColor;         // KHR_materials_sheen: Charlie lobe color (default black = off)
-    float sheenRoughness;     // KHR_materials_sheen: Charlie roughness (default 0)
-    int   doubleSided;        // 1 = shade both faces; 0 = pass through back-face hits
-    mat3  uvTransform;              // albedo channel
-    int   occlusionTexIndex;        // -1 = none; sampled .r
-    mat3  uvTransformNormal;        // for normalTexIndex
-    mat3  uvTransformRoughMetal;    // for roughness + metalness
-    mat3  uvTransformEmissive;      // for emissiveTexIndex
-    mat3  uvTransformOcclusion;     // for occlusionTexIndex
-    mat3  uvTransformClearcoat;     // for clearcoatTexIndex
-    mat3  uvTransformClearcoatRough;// for clearcoatRoughnessTexIndex
-    mat3  uvTransformTransmission;  // for transmissionTexIndex
-    float iridescence;              // KHR_materials_iridescence: 0..1 layer factor
-    float iridescenceIOR;           // thin-film IOR (1.0..2.5; default 1.3)
-    float iridescenceThicknessNm;   // thin-film thickness in nm (default 400)
-    float dispersion;               // KHR_materials_dispersion: 0 = off; ~0.05+ visible
-    float thickness;                // KHR_materials_volume: in-medium distance proxy for thin/open meshes; 0 = fall back to back-face actual ray distance
-    int   thinWalled;               // 1 = treat both faces as entry (thin-shell BSDF); 0 = closed mesh
-};
-
-const uint kMaxMaterialTextures = 2048;
 
 struct DirLight {
     vec3 direction;
@@ -190,11 +147,7 @@ layout(set = 0, binding = 14, scalar) readonly buffer EmissiveTriBuf {
 };
 
 // Caustic photon map (photon_emit.rgen deposits, we gather here).
-// Grid constants must match photon_emit.rgen exactly.
-const uint  kPhotonGridBits = 16u;
-const uint  kPhotonGridSize = 1u << kPhotonGridBits; // 65536
-const uint  kPhotonsPerCell = 8u;
-const float kGatherRadius   = 0.15;
+// Grid constants + kGatherRadius come from vulkan_shared.h.
 
 layout(set = 0, binding = 15, std430) readonly buffer PhotonCountBuf { uint photonCounts[]; };
 layout(set = 0, binding = 16, scalar) readonly buffer PhotonDataBuf  { vec3 photonData[];   };

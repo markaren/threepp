@@ -1,6 +1,9 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+#include "vulkan_shared.h"
 
 // Photon emission pass for caustic photon mapping.
 // Each invocation emits one photon path from a random analytic light source.
@@ -9,11 +12,8 @@
 // closest_hit.rchit. Purely direct photons (no specular bounce) are discarded
 // to avoid double-counting with the path tracer's shadow rays.
 //
-// Grid constants must match closest_hit.rchit exactly.
-const uint  kGridBits     = 16u;
-const uint  kGridSize     = 1u << kGridBits; // 65536 cells
-const uint  kPerCell      = 8u;
-const float kGatherRadius = 0.15;            // world-space metres
+// kPhotonGridBits / kPhotonGridSize / kPhotonsPerCell / kGatherRadius come
+// from vulkan_shared.h — same values are read by closest_hit.rchit's gather.
 
 const float PI     = 3.14159265358979;
 const float TWO_PI = 6.28318530717958;
@@ -89,14 +89,14 @@ uint cellHash(ivec3 c) {
     h = (h ^ uint(c.x)) * 16777619u;
     h = (h ^ uint(c.y)) * 16777619u;
     h = (h ^ uint(c.z)) * 16777619u;
-    return h & (kGridSize - 1u);
+    return h & (kPhotonGridSize - 1u);
 }
 
 void depositPhoton(vec3 pos, vec3 flux, vec3 dir) {
     const uint h    = cellHash(ivec3(floor(pos / kGatherRadius)));
     const uint slot = atomicAdd(counts[h], 1u);
-    if (slot < kPerCell) {
-        const uint base = (h * kPerCell + slot) * 3u;
+    if (slot < kPhotonsPerCell) {
+        const uint base = (h * kPhotonsPerCell + slot) * 3u;
         data[base + 0u] = pos;
         data[base + 1u] = flux;
         data[base + 2u] = dir; // photon travel direction (toward surface)

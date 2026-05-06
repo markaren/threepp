@@ -3,6 +3,9 @@
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive : enable
+
+#include "vulkan_shared.h"
 
 // Phase 10: alpha-test + alpha-blend any-hit. Bound to the same hit group as
 // closest_hit, fires for every triangle hit candidate before closest_hit.
@@ -34,33 +37,10 @@ struct GeometryDesc {
     uint     _pad;
 };
 
-// Must match the FULL MaterialDesc layout in closest_hit.rchit (456 bytes with
-// scalar block layout). Fields not accessed are collapsed into padding blocks
-// so mats[i] uses the correct stride. Fields accessed:
-//   albedoTexIndex(36), alphaCutoff(60), transmission(64), uvTransform(148).
-// uvTransform is essential for foliage atlases — alpha test must sample the
-// same texel as closest_hit's color sample, otherwise leaf silhouettes don't
-// line up with the visible color and the host plane rectangle shows through.
-struct MaterialDesc {
-    vec3  albedo;            // 12 (0)
-    float roughness;         //  4 (12)
-    float metalness;         //  4 (16)
-    vec3  emissive;          // 12 (20)
-    float emissiveIntensity; //  4 (32)
-    int   albedoTexIndex;    //  4 (36) ← used
-    int   roughnessTexIndex; //  4 (40)
-    int   metalnessTexIndex; //  4 (44)
-    int   normalTexIndex;    //  4 (48)
-    vec2  normalScale;       //  8 (52)
-    float alphaCutoff;       //  4 (60) ← used
-    float transmission;      //  4 (64) ← used (shadow ray pass-through)
-    float ior;               //  4 (68)
-    float _pad1[19];         // 76 (72..148)  ← transmissionTexIndex .. doubleSided
-    mat3  uvTransform;       // 36 (148..184) ← used (albedo UV transform)
-    float _pad2[70];         // 280 (184..464) ← occlusion/normal/...iridescence/thickness/thinWalled
-};
-
-const uint kMaxMaterialTextures = 2048;
+// MaterialDesc + kMaxMaterialTextures come from vulkan_shared.h. This shader
+// only reads albedoTexIndex, alphaCutoff, transmission, and uvTransform, but
+// having the full struct visible removes the hand-padded prefix-mirror trick
+// that needed manual updates whenever the host struct grew.
 
 layout(set = 0, binding = 3, scalar) readonly buffer GeomDescBuf {
     GeometryDesc geoms[];

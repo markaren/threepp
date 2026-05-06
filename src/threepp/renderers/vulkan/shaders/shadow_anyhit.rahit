@@ -3,6 +3,9 @@
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive : enable
+
+#include "vulkan_shared.h"
 
 // Shadow any-hit shader (hit group 1). Shadow rays select this via
 // sbtRecordOffset=1 and gl_RayFlagsNoOpaqueEXT so it fires for every
@@ -29,30 +32,8 @@ struct GeometryDesc {
     uint     _pad;
 };
 
-// Minimal prefix of the full MaterialDesc (must match closest_hit.rchit layout
-// byte-for-byte — scalar block layout, no implicit padding). uvTransform is
-// pulled in for the alpha-cutout sample so foliage shadow rays test the same
-// texel as the primary path's albedo sample.
-struct MaterialDesc {
-    vec3  albedo;            // 12 (0)
-    float roughness;         //  4 (12)
-    float metalness;         //  4 (16)
-    vec3  emissive;          // 12 (20)
-    float emissiveIntensity; //  4 (32)
-    int   albedoTexIndex;    //  4 (36) — alpha-cutout texture
-    int   roughnessTexIndex; //  4 (40)
-    int   metalnessTexIndex; //  4 (44)
-    int   normalTexIndex;    //  4 (48)
-    vec2  normalScale;       //  8 (52)
-    float alphaCutoff;       //  4 (60) — < 0: blend, > 0: cutout, 0: opaque
-    float transmission;      //  4 (64) — glass probability
-    float ior;               //  4 (68) — index of refraction (Fresnel)
-    float _pad1[19];         // 76 (72..148)
-    mat3  uvTransform;       // 36 (148..184) — albedo UV transform
-    float _pad2[70];         // 280 (184..464)
-};
-
-const uint kMaxMaterialTextures = 2048;
+// MaterialDesc + kMaxMaterialTextures come from vulkan_shared.h. This shader
+// only reads albedoTexIndex, alphaCutoff, transmission, ior, and uvTransform.
 
 layout(set = 0, binding = 3, scalar) readonly buffer GeomDescBuf {
     GeometryDesc geoms[];

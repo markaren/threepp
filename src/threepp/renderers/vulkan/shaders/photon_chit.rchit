@@ -3,6 +3,9 @@
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive : enable
+
+#include "vulkan_shared.h"
 
 // Photon closest-hit: fills PhotonPayload with surface info so photon_emit.rgen
 // can decide whether to refract, reflect, deposit, or discard the photon path.
@@ -20,25 +23,9 @@ struct GeometryDesc {
     uint     _pad;
 };
 
-// Minimal prefix matched byte-for-byte to closest_hit.rchit's MaterialDesc
-// (scalar layout, no implicit padding). Fields after ior are padded so the
-// array stride is the correct full struct size (456 bytes).
-struct MaterialDesc {
-    vec3  albedo;            //  0: 12
-    float roughness;         // 12:  4
-    float metalness;         // 16:  4
-    vec3  emissive;          // 20: 12
-    float emissiveIntensity; // 32:  4
-    int   albedoTexIndex;    // 36:  4
-    int   roughnessTexIndex; // 40:  4
-    int   metalnessTexIndex; // 44:  4
-    int   normalTexIndex;    // 48:  4
-    vec2  normalScale;       // 52:  8
-    float alphaCutoff;       // 60:  4
-    float transmission;      // 64:  4
-    float ior;               // 68:  4
-    float _pad[98];          // 72: 392 — total 464 bytes
-};
+// MaterialDesc comes from vulkan_shared.h. This shader only reads albedo,
+// roughness, metalness, transmission, and ior; the rest of the struct is
+// declared so mats[i] uses the correct stride without a hand-padded mirror.
 
 layout(set = 0, binding = 3, scalar) readonly buffer GeomDescBuf { GeometryDesc geoms[]; };
 layout(set = 0, binding = 4, scalar) readonly buffer MatDescBuf  { MaterialDesc mats[];  };
