@@ -146,9 +146,23 @@ void main() {
         const float dDzDx = (dR.z - dL.z) * 0.5 / eps;
         const float dDzDz = (dU.z - dD.z) * 0.5 / eps;
         const float J = (1.0 + dDxDx) * (1.0 + dDzDz) - dDxDz * dDzDx;
-        const float foamThresh = 0.6;
-        const float foamWidth  = 0.6;
-        const float foam = clamp((foamThresh - J) / foamWidth, 0.0, 1.0);
-        foamOut.v[i] = foam;
+        // Instantaneous foam from Jacobian compression. Calibrated for
+        // Phillips A = 0.01 — J deviates a few percent on the steepest
+        // crests, so foam appears in J ∈ [0.93, 0.97].
+        const float foamThresh = 0.97;
+        const float foamWidth  = 0.04;
+        const float foamInstant = clamp((foamThresh - J) / foamWidth, 0.0, 1.0);
+        // Temporal persistence: real foam lingers seconds after the
+        // breaking event as bubbles dissipate. Without this, foam tracks
+        // wave-crest motion frame-by-frame and reads as too fast / too
+        // synchronised with wave geometry. We read the previous frame's
+        // foam at this vertex (the buffer isn't cleared between frames),
+        // decay it slightly, and take the max with the new instantaneous
+        // value. Foam born this frame writes its full value; older foam
+        // fades on its own. Decay 0.97/frame → ~0.4 s half-life at 60 fps,
+        // matching loose whitewater dispersion. Use 0.99 for long trails.
+        const float prev = foamOut.v[i];
+        const float decay = 0.97;
+        foamOut.v[i] = max(foamInstant, prev * decay);
     }
 }

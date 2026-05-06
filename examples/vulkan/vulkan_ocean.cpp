@@ -22,6 +22,7 @@
 #include "threepp/math/Box3.hpp"
 #include "threepp/objects/DisplacedMesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
 
 #include <algorithm>
@@ -62,6 +63,106 @@ namespace {
 
 namespace {
 
+    // Procedural water-surface normal map. Multi-octave sum of sine waves in
+    // tangent space, with each octave at a different angle and double the
+    // frequency. Periodic on [0,1]² so it tiles cleanly when wrapped. Used
+    // as `mat->normalMap` on the ocean to add sub-mesh-resolution shading
+    // detail (the FFT cascades produce ~1 m mesh-resolvable waves; the
+    // visible "real ocean" has cm-scale chop that this fakes via the BRDF
+    // microfacet path rather than geometry).
+    //
+    // Returns a 256² RGBA8 DataTexture with tangent-space normals encoded
+    // [0..1] in RGB. Caller wraps + tiles it; `repeat = (20, 20)` over a
+    // 1000 m ocean gives ~5 m / texel = ~2 cm normal-detail granularity.
+    std::shared_ptr<DataTexture> makeProceduralWaterNormalMap() {
+        constexpr unsigned int N = 256;
+        std::vector<unsigned char> data(N * N * 4);
+
+        // Tiling 2D value noise — hash of integer lattice points + smooth
+        // bilinear interpolation. The hash wraps modulo `period` so the
+        // resulting noise field tiles cleanly at integer multiples of
+        // `period` per [0,1]² UV. Used as the base of an FBM that gives
+        // the surface a non-regular, water-y look (rather than the regular
+        // grid pattern that sum-of-sines at power-of-two frequencies
+        // produces — that reads as fabric weave).
+        auto hash = [](int x, int y) {
+            uint32_t h = uint32_t(x) * 73856093u ^ uint32_t(y) * 19349663u;
+            h ^= h >> 16; h *= 0x7feb352du;
+            h ^= h >> 15; h *= 0x846ca68bu;
+            h ^= h >> 16;
+            return float(h) / 4294967296.0f;// [0..1]
+        };
+        auto valueNoise = [&hash](float u, float v, int period) {
+            const float U = u * float(period);
+            const float V = v * float(period);
+            const int x0 = int(std::floor(U)), y0 = int(std::floor(V));
+            const float fx = U - float(x0), fy = V - float(y0);
+            // Smoothstep for C1 continuity (otherwise see grid lines).
+            const float sx = fx * fx * (3.f - 2.f * fx);
+            const float sy = fy * fy * (3.f - 2.f * fy);
+            // Wrap lattice coords mod `period` for tileability.
+            const int X0 = ((x0 % period) + period) % period;
+            const int Y0 = ((y0 % period) + period) % period;
+            const int X1 = (X0 + 1) % period;
+            const int Y1 = (Y0 + 1) % period;
+            const float a = hash(X0, Y0);
+            const float b = hash(X1, Y0);
+            const float c = hash(X0, Y1);
+            const float d = hash(X1, Y1);
+            const float ab = a * (1.f - sx) + b * sx;
+            const float cd = c * (1.f - sx) + d * sx;
+            return (ab * (1.f - sy) + cd * sy) * 2.f - 1.f;// → [-1, 1]
+        };
+        // FBM: sum noise octaves at increasing period (= higher frequency)
+        // with halving amplitude. Periods are integers so each octave wraps,
+        // and we mix non-power-of-two periods (3, 7, 13, …) to avoid the
+        // regular dyadic-grid look.
+        // Period choices: skip the lowest periods (3, 5) — they generate
+        // noise blobs that span ~⅓ of a tile, which after wrap-tiling read
+        // as obvious large-scale repetition. Starting at 11/19/31… makes
+        // the largest features ~9 % of a tile, too small to register as a
+        // tile-boundary cue when viewed across many tiles.
+        auto height = [&valueNoise](float u, float v) {
+            float h = 0.f;
+            h += 1.000f * valueNoise(u, v, 11);
+            h += 0.500f * valueNoise(u, v, 19);
+            h += 0.250f * valueNoise(u, v, 37);
+            h += 0.125f * valueNoise(u, v, 71);
+            h += 0.062f * valueNoise(u, v, 137);
+            return h;
+        };
+
+        const float eps = 1.f / float(N);
+        const float bumpStrength = 1.5f;// tuning knob for "how rippled"
+        for (unsigned y = 0; y < N; ++y) {
+            for (unsigned x = 0; x < N; ++x) {
+                const float u = float(x) / float(N);
+                const float v = float(y) / float(N);
+                const float hL = height(u - eps, v);
+                const float hR = height(u + eps, v);
+                const float hD = height(u, v - eps);
+                const float hU = height(u, v + eps);
+                const float dx = (hR - hL) * 0.5f / eps * bumpStrength;
+                const float dy = (hU - hD) * 0.5f / eps * bumpStrength;
+                const float invLen = 1.f / std::sqrt(dx * dx + dy * dy + 1.f);
+                const float nx = -dx * invLen;
+                const float ny = -dy * invLen;
+                const float nz = invLen;
+                const unsigned i = (y * N + x) * 4;
+                data[i + 0] = static_cast<unsigned char>((nx * 0.5f + 0.5f) * 255.f);
+                data[i + 1] = static_cast<unsigned char>((ny * 0.5f + 0.5f) * 255.f);
+                data[i + 2] = static_cast<unsigned char>((nz * 0.5f + 0.5f) * 255.f);
+                data[i + 3] = 255;
+            }
+        }
+        auto tex = DataTexture::create(data, N, N);
+        tex->magFilter = Filter::Linear;
+        tex->minFilter = Filter::Linear;
+        tex->wrapS = TextureWrapping::Repeat;
+        tex->wrapT = TextureWrapping::Repeat;
+        return tex;
+    }
+
     constexpr float kTileSize    = 1000.0f;  // metres — full mesh extent and cascade-0 tile
     constexpr uint32_t kFftSize  = 1024;     // 4× cost vs 512² → 0.98 m vertex spacing, resolves λ ≥ 2 m
     constexpr float kPlaneEdge   = kTileSize;  // mesh extends one full FFT tile in X and Z
@@ -76,7 +177,7 @@ namespace {
         // 0.02 keeps the glitter tight (sharper specular highlights, fewer
         // distributed sparkles) — denoiser-off output reads as "specular
         // glints on water" rather than "scattered noise".
-        mat->roughness = 0.02f;
+        mat->roughness = 0.01f;
         mat->metalness = 0.0f;
         mat->setIor(1.33f);
         mat->transmission = 1.0f;
@@ -100,11 +201,23 @@ namespace {
         mat->thinWalled = true;
         mat->attenuationColor = Color(0.10f, 0.45f, 0.55f);
         mat->attenuationDistance = 3.0f;
-        mat->clearcoat = 0.1;
-        // No clearcoat: with roughness=0 the base specular is already a clean
-        // delta lobe and Fresnel handles reflect/refract via the transmission
-        // BSDF. Stacking a clearcoat lobe on top was the dominant noise
-        // source on the surface (per-pixel variance from sampling both lobes).
+        // mat->clearcoat = 0.1;
+
+        // Procedural water-surface normal map. The FFT cascades only resolve
+        // waves down to the mesh resolution (~1 m at 1024² over a 1 km tile),
+        // but real ocean has cm-scale chop the eye reads as "wet, textured
+        // water". The normal map perturbs the BRDF normal at sub-pixel scale
+        // → glittery sun reflections + breaks up the otherwise mirror-clean
+        // wave faces. Tile factor 30× across the ocean = each texture tile
+        // covers ~33 m, so chop features land at the right perceptual size.
+        // normalScale tunes how strong the bump reads in the BRDF.
+        mat->normalMap = makeProceduralWaterNormalMap();
+        // Higher repeat = smaller tile = less obvious repetition. 60× over
+        // 1000 m → each tile covers ~17 m of ocean. Combined with the
+        // texture's smallest feature (~0.12 m at period 137), normal-map
+        // detail spans ~10 cm – 1.5 m. Reads as chop, not tiled fabric.
+        mat->normalMap->repeat.set(60.f, 60.f);
+        mat->normalScale.set(0.6f, 0.6f);
         return mat;
     }
 

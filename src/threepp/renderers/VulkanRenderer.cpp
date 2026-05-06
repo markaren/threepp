@@ -396,6 +396,17 @@ namespace threepp {
         bool envIsBgColor  = false;
         Color envBgColor{0.f, 0.f, 0.f};
 
+        // Ocean fine-cascade normal-map source (binding 21 in rtDsLayout).
+        // Default 1×1 dummy R32F, replaced with the active DisplacedMesh's
+        // cascade-2 height image when one is in the scene. closest_hit
+        // samples this on `thinWalled` materials at world-space XZ via
+        // finite differences to perturb the macro normal — adds sub-mesh
+        // chop detail (FFT cells finer than the 1 m mesh resolves).
+        Image2D oceanFineHeightDummy{};
+        VkImageView oceanFineHeightView   = VK_NULL_HANDLE;// either dummy or cascade-2 view
+        VkSampler   oceanFineHeightSampler = VK_NULL_HANDLE;
+        float       oceanFineTileSize     = 0.f;          // 0 disables sampling in shader
+
         // Env luminance CDF (Phase A: env importance sampling).
         // Conditional CDF: w×h R32F texture; row r holds the cumulative
         // distribution over columns at that latitude.
