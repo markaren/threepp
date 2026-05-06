@@ -1,9 +1,9 @@
 #version 460
 
 // Multi-pass à-trous spatial denoiser pass. Reads from accumImage (pass 0)
-// or one of the ping-pong intermediates (pass 1, 2), applies a 5×5 edge-
-// aware atrous filter with the per-pass stride (1, 2, 4), writes to the
-// other ping-pong slot. The finalize stage (denoise.comp) reads filtered[0]
+// or the other ping-pong intermediate (pass 1), applies a 5×5 edge-aware
+// atrous filter with the per-pass stride (1, 2), writes to the other
+// ping-pong slot. The finalize stage (denoise.comp) reads filtered[0]
 // after the last pass and mixes by per-pixel FC, then tonemaps + sRGB-encodes
 // to the swap chain.
 //

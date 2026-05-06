@@ -206,7 +206,7 @@ layout(push_constant) uniform Pc {
     uint envMipCount;
     uint _pad1;
     uint _pad2;
-    uint motionFlags;       // unused in closest_hit
+    uint motionFlags;       // bit 2 = scene has any glass material (gates caustic gather)
     uint mb0;               // unused
     uint mb1;               // unused
     uint mb2;               // unused
@@ -217,6 +217,7 @@ layout(push_constant) uniform Pc {
     uint envCdfWidth;       // env CDF dimensions (envCdfTotalSum > 0 to enable)
     uint envCdfHeight;
     float envCdfTotalSum;   // pdf normaliser; 0 disables env importance sampling
+    float fireflyClamp;     // per-NEE luminance cap; 1e30 disables (gates never fire)
 } pc;
 
 hitAttributeEXT vec2 attribs;
@@ -1076,7 +1077,7 @@ void main() {
             emissiveOut *= texture(albedoMaps[ei], uvEmissive).rgb;
         }
         const float emLum0 = dot(emissiveOut, vec3(0.2126, 0.7152, 0.0722));
-        if (emLum0 > 20.0) emissiveOut *= 20.0 / emLum0;
+        if (emLum0 > pc.fireflyClamp) emissiveOut *= pc.fireflyClamp / emLum0;
         if ((payload.inFlags & 1u) != 0u) emissiveOut = vec3(0.0);
         // For thin-shell mode reflectContrib was captured analytically; for
         // stochastic mode it stays vec3(0) and the reflect lobe's contribution
@@ -1447,7 +1448,7 @@ void main() {
                         }
                         vec3 emCol = t.emission.rgb;
                         const float emLumE = dot(emCol, vec3(0.2126, 0.7152, 0.0722));
-                        if (emLumE > 20.0) emCol *= 20.0 / emLumE;
+                        if (emLumE > pc.fireflyClamp) emCol *= pc.fireflyClamp / emLumE;
                         // MIS balance heuristic against the BSDF-sampled bounce
                         // estimator. On glossy surfaces pdfBsdf >> pdfOmega →
                         // w_light → 0 (NEE contributes nothing, the BSDF bounce
@@ -1458,15 +1459,13 @@ void main() {
                         const float pdfBsdfNee = brdfPdf(V, toL, N, roughness, metalness);
                         const float wLight = pdfOmega / max(pdfOmega + pdfBsdfNee, 1e-8);
                         vec3 emContrib = perEm * NdotLe * emCol * wLight / max(pdfOmega, 1e-8);
-                        // Per-contribution firefly clamp.  20 matches the
-                        // budget the bounce-radiance path elsewhere already
-                        // operates within (raygen line ~280, emission cap at
-                        // 20 luminance) — anything brighter than that on a
-                        // single NEE sample is either a numerical spike or a
-                        // legitimate direct-bright tap that the next sample
-                        // will reinforce anyway.
+                        // Per-contribution firefly clamp.  Anything brighter
+                        // than the user-tunable cap on a single NEE sample is
+                        // either a numerical spike or a legitimate direct-
+                        // bright tap that the next sample will reinforce
+                        // anyway. Default 20.0 (set via setFireflyClamp).
                         const float emCLum = dot(emContrib, vec3(0.2126, 0.7152, 0.0722));
-                        if (emCLum > 20.0) emContrib *= 20.0 / emCLum;
+                        if (emCLum > pc.fireflyClamp) emContrib *= pc.fireflyClamp / emCLum;
                         const vec3 fogAttenEm = fogEnabled() ? fogTransmittance(dist) : vec3(1.0);
                         lit += emContrib * shadowVisibility * fogAttenEm;
                     }
@@ -1518,7 +1517,7 @@ void main() {
                 }
                 vec3 envSample = sampleEquirect(nDir);
                 const float envLum = dot(envSample, vec3(0.2126, 0.7152, 0.0722));
-                if (envLum > 20.0) envSample *= 20.0 / envLum;
+                if (envLum > pc.fireflyClamp) envSample *= pc.fireflyClamp / envLum;
                 // 3-lobe pdf: matches the cc + base-spec + base-diff sampler
                 // in main()'s bounce direction selection. Clearcoat-aware so
                 // MIS doesn't add noise on clearcoat materials.
@@ -1579,7 +1578,7 @@ void main() {
             if (shadowVisibility > 0.0) {
                 vec3 envSample = sampleEquirect(nDir);
                 const float envLum = dot(envSample, vec3(0.2126, 0.7152, 0.0722));
-                if (envLum > 20.0) envSample *= 20.0 / envLum;
+                if (envLum > pc.fireflyClamp) envSample *= pc.fireflyClamp / envLum;
                 lit += 0.5 * nWeight * envSample * shadowVisibility;
             }
         }
@@ -1659,13 +1658,13 @@ void main() {
         emissiveOut *= texture(albedoMaps[ei], uvEmissive).rgb;
     }
     const float emLum1 = dot(emissiveOut, vec3(0.2126, 0.7152, 0.0722));
-    if (emLum1 > 20.0) emissiveOut *= 20.0 / emLum1;
+    if (emLum1 > pc.fireflyClamp) emissiveOut *= pc.fireflyClamp / emLum1;
     // Suppress emission on indirect shading hits when the prior shade event
     // already accounted for emissive triangles via NEE. Primary hits, hits
     // after pass-through, and hits on frames with no emissive geometry keep
     // the term so the user can see directly-visible glowing surfaces.
     if ((payload.inFlags & 1u) != 0u) emissiveOut = vec3(0.0);
-    lit += gatherCaustics(hitPos, N, albedo, roughness);
+    if ((pc.motionFlags & 4u) != 0u) lit += gatherCaustics(hitPos, N, albedo, roughness);
     payload.radiance   = emissiveOut + ambient + lit;
     payload.brdfWeight = brdfWeight;
     payload.nextOrigin = hitPos + N * 1e-3;

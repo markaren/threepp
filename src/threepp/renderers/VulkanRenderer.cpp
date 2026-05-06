@@ -557,6 +557,13 @@ namespace threepp {
         std::array<VkDeviceSize, kFramesInFlight> emissiveTriBufferCapacity{};
         uint32_t emissiveTriCountThisFrame_ = 0;
         float    emissiveTotalPowerThisFrame_ = 0.0f;
+        // True if any material in the current scene has transmission > 0.
+        // Gates photon emit (no caustics possible without glass) and the
+        // 27-cell caustic gather in closest_hit.
+        bool     sceneHasGlass_ = false;
+        // Per-NEE firefly clamp; pushed to shaders as float bits in slot [15].
+        // 1e30f sentinel disables the clamp (set via setFireflyClamp(0)).
+        float    fireflyClamp_ = 20.0f;
         // Cached CDF blob (16 floats per tri) reused across frames when no
         // emissive mesh moved + entries-list size unchanged. The CPU walk in
         // buildAndUploadEmissiveTris is the dominant per-frame cost on
@@ -2379,6 +2386,10 @@ namespace threepp {
                                         matDescs.size() * sizeof(MaterialDesc));
                             vmaUnmapMemory(ctx->allocator(), materialDescsBuffer.alloc);
                         }
+                        sceneHasGlass_ = false;
+                        for (const auto& md : matDescs) {
+                            if (md.transmission > 0.0f) { sceneHasGlass_ = true; break; }
+                        }
                     }
                     // Update prevSceneFingerprint so later frames compare
                     // against this frame's state, not stale.
@@ -2596,6 +2607,10 @@ namespace threepp {
             buildTlas(instances);
             uploadDescBuffer(geometryDescsBuffer, geomDescs);
             uploadDescBuffer(materialDescsBuffer, matDescs);
+            sceneHasGlass_ = false;
+            for (const auto& md : matDescs) {
+                if (md.transmission > 0.0f) { sceneHasGlass_ = true; break; }
+            }
 
             // Topology rebuild: prev gbuf + accum hold mesh IDs from the old
             // scene, but the gl_InstanceCustomIndexEXT space just changed
@@ -4467,7 +4482,7 @@ namespace threepp {
             check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rtDsLayout),
                   "vkCreateDescriptorSetLayout(RT)");
 
-            // 60-byte push constant. Layout matches the host-side `pc[15]`
+            // 64-byte push constant. Layout matches the host-side `pc[16]`
             // assembled in renderFrame and the GLSL PushConstants struct in
             // raygen.rgen / closest_hit.rchit / miss.rmiss. Well under the
             // 128-byte minimum push-constant guarantee.
@@ -4477,9 +4492,10 @@ namespace threepp {
             //   [2] toneMapping enum
             //   [3] exposure as float bits
             //   [4] motionFlags: bit 0 = any motion this frame (mesh or
-            //       camera), bit 1 = camera viewProj changed. Raygen takes a
-            //       self-tap of accum/gbuf when bit 0 is clear, avoiding
-            //       round-trip reproject precision drift on static scenes.
+            //       camera), bit 1 = camera viewProj changed, bit 2 = scene
+            //       has any glass material. Raygen takes a self-tap of
+            //       accum/gbuf when bit 0 is clear, avoiding round-trip
+            //       reproject precision drift on static scenes.
             //   [5..8] meshMovedBits[4] — packed per-mesh moved bits (128
             //       meshes). Lets raygen gate FC-halving per-pixel via
             //       primaryInstanceId-1 instead of scene-wide.
@@ -4490,13 +4506,14 @@ namespace threepp {
             //   [12] envCdfWidth         (closest_hit + miss — env importance sample)
             //   [13] envCdfHeight        (closest_hit + miss — env importance sample)
             //   [14] envCdfTotalSum bits (float — pdf normalisation; 0 disables CDF)
+            //   [15] fireflyClamp bits   (float — per-NEE luminance cap; 1e30 disables)
             VkPushConstantRange pcRange{};
             pcRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                  VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
                                  VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
                                  VK_SHADER_STAGE_MISS_BIT_KHR;
             pcRange.offset = 0;
-            pcRange.size   = 60;
+            pcRange.size   = 64;
 
             VkPipelineLayoutCreateInfo plci{};
             plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -5332,7 +5349,14 @@ namespace threepp {
             dep.pImageMemoryBarriers = preBarriers.data();
             vkCmdPipelineBarrier2(cb, &dep);
 
+            // descriptorSets index is shared by photon and primary RT pipelines.
+            const uint32_t setIdx = currentFrame * imageCount_ + imageIndex;
+
             // ── Photon emit pass ────────────────────────────────────────────────
+            // Skipped when no material has transmission > 0: caustics only form
+            // through glass, and gatherCaustics in closest_hit is gated on the
+            // same flag, so no shader will read these buffers either way.
+            if (sceneHasGlass_) {
             // 1. Zero per-cell photon counters (counts only; data is overwritten
             //    in place, old overflow slots beyond the new count are never read).
             vkCmdFillBuffer(cb, photonCountBuf.handle, 0, VK_WHOLE_SIZE, 0u);
@@ -5357,7 +5381,6 @@ namespace threepp {
             }
 
             // 3. Photon emit dispatch.
-            const uint32_t setIdx = currentFrame * imageCount_ + imageIndex;
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, photonEmitPipeline);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
                                     rtPipelineLayout, 0, 1,
@@ -5368,12 +5391,15 @@ namespace threepp {
                 std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
                 const uint32_t motionFlagsPhoton =
                         (motionThisFrame_      ? 1u : 0u) |
-                        (cameraMovedThisFrame_ ? 2u : 0u);
+                        (cameraMovedThisFrame_ ? 2u : 0u) |
+                        (sceneHasGlass_        ? 4u : 0u);
                 uint32_t emPowerBits;
                 std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
                 uint32_t envSumBitsPhoton;
                 std::memcpy(&envSumBitsPhoton, &envCdfTotalSum_, sizeof(envSumBitsPhoton));
-                const uint32_t ppc[15] = {
+                uint32_t fireflyBitsPhoton;
+                std::memcpy(&fireflyBitsPhoton, &fireflyClamp_, sizeof(fireflyBitsPhoton));
+                const uint32_t ppc[16] = {
                         sampleIndex, envImage.mipLevels,
                         static_cast<uint32_t>(toneMapping_), exposureBits,
                         motionFlagsPhoton,
@@ -5381,6 +5407,7 @@ namespace threepp {
                         emissiveTriCountThisFrame_, emPowerBits,
                         samplesPerPixel_,
                         envCdfWidth_, envCdfHeight_, envSumBitsPhoton,
+                        fireflyBitsPhoton,
                 };
                 vkCmdPushConstants(cb, rtPipelineLayout,
                                    VK_SHADER_STAGE_RAYGEN_BIT_KHR |
@@ -5412,6 +5439,7 @@ namespace threepp {
                 photonDep.pBufferMemoryBarriers = photonDone.data();
                 vkCmdPipelineBarrier2(cb, &photonDep);
             }
+            }// if (sceneHasGlass_)
             // ── End photon emit ─────────────────────────────────────────────────
 
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rtPipeline);
@@ -5421,7 +5449,8 @@ namespace threepp {
 
             // [0] sampleIndex (raygen), [1] PMREM mip count (closest_hit),
             // [2] ToneMapping enum, [3] exposure as float bits,
-            // [4] motionFlags (bit 0 = any motion, bit 1 = camera moved),
+            // [4] motionFlags (bit 0 = any motion, bit 1 = camera moved,
+            //                  bit 2 = scene has any glass material),
             // [5..8] meshMovedBits[4] — see VkPushConstantRange comment above.
             // [9] emissiveCount, [10] emissiveTotalPower (float bits).
             const float exposure = toneMappingExposure_;
@@ -5429,12 +5458,15 @@ namespace threepp {
             std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
             const uint32_t motionFlags =
                     (motionThisFrame_      ? 1u : 0u) |
-                    (cameraMovedThisFrame_ ? 2u : 0u);
+                    (cameraMovedThisFrame_ ? 2u : 0u) |
+                    (sceneHasGlass_        ? 4u : 0u);
             uint32_t emPowerBits;
             std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
             uint32_t envSumBits;
             std::memcpy(&envSumBits, &envCdfTotalSum_, sizeof(envSumBits));
-            const uint32_t pc[15] = {
+            uint32_t fireflyBits;
+            std::memcpy(&fireflyBits, &fireflyClamp_, sizeof(fireflyBits));
+            const uint32_t pc[16] = {
                     sampleIndex,
                     envImage.mipLevels,
                     static_cast<uint32_t>(toneMapping_),
@@ -5450,6 +5482,7 @@ namespace threepp {
                     envCdfWidth_,
                     envCdfHeight_,
                     envSumBits,
+                    fireflyBits,
             };
             vkCmdPushConstants(cb, rtPipelineLayout,
                                VK_SHADER_STAGE_RAYGEN_BIT_KHR |
@@ -5494,8 +5527,8 @@ namespace threepp {
 
                 if (denoiseEnabled_) {
                     // 2 atrous passes: stride 1 → 2. Pass 0 sources from
-                    // accumImage; pass 1 reads filt[0] and writes filt[1].
-                    // Finalize then reads filt[1].
+                    // accumImage and writes filt[1]; pass 1 reads filt[1]
+                    // and writes filt[0]. Finalize then reads filt[0].
                     //
                     // Initial multi-pass land used 3 passes (strides 1/2/4)
                     // with a 21×21 effective radius. On this fast-converging
@@ -5840,6 +5873,15 @@ namespace threepp {
 
     bool VulkanRenderer::denoise() const {
         return pimpl_->denoiseEnabled_;
+    }
+
+    void VulkanRenderer::setFireflyClamp(float cap) {
+        pimpl_->fireflyClamp_ = (cap <= 0.0f) ? 1e30f : cap;
+    }
+
+    float VulkanRenderer::fireflyClamp() const {
+        const float v = pimpl_->fireflyClamp_;
+        return (v > 1e20f) ? 0.0f : v;
     }
 
 }// namespace threepp

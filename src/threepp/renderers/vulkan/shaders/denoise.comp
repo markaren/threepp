@@ -8,8 +8,8 @@
 // tonemap + sRGB on raw accum. Pixel-identical to the prior in-shader
 // raygen tail in that mode.
 //
-// Three atrous passes (denoise_atrous.comp) run before this stage with
-// strides 1, 2, 4 ping-ponging filteredArray[0] ↔ filteredArray[1]; the
+// Two à-trous passes (denoise_atrous.comp) run before this stage with
+// strides 1, 2 ping-ponging filteredArray[0] ↔ filteredArray[1]; the
 // final pass writes to filteredArray[0] which is what we read here.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;

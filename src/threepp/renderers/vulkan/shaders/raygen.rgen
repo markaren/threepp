@@ -192,6 +192,7 @@ layout(push_constant) uniform Pc {
     uint envCdfWidth;         // env CDF dims (closest_hit + miss; raygen ignores)
     uint envCdfHeight;
     float envCdfTotalSum;     // env importance pdf normaliser; 0 disables CDF
+    float fireflyClamp;       // per-NEE luminance cap (closest_hit reads); 1e30 disables
 } pc;
 
 bool isMeshMoved(uint idx) {
@@ -595,8 +596,9 @@ void main() {
         // Re-evaluated each step since the FIRST step classifies primary into
         // primaryRoughness/Metalness/Transmission. Mirror / metal / glass keep
         // the full budget. Cap is BIASED — truncates the Neumann-series energy
-        // sum and causes ρ≈1 cavities to under-read; should gate on a "clamps
-        // on" flag once setFireflyClamp(0) is wired.
+        // sum and causes ρ≈1 cavities to under-read; gate on
+        // pc.fireflyClamp > 1e20 (= setFireflyClamp(0)) when an unbiased mode
+        // is wanted.
         int effectiveBounces = kMaxBounces;
         for (int step = 0; step < kMaxSteps; ++step) {
             // Recompute each step — primary classification settles after first hit.

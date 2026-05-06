@@ -49,6 +49,7 @@ layout(push_constant) uniform Pc {
     uint envCdfWidth;
     uint envCdfHeight;
     float envCdfTotalSum;
+    float fireflyClamp;     // unused in miss; declared for layout parity with primary RT
 } pc;
 
 layout(location = 0) rayPayloadInEXT Payload payload;

@@ -95,6 +95,13 @@ namespace threepp {
         void setDenoise(bool enabled);
         [[nodiscard]] bool denoise() const;
 
+        // Per-NEE-sample firefly clamp: any direct-lighting contribution whose
+        // luminance exceeds `cap` is rescaled down to `cap`. Default 20.0.
+        // Pass 0 to disable (stored as a 1e30 sentinel — gates never fire).
+        // Mirrors WgpuPathTracer::setFireflyClamp.
+        void setFireflyClamp(float cap);
+        [[nodiscard]] float fireflyClamp() const;
+
     private:
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
