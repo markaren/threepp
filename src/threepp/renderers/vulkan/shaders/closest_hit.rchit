@@ -557,6 +557,73 @@ vec3 sampleVNDF(vec3 wo, vec3 n, float alpha, vec2 u) {
     return reflect(-wo, sampleVNDF_H(wo, n, alpha, u));
 }
 
+// Multi-lobe BSDF importance sampler shared by env-NEE-fallback and the
+// indirect bounce. Picks between clearcoat / base-spec / base-diff via the
+// supplied probabilities, samples a direction from the chosen lobe, and
+// returns the throughput weight (already divided by the lobe-pick pdf).
+//
+// `valid == false` means the sampled direction landed at or below the
+// surface (rare numerical edge case); callers either skip the trace
+// (env-NEE) or terminate the path (bounce).
+//
+// Both call sites must use this so MIS pdf agreement (brdfPdf3) holds —
+// any divergence in lobe weights or urand call order would over-/under-
+// count contributions where env-NEE and BSDF-sampled bounce overlap.
+struct BsdfSample {
+    vec3  dir;
+    vec3  weight;
+    bool  valid;
+};
+
+BsdfSample sampleBsdf(
+        vec3  V,         vec3  N,        vec3  F0,         vec3  albedo,
+        float alpha,     float ccAlpha,  float metalness,  float NdotV,
+        float pSpec,     float ccProb,   float ccWeight,
+        float baseScale, float invBaseProb,
+        inout uint seed) {
+    BsdfSample r;
+    r.valid = true;
+    const float xiCC = urand(seed);
+    if (ccProb > 0.0 && xiCC < ccProb) {
+        const vec2 u2 = vec2(urand(seed), urand(seed));
+        r.dir = sampleVNDF(V, N, ccAlpha, u2);
+        const float NdotL = dot(N, r.dir);
+        if (NdotL <= 0.0) {
+            r.valid  = false;
+            r.weight = vec3(0.0);
+            return r;
+        }
+        const float G1L = smithG1(NdotL, ccAlpha);
+        r.weight = vec3(ccWeight * G1L / ccProb);
+    } else {
+        const float xi = urand(seed);
+        if (xi < pSpec) {
+            const vec2 u2 = vec2(urand(seed), urand(seed));
+            r.dir = sampleVNDF(V, N, alpha, u2);
+            const float NdotL = dot(N, r.dir);
+            if (NdotL <= 0.0) {
+                r.valid  = false;
+                r.weight = vec3(0.0);
+                return r;
+            }
+            const vec3  H     = normalize(V + r.dir);
+            const float VdotH = max(0.0, dot(V, H));
+            const vec3  F     = fresnelSchlick(VdotH, F0);
+            const float G1L   = smithG1(NdotL, alpha);
+            r.weight = F * G1L * baseScale * invBaseProb / pSpec;
+        } else {
+            const vec2 u2 = vec2(urand(seed), urand(seed));
+            const vec3 localDir = cosineHemisphere(u2);
+            const mat3 tbn = makeTBN(N);
+            r.dir = normalize(tbn * localDir);
+            r.weight = albedo * (1.0 - metalness)
+                     * kcBoost(F0, NdotV, alpha)
+                     * baseScale * invBaseProb / (1.0 - pSpec);
+        }
+    }
+    return r;
+}
+
 void main() {
     const float w = 1.0 - attribs.x - attribs.y;
 
@@ -1476,59 +1543,25 @@ void main() {
             }
         }
     } else {
-        // Fallback: BSDF-sampled env NEE with constant 0.5 MIS (no CDF). 3-way
-        // stochastic lobe selection mirrors the bounce sampler so the implicit
-        // pdfs match and the balance-heuristic weight collapses to 0.5 / 0.5.
-        const float xiCC = urand(seed);
-        vec3 nDir;
-        vec3 nWeight;
-        bool nValid = true;
-        if (ccProb > 0.0 && xiCC < ccProb) {
-            const vec2 u2 = vec2(urand(seed), urand(seed));
-            nDir = sampleVNDF(V, N, ccAlpha, u2);
-            const float NdotL = dot(N, nDir);
-            if (NdotL <= 0.0) {
-                nValid = false;
-            } else {
-                const float G1L = smithG1(NdotL, ccAlpha);
-                nWeight = vec3(ccWeight * G1L / ccProb);
-            }
-        } else {
-            const float xiN = urand(seed);
-            if (xiN < pSpec) {
-                const vec2 u2 = vec2(urand(seed), urand(seed));
-                nDir = sampleVNDF(V, N, alpha, u2);
-                const float NdotL = dot(N, nDir);
-                if (NdotL <= 0.0) {
-                    nValid = false;
-                } else {
-                    const vec3  H_n   = normalize(V + nDir);
-                    const float VdotH = max(0.0, dot(V, H_n));
-                    const vec3  F_n   = fresnelSchlick(VdotH, F0);
-                    const float G1L   = smithG1(NdotL, alpha);
-                    nWeight = F_n * G1L * baseScale * invBaseProb / pSpec;
-                }
-            } else {
-                const vec2 u2 = vec2(urand(seed), urand(seed));
-                const vec3 localDir = cosineHemisphere(u2);
-                const mat3 tbn = makeTBN(N);
-                nDir = normalize(tbn * localDir);
-                nWeight = albedo * (1.0 - metalness) * kcBoost(F0, NdotV, alpha) * baseScale * invBaseProb / (1.0 - pSpec);
-            }
-        }
-        if (nValid) {
+        // Fallback: BSDF-sampled env NEE with constant 0.5 MIS (no CDF). The
+        // sampler shares its lobe-pick logic with the indirect bounce below
+        // so pdfs match and the balance-heuristic weight collapses to 0.5/0.5.
+        const BsdfSample s = sampleBsdf(V, N, F0, albedo, alpha, ccAlpha,
+                                        metalness, NdotV, pSpec, ccProb,
+                                        ccWeight, baseScale, invBaseProb, seed);
+        if (s.valid) {
             shadowVisibility = 1.0;
             traceRayEXT(topAS,
                         gl_RayFlagsTerminateOnFirstHitEXT |
                         gl_RayFlagsSkipClosestHitShaderEXT |
                         gl_RayFlagsNoOpaqueEXT,
                         0xff, 1, 0, 1,
-                        hitPos + N * 1e-3, 0.0, nDir, 1e30, 1);
+                        hitPos + N * 1e-3, 0.0, s.dir, 1e30, 1);
             if (shadowVisibility > 0.0) {
-                vec3 envSample = sampleEquirect(nDir);
+                vec3 envSample = sampleEquirect(s.dir);
                 const float envLum = dot(envSample, vec3(0.2126, 0.7152, 0.0722));
                 if (envLum > pc.fireflyClamp) envSample *= pc.fireflyClamp / envLum;
-                lit += 0.5 * nWeight * envSample * shadowVisibility;
+                lit += 0.5 * s.weight * envSample * shadowVisibility;
             }
         }
     }
@@ -1559,47 +1592,14 @@ void main() {
     //     final weight = diffuseAlbedo / (1 - p_spec).
     //
     // Spherical-cap VNDF (Dupuy 2023) guarantees above-horizon wi; the
-    // dot(N,wi)<=0 guards below are retained for numerical edge cases only.
-    // 3-way stochastic split mirrors the env-NEE sampler so MIS pairs match.
-    const float xiCCB = urand(seed);
-    vec3 bounceDir;
-    vec3 brdfWeight;
-    uint pathFlags = 0u;
-    if (ccProb > 0.0 && xiCCB < ccProb) {
-        const vec2 u2 = vec2(urand(seed), urand(seed));
-        bounceDir = sampleVNDF(V, N, ccAlpha, u2);
-        const float NdotL = dot(N, bounceDir);
-        if (NdotL <= 0.0) {
-            brdfWeight = vec3(0.0);
-            pathFlags |= 1u;// numerical edge case — terminate path
-        } else {
-            const float G1L = smithG1(NdotL, ccAlpha);
-            brdfWeight = vec3(ccWeight * G1L / ccProb);
-        }
-    } else {
-        const float xi = urand(seed);
-        if (xi < pSpec) {
-            const vec2 u2 = vec2(urand(seed), urand(seed));
-            bounceDir = sampleVNDF(V, N, alpha, u2);
-            const float NdotL = dot(N, bounceDir);
-            if (NdotL <= 0.0) {
-                brdfWeight = vec3(0.0);
-                pathFlags |= 1u;// numerical edge case — terminate path
-            } else {
-                const vec3  H_b   = normalize(V + bounceDir);
-                const float VdotH = max(0.0, dot(V, H_b));
-                const vec3  F_b   = fresnelSchlick(VdotH, F0);
-                const float G1L   = smithG1(NdotL, alpha);
-                brdfWeight = F_b * G1L * baseScale * invBaseProb / pSpec;
-            }
-        } else {
-            const vec2 u2 = vec2(urand(seed), urand(seed));
-            const vec3 localDir = cosineHemisphere(u2);
-            const mat3 tbn = makeTBN(N);
-            bounceDir = normalize(tbn * localDir);
-            brdfWeight = albedo * (1.0 - metalness) * kcBoost(F0, NdotV, alpha) * baseScale * invBaseProb / (1.0 - pSpec);
-        }
-    }
+    // valid-flag check below is retained for numerical edge cases only.
+    // Same sampler the env-NEE fallback uses, so pdfs match for MIS.
+    const BsdfSample bs = sampleBsdf(V, N, F0, albedo, alpha, ccAlpha,
+                                     metalness, NdotV, pSpec, ccProb,
+                                     ccWeight, baseScale, invBaseProb, seed);
+    const vec3 bounceDir  = bs.dir;
+    const vec3 brdfWeight = bs.weight;
+    uint       pathFlags  = bs.valid ? 0u : 1u;// numerical edge case → terminate
 
     vec3 emissiveOut = mdesc.emissive * mdesc.emissiveIntensity;
     if (mdesc.emissiveTexIndex >= 0) {
