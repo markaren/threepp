@@ -26,7 +26,9 @@ layout(location = 0) out vec4 outNormal;
 layout(location = 1) out vec4 outMotion;
 
 // Attachment 2: per-pixel IDs + flags (rgba16ui).
-//   .x = instanceCustomIndex (raygen looks up MaterialDesc / GeometryDesc)
+//   .x = instanceCustomIndex + 1 (matches raygen Payload.hitInstanceId
+//        convention; 0 reserved for sky/miss because the render pass
+//        clears IDs to 0 before any draw)
 //   .y = mesh-ID for the reproject same-mesh guard (currently == .x but
 //        kept separate so future stages can decouple)
 //   .z = flags (bit 0 is_water, bit 1 transmissive, bit 2 thinWalled, ...)
@@ -48,5 +50,7 @@ void main() {
     vec2 motion = prevNDC - currNDC;
     outMotion = vec4(motion, 0.0, 0.0);
 
-    outIds = uvec4(vInstanceIdx, vInstanceIdx, vFlags, 0u);
+    // +1 so the renderpass's clear-to-0 means "sky/no draw", matching
+    // raygen's Payload.hitInstanceId convention exactly.
+    outIds = uvec4(vInstanceIdx + 1u, vInstanceIdx + 1u, vFlags, 0u);
 }

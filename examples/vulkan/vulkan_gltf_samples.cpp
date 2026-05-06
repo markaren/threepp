@@ -77,6 +77,7 @@ int main(int argc, char** argv) {
 
     VulkanRenderer renderer(canvas);
     renderer.setHybridEnabled(true);
+    renderer.setHybridDebugView(0);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
 

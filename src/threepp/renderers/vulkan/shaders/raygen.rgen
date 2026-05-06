@@ -80,6 +80,16 @@ layout(set = 0, binding = 11, rgba32f) uniform readonly image2D prevAccumImage;
 layout(set = 0, binding = 12, rgba32f) uniform writeonly image2D gbufImage;
 layout(set = 0, binding = 13, rgba32f) uniform readonly image2D prevGbufImage;
 
+// Hybrid raster G-buffer attachments. Always bound (allocated at startup);
+// raygen samples them only when (pc.motionFlags & 8u) != 0 (hybrid mode).
+// Stage 1B uses the motion vector for reproject; normal/depth/ids are wired
+// for stage 1A (skip primary traceRayEXT). Sampler is nearest-filter so
+// silhouette pixels don't bleed.
+layout(set = 0, binding = 22) uniform sampler2D  gbufNormalTex;// world normal in n*0.5+0.5 encoding
+layout(set = 0, binding = 23) uniform sampler2D  gbufMotionTex;// rg = (prevNDC - currNDC) in GL convention
+layout(set = 0, binding = 24) uniform sampler2D  gbufDepthTex; // .r = depth (Vulkan NDC z, [0,1])
+layout(set = 0, binding = 25) uniform usampler2D gbufIdsTex;   // .x = instanceCustomIndex+1; 0 == sky/miss
+
 // ─── Fog (homogeneous participating media) ─────────────────────────────────
 // Bindings 5/6/14/17 are also bound to closest_hit; they're re-staged into
 // RAYGEN at descriptor-layout time so volumeInscatter() can NEE to all
@@ -541,14 +551,24 @@ void main() {
     float primaryMetalness   = 0.0;
     float primaryTransmission = 0.0;
 
+    // Hybrid mode (gbuffer drives primary visibility): primary-ray jitter is
+    // disabled because raster TAA owns AA on the primary now. With jitter on
+    // and no TAA resolve in stage 1, the gbuffer/PT primary would shimmer
+    // sub-pixel — which was the moving-object shake symptom that motivated
+    // the whole hybrid migration. Stage 1A will further skip the primary
+    // traceRayEXT entirely; this stage just nullifies the per-frame jitter
+    // and lets the gbuffer motion vector drive reproject.
+    const bool hybridOn = (pc.motionFlags & 8u) != 0u;
     for (uint s = 0u; s < spp; ++s) {
         // Per-sample sub-frame index — each in-frame sample needs its own
         // jitter and seed to actually decorrelate. Halton(0) is 0, which would
         // degenerate to no jitter, so index from 1.
         const uint subIdx = pc.sampleIndex * spp + s;
         const uint sIdx   = subIdx + 1u;
-        const vec2 jitter = vec2(halton(sIdx, 2u) - 0.5,
-                                 halton(sIdx, 3u) - 0.5);
+        const vec2 jitter = hybridOn
+                ? vec2(0.0)
+                : vec2(halton(sIdx, 2u) - 0.5,
+                       halton(sIdx, 3u) - 0.5);
 
         const vec2 pix = vec2(gl_LaunchIDEXT.xy) + 0.5 + jitter;
         vec2 ndc = pix / size * 2.0 - 1.0;
@@ -787,25 +807,57 @@ void main() {
 
     } else if (primaryInstanceId != 0u) {
         // ── This pixel moved (or camera moved): bilinear 4-tap reproject
-        const mat4 motion = motionMat[primaryInstanceId - 1u];
-        const vec3 prevWS = (motion * vec4(primaryWorldPos, 1.0)).xyz;
-        const vec3  toPoint = prevWS - pcam.prevCamPosX.xyz;
-        const float prevZ   = dot(toPoint, pcam.prevCamFwdY.xyz);
-        if (prevZ > 0.001) {
-            const float ndcX  = dot(toPoint, pcam.prevCamRgt.xyz) * pcam.prevCamPosX.w / prevZ;
-            const float ndcY  = dot(toPoint, pcam.prevCamUp.xyz)  * pcam.prevCamFwdY.w / prevZ;
-            // Pixel-space reprojection. The forward camera ray (line ~193) puts
-            // pixel (i,j)'s CENTER at NDC = ((i+0.5)/sx*2-1, ...). Reversing
-            // back gives prevU = i + 0.5 for the matching prev-frame pixel —
-            // i.e., integer-plus-half. Bilinear interpolation expects integer
-            // coords AT pixel centers, so we subtract 0.5 to put pixel i's
-            // center at prevU=i. Without this shift, an unmoved world point
-            // produces fx=fy=0.5 (all four bilinear weights = 0.25), smearing
-            // content half-a-pixel down-and-right; under camera motion it
-            // shows up as a diagonal drift overlaid on the real reproject.
-            const float prevU = (ndcX * 0.5 + 0.5) * float(sz.x) - 0.5;
-            const float prevV = (0.5 - ndcY * 0.5) * float(sz.y) - 0.5;
+        //
+        // Two prevU/prevV sources:
+        //   (a) hybrid: read the raster gbuffer's per-pixel motion vector
+        //       directly. Sub-pixel exact for moving objects (vs reverse-
+        //       projection through prev camera basis, which is sensitive
+        //       to float precision on long-throw cameras), no motionMat
+        //       lookup needed, and works on InstancedMesh sub-instances
+        //       without per-instance pre-baking.
+        //   (b) legacy: reverse-project this frame's primaryWorldPos through
+        //       motionMat (per-instance prev*inv(curr)) and the prev camera
+        //       basis. The original path; kept for non-hybrid runs.
+        float prevU = 0.0, prevV = 0.0;
+        bool  reprojValid = false;
+        // Depth-tolerance gate inputs — only used in legacy path. Hybrid
+        // path skips the depth gate entirely (gbuffer motion is per-pixel
+        // exact for the surface, so mesh-ID alone is enough to reject
+        // bilinear neighbors on the wrong surface).
+        vec3  prevWS = vec3(0.0);
+        float prevZ  = 0.0;
 
+        if (hybridOn) {
+            const vec2 uv       = (vec2(gl_LaunchIDEXT.xy) + 0.5) / vec2(sz);
+            const vec2 motionGL = texture(gbufMotionTex, uv).rg;
+            // gbuffer motion vector is in GL-convention NDC (Y up).
+            const vec2 currNDC = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+            const vec2 prevNDC = currNDC + motionGL;
+            prevU = (prevNDC.x * 0.5 + 0.5) * float(sz.x) - 0.5;
+            prevV = (0.5 - prevNDC.y * 0.5) * float(sz.y) - 0.5;
+            reprojValid = true;
+        } else {
+            const mat4 motion = motionMat[primaryInstanceId - 1u];
+            prevWS = (motion * vec4(primaryWorldPos, 1.0)).xyz;
+            const vec3 toPoint = prevWS - pcam.prevCamPosX.xyz;
+            prevZ = dot(toPoint, pcam.prevCamFwdY.xyz);
+            if (prevZ > 0.001) {
+                const float ndcX = dot(toPoint, pcam.prevCamRgt.xyz) * pcam.prevCamPosX.w / prevZ;
+                const float ndcY = dot(toPoint, pcam.prevCamUp.xyz)  * pcam.prevCamFwdY.w / prevZ;
+                // Pixel-space reprojection. The forward camera ray puts
+                // pixel (i,j)'s CENTER at NDC = ((i+0.5)/sx*2-1, ...).
+                // Reversing back gives prevU = i + 0.5; bilinear expects
+                // integer coords AT pixel centers, so we subtract 0.5.
+                // Without this shift, an unmoved world point produces
+                // fx=fy=0.5 (all four taps = 0.25 weight), smearing
+                // content half-a-pixel down-and-right.
+                prevU = (ndcX * 0.5 + 0.5) * float(sz.x) - 0.5;
+                prevV = (0.5 - ndcY * 0.5) * float(sz.y) - 0.5;
+                reprojValid = true;
+            }
+        }
+
+        if (reprojValid) {
             const ivec2 b = ivec2(int(floor(prevU)), int(floor(prevV)));
             if (b.x >= 0 && b.x + 1 < sz.x && b.y >= 0 && b.y + 1 < sz.y) {
                 // Bilinear weights
@@ -835,15 +887,21 @@ void main() {
                 const vec4  g10v = imageLoad(prevGbufImage, b + ivec2(1,0));
                 const vec4  g01v = imageLoad(prevGbufImage, b + ivec2(0,1));
                 const vec4  g11v = imageLoad(prevGbufImage, b + ivec2(1,1));
-                const float dEps2 = (0.05 * prevZ) * (0.05 * prevZ);
-                const vec3 d00 = g00v.xyz - prevWS;
-                const vec3 d10 = g10v.xyz - prevWS;
-                const vec3 d01 = g01v.xyz - prevWS;
-                const vec3 d11 = g11v.xyz - prevWS;
-                const float v00 = (uint(g00v.w) == primaryInstanceId && dot(d00,d00) < dEps2) ? w00 : 0.0;
-                const float v10 = (uint(g10v.w) == primaryInstanceId && dot(d10,d10) < dEps2) ? w10 : 0.0;
-                const float v01 = (uint(g01v.w) == primaryInstanceId && dot(d01,d01) < dEps2) ? w01 : 0.0;
-                const float v11 = (uint(g11v.w) == primaryInstanceId && dot(d11,d11) < dEps2) ? w11 : 0.0;
+                // Depth-tolerance gate: only meaningful in the legacy reverse-
+                // projection path where prevWS / prevZ are populated. Hybrid
+                // skips it — the gbuffer motion vector is sub-pixel exact for
+                // the surface this pixel belongs to, so any bilinear neighbor
+                // on a different surface is caught by the mesh-ID guard alone.
+                const bool depthGate = !hybridOn;
+                const float dEps2 = depthGate ? (0.05 * prevZ) * (0.05 * prevZ) : 0.0;
+                const vec3 d00 = depthGate ? (g00v.xyz - prevWS) : vec3(0.0);
+                const vec3 d10 = depthGate ? (g10v.xyz - prevWS) : vec3(0.0);
+                const vec3 d01 = depthGate ? (g01v.xyz - prevWS) : vec3(0.0);
+                const vec3 d11 = depthGate ? (g11v.xyz - prevWS) : vec3(0.0);
+                const float v00 = (uint(g00v.w) == primaryInstanceId && (!depthGate || dot(d00,d00) < dEps2)) ? w00 : 0.0;
+                const float v10 = (uint(g10v.w) == primaryInstanceId && (!depthGate || dot(d10,d10) < dEps2)) ? w10 : 0.0;
+                const float v01 = (uint(g01v.w) == primaryInstanceId && (!depthGate || dot(d01,d01) < dEps2)) ? w01 : 0.0;
+                const float v11 = (uint(g11v.w) == primaryInstanceId && (!depthGate || dot(d11,d11) < dEps2)) ? w11 : 0.0;
                 const float wSum = v00 + v10 + v01 + v11;
 
                 if (wSum > 1e-4) {

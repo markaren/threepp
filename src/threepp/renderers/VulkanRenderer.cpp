@@ -660,6 +660,11 @@ namespace threepp {
         bool  rasterPrevVPValid_ = false;
         float rasterPrevVP_[16]{};
 
+        // Nearest-filter sampler used by raygen to read gbuffer attachments.
+        // Nearest avoids bilinear smearing of normal/motion/ids at silhouettes
+        // — primary visibility from raster is already exact-pixel.
+        VkSampler gbufSampler_ = VK_NULL_HANDLE;
+
         // Master toggle for the hybrid path. setHybridEnabled(true) flips it
         // on; off keeps the existing full-PT primary path. Stage 1 ships
         // disabled by default so the raster prepass can land + be validated
@@ -731,6 +736,11 @@ namespace threepp {
             createPhotonEmitPipeline();
             createPhotonSbt();
             createWaterDisplacePipeline();
+            // Hybrid raster G-buffer infrastructure is always allocated so
+            // the RT descriptor sets can include valid gbuffer-attachment
+            // bindings even when hybridEnabled_ stays false. Cheap: ~50MB
+            // at 1080p for four attachments × two frames.
+            ensureHybridResources();
             createDescriptorPool();
         }
 
@@ -848,6 +858,7 @@ namespace threepp {
             if (rasterDsLayout)         vkDestroyDescriptorSetLayout(d, rasterDsLayout, nullptr);
             if (rasterDescPool)         vkDestroyDescriptorPool(d, rasterDescPool, nullptr);
             if (rasterGbufRenderPass)   vkDestroyRenderPass(d, rasterGbufRenderPass, nullptr);
+            if (gbufSampler_)           vkDestroySampler(d, gbufSampler_, nullptr);
         }
 
         void createCommandResources() {
@@ -4298,6 +4309,20 @@ namespace threepp {
         // Lazy bring-up: called at the start of each render() when hybrid is on.
         // Idempotent — handles both initial creation and post-resize reallocation.
         void ensureHybridResources() {
+            if (gbufSampler_ == VK_NULL_HANDLE) {
+                VkSamplerCreateInfo sci{};
+                sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+                sci.magFilter    = VK_FILTER_NEAREST;
+                sci.minFilter    = VK_FILTER_NEAREST;
+                sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+                sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+                sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+                sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+                sci.unnormalizedCoordinates = VK_FALSE;
+                sci.maxLod       = 0.f;
+                check(vkCreateSampler(ctx->device(), &sci, nullptr, &gbufSampler_),
+                      "vkCreateSampler(gbuf)");
+            }
             if (rasterGbufRenderPass == VK_NULL_HANDLE) {
                 createRasterGbufRenderPass();
                 createRasterCameraUbos();
@@ -5162,7 +5187,12 @@ namespace threepp {
             // 9=prev camera UBO (motion), 10=motion matrix SSBO (motion),
             // 11=prev accum read image (ping-pong), 12=gbuf write image
             // (ping-pong), 13=prev gbuf read image (ping-pong).
-            std::array<VkDescriptorSetLayoutBinding, 22> bindings{};
+            // Bindings 22-25: hybrid raster G-buffer attachments — read by
+            // raygen for primary visibility (depth + worldPos reconstruction,
+            // motion vector for reproject, normal for shading, instance ID
+            // for material lookup). Always present in the layout; raygen
+            // gates use on the hybrid push-constant bit.
+            std::array<VkDescriptorSetLayoutBinding, 26> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -5307,6 +5337,28 @@ namespace threepp {
             bindings[21].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[21].descriptorCount = 1;
             bindings[21].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+            // Bindings 22-25 — hybrid raster G-buffer attachments. Sampled by
+            // raygen when the hybrid push-constant bit is set; ignored
+            // otherwise (descriptors stay populated so the layout is valid
+            // either way). Same physical images created by ensureHybridResources;
+            // descriptor writes route raygen at frame f to rasterGbufs[f].
+            bindings[22].binding = 22;// world-space normal (rgba16f, decoded n*2-1)
+            bindings[22].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[22].descriptorCount = 1;
+            bindings[22].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            bindings[23].binding = 23;// motion vector (rgba16f, NDC delta in .rg)
+            bindings[23].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[23].descriptorCount = 1;
+            bindings[23].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            bindings[24].binding = 24;// depth (d32_sfloat, depth aspect view)
+            bindings[24].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[24].descriptorCount = 1;
+            bindings[24].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            bindings[25].binding = 25;// IDs+flags (rgba16ui, usampler2D in shader)
+            bindings[25].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[25].descriptorCount = 1;
+            bindings[25].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -5644,7 +5696,7 @@ namespace threepp {
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             ps[3].descriptorCount = totalSets * 7;// bindings 3,4,10,14 (existing) + 15,16 (photon) + 21 (meshMovedBits)
             ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF)
+            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures + 4);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF) + bindings 22-25 (hybrid gbuffer attachments)
 
             VkDescriptorPoolCreateInfo ci{};
             ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -5944,11 +5996,64 @@ namespace threepp {
                     wMeshMoved.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                     wMeshMoved.pBufferInfo = &meshMovedInfo;
 
-                    std::array<VkWriteDescriptorSet, 22> writes{
+                    // Bindings 22-25: hybrid gbuffer attachments. raygen at
+                    // frame f reads rasterGbufs[f].* (built one frame ahead).
+                    // ensureHybridResources runs in the ctor before this, so
+                    // the views are valid.
+                    VkDescriptorImageInfo gbufNormalInfo{};
+                    gbufNormalInfo.sampler     = gbufSampler_;
+                    gbufNormalInfo.imageView   = rasterGbufs[f].normal.view;
+                    gbufNormalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    VkWriteDescriptorSet wGbufNormal{};
+                    wGbufNormal.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wGbufNormal.dstSet = descriptorSets[idx];
+                    wGbufNormal.dstBinding = 22;
+                    wGbufNormal.descriptorCount = 1;
+                    wGbufNormal.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wGbufNormal.pImageInfo = &gbufNormalInfo;
+
+                    VkDescriptorImageInfo gbufMotionInfo{};
+                    gbufMotionInfo.sampler     = gbufSampler_;
+                    gbufMotionInfo.imageView   = rasterGbufs[f].motion.view;
+                    gbufMotionInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    VkWriteDescriptorSet wGbufMotion{};
+                    wGbufMotion.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wGbufMotion.dstSet = descriptorSets[idx];
+                    wGbufMotion.dstBinding = 23;
+                    wGbufMotion.descriptorCount = 1;
+                    wGbufMotion.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wGbufMotion.pImageInfo = &gbufMotionInfo;
+
+                    VkDescriptorImageInfo gbufDepthInfo{};
+                    gbufDepthInfo.sampler     = gbufSampler_;
+                    gbufDepthInfo.imageView   = rasterGbufs[f].depth.view;
+                    gbufDepthInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                    VkWriteDescriptorSet wGbufDepth{};
+                    wGbufDepth.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wGbufDepth.dstSet = descriptorSets[idx];
+                    wGbufDepth.dstBinding = 24;
+                    wGbufDepth.descriptorCount = 1;
+                    wGbufDepth.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wGbufDepth.pImageInfo = &gbufDepthInfo;
+
+                    VkDescriptorImageInfo gbufIdsInfo{};
+                    gbufIdsInfo.sampler     = gbufSampler_;
+                    gbufIdsInfo.imageView   = rasterGbufs[f].ids.view;
+                    gbufIdsInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    VkWriteDescriptorSet wGbufIds{};
+                    wGbufIds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wGbufIds.dstSet = descriptorSets[idx];
+                    wGbufIds.dstBinding = 25;
+                    wGbufIds.descriptorCount = 1;
+                    wGbufIds.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wGbufIds.pImageInfo = &gbufIdsInfo;
+
+                    std::array<VkWriteDescriptorSet, 26> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
                             wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered,
-                            wMeshMoved};
+                            wMeshMoved,
+                            wGbufNormal, wGbufMotion, wGbufDepth, wGbufIds};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -6147,6 +6252,11 @@ namespace threepp {
             for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : filteredImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             createAccumImage();// resets sampleIndex + clears prevWorldMats
+            // Resize hybrid raster attachments BEFORE descriptor rewrites —
+            // bindings 22-25 point at rasterGbufs[f].*.view, so stale views
+            // from the old extent need to be replaced before the new
+            // descriptor sets capture them.
+            ensureHybridResources();
             vkDestroyDescriptorPool(ctx->device(), descriptorPool, nullptr);
             descriptorPool = VK_NULL_HANDLE;
             descriptorSets.clear();
@@ -6410,7 +6520,9 @@ namespace threepp {
             // [0] sampleIndex (raygen), [1] PMREM mip count (closest_hit),
             // [2] ToneMapping enum, [3] exposure as float bits,
             // [4] motionFlags (bit 0 = any motion, bit 1 = camera moved,
-            //                  bit 2 = scene has any glass material),
+            //                  bit 2 = scene has any glass material,
+            //                  bit 3 = hybrid mode (gbuffer drives reproject
+            //                          + primary jitter is disabled)),
             // [5] emissiveCount, [6] emissiveTotalPower (float bits).
             // Per-instance moved bits live in the binding 21 SSBO.
             const float exposure = toneMappingExposure_;
@@ -6419,7 +6531,8 @@ namespace threepp {
             const uint32_t motionFlags =
                     (motionThisFrame_      ? 1u : 0u) |
                     (cameraMovedThisFrame_ ? 2u : 0u) |
-                    (sceneHasGlass_        ? 4u : 0u);
+                    (sceneHasGlass_        ? 4u : 0u) |
+                    (hybridEnabled_        ? 8u : 0u);
             uint32_t emPowerBits;
             std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
             uint32_t envSumBits;
