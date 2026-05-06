@@ -40,8 +40,8 @@ namespace threepp::wgpu_pt {
     /// If `entryTriRanges` is non-null it is resized to entries.size() and
     /// populated with (triStart, triCount) pairs per entry (into triBuffer /
     /// rawObjTriBuf). Entries skipped due to material/mesh/tri caps get a
-    /// zero-count range. Used by the TLAS/BLAS builder to locate each
-    /// entry's triangle slice for per-mesh BLAS construction.
+    /// zero-count range. Used by the per-frame dirty-geometry fast path to
+    /// locate each entry's triangle slice in rawObjTriBuf.
     int buildGeometryBuffers(
             const std::vector<RtMeshEntry>& entries,
             const std::unordered_map<Texture*, int>& texSlotMap,

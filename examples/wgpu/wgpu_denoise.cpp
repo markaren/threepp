@@ -109,7 +109,6 @@ int main() {
     pathTracer.setMaxBounces(4);
     pathTracer.setReSTIREnabled(true);
     pathTracer.setReSTIRGIEnabled(true);
-    pathTracer.setTlasEnabled(true);
     // pathTracer.setFireflyClamp(0.001);
 
     // ---- Scene ----

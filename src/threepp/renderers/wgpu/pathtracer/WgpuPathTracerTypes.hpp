@@ -143,37 +143,6 @@ namespace threepp::wgpu_pt {
     };
 
     // -----------------------------------------------------------------------
-    // TLAS/BLAS records (PR1 plumbing — unused until PR2 wires traversal)
-    // -----------------------------------------------------------------------
-    // One per unique Geometry* — indexes into the shared bvhNodeBuf and object-
-    // space triangle buffer. `triStart` is the global tri-buffer offset of this
-    // mesh's first triangle; BLAS leaves encode triStart relative to 0 within
-    // the BLAS and the shader adds this offset when fetching.
-    struct alignas(16) BlasRecord {
-        std::uint32_t rootNodeOffset;   // first Bvh4Node index belonging to this BLAS
-        std::uint32_t nodeCount;
-        std::uint32_t triStart;         // global offset into triBuf/triTex
-        std::uint32_t triCount;
-        float aabbMin[4];               // BLAS root AABB in object space (w unused)
-        float aabbMax[4];
-    };
-    static_assert(sizeof(BlasRecord) == 48, "BlasRecord must be 48 bytes");
-
-    // One per mesh instance. `objToWorld` / `worldToObj` stored as mat3x4
-    // (three vec4 rows, 48 B each) — std430-safe and saves 16 B over mat4x4.
-    // The shader transforms incoming world-space rays into BLAS object space
-    // with `worldToObj`, then returns hit position via `objToWorld`.
-    struct alignas(16) TlasInstance {
-        float objToWorld[3][4];         // 48 B — rows of mat3x4 (rotation*scale + translation)
-        float worldToObj[3][4];         // 48 B — inverse
-        std::uint32_t blasIndex;        // index into blasRecords buffer
-        std::uint32_t matIdx;           // material offset for this instance
-        std::uint32_t meshId;           // stable scene-mesh identifier
-        std::uint32_t flags;            // bit 0 = non-uniform scale (needs |det| for t-remap)
-    };
-    static_assert(sizeof(TlasInstance) == 112, "TlasInstance must be 112 bytes");
-
-    // -----------------------------------------------------------------------
     // PingPong — ping-pong texture pair with read/write pointer aliases
     // -----------------------------------------------------------------------
     struct PingPong {
