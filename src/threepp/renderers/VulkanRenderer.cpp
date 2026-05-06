@@ -472,7 +472,7 @@ namespace threepp {
         // Samples per pixel per frame. Each sample is an independent
         // jittered primary ray; raygen sums them and the accumulator
         // advances FC by `spp` so the running mean stays correctly weighted.
-        uint32_t samplesPerPixel_ = 2;
+        uint32_t samplesPerPixel_ = 1;
         // Prev-frame camera packed as four vec4s (matches PrevCameraUbo):
         //   [0..3]  = vec4(pos.xyz,  projScaleX)   → prevCamPosX
         //   [4..7]  = vec4(fwd.xyz,  projScaleY)   → prevCamFwdY

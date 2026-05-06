@@ -153,6 +153,7 @@ int main() {
     float fogDensity = 0.08f;
     float fogColor[3] = {0.55f, 0.55f, 0.62f};
     float fogG = 0.6f;// HG anisotropy: forward-scattering god rays by default
+    int spp = renderer.samplesPerPixel();
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
@@ -174,6 +175,10 @@ int main() {
             ImGui::ColorEdit3("Color", fogColor);
             ImGui::SliderFloat("Anisotropy g", &fogG, -0.9f, 0.9f, "%.2f");
         }
+
+        ImGui::Separator();
+        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
+            renderer.setSamplesPerPixel(spp);
 
         ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");

@@ -176,6 +176,7 @@ int main(int argc, char** argv) {
     float exposure = renderer.toneMappingExposure;
     int toneMode = static_cast<int>(renderer.toneMapping);
     bool dirLight = sun->visible;
+    int spp = renderer.samplesPerPixel();
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
@@ -214,6 +215,9 @@ int main(int argc, char** argv) {
         bool denoise = renderer.denoise();
         if (ImGui::Checkbox("Denoise", &denoise))
             renderer.setDenoise(denoise);
+
+        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
+            renderer.setSamplesPerPixel(spp);
 
         ImGui::End();
     });

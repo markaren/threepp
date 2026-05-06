@@ -189,6 +189,7 @@ int main() {
     float ambIntensity = 0.0f;
     float exposure = renderer.toneMappingExposure;
     int toneMode = static_cast<int>(renderer.toneMapping);
+    int spp = renderer.samplesPerPixel();
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
@@ -250,6 +251,9 @@ int main() {
         const char* toneItems[] = {"None", "Linear", "Reinhard", "Cineon", "ACESFilmic"};
         if (ImGui::Combo("Tone mapping", &toneMode, toneItems, IM_ARRAYSIZE(toneItems)))
             renderer.toneMapping = static_cast<ToneMapping>(toneMode);
+
+        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
+            renderer.setSamplesPerPixel(spp);
 
         ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");
