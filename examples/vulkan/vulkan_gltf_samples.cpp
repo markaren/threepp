@@ -76,6 +76,7 @@ int main(int argc, char** argv) {
     Canvas canvas("Vulkan PT - GLTF Samples", {{"vsync", false}});
 
     VulkanRenderer renderer(canvas);
+    renderer.setHybridEnabled(true);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
 

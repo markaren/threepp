@@ -924,6 +924,17 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/water_displace.comp"
         kWaterDisplaceCompSpv
         _water_displace_spv_h)
+    # Hybrid raster G-buffer prepass — produces depth/normal/motion/IDs
+    # for the path tracer to skip its primary BVH trace. See raygen.rgen
+    # for the consumer side.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuffer.vert"
+        kGbufferVertSpv
+        _gbuffer_vert_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuffer.frag"
+        kGbufferFragSpv
+        _gbuffer_frag_spv_h)
 endif ()
 
 

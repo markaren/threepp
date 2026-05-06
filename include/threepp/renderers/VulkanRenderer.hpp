@@ -102,6 +102,24 @@ namespace threepp {
         void setFireflyClamp(float cap);
         [[nodiscard]] float fireflyClamp() const;
 
+        // Hybrid raster + path tracer mode (UE/Omniverse-style). Raster runs
+        // a deterministic G-buffer prepass (depth, normal, motion vectors,
+        // per-pixel IDs); the path tracer reads that as primary visibility
+        // and starts at bounce 1. Eliminates moving-object shake from PT
+        // primary jitter; AA happens via TAA on the raster side. Default off.
+        void setHybridEnabled(bool enabled);
+        [[nodiscard]] bool hybridEnabled() const;
+
+        // Day-1 / debug visualization: blit one G-buffer channel directly
+        // to the swapchain, bypassing the path tracer.
+        //   0 = off (PT consumes the G-buffer normally)
+        //   1 = world-space normal
+        //   2 = motion vector (NDC delta in red/green)
+        //   3 = per-pixel instanceCustomIndex (raw uint16)
+        // Has no effect when hybridEnabled is false.
+        void setHybridDebugView(int view);
+        [[nodiscard]] int hybridDebugView() const;
+
     private:
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
