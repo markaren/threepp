@@ -23,9 +23,16 @@ layout(set = 0, binding = 1) uniform sampler2D taaHistoryReadTex;
 layout(set = 0, binding = 2) uniform sampler2D gbufMotionTex;
 layout(set = 0, binding = 3, rgba8) uniform writeonly image2D taaSwapImage;
 layout(set = 0, binding = 4, rgba8) uniform writeonly image2D taaHistoryWriteImg;
+// Mesh-ID rejection: bind both the current frame's IDs and the previous
+// frame's. When the reprojected prev pixel sits on a different mesh than
+// the current pixel, the history is from a disocclusion and must be
+// rejected (neighborhood clamp can't catch this when adjacent surfaces
+// share similar color, e.g. boat-edge over water).
+layout(set = 0, binding = 5) uniform usampler2D gbufIdsCurrTex;
+layout(set = 0, binding = 6) uniform usampler2D gbufIdsPrevTex;
 
 layout(push_constant) uniform Pc {
-    float blendAlpha;// new-sample weight (0.1 = strong AA, slow ghost decay)
+    float blendAlpha;// base new-sample weight (0.1 = strong AA, slow ghost decay)
     uint  width;
     uint  height;
     uint  _pad;
@@ -61,22 +68,43 @@ void main() {
     const vec2 prevUv   = vec2((prevNDC.x * 0.5) + 0.5,
                                 0.5 - (prevNDC.y * 0.5));
 
-    vec3 history = curr;// fallback when reproject lands off-screen
-    if (prevUv.x >= 0.0 && prevUv.x <= 1.0 &&
-        prevUv.y >= 0.0 && prevUv.y <= 1.0) {
+    bool reprojValid = (prevUv.x >= 0.0 && prevUv.x <= 1.0 &&
+                        prevUv.y >= 0.0 && prevUv.y <= 1.0);
+
+    // Mesh-ID rejection + skinned-mesh detection. Read both at once.
+    //   ids.x = instanceCustomIndex+1 (0 = sky/miss)
+    //   ids.z = flags  (bit 0 is_water, bit 3 is_skinned)
+    const uvec4 currIds = texture(gbufIdsCurrTex, uv);
+    const uvec4 prevIds = reprojValid
+            ? texture(gbufIdsPrevTex, prevUv)
+            : uvec4(0u);
+    const bool isSkinned = (currIds.z & 8u) != 0u;
+    // Mesh-ID disagreement at the reprojected pixel = disocclusion. Reject.
+    if (reprojValid && currIds.x != prevIds.x) reprojValid = false;
+
+    vec3 history = curr;
+    if (reprojValid) {
         history = texture(taaHistoryReadTex, prevUv).rgb;
+        // Neighborhood AABB clamp — softens edge disocclusion, keeps fresh.
+        history = clamp(history, nMin, nMax);
     }
 
-    // Neighborhood AABB clamp — keeps history within the per-pixel local
-    // color distribution, which absorbs disocclusions / shading changes
-    // without explicit history rejection.
-    history = clamp(history, nMin, nMax);
-
-    // Blend. At alpha=0.1, primary edge AA stabilizes within ~10 frames on
-    // a stationary view. Under continuous motion the neighborhood clamp
-    // keeps history fresh (clamped to current neighborhood every frame).
-    const float a = clamp(pc.blendAlpha, 0.02, 1.0);
-    const vec3 result = mix(history, curr, a);
+    // Velocity-scaled alpha: faster-moving pixels weight current more,
+    // making ghost trails decay quicker. Static/slow keeps strong AA via
+    // history. Motion is in NDC (∈ [-2, 2] across the screen), convert
+    // to pixels for an intuitive scale: 30 px/frame → +0.5 boost, capped.
+    const vec2 motionPx = motionGL * 0.5 * vec2(pc.width, pc.height);
+    const float motionLen = length(motionPx);
+    const float velocityBump = clamp(motionLen / 30.0, 0.0, 0.5);
+    // SkinnedMesh has identity motion vector (the world matrix doesn't
+    // change; bones do, but we don't capture per-vertex skinning motion
+    // yet). The reported "static" motion would let TAA history blend
+    // forever onto a deforming surface, producing visible ghost trails.
+    // Force high alpha to kill ghosting at the cost of TAA-AA on those
+    // pixels. Proper fix: per-vertex prev-pose vertex buffer.
+    const float skinnedAlpha = isSkinned ? 0.9 : 0.0;
+    const float a = clamp(pc.blendAlpha + velocityBump + skinnedAlpha, 0.02, 1.0);
+    const vec3 result = reprojValid ? mix(history, curr, a) : curr;
 
     imageStore(taaSwapImage,        px, vec4(result, 1.0));
     imageStore(taaHistoryWriteImg,  px, vec4(result, 1.0));

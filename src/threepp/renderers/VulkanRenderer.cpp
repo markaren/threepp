@@ -3536,9 +3536,14 @@ namespace threepp {
                 } pc{};
                 std::memcpy(pc.model, en.worldMatrix.data(), 64);
                 pc.instanceCustomIndex = static_cast<uint32_t>(i);
-                // flag bits: 0=is_water, 1=transmissive, 2=thinWalled.
+                // flag bits: 0=is_water, 1=transmissive, 2=thinWalled, 3=is_skinned.
+                // is_skinned tells the TAA shader to suppress history blending
+                // for that pixel — motionMat captures rigid-body motion only,
+                // so a deforming skinned surface reports zero motion and
+                // would otherwise ghost severely.
                 uint32_t flags = 0u;
                 if (dynamic_cast<DisplacedMesh*>(en.mesh)) flags |= 1u;
+                if (dynamic_cast<SkinnedMesh*>(en.mesh))   flags |= 8u;
                 // For transmissive/thinWalled we'd consult MaterialDesc here
                 // — deferred to next pass; raygen also reads matDesc directly.
                 pc.flags = flags;
@@ -4571,10 +4576,12 @@ namespace threepp {
                 check(vkCreateSampler(ctx->device(), &sci, nullptr, &taaSampler),
                       "vkCreateSampler(taa)");
             }
-            // Layout: 5 bindings (input, historyRead, motion, swapOut, historyWrite).
-            // input + historyRead + motion = combined image samplers.
-            // swapOut + historyWrite = storage images.
-            VkDescriptorSetLayoutBinding bindings[5]{};
+            // Layout: 7 bindings.
+            //   0..2: combined image samplers — taaInput, historyRead, gbufMotion
+            //   3..4: storage images          — swapOut, historyWrite
+            //   5..6: combined image samplers — gbufIds (curr + prev) for
+            //                                   mesh-ID rejection + is_skinned flag.
+            VkDescriptorSetLayoutBinding bindings[7]{};
             for (int i = 0; i < 3; ++i) {
                 bindings[i].binding         = i;
                 bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -4589,10 +4596,18 @@ namespace threepp {
             bindings[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[4].descriptorCount = 1;
             bindings[4].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            bindings[5].binding         = 5;
+            bindings[5].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[5].descriptorCount = 1;
+            bindings[5].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            bindings[6].binding         = 6;
+            bindings[6].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[6].descriptorCount = 1;
+            bindings[6].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            dlci.bindingCount = 5;
+            dlci.bindingCount = 7;
             dlci.pBindings    = bindings;
             check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &taaDsLayout),
                   "vkCreateDescriptorSetLayout(taa)");
@@ -4639,7 +4654,7 @@ namespace threepp {
             const uint32_t totalSets = imageCount_ * kFramesInFlight;
             VkDescriptorPoolSize sizes[2]{};
             sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            sizes[0].descriptorCount = totalSets * 3;// 3 sampled per set
+            sizes[0].descriptorCount = totalSets * 5;// 5 sampled per set (input, histRead, motion, idsCurr, idsPrev)
             sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             sizes[1].descriptorCount = totalSets * 2;// 2 storage per set
 
@@ -4690,8 +4705,20 @@ namespace threepp {
                     histWriteI.imageView   = taaHistoryImagesPP[writeSlot].view;
                     histWriteI.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-                    VkWriteDescriptorSet w[5]{};
-                    for (int b = 0; b < 5; ++b) {
+                    // Curr/prev gbuffer IDs for mesh-ID rejection + skinned
+                    // detection. Prev gbuffer is the OTHER frame-in-flight slot.
+                    const uint32_t prevFrame = (f + (kFramesInFlight - 1u)) % kFramesInFlight;
+                    VkDescriptorImageInfo idsCurrI{};
+                    idsCurrI.sampler     = gbufSampler_;
+                    idsCurrI.imageView   = rasterGbufs[f].ids.view;
+                    idsCurrI.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    VkDescriptorImageInfo idsPrevI{};
+                    idsPrevI.sampler     = gbufSampler_;
+                    idsPrevI.imageView   = rasterGbufs[prevFrame].ids.view;
+                    idsPrevI.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+                    VkWriteDescriptorSet w[7]{};
+                    for (int b = 0; b < 7; ++b) {
                         w[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                         w[b].dstSet          = taaDescSets[idx];
                         w[b].dstBinding      = uint32_t(b);
@@ -4707,7 +4734,11 @@ namespace threepp {
                     w[3].pImageInfo = &swapI;
                     w[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                     w[4].pImageInfo = &histWriteI;
-                    vkUpdateDescriptorSets(ctx->device(), 5, w, 0, nullptr);
+                    w[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    w[5].pImageInfo = &idsCurrI;
+                    w[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    w[6].pImageInfo = &idsPrevI;
+                    vkUpdateDescriptorSets(ctx->device(), 7, w, 0, nullptr);
                 }
             }
         }
