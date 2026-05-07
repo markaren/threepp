@@ -270,6 +270,20 @@ uint seedFor(uvec2 px, uint s) {
     return h | 1u;// avoid the absorbing all-zero state
 }
 
+// Interleaved Gradient Noise — Jorge Jimenez, Call of Duty: AW.
+// Procedural blue-noise approximation: spatially smooth (adjacent pixels
+// have correlated values, so silhouettes don't flutter per-pixel) yet
+// globally decorrelated (no coherent shake on moving objects). Used in
+// production for spatially-coherent dithering.
+//
+// Returns a pseudo-random in [0, 1). Different `salt` values for x vs y
+// jitter components give independent samples without re-running the hash.
+float ign(uvec2 px, uint frame, uint salt) {
+    const vec2 p = vec2(px) + vec2(float(frame * 47u + salt * 7u),
+                                   float(frame * 17u + salt * 13u));
+    return fract(52.9829189 * fract(p.x * 0.06711056 + p.y * 0.00583715));
+}
+
 // PCG XSH-RR — same generator as closest_hit so the two share a stream.
 uint pcgNext(inout uint state) {
     state = state * 747796405u + 2891336453u;
@@ -613,18 +627,16 @@ void main() {
         const uvec4 idsTap    = texture(gbufIdsTex, uv_screen);
         const uint  id1       = idsTap.x;// 0 == sky/miss
 
-        // Per-pixel DECORRELATED sub-pixel jitter on primary direction.
-        // - Provides AA: each pixel cycles through different sub-pixel offsets
-        //   over time, accumulator integrates → proper temporal sub-pixel AA.
-        // - No coherent shake: jitter is uncorrelated across pixels, so
-        //   motion-mat × jitter on rotating objects can't synchronize into
-        //   visible wobble. Manifests as incoherent noise (absorbed by
-        //   spatial denoise + TAA neighborhood clamp), not a coherent
-        //   translation artifact. Matches WGPU's empirical behavior.
-        const uint pxFrameIdx = (pc.sampleIndex + 1u) +
-                                (seedFor(gl_LaunchIDEXT.xy, 0u) >> 4u);
-        const vec2 jitterPx   = vec2(halton(pxFrameIdx, 2u) - 0.5,
-                                     halton(pxFrameIdx, 3u) - 0.5);
+        // Blue-noise sub-pixel jitter on primary direction via Interleaved
+        // Gradient Noise. Adjacent pixels have correlated jitters (silhouette
+        // pixels move together → no per-pixel flicker, no transform-wobble
+        // appearance on stopped textured surfaces), globally decorrelated (no
+        // coherent shake on moving objects). Temporal animation rotates the
+        // pattern per frame so each pixel cycles through different sub-pixel
+        // positions over time → standard temporal AA via PT accumulator.
+        const vec2 jitterPx = vec2(
+                ign(gl_LaunchIDEXT.xy, pc.sampleIndex, 0u) - 0.5,
+                ign(gl_LaunchIDEXT.xy, pc.sampleIndex, 1u) - 0.5) * 0.5;
         // Pixel-space jitter → NDC: 1 pixel = 2/size in NDC.
         const vec2 jitterNdc  = jitterPx * 2.0 / size;
         const vec2  ndcCenter = vec2(uv_screen.x * 2.0 - 1.0 + jitterNdc.x,
@@ -644,18 +656,14 @@ void main() {
         // degenerate to no jitter, so index from 1.
         const uint subIdx = pc.sampleIndex * spp + s;
         const uint sIdx   = subIdx + 1u;
-        // Per-pixel DECORRELATED jitter (offset Halton index by a per-pixel
-        // hash). Each pixel cycles through different sub-pixel positions over
-        // time → temporal sub-pixel sampling → AA via accumulator integration.
-        // No coherent shake on moving objects: adjacent pixels see uncorrelated
-        // jitters, so motion-mat × jitter doesn't synchronize visually.
-        // Hybrid uses the same per-pixel decorrelated jitter — applied
-        // outside the spp loop in primaryDirHybrid.
-        const uint sIdxPx = sIdx + (seedFor(gl_LaunchIDEXT.xy, 0u) >> 4u);
+        // Non-hybrid: blue-noise jitter via IGN, same scheme as hybrid's
+        // primary direction (computed outside the loop). Hybrid sets jitter
+        // to zero here because all spp share the same primary direction
+        // (gbuf rasterized once per frame).
         const vec2 jitter = hybridOn
                 ? vec2(0.0)
-                : vec2(halton(sIdxPx, 2u) - 0.5,
-                       halton(sIdxPx, 3u) - 0.5);
+                : vec2(ign(gl_LaunchIDEXT.xy, sIdx, 0u) - 0.5,
+                       ign(gl_LaunchIDEXT.xy, sIdx, 1u) - 0.5);
 
         const vec2 pix = vec2(gl_LaunchIDEXT.xy) + 0.5 + jitter;
         vec2 ndc = pix / size * 2.0 - 1.0;

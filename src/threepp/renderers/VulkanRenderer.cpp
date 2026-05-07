@@ -3039,7 +3039,28 @@ namespace threepp {
             const uint32_t count = static_cast<uint32_t>(entries.size());
             if (count == 0) return;
 
+            // Per-instance "settled" threshold. Physics solvers (Bullet,
+            // PhysX, etc.) often leave bodies with sub-millimeter / sub-
+            // milliradian residual jitter even at rest — a parked car still
+            // ticks every frame as the constraint solver re-converges. The
+            // PT pipeline faithfully reflects that motion (motionMat → motion
+            // vec → FC reset/reproject) and the user sees a wobble that
+            // doesn't actually exist in the asset.
+            //
+            // Threshold the per-element matrix delta: if the largest absolute
+            // change is below kSettledEps, treat motion as identity AND
+            // don't update prevWorldMats. The body then locks to its prior
+            // pose persistently — sub-eps accumulation can't drift past the
+            // threshold because the reference doesn't update.
+            //
+            // 1e-4 covers ~0.1mm translation / ~0.0057° rotation. Tighter
+            // than typical solver residual, looser than visible motion.
+            // Tune up if your physics still wobbles; tune down if real slow
+            // motion gets frozen.
+            constexpr float kSettledEps = 1e-4f;
+
             std::vector<float> data(count * 16);
+            std::vector<uint8_t> settled(count, 0);
             for (uint32_t i = 0; i < count; ++i) {
                 Matrix4 cur;
                 std::memcpy(cur.elements.data(), entries[i].worldMatrix.data(), 64);
@@ -3050,9 +3071,21 @@ namespace threepp {
                 if (it != prevWorldMats.end()) {
                     Matrix4 prev;
                     std::memcpy(prev.elements.data(), it->second.data(), 64);
-                    Matrix4 curInv;
-                    curInv.copy(cur).invert();
-                    motion.multiplyMatrices(prev, curInv);
+
+                    // Per-element max-abs delta. Cheap, catches both
+                    // translation (cols 12..14) and rotation/scale (rest).
+                    float maxDelta = 0.0f;
+                    for (int e = 0; e < 16; ++e) {
+                        const float d = std::abs(cur.elements[e] - prev.elements[e]);
+                        if (d > maxDelta) maxDelta = d;
+                    }
+                    if (maxDelta < kSettledEps) {
+                        settled[i] = 1u;// keep motion as identity
+                    } else {
+                        Matrix4 curInv;
+                        curInv.copy(cur).invert();
+                        motion.multiplyMatrices(prev, curInv);
+                    }
                 }
                 std::memcpy(&data[i * 16], motion.elements.data(), 64);
             }
@@ -3062,10 +3095,13 @@ namespace threepp {
             std::memcpy(mapped, data.data(), data.size() * sizeof(float));
             vmaUnmapMemory(ctx->allocator(), motionMatBuffers[frame].alloc);
 
-            // Record this frame's matrices for next frame's motion delta.
-            // Only update entries we just wrote; entries removed from the
-            // scene are pruned naturally (full-rebuild path clears the map).
+            // Record this frame's matrices for next frame's motion delta —
+            // BUT skip settled entries so prev stays anchored to its
+            // pre-jitter pose. Re-evaluating against the same frozen prev
+            // each frame keeps the body locked in render space until real
+            // motion actually crosses the eps threshold.
             for (uint32_t i = 0; i < count; ++i) {
+                if (settled[i]) continue;
                 EntryKey key{entries[i].mesh, entries[i].instanceIndex};
                 prevWorldMats[key] = entries[i].worldMatrix;
             }
