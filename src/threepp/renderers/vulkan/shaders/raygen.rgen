@@ -934,12 +934,36 @@ void main() {
 
     if ((pc.motionFlags & 1u) == 0u || (!primaryMoved && !camMoved)) {
         // ── Static for this pixel: self-tap ───────────────────────────
-        const vec4 pa = imageLoad(prevAccumImage, px);
-        const vec3 m  = pa.rgb;
-        if (!any(isnan(m)) && !any(isinf(m))) {
-            histMean = m;
-            histFc   = pa.w;
+        //
+        // Targeted validation: cold-start only when the prev frame's gbuf
+        // at this exact pixel held a DIFFERENT surface AND that prev
+        // surface was a moved mesh. This catches the wispy ghost trails
+        // that surround animated skinned meshes (curr=sky, prev=robot
+        // which moved away) without sacrificing accumulation on AA
+        // silhouettes of static surfaces (where the same wall vs sky
+        // alternate between frames due to camera-jitter — neither side
+        // actually moved, so we should keep smoothing).
+        // motionFlags bit 0 == 0 means no instance moved at all → skip the
+        // load (saves a fetch) and trust the self-tap unconditionally.
+        bool selfTapValid = true;
+        if ((pc.motionFlags & 1u) != 0u) {
+            const uint prevMeshHere = uint(imageLoad(prevGbufImage, px).w);
+            if (prevMeshHere != primaryInstanceId &&
+                prevMeshHere != 0u &&
+                isMeshMoved(prevMeshHere - 1u)) {
+                selfTapValid = false;
+            }
         }
+        if (selfTapValid) {
+            const vec4 pa = imageLoad(prevAccumImage, px);
+            const vec3 m  = pa.rgb;
+            if (!any(isnan(m)) && !any(isinf(m))) {
+                histMean = m;
+                histFc   = pa.w;
+            }
+        }
+        // else: histFc stays 0 → cold-start; the moving mesh's old radiance
+        // doesn't bleed into newly-uncovered pixels.
 
     } else if (primaryInstanceId != 0u) {
         // ── This pixel moved (or camera moved): bilinear 4-tap reproject
@@ -956,12 +980,20 @@ void main() {
         //       basis. The original path; kept for non-hybrid runs.
         float prevU = 0.0, prevV = 0.0;
         bool  reprojValid = false;
-        // Depth-tolerance gate inputs — only used in legacy path. Hybrid
-        // path skips the depth gate entirely (gbuffer motion is per-pixel
-        // exact for the surface, so mesh-ID alone is enough to reject
-        // bilinear neighbors on the wrong surface).
-        vec3  prevWS = vec3(0.0);
-        float prevZ  = 0.0;
+
+        // Reverse-project current world hit through the per-instance motion
+        // matrix and prev camera basis. Used unconditionally now:
+        //   • Legacy path: provides prevU/prevV for the bilinear reproject.
+        //   • Hybrid path: prevU/prevV come from the gbuffer motion vector,
+        //     but prevWS/prevZ are still needed to gate skinned/displaced
+        //     meshes — motionMat is identity for those (the rigid worldMatrix
+        //     doesn't change when only bones rotate), so the gate flags any
+        //     prev-gbuf position that drifted from currWS by more than the
+        //     tightened tolerance below as deformed-and-stale.
+        const mat4 motion = motionMat[primaryInstanceId - 1u];
+        const vec3 prevWS  = (motion * vec4(primaryWorldPos, 1.0)).xyz;
+        const vec3 toPoint = prevWS - pcam.prevCamPosX.xyz;
+        const float prevZ  = dot(toPoint, pcam.prevCamFwdY.xyz);
 
         if (hybridOn) {
             const vec2 uv       = (vec2(gl_LaunchIDEXT.xy) + 0.5) / vec2(sz);
@@ -972,25 +1004,19 @@ void main() {
             prevU = (prevNDC.x * 0.5 + 0.5) * float(sz.x) - 0.5;
             prevV = (0.5 - prevNDC.y * 0.5) * float(sz.y) - 0.5;
             reprojValid = true;
-        } else {
-            const mat4 motion = motionMat[primaryInstanceId - 1u];
-            prevWS = (motion * vec4(primaryWorldPos, 1.0)).xyz;
-            const vec3 toPoint = prevWS - pcam.prevCamPosX.xyz;
-            prevZ = dot(toPoint, pcam.prevCamFwdY.xyz);
-            if (prevZ > 0.001) {
-                const float ndcX = dot(toPoint, pcam.prevCamRgt.xyz) * pcam.prevCamPosX.w / prevZ;
-                const float ndcY = dot(toPoint, pcam.prevCamUp.xyz)  * pcam.prevCamFwdY.w / prevZ;
-                // Pixel-space reprojection. The forward camera ray puts
-                // pixel (i,j)'s CENTER at NDC = ((i+0.5)/sx*2-1, ...).
-                // Reversing back gives prevU = i + 0.5; bilinear expects
-                // integer coords AT pixel centers, so we subtract 0.5.
-                // Without this shift, an unmoved world point produces
-                // fx=fy=0.5 (all four taps = 0.25 weight), smearing
-                // content half-a-pixel down-and-right.
-                prevU = (ndcX * 0.5 + 0.5) * float(sz.x) - 0.5;
-                prevV = (0.5 - ndcY * 0.5) * float(sz.y) - 0.5;
-                reprojValid = true;
-            }
+        } else if (prevZ > 0.001) {
+            const float ndcX = dot(toPoint, pcam.prevCamRgt.xyz) * pcam.prevCamPosX.w / prevZ;
+            const float ndcY = dot(toPoint, pcam.prevCamUp.xyz)  * pcam.prevCamFwdY.w / prevZ;
+            // Pixel-space reprojection. The forward camera ray puts
+            // pixel (i,j)'s CENTER at NDC = ((i+0.5)/sx*2-1, ...).
+            // Reversing back gives prevU = i + 0.5; bilinear expects
+            // integer coords AT pixel centers, so we subtract 0.5.
+            // Without this shift, an unmoved world point produces
+            // fx=fy=0.5 (all four taps = 0.25 weight), smearing
+            // content half-a-pixel down-and-right.
+            prevU = (ndcX * 0.5 + 0.5) * float(sz.x) - 0.5;
+            prevV = (0.5 - ndcY * 0.5) * float(sz.y) - 0.5;
+            reprojValid = true;
         }
 
         if (reprojValid) {
@@ -1024,10 +1050,16 @@ void main() {
                 const vec4  g01v = imageLoad(prevGbufImage, b + ivec2(0,1));
                 const vec4  g11v = imageLoad(prevGbufImage, b + ivec2(1,1));
                 // Depth-tolerance gate: only meaningful in the legacy reverse-
-                // projection path where prevWS / prevZ are populated. Hybrid
-                // skips it — the gbuffer motion vector is sub-pixel exact for
-                // the surface this pixel belongs to, so any bilinear neighbor
-                // on a different surface is caught by the mesh-ID guard alone.
+                // projection path where prevWS / prevZ map currWS into prev-
+                // camera space directly. Hybrid skips it — the gbuffer motion
+                // vector is sub-pixel exact for the surface this pixel belongs
+                // to, and on glancing / curved skinned surfaces the prev-gbuf
+                // at bilinear neighbours legitimately differs from prevWS by
+                // pixel-sized world distances; a tight gate would reject
+                // them and add noise. Skin lingering on-mesh is acceptable
+                // (the user looks at the *mesh*, not its silhouette trail);
+                // the wispy sky trail surrounding moving skinned meshes is
+                // handled in the self-tap branch above by mesh-ID validation.
                 const bool depthGate = !hybridOn;
                 const float dEps2 = depthGate ? (0.05 * prevZ) * (0.05 * prevZ) : 0.0;
                 const vec3 d00 = depthGate ? (g00v.xyz - prevWS) : vec3(0.0);
