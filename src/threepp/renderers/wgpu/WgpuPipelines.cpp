@@ -284,11 +284,18 @@ namespace threepp::wgpu {
     PipelineEntry& WgpuPipelines::getOrCreatePipeline(uint64_t features,
                                                        WGPUTextureFormat surfaceFormat,
                                                        uint32_t sampleCount) {
-        // Encode sampleCount in bit 62 and RGBA16Float format in bit 61 so pipelines
-        // compiled for different MSAA counts or target formats are cached separately.
+        // Encode sampleCount and target format flavor so pipelines compiled
+        // for different MSAA counts or color targets cache separately. The
+        // surface direct path uses *UnormSrgb (GPU does sRGB encode); RTs use
+        // the linear *Unorm form (in-shader sRGB encode); intermediate uses
+        // RGBA16Float. Three buckets, two bits.
+        const bool isFloat16 = (surfaceFormat == WGPUTextureFormat_RGBA16Float);
+        const bool isSrgb = (surfaceFormat == WGPUTextureFormat_BGRA8UnormSrgb
+                          || surfaceFormat == WGPUTextureFormat_RGBA8UnormSrgb);
         const uint64_t cacheKey = features
                                 | (sampleCount > 1 ? (1ULL << 62) : 0ULL)
-                                | (surfaceFormat == WGPUTextureFormat_RGBA16Float ? (1ULL << 61) : 0ULL);
+                                | (isFloat16 ? (1ULL << 61) : 0ULL)
+                                | (isSrgb ? (1ULL << 60) : 0ULL);
         auto it = pipelineCache_.find(cacheKey);
         if (it != pipelineCache_.end()) return it->second;
 
@@ -459,10 +466,16 @@ namespace threepp::wgpu {
         const bool isGlsl = sm->vertexShader.find("gl_Position") != std::string::npos ||
                              sm->fragmentShader.find("gl_FragColor") != std::string::npos;
 
-        // Encode sampleCount in bit 32 and RGBA16Float in bit 33 for separate cache entries.
+        // Encode sampleCount in bit 32, RGBA16Float in bit 33, sRGB target in bit 34.
+        // Same three-bucket scheme as getOrCreatePipeline above: surface direct
+        // uses *UnormSrgb, RTs use linear, intermediate uses RGBA16Float.
+        const bool isFloat16Custom = (surfaceFormat == WGPUTextureFormat_RGBA16Float);
+        const bool isSrgbCustom = (surfaceFormat == WGPUTextureFormat_BGRA8UnormSrgb
+                                || surfaceFormat == WGPUTextureFormat_RGBA8UnormSrgb);
         const uint64_t customCacheKey = static_cast<uint64_t>(sm->id)
                                       | (sampleCount > 1 ? (1ULL << 32) : 0ULL)
-                                      | (surfaceFormat == WGPUTextureFormat_RGBA16Float ? (1ULL << 33) : 0ULL);
+                                      | (isFloat16Custom ? (1ULL << 33) : 0ULL)
+                                      | (isSrgbCustom ? (1ULL << 34) : 0ULL);
 
 #ifndef THREEPP_WGPU_GLSL_COMPAT
         if (isGlsl) {
