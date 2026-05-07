@@ -613,16 +613,22 @@ void main() {
         const uvec4 idsTap    = texture(gbufIdsTex, uv_screen);
         const uint  id1       = idsTap.x;// 0 == sky/miss
 
-        // Fire primary along the UNJITTERED pixel-center direction. Chit's
-        // natural hitWorldPos is then deterministic per pixel per frame for
-        // static surfaces and reflects only surface motion for moving ones —
-        // no per-frame depth jitter for motion-mat to amplify into wobble.
-        // Raster G-buffer still jitters (drives motion vec / mesh-ID for TAA
-        // and spatial AA), but the PT accumulator sees a stable worldPos and
-        // its reproject doesn't drift across frames. Net effect: no shake on
-        // moving rigid objects, AA delivered by TAA on top.
-        const vec2  ndcCenter = vec2(uv_screen.x * 2.0 - 1.0,
-                                     -(uv_screen.y * 2.0 - 1.0));
+        // Per-pixel DECORRELATED sub-pixel jitter on primary direction.
+        // - Provides AA: each pixel cycles through different sub-pixel offsets
+        //   over time, accumulator integrates → proper temporal sub-pixel AA.
+        // - No coherent shake: jitter is uncorrelated across pixels, so
+        //   motion-mat × jitter on rotating objects can't synchronize into
+        //   visible wobble. Manifests as incoherent noise (absorbed by
+        //   spatial denoise + TAA neighborhood clamp), not a coherent
+        //   translation artifact. Matches WGPU's empirical behavior.
+        const uint pxFrameIdx = (pc.sampleIndex + 1u) +
+                                (seedFor(gl_LaunchIDEXT.xy, 0u) >> 4u);
+        const vec2 jitterPx   = vec2(halton(pxFrameIdx, 2u) - 0.5,
+                                     halton(pxFrameIdx, 3u) - 0.5);
+        // Pixel-space jitter → NDC: 1 pixel = 2/size in NDC.
+        const vec2 jitterNdc  = jitterPx * 2.0 / size;
+        const vec2  ndcCenter = vec2(uv_screen.x * 2.0 - 1.0 + jitterNdc.x,
+                                     -(uv_screen.y * 2.0 - 1.0) - jitterNdc.y);
         const vec4 targetVS_c = cam.projInverse * vec4(ndcCenter, 1.0, 1.0);
         const vec3 dirVS_c    = normalize(targetVS_c.xyz / targetVS_c.w);
         primaryDirHybrid      = normalize((cam.viewInverse * vec4(dirVS_c, 0.0)).xyz);
@@ -638,10 +644,18 @@ void main() {
         // degenerate to no jitter, so index from 1.
         const uint subIdx = pc.sampleIndex * spp + s;
         const uint sIdx   = subIdx + 1u;
+        // Per-pixel DECORRELATED jitter (offset Halton index by a per-pixel
+        // hash). Each pixel cycles through different sub-pixel positions over
+        // time → temporal sub-pixel sampling → AA via accumulator integration.
+        // No coherent shake on moving objects: adjacent pixels see uncorrelated
+        // jitters, so motion-mat × jitter doesn't synchronize visually.
+        // Hybrid uses the same per-pixel decorrelated jitter — applied
+        // outside the spp loop in primaryDirHybrid.
+        const uint sIdxPx = sIdx + (seedFor(gl_LaunchIDEXT.xy, 0u) >> 4u);
         const vec2 jitter = hybridOn
                 ? vec2(0.0)
-                : vec2(halton(sIdx, 2u) - 0.5,
-                       halton(sIdx, 3u) - 0.5);
+                : vec2(halton(sIdxPx, 2u) - 0.5,
+                       halton(sIdxPx, 3u) - 0.5);
 
         const vec2 pix = vec2(gl_LaunchIDEXT.xy) + 0.5 + jitter;
         vec2 ndc = pix / size * 2.0 - 1.0;
