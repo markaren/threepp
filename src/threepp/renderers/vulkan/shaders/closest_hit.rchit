@@ -443,6 +443,53 @@ float urand(inout uint state) {
     return float(pcgNext(state)) / 4294967296.0;
 }
 
+float lum3(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+// ───── ReSTIR DI — Stage 1a (init RIS, no temporal/spatial reuse) ─────
+// One reservoir per primary-shading invocation; lives in registers and is
+// not persisted across frames (no SSBO yet — Stage 1b adds temporal reuse).
+//
+// lightType encoding:
+//   < 0      : sentinel "no candidate" / env (env is NEE'd separately,
+//              not via the reservoir, matching the WGPU PT)
+//   0..7     : directional[lightType]      — lightPos = direction
+//   8..15    : point   [lightType - 8]     — lightPos = position
+//   16..23   : spot    [lightType - 16]    — lightPos = position
+//   24..27   : rect    [lightType - 24]    — lightPos = sampled point
+//   1000+    : emissive[lightType - 1000]  — lightPos = sampled point
+//
+// Target pdf p_hat = NdotL · luminance(Le).  Le here is the emitter's
+// post-attenuation radiance at the receiver (point/spot include 1/d² +
+// range window + cone; rect/emTri are unattenuated emitter color). No
+// BRDF in the target — keeps it cheap and roughness-independent (matches
+// WGPU; a BRDF-based target produced texture-pattern bias because of the
+// safeAlpha clamp at low roughness).
+struct Reservoir {
+    vec3  lightPos;
+    float lightType;
+    float W_sum;
+    float M;
+    float W;
+    float p_hat;
+};
+
+void updateReservoir(inout Reservoir r, vec3 pos, float ltype,
+                     float w, float p_hat_new, inout uint seed) {
+    r.W_sum += w;
+    r.M     += 1.0;
+    if (urand(seed) < w / max(r.W_sum, 1e-20)) {
+        r.lightPos  = pos;
+        r.lightType = ltype;
+        r.p_hat     = p_hat_new;
+    }
+}
+
+void finalizeReservoir(inout Reservoir r) {
+    r.W = r.W_sum / max(r.M * r.p_hat, 1e-20);
+}
+
 // Binary search a 1-row CDF lookup. row=0 is used for the 1×h marginal CDF
 // (treated as a single column laid out top-to-bottom).
 int envCdfSearch(sampler2D tex, int row, int size, float xi) {
@@ -1155,6 +1202,261 @@ void main() {
     }
 
     vec3 lit = vec3(0.0);
+
+    // ReSTIR DI Stage 1a: at primary on opaque-ish surfaces, replace per-light
+    // shadow rays with RIS over a single chosen sample (1 shadow ray total
+    // instead of up to 28 + emissive). Bounces and transmissive primaries
+    // fall through to classic NEE below. Env NEE remains separate (matches
+    // WGPU PT — env CDF importance sampling carries its own MIS pair). No
+    // temporal/spatial reuse yet — those need a per-pixel reservoir SSBO and
+    // come in Stage 1b/1c.
+    const bool useRISPrimary = ((payload.inFlags & 1u) == 0u) && (mdesc.transmission < 0.05);
+
+    if (useRISPrimary) {
+        Reservoir r;
+        r.lightPos  = vec3(0.0);
+        r.lightType = -2.0;
+        r.W_sum     = 0.0;
+        r.M         = 0.0;
+        r.W         = 0.0;
+        r.p_hat     = 0.0;
+
+        // Directional candidates — delta lights, p_source = 1.
+        for (uint i = 0u; i < lights.dirCount; ++i) {
+            const vec3 L = normalize(lights.dirLights[i].direction);
+            const float NdotL = max(dot(N, L), 0.0);
+            const vec3 Le = lights.dirLights[i].color;
+            const float p_hat = NdotL * lum3(Le);
+            updateReservoir(r, L, float(i), p_hat, p_hat, seed);
+        }
+
+        // Point candidates — delta with 1/d^decay + range window in Le.
+        for (uint i = 0u; i < lights.pointCount; ++i) {
+            const vec3 toL_p = lights.pointLights[i].position - hitPos;
+            const float dist = length(toL_p);
+            if (dist < 1e-4) { r.M += 1.0; continue; }
+            const vec3 L = toL_p / dist;
+            const float NdotL = max(dot(N, L), 0.0);
+            const float decay = lights.pointLights[i].decay;
+            float atten = 1.0 / max(pow(dist, decay), 0.01);
+            const float rng = lights.pointLights[i].range;
+            if (rng > 0.0) {
+                const float t  = dist / rng;
+                const float t4 = t * t * t * t;
+                const float ww = max(1.0 - t4, 0.0);
+                atten *= ww * ww;
+            }
+            const vec3 Le = lights.pointLights[i].color * atten;
+            const float p_hat = NdotL * lum3(Le);
+            updateReservoir(r, lights.pointLights[i].position, float(8u + i), p_hat, p_hat, seed);
+        }
+
+        // Spot candidates — point + cone.
+        for (uint i = 0u; i < lights.spotCount; ++i) {
+            const vec3 toL_s = lights.spotLights[i].position - hitPos;
+            const float dist = length(toL_s);
+            if (dist < 1e-4) { r.M += 1.0; continue; }
+            const vec3 L = toL_s / dist;
+            const float NdotL = max(dot(N, L), 0.0);
+            const float spotCos = dot(-L, lights.spotLights[i].direction);
+            const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
+                                                lights.spotLights[i].cosAngleInner, spotCos);
+            const float decay = lights.spotLights[i].decay;
+            float atten = 1.0 / max(pow(dist, decay), 0.01);
+            const float rng = lights.spotLights[i].range;
+            if (rng > 0.0) {
+                const float t  = dist / rng;
+                const float t4 = t * t * t * t;
+                const float ww = max(1.0 - t4, 0.0);
+                atten *= ww * ww;
+            }
+            atten *= spotAtten;
+            const vec3 Le = lights.spotLights[i].color * atten;
+            const float p_hat = NdotL * lum3(Le);
+            updateReservoir(r, lights.spotLights[i].position, float(16u + i), p_hat, p_hat, seed);
+        }
+
+        // Rect candidates — area light, sample uniform-area;
+        // p_source in solid angle = dist² / (cosEmitter · area).
+        for (uint i = 0u; i < lights.rectCount; ++i) {
+            const float ru = urand(seed) * 2.0 - 1.0;
+            const float rv = urand(seed) * 2.0 - 1.0;
+            const vec3 samplePos = lights.rectLights[i].position
+                                  + ru * lights.rectLights[i].halfU
+                                  + rv * lights.rectLights[i].halfV;
+            const vec3 toL_r = samplePos - hitPos;
+            const float dist = length(toL_r);
+            if (dist < 1e-4) { r.M += 1.0; continue; }
+            const vec3 L = toL_r / dist;
+            const float NdotL = max(dot(N, L), 0.0);
+            const float cosEmitter = max(dot(-L, lights.rectLights[i].normal), 0.0);
+            if (NdotL <= 0.0 || cosEmitter <= 0.0) { r.M += 1.0; continue; }
+            const float area = length(cross(lights.rectLights[i].halfU,
+                                             lights.rectLights[i].halfV)) * 4.0;
+            const float p_omega = (dist * dist) / max(area * cosEmitter, 1e-12);
+            const vec3 Le = lights.rectLights[i].color;
+            const float p_hat = NdotL * lum3(Le);
+            const float w_i = p_hat / max(p_omega, 1e-20);
+            updateReservoir(r, samplePos, float(24u + i), w_i, p_hat, seed);
+        }
+
+        // Emissive candidates — 4 samples from per-frame power CDF.
+        if (pc.emissiveCount > 0u && pc.emissiveTotalPower > 0.0) {
+            for (int s = 0; s < 4; ++s) {
+                const float xi = urand(seed) * pc.emissiveTotalPower;
+                uint lo = 0u;
+                uint hi = pc.emissiveCount - 1u;
+                for (int it = 0; it < 32; ++it) {
+                    if (lo >= hi) break;
+                    const uint mid = (lo + hi) >> 1u;
+                    if (emissiveTris[mid].v1.w < xi) lo = mid + 1u;
+                    else                              hi = mid;
+                }
+                const EmTri t = emissiveTris[lo];
+                const float r1 = urand(seed);
+                const float r2 = urand(seed);
+                const float su1 = sqrt(r1);
+                const float bA = 1.0 - su1;
+                const float bB = su1 * (1.0 - r2);
+                const float bC = su1 * r2;
+                const vec3 lp = bA * t.v0.xyz + bB * t.v1.xyz + bC * t.v2.xyz;
+                const vec3 toL_e = lp - hitPos;
+                const float dist2 = dot(toL_e, toL_e);
+                const float dist = sqrt(max(dist2, 1e-20));
+                if (dist <= 1e-4) { r.M += 1.0; continue; }
+                const vec3 L = toL_e / dist;
+                const float NdotL = dot(N, L);
+                const vec3 ge1 = t.v1.xyz - t.v0.xyz;
+                const vec3 ge2 = t.v2.xyz - t.v0.xyz;
+                const vec3 lnRaw = cross(ge1, ge2);
+                const float lnLen = length(lnRaw);
+                if (NdotL <= 0.01 || lnLen < 1e-20 || t.v0.w <= 1e-20 || t.v2.w <= 0.0) {
+                    r.M += 1.0; continue;
+                }
+                const vec3 lN = lnRaw / lnLen;
+                const float cosLight = abs(dot(-L, lN));
+                if (cosLight <= 0.01) { r.M += 1.0; continue; }
+                const float pickPdf = t.v2.w / pc.emissiveTotalPower;
+                const float p_omega = pickPdf * dist2 / (t.v0.w * cosLight);
+                const vec3 Le = t.emission.rgb;
+                const float p_hat = NdotL * lum3(Le);
+                const float w_i = p_hat / max(p_omega, 1e-20);
+                updateReservoir(r, lp, 1000.0 + float(lo), w_i, p_hat, seed);
+            }
+        }
+
+        finalizeReservoir(r);
+        // Cap W when firefly clamping is enabled (matches WGPU's `if
+        // emissiveInfo.z < 1e20 → W = min(W,5)`); pc.fireflyClamp uses 1e30
+        // as the disabled sentinel.
+        if (pc.fireflyClamp < 1e20) r.W = min(r.W, 5.0);
+
+        // ── Visibility test + shade at chosen sample ──
+        if (r.W > 0.0 && r.p_hat > 0.0) {
+            const int typeCode = int(r.lightType);
+            vec3 lDir;
+            float lMaxDist;
+            vec3 Le;
+            if (typeCode >= 1000) {
+                const int eTi = typeCode - 1000;
+                const vec3 toL_c = r.lightPos - hitPos;
+                const float dist = length(toL_c);
+                lDir = toL_c / max(dist, 1e-12);
+                lMaxDist = dist - 1e-2;
+                Le = emissiveTris[eTi].emission.rgb;
+                const float emLum = lum3(Le);
+                if (emLum > pc.fireflyClamp) Le *= pc.fireflyClamp / emLum;
+            } else if (typeCode < 8) {
+                lDir = normalize(lights.dirLights[typeCode].direction);
+                lMaxDist = 1e30;
+                Le = lights.dirLights[typeCode].color;
+            } else if (typeCode < 16) {
+                const int pi = typeCode - 8;
+                const vec3 toL_c = lights.pointLights[pi].position - hitPos;
+                const float dist = length(toL_c);
+                lDir = toL_c / max(dist, 1e-12);
+                lMaxDist = dist - 1e-2;
+                const float decay = lights.pointLights[pi].decay;
+                float atten = 1.0 / max(pow(dist, decay), 0.01);
+                const float rng = lights.pointLights[pi].range;
+                if (rng > 0.0) {
+                    const float t = dist / rng;
+                    const float t4 = t * t * t * t;
+                    const float ww = max(1.0 - t4, 0.0);
+                    atten *= ww * ww;
+                }
+                Le = lights.pointLights[pi].color * atten;
+            } else if (typeCode < 24) {
+                const int si = typeCode - 16;
+                const vec3 toL_c = lights.spotLights[si].position - hitPos;
+                const float dist = length(toL_c);
+                lDir = toL_c / max(dist, 1e-12);
+                lMaxDist = dist - 1e-2;
+                const float spotCos = dot(-lDir, lights.spotLights[si].direction);
+                const float spotAtten = smoothstep(lights.spotLights[si].cosAngleOuter,
+                                                    lights.spotLights[si].cosAngleInner, spotCos);
+                const float decay = lights.spotLights[si].decay;
+                float atten = 1.0 / max(pow(dist, decay), 0.01);
+                const float rng = lights.spotLights[si].range;
+                if (rng > 0.0) {
+                    const float t = dist / rng;
+                    const float t4 = t * t * t * t;
+                    const float ww = max(1.0 - t4, 0.0);
+                    atten *= ww * ww;
+                }
+                atten *= spotAtten;
+                Le = lights.spotLights[si].color * atten;
+            } else {
+                const int ri = typeCode - 24;
+                const vec3 toL_c = r.lightPos - hitPos;
+                const float dist = length(toL_c);
+                lDir = toL_c / max(dist, 1e-12);
+                lMaxDist = dist - 1e-2;
+                Le = lights.rectLights[ri].color;
+            }
+
+            const float NdotL_c = max(dot(N, lDir), 0.0);
+            if (NdotL_c > 0.0) {
+                shadowVisibility = 1.0;
+                traceRayEXT(topAS,
+                            gl_RayFlagsTerminateOnFirstHitEXT |
+                            gl_RayFlagsSkipClosestHitShaderEXT |
+                            gl_RayFlagsNoOpaqueEXT,
+                            0xff, 1, 0, 1,
+                            hitPos + N * 1e-3, 0.0, lDir, lMaxDist, 1);
+                if (shadowVisibility > 0.0) {
+                    // BRDF eval at chosen direction (mirrors per-light eval below).
+                    const vec3 H = normalize(V + lDir);
+                    const float NdotH = max(dot(N, H), 0.0);
+                    const float VdotH = max(dot(V, H), 0.0);
+                    const vec3 F = fresnelSchlick(VdotH, F0);
+                    const float D = distGGX(NdotH, roughness);
+                    const float G = geomSmithG1(NdotV, k) * geomSmithG1(NdotL_c, k);
+                    const vec3  spec_c = (D * G * F) / max(4.0 * NdotV * NdotL_c, 1e-4);
+                    const vec3  kd_c   = (vec3(1.0) - F) * (1.0 - metalness);
+                    const vec3  diff_c = kd_c * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
+                    vec3 perChosen = (diff_c + spec_c) * baseScale * sheenScaling;
+                    if (hasSheen) {
+                        perChosen += mdesc.sheenColor * D_Charlie(NdotH, mdesc.sheenRoughness)
+                                                      * V_Neubelt(NdotV, NdotL_c);
+                    }
+                    if (ccWeight > 0.0) {
+                        const float k_cc = (ccRough + 1.0) * (ccRough + 1.0) / 8.0;
+                        const float D_cc = distGGX(NdotH, ccRough);
+                        const float G_cc = geomSmithG1(NdotV, k_cc) * geomSmithG1(NdotL_c, k_cc);
+                        perChosen += vec3((D_cc * G_cc) / max(4.0 * NdotV * NdotL_c, 1e-4) * ccWeight);
+                    }
+                    vec3 contrib = perChosen * NdotL_c * Le * shadowVisibility * r.W;
+                    if (fogEnabled() && lMaxDist < 1e20) {
+                        contrib *= fogTransmittance(lMaxDist);
+                    }
+                    const float cLum = lum3(contrib);
+                    if (cLum > pc.fireflyClamp) contrib *= pc.fireflyClamp / cLum;
+                    lit += contrib;
+                }
+            }
+        }
+    } else {
     for (uint i = 0u; i < lights.dirCount; ++i) {
         const vec3 L = normalize(lights.dirLights[i].direction);
         const float NdotL = max(dot(N, L), 0.0);
@@ -1489,6 +1791,7 @@ void main() {
             }
         }
     }
+    } // end useRISPrimary else (classic NEE branch)
 
     // === Env NEE + MIS ===
     //   • envCdfTotalSum > 0  → importance-sample the env by luminance, eval
