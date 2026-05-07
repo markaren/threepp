@@ -942,6 +942,18 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/taa_resolve.comp"
         kTaaResolveCompSpv
         _taa_resolve_spv_h)
+    # Hybrid raster overlay: wireframe + Line/LineSegments draw on top of
+    # the post-TAA swapchain image. Depth-tested against the G-buffer's
+    # depth attachment so overlays are correctly occluded by path-traced
+    # geometry. Only runs when hybridEnabled_ + scene has overlay objects.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay.vert"
+        kOverlayVertSpv
+        _overlay_vert_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay.frag"
+        kOverlayFragSpv
+        _overlay_frag_spv_h)
 endif ()
 
 

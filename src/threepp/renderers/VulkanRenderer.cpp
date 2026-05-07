@@ -67,6 +67,8 @@
 #include "threepp/renderers/vulkan/shaders/gbuffer.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/taa_resolve.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay.frag.spv.h"
 
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.hpp"
 
@@ -513,6 +515,11 @@ namespace threepp {
             Mesh*    mesh;
             std::array<float, 16> worldMatrix;
             uint32_t instanceIndex;// 0 for non-instanced
+            // Hybrid overlay flag: wireframe-flagged material OR mesh.layers
+            // includes the configured overlayLayer_. Excluded from TLAS,
+            // raster G-buffer, and emissive-tri NEE so PT can't see/shadow
+            // them; drawn instead by the post-TAA overlay pass.
+            bool     isOverlay = false;
         };
 
         // Previous-frame camera (proj_prev * view_prev) for primary-hit
@@ -682,6 +689,19 @@ namespace threepp {
         VkDescriptorPool      rasterDescPool       = VK_NULL_HANDLE;
         std::array<VkDescriptorSet, kFramesInFlight> rasterDescSets{};
 
+        // Hybrid raster overlay (wireframe + Line/LineSegments). Runs after
+        // TAA resolve, draws onto the swapchain with the G-buffer's depth
+        // attachment as a read-only depth source so overlays are correctly
+        // occluded by path-traced geometry. No descriptor sets — the only
+        // input is a push constant (mvp + color).
+        VkPipelineLayout overlayPipelineLayout      = VK_NULL_HANDLE;
+        VkPipeline       overlayWireframePipeline   = VK_NULL_HANDLE;
+        // Cached unjittered view-projection matrix (column-major,
+        // row-of-element-4 layout). Computed once per frame in
+        // uploadRasterCameraUbo and read by recordOverlayPass to build
+        // the per-draw mvp = vpUnjit · model push constant.
+        std::array<float, 16> currVPunjit_{};
+
         // Per-frame raster camera data. currVPjittered drives gl_Position;
         // currVPunjittered + prevVP drive the motion-vector computation
         // (which must be jitter-free or motion vectors include the jitter
@@ -746,6 +766,14 @@ namespace threepp {
         // (same pattern as bounces). Default on. Forwarded to chit via
         // pc.motionFlags bit 16 each frame.
         bool restirDIEnabled_ = true;
+        // Hybrid raster overlay: layer index for opt-in overlay objects
+        // (alongside auto-detected wireframe materials + Line/LineSegments).
+        // -1 disables layer-based selection. Mirrors WGPU PT's overlayLayer_.
+        int overlayLayer_ = -1;
+        // Memoized "scene actually has overlay objects" so the per-frame
+        // overlay pass can early-out without traversing on a static-no-
+        // overlay scene. Set during the prior frame's traversal.
+        bool overlayFoundLastFrame_ = false;
         // Sub-pixel jitter sequence index for raster TAA. Cycles within a
         // small period (16 frames) — long enough to look stable, short enough
         // to avoid ever-growing index drift.
@@ -951,6 +979,8 @@ namespace threepp {
             if (rasterDsLayout)         vkDestroyDescriptorSetLayout(d, rasterDsLayout, nullptr);
             if (rasterDescPool)         vkDestroyDescriptorPool(d, rasterDescPool, nullptr);
             if (rasterGbufRenderPass)   vkDestroyRenderPass(d, rasterGbufRenderPass, nullptr);
+            if (overlayWireframePipeline) vkDestroyPipeline(d, overlayWireframePipeline, nullptr);
+            if (overlayPipelineLayout)    vkDestroyPipelineLayout(d, overlayPipelineLayout, nullptr);
             if (gbufSampler_)           vkDestroySampler(d, gbufSampler_, nullptr);
             destroyBuffer(ctx->allocator(), dummyUvBuffer_);
 
@@ -2304,13 +2334,20 @@ namespace threepp {
                 auto geom = m->geometry();
                 if (!geom || !geom->hasAttribute("position")) return;
                 if (!geom->hasAttribute("normal")) return;
-                // Wireframe meshes can't be path-traced — a triangle hit would
-                // shade the whole face. WGPU PT routes these to its raster
-                // overlay; until that lands in the Vulkan path, skip them so
-                // they don't show up as solid blobs. Helpers/debug visuals
-                // disappear, which matches WGPU+overlay-disabled.
+                // Hybrid overlay (raster-only) classification. Wireframe-
+                // flagged materials and overlay-layer membership both route
+                // the mesh to the post-TAA raster overlay pass and exclude
+                // it from PT (TLAS, raster G-buffer, emissive NEE). PT can't
+                // see/shadow overlay meshes — they're pure debug visuals.
+                bool isOverlay = false;
                 if (auto mat = m->material()) {
-                    if (auto* wf = dynamic_cast<MaterialWithWireframe*>(mat.get()); wf && wf->wireframe) return;
+                    if (auto* wf = dynamic_cast<MaterialWithWireframe*>(mat.get()); wf && wf->wireframe) {
+                        isOverlay = true;
+                    }
+                }
+                if (overlayLayer_ >= 0 &&
+                    o.layers.isEnabled(static_cast<unsigned>(overlayLayer_))) {
+                    isOverlay = true;
                 }
                 if (auto* inst = dynamic_cast<InstancedMesh*>(m); inst && inst->count() > 0) {
                     Matrix4 instMat;
@@ -2321,6 +2358,7 @@ namespace threepp {
                         MeshEntry e{};
                         e.mesh = m;
                         e.instanceIndex = static_cast<uint32_t>(j);
+                        e.isOverlay = isOverlay;
                         std::memcpy(e.worldMatrix.data(), world.elements.data(), 64);
                         entries.push_back(e);
                     }
@@ -2328,6 +2366,7 @@ namespace threepp {
                     MeshEntry e{};
                     e.mesh = m;
                     e.instanceIndex = 0u;
+                    e.isOverlay = isOverlay;
                     std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
                     entries.push_back(e);
                 }
@@ -2530,6 +2569,7 @@ namespace threepp {
                         std::vector<VkAccelerationStructureInstanceKHR> instances;
                         instances.reserve(entries.size());
                         for (const MeshEntry& en : entries) {
+                            if (en.isOverlay) continue;// raster-overlay only
                             VkDeviceAddress blasAddr = 0;
                             if (auto* sm = dynamic_cast<SkinnedMesh*>(en.mesh); sm && sm->skeleton && !sm->skeleton->bones.empty()) {
                                 auto smIt = skinnedMeshStates.find(sm);
@@ -2573,6 +2613,7 @@ namespace threepp {
                         std::vector<MaterialDesc> matDescs;
                         matDescs.reserve(entries.size());
                         for (const MeshEntry& en : entries) {
+                            if (en.isOverlay) continue;// raster-overlay only — no MaterialDesc slot
                             Mesh* m = en.mesh;
                             MaterialDesc md = materialFromMesh(*m);
                             if (auto tex = albedoTexOf(*m)) {
@@ -2774,6 +2815,11 @@ namespace threepp {
                     }
                     recPtr = it->second.get();
                 }
+
+                // Overlay meshes need a BlasRecord (vertex buffer for the
+                // raster overlay pass) but must not appear in the TLAS or
+                // GeometryDesc/MaterialDesc arrays — PT must not see them.
+                if (en.isOverlay) continue;
 
                 VkAccelerationStructureInstanceKHR inst{};
                 // VkTransformMatrixKHR is row-major 3x4; threepp Matrix4 is
@@ -3221,6 +3267,7 @@ namespace threepp {
             float cumPower = 0.0f;
 
             for (const auto& en : entries) {
+                if (en.isOverlay) continue;// raster-overlay only — no emissive contribution to PT
                 if (!en.mesh) continue;
                 auto matPtr = en.mesh->material();
                 if (!matPtr) continue;
@@ -3578,6 +3625,12 @@ namespace threepp {
             RasterCameraData ubo{};
             std::memcpy(ubo.currVPjittered,   vpJ.elements.data(),  64);
             std::memcpy(ubo.currVPunjittered, vpUnj.elements.data(), 64);
+            // Mirror to Impl-level cache for recordOverlayPass — the overlay
+            // pass runs in recordCommandBuffer which doesn't have direct
+            // access to the camera; it needs the same unjittered VP that
+            // the raster prepass + TAA used so wireframes register pixel-
+            // exact with the post-TAA path-traced silhouette.
+            std::memcpy(currVPunjit_.data(), vpUnj.elements.data(), 64);
             // First frame: self-seed prevVP so motion vectors are zero. The
             // following frame picks up the real history.
             std::memcpy(ubo.prevVP,
@@ -3718,6 +3771,7 @@ namespace threepp {
 
             for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
                 const auto& en = lastVisibleEntries_[i];
+                if (en.isOverlay) continue;// raster-overlay only — drawn post-TAA, not in G-buf
                 const BlasRecord* rec = resolveBlasForEntry(en);
                 if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
 
@@ -4817,6 +4871,175 @@ namespace threepp {
             vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
         }
 
+        // ── Hybrid raster overlay pipeline (wireframe variant) ──────────────
+        // Dynamic-rendering pipeline targeting the swapchain (B8G8R8A8_UNORM)
+        // + the existing G-buffer depth (D32_SFLOAT, read-only). Pushes
+        // mat4 mvp + vec4 color (80B). Triangle topology + polygon-mode
+        // line draws each visible mesh as a wireframe; the host gates
+        // per-draw on material.wireframe / overlayLayer membership.
+        // Line/LineSegments need their own pipeline variant + cached
+        // vertex buffer; deferred to Stage 2.
+        void createOverlayPipeline() {
+            VkShaderModuleCreateInfo vsmci{};
+            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            vsmci.codeSize = sizeof(kOverlayVertSpv);
+            vsmci.pCode    = kOverlayVertSpv;
+            VkShaderModule vertModule = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vertModule),
+                  "vkCreateShaderModule(overlay.vert)");
+
+            VkShaderModuleCreateInfo fsmci{};
+            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            fsmci.codeSize = sizeof(kOverlayFragSpv);
+            fsmci.pCode    = kOverlayFragSpv;
+            VkShaderModule fragModule = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &fragModule),
+                  "vkCreateShaderModule(overlay.frag)");
+
+            VkPipelineShaderStageCreateInfo stages[2]{};
+            stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+            stages[0].module = vertModule;
+            stages[0].pName  = "main";
+            stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stages[1].module = fragModule;
+            stages[1].pName  = "main";
+
+            // Single vertex binding: position, R32G32B32_SFLOAT. Reuses the
+            // BLAS's vertex buffer directly (skinned meshes get the deformed
+            // current-pose positions because refreshSkinnedBlas already wrote
+            // them at the start of the frame).
+            VkVertexInputBindingDescription vib{};
+            vib.binding   = 0;
+            vib.stride    = 3 * sizeof(float);
+            vib.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+            VkVertexInputAttributeDescription via{};
+            via.location = 0;
+            via.binding  = 0;
+            via.format   = VK_FORMAT_R32G32B32_SFLOAT;
+            via.offset   = 0;
+
+            VkPipelineVertexInputStateCreateInfo vi{};
+            vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            vi.vertexBindingDescriptionCount   = 1;
+            vi.pVertexBindingDescriptions      = &vib;
+            vi.vertexAttributeDescriptionCount = 1;
+            vi.pVertexAttributeDescriptions    = &via;
+
+            VkPipelineInputAssemblyStateCreateInfo ia{};
+            ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+            VkPipelineViewportStateCreateInfo vp{};
+            vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+            vp.viewportCount = 1;
+            vp.scissorCount  = 1;
+
+            // POLYGON_MODE_LINE renders each tri as 3 lines — that's the
+            // wireframe effect. cullMode NONE so back-facing geometry's
+            // edges are visible too (helps see structure on closed meshes).
+            VkPipelineRasterizationStateCreateInfo rs{};
+            rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            rs.polygonMode = VK_POLYGON_MODE_LINE;
+            rs.cullMode    = VK_CULL_MODE_NONE;
+            rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rs.lineWidth   = 1.0f;
+
+            VkPipelineMultisampleStateCreateInfo ms{};
+            ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+            ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+            // Depth test DISABLED. Two reasons:
+            //   1. The G-buffer depth attachment is written with the JITTERED
+            //      projection (per-frame Halton sub-pixel offset) so the same
+            //      world point lands at slightly different depth values each
+            //      frame. The overlay uses the UNJITTERED projection (its
+            //      input is the post-TAA color, conceptually "as if no jitter")
+            //      so the per-pixel z values disagree by sub-pixel jitter →
+            //      LEQ depth test inconsistently passes/fails per frame and
+            //      the wireframe shimmers ("shake").
+            //   2. Wireframe / line debug visualizations are typically more
+            //      useful when always-on-top (helpers visible through walls).
+            //      Matches WGPU PT's overlay behavior (no manual depth fill
+            //      means overlays draw on top of the post-PT compose).
+            //
+            // No depth attachment is bound on the pipeline either (depth
+            // format kept in the dynamic-rendering create info just so the
+            // pipeline is compatible with whatever the render-pass declares,
+            // but with depthTestEnable=FALSE the values are ignored).
+            VkPipelineDepthStencilStateCreateInfo ds{};
+            ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+            ds.depthTestEnable  = VK_FALSE;
+            ds.depthWriteEnable = VK_FALSE;
+            ds.depthCompareOp   = VK_COMPARE_OP_ALWAYS;
+
+            VkPipelineColorBlendAttachmentState cbas{};
+            cbas.blendEnable    = VK_FALSE;
+            cbas.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                  VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            VkPipelineColorBlendStateCreateInfo cb{};
+            cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            cb.attachmentCount = 1;
+            cb.pAttachments    = &cbas;
+
+            VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                           VK_DYNAMIC_STATE_SCISSOR};
+            VkPipelineDynamicStateCreateInfo dyn{};
+            dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            dyn.dynamicStateCount = 2;
+            dyn.pDynamicStates    = dynStates;
+
+            // mat4 mvp (64) + vec4 color (16) = 80 bytes, well under the
+            // 128B push-constant guarantee. Both vertex and fragment read
+            // the same block.
+            VkPushConstantRange pcRange{};
+            pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+            pcRange.offset     = 0;
+            pcRange.size       = 80;
+
+            VkPipelineLayoutCreateInfo plci{};
+            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            plci.setLayoutCount         = 0;
+            plci.pSetLayouts            = nullptr;
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges    = &pcRange;
+            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &overlayPipelineLayout),
+                  "vkCreatePipelineLayout(overlay)");
+
+            // Dynamic rendering: declare formats up-front via
+            // VkPipelineRenderingCreateInfo. Color only — depth-test is off
+            // (see ds note above) so no depth attachment is bound at draw
+            // time and we leave depthAttachmentFormat as VK_FORMAT_UNDEFINED.
+            const VkFormat colorFmt = ctx->swapchainFormat();
+            VkPipelineRenderingCreateInfo prci{};
+            prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+            prci.colorAttachmentCount    = 1;
+            prci.pColorAttachmentFormats = &colorFmt;
+
+            VkGraphicsPipelineCreateInfo gpci{};
+            gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            gpci.pNext               = &prci;
+            gpci.stageCount          = 2;
+            gpci.pStages             = stages;
+            gpci.pVertexInputState   = &vi;
+            gpci.pInputAssemblyState = &ia;
+            gpci.pViewportState      = &vp;
+            gpci.pRasterizationState = &rs;
+            gpci.pMultisampleState   = &ms;
+            gpci.pDepthStencilState  = &ds;
+            gpci.pColorBlendState    = &cb;
+            gpci.pDynamicState       = &dyn;
+            gpci.layout              = overlayPipelineLayout;
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpci, nullptr,
+                                            &overlayWireframePipeline),
+                  "vkCreateGraphicsPipelines(overlayWireframe)");
+
+            vkDestroyShaderModule(ctx->device(), vertModule, nullptr);
+            vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
+        }
+
         // ── TAA resources ───────────────────────────────────────────────────
         // Allocates taaInputImagesPP (denoise output target), taaHistoryImagesPP
         // (ping-pong), taaSampler, descriptor layout/pool/pipeline. Idempotent.
@@ -5193,6 +5416,9 @@ namespace threepp {
                 createRasterCameraUbos();
                 createRasterDsLayoutAndPool();
                 createRasterGbufPipeline();
+            }
+            if (overlayWireframePipeline == VK_NULL_HANDLE) {
+                createOverlayPipeline();
             }
             const VkExtent2D ext = ctx->swapchainExtent();
             if (rasterGbufs[0].width != ext.width || rasterGbufs[0].height != ext.height) {
@@ -7880,6 +8106,169 @@ namespace threepp {
             }
             // ── End raster TAA ─────────────────────────────────────────────────
 
+            // ── Hybrid raster overlay pass ─────────────────────────────────────
+            // Wireframe-flagged meshes (any material with wireframe == true)
+            // and overlay-layer-tagged meshes drawn on top of the post-TAA
+            // image. Depth-tested against the existing raster G-buffer depth
+            // so overlays are correctly occluded by path-traced surfaces. No
+            // depth writes — the depth attachment stays unchanged for the
+            // next frame's chit + denoise consumption.
+            //
+            // Stage 2 will add a Line-topology pipeline + per-Line vertex
+            // buffer cache for Line/LineSegments objects. Today this only
+            // handles MeshWithWireframe / overlay-layer Meshes that already
+            // exist in lastVisibleEntries_ (PT-tracked geometry).
+            //
+            // Skip the whole block when not in hybrid (depth attachment isn't
+            // built), pipeline failed to create, or the early scan didn't
+            // find any overlay candidates this frame.
+            if (hybridEnabled_ && overlayWireframePipeline != VK_NULL_HANDLE) {
+                bool hasOverlay = false;
+                for (const auto& en : lastVisibleEntries_) {
+                    if (en.isOverlay) { hasOverlay = true; break; }
+                }
+                overlayFoundLastFrame_ = hasOverlay;
+
+                if (hasOverlay) {
+                    // Swapchain GENERAL → COLOR_ATTACHMENT_OPTIMAL. TAA's
+                    // compute write is the source stage we're synchronizing.
+                    VkImageMemoryBarrier2 toColor{};
+                    toColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    toColor.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                            VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                    toColor.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                            VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                    toColor.dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    toColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                                            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                    toColor.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    toColor.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    toColor.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toColor.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toColor.image = img;
+                    toColor.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    toColor.subresourceRange.levelCount = 1;
+                    toColor.subresourceRange.layerCount = 1;
+                    VkDependencyInfo dOv{};
+                    dOv.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dOv.imageMemoryBarrierCount = 1;
+                    dOv.pImageMemoryBarriers = &toColor;
+                    vkCmdPipelineBarrier2(cb, &dOv);
+
+                    VkRenderingAttachmentInfo colorAtt{};
+                    colorAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    colorAtt.imageView   = ctx->swapchainImageViews()[imageIndex];
+                    colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    colorAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+                    colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+
+                    // No depth attachment — overlays are always-on-top
+                    // (see depth-test note in createOverlayPipeline).
+                    VkRenderingInfo ri{};
+                    ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                    ri.renderArea.offset = {0, 0};
+                    ri.renderArea.extent = ext;
+                    ri.layerCount = 1;
+                    ri.colorAttachmentCount = 1;
+                    ri.pColorAttachments = &colorAtt;
+                    vkCmdBeginRendering(cb, &ri);
+
+                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayWireframePipeline);
+                    VkViewport vpDyn{0.f, 0.f, float(ext.width), float(ext.height), 0.f, 1.f};
+                    vkCmdSetViewport(cb, 0, 1, &vpDyn);
+                    VkRect2D scDyn{{0, 0}, ext};
+                    vkCmdSetScissor(cb, 0, 1, &scDyn);
+
+                    Matrix4 vpUnjitMat;
+                    std::memcpy(vpUnjitMat.elements.data(), currVPunjit_.data(), 64);
+
+                    for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
+                        const auto& en = lastVisibleEntries_[i];
+                        if (!en.mesh || !en.isOverlay) continue;
+                        Color color(1.f, 1.f, 1.f);
+                        float opacity = 1.0f;
+                        if (auto* m = en.mesh->material().get()) {
+                            if (auto* mc = dynamic_cast<MaterialWithColor*>(m)) {
+                                color = mc->color;
+                            }
+                            opacity = m->opacity;
+                        }
+
+                        const BlasRecord* rec = resolveBlasForEntry(en);
+                        if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
+
+                        Matrix4 model;
+                        std::memcpy(model.elements.data(), en.worldMatrix.data(), 64);
+                        Matrix4 mvp;
+                        mvp.multiplyMatrices(vpUnjitMat, model);
+
+                        struct OverlayPC {
+                            float mvp[16];
+                            float color[4];
+                        } pc{};
+                        std::memcpy(pc.mvp, mvp.elements.data(), 64);
+                        pc.color[0] = color.r;
+                        pc.color[1] = color.g;
+                        pc.color[2] = color.b;
+                        pc.color[3] = opacity;
+                        vkCmdPushConstants(cb, overlayPipelineLayout,
+                                           VK_SHADER_STAGE_VERTEX_BIT |
+                                                   VK_SHADER_STAGE_FRAGMENT_BIT,
+                                           0, sizeof(pc), &pc);
+
+                        VkBuffer     vbufs[1] = {rec->vertex.handle};
+                        VkDeviceSize voffs[1] = {0};
+                        vkCmdBindVertexBuffers(cb, 0, 1, vbufs, voffs);
+                        if (rec->index.handle != VK_NULL_HANDLE) {
+                            vkCmdBindIndexBuffer(cb, rec->index.handle, 0, VK_INDEX_TYPE_UINT32);
+                            auto* idxAttr = en.mesh->geometry()->getIndex();
+                            if (idxAttr) {
+                                vkCmdDrawIndexed(cb, static_cast<uint32_t>(idxAttr->count()),
+                                                 1, 0, 0, 0);
+                            }
+                        } else {
+                            auto* posAttr = en.mesh->geometry()->getAttribute<float>("position");
+                            if (posAttr) {
+                                vkCmdDraw(cb, static_cast<uint32_t>(posAttr->count()), 1, 0, 0);
+                            }
+                        }
+                    }
+                    vkCmdEndRendering(cb);
+
+                    // Swapchain back to GENERAL so the downstream blocks
+                    // (ImGui overlay or the no-overlay direct present-src
+                    // transition) see the layout they expect.
+                    VkImageMemoryBarrier2 toGeneral{};
+                    toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    toGeneral.srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    toGeneral.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                    toGeneral.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                              VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+                                              VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                              VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
+                    toGeneral.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                              VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                              VK_ACCESS_2_TRANSFER_READ_BIT |
+                                              VK_ACCESS_2_TRANSFER_WRITE_BIT |
+                                              VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                                              VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                    toGeneral.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    toGeneral.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toGeneral.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toGeneral.image = img;
+                    toGeneral.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    toGeneral.subresourceRange.levelCount = 1;
+                    toGeneral.subresourceRange.layerCount = 1;
+                    VkDependencyInfo dBack{};
+                    dBack.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dBack.imageMemoryBarrierCount = 1;
+                    dBack.pImageMemoryBarriers = &toGeneral;
+                    vkCmdPipelineBarrier2(cb, &dBack);
+                }
+            }
+            // ── End hybrid raster overlay pass ─────────────────────────────────
+
             // If an overlay (ImGui) is registered, draw it on top of the
             // ray-traced image inside a dynamic render pass before presenting.
             if (overlayCallback) {
@@ -8255,6 +8644,14 @@ namespace threepp {
 
     bool VulkanRenderer::restirDIEnabled() const {
         return pimpl_->restirDIEnabled_;
+    }
+
+    void VulkanRenderer::setOverlayLayer(int channel) {
+        pimpl_->overlayLayer_ = (channel < 0 || channel > 31) ? -1 : channel;
+    }
+
+    int VulkanRenderer::overlayLayer() const {
+        return pimpl_->overlayLayer_;
     }
 
     void VulkanRenderer::setHybridDebugView(int view) {

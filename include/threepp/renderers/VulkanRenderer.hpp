@@ -120,6 +120,22 @@ namespace threepp {
         void setRestirDIEnabled(bool enabled);
         [[nodiscard]] bool restirDIEnabled() const;
 
+        // Hybrid-mode raster overlay: post-TAA, draws wireframe-flagged
+        // meshes (any material with `wireframe = true`) and Line/LineSegments
+        // objects on top of the path-traced image, depth-tested against the
+        // raster G-buffer's depth attachment so overlays are correctly
+        // occluded by path-traced geometry. Mirrors the WGPU PT overlay path
+        // (WgpuPathTracer.cpp:3748).
+        //
+        // Auto-detected: any Mesh with `material.wireframe == true`,
+        // any Line/LineSegments, plus everything on the configured layer.
+        // Pass `-1` (default) to disable layer-based selection — material
+        // wireframe + Line objects are still drawn. Pass `0..31` to also
+        // include any object on that layer (`obj.layers.enable(channel)`).
+        // Has no effect when hybridEnabled is false.
+        void setOverlayLayer(int channel);
+        [[nodiscard]] int overlayLayer() const;
+
         // Day-1 / debug visualization: blit one G-buffer channel directly
         // to the swapchain, bypassing the path tracer.
         //   0 = off (PT consumes the G-buffer normally)
