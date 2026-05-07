@@ -74,11 +74,12 @@ namespace threepp {
             glRenderer.setScissorTest(true);
 
             // Headless WGPU canvas sized to one half of the visible window.
+            // Inherit AA from the visible canvas so both halves match.
             wgpuCanvas.emplace(Canvas::Parameters()
                                        .size(halfW, h)
                                        .headless(true)
                                        .vsync(false)
-                                       .antialiasing(0));
+                                       .antialiasing(glCanvas.samples()));
             wgpuRenderer = std::make_unique<WgpuRenderer>(*wgpuCanvas);
 
             previewScene = Scene::create();
