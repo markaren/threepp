@@ -442,6 +442,14 @@ namespace threepp {
         // the accumulation count and survives camera / object motion.
         std::array<Image2D, 2> accumImagesPP{};
         std::array<Image2D, 2> gbufImagesPP{};
+        // ReSTIR DI Stage 1b — per-pixel reservoir ping-pong storage. Two
+        // physical images per logical buffer: reservoirPosImagesPP carries
+        // lightPos.xyz + lightType.w (rgba32f), reservoirWImagesPP carries
+        // W_sum + M + W + p_hat (rgba16f). Bindings 28/30 = write (frame N),
+        // 29/31 = read (frame N-1); descriptor sets are baked once with the
+        // f&1 → image-slot mapping just like accumImagesPP / gbufImagesPP.
+        std::array<Image2D, 2> reservoirPosImagesPP{};
+        std::array<Image2D, 2> reservoirWImagesPP{};
         // Multi-pass à-trous ping-pong intermediates (rgba32f). filt[0] is the
         // pass 0 / pass 2 destination, filt[1] is the pass 1 destination. After
         // the final atrous pass filt[0] holds the filtered radiance that
@@ -904,6 +912,8 @@ namespace threepp {
             destroyImage2D(ctx->allocator(), d, blueNoiseImage);
             for (auto& img : accumImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), d, img);
+            for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, img);
+            for (auto& img : reservoirWImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : filteredImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : materialTextures) destroyImage2D(ctx->allocator(), d, img);
             materialTextures.clear();
@@ -2980,12 +2990,17 @@ namespace threepp {
         void clearGbufImages() {
             VkCommandBuffer cb = beginOneShot();
 
-            std::array<VkImage, 4> images = {
+            // Includes ReSTIR DI reservoir ping-pong (28/29 pos, 30/31 W) so
+            // M=0 on frame 0's read side and the temporal-reuse path correctly
+            // sees "no prior history" instead of garbage.
+            std::array<VkImage, 8> images = {
                     gbufImagesPP[0].image, gbufImagesPP[1].image,
                     accumImagesPP[0].image, accumImagesPP[1].image,
+                    reservoirPosImagesPP[0].image, reservoirPosImagesPP[1].image,
+                    reservoirWImagesPP[0].image, reservoirWImagesPP[1].image,
             };
 
-            std::array<VkImageMemoryBarrier2, 4> toTransfer{};
+            std::array<VkImageMemoryBarrier2, 8> toTransfer{};
             for (size_t i = 0; i < images.size(); ++i) {
                 toTransfer[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                 toTransfer[i].srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -3015,7 +3030,7 @@ namespace threepp {
                                      &clear, 1, &range);
             }
 
-            std::array<VkImageMemoryBarrier2, 4> toGeneral{};
+            std::array<VkImageMemoryBarrier2, 8> toGeneral{};
             for (size_t i = 0; i < images.size(); ++i) {
                 toGeneral[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                 toGeneral[i].srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
@@ -4368,6 +4383,14 @@ namespace threepp {
             for (auto& img : filteredImagesPP) {
                 img = createStorageImage2D(ext.width, ext.height,
                                            VK_FORMAT_R32G32B32A32_SFLOAT);
+            }
+            for (auto& img : reservoirPosImagesPP) {
+                img = createStorageImage2D(ext.width, ext.height,
+                                           VK_FORMAT_R32G32B32A32_SFLOAT);
+            }
+            for (auto& img : reservoirWImagesPP) {
+                img = createStorageImage2D(ext.width, ext.height,
+                                           VK_FORMAT_R16G16B16A16_SFLOAT);
             }
             // Storage memory contents are undefined after vmaCreateImage —
             // clear all four slots to 0 so the first frame's reproject sees
@@ -6186,7 +6209,7 @@ namespace threepp {
             // for material lookup, UV for texture sampling on the primary).
             // Always present in the layout; raygen gates use on the hybrid
             // push-constant bit.
-            std::array<VkDescriptorSetLayoutBinding, 28> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 32> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -6248,7 +6271,9 @@ namespace threepp {
             bindings[9].binding = 9;
             bindings[9].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[9].descriptorCount = 1;
-            bindings[9].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            // CLOSEST_HIT added so chit can reproject for ReSTIR DI temporal reuse.
+            bindings[9].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
+                                     VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
             bindings[10].binding = 10;
             bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[10].descriptorCount = 1;
@@ -6266,7 +6291,10 @@ namespace threepp {
             bindings[13].binding = 13;
             bindings[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[13].descriptorCount = 1;
-            bindings[13].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            // CLOSEST_HIT added so chit can read prev worldPos for ReSTIR DI
+            // temporal-reuse depth validation.
+            bindings[13].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
+                                      VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
             // Binding 14 — per-frame emissive-triangle CDF (closest_hit reads
             // it for emissive-mesh NEE). One slot per frame-in-flight; rewritten
             // by rewriteEmissiveTriDescriptors when the buffer grows.
@@ -6361,6 +6389,29 @@ namespace threepp {
             bindings[27].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[27].descriptorCount = 1;
             bindings[27].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+            // Bindings 28-31 — ReSTIR DI Stage 1b reservoir ping-pong storage.
+            // 28/29: lightPos.xyz + lightType.w (rgba32f, write/read)
+            // 30/31: W_sum, M, W, p_hat (rgba16f, write/read)
+            // Frame N writes 28/30, reads 29/31; descriptor-set 1 (next f) flips
+            // the physical images so each frame's read sees the prior frame's
+            // write. Same pattern as accumImagesPP / gbufImagesPP.
+            bindings[28].binding = 28;
+            bindings[28].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[28].descriptorCount = 1;
+            bindings[28].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[29].binding = 29;
+            bindings[29].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[29].descriptorCount = 1;
+            bindings[29].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[30].binding = 30;
+            bindings[30].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[30].descriptorCount = 1;
+            bindings[30].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[31].binding = 31;
+            bindings[31].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[31].descriptorCount = 1;
+            bindings[31].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -6692,7 +6743,7 @@ namespace threepp {
             ps[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             ps[0].descriptorCount = totalSets;
             ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            ps[1].descriptorCount = totalSets * 7;// bindings 1, 7, 11, 12, 13 + 20×2 (filtered ping-pong)
+            ps[1].descriptorCount = totalSets * 11;// bindings 1, 7, 11, 12, 13 + 20×2 (filtered ping-pong) + 28-31 (ReSTIR DI reservoir ping-pong)
             ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             ps[2].descriptorCount = totalSets * 4;// bindings 2 (camera), 5 (lights), 9 (prevCamera), 17 (fog)
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -7079,13 +7130,61 @@ namespace threepp {
                     wBlueNoise.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                     wBlueNoise.pImageInfo = &blueNoiseInfo;
 
-                    std::array<VkWriteDescriptorSet, 28> writes{
+                    // Bindings 28-31 — ReSTIR DI Stage 1b reservoir ping-pong.
+                    // 28 = pos+type write (this frame), 29 = pos+type read (prev),
+                    // 30 = W_sum/M/W/p_hat write, 31 = same read. f&1 picks slot.
+                    VkDescriptorImageInfo resPosWriteInfo{};
+                    resPosWriteInfo.imageView   = reservoirPosImagesPP[writeSlot].view;
+                    resPosWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wResPosWrite{};
+                    wResPosWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wResPosWrite.dstSet = descriptorSets[idx];
+                    wResPosWrite.dstBinding = 28;
+                    wResPosWrite.descriptorCount = 1;
+                    wResPosWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wResPosWrite.pImageInfo = &resPosWriteInfo;
+
+                    VkDescriptorImageInfo resPosReadInfo{};
+                    resPosReadInfo.imageView   = reservoirPosImagesPP[readSlot].view;
+                    resPosReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wResPosRead{};
+                    wResPosRead.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wResPosRead.dstSet = descriptorSets[idx];
+                    wResPosRead.dstBinding = 29;
+                    wResPosRead.descriptorCount = 1;
+                    wResPosRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wResPosRead.pImageInfo = &resPosReadInfo;
+
+                    VkDescriptorImageInfo resWWriteInfo{};
+                    resWWriteInfo.imageView   = reservoirWImagesPP[writeSlot].view;
+                    resWWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wResWWrite{};
+                    wResWWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wResWWrite.dstSet = descriptorSets[idx];
+                    wResWWrite.dstBinding = 30;
+                    wResWWrite.descriptorCount = 1;
+                    wResWWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wResWWrite.pImageInfo = &resWWriteInfo;
+
+                    VkDescriptorImageInfo resWReadInfo{};
+                    resWReadInfo.imageView   = reservoirWImagesPP[readSlot].view;
+                    resWReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wResWRead{};
+                    wResWRead.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wResWRead.dstSet = descriptorSets[idx];
+                    wResWRead.dstBinding = 31;
+                    wResWRead.descriptorCount = 1;
+                    wResWRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wResWRead.pImageInfo = &resWReadInfo;
+
+                    std::array<VkWriteDescriptorSet, 32> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
                             wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered,
                             wMeshMoved,
                             wGbufNormal, wGbufMotion, wGbufDepth, wGbufIds, wGbufUv,
-                            wBlueNoise};
+                            wBlueNoise,
+                            wResPosWrite, wResPosRead, wResWWrite, wResWRead};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -7283,6 +7382,8 @@ namespace threepp {
             for (auto& img : accumImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : filteredImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
+            for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
+            for (auto& img : reservoirWImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             createAccumImage();// resets sampleIndex + clears prevWorldMats
             // Resize hybrid raster attachments BEFORE descriptor rewrites —
             // bindings 22-25 point at rasterGbufs[f].*.view, so stale views
@@ -7458,12 +7559,19 @@ namespace threepp {
             accumGbufTemplate.subresourceRange.levelCount = 1;
             accumGbufTemplate.subresourceRange.layerCount = 1;
 
-            std::array<VkImageMemoryBarrier2, 5> preBarriers{};
+            std::array<VkImageMemoryBarrier2, 9> preBarriers{};
             preBarriers[0] = toGeneral;
             preBarriers[1] = accumGbufTemplate; preBarriers[1].image = accumImagesPP[0].image;
             preBarriers[2] = accumGbufTemplate; preBarriers[2].image = accumImagesPP[1].image;
             preBarriers[3] = accumGbufTemplate; preBarriers[3].image = gbufImagesPP[0].image;
             preBarriers[4] = accumGbufTemplate; preBarriers[4].image = gbufImagesPP[1].image;
+            // ReSTIR DI reservoir ping-pong: frame N writes one slot, reads the
+            // other; the barrier ensures frame N-1's write is visible to frame
+            // N's read in the same RT_SHADER stage.
+            preBarriers[5] = accumGbufTemplate; preBarriers[5].image = reservoirPosImagesPP[0].image;
+            preBarriers[6] = accumGbufTemplate; preBarriers[6].image = reservoirPosImagesPP[1].image;
+            preBarriers[7] = accumGbufTemplate; preBarriers[7].image = reservoirWImagesPP[0].image;
+            preBarriers[8] = accumGbufTemplate; preBarriers[8].image = reservoirWImagesPP[1].image;
             VkDependencyInfo dep{};
             dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
             dep.imageMemoryBarrierCount = static_cast<uint32_t>(preBarriers.size());

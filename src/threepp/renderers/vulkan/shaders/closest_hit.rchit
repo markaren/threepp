@@ -152,6 +152,27 @@ layout(set = 0, binding = 14, scalar) readonly buffer EmissiveTriBuf {
 layout(set = 0, binding = 15, std430) readonly buffer PhotonCountBuf { uint photonCounts[]; };
 layout(set = 0, binding = 16, scalar) readonly buffer PhotonDataBuf  { vec3 photonData[];   };
 
+// ReSTIR DI Stage 1b — temporal-reuse infrastructure.
+//   binding 9  = PrevCameraUbo (added CLOSEST_HIT stage on host); used to
+//                reproject the current-frame world-space hit point into the
+//                previous frame's pixel grid for reservoir lookup.
+//   binding 13 = prevGbufImage (rgba32f: prev worldPos.xyz + prev instID.w);
+//                used for the depth + mesh-ID validation gate.
+//   bindings 28/29 = reservoir lightPos + lightType ping-pong (rgba32f).
+//   bindings 30/31 = reservoir W_sum/M/W/p_hat ping-pong (rgba16f).
+// 28/30 are written this frame; 29/31 hold the prior frame's writes.
+layout(set = 0, binding = 9) uniform PrevCameraUboChit {
+    vec4 prevCamPosX;  // .xyz = world position, .w = projScaleX = 1/(aspect·tanHalfFovY)
+    vec4 prevCamFwdY;  // .xyz = forward,        .w = projScaleY = 1/tanHalfFovY
+    vec4 prevCamRgt;   // .xyz = right
+    vec4 prevCamUp;    // .xyz = up
+} pcam;
+layout(set = 0, binding = 13, rgba32f) uniform readonly image2D prevGbufImage;
+layout(set = 0, binding = 28, rgba32f) uniform writeonly image2D resPosWrite;
+layout(set = 0, binding = 29, rgba32f) uniform readonly  image2D resPosRead;
+layout(set = 0, binding = 30, rgba16f) uniform writeonly image2D resWWrite;
+layout(set = 0, binding = 31, rgba16f) uniform readonly  image2D resWRead;
+
 // Phase 11: PMREM mip count comes via the same push-constant block used by
 // raygen. .x is raygen's sampleIndex (not read here); .y is envMipCount.
 layout(push_constant) uniform Pc {
@@ -488,6 +509,94 @@ void updateReservoir(inout Reservoir r, vec3 pos, float ltype,
 
 void finalizeReservoir(inout Reservoir r) {
     r.W = r.W_sum / max(r.M * r.p_hat, 1e-20);
+}
+
+// Reconstruct (dir, maxDist, Le_unclamped) from a stored reservoir sample.
+// Used by both temporal-reuse target-pdf re-eval (Stage 1b) and the
+// visibility-test shade pass. Le here is the *unclamped* emitter radiance at
+// the receiver — analytic lights include attenuation; emTri / rect are raw
+// emitter color. Caller applies fireflyClamp when shading. Returns a zero
+// dir for sentinel "no candidate" reservoirs (typeCode < 0).
+struct LightInfo { vec3 dir; float maxDist; vec3 Le; };
+LightInfo evalLightInfoForReservoir(int typeCode, vec3 lightPos, vec3 hitPos) {
+    LightInfo o;
+    o.dir     = vec3(0.0);
+    o.maxDist = 0.0;
+    o.Le      = vec3(0.0);
+    if (typeCode < 0) return o;
+    if (typeCode >= 1000) {
+        const int eTi = typeCode - 1000;
+        const vec3 toL = lightPos - hitPos;
+        const float dist = length(toL);
+        if (dist < 1e-12) return o;
+        o.dir     = toL / dist;
+        o.maxDist = dist - 1e-2;
+        o.Le      = emissiveTris[eTi].emission.rgb;
+        return o;
+    }
+    if (typeCode < 8) {
+        if (uint(typeCode) >= lights.dirCount) return o;
+        o.dir     = normalize(lights.dirLights[typeCode].direction);
+        o.maxDist = 1e30;
+        o.Le      = lights.dirLights[typeCode].color;
+        return o;
+    }
+    if (typeCode < 16) {
+        const int pi = typeCode - 8;
+        if (uint(pi) >= lights.pointCount) return o;
+        const vec3 toL = lights.pointLights[pi].position - hitPos;
+        const float dist = length(toL);
+        if (dist < 1e-12) return o;
+        o.dir     = toL / dist;
+        o.maxDist = dist - 1e-2;
+        const float decay = lights.pointLights[pi].decay;
+        float atten = 1.0 / max(pow(dist, decay), 0.01);
+        const float rng = lights.pointLights[pi].range;
+        if (rng > 0.0) {
+            const float t  = dist / rng;
+            const float t4 = t * t * t * t;
+            const float ww = max(1.0 - t4, 0.0);
+            atten *= ww * ww;
+        }
+        o.Le = lights.pointLights[pi].color * atten;
+        return o;
+    }
+    if (typeCode < 24) {
+        const int si = typeCode - 16;
+        if (uint(si) >= lights.spotCount) return o;
+        const vec3 toL = lights.spotLights[si].position - hitPos;
+        const float dist = length(toL);
+        if (dist < 1e-12) return o;
+        o.dir     = toL / dist;
+        o.maxDist = dist - 1e-2;
+        const float spotCos   = dot(-o.dir, lights.spotLights[si].direction);
+        const float spotAtten = smoothstep(lights.spotLights[si].cosAngleOuter,
+                                            lights.spotLights[si].cosAngleInner, spotCos);
+        const float decay = lights.spotLights[si].decay;
+        float atten = 1.0 / max(pow(dist, decay), 0.01);
+        const float rng = lights.spotLights[si].range;
+        if (rng > 0.0) {
+            const float t  = dist / rng;
+            const float t4 = t * t * t * t;
+            const float ww = max(1.0 - t4, 0.0);
+            atten *= ww * ww;
+        }
+        atten *= spotAtten;
+        o.Le = lights.spotLights[si].color * atten;
+        return o;
+    }
+    // typeCode in [24,28): rect light. lightPos is the *sampled point* on
+    // the rect that was selected at candidate-gen time; we re-aim the shadow
+    // ray at that exact point so re-evaluating Le requires no extra sampling.
+    const int ri = typeCode - 24;
+    if (uint(ri) >= lights.rectCount) return o;
+    const vec3 toL = lightPos - hitPos;
+    const float dist = length(toL);
+    if (dist < 1e-12) return o;
+    o.dir     = toL / dist;
+    o.maxDist = dist - 1e-2;
+    o.Le      = lights.rectLights[ri].color;
+    return o;
 }
 
 // Binary search a 1-row CDF lookup. row=0 is used for the 1×h marginal CDF
@@ -1346,73 +1455,98 @@ void main() {
         }
 
         finalizeReservoir(r);
+
+        // ── Stage 1b: temporal reuse ──
+        // Reproject world hit into prev frame's pixel grid; if mesh-ID + depth
+        // gates pass, merge with prev reservoir. WGPU PT validates with
+        // normal+depth via gBuf.xyz/.w; Vulkan's prevGbufImage carries
+        // worldPos+meshID (same physical buffer raygen uses for accum
+        // reproject), so we use mesh-ID + |Δdist|/dist instead of normal —
+        // gives a comparable validity gate without a second prev-gbuf texture.
+        // M-clamp: 5 during camera motion (flush stale history quickly), 20
+        // when static — matches WGPU's restirParams.y values.
+        {
+            const ivec2 sz = imageSize(prevGbufImage);
+            const vec3 toPrevCam = hitPos - pcam.prevCamPosX.xyz;
+            const float prevZ    = dot(toPrevCam, pcam.prevCamFwdY.xyz);
+            if (prevZ > 1e-3 && sz.x > 0 && sz.y > 0) {
+                const float ndcX = dot(toPrevCam, pcam.prevCamRgt.xyz) * pcam.prevCamPosX.w / prevZ;
+                const float ndcY = dot(toPrevCam, pcam.prevCamUp.xyz)  * pcam.prevCamFwdY.w / prevZ;
+                const float prevU = (ndcX * 0.5 + 0.5) * float(sz.x);
+                const float prevV = (0.5 - ndcY * 0.5) * float(sz.y);
+                const ivec2 prevPx = ivec2(int(floor(prevU)), int(floor(prevV)));
+                if (prevPx.x >= 0 && prevPx.x < sz.x &&
+                    prevPx.y >= 0 && prevPx.y < sz.y) {
+                    const vec4 pgb = imageLoad(prevGbufImage, prevPx);
+                    const uint prevMeshId = uint(pgb.w);
+                    const uint curMeshId  = uint(gl_InstanceCustomIndexEXT) + 1u;
+                    if (prevMeshId != 0u && prevMeshId == curMeshId) {
+                        const float curDist  = length(toPrevCam);
+                        const float prevDist = length(pgb.xyz - pcam.prevCamPosX.xyz);
+                        if (abs(curDist - prevDist) / max(curDist, 1e-6) < 0.1) {
+                            const vec4 prevPosT = imageLoad(resPosRead, prevPx);
+                            const vec4 prevWdat = imageLoad(resWRead,   prevPx);
+                            const float mClamp = ((pc.motionFlags & 2u) != 0u) ? 5.0 : 20.0;
+                            Reservoir rPrev;
+                            rPrev.lightPos  = prevPosT.xyz;
+                            rPrev.lightType = prevPosT.w;
+                            rPrev.W_sum     = prevWdat.x;
+                            rPrev.M         = min(prevWdat.y, mClamp);
+                            rPrev.W         = prevWdat.z;
+                            rPrev.p_hat     = prevWdat.w;
+                            if (rPrev.W > 0.0 && rPrev.M > 0.0 && rPrev.lightType >= -0.5) {
+                                const int prevType = int(rPrev.lightType);
+                                const LightInfo li = evalLightInfoForReservoir(prevType, rPrev.lightPos, hitPos);
+                                const float NdotL_prev = max(dot(N, li.dir), 0.0);
+                                const float p_hat_prev = NdotL_prev * lum3(li.Le);
+                                if (p_hat_prev > 0.0) {
+                                    const float w_prev = p_hat_prev * rPrev.M * rPrev.W;
+                                    r.W_sum += w_prev;
+                                    r.M     += rPrev.M;
+                                    if (urand(seed) < w_prev / max(r.W_sum, 1e-20)) {
+                                        r.lightPos  = rPrev.lightPos;
+                                        r.lightType = rPrev.lightType;
+                                        r.p_hat     = p_hat_prev;
+                                    }
+                                    finalizeReservoir(r);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Persist this frame's reservoir for next frame's temporal merge.
+        // Done unconditionally inside the RIS branch — including W=0 cases —
+        // so disocclusions get cleanly zeroed history rather than picking up
+        // stale data from two frames ago. Bounce / transmissive primaries
+        // skip this branch entirely; their pixel's prev reservoir lingers
+        // until validation rejects it.
+        imageStore(resPosWrite, ivec2(gl_LaunchIDEXT.xy),
+                   vec4(r.lightPos, r.lightType));
+        imageStore(resWWrite,   ivec2(gl_LaunchIDEXT.xy),
+                   vec4(r.W_sum, r.M, r.W, r.p_hat));
+
         // Cap W when firefly clamping is enabled (matches WGPU's `if
         // emissiveInfo.z < 1e20 → W = min(W,5)`); pc.fireflyClamp uses 1e30
-        // as the disabled sentinel.
+        // as the disabled sentinel. Applied AFTER the writeback so the
+        // persisted W is unclamped (matches WGPU — clamp is a shading-time
+        // safety net, not a structural property of the reservoir).
         if (pc.fireflyClamp < 1e20) r.W = min(r.W, 5.0);
 
         // ── Visibility test + shade at chosen sample ──
-        if (r.W > 0.0 && r.p_hat > 0.0) {
+        if (r.W > 0.0 && r.p_hat > 0.0 && r.lightType >= -0.5) {
             const int typeCode = int(r.lightType);
-            vec3 lDir;
-            float lMaxDist;
-            vec3 Le;
+            const LightInfo li = evalLightInfoForReservoir(typeCode, r.lightPos, hitPos);
+            vec3 lDir       = li.dir;
+            float lMaxDist  = li.maxDist;
+            vec3 Le         = li.Le;
+            // Per-emitter firefly clamp (analytic Le already includes
+            // attenuation, so clamp on the post-attenuation luminance).
             if (typeCode >= 1000) {
-                const int eTi = typeCode - 1000;
-                const vec3 toL_c = r.lightPos - hitPos;
-                const float dist = length(toL_c);
-                lDir = toL_c / max(dist, 1e-12);
-                lMaxDist = dist - 1e-2;
-                Le = emissiveTris[eTi].emission.rgb;
                 const float emLum = lum3(Le);
                 if (emLum > pc.fireflyClamp) Le *= pc.fireflyClamp / emLum;
-            } else if (typeCode < 8) {
-                lDir = normalize(lights.dirLights[typeCode].direction);
-                lMaxDist = 1e30;
-                Le = lights.dirLights[typeCode].color;
-            } else if (typeCode < 16) {
-                const int pi = typeCode - 8;
-                const vec3 toL_c = lights.pointLights[pi].position - hitPos;
-                const float dist = length(toL_c);
-                lDir = toL_c / max(dist, 1e-12);
-                lMaxDist = dist - 1e-2;
-                const float decay = lights.pointLights[pi].decay;
-                float atten = 1.0 / max(pow(dist, decay), 0.01);
-                const float rng = lights.pointLights[pi].range;
-                if (rng > 0.0) {
-                    const float t = dist / rng;
-                    const float t4 = t * t * t * t;
-                    const float ww = max(1.0 - t4, 0.0);
-                    atten *= ww * ww;
-                }
-                Le = lights.pointLights[pi].color * atten;
-            } else if (typeCode < 24) {
-                const int si = typeCode - 16;
-                const vec3 toL_c = lights.spotLights[si].position - hitPos;
-                const float dist = length(toL_c);
-                lDir = toL_c / max(dist, 1e-12);
-                lMaxDist = dist - 1e-2;
-                const float spotCos = dot(-lDir, lights.spotLights[si].direction);
-                const float spotAtten = smoothstep(lights.spotLights[si].cosAngleOuter,
-                                                    lights.spotLights[si].cosAngleInner, spotCos);
-                const float decay = lights.spotLights[si].decay;
-                float atten = 1.0 / max(pow(dist, decay), 0.01);
-                const float rng = lights.spotLights[si].range;
-                if (rng > 0.0) {
-                    const float t = dist / rng;
-                    const float t4 = t * t * t * t;
-                    const float ww = max(1.0 - t4, 0.0);
-                    atten *= ww * ww;
-                }
-                atten *= spotAtten;
-                Le = lights.spotLights[si].color * atten;
-            } else {
-                const int ri = typeCode - 24;
-                const vec3 toL_c = r.lightPos - hitPos;
-                const float dist = length(toL_c);
-                lDir = toL_c / max(dist, 1e-12);
-                lMaxDist = dist - 1e-2;
-                Le = lights.rectLights[ri].color;
             }
 
             const float NdotL_c = max(dot(N, lDir), 0.0);
