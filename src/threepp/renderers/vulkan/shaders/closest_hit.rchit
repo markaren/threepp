@@ -1312,14 +1312,18 @@ void main() {
 
     vec3 lit = vec3(0.0);
 
-    // ReSTIR DI Stage 1a: at primary on opaque-ish surfaces, replace per-light
-    // shadow rays with RIS over a single chosen sample (1 shadow ray total
-    // instead of up to 28 + emissive). Bounces and transmissive primaries
-    // fall through to classic NEE below. Env NEE remains separate (matches
-    // WGPU PT — env CDF importance sampling carries its own MIS pair). No
-    // temporal/spatial reuse yet — those need a per-pixel reservoir SSBO and
-    // come in Stage 1b/1c.
-    const bool useRISPrimary = ((payload.inFlags & 1u) == 0u) && (mdesc.transmission < 0.05);
+    // ReSTIR DI: at primary on opaque-ish surfaces, replace per-light shadow
+    // rays with RIS over a single chosen sample (1 shadow ray total instead
+    // of up to 28 + emissive). Bounces and transmissive primaries fall
+    // through to classic NEE below. Env NEE remains separate (matches WGPU
+    // PT — env CDF importance sampling carries its own MIS pair). Stage 1a
+    // = init RIS only; 1b adds temporal reuse via a per-pixel reservoir
+    // SSBO; 1c adds spatial reuse via random neighbour taps from the same
+    // SSBO. Master gate is pc.motionFlags bit 4 (renderer.setRestirDIEnabled).
+    const bool restirOn      = (pc.motionFlags & 16u) != 0u;
+    const bool useRISPrimary = restirOn
+                            && ((payload.inFlags & 1u) == 0u)
+                            && (mdesc.transmission < 0.05);
 
     if (useRISPrimary) {
         Reservoir r;
@@ -1330,13 +1334,25 @@ void main() {
         r.W         = 0.0;
         r.p_hat     = 0.0;
 
-        // Directional candidates — delta lights, p_source = 1.
+        // Joint analytic-light proposal density: pick uniformly over all
+        // enabled analytic slots in the lights UBO. p_source_per_candidate
+        // = 1 / analyticN, so w_i = ρ_i / p_source = ρ_i × analyticN. Without
+        // this factor, M grows by `analyticN` (one per slot, including
+        // intensity-zero ones) but W_sum only collects ρ from the live
+        // ones — the resulting W = W_sum / (M·p_hat) is darkened by the
+        // ratio of live-to-total slots. Matches WGPU's `p_source_a =
+        // 1/lcount` (pt_primary_shade1.wgsl:168). Floor at 1.0 since when
+        // analyticN == 0 the for-loops below don't execute anyway.
+        const float analyticN = max(float(lights.dirCount + lights.pointCount
+                                         + lights.spotCount + lights.rectCount), 1.0);
+
+        // Directional candidates — delta lights.
         for (uint i = 0u; i < lights.dirCount; ++i) {
             const vec3 L = normalize(lights.dirLights[i].direction);
             const float NdotL = max(dot(N, L), 0.0);
             const vec3 Le = lights.dirLights[i].color;
             const float p_hat = NdotL * lum3(Le);
-            updateReservoir(r, L, float(i), p_hat, p_hat, seed);
+            updateReservoir(r, L, float(i), p_hat * analyticN, p_hat, seed);
         }
 
         // Point candidates — delta with 1/d^decay + range window in Le.
@@ -1357,7 +1373,8 @@ void main() {
             }
             const vec3 Le = lights.pointLights[i].color * atten;
             const float p_hat = NdotL * lum3(Le);
-            updateReservoir(r, lights.pointLights[i].position, float(8u + i), p_hat, p_hat, seed);
+            updateReservoir(r, lights.pointLights[i].position, float(8u + i),
+                            p_hat * analyticN, p_hat, seed);
         }
 
         // Spot candidates — point + cone.
@@ -1382,11 +1399,12 @@ void main() {
             atten *= spotAtten;
             const vec3 Le = lights.spotLights[i].color * atten;
             const float p_hat = NdotL * lum3(Le);
-            updateReservoir(r, lights.spotLights[i].position, float(16u + i), p_hat, p_hat, seed);
+            updateReservoir(r, lights.spotLights[i].position, float(16u + i),
+                            p_hat * analyticN, p_hat, seed);
         }
 
-        // Rect candidates — area light, sample uniform-area;
-        // p_source in solid angle = dist² / (cosEmitter · area).
+        // Rect candidates — area light, sample uniform-area; combined
+        // proposal = (1/analyticN) × (1/area_omega), so w = (p_hat / p_omega) × analyticN.
         for (uint i = 0u; i < lights.rectCount; ++i) {
             const float ru = urand(seed) * 2.0 - 1.0;
             const float rv = urand(seed) * 2.0 - 1.0;
@@ -1405,7 +1423,7 @@ void main() {
             const float p_omega = (dist * dist) / max(area * cosEmitter, 1e-12);
             const vec3 Le = lights.rectLights[i].color;
             const float p_hat = NdotL * lum3(Le);
-            const float w_i = p_hat / max(p_omega, 1e-20);
+            const float w_i = (p_hat / max(p_omega, 1e-20)) * analyticN;
             updateReservoir(r, samplePos, float(24u + i), w_i, p_hat, seed);
         }
 
@@ -1517,12 +1535,73 @@ void main() {
             }
         }
 
-        // Persist this frame's reservoir for next frame's temporal merge.
-        // Done unconditionally inside the RIS branch — including W=0 cases —
-        // so disocclusions get cleanly zeroed history rather than picking up
-        // stale data from two frames ago. Bounce / transmissive primaries
-        // skip this branch entirely; their pixel's prev reservoir lingers
-        // until validation rejects it.
+        // ── Stage 1c: spatial reuse ──
+        // Random neighbour taps from prev-frame reservoir buffer. Validation
+        // gate is mesh-ID + depth (same prevGbufImage temporal uses; we don't
+        // bind a prev-normal texture, so the cone-of-normals gate WGPU has is
+        // approximated by per-mesh + depth. Curved surfaces get more permissive
+        // acceptance, but the recomputed p_hat at our normal keeps the merge
+        // unbiased — a "wasted" tap with low p_hat barely shifts the reservoir.
+        // M-cap of 4 per neighbour matches WGPU; loop terminates early once
+        // total M reaches 20 (the static-frame target). spMax: 5 static, 2
+        // moving (matches WGPU's restirParams cam-moving fallback).
+        {
+            const ivec2 sz = imageSize(prevGbufImage);
+            if (sz.x > 0 && sz.y > 0) {
+                const bool camMoving = (pc.motionFlags & 2u) != 0u;
+                const uint spMax     = camMoving ? 2u : 5u;
+                const float mTarget  = 20.0;
+                const uint curMeshId = uint(gl_InstanceCustomIndexEXT) + 1u;
+                const float curDistC = length(hitPos - pcam.prevCamPosX.xyz);
+                for (uint sp = 0u; sp < spMax; ++sp) {
+                    if (r.M >= mTarget) break;
+                    const float spAngle = urand(seed) * TWO_PI;
+                    const float spR     = sqrt(urand(seed)) * 20.0;
+                    const ivec2 spOff   = ivec2(int(spR * cos(spAngle)),
+                                                int(spR * sin(spAngle)));
+                    if (spOff.x == 0 && spOff.y == 0) continue;
+                    const ivec2 spPx = clamp(ivec2(gl_LaunchIDEXT.xy) + spOff,
+                                             ivec2(0), ivec2(sz - ivec2(1)));
+                    const vec4 spGbuf   = imageLoad(prevGbufImage, spPx);
+                    const uint spMeshId = uint(spGbuf.w);
+                    if (spMeshId == 0u || spMeshId != curMeshId) continue;
+                    const float spDist = length(spGbuf.xyz - pcam.prevCamPosX.xyz);
+                    if (abs(spDist - curDistC) / max(curDistC, 1e-3) > 0.1) continue;
+                    const vec4 spPosT = imageLoad(resPosRead, spPx);
+                    const vec4 spWdat = imageLoad(resWRead,   spPx);
+                    Reservoir rSp;
+                    rSp.lightPos  = spPosT.xyz;
+                    rSp.lightType = spPosT.w;
+                    rSp.W_sum     = spWdat.x;
+                    rSp.M         = min(spWdat.y, 4.0);
+                    rSp.W         = spWdat.z;
+                    rSp.p_hat     = spWdat.w;
+                    if (rSp.W <= 0.0 || rSp.M <= 0.0 || rSp.lightType < -0.5) continue;
+                    const int spType = int(rSp.lightType);
+                    const LightInfo li = evalLightInfoForReservoir(spType, rSp.lightPos, hitPos);
+                    const float NdotL_sp = max(dot(N, li.dir), 0.0);
+                    const float p_hat_sp = NdotL_sp * lum3(li.Le);
+                    if (p_hat_sp > 0.0) {
+                        const float w_sp = p_hat_sp * rSp.M * rSp.W;
+                        r.W_sum += w_sp;
+                        r.M     += rSp.M;
+                        if (urand(seed) < w_sp / max(r.W_sum, 1e-20)) {
+                            r.lightPos  = rSp.lightPos;
+                            r.lightType = rSp.lightType;
+                            r.p_hat     = p_hat_sp;
+                        }
+                    }
+                }
+                finalizeReservoir(r);
+            }
+        }
+
+        // Persist this frame's post-spatial reservoir for next frame's
+        // temporal merge. Done unconditionally inside the RIS branch —
+        // including W=0 cases — so disocclusions get cleanly zeroed history
+        // rather than picking up stale data from two frames ago. Bounce /
+        // transmissive primaries skip this branch entirely; their pixel's
+        // prev reservoir lingers until validation rejects it.
         imageStore(resPosWrite, ivec2(gl_LaunchIDEXT.xy),
                    vec4(r.lightPos, r.lightType));
         imageStore(resWWrite,   ivec2(gl_LaunchIDEXT.xy),

@@ -741,6 +741,11 @@ namespace threepp {
         // disabled by default so the raster prepass can land + be validated
         // before becoming the default.
         bool hybridEnabled_ = true;
+        // ReSTIR DI master toggle. When false, chit's primary RIS branch is
+        // bypassed and the legacy per-light NEE classic loops run instead
+        // (same pattern as bounces). Default on. Forwarded to chit via
+        // pc.motionFlags bit 16 each frame.
+        bool restirDIEnabled_ = true;
         // Sub-pixel jitter sequence index for raster TAA. Cycles within a
         // small period (16 frames) — long enough to look stable, short enough
         // to avoid ever-growing index drift.
@@ -7680,17 +7685,20 @@ namespace threepp {
             // [4] motionFlags (bit 0 = any motion, bit 1 = camera moved,
             //                  bit 2 = scene has any glass material,
             //                  bit 3 = hybrid mode (gbuffer drives reproject
-            //                          + primary jitter is disabled)),
+            //                          + primary jitter is disabled),
+            //                  bit 4 = ReSTIR DI enabled (RIS at primary;
+            //                          chit falls back to classic NEE when off)),
             // [5] emissiveCount, [6] emissiveTotalPower (float bits).
             // Per-instance moved bits live in the binding 21 SSBO.
             const float exposure = toneMappingExposure_;
             uint32_t exposureBits;
             std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
             const uint32_t motionFlags =
-                    (motionThisFrame_      ? 1u : 0u) |
-                    (cameraMovedThisFrame_ ? 2u : 0u) |
-                    (sceneHasGlass_        ? 4u : 0u) |
-                    (hybridEnabled_        ? 8u : 0u);
+                    (motionThisFrame_      ? 1u  : 0u) |
+                    (cameraMovedThisFrame_ ? 2u  : 0u) |
+                    (sceneHasGlass_        ? 4u  : 0u) |
+                    (hybridEnabled_        ? 8u  : 0u) |
+                    (restirDIEnabled_      ? 16u : 0u);
             uint32_t emPowerBits;
             std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
             uint32_t envSumBits;
@@ -8239,6 +8247,14 @@ namespace threepp {
 
     bool VulkanRenderer::hybridEnabled() const {
         return pimpl_->hybridEnabled_;
+    }
+
+    void VulkanRenderer::setRestirDIEnabled(bool enabled) {
+        pimpl_->restirDIEnabled_ = enabled;
+    }
+
+    bool VulkanRenderer::restirDIEnabled() const {
+        return pimpl_->restirDIEnabled_;
     }
 
     void VulkanRenderer::setHybridDebugView(int view) {

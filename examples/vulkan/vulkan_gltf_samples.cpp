@@ -222,6 +222,10 @@ int main(int argc, char** argv) {
         if (ImGui::Checkbox("Hybrid (raster + PT)", &hybrid))
             renderer.setHybridEnabled(hybrid);
 
+        bool restirDI = renderer.restirDIEnabled();
+        if (ImGui::Checkbox("ReSTIR DI", &restirDI))
+            renderer.setRestirDIEnabled(restirDI);
+
         if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
             renderer.setSamplesPerPixel(spp);
 

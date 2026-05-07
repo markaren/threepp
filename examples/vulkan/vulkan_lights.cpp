@@ -256,6 +256,17 @@ int main() {
             renderer.setSamplesPerPixel(spp);
 
         ImGui::Separator();
+        bool restirDI = renderer.restirDIEnabled();
+        if (ImGui::Checkbox("ReSTIR DI", &restirDI))
+            renderer.setRestirDIEnabled(restirDI);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Reservoir-resampled direct lighting at primary.\n"
+                              "Off = classic per-light NEE (one shadow ray\n"
+                              "per analytic light + emissive sample).");
+
+        ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");
         ImGui::End();
     });

@@ -110,6 +110,16 @@ namespace threepp {
         void setHybridEnabled(bool enabled);
         [[nodiscard]] bool hybridEnabled() const;
 
+        // ReSTIR DI master toggle. When on (default), the path tracer uses
+        // streaming RIS + temporal + spatial reuse at primary surfaces — one
+        // shadow ray to a single chosen sample replaces the per-light NEE
+        // loop, with reservoirs reused across frames and neighbours. When
+        // off, falls back to classic per-light NEE at primary (one shadow
+        // ray per analytic light + one per emissive sample). Bounces and
+        // env NEE are unaffected either way.
+        void setRestirDIEnabled(bool enabled);
+        [[nodiscard]] bool restirDIEnabled() const;
+
         // Day-1 / debug visualization: blit one G-buffer channel directly
         // to the swapchain, bypassing the path tracer.
         //   0 = off (PT consumes the G-buffer normally)
