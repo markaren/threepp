@@ -96,14 +96,11 @@ void main() {
     const vec2 motionPx = motionGL * 0.5 * vec2(pc.width, pc.height);
     const float motionLen = length(motionPx);
     const float velocityBump = clamp(motionLen / 30.0, 0.0, 0.5);
-    // SkinnedMesh has identity motion vector (the world matrix doesn't
-    // change; bones do, but we don't capture per-vertex skinning motion
-    // yet). The reported "static" motion would let TAA history blend
-    // forever onto a deforming surface, producing visible ghost trails.
-    // Force high alpha to kill ghosting at the cost of TAA-AA on those
-    // pixels. Proper fix: per-vertex prev-pose vertex buffer.
-    const float skinnedAlpha = isSkinned ? 0.9 : 0.0;
-    const float a = clamp(pc.blendAlpha + velocityBump + skinnedAlpha, 0.02, 1.0);
+    // is_skinned flag (bit 3) is informational; SkinnedMesh now has proper
+    // per-vertex motion vectors via a prev-pose vertex buffer (gbuffer.vert
+    // reads it at attribute 3). The previous force-high-alpha hack is gone —
+    // velocity bump alone now correctly tracks deformation.
+    const float a = clamp(pc.blendAlpha + velocityBump, 0.02, 1.0);
     const vec3 result = reprojValid ? mix(history, curr, a) : curr;
 
     imageStore(taaSwapImage,        px, vec4(result, 1.0));

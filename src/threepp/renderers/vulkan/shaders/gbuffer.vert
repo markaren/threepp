@@ -39,6 +39,11 @@ layout(push_constant) uniform PC {
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inUv;// passthrough for raygen texture sampling
+// Previous-frame local-space vertex position. For SkinnedMesh + DisplacedMesh
+// the host maintains a separate prev-pose buffer; for static meshes the host
+// binds rec->vertex here so inPrevPos == inPos and motion reduces to the
+// rigid-body case via motionMat[i] alone (same as before this change).
+layout(location = 3) in vec3 inPrevPos;
 
 layout(location = 0) out vec3 vWorldNormal;
 layout(location = 1) out vec4 vCurrClipUnjit;// motion-vec source — must not include jitter
@@ -50,7 +55,14 @@ layout(location = 6) out vec3 vWorldPos;// for fragment-shader TBN via dFdx/dFdy
 
 void main() {
     vec4 worldPos     = pc.model * vec4(inPos, 1.0);
-    vec4 prevWorldPos = motionMat[pc.instanceCustomIndex] * worldPos;
+    // prev_world = (motionMat * curr_model) * prev_local_pos = prev_model * inPrevPos.
+    //   Static meshes:    inPrevPos == inPos     → equivalent to motionMat * worldPos.
+    //   Skinned/displaced: inPrevPos = prev pose → captures the per-vertex
+    //                                              deformation that motionMat alone
+    //                                              (identity for these meshes since
+    //                                              the rigid world matrix doesn't
+    //                                              change) would miss.
+    vec4 prevWorldPos = motionMat[pc.instanceCustomIndex] * pc.model * vec4(inPrevPos, 1.0);
 
     // mat3(model) is correct for normals only under uniform/no-shear scale.
     // threepp's scene graphs are typically uniform-scaled; non-uniform

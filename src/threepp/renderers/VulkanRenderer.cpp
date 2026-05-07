@@ -197,6 +197,14 @@ namespace threepp {
             Buffer normal;
             Buffer uv;   // .handle == VK_NULL_HANDLE if geometry has no "uv"
             Buffer foam; // .handle == VK_NULL_HANDLE unless this is an FFT-displaced ocean mesh
+            // Previous-frame vertex positions, allocated for skinned + displaced
+            // meshes only. Used by the hybrid raster prepass to compute
+            // per-vertex motion vectors (skinned/displaced surfaces deform
+            // each frame; the rigid-body motionMat alone produces zero motion
+            // and ghosts under TAA + PT temporal accumulation). Static meshes
+            // bind .vertex at the prev-pos attribute slot — inPrevPos == inPos
+            // so the motion is identity-rigid as before.
+            Buffer prevVertex;
             VkDeviceAddress address = 0;
             // Liveness tag: detects dangling-pointer reuse when a BufferGeometry
             // is destroyed (model unloaded) and the C++ allocator hands the
@@ -824,6 +832,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->normal);
                 destroyBuffer(ctx->allocator(), rec->uv);
                 destroyBuffer(ctx->allocator(), rec->foam);
+                destroyBuffer(ctx->allocator(), rec->prevVertex);
             }
             blasCache.clear();
 
@@ -837,6 +846,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->normal);
                 destroyBuffer(ctx->allocator(), rec->uv);
                 destroyBuffer(ctx->allocator(), rec->foam);
+                destroyBuffer(ctx->allocator(), rec->prevVertex);
             }
             skinnedMeshStates.clear();
 
@@ -850,6 +860,7 @@ namespace threepp {
                     destroyBuffer(ctx->allocator(), rec->normal);
                     destroyBuffer(ctx->allocator(), rec->uv);
                     destroyBuffer(ctx->allocator(), rec->foam);
+                    destroyBuffer(ctx->allocator(), rec->prevVertex);
                 }
                 if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->scratchA.view, nullptr);
                 if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
@@ -995,13 +1006,15 @@ namespace threepp {
             // Hybrid: raster G-buffer pre-pass binds these same allocations
             // directly as vertex / index buffers — no duplication, no extra
             // upload, and the raster prepass + RT shadow rays warm the same
-            // cache lines.
+            // cache lines. TRANSFER_SRC_BIT for displaced meshes that need
+            // to vkCmdCopyBuffer the current vertex into prev each frame.
             const VkBufferUsageFlags geomUsage =
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
             auto rec = std::make_unique<BlasRecord>();
 
@@ -1254,6 +1267,17 @@ namespace threepp {
             if (!rec) return nullptr;
             rec->liveCheck = sm.geometry();
 
+            // Per-vertex previous-pose buffer for hybrid raster motion vec.
+            // Same size as the current vertex buffer; host-mapped so we can
+            // memcpy prev positions each frame in refreshSkinnedBlas.
+            const VkDeviceSize vbBytes = posAttr->array().size() * sizeof(float);
+            rec->prevVertex = createBuffer(
+                    ctx->allocator(), ctx->device(), vbBytes,
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+
             auto state = std::make_unique<SkinnedMeshState>();
             state->blas = std::move(rec);
             state->liveCheck = sm.geometry();
@@ -1275,6 +1299,22 @@ namespace threepp {
         void refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState& st) {
             cpuSkin(sm, st.deformedPositions, st.deformedNormals);
             if (st.deformedPositions.empty() || !st.blas) return;
+
+            // Per-vertex motion source for hybrid raster pass only. Reverted
+            // from PT-side use after the chit-side prev-vertex interpolation
+            // was found to bloat the kernel and tank FPS without resolving
+            // the underlying skinned-mesh "lingering pixels" problem (which
+            // was about prev-frame normal/shading state, not position).
+            if (hybridEnabled_ && st.blas->prevVertex.handle != VK_NULL_HANDLE) {
+                void* prevMap = nullptr;
+                void* currMap = nullptr;
+                vmaMapMemory(ctx->allocator(), st.blas->prevVertex.alloc, &prevMap);
+                vmaMapMemory(ctx->allocator(), st.blas->vertex.alloc,     &currMap);
+                std::memcpy(prevMap, currMap,
+                            st.deformedPositions.size() * sizeof(float));
+                vmaUnmapMemory(ctx->allocator(), st.blas->vertex.alloc);
+                vmaUnmapMemory(ctx->allocator(), st.blas->prevVertex.alloc);
+            }
 
             void* mapped = nullptr;
             vmaMapMemory(ctx->allocator(), st.blas->vertex.alloc, &mapped);
@@ -1404,6 +1444,17 @@ namespace threepp {
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO);
+
+            // Per-vertex previous-pose buffer for hybrid raster motion vec.
+            // Same size as vertex (R32G32B32 SFLOAT × vertexCount). Filled
+            // GPU-side via vkCmdCopyBuffer before each water_displace dispatch.
+            blas->prevVertex = createBuffer(
+                    ctx->allocator(), ctx->device(),
+                    VkDeviceSize(vertexCount) * 3u * sizeof(float),
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                     VMA_MEMORY_USAGE_AUTO);
 
             auto state = std::make_unique<DisplacedMeshState>();
@@ -1644,6 +1695,32 @@ namespace threepp {
                             VK_PIPELINE_STAGE_HOST_BIT,
                             0, 0, nullptr, 1, &bmb, 0, nullptr);
                 }
+            }
+
+            // (3.5) Per-vertex motion: copy current vertex positions into
+            // prevVertex BEFORE water_displace overwrites them. Hybrid-only
+            // (raster gbuffer reads prevVertex at attribute 3).
+            if (hybridEnabled_ && st.blas->prevVertex.handle != VK_NULL_HANDLE) {
+                VkBufferCopy region{};
+                region.size = VkDeviceSize(st.vertexCount) * 3u * sizeof(float);
+                vkCmdCopyBuffer(cb, st.blas->vertex.handle,
+                                st.blas->prevVertex.handle, 1, &region);
+                // Barrier: copy WRITE → vertex shader READ (raster prepass)
+                // and the immediate water_displace.comp WRITE on vertex.
+                std::array<VkBufferMemoryBarrier, 1> bmb{};
+                bmb[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                bmb[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                bmb[0].dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT |
+                                       VK_ACCESS_SHADER_READ_BIT;
+                bmb[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                bmb[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                bmb[0].buffer = st.blas->prevVertex.handle;
+                bmb[0].size   = VK_WHOLE_SIZE;
+                vkCmdPipelineBarrier(cb,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_VERTEX_INPUT_BIT |
+                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        0, 0, nullptr, uint32_t(bmb.size()), bmb.data(), 0, nullptr);
             }
 
             // (4) Dispatch water_displace.comp → writes positions + normals
@@ -2557,6 +2634,7 @@ namespace threepp {
                         destroyBuffer(ctx->allocator(), rec->normal);
                         destroyBuffer(ctx->allocator(), rec->uv);
                         destroyBuffer(ctx->allocator(), rec->foam);
+                        destroyBuffer(ctx->allocator(), rec->prevVertex);
                         it = blasCache.erase(it);
                     } else {
                         ++it;
@@ -2573,6 +2651,7 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), rec->normal);
                             destroyBuffer(ctx->allocator(), rec->uv);
                             destroyBuffer(ctx->allocator(), rec->foam);
+                            destroyBuffer(ctx->allocator(), rec->prevVertex);
                         }
                         it = skinnedMeshStates.erase(it);
                     } else {
@@ -2591,6 +2670,7 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), rec->normal);
                             destroyBuffer(ctx->allocator(), rec->uv);
                             destroyBuffer(ctx->allocator(), rec->foam);
+                            destroyBuffer(ctx->allocator(), rec->prevVertex);
                         }
                         if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->scratchA.view, nullptr);
                         if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
@@ -3551,16 +3631,20 @@ namespace threepp {
                                    VK_SHADER_STAGE_VERTEX_BIT,
                                    0, sizeof(pc), &pc);
 
-                // Vertex inputs: position (binding 0), normal (binding 1),
-                // uv (binding 2). Meshes without a UV attribute fall back to
-                // the 8-byte dummy buffer of zeros so the gbuffer pipeline
-                // keeps a fixed 3-binding layout per draw.
+                // Vertex inputs: position (0), normal (1), uv (2), prevPos (3).
+                // - UV: dummy zero buffer when the mesh has no UV attribute.
+                // - prevPos: rec->prevVertex when allocated (skinned/displaced),
+                //   else rec->vertex (static mesh: prev == curr → identity-rigid
+                //   motion driven by motionMat alone, same as before this commit).
                 VkBuffer uvBuf = (rec->uv.handle != VK_NULL_HANDLE)
                                          ? rec->uv.handle
                                          : dummyUvBuffer_.handle;
-                VkBuffer     vbufs[3] = {rec->vertex.handle, rec->normal.handle, uvBuf};
-                VkDeviceSize voffs[3] = {0, 0, 0};
-                vkCmdBindVertexBuffers(cb, 0, 3, vbufs, voffs);
+                VkBuffer prevPosBuf = (rec->prevVertex.handle != VK_NULL_HANDLE)
+                                              ? rec->prevVertex.handle
+                                              : rec->vertex.handle;
+                VkBuffer     vbufs[4] = {rec->vertex.handle, rec->normal.handle, uvBuf, prevPosBuf};
+                VkDeviceSize voffs[4] = {0, 0, 0, 0};
+                vkCmdBindVertexBuffers(cb, 0, 4, vbufs, voffs);
 
                 if (rec->index.handle != VK_NULL_HANDLE) {
                     vkCmdBindIndexBuffer(cb, rec->index.handle, 0, VK_INDEX_TYPE_UINT32);
@@ -4347,12 +4431,12 @@ namespace threepp {
             stages[1].pName  = "main";
 
             // Vertex input mirrors the BLAS allocation layout: positions /
-            // normals / uvs are tightly packed (R32G32B32_SFLOAT for pos+normal,
-            // R32G32_SFLOAT for uv) in three separate device buffers. The
-            // BLAS allocations have VERTEX_BUFFER_BIT so they bind directly.
-            // Meshes without a UV attribute bind dummyUvBuffer_ instead — see
-            // recordRasterGbufPass.
-            VkVertexInputBindingDescription vibs[3]{};
+            // normals / uvs / prev-positions packed (R32G32B32_SFLOAT for
+            // pos+normal+prevPos, R32G32_SFLOAT for uv). The BLAS allocations
+            // have VERTEX_BUFFER_BIT so they bind directly. Meshes without
+            // a UV attribute bind dummyUvBuffer_ at binding 2; static meshes
+            // bind their own vertex buffer at binding 3 (prev == curr).
+            VkVertexInputBindingDescription vibs[4]{};
             vibs[0].binding   = 0;
             vibs[0].stride    = 3 * sizeof(float);
             vibs[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
@@ -4362,8 +4446,11 @@ namespace threepp {
             vibs[2].binding   = 2;
             vibs[2].stride    = 2 * sizeof(float);
             vibs[2].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            vibs[3].binding   = 3;
+            vibs[3].stride    = 3 * sizeof(float);
+            vibs[3].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-            VkVertexInputAttributeDescription vias[3]{};
+            VkVertexInputAttributeDescription vias[4]{};
             vias[0].location = 0;
             vias[0].binding  = 0;
             vias[0].format   = VK_FORMAT_R32G32B32_SFLOAT;
@@ -4376,12 +4463,16 @@ namespace threepp {
             vias[2].binding  = 2;
             vias[2].format   = VK_FORMAT_R32G32_SFLOAT;
             vias[2].offset   = 0;
+            vias[3].location = 3;
+            vias[3].binding  = 3;
+            vias[3].format   = VK_FORMAT_R32G32B32_SFLOAT;
+            vias[3].offset   = 0;
 
             VkPipelineVertexInputStateCreateInfo vi{};
             vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-            vi.vertexBindingDescriptionCount   = 3;
+            vi.vertexBindingDescriptionCount   = 4;
             vi.pVertexBindingDescriptions      = vibs;
-            vi.vertexAttributeDescriptionCount = 3;
+            vi.vertexAttributeDescriptionCount = 4;
             vi.pVertexAttributeDescriptions    = vias;
 
             VkPipelineInputAssemblyStateCreateInfo ia{};
@@ -6198,13 +6289,13 @@ namespace threepp {
                     wAS.descriptorCount = 1;
                     wAS.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
 
-                    // Stage 1A.5: denoise's binding 1 output target is now
-                    // taaInputImagesPP[f] (was the swapchain image). The TAA
-                    // resolve pass reads it + history → writes the swapchain.
-                    // Per-frame, not per-image: TAA uses (f & 1) ping-pong
-                    // for history and the swapchain index for the final write.
+                    // Binding 1 (denoise output) defaults to the swapchain
+                    // image — preserves pre-TAA-commit behaviour for non-
+                    // hybrid renders. When hybridEnabled_ flips on, renderFrame
+                    // rewrites this binding per-frame to taaInputImagesPP[f]
+                    // so TAA can resolve it before swapchain present.
                     VkDescriptorImageInfo imgInfo{};
-                    imgInfo.imageView = taaInputImagesPP[f].view;
+                    imgInfo.imageView = ctx->swapchainImageViews()[i];
                     imgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                     VkWriteDescriptorSet wImg{};
                     wImg.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -7146,14 +7237,14 @@ namespace threepp {
             // ── End denoise ─────────────────────────────────────────────────────
 
             // ── Stage 1A.5: raster TAA ─────────────────────────────────────────
-            // Denoise wrote tonemapped sRGB to taaInputImagesPP[currentFrame].
-            // When hybridEnabled_, run taa_resolve to mix it with the previous
-            // frame's history (reprojected via gbuffer motion vec, neighborhood-
-            // clamped) and write the swapchain + new history. When hybrid is
-            // off, copy taaInput directly to the swapchain — TAA needs the
-            // raster motion vector to reproject, and that vector is invalid
-            // without the gbuffer pass.
-            {
+            // Hybrid path only. When hybridEnabled_ is true, denoise wrote
+            // its tonemapped sRGB output to taaInputImagesPP[currentFrame]
+            // (per the per-frame binding-1 rewrite in renderFrame); we then
+            // run taa_resolve to mix it with reprojected history into the
+            // swapchain. When hybrid is off, denoise wrote directly to the
+            // swapchain (binding 1 is the swapchain image view) — nothing
+            // to do here.
+            if (hybridEnabled_) {
                 // Barrier: taaInputImagesPP write → read; new history write
                 // → read on the OUTGOING-to-history pong slot just to be safe.
                 std::array<VkImageMemoryBarrier2, 3> taaPre{};
@@ -7183,7 +7274,7 @@ namespace threepp {
                 taaDep.pImageMemoryBarriers = taaPre.data();
                 vkCmdPipelineBarrier2(cb, &taaDep);
 
-                if (hybridEnabled_ && taaResolvePipeline != VK_NULL_HANDLE) {
+                if (taaResolvePipeline != VK_NULL_HANDLE) {
                     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, taaResolvePipeline);
                     const uint32_t taaIdx = currentFrame * imageCount_ + imageIndex;
                     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -7207,23 +7298,6 @@ namespace threepp {
                     const uint32_t gyT = (ext.height + 7u) / 8u;
                     vkCmdDispatch(cb, gxT, gyT, 1);
                     taaHistoryValid_ = true;
-                } else {
-                    // Non-hybrid path: direct copy taaInput → swapchain.
-                    VkImageCopy region{};
-                    region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                    region.srcSubresource.layerCount = 1;
-                    region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                    region.dstSubresource.layerCount = 1;
-                    region.extent = {ext.width, ext.height, 1};
-                    vkCmdCopyImage(cb,
-                                   taaInputImagesPP[currentFrame].image,
-                                   VK_IMAGE_LAYOUT_GENERAL,
-                                   img,
-                                   VK_IMAGE_LAYOUT_GENERAL,
-                                   1, &region);
-                    // History stays unused/stale; reset valid so when hybrid
-                    // turns on later it cold-starts cleanly.
-                    taaHistoryValid_ = false;
                 }
             }
             // ── End raster TAA ─────────────────────────────────────────────────
@@ -7346,6 +7420,44 @@ namespace threepp {
             if (hybridEnabled_) {
                 ensureHybridResources();
                 uploadRasterCameraUbo(currentFrame, camera);
+                // Per-frame: redirect the RT/denoise pipeline's output
+                // image (binding 1) from the swapchain to taaInputImagesPP
+                // so TAA can resolve before present. When hybrid is off
+                // the binding stays at the swapchain (set during the
+                // initial allocateAndUpdateDescriptors), so denoise writes
+                // direct-to-present and behavior matches pre-TAA-commit.
+                for (uint32_t i = 0; i < imageCount_; ++i) {
+                    const uint32_t idx = currentFrame * imageCount_ + i;
+                    VkDescriptorImageInfo info{};
+                    info.imageView   = taaInputImagesPP[currentFrame].view;
+                    info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet w{};
+                    w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    w.dstSet          = descriptorSets[idx];
+                    w.dstBinding      = 1;
+                    w.descriptorCount = 1;
+                    w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    w.pImageInfo      = &info;
+                    vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+                }
+            } else {
+                // hybrid was on previously and is now off — make sure
+                // binding 1 points back at the swapchain. Idempotent;
+                // cheap (1 descriptor per swapchain image).
+                for (uint32_t i = 0; i < imageCount_; ++i) {
+                    const uint32_t idx = currentFrame * imageCount_ + i;
+                    VkDescriptorImageInfo info{};
+                    info.imageView   = ctx->swapchainImageViews()[i];
+                    info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet w{};
+                    w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    w.dstSet          = descriptorSets[idx];
+                    w.dstBinding      = 1;
+                    w.descriptorCount = 1;
+                    w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    w.pImageInfo      = &info;
+                    vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+                }
             }
             uploadMeshMovedBits(currentFrame);
             // Same fence guarantees emissiveTriBuffers[currentFrame] is no
