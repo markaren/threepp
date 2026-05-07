@@ -218,6 +218,10 @@ int main(int argc, char** argv) {
         if (ImGui::Checkbox("Denoise", &denoise))
             renderer.setDenoise(denoise);
 
+        bool hybrid = renderer.hybridEnabled();
+        if (ImGui::Checkbox("Hybrid (raster + PT)", &hybrid))
+            renderer.setHybridEnabled(hybrid);
+
         if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
             renderer.setSamplesPerPixel(spp);
 

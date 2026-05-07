@@ -294,6 +294,7 @@ namespace threepp::vulkan {
         VkPhysicalDeviceFeatures2 features2{};
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         features2.features.shaderInt64 = VK_TRUE;// uint64_t buffer-reference addresses in rchit
+        features2.features.samplerAnisotropy = VK_TRUE;// material-tex sampler enables aniso filtering
         features2.pNext = rayTracingEnabled_ ? static_cast<void*>(&fAS) : static_cast<void*>(&f12);
 
         VkDeviceCreateInfo ci{};

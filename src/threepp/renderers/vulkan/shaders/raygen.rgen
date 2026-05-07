@@ -60,6 +60,13 @@ layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
 layout(set = 0, binding = 2) uniform CameraUbo {
     mat4 viewInverse;
     mat4 projInverse;
+    // .xy = clip-space sub-pixel jitter offset matching the raster G-buffer
+    // pass's Halton(2,3) sequence. raygen applies it to the primary NDC in
+    // hybrid mode so V varies per frame (TAA integrates correctly across
+    // the Halton period). Zero in non-hybrid mode — the chit's per-frame
+    // Halton on the primary still produces the same effect there.
+    // .zw = (1/width, 1/height) — reserved for future ddx/ddy-style use.
+    vec4 jitter;
 } cam;
 layout(set = 0, binding = 7, rgba32f) uniform image2D accumImage;
 // Continuous-motion accumulation (Phase: motion). The previous frame's
@@ -550,10 +557,10 @@ vec3 volumeInscatter(vec3 rayOrigin, vec3 rayDir, float maxT, inout uint seed) {
     return inscatter * scatterFactor / float(N);
 }
 
-// Stage 1A: hybrid primary-hit shader. Included near main() so all bindings
-// + helpers it depends on (mats/albedoMaps/lights/env/emissiveTris/fog/pc/
-// urand/pcgNext/Payload/shadowVisibility) are already declared.
-#include "shade_primary.glsl"
+// shade_primary.glsl was the in-raygen primary shader for hybrid mode; it had
+// subtle BSDF/sampling divergences from chit and is no longer used. Hybrid
+// now traces a primary ray and lets chit shade it (see hybridOn block at the
+// top of main()). Header file kept on disk for reference but not included.
 
 void main() {
     const uint spp = max(pc.samplesPerPixel, 1u);
@@ -587,56 +594,42 @@ void main() {
     // Saves spp×(env + dir + point + spot + rect + emissive) shadow rays
     // — ~major win on heavily-lit scenes with spp > 1. Only the bounce
     // direction varies per-sample.
-    PrimaryShadeState primaryState;
-    vec3 primaryDirect      = vec3(0.0);
-    vec3 primarySkyEnv      = vec3(0.0);
-    bool primaryHybridValid = false;// setup succeeded → use primaryShadeBounce per sample
-    bool primaryHybridSky   = false;// gbuffer says sky → sample env, terminate
+    // Hybrid primary path: raster G-buffer determines visibility, but we let
+    // chit handle primary shading by tracing a primary ray from camera origin
+    // to the gbuf-derived surface direction. shade_primary.glsl's in-raygen
+    // BSDF had subtle divergences from chit (basis-rotation bug, weight-form
+    // numerics on low-roughness specular) that produced lower stills quality
+    // than non-hybrid. Routing through chit collapses the two paths to one
+    // BSDF implementation — hybrid quality matches non-hybrid by construction.
+    //
+    // The shake fix is preserved: per-frame raster Halton jitter is applied
+    // to the primary NDC, the PT accumulator integrates the result across
+    // frames, and FC reset on motion handles moving objects.
+    vec3 primarySkyEnv     = vec3(0.0);
+    bool primaryHybridSky  = false;// gbuffer says sky → tap env, terminate at step 0
+    vec3 primaryDirHybrid  = vec3(0.0);// camera → pixel-center, unjittered
     if (hybridOn) {
-        const vec2 uv_screen = (vec2(gl_LaunchIDEXT.xy) + 0.5) / size;
-        const uvec4 idsTap = texture(gbufIdsTex, uv_screen);
-        const uint id1 = idsTap.x;// 0 == sky/miss
-        // Primary ray direction at pixel center — used both for sky env tap
-        // and as HitContext.rayDir when feeding shadePrimaryHit.
-        vec2 ndcCenter = vec2(uv_screen.x * 2.0 - 1.0, -(uv_screen.y * 2.0 - 1.0));
+        const vec2  uv_screen = (vec2(gl_LaunchIDEXT.xy) + 0.5) / size;
+        const uvec4 idsTap    = texture(gbufIdsTex, uv_screen);
+        const uint  id1       = idsTap.x;// 0 == sky/miss
+
+        // Fire primary along the UNJITTERED pixel-center direction. Chit's
+        // natural hitWorldPos is then deterministic per pixel per frame for
+        // static surfaces and reflects only surface motion for moving ones —
+        // no per-frame depth jitter for motion-mat to amplify into wobble.
+        // Raster G-buffer still jitters (drives motion vec / mesh-ID for TAA
+        // and spatial AA), but the PT accumulator sees a stable worldPos and
+        // its reproject doesn't drift across frames. Net effect: no shake on
+        // moving rigid objects, AA delivered by TAA on top.
+        const vec2  ndcCenter = vec2(uv_screen.x * 2.0 - 1.0,
+                                     -(uv_screen.y * 2.0 - 1.0));
         const vec4 targetVS_c = cam.projInverse * vec4(ndcCenter, 1.0, 1.0);
         const vec3 dirVS_c    = normalize(targetVS_c.xyz / targetVS_c.w);
-        const vec3 dirWS_c    = normalize((cam.viewInverse * vec4(dirVS_c, 0.0)).xyz);
+        primaryDirHybrid      = normalize((cam.viewInverse * vec4(dirVS_c, 0.0)).xyz);
 
         if (id1 == 0u) {
-            primarySkyEnv    = sampleEquirectFog(dirWS_c);
+            primarySkyEnv    = sampleEquirectFog(primaryDirHybrid);
             primaryHybridSky = true;
-        } else {
-            const float depthV   = texture(gbufDepthTex, uv_screen).r;
-            const vec2  ndcVk    = uv_screen * 2.0 - 1.0;
-            const vec4  ndcH     = vec4(ndcVk.x, -ndcVk.y, depthV, 1.0);
-            const vec4  viewPos  = cam.projInverse * ndcH;
-            const vec4  worldH   = cam.viewInverse * viewPos;
-            const vec3  worldPos = worldH.xyz / worldH.w;
-            const vec3  normalEnc   = texture(gbufNormalTex, uv_screen).xyz;
-            const vec3  worldNormal = normalize(normalEnc * 2.0 - 1.0);
-            const vec2  matUv       = texture(gbufUvTex, uv_screen).rg;
-
-            HitContext hc;
-            hc.worldPos        = worldPos;
-            hc.worldNormalGeom = worldNormal;
-            hc.uv              = matUv;
-            hc.instanceId      = id1 - 1u;
-            hc.rayOrigin       = originWS.xyz;
-            hc.rayDir          = dirWS_c;
-            hc.hitT            = length(worldPos - originWS.xyz);
-            hc.flags           = idsTap.z;// gbuffer flag bits (bit 0 = is_water)
-
-            if (primaryShadeSetup(hc, primaryState)) {
-                // Use a frame-coherent seed (sample-index 0) so direct
-                // lighting is deterministic across the spp loop. The
-                // analytic-light NEE has no random component anyway; rect-
-                // light random sample, env CDF random sample, and emissive-
-                // tri random sample all draw from this seed.
-                uint directSeed = seedFor(gl_LaunchIDEXT.xy, pc.sampleIndex * spp);
-                primaryDirect = primaryShadeDirect(primaryState, directSeed);
-                primaryHybridValid = true;
-            }
         }
     }
     for (uint s = 0u; s < spp; ++s) {
@@ -663,7 +656,10 @@ void main() {
         vec3 radiance   = vec3(0.0);
         vec3 throughput = vec3(1.0);
         vec3 origin     = originWS.xyz;
-        vec3 dir        = dirWS;
+        // Hybrid: every spp uses the same gbuf-derived primary direction
+        // (the gbuffer was rasterized once for the whole frame). Non-hybrid
+        // varies primary per spp via the Halton jitter computed above.
+        vec3 dir        = hybridOn ? primaryDirHybrid : dirWS;
         // True when the prior shade event ran env NEE — used to gate the MIS
         // half-env weight on the next miss. Transmission events skip NEE and
         // clear this so the env is read at full strength on the bounce-into-miss.
@@ -744,33 +740,27 @@ void main() {
         // splatter inside the decal silhouette.
         const float tmin = prevPassThrough ? 1e-4 : 0.001;
 
-        // Stage 1A v2: hybrid primary uses the per-pixel cache populated
-        // outside the spp loop. Sky → primarySkyEnv (terminate). Opaque
-        // hit → reuse primaryState + primaryDirect, only the bounce
-        // direction varies per-sample. Transmissive / unlit / alpha-test
-        // surfaces have primaryHybridValid==false and fall through to a
-        // regular primary traceRayEXT below.
+        // Hybrid sky early-out: gbuf at this pixel said miss, so skip the
+        // primary traceRay and use the precomputed env tap. Non-sky hybrid
+        // pixels fall through to the same traceRayEXT non-hybrid uses; chit
+        // handles primary shading exactly the same way (`dir` was set to
+        // `primaryDirHybrid` above so the ray hits the gbuf-rasterized
+        // surface).
         bool primaryViaHybrid = false;
-        if (hybridOn && step == 0) {
-            if (primaryHybridSky) {
-                payload.radiance        = primarySkyEnv;
-                payload.brdfWeight      = vec3(0.0);
-                payload.nextOrigin      = vec3(0.0);
-                payload.nextDir         = vec3(0.0);
-                payload.flags           = 1u;
-                payload.hitWorldPos     = origin + dir * 1e6;
-                payload.hitInstanceId   = 0u;
-                payload.hitRoughness    = 1.0;
-                payload.hitMetalness    = 0.0;
-                payload.hitTransmission = 0.0;
-                payload.bsdfPdf         = 0.0;
-                payload.currentIor      = 1.0;
-                primaryViaHybrid = true;
-            } else if (primaryHybridValid) {
-                primaryShadeBounce(primaryState, seed, payload);
-                payload.radiance = primaryDirect;
-                primaryViaHybrid = true;
-            }
+        if (hybridOn && step == 0 && primaryHybridSky) {
+            payload.radiance        = primarySkyEnv;
+            payload.brdfWeight      = vec3(0.0);
+            payload.nextOrigin      = vec3(0.0);
+            payload.nextDir         = vec3(0.0);
+            payload.flags           = 1u;
+            payload.hitWorldPos     = origin + dir * 1e6;
+            payload.hitInstanceId   = 0u;
+            payload.hitRoughness    = 1.0;
+            payload.hitMetalness    = 0.0;
+            payload.hitTransmission = 0.0;
+            payload.bsdfPdf         = 0.0;
+            payload.currentIor      = 1.0;
+            primaryViaHybrid = true;
         }
 
         // No OpaqueEXT — alpha-test materials need the any-hit shader to fire.

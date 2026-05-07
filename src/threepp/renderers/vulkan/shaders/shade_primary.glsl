@@ -42,6 +42,12 @@ struct HitContext {
     vec3 rayDir;            // hit ray direction (toward surface, normalized)
     float hitT;             // distance from rayOrigin to worldPos
     uint flags;             // bit 0 = is_water, bit 1 = transmissive, bit 2 = thinWalled
+    float texLodBias;       // log2(max(|dUV/dx|, |dUV/dy|)) from gbuffer.frag — texture-
+                            // size independent. Per-tex LOD = bias + log2(textureSize.x).
+                            // RT shaders have no implicit derivatives, so without this
+                            // every texture() call would snap to mip 0. Set to -INF
+                            // (e.g. -32.0) to force mip 0 — that's what callers outside
+                            // the hybrid path (no gbuffer LOD info) should pass.
 };
 
 // ── Cached primary surface state — produced by primaryShadeSetup, read by
@@ -134,8 +140,6 @@ vec3 spSampleVNDF_H(vec3 wo, vec3 n, float alpha, vec2 u) {
                                     : vec3(1.0, 0.0, 0.0);
     const vec3 t1 = normalize(cross(nt, n));
     const vec3 t2 = cross(n, t1);
-    const mat3 W2L = mat3(t1, t2, n);
-    const mat3 L2W = transpose(W2L);
 
     const vec3 woLocal = vec3(dot(wo, t1), dot(wo, t2), dot(wo, n));
     const vec3 woHemi  = normalize(vec3(woLocal.xy * alpha, woLocal.z));
@@ -146,7 +150,13 @@ vec3 spSampleVNDF_H(vec3 wo, vec3 n, float alpha, vec2 u) {
     const vec3 c     = vec3(sinT * cos(phi), sinT * sin(phi), z);
     const vec3 nhHemi = c + woHemi;
     const vec3 hLocal = normalize(vec3(nhHemi.xy * alpha, max(0.0, nhHemi.z)));
-    return normalize(L2W * hLocal);
+    // Local-to-world: hLocal.x is along t1, .y along t2, .z along n.
+    // Earlier this code built `mat3(t1,t2,n)` and named it `W2L`, then
+    // applied `transpose(W2L) * hLocal` — which IS world-to-local. The
+    // result was a direction in a wrong frame, so the specular lobe was
+    // rotated arbitrarily on every pixel. Fully equivalent to chit's
+    // `hLocal.x*t1 + hLocal.y*t2 + hLocal.z*n` (closest_hit.rchit:553).
+    return normalize(hLocal.x * t1 + hLocal.y * t2 + hLocal.z * n);
 }
 
 vec3 spSampleVNDF(vec3 wo, vec3 n, float alpha, vec2 u) {
@@ -240,17 +250,20 @@ bool primaryShadeSetup(HitContext ctx, out PrimaryShadeState s) {
     vec3 albedo = m.albedo;
     if (m.albedoTexIndex >= 0) {
         const int i = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        albedo *= texture(albedoMaps[i], uvAlbedo).rgb;
+        const float lod = ctx.texLodBias + log2(float(textureSize(albedoMaps[i], 0).x));
+        albedo *= textureLod(albedoMaps[i], uvAlbedo, lod).rgb;
     }
     float roughness = m.roughness;
     if (m.roughnessTexIndex >= 0) {
         const int i = clamp(m.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        roughness *= texture(albedoMaps[i], uvRoughMetal).g;
+        const float lod = ctx.texLodBias + log2(float(textureSize(albedoMaps[i], 0).x));
+        roughness *= textureLod(albedoMaps[i], uvRoughMetal, lod).g;
     }
     float metalness = m.metalness;
     if (m.metalnessTexIndex >= 0) {
         const int i = clamp(m.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        metalness *= texture(albedoMaps[i], uvRoughMetal).b;
+        const float lod = ctx.texLodBias + log2(float(textureSize(albedoMaps[i], 0).x));
+        metalness *= textureLod(albedoMaps[i], uvRoughMetal, lod).b;
     }
     roughness = clamp(roughness, 0.04, 1.0);
     metalness = clamp(metalness, 0.0,  1.0);
@@ -258,7 +271,8 @@ bool primaryShadeSetup(HitContext ctx, out PrimaryShadeState s) {
     vec3 emissive = m.emissive * m.emissiveIntensity;
     if (m.emissiveTexIndex >= 0) {
         const int i = clamp(m.emissiveTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        emissive *= texture(albedoMaps[i], uvEmissive).rgb;
+        const float lod = ctx.texLodBias + log2(float(textureSize(albedoMaps[i], 0).x));
+        emissive *= textureLod(albedoMaps[i], uvEmissive, lod).rgb;
     }
 
     s.albedo    = albedo;

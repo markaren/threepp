@@ -31,6 +31,11 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
     set(_gen_dir "${CMAKE_BINARY_DIR}/generated/threepp/renderers/vulkan/shaders")
     set(_out_header "${_gen_dir}/${_name}.spv.h")
     set(_shared_header "${_src_dir}/vulkan_shared.h")
+    # raygen.rgen #includes shade_primary.glsl; we list it here as a global
+    # dep so edits to shade_primary trigger a raygen rebuild. Cheap (<1s
+    # extra glslangValidator invocations on the unrelated shaders that
+    # don't include it).
+    set(_shade_primary "${_src_dir}/shade_primary.glsl")
 
     file(MAKE_DIRECTORY "${_gen_dir}")
 
@@ -41,7 +46,7 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
                 --vn "${var_name}"
                 "${shader_src}"
                 -o   "${_out_header}"
-        DEPENDS "${shader_src}" "${_shared_header}"
+        DEPENDS "${shader_src}" "${_shared_header}" "${_shade_primary}"
         COMMENT "Compiling Vulkan shader ${_name} -> ${var_name}"
         VERBATIM)
 

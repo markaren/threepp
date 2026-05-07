@@ -14,6 +14,14 @@
 // surface detail (mortar lines, fabric weave, brick relief, etc.).
 // Albedo / roughness / metalness sampling stays in raygen.
 
+layout(set = 0, binding = 0) uniform CameraUbo {
+    mat4 currVPjittered;
+    mat4 currVPunjittered;
+    mat4 prevVP;
+    vec4 jitter;          // .xy = curr clip-space sub-pixel jitter
+    vec4 prevJitter;      // .xy = prev clip-space sub-pixel jitter
+} cam;
+
 layout(set = 0, binding = 2, scalar) readonly buffer GbufMatBuf {
     MaterialDesc gbufMats[];
 };
@@ -47,14 +55,24 @@ layout(location = 1) out vec4 outMotion;
 //   .w = reserved
 layout(location = 2) out uvec4 outIds;
 
-// Attachment 3: material UV (rg16f, .b/.a unused). raygen samples the
-// bindless material texture array at this UV when hybrid mode skips the
-// primary traceRayEXT (Stage 1A) — chit normally interpolates UV from
-// triangle vertices; we precompute it here so raygen doesn't have to.
+// Attachment 3: material UV + LOD bias (rgba16f). .rg = UV (chit normally
+// interpolates from triangle vertices; we precompute here so raygen's hybrid
+// primary skips the primary traceRayEXT). .b = log2(max(|dUV/dx|, |dUV/dy|))
+// — a texture-size-independent footprint. raygen adds log2(textureSize) per
+// sample to drive textureLod. Without this, raygen's `texture()` calls (RT
+// shaders have no implicit derivatives) snap to mip 0 and per-frame texture
+// shimmer survives TAA — which non-hybrid PT averages out via accumulated
+// samples but hybrid (1-2 spp/frame) cannot.
 layout(location = 3) out vec4 outUv;
 
 void main() {
     vec3 N = normalize(vWorldNormal);
+
+    // UV derivatives — used both for the LOD bias attachment and the normal-
+    // map TBN construction below. Hoisted out of the normal-map branch
+    // because dFdx/dFdy must be called from non-divergent control flow.
+    const vec2 duvx = dFdx(vUv);
+    const vec2 duvy = dFdy(vUv);
 
     // Normal map perturbation. TBN derived from screen-space derivatives:
     // (dpx, dpy) = world-space partial derivatives of position
@@ -73,8 +91,6 @@ void main() {
     if (m.normalTexIndex >= 0 && !isWater) {
         const vec3 dpx = dFdx(vWorldPos);
         const vec3 dpy = dFdy(vWorldPos);
-        const vec2 duvx = dFdx(vUv);
-        const vec2 duvy = dFdy(vUv);
         const float det = duvx.x * duvy.y - duvy.x * duvx.y;
         if (abs(det) > 1e-8) {
             vec3 T = (dpx * duvy.y - dpy * duvx.y) / det;
@@ -100,9 +116,13 @@ void main() {
 
     vec2 currNDC = vCurrClipUnjit.xy / vCurrClipUnjit.w;
     vec2 prevNDC = vPrevClip.xy      / vPrevClip.w;
-    // Motion vector points from current pixel to where the surface WAS
-    // last frame. Stationary surface → zero motion → reproject samples
-    // self-pixel. Convention matches raygen's existing reproject expectation.
+    // Motion vector points from current pixel to where the surface WAS last
+    // frame. Tested adding a (curr_jitter - prev_jitter) delta here; sign
+    // flip didn't change behavior, so the shake source isn't TAA reproject —
+    // it's the PT accumulator's reproject reading a jittered chit
+    // hitWorldPos. raygen now overrides hitWorldPos to a pixel-center-
+    // deterministic value (see raygen primaryWorldPosHybrid override after
+    // the primary traceRayEXT). Motion vec stays jitter-free.
     vec2 motion = prevNDC - currNDC;
     outMotion = vec4(motion, 0.0, 0.0);
 
@@ -110,5 +130,12 @@ void main() {
     // raygen's Payload.hitInstanceId convention exactly.
     outIds = uvec4(vInstanceIdx + 1u, vInstanceIdx + 1u, vFlags, 0u);
 
-    outUv = vec4(vUv, 0.0, 0.0);
+    // log2 of the per-pixel UV-footprint diameter (texture-size-independent).
+    // raygen turns this into a per-texture LOD via `bias + log2(textureSize.x)`.
+    // Floor at -16 to keep textureLod's clamp from biting the rare
+    // duvx==duvy==0 case (degenerate triangle / fully orthogonal view).
+    const float fp2 = max(dot(duvx, duvx), dot(duvy, duvy));
+    const float lodBias = 0.5 * log2(max(fp2, 1e-32));
+
+    outUv = vec4(vUv, lodBias, 0.0);
 }

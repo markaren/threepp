@@ -670,10 +670,17 @@ namespace threepp {
             float currVPunjittered[16];
             float prevVP[16];
             float jitter[4];          // .xy = clip-space sub-texel offset, .zw = 1/resolution
+            float prevJitter[4];      // .xy = previous frame's jitter; gbuffer.frag adds
+                                      // (prev - curr) to the unjittered motion vec so TAA
+                                      // reproject lands on the prev rasterized pixel rather
+                                      // than its unjittered ideal — fixes per-frame wander
+                                      // that manifests as shake on moving objects.
         };
         std::array<Buffer, kFramesInFlight> rasterCameraUbos{};
         bool  rasterPrevVPValid_ = false;
         float rasterPrevVP_[16]{};
+        float rasterPrevJitter_[2]{};
+        bool  rasterPrevJitterValid_ = false;
 
         // Nearest-filter sampler used by raygen to read gbuffer attachments.
         // Nearest avoids bilinear smearing of normal/motion/ids at silhouettes
@@ -2851,7 +2858,9 @@ namespace threepp {
             for (auto& b : cameraUbos) {
                 b = createBuffer(
                         ctx->allocator(), ctx->device(),
-                        /*size*/ 2 * 16 * sizeof(float),// viewInverse + projInverse
+                        /*size*/ 2 * 16 * sizeof(float) + 4 * sizeof(float),
+                        // viewInverse + projInverse + jitter (.xy = clip-space
+                        // sub-pixel offset matching raster's Halton, .zw = 1/res)
                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
@@ -3299,9 +3308,28 @@ namespace threepp {
         void updateCameraUbo(uint32_t frame, Camera& camera) {
             camera.updateMatrixWorld(true);
 
-            float data[32];
+            float data[36];
             std::memcpy(data + 0,  camera.matrixWorld->elements.data(),            64);
             std::memcpy(data + 16, camera.projectionMatrixInverse.elements.data(), 64);
+
+            // Per-frame Halton(2,3) jitter — must match what uploadRasterCameraUbo
+            // computes for THIS frame so raygen's hybrid primary direction lands
+            // on the same surface the raster jittered to. uploadRasterCameraUbo
+            // runs after this and uses the same `haltonFrame_` value before
+            // incrementing, so both ubos see identical jitter. Without this,
+            // raygen reconstructs V from pixel-center every frame → reflection
+            // direction frozen → low-roughness metals show "lines" because TAA
+            // accumulates the same env tap each frame instead of integrating.
+            const VkExtent2D ext = ctx->swapchainExtent();
+            const uint32_t hi = haltonFrame_ + 1u;
+            const float jx = halton_(hi, 2) - 0.5f;
+            const float jy = halton_(hi, 3) - 0.5f;
+            const float jClipX = (hybridEnabled_ ? 2.f * jx / float(ext.width)  : 0.f);
+            const float jClipY = (hybridEnabled_ ? 2.f * jy / float(ext.height) : 0.f);
+            data[32] = jClipX;
+            data[33] = jClipY;
+            data[34] = 1.f / float(ext.width);
+            data[35] = 1.f / float(ext.height);
 
             // Build camera basis-vector buffer matching PrevCameraUbo layout.
             // matrixWorld column-major: col0=right, col1=up, col2=backward(-fwd), col3=pos.
@@ -3358,6 +3386,8 @@ namespace threepp {
         }
 
         // ── Hybrid raster runtime helpers ───────────────────────────────────
+        // (halton_ is also used by updateCameraUbo above to mirror the raster's
+        // jitter into the raygen camera UBO — keep both helpers reachable.)
         // Halton(2,3) sub-pixel jitter for raster TAA. (1, base) skips the
         // zero entry so frame 0 already gets a non-zero offset.
         static float halton_(uint32_t i, uint32_t base) {
@@ -3471,6 +3501,12 @@ namespace threepp {
             ubo.jitter[1] = jClipY;
             ubo.jitter[2] = 1.f / float(ext.width);
             ubo.jitter[3] = 1.f / float(ext.height);
+            // First frame: self-seed prev jitter to curr so motion vec for
+            // static surfaces is exactly zero (no spurious offset on cold start).
+            ubo.prevJitter[0] = rasterPrevJitterValid_ ? rasterPrevJitter_[0] : jClipX;
+            ubo.prevJitter[1] = rasterPrevJitterValid_ ? rasterPrevJitter_[1] : jClipY;
+            ubo.prevJitter[2] = 0.f;
+            ubo.prevJitter[3] = 0.f;
 
             void* mapped = nullptr;
             vmaMapMemory(ctx->allocator(), rasterCameraUbos[frame].alloc, &mapped);
@@ -3479,6 +3515,9 @@ namespace threepp {
 
             std::memcpy(rasterPrevVP_, vpUnj.elements.data(), 64);
             rasterPrevVPValid_ = true;
+            rasterPrevJitter_[0] = jClipX;
+            rasterPrevJitter_[1] = jClipY;
+            rasterPrevJitterValid_ = true;
             // 16-frame Halton cycle: longer than the eye notices, short
             // enough that any drift in the host counter never overflows.
             haltonFrame_ = (haltonFrame_ + 1u) & 15u;
@@ -3966,16 +4005,26 @@ namespace threepp {
             out.height = h;
             out.format = format;
 
+            // Mip chain only for linear-filtered, multi-pixel images. The 1×1
+            // env default and the 1D env CDF/marg LUTs use NEAREST + dim==1 so
+            // they keep mipLevels=1 and never hit the blit path below.
+            const bool wantMips = (filter == VK_FILTER_LINEAR) && (w > 1u || h > 1u);
+            const uint32_t mipLevels = wantMips
+                    ? (1u + static_cast<uint32_t>(std::floor(std::log2(static_cast<float>(std::max(w, h))))))
+                    : 1u;
+            out.mipLevels = mipLevels;
+
             VkImageCreateInfo ici{};
             ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
             ici.imageType     = VK_IMAGE_TYPE_2D;
             ici.format        = format;
             ici.extent        = {w, h, 1};
-            ici.mipLevels     = 1;
+            ici.mipLevels     = mipLevels;
             ici.arrayLayers   = 1;
             ici.samples       = VK_SAMPLE_COUNT_1_BIT;
             ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
-            ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                              | (mipLevels > 1u ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0u);
             ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
             ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
@@ -3998,6 +4047,7 @@ namespace threepp {
 
             VkCommandBuffer cb = beginOneShot();
 
+            // Transition mip 0 → TRANSFER_DST for the buffer copy.
             VkImageMemoryBarrier toDst{};
             toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
             toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -4006,6 +4056,7 @@ namespace threepp {
             toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             toDst.image = out.image;
             toDst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            toDst.subresourceRange.baseMipLevel = 0;
             toDst.subresourceRange.levelCount = 1;
             toDst.subresourceRange.layerCount = 1;
             toDst.srcAccessMask = 0;
@@ -4018,20 +4069,112 @@ namespace threepp {
             VkBufferImageCopy region{};
             region.bufferOffset = 0;
             region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.mipLevel = 0;
             region.imageSubresource.layerCount = 1;
             region.imageExtent = {w, h, 1};
             vkCmdCopyBufferToImage(cb, staging.handle, out.image,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-            VkImageMemoryBarrier toRead = toDst;
-            toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            vkCmdPipelineBarrier(cb,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                                 0, 0, nullptr, 0, nullptr, 1, &toRead);
+            if (mipLevels > 1u) {
+                // Mip-chain build via vkCmdBlitImage. Each mip i transitions
+                // from TRANSFER_DST → TRANSFER_SRC after being written, then
+                // serves as the source for the i+1 blit. Final pass moves
+                // every level to SHADER_READ_ONLY_OPTIMAL in one barrier.
+                int32_t mipW = static_cast<int32_t>(w);
+                int32_t mipH = static_cast<int32_t>(h);
+
+                for (uint32_t i = 1; i < mipLevels; ++i) {
+                    // Mip (i-1): TRANSFER_DST → TRANSFER_SRC.
+                    VkImageMemoryBarrier b{};
+                    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                    b.image = out.image;
+                    b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    b.subresourceRange.baseMipLevel = i - 1;
+                    b.subresourceRange.levelCount = 1;
+                    b.subresourceRange.layerCount = 1;
+                    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                    vkCmdPipelineBarrier(cb,
+                                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                         0, 0, nullptr, 0, nullptr, 1, &b);
+
+                    // Mip i starts UNDEFINED → TRANSFER_DST (we just allocated it).
+                    VkImageMemoryBarrier bDst = b;
+                    bDst.subresourceRange.baseMipLevel = i;
+                    bDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    bDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    bDst.srcAccessMask = 0;
+                    bDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    vkCmdPipelineBarrier(cb,
+                                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                         0, 0, nullptr, 0, nullptr, 1, &bDst);
+
+                    const int32_t dstW = std::max(mipW >> 1, 1);
+                    const int32_t dstH = std::max(mipH >> 1, 1);
+
+                    VkImageBlit blit{};
+                    blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    blit.srcSubresource.mipLevel = i - 1;
+                    blit.srcSubresource.layerCount = 1;
+                    blit.srcOffsets[1] = {mipW, mipH, 1};
+                    blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    blit.dstSubresource.mipLevel = i;
+                    blit.dstSubresource.layerCount = 1;
+                    blit.dstOffsets[1] = {dstW, dstH, 1};
+
+                    vkCmdBlitImage(cb,
+                                   out.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   1, &blit, VK_FILTER_LINEAR);
+
+                    mipW = dstW;
+                    mipH = dstH;
+                }
+
+                // Whole chain → SHADER_READ_ONLY_OPTIMAL. Levels 0..N-2 are
+                // currently TRANSFER_SRC, level N-1 is TRANSFER_DST.
+                VkImageMemoryBarrier brs[2]{};
+                brs[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                brs[0].image = out.image;
+                brs[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                brs[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                brs[0].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                brs[0].subresourceRange.baseMipLevel = 0;
+                brs[0].subresourceRange.levelCount = mipLevels - 1;
+                brs[0].subresourceRange.layerCount = 1;
+                brs[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                brs[0].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                brs[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                brs[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+                brs[1] = brs[0];
+                brs[1].subresourceRange.baseMipLevel = mipLevels - 1;
+                brs[1].subresourceRange.levelCount = 1;
+                brs[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                brs[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+                vkCmdPipelineBarrier(cb,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                             VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                     0, 0, nullptr, 0, nullptr, 2, brs);
+            } else {
+                VkImageMemoryBarrier toRead = toDst;
+                toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                vkCmdPipelineBarrier(cb,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                                     0, 0, nullptr, 0, nullptr, 1, &toRead);
+            }
 
             endAndSubmitOneShot(cb);
             destroyBuffer(ctx->allocator(), staging);
@@ -4044,26 +4187,38 @@ namespace threepp {
             vci.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
                               VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
             vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            vci.subresourceRange.levelCount = 1;
+            vci.subresourceRange.levelCount = mipLevels;
             vci.subresourceRange.layerCount = 1;
             check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
                   "vkCreateImageView(env)");
+
+            // Anisotropic filtering is paired with the mip chain — they only
+            // help together. Aniso without mips snaps to mip 0 (no benefit at
+            // distance); mips without aniso blur at glancing angles. fillMat-
+            // TextureInfos binds *this* per-image sampler into descriptor
+            // binding 8, so settings here directly drive raster + RT albedo
+            // sampling quality.
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
+            const float maxAniso = std::min(16.0f, props.limits.maxSamplerAnisotropy);
 
             VkSamplerCreateInfo sci{};
             sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
             sci.magFilter = filter;
             sci.minFilter = filter;
-            sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            sci.mipmapMode = (mipLevels > 1u)
+                                     ? VK_SAMPLER_MIPMAP_MODE_LINEAR
+                                     : VK_SAMPLER_MIPMAP_MODE_NEAREST;
             sci.addressModeU = addrU;
             sci.addressModeV = addrV;
             sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            sci.anisotropyEnable = VK_FALSE;
-            sci.maxAnisotropy = 1.0f;
+            sci.anisotropyEnable = (mipLevels > 1u) ? VK_TRUE : VK_FALSE;
+            sci.maxAnisotropy = (mipLevels > 1u) ? maxAniso : 1.0f;
             sci.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
             sci.unnormalizedCoordinates = VK_FALSE;
             sci.compareEnable = VK_FALSE;
             sci.minLod = 0.0f;
-            sci.maxLod = 0.0f;
+            sci.maxLod = (mipLevels > 1u) ? VK_LOD_CLAMP_NONE : 0.0f;
             check(vkCreateSampler(ctx->device(), &sci, nullptr, &out.sampler),
                   "vkCreateSampler(env)");
 
@@ -4645,10 +4800,78 @@ namespace threepp {
             return out;
         }
 
+        // Same shape as createTaaStorageSampled but rgba16f instead of bgra8.
+        // Used for the TAA history ping-pong only — input stays bgra8 because
+        // denoise.comp writes binding 1 with `rgba8` qualifier and that binding
+        // points at either the swapchain (BGRA8) or taaInputImagesPP[f]; we
+        // can't bump it without duplicating the denoise pipeline.
+        //
+        // The win: TAA blends current (rgba8 → float) against history (rgba16f)
+        // and writes the result back to history without re-quantization. Over
+        // 16+ frames the running average converges to its true sub-quantum
+        // value rather than hopping between adjacent uint8 levels — fixes the
+        // visible iso-luminance "lines" on smooth specular surfaces (polished
+        // metals, glass) where the per-pixel mean lives between rgba8 codes.
+        Image2D createTaaHistoryImage(uint32_t w, uint32_t h) {
+            Image2D out{};
+            out.width  = w;
+            out.height = h;
+            out.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+
+            VkImageCreateInfo ici{};
+            ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            ici.imageType     = VK_IMAGE_TYPE_2D;
+            ici.format        = out.format;
+            ici.extent        = {w, h, 1};
+            ici.mipLevels     = 1;
+            ici.arrayLayers   = 1;
+            ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+            ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+            ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+            ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+            VmaAllocationCreateInfo aci{};
+            aci.usage = VMA_MEMORY_USAGE_AUTO;
+            check(vmaCreateImage(ctx->allocator(), &ici, &aci, &out.image, &out.alloc, nullptr),
+                  "vmaCreateImage(taaHistoryF16)");
+
+            VkCommandBuffer cb = beginOneShot();
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image = out.image;
+            b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            b.subresourceRange.levelCount = 1;
+            b.subresourceRange.layerCount = 1;
+            b.srcAccessMask = 0;
+            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            vkCmdPipelineBarrier(cb,
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &b);
+            endAndSubmitOneShot(cb);
+
+            VkImageViewCreateInfo vci{};
+            vci.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            vci.image    = out.image;
+            vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vci.format   = out.format;
+            vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            vci.subresourceRange.levelCount = 1;
+            vci.subresourceRange.layerCount = 1;
+            check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
+                  "vkCreateImageView(taaHistoryF16)");
+            return out;
+        }
+
         void createTaaImages(uint32_t w, uint32_t h) {
             destroyTaaImages();
             for (auto& img : taaInputImagesPP)   img = createTaaStorageSampled(w, h);
-            for (auto& img : taaHistoryImagesPP) img = createTaaStorageSampled(w, h);
+            for (auto& img : taaHistoryImagesPP) img = createTaaHistoryImage(w, h);
         }
 
         void createTaaPipeline() {
@@ -4900,24 +5123,30 @@ namespace threepp {
         }
 
         // Single shared sampler for every material texture in binding 8.
-        // Linear filter + REPEAT addressing matches the typical raster default;
-        // per-texture wrap/filter is a v2 concern.
+        // Trilinear + 16× anisotropy: minified surfaces fetch from the proper
+        // mip level (set by createSampledImage2D's blit-chain) and glancing
+        // angles get aniso-filtered, both of which kill the per-frame texture
+        // shimmer that TAA was trying to absorb.
         void createTextureSampler() {
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
+            const float maxAniso = std::min(16.0f, props.limits.maxSamplerAnisotropy);
+
             VkSamplerCreateInfo sci{};
             sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
             sci.magFilter = VK_FILTER_LINEAR;
             sci.minFilter = VK_FILTER_LINEAR;
-            sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
             sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            sci.anisotropyEnable = VK_FALSE;
-            sci.maxAnisotropy = 1.0f;
+            sci.anisotropyEnable = VK_TRUE;
+            sci.maxAnisotropy = maxAniso;
             sci.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
             sci.unnormalizedCoordinates = VK_FALSE;
             sci.compareEnable = VK_FALSE;
             sci.minLod = 0.0f;
-            sci.maxLod = 0.0f;
+            sci.maxLod = VK_LOD_CLAMP_NONE;
             check(vkCreateSampler(ctx->device(), &sci, nullptr, &textureSampler_),
                   "vkCreateSampler(material)");
         }
@@ -7237,13 +7466,13 @@ namespace threepp {
             // ── End denoise ─────────────────────────────────────────────────────
 
             // ── Stage 1A.5: raster TAA ─────────────────────────────────────────
-            // Hybrid path only. When hybridEnabled_ is true, denoise wrote
-            // its tonemapped sRGB output to taaInputImagesPP[currentFrame]
-            // (per the per-frame binding-1 rewrite in renderFrame); we then
-            // run taa_resolve to mix it with reprojected history into the
-            // swapchain. When hybrid is off, denoise wrote directly to the
-            // swapchain (binding 1 is the swapchain image view) — nothing
-            // to do here.
+            // Hybrid path. Reads denoise output from taaInputImagesPP, blends
+            // with reprojected history (rgba16f, no quantization), writes the
+            // result to the swapchain. The spatial neighborhood clamp +
+            // motion-vec reproject is what smooths per-frame Halton jitter
+            // shake on moving objects — the original architectural reason for
+            // hybrid mode. PT accumulator + à-trous already gave stills
+            // quality via chit primary; TAA handles motion on top of that.
             if (hybridEnabled_) {
                 // Barrier: taaInputImagesPP write → read; new history write
                 // → read on the OUTGOING-to-history pong slot just to be safe.
@@ -7420,12 +7649,15 @@ namespace threepp {
             if (hybridEnabled_) {
                 ensureHybridResources();
                 uploadRasterCameraUbo(currentFrame, camera);
-                // Per-frame: redirect the RT/denoise pipeline's output
-                // image (binding 1) from the swapchain to taaInputImagesPP
-                // so TAA can resolve before present. When hybrid is off
-                // the binding stays at the swapchain (set during the
-                // initial allocateAndUpdateDescriptors), so denoise writes
-                // direct-to-present and behavior matches pre-TAA-commit.
+                // Per-frame: redirect denoise output (binding 1) into
+                // taaInputImagesPP[currentFrame] so the TAA pass below sees
+                // it. TAA's spatial+temporal smoothing is what fixes the
+                // moving-object shake from per-frame Halton jitter; the PT
+                // accumulator + à-trous already gave us stills quality, TAA
+                // sits on top to handle motion. Now that primary is shaded
+                // by chit (not the deprecated shade_primary), TAA's input
+                // is high quality, so the output preserves stills quality
+                // while still smoothing motion.
                 for (uint32_t i = 0; i < imageCount_; ++i) {
                     const uint32_t idx = currentFrame * imageCount_ + i;
                     VkDescriptorImageInfo info{};
@@ -7441,9 +7673,8 @@ namespace threepp {
                     vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
                 }
             } else {
-                // hybrid was on previously and is now off — make sure
-                // binding 1 points back at the swapchain. Idempotent;
-                // cheap (1 descriptor per swapchain image).
+                // Hybrid was on previously and is now off — restore binding 1
+                // to the swapchain so denoise writes direct-to-present.
                 for (uint32_t i = 0; i < imageCount_; ++i) {
                     const uint32_t idx = currentFrame * imageCount_ + i;
                     VkDescriptorImageInfo info{};
