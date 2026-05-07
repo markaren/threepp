@@ -75,6 +75,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
+#include <random>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -392,6 +394,12 @@ namespace threepp {
         // when env is solid color or default — chit gates env CDF on totalSum>0.
         Image2D envCdfImage{};
         Image2D envMargImage{};
+        // 64×64 R8 blue-noise tile for sub-pixel jitter. Generated once via
+        // void-and-cluster (Ulichney 1993) and uploaded at startup. Adjacent
+        // pixels share correlated values (silhouette stability) but globally
+        // decorrelated (no coherent shake). Animated temporally by offsetting
+        // the lookup coords per frame; AA convergence via accumulator.
+        Image2D blueNoiseImage{};
         uint32_t envCdfWidth_  = 1;
         uint32_t envCdfHeight_ = 1;
         float    envCdfTotalSum_ = 0.0f;
@@ -523,6 +531,11 @@ namespace threepp {
         std::array<Buffer, kFramesInFlight> prevCameraUbos{};
         std::array<Buffer, kFramesInFlight> motionMatBuffers{};
         std::array<VkDeviceSize, kFramesInFlight> motionMatBufferCapacity{};
+        // Per-buffer-slot "last upload was all-identity" flag. When true and
+        // the current frame also has no per-instance motion, skip the upload
+        // entirely — the buffer slot is still valid identity from before.
+        // Cleared on capacity-grow (new buffer is undefined).
+        std::array<bool, kFramesInFlight> motionMatBufferAllIdentity_{};
         // Per-frame emissive-triangle CDF buffer. Each entry is 4 vec4 (64 B):
         //   v0.xyz/area, v1.xyz/cumPower, v2.xyz/power, emission.rgb/_pad.
         // Built fresh each frame from the visible scene; size = numEmissiveTris.
@@ -801,6 +814,7 @@ namespace threepp {
                 createTaaPipeline();
             }
             createDescriptorPool();
+            createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             allocateTaaDescriptors();// independent of scene state, safe at ctor time
         }
 
@@ -887,6 +901,7 @@ namespace threepp {
             destroyImage2D(ctx->allocator(), d, envImage);
             destroyImage2D(ctx->allocator(), d, envCdfImage);
             destroyImage2D(ctx->allocator(), d, envMargImage);
+            destroyImage2D(ctx->allocator(), d, blueNoiseImage);
             for (auto& img : accumImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : filteredImagesPP) destroyImage2D(ctx->allocator(), d, img);
@@ -3061,6 +3076,7 @@ namespace threepp {
 
             std::vector<float> data(count * 16);
             std::vector<uint8_t> settled(count, 0);
+            bool anyNonIdentity = false;
             for (uint32_t i = 0; i < count; ++i) {
                 Matrix4 cur;
                 std::memcpy(cur.elements.data(), entries[i].worldMatrix.data(), 64);
@@ -3085,15 +3101,27 @@ namespace threepp {
                         Matrix4 curInv;
                         curInv.copy(cur).invert();
                         motion.multiplyMatrices(prev, curInv);
+                        anyNonIdentity = true;
                     }
                 }
                 std::memcpy(&data[i * 16], motion.elements.data(), 64);
             }
 
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), motionMatBuffers[frame].alloc, &mapped);
-            std::memcpy(mapped, data.data(), data.size() * sizeof(float));
-            vmaUnmapMemory(ctx->allocator(), motionMatBuffers[frame].alloc);
+            // Fast path: if every entry's motion is identity AND the buffer
+            // slot was already all-identity from a previous frame, skip the
+            // upload. mmap+memcpy of an all-zero scene's per-frame motionMat
+            // is a real cost on heavy scenes (1500 entries × 64B = 96KB
+            // mapped+written every frame for nothing). Sub-millisecond
+            // individually, but it adds up on CPU-bound paths.
+            if (!anyNonIdentity && motionMatBufferAllIdentity_[frame]) {
+                // Buffer slot already holds identities; skip the upload.
+            } else {
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), motionMatBuffers[frame].alloc, &mapped);
+                std::memcpy(mapped, data.data(), data.size() * sizeof(float));
+                vmaUnmapMemory(ctx->allocator(), motionMatBuffers[frame].alloc);
+                motionMatBufferAllIdentity_[frame] = !anyNonIdentity;
+            }
 
             // Record this frame's matrices for next frame's motion delta —
             // BUT skip settled entries so prev stays anchored to its
@@ -3318,6 +3346,8 @@ namespace threepp {
                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
             motionMatBufferCapacity[frame] = newCap;
+            // New buffer is undefined; force the next upload to actually run.
+            motionMatBufferAllIdentity_[frame] = false;
             return true;
         }
 
@@ -5901,6 +5931,156 @@ namespace threepp {
             envCdfTotalSum_ = cdf.totalSum;
         }
 
+        // Generate a 64×64 blue-noise tile via void-and-cluster (Ulichney 1993).
+        // One-time CPU work at startup; the resulting tile has:
+        //   - Spatially smooth correlation between adjacent cells (silhouette
+        //     stability — neighbors agree on object/background membership)
+        //   - Globally well-distributed (no coherent shake possible)
+        //   - Suppressed low-frequency content (variance lives in high
+        //     frequencies that denoise + TAA absorb)
+        //
+        // ~50ms on a single core for the 64×64 case (M=4096). Acceptable as a
+        // one-shot startup cost. The output is uint8 ranks normalized to
+        // [0, 255]; shader maps via R8_UNORM sampler to [0, 1) jitter.
+        std::vector<uint8_t> generateBlueNoiseTile_() {
+            constexpr int N = 64;
+            constexpr int M = N * N;
+            constexpr float kSigma = 1.5f;
+            constexpr int kRadius = 4;
+            constexpr int kKernelSide = 2 * kRadius + 1;
+
+            auto wrap = [](int v, int n) { return ((v % n) + n) % n; };
+
+            // Precomputed Gaussian kernel for void/cluster filter.
+            std::array<float, kKernelSide * kKernelSide> kernel{};
+            for (int dy = -kRadius; dy <= kRadius; ++dy) {
+                for (int dx = -kRadius; dx <= kRadius; ++dx) {
+                    const int ki = (dy + kRadius) * kKernelSide + (dx + kRadius);
+                    kernel[ki] = std::exp(-(dx * dx + dy * dy) /
+                                          (2.0f * kSigma * kSigma));
+                }
+            }
+
+            std::vector<uint8_t> binary(M, 0u);// 0 / 1 instead of bool for vec speed
+            std::vector<float>   density(M, 0.0f);
+
+            // Toggle a cell and incrementally update the density field over
+            // the Gaussian kernel footprint (toroidal wrap for tileable noise).
+            auto toggle = [&](int idx, bool toOn) {
+                binary[idx] = toOn ? 1u : 0u;
+                const int x = idx % N;
+                const int y = idx / N;
+                const float sign = toOn ? +1.0f : -1.0f;
+                for (int dy = -kRadius; dy <= kRadius; ++dy) {
+                    const int yy = wrap(y + dy, N);
+                    for (int dx = -kRadius; dx <= kRadius; ++dx) {
+                        const int xx = wrap(x + dx, N);
+                        const int ki = (dy + kRadius) * kKernelSide + (dx + kRadius);
+                        density[yy * N + xx] += sign * kernel[ki];
+                    }
+                }
+            };
+
+            // Find the tightest cluster: the "1" pixel with max density.
+            auto findTightest = [&]() {
+                int best = -1;
+                float bestD = -1.0f;
+                for (int i = 0; i < M; ++i) {
+                    if (binary[i] && density[i] > bestD) {
+                        bestD = density[i];
+                        best = i;
+                    }
+                }
+                return best;
+            };
+            // Find the largest void: the "0" pixel with min density.
+            auto findLargestVoid = [&]() {
+                int best = -1;
+                float bestD = std::numeric_limits<float>::infinity();
+                for (int i = 0; i < M; ++i) {
+                    if (!binary[i] && density[i] < bestD) {
+                        bestD = density[i];
+                        best = i;
+                    }
+                }
+                return best;
+            };
+
+            // Initial random pattern (~10% set). Deterministic seed for
+            // reproducible tiles.
+            constexpr int kInitOnes = M / 10;
+            {
+                std::mt19937 rng(0x12345678u);
+                int placed = 0;
+                while (placed < kInitOnes) {
+                    const int idx = static_cast<int>(rng() % static_cast<uint32_t>(M));
+                    if (!binary[idx]) {
+                        toggle(idx, true);
+                        ++placed;
+                    }
+                }
+            }
+
+            // Phase 1: stabilize via swap (tightest → void). Up to 200 iters;
+            // typically converges in <100 for 64×64.
+            for (int iter = 0; iter < 200; ++iter) {
+                const int tight = findTightest();
+                const int voidIdx = findLargestVoid();
+                if (tight < 0 || voidIdx < 0 || tight == voidIdx) break;
+                toggle(tight, false);
+                toggle(voidIdx, true);
+            }
+
+            // Snapshot the stabilized prototype for phases 2 + 3.
+            const std::vector<uint8_t> proto    = binary;
+            const std::vector<float>   protoDen = density;
+
+            std::vector<int> rank(M, 0);
+
+            // Phase 2: rank prototype "ones" by progressive removal of the
+            // tightest cluster. Lowest rank = first removed = most isolated.
+            for (int r = kInitOnes - 1; r >= 0; --r) {
+                const int tight = findTightest();
+                if (tight < 0) break;
+                rank[tight] = r;
+                toggle(tight, false);
+            }
+
+            // Restore the prototype for phase 3.
+            binary = proto;
+            density = protoDen;
+
+            // Phase 3: rank prototype "zeros" by progressive addition into the
+            // largest void. Higher rank = added later = more clustered.
+            for (int r = kInitOnes; r < M; ++r) {
+                const int voidIdx = findLargestVoid();
+                if (voidIdx < 0) break;
+                rank[voidIdx] = r;
+                toggle(voidIdx, true);
+            }
+
+            // Map rank ∈ [0, M-1] → uint8 ∈ [0, 255].
+            std::vector<uint8_t> tile(static_cast<size_t>(M));
+            for (int i = 0; i < M; ++i) {
+                tile[i] = static_cast<uint8_t>((rank[i] * 255) / (M - 1));
+            }
+            return tile;
+        }
+
+        // Generate the tile and upload as an R8_UNORM image. Called once at
+        // ctor time (after createDescriptorPool) so the descriptor write below
+        // can include it.
+        void createBlueNoiseImage_() {
+            const auto tile = generateBlueNoiseTile_();
+            blueNoiseImage = createSampledImage2D(
+                    /*w*/ 64u, /*h*/ 64u,
+                    VK_FORMAT_R8_UNORM,
+                    tile.data(), tile.size(),
+                    VK_FILTER_NEAREST,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT);
+        }
+
         // Build a degenerate 1×1 CDF (totalSum=0) for the case where the env is
         // solid color or default. Shader uses totalSum=0 as the "no CDF" gate.
         void rebuildDefaultEnvCdfImages() {
@@ -6006,7 +6186,7 @@ namespace threepp {
             // for material lookup, UV for texture sampling on the primary).
             // Always present in the layout; raygen gates use on the hybrid
             // push-constant bit.
-            std::array<VkDescriptorSetLayoutBinding, 27> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 28> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -6177,6 +6357,10 @@ namespace threepp {
             bindings[26].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[26].descriptorCount = 1;
             bindings[26].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            bindings[27].binding = 27;// 64×64 R8 blue-noise tile for sub-pixel jitter
+            bindings[27].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[27].descriptorCount = 1;
+            bindings[27].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -6514,7 +6698,7 @@ namespace threepp {
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             ps[3].descriptorCount = totalSets * 7;// bindings 3,4,10,14 (existing) + 15,16 (photon) + 21 (meshMovedBits)
             ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures + 5);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF) + bindings 22-26 (hybrid gbuffer attachments incl. UV)
+            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures + 5 + 1);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF) + bindings 22-26 (hybrid gbuffer attachments incl. UV) + binding 27 (blue noise tile)
 
             VkDescriptorPoolCreateInfo ci{};
             ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -6883,12 +7067,25 @@ namespace threepp {
                     wGbufUv.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                     wGbufUv.pImageInfo = &gbufUvInfo;
 
-                    std::array<VkWriteDescriptorSet, 27> writes{
+                    VkDescriptorImageInfo blueNoiseInfo{};
+                    blueNoiseInfo.sampler     = blueNoiseImage.sampler;
+                    blueNoiseInfo.imageView   = blueNoiseImage.view;
+                    blueNoiseInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    VkWriteDescriptorSet wBlueNoise{};
+                    wBlueNoise.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wBlueNoise.dstSet = descriptorSets[idx];
+                    wBlueNoise.dstBinding = 27;
+                    wBlueNoise.descriptorCount = 1;
+                    wBlueNoise.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wBlueNoise.pImageInfo = &blueNoiseInfo;
+
+                    std::array<VkWriteDescriptorSet, 28> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
                             wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered,
                             wMeshMoved,
-                            wGbufNormal, wGbufMotion, wGbufDepth, wGbufIds, wGbufUv};
+                            wGbufNormal, wGbufMotion, wGbufDepth, wGbufIds, wGbufUv,
+                            wBlueNoise};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
