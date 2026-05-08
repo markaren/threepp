@@ -73,6 +73,8 @@
 #include "threepp/renderers/vulkan/shaders/overlay.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_depth.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_depth.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_color.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_color.frag.spv.h"
 
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.hpp"
 
@@ -746,6 +748,12 @@ namespace threepp {
         // Mesh entries and walked in the overlay record loop.
         VkPipeline       overlayLineListPipeline    = VK_NULL_HANDLE;
         VkPipeline       overlayLineStripPipeline   = VK_NULL_HANDLE;
+        // Per-vertex color counterparts. Use overlay_color.vert/.frag
+        // (location 1 = inColor) and require a 2-binding vertex input.
+        // Picked when the Line's geometry has a "color" attribute AND the
+        // material has vertexColors == true (matches three.js semantics).
+        VkPipeline       overlayLineListColoredPipeline  = VK_NULL_HANDLE;
+        VkPipeline       overlayLineStripColoredPipeline = VK_NULL_HANDLE;
         // Depth prepass that fills rasterGbufs[f].unjitDepth using the
         // unjittered VP. Reuses the raster pipeline's descriptor set + push
         // constants (same camera UBO, same model matrix push). Runs after
@@ -762,10 +770,12 @@ namespace threepp {
         struct LineRec {
             Buffer   vertex;
             Buffer   index;          // .handle == VK_NULL_HANDLE if non-indexed
+            Buffer   color;          // .handle == VK_NULL_HANDLE if no "color" attribute
             uint32_t vertexCount  = 0;
             uint32_t indexCount   = 0;  // 0 if non-indexed
             uint32_t positionVersion = 0;
             uint32_t indexVersion    = 0;
+            uint32_t colorVersion    = 0;
         };
         std::unordered_map<const BufferGeometry*, LineRec> lineGeomCache_;
 
@@ -1080,11 +1090,14 @@ namespace threepp {
             if (overlayBasicTransparentPipeline)  vkDestroyPipeline(d, overlayBasicTransparentPipeline, nullptr);
             if (overlayLineListPipeline)          vkDestroyPipeline(d, overlayLineListPipeline, nullptr);
             if (overlayLineStripPipeline)         vkDestroyPipeline(d, overlayLineStripPipeline, nullptr);
+            if (overlayLineListColoredPipeline)   vkDestroyPipeline(d, overlayLineListColoredPipeline, nullptr);
+            if (overlayLineStripColoredPipeline)  vkDestroyPipeline(d, overlayLineStripColoredPipeline, nullptr);
             if (overlayDepthPrepassPipeline)      vkDestroyPipeline(d, overlayDepthPrepassPipeline, nullptr);
             if (overlayPipelineLayout)      vkDestroyPipelineLayout(d, overlayPipelineLayout, nullptr);
             for (auto& [g, rec] : lineGeomCache_) {
                 destroyBuffer(ctx->allocator(), rec.vertex);
                 if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.index);
+                if (rec.color.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.color);
             }
             lineGeomCache_.clear();
             if (gbufSampler_)           vkDestroySampler(d, gbufSampler_, nullptr);
@@ -5675,8 +5688,78 @@ namespace threepp {
                                             &overlayLineStripPipeline),
                   "vkCreateGraphicsPipelines(overlayLineStrip)");
 
+            // ── Colored line pipelines ──────────────────────────────────────
+            // Different shader pair (overlay_color.vert/.frag) + 2 vertex
+            // bindings: position at 0, color at 1.
+            VkShaderModuleCreateInfo cvsmci{};
+            cvsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            cvsmci.codeSize = sizeof(kOverlayColorVertSpv);
+            cvsmci.pCode    = kOverlayColorVertSpv;
+            VkShaderModule cvert = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &cvsmci, nullptr, &cvert),
+                  "vkCreateShaderModule(overlay_color.vert)");
+
+            VkShaderModuleCreateInfo cfsmci{};
+            cfsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            cfsmci.codeSize = sizeof(kOverlayColorFragSpv);
+            cfsmci.pCode    = kOverlayColorFragSpv;
+            VkShaderModule cfrag = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &cfsmci, nullptr, &cfrag),
+                  "vkCreateShaderModule(overlay_color.frag)");
+
+            VkPipelineShaderStageCreateInfo cStages[2]{};
+            cStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            cStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+            cStages[0].module = cvert;
+            cStages[0].pName  = "main";
+            cStages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            cStages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            cStages[1].module = cfrag;
+            cStages[1].pName  = "main";
+
+            VkVertexInputBindingDescription cvibs[2]{};
+            cvibs[0].binding   = 0;
+            cvibs[0].stride    = 3 * sizeof(float);
+            cvibs[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            cvibs[1].binding   = 1;
+            cvibs[1].stride    = 3 * sizeof(float);
+            cvibs[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            VkVertexInputAttributeDescription cvias[2]{};
+            cvias[0].location = 0;
+            cvias[0].binding  = 0;
+            cvias[0].format   = VK_FORMAT_R32G32B32_SFLOAT;
+            cvias[0].offset   = 0;
+            cvias[1].location = 1;
+            cvias[1].binding  = 1;
+            cvias[1].format   = VK_FORMAT_R32G32B32_SFLOAT;
+            cvias[1].offset   = 0;
+            VkPipelineVertexInputStateCreateInfo cvi{};
+            cvi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            cvi.vertexBindingDescriptionCount   = 2;
+            cvi.pVertexBindingDescriptions      = cvibs;
+            cvi.vertexAttributeDescriptionCount = 2;
+            cvi.pVertexAttributeDescriptions    = cvias;
+
+            VkGraphicsPipelineCreateInfo gpciLineListColored = gpciLineList;
+            gpciLineListColored.stageCount        = 2;
+            gpciLineListColored.pStages           = cStages;
+            gpciLineListColored.pVertexInputState = &cvi;
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciLineListColored, nullptr,
+                                            &overlayLineListColoredPipeline),
+                  "vkCreateGraphicsPipelines(overlayLineListColored)");
+
+            VkGraphicsPipelineCreateInfo gpciLineStripColored = gpciLineStrip;
+            gpciLineStripColored.stageCount        = 2;
+            gpciLineStripColored.pStages           = cStages;
+            gpciLineStripColored.pVertexInputState = &cvi;
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciLineStripColored, nullptr,
+                                            &overlayLineStripColoredPipeline),
+                  "vkCreateGraphicsPipelines(overlayLineStripColored)");
+
             vkDestroyShaderModule(ctx->device(), vertModule, nullptr);
             vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
+            vkDestroyShaderModule(ctx->device(), cvert, nullptr);
+            vkDestroyShaderModule(ctx->device(), cfrag, nullptr);
 
             // ── Overlay depth prepass pipeline ──────────────────────────────
             // Renders all non-overlay scene geometry with the unjittered VP
@@ -5815,14 +5898,21 @@ namespace threepp {
             auto posAttr = geom->getAttribute<float>("position");
             if (!posAttr || posAttr->count() == 0) return nullptr;
             auto* idxAttr = geom->getIndex();
+            // Optional per-vertex color, used by AxesHelper-style overlays.
+            const auto colAttr = geom->hasAttribute("color")
+                                         ? geom->getAttribute<float>("color")
+                                         : nullptr;
 
             const uint32_t posVer = posAttr->version;
             const uint32_t idxVer = (idxAttr && idxAttr->count() > 0) ? idxAttr->version : 0u;
+            const uint32_t colVer = (colAttr && colAttr->count() > 0) ? colAttr->version : 0u;
 
             auto it = lineGeomCache_.find(geom);
             if (it != lineGeomCache_.end()) {
                 auto& rec = it->second;
-                if (rec.positionVersion == posVer && rec.indexVersion == idxVer) {
+                if (rec.positionVersion == posVer &&
+                    rec.indexVersion    == idxVer &&
+                    rec.colorVersion    == colVer) {
                     return &rec;
                 }
                 // Re-upload paths.
@@ -5865,6 +5955,28 @@ namespace threepp {
                     rec.indexCount   = 0;
                     rec.indexVersion = 0;
                 }
+
+                // Color buffer follows the same in-place / recreate logic.
+                if (colAttr && colAttr->count() > 0) {
+                    const auto& colArr = colAttr->array();
+                    const VkDeviceSize cbBytes = colArr.size() * sizeof(float);
+                    if (rec.color.handle == VK_NULL_HANDLE || cbBytes > rec.color.size) {
+                        if (rec.color.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.color);
+                        rec.color = createBuffer(
+                                ctx->allocator(), ctx->device(), cbBytes,
+                                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                VMA_MEMORY_USAGE_AUTO,
+                                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                    }
+                    vmaMapMemory(ctx->allocator(), rec.color.alloc, &mapped);
+                    std::memcpy(mapped, colArr.data(), cbBytes);
+                    vmaUnmapMemory(ctx->allocator(), rec.color.alloc);
+                    rec.colorVersion = colVer;
+                } else if (rec.color.handle != VK_NULL_HANDLE) {
+                    destroyBuffer(ctx->allocator(), rec.color);
+                    rec.color        = {};
+                    rec.colorVersion = 0;
+                }
                 return &rec;
             }
 
@@ -5898,6 +6010,20 @@ namespace threepp {
                 vmaMapMemory(ctx->allocator(), rec.index.alloc, &mapped);
                 std::memcpy(mapped, indices.data(), ibBytes);
                 vmaUnmapMemory(ctx->allocator(), rec.index.alloc);
+            }
+
+            if (colAttr && colAttr->count() > 0) {
+                const auto& colArr = colAttr->array();
+                rec.colorVersion = colVer;
+                const VkDeviceSize cbBytes = colArr.size() * sizeof(float);
+                rec.color = createBuffer(
+                        ctx->allocator(), ctx->device(), cbBytes,
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                vmaMapMemory(ctx->allocator(), rec.color.alloc, &mapped);
+                std::memcpy(mapped, colArr.data(), cbBytes);
+                vmaUnmapMemory(ctx->allocator(), rec.color.alloc);
             }
 
             return &lineGeomCache_.emplace(geom, std::move(rec)).first->second;
@@ -9264,26 +9390,38 @@ namespace threepp {
                     // ── Line / LineSegments draws ──────────────────────────
                     // Always-drawn (no isOverlay flag — Lines are inherently
                     // overlay; they don't ray-trace). Per-Line: ensure geom
-                    // upload, push MVP+color, switch topology pipeline.
+                    // upload, push MVP+color, switch topology pipeline. When
+                    // material.vertexColors is true AND geometry has a color
+                    // attribute → bind the colored pipeline variant + a
+                    // second vertex binding at location 1.
                     for (const auto& le : lastVisibleLines_) {
                         if (!le.line) continue;
                         const LineRec* lrec = ensureLineGeometryUploaded(le.line->geometry().get());
                         if (!lrec || lrec->vertex.handle == VK_NULL_HANDLE) continue;
 
-                        VkPipeline want = le.isSegments ? overlayLineListPipeline
-                                                        : overlayLineStripPipeline;
-                        if (want != curPipeline) {
-                            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
-                            curPipeline = want;
-                        }
-
                         Color color(1.f, 1.f, 1.f);
                         float opacity = 1.0f;
+                        bool useVertexColors = false;
                         if (auto mat = le.line->material()) {
                             if (auto* mc = dynamic_cast<MaterialWithColor*>(mat.get())) {
                                 color = mc->color;
                             }
-                            opacity = mat->opacity;
+                            opacity         = mat->opacity;
+                            useVertexColors = mat->vertexColors &&
+                                              lrec->color.handle != VK_NULL_HANDLE;
+                        }
+
+                        VkPipeline want;
+                        if (useVertexColors) {
+                            want = le.isSegments ? overlayLineListColoredPipeline
+                                                 : overlayLineStripColoredPipeline;
+                        } else {
+                            want = le.isSegments ? overlayLineListPipeline
+                                                 : overlayLineStripPipeline;
+                        }
+                        if (want != curPipeline) {
+                            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                            curPipeline = want;
                         }
 
                         Matrix4 model;
@@ -9305,9 +9443,15 @@ namespace threepp {
                                                    VK_SHADER_STAGE_FRAGMENT_BIT,
                                            0, sizeof(pcL), &pcL);
 
-                        VkBuffer     vbufsL[1] = {lrec->vertex.handle};
-                        VkDeviceSize voffsL[1] = {0};
-                        vkCmdBindVertexBuffers(cb, 0, 1, vbufsL, voffsL);
+                        if (useVertexColors) {
+                            VkBuffer     vbufsL[2] = {lrec->vertex.handle, lrec->color.handle};
+                            VkDeviceSize voffsL[2] = {0, 0};
+                            vkCmdBindVertexBuffers(cb, 0, 2, vbufsL, voffsL);
+                        } else {
+                            VkBuffer     vbufsL[1] = {lrec->vertex.handle};
+                            VkDeviceSize voffsL[1] = {0};
+                            vkCmdBindVertexBuffers(cb, 0, 1, vbufsL, voffsL);
+                        }
                         if (lrec->index.handle != VK_NULL_HANDLE) {
                             vkCmdBindIndexBuffer(cb, lrec->index.handle, 0, VK_INDEX_TYPE_UINT32);
                             vkCmdDrawIndexed(cb, lrec->indexCount, 1, 0, 0, 0);

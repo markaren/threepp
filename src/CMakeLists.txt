@@ -965,6 +965,17 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_depth.frag"
         kOverlayDepthFragSpv
         _overlay_depth_frag_spv_h)
+    # Overlay variant with per-vertex color input — used by Line /
+    # LineSegments when geometry has a "color" attribute AND material
+    # has vertexColors=true (e.g. AxesHelper).
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_color.vert"
+        kOverlayColorVertSpv
+        _overlay_color_vert_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_color.frag"
+        kOverlayColorFragSpv
+        _overlay_color_frag_spv_h)
 endif ()
 
 
