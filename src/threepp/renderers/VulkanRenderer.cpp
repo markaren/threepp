@@ -38,6 +38,8 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
+#include "threepp/objects/Line.hpp"
+#include "threepp/objects/LineSegments.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/objects/Bone.hpp"
@@ -736,11 +738,46 @@ namespace threepp {
         // SRC_ALPHA / ONE_MINUS_SRC_ALPHA. Selected when the mesh's
         // material has `transparent == true`.
         VkPipeline       overlayBasicTransparentPipeline = VK_NULL_HANDLE;
+        // Line-topology pipelines for Line / LineSegments objects. Same
+        // overlay shaders, only input-assembly topology differs:
+        //   LineSegments → LINE_LIST  (vertices in pairs)
+        //   Line         → LINE_STRIP (connected polyline)
+        // Lines never path-trace; they're collected separately from
+        // Mesh entries and walked in the overlay record loop.
+        VkPipeline       overlayLineListPipeline    = VK_NULL_HANDLE;
+        VkPipeline       overlayLineStripPipeline   = VK_NULL_HANDLE;
         // Depth prepass that fills rasterGbufs[f].unjitDepth using the
         // unjittered VP. Reuses the raster pipeline's descriptor set + push
         // constants (same camera UBO, same model matrix push). Runs after
         // recordRasterGbufPass and only renders non-overlay geometry.
         VkPipeline       overlayDepthPrepassPipeline = VK_NULL_HANDLE;
+
+        // Per-BufferGeometry vertex/index upload cache for Line objects.
+        // Lines never go through the BLAS path — they don't ray-trace —
+        // so they need an independent host-visible upload. Keyed by raw
+        // BufferGeometry pointer (stable for the life of the geometry).
+        // positionVersion / indexVersion mirror the BufferAttribute::version
+        // counters; ensureLineGeometryUploaded re-uploads (in place when the
+        // size fits, recreate-and-copy when it grew) any time either bumps.
+        struct LineRec {
+            Buffer   vertex;
+            Buffer   index;          // .handle == VK_NULL_HANDLE if non-indexed
+            uint32_t vertexCount  = 0;
+            uint32_t indexCount   = 0;  // 0 if non-indexed
+            uint32_t positionVersion = 0;
+            uint32_t indexVersion    = 0;
+        };
+        std::unordered_map<const BufferGeometry*, LineRec> lineGeomCache_;
+
+        // Per-Line scene snapshot, refreshed in ensureSceneBuilt alongside
+        // lastVisibleEntries_. Lives only for the overlay record's draw
+        // loop — neither PT nor the raster G-buffer touches this.
+        struct LineEntry {
+            Line*    line;
+            std::array<float, 16> worldMatrix;
+            bool     isSegments;// true → LINE_LIST topology, false → LINE_STRIP
+        };
+        std::vector<LineEntry> lastVisibleLines_;
         // Cached unjittered view-projection matrix (column-major,
         // row-of-element-4 layout). Computed once per frame in
         // uploadRasterCameraUbo and read by recordOverlayPass to build
@@ -1041,8 +1078,15 @@ namespace threepp {
             if (overlayWireframePipeline)         vkDestroyPipeline(d, overlayWireframePipeline, nullptr);
             if (overlayBasicPipeline)             vkDestroyPipeline(d, overlayBasicPipeline, nullptr);
             if (overlayBasicTransparentPipeline)  vkDestroyPipeline(d, overlayBasicTransparentPipeline, nullptr);
+            if (overlayLineListPipeline)          vkDestroyPipeline(d, overlayLineListPipeline, nullptr);
+            if (overlayLineStripPipeline)         vkDestroyPipeline(d, overlayLineStripPipeline, nullptr);
             if (overlayDepthPrepassPipeline)      vkDestroyPipeline(d, overlayDepthPrepassPipeline, nullptr);
             if (overlayPipelineLayout)      vkDestroyPipelineLayout(d, overlayPipelineLayout, nullptr);
+            for (auto& [g, rec] : lineGeomCache_) {
+                destroyBuffer(ctx->allocator(), rec.vertex);
+                if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.index);
+            }
+            lineGeomCache_.clear();
             if (gbufSampler_)           vkDestroySampler(d, gbufSampler_, nullptr);
             destroyBuffer(ctx->allocator(), dummyUvBuffer_);
 
@@ -2702,7 +2746,23 @@ namespace threepp {
             // count() entries each with worldMatrix = matrixWorld * instanceMat[i].
             // Mirrors WGPU's expandMeshEntries (WgpuPathTracerAtlas.cpp:20).
             std::vector<MeshEntry> entries;
+            std::vector<LineEntry> lineEntries;
             scene.traverse([&](Object3D& o) {
+                // Line / LineSegments: never path-trace, always overlay.
+                // Collected before the Mesh dispatch so subclasses don't
+                // accidentally route through the Mesh path.
+                if (auto* line = dynamic_cast<Line*>(&o); line && line->visible) {
+                    auto geom = line->geometry();
+                    if (geom && geom->hasAttribute("position")) {
+                        LineEntry le{};
+                        le.line       = line;
+                        le.isSegments = (dynamic_cast<LineSegments*>(line) != nullptr);
+                        std::memcpy(le.worldMatrix.data(),
+                                    line->matrixWorld->elements.data(), 64);
+                        lineEntries.push_back(le);
+                    }
+                    return;// Lines aren't Meshes; nothing more to do
+                }
                 auto* m = dynamic_cast<Mesh*>(&o);
                 if (!m || !m->visible) return;
                 auto geom = m->geometry();
@@ -2870,6 +2930,7 @@ namespace threepp {
             // motion matrices themselves are computed each frame in
             // renderFrame so we can defer the host write past the fence wait.
             lastVisibleEntries_ = entries;
+            lastVisibleLines_   = std::move(lineEntries);
             if (sceneBuilt_ && currFp.size() == prevSceneFingerprint.size()) {
                 // Four classes of change:
                 //   structural    — pointers (mesh/geom/mat/textures): full rebuild.
@@ -5584,6 +5645,36 @@ namespace threepp {
                                             &overlayBasicTransparentPipeline),
                   "vkCreateGraphicsPipelines(overlayBasicTransparent)");
 
+            // Line / LineSegments pipelines. Same overlay shaders, same
+            // depth/blend state as the basic opaque variant; only the
+            // input-assembly topology and rasterization mode differ.
+            // POLYGON_MODE_FILL is irrelevant for line topologies but kept
+            // for pipeline validity. cullMode=NONE (lines don't have
+            // facing).
+            VkPipelineRasterizationStateCreateInfo rsLine = rs;
+            rsLine.polygonMode = VK_POLYGON_MODE_FILL;
+            rsLine.cullMode    = VK_CULL_MODE_NONE;
+
+            VkPipelineInputAssemblyStateCreateInfo iaLineList{};
+            iaLineList.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            iaLineList.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+            VkGraphicsPipelineCreateInfo gpciLineList = gpci;
+            gpciLineList.pInputAssemblyState = &iaLineList;
+            gpciLineList.pRasterizationState = &rsLine;
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciLineList, nullptr,
+                                            &overlayLineListPipeline),
+                  "vkCreateGraphicsPipelines(overlayLineList)");
+
+            VkPipelineInputAssemblyStateCreateInfo iaLineStrip{};
+            iaLineStrip.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            iaLineStrip.topology = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+            VkGraphicsPipelineCreateInfo gpciLineStrip = gpci;
+            gpciLineStrip.pInputAssemblyState = &iaLineStrip;
+            gpciLineStrip.pRasterizationState = &rsLine;
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciLineStrip, nullptr,
+                                            &overlayLineStripPipeline),
+                  "vkCreateGraphicsPipelines(overlayLineStrip)");
+
             vkDestroyShaderModule(ctx->device(), vertModule, nullptr);
             vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
 
@@ -5707,6 +5798,109 @@ namespace threepp {
                 vkDestroyShaderModule(ctx->device(), dvert, nullptr);
                 vkDestroyShaderModule(ctx->device(), dfrag, nullptr);
             }
+        }
+
+        // Lazy-upload Line / LineSegments geometry into a host-visible
+        // vertex (+ optional index) buffer pair. Returns nullptr if the
+        // geometry has no usable position attribute. Cached by raw pointer
+        // — first call allocates + writes, subsequent calls compare the
+        // BufferAttribute::version counters and re-upload only when the
+        // user mutated the data. In-place memcpy when the new size fits
+        // the existing buffer; full recreate when it grew (matches the
+        // refreshSkinnedBlas pattern — a write-during-read race for that
+        // one frame is benign because the per-pixel result blends sub-
+        // pixel anyway).
+        const LineRec* ensureLineGeometryUploaded(const BufferGeometry* geom) {
+            if (!geom) return nullptr;
+            auto posAttr = geom->getAttribute<float>("position");
+            if (!posAttr || posAttr->count() == 0) return nullptr;
+            auto* idxAttr = geom->getIndex();
+
+            const uint32_t posVer = posAttr->version;
+            const uint32_t idxVer = (idxAttr && idxAttr->count() > 0) ? idxAttr->version : 0u;
+
+            auto it = lineGeomCache_.find(geom);
+            if (it != lineGeomCache_.end()) {
+                auto& rec = it->second;
+                if (rec.positionVersion == posVer && rec.indexVersion == idxVer) {
+                    return &rec;
+                }
+                // Re-upload paths.
+                const auto& posArr = posAttr->array();
+                const VkDeviceSize vbBytes = posArr.size() * sizeof(float);
+                if (vbBytes > rec.vertex.size) {
+                    destroyBuffer(ctx->allocator(), rec.vertex);
+                    rec.vertex = createBuffer(
+                            ctx->allocator(), ctx->device(), vbBytes,
+                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                            VMA_MEMORY_USAGE_AUTO,
+                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                }
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), rec.vertex.alloc, &mapped);
+                std::memcpy(mapped, posArr.data(), vbBytes);
+                vmaUnmapMemory(ctx->allocator(), rec.vertex.alloc);
+                rec.vertexCount     = static_cast<uint32_t>(posAttr->count());
+                rec.positionVersion = posVer;
+
+                if (idxAttr && idxAttr->count() > 0) {
+                    const auto& indices = idxAttr->array();
+                    const VkDeviceSize ibBytes = indices.size() * sizeof(unsigned int);
+                    if (rec.index.handle == VK_NULL_HANDLE || ibBytes > rec.index.size) {
+                        if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.index);
+                        rec.index = createBuffer(
+                                ctx->allocator(), ctx->device(), ibBytes,
+                                VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                                VMA_MEMORY_USAGE_AUTO,
+                                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                    }
+                    vmaMapMemory(ctx->allocator(), rec.index.alloc, &mapped);
+                    std::memcpy(mapped, indices.data(), ibBytes);
+                    vmaUnmapMemory(ctx->allocator(), rec.index.alloc);
+                    rec.indexCount   = static_cast<uint32_t>(indices.size());
+                    rec.indexVersion = idxVer;
+                } else if (rec.index.handle != VK_NULL_HANDLE) {
+                    destroyBuffer(ctx->allocator(), rec.index);
+                    rec.index        = {};
+                    rec.indexCount   = 0;
+                    rec.indexVersion = 0;
+                }
+                return &rec;
+            }
+
+            // First-time upload.
+            const auto& posArr = posAttr->array();
+            LineRec rec{};
+            rec.vertexCount     = static_cast<uint32_t>(posAttr->count());
+            rec.positionVersion = posVer;
+
+            const VkDeviceSize vbBytes = posArr.size() * sizeof(float);
+            rec.vertex = createBuffer(
+                    ctx->allocator(), ctx->device(), vbBytes,
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), rec.vertex.alloc, &mapped);
+            std::memcpy(mapped, posArr.data(), vbBytes);
+            vmaUnmapMemory(ctx->allocator(), rec.vertex.alloc);
+
+            if (idxAttr && idxAttr->count() > 0) {
+                const auto& indices = idxAttr->array();
+                rec.indexCount   = static_cast<uint32_t>(indices.size());
+                rec.indexVersion = idxVer;
+                const VkDeviceSize ibBytes = indices.size() * sizeof(unsigned int);
+                rec.index = createBuffer(
+                        ctx->allocator(), ctx->device(), ibBytes,
+                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                vmaMapMemory(ctx->allocator(), rec.index.alloc, &mapped);
+                std::memcpy(mapped, indices.data(), ibBytes);
+                vmaUnmapMemory(ctx->allocator(), rec.index.alloc);
+            }
+
+            return &lineGeomCache_.emplace(geom, std::move(rec)).first->second;
         }
 
         // ── TAA resources ───────────────────────────────────────────────────
@@ -8919,9 +9113,11 @@ namespace threepp {
             // built), pipeline failed to create, or the early scan didn't
             // find any overlay candidates this frame.
             if (hybridEnabled_ && overlayWireframePipeline != VK_NULL_HANDLE) {
-                bool hasOverlay = false;
-                for (const auto& en : lastVisibleEntries_) {
-                    if (en.isOverlay) { hasOverlay = true; break; }
+                bool hasOverlay = !lastVisibleLines_.empty();
+                if (!hasOverlay) {
+                    for (const auto& en : lastVisibleEntries_) {
+                        if (en.isOverlay) { hasOverlay = true; break; }
+                    }
                 }
                 overlayFoundLastFrame_ = hasOverlay;
 
@@ -9064,6 +9260,62 @@ namespace threepp {
                             }
                         }
                     }
+
+                    // ── Line / LineSegments draws ──────────────────────────
+                    // Always-drawn (no isOverlay flag — Lines are inherently
+                    // overlay; they don't ray-trace). Per-Line: ensure geom
+                    // upload, push MVP+color, switch topology pipeline.
+                    for (const auto& le : lastVisibleLines_) {
+                        if (!le.line) continue;
+                        const LineRec* lrec = ensureLineGeometryUploaded(le.line->geometry().get());
+                        if (!lrec || lrec->vertex.handle == VK_NULL_HANDLE) continue;
+
+                        VkPipeline want = le.isSegments ? overlayLineListPipeline
+                                                        : overlayLineStripPipeline;
+                        if (want != curPipeline) {
+                            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                            curPipeline = want;
+                        }
+
+                        Color color(1.f, 1.f, 1.f);
+                        float opacity = 1.0f;
+                        if (auto mat = le.line->material()) {
+                            if (auto* mc = dynamic_cast<MaterialWithColor*>(mat.get())) {
+                                color = mc->color;
+                            }
+                            opacity = mat->opacity;
+                        }
+
+                        Matrix4 model;
+                        std::memcpy(model.elements.data(), le.worldMatrix.data(), 64);
+                        Matrix4 mvpL;
+                        mvpL.multiplyMatrices(vpUnjitMat, model);
+
+                        struct OverlayPC {
+                            float mvp[16];
+                            float color[4];
+                        } pcL{};
+                        std::memcpy(pcL.mvp, mvpL.elements.data(), 64);
+                        pcL.color[0] = color.r;
+                        pcL.color[1] = color.g;
+                        pcL.color[2] = color.b;
+                        pcL.color[3] = opacity;
+                        vkCmdPushConstants(cb, overlayPipelineLayout,
+                                           VK_SHADER_STAGE_VERTEX_BIT |
+                                                   VK_SHADER_STAGE_FRAGMENT_BIT,
+                                           0, sizeof(pcL), &pcL);
+
+                        VkBuffer     vbufsL[1] = {lrec->vertex.handle};
+                        VkDeviceSize voffsL[1] = {0};
+                        vkCmdBindVertexBuffers(cb, 0, 1, vbufsL, voffsL);
+                        if (lrec->index.handle != VK_NULL_HANDLE) {
+                            vkCmdBindIndexBuffer(cb, lrec->index.handle, 0, VK_INDEX_TYPE_UINT32);
+                            vkCmdDrawIndexed(cb, lrec->indexCount, 1, 0, 0, 0);
+                        } else {
+                            vkCmdDraw(cb, lrec->vertexCount, 1, 0, 0);
+                        }
+                    }
+
                     vkCmdEndRendering(cb);
 
                     // Swapchain back to GENERAL so the downstream blocks
