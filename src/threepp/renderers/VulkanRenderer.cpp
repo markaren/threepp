@@ -85,6 +85,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace threepp {
@@ -214,6 +215,13 @@ namespace threepp {
             // is destroyed (model unloaded) and the C++ allocator hands the
             // same address to a different geometry. Pruned in ensureSceneBuilt.
             std::weak_ptr<BufferGeometry> liveCheck;
+            // Attribute-version snapshot at build time. When the user mutates
+            // vertex data in-place and calls needsUpdate(), the composite
+            // version changes and the BLAS is refreshed (in-place rebuild if
+            // counts match, full evict+rebuild if topology changed).
+            unsigned int geomVersion = 0;
+            uint32_t vertexCount = 0;
+            uint32_t indexCount  = 0;
         };
         std::unordered_map<const BufferGeometry*, std::unique_ptr<BlasRecord>> blasCache;
 
@@ -233,6 +241,19 @@ namespace threepp {
             std::weak_ptr<BufferGeometry> liveCheck;
         };
         std::unordered_map<const SkinnedMesh*, std::unique_ptr<SkinnedMeshState>> skinnedMeshStates;
+
+        // Per-Mesh morphed-geometry BLAS. Two meshes sharing the same
+        // BufferGeometry can have different morphTargetInfluences, so each
+        // morphed mesh gets its own BLAS (same principle as SkinnedMesh).
+        // prevInfluences is the dirty-detection key (memcmp).
+        struct MorphedMeshState {
+            std::unique_ptr<BlasRecord> blas;
+            std::vector<float> prevInfluences;
+            std::vector<float> blendedPositions;
+            std::vector<float> blendedNormals;
+            std::weak_ptr<BufferGeometry> liveCheck;
+        };
+        std::unordered_map<const Mesh*, std::unique_ptr<MorphedMeshState>> morphedMeshStates;
 
         // Per-DisplacedMesh: BLAS (rebuilt-in-place each frame, same scheme as
         // SkinnedMesh) plus up to three FFT cascades (Phillips/Dynamic/IFFT
@@ -612,6 +633,7 @@ namespace threepp {
                                         // 8 texture-of dynamic_casts + materialFromMesh
                                         // (~21 dynamic_casts/mesh) when nothing on the
                                         // material has changed since last frame.
+            unsigned int geomVersion = 0;// composite BufferAttribute version (pos+norm+idx+uv)
             std::array<float, 16> matrix{};
             std::array<float, 15> pbr{};// + normalScale.xy + transmission/ior + clearcoat/roughness
         };
@@ -932,6 +954,20 @@ namespace threepp {
             }
             displacedStates.clear();
 
+            for (auto& [_, st] : morphedMeshStates) {
+                auto& rec = st->blas;
+                if (!rec) continue;
+                if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
+                destroyBuffer(ctx->allocator(), rec->storage);
+                destroyBuffer(ctx->allocator(), rec->vertex);
+                destroyBuffer(ctx->allocator(), rec->index);
+                destroyBuffer(ctx->allocator(), rec->normal);
+                destroyBuffer(ctx->allocator(), rec->uv);
+                destroyBuffer(ctx->allocator(), rec->foam);
+                destroyBuffer(ctx->allocator(), rec->prevVertex);
+            }
+            morphedMeshStates.clear();
+
             for (auto& b : cameraUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : prevCameraUbos) destroyBuffer(ctx->allocator(), b);
             for (auto& b : lightsUbos) destroyBuffer(ctx->allocator(), b);
@@ -1047,6 +1083,15 @@ namespace threepp {
             check(vkQueueSubmit(ctx->graphicsQueue(), 1, &si, VK_NULL_HANDLE), "submit one-shot");
             check(vkQueueWaitIdle(ctx->graphicsQueue()), "wait one-shot");
             vkFreeCommandBuffers(ctx->device(), cmdPool, 1, &cb);
+        }
+
+        static unsigned int geomVersionOf(const BufferGeometry& g) {
+            unsigned int v = 0;
+            if (auto* a = g.getAttribute<float>("position")) v += a->version;
+            if (auto* a = g.getAttribute<float>("normal"))   v += a->version;
+            if (auto* idx = g.getIndex())                     v += idx->version;
+            if (auto* a = g.getAttribute<float>("uv"))        v += a->version;
+            return v;
         }
 
         // Build a single BLAS for the given geometry. Vertex / index buffers
@@ -1219,6 +1264,10 @@ namespace threepp {
             addrInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
             addrInfo.accelerationStructure = rec->as;
             rec->address = ctx->rt().getAccelerationStructureDeviceAddress(ctx->device(), &addrInfo);
+
+            rec->geomVersion = geomVersionOf(geom);
+            rec->vertexCount = vertexCount;
+            rec->indexCount  = indexed ? static_cast<uint32_t>(idxAttr->count()) : 0u;
 
             return rec;
         }
@@ -1465,6 +1514,298 @@ namespace threepp {
             } else {
                 st.prevBoneMats = bm;
             }
+        }
+
+        // Re-upload vertex/normal/uv/index data from a BufferGeometry whose
+        // attributes were mutated in-place (user called needsUpdate()), then
+        // rebuild the BLAS against the same AS handle/storage so the device
+        // address — and every TLAS reference to it — stay valid. Caller must
+        // have already verified that vertex/index counts match the cached BLAS.
+        void refreshGeomBlas(const BufferGeometry& geom, BlasRecord& rec) {
+            auto* posAttr  = geom.getAttribute<float>("position");
+            auto* nrmAttr  = geom.getAttribute<float>("normal");
+            if (!posAttr || !nrmAttr) return;
+
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), rec.vertex.alloc, &mapped);
+            std::memcpy(mapped, posAttr->array().data(),
+                        posAttr->array().size() * sizeof(float));
+            vmaUnmapMemory(ctx->allocator(), rec.vertex.alloc);
+
+            vmaMapMemory(ctx->allocator(), rec.normal.alloc, &mapped);
+            std::memcpy(mapped, nrmAttr->array().data(),
+                        nrmAttr->array().size() * sizeof(float));
+            vmaUnmapMemory(ctx->allocator(), rec.normal.alloc);
+
+            if (auto* uvAttr = geom.getAttribute<float>("uv");
+                uvAttr && rec.uv.handle != VK_NULL_HANDLE) {
+                vmaMapMemory(ctx->allocator(), rec.uv.alloc, &mapped);
+                std::memcpy(mapped, uvAttr->array().data(),
+                            uvAttr->array().size() * sizeof(float));
+                vmaUnmapMemory(ctx->allocator(), rec.uv.alloc);
+            }
+
+            if (auto* idxAttr = geom.getIndex();
+                idxAttr && rec.index.handle != VK_NULL_HANDLE) {
+                vmaMapMemory(ctx->allocator(), rec.index.alloc, &mapped);
+                std::memcpy(mapped, idxAttr->array().data(),
+                            idxAttr->array().size() * sizeof(unsigned int));
+                vmaUnmapMemory(ctx->allocator(), rec.index.alloc);
+            }
+
+            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
+            const auto* idxAttr = geom.getIndex();
+            const bool indexed = idxAttr != nullptr;
+            const uint32_t primitiveCount = indexed
+                    ? static_cast<uint32_t>(idxAttr->count() / 3)
+                    : vertexCount / 3;
+
+            VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+            triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+            triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            triData.vertexData.deviceAddress = rec.vertex.address;
+            triData.vertexStride = 3 * sizeof(float);
+            triData.maxVertex = vertexCount - 1;
+            if (indexed) {
+                triData.indexType = VK_INDEX_TYPE_UINT32;
+                triData.indexData.deviceAddress = rec.index.address;
+            } else {
+                triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+            }
+
+            VkAccelerationStructureGeometryKHR blasGeom{};
+            blasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            blasGeom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            blasGeom.geometry.triangles = triData;
+            blasGeom.flags = 0;
+
+            VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
+            blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+            blasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                              VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+            blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            blasBuild.geometryCount = 1;
+            blasBuild.pGeometries = &blasGeom;
+            blasBuild.dstAccelerationStructure = rec.as;
+
+            VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
+            blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+            ctx->rt().getAccelerationStructureBuildSizes(
+                    ctx->device(),
+                    VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                    &blasBuild, &primitiveCount, &blasSizes);
+
+            Buffer scratch = createBuffer(
+                    ctx->allocator(), ctx->device(), blasSizes.buildScratchSize,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO);
+            blasBuild.scratchData.deviceAddress = scratch.address;
+
+            VkAccelerationStructureBuildRangeInfoKHR range{};
+            range.primitiveCount = primitiveCount;
+            const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+
+            VkCommandBuffer cb = beginOneShot();
+            ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
+            endAndSubmitOneShot(cb);
+            destroyBuffer(ctx->allocator(), scratch);
+
+            rec.geomVersion = geomVersionOf(geom);
+        }
+
+        // ── Morph-target helpers ─────────────────────────────────────────
+
+        static bool isMorphedMesh(const Mesh& m) {
+            return m.geometry()->getMorphAttributes().count("position") > 0;
+        }
+
+        static void cpuMorphBlend(Mesh& mesh,
+                                  std::vector<float>& outPos,
+                                  std::vector<float>& outNorm) {
+            const auto& geom = *mesh.geometry();
+            auto* posAttr = geom.getAttribute<float>("position");
+            auto* nrmAttr = geom.getAttribute<float>("normal");
+            if (!posAttr) return;
+
+            const int vtxCount = posAttr->count();
+            const auto& basePos = posAttr->array();
+            outPos.assign(basePos.begin(), basePos.end());
+
+            if (nrmAttr) {
+                const auto& baseNrm = nrmAttr->array();
+                outNorm.assign(baseNrm.begin(), baseNrm.end());
+            } else {
+                outNorm.assign(vtxCount * 3, 0.f);
+            }
+
+            const auto& morphAttrsMap = geom.getMorphAttributes();
+            auto posIt = morphAttrsMap.find("position");
+            if (posIt == morphAttrsMap.end()) return;
+            const auto& morphPos = posIt->second;
+
+            const std::vector<std::shared_ptr<BufferAttribute>>* morphNrm = nullptr;
+            auto nrmIt = morphAttrsMap.find("normal");
+            if (nrmIt != morphAttrsMap.end()) morphNrm = &nrmIt->second;
+
+            auto* morphObj = mesh.as<ObjectWithMorphTargetInfluences>();
+            if (!morphObj) return;
+            const auto& influences = morphObj->morphTargetInfluences();
+
+            const bool relative = geom.morphTargetsRelative;
+            const size_t numTargets = morphPos.size();
+
+            for (size_t t = 0; t < numTargets && t < influences.size(); ++t) {
+                const float w = influences[t];
+                if (w == 0.f) continue;
+
+                auto* tAttr = dynamic_cast<TypedBufferAttribute<float>*>(morphPos[t].get());
+                if (!tAttr || tAttr->count() != vtxCount) continue;
+                const auto& tData = tAttr->array();
+
+                if (relative) {
+                    for (int v = 0; v < vtxCount; ++v) {
+                        outPos[v * 3 + 0] += w * tData[v * 3 + 0];
+                        outPos[v * 3 + 1] += w * tData[v * 3 + 1];
+                        outPos[v * 3 + 2] += w * tData[v * 3 + 2];
+                    }
+                } else {
+                    for (int v = 0; v < vtxCount; ++v) {
+                        outPos[v * 3 + 0] += w * (tData[v * 3 + 0] - basePos[v * 3 + 0]);
+                        outPos[v * 3 + 1] += w * (tData[v * 3 + 1] - basePos[v * 3 + 1]);
+                        outPos[v * 3 + 2] += w * (tData[v * 3 + 2] - basePos[v * 3 + 2]);
+                    }
+                }
+
+                if (morphNrm && t < morphNrm->size()) {
+                    auto* nAttr = dynamic_cast<TypedBufferAttribute<float>*>((*morphNrm)[t].get());
+                    if (nAttr && nAttr->count() == vtxCount) {
+                        const auto& nData = nAttr->array();
+                        if (relative) {
+                            for (int v = 0; v < vtxCount; ++v) {
+                                outNorm[v * 3 + 0] += w * nData[v * 3 + 0];
+                                outNorm[v * 3 + 1] += w * nData[v * 3 + 1];
+                                outNorm[v * 3 + 2] += w * nData[v * 3 + 2];
+                            }
+                        } else if (nrmAttr) {
+                            const auto& baseNrm = nrmAttr->array();
+                            for (int v = 0; v < vtxCount; ++v) {
+                                outNorm[v * 3 + 0] += w * (nData[v * 3 + 0] - baseNrm[v * 3 + 0]);
+                                outNorm[v * 3 + 1] += w * (nData[v * 3 + 1] - baseNrm[v * 3 + 1]);
+                                outNorm[v * 3 + 2] += w * (nData[v * 3 + 2] - baseNrm[v * 3 + 2]);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Renormalize normals.
+            for (int v = 0; v < vtxCount; ++v) {
+                float& nx = outNorm[v * 3 + 0];
+                float& ny = outNorm[v * 3 + 1];
+                float& nz = outNorm[v * 3 + 2];
+                const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+                if (len > 0.f) { const float inv = 1.f / len; nx *= inv; ny *= inv; nz *= inv; }
+            }
+        }
+
+        MorphedMeshState* ensureMorphedBlas(Mesh& mesh) {
+            auto it = morphedMeshStates.find(&mesh);
+            if (it != morphedMeshStates.end()) return it->second.get();
+
+            auto rec = buildBlasFor(*mesh.geometry());
+            if (!rec) return nullptr;
+            rec->liveCheck = mesh.geometry();
+
+            auto state = std::make_unique<MorphedMeshState>();
+            state->blas = std::move(rec);
+            state->liveCheck = mesh.geometry();
+
+            auto* raw = state.get();
+            morphedMeshStates.emplace(&mesh, std::move(state));
+
+            refreshMorphedBlas(mesh, *raw);
+            return raw;
+        }
+
+        void refreshMorphedBlas(Mesh& mesh, MorphedMeshState& st) {
+            cpuMorphBlend(mesh, st.blendedPositions, st.blendedNormals);
+            if (st.blendedPositions.empty() || !st.blas) return;
+
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), st.blas->vertex.alloc, &mapped);
+            std::memcpy(mapped, st.blendedPositions.data(),
+                        st.blendedPositions.size() * sizeof(float));
+            vmaUnmapMemory(ctx->allocator(), st.blas->vertex.alloc);
+
+            vmaMapMemory(ctx->allocator(), st.blas->normal.alloc, &mapped);
+            std::memcpy(mapped, st.blendedNormals.data(),
+                        st.blendedNormals.size() * sizeof(float));
+            vmaUnmapMemory(ctx->allocator(), st.blas->normal.alloc);
+
+            auto* posAttr = mesh.geometry()->getAttribute<float>("position");
+            auto* idxAttr = mesh.geometry()->getIndex();
+            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
+            const bool indexed = idxAttr != nullptr;
+            const uint32_t primitiveCount = indexed
+                    ? static_cast<uint32_t>(idxAttr->count() / 3)
+                    : vertexCount / 3;
+
+            VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+            triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+            triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            triData.vertexData.deviceAddress = st.blas->vertex.address;
+            triData.vertexStride = 3 * sizeof(float);
+            triData.maxVertex = vertexCount - 1;
+            if (indexed) {
+                triData.indexType = VK_INDEX_TYPE_UINT32;
+                triData.indexData.deviceAddress = st.blas->index.address;
+            } else {
+                triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+            }
+
+            VkAccelerationStructureGeometryKHR blasGeom{};
+            blasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            blasGeom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            blasGeom.geometry.triangles = triData;
+            blasGeom.flags = 0;
+
+            VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
+            blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+            blasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                              VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+            blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            blasBuild.geometryCount = 1;
+            blasBuild.pGeometries = &blasGeom;
+            blasBuild.dstAccelerationStructure = st.blas->as;
+
+            VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
+            blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+            ctx->rt().getAccelerationStructureBuildSizes(
+                    ctx->device(),
+                    VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                    &blasBuild, &primitiveCount, &blasSizes);
+
+            Buffer scratch = createBuffer(
+                    ctx->allocator(), ctx->device(), blasSizes.buildScratchSize,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO);
+            blasBuild.scratchData.deviceAddress = scratch.address;
+
+            VkAccelerationStructureBuildRangeInfoKHR range{};
+            range.primitiveCount = primitiveCount;
+            const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+
+            VkCommandBuffer cb = beginOneShot();
+            ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
+            endAndSubmitOneShot(cb);
+            destroyBuffer(ctx->allocator(), scratch);
+
+            auto* morphObj = mesh.as<ObjectWithMorphTargetInfluences>();
+            if (morphObj) st.prevInfluences = morphObj->morphTargetInfluences();
         }
 
         // ── DisplacedMesh helpers ────────────────────────────────────────
@@ -2007,7 +2348,8 @@ namespace threepp {
         // unchanged so descriptor binding 0 keeps pointing at it. Caller
         // must hold the same instance count as the previous build (only
         // matrices may change) — topology growth requires a full rebuild.
-        void refitTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances) {
+        void refitTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances,
+                       bool fullBuild = false) {
             const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
             if (instanceCount == 0 || tlas == VK_NULL_HANDLE) return;
 
@@ -2028,13 +2370,17 @@ namespace threepp {
             tlasGeom.geometry.instances = instData;
             tlasGeom.flags = 0;
 
+            const auto mode = fullBuild
+                    ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
+                    : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+
             VkAccelerationStructureBuildGeometryInfoKHR tlasBuild{};
             tlasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
             tlasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
             tlasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
                               VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
-            tlasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
-            tlasBuild.srcAccelerationStructure = tlas;
+            tlasBuild.mode = mode;
+            tlasBuild.srcAccelerationStructure = fullBuild ? VK_NULL_HANDLE : tlas;
             tlasBuild.dstAccelerationStructure = tlas;
             tlasBuild.geometryCount = 1;
             tlasBuild.pGeometries = &tlasGeom;
@@ -2046,8 +2392,10 @@ namespace threepp {
                     VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                     &tlasBuild, &instanceCount, &sizes);
 
+            const VkDeviceSize scratchSize = fullBuild
+                    ? sizes.buildScratchSize : sizes.updateScratchSize;
             Buffer scratch = createBuffer(
-                    ctx->allocator(), ctx->device(), sizes.updateScratchSize,
+                    ctx->allocator(), ctx->device(), scratchSize,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                     VMA_MEMORY_USAGE_AUTO);
@@ -2389,6 +2737,7 @@ namespace threepp {
                 const Material* matPtr = matSp.get();
                 const unsigned int matVer = matPtr ? matPtr->version() : 0u;
                 const void* geomPtr = m->geometry().get();
+                const unsigned int geomVer = geomVersionOf(*m->geometry());
 
                 MeshFingerprint& fp = currFp[i];
                 bool fastPath = false;
@@ -2396,7 +2745,7 @@ namespace threepp {
                     const auto& p = prevSceneFingerprint[i];
                     if (p.mesh == m && p.mat == matPtr && p.geom == geomPtr &&
                         p.instanceIndex == en.instanceIndex &&
-                        p.matVersion == matVer) {
+                        p.matVersion == matVer && p.geomVersion == geomVer) {
                         // Texture pointers + pbr live on the material; matVersion
                         // unchanged means none of them moved. Copy everything from
                         // prev, then overwrite matrix (transform can change without
@@ -2412,6 +2761,7 @@ namespace threepp {
                     fp.geom = geomPtr;
                     fp.mat  = matPtr;
                     fp.matVersion = matVer;
+                    fp.geomVersion = geomVer;
                     fp.albedoTex             = albedoTexOf(*m);
                     fp.roughnessTex          = roughnessTexOf(*m);
                     fp.metalnessTex          = metalnessTexOf(*m);
@@ -2466,6 +2816,27 @@ namespace threepp {
                 }
             }
 
+            // Morphed meshes — dirty when morphTargetInfluences changed.
+            std::vector<bool> entryMorphDirty(entries.size(), false);
+            for (size_t i = 0; i < entries.size(); ++i) {
+                Mesh* m = entries[i].mesh;
+                if (!isMorphedMesh(*m)) continue;
+                if (dynamic_cast<SkinnedMesh*>(m)) continue;
+                auto mIt = morphedMeshStates.find(m);
+                if (mIt == morphedMeshStates.end()) {
+                    entryMorphDirty[i] = true;
+                    continue;
+                }
+                auto* morphObj = m->as<ObjectWithMorphTargetInfluences>();
+                if (!morphObj) continue;
+                const auto& inf = morphObj->morphTargetInfluences();
+                const auto& prev = mIt->second->prevInfluences;
+                if (inf.size() != prev.size() ||
+                    std::memcmp(inf.data(), prev.data(), inf.size() * sizeof(float)) != 0) {
+                    entryMorphDirty[i] = true;
+                }
+            }
+
             // Continuous-motion fast path: when only the per-mesh matrices
             // changed (everything else — topology, materials, textures —
             // matches), refit the TLAS in place and let raygen reproject.
@@ -2474,11 +2845,15 @@ namespace threepp {
             // renderFrame so we can defer the host write past the fence wait.
             lastVisibleEntries_ = entries;
             if (sceneBuilt_ && currFp.size() == prevSceneFingerprint.size()) {
-                // Three classes of change:
+                // Four classes of change:
                 //   structural    — pointers (mesh/geom/mat/textures): full rebuild.
                 //   matrices      — per-mesh world matrices: TLAS refit + bit set.
                 //   materialVals  — pbr floats (KHR_animation_pointer animates colors,
                 //                   roughness, etc): re-upload matDescs in place + bit set.
+                //   geomData      — same BufferGeometry pointer but attribute version
+                //                   bumped (user mutated vertices in-place): re-upload
+                //                   data + in-place BLAS rebuild + TLAS refit. Falls
+                //                   through to structural if vertex/index count changed.
                 // Splitting matters: KHR_animation_pointer changes pbr every frame
                 // without changing any pointer or texture. Lumping it under
                 // structural caused full rebuild every frame, which reset the
@@ -2488,6 +2863,9 @@ namespace threepp {
                 bool materialValuesSame = true;
                 bool bonesDirtyAny = false;
                 bool displacedDirtyAny = false;
+                bool geomDirtyAny = false;
+                bool morphDirtyAny = false;
+                std::vector<bool> entryGeomDirty(entries.size(), false);
                 for (size_t i = 0; i < currFp.size(); ++i) {
                     const auto& a = currFp[i];
                     const auto& b = prevSceneFingerprint[i];
@@ -2505,22 +2883,26 @@ namespace threepp {
                     const bool matChanged   = std::memcmp(a.pbr.data(),    b.pbr.data(),    sizeof(a.pbr))    != 0;
                     const bool bonesChanged = entryBonesDirty[i];
                     const bool dispChanged  = entryDisplacedDirty[i];
+                    const bool geomChanged  = (a.geomVersion != b.geomVersion);
+                    const bool morphChanged = entryMorphDirty[i];
                     if (xfmChanged) matricesSame = false;
                     if (matChanged) materialValuesSame = false;
                     if (bonesChanged) bonesDirtyAny = true;
                     if (dispChanged)  displacedDirtyAny = true;
+                    if (geomChanged) { geomDirtyAny = true; entryGeomDirty[i] = true; }
+                    if (morphChanged) morphDirtyAny = true;
                     // All flavors of change invalidate this pixel's history —
                     // share the same per-mesh bit. Reproject+halve FC for any
                     // of: matrix shift, pbr shift, pose deformation, ocean
-                    // surface displacement.
-                    if (xfmChanged || matChanged || bonesChanged || dispChanged) {
+                    // surface displacement, geometry data mutation, morph blend.
+                    if (xfmChanged || matChanged || bonesChanged || dispChanged || geomChanged || morphChanged) {
                         const size_t w = i >> 5;
                         if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
                         meshMovedBits_[w] |= (1u << (i & 31u));
                     }
                 }
                 if (structuralSame) {
-                    if (!matricesSame || !materialValuesSame || bonesDirtyAny || displacedDirtyAny) {
+                    if (!matricesSame || !materialValuesSame || bonesDirtyAny || displacedDirtyAny || geomDirtyAny || morphDirtyAny) {
                         motionThisFrame_ = true;
                     }
                     if (bonesDirtyAny) {
@@ -2556,7 +2938,60 @@ namespace threepp {
                             ++dm->frameTick;
                         }
                     }
-                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny) {
+                    if (morphDirtyAny) {
+                        std::unordered_set<Mesh*> refreshed;
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            if (!entryMorphDirty[i]) continue;
+                            Mesh* m = entries[i].mesh;
+                            if (!refreshed.insert(m).second) continue;
+                            auto mIt = morphedMeshStates.find(m);
+                            if (mIt == morphedMeshStates.end()) continue;
+                            refreshMorphedBlas(*m, *mIt->second);
+                        }
+                    }
+                    if (geomDirtyAny) {
+                        // Re-upload vertex data for geometries whose
+                        // BufferAttribute versions changed and rebuild their
+                        // BLAS in-place. If any geometry changed its vertex or
+                        // index count (topology change), we can't reuse the
+                        // old buffers — fall through to the full structural
+                        // rebuild instead.
+                        bool topologyChanged = false;
+                        std::unordered_set<const BufferGeometry*> refreshedGeoms;
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            if (!entryGeomDirty[i]) continue;
+                            if (dynamic_cast<SkinnedMesh*>(entries[i].mesh)) continue;
+                            if (dynamic_cast<DisplacedMesh*>(entries[i].mesh)) continue;
+
+                            const BufferGeometry* geomKey = entries[i].mesh->geometry().get();
+                            if (refreshedGeoms.count(geomKey)) continue;
+
+                            auto cIt = blasCache.find(geomKey);
+                            if (cIt == blasCache.end()) continue;
+                            auto& rec = *cIt->second;
+
+                            auto* posAttr = entries[i].mesh->geometry()->getAttribute<float>("position");
+                            auto* idxAttr = entries[i].mesh->geometry()->getIndex();
+                            if (!posAttr) continue;
+
+                            const uint32_t curVtx = static_cast<uint32_t>(posAttr->count());
+                            const uint32_t curIdx = idxAttr ? static_cast<uint32_t>(idxAttr->count()) : 0u;
+                            if (curVtx != rec.vertexCount || curIdx != rec.indexCount) {
+                                topologyChanged = true;
+                                break;
+                            }
+
+                            refreshGeomBlas(*entries[i].mesh->geometry(), rec);
+                            refreshedGeoms.insert(geomKey);
+                        }
+                        if (topologyChanged) {
+                            // Vertex/index count changed — can't reuse BLAS
+                            // buffers. Fall through to the full structural
+                            // rebuild path below.
+                            goto fullRebuild;
+                        }
+                    }
+                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny || geomDirtyAny || morphDirtyAny) {
                         // TLAS refit: needed when instance transforms change
                         // (matricesSame=false) AND when any skinned BLAS was
                         // just rebuilt — the TLAS's per-instance wrapped AABB
@@ -2579,6 +3014,8 @@ namespace threepp {
                                 auto dmIt = displacedStates.find(dm);
                                 if (dmIt == displacedStates.end()) continue;
                                 blasAddr = dmIt->second->blas->address;
+                            } else if (auto mIt = morphedMeshStates.find(en.mesh); mIt != morphedMeshStates.end()) {
+                                blasAddr = mIt->second->blas->address;
                             } else {
                                 const BufferGeometry* geomKey = en.mesh->geometry().get();
                                 auto it = blasCache.find(geomKey);
@@ -2599,7 +3036,8 @@ namespace threepp {
                             inst.accelerationStructureReference = blasAddr;
                             instances.push_back(inst);
                         }
-                        refitTlas(instances);
+                        const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || morphDirtyAny || geomDirtyAny;
+                        refitTlas(instances, blasDeformed);
                     }
                     if (!materialValuesSame) {
                         // Material-values-only update: rebuild MaterialDescs and
@@ -2674,6 +3112,7 @@ namespace threepp {
                 }
             }
 
+            fullRebuild:
             // Structural change — invalidate the emissive-tri cache so next
             // frame's buildAndUploadEmissiveTris does a full walk regardless
             // of whether entries.size() happens to match.
@@ -2759,6 +3198,24 @@ namespace threepp {
                         ++it;
                     }
                 }
+                for (auto it = morphedMeshStates.begin(); it != morphedMeshStates.end(); ) {
+                    if (it->second->liveCheck.expired()) {
+                        auto& rec = it->second->blas;
+                        if (rec) {
+                            if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);
+                            destroyBuffer(ctx->allocator(), rec->storage);
+                            destroyBuffer(ctx->allocator(), rec->vertex);
+                            destroyBuffer(ctx->allocator(), rec->index);
+                            destroyBuffer(ctx->allocator(), rec->normal);
+                            destroyBuffer(ctx->allocator(), rec->uv);
+                            destroyBuffer(ctx->allocator(), rec->foam);
+                            destroyBuffer(ctx->allocator(), rec->prevVertex);
+                        }
+                        it = morphedMeshStates.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
                 for (auto it = textureCache.begin(); it != textureCache.end(); ) {
                     if (it->second.first.expired()) {
                         const uint32_t slot = it->second.second;
@@ -2805,8 +3262,27 @@ namespace threepp {
                     // contents (rest grid right now) become the displaced
                     // surface before the first ray-trace sees it.
                     refreshDisplacedBlas(*dm, *st, static_cast<float>(glfwGetTime()));
+                } else if (isMorphedMesh(*m)) {
+                    auto* st = ensureMorphedBlas(*m);
+                    if (!st) continue;
+                    recPtr = st->blas.get();
                 } else {
                     auto it = blasCache.find(geomKey);
+                    if (it != blasCache.end()) {
+                        const unsigned int curVer = geomVersionOf(*m->geometry());
+                        if (it->second->geomVersion != curVer) {
+                            auto& old = it->second;
+                            if (old->as) ctx->rt().destroyAccelerationStructure(ctx->device(), old->as, nullptr);
+                            destroyBuffer(ctx->allocator(), old->storage);
+                            destroyBuffer(ctx->allocator(), old->vertex);
+                            destroyBuffer(ctx->allocator(), old->index);
+                            destroyBuffer(ctx->allocator(), old->normal);
+                            destroyBuffer(ctx->allocator(), old->uv);
+                            destroyBuffer(ctx->allocator(), old->foam);
+                            destroyBuffer(ctx->allocator(), old->prevVertex);
+                            it = blasCache.erase(it);
+                        }
+                    }
                     if (it == blasCache.end()) {
                         auto rec = buildBlasFor(*m->geometry());
                         if (!rec) continue;// degenerate / unsupported geometry
@@ -3566,6 +4042,11 @@ namespace threepp {
                 if (it != displacedStates.end() && it->second->blas)
                     return it->second->blas.get();
                 return nullptr;
+            }
+            {
+                auto it = morphedMeshStates.find(en.mesh);
+                if (it != morphedMeshStates.end() && it->second->blas)
+                    return it->second->blas.get();
             }
             auto* geom = en.mesh->geometry().get();
             auto it = blasCache.find(geom);

@@ -820,14 +820,18 @@ void main() {
     const vec3 Nworld = normalize(transpose(mat3(gl_WorldToObjectEXT)) * nObj);
 
     const vec3 V = normalize(-gl_WorldRayDirectionEXT);
-    // Front-face = ray came from outside the surface (V on the same side as the
-    // outward normal). Captured before flipping so the transmission lobe below
-    // can pick the correct refraction η and origin offset on back-facing hits.
+    // Geometric facing from triangle winding — always correct regardless of
+    // shading normals. Used for the single-sided pass-through test so that
+    // morphed/deformed meshes whose blended shading normals diverge from the
+    // geometric normal at grazing angles don't falsely pass through.
+    const bool geoFront = gl_HitKindEXT == gl_HitKindFrontFacingTriangleEXT;
+    // Shading-normal facing for lighting (smooth-normal flip on double-sided).
     const bool isFront = dot(Nworld, V) >= 0.0;
-    vec3 N = isFront ? Nworld : -Nworld;// double-sided shading for thin meshes / cull-disabled
+    vec3 N = isFront ? Nworld : -Nworld;
 
     // Single-sided material hit from behind: pass the ray through unchanged.
-    if (!isFront && mdesc.doubleSided == 0 && mdesc.transmission <= 0.0) {
+    // Uses geometric facing to avoid false pass-through at grazing angles.
+    if (!geoFront && mdesc.doubleSided == 0 && mdesc.transmission <= 0.0) {
         payload.radiance      = vec3(0.0);
         payload.brdfWeight    = vec3(1.0);
         // No advance past hitT — raygen uses a 1e-4 tmin for pass-through
