@@ -726,6 +726,16 @@ namespace threepp {
         // input is a push constant (mvp + color).
         VkPipelineLayout overlayPipelineLayout      = VK_NULL_HANDLE;
         VkPipeline       overlayWireframePipeline   = VK_NULL_HANDLE;
+        // Solid-fill counterpart for MeshBasicMaterial-style overlays — flat
+        // color, depth-tested, but rendered as filled triangles instead of
+        // wireframe lines. Selected per-draw based on the material's
+        // `wireframe` flag (true → wireframe pipeline, false → basic).
+        VkPipeline       overlayBasicPipeline       = VK_NULL_HANDLE;
+        // Alpha-blended counterpart to overlayBasicPipeline. Same state
+        // except colorBlendAttachmentState's blendEnable=TRUE with
+        // SRC_ALPHA / ONE_MINUS_SRC_ALPHA. Selected when the mesh's
+        // material has `transparent == true`.
+        VkPipeline       overlayBasicTransparentPipeline = VK_NULL_HANDLE;
         // Depth prepass that fills rasterGbufs[f].unjitDepth using the
         // unjittered VP. Reuses the raster pipeline's descriptor set + push
         // constants (same camera UBO, same model matrix push). Runs after
@@ -1028,8 +1038,10 @@ namespace threepp {
             if (rasterDsLayout)         vkDestroyDescriptorSetLayout(d, rasterDsLayout, nullptr);
             if (rasterDescPool)         vkDestroyDescriptorPool(d, rasterDescPool, nullptr);
             if (rasterGbufRenderPass)   vkDestroyRenderPass(d, rasterGbufRenderPass, nullptr);
-            if (overlayWireframePipeline)   vkDestroyPipeline(d, overlayWireframePipeline, nullptr);
-            if (overlayDepthPrepassPipeline) vkDestroyPipeline(d, overlayDepthPrepassPipeline, nullptr);
+            if (overlayWireframePipeline)         vkDestroyPipeline(d, overlayWireframePipeline, nullptr);
+            if (overlayBasicPipeline)             vkDestroyPipeline(d, overlayBasicPipeline, nullptr);
+            if (overlayBasicTransparentPipeline)  vkDestroyPipeline(d, overlayBasicTransparentPipeline, nullptr);
+            if (overlayDepthPrepassPipeline)      vkDestroyPipeline(d, overlayDepthPrepassPipeline, nullptr);
             if (overlayPipelineLayout)      vkDestroyPipelineLayout(d, overlayPipelineLayout, nullptr);
             if (gbufSampler_)           vkDestroySampler(d, gbufSampler_, nullptr);
             destroyBuffer(ctx->allocator(), dummyUvBuffer_);
@@ -5529,6 +5541,49 @@ namespace threepp {
                                             &overlayWireframePipeline),
                   "vkCreateGraphicsPipelines(overlayWireframe)");
 
+            // Solid-fill variant for MeshBasicMaterial-style overlays. Same
+            // shaders + state otherwise; only the rasterization mode flips
+            // to FILL and we cull back faces (no need to draw the inside of
+            // a closed convex overlay). Reuses the just-created shader
+            // modules → cheap second pipeline.
+            VkPipelineRasterizationStateCreateInfo rsBasic = rs;
+            rsBasic.polygonMode = VK_POLYGON_MODE_FILL;
+            rsBasic.cullMode    = VK_CULL_MODE_BACK_BIT;
+            VkGraphicsPipelineCreateInfo gpciBasic = gpci;
+            gpciBasic.pRasterizationState = &rsBasic;
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciBasic, nullptr,
+                                            &overlayBasicPipeline),
+                  "vkCreateGraphicsPipelines(overlayBasic)");
+
+            // Alpha-blended fill variant. Standard "non-premultiplied" alpha:
+            //   srcColor·srcAlpha + dstColor·(1-srcAlpha)
+            // Depth-test stays on (occluded by PT geometry), depth-write OFF
+            // so back-to-front order doesn't matter for the depth attachment
+            // even if multiple transparent overlays overlap. Per-overlay
+            // depth sorting is NOT performed — overlapping transparent
+            // overlays may show out-of-order alpha. For typical gizmo /
+            // single-transparent-mesh use this is acceptable; documented as
+            // a Stage-2 limitation.
+            VkPipelineColorBlendAttachmentState cbasBlend{};
+            cbasBlend.blendEnable         = VK_TRUE;
+            cbasBlend.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            cbasBlend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbasBlend.colorBlendOp        = VK_BLEND_OP_ADD;
+            cbasBlend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbasBlend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbasBlend.alphaBlendOp        = VK_BLEND_OP_ADD;
+            cbasBlend.colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            VkPipelineColorBlendStateCreateInfo cbBlend{};
+            cbBlend.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            cbBlend.attachmentCount = 1;
+            cbBlend.pAttachments    = &cbasBlend;
+            VkGraphicsPipelineCreateInfo gpciBasicTr = gpciBasic;
+            gpciBasicTr.pColorBlendState = &cbBlend;
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciBasicTr, nullptr,
+                                            &overlayBasicTransparentPipeline),
+                  "vkCreateGraphicsPipelines(overlayBasicTransparent)");
+
             vkDestroyShaderModule(ctx->device(), vertModule, nullptr);
             vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
 
@@ -8925,7 +8980,9 @@ namespace threepp {
                     ri.pDepthAttachment = &depthAtt;
                     vkCmdBeginRendering(cb, &ri);
 
-                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayWireframePipeline);
+                    // Pipeline is selected per-draw based on material.wireframe.
+                    // Set viewport/scissor once — they're dynamic state shared
+                    // across the wireframe + basic pipelines.
                     VkViewport vpDyn{0.f, 0.f, float(ext.width), float(ext.height), 0.f, 1.f};
                     vkCmdSetViewport(cb, 0, 1, &vpDyn);
                     VkRect2D scDyn{{0, 0}, ext};
@@ -8934,16 +8991,38 @@ namespace threepp {
                     Matrix4 vpUnjitMat;
                     std::memcpy(vpUnjitMat.elements.data(), currVPunjit_.data(), 64);
 
+                    // Track currently-bound pipeline so we don't redundantly
+                    // re-bind on every draw when the scene's overlay objects
+                    // share a mode (most do).
+                    VkPipeline curPipeline = VK_NULL_HANDLE;
+
                     for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
                         const auto& en = lastVisibleEntries_[i];
                         if (!en.mesh || !en.isOverlay) continue;
                         Color color(1.f, 1.f, 1.f);
                         float opacity = 1.0f;
+                        bool wireframe = false;
+                        bool transparent = false;
                         if (auto* m = en.mesh->material().get()) {
                             if (auto* mc = dynamic_cast<MaterialWithColor*>(m)) {
                                 color = mc->color;
                             }
-                            opacity = m->opacity;
+                            if (auto* mw = dynamic_cast<MaterialWithWireframe*>(m)) {
+                                wireframe = mw->wireframe;
+                            }
+                            opacity     = m->opacity;
+                            transparent = m->transparent;
+                        }
+                        // Wireframe takes precedence — wireframe lines are
+                        // typically opaque even when material.transparent
+                        // is incidentally true.
+                        VkPipeline want;
+                        if (wireframe)        want = overlayWireframePipeline;
+                        else if (transparent) want = overlayBasicTransparentPipeline;
+                        else                  want = overlayBasicPipeline;
+                        if (want != curPipeline) {
+                            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                            curPipeline = want;
                         }
 
                         const BlasRecord* rec = resolveBlasForEntry(en);
