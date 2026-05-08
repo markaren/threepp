@@ -159,10 +159,12 @@ void main() {
         // foam at this vertex (the buffer isn't cleared between frames),
         // decay it slightly, and take the max with the new instantaneous
         // value. Foam born this frame writes its full value; older foam
-        // fades on its own. Decay 0.97/frame → ~0.4 s half-life at 60 fps,
-        // matching loose whitewater dispersion. Use 0.99 for long trails.
+        // fades on its own. Decay 0.992/frame → ~1.4 s half-life at 60 fps:
+        // wave passes, foam stays behind as a fading trail rather than
+        // moving lock-step with the crest. Frame-rate-dependent — pin the
+        // example FPS or wire dt through if running variable frame rates.
         const float prev = foamOut.v[i];
-        const float decay = 0.97;
+        const float decay = 0.992;
         foamOut.v[i] = max(foamInstant, prev * decay);
     }
 }

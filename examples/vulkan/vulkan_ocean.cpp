@@ -201,7 +201,7 @@ namespace {
         mat->thinWalled = true;
         mat->attenuationColor = Color(0.10f, 0.45f, 0.55f);
         mat->attenuationDistance = 3.0f;
-        // mat->clearcoat = 0.1;
+        mat->clearcoat = 0.1;
 
         // Procedural water-surface normal map. The FFT cascades only resolve
         // waves down to the mesh resolution (~1 m at 1024² over a 1 km tile),
@@ -216,14 +216,14 @@ namespace {
         // 1000 m → each tile covers ~17 m of ocean. Combined with the
         // texture's smallest feature (~0.12 m at period 137), normal-map
         // detail spans ~10 cm – 1.5 m. Reads as chop, not tiled fabric.
-        mat->normalMap->repeat.set(60.f, 60.f);
+        mat->normalMap->repeat.set(200.f, 200.f);
         mat->normalScale.set(0.6f, 0.6f);
         return mat;
     }
 
     auto makeSandMaterial() {
         return MeshStandardMaterial::create({
-                {"color", Color::black},
+                {"color", Color(0.02,0.02,0.02)},
                 {"roughness", 1.0f},
         });
     }
@@ -238,10 +238,6 @@ int main() {
     renderer.setHybridEnabled(true);
     renderer.setHybridDebugView(0);
     renderer.toneMapping = ToneMapping::ACESFilmic;
-    // puresky_2k.hdr is a very bright daylight env. ACES desaturates strongly
-    // at high luminance so the sand goes white-ish even at 0.5; 0.3 keeps
-    // the sand in the saturated regime so its tan colour shows through and
-    // the water's blue-tinted depth gradient can be read against it.
     renderer.toneMappingExposure = 0.5f;
 
     RGBELoader rgbe;

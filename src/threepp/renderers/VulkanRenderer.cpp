@@ -1934,8 +1934,21 @@ namespace threepp {
                     VkDeviceSize(vertexCount) * sizeof(float),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     VMA_MEMORY_USAGE_AUTO);
+            // Zero-init: water_displace.comp's decay path reads the previous
+            // frame's foam at this vertex and computes max(foamInstant, prev*
+            // decay). Without explicit init the first frame reads undefined
+            // GPU memory — often huge garbage values (NaN/Inf bit patterns
+            // or just large floats) that decay slowly enough to be visible
+            // for tens of seconds, bilinear-interpolated across the plane's
+            // triangulation as a hex-tile foam pattern.
+            {
+                VkCommandBuffer cb = beginOneShot();
+                vkCmdFillBuffer(cb, blas->foam.handle, 0, VK_WHOLE_SIZE, 0);
+                endAndSubmitOneShot(cb);
+            }
 
             // Per-vertex previous-pose buffer for hybrid raster motion vec.
             // Same size as vertex (R32G32B32 SFLOAT × vertexCount). Filled

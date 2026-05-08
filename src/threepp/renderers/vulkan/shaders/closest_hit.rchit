@@ -468,6 +468,15 @@ float lum3(vec3 c) {
     return dot(c, vec3(0.2126, 0.7152, 0.0722));
 }
 
+// 2D→1D hash. Used to break up bilinear-interpolated per-vertex foam into
+// crisp speckle (matches the multi-octave hash noise in the WGPU webtide
+// raster shader).
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
 // ───── ReSTIR DI — Stage 1a (init RIS, no temporal/spatial reuse) ─────
 // One reservoir per primary-shading invocation; lives in registers and is
 // not persisted across frames (no SSBO yet — Stage 1b adds temporal reuse).
@@ -978,9 +987,22 @@ void main() {
     // transmission lobe also reads `transmission` later in the shader; we
     // suppress it on heavy foam so whitecaps read as opaque whitewater
     // rather than tinted glass-foam. No-op when foamCoverage = 0.
+    float foamMask = 0.0;
     if (foamCoverage > 0.0) {
-        albedo    = mix(albedo,    vec3(1.0), foamCoverage);
-        roughness = mix(roughness, 1.0,       foamCoverage);
+        // Break up the bilinear-interpolated per-vertex coverage into crisp
+        // whitewater speckle. 3 octaves of hash noise on world-XZ at scales
+        // matching the WGPU webtide raster pass (≈2.5 m / 0.48 m / 0.15 m).
+        // Subtraction punches holes in the coverage; smoothstep softens the
+        // fleck edges so individual spots fade rather than alias.
+        const vec3 hpFoam = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
+        const vec2 wxz = hpFoam.xz;
+        const float fn1 = hash21(wxz * 0.4);
+        const float fn2 = hash21(wxz * 2.1);
+        const float fn3 = hash21(wxz * 6.5);
+        const float foamN = fn1 * 0.12 + fn2 * 0.20 + fn3 * 0.13;
+        foamMask = smoothstep(0.10, 0.55, foamCoverage - foamN);
+        albedo    = mix(albedo,    vec3(0.85, 0.90, 0.92), foamMask);
+        roughness = mix(roughness, 1.0,                    foamMask);
     }
 
     vec3 F0 = mix(vec3(0.04) * mdesc.specularIntensity * mdesc.specularColor, albedo, metalness);
@@ -1065,8 +1087,10 @@ void main() {
         transmission *= texture(albedoMaps[i], uvTransmission).r;
     }
     // Foam suppresses transmission so whitecaps read as opaque whitewater
-    // rather than tinted glass. mix toward 0 by foamCoverage.
-    transmission *= (1.0 - foamCoverage);
+    // rather than tinted glass. Keyed off foamMask (the speckled visible
+    // foam) rather than raw foamCoverage, so opacity matches the same
+    // pattern the eye sees on the surface.
+    transmission *= (1.0 - foamMask);
     if (transmission > 0.0 && urand(seed) < transmission) {
         const float ior_base = max(mdesc.ior, 1.0);
         const vec3  I        = gl_WorldRayDirectionEXT;
