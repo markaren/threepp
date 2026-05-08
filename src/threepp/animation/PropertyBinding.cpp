@@ -5,6 +5,7 @@
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
 
+#include <functional>
 #include <iostream>
 #include <regex>
 
@@ -219,6 +220,22 @@ void PropertyBinding::bind() {
 
         std::cerr << "THREE.PropertyBinding: Trying to update node for track: " << this->path << " but it wasn't found." << std::endl;
         return;
+    }
+
+    // glTF nodes are pre-created as Group; the actual Mesh with morph
+    // influences is a child. When the property is a morph index and the
+    // found node doesn't implement the interface, search its subtree.
+    if (parseMorphIndex(propertyName) >= 0 &&
+        !dynamic_cast<ObjectWithMorphTargetInfluences*>(targetObject)) {
+        std::function<Object3D*(Object3D*)> findMorphChild = [&](Object3D* n) -> Object3D* {
+            for (auto* c : n->children) {
+                if (dynamic_cast<ObjectWithMorphTargetInfluences*>(c)) return c;
+                if (auto* found = findMorphChild(c)) return found;
+            }
+            return nullptr;
+        };
+        if (auto* m = findMorphChild(targetObject))
+            targetObject = m;
     }
 
     this->targetObject = targetObject;

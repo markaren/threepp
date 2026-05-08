@@ -9,6 +9,7 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
 #include "threepp/objects/Bone.hpp"
+#include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
 
 namespace threepp {
 
@@ -79,6 +80,13 @@ namespace threepp {
             that->setValue(sourceArray, offset);
         }
 
+        static int parseMorphIndex(const std::string& name) {
+            if (name.size() > 23 && name.compare(0, 22, "morphTargetInfluences[") == 0 && name.back() == ']') {
+                return std::stoi(name.substr(22, name.size() - 23));
+            }
+            return -1;
+        }
+
         static void _getValue_direct(PropertyBinding* that, std::vector<float>& buffer, size_t offset) {
 
             if (that->propertyName == "quaternion") {
@@ -87,6 +95,11 @@ namespace threepp {
                 that->targetObject->position.toArray(buffer, offset);
             } else if (that->propertyName == "scale") {
                 that->targetObject->scale.toArray(buffer, offset);
+            } else if (int idx = parseMorphIndex(that->propertyName); idx >= 0) {
+                if (auto* m = dynamic_cast<ObjectWithMorphTargetInfluences*>(that->targetObject)) {
+                    auto& inf = m->morphTargetInfluences();
+                    buffer[offset] = idx < static_cast<int>(inf.size()) ? inf[idx] : 0.f;
+                }
             } else {
                 std::cerr << that->propertyName << " is not readable." << std::endl;
             }
@@ -100,6 +113,12 @@ namespace threepp {
                 that->targetObject->position.fromArray(buffer, offset);
             } else if (that->propertyName == "scale") {
                 that->targetObject->scale.fromArray(buffer, offset);
+            } else if (int idx = parseMorphIndex(that->propertyName); idx >= 0) {
+                if (auto* m = dynamic_cast<ObjectWithMorphTargetInfluences*>(that->targetObject)) {
+                    auto& inf = m->morphTargetInfluences();
+                    if (idx >= static_cast<int>(inf.size())) inf.resize(idx + 1, 0.f);
+                    inf[idx] = buffer[offset];
+                }
             } else {
                 std::cerr << that->propertyName << " is not writable." << std::endl;
             }
@@ -111,9 +130,15 @@ namespace threepp {
                 that->targetObject->quaternion.fromArray(buffer, offset);
             } else if (that->propertyName == "position") {
                 that->targetObject->position.fromArray(buffer, offset);
-            }  else if (that->propertyName == "scale") {
+            } else if (that->propertyName == "scale") {
                 that->targetObject->scale.fromArray(buffer, offset);
-            }  else {
+            } else if (int idx = parseMorphIndex(that->propertyName); idx >= 0) {
+                if (auto* m = dynamic_cast<ObjectWithMorphTargetInfluences*>(that->targetObject)) {
+                    auto& inf = m->morphTargetInfluences();
+                    if (idx >= static_cast<int>(inf.size())) inf.resize(idx + 1, 0.f);
+                    inf[idx] = buffer[offset];
+                }
+            } else {
                 std::cerr << "_setValue_direct_setMatrixWorldNeedsUpdate: " << that->propertyName << " is not writable." << std::endl;
             }
             that->targetObject->matrixWorldNeedsUpdate = true;
