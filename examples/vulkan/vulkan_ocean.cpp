@@ -246,7 +246,7 @@ int main() {
 
     RGBELoader rgbe;
     auto env = rgbe.load(std::string(DATA_FOLDER) +
-                         "/textures/env/citrus_orchard_road_puresky_2k.hdr");
+                         "/textures/env/autumn_field_puresky_2k.hdr");
 
     Scene scene;
     scene.background = env;
