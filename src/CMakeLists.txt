@@ -954,6 +954,17 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay.frag"
         kOverlayFragSpv
         _overlay_frag_spv_h)
+    # Overlay depth prepass — writes unjittered depth so the wireframe
+    # overlay's depth test compares like-with-like (the main G-buffer
+    # depth is jittered for TAA).
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_depth.vert"
+        kOverlayDepthVertSpv
+        _overlay_depth_vert_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_depth.frag"
+        kOverlayDepthFragSpv
+        _overlay_depth_frag_spv_h)
 endif ()
 
 

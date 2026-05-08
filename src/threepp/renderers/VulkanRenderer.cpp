@@ -69,6 +69,8 @@
 #include "threepp/renderers/vulkan/shaders/taa_resolve.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_depth.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_depth.frag.spv.h"
 
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.hpp"
 
@@ -697,7 +699,13 @@ namespace threepp {
             Image2D       motion;       // rgba16f — NDC delta in .rg, .ba reserved
             Image2D       ids;          // rgba16ui — instanceCustomIndex/meshID/flags/reserved
             Image2D       uv;           // rgba16f — material UV in .rg (raygen samples textures with this in hybrid stage 1A)
-            Image2D       depth;        // d32_sfloat
+            Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
+            // Hybrid raster overlay's UNJITTERED depth attachment. Filled by
+            // an extra depth-only prepass (overlay_depth.vert) right after
+            // the main G-buffer pass. The wireframe overlay reads it as a
+            // depth attachment so its depth test compares unjittered z
+            // against unjittered z and doesn't shimmer between frames.
+            Image2D       unjitDepth;   // d32_sfloat — UNJITTERED projection
             VkFramebuffer framebuffer = VK_NULL_HANDLE;
             uint32_t      width = 0;
             uint32_t      height = 0;
@@ -718,6 +726,11 @@ namespace threepp {
         // input is a push constant (mvp + color).
         VkPipelineLayout overlayPipelineLayout      = VK_NULL_HANDLE;
         VkPipeline       overlayWireframePipeline   = VK_NULL_HANDLE;
+        // Depth prepass that fills rasterGbufs[f].unjitDepth using the
+        // unjittered VP. Reuses the raster pipeline's descriptor set + push
+        // constants (same camera UBO, same model matrix push). Runs after
+        // recordRasterGbufPass and only renders non-overlay geometry.
+        VkPipeline       overlayDepthPrepassPipeline = VK_NULL_HANDLE;
         // Cached unjittered view-projection matrix (column-major,
         // row-of-element-4 layout). Computed once per frame in
         // uploadRasterCameraUbo and read by recordOverlayPass to build
@@ -1015,8 +1028,9 @@ namespace threepp {
             if (rasterDsLayout)         vkDestroyDescriptorSetLayout(d, rasterDsLayout, nullptr);
             if (rasterDescPool)         vkDestroyDescriptorPool(d, rasterDescPool, nullptr);
             if (rasterGbufRenderPass)   vkDestroyRenderPass(d, rasterGbufRenderPass, nullptr);
-            if (overlayWireframePipeline) vkDestroyPipeline(d, overlayWireframePipeline, nullptr);
-            if (overlayPipelineLayout)    vkDestroyPipelineLayout(d, overlayPipelineLayout, nullptr);
+            if (overlayWireframePipeline)   vkDestroyPipeline(d, overlayWireframePipeline, nullptr);
+            if (overlayDepthPrepassPipeline) vkDestroyPipeline(d, overlayDepthPrepassPipeline, nullptr);
+            if (overlayPipelineLayout)      vkDestroyPipelineLayout(d, overlayPipelineLayout, nullptr);
             if (gbufSampler_)           vkDestroySampler(d, gbufSampler_, nullptr);
             destroyBuffer(ctx->allocator(), dummyUvBuffer_);
 
@@ -5002,6 +5016,7 @@ namespace threepp {
                 destroyImage2D(ctx->allocator(), d, g.ids);
                 destroyImage2D(ctx->allocator(), d, g.uv);
                 destroyImage2D(ctx->allocator(), d, g.depth);
+                destroyImage2D(ctx->allocator(), d, g.unjitDepth);
                 g.width  = 0;
                 g.height = 0;
             }
@@ -5099,6 +5114,12 @@ namespace threepp {
                                                    colorUsage, VK_IMAGE_ASPECT_COLOR_BIT);
                 g.depth  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
                                                    depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT);
+                // Unjittered depth, written by the overlay depth prepass and
+                // read by the post-TAA wireframe overlay's depth-test. Lives
+                // outside the main G-buffer render pass — bound only via
+                // dynamic rendering, so it's not part of the framebuffer.
+                g.unjitDepth = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
+                                                       depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT);
 
                 VkImageView views[5] = {g.normal.view, g.motion.view, g.ids.view,
                                         g.uv.view, g.depth.view};
@@ -5432,29 +5453,19 @@ namespace threepp {
             ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
             ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-            // Depth test DISABLED. Two reasons:
-            //   1. The G-buffer depth attachment is written with the JITTERED
-            //      projection (per-frame Halton sub-pixel offset) so the same
-            //      world point lands at slightly different depth values each
-            //      frame. The overlay uses the UNJITTERED projection (its
-            //      input is the post-TAA color, conceptually "as if no jitter")
-            //      so the per-pixel z values disagree by sub-pixel jitter →
-            //      LEQ depth test inconsistently passes/fails per frame and
-            //      the wireframe shimmers ("shake").
-            //   2. Wireframe / line debug visualizations are typically more
-            //      useful when always-on-top (helpers visible through walls).
-            //      Matches WGPU PT's overlay behavior (no manual depth fill
-            //      means overlays draw on top of the post-PT compose).
-            //
-            // No depth attachment is bound on the pipeline either (depth
-            // format kept in the dynamic-rendering create info just so the
-            // pipeline is compatible with whatever the render-pass declares,
-            // but with depthTestEnable=FALSE the values are ignored).
+            // Depth test re-enabled. Compares against rasterGbufs[f].unjitDepth
+            // (filled by the overlay_depth prepass with the SAME unjittered
+            // projection overlay.vert uses), so per-pixel z values match and
+            // the depth test is stable across frames (no sub-pixel-jitter
+            // shimmer that the jittered G-buffer depth caused in the earlier
+            // depth-test-on configuration). depthWrite stays OFF — overlay
+            // doesn't mutate the depth attachment so subsequent reads of it
+            // (next frame's prepass clears + writes again) are well-defined.
             VkPipelineDepthStencilStateCreateInfo ds{};
             ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-            ds.depthTestEnable  = VK_FALSE;
+            ds.depthTestEnable  = VK_TRUE;
             ds.depthWriteEnable = VK_FALSE;
-            ds.depthCompareOp   = VK_COMPARE_OP_ALWAYS;
+            ds.depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL;
 
             VkPipelineColorBlendAttachmentState cbas{};
             cbas.blendEnable    = VK_FALSE;
@@ -5490,14 +5501,15 @@ namespace threepp {
                   "vkCreatePipelineLayout(overlay)");
 
             // Dynamic rendering: declare formats up-front via
-            // VkPipelineRenderingCreateInfo. Color only — depth-test is off
-            // (see ds note above) so no depth attachment is bound at draw
-            // time and we leave depthAttachmentFormat as VK_FORMAT_UNDEFINED.
+            // VkPipelineRenderingCreateInfo. Color = swapchain, depth =
+            // D32_SFLOAT (matches rasterGbufs.unjitDepth which the overlay
+            // pass binds as a read-only depth attachment).
             const VkFormat colorFmt = ctx->swapchainFormat();
             VkPipelineRenderingCreateInfo prci{};
             prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
             prci.colorAttachmentCount    = 1;
             prci.pColorAttachmentFormats = &colorFmt;
+            prci.depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT;
 
             VkGraphicsPipelineCreateInfo gpci{};
             gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -5519,6 +5531,127 @@ namespace threepp {
 
             vkDestroyShaderModule(ctx->device(), vertModule, nullptr);
             vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
+
+            // ── Overlay depth prepass pipeline ──────────────────────────────
+            // Renders all non-overlay scene geometry with the unjittered VP
+            // into rasterGbufs[f].unjitDepth. Reuses rasterPipelineLayout
+            // (same camera UBO + push constant). Position-only vertex input;
+            // no color attachments. depthCompareOp = LESS so the closest
+            // surface wins per pixel, the same way the main G-buffer fills
+            // depth. Runs each frame after recordRasterGbufPass.
+            {
+                VkShaderModuleCreateInfo dvsmci{};
+                dvsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+                dvsmci.codeSize = sizeof(kOverlayDepthVertSpv);
+                dvsmci.pCode    = kOverlayDepthVertSpv;
+                VkShaderModule dvert = VK_NULL_HANDLE;
+                check(vkCreateShaderModule(ctx->device(), &dvsmci, nullptr, &dvert),
+                      "vkCreateShaderModule(overlay_depth.vert)");
+
+                VkShaderModuleCreateInfo dfsmci{};
+                dfsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+                dfsmci.codeSize = sizeof(kOverlayDepthFragSpv);
+                dfsmci.pCode    = kOverlayDepthFragSpv;
+                VkShaderModule dfrag = VK_NULL_HANDLE;
+                check(vkCreateShaderModule(ctx->device(), &dfsmci, nullptr, &dfrag),
+                      "vkCreateShaderModule(overlay_depth.frag)");
+
+                VkPipelineShaderStageCreateInfo dStages[2]{};
+                dStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                dStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+                dStages[0].module = dvert;
+                dStages[0].pName  = "main";
+                dStages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                dStages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+                dStages[1].module = dfrag;
+                dStages[1].pName  = "main";
+
+                // Position-only vertex input. Note: the raster pipeline also
+                // declares 4 vertex bindings (pos/normal/uv/prevPos) — the
+                // depth prepass shares rasterPipelineLayout but its pipeline
+                // declares only 1 binding here so we don't need to bind 4
+                // buffers per draw. Vulkan permits more pipeline-declared
+                // bindings than the shader uses; what's important is the
+                // SHADER consumes only the bindings it has.
+                VkVertexInputBindingDescription dvib{};
+                dvib.binding   = 0;
+                dvib.stride    = 3 * sizeof(float);
+                dvib.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+                VkVertexInputAttributeDescription dvia{};
+                dvia.location = 0;
+                dvia.binding  = 0;
+                dvia.format   = VK_FORMAT_R32G32B32_SFLOAT;
+                dvia.offset   = 0;
+                VkPipelineVertexInputStateCreateInfo dvi{};
+                dvi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+                dvi.vertexBindingDescriptionCount   = 1;
+                dvi.pVertexBindingDescriptions      = &dvib;
+                dvi.vertexAttributeDescriptionCount = 1;
+                dvi.pVertexAttributeDescriptions    = &dvia;
+
+                VkPipelineInputAssemblyStateCreateInfo dia{};
+                dia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+                dia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+                VkPipelineViewportStateCreateInfo dvp{};
+                dvp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+                dvp.viewportCount = 1;
+                dvp.scissorCount  = 1;
+
+                VkPipelineRasterizationStateCreateInfo drs{};
+                drs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+                drs.polygonMode = VK_POLYGON_MODE_FILL;
+                drs.cullMode    = VK_CULL_MODE_BACK_BIT;
+                drs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+                drs.lineWidth   = 1.0f;
+
+                VkPipelineMultisampleStateCreateInfo dms{};
+                dms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+                dms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+                VkPipelineDepthStencilStateCreateInfo dds{};
+                dds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+                dds.depthTestEnable  = VK_TRUE;
+                dds.depthWriteEnable = VK_TRUE;
+                dds.depthCompareOp   = VK_COMPARE_OP_LESS;
+
+                // No color attachments — pColorBlendState attachmentCount=0.
+                VkPipelineColorBlendStateCreateInfo dcb{};
+                dcb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+                dcb.attachmentCount = 0;
+
+                VkDynamicState ddyns[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+                VkPipelineDynamicStateCreateInfo ddyn{};
+                ddyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+                ddyn.dynamicStateCount = 2;
+                ddyn.pDynamicStates    = ddyns;
+
+                VkPipelineRenderingCreateInfo dprci{};
+                dprci.sType                 = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+                dprci.colorAttachmentCount  = 0;
+                dprci.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+
+                VkGraphicsPipelineCreateInfo dgpci{};
+                dgpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+                dgpci.pNext               = &dprci;
+                dgpci.stageCount          = 2;
+                dgpci.pStages             = dStages;
+                dgpci.pVertexInputState   = &dvi;
+                dgpci.pInputAssemblyState = &dia;
+                dgpci.pViewportState      = &dvp;
+                dgpci.pRasterizationState = &drs;
+                dgpci.pMultisampleState   = &dms;
+                dgpci.pDepthStencilState  = &dds;
+                dgpci.pColorBlendState    = &dcb;
+                dgpci.pDynamicState       = &ddyn;
+                dgpci.layout              = rasterPipelineLayout;
+                check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &dgpci, nullptr,
+                                                &overlayDepthPrepassPipeline),
+                      "vkCreateGraphicsPipelines(overlayDepthPrepass)");
+
+                vkDestroyShaderModule(ctx->device(), dvert, nullptr);
+                vkDestroyShaderModule(ctx->device(), dfrag, nullptr);
+            }
         }
 
         // ── TAA resources ───────────────────────────────────────────────────
@@ -8137,6 +8270,133 @@ namespace threepp {
             // present — bypassing the entire RT pipeline.
             if (hybridEnabled_ && rasterGbufPipeline != VK_NULL_HANDLE) {
                 recordRasterGbufPass(cb, currentFrame);
+                // ── Overlay depth prepass ──────────────────────────────────
+                // Fills rasterGbufs[currentFrame].unjitDepth with the
+                // unjittered VP. Consumed by the post-TAA wireframe overlay
+                // pass for occlusion testing. Only runs when an overlay
+                // pipeline exists AND the scene actually has overlay
+                // candidates this frame (else the prepass is wasted work).
+                if (overlayDepthPrepassPipeline != VK_NULL_HANDLE && overlayFoundLastFrame_) {
+                    const VkExtent2D dext = ctx->swapchainExtent();
+                    VkImage      depthImg  = rasterGbufs[currentFrame].unjitDepth.image;
+                    VkImageView  depthView = rasterGbufs[currentFrame].unjitDepth.view;
+
+                    // UNDEFINED → DEPTH_ATTACHMENT (write). We always clear
+                    // each frame so the prior contents are irrelevant; the
+                    // initial layout is ignored under DONT_CARE-style clear.
+                    VkImageMemoryBarrier2 toDepth{};
+                    toDepth.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    toDepth.srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                             VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+                                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                    toDepth.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                             VK_ACCESS_2_SHADER_READ_BIT;
+                    toDepth.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                             VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                    toDepth.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+                    toDepth.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    toDepth.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                    toDepth.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toDepth.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toDepth.image = depthImg;
+                    toDepth.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                    toDepth.subresourceRange.levelCount = 1;
+                    toDepth.subresourceRange.layerCount = 1;
+                    VkDependencyInfo depToDepth{};
+                    depToDepth.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    depToDepth.imageMemoryBarrierCount = 1;
+                    depToDepth.pImageMemoryBarriers = &toDepth;
+                    vkCmdPipelineBarrier2(cb, &depToDepth);
+
+                    VkRenderingAttachmentInfo dDepthAtt{};
+                    dDepthAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    dDepthAtt.imageView   = depthView;
+                    dDepthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                    dDepthAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                    dDepthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+                    dDepthAtt.clearValue.depthStencil = {1.0f, 0u};
+
+                    VkRenderingInfo dRi{};
+                    dRi.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                    dRi.renderArea.offset = {0, 0};
+                    dRi.renderArea.extent = dext;
+                    dRi.layerCount = 1;
+                    dRi.colorAttachmentCount = 0;
+                    dRi.pDepthAttachment = &dDepthAtt;
+                    vkCmdBeginRendering(cb, &dRi);
+
+                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayDepthPrepassPipeline);
+                    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            rasterPipelineLayout, 0, 1,
+                                            &rasterDescSets[currentFrame], 0, nullptr);
+                    VkViewport dvp{0.f, 0.f, float(dext.width), float(dext.height), 0.f, 1.f};
+                    vkCmdSetViewport(cb, 0, 1, &dvp);
+                    VkRect2D dsc{{0, 0}, dext};
+                    vkCmdSetScissor(cb, 0, 1, &dsc);
+
+                    for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
+                        const auto& en = lastVisibleEntries_[i];
+                        if (en.isOverlay) continue;// overlay meshes drawn by overlay pass instead
+                        const BlasRecord* rec = resolveBlasForEntry(en);
+                        if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
+
+                        struct PC {
+                            float    model[16];
+                            uint32_t instanceCustomIndex;
+                            uint32_t flags;
+                            uint32_t _pad0;
+                            uint32_t _pad1;
+                        } pcDepth{};
+                        std::memcpy(pcDepth.model, en.worldMatrix.data(), 64);
+                        pcDepth.instanceCustomIndex = static_cast<uint32_t>(i);
+                        pcDepth.flags = 0u;
+                        vkCmdPushConstants(cb, rasterPipelineLayout,
+                                           VK_SHADER_STAGE_VERTEX_BIT,
+                                           0, sizeof(pcDepth), &pcDepth);
+
+                        VkBuffer     vbufs[1] = {rec->vertex.handle};
+                        VkDeviceSize voffs[1] = {0};
+                        vkCmdBindVertexBuffers(cb, 0, 1, vbufs, voffs);
+                        if (rec->index.handle != VK_NULL_HANDLE) {
+                            vkCmdBindIndexBuffer(cb, rec->index.handle, 0, VK_INDEX_TYPE_UINT32);
+                            auto* idxAttr = en.mesh->geometry()->getIndex();
+                            if (idxAttr) {
+                                vkCmdDrawIndexed(cb, static_cast<uint32_t>(idxAttr->count()),
+                                                 1, 0, 0, 0);
+                            }
+                        } else {
+                            auto* posAttr = en.mesh->geometry()->getAttribute<float>("position");
+                            if (posAttr) {
+                                vkCmdDraw(cb, static_cast<uint32_t>(posAttr->count()), 1, 0, 0);
+                            }
+                        }
+                    }
+                    vkCmdEndRendering(cb);
+
+                    // Transition to DEPTH_STENCIL_READ_ONLY_OPTIMAL for the
+                    // overlay pass's read-only depth attachment.
+                    VkImageMemoryBarrier2 toRead{};
+                    toRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    toRead.srcStageMask  = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                    toRead.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                    toRead.dstStageMask  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                            VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                    toRead.dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+                    toRead.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+                    toRead.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                    toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toRead.image = depthImg;
+                    toRead.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                    toRead.subresourceRange.levelCount = 1;
+                    toRead.subresourceRange.layerCount = 1;
+                    VkDependencyInfo depToRead{};
+                    depToRead.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    depToRead.imageMemoryBarrierCount = 1;
+                    depToRead.pImageMemoryBarriers = &toRead;
+                    vkCmdPipelineBarrier2(cb, &depToRead);
+                }
                 if (hybridDebugView_ != HybridDebugView::Off) {
                     recordHybridDebugBlit(cb, imageIndex, currentFrame);
                     // Blit left swapchain in TRANSFER_DST_OPTIMAL. Same
@@ -8643,8 +8903,18 @@ namespace threepp {
                     colorAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
                     colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
 
-                    // No depth attachment — overlays are always-on-top
-                    // (see depth-test note in createOverlayPipeline).
+                    // Read-only depth from the overlay depth prepass. Was
+                    // transitioned to DEPTH_STENCIL_READ_ONLY_OPTIMAL at the
+                    // end of the prepass; LOAD_OP_LOAD reads the prepass
+                    // values, STORE_OP_NONE leaves them alone (overlay
+                    // doesn't write depth).
+                    VkRenderingAttachmentInfo depthAtt{};
+                    depthAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    depthAtt.imageView   = rasterGbufs[currentFrame].unjitDepth.view;
+                    depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+                    depthAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+                    depthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_NONE;
+
                     VkRenderingInfo ri{};
                     ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
                     ri.renderArea.offset = {0, 0};
@@ -8652,6 +8922,7 @@ namespace threepp {
                     ri.layerCount = 1;
                     ri.colorAttachmentCount = 1;
                     ri.pColorAttachments = &colorAtt;
+                    ri.pDepthAttachment = &depthAtt;
                     vkCmdBeginRendering(cb, &ri);
 
                     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayWireframePipeline);
