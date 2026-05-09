@@ -1,0 +1,237 @@
+diff --git a/src/crate-format.hh b/src/crate-format.hh
+index 6646e5a5..b1d2c022 100644
+--- a/src/crate-format.hh
++++ b/src/crate-format.hh
+@@ -427,6 +427,10 @@ class CrateValue {
+   SET_TYPE_SCALAR(bool)
+   SET_TYPE_1D(bool)
+ 
++  // uchar (uint8_t) — required for CrateDataTypeId::CRATE_DATA_TYPE_UCHAR arrays.
++  SET_TYPE_SCALAR(uint8_t)
++  SET_TYPE_1D(uint8_t)
++
+   SET_TYPE_SCALAR(Specifier)
+   SET_TYPE_SCALAR(Permission)
+   SET_TYPE_SCALAR(Variability)
+diff --git a/src/crate-reader.cc b/src/crate-reader.cc
+index a2a1f2ab..ee9a20ef 100644
+--- a/src/crate-reader.cc
++++ b/src/crate-reader.cc
+@@ -2635,8 +2635,43 @@ bool CrateReader::UnpackValueRep(const crate::ValueRep &rep,
+       return false;
+     }
+     case crate::CrateDataTypeId::CRATE_DATA_TYPE_UCHAR: {
++      COMPRESS_UNSUPPORTED_CHECK(dty)
+       NON_ARRAY_UNSUPPORTED_CHECK(dty)
+-      TODO_IMPLEMENT(dty)
++
++      if (rep.IsArray()) {
++        std::vector<uint8_t> v;
++        if (rep.GetPayload() == 0) { // empty array
++          value->Set(v);
++          return true;
++        }
++
++        uint64_t n;
++        if (!_sr->read8(&n)) {
++          PUSH_ERROR("Failed to read the number of array elements.");
++          return false;
++        }
++
++        if (n > _config.maxArrayElements) {
++          PUSH_ERROR_AND_RETURN_TAG(kTag, fmt::format("# of UChar array too large. TinyUSDZ limites it up to {}", _config.maxArrayElements));
++        }
++
++        CHECK_MEMORY_USAGE(n * sizeof(uint8_t));
++
++        v.resize(static_cast<size_t>(n));
++        if (!_sr->read(size_t(n) * sizeof(uint8_t),
++                       size_t(n) * sizeof(uint8_t),
++                       reinterpret_cast<uint8_t *>(v.data()))) {
++          PUSH_ERROR("Failed to read UChar array.");
++          return false;
++        }
++
++        DCOUT("UCharArray = " << value::print_array_snipped(v));
++
++        value->Set(v);
++        return true;
++      } else {
++        return false;
++      }
+     }
+     case crate::CrateDataTypeId::CRATE_DATA_TYPE_INT: {
+       NON_ARRAY_UNSUPPORTED_CHECK(dty)
+diff --git a/src/usdc-reader.cc b/src/usdc-reader.cc
+index 681d7fdc..69692d0a 100644
+--- a/src/usdc-reader.cc
++++ b/src/usdc-reader.cc
+@@ -647,16 +647,15 @@ nonstd::expected<APISchemas, std::string> USDCReader::Impl::ToAPISchemas(
+     schemas.listOpQual = ListEditQual::ResetToExplicit;
+ 
+   } else {
+-    // Assume all items have same ListEdit qualifier.
+-    if (arg.GetExplicitItems().size()) {
+-      if (arg.GetAddedItems().size() || arg.GetAppendedItems().size() ||
+-          arg.GetDeletedItems().size() || arg.GetPrependedItems().size() ||
+-          arg.GetOrderedItems().size()) {
+-        return nonstd::make_unexpected(
+-            "Currently TinyUSDZ does not support ListOp with different "
+-            "ListEdit qualifiers.");
+-      }
+-      for (auto &&item : arg.GetExplicitItems()) {
++    // Real-world Omniverse / Lightwheel scenes commonly mix ListEdit
++    // qualifiers within a single `apiSchemas` listop (e.g. both prepended and
++    // appended items). The strict upstream policy of "all items must share
++    // one qualifier" rejects those scenes outright. Since the APISchemas
++    // struct stores items as a flat names list and only records a single
++    // `listOpQual`, we merge items from every populated category into the
++    // names vector and pick a representative qualifier.
++    auto processList = [&](const std::vector<value::token> &items) -> bool {
++      for (auto &item : items) {
+         if (auto pv = SchemaHandler(item)) {
+           std::string instanceName = "";  // TODO
+           schemas.names.push_back({pv.value(), instanceName});
+@@ -664,110 +663,47 @@ nonstd::expected<APISchemas, std::string> USDCReader::Impl::ToAPISchemas(
+           warn += "Ignored unknown or unsupported API schema: " +
+                                          item.str() + "\n";
+         } else {
+-          return nonstd::make_unexpected("Invalid or Unsupported API schema: " +
+-                                         item.str());
++          return false;
+         }
+       }
+-      schemas.listOpQual = ListEditQual::ResetToExplicit;
++      return true;
++    };
+ 
+-    } else if (arg.GetAddedItems().size()) {
+-      if (arg.GetExplicitItems().size() || arg.GetAppendedItems().size() ||
+-          arg.GetDeletedItems().size() || arg.GetPrependedItems().size() ||
+-          arg.GetOrderedItems().size()) {
+-        return nonstd::make_unexpected(
+-            "Currently TinyUSDZ does not support ListOp with different "
+-            "ListEdit qualifiers.");
+-      }
+-      for (auto &item : arg.GetAddedItems()) {
+-        if (auto pv = SchemaHandler(item)) {
+-          std::string instanceName = "";  // TODO
+-          schemas.names.push_back({pv.value(), instanceName});
+-        } else if (ignore_unknown) {
+-          warn += "Ignored unknown or unsupported API schema: " +
+-                                         item.str() + "\n";
+-        } else {
+-          return nonstd::make_unexpected("Invalid or Unsupported API schema: " +
+-                                         item.str());
+-        }
+-      }
+-      schemas.listOpQual = ListEditQual::Add;
++    // Merge in USD composition order: prepend/append/add/delete/explicit/order.
++    // Order is informational here; the rendering pipeline only needs the
++    // resulting names set.
++    if (!processList(arg.GetExplicitItems())) {
++      return nonstd::make_unexpected("Invalid or Unsupported API schema in explicit items.");
++    }
++    if (!processList(arg.GetPrependedItems())) {
++      return nonstd::make_unexpected("Invalid or Unsupported API schema in prepended items.");
++    }
++    if (!processList(arg.GetAppendedItems())) {
++      return nonstd::make_unexpected("Invalid or Unsupported API schema in appended items.");
++    }
++    if (!processList(arg.GetAddedItems())) {
++      return nonstd::make_unexpected("Invalid or Unsupported API schema in added items.");
++    }
++    if (!processList(arg.GetDeletedItems())) {
++      return nonstd::make_unexpected("Invalid or Unsupported API schema in deleted items.");
++    }
++    // Ordered items are still effectively a TODO upstream; treat as no-op.
++
++    // Pick the strongest populated qualifier (priority order matches USD).
++    if (arg.GetExplicitItems().size()) {
++      schemas.listOpQual = ListEditQual::ResetToExplicit;
++    } else if (arg.GetPrependedItems().size()) {
++      schemas.listOpQual = ListEditQual::Prepend;
+     } else if (arg.GetAppendedItems().size()) {
+-      if (arg.GetExplicitItems().size() || arg.GetAddedItems().size() ||
+-          arg.GetDeletedItems().size() || arg.GetPrependedItems().size() ||
+-          arg.GetOrderedItems().size()) {
+-        return nonstd::make_unexpected(
+-            "Currently TinyUSDZ does not support ListOp with different "
+-            "ListEdit qualifiers.");
+-      }
+-      for (auto &&item : arg.GetAppendedItems()) {
+-        if (auto pv = SchemaHandler(item)) {
+-          std::string instanceName = "";  // TODO
+-          schemas.names.push_back({pv.value(), instanceName});
+-        } else if (ignore_unknown) {
+-          warn += "Ignored unknown or unsupported API schema: " +
+-                                         item.str() + "\n";
+-        } else {
+-          return nonstd::make_unexpected("Invalid or Unsupported API schema: " +
+-                                         item.str());
+-        }
+-      }
+       schemas.listOpQual = ListEditQual::Append;
++    } else if (arg.GetAddedItems().size()) {
++      schemas.listOpQual = ListEditQual::Add;
+     } else if (arg.GetDeletedItems().size()) {
+-      if (arg.GetExplicitItems().size() || arg.GetAddedItems().size() ||
+-          arg.GetAppendedItems().size() || arg.GetPrependedItems().size() ||
+-          arg.GetOrderedItems().size()) {
+-        return nonstd::make_unexpected(
+-            "Currently TinyUSDZ does not support ListOp with different "
+-            "ListEdit qualifiers.");
+-      }
+-      for (auto &&item : arg.GetDeletedItems()) {
+-        if (auto pv = SchemaHandler(item)) {
+-          std::string instanceName = "";  // TODO
+-          schemas.names.push_back({pv.value(), instanceName});
+-        } else if (ignore_unknown) {
+-          warn += "Ignored unknown or unsupported API schema: " +
+-                                         item.str() + "\n";
+-        } else {
+-          return nonstd::make_unexpected("Invalid or Unsupported API schema: " +
+-                                         item.str());
+-        }
+-      }
+       schemas.listOpQual = ListEditQual::Delete;
+-    } else if (arg.GetPrependedItems().size()) {
+-      if (arg.GetExplicitItems().size() || arg.GetAddedItems().size() ||
+-          arg.GetAppendedItems().size() || arg.GetDeletedItems().size() ||
+-          arg.GetOrderedItems().size()) {
+-        return nonstd::make_unexpected(
+-            "Currently TinyUSDZ does not support ListOp with different "
+-            "ListEdit qualifiers.");
+-      }
+-      for (auto &&item : arg.GetPrependedItems()) {
+-        if (auto pv = SchemaHandler(item)) {
+-          std::string instanceName = "";  // TODO
+-          schemas.names.push_back({pv.value(), instanceName});
+-        } else if (ignore_unknown) {
+-          warn += "Ignored unknown or unsupported API schema: " +
+-                                         item.str() + "\n";
+-        } else {
+-          return nonstd::make_unexpected("Invalid or Unsupported API schema: " +
+-                                         item.str());
+-        }
+-      }
+-      schemas.listOpQual = ListEditQual::Prepend;
+     } else if (arg.GetOrderedItems().size()) {
+-      if (arg.GetExplicitItems().size() || arg.GetAddedItems().size() ||
+-          arg.GetAppendedItems().size() || arg.GetDeletedItems().size() ||
+-          arg.GetPrependedItems().size()) {
+-        return nonstd::make_unexpected(
+-            "Currently TinyUSDZ does not support ListOp with different "
+-            "ListEdit qualifiers.");
+-      }
+-
+-      // schemas.qual = ListEditQual::Order;
+-      return nonstd::make_unexpected("TODO: Ordered ListOp items.");
++      schemas.listOpQual = ListEditQual::Order;
+     } else {
+-      // ??? This should not happend.
+-      return nonstd::make_unexpected("Internal error: ListOp conversion.");
++      // No items at all — leave qualifier as default-constructed.
+     }
+   }
+ 

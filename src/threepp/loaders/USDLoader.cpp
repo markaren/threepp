@@ -282,34 +282,157 @@ namespace threepp {
                 return texLoader.load(texPath, flipY);
             };
 
+            // Try a list of candidate names in order; return the first hit.
+            auto tryFirst = [&](std::initializer_list<const char*> names, bool flipY = true)
+                    -> std::shared_ptr<Texture> {
+                for (auto* n : names) {
+                    if (auto t = tryLoad(n, flipY)) return t;
+                }
+                return nullptr;
+            };
+
             // Albedo / diffuse
-            if (auto t = tryLoad("inputs:diffuse_texture")) {
+            // Covers: snake_case (OmniPBR style) + PascalCase (OmniUe4Base /
+            // Omniverse Unreal bridge, used by Lightwheel exports).
+            if (auto t = tryFirst({"inputs:diffuse_texture",
+                                   "inputs:albedo_texture",
+                                   "inputs:Diffuse_Texture",
+                                   "inputs:Albedo_Texture",
+                                   "inputs:BaseColor_Texture"})) {
                 mat->map = t; anyTex = true;
-            } else if (auto t2 = tryLoad("inputs:albedo_texture")) {
-                mat->map = t2; anyTex = true;
             }
             // Normal map (linear, no flip needed for tangent-space normals)
-            if (auto t = tryLoad("inputs:normalmap_texture", false)) {
+            if (auto t = tryFirst({"inputs:normalmap_texture",
+                                   "inputs:normal_texture",
+                                   "inputs:Normal_Texture",
+                                   "inputs:NormalMap_Texture",
+                                   "inputs:Bump_Texture"}, false)) {
                 t->colorSpace = ColorSpace::Linear;
                 mat->normalMap = t; anyTex = true;
-            } else if (auto t2 = tryLoad("inputs:normal_texture", false)) {
-                t2->colorSpace = ColorSpace::Linear;
-                mat->normalMap = t2; anyTex = true;
             }
-            // ORM packed map (R=occlusion, G=roughness, B=metallic)
+            // Roughness — try ORM-packed first, then dedicated roughness map.
             if (auto t = tryLoad("inputs:ORM_texture", false)) {
                 t->colorSpace = ColorSpace::Linear;
                 mat->aoMap         = t;
                 mat->roughnessMap  = t;
                 mat->metalnessMap  = t;
                 anyTex = true;
+            } else {
+                if (auto r = tryFirst({"inputs:roughness_texture",
+                                       "inputs:Roughness_Texture"}, false)) {
+                    r->colorSpace = ColorSpace::Linear;
+                    mat->roughnessMap = r; anyTex = true;
+                }
+                if (auto m = tryFirst({"inputs:metallic_texture",
+                                       "inputs:Metallic_Texture"}, false)) {
+                    m->colorSpace = ColorSpace::Linear;
+                    mat->metalnessMap = m; anyTex = true;
+                }
             }
             // Emissive
-            if (auto t = tryLoad("inputs:emissive_texture")) {
+            if (auto t = tryFirst({"inputs:emissive_texture",
+                                   "inputs:Emissive_Texture",
+                                   "inputs:Emission_Texture"})) {
                 mat->emissiveMap = t; anyTex = true;
             }
 
+            // Constant-color fallbacks (used when there's no texture but we
+            // still want a non-grey material).
+            auto tryFloatTuple = [&](const std::string& propName)
+                    -> std::optional<std::array<float, 3>> {
+                auto it = shaderSpec.props().find(propName);
+                if (it == shaderSpec.props().end()) return std::nullopt;
+                const auto& prop = it->second;
+                if (!prop.is_attribute()) return std::nullopt;
+                const auto& attr = prop.get_attribute();
+                if (auto pv = attr.get_value<tinyusdz::value::color3f>()) {
+                    return std::array<float, 3>{pv->r, pv->g, pv->b};
+                }
+                if (auto pv = attr.get_value<tinyusdz::value::float3>()) {
+                    return std::array<float, 3>{(*pv)[0], (*pv)[1], (*pv)[2]};
+                }
+                return std::nullopt;
+            };
+            auto tryFloat = [&](const std::string& propName) -> std::optional<float> {
+                auto it = shaderSpec.props().find(propName);
+                if (it == shaderSpec.props().end()) return std::nullopt;
+                const auto& prop = it->second;
+                if (!prop.is_attribute()) return std::nullopt;
+                const auto& attr = prop.get_attribute();
+                if (auto pv = attr.get_value<float>()) return *pv;
+                if (auto pv = attr.get_value<double>()) return static_cast<float>(*pv);
+                return std::nullopt;
+            };
+
+            if (!mat->map) {
+                if (auto c = tryFloatTuple("inputs:Diffuse_Color")) {
+                    mat->color.setRGB((*c)[0], (*c)[1], (*c)[2]);
+                    anyTex = true;  // count constant color as "real"
+                } else if (auto c2 = tryFloatTuple("inputs:diffuse_color_constant")) {
+                    mat->color.setRGB((*c2)[0], (*c2)[1], (*c2)[2]);
+                    anyTex = true;
+                }
+            }
+            if (!mat->roughnessMap) {
+                if (auto v = tryFloat("inputs:Roughness_Color")) {
+                    mat->roughness = *v;
+                } else if (auto v2 = tryFloat("inputs:reflection_roughness_constant")) {
+                    mat->roughness = *v2;
+                }
+            }
+            if (!mat->metalnessMap) {
+                if (auto v = tryFloat("inputs:Metallic_Color")) {
+                    mat->metalness = *v;
+                } else if (auto v2 = tryFloat("inputs:metallic_constant")) {
+                    mat->metalness = *v2;
+                }
+            }
+
             return anyTex ? mat : nullptr;
+        }
+
+        // Try to locate the material at `target`. If it's not directly
+        // resolvable in `layer`, fall back to searching for a child with the
+        // same leaf name inside any `Looks` scope along the ancestor chain of
+        // `meshAbsPath`. This handles Lightwheel/Omniverse scenes whose
+        // `material:binding` rels point at scene-level paths that no longer
+        // exist after composition (the actual material was authored inside a
+        // referenced prop's local /Looks scope).
+        std::string resolveMaterialPath(const tinyusdz::Layer& layer,
+                                        const std::string& target,
+                                        const std::string& meshAbsPath) {
+            if (target.empty()) return {};
+            const tinyusdz::PrimSpec* matSpec = nullptr;
+            std::string err;
+            if (layer.find_primspec_at(tinyusdz::Path(target, ""), &matSpec, &err) && matSpec) {
+                return target;  // direct hit
+            }
+            // Fallback: leaf-name search within ancestor /Looks scopes.
+            const auto leafSep = target.rfind('/');
+            if (leafSep == std::string::npos) return {};
+            const std::string leaf = target.substr(leafSep + 1);
+            if (leaf.empty()) return {};
+
+            std::string anc = meshAbsPath;
+            while (!anc.empty()) {
+                const tinyusdz::PrimSpec* aspec = nullptr;
+                std::string ae;
+                if (layer.find_primspec_at(tinyusdz::Path(anc, ""), &aspec, &ae) && aspec) {
+                    for (const auto& child : aspec->children()) {
+                        if (child.name() == "Looks") {
+                            for (const auto& mat : child.children()) {
+                                if (mat.name() == leaf) {
+                                    return anc + "/Looks/" + leaf;
+                                }
+                            }
+                        }
+                    }
+                }
+                auto sp = anc.rfind('/');
+                if (sp == 0 || sp == std::string::npos) break;
+                anc = anc.substr(0, sp);
+            }
+            return {};
         }
 
         // Given a prim abs_path, walk up the ancestor chain in the composed Layer
@@ -330,10 +453,14 @@ namespace threepp {
                     auto it = spec->props().find("material:binding");
                     if (it != spec->props().end() && it->second.is_relationship()) {
                         const auto& rel = it->second.get_relationship();
+                        std::string raw;
                         if (rel.is_path()) {
-                            return rel.targetPath.prim_part();
+                            raw = rel.targetPath.prim_part();
                         } else if (rel.is_pathvector() && !rel.targetPathVector.empty()) {
-                            return rel.targetPathVector[0].prim_part();
+                            raw = rel.targetPathVector[0].prim_part();
+                        }
+                        if (auto resolved = resolveMaterialPath(layer, raw, primAbsPath); !resolved.empty()) {
+                            return resolved;
                         }
                     }
                 }
@@ -345,8 +472,117 @@ namespace threepp {
             return {};
         }
 
+        // Build a material from a UsdPreviewSurface-style Material prim. The
+        // standard Lightwheel/Omniverse-exported pattern places sibling Shader
+        // nodes named `<MatName>DiffuseColorTex`, `<MatName>NormalTex`, etc.
+        // alongside a `<MatName>PreviewSurface` shader. Each tex shader holds
+        // an `inputs:file` asset path. We classify by name suffix and build a
+        // MeshStandardMaterial.
+        std::shared_ptr<MeshStandardMaterial> materialFromUsdPreviewLayer(
+                const tinyusdz::PrimSpec& matSpec,
+                const std::filesystem::path& baseDir,
+                const tinyusdz::AssetResolutionResolver& resolver,
+                TextureLoader& texLoader) {
+
+            auto extractFile = [&](const tinyusdz::PrimSpec& shader) -> std::filesystem::path {
+                auto it = shader.props().find("inputs:file");
+                if (it == shader.props().end()) return {};
+                if (!it->second.is_attribute()) return {};
+                auto pv = it->second.get_attribute().get_value<tinyusdz::value::AssetPath>();
+                if (!pv) return {};
+                const std::string raw = pv.value().GetAssetPath();
+                if (raw.empty()) return {};
+                std::filesystem::path cwp = shader.get_current_working_path().empty()
+                    ? baseDir
+                    : std::filesystem::path(shader.get_current_working_path());
+                return resolveAssetPath(raw, cwp, baseDir, resolver);
+            };
+
+            auto containsCI = [](const std::string& s, const std::string& sub) {
+                if (sub.size() > s.size()) return false;
+                for (size_t i = 0; i + sub.size() <= s.size(); ++i) {
+                    bool match = true;
+                    for (size_t j = 0; j < sub.size(); ++j) {
+                        if (std::tolower(static_cast<unsigned char>(s[i + j])) !=
+                            std::tolower(static_cast<unsigned char>(sub[j]))) {
+                            match = false; break;
+                        }
+                    }
+                    if (match) return true;
+                }
+                return false;
+            };
+
+            auto mat = MeshStandardMaterial::create();
+            bool anyTex = false;
+
+            for (const auto& shader : matSpec.children()) {
+                const std::string& sname = shader.name();
+                // Skip the PreviewSurface root and the UV reader; we only want
+                // the sibling texture-reader shaders.
+                if (containsCI(sname, "PreviewSurface")) continue;
+                if (sname == "PrimST" || sname == "UnrealShader") continue;
+
+                auto path = extractFile(shader);
+                if (path.empty() || !std::filesystem::exists(path)) continue;
+
+                // Color-space defaults: textures in normal/roughness/metallic
+                // channels are linear; baseColor + emissive are sRGB.
+                const bool isLinear =
+                    containsCI(sname, "Normal") ||
+                    containsCI(sname, "Roughness") ||
+                    containsCI(sname, "Metallic") ||
+                    containsCI(sname, "Specular") ||
+                    containsCI(sname, "OpacityMask") ||
+                    containsCI(sname, "ORM");
+
+                if (containsCI(sname, "DiffuseColorTex") ||
+                    containsCI(sname, "BaseColorTex") ||
+                    containsCI(sname, "AlbedoTex")) {
+                    if (!mat->map) {
+                        mat->map = texLoader.load(path, true);
+                        anyTex = true;
+                    }
+                } else if (containsCI(sname, "NormalTex")) {
+                    if (!mat->normalMap) {
+                        auto t = texLoader.load(path, false);
+                        if (t) t->colorSpace = ColorSpace::Linear;
+                        mat->normalMap = t;
+                        anyTex = true;
+                    }
+                } else if (containsCI(sname, "RoughnessTex")) {
+                    if (!mat->roughnessMap) {
+                        auto t = texLoader.load(path, false);
+                        if (t) t->colorSpace = ColorSpace::Linear;
+                        mat->roughnessMap = t;
+                        anyTex = true;
+                    }
+                } else if (containsCI(sname, "MetallicTex")) {
+                    if (!mat->metalnessMap) {
+                        auto t = texLoader.load(path, false);
+                        if (t) t->colorSpace = ColorSpace::Linear;
+                        mat->metalnessMap = t;
+                        anyTex = true;
+                    }
+                } else if (containsCI(sname, "EmissiveColorTex") ||
+                           containsCI(sname, "EmissionTex")) {
+                    if (!mat->emissiveMap) {
+                        mat->emissiveMap = texLoader.load(path, true);
+                        anyTex = true;
+                    }
+                }
+                // OpacityMask, Specular: skipped (three.js MeshStandardMaterial
+                // doesn't have a direct equivalent for either).
+                (void)isLinear;
+            }
+
+            return anyTex ? mat : nullptr;
+        }
+
         // Walk the composed layer to find the MDL Shader child of a material prim
         // at 'matAbsPath', then build a material from its MDL inputs.
+        // Falls back to UsdPreviewSurface-style scanning when the MDL path
+        // produces nothing.
         std::shared_ptr<MeshStandardMaterial> materialFromMDLLayer(
                 const tinyusdz::Layer& layer,
                 const std::string& matAbsPath,
@@ -363,7 +599,10 @@ namespace threepp {
                 if (auto mat = materialFromMDLPrimSpec(child, baseDir, resolver, texLoader))
                     return mat;
             }
-            return nullptr;
+            // UsdPreviewSurface fallback: scan sibling tex shaders inside the
+            // Material directly. Lightwheel exports place these alongside the
+            // `*PreviewSurface` shader rather than under a single MDL shader.
+            return materialFromUsdPreviewLayer(*matSpec, baseDir, resolver, texLoader);
         }
 
         // -----------------------------------------------------------------------
@@ -682,8 +921,13 @@ namespace threepp {
                         mdlOverrides[mi] = std::move(mdlMat);
                 }
 
-                // Case B — per-mesh-path overrides for instanceable / composite scenes
-                if (renderScene.materials.empty()) {
+                // Case B — per-mesh-path overrides for instanceable / composite scenes.
+                // Run even when renderScene.materials is non-empty: an Omniverse
+                // scene may have a couple of materials surface through tinyusdz
+                // (e.g. a UsdPreviewSurface fallback on a non-instanced prim) yet
+                // leave most of its 100s of meshes pointing at MDL materials inside
+                // referenced .usd / instanceable prims, where GetBoundMaterial fails.
+                {
                     // Cache unique material paths to avoid re-loading the same textures
                     std::unordered_map<std::string,
                                        std::shared_ptr<MeshStandardMaterial>> matPathCache;
@@ -713,6 +957,44 @@ namespace threepp {
                     for (const auto& n : renderScene.nodes) buildMap(n);
                 }
             }
+
+            // Brief one-line status: how many meshes resolved to a real material
+            // vs. fell through to the default grey fallback.
+            int statTextured = 0, statColored = 0, statFallback = 0, statTinyusdzMat = 0;
+            std::function<void(const tinyusdz::tydra::Node&)> classify =
+                [&](const tinyusdz::tydra::Node& n) {
+                    if (n.nodeType == tinyusdz::tydra::NodeType::Mesh &&
+                        n.id >= 0 && n.id < (int)renderScene.meshes.size()) {
+                        const auto& rm = renderScene.meshes[n.id];
+                        int matId = rm.material_id;
+                        if (!rm.material_subsetMap.empty()) {
+                            const int subId = rm.material_subsetMap.begin()->second.material_id;
+                            if (subId >= 0) matId = subId;
+                        }
+                        std::shared_ptr<MeshStandardMaterial> chosen;
+                        if (auto it = mdlOverrides.find(matId); it != mdlOverrides.end()) {
+                            chosen = it->second;
+                        } else if (auto it = meshPathMdlMap.find(n.abs_path); it != meshPathMdlMap.end()) {
+                            chosen = it->second;
+                        } else if (matId >= 0 && matId < (int)renderScene.materials.size()) {
+                            ++statTinyusdzMat;
+                        } else {
+                            ++statFallback;
+                        }
+                        if (chosen && chosen->map) ++statTextured;
+                        else if (chosen) ++statColored;
+                    }
+                    for (const auto& c : n.children) classify(c);
+                };
+            for (const auto& n : renderScene.nodes) classify(n);
+
+            std::cerr << "[USDLoader] " << pathStr
+                      << " — meshes=" << renderScene.meshes.size()
+                      << " (textured=" << statTextured
+                      << ", color=" << statColored
+                      << ", tinyusdz=" << statTinyusdzMat
+                      << ", fallback=" << statFallback << ")"
+                      << std::endl;
 
             // --- Root group + Z-up correction ---
             // renderScene.meta.upAxis is never populated by ConvertToRenderScene;

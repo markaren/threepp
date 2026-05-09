@@ -12,11 +12,21 @@ if (THREEPP_WITH_USD)
     set(TINYUSDZ_WITH_USDMTLX       OFF CACHE BOOL "" FORCE)
     set(TINYUSDZ_WITH_USDVOX        OFF CACHE BOOL "" FORCE)
 
+    # Local patches applied to the pinned tinyusdz tag.
+    # PATCH_COMMAND runs once after FetchContent populates the source tree.
+    # `git reset --hard HEAD` first makes re-runs idempotent should the source
+    # tree need to be re-patched.
+    find_package(Git REQUIRED)
+    set(_TINYUSDZ_PATCH_DIR "${CMAKE_CURRENT_LIST_DIR}/patches/tinyusdz")
+
     FetchContent_Declare(
         tinyusdz
         GIT_REPOSITORY https://github.com/lighttransport/tinyusdz.git
         GIT_TAG        v0.9.1
         GIT_SHALLOW    TRUE
+        PATCH_COMMAND  ${GIT_EXECUTABLE} reset --hard HEAD
+                COMMAND ${GIT_EXECUTABLE} apply --ignore-whitespace
+                        "${_TINYUSDZ_PATCH_DIR}/0001-implement-uchar-array-unpack.patch"
     )
     FetchContent_MakeAvailable(tinyusdz)
 
