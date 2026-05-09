@@ -465,8 +465,108 @@ namespace threepp {
         // Geometry
         // -----------------------------------------------------------------------
 
+        // -----------------------------------------------------------------------
+        // Static linear-blend skinning. tinyusdz tydra surfaces UsdSkel data
+        // (per-vertex jointIndices/jointWeights, per-joint bind/rest
+        // transforms, geomBindTransform) but does NOT deform `RenderMesh::points`
+        // — those stay in mesh-local bind-pose. For a non-animated render we
+        // bake LBS at the rest pose so skinned geometry (e.g. the brake
+        // cables on the CarbonFrameBike) shows in its authored shape rather
+        // than as the raw bind layout.
+        //
+        // Maths per vertex:
+        //   p_bind  = geomBindTransform * v_local
+        //   p_rest  = sum_k(weight_k * (restWorld_k * inverse(bindWorld_k)) * p_bind)
+        // where restWorld_k is the world-space rest transform of joint k
+        // (computed by walking the hierarchy with parent_world * local_rest)
+        // and bindWorld_k is the joint's world-space bind transform (USD
+        // `bindTransforms` is already world-space).
+        // -----------------------------------------------------------------------
+
+        std::unordered_map<int, Matrix4> buildSkinMatrices(
+                const tinyusdz::tydra::SkelHierarchy& skel) {
+
+            std::unordered_map<int, Matrix4> out;
+            std::function<void(const tinyusdz::tydra::SkelNode&, const Matrix4&)> walk =
+                [&](const tinyusdz::tydra::SkelNode& node,
+                    const Matrix4& parentRestWorld) {
+                    Matrix4 localRest = toMatrix4(node.rest_transform);
+                    Matrix4 nodeRestWorld;
+                    nodeRestWorld.multiplyMatrices(parentRestWorld, localRest);
+
+                    Matrix4 bindWorld = toMatrix4(node.bind_transform);
+                    Matrix4 bindWorldInv;
+                    bindWorldInv.copy(bindWorld).invert();
+
+                    Matrix4 skin;
+                    skin.multiplyMatrices(nodeRestWorld, bindWorldInv);
+                    if (node.joint_id >= 0) {
+                        out[node.joint_id] = skin;
+                    }
+                    for (const auto& child : node.children) {
+                        walk(child, nodeRestWorld);
+                    }
+                };
+            walk(skel.root_node, Matrix4().identity());
+            return out;
+        }
+
+        // Apply LBS to `rm.points` and return the deformed flat vec3 array.
+        std::vector<float> deformPointsByLBS(
+                const tinyusdz::tydra::RenderMesh& rm,
+                const std::unordered_map<int, Matrix4>& skinMatrices) {
+
+            const Matrix4 geomBind = toMatrix4(rm.joint_and_weights.geomBindTransform);
+            const auto& jids = rm.joint_and_weights.jointIndices;
+            const auto& jws  = rm.joint_and_weights.jointWeights;
+            const int es = rm.joint_and_weights.elementSize;
+            const size_t numV = rm.points.size();
+
+            std::vector<float> out;
+            out.reserve(numV * 3);
+
+            const bool haveSkin = es > 0 &&
+                jids.size() >= numV * static_cast<size_t>(es) &&
+                jws.size()  >= numV * static_cast<size_t>(es);
+
+            for (size_t v = 0; v < numV; ++v) {
+                Vector3 vBind(rm.points[v][0], rm.points[v][1], rm.points[v][2]);
+                vBind.applyMatrix4(geomBind);
+
+                if (!haveSkin) {
+                    out.push_back(vBind.x); out.push_back(vBind.y); out.push_back(vBind.z);
+                    continue;
+                }
+
+                Vector3 vOut(0.f, 0.f, 0.f);
+                float totalW = 0.f;
+                for (int k = 0; k < es; ++k) {
+                    const size_t idx = v * static_cast<size_t>(es) + static_cast<size_t>(k);
+                    const int jId = jids[idx];
+                    const float w = jws[idx];
+                    if (w <= 0.f) continue;
+                    auto it = skinMatrices.find(jId);
+                    if (it == skinMatrices.end()) continue;
+                    Vector3 d = vBind;
+                    d.applyMatrix4(it->second);
+                    vOut.x += w * d.x;
+                    vOut.y += w * d.y;
+                    vOut.z += w * d.z;
+                    totalW += w;
+                }
+                if (totalW > 0.f) {
+                    vOut.x /= totalW; vOut.y /= totalW; vOut.z /= totalW;
+                } else {
+                    vOut = vBind;
+                }
+                out.push_back(vOut.x); out.push_back(vOut.y); out.push_back(vOut.z);
+            }
+            return out;
+        }
+
         std::shared_ptr<BufferGeometry> geometryFromRenderMesh(
-                const tinyusdz::tydra::RenderMesh& rm) {
+                const tinyusdz::tydra::RenderMesh& rm,
+                const tinyusdz::tydra::RenderScene& scene) {
 
             if (rm.points.empty()) return nullptr;
 
@@ -477,13 +577,24 @@ namespace threepp {
                 : rm.usdFaceVertexIndices;
             if (idxBuf.empty()) return nullptr;
 
-            // Positions — vec3 = std::array<float,3>
+            // Positions — vec3 = std::array<float,3>. If the mesh has skinning
+            // data, bake the rest pose now (otherwise the shapes look wrong;
+            // see comments above buildSkinMatrices).
             std::vector<float> pos;
-            pos.reserve(rm.points.size() * 3);
-            for (const auto& p : rm.points) {
-                pos.push_back(p[0]);
-                pos.push_back(p[1]);
-                pos.push_back(p[2]);
+            const bool isSkinned =
+                rm.skel_id >= 0 &&
+                rm.skel_id < static_cast<int>(scene.skeletons.size()) &&
+                !rm.joint_and_weights.jointIndices.empty();
+            if (isSkinned) {
+                auto skinMats = buildSkinMatrices(scene.skeletons[rm.skel_id]);
+                pos = deformPointsByLBS(rm, skinMats);
+            } else {
+                pos.reserve(rm.points.size() * 3);
+                for (const auto& p : rm.points) {
+                    pos.push_back(p[0]);
+                    pos.push_back(p[1]);
+                    pos.push_back(p[2]);
+                }
             }
 
             auto geometry = BufferGeometry::create();
@@ -1558,7 +1669,7 @@ namespace threepp {
                 node.id < static_cast<int>(scene.meshes.size())) {
 
                 const auto& rm = scene.meshes[node.id];
-                auto geometry = geometryFromRenderMesh(rm);
+                auto geometry = geometryFromRenderMesh(rm, scene);
                 if (geometry) {
                     // Pick the first sub-mesh material; fall back to whole-mesh
                     int matId = rm.material_id;
