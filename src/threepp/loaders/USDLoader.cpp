@@ -4,6 +4,7 @@
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix4.hpp"
+#include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -503,19 +504,14 @@ namespace threepp {
             }
             geometry->setIndex(indices);
 
-            // Normals
-            const auto& nattr = rm.normals;
-            const size_t nVerts = nattr.vertex_count();
-            if (nVerts > 0 &&
-                nattr.format == tinyusdz::tydra::VertexAttributeFormat::Vec3) {
-                const float* nptr =
-                    reinterpret_cast<const float*>(nattr.data.data());
-                geometry->setAttribute("normal",
-                        FloatBufferAttribute::create(
-                            std::vector<float>(nptr, nptr + nVerts * 3), 3));
-            } else {
-                geometry->computeVertexNormals();
-            }
+            // Normals. Authored normals from real-world USD assets are too
+            // unreliable to trust globally — different exporters disagree on
+            // the "outward" convention, and even within a single asset the
+            // direction can flip across submeshes (chess set: King/Queen
+            // leftHanded with one convention, Pawn rightHanded with another).
+            // Recompute per-face from the post-swap winding: guaranteed
+            // outward, costs only smoothing-group fidelity.
+            geometry->computeVertexNormals();
 
             // UV (slot 0)
             if (!rm.texcoords.empty()) {
@@ -696,17 +692,20 @@ namespace threepp {
                 t->colorSpace = ColorSpace::sRGB;
                 mat->map = t; anyTex = true;
             }
-            // Normal map (linear, no flip needed for tangent-space normals)
+            // Normal map. Tangent-space normals are linear data; flipY=true
+            // matches diffuse so the normal-map detail aligns with the base
+            // color (data textures need the same Y orientation as color
+            // textures otherwise the surface detail looks flipped).
             if (auto t = tryFirst({"inputs:normalmap_texture",
                                    "inputs:normal_texture",
                                    "inputs:Normal_Texture",
                                    "inputs:NormalMap_Texture",
-                                   "inputs:Bump_Texture"}, false)) {
+                                   "inputs:Bump_Texture"}, true)) {
                 t->colorSpace = ColorSpace::Linear;
                 mat->normalMap = t; anyTex = true;
             }
             // Roughness — try ORM-packed first, then dedicated roughness map.
-            if (auto t = tryLoad("inputs:ORM_texture", false)) {
+            if (auto t = tryLoad("inputs:ORM_texture", true)) {
                 t->colorSpace = ColorSpace::Linear;
                 mat->aoMap         = t;
                 mat->roughnessMap  = t;
@@ -714,12 +713,12 @@ namespace threepp {
                 anyTex = true;
             } else {
                 if (auto r = tryFirst({"inputs:roughness_texture",
-                                       "inputs:Roughness_Texture"}, false)) {
+                                       "inputs:Roughness_Texture"}, true)) {
                     r->colorSpace = ColorSpace::Linear;
                     mat->roughnessMap = r; anyTex = true;
                 }
                 if (auto m = tryFirst({"inputs:metallic_texture",
-                                       "inputs:Metallic_Texture"}, false)) {
+                                       "inputs:Metallic_Texture"}, true)) {
                     m->colorSpace = ColorSpace::Linear;
                     mat->metalnessMap = m; anyTex = true;
                 }
@@ -942,19 +941,19 @@ namespace threepp {
                     }
                 } else if (containsCI(sname, "NormalTex")) {
                     if (!mat->normalMap) {
-                        auto t = texLoader.load(path, ColorSpace::Linear, false);
+                        auto t = texLoader.load(path, ColorSpace::Linear, true);
                         mat->normalMap = t;
                         anyTex = true;
                     }
                 } else if (containsCI(sname, "RoughnessTex")) {
                     if (!mat->roughnessMap) {
-                        auto t = texLoader.load(path, ColorSpace::Linear, false);
+                        auto t = texLoader.load(path, ColorSpace::Linear, true);
                         mat->roughnessMap = t;
                         anyTex = true;
                     }
                 } else if (containsCI(sname, "MetallicTex")) {
                     if (!mat->metalnessMap) {
-                        auto t = texLoader.load(path, ColorSpace::Linear, false);
+                        auto t = texLoader.load(path, ColorSpace::Linear, true);
                         mat->metalnessMap = t;
                         anyTex = true;
                     }
@@ -1252,13 +1251,15 @@ namespace threepp {
             auto roughnessPath = resolveRel(resolveMtlxInput(m, shader, "specular_roughness"));
             auto normalPath    = resolveRel(resolveMtlxInput(m, shader, "normal"));
 
-            // Constant-value fallbacks for shaders that don't bind a texture
-            // (e.g. the OpenChessSet pawn `Top` uses base_color=(1,1,1) plus
-            // a transmission_color tint to fake tinted glass — no diffuse map).
+            // Constant-value fallbacks. Some standard_surface shaders don't
+            // bind a texture for an input but instead provide a literal value
+            // (e.g. pawn `Top` uses base_color=(1,1,1) + transmission=1 +
+            // transmission_color=(...) for tinted glass).
             std::vector<float> baseColorConst, transmissionColorConst;
             float transmissionConst = 0.f;
             float metalnessConst = -1.f;
             float roughnessConst = -1.f;
+            float iorConst = -1.f;
             try {
                 if (auto v = resolveMtlxConstant(m, shader, "base_color"); !v.empty())
                     parseMtlxFloatTuple(v, baseColorConst);
@@ -1276,6 +1277,10 @@ namespace threepp {
                     std::vector<float> t; parseMtlxFloatTuple(v, t);
                     if (!t.empty()) roughnessConst = t[0];
                 }
+                if (auto v = resolveMtlxConstant(m, shader, "specular_IOR"); !v.empty()) {
+                    std::vector<float> t; parseMtlxFloatTuple(v, t);
+                    if (!t.empty()) iorConst = t[0];
+                }
             } catch (...) {
                 // Best-effort numeric parse; ignore malformed values.
             }
@@ -1285,46 +1290,72 @@ namespace threepp {
                 !roughnessPath.empty() || !normalPath.empty();
             const bool hasAnyConstant =
                 baseColorConst.size() >= 3 || metalnessConst >= 0.f ||
-                roughnessConst >= 0.f || transmissionColorConst.size() >= 3;
+                roughnessConst >= 0.f || transmissionColorConst.size() >= 3 ||
+                transmissionConst > 0.f;
 
             if (!hasAnyTexture && !hasAnyConstant) {
                 return nullptr;
             }
 
-            auto mat = MeshStandardMaterial::create();
+            // Use MeshPhysicalMaterial when the shader requests transmission,
+            // so the renderer evaluates a real refraction lobe (Beer–Lambert
+            // attenuation, IOR-based refraction). Otherwise stay on the
+            // cheaper MeshStandardMaterial. The return type is the standard
+            // material base — physical IS-A standard, so callers don't care.
+            //
+            // Notes:
+            //   - Don't set `transparent`: three.js's transmission compositing
+            //     is its own pass (it samples a screenspace backdrop), and
+            //     enabling alpha blending forces the surface into the
+            //     transparent pass which breaks the refraction lookup. The
+            //     transmission shader explicitly forces opaque output.
+            //   - Leave `thinWalled` at its default. The flag is a Vulkan PT
+            //     hint; turning it on for raster renderers has no effect, but
+            //     keep it false so we don't surprise PT for closed pieces.
+            std::shared_ptr<MeshStandardMaterial> mat;
+            if (transmissionConst > 0.f) {
+                auto pm = MeshPhysicalMaterial::create();
+                pm->transmission = transmissionConst;
+                // `thickness` drives how far the refracted ray travels inside
+                // the medium and how much it bends in `getIBLVolumeRefraction`.
+                // 0 (default) collapses refraction to no-op, so the surface
+                // looks like a flat tinted layer rather than glass. Pick a
+                // chess-piece-scale value; the result is the inverted-scene
+                // lensing through pawn tops you'd expect from a glass dome.
+                pm->thickness = 0.02f;
+                if (transmissionColorConst.size() >= 3) {
+                    pm->attenuationColor.setRGB(
+                        transmissionColorConst[0],
+                        transmissionColorConst[1],
+                        transmissionColorConst[2]);
+                    // attenuationDistance=0 means "no attenuation". Use a
+                    // value comparable to thickness so the tint colours the
+                    // refracted backdrop without dominating it.
+                    pm->attenuationDistance = 0.05f;
+                }
+                pm->setIor(iorConst > 1.f ? iorConst : 1.5f);
+                mat = pm;
+            } else {
+                mat = MeshStandardMaterial::create();
+            }
+
             if (!baseColorPath.empty()) {
                 mat->map = texLoader.load(baseColorPath, ColorSpace::sRGB, true);
             } else if (baseColorConst.size() >= 3) {
-                // Fold transmission_color into the base color for glass-like
-                // materials (we render via the standard non-transmissive lobe,
-                // so the tint shows up as plain diffuse).
-                float r = baseColorConst[0], g = baseColorConst[1], b = baseColorConst[2];
-                if (transmissionConst > 0.f && transmissionColorConst.size() >= 3) {
-                    r *= transmissionColorConst[0];
-                    g *= transmissionColorConst[1];
-                    b *= transmissionColorConst[2];
-                }
-                mat->color.setRGB(r, g, b);
-                if (transmissionConst > 0.f) {
-                    // Approximate the glass tint by making the material slightly
-                    // transparent — the standard material can't refract, but this
-                    // hints at the look.
-                    mat->transparent = true;
-                    mat->opacity = 1.f - 0.3f * transmissionConst;
-                }
+                mat->color.setRGB(baseColorConst[0], baseColorConst[1], baseColorConst[2]);
             }
             if (!metalnessPath.empty()) {
-                mat->metalnessMap = texLoader.load(metalnessPath, ColorSpace::Linear, false);
+                mat->metalnessMap = texLoader.load(metalnessPath, ColorSpace::Linear, true);
             } else if (metalnessConst >= 0.f) {
                 mat->metalness = metalnessConst;
             }
             if (!roughnessPath.empty()) {
-                mat->roughnessMap = texLoader.load(roughnessPath, ColorSpace::Linear, false);
+                mat->roughnessMap = texLoader.load(roughnessPath, ColorSpace::Linear, true);
             } else if (roughnessConst >= 0.f) {
                 mat->roughness = roughnessConst;
             }
             if (!normalPath.empty()) {
-                mat->normalMap = texLoader.load(normalPath, ColorSpace::Linear, false);
+                mat->normalMap = texLoader.load(normalPath, ColorSpace::Linear, true);
             }
             return mat;
         }
