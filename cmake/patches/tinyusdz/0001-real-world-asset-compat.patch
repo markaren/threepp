@@ -1,3 +1,64 @@
+diff --git a/src/composition.cc b/src/composition.cc
+index b8935d24..059c59e0 100644
+--- a/src/composition.cc
++++ b/src/composition.cc
+@@ -390,6 +390,36 @@ bool LoadAsset(AssetResolutionResolver &resolver,
+ 
+   DCOUT("layer = " << print_layer(layer, 0));
+ 
++  // Compose `subLayers` within the loaded asset before checking for empty
++  // primspecs. Real-world payload chains (e.g. OpenChessSet's
++  // *_payload.usd files) declare nothing locally and rely on subLayers to
++  // pull in their geometry/shading. Without this, those files appear
++  // empty and the "No prims in layer" check below aborts the load.
++  if (!layer.metas().subLayers.empty()) {
++    std::string asset_dir;
++    {
++      size_t pos = resolved_path.find_last_of("/\\");
++      if (pos != std::string::npos) asset_dir = resolved_path.substr(0, pos);
++    }
++    AssetResolutionResolver subResolver = resolver;
++    if (!asset_dir.empty()) {
++      subResolver.set_current_working_path(asset_dir);
++      auto sps = subResolver.search_paths();
++      sps.push_back(asset_dir);
++      subResolver.set_search_paths(sps);
++    }
++    Layer composed;
++    std::string sw, se;
++    SublayersCompositionOptions sopts;
++    if (CompositeSublayers(subResolver, layer, &composed, &sw, &se, sopts)) {
++      layer = std::move(composed);
++      if (warn && sw.size()) (*warn) += sw;
++    } else if (err && se.size()) {
++      // Non-fatal: leave layer as-is and let the caller decide.
++      (*err) += se;
++    }
++  }
++
+   // TODO: Recursively resolve `references`
+ 
+   if (_warn.size()) {
+@@ -473,6 +503,19 @@ bool CombinePrimSpecRec(uint32_t depth, PrimSpec &dst, const PrimSpec &src, std:
+     PUSH_ERROR_AND_RETURN("PrimSpec tree too deep.");
+   }
+ 
++  // typeName / specifier merge: a `def Mesh "Render"` opinion in a weaker
++  // sublayer should not be eclipsed by an `over "Render"` (no typeName,
++  // Specifier::Over) opinion in a stronger sublayer. The strongest opinion
++  // wins for properties, but the strongest non-empty typeName + the strongest
++  // Def specifier survive. Without this, USD `over` opinions silently turn
++  // typed prims (Mesh, Xform, Material...) into untyped Xforms.
++  if (dst.typeName().empty() && !src.typeName().empty()) {
++    dst.typeName() = src.typeName();
++  }
++  if (dst.specifier() == Specifier::Over && src.specifier() == Specifier::Def) {
++    dst.specifier() = Specifier::Def;
++  }
++
+   // Combine metadataum
+   dst.metas().update_from(src.metas(), false);
+ 
 diff --git a/src/crate-format.hh b/src/crate-format.hh
 index 6646e5a5..b1d2c022 100644
 --- a/src/crate-format.hh

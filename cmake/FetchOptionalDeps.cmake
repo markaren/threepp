@@ -26,7 +26,7 @@ if (THREEPP_WITH_USD)
         GIT_SHALLOW    TRUE
         PATCH_COMMAND  ${GIT_EXECUTABLE} reset --hard HEAD
                 COMMAND ${GIT_EXECUTABLE} apply --ignore-whitespace
-                        "${_TINYUSDZ_PATCH_DIR}/0001-implement-uchar-array-unpack.patch"
+                        "${_TINYUSDZ_PATCH_DIR}/0001-real-world-asset-compat.patch"
     )
     FetchContent_MakeAvailable(tinyusdz)
 

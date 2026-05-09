@@ -40,26 +40,254 @@ namespace threepp {
         // bailing out on the first such prim.
         // ----------------------------------------------------------------------
 
-        void stripUnsupportedArcs(tinyusdz::PrimSpec& ps) {
+        // tinyusdz's CompositeReferences/CompositePayload only processes arcs
+        // qualified as `ResetToExplicit` (no qualifier) or `Prepend`. Real-world
+        // USD uses `add references` (chess set, MaterialX example assets) and
+        // `append references` (some Omniverse exports) freely. For a flat
+        // single-layer composition, all four "additive" qualifiers are
+        // equivalent — they just contribute the referenced opinions. Rewrite
+        // Add/Append to Prepend so tinyusdz processes them; strip Delete/Order
+        // since nothing weaker exists for them to act on.
+        void normalizeArcsQual(tinyusdz::PrimSpec& ps) {
             using tinyusdz::ListEditQual;
-            auto isUnsupported = [](ListEditQual q) {
-                return q == ListEditQual::Delete ||
-                       q == ListEditQual::Add    ||
-                       q == ListEditQual::Order;
+            auto rewrite = [](auto& slot) {
+                if (!slot) return;
+                auto& q = slot->first;
+                if (q == ListEditQual::Add || q == ListEditQual::Append) {
+                    q = ListEditQual::Prepend;
+                } else if (q == ListEditQual::Delete || q == ListEditQual::Order) {
+                    slot.reset();
+                }
             };
-            if (ps.metas().references && isUnsupported(ps.metas().references->first))
-                ps.metas().references.reset();
-            if (ps.metas().payload && isUnsupported(ps.metas().payload->first))
-                ps.metas().payload.reset();
-            if (ps.metas().inherits && isUnsupported(ps.metas().inherits->first))
-                ps.metas().inherits.reset();
+            rewrite(ps.metas().references);
+            rewrite(ps.metas().payload);
+            rewrite(ps.metas().inherits);
             for (auto& child : ps.children())
-                stripUnsupportedArcs(child);
+                normalizeArcsQual(child);
         }
 
-        void stripUnsupportedArcsInLayer(tinyusdz::Layer& layer) {
+        void normalizeArcsInLayer(tinyusdz::Layer& layer) {
             for (auto& [name, ps] : layer.primspecs())
-                stripUnsupportedArcs(ps);
+                normalizeArcsQual(ps);
+        }
+
+        // ----------------------------------------------------------------------
+        // PointInstancer expansion. tinyusdz's tydra::RenderSceneConverter does
+        // not visit PointInstancer prims (they're skipped along with their
+        // children), so the prototypes never reach the rendered scene. We work
+        // around this at the layer level: rewrite each PointInstancer into a
+        // plain Xform that contains N child clones of the prototype, each
+        // wrapped in an Xform with the per-instance translate/orient applied.
+        // The original prototype child is removed (USD semantics: prototypes
+        // are templates, not rendered themselves).
+        // ----------------------------------------------------------------------
+
+        struct InstanceXform {
+            float tx = 0, ty = 0, tz = 0;
+            // quat order in USDA: (w, x, y, z). Here quat[0]=w (real).
+            float qw = 1, qx = 0, qy = 0, qz = 0;
+            float sx = 1, sy = 1, sz = 1;
+            bool hasOrient = false;
+            bool hasScale = false;
+        };
+
+        // Look up a prim by absolute path in `searchSpec`'s subtree.
+        const tinyusdz::PrimSpec* findPrimByPathRel(const tinyusdz::PrimSpec& root,
+                                                    const std::string& rootAbsPath,
+                                                    const std::string& targetAbsPath) {
+            if (rootAbsPath == targetAbsPath) return &root;
+            // Otherwise the target must be under root's path.
+            if (targetAbsPath.size() <= rootAbsPath.size() ||
+                targetAbsPath.compare(0, rootAbsPath.size(), rootAbsPath) != 0 ||
+                targetAbsPath[rootAbsPath.size()] != '/') {
+                return nullptr;
+            }
+            std::string rel = targetAbsPath.substr(rootAbsPath.size() + 1);
+            const tinyusdz::PrimSpec* cur = &root;
+            std::string curPath = rootAbsPath;
+            while (!rel.empty()) {
+                auto slash = rel.find('/');
+                std::string name = (slash == std::string::npos) ? rel : rel.substr(0, slash);
+                rel = (slash == std::string::npos) ? std::string() : rel.substr(slash + 1);
+                const tinyusdz::PrimSpec* next = nullptr;
+                for (const auto& c : cur->children()) {
+                    if (c.name() == name) { next = &c; break; }
+                }
+                if (!next) return nullptr;
+                cur = next;
+                curPath += "/" + name;
+            }
+            return cur;
+        }
+
+        // Apply translate / orient / scale xformOps to the front of a copied prim.
+        // Existing xformOps on the copy are preserved and run AFTER ours so the
+        // prototype's local transforms still take effect.
+        void applyInstanceXform(tinyusdz::PrimSpec& copy, const InstanceXform& x) {
+            using tinyusdz::Property;
+            using tinyusdz::Attribute;
+            // Translate
+            tinyusdz::value::float3 t{x.tx, x.ty, x.tz};
+            copy.props()["xformOp:translate"] = Property(Attribute::Uniform(t));
+            // Orient
+            if (x.hasOrient) {
+                tinyusdz::value::quatf q;
+                q.imag[0] = x.qx; q.imag[1] = x.qy; q.imag[2] = x.qz;
+                q.real    = x.qw;
+                copy.props()["xformOp:orient"] = Property(Attribute::Uniform(q));
+            }
+            // Scale
+            if (x.hasScale) {
+                tinyusdz::value::float3 s{x.sx, x.sy, x.sz};
+                copy.props()["xformOp:scale"] = Property(Attribute::Uniform(s));
+            }
+            // xformOpOrder — ours first, then any existing ops.
+            std::vector<tinyusdz::value::token> order;
+            order.emplace_back(tinyusdz::value::token("xformOp:translate"));
+            if (x.hasOrient) order.emplace_back(tinyusdz::value::token("xformOp:orient"));
+            if (x.hasScale)  order.emplace_back(tinyusdz::value::token("xformOp:scale"));
+            // Append the existing order if present
+            if (auto it = copy.props().find("xformOpOrder"); it != copy.props().end()) {
+                if (it->second.is_attribute()) {
+                    if (auto pv = it->second.get_attribute().get_value<std::vector<tinyusdz::value::token>>()) {
+                        for (auto& tok : *pv) order.push_back(tok);
+                    }
+                }
+            }
+            // Attribute::Uniform<T> requires a scalar value type; for the
+            // token[] array we build the Attribute by hand.
+            tinyusdz::Attribute orderAttr;
+            orderAttr.set_value(order);
+            orderAttr.variability() = tinyusdz::Variability::Uniform;
+            copy.props()["xformOpOrder"] = Property(orderAttr);
+        }
+
+        void expandPointInstancers(tinyusdz::PrimSpec& ps) {
+            if (ps.typeName() == "PointInstancer") {
+                // Read positions
+                std::vector<tinyusdz::value::point3f> positions;
+                if (auto it = ps.props().find("positions"); it != ps.props().end() && it->second.is_attribute()) {
+                    if (auto pv = it->second.get_attribute().get_value<std::vector<tinyusdz::value::point3f>>()) {
+                        positions = *pv;
+                    }
+                }
+                // Read protoIndices
+                std::vector<int> protoIndices;
+                if (auto it = ps.props().find("protoIndices"); it != ps.props().end() && it->second.is_attribute()) {
+                    if (auto pv = it->second.get_attribute().get_value<std::vector<int>>()) {
+                        protoIndices = *pv;
+                    }
+                }
+                // Read orientations (quath[] or quatf[])
+                std::vector<tinyusdz::value::quatf> orientations;
+                if (auto it = ps.props().find("orientations"); it != ps.props().end() && it->second.is_attribute()) {
+                    const auto& a = it->second.get_attribute();
+                    if (auto pv = a.get_value<std::vector<tinyusdz::value::quatf>>()) {
+                        orientations = *pv;
+                    } else if (auto pvh = a.get_value<std::vector<tinyusdz::value::quath>>()) {
+                        orientations.reserve(pvh->size());
+                        for (const auto& q : *pvh) {
+                            tinyusdz::value::quatf qf;
+                            qf.imag[0] = tinyusdz::value::half_to_float(q.imag[0]);
+                            qf.imag[1] = tinyusdz::value::half_to_float(q.imag[1]);
+                            qf.imag[2] = tinyusdz::value::half_to_float(q.imag[2]);
+                            qf.real    = tinyusdz::value::half_to_float(q.real);
+                            orientations.push_back(qf);
+                        }
+                    }
+                }
+                // Read scales (float3[])
+                std::vector<tinyusdz::value::float3> scales;
+                if (auto it = ps.props().find("scales"); it != ps.props().end() && it->second.is_attribute()) {
+                    if (auto pv = it->second.get_attribute().get_value<std::vector<tinyusdz::value::float3>>()) {
+                        scales = *pv;
+                    }
+                }
+                // Read prototypes rel
+                std::vector<std::string> protoPaths;
+                if (auto it = ps.props().find("prototypes"); it != ps.props().end() && it->second.is_relationship()) {
+                    const auto& rel = it->second.get_relationship();
+                    if (rel.is_path()) {
+                        protoPaths.push_back(rel.targetPath.prim_part());
+                    } else if (rel.is_pathvector()) {
+                        for (const auto& p : rel.targetPathVector) {
+                            protoPaths.push_back(p.prim_part());
+                        }
+                    }
+                }
+
+                if (!positions.empty() && !protoIndices.empty() && !protoPaths.empty()) {
+                    // Resolve prototype prims (children of this PointInstancer
+                    // in the typical authoring pattern). Match by leaf name.
+                    std::vector<const tinyusdz::PrimSpec*> protoPrims(protoPaths.size(), nullptr);
+                    for (size_t k = 0; k < protoPaths.size(); ++k) {
+                        const std::string& pp = protoPaths[k];
+                        auto slash = pp.rfind('/');
+                        std::string leaf = (slash == std::string::npos) ? pp : pp.substr(slash + 1);
+                        for (const auto& c : ps.children()) {
+                            if (c.name() == leaf) { protoPrims[k] = &c; break; }
+                        }
+                    }
+
+                    // Build instance children
+                    std::vector<tinyusdz::PrimSpec> newChildren;
+                    newChildren.reserve(positions.size());
+                    for (size_t i = 0; i < positions.size(); ++i) {
+                        int pi = (i < protoIndices.size()) ? protoIndices[i] : 0;
+                        if (pi < 0 || pi >= (int)protoPrims.size() || !protoPrims[pi]) continue;
+                        tinyusdz::PrimSpec inst = *protoPrims[pi];  // deep copy
+                        inst.name() = "__inst_" + std::to_string(i);
+
+                        InstanceXform xf;
+                        xf.tx = positions[i].x;
+                        xf.ty = positions[i].y;
+                        xf.tz = positions[i].z;
+                        if (i < orientations.size()) {
+                            xf.qx = orientations[i].imag[0];
+                            xf.qy = orientations[i].imag[1];
+                            xf.qz = orientations[i].imag[2];
+                            xf.qw = orientations[i].real;
+                            const bool isIdentity = (xf.qw == 1.f && xf.qx == 0.f && xf.qy == 0.f && xf.qz == 0.f);
+                            xf.hasOrient = !isIdentity;
+                        }
+                        if (i < scales.size()) {
+                            xf.sx = scales[i][0];
+                            xf.sy = scales[i][1];
+                            xf.sz = scales[i][2];
+                            const bool isIdentity = (xf.sx == 1.f && xf.sy == 1.f && xf.sz == 1.f);
+                            xf.hasScale = !isIdentity;
+                        }
+                        applyInstanceXform(inst, xf);
+                        newChildren.push_back(std::move(inst));
+                    }
+
+                    // Replace children: drop the prototype children, keep any
+                    // unrelated children, append the new instances.
+                    std::vector<tinyusdz::PrimSpec> kept;
+                    for (auto& c : ps.children()) {
+                        bool isProto = false;
+                        for (auto* p : protoPrims) {
+                            if (p == &c) { isProto = true; break; }
+                        }
+                        if (!isProto) kept.push_back(c);
+                    }
+                    for (auto& c : newChildren) kept.push_back(std::move(c));
+                    ps.children() = std::move(kept);
+
+                    // Demote PointInstancer to a plain Xform so tydra traverses
+                    // its children.
+                    ps.typeName() = "";
+                }
+            }
+            for (auto& child : ps.children()) {
+                expandPointInstancers(child);
+            }
+        }
+
+        void expandPointInstancersInLayer(tinyusdz::Layer& layer) {
+            for (auto& [name, ps] : layer.primspecs()) {
+                expandPointInstancers(ps);
+            }
         }
 
         Matrix4 toMatrix4(const tinyusdz::value::matrix4d& mat) {
@@ -799,14 +1027,16 @@ namespace threepp {
             }
 
             // 2. References and payloads — iterate until stable (max 8 passes).
-            // Strip unsupported list-edit qualifiers (Delete/Add/Order) once
-            // per expansion: the original layer first, then again after each
-            // successful composition pass so arcs introduced by referenced files
-            // don't trip up subsequent passes.
-            // NOTE: do NOT call stripUnsupportedArcsInLayer inside the
+            // Normalize list-edit qualifiers (Add/Append → Prepend; strip
+            // Delete/Order) once per expansion: the original layer first, then
+            // again after each successful composition pass so arcs introduced
+            // by referenced files don't get silently dropped by tinyusdz's
+            // CompositeReferences (which only honours ResetToExplicit and
+            // Prepend).
+            // NOTE: do NOT call normalizeArcsInLayer inside the
             // check_unresolved_references() predicate — the layer may be large
             // and calling it every iteration would stall on big scenes.
-            stripUnsupportedArcsInLayer(layer);
+            normalizeArcsInLayer(layer);
 
             for (int pass = 0; pass < 8; ++pass) {
                 bool progressed = false;
@@ -814,25 +1044,33 @@ namespace threepp {
                 if (layer.check_unresolved_references()) {
                     tinyusdz::Layer composed;
                     std::string cw, ce;
-                    if (!tinyusdz::CompositeReferences(resolver, layer, &composed, &cw, &ce))
-                        break;
-                    layer = std::move(composed);
-                    stripUnsupportedArcsInLayer(layer); // strip arcs from newly expanded files
-                    progressed = true;
+                    if (tinyusdz::CompositeReferences(resolver, layer, &composed, &cw, &ce)) {
+                        layer = std::move(composed);
+                        normalizeArcsInLayer(layer);
+                        progressed = true;
+                    }
+                    // On failure (e.g. unsupported MaterialX subpath ref) keep
+                    // going with whatever was composed in earlier passes —
+                    // partial geometry is more useful than zero geometry.
                 }
 
                 if (layer.check_unresolved_payload()) {
                     tinyusdz::Layer composed;
                     std::string cw, ce;
-                    if (!tinyusdz::CompositePayload(resolver, layer, &composed, &cw, &ce))
-                        break;
-                    layer = std::move(composed);
-                    stripUnsupportedArcsInLayer(layer);
-                    progressed = true;
+                    if (tinyusdz::CompositePayload(resolver, layer, &composed, &cw, &ce)) {
+                        layer = std::move(composed);
+                        normalizeArcsInLayer(layer);
+                        progressed = true;
+                    }
                 }
 
                 if (!progressed) break;
             }
+
+            // Expand PointInstancer prims into N instance Xforms so tydra
+            // traverses them. Done after composition so referenced/payloaded
+            // prototypes are present.
+            expandPointInstancersInLayer(layer);
 
             // --- Build Stage from composed Layer ---
             tinyusdz::Stage stage;
