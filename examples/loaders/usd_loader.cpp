@@ -1,4 +1,5 @@
 
+#include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/loaders/USDLoader.hpp"
 #include "threepp/threepp.hpp"
 
@@ -13,19 +14,25 @@ int main(int argc, char** argv) {
     Canvas canvas("USD loader example");
     auto renderer= createRenderer(canvas);
 
-    auto scene = Scene::create();
-    scene->background = Color::aliceblue;
-    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 1000.f);
+    RGBELoader rgbe;
+    auto env = rgbe.load(std::string(DATA_FOLDER) +
+                         "/textures/env/autumn_field_puresky_2k.hdr");
+
+    Scene scene;
+    scene.background = env;
+    scene.environment = env;
+    
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.01f, 10000.f);
     camera->position.set(0, 1, 5);
 
     OrbitControls controls{*camera, canvas};
 
     auto ambientLight = AmbientLight::create(0xffffff, 0.2f);
-    scene->add(ambientLight);
+    scene.add(ambientLight);
 
-    auto dirLight = DirectionalLight::create(0xffffff, 1.0f);
+    auto dirLight = DirectionalLight::create(0xffffff, 1.5f);
     dirLight->position.set(1, 1, 1);
-    scene->add(dirLight);
+    scene.add(dirLight);
 
     USDLoader loader;
 
@@ -52,7 +59,7 @@ int main(int argc, char** argv) {
             std::cerr << "Failed to load model\n";
             return 1;
         }
-        scene->add(model);
+        scene.add(model);
     } else {
         auto catPlane = loader.load(std::string(DATA_FOLDER) + "/models/usd/texture-cat-plane.usdz");
 
@@ -62,7 +69,7 @@ int main(int argc, char** argv) {
         }
 
         catPlane->position.x = -2;
-        scene->add(catPlane);
+        scene.add(catPlane);
 
         auto suzanne = loader.load(std::string(DATA_FOLDER) + "/models/usd/suzanne-pbr.usda");
 
@@ -72,15 +79,8 @@ int main(int argc, char** argv) {
         }
 
         suzanne->position.x = 2;
-        scene->add(suzanne);
+        scene.add(suzanne);
     }
-
-    auto floor = Mesh::create(
-            BoxGeometry::create(10, 0.1f, 10),
-            MeshStandardMaterial::create({{"color", Color::lightgray}}));
-    floor->position.set(0, -2, 0);
-    floor->receiveShadow = true;
-    scene->add(floor);
 
     canvas.onWindowResize([&](WindowSize newSize) {
         renderer->setSize(newSize);
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
     });
 
     canvas.animate([&] {
-        renderer->render(*scene, *camera);
+        renderer->render(scene, *camera);
     });
 
 }
