@@ -22,13 +22,10 @@ int main(int argc, char** argv) {
     scene.background = env;
     scene.environment = env;
     
-    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.01f, 10000.f);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.01f, 100000.f);
     camera->position.set(0, 1, 5);
 
     OrbitControls controls{*camera, canvas};
-
-    auto ambientLight = AmbientLight::create(0xffffff, 0.2f);
-    scene.add(ambientLight);
 
     auto dirLight = DirectionalLight::create(0xffffff, 1.5f);
     dirLight->position.set(1, 1, 1);
@@ -54,12 +51,17 @@ int main(int argc, char** argv) {
 
     if (!modelPath.empty()) {
         std::cout << "Loading: " << modelPath << "\n";
-        auto model = loader.load(modelPath);
-        if (!model) {
+        auto result = loader.loadFull(modelPath);
+        if (!result.scene) {
             std::cerr << "Failed to load model\n";
             return 1;
         }
-        scene.add(model);
+        std::cout << "Loaded: " << result.scene->name << "\n";
+        if (result.environment) {
+            scene.background = result.environment;
+            scene.environment = result.environment;
+        }
+        scene.add(result.scene);
     } else {
         auto catPlane = loader.load(std::string(DATA_FOLDER) + "/models/usd/texture-cat-plane.usdz");
 

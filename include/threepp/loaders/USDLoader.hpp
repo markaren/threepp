@@ -8,10 +8,16 @@
 namespace threepp {
 
     class Group;
+    class Texture;
 
     struct USDResult {
         std::shared_ptr<Group> scene;
         MaterialVariants variants;///< Named material variants (empty in current implementation)
+        /// HDR/equirect texture authored by the file's UsdLuxDomeLight, if any.
+        /// Assign to `scene.background` and `scene.environment` for IBL. Null
+        /// when the file has no DomeLight or its `inputs:texture:file` could
+        /// not be resolved.
+        std::shared_ptr<Texture> environment;
     };
 
     class USDLoader {

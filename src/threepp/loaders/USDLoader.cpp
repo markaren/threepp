@@ -1,6 +1,12 @@
 #include "threepp/loaders/USDLoader.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/lights/AmbientLight.hpp"
+#include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/lights/PointLight.hpp"
+#include "threepp/lights/RectAreaLight.hpp"
+#include "threepp/lights/SpotLight.hpp"
+#include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix4.hpp"
@@ -12,9 +18,11 @@
 #include "tinyusdz.hh"
 #include "composition.hh"
 #include "asset-resolution.hh"
+#include "io-util.hh"
 #include "stage.hh"
 #include "tydra/render-data.hh"
 #include "tydra/scene-access.hh"
+#include "usdLux.hh"
 
 #include <algorithm>
 #include <cctype>
@@ -32,6 +40,154 @@
 namespace threepp {
 
     namespace {
+
+        // -----------------------------------------------------------------------
+        // HTTP/HTTPS asset resolution.
+        //
+        // Real-world Omniverse / NVIDIA Showcases scenes embed payload paths
+        // pointing into the public Nucleus mirror
+        // (`https://omniverse-content-production.s3.us-west-2.amazonaws.com/...`).
+        // tinyusdz can't fetch those by default, so we register a wildcard
+        // AssetResolutionHandler that:
+        //   - For http(s) URLs: download via `curl` once (built into Win 10+,
+        //     macOS, all current Linux distros) into a temp on-disk cache,
+        //     return that local path. Subsequent resolves hit the cache.
+        //   - For local paths: replicate tinyusdz's own io::FindFile lookup
+        //     against the resolver's search paths so we don't disable normal
+        //     file resolution by claiming the wildcard slot.
+        //
+        // size_fun / read_fun work on the resolved local path (cache file or
+        // the file the search-paths lookup found), so they're shared between
+        // both cases.
+        // -----------------------------------------------------------------------
+
+        bool isHttpUrl(const std::string& s) {
+            return s.compare(0, 7, "http://") == 0 ||
+                   s.compare(0, 8, "https://") == 0;
+        }
+
+        std::filesystem::path httpCacheDir() {
+            std::filesystem::path p =
+                std::filesystem::temp_directory_path() / "threepp_usd_cache";
+            std::error_code ec;
+            std::filesystem::create_directories(p, ec);
+            return p;
+        }
+
+        // Hash a URL into a stable cache filename. Preserves the URL's
+        // extension so tinyusdz / our loader can format-detect from it.
+        std::string urlToCacheName(const std::string& url) {
+            std::hash<std::string> h;
+            std::ostringstream os;
+            os << std::hex << h(url);
+            // strip query string before extracting extension
+            std::string clean = url;
+            if (auto q = clean.find('?'); q != std::string::npos) clean = clean.substr(0, q);
+            auto dot = clean.rfind('.');
+            auto slash = clean.rfind('/');
+            if (dot != std::string::npos &&
+                (slash == std::string::npos || dot > slash) &&
+                clean.size() - dot <= 6 /* sanity */) {
+                os << clean.substr(dot);
+            }
+            return os.str();
+        }
+
+        bool fetchHttp(const std::string& url,
+                       const std::filesystem::path& dest,
+                       std::string& err) {
+            // -L follow redirects, -s silent, -f fail on HTTP errors,
+            // --max-time bounds the download. curl on Win/macOS/Linux all
+            // accept the same flags.
+            std::string cmd = "curl -L -s -f --max-time 60 -o \"" +
+                              dest.string() + "\" \"" + url + "\"";
+#ifdef _WIN32
+            // Suppress stderr from spawning a console window.
+            cmd = cmd + " 2>nul";
+#else
+            cmd = cmd + " 2>/dev/null";
+#endif
+            const int rc = std::system(cmd.c_str());
+            if (rc != 0) {
+                err = "curl exit " + std::to_string(rc) + " for " + url;
+                std::error_code ec;
+                std::filesystem::remove(dest, ec);  // don't leave a partial file in cache
+                return false;
+            }
+            std::error_code ec;
+            if (!std::filesystem::exists(dest, ec) ||
+                std::filesystem::file_size(dest, ec) == 0) {
+                err = "downloaded file empty for " + url;
+                std::filesystem::remove(dest, ec);
+                return false;
+            }
+            return true;
+        }
+
+        // FSResolveAsset: route URLs to the cache, locals to FindFile.
+        int httpAwareResolve(const char* asset_name,
+                             const std::vector<std::string>& search_paths,
+                             std::string* resolved_asset_name,
+                             std::string* err,
+                             void* /*userdata*/) {
+            if (!asset_name || !resolved_asset_name) return -1;
+            const std::string path = asset_name;
+            if (isHttpUrl(path)) {
+                auto cache = httpCacheDir() / urlToCacheName(path);
+                if (!std::filesystem::exists(cache)) {
+                    std::string fetchErr;
+                    if (!fetchHttp(path, cache, fetchErr)) {
+                        if (err) *err = fetchErr;
+                        return -1;
+                    }
+                }
+                *resolved_asset_name = cache.string();
+                return 0;
+            }
+            // Local path: defer to tinyusdz's standard search-path lookup
+            // (same logic the resolver would have used without our wildcard).
+            std::string found = tinyusdz::io::FindFile(path, search_paths);
+            if (found.empty()) return -1;
+            *resolved_asset_name = found;
+            return 0;
+        }
+
+        // FSSizeAsset: works for both URL-cache files and local files since
+        // resolve() always returns a local filesystem path.
+        int httpAwareSize(const char* resolved_asset_name,
+                          uint64_t* nbytes,
+                          std::string* err,
+                          void* /*userdata*/) {
+            if (!resolved_asset_name || !nbytes) return -1;
+            std::error_code ec;
+            const auto sz = std::filesystem::file_size(resolved_asset_name, ec);
+            if (ec) { if (err) *err = ec.message(); return -1; }
+            *nbytes = sz;
+            return 0;
+        }
+
+        // FSReadAsset: read from the resolved local path.
+        int httpAwareRead(const char* resolved_asset_name,
+                          uint64_t req_nbytes,
+                          uint8_t* out_buf,
+                          uint64_t* nbytes,
+                          std::string* err,
+                          void* /*userdata*/) {
+            if (!resolved_asset_name || !out_buf || !nbytes) return -1;
+            std::ifstream f(resolved_asset_name, std::ios::binary);
+            if (!f) { if (err) *err = "open failed"; return -1; }
+            f.read(reinterpret_cast<char*>(out_buf), static_cast<std::streamsize>(req_nbytes));
+            *nbytes = static_cast<uint64_t>(f.gcount());
+            return 0;
+        }
+
+        void registerHttpAwareResolver(tinyusdz::AssetResolutionResolver& resolver) {
+            tinyusdz::AssetResolutionHandler h;
+            h.resolve_fun = httpAwareResolve;
+            h.size_fun = httpAwareSize;
+            h.read_fun = httpAwareRead;
+            resolver.register_wildcard_asset_resolution_handler(h);
+        }
 
         // -----------------------------------------------------------------------
         // Helpers
@@ -1874,8 +2030,13 @@ namespace threepp {
         // returned from SetupUSDZAssetResolution holds pointers into this so
         // it must outlive the ConvertToRenderScene call. Reset on each load.
         std::unique_ptr<tinyusdz::USDZAsset> _usdzAsset;
+        // The latest load's DomeLight environment texture (if any) — exposed
+        // to the caller via USDResult so they can assign it to scene.environment
+        // / scene.background. Reset at the start of each load().
+        std::shared_ptr<Texture> _envTexture;
 
         std::shared_ptr<Group> load(const std::filesystem::path& path) {
+            _envTexture.reset();
             const std::string pathStr = path.string();
             const std::string ext = [&] {
                 std::string e = path.extension().string();
@@ -1890,6 +2051,11 @@ namespace threepp {
             tinyusdz::AssetResolutionResolver resolver;
             resolver.set_current_working_path(baseDir.string());
             resolver.set_search_paths({baseDir.string()});
+            // Wildcard handler that fetches http(s) URLs via curl into a
+            // local cache and falls through to tinyusdz's FindFile for
+            // local paths. Lets Omniverse-style payloads to remote Nucleus
+            // mirrors compose.
+            registerHttpAwareResolver(resolver);
 
             // --- Load raw Layer (no composition yet) ---
             tinyusdz::Layer layer;
@@ -2040,8 +2206,11 @@ namespace threepp {
             tinyusdz::tydra::RenderScene renderScene;
             tinyusdz::tydra::RenderSceneConverter converter;
 
-            if (!converter.ConvertToRenderScene(env, &renderScene))
+            if (!converter.ConvertToRenderScene(env, &renderScene)) {
+                std::cerr << "[USDLoader] ConvertToRenderScene failed for '" << pathStr
+                          << "': " << converter.GetError() << "\n";
                 return nullptr;
+            }
 
             if (renderScene.meshes.empty()) {
                 std::cerr << "[USDLoader] No meshes after conversion of '" << pathStr << "'\n";
@@ -2163,12 +2332,180 @@ namespace threepp {
                 visitNode(renderScene, node, *root, texCache, mdlOverrides, meshPathMdlMap);
             }
 
+            // --- UsdLux lights ---
+            // Walk the Stage with an XformNode tree so we have each light's
+            // world transform, then map UsdLux types onto threepp lights and
+            // attach them to the root group.
+            addLightsFromStage(stage, *root, baseDir, resolver);
+
             if (root->children.empty()) {
                 std::cerr << "[USDLoader] No usable geometry in '" << pathStr << "'\n";
                 return nullptr;
             }
 
             return root;
+        }
+
+        // ----------------------------------------------------------------------
+        // UsdLux → threepp light conversion.
+        //
+        //   DistantLight  → DirectionalLight (sun-like, parallel rays)
+        //   DomeLight     → AmbientLight (HDR texture handling is left to the
+        //                   caller — they typically set scene.environment to
+        //                   their own HDR; doing it here would require
+        //                   returning more than just a Group)
+        //   SphereLight   → PointLight (we ignore radius — three.js doesn't
+        //                   model point-light area)
+        //   RectLight     → RectAreaLight (width/height in metres)
+        //   DiskLight     → SpotLight (with a wide cone — closest approximation)
+        //
+        // Intensity uses USD's `intensity * 2^exposure` and `color`. Light
+        // direction (DistantLight) and orientation (RectLight, DiskLight) come
+        // from the world transform's rotation applied to the canonical local
+        // -Z direction (UsdLux convention).
+        // ----------------------------------------------------------------------
+
+        void addLightsFromStage(const tinyusdz::Stage& stage, Group& root,
+                                const std::filesystem::path& baseDir,
+                                const tinyusdz::AssetResolutionResolver& resolver) {
+            tinyusdz::tydra::XformNode xroot;
+            std::string xerr;
+            if (!tinyusdz::tydra::BuildXformNodeFromStage(stage, &xroot)) {
+                return;  // no transform info; safest is to skip lights
+            }
+
+            std::function<void(const tinyusdz::tydra::XformNode&)> walk =
+                [&](const tinyusdz::tydra::XformNode& xn) {
+                    const tinyusdz::Prim* prim = xn.prim;
+                    if (prim) {
+                        // World matrix → threepp Matrix4 (USD row-vector to threepp column-vector).
+                        Matrix4 wm = toMatrix4(xn.get_world_matrix());
+
+                        // Read scalar values out of Animatable<T> wrappers.
+                        auto readFloat = [](const auto& attr, float fallback = 0.f) {
+                            float v = fallback;
+                            attr.get_value().get_scalar(&v);
+                            return v;
+                        };
+                        auto readColor = [](const auto& attr) {
+                            tinyusdz::value::color3f c{1.f, 1.f, 1.f};
+                            attr.get_value().get_scalar(&c);
+                            return Color(c.r, c.g, c.b);
+                        };
+                        auto effectiveIntensity = [&](const auto& iAttr, const auto& eAttr) {
+                            return readFloat(iAttr, 1.f) *
+                                   std::pow(2.0f, readFloat(eAttr, 0.f));
+                        };
+
+                        // DistantLight → DirectionalLight
+                        if (auto* dl = prim->as<tinyusdz::DistantLight>()) {
+                            auto light = DirectionalLight::create(
+                                readColor(dl->color),
+                                effectiveIntensity(dl->intensity, dl->exposure));
+
+                            // UsdLux DistantLight shines along its local -Z.
+                            // Place threepp light at +Z (away from target) so
+                            // its default (0,0,0) target gives rays travelling
+                            // in -Z (after world rotation).
+                            Vector3 dir(0, 0, -1);
+                            dir.transformDirection(wm).normalize();
+                            light->position.set(-dir.x, -dir.y, -dir.z);
+                            root.add(light);
+                        }
+                        // DomeLight → AmbientLight + optional HDR env texture
+                        // exposed via USDResult.environment.
+                        else if (auto* dome = prim->as<tinyusdz::DomeLight>()) {
+                            // DomeLight covers a full hemisphere; treat as
+                            // ambient at half intensity so it doesn't double
+                            // up with a scene.environment HDR set externally.
+                            auto light = AmbientLight::create(
+                                readColor(dome->color),
+                                effectiveIntensity(dome->intensity, dome->exposure) * 0.5f);
+                            root.add(light);
+
+                            // If the DomeLight has `inputs:texture:file`,
+                            // resolve and load it. Cache on _envTexture so
+                            // USDResult.environment can hand it back.
+                            if (!_envTexture && dome->file.authored()) {
+                                auto fileOpt = dome->file.get_value();
+                                tinyusdz::value::AssetPath ap;
+                                const bool gotAp =
+                                    fileOpt.has_value() &&
+                                    fileOpt.value().get_scalar(&ap);
+                                if (gotAp) {
+                                    const std::string raw = ap.GetAssetPath();
+                                    if (!raw.empty()) {
+                                        const auto texPath = resolveAssetPath(
+                                            raw, baseDir, baseDir, resolver);
+                                        if (!texPath.empty()) {
+                                            // .hdr → RGBELoader, otherwise
+                                            // texLoader handles png/jpg/exr.
+                                            std::string ext = texPath.extension().string();
+                                            std::transform(ext.begin(), ext.end(), ext.begin(),
+                                                [](unsigned char c) { return std::tolower(c); });
+                                            if (ext == ".hdr") {
+                                                RGBELoader rgbe;
+                                                _envTexture = rgbe.load(texPath, true);
+                                            } else {
+                                                _envTexture = texLoader.load(texPath, true);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // SphereLight → PointLight (radius ignored)
+                        else if (auto* sph = prim->as<tinyusdz::SphereLight>()) {
+                            auto light = PointLight::create(
+                                readColor(sph->color),
+                                effectiveIntensity(sph->intensity, sph->exposure));
+                            Vector3 pos, scale; Quaternion rot;
+                            wm.decompose(pos, rot, scale);
+                            light->position.copy(pos);
+                            root.add(light);
+                        }
+                        // RectLight → RectAreaLight
+                        else if (auto* rect = prim->as<tinyusdz::RectLight>()) {
+                            auto light = RectAreaLight::create(
+                                readColor(rect->color),
+                                effectiveIntensity(rect->intensity, rect->exposure),
+                                readFloat(rect->width,  1.f),
+                                readFloat(rect->height, 1.f));
+                            Vector3 pos, scale; Quaternion rot;
+                            wm.decompose(pos, rot, scale);
+                            light->position.copy(pos);
+                            light->quaternion.copy(rot);
+                            root.add(light);
+                        }
+                        // DiskLight → SpotLight (threepp has no disk-area light;
+                        // use a moderate cone)
+                        else if (auto* disk = prim->as<tinyusdz::DiskLight>()) {
+                            auto light = SpotLight::create(
+                                readColor(disk->color),
+                                effectiveIntensity(disk->intensity, disk->exposure),
+                                /*distance*/ 0.f,
+                                /*angle*/ math::PI / 4.f,
+                                /*penumbra*/ 0.5f,
+                                /*decay*/ 1.f);
+                            Vector3 pos, scale; Quaternion rot;
+                            wm.decompose(pos, rot, scale);
+                            light->position.copy(pos);
+                            // Aim the SpotLight along the rotated local -Z.
+                            // The light's `target` defaults to origin, so we
+                            // create a child target Object3D positioned along
+                            // that direction and bind it via setTarget().
+                            Vector3 dir(0, 0, -1);
+                            dir.applyQuaternion(rot).normalize();
+                            auto tgt = std::make_shared<Object3D>();
+                            tgt->position.set(pos.x + dir.x, pos.y + dir.y, pos.z + dir.z);
+                            light->setTarget(*tgt);
+                            root.add(light);
+                            root.add(tgt);
+                        }
+                    }
+                    for (const auto& c : xn.children) walk(c);
+                };
+            for (const auto& c : xroot.children) walk(c);
         }
     };
 
@@ -2185,7 +2522,8 @@ namespace threepp {
     }
 
     USDResult USDLoader::loadFull(const std::filesystem::path& path) {
-        return {pimpl_->load(path), {}};
+        auto group = pimpl_->load(path);
+        return {std::move(group), {}, pimpl_->_envTexture};
     }
 
 }// namespace threepp

@@ -1,5 +1,5 @@
 diff --git a/src/composition.cc b/src/composition.cc
-index b8935d24..7a12e838 100644
+index b8935d24..8b42c73c 100644
 --- a/src/composition.cc
 +++ b/src/composition.cc
 @@ -186,6 +186,19 @@ bool ReplaceRootPrimPathRec(
@@ -22,7 +22,34 @@ index b8935d24..7a12e838 100644
    return true;
  }
  
-@@ -390,6 +403,36 @@ bool LoadAsset(AssetResolutionResolver &resolver,
+@@ -237,6 +250,26 @@ bool LoadAsset(AssetResolutionResolver &resolver,
+         "TODO: No assetPath but Prim path(e.g. </xform>) in references.");
+   }
+ 
++  // Snapshot/restore the resolver state across this LoadAsset call.
++  // LoadAsset mutates `_current_working_path` and `_search_paths` to point
++  // into the loaded asset's directory; if a caller invokes LoadAsset
++  // repeatedly (CompositePayloadRec/CompositeReferencesRec iterate over
++  // many sibling prims) the second-and-later calls inherit the previous
++  // sibling's pollution, which breaks resolution of relative asset paths
++  // when the prim's own CWP is empty (e.g. prims added via subLayer
++  // composition that did not run PropagateAssetResolverState).
++  struct ResolverGuard {
++    AssetResolutionResolver &r;
++    std::string cwp;
++    std::vector<std::string> paths;
++    ResolverGuard(AssetResolutionResolver &res)
++        : r(res), cwp(res.current_working_path()), paths(res.search_paths()) {}
++    ~ResolverGuard() {
++      r.set_current_working_path(cwp);
++      r.set_search_paths(paths);
++    }
++  } resolver_guard(resolver);
++
+   // TODO: Use std::stack to manage AssetResolutionResolver state?
+   if (current_working_path.size()) {
+     resolver.set_current_working_path(current_working_path);
+@@ -390,6 +423,36 @@ bool LoadAsset(AssetResolutionResolver &resolver,
  
    DCOUT("layer = " << print_layer(layer, 0));
  
@@ -59,7 +86,7 @@ index b8935d24..7a12e838 100644
    // TODO: Recursively resolve `references`
  
    if (_warn.size()) {
-@@ -473,6 +516,19 @@ bool CombinePrimSpecRec(uint32_t depth, PrimSpec &dst, const PrimSpec &src, std:
+@@ -473,6 +536,19 @@ bool CombinePrimSpecRec(uint32_t depth, PrimSpec &dst, const PrimSpec &src, std:
      PUSH_ERROR_AND_RETURN("PrimSpec tree too deep.");
    }
  
@@ -79,7 +106,7 @@ index b8935d24..7a12e838 100644
    // Combine metadataum
    dst.metas().update_from(src.metas(), false);
  
-@@ -502,6 +558,29 @@ bool CombinePrimSpecRec(uint32_t depth, PrimSpec &dst, const PrimSpec &src, std:
+@@ -502,6 +578,29 @@ bool CombinePrimSpecRec(uint32_t depth, PrimSpec &dst, const PrimSpec &src, std:
      }
    }
  
@@ -109,6 +136,36 @@ index b8935d24..7a12e838 100644
    return true;
  }
  
+@@ -534,6 +633,18 @@ bool CompositeSublayersRec(AssetResolutionResolver &resolver,
+     }
+   }
+ 
++  // LoadAsset (called below per sublayer) mutates the resolver's
++  // current_working_path and search_paths to the loaded asset's directory,
++  // and that mutation persists across iterations. For multi-sublayer files
++  // (e.g. NVIDIA Omniverse Showcases) the second and subsequent
++  // resolver.resolve() calls then run against the previous sublayer's
++  // directory rather than the parent layer's, and "./SubUSDs/foo.usd"
++  // tries to load `parent/SubUSDs/SubUSDs/foo.usd`. Snapshot the resolver
++  // state once and restore it before resolving each sublayer so iterations
++  // are independent.
++  const std::string saved_cwp = resolver.current_working_path();
++  const std::vector<std::string> saved_paths = resolver.search_paths();
++
+   for (const auto &layer : in_layer.metas().subLayers) {
+     // TODO: subLayerOffset
+     std::string sublayer_asset_path = layer.assetPath.GetAssetPath();
+@@ -546,6 +657,10 @@ bool CompositeSublayersRec(AssetResolutionResolver &resolver,
+                       sublayer_asset_path, in_layer.name()));
+     }
+ 
++    // Restore resolver state before resolving this sublayer.
++    resolver.set_current_working_path(saved_cwp);
++    resolver.set_search_paths(saved_paths);
++
+     std::string layer_filepath = resolver.resolve(sublayer_asset_path);
+     if (layer_filepath.empty()) {
+       PUSH_ERROR_AND_RETURN(fmt::format("{} not found in path: {}",
 diff --git a/src/crate-format.hh b/src/crate-format.hh
 index 6646e5a5..b1d2c022 100644
 --- a/src/crate-format.hh
@@ -174,7 +231,7 @@ index a2a1f2ab..ee9a20ef 100644
      case crate::CrateDataTypeId::CRATE_DATA_TYPE_INT: {
        NON_ARRAY_UNSUPPORTED_CHECK(dty)
 diff --git a/src/usdc-reader.cc b/src/usdc-reader.cc
-index 681d7fdc..69692d0a 100644
+index 681d7fdc..c6cb39f3 100644
 --- a/src/usdc-reader.cc
 +++ b/src/usdc-reader.cc
 @@ -647,16 +647,15 @@ nonstd::expected<APISchemas, std::string> USDCReader::Impl::ToAPISchemas(
@@ -346,3 +403,150 @@ index 681d7fdc..69692d0a 100644
      }
    }
  
+@@ -1052,19 +988,29 @@ bool USDCReader::Impl::ParseProperty(const SpecType spec_type,
+         auto p = pv.value();
+         DCOUT("connectionPaths = " << to_string(p));
+ 
+-        if (!p.IsExplicit()) {
++        // Real-world Omniverse exports (e.g. NVIDIA Showcases) use mixed
++        // ListEdit qualifiers (`prepend`, `append`, …) on connectionPaths.
++        // The strict "Explicit only" check rejects those files outright,
++        // even when only one qualifier list has items. Merge items from
++        // every populated category — for a single-layer asset they're
++        // semantically equivalent (the connection target list).
++        std::vector<Path> items;
++        auto append_items = [&](const std::vector<Path>& src) {
++          items.insert(items.end(), src.begin(), src.end());
++        };
++        append_items(p.GetExplicitItems());
++        append_items(p.GetPrependedItems());
++        append_items(p.GetAppendedItems());
++        append_items(p.GetAddedItems());
++        // Skip Deleted/Ordered: not meaningful for a single-layer
++        // connection target list.
++
++        if (items.empty()) {
+           PUSH_ERROR_AND_RETURN_TAG(
+-              kTag, "`connectionPaths` must be composed of Explicit items.");
++              kTag, "`connectionPaths` have empty items.");
+         }
+ 
+-        // Must be explicit_items for now.
+-        auto items = p.GetExplicitItems();
+-        if (items.size() == 0) {
+-          PUSH_ERROR_AND_RETURN_TAG(
+-              kTag, "`connectionPaths` have empty Explicit items.");
+-        }
+-
+-        attr.set_connections(items); 
++        attr.set_connections(items);
+ 
+       } else {
+         PUSH_ERROR_AND_RETURN_TAG(
+@@ -2161,16 +2107,27 @@ bool USDCReader::Impl::ParsePrimSpec(const crate::FieldValuePairVector &fvs,
+ 
+         auto ps = DecodeListOp<Reference>(p);
+ 
++        // Real-world USDC files (e.g. NVIDIA Omniverse Showcases) author
++        // both `delete references` and `prepend references` on the same
++        // prim. DecodeListOp returns them in fixed insertion order with
++        // Delete BEFORE Prepend (qual=Delete=3 < Prepend=4 in dst[]). The
++        // legacy "ps[0]" pick then loses the actual additive items. Prefer
++        // an additive op (Prepend/Append/Add/Explicit) over Delete/Order
++        // when multiple list-op kinds are present.
++        size_t pickIdx = 0;
+         if (ps.size() > 1) {
+-          // This should not happen though.
+-          PUSH_WARN(
+-              "ListOp with multiple ListOpType is not supported for now. Use "
+-              "the first one: " +
+-              to_string(std::get<0>(ps[0])));
++          for (size_t i = 0; i < ps.size(); ++i) {
++            ListEditQual q = std::get<0>(ps[i]);
++            if (q == ListEditQual::Prepend || q == ListEditQual::Append ||
++                q == ListEditQual::Add || q == ListEditQual::ResetToExplicit) {
++              pickIdx = i;
++              break;
++            }
++          }
+         }
+ 
+-        auto qual = std::get<0>(ps[0]);
+-        auto items = std::get<1>(ps[0]);
++        auto qual = std::get<0>(ps[pickIdx]);
++        auto items = std::get<1>(ps[pickIdx]);
+         auto listop = (*pv);
+         primMeta.references = std::make_pair(qual, items);
+       } else {
+@@ -2197,16 +2154,22 @@ bool USDCReader::Impl::ParsePrimSpec(const crate::FieldValuePairVector &fvs,
+ 
+         auto ps = DecodeListOp<Payload>(p);
+ 
++        // See comments in `references` branch above: prefer an additive
++        // qualifier when DecodeListOp returns Delete/Order alongside it.
++        size_t pickIdx = 0;
+         if (ps.size() > 1) {
+-          // This should not happen though.
+-          PUSH_WARN(
+-              "ListOp with multiple ListOpType is not supported for now. Use "
+-              "the first one: " +
+-              to_string(std::get<0>(ps[0])));
++          for (size_t i = 0; i < ps.size(); ++i) {
++            ListEditQual q = std::get<0>(ps[i]);
++            if (q == ListEditQual::Prepend || q == ListEditQual::Append ||
++                q == ListEditQual::Add || q == ListEditQual::ResetToExplicit) {
++              pickIdx = i;
++              break;
++            }
++          }
+         }
+ 
+-        auto qual = std::get<0>(ps[0]);
+-        auto items = std::get<1>(ps[0]);
++        auto qual = std::get<0>(ps[pickIdx]);
++        auto items = std::get<1>(ps[pickIdx]);
+         auto listop = (*pvs);
+         primMeta.payload = std::make_pair(qual, items);
+       } else {
+@@ -2661,10 +2624,17 @@ bool USDCReader::Impl::ReconstructPrimNode(int parent, int current, int level,
+         std::string variantSetName = variantPair[0];
+         std::string variantPrimName = variantPair[1];
+ 
+-        if (!ValidatePrimElementName(variantPrimName)) {
++        // USD variant selection names (e.g. "24" for 24mm focal length on a
++        // Camera) are routinely numeric in real-world assets. The strict
++        // ValidatePrimElementName check rejects any name that starts with
++        // a digit, which causes whole-file parse failures (e.g. NVIDIA
++        // Omniverse Showcase cam.usd). Accept any non-empty token here:
++        // tokenize_variantElement already split on `{=}` so we know the
++        // bytes are well-formed identifiers in the looser USD-variant sense.
++        if (variantPrimName.empty()) {
+           PUSH_ERROR_AND_RETURN_TAG(
+-              kTag, fmt::format("Invalid Prim name in Variant: `{}`",
+-                                variantPrimName));
++              kTag, fmt::format("Empty Prim name in Variant for elemPath `{}`",
++                                elemPath));
+         }
+ 
+         bool is_unsupported_prim{false};
+@@ -3135,10 +3105,17 @@ bool USDCReader::Impl::ReconstructPrimSpecNode(int parent, int current, int leve
+         std::string variantSetName = variantPair[0];
+         std::string variantPrimName = variantPair[1];
+ 
+-        if (!ValidatePrimElementName(variantPrimName)) {
++        // USD variant selection names (e.g. "24" for 24mm focal length on a
++        // Camera) are routinely numeric in real-world assets. The strict
++        // ValidatePrimElementName check rejects any name that starts with
++        // a digit, which causes whole-file parse failures (e.g. NVIDIA
++        // Omniverse Showcase cam.usd). Accept any non-empty token here:
++        // tokenize_variantElement already split on `{=}` so we know the
++        // bytes are well-formed identifiers in the looser USD-variant sense.
++        if (variantPrimName.empty()) {
+           PUSH_ERROR_AND_RETURN_TAG(
+-              kTag, fmt::format("Invalid Prim name in Variant: `{}`",
+-                                variantPrimName));
++              kTag, fmt::format("Empty Prim name in Variant for elemPath `{}`",
++                                elemPath));
+         }
+ 
+ #if 0
