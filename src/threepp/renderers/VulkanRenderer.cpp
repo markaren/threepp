@@ -2799,7 +2799,11 @@ namespace threepp {
             // Mirrors WGPU's expandMeshEntries (WgpuPathTracerAtlas.cpp:20).
             std::vector<MeshEntry> entries;
             std::vector<LineEntry> lineEntries;
-            scene.traverse([&](Object3D& o) {
+            // traverseVisible (not traverse) so an invisible parent hides its
+            // whole subtree — matches three.js / GLRenderer convention. Plain
+            // `traverse` walks every node regardless of visibility, leaking
+            // children of hidden groups into the PT/overlay passes.
+            scene.traverseVisible([&](Object3D& o) {
                 // Line / LineSegments: never path-trace, always overlay.
                 // Collected before the Mesh dispatch so subclasses don't
                 // accidentally route through the Mesh path.
@@ -4596,8 +4600,8 @@ namespace threepp {
 
             GpuLightsUbo ubo{};
 
-            scene.traverse([&](Object3D& o) {
-                if (!o.visible) return;
+            // traverseVisible so a hidden parent prunes its child lights too.
+            scene.traverseVisible([&](Object3D& o) {
                 if (auto* a = dynamic_cast<AmbientLight*>(&o)) {
                     ubo.ambient[0] += a->color.r * a->intensity;
                     ubo.ambient[1] += a->color.g * a->intensity;
