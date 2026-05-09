@@ -16,9 +16,14 @@
 #include "tydra/scene-access.hh"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
+#include <map>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -162,7 +167,79 @@ namespace threepp {
             copy.props()["xformOpOrder"] = Property(orderAttr);
         }
 
-        void expandPointInstancers(tinyusdz::PrimSpec& ps) {
+        // Rewrite all relationship/connection targetPaths inside `ps` (and its
+        // descendants + variantSets) whose prefix equals `srcPrefix`. Used
+        // after deep-copying a PointInstancer prototype so that absolute
+        // bindings pointing at the prototype's old path are redirected to the
+        // instance's new path.
+        void rewriteAbsPathsRec(tinyusdz::PrimSpec& ps,
+                                const tinyusdz::Path& srcPrefix,
+                                const tinyusdz::Path& dstPrefix) {
+            for (auto& [name, prop] : ps.props()) {
+                if (prop.is_relationship()) {
+                    tinyusdz::Relationship& rel = prop.relationship();
+                    if (rel.is_path()) {
+                        if (rel.targetPath.has_prefix(srcPrefix)) {
+                            rel.targetPath.replace_prefix(srcPrefix, dstPrefix);
+                        }
+                    } else if (rel.is_pathvector()) {
+                        for (auto& path : rel.targetPathVector) {
+                            if (path.has_prefix(srcPrefix)) {
+                                path.replace_prefix(srcPrefix, dstPrefix);
+                            }
+                        }
+                    }
+                } else if (prop.is_attribute_connection()) {
+                    tinyusdz::Attribute& attr = prop.attribute();
+                    for (auto& cp : attr.connections()) {
+                        if (cp.has_prefix(srcPrefix)) {
+                            cp.replace_prefix(srcPrefix, dstPrefix);
+                        }
+                    }
+                }
+            }
+            for (auto& child : ps.children()) {
+                rewriteAbsPathsRec(child, srcPrefix, dstPrefix);
+            }
+            for (auto& vs : ps.variantSets()) {
+                for (auto& kv : vs.second.variantSet) {
+                    rewriteAbsPathsRec(kv.second, srcPrefix, dstPrefix);
+                }
+            }
+        }
+
+        // Helper: walk the layer to find the absolute path of a given PrimSpec
+        // by pointer match. Used so we know what prefix to rewrite for
+        // PointInstancer instance clones. Returns empty if not found.
+        bool findAbsPathOfSpecRec(const tinyusdz::PrimSpec& haystack,
+                                  std::string& curPath,
+                                  const tinyusdz::PrimSpec* needle,
+                                  std::string& out) {
+            if (&haystack == needle) {
+                out = curPath;
+                return true;
+            }
+            for (const auto& c : haystack.children()) {
+                std::string childPath = curPath + "/" + c.name();
+                if (findAbsPathOfSpecRec(c, childPath, needle, out)) return true;
+            }
+            return false;
+        }
+
+        std::string findAbsPathOfSpec(const tinyusdz::Layer& layer,
+                                      const tinyusdz::PrimSpec* needle) {
+            if (!needle) return {};
+            std::string out;
+            for (const auto& [name, ps] : layer.primspecs()) {
+                std::string root = "/" + name;
+                if (findAbsPathOfSpecRec(ps, root, needle, out)) return out;
+            }
+            return out;
+        }
+
+        void expandPointInstancers(tinyusdz::PrimSpec& ps,
+                                   const tinyusdz::Layer& layer,
+                                   const std::string& parentPath) {
             if (ps.typeName() == "PointInstancer") {
                 // Read positions
                 std::vector<tinyusdz::value::point3f> positions;
@@ -217,13 +294,17 @@ namespace threepp {
                 }
 
                 if (!positions.empty() && !protoIndices.empty() && !protoPaths.empty()) {
+                    const std::string instancerAbsPath = parentPath + "/" + ps.name();
+
                     // Resolve prototype prims (children of this PointInstancer
                     // in the typical authoring pattern). Match by leaf name.
                     std::vector<const tinyusdz::PrimSpec*> protoPrims(protoPaths.size(), nullptr);
+                    std::vector<std::string> protoChildNames(protoPaths.size());
                     for (size_t k = 0; k < protoPaths.size(); ++k) {
                         const std::string& pp = protoPaths[k];
                         auto slash = pp.rfind('/');
                         std::string leaf = (slash == std::string::npos) ? pp : pp.substr(slash + 1);
+                        protoChildNames[k] = leaf;
                         for (const auto& c : ps.children()) {
                             if (c.name() == leaf) { protoPrims[k] = &c; break; }
                         }
@@ -236,7 +317,19 @@ namespace threepp {
                         int pi = (i < protoIndices.size()) ? protoIndices[i] : 0;
                         if (pi < 0 || pi >= (int)protoPrims.size() || !protoPrims[pi]) continue;
                         tinyusdz::PrimSpec inst = *protoPrims[pi];  // deep copy
-                        inst.name() = "__inst_" + std::to_string(i);
+                        const std::string instName = "__inst_" + std::to_string(i);
+                        inst.name() = instName;
+
+                        // Rewrite absolute paths inside the copy from the
+                        // prototype's path to the instance's path so any
+                        // material:binding rels (or other rels) that point at
+                        // the prototype's now-removed Materials subtree
+                        // resolve to the duplicated copy instead.
+                        const std::string protoAbs = instancerAbsPath + "/" + protoChildNames[pi];
+                        const std::string instAbs  = instancerAbsPath + "/" + instName;
+                        rewriteAbsPathsRec(inst,
+                            tinyusdz::Path(protoAbs, ""),
+                            tinyusdz::Path(instAbs, ""));
 
                         InstanceXform xf;
                         xf.tx = positions[i].x;
@@ -279,14 +372,77 @@ namespace threepp {
                     ps.typeName() = "";
                 }
             }
+            const std::string myPath = parentPath + "/" + ps.name();
             for (auto& child : ps.children()) {
-                expandPointInstancers(child);
+                expandPointInstancers(child, layer, myPath);
             }
         }
 
         void expandPointInstancersInLayer(tinyusdz::Layer& layer) {
             for (auto& [name, ps] : layer.primspecs()) {
-                expandPointInstancers(ps);
+                expandPointInstancers(ps, layer, "");
+            }
+        }
+
+        // ----------------------------------------------------------------------
+        // Variant selection. tinyusdz's composition leaves `variantSet` blocks
+        // unresolved on the layer — meaning if a `material:binding` rel only
+        // exists inside a `"Black" { over Render { rel ... } }` variant block,
+        // the live PrimSpec for Render is missing it. We apply selections
+        // ourselves: for each prim with a `variants = {…}` selection and a
+        // matching `variantSet`, merge the selected variant's child opinions
+        // into the prim. The variant block is the stronger opinion, so its
+        // properties win on conflict; typeName/Def specifier from the existing
+        // (def-typed) prim is preserved.
+        // ----------------------------------------------------------------------
+
+        void mergeVariantInto(tinyusdz::PrimSpec& dst, const tinyusdz::PrimSpec& src) {
+            using tinyusdz::Specifier;
+
+            // Properties: variant (src) is the stronger opinion.
+            for (const auto& [k, v] : src.props()) {
+                dst.props()[k] = v;
+            }
+
+            // typeName / specifier: don't let an `over`-style variant prim
+            // demote a `def Mesh ...`. Existing typeName + Def survive.
+            if (dst.typeName().empty() && !src.typeName().empty()) {
+                dst.typeName() = src.typeName();
+            }
+            if (dst.specifier() == Specifier::Over && src.specifier() == Specifier::Def) {
+                dst.specifier() = Specifier::Def;
+            }
+
+            // Children: recurse by name; new ones get appended.
+            for (const auto& srcChild : src.children()) {
+                auto it = std::find_if(dst.children().begin(), dst.children().end(),
+                    [&](const tinyusdz::PrimSpec& d) { return d.name() == srcChild.name(); });
+                if (it != dst.children().end()) {
+                    mergeVariantInto(*it, srcChild);
+                } else {
+                    dst.children().push_back(srcChild);
+                }
+            }
+        }
+
+        void applyVariantsRec(tinyusdz::PrimSpec& ps) {
+            if (ps.metas().variants && !ps.variantSets().empty()) {
+                for (const auto& [vsname, selection] : ps.metas().variants.value()) {
+                    auto vsIt = ps.variantSets().find(vsname);
+                    if (vsIt == ps.variantSets().end()) continue;
+                    auto vIt = vsIt->second.variantSet.find(selection);
+                    if (vIt == vsIt->second.variantSet.end()) continue;
+                    mergeVariantInto(ps, vIt->second);
+                }
+            }
+            for (auto& child : ps.children()) {
+                applyVariantsRec(child);
+            }
+        }
+
+        void applyVariantsInLayer(tinyusdz::Layer& layer) {
+            for (auto& [name, ps] : layer.primspecs()) {
+                applyVariantsRec(ps);
             }
         }
 
@@ -333,8 +489,18 @@ namespace threepp {
             geometry->setAttribute("position",
                     FloatBufferAttribute::create(std::move(pos), 3));
 
-            // Copy indices (uint32 → unsigned int, same size on all modern targets)
+            // Copy indices (uint32 → unsigned int, same size on all modern targets).
+            // USD meshes default to `orientation = "rightHanded"` (CCW front
+            // faces, matches three.js). When a mesh declares `leftHanded` the
+            // triangle winding is reversed; flip every triangle so we don't
+            // render its faces from the back (which makes lit metals look
+            // black under direct lighting).
             std::vector<unsigned int> indices(idxBuf.begin(), idxBuf.end());
+            if (!rm.is_rightHanded) {
+                for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+                    std::swap(indices[i + 1], indices[i + 2]);
+                }
+            }
             geometry->setIndex(indices);
 
             // Normals
@@ -527,6 +693,7 @@ namespace threepp {
                                    "inputs:Diffuse_Texture",
                                    "inputs:Albedo_Texture",
                                    "inputs:BaseColor_Texture"})) {
+                t->colorSpace = ColorSpace::sRGB;
                 mat->map = t; anyTex = true;
             }
             // Normal map (linear, no flip needed for tangent-space normals)
@@ -561,6 +728,7 @@ namespace threepp {
             if (auto t = tryFirst({"inputs:emissive_texture",
                                    "inputs:Emissive_Texture",
                                    "inputs:Emission_Texture"})) {
+                t->colorSpace = ColorSpace::sRGB;
                 mat->emissiveMap = t; anyTex = true;
             }
 
@@ -768,34 +936,33 @@ namespace threepp {
                     containsCI(sname, "BaseColorTex") ||
                     containsCI(sname, "AlbedoTex")) {
                     if (!mat->map) {
-                        mat->map = texLoader.load(path, true);
+                        auto t = texLoader.load(path, ColorSpace::sRGB, true);
+                        mat->map = t;
                         anyTex = true;
                     }
                 } else if (containsCI(sname, "NormalTex")) {
                     if (!mat->normalMap) {
-                        auto t = texLoader.load(path, false);
-                        if (t) t->colorSpace = ColorSpace::Linear;
+                        auto t = texLoader.load(path, ColorSpace::Linear, false);
                         mat->normalMap = t;
                         anyTex = true;
                     }
                 } else if (containsCI(sname, "RoughnessTex")) {
                     if (!mat->roughnessMap) {
-                        auto t = texLoader.load(path, false);
-                        if (t) t->colorSpace = ColorSpace::Linear;
+                        auto t = texLoader.load(path, ColorSpace::Linear, false);
                         mat->roughnessMap = t;
                         anyTex = true;
                     }
                 } else if (containsCI(sname, "MetallicTex")) {
                     if (!mat->metalnessMap) {
-                        auto t = texLoader.load(path, false);
-                        if (t) t->colorSpace = ColorSpace::Linear;
+                        auto t = texLoader.load(path, ColorSpace::Linear, false);
                         mat->metalnessMap = t;
                         anyTex = true;
                     }
                 } else if (containsCI(sname, "EmissiveColorTex") ||
                            containsCI(sname, "EmissionTex")) {
                     if (!mat->emissiveMap) {
-                        mat->emissiveMap = texLoader.load(path, true);
+                        auto t = texLoader.load(path, ColorSpace::sRGB, true);
+                        mat->emissiveMap = t;
                         anyTex = true;
                     }
                 }
@@ -834,6 +1001,424 @@ namespace threepp {
         }
 
         // -----------------------------------------------------------------------
+        // Minimal MaterialX (.mtlx) reader.
+        //
+        // tinyusdz only knows how to load a .mtlx whose root prim path is
+        // exactly `</MaterialX>`; real-world references like the OpenChessSet's
+        // `</MaterialX/Materials>` cause CompositeReferences to bail out and
+        // leave the bound Material prim empty. We work around this by parsing
+        // the .mtlx ourselves (XML) and extracting just the texture file paths
+        // for `base_color` / `metalness` / `specular_roughness` / `normal` —
+        // enough to populate a MeshStandardMaterial.
+        //
+        // Scope: the chess-set / standard_surface / nodegraph / image /
+        // normalmap pattern. Not a general MaterialX implementation.
+        // -----------------------------------------------------------------------
+
+        struct MtlxElem {
+            std::string name;
+            std::map<std::string, std::string> attrs;
+            std::vector<MtlxElem> children;
+
+            const std::string* attr(const std::string& k) const {
+                auto it = attrs.find(k);
+                return it == attrs.end() ? nullptr : &it->second;
+            }
+            std::string attrOr(const std::string& k) const {
+                auto p = attr(k);
+                return p ? *p : std::string();
+            }
+        };
+
+        // Skip whitespace, XML declaration, comments.
+        size_t mtlxSkipWS(const std::string& s, size_t i) {
+            while (i < s.size()) {
+                if (std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+                else if (s.compare(i, 4, "<!--") == 0) {
+                    auto e = s.find("-->", i);
+                    i = (e == std::string::npos) ? s.size() : e + 3;
+                }
+                else if (s.compare(i, 5, "<?xml") == 0) {
+                    auto e = s.find("?>", i);
+                    i = (e == std::string::npos) ? s.size() : e + 2;
+                }
+                else break;
+            }
+            return i;
+        }
+
+        bool mtlxParseElem(const std::string& s, size_t& i, MtlxElem& out) {
+            if (i >= s.size() || s[i] != '<') return false;
+            ++i;
+            const auto nameStart = i;
+            while (i < s.size() &&
+                   (std::isalnum(static_cast<unsigned char>(s[i])) ||
+                    s[i] == '_' || s[i] == '-' || s[i] == ':')) ++i;
+            out.name = s.substr(nameStart, i - nameStart);
+
+            // Attributes
+            while (i < s.size()) {
+                i = mtlxSkipWS(s, i);
+                if (i >= s.size()) return false;
+                if (s[i] == '/' && i + 1 < s.size() && s[i + 1] == '>') {
+                    i += 2;
+                    return true;  // self-closing, no children
+                }
+                if (s[i] == '>') { ++i; break; }
+                const auto aStart = i;
+                while (i < s.size() &&
+                       (std::isalnum(static_cast<unsigned char>(s[i])) ||
+                        s[i] == '_' || s[i] == '-' || s[i] == ':')) ++i;
+                std::string aName = s.substr(aStart, i - aStart);
+                i = mtlxSkipWS(s, i);
+                if (i >= s.size() || s[i] != '=') return false;
+                ++i;
+                i = mtlxSkipWS(s, i);
+                if (i >= s.size() || s[i] != '"') return false;
+                ++i;
+                const auto vStart = i;
+                while (i < s.size() && s[i] != '"') ++i;
+                out.attrs[aName] = s.substr(vStart, i - vStart);
+                if (i < s.size()) ++i;
+            }
+
+            // Children up to </name>
+            while (i < s.size()) {
+                i = mtlxSkipWS(s, i);
+                if (i >= s.size()) return false;
+                if (s.compare(i, 2, "</") == 0) {
+                    i += 2;
+                    while (i < s.size() && s[i] != '>') ++i;
+                    if (i < s.size()) ++i;
+                    return true;
+                }
+                if (s[i] == '<') {
+                    MtlxElem child;
+                    if (!mtlxParseElem(s, i, child)) return false;
+                    out.children.push_back(std::move(child));
+                } else {
+                    ++i;  // stray text
+                }
+            }
+            return true;
+        }
+
+        bool mtlxParseRoot(const std::string& src, MtlxElem& root) {
+            size_t i = mtlxSkipWS(src, 0);
+            return mtlxParseElem(src, i, root);
+        }
+
+        // Maps assembled from a parsed .mtlx file. Allows resolving from a
+        // surfacematerial name down to the texture file path for each input.
+        struct MtlxMaps {
+            std::map<std::string, std::string> imageFile;       // image name -> filename attr
+            std::map<std::string, std::string> normalmapToImg;  // normalmap name -> input image name
+            std::map<std::pair<std::string, std::string>, std::string> outputs;  // (ng, output) -> source node
+            struct ShaderInput {
+                std::string ng;
+                std::string output;
+                std::string value;
+            };
+            std::map<std::pair<std::string, std::string>, ShaderInput> shaderInputs;  // (shader, input) -> SI
+            std::map<std::string, std::string> matToShader;     // M_NAME -> standard_surface name
+        };
+
+        MtlxMaps buildMtlxMaps(const MtlxElem& root) {
+            MtlxMaps m;
+            if (root.name != "materialx") return m;
+            for (const auto& top : root.children) {
+                if (top.name == "nodegraph") {
+                    const std::string ng = top.attrOr("name");
+                    for (const auto& c : top.children) {
+                        if (c.name == "image") {
+                            const std::string n = c.attrOr("name");
+                            for (const auto& cc : c.children) {
+                                if (cc.name == "input" && cc.attrOr("name") == "file") {
+                                    m.imageFile[n] = cc.attrOr("value");
+                                    break;
+                                }
+                            }
+                        } else if (c.name == "normalmap") {
+                            const std::string n = c.attrOr("name");
+                            for (const auto& cc : c.children) {
+                                if (cc.name == "input" && cc.attrOr("name") == "in") {
+                                    m.normalmapToImg[n] = cc.attrOr("nodename");
+                                    break;
+                                }
+                            }
+                        } else if (c.name == "output") {
+                            m.outputs[{ng, c.attrOr("name")}] = c.attrOr("nodename");
+                        }
+                    }
+                } else if (top.name == "standard_surface") {
+                    const std::string ss = top.attrOr("name");
+                    for (const auto& c : top.children) {
+                        if (c.name == "input") {
+                            MtlxMaps::ShaderInput si{c.attrOr("nodegraph"),
+                                                     c.attrOr("output"),
+                                                     c.attrOr("value")};
+                            m.shaderInputs[{ss, c.attrOr("name")}] = si;
+                        }
+                    }
+                } else if (top.name == "surfacematerial") {
+                    const std::string mat = top.attrOr("name");
+                    for (const auto& c : top.children) {
+                        if (c.name == "input" && c.attrOr("name") == "surfaceshader") {
+                            m.matToShader[mat] = c.attrOr("nodename");
+                            break;
+                        }
+                    }
+                }
+            }
+            return m;
+        }
+
+        // Resolve a single shader input chain (input -> nodegraph output -> source node -> image file).
+        std::string resolveMtlxInput(const MtlxMaps& m,
+                                     const std::string& shader,
+                                     const std::string& input) {
+            auto itI = m.shaderInputs.find({shader, input});
+            if (itI == m.shaderInputs.end()) return {};
+            const auto& si = itI->second;
+            if (si.ng.empty() || si.output.empty()) return {};
+            auto itO = m.outputs.find({si.ng, si.output});
+            if (itO == m.outputs.end()) return {};
+            std::string node = itO->second;
+            // Follow normalmap → image
+            if (auto itN = m.normalmapToImg.find(node); itN != m.normalmapToImg.end()) {
+                node = itN->second;
+            }
+            auto itImg = m.imageFile.find(node);
+            if (itImg == m.imageFile.end()) return {};
+            return itImg->second;
+        }
+
+        // Direct-value getter for a shader input (e.g. `base_color = "1, 1, 1"`).
+        // Returns the raw `value=` attribute text or empty.
+        std::string resolveMtlxConstant(const MtlxMaps& m,
+                                        const std::string& shader,
+                                        const std::string& input) {
+            auto it = m.shaderInputs.find({shader, input});
+            if (it == m.shaderInputs.end()) return {};
+            return it->second.value;
+        }
+
+        // Parse a comma-separated MaterialX color3 / vector3 / float-tuple.
+        // "1, 1, 0.828" -> {1, 1, 0.828}. Returns false on parse failure.
+        bool parseMtlxFloatTuple(const std::string& s, std::vector<float>& out) {
+            out.clear();
+            std::string cur;
+            for (char c : s) {
+                if (c == ',' || std::isspace(static_cast<unsigned char>(c))) {
+                    if (!cur.empty()) { out.push_back(std::stof(cur)); cur.clear(); }
+                } else {
+                    cur.push_back(c);
+                }
+            }
+            if (!cur.empty()) out.push_back(std::stof(cur));
+            return !out.empty();
+        }
+
+        // Build a MeshStandardMaterial from a .mtlx file by surfacematerial
+        // name (e.g. "M_King_B").
+        std::shared_ptr<MeshStandardMaterial> materialFromMtlxFile(
+                const std::filesystem::path& mtlxFile,
+                const std::string& materialName,
+                TextureLoader& texLoader) {
+
+            std::ifstream f(mtlxFile, std::ios::binary);
+            if (!f) return nullptr;
+            std::stringstream ss;
+            ss << f.rdbuf();
+            const std::string src = ss.str();
+
+            MtlxElem root;
+            if (!mtlxParseRoot(src, root)) return nullptr;
+            const MtlxMaps m = buildMtlxMaps(root);
+
+            auto itMS = m.matToShader.find(materialName);
+            if (itMS == m.matToShader.end()) return nullptr;
+            const std::string& shader = itMS->second;
+
+            const std::filesystem::path mtlxDir = mtlxFile.parent_path();
+            auto resolveRel = [&](const std::string& rel) -> std::filesystem::path {
+                if (rel.empty()) return {};
+                std::filesystem::path p = mtlxDir / rel;
+                return std::filesystem::exists(p) ? p : std::filesystem::path{};
+            };
+
+            auto baseColorPath = resolveRel(resolveMtlxInput(m, shader, "base_color"));
+            auto metalnessPath = resolveRel(resolveMtlxInput(m, shader, "metalness"));
+            auto roughnessPath = resolveRel(resolveMtlxInput(m, shader, "specular_roughness"));
+            auto normalPath    = resolveRel(resolveMtlxInput(m, shader, "normal"));
+
+            // Constant-value fallbacks for shaders that don't bind a texture
+            // (e.g. the OpenChessSet pawn `Top` uses base_color=(1,1,1) plus
+            // a transmission_color tint to fake tinted glass — no diffuse map).
+            std::vector<float> baseColorConst, transmissionColorConst;
+            float transmissionConst = 0.f;
+            float metalnessConst = -1.f;
+            float roughnessConst = -1.f;
+            try {
+                if (auto v = resolveMtlxConstant(m, shader, "base_color"); !v.empty())
+                    parseMtlxFloatTuple(v, baseColorConst);
+                if (auto v = resolveMtlxConstant(m, shader, "transmission_color"); !v.empty())
+                    parseMtlxFloatTuple(v, transmissionColorConst);
+                if (auto v = resolveMtlxConstant(m, shader, "transmission"); !v.empty()) {
+                    std::vector<float> t; parseMtlxFloatTuple(v, t);
+                    if (!t.empty()) transmissionConst = t[0];
+                }
+                if (auto v = resolveMtlxConstant(m, shader, "metalness"); !v.empty()) {
+                    std::vector<float> t; parseMtlxFloatTuple(v, t);
+                    if (!t.empty()) metalnessConst = t[0];
+                }
+                if (auto v = resolveMtlxConstant(m, shader, "specular_roughness"); !v.empty()) {
+                    std::vector<float> t; parseMtlxFloatTuple(v, t);
+                    if (!t.empty()) roughnessConst = t[0];
+                }
+            } catch (...) {
+                // Best-effort numeric parse; ignore malformed values.
+            }
+
+            const bool hasAnyTexture =
+                !baseColorPath.empty() || !metalnessPath.empty() ||
+                !roughnessPath.empty() || !normalPath.empty();
+            const bool hasAnyConstant =
+                baseColorConst.size() >= 3 || metalnessConst >= 0.f ||
+                roughnessConst >= 0.f || transmissionColorConst.size() >= 3;
+
+            if (!hasAnyTexture && !hasAnyConstant) {
+                return nullptr;
+            }
+
+            auto mat = MeshStandardMaterial::create();
+            if (!baseColorPath.empty()) {
+                mat->map = texLoader.load(baseColorPath, ColorSpace::sRGB, true);
+            } else if (baseColorConst.size() >= 3) {
+                // Fold transmission_color into the base color for glass-like
+                // materials (we render via the standard non-transmissive lobe,
+                // so the tint shows up as plain diffuse).
+                float r = baseColorConst[0], g = baseColorConst[1], b = baseColorConst[2];
+                if (transmissionConst > 0.f && transmissionColorConst.size() >= 3) {
+                    r *= transmissionColorConst[0];
+                    g *= transmissionColorConst[1];
+                    b *= transmissionColorConst[2];
+                }
+                mat->color.setRGB(r, g, b);
+                if (transmissionConst > 0.f) {
+                    // Approximate the glass tint by making the material slightly
+                    // transparent — the standard material can't refract, but this
+                    // hints at the look.
+                    mat->transparent = true;
+                    mat->opacity = 1.f - 0.3f * transmissionConst;
+                }
+            }
+            if (!metalnessPath.empty()) {
+                mat->metalnessMap = texLoader.load(metalnessPath, ColorSpace::Linear, false);
+            } else if (metalnessConst >= 0.f) {
+                mat->metalness = metalnessConst;
+            }
+            if (!roughnessPath.empty()) {
+                mat->roughnessMap = texLoader.load(roughnessPath, ColorSpace::Linear, false);
+            } else if (roughnessConst >= 0.f) {
+                mat->roughness = roughnessConst;
+            }
+            if (!normalPath.empty()) {
+                mat->normalMap = texLoader.load(normalPath, ColorSpace::Linear, false);
+            }
+            return mat;
+        }
+
+        // Locate a .mtlx reference on `spec` and return the resolved absolute
+        // file path. Looks at `references` metadata for any asset whose path
+        // ends in .mtlx.
+        std::filesystem::path findMtlxRefOnSpec(
+                const tinyusdz::PrimSpec& spec,
+                const std::filesystem::path& baseDir,
+                const tinyusdz::AssetResolutionResolver& resolver) {
+
+            if (!spec.metas().references) return {};
+            std::filesystem::path cwp = spec.get_current_working_path().empty()
+                ? baseDir
+                : std::filesystem::path(spec.get_current_working_path());
+            for (const auto& ref : spec.metas().references->second) {
+                std::string raw = ref.asset_path.GetAssetPath();
+                if (raw.empty()) continue;
+                auto dot = raw.rfind('.');
+                if (dot == std::string::npos) continue;
+                std::string ext = raw.substr(dot);
+                std::transform(ext.begin(), ext.end(), ext.begin(),
+                               [](unsigned char c) { return std::tolower(c); });
+                if (ext != ".mtlx") continue;
+                // Resolve the asset path
+                std::string norm = raw;
+                std::replace(norm.begin(), norm.end(), '\\', '/');
+                std::string rel = norm;
+                if (rel.size() >= 2 && rel[0] == '.' && rel[1] == '/') rel = rel.substr(2);
+                auto cand = cwp / rel;
+                if (std::filesystem::exists(cand)) return cand;
+                cand = baseDir / rel;
+                if (std::filesystem::exists(cand)) return cand;
+                std::string r = resolver.resolve(norm);
+                if (!r.empty() && std::filesystem::exists(r)) return std::filesystem::path(r);
+            }
+            return {};
+        }
+
+        // Top-level MaterialX path: given the raw binding target for a mesh
+        // (e.g. /ChessSet/Black/King/Materials/M_King_B), find the parent
+        // Materials Scope's .mtlx reference and resolve the binding's leaf
+        // name through it. Returns nullptr if not a MaterialX-backed binding.
+        std::shared_ptr<MeshStandardMaterial> materialFromMtlxBinding(
+                const tinyusdz::Layer& layer,
+                const std::string& bindingTargetPath,
+                const std::filesystem::path& baseDir,
+                const tinyusdz::AssetResolutionResolver& resolver,
+                TextureLoader& texLoader) {
+
+            const auto slash = bindingTargetPath.rfind('/');
+            if (slash == std::string::npos || slash == 0) return nullptr;
+            const std::string parentPath = bindingTargetPath.substr(0, slash);
+            const std::string matLeaf = bindingTargetPath.substr(slash + 1);
+            if (matLeaf.empty()) return nullptr;
+
+            const tinyusdz::PrimSpec* parent = nullptr;
+            std::string err;
+            if (!layer.find_primspec_at(tinyusdz::Path(parentPath, ""), &parent, &err) || !parent) {
+                return nullptr;
+            }
+            auto mtlxFile = findMtlxRefOnSpec(*parent, baseDir, resolver);
+            if (mtlxFile.empty()) return nullptr;
+
+            return materialFromMtlxFile(mtlxFile, matLeaf, texLoader);
+        }
+
+        // Walk ancestors of meshAbsPath looking for a `material:binding` rel,
+        // and return its raw target path string. (No resolution attempts.)
+        std::string findRawMaterialBindingForMesh(
+                const tinyusdz::Layer& layer,
+                const std::string& meshAbsPath) {
+            std::string path = meshAbsPath;
+            while (!path.empty()) {
+                const tinyusdz::PrimSpec* spec = nullptr;
+                std::string err;
+                if (layer.find_primspec_at(tinyusdz::Path(path, ""), &spec, &err) && spec) {
+                    auto it = spec->props().find("material:binding");
+                    if (it != spec->props().end() && it->second.is_relationship()) {
+                        const auto& rel = it->second.get_relationship();
+                        if (rel.is_path()) return rel.targetPath.prim_part();
+                        if (rel.is_pathvector() && !rel.targetPathVector.empty())
+                            return rel.targetPathVector[0].prim_part();
+                    }
+                }
+                auto sp = path.rfind('/');
+                if (sp == 0 || sp == std::string::npos) break;
+                path = path.substr(0, sp);
+            }
+            return {};
+        }
+
+        // -----------------------------------------------------------------------
         // Material
         // -----------------------------------------------------------------------
 
@@ -854,31 +1439,43 @@ namespace threepp {
                 return texCache[texId];
             };
 
-            // diffuseColor / map
+            // diffuseColor / map (sRGB so the shader decodes the .jpg/.png).
             if (shader.diffuseColor.is_texture()) {
-                mat->map = getTex(shader.diffuseColor.texture_id);
+                if (auto t = getTex(shader.diffuseColor.texture_id)) {
+                    t->colorSpace = ColorSpace::sRGB;
+                    mat->map = t;
+                }
             } else {
                 const auto& c = shader.diffuseColor.value;
                 mat->color.setRGB(c[0], c[1], c[2]);
             }
 
-            // roughness
+            // roughness (linear data).
             if (shader.roughness.is_texture()) {
-                mat->roughnessMap = getTex(shader.roughness.texture_id);
+                if (auto t = getTex(shader.roughness.texture_id)) {
+                    t->colorSpace = ColorSpace::Linear;
+                    mat->roughnessMap = t;
+                }
             } else {
                 mat->roughness = shader.roughness.value;
             }
 
-            // metallic
+            // metallic (linear data).
             if (shader.metallic.is_texture()) {
-                mat->metalnessMap = getTex(shader.metallic.texture_id);
+                if (auto t = getTex(shader.metallic.texture_id)) {
+                    t->colorSpace = ColorSpace::Linear;
+                    mat->metalnessMap = t;
+                }
             } else {
                 mat->metalness = shader.metallic.value;
             }
 
-            // emissiveColor
+            // emissiveColor (sRGB).
             if (shader.emissiveColor.is_texture()) {
-                mat->emissiveMap = getTex(shader.emissiveColor.texture_id);
+                if (auto t = getTex(shader.emissiveColor.texture_id)) {
+                    t->colorSpace = ColorSpace::sRGB;
+                    mat->emissiveMap = t;
+                }
             } else {
                 const auto& e = shader.emissiveColor.value;
                 mat->emissive.setRGB(e[0], e[1], e[2]);
@@ -893,9 +1490,12 @@ namespace threepp {
                 }
             }
 
-            // occlusion → aoMap
+            // occlusion → aoMap (linear data).
             if (shader.occlusion.is_texture()) {
-                mat->aoMap = getTex(shader.occlusion.texture_id);
+                if (auto t = getTex(shader.occlusion.texture_id)) {
+                    t->colorSpace = ColorSpace::Linear;
+                    mat->aoMap = t;
+                }
             }
 
             // opacity
@@ -1067,6 +1667,12 @@ namespace threepp {
                 if (!progressed) break;
             }
 
+            // Apply variant selections before tydra runs. tinyusdz leaves
+            // `variantSet` blocks unevaluated; meshes whose `material:binding`
+            // only exists inside the selected variant (e.g. King's "Black"
+            // block) show up unbound otherwise.
+            applyVariantsInLayer(layer);
+
             // Expand PointInstancer prims into N instance Xforms so tydra
             // traverses them. Done after composition so referenced/payloaded
             // prototypes are present.
@@ -1174,6 +1780,12 @@ namespace threepp {
                         [&](const tinyusdz::tydra::Node& n) {
                             if (n.nodeType == tinyusdz::tydra::NodeType::Mesh &&
                                 !n.abs_path.empty()) {
+                                std::shared_ptr<MeshStandardMaterial> mat;
+
+                                // 1. Standard MDL / UsdPreviewSurface flow:
+                                //    findMaterialBindingInLayer resolves the
+                                //    binding to an existing Material PrimSpec,
+                                //    then materialFromMDLLayer extracts inputs.
                                 const std::string matPath =
                                     findMaterialBindingInLayer(*layer, n.abs_path);
                                 if (!matPath.empty()) {
@@ -1185,9 +1797,32 @@ namespace threepp {
                                         cit = matPathCache.emplace(matPath,
                                                                     std::move(mdlMat)).first;
                                     }
-                                    if (cit->second)
-                                        meshPathMdlMap[n.abs_path] = cit->second;
+                                    mat = cit->second;
                                 }
+
+                                // 2. MaterialX fallback: if the binding's
+                                //    target prim doesn't exist (typical when
+                                //    the parent Materials Scope references a
+                                //    .mtlx file that tinyusdz couldn't fully
+                                //    compose), try parsing the .mtlx ourselves.
+                                if (!mat) {
+                                    const std::string raw =
+                                        findRawMaterialBindingForMesh(*layer, n.abs_path);
+                                    if (!raw.empty()) {
+                                        const std::string key = "MTLX:" + raw;
+                                        auto cit = matPathCache.find(key);
+                                        if (cit == matPathCache.end()) {
+                                            auto mtlxMat = materialFromMtlxBinding(
+                                                *layer, raw, baseDir,
+                                                env.asset_resolver, texLoader);
+                                            cit = matPathCache.emplace(key,
+                                                                       std::move(mtlxMat)).first;
+                                        }
+                                        mat = cit->second;
+                                    }
+                                }
+
+                                if (mat) meshPathMdlMap[n.abs_path] = mat;
                             }
                             for (const auto& c : n.children) buildMap(c);
                         };

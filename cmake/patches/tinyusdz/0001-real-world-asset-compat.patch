@@ -1,8 +1,28 @@
 diff --git a/src/composition.cc b/src/composition.cc
-index b8935d24..059c59e0 100644
+index b8935d24..7a12e838 100644
 --- a/src/composition.cc
 +++ b/src/composition.cc
-@@ -390,6 +390,36 @@ bool LoadAsset(AssetResolutionResolver &resolver,
+@@ -186,6 +186,19 @@ bool ReplaceRootPrimPathRec(
+     }
+   }
+ 
++  // VariantSet contents must also have their absolute path references
++  // rewritten. Without this, a `material:binding = </Foo/Bar>` declared
++  // inside a `variantSet "shadingVariant" = { "Black" { … } }` block
++  // survives composition unchanged and points at /Foo/Bar in the source
++  // namespace rather than the final composed namespace.
++  for (auto &vs : ps.variantSets()) {
++    for (auto &kv : vs.second.variantSet) {
++      if (!ReplaceRootPrimPathRec(depth + 1, srcPrefix, dstPrefix, kv.second, warn, err)) {
++        return false;
++      }
++    }
++  }
++
+   return true;
+ }
+ 
+@@ -390,6 +403,36 @@ bool LoadAsset(AssetResolutionResolver &resolver,
  
    DCOUT("layer = " << print_layer(layer, 0));
  
@@ -39,7 +59,7 @@ index b8935d24..059c59e0 100644
    // TODO: Recursively resolve `references`
  
    if (_warn.size()) {
-@@ -473,6 +503,19 @@ bool CombinePrimSpecRec(uint32_t depth, PrimSpec &dst, const PrimSpec &src, std:
+@@ -473,6 +516,19 @@ bool CombinePrimSpecRec(uint32_t depth, PrimSpec &dst, const PrimSpec &src, std:
      PUSH_ERROR_AND_RETURN("PrimSpec tree too deep.");
    }
  
@@ -58,6 +78,36 @@ index b8935d24..059c59e0 100644
 +
    // Combine metadataum
    dst.metas().update_from(src.metas(), false);
+ 
+@@ -502,6 +558,29 @@ bool CombinePrimSpecRec(uint32_t depth, PrimSpec &dst, const PrimSpec &src, std:
+     }
+   }
+ 
++  // Combine variantSets. Without this, a `variantSet "shadingVariant" = {…}`
++  // declared in a stronger sublayer (e.g. *_look.usd) is silently dropped
++  // when merged onto the same prim in a weaker sublayer (e.g. *_geom.usd),
++  // and downstream variant-selection processing finds nothing to apply.
++  for (const auto &vs : src.variantSets()) {
++    auto it = dst.variantSets().find(vs.first);
++    if (it == dst.variantSets().end()) {
++      dst.variantSets()[vs.first] = vs.second;
++    } else {
++      // Same variantSet name on both sides: merge per-variant content.
++      for (const auto &kv : vs.second.variantSet) {
++        auto vIt = it->second.variantSet.find(kv.first);
++        if (vIt == it->second.variantSet.end()) {
++          it->second.variantSet[kv.first] = kv.second;
++        } else {
++          if (!CombinePrimSpecRec(depth + 1, vIt->second, kv.second, warn, err)) {
++            return false;
++          }
++        }
++      }
++    }
++  }
++
+   return true;
+ }
  
 diff --git a/src/crate-format.hh b/src/crate-format.hh
 index 6646e5a5..b1d2c022 100644
