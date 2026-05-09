@@ -687,11 +687,161 @@ namespace threepp {
                         texPath = rawId;
                     }
                 }
-                if (!std::filesystem::exists(texPath))
-                    continue;
-
                 const bool flipY = true;
-                cache[ti] = texLoader.load(texPath, flipY);
+                std::shared_ptr<Texture> tex;
+                if (std::filesystem::exists(texPath)) {
+                    tex = texLoader.load(texPath, flipY);
+                } else if (img.buffer_id >= 0 &&
+                           img.buffer_id < static_cast<int64_t>(scene.buffers.size())) {
+                    // .usdz textures live inside the zip; tinyusdz stores them
+                    // in `scene.buffers[image.buffer_id]`. tydra's USDZAsset
+                    // resolver normally decodes them ahead of time, so we get
+                    // raw RGBA pixel rows in `buf.data`. Fall back to
+                    // loadFromMemory for the un-decoded case (encoded
+                    // JPEG/PNG bytes).
+                    const auto& buf = scene.buffers[img.buffer_id];
+                    if (!buf.data.empty()) {
+                        if (img.decoded && img.width > 0 && img.height > 0 && img.channels > 0) {
+                            // tinyusdz mis-tags the component type for some
+                            // .usdz pipelines (reports UInt8 but stores RGBA
+                            // float32). Detect bytes-per-component from the
+                            // actual buffer size and convert to UInt8 so
+                            // threepp's Texture sees standard RGBA8 — reading
+                            // the bytes as uint8 directly produces garbled
+                            // noise (the chevron-pattern carbon weave).
+                            const size_t numComponents =
+                                static_cast<size_t>(img.width) *
+                                static_cast<size_t>(img.height) *
+                                static_cast<size_t>(img.channels);
+                            const size_t bytesPerComponent =
+                                numComponents > 0 ? buf.data.size() / numComponents : 1;
+                            const size_t srcRowBytes =
+                                static_cast<size_t>(img.width) *
+                                static_cast<size_t>(img.channels) *
+                                bytesPerComponent;
+                            const size_t srcExpected =
+                                srcRowBytes * static_cast<size_t>(img.height);
+
+                            if (buf.data.size() >= srcExpected) {
+                                const size_t dstRowBytes =
+                                    static_cast<size_t>(img.width) *
+                                    static_cast<size_t>(img.channels);
+                                std::vector<unsigned char> pixels(
+                                    dstRowBytes * static_cast<size_t>(img.height));
+
+                                auto copyAndConvertRow = [&](size_t srcRow, size_t dstRow) {
+                                    const unsigned char* src = buf.data.data() + srcRow * srcRowBytes;
+                                    unsigned char*       dst = pixels.data() + dstRow * dstRowBytes;
+                                    const size_t rowComponents =
+                                        static_cast<size_t>(img.width) *
+                                        static_cast<size_t>(img.channels);
+                                    if (bytesPerComponent == 4) {
+                                        // RGBA float32 → uint8 (clamp [0,1] → 0..255).
+                                        const float* fsrc = reinterpret_cast<const float*>(src);
+                                        for (size_t k = 0; k < rowComponents; ++k) {
+                                            float v = fsrc[k];
+                                            if (v < 0.f) v = 0.f;
+                                            if (v > 1.f) v = 1.f;
+                                            dst[k] = static_cast<unsigned char>(v * 255.f + 0.5f);
+                                        }
+                                    } else if (bytesPerComponent == 2) {
+                                        // RGBA uint16 → uint8 (drop low byte).
+                                        const uint16_t* hsrc = reinterpret_cast<const uint16_t*>(src);
+                                        for (size_t k = 0; k < rowComponents; ++k) {
+                                            dst[k] = static_cast<unsigned char>(hsrc[k] >> 8);
+                                        }
+                                    } else if (bytesPerComponent == 1) {
+                                        std::memcpy(dst, src, rowComponents);
+                                    } else {
+                                        std::memset(dst, 0, rowComponents);
+                                    }
+                                };
+
+                                // tinyusdz hands us top-down rows (stb-style);
+                                // threepp/GL with flipY=true expects bottom-up.
+                                for (int y = 0; y < img.height; ++y) {
+                                    const int srcY = flipY ? (img.height - 1 - y) : y;
+                                    copyAndConvertRow(static_cast<size_t>(srcY),
+                                                      static_cast<size_t>(y));
+                                }
+                                Image image(std::move(pixels),
+                                            static_cast<unsigned int>(img.width),
+                                            static_cast<unsigned int>(img.height));
+                                tex = Texture::create(image);
+                                tex->name = rawId;
+                                tex->format = (img.channels == 4) ? Format::RGBA : Format::RGB;
+                                tex->needsUpdate();
+                            }
+                        } else {
+                            // Encoded JPEG/PNG bytes — let TextureLoader sniff
+                            // the format and decode.
+                            tex = texLoader.loadFromMemory(rawId, buf.data, flipY);
+                        }
+                    }
+                }
+                if (!tex) continue;
+
+                if (tex) {
+                    // Map tinyusdz wrap modes onto threepp wrap modes.
+                    auto mapWrap = [](tinyusdz::tydra::UVTexture::WrapMode w) {
+                        using W = tinyusdz::tydra::UVTexture::WrapMode;
+                        switch (w) {
+                            case W::REPEAT:           return TextureWrapping::Repeat;
+                            case W::MIRROR:           return TextureWrapping::MirroredRepeat;
+                            case W::CLAMP_TO_BORDER:  return TextureWrapping::ClampToEdge;
+                            case W::CLAMP_TO_EDGE:
+                            default:                  return TextureWrapping::ClampToEdge;
+                        }
+                    };
+
+                    // Apply UsdTransform2d when authored, plus per-UVTexture
+                    // wrap mode. The texLoader caches by file path, so
+                    // multiple UVTextures sharing an image otherwise share
+                    // the SAME Texture object; clone before mutating
+                    // per-UVTexture state so transform/wrap don't leak.
+                    const bool hasXform = uvtex.has_transform2d;
+                    const bool wantRepeat =
+                        uvtex.wrapS == tinyusdz::tydra::UVTexture::WrapMode::REPEAT ||
+                        uvtex.wrapT == tinyusdz::tydra::UVTexture::WrapMode::REPEAT ||
+                        uvtex.wrapS == tinyusdz::tydra::UVTexture::WrapMode::MIRROR ||
+                        uvtex.wrapT == tinyusdz::tydra::UVTexture::WrapMode::MIRROR ||
+                        // UsdTransform2d with scale != 1 implies the artist
+                        // wants tiling; default-clamp would defeat it.
+                        (hasXform && (uvtex.tx_scale[0] != 1.f || uvtex.tx_scale[1] != 1.f));
+
+                    if (hasXform || wantRepeat) {
+                        auto cloned = tex->clone();
+                        cloned->wrapS = mapWrap(uvtex.wrapS);
+                        cloned->wrapT = mapWrap(uvtex.wrapT);
+                        if (wantRepeat) {
+                            // Force repeat so tiling actually shows when the
+                            // wrap was authored as repeat OR the transform
+                            // implies tiling.
+                            if (cloned->wrapS == TextureWrapping::ClampToEdge)
+                                cloned->wrapS = TextureWrapping::Repeat;
+                            if (cloned->wrapT == TextureWrapping::ClampToEdge)
+                                cloned->wrapT = TextureWrapping::Repeat;
+                        }
+                        if (hasXform) {
+                            // Set the UV matrix directly from tinyusdz's
+                            // pre-computed transform (scale*rotate*translate
+                            // already composed) to avoid any mismatch
+                            // between three.js's offset/repeat/rotation/center
+                            // composition order and USD's. The matrix is
+                            // applied in the shader as `matrix * vec3(uv, 1)`,
+                            // matching USD's UsdTransform2d output.
+                            const auto& T = uvtex.transform.m;
+                            cloned->matrix.set(
+                                T[0][0], T[0][1], T[0][2],
+                                T[1][0], T[1][1], T[1][2],
+                                T[2][0], T[2][1], T[2][2]);
+                            cloned->matrixAutoUpdate = false;
+                        }
+                        tex = cloned;
+                    }
+                }
+
+                cache[ti] = tex;
             }
 
             return cache;
@@ -1720,6 +1870,10 @@ namespace threepp {
     struct USDLoader::Impl {
         TextureLoader texLoader;
         bool ignoreUpDirection = false;
+        // Holds the parsed .usdz zip table during a load; the asset resolver
+        // returned from SetupUSDZAssetResolution holds pointers into this so
+        // it must outlive the ConvertToRenderScene call. Reset on each load.
+        std::unique_ptr<tinyusdz::USDZAsset> _usdzAsset;
 
         std::shared_ptr<Group> load(const std::filesystem::path& path) {
             const std::string pathStr = path.string();
@@ -1742,12 +1896,33 @@ namespace threepp {
             std::string warn, err;
             bool ok;
             if (ext == ".usdz") {
-                // USDZ is a zip; load directly to Stage (self-contained, no external refs)
+                // USDZ is a zip. Load the Stage *and* register the zip's
+                // asset table with our resolver so tinyusdz tydra can pull
+                // texture bytes (`0/texgen_0.jpg` etc) from inside the zip
+                // when ConvertToRenderScene runs. Without this the
+                // RenderScene's TextureImage entries come back with
+                // buffer_id = -1 / no width/height, and downstream
+                // texture loading skips them.
                 tinyusdz::Stage stageDirect;
                 ok = tinyusdz::LoadUSDZFromFile(pathStr, &stageDirect, &warn, &err);
                 if (!ok) {
                     std::cerr << "[USDLoader] Failed to load '" << pathStr << "': " << err << "\n";
                     return nullptr;
+                }
+                // USDZAsset must outlive the load — keep it on this Impl so
+                // pointers held by the resolver remain valid through tydra.
+                _usdzAsset = std::make_unique<tinyusdz::USDZAsset>();
+                std::string zw, ze;
+                if (!tinyusdz::ReadUSDZAssetInfoFromFile(pathStr, _usdzAsset.get(), &zw, &ze)) {
+                    std::cerr << "[USDLoader] ReadUSDZAssetInfoFromFile failed for '"
+                              << pathStr << "': " << ze << "\n";
+                    // Fall through with an empty asset; textures inside the zip
+                    // won't resolve, but geometry still loads.
+                } else {
+                    if (!tinyusdz::SetupUSDZAssetResolution(resolver, _usdzAsset.get())) {
+                        std::cerr << "[USDLoader] SetupUSDZAssetResolution failed for '"
+                                  << pathStr << "'\n";
+                    }
                 }
                 return buildFromStage(stageDirect, pathStr, baseDir, resolver);
             } else {
@@ -1972,44 +2147,6 @@ namespace threepp {
                     for (const auto& n : renderScene.nodes) buildMap(n);
                 }
             }
-
-            // Brief one-line status: how many meshes resolved to a real material
-            // vs. fell through to the default grey fallback.
-            int statTextured = 0, statColored = 0, statFallback = 0, statTinyusdzMat = 0;
-            std::function<void(const tinyusdz::tydra::Node&)> classify =
-                [&](const tinyusdz::tydra::Node& n) {
-                    if (n.nodeType == tinyusdz::tydra::NodeType::Mesh &&
-                        n.id >= 0 && n.id < (int)renderScene.meshes.size()) {
-                        const auto& rm = renderScene.meshes[n.id];
-                        int matId = rm.material_id;
-                        if (!rm.material_subsetMap.empty()) {
-                            const int subId = rm.material_subsetMap.begin()->second.material_id;
-                            if (subId >= 0) matId = subId;
-                        }
-                        std::shared_ptr<MeshStandardMaterial> chosen;
-                        if (auto it = mdlOverrides.find(matId); it != mdlOverrides.end()) {
-                            chosen = it->second;
-                        } else if (auto it = meshPathMdlMap.find(n.abs_path); it != meshPathMdlMap.end()) {
-                            chosen = it->second;
-                        } else if (matId >= 0 && matId < (int)renderScene.materials.size()) {
-                            ++statTinyusdzMat;
-                        } else {
-                            ++statFallback;
-                        }
-                        if (chosen && chosen->map) ++statTextured;
-                        else if (chosen) ++statColored;
-                    }
-                    for (const auto& c : n.children) classify(c);
-                };
-            for (const auto& n : renderScene.nodes) classify(n);
-
-            std::cerr << "[USDLoader] " << pathStr
-                      << " — meshes=" << renderScene.meshes.size()
-                      << " (textured=" << statTextured
-                      << ", color=" << statColored
-                      << ", tinyusdz=" << statTinyusdzMat
-                      << ", fallback=" << statFallback << ")"
-                      << std::endl;
 
             // --- Root group + Z-up correction ---
             // renderScene.meta.upAxis is never populated by ConvertToRenderScene;
