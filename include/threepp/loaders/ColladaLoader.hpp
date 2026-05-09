@@ -15,6 +15,12 @@ namespace threepp {
     public:
         ColladaLoader();
 
+        // When true, the file-level <up_axis> metadata is ignored and the
+        // returned scene is left in its file-native orientation. Use this when
+        // the mesh is being composed into an outer system (URDF/SDF/MJCF) that
+        // owns the coordinate frame.
+        ColladaLoader& setIgnoreUpDirection(bool ignore);
+
         std::shared_ptr<Group> load(const std::filesystem::path& path) override;
 
         ~ColladaLoader() override;

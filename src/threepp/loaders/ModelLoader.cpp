@@ -34,6 +34,7 @@ std::shared_ptr<Group> ModelLoader::load(const std::filesystem::path& path) {
 
     if (ext == ".dae") {
         thread_local ColladaLoader loader;
+        loader.setIgnoreUpDirection(ignoreUpDirection_);
         return loader.load(path);
     }
 
@@ -61,6 +62,7 @@ std::shared_ptr<Group> ModelLoader::load(const std::filesystem::path& path) {
 #ifdef THREEPP_WITH_USD
     if (ext == ".usd" || ext == ".usda" || ext == ".usdc" || ext == ".usdz") {
         thread_local USDLoader loader;
+        loader.setIgnoreUpDirection(ignoreUpDirection_);
         return loader.load(path);
     }
 #endif
@@ -74,4 +76,9 @@ std::shared_ptr<Group> ModelLoader::load(const std::filesystem::path& path) {
 
     std::cerr << "[ModelLoader] Unsupported file extension '" << ext << "'." << std::endl;
     return nullptr;
+}
+
+ModelLoader& ModelLoader::setIgnoreUpDirection(bool ignore) {
+    ignoreUpDirection_ = ignore;
+    return *this;
 }

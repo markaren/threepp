@@ -19,6 +19,12 @@ namespace threepp {
         USDLoader();
         ~USDLoader();
 
+        /// When true, the file-level upAxis metadata is ignored and the
+        /// returned scene is left in its file-native orientation. Use this when
+        /// the mesh is being composed into an outer system (URDF/SDF/MJCF) that
+        /// owns the coordinate frame.
+        USDLoader& setIgnoreUpDirection(bool ignore);
+
         /// Load a USD/USDA/USDC/USDZ file. Returns the scene root only.
         std::shared_ptr<Group> load(const std::filesystem::path& path);
 

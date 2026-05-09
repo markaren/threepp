@@ -1,7 +1,6 @@
 
 #include <iostream>
 #include <threepp/extras/imgui/ImguiContext.hpp>
-#include <threepp/loaders/AssimpLoader.hpp>
 #include <threepp/loaders/URDFLoader.hpp>
 #include <threepp/threepp.hpp>
 
@@ -9,34 +8,33 @@ using namespace threepp;
 
 int main(int argc, char** argv) {
 
-    if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <urdf file>" << std::endl;
-        return 1;
-    }
-
-    std::filesystem::path urdfPath = argv[1];
-    if (!exists(urdfPath)) {
-        std::cerr << "File not found: " << urdfPath << std::endl;
-        return 1;
+    std::filesystem::path urdfPath = std::filesystem::path(DATA_FOLDER) / "urdf" / "lbr_iiwa_14_r820.urdf";
+    if (argc > 1) {
+        urdfPath = argv[1];
+        if (!exists(urdfPath)) {
+            std::cerr << "File not found: " << urdfPath << std::endl;
+            return 1;
+        }
     }
 
     Canvas canvas{"URDF loader", {{"aa", 4}}};
     auto renderer = createRenderer(canvas);
-    renderer->setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
+    scene->background = Color::aliceblue;
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
     camera->position.z = 1;
 
     OrbitControls controls{*camera, canvas};
 
     auto light = HemisphereLight::create(Color::aliceblue, Color::grey);
+    light->intensity = 1.5f;
     scene->add(light);
 
+    auto ambientLight = AmbientLight::create(0xffffff, 0.3f);
+    scene->add(ambientLight);
+
     URDFLoader loader;
-    auto assimpLoader = std::make_shared<AssimpLoader>();
-    assimpLoader->setIgnoreUpDirection(true);
-    loader.setGeometryLoader(assimpLoader);
     auto robot = loader.load(urdfPath);
     robot->rotation.x = -math::PI / 2;
     robot->showColliders(false);

@@ -181,7 +181,11 @@ struct URDFLoader::Impl {
     std::shared_ptr<Loader<Group>> loader;
     std::map<std::string, std::string> xacroArgs;
 
-    Impl(): loader(std::make_shared<ModelLoader>()) {}
+    Impl() {
+        auto ml = std::make_shared<ModelLoader>();
+        ml->setIgnoreUpDirection(true);
+        loader = std::move(ml);
+    }
 
     std::shared_ptr<Robot> load(const std::filesystem::path& path) {
         pugi::xml_document doc;

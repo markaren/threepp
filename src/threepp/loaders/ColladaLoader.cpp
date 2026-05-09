@@ -691,6 +691,8 @@ namespace {
 
 struct ColladaLoader::Impl {
 
+    bool ignoreUpDirection = false;
+
     std::shared_ptr<Group> load(const std::filesystem::path& path) {
         if (!std::filesystem::exists(path)) {
             std::cerr << "[ColladaLoader] No such file: '" << std::filesystem::absolute(path).string() << "'!" << std::endl;
@@ -1016,10 +1018,14 @@ struct ColladaLoader::Impl {
 
         // Apply up-axis conversion so the returned model is Y-up.
         // Collada permits X_UP, Y_UP or Z_UP; three.js/threepp is Y_UP.
-        if (upAxis == "Z_UP") {
-            sceneGroup->rotation.set(-math::PI / 2.f, 0.f, 0.f);
-        } else if (upAxis == "X_UP") {
-            sceneGroup->rotation.set(0.f, 0.f, math::PI / 2.f);
+        // Skipped when this loader is being used by an outer system (URDF/SDF/...)
+        // that owns the coordinate frame.
+        if (!ignoreUpDirection) {
+            if (upAxis == "Z_UP") {
+                sceneGroup->rotation.set(-math::PI / 2.f, 0.f, 0.f);
+            } else if (upAxis == "X_UP") {
+                sceneGroup->rotation.set(0.f, 0.f, math::PI / 2.f);
+            }
         }
 
         // Resolve pending skin bindings now that every joint node exists in nodesById.
@@ -1196,6 +1202,11 @@ struct ColladaLoader::Impl {
 
 ColladaLoader::ColladaLoader()
     : pimpl_(std::make_unique<Impl>()) {}
+
+ColladaLoader& ColladaLoader::setIgnoreUpDirection(bool ignore) {
+    pimpl_->ignoreUpDirection = ignore;
+    return *this;
+}
 
 std::shared_ptr<Group> ColladaLoader::load(const std::filesystem::path& path) {
     return pimpl_->load(path);

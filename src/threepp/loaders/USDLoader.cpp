@@ -510,6 +510,7 @@ namespace threepp {
 
     struct USDLoader::Impl {
         TextureLoader texLoader;
+        bool ignoreUpDirection = false;
 
         std::shared_ptr<Group> load(const std::filesystem::path& path) {
             const std::string pathStr = path.string();
@@ -716,8 +717,10 @@ namespace threepp {
             // --- Root group + Z-up correction ---
             // renderScene.meta.upAxis is never populated by ConvertToRenderScene;
             // read from stage metadata directly.
+            // Skipped when this loader is being used by an outer system (URDF/SDF/...)
+            // that owns the coordinate frame.
             auto root = Group::create();
-            if (stage.metas().upAxis.get_value() == tinyusdz::Axis::Z) {
+            if (!ignoreUpDirection && stage.metas().upAxis.get_value() == tinyusdz::Axis::Z) {
                 root->rotation.x = -math::PI / 2.0f;
             }
 
@@ -737,6 +740,11 @@ namespace threepp {
 
     USDLoader::USDLoader() : pimpl_(std::make_unique<Impl>()) {}
     USDLoader::~USDLoader() = default;
+
+    USDLoader& USDLoader::setIgnoreUpDirection(bool ignore) {
+        pimpl_->ignoreUpDirection = ignore;
+        return *this;
+    }
 
     std::shared_ptr<Group> USDLoader::load(const std::filesystem::path& path) {
         return pimpl_->load(path);
