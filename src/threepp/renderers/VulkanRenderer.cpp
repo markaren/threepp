@@ -9761,10 +9761,14 @@ namespace threepp {
                 check(pr, "vkQueuePresentKHR");
             }
 
-            // Phase 8: cap to keep 1/(N+1) blend in float precision and avoid
-            // overflow in the (prev*N + curr) scaling. ~65k samples is well
-            // beyond visual convergence for direct lighting.
-            if (sampleIndex < 65535u) ++sampleIndex;
+            // Cap to keep `subIdx = sampleIndex * spp + s` (raygen.rgen line ~671)
+            // from overflowing uint32. With spp ≤ 256, cap at 2^24 leaves headroom
+            // (16M·256 ≈ 4G, just under uint32 max). The previous 65535 cap froze
+            // the blue-noise jitter and Halton sequence after ~18 min at 60 fps,
+            // causing the per-pixel FC=4096 running mean to slowly absorb the
+            // single deterministic sample — image visibly resets from converged
+            // toward biased noise. 16M ≈ 75 hours at 60 fps, no longer reachable.
+            if (sampleIndex < (1u << 24)) ++sampleIndex;
 
             currentFrame = (currentFrame + 1) % kFramesInFlight;
         }
