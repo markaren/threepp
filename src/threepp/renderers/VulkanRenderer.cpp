@@ -1198,6 +1198,32 @@ namespace threepp {
                     : vertexCount / 3;
             if (primitiveCount == 0) return nullptr;
 
+            // BLAS build is undefined behavior on NaN/Inf positions or
+            // out-of-bounds indices — drivers respond with device-lost
+            // (vkQueueWaitIdle returns VK_ERROR_DEVICE_LOST). Validate
+            // before submission so a bad asset (typical of Assimp-loaded
+            // URDF .dae meshes with degenerate triangles) is skipped with
+            // a warning rather than killing the whole renderer.
+            for (size_t i = 0; i < positions.size(); ++i) {
+                if (!std::isfinite(positions[i])) {
+                    std::cerr << "[VulkanRenderer] buildBlasFor: skipping geometry — "
+                              << "position[" << i << "] is non-finite ("
+                              << positions[i] << "), vertexCount=" << vertexCount << '\n';
+                    return nullptr;
+                }
+            }
+            if (indexed) {
+                const auto& indices = idxAttr->array();
+                for (size_t i = 0; i < indices.size(); ++i) {
+                    if (indices[i] >= vertexCount) {
+                        std::cerr << "[VulkanRenderer] buildBlasFor: skipping geometry — "
+                                  << "index[" << i << "]=" << indices[i]
+                                  << " >= vertexCount=" << vertexCount << '\n';
+                        return nullptr;
+                    }
+                }
+            }
+
             // Hybrid: raster G-buffer pre-pass binds these same allocations
             // directly as vertex / index buffers — no duplication, no extra
             // upload, and the raster prepass + RT shadow rays warm the same
