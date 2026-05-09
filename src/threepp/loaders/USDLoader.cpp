@@ -35,6 +35,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace threepp {
@@ -1099,13 +1100,17 @@ namespace threepp {
             };
 
             // Albedo / diffuse
-            // Covers: snake_case (OmniPBR style) + PascalCase (OmniUe4Base /
-            // Omniverse Unreal bridge, used by Lightwheel exports).
+            // Covers: snake_case (OmniPBR style), PascalCase (OmniUe4Base /
+            // Omniverse Unreal bridge, used by Lightwheel exports), and
+            // *_image (NVIDIA OmniSurface MDL — Omniverse Automotive
+            // Showcase materials).
             if (auto t = tryFirst({"inputs:diffuse_texture",
                                    "inputs:albedo_texture",
                                    "inputs:Diffuse_Texture",
                                    "inputs:Albedo_Texture",
-                                   "inputs:BaseColor_Texture"})) {
+                                   "inputs:BaseColor_Texture",
+                                   "inputs:base_color_image",
+                                   "inputs:diffuse_color_image"})) {
                 t->colorSpace = ColorSpace::sRGB;
                 mat->map = t; anyTex = true;
             }
@@ -1117,7 +1122,8 @@ namespace threepp {
                                    "inputs:normal_texture",
                                    "inputs:Normal_Texture",
                                    "inputs:NormalMap_Texture",
-                                   "inputs:Bump_Texture"}, true)) {
+                                   "inputs:Bump_Texture",
+                                   "inputs:normal_image"}, true)) {
                 t->colorSpace = ColorSpace::Linear;
                 mat->normalMap = t; anyTex = true;
             }
@@ -1130,20 +1136,32 @@ namespace threepp {
                 anyTex = true;
             } else {
                 if (auto r = tryFirst({"inputs:roughness_texture",
-                                       "inputs:Roughness_Texture"}, true)) {
+                                       "inputs:Roughness_Texture",
+                                       "inputs:roughness_image"}, true)) {
                     r->colorSpace = ColorSpace::Linear;
                     mat->roughnessMap = r; anyTex = true;
                 }
                 if (auto m = tryFirst({"inputs:metallic_texture",
-                                       "inputs:Metallic_Texture"}, true)) {
+                                       "inputs:Metallic_Texture",
+                                       "inputs:metalness_image",
+                                       "inputs:metallic_image"}, true)) {
                     m->colorSpace = ColorSpace::Linear;
                     mat->metalnessMap = m; anyTex = true;
+                }
+                // OmniSurface "cavity" map ~= ambient occlusion.
+                if (auto a = tryFirst({"inputs:ao_image",
+                                       "inputs:cavity_image"}, true)) {
+                    a->colorSpace = ColorSpace::Linear;
+                    mat->aoMap = a; anyTex = true;
                 }
             }
             // Emissive
             if (auto t = tryFirst({"inputs:emissive_texture",
                                    "inputs:Emissive_Texture",
-                                   "inputs:Emission_Texture"})) {
+                                   "inputs:Emission_Texture",
+                                   "inputs:emissive_image",
+                                   "inputs:emission_image",
+                                   "inputs:emission_color_image"})) {
                 t->colorSpace = ColorSpace::sRGB;
                 mat->emissiveMap = t; anyTex = true;
             }
@@ -1183,6 +1201,10 @@ namespace threepp {
                 } else if (auto c2 = tryFloatTuple("inputs:diffuse_color_constant")) {
                     mat->color.setRGB((*c2)[0], (*c2)[1], (*c2)[2]);
                     anyTex = true;
+                } else if (auto c3 = tryFloatTuple("inputs:diffuse_reflection_color")) {
+                    // OmniSurface MDL constant base color.
+                    mat->color.setRGB((*c3)[0], (*c3)[1], (*c3)[2]);
+                    anyTex = true;
                 }
             }
             if (!mat->roughnessMap) {
@@ -1190,6 +1212,8 @@ namespace threepp {
                     mat->roughness = *v;
                 } else if (auto v2 = tryFloat("inputs:reflection_roughness_constant")) {
                     mat->roughness = *v2;
+                } else if (auto v3 = tryFloat("inputs:roughness_range_position")) {
+                    mat->roughness = *v3;
                 }
             }
             if (!mat->metalnessMap) {
@@ -1197,6 +1221,8 @@ namespace threepp {
                     mat->metalness = *v;
                 } else if (auto v2 = tryFloat("inputs:metallic_constant")) {
                     mat->metalness = *v2;
+                } else if (auto v3 = tryFloat("inputs:metalness")) {
+                    mat->metalness = *v3;
                 }
             }
 
@@ -2237,8 +2263,23 @@ namespace threepp {
             std::unordered_map<std::string, std::shared_ptr<MeshStandardMaterial>> meshPathMdlMap;
 
             if (layer) {
+                // Compute the set of material IDs actually referenced by some
+                // mesh (whole-mesh binding or per-face GeomSubset). Real-world
+                // Omniverse scenes ship a master /Looks scope with 100+
+                // materials, but each scene only binds a fraction of them —
+                // the rest are unused defaults. Skipping the unused ones
+                // avoids downloading several GB of textures for materials we'd
+                // immediately throw away.
+                std::unordered_set<int> usedMatIds;
+                for (const auto& m : renderScene.meshes) {
+                    if (m.material_id >= 0) usedMatIds.insert(m.material_id);
+                    for (const auto& [_, sub] : m.material_subsetMap)
+                        if (sub.material_id >= 0) usedMatIds.insert(sub.material_id);
+                }
+
                 // Case A — per-material-id overrides
                 for (int mi = 0; mi < static_cast<int>(renderScene.materials.size()); ++mi) {
+                    if (!usedMatIds.count(mi)) continue;
                     const auto& rmat = renderScene.materials[mi];
                     const bool hasTextures =
                         rmat.surfaceShader.diffuseColor.is_texture() ||
