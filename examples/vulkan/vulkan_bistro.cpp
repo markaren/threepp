@@ -2,7 +2,6 @@
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
-#include "threepp/renderers/WgpuRenderer.hpp"
 #include "threepp/renderers/wgpu/WgpuPathTracer.hpp"
 #include "threepp/threepp.hpp"
 
@@ -30,18 +29,9 @@ int main(int argc, char** argv) {
     Canvas canvas("Bistro scene",
                   { {"vsync", false}});
 
-    WgpuRenderer renderer(canvas);
+    VulkanRenderer renderer(canvas);
     renderer.outputColorSpace = ColorSpace::sRGB;
     renderer.toneMapping = ToneMapping::ACESFilmic;
-    renderer.shadowMap().enabled = true;
-
-    auto& pathTracer = renderer.pathTracer();
-    pathTracer.setExposure(1.0f);
-    pathTracer.setDenoiserEnabled(false);
-    pathTracer.setFoveatedRendering(false);
-    pathTracer.setReSTIREnabled(false);
-    pathTracer.setReSTIRGIEnabled(false);
-    pathTracer.setMaxBounces(3);
 
     RGBELoader imgLoader;
     auto env = imgLoader.load(modelFolder / "san_giuseppe_bridge_4k.hdr");
@@ -92,12 +82,9 @@ int main(int argc, char** argv) {
 
     // ---- UI ----
     bool raster = false;
-    bool denoiserOn = pathTracer.denoiserEnabled();
-    bool restdirOn = pathTracer.restirEnabled();
-    bool restdirGIOn = pathTracer.restirGiEnabled();
-    float exposure = pathTracer.exposure();
+    bool denoiserOn = renderer.denoise();
+    bool restdirOn = renderer.restirDIEnabled();
     float fps = 0.f, fpsAccum = 0.f;
-    float pixelScale = pathTracer.pixelScale();
     int fpsFrames = 0;
 
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
@@ -113,21 +100,16 @@ int main(int argc, char** argv) {
         ImGui::Begin("GLTF Samples");
         ImGui::Text("FPS: %.1f", fps);
         ImGui::Text("Mode: %s (T to cycle)", raster ? "Raster" : "Path tracer");
-        if (!raster) ImGui::Text("Frames: %d", pathTracer.frameCount());
+        // if (!raster) ImGui::Text("Frames: %d", renderer.frameCount());
 
         ImGui::Separator();
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
-            pathTracer.setExposure(exposure);
-        if (ImGui::SliderFloat("Pixel Scale", &pixelScale, 0.25f, 1.2f, "%.2f"))
-            pathTracer.setPixelScale(pixelScale);
+        ImGui::SliderFloat("Exposure", &renderer.toneMappingExposure, 0.1f, 2.0f);
 
         if (!raster && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (ImGui::Checkbox("Denoiser", &denoiserOn))
-                pathTracer.setDenoiserEnabled(denoiserOn);
+                renderer.setDenoise(denoiserOn);
             if (ImGui::Checkbox("REsTDIR DI", &restdirOn))
-                pathTracer.setReSTIREnabled(restdirOn);
-            if (ImGui::Checkbox("REsTDIR GI", &restdirGIOn))
-                pathTracer.setReSTIRGIEnabled(restdirGIOn);
+                renderer.setRestirDIEnabled(restdirOn);
 
         }
 
@@ -160,7 +142,6 @@ int main(int argc, char** argv) {
 
         controls.update();
 
-        renderer.usePathTracer = !raster;
         renderer.render(scene, camera);
 
         ui.render();
