@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
     scene.environment = env;
 
     // ---- Camera ----
-    PerspectiveCamera camera(50.f, canvas.aspect(), 0.01f, 1000.f);
+    PerspectiveCamera camera(60.f, canvas.aspect(), 0.01f, 1000.f);
     camera.position.set(0.f, 1.f, 3.f);
     OrbitControls controls{camera, canvas};
     controls.enableKeys = false;
@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
     scene.add(exterior);
 
     scene.traverseType<Light>([&](Light& l) {
-        l.visible = false;
+        l.visible = true;
     });
 
 
@@ -97,9 +97,8 @@ int main(int argc, char** argv) {
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({0, 0});
         ImGui::SetNextWindowSize({300, 0});
-        ImGui::Begin("GLTF Samples");
+        ImGui::Begin("Bistro scene");
         ImGui::Text("FPS: %.1f", fps);
-        ImGui::Text("Mode: %s (T to cycle)", raster ? "Raster" : "Path tracer");
         // if (!raster) ImGui::Text("Frames: %d", renderer.frameCount());
 
         ImGui::Separator();
@@ -143,6 +142,24 @@ int main(int argc, char** argv) {
         controls.update();
 
         renderer.render(scene, camera);
+        auto t = renderer.lastFrameTimings();
+        static int frames = 0;
+static double accum = 0.0;
+accum += t.cpuFrameMs;
+if (++frames >= 60) {
+    std::cout << std::fixed << std::setprecision(2)
+           << "frame " << t.cpuFrameMs    << " ms"
+           << " | PT "      << t.pathTraceMs
+           << " | denoise " << t.denoiseMs
+           << " | TAA "     << t.taaMs
+           << " | gbuf "    << t.rasterGbufMs
+           << " | overlay " << t.overlayMs
+           << " | photon "  << t.photonEmitMs
+           << " | cpu(scene "  << t.cpuEnsureSceneMs
+           << ", record "      << t.cpuRecordMs << ")"
+           << '\n';
+    frames = 0; accum = 0.0;
+}
 
         ui.render();
     });
