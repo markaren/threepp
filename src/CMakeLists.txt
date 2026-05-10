@@ -935,6 +935,16 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuffer.frag"
         kGbufferFragSpv
         _gbuffer_frag_spv_h)
+    # Indirect-drawing variant of the G-buffer vertex shader. Reads per-mesh
+    # data (model matrix, attribute buffer device addresses, flags) from an
+    # SSBO indexed by gl_DrawIDEXT, fetches vertices via buffer references —
+    # lets the whole gbuf pass ship as 1-3 vkCmdDrawIndirect calls instead
+    # of N vkCmdDrawIndexed calls. Path B of the perf work; see
+    # recordRasterGbufPass for the dispatch side.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/gbuffer_indirect.vert"
+        kGbufferIndirectVertSpv
+        _gbuffer_indirect_vert_spv_h)
     # Hybrid raster TAA: post-denoise temporal resolve. Reads taaInput +
     # history + gbufMotion → writes swapchain + new history. Runs only
     # when hybridEnabled_; non-hybrid path copies taaInput → swapchain.

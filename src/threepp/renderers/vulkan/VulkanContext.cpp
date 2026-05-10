@@ -295,6 +295,16 @@ namespace threepp::vulkan {
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         features2.features.shaderInt64 = VK_TRUE;// uint64_t buffer-reference addresses in rchit
         features2.features.samplerAnisotropy = VK_TRUE;// material-tex sampler enables aniso filtering
+        // Hybrid gbuf indirect-drawing path encodes the per-draw DrawInfo
+        // index into VkDrawIndirectCommand::firstInstance; the VS reads
+        // it back as gl_InstanceIndex. Without this feature, firstInstance
+        // must be 0 and the trick collapses.
+        features2.features.drawIndirectFirstInstance = VK_TRUE;
+        // gl_DrawIDARB / gl_BaseInstanceARB / gl_BaseVertexARB — not strictly
+        // required by the current gbuf shader (it uses gl_InstanceIndex), but
+        // pulling the feature in keeps the door open for future per-draw
+        // pulls and is universally supported on RT-capable hardware.
+        features2.features.multiDrawIndirect = VK_TRUE;
         features2.pNext = rayTracingEnabled_ ? static_cast<void*>(&fAS) : static_cast<void*>(&f12);
 
         VkDeviceCreateInfo ci{};

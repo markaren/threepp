@@ -70,6 +70,7 @@
 #include "threepp/renderers/vulkan/shaders/water_displace.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/gbuffer_indirect.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/taa_resolve.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay.frag.spv.h"
@@ -779,8 +780,25 @@ namespace threepp {
         VkDescriptorSetLayout rasterDsLayout       = VK_NULL_HANDLE;
         VkPipelineLayout      rasterPipelineLayout = VK_NULL_HANDLE;
         VkPipeline            rasterGbufPipeline   = VK_NULL_HANDLE;
+        // Indirect-drawing variant: uses gbuffer_indirect.vert with bindless
+        // vertex pulling, declares zero vertex input bindings, consumes the
+        // per-frame DrawInfo SSBO at binding 4. Selected by default for the
+        // gbuf pass since it collapses N draws into 1-3 vkCmdDrawIndirect
+        // calls — see recordRasterGbufPass.
+        VkPipeline            rasterGbufIndirectPipeline = VK_NULL_HANDLE;
         VkDescriptorPool      rasterDescPool       = VK_NULL_HANDLE;
         std::array<VkDescriptorSet, kFramesInFlight> rasterDescSets{};
+        // Per-frame draw info ring. Each entry mirrors the GLSL DrawInfo
+        // struct in gbuffer_indirect.vert: model matrix + buffer device
+        // addresses + flags. Sized lazily; grows on demand.
+        std::array<Buffer, kFramesInFlight> drawInfoBuffers{};
+        std::array<VkDeviceSize, kFramesInFlight> drawInfoBufferCapacity{};
+        // Per-frame indirect command ring. Holds a contiguous array of
+        // VkDrawIndirectCommand structs partitioned by cull mode (Front,
+        // then Back, then Double). Counts + offsets per group recorded in
+        // indirectGroupRanges_ during recordRasterGbufPass.
+        std::array<Buffer, kFramesInFlight> indirectCmdBuffers{};
+        std::array<VkDeviceSize, kFramesInFlight> indirectCmdBufferCapacity{};
 
         // Hybrid raster overlay (wireframe + Line/LineSegments). Runs after
         // TAA resolve, draws onto the swapchain with the G-buffer's depth
@@ -1183,8 +1201,11 @@ namespace threepp {
             // turned on, all handles stay VK_NULL_HANDLE and these calls
             // become no-ops.
             destroyRasterGbufImages();
-            for (auto& b : rasterCameraUbos) destroyBuffer(ctx->allocator(), b);
-            if (rasterGbufPipeline)     vkDestroyPipeline(d, rasterGbufPipeline, nullptr);
+            for (auto& b : rasterCameraUbos)    destroyBuffer(ctx->allocator(), b);
+            for (auto& b : drawInfoBuffers)     destroyBuffer(ctx->allocator(), b);
+            for (auto& b : indirectCmdBuffers)  destroyBuffer(ctx->allocator(), b);
+            if (rasterGbufPipeline)         vkDestroyPipeline(d, rasterGbufPipeline, nullptr);
+            if (rasterGbufIndirectPipeline) vkDestroyPipeline(d, rasterGbufIndirectPipeline, nullptr);
             if (rasterPipelineLayout)   vkDestroyPipelineLayout(d, rasterPipelineLayout, nullptr);
             if (rasterDsLayout)         vkDestroyDescriptorSetLayout(d, rasterDsLayout, nullptr);
             if (rasterDescPool)         vkDestroyDescriptorPool(d, rasterDescPool, nullptr);
@@ -4583,12 +4604,215 @@ namespace threepp {
             vkUpdateDescriptorSets(ctx->device(), 4, writes, 0, nullptr);
         }
 
-        // Begin the raster G-buffer render pass, iterate the visible-entry
-        // list, push per-draw model matrix + instanceCustomIndex + flags,
-        // bind position+normal+index buffers from the cached BlasRecord and
-        // issue an indexed/non-indexed draw. Same iteration order as the
-        // TLAS build so the customIndex baked into the push constant matches
-        // what the chit/raygen would see.
+        // Host mirror of gbuffer_indirect.vert's DrawInfo struct. Tight-
+        // packed (120 bytes, all members naturally aligned to ≤ 8) so it
+        // matches the GLSL `scalar` block layout used in the shader.
+        struct DrawInfoGpu {
+            float    model[16];        // 64
+            uint64_t posAddr;          // 8
+            uint64_t nrmAddr;          // 8
+            uint64_t uvAddr;           // 8
+            uint64_t prevPosAddr;      // 8
+            uint64_t indexAddr;        // 8 (0 → non-indexed)
+            uint32_t instanceCustomIndex;
+            uint32_t flags;
+            uint32_t indexed;
+            uint32_t _pad;
+        };
+        static_assert(sizeof(DrawInfoGpu) == 120,
+                      "DrawInfoGpu layout drifted from gbuffer_indirect.vert");
+
+        // Per-cull-mode dispatch span into indirectCmdBuffers[frame].
+        struct DrawGroup {
+            VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
+            uint32_t        offset   = 0;// first cmd index (cmd-buffer-relative)
+            uint32_t        count    = 0;
+        };
+        // [0] Front (BACK cull), [1] Back (FRONT cull), [2] Double (NONE cull).
+        // The static order means recordRasterGbufPass can issue at most 3
+        // vkCmdDrawIndirect calls and skip the empty ones.
+        std::array<DrawGroup, 3> indirectGroups_{};
+        uint32_t indirectTotalDraws_ = 0;
+
+        bool ensureDrawInfoCapacity(uint32_t frame, VkDeviceSize neededBytes) {
+            if (neededBytes <= drawInfoBufferCapacity[frame]) return false;
+            const VkDeviceSize newCap = std::max<VkDeviceSize>(
+                    neededBytes, drawInfoBufferCapacity[frame] * 2u);
+            destroyBuffer(ctx->allocator(), drawInfoBuffers[frame]);
+            drawInfoBuffers[frame] = createBuffer(
+                    ctx->allocator(), ctx->device(),
+                    newCap,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            drawInfoBufferCapacity[frame] = newCap;
+            return true;
+        }
+
+        bool ensureIndirectCmdCapacity(uint32_t frame, VkDeviceSize neededBytes) {
+            if (neededBytes <= indirectCmdBufferCapacity[frame]) return false;
+            const VkDeviceSize newCap = std::max<VkDeviceSize>(
+                    neededBytes, indirectCmdBufferCapacity[frame] * 2u);
+            destroyBuffer(ctx->allocator(), indirectCmdBuffers[frame]);
+            indirectCmdBuffers[frame] = createBuffer(
+                    ctx->allocator(), ctx->device(),
+                    newCap,
+                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            indirectCmdBufferCapacity[frame] = newCap;
+            return true;
+        }
+
+        // Build the per-frame DrawInfo + indirect-command buffers for the
+        // hybrid raster G-buffer pass. Called from renderFrame right after
+        // cullEntriesAgainstFrustum (which sets MeshEntry::inFrustum) so we
+        // can skip culled draws here. The actual GPU dispatch happens in
+        // recordRasterGbufPass via 1-3 vkCmdDrawIndirect calls partitioned
+        // by cull mode.
+        //
+        // Draw partitioning: walk entries once, sort each visible draw
+        // into one of three buckets (Side::Front/Back/Double). Buckets
+        // are concatenated [Front | Back | Double] in the device buffers,
+        // and each VkDrawIndirectCommand's firstInstance carries the
+        // global DrawInfo index — surfaced to the VS as gl_InstanceIndex
+        // so the shader fetches `draws[gl_InstanceIndex]`. This trick
+        // sidesteps the gl_DrawIDARB-resets-per-call issue without
+        // needing dynamic-offset descriptors or per-call push constants.
+        void buildIndirectDrawData(uint32_t frame) {
+            for (auto& g : indirectGroups_) { g.offset = 0; g.count = 0; }
+            indirectTotalDraws_ = 0;
+
+            if (lastVisibleEntries_.empty()) return;
+
+            // Three buckets in [BACK_cull, FRONT_cull, NONE_cull] order.
+            std::array<std::vector<DrawInfoGpu>, 3>            draws;
+            std::array<std::vector<VkDrawIndirectCommand>, 3>  cmds;
+            auto bucketOf = [](VkCullModeFlags cm) -> int {
+                if (cm == VK_CULL_MODE_BACK_BIT)  return 0;
+                if (cm == VK_CULL_MODE_FRONT_BIT) return 1;
+                return 2;
+            };
+
+            uint32_t globalIdx = 0;
+            for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
+                const auto& en = lastVisibleEntries_[i];
+                if (en.isOverlay)  continue;
+                if (!en.inFrustum) continue;
+                const BlasRecord* rec = resolveBlasForEntry(en);
+                if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
+
+                const bool indexed = (rec->index.handle != VK_NULL_HANDLE);
+                const uint32_t vcount = indexed ? rec->indexCount : rec->vertexCount;
+                if (vcount == 0u) continue;
+
+                const VkCullModeFlags wantCull =
+                        (i < lastVisibleCullMode_.size())
+                                ? lastVisibleCullMode_[i]
+                                : VK_CULL_MODE_BACK_BIT;
+                const int b = bucketOf(wantCull);
+
+                DrawInfoGpu di{};
+                std::memcpy(di.model, en.worldMatrix.data(), 64);
+                di.posAddr     = rec->vertex.address;
+                di.nrmAddr     = rec->normal.address;
+                di.uvAddr      = (rec->uv.handle != VK_NULL_HANDLE) ? rec->uv.address : 0ull;
+                di.prevPosAddr = (rec->prevVertex.handle != VK_NULL_HANDLE)
+                                         ? rec->prevVertex.address
+                                         : rec->vertex.address;
+                di.indexAddr   = indexed ? rec->index.address : 0ull;
+                di.instanceCustomIndex = static_cast<uint32_t>(i);
+                // Flag bits match the old gbuffer.vert push-constant layout:
+                //   bit 0 = is_water (DisplacedMesh), bit 3 = is_skinned.
+                uint32_t flags = 0u;
+                if (en.isDisplaced) flags |= 1u;
+                if (en.isSkinned)   flags |= 8u;
+                di.flags   = flags;
+                di.indexed = indexed ? 1u : 0u;
+                di._pad    = 0u;
+                draws[b].push_back(di);
+
+                VkDrawIndirectCommand cmd{};
+                cmd.vertexCount   = vcount;
+                cmd.instanceCount = 1u;
+                cmd.firstVertex   = 0u;
+                cmd.firstInstance = 0u;// patched below to the final-position index
+                cmds[b].push_back(cmd);
+                ++globalIdx;
+            }
+
+            indirectTotalDraws_ = globalIdx;
+            if (globalIdx == 0u) return;
+
+            // Concatenate buckets into the per-frame device buffers.
+            const VkDeviceSize drawBytes = sizeof(DrawInfoGpu) * globalIdx;
+            const VkDeviceSize cmdBytes  = sizeof(VkDrawIndirectCommand) * globalIdx;
+            const bool drawGrown = ensureDrawInfoCapacity(frame, drawBytes);
+            ensureIndirectCmdCapacity(frame, cmdBytes);
+
+            void* mappedDraws = nullptr;
+            vmaMapMemory(ctx->allocator(), drawInfoBuffers[frame].alloc, &mappedDraws);
+            void* mappedCmds = nullptr;
+            vmaMapMemory(ctx->allocator(), indirectCmdBuffers[frame].alloc, &mappedCmds);
+
+            uint8_t* dDst = static_cast<uint8_t*>(mappedDraws);
+            uint8_t* cDst = static_cast<uint8_t*>(mappedCmds);
+            uint32_t offset = 0;
+            const VkCullModeFlags cullForBucket[3] = {
+                    VK_CULL_MODE_BACK_BIT, VK_CULL_MODE_FRONT_BIT, VK_CULL_MODE_NONE
+            };
+            for (int b = 0; b < 3; ++b) {
+                const uint32_t n = static_cast<uint32_t>(draws[b].size());
+                indirectGroups_[b].cullMode = cullForBucket[b];
+                indirectGroups_[b].offset   = offset;
+                indirectGroups_[b].count    = n;
+                if (n > 0u) {
+                    // Patch firstInstance now that we know each draw's final
+                    // position in the concatenated DrawInfo / indirect arrays.
+                    // Entry-order assignment up above doesn't match concat
+                    // order once we partition by cull mode — the VS reads
+                    // `draws[gl_InstanceIndex]` so the encoded index has to
+                    // be the FINAL position, not the bucket-order index.
+                    for (uint32_t k = 0; k < n; ++k) {
+                        cmds[b][k].firstInstance = offset + k;
+                    }
+                    std::memcpy(dDst + offset * sizeof(DrawInfoGpu),
+                                draws[b].data(), n * sizeof(DrawInfoGpu));
+                    std::memcpy(cDst + offset * sizeof(VkDrawIndirectCommand),
+                                cmds[b].data(), n * sizeof(VkDrawIndirectCommand));
+                }
+                offset += n;
+            }
+
+            vmaUnmapMemory(ctx->allocator(), indirectCmdBuffers[frame].alloc);
+            vmaUnmapMemory(ctx->allocator(), drawInfoBuffers[frame].alloc);
+
+            // Rewrite binding 4 if the DrawInfo buffer handle moved (grow).
+            // The indirect cmd buffer is consumed by vkCmdDrawIndirect — no
+            // descriptor binding needed for it.
+            if (drawGrown) {
+                VkDescriptorBufferInfo dbInfo{};
+                dbInfo.buffer = drawInfoBuffers[frame].handle;
+                dbInfo.offset = 0;
+                dbInfo.range  = VK_WHOLE_SIZE;
+                VkWriteDescriptorSet w{};
+                w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w.dstSet          = rasterDescSets[frame];
+                w.dstBinding      = 4;
+                w.descriptorCount = 1;
+                w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                w.pBufferInfo     = &dbInfo;
+                vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+            }
+        }
+
+        // Begin the raster G-buffer render pass and ship the prebuilt
+        // indirect-draw groups via 1-3 vkCmdDrawIndirect calls (one per
+        // active cull mode). Replaces the prior per-mesh draw loop —
+        // see buildIndirectDrawData above for how the GPU buffers are
+        // populated.
         void recordRasterGbufPass(VkCommandBuffer cb, uint32_t frame) {
             const VkExtent2D ext = ctx->swapchainExtent();
             const auto& g = rasterGbufs[frame];
@@ -4627,89 +4851,30 @@ namespace threepp {
             scissor.extent = ext;
             vkCmdSetScissor(cb, 0, 1, &scissor);
 
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, rasterGbufPipeline);
+            if (indirectTotalDraws_ == 0u) {
+                vkCmdEndRenderPass(cb);
+                return;
+            }
+
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, rasterGbufIndirectPipeline);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     rasterPipelineLayout, 0, 1,
                                     &rasterDescSets[frame], 0, nullptr);
 
-            // Track currently-bound dynamic cull mode so we don't redundantly
-            // set it. Default 0xFFFFFFFF = "uninitialized; force first set".
-            uint32_t curCullMode = 0xFFFFFFFFu;
-
-            for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
-                const auto& en = lastVisibleEntries_[i];
-                if (en.isOverlay) continue;// raster-overlay only — drawn post-TAA, not in G-buf
-                if (!en.inFrustum) continue;// CPU frustum cull dodges per-draw GPU CP overhead
-                const BlasRecord* rec = resolveBlasForEntry(en);
-                if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
-
-                // Per-draw cull mode from cached material side. Falls back to
-                // BACK (Side::Front default) when the cache hasn't been built
-                // for this entry yet, matching the previous behaviour.
-                const VkCullModeFlags wantCull =
-                        (i < lastVisibleCullMode_.size())
-                                ? lastVisibleCullMode_[i]
-                                : VK_CULL_MODE_BACK_BIT;
-                if (wantCull != curCullMode) {
-                    vkCmdSetCullMode(cb, wantCull);
-                    curCullMode = wantCull;
-                }
-
-                // Push constants: 64B model matrix + 16B (instId/flags/pad/pad).
-                struct PC {
-                    float    model[16];
-                    uint32_t instanceCustomIndex;
-                    uint32_t flags;
-                    uint32_t _pad0;
-                    uint32_t _pad1;
-                } pc{};
-                std::memcpy(pc.model, en.worldMatrix.data(), 64);
-                pc.instanceCustomIndex = static_cast<uint32_t>(i);
-                // flag bits: 0=is_water, 1=transmissive, 2=thinWalled, 3=is_skinned.
-                // is_skinned tells the TAA shader to suppress history blending
-                // for that pixel — motionMat captures rigid-body motion only,
-                // so a deforming skinned surface reports zero motion and
-                // would otherwise ghost severely.
-                uint32_t flags = 0u;
-                if (en.isDisplaced) flags |= 1u;
-                if (en.isSkinned)   flags |= 8u;
-                // For transmissive/thinWalled we'd consult MaterialDesc here
-                // — deferred to next pass; raygen also reads matDesc directly.
-                pc.flags = flags;
-                vkCmdPushConstants(cb, rasterPipelineLayout,
-                                   VK_SHADER_STAGE_VERTEX_BIT,
-                                   0, sizeof(pc), &pc);
-
-                // Vertex inputs: position (0), normal (1), uv (2), prevPos (3).
-                // - UV: dummy zero buffer when the mesh has no UV attribute.
-                // - prevPos: rec->prevVertex when allocated (skinned/displaced),
-                //   else rec->vertex (static mesh: prev == curr → identity-rigid
-                //   motion driven by motionMat alone, same as before this commit).
-                VkBuffer uvBuf = (rec->uv.handle != VK_NULL_HANDLE)
-                                         ? rec->uv.handle
-                                         : dummyUvBuffer_.handle;
-                VkBuffer prevPosBuf = (rec->prevVertex.handle != VK_NULL_HANDLE)
-                                              ? rec->prevVertex.handle
-                                              : rec->vertex.handle;
-                VkBuffer     vbufs[4] = {rec->vertex.handle, rec->normal.handle, uvBuf, prevPosBuf};
-                VkDeviceSize voffs[4] = {0, 0, 0, 0};
-                vkCmdBindVertexBuffers(cb, 0, 4, vbufs, voffs);
-
-                if (rec->index.handle != VK_NULL_HANDLE) {
-                    vkCmdBindIndexBuffer(cb, rec->index.handle, 0, VK_INDEX_TYPE_UINT32);
-                    // index count = bytes / sizeof(uint32_t). Matches buildBlasFor.
-                    auto* idxAttr = en.mesh->geometry()->getIndex();
-                    if (idxAttr) {
-                        vkCmdDrawIndexed(cb,
-                                         static_cast<uint32_t>(idxAttr->count()),
-                                         1, 0, 0, 0);
-                    }
-                } else {
-                    auto* posAttr = en.mesh->geometry()->getAttribute<float>("position");
-                    if (posAttr) {
-                        vkCmdDraw(cb, static_cast<uint32_t>(posAttr->count()), 1, 0, 0);
-                    }
-                }
+            // One vkCmdDrawIndirect per cull-mode group. Empty groups skip;
+            // a typical static scene fires one (BACK_cull); transmissive
+            // sets can fire two or three. cullMode flips between calls
+            // via the dynamic cullMode state — far cheaper than re-doing
+            // it per draw.
+            constexpr VkDeviceSize cmdStride = sizeof(VkDrawIndirectCommand);
+            for (const auto& g : indirectGroups_) {
+                if (g.count == 0u) continue;
+                vkCmdSetCullMode(cb, g.cullMode);
+                vkCmdDrawIndirect(cb,
+                                  indirectCmdBuffers[frame].handle,
+                                  static_cast<VkDeviceSize>(g.offset) * cmdStride,
+                                  g.count,
+                                  static_cast<uint32_t>(cmdStride));
             }
 
             vkCmdEndRenderPass(cb);
@@ -5545,7 +5710,11 @@ namespace threepp {
             // binding 2: mats[] storage (fragment; for normal-map index + uvTransformNormal)
             // binding 3: albedoMaps[] bindless sampler array (fragment;
             //            same VkImage handles as raygen's binding 8)
-            VkDescriptorSetLayoutBinding bindings[4]{};
+            // binding 4: DrawInfo[] storage (vertex; bindless vertex-pulling SSBO
+            //            for the indirect-drawing gbuf pipeline). Re-pointed at
+            //            this frame's drawInfoBuffers slot in
+            //            recordRasterGbufPass before each indirect dispatch.
+            VkDescriptorSetLayoutBinding bindings[5]{};
             bindings[0].binding         = 0;
             bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[0].descriptorCount = 1;
@@ -5562,10 +5731,14 @@ namespace threepp {
             bindings[3].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[3].descriptorCount = kMaxMaterialTextures;
             bindings[3].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+            bindings[4].binding         = 4;
+            bindings[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[4].descriptorCount = 1;
+            bindings[4].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            dlci.bindingCount = 4;
+            dlci.bindingCount = 5;
             dlci.pBindings    = bindings;
             check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rasterDsLayout),
                   "vkCreateDescriptorSetLayout(raster)");
@@ -5574,7 +5747,7 @@ namespace threepp {
             sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             sizes[0].descriptorCount = kFramesInFlight;
             sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            sizes[1].descriptorCount = kFramesInFlight * 2;// motionMat + mats
+            sizes[1].descriptorCount = kFramesInFlight * 3;// motionMat + mats + drawInfo
             sizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             sizes[2].descriptorCount = kFramesInFlight * kMaxMaterialTextures;
 
@@ -5758,6 +5931,55 @@ namespace threepp {
 
             vkDestroyShaderModule(ctx->device(), vertModule, nullptr);
             vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
+
+            // Indirect-drawing variant: same fragment shader + same render
+            // pass, but uses gbuffer_indirect.vert with bindless vertex
+            // pulling. No vertex input bindings — the VS reads positions /
+            // normals / UVs via buffer-device-address dereferences keyed
+            // by gl_DrawIDARB and the DrawInfo SSBO at binding 4.
+            VkShaderModuleCreateInfo vciInd{};
+            vciInd.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            vciInd.codeSize = sizeof(kGbufferIndirectVertSpv);
+            vciInd.pCode    = kGbufferIndirectVertSpv;
+            VkShaderModule vertIndirectModule = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &vciInd, nullptr, &vertIndirectModule),
+                  "vkCreateShaderModule(gbuffer_indirect.vert)");
+            VkShaderModuleCreateInfo fciInd{};
+            fciInd.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            fciInd.codeSize = sizeof(kGbufferFragSpv);
+            fciInd.pCode    = kGbufferFragSpv;
+            VkShaderModule fragIndModule = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &fciInd, nullptr, &fragIndModule),
+                  "vkCreateShaderModule(gbuffer.frag for indirect)");
+
+            VkPipelineShaderStageCreateInfo stagesInd[2]{};
+            stagesInd[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stagesInd[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+            stagesInd[0].module = vertIndirectModule;
+            stagesInd[0].pName  = "main";
+            stagesInd[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stagesInd[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stagesInd[1].module = fragIndModule;
+            stagesInd[1].pName  = "main";
+
+            // Empty vertex input state — VS doesn't bind anything, it reads
+            // from buffer device addresses stored in the per-draw SSBO.
+            VkPipelineVertexInputStateCreateInfo viInd{};
+            viInd.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            viInd.vertexBindingDescriptionCount   = 0;
+            viInd.vertexAttributeDescriptionCount = 0;
+
+            VkGraphicsPipelineCreateInfo gpciInd = gpci;// reuse most state
+            gpciInd.stageCount        = 2;
+            gpciInd.pStages           = stagesInd;
+            gpciInd.pVertexInputState = &viInd;
+
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciInd, nullptr,
+                                            &rasterGbufIndirectPipeline),
+                  "vkCreateGraphicsPipelines(rasterGbufIndirect)");
+
+            vkDestroyShaderModule(ctx->device(), vertIndirectModule, nullptr);
+            vkDestroyShaderModule(ctx->device(), fragIndModule, nullptr);
         }
 
         // ── Hybrid raster overlay pipeline (wireframe variant) ──────────────
@@ -10096,6 +10318,10 @@ namespace threepp {
             if (hybridEnabled_) {
                 ensureHybridResources();
                 uploadRasterCameraUbo(currentFrame, camera);
+                // Build the per-frame DrawInfo + indirect-cmd buffers used
+                // by the indirect-drawing gbuf pass. Runs after the cull
+                // pass + camera upload (depends on both) and before record.
+                buildIndirectDrawData(currentFrame);
             }
             // Binding 1 (RT denoise output) target: TAA input when hybrid is
             // on (TAA resolves it before swapchain present), swapchain view
