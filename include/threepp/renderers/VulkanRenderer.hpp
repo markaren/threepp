@@ -156,6 +156,30 @@ namespace threepp {
         void setHybridDebugView(int view);
         [[nodiscard]] int hybridDebugView() const;
 
+        // Per-frame timings (milliseconds). CPU values come from
+        // std::chrono around the host-side hot path of the most recent
+        // render() call. GPU values come from VkQueryPool timestamps and
+        // lag by one in-flight slot (the most recently *retired* frame —
+        // GPU is necessarily one or two frames behind the host). For a
+        // steady-state renderer the difference is invisible; for a HUD
+        // overlay it's fine to read both as "current frame".
+        //
+        // First frame after construction returns all zeros. GPU fields
+        // are zero on frames where the corresponding pass didn't run
+        // (e.g. photonEmitMs == 0 when no glass is visible).
+        struct FrameTimings {
+            float photonEmitMs   = 0.f;// caustic photon trace (when visible)
+            float pathTraceMs    = 0.f;// main RT megakernel
+            float denoiseMs      = 0.f;// à-trous passes + finalize tonemap
+            float taaMs          = 0.f;// hybrid TAA resolve compute
+            float rasterGbufMs   = 0.f;// hybrid G-buffer prepass
+            float overlayMs      = 0.f;// hybrid overlay depth + draw
+            float cpuEnsureSceneMs = 0.f;// ensureSceneBuilt
+            float cpuRecordMs      = 0.f;// recordCommandBuffer
+            float cpuFrameMs       = 0.f;// total render() wall time
+        };
+        [[nodiscard]] FrameTimings lastFrameTimings() const;
+
     private:
         struct Impl;
         std::unique_ptr<Impl> pimpl_;

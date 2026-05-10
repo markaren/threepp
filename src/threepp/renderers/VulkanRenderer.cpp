@@ -40,6 +40,8 @@
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineSegments.hpp"
+#include "threepp/math/Box3.hpp"
+#include "threepp/math/Frustum.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/objects/Bone.hpp"
@@ -82,6 +84,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <random>
@@ -328,7 +331,18 @@ namespace threepp {
         using MaterialDesc = threepp::vulkan_pt::MaterialDesc;
 
         Buffer geometryDescsBuffer;
-        Buffer materialDescsBuffer;
+        // Per-frame-in-flight MaterialDesc storage. Was a single shared buffer
+        // gated by vkDeviceWaitIdle on every animated-pbr update; now one buffer
+        // per kFramesInFlight slot so the upload after a fence wait races
+        // nothing. The hot path stages new descs in `matDescsCached_` + flips
+        // `matDescsDirty_[*]=true`; renderFrame's flushMaterialDescsIfDirty
+        // memcpys into `materialDescsBuffers[currentFrame]` once the fence has
+        // signaled (= GPU done with this slot). Descriptor sets are bound
+        // per-frame (set idx = f*imageCount_+k → buffer[f]) so the binding
+        // stays valid across the swap.
+        std::array<Buffer, kFramesInFlight> materialDescsBuffers{};
+        std::vector<MaterialDesc> matDescsCached_;
+        std::array<bool, kFramesInFlight> matDescsDirty_{};
 
         // Scene lights mirrored to a per-frame UBO. Scalar block layout means
         // the C++ structs map directly (no std140 vec3→vec4 padding).
@@ -547,6 +561,24 @@ namespace threepp {
             // raster G-buffer, and emissive-tri NEE so PT can't see/shadow
             // them; drawn instead by the post-TAA overlay pass.
             bool     isOverlay = false;
+            // Cached type probes. Resolved once per Mesh in ensureSceneBuilt's
+            // traverseVisible callback (before the InstancedMesh fork so an
+            // N-instance mesh costs 3 dynamic_casts, not 3·N). Consumers
+            // (resolveBlasForEntry, recordRasterGbufPass, TLAS refit, bone /
+            // displaced / morph dirty-detection) read these flags instead of
+            // casting every frame.
+            bool     isSkinned   = false;
+            bool     isDisplaced = false;
+            bool     isMorphed   = false;
+            // Frustum-cull bit, populated once per frame by
+            // cullEntriesAgainstFrustum() right before record. Raster passes
+            // skip entries with inFrustum == false to dodge the GPU's per-
+            // draw command-processor overhead on off-screen geometry. The
+            // PT path is unaffected — TLAS culling handles it implicitly.
+            // Defaults to true so passes work before the first cull pass.
+            // Skinned / displaced / morphed entries always stay true; their
+            // local AABB doesn't reflect deformed extents.
+            bool     inFrustum   = true;
         };
 
         // Previous-frame camera (proj_prev * view_prev) for primary-hit
@@ -588,9 +620,33 @@ namespace threepp {
         uint32_t emissiveTriCountThisFrame_ = 0;
         float    emissiveTotalPowerThisFrame_ = 0.0f;
         // True if any material in the current scene has transmission > 0.
-        // Gates photon emit (no caustics possible without glass) and the
-        // 27-cell caustic gather in closest_hit.
+        // Gates the 27-cell caustic gather in closest_hit. Photon emit also
+        // requires glassVisibleThisFrame_ below — emitting 512×512 photon
+        // paths per frame is wasted work when no glass is in the camera
+        // frustum (no caustic gather can read fresh photons anyway). Gather
+        // stays gated on sceneHasGlass_ only so caustics persist visually
+        // for a few frames after the camera turns away from glass (read
+        // from the world-space photon grid until it's overwritten by the
+        // next emit pass).
         bool     sceneHasGlass_ = false;
+        // Per-frame frustum-cull result: any glass-flagged entry visible?
+        // Resolved by cullEntriesAgainstFrustum() as a side effect of the
+        // pass that tags every entry's MeshEntry::inFrustum.
+        bool     glassVisibleThisFrame_ = false;
+        // Flipped to true the first time photon emit (or a one-shot zero-fill
+        // shim below) writes the photon count buffer. Until that happens we
+        // can't let chit's gather read undefined memory — the buffer is
+        // device-local with no VMA zero-init, so it may contain garbage.
+        bool     photonCountInitialized_ = false;
+        // Ascending indices into lastVisibleEntries_ for transmissive-
+        // material entries. Maintained alongside materialDescs builds
+        // (full rebuild + the materialValuesSame=false hot path); a
+        // matrix-only frame keeps the existing list valid since glass
+        // identity is per-entry, not per-xfm. Used by
+        // cullEntriesAgainstFrustum to test only the (small) subset of
+        // visible-test results for glass membership when deciding whether
+        // photon emit should run.
+        std::vector<size_t> glassEntryIndices_;
         // Per-NEE firefly clamp; pushed to shaders as float bits in slot [15].
         // 1e30f sentinel disables the clamp (set via setFireflyClamp(0)).
         float    fireflyClamp_ = 20.0f;
@@ -856,6 +912,49 @@ namespace threepp {
         // disabled by default so the raster prepass can land + be validated
         // before becoming the default.
         bool hybridEnabled_ = true;
+        // Tracks what each per-frame slot's binding 1 (RT denoise output)
+        // currently points at, so the per-frame rewrite block only fires on
+        // a real state change: -1 = unknown/needs rewrite, 0 = swapchain
+        // image view, 1 = taaInputImagesPP[frame].view. allocateAndUpdate-
+        // Descriptors writes swapchain (sets to 0); swapchain recreation
+        // reruns that path. Used to be rewritten unconditionally every frame,
+        // burning imageCount_ vkUpdateDescriptorSets calls for nothing.
+        std::array<int8_t, kFramesInFlight> binding1Mode_{};
+
+        // ── Per-frame timing instrumentation ─────────────────────────────
+        // GPU timestamps via VkQueryPool (one pool per frame-in-flight).
+        // Each pool has 2 slots per pass (begin / end). After the fence
+        // wait at the top of renderFrame, the previous use of this slot's
+        // pool has retired, so vkGetQueryPoolResults reads the last frame's
+        // values. We translate ticks → ms using
+        // VkPhysicalDeviceLimits::timestampPeriod.
+        //
+        // timingMaskRecorded_ tracks which passes wrote both endpoints last
+        // frame so we don't read undefined slots from skipped passes
+        // (photon emit on no-glass frames, overlay depth on no-overlay
+        // frames, etc.).
+        enum TimingPass : uint32_t {
+            TP_RasterGbuf    = 0,
+            TP_OverlayDepth  = 1,
+            TP_PhotonEmit    = 2,
+            TP_PathTrace     = 3,
+            TP_Denoise       = 4,
+            TP_TAA           = 5,
+            TP_OverlayDraw   = 6,
+            TP_COUNT         = 7,
+        };
+        static constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
+        std::array<VkQueryPool, kFramesInFlight> timestampPools{};
+        std::array<uint32_t, kFramesInFlight> timingMaskRecorded_{};
+        float    timestampPeriodNs_ = 1.0f;
+        bool     timingsSupported_  = false;
+        VulkanRenderer::FrameTimings lastFrameTimings_{};
+        std::chrono::high_resolution_clock::time_point recordStartTp_{};
+        // Set by VulkanRenderer::render(...) right after ensureSceneBuilt
+        // and consumed by readBackTimingsFromPriorUse on the next frame's
+        // fence wait so the public getter sees the same frame's CPU + GPU
+        // numbers.
+        float    pendingCpuEnsureSceneMs_ = 0.f;
         // ReSTIR DI master toggle. When false, chit's primary RIS branch is
         // bypassed and the legacy per-light NEE classic loops run instead
         // (same pattern as bounces). Default on. Forwarded to chit via
@@ -952,6 +1051,7 @@ namespace threepp {
             createDescriptorPool();
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             allocateTaaDescriptors();// independent of scene state, safe at ctor time
+            createTimestampPools();// per-frame VkQueryPool for the timings API
         }
 
         ~Impl() {
@@ -963,6 +1063,7 @@ namespace threepp {
             for (auto s : renderFinished) if (s) vkDestroySemaphore(d, s, nullptr);
             for (auto f : inFlight) if (f) vkDestroyFence(d, f, nullptr);
             if (cmdPool) vkDestroyCommandPool(d, cmdPool, nullptr);
+            for (auto p : timestampPools) if (p) vkDestroyQueryPool(d, p, nullptr);
 
             if (descriptorPool) vkDestroyDescriptorPool(d, descriptorPool, nullptr);
 
@@ -979,7 +1080,7 @@ namespace threepp {
             destroyBuffer(ctx->allocator(), tlasBuffer);
             destroyBuffer(ctx->allocator(), tlasInstancesBuffer);
             destroyBuffer(ctx->allocator(), geometryDescsBuffer);
-            destroyBuffer(ctx->allocator(), materialDescsBuffer);
+            for (auto& b : materialDescsBuffers) destroyBuffer(ctx->allocator(), b);
 
             for (auto& [_, rec] : blasCache) {
                 if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
@@ -2554,6 +2655,83 @@ namespace threepp {
             }
         }
 
+        // Flush the cached host-side MaterialDescs into this frame's slot of
+        // the per-frame ring. Called from renderFrame after the fence wait —
+        // the in-flight signal guarantees the previous use of this slot has
+        // retired, so the memcpy races nothing. Replaces the old shared-buffer
+        // path that called vkDeviceWaitIdle on every animated-pbr update.
+        void flushMaterialDescsIfDirty(uint32_t frame) {
+            if (!matDescsDirty_[frame]) return;
+            matDescsDirty_[frame] = false;
+            if (matDescsCached_.empty()) return;
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), materialDescsBuffers[frame].alloc, &mapped);
+            std::memcpy(mapped, matDescsCached_.data(),
+                        matDescsCached_.size() * sizeof(MaterialDesc));
+            vmaUnmapMemory(ctx->allocator(), materialDescsBuffers[frame].alloc);
+        }
+
+        // Per-frame frustum cull: tag every entry with `inFrustum` so raster
+        // passes (gbuf prepass, overlay depth prepass) can skip off-screen
+        // geometry. Each draw on the raster gbuf pass costs ~15 µs of GPU
+        // command-processor time regardless of whether anything actually
+        // rasterizes — at 1500-mesh scenes that's ~22 ms eaten by draws
+        // whose vertex shader transforms all land outside the clip cube.
+        // The PT path is untouched: TLAS culling handles visibility
+        // implicitly on the ray-traced side.
+        //
+        // Deformable entries (skinned / displaced / morphed) keep
+        // inFrustum=true unconditionally — their local AABB is the rest-
+        // pose extent, not the deformed one, so a tight test would clip
+        // out poses that bulge past the bind silhouette. Re-fitting a
+        // tight bound every frame on the CPU isn't worth the cost; the
+        // GPU pays a small constant for these. Overlay entries also stay
+        // on (debug viz should always render).
+        //
+        // Side effect: also resolves glassVisibleThisFrame_ from the same
+        // walk so the photon emit gating doesn't need a separate frustum
+        // build. The flag is true iff at least one transmissive entry
+        // passed the cull.
+        void cullEntriesAgainstFrustum(Camera& camera) {
+            glassVisibleThisFrame_ = false;
+            if (lastVisibleEntries_.empty()) return;
+            // Combine projection * matrixWorldInverse to extract the world-
+            // space frustum (Three.js convention; Camera::updateMatrixWorld
+            // already ran in updateCameraUbo this frame).
+            Matrix4 vp;
+            vp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+            Frustum frustum;
+            frustum.setFromProjectionMatrix(vp);
+            // Pre-compute a sparse "is glass" lookup. glassEntryIndices_ is
+            // already sorted ascending (built by walking entries in order),
+            // so we can iterate it in lockstep with i.
+            size_t gi = 0;
+            const size_t gN = glassEntryIndices_.size();
+            for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
+                auto& en = lastVisibleEntries_[i];
+                // Default-include conservative cases — they always draw.
+                if (en.isOverlay || en.isSkinned || en.isDisplaced || en.isMorphed) {
+                    en.inFrustum = true;
+                } else {
+                    auto geom = en.mesh->geometry();
+                    if (!geom) { en.inFrustum = true; continue; }
+                    if (!geom->boundingBox) geom->computeBoundingBox();
+                    if (!geom->boundingBox) { en.inFrustum = true; continue; }
+                    Box3 worldAabb = *geom->boundingBox;
+                    Matrix4 w;
+                    std::memcpy(w.elements.data(), en.worldMatrix.data(), 64);
+                    worldAabb.applyMatrix4(w);
+                    en.inFrustum = frustum.intersectsBox(worldAabb);
+                }
+                // Advance the glass-index cursor in lockstep; if this entry
+                // is glass AND in-frustum, light the global flag.
+                while (gi < gN && glassEntryIndices_[gi] < i) ++gi;
+                if (gi < gN && glassEntryIndices_[gi] == i && en.inFrustum) {
+                    glassVisibleThisFrame_ = true;
+                }
+            }
+        }
+
         // Pull per-mesh PBR material params off the threepp Material chain.
         // Anything not satisfying the relevant interface gets a sensible
         // default so meshes lacking a material still render. albedoTexIndex
@@ -2845,6 +3023,12 @@ namespace threepp {
                     o.layers.isEnabled(static_cast<unsigned>(overlayLayer_))) {
                     isOverlay = true;
                 }
+                // One-shot type probes: an N-instance InstancedMesh costs 3
+                // dynamic_casts total, not 3·N. Consumed by raster pass loops,
+                // resolveBlasForEntry, TLAS refit, and dirty-detection.
+                const bool isSkinned   = (dynamic_cast<SkinnedMesh*>(m)   != nullptr);
+                const bool isDisplaced = (dynamic_cast<DisplacedMesh*>(m) != nullptr);
+                const bool isMorphed   = isMorphedMesh(*m);
                 if (auto* inst = dynamic_cast<InstancedMesh*>(m); inst && inst->count() > 0) {
                     Matrix4 instMat;
                     Matrix4 world;
@@ -2854,7 +3038,10 @@ namespace threepp {
                         MeshEntry e{};
                         e.mesh = m;
                         e.instanceIndex = static_cast<uint32_t>(j);
-                        e.isOverlay = isOverlay;
+                        e.isOverlay    = isOverlay;
+                        e.isSkinned    = isSkinned;
+                        e.isDisplaced  = isDisplaced;
+                        e.isMorphed    = isMorphed;
                         std::memcpy(e.worldMatrix.data(), world.elements.data(), 64);
                         entries.push_back(e);
                     }
@@ -2862,7 +3049,10 @@ namespace threepp {
                     MeshEntry e{};
                     e.mesh = m;
                     e.instanceIndex = 0u;
-                    e.isOverlay = isOverlay;
+                    e.isOverlay    = isOverlay;
+                    e.isSkinned    = isSkinned;
+                    e.isDisplaced  = isDisplaced;
+                    e.isMorphed    = isMorphed;
                     std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
                     entries.push_back(e);
                 }
@@ -2936,11 +3126,13 @@ namespace threepp {
             // misses them. We compare current Skeleton::boneMatrices against
             // the cached prevBoneMats for each known SkinnedMesh; first-time
             // skinned meshes mark dirty so the structural-rebuild path skins
-            // before its first ray trace.
+            // before its first ray trace. Gated on the cached isSkinned flag
+            // so non-skinned entries skip the type probe entirely.
             std::vector<bool> entryBonesDirty(entries.size(), false);
             for (size_t i = 0; i < entries.size(); ++i) {
-                auto* sm = dynamic_cast<SkinnedMesh*>(entries[i].mesh);
-                if (!sm || !sm->skeleton || sm->skeleton->bones.empty()) continue;
+                if (!entries[i].isSkinned) continue;
+                auto* sm = static_cast<SkinnedMesh*>(entries[i].mesh);
+                if (!sm->skeleton || sm->skeleton->bones.empty()) continue;
                 auto stIt = skinnedMeshStates.find(sm);
                 if (stIt == skinnedMeshStates.end()) {
                     entryBonesDirty[i] = true;
@@ -2956,20 +3148,24 @@ namespace threepp {
             }
 
             // DisplacedMesh — intrinsically dirty every frame (FFT spectrum
-            // advances continuously). Same per-entry-bool pattern as bones.
+            // advances continuously). Same per-entry-bool pattern as bones,
+            // routed through the cached isDisplaced flag instead of a fresh
+            // dynamic_cast every frame.
             std::vector<bool> entryDisplacedDirty(entries.size(), false);
             for (size_t i = 0; i < entries.size(); ++i) {
-                if (dynamic_cast<DisplacedMesh*>(entries[i].mesh)) {
-                    entryDisplacedDirty[i] = true;
-                }
+                if (entries[i].isDisplaced) entryDisplacedDirty[i] = true;
             }
 
             // Morphed meshes — dirty when morphTargetInfluences changed.
+            // Skinned meshes that also carry morph targets are handled by the
+            // bone path above (BLAS rebuild from cpuSkin) so we skip them
+            // here. Both predicates come from the cached fingerprint flags;
+            // the getMorphAttributes hash lookup + SkinnedMesh dynamic_cast
+            // used to run for every entry every frame.
             std::vector<bool> entryMorphDirty(entries.size(), false);
             for (size_t i = 0; i < entries.size(); ++i) {
+                if (!entries[i].isMorphed || entries[i].isSkinned) continue;
                 Mesh* m = entries[i].mesh;
-                if (!isMorphedMesh(*m)) continue;
-                if (dynamic_cast<SkinnedMesh*>(m)) continue;
                 auto mIt = morphedMeshStates.find(m);
                 if (mIt == morphedMeshStates.end()) {
                     entryMorphDirty[i] = true;
@@ -3064,8 +3260,7 @@ namespace threepp {
                         // reach the BLAS, clipping the silhouette.
                         for (size_t i = 0; i < entries.size(); ++i) {
                             if (!entryBonesDirty[i]) continue;
-                            auto* sm = dynamic_cast<SkinnedMesh*>(entries[i].mesh);
-                            if (!sm) continue;
+                            auto* sm = static_cast<SkinnedMesh*>(entries[i].mesh);
                             auto stIt = skinnedMeshStates.find(sm);
                             if (stIt == skinnedMeshStates.end()) continue;
                             refreshSkinnedBlas(*sm, *stIt->second);
@@ -3079,8 +3274,7 @@ namespace threepp {
                         const float now = static_cast<float>(glfwGetTime());
                         for (size_t i = 0; i < entries.size(); ++i) {
                             if (!entryDisplacedDirty[i]) continue;
-                            auto* dm = dynamic_cast<DisplacedMesh*>(entries[i].mesh);
-                            if (!dm) continue;
+                            auto* dm = static_cast<DisplacedMesh*>(entries[i].mesh);
                             auto stIt = displacedStates.find(dm);
                             if (stIt == displacedStates.end()) continue;
                             refreshDisplacedBlas(*dm, *stIt->second, now);
@@ -3109,8 +3303,8 @@ namespace threepp {
                         std::unordered_set<const BufferGeometry*> refreshedGeoms;
                         for (size_t i = 0; i < entries.size(); ++i) {
                             if (!entryGeomDirty[i]) continue;
-                            if (dynamic_cast<SkinnedMesh*>(entries[i].mesh)) continue;
-                            if (dynamic_cast<DisplacedMesh*>(entries[i].mesh)) continue;
+                            if (entries[i].isSkinned)   continue;
+                            if (entries[i].isDisplaced) continue;
 
                             const BufferGeometry* geomKey = entries[i].mesh->geometry().get();
                             if (refreshedGeoms.count(geomKey)) continue;
@@ -3155,15 +3349,20 @@ namespace threepp {
                         for (const MeshEntry& en : entries) {
                             if (en.isOverlay) continue;// raster-overlay only
                             VkDeviceAddress blasAddr = 0;
-                            if (auto* sm = dynamic_cast<SkinnedMesh*>(en.mesh); sm && sm->skeleton && !sm->skeleton->bones.empty()) {
+                            if (en.isSkinned) {
+                                auto* sm = static_cast<SkinnedMesh*>(en.mesh);
+                                if (!sm->skeleton || sm->skeleton->bones.empty()) continue;
                                 auto smIt = skinnedMeshStates.find(sm);
                                 if (smIt == skinnedMeshStates.end()) continue;
                                 blasAddr = smIt->second->blas->address;
-                            } else if (auto* dm = dynamic_cast<DisplacedMesh*>(en.mesh)) {
+                            } else if (en.isDisplaced) {
+                                auto* dm = static_cast<DisplacedMesh*>(en.mesh);
                                 auto dmIt = displacedStates.find(dm);
                                 if (dmIt == displacedStates.end()) continue;
                                 blasAddr = dmIt->second->blas->address;
-                            } else if (auto mIt = morphedMeshStates.find(en.mesh); mIt != morphedMeshStates.end()) {
+                            } else if (en.isMorphed) {
+                                auto mIt = morphedMeshStates.find(en.mesh);
+                                if (mIt == morphedMeshStates.end()) continue;
                                 blasAddr = mIt->second->blas->address;
                             } else {
                                 const BufferGeometry* geomKey = en.mesh->geometry().get();
@@ -3189,16 +3388,20 @@ namespace threepp {
                         refitTlas(instances, blasDeformed);
                     }
                     if (!materialValuesSame) {
-                        // Material-values-only update: rebuild MaterialDescs and
-                        // memcpy into the existing materialDescsBuffer. Pointers
-                        // and textures haven't changed, so the matDescs slot count
-                        // and texture indices stay valid; only the pbr floats need
-                        // to flow through. Wait the device idle since the buffer is
-                        // shared across frames-in-flight — without it we'd race a
-                        // previous frame's RT trace still reading the old contents.
-                        vkDeviceWaitIdle(ctx->device());
-                        std::vector<MaterialDesc> matDescs;
-                        matDescs.reserve(entries.size());
+                        // Material-values-only update: rebuild MaterialDescs into
+                        // the host-side cache, mark every per-frame slot dirty,
+                        // and let renderFrame flush after the next fence wait.
+                        // Pointers and textures haven't changed, so slot count
+                        // and texture indices stay valid; only the pbr floats
+                        // need to flow through. The old single-buffer path called
+                        // vkDeviceWaitIdle here on every animated-pbr frame —
+                        // stalling the whole device just to memcpy a few KB.
+                        // Multi-buffered: this frame's slot is safe to write
+                        // post-fence; the other slot gets flushed when its turn
+                        // comes around (it's still serving the previous frame's
+                        // in-flight RT trace right now).
+                        matDescsCached_.clear();
+                        matDescsCached_.reserve(entries.size());
                         for (const MeshEntry& en : entries) {
                             if (en.isOverlay) continue;// raster-overlay only — no MaterialDesc slot
                             Mesh* m = en.mesh;
@@ -3239,20 +3442,23 @@ namespace threepp {
                                 md.occlusionTexIndex = ensureMaterialTexture(tex);
                                 copyTexUvTransform(md.uvTransformOcclusion, tex);
                             }
-                            matDescs.push_back(md);
+                            matDescsCached_.push_back(md);
                         }
-                        if (!matDescs.empty()) {
-                            void* mapped = nullptr;
-                            vmaMapMemory(ctx->allocator(), materialDescsBuffer.alloc, &mapped);
-                            std::memcpy(mapped, matDescs.data(),
-                                        matDescs.size() * sizeof(MaterialDesc));
-                            vmaUnmapMemory(ctx->allocator(), materialDescsBuffer.alloc);
-                        }
+                        for (auto& d : matDescsDirty_) d = true;
                         sceneHasGlass_ = false;
-                        for (const auto& md : matDescs) {
-                            if (md.transmission > 0.0f) { sceneHasGlass_ = true; break; }
+                        glassEntryIndices_.clear();
+                        // matDescsCached_ skips overlay entries (raster-only),
+                        // so the mat-index lags behind the entry-index whenever
+                        // an overlay precedes glass in the entry list.
+                        for (size_t i = 0, mi = 0; i < entries.size(); ++i) {
+                            if (entries[i].isOverlay) continue;
+                            const auto& md = matDescsCached_[mi++];
+                            if (md.transmission > 0.0f) {
+                                sceneHasGlass_ = true;
+                                glassEntryIndices_.push_back(i);
+                            }
                         }
-                        cacheCullFlags(matDescs);
+                        cacheCullFlags(matDescsCached_);
                     }
                     // Update prevSceneFingerprint so later frames compare
                     // against this frame's state, not stale.
@@ -3279,11 +3485,13 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), tlasBuffer);
                 destroyBuffer(ctx->allocator(), tlasInstancesBuffer);
                 destroyBuffer(ctx->allocator(), geometryDescsBuffer);
-                destroyBuffer(ctx->allocator(), materialDescsBuffer);
+                for (auto& b : materialDescsBuffers) {
+                    destroyBuffer(ctx->allocator(), b);
+                    b = {};
+                }
                 tlasBuffer = {};
                 tlasInstancesBuffer = {};
                 geometryDescsBuffer = {};
-                materialDescsBuffer = {};
 
                 // Prune stale cache entries whose underlying objects have been
                 // destroyed (typical on model swap). Keeping them risks an
@@ -3399,11 +3607,13 @@ namespace threepp {
                 // own FFT cascade and its own continuously-rewritten vertex
                 // buffer).
                 BlasRecord* recPtr = nullptr;
-                if (auto* sm = dynamic_cast<SkinnedMesh*>(m); sm && sm->skeleton && !sm->skeleton->bones.empty()) {
+                auto* sm = en.isSkinned ? static_cast<SkinnedMesh*>(m) : nullptr;
+                if (sm && sm->skeleton && !sm->skeleton->bones.empty()) {
                     auto* st = ensureSkinnedBlas(*sm);
                     if (!st) continue;
                     recPtr = st->blas.get();
-                } else if (auto* dm = dynamic_cast<DisplacedMesh*>(m)) {
+                } else if (en.isDisplaced) {
+                    auto* dm = static_cast<DisplacedMesh*>(m);
                     auto* st = ensureDisplacedState(*dm);
                     if (!st) continue;
                     recPtr = st->blas.get();
@@ -3411,7 +3621,7 @@ namespace threepp {
                     // contents (rest grid right now) become the displaced
                     // surface before the first ray-trace sees it.
                     refreshDisplacedBlas(*dm, *st, static_cast<float>(glfwGetTime()));
-                } else if (isMorphedMesh(*m)) {
+                } else if (en.isMorphed) {
                     auto* st = ensureMorphedBlas(*m);
                     if (!st) continue;
                     recPtr = st->blas.get();
@@ -3515,10 +3725,24 @@ namespace threepp {
 
             buildTlas(instances);
             uploadDescBuffer(geometryDescsBuffer, geomDescs);
-            uploadDescBuffer(materialDescsBuffer, matDescs);
+            // Seed every per-frame slot with the fresh matDescs so the first
+            // few frames don't try to flush against a half-initialised ring.
+            // matDescsCached_ stays in sync as the host-side authoritative
+            // copy used by the hot-path flush.
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                uploadDescBuffer(materialDescsBuffers[f], matDescs);
+            }
+            matDescsCached_ = matDescs;
+            for (auto& d : matDescsDirty_) d = false;
             sceneHasGlass_ = false;
-            for (const auto& md : matDescs) {
-                if (md.transmission > 0.0f) { sceneHasGlass_ = true; break; }
+            glassEntryIndices_.clear();
+            for (size_t i = 0, mi = 0; i < entries.size(); ++i) {
+                if (entries[i].isOverlay) continue;
+                const auto& md = matDescs[mi++];
+                if (md.transmission > 0.0f) {
+                    sceneHasGlass_ = true;
+                    glassEntryIndices_.push_back(i);
+                }
             }
             cacheCullFlags(matDescs);
 
@@ -3553,6 +3777,10 @@ namespace threepp {
             }
             prevSceneFingerprint = std::move(currFp);
             sceneBuilt_ = true;
+            // Structural change invalidates the photon grid: cells from the
+            // old scene's world layout linger and would leak into the new
+            // scene's gather. Force the one-shot zero-fill shim to re-run.
+            photonCountInitialized_ = false;
         }
 
         void createCameraUbos() {
@@ -4184,20 +4412,24 @@ namespace threepp {
         // Resolve the BlasRecord backing a given visible entry. The same
         // physical buffers feed BLAS and the raster prepass (VERTEX_BUFFER_BIT
         // was added at allocation), so this is a pure lookup, no upload.
+        // Branches off the cached type flags so we don't dynamic_cast every
+        // entry on every raster draw call.
         const BlasRecord* resolveBlasForEntry(const MeshEntry& en) const {
-            if (auto* sm = dynamic_cast<SkinnedMesh*>(en.mesh)) {
+            if (en.isSkinned) {
+                auto* sm = static_cast<SkinnedMesh*>(en.mesh);
                 auto it = skinnedMeshStates.find(sm);
                 if (it != skinnedMeshStates.end() && it->second->blas)
                     return it->second->blas.get();
                 return nullptr;
             }
-            if (auto* dm = dynamic_cast<DisplacedMesh*>(en.mesh)) {
+            if (en.isDisplaced) {
+                auto* dm = static_cast<DisplacedMesh*>(en.mesh);
                 auto it = displacedStates.find(dm);
                 if (it != displacedStates.end() && it->second->blas)
                     return it->second->blas.get();
                 return nullptr;
             }
-            {
+            if (en.isMorphed) {
                 auto it = morphedMeshStates.find(en.mesh);
                 if (it != morphedMeshStates.end() && it->second->blas)
                     return it->second->blas.get();
@@ -4311,7 +4543,7 @@ namespace threepp {
             mmInfo.range  = VK_WHOLE_SIZE;
 
             VkDescriptorBufferInfo matsInfo{};
-            matsInfo.buffer = materialDescsBuffer.handle;
+            matsInfo.buffer = materialDescsBuffers[frame].handle;
             matsInfo.offset = 0;
             matsInfo.range  = VK_WHOLE_SIZE;
 
@@ -4407,6 +4639,7 @@ namespace threepp {
             for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
                 const auto& en = lastVisibleEntries_[i];
                 if (en.isOverlay) continue;// raster-overlay only — drawn post-TAA, not in G-buf
+                if (!en.inFrustum) continue;// CPU frustum cull dodges per-draw GPU CP overhead
                 const BlasRecord* rec = resolveBlasForEntry(en);
                 if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
 
@@ -4438,8 +4671,8 @@ namespace threepp {
                 // so a deforming skinned surface reports zero motion and
                 // would otherwise ghost severely.
                 uint32_t flags = 0u;
-                if (dynamic_cast<DisplacedMesh*>(en.mesh)) flags |= 1u;
-                if (dynamic_cast<SkinnedMesh*>(en.mesh))   flags |= 8u;
+                if (en.isDisplaced) flags |= 1u;
+                if (en.isSkinned)   flags |= 8u;
                 // For transmissive/thinWalled we'd consult MaterialDesc here
                 // — deferred to next pass; raygen also reads matDesc directly.
                 pc.flags = flags;
@@ -7904,6 +8137,96 @@ namespace threepp {
             callRegion = {};
         }
 
+        // Allocate one VkQueryPool per frame-in-flight, each sized for the
+        // begin/end pair of every TimingPass. We probe device support up
+        // front; on the (rare) device without timestampComputeAndGraphics
+        // we skip pool creation and lastFrameTimings_ stays at zero — the
+        // helpers below short-circuit when the pool handle is null.
+        void createTimestampPools() {
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
+            timestampPeriodNs_ = props.limits.timestampPeriod;
+            timingsSupported_  = (timestampPeriodNs_ > 0.f) &&
+                                 (props.limits.timestampComputeAndGraphics != 0u);
+            if (!timingsSupported_) return;
+            VkQueryPoolCreateInfo qpci{};
+            qpci.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            qpci.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+            qpci.queryCount = kTimingSlots;
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                check(vkCreateQueryPool(ctx->device(), &qpci, nullptr,
+                                        &timestampPools[f]),
+                      "vkCreateQueryPool(timing)");
+            }
+        }
+
+        // Bracket helpers — write a timestamp at BOTTOM_OF_PIPE (= once all
+        // prior commands have finished). Marking the pass bit lets readback
+        // skip pairs that didn't run this frame (photon emit when glass not
+        // visible, overlay passes in non-hybrid mode, etc.).
+        void timingBegin(VkCommandBuffer cb, TimingPass p) {
+            if (!timingsSupported_) return;
+            vkCmdWriteTimestamp2(cb,
+                                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                                 timestampPools[currentFrame],
+                                 p * 2u);
+            timingMaskRecorded_[currentFrame] |= (1u << p);
+        }
+        void timingEnd(VkCommandBuffer cb, TimingPass p) {
+            if (!timingsSupported_) return;
+            vkCmdWriteTimestamp2(cb,
+                                 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                 timestampPools[currentFrame],
+                                 p * 2u + 1u);
+        }
+
+        // Read back the timestamps written into THIS frame's pool by the
+        // previous render that used the same slot. Safe to call after the
+        // inFlight[currentFrame] fence has signaled — the GPU has retired
+        // every command that wrote into this pool.
+        //
+        // We read pairs individually (not in one bulk fetch) because slots
+        // for passes that didn't run this cycle are RESET but never WRITTEN,
+        // and VK_QUERY_RESULT_WAIT_BIT on a reset query blocks indefinitely.
+        // The recorded-mask tells us which pair endpoints were both written.
+        void readBackTimingsFromPriorUse() {
+            // Pre-populate CPU fields the caller can keep updated even if
+            // GPU timings aren't available.
+            lastFrameTimings_.cpuEnsureSceneMs = pendingCpuEnsureSceneMs_;
+            // Zero the GPU fields — only the passes that ran will overwrite.
+            lastFrameTimings_.rasterGbufMs = 0.f;
+            lastFrameTimings_.overlayMs    = 0.f;
+            lastFrameTimings_.photonEmitMs = 0.f;
+            lastFrameTimings_.pathTraceMs  = 0.f;
+            lastFrameTimings_.denoiseMs    = 0.f;
+            lastFrameTimings_.taaMs        = 0.f;
+            if (!timingsSupported_) return;
+            const uint32_t mask = timingMaskRecorded_[currentFrame];
+            if (mask == 0u) return;// first use of this slot
+            const float toMs = timestampPeriodNs_ * 1e-6f;
+            auto pairMs = [&](TimingPass p) -> float {
+                if ((mask & (1u << p)) == 0u) return 0.f;
+                std::array<uint64_t, 2> pair{};
+                const VkResult r = vkGetQueryPoolResults(
+                        ctx->device(), timestampPools[currentFrame],
+                        p * 2u, 2u,
+                        sizeof(pair), pair.data(),
+                        sizeof(uint64_t),
+                        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+                if (r != VK_SUCCESS) return 0.f;
+                if (pair[1] < pair[0]) return 0.f;
+                return float(pair[1] - pair[0]) * toMs;
+            };
+            lastFrameTimings_.rasterGbufMs = pairMs(TP_RasterGbuf);
+            // Overlay timings collapse the depth prepass + draw pair into
+            // a single "overlay" column for the public API.
+            lastFrameTimings_.overlayMs    = pairMs(TP_OverlayDepth) + pairMs(TP_OverlayDraw);
+            lastFrameTimings_.photonEmitMs = pairMs(TP_PhotonEmit);
+            lastFrameTimings_.pathTraceMs  = pairMs(TP_PathTrace);
+            lastFrameTimings_.denoiseMs    = pairMs(TP_Denoise);
+            lastFrameTimings_.taaMs        = pairMs(TP_TAA);
+        }
+
         void createPhotonBuffers() {
             photonCountBuf = createBuffer(
                     ctx->allocator(), ctx->device(),
@@ -8118,7 +8441,7 @@ namespace threepp {
                     wGeom.pBufferInfo = &geomInfo;
 
                     VkDescriptorBufferInfo matInfo{};
-                    matInfo.buffer = materialDescsBuffer.handle;
+                    matInfo.buffer = materialDescsBuffers[f].handle;
                     matInfo.offset = 0;
                     matInfo.range = VK_WHOLE_SIZE;
                     VkWriteDescriptorSet wMat{};
@@ -8478,6 +8801,10 @@ namespace threepp {
                                            writes.data(), 0, nullptr);
                 }
             }
+            // Binding 1 just got initialised to swapchain views (see imgInfo
+            // above) — record that so renderFrame's per-frame rewrite block
+            // can detect a hybrid-on transition without firing on every frame.
+            binding1Mode_.fill(0);
         }
 
         // Populate `infos` with the current bindless material-texture array,
@@ -8515,10 +8842,15 @@ namespace threepp {
             geomInfo.offset = 0;
             geomInfo.range = VK_WHOLE_SIZE;
 
-            VkDescriptorBufferInfo matInfo{};
-            matInfo.buffer = materialDescsBuffer.handle;
-            matInfo.offset = 0;
-            matInfo.range = VK_WHOLE_SIZE;
+            // Per-frame matDescs ring — set idx maps to frame f = idx / imageCount_,
+            // and that set must bind materialDescsBuffers[f] (each frame-in-flight
+            // owns its own slot so the hot path can flush without a device wait).
+            std::array<VkDescriptorBufferInfo, kFramesInFlight> matInfos{};
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                matInfos[f].buffer = materialDescsBuffers[f].handle;
+                matInfos[f].offset = 0;
+                matInfos[f].range  = VK_WHOLE_SIZE;
+            }
 
             std::array<VkDescriptorImageInfo, kMaxMaterialTextures> matTexInfos{};
             fillMaterialTextureInfos(matTexInfos);
@@ -8526,6 +8858,7 @@ namespace threepp {
             std::vector<VkWriteDescriptorSet> writes;
             writes.reserve(totalSets * 4);
             for (uint32_t i = 0; i < totalSets; ++i) {
+                const uint32_t f = i / imageCount_;
                 VkWriteDescriptorSet wAS{};
                 wAS.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 wAS.pNext = &asWrite;
@@ -8550,7 +8883,7 @@ namespace threepp {
                 wMat.dstBinding = 4;
                 wMat.descriptorCount = 1;
                 wMat.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                wMat.pBufferInfo = &matInfo;
+                wMat.pBufferInfo = &matInfos[f];
                 writes.push_back(wMat);
 
                 VkWriteDescriptorSet wMatTex{};
@@ -8701,9 +9034,20 @@ namespace threepp {
         }
 
         void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
+            recordStartTp_ = std::chrono::high_resolution_clock::now();
             VkCommandBufferBeginInfo bi{};
             bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer");
+
+            // Timing pool reset must run on the command stream (CPU-side
+            // vkResetQueryPool also works on 1.2+ but we keep the GPU-side
+            // reset for portability with older Vulkan toolchains). Clear
+            // the host-side recorded-mask in lockstep.
+            if (timingsSupported_ && timestampPools[currentFrame] != VK_NULL_HANDLE) {
+                vkCmdResetQueryPool(cb, timestampPools[currentFrame],
+                                    0, kTimingSlots);
+                timingMaskRecorded_[currentFrame] = 0u;
+            }
 
             // ── Hybrid raster G-buffer pass ─────────────────────────────────
             // Runs ahead of any RT work so the gbuffer is ready when raygen
@@ -8712,7 +9056,9 @@ namespace threepp {
             // overlay on top (mirrors the PT path's overlay flow), then
             // present — bypassing the entire RT pipeline.
             if (hybridEnabled_ && rasterGbufPipeline != VK_NULL_HANDLE) {
+                timingBegin(cb, TP_RasterGbuf);
                 recordRasterGbufPass(cb, currentFrame);
+                timingEnd(cb, TP_RasterGbuf);
                 // ── Overlay depth prepass ──────────────────────────────────
                 // Fills rasterGbufs[currentFrame].unjitDepth with the
                 // unjittered VP. Consumed by the post-TAA wireframe overlay
@@ -8720,6 +9066,7 @@ namespace threepp {
                 // pipeline exists AND the scene actually has overlay
                 // candidates this frame (else the prepass is wasted work).
                 if (overlayDepthPrepassPipeline != VK_NULL_HANDLE && overlayFoundLastFrame_) {
+                    timingBegin(cb, TP_OverlayDepth);
                     const VkExtent2D dext = ctx->swapchainExtent();
                     VkImage      depthImg  = rasterGbufs[currentFrame].unjitDepth.image;
                     VkImageView  depthView = rasterGbufs[currentFrame].unjitDepth.view;
@@ -8781,6 +9128,7 @@ namespace threepp {
                     for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
                         const auto& en = lastVisibleEntries_[i];
                         if (en.isOverlay) continue;// overlay meshes drawn by overlay pass instead
+                        if (!en.inFrustum) continue;// frustum cull (same lever as the gbuf prepass)
                         const BlasRecord* rec = resolveBlasForEntry(en);
                         if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
 
@@ -8839,6 +9187,7 @@ namespace threepp {
                     depToRead.imageMemoryBarrierCount = 1;
                     depToRead.pImageMemoryBarriers = &toRead;
                     vkCmdPipelineBarrier2(cb, &depToRead);
+                    timingEnd(cb, TP_OverlayDepth);
                 }
                 if (hybridDebugView_ != HybridDebugView::Off) {
                     recordHybridDebugBlit(cb, imageIndex, currentFrame);
@@ -8928,6 +9277,11 @@ namespace threepp {
                         vkCmdPipelineBarrier2(cb, &depPresent);
                     }
                     check(vkEndCommandBuffer(cb), "vkEndCommandBuffer");
+                    {
+                        using namespace std::chrono;
+                        const auto dt = high_resolution_clock::now() - recordStartTp_;
+                        lastFrameTimings_.cpuRecordMs = duration<float, std::milli>(dt).count();
+                    }
                     return;
                 }
             }
@@ -8997,10 +9351,42 @@ namespace threepp {
             const uint32_t setIdx = currentFrame * imageCount_ + imageIndex;
 
             // ── Photon emit pass ────────────────────────────────────────────────
-            // Skipped when no material has transmission > 0: caustics only form
-            // through glass, and gatherCaustics in closest_hit is gated on the
-            // same flag, so no shader will read these buffers either way.
-            if (sceneHasGlass_) {
+            // Two gates: (1) sceneHasGlass_ — no transmissive material means
+            // there's no chance of caustics anywhere, and the chit gather is
+            // gated on the same flag. (2) glassVisibleThisFrame_ — even when
+            // glass exists, skip the 512×512 emit pass on frames where no
+            // glass AABB is in the camera frustum. The world-grid photon
+            // store keeps the last emit visible to gather for free, so a few
+            // frames of "stale" caustics persist after the camera pans away;
+            // they're refreshed the moment glass re-enters view.
+            //
+            // First-frame safety: chit's gather is gated on sceneHasGlass_
+            // alone (not visibility), so if a scene starts with glass but
+            // glass is not in the initial frustum we'd let gather read
+            // device-local photonCountBuf before anyone has written it.
+            // Shim a one-shot zero-fill so the gather always sees a valid
+            // (all-zero) count buffer.
+            if (sceneHasGlass_ && !glassVisibleThisFrame_ && !photonCountInitialized_) {
+                vkCmdFillBuffer(cb, photonCountBuf.handle, 0, VK_WHOLE_SIZE, 0u);
+                VkBufferMemoryBarrier2 fillDone{};
+                fillDone.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                fillDone.srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                fillDone.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                fillDone.dstStageMask  = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                fillDone.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                fillDone.srcQueueFamilyIndex = fillDone.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                fillDone.buffer = photonCountBuf.handle;
+                fillDone.size   = VK_WHOLE_SIZE;
+                VkDependencyInfo fillDep{};
+                fillDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                fillDep.bufferMemoryBarrierCount = 1;
+                fillDep.pBufferMemoryBarriers = &fillDone;
+                vkCmdPipelineBarrier2(cb, &fillDep);
+                photonCountInitialized_ = true;
+            }
+            if (sceneHasGlass_ && glassVisibleThisFrame_) {
+                photonCountInitialized_ = true;
+                timingBegin(cb, TP_PhotonEmit);
             // 1. Zero per-cell photon counters (counts only; data is overwritten
             //    in place, old overflow slots beyond the new count are never read).
             vkCmdFillBuffer(cb, photonCountBuf.handle, 0, VK_WHOLE_SIZE, 0u);
@@ -9082,7 +9468,8 @@ namespace threepp {
                 photonDep.pBufferMemoryBarriers = photonDone.data();
                 vkCmdPipelineBarrier2(cb, &photonDep);
             }
-            }// if (sceneHasGlass_)
+            timingEnd(cb, TP_PhotonEmit);
+            }// if (sceneHasGlass_ && glassVisibleThisFrame_)
             // ── End photon emit ─────────────────────────────────────────────────
 
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rtPipeline);
@@ -9136,8 +9523,10 @@ namespace threepp {
                                0, sizeof(pc), pc);
 
             const VkExtent2D ext = ctx->swapchainExtent();
+            timingBegin(cb, TP_PathTrace);
             ctx->rt().cmdTraceRays(cb, &rgenRegion, &missRegion, &hitRegion, &callRegion,
                                    ext.width, ext.height, 1);
+            timingEnd(cb, TP_PathTrace);
 
             // ── Spatial denoiser: 3-pass à-trous + finalize tonemap + sRGB ──────
             // RT writes accumImage + gbufImage; denoise pipeline reads them.
@@ -9169,6 +9558,7 @@ namespace threepp {
                 };
 
                 barrierMem(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR);
+                timingBegin(cb, TP_Denoise);
 
                 if (denoiseEnabled_) {
                     // 2 atrous passes: stride 1 → 2. Pass 0 sources from
@@ -9221,6 +9611,7 @@ namespace threepp {
                                    VK_SHADER_STAGE_COMPUTE_BIT,
                                    0, sizeof(finalizePc), finalizePc);
                 vkCmdDispatch(cb, gx, gy, 1);
+                timingEnd(cb, TP_Denoise);
             }
             // ── End denoise ─────────────────────────────────────────────────────
 
@@ -9263,6 +9654,7 @@ namespace threepp {
                 vkCmdPipelineBarrier2(cb, &taaDep);
 
                 if (taaResolvePipeline != VK_NULL_HANDLE) {
+                    timingBegin(cb, TP_TAA);
                     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, taaResolvePipeline);
                     const uint32_t taaIdx = currentFrame * imageCount_ + imageIndex;
                     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -9285,6 +9677,7 @@ namespace threepp {
                     const uint32_t gxT = (ext.width  + 7u) / 8u;
                     const uint32_t gyT = (ext.height + 7u) / 8u;
                     vkCmdDispatch(cb, gxT, gyT, 1);
+                    timingEnd(cb, TP_TAA);
                     taaHistoryValid_ = true;
                 }
             }
@@ -9316,6 +9709,7 @@ namespace threepp {
                 overlayFoundLastFrame_ = hasOverlay;
 
                 if (hasOverlay) {
+                    timingBegin(cb, TP_OverlayDraw);
                     // Swapchain GENERAL → COLOR_ATTACHMENT_OPTIMAL. TAA's
                     // compute write is the source stage we're synchronizing.
                     VkImageMemoryBarrier2 toColor{};
@@ -9560,6 +9954,7 @@ namespace threepp {
                     dBack.imageMemoryBarrierCount = 1;
                     dBack.pImageMemoryBarriers = &toGeneral;
                     vkCmdPipelineBarrier2(cb, &dBack);
+                    timingEnd(cb, TP_OverlayDraw);
                 }
             }
             // ── End hybrid raster overlay pass ─────────────────────────────────
@@ -9650,11 +10045,21 @@ namespace threepp {
             }
 
             check(vkEndCommandBuffer(cb), "vkEndCommandBuffer");
+            {
+                using namespace std::chrono;
+                const auto dt = high_resolution_clock::now() - recordStartTp_;
+                lastFrameTimings_.cpuRecordMs = duration<float, std::milli>(dt).count();
+            }
         }
 
         void renderFrame(Object3D& scene, Camera& camera) {
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
+            // Fence has signaled → the previous render that wrote into
+            // timestampPools[currentFrame] has retired. Read it now, before
+            // we reset the pool and re-record. Result lands in
+            // lastFrameTimings_ for the public getter to read.
+            readBackTimingsFromPriorUse();
 
             uint32_t imageIndex = 0;
             VkResult acq = vkAcquireNextImageKHR(d, ctx->swapchain(), UINT64_MAX,
@@ -9674,6 +10079,15 @@ namespace threepp {
             // inFlight[currentFrame] fence has been signaled — the GPU has
             // finished its previous use of this slot.
             computeAndUploadMotionMatrices(currentFrame, lastVisibleEntries_);
+            // Same fence guarantee covers materialDescsBuffers[currentFrame].
+            // ensureSceneBuilt staged any material-value change in
+            // matDescsCached_ + flipped matDescsDirty_[*]=true; flush this
+            // slot now (the other slot flushes when its frame comes around).
+            flushMaterialDescsIfDirty(currentFrame);
+            // Per-frame frustum cull: tags every entry with `inFrustum`
+            // for the raster passes to consume, and resolves the photon-
+            // emit gating flag (glassVisibleThisFrame_) as a side effect.
+            cullEntriesAgainstFrustum(camera);
             // Hybrid raster prepass: lazy-create resources on first use,
             // refresh attachments on resize, then upload the per-frame
             // camera VPs (curr jittered, curr unjittered, prev unjittered).
@@ -9682,45 +10096,38 @@ namespace threepp {
             if (hybridEnabled_) {
                 ensureHybridResources();
                 uploadRasterCameraUbo(currentFrame, camera);
-                // Per-frame: redirect denoise output (binding 1) into
-                // taaInputImagesPP[currentFrame] so the TAA pass below sees
-                // it. TAA's spatial+temporal smoothing is what fixes the
-                // moving-object shake from per-frame Halton jitter; the PT
-                // accumulator + à-trous already gave us stills quality, TAA
-                // sits on top to handle motion. Now that primary is shaded
-                // by chit (not the deprecated shade_primary), TAA's input
-                // is high quality, so the output preserves stills quality
-                // while still smoothing motion.
-                for (uint32_t i = 0; i < imageCount_; ++i) {
-                    const uint32_t idx = currentFrame * imageCount_ + i;
-                    VkDescriptorImageInfo info{};
-                    info.imageView   = taaInputImagesPP[currentFrame].view;
-                    info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet w{};
-                    w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    w.dstSet          = descriptorSets[idx];
-                    w.dstBinding      = 1;
-                    w.descriptorCount = 1;
-                    w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    w.pImageInfo      = &info;
-                    vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
-                }
-            } else {
-                // Hybrid was on previously and is now off — restore binding 1
-                // to the swapchain so denoise writes direct-to-present.
-                for (uint32_t i = 0; i < imageCount_; ++i) {
-                    const uint32_t idx = currentFrame * imageCount_ + i;
-                    VkDescriptorImageInfo info{};
-                    info.imageView   = ctx->swapchainImageViews()[i];
-                    info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet w{};
-                    w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    w.dstSet          = descriptorSets[idx];
-                    w.dstBinding      = 1;
-                    w.descriptorCount = 1;
-                    w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    w.pImageInfo      = &info;
-                    vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+            }
+            // Binding 1 (RT denoise output) target: TAA input when hybrid is
+            // on (TAA resolves it before swapchain present), swapchain view
+            // when hybrid is off (denoise writes direct-to-present). Only
+            // rewrite when this slot's actual binding differs from the desired
+            // mode — used to fire imageCount_ vkUpdateDescriptorSets calls per
+            // frame for nothing once the steady state was reached.
+            //
+            // TAA's spatial+temporal smoothing is what fixes the moving-object
+            // shake from per-frame Halton jitter; the PT accumulator + à-trous
+            // gives stills quality (chit primary is high-quality input), TAA
+            // sits on top to handle motion.
+            {
+                const int8_t desired = hybridEnabled_ ? 1 : 0;
+                if (binding1Mode_[currentFrame] != desired) {
+                    for (uint32_t i = 0; i < imageCount_; ++i) {
+                        const uint32_t idx = currentFrame * imageCount_ + i;
+                        VkDescriptorImageInfo info{};
+                        info.imageView   = (desired == 1)
+                                ? taaInputImagesPP[currentFrame].view
+                                : ctx->swapchainImageViews()[i];
+                        info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        VkWriteDescriptorSet w{};
+                        w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                        w.dstSet          = descriptorSets[idx];
+                        w.dstBinding      = 1;
+                        w.descriptorCount = 1;
+                        w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                        w.pImageInfo      = &info;
+                        vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+                    }
+                    binding1Mode_[currentFrame] = desired;
                 }
             }
             uploadMeshMovedBits(currentFrame);
@@ -9807,6 +10214,7 @@ namespace threepp {
     VulkanRenderer::~VulkanRenderer() = default;
 
     void VulkanRenderer::render(Object3D& scene, Camera& camera) {
+        const auto frameStart = std::chrono::high_resolution_clock::now();
         const auto cur = pimpl_->canvas.size();
         if (cur.width() != pimpl_->size.width() || cur.height() != pimpl_->size.height()) {
             pimpl_->needsResize = true;
@@ -9816,8 +10224,20 @@ namespace threepp {
         // can flip toneMapping / toneMappingExposure freely between frames.
         pimpl_->toneMapping_         = toneMapping;
         pimpl_->toneMappingExposure_ = toneMappingExposure;
+        // Time ensureSceneBuilt into the pending CPU slot; renderFrame's
+        // readback consumes it after the fence wait so the public getter
+        // matches the same frame whose GPU timings we expose.
+        const auto sceneStart = std::chrono::high_resolution_clock::now();
         pimpl_->ensureSceneBuilt(scene);
+        pimpl_->pendingCpuEnsureSceneMs_ =
+                std::chrono::duration<float, std::milli>(
+                        std::chrono::high_resolution_clock::now() - sceneStart)
+                        .count();
         pimpl_->renderFrame(scene, camera);
+        pimpl_->lastFrameTimings_.cpuFrameMs =
+                std::chrono::duration<float, std::milli>(
+                        std::chrono::high_resolution_clock::now() - frameStart)
+                        .count();
     }
 
     WindowSize VulkanRenderer::size() const { return pimpl_->size; }
@@ -9947,6 +10367,10 @@ namespace threepp {
 
     bool VulkanRenderer::restirDIEnabled() const {
         return pimpl_->restirDIEnabled_;
+    }
+
+    VulkanRenderer::FrameTimings VulkanRenderer::lastFrameTimings() const {
+        return pimpl_->lastFrameTimings_;
     }
 
     void VulkanRenderer::setOverlayLayer(int channel) {
