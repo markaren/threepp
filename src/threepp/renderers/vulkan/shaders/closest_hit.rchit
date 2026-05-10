@@ -838,9 +838,14 @@ void main() {
     const bool isFront = dot(Nworld, V) >= 0.0;
     vec3 N = isFront ? Nworld : -Nworld;
 
-    // Single-sided material hit from behind: pass the ray through unchanged.
-    // Uses geometric facing to avoid false pass-through at grazing angles.
-    if (!geoFront && mdesc.doubleSided == 0 && mdesc.transmission <= 0.0) {
+    // Single-sided material hit from the wrong side: pass the ray through
+    // unchanged. Uses geometric facing (not shading normal) to avoid false
+    // pass-through at grazing angles. sideMode 0 = Front (back-face hit is
+    // wrong side), 1 = Back (front-face hit is wrong side), 2 = Double
+    // (never wrong side — falls through to shading).
+    const bool wrongSideHit = (mdesc.sideMode == 0 && !geoFront) ||
+                              (mdesc.sideMode == 1 &&  geoFront);
+    if (wrongSideHit && mdesc.transmission <= 0.0) {
         payload.radiance      = vec3(0.0);
         payload.brdfWeight    = vec3(1.0);
         // No advance past hitT — raygen uses a 1e-4 tmin for pass-through

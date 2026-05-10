@@ -63,7 +63,10 @@ namespace threepp::vulkan_pt {
         float specularColor[3];
         float sheenColor[3];
         float sheenRoughness;
-        int32_t doubleSided;
+        // Side enum (matches threepp::Side): 0 = Front, 1 = Back, 2 = Double.
+        // Drives the chit pass-through gate (wrong-side hits skip the surface)
+        // and the raster gbuffer cull mode (BACK / FRONT / NONE respectively).
+        int32_t sideMode;
         float uvTransform[9];
         int32_t occlusionTexIndex;
         float uvTransformNormal[9];
@@ -116,7 +119,8 @@ struct MaterialDesc {
     vec3  specularColor;
     vec3  sheenColor;
     float sheenRoughness;
-    int   doubleSided;
+    // 0 = Front (cull back), 1 = Back (cull front), 2 = Double (no cull).
+    int   sideMode;
     mat3  uvTransform;
     int   occlusionTexIndex;
     mat3  uvTransformNormal;

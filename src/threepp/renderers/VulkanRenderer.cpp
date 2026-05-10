@@ -649,11 +649,14 @@ namespace threepp {
         // after the in-flight fence has been waited (safe to write the
         // motionMatBuffers[currentFrame] HOST_VISIBLE buffer).
         std::vector<MeshEntry> lastVisibleEntries_;
-        // Per-entry cull flag cached from each upload of matDescs. Set when
-        // the material is double-sided OR transmissive (or thin-walled) —
-        // those classes need both faces rasterized in the gbuffer pass to
-        // match BVH/chit semantics. Indexed in lock-step with lastVisibleEntries_.
-        std::vector<uint8_t> lastVisibleNeedsNoCull_;
+        // Per-entry cull mode cached from each upload of matDescs.
+        //   Side::Front  → VK_CULL_MODE_BACK_BIT  (default fast path)
+        //   Side::Back   → VK_CULL_MODE_FRONT_BIT
+        //   Side::Double → VK_CULL_MODE_NONE
+        // Stored as VkCullModeFlags directly so the gbuffer draw loop can
+        // hand it straight to vkCmdSetCullMode. Indexed in lock-step with
+        // lastVisibleEntries_.
+        std::vector<VkCullModeFlags> lastVisibleCullMode_;
         bool sceneBuilt_ = false;
 
         // Ray-tracing pipeline.
@@ -2673,7 +2676,10 @@ namespace threepp {
                 d.iridescenceIOR         = std::max(1.0f, ir->iridescenceIOR);
                 d.iridescenceThicknessNm = std::max(0.0f, ir->iridescenceThicknessNm);
             }
-            d.doubleSided = (mat->side == Side::Double) ? 1 : 0;
+            // sideMode mirrors threepp::Side {Front=0, Back=1, Double=2}.
+            // Chit reads it for the wrong-side pass-through gate; the raster
+            // gbuffer pass picks BACK / FRONT / NONE cull mode accordingly.
+            d.sideMode = static_cast<int32_t>(mat->side);
             // MeshBasicMaterial is unlit: emit base color directly with no
             // PBR shading or bounce. Use roughness < 0 as the shader sentinel
             // (avoids growing the MaterialDesc layout). Mirrors WGPU's
@@ -4152,21 +4158,26 @@ namespace threepp {
             return r;
         }
 
-        // Cache per-entry cull flags from a freshly-built matDescs array.
+        // Cache per-entry cull mode from a freshly-built matDescs array.
         // Called wherever matDescs is uploaded so the gbuffer draw loop can
-        // pick BACK-cull (default fast path) vs NONE-cull (Side::Double).
+        // pick BACK-cull (Front, default fast path), FRONT-cull (Back), or
+        // NONE-cull (Double).
         //
-        // Only doubleSided triggers no-cull. Transmissive materials with
-        // proper outward winding (ocean, most glass viewed from outside)
-        // render correctly under BACK culling. Camera-inside-glass cases
-        // (windshield from cabin) are an artist content concern: mark the
-        // glass as Side::Double if you need interior viewing — chit's BVH
-        // path doesn't cull, but the raster prepass does, so unmarked
-        // single-sided glass shows the surface BEHIND it in the gbuffer.
+        // Side::Front + transmissive materials with proper outward winding
+        // (ocean, most glass viewed from outside) render correctly under
+        // BACK culling. Camera-inside-glass cases (windshield from cabin)
+        // are an artist content concern: mark the glass as Side::Double if
+        // you need interior viewing — chit's BVH path doesn't cull, but the
+        // raster prepass does, so unmarked single-sided glass shows the
+        // surface BEHIND it in the gbuffer.
         void cacheCullFlags(const std::vector<MaterialDesc>& mds) {
-            lastVisibleNeedsNoCull_.resize(mds.size());
+            lastVisibleCullMode_.resize(mds.size());
             for (size_t i = 0; i < mds.size(); ++i) {
-                lastVisibleNeedsNoCull_[i] = (mds[i].doubleSided != 0) ? 1u : 0u;
+                switch (mds[i].sideMode) {
+                    case 0:  lastVisibleCullMode_[i] = VK_CULL_MODE_BACK_BIT;  break;
+                    case 1:  lastVisibleCullMode_[i] = VK_CULL_MODE_FRONT_BIT; break;
+                    default: lastVisibleCullMode_[i] = VK_CULL_MODE_NONE;      break;
+                }
             }
         }
 
@@ -4399,11 +4410,13 @@ namespace threepp {
                 const BlasRecord* rec = resolveBlasForEntry(en);
                 if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
 
-                // Per-draw cull mode based on cached material flags.
-                const bool noCull = (i < lastVisibleNeedsNoCull_.size() &&
-                                     lastVisibleNeedsNoCull_[i] != 0u);
-                const VkCullModeFlags wantCull = noCull ? VK_CULL_MODE_NONE
-                                                        : VK_CULL_MODE_BACK_BIT;
+                // Per-draw cull mode from cached material side. Falls back to
+                // BACK (Side::Front default) when the cache hasn't been built
+                // for this entry yet, matching the previous behaviour.
+                const VkCullModeFlags wantCull =
+                        (i < lastVisibleCullMode_.size())
+                                ? lastVisibleCullMode_[i]
+                                : VK_CULL_MODE_BACK_BIT;
                 if (wantCull != curCullMode) {
                     vkCmdSetCullMode(cb, wantCull);
                     curCullMode = wantCull;
@@ -5435,13 +5448,11 @@ namespace threepp {
             VkPipelineRasterizationStateCreateInfo rs{};
             rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
             rs.polygonMode = VK_POLYGON_MODE_FILL;
-            // cullMode is set dynamically per-draw in recordRasterGbufPass —
-            // BACK by default (fast path, ~2× perf on dense meshes like
-            // ocean) and NONE for transmissive / doubleSided / thin-walled
-            // materials (so windshields/glass viewed from inside still
-            // rasterize the camera-facing back face). The static value
-            // here is overridden by the dynamic state, but Vulkan still
-            // wants a valid placeholder.
+            // cullMode is set dynamically per-draw in recordRasterGbufPass
+            // from the material's Side: BACK for Front (default fast path,
+            // ~2× perf on dense meshes like ocean), FRONT for Back, NONE
+            // for Double. The static value here is overridden by the dynamic
+            // state, but Vulkan still wants a valid placeholder.
             rs.cullMode    = VK_CULL_MODE_BACK_BIT;
             rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
             rs.lineWidth   = 1.0f;
@@ -5468,9 +5479,9 @@ namespace threepp {
             cb.pAttachments    = cbas;
 
             // Dynamic viewport + scissor + cullMode (Vulkan 1.3 core via
-            // extendedDynamicState). cullMode flips per-draw between BACK
-            // (opaque single-sided fast path) and NONE (transmissive /
-            // doubleSided / thin-walled).
+            // extendedDynamicState). cullMode flips per-draw across BACK
+            // (Side::Front, default fast path), FRONT (Side::Back), and
+            // NONE (Side::Double).
             VkDynamicState dynStates[3] = {VK_DYNAMIC_STATE_VIEWPORT,
                                            VK_DYNAMIC_STATE_SCISSOR,
                                            VK_DYNAMIC_STATE_CULL_MODE};
