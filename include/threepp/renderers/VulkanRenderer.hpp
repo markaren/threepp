@@ -102,6 +102,16 @@ namespace threepp {
         void setFireflyClamp(float cap);
         [[nodiscard]] float fireflyClamp() const;
 
+        // Manually reset path-tracer frame accumulation. Wipes per-pixel
+        // running mean + history (gbuf + accum + ReSTIR DI reservoirs),
+        // invalidates reproject state (prev camera + per-mesh prevWorld),
+        // and rewinds the sampleIndex counter so the next frame cold-starts
+        // from sample 1. Use after lens / focus / lighting changes the
+        // renderer can't detect on its own. Issues a vkDeviceWaitIdle
+        // internally — must not be called from inside a render() pass.
+        // Mirrors WgpuPathTracer::resetAccumulation.
+        void resetAccumulation();
+
         // Hybrid raster + path tracer mode (UE/Omniverse-style). Raster runs
         // a deterministic G-buffer prepass (depth, normal, motion vectors,
         // per-pixel IDs); the path tracer reads that as primary visibility

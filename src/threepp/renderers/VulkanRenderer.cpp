@@ -5087,6 +5087,20 @@ namespace threepp {
             prevWorldMats.clear();
         }
 
+        // Manual accumulation reset. Mirrors the post-create reset block above:
+        // wipes gbuf + accum + ReSTIR DI reservoirs, rewinds sampleIndex, and
+        // invalidates reproject state so the next frame cold-starts from
+        // sample 1. Issues a vkDeviceWaitIdle since clearGbufImages requires
+        // the GPU idle before its TRANSFER_DST layout transition.
+        void resetAccumulation() {
+            vkDeviceWaitIdle(ctx->device());
+            clearGbufImages();
+            sampleIndex = 0;
+            accumWriteIdx_ = 0;
+            prevCameraValid = false;
+            prevWorldMats.clear();
+        }
+
         // ── Hybrid raster G-buffer prepass implementation ───────────────────
         // Lazy-initialized on first render() with hybridEnabled_ = true.
         // All resources owned by Impl; cleanup in dtor + destroyRasterGbufImages
@@ -9902,6 +9916,10 @@ namespace threepp {
     float VulkanRenderer::fireflyClamp() const {
         const float v = pimpl_->fireflyClamp_;
         return (v > 1e20f) ? 0.0f : v;
+    }
+
+    void VulkanRenderer::resetAccumulation() {
+        pimpl_->resetAccumulation();
     }
 
     void VulkanRenderer::setHybridEnabled(bool enabled) {
