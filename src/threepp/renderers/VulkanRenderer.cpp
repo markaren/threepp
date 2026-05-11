@@ -1068,6 +1068,7 @@ namespace threepp {
             }
             createDescriptorPool();
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
+            createOceanFineDummy_();// must run before descriptor writes (binding 32)
             allocateTaaDescriptors();// independent of scene state, safe at ctor time
             createTimestampPools();// per-frame VkQueryPool for the timings API
         }
@@ -1171,6 +1172,7 @@ namespace threepp {
             destroyImage2D(ctx->allocator(), d, envCdfImage);
             destroyImage2D(ctx->allocator(), d, envMargImage);
             destroyImage2D(ctx->allocator(), d, blueNoiseImage);
+            destroyImage2D(ctx->allocator(), d, oceanFineHeightDummy);
             for (auto& img : accumImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, img);
@@ -2272,6 +2274,28 @@ namespace threepp {
                 ws[i].pImageInfo = &imageInfos[i];
             }
             vkUpdateDescriptorSets(ctx->device(), uint32_t(ws.size()), ws.data(), 0, nullptr);
+
+            // Hand the smallest enabled cascade's height image to closest_hit
+            // (binding 32) for sub-mesh-resolution normal perturbation. Picks
+            // the highest enabled bit — the cascade with the smallest tileSize
+            // and therefore the finest spatial resolution. The cascade VkImage
+            // handle is stable until the DisplacedMesh is destroyed, so we
+            // only rewrite the descriptor on first init (not per frame).
+            {
+                uint32_t fineIdx = 0;
+                float fineTile   = 0.f;
+                for (uint32_t i = 0; i < 3; ++i) {
+                    if (state->cascadeMask & (1u << i)) {
+                        fineIdx  = i;
+                        fineTile = state->cascades[i].tileSize;
+                    }
+                }
+                if (fineTile > 0.f) {
+                    oceanFineHeightView = state->cascades[fineIdx].dyn->ht().view;
+                    oceanFineTileSize   = fineTile;
+                    rewriteOceanFineDescriptors_();
+                }
+            }
 
             auto* raw = state.get();
             displacedStates.emplace(&dm, std::move(state));
@@ -7847,6 +7871,77 @@ namespace threepp {
                     VK_SAMPLER_ADDRESS_MODE_REPEAT);
         }
 
+        // 1×1 R32F dummy used at binding 32 when no DisplacedMesh is in the
+        // scene. closest_hit gates on pc.oceanFineTileSize > 0 so the sampler
+        // result is unread; the descriptor still needs a valid view/sampler
+        // to keep the layout populated. Replaced (view only) with the active
+        // ocean's cascade-2 height image via rewriteOceanFineDescriptors_().
+        void createOceanFineDummy_() {
+            const float zero = 0.0f;
+            oceanFineHeightDummy = createSampledImage2D(
+                    /*w*/ 1u, /*h*/ 1u,
+                    VK_FORMAT_R32_SFLOAT,
+                    &zero, sizeof(zero),
+                    VK_FILTER_LINEAR,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT);
+            // Transition to GENERAL so the descriptor layout matches the
+            // cascade-2 storage image's layout (also GENERAL after IFFT). One
+            // declared layout simplifies rewriteOceanFineDescriptors_().
+            {
+                VkCommandBuffer cb = beginOneShot();
+                VkImageMemoryBarrier imb{};
+                imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                imb.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                imb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                imb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                imb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                imb.image = oceanFineHeightDummy.image;
+                imb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                vkCmdPipelineBarrier(cb,
+                        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                        0, 0, nullptr, 0, nullptr, 1, &imb);
+                endAndSubmitOneShot(cb);
+            }
+            oceanFineHeightView    = oceanFineHeightDummy.view;
+            oceanFineHeightSampler = oceanFineHeightDummy.sampler;
+            oceanFineTileSize      = 0.0f;
+        }
+
+        // Re-write descriptor binding 32 across all sets to point at the
+        // currently active view/sampler/tileSize. Called from ensureDisplacedState
+        // after the FFT cascades are constructed (and on first switchover from
+        // dummy → cascade-2). The cascade-2 VkImage handle is stable for the
+        // lifetime of the DisplacedMesh, so we only need to rewrite once.
+        // Safe no-op when descriptors haven't been allocated yet — the first
+        // structural scene build calls ensureDisplacedState before
+        // allocateAndUpdateDescriptors, and the latter picks up the current
+        // oceanFineHeightView/Sampler/TileSize values via the standard path.
+        void rewriteOceanFineDescriptors_() {
+            if (descriptorSets.empty()) return;
+            const uint32_t totalSets = imageCount_ * kFramesInFlight;
+            std::vector<VkDescriptorImageInfo> infos(totalSets);
+            std::vector<VkWriteDescriptorSet>  writes(totalSets);
+            for (uint32_t i = 0; i < totalSets; ++i) {
+                infos[i].sampler     = oceanFineHeightSampler;
+                infos[i].imageView   = oceanFineHeightView;
+                infos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                writes[i] = VkWriteDescriptorSet{};
+                writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[i].dstSet = descriptorSets[i];
+                writes[i].dstBinding = 32;
+                writes[i].descriptorCount = 1;
+                writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[i].pImageInfo = &infos[i];
+            }
+            vkUpdateDescriptorSets(ctx->device(),
+                                   static_cast<uint32_t>(writes.size()),
+                                   writes.data(), 0, nullptr);
+        }
+
         // Build a degenerate 1×1 CDF (totalSum=0) for the case where the env is
         // solid color or default. Shader uses totalSum=0 as the "no CDF" gate.
         void rebuildDefaultEnvCdfImages() {
@@ -7952,7 +8047,7 @@ namespace threepp {
             // for material lookup, UV for texture sampling on the primary).
             // Always present in the layout; raygen gates use on the hybrid
             // push-constant bit.
-            std::array<VkDescriptorSetLayoutBinding, 32> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 33> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -8156,6 +8251,16 @@ namespace threepp {
             bindings[31].descriptorCount = 1;
             bindings[31].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
+            // Binding 32 — ocean fine-cascade height image (R32F via RG32F .r).
+            // Default 1×1 dummy when no DisplacedMesh is in the scene; swapped
+            // to cascade-2 height when an FFT ocean is active. closest_hit reads
+            // it on thinWalled materials to perturb the shading normal at world-
+            // space XZ via finite differences. Gated by pc.oceanFineTileSize > 0.
+            bindings[32].binding = 32;
+            bindings[32].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[32].descriptorCount = 1;
+            bindings[32].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
             dlci.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -8163,7 +8268,7 @@ namespace threepp {
             check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &rtDsLayout),
                   "vkCreateDescriptorSetLayout(RT)");
 
-            // 48-byte push constant. Layout matches the host-side `pc[12]`
+            // 52-byte push constant. Layout matches the host-side `pc[13]`
             // assembled in renderFrame and the GLSL PushConstants struct in
             // raygen.rgen / closest_hit.rchit / miss.rmiss. Well under the
             // 128-byte minimum push-constant guarantee. Per-instance moved
@@ -8186,13 +8291,15 @@ namespace threepp {
             //   [9]  envCdfHeight        (closest_hit + miss — env importance sample)
             //   [10] envCdfTotalSum bits (float — pdf normalisation; 0 disables CDF)
             //   [11] fireflyClamp bits   (float — per-NEE luminance cap; 1e30 disables)
+            //   [12] oceanFineTileSize bits (float — fine-cascade tile size in m;
+            //        0 disables FFT-fine-normal perturbation on thinWalled hits)
             VkPushConstantRange pcRange{};
             pcRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                  VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
                                  VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
                                  VK_SHADER_STAGE_MISS_BIT_KHR;
             pcRange.offset = 0;
-            pcRange.size   = 48;
+            pcRange.size   = 52;
 
             VkPipelineLayoutCreateInfo plci{};
             plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -8582,7 +8689,7 @@ namespace threepp {
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             ps[3].descriptorCount = totalSets * 7;// bindings 3,4,10,14 (existing) + 15,16 (photon) + 21 (meshMovedBits)
             ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures + 5 + 1);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF) + bindings 22-26 (hybrid gbuffer attachments incl. UV) + binding 27 (blue noise tile)
+            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures + 5 + 1 + 1);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF) + bindings 22-26 (hybrid gbuffer attachments incl. UV) + binding 27 (blue noise tile) + binding 32 (ocean fine-cascade height)
 
             VkDescriptorPoolCreateInfo ci{};
             ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -9010,14 +9117,30 @@ namespace threepp {
                     wResWRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                     wResWRead.pImageInfo = &resWReadInfo;
 
-                    std::array<VkWriteDescriptorSet, 32> writes{
+                    // Binding 32 — ocean fine-cascade height (default dummy until
+                    // a DisplacedMesh appears and rewrites the view via
+                    // rewriteOceanFineDescriptors).
+                    VkDescriptorImageInfo oceanFineInfo{};
+                    oceanFineInfo.sampler     = oceanFineHeightSampler;
+                    oceanFineInfo.imageView   = oceanFineHeightView;
+                    oceanFineInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wOceanFine{};
+                    wOceanFine.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wOceanFine.dstSet = descriptorSets[idx];
+                    wOceanFine.dstBinding = 32;
+                    wOceanFine.descriptorCount = 1;
+                    wOceanFine.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wOceanFine.pImageInfo = &oceanFineInfo;
+
+                    std::array<VkWriteDescriptorSet, 33> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
                             wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered,
                             wMeshMoved,
                             wGbufNormal, wGbufMotion, wGbufDepth, wGbufIds, wGbufUv,
                             wBlueNoise,
-                            wResPosWrite, wResPosRead, wResWWrite, wResWRead};
+                            wResPosWrite, wResPosRead, wResWWrite, wResWRead,
+                            wOceanFine};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -9651,7 +9774,9 @@ namespace threepp {
                 std::memcpy(&envSumBitsPhoton, &envCdfTotalSum_, sizeof(envSumBitsPhoton));
                 uint32_t fireflyBitsPhoton;
                 std::memcpy(&fireflyBitsPhoton, &fireflyClamp_, sizeof(fireflyBitsPhoton));
-                const uint32_t ppc[12] = {
+                uint32_t oceanFineBitsPhoton;
+                std::memcpy(&oceanFineBitsPhoton, &oceanFineTileSize, sizeof(oceanFineBitsPhoton));
+                const uint32_t ppc[13] = {
                         sampleIndex, envImage.mipLevels,
                         static_cast<uint32_t>(toneMapping_), exposureBits,
                         motionFlagsPhoton,
@@ -9659,6 +9784,7 @@ namespace threepp {
                         samplesPerPixel_,
                         envCdfWidth_, envCdfHeight_, envSumBitsPhoton,
                         fireflyBitsPhoton,
+                        oceanFineBitsPhoton,
                 };
                 vkCmdPushConstants(cb, rtPipelineLayout,
                                    VK_SHADER_STAGE_RAYGEN_BIT_KHR |
@@ -9724,7 +9850,9 @@ namespace threepp {
             std::memcpy(&envSumBits, &envCdfTotalSum_, sizeof(envSumBits));
             uint32_t fireflyBits;
             std::memcpy(&fireflyBits, &fireflyClamp_, sizeof(fireflyBits));
-            const uint32_t pc[12] = {
+            uint32_t oceanFineBits;
+            std::memcpy(&oceanFineBits, &oceanFineTileSize, sizeof(oceanFineBits));
+            const uint32_t pc[13] = {
                     sampleIndex,
                     envImage.mipLevels,
                     static_cast<uint32_t>(toneMapping_),
@@ -9737,6 +9865,7 @@ namespace threepp {
                     envCdfHeight_,
                     envSumBits,
                     fireflyBits,
+                    oceanFineBits,
             };
             vkCmdPushConstants(cb, rtPipelineLayout,
                                VK_SHADER_STAGE_RAYGEN_BIT_KHR |

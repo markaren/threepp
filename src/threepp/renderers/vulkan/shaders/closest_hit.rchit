@@ -131,6 +131,13 @@ vec3 fogTransmittance(float dist) {
 // the host's 1×1 white default, used implicitly via -1→0 fallback below.
 layout(set = 0, binding = 8) uniform sampler2D albedoMaps[kMaxMaterialTextures];
 
+// FFT ocean fine-cascade spatial-domain height map (RG32F, .r = height in m
+// after multiplying by 1/tileSize per Tessendorf convention). 1×1 dummy when
+// no DisplacedMesh is in the scene; cascade-2 view when one is present.
+// Sampled on thinWalled hits at world-space XZ to perturb the shading normal
+// with sub-mesh-resolution wave detail. Gated by pc.oceanFineTileSize > 0.
+layout(set = 0, binding = 32) uniform sampler2D oceanFineHeight;
+
 // Emissive-mesh NEE: each emissive triangle is packed as 4 vec4
 // (v0.xyz/area, v1.xyz/cumPower, v2.xyz/power, emission.rgb/_pad).
 // The host walks the scene each frame, transforms triangle vertices to
@@ -188,6 +195,7 @@ layout(push_constant) uniform Pc {
     uint envCdfHeight;
     float envCdfTotalSum;   // pdf normaliser; 0 disables env importance sampling
     float fireflyClamp;     // per-NEE luminance cap; 1e30 disables (gates never fire)
+    float oceanFineTileSize;// FFT fine-cascade tile size in m; 0 = no ocean fine normal
 } pc;
 
 hitAttributeEXT vec2 attribs;
@@ -949,6 +957,39 @@ void main() {
                 }
             }
         }
+    }
+
+    // FFT fine-cascade normal perturbation. Adds sub-mesh-resolution wave
+    // detail derived from the same Phillips/Tessendorf system that drives
+    // the geometry. The vertex normals computed in water_displace.comp use
+    // a coarse 4-tap finite difference (eps ≈ tileSize0/256, so ~3.9 m for
+    // a 1 km tile) that captures only the macro waves; cm-scale chop in
+    // cascade 2 is lost to that smoothing. Re-sampling cascade 2 here with
+    // a much smaller eps recovers it as a shading-time normal perturbation
+    // — animates for free (the FFT texture is rewritten per frame) and
+    // matches the wave field exactly. Replaces the static procedural normal
+    // map on water surfaces. Gated on thinWalled so non-ocean surfaces are
+    // unaffected.
+    if (mdesc.thinWalled != 0 && pc.oceanFineTileSize > 0.0) {
+        const vec3  worldPos = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
+        const float invTile  = 1.0 / pc.oceanFineTileSize;
+        const float eps      = pc.oceanFineTileSize / 32.0;
+        const float depsUV   = eps * invTile;
+        const vec2  uv       = worldPos.xz * invTile;
+        const float hL = texture(oceanFineHeight, uv + vec2(-depsUV, 0.0)).r * invTile;
+        const float hR = texture(oceanFineHeight, uv + vec2( depsUV, 0.0)).r * invTile;
+        const float hD = texture(oceanFineHeight, uv + vec2(0.0, -depsUV)).r * invTile;
+        const float hU = texture(oceanFineHeight, uv + vec2(0.0,  depsUV)).r * invTile;
+        const vec2  grad = vec2(hR - hL, hU - hD) / (2.0 * eps);
+        // Add gradient as XZ tangent-space offset to N. Ocean macro normal is
+        // close to +Y so this approximates the tangent frame; tilted patches
+        // get a small directional error that's invisible at typical wave
+        // slopes. Strength <1 keeps the perturbation subtle — cascade 2's
+        // contribution is already partly baked into the vertex Y, so re-
+        // adding the full gradient double-counts the low end. 0.5 reads as
+        // "sharp chop in the highlights" without making the surface noisy.
+        const float strength = 0.5;
+        N = normalize(N + strength * vec3(-grad.x, 0.0, -grad.y));
     }
     // Per-channel transformed UVs — applied to rawUv with each texture's own matrix.
     const vec2 uvAlbedo         = (mdesc.uvTransform            * vec3(rawUv, 1.0)).xy;

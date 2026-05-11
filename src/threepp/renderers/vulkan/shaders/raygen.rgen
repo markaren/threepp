@@ -231,6 +231,7 @@ layout(push_constant) uniform Pc {
     uint envCdfHeight;
     float envCdfTotalSum;     // env importance pdf normaliser; 0 disables CDF
     float fireflyClamp;       // per-NEE luminance cap (closest_hit reads); 1e30 disables
+    float oceanFineTileSize;  // fine-cascade tile size (closest_hit reads); 0 disables
 } pc;
 
 bool isMeshMoved(uint idx) {
