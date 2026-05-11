@@ -51,8 +51,8 @@ int main(int argc, char** argv) {
 
     // ---- Async model loading ----
     FBXLoader loader;
-    auto interior = loader.load(modelFolder / "BistroInterior_Wine.fbx");
-    auto exterior = loader.load(modelFolder / "BistroExterior.fbx");
+    auto interior = loadAsync(loader, modelFolder / "BistroInterior_Wine.fbx");
+    auto exterior = loadAsync(loader, modelFolder / "BistroExterior.fbx");
 
     scene.add(interior);
     scene.add(exterior);
