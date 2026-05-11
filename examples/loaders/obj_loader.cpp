@@ -1,4 +1,5 @@
 
+#include <threepp/loaders/AsyncGroup.hpp>
 #include <threepp/threepp.hpp>
 
 using namespace threepp;
@@ -30,19 +31,22 @@ int main() {
     camera->position.set(0, 100, 150);
 
     OBJLoader loader;
-    auto obj1 = loader.load(std::string(DATA_FOLDER) + "/models/obj/female02/female02.obj");
+    auto obj1 = loadAsync(loader, std::string(DATA_FOLDER) + "/models/obj/female02/female02.obj");
     obj1->position.x = -30;
     scene->add(obj1);
 
-    TextureLoader tl;
-    auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/uv_grid_opengl.jpg", ColorSpace::sRGB);
-    auto obj2 = loader.load(std::string(DATA_FOLDER) + "/models/obj/female02/female02.obj", false);
-    obj2->position.x = 30;
-    obj2->traverseType<Mesh>([tex](Mesh& child) {
-        auto m = MeshPhongMaterial::create();
-        m->map = tex;
-        child.setMaterial(m);
+    auto obj2 = loadAsync([] {
+        auto tex = TextureLoader().load(std::string(DATA_FOLDER) + "/textures/uv_grid_opengl.jpg", ColorSpace::sRGB);
+        auto model = OBJLoader().load(std::string(DATA_FOLDER) + "/models/obj/female02/female02.obj", false);
+        model->traverseType<Mesh>([tex](Mesh& child) {
+            auto m = MeshPhongMaterial::create();
+            m->map = tex;
+            child.setMaterial(m);
+        });
+        return model;
     });
+    obj2->position.x = 30;
+
     scene->add(obj2);
 
     createAndAddLights(*scene);

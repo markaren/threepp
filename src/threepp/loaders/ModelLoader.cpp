@@ -78,6 +78,10 @@ std::shared_ptr<Group> ModelLoader::load(const std::filesystem::path& path) {
     return nullptr;
 }
 
+std::shared_ptr<AsyncGroup> ModelLoader::loadAsync(const std::filesystem::path& path) {
+    return threepp::loadAsync(*this, path);
+}
+
 ModelLoader& ModelLoader::setIgnoreUpDirection(bool ignore) {
     ignoreUpDirection_ = ignore;
     return *this;

@@ -27,6 +27,7 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/core/Raycaster.hpp"
 
+#include "threepp/loaders/AsyncGroup.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/HUD.hpp"
 #include "threepp/objects/InstancedMesh.hpp"

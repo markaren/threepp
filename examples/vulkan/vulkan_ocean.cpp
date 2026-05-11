@@ -194,43 +194,29 @@ int main() {
     ocean->params.textureSize = kFftSize;
     scene.add(ocean);
 
-    // Gunnerus research vessel (~28 m × 9 m). Loaded synchronously at
-    // startup — 31 MB binary glTF takes ~1 s. Re-scaled to a known length so
-    // the hydrodynamic sample points (fore/aft/port/starboard) are
-    // physically meaningful regardless of the asset's source unit.
     constexpr float kBoatLength = 28.0f;
     constexpr float kBoatBeam   = 9.0f;
     GLTFLoader gltfLoader;
-    auto boat = Group::create();
-    auto gltf = gltfLoader.load(std::string(DATA_FOLDER) + "/models/gltf/Gunnerus.glb");
-    if (!gltf || !gltf->scene) {
-        std::cerr << "Failed to load Gunnerus.glb" << std::endl;
+    auto boat = loadAsync([&gltfLoader]() -> std::shared_ptr<Group> {
+        auto gltf = gltfLoader.load(std::string(DATA_FOLDER) + "/models/gltf/Gunnerus.glb");
+        if (!gltf || !gltf->scene) {
+            std::cerr << "Failed to load Gunnerus.glb" << std::endl;
+            auto fallback = Group::create();
+            fallback->add(Mesh::create(BoxGeometry::create(kBoatBeam, 5.f, kBoatLength),
+                                       MeshStandardMaterial::create({{"color", Color::red}})));
+            return fallback;
+        }
 
-        boat->add(Mesh::create(BoxGeometry::create(kBoatBeam, 5.f, kBoatLength),
-                              MeshStandardMaterial::create({{"color", Color::red}})));
-
-    } else {
         auto innerAsset = gltf->scene;
-
-        boat->add(innerAsset);
         {
             Box3 bbox;
             bbox.setFromObject(*innerAsset);
             Vector3 size; bbox.getSize(size);
-            // If the asset is longer in X than Z, its longitudinal axis is +X
-            // not +Z. Rotate so its long axis aligns with Z to match our heading
-            // convention (yaw = 0 → translate along +Z).
             if (size.x > size.z) {
                 innerAsset->rotateY(-math::PI / 2.f);
                 bbox.setFromObject(*innerAsset);
                 bbox.getSize(size);
             }
-            // Bow direction can't be inferred from bbox alone — both ends of
-            // the longest axis look the same from outside. Empirically Gunnerus
-            // ends up with bow at −Z after the auto-rotation, so W key (which
-            // translates +Z) reads as "go backward". Add a 180° flip so the
-            // visual nose points along the heading direction. If you load a
-            // different asset whose bow ends up at +Z naturally, drop this.
             innerAsset->rotateY(math::PI);
             const float maxExtent = std::max({size.x, size.y, size.z});
             if (maxExtent > 0.f) {
@@ -238,8 +224,11 @@ int main() {
                 innerAsset->scale.set(s, s, s);
             }
         }
-    }
 
+        auto group = Group::create();
+        group->add(innerAsset);
+        return group;
+    });
     scene.add(boat);
     BoatState bs;
     BoatInput bi;

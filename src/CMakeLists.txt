@@ -107,6 +107,7 @@ set(publicHeaders
         "threepp/helpers/SkeletonHelper.hpp"
         "threepp/helpers/SpotLightHelper.hpp"
 
+        "threepp/loaders/AsyncGroup.hpp"
         "threepp/loaders/loaders.hpp"
         "threepp/loaders/AssimpLoader.hpp"
         "threepp/loaders/CubeTextureLoader.hpp"
@@ -369,6 +370,7 @@ set(sources
 
         "threepp/input/PeripheralsEventSource.cpp"
 
+        "threepp/loaders/AsyncGroup.cpp"
         "threepp/loaders/ColladaLoader.cpp"
         "threepp/loaders/DDSLoader.cpp"
         "threepp/loaders/FontLoader.cpp"
