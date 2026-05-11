@@ -9,8 +9,6 @@
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/objects/TextSprite.hpp"
 
-#include <future>
-
 using namespace threepp;
 using namespace kine;
 
@@ -115,30 +113,39 @@ int main() {
     HUD hud(*renderer);
     hud.add(textHandle).setNormalizedPosition({0.5, 0.5});
 
-    TaskManager tm;
-
-    std::shared_ptr<Youbot> youbot;
+    Youbot* youbot = nullptr;
     std::unique_ptr<KeyController> keyController;
-    auto loadFuture = std::async(std::launch::async, [&] {
-        try {
-            youbot = Youbot::create(std::string(DATA_FOLDER) + "/models/collada/youbot.dae");
+    auto youbotGroup = loadAsync([path = std::string(DATA_FOLDER) + "/models/collada/youbot.dae"]() -> std::shared_ptr<Group> {
+        auto y = Youbot::create(path);
+        auto wrapper = Group::create();
+        wrapper->add(std::shared_ptr<Youbot>(y.release()));
+        return wrapper;
+    });
+
+    youbotGroup->onLoaded([&](AsyncGroup& g) {
+        g.traverse([&](Object3D& obj) {
+            if (!youbot) {
+                if (auto* y = dynamic_cast<Youbot*>(&obj)) {
+                    youbot = y;
+                }
+            }
+        });
+        if (youbot) {
             youbot->add(targetHelper);
             youbot->add(endEffectorHelper);
             endEffectorHelper->visible = true;
             keyController = std::make_unique<KeyController>(*youbot);
-
-            tm.invokeLater([&] {
-                canvas.addKeyListener(*keyController);
-                scene->add(youbot);
-                textHandle.setText("Use WASD keys to steer robot");
-                hud.getStoredOptions(textHandle)->setNormalizedPosition(0, 0).setVerticalAlignment(HUD::VerticalAlignment::ABOVE).setHorizontalAlignment(HUD::HorizontalAlignment::LEFT);
-            });
-        } catch (const std::exception& e) {
-            tm.invokeLater([&, msg = std::string(e.what())] {
-                textHandle.setText("Error: " + msg);
-            });
+            canvas.addKeyListener(*keyController);
+            textHandle.setText("Use WASD keys to steer robot");
+            hud.getStoredOptions(textHandle)->setNormalizedPosition(0, 0)
+                    .setVerticalAlignment(HUD::VerticalAlignment::ABOVE)
+                    .setHorizontalAlignment(HUD::HorizontalAlignment::LEFT);
+        } else {
+            textHandle.setText("Error loading model");
         }
     });
+
+    scene->add(youbotGroup);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -173,8 +180,6 @@ int main() {
     canvas.animate([&] {
         const auto dt = clock.getDelta();
 
-        tm.handleTasks();
-
         renderer->clear();
         renderer->render(*scene, *camera);
 
@@ -206,7 +211,4 @@ int main() {
 
         hud.render();
     });
-
-    loadFuture.get();
-
 }

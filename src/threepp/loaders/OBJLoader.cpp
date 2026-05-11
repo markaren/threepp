@@ -291,14 +291,14 @@ struct OBJLoader::Impl {
 
     std::shared_ptr<Group> load(const std::filesystem::path& path, bool tryLoadMtl) {
 
-        if (scope.useCache && cache_.contains(path.string())) {
+        const auto cacheKey = path.string() + (tryLoadMtl ? ":mtl" : ":nomtl");
 
-            auto cached = cache_.at(path.string());
-            if (!cached.expired()) {
+        if (scope.useCache && cache_.contains(cacheKey)) {
+
+            if (auto cached = cache_.at(cacheKey); !cached.expired()) {
                 return cached.lock()->clone<Group>();
-            } else {
-                cache_.erase(path.string());
             }
+            cache_.erase(cacheKey);
         }
 
         if (!std::filesystem::exists(path)) {
@@ -478,7 +478,7 @@ struct OBJLoader::Impl {
 
                 std::shared_ptr<Material> material;
 
-                if (this->materials) {
+                if (this->materials && tryLoadMtl) {
                     material = this->materials->create(sourceMaterial->name);
 
                     if (isLine && material && !material->is<LineBasicMaterial>()) {
@@ -549,7 +549,7 @@ struct OBJLoader::Impl {
             container->add(mesh);
         }
 
-        if (scope.useCache) cache_[path.string()] = container;
+        if (scope.useCache) cache_[cacheKey] = container;
 
         return container;
     }

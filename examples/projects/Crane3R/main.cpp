@@ -7,10 +7,6 @@
 #include "threepp/threepp.hpp"
 #include "utility/Angle.hpp"
 
-#ifndef __EMSCRIPTEN__
-#include <future>
-#endif
-
 using namespace threepp;
 using namespace kine;
 
@@ -135,34 +131,28 @@ int main() {
                         .addLink(Vector3::Z() * 5.2)
                         .build();
 
-    TaskManager tm;
-
-#ifndef __EMSCRIPTEN__
-    std::shared_ptr<Crane3R> crane;
-    auto future = std::async([&] {
-        crane = Crane3R::create();
-        crane->setTargetValues(asAngles(kine.meanAngles(), Angle::Repr::DEG));
-        crane->traverseType<Mesh>([](Mesh& m) {
+    Crane3R* crane = nullptr;
+    auto craneGroup = loadAsync([&kine]() -> std::shared_ptr<Group> {
+        auto c = Crane3R::create();
+        c->setTargetValues(asAngles(kine.meanAngles(), Angle::Repr::DEG));
+        c->traverseType<Mesh>([](Mesh& m) {
             m.castShadow = true;
         });
-
-        tm.invokeLater([&, crane] {
-            hud.remove(handle);
-            scene->add(crane);
-            endEffectorHelper->visible = true;
-        });
-    });
-#else
-    auto crane = Crane3R::create();
-    crane->setTargetValues(asAngles(kine.meanAngles(), Angle::Repr::DEG));
-    crane->traverseType<Mesh>([](Mesh& m) {
-        m.castShadow = true;
+        return c;
     });
 
-    hud.remove(handle);
-    scene->add(crane);
-    endEffectorHelper->visible = true;
-#endif
+    craneGroup->onLoaded([&](AsyncGroup& g) {
+        for (auto* child : g.children) {
+            if (auto* c = dynamic_cast<Crane3R*>(child)) {
+                crane = c;
+                break;
+            }
+        }
+        hud.remove(handle);
+        endEffectorHelper->visible = true;
+    });
+
+    scene->add(craneGroup);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -197,8 +187,6 @@ int main() {
     Clock clock;
     canvas.animate([&] {
         const auto dt = clock.getDelta();
-
-        tm.handleTasks();
 
         transformControls.visible = targetHelper->visible;
 
@@ -237,8 +225,4 @@ int main() {
             hud.render();
         }
     });
-
-#ifndef __EMSCRIPTEN__
-    future.get();
-#endif
 }

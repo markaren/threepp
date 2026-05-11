@@ -23,36 +23,41 @@ int main() {
     auto ambientLight = AmbientLight::create(0xffffff, 0.2f);
     scene->add(ambientLight);
 
-
     auto dirLight = DirectionalLight::create(0xffffff, 1.0f);
     dirLight->position.set(1, 1, 1);
     scene->add(dirLight);
 
     ColladaLoader loader;
-    auto stormTrooper = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
+    std::unique_ptr<AnimationMixer> mixer;
+    auto stormTrooper = loadAsync([&]() -> std::shared_ptr<Group> {
+        auto model = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
+        if (!model) return nullptr;
+
+        model->rotateZ(math::PI);
+
+        Box3 bb;
+        bb.setFromObject(*model);
+
+        controls.target = bb.getCenter();
+        controls.update();
+
+        if (!model->animations.empty()) {
+            std::cout << "Loaded " << model->animations.size() << " animation clip(s)." << std::endl;
+            mixer = std::make_unique<AnimationMixer>(*model);
+            mixer->clipAction(model->animations.front())->play();
+        }
+
+        auto skeletonHelper = SkeletonHelper::create(*model);
+        scene->add(skeletonHelper);
+        return model;
+    });
 
     if (!stormTrooper) {
         std::cerr << "Failed to load model\n";
         return 1;
     }
-    stormTrooper->rotateZ(math::PI);
+
     scene->add(stormTrooper);
-
-    Box3 bb;
-    bb.setFromObject(*stormTrooper);
-
-    controls.target = bb.getCenter();
-    controls.update();
-
-    std::unique_ptr<AnimationMixer> mixer;
-    if (!stormTrooper->animations.empty()) {
-        std::cout << "Loaded " << stormTrooper->animations.size() << " animation clip(s)." << std::endl;
-        mixer = std::make_unique<AnimationMixer>(*stormTrooper);
-        mixer->clipAction(stormTrooper->animations.front())->play();
-    }
-
-    auto skeletonHelper = SkeletonHelper::create(*stormTrooper);
-    scene->add(skeletonHelper);
 
     Clock clock;
     canvas.animate([&] {

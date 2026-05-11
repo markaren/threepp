@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
-#include <future>
 #include <iostream>
 
 using namespace threepp;
@@ -99,53 +98,10 @@ int main(int argc, char** argv) {
     controls.enableKeys = false;
     controls.update();
 
-    struct LoadedGltf {
-        std::shared_ptr<Group> scene;
-        std::vector<std::shared_ptr<AnimationClip>> animations;
-    };
-
     GLTFLoader loader;
     int currentModel = -1;
-    std::shared_ptr<Group> loadedModel;
+    std::shared_ptr<AsyncGroup> loadedModel;
     std::unique_ptr<AnimationMixer> mixer;
-    std::vector<std::shared_ptr<AnimationClip>> clips;
-    std::future<LoadedGltf> modelFuture;
-    bool loadPending = false;
-
-    auto loadModel = [&](int idx) {
-        if (idx < 0 || idx >= static_cast<int>(models.size())) return;
-        if (loadPending) return;
-
-        currentModel = idx;
-        loadPending = true;
-        auto path = models[idx].path;
-        std::cout << "Loading: " << models[idx].name << " (" << path << ")" << std::endl;
-
-        modelFuture = std::async(std::launch::async, [&loader, path, name = models[idx].name]() -> LoadedGltf {
-            try {
-                auto result = loader.load(path);
-                if (!result || !result->scene) {
-                    std::cerr << "Load failed '" << name << "'" << std::endl;
-                    return {};
-                }
-                auto& root = result->scene;
-                bool hasMesh = false;
-                root->traverseType<Mesh>([&](Mesh&) { hasMesh = true; });
-                root->traverseType<Light>([&](Light& l) {
-                    l.visible = false;
-                    l.intensity = std::max(l.intensity, 1.0f);
-                });
-                if (!hasMesh) {
-                    std::cerr << "Skipping '" << name << "': no mesh geometry" << std::endl;
-                    return {};
-                }
-                return {root, std::move(result->animations)};
-            } catch (const std::exception& e) {
-                std::cerr << "Load failed '" << name << "': " << e.what() << std::endl;
-                return {};
-            }
-        });
-    };
 
     auto fitCamera = [&](Object3D& obj) {
         Box3 bbox;
@@ -161,6 +117,60 @@ int main(int argc, char** argv) {
         camera.farPlane = dist * 100.f;
         camera.updateProjectionMatrix();
         controls.update();
+    };
+
+    auto loadModel = [&](int idx) {
+        if (idx < 0 || idx >= static_cast<int>(models.size())) return;
+
+        if (loadedModel) {
+            scene.remove(*loadedModel);
+            loadedModel.reset();
+        }
+        mixer.reset();
+
+        currentModel = idx;
+        auto path = models[idx].path;
+        auto name = models[idx].name;
+        std::cout << "Loading: " << name << " (" << path << ")" << std::endl;
+
+        loadedModel = loadAsync([&loader, path, name]() -> std::shared_ptr<Group> {
+            try {
+                auto result = loader.load(path);
+                if (!result || !result->scene) {
+                    std::cerr << "Load failed '" << name << "'" << std::endl;
+                    return nullptr;
+                }
+                auto& root = result->scene;
+                bool hasMesh = false;
+                root->traverseType<Mesh>([&](Mesh&) { hasMesh = true; });
+                root->traverseType<Light>([&](Light& l) {
+                    l.visible = false;
+                    l.intensity = std::max(l.intensity, 1.0f);
+                });
+                if (!hasMesh) {
+                    std::cerr << "Skipping '" << name << "': no mesh geometry" << std::endl;
+                    return nullptr;
+                }
+                root->animations = result->animations;
+                return root;
+            } catch (const std::exception& e) {
+                std::cerr << "Load failed '" << name << "': " << e.what() << std::endl;
+                return nullptr;
+            }
+        });
+
+        loadedModel->onLoaded([&](AsyncGroup& g) {
+            fitCamera(g);
+            if (!g.animations.empty()) {
+                mixer = std::make_unique<AnimationMixer>(g);
+                mixer->clipAction(g.animations.front())->play();
+                std::cout << "Playing animation: " << g.animations.front()->name()
+                          << " (" << g.animations.size() << " clip(s))" << std::endl;
+            }
+            std::cout << "Loaded: " << models[currentModel].name << std::endl;
+        });
+
+        scene.add(loadedModel);
     };
 
     loadModel(0);
@@ -190,7 +200,7 @@ int main(int argc, char** argv) {
 
         ImGui::Separator();
         ImGui::Text("Model: %s", currentModel >= 0 ? models[currentModel].name.c_str() : "none");
-        if (loadPending) ImGui::Text("Loading...");
+        if (loadedModel && loadedModel->isLoading()) ImGui::Text("Loading...");
         ImGui::Text("Left/Right arrows to browse");
 
         if (ImGui::CollapsingHeader("Models")) {
@@ -253,31 +263,6 @@ int main(int argc, char** argv) {
             fps = fpsFrames / fpsAccum;
             fpsAccum = 0.f;
             fpsFrames = 0;
-        }
-
-        if (loadPending && modelFuture.valid() &&
-            modelFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            auto loaded = modelFuture.get();
-            loadPending = false;
-            if (loadedModel) {
-                scene.remove(*loadedModel);
-                loadedModel.reset();
-            }
-            mixer.reset();
-            clips.clear();
-            loadedModel = loaded.scene;
-            if (loadedModel) {
-                scene.add(loadedModel);
-                fitCamera(*loadedModel);
-                clips = std::move(loaded.animations);
-                if (!clips.empty()) {
-                    mixer = std::make_unique<AnimationMixer>(*loadedModel);
-                    mixer->clipAction(clips.front())->play();
-                    std::cout << "Playing animation: " << clips.front()->name()
-                              << " (" << clips.size() << " clip(s))" << std::endl;
-                }
-                std::cout << "Loaded: " << models[currentModel].name << std::endl;
-            }
         }
 
         if (mixer) mixer->update(dt);
