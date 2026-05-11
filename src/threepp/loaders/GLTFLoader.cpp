@@ -1366,7 +1366,46 @@ namespace threepp {
                             else if (tail == "pbrMetallicRoughness/roughnessFactor") { propName = "roughness"; expected = 1; }
                             else if (tail == "emissiveFactor")                       { propName = "emissive"; expected = 3; }
                             else if (tail == "alphaCutoff")                          { propName = "alphaTest"; expected = 1; }
-                            else continue;
+                            else {
+                                // KHR_texture_transform: rotation/offset/scale on a per-slot
+                                // texture transform. The tail looks like
+                                //   <slot>/extensions/KHR_texture_transform/{rotation|offset|scale}
+                                // where <slot> is the glTF texture path (e.g. "normalTexture",
+                                // "pbrMetallicRoughness/baseColorTexture", or
+                                // "extensions/KHR_materials_volume/thicknessTexture").
+                                static const std::string kTT = "/extensions/KHR_texture_transform/";
+                                size_t ttPos = tail.find(kTT);
+                                if (ttPos == std::string::npos) continue;
+                                const std::string slotPath = tail.substr(0, ttPos);
+                                const std::string ttProp   = tail.substr(ttPos + kTT.size());
+
+                                // glTF slot path → threepp Material texture field name.
+                                // Sheen / specular / iridescence / anisotropy slot textures
+                                // aren't carried on threepp's material interfaces, so they're
+                                // silently ignored here.
+                                std::string field;
+                                if (slotPath == "normalTexture") field = "normalMap";
+                                else if (slotPath == "occlusionTexture") field = "aoMap";
+                                else if (slotPath == "emissiveTexture") field = "emissiveMap";
+                                else if (slotPath == "pbrMetallicRoughness/baseColorTexture") field = "map";
+                                else if (slotPath == "pbrMetallicRoughness/metallicRoughnessTexture") field = "metalnessMap";
+                                else if (slotPath == "extensions/KHR_materials_transmission/transmissionTexture") field = "transmissionMap";
+                                else if (slotPath == "extensions/KHR_materials_volume/thicknessTexture") field = "thicknessMap";
+                                else if (slotPath == "extensions/KHR_materials_clearcoat/clearcoatTexture") field = "clearcoatMap";
+                                else if (slotPath == "extensions/KHR_materials_clearcoat/clearcoatRoughnessTexture") field = "clearcoatRoughnessMap";
+                                else if (slotPath == "extensions/KHR_materials_clearcoat/clearcoatNormalTexture") field = "clearcoatNormalMap";
+                                if (field.empty()) continue;
+
+                                // Use '/' as the inner separator: PropertyBinding splits
+                                // the track name on the *last* '.' to find nodeName vs
+                                // property, so any '.' inside the property would route
+                                // the setter to Object3D::rotation (read-only Euler) and
+                                // throw "rotation is not writable".
+                                if (ttProp == "rotation")    { propName = "tex/" + field + "/rotation"; expected = 1; }
+                                else if (ttProp == "offset") { propName = "tex/" + field + "/offset";   expected = 2; }
+                                else if (ttProp == "scale")  { propName = "tex/" + field + "/scale";    expected = 2; }
+                                else continue;
+                            }
 
                             auto mat = loadMaterial(matIdx);
                             if (!mat) continue;

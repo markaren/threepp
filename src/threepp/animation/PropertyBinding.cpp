@@ -4,6 +4,7 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
+#include "threepp/textures/Texture.hpp"
 
 #include <functional>
 #include <iostream>
@@ -13,14 +14,102 @@ using namespace threepp;
 
 namespace {
 
+    // Resolve a material texture slot by name (the threepp field name we emit
+    // from GLTFLoader, e.g. "normalMap" / "thicknessMap"). Returns the raw
+    // Texture* on the material's interface mix-in, or nullptr if the material
+    // doesn't carry that slot. Used by the tex.<slot>.<prop> animation path.
+    Texture* findMaterialTexture(Material* mat, const std::string& slot) {
+        if (!mat) return nullptr;
+        if (slot == "map")                       { if (auto* m = dynamic_cast<MaterialWithMap*>(mat))           return m->map.get(); }
+        else if (slot == "normalMap")            { if (auto* m = dynamic_cast<MaterialWithNormalMap*>(mat))     return m->normalMap.get(); }
+        else if (slot == "aoMap")                { if (auto* m = dynamic_cast<MaterialWithAoMap*>(mat))         return m->aoMap.get(); }
+        else if (slot == "emissiveMap")          { if (auto* m = dynamic_cast<MaterialWithEmissive*>(mat))      return m->emissiveMap.get(); }
+        else if (slot == "metalnessMap")         { if (auto* m = dynamic_cast<MaterialWithMetalness*>(mat))     return m->metalnessMap.get(); }
+        else if (slot == "roughnessMap")         { if (auto* m = dynamic_cast<MaterialWithRoughness*>(mat))     return m->roughnessMap.get(); }
+        else if (slot == "transmissionMap")      { if (auto* m = dynamic_cast<MaterialWithTransmission*>(mat))  return m->transmissionMap.get(); }
+        else if (slot == "thicknessMap")         { if (auto* m = dynamic_cast<MaterialWithThickness*>(mat))     return m->thicknessMap.get(); }
+        else if (slot == "clearcoatMap")         { if (auto* m = dynamic_cast<MaterialWithClearcoat*>(mat))     return m->clearcoatMap.get(); }
+        else if (slot == "clearcoatRoughnessMap"){ if (auto* m = dynamic_cast<MaterialWithClearcoat*>(mat))     return m->clearcoatRoughnessMap.get(); }
+        else if (slot == "clearcoatNormalMap")   { if (auto* m = dynamic_cast<MaterialWithClearcoat*>(mat))     return m->clearcoatNormalMap.get(); }
+        return nullptr;
+    }
+
+    // Apply an animation update to a texture transform component. Recomputes
+    // texture.matrix immediately when matrixAutoUpdate is on so the next render
+    // picks up the new transform. The renderer's per-frame texture state
+    // re-uploads the matrix as needed.
+    bool applyTextureTransform(Texture* tex, const std::string& ttProp,
+                               const std::vector<float>& buf, size_t offset) {
+        if (!tex) return false;
+        if (ttProp == "rotation") {
+            tex->rotation = buf[offset];
+        } else if (ttProp == "offset") {
+            tex->offset.set(buf[offset], buf[offset + 1]);
+        } else if (ttProp == "scale") {
+            tex->repeat.set(buf[offset], buf[offset + 1]);
+        } else {
+            return false;
+        }
+        if (tex->matrixAutoUpdate) tex->updateMatrix();
+        return true;
+    }
+
+    bool readTextureTransform(const Texture* tex, const std::string& ttProp,
+                              std::vector<float>& buf, size_t offset) {
+        if (!tex) return false;
+        if (ttProp == "rotation") {
+            buf[offset] = tex->rotation;
+        } else if (ttProp == "offset") {
+            buf[offset]     = tex->offset.x;
+            buf[offset + 1] = tex->offset.y;
+        } else if (ttProp == "scale") {
+            buf[offset]     = tex->repeat.x;
+            buf[offset + 1] = tex->repeat.y;
+        } else {
+            return false;
+        }
+        return true;
+    }
+
+    // Parse a "tex/<slot>/<prop>" property name into its two components.
+    // Inner separator is '/' (not '.') because the binding parser splits the
+    // full track name on the last dot to separate nodeName/propertyName; any
+    // '.' inside the property would mis-route to Object3D::rotation.
+    bool parseTexProp(const std::string& prop, std::string& slot, std::string& ttProp) {
+        constexpr std::string_view kPrefix = "tex/";
+        if (prop.rfind(kPrefix, 0) != 0) return false;
+        size_t sep = prop.find('/', kPrefix.size());
+        if (sep == std::string::npos) return false;
+        slot   = prop.substr(kPrefix.size(), sep - kPrefix.size());
+        ttProp = prop.substr(sep + 1);
+        return true;
+    }
+
     // Route a float-buffer write to a named field on a Material. Returns true
     // on hit. Covers the glTF KHR_animation_pointer subset we emit from
     // GLTFLoader: baseColorFactor, metalness, roughness, emissive,
-    // emissiveIntensity, opacity, alphaTest. Unknown names are a no-op — the
+    // emissiveIntensity, opacity, alphaTest, plus tex/<slot>/{rotation|offset|scale}
+    // for KHR_texture_transform animation. Unknown names are a no-op — the
     // loader won't emit them, so hitting the fallback means a typo somewhere.
     bool setMaterialProperty(Material* mat, const std::string& prop,
                              const std::vector<float>& buffer, size_t offset) {
         if (!mat) return false;
+
+        // KHR_texture_transform animations: "tex/<slot>/<rotation|offset|scale>".
+        // Silent OK if the material doesn't carry that slot — the loader emits
+        // these whenever the glTF channel exists, regardless of whether the
+        // target material actually has the texture set on threepp's side.
+        {
+            std::string slot, ttProp;
+            if (parseTexProp(prop, slot, ttProp)) {
+                if (auto* tex = findMaterialTexture(mat, slot)) {
+                    if (applyTextureTransform(tex, ttProp, buffer, offset)) {
+                        mat->needsUpdate();
+                    }
+                }
+                return true;
+            }
+        }
 
         if (prop == "baseColorFactor") {
             // glTF packs RGBA; route RGB → color, A → opacity. Opacity drives
@@ -86,6 +175,18 @@ namespace {
     bool getMaterialProperty(Material* mat, const std::string& prop,
                              std::vector<float>& buffer, size_t offset) {
         if (!mat) return false;
+
+        // tex.<slot>.<prop> mirror of the setter above; silent default when the
+        // material doesn't carry that slot so initial sample reads still succeed.
+        {
+            std::string slot, ttProp;
+            if (parseTexProp(prop, slot, ttProp)) {
+                if (auto* tex = findMaterialTexture(mat, slot)) {
+                    readTextureTransform(tex, ttProp, buffer, offset);
+                }
+                return true;
+            }
+        }
 
         if (prop == "baseColorFactor") {
             if (auto* c = dynamic_cast<MaterialWithColor*>(mat)) {

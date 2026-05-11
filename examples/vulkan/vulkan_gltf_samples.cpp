@@ -144,7 +144,7 @@ int main(int argc, char** argv) {
                 bool hasMesh = false;
                 root->traverseType<Mesh>([&](Mesh&) { hasMesh = true; });
                 root->traverseType<Light>([&](Light& l) {
-                    l.visible = false;
+                    l.visible = true;
                     l.intensity = std::max(l.intensity, 1.0f);
                 });
                 if (!hasMesh) {
@@ -214,7 +214,7 @@ int main(int argc, char** argv) {
 
         ImGui::Separator();
 
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
+        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 2.0f))
             renderer.toneMappingExposure = exposure;
 
         const char* toneItems[] = {"None", "Linear", "Reinhard", "Cineon", "ACESFilmic"};

@@ -3301,7 +3301,14 @@ namespace threepp {
                         break;
                     }
                     const bool xfmChanged   = std::memcmp(a.matrix.data(), b.matrix.data(), sizeof(a.matrix)) != 0;
-                    const bool matChanged   = std::memcmp(a.pbr.data(),    b.pbr.data(),    sizeof(a.pbr))    != 0;
+                    // matVersion catches changes the pbr float-array doesn't —
+                    // notably KHR_texture_transform animation (rotation/offset/
+                    // scale of a texture). PropertyBinding bumps Material::version
+                    // on every setMaterialProperty hit, so this fires whenever
+                    // anything on the material has been touched even if the
+                    // PBR floats themselves didn't move.
+                    const bool matChanged   = std::memcmp(a.pbr.data(),    b.pbr.data(),    sizeof(a.pbr))    != 0
+                                              || a.matVersion != b.matVersion;
                     const bool bonesChanged = entryBonesDirty[i];
                     const bool dispChanged  = entryDisplacedDirty[i];
                     const bool geomChanged  = (a.geomVersion != b.geomVersion);
