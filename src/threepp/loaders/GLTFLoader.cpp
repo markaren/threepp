@@ -24,6 +24,7 @@
 #include <threepp/materials/MeshBasicMaterial.hpp>
 #include <threepp/materials/MeshPhysicalMaterial.hpp>
 #include <threepp/objects/Bone.hpp>
+#include <threepp/objects/InstancedMesh.hpp>
 #include <threepp/objects/ObjectWithMaterials.hpp>
 #include <threepp/objects/Skeleton.hpp>
 #include <threepp/objects/SkinnedMesh.hpp>
@@ -923,6 +924,89 @@ namespace threepp {
             //  Node / Scene hierarchy
             // -----------------------------------------------------------------------
 
+            // EXT_mesh_gpu_instancing — node-level extension carrying per-instance
+            // TRANSLATION (vec3) / ROTATION (vec4 quat xyzw) / SCALE (vec3) accessor
+            // arrays. Any subset may be present; missing components default to
+            // identity. All provided accessors must share the same count.
+            //
+            // We walk `meshObj` (single Mesh or Group of Meshes from loadMesh) and
+            // replace each non-skinned Mesh with an InstancedMesh sharing its
+            // geometry + material. Per-instance matrices are composed from the TRS
+            // accessors and uploaded into instanceMatrix. The replacement preserves
+            // mesh name + userData so variant resolution and friends keep working.
+            std::shared_ptr<Object3D> applyGpuInstancing(const json& extData,
+                                                        const std::shared_ptr<Object3D>& meshObj) {
+                if (!extData.contains("attributes") || !meshObj) return meshObj;
+                const auto& attrs = extData["attributes"];
+
+                // Count comes from any provided accessor (spec: all must match).
+                size_t count = 0;
+                for (const char* key : {"TRANSLATION", "ROTATION", "SCALE"}) {
+                    if (attrs.contains(key)) {
+                        count = gltf["accessors"][attrs[key].get<int>()]["count"].get<size_t>();
+                        break;
+                    }
+                }
+                if (count == 0) return meshObj;
+
+                const std::vector<float> t = attrs.contains("TRANSLATION")
+                        ? readFloats(attrs["TRANSLATION"].get<int>()) : std::vector<float>();
+                const std::vector<float> r = attrs.contains("ROTATION")
+                        ? readFloats(attrs["ROTATION"].get<int>()) : std::vector<float>();
+                const std::vector<float> s = attrs.contains("SCALE")
+                        ? readFloats(attrs["SCALE"].get<int>()) : std::vector<float>();
+
+                std::vector<Matrix4> mats(count);
+                for (size_t i = 0; i < count; ++i) {
+                    Vector3 tv(0, 0, 0), sv(1, 1, 1);
+                    Quaternion qv;
+                    if (!t.empty()) tv.set(t[i * 3], t[i * 3 + 1], t[i * 3 + 2]);
+                    if (!r.empty()) qv.set(r[i * 4], r[i * 4 + 1], r[i * 4 + 2], r[i * 4 + 3]);
+                    if (!s.empty()) sv.set(s[i * 3], s[i * 3 + 1], s[i * 3 + 2]);
+                    mats[i].compose(tv, qv, sv);
+                }
+
+                auto convert = [&](Mesh& m) -> std::shared_ptr<InstancedMesh> {
+                    // Skinned meshes can't reasonably share a single pose buffer
+                    // across instances; leave them as the regular Mesh.
+                    if (dynamic_cast<SkinnedMesh*>(&m)) return nullptr;
+                    auto inst = InstancedMesh::create(m.geometry(), m.material(), count);
+                    inst->name = m.name;
+                    inst->userData = m.userData;
+                    for (size_t i = 0; i < count; ++i) inst->setMatrixAt(i, mats[i]);
+                    inst->instanceMatrix()->needsUpdate();
+                    inst->computeBoundingSphere();
+                    return inst;
+                };
+
+                // Single-Mesh case (loadMesh unwrapped a single-primitive mesh).
+                // Mesh and Group are siblings under Object3D, so as<Mesh>() is
+                // null on a Group.
+                if (auto* m = meshObj->as<Mesh>()) {
+                    if (auto inst = convert(*m)) return inst;
+                    return meshObj;
+                }
+
+                // Group-of-Meshes case: rebuild the group with InstancedMesh children.
+                auto group = Group::create();
+                group->name = meshObj->name;
+                group->userData = meshObj->userData;
+                for (auto* child : meshObj->children) {
+                    if (auto* cm = child->as<Mesh>()) {
+                        if (auto inst = convert(*cm)) {
+                            group->add(inst);
+                            continue;
+                        }
+                    }
+                    // Non-Mesh / SkinnedMesh: keep as-is, share the existing pointer.
+                    // children stores raw pointers; promote via shared_from_this if
+                    // available, otherwise we can't reattach safely — fall back to a
+                    // clone so we don't leave dangling refs.
+                    group->add(child->clone());
+                }
+                return group;
+            }
+
             // Build node hierarchy using pre-created node objects
             void buildNode(int nodeIdx) {
                 if (!builtNodes.insert(nodeIdx).second) return; // already built
@@ -943,6 +1027,16 @@ namespace threepp {
                             if (auto sm = dynamic_cast<SkinnedMesh*>(child))
                                 sm->bind(skel, Matrix4());
                         }
+                    }
+
+                    // EXT_mesh_gpu_instancing — replace Mesh children with
+                    // InstancedMesh driven by the extension's per-instance TRS
+                    // accessor arrays. Skipped for skinned meshes (spec advises
+                    // against combining with KHR_skin).
+                    if (!hasSkin && nodeDef.contains("extensions") &&
+                        nodeDef["extensions"].contains("EXT_mesh_gpu_instancing")) {
+                        meshObj = applyGpuInstancing(
+                                nodeDef["extensions"]["EXT_mesh_gpu_instancing"], meshObj);
                     }
 
                     // DCC tools (Blender, Maya, ...) put the user-facing object name on
