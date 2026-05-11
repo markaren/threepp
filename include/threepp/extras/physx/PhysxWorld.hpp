@@ -3,6 +3,8 @@
 #define THREEPP_PHYSX_WORLD_HPP
 
 #include <PxPhysicsAPI.h>
+#include <cudamanager/PxCudaContext.h>
+#include <cudamanager/PxCudaContextManager.h>
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
@@ -21,6 +23,8 @@
 #include <vector>
 
 namespace threepp {
+
+    class SoftBody;// defined in PhysxSoftBody.hpp, included at the bottom of this file
 
     inline ::physx::PxVec3 toPxVec3(const Vector3& v) {
         return {v.x, v.y, v.z};
@@ -56,9 +60,16 @@ namespace threepp {
             float fixedTimestep = 1.f / 60.f;
             int maxSubSteps = 4;
             unsigned numThreads = 2;
+            // Enable GPU dynamics. Required for soft bodies (PxDeformableVolume),
+            // particle systems, and GPU broadphase. Switches the scene to the TGS
+            // solver. Needs a CUDA-capable GPU and the omniverse-physx GPU library
+            // (gpu-library is copied next to the example by AddExample.cmake).
+            bool enableGpuDynamics = false;
         };
 
-        explicit PhysxWorld(Settings s = {})
+        PhysxWorld() : PhysxWorld(Settings{}) {}
+
+        explicit PhysxWorld(Settings s)
             : settings_(s) {
 
             using namespace ::physx;
@@ -66,11 +77,27 @@ namespace threepp {
             foundation_ = PxCreateFoundation(PX_PHYSICS_VERSION, allocator_, errorCallback_);
             if (!foundation_) throw std::runtime_error("PxCreateFoundation failed");
 
-            physics_ = PxCreatePhysics(PX_PHYSICS_VERSION, *foundation_, PxTolerancesScale());
+            // trackOutstandingAllocations=true matches the GPU samples; harmless when off.
+            physics_ = PxCreatePhysics(PX_PHYSICS_VERSION, *foundation_, PxTolerancesScale(),
+                                       settings_.enableGpuDynamics);
             if (!physics_) throw std::runtime_error("PxCreatePhysics failed");
 
             if (!PxInitExtensions(*physics_, nullptr)) {
                 throw std::runtime_error("PxInitExtensions failed");
+            }
+
+            if (settings_.enableGpuDynamics) {
+                PxCudaContextManagerDesc cudaDesc;
+                cuda_ = PxCreateCudaContextManager(*foundation_, cudaDesc, PxGetProfilerCallback());
+                if (cuda_ && !cuda_->contextIsValid()) {
+                    cuda_->release();
+                    cuda_ = nullptr;
+                }
+                if (!cuda_) throw std::runtime_error("PhysxWorld: failed to create CUDA context (no CUDA GPU?)");
+                {
+                    PxScopedCudaLock _lock(*cuda_);
+                    cuda_->getCudaContext()->streamCreate(&cudaCopyStream_, 0);
+                }
             }
 
             dispatcher_ = PxDefaultCpuDispatcherCreate(settings_.numThreads);
@@ -80,6 +107,15 @@ namespace threepp {
             desc.gravity = toPxVec3(settings_.gravity);
             desc.cpuDispatcher = dispatcher_;
             desc.filterShader = PxDefaultSimulationFilterShader;
+            if (settings_.enableGpuDynamics) {
+                desc.cudaContextManager = cuda_;
+                desc.flags |= PxSceneFlag::eENABLE_GPU_DYNAMICS;
+                desc.flags |= PxSceneFlag::eENABLE_PCM;
+                desc.flags |= PxSceneFlag::eENABLE_STABILIZATION;
+                desc.broadPhaseType = PxBroadPhaseType::eGPU;
+                desc.gpuMaxNumPartitions = 8;
+                desc.solverType = PxSolverType::eTGS;
+            }
             scene_ = physics_->createScene(desc);
             if (!scene_) throw std::runtime_error("createScene failed");
 
@@ -88,6 +124,10 @@ namespace threepp {
 
         ~PhysxWorld() {
             using namespace ::physx;
+            // Soft bodies must be released BEFORE the scene/physics/cuda context;
+            // their destructor releases the PxDeformableVolume actor and frees pinned
+            // host memory through the CUDA context.
+            softBodies_.clear();
             if (scene_) {
                 scene_->release();
                 scene_ = nullptr;
@@ -96,10 +136,19 @@ namespace threepp {
                 dispatcher_->release();
                 dispatcher_ = nullptr;
             }
+            if (cuda_ && cudaCopyStream_) {
+                PxScopedCudaLock _lock(*cuda_);
+                cuda_->getCudaContext()->streamDestroy(cudaCopyStream_);
+                cudaCopyStream_ = nullptr;
+            }
             if (physics_) {
                 PxCloseExtensions();
                 physics_->release();
                 physics_ = nullptr;
+            }
+            if (cuda_) {
+                cuda_->release();
+                cuda_ = nullptr;
             }
             if (foundation_) {
                 foundation_->release();
@@ -403,10 +452,46 @@ namespace threepp {
         ::physx::PxMaterial& defaultMaterial() { return *defaultMat_; }
         ::physx::PxCpuDispatcher& dispatcher() { return *dispatcher_; }
 
+        // CUDA context — non-null only when Settings::enableGpuDynamics was set.
+        // Required for soft bodies, particle systems, and GPU broadphase.
+        ::physx::PxCudaContextManager* cudaContextManager() const { return cuda_; }
+
         void setGravity(const Vector3& g) {
             settings_.gravity = g;
             scene_->setGravity(toPxVec3(g));
         }
+
+        // --- Soft body API (requires Settings::enableGpuDynamics). Implementations
+        // live in PhysxSoftBody.hpp because they depend on the full SoftBody type.
+
+        // Create a deformable-volume material. Owned by PxPhysics; no manual release.
+        ::physx::PxDeformableVolumeMaterial* createSoftBodyMaterial(
+                float youngsModulus = 1e6f, float poissonsRatio = 0.45f,
+                float dynamicFriction = 0.5f);
+
+        // Cook the supplied geometry into a deformable volume and add it to the
+        // scene. The geometry's position attribute is mutated each frame to match
+        // the deformed simulation. The geometry's positions are taken as-is (world
+        // space). voxelResolution sets the simulation mesh detail (~10 default;
+        // higher = finer simulation + more solver work).
+        SoftBody* addSoftBody(
+                const std::shared_ptr<BufferGeometry>& visualGeometry,
+                ::physx::PxDeformableVolumeMaterial* material = nullptr,
+                int voxelResolution = 10,
+                unsigned solverIterations = 20,
+                bool selfCollision = false);
+
+        // Convenience: bake mesh.matrixWorld into the geometry positions, reset
+        // the mesh's local transform to identity, then add as a soft body. Useful
+        // for typical scene-graph workflows (`mesh->position.set(...)` then add).
+        SoftBody* addSoftBody(
+                Mesh& mesh,
+                ::physx::PxDeformableVolumeMaterial* material = nullptr,
+                int voxelResolution = 10,
+                unsigned solverIterations = 20,
+                bool selfCollision = false);
+
+        void removeSoftBody(SoftBody* softBody);
 
     private:
         struct ObjBinding {
@@ -452,7 +537,14 @@ namespace threepp {
             for (auto& cb : postSubstep_) cb(dt);
         }
 
+        // Pull deformed positions GPU->CPU for every soft body, then write them into
+        // the bound BufferGeometry's position attribute. Defined in PhysxSoftBody.hpp.
+        void syncSoftBodies();
+
+        ::physx::PxDeformableVolumeMaterial* defaultSoftBodyMaterial();
+
         void syncBindings() {
+            syncSoftBodies();
             for (auto& b : objBindings_) {
                 auto t = b.actor->getGlobalPose();
                 const Vector3 worldPos = fromPxVec3(t.p);
@@ -498,6 +590,10 @@ namespace threepp {
         ::physx::PxDefaultCpuDispatcher* dispatcher_ = nullptr;
         ::physx::PxScene* scene_ = nullptr;
         ::physx::PxMaterial* defaultMat_ = nullptr;
+        ::physx::PxCudaContextManager* cuda_ = nullptr;
+        CUstream cudaCopyStream_ = nullptr;
+        ::physx::PxDeformableVolumeMaterial* defaultSoftBodyMat_ = nullptr;
+        std::vector<std::unique_ptr<SoftBody>> softBodies_;
         float accumulator_ = 0.f;
 
         std::vector<ObjBinding> objBindings_;
@@ -507,5 +603,7 @@ namespace threepp {
     };
 
 }// namespace threepp
+
+#include "threepp/extras/physx/PhysxSoftBody.hpp"
 
 #endif//THREEPP_PHYSX_WORLD_HPP
