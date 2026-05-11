@@ -157,6 +157,39 @@ namespace threepp {
             b = {};
         }
 
+        // Acceleration-structure scratch buffer with the alignment the spec
+        // demands: VkAccelerationStructureBuildGeometryInfoKHR::scratchData::
+        // deviceAddress must be aligned to
+        // VkPhysicalDeviceAccelerationStructurePropertiesKHR::
+        // minAccelerationStructureScratchOffsetAlignment. NVIDIA reports 128B,
+        // AMD 256B, Intel up to 1024B. The plain createBuffer path falls
+        // through to whatever alignment VMA picks (typically 64B from
+        // VkMemoryRequirements), which on AMD/Intel produces a misaligned
+        // address and the build faults with VK_ERROR_DEVICE_LOST. 256B is
+        // conservative for desktop GPUs; if a future device demands more,
+        // upgrade to a property-query.
+        Buffer createAsScratchBuffer(VmaAllocator alloc, VkDevice device, VkDeviceSize size) {
+            Buffer b{};
+            b.size = size;
+            VkBufferCreateInfo bci{};
+            bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bci.size = size;
+            bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+            bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            VmaAllocationCreateInfo aci{};
+            aci.usage = VMA_MEMORY_USAGE_AUTO;
+            check(vmaCreateBufferWithAlignment(alloc, &bci, &aci,
+                                                /*minAlignment*/ 256,
+                                                &b.handle, &b.alloc, nullptr),
+                  "vmaCreateBufferWithAlignment(scratch)");
+            VkBufferDeviceAddressInfo dai{};
+            dai.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+            dai.buffer = b.handle;
+            b.address = vkGetBufferDeviceAddress(device, &dai);
+            return b;
+        }
+
         // Phase 7: minimal sampled-image record for the equirect environment
         // map. Held alive for the lifetime of the renderer; recreated when the
         // scene's env texture changes (compared by Texture::id).
@@ -1284,14 +1317,23 @@ namespace threepp {
             return cb;
         }
 
-        void endAndSubmitOneShot(VkCommandBuffer cb) {
+        // The optional `label` is folded into the error message when the
+        // submit / wait throws — handy for distinguishing which one-shot site
+        // hit a device-lost during runtime debugging.
+        void endAndSubmitOneShot(VkCommandBuffer cb, const char* label = "one-shot") {
             check(vkEndCommandBuffer(cb), "end one-shot cb");
             VkSubmitInfo si{};
             si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             si.commandBufferCount = 1;
             si.pCommandBuffers = &cb;
-            check(vkQueueSubmit(ctx->graphicsQueue(), 1, &si, VK_NULL_HANDLE), "submit one-shot");
-            check(vkQueueWaitIdle(ctx->graphicsQueue()), "wait one-shot");
+            const VkResult sr = vkQueueSubmit(ctx->graphicsQueue(), 1, &si, VK_NULL_HANDLE);
+            if (sr != VK_SUCCESS) {
+                check(sr, (std::string("submit one-shot (") + label + ")").c_str());
+            }
+            const VkResult wr = vkQueueWaitIdle(ctx->graphicsQueue());
+            if (wr != VK_SUCCESS) {
+                check(wr, (std::string("wait one-shot (") + label + ")").c_str());
+            }
             vkFreeCommandBuffers(ctx->device(), cmdPool, 1, &cb);
         }
 
@@ -1478,11 +1520,7 @@ namespace threepp {
             check(ctx->rt().createAccelerationStructure(ctx->device(), &blasCreate, nullptr, &rec->as),
                   "vkCreateAccelerationStructureKHR(BLAS)");
 
-            Buffer scratch = createBuffer(
-                    ctx->allocator(), ctx->device(), blasSizes.buildScratchSize,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO);
+            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
 
             blasBuild.dstAccelerationStructure = rec->as;
             blasBuild.scratchData.deviceAddress = scratch.address;
@@ -1493,7 +1531,7 @@ namespace threepp {
 
             VkCommandBuffer cb = beginOneShot();
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
-            endAndSubmitOneShot(cb);
+            endAndSubmitOneShot(cb, "buildBlasFor");
             destroyBuffer(ctx->allocator(), scratch);
 
             VkAccelerationStructureDeviceAddressInfoKHR addrInfo{};
@@ -1727,11 +1765,7 @@ namespace threepp {
                     VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                     &blasBuild, &primitiveCount, &blasSizes);
 
-            Buffer scratch = createBuffer(
-                    ctx->allocator(), ctx->device(), blasSizes.buildScratchSize,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO);
+            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
             blasBuild.scratchData.deviceAddress = scratch.address;
 
             VkAccelerationStructureBuildRangeInfoKHR range{};
@@ -1761,6 +1795,22 @@ namespace threepp {
             auto* posAttr  = geom.getAttribute<float>("position");
             auto* nrmAttr  = geom.getAttribute<float>("normal");
             if (!posAttr || !nrmAttr) return;
+
+            // BLAS build is undefined behavior on non-finite positions — drivers
+            // respond with device-lost. buildBlasFor validates in the slow path;
+            // the per-frame refresh path needs the same guard because dynamic
+            // geometry (soft body collapse, skinning singularities) can leak NaN
+            // even when the source simulation is supposed to be stabilized.
+            {
+                const auto& p = posAttr->array();
+                for (size_t i = 0; i < p.size(); ++i) {
+                    if (!std::isfinite(p[i])) {
+                        std::cerr << "[VulkanRenderer] refreshGeomBlas: skipping refresh — "
+                                  << "position[" << i << "] is non-finite (" << p[i] << ")\n";
+                        return;
+                    }
+                }
+            }
 
             void* mapped = nullptr;
             vmaMapMemory(ctx->allocator(), rec.vertex.alloc, &mapped);
@@ -1832,11 +1882,7 @@ namespace threepp {
                     VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                     &blasBuild, &primitiveCount, &blasSizes);
 
-            Buffer scratch = createBuffer(
-                    ctx->allocator(), ctx->device(), blasSizes.buildScratchSize,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO);
+            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
             blasBuild.scratchData.deviceAddress = scratch.address;
 
             VkAccelerationStructureBuildRangeInfoKHR range{};
@@ -1845,7 +1891,7 @@ namespace threepp {
 
             VkCommandBuffer cb = beginOneShot();
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
-            endAndSubmitOneShot(cb);
+            endAndSubmitOneShot(cb, "refreshGeomBlas");
             destroyBuffer(ctx->allocator(), scratch);
 
             rec.geomVersion = geomVersionOf(geom);
@@ -2024,11 +2070,7 @@ namespace threepp {
                     VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                     &blasBuild, &primitiveCount, &blasSizes);
 
-            Buffer scratch = createBuffer(
-                    ctx->allocator(), ctx->device(), blasSizes.buildScratchSize,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO);
+            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
             blasBuild.scratchData.deviceAddress = scratch.address;
 
             VkAccelerationStructureBuildRangeInfoKHR range{};
@@ -2500,10 +2542,7 @@ namespace threepp {
                     ctx->device(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                     &build, &primCount, &sizes);
 
-            Buffer scratch = createBuffer(
-                    ctx->allocator(), ctx->device(), sizes.buildScratchSize,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO);
+            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), sizes.buildScratchSize);
             build.scratchData.deviceAddress = scratch.address;
 
             VkAccelerationStructureBuildRangeInfoKHR range{};
@@ -2595,11 +2634,7 @@ namespace threepp {
             check(ctx->rt().createAccelerationStructure(ctx->device(), &tlasCreate, nullptr, &tlas),
                   "vkCreateAccelerationStructureKHR(TLAS)");
 
-            Buffer scratch = createBuffer(
-                    ctx->allocator(), ctx->device(), tlasSizes.buildScratchSize,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO);
+            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), tlasSizes.buildScratchSize);
 
             tlasBuild.dstAccelerationStructure = tlas;
             tlasBuild.scratchData.deviceAddress = scratch.address;
@@ -2610,7 +2645,7 @@ namespace threepp {
 
             VkCommandBuffer cb = beginOneShot();
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &tlasBuild, &pRange);
-            endAndSubmitOneShot(cb);
+            endAndSubmitOneShot(cb, "buildTlas");
             destroyBuffer(ctx->allocator(), scratch);
         }
 
@@ -2665,11 +2700,7 @@ namespace threepp {
 
             const VkDeviceSize scratchSize = fullBuild
                     ? sizes.buildScratchSize : sizes.updateScratchSize;
-            Buffer scratch = createBuffer(
-                    ctx->allocator(), ctx->device(), scratchSize,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO);
+            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), scratchSize);
             tlasBuild.scratchData.deviceAddress = scratch.address;
 
             VkAccelerationStructureBuildRangeInfoKHR range{};
@@ -2678,7 +2709,7 @@ namespace threepp {
 
             VkCommandBuffer cb = beginOneShot();
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &tlasBuild, &pRange);
-            endAndSubmitOneShot(cb);
+            endAndSubmitOneShot(cb, "refitTlas");
             destroyBuffer(ctx->allocator(), scratch);
         }
 
@@ -3344,6 +3375,20 @@ namespace threepp {
                         // index count (topology change), we can't reuse the
                         // old buffers — fall through to the full structural
                         // rebuild instead.
+                        //
+                        // ensureSceneBuilt runs in render() BEFORE renderFrame
+                        // waits on inFlight[currentFrame], so up to
+                        // kFramesInFlight prior frames may still be reading
+                        // rec.vertex/normal/index via closest_hit's
+                        // GeometryDesc.vertexAddress fetches (and the hybrid
+                        // raster gbuffer pass binds the same buffer as a
+                        // vertex buffer). Memcpying into those buffers
+                        // mid-flight is a device-lost on NVIDIA. Drain
+                        // everything device-wide before mutating shared BLAS
+                        // buffers — skinned / displaced / morphed paths above
+                        // submit on the same queue, so this one wait covers
+                        // them too.
+                        check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (pre-BLAS-refresh)");
                         bool topologyChanged = false;
                         std::unordered_set<const BufferGeometry*> refreshedGeoms;
                         for (size_t i = 0; i < entries.size(); ++i) {
@@ -9789,6 +9834,7 @@ namespace threepp {
                 vkCmdPushConstants(cb, rtPipelineLayout,
                                    VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                            VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                           VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
                                            VK_SHADER_STAGE_MISS_BIT_KHR,
                                    0, sizeof(ppc), ppc);
             }
@@ -9870,6 +9916,7 @@ namespace threepp {
             vkCmdPushConstants(cb, rtPipelineLayout,
                                VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                        VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                       VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
                                        VK_SHADER_STAGE_MISS_BIT_KHR,
                                0, sizeof(pc), pc);
 
