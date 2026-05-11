@@ -1,8 +1,9 @@
 
-#include <iostream>
 #include <threepp/extras/imgui/ImguiContext.hpp>
 #include <threepp/loaders/URDFLoader.hpp>
 #include <threepp/threepp.hpp>
+
+#include <cmath>
 
 using namespace threepp;
 
