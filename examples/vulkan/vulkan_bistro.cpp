@@ -1,5 +1,6 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/loaders/FBXLoader.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/renderers/wgpu/WgpuPathTracer.hpp"
@@ -27,7 +28,7 @@ int main(int argc, char** argv) {
 
     // ---- Window & Renderer ----
     Canvas canvas("Bistro scene",
-                  { {"vsync", false}});
+                  {{"vsync", false}});
 
     VulkanRenderer renderer(canvas);
     renderer.outputColorSpace = ColorSpace::sRGB;
@@ -43,54 +44,33 @@ int main(int argc, char** argv) {
 
     // ---- Camera ----
     PerspectiveCamera camera(60.f, canvas.aspect(), 0.01f, 1000.f);
-    camera.position.set(0.f, 1.f, 3.f);
+    camera.position.set(-10.f, 3.f, -5.f);
     OrbitControls controls{camera, canvas};
     controls.enableKeys = false;
     controls.update();
 
     // ---- Async model loading ----
-    ModelLoader loader;
+    FBXLoader loader;
     auto interior = loader.load(modelFolder / "BistroInterior_Wine.fbx");
     auto exterior = loader.load(modelFolder / "BistroExterior.fbx");
 
     scene.add(interior);
     scene.add(exterior);
 
-    scene.traverseType<Light>([&](Light& l) {
-        l.visible = true;
-    });
-
-
-    // Auto-fit camera to model bounding box
-    auto fitCamera = [&](Object3D& obj) {
-        Box3 bbox;
-        bbox.setFromObject(obj);
-        auto center = bbox.getCenter();
-        auto size = bbox.getSize();
-        float maxDim = std::max({size.x, size.y, size.z});
-        float dist = maxDim * 1.5f / std::tan(camera.fov * 0.5f * math::PI / 180.f);
-
-        controls.target.copy(center);
-        camera.position.set(center.x, center.y, center.z + dist);
-        camera.nearPlane = dist * 0.01f;
-        camera.farPlane = dist * 100.f;
-        camera.updateProjectionMatrix();
-        controls.update();
+    auto toggleBistroLights = [&] {
+        scene.traverseType<Light>([&](Light& l) {
+            l.visible = !l.visible;
+        });
     };
 
-    fitCamera(scene);
-
     // ---- UI ----
-    bool raster = false;
     bool denoiserOn = renderer.denoise();
     bool restdirOn = renderer.restirDIEnabled();
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
-        if (ev.key == Key::T) {
-            raster = !raster;
-        }
+
     });
     canvas.addKeyListener(keyAdapter);
 
@@ -104,12 +84,16 @@ int main(int argc, char** argv) {
         ImGui::Separator();
         ImGui::SliderFloat("Exposure", &renderer.toneMappingExposure, 0.1f, 2.0f);
 
-        if (!raster && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
-            if (ImGui::Checkbox("Denoiser", &denoiserOn))
-                renderer.setDenoise(denoiserOn);
-            if (ImGui::Checkbox("REsTDIR DI", &restdirOn))
-                renderer.setRestirDIEnabled(restdirOn);
 
+        if (ImGui::Checkbox("Denoiser", &denoiserOn)) {
+            renderer.setDenoise(denoiserOn);
+        }
+        if (ImGui::Checkbox("REsTDIR DI", &restdirOn)) {
+            renderer.setRestirDIEnabled(restdirOn);
+        }
+
+        if (ImGui::Button("Toggle bistro lights")) {
+            toggleBistroLights();
         }
 
         ImGui::End();
@@ -142,24 +126,25 @@ int main(int argc, char** argv) {
         controls.update();
 
         renderer.render(scene, camera);
-        auto t = renderer.lastFrameTimings();
-        static int frames = 0;
-static double accum = 0.0;
-accum += t.cpuFrameMs;
-if (++frames >= 60) {
-    std::cout << std::fixed << std::setprecision(2)
-           << "frame " << t.cpuFrameMs    << " ms"
-           << " | PT "      << t.pathTraceMs
-           << " | denoise " << t.denoiseMs
-           << " | TAA "     << t.taaMs
-           << " | gbuf "    << t.rasterGbufMs
-           << " | overlay " << t.overlayMs
-           << " | photon "  << t.photonEmitMs
-           << " | cpu(scene "  << t.cpuEnsureSceneMs
-           << ", record "      << t.cpuRecordMs << ")"
-           << '\n';
-    frames = 0; accum = 0.0;
-}
+        // auto t = renderer.lastFrameTimings();
+        // static int frames = 0;
+        // static double accum = 0.0;
+        // accum += t.cpuFrameMs;
+        // if (++frames >= 60) {
+        //     std::cout << std::fixed << std::setprecision(2)
+        //               << "frame " << t.cpuFrameMs << " ms"
+        //               << " | PT " << t.pathTraceMs
+        //               << " | denoise " << t.denoiseMs
+        //               << " | TAA " << t.taaMs
+        //               << " | gbuf " << t.rasterGbufMs
+        //               << " | overlay " << t.overlayMs
+        //               << " | photon " << t.photonEmitMs
+        //               << " | cpu(scene " << t.cpuEnsureSceneMs
+        //               << ", record " << t.cpuRecordMs << ")"
+        //               << '\n';
+        //     frames = 0;
+        //     accum = 0.0;
+        // }
 
         ui.render();
     });
