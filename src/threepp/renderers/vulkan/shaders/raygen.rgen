@@ -65,7 +65,12 @@ layout(set = 0, binding = 2) uniform CameraUbo {
     // hybrid mode so V varies per frame (TAA integrates correctly across
     // the Halton period). Zero in non-hybrid mode — the chit's per-frame
     // Halton on the primary still produces the same effect there.
-    // .zw = (1/width, 1/height) — reserved for future ddx/ddy-style use.
+    // .zw = previous frame's clip-space jitter. The hybrid reproject below
+    // uses (zw - xy) to shift bilinear taps so they hit the same sub-pixel
+    // location in prevAccumImage that the prev raster jitter wrote to —
+    // without this, moving objects wobble (per-frame jitter delta cycles
+    // through Halton 2/3 values and pure PT averages it out via spp, but
+    // hybrid rasterizes once per frame so the shake shows through).
     vec4 jitter;
 } cam;
 layout(set = 0, binding = 7, rgba32f) uniform image2D accumImage;
@@ -962,9 +967,26 @@ void main() {
                 histMean = m;
                 histFc   = pa.w;
             }
+        } else {
+            // Damped reuse instead of full cold-start. Prev held a moving
+            // mesh that has since vacated this pixel. At silhouettes, the
+            // raster pass's per-frame Halton jitter flips coverage between
+            // "covered by the mesh" and "covered by sky/background" — a hard
+            // histFc=0 here produces a 1-spp env tap on the "sky" frame and
+            // those single samples can land on dark env directions (visible
+            // as black pixels stippling the moving silhouette).
+            // Capping histFc instead lets the new sample dominate within
+            // ~kSilDampFc frames: enough to wash out a genuine ghost trail
+            // when the mesh truly leaves the pixel, but soft enough that
+            // jitter-aliased edge pixels stay smooth.
+            const float kSilDampFc = 4.0;
+            const vec4 pa = imageLoad(prevAccumImage, px);
+            const vec3 m  = pa.rgb;
+            if (!any(isnan(m)) && !any(isinf(m))) {
+                histMean = m;
+                histFc   = min(pa.w, kSilDampFc);
+            }
         }
-        // else: histFc stays 0 → cold-start; the moving mesh's old radiance
-        // doesn't bleed into newly-uncovered pixels.
 
     } else if (primaryInstanceId != 0u) {
         // ── This pixel moved (or camera moved): bilinear 4-tap reproject
@@ -1004,6 +1026,20 @@ void main() {
             const vec2 prevNDC = currNDC + motionGL;
             prevU = (prevNDC.x * 0.5 + 0.5) * float(sz.x) - 0.5;
             prevV = (0.5 - prevNDC.y * 0.5) * float(sz.y) - 0.5;
+            // Jitter-delta correction: the surface this pixel rasterized to
+            // sat at the JITTERED pixel position last frame too, but with a
+            // different Halton sample. motion vec is computed from unjittered
+            // projections (vCurrClipUnjit / vPrevClip in gbuffer.vert), so
+            // prevU/V here lands on the unjittered prev pixel — half a pixel
+            // off from where prev raygen actually wrote into prevAccumImage.
+            // Add (prev_jitter - curr_jitter) in pixel space to land on the
+            // prev rasterized pixel exactly. cam.jitter is in clip space
+            // ([-1,1] NDC), so multiply by size/2. Y axis: clip and GL-NDC
+            // agree on sign because the projection's m12 (clip Y) is what
+            // shifts; the gl_Position Y flip happens after.
+            const vec2 jDelta = (cam.jitter.zw - cam.jitter.xy) * 0.5 * vec2(sz);
+            prevU += jDelta.x;
+            prevV -= jDelta.y;
             reprojValid = true;
         } else if (prevZ > 0.001) {
             const float ndcX = dot(toPoint, pcam.prevCamRgt.xyz) * pcam.prevCamPosX.w / prevZ;

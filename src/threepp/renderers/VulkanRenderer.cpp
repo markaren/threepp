@@ -4411,8 +4411,14 @@ namespace threepp {
             const float jClipY = (hybridEnabled_ ? 2.f * jy / float(ext.height) : 0.f);
             data[32] = jClipX;
             data[33] = jClipY;
-            data[34] = 1.f / float(ext.width);
-            data[35] = 1.f / float(ext.height);
+            // .zw = previous frame's jitter so raygen's hybrid reproject can
+            // correct the bilinear tap by (prev - curr) pixels. The raster
+            // path tracks this in rasterPrevJitter_; PT UBO upload runs before
+            // the raster upload, so rasterPrevJitter_ here still holds the
+            // PREVIOUS frame's value (which is exactly what we want). First
+            // frame: self-seed to curr so the delta is zero.
+            data[34] = rasterPrevJitterValid_ ? rasterPrevJitter_[0] : jClipX;
+            data[35] = rasterPrevJitterValid_ ? rasterPrevJitter_[1] : jClipY;
 
             // Build camera basis-vector buffer matching PrevCameraUbo layout.
             // matrixWorld column-major: col0=right, col1=up, col2=backward(-fwd), col3=pos.
@@ -4562,16 +4568,16 @@ namespace threepp {
             // Map sub-pixel offset to clip-space: one pixel spans 2/width of
             // NDC (NDC ∈ [-1, +1]), so a 1-pixel jitter is 2/width in clip x.
             //
-            // Stage 1A: now that the PT primary trace is replaced by raster
-            // (deterministic per pixel for whatever surface the raster
-            // jittered onto), the chit's Monte Carlo primary jitter is gone
-            // and we can safely re-enable raster jitter. The PT temporal
-            // accumulator blends across frames — interior surfaces get
-            // sub-pixel-offset texture AA from the blend; silhouettes still
-            // depend on the existing mesh-ID guard. If silhouette flicker
-            // shows up, we'd need proper raster TAA with normal-aware
-            // history rejection on top.
-            constexpr bool kRasterJitterEnabled = true;
+            // Raster jitter trade-off: ON gives sub-pixel-offset texture AA
+            // on interior surfaces via PT temporal blend, but the per-frame
+            // Halton coverage flip at silhouettes shows up as black-pixel
+            // stippling on moving objects (1-spp env taps on the "uncovered"
+            // half-frame). Without MSAA on the gbuffer pass, that aliasing
+            // costs more than the interior AA gains. Disabled by default;
+            // sub-pixel jitter still happens in raygen's hybrid primary via
+            // the blue-noise tile (see primaryDirHybrid), so interior AA
+            // doesn't disappear — only the coverage jitter is gone.
+            constexpr bool kRasterJitterEnabled = false;
             const float jClipX = kRasterJitterEnabled ? 2.f * jx / float(ext.width)  : 0.f;
             const float jClipY = kRasterJitterEnabled ? 2.f * jy / float(ext.height) : 0.f;
 
