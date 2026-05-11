@@ -136,6 +136,12 @@ namespace threepp {
         /// Avoids exposing WebGPU types in the public header.
         [[nodiscard]] uint32_t nativeSurfaceFormat() const;
 
+        /// Linear-format equivalent of the surface format (e.g. BGRA8Unorm when
+        /// the surface is BGRA8UnormSrgb). RT textures are allocated in this
+        /// format; off-screen passes that consume already-sRGB-encoded RT bytes
+        /// must use it to avoid a second hardware sRGB encode at write time.
+        [[nodiscard]] uint32_t nativeSurfaceFormatLinear() const;
+
         /// Current frame's depth texture view (WGPUTextureView, type-erased).
         /// Valid after the first render() call in a frame; nullptr otherwise.
         [[nodiscard]] void* nativeFrameDepthView() const;

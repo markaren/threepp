@@ -3689,6 +3689,10 @@ uint32_t WgpuRenderer::nativeSurfaceFormat() const {
     return static_cast<uint32_t>(pimpl_->surfaceFormat);
 }
 
+uint32_t WgpuRenderer::nativeSurfaceFormatLinear() const {
+    return static_cast<uint32_t>(pimpl_->surfaceFormatLinear);
+}
+
 void* WgpuRenderer::nativeFrameDepthView() const {
     if (!pimpl_->frame_.active) return nullptr;
     if (pimpl_->needsToneMapPass()) return static_cast<void*>(pimpl_->toneMap_.depthView);

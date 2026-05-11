@@ -45,7 +45,12 @@ struct EffectComposer::Impl {
         : renderer(r),
           device(static_cast<WGPUDevice>(r.nativeDevice())),
           queue(static_cast<WGPUQueue>(r.nativeQueue())),
-          format(static_cast<WGPUTextureFormat>(r.nativeSurfaceFormat())) {}
+          // Linear format (e.g. BGRA8Unorm). sceneRT is allocated in the linear
+          // format and the tonemap pass writes already-sRGB-encoded bytes into
+          // it. Using the sRGB format here would apply a second hardware sRGB
+          // encode when the ShaderPass writes to ping/pong, double-encoding the
+          // pixels and breaking identity composition.
+          format(static_cast<WGPUTextureFormat>(r.nativeSurfaceFormatLinear())) {}
 
     ~Impl() {
         releaseResources();
