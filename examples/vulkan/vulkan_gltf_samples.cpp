@@ -225,16 +225,20 @@ int main(int argc, char** argv) {
             sun->visible = dirLight;
 
         bool denoise = renderer.denoise();
-        if (ImGui::Checkbox("Denoise", &denoise))
+        if (ImGui::Checkbox("Denoise", &denoise)) {
             renderer.setDenoise(denoise);
+        }
 
         bool hybrid = renderer.hybridEnabled();
-        if (ImGui::Checkbox("Hybrid (raster + PT)", &hybrid))
+        if (ImGui::Checkbox("Hybrid (raster + PT)", &hybrid)) {
             renderer.setHybridEnabled(hybrid);
+            renderer.resetAccumulation();
+        }
 
         bool restirDI = renderer.restirDIEnabled();
-        if (ImGui::Checkbox("ReSTIR DI", &restirDI))
+        if (ImGui::Checkbox("ReSTIR DI", &restirDI)) {
             renderer.setRestirDIEnabled(restirDI);
+        }
 
         if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
             renderer.setSamplesPerPixel(spp);
