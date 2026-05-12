@@ -968,24 +968,13 @@ void main() {
                 histFc   = pa.w;
             }
         } else {
-            // Damped reuse instead of full cold-start. Prev held a moving
-            // mesh that has since vacated this pixel. At silhouettes, the
-            // raster pass's per-frame Halton jitter flips coverage between
-            // "covered by the mesh" and "covered by sky/background" — a hard
-            // histFc=0 here produces a 1-spp env tap on the "sky" frame and
-            // those single samples can land on dark env directions (visible
-            // as black pixels stippling the moving silhouette).
-            // Capping histFc instead lets the new sample dominate within
-            // ~kSilDampFc frames: enough to wash out a genuine ghost trail
-            // when the mesh truly leaves the pixel, but soft enough that
-            // jitter-aliased edge pixels stay smooth.
-            const float kSilDampFc = 4.0;
-            const vec4 pa = imageLoad(prevAccumImage, px);
-            const vec3 m  = pa.rgb;
-            if (!any(isnan(m)) && !any(isinf(m))) {
-                histMean = m;
-                histFc   = min(pa.w, kSilDampFc);
-            }
+            // 2026-05-13: hard cold-start when prev pixel held a now-vacated
+            // moving mesh (selfTapValid==false case). Was previously damped
+            // to histFc=4 to keep silhouette AA smooth, but the old mesh
+            // color contributing ~80% for several frames left visible trails
+            // behind animated characters. histMean / histFc stay at 0 — the
+            // FC blend below uses current sample only this frame, accepting
+            // the single-sample edge sparkle in exchange for zero trail.
         }
 
     } else if (primaryInstanceId != 0u) {
@@ -1098,7 +1087,17 @@ void main() {
                 // the wispy sky trail surrounding moving skinned meshes is
                 // handled in the self-tap branch above by mesh-ID validation.
                 const bool depthGate = !hybridOn;
-                const float dEps2 = depthGate ? (0.05 * prevZ) * (0.05 * prevZ) : 0.0;
+                // 2026-05-13: tightened from 5% to 1%·prevZ. Skinned-mesh
+                // animations have motionMat=identity (only worldMatrix tracked,
+                // not bone matrices), so prev-gbuf at the surface-reprojected
+                // pixel records the OLD pose's hit position. 5% was loose
+                // enough that typical per-frame bone deltas slipped through,
+                // accepting prev content → partial blend of old+new pose →
+                // visible blur on animated characters. 1% rejects deltas of
+                // ~1%·prev surface depth (typical bone motion), cold-starts
+                // the affected pixels. Still well above sub-pixel rigid
+                // motion (~0.2%·prevZ), so rigid reproject is unaffected.
+                const float dEps2 = depthGate ? (0.01 * prevZ) * (0.01 * prevZ) : 0.0;
                 const vec3 d00 = depthGate ? (g00v.xyz - prevWS) : vec3(0.0);
                 const vec3 d10 = depthGate ? (g10v.xyz - prevWS) : vec3(0.0);
                 const vec3 d01 = depthGate ? (g01v.xyz - prevWS) : vec3(0.0);
