@@ -124,10 +124,10 @@ int main() {
     Canvas canvas("Vulkan PT  Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
     VulkanRenderer renderer(canvas);
     renderer.setDenoise(true);
-    renderer.setHybridEnabled(false);
-    renderer.setHybridDebugView(0);
+    renderer.setHybridEnabled(true);
+    renderer.setRestirDIEnabled(false);
     renderer.toneMapping = ToneMapping::ACESFilmic;
-    renderer.toneMappingExposure = 0.5f;
+    renderer.toneMappingExposure = 0.7f;
 
     RGBELoader rgbe;
     auto env = rgbe.load(std::string(DATA_FOLDER) +
