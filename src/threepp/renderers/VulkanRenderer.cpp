@@ -3771,6 +3771,16 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), rec->foam);
                             destroyBuffer(ctx->allocator(), rec->prevVertex);
                         }
+                        // Return the skinning descriptor set to the pool, else
+                        // the slot leaks across remove/re-add cycles and the
+                        // next vkAllocateDescriptorSets(skinning) eventually
+                        // hits VK_ERROR_OUT_OF_POOL_MEMORY. Requires the pool
+                        // to be created with FREE_DESCRIPTOR_SET_BIT.
+                        if (it->second->skinDescSet != VK_NULL_HANDLE) {
+                            vkFreeDescriptorSets(ctx->device(), skinningDescPool,
+                                                 1, &it->second->skinDescSet);
+                            it->second->skinDescSet = VK_NULL_HANDLE;
+                        }
                         it = skinnedMeshStates.erase(it);
                     } else {
                         ++it;
@@ -7468,6 +7478,11 @@ namespace threepp {
             ps.descriptorCount = kMaxSkinnedMeshes * 7;
             VkDescriptorPoolCreateInfo dpci{};
             dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            // FREE_DESCRIPTOR_SET_BIT lets the per-frame liveCheck-expired
+            // erase loop call vkFreeDescriptorSets when a SkinnedMeshState is
+            // destroyed; without it the set leaks until the pool exhausts on
+            // repeated remove/re-add of skinned meshes.
+            dpci.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
             dpci.maxSets       = kMaxSkinnedMeshes;
             dpci.poolSizeCount = 1;
             dpci.pPoolSizes    = &ps;
