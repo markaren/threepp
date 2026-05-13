@@ -58,6 +58,7 @@ layout(push_constant, scalar) uniform Pc {
     float   hullHalfBeam;
     float   hullSinYaw;
     float   hullCosYaw;
+    float   forwardSpeed;   // m/s along +heading; 0 disables wake
 } pc;
 
 vec3 sampleDisplacement(vec2 worldXZ) {
@@ -117,19 +118,135 @@ void main() {
 
     vec3 disp = sampleDisplacement(rest.xz);
 
+    // === Vessel-local coordinates (shared by hull exclusion + wake) ===
+    // localX = beam axis (port/starboard), localZ = length axis (stern→bow).
+    // Positive localZ is ahead of the vessel centre under the convention
+    // forward_world = (sinYaw, cosYaw) used by the example boat integration.
+    const bool  hasVessel = pc.hullHalfLength > 0.0;
+    float wakeLocalX = 0.0;
+    float wakeLocalZ = 0.0;
+    float hullFade   = 1.0;          // 0 = fully inside hull, 1 = fully outside
+    if (hasVessel) {
+        const float dx = rest.x - pc.hullCenterX;
+        const float dz = rest.z - pc.hullCenterZ;
+        wakeLocalX = pc.hullCosYaw * dx - pc.hullSinYaw * dz;
+        wakeLocalZ = pc.hullSinYaw * dx + pc.hullCosYaw * dz;
+        const float edgeX    = abs(wakeLocalX) - pc.hullHalfBeam;
+        const float edgeZ    = abs(wakeLocalZ) - pc.hullHalfLength;
+        const float edgeDist = max(edgeX, edgeZ);
+        hullFade = smoothstep(0.0, 2.0, edgeDist);
+    }
+
     // Hull exclusion: suppress displacement inside a vessel's footprint
     // so the ocean mesh doesn't clip through the deck. Smooth fade over
     // ~2 m outside the hull edge keeps the transition invisible.
-    if (pc.hullHalfLength > 0.0) {
-        const float dx = rest.x - pc.hullCenterX;
-        const float dz = rest.z - pc.hullCenterZ;
-        const float localX = pc.hullCosYaw * dx - pc.hullSinYaw * dz;
-        const float localZ = pc.hullSinYaw * dx + pc.hullCosYaw * dz;
-        const float edgeX = abs(localX) - pc.hullHalfBeam;
-        const float edgeZ = abs(localZ) - pc.hullHalfLength;
-        const float edgeDist = max(edgeX, edgeZ);
-        const float fade = smoothstep(0.0, 2.0, edgeDist);
-        disp *= fade;
+    if (hasVessel) {
+        disp *= hullFade;
+    }
+
+    // === Vessel wake ===
+    // Analytical wake from vessel pose + forward speed:
+    //   A. Foam trail behind stern (writes wakeFoam; consumed by foam block)
+    //   B. Bow bump (positive height bulge centred at the prow)
+    //   C. Kelvin V-wake (V-shaped train of crests behind, half-angle 19.47°)
+    //   D. Bow V-wedge (two ridges of pushed-aside water along the hull
+    //      sides, forming a V whose vertex is at the bow)
+    //
+    // All effects are gated by a smoothstep on |forwardSpeed| so the wake
+    // fades to nothing below ~0.5 m/s — avoids the v²-wavelength blow-up
+    // at v=0 and makes anchored vessels (forwardSpeed=0) wake-free without
+    // a separate branch.
+    //
+    // Spatial gating differs by effect:
+    //   - A (foam) and C (Kelvin) live BEHIND the hull rectangle and need
+    //     no hull-fade — they originate outside the deck footprint.
+    //   - B (bow bump) and D (V-wedge) extend INTO the hull rectangle
+    //     near the prow and along the sides; they get multiplied by
+    //     `hullFade` so they fall to zero inside the hull and don't clip
+    //     through the deck.
+    //
+    // Known v1 limitations: wake is purely from the current pose, so a
+    // turning vessel's wake snaps to the new heading rather than tracing
+    // its historical path. Normal finite-diff taps below do NOT re-sample
+    // wake — its contribution to shading normals is small at long wave-
+    // lengths and re-sampling would 4× the wake math per vertex.
+    float wakeFoam = 0.0;
+    if (hasVessel) {
+        const float wakeSpeed = abs(pc.forwardSpeed);
+        const float wakeGate  = smoothstep(0.5, 1.5, wakeSpeed);
+        if (wakeGate > 0.0) {
+            const float lX = wakeLocalX;
+            const float lZ = wakeLocalZ;
+            // Distance into the wake region (behind stern, lZ < -halfLength).
+            const float distBehind = -lZ - pc.hullHalfLength;
+
+            // --- A. Foam trail: gaussian on lateral, exp on along ---
+            if (distBehind > 0.0) {
+                const float lenDecay   = 30.0;                       // metres
+                const float beamSpread = pc.hullHalfBeam * 1.5;
+                const float lateral    = exp(-(lX * lX) / (beamSpread * beamSpread));
+                const float along      = exp(-distBehind / lenDecay);
+                wakeFoam = wakeGate * 0.95 * along * lateral;
+            }
+
+            // --- B. Bow bump: gaussian centred at the bow (lZ = +halfLength) ---
+            // Amplitude scales with v² (Bernoulli-flavoured), clamped to keep
+            // tall-wave visuals stable. Multiplied by hullFade so the bump
+            // disappears inside the prow and doesn't poke through the deck.
+            const float distFromBow = lZ - pc.hullHalfLength;        // 0 at bow, +ve ahead
+            const float bowR        = 1.5;
+            const float bowG        = exp(-(distFromBow * distFromBow) / (bowR * bowR));
+            const float bowL        = exp(-(lX * lX) / (pc.hullHalfBeam * pc.hullHalfBeam));
+            const float wakeSpeedSq = pc.forwardSpeed * pc.forwardSpeed;
+            const float bowAmp      = clamp(0.012 * wakeSpeedSq, 0.0, 0.4);
+            disp.y += hullFade * wakeGate * bowAmp * bowG * bowL;
+
+            // --- D. Bow V-wedge: two ridges of pushed-aside water ---
+            // Forms a V opening rearward from the bow tip; physically the
+            // water that the hull pushes sideways as it moves. Ridge lines
+            // diverge at half-angle αV from the centreline (~20°, narrower
+            // than the Kelvin 19.47° far-field). Each ridge is a gaussian
+            // crest centred on the line |lX| = tanαV · distFromBowAft, with
+            // amplitude scaling with speed and decaying along the hull.
+            // Multiplied by hullFade so the ridges fade out inside the hull
+            // rectangle — they sit just outside the hull where the boat is
+            // physically pushing water aside.
+            const float distAft = pc.hullHalfLength - lZ;            // > 0 behind the bow
+            if (distAft > 0.0 && distAft < pc.hullHalfLength * 5.0) {
+                const float tanAV    = 0.36;                          // ~20° half-angle
+                const float expectedX = tanAV * distAft;              // ridge |lX| at this distAft
+                const float dRidge    = abs(abs(lX) - expectedX);
+                const float sigmaR    = 0.6 + 0.04 * distAft;         // ridge widens with distance
+                const float ridge     = exp(-(dRidge * dRidge) / (sigmaR * sigmaR));
+                const float alongDecay = exp(-distAft / (pc.hullHalfLength * 3.0));
+                const float vAmp      = clamp(0.07 * wakeSpeed, 0.0, 0.6);
+                disp.y += hullFade * wakeGate * vAmp * ridge * alongDecay;
+
+                // Foam highlight along the bow ridges: where water tears up
+                // around the hull there's whitewater. Sharper than the height
+                // ridge (the foam concentrates on the breaking crest).
+                const float ridgeFoam = exp(-(dRidge * dRidge) / (0.5 * 0.5));
+                const float wedgeFoamAmt = hullFade * wakeGate * 0.6 *
+                                           ridgeFoam * alongDecay;
+                wakeFoam = max(wakeFoam, wedgeFoamAmt);
+            }
+
+            // --- C. Kelvin V-wake: cos waves inside a V-mask, decaying along ---
+            // Wavelength λ = 2π v² / g (deep-water gravity wave behind a moving
+            // pressure point). Kelvin half-angle ~19.47° is physical (geometric,
+            // independent of speed). Visible over ~3 wavelengths.
+            if (distBehind > 0.0) {
+                const float lambda = 6.2831853 * wakeSpeedSq / 9.81;
+                const float k      = 6.2831853 / max(lambda, 1.0);
+                const float tanK   = 0.3536;                         // tan(19.47°)
+                const float Vmask  = 1.0 - smoothstep(tanK * 0.9, tanK * 1.1,
+                                                      abs(lX) / max(distBehind, 1.0));
+                const float decay  = exp(-distBehind / max(3.0 * lambda, 1.0));
+                const float fadeIn = smoothstep(0.0, 2.0, distBehind);
+                const float kelvAmp = clamp(0.04 * wakeSpeed, 0.0, 0.5);
+                disp.y += wakeGate * kelvAmp * decay * Vmask * fadeIn * cos(k * distBehind);
+            }
+        }
     }
 
     const vec3 outPos = rest + disp;
@@ -174,6 +291,12 @@ void main() {
         const float foamThresh = 0.97;
         const float foamWidth  = 0.04;
         const float foamInstant = clamp((foamThresh - J) / foamWidth, 0.0, 1.0);
+        // Combine natural-wave (Jacobian) foam with vessel-wake foam injected
+        // above. Both are instantaneous values for THIS frame; the persistence
+        // decay below is the same trail mechanism. wakeFoam == 0 when there is
+        // no vessel or the wake gate is inactive, so the natural-wave path is
+        // unchanged.
+        const float foamInstantTotal = max(foamInstant, wakeFoam);
         // Temporal persistence: real foam lingers seconds after the
         // breaking event as bubbles dissipate. Without this, foam tracks
         // wave-crest motion frame-by-frame and reads as too fast / too
@@ -185,8 +308,11 @@ void main() {
         // wave passes, foam stays behind as a fading trail rather than
         // moving lock-step with the crest. Frame-rate-dependent — pin the
         // example FPS or wire dt through if running variable frame rates.
+        // The wake trail "automatically" trails behind the moving vessel
+        // because each vertex that was once in the stern injection region
+        // keeps decaying after the boat moves on.
         const float prev = foamOut.v[i];
         const float decay = 0.992;
-        foamOut.v[i] = max(foamInstant, prev * decay);
+        foamOut.v[i] = max(foamInstantTotal, prev * decay);
     }
 }

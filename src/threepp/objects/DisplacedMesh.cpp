@@ -55,10 +55,13 @@ namespace threepp {
 
     }// namespace
 
-    float DisplacedMesh::sampleHeight(float worldX, float worldZ) const {
+    float DisplacedMesh::sampleHeight(float worldX, float worldZ,
+                                      uint32_t cascadeMask) const {
         float total = 0.f;
-        for (const auto& cf : heightFields)
-            total += sampleCascade(cf, worldX, worldZ);
+        for (uint32_t i = 0; i < 3; ++i) {
+            if ((cascadeMask & (1u << i)) != 0u)
+                total += sampleCascade(heightFields[i], worldX, worldZ);
+        }
         return total * params.waveScale;
     }
 

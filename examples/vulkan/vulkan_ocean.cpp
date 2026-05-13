@@ -337,13 +337,20 @@ int main() {
         // Sample 5 points: centre + four corners of the bounding rectangle.
         // Heave (Y) follows the centre; pitch comes from fore/aft height
         // diff over hull length; roll from port/starboard diff over beam.
+        //
+        // Cascade mask 0b011 = swells + mid-frequency only; skip cascade 2
+        // (4-8 m chop). A 28 m hull doesn't physically pitch on wavelengths
+        // shorter than itself — those waves wash under harmlessly. Reading
+        // them at bow and stern gave the boat a "car on rocks" feel.
+        // Visuals are unaffected — the GPU still renders all three cascades.
+        constexpr uint32_t kBuoyancyMask = 0b011u;
         const float halfL = kBoatLength * 0.5f;
         const float halfB = kBoatBeam   * 0.5f;
         auto sampleH = [&](float dx, float dz) {
             // Local (forward, right) → world via yaw rotation
             const float wx = bs.position.x + sinY * dz + cosY * dx;
             const float wz = bs.position.z + cosY * dz - sinY * dx;
-            return ocean->sampleHeight(wx, wz);
+            return ocean->sampleHeight(wx, wz, kBuoyancyMask);
         };
         const float hCentre = sampleH(0.f,    0.f);
         const float hBow    = sampleH(0.f,  +halfL);
@@ -356,9 +363,12 @@ int main() {
         // which under +Z forward convention means starboard side dips).
         const float roll  = std::atan2(hStbd - hPort,  kBoatBeam);
 
-        // Pitch / roll: temporal low-pass at ~3 Hz so attitude rides the
-        // swells but ignores sub-metre chop. alpha = 1 − exp(−2π · cutoff · dt).
-        const float alpha = 1.f - std::exp(-2.f * 3.14159f * 3.f * dt);
+        // Pitch / roll: temporal low-pass at ~1 Hz so attitude rides the
+        // swells but doesn't snap to wave-pumping at hull-traversal rates.
+        // alpha = 1 − exp(−2π · cutoff · dt). With cascade 2 masked out
+        // the input is already smoother; 1 Hz cutoff (was 3 Hz) is the
+        // additional damping that finishes off the rock-terrain feel.
+        const float alpha = 1.f - std::exp(-2.f * 3.14159f * 1.f * dt);
         bs.smoothPitch += (pitch - bs.smoothPitch) * alpha;
         bs.smoothRoll  += (roll  - bs.smoothRoll)  * alpha;
 
@@ -396,6 +406,10 @@ int main() {
         ocean->hullExclusion.halfBeam   = kBoatBeam * 0.5f;
         ocean->hullExclusion.sinYaw     = sinY;
         ocean->hullExclusion.cosYaw     = cosY;
+
+        // Vessel wake — analytical foam trail + bow bump + Kelvin V-wake
+        // injected in water_displace.comp from the same pose plus speed.
+        ocean->wake.forwardSpeed = bs.forwardSpeed;
 
         // No camera follow — was making the boat read as "stuck" at the
         // camera centre, since camera and target moved with it. Let the

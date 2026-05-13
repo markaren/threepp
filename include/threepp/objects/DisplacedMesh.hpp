@@ -73,6 +73,18 @@ namespace threepp {
         };
         HullExclusion hullExclusion;
 
+        // Vessel wake: per-frame state used by water_displace.comp to inject a
+        // Kelvin V-wake (geometric height), a bow bump, and a foam trail behind
+        // the vessel. Reuses the HullExclusion pose (centerX/Z, sin/cosYaw,
+        // halfLength, halfBeam) — only forward speed is wake-specific. Set
+        // forwardSpeed = 0 (or enabled = false) to disable on stationary
+        // vessels (buoys, anchored ships) that still need a hull exclusion.
+        struct VesselWake {
+            float forwardSpeed = 0.f;   // m/s along +heading; 0 disables wake
+            bool  enabled      = true;
+        };
+        VesselWake wake;
+
         DisplacedMesh(const std::shared_ptr<BufferGeometry>& geometry,
                       const std::shared_ptr<Material>& material);
 
@@ -102,10 +114,20 @@ namespace threepp {
         };
         mutable CascadeField heightFields[3];
 
-        // Bilinear-sample the combined wave height (all active cascades) at
-        // (worldX, worldZ). Matches the GPU's sampleDisplacement().y exactly:
-        // each cascade contributes height * (1/tileSize) * waveScale.
-        float sampleHeight(float worldX, float worldZ) const;
+        // Bilinear-sample the combined wave height at (worldX, worldZ).
+        // Matches the GPU's sampleDisplacement().y exactly: each enabled
+        // cascade contributes height * (1/tileSize) * waveScale.
+        //
+        // `cascadeMask` is a bitmask (bit i selects cascade i); the default
+        // 0b111 sums all three. Use a narrower mask for hull-scale buoyancy
+        // queries on long vessels — sampling the fine cascade at the bow
+        // and stern of a 28 m hull picks up 4-8 m chop that wouldn't
+        // physically induce pitch on a hull that long ("car on rocks"
+        // feel). Masking out cascade 2 for the buoyancy sample (visual
+        // remains unchanged — GPU still renders all cascades) restores
+        // the integrating behaviour of a long hull.
+        float sampleHeight(float worldX, float worldZ,
+                           uint32_t cascadeMask = 0b111u) const;
     };
 
 }// namespace threepp

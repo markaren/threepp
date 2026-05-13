@@ -2619,6 +2619,7 @@ namespace threepp {
                 float    hullHalfBeam;
                 float    hullSinYaw;
                 float    hullCosYaw;
+                float    forwardSpeed;
             } pc{};
             pc.posOut       = st.blas->vertex.address;
             pc.normOut      = st.blas->normal.address;
@@ -2638,6 +2639,7 @@ namespace threepp {
             pc.hullHalfBeam   = dm.hullExclusion.halfBeam;
             pc.hullSinYaw     = dm.hullExclusion.sinYaw;
             pc.hullCosYaw     = dm.hullExclusion.cosYaw;
+            pc.forwardSpeed   = dm.wake.enabled ? dm.wake.forwardSpeed : 0.0f;
             vkCmdPushConstants(cb, displacePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                                0, sizeof(pc), &pc);
             const uint32_t groups = (st.vertexCount + 63u) / 64u;
@@ -7542,11 +7544,11 @@ namespace threepp {
                   "vkCreateDescriptorSetLayout(displace)");
 
             // Push constants — match water_displace.comp's `Pc` struct:
-            //   3 × VkDeviceAddress (24) + 15 × u32/float (60) = 84 bytes.
+            //   3 × VkDeviceAddress (24) + 16 × u32/float (64) = 88 bytes.
             VkPushConstantRange pcr{};
             pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
             pcr.offset     = 0;
-            pcr.size       = 84;
+            pcr.size       = 88;
 
             VkPipelineLayoutCreateInfo plci{};
             plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
