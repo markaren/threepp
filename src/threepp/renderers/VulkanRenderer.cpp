@@ -576,6 +576,14 @@ namespace threepp {
         // the final atrous pass filt[0] holds the filtered radiance that
         // denoise.comp (finalize) mixes with raw accumImage by per-pixel FC.
         std::array<Image2D, 2> filteredImagesPP{};
+        // Temporal moments ping-pong (R32F). Each slot stores per-pixel
+        // mean(luminance²) integrated alongside accumImage with the same FC
+        // weight and reproject taps. denoise_atrous reads variance =
+        // max(M2 − lum(mean)², 0) to drive σ_lum per pixel — replaces the
+        // constant σ_lum=1.5 the filter used before. SVGF-style first stage:
+        // no spatial prefilter, no per-pass propagation of variance through
+        // the à-trous cascade; both are follow-ups.
+        std::array<Image2D, 2> momentsImagesPP{};
         uint32_t accumWriteIdx_ = 0;
         uint32_t sampleIndex = 0;
         // Samples per pixel per frame. Each sample is an independent
@@ -1279,6 +1287,7 @@ namespace threepp {
             for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : reservoirWImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : filteredImagesPP) destroyImage2D(ctx->allocator(), d, img);
+            for (auto& img : momentsImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : materialTextures) destroyImage2D(ctx->allocator(), d, img);
             materialTextures.clear();
             if (textureSampler_) vkDestroySampler(d, textureSampler_, nullptr);
@@ -4190,14 +4199,18 @@ namespace threepp {
             // Includes ReSTIR DI reservoir ping-pong (28/29 pos, 30/31 W) so
             // M=0 on frame 0's read side and the temporal-reuse path correctly
             // sees "no prior history" instead of garbage.
-            std::array<VkImage, 8> images = {
+            // Also includes momentsImagesPP (33/34) so M2=0 on first read —
+            // variance reads from a stale-undefined moments slot would give
+            // huge spurious variance, blowing the σ_lum estimate.
+            std::array<VkImage, 10> images = {
                     gbufImagesPP[0].image, gbufImagesPP[1].image,
                     accumImagesPP[0].image, accumImagesPP[1].image,
                     reservoirPosImagesPP[0].image, reservoirPosImagesPP[1].image,
                     reservoirWImagesPP[0].image, reservoirWImagesPP[1].image,
+                    momentsImagesPP[0].image, momentsImagesPP[1].image,
             };
 
-            std::array<VkImageMemoryBarrier2, 8> toTransfer{};
+            std::array<VkImageMemoryBarrier2, 10> toTransfer{};
             for (size_t i = 0; i < images.size(); ++i) {
                 toTransfer[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                 toTransfer[i].srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -4227,7 +4240,7 @@ namespace threepp {
                                      &clear, 1, &range);
             }
 
-            std::array<VkImageMemoryBarrier2, 8> toGeneral{};
+            std::array<VkImageMemoryBarrier2, 10> toGeneral{};
             for (size_t i = 0; i < images.size(); ++i) {
                 toGeneral[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                 toGeneral[i].srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
@@ -5763,6 +5776,10 @@ namespace threepp {
             for (auto& img : reservoirWImagesPP) {
                 img = createStorageImage2D(ext.width, ext.height,
                                            VK_FORMAT_R16G16B16A16_SFLOAT);
+            }
+            for (auto& img : momentsImagesPP) {
+                img = createStorageImage2D(ext.width, ext.height,
+                                           VK_FORMAT_R32_SFLOAT);
             }
             // Storage memory contents are undefined after vmaCreateImage —
             // clear all four slots to 0 so the first frame's reproject sees
@@ -8381,7 +8398,7 @@ namespace threepp {
             // for material lookup, UV for texture sampling on the primary).
             // Always present in the layout; raygen gates use on the hybrid
             // push-constant bit.
-            std::array<VkDescriptorSetLayoutBinding, 33> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 35> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -8594,6 +8611,23 @@ namespace threepp {
             bindings[32].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[32].descriptorCount = 1;
             bindings[32].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+            // Bindings 33/34 — temporal moments ping-pong (R32F).
+            // 33 = write (this frame, raygen); 34 = read (prev frame, raygen).
+            // Atrous reads binding 33 (the just-written current-frame moments)
+            // to compute per-pixel variance = max(M2 − luminance(mean)², 0)
+            // for the σ_lum edge stop. Same ping-pong pattern as
+            // accumImagesPP / gbufImagesPP — descriptor sets bake the f&1 →
+            // slot mapping at allocation time.
+            bindings[33].binding = 33;
+            bindings[33].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[33].descriptorCount = 1;
+            bindings[33].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
+                                      VK_SHADER_STAGE_COMPUTE_BIT;
+            bindings[34].binding = 34;
+            bindings[34].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[34].descriptorCount = 1;
+            bindings[34].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -9017,7 +9051,7 @@ namespace threepp {
             ps[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             ps[0].descriptorCount = totalSets;
             ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            ps[1].descriptorCount = totalSets * 11;// bindings 1, 7, 11, 12, 13 + 20×2 (filtered ping-pong) + 28-31 (ReSTIR DI reservoir ping-pong)
+            ps[1].descriptorCount = totalSets * 13;// bindings 1, 7, 11, 12, 13 + 20×2 (filtered ping-pong) + 28-31 (ReSTIR DI reservoir ping-pong) + 33,34 (moments ping-pong)
             ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             ps[2].descriptorCount = totalSets * 4;// bindings 2 (camera), 5 (lights), 9 (prevCamera), 17 (fog)
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -9466,7 +9500,31 @@ namespace threepp {
                     wOceanFine.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                     wOceanFine.pImageInfo = &oceanFineInfo;
 
-                    std::array<VkWriteDescriptorSet, 33> writes{
+                    // Bindings 33/34 — temporal moments ping-pong (R32F).
+                    // Same writeSlot/readSlot mapping as accumImagesPP.
+                    VkDescriptorImageInfo momentsWriteInfo{};
+                    momentsWriteInfo.imageView   = momentsImagesPP[writeSlot].view;
+                    momentsWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wMomentsWrite{};
+                    wMomentsWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wMomentsWrite.dstSet = descriptorSets[idx];
+                    wMomentsWrite.dstBinding = 33;
+                    wMomentsWrite.descriptorCount = 1;
+                    wMomentsWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wMomentsWrite.pImageInfo = &momentsWriteInfo;
+
+                    VkDescriptorImageInfo momentsReadInfo{};
+                    momentsReadInfo.imageView   = momentsImagesPP[readSlot].view;
+                    momentsReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wMomentsRead{};
+                    wMomentsRead.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wMomentsRead.dstSet = descriptorSets[idx];
+                    wMomentsRead.dstBinding = 34;
+                    wMomentsRead.descriptorCount = 1;
+                    wMomentsRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wMomentsRead.pImageInfo = &momentsReadInfo;
+
+                    std::array<VkWriteDescriptorSet, 35> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
                             wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered,
@@ -9474,7 +9532,8 @@ namespace threepp {
                             wGbufNormal, wGbufMotion, wGbufDepth, wGbufIds, wGbufUv,
                             wBlueNoise,
                             wResPosWrite, wResPosRead, wResWWrite, wResWRead,
-                            wOceanFine};
+                            wOceanFine,
+                            wMomentsWrite, wMomentsRead};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -9684,6 +9743,7 @@ namespace threepp {
             for (auto& img : filteredImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : reservoirWImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
+            for (auto& img : momentsImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             createAccumImage();// resets sampleIndex + clears prevWorldMats
             // Resize hybrid raster attachments BEFORE descriptor rewrites —
             // bindings 22-25 point at rasterGbufs[f].*.view, so stale views
@@ -10141,7 +10201,7 @@ namespace threepp {
             accumGbufTemplate.subresourceRange.levelCount = 1;
             accumGbufTemplate.subresourceRange.layerCount = 1;
 
-            std::array<VkImageMemoryBarrier2, 9> preBarriers{};
+            std::array<VkImageMemoryBarrier2, 11> preBarriers{};
             preBarriers[0] = toGeneral;
             preBarriers[1] = accumGbufTemplate; preBarriers[1].image = accumImagesPP[0].image;
             preBarriers[2] = accumGbufTemplate; preBarriers[2].image = accumImagesPP[1].image;
@@ -10154,6 +10214,11 @@ namespace threepp {
             preBarriers[6] = accumGbufTemplate; preBarriers[6].image = reservoirPosImagesPP[1].image;
             preBarriers[7] = accumGbufTemplate; preBarriers[7].image = reservoirWImagesPP[0].image;
             preBarriers[8] = accumGbufTemplate; preBarriers[8].image = reservoirWImagesPP[1].image;
+            // Temporal moments ping-pong: same RT_SHADER → RT_SHADER fence as
+            // accum/gbuf. Atrous reads the just-written slot via the existing
+            // memory barrier (barrierMem RT→COMPUTE in the denoise block).
+            preBarriers[9]  = accumGbufTemplate; preBarriers[9].image  = momentsImagesPP[0].image;
+            preBarriers[10] = accumGbufTemplate; preBarriers[10].image = momentsImagesPP[1].image;
             VkDependencyInfo dep{};
             dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
             dep.imageMemoryBarrierCount = static_cast<uint32_t>(preBarriers.size());
@@ -10350,7 +10415,7 @@ namespace threepp {
                                    ext.width, ext.height, 1);
             timingEnd(cb, TP_PathTrace);
 
-            // ── Spatial denoiser: 3-pass à-trous + finalize tonemap + sRGB ──────
+            // ── Spatial denoiser: 2-pass à-trous + finalize tonemap + sRGB ──────
             // RT writes accumImage + gbufImage; denoise pipeline reads them.
             // outImage is owned by the finalize pass (raygen.rgen tail was
             // stripped). All ping-pong slots stay GENERAL throughout.

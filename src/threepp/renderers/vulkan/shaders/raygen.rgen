@@ -103,6 +103,15 @@ layout(set = 0, binding = 10, std430) readonly buffer MotionMatBuf {
 layout(set = 0, binding = 11, rgba32f) uniform readonly image2D prevAccumImage;
 layout(set = 0, binding = 12, rgba32f) uniform writeonly image2D gbufImage;
 layout(set = 0, binding = 13, rgba32f) uniform readonly image2D prevGbufImage;
+// Temporal moments ping-pong (R32F). Stores per-pixel mean(luminance²)
+// accumulated alongside accumImage with the same FC weight. Atrous reads
+// this to compute variance = max(M2 − luminance(mean)², 0) and derive a
+// per-pixel σ_lum for its edge stop — instead of a constant 1.5 that
+// over-blurs noisy pixels and over-preserves detail in cleanly-converged
+// regions. Population-variance form (not divided by N) is what SVGF's
+// luminance edge stop wants.
+layout(set = 0, binding = 33, r32f) uniform writeonly image2D momentsImage;
+layout(set = 0, binding = 34, r32f) uniform readonly  image2D prevMomentsImage;
 
 // Hybrid raster G-buffer attachments. Always bound (allocated at startup);
 // raygen samples them only when (pc.motionFlags & 8u) != 0 (hybrid mode).
@@ -614,6 +623,11 @@ void main() {
     // of per-sample radiance; the history blend below treats it as `spp`
     // effective samples (weight = spp), keeping FC arithmetic correct.
     vec3 radianceSum = vec3(0.0);
+    // Companion sum of luminance² across spp samples — same effective-sample
+    // weighting in the FC blend below produces M2 = mean(lum²). Variance
+    // (read by atrous) is then M2 − luminance(mean)². Population form, not
+    // divided by N: that's what the SVGF luminance edge stop wants.
+    float lum2Sum = 0.0;
 
     // Captured the very first traceRayEXT of the FIRST sample. Used after the
     // loop to reproject this pixel's converged history. primaryInstanceId == 0
@@ -922,6 +936,12 @@ void main() {
         }
 
         radianceSum += radiance;
+        // Luminance is a linear function of color, so luminance(mean(rgb)) ==
+        // mean(luminance(rgb_s)). We can compute lum² here from the per-sample
+        // radiance (post-firefly-clamp, post-fog) and the FC blend below will
+        // yield M2 = mean(lum²) consistent with M1 = luminance(mean rgb).
+        const float lumS = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
+        lum2Sum += lumS * lumS;
     }// end outer spp loop
 
     // ── history tap (mirrors WGPU PT design) ─────────────────────────────
@@ -953,6 +973,9 @@ void main() {
 
     float histFc   = 0.0;
     vec3  histMean = vec3(0.0);
+    // Companion to histMean: prev-frame mean(lum²). Same FC weight in the
+    // final blend yields M2_new = (histLum2·histFc + lum2Sum)/(histFc+sppF).
+    float histLum2 = 0.0;
 
     const uint primaryMeshU = (primaryInstanceId != 0u) ? (primaryInstanceId - 1u) : 0xFFFFFFFFu;
     const bool primaryMoved = isMeshMoved(primaryMeshU);
@@ -986,6 +1009,11 @@ void main() {
             if (!any(isnan(m)) && !any(isinf(m))) {
                 histMean = m;
                 histFc   = pa.w;
+                // Same self-tap pixel for moments; finite-check ensures we
+                // don't propagate a NaN into the variance estimate (atrous'
+                // σ_lum would explode).
+                const float pm = imageLoad(prevMomentsImage, px).r;
+                if (!isnan(pm) && !isinf(pm)) histLum2 = pm;
             }
         } else {
             // 2026-05-13: hard cold-start when prev pixel held a now-vacated
@@ -1144,8 +1172,20 @@ void main() {
                     const vec4 a11 = imageLoad(prevAccumImage, b + ivec2(1,1));
                     const vec3 bMean = (a00.rgb*v00 + a10.rgb*v10 + a01.rgb*v01 + a11.rgb*v11) / wSum;
                     const float bFc  = (a00.w  *v00 + a10.w  *v10 + a01.w  *v01 + a11.w  *v11) / wSum;
+                    // Moments use the same bilinear weights so the per-pixel
+                    // variance estimate follows the same physical surface
+                    // point as the mean. Without matching the taps, M2 and M1
+                    // would describe slightly different surface regions and
+                    // produce stale-variance ghost trails behind moving
+                    // objects.
+                    const float m00 = imageLoad(prevMomentsImage, b              ).r;
+                    const float m10 = imageLoad(prevMomentsImage, b + ivec2(1,0)).r;
+                    const float m01 = imageLoad(prevMomentsImage, b + ivec2(0,1)).r;
+                    const float m11 = imageLoad(prevMomentsImage, b + ivec2(1,1)).r;
+                    const float bLum2 = (m00*v00 + m10*v10 + m01*v01 + m11*v11) / wSum;
                     if (!any(isnan(bMean)) && !any(isinf(bMean))) {
                         histMean = bMean;
+                        if (!isnan(bLum2) && !isinf(bLum2)) histLum2 = bLum2;
                         // Roughness-aware FC cap + floor.
                         //
                         // Cap (upper): split into movingCap (mesh self-moved) vs
@@ -1214,7 +1254,13 @@ void main() {
     const float sppF  = float(spp);
     const vec3  mean  = (histMean * histFc + radianceSum) / (histFc + sppF);
     const float newFc = min(histFc + sppF, 4096.0);
+    // M2 update: same FC weight as mean. Equivalent to:
+    //   M2 = (Σ_history lum² + Σ_this_frame lum²) / total_samples.
+    // Subnormal-flush safe: lum² stays well above subnormal range for any
+    // realistic radiance value (~0.01 → 1e-4 stored as plain float).
+    const float lum2Mean = (histLum2 * histFc + lum2Sum) / (histFc + sppF);
     imageStore(accumImage, px, vec4(mean, newFc));
+    imageStore(momentsImage, px, vec4(lum2Mean, 0.0, 0.0, 0.0));
     imageStore(gbufImage, px, vec4(primaryWorldPos, float(primaryInstanceId)));
     // Tonemap + sRGB encode + outImage write moved to denoise.comp so the
     // spatial filter can run on linear HDR before display encode.

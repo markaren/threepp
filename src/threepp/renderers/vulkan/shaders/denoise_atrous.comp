@@ -24,6 +24,10 @@ layout(set = 0, binding = 2) uniform CameraUbo {
 layout(set = 0, binding = 7,  rgba32f) uniform readonly image2D accumImage;
 layout(set = 0, binding = 12, rgba32f) uniform readonly image2D gbufImage;
 layout(set = 0, binding = 20, rgba32f) uniform image2D filteredArray[2];
+// Per-pixel mean(lum²) written by raygen. Variance = max(M2 − lum(mean)², 0)
+// drives the σ_lum edge stop below, replacing a constant 1.5 that
+// over-blurred clean pixels and under-blurred noisy ones.
+layout(set = 0, binding = 33, r32f) uniform readonly image2D momentsImage;
 
 layout(push_constant) uniform Pc {
     uint stride;          // 1, 2, or 4 (binomial spacing)
@@ -58,11 +62,30 @@ void main() {
     const float lumC   = luminance(c.rgb);
 
     // Tight edge stops — the PT input is mostly clean (high FPS, fast FC
-    // climb), so the filter must not over-blur. Loose stops + multi-pass
-    // produced visibly soft surfaces. Tighten depth to 2% of center depth
-    // and luminance to 1.5 (was 5% / 4.0 in the initial multi-pass land).
+    // climb), so the filter must not over-blur. Depth stays at 2%·depth
+    // (consistent with prior tuning); luminance is now per-pixel from the
+    // temporal variance estimate instead of a constant 1.5.
     const float sigmaDepth = max(depthC * 0.02, 1e-3);
-    const float sigmaLum   = 1.5;
+
+    // Variance-driven σ_lum (SVGF-style). M2 is mean(lum²); subtracting
+    // luminance(mean)² gives the population variance of the per-sample
+    // luminance signal. Clamped non-negative since float round-off can make
+    // M2 < lumC² when the signal is essentially constant.
+    //
+    // σ_lum = c · sqrt(variance + ε), clamped to [σ_min, σ_max]:
+    //   • c = 4.0 — empirical multiplier that lets the lum-stop reject
+    //     edges with luminance jumps a few stddevs above the noise floor.
+    //     SVGF uses ~10 on raw 1-spp input; we run on already-temporally-
+    //     accumulated mean, so the post-blend variance is much smaller and
+    //     a tighter c is appropriate.
+    //   • σ_min = 0.5 — clean settled pixels still get some lum sensitivity
+    //     so detail (highlights, edges) is preserved.
+    //   • σ_max = 8.0 — caps the loosening on extreme outliers; without
+    //     this, a single firefly pixel produces variance large enough to
+    //     blur its entire 5×5 neighbourhood.
+    const float M2       = imageLoad(momentsImage, px).r;
+    const float variance = max(M2 - lumC * lumC, 0.0);
+    const float sigmaLum = clamp(4.0 * sqrt(variance + 1e-8), 0.5, 8.0);
 
     // Binomial 1D kernel {1,4,6,4,1}/16 outer-product → standard à-trous.
     const float k1d[5] = float[](1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
