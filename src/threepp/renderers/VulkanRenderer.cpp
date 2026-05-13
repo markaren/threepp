@@ -24,6 +24,7 @@
 
 #define VMA_IMPLEMENTATION
 #include "vulkan/VulkanContext.hpp"
+#include "vulkan/VulkanResources.hpp"
 #include "vulkan/shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
 #include "wgpu/pathtracer/WgpuPathTracerEnvCdf.hpp"// reused: pure C++ template, no WGPU deps
 
@@ -102,115 +103,35 @@
 namespace threepp {
 
     using vulkan::VulkanContext;
+    // Resource helpers moved to vulkan/VulkanResources.{hpp,cpp} to start
+    // peeling apart the 11k-line VulkanRenderer.cpp monolith. Type names +
+    // free functions imported into the local scope so the rest of this file
+    // (which references them as unqualified Buffer / Image2D / createBuffer
+    // / destroyBuffer / check / alignUp / etc.) keeps compiling unchanged.
+    using vulkan::Buffer;
+    using vulkan::Image2D;
+    using vulkan::check;
+    using vulkan::alignUp;
+    using vulkan::createBuffer;
+    using vulkan::destroyBuffer;
+    using vulkan::createAsScratchBuffer;
+    using vulkan::destroyImage2D;
 
     namespace {
-        constexpr uint32_t kFramesInFlight = 2;
-
-        void check(VkResult r, const char* what) {
-            if (r != VK_SUCCESS) {
-                throw std::runtime_error(std::string("[VulkanRenderer] ") + what + " failed: " + std::to_string(r));
-            }
-        }
-
-        // Round x up to the nearest multiple of `align` (align must be POT).
-        uint32_t alignUp(uint32_t x, uint32_t align) {
-            return (x + align - 1) & ~(align - 1);
-        }
-
-        struct Buffer {
-            VkBuffer       handle = VK_NULL_HANDLE;
-            VmaAllocation  alloc  = VK_NULL_HANDLE;
-            VkDeviceSize   size   = 0;
-            VkDeviceAddress address = 0;
-        };
-
-        Buffer createBuffer(VmaAllocator alloc, VkDevice device,
-                            VkDeviceSize size, VkBufferUsageFlags usage,
-                            VmaMemoryUsage memoryUsage,
-                            VmaAllocationCreateFlags flags = 0) {
-            Buffer b{};
-            b.size = size;
-
-            VkBufferCreateInfo bci{};
-            bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            bci.size = size;
-            bci.usage = usage;
-            bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-            VmaAllocationCreateInfo aci{};
-            aci.usage = memoryUsage;
-            aci.flags = flags;
-
-            check(vmaCreateBuffer(alloc, &bci, &aci, &b.handle, &b.alloc, nullptr),
-                  "vmaCreateBuffer");
-
-            if (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) {
-                VkBufferDeviceAddressInfo dai{};
-                dai.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
-                dai.buffer = b.handle;
-                b.address = vkGetBufferDeviceAddress(device, &dai);
-            }
-            return b;
-        }
-
-        void destroyBuffer(VmaAllocator alloc, Buffer& b) {
-            if (b.handle) vmaDestroyBuffer(alloc, b.handle, b.alloc);
-            b = {};
-        }
-
-        // Acceleration-structure scratch buffer with the alignment the spec
-        // demands: VkAccelerationStructureBuildGeometryInfoKHR::scratchData::
-        // deviceAddress must be aligned to
-        // VkPhysicalDeviceAccelerationStructurePropertiesKHR::
-        // minAccelerationStructureScratchOffsetAlignment. NVIDIA reports 128B,
-        // AMD 256B, Intel up to 1024B. The plain createBuffer path falls
-        // through to whatever alignment VMA picks (typically 64B from
-        // VkMemoryRequirements), which on AMD/Intel produces a misaligned
-        // address and the build faults with VK_ERROR_DEVICE_LOST. 256B is
-        // conservative for desktop GPUs; if a future device demands more,
-        // upgrade to a property-query.
-        Buffer createAsScratchBuffer(VmaAllocator alloc, VkDevice device, VkDeviceSize size) {
-            Buffer b{};
-            b.size = size;
-            VkBufferCreateInfo bci{};
-            bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            bci.size = size;
-            bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-            bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            VmaAllocationCreateInfo aci{};
-            aci.usage = VMA_MEMORY_USAGE_AUTO;
-            check(vmaCreateBufferWithAlignment(alloc, &bci, &aci,
-                                                /*minAlignment*/ 256,
-                                                &b.handle, &b.alloc, nullptr),
-                  "vmaCreateBufferWithAlignment(scratch)");
-            VkBufferDeviceAddressInfo dai{};
-            dai.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
-            dai.buffer = b.handle;
-            b.address = vkGetBufferDeviceAddress(device, &dai);
-            return b;
-        }
-
-        // Phase 7: minimal sampled-image record for the equirect environment
-        // map. Held alive for the lifetime of the renderer; recreated when the
-        // scene's env texture changes (compared by Texture::id).
-        struct Image2D {
-            VkImage       image  = VK_NULL_HANDLE;
-            VmaAllocation alloc  = VK_NULL_HANDLE;
-            VkImageView   view   = VK_NULL_HANDLE;
-            VkSampler     sampler = VK_NULL_HANDLE;
-            uint32_t      width  = 0;
-            uint32_t      height = 0;
-            uint32_t      mipLevels = 1;// >1 for the prefiltered env (PMREM)
-            VkFormat      format = VK_FORMAT_UNDEFINED;
-        };
-
-        void destroyImage2D(VmaAllocator alloc, VkDevice device, Image2D& img) {
-            if (img.sampler) vkDestroySampler(device, img.sampler, nullptr);
-            if (img.view)    vkDestroyImageView(device, img.view, nullptr);
-            if (img.image)   vmaDestroyImage(alloc, img.image, img.alloc);
-            img = {};
-        }
+        // Frames-in-flight depth. Bumped from 2 → 3 to deepen CPU/GPU
+        // pipelining: while frame N+2 is being recorded on the CPU, frame N
+        // and frame N+1 can be in different stages of GPU execution. Hides
+        // CPU jitter (scene-build, ImGui, frustum cull) without changing the
+        // GPU schedule (queue is still serial — async compute would do that,
+        // and is a much larger change).
+        //
+        // The 2-slot ping-pong (accumImagesPP / gbufImagesPP / momentsImagesPP
+        // / reservoirImagesPP) stays at 2 entries — Vulkan queue execution is
+        // strictly in-order within a queue, so when frame N+2 writes slot
+        // (N+2)&1 the prior owner of that slot (frame N) has fully completed
+        // on the GPU. Temporal reproject still reads "the previous frame"
+        // because readSlot = 1 - writeSlot, which alternates correctly.
+        constexpr uint32_t kFramesInFlight = 3;
     }// namespace
 
     struct VulkanRenderer::Impl {

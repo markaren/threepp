@@ -602,11 +602,13 @@ if (THREEPP_WITH_VULKAN)
     )
     list(APPEND privateHeaders
             "threepp/renderers/vulkan/VulkanContext.hpp"
+            "threepp/renderers/vulkan/VulkanResources.hpp"
             "threepp/renderers/vulkan/water/OceanFFT.hpp"
     )
     list(APPEND sources
             "threepp/renderers/VulkanRenderer.cpp"
             "threepp/renderers/vulkan/VulkanContext.cpp"
+            "threepp/renderers/vulkan/VulkanResources.cpp"
             "threepp/renderers/vulkan/water/OceanFFT.cpp"
     )
 endif ()
