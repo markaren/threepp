@@ -25,6 +25,7 @@
 #define VMA_IMPLEMENTATION
 #include "vulkan/VulkanContext.hpp"
 #include "vulkan/VulkanResources.hpp"
+#include "vulkan/PhotonCaustics.hpp"
 #include "vulkan/shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
 #include "wgpu/pathtracer/WgpuPathTracerEnvCdf.hpp"// reused: pure C++ template, no WGPU deps
 
@@ -62,9 +63,7 @@
 #include "threepp/renderers/vulkan/shaders/closest_hit.rchit.spv.h"
 #include "threepp/renderers/vulkan/shaders/closest_hit_alpha.rahit.spv.h"
 #include "threepp/renderers/vulkan/shaders/shadow_anyhit.rahit.spv.h"
-#include "threepp/renderers/vulkan/shaders/photon_emit.rgen.spv.h"
-#include "threepp/renderers/vulkan/shaders/photon_miss.rmiss.spv.h"
-#include "threepp/renderers/vulkan/shaders/photon_chit.rchit.spv.h"
+// (photon shader SPVs moved into vulkan/PhotonCaustics.cpp)
 #include "threepp/renderers/vulkan/shaders/prefilter_env.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/denoise.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/denoise_atrous.comp.spv.h"
@@ -640,11 +639,8 @@ namespace threepp {
         // Resolved by cullEntriesAgainstFrustum() as a side effect of the
         // pass that tags every entry's MeshEntry::inFrustum.
         bool     glassVisibleThisFrame_ = false;
-        // Flipped to true the first time photon emit (or a one-shot zero-fill
-        // shim below) writes the photon count buffer. Until that happens we
-        // can't let chit's gather read undefined memory — the buffer is
-        // device-local with no VMA zero-init, so it may contain garbage.
-        bool     photonCountInitialized_ = false;
+        // (photon-count initialization flag is now owned by photon_;
+        // access via photon_->isInitialized() / markUninitialized())
         // Ascending indices into lastVisibleEntries_ for transmissive-
         // material entries. Maintained alongside materialDescs builds
         // (full rebuild + the materialValuesSame=false hot path); a
@@ -734,17 +730,11 @@ namespace threepp {
         VkStridedDeviceAddressRegionKHR hitRegion{};
         VkStridedDeviceAddressRegionKHR callRegion{};// unused
 
-        // Photon-map emit pipeline (separate from rtPipeline; shares rtPipelineLayout).
-        VkPipeline photonEmitPipeline = VK_NULL_HANDLE;
-        Buffer     photonSbtBuf;
-        VkStridedDeviceAddressRegionKHR photonRgenRgn{};
-        VkStridedDeviceAddressRegionKHR photonMissRgn{};
-        VkStridedDeviceAddressRegionKHR photonHitRgn{};
-        VkStridedDeviceAddressRegionKHR photonCallRgn{};
-
-        // Photon-map storage (binding 15 = atomic counters, binding 16 = pos/flux/dir).
-        Buffer photonCountBuf;
-        Buffer photonDataBuf;
+        // Photon caustics subsystem (pipeline + SBT + count/data buffers).
+        // Encapsulated as a separate module — see vulkan/PhotonCaustics.{hpp,cpp}.
+        // Owns its state; this Impl just holds the unique_ptr and routes
+        // descriptor binding + dispatch through the class.
+        std::unique_ptr<vulkan::PhotonCaustics> photon_;
 
         // Spatial denoiser compute pipelines. Both reuse rtDsLayout (set 0) so
         // the same per-frame descriptor set drives RT, atrous, and finalize.
@@ -1068,9 +1058,7 @@ namespace threepp {
             createShaderBindingTable();
             createDenoisePipeline();// must follow createRtPipeline (shares rtDsLayout)
             createSkinningPipeline();
-            createPhotonBuffers();
-            createPhotonEmitPipeline();
-            createPhotonSbt();
+            photon_ = std::make_unique<vulkan::PhotonCaustics>(*ctx, rtPipelineLayout);
             createWaterDisplacePipeline();
             // Hybrid raster G-buffer infrastructure is always allocated so
             // the RT descriptor sets can include valid gbuffer-attachment
@@ -1108,10 +1096,9 @@ namespace threepp {
 
             destroyBuffer(ctx->allocator(), sbtBuffer);
             if (rtPipeline)       vkDestroyPipeline(d, rtPipeline, nullptr);
-            destroyBuffer(ctx->allocator(), photonSbtBuf);
-            if (photonEmitPipeline) vkDestroyPipeline(d, photonEmitPipeline, nullptr);
-            destroyBuffer(ctx->allocator(), photonCountBuf);
-            destroyBuffer(ctx->allocator(), photonDataBuf);
+            // Photon caustics owns its pipeline + SBT + buffers; reset
+            // before destroying the shared rtPipelineLayout it references.
+            photon_.reset();
             if (rtPipelineLayout) vkDestroyPipelineLayout(d, rtPipelineLayout, nullptr);
             if (rtDsLayout)       vkDestroyDescriptorSetLayout(d, rtDsLayout, nullptr);
 
@@ -4003,7 +3990,7 @@ namespace threepp {
             // Structural change invalidates the photon grid: cells from the
             // old scene's world layout linger and would leak into the new
             // scene's gather. Force the one-shot zero-fill shim to re-run.
-            photonCountInitialized_ = false;
+            if (photon_) photon_->markUninitialized();
         }
 
         void createCameraUbos() {
@@ -8845,126 +8832,6 @@ namespace threepp {
             lastFrameTimings_.taaMs        = pairMs(TP_TAA);
         }
 
-        void createPhotonBuffers() {
-            photonCountBuf = createBuffer(
-                    ctx->allocator(), ctx->device(),
-                    static_cast<VkDeviceSize>(kPhotonGridSize) * sizeof(uint32_t),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                    0);
-            // 3 vec3 per slot: position, flux, direction.
-            photonDataBuf = createBuffer(
-                    ctx->allocator(), ctx->device(),
-                    static_cast<VkDeviceSize>(kPhotonGridSize) * kPhotonsPerCell * 3 * 12,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                    0);
-        }
-
-        void createPhotonEmitPipeline() {
-            auto loadModule = [this](const uint32_t* code, size_t size) {
-                VkShaderModuleCreateInfo smci{};
-                smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-                smci.codeSize = size;
-                smci.pCode    = code;
-                VkShaderModule m = VK_NULL_HANDLE;
-                check(vkCreateShaderModule(ctx->device(), &smci, nullptr, &m),
-                      "vkCreateShaderModule(photon)");
-                return m;
-            };
-            VkShaderModule rgenMod = loadModule(kPhotonEmitRgenSpv, sizeof(kPhotonEmitRgenSpv));
-            VkShaderModule missMod = loadModule(kPhotonMissRmissSpv, sizeof(kPhotonMissRmissSpv));
-            VkShaderModule chitMod = loadModule(kPhotonChitRchitSpv, sizeof(kPhotonChitRchitSpv));
-
-            // Groups: 0=rgen, 1=miss, 2=photon closest-hit.
-            std::array<VkPipelineShaderStageCreateInfo, 3> stg{};
-            for (auto& s : stg) { s.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO; s.pName = "main"; }
-            stg[0].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;      stg[0].module = rgenMod;
-            stg[1].stage = VK_SHADER_STAGE_MISS_BIT_KHR;        stg[1].module = missMod;
-            stg[2].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR; stg[2].module = chitMod;
-
-            std::array<VkRayTracingShaderGroupCreateInfoKHR, 3> grp{};
-            for (auto& g : grp) {
-                g.sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
-                g.generalShader = g.closestHitShader = g.anyHitShader = g.intersectionShader = VK_SHADER_UNUSED_KHR;
-            }
-            grp[0].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;          grp[0].generalShader = 0;
-            grp[1].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;          grp[1].generalShader = 1;
-            grp[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR; grp[2].closestHitShader = 2;
-
-            VkRayTracingPipelineCreateInfoKHR rci{};
-            rci.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
-            rci.stageCount = static_cast<uint32_t>(stg.size());
-            rci.pStages    = stg.data();
-            rci.groupCount = static_cast<uint32_t>(grp.size());
-            rci.pGroups    = grp.data();
-            rci.maxPipelineRayRecursionDepth = 1; // loop in raygen, no nested traces
-            rci.layout = rtPipelineLayout; // same layout as path trace pipeline
-
-            check(ctx->rt().createRayTracingPipelines(
-                          ctx->device(), VK_NULL_HANDLE, VK_NULL_HANDLE,
-                          1, &rci, nullptr, &photonEmitPipeline),
-                  "vkCreateRayTracingPipelinesKHR(photon)");
-
-            vkDestroyShaderModule(ctx->device(), rgenMod, nullptr);
-            vkDestroyShaderModule(ctx->device(), missMod, nullptr);
-            vkDestroyShaderModule(ctx->device(), chitMod, nullptr);
-        }
-
-        void createPhotonSbt() {
-            const auto& props = ctx->rtPipelineProperties();
-            const uint32_t handleSize        = props.shaderGroupHandleSize;
-            const uint32_t handleAlignment   = props.shaderGroupHandleAlignment;
-            const uint32_t baseAlignment     = props.shaderGroupBaseAlignment;
-            const uint32_t handleSizeAligned = alignUp(handleSize, handleAlignment);
-
-            constexpr uint32_t groupCount = 3; // rgen, miss, hit
-            const uint32_t handlesSize = groupCount * handleSize;
-            std::vector<uint8_t> handles(handlesSize);
-            check(ctx->rt().getRayTracingShaderGroupHandles(
-                          ctx->device(), photonEmitPipeline, 0, groupCount,
-                          handlesSize, handles.data()),
-                  "vkGetRayTracingShaderGroupHandlesKHR(photon)");
-
-            const uint32_t rgenBytes = alignUp(handleSizeAligned, baseAlignment);
-            const uint32_t missBytes = alignUp(handleSizeAligned, baseAlignment);
-            const uint32_t hitBytes  = alignUp(handleSizeAligned, baseAlignment);
-            const VkDeviceSize sbtSize =
-                    static_cast<VkDeviceSize>(rgenBytes) +
-                    static_cast<VkDeviceSize>(missBytes) +
-                    static_cast<VkDeviceSize>(hitBytes);
-
-            photonSbtBuf = createBuffer(
-                    ctx->allocator(), ctx->device(), sbtSize,
-                    VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
-                            VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
-
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), photonSbtBuf.alloc, &mapped);
-            std::memset(mapped, 0, sbtSize);
-            uint8_t* dst = static_cast<uint8_t*>(mapped);
-            std::memcpy(dst,                        handles.data() + 0 * handleSize, handleSize);
-            std::memcpy(dst + rgenBytes,             handles.data() + 1 * handleSize, handleSize);
-            std::memcpy(dst + rgenBytes + missBytes, handles.data() + 2 * handleSize, handleSize);
-            vmaUnmapMemory(ctx->allocator(), photonSbtBuf.alloc);
-
-            const VkDeviceAddress base = photonSbtBuf.address;
-            photonRgenRgn.deviceAddress = base;
-            photonRgenRgn.stride = rgenBytes;
-            photonRgenRgn.size   = rgenBytes;
-            photonMissRgn.deviceAddress = base + rgenBytes;
-            photonMissRgn.stride = handleSizeAligned;
-            photonMissRgn.size   = missBytes;
-            photonHitRgn.deviceAddress = base + rgenBytes + missBytes;
-            photonHitRgn.stride = handleSizeAligned;
-            photonHitRgn.size   = hitBytes;
-            photonCallRgn = {};
-        }
-
         void createDescriptorPool() {
             imageCount_ = static_cast<uint32_t>(ctx->swapchainImages().size());
             const uint32_t totalSets = imageCount_ * kFramesInFlight;
@@ -9195,7 +9062,7 @@ namespace threepp {
                     wEmTri.pBufferInfo = &emTriInfo;
 
                     VkDescriptorBufferInfo photonCntInfo{};
-                    photonCntInfo.buffer = photonCountBuf.handle;
+                    photonCntInfo.buffer = photon_->countBuffer();
                     photonCntInfo.offset = 0;
                     photonCntInfo.range  = VK_WHOLE_SIZE;
                     VkWriteDescriptorSet wPhotonCnt{};
@@ -9207,7 +9074,7 @@ namespace threepp {
                     wPhotonCnt.pBufferInfo = &photonCntInfo;
 
                     VkDescriptorBufferInfo photonDataInfo{};
-                    photonDataInfo.buffer = photonDataBuf.handle;
+                    photonDataInfo.buffer = photon_->dataBuffer();
                     photonDataInfo.offset = 0;
                     photonDataInfo.range  = VK_WHOLE_SIZE;
                     VkWriteDescriptorSet wPhotonData{};
@@ -10165,56 +10032,11 @@ namespace threepp {
             // device-local photonCountBuf before anyone has written it.
             // Shim a one-shot zero-fill so the gather always sees a valid
             // (all-zero) count buffer.
-            if (sceneHasGlass_ && !glassVisibleThisFrame_ && !photonCountInitialized_) {
-                vkCmdFillBuffer(cb, photonCountBuf.handle, 0, VK_WHOLE_SIZE, 0u);
-                VkBufferMemoryBarrier2 fillDone{};
-                fillDone.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-                fillDone.srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-                fillDone.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                fillDone.dstStageMask  = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                fillDone.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                fillDone.srcQueueFamilyIndex = fillDone.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                fillDone.buffer = photonCountBuf.handle;
-                fillDone.size   = VK_WHOLE_SIZE;
-                VkDependencyInfo fillDep{};
-                fillDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                fillDep.bufferMemoryBarrierCount = 1;
-                fillDep.pBufferMemoryBarriers = &fillDone;
-                vkCmdPipelineBarrier2(cb, &fillDep);
-                photonCountInitialized_ = true;
+            if (sceneHasGlass_ && !glassVisibleThisFrame_ && !photon_->isInitialized()) {
+                photon_->recordZeroFillCounts(cb);
             }
             if (sceneHasGlass_ && glassVisibleThisFrame_) {
-                photonCountInitialized_ = true;
                 timingBegin(cb, TP_PhotonEmit);
-            // 1. Zero per-cell photon counters (counts only; data is overwritten
-            //    in place, old overflow slots beyond the new count are never read).
-            vkCmdFillBuffer(cb, photonCountBuf.handle, 0, VK_WHOLE_SIZE, 0u);
-
-            // 2. Barrier: fill → raygen read/write in photon emit shader.
-            {
-                VkBufferMemoryBarrier2 fillDone{};
-                fillDone.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-                fillDone.srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-                fillDone.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                fillDone.dstStageMask  = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                fillDone.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
-                fillDone.srcQueueFamilyIndex = fillDone.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                fillDone.buffer = photonCountBuf.handle;
-                fillDone.size   = VK_WHOLE_SIZE;
-
-                VkDependencyInfo fillDep{};
-                fillDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                fillDep.bufferMemoryBarrierCount = 1;
-                fillDep.pBufferMemoryBarriers = &fillDone;
-                vkCmdPipelineBarrier2(cb, &fillDep);
-            }
-
-            // 3. Photon emit dispatch.
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, photonEmitPipeline);
-            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
-                                    rtPipelineLayout, 0, 1,
-                                    &descriptorSets[setIdx], 0, nullptr);
-            {
                 const float exposure = toneMappingExposure_;
                 uint32_t exposureBits;
                 std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
@@ -10230,49 +10052,23 @@ namespace threepp {
                 std::memcpy(&fireflyBitsPhoton, &fireflyClamp_, sizeof(fireflyBitsPhoton));
                 uint32_t oceanFineBitsPhoton;
                 std::memcpy(&oceanFineBitsPhoton, &oceanFineTileSize, sizeof(oceanFineBitsPhoton));
-                const uint32_t ppc[13] = {
-                        sampleIndex, envImage.mipLevels,
-                        static_cast<uint32_t>(toneMapping_), exposureBits,
-                        motionFlagsPhoton,
-                        emissiveTriCountThisFrame_, emPowerBits,
-                        samplesPerPixel_,
-                        envCdfWidth_, envCdfHeight_, envSumBitsPhoton,
-                        fireflyBitsPhoton,
-                        oceanFineBitsPhoton,
-                };
-                vkCmdPushConstants(cb, rtPipelineLayout,
-                                   VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                           VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                           VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
-                                           VK_SHADER_STAGE_MISS_BIT_KHR,
-                                   0, sizeof(ppc), ppc);
+                vulkan::PhotonCaustics::EmitPushConstants push{};
+                push.v[0]  = sampleIndex;
+                push.v[1]  = envImage.mipLevels;
+                push.v[2]  = static_cast<uint32_t>(toneMapping_);
+                push.v[3]  = exposureBits;
+                push.v[4]  = motionFlagsPhoton;
+                push.v[5]  = emissiveTriCountThisFrame_;
+                push.v[6]  = emPowerBits;
+                push.v[7]  = samplesPerPixel_;
+                push.v[8]  = envCdfWidth_;
+                push.v[9]  = envCdfHeight_;
+                push.v[10] = envSumBitsPhoton;
+                push.v[11] = fireflyBitsPhoton;
+                push.v[12] = oceanFineBitsPhoton;
+                photon_->recordEmitPass(cb, descriptorSets[setIdx], push);
+                timingEnd(cb, TP_PhotonEmit);
             }
-            ctx->rt().cmdTraceRays(cb, &photonRgenRgn, &photonMissRgn, &photonHitRgn, &photonCallRgn,
-                                   kPhotonEmitDim, kPhotonEmitDim, 1);
-
-            // 4. Barrier: photon writes → closest_hit reads (caustic gather).
-            {
-                std::array<VkBufferMemoryBarrier2, 2> photonDone{};
-                for (auto& b : photonDone) {
-                    b.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-                    b.srcStageMask  = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                    b.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-                    b.dstStageMask  = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-                    b.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    b.size = VK_WHOLE_SIZE;
-                }
-                photonDone[0].buffer = photonCountBuf.handle;
-                photonDone[1].buffer = photonDataBuf.handle;
-
-                VkDependencyInfo photonDep{};
-                photonDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                photonDep.bufferMemoryBarrierCount = 2;
-                photonDep.pBufferMemoryBarriers = photonDone.data();
-                vkCmdPipelineBarrier2(cb, &photonDep);
-            }
-            timingEnd(cb, TP_PhotonEmit);
-            }// if (sceneHasGlass_ && glassVisibleThisFrame_)
             // ── End photon emit ─────────────────────────────────────────────────
 
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rtPipeline);
