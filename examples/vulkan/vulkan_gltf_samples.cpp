@@ -75,7 +75,6 @@ int main(int argc, char** argv) {
     Canvas canvas("Vulkan PT - GLTF Samples", {{"vsync", false}});
 
     VulkanRenderer renderer(canvas);
-    renderer.setHybridEnabled(true);
     renderer.setHybridDebugView(0);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
@@ -233,6 +232,16 @@ int main(int argc, char** argv) {
         if (ImGui::Checkbox("Hybrid (raster + PT)", &hybrid)) {
             renderer.setHybridEnabled(hybrid);
             renderer.resetAccumulation();
+        }
+        if (hybrid) {
+            bool perSpp = renderer.perSppJitterHybrid();
+            if (ImGui::Checkbox("  Per-spp AA jitter", &perSpp))
+                renderer.setPerSppJitterHybrid(perSpp);
+        }
+        if (!hybrid) {
+            bool taaOn = renderer.taaEnabled();
+            if (ImGui::Checkbox("TAA (standalone)", &taaOn))
+                renderer.setTaaEnabled(taaOn);
         }
 
         bool restirDI = renderer.restirDIEnabled();

@@ -162,6 +162,8 @@ int main() {
     bool denoiserOn   = renderer.denoise();
     bool restirOn     = renderer.restirDIEnabled();
     bool hybridOn     = renderer.hybridEnabled();
+    bool perSppJitter = renderer.perSppJitterHybrid();
+    bool taaOn        = renderer.taaEnabled();
     bool rotating     = true;
     float rotSpeed    = 0.5f;
     float exposure    = renderer.toneMappingExposure;
@@ -191,6 +193,14 @@ int main() {
             renderer.setRestirDIEnabled(restirOn);
         if (ImGui::Checkbox("Hybrid raster G-buffer", &hybridOn))
             renderer.setHybridEnabled(hybridOn);
+        if (hybridOn) {
+            if (ImGui::Checkbox("  Per-spp AA jitter", &perSppJitter))
+                renderer.setPerSppJitterHybrid(perSppJitter);
+        }
+        if (!hybridOn) {
+            if (ImGui::Checkbox("TAA (standalone)", &taaOn))
+                renderer.setTaaEnabled(taaOn);
+        }
 
         if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
             renderer.toneMappingExposure = exposure;

@@ -120,6 +120,12 @@ namespace threepp {
         void setHybridEnabled(bool enabled);
         [[nodiscard]] bool hybridEnabled() const;
 
+        void setPerSppJitterHybrid(bool enabled);
+        [[nodiscard]] bool perSppJitterHybrid() const;
+
+        void setTaaEnabled(bool enabled);
+        [[nodiscard]] bool taaEnabled() const;
+
         // ReSTIR DI master toggle. When on (default), the path tracer uses
         // streaming RIS + temporal + spatial reuse at primary surfaces — one
         // shadow ray to a single chosen sample replaces the per-light NEE

@@ -1017,7 +1017,9 @@ namespace threepp {
         // on; off keeps the existing full-PT primary path. Stage 1 ships
         // disabled by default so the raster prepass can land + be validated
         // before becoming the default.
-        bool hybridEnabled_ = true;
+        bool hybridEnabled_ = false;
+        bool perSppJitterHybrid_ = false;
+        bool taaEnabled_ = true;
         // Tracks what each per-frame slot's binding 1 (RT denoise output)
         // currently points at, so the per-frame rewrite block only fires on
         // a real state change: -1 = unknown/needs rewrite, 0 = swapchain
@@ -1065,7 +1067,7 @@ namespace threepp {
         // bypassed and the legacy per-light NEE classic loops run instead
         // (same pattern as bounces). Default on. Forwarded to chit via
         // pc.motionFlags bit 16 each frame.
-        bool restirDIEnabled_ = true;
+        bool restirDIEnabled_ = false;
         // Hybrid raster overlay: layer index for opt-in overlay objects
         // (alongside auto-detected wireframe materials + Line/LineSegments).
         // -1 disables layer-based selection. Mirrors WGPU PT's overlayLayer_.
@@ -2562,7 +2564,7 @@ namespace threepp {
             // (3.5) Per-vertex motion: copy current vertex positions into
             // prevVertex BEFORE water_displace overwrites them. Hybrid-only
             // (raster gbuffer reads prevVertex at attribute 3).
-            if (hybridEnabled_ && st.blas->prevVertex.handle != VK_NULL_HANDLE) {
+            if ((hybridEnabled_ || taaEnabled_) && st.blas->prevVertex.handle != VK_NULL_HANDLE) {
                 VkBufferCopy region{};
                 region.size = VkDeviceSize(st.vertexCount) * 3u * sizeof(float);
                 vkCmdCopyBuffer(cb, st.blas->vertex.handle,
@@ -9836,7 +9838,7 @@ namespace threepp {
             // a chosen channel directly to the swapchain, draw the ImGui
             // overlay on top (mirrors the PT path's overlay flow), then
             // present — bypassing the entire RT pipeline.
-            if (hybridEnabled_ && rasterGbufPipeline != VK_NULL_HANDLE) {
+            if ((hybridEnabled_ || taaEnabled_) && rasterGbufPipeline != VK_NULL_HANDLE) {
                 timingBegin(cb, TP_RasterGbuf);
                 recordRasterGbufPass(cb, currentFrame);
                 timingEnd(cb, TP_RasterGbuf);
@@ -10280,7 +10282,8 @@ namespace threepp {
                     (cameraMovedThisFrame_ ? 2u  : 0u) |
                     (sceneHasGlass_        ? 4u  : 0u) |
                     (hybridEnabled_        ? 8u  : 0u) |
-                    (restirDIEnabled_      ? 16u : 0u);
+                    (restirDIEnabled_      ? 16u : 0u) |
+                    (perSppJitterHybrid_   ? 32u : 0u);
             uint32_t emPowerBits;
             std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
             uint32_t envSumBits;
@@ -10412,7 +10415,7 @@ namespace threepp {
             // shake on moving objects — the original architectural reason for
             // hybrid mode. PT accumulator + à-trous already gave stills
             // quality via chit primary; TAA handles motion on top of that.
-            if (hybridEnabled_) {
+            if (hybridEnabled_ || taaEnabled_) {
                 // Barrier: taaInputImagesPP write → read; new history write
                 // → read on the OUTGOING-to-history pong slot just to be safe.
                 std::array<VkImageMemoryBarrier2, 3> taaPre{};
@@ -10882,7 +10885,7 @@ namespace threepp {
             // camera VPs (curr jittered, curr unjittered, prev unjittered).
             // Must run after computeAndUploadMotionMatrices so the descriptor
             // rewrite picks up the populated motionMat buffer for this frame.
-            if (hybridEnabled_) {
+            if (hybridEnabled_ || taaEnabled_) {
                 ensureHybridResources();
                 uploadRasterCameraUbo(currentFrame, camera);
                 // Build the per-frame DrawInfo + indirect-cmd buffers used
@@ -10902,7 +10905,7 @@ namespace threepp {
             // gives stills quality (chit primary is high-quality input), TAA
             // sits on top to handle motion.
             {
-                const int8_t desired = hybridEnabled_ ? 1 : 0;
+                const int8_t desired = (hybridEnabled_ || taaEnabled_) ? 1 : 0;
                 if (binding1Mode_[currentFrame] != desired) {
                     for (uint32_t i = 0; i < imageCount_; ++i) {
                         const uint32_t idx = currentFrame * imageCount_ + i;
@@ -11152,6 +11155,26 @@ namespace threepp {
 
     bool VulkanRenderer::hybridEnabled() const {
         return pimpl_->hybridEnabled_;
+    }
+
+    void VulkanRenderer::setPerSppJitterHybrid(bool enabled) {
+        pimpl_->perSppJitterHybrid_ = enabled;
+    }
+
+    bool VulkanRenderer::perSppJitterHybrid() const {
+        return pimpl_->perSppJitterHybrid_;
+    }
+
+    void VulkanRenderer::setTaaEnabled(bool enabled) {
+        if (pimpl_->taaEnabled_ != enabled) {
+            pimpl_->taaEnabled_ = enabled;
+            pimpl_->taaHistoryValid_ = false;
+            for (auto& m : pimpl_->binding1Mode_) m = -1;
+        }
+    }
+
+    bool VulkanRenderer::taaEnabled() const {
+        return pimpl_->taaEnabled_;
     }
 
     void VulkanRenderer::setRestirDIEnabled(bool enabled) {

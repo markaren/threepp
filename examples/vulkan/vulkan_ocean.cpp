@@ -124,7 +124,6 @@ int main() {
     Canvas canvas("Vulkan PT  Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
     VulkanRenderer renderer(canvas);
     renderer.setDenoise(true);
-    renderer.setHybridEnabled(true);
     renderer.setRestirDIEnabled(false);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 0.7f;

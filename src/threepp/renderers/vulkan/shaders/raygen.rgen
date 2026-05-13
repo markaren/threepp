@@ -691,10 +691,12 @@ void main() {
         // degenerate to no jitter, so index from 1.
         const uint subIdx = pc.sampleIndex * spp + s;
         const uint sIdx   = subIdx + 1u;
-        // Non-hybrid: blue-noise jitter from the void-and-cluster tile.
-        // Hybrid sets jitter to zero here because all spp share the same
-        // primary direction (gbuf rasterized once per frame).
-        const vec2 jitter = hybridOn
+        // Per-spp blue-noise jitter from the void-and-cluster tile.
+        // When perSppJitter is on (motionFlags bit 5), hybrid also gets
+        // independent sub-pixel jitter per sample — combining hybrid TAA
+        // noise suppression with multi-sample AA convergence.
+        const bool perSppJitter = (pc.motionFlags & 32u) != 0u;
+        const vec2 jitter = (hybridOn && !perSppJitter)
                 ? vec2(0.0)
                 : vec2(blueNoise(gl_LaunchIDEXT.xy, sIdx, 0u) - 0.5,
                        blueNoise(gl_LaunchIDEXT.xy, sIdx, 1u) - 0.5);
@@ -712,10 +714,10 @@ void main() {
         vec3 radiance   = vec3(0.0);
         vec3 throughput = vec3(1.0);
         vec3 origin     = originWS.xyz;
-        // Hybrid: every spp uses the same gbuf-derived primary direction
-        // (the gbuffer was rasterized once for the whole frame). Non-hybrid
-        // varies primary per spp via the Halton jitter computed above.
-        vec3 dir        = hybridOn ? primaryDirHybrid : dirWS;
+        // Hybrid without perSppJitter: every spp uses the same gbuf-derived
+        // primary direction. With perSppJitter (or non-hybrid): each spp
+        // gets its own jittered direction for multi-sample AA.
+        vec3 dir        = (hybridOn && !perSppJitter) ? primaryDirHybrid : dirWS;
         // True when the prior shade event ran env NEE — used to gate the MIS
         // half-env weight on the next miss. Transmission events skip NEE and
         // clear this so the env is read at full strength on the bounce-into-miss.
