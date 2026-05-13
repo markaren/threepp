@@ -76,30 +76,22 @@ namespace threepp {
         // Internal; do not mutate from user code.
         uint64_t frameTick = 0;
 
-        // Renderer-filled spatial-domain height field for cascade 0, copied
-        // back from GPU each frame after the IFFT pass. Layout: row-major
-        // RG32F (R = vertical displacement in metres, G = vertical velocity
-        // — currently unused). Cell (ix, iz) lives at index `(iz*dim + ix)*2`.
-        // Size: dim² * 2 floats. Empty until the first frame has run.
+        // Renderer-filled spatial-domain height fields, one per cascade,
+        // copied back from GPU each frame after the IFFT pass. Layout:
+        // row-major RG32F (R = vertical displacement, G = unused).
+        // Cell (ix, iz) lives at index `(iz*dim + ix)*2`.
         // mutable so const-method `sampleHeight` can be called on a const
         // DisplacedMesh while the renderer keeps the data fresh.
-        mutable std::vector<float> heightField;
-        mutable uint32_t heightFieldDim      = 0;     // width = height = textureSize after first frame
-        mutable float    heightFieldTileSize = 0.f;   // tileSize0 the field was sampled at
+        struct CascadeField {
+            std::vector<float> data;
+            uint32_t dim      = 0;
+            float    tileSize = 0.f;
+        };
+        mutable CascadeField heightFields[3];
 
-        // Bilinear-sample the cascade-0 wave height at (worldX, worldZ).
-        // Returns the displacement applied to a flat surface at y=0 (so
-        // boat.y = sampleHeight(...) puts the hull at the wave surface,
-        // matching what's rendered). Returns 0 if the readback hasn't run
-        // yet. Wraps the FFT tile (the texture is periodic).
-        //
-        // Matches the sampling formula used by water_displace.comp:
-        //   uv         = (worldX, worldZ) / tileSize
-        //   height(uv) = bilinear(heightField, uv)
-        //   y          = height(uv) * waveScale * (1 / tileSize)
-        // — i.e. the same `* (1/tileSize)` amplitude normalisation, so the
-        // returned value matches the GPU-rendered surface to ~bilinear
-        // precision (the GPU uses hardware bilinear too).
+        // Bilinear-sample the combined wave height (all active cascades) at
+        // (worldX, worldZ). Matches the GPU's sampleDisplacement().y exactly:
+        // each cascade contributes height * (1/tileSize) * waveScale.
         float sampleHeight(float worldX, float worldZ) const;
     };
 
