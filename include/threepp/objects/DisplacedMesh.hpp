@@ -60,6 +60,19 @@ namespace threepp {
 
         Params params;
 
+        // Hull exclusion zone: suppresses wave displacement inside a
+        // world-space oriented rectangle so the ocean doesn't clip through
+        // a vessel's deck. Set each frame before render().
+        struct HullExclusion {
+            float centerX    = 0.f;
+            float centerZ    = 0.f;
+            float halfLength = 0.f;   // 0 = disabled
+            float halfBeam   = 0.f;
+            float sinYaw     = 0.f;
+            float cosYaw     = 1.f;
+        };
+        HullExclusion hullExclusion;
+
         DisplacedMesh(const std::shared_ptr<BufferGeometry>& geometry,
                       const std::shared_ptr<Material>& material);
 

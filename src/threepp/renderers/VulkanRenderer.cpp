@@ -2613,10 +2613,16 @@ namespace threepp {
                 float    waveScale;
                 float    choppiness;
                 uint32_t cascadeMask;
+                float    hullCenterX;
+                float    hullCenterZ;
+                float    hullHalfLength;
+                float    hullHalfBeam;
+                float    hullSinYaw;
+                float    hullCosYaw;
             } pc{};
             pc.posOut       = st.blas->vertex.address;
             pc.normOut      = st.blas->normal.address;
-            pc.foamOut      = st.blas->foam.address;// 0 if foam buffer not allocated → shader skips foam write
+            pc.foamOut      = st.blas->foam.address;
             pc.vertexCount  = st.vertexCount;
             pc.gridDim      = st.gridDim;
             pc.planeSize    = st.planeSize;
@@ -2626,6 +2632,12 @@ namespace threepp {
             pc.waveScale    = dm.params.waveScale;
             pc.choppiness   = dm.params.choppiness;
             pc.cascadeMask  = st.cascadeMask;
+            pc.hullCenterX    = dm.hullExclusion.centerX;
+            pc.hullCenterZ    = dm.hullExclusion.centerZ;
+            pc.hullHalfLength = dm.hullExclusion.halfLength;
+            pc.hullHalfBeam   = dm.hullExclusion.halfBeam;
+            pc.hullSinYaw     = dm.hullExclusion.sinYaw;
+            pc.hullCosYaw     = dm.hullExclusion.cosYaw;
             vkCmdPushConstants(cb, displacePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                                0, sizeof(pc), &pc);
             const uint32_t groups = (st.vertexCount + 63u) / 64u;
@@ -7530,11 +7542,11 @@ namespace threepp {
                   "vkCreateDescriptorSetLayout(displace)");
 
             // Push constants — match water_displace.comp's `Pc` struct:
-            //   3 × VkDeviceAddress (24) + 9 × u32/float (36) = 60 bytes.
+            //   3 × VkDeviceAddress (24) + 15 × u32/float (60) = 84 bytes.
             VkPushConstantRange pcr{};
             pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
             pcr.offset     = 0;
-            pcr.size       = 60;
+            pcr.size       = 84;
 
             VkPipelineLayoutCreateInfo plci{};
             plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;

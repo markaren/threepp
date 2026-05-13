@@ -390,6 +390,13 @@ int main() {
         boat->position.set(bs.position.x, bs.y - 0.2f, bs.position.z);
         boat->rotation.set(-bs.smoothPitch, bs.yaw, bs.smoothRoll, Euler::YXZ);
 
+        ocean->hullExclusion.centerX    = bs.position.x;
+        ocean->hullExclusion.centerZ    = bs.position.z;
+        ocean->hullExclusion.halfLength = kBoatLength * 0.5f;
+        ocean->hullExclusion.halfBeam   = kBoatBeam * 0.5f;
+        ocean->hullExclusion.sinYaw     = sinY;
+        ocean->hullExclusion.cosYaw     = cosY;
+
         // No camera follow — was making the boat read as "stuck" at the
         // camera centre, since camera and target moved with it. Let the
         // user orbit / zoom manually; the boat translates freely in world

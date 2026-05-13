@@ -52,6 +52,12 @@ layout(push_constant, scalar) uniform Pc {
     float   waveScale;      // global Y-displacement multiplier
     float   choppiness;     // horizontal-displacement multiplier (0 = pure heightfield)
     uint    cascadeMask;    // bit i = enable cascade i (0..2)
+    float   hullCenterX;
+    float   hullCenterZ;
+    float   hullHalfLength; // 0 = no hull exclusion
+    float   hullHalfBeam;
+    float   hullSinYaw;
+    float   hullCosYaw;
 } pc;
 
 vec3 sampleDisplacement(vec2 worldXZ) {
@@ -109,7 +115,23 @@ void main() {
                            0.0,
                            -(v - 0.5) * pc.planeSize);
 
-    const vec3 disp = sampleDisplacement(rest.xz);
+    vec3 disp = sampleDisplacement(rest.xz);
+
+    // Hull exclusion: suppress displacement inside a vessel's footprint
+    // so the ocean mesh doesn't clip through the deck. Smooth fade over
+    // ~2 m outside the hull edge keeps the transition invisible.
+    if (pc.hullHalfLength > 0.0) {
+        const float dx = rest.x - pc.hullCenterX;
+        const float dz = rest.z - pc.hullCenterZ;
+        const float localX = pc.hullCosYaw * dx - pc.hullSinYaw * dz;
+        const float localZ = pc.hullSinYaw * dx + pc.hullCosYaw * dz;
+        const float edgeX = abs(localX) - pc.hullHalfBeam;
+        const float edgeZ = abs(localZ) - pc.hullHalfLength;
+        const float edgeDist = max(edgeX, edgeZ);
+        const float fade = smoothstep(0.0, 2.0, edgeDist);
+        disp *= fade;
+    }
+
     const vec3 outPos = rest + disp;
 
     // Finite-difference samples at four neighbours. Reused for both the
