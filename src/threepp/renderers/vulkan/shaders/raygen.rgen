@@ -38,6 +38,15 @@ struct Payload {
     uint seed;         // PCG state threaded through bounces
     vec3 hitWorldPos;  // world-space hit point (for primary-hit reprojection)
     uint hitInstanceId;// gl_InstanceCustomIndexEXT + 1; 0 == miss/sky
+    // Per-vertex motion-vector reproject support: chit interpolates the
+    // previous-frame deformed positions of the hit triangle via
+    // gdesc.prevVertexAddress, transforms with gl_ObjectToWorldEXT, and
+    // stores the result here. For static (non-deforming) geometry the
+    // prevVertex buffer is the same as vertex so this ends up equal to
+    // hitWorldPos. raygen uses motionMat * prevWorldPos for the reproject
+    // — correctly handles skinned-mesh deformation that motionMat alone
+    // (= identity for skinned) cannot capture.
+    vec3 prevWorldPos;
     float hitRoughness;// post-clamp surface roughness; primary-hit FC cap input
     uint inFlags;      // raygen→closest_hit: bit 0 = scatter>0 (suppress emission;
                        // NEE on the prev shade already covered emissive light at this hit)
@@ -610,6 +619,12 @@ void main() {
     // loop to reproject this pixel's converged history. primaryInstanceId == 0
     // means sky / miss — no reproject (env is camera-locked, accumulates naively).
     vec3 primaryWorldPos   = vec3(0.0);
+    // Per-vertex prev-frame world position at the primary hit. Filled by chit
+    // via gdesc.prevVertexAddress interpolation. For static / rigid-only
+    // meshes this equals primaryWorldPos (chit reads same buffer for both);
+    // for skinned/displaced meshes it's the deformed position from the
+    // previous frame. Reproject uses motionMat · primaryPrevWorldPos.
+    vec3 primaryPrevWorldPos = vec3(0.0);
     uint primaryInstanceId = 0u;
     float primaryRoughness   = 1.0;// default (most lenient cap) until first real shade event
     float primaryMetalness   = 0.0;
@@ -756,6 +771,7 @@ void main() {
         payload.flags      = prevRanNEE ? 2u : 0u;
         payload.seed       = seed;
         payload.hitWorldPos    = vec3(0.0);
+        payload.prevWorldPos   = vec3(0.0);
         payload.hitInstanceId  = 0u;
         payload.hitRoughness   = 1.0;
         payload.hitMetalness   = 0.0;
@@ -795,6 +811,7 @@ void main() {
             payload.nextDir         = vec3(0.0);
             payload.flags           = 1u;
             payload.hitWorldPos     = origin + dir * 1e6;
+            payload.prevWorldPos    = origin + dir * 1e6;// sky has no prev — same as current
             payload.hitInstanceId   = 0u;
             payload.hitRoughness    = 1.0;
             payload.hitMetalness    = 0.0;
@@ -818,6 +835,7 @@ void main() {
         // accept 0/sky if we never get one).
         if (primaryInstanceId == 0u && payload.hitInstanceId != 0u) {
             primaryWorldPos     = payload.hitWorldPos;
+            primaryPrevWorldPos = payload.prevWorldPos;
             primaryInstanceId   = payload.hitInstanceId;
             primaryRoughness    = payload.hitRoughness;
             primaryMetalness    = payload.hitMetalness;
@@ -1003,7 +1021,16 @@ void main() {
         //     prev-gbuf position that drifted from currWS by more than the
         //     tightened tolerance below as deformed-and-stale.
         const mat4 motion = motionMat[primaryInstanceId - 1u];
-        const vec3 prevWS  = (motion * vec4(primaryWorldPos, 1.0)).xyz;
+        // 2026-05-13: reproject uses chit's per-vertex prev-world position
+        // instead of motionMat·primaryWorldPos directly. For static/rigid
+        // meshes primaryPrevWorldPos == primaryWorldPos (chit's prev-vertex
+        // interpolation falls through to the same buffer), so the result
+        // identical to the old motionMat·primaryWorldPos formula. For
+        // skinned/displaced meshes primaryPrevWorldPos captures the previous
+        // frame's deformed surface point in CURRENT-frame world space —
+        // applying motionMat then takes it to PREV-frame world space, which
+        // is what the prev-camera-basis projection below expects.
+        const vec3 prevWS  = (motion * vec4(primaryPrevWorldPos, 1.0)).xyz;
         const vec3 toPoint = prevWS - pcam.prevCamPosX.xyz;
         const float prevZ  = dot(toPoint, pcam.prevCamFwdY.xyz);
 

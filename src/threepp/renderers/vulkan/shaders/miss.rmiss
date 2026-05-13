@@ -19,6 +19,7 @@ struct Payload {
     uint seed;
     vec3 hitWorldPos;  // unused by miss (kept for layout match with raygen/closest_hit)
     uint hitInstanceId;// must be 0 on miss so raygen sees sky/background as no-reproject
+    vec3 prevWorldPos; // unused by miss (kept for layout match)
     float hitRoughness;// unused by miss (sky cold-starts on cam motion; cap doesn't apply)
     uint inFlags;      // unused by miss (kept for layout match)
     float hitMetalness;// unused by miss (kept for layout match)

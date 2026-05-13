@@ -392,6 +392,14 @@ namespace threepp {
             VkDeviceAddress indexAddress;
             VkDeviceAddress uvAddress;// 0 == no UV attribute
             VkDeviceAddress foamAddress;// 0 == no foam attribute (per-vertex float, written by water_displace.comp)
+            // Previous-frame deformed vertex positions. For SkinnedMesh (or any
+            // mesh that re-deforms per frame): a separate buffer holding the
+            // previous frame's vertex data. Chit interpolates these to give
+            // raygen a per-vertex "previous world position" so reprojection
+            // tracks the same surface point across deformation. For static /
+            // rigid-only meshes: set equal to vertexAddress, in which case the
+            // chit reads the same data twice (no harm; equals current pos).
+            VkDeviceAddress prevVertexAddress;
             uint32_t indexed;
             uint32_t _pad;
         };
@@ -1721,14 +1729,22 @@ namespace threepp {
             if (!rec) return nullptr;
             rec->liveCheck = sm.geometry();
 
-            // Per-vertex previous-pose buffer for hybrid raster motion vec.
+            // Per-vertex previous-pose buffer. Used for two purposes:
+            // (1) Hybrid raster motion-vector source (existing).
+            // (2) Per-vertex prev-world-position reproject (2026-05-13):
+            //     chit reads via gdesc.prevVertexAddress, interpolates, and
+            //     writes payload.prevWorldPos which raygen consumes for the
+            //     motionMat reproject. TRANSFER_DST_BIT lets the per-frame
+            //     vkCmdCopyBuffer push current→prev before the skinning
+            //     compute writes new positions. Device-local (no host
+            //     access) — the per-frame update happens entirely on GPU.
             const VkDeviceSize vbBytes = posAttr->array().size() * sizeof(float);
             rec->prevVertex = createBuffer(
                     ctx->allocator(), ctx->device(), vbBytes,
                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                    VMA_MEMORY_USAGE_AUTO);
 
             auto state = std::make_unique<SkinnedMeshState>();
             state->blas = std::move(rec);
@@ -3907,6 +3923,13 @@ namespace threepp {
                 gdesc.indexAddress  = recPtr->index.address;
                 gdesc.uvAddress     = recPtr->uv.address;// 0 if no UV attribute
                 gdesc.foamAddress   = recPtr->foam.address;// 0 unless this is an FFT-displaced ocean mesh
+                // prevVertexAddress: skinned + displaced meshes have a real
+                // prev-vertex buffer (different from current). Static meshes
+                // get vertex.address as a fallback — the chit reads the same
+                // buffer for both, prevHitWorldPos ends up equal to current.
+                gdesc.prevVertexAddress = (recPtr->prevVertex.handle != VK_NULL_HANDLE)
+                        ? recPtr->prevVertex.address
+                        : recPtr->vertex.address;
                 gdesc.indexed = recPtr->index.handle != VK_NULL_HANDLE ? 1u : 0u;
                 gdesc._pad = 0;
                 geomDescs.push_back(gdesc);
@@ -9668,6 +9691,39 @@ namespace threepp {
             // raygen/raster downstream reads the BLAS via TLAS.
             if (!pendingSkinnedRebuilds_.empty() &&
                 skinningPipeline != VK_NULL_HANDLE) {
+                // ── Step 1: snapshot current vertex → prevVertex ──────────
+                // Before the skinning compute overwrites vertex with frame
+                // N's deformed positions, copy what's there (frame N-1's
+                // positions) into prevVertex. The chit's per-vertex motion-
+                // vector interpolation in step 1 reads prevVertex via
+                // gdesc.prevVertexAddress for the reprojection.
+                for (auto* st : pendingSkinnedRebuilds_) {
+                    if (st->blas->prevVertex.handle == VK_NULL_HANDLE) continue;
+                    VkBufferCopy region{};
+                    region.size = VkDeviceSize(st->vertexCount) * 3u * sizeof(float);
+                    vkCmdCopyBuffer(cb, st->blas->vertex.handle,
+                                    st->blas->prevVertex.handle, 1, &region);
+                }
+                // Transfer write → compute storage write (for vertex, which
+                // the skinning dispatch will now overwrite) and transfer
+                // write → ray-tracing shader read (for prevVertex, which
+                // chit reads via gdesc.prevVertexAddress later this frame).
+                {
+                    VkMemoryBarrier2 mb{};
+                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+                    mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    VkDependencyInfo dep{};
+                    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep.memoryBarrierCount = 1;
+                    dep.pMemoryBarriers    = &mb;
+                    vkCmdPipelineBarrier2(cb, &dep);
+                }
+
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, skinningPipeline);
                 for (auto* st : pendingSkinnedRebuilds_) {
                     vkCmdBindDescriptorSets(

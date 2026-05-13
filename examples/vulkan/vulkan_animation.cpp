@@ -125,8 +125,6 @@ int main() {
     float fpsAccum = 0.f;
     int fpsFrames = 0;
 
-    std::cout << "Press T to switch render mode: PathTracer -> Raster" << std::endl;
-
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::T) {
             // pathTracerOn = !pathTracerOn;
@@ -196,7 +194,6 @@ int main() {
 
         controls.update();
 
-        // renderer.usePathTracer = pathTracerOn;
         renderer.render(scene, rtCam);
 
         ui.render();

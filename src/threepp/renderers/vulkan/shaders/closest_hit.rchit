@@ -31,6 +31,7 @@ struct Payload {
     uint seed;
     vec3 hitWorldPos;  // world-space hit point (for primary-hit reprojection)
     uint hitInstanceId;// gl_InstanceCustomIndexEXT + 1; 0 == miss/sky/pass-through
+    vec3 prevWorldPos; // per-vertex prev-frame world position (skinned mesh reproject); see raygen Payload for details
     float hitRoughness;// post-clamp surface roughness; primary-hit FC cap input
     uint inFlags;      // raygen→here: bit 0 = scatter>0 (suppress emissive output;
                        // emissive NEE on the prev shade already accounted for it)
@@ -52,6 +53,7 @@ struct GeometryDesc {
     uint64_t indexAddress;
     uint64_t uvAddress;// 0 == no UV attribute
     uint64_t foamAddress;// 0 == no foam attribute (per-vertex float; written by water_displace.comp for ocean meshes)
+    uint64_t prevVertexAddress;// previous frame deformed positions (skinned/displaced); == vertexAddress for static
     uint     indexed;
     uint     _pad;
 };
@@ -866,6 +868,7 @@ void main() {
         // opaque is found later (e.g. pass-through → sky). Without this, sky-
         // facing back-faces never accumulate history and stay permanently noisy.
         payload.hitWorldPos   = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
+        payload.prevWorldPos  = payload.hitWorldPos;// pass-through — no deformation handling needed
         payload.hitInstanceId = uint(gl_InstanceCustomIndexEXT) + 1u;
         // Pass-through: no shading, so use the material's nominal roughness as
         // a coarse-but-safe FC cap input. The next visible surface upstream
@@ -902,6 +905,7 @@ void main() {
         payload.nextDir       = vec3(0.0);
         payload.flags         = 1u;// terminate
         payload.hitWorldPos     = hitPosUnlit;
+        payload.prevWorldPos    = hitPosUnlit;// unlit terminates path, no reproject benefit
         payload.hitInstanceId   = uint(gl_InstanceCustomIndexEXT) + 1u;
         payload.hitRoughness    = 1.0;
         payload.hitMetalness    = 0.0;
@@ -1354,12 +1358,14 @@ void main() {
         const bool tagPrimary = (ior_base > 1.01);
         if (tagPrimary) {
             payload.hitWorldPos     = hitPos;
+            payload.prevWorldPos    = hitPos;// transmission front face: no deformation handling
             payload.hitInstanceId   = uint(gl_InstanceCustomIndexEXT) + 1u;
             payload.hitRoughness    = roughness;
             payload.hitMetalness    = metalness;
             payload.hitTransmission = mdesc.transmission;
         } else {
             payload.hitWorldPos     = vec3(0.0);
+            payload.prevWorldPos    = vec3(0.0);
             payload.hitInstanceId   = 0u;
             payload.hitRoughness    = 1.0;
             payload.hitMetalness    = 0.0;
@@ -2210,6 +2216,24 @@ void main() {
     payload.nextDir    = bounceDir;
     payload.flags      = pathFlags;
     payload.seed       = seed;
+    // Per-vertex motion vector: interpolate this triangle's PREVIOUS-frame
+    // vertex positions (via gdesc.prevVertexAddress) using the same
+    // barycentric weights as the hit, then transform with the current
+    // worldMatrix (gl_ObjectToWorldEXT). raygen uses motionMat · prevWorld
+    // for reprojection. For static meshes prevVertexAddress == vertexAddress
+    // so this resolves to the same world position as hitPos (no harm, no
+    // change to existing behaviour). For skinned/displaced meshes the
+    // prevVertex buffer holds frame N-1's deformed positions and we get
+    // the per-vertex motion vector raygen needs to track the same surface
+    // point across deformation.
+    {
+        VertexBuf pvb = VertexBuf(gdesc.prevVertexAddress);
+        const vec3 pv0 = vec3(pvb.p[idx.x * 3 + 0], pvb.p[idx.x * 3 + 1], pvb.p[idx.x * 3 + 2]);
+        const vec3 pv1 = vec3(pvb.p[idx.y * 3 + 0], pvb.p[idx.y * 3 + 1], pvb.p[idx.y * 3 + 2]);
+        const vec3 pv2 = vec3(pvb.p[idx.z * 3 + 0], pvb.p[idx.z * 3 + 1], pvb.p[idx.z * 3 + 2]);
+        const vec3 prevLocal = w * pv0 + attribs.x * pv1 + attribs.y * pv2;
+        payload.prevWorldPos = vec3(gl_ObjectToWorldEXT * vec4(prevLocal, 1.0));
+    }
     // Tag this surface for raygen's primary-hit reprojection. Pass-through and
     // transmission early-returns above leave hitInstanceId at 0 so raygen waits
     // for the first real shade event to anchor history. +1 so 0 still means
