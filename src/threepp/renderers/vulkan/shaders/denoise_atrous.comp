@@ -61,10 +61,37 @@ void main() {
     const float depthC = length(g.xyz - camPos);
     const float lumC   = luminance(c.rgb);
 
-    // Tight edge stops — the PT input is mostly clean (high FPS, fast FC
-    // climb), so the filter must not over-blur. Depth stays at 2%·depth
-    // (consistent with prior tuning); luminance is now per-pixel from the
-    // temporal variance estimate instead of a constant 1.5.
+    // Plane-distance edge stop (replaces the linear-depth stop). Derive the
+    // surface normal at the center pixel via finite differences of worldPos
+    // and gate taps by |dot(wpQ − wpC, nC)|. Handles oblique surfaces correctly
+    // — the old |distQ − distC| over-rejected taps on grazing walls and
+    // under-rejected taps on near-parallel-to-view surfaces. SVGF uses the
+    // same trick.
+    //
+    // Finite-diff neighbours are mesh-ID-validated against center so silhouette
+    // taps don't poison the normal. If both axes degenerate (silhouette
+    // corners, 1-pixel meshes), fall back to the old linear-distance test —
+    // never worse than the previous behaviour. The 4 extra imageLoads are
+    // paid once per pixel, not per kernel tap.
+    const vec4 g_L = imageLoad(gbufImage, clamp(px + ivec2(-1,  0), ivec2(0), size - ivec2(1)));
+    const vec4 g_R = imageLoad(gbufImage, clamp(px + ivec2(+1,  0), ivec2(0), size - ivec2(1)));
+    const vec4 g_D = imageLoad(gbufImage, clamp(px + ivec2( 0, -1), ivec2(0), size - ivec2(1)));
+    const vec4 g_U = imageLoad(gbufImage, clamp(px + ivec2( 0, +1), ivec2(0), size - ivec2(1)));
+    const bool xValid = (abs(g_L.w - g.w) < 0.5) && (abs(g_R.w - g.w) < 0.5);
+    const bool yValid = (abs(g_D.w - g.w) < 0.5) && (abs(g_U.w - g.w) < 0.5);
+    const vec3 dX = xValid ? (g_R.xyz - g_L.xyz) : vec3(0.0);
+    const vec3 dY = yValid ? (g_U.xyz - g_D.xyz) : vec3(0.0);
+    // cross(dY, dX) so the normal points roughly toward camera in a right-
+    // handed world. Sign doesn't matter for abs(dot), but the form is the
+    // convention used in normal-from-position derivations.
+    const vec3  nC_raw = cross(dY, dX);
+    const float nCLen  = length(nC_raw);
+    const bool  nValid = nCLen > 1e-6;
+    const vec3  nC     = nValid ? (nC_raw / nCLen) : vec3(0.0);
+
+    // Plane / linear σ: 2%·depth — keeps a fixed angular tolerance the same
+    // way the old depth stop did, so previously-tuned scenes stay close to
+    // their old denoise behaviour on near-fronto-parallel surfaces.
     const float sigmaDepth = max(depthC * 0.02, 1e-3);
 
     // Variance-driven σ_lum (SVGF-style). M2 is mean(lum²); subtracting
@@ -103,11 +130,16 @@ void main() {
             // without needing a normal channel.
             if (abs(gq.w - g.w) > 0.5) continue;
 
-            const float depthQ = length(gq.xyz - camPos);
             const float lumQ   = luminance(cq.rgb);
 
-            const float wDepth = exp(-abs(depthQ - depthC) / sigmaDepth);
-            const float wLum   = exp(-abs(lumQ   - lumC)   / sigmaLum);
+            // Plane distance when we have a valid center normal; fall back
+            // to the original linear depth difference when degenerate (single-
+            // pixel meshes, silhouette corners with both FD axes invalid).
+            const float dDist  = nValid
+                    ? abs(dot(gq.xyz - g.xyz, nC))
+                    : abs(length(gq.xyz - camPos) - depthC);
+            const float wDepth = exp(-dDist / sigmaDepth);
+            const float wLum   = exp(-abs(lumQ - lumC) / sigmaLum);
             const float wKern  = k1d[dx + 2] * k1d[dy + 2];
 
             const float w = wKern * wDepth * wLum;
