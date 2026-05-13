@@ -67,6 +67,7 @@
 #include "threepp/renderers/vulkan/shaders/prefilter_env.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/denoise.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/denoise_atrous.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/skinning.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/water_displace.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.frag.spv.h"
@@ -279,11 +280,46 @@ namespace threepp {
         struct SkinnedMeshState {
             std::unique_ptr<BlasRecord> blas;
             std::vector<float> prevBoneMats;
+            // Legacy CPU-skin scratch — kept for potential fallback paths
+            // but no longer touched on the per-frame hot path (replaced by
+            // the GPU skinning compute pipeline below).
             std::vector<float> deformedPositions;
             std::vector<float> deformedNormals;
             std::weak_ptr<BufferGeometry> liveCheck;
+
+            // GPU skinning input buffers — populated once at ensureSkinnedBlas
+            // time and reused every frame. Output is the BLAS's own vertex /
+            // normal buffer (overwritten by the compute dispatch).
+            Buffer baseVertex   {};// vec3<float>, count = vertexCount
+            Buffer baseNormal   {};// vec3<float>, count = vertexCount
+            Buffer skinIndex    {};// vec4<float>, count = vertexCount
+            Buffer skinWeight   {};// vec4<float>, count = vertexCount
+            // Bone matrices buffer layout: [bindMatrix, bindMatrixInverse,
+            // bones[0]...bones[N-1]] as mat4s. Host-visible so the per-frame
+            // upload is a small memcpy. bindMatrix/Inverse are written once
+            // at allocation; only the bones[..] portion changes each frame.
+            Buffer boneMatrices {};
+            uint32_t vertexCount    = 0;
+            uint32_t boneCount      = 0;
+            uint32_t primitiveCount = 0;// for per-frame BLAS rebuild
+            bool     indexed        = false;
+            // Per-mesh descriptor set wiring all of the above + the BLAS
+            // output buffers into the skinning pipeline's set 0.
+            VkDescriptorSet skinDescSet = VK_NULL_HANDLE;
+            // Persistent scratch buffer for BLAS rebuild. Sized at the
+            // first ensureSkinnedBlas, reused every frame. Avoids per-frame
+            // alloc/free that was the original oneshot cost.
+            Buffer blasScratch {};
+            VkDeviceSize blasScratchSize = 0;
         };
         std::unordered_map<const SkinnedMesh*, std::unique_ptr<SkinnedMeshState>> skinnedMeshStates;
+
+        // List of SkinnedMeshState pointers whose bones changed this frame.
+        // ensureSceneBuilt populates this (uploads bone matrices to the GPU
+        // buffer); recordCommandBuffer consumes it by recording skinning
+        // dispatch + BLAS rebuild into the main per-frame cmd buffer with
+        // barriers. Cleared at the end of recordCommandBuffer.
+        std::vector<SkinnedMeshState*> pendingSkinnedRebuilds_;
 
         // Per-Mesh morphed-geometry BLAS. Two meshes sharing the same
         // BufferGeometry can have different morphTargetInfluences, so each
@@ -784,6 +820,17 @@ namespace threepp {
         VkPipeline       denoiseAtrousPipeline    = VK_NULL_HANDLE;
         bool             denoiseEnabled_          = true;
 
+        // ── GPU skinning compute pipeline ──────────────────────────────────
+        // Replaces the cpuSkin() loop. One dispatch per skinned mesh per
+        // frame when bones change, recorded into the main per-frame command
+        // buffer alongside the BLAS rebuild. Frees the CPU thread from
+        // the synchronous per-vertex linear-blend math + blocking BLAS
+        // submit (was ~10 ms / frame on stormtrooper-density meshes).
+        VkDescriptorSetLayout skinningDsLayout       = VK_NULL_HANDLE;
+        VkPipelineLayout      skinningPipelineLayout = VK_NULL_HANDLE;
+        VkPipeline            skinningPipeline       = VK_NULL_HANDLE;
+        VkDescriptorPool      skinningDescPool       = VK_NULL_HANDLE;
+
         // ── Hybrid raster G-buffer prepass ──────────────────────────────────
         // Replaces PT primary-ray traversal: raster writes depth/normal/motion/IDs
         // into per-frame attachments; raygen reads them and starts at bounce 1.
@@ -1081,6 +1128,7 @@ namespace threepp {
             createRtPipeline();
             createShaderBindingTable();
             createDenoisePipeline();// must follow createRtPipeline (shares rtDsLayout)
+            createSkinningPipeline();
             createPhotonBuffers();
             createPhotonEmitPipeline();
             createPhotonSbt();
@@ -1147,6 +1195,14 @@ namespace threepp {
             blasCache.clear();
 
             for (auto& [_, st] : skinnedMeshStates) {
+                // Destroy the GPU-skinning input buffers + scratch first;
+                // BLAS buffers below.
+                destroyBuffer(ctx->allocator(), st->baseVertex);
+                destroyBuffer(ctx->allocator(), st->baseNormal);
+                destroyBuffer(ctx->allocator(), st->skinIndex);
+                destroyBuffer(ctx->allocator(), st->skinWeight);
+                destroyBuffer(ctx->allocator(), st->boneMatrices);
+                destroyBuffer(ctx->allocator(), st->blasScratch);
                 auto& rec = st->blas;
                 if (!rec) continue;
                 if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
@@ -1224,6 +1280,14 @@ namespace threepp {
             if (denoisePipeline)        vkDestroyPipeline(d, denoisePipeline, nullptr);
             if (denoiseAtrousPipeline)  vkDestroyPipeline(d, denoiseAtrousPipeline, nullptr);
             if (denoisePipelineLayout)  vkDestroyPipelineLayout(d, denoisePipelineLayout, nullptr);
+
+            // GPU skinning teardown. Per-SkinnedMeshState buffers are
+            // destroyed alongside the BLAS in the skinnedMeshStates clear
+            // (see below); here we just release the shared pipeline + pool.
+            if (skinningPipeline)         vkDestroyPipeline(d, skinningPipeline, nullptr);
+            if (skinningPipelineLayout)   vkDestroyPipelineLayout(d, skinningPipelineLayout, nullptr);
+            if (skinningDsLayout)         vkDestroyDescriptorSetLayout(d, skinningDsLayout, nullptr);
+            if (skinningDescPool)         vkDestroyDescriptorPool(d, skinningDescPool, nullptr);
 
             if (displacePipeline)        vkDestroyPipeline(d, displacePipeline, nullptr);
             if (displacePipelineLayout)  vkDestroyPipelineLayout(d, displacePipelineLayout, nullptr);
@@ -1643,23 +1707,21 @@ namespace threepp {
             auto it = skinnedMeshStates.find(&sm);
             if (it != skinnedMeshStates.end()) return it->second.get();
 
-            auto* posAttr = sm.geometry()->getAttribute<float>("position");
-            auto* nrmAttr = sm.geometry()->getAttribute<float>("normal");
-            if (!posAttr || !nrmAttr) return nullptr;
+            auto* posAttr     = sm.geometry()->getAttribute<float>("position");
+            auto* nrmAttr     = sm.geometry()->getAttribute<float>("normal");
+            auto* skinIdxAttr = sm.geometry()->getAttribute<float>("skinIndex");
+            auto* skinWAttr   = sm.geometry()->getAttribute<float>("skinWeight");
+            if (!posAttr || !nrmAttr || !skinIdxAttr || !skinWAttr) return nullptr;
             if (!sm.skeleton || sm.skeleton->bones.empty()) return nullptr;
-            if (!sm.geometry()->hasAttribute("skinIndex") || !sm.geometry()->hasAttribute("skinWeight")) return nullptr;
 
-            // Build BLAS using the bind-pose positions/normals first so the AS
-            // sizes are determined and the storage is allocated. We then run a
-            // skin pass (immediate refresh below) so first-frame geometry is
-            // already deformed before any ray trace touches it.
+            // Build BLAS with the bind-pose positions/normals first. The
+            // BLAS buffers are then re-written each frame by the skinning
+            // compute shader (binding 5/6) and rebuilt in-place.
             auto rec = buildBlasFor(*sm.geometry());
             if (!rec) return nullptr;
             rec->liveCheck = sm.geometry();
 
             // Per-vertex previous-pose buffer for hybrid raster motion vec.
-            // Same size as the current vertex buffer; host-mapped so we can
-            // memcpy prev positions each frame in refreshSkinnedBlas.
             const VkDeviceSize vbBytes = posAttr->array().size() * sizeof(float);
             rec->prevVertex = createBuffer(
                     ctx->allocator(), ctx->device(), vbBytes,
@@ -1671,12 +1733,137 @@ namespace threepp {
             auto state = std::make_unique<SkinnedMeshState>();
             state->blas = std::move(rec);
             state->liveCheck = sm.geometry();
-            state->prevBoneMats.assign(sm.skeleton->bones.size() * 16, 0.f);
+            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
+            const uint32_t boneCount   = static_cast<uint32_t>(sm.skeleton->bones.size());
+            state->vertexCount = vertexCount;
+            state->boneCount   = boneCount;
+            state->prevBoneMats.assign(boneCount * 16, 0.f);
+
+            auto* idxAttr = sm.geometry()->getIndex();
+            state->indexed = idxAttr != nullptr;
+            state->primitiveCount = state->indexed
+                    ? static_cast<uint32_t>(idxAttr->count() / 3)
+                    : vertexCount / 3;
+
+            // ── GPU-skinning input buffers. Uploaded once, reused every frame.
+            auto allocAndUpload = [&](Buffer& dst, const void* src,
+                                      VkDeviceSize bytes) {
+                dst = createBuffer(
+                        ctx->allocator(), ctx->device(), bytes,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), dst.alloc, &mapped);
+                std::memcpy(mapped, src, bytes);
+                vmaUnmapMemory(ctx->allocator(), dst.alloc);
+            };
+            allocAndUpload(state->baseVertex, posAttr->array().data(),
+                           vertexCount * 3 * sizeof(float));
+            allocAndUpload(state->baseNormal, nrmAttr->array().data(),
+                           vertexCount * 3 * sizeof(float));
+            allocAndUpload(state->skinIndex, skinIdxAttr->array().data(),
+                           vertexCount * 4 * sizeof(float));
+            allocAndUpload(state->skinWeight, skinWAttr->array().data(),
+                           vertexCount * 4 * sizeof(float));
+
+            // Bone matrices buffer: [bindMatrix, bindMatrixInverse, bones...].
+            // bindMatrix / bindMatrixInverse are constant — written once here.
+            const VkDeviceSize matsBytes = (2 + boneCount) * 16 * sizeof(float);
+            state->boneMatrices = createBuffer(
+                    ctx->allocator(), ctx->device(), matsBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            {
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), state->boneMatrices.alloc, &mapped);
+                std::memcpy(static_cast<char*>(mapped),
+                            sm.bindMatrix.elements.data(),
+                            16 * sizeof(float));
+                std::memcpy(static_cast<char*>(mapped) + 16 * sizeof(float),
+                            sm.bindMatrixInverse.elements.data(),
+                            16 * sizeof(float));
+                std::memset(static_cast<char*>(mapped) + 32 * sizeof(float),
+                            0, boneCount * 16 * sizeof(float));
+                vmaUnmapMemory(ctx->allocator(), state->boneMatrices.alloc);
+            }
+
+            // Descriptor set — wires base inputs + bone mats + BLAS outputs.
+            VkDescriptorSetAllocateInfo dsAi{};
+            dsAi.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            dsAi.descriptorPool     = skinningDescPool;
+            dsAi.descriptorSetCount = 1;
+            dsAi.pSetLayouts        = &skinningDsLayout;
+            check(vkAllocateDescriptorSets(ctx->device(), &dsAi, &state->skinDescSet),
+                  "vkAllocateDescriptorSets(skinning)");
+
+            std::array<VkDescriptorBufferInfo, 7> bi{};
+            const Buffer* bufs[7] = {
+                    &state->baseVertex, &state->baseNormal,
+                    &state->skinIndex,  &state->skinWeight,
+                    &state->boneMatrices,
+                    &state->blas->vertex, &state->blas->normal,
+            };
+            std::array<VkWriteDescriptorSet, 7> wr{};
+            for (uint32_t i = 0; i < 7; ++i) {
+                bi[i].buffer        = bufs[i]->handle;
+                bi[i].offset        = 0;
+                bi[i].range         = VK_WHOLE_SIZE;
+                wr[i]               = {};
+                wr[i].sType         = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                wr[i].dstSet        = state->skinDescSet;
+                wr[i].dstBinding    = i;
+                wr[i].descriptorCount = 1;
+                wr[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                wr[i].pBufferInfo     = &bi[i];
+            }
+            vkUpdateDescriptorSets(ctx->device(),
+                                   static_cast<uint32_t>(wr.size()),
+                                   wr.data(), 0, nullptr);
+
+            // BLAS rebuild scratch buffer (persistent — sized once, reused).
+            VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+            triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+            triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            triData.vertexData.deviceAddress = state->blas->vertex.address;
+            triData.vertexStride = 3 * sizeof(float);
+            triData.maxVertex    = vertexCount - 1;
+            if (state->indexed) {
+                triData.indexType = VK_INDEX_TYPE_UINT32;
+                triData.indexData.deviceAddress = state->blas->index.address;
+            } else {
+                triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+            }
+            VkAccelerationStructureGeometryKHR blasGeom{};
+            blasGeom.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            blasGeom.geometryType  = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            blasGeom.geometry.triangles = triData;
+            blasGeom.flags         = 0;
+            VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
+            blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+            blasBuild.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                              VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+            blasBuild.mode  = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            blasBuild.geometryCount = 1;
+            blasBuild.pGeometries   = &blasGeom;
+            blasBuild.dstAccelerationStructure = state->blas->as;
+            VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
+            blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+            ctx->rt().getAccelerationStructureBuildSizes(
+                    ctx->device(),
+                    VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                    &blasBuild, &state->primitiveCount, &blasSizes);
+            state->blasScratchSize = blasSizes.buildScratchSize;
+            state->blasScratch = createAsScratchBuffer(
+                    ctx->allocator(), ctx->device(), state->blasScratchSize);
 
             auto* raw = state.get();
             skinnedMeshStates.emplace(&sm, std::move(state));
-
-            // Initial skin so the BLAS reflects the current pose, not bind pose.
+            // First-frame refresh: upload bones + queue a rebuild so the BLAS
+            // reflects the current pose, not bind pose, when the next frame
+            // records.
             refreshSkinnedBlas(sm, *raw);
             return raw;
         }
@@ -1687,103 +1874,41 @@ namespace threepp {
         // TLAS reference to it — stay valid). The TLAS doesn't need refit
         // for pose-only changes; the instance's transform is unchanged.
         void refreshSkinnedBlas(SkinnedMesh& sm, SkinnedMeshState& st) {
-            cpuSkin(sm, st.deformedPositions, st.deformedNormals);
-            if (st.deformedPositions.empty() || !st.blas) return;
+            if (!st.blas || !sm.skeleton || st.boneCount == 0) return;
 
-            // Per-vertex motion source for hybrid raster pass only. Reverted
-            // from PT-side use after the chit-side prev-vertex interpolation
-            // was found to bloat the kernel and tank FPS without resolving
-            // the underlying skinned-mesh "lingering pixels" problem (which
-            // was about prev-frame normal/shading state, not position).
-            if (hybridEnabled_ && st.blas->prevVertex.handle != VK_NULL_HANDLE) {
-                void* prevMap = nullptr;
-                void* currMap = nullptr;
-                vmaMapMemory(ctx->allocator(), st.blas->prevVertex.alloc, &prevMap);
-                vmaMapMemory(ctx->allocator(), st.blas->vertex.alloc,     &currMap);
-                std::memcpy(prevMap, currMap,
-                            st.deformedPositions.size() * sizeof(float));
-                vmaUnmapMemory(ctx->allocator(), st.blas->vertex.alloc);
-                vmaUnmapMemory(ctx->allocator(), st.blas->prevVertex.alloc);
-            }
-
+            // Recompute per-bone matrix = bones[b]->matrixWorld * boneInverse[b].
+            // Mirrors what cpuSkin used to do on host; cheap (a few dozen
+            // matrix multiplies). Upload into the bones[..] section of the
+            // host-visible boneMatrices buffer (skipping the [bindMat, bindInv]
+            // prefix written once in ensureSkinnedBlas).
+            const auto& skel = *sm.skeleton;
             void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), st.blas->vertex.alloc, &mapped);
-            std::memcpy(mapped, st.deformedPositions.data(),
-                        st.deformedPositions.size() * sizeof(float));
-            vmaUnmapMemory(ctx->allocator(), st.blas->vertex.alloc);
-
-            vmaMapMemory(ctx->allocator(), st.blas->normal.alloc, &mapped);
-            std::memcpy(mapped, st.deformedNormals.data(),
-                        st.deformedNormals.size() * sizeof(float));
-            vmaUnmapMemory(ctx->allocator(), st.blas->normal.alloc);
-
-            // Rebuild the BLAS contents in-place. We use BUILD (not UPDATE)
-            // because large pose changes can degrade an UPDATE'd BVH, and
-            // BUILD lets us treat each frame uniformly without tracking
-            // build-vs-update scratch sizes separately.
-            auto* posAttr = sm.geometry()->getAttribute<float>("position");
-            auto* idxAttr = sm.geometry()->getIndex();
-            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
-            const bool indexed = idxAttr != nullptr;
-            const uint32_t primitiveCount = indexed
-                    ? static_cast<uint32_t>(idxAttr->count() / 3)
-                    : vertexCount / 3;
-
-            VkAccelerationStructureGeometryTrianglesDataKHR triData{};
-            triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-            triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-            triData.vertexData.deviceAddress = st.blas->vertex.address;
-            triData.vertexStride = 3 * sizeof(float);
-            triData.maxVertex = vertexCount - 1;
-            if (indexed) {
-                triData.indexType = VK_INDEX_TYPE_UINT32;
-                triData.indexData.deviceAddress = st.blas->index.address;
-            } else {
-                triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+            vmaMapMemory(ctx->allocator(), st.boneMatrices.alloc, &mapped);
+            char* dst = static_cast<char*>(mapped) + 32 * sizeof(float);
+            for (uint32_t b = 0; b < st.boneCount; ++b) {
+                Matrix4 m;
+                if (b < skel.bones.size() && skel.bones[b]) {
+                    m.multiplyMatrices(*skel.bones[b]->matrixWorld, skel.boneInverses[b]);
+                }
+                std::memcpy(dst + b * 16 * sizeof(float),
+                            m.elements.data(), 16 * sizeof(float));
             }
+            vmaUnmapMemory(ctx->allocator(), st.boneMatrices.alloc);
 
-            VkAccelerationStructureGeometryKHR blasGeom{};
-            blasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-            blasGeom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-            blasGeom.geometry.triangles = triData;
-            blasGeom.flags = 0;
-
-            VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
-            blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-            blasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-            blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
-                              VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
-            blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-            blasBuild.geometryCount = 1;
-            blasBuild.pGeometries = &blasGeom;
-            blasBuild.dstAccelerationStructure = st.blas->as;
-
-            VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
-            blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-            ctx->rt().getAccelerationStructureBuildSizes(
-                    ctx->device(),
-                    VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                    &blasBuild, &primitiveCount, &blasSizes);
-
-            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
-            blasBuild.scratchData.deviceAddress = scratch.address;
-
-            VkAccelerationStructureBuildRangeInfoKHR range{};
-            range.primitiveCount = primitiveCount;
-            const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
-
-            VkCommandBuffer cb = beginOneShot();
-            ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
-            endAndSubmitOneShot(cb);
-            destroyBuffer(ctx->allocator(), scratch);
-
-            // Cache the bone matrices for next frame's dirty detection.
-            const auto& bm = sm.skeleton->boneMatrices;
+            // Cache the canonical bone matrices for next-frame dirty detection
+            // (still uses Skeleton::boneMatrices since that's the host-visible
+            // change signal the dirty path reads).
+            const auto& bm = skel.boneMatrices;
             if (st.prevBoneMats.size() == bm.size()) {
                 std::memcpy(st.prevBoneMats.data(), bm.data(), bm.size() * sizeof(float));
             } else {
                 st.prevBoneMats = bm;
             }
+
+            // Queue for per-frame skinning compute + BLAS rebuild. The actual
+            // GPU work is recorded into the main command buffer at the start
+            // of recordCommandBuffer — no blocking submit here.
+            pendingSkinnedRebuilds_.push_back(&st);
         }
 
         // Re-upload vertex/normal/uv/index data from a BufferGeometry whose
@@ -3613,6 +3738,12 @@ namespace threepp {
                 }
                 for (auto it = skinnedMeshStates.begin(); it != skinnedMeshStates.end(); ) {
                     if (it->second->liveCheck.expired()) {
+                        destroyBuffer(ctx->allocator(), it->second->baseVertex);
+                        destroyBuffer(ctx->allocator(), it->second->baseNormal);
+                        destroyBuffer(ctx->allocator(), it->second->skinIndex);
+                        destroyBuffer(ctx->allocator(), it->second->skinWeight);
+                        destroyBuffer(ctx->allocator(), it->second->boneMatrices);
+                        destroyBuffer(ctx->allocator(), it->second->blasScratch);
                         auto& rec = it->second->blas;
                         if (rec) {
                             if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);
@@ -7246,6 +7377,81 @@ namespace threepp {
             vkDestroyShaderModule(ctx->device(), amod, nullptr);
         }
 
+        // GPU skinning pipeline. One descriptor set per SkinnedMesh, allocated
+        // from a dedicated pool (sized to a generous max). The shader is a
+        // straight LBS — see skinning.comp. Replaces cpuSkin() entirely; the
+        // dispatch is recorded into the main per-frame cmd buffer alongside
+        // the BLAS rebuild, with barriers between them.
+        void createSkinningPipeline() {
+            // Set-0 layout: 7 storage buffers.
+            std::array<VkDescriptorSetLayoutBinding, 7> sb{};
+            for (uint32_t i = 0; i < sb.size(); ++i) {
+                sb[i].binding         = i;
+                sb[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                sb[i].descriptorCount = 1;
+                sb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+            VkDescriptorSetLayoutCreateInfo slci{};
+            slci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            slci.bindingCount = static_cast<uint32_t>(sb.size());
+            slci.pBindings    = sb.data();
+            check(vkCreateDescriptorSetLayout(ctx->device(), &slci, nullptr, &skinningDsLayout),
+                  "vkCreateDescriptorSetLayout(skinning)");
+
+            // Pipeline layout: set 0 + push constant (vertexCount as u32).
+            VkPushConstantRange pcRange{};
+            pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            pcRange.offset     = 0;
+            pcRange.size       = sizeof(uint32_t);
+
+            VkPipelineLayoutCreateInfo plci{};
+            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            plci.setLayoutCount         = 1;
+            plci.pSetLayouts            = &skinningDsLayout;
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges    = &pcRange;
+            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &skinningPipelineLayout),
+                  "vkCreatePipelineLayout(skinning)");
+
+            VkShaderModuleCreateInfo smci{};
+            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            smci.codeSize = sizeof(kSkinningCompSpv);
+            smci.pCode    = kSkinningCompSpv;
+            VkShaderModule mod = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &smci, nullptr, &mod),
+                  "vkCreateShaderModule(skinning)");
+
+            VkPipelineShaderStageCreateInfo stage{};
+            stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+            stage.module = mod;
+            stage.pName  = "main";
+
+            VkComputePipelineCreateInfo cpci{};
+            cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            cpci.stage  = stage;
+            cpci.layout = skinningPipelineLayout;
+            check(vkCreateComputePipelines(ctx->device(), VK_NULL_HANDLE, 1, &cpci, nullptr,
+                                           &skinningPipeline),
+                  "vkCreateComputePipelines(skinning)");
+            vkDestroyShaderModule(ctx->device(), mod, nullptr);
+
+            // Descriptor pool sized for up to 64 SkinnedMeshes — each set
+            // holds 7 storage buffers. Generous for typical scenes; resize
+            // if you have more skinned characters.
+            const uint32_t kMaxSkinnedMeshes = 64;
+            VkDescriptorPoolSize ps{};
+            ps.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            ps.descriptorCount = kMaxSkinnedMeshes * 7;
+            VkDescriptorPoolCreateInfo dpci{};
+            dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            dpci.maxSets       = kMaxSkinnedMeshes;
+            dpci.poolSizeCount = 1;
+            dpci.pPoolSizes    = &ps;
+            check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &skinningDescPool),
+                  "vkCreateDescriptorPool(skinning)");
+        }
+
         // Renderer-level water_displace.comp pipeline. Bindings 0..5 = three
         // (height, displacement) pairs of combined-image-samplers, all RG32F
         // spatial-domain images from the IFFT chain. The push constant carries
@@ -9450,6 +9656,107 @@ namespace threepp {
                 vkCmdResetQueryPool(cb, timestampPools[currentFrame],
                                     0, kTimingSlots);
                 timingMaskRecorded_[currentFrame] = 0u;
+            }
+
+            // ── Skinned-mesh GPU pipeline ──────────────────────────────────
+            // ensureSceneBuilt populated pendingSkinnedRebuilds_ with the
+            // states whose bones changed this frame and uploaded the new
+            // bone matrices to each state's host-visible boneMatrices buffer.
+            // Now record: one skinning dispatch per state → barrier → one
+            // BLAS rebuild per state → barrier. The BLAS rebuild reads the
+            // deformed vertex/normal buffers the dispatch just wrote. The
+            // raygen/raster downstream reads the BLAS via TLAS.
+            if (!pendingSkinnedRebuilds_.empty() &&
+                skinningPipeline != VK_NULL_HANDLE) {
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, skinningPipeline);
+                for (auto* st : pendingSkinnedRebuilds_) {
+                    vkCmdBindDescriptorSets(
+                            cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            skinningPipelineLayout, 0, 1,
+                            &st->skinDescSet, 0, nullptr);
+                    vkCmdPushConstants(
+                            cb, skinningPipelineLayout,
+                            VK_SHADER_STAGE_COMPUTE_BIT,
+                            0, sizeof(uint32_t), &st->vertexCount);
+                    const uint32_t gx = (st->vertexCount + 63u) / 64u;
+                    vkCmdDispatch(cb, gx, 1u, 1u);
+                }
+
+                // Compute write → AS build read + vertex attribute read +
+                // shader storage read. Single global memory barrier covers
+                // every pending mesh.
+                {
+                    VkMemoryBarrier2 mb{};
+                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                       VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
+                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                    mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                       VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
+                                       VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                    VkDependencyInfo dep{};
+                    dep.sType               = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep.memoryBarrierCount  = 1;
+                    dep.pMemoryBarriers     = &mb;
+                    vkCmdPipelineBarrier2(cb, &dep);
+                }
+
+                // BLAS rebuild per state — same code path as the old
+                // refreshSkinnedBlas, but recorded into the main cmd buffer
+                // and using each state's persistent scratch buffer.
+                for (auto* st : pendingSkinnedRebuilds_) {
+                    VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+                    triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+                    triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+                    triData.vertexData.deviceAddress = st->blas->vertex.address;
+                    triData.vertexStride = 3 * sizeof(float);
+                    triData.maxVertex    = st->vertexCount - 1;
+                    if (st->indexed) {
+                        triData.indexType = VK_INDEX_TYPE_UINT32;
+                        triData.indexData.deviceAddress = st->blas->index.address;
+                    } else {
+                        triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+                    }
+                    VkAccelerationStructureGeometryKHR blasGeom{};
+                    blasGeom.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+                    blasGeom.geometryType  = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+                    blasGeom.geometry.triangles = triData;
+                    blasGeom.flags         = 0;
+                    VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
+                    blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+                    blasBuild.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                    blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                                      VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+                    blasBuild.mode  = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+                    blasBuild.geometryCount = 1;
+                    blasBuild.pGeometries   = &blasGeom;
+                    blasBuild.dstAccelerationStructure = st->blas->as;
+                    blasBuild.scratchData.deviceAddress = st->blasScratch.address;
+                    VkAccelerationStructureBuildRangeInfoKHR range{};
+                    range.primitiveCount = st->primitiveCount;
+                    const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+                    ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
+                }
+
+                // AS build write → TLAS / RT_SHADER read.
+                {
+                    VkMemoryBarrier2 mb{};
+                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+                    mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                    mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+                    VkDependencyInfo dep{};
+                    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep.memoryBarrierCount = 1;
+                    dep.pMemoryBarriers    = &mb;
+                    vkCmdPipelineBarrier2(cb, &dep);
+                }
+
+                pendingSkinnedRebuilds_.clear();
             }
 
             // ── Hybrid raster G-buffer pass ─────────────────────────────────

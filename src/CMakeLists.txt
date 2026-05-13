@@ -893,6 +893,10 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/denoise_atrous.comp"
         kDenoiseAtrousCompSpv
         _denoise_atrous_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/skinning.comp"
+        kSkinningCompSpv
+        _skinning_spv_h)
     # FFT-based ocean (DisplacedMesh): Phillips spectrum, time-evolution,
     # IFFT (twiddle table + horizontal/vertical butterflies + permute) and
     # a vertex-displacement compute that writes into the BLAS vertex buffer.

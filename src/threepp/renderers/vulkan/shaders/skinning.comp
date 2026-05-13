@@ -1,0 +1,89 @@
+#version 460
+
+// GPU linear-blend skinning for SkinnedMesh. Runs once per skinned mesh
+// per frame (when bones changed), writes deformed positions/normals to
+// the BLAS vertex/normal buffers, then the BLAS rebuild reads them.
+//
+// Mirrors the math of VulkanRenderer.cpp's cpuSkin() (which it replaces):
+//   bindPos  = bindMatrix · localPos
+//   bindNrm  = upper3x3(bindMatrix) · localNrm
+//   accPos   = Σ_b w_b · (boneMat_b · bindPos)
+//   accNrm   = Σ_b w_b · (upper3x3(boneMat_b) · bindNrm)
+//   outPos   = bindMatrixInverse · accPos
+//   outNrm   = normalize(upper3x3(bindMatrixInverse) · accNrm)
+//
+// `boneMat_b` is the host-precomputed Skeleton::boneMatrices[b] =
+//   bones[b]->matrixWorld · boneInverses[b]
+// One mat4 per bone, uploaded to the bone-matrices buffer each animation
+// frame (a few KB; cheap).
+//
+// Layout convention for the matrices buffer:
+//   mats[0]     = bindMatrix
+//   mats[1]     = bindMatrixInverse
+//   mats[2..N+2]= bone matrices [0..N-1]
+// bindMatrix / bindMatrixInverse are constants per SkinnedMesh; written
+// once at ensureSkinnedBlas. Only the bones[..] portion is re-uploaded
+// per frame.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer BasePos  { float basePos[]; };
+layout(set = 0, binding = 1, std430) readonly buffer BaseNrm  { float baseNrm[]; };
+layout(set = 0, binding = 2, std430) readonly buffer SkinIdx  { vec4  skinIdx[]; };
+layout(set = 0, binding = 3, std430) readonly buffer SkinW    { vec4  skinW[]; };
+layout(set = 0, binding = 4, std430) readonly buffer MatsBuf  { mat4  mats[]; };
+layout(set = 0, binding = 5, std430)         buffer OutPos    { float outPos[]; };
+layout(set = 0, binding = 6, std430)         buffer OutNrm    { float outNrm[]; };
+
+layout(push_constant) uniform Pc {
+    uint vertexCount;
+} pc;
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.vertexCount) return;
+
+    const vec3 localPos = vec3(basePos[i * 3 + 0], basePos[i * 3 + 1], basePos[i * 3 + 2]);
+    const vec3 localNrm = vec3(baseNrm[i * 3 + 0], baseNrm[i * 3 + 1], baseNrm[i * 3 + 2]);
+
+    const mat4 bindMat    = mats[0];
+    const mat4 bindMatInv = mats[1];
+
+    // Apply bindMatrix to take the vertex from the SkinnedMesh's local
+    // frame to the bind-pose frame (the frame the boneInverses were
+    // computed in). For normals, drop translation by passing w=0.
+    const vec3 bindPos = (bindMat * vec4(localPos, 1.0)).xyz;
+    const vec3 bindNrm = (bindMat * vec4(localNrm, 0.0)).xyz;
+
+    const vec4 idx = skinIdx[i];
+    const vec4 w   = skinW[i];
+
+    vec3 accPos = vec3(0.0);
+    vec3 accNrm = vec3(0.0);
+    for (uint b = 0; b < 4u; ++b) {
+        const float wb = w[b];
+        if (wb == 0.0) continue;
+        // +2 to skip bindMatrix / bindMatrixInverse at the front of mats[].
+        const uint  bMatIdx = uint(idx[b]) + 2u;
+        const mat4  m       = mats[bMatIdx];
+
+        const vec3 bp = (m * vec4(bindPos, 1.0)).xyz;
+        accPos += bp * wb;
+
+        const vec3 bn = (m * vec4(bindNrm, 0.0)).xyz;
+        accNrm += bn * wb;
+    }
+
+    // Return to SkinnedMesh local frame.
+    const vec3 outPosLocal = (bindMatInv * vec4(accPos, 1.0)).xyz;
+    const vec3 outNrmLocal = (bindMatInv * vec4(accNrm, 0.0)).xyz;
+    const float nrmLen     = length(outNrmLocal);
+    const vec3  outNrmNorm = nrmLen > 0.0 ? outNrmLocal / nrmLen : vec3(0.0, 1.0, 0.0);
+
+    outPos[i * 3 + 0] = outPosLocal.x;
+    outPos[i * 3 + 1] = outPosLocal.y;
+    outPos[i * 3 + 2] = outPosLocal.z;
+    outNrm[i * 3 + 0] = outNrmNorm.x;
+    outNrm[i * 3 + 1] = outNrmNorm.y;
+    outNrm[i * 3 + 2] = outNrmNorm.z;
+}
