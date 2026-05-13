@@ -10,6 +10,7 @@
 // procedural sky come later; for now a single 40 m tile + an HDRI sky is
 // enough to validate the geometry pipeline and BLAS-rebuild-per-frame.
 
+#include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/input/KeyListener.hpp"
@@ -20,6 +21,8 @@
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/math/Box3.hpp"
+#include "threepp/math/Matrix3.hpp"
+#include "threepp/math/Matrix4.hpp"
 #include "threepp/objects/DisplacedMesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/threepp.hpp"
@@ -124,7 +127,8 @@ int main() {
     Canvas canvas("Vulkan PT  Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
     VulkanRenderer renderer(canvas);
     renderer.setDenoise(true);
-    renderer.setRestirDIEnabled(false);
+    renderer.setRestirDIEnabled(true);
+    renderer.setHybridEnabled(true);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 0.7f;
 
@@ -233,6 +237,148 @@ int main() {
     BoatInput bi;
     canvas.addKeyListener(bi);
 
+    // ── Auto-pilot waypoints ───────────────────────────────────────────────
+    // Closed Catmull-Rom loop the vessel follows when autopilot is on.
+    // Five waypoints, one per buoy variant loaded from the GLB below.
+    // Points are world-space (x, 0, z); y=0 — boat heave still comes from
+    // wave sampling so it rides crests naturally along the path.
+    // Centripetal parameterization avoids cusps/loops in non-uniform spacing;
+    // closed=true makes the curve wrap so reaching u=1 seamlessly resets to
+    // u=0 (continuous tangent at the seam).
+    std::vector<Vector3> waypoints = {
+            Vector3(-200.f, 0.f, -150.f),
+            Vector3( 250.f, 0.f, -200.f),
+            Vector3( 320.f, 0.f,  100.f),
+            Vector3(   0.f, 0.f,  280.f),
+            Vector3(-300.f, 0.f,   50.f),
+    };
+    CatmullRomCurve3 navCurve(waypoints, /*closed=*/true,
+                              CatmullRomCurve3::centripetal, 0.5f);
+    const float navCurveLength = navCurve.getLength();
+
+    // ── Buoys at each waypoint ─────────────────────────────────────────────
+    // Loaded from a GLB containing 5 distinct buoy meshes as top-level
+    // children. We use the GLB's scene root as the buoy group directly
+    // (Object3D doesn't expose the owning shared_ptr for children, so the
+    // cleanest reparent is to keep them where they are and just reposition
+    // each in place). Root transform is reset so the children's local
+    // positions ARE their world positions.
+    //
+    // Fallback path: if the GLB is missing or doesn't expose ≥5 children,
+    // emissive spheres take over. Path tracer's emissive NEE picks them up
+    // (low intensity so they don't double as light sources).
+    auto buoyFallbackMat = MeshStandardMaterial::create({
+            {"color", Color(0.95f, 0.25f, 0.1f)},
+            {"emissive", Color(0.95f, 0.25f, 0.1f)},
+            {"emissiveIntensity", 0.6f},
+            {"roughness", 0.8f},
+    });
+    auto makeFallbackBuoy = [&] {
+        return Mesh::create(SphereGeometry::create(1.0f, 16, 12), buoyFallbackMat);
+    };
+
+    std::shared_ptr<Object3D> buoyRoot;
+    try {
+        auto buoyGltf = gltfLoader.load(std::string(DATA_FOLDER) +
+                                        "/models/gltf/ocean_buoy/ocean_buoy_v.2_tao_buoy.glb");
+        if (buoyGltf && buoyGltf->scene) {
+            auto obj = buoyGltf->scene->getObjectByName("TAO_L.obj.cleaner.materialmerger.gles");
+            buoyRoot = obj->clone();
+
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to load buoy GLB: " << e.what() << std::endl;
+    }
+
+    // Per-buoy state captured across frames for buoyancy. Filled in the
+    // GLB-success branch below; the animate loop sees an empty vector if
+    // the fallback sphere path took over (and skips buoyancy then).
+    struct BuoyState {
+        float   worldX = 0.f, worldZ = 0.f;  // fixed waypoint position
+        Vector3 baseLocal;                   // anchored "rest" local position
+        float   worldYOffset = 0.f;          // current bob (world units)
+        float   vY = 0.f;                    // bob velocity (world units / s)
+    };
+    std::vector<BuoyState> buoyStates;
+    Matrix3 buoyInvRotScale;// captures buoyRoot's inverse rotation+scale for
+                            // converting world-Y bob deltas back to local.
+
+    if (buoyRoot && buoyRoot->children.size() >= waypoints.size()) {
+        // GLB is Z-up at ~10× our scene scale; the rotation + uniform 0.1
+        // scale lives on buoyRoot. Because of that parent transform, placing
+        // each child at the waypoint requires going through invRootMat —
+        // setting child.position directly in local space would put buoys at
+        // (0.1·wp) in world coords, and a 15 m underwater spot in Y because
+        // the X-axis rotation maps local Z to world Y.
+        buoyRoot->position.set(0.f, 0.f, 0.f);
+        buoyRoot->rotation.x = -math::PI / 2.f;
+        buoyRoot->scale *= 0.1f;
+        buoyRoot->updateMatrixWorld(true);
+        Matrix4 invRootMat;
+        invRootMat.copy(*buoyRoot->matrixWorld).invert();
+        buoyInvRotScale.setFromMatrix4(invRootMat);
+
+        // Per-buoy Y anchoring: GLB variants have different origin
+        // conventions (one is centred way below its body, hence the
+        // hovering buoy in the first screenshot). Computing each child's
+        // world bbox and shifting so bbox.min().y sits at a uniform depth
+        // below the waterline puts all five buoys at the same visual height.
+        constexpr float kBuoyBottomBelowWater = 0.8f;
+        buoyStates.resize(waypoints.size());
+        for (size_t i = 0; i < waypoints.size(); ++i) {
+            auto* child = buoyRoot->children[i];
+            // Step 1: put the buoy at (waypoint.x, 0, waypoint.z) in world.
+            Vector3 wantWorld(waypoints[i].x, 0.f, waypoints[i].z);
+            Vector3 wantLocal = wantWorld;
+            wantLocal.applyMatrix4(invRootMat);
+            child->position.copy(wantLocal);
+            child->updateMatrixWorld(true);
+
+            // Step 2: compute world bbox, derive a vertical shift that
+            // anchors the body's bottom at -kBuoyBottomBelowWater (slightly
+            // submerged so the float ring intersects the chop naturally).
+            Box3 bbox;
+            bbox.setFromObject(*child);
+            const float deltaWorldY = -kBuoyBottomBelowWater - bbox.min().y;
+            Vector3 dLocal(0.f, deltaWorldY, 0.f);
+            dLocal.applyMatrix3(buoyInvRotScale);
+            child->position.add(dLocal);
+
+            // Snapshot the "rest" local position so the per-frame buoyancy
+            // step can offset cleanly without drifting.
+            buoyStates[i].worldX = waypoints[i].x;
+            buoyStates[i].worldZ = waypoints[i].z;
+            buoyStates[i].baseLocal = child->position;
+        }
+        scene.add(buoyRoot);
+    } else {
+        if (buoyRoot) {
+            std::cerr << "Buoy GLB has " << buoyRoot->children.size()
+                      << " children (need " << waypoints.size() << "); using fallback spheres."
+                      << std::endl;
+        }
+        auto buoyGroup = Group::create();
+        for (const Vector3& wp : waypoints) {
+            auto buoy = makeFallbackBuoy();
+            buoy->position.set(wp.x, 1.5f, wp.z);
+            buoyGroup->add(buoy);
+        }
+        scene.add(buoyGroup);
+    }
+
+    // Start the vessel at the first waypoint, heading along the initial tangent.
+    bool  autoPilot      = true;
+    float autoU          = 0.f;   // arc-length parameter in [0, 1)
+    float autoCruiseSpeed = 6.f;  // m/s (~12 kn) — moderate cruise
+    {
+        Vector3 p0, t0;
+        navCurve.getPointAt(0.f, p0);
+        navCurve.getTangentAt(0.f, t0);
+        bs.position.set(p0.x, 0.f, p0.z);
+        bs.yaw          = std::atan2(t0.x, t0.z);
+        bs.forwardSpeed = autoCruiseSpeed;
+    }
+
     // Far-clip raised so the horizon doesn't get cut at the elevated/distant
     // camera. Initial position is offset from the boat; OrbitControls'
     // target is updated each frame to follow the boat so orbiting always
@@ -243,6 +389,21 @@ int main() {
     controls.target.set(0.f, 1.f, 0.f);
     controls.update();
 
+    // ── Camera modes ──────────────────────────────────────────────────────
+    // C cycles: Free orbit → Side-mounted (starboard, forward-facing) → Chase.
+    // SideFixed/Chase override camera.position + lookAt each frame; the
+    // OrbitControls state is left alone so switching back to Free restores
+    // whatever orbit angle the user left it at.
+    enum class CamMode : int { Free = 0, SideFixed = 1, Chase = 2 };
+    CamMode camMode = CamMode::Free;
+    const char* camModeNames[] = {"Free (orbit)", "Side (forward)", "Chase"};
+    KeyAdapter camKey(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
+        if (ev.key == Key::C) {
+            camMode = static_cast<CamMode>((static_cast<int>(camMode) + 1) % 3);
+        }
+    });
+    canvas.addKeyListener(camKey);
+
     float waveScale = ocean->params.waveScale;
     float choppiness = ocean->params.choppiness;
     float windSpeed = ocean->params.windSpeed;
@@ -252,6 +413,20 @@ int main() {
     int   spp       = renderer.samplesPerPixel();
     float fps = 0.f, fpsAccum = 0.f;
     int   fpsFrames = 0;
+
+    // ── Radar state ────────────────────────────────────────────────────────
+    // Heading-up scope, 500 m range, 4 s sweep period (15 RPM — realistic
+    // small-craft). Per-target intensity is set to 1 when the sweep crosses
+    // its bearing, then decays exponentially (3 s time constant ≈ slightly
+    // less than one full rotation). Cap intensity by range so distant blips
+    // look weaker than nearby ones — closer to a real CRT.
+    bool  radarOn          = true;
+    float radarRangeM      = 500.f;
+    float radarSweepAngle  = 0.f;        // [0, 2π), advances clockwise
+    constexpr float kRadarSweepPeriod = 4.f;
+    constexpr float kRadarBlipTau     = 3.f;
+    constexpr int   kMaxRadarTargets  = 16;
+    std::array<float, kMaxRadarTargets> radarBlipIntensity{};
 
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({0, 0});
@@ -267,9 +442,24 @@ int main() {
         ImGui::Text("Speed: %.1f m/s   Heading: %.0f°", bs.forwardSpeed,
                     bs.yaw * 180.f / 3.14159f);
         ImGui::Text("Pos: %7.1f, %7.1f", bs.position.x, bs.position.z);
-        ImGui::Text("Keys  W:%d  A:%d  S:%d  D:%d",
+        ImGui::Text("Keys  W:%d  A:%d  S:%d  D:%d   (C = cycle camera)",
                     bi.W ? 1 : 0, bi.A ? 1 : 0, bi.S ? 1 : 0, bi.D ? 1 : 0);
+        ImGui::Text("Camera: %s", camModeNames[static_cast<int>(camMode)]);
         ImGui::Separator();
+
+        ImGui::TextUnformatted("Autopilot");
+        ImGui::Checkbox("Follow waypoint loop", &autoPilot);
+        if (autoPilot) {
+            ImGui::SliderFloat("Cruise speed (m/s)", &autoCruiseSpeed, 1.f, 12.f, "%.1f");
+            const int wpCount = static_cast<int>(waypoints.size());
+            const int currentWp = std::min(wpCount - 1,
+                                           static_cast<int>(autoU * wpCount));
+            ImGui::Text("Waypoint %d / %d   (u = %.2f)", currentWp + 1, wpCount, autoU);
+        } else {
+            ImGui::TextDisabled("WASD to steer manually.");
+        }
+        ImGui::Separator();
+
         if (ImGui::SliderFloat("Wave scale", &waveScale, 0.f, 3.f, "%.2f"))
             ocean->params.waveScale = waveScale;
         if (ImGui::SliderFloat("Choppiness", &choppiness, 0.f, 1.0f, "%.2f"))
@@ -288,6 +478,99 @@ int main() {
         if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
             renderer.setSamplesPerPixel(spp);
         ImGui::End();
+
+        // ── Radar HUD ─────────────────────────────────────────────────────
+        // Separate floating window, top-right of the viewport. Heading-up
+        // CRT-green scope drawn entirely with ImDrawList primitives over a
+        // dark phosphor disc. Range slider lives inside the radar window.
+        if (radarOn) {
+            const ImGuiViewport* vp = ImGui::GetMainViewport();
+            const float radarSize = 260.f;
+            ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - radarSize - 16.f,
+                                           vp->WorkPos.y + 16.f));
+            ImGui::SetNextWindowSize(ImVec2(radarSize, 0.f));
+            ImGui::Begin("Radar", &radarOn,
+                         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const ImVec2 cursor = ImGui::GetCursorScreenPos();
+            const float scopeDim = radarSize - 16.f;
+            const ImVec2 center(cursor.x + scopeDim * 0.5f,
+                                cursor.y + scopeDim * 0.5f);
+            const float R = scopeDim * 0.5f - 4.f;
+
+            // Bearing → scope screen position. Negated sin keeps the radar's
+            // left/right in sync with the chase/side camera (this scene uses
+            // left-handed-style boatRight so world +X is on the LEFT of any
+            // forward-looking view).
+            auto scopePos = [&](float angle, float radius) {
+                return ImVec2(center.x - std::sin(angle) * radius,
+                              center.y - std::cos(angle) * radius);
+            };
+
+            // Background disc (dark CRT phosphor)
+            dl->AddCircleFilled(center, R, IM_COL32(8, 24, 8, 235), 64);
+            // Range rings — 4 concentric, at 25/50/75/100% of range
+            for (int k = 1; k <= 4; ++k) {
+                const float r = R * (float)k / 4.f;
+                dl->AddCircle(center, r, IM_COL32(0, 130, 0, 200), 64, 1.0f);
+            }
+            // Cross-hairs (vertical = vessel forward; horizontal = abeam)
+            dl->AddLine(ImVec2(center.x, center.y - R), ImVec2(center.x, center.y + R),
+                        IM_COL32(0, 90, 0, 160), 1.0f);
+            dl->AddLine(ImVec2(center.x - R, center.y), ImVec2(center.x + R, center.y),
+                        IM_COL32(0, 90, 0, 160), 1.0f);
+
+            // Sweep wedge: 16 segments, each step wide arc, fading toward
+            // the trail end. Correct math: segment k spans [sweep - k·step,
+            // sweep - (k+1)·step] where step = trailArc / trailSteps. The
+            // earlier double-divide bug packed every triangle on top of the
+            // leading edge — fixed now.
+            constexpr int   trailSteps = 16;
+            constexpr float trailArc   = 1.4f;
+            constexpr float step       = trailArc / trailSteps;
+            for (int k = 0; k < trailSteps; ++k) {
+                const float a0 = radarSweepAngle - (float)k       * step;
+                const float a1 = radarSweepAngle - (float)(k + 1) * step;
+                const int alpha = static_cast<int>(140.f * (1.f - (float)k / trailSteps));
+                dl->AddTriangleFilled(center, scopePos(a0, R), scopePos(a1, R),
+                                      IM_COL32(40, 220, 40, alpha));
+            }
+            // Sweep leading edge — bright line
+            dl->AddLine(center, scopePos(radarSweepAngle, R),
+                        IM_COL32(140, 255, 140, 255), 1.6f);
+
+            // Blips — halo glow + bright core for the CRT look.
+            for (size_t i = 0; i < buoyStates.size() && i < kMaxRadarTargets; ++i) {
+                const float a = radarBlipIntensity[i];
+                if (a <= 0.01f) continue;
+                const float dxw = buoyStates[i].worldX - bs.position.x;
+                const float dzw = buoyStates[i].worldZ - bs.position.z;
+                const float dist = std::sqrt(dxw * dxw + dzw * dzw);
+                if (dist > radarRangeM) continue;
+                const float bearing = std::atan2(dxw, dzw) - bs.yaw;
+                const float r       = (dist / radarRangeM) * R;
+                const ImVec2 pos    = scopePos(bearing, r);
+                dl->AddCircleFilled(pos, 7.f,
+                                    IM_COL32(120, 255, 120, (int)(90.f * a)), 14);
+                dl->AddCircleFilled(pos, 3.5f,
+                                    IM_COL32(200, 255, 200, (int)(255.f * a)), 12);
+            }
+
+            // Own-ship marker (triangle pointing forward = up)
+            const float ts = 7.f;
+            dl->AddTriangleFilled(
+                    ImVec2(center.x,             center.y - ts),
+                    ImVec2(center.x - ts * 0.6f, center.y + ts * 0.55f),
+                    ImVec2(center.x + ts * 0.6f, center.y + ts * 0.55f),
+                    IM_COL32(220, 255, 220, 255));
+
+            // Reserve the drawn area + readouts below.
+            ImGui::Dummy(ImVec2(scopeDim, scopeDim));
+            ImGui::Text("Range: %.0f m   Heading: %.0f°",
+                        radarRangeM, bs.yaw * 180.f / 3.14159f);
+            ImGui::SliderFloat("##rng", &radarRangeM, 100.f, 1000.f, "Range %.0f m");
+            ImGui::End();
+        }
     });
 
     IOCapture ioCapture;
@@ -314,24 +597,46 @@ int main() {
         }
 
         // === Boat steering integration ===
-        // Linear: W = forward thrust, S = reverse. Speed clamped to ±vMax;
-        // a linear drag (0.7/s) gives a coast-down once thrust released.
-        const float thrust = (bi.W ? 6.0f : 0.f) - (bi.S ? 4.0f : 0.f);
-        bs.forwardSpeed += thrust * dt;
-        bs.forwardSpeed -= bs.forwardSpeed * 0.5f * dt;
-        bs.forwardSpeed = std::clamp(bs.forwardSpeed, -4.f, 8.f);
-        // Yaw: A = left, D = right. Rate scales with speed (a stationary
-        // hull doesn't yaw easily). Min factor 0.1 keeps the rudder usable
-        // when nearly stopped.
-        const float yawInput = (bi.A ? 1.0f : 0.f) - (bi.D ? 1.0f : 0.f);
-        const float speedFactor = std::clamp(std::abs(bs.forwardSpeed) / 5.f, 0.1f, 1.0f);
-        bs.yaw += yawInput * 0.6f * speedFactor * dt;
-        // Position: boat moves along its heading. Convention: yaw=0 → +Z,
-        // matching the OrbitControls default forward.
-        const float cosY = std::cos(bs.yaw);
-        const float sinY = std::sin(bs.yaw);
-        bs.position.x += sinY * bs.forwardSpeed * dt;
-        bs.position.z += cosY * bs.forwardSpeed * dt;
+        // Autopilot path: advance arc-length parameter u by cruise speed × dt
+        // along the closed nav curve and lift position + heading directly
+        // from the curve. Yaw aligns with the tangent so the boat always
+        // faces "forward along the path". forwardSpeed is set to the cruise
+        // speed so the wake reads correctly. closed=true on the curve means
+        // u wraps seamlessly — fmod handles the [0, 1) wrap, and the loop
+        // restarts without a heading jump.
+        float cosY, sinY;
+        if (autoPilot && navCurveLength > 1e-3f) {
+            autoU += (autoCruiseSpeed * dt) / navCurveLength;
+            autoU = std::fmod(autoU, 1.f);
+            if (autoU < 0.f) autoU += 1.f;
+            Vector3 p, tan;
+            navCurve.getPointAt(autoU, p);
+            navCurve.getTangentAt(autoU, tan);
+            bs.position.set(p.x, 0.f, p.z);
+            bs.yaw          = std::atan2(tan.x, tan.z);
+            bs.forwardSpeed = autoCruiseSpeed;
+            cosY = std::cos(bs.yaw);
+            sinY = std::sin(bs.yaw);
+        } else {
+            // Manual: W = forward thrust, S = reverse. Speed clamped to ±vMax;
+            // a linear drag (0.7/s) gives a coast-down once thrust released.
+            const float thrust = (bi.W ? 6.0f : 0.f) - (bi.S ? 4.0f : 0.f);
+            bs.forwardSpeed += thrust * dt;
+            bs.forwardSpeed -= bs.forwardSpeed * 0.5f * dt;
+            bs.forwardSpeed = std::clamp(bs.forwardSpeed, -4.f, 8.f);
+            // Yaw: A = left, D = right. Rate scales with speed (a stationary
+            // hull doesn't yaw easily). Min factor 0.1 keeps the rudder usable
+            // when nearly stopped.
+            const float yawInput = (bi.A ? 1.0f : 0.f) - (bi.D ? 1.0f : 0.f);
+            const float speedFactor = std::clamp(std::abs(bs.forwardSpeed) / 5.f, 0.1f, 1.0f);
+            bs.yaw += yawInput * 0.6f * speedFactor * dt;
+            // Position: boat moves along its heading. Convention: yaw=0 → +Z,
+            // matching the OrbitControls default forward.
+            cosY = std::cos(bs.yaw);
+            sinY = std::sin(bs.yaw);
+            bs.position.x += sinY * bs.forwardSpeed * dt;
+            bs.position.z += cosY * bs.forwardSpeed * dt;
+        }
 
         // === Hydrodynamics from sampled wave surface ===
         // Sample 5 points: centre + four corners of the bounding rectangle.
@@ -411,12 +716,113 @@ int main() {
         // injected in water_displace.comp from the same pose plus speed.
         ocean->wake.forwardSpeed = bs.forwardSpeed;
 
-        // No camera follow — was making the boat read as "stuck" at the
-        // camera centre, since camera and target moved with it. Let the
-        // user orbit / zoom manually; the boat translates freely in world
-        // and the Pos readout in the UI shows actual coordinates.
-        controls.target.set(bs.position.x, bs.y, bs.position.z);
-        controls.update();
+        // ── Buoy buoyancy ──────────────────────────────────────────────────
+        // Each buoy spring-damps toward the wave height at its fixed waypoint
+        // position. Stiffer than the boat (1.6 Hz natural freq vs 0.8) so the
+        // small bodies track chop visibly; under-damped (ζ=0.55) so they get
+        // a subtle bob after a crest passes through. Same buoyancy cascade
+        // mask as the boat (swells + mid; cascade-2 chop is too fine to push
+        // a buoy meaningfully).
+        if (!buoyStates.empty() && buoyRoot) {
+            constexpr float kBuoyOmega = 2.f * 3.14159f * 1.6f;
+            constexpr float kBuoyK     = kBuoyOmega * kBuoyOmega;
+            constexpr float kBuoyC     = 2.f * 0.55f * kBuoyOmega;
+            for (size_t i = 0; i < buoyStates.size(); ++i) {
+                BuoyState& s = buoyStates[i];
+                const float h = ocean->sampleHeight(s.worldX, s.worldZ, kBuoyancyMask);
+                const float err = h - s.worldYOffset;
+                const float accel = err * kBuoyK - s.vY * kBuoyC;
+                s.vY += accel * dt;
+                s.worldYOffset += s.vY * dt;
+                Vector3 dLocal(0.f, s.worldYOffset, 0.f);
+                dLocal.applyMatrix3(buoyInvRotScale);
+                auto* child = buoyRoot->children[i];
+                child->position.copy(s.baseLocal).add(dLocal);
+            }
+        }
+
+        // ── Radar sweep + blip update ─────────────────────────────────────
+        // Sweep advances clockwise (positive angle from "up" = forward).
+        // For each target (buoys only here), compute heading-up bearing and
+        // check if the sweep just crossed it this frame. When it crosses,
+        // set the blip intensity = range-attenuated strength; otherwise
+        // decay toward zero. The ImGui block below renders the scope.
+        if (radarOn) {
+            const float prevSweep = radarSweepAngle;
+            const float twoPi     = 2.f * 3.14159265f;
+            const float omega     = twoPi / kRadarSweepPeriod;
+            radarSweepAngle = std::fmod(radarSweepAngle + omega * dt, twoPi);
+            const float decay     = std::exp(-dt / kRadarBlipTau);
+            // Helper: does the angle `tgt` ∈ [0, 2π) fall in the swept arc
+            // (prev → curr)? Handles wraparound (prev > curr).
+            auto inSweep = [&](float prev, float curr, float tgt) {
+                if (prev <= curr) return tgt >= prev && tgt <= curr;
+                return tgt >= prev || tgt <= curr;
+            };
+            for (size_t i = 0; i < buoyStates.size() && i < kMaxRadarTargets; ++i) {
+                const float dxw = buoyStates[i].worldX - bs.position.x;
+                const float dzw = buoyStates[i].worldZ - bs.position.z;
+                const float dist = std::sqrt(dxw * dxw + dzw * dzw);
+                radarBlipIntensity[i] *= decay;
+                if (dist > radarRangeM) continue;
+                // Heading-up bearing: world-bearing − yaw, wrapped to [0, 2π).
+                float bearing = std::atan2(dxw, dzw) - bs.yaw;
+                bearing = std::fmod(bearing, twoPi);
+                if (bearing < 0.f) bearing += twoPi;
+                if (inSweep(prevSweep, radarSweepAngle, bearing)) {
+                    // Range-attenuated echo: 1 close, ~0.3 at the edge.
+                    const float r01 = dist / radarRangeM;
+                    const float strength = std::clamp(1.f - 0.7f * r01, 0.3f, 1.f);
+                    radarBlipIntensity[i] = std::max(radarBlipIntensity[i], strength);
+                }
+            }
+        }
+
+        // ── Camera pose per mode ──────────────────────────────────────────
+        // Boat basis vectors (yaw-only — pitch/roll come from wave tilt but
+        // we deliberately ignore them for camera framing so the horizon
+        // doesn't wobble in side/chase modes; that's how real-world doc /
+        // chase footage is shot too).
+        const Vector3 boatFwd{sinY, 0.f, cosY};
+        const Vector3 boatRight{cosY, 0.f, -sinY};
+        const Vector3 boatPos{bs.position.x, bs.y, bs.position.z};
+        switch (camMode) {
+            case CamMode::Free: {
+                // Existing behavior: orbit target tracks the boat; controls
+                // own the position. User drags / scrolls to compose.
+                controls.target.set(boatPos.x, boatPos.y, boatPos.z);
+                controls.update();
+                break;
+            }
+            case CamMode::SideFixed: {
+                // Starboard rail, just above the deck, looking forward.
+                // Offset: half-beam + a bit outboard, ~3 m above mean water,
+                // 2 m forward of midships so the bow + bow-wave are visible.
+                const Vector3 camPos = boatPos
+                                      + boatRight * (kBoatBeam * 0.5f + 1.0f)
+                                      + Vector3(-2.f, 5.0f, -2.f)
+                                      + boatFwd * 2.0f;
+                // Look ~50 m ahead along the heading, slightly down so the
+                // horizon sits in the upper third (cinematic framing).
+                const Vector3 lookAt = boatPos
+                                       + boatFwd * 50.0f
+                                       + Vector3(0.f, -2.0f, 0.f);
+                camera.position.copy(camPos);
+                camera.lookAt(lookAt);
+                break;
+            }
+            case CamMode::Chase: {
+                // Behind + above, looking at the boat. Tuned so the boat
+                // occupies ~⅓ of the vertical frame at this FOV.
+                const Vector3 camPos = boatPos
+                                      - boatFwd * 32.0f
+                                      + Vector3(0.f, 12.0f, 0.f);
+                const Vector3 lookAt = boatPos + Vector3(0.f, 2.0f, 0.f);
+                camera.position.copy(camPos);
+                camera.lookAt(lookAt);
+                break;
+            }
+        }
 
         renderer.render(scene, camera);
         ui.render();
