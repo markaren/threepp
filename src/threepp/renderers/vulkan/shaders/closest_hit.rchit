@@ -1904,6 +1904,36 @@ void main() {
                     if (fogEnabled() && lMaxDist < 1e20) {
                         contrib *= fogTransmittance(lMaxDist);
                     }
+                    // MIS wLight for emissive-triangle samples. Pairs with the
+                    // BSDF-side MIS at bounce-into-emissive (see the chit's
+                    // post-emissive-eval block) so the two halves sum to 1.0
+                    // (balance heuristic). Without this, DI's emissive shade
+                    // contributes the full NEE estimator (BRDF·cos·Le/p_omega)
+                    // while the bounce-into-emissive side ALSO contributes its
+                    // share (wBSDF · Le) — net over-count by wBSDF. Analytic
+                    // delta lights (typeCode < 1000) skip MIS because the BSDF
+                    // sampler can't hit a measure-zero direction; no double-
+                    // count possible there.
+                    if (typeCode >= 1000) {
+                        const int eTi = typeCode - 1000;
+                        const EmTri tChosen = emissiveTris[eTi];
+                        const vec3 ge1c = tChosen.v1.xyz - tChosen.v0.xyz;
+                        const vec3 ge2c = tChosen.v2.xyz - tChosen.v0.xyz;
+                        const vec3 lnRawC = cross(ge1c, ge2c);
+                        const float lnLenC = length(lnRawC);
+                        if (lnLenC > 1e-20 && tChosen.v0.w > 1e-20 && tChosen.v2.w > 0.0) {
+                            const vec3  lNc      = lnRawC / lnLenC;
+                            const float cosLight = max(abs(dot(-lDir, lNc)), 1e-4);
+                            // dist² recovered from li.maxDist (= true dist - 1e-2).
+                            const float dist     = lMaxDist + 1e-2;
+                            const float dist2    = dist * dist;
+                            const float pickPdf  = tChosen.v2.w / pc.emissiveTotalPower;
+                            const float pdfOmega = pickPdf * dist2 / (tChosen.v0.w * cosLight);
+                            const float pdfBsdfNee = brdfPdf3(V, lDir, N, roughness, metalness, ccProb, ccRough);
+                            const float wLight     = pdfOmega / max(pdfOmega + pdfBsdfNee, 1e-8);
+                            contrib *= wLight;
+                        }
+                    }
                     const float cLum = lum3(contrib);
                     if (cLum > pc.fireflyClamp) contrib *= pc.fireflyClamp / cLum;
                     lit += contrib;
