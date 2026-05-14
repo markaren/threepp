@@ -1429,6 +1429,27 @@ void main() {
                             capUp = min(capUp, viewDepFC);
                             capLo = min(capLo, max(viewDepFC, 1.0));
                         }
+
+                        // Velocity-clamped FC cap. Bilinear reproject under
+                        // continuous sub-pixel motion compounds drift each
+                        // frame — over N frames at v px/frame motion, the
+                        // accumulator's effective footprint blurs by ~N*v
+                        // sub-pixels in the texture-sample sense. To keep
+                        // cumulative blur bounded (≤ ~10 px-frames of drift),
+                        // cap FC at 10 / motionPx. At motionPx < 0.5 (sub-
+                        // pixel motion, essentially self-tap), cap is loose
+                        // (FC = 20+); at motionPx = 5+ (fast translation),
+                        // cap collapses to FC ≤ 2 — keeps moving textured
+                        // surfaces from accumulating drift into severe
+                        // smearing (cube text smearing under sideways
+                        // camera translation was the symptom).
+                        const vec2 motionVec = vec2(prevU - float(px.x),
+                                                    prevV - float(px.y));
+                        const float motionPx = length(motionVec);
+                        const float velocityFc = 10.0 / max(motionPx, 0.5);
+                        capUp = min(capUp, velocityFc);
+                        capLo = min(capLo, max(velocityFc * 0.5, 1.0));
+
                         histFc = clamp(bFc * 0.5, capLo, capUp);
                     }
                 }
