@@ -42,6 +42,7 @@ struct Payload {
     float currentIor;     // medium-stack tracking; see raygen Payload for full description
     float hitSpecFrac;    // estimated [0,1] spec-vs-diff fraction at primary; see raygen
     vec4 primaryAlbedo;   // primary-surface albedo + demod-valid flag; see raygen
+    vec3 hitNormal;       // world-space shading normal at this hit; see raygen Payload
 };
 
 layout(buffer_reference, scalar) readonly buffer VertexBuf { float p[]; };
@@ -884,6 +885,7 @@ void main() {
         payload.hitMetalness    = clamp(mdesc.metalness, 0.0, 1.0);
         payload.hitTransmission = clamp(mdesc.transmission, 0.0, 1.0);
         payload.hitSpecFrac     = 0.0;// pass-through; primary surface upstream owns this
+        payload.hitNormal       = vec3(0.0);// pass-through has no shading surface
         return;
     }
 
@@ -922,6 +924,7 @@ void main() {
         payload.hitMetalness    = 0.0;
         payload.hitTransmission = 0.0;
         payload.hitSpecFrac     = 0.0;// unlit: no view-dep concern
+        payload.hitNormal       = N;
         return;
     }
 
@@ -1380,6 +1383,7 @@ void main() {
             payload.hitMetalness    = metalness;
             payload.hitTransmission = mdesc.transmission;
             payload.hitSpecFrac     = 0.0;// glass — view-dep handled separately via isGlassP gate
+            payload.hitNormal       = N;
         } else {
             payload.hitWorldPos     = vec3(0.0);
             payload.prevWorldPos    = vec3(0.0);
@@ -1388,6 +1392,7 @@ void main() {
             payload.hitMetalness    = 0.0;
             payload.hitTransmission = 0.0;
             payload.hitSpecFrac     = 0.0;
+            payload.hitNormal       = vec3(0.0);
         }
         return;
     }
@@ -2319,6 +2324,7 @@ void main() {
     payload.hitRoughness    = roughness;// post-clamp; raygen uses for FC cap on motion
     payload.hitMetalness    = metalness;
     payload.hitTransmission = mdesc.transmission;
+    payload.hitNormal       = N;// world-space shading normal for ReSTIR GI candidate (xs, ns, Lo)
     // Estimate the fraction of outgoing radiance that comes from the
     // VIEW-DEPENDENT spec lobe vs the view-INDEPENDENT diffuse lobe.
     // Drives the FC decay signal in raygen — surface-anchored reprojection

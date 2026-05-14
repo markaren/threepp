@@ -86,6 +86,14 @@ struct Payload {
                           //  consistent under motion (snapshot albedo / FC-blended
                           //  radiance previously produced ghost trails when the
                           //  two channels had inconsistent temporal characteristics).
+    vec3 hitNormal;       // chit→raygen: world-space shading normal at this hit
+                          //  (post normal-map, post double-side flip). Zero on
+                          //  miss / sky / pass-through. ReSTIR GI Phase 1 plumbing:
+                          //  captured by raygen as primaryNormal (step 0) and as
+                          //  nsAtXs (step 1, the first indirect hit) so the GI
+                          //  reservoir candidate (xs, ns, Lo) is fully populated.
+                          //  Doesn't replace prevWorldPos / hitWorldPos — those
+                          //  drive reproject, this drives the GI target function.
 };
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
@@ -846,6 +854,7 @@ void main() {
         payload.hitTransmission = 0.0;
         payload.hitSpecFrac    = 0.0;
         payload.primaryAlbedo  = vec4(0.0);
+        payload.hitNormal      = vec3(0.0);
         // NOTE: bsdfPdf is intentionally NOT reset here — it must persist from
         // the previous step's chit (which wrote it for the bounce direction we
         // are about to trace) so the miss handler can compute MIS for env CDF.
@@ -891,6 +900,7 @@ void main() {
             payload.currentIor      = 1.0;
             payload.hitSpecFrac     = 0.0;
             payload.primaryAlbedo   = vec4(0.0);
+            payload.hitNormal       = vec3(0.0);// hybrid sky early-out — no surface normal
             primaryViaHybrid = true;
         }
 

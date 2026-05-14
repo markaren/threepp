@@ -29,6 +29,7 @@ struct Payload {
     float currentIor;  // unused by miss (kept for layout match)
     float hitSpecFrac; // unused by miss (kept for layout match — sky has no surface)
     vec4 primaryAlbedo;// unused by miss (kept for layout match — sky has no surface)
+    vec3 hitNormal;    // unused by miss (kept for layout match — sky has no surface)
 };
 
 layout(set = 0, binding = 6) uniform sampler2D envTex;
@@ -120,5 +121,6 @@ void main() {
     }
     payload.radianceDiff = envContrib;
     payload.radianceSpec = vec3(0.0);
+    payload.hitNormal    = vec3(0.0);// sky/env has no surface — ReSTIR GI candidate gate
     payload.flags |= 1u;// terminate path — no scatter beyond the env
 }
