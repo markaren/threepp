@@ -2431,7 +2431,9 @@ void main() {
         giSubPayload.hitInstanceId   = 0u;
         giSubPayload.prevWorldPos    = vec3(0.0);
         giSubPayload.hitRoughness    = 1.0;
-        giSubPayload.inFlags         = 8u | 16u;// sub-trace mode + recursion stop bit
+        // Same `8u` sub-trace gate + bit 4 (16u) recursion stop bit, plus
+        // bit 0 to match the classic-path emissive suppression at bounce-2.
+        giSubPayload.inFlags         = (8u | 16u) | ((pc.emissiveCount > 0u) ? 1u : 0u);
         giSubPayload.hitMetalness    = 0.0;
         giSubPayload.hitTransmission = 0.0;
         giSubPayload.bsdfPdf         = brdfPdf3(V, bs.dir, N, roughness, metalness, ccProb, ccRough);
@@ -2523,7 +2525,16 @@ void main() {
         giSubPayload.hitInstanceId   = 0u;
         giSubPayload.prevWorldPos    = vec3(0.0);
         giSubPayload.hitRoughness    = 1.0;
-        giSubPayload.inFlags         = 8u;// GI sub-trace gate
+        // bit 3 = "GI sub-trace gate" (suppress recursive GI + RIS DI in chit).
+        // bit 0 = "prev shade ran NEE; suppress emissive at this hit". Mirrors
+        // raygen's classic-path bounce loop: when we trace a bounce-1 ray, the
+        // chit at that hit zeros emissiveOut, assuming the prior emissive NEE
+        // covered it (crude MIS approximation, but it's what the rest of the
+        // codebase does — without it, GI's Lo over-counts emissive light by
+        // including bs.dir-hits-emissive contributions that don't get clipped
+        // against primary's emissive NEE pick, producing visibly "extra
+        // light" on emissive-heavy scenes vs the classic continuation path).
+        giSubPayload.inFlags         = 8u | ((pc.emissiveCount > 0u) ? 1u : 0u);
         giSubPayload.hitMetalness    = 0.0;
         giSubPayload.hitTransmission = 0.0;
         giSubPayload.bsdfPdf         = brdfPdf3(V, bs.dir, N, roughness, metalness, ccProb, ccRough);
