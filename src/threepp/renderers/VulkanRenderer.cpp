@@ -26,6 +26,7 @@
 #include "vulkan/VulkanContext.hpp"
 #include "vulkan/VulkanResources.hpp"
 #include "vulkan/Denoiser.hpp"
+#include "vulkan/EnvPrefilter.hpp"
 #include "vulkan/PhotonCaustics.hpp"
 #include "vulkan/TaaResolve.hpp"
 #include "vulkan/shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
@@ -67,7 +68,7 @@
 #include "threepp/renderers/vulkan/shaders/shadow_anyhit.rahit.spv.h"
 // (photon shader SPVs moved into vulkan/PhotonCaustics.cpp)
 // (denoise + denoise_atrous shader SPVs moved into vulkan/Denoiser.cpp)
-#include "threepp/renderers/vulkan/shaders/prefilter_env.comp.spv.h"
+// (prefilter_env shader SPV moved into vulkan/EnvPrefilter.cpp)
 #include "threepp/renderers/vulkan/shaders/skinning.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/water_displace.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.vert.spv.h"
@@ -447,13 +448,10 @@ namespace threepp {
         float    envCdfTotalSum_ = 0.0f;
 
         // PMREM (Phase 11): GGX-prefiltered env mip chain. Built once per env
-        // upload by dispatching prefilter_env.comp for each mip > 0; closest_hit
-        // samples textureLod(envTex, dir, roughness * (mipCount - 1)).
-        VkDescriptorSetLayout prefilterDsLayout = VK_NULL_HANDLE;
-        VkPipelineLayout      prefilterPipelineLayout = VK_NULL_HANDLE;
-        VkPipeline            prefilterPipeline = VK_NULL_HANDLE;
-        VkDescriptorPool      prefilterDescPool = VK_NULL_HANDLE;
-        VkSampler             prefilterSrcSampler = VK_NULL_HANDLE;
+        // upload — see vulkan/EnvPrefilter.{hpp,cpp}. Owns the prefilter
+        // compute pipeline + descriptor pool + source sampler; the host calls
+        // envPrefilter_->buildPmrem(...) when scene.environment changes.
+        std::unique_ptr<vulkan::EnvPrefilter> envPrefilter_;
 
         // Bindless material textures (albedo only for v1). The descriptor set
         // exposes a fixed-size sampler2D[] at binding 8; closest_hit indexes
@@ -1021,7 +1019,10 @@ namespace threepp {
             createCameraUbos();
             createLightsUbos();
             createFogUbos();
-            createPrefilterPipeline();// must precede createDefaultEnvImage so PMREM is ready
+            // EnvPrefilter owns the PMREM compute pipeline + descriptor pool.
+            // Construct before createDefaultEnvImage so the env upload path is
+            // ready if scene.environment is set before the first render().
+            envPrefilter_ = std::make_unique<vulkan::EnvPrefilter>(*ctx, cmdPool);
             createDefaultEnvImage();
             rebuildDefaultEnvCdfImages();// 1×1 dummy so descriptors are valid before any HDR upload
             createTextureSampler();
@@ -1182,11 +1183,8 @@ namespace threepp {
             materialTextures.clear();
             if (textureSampler_) vkDestroySampler(d, textureSampler_, nullptr);
 
-            if (prefilterPipeline)        vkDestroyPipeline(d, prefilterPipeline, nullptr);
-            if (prefilterPipelineLayout)  vkDestroyPipelineLayout(d, prefilterPipelineLayout, nullptr);
-            if (prefilterDsLayout)        vkDestroyDescriptorSetLayout(d, prefilterDsLayout, nullptr);
-            if (prefilterDescPool)        vkDestroyDescriptorPool(d, prefilterDescPool, nullptr);
-            if (prefilterSrcSampler)      vkDestroySampler(d, prefilterSrcSampler, nullptr);
+            // EnvPrefilter owns its pipeline / layout / pool / sampler.
+            envPrefilter_.reset();
 
             // GPU skinning teardown. Per-SkinnedMeshState buffers are
             // destroyed alongside the BLAS in the skinnedMeshStates clear
@@ -6861,99 +6859,6 @@ namespace threepp {
             materialTextures.push_back(tex);
         }
 
-        // PMREM (Phase 11): set up the compute pipeline that GGX-prefilters
-        // each mip level of the env equirect. One pipeline + descriptor pool
-        // shared across env uploads; descriptor sets are allocated per-mip
-        // each upload (pool is reset between uploads).
-        static constexpr uint32_t kMaxEnvMips = 8;
-        void createPrefilterPipeline() {
-            // Sampler used to read mip 0 during prefilter. REPEAT in u so the
-            // longitudinal seam blends; CLAMP in v to avoid pole bleed.
-            VkSamplerCreateInfo sci{};
-            sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-            sci.magFilter = VK_FILTER_LINEAR;
-            sci.minFilter = VK_FILTER_LINEAR;
-            sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-            sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            sci.minLod = 0.0f;
-            sci.maxLod = 0.0f;// only mip 0 read during prefilter
-            check(vkCreateSampler(ctx->device(), &sci, nullptr, &prefilterSrcSampler),
-                  "vkCreateSampler(prefilter)");
-
-            // Descriptor layout: 0 = sampled mip-0 view, 1 = storage view of target mip.
-            std::array<VkDescriptorSetLayoutBinding, 2> b{};
-            b[0].binding = 0;
-            b[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            b[0].descriptorCount = 1;
-            b[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            b[1].binding = 1;
-            b[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            b[1].descriptorCount = 1;
-            b[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-            VkDescriptorSetLayoutCreateInfo dlci{};
-            dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            dlci.bindingCount = static_cast<uint32_t>(b.size());
-            dlci.pBindings = b.data();
-            check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &prefilterDsLayout),
-                  "vkCreateDescriptorSetLayout(prefilter)");
-
-            // Push constants: alpha (4) + numSamples (4) + 8 byte pad → 16.
-            VkPushConstantRange pcRange{};
-            pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            pcRange.offset = 0;
-            pcRange.size   = 16;
-
-            VkPipelineLayoutCreateInfo plci{};
-            plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            plci.setLayoutCount = 1;
-            plci.pSetLayouts = &prefilterDsLayout;
-            plci.pushConstantRangeCount = 1;
-            plci.pPushConstantRanges = &pcRange;
-            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &prefilterPipelineLayout),
-                  "vkCreatePipelineLayout(prefilter)");
-
-            VkShaderModuleCreateInfo smci{};
-            smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            smci.codeSize = sizeof(kPrefilterEnvCompSpv);
-            smci.pCode = kPrefilterEnvCompSpv;
-            VkShaderModule mod = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &smci, nullptr, &mod),
-                  "vkCreateShaderModule(prefilter)");
-
-            VkPipelineShaderStageCreateInfo stage{};
-            stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-            stage.module = mod;
-            stage.pName = "main";
-
-            VkComputePipelineCreateInfo cpci{};
-            cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            cpci.stage = stage;
-            cpci.layout = prefilterPipelineLayout;
-            check(vkCreateComputePipelines(ctx->device(), VK_NULL_HANDLE, 1, &cpci, nullptr,
-                                           &prefilterPipeline),
-                  "vkCreateComputePipelines(prefilter)");
-            vkDestroyShaderModule(ctx->device(), mod, nullptr);
-
-            // Descriptor pool: kMaxEnvMips sets, each with one sampled + one storage.
-            std::array<VkDescriptorPoolSize, 2> ps{};
-            ps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps[0].descriptorCount = kMaxEnvMips;
-            ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            ps[1].descriptorCount = kMaxEnvMips;
-
-            VkDescriptorPoolCreateInfo pci{};
-            pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            pci.maxSets = kMaxEnvMips;
-            pci.poolSizeCount = static_cast<uint32_t>(ps.size());
-            pci.pPoolSizes = ps.data();
-            check(vkCreateDescriptorPool(ctx->device(), &pci, nullptr, &prefilterDescPool),
-                  "vkCreateDescriptorPool(prefilter)");
-        }
-
         // GPU skinning pipeline. One descriptor set per SkinnedMesh, allocated
         // from a dedicated pool (sized to a generous max). The shader is a
         // straight LBS — see skinning.comp. Replaces cpuSkin() entirely; the
@@ -7121,262 +7026,8 @@ namespace threepp {
                   "vkCreateSampler(displace)");
         }
 
-        // Allocate an env Image2D with a full GGX-prefiltered mip chain. Mip 0
-        // holds the source equirect (uploaded from CPU); mips 1..N-1 are filled
-        // by dispatching prefilter_env.comp once per mip. Roughness mapping is
-        // r = mip / (numMips - 1) — linear in mip index, matching the runtime
-        // sample LOD = roughness * (numMips - 1).
-        Image2D createPmremEnvImage(uint32_t w, uint32_t h, const float* pixels,
-                                    VkDeviceSize byteSize) {
-            Image2D out{};
-            out.width  = w;
-            out.height = h;
-            out.format = VK_FORMAT_R32G32B32A32_SFLOAT;
-
-            const uint32_t maxDim = std::max(w, h);
-            const uint32_t fullMips = static_cast<uint32_t>(
-                    std::floor(std::log2(static_cast<float>(maxDim)))) + 1u;
-            out.mipLevels = std::min(fullMips, kMaxEnvMips);
-
-            VkImageCreateInfo ici{};
-            ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-            ici.imageType     = VK_IMAGE_TYPE_2D;
-            ici.format        = out.format;
-            ici.extent        = {w, h, 1};
-            ici.mipLevels     = out.mipLevels;
-            ici.arrayLayers   = 1;
-            ici.samples       = VK_SAMPLE_COUNT_1_BIT;
-            ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
-            ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT |
-                                VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                                VK_IMAGE_USAGE_STORAGE_BIT;
-            ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-            ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-            VmaAllocationCreateInfo aci{};
-            aci.usage = VMA_MEMORY_USAGE_AUTO;
-            check(vmaCreateImage(ctx->allocator(), &ici, &aci, &out.image, &out.alloc, nullptr),
-                  "vmaCreateImage(envPmrem)");
-
-            // Staging buffer for mip 0.
-            Buffer staging = createBuffer(
-                    ctx->allocator(), ctx->device(), byteSize,
-                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), staging.alloc, &mapped);
-            std::memcpy(mapped, pixels, byteSize);
-            vmaUnmapMemory(ctx->allocator(), staging.alloc);
-
-            VkCommandBuffer cb = beginOneShot();
-
-            // Mip 0: UNDEFINED → TRANSFER_DST for upload.
-            {
-                VkImageMemoryBarrier br{};
-                br.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                br.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                br.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                br.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                br.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                br.image = out.image;
-                br.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                br.subresourceRange.baseMipLevel = 0;
-                br.subresourceRange.levelCount = 1;
-                br.subresourceRange.layerCount = 1;
-                br.srcAccessMask = 0;
-                br.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                vkCmdPipelineBarrier(cb,
-                                     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                                     VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                     0, 0, nullptr, 0, nullptr, 1, &br);
-            }
-            VkBufferImageCopy region{};
-            region.bufferOffset = 0;
-            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            region.imageSubresource.mipLevel = 0;
-            region.imageSubresource.layerCount = 1;
-            region.imageExtent = {w, h, 1};
-            vkCmdCopyBufferToImage(cb, staging.handle, out.image,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-            // Transition: mip 0 (TRANSFER_DST → GENERAL for compute read), mips 1..N-1
-            // (UNDEFINED → GENERAL for compute write). GENERAL is universal so reads and
-            // writes coexist in the same dispatch.
-            {
-                std::array<VkImageMemoryBarrier, 2> brs{};
-                brs[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                brs[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                brs[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                brs[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                brs[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                brs[0].image = out.image;
-                brs[0].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                brs[0].subresourceRange.baseMipLevel = 0;
-                brs[0].subresourceRange.levelCount = 1;
-                brs[0].subresourceRange.layerCount = 1;
-                brs[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                brs[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-                brs[1] = brs[0];
-                brs[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                brs[1].subresourceRange.baseMipLevel = 1;
-                brs[1].subresourceRange.levelCount = out.mipLevels - 1;
-                brs[1].srcAccessMask = 0;
-                brs[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-
-                const uint32_t brCount = (out.mipLevels > 1) ? 2u : 1u;
-                vkCmdPipelineBarrier(cb,
-                                     VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                     0, 0, nullptr, 0, nullptr, brCount, brs.data());
-            }
-
-            // The base view (used for closest_hit sampling) covers all mips.
-            {
-                VkImageViewCreateInfo vci{};
-                vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-                vci.image = out.image;
-                vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-                vci.format = out.format;
-                vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                vci.subresourceRange.baseMipLevel = 0;
-                vci.subresourceRange.levelCount = out.mipLevels;
-                vci.subresourceRange.layerCount = 1;
-                check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
-                      "vkCreateImageView(envPmrem)");
-            }
-
-            // Sampler with LINEAR mip filtering so trilinear blends across mips.
-            // maxLod = mipLevels - 1 lets textureLod sample the full chain.
-            {
-                VkSamplerCreateInfo sci{};
-                sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-                sci.magFilter = VK_FILTER_LINEAR;
-                sci.minFilter = VK_FILTER_LINEAR;
-                sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-                sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-                sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-                sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-                sci.minLod = 0.0f;
-                sci.maxLod = static_cast<float>(out.mipLevels - 1);
-                check(vkCreateSampler(ctx->device(), &sci, nullptr, &out.sampler),
-                      "vkCreateSampler(envPmrem)");
-            }
-
-            // Run the prefilter compute for each mip > 0. Per-mip storage views
-            // are created and destroyed inside the same command-buffer scope.
-            std::vector<VkImageView> mipStorageViews;
-            mipStorageViews.reserve(out.mipLevels);
-            if (out.mipLevels > 1) {
-                vkResetDescriptorPool(ctx->device(), prefilterDescPool, 0);
-                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, prefilterPipeline);
-
-                for (uint32_t mip = 1; mip < out.mipLevels; ++mip) {
-                    VkImageViewCreateInfo vci{};
-                    vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-                    vci.image = out.image;
-                    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-                    vci.format = out.format;
-                    vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                    vci.subresourceRange.baseMipLevel = mip;
-                    vci.subresourceRange.levelCount = 1;
-                    vci.subresourceRange.layerCount = 1;
-                    VkImageView mipView = VK_NULL_HANDLE;
-                    check(vkCreateImageView(ctx->device(), &vci, nullptr, &mipView),
-                          "vkCreateImageView(prefilter mip)");
-                    mipStorageViews.push_back(mipView);
-
-                    VkDescriptorSetAllocateInfo ai{};
-                    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-                    ai.descriptorPool = prefilterDescPool;
-                    ai.descriptorSetCount = 1;
-                    ai.pSetLayouts = &prefilterDsLayout;
-                    VkDescriptorSet set = VK_NULL_HANDLE;
-                    check(vkAllocateDescriptorSets(ctx->device(), &ai, &set),
-                          "vkAllocateDescriptorSets(prefilter)");
-
-                    VkDescriptorImageInfo srcInfo{};
-                    srcInfo.sampler     = prefilterSrcSampler;
-                    srcInfo.imageView   = out.view;// full-chain view; sampler reads mip 0
-                    srcInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-                    VkDescriptorImageInfo dstInfo{};
-                    dstInfo.sampler     = VK_NULL_HANDLE;
-                    dstInfo.imageView   = mipView;
-                    dstInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-                    std::array<VkWriteDescriptorSet, 2> ws{};
-                    ws[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    ws[0].dstSet = set;
-                    ws[0].dstBinding = 0;
-                    ws[0].descriptorCount = 1;
-                    ws[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    ws[0].pImageInfo = &srcInfo;
-                    ws[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    ws[1].dstSet = set;
-                    ws[1].dstBinding = 1;
-                    ws[1].descriptorCount = 1;
-                    ws[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    ws[1].pImageInfo = &dstInfo;
-                    vkUpdateDescriptorSets(ctx->device(), 2, ws.data(), 0, nullptr);
-
-                    struct Pc {
-                        float    alpha;
-                        uint32_t numSamples;
-                        uint32_t _pad0;
-                        uint32_t _pad1;
-                    } pc{};
-                    const float r = static_cast<float>(mip) /
-                                    static_cast<float>(out.mipLevels - 1);
-                    pc.alpha      = r * r;// GGX α = roughness²
-                    pc.numSamples = 64u;
-                    vkCmdPushConstants(cb, prefilterPipelineLayout,
-                                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-                    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                            prefilterPipelineLayout, 0, 1, &set,
-                                            0, nullptr);
-
-                    const uint32_t mipW = std::max(1u, w >> mip);
-                    const uint32_t mipH = std::max(1u, h >> mip);
-                    const uint32_t gx = (mipW + 7u) / 8u;
-                    const uint32_t gy = (mipH + 7u) / 8u;
-                    vkCmdDispatch(cb, gx, gy, 1u);
-                    // No barrier between dispatches: each writes a different mip
-                    // and reads only mip 0, no hazard.
-                }
-            }
-
-            // Final transition: all mips → SHADER_READ_ONLY_OPTIMAL for sampling.
-            {
-                VkImageMemoryBarrier br{};
-                br.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                br.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                br.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                br.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                br.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                br.image = out.image;
-                br.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                br.subresourceRange.baseMipLevel = 0;
-                br.subresourceRange.levelCount = out.mipLevels;
-                br.subresourceRange.layerCount = 1;
-                br.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-                br.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                vkCmdPipelineBarrier(cb,
-                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                     VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                                     0, 0, nullptr, 0, nullptr, 1, &br);
-            }
-
-            endAndSubmitOneShot(cb);
-            destroyBuffer(ctx->allocator(), staging);
-            for (auto v : mipStorageViews) {
-                vkDestroyImageView(ctx->device(), v, nullptr);
-            }
-
-            return out;
-        }
+        // createPmremEnvImage moved into vulkan/EnvPrefilter.{hpp,cpp}.
+        // Call envPrefilter_->buildPmrem(w, h, pixels, byteSize) instead.
 
         static VkSamplerAddressMode wrapToVk(TextureWrapping w) {
             switch (w) {
@@ -7867,7 +7518,7 @@ namespace threepp {
             // (1-r)² fade. Mip 0 is the source mirror, mip k is convolved with
             // GGX(α=(k/(N-1))²). closest_hit fades from mirror to fully diffuse
             // by walking the chain via textureLod.
-            envImage = createPmremEnvImage(
+            envImage = envPrefilter_->buildPmrem(
                     w, h, src.data(), 4u * w * h * sizeof(float));
             envIsDefault = false;
             envTextureIdUploaded = tex->id;
