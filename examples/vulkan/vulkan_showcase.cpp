@@ -273,6 +273,13 @@ int main() {
         if (ImGui::Combo("Tone mapping", &toneMode, toneItems, IM_ARRAYSIZE(toneItems)))
             renderer.toneMapping = static_cast<ToneMapping>(toneMode);
 
+        bool restirDI = renderer.restirDIEnabled();
+        if (ImGui::Checkbox("ReSTIR DI", &restirDI))
+            renderer.setRestirDIEnabled(restirDI);
+        bool restirGI = renderer.restirGIEnabled();
+        if (ImGui::Checkbox("ReSTIR GI", &restirGI))
+            renderer.setRestirGIEnabled(restirGI);
+
         if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
             renderer.setSamplesPerPixel(spp);
 
