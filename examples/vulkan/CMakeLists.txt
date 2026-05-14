@@ -7,6 +7,7 @@ add_example(NAME "vulkan_ocean" LINK_IMGUI)
 add_example(NAME "vulkan_denoise" LINK_IMGUI)
 add_example(NAME "vulkan_animation" LINK_IMGUI)
 add_example(NAME "vulkan_gallery" LINK_IMGUI)
+add_example(NAME "vulkan_restir_test" LINK_IMGUI)
 
 if (THREEPP_WITH_FBX)
     add_example(NAME "vulkan_bistro" LINK_IMGUI)
