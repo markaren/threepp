@@ -28,6 +28,7 @@
 #include "vulkan/Denoiser.hpp"
 #include "vulkan/EnvPrefilter.hpp"
 #include "vulkan/PhotonCaustics.hpp"
+#include "vulkan/SkinningPipeline.hpp"
 #include "vulkan/TaaResolve.hpp"
 #include "vulkan/shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
 #include "wgpu/pathtracer/WgpuPathTracerEnvCdf.hpp"// reused: pure C++ template, no WGPU deps
@@ -69,7 +70,7 @@
 // (photon shader SPVs moved into vulkan/PhotonCaustics.cpp)
 // (denoise + denoise_atrous shader SPVs moved into vulkan/Denoiser.cpp)
 // (prefilter_env shader SPV moved into vulkan/EnvPrefilter.cpp)
-#include "threepp/renderers/vulkan/shaders/skinning.comp.spv.h"
+// (skinning shader SPV moved into vulkan/SkinningPipeline.cpp)
 #include "threepp/renderers/vulkan/shaders/water_displace.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.frag.spv.h"
@@ -738,10 +739,10 @@ namespace threepp {
         // buffer alongside the BLAS rebuild. Frees the CPU thread from
         // the synchronous per-vertex linear-blend math + blocking BLAS
         // submit (was ~10 ms / frame on stormtrooper-density meshes).
-        VkDescriptorSetLayout skinningDsLayout       = VK_NULL_HANDLE;
-        VkPipelineLayout      skinningPipelineLayout = VK_NULL_HANDLE;
-        VkPipeline            skinningPipeline       = VK_NULL_HANDLE;
-        VkDescriptorPool      skinningDescPool       = VK_NULL_HANDLE;
+        //
+        // Pipeline + descriptor pool live in vulkan/SkinningPipeline.{hpp,cpp};
+        // per-mesh descriptor sets (state->skinDescSet) live in SkinnedMeshState.
+        std::unique_ptr<vulkan::SkinningPipeline> skinning_;
 
         // ── Hybrid raster G-buffer prepass ──────────────────────────────────
         // Replaces PT primary-ray traversal: raster writes depth/normal/motion/IDs
@@ -1036,7 +1037,7 @@ namespace threepp {
             // includes denoiser_->momentsImage(0/1).
             denoiser_ = std::make_unique<vulkan::Denoiser>(*ctx, rtDsLayout, cmdPool);
             createAccumImage();
-            createSkinningPipeline();
+            skinning_ = std::make_unique<vulkan::SkinningPipeline>(*ctx);
             photon_ = std::make_unique<vulkan::PhotonCaustics>(*ctx, rtPipelineLayout);
             createWaterDisplacePipeline();
             // Hybrid raster G-buffer infrastructure is always allocated so
@@ -1188,11 +1189,8 @@ namespace threepp {
 
             // GPU skinning teardown. Per-SkinnedMeshState buffers are
             // destroyed alongside the BLAS in the skinnedMeshStates clear
-            // (see below); here we just release the shared pipeline + pool.
-            if (skinningPipeline)         vkDestroyPipeline(d, skinningPipeline, nullptr);
-            if (skinningPipelineLayout)   vkDestroyPipelineLayout(d, skinningPipelineLayout, nullptr);
-            if (skinningDsLayout)         vkDestroyDescriptorSetLayout(d, skinningDsLayout, nullptr);
-            if (skinningDescPool)         vkDestroyDescriptorPool(d, skinningDescPool, nullptr);
+            // (see below); the shared pipeline + pool live in skinning_.
+            skinning_.reset();
 
             if (displacePipeline)        vkDestroyPipeline(d, displacePipeline, nullptr);
             if (displacePipelineLayout)  vkDestroyPipelineLayout(d, displacePipelineLayout, nullptr);
@@ -1698,13 +1696,7 @@ namespace threepp {
             }
 
             // Descriptor set — wires base inputs + bone mats + BLAS outputs.
-            VkDescriptorSetAllocateInfo dsAi{};
-            dsAi.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            dsAi.descriptorPool     = skinningDescPool;
-            dsAi.descriptorSetCount = 1;
-            dsAi.pSetLayouts        = &skinningDsLayout;
-            check(vkAllocateDescriptorSets(ctx->device(), &dsAi, &state->skinDescSet),
-                  "vkAllocateDescriptorSets(skinning)");
+            state->skinDescSet = skinning_->allocateMeshDescriptorSet();
 
             std::array<VkDescriptorBufferInfo, 7> bi{};
             const Buffer* bufs[7] = {
@@ -3693,12 +3685,10 @@ namespace threepp {
                         }
                         // Return the skinning descriptor set to the pool, else
                         // the slot leaks across remove/re-add cycles and the
-                        // next vkAllocateDescriptorSets(skinning) eventually
-                        // hits VK_ERROR_OUT_OF_POOL_MEMORY. Requires the pool
-                        // to be created with FREE_DESCRIPTOR_SET_BIT.
+                        // next allocateMeshDescriptorSet eventually hits
+                        // VK_ERROR_OUT_OF_POOL_MEMORY.
                         if (it->second->skinDescSet != VK_NULL_HANDLE) {
-                            vkFreeDescriptorSets(ctx->device(), skinningDescPool,
-                                                 1, &it->second->skinDescSet);
+                            skinning_->freeMeshDescriptorSet(it->second->skinDescSet);
                             it->second->skinDescSet = VK_NULL_HANDLE;
                         }
                         it = skinnedMeshStates.erase(it);
@@ -6859,85 +6849,9 @@ namespace threepp {
             materialTextures.push_back(tex);
         }
 
-        // GPU skinning pipeline. One descriptor set per SkinnedMesh, allocated
-        // from a dedicated pool (sized to a generous max). The shader is a
-        // straight LBS — see skinning.comp. Replaces cpuSkin() entirely; the
-        // dispatch is recorded into the main per-frame cmd buffer alongside
-        // the BLAS rebuild, with barriers between them.
-        void createSkinningPipeline() {
-            // Set-0 layout: 7 storage buffers.
-            std::array<VkDescriptorSetLayoutBinding, 7> sb{};
-            for (uint32_t i = 0; i < sb.size(); ++i) {
-                sb[i].binding         = i;
-                sb[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                sb[i].descriptorCount = 1;
-                sb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-            }
-            VkDescriptorSetLayoutCreateInfo slci{};
-            slci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            slci.bindingCount = static_cast<uint32_t>(sb.size());
-            slci.pBindings    = sb.data();
-            check(vkCreateDescriptorSetLayout(ctx->device(), &slci, nullptr, &skinningDsLayout),
-                  "vkCreateDescriptorSetLayout(skinning)");
-
-            // Pipeline layout: set 0 + push constant (vertexCount as u32).
-            VkPushConstantRange pcRange{};
-            pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            pcRange.offset     = 0;
-            pcRange.size       = sizeof(uint32_t);
-
-            VkPipelineLayoutCreateInfo plci{};
-            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            plci.setLayoutCount         = 1;
-            plci.pSetLayouts            = &skinningDsLayout;
-            plci.pushConstantRangeCount = 1;
-            plci.pPushConstantRanges    = &pcRange;
-            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &skinningPipelineLayout),
-                  "vkCreatePipelineLayout(skinning)");
-
-            VkShaderModuleCreateInfo smci{};
-            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            smci.codeSize = sizeof(kSkinningCompSpv);
-            smci.pCode    = kSkinningCompSpv;
-            VkShaderModule mod = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &smci, nullptr, &mod),
-                  "vkCreateShaderModule(skinning)");
-
-            VkPipelineShaderStageCreateInfo stage{};
-            stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            stage.module = mod;
-            stage.pName  = "main";
-
-            VkComputePipelineCreateInfo cpci{};
-            cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            cpci.stage  = stage;
-            cpci.layout = skinningPipelineLayout;
-            check(vkCreateComputePipelines(ctx->device(), VK_NULL_HANDLE, 1, &cpci, nullptr,
-                                           &skinningPipeline),
-                  "vkCreateComputePipelines(skinning)");
-            vkDestroyShaderModule(ctx->device(), mod, nullptr);
-
-            // Descriptor pool sized for up to 64 SkinnedMeshes — each set
-            // holds 7 storage buffers. Generous for typical scenes; resize
-            // if you have more skinned characters.
-            const uint32_t kMaxSkinnedMeshes = 64;
-            VkDescriptorPoolSize ps{};
-            ps.type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            ps.descriptorCount = kMaxSkinnedMeshes * 7;
-            VkDescriptorPoolCreateInfo dpci{};
-            dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            // FREE_DESCRIPTOR_SET_BIT lets the per-frame liveCheck-expired
-            // erase loop call vkFreeDescriptorSets when a SkinnedMeshState is
-            // destroyed; without it the set leaks until the pool exhausts on
-            // repeated remove/re-add of skinned meshes.
-            dpci.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-            dpci.maxSets       = kMaxSkinnedMeshes;
-            dpci.poolSizeCount = 1;
-            dpci.pPoolSizes    = &ps;
-            check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &skinningDescPool),
-                  "vkCreateDescriptorPool(skinning)");
-        }
+        // GPU skinning pipeline moved into vulkan/SkinningPipeline.{hpp,cpp}.
+        // Renderer holds a unique_ptr `skinning_` and delegates allocation +
+        // dispatch through it.
 
         // Renderer-level water_displace.comp pipeline. Bindings 0..5 = three
         // (height, displacement) pairs of combined-image-samplers, all RG32F
@@ -8819,8 +8733,7 @@ namespace threepp {
             // BLAS rebuild per state → barrier. The BLAS rebuild reads the
             // deformed vertex/normal buffers the dispatch just wrote. The
             // raygen/raster downstream reads the BLAS via TLAS.
-            if (!pendingSkinnedRebuilds_.empty() &&
-                skinningPipeline != VK_NULL_HANDLE) {
+            if (!pendingSkinnedRebuilds_.empty() && skinning_) {
                 // ── Step 1: snapshot current vertex → prevVertex ──────────
                 // Before the skinning compute overwrites vertex with frame
                 // N's deformed positions, copy what's there (frame N-1's
@@ -8854,18 +8767,9 @@ namespace threepp {
                     vkCmdPipelineBarrier2(cb, &dep);
                 }
 
-                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, skinningPipeline);
+                skinning_->bindPipeline(cb);
                 for (auto* st : pendingSkinnedRebuilds_) {
-                    vkCmdBindDescriptorSets(
-                            cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            skinningPipelineLayout, 0, 1,
-                            &st->skinDescSet, 0, nullptr);
-                    vkCmdPushConstants(
-                            cb, skinningPipelineLayout,
-                            VK_SHADER_STAGE_COMPUTE_BIT,
-                            0, sizeof(uint32_t), &st->vertexCount);
-                    const uint32_t gx = (st->vertexCount + 63u) / 64u;
-                    vkCmdDispatch(cb, gx, 1u, 1u);
+                    skinning_->recordDispatch(cb, st->skinDescSet, st->vertexCount);
                 }
 
                 // Compute write → AS build read + vertex attribute read +

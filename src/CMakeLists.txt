@@ -606,6 +606,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/PhotonCaustics.hpp"
             "threepp/renderers/vulkan/Denoiser.hpp"
             "threepp/renderers/vulkan/EnvPrefilter.hpp"
+            "threepp/renderers/vulkan/SkinningPipeline.hpp"
             "threepp/renderers/vulkan/TaaResolve.hpp"
             "threepp/renderers/vulkan/water/OceanFFT.hpp"
     )
@@ -616,6 +617,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/PhotonCaustics.cpp"
             "threepp/renderers/vulkan/Denoiser.cpp"
             "threepp/renderers/vulkan/EnvPrefilter.cpp"
+            "threepp/renderers/vulkan/SkinningPipeline.cpp"
             "threepp/renderers/vulkan/TaaResolve.cpp"
             "threepp/renderers/vulkan/water/OceanFFT.cpp"
     )
