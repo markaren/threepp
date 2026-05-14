@@ -657,7 +657,7 @@ namespace threepp {
         std::vector<size_t> glassEntryIndices_;
         // Per-NEE firefly clamp; pushed to shaders as float bits in slot [15].
         // 1e30f sentinel disables the clamp (set via setFireflyClamp(0)).
-        float    fireflyClamp_ = 20.0f;
+        float    fireflyClamp_ = 30.f;
         // Cached CDF blob (16 floats per tri) reused across frames when no
         // emissive mesh moved + entries-list size unchanged. The CPU walk in
         // buildAndUploadEmissiveTris is the dominant per-frame cost on
