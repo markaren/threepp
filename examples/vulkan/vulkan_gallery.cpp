@@ -391,6 +391,7 @@ int main() {
     bool showWindow = true;
     bool denoiseOn = renderer.denoise();
     bool restirOn = renderer.restirDIEnabled();
+    bool restirGiOn = renderer.restirGIEnabled();
     bool hybridOn = renderer.hybridEnabled();
     bool taaOn = renderer.taaEnabled();
     bool rectOn = true;
@@ -444,6 +445,8 @@ int main() {
             renderer.setDenoise(denoiseOn);
         if (ImGui::Checkbox("ReSTIR DI", &restirOn))
             renderer.setRestirDIEnabled(restirOn);
+        if (ImGui::Checkbox("ReSTIR GI", &restirGiOn))
+            renderer.setRestirGIEnabled(restirGiOn);
         if (ImGui::Checkbox("Hybrid (raster G-buf)", &hybridOn))
             renderer.setHybridEnabled(hybridOn);
         if (ImGui::Checkbox("TAA", &taaOn))
