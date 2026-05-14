@@ -923,7 +923,7 @@ namespace threepp {
         // on; off keeps the existing full-PT primary path. Stage 1 ships
         // disabled by default so the raster prepass can land + be validated
         // before becoming the default.
-        bool hybridEnabled_ = false;
+        bool hybridEnabled_ = true;
         bool perSppJitterHybrid_ = false;
         bool taaEnabled_ = true;
         // Tracks what each per-frame slot's binding 1 (RT denoise output)
