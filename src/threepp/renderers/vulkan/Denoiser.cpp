@@ -26,7 +26,8 @@ namespace threepp::vulkan {
         VkDevice d = ctx_.device();
         for (auto& img : filteredImagesPP_) destroyImage2D(ctx_.allocator(), d, img);
         for (auto& img : momentsImagesPP_)  destroyImage2D(ctx_.allocator(), d, img);
-        destroyImage2D(ctx_.allocator(), d, albedoImage_);
+        for (auto& img : albedoImagesPP_)   destroyImage2D(ctx_.allocator(), d, img);
+        destroyImage2D(ctx_.allocator(), d, albedoSnapshotImage_);
     }
 
     Image2D Denoiser::createStorageImage2D(uint32_t w, uint32_t h,
@@ -135,15 +136,24 @@ namespace threepp::vulkan {
             img = createStorageImage2D(width, height,
                                        VK_FORMAT_R32_SFLOAT,
                                        "vmaCreateImage(denoise.moments)");
-        // Primary-surface albedo (RGBA8): chit writes once per pixel per
-        // frame, atrous reads to demodulate radiance before filtering. RGBA8
-        // is sufficient — albedo is normalised to [0,1]. The .a channel is
-        // a "demod valid" gate: 1 = pure diffuse / paint surface, demod OK;
-        // 0 = metal / glass / emissive / sky, atrous skips demod and filters
-        // in radiance space (the safe fallback).
-        albedoImage_ = createStorageImage2D(width, height,
-                                            VK_FORMAT_R8G8B8A8_UNORM,
-                                            "vmaCreateImage(denoise.albedo)");
+        // Primary-surface albedo ping-pong (RGBA8): each slot is the
+        // temporal-blended albedo at one frame. Raygen reads the prev
+        // slot via the SAME bilinear-reproject taps and mesh/depth gates
+        // used for accumImage, FC-blends with chit's current-frame snapshot
+        // (payload.primaryAlbedo), writes to the current write slot. atrous
+        // reads the write slot. RGBA8 is sufficient — albedo is normalised
+        // to [0,1]. .a is the demod-valid flag (1 = demod ON, 0 = OFF).
+        for (auto& img : albedoImagesPP_)
+            img = createStorageImage2D(width, height,
+                                       VK_FORMAT_R8G8B8A8_UNORM,
+                                       "vmaCreateImage(denoise.albedo)");
+        // Snapshot of the chit's current-frame albedo (no temporal blend).
+        // Atrous reads at center for re-modulation — temporal smoothing
+        // protects noise on the demod division side, snapshot preserves
+        // texture detail on the re-mod side. Standard NRD-RELAX split.
+        albedoSnapshotImage_ = createStorageImage2D(width, height,
+                                                    VK_FORMAT_R8G8B8A8_UNORM,
+                                                    "vmaCreateImage(denoise.albedoSnapshot)");
     }
 
     void Denoiser::createPipelines() {

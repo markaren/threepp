@@ -41,6 +41,7 @@ struct Payload {
     float bsdfPdf;        // chit→miss: pdf of the BSDF-sampled bounce direction
     float currentIor;     // medium-stack tracking; see raygen Payload for full description
     float hitSpecFrac;    // estimated [0,1] spec-vs-diff fraction at primary; see raygen
+    vec4 primaryAlbedo;   // primary-surface albedo + demod-valid flag; see raygen
 };
 
 layout(buffer_reference, scalar) readonly buffer VertexBuf { float p[]; };
@@ -183,12 +184,9 @@ layout(set = 0, binding = 28, rgba32f) uniform writeonly image2D resPosWrite;
 layout(set = 0, binding = 29, rgba32f) uniform readonly  image2D resPosRead;
 layout(set = 0, binding = 30, rgba16f) uniform writeonly image2D resWWrite;
 layout(set = 0, binding = 31, rgba16f) uniform readonly  image2D resWRead;
-// Primary-surface albedo target for atrous demodulation. Written at primary
-// hits with .a=1 to mark "demod valid"; left at the host-cleared zero
-// (.a=0) on bounces / metal / glass / emissive / sky so the denoiser falls
-// back to filtering in radiance space for those pixels. Atomic-free —
-// each pixel is written at most once per frame (primary hit only).
-layout(set = 0, binding = 35, rgba8) uniform writeonly image2D primaryAlbedoImage;
+// Primary-surface albedo is no longer written here directly. Chit fills
+// payload.primaryAlbedo; raygen owns the temporal-blend write to the
+// ping-pong albedo accumulator (bindings 35 write / 36 read).
 
 // Phase 11: PMREM mip count comes via the same push-constant block used by
 // raygen. .x is raygen's sampleIndex (not read here); .y is envMipCount.
@@ -2378,10 +2376,10 @@ void main() {
         // would divide to infinity at the atrous step. 0.04 matches the
         // F0 floor and is below any plausible real albedo.
         const vec3 stableAlb = clamp(albedo, vec3(0.04), vec3(1.0));
-        imageStore(primaryAlbedoImage, ivec2(gl_LaunchIDEXT.xy),
-                   vec4(stableAlb, 1.0));
-    } else if (isPrimary) {
-        imageStore(primaryAlbedoImage, ivec2(gl_LaunchIDEXT.xy),
-                   vec4(0.0));// .a=0 → atrous skips demod for this pixel
+        payload.primaryAlbedo = vec4(stableAlb, 1.0);
     }
+    // Non-primary / non-diffuse / emissive / high-specFrac surfaces: leave
+    // payload.primaryAlbedo at vec4(0.0) (set by raygen pre-init). Raygen
+    // writes vec4(0) to the temporal albedo accumulator → atrous treats
+    // the pixel as demod-disabled.
 }

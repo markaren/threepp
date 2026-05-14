@@ -77,6 +77,15 @@ struct Payload {
                           //  dim and Fresnel spec dominates (wet asphalt, dark
                           //  paint, cones at low NdotV). Computed at primary
                           //  only; 0 on bounces / pass-throughs / sky.
+    vec4 primaryAlbedo;   // chit→raygen: primary-surface albedo for atrous
+                          //  demodulation. .rgb = clamped albedo; .a = demod-valid
+                          //  flag (1 = enable demod, 0 = fall back to radiance-
+                          //  space filter). Raygen temporally accumulates this
+                          //  alongside radiance with the SAME FC blend + reproject
+                          //  gates, so the demod division stays mathematically
+                          //  consistent under motion (snapshot albedo / FC-blended
+                          //  radiance previously produced ghost trails when the
+                          //  two channels had inconsistent temporal characteristics).
 };
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
@@ -129,12 +138,23 @@ layout(set = 0, binding = 13, rgba32f) uniform readonly image2D prevGbufImage;
 // luminance edge stop wants.
 layout(set = 0, binding = 33, r32f) uniform writeonly image2D momentsImage;
 layout(set = 0, binding = 34, r32f) uniform readonly  image2D prevMomentsImage;
-// Primary-surface albedo sink for atrous demodulation. Raygen clears each
-// pixel to vec4(0) at the start of its accumulation (so pixels whose chit
-// path early-returns — refract probes, pass-through — fall back cleanly to
-// "no demod"). chit imageStore on the primary hit overwrites with the real
-// albedo and .a=1. atrous reads it.
+// Primary-surface albedo accumulator (ping-pong, rgba8). Raygen FC-blends
+// the prev-frame slot (binding 36) at the reprojected pixel with the
+// chit-provided current-frame snapshot (payload.primaryAlbedo), writes the
+// blended result to the current-frame slot (binding 35). atrous reads
+// binding 35. The temporal blend keeps demod's two channels (radiance and
+// albedo) in lockstep so divisions stay mathematically consistent under
+// motion — fixes the position-fixed ghost trails the snapshot albedo
+// previously produced when accumImage carried multi-frame history but
+// the albedo channel was just-this-frame data.
 layout(set = 0, binding = 35, rgba8) uniform writeonly image2D primaryAlbedoImage;
+layout(set = 0, binding = 36, rgba8) uniform readonly  image2D prevPrimaryAlbedoImage;
+// Snapshot of THIS frame's chit-provided primaryAlbedo (no temporal blend).
+// Atrous reads at center pixel and uses for re-modulation, so texture
+// detail stays per-frame crisp while the temporal-smoothed primaryAlbedoImage
+// drives the demod division (smoothed albedo / smoothed radiance =
+// stable lighting, snapshot * lighting = crisp textured output).
+layout(set = 0, binding = 37, rgba8) uniform writeonly image2D primaryAlbedoSnapshotImage;
 
 // Hybrid raster G-buffer attachments. Always bound (allocated at startup);
 // raygen samples them only when (pc.motionFlags & 8u) != 0 (hybrid mode).
@@ -642,12 +662,12 @@ void main() {
     const vec2 size = vec2(gl_LaunchSizeEXT.xy);
     const vec4 originWS = cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0);
 
-    // Pre-clear the demod albedo at this pixel so any chit early-return path
-    // (refract probe, transmission pass-through, sky miss) leaves a sentinel
-    // `.a=0` for atrous → fall back to non-demod filtering. chit overwrites
-    // with the real albedo + `.a=1` only when the primary hit is a
-    // diffuse-dominant surface where demod is mathematically valid.
-    imageStore(primaryAlbedoImage, ivec2(gl_LaunchIDEXT.xy), vec4(0.0));
+    // Per-pixel running snapshot of the chit's most-recent primaryAlbedo.
+    // chit writes payload.primaryAlbedo per traceRayEXT; the LAST chit
+    // that ran at primary supplies the value. Initialised to vec4(0)
+    // → atrous treats as demod-disabled if no valid chit fired (sky,
+    // pass-through-only paths).
+    vec4 primaryAlbedoSnapshot = vec4(0.0);
 
     // Accumulator across in-frame samples. radianceSum is the SUM (not mean)
     // of per-sample radiance; the history blend below treats it as `spp`
@@ -825,6 +845,7 @@ void main() {
         payload.hitMetalness   = 0.0;
         payload.hitTransmission = 0.0;
         payload.hitSpecFrac    = 0.0;
+        payload.primaryAlbedo  = vec4(0.0);
         // NOTE: bsdfPdf is intentionally NOT reset here — it must persist from
         // the previous step's chit (which wrote it for the bounce direction we
         // are about to trace) so the miss handler can compute MIS for env CDF.
@@ -869,6 +890,7 @@ void main() {
             payload.bsdfPdf         = 0.0;
             payload.currentIor      = 1.0;
             payload.hitSpecFrac     = 0.0;
+            payload.primaryAlbedo   = vec4(0.0);
             primaryViaHybrid = true;
         }
 
@@ -892,6 +914,7 @@ void main() {
             primaryMetalness    = payload.hitMetalness;
             primaryTransmission = payload.hitTransmission;
             primarySpecFrac     = payload.hitSpecFrac;
+            primaryAlbedoSnapshot = payload.primaryAlbedo;
         }
 
         // Per-bounce firefly clamp on the contribution that lands in the
@@ -1024,6 +1047,12 @@ void main() {
     // Companion to histMean: prev-frame mean(lum²). Same FC weight in the
     // final blend yields M2_new = (histLum2·histFc + lum2Sum)/(histFc+sppF).
     float histLum2 = 0.0;
+    // Companion to histMean: prev-frame primary-surface albedo. Same
+    // reproject path + same FC weight in the final blend yields a
+    // temporally-consistent albedo channel so demod division stays stable
+    // under motion. .a tracks whether prev-frame's snapshot was valid.
+    vec3  histAlbedoRGB = vec3(0.0);
+    float histAlbedoA   = 0.0;
 
     const uint primaryMeshU = (primaryInstanceId != 0u) ? (primaryInstanceId - 1u) : 0xFFFFFFFFu;
     const bool primaryMoved = isMeshMoved(primaryMeshU);
@@ -1062,6 +1091,10 @@ void main() {
                 // σ_lum would explode).
                 const float pm = imageLoad(prevMomentsImage, px).r;
                 if (!isnan(pm) && !isinf(pm)) histLum2 = pm;
+                // Same self-tap for prev albedo.
+                const vec4 pal = imageLoad(prevPrimaryAlbedoImage, px);
+                histAlbedoRGB = pal.rgb;
+                histAlbedoA   = pal.a;
             }
         } else {
             // 2026-05-13: hard cold-start when prev pixel held a now-vacated
@@ -1247,9 +1280,25 @@ void main() {
                     const float m01 = imageLoad(prevMomentsImage, b + ivec2(0,1)).r;
                     const float m11 = imageLoad(prevMomentsImage, b + ivec2(1,1)).r;
                     const float bLum2 = (m00*v00 + m10*v10 + m01*v01 + m11*v11) / wSum;
+                    // Same bilinear blend for prev albedo, with the same
+                    // mesh-ID + depth-validated tap weights. Keeps the
+                    // demod albedo channel in lockstep with the radiance
+                    // channel (any sub-pixel reproject error blurs BOTH
+                    // signals the same way → demod division remains
+                    // mathematically consistent → no ghost smear).
+                    const vec4 pal00 = imageLoad(prevPrimaryAlbedoImage, b              );
+                    const vec4 pal10 = imageLoad(prevPrimaryAlbedoImage, b + ivec2(1,0));
+                    const vec4 pal01 = imageLoad(prevPrimaryAlbedoImage, b + ivec2(0,1));
+                    const vec4 pal11 = imageLoad(prevPrimaryAlbedoImage, b + ivec2(1,1));
+                    const vec3 bAlbedoRGB = (pal00.rgb*v00 + pal10.rgb*v10
+                                           + pal01.rgb*v01 + pal11.rgb*v11) / wSum;
+                    const float bAlbedoA  = (pal00.a*v00 + pal10.a*v10
+                                           + pal01.a*v01 + pal11.a*v11) / wSum;
                     if (!any(isnan(bMean)) && !any(isinf(bMean))) {
                         histMean = bMean;
                         if (!isnan(bLum2) && !isinf(bLum2)) histLum2 = bLum2;
+                        histAlbedoRGB = bAlbedoRGB;
+                        histAlbedoA   = bAlbedoA;
                         // Roughness-aware FC cap + floor.
                         //
                         // Cap (upper): split into movingCap (mesh self-moved) vs
@@ -1404,6 +1453,42 @@ void main() {
     imageStore(accumImage, px, vec4(mean, newFc));
     imageStore(momentsImage, px, vec4(lum2Mean, 0.0, 0.0, 0.0));
     imageStore(gbufImage, px, vec4(primaryWorldPos, float(primaryInstanceId)));
+
+    // Temporal albedo blend. chit fills payload.primaryAlbedo per primary
+    // ray (.a=1 for demod-valid surfaces, otherwise vec4(0)). Blend with
+    // the reprojected prev albedo using histFc as the weight so the
+    // albedo accumulator tracks the SAME temporal blend as the radiance
+    // accumulator — keeps demod division consistent.
+    vec3  finalAlbedoRGB;
+    float finalAlbedoA;
+    if (primaryAlbedoSnapshot.a > 0.5 && histAlbedoA > 0.5) {
+        // Cap albedo's effective FC at 8 (vs radiance's up-to-60 default
+        // cap). The radiance accumulator benefits from 60-frame averaging
+        // for noise reduction, but the SAME 60-frame window applied to
+        // albedo accumulates sub-pixel reproject drift on textured
+        // surfaces into severe smearing (cube text becomes illegible
+        // under sideways camera translation). 8 frames is enough to
+        // suppress chit's per-frame UV jitter (FC=8 → ~12% per-frame
+        // weight) while keeping the bilinear reproject's drift contained.
+        const float albedoFc = min(histFc, 8.0);
+        finalAlbedoRGB = (histAlbedoRGB * albedoFc + primaryAlbedoSnapshot.rgb)
+                       / (albedoFc + 1.0);
+        finalAlbedoA   = 1.0;
+    } else if (primaryAlbedoSnapshot.a > 0.5) {
+        // Curr valid, no history: use curr only.
+        finalAlbedoRGB = primaryAlbedoSnapshot.rgb;
+        finalAlbedoA   = 1.0;
+    } else {
+        // Curr invalid: pixel is demod-disabled this frame regardless of
+        // history. Write zero so atrous skips demod here.
+        finalAlbedoRGB = vec3(0.0);
+        finalAlbedoA   = 0.0;
+    }
+    imageStore(primaryAlbedoImage, px, vec4(finalAlbedoRGB, finalAlbedoA));
+    // Snapshot: just this-frame's chit value, no temporal blend. Atrous
+    // reads at center for the re-mod step so texture detail isn't dimmed
+    // by the temporal-blend lag under motion.
+    imageStore(primaryAlbedoSnapshotImage, px, primaryAlbedoSnapshot);
     // Tonemap + sRGB encode + outImage write moved to denoise.comp so the
     // spatial filter can run on linear HDR before display encode.
 }

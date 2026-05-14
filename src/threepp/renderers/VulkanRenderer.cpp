@@ -4035,19 +4035,21 @@ namespace threepp {
             // Also includes denoiser_'s moments images (33/34) so M2=0 on
             // first read — variance reads from a stale-undefined moments slot
             // would give huge spurious variance, blowing the σ_lum estimate.
-            // Also includes the albedo image (35) so the demod-valid gate
-            // (.a) reads zero on uninitialised pixels — atrous treats those
-            // as "no demod, filter in radiance space".
-            std::array<VkImage, 11> images = {
+            // Also includes the albedo ping-pong (35/36) so both slots' .a=0
+            // on first read — raygen's temporal blend uses prev albedo at
+            // mesh-ID validated taps, and uninitialised .a=garbage would
+            // fool the demod-valid gate.
+            std::array<VkImage, 13> images = {
                     gbufImagesPP[0].image, gbufImagesPP[1].image,
                     accumImagesPP[0].image, accumImagesPP[1].image,
                     reservoirPosImagesPP[0].image, reservoirPosImagesPP[1].image,
                     reservoirWImagesPP[0].image, reservoirWImagesPP[1].image,
                     denoiser_->momentsImage(0), denoiser_->momentsImage(1),
-                    denoiser_->albedoImage(),
+                    denoiser_->albedoImage(0), denoiser_->albedoImage(1),
+                    denoiser_->albedoSnapshotImage(),
             };
 
-            std::array<VkImageMemoryBarrier2, 11> toTransfer{};
+            std::array<VkImageMemoryBarrier2, 13> toTransfer{};
             for (size_t i = 0; i < images.size(); ++i) {
                 toTransfer[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                 toTransfer[i].srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -4077,7 +4079,7 @@ namespace threepp {
                                      &clear, 1, &range);
             }
 
-            std::array<VkImageMemoryBarrier2, 11> toGeneral{};
+            std::array<VkImageMemoryBarrier2, 13> toGeneral{};
             for (size_t i = 0; i < images.size(); ++i) {
                 toGeneral[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                 toGeneral[i].srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
@@ -7343,7 +7345,7 @@ namespace threepp {
             // for material lookup, UV for texture sampling on the primary).
             // Always present in the layout; raygen gates use on the hybrid
             // push-constant bit.
-            std::array<VkDescriptorSetLayoutBinding, 36> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 38> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -7574,15 +7576,30 @@ namespace threepp {
             bindings[34].descriptorCount = 1;
             bindings[34].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
-            // Binding 35 — primary-surface albedo (rgba8). closest_hit writes
-            // at primary hits with .a=1 to mark "demod valid"; non-shaded
-            // primaries (metal/glass/emissive/sky) write .a=0 to disable
-            // demod for that pixel. Atrous reads it as a sampler in compute
-            // to demodulate radiance before the edge-aware filter.
+            // Bindings 35/36 — primary-surface albedo ping-pong (rgba8).
+            // 35 = write (current frame): raygen FC-blends prev albedo
+            // (binding 36) with payload.primaryAlbedo and writes here.
+            // Atrous reads binding 35 to demodulate radiance.
+            // 36 = read (prev frame): raygen samples via bilinear reproject
+            // with same mesh-ID + depth gates as accumImage reproject.
             bindings[35].binding = 35;
             bindings[35].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[35].descriptorCount = 1;
-            bindings[35].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+            bindings[35].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
+                                      VK_SHADER_STAGE_COMPUTE_BIT;
+            bindings[36].binding = 36;
+            bindings[36].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[36].descriptorCount = 1;
+            bindings[36].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+            // Binding 37 — snapshot of chit's per-frame albedo (no temporal
+            // blend). Raygen writes; atrous reads at center for re-mod.
+            // Preserves texture crispness while temporal blend on 35/36
+            // smooths noise on the demod division side.
+            bindings[37].binding = 37;
+            bindings[37].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[37].descriptorCount = 1;
+            bindings[37].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                       VK_SHADER_STAGE_COMPUTE_BIT;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
@@ -8360,21 +8377,47 @@ namespace threepp {
                     wMomentsRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                     wMomentsRead.pImageInfo = &momentsReadInfo;
 
-                    // Binding 35 — primary-surface albedo (RGBA8 storage image).
-                    // Single image (not ping-ponged): chit overwrites per frame,
-                    // atrous reads the just-written values in the same frame.
-                    VkDescriptorImageInfo albedoInfo{};
-                    albedoInfo.imageView   = denoiser_->albedoView();
-                    albedoInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    VkWriteDescriptorSet wAlbedo{};
-                    wAlbedo.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                    wAlbedo.dstSet = descriptorSets[idx];
-                    wAlbedo.dstBinding = 35;
-                    wAlbedo.descriptorCount = 1;
-                    wAlbedo.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    wAlbedo.pImageInfo = &albedoInfo;
+                    // Bindings 35/36 — primary-surface albedo ping-pong
+                    // (RGBA8). Raygen FC-blends prev albedo (36, prev slot)
+                    // with chit's payload.primaryAlbedo, writes to 35
+                    // (current write slot). Atrous reads 35. Same write/
+                    // read slot mapping as accumImagesPP / momentsImagesPP.
+                    VkDescriptorImageInfo albedoWriteInfo{};
+                    albedoWriteInfo.imageView   = denoiser_->albedoView(writeSlot);
+                    albedoWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wAlbedoWrite{};
+                    wAlbedoWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wAlbedoWrite.dstSet = descriptorSets[idx];
+                    wAlbedoWrite.dstBinding = 35;
+                    wAlbedoWrite.descriptorCount = 1;
+                    wAlbedoWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wAlbedoWrite.pImageInfo = &albedoWriteInfo;
 
-                    std::array<VkWriteDescriptorSet, 36> writes{
+                    VkDescriptorImageInfo albedoReadInfo{};
+                    albedoReadInfo.imageView   = denoiser_->albedoView(readSlot);
+                    albedoReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wAlbedoRead{};
+                    wAlbedoRead.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wAlbedoRead.dstSet = descriptorSets[idx];
+                    wAlbedoRead.dstBinding = 36;
+                    wAlbedoRead.descriptorCount = 1;
+                    wAlbedoRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wAlbedoRead.pImageInfo = &albedoReadInfo;
+
+                    // Binding 37 — snapshot albedo (single buffer, not
+                    // ping-pong). Same view across all frames.
+                    VkDescriptorImageInfo albedoSnapInfo{};
+                    albedoSnapInfo.imageView   = denoiser_->albedoSnapshotView();
+                    albedoSnapInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wAlbedoSnap{};
+                    wAlbedoSnap.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wAlbedoSnap.dstSet = descriptorSets[idx];
+                    wAlbedoSnap.dstBinding = 37;
+                    wAlbedoSnap.descriptorCount = 1;
+                    wAlbedoSnap.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wAlbedoSnap.pImageInfo = &albedoSnapInfo;
+
+                    std::array<VkWriteDescriptorSet, 38> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
                             wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered,
@@ -8384,7 +8427,7 @@ namespace threepp {
                             wResPosWrite, wResPosRead, wResWWrite, wResWRead,
                             wOceanFine,
                             wMomentsWrite, wMomentsRead,
-                            wAlbedo};
+                            wAlbedoWrite, wAlbedoRead, wAlbedoSnap};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);

@@ -28,6 +28,7 @@ struct Payload {
     float bsdfPdf;     // pdf of the BSDF-sampled bounce direction (set by chit; used here for MIS)
     float currentIor;  // unused by miss (kept for layout match)
     float hitSpecFrac; // unused by miss (kept for layout match — sky has no surface)
+    vec4 primaryAlbedo;// unused by miss (kept for layout match — sky has no surface)
 };
 
 layout(set = 0, binding = 6) uniform sampler2D envTex;

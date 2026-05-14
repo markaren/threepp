@@ -38,6 +38,12 @@ layout(set = 0, binding = 33, r32f) uniform readonly image2D momentsImage;
 // texture detail. Single image (not ping-pong) — chit overwrites, atrous
 // reads, no temporal dependency.
 layout(set = 0, binding = 35, rgba8) uniform readonly image2D primaryAlbedoImage;
+// Per-frame snapshot of chit's primaryAlbedo (no temporal blend). Atrous
+// reads at center pixel only and uses for re-modulation, so texture
+// detail stays per-frame crisp. The smoothed temporal albedo on binding
+// 35 drives the demod division (consistent with accumImage's temporal
+// blending); the snapshot here drives re-mod (preserves spatial detail).
+layout(set = 0, binding = 37, rgba8) uniform readonly image2D primaryAlbedoSnapshotImage;
 
 layout(push_constant) uniform Pc {
     uint stride;          // 1, 2, or 4 (binomial spacing)
@@ -199,11 +205,23 @@ void main() {
     vec3 filteredColor = c.rgb;
     if (sumW > 1e-5) {
         const vec3 demodFiltered = sumColor / sumW;
-        // Re-modulate with the center albedo. When center had no valid
-        // albedo, invAlbC == 1 → demodFiltered IS the filtered radiance
-        // and multiplying by aC.rgb (which is 0) would zero it — so
-        // multiply by (demodC ? aC.rgb : vec3(1.0)) instead.
-        filteredColor = demodC ? (demodFiltered * aC.rgb) : demodFiltered;
+        // Re-mod albedo: mix between snapshot (per-frame chit value, has
+        // chit jitter noise) and temporal-smoothed (suppresses jitter but
+        // smears textures under reproject motion). Use the DIFFERENCE
+        // between them as the motion-detection signal: when they agree
+        // (static pixel, smoothed has converged on the snapshot value),
+        // use smoothed for jitter stability; when they differ (motion is
+        // bringing different-albedo content into the temporal blend),
+        // use snapshot for texture crispness. FC-based mix didn't work
+        // because static-mesh-under-camera-translation keeps FC high but
+        // the smoothed albedo is severely smeared by the reproject mixing
+        // adjacent texels over many frames.
+        const vec4  aSnap        = imageLoad(primaryAlbedoSnapshotImage, px);
+        const vec3  albDelta     = abs(aSnap.rgb - aC.rgb);
+        const float albDeltaMax  = max(albDelta.r, max(albDelta.g, albDelta.b));
+        const float useSnap      = clamp(albDeltaMax * 8.0, 0.0, 1.0);
+        const vec3  remodAlb     = mix(aC.rgb, aSnap.rgb, useSnap);
+        filteredColor = demodC ? (demodFiltered * remodAlb) : demodFiltered;
     }
 
     // Carry FC through .a unchanged so the finalize stage can read it for

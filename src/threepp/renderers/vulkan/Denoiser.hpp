@@ -77,18 +77,34 @@ namespace threepp::vulkan {
             return momentsImagesPP_[slot].image;
         }
 
-        // Per-pixel primary-surface albedo. Written by closest_hit at the
-        // primary hit only (gated on payload.inFlags scatter==0). The atrous
-        // shader divides the temporal-accumulated radiance by this before
-        // filtering and multiplies back after — surfaces with high-frequency
-        // texture detail (paint, weathering) confuse the luminance edge stop
-        // when filtering in radiance space; demodulating makes the filter
-        // see pure illumination, which is smoother, so the lum-stop can let
-        // the filter actually average out fireflies. Zero (sentinel) on
-        // non-shaded primaries (sky, metal, glass, emissive) — atrous treats
-        // those as "no demod available" and filters in radiance space.
-        [[nodiscard]] VkImageView albedoView() const { return albedoImage_.view; }
-        [[nodiscard]] VkImage    albedoImage() const { return albedoImage_.image; }
+        // Per-pixel primary-surface albedo, temporally accumulated as a
+        // ping-pong alongside accumImagesPP. Raygen FC-blends the chit's
+        // current-frame snapshot (payload.primaryAlbedo) with prev-frame
+        // albedo reprojected via the same bilinear taps + mesh/depth gates
+        // as the radiance accumulator — keeps the two channels temporally
+        // consistent so demod division produces stable illumination instead
+        // of ghost trails at the snapshot/temporal boundary. atrous reads
+        // the write slot (current-frame's just-blended albedo).
+        [[nodiscard]] VkImageView albedoView(uint32_t slot) const {
+            return albedoImagesPP_[slot].view;
+        }
+        [[nodiscard]] VkImage albedoImage(uint32_t slot) const {
+            return albedoImagesPP_[slot].image;
+        }
+
+        // Snapshot of the chit's current-frame primaryAlbedo, no temporal
+        // blend. Atrous uses it for the re-modulation step at the end of
+        // its kernel: dividing by the temporal-smoothed albedo recovers
+        // clean lighting, then multiplying by the snapshot restores the
+        // per-frame texture detail crisp (the smoothed albedo lags texel
+        // motion under camera arc, which dims texture detail if used for
+        // re-mod). Raygen writes per frame; atrous reads at center only.
+        [[nodiscard]] VkImageView albedoSnapshotView() const {
+            return albedoSnapshotImage_.view;
+        }
+        [[nodiscard]] VkImage albedoSnapshotImage() const {
+            return albedoSnapshotImage_.image;
+        }
 
     private:
         VulkanContext&        ctx_;
@@ -100,7 +116,8 @@ namespace threepp::vulkan {
 
         std::array<Image2D, 2> filteredImagesPP_{};
         std::array<Image2D, 2> momentsImagesPP_{};
-        Image2D                albedoImage_{};
+        std::array<Image2D, 2> albedoImagesPP_{};
+        Image2D                albedoSnapshotImage_{};
 
         Image2D createStorageImage2D(uint32_t w, uint32_t h,
                                      VkFormat format, const char* label);
