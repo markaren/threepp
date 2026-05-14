@@ -21,7 +21,11 @@ namespace {
     // Five sections side-by-side, 3.4 units wide each.
     constexpr float kSectionDx = 3.4f;
     constexpr float kSectionXs[5] = {
-            -2 * kSectionDx, -1 * kSectionDx, 0.0f, +1 * kSectionDx, +2 * kSectionDx,
+            -2 * kSectionDx,
+            -1 * kSectionDx,
+            0.0f,
+            +1 * kSectionDx,
+            +2 * kSectionDx,
     };
     constexpr float kRoomDepth = 6.0f;
     constexpr float kRoomHeight = 5.0f;
@@ -259,6 +263,9 @@ int main() {
         bool restirDI = renderer.restirDIEnabled();
         if (ImGui::Checkbox("ReSTIR DI", &restirDI))
             renderer.setRestirDIEnabled(restirDI);
+        bool restirGI = renderer.restirGIEnabled();
+        if (ImGui::Checkbox("ReSTIR GI", &restirGI))
+            renderer.setRestirGIEnabled(restirGI);
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");
         if (ImGui::IsItemHovered())
