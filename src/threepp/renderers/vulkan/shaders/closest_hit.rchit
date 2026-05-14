@@ -211,6 +211,15 @@ hitAttributeEXT vec2 attribs;
 layout(location = 0) rayPayloadInEXT Payload payload;
 // Shadow visibility: 0 = occluded (default), 1 = clear (set by shadow_miss).
 layout(location = 1) rayPayloadEXT float shadowVisibility;
+// ReSTIR GI Stage 1a — sub-payload for the indirect "candidate" trace launched
+// from the primary hit. Same Payload struct as the incoming `payload` so the
+// recursive chit invocation can re-use the full shading path; the sub-trace
+// chit gates its behaviour on `inFlags & 8u` (set here before traceRayEXT) so
+// it (a) doesn't recurse into another GI sub-trace and (b) doesn't run RIS DI
+// against the temporal reservoir bound for the primary pixel. Recursion depth
+// 3 (primary chit → GI sub-trace chit → shadow ray for NEE at xs) is allocated
+// at pipeline creation time; the shadow_anyhit terminates without re-tracing.
+layout(location = 2) rayPayloadEXT Payload giSubPayload;
 
 const float PI = 3.14159265358979;
 const float TWO_PI = 6.28318530717958;
@@ -534,6 +543,52 @@ void updateReservoir(inout Reservoir r, vec3 pos, float ltype,
 }
 
 void finalizeReservoir(inout Reservoir r) {
+    r.W = r.W_sum / max(r.M * r.p_hat, 1e-20);
+}
+
+// ───── ReSTIR GI — Stage 1a (single-sample reservoir at primary) ─────
+// Per Ouyang 2021 (vanilla ReSTIR GI), the indirect sample at primary is
+// represented as (xs, ns, Lo, omegaI) — a virtual point sample where
+//   xs      = world-space position of the first indirect hit,
+//   ns      = shading normal at xs,
+//   Lo      = outgoing radiance at xs (one-bounce direct in Stage 1a — full
+//             path-tracer continuation from xs lives in raygen, not here),
+//   omegaI  = direction from the primary surface point to xs.
+//
+// Stage 1a generates exactly one candidate per pixel per frame via BSDF
+// sampling from the primary, traces the sub-ray, and shades xs (via the
+// recursive chit invocation) to obtain Lo. The reservoir struct + helpers
+// are scaffolded here so Stage 1b can add temporal reuse (persistent
+// reservoir ping-pong) and Stage 1c can add spatial reuse without rewriting
+// the data layout. At M=1 the contribution collapses to the classic MC
+// bounce-1 estimate (= bs.weight · Lo); the variance reduction kicks in at
+// M>1 when neighbours/history contribute via RIS.
+struct GiReservoir {
+    vec3  xs;      // sample position (world space)
+    vec3  ns;      // sample normal (world space)
+    vec3  Lo;      // outgoing radiance at xs
+    vec3  omegaI;  // direction from primary hitPos to xs
+    float W_sum;   // running Σ w_i = p_hat / proposal_pdf
+    float M;       // # of candidates merged
+    float W;       // = W_sum / (M · p_hat_at_chosen)
+    float p_hat;   // target pdf at chosen sample
+};
+
+void updateGiReservoir(inout GiReservoir r,
+                      vec3 xs_new, vec3 ns_new, vec3 Lo_new, vec3 omegaI_new,
+                      float w, float p_hat_new, inout uint seed) {
+    r.W_sum += w;
+    r.M     += 1.0;
+    if (urand(seed) < w / max(r.W_sum, 1e-20)) {
+        r.xs     = xs_new;
+        r.ns     = ns_new;
+        r.Lo     = Lo_new;
+        r.omegaI = omegaI_new;
+        r.p_hat  = p_hat_new;
+    }
+}
+
+void finalizeGiReservoir(inout GiReservoir r) {
     r.W = r.W_sum / max(r.M * r.p_hat, 1e-20);
 }
 
@@ -1423,9 +1478,15 @@ void main() {
     // = init RIS only; 1b adds temporal reuse via a per-pixel reservoir
     // SSBO; 1c adds spatial reuse via random neighbour taps from the same
     // SSBO. Master gate is pc.motionFlags bit 4 (renderer.setRestirDIEnabled).
+    // The `inFlags & 8u` exclusion suppresses RIS DI when this chit invocation
+    // is a ReSTIR GI sub-trace — the reservoir at this LaunchID belongs to
+    // the primary pixel (the camera ray's primary hit), and the sub-trace's
+    // xs is a different surface entirely. Letting RIS run here would mix two
+    // unrelated reservoir streams into the same per-pixel slot.
     const bool restirOn      = (pc.motionFlags & 16u) != 0u;
     const bool useRISPrimary = restirOn
                             && ((payload.inFlags & 1u) == 0u)
+                            && ((payload.inFlags & 8u) == 0u)
                             && (mdesc.transmission < 0.05);
 
     if (useRISPrimary) {
@@ -2286,17 +2347,173 @@ void main() {
     // the term so the user can see directly-visible glowing surfaces.
     if ((payload.inFlags & 1u) != 0u) emissiveOut = vec3(0.0);
     if ((pc.motionFlags & 4u) != 0u) lit += gatherCaustics(hitPos, N, albedo, roughness);
+
+    // ── ReSTIR GI Stage 1a — single-sample reservoir at primary ──
+    // When ReSTIR GI is enabled (master = pc.motionFlags bit 6), and this
+    // chit invocation is the camera-ray primary on a roughly-diffuse opaque
+    // dielectric, we launch one BSDF-proposal sub-ray and use the shaded
+    // first-bounce result as the candidate sample for a single-entry
+    // reservoir. Stage 1a's contribution at M=1 collapses to the classic
+    // MC bounce-1 estimate (bs.weight·Lo); the reservoir struct is in place
+    // so Stage 1b (temporal) and Stage 1c (spatial) can extend by merging
+    // additional samples without rewriting the data layout.
+    //
+    // Eligibility — exclude:
+    //   • non-primary hits (`inFlags & 1u`)        — bounces handle indirect via continuation
+    //   • GI sub-trace recursion (`inFlags & 8u`)  — would explode the recursion depth
+    //   • transmissive primaries (glass)           — refracted xs shifts non-linearly w/ view
+    //   • near-mirror surfaces (roughness ≤ 0.20)  — deterministic dir, RIS has nothing to gain
+    //   • pure metals (metalness ≥ 0.5)            — same reason, plus spec target ≠ diff target
+    //   • emissive-dominated primaries (emLum1 > 0.5) — direct emission already dwarfs bounce 1
+    //   • bs.valid = false (numerical edge case)    — no usable proposal
+    // When the gate fails, the existing classic bounce-loop continuation
+    // (set up below in the `else` branch of the payload writes) handles
+    // bounce 1 via raygen's step 1 trace — identical to pre-Stage-1a.
+    const bool restirGIOn   = (pc.motionFlags & 64u) != 0u;
+    const bool useGIPrimary = restirGIOn
+                           && bs.valid
+                           && ((payload.inFlags & 1u) == 0u)
+                           && ((payload.inFlags & 8u) == 0u)
+                           && (mdesc.transmission < 0.05)
+                           && (roughness > 0.20)
+                           && (metalness < 0.5)
+                           && (emLum1 < 0.5);
+
+    bool giConsumed = false;
+    vec3 giContrib  = vec3(0.0);
+    vec3 giNextOrigin = vec3(0.0);
+    vec3 giNextDir    = vec3(0.0);
+    vec3 giThroughput = vec3(0.0);// brdfWeight for raygen step 1 = bs.weight · sub.brdfWeight
+    bool giTerminate  = false;    // sub-trace said terminate (env hit, or sub-trace bs invalid)
+
+    if (useGIPrimary) {
+        // Initialise the sub-payload. Bit 3 of inFlags marks this as a GI
+        // sub-trace so the recursive chit invocation suppresses RIS DI and
+        // (more importantly) skips its OWN GI launch — otherwise depth grows
+        // unbounded. flags bit 1 (=2u) primes miss.rmiss to MIS-halve the env
+        // contribution: primary's env-NEE already supplied the env-CDF half
+        // (in `lit` above), so if our sub-ray hits the sky we want the BSDF
+        // half. bsdfPdf is the 3-lobe mixture pdf at bs.dir, matching miss's
+        // MIS weight expectation.
+        giSubPayload.radianceDiff    = vec3(0.0);
+        giSubPayload.radianceSpec    = vec3(0.0);
+        giSubPayload.brdfWeight      = vec3(0.0);
+        giSubPayload.nextOrigin      = vec3(0.0);
+        giSubPayload.nextDir         = vec3(0.0);
+        giSubPayload.flags           = 2u;// halve env on miss for MIS
+        giSubPayload.seed            = seed;
+        giSubPayload.hitWorldPos     = vec3(0.0);
+        giSubPayload.hitInstanceId   = 0u;
+        giSubPayload.prevWorldPos    = vec3(0.0);
+        giSubPayload.hitRoughness    = 1.0;
+        giSubPayload.inFlags         = 8u;// GI sub-trace gate
+        giSubPayload.hitMetalness    = 0.0;
+        giSubPayload.hitTransmission = 0.0;
+        giSubPayload.bsdfPdf         = brdfPdf3(V, bs.dir, N, roughness, metalness, ccProb, ccRough);
+        giSubPayload.currentIor      = 1.0;
+        giSubPayload.hitSpecFrac     = 0.0;
+        giSubPayload.primaryAlbedo   = vec4(0.0);
+        giSubPayload.hitNormal       = vec3(0.0);
+
+        // Launch sub-ray in BSDF-sampled direction. payloadLocation=2 routes
+        // chit/miss writes into giSubPayload. Path hit group (sbtOffset=0),
+        // primary miss (missIndex=0). Same offset/origin as the classic bounce
+        // raygen would launch.
+        traceRayEXT(topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
+                    hitPos + N * 1e-3, 0.001, bs.dir, 10000.0, 2);
+
+        // Sub-trace's chit (or miss) consumed urand calls — adopt its seed.
+        seed = giSubPayload.seed;
+
+        // Candidate (xs, ns, Lo, ωi). Lo is the radiance leaving xs — direct
+        // light at xs from the sub-trace's classic NEE + any visible emission
+        // at xs + ambient. Bounces 2+ from xs are NOT folded into Lo; they
+        // travel through raygen's continuation (step 1 picks up at xs in the
+        // sub-trace's BSDF-sampled outbound direction).
+        const vec3 xs_cand = giSubPayload.hitWorldPos;
+        const vec3 ns_cand = giSubPayload.hitNormal;
+        const vec3 Lo_cand = giSubPayload.radianceDiff + giSubPayload.radianceSpec;
+
+        // Stage 1a single-candidate reservoir. Target p_hat ∝ luminance of
+        // the integrand (lum(BRDF·NdotL·Lo)). Proposal q = bsdfPdf3 (3-lobe
+        // mixture pdf). w_i = p_hat / q. At M=1 finalize gives W = 1/q.
+        // bs.weight already encodes (BRDF·NdotL/q_lobe_conditional · 1/lobePickProb)
+        // = (BRDF·NdotL/q_marginal_full)  — so the contribution at M=1
+        // simplifies to bs.weight · Lo, identical to classic MC bounce 1.
+        // We still populate the reservoir for layout parity with Stage 1b/1c
+        // which will swap to explicit BRDF eval at xs's omegaI (needed when
+        // resampling neighbours whose primary surface differs).
+        const float p_hat_local = max(lum3(bs.weight * Lo_cand) * giSubPayload.bsdfPdf, 0.0);
+        const float q_local     = max(giSubPayload.bsdfPdf, 1e-20);
+        const float w_local     = p_hat_local / q_local;
+
+        GiReservoir gi;
+        gi.xs     = vec3(0.0);
+        gi.ns     = vec3(0.0);
+        gi.Lo     = vec3(0.0);
+        gi.omegaI = vec3(0.0);
+        gi.W_sum  = 0.0;
+        gi.M      = 0.0;
+        gi.W      = 0.0;
+        gi.p_hat  = 0.0;
+        updateGiReservoir(gi, xs_cand, ns_cand, Lo_cand, bs.dir,
+                          w_local, p_hat_local, seed);
+        finalizeGiReservoir(gi);
+
+        // Contribution: at M=1, F·W = bs.weight · Lo (see comment block above).
+        // Per-pixel firefly clamp on the contribution — a bounce-1 sample that
+        // lands on a grazing emissive or a low-pdf direction near a hot HDRI
+        // pixel can spike enough to dominate the running mean for many frames.
+        // Same `< 1e20` sentinel pattern the env NEE post-multiply clamp uses.
+        giContrib = bs.weight * Lo_cand;
+        if (pc.fireflyClamp < 1e20) {
+            const float giLum = lum3(giContrib);
+            if (giLum > pc.fireflyClamp) giContrib *= pc.fireflyClamp / giLum;
+        }
+
+        // Continuation hand-off for raygen: step 1 picks up at xs in the
+        // sub-trace's BSDF-sampled outbound direction. brdfWeight handed to
+        // raygen is the throughput multiplier covering BOTH the primary→xs
+        // edge (= bs.weight, the bounce-1 weight that GI just "consumed")
+        // AND the xs→y edge (sub.brdfWeight, sampled inside the sub-trace
+        // chit). raygen multiplies throughput by this once at end-of-step-0;
+        // step 1 then traces from xs and accumulates the y-shading contribution
+        // at the right throughput. If the sub-trace terminated (env hit or
+        // numeric edge case), we cap the path — no usable continuation point.
+        giNextOrigin = giSubPayload.nextOrigin;
+        giNextDir    = giSubPayload.nextDir;
+        giThroughput = bs.weight * giSubPayload.brdfWeight;
+        giTerminate  = (giSubPayload.flags & 1u) != 0u ||
+                       giSubPayload.hitInstanceId == 0u;
+        giConsumed   = true;
+    }
+
     // Phase 1: route ALL contributions to diff channel for now. Phase 1b
     // will split litDiff and litSpec at each NEE site for proper channel
     // separation. Keeping spec=0 for this initial split preserves current
     // behavior pixel-identical while the infrastructure lands.
-    payload.radianceDiff = emissiveOut + ambient + lit;
-    payload.radianceSpec = vec3(0.0);
-    payload.brdfWeight = brdfWeight;
-    payload.nextOrigin = hitPos + N * 1e-3;
-    payload.nextDir    = bounceDir;
-    payload.flags      = pathFlags;
-    payload.seed       = seed;
+    if (giConsumed) {
+        // GI absorbed bounce 1's contribution; raygen's step 1 trace continues
+        // from xs at bounce 2. payload.flags bit 3 (=8u) is a documentation
+        // marker that raygen could use for special handling later (e.g.,
+        // skipping FC adjustments for "free" GI bounces); the existing
+        // bounce-loop maths is already correct without inspecting bit 3 since
+        // the next-origin/dir + brdfWeight encode the post-bounce-1 state.
+        payload.radianceDiff = emissiveOut + ambient + lit + giContrib;
+        payload.radianceSpec = vec3(0.0);
+        payload.brdfWeight   = giTerminate ? vec3(0.0) : giThroughput;
+        payload.nextOrigin   = giTerminate ? vec3(0.0) : giNextOrigin;
+        payload.nextDir      = giTerminate ? vec3(0.0) : giNextDir;
+        payload.flags        = giTerminate ? 1u : 8u;
+    } else {
+        payload.radianceDiff = emissiveOut + ambient + lit;
+        payload.radianceSpec = vec3(0.0);
+        payload.brdfWeight   = brdfWeight;
+        payload.nextOrigin   = hitPos + N * 1e-3;
+        payload.nextDir      = bounceDir;
+        payload.flags        = pathFlags;
+    }
+    payload.seed = seed;
     // Per-vertex motion vector: interpolate this triangle's PREVIOUS-frame
     // vertex positions (via gdesc.prevVertexAddress) using the same
     // barycentric weights as the hit, then transform with the current

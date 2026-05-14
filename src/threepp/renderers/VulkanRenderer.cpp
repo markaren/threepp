@@ -959,6 +959,15 @@ namespace threepp {
         // (same pattern as bounces). Default on. Forwarded to chit via
         // pc.motionFlags bit 16 each frame.
         bool restirDIEnabled_ = false;
+        // ReSTIR GI master toggle. Stage 1a: when on, primary chit launches a
+        // BSDF-sampled sub-ray to generate a single-sample reservoir for the
+        // indirect contribution at primary, then hands off to raygen with the
+        // sub-trace's xs as the new origin for bounce 2 (skipping classic
+        // bounce 1 to avoid double-counting). At M=1 the contribution is
+        // statistically equivalent to classic MC; later stages (1b temporal,
+        // 1c spatial) provide the actual variance reduction. Forwarded to
+        // chit via pc.motionFlags bit 6 each frame.
+        bool restirGIEnabled_ = false;
         // Hybrid raster overlay: layer index for opt-in overlay objects
         // (alongside auto-detected wireframe materials + Line/LineSegments).
         // -1 disables layer-based selection. Mirrors WGPU PT's overlayLayer_.
@@ -7723,7 +7732,13 @@ namespace threepp {
             rci.pStages = stages.data();
             rci.groupCount = static_cast<uint32_t>(groups.size());
             rci.pGroups = groups.data();
-            rci.maxPipelineRayRecursionDepth = 2;// primary + 1 shadow
+            // depth 3 — primary chit → ReSTIR GI sub-trace chit → shadow ray
+            // at xs (Stage 1a recursive chit-launched indirect candidate).
+            // Without GI the deepest path is primary + 1 shadow ray = depth 2;
+            // depth 3 covers the extra hop and stays well under the spec's
+            // VkPhysicalDeviceRayTracingPipelinePropertiesKHR::maxRayRecursionDepth
+            // floor (commonly 31 on desktop / 8+ on mobile).
+            rci.maxPipelineRayRecursionDepth = 3;
             rci.layout = rtPipelineLayout;
 
             check(ctx->rt().createRayTracingPipelines(
@@ -9176,7 +9191,12 @@ namespace threepp {
             //                  bit 3 = hybrid mode (gbuffer drives reproject
             //                          + primary jitter is disabled),
             //                  bit 4 = ReSTIR DI enabled (RIS at primary;
-            //                          chit falls back to classic NEE when off)),
+            //                          chit falls back to classic NEE when off),
+            //                  bit 5 = perSppJitter (hybrid sub-pixel jitter
+            //                          is taken per-sample instead of once),
+            //                  bit 6 = ReSTIR GI enabled (Stage 1a single-
+            //                          sample indirect reservoir at primary;
+            //                          off = classic bounce-1 continuation)),
             // [5] emissiveCount, [6] emissiveTotalPower (float bits).
             // Per-instance moved bits live in the binding 21 SSBO.
             const float exposure = toneMappingExposure_;
@@ -9188,7 +9208,8 @@ namespace threepp {
                     (sceneHasGlass_        ? 4u  : 0u) |
                     (hybridEnabled_        ? 8u  : 0u) |
                     (restirDIEnabled_      ? 16u : 0u) |
-                    (perSppJitterHybrid_   ? 32u : 0u);
+                    (perSppJitterHybrid_   ? 32u : 0u) |
+                    (restirGIEnabled_      ? 64u : 0u);
             uint32_t emPowerBits;
             std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
             uint32_t envSumBits;
@@ -9963,6 +9984,14 @@ namespace threepp {
 
     bool VulkanRenderer::restirDIEnabled() const {
         return pimpl_->restirDIEnabled_;
+    }
+
+    void VulkanRenderer::setRestirGIEnabled(bool enabled) {
+        pimpl_->restirGIEnabled_ = enabled;
+    }
+
+    bool VulkanRenderer::restirGIEnabled() const {
+        return pimpl_->restirGIEnabled_;
     }
 
     VulkanRenderer::FrameTimings VulkanRenderer::lastFrameTimings() const {

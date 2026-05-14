@@ -249,6 +249,11 @@ int main(int argc, char** argv) {
             renderer.setRestirDIEnabled(restirDI);
         }
 
+        bool restirGI = renderer.restirGIEnabled();
+        if (ImGui::Checkbox("ReSTIR GI", &restirGI)) {
+            renderer.setRestirGIEnabled(restirGI);
+        }
+
         if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
             renderer.setSamplesPerPixel(spp);
 

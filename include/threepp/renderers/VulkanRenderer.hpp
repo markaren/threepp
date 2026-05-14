@@ -136,6 +136,16 @@ namespace threepp {
         void setRestirDIEnabled(bool enabled);
         [[nodiscard]] bool restirDIEnabled() const;
 
+        // ReSTIR GI master toggle (Stage 1a). When on, primary chit launches
+        // a BSDF-sampled indirect sub-ray and assembles a single-sample
+        // reservoir for the bounce-1 contribution; raygen's step-1 continues
+        // from the sub-trace's hit (xs) at bounce 2 to avoid double-counting.
+        // At M=1 the result is statistically equivalent to classic MC; the
+        // visible variance reduction lands with Stage 1b/1c (temporal +
+        // spatial reuse, separate commits). Default off.
+        void setRestirGIEnabled(bool enabled);
+        [[nodiscard]] bool restirGIEnabled() const;
+
         // Hybrid-mode raster overlay: post-TAA, draws wireframe-flagged
         // meshes (any material with `wireframe = true`) and Line/LineSegments
         // objects on top of the path-traced image, depth-tested against the
