@@ -383,7 +383,7 @@ int main() {
 
     // ── Scene ──────────────────────────────────────────────────────────────────
     Scene scene;
-    scene.background = Color::aliceblue;
+    scene.background = Color::black;
 
     buildRoom(scene);
     buildPillars(scene);
