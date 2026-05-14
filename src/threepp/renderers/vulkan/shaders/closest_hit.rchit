@@ -2160,7 +2160,25 @@ void main() {
                 // MIS doesn't add noise on clearcoat materials.
                 const float pdfBrdf = brdfPdf3(V, nDir, N, roughness, metalness, ccProb, ccRough);
                 const float wEnv    = pdfEnv / max(pdfEnv + pdfBrdf, 1e-8);
-                lit += wEnv * lobeSum * NdotL_e * envSample * shadowVisibility / max(pdfEnv, 1e-8);
+                // Post-multiply firefly clamp. The env-sample clamp above caps
+                // the env texel's luminance, but on glossy surfaces the BSDF
+                // lobe (`lobeSum`) can spike — `D_e = distGGX` at a near-mirror
+                // configuration easily hits 1000+ — and when the env CDF picks
+                // a low-pdf direction near a bright HDR sun disc, the ratio
+                // `lobeSum / pdfEnv` blows up regardless of the per-sample env
+                // clamp. The product becomes a visible sky-coloured firefly on
+                // glossy/painted surfaces under sunlit HDRI scenes (the long-
+                // standing speckle issue on the Ocean demo's ship hull).
+                // Matches the post-multiply clamp pattern used in the ReSTIR DI
+                // path at line ~1772 and the emissive-tri NEE path. Gated by
+                // the `< 1e20` sentinel so setFireflyClamp(0) disables it.
+                vec3 envContrib = wEnv * lobeSum * NdotL_e * envSample
+                                  * shadowVisibility / max(pdfEnv, 1e-8);
+                if (pc.fireflyClamp < 1e20) {
+                    const float cLumE = lum3(envContrib);
+                    if (cLumE > pc.fireflyClamp) envContrib *= pc.fireflyClamp / cLumE;
+                }
+                lit += envContrib;
             }
         }
     } else {
@@ -2182,7 +2200,17 @@ void main() {
                 vec3 envSample = sampleEquirect(s.dir);
                 const float envLum = dot(envSample, vec3(0.2126, 0.7152, 0.0722));
                 if (envLum > pc.fireflyClamp) envSample *= pc.fireflyClamp / envLum;
-                lit += 0.5 * s.weight * envSample * shadowVisibility;
+                // Post-multiply clamp — same reasoning as the env-CDF branch
+                // above. `s.weight = BRDF·cos / pdf_lobe / p_lobeSel` can spike
+                // on glossy surfaces when the lobe pdf was small. Without this,
+                // bright env values reflected off near-mirror surfaces produce
+                // visible fireflies.
+                vec3 envContrib = 0.5 * s.weight * envSample * shadowVisibility;
+                if (pc.fireflyClamp < 1e20) {
+                    const float cLumE = lum3(envContrib);
+                    if (cLumE > pc.fireflyClamp) envContrib *= pc.fireflyClamp / cLumE;
+                }
+                lit += envContrib;
             }
         }
     }

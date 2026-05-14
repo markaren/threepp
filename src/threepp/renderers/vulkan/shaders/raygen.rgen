@@ -877,9 +877,19 @@ void main() {
         // unclamped so directly-visible emissive surfaces and the
         // background-through-glass case stay at full intensity.
         vec3 contribution = throughput * payload.radiance;
-        if (scatter > 0) {
+        if (scatter > 0 && pc.fireflyClamp < 1e20) {
+            // Tie indirect-bounce cap to fireflyClamp so a tightened
+            // user-facing clamp (Ocean demo sets 6) reaches the indirect
+            // path too. Earlier hardcoded 50 was brighter than fireflyClamp,
+            // letting BSDF-sample→miss→sun-disc fireflies stay visible even
+            // when the user explicitly dialled the clamp down. 1.5× factor
+            // gives indirect bounces a bit more room than direct NEE
+            // (legitimate glossy reflections of bright surfaces want some
+            // headroom — a polished metal viewed through a slight bounce
+            // shouldn't get crushed as hard as a primary NEE outlier would).
+            const float cap = pc.fireflyClamp * 1.5;
             const float lum = dot(contribution, vec3(0.2126, 0.7152, 0.0722));
-            if (lum > 50.0) contribution *= 50.0 / lum;
+            if (lum > cap) contribution *= cap / lum;
         }
         radiance += contribution;
         if ((payload.flags & 1u) != 0u) break;
@@ -1238,6 +1248,59 @@ void main() {
                         // NOT cause mirror-style ghosting. Bump floor + cap so
                         // continuous-motion FC settles around 24-32, dropping
                         // tint variance ~3-4×.
+
+                        // ── View-dependent radiance: spec/metal smear suppression ──
+                        // The roughness-aware caps above were tuned for variance
+                        // reduction (rough = wide lobe = high per-sample variance =
+                        // needs more history; smooth = narrow lobe = low variance =
+                        // less history needed). But they don't account for the
+                        // fact that smooth surfaces also have HIGHLY view-dependent
+                        // radiance: the BRDF lobe rotates with view direction, so
+                        // each frame samples DIFFERENT env/scene content at the
+                        // same surface point. Surface-anchored reprojection blends
+                        // those values as if they were samples of the same
+                        // integrand — they aren't — so the running mean lags
+                        // behind the true new-view integrand, manifesting as
+                        // visible smear/ghost trails on mirrors, chrome, glossy
+                        // paint when the camera translates. Worst close to the
+                        // surface where view-direction delta per frame is largest.
+                        //
+                        // Fix: on motion frames, drop the cap aggressively for
+                        // view-dependent (metal OR low-roughness) primary surfaces
+                        // so the mean re-locks to the new view's integrand in a
+                        // few frames instead of dragging the old one along.
+                        // Glass is excluded — refracted content reprojects with
+                        // parallax (anchored on the glass surface), so keeping
+                        // history does NOT cause mirror-style ghosting (per the
+                        // tint-stability block above).
+                        const bool isGlassP = primaryTransmission > 0.05;
+                        const float viewDepT = isGlassP ? 0.0 : max(
+                                primaryMetalness,
+                                1.0 - smoothstep(0.05, 0.30, primaryRoughness));
+                        // ── Emissive smear suppression ──
+                        // Emissive primary surfaces have view-INDEPENDENT radiance
+                        // (so the view-dep factor above doesn't catch them), but
+                        // their extreme per-pixel luminance — typically 50-500×
+                        // scene base, or higher with HDR emissives — amplifies any
+                        // sub-pixel reprojection error from the 4-tap bilinear-
+                        // style blend into a visible smear trail under camera
+                        // motion. Diffuse walls have the same per-frame error
+                        // mechanism but their BG/FG values are similar so it's
+                        // invisible; emissives turn it into a comet tail.
+                        // Same fix family: detect bright primary radiance, force
+                        // fast FC decay so the compound blur can't accumulate.
+                        // Soft threshold 10..30 lum picks up typical emissives
+                        // (intensity * color around 1-50 scene-linear pre-clamp)
+                        // without false-positives on sunlit diffuse surfaces
+                        // (~1-3 lum scene-linear under typical exposure).
+                        const float primaryLum = dot(radianceSum,
+                                vec3(0.2126, 0.7152, 0.0722)) / float(spp);
+                        const float emissiveT = clamp((primaryLum - 10.0) / 20.0, 0.0, 1.0);
+                        const float decayT = max(viewDepT, emissiveT);
+                        if (primaryMoved && decayT > 0.05) {
+                            capUp = mix(capUp, 4.0, decayT);
+                            capLo = mix(capLo, 1.0, decayT);
+                        }
                         histFc = clamp(bFc * 0.5, capLo, capUp);
                     }
                 }

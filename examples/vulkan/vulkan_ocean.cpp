@@ -129,6 +129,17 @@ int main() {
     renderer.setDenoise(true);
     renderer.setRestirDIEnabled(true);
     renderer.setHybridEnabled(true);
+    // Default fireflyClamp of 20 maps to ~0.93 sRGB after `exposure 0.7 × ACES`
+    // — i.e. clamped fireflies still render near-white. Outdoor HDRI scenes
+    // with a real sun disc (autumn_field_puresky has one) produce env-NEE
+    // samples that hit the cap regularly; on the Gunnerus's glossy painted
+    // hull this shows as a dense field of sky-tinted speckles. Tightening to
+    // 3 maps the cap to ~0.45 sRGB after tonemap — clamped samples blend
+    // into the surface tone rather than punching through as specks. Trade:
+    // legitimate bright env reflections off polished metal get crushed
+    // (acceptable here — Gunnerus is painted, no chrome). For scenes with
+    // genuine mirror surfaces a value of 8-12 is the safer middle.
+    renderer.setFireflyClamp(3.0f);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 0.7f;
 
@@ -431,7 +442,7 @@ int main() {
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({0, 0});
         ImGui::SetNextWindowSize({340, 0});
-        ImGui::Begin("Vulkan PT — Ocean");
+        ImGui::Begin("Vulkan PT - Ocean");
         ImGui::Text("FPS: %.1f", fps);
         ImGui::Separator();
         ImGui::TextWrapped(
