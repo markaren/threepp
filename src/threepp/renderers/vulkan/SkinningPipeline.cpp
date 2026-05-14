@@ -6,6 +6,8 @@
 #include "threepp/renderers/vulkan/shaders/skinning.comp.spv.h"
 
 #include <array>
+#include <stdexcept>
+#include <string>
 
 namespace threepp::vulkan {
 
@@ -101,14 +103,24 @@ namespace threepp::vulkan {
         dsAi.descriptorSetCount = 1;
         dsAi.pSetLayouts        = &dsLayout_;
         VkDescriptorSet ds = VK_NULL_HANDLE;
-        check(vkAllocateDescriptorSets(ctx_.device(), &dsAi, &ds),
-              "vkAllocateDescriptorSets(skinning)");
+        const VkResult r = vkAllocateDescriptorSets(ctx_.device(), &dsAi, &ds);
+        if (r == VK_ERROR_OUT_OF_POOL_MEMORY || r == VK_ERROR_FRAGMENTED_POOL) {
+            throw std::runtime_error(
+                    "SkinningPipeline: descriptor pool exhausted — "
+                    "scene has more than kMaxSkinnedMeshes=" +
+                    std::to_string(kMaxSkinnedMeshes) + " SkinnedMesh instances "
+                    "(live count " + std::to_string(liveSetCount_) + "). "
+                    "Bump kMaxSkinnedMeshes in SkinningPipeline.hpp.");
+        }
+        check(r, "vkAllocateDescriptorSets(skinning)");
+        ++liveSetCount_;
         return ds;
     }
 
     void SkinningPipeline::freeMeshDescriptorSet(VkDescriptorSet ds) {
         if (ds == VK_NULL_HANDLE) return;
         vkFreeDescriptorSets(ctx_.device(), descPool_, 1, &ds);
+        if (liveSetCount_ > 0) --liveSetCount_;
     }
 
     void SkinningPipeline::bindPipeline(VkCommandBuffer cb) {

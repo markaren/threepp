@@ -23,9 +23,11 @@ namespace threepp::vulkan {
     class SkinningPipeline {
 
     public:
-        // Max simultaneous skinned meshes. Each set holds 7 storage buffers.
-        // Resize if you have more skinned characters.
-        static constexpr uint32_t kMaxSkinnedMeshes = 64;
+        // Max simultaneous skinned meshes. Each set holds 7 storage buffers
+        // (= 256 × 7 = 1792 descriptors at the pool level). Bump if scenes
+        // ever exceed; allocateMeshDescriptorSet throws a clearer error with
+        // the live count when the pool is exhausted.
+        static constexpr uint32_t kMaxSkinnedMeshes = 256;
 
         explicit SkinningPipeline(VulkanContext& ctx);
         ~SkinningPipeline();
@@ -42,6 +44,8 @@ namespace threepp::vulkan {
         // skinned meshes.
         VkDescriptorSet allocateMeshDescriptorSet();
         void            freeMeshDescriptorSet(VkDescriptorSet ds);
+        // Live count for diagnostics (#allocated − #freed).
+        [[nodiscard]] uint32_t liveSetCount() const { return liveSetCount_; }
 
         // Caller binds the pipeline once before iterating pendingSkinnedRebuilds_.
         void bindPipeline(VkCommandBuffer cb);
@@ -58,6 +62,7 @@ namespace threepp::vulkan {
         VkPipelineLayout      pipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline            pipeline_       = VK_NULL_HANDLE;
         VkDescriptorPool      descPool_       = VK_NULL_HANDLE;
+        uint32_t              liveSetCount_   = 0;
 
         void createPipeline();
     };
