@@ -2591,11 +2591,12 @@ void main() {
         }
 
         // ── Snapshot pre-spatial state for persistence ──
-        // Stage 1c will insert spatial neighbour resampling into `gi` here,
-        // modifying it; the snapshot keeps the pre-spatial form for next
-        // frame's temporal merge. Stage 1b has no spatial step yet, so the
-        // snapshot equals `gi` — the structure is in place for 1c to drop in
-        // without re-plumbing persistence. Same pattern ReSTIR DI uses.
+        // The persisted slot is the PRE-spatial reservoir (matches DI's
+        // pattern at chit:1650, and Ouyang 2021 §4.3 — feeding post-spatial
+        // back into next frame's temporal merge inflates M with neighbour
+        // contributions that don't generalise across reprojection, biasing
+        // the temporal weights). Spatial reuse modifies `gi` AFTER this
+        // snapshot; `giPreSpatial` is what we write, `gi` is what we shade.
         // We persist unconditionally (zero when subHitSurface == false) so
         // next frame's reproject at this pixel always sees a clean slot;
         // the validity gate over there (ns is a unit vector) rejects zeros.
@@ -2605,6 +2606,83 @@ void main() {
         imageStore(giResXsWrite, ivec2(gl_LaunchIDEXT.xy), vec4(giPreSpatial.xs, giPreSpatial.W_sum));
         imageStore(giResNsWrite, ivec2(gl_LaunchIDEXT.xy), vec4(giPreSpatial.ns, giPreSpatial.M));
         imageStore(giResLoWrite, ivec2(gl_LaunchIDEXT.xy), vec4(giPreSpatial.Lo, Wpersist));
+
+        // ── Stage 1c: spatial neighbour resampling ──
+        // Disk-radius taps from the prev-frame reservoir buffer (giResXsRead
+        // / giResNsRead / giResLoRead) — same images temporal uses, accepting
+        // one-frame staleness rather than racing against this-frame's writes
+        // mid-dispatch. Number of taps and disk radius follow the standard
+        // ReSTIR PT / GI defaults (Bitterli 2020, Ouyang 2021): 5 taps when
+        // static, 2 when camera moving (stale-history risk is higher under
+        // motion); disk radius 20 px; per-neighbour M-cap 4 to prevent a
+        // single stale-history reservoir from dominating; early-break once
+        // total M reaches 20 to bound cost when many neighbours validate.
+        //
+        // Validation gate is mesh-ID + |Δdist|/dist < 0.1 — same as temporal.
+        // The codebase doesn't carry a prev-normal image so the standard
+        // cone-of-normals gate is approximated via mesh-ID. Curved surfaces
+        // get more permissive acceptance, but `evalGiTarget` re-evaluates
+        // at OUR pixel's normal, so a tap with very different surface
+        // orientation produces low p_hat and barely shifts the reservoir.
+        if (subHitSurface) {
+            const ivec2 sz = imageSize(prevGbufImage);
+            if (sz.x > 0 && sz.y > 0) {
+                const bool camMoving = (pc.motionFlags & 2u) != 0u;
+                const uint  spMax    = camMoving ? 2u : 5u;
+                const float mTarget  = 20.0;
+                const uint  curMeshId = uint(gl_InstanceCustomIndexEXT) + 1u;
+                const float curDistC  = length(hitPos - pcam.prevCamPosX.xyz);
+                for (uint sp = 0u; sp < spMax; ++sp) {
+                    if (gi.M >= mTarget) break;
+                    const float spAngle = urand(seed) * TWO_PI;
+                    const float spR     = sqrt(urand(seed)) * 20.0;
+                    const ivec2 spOff   = ivec2(int(spR * cos(spAngle)),
+                                                int(spR * sin(spAngle)));
+                    if (spOff.x == 0 && spOff.y == 0) continue;
+                    const ivec2 spPx = clamp(ivec2(gl_LaunchIDEXT.xy) + spOff,
+                                             ivec2(0), ivec2(sz - ivec2(1)));
+                    const vec4 spGbuf  = imageLoad(prevGbufImage, spPx);
+                    const uint spMeshId = uint(spGbuf.w);
+                    if (spMeshId == 0u || spMeshId != curMeshId) continue;
+                    const float spDist = length(spGbuf.xyz - pcam.prevCamPosX.xyz);
+                    if (abs(spDist - curDistC) / max(curDistC, 1e-3) > 0.1) continue;
+                    const vec4 spXs = imageLoad(giResXsRead, spPx);
+                    const vec4 spNs = imageLoad(giResNsRead, spPx);
+                    const vec4 spLo = imageLoad(giResLoRead, spPx);
+                    const vec3 spXsP = spXs.xyz;
+                    const vec3 spNsP = spNs.xyz;
+                    const vec3 spLoP = spLo.rgb;
+                    const float spM = min(spNs.w, 4.0);
+                    const float spW = spLo.w;
+                    if (spW <= 0.0 || spM <= 0.0 || dot(spNsP, spNsP) < 0.01) continue;
+                    const vec3 omegaI_sp = spXsP - hitPos;
+                    const float dist_sp  = length(omegaI_sp);
+                    if (dist_sp < 1e-3) continue;
+                    const vec3 L_sp = omegaI_sp / dist_sp;
+                    // Re-evaluate target at OUR pixel (BRDF + normal) for the
+                    // neighbour's stored sample. This is what makes the merge
+                    // unbiased — neighbour's BRDF / normal don't apply here.
+                    const vec3 F_sp = evalGiTarget(V, L_sp, N, F0, albedo,
+                                                    roughness, metalness, alpha,
+                                                    ccProb, ccWeight, ccRough,
+                                                    baseScale, spLoP);
+                    const float p_hat_sp = max(lum3(F_sp), 0.0);
+                    if (p_hat_sp > 0.0) {
+                        const float w_sp = p_hat_sp * spM * spW;
+                        gi.W_sum += w_sp;
+                        gi.M     += spM;
+                        if (urand(seed) < w_sp / max(gi.W_sum, 1e-20)) {
+                            gi.xs     = spXsP;
+                            gi.ns     = spNsP;
+                            gi.Lo     = spLoP;
+                            gi.omegaI = L_sp;
+                            gi.p_hat  = p_hat_sp;
+                        }
+                    }
+                }
+                finalizeGiReservoir(gi);
+            }
+        }
 
         if (pc.fireflyClamp < 1e20) gi.W = min(gi.W, 5.0);
 
