@@ -30,6 +30,7 @@
 #include "vulkan/PhotonCaustics.hpp"
 #include "vulkan/SkinningPipeline.hpp"
 #include "vulkan/TaaResolve.hpp"
+#include "vulkan/WaterDisplacePipeline.hpp"
 #include "vulkan/shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
 #include "wgpu/pathtracer/WgpuPathTracerEnvCdf.hpp"// reused: pure C++ template, no WGPU deps
 
@@ -71,7 +72,7 @@
 // (denoise + denoise_atrous shader SPVs moved into vulkan/Denoiser.cpp)
 // (prefilter_env shader SPV moved into vulkan/EnvPrefilter.cpp)
 // (skinning shader SPV moved into vulkan/SkinningPipeline.cpp)
-#include "threepp/renderers/vulkan/shaders/water_displace.comp.spv.h"
+// (water_displace shader SPV moved into vulkan/WaterDisplacePipeline.cpp)
 #include "threepp/renderers/vulkan/shaders/gbuffer.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer_indirect.vert.spv.h"
@@ -295,11 +296,10 @@ namespace threepp {
         // Renderer-level water_displace pipeline. One compute pipeline shared
         // across all DisplacedMesh instances; per-instance state owns its own
         // descriptor set so binding multiple oceans in one scene is safe.
-        VkDescriptorSetLayout displaceDsLayout      = VK_NULL_HANDLE;
-        VkPipelineLayout      displacePipelineLayout = VK_NULL_HANDLE;
-        VkPipeline            displacePipeline       = VK_NULL_HANDLE;
-        VkDescriptorPool      displaceDescPool       = VK_NULL_HANDLE;
-        VkSampler             displaceSampler        = VK_NULL_HANDLE;
+        // Water displace pipeline — see vulkan/WaterDisplacePipeline.{hpp,cpp}.
+        // Owns the shared compute pipeline + descriptor pool + sampler;
+        // per-mesh descriptor sets (state->displaceDS) live in DisplacedMeshState.
+        std::unique_ptr<vulkan::WaterDisplacePipeline> waterDisplace_;
 
         // Single TLAS over all mesh instances in the scene.
         VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
@@ -1039,7 +1039,7 @@ namespace threepp {
             createAccumImage();
             skinning_ = std::make_unique<vulkan::SkinningPipeline>(*ctx);
             photon_ = std::make_unique<vulkan::PhotonCaustics>(*ctx, rtPipelineLayout);
-            createWaterDisplacePipeline();
+            waterDisplace_ = std::make_unique<vulkan::WaterDisplacePipeline>(*ctx);
             // Hybrid raster G-buffer infrastructure is always allocated so
             // the RT descriptor sets can include valid gbuffer-attachment
             // bindings even when hybridEnabled_ stays false. Cheap: ~50MB
@@ -1192,11 +1192,8 @@ namespace threepp {
             // (see below); the shared pipeline + pool live in skinning_.
             skinning_.reset();
 
-            if (displacePipeline)        vkDestroyPipeline(d, displacePipeline, nullptr);
-            if (displacePipelineLayout)  vkDestroyPipelineLayout(d, displacePipelineLayout, nullptr);
-            if (displaceDsLayout)        vkDestroyDescriptorSetLayout(d, displaceDsLayout, nullptr);
-            if (displaceDescPool)        vkDestroyDescriptorPool(d, displaceDescPool, nullptr);
-            if (displaceSampler)         vkDestroySampler(d, displaceSampler, nullptr);
+            // Water displace pipeline owns its handles + sampler.
+            waterDisplace_.reset();
 
             // Hybrid raster G-buffer cleanup. All resources are lazy-created
             // on first render() with hybridEnabled_ true; if hybrid was never
@@ -2313,13 +2310,7 @@ namespace threepp {
             }
 
             // Allocate this mesh's displace descriptor set + write bindings.
-            VkDescriptorSetAllocateInfo dai{};
-            dai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            dai.descriptorPool     = displaceDescPool;
-            dai.descriptorSetCount = 1;
-            dai.pSetLayouts        = &displaceDsLayout;
-            check(vkAllocateDescriptorSets(ctx->device(), &dai, &state->displaceDS),
-                  "vkAllocateDescriptorSets(displace)");
+            state->displaceDS = waterDisplace_->allocateMeshDescriptorSet();
 
             // Bind each enabled cascade's spatial images to its (height, displace)
             // slot pair. Disabled cascades are filled with cascade 0's images
@@ -2329,10 +2320,10 @@ namespace threepp {
             for (uint32_t i = 0; i < 3; ++i) {
                 const uint32_t srcCascade = (state->cascadeMask & (1u << i)) ? i : 0u;
                 const auto& c = state->cascades[srcCascade];
-                imageInfos[i * 2 + 0].sampler     = displaceSampler;
+                imageInfos[i * 2 + 0].sampler     = waterDisplace_->sampler();
                 imageInfos[i * 2 + 0].imageView   = c.dyn->ht().view;
                 imageInfos[i * 2 + 0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                imageInfos[i * 2 + 1].sampler     = displaceSampler;
+                imageInfos[i * 2 + 1].sampler     = waterDisplace_->sampler();
                 imageInfos[i * 2 + 1].imageView   = c.dyn->displacement().view;
                 imageInfos[i * 2 + 1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
             }
@@ -2476,31 +2467,7 @@ namespace threepp {
 
             // (4) Dispatch water_displace.comp → writes positions + normals
             // into the BLAS vertex/normal buffers.
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, displacePipeline);
-            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, displacePipelineLayout,
-                                    0, 1, &st.displaceDS, 0, nullptr);
-
-            struct DisplacePc {
-                VkDeviceAddress posOut;
-                VkDeviceAddress normOut;
-                VkDeviceAddress foamOut;
-                uint32_t vertexCount;
-                uint32_t gridDim;
-                float    planeSize;
-                float    tileSize0;
-                float    tileSize1;
-                float    tileSize2;
-                float    waveScale;
-                float    choppiness;
-                uint32_t cascadeMask;
-                float    hullCenterX;
-                float    hullCenterZ;
-                float    hullHalfLength;
-                float    hullHalfBeam;
-                float    hullSinYaw;
-                float    hullCosYaw;
-                float    forwardSpeed;
-            } pc{};
+            vulkan::WaterDisplacePipeline::PushConstants pc{};
             pc.posOut       = st.blas->vertex.address;
             pc.normOut      = st.blas->normal.address;
             pc.foamOut      = st.blas->foam.address;
@@ -2520,10 +2487,7 @@ namespace threepp {
             pc.hullSinYaw     = dm.hullExclusion.sinYaw;
             pc.hullCosYaw     = dm.hullExclusion.cosYaw;
             pc.forwardSpeed   = dm.wake.enabled ? dm.wake.forwardSpeed : 0.0f;
-            vkCmdPushConstants(cb, displacePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
-                               0, sizeof(pc), &pc);
-            const uint32_t groups = (st.vertexCount + 63u) / 64u;
-            vkCmdDispatch(cb, groups, 1, 1);
+            waterDisplace_->recordDispatch(cb, st.displaceDS, pc);
 
             // Buffer barrier: compute write → AS-build read on the vertex/normal buffers.
             VkBufferMemoryBarrier bbs[2]{};
@@ -6853,92 +6817,9 @@ namespace threepp {
         // Renderer holds a unique_ptr `skinning_` and delegates allocation +
         // dispatch through it.
 
-        // Renderer-level water_displace.comp pipeline. Bindings 0..5 = three
-        // (height, displacement) pairs of combined-image-samplers, all RG32F
-        // spatial-domain images from the IFFT chain. The push constant carries
-        // the BLAS vertex/normal buffer device addresses + grid metadata.
-        // One pipeline shared across all DisplacedMesh instances; per-mesh
-        // descriptor sets bind the appropriate cascade images.
-        void createWaterDisplacePipeline() {
-            std::array<VkDescriptorSetLayoutBinding, 6> bb{};
-            for (uint32_t i = 0; i < bb.size(); ++i) {
-                bb[i].binding = i;
-                bb[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                bb[i].descriptorCount = 1;
-                bb[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
-            }
-            VkDescriptorSetLayoutCreateInfo dlci{};
-            dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            dlci.bindingCount = uint32_t(bb.size());
-            dlci.pBindings    = bb.data();
-            check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &displaceDsLayout),
-                  "vkCreateDescriptorSetLayout(displace)");
-
-            // Push constants — match water_displace.comp's `Pc` struct:
-            //   3 × VkDeviceAddress (24) + 16 × u32/float (64) = 88 bytes.
-            VkPushConstantRange pcr{};
-            pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            pcr.offset     = 0;
-            pcr.size       = 88;
-
-            VkPipelineLayoutCreateInfo plci{};
-            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            plci.setLayoutCount         = 1;
-            plci.pSetLayouts            = &displaceDsLayout;
-            plci.pushConstantRangeCount = 1;
-            plci.pPushConstantRanges    = &pcr;
-            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &displacePipelineLayout),
-                  "vkCreatePipelineLayout(displace)");
-
-            VkShaderModuleCreateInfo smci{};
-            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            smci.codeSize = sizeof(kWaterDisplaceCompSpv);
-            smci.pCode    = kWaterDisplaceCompSpv;
-            VkShaderModule mod = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &smci, nullptr, &mod),
-                  "vkCreateShaderModule(displace)");
-
-            VkPipelineShaderStageCreateInfo stage{};
-            stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            stage.module = mod;
-            stage.pName  = "main";
-
-            VkComputePipelineCreateInfo cpci{};
-            cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            cpci.stage  = stage;
-            cpci.layout = displacePipelineLayout;
-            check(vkCreateComputePipelines(ctx->device(), VK_NULL_HANDLE, 1, &cpci, nullptr,
-                                           &displacePipeline),
-                  "vkCreateComputePipelines(displace)");
-            vkDestroyShaderModule(ctx->device(), mod, nullptr);
-
-            // Pool sized for up to 16 DisplacedMesh instances at once. Each
-            // takes 6 combined-image-samplers. Bump if scenes ever go beyond.
-            constexpr uint32_t kMaxOceans = 16;
-            VkDescriptorPoolSize ps{};
-            ps.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps.descriptorCount = 6 * kMaxOceans;
-            VkDescriptorPoolCreateInfo dpci{};
-            dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            dpci.maxSets       = kMaxOceans;
-            dpci.poolSizeCount = 1;
-            dpci.pPoolSizes    = &ps;
-            check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &displaceDescPool),
-                  "vkCreateDescriptorPool(displace)");
-
-            VkSamplerCreateInfo sci{};
-            sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-            sci.magFilter    = VK_FILTER_LINEAR;
-            sci.minFilter    = VK_FILTER_LINEAR;
-            sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-            sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            sci.maxLod       = VK_LOD_CLAMP_NONE;
-            check(vkCreateSampler(ctx->device(), &sci, nullptr, &displaceSampler),
-                  "vkCreateSampler(displace)");
-        }
+        // Water displace pipeline moved into vulkan/WaterDisplacePipeline.{hpp,cpp}.
+        // Renderer holds a unique_ptr `waterDisplace_` and delegates allocation
+        // + dispatch through it.
 
         // createPmremEnvImage moved into vulkan/EnvPrefilter.{hpp,cpp}.
         // Call envPrefilter_->buildPmrem(w, h, pixels, byteSize) instead.
