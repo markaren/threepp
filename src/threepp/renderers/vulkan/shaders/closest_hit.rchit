@@ -1615,6 +1615,26 @@ void main() {
             }
         }
 
+        // Snapshot the reservoir BEFORE spatial reuse — this is what gets
+        // persisted for next frame's temporal merge, matching WGPU
+        // pt_primary_shade1.wgsl:289. Persisting post-spatial would inflate
+        // next-frame temporal M with spatial contributions that don't
+        // generalise across reprojection, biasing temporal weights overly
+        // conservative (and producing visible temporal instability). The
+        // post-spatial reservoir is still used below for THIS frame's
+        // visibility/shading — spatial improves the current estimate, but
+        // only the pre-spatial state propagates forward.
+        Reservoir rPreSpatial = r;
+        // Cap the persisted W with the same firefly bound used at shading
+        // time (line 1711 below). Without this, a stale high-W reservoir
+        // perpetuates via temporal merge each frame — w_prev includes
+        // rPrev.W as a factor, so a firefly sample picked once keeps
+        // dominating that pixel's W_sum every frame, producing static
+        // bright specks that never average out. Capping at persistence
+        // breaks the feedback loop while leaving the current frame's
+        // unclamped post-spatial r alone for shading.
+        if (pc.fireflyClamp < 1e20) rPreSpatial.W = min(rPreSpatial.W, 5.0);
+
         // ── Stage 1c: spatial reuse ──
         // Random neighbour taps from prev-frame reservoir buffer. Validation
         // gate is mesh-ID + depth (same prevGbufImage temporal uses; we don't
@@ -1676,16 +1696,21 @@ void main() {
             }
         }
 
-        // Persist this frame's post-spatial reservoir for next frame's
-        // temporal merge. Done unconditionally inside the RIS branch —
-        // including W=0 cases — so disocclusions get cleanly zeroed history
-        // rather than picking up stale data from two frames ago. Bounce /
-        // transmissive primaries skip this branch entirely; their pixel's
-        // prev reservoir lingers until validation rejects it.
+        // Persist this frame's PRE-SPATIAL reservoir for next frame's
+        // temporal merge (rPreSpatial snapshotted above the spatial block).
+        // Matches WGPU pt_primary_shade1.wgsl:368-373. NaN-guard W (W = W_sum
+        // / (M * p_hat) can produce NaN when M or p_hat are zero through
+        // floating-point underflow despite the max() in finalizeReservoir).
+        // Done unconditionally inside the RIS branch — including W=0 cases —
+        // so disocclusions get cleanly zeroed history rather than picking up
+        // stale data from two frames ago. Bounce / transmissive primaries
+        // skip this branch entirely; their pixel's prev reservoir lingers
+        // until validation rejects it.
+        const float rWpersist = isnan(rPreSpatial.W) ? 0.0 : rPreSpatial.W;
         imageStore(resPosWrite, ivec2(gl_LaunchIDEXT.xy),
-                   vec4(r.lightPos, r.lightType));
+                   vec4(rPreSpatial.lightPos, rPreSpatial.lightType));
         imageStore(resWWrite,   ivec2(gl_LaunchIDEXT.xy),
-                   vec4(r.W_sum, r.M, r.W, r.p_hat));
+                   vec4(rPreSpatial.W_sum, rPreSpatial.M, rWpersist, rPreSpatial.p_hat));
 
         // Cap W when firefly clamping is enabled (matches WGPU's `if
         // emissiveInfo.z < 1e20 → W = min(W,5)`); pc.fireflyClamp uses 1e30
