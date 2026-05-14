@@ -491,6 +491,21 @@ namespace threepp {
         // f&1 → image-slot mapping just like accumImagesPP / gbufImagesPP.
         std::array<Image2D, 2> reservoirPosImagesPP{};
         std::array<Image2D, 2> reservoirWImagesPP{};
+        // ReSTIR GI Stage 1b — per-pixel reservoir ping-pong storage. Three
+        // physical images per logical buffer (all rgba32f for precision on
+        // world-space xs):
+        //   giResXsImagesPP : xs.xyz + W_sum   (chosen sample position + RIS sum)
+        //   giResNsImagesPP : ns.xyz + M       (chosen sample normal + count)
+        //   giResLoImagesPP : Lo.rgb + W       (chosen sample radiance + finalized RIS weight)
+        // omegaI is re-derived per-frame as `normalize(xs - currentHitPos)` so
+        // it doesn't need its own storage pair. p_hat is also not stored —
+        // resampling re-evaluates target at OUR pixel via evalGiTarget, so the
+        // stored sample's p_hat (computed at a possibly-different pixel) is
+        // discarded each merge. Bindings 38/40/42 = write (frame N), 39/41/43
+        // = read (frame N-1); descriptor sets bake the f&1 → image-slot map.
+        std::array<Image2D, 2> giResXsImagesPP{};
+        std::array<Image2D, 2> giResNsImagesPP{};
+        std::array<Image2D, 2> giResLoImagesPP{};
         // Filtered and moments ping-pong images are owned by `denoiser_`;
         // bindings 20 / 33 / 34 are wired via accessors at descriptor-write
         // time. See vulkan/Denoiser.hpp.
@@ -1189,6 +1204,9 @@ namespace threepp {
             for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : reservoirWImagesPP) destroyImage2D(ctx->allocator(), d, img);
+            for (auto& img : giResXsImagesPP) destroyImage2D(ctx->allocator(), d, img);
+            for (auto& img : giResNsImagesPP) destroyImage2D(ctx->allocator(), d, img);
+            for (auto& img : giResLoImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : materialTextures) destroyImage2D(ctx->allocator(), d, img);
             materialTextures.clear();
             if (textureSampler_) vkDestroySampler(d, textureSampler_, nullptr);
@@ -4041,6 +4059,10 @@ namespace threepp {
             // Includes ReSTIR DI reservoir ping-pong (28/29 pos, 30/31 W) so
             // M=0 on frame 0's read side and the temporal-reuse path correctly
             // sees "no prior history" instead of garbage.
+            // Also includes ReSTIR GI reservoir ping-pong (38/39 xs+Wsum,
+            // 40/41 ns+M, 42/43 Lo+W) — the chit's validity check (ns is a
+            // unit vector AND prevW>0 AND prevM>0) rejects zero-cleared slots
+            // so first-frame reads see "no prior history" cleanly.
             // Also includes denoiser_'s moments images (33/34) so M2=0 on
             // first read — variance reads from a stale-undefined moments slot
             // would give huge spurious variance, blowing the σ_lum estimate.
@@ -4048,17 +4070,20 @@ namespace threepp {
             // on first read — raygen's temporal blend uses prev albedo at
             // mesh-ID validated taps, and uninitialised .a=garbage would
             // fool the demod-valid gate.
-            std::array<VkImage, 13> images = {
+            std::array<VkImage, 19> images = {
                     gbufImagesPP[0].image, gbufImagesPP[1].image,
                     accumImagesPP[0].image, accumImagesPP[1].image,
                     reservoirPosImagesPP[0].image, reservoirPosImagesPP[1].image,
                     reservoirWImagesPP[0].image, reservoirWImagesPP[1].image,
+                    giResXsImagesPP[0].image, giResXsImagesPP[1].image,
+                    giResNsImagesPP[0].image, giResNsImagesPP[1].image,
+                    giResLoImagesPP[0].image, giResLoImagesPP[1].image,
                     denoiser_->momentsImage(0), denoiser_->momentsImage(1),
                     denoiser_->albedoImage(0), denoiser_->albedoImage(1),
                     denoiser_->albedoSnapshotImage(),
             };
 
-            std::array<VkImageMemoryBarrier2, 13> toTransfer{};
+            std::array<VkImageMemoryBarrier2, 19> toTransfer{};
             for (size_t i = 0; i < images.size(); ++i) {
                 toTransfer[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                 toTransfer[i].srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -4088,7 +4113,7 @@ namespace threepp {
                                      &clear, 1, &range);
             }
 
-            std::array<VkImageMemoryBarrier2, 13> toGeneral{};
+            std::array<VkImageMemoryBarrier2, 19> toGeneral{};
             for (size_t i = 0; i < images.size(); ++i) {
                 toGeneral[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                 toGeneral[i].srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
@@ -5620,6 +5645,21 @@ namespace threepp {
             for (auto& img : reservoirWImagesPP) {
                 img = createStorageImage2D(ext.width, ext.height,
                                            VK_FORMAT_R16G16B16A16_SFLOAT);
+            }
+            // ReSTIR GI reservoir ping-pong — all rgba32f for world-space xs
+            // precision (rgba16f would lose ~mm-level accuracy at typical
+            // scene scales and break the visibility test's distance check).
+            for (auto& img : giResXsImagesPP) {
+                img = createStorageImage2D(ext.width, ext.height,
+                                           VK_FORMAT_R32G32B32A32_SFLOAT);
+            }
+            for (auto& img : giResNsImagesPP) {
+                img = createStorageImage2D(ext.width, ext.height,
+                                           VK_FORMAT_R32G32B32A32_SFLOAT);
+            }
+            for (auto& img : giResLoImagesPP) {
+                img = createStorageImage2D(ext.width, ext.height,
+                                           VK_FORMAT_R32G32B32A32_SFLOAT);
             }
             // Filtered + moments ping-pong are owned by Denoiser; ctor must
             // have already constructed denoiser_ before this is reached.
@@ -7354,7 +7394,7 @@ namespace threepp {
             // for material lookup, UV for texture sampling on the primary).
             // Always present in the layout; raygen gates use on the hybrid
             // push-constant bit.
-            std::array<VkDescriptorSetLayoutBinding, 38> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 44> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -7610,6 +7650,39 @@ namespace threepp {
             bindings[37].descriptorCount = 1;
             bindings[37].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                       VK_SHADER_STAGE_COMPUTE_BIT;
+
+            // Bindings 38-43 — ReSTIR GI Stage 1b reservoir ping-pong storage.
+            // 38/39: xs.xyz + W_sum   (rgba32f write/read)
+            // 40/41: ns.xyz + M       (rgba32f write/read)
+            // 42/43: Lo.rgb + W       (rgba32f write/read)
+            // Frame N writes 38/40/42 and reads 39/41/43; descriptor sets in
+            // alloc bake the f&1 → physical slot mapping (like accumImagesPP).
+            // CLOSEST_HIT only — raygen doesn't touch these; chit does both
+            // the temporal-merge read and the post-merge persistence write.
+            bindings[38].binding = 38;
+            bindings[38].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[38].descriptorCount = 1;
+            bindings[38].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[39].binding = 39;
+            bindings[39].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[39].descriptorCount = 1;
+            bindings[39].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[40].binding = 40;
+            bindings[40].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[40].descriptorCount = 1;
+            bindings[40].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[41].binding = 41;
+            bindings[41].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[41].descriptorCount = 1;
+            bindings[41].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[42].binding = 42;
+            bindings[42].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[42].descriptorCount = 1;
+            bindings[42].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[43].binding = 43;
+            bindings[43].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[43].descriptorCount = 1;
+            bindings[43].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -7919,7 +7992,7 @@ namespace threepp {
             ps[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             ps[0].descriptorCount = totalSets;
             ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            ps[1].descriptorCount = totalSets * 13;// bindings 1, 7, 11, 12, 13 + 20×2 (filtered ping-pong) + 28-31 (ReSTIR DI reservoir ping-pong) + 33,34 (moments ping-pong)
+            ps[1].descriptorCount = totalSets * 22;// bindings 1, 7, 11, 12, 13 + 20×2 (filtered ping-pong) + 28-31 (ReSTIR DI reservoir ping-pong) + 33,34 (moments ping-pong) + 35,36,37 (albedo ping-pong + snapshot) + 38-43 (ReSTIR GI reservoir ping-pong)
             ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             ps[2].descriptorCount = totalSets * 4;// bindings 2 (camera), 5 (lights), 9 (prevCamera), 17 (fog)
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -8432,7 +8505,76 @@ namespace threepp {
                     wAlbedoSnap.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                     wAlbedoSnap.pImageInfo = &albedoSnapInfo;
 
-                    std::array<VkWriteDescriptorSet, 38> writes{
+                    // Bindings 38-43 — ReSTIR GI reservoir ping-pong storage.
+                    // 38/40/42 = write (this frame), 39/41/43 = read (prev).
+                    // f&1 picks slot, same as DI's reservoir bindings.
+                    VkDescriptorImageInfo giXsWriteInfo{};
+                    giXsWriteInfo.imageView   = giResXsImagesPP[writeSlot].view;
+                    giXsWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wGiXsWrite{};
+                    wGiXsWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wGiXsWrite.dstSet = descriptorSets[idx];
+                    wGiXsWrite.dstBinding = 38;
+                    wGiXsWrite.descriptorCount = 1;
+                    wGiXsWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wGiXsWrite.pImageInfo = &giXsWriteInfo;
+
+                    VkDescriptorImageInfo giXsReadInfo{};
+                    giXsReadInfo.imageView   = giResXsImagesPP[readSlot].view;
+                    giXsReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wGiXsRead{};
+                    wGiXsRead.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wGiXsRead.dstSet = descriptorSets[idx];
+                    wGiXsRead.dstBinding = 39;
+                    wGiXsRead.descriptorCount = 1;
+                    wGiXsRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wGiXsRead.pImageInfo = &giXsReadInfo;
+
+                    VkDescriptorImageInfo giNsWriteInfo{};
+                    giNsWriteInfo.imageView   = giResNsImagesPP[writeSlot].view;
+                    giNsWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wGiNsWrite{};
+                    wGiNsWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wGiNsWrite.dstSet = descriptorSets[idx];
+                    wGiNsWrite.dstBinding = 40;
+                    wGiNsWrite.descriptorCount = 1;
+                    wGiNsWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wGiNsWrite.pImageInfo = &giNsWriteInfo;
+
+                    VkDescriptorImageInfo giNsReadInfo{};
+                    giNsReadInfo.imageView   = giResNsImagesPP[readSlot].view;
+                    giNsReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wGiNsRead{};
+                    wGiNsRead.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wGiNsRead.dstSet = descriptorSets[idx];
+                    wGiNsRead.dstBinding = 41;
+                    wGiNsRead.descriptorCount = 1;
+                    wGiNsRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wGiNsRead.pImageInfo = &giNsReadInfo;
+
+                    VkDescriptorImageInfo giLoWriteInfo{};
+                    giLoWriteInfo.imageView   = giResLoImagesPP[writeSlot].view;
+                    giLoWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wGiLoWrite{};
+                    wGiLoWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wGiLoWrite.dstSet = descriptorSets[idx];
+                    wGiLoWrite.dstBinding = 42;
+                    wGiLoWrite.descriptorCount = 1;
+                    wGiLoWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wGiLoWrite.pImageInfo = &giLoWriteInfo;
+
+                    VkDescriptorImageInfo giLoReadInfo{};
+                    giLoReadInfo.imageView   = giResLoImagesPP[readSlot].view;
+                    giLoReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wGiLoRead{};
+                    wGiLoRead.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wGiLoRead.dstSet = descriptorSets[idx];
+                    wGiLoRead.dstBinding = 43;
+                    wGiLoRead.descriptorCount = 1;
+                    wGiLoRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wGiLoRead.pImageInfo = &giLoReadInfo;
+
+                    std::array<VkWriteDescriptorSet, 44> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
                             wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered,
@@ -8442,7 +8584,9 @@ namespace threepp {
                             wResPosWrite, wResPosRead, wResWWrite, wResWRead,
                             wOceanFine,
                             wMomentsWrite, wMomentsRead,
-                            wAlbedoWrite, wAlbedoRead, wAlbedoSnap};
+                            wAlbedoWrite, wAlbedoRead, wAlbedoSnap,
+                            wGiXsWrite, wGiXsRead, wGiNsWrite, wGiNsRead,
+                            wGiLoWrite, wGiLoRead};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -8651,6 +8795,9 @@ namespace threepp {
             for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : reservoirWImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
+            for (auto& img : giResXsImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
+            for (auto& img : giResNsImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
+            for (auto& img : giResLoImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             // Filtered + moments destroyed implicitly by denoiser_->createImages
             // inside createAccumImage below.
             createAccumImage();// resets sampleIndex + clears prevWorldMats
@@ -9097,7 +9244,7 @@ namespace threepp {
             accumGbufTemplate.subresourceRange.levelCount = 1;
             accumGbufTemplate.subresourceRange.layerCount = 1;
 
-            std::array<VkImageMemoryBarrier2, 11> preBarriers{};
+            std::array<VkImageMemoryBarrier2, 17> preBarriers{};
             preBarriers[0] = toGeneral;
             preBarriers[1] = accumGbufTemplate; preBarriers[1].image = accumImagesPP[0].image;
             preBarriers[2] = accumGbufTemplate; preBarriers[2].image = accumImagesPP[1].image;
@@ -9110,11 +9257,18 @@ namespace threepp {
             preBarriers[6] = accumGbufTemplate; preBarriers[6].image = reservoirPosImagesPP[1].image;
             preBarriers[7] = accumGbufTemplate; preBarriers[7].image = reservoirWImagesPP[0].image;
             preBarriers[8] = accumGbufTemplate; preBarriers[8].image = reservoirWImagesPP[1].image;
+            // ReSTIR GI reservoir ping-pong (3 image-pairs: xs, ns, Lo).
+            preBarriers[9]  = accumGbufTemplate; preBarriers[9].image  = giResXsImagesPP[0].image;
+            preBarriers[10] = accumGbufTemplate; preBarriers[10].image = giResXsImagesPP[1].image;
+            preBarriers[11] = accumGbufTemplate; preBarriers[11].image = giResNsImagesPP[0].image;
+            preBarriers[12] = accumGbufTemplate; preBarriers[12].image = giResNsImagesPP[1].image;
+            preBarriers[13] = accumGbufTemplate; preBarriers[13].image = giResLoImagesPP[0].image;
+            preBarriers[14] = accumGbufTemplate; preBarriers[14].image = giResLoImagesPP[1].image;
             // Temporal moments ping-pong: same RT_SHADER → RT_SHADER fence as
             // accum/gbuf. Atrous reads the just-written slot via the existing
             // memory barrier (barrierMem RT→COMPUTE in the denoise block).
-            preBarriers[9]  = accumGbufTemplate; preBarriers[9].image  = denoiser_->momentsImage(0);
-            preBarriers[10] = accumGbufTemplate; preBarriers[10].image = denoiser_->momentsImage(1);
+            preBarriers[15] = accumGbufTemplate; preBarriers[15].image = denoiser_->momentsImage(0);
+            preBarriers[16] = accumGbufTemplate; preBarriers[16].image = denoiser_->momentsImage(1);
             VkDependencyInfo dep{};
             dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
             dep.imageMemoryBarrierCount = static_cast<uint32_t>(preBarriers.size());

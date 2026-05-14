@@ -185,6 +185,22 @@ layout(set = 0, binding = 28, rgba32f) uniform writeonly image2D resPosWrite;
 layout(set = 0, binding = 29, rgba32f) uniform readonly  image2D resPosRead;
 layout(set = 0, binding = 30, rgba16f) uniform writeonly image2D resWWrite;
 layout(set = 0, binding = 31, rgba16f) uniform readonly  image2D resWRead;
+// ReSTIR GI Stage 1b — per-pixel reservoir ping-pong (3× rgba32f pairs).
+//   38/39: xs.xyz   + W_sum    — chosen sample position + RIS sum
+//   40/41: ns.xyz   + M        — chosen sample normal   + running candidate count
+//   42/43: Lo.rgb   + W        — chosen sample radiance + finalized RIS weight
+// omegaI is re-derived per-frame as `normalize(xs - currentHitPos)` so it
+// doesn't need storage (saves one pair). p_hat is also not stored — Stage 1b's
+// resampling re-evaluates the target function `lum(BRDF·NdotL·Lo)` at OUR pixel
+// (the whole point of temporal reuse with shifted view), and we recompute it
+// freshly from xs/ns/Lo each merge. f&1 ping-pong: frame N writes 38/40/42 and
+// reads 39/41/43; the descriptor sets alternate slots per frame in flight.
+layout(set = 0, binding = 38, rgba32f) uniform writeonly image2D giResXsWrite;
+layout(set = 0, binding = 39, rgba32f) uniform readonly  image2D giResXsRead;
+layout(set = 0, binding = 40, rgba32f) uniform writeonly image2D giResNsWrite;
+layout(set = 0, binding = 41, rgba32f) uniform readonly  image2D giResNsRead;
+layout(set = 0, binding = 42, rgba32f) uniform writeonly image2D giResLoWrite;
+layout(set = 0, binding = 43, rgba32f) uniform readonly  image2D giResLoRead;
 // Primary-surface albedo is no longer written here directly. Chit fills
 // payload.primaryAlbedo; raygen owns the temporal-blend write to the
 // ping-pong albedo accumulator (bindings 35 write / 36 read).
@@ -590,6 +606,42 @@ void updateGiReservoir(inout GiReservoir r,
 
 void finalizeGiReservoir(inout GiReservoir r) {
     r.W = r.W_sum / max(r.M * r.p_hat, 1e-20);
+}
+
+// Evaluate the GI target integrand at this pixel for an arbitrary incoming
+// direction `L` and a virtual-sample radiance `Lo`. Returns
+//   F_integrand = BRDF(V, L, surface) · max(N·L, 0) · Lo
+// — the full bounce-1 estimator value at this surface (no 1/pdf factored in).
+// Mirrors the env-NEE BSDF eval block (cc + base-spec + base-diff, sheen
+// omitted as a minor approximation on indirect surfaces) so target evaluation
+// at NEIGHBOUR samples (temporal reproject / spatial neighbour taps) uses
+// THIS pixel's BRDF rather than the storing pixel's — that's the whole point
+// of ReSTIR target re-eval. Pass `Lo = vec3(0)` to get just BRDF·NdotL.
+vec3 evalGiTarget(vec3 V, vec3 L, vec3 N, vec3 F0, vec3 albedo,
+                  float roughness, float metalness, float alpha,
+                  float ccProb,    float ccWeight,  float ccRough,
+                  float baseScale, vec3 Lo) {
+    const float NdotL = dot(N, L);
+    if (NdotL <= 0.0) return vec3(0.0);
+    const float NdotV = max(dot(N, V), 0.0);
+    const vec3  H     = normalize(V + L);
+    const float NdotH = max(dot(N, H), 0.0);
+    const float VdotH = max(dot(V, H), 0.0);
+    const float k     = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    const vec3  F_e   = fresnelSchlick(VdotH, F0);
+    const float D_e   = distGGX(NdotH, roughness);
+    const float G_e   = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
+    const vec3  spec  = (D_e * G_e * F_e) / max(4.0 * NdotV * NdotL, 1e-4);
+    const vec3  kd    = (vec3(1.0) - F_e) * (1.0 - metalness);
+    const vec3  diff  = kd * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
+    vec3 brdf = (diff + spec) * baseScale;
+    if (ccWeight > 0.0) {
+        const float k_cc = (ccRough + 1.0) * (ccRough + 1.0) / 8.0;
+        const float D_cc = distGGX(NdotH, ccRough);
+        const float G_cc = geomSmithG1(NdotV, k_cc) * geomSmithG1(NdotL, k_cc);
+        brdf += vec3((D_cc * G_cc) / max(4.0 * NdotV * NdotL, 1e-4) * ccWeight);
+    }
+    return brdf * NdotL * Lo;
 }
 
 // Reconstruct (dir, maxDist, Le_unclamped) from a stored reservoir sample.
@@ -2348,27 +2400,38 @@ void main() {
     if ((payload.inFlags & 1u) != 0u) emissiveOut = vec3(0.0);
     if ((pc.motionFlags & 4u) != 0u) lit += gatherCaustics(hitPos, N, albedo, roughness);
 
-    // ── ReSTIR GI Stage 1a — single-sample reservoir at primary ──
-    // When ReSTIR GI is enabled (master = pc.motionFlags bit 6), and this
-    // chit invocation is the camera-ray primary on a roughly-diffuse opaque
-    // dielectric, we launch one BSDF-proposal sub-ray and use the shaded
-    // first-bounce result as the candidate sample for a single-entry
-    // reservoir. Stage 1a's contribution at M=1 collapses to the classic
-    // MC bounce-1 estimate (bs.weight·Lo); the reservoir struct is in place
-    // so Stage 1b (temporal) and Stage 1c (spatial) can extend by merging
-    // additional samples without rewriting the data layout.
+    // ── ReSTIR GI Stage 1b — single-sample reservoir with temporal reuse ──
+    // Stage 1a established the chit-recursive sub-trace + in-register reservoir.
+    // Stage 1b adds:
+    //   • persistent reservoir ping-pong (3× rgba32f images on bindings 38-43)
+    //   • temporal reuse via reproject-+-resample of the prev-frame reservoir
+    //   • mesh-ID + depth validation gate (no prev-normal image; same approach
+    //     ReSTIR DI uses on this codebase)
+    //   • explicit `evalGiTarget` for re-evaluating the target function at OUR
+    //     pixel when the chosen sample came from elsewhere (temporal reproject
+    //     here; spatial neighbours in Stage 1c)
+    //   • visibility test from primary toward the chosen sample's xs — required
+    //     because the chosen sample may have been stored at a different pixel
+    //     (i.e. different camera origin) where the occluder geometry may have
+    //     moved or been freshly disoccluded
+    //   • W clamp on the persisted slot to break the same firefly feedback
+    //     loop that ReSTIR DI ran into pre-fix
+    //   • contribution form switched to `F · W` (textbook RIS): F evaluated at
+    //     this pixel's BRDF in the direction of the chosen sample's xs. At M=1
+    //     this is unbiased single-sample MC with `q = brdfPdf3` (marginal
+    //     mixture pdf) — different per-frame variance from Stage 1a's
+    //     `bs.weight·Lo` (lobe-conditional MC) but identical mean.
     //
-    // Eligibility — exclude:
-    //   • non-primary hits (`inFlags & 1u`)        — bounces handle indirect via continuation
-    //   • GI sub-trace recursion (`inFlags & 8u`)  — would explode the recursion depth
-    //   • transmissive primaries (glass)           — refracted xs shifts non-linearly w/ view
-    //   • near-mirror surfaces (roughness ≤ 0.20)  — deterministic dir, RIS has nothing to gain
-    //   • pure metals (metalness ≥ 0.5)            — same reason, plus spec target ≠ diff target
-    //   • emissive-dominated primaries (emLum1 > 0.5) — direct emission already dwarfs bounce 1
-    //   • bs.valid = false (numerical edge case)    — no usable proposal
-    // When the gate fails, the existing classic bounce-loop continuation
-    // (set up below in the `else` branch of the payload writes) handles
-    // bounce 1 via raygen's step 1 trace — identical to pre-Stage-1a.
+    // The continuation hand-off (next bounce after primary) still uses
+    // THIS frame's sub-trace data even when the reservoir's chosen sample is
+    // from prev frame. Bounce 2+ paths are sampled independently per frame;
+    // mixing this-frame's continuation with prev-frame's chosen sample is a
+    // controlled bias on top of an unbiased bounce-1 estimate. Full-path Lo
+    // (where Lo = Le_xs + Ldirect_xs + indirect_xs_via_continuation) is the
+    // Stage-2 fix; not needed for Stage 1b's variance-reduction goal.
+    //
+    // Eligibility gate same as Stage 1a (see comment block in original commit
+    // 657e1b15). Falls through to classic bounce-1 on miss.
     const bool restirGIOn   = (pc.motionFlags & 64u) != 0u;
     const bool useGIPrimary = restirGIOn
                            && bs.valid
@@ -2384,17 +2447,10 @@ void main() {
     vec3 giNextOrigin = vec3(0.0);
     vec3 giNextDir    = vec3(0.0);
     vec3 giThroughput = vec3(0.0);// brdfWeight for raygen step 1 = bs.weight · sub.brdfWeight
-    bool giTerminate  = false;    // sub-trace said terminate (env hit, or sub-trace bs invalid)
+    bool giTerminate  = false;    // sub-trace missed surface (env / numeric edge)
 
     if (useGIPrimary) {
-        // Initialise the sub-payload. Bit 3 of inFlags marks this as a GI
-        // sub-trace so the recursive chit invocation suppresses RIS DI and
-        // (more importantly) skips its OWN GI launch — otherwise depth grows
-        // unbounded. flags bit 1 (=2u) primes miss.rmiss to MIS-halve the env
-        // contribution: primary's env-NEE already supplied the env-CDF half
-        // (in `lit` above), so if our sub-ray hits the sky we want the BSDF
-        // half. bsdfPdf is the 3-lobe mixture pdf at bs.dir, matching miss's
-        // MIS weight expectation.
+        // ── Sub-trace launch (unchanged from Stage 1a) ──
         giSubPayload.radianceDiff    = vec3(0.0);
         giSubPayload.radianceSpec    = vec3(0.0);
         giSubPayload.brdfWeight      = vec3(0.0);
@@ -2415,76 +2471,207 @@ void main() {
         giSubPayload.primaryAlbedo   = vec4(0.0);
         giSubPayload.hitNormal       = vec3(0.0);
 
-        // Launch sub-ray in BSDF-sampled direction. payloadLocation=2 routes
-        // chit/miss writes into giSubPayload. Path hit group (sbtOffset=0),
-        // primary miss (missIndex=0). Same offset/origin as the classic bounce
-        // raygen would launch.
         traceRayEXT(topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
                     hitPos + N * 1e-3, 0.001, bs.dir, 10000.0, 2);
 
-        // Sub-trace's chit (or miss) consumed urand calls — adopt its seed.
         seed = giSubPayload.seed;
 
-        // Candidate (xs, ns, Lo, ωi). Lo is the radiance leaving xs — direct
-        // light at xs from the sub-trace's classic NEE + any visible emission
-        // at xs + ambient. Bounces 2+ from xs are NOT folded into Lo; they
-        // travel through raygen's continuation (step 1 picks up at xs in the
-        // sub-trace's BSDF-sampled outbound direction).
+        // ── This-frame candidate ──
         const vec3 xs_cand = giSubPayload.hitWorldPos;
         const vec3 ns_cand = giSubPayload.hitNormal;
         const vec3 Lo_cand = giSubPayload.radianceDiff + giSubPayload.radianceSpec;
+        const bool subHitSurface = giSubPayload.hitInstanceId != 0u &&
+                                   (giSubPayload.flags & 1u) == 0u;
 
-        // Stage 1a single-candidate reservoir. Target p_hat ∝ luminance of
-        // the integrand (lum(BRDF·NdotL·Lo)). Proposal q = bsdfPdf3 (3-lobe
-        // mixture pdf). w_i = p_hat / q. At M=1 finalize gives W = 1/q.
-        // bs.weight already encodes (BRDF·NdotL/q_lobe_conditional · 1/lobePickProb)
-        // = (BRDF·NdotL/q_marginal_full)  — so the contribution at M=1
-        // simplifies to bs.weight · Lo, identical to classic MC bounce 1.
-        // We still populate the reservoir for layout parity with Stage 1b/1c
-        // which will swap to explicit BRDF eval at xs's omegaI (needed when
-        // resampling neighbours whose primary surface differs).
-        const float p_hat_local = max(lum3(bs.weight * Lo_cand) * giSubPayload.bsdfPdf, 0.0);
-        const float q_local     = max(giSubPayload.bsdfPdf, 1e-20);
-        const float w_local     = p_hat_local / q_local;
-
+        // ── Initial reservoir (single candidate, M=1) ──
+        // RIS target = lum(F_integrand) with F = BRDF·NdotL·Lo, proposal q =
+        // brdfPdf3 (marginal mixture pdf at bs.dir). At M=1, finalize gives
+        // W = 1/q. Different from Stage 1a's bs.weight·Lo form (which used
+        // the lobe-conditional pdf instead of the marginal); same mean,
+        // slightly different per-frame variance.
+        //
+        // When the sub-trace missed the geometry (env hit or numeric edge),
+        // the candidate has no positional xs to store. We skip the reservoir
+        // path entirely — the env contribution is added at shade time via
+        // `bs.weight · Lo` (classic MC bounce-1 to env), and the reservoir
+        // slot is persisted as zero so next frame's temporal merge here
+        // rejects the slot via the ns unit-vector check.
         GiReservoir gi;
-        gi.xs     = vec3(0.0);
-        gi.ns     = vec3(0.0);
-        gi.Lo     = vec3(0.0);
-        gi.omegaI = vec3(0.0);
-        gi.W_sum  = 0.0;
-        gi.M      = 0.0;
-        gi.W      = 0.0;
-        gi.p_hat  = 0.0;
-        updateGiReservoir(gi, xs_cand, ns_cand, Lo_cand, bs.dir,
-                          w_local, p_hat_local, seed);
-        finalizeGiReservoir(gi);
+        gi.xs = vec3(0.0); gi.ns = vec3(0.0); gi.Lo = vec3(0.0); gi.omegaI = vec3(0.0);
+        gi.W_sum = 0.0; gi.M = 0.0; gi.W = 0.0; gi.p_hat = 0.0;
 
-        // Contribution: at M=1, F·W = bs.weight · Lo (see comment block above).
-        // Per-pixel firefly clamp on the contribution — a bounce-1 sample that
-        // lands on a grazing emissive or a low-pdf direction near a hot HDRI
-        // pixel can spike enough to dominate the running mean for many frames.
-        // Same `< 1e20` sentinel pattern the env NEE post-multiply clamp uses.
-        giContrib = bs.weight * Lo_cand;
-        if (pc.fireflyClamp < 1e20) {
-            const float giLum = lum3(giContrib);
-            if (giLum > pc.fireflyClamp) giContrib *= pc.fireflyClamp / giLum;
+        if (subHitSurface) {
+            const vec3 F_cand = evalGiTarget(V, bs.dir, N, F0, albedo, roughness, metalness,
+                                             alpha, ccProb, ccWeight, ccRough, baseScale, Lo_cand);
+            const float p_hat_cand = max(lum3(F_cand), 0.0);
+            const float q_cand     = max(giSubPayload.bsdfPdf, 1e-20);
+            const float w_cand     = p_hat_cand / q_cand;
+            updateGiReservoir(gi, xs_cand, ns_cand, Lo_cand, bs.dir,
+                              w_cand, p_hat_cand, seed);
+
+            // ── Temporal reuse — reproject + merge prev reservoir ──
+            // Reproject our world hitPos to prev-frame pixel space via the
+            // prevCamera UBO (same path DI uses). Validate via mesh-ID
+            // identity + |Δdist|/dist < 0.1; prev-normal isn't in the gbuf
+            // schema so the cone-of-normals gate WGPU/Bitterli typically use
+            // is approximated by mesh-ID. Re-evaluating the target at OUR
+            // pixel keeps the merge unbiased — neighbours with very different
+            // normals will simply produce low p_hat_us and contribute little
+            // weight to the resampled reservoir.
+            const ivec2 sz = imageSize(prevGbufImage);
+            const vec3  toPrevCam = hitPos - pcam.prevCamPosX.xyz;
+            const float prevZ     = dot(toPrevCam, pcam.prevCamFwdY.xyz);
+            if (prevZ > 1e-3 && sz.x > 0 && sz.y > 0) {
+                const float ndcX = dot(toPrevCam, pcam.prevCamRgt.xyz) * pcam.prevCamPosX.w / prevZ;
+                const float ndcY = dot(toPrevCam, pcam.prevCamUp.xyz)  * pcam.prevCamFwdY.w / prevZ;
+                const float prevU = (ndcX * 0.5 + 0.5) * float(sz.x);
+                const float prevV = (0.5 - ndcY * 0.5) * float(sz.y);
+                const ivec2 prevPx = ivec2(int(floor(prevU)), int(floor(prevV)));
+                if (prevPx.x >= 0 && prevPx.x < sz.x &&
+                    prevPx.y >= 0 && prevPx.y < sz.y) {
+                    const vec4 pgb = imageLoad(prevGbufImage, prevPx);
+                    const uint prevMeshId = uint(pgb.w);
+                    const uint curMeshId  = uint(gl_InstanceCustomIndexEXT) + 1u;
+                    if (prevMeshId != 0u && prevMeshId == curMeshId) {
+                        const float curDist  = length(toPrevCam);
+                        const float prevDist = length(pgb.xyz - pcam.prevCamPosX.xyz);
+                        if (abs(curDist - prevDist) / max(curDist, 1e-6) < 0.1) {
+                            // Validation passed — load prev reservoir.
+                            const vec4 prevXs = imageLoad(giResXsRead, prevPx);
+                            const vec4 prevNs = imageLoad(giResNsRead, prevPx);
+                            const vec4 prevLo = imageLoad(giResLoRead, prevPx);
+                            const vec3 prevXsP = prevXs.xyz;
+                            const vec3 prevNsP = prevNs.xyz;
+                            const vec3 prevLoP = prevLo.rgb;
+                            const float prevW_sum = prevXs.w;
+                            // M-cap: tighter on camera motion (flush stale
+                            // samples fast → less smearing on view shifts);
+                            // larger when static (accumulate longer history
+                            // for stronger variance reduction).
+                            const float mClamp = ((pc.motionFlags & 2u) != 0u) ? 5.0 : 20.0;
+                            const float prevM = min(prevNs.w, mClamp);
+                            const float prevW = prevLo.w;
+                            // Validity: non-zero W + M, and stored ns is a
+                            // unit vector (rejects images zero-cleared by host
+                            // at first frame and any pixel that never wrote).
+                            if (prevW > 0.0 && prevM > 0.0 && dot(prevNsP, prevNsP) > 0.01) {
+                                const vec3 omegaI_prev = prevXsP - hitPos;
+                                const float dist_prev  = length(omegaI_prev);
+                                if (dist_prev > 1e-3) {
+                                    const vec3 L_prev = omegaI_prev / dist_prev;
+                                    // Re-eval F + p_hat at OUR pixel using the
+                                    // stored sample's xs / Lo. This is the
+                                    // textbook ReSTIR target re-eval.
+                                    const vec3 F_prev = evalGiTarget(V, L_prev, N, F0, albedo,
+                                                                       roughness, metalness, alpha,
+                                                                       ccProb, ccWeight, ccRough,
+                                                                       baseScale, prevLoP);
+                                    const float p_hat_prev = max(lum3(F_prev), 0.0);
+                                    if (p_hat_prev > 0.0) {
+                                        // Canonical RIS temporal merge:
+                                        //   w_prev = p_hat_us · M_prev · W_prev
+                                        const float w_prev = p_hat_prev * prevM * prevW;
+                                        gi.W_sum += w_prev;
+                                        gi.M     += prevM;
+                                        if (urand(seed) < w_prev / max(gi.W_sum, 1e-20)) {
+                                            gi.xs     = prevXsP;
+                                            gi.ns     = prevNsP;
+                                            gi.Lo     = prevLoP;
+                                            gi.omegaI = L_prev;
+                                            gi.p_hat  = p_hat_prev;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            finalizeGiReservoir(gi);
         }
 
-        // Continuation hand-off for raygen: step 1 picks up at xs in the
-        // sub-trace's BSDF-sampled outbound direction. brdfWeight handed to
-        // raygen is the throughput multiplier covering BOTH the primary→xs
-        // edge (= bs.weight, the bounce-1 weight that GI just "consumed")
-        // AND the xs→y edge (sub.brdfWeight, sampled inside the sub-trace
-        // chit). raygen multiplies throughput by this once at end-of-step-0;
-        // step 1 then traces from xs and accumulates the y-shading contribution
-        // at the right throughput. If the sub-trace terminated (env hit or
-        // numeric edge case), we cap the path — no usable continuation point.
+        // ── Snapshot pre-spatial state for persistence ──
+        // Stage 1c will insert spatial neighbour resampling into `gi` here,
+        // modifying it; the snapshot keeps the pre-spatial form for next
+        // frame's temporal merge. Stage 1b has no spatial step yet, so the
+        // snapshot equals `gi` — the structure is in place for 1c to drop in
+        // without re-plumbing persistence. Same pattern ReSTIR DI uses.
+        // We persist unconditionally (zero when subHitSurface == false) so
+        // next frame's reproject at this pixel always sees a clean slot;
+        // the validity gate over there (ns is a unit vector) rejects zeros.
+        GiReservoir giPreSpatial = gi;
+        if (pc.fireflyClamp < 1e20) giPreSpatial.W = min(giPreSpatial.W, 5.0);
+        const float Wpersist = isnan(giPreSpatial.W) ? 0.0 : giPreSpatial.W;
+        imageStore(giResXsWrite, ivec2(gl_LaunchIDEXT.xy), vec4(giPreSpatial.xs, giPreSpatial.W_sum));
+        imageStore(giResNsWrite, ivec2(gl_LaunchIDEXT.xy), vec4(giPreSpatial.ns, giPreSpatial.M));
+        imageStore(giResLoWrite, ivec2(gl_LaunchIDEXT.xy), vec4(giPreSpatial.Lo, Wpersist));
+
+        if (pc.fireflyClamp < 1e20) gi.W = min(gi.W, 5.0);
+
+        if (subHitSurface && gi.W > 0.0 && gi.M > 0.0) {
+            // ── Visibility test for the chosen sample ──
+            // When the reservoir picks a sample from prev frame, xs may now
+            // be occluded from our current primary — camera moved, an opaque
+            // mesh slid into the line of sight, etc. The shadow ray closes
+            // that loop. For this-frame candidates, the ray is along bs.dir
+            // and trivially passes (we just traced through that segment in
+            // the sub-trace) but the cost is uniform either way.
+            const vec3 toXs = gi.xs - hitPos;
+            const float distChosen = length(toXs);
+            if (distChosen > 1e-3) {
+                const vec3 omegaI_chosen = toXs / distChosen;
+                shadowVisibility = 1.0;
+                traceRayEXT(topAS,
+                            gl_RayFlagsTerminateOnFirstHitEXT |
+                            gl_RayFlagsSkipClosestHitShaderEXT |
+                            gl_RayFlagsNoOpaqueEXT,
+                            0xff, 1, 0, 1,
+                            hitPos + N * 1e-3, 0.0, omegaI_chosen,
+                            distChosen - 1e-2, 1);
+                const float vis = shadowVisibility;
+
+                // ── Contribution at primary ──
+                // Standard RIS estimator: F · W at the chosen sample, F
+                // evaluated at OUR pixel's BRDF.
+                const vec3 F_chosen = evalGiTarget(V, omegaI_chosen, N, F0, albedo,
+                                                    roughness, metalness, alpha,
+                                                    ccProb, ccWeight, ccRough, baseScale, gi.Lo);
+                vec3 contrib_raw = F_chosen * gi.W * vis;
+                if (pc.fireflyClamp < 1e20) {
+                    const float giLum = lum3(contrib_raw);
+                    if (giLum > pc.fireflyClamp) contrib_raw *= pc.fireflyClamp / giLum;
+                }
+                giContrib = contrib_raw;
+            }
+            // else: degenerate xs (numerical edge case) → giContrib stays 0.
+        } else if (!subHitSurface) {
+            // Sub-trace missed the geometry (env / numeric). Use the
+            // sub-trace's radiance directly as the bounce-1 contribution —
+            // miss.rmiss has already MIS-halved the env color (we set
+            // giSubPayload.flags = 2u above), so bs.weight · Lo_cand is the
+            // unbiased single-sample MC estimator for the env-via-bounce-1
+            // half of the env MIS pair. No reservoir for env samples in
+            // Stage 1b — positional xs doesn't make sense for sky/HDRI
+            // (Stage 2 / full-path Lo would store them as directional).
+            vec3 envContrib = bs.weight * Lo_cand;
+            if (pc.fireflyClamp < 1e20) {
+                const float l = lum3(envContrib);
+                if (l > pc.fireflyClamp) envContrib *= pc.fireflyClamp / l;
+            }
+            giContrib = envContrib;
+        }
+
+        // ── Continuation hand-off (unchanged from Stage 1a) ──
+        // Step 1 always traces from THIS frame's sub-trace's hit (not from
+        // the reservoir's chosen sample which may be from prev frame). Bounce
+        // 2+ paths are statistically independent per frame; using this-frame's
+        // continuation keeps the bounce loop's throughput multiplication
+        // consistent. If the sub-trace missed (env hit), no usable
+        // continuation point — terminate the path.
         giNextOrigin = giSubPayload.nextOrigin;
         giNextDir    = giSubPayload.nextDir;
         giThroughput = bs.weight * giSubPayload.brdfWeight;
-        giTerminate  = (giSubPayload.flags & 1u) != 0u ||
-                       giSubPayload.hitInstanceId == 0u;
+        giTerminate  = !subHitSurface;
         giConsumed   = true;
     }
 
