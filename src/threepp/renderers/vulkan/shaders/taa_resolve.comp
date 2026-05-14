@@ -44,6 +44,45 @@ layout(push_constant) uniform Pc {
     uint  _pad;
 } pc;
 
+// Catmull-Rom history reconstruction (5-tap, bilinear-fused).
+// Single-bilinear sampling of history smears under camera translation
+// (every frame's prevUv lands at a sub-pixel position → bilinear blurs
+// history by ~0.5 px → blur compounds across frames with α=0.1 →
+// visible smear, worst on close objects where screen-space velocity per
+// camera unit is highest). Catmull-Rom is a sharper reconstruction
+// filter: a separable cubic, evaluated as 5 bilinear taps (Jorge
+// Jimenez / Inside the renderer trick — drop the 4 corner weights,
+// since they're small). The neighborhood AABB clamp below catches any
+// slight overshoot. Sampler stays LINEAR — required for the 4 sub-taps
+// fused into each fetch.
+vec3 sampleHistoryCR(vec2 uv) {
+    const vec2 texSize = vec2(float(pc.width), float(pc.height));
+    const vec2 samplePos = uv * texSize;
+    const vec2 texPos1 = floor(samplePos - 0.5) + 0.5;
+    const vec2 f = samplePos - texPos1;
+
+    const vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    const vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    const vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    const vec2 w3 = f * f * (-0.5 + 0.5 * f);
+
+    const vec2 w12 = w1 + w2;
+    const vec2 offset12 = w2 / w12;
+
+    const vec2 texPos0  = (texPos1 - 1.0)        / texSize;
+    const vec2 texPos3  = (texPos1 + 2.0)        / texSize;
+    const vec2 texPos12 = (texPos1 + offset12)   / texSize;
+
+    // Cross of 5 fused-bilinear fetches (top, left, center, right, bottom).
+    vec3 result = vec3(0.0);
+    result += texture(taaHistoryReadTex, vec2(texPos12.x, texPos0.y )).rgb * (w12.x * w0.y );
+    result += texture(taaHistoryReadTex, vec2(texPos0.x,  texPos12.y)).rgb * (w0.x  * w12.y);
+    result += texture(taaHistoryReadTex, vec2(texPos12.x, texPos12.y)).rgb * (w12.x * w12.y);
+    result += texture(taaHistoryReadTex, vec2(texPos3.x,  texPos12.y)).rgb * (w3.x  * w12.y);
+    result += texture(taaHistoryReadTex, vec2(texPos12.x, texPos3.y )).rgb * (w12.x * w3.y );
+    return max(result, vec3(0.0));// Catmull-Rom can ring slightly negative on hard edges.
+}
+
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
@@ -90,8 +129,11 @@ void main() {
 
     vec3 history = curr;
     if (reprojValid) {
-        history = texture(taaHistoryReadTex, prevUv).rgb;
-        // Neighborhood AABB clamp — softens edge disocclusion, keeps fresh.
+        // Catmull-Rom 5-tap (sharper than single bilinear — kills the
+        // "everything smears on camera translation" compounding blur).
+        history = sampleHistoryCR(prevUv);
+        // Neighborhood AABB clamp — softens edge disocclusion, keeps fresh,
+        // also caps any slight overshoot from the Catmull-Rom reconstruction.
         history = clamp(history, nMin, nMax);
     }
 

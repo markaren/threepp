@@ -143,8 +143,11 @@ namespace threepp::vulkan {
         if (sampler_ == VK_NULL_HANDLE) {
             VkSamplerCreateInfo sci{};
             sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-            // Linear filter on history reprojection so sub-pixel sampling
-            // stays smooth — the whole point of TAA is sub-pixel blending.
+            // LINEAR filter — required by the Catmull-Rom 5-tap history
+            // reconstruction in taa_resolve.comp (each tap fuses 4 texels
+            // via the bilinear sampler). A naive single bilinear sample
+            // would compound a half-pixel blur every frame on translating
+            // close objects — the long-standing "everything smears" bug.
             sci.magFilter    = VK_FILTER_LINEAR;
             sci.minFilter    = VK_FILTER_LINEAR;
             sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
