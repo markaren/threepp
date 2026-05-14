@@ -2393,11 +2393,54 @@ void main() {
     }
     const float emLum1 = dot(emissiveOut, vec3(0.2126, 0.7152, 0.0722));
     if (emLum1 > pc.fireflyClamp) emissiveOut *= pc.fireflyClamp / emLum1;
-    // Suppress emission on indirect shading hits when the prior shade event
-    // already accounted for emissive triangles via NEE. Primary hits, hits
-    // after pass-through, and hits on frames with no emissive geometry keep
-    // the term so the user can see directly-visible glowing surfaces.
-    if ((payload.inFlags & 1u) != 0u) emissiveOut = vec3(0.0);
+    // BSDF-side MIS weight for emissive surfaces hit by bounce rays.
+    // Replaces the older crude suppression (`emissiveOut = vec3(0)` when
+    // prev shade ran NEE), which biased every bounce-into-emissive event
+    // toward zero contribution regardless of how unlikely NEE was to have
+    // picked that exact direction. Standard balance heuristic:
+    //   wBSDF = pdfBSDF / (pdfBSDF + pdfOmega_NEE)
+    // where `pdfBSDF` is the BSDF pdf at the bouncing direction (set by
+    // the prev chit into payload.bsdfPdf, same field miss.rmiss already
+    // uses for env MIS), and `pdfOmega_NEE` is the solid-angle pdf with
+    // which prev chit's emissive NEE would have sampled THIS exact hit.
+    //
+    // pdfOmega derivation — note T.area cancels between the pickPdf and
+    // the area-to-omega Jacobian:
+    //   pickPdf      = T.emLum · T.area / totalPower
+    //   areaToOmega  = dist² / (T.area · cosLight)
+    //   pdfOmega     = T.emLum · dist² / (totalPower · cosLight)
+    // We approximate `T.emLum` (the CDF-recorded triangle emission
+    // luminance) with `emLum1` from this hit's actual material/texture
+    // eval. For meshes with emission textures this differs slightly from
+    // the CDF-stored emission (host stores material-level lum, not per-
+    // texel) — a few % bias on emission-textured meshes; negligible on
+    // typical flat-emitter geometry (light strips, area panels).
+    //
+    // cosLight uses the GEOMETRIC face normal (cross product of edge
+    // vectors transformed to world space), matching the NEE side's
+    // `abs(dot(-toL, lN))` — using N (shading / normal-mapped) here
+    // would introduce a small bias whenever the shading normal deviates
+    // from the face.
+    //
+    // Gates: `inFlags & 1u` (prev shade ran NEE), `pc.emissiveCount > 0u`
+    // (scene has emissive geometry — mirror raygen's inFlags gate),
+    // `pc.emissiveTotalPower > 0` (CDF denominator), `emLum1 > 0`
+    // (skip the vertex-fetch + cross product when this surface is non-
+    // emissive — MIS would be a no-op via 0 emission anyway).
+    if ((payload.inFlags & 1u) != 0u && pc.emissiveCount > 0u &&
+        pc.emissiveTotalPower > 0.0 && emLum1 > 0.0) {
+        VertexBuf vbMis = VertexBuf(gdesc.vertexAddress);
+        const vec3 v0_mis = vec3(vbMis.p[idx.x * 3 + 0], vbMis.p[idx.x * 3 + 1], vbMis.p[idx.x * 3 + 2]);
+        const vec3 v1_mis = vec3(vbMis.p[idx.y * 3 + 0], vbMis.p[idx.y * 3 + 1], vbMis.p[idx.y * 3 + 2]);
+        const vec3 v2_mis = vec3(vbMis.p[idx.z * 3 + 0], vbMis.p[idx.z * 3 + 1], vbMis.p[idx.z * 3 + 2]);
+        const vec3 nFace_obj   = cross(v1_mis - v0_mis, v2_mis - v0_mis);
+        const vec3 nFace_world = normalize(transpose(mat3(gl_WorldToObjectEXT)) * nFace_obj);
+        const float cosLight   = max(abs(dot(nFace_world, gl_WorldRayDirectionEXT)), 1e-4);
+        const float pdfOmega   = emLum1 * gl_HitTEXT * gl_HitTEXT / (pc.emissiveTotalPower * cosLight);
+        const float pdfBsdfPrev = max(payload.bsdfPdf, 0.0);
+        const float wBSDF       = pdfBsdfPrev / max(pdfBsdfPrev + pdfOmega, 1e-8);
+        emissiveOut *= wBSDF;
+    }
     if ((pc.motionFlags & 4u) != 0u) lit += gatherCaustics(hitPos, N, albedo, roughness);
 
     // ── ReSTIR GI Stage 2 — bounce-2 inside Lo (full-path-Lo, capped at 2) ──
