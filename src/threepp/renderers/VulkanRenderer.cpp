@@ -25,6 +25,7 @@
 #define VMA_IMPLEMENTATION
 #include "vulkan/VulkanContext.hpp"
 #include "vulkan/VulkanResources.hpp"
+#include "vulkan/Denoiser.hpp"
 #include "vulkan/PhotonCaustics.hpp"
 #include "vulkan/TaaResolve.hpp"
 #include "vulkan/shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
@@ -65,9 +66,8 @@
 #include "threepp/renderers/vulkan/shaders/closest_hit_alpha.rahit.spv.h"
 #include "threepp/renderers/vulkan/shaders/shadow_anyhit.rahit.spv.h"
 // (photon shader SPVs moved into vulkan/PhotonCaustics.cpp)
+// (denoise + denoise_atrous shader SPVs moved into vulkan/Denoiser.cpp)
 #include "threepp/renderers/vulkan/shaders/prefilter_env.comp.spv.h"
-#include "threepp/renderers/vulkan/shaders/denoise.comp.spv.h"
-#include "threepp/renderers/vulkan/shaders/denoise_atrous.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/skinning.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/water_displace.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/gbuffer.vert.spv.h"
@@ -125,8 +125,8 @@ namespace threepp {
         // GPU schedule (queue is still serial — async compute would do that,
         // and is a much larger change).
         //
-        // The 2-slot ping-pong (accumImagesPP / gbufImagesPP / momentsImagesPP
-        // / reservoirImagesPP) stays at 2 entries — Vulkan queue execution is
+        // The 2-slot ping-pong (accumImagesPP / gbufImagesPP / denoiser_'s
+        // moments / reservoirImagesPP) stays at 2 entries — Vulkan queue execution is
         // strictly in-order within a queue, so when frame N+2 writes slot
         // (N+2)&1 the prior owner of that slot (frame N) has fully completed
         // on the GPU. Temporal reproject still reads "the previous frame"
@@ -492,19 +492,9 @@ namespace threepp {
         // f&1 → image-slot mapping just like accumImagesPP / gbufImagesPP.
         std::array<Image2D, 2> reservoirPosImagesPP{};
         std::array<Image2D, 2> reservoirWImagesPP{};
-        // Multi-pass à-trous ping-pong intermediates (rgba32f). filt[0] is the
-        // pass 0 / pass 2 destination, filt[1] is the pass 1 destination. After
-        // the final atrous pass filt[0] holds the filtered radiance that
-        // denoise.comp (finalize) mixes with raw accumImage by per-pixel FC.
-        std::array<Image2D, 2> filteredImagesPP{};
-        // Temporal moments ping-pong (R32F). Each slot stores per-pixel
-        // mean(luminance²) integrated alongside accumImage with the same FC
-        // weight and reproject taps. denoise_atrous reads variance =
-        // max(M2 − lum(mean)², 0) to drive σ_lum per pixel — replaces the
-        // constant σ_lum=1.5 the filter used before. SVGF-style first stage:
-        // no spatial prefilter, no per-pass propagation of variance through
-        // the à-trous cascade; both are follow-ups.
-        std::array<Image2D, 2> momentsImagesPP{};
+        // Filtered and moments ping-pong images are owned by `denoiser_`;
+        // bindings 20 / 33 / 34 are wired via accessors at descriptor-write
+        // time. See vulkan/Denoiser.hpp.
         uint32_t accumWriteIdx_ = 0;
         uint32_t sampleIndex = 0;
         // Samples per pixel per frame. Each sample is an independent
@@ -737,16 +727,12 @@ namespace threepp {
         // descriptor binding + dispatch through the class.
         std::unique_ptr<vulkan::PhotonCaustics> photon_;
 
-        // Spatial denoiser compute pipelines. Both reuse rtDsLayout (set 0) so
-        // the same per-frame descriptor set drives RT, atrous, and finalize.
-        // One pipeline layout shared by both compute pipelines (16-byte
-        // COMPUTE push constant). denoiseAtrousPipeline runs strided à-trous
-        // ping-pong over filteredArray; denoisePipeline finalizes (FC fade +
-        // tonemap + sRGB → outImage).
-        VkPipelineLayout denoisePipelineLayout    = VK_NULL_HANDLE;
-        VkPipeline       denoisePipeline          = VK_NULL_HANDLE;
-        VkPipeline       denoiseAtrousPipeline    = VK_NULL_HANDLE;
-        bool             denoiseEnabled_          = true;
+        // Spatial denoiser — see vulkan/Denoiser.{hpp,cpp}. Owns the atrous
+        // + finalize compute pipelines and the filtered + moments ping-pong
+        // images. Shares rtDsLayout so a single per-frame descriptor set
+        // drives RT raygen, atrous, and finalize.
+        std::unique_ptr<vulkan::Denoiser> denoiser_;
+        bool                              denoiseEnabled_ = true;
 
         // ── GPU skinning compute pipeline ──────────────────────────────────
         // Replaces the cpuSkin() loop. One dispatch per skinned mesh per
@@ -1038,12 +1024,17 @@ namespace threepp {
             createPrefilterPipeline();// must precede createDefaultEnvImage so PMREM is ready
             createDefaultEnvImage();
             rebuildDefaultEnvCdfImages();// 1×1 dummy so descriptors are valid before any HDR upload
-            createAccumImage();
             createTextureSampler();
             createDefaultMaterialTexture();
             createRtPipeline();
             createShaderBindingTable();
-            createDenoisePipeline();// must follow createRtPipeline (shares rtDsLayout)
+            // Denoiser reuses rtDsLayout for its descriptor set (single
+            // per-frame set drives raygen + atrous + finalize) and needs
+            // cmdPool for one-shot image transitions in createImages. Must
+            // construct before createAccumImage since clearGbufImages now
+            // includes denoiser_->momentsImage(0/1).
+            denoiser_ = std::make_unique<vulkan::Denoiser>(*ctx, rtDsLayout, cmdPool);
+            createAccumImage();
             createSkinningPipeline();
             photon_ = std::make_unique<vulkan::PhotonCaustics>(*ctx, rtPipelineLayout);
             createWaterDisplacePipeline();
@@ -1088,6 +1079,10 @@ namespace threepp {
             // Photon caustics owns its pipeline + SBT + buffers; reset
             // before destroying the shared rtPipelineLayout it references.
             photon_.reset();
+            // Denoiser owns atrous + finalize pipelines + its own pipeline
+            // layout (built from rtDsLayout) + filtered/moments images.
+            // Reset before destroying rtDsLayout for symmetry with photon_.
+            denoiser_.reset();
             if (rtPipelineLayout) vkDestroyPipelineLayout(d, rtPipelineLayout, nullptr);
             if (rtDsLayout)       vkDestroyDescriptorSetLayout(d, rtDsLayout, nullptr);
 
@@ -1183,8 +1178,6 @@ namespace threepp {
             for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : reservoirWImagesPP) destroyImage2D(ctx->allocator(), d, img);
-            for (auto& img : filteredImagesPP) destroyImage2D(ctx->allocator(), d, img);
-            for (auto& img : momentsImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : materialTextures) destroyImage2D(ctx->allocator(), d, img);
             materialTextures.clear();
             if (textureSampler_) vkDestroySampler(d, textureSampler_, nullptr);
@@ -1194,10 +1187,6 @@ namespace threepp {
             if (prefilterDsLayout)        vkDestroyDescriptorSetLayout(d, prefilterDsLayout, nullptr);
             if (prefilterDescPool)        vkDestroyDescriptorPool(d, prefilterDescPool, nullptr);
             if (prefilterSrcSampler)      vkDestroySampler(d, prefilterSrcSampler, nullptr);
-
-            if (denoisePipeline)        vkDestroyPipeline(d, denoisePipeline, nullptr);
-            if (denoiseAtrousPipeline)  vkDestroyPipeline(d, denoiseAtrousPipeline, nullptr);
-            if (denoisePipelineLayout)  vkDestroyPipelineLayout(d, denoisePipelineLayout, nullptr);
 
             // GPU skinning teardown. Per-SkinnedMeshState buffers are
             // destroyed alongside the BLAS in the skinnedMeshStates clear
@@ -4091,15 +4080,15 @@ namespace threepp {
             // Includes ReSTIR DI reservoir ping-pong (28/29 pos, 30/31 W) so
             // M=0 on frame 0's read side and the temporal-reuse path correctly
             // sees "no prior history" instead of garbage.
-            // Also includes momentsImagesPP (33/34) so M2=0 on first read —
-            // variance reads from a stale-undefined moments slot would give
-            // huge spurious variance, blowing the σ_lum estimate.
+            // Also includes denoiser_'s moments images (33/34) so M2=0 on
+            // first read — variance reads from a stale-undefined moments slot
+            // would give huge spurious variance, blowing the σ_lum estimate.
             std::array<VkImage, 10> images = {
                     gbufImagesPP[0].image, gbufImagesPP[1].image,
                     accumImagesPP[0].image, accumImagesPP[1].image,
                     reservoirPosImagesPP[0].image, reservoirPosImagesPP[1].image,
                     reservoirWImagesPP[0].image, reservoirWImagesPP[1].image,
-                    momentsImagesPP[0].image, momentsImagesPP[1].image,
+                    denoiser_->momentsImage(0), denoiser_->momentsImage(1),
             };
 
             std::array<VkImageMemoryBarrier2, 10> toTransfer{};
@@ -5657,10 +5646,6 @@ namespace threepp {
                 img = createStorageImage2D(ext.width, ext.height,
                                            VK_FORMAT_R32G32B32A32_SFLOAT);
             }
-            for (auto& img : filteredImagesPP) {
-                img = createStorageImage2D(ext.width, ext.height,
-                                           VK_FORMAT_R32G32B32A32_SFLOAT);
-            }
             for (auto& img : reservoirPosImagesPP) {
                 img = createStorageImage2D(ext.width, ext.height,
                                            VK_FORMAT_R32G32B32A32_SFLOAT);
@@ -5669,10 +5654,9 @@ namespace threepp {
                 img = createStorageImage2D(ext.width, ext.height,
                                            VK_FORMAT_R16G16B16A16_SFLOAT);
             }
-            for (auto& img : momentsImagesPP) {
-                img = createStorageImage2D(ext.width, ext.height,
-                                           VK_FORMAT_R32_SFLOAT);
-            }
+            // Filtered + moments ping-pong are owned by Denoiser; ctor must
+            // have already constructed denoiser_ before this is reached.
+            denoiser_->createImages(ext.width, ext.height);
             // Storage memory contents are undefined after vmaCreateImage —
             // clear all four slots to 0 so the first frame's reproject sees
             // mesh-ID 0 (= miss) and cold-starts with histFc=0 instead of
@@ -6968,77 +6952,6 @@ namespace threepp {
             pci.pPoolSizes = ps.data();
             check(vkCreateDescriptorPool(ctx->device(), &pci, nullptr, &prefilterDescPool),
                   "vkCreateDescriptorPool(prefilter)");
-        }
-
-        // Spatial denoiser. One compute pipeline that reads accumImage (binding 7)
-        // + gbufImage (binding 12) + cam (binding 2) and writes outImage (binding 1)
-        // — all four bindings live in rtDsLayout (with COMPUTE_BIT added to their
-        // stageFlags). Push constant carries tonemap + exposure + enable flag.
-        void createDenoisePipeline() {
-            // Push constants: 4 × u32 = 16 bytes (toneMapping, exposureBits,
-            // denoiseEnabled, _pad). COMPUTE-only, separate from rtPipelineLayout's
-            // RGEN/CHIT/MISS push constant range.
-            VkPushConstantRange pcRange{};
-            pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-            pcRange.offset = 0;
-            pcRange.size   = 16;
-
-            VkPipelineLayoutCreateInfo plci{};
-            plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            plci.setLayoutCount = 1;
-            plci.pSetLayouts = &rtDsLayout;// reuse the RT descriptor set layout
-            plci.pushConstantRangeCount = 1;
-            plci.pPushConstantRanges = &pcRange;
-            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &denoisePipelineLayout),
-                  "vkCreatePipelineLayout(denoise)");
-
-            VkShaderModuleCreateInfo smci{};
-            smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            smci.codeSize = sizeof(kDenoiseCompSpv);
-            smci.pCode    = kDenoiseCompSpv;
-            VkShaderModule mod = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &smci, nullptr, &mod),
-                  "vkCreateShaderModule(denoise)");
-
-            VkPipelineShaderStageCreateInfo stage{};
-            stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            stage.module = mod;
-            stage.pName  = "main";
-
-            VkComputePipelineCreateInfo cpci{};
-            cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            cpci.stage  = stage;
-            cpci.layout = denoisePipelineLayout;
-            check(vkCreateComputePipelines(ctx->device(), VK_NULL_HANDLE, 1, &cpci, nullptr,
-                                           &denoisePipeline),
-                  "vkCreateComputePipelines(denoise)");
-            vkDestroyShaderModule(ctx->device(), mod, nullptr);
-
-            // Atrous pipeline shares the same layout (same descriptor set, same
-            // 16-byte COMPUTE push constant range — interpretation differs).
-            VkShaderModuleCreateInfo asmci{};
-            asmci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            asmci.codeSize = sizeof(kDenoiseAtrousCompSpv);
-            asmci.pCode    = kDenoiseAtrousCompSpv;
-            VkShaderModule amod = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &asmci, nullptr, &amod),
-                  "vkCreateShaderModule(denoise_atrous)");
-
-            VkPipelineShaderStageCreateInfo astage{};
-            astage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            astage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
-            astage.module = amod;
-            astage.pName  = "main";
-
-            VkComputePipelineCreateInfo acpci{};
-            acpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-            acpci.stage  = astage;
-            acpci.layout = denoisePipelineLayout;
-            check(vkCreateComputePipelines(ctx->device(), VK_NULL_HANDLE, 1, &acpci, nullptr,
-                                           &denoiseAtrousPipeline),
-                  "vkCreateComputePipelines(denoise_atrous)");
-            vkDestroyShaderModule(ctx->device(), amod, nullptr);
         }
 
         // GPU skinning pipeline. One descriptor set per SkinnedMesh, allocated
@@ -8799,9 +8712,9 @@ namespace threepp {
                     // Both filtered slots are baked here; the shader uses
                     // filteredArray[N] indexed by a per-pass push constant.
                     std::array<VkDescriptorImageInfo, 2> filteredInfos{};
-                    filteredInfos[0].imageView   = filteredImagesPP[0].view;
+                    filteredInfos[0].imageView   = denoiser_->filteredView(0);
                     filteredInfos[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    filteredInfos[1].imageView   = filteredImagesPP[1].view;
+                    filteredInfos[1].imageView   = denoiser_->filteredView(1);
                     filteredInfos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                     VkWriteDescriptorSet wFiltered{};
                     wFiltered.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -8965,7 +8878,7 @@ namespace threepp {
                     // Bindings 33/34 — temporal moments ping-pong (R32F).
                     // Same writeSlot/readSlot mapping as accumImagesPP.
                     VkDescriptorImageInfo momentsWriteInfo{};
-                    momentsWriteInfo.imageView   = momentsImagesPP[writeSlot].view;
+                    momentsWriteInfo.imageView   = denoiser_->momentsView(writeSlot);
                     momentsWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                     VkWriteDescriptorSet wMomentsWrite{};
                     wMomentsWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -8976,7 +8889,7 @@ namespace threepp {
                     wMomentsWrite.pImageInfo = &momentsWriteInfo;
 
                     VkDescriptorImageInfo momentsReadInfo{};
-                    momentsReadInfo.imageView   = momentsImagesPP[readSlot].view;
+                    momentsReadInfo.imageView   = denoiser_->momentsView(readSlot);
                     momentsReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                     VkWriteDescriptorSet wMomentsRead{};
                     wMomentsRead.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -9202,10 +9115,10 @@ namespace threepp {
             ctx->recreateSwapchain();
             for (auto& img : accumImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
-            for (auto& img : filteredImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : reservoirWImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
-            for (auto& img : momentsImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
+            // Filtered + moments destroyed implicitly by denoiser_->createImages
+            // inside createAccumImage below.
             createAccumImage();// resets sampleIndex + clears prevWorldMats
             // Resize hybrid raster attachments BEFORE descriptor rewrites —
             // bindings 22-25 point at rasterGbufs[f].*.view, so stale views
@@ -9676,8 +9589,8 @@ namespace threepp {
             // Temporal moments ping-pong: same RT_SHADER → RT_SHADER fence as
             // accum/gbuf. Atrous reads the just-written slot via the existing
             // memory barrier (barrierMem RT→COMPUTE in the denoise block).
-            preBarriers[9]  = accumGbufTemplate; preBarriers[9].image  = momentsImagesPP[0].image;
-            preBarriers[10] = accumGbufTemplate; preBarriers[10].image = momentsImagesPP[1].image;
+            preBarriers[9]  = accumGbufTemplate; preBarriers[9].image  = denoiser_->momentsImage(0);
+            preBarriers[10] = accumGbufTemplate; preBarriers[10].image = denoiser_->momentsImage(1);
             VkDependencyInfo dep{};
             dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
             dep.imageMemoryBarrierCount = static_cast<uint32_t>(preBarriers.size());
@@ -9806,88 +9719,15 @@ namespace threepp {
             // ── Spatial denoiser: 2-pass à-trous + finalize tonemap + sRGB ──────
             // RT writes accumImage + gbufImage; denoise pipeline reads them.
             // outImage is owned by the finalize pass (raygen.rgen tail was
-            // stripped). All ping-pong slots stay GENERAL throughout.
-            {
-                const uint32_t gx = (ext.width  + 7u) / 8u;
-                const uint32_t gy = (ext.height + 7u) / 8u;
-
-                // Bind once — both pipelines share denoisePipelineLayout.
-                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                        denoisePipelineLayout, 0, 1,
-                                        &descriptorSets[setIdx], 0, nullptr);
-
-                // Initial barrier: RT_SHADER write → COMPUTE_SHADER read+write.
-                auto barrierMem = [&](VkPipelineStageFlags2 srcStage) {
-                    VkMemoryBarrier2 mb{};
-                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                    mb.srcStageMask  = srcStage;
-                    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    VkDependencyInfo bd{};
-                    bd.sType                = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    bd.memoryBarrierCount   = 1;
-                    bd.pMemoryBarriers      = &mb;
-                    vkCmdPipelineBarrier2(cb, &bd);
-                };
-
-                barrierMem(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR);
-                timingBegin(cb, TP_Denoise);
-
-                if (denoiseEnabled_) {
-                    // 2 atrous passes: stride 1 → 2. Pass 0 sources from
-                    // accumImage and writes filt[1]; pass 1 reads filt[1]
-                    // and writes filt[0]. Finalize then reads filt[0].
-                    //
-                    // Initial multi-pass land used 3 passes (strides 1/2/4)
-                    // with a 21×21 effective radius. On this fast-converging
-                    // PT (60-200 FPS, 2 spp → settled in <1s) the third pass
-                    // overblurred clean input. 2 passes give a 9×9 radius
-                    // which keeps detail without leaving residual noise.
-                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, denoiseAtrousPipeline);
-
-                    struct AtrousPc {
-                        uint32_t stride;
-                        uint32_t readFromAccum;
-                        uint32_t inputIdx;
-                        uint32_t outputIdx;
-                    };
-                    // Schedule lands the final filtered output in filt[0] so
-                    // finalize.comp's hard-coded `filteredArray[0]` read is
-                    // correct.
-                    const AtrousPc passes[2] = {
-                            {1u, 1u, 0u, 1u}, // accum → filt[1]
-                            {2u, 0u, 1u, 0u}, // filt[1] → filt[0]
-                    };
-                    for (int i = 0; i < 2; ++i) {
-                        if (i > 0) barrierMem(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-                        vkCmdPushConstants(cb, denoisePipelineLayout,
-                                           VK_SHADER_STAGE_COMPUTE_BIT,
-                                           0, sizeof(passes[i]), &passes[i]);
-                        vkCmdDispatch(cb, gx, gy, 1);
-                    }
-
-                    // Atrous → finalize barrier (filt[0] write → finalize read).
-                    barrierMem(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
-                }
-
-                // Finalize: tonemap + sRGB → outImage. When denoiseEnabled_ ==
-                // false, this is the only compute dispatch in the block; the
-                // initial RT-to-COMPUTE barrier above covers it.
-                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, denoisePipeline);
-                const uint32_t finalizePc[4] = {
-                        static_cast<uint32_t>(toneMapping_),
-                        exposureBits,
-                        denoiseEnabled_ ? 1u : 0u,
-                        0u,
-                };
-                vkCmdPushConstants(cb, denoisePipelineLayout,
-                                   VK_SHADER_STAGE_COMPUTE_BIT,
-                                   0, sizeof(finalizePc), finalizePc);
-                vkCmdDispatch(cb, gx, gy, 1);
-                timingEnd(cb, TP_Denoise);
-            }
+            // stripped). All ping-pong slots stay GENERAL throughout. The
+            // RT_SHADER → COMPUTE_SHADER barrier is recorded inside
+            // Denoiser::recordDispatch.
+            timingBegin(cb, TP_Denoise);
+            denoiser_->recordDispatch(cb, descriptorSets[setIdx], ext,
+                                      denoiseEnabled_,
+                                      static_cast<uint32_t>(toneMapping_),
+                                      exposureBits);
+            timingEnd(cb, TP_Denoise);
             // ── End denoise ─────────────────────────────────────────────────────
 
             // ── Stage 1A.5: raster TAA ─────────────────────────────────────────
