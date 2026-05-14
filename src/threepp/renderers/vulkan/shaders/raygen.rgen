@@ -30,7 +30,15 @@
 // rays from closest_hit.
 
 struct Payload {
-    vec3 radiance;     // emitted + direct + spec IBL leaving the hit
+    // Diffuse + specular split — each channel reproject/accumulate/filter
+    // independently. Diffuse content (Lambertian, ambient, emissive,
+    // caustics) is view-INdependent: surface-anchored reproject is exact,
+    // long history is desirable. Specular content (Cook-Torrance lit, env
+    // BRDF spec) is view-DEPENDENT: surface-anchored reproject mixes
+    // prev-view lobe with new-view lobe → trails on camera motion. Spec
+    // channel uses FC=1 (no history) until virtual reproject lands.
+    vec3 radianceDiff; // diffuse-channel contribution at this hit
+    vec3 radianceSpec; // specular-channel contribution at this hit
     vec3 brdfWeight;   // throughput multiplier for the next bounce (BRDF·cos/pdf)
     vec3 nextOrigin;   // world-space origin for the next bounce ray
     vec3 nextDir;      // world-space direction for the next bounce ray
@@ -60,6 +68,15 @@ struct Payload {
                           //  and updates it on a refraction event. Fixes camera-inside-closed-glass
                           //  (e.g. windshield from cabin) where geometric isFront alone misclassifies
                           //  back-face hits as "exiting glass" when the ray was actually in air.
+    float hitSpecFrac;    // chit→raygen: estimated fraction of this primary hit's
+                          //  outgoing radiance that comes from the view-DEPENDENT
+                          //  spec lobe (vs view-INDEPENDENT diffuse). Range [0,1].
+                          //  Used as the actual decay signal for the motion-time
+                          //  FC override — replaces the old `1-smoothstep(roughness)`
+                          //  heuristic which missed dark surfaces where diff is
+                          //  dim and Fresnel spec dominates (wet asphalt, dark
+                          //  paint, cones at low NdotV). Computed at primary
+                          //  only; 0 on bounces / pass-throughs / sky.
 };
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
@@ -112,6 +129,12 @@ layout(set = 0, binding = 13, rgba32f) uniform readonly image2D prevGbufImage;
 // luminance edge stop wants.
 layout(set = 0, binding = 33, r32f) uniform writeonly image2D momentsImage;
 layout(set = 0, binding = 34, r32f) uniform readonly  image2D prevMomentsImage;
+// Primary-surface albedo sink for atrous demodulation. Raygen clears each
+// pixel to vec4(0) at the start of its accumulation (so pixels whose chit
+// path early-returns — refract probes, pass-through — fall back cleanly to
+// "no demod"). chit imageStore on the primary hit overwrites with the real
+// albedo and .a=1. atrous reads it.
+layout(set = 0, binding = 35, rgba8) uniform writeonly image2D primaryAlbedoImage;
 
 // Hybrid raster G-buffer attachments. Always bound (allocated at startup);
 // raygen samples them only when (pc.motionFlags & 8u) != 0 (hybrid mode).
@@ -619,6 +642,13 @@ void main() {
     const vec2 size = vec2(gl_LaunchSizeEXT.xy);
     const vec4 originWS = cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0);
 
+    // Pre-clear the demod albedo at this pixel so any chit early-return path
+    // (refract probe, transmission pass-through, sky miss) leaves a sentinel
+    // `.a=0` for atrous → fall back to non-demod filtering. chit overwrites
+    // with the real albedo + `.a=1` only when the primary hit is a
+    // diffuse-dominant surface where demod is mathematically valid.
+    imageStore(primaryAlbedoImage, ivec2(gl_LaunchIDEXT.xy), vec4(0.0));
+
     // Accumulator across in-frame samples. radianceSum is the SUM (not mean)
     // of per-sample radiance; the history blend below treats it as `spp`
     // effective samples (weight = spp), keeping FC arithmetic correct.
@@ -643,6 +673,7 @@ void main() {
     float primaryRoughness   = 1.0;// default (most lenient cap) until first real shade event
     float primaryMetalness   = 0.0;
     float primaryTransmission = 0.0;
+    float primarySpecFrac    = 0.0;// chit-computed view-dep fraction; drives FC decay
 
     // Hybrid mode (gbuffer drives primary visibility): PT primary-ray jitter
     // is gated off — confirmed empirically (2026-05-06) that Monte Carlo
@@ -776,7 +807,8 @@ void main() {
                     effectiveBounces = kMaxBounces;
                 }
             }
-        payload.radiance   = vec3(0.0);
+        payload.radianceDiff = vec3(0.0);
+        payload.radianceSpec = vec3(0.0);
         payload.brdfWeight = vec3(0.0);
         payload.nextOrigin = vec3(0.0);
         payload.nextDir    = vec3(0.0);
@@ -792,6 +824,7 @@ void main() {
         payload.hitRoughness   = 1.0;
         payload.hitMetalness   = 0.0;
         payload.hitTransmission = 0.0;
+        payload.hitSpecFrac    = 0.0;
         // NOTE: bsdfPdf is intentionally NOT reset here — it must persist from
         // the previous step's chit (which wrote it for the bounce direction we
         // are about to trace) so the miss handler can compute MIS for env CDF.
@@ -821,7 +854,8 @@ void main() {
         // surface).
         bool primaryViaHybrid = false;
         if (hybridOn && step == 0 && primaryHybridSky) {
-            payload.radiance        = primarySkyEnv;
+            payload.radianceDiff    = primarySkyEnv;
+            payload.radianceSpec    = vec3(0.0);
             payload.brdfWeight      = vec3(0.0);
             payload.nextOrigin      = vec3(0.0);
             payload.nextDir         = vec3(0.0);
@@ -834,6 +868,7 @@ void main() {
             payload.hitTransmission = 0.0;
             payload.bsdfPdf         = 0.0;
             payload.currentIor      = 1.0;
+            payload.hitSpecFrac     = 0.0;
             primaryViaHybrid = true;
         }
 
@@ -856,6 +891,7 @@ void main() {
             primaryRoughness    = payload.hitRoughness;
             primaryMetalness    = payload.hitMetalness;
             primaryTransmission = payload.hitTransmission;
+            primarySpecFrac     = payload.hitSpecFrac;
         }
 
         // Per-bounce firefly clamp on the contribution that lands in the
@@ -876,7 +912,9 @@ void main() {
         // off a sunlit surface). Primary view (scatter==0) is left
         // unclamped so directly-visible emissive surfaces and the
         // background-through-glass case stay at full intensity.
-        vec3 contribution = throughput * payload.radiance;
+        // Phase 1: sum diff+spec for the existing single-channel accumulator.
+        // Phase 2 will split into separate accumImages per channel.
+        vec3 contribution = throughput * (payload.radianceDiff + payload.radianceSpec);
         if (scatter > 0 && pc.fireflyClamp < 1e20) {
             // Tie indirect-bounce cap to fireflyClamp so a tightened
             // user-facing clamp (Ocean demo sets 6) reaches the indirect
@@ -1169,10 +1207,26 @@ void main() {
                 const vec3 d10 = depthGate ? (g10v.xyz - prevWS) : vec3(0.0);
                 const vec3 d01 = depthGate ? (g01v.xyz - prevWS) : vec3(0.0);
                 const vec3 d11 = depthGate ? (g11v.xyz - prevWS) : vec3(0.0);
-                const float v00 = (uint(g00v.w) == primaryInstanceId && (!depthGate || dot(d00,d00) < dEps2)) ? w00 : 0.0;
-                const float v10 = (uint(g10v.w) == primaryInstanceId && (!depthGate || dot(d10,d10) < dEps2)) ? w10 : 0.0;
-                const float v01 = (uint(g01v.w) == primaryInstanceId && (!depthGate || dot(d01,d01) < dEps2)) ? w01 : 0.0;
-                const float v11 = (uint(g11v.w) == primaryInstanceId && (!depthGate || dot(d11,d11) < dEps2)) ? w11 : 0.0;
+                // All-or-nothing reproject: every bilinear tap must match
+                // the same mesh AND pass the depth gate, else the entire
+                // 2×2 footprint is rejected and the pixel cold-starts.
+                // Per-tap acceptance previously let some taps survive at
+                // silhouette boundaries (asphalt/cone): rejected taps had
+                // weight 0 but accepted taps still carried content → demod
+                // saw blended radiance ÷ current-frame albedo as a wrong-
+                // mesh outlier → atrous preserved it → visible ghost. With
+                // strict all-or-nothing, silhouette pixels disocclude
+                // cleanly (FC=0 there) and the demod stays mathematically
+                // consistent (radiance and albedo both fresh-current).
+                const bool m00 = (uint(g00v.w) == primaryInstanceId) && (!depthGate || dot(d00,d00) < dEps2);
+                const bool m10 = (uint(g10v.w) == primaryInstanceId) && (!depthGate || dot(d10,d10) < dEps2);
+                const bool m01 = (uint(g01v.w) == primaryInstanceId) && (!depthGate || dot(d01,d01) < dEps2);
+                const bool m11 = (uint(g11v.w) == primaryInstanceId) && (!depthGate || dot(d11,d11) < dEps2);
+                const bool allMatch = m00 && m10 && m01 && m11;
+                const float v00 = allMatch ? w00 : 0.0;
+                const float v10 = allMatch ? w10 : 0.0;
+                const float v01 = allMatch ? w01 : 0.0;
+                const float v11 = allMatch ? w11 : 0.0;
                 const float wSum = v00 + v10 + v01 + v11;
 
                 if (wSum > 1e-4) {
@@ -1273,10 +1327,22 @@ void main() {
                         // parallax (anchored on the glass surface), so keeping
                         // history does NOT cause mirror-style ghosting (per the
                         // tint-stability block above).
+                        // View-dep weight comes directly from chit's
+                        // Fresnel-weighted spec-vs-diff fraction (computed
+                        // at the actual surface with full material info).
+                        // Replaces the old roughness/metalness heuristic
+                        // — that heuristic completely missed dark surfaces
+                        // (wet asphalt, dark paint, dim plastic) where
+                        // the dim diffuse component can't compete with
+                        // Fresnel spec → most of their outgoing radiance
+                        // IS view-dependent even at moderate roughness.
+                        // 2026-05-14 Vehicle demo: cones at low NdotV
+                        // were leaving blue sky-reflection trails because
+                        // the heuristic said roughness=0.3 → viewDepT=0.5,
+                        // but actual spec fraction was ~0.85 (low albedo
+                        // × high Fresnel). Direct signal is precise.
                         const bool isGlassP = primaryTransmission > 0.05;
-                        const float viewDepT = isGlassP ? 0.0 : max(
-                                primaryMetalness,
-                                1.0 - smoothstep(0.05, 0.30, primaryRoughness));
+                        const float viewDepT = isGlassP ? 0.0 : primarySpecFrac;
                         // ── Emissive smear suppression ──
                         // Emissive primary surfaces have view-INDEPENDENT radiance
                         // (so the view-dep factor above doesn't catch them), but
@@ -1297,9 +1363,22 @@ void main() {
                                 vec3(0.2126, 0.7152, 0.0722)) / float(spp);
                         const float emissiveT = clamp((primaryLum - 10.0) / 20.0, 0.0, 1.0);
                         const float decayT = max(viewDepT, emissiveT);
+                        // FC requirement from the view-dep math: to flush a
+                        // fraction X of view-dep content per frame, current
+                        // weight must be ≥ X, i.e. FC ≤ 1/X. For specFrac=0.6
+                        // (wet asphalt, dark plastic at mid view angle):
+                        // cap=1.67. For specFrac=0.3 (cones at normal):
+                        // cap=3.3. For pure diffuse (specFrac=0.05): cap=20.
+                        // FC requirement from view-dep math: to flush a
+                        // fraction X of view-dep content per frame, current
+                        // weight must be ≥ X, i.e. FC ≤ 1/X. For specFrac=0.6
+                        // (wet asphalt): cap=1.67. For specFrac=0.3 (cones at
+                        // normal): cap=3.3. For pure diffuse (specFrac=0.05):
+                        // cap=20.
                         if (primaryMoved && decayT > 0.05) {
-                            capUp = mix(capUp, 4.0, decayT);
-                            capLo = mix(capLo, 1.0, decayT);
+                            const float viewDepFC = 1.0 / max(decayT, 0.05);
+                            capUp = min(capUp, viewDepFC);
+                            capLo = min(capLo, max(viewDepFC, 1.0));
                         }
                         histFc = clamp(bFc * 0.5, capLo, capUp);
                     }

@@ -26,6 +26,7 @@ namespace threepp::vulkan {
         VkDevice d = ctx_.device();
         for (auto& img : filteredImagesPP_) destroyImage2D(ctx_.allocator(), d, img);
         for (auto& img : momentsImagesPP_)  destroyImage2D(ctx_.allocator(), d, img);
+        destroyImage2D(ctx_.allocator(), d, albedoImage_);
     }
 
     Image2D Denoiser::createStorageImage2D(uint32_t w, uint32_t h,
@@ -134,6 +135,15 @@ namespace threepp::vulkan {
             img = createStorageImage2D(width, height,
                                        VK_FORMAT_R32_SFLOAT,
                                        "vmaCreateImage(denoise.moments)");
+        // Primary-surface albedo (RGBA8): chit writes once per pixel per
+        // frame, atrous reads to demodulate radiance before filtering. RGBA8
+        // is sufficient — albedo is normalised to [0,1]. The .a channel is
+        // a "demod valid" gate: 1 = pure diffuse / paint surface, demod OK;
+        // 0 = metal / glass / emissive / sky, atrous skips demod and filters
+        // in radiance space (the safe fallback).
+        albedoImage_ = createStorageImage2D(width, height,
+                                            VK_FORMAT_R8G8B8A8_UNORM,
+                                            "vmaCreateImage(denoise.albedo)");
     }
 
     void Denoiser::createPipelines() {
@@ -244,11 +254,14 @@ namespace threepp::vulkan {
             // and writes filt[1]; pass 1 reads filt[1] and writes filt[0].
             // Finalize then reads filt[0].
             //
-            // Initial multi-pass land used 3 passes (strides 1/2/4) with a
-            // 21×21 effective radius. On this fast-converging PT (60-200
-            // FPS, 2 spp → settled in <1s) the third pass overblurred clean
-            // input. 2 passes give a 9×9 radius which keeps detail without
-            // leaving residual noise.
+            // Tried a third pass (stride 4) on 2026-05-14 after demod
+            // landed — hypothesis was that demod's illumination-space
+            // filter wouldn't over-blur with wider reach. In practice the
+            // stride-4 kernel pulls taps from 8 pixels away (stride × half-
+            // kernel = 4×2), which crosses surface-feature boundaries the
+            // variance-driven σ can't fully reject — visible as edge
+            // artifacts (halos / bleed-through). 2 passes (9×9 reach)
+            // remains the sweet spot for this fast-converging PT.
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, atrousPipeline_);
 
             struct AtrousPc {

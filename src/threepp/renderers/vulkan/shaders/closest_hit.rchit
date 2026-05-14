@@ -23,7 +23,8 @@
 // reflect the env map only.
 
 struct Payload {
-    vec3 radiance;
+    vec3 radianceDiff;
+    vec3 radianceSpec;
     vec3 brdfWeight;
     vec3 nextOrigin;
     vec3 nextDir;
@@ -39,6 +40,7 @@ struct Payload {
     float hitTransmission;// raygen uses for adaptive bounce classification
     float bsdfPdf;        // chit→miss: pdf of the BSDF-sampled bounce direction
     float currentIor;     // medium-stack tracking; see raygen Payload for full description
+    float hitSpecFrac;    // estimated [0,1] spec-vs-diff fraction at primary; see raygen
 };
 
 layout(buffer_reference, scalar) readonly buffer VertexBuf { float p[]; };
@@ -181,6 +183,12 @@ layout(set = 0, binding = 28, rgba32f) uniform writeonly image2D resPosWrite;
 layout(set = 0, binding = 29, rgba32f) uniform readonly  image2D resPosRead;
 layout(set = 0, binding = 30, rgba16f) uniform writeonly image2D resWWrite;
 layout(set = 0, binding = 31, rgba16f) uniform readonly  image2D resWRead;
+// Primary-surface albedo target for atrous demodulation. Written at primary
+// hits with .a=1 to mark "demod valid"; left at the host-cleared zero
+// (.a=0) on bounces / metal / glass / emissive / sky so the denoiser falls
+// back to filtering in radiance space for those pixels. Atomic-free —
+// each pixel is written at most once per frame (primary hit only).
+layout(set = 0, binding = 35, rgba8) uniform writeonly image2D primaryAlbedoImage;
 
 // Phase 11: PMREM mip count comes via the same push-constant block used by
 // raygen. .x is raygen's sampleIndex (not read here); .y is envMipCount.
@@ -856,7 +864,8 @@ void main() {
     const bool wrongSideHit = (mdesc.sideMode == 0 && !geoFront) ||
                               (mdesc.sideMode == 1 &&  geoFront);
     if (wrongSideHit && mdesc.transmission <= 0.0) {
-        payload.radiance      = vec3(0.0);
+        payload.radianceDiff  = vec3(0.0);
+        payload.radianceSpec  = vec3(0.0);
         payload.brdfWeight    = vec3(1.0);
         // No advance past hitT — raygen uses a 1e-4 tmin for pass-through
         // bounces so the next ray sees a host surface sitting right behind
@@ -876,6 +885,7 @@ void main() {
         payload.hitRoughness    = clamp(mdesc.roughness, 0.04, 1.0);
         payload.hitMetalness    = clamp(mdesc.metalness, 0.0, 1.0);
         payload.hitTransmission = clamp(mdesc.transmission, 0.0, 1.0);
+        payload.hitSpecFrac     = 0.0;// pass-through; primary surface upstream owns this
         return;
     }
 
@@ -899,7 +909,10 @@ void main() {
             albedoSample = texture(albedoMaps[idxClamped], uvA).rgb;
         }
         const vec3 hitPosUnlit = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
-        payload.radiance      = mdesc.albedo * albedoSample;
+        // Unlit: emit base color as direct radiance. Route to diff channel
+        // (unlit is view-independent by definition).
+        payload.radianceDiff  = mdesc.albedo * albedoSample;
+        payload.radianceSpec  = vec3(0.0);
         payload.brdfWeight    = vec3(0.0);
         payload.nextOrigin    = vec3(0.0);
         payload.nextDir       = vec3(0.0);
@@ -910,6 +923,7 @@ void main() {
         payload.hitRoughness    = 1.0;
         payload.hitMetalness    = 0.0;
         payload.hitTransmission = 0.0;
+        payload.hitSpecFrac     = 0.0;// unlit: no view-dep concern
         return;
     }
 
@@ -1333,7 +1347,11 @@ void main() {
         // stochastic mode it stays vec3(0) and the reflect lobe's contribution
         // arrives via path traversal. raygen adds throughput·radiance to the
         // total each hit and multiplies throughput by brdfWeight.
-        payload.radiance      = emissiveOut + reflectContrib;
+        // Glass reflect: route to spec channel (view-dependent); emissive
+        // to diff. Both will need refinement but glass already has its own
+        // FC behavior via isGlassP gate in raygen.
+        payload.radianceDiff  = emissiveOut;
+        payload.radianceSpec  = reflectContrib;
         payload.brdfWeight    = tWeight;
         payload.nextOrigin    = wOrigin;
         payload.nextDir       = wDir;
@@ -1363,6 +1381,7 @@ void main() {
             payload.hitRoughness    = roughness;
             payload.hitMetalness    = metalness;
             payload.hitTransmission = mdesc.transmission;
+            payload.hitSpecFrac     = 0.0;// glass — view-dep handled separately via isGlassP gate
         } else {
             payload.hitWorldPos     = vec3(0.0);
             payload.prevWorldPos    = vec3(0.0);
@@ -1370,6 +1389,7 @@ void main() {
             payload.hitRoughness    = 1.0;
             payload.hitMetalness    = 0.0;
             payload.hitTransmission = 0.0;
+            payload.hitSpecFrac     = 0.0;
         }
         return;
     }
@@ -2263,7 +2283,12 @@ void main() {
     // the term so the user can see directly-visible glowing surfaces.
     if ((payload.inFlags & 1u) != 0u) emissiveOut = vec3(0.0);
     if ((pc.motionFlags & 4u) != 0u) lit += gatherCaustics(hitPos, N, albedo, roughness);
-    payload.radiance   = emissiveOut + ambient + lit;
+    // Phase 1: route ALL contributions to diff channel for now. Phase 1b
+    // will split litDiff and litSpec at each NEE site for proper channel
+    // separation. Keeping spec=0 for this initial split preserves current
+    // behavior pixel-identical while the infrastructure lands.
+    payload.radianceDiff = emissiveOut + ambient + lit;
+    payload.radianceSpec = vec3(0.0);
     payload.brdfWeight = brdfWeight;
     payload.nextOrigin = hitPos + N * 1e-3;
     payload.nextDir    = bounceDir;
@@ -2296,9 +2321,67 @@ void main() {
     payload.hitRoughness    = roughness;// post-clamp; raygen uses for FC cap on motion
     payload.hitMetalness    = metalness;
     payload.hitTransmission = mdesc.transmission;
+    // Estimate the fraction of outgoing radiance that comes from the
+    // VIEW-DEPENDENT spec lobe vs the view-INDEPENDENT diffuse lobe.
+    // Drives the FC decay signal in raygen — surface-anchored reprojection
+    // mixes prev-view spec with new-view spec, so a high spec fraction
+    // means most of this pixel's history is "wrong-view" content that
+    // should be flushed quickly on motion.
+    //
+    // Energy model: Fresnel at view angle gives the spec lobe's reflectance
+    // weight; the complement times Lambertian-integrated albedo gives the
+    // diffuse weight. Metals have F0=albedo (high spec, no diff). Dark
+    // dielectrics have F0=0.04 but tiny albedo, so spec dominates anyway —
+    // which is why wet asphalt / dark paint trail visibly under camera
+    // motion even though they look "rough/diffuse" by roughness alone.
+    {
+        const vec3 F_at_V = fresnelSchlick(NdotV, F0);
+        const float specW = max(F_at_V.r, max(F_at_V.g, F_at_V.b));
+        const float diffW = (1.0 - specW) * (1.0 - metalness)
+                            * max(albedo.r, max(albedo.g, albedo.b));
+        payload.hitSpecFrac = specW / max(specW + diffW, 1e-6);
+    }
     // 3-lobe pdf at the chosen bounce direction (cc + base-spec + base-diff).
     // Miss uses this for the BSDF→env MIS weight when env CDF is enabled. Must
     // match the actual sampler mixture above, otherwise MIS over/underweights
     // and adds noise on clearcoat.
     payload.bsdfPdf = brdfPdf3(V, bounceDir, N, roughness, metalness, ccProb, ccRough);
+
+    // ── Primary-surface albedo for atrous demodulation (binding 35) ──
+    // Gate: write a valid (.a=1) albedo ONLY at the primary hit on a
+    // diffuse-dominant, non-emissive, non-transmissive surface. The atrous
+    // shader divides radiance by max(albedo, eps) before its edge-aware
+    // filter — when the surface has high-frequency texture detail (paint,
+    // weathering on the boat hull) the lum-stop sees albedo×illumination
+    // and rejects taps based on texture variation it can't tell apart from
+    // real edges. Demodulating leaves only illumination — much smoother,
+    // so the stop loosens correctly and fireflies actually get filtered.
+    // For metals (F0=albedo, no diffuse lobe), glass (transmissive), and
+    // emissives (emission term doesn't factor through albedo), we write
+    // .a=0 so the atrous shader treats this pixel as "no demod" and
+    // filters in radiance space — the safe fallback.
+    const bool isPrimary       = (payload.inFlags & 1u) == 0u;
+    const bool diffuseDominant = (metalness < 0.5) && (mdesc.transmission < 0.05);
+    const bool notEmissive     = emLum1 < 0.5;
+    // Also gate demod on low spec fraction. Surfaces with significant
+    // view-dependent spec content (dark dielectrics at grazing — wet asphalt,
+    // dark plastic cones at low NdotV, with specFrac > 0.3) produce
+    // demod ghost trails under camera motion because the atrous kernel
+    // mixes per-pixel spec lobe content spatially in illumination space
+    // and the resulting smear is highly visible. For those pixels the
+    // radiance-space filter is the right tool (per-pixel spec stays per
+    // pixel, no spatial mixing of view-dep content). For low-specFrac
+    // surfaces (textured paint, cube cells), demod still pays its way.
+    const bool lowSpecFrac     = payload.hitSpecFrac < 0.3;
+    if (isPrimary && diffuseDominant && notEmissive && lowSpecFrac) {
+        // Clamp albedo to [0.04, 1] for stable demod — pure-black surfaces
+        // would divide to infinity at the atrous step. 0.04 matches the
+        // F0 floor and is below any plausible real albedo.
+        const vec3 stableAlb = clamp(albedo, vec3(0.04), vec3(1.0));
+        imageStore(primaryAlbedoImage, ivec2(gl_LaunchIDEXT.xy),
+                   vec4(stableAlb, 1.0));
+    } else if (isPrimary) {
+        imageStore(primaryAlbedoImage, ivec2(gl_LaunchIDEXT.xy),
+                   vec4(0.0));// .a=0 → atrous skips demod for this pixel
+    }
 }

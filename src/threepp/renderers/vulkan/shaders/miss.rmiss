@@ -11,7 +11,8 @@
 // path (no further bounce ray is launched).
 
 struct Payload {
-    vec3 radiance;
+    vec3 radianceDiff;
+    vec3 radianceSpec;
     vec3 brdfWeight;
     vec3 nextOrigin;
     vec3 nextDir;
@@ -26,6 +27,7 @@ struct Payload {
     float hitTransmission;// unused by miss (kept for layout match)
     float bsdfPdf;     // pdf of the BSDF-sampled bounce direction (set by chit; used here for MIS)
     float currentIor;  // unused by miss (kept for layout match)
+    float hitSpecFrac; // unused by miss (kept for layout match — sky has no surface)
 };
 
 layout(set = 0, binding = 6) uniform sampler2D envTex;
@@ -99,17 +101,23 @@ void main() {
     //     wrote into payload.bsdfPdf when sampling the bounce.
     //   • envCdfTotalSum <= 0 → chit used BSDF-sampled env NEE; pdfs match
     //     so the balance-heuristic weight collapses to 0.5.
+    // Phase 1: route all env miss radiance to diff channel for now.
+    // Phase 1b will route bounce-escape env to the spec channel when
+    // payload.flags bit indicates primary lobe was spec.
+    vec3 envContrib;
     if ((payload.flags & 2u) != 0u) {
         if (pc.envCdfTotalSum > 0.0) {
             const float pdfEnv  = envImportancePdf(dir);
             const float pdfBrdf = payload.bsdfPdf;
             const float wBrdf   = pdfBrdf / max(pdfBrdf + pdfEnv, 1e-8);
-            payload.radiance = wBrdf * envR;
+            envContrib = wBrdf * envR;
         } else {
-            payload.radiance = 0.5 * envR;
+            envContrib = 0.5 * envR;
         }
     } else {
-        payload.radiance = envR;
+        envContrib = envR;
     }
+    payload.radianceDiff = envContrib;
+    payload.radianceSpec = vec3(0.0);
     payload.flags |= 1u;// terminate path — no scatter beyond the env
 }

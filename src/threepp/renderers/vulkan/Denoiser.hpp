@@ -77,6 +77,19 @@ namespace threepp::vulkan {
             return momentsImagesPP_[slot].image;
         }
 
+        // Per-pixel primary-surface albedo. Written by closest_hit at the
+        // primary hit only (gated on payload.inFlags scatter==0). The atrous
+        // shader divides the temporal-accumulated radiance by this before
+        // filtering and multiplies back after — surfaces with high-frequency
+        // texture detail (paint, weathering) confuse the luminance edge stop
+        // when filtering in radiance space; demodulating makes the filter
+        // see pure illumination, which is smoother, so the lum-stop can let
+        // the filter actually average out fireflies. Zero (sentinel) on
+        // non-shaded primaries (sky, metal, glass, emissive) — atrous treats
+        // those as "no demod available" and filters in radiance space.
+        [[nodiscard]] VkImageView albedoView() const { return albedoImage_.view; }
+        [[nodiscard]] VkImage    albedoImage() const { return albedoImage_.image; }
+
     private:
         VulkanContext&        ctx_;
         VkDescriptorSetLayout sharedDsLayout_   = VK_NULL_HANDLE;
@@ -87,6 +100,7 @@ namespace threepp::vulkan {
 
         std::array<Image2D, 2> filteredImagesPP_{};
         std::array<Image2D, 2> momentsImagesPP_{};
+        Image2D                albedoImage_{};
 
         Image2D createStorageImage2D(uint32_t w, uint32_t h,
                                      VkFormat format, const char* label);
