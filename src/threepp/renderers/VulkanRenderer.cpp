@@ -7805,13 +7805,15 @@ namespace threepp {
             rci.pStages = stages.data();
             rci.groupCount = static_cast<uint32_t>(groups.size());
             rci.pGroups = groups.data();
-            // depth 3 — primary chit → ReSTIR GI sub-trace chit → shadow ray
-            // at xs (Stage 1a recursive chit-launched indirect candidate).
-            // Without GI the deepest path is primary + 1 shadow ray = depth 2;
-            // depth 3 covers the extra hop and stays well under the spec's
+            // depth 4 — primary chit (1) → ReSTIR GI sub-trace chit (2) →
+            // recursive sub-sub-trace chit (3, Stage 2 bounce-2 in Lo) →
+            // shadow ray at the sub-sub-trace hit (4). Without GI the deepest
+            // path is primary + 1 shadow ray = depth 2; Stages 1a-1c needed
+            // depth 3; Stage 2's full-path-Lo (one recursive bounce inside
+            // the sub-trace) adds one more level. Stays well under the spec's
             // VkPhysicalDeviceRayTracingPipelinePropertiesKHR::maxRayRecursionDepth
             // floor (commonly 31 on desktop / 8+ on mobile).
-            rci.maxPipelineRayRecursionDepth = 3;
+            rci.maxPipelineRayRecursionDepth = 4;
             rci.layout = rtPipelineLayout;
 
             check(ctx->rt().createRayTracingPipelines(
