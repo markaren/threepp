@@ -66,6 +66,7 @@ int main(int argc, char** argv) {
     // ---- UI ----
     bool denoiserOn = renderer.denoise();
     bool restdirOn = renderer.restirDIEnabled();
+    bool restdirGiOn = renderer.restirGIEnabled();
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
@@ -90,6 +91,9 @@ int main(int argc, char** argv) {
         }
         if (ImGui::Checkbox("REsTDIR DI", &restdirOn)) {
             renderer.setRestirDIEnabled(restdirOn);
+        }
+        if (ImGui::Checkbox("REsTDIR GI", &restdirGiOn)) {
+            renderer.setRestirGIEnabled(restdirGiOn);
         }
 
         if (ImGui::Button("Toggle bistro lights")) {
