@@ -391,16 +391,16 @@ int main() {
     controls.update();
 
     // ── Camera modes ──────────────────────────────────────────────────────
-    // C cycles: Free orbit → Side-mounted (starboard, forward-facing) → Chase.
-    // SideFixed/Chase override camera.position + lookAt each frame; the
-    // OrbitControls state is left alone so switching back to Free restores
-    // whatever orbit angle the user left it at.
-    enum class CamMode : int { Free = 0, SideFixed = 1, Chase = 2 };
+    // C cycles: Free orbit → Side → Chase → Underwater.
+    // SideFixed/Chase/Underwater override camera.position + lookAt each
+    // frame; OrbitControls state is left alone so switching back to Free
+    // restores whatever orbit angle the user left it at.
+    enum class CamMode : int { Free = 0, SideFixed = 1, Chase = 2, Underwater = 3 };
     CamMode camMode = CamMode::Free;
-    const char* camModeNames[] = {"Free (orbit)", "Side (forward)", "Chase"};
+    const char* camModeNames[] = {"Free (orbit)", "Side (forward)", "Chase", "Underwater"};
     KeyAdapter camKey(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::C) {
-            camMode = static_cast<CamMode>((static_cast<int>(camMode) + 1) % 3);
+            camMode = static_cast<CamMode>((static_cast<int>(camMode) + 1) % 4);
         }
     });
     canvas.addKeyListener(camKey);
@@ -414,6 +414,17 @@ int main() {
     int   spp       = renderer.samplesPerPixel();
     float fps = 0.f, fpsAccum = 0.f;
     int   fpsFrames = 0;
+
+    // ── Underwater fog parameters ─────────────────────────────────────────
+    // Controlled by ImGui; applied per-frame when the camera is submerged.
+    // fogDensity = σ_t (extinction per metre, uniform across channels).
+    // fogColor = single-scattering albedo σ_s/σ_t — blue-green for ocean.
+    // fogAnisotropy = Henyey-Greenstein g: 0.85 → strong forward scatter
+    //   (sun shafts / god rays when looking toward the light).
+    float uwFogDensity   = 0.06f;
+    float uwFogColor[3]  = {0.10f, 0.55f, 0.65f};
+    float uwFogAniso     = 0.85f;
+    float uwDepthSmooth  = 0.f;
 
     // ── Radar state ────────────────────────────────────────────────────────
     // Heading-up scope, 500 m range, 4 s sweep period (15 RPM — realistic
@@ -484,6 +495,17 @@ int main() {
             renderer.setRestirGIEnabled(restirGI);
         if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
             renderer.setSamplesPerPixel(spp);
+        ImGui::Separator();
+
+        ImGui::TextUnformatted("Underwater fog");
+        ImGui::SliderFloat("Density (1/m)", &uwFogDensity, 0.01f, 0.20f, "%.3f");
+        ImGui::ColorEdit3("Inscatter tint", uwFogColor,
+                          ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs);
+        ImGui::SliderFloat("Anisotropy (g)", &uwFogAniso, -0.95f, 0.95f, "%.2f");
+        if (uwDepthSmooth > 0.001f)
+            ImGui::Text("Submerged: %.1f%%", uwDepthSmooth * 100.f);
+        else
+            ImGui::TextDisabled("Camera above water.");
         ImGui::End();
 
         // ── Radar HUD ─────────────────────────────────────────────────────
@@ -828,6 +850,48 @@ int main() {
                 camera.position.copy(camPos);
                 camera.lookAt(lookAt);
                 break;
+            }
+            case CamMode::Underwater: {
+                // Below the surface near the boat, looking forward and
+                // slightly up so god rays from the sun are visible and
+                // the caustic pattern on the sand floor is in frame.
+                const Vector3 camPos = boatPos
+                                      - boatFwd * 15.0f
+                                      + Vector3(0.f, -3.0f, 0.f);
+                const Vector3 lookAt = boatPos
+                                      + boatFwd * 20.0f
+                                      + Vector3(0.f, -1.0f, 0.f);
+                camera.position.copy(camPos);
+                camera.lookAt(lookAt);
+                break;
+            }
+        }
+
+        // ── Underwater fog activation ─────────────────────────────────────
+        // Sample the wave height at the camera's XZ position. If the camera
+        // is below the surface, enable homogeneous fog (participating media)
+        // for the path tracer — this activates the existing volumeInscatter
+        // pipeline in raygen.rgen (single-scattering NEE with HG phase).
+        // A 0.5 m ramp smooths the transition at the waterline.
+        {
+            const float waveH = ocean->sampleHeight(camera.position.x,
+                                                    camera.position.z);
+            const float submerge = waveH - camera.position.y;
+            const float target = std::clamp(submerge / 0.5f, 0.f, 1.f);
+            // Temporal smoothing so the fog doesn't flash when waves wash
+            // over the camera near the waterline (~4 Hz cutoff).
+            const float fogAlpha = 1.f - std::exp(-2.f * 3.14159f * 4.f * dt);
+            uwDepthSmooth += (target - uwDepthSmooth) * fogAlpha;
+
+            if (uwDepthSmooth > 0.001f) {
+                const float d = uwFogDensity * uwDepthSmooth;
+                scene.fog = FogExp2(
+                        Color(uwFogColor[0], uwFogColor[1], uwFogColor[2]), d);
+                renderer.setFogAnisotropy(uwFogAniso);
+                renderer.setFogWaterSurfaceY(waveH);
+            } else {
+                scene.fog = std::nullopt;
+                renderer.setFogWaterSurfaceY(1e30f);
             }
         }
 

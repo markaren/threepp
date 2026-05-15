@@ -400,10 +400,13 @@ namespace threepp {
             float enabled;       // 1.0 = fog active, 0.0 = disabled
             float color[3];      // inscatter tint (sRGB-linear)
             float anisotropy;    // HG g, clamped [-0.95, 0.95] by setFogAnisotropy
+            float waterSurfaceY; // world-Y of the water surface; 1e30 = no limit
+            float _pad[3];
         };
-        static_assert(sizeof(GpuFogUbo) == 32);
+        static_assert(sizeof(GpuFogUbo) == 48);
         std::array<Buffer, kFramesInFlight> fogUbos{};
         float    fogAnisotropy_ = 0.0f;
+        float    fogWaterSurfaceY_ = 1e30f;
         uint64_t prevFogHash_ = 0u;
 
         // Phase 7: environment equirect (HDR float) used by the primary miss
@@ -5311,6 +5314,7 @@ namespace threepp {
                     ubo.color[1]  = tint.g;
                     ubo.color[2]  = tint.b;
                     ubo.anisotropy = fogAnisotropy_;
+                    ubo.waterSurfaceY = fogWaterSurfaceY_;
                 }
             }
 
@@ -10074,6 +10078,10 @@ namespace threepp {
 
     float VulkanRenderer::getFogAnisotropy() const {
         return pimpl_->fogAnisotropy_;
+    }
+
+    void VulkanRenderer::setFogWaterSurfaceY(float y) {
+        pimpl_->fogWaterSurfaceY_ = y;
     }
 
     void VulkanRenderer::setSamplesPerPixel(int spp) {

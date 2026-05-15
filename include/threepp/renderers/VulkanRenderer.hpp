@@ -81,6 +81,13 @@ namespace threepp {
         void setFogAnisotropy(float g);
         [[nodiscard]] float getFogAnisotropy() const;
 
+        // World-Y of the water surface for bounding underwater fog to the
+        // water column. When the camera is below this Y, the fog distance
+        // is capped at the ray's exit through the surface — prevents fog
+        // from absorbing sky radiance on rays that leave the water.
+        // Default 1e30 (no limit). Set each frame alongside scene.fog.
+        void setFogWaterSurfaceY(float y);
+
         // Samples per pixel per frame for the path tracer. Default 2.
         // Each sample is an independent jittered primary ray; in-frame samples
         // are summed into the accumulator with weight `spp`, so per-pixel FC

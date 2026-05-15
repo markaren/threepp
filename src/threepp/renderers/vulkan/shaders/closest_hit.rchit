@@ -121,6 +121,7 @@ layout(set = 0, binding = 17) uniform FogUbo {
     float enabled;
     vec3  color;
     float anisotropy;
+    float waterSurfaceY;
 } fog;
 
 // Beer-Lambert transmittance over a finite ray segment. Distance is clamped

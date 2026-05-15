@@ -260,6 +260,7 @@ layout(set = 0, binding = 17) uniform FogUbo {
     float enabled;
     vec3  color;
     float anisotropy;
+    float waterSurfaceY;
 } fog;
 
 bool fogEnabled() { return fog.enabled > 0.5; }
@@ -1007,10 +1008,22 @@ void main() {
         // Sky pixels (primaryInstanceId==0) use a bounded sky distance so the
         // inscatter still fades — matching WGPU rt_accum_main's primaryDepth<=0
         // branch.
+        //
+        // Underwater: when waterSurfaceY < 1e20, fog is confined to the water
+        // column. Rays exiting the water surface are fog-attenuated only up to
+        // the exit point, not to the sky at 1e4 — preserving refracted sky
+        // visibility and concentrating scatter samples in the actual medium.
         if (fogEnabled()) {
-            const float fogDist = (primaryInstanceId != 0u)
+            float fogDist = (primaryInstanceId != 0u)
                     ? distance(originWS.xyz, primaryWorldPos)
                     : 1e4;
+
+            if (fog.waterSurfaceY < 1e20 && originWS.y < fog.waterSurfaceY
+                    && dirWS.y > 1e-4) {
+                float exitDist = (fog.waterSurfaceY - originWS.y) / dirWS.y;
+                fogDist = min(fogDist, exitDist);
+            }
+
             const vec3 T   = fogTransmittance(fogDist);
             const vec3 vol = volumeInscatter(originWS.xyz, dirWS, fogDist, seed);
             radiance = radiance * T + vol;
