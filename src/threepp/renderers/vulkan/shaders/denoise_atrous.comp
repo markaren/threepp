@@ -144,17 +144,26 @@ void main() {
     const float variance = varRaw / (lumAlbC * lumAlbC);
     const float sigmaLum = clamp(4.0 * sqrt(variance + 1e-8), 0.5, 8.0);
 
-    // Stride-4 (third) pass fires only on under-converged pixels. The earlier
-    // 2026-05-14 attempt at a static stride-4 third pass produced halos at
-    // silhouettes because 8-pixel-reach taps crossed surface boundaries the
-    // edge stops couldn't fully reject. Per-pixel gating keeps the wider
-    // reach where it matters (heavy speckle on a panning shot — primary
-    // surfaces with FC ≤ 32 OR sustained-high variance) and passthroughs
-    // converged flat areas. Mesh-ID + plane-distance stops still apply for
-    // the taps that DO get evaluated, bounding halo extent.
+    // Stride-4 (third) pass fires only on interior pixels of large flat
+    // surfaces that are still under-converged. Three skip gates:
+    //   1. Silhouette-adjacent: any of the 4 finite-diff neighbours sits on
+    //      a different mesh. The 8-pixel-reach kernel WILL cross the
+    //      silhouette and the lum/depth stops can't fully reject it on
+    //      noisy pixels (σ_lum sits near ceiling, lum diff masked).
+    //      Skipping outright is cleaner than trying to tighten stops.
+    //   2. Degenerate normal (nValid false): same scenario from a different
+    //      angle — small features, 1-pixel meshes, kernel reaches non-
+    //      coplanar surfaces.
+    //   3. Already converged (FC > 32 AND variance < 0.01): no benefit from
+    //      wider reach on a clean pixel; preserves sharpness.
     if (pc.stride >= 4u) {
+        const bool nearSilhouette = (abs(g_L.w - g.w) > 0.5) ||
+                                    (abs(g_R.w - g.w) > 0.5) ||
+                                    (abs(g_D.w - g.w) > 0.5) ||
+                                    (abs(g_U.w - g.w) > 0.5);
         const float fc = imageLoad(accumImage, px).w;
-        if (fc > 32.0 && variance < 0.01) {
+        const bool converged = (fc > 32.0 && variance < 0.01);
+        if (nearSilhouette || !nValid || converged) {
             imageStore(filteredArray[pc.outputIdx], px, c);
             return;
         }
@@ -163,6 +172,18 @@ void main() {
     // Binomial 1D kernel {1,4,6,4,1}/16 outer-product → standard à-trous.
     const float k1d[5] = float[](1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
     const int s = int(pc.stride);
+
+    // Stride-4 needs tighter edge stops than the binomial spread alone
+    // provides — same-mesh sub-features (bollard ↔ deck on a shared mesh,
+    // wall ↔ window if combined) span the 8-pixel reach and the standard
+    // sigmas can't separate them. Tighten by 4× depth and 2× lum on the
+    // wide pass; also drop the asymmetric lum boost (which was tuned for
+    // firefly absorption, not appropriate for the wide-reach diffuse pass).
+    const float strideEdgeScale  = (pc.stride >= 4u) ? 0.25 : 1.0;
+    const float strideLumScale   = (pc.stride >= 4u) ? 0.5  : 1.0;
+    const float strideAsymScale  = (pc.stride >= 4u) ? 1.0  : 1.5;
+    const float effSigmaDepth    = sigmaDepth * strideEdgeScale;
+    const float effSigmaLumBase  = sigmaLum   * strideLumScale;
 
     vec3  sumColor = vec3(0.0);
     float sumW     = 0.0;
@@ -198,14 +219,18 @@ void main() {
             const float dDist  = nValid
                     ? abs(dot(gq.xyz - g.xyz, nC))
                     : abs(length(gq.xyz - camPos) - depthC);
-            const float wDepth = exp(-dDist / sigmaDepth);
+            const float wDepth = exp(-dDist / effSigmaDepth);
             // Asymmetric luminance stop: penalize neighbours BRIGHTER than
             // center sharply (clean pixels reject firefly contamination),
             // looser stop for DIMMER neighbours (firefly centers pull in
-            // clean dim neighbours and average down). User-confirmed clean
-            // on textured surfaces and good firefly absorption.
+            // clean dim neighbours and average down). At stride 4 the
+            // asymmetric multiplier is dropped (strideAsymScale = 1) — the
+            // wide pass isn't trying to absorb fireflies (those got crushed
+            // earlier in the cascade), and asymmetric leniency on the
+            // dimmer side is what produces the wall→deck bleed.
             const float dLum   = lumQ - lumC;
-            const float effSig = (dLum > 0.0) ? sigmaLum : (sigmaLum * 1.5);
+            const float effSig = (dLum > 0.0) ? effSigmaLumBase
+                                              : (effSigmaLumBase * strideAsymScale);
             const float wLum   = exp(-abs(dLum) / effSig);
             const float wKern  = k1d[dx + 2] * k1d[dy + 2];
 
