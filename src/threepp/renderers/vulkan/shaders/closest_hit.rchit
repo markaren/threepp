@@ -2571,6 +2571,13 @@ void main() {
     // Eligibility gate same as Stage 1a (see comment block in original commit
     // 657e1b15). Falls through to classic bounce-1 on miss.
     const bool restirGIOn   = (pc.motionFlags & 64u) != 0u;
+    // Smooth clearcoat puts a near-delta lobe into evalGiTarget's p_hat (D_cc
+    // peaks like a delta at ccRough ≈ 0). RIS then concentrates samples in
+    // that spike — unbiased in expectation, but per-frame variance is huge,
+    // so the surface reads as a constantly-flickering bright mirror until
+    // FC builds. Fall back to classic continuation for those materials; the
+    // base lobes alone don't trigger the pathology.
+    const bool smoothCC     = (ccScalar > 0.05) && (ccRough < 0.20);
     const bool useGIPrimary = restirGIOn
                            && bs.valid
                            && ((payload.inFlags & 1u) == 0u)
@@ -2578,7 +2585,8 @@ void main() {
                            && (mdesc.transmission < 0.05)
                            && (roughness > 0.20)
                            && (metalness < 0.5)
-                           && (emLum1 < 0.5);
+                           && (emLum1 < 0.5)
+                           && !smoothCC;
 
     bool giConsumed = false;
     vec3 giContrib  = vec3(0.0);
