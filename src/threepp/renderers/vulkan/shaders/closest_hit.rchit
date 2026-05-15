@@ -2494,7 +2494,17 @@ void main() {
     // next Stage 2 commit would extend the recursion cap or restore raygen
     // continuation from y's outbound direction (needs propagating y's
     // nextOrigin/Dir up through the sub-trace's payload — bigger plumbing).
-    if ((payload.inFlags & 8u) != 0u && (payload.inFlags & 16u) == 0u && bs.valid) {
+    // Stage 2 fires at the GI sub-trace's hit. Skip on hits where the bounce-2
+    // contribution is either redundant (own NEE/Le dominates) or noise-prone
+    // (narrow-lobe specular + delta refract). Preserves the variance-reduction
+    // win on diffuse-rough surfaces (the typical case) while cutting one ray
+    // per pixel in the noisy/redundant cases.
+    const bool stage2Eligible = roughness > 0.30
+                             && metalness < 0.7
+                             && mdesc.transmission < 0.05
+                             && emLum1 < 0.5;
+    if ((payload.inFlags & 8u) != 0u && (payload.inFlags & 16u) == 0u
+        && bs.valid && stage2Eligible) {
         giSubPayload.radianceDiff    = vec3(0.0);
         giSubPayload.radianceSpec    = vec3(0.0);
         giSubPayload.brdfWeight      = vec3(0.0);

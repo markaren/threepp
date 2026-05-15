@@ -24,7 +24,10 @@
 #define kPhotonsPerCell  8u
 
 // Photon emit raygen dimensions: kPhotonEmitDim × kPhotonEmitDim paths/frame.
-#define kPhotonEmitDim   512
+// 256² = 65 536 photons/frame. Earlier 512² was 4× this — visibly diminishing
+// returns past ~64 K because per-cell capacity (kPhotonsPerCell = 8) saturates
+// quickly on hot caustic patches and overflow scaling absorbs the rest.
+#define kPhotonEmitDim   256
 
 // World-space grid cell size (metres) — same value used by photon_emit.rgen
 // when depositing and closest_hit.rchit when gathering. They must agree or
