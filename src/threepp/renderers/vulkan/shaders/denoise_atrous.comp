@@ -144,6 +144,21 @@ void main() {
     const float variance = varRaw / (lumAlbC * lumAlbC);
     const float sigmaLum = clamp(4.0 * sqrt(variance + 1e-8), 0.5, 8.0);
 
+    // FC read shared by both early-out gates below.
+    const float fc = imageLoad(accumImage, px).w;
+
+    // All-strides converged-pixel passthrough. Once a pixel is well-
+    // accumulated (high FC + very low variance) the kernel evaluation is
+    // wasted work — σ_lum sits near its floor (0.5), the lum stop rejects
+    // anything not near-identical to center, and the kernel result barely
+    // differs from `c` itself. Skip the dispatch outright. Tighter
+    // threshold than the stride-4 gate below so this only fires on truly
+    // converged pixels (preserves correctness on borderline noise).
+    if (fc > 200.0 && variance < 0.001) {
+        imageStore(filteredArray[pc.outputIdx], px, c);
+        return;
+    }
+
     // Stride-4 (third) pass fires only on interior pixels of large flat
     // surfaces that are still under-converged. Three skip gates:
     //   1. Silhouette-adjacent: any of the 4 finite-diff neighbours sits on
@@ -155,13 +170,14 @@ void main() {
     //      angle — small features, 1-pixel meshes, kernel reaches non-
     //      coplanar surfaces.
     //   3. Already converged (FC > 32 AND variance < 0.01): no benefit from
-    //      wider reach on a clean pixel; preserves sharpness.
+    //      wider reach on a clean pixel; preserves sharpness. Looser than
+    //      the all-strides gate above — stride 4 has more to lose from
+    //      cross-feature reach, so it bails earlier.
     if (pc.stride >= 4u) {
         const bool nearSilhouette = (abs(g_L.w - g.w) > 0.5) ||
                                     (abs(g_R.w - g.w) > 0.5) ||
                                     (abs(g_D.w - g.w) > 0.5) ||
                                     (abs(g_U.w - g.w) > 0.5);
-        const float fc = imageLoad(accumImage, px).w;
         const bool converged = (fc > 32.0 && variance < 0.01);
         if (nearSilhouette || !nValid || converged) {
             imageStore(filteredArray[pc.outputIdx], px, c);
