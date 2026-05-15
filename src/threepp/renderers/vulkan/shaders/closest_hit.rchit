@@ -2632,11 +2632,89 @@ void main() {
         seed = giSubPayload.seed;
 
         // ── This-frame candidate ──
-        const vec3 xs_cand = giSubPayload.hitWorldPos;
-        const vec3 ns_cand = giSubPayload.hitNormal;
-        const vec3 Lo_cand = giSubPayload.radianceDiff + giSubPayload.radianceSpec;
-        const bool subHitSurface = giSubPayload.hitInstanceId != 0u &&
-                                   (giSubPayload.flags & 1u) == 0u;
+        // Snapshot the FIRST sub-trace hit. xs/ns of the reservoir always
+        // refer to this point so the primary's BRDF(V, bs.dir) re-eval is
+        // well-defined and reservoir reuse at neighbours stays meaningful
+        // (omegaI = neighbour→xs is close to bs.dir for nearby pixels).
+        const vec3 xs_cand        = giSubPayload.hitWorldPos;
+        const vec3 ns_cand        = giSubPayload.hitNormal;
+        const float firstBsdfPdf  = giSubPayload.bsdfPdf;
+        const bool subHitSurface  = giSubPayload.hitInstanceId != 0u &&
+                                    (giSubPayload.flags & 1u) == 0u;
+        const bool firstWasGlass  = subHitSurface &&
+                                    (giSubPayload.hitTransmission > 0.05 ||
+                                     giSubPayload.hitSpecFrac     > 0.5);
+
+        // SDS path extension. When the first sub-trace lands on a
+        // transmissive/specular surface, the single-hit Lo is ~0 (glass
+        // chit sets up nextOrigin/Dir for raygen continuation but doesn't
+        // carry refracted radiance through itself). Continue tracing
+        // through up to kMaxGlassHops more refractions to find the diffuse
+        // termination of the SDS chain. The accumulated chain radiance is
+        // the radiance leaving the FIRST hit in the -bs.dir direction
+        // (throughput-attenuated by glass along the way), which is exactly
+        // what the primary's BRDF eval at xs needs.
+        //
+        // Recursion budget unchanged: each hop is a separate trace from
+        // the primary chit, max depth still 4 (primary → sub → Stage 2
+        // sub-sub → shadow). Cost: 1 extra ray per pixel where sub-trace
+        // hits glass; +1 more for nested glass (e.g. sphere's back face).
+        vec3 chainRadiance = giSubPayload.radianceDiff + giSubPayload.radianceSpec;
+        if (firstWasGlass) {
+            vec3 chainThroughput = vec3(1.0);
+            const int kMaxGlassHops = 2;
+            for (int hop = 0; hop < kMaxGlassHops; ++hop) {
+                chainThroughput *= giSubPayload.brdfWeight;
+                const float thMax = max(max(chainThroughput.r, chainThroughput.g),
+                                        chainThroughput.b);
+                if (thMax < 1e-4) break;
+                if ((giSubPayload.flags & 1u) != 0u) break;// TIR/thin-shell terminate
+                const vec3 nextO = giSubPayload.nextOrigin;
+                const vec3 nextD = giSubPayload.nextDir;
+                if (length(nextD) < 0.5) break;
+
+                // Re-fire sub-trace from the glass exit point.
+                giSubPayload.radianceDiff    = vec3(0.0);
+                giSubPayload.radianceSpec    = vec3(0.0);
+                giSubPayload.brdfWeight      = vec3(0.0);
+                giSubPayload.nextOrigin      = vec3(0.0);
+                giSubPayload.nextDir         = vec3(0.0);
+                giSubPayload.flags           = 2u;
+                giSubPayload.seed            = seed;
+                giSubPayload.hitWorldPos     = vec3(0.0);
+                giSubPayload.hitInstanceId   = 0u;
+                giSubPayload.prevWorldPos    = vec3(0.0);
+                giSubPayload.hitRoughness    = 1.0;
+                giSubPayload.inFlags         = 8u | ((pc.emissiveCount > 0u) ? 1u : 0u);
+                giSubPayload.hitMetalness    = 0.0;
+                giSubPayload.hitTransmission = 0.0;
+                // Delta refract: glass effectively samples a single direction
+                // with infinite pdf. Pass a large sentinel so the next chit's
+                // bounce-into-emissive MIS gives the BSDF side full weight
+                // (correct for delta sampling — NEE pdf at the matched
+                // direction is negligible vs the delta).
+                giSubPayload.bsdfPdf         = 1e10;
+                giSubPayload.currentIor      = 1.0;
+                giSubPayload.hitSpecFrac     = 0.0;
+                giSubPayload.primaryAlbedo   = vec4(0.0);
+                giSubPayload.hitNormal       = vec3(0.0);
+
+                traceRayEXT(topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
+                            nextO, 0.001, nextD, 10000.0, 2);
+                seed = giSubPayload.seed;
+
+                chainRadiance += chainThroughput *
+                                 (giSubPayload.radianceDiff + giSubPayload.radianceSpec);
+
+                const bool curHitSurface = (giSubPayload.hitInstanceId != 0u) &&
+                                           ((giSubPayload.flags & 1u) == 0u);
+                if (!curHitSurface) break;// env miss → done
+                const bool curWasGlass = (giSubPayload.hitTransmission > 0.05 ||
+                                          giSubPayload.hitSpecFrac     > 0.5);
+                if (!curWasGlass) break;// landed on diffuse → done
+            }
+        }
+        const vec3 Lo_cand = chainRadiance;
 
         // ── Initial reservoir (single candidate, M=1) ──
         // RIS target = lum(F_integrand) with F = BRDF·NdotL·Lo, proposal q =
@@ -2659,7 +2737,7 @@ void main() {
             const vec3 F_cand = evalGiTarget(V, bs.dir, N, F0, albedo, roughness, metalness,
                                              alpha, ccProb, ccWeight, ccRough, baseScale, Lo_cand);
             const float p_hat_cand = max(lum3(F_cand), 0.0);
-            const float q_cand     = max(giSubPayload.bsdfPdf, 1e-20);
+            const float q_cand     = max(firstBsdfPdf, 1e-20);
             const float w_cand     = p_hat_cand / q_cand;
             updateGiReservoir(gi, xs_cand, ns_cand, Lo_cand, bs.dir,
                               w_cand, p_hat_cand, seed);
