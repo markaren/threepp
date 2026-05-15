@@ -2701,9 +2701,14 @@ void main() {
         const float firstBsdfPdf  = giSubPayload.bsdfPdf;
         const bool subHitSurface  = giSubPayload.hitInstanceId != 0u &&
                                     (giSubPayload.flags & 1u) == 0u;
+        // Glass-only trigger. Earlier version OR'd in `hitSpecFrac > 0.5`
+        // which also fires the loop on smooth-metal sub-trace hits — those
+        // don't have an SDS path through them (light bounces off, doesn't
+        // refract through), so the extra rays + Stage 2 per iteration add
+        // cost + single-sample variance for no benefit. Vessel scene with
+        // many metal fittings nearly doubled GI cost via this gate.
         const bool firstWasGlass  = subHitSurface &&
-                                    (giSubPayload.hitTransmission > 0.05 ||
-                                     giSubPayload.hitSpecFrac     > 0.5);
+                                    (giSubPayload.hitTransmission > 0.05);
 
         // SDS path extension. When the first sub-trace lands on a
         // transmissive/specular surface, the single-hit Lo is ~0 (glass
