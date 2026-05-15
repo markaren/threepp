@@ -195,8 +195,9 @@ const float TWO_PI = 6.28318530717958;
 
 // ─── Fog (homogeneous participating media) ─────────────────────────────────
 // Bindings 5/6/14/17 are also bound to closest_hit; they're re-staged into
-// RAYGEN at descriptor-layout time so volumeInscatter() can NEE to all
-// scene light sources without round-tripping through closest_hit.
+// RAYGEN at descriptor-layout time so the in-loop volumetric integrator
+// (volumeNeeSingle at each scatter event) can NEE to all scene light sources
+// without round-tripping through closest_hit.
 //
 // Light / emissive structs duplicated from closest_hit.rchit (matching the
 // Payload-struct duplication pattern). Field layout / std140 alignment must
@@ -270,11 +271,56 @@ vec3 fogTransmittance(float dist) {
     const float d = clamp(dist, 0.0, 1e6);
     return exp(-fog.sigmaT * d);
 }
+
+// Effective participating-medium length along a ray segment.
+//  * Unbounded medium (waterSurfaceY ≥ 1e20): full segment, except env miss
+//    (`isEnvMiss == true`) is capped at atmospheric scale 1e4 so thin fog
+//    still lets distant sky through.
+//  * Water column (waterSurfaceY < 1e20): if the ray starts below the surface
+//    and is heading up, the medium ends at the exit point; otherwise the
+//    same global cap applies.
+// Used by the in-loop volumetric integrator to confine scatter sampling and
+// Beer-Lambert to the actual medium volume.
+float fogSegmentLength(vec3 rayOrigin, vec3 rayDir, float maxDist, bool isEnvMiss) {
+    float len = isEnvMiss ? min(maxDist, 1e4) : maxDist;
+    if (fog.waterSurfaceY < 1e20 && rayOrigin.y < fog.waterSurfaceY
+            && rayDir.y > 1e-4) {
+        len = min(len, (fog.waterSurfaceY - rayOrigin.y) / rayDir.y);
+    }
+    return len;
+}
 // Henyey-Greenstein phase. g∈(-1,1): 0 isotropic, >0 forward (god rays), <0 back.
 float phaseHG(float cosTh, float g) {
     const float g2 = g * g;
     const float denom = 1.0 + g2 - 2.0 * g * cosTh;
     return (1.0 - g2) / (4.0 * 3.14159265358979 * max(denom * sqrt(max(denom, 1e-6)), 1e-6));
+}
+
+// Sample a scattered direction from the Henyey-Greenstein phase function
+// centered on the incoming-ray direction `wi`. PBRT v4 §11.3 inversion:
+//   cosθ = -(1+g² - ((1-g²)/(1-g+2gξ))²) / (2g)   for g ≠ 0
+//   cosθ = 1 − 2ξ                                 for g ≈ 0 (isotropic)
+// Returned world-space direction wo satisfies dot(wi, wo) = cosθ, matching
+// the phaseHG convention. Used by the in-loop volumetric integrator at scatter
+// events to continue the path; the throughput contribution from "sample
+// direction with the phase function" is 1 (phase / phasePdf cancels exactly).
+vec3 sampleHG(vec3 wi, float g, vec2 u) {
+    float cosTheta;
+    if (abs(g) < 1e-3) {
+        cosTheta = 1.0 - 2.0 * u.x;
+    } else {
+        const float sqrTerm = (1.0 - g * g) / (1.0 - g + 2.0 * g * u.x);
+        cosTheta = -(1.0 + g * g - sqrTerm * sqrTerm) / (2.0 * g);
+        cosTheta = clamp(cosTheta, -1.0, 1.0);
+    }
+    const float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+    const float phi      = 6.28318530717958 * u.y;
+    // Orthonormal basis around wi (z-axis = wi). Avoid degenerate cross product
+    // when wi is near ±x by picking a fallback axis.
+    const vec3 a = (abs(wi.x) > 0.99) ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    const vec3 t = normalize(cross(a, wi));
+    const vec3 b = cross(wi, t);
+    return sinTheta * (cos(phi) * t + sin(phi) * b) + cosTheta * wi;
 }
 
 // Equirect env sampler — duplicates miss.rmiss / closest_hit.rchit logic
@@ -503,163 +549,134 @@ void addInscatter(inout vec3 sum, vec3 c) {
     sum += c;
 }
 
-// Single-scattering volumetric inscatter along the primary camera ray.
-// N=4 stratified depth samples + NEE to (a) emissive triangles, (b) analytical
-// lights (dir/point/spot/rect), (c) env (uniform-sphere fallback — Vulkan PT
-// has no env CDF). Henyey-Greenstein phase with `g = fog.anisotropy` produces
-// directional god rays. Mirrors WGPU's volumeInscatter (WgpuPathTracerShaders_Rt.cpp:1934).
-vec3 volumeInscatter(vec3 rayOrigin, vec3 rayDir, float maxT, inout uint seed) {
-    const float sigmaT = fog.sigmaT.x;
-    if (sigmaT <= 0.0) return vec3(0.0);
-    const float tMax  = min(maxT, 1e5);
-    const float T_max = exp(-sigmaT * tMax);
-    const float p1    = 1.0 - T_max;
-    if (p1 < 1e-4) return vec3(0.0);
+// Single-point in-medium NEE estimator. At a scatter event at world-position
+// `x` (the path is in the medium, came in along direction `wi`), sample one
+// shadow ray per light source and return the sum of HG-phase-weighted direct
+// radiance. Per-light firefly cap via addInscatter() suppresses 1/d² and
+// near-grazing-emitter spikes. Used by both:
+//   * the in-loop unbiased volumetric integrator (one call per scatter event)
+//   * volumeInscatter() (N stratified calls along a single segment, for the
+//     legacy primary-only single-scatter overlay)
+// Returns radiance with units already in [Le · sr⁻¹], no σ_s factor — the
+// caller is responsible for multiplying by the medium albedo (σ_s/σ_t) and
+// any throughput.
+vec3 volumeNeeSingle(vec3 x, vec3 wi, float g, inout uint seed) {
+    vec3 nee = vec3(0.0);
 
-    // Estimator factor: σ_s·T(t)/p(t) = (σ_s/σ_t)·(1 − T_max).
-    // fog.color is the single-scattering albedo σ_s/σ_t.
-    const vec3  scatterFactor = fog.color * p1;
-    const float g             = clamp(fog.anisotropy, -0.95, 0.95);
-
-    const uint N = 4u;
-    vec3 inscatter = vec3(0.0);
-
-    for (uint i = 0u; i < N; ++i) {
-        // Truncated free-flight, stratified ξ ∈ [i/N, (i+1)/N).
-        const float xi = (float(i) + urand(seed)) / float(N);
-        const float tScatter = -log(max(1.0 - xi * p1, 1e-30)) / sigmaT;
-        const vec3  x        = rayOrigin + rayDir * tScatter;
-
-        // (a) Emissive-tri NEE
-        if (pc.emissiveCount > 0u && pc.emissiveTotalPower > 0.0) {
-            const EmissiveSample es = sampleEmissiveTriCdfFog(seed);
-            if (es.area > 1e-20 && es.power > 0.0) {
-                vec3 toL = es.point - x;
-                const float dist = max(length(toL), 1e-4);
-                toL /= dist;
-                const float cosLight = abs(dot(-toL, es.normal));
-                if (cosLight > 1e-4) {
-                    const vec3 atten = traceFogShadowRay(x, toL, dist - 1e-2);
-                    const float pickPdf  = es.power / pc.emissiveTotalPower;
-                    const float pdfArea  = pickPdf / es.area;
-                    const float pdfOmega = pdfArea * dist * dist / cosLight;
-                    if (pdfOmega > 1e-10) {
-                        const float ph = phaseHG(dot(rayDir, toL), g);
-                        // Same firefly cap as analytic lights — emTri NEE
-                        // pdfOmega gets small for grazing emitter angles,
-                        // amplifying the contribution.
-                        addInscatter(inscatter, ph * es.emission * atten / pdfOmega);
-                    }
+    // (a) Emissive-tri NEE
+    if (pc.emissiveCount > 0u && pc.emissiveTotalPower > 0.0) {
+        const EmissiveSample es = sampleEmissiveTriCdfFog(seed);
+        if (es.area > 1e-20 && es.power > 0.0) {
+            vec3 toL = es.point - x;
+            const float dist = max(length(toL), 1e-4);
+            toL /= dist;
+            const float cosLight = abs(dot(-toL, es.normal));
+            if (cosLight > 1e-4) {
+                const vec3 atten = traceFogShadowRay(x, toL, dist - 1e-2);
+                const float pickPdf  = es.power / pc.emissiveTotalPower;
+                const float pdfArea  = pickPdf / es.area;
+                const float pdfOmega = pdfArea * dist * dist / cosLight;
+                if (pdfOmega > 1e-10) {
+                    const float ph = phaseHG(dot(wi, toL), g);
+                    // Per-tap firefly cap — emTri NEE pdfOmega gets small for
+                    // grazing emitter angles, amplifying the contribution.
+                    addInscatter(nee, ph * es.emission * atten / pdfOmega);
                 }
             }
         }
-
-        // (b) Analytical lights — dir / point / spot / rect
-        // DirLights — infinite distance sentinel. No 1/d² singularity here so
-        // skipping the firefly clamp would be safe, but keeping it uniform
-        // costs nothing and guards against pathological `intensity` values.
-        for (uint li = 0u; li < lights.dirCount; ++li) {
-            const vec3 L = normalize(lights.dirLights[li].direction);
-            const vec3 atten = traceFogShadowRay(x, L, 1e30);
-            const float ph = phaseHG(dot(rayDir, L), g);
-            addInscatter(inscatter, ph * lights.dirLights[li].color * atten);
-        }
-        // PointLights — physical falloff matches closest_hit. Stratified
-        // taps that land near the light source spike via 1/d²; addInscatter
-        // caps per-tap luminance to suppress fireflies. Floor of the pow()
-        // is also tightened to 0.1 (vs closest_hit's 0.01) — surface NEE
-        // averages over many paths, but volumetric is N=4/frame so the
-        // singularity is much more visible.
-        for (uint li = 0u; li < lights.pointCount; ++li) {
-            vec3 toL = lights.pointLights[li].position - x;
-            const float dist = length(toL);
-            if (dist < 1e-4) continue;
-            toL /= dist;
-            const float decay = lights.pointLights[li].decay;
-            float att = 1.0 / max(pow(dist, decay), 0.1);
-            const float range = lights.pointLights[li].range;
-            if (range > 0.0) {
-                const float t  = dist / range;
-                const float t4 = t * t * t * t;
-                const float w  = max(1.0 - t4, 0.0);
-                att *= w * w;
-            }
-            const vec3 atten = traceFogShadowRay(x, toL, dist - 1e-2);
-            const float ph = phaseHG(dot(rayDir, toL), g);
-            addInscatter(inscatter, ph * lights.pointLights[li].color * att * atten);
-        }
-        // SpotLights — cone window + falloff (same near-source clamping).
-        for (uint li = 0u; li < lights.spotCount; ++li) {
-            vec3 toL = lights.spotLights[li].position - x;
-            const float dist = length(toL);
-            if (dist < 1e-4) continue;
-            toL /= dist;
-            const float spotCos = dot(-toL, lights.spotLights[li].direction);
-            const float spotAtten = smoothstep(lights.spotLights[li].cosAngleOuter,
-                                               lights.spotLights[li].cosAngleInner,
-                                               spotCos);
-            if (spotAtten <= 0.0) continue;
-            const float decay = lights.spotLights[li].decay;
-            float att = 1.0 / max(pow(dist, decay), 0.1);
-            const float range = lights.spotLights[li].range;
-            if (range > 0.0) {
-                const float t  = dist / range;
-                const float t4 = t * t * t * t;
-                const float w  = max(1.0 - t4, 0.0);
-                att *= w * w;
-            }
-            att *= spotAtten;
-            const vec3 atten = traceFogShadowRay(x, toL, dist - 1e-2);
-            const float ph = phaseHG(dot(rayDir, toL), g);
-            addInscatter(inscatter, ph * lights.spotLights[li].color * att * atten);
-        }
-        // RectLights — single random sample on the emitter rectangle.
-        // The geomTerm (cos/dist²) can also spike when the scatter point is
-        // close to and in front of the emitter face.
-        for (uint li = 0u; li < lights.rectCount; ++li) {
-            const float ru = urand(seed) * 2.0 - 1.0;
-            const float rv = urand(seed) * 2.0 - 1.0;
-            const vec3 samplePos = lights.rectLights[li].position
-                                 + ru * lights.rectLights[li].halfU
-                                 + rv * lights.rectLights[li].halfV;
-            vec3 toL = samplePos - x;
-            const float dist = length(toL);
-            if (dist < 1e-4) continue;
-            toL /= dist;
-            const float cosEmitter = max(dot(-toL, lights.rectLights[li].normal), 0.0);
-            if (cosEmitter <= 0.0) continue;
-            const float area = length(cross(lights.rectLights[li].halfU,
-                                            lights.rectLights[li].halfV)) * 4.0;
-            // Cap the inverse-square term at 1/0.01 so close, near-axis
-            // taps don't spike. Matches the spirit of closest_hit's pow floor.
-            const float geomTerm = cosEmitter * area / max(dist * dist, 0.01);
-            const vec3 atten = traceFogShadowRay(x, toL, dist - 1e-2);
-            const float ph = phaseHG(dot(rayDir, toL), g);
-            addInscatter(inscatter, ph * lights.rectLights[li].color * geomTerm * atten);
-        }
-
-        // (c) Env NEE — uniform sphere sample (no env CDF in Vulkan PT).
-        // pdf = 1/(4π); sample is unbiased for a constant-luminance sky.
-        // For peaked HDRIs the variance is high; convergence relies on temporal
-        // accumulation. Matches WGPU's `envMode == 1` branch.
-        {
-            const float u1 = urand(seed);
-            const float u2 = urand(seed);
-            const float z  = 1.0 - 2.0 * u1;
-            const float r  = sqrt(max(0.0, 1.0 - z * z));
-            const float ph = 6.2831853 * u2;
-            const vec3  dirE = vec3(r * cos(ph), r * sin(ph), z);
-            const float pdfE = 1.0 / (4.0 * 3.14159265358979);
-            const vec3 atten = traceFogShadowRay(x, dirE, 1e30);
-            const vec3 Le    = sampleEquirectFog(dirE);
-            const float phV  = phaseHG(dot(rayDir, dirE), g);
-            // 4π division can amplify bright HDR pixels (sun disk in env);
-            // cap matches the surface env-NEE clamp behavior.
-            addInscatter(inscatter, phV * Le * atten / pdfE);
-        }
     }
 
-    return inscatter * scatterFactor / float(N);
+    // (b) Analytical lights — dir / point / spot / rect
+    for (uint li = 0u; li < lights.dirCount; ++li) {
+        const vec3 L = normalize(lights.dirLights[li].direction);
+        const vec3 atten = traceFogShadowRay(x, L, 1e30);
+        const float ph = phaseHG(dot(wi, L), g);
+        addInscatter(nee, ph * lights.dirLights[li].color * atten);
+    }
+    // PointLights — physical falloff matches closest_hit. Stratified taps that
+    // land near the source spike via 1/d²; addInscatter caps per-tap luminance.
+    // Floor of pow() at 0.1 (vs closest_hit's 0.01) — volumetric samples are
+    // sparse so the singularity is much more visible.
+    for (uint li = 0u; li < lights.pointCount; ++li) {
+        vec3 toL = lights.pointLights[li].position - x;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float decay = lights.pointLights[li].decay;
+        float att = 1.0 / max(pow(dist, decay), 0.1);
+        const float range = lights.pointLights[li].range;
+        if (range > 0.0) {
+            const float t  = dist / range;
+            const float t4 = t * t * t * t;
+            const float w  = max(1.0 - t4, 0.0);
+            att *= w * w;
+        }
+        const vec3 atten = traceFogShadowRay(x, toL, dist - 1e-2);
+        const float ph = phaseHG(dot(wi, toL), g);
+        addInscatter(nee, ph * lights.pointLights[li].color * att * atten);
+    }
+    for (uint li = 0u; li < lights.spotCount; ++li) {
+        vec3 toL = lights.spotLights[li].position - x;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float spotCos = dot(-toL, lights.spotLights[li].direction);
+        const float spotAtten = smoothstep(lights.spotLights[li].cosAngleOuter,
+                                           lights.spotLights[li].cosAngleInner,
+                                           spotCos);
+        if (spotAtten <= 0.0) continue;
+        const float decay = lights.spotLights[li].decay;
+        float att = 1.0 / max(pow(dist, decay), 0.1);
+        const float range = lights.spotLights[li].range;
+        if (range > 0.0) {
+            const float t  = dist / range;
+            const float t4 = t * t * t * t;
+            const float w  = max(1.0 - t4, 0.0);
+            att *= w * w;
+        }
+        att *= spotAtten;
+        const vec3 atten = traceFogShadowRay(x, toL, dist - 1e-2);
+        const float ph = phaseHG(dot(wi, toL), g);
+        addInscatter(nee, ph * lights.spotLights[li].color * att * atten);
+    }
+    for (uint li = 0u; li < lights.rectCount; ++li) {
+        const float ru = urand(seed) * 2.0 - 1.0;
+        const float rv = urand(seed) * 2.0 - 1.0;
+        const vec3 samplePos = lights.rectLights[li].position
+                             + ru * lights.rectLights[li].halfU
+                             + rv * lights.rectLights[li].halfV;
+        vec3 toL = samplePos - x;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float cosEmitter = max(dot(-toL, lights.rectLights[li].normal), 0.0);
+        if (cosEmitter <= 0.0) continue;
+        const float area = length(cross(lights.rectLights[li].halfU,
+                                        lights.rectLights[li].halfV)) * 4.0;
+        const float geomTerm = cosEmitter * area / max(dist * dist, 0.01);
+        const vec3 atten = traceFogShadowRay(x, toL, dist - 1e-2);
+        const float ph = phaseHG(dot(wi, toL), g);
+        addInscatter(nee, ph * lights.rectLights[li].color * geomTerm * atten);
+    }
+
+    // (c) Env NEE — uniform sphere sample. pdf = 1/(4π). Unbiased for constant-
+    // luminance sky; high variance for peaked HDRIs (sun disk) which temporal
+    // accumulation absorbs over many frames.
+    {
+        const float u1 = urand(seed);
+        const float u2 = urand(seed);
+        const float z  = 1.0 - 2.0 * u1;
+        const float r  = sqrt(max(0.0, 1.0 - z * z));
+        const float ph = 6.2831853 * u2;
+        const vec3  dirE = vec3(r * cos(ph), r * sin(ph), z);
+        const float pdfE = 1.0 / (4.0 * 3.14159265358979);
+        const vec3 atten = traceFogShadowRay(x, dirE, 1e30);
+        const vec3 Le    = sampleEquirectFog(dirE);
+        const float phV  = phaseHG(dot(wi, dirE), g);
+        addInscatter(nee, phV * Le * atten / pdfE);
+    }
+
+    return nee;
 }
 
 // shade_primary.glsl was the in-raygen primary shader for hybrid mode; it had
@@ -769,23 +786,16 @@ void main() {
 
     // Hybrid sky early-out: gbuf at this pixel is sky → primary direction is
     // fixed (primaryDirHybrid), env tap is deterministic, and the path
-    // terminates at step 0. Replace the spp loop with one sky+fog evaluation
-    // scaled by spp. Loses spp's variance reduction on fog inscatter for
-    // sky pixels (single-sample inscatter replicated) — acceptable since
-    // inscatter is low-frequency and sky pixels are usually clean anyway.
-    if (hybridOn && primaryHybridSky) {
-        vec3 skyRadiance = primarySkyEnv;
-        if (fogEnabled()) {
-            const vec3 T = fogTransmittance(1e4);
-            uint fogSeed = seedFor(gl_LaunchIDEXT.xy, pc.sampleIndex * spp);
-            const vec3 vol = volumeInscatter(originWS.xyz, primaryDirHybrid,
-                                              1e4, fogSeed);
-            skyRadiance = skyRadiance * T + vol;
-        }
-        const float sppF  = float(spp);
-        radianceSum       = skyRadiance * sppF;
-        const float lumSky = dot(skyRadiance, vec3(0.2126, 0.7152, 0.0722));
-        lum2Sum           = lumSky * lumSky * sppF;
+    // terminates at step 0. Replace the spp loop with one sky evaluation
+    // scaled by spp. Disabled when fog is enabled — the unbiased in-loop
+    // volumetric integrator needs per-spp scatter samples (each spp may
+    // scatter at a different depth + direction), so we fall through to the
+    // regular spp loop which performs the correct integration.
+    if (hybridOn && primaryHybridSky && !fogEnabled()) {
+        const float sppF   = float(spp);
+        radianceSum        = primarySkyEnv * sppF;
+        const float lumSky = dot(primarySkyEnv, vec3(0.2126, 0.7152, 0.0722));
+        lum2Sum            = lumSky * lumSky * sppF;
     } else
     for (uint s = 0u; s < spp; ++s) {
         // Per-sample sub-frame index — each in-frame sample needs its own
@@ -850,6 +860,10 @@ void main() {
         // pc.fireflyClamp > 1e20 (= setFireflyClamp(0)) when an unbiased mode
         // is wanted.
         int effectiveBounces = kMaxBounces;
+        // True once a medium scatter event has fired on this path; suppresses
+        // primary-hit capture (a post-scatter surface is not the camera-ray's
+        // first surface, so it isn't a valid reproject anchor).
+        bool mediumScattered = false;
         for (int step = 0; step < kMaxSteps; ++step) {
             // Recompute each step — primary classification settles after first hit.
             {
@@ -946,12 +960,106 @@ void main() {
                         origin, tmin, dir, 10000.0, 0);
         }
 
+        // ─── Unbiased volumetric path step ──────────────────────────────────
+        // Analog free-flight sampling. Given current segment of length tSurf
+        // (distance to surface hit, or atmospheric cap on env miss), sample a
+        // scatter distance tScatter ~ Exp(σ_t). If tScatter < tSurf, the path
+        // scatters in the medium at x = origin + dir*tScatter; otherwise it
+        // proceeds to the surface (or env). The Beer-Lambert factor and the
+        // distance pdf cancel exactly in the analog estimator, so no explicit
+        // exp() reweighting is needed at the scatter event — only at surface
+        // events (the no-scatter probability, applied to throughput).
+        //
+        // Reference: PBRT v4 §11.3 (Pharr/Jakob/Humphreys, 2023).
+        //
+        // Hybrid-sky early-out also goes through this block: the hybrid path
+        // sets payload.hitInstanceId = 0 and payload.hitWorldPos far away
+        // (origin + dir·1e6), so tSurf falls into the env-miss branch (1e6).
+        // Scatter can still win, yielding in-medium in-scatter on otherwise-
+        // sky-only hybrid pixels.
+        if (fogEnabled() && fog.sigmaT.x > 1e-8) {
+            const bool  isEnvMiss = (payload.hitInstanceId == 0u);
+            const float tSurf     = isEnvMiss
+                    ? 1e6
+                    : distance(origin, payload.hitWorldPos);
+            // Length of the medium-active portion of this segment. Honours the
+            // water-column waterSurfaceY clip and the env-miss atmospheric cap.
+            const float mediumLen = fogSegmentLength(origin, dir, tSurf, isEnvMiss);
+            const float xi        = urand(seed);
+            const float tScatter  = -log(max(1.0 - xi, 1e-30)) / fog.sigmaT.x;
+
+            if (tScatter < mediumLen) {
+                // Scatter event in the medium. The post-scatter surface (if any
+                // later in the path) is NOT a valid primary-reproject anchor.
+                mediumScattered = true;
+
+                // Albedo factor σ_s/σ_t = fog.color (single-scattering albedo).
+                throughput *= fog.color;
+
+                const vec3  x = origin + dir * tScatter;
+                const float g = clamp(fog.anisotropy, -0.95, 0.95);
+
+                // In-medium NEE (one shadow ray per light source).
+                const vec3 Ld = volumeNeeSingle(x, dir, g, seed);
+                vec3 contribution = throughput * Ld;
+                // Post-multiply firefly clamp — env / emitter-PDF spikes
+                // amplified by throughput need bounding (mirrors the env-NEE
+                // post-multiply pattern used for surfaces).
+                if (pc.fireflyClamp < 1e20) {
+                    const float cap = pc.fireflyClamp * 1.5;
+                    const float lum = dot(contribution, vec3(0.2126, 0.7152, 0.0722));
+                    if (lum > cap) contribution *= cap / lum;
+                }
+                radiance += contribution;
+
+                // Sample next direction from the phase function. For analog
+                // sampling, phase·pdf cancels exactly, so no throughput factor
+                // is needed here.
+                const vec2 u2     = vec2(urand(seed), urand(seed));
+                const vec3 newDir = sampleHG(dir, g, u2);
+                // Persist phase pdf as bsdfPdf so the next miss (if the new dir
+                // exits the scene) gets a balance-heuristic env-NEE MIS weight
+                // approximately right. Strict MIS at scatter events would use
+                // the phase pdf as one strategy and env-NEE as the other; we
+                // only do NEE here, so this is a best-effort fallback.
+                payload.bsdfPdf = phaseHG(dot(dir, newDir), g);
+
+                origin = x;
+                dir    = newDir;
+
+                // Scatter consumes a bounce; RR after the 2nd scatter.
+                ++scatter;
+                if (scatter >= effectiveBounces) break;
+                if (max(max(throughput.r, throughput.g), throughput.b) < 1e-4) break;
+                if (scatter >= 2) {
+                    const float p = clamp(max(max(throughput.r, throughput.g),
+                                              throughput.b),
+                                          0.05, 0.95);
+                    if (urand(seed) > p) break;
+                    throughput /= p;
+                }
+
+                prevRanNEE      = true;  // NEE was performed at this scatter point
+                prevPassThrough = false; // scatter is not a pass-through hop
+                continue;
+            }
+
+            // No scatter on this segment: apply Beer-Lambert over the medium-
+            // active portion only. The remainder of the segment (e.g. above-
+            // water portion of a ray exiting the water column, or anything
+            // past the env-miss atmospheric cap) is treated as clear air.
+            throughput *= fogTransmittance(mediumLen);
+        }
+
         // Capture the primary hit (first iteration only) for reprojection
         // + adaptive bounce classification. Transmission hops and back-face
         // pass-throughs aren't real shade events — they don't tag a stable
         // surface — so we wait until the first non-pass-through hit (or
-        // accept 0/sky if we never get one).
-        if (primaryInstanceId == 0u && payload.hitInstanceId != 0u) {
+        // accept 0/sky if we never get one). Skipped once the path scattered
+        // in the medium: the next surface seen is a post-scatter surface, not
+        // the camera ray's first surface, so reproject anchored on it would be
+        // wrong.
+        if (primaryInstanceId == 0u && payload.hitInstanceId != 0u && !mediumScattered) {
             primaryWorldPos     = payload.hitWorldPos;
             primaryPrevWorldPos = payload.prevWorldPos;
             primaryInstanceId   = payload.hitInstanceId;
@@ -1051,33 +1159,10 @@ void main() {
         dir    = payload.nextDir;
         }// end inner step loop
 
-        // ── fog at primary-ray boundary (per-sample) ────────────────────────
-        // L_pixel = T(t)·L_surface + L_inscatter(t).  Beer-Lambert dims the
-        // surface return; volumeInscatter adds single-scattering NEE so distant
-        // lights "glow" through the medium and god rays form near real sources.
-        // Sky pixels (primaryInstanceId==0) use a bounded sky distance so the
-        // inscatter still fades — matching WGPU rt_accum_main's primaryDepth<=0
-        // branch.
-        //
-        // Underwater: when waterSurfaceY < 1e20, fog is confined to the water
-        // column. Rays exiting the water surface are fog-attenuated only up to
-        // the exit point, not to the sky at 1e4 — preserving refracted sky
-        // visibility and concentrating scatter samples in the actual medium.
-        if (fogEnabled()) {
-            float fogDist = (primaryInstanceId != 0u)
-                    ? distance(originWS.xyz, primaryWorldPos)
-                    : 1e4;
-
-            if (fog.waterSurfaceY < 1e20 && originWS.y < fog.waterSurfaceY
-                    && dirWS.y > 1e-4) {
-                float exitDist = (fog.waterSurfaceY - originWS.y) / dirWS.y;
-                fogDist = min(fogDist, exitDist);
-            }
-
-            const vec3 T   = fogTransmittance(fogDist);
-            const vec3 vol = volumeInscatter(originWS.xyz, dirWS, fogDist, seed);
-            radiance = radiance * T + vol;
-        }
+        // Volumetric attenuation + in-scattering are folded into the in-loop
+        // path-integrator above (per-segment Beer-Lambert on throughput, per-
+        // scatter-event NEE + HG phase sample). The water-column waterSurfaceY
+        // clip is honoured at each segment via fogSegmentLength().
 
         radianceSum += radiance;
         // Luminance is a linear function of color, so luminance(mean(rgb)) ==
