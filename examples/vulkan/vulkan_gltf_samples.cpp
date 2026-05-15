@@ -4,6 +4,7 @@
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/scenes/FogExp2.hpp"
 #include "threepp/threepp.hpp"
 
 #include <algorithm>
@@ -188,6 +189,10 @@ int main(int argc, char** argv) {
     int toneMode = static_cast<int>(renderer.toneMapping);
     bool dirLight = sun->visible;
     int spp = renderer.samplesPerPixel();
+    bool fogOn = false;
+    float fogDensity = 0.05f;
+    float fogColor[3] = {0.55f, 0.6f, 0.7f};
+    float fogG = 0.5f;// HG anisotropy: moderately forward-scattering by default
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
@@ -254,6 +259,16 @@ int main(int argc, char** argv) {
             renderer.setRestirGIEnabled(restirGI);
         }
 
+        if (ImGui::CollapsingHeader("Fog (FogExp2 + HG)")) {
+            ImGui::Checkbox("Fog", &fogOn);
+            if (fogOn) {
+                ImGui::SliderFloat("Density", &fogDensity, 0.001f, 0.5f, "%.3f",
+                                   ImGuiSliderFlags_Logarithmic);
+                ImGui::ColorEdit3("Color", fogColor);
+                ImGui::SliderFloat("Anisotropy g", &fogG, -0.9f, 0.9f, "%.2f");
+            }
+        }
+
         if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
             renderer.setSamplesPerPixel(spp);
 
@@ -284,6 +299,13 @@ int main(int argc, char** argv) {
         }
 
         if (mixer) mixer->update(dt);
+
+        if (fogOn) {
+            scene.fog = FogExp2(Color(fogColor[0], fogColor[1], fogColor[2]), fogDensity);
+            renderer.setFogAnisotropy(fogG);
+        } else {
+            scene.fog.reset();
+        }
 
         controls.update();
         renderer.render(scene, camera);
