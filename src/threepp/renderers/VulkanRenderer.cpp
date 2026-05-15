@@ -926,7 +926,7 @@ namespace threepp {
         // on; off keeps the existing full-PT primary path. Defaults on now
         // that the raster prepass has been validated end-to-end.
         bool hybridEnabled_ = true;
-        bool perSppJitterHybrid_ = false;
+        bool perSppJitterHybrid_ = true;
         bool taaEnabled_ = true;
         // Tracks what each per-frame slot's binding 1 (RT denoise output)
         // currently points at, so the per-frame rewrite block only fires on
