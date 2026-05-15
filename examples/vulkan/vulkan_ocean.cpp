@@ -428,6 +428,7 @@ int main() {
     float exposure  = renderer.toneMappingExposure;
     int   toneMode  = static_cast<int>(renderer.toneMapping);
     int   spp       = renderer.samplesPerPixel();
+    float renderScale = renderer.renderScale();
     float fps = 0.f, fpsAccum = 0.f;
     int   fpsFrames = 0;
 
@@ -517,6 +518,9 @@ int main() {
             renderer.setRestirGIEnabled(restirGI);
         if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
             renderer.setSamplesPerPixel(spp);
+        // Path-trace render scale: < 1 traces fewer pixels, then upscales.
+        if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f, "%.2f"))
+            renderer.setRenderScale(renderScale);
         ImGui::Separator();
 
         ImGui::TextUnformatted("Underwater fog");

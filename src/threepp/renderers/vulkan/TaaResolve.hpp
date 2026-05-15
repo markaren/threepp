@@ -41,10 +41,13 @@ namespace threepp::vulkan {
         TaaResolve(const TaaResolve&) = delete;
         TaaResolve& operator=(const TaaResolve&) = delete;
 
-        // Allocate input + history images at the given size. Idempotent —
-        // frees existing images first. Resets history-valid to false (the
-        // freshly-allocated history slots are undefined).
-        void createImages(uint32_t width, uint32_t height);
+        // Allocate input images at the render extent and history images at
+        // the output (swapchain) extent. When the two extents differ the
+        // resolve runs as a temporal upsampler; when equal it is a plain
+        // 1:1 TAA resolve. Idempotent — frees existing images first. Resets
+        // history-valid to false (the freshly-allocated slots are undefined).
+        void createImages(uint32_t inWidth, uint32_t inHeight,
+                           uint32_t outWidth, uint32_t outHeight);
         void destroyImages();
 
         // Rewrite all descriptor sets. Caller supplies the external view
@@ -63,13 +66,16 @@ namespace threepp::vulkan {
 
         // Per-frame dispatch. Records barrier on input/history images, binds
         // pipeline + descriptor set + push constants, dispatches over the
-        // swap-chain extent in 8×8 groups. Auto-flips history-valid to true
-        // after the first dispatch.
+        // OUTPUT extent in 8×8 groups (each thread reconstructs one full-res
+        // pixel; the input may be lower-res). Auto-flips history-valid to
+        // true after the first dispatch.
         void recordResolve(VkCommandBuffer cb,
                            uint32_t frame,
                            uint32_t imageIndex,
-                           uint32_t width,
-                           uint32_t height,
+                           uint32_t inWidth,
+                           uint32_t inHeight,
+                           uint32_t outWidth,
+                           uint32_t outHeight,
                            float blendAlpha);
 
         // Denoise writes its output here when TAA is active (replaces the
@@ -99,13 +105,15 @@ namespace threepp::vulkan {
         uint32_t       imageCount_;
         uint32_t       framesInFlight_;
 
-        // Input image per frame-in-flight (denoise's target).
-        // BGRA8_UNORM to match the swapchain so the final blit is a clean
-        // byte-wise copy.
+        // Input image per frame-in-flight (denoise's target) — sized to the
+        // path-trace RENDER extent. BGRA8_UNORM to match denoise.comp's
+        // rgba8 output and the swapchain channel order.
         std::vector<Image2D> inputImagesPP_;
-        // History ping-pong (RGBA16F — higher precision than input so the
-        // running mix() doesn't re-quantize to uint8 each frame, which
-        // produced visible iso-luminance "lines" on smooth specular surfaces).
+        // History ping-pong — sized to the OUTPUT (swapchain) extent, so it
+        // accumulates the temporal upsampler's reconstructed full-res image.
+        // RGBA16F (higher precision than the rgba8 input) so the running
+        // mix() doesn't re-quantize to uint8 each frame, which produced
+        // visible iso-luminance "lines" on smooth specular surfaces.
         std::array<Image2D, 2> historyImagesPP_{};
         VkSampler sampler_ = VK_NULL_HANDLE;
 

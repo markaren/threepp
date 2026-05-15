@@ -123,18 +123,20 @@ namespace threepp::vulkan {
         vkFreeCommandBuffers(ctx_.device(), cmdPool_, 1, &cb);
     }
 
-    void TaaResolve::createImages(uint32_t width, uint32_t height) {
+    void TaaResolve::createImages(uint32_t inWidth, uint32_t inHeight,
+                                  uint32_t outWidth, uint32_t outHeight) {
         destroyImages();
-        // Input: BGRA8_UNORM — matches swap chain so the byte-wise copy from
-        // input→swapchain doesn't swizzle channels. See
-        // feedback_vulkan_swapchain_unorm_srgb_encode.
+        // Input: BGRA8_UNORM at the render extent — matches denoise.comp's
+        // rgba8 output and the swapchain channel order.
         for (auto& img : inputImagesPP_)
-            img = createStorageSampledImage(width, height,
+            img = createStorageSampledImage(inWidth, inHeight,
                                             VK_FORMAT_B8G8R8A8_UNORM,
                                             "vmaCreateImage(taa.input)");
-        // History: RGBA16F so the running mix() doesn't quantize.
+        // History: RGBA16F at the output extent — the running mix() stays
+        // sub-quantum precise and the reconstructed full-res image
+        // accumulates here when the input is lower-resolution.
         for (auto& img : historyImagesPP_)
-            img = createStorageSampledImage(width, height,
+            img = createStorageSampledImage(outWidth, outHeight,
                                             VK_FORMAT_R16G16B16A16_SFLOAT,
                                             "vmaCreateImage(taa.history)");
     }
@@ -196,7 +198,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pcRange{};
         pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pcRange.offset     = 0;
-        pcRange.size       = 16;// blendAlpha + width + height + pad
+        pcRange.size       = 24;// blendAlpha + out w/h + in w/h + pad
 
         VkPipelineLayoutCreateInfo plci{};
         plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -329,8 +331,10 @@ namespace threepp::vulkan {
     void TaaResolve::recordResolve(VkCommandBuffer cb,
                                    uint32_t frame,
                                    uint32_t imageIndex,
-                                   uint32_t width,
-                                   uint32_t height,
+                                   uint32_t inWidth,
+                                   uint32_t inHeight,
+                                   uint32_t outWidth,
+                                   uint32_t outHeight,
                                    float blendAlpha) {
         // Barrier: taaInput write → read; both history slots covered (RAW
         // hazard on the read slot, WAW on the write slot we're about to
@@ -373,12 +377,16 @@ namespace threepp::vulkan {
         const float alpha = historyValid_ ? blendAlpha : 1.0f;
         uint32_t alphaBits;
         std::memcpy(&alphaBits, &alpha, sizeof(alphaBits));
-        const uint32_t pc[4] = {alphaBits, width, height, 0u};
+        // Layout: blendAlpha, output w/h (history + dispatch + writes),
+        // input w/h (the render extent the samples were traced at).
+        const uint32_t pc[6] = {alphaBits, outWidth, outHeight,
+                                inWidth, inHeight, 0u};
         vkCmdPushConstants(cb, pipelineLayout_,
                            VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(pc), pc);
-        const uint32_t gx = (width  + 7u) / 8u;
-        const uint32_t gy = (height + 7u) / 8u;
+        // Dispatch covers the output extent — one thread per full-res pixel.
+        const uint32_t gx = (outWidth  + 7u) / 8u;
+        const uint32_t gy = (outHeight + 7u) / 8u;
         vkCmdDispatch(cb, gx, gy, 1);
         historyValid_ = true;
     }

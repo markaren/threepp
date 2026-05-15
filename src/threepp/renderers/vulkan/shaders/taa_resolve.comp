@@ -1,15 +1,25 @@
 #version 460
 
-// Raster TAA resolve. Inputs:
-//   binding 0: taaInputTex        — current frame, post-denoise, tonemapped sRGB
-//   binding 1: taaHistoryReadTex  — previous frame's TAA output (history)
-//   binding 2: gbufMotionTex      — gbuffer motion vector (rg = NDC delta, GL convention)
-//   binding 3: taaSwapImage       — swapchain output (write)
-//   binding 4: taaHistoryWriteImg — next-frame history (write)
+// Raster TAA resolve / temporal upsampler. Inputs:
+//   binding 0: taaInputTex        — current frame, post-denoise (RENDER extent)
+//   binding 1: taaHistoryReadTex  — previous frame's output      (OUTPUT extent)
+//   binding 2: gbufMotionTex      — gbuffer motion vector         (RENDER extent)
+//   binding 3: taaSwapImage       — swapchain output (write)      (OUTPUT extent)
+//   binding 4: taaHistoryWriteImg — next-frame history (write)    (OUTPUT extent)
+//
+// When the path tracer renders below the swapchain resolution
+// (renderScale < 1) the input + gbuffer are at the render extent while
+// the history + output are at the swapchain extent: the pass becomes a
+// temporal upsampler — each frame's jittered low-res sample is folded
+// into the full-res history, reconstructing detail over several frames
+// (the FSR2 / TSR / DLSS principle; the camera jitter is what spreads
+// the samples across the high-res grid). At renderScale == 1 the two
+// extents are equal and this collapses to a plain 1:1 TAA resolve,
+// bit-identical to the non-upscaling path.
 //
 // Standard UE-style temporal AA:
 //   1) reproject prev frame via the gbuffer motion vector (sub-pixel exact for moving meshes)
-//   2) compute current-frame 3×3 color AABB → clamp the reprojected history into it
+//   2) compute current-frame 3×3 color AABB (in INPUT texels) → clamp the reprojected history
 //   3) blend mix(history, current, alpha) with alpha small (~0.1 → 90% history weight)
 // The neighborhood clamp suppresses ghosting at disocclusions and on
 // fast-moving geometry without an explicit motion-rejection branch.
@@ -39,8 +49,10 @@ layout(set = 0, binding = 6) uniform usampler2D gbufIdsPrevTex;
 
 layout(push_constant) uniform Pc {
     float blendAlpha;// base new-sample weight (0.1 = strong AA, slow ghost decay)
-    uint  width;
+    uint  width;     // output (swapchain) extent — history + dispatch + writes
     uint  height;
+    uint  inWidth;   // input (path-trace render) extent — equals width/height
+    uint  inHeight;  // when renderScale == 1 (no upsampling)
     uint  _pad;
 } pc;
 
@@ -90,15 +102,22 @@ void main() {
     const vec2 sz = vec2(float(pc.width), float(pc.height));
     const vec2 uv = (vec2(px) + 0.5) / sz;
 
-    // Current pixel + 3×3 neighborhood color AABB.
-    const vec3 curr = texelFetch(taaInputTex, px, 0).rgb;
-    vec3 nMin = curr;
-    vec3 nMax = curr;
+    // Current sample — a bilinear fetch of the (possibly lower-res) input.
+    // At renderScale 1, uv lands on an input texel centre so the LINEAR
+    // sampler returns that exact texel (equivalent to the old texelFetch).
+    const vec3 curr = texture(taaInputTex, uv).rgb;
+
+    // 3×3 neighbourhood colour AABB, sampled in INPUT texels — the clamp
+    // must bound the history against the resolution the samples were
+    // actually traced at. (A full-res-texel offset would collapse the
+    // window to a single input texel when renderScale < 1.)
+    const ivec2 inSz = ivec2(int(pc.inWidth), int(pc.inHeight));
+    const ivec2 ipx  = clamp(ivec2(uv * vec2(inSz)), ivec2(0), inSz - 1);
+    vec3 nMin = vec3(1e30);
+    vec3 nMax = vec3(-1e30);
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
-            if (dx == 0 && dy == 0) continue;
-            const ivec2 q = clamp(px + ivec2(dx, dy),
-                                  ivec2(0), ivec2(pc.width - 1u, pc.height - 1u));
+            const ivec2 q = clamp(ipx + ivec2(dx, dy), ivec2(0), inSz - 1);
             const vec3 n = texelFetch(taaInputTex, q, 0).rgb;
             nMin = min(nMin, n);
             nMax = max(nMax, n);

@@ -95,6 +95,23 @@ namespace threepp {
         void setSamplesPerPixel(int spp);
         [[nodiscard]] int samplesPerPixel() const;
 
+        // Path-trace render scale. raygen, denoise, and the hybrid raster
+        // G-buffer run at (swapchain extent × scale); the temporal AA pass
+        // then reconstructs full swapchain resolution by accumulating the
+        // jittered low-res samples into a full-res history (TAA upsampling —
+        // sharper than a plain blit, since it recovers detail across frames).
+        // With TAA disabled the low-res result is instead bilinearly blitted
+        // up. The wireframe overlay and ImGui always draw at full resolution.
+        // Quadratic FPS lever: 0.5 quarters the path-trace pixel count.
+        // Clamped to [0.25, 1.0]. Default 1.0 (no scaling — pixel-identical
+        // to the unscaled path, zero added cost).
+        //
+        // Changing the scale reallocates all render-extent resources and
+        // resets accumulation; it issues a vkDeviceWaitIdle internally and so
+        // must not be called from inside a render() pass.
+        void setRenderScale(float scale);
+        [[nodiscard]] float renderScale() const;
+
         // Spatial denoiser (5×5 à-trous edge-aware filter) applied to the
         // temporally-accumulated radiance before tonemap + sRGB encode. Default
         // on. When off, the compute pass still runs but acts as a tonemap-only

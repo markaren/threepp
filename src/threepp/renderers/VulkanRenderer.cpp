@@ -938,6 +938,43 @@ namespace threepp {
         // burning imageCount_ vkUpdateDescriptorSets calls for nothing.
         std::array<int8_t, kFramesInFlight> binding1Mode_{};
 
+        // ── Lower-resolution path-trace mode ────────────────────────────
+        // renderScale_ < 1 runs raygen, denoise, and the raster G-buffer at
+        // renderExtent() instead of the swapchain extent. The TAA pass then
+        // upsamples to full resolution (it dispatches at the swapchain extent
+        // with a full-res history — see taa_resolve.comp); with TAA off a
+        // bilinear blit upscales the low-res denoise output instead. 1.0 →
+        // renderExtent() equals the swapchain extent and every pass behaves
+        // exactly as before.
+        float renderScale_ = 1.0f;
+        // Upscale source — the render-extent intermediate the denoise pass
+        // resolves into in the TAA-OFF + scaled fallback path; the bilinear
+        // upscale blit reads it. (When TAA runs it is the upsampler and
+        // writes the swapchain directly, so these are unused then.) One per
+        // frame-in-flight; BGRA8_UNORM to match the swapchain. Allocated only
+        // while scaled — slots stay null (and unreferenced) at renderScale 1.
+        std::array<Image2D, kFramesInFlight> upscaleSrcImages_{};
+
+        // PT render extent: swapchain extent × renderScale_, each axis
+        // clamped to ≥ 1px. Exactly equal to the swapchain extent when
+        // renderScale_ is 1 (the unscaled fast path).
+        VkExtent2D renderExtent() const {
+            const VkExtent2D s = ctx->swapchainExtent();
+            if (renderScale_ >= 0.999f) return s;
+            const auto px = [](uint32_t v, float k) -> uint32_t {
+                const auto r = static_cast<uint32_t>(static_cast<float>(v) * k + 0.5f);
+                return r < 1u ? 1u : r;
+            };
+            return {px(s.width, renderScale_), px(s.height, renderScale_)};
+        }
+        // True when the PT pipeline renders below the swapchain extent and
+        // the upscale blit is therefore required.
+        bool ptScaled() const {
+            const VkExtent2D r = renderExtent();
+            const VkExtent2D s = ctx->swapchainExtent();
+            return r.width != s.width || r.height != s.height;
+        }
+
         // ── Per-frame timing instrumentation ─────────────────────────────
         // GPU timestamps via VkQueryPool (one pool per frame-in-flight).
         // Each pool has 2 slots per pass (begin / end). After the fence
@@ -1080,9 +1117,15 @@ namespace threepp {
             taa_ = std::make_unique<vulkan::TaaResolve>(
                     *ctx, cmdPool, imageCount_, kFramesInFlight);
             {
-                const VkExtent2D ext = ctx->swapchainExtent();
-                taa_->createImages(ext.width, ext.height);
+                // TAA input is the path-trace render extent; history +
+                // output are the swapchain extent. When they differ the
+                // resolve pass runs as a temporal upsampler.
+                const VkExtent2D inExt  = renderExtent();
+                const VkExtent2D outExt = ctx->swapchainExtent();
+                taa_->createImages(inExt.width, inExt.height,
+                                   outExt.width, outExt.height);
             }
+            createUpscaleSrcImages();// no-op at the default renderScale_ == 1
             createDescriptorPool();
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             createOceanFineDummy_();// must run before descriptor writes (binding 32)
@@ -1210,6 +1253,7 @@ namespace threepp {
             for (auto& img : giResXsImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : giResNsImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : giResLoImagesPP) destroyImage2D(ctx->allocator(), d, img);
+            destroyUpscaleSrcImages();
             for (auto& img : materialTextures) destroyImage2D(ctx->allocator(), d, img);
             materialTextures.clear();
             if (textureSampler_) vkDestroySampler(d, textureSampler_, nullptr);
@@ -4488,7 +4532,10 @@ namespace threepp {
             // raygen reconstructs V from pixel-center every frame → reflection
             // direction frozen → low-roughness metals show "lines" because TAA
             // accumulates the same env tap each frame instead of integrating.
-            const VkExtent2D ext = ctx->swapchainExtent();
+            // Render extent: the jitter is a sub-pixel offset, so the pixel
+            // size in clip space (2/width) must use the resolution raygen +
+            // the raster gbuffer actually run at, not the swapchain extent.
+            const VkExtent2D ext = renderExtent();
             const uint32_t hi = haltonFrame_ + 1u;
             const float jx = halton_(hi, 2) - 0.5f;
             const float jy = halton_(hi, 3) - 0.5f;
@@ -4644,7 +4691,10 @@ namespace threepp {
             Matrix4 vpUnj;
             vpUnj.multiplyMatrices(proj, view);
 
-            const VkExtent2D ext = ctx->swapchainExtent();
+            // Render extent — jitter + the .zw = 1/resolution this writes
+            // into the raster camera UBO must match the resolution the
+            // gbuffer rasterizes at (see updateCameraUbo for the rationale).
+            const VkExtent2D ext = renderExtent();
             // Sub-pixel offset in [-0.5, +0.5] per axis. Halton(2,3) is the
             // industry-standard low-discrepancy sequence for primary AA.
             const uint32_t hi = haltonFrame_ + 1u;
@@ -4981,7 +5031,9 @@ namespace threepp {
         // see buildIndirectDrawData above for how the GPU buffers are
         // populated.
         void recordRasterGbufPass(VkCommandBuffer cb, uint32_t frame) {
-            const VkExtent2D ext = ctx->swapchainExtent();
+            // Render extent — the gbuffer attachments are sized to it and
+            // raygen launches over it; the viewport must agree.
+            const VkExtent2D ext = renderExtent();
             const auto& g = rasterGbufs[frame];
             if (g.framebuffer == VK_NULL_HANDLE) return;// not initialized
 
@@ -5573,7 +5625,8 @@ namespace threepp {
         // initialised the first frame after sampleIndex resets to 0. The
         // raygen reads/writes this every frame, so we transition once at
         // creation and keep it in GENERAL forever after.
-        Image2D createStorageImage2D(uint32_t w, uint32_t h, VkFormat format) {
+        Image2D createStorageImage2D(uint32_t w, uint32_t h, VkFormat format,
+                                     VkImageUsageFlags extraUsage = 0) {
             Image2D out{};
             out.width  = w;
             out.height = h;
@@ -5588,7 +5641,7 @@ namespace threepp {
             ici.arrayLayers   = 1;
             ici.samples       = VK_SAMPLE_COUNT_1_BIT;
             ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
-            ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT;
+            ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extraUsage;
             ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
             ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
@@ -5633,7 +5686,11 @@ namespace threepp {
         }
 
         void createAccumImage() {
-            const VkExtent2D ext = ctx->swapchainExtent();
+            // Render extent, not swapchain extent — every per-pixel PT
+            // buffer (accum, gbuf, reservoirs, denoiser) is sized to the
+            // resolution raygen actually launches at. Equal to the
+            // swapchain extent unless renderScale_ < 1.
+            const VkExtent2D ext = renderExtent();
             for (auto& img : accumImagesPP) {
                 img = createStorageImage2D(ext.width, ext.height,
                                            VK_FORMAT_R32G32B32A32_SFLOAT);
@@ -5678,6 +5735,27 @@ namespace threepp {
             accumWriteIdx_ = 0;
             prevCameraValid = false;
             prevWorldMats.clear();
+        }
+
+        void destroyUpscaleSrcImages() {
+            for (auto& img : upscaleSrcImages_)
+                destroyImage2D(ctx->allocator(), ctx->device(), img);
+        }
+
+        // Allocate the render-extent upscale intermediates — only while
+        // scaled; at renderScale_ == 1, or whenever TAA runs (it upsamples
+        // straight to the swapchain), the slots go unused. BGRA8_UNORM
+        // matches the swapchain so the upscale is a same-format linear blit;
+        // STORAGE feeds the denoise write, TRANSFER_SRC the blit.
+        void createUpscaleSrcImages() {
+            destroyUpscaleSrcImages();
+            if (!ptScaled()) return;
+            const VkExtent2D ext = renderExtent();
+            for (auto& img : upscaleSrcImages_) {
+                img = createStorageImage2D(ext.width, ext.height,
+                                           VK_FORMAT_B8G8R8A8_UNORM,
+                                           VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+            }
         }
 
         // Manual accumulation reset. Mirrors the post-create reset block above:
@@ -5854,7 +5932,13 @@ namespace threepp {
                 // read by the post-TAA wireframe overlay's depth-test. Lives
                 // outside the main G-buffer render pass — bound only via
                 // dynamic rendering, so it's not part of the framebuffer.
-                g.unjitDepth = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
+                // Sized to the SWAPCHAIN extent, not the render extent: the
+                // overlay composites onto the post-TAA full-resolution image
+                // (TAA upscales when renderScale < 1), so its depth
+                // attachment must match the swapchain, not the G-buffer.
+                const VkExtent2D swapExt = ctx->swapchainExtent();
+                g.unjitDepth = createAttachmentImage2D(swapExt.width, swapExt.height,
+                                                       VK_FORMAT_D32_SFLOAT,
                                                        depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT);
 
                 VkImageView views[5] = {g.normal.view, g.motion.view, g.ids.view,
@@ -6804,7 +6888,10 @@ namespace threepp {
             if (overlayWireframePipeline == VK_NULL_HANDLE) {
                 createOverlayPipeline();
             }
-            const VkExtent2D ext = ctx->swapchainExtent();
+            // Raster G-buffer matches the PT render extent — in hybrid mode
+            // raygen reads it 1:1 by launch coord, so it must launch at the
+            // same resolution the gbuffer rasterized at.
+            const VkExtent2D ext = renderExtent();
             if (rasterGbufs[0].width != ext.width || rasterGbufs[0].height != ext.height) {
                 createRasterGbufImages(ext.width, ext.height);
             }
@@ -8795,8 +8882,13 @@ namespace threepp {
                                    writes.data(), 0, nullptr);
         }
 
-        void recreateSwapchainAndDescriptors() {
-            ctx->recreateSwapchain();
+        // Rebuild every resource sized to the PT render extent — the accum /
+        // gbuf / reservoir / GI ping-pongs, the denoiser + TAA images, the
+        // raster G-buffer, the upscale intermediates — plus the descriptor
+        // sets that bind them. Shared by swapchain recreation and runtime
+        // renderScale changes. createAccumImage resets accumulation; the
+        // caller must have the GPU idle before this runs.
+        void reallocateRenderExtentResources() {
             for (auto& img : accumImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
             for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), ctx->device(), img);
@@ -8812,13 +8904,19 @@ namespace threepp {
             // from the old extent need to be replaced before the new
             // descriptor sets capture them.
             ensureHybridResources();
-            // TAA images live at swapchain extent too; rebuild before any
-            // descriptor write captures their views (RT binding 1, all TAA
-            // descriptor sets).
+            // TAA + upscale intermediates live at the render extent too;
+            // rebuild before any descriptor write captures their views (RT
+            // binding 1, all TAA descriptor sets).
             {
-                const VkExtent2D ext = ctx->swapchainExtent();
-                taa_->createImages(ext.width, ext.height);
+                // TAA input is the path-trace render extent; history +
+                // output are the swapchain extent. When they differ the
+                // resolve pass runs as a temporal upsampler.
+                const VkExtent2D inExt  = renderExtent();
+                const VkExtent2D outExt = ctx->swapchainExtent();
+                taa_->createImages(inExt.width, inExt.height,
+                                   outExt.width, outExt.height);
             }
+            createUpscaleSrcImages();
             vkDestroyDescriptorPool(ctx->device(), descriptorPool, nullptr);
             descriptorPool = VK_NULL_HANDLE;
             descriptorSets.clear();
@@ -8827,8 +8925,29 @@ namespace threepp {
             // TAA descriptor sets are persistent (pool lives inside TaaResolve);
             // just rewrite them to the new image / view handles.
             rewriteTaaDescriptors();
+            // The descriptor pool was rebuilt — force the per-frame binding-1
+            // target rewrite to re-run regardless of its prior cached mode.
+            binding1Mode_.fill(-1);
+        }
+
+        void recreateSwapchainAndDescriptors() {
+            ctx->recreateSwapchain();
+            reallocateRenderExtentResources();
             size = WindowSize{static_cast<int>(ctx->swapchainExtent().width),
                               static_cast<int>(ctx->swapchainExtent().height)};
+        }
+
+        // Runtime render-scale change. Reallocates every render-extent
+        // resource and resets accumulation. Issues a vkDeviceWaitIdle — must
+        // not run inside a render() pass. No-op when the clamped value
+        // already matches the current scale.
+        void setRenderScale(float scale) {
+            const float clamped = scale < 0.25f ? 0.25f
+                                : (scale > 1.0f ? 1.0f : scale);
+            if (clamped == renderScale_) return;
+            vkDeviceWaitIdle(ctx->device());
+            renderScale_ = clamped;
+            reallocateRenderExtentResources();
         }
 
         void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
@@ -8989,6 +9108,8 @@ namespace threepp {
                 // candidates this frame (else the prepass is wasted work).
                 if (overlayDepthPrepassPipeline != VK_NULL_HANDLE && overlayFoundLastFrame_) {
                     timingBegin(cb, TP_OverlayDepth);
+                    // Swapchain extent — unjitDepth is full-res so the
+                    // post-TAA overlay can depth-test the upscaled image.
                     const VkExtent2D dext = ctx->swapchainExtent();
                     VkImage      depthImg  = rasterGbufs[currentFrame].unjitDepth.image;
                     VkImageView  depthView = rasterGbufs[currentFrame].unjitDepth.view;
@@ -9401,9 +9522,17 @@ namespace threepp {
                                0, sizeof(pc), pc);
 
             const VkExtent2D ext = ctx->swapchainExtent();
+            // Path-trace render extent — equals `ext` unless renderScale_ < 1.
+            // raygen + denoise dispatch over it. When it is smaller than the
+            // swapchain, the result is brought up to full resolution by one
+            // of two paths: TAA runs as a temporal upsampler (taaRuns), or —
+            // with TAA off — a plain linear blit (scaled && !taaRuns).
+            const VkExtent2D ptExt   = renderExtent();
+            const bool       scaled  = ptScaled();
+            const bool       taaRuns = hybridEnabled_ || taaEnabled_;
             timingBegin(cb, TP_PathTrace);
             ctx->rt().cmdTraceRays(cb, &rgenRegion, &missRegion, &hitRegion, &callRegion,
-                                   ext.width, ext.height, 1);
+                                   ptExt.width, ptExt.height, 1);
             timingEnd(cb, TP_PathTrace);
 
             // ── Spatial denoiser: 2-pass à-trous + finalize tonemap + sRGB ──────
@@ -9413,24 +9542,26 @@ namespace threepp {
             // RT_SHADER → COMPUTE_SHADER barrier is recorded inside
             // Denoiser::recordDispatch.
             timingBegin(cb, TP_Denoise);
-            denoiser_->recordDispatch(cb, descriptorSets[setIdx], ext,
+            denoiser_->recordDispatch(cb, descriptorSets[setIdx], ptExt,
                                       denoiseEnabled_,
                                       static_cast<uint32_t>(toneMapping_),
                                       exposureBits);
             timingEnd(cb, TP_Denoise);
             // ── End denoise ─────────────────────────────────────────────────────
 
-            // ── Stage 1A.5: raster TAA ─────────────────────────────────────────
-            // Hybrid path. Reads denoise output from taaInputImagesPP, blends
-            // with reprojected history (rgba16f, no quantization), writes the
-            // result to the swapchain. The spatial neighborhood clamp +
-            // motion-vec reproject is what smooths per-frame Halton jitter
-            // shake on moving objects — the original architectural reason for
-            // hybrid mode. PT accumulator + à-trous already gave stills
-            // quality via chit primary; TAA handles motion on top of that.
-            if (hybridEnabled_ || taaEnabled_) {
+            // ── Stage 1A.5: raster TAA / temporal upsampler ────────────────────
+            // Reads denoise output from taaInputImagesPP (render extent),
+            // blends with reprojected history (rgba16f, swapchain extent),
+            // writes the result straight to the swapchain. When renderScale
+            // < 1 the input is lower-res than the output, so this pass IS the
+            // upscaler — jittered low-res samples accumulate into the full-
+            // res history, reconstructing detail (no separate blit needed).
+            // The spatial neighborhood clamp + motion-vec reproject smooths
+            // per-frame Halton jitter shake on moving objects.
+            if (taaRuns) {
                 timingBegin(cb, TP_TAA);
                 taa_->recordResolve(cb, currentFrame, imageIndex,
+                                    ptExt.width, ptExt.height,
                                     ext.width, ext.height, taaBlendAlpha_);
                 timingEnd(cb, TP_TAA);
             }
@@ -9463,8 +9594,11 @@ namespace threepp {
 
                 if (hasOverlay) {
                     timingBegin(cb, TP_OverlayDraw);
-                    // Swapchain GENERAL → COLOR_ATTACHMENT_OPTIMAL. TAA's
-                    // compute write is the source stage we're synchronizing.
+                    // Swapchain GENERAL → COLOR_ATTACHMENT_OPTIMAL. The
+                    // overlay always composites onto the full-resolution
+                    // swapchain — TAA wrote it directly (upscaling there if
+                    // renderScale < 1), so there is no render-extent target
+                    // here even in scaled mode.
                     VkImageMemoryBarrier2 toColor{};
                     toColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                     toColor.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
@@ -9678,8 +9812,8 @@ namespace threepp {
                     vkCmdEndRendering(cb);
 
                     // Swapchain back to GENERAL so the downstream blocks
-                    // (ImGui overlay or the no-overlay direct present-src
-                    // transition) see the layout they expect.
+                    // (ImGui overlay or the direct present-src transition)
+                    // see the layout they expect.
                     VkImageMemoryBarrier2 toGeneral{};
                     toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
                     toGeneral.srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -9712,13 +9846,66 @@ namespace threepp {
             }
             // ── End hybrid raster overlay pass ─────────────────────────────────
 
+            // ── Upscale fallback: render-extent denoise output → swapchain ─────
+            // Only the scaled + TAA-off case reaches here: denoise wrote a
+            // render-extent intermediate (upscaleSrcImages_[currentFrame]),
+            // expanded to the swapchain with a hardware linear blit. When TAA
+            // runs it IS the upscaler (it resolved straight to the swapchain),
+            // and at renderScale 1 the denoise pass wrote the swapchain
+            // directly — both skip this block.
+            //
+            // Both blit endpoints stay in GENERAL — a layout vkCmdBlitImage
+            // accepts for src and dst alike — so no transitions are needed:
+            // upscaleSrc rests in GENERAL like every other PT storage image,
+            // and the swapchain is already GENERAL from the frame-start
+            // barrier. Only an execution+memory barrier is required, to make
+            // the denoise write visible to the blit read.
+            if (scaled && !taaRuns) {
+                const VkImage upImg = upscaleSrcImages_[currentFrame].image;
+                VkImageMemoryBarrier2 ub{};
+                ub.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                ub.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                ub.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                ub.dstStageMask  = VK_PIPELINE_STAGE_2_BLIT_BIT;
+                ub.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+                ub.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                ub.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                ub.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                ub.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                ub.image = upImg;
+                ub.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                ub.subresourceRange.levelCount = 1;
+                ub.subresourceRange.layerCount = 1;
+                VkDependencyInfo dUp{};
+                dUp.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dUp.imageMemoryBarrierCount = 1;
+                dUp.pImageMemoryBarriers = &ub;
+                vkCmdPipelineBarrier2(cb, &dUp);
+
+                // sRGB-encoded BGRA8 → same-format BGRA8: a linear filter
+                // interpolating in the encoded domain — the standard "render
+                // scale" upscale, matching a hardware bilinear sampler.
+                VkImageBlit blit{};
+                blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                blit.srcSubresource.layerCount = 1;
+                blit.srcOffsets[1] = {int32_t(ptExt.width), int32_t(ptExt.height), 1};
+                blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                blit.dstSubresource.layerCount = 1;
+                blit.dstOffsets[1] = {int32_t(ext.width), int32_t(ext.height), 1};
+                vkCmdBlitImage(cb, upImg, VK_IMAGE_LAYOUT_GENERAL,
+                               img, VK_IMAGE_LAYOUT_GENERAL,
+                               1, &blit, VK_FILTER_LINEAR);
+            }
+            // ── End upscale fallback ───────────────────────────────────────────
+
             // If an overlay (ImGui) is registered, draw it on top of the
             // ray-traced image inside a dynamic render pass before presenting.
             if (overlayCallback) {
                 VkImageMemoryBarrier2 toColor{};
                 toColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                // Swapchain was last written by either TAA dispatch (compute)
-                // or the non-hybrid fallback copy (transfer). Cover both.
+                // Swapchain was last written by the TAA dispatch (compute),
+                // the non-hybrid denoise write (compute), or — when scaled —
+                // the upscale blit (transfer). Cover all three.
                 toColor.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
                                        VK_PIPELINE_STAGE_2_TRANSFER_BIT;
                 toColor.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
@@ -9776,8 +9963,9 @@ namespace threepp {
             } else {
                 VkImageMemoryBarrier2 toPresent{};
                 toPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                // Swapchain was last written by either TAA dispatch (compute)
-                // or the non-hybrid fallback copy (transfer). Cover both.
+                // Swapchain was last written by the TAA dispatch (compute),
+                // the non-hybrid denoise write (compute), or — when scaled —
+                // the upscale blit (transfer). Cover all three.
                 toPresent.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
                                          VK_PIPELINE_STAGE_2_TRANSFER_BIT;
                 toPresent.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
@@ -9854,26 +10042,33 @@ namespace threepp {
                 // pass + camera upload (depends on both) and before record.
                 buildIndirectDrawData(currentFrame);
             }
-            // Binding 1 (RT denoise output) target: TAA input when hybrid is
-            // on (TAA resolves it before swapchain present), swapchain view
-            // when hybrid is off (denoise writes direct-to-present). Only
-            // rewrite when this slot's actual binding differs from the desired
-            // mode — used to fire imageCount_ vkUpdateDescriptorSets calls per
-            // frame for nothing once the steady state was reached.
+            // Binding 1 (RT denoise output) target — three modes:
+            //   1 = TAA input  : TAA on (hybrid || taa); TAA resolves it.
+            //   2 = upscale src : TAA off but renderScale_ < 1; the upscale
+            //                     blit expands it to the swapchain.
+            //   0 = swapchain   : TAA off and unscaled; denoise writes the
+            //                     swapchain image directly (per swap image).
+            // Only rewrite when this slot's actual binding differs from the
+            // desired mode — avoids firing imageCount_ vkUpdateDescriptorSets
+            // calls per frame for nothing once the steady state was reached.
             //
             // TAA's spatial+temporal smoothing is what fixes the moving-object
             // shake from per-frame Halton jitter; the PT accumulator + à-trous
             // gives stills quality (chit primary is high-quality input), TAA
             // sits on top to handle motion.
             {
-                const int8_t desired = (hybridEnabled_ || taaEnabled_) ? 1 : 0;
+                const int8_t desired = (hybridEnabled_ || taaEnabled_) ? 1
+                                     : (ptScaled()                    ? 2
+                                                                       : 0);
                 if (binding1Mode_[currentFrame] != desired) {
                     for (uint32_t i = 0; i < imageCount_; ++i) {
                         const uint32_t idx = currentFrame * imageCount_ + i;
                         VkDescriptorImageInfo info{};
                         info.imageView   = (desired == 1)
                                 ? taa_->inputView(currentFrame)
-                                : ctx->swapchainImageViews()[i];
+                                : (desired == 2)
+                                          ? upscaleSrcImages_[currentFrame].view
+                                          : ctx->swapchainImageViews()[i];
                         info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                         VkWriteDescriptorSet w{};
                         w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -10091,6 +10286,14 @@ namespace threepp {
 
     int VulkanRenderer::samplesPerPixel() const {
         return static_cast<int>(pimpl_->samplesPerPixel_);
+    }
+
+    void VulkanRenderer::setRenderScale(float scale) {
+        pimpl_->setRenderScale(scale);
+    }
+
+    float VulkanRenderer::renderScale() const {
+        return pimpl_->renderScale_;
     }
 
     void VulkanRenderer::setDenoise(bool enabled) {
