@@ -658,7 +658,7 @@ namespace threepp {
         // visible-test results for glass membership when deciding whether
         // photon emit should run.
         std::vector<size_t> glassEntryIndices_;
-        // Per-NEE firefly clamp; pushed to shaders as float bits in slot [15].
+        // Per-NEE firefly clamp; pushed to shaders as float bits in slot [11].
         // 1e30f sentinel disables the clamp (set via setFireflyClamp(0)).
         float    fireflyClamp_ = 30.f;
         // Cached CDF blob (16 floats per tri) reused across frames when no
@@ -773,7 +773,7 @@ namespace threepp {
             Image2D       normal;       // rgba16f — world-space normal in xyz, .w=0 (roughness in stage 2)
             Image2D       motion;       // rgba16f — NDC delta in .rg, .ba reserved
             Image2D       ids;          // rgba16ui — instanceCustomIndex/meshID/flags/reserved
-            Image2D       uv;           // rgba16f — material UV in .rg (raygen samples textures with this in hybrid stage 1A)
+            Image2D       uv;           // rgba16f — material UV in .rg
             Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
             // Hybrid raster overlay's UNJITTERED depth attachment. Filled by
             // an extra depth-only prepass (overlay_depth.vert) right after
@@ -923,16 +923,15 @@ namespace threepp {
         float taaBlendAlpha_ = 0.1f;// 10% current, 90% history
 
         // Master toggle for the hybrid path. setHybridEnabled(true) flips it
-        // on; off keeps the existing full-PT primary path. Stage 1 ships
-        // disabled by default so the raster prepass can land + be validated
-        // before becoming the default.
+        // on; off keeps the existing full-PT primary path. Defaults on now
+        // that the raster prepass has been validated end-to-end.
         bool hybridEnabled_ = true;
         bool perSppJitterHybrid_ = false;
         bool taaEnabled_ = true;
         // Tracks what each per-frame slot's binding 1 (RT denoise output)
         // currently points at, so the per-frame rewrite block only fires on
         // a real state change: -1 = unknown/needs rewrite, 0 = swapchain
-        // image view, 1 = taaInputImagesPP[frame].view. allocateAndUpdate-
+        // image view, 1 = taa_->inputView(frame). allocateAndUpdate-
         // Descriptors writes swapchain (sets to 0); swapchain recreation
         // reruns that path. Used to be rewritten unconditionally every frame,
         // burning imageCount_ vkUpdateDescriptorSets calls for nothing.
@@ -1011,8 +1010,8 @@ namespace threepp {
         float    pendingCpuEnsureSceneMs_ = 0.f;
         // ReSTIR DI master toggle. When false, chit's primary RIS branch is
         // bypassed and the legacy per-light NEE classic loops run instead
-        // (same pattern as bounces). Default on. Forwarded to chit via
-        // pc.motionFlags bit 16 each frame.
+        // (same pattern as bounces). Default off. Forwarded to chit via
+        // pc.motionFlags bit 4 each frame.
         bool restirDIEnabled_ = false;
         // ReSTIR GI master toggle. Stage 1a: when on, primary chit launches a
         // BSDF-sampled sub-ray to generate a single-sample reservoir for the
@@ -1106,8 +1105,8 @@ namespace threepp {
             waterDisplace_ = std::make_unique<vulkan::WaterDisplacePipeline>(*ctx);
             // Hybrid raster G-buffer infrastructure is always allocated so
             // the RT descriptor sets can include valid gbuffer-attachment
-            // bindings even when hybridEnabled_ stays false. Cheap: ~50MB
-            // at 1080p for four attachments × two frames.
+            // bindings even when hybridEnabled_ stays false. Costs a few
+            // hundred MB at 1080p for six attachments × kFramesInFlight.
             ensureHybridResources();
             // TAA pipeline + images. Allocated unconditionally so the RT
             // descriptor's binding 1 (denoise output target) always has a
@@ -3325,7 +3324,7 @@ namespace threepp {
 
             // Morphed meshes — dirty when morphTargetInfluences changed.
             // Skinned meshes that also carry morph targets are handled by the
-            // bone path above (BLAS rebuild from cpuSkin) so we skip them
+            // bone path above (GPU-skinned BLAS rebuild) so we skip them
             // here. Both predicates come from the cached fingerprint flags;
             // the getMorphAttributes hash lookup + SkinnedMesh dynamic_cast
             // used to run for every entry every frame.
@@ -5337,7 +5336,7 @@ namespace threepp {
         }
 
         // Pack scene.fog (Fog/FogExp2 variant) into the per-frame fog UBO.
-        // Mirrors WgpuPathTracer.cpp:3352-3379 — FogExp2.density maps directly
+        // Mirrors WgpuPathTracer.cpp — FogExp2.density maps directly
         // to sigma_t; linear Fog reaches ~63% extinction at farPlane via
         // sigma = 1 / (far - near). Hash detect changes so the per-pixel motion
         // path halves FC and the new fog state converges quickly.
@@ -5852,7 +5851,7 @@ namespace threepp {
             // 2: per-pixel IDs + flags (rgba16ui).
             attachments[2] = attachments[0];
             attachments[2].format = VK_FORMAT_R16G16B16A16_UINT;
-            // 3: material UV (rgba16f, only rg used). Stage 1A material lookup.
+            // 3: material UV (rgba16f, only rg used).
             attachments[3] = attachments[0];
             // 4: depth (d32_sfloat).
             attachments[4]              = attachments[0];
@@ -6202,7 +6201,7 @@ namespace threepp {
             // pass, but uses gbuffer_indirect.vert with bindless vertex
             // pulling. No vertex input bindings — the VS reads positions /
             // normals / UVs via buffer-device-address dereferences keyed
-            // by gl_DrawIDARB and the DrawInfo SSBO at binding 4.
+            // by gl_InstanceIndex into the DrawInfo SSBO at binding 4.
             VkShaderModuleCreateInfo vciInd{};
             vciInd.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
             vciInd.codeSize = sizeof(kGbufferIndirectVertSpv);
@@ -6254,8 +6253,8 @@ namespace threepp {
         // mat4 mvp + vec4 color (80B). Triangle topology + polygon-mode
         // line draws each visible mesh as a wireframe; the host gates
         // per-draw on material.wireframe / overlayLayer membership.
-        // Line/LineSegments need their own pipeline variant + cached
-        // vertex buffer; deferred to Stage 2.
+        // Line/LineSegments get their own pipeline variants + cached
+        // vertex buffer, also built below.
         void createOverlayPipeline() {
             VkShaderModuleCreateInfo vsmci{};
             vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -7636,7 +7635,7 @@ namespace threepp {
             bindings[21].descriptorCount = 1;
             bindings[21].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
-            // Bindings 22-25 — hybrid raster G-buffer attachments. Sampled by
+            // Bindings 22-26 — hybrid raster G-buffer attachments. Sampled by
             // raygen when the hybrid push-constant bit is set; ignored
             // otherwise (descriptors stay populated so the layout is valid
             // either way). Same physical images created by ensureHybridResources;
@@ -8134,7 +8133,7 @@ namespace threepp {
                     // Binding 1 (denoise output) defaults to the swapchain
                     // image — preserves pre-TAA-commit behaviour for non-
                     // hybrid renders. When hybridEnabled_ flips on, renderFrame
-                    // rewrites this binding per-frame to taaInputImagesPP[f]
+                    // rewrites this binding per-frame to taa_->inputView(f)
                     // so TAA can resolve it before swapchain present.
                     VkDescriptorImageInfo imgInfo{};
                     imgInfo.imageView = ctx->swapchainImageViews()[i];
@@ -8396,7 +8395,7 @@ namespace threepp {
                     wMeshMoved.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                     wMeshMoved.pBufferInfo = &meshMovedInfo;
 
-                    // Bindings 22-25: hybrid gbuffer attachments. raygen at
+                    // Bindings 22-26: hybrid gbuffer attachments. raygen at
                     // frame f reads rasterGbufs[f].* (built one frame ahead).
                     // ensureHybridResources runs in the ctor before this, so
                     // the views are valid.
@@ -8900,7 +8899,7 @@ namespace threepp {
             // inside createAccumImage below.
             createAccumImage();// resets sampleIndex + clears prevWorldMats
             // Resize hybrid raster attachments BEFORE descriptor rewrites —
-            // bindings 22-25 point at rasterGbufs[f].*.view, so stale views
+            // bindings 22-26 point at rasterGbufs[f].*.view, so stale views
             // from the old extent need to be replaced before the new
             // descriptor sets capture them.
             ensureHybridResources();
@@ -9332,9 +9331,10 @@ namespace threepp {
             const VkImage img = ctx->swapchainImages()[imageIndex];
 
             // UNDEFINED -> GENERAL. Swapchain is now written by either the
-            // TAA compute dispatch (post-denoise) or vkCmdCopyImage in the
-            // non-hybrid path; raygen no longer writes the swapchain
-            // directly (binding 1 was redirected to taaInputImagesPP).
+            // TAA compute dispatch (post-denoise), the denoise compute pass
+            // directly (TAA off + unscaled), or the upscale blit (TAA off +
+            // scaled); raygen no longer writes the swapchain directly
+            // (binding 1 was redirected away from the swapchain view).
             VkImageMemoryBarrier2 toGeneral{};
             toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
             toGeneral.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
@@ -9550,7 +9550,7 @@ namespace threepp {
             // ── End denoise ─────────────────────────────────────────────────────
 
             // ── Stage 1A.5: raster TAA / temporal upsampler ────────────────────
-            // Reads denoise output from taaInputImagesPP (render extent),
+            // Reads denoise output from the TAA input image (render extent),
             // blends with reprojected history (rgba16f, swapchain extent),
             // writes the result straight to the swapchain. When renderScale
             // < 1 the input is lower-res than the output, so this pass IS the
@@ -9573,12 +9573,9 @@ namespace threepp {
             // image. Depth-tested against the existing raster G-buffer depth
             // so overlays are correctly occluded by path-traced surfaces. No
             // depth writes — the depth attachment stays unchanged for the
-            // next frame's chit + denoise consumption.
-            //
-            // Stage 2 will add a Line-topology pipeline + per-Line vertex
-            // buffer cache for Line/LineSegments objects. Today this only
-            // handles MeshWithWireframe / overlay-layer Meshes that already
-            // exist in lastVisibleEntries_ (PT-tracked geometry).
+            // next frame's chit + denoise consumption. Line/LineSegments
+            // objects are drawn here too, via their own topology pipelines
+            // and the per-Line vertex buffer cache (ensureLineGeometryUploaded).
             //
             // Skip the whole block when not in hybrid (depth attachment isn't
             // built), pipeline failed to create, or the early scan didn't
@@ -10145,7 +10142,7 @@ namespace threepp {
                 check(pr, "vkQueuePresentKHR");
             }
 
-            // Cap to keep `subIdx = sampleIndex * spp + s` (raygen.rgen line ~671)
+            // Cap to keep `subIdx = sampleIndex * spp + s` (raygen.rgen)
             // from overflowing uint32. With spp ≤ 256, cap at 2^24 leaves headroom
             // (16M·256 ≈ 4G, just under uint32 max). The previous 65535 cap froze
             // the blue-noise jitter and Halton sequence after ~18 min at 60 fps,

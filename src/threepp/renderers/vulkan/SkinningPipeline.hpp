@@ -1,5 +1,5 @@
 // SkinningPipeline — GPU skinning compute pipeline. One descriptor set per
-// SkinnedMesh, allocated from a dedicated pool (capacity = 64 simultaneous
+// SkinnedMesh, allocated from a dedicated pool (capacity = 256 simultaneous
 // skinned meshes). The shader is a straight LBS — see skinning.comp.
 //
 // Per-mesh state (BLAS, bone-matrix buffer, descriptor set itself) lives in

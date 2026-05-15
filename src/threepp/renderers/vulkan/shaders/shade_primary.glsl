@@ -1,8 +1,10 @@
 // Shared primary-hit shading for the hybrid raster + PT pipeline.
 //
-// Used by raygen.rgen when the hybrid push-constant bit is set: instead of
-// casting a primary traceRayEXT, raygen reads the raster G-buffer's hit
-// info and shades the primary surface here. Bounce loop continues unchanged.
+// No longer included or used. This was raygen.rgen's in-shader primary
+// shader for hybrid mode (shade the raster G-buffer hit instead of casting
+// a primary traceRayEXT); it had subtle BSDF/sampling divergences from chit,
+// so hybrid now traces a primary ray and lets chit shade it. Kept on disk
+// for reference.
 //
 // Stage 1A v2: split into three entry points so spp gets cheaper —
 //   primaryShadeSetup()  : material + BSDF inputs (cheap, runs once / pixel)

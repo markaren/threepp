@@ -78,7 +78,7 @@ void main() {
     // (dpx, dpy) = world-space partial derivatives of position
     // (duvx, duvy) = uv derivatives.
     // Tangent T = (dpx · duvy.y - dpy · duvx.y) / det. Same construction
-    // as chit's per-triangle tangent (closest_hit.rchit:751-777), just
+    // as chit's per-triangle tangent (closest_hit.rchit:1050-1086), just
     // expressed via fragment-shader derivatives so we don't need triangle
     // vertex/UV data here.
     //

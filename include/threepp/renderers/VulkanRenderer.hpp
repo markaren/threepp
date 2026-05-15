@@ -88,7 +88,7 @@ namespace threepp {
         // Default 1e30 (no limit). Set each frame alongside scene.fog.
         void setFogWaterSurfaceY(float y);
 
-        // Samples per pixel per frame for the path tracer. Default 2.
+        // Samples per pixel per frame for the path tracer. Default 1.
         // Each sample is an independent jittered primary ray; in-frame samples
         // are summed into the accumulator with weight `spp`, so per-pixel FC
         // also advances by `spp`. Clamped to >= 1.
@@ -120,7 +120,7 @@ namespace threepp {
         [[nodiscard]] bool denoise() const;
 
         // Per-NEE-sample firefly clamp: any direct-lighting contribution whose
-        // luminance exceeds `cap` is rescaled down to `cap`. Default 20.0.
+        // luminance exceeds `cap` is rescaled down to `cap`. Default 30.0.
         // Pass 0 to disable (stored as a 1e30 sentinel — gates never fire).
         // Mirrors WgpuPathTracer::setFireflyClamp.
         void setFireflyClamp(float cap);
@@ -140,7 +140,7 @@ namespace threepp {
         // a deterministic G-buffer prepass (depth, normal, motion vectors,
         // per-pixel IDs); the path tracer reads that as primary visibility
         // and starts at bounce 1. Eliminates moving-object shake from PT
-        // primary jitter; AA happens via TAA on the raster side. Default off.
+        // primary jitter; AA happens via TAA on the raster side. Default on.
         void setHybridEnabled(bool enabled);
         [[nodiscard]] bool hybridEnabled() const;
 
@@ -150,13 +150,13 @@ namespace threepp {
         void setTaaEnabled(bool enabled);
         [[nodiscard]] bool taaEnabled() const;
 
-        // ReSTIR DI master toggle. When on (default), the path tracer uses
+        // ReSTIR DI master toggle. When on, the path tracer uses
         // streaming RIS + temporal + spatial reuse at primary surfaces — one
         // shadow ray to a single chosen sample replaces the per-light NEE
         // loop, with reservoirs reused across frames and neighbours. When
-        // off, falls back to classic per-light NEE at primary (one shadow
-        // ray per analytic light + one per emissive sample). Bounces and
-        // env NEE are unaffected either way.
+        // off (default), falls back to classic per-light NEE at primary (one
+        // shadow ray per analytic light + one per emissive sample). Bounces
+        // and env NEE are unaffected either way.
         void setRestirDIEnabled(bool enabled);
         [[nodiscard]] bool restirDIEnabled() const;
 

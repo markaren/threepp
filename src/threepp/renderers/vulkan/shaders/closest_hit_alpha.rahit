@@ -20,9 +20,9 @@
 //   - alphaCutoff == 0 (opaque)   : accept the hit (most-frequent path).
 //
 // The descriptor layout intentionally mirrors closest_hit's so the two
-// shaders share bindings 3, 4, and 8. The shadow ray (location = 1) and
-// path payload (location = 0) are NOT used here — rayPayloadInEXT is only
-// declared so the compiler matches the location 0 incoming payload.
+// shaders share bindings 3, 4, and 8. Neither the path payload (location 0)
+// nor the shadow-ray payload (location 1) is accessed here, so this shader
+// declares no rayPayloadInEXT block at all.
 
 layout(buffer_reference, scalar) readonly buffer IndexBuf { uint  i[]; };
 layout(buffer_reference, scalar) readonly buffer UvBuf    { float u[]; };

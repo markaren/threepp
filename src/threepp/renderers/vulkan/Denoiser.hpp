@@ -1,6 +1,7 @@
 // Denoiser — spatial path-trace denoiser. Owns two compute pipelines (à-trous
 // filter + finalize tone-map / sRGB) plus the swapchain-sized ping-pong
-// storage they consume (filtered rgba32f × 2, moments R32F × 2).
+// storage they consume (filtered rgba32f × 2, moments R32F × 2, albedo
+// rgba8 × 2, albedoSnapshot rgba8 × 1).
 //
 // Reuses the RT pipeline's set-0 descriptor set layout (rtDsLayout) verbatim
 // so the renderer can bind one descriptor set per frame and drive raygen +

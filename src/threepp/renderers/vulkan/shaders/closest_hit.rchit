@@ -16,11 +16,11 @@
 // is sampled directly from the equirect at the reflection direction
 // (matches WGPU PT and standard raster IBL).
 //
-// Indirect bounce: cosine-weighted hemisphere sample. BRDF·cos/pdf for
-// Lambert collapses to `albedo·(1-metalness)`, so metals get throughput=0
-// and naturally do not contribute to diffuse GI. Specular indirect
-// (mirror reflections of nearby geometry) is a follow-up — for now metals
-// reflect the env map only.
+// Indirect bounce: multi-lobe BSDF importance sample (sampleBsdf) — a
+// stochastic split between clearcoat, base-spec (VNDF) and base-diff
+// (cosine-weighted hemisphere) lobes. The spec lobe gives metals mirror
+// reflections of nearby geometry; the diff lobe's BRDF·cos/pdf collapses
+// to `albedo·(1-metalness)` so metals contribute nothing to diffuse GI.
 
 struct Payload {
     vec3 radianceDiff;
@@ -234,8 +234,9 @@ layout(location = 1) rayPayloadEXT float shadowVisibility;
 // chit gates its behaviour on `inFlags & 8u` (set here before traceRayEXT) so
 // it (a) doesn't recurse into another GI sub-trace and (b) doesn't run RIS DI
 // against the temporal reservoir bound for the primary pixel. Recursion depth
-// 3 (primary chit → GI sub-trace chit → shadow ray for NEE at xs) is allocated
-// at pipeline creation time; the shadow_anyhit terminates without re-tracing.
+// 4 (primary chit → GI sub-trace chit at xs → sub-sub-trace at y → shadow ray
+// at y) is allocated at pipeline creation time; the shadow_anyhit terminates
+// without re-tracing.
 layout(location = 2) rayPayloadEXT Payload giSubPayload;
 
 const float PI = 3.14159265358979;

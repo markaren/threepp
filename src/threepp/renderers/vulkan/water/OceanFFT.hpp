@@ -178,7 +178,7 @@ namespace threepp::water {
         uint32_t logSize_;
 
         OceanImage twiddle_;
-        OceanBuffer paramsUbo_;     // 16 bytes; rewritten per pass
+        OceanBuffer paramsUbo_;     // unused (step index passed via push constant)
         VkSampler   sampler_ = VK_NULL_HANDLE;
 
         VkDescriptorPool      pool_       = VK_NULL_HANDLE;
@@ -201,7 +201,7 @@ namespace threepp::water {
         std::vector<VkDescriptorSet> dsHorizontal_; // 2 entries (ping/pong)
         std::vector<VkDescriptorSet> dsVertical_;   // 2 entries
         VkDescriptorSet dsTwiddle_ = VK_NULL_HANDLE;
-        VkDescriptorSet dsPermute_[2]{}; // [0]: scratch->input, [1]: input->input (after even count)
+        VkDescriptorSet dsPermute_[2]{}; // [0]: reads input, writes scratch; [1]: reads scratch, writes input
 
         bool twiddleComputed_ = false;
         OceanImage*   prevInput_   = nullptr;

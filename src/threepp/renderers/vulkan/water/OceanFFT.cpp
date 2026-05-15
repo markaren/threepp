@@ -219,7 +219,7 @@ namespace threepp::water {
         createImages();
         uploadNoise();
 
-        // Params UBO (32 bytes — 7 fields rounded up)
+        // Params UBO (64 bytes — 7 payload fields + 1 pad, doubled for alignment)
         paramsUbo_ = makeUbo(ctx_, 64);
         writeParams();
 

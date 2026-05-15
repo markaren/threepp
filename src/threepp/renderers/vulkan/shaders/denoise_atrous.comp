@@ -46,7 +46,7 @@ layout(set = 0, binding = 35, rgba8) uniform readonly image2D primaryAlbedoImage
 layout(set = 0, binding = 37, rgba8) uniform readonly image2D primaryAlbedoSnapshotImage;
 
 layout(push_constant) uniform Pc {
-    uint stride;          // 1, 2, or 4 (binomial spacing)
+    uint stride;          // 1 or 2 (binomial spacing)
     uint readFromAccum;   // 1 = pass 0 reads accumImage; 0 = reads filteredArray[inputIdx]
     uint inputIdx;        // 0 or 1 — which filteredArray slot to read (when readFromAccum==0)
     uint outputIdx;       // 0 or 1 — which filteredArray slot to write

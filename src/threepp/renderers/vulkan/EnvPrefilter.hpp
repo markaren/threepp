@@ -1,8 +1,6 @@
 // EnvPrefilter — GGX-prefilters an equirect HDR environment map into a
 // mip chain (PMREM). Mip 0 is the source mirror; mip k is convolved with
 // GGX(α = (k / (N-1))²) by dispatching prefilter_env.comp once per mip.
-// closest_hit fades from mirror to fully diffuse by walking the chain via
-// textureLod(envImage, dir, roughness * (mipLevels - 1)).
 //
 // One pipeline + descriptor pool shared across env uploads; descriptor sets
 // are allocated per-mip each upload (pool is reset between uploads).

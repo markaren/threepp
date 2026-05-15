@@ -37,7 +37,7 @@ layout(set = 0, binding = 3, rgba8) uniform writeonly image2D taaSwapImage;
 // re-quantized every frame and locked into uint8 codes, producing visible
 // iso-luminance bands on smooth specular surfaces. Input/swap stay rgba8
 // because denoise.comp writes binding 1 with rgba8 and that target can be
-// either taaInputImagesPP or the BGRA8 swapchain.
+// either the TAA input image or the BGRA8 swapchain.
 layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D taaHistoryWriteImg;
 // Mesh-ID rejection: bind both the current frame's IDs and the previous
 // frame's. When the reprojected prev pixel sits on a different mesh than
