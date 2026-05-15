@@ -152,9 +152,6 @@ int main() {
     sun->setTarget(sunTarget);
     scene.add(sun);
 
-    // auto ambient = AmbientLight::create(Color(0.55f, 0.72f, 0.95f), 0.25f);
-    // scene.add(ambient);
-
     // Sand floor sits directly under the ocean tile and matches its extent:
     // making the floor larger leaves a visible sand frame around the water
     // when viewed from above (the open-ocean illusion breaks). At the
