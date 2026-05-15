@@ -146,7 +146,7 @@ namespace {
             auto mat = MeshStandardMaterial::create({
                     {"color", Color::black},
                     {"emissive", Color(0.1f, 0.85f, 1.0f)},
-                    {"emissiveIntensity", 8.0f},
+                    {"emissiveIntensity", 4.0f},
                     {"roughness", 1.0f},
             });
             auto m = Mesh::create(sphereGeom, mat);
