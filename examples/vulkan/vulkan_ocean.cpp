@@ -146,7 +146,7 @@ int main() {
     // here to drive the photon-mapping caustics pass — kept gentle so it
     // doesn't double up with the env's own sun on the surface.
     auto sun = DirectionalLight::create(Color(1.0f, 0.95f, 0.85f), 2.0f);
-    sun->position.set(2.f, 5.f, 2.f);
+    sun->position.set(2.f, 1.f, 2.f);
     Object3D sunTarget;
     sunTarget.position.set(0.f, 0.f, 0.f);
     sun->setTarget(sunTarget);
@@ -391,16 +391,35 @@ int main() {
     controls.update();
 
     // ── Camera modes ──────────────────────────────────────────────────────
-    // C cycles: Free orbit → Side → Chase → Underwater.
-    // SideFixed/Chase/Underwater override camera.position + lookAt each
-    // frame; OrbitControls state is left alone so switching back to Free
-    // restores whatever orbit angle the user left it at.
-    enum class CamMode : int { Free = 0, SideFixed = 1, Chase = 2, Underwater = 3 };
+    // C cycles: Free orbit → Side → Chase → Underwater → NearestBuoy.
+    // SideFixed/Chase/Underwater/NearestBuoy override camera.position +
+    // lookAt each frame; OrbitControls state is left alone so switching
+    // back to Free restores whatever orbit angle the user left it at.
+    enum class CamMode : int {
+        Free        = 0,
+        SideFixed   = 1,
+        Chase       = 2,
+        Underwater  = 3,
+        NearestBuoy = 4,
+    };
+    constexpr int kCamModeCount = 5;
     CamMode camMode = CamMode::Free;
-    const char* camModeNames[] = {"Free (orbit)", "Side (forward)", "Chase", "Underwater"};
+    const char* camModeNames[] = {
+            "Free (orbit)", "Side (forward)", "Chase", "Underwater", "Nearest buoy"};
+
+    // Auto-cam: cycles through every CamMode in turn at a fixed cadence.
+    // Lets the demo show all viewpoints without the user touching anything.
+    // Free is skipped while auto is on so OrbitControls input doesn't fight
+    // the timer.
+    bool  autoCam        = false;
+    float autoCamHold    = 5.0f;  // seconds per camera before switching
+    float autoCamElapsed = 0.f;
+
     KeyAdapter camKey(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::C) {
-            camMode = static_cast<CamMode>((static_cast<int>(camMode) + 1) % 4);
+            camMode = static_cast<CamMode>(
+                    (static_cast<int>(camMode) + 1) % kCamModeCount);
+            autoCamElapsed = 0.f;  // a manual switch restarts the auto timer
         }
     });
     canvas.addKeyListener(camKey);
@@ -457,6 +476,12 @@ int main() {
         ImGui::Text("Keys  W:%d  A:%d  S:%d  D:%d   (C = cycle camera)",
                     bi.W ? 1 : 0, bi.A ? 1 : 0, bi.S ? 1 : 0, bi.D ? 1 : 0);
         ImGui::Text("Camera: %s", camModeNames[static_cast<int>(camMode)]);
+        if (ImGui::Checkbox("Auto-cam (cycle every N s)", &autoCam))
+            autoCamElapsed = 0.f;
+        if (autoCam) {
+            ImGui::SliderFloat("Hold (s)", &autoCamHold, 1.f, 30.f, "%.1f");
+            ImGui::Text("Next in %.1fs", std::max(0.f, autoCamHold - autoCamElapsed));
+        }
         ImGui::Separator();
 
         ImGui::TextUnformatted("Autopilot");
@@ -807,6 +832,23 @@ int main() {
             }
         }
 
+        // ── Auto-cam timer ────────────────────────────────────────────────
+        // When enabled, cycle through every camera mode every `autoCamHold`
+        // seconds. Skip Free — its position is owned by OrbitControls and
+        // re-entering it mid-cycle just shows the user's last orbit. Start
+        // the cycle at SideFixed (1) so the first auto switch from Free
+        // doesn't snap straight back to Free.
+        if (autoCam) {
+            autoCamElapsed += dt;
+            if (autoCamElapsed >= autoCamHold) {
+                autoCamElapsed = 0.f;
+                int next = static_cast<int>(camMode) + 1;
+                if (next >= kCamModeCount) next = 1;
+                if (next == 0) next = 1;
+                camMode = static_cast<CamMode>(next);
+            }
+        }
+
         // ── Camera pose per mode ──────────────────────────────────────────
         // Boat basis vectors (yaw-only — pitch/roll come from wave tilt but
         // we deliberately ignore them for camera framing so the horizon
@@ -863,6 +905,53 @@ int main() {
                                       + Vector3(0.f, -1.0f, 0.f);
                 camera.position.copy(camPos);
                 camera.lookAt(lookAt);
+                break;
+            }
+            case CamMode::NearestBuoy: {
+                // Find the buoy closest to the current boat position and
+                // perch the camera right next to it, looking at the boat.
+                // As the boat moves through the waypoint loop this naturally
+                // hands off from one buoy to the next — the camera tracks
+                // whichever marker is currently nearest.
+                int   nearest    = -1;
+                float nearestSq  = 1e30f;
+                for (size_t i = 0; i < buoyStates.size(); ++i) {
+                    const float dx = buoyStates[i].worldX - bs.position.x;
+                    const float dz = buoyStates[i].worldZ - bs.position.z;
+                    const float d2 = dx * dx + dz * dz;
+                    if (d2 < nearestSq) {
+                        nearestSq = d2;
+                        nearest   = static_cast<int>(i);
+                    }
+                }
+                if (nearest >= 0) {
+                    const float bx = buoyStates[nearest].worldX;
+                    const float bz = buoyStates[nearest].worldZ;
+                    // Offset 3 m behind the buoy (toward the boat) and 2.5 m
+                    // up so the buoy sits in the foreground with the boat
+                    // visible past it. "Behind" = direction from boat to buoy
+                    // continued past the buoy by a small amount.
+                    const float dxw = bx - bs.position.x;
+                    const float dzw = bz - bs.position.z;
+                    const float dlen = std::max(std::sqrt(dxw * dxw + dzw * dzw), 1e-3f);
+                    const float ux = dxw / dlen, uz = dzw / dlen;
+                    const Vector3 camPos(bx + ux * 3.0f,
+                                         2.5f,
+                                         bz + uz * 3.0f);
+                    const Vector3 lookAt(bs.position.x, bs.y + 1.0f, bs.position.z);
+                    camera.position.copy(camPos);
+                    camera.lookAt(lookAt);
+                } else {
+                    // No buoys (fallback path took over earlier) — degrade
+                    // to a Chase-style framing rather than leaving the camera
+                    // stranded at its last pose.
+                    const Vector3 camPos = boatPos
+                                          - boatFwd * 32.0f
+                                          + Vector3(0.f, 12.0f, 0.f);
+                    const Vector3 lookAt = boatPos + Vector3(0.f, 2.0f, 0.f);
+                    camera.position.copy(camPos);
+                    camera.lookAt(lookAt);
+                }
                 break;
             }
         }
