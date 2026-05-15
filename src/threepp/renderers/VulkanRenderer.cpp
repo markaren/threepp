@@ -7531,9 +7531,12 @@ namespace threepp {
             bindings[7].binding = 7;
             bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[7].descriptorCount = 1;
-            // Compute denoise reads accumImage radiance + per-pixel FC.
+            // Raygen writes; compute denoise reads radiance + per-pixel FC;
+            // closest_hit reads .w (per-pixel FC) for the GI primary
+            // saturation gate (skip sub-trace on converged pixels).
             bindings[7].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
-                                     VK_SHADER_STAGE_COMPUTE_BIT;
+                                     VK_SHADER_STAGE_COMPUTE_BIT |
+                                     VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
             // Bindless material albedo array. Fixed-cap kMaxMaterialTextures
             // so we can avoid VK_EXT_descriptor_indexing's variable-descriptor-
             // count plumbing for v1; closest_hit indexes via mdesc.albedoTexIndex.

@@ -182,6 +182,9 @@ layout(set = 0, binding = 9) uniform PrevCameraUboChit {
     vec4 prevCamUp;    // .xyz = up
 } pcam;
 layout(set = 0, binding = 13, rgba32f) uniform readonly image2D prevGbufImage;
+// accumImage .w = per-pixel FC; chit reads at gl_LaunchIDEXT for the GI
+// primary saturation gate (skip sub-trace on converged pixels).
+layout(set = 0, binding =  7, rgba32f) uniform readonly image2D accumImage;
 layout(set = 0, binding = 28, rgba32f) uniform writeonly image2D resPosWrite;
 layout(set = 0, binding = 29, rgba32f) uniform readonly  image2D resPosRead;
 layout(set = 0, binding = 30, rgba16f) uniform writeonly image2D resWWrite;
@@ -2616,7 +2619,43 @@ void main() {
     vec3 giThroughput = vec3(0.0);// brdfWeight for raygen step 1 = bs.weight · sub.brdfWeight
     bool giTerminate  = false;    // sub-trace missed surface (env / numeric edge)
 
-    if (useGIPrimary) {
+    // ── Fast-path saturation gate ──
+    // For static camera + fully-converged pixels, the reservoir is already
+    // M-saturated; firing a fresh sub-trace + Stage 2 + RIS + temporal +
+    // spatial barely shifts the chosen sample (new candidate's weight is
+    // ~1/W_sum which is huge after many frames of accumulation). Skip the
+    // expensive paths and shade with the persisted reservoir directly.
+    // Re-persist the same data this frame so the ping-pong stays current
+    // for next frame's read. The visibility test below still catches
+    // dynamic occluders changing between frames.
+    bool giFastPath = false;
+    GiReservoir giFast;
+    giFast.xs = vec3(0.0); giFast.ns = vec3(0.0); giFast.Lo = vec3(0.0); giFast.omegaI = vec3(0.0);
+    giFast.W_sum = 0.0; giFast.M = 0.0; giFast.W = 0.0; giFast.p_hat = 0.0;
+    if (useGIPrimary && (pc.motionFlags & 2u) == 0u) {
+        const float pixelFc = imageLoad(accumImage, ivec2(gl_LaunchIDEXT.xy)).w;
+        if (pixelFc > 100.0) {
+            const vec4 pX = imageLoad(giResXsRead, ivec2(gl_LaunchIDEXT.xy));
+            const vec4 pN = imageLoad(giResNsRead, ivec2(gl_LaunchIDEXT.xy));
+            const vec4 pL = imageLoad(giResLoRead, ivec2(gl_LaunchIDEXT.xy));
+            if (pN.w >= 15.0 && pL.w > 0.0 && dot(pN.xyz, pN.xyz) > 0.01) {
+                giFast.xs    = pX.xyz;
+                giFast.ns    = pN.xyz;
+                giFast.Lo    = pL.rgb;
+                giFast.W_sum = pX.w;
+                giFast.M     = pN.w;
+                giFast.W     = pL.w;
+                giFastPath   = true;
+                // Re-persist unchanged so the ping-pong write image carries
+                // forward (otherwise next frame's read would lag by one).
+                imageStore(giResXsWrite, ivec2(gl_LaunchIDEXT.xy), pX);
+                imageStore(giResNsWrite, ivec2(gl_LaunchIDEXT.xy), pN);
+                imageStore(giResLoWrite, ivec2(gl_LaunchIDEXT.xy), pL);
+            }
+        }
+    }
+
+    if (useGIPrimary && !giFastPath) {
         // ── Sub-trace launch (unchanged from Stage 1a) ──
         giSubPayload.radianceDiff    = vec3(0.0);
         giSubPayload.radianceSpec    = vec3(0.0);
@@ -2882,14 +2921,22 @@ void main() {
             const ivec2 sz = imageSize(prevGbufImage);
             if (sz.x > 0 && sz.y > 0) {
                 const bool camMoving = (pc.motionFlags & 2u) != 0u;
-                const uint  spMax    = camMoving ? 2u : 5u;
+                // Reduced from 2/5 → 1/3: variance reduction plateaus past
+                // M ≈ 10-15, and with M-cap-per-tap of 4, 3 taps already
+                // reach ~12-16 added M. Saves ~40% of spatial cost for
+                // imperceptible variance increase on the cases GI targets.
+                const uint  spMax    = camMoving ? 1u : 3u;
                 const float mTarget  = 20.0;
                 const uint  curMeshId = uint(gl_InstanceCustomIndexEXT) + 1u;
                 const float curDistC  = length(hitPos - pcam.prevCamPosX.xyz);
                 for (uint sp = 0u; sp < spMax; ++sp) {
                     if (gi.M >= mTarget) break;
                     const float spAngle = urand(seed) * TWO_PI;
-                    const float spR     = sqrt(urand(seed)) * 20.0;
+                    // Reduced from 20 → 12 px: tighter disk = better L2
+                    // cache locality on reservoir reads, plus the wider
+                    // radius pulled in cross-feature samples that the
+                    // mesh-ID gate ended up rejecting anyway.
+                    const float spR     = sqrt(urand(seed)) * 12.0;
                     const ivec2 spOff   = ivec2(int(spR * cos(spAngle)),
                                                 int(spR * sin(spAngle)));
                     if (spOff.x == 0 && spOff.y == 0) continue;
@@ -3004,6 +3051,50 @@ void main() {
         // and trades cleanly against Stage 1's biased continuation hack
         // (which used this-frame's xs continuation even when the reservoir
         // chose a prev-frame sample).
+        giNextOrigin = vec3(0.0);
+        giNextDir    = vec3(0.0);
+        giThroughput = vec3(0.0);
+        giTerminate  = true;
+        giConsumed   = true;
+    }
+
+    // ── Fast-path completion ──
+    // Saturated/converged pixel: skip sub-trace + Stage 2 + RIS + temporal
+    // + spatial. Use the persisted reservoir directly for shading. Visibility
+    // test still fires to catch dynamic occluders changing between frames.
+    // (Vis-fail behaviour matches the standard path on this branch — produces
+    // 0 contribution; if/when vis-fail decay lands in the standard path,
+    // mirror it here.)
+    if (useGIPrimary && giFastPath) {
+        GiReservoir gi = giFast;
+        if (pc.fireflyClamp < 1e20) gi.W = min(gi.W, 5.0);
+        if (gi.W > 0.0 && gi.M > 0.0) {
+            const vec3 toXs = gi.xs - hitPos;
+            const float distChosen = length(toXs);
+            if (distChosen > 1e-3) {
+                const vec3 omegaI_chosen = toXs / distChosen;
+                shadowVisibility = 1.0;
+                traceRayEXT(topAS,
+                            gl_RayFlagsTerminateOnFirstHitEXT |
+                            gl_RayFlagsSkipClosestHitShaderEXT |
+                            gl_RayFlagsNoOpaqueEXT,
+                            0xff, 1, 0, 1,
+                            hitPos + N * 1e-3, 0.0, omegaI_chosen,
+                            distChosen - 1e-2, 1);
+                const float vis = shadowVisibility;
+                if (vis > 0.0) {
+                    const vec3 F_chosen = evalGiTarget(V, omegaI_chosen, N, F0, albedo,
+                                                        roughness, metalness, alpha,
+                                                        ccProb, ccWeight, ccRough, baseScale, gi.Lo);
+                    vec3 contrib_raw = F_chosen * gi.W * vis;
+                    if (pc.fireflyClamp < 1e20) {
+                        const float giLum = lum3(contrib_raw);
+                        if (giLum > pc.fireflyClamp) contrib_raw *= pc.fireflyClamp / giLum;
+                    }
+                    giContrib = contrib_raw;
+                }
+            }
+        }
         giNextOrigin = vec3(0.0);
         giNextDir    = vec3(0.0);
         giThroughput = vec3(0.0);
