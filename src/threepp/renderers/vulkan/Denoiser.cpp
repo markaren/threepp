@@ -260,18 +260,19 @@ namespace threepp::vulkan {
         barrierMem(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR);
 
         if (denoiseEnabled) {
-            // 2 atrous passes: stride 1 → 2. Pass 0 sources from accumImage
-            // and writes filt[1]; pass 1 reads filt[1] and writes filt[0].
-            // Finalize then reads filt[0].
+            // 3 atrous passes: stride 1 → 2 → 4. Pass 0 sources from
+            // accumImage and writes filt[0]; pass 1 reads filt[0] and writes
+            // filt[1]; pass 2 reads filt[1] and writes filt[0] (so finalize's
+            // hard-coded filteredArray[0] read is correct).
             //
-            // Tried a third pass (stride 4) on 2026-05-14 after demod
-            // landed — hypothesis was that demod's illumination-space
-            // filter wouldn't over-blur with wider reach. In practice the
-            // stride-4 kernel pulls taps from 8 pixels away (stride × half-
-            // kernel = 4×2), which crosses surface-feature boundaries the
-            // variance-driven σ can't fully reject — visible as edge
-            // artifacts (halos / bleed-through). 2 passes (9×9 reach)
-            // remains the sweet spot for this fast-converging PT.
+            // The stride-4 third pass is per-pixel gated inside the shader:
+            // converged flat pixels (FC > 32 AND variance < 0.01) passthrough
+            // unchanged; under-converged or sustained-noisy pixels get the
+            // wider 17×17 effective reach. Per-pixel gating sidesteps the
+            // 2026-05-14 static-stride-4 attempt that produced halos at
+            // silhouettes — wider taps now only fire where the noise is
+            // worth the broader reach, and the mesh-ID + plane-distance
+            // stops bound the halo extent for the taps that do evaluate.
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, atrousPipeline_);
 
             struct AtrousPc {
@@ -280,13 +281,12 @@ namespace threepp::vulkan {
                 uint32_t inputIdx;
                 uint32_t outputIdx;
             };
-            // Schedule lands the final filtered output in filt[0] so
-            // finalize.comp's hard-coded filteredArray[0] read is correct.
-            const AtrousPc passes[2] = {
-                    {1u, 1u, 0u, 1u}, // accum → filt[1]
-                    {2u, 0u, 1u, 0u}, // filt[1] → filt[0]
+            const AtrousPc passes[3] = {
+                    {1u, 1u, 0u, 0u}, // accum → filt[0]
+                    {2u, 0u, 0u, 1u}, // filt[0] → filt[1]
+                    {4u, 0u, 1u, 0u}, // filt[1] → filt[0] (gated, mostly noisy pixels)
             };
-            for (int i = 0; i < 2; ++i) {
+            for (int i = 0; i < 3; ++i) {
                 if (i > 0) barrierMem(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
                 vkCmdPushConstants(cb, pipelineLayout_,
                                    VK_SHADER_STAGE_COMPUTE_BIT,

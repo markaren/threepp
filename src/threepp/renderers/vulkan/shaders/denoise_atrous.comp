@@ -144,6 +144,22 @@ void main() {
     const float variance = varRaw / (lumAlbC * lumAlbC);
     const float sigmaLum = clamp(4.0 * sqrt(variance + 1e-8), 0.5, 8.0);
 
+    // Stride-4 (third) pass fires only on under-converged pixels. The earlier
+    // 2026-05-14 attempt at a static stride-4 third pass produced halos at
+    // silhouettes because 8-pixel-reach taps crossed surface boundaries the
+    // edge stops couldn't fully reject. Per-pixel gating keeps the wider
+    // reach where it matters (heavy speckle on a panning shot — primary
+    // surfaces with FC ≤ 32 OR sustained-high variance) and passthroughs
+    // converged flat areas. Mesh-ID + plane-distance stops still apply for
+    // the taps that DO get evaluated, bounding halo extent.
+    if (pc.stride >= 4u) {
+        const float fc = imageLoad(accumImage, px).w;
+        if (fc > 32.0 && variance < 0.01) {
+            imageStore(filteredArray[pc.outputIdx], px, c);
+            return;
+        }
+    }
+
     // Binomial 1D kernel {1,4,6,4,1}/16 outer-product → standard à-trous.
     const float k1d[5] = float[](1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
     const int s = int(pc.stride);
