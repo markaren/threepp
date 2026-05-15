@@ -1537,11 +1537,21 @@ void main() {
     // the primary pixel (the camera ray's primary hit), and the sub-trace's
     // xs is a different surface entirely. Letting RIS run here would mix two
     // unrelated reservoir streams into the same per-pixel slot.
+    // BSDF_ONLY mode (inFlags bit 5 = 32u): raygen sets this for spp samples
+    // s>=1 at primary so the chit only does material setup + BSDF sample +
+    // payload finalize, skipping NEE / RIS / GI / caustic gather. The result
+    // is direct-lighting independent of bs.dir is computed once per pixel
+    // (s=0) and the cached value is injected by raygen for s>=1; only the
+    // bounce direction (and resulting indirect path) varies per spp. Saves
+    // (spp-1) × (NEE shadow ray + RIS shadow ray + GI sub-trace + Stage 2
+    // sub-sub-trace + photon gather) per primary-hit pixel.
+    const bool bsdfOnlyMode  = (payload.inFlags & 32u) != 0u;
     const bool restirOn      = (pc.motionFlags & 16u) != 0u;
     const bool useRISPrimary = restirOn
                             && ((payload.inFlags & 1u) == 0u)
                             && ((payload.inFlags & 8u) == 0u)
-                            && (mdesc.transmission < 0.05);
+                            && (mdesc.transmission < 0.05)
+                            && !bsdfOnlyMode;
 
     if (useRISPrimary) {
         Reservoir r;
@@ -1942,7 +1952,7 @@ void main() {
                 }
             }
         }
-    } else {
+    } else if (!bsdfOnlyMode) {
     for (uint i = 0u; i < lights.dirCount; ++i) {
         const vec3 L = normalize(lights.dirLights[i].direction);
         const float NdotL = max(dot(N, L), 0.0);
@@ -2473,7 +2483,7 @@ void main() {
         const float wBSDF       = pdfBsdfPrev / max(pdfBsdfPrev + pdfOmega, 1e-8);
         emissiveOut *= wBSDF;
     }
-    if ((pc.motionFlags & 4u) != 0u) lit += gatherCaustics(hitPos, N, albedo, roughness);
+    if ((pc.motionFlags & 4u) != 0u && !bsdfOnlyMode) lit += gatherCaustics(hitPos, N, albedo, roughness);
 
     // ── ReSTIR GI Stage 2 — bounce-2 inside Lo (full-path-Lo, capped at 2) ──
     // When this chit is itself a GI sub-trace (inFlags bit 3 set) AND the
@@ -2596,7 +2606,8 @@ void main() {
                            && (roughness > 0.20)
                            && (metalness < 0.5)
                            && (emLum1 < 0.5)
-                           && !smoothCC;
+                           && !smoothCC
+                           && !bsdfOnlyMode;
 
     bool giConsumed = false;
     vec3 giContrib  = vec3(0.0);
@@ -3024,6 +3035,15 @@ void main() {
         payload.nextOrigin   = hitPos + N * 1e-3;
         payload.nextDir      = bounceDir;
         payload.flags        = pathFlags;
+    }
+    // BSDF_ONLY override: zero the radiance fields so raygen's `radiance +=
+    // throughput * (radianceDiff + radianceSpec)` at primary contributes
+    // nothing — raygen injects the cached direct from s=0 instead. Bounce
+    // fields (brdfWeight / nextOrigin / nextDir / flags) are preserved so
+    // raygen's bounce loop continues with this sample's BSDF direction.
+    if (bsdfOnlyMode) {
+        payload.radianceDiff = vec3(0.0);
+        payload.radianceSpec = vec3(0.0);
     }
     payload.seed = seed;
     // Per-vertex motion vector: interpolate this triangle's PREVIOUS-frame

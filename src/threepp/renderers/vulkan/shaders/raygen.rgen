@@ -755,6 +755,38 @@ void main() {
             primaryHybridSky = true;
         }
     }
+
+    // Per-spp loop optimization controls.
+    //   canCachePrimary: hybrid + !perSppJitter means primary direction is
+    //     identical across spp samples → primary chit's NEE/RIS/GI/caustic
+    //     gather (which depend on the surface, not bs.dir) can be computed
+    //     once at s=0 and reused for s>=1 via inFlags bit 5 (BSDF_ONLY).
+    //   primaryHybridSky early-out below covers the sky-pixel case
+    //     separately so the loop can skip entirely.
+    const bool perSppJitter   = (pc.motionFlags & 32u) != 0u;
+    const bool canCachePrimary = hybridOn && !perSppJitter;
+    vec3 cachedDirect = vec3(0.0);
+
+    // Hybrid sky early-out: gbuf at this pixel is sky → primary direction is
+    // fixed (primaryDirHybrid), env tap is deterministic, and the path
+    // terminates at step 0. Replace the spp loop with one sky+fog evaluation
+    // scaled by spp. Loses spp's variance reduction on fog inscatter for
+    // sky pixels (single-sample inscatter replicated) — acceptable since
+    // inscatter is low-frequency and sky pixels are usually clean anyway.
+    if (hybridOn && primaryHybridSky) {
+        vec3 skyRadiance = primarySkyEnv;
+        if (fogEnabled()) {
+            const vec3 T = fogTransmittance(1e4);
+            uint fogSeed = seedFor(gl_LaunchIDEXT.xy, pc.sampleIndex * spp);
+            const vec3 vol = volumeInscatter(originWS.xyz, primaryDirHybrid,
+                                              1e4, fogSeed);
+            skyRadiance = skyRadiance * T + vol;
+        }
+        const float sppF  = float(spp);
+        radianceSum       = skyRadiance * sppF;
+        const float lumSky = dot(skyRadiance, vec3(0.2126, 0.7152, 0.0722));
+        lum2Sum           = lumSky * lumSky * sppF;
+    } else
     for (uint s = 0u; s < spp; ++s) {
         // Per-sample sub-frame index — each in-frame sample needs its own
         // jitter and seed to actually decorrelate.
@@ -764,7 +796,7 @@ void main() {
         // When perSppJitter is on (motionFlags bit 5), hybrid also gets
         // independent sub-pixel jitter per sample — combining hybrid TAA
         // noise suppression with multi-sample AA convergence.
-        const bool perSppJitter = (pc.motionFlags & 32u) != 0u;
+        // (perSppJitter is hoisted above the spp loop now.)
         const vec2 jitter = (hybridOn && !perSppJitter)
                 ? vec2(0.0)
                 : vec2(blueNoise(gl_LaunchIDEXT.xy, sIdx, 0u) - 0.5,
@@ -861,7 +893,14 @@ void main() {
         // by the prior shade's emissive-NEE shadow ray, so suppress it here".
         // Cleared on primary (scatter==0) and after pass-through hops (those
         // don't perform NEE, so the next shade event must keep emission).
-        payload.inFlags    = (scatter > 0 && !prevPassThrough && pc.emissiveCount > 0u) ? 1u : 0u;
+        // bit 5 (= 32u) of inFlags = "BSDF_ONLY" — set on primary trace
+        // (step==0) for spp samples 1..spp-1 when canCachePrimary is on.
+        // The chit reads this to skip NEE / RIS / GI / caustic gather (those
+        // depend on the surface, not bs.dir) and only sample BSDF + write
+        // bounce-continuation payload. raygen injects the cached direct
+        // contribution from s=0 via the override below the trace.
+        payload.inFlags    = ((scatter > 0 && !prevPassThrough && pc.emissiveCount > 0u) ? 1u : 0u)
+                           | ((canCachePrimary && step == 0 && s > 0u) ? 32u : 0u);
 
         // tmin selection: shaded bounces use 0.001 (1mm) to avoid self-
         // intersection acne on the surface we just left. Pass-through hops
@@ -921,6 +960,22 @@ void main() {
             primaryTransmission = payload.hitTransmission;
             primarySpecFrac     = payload.hitSpecFrac;
             primaryAlbedoSnapshot = payload.primaryAlbedo;
+        }
+
+        // BSDF_ONLY cache logic. At step 0 (primary) under canCachePrimary:
+        //   s == 0 → record the primary's direct contribution (NEE + RIS + GI
+        //            + caustic + ambient + emissive) for re-injection.
+        //   s >= 1 → chit returned radianceDiff = 0 (BSDF_ONLY); inject the
+        //            cached direct so this sample gets the same direct term
+        //            (variance reduction sacrificed on direct, preserved on
+        //            indirect since each sample's bs.dir is fresh).
+        if (canCachePrimary && step == 0 && !primaryViaHybrid) {
+            if (s == 0u) {
+                cachedDirect = payload.radianceDiff + payload.radianceSpec;
+            } else {
+                payload.radianceDiff = cachedDirect;
+                payload.radianceSpec = vec3(0.0);
+            }
         }
 
         // Per-bounce firefly clamp on the contribution that lands in the
