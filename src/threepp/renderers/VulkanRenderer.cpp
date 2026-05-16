@@ -1148,6 +1148,15 @@ namespace threepp {
         uint32_t   frameImageIndex_ = 0;
         std::chrono::high_resolution_clock::time_point frameStartTp_;
 
+        // Deferred-apply queue for setters that issue vkDeviceWaitIdle +
+        // realloc descriptor/image resources. These collide with an open
+        // cmd buffer (frameState_ != Idle), so when called mid-frame we
+        // stash the request and apply it at the next beginFrameForPT —
+        // after the prior frame's fence wait, before any record. Setters
+        // called when Idle apply immediately as before.
+        bool pendingRenderScaleRealloc_ = false;
+        bool pendingAccumulationReset_  = false;
+
         explicit Impl(Canvas& c) : canvas(c), size(c.size()) {
             ctx = std::make_unique<VulkanContext>(
                     static_cast<GLFWwindow*>(canvas.windowPtr()),
@@ -5907,14 +5916,21 @@ namespace threepp {
         // wipes gbuf + accum + ReSTIR DI reservoirs, rewinds sampleIndex, and
         // invalidates reproject state so the next frame cold-starts from
         // sample 1. Issues a vkDeviceWaitIdle since clearGbufImages requires
-        // the GPU idle before its TRANSFER_DST layout transition.
+        // the GPU idle before its TRANSFER_DST layout transition. When
+        // called mid-frame (frameState_ != Idle) the GPU-side clear is
+        // deferred to the next beginFrameForPT; CPU-side counters reset
+        // immediately so the user-visible behaviour matches.
         void resetAccumulation() {
-            vkDeviceWaitIdle(ctx->device());
-            clearGbufImages();
             sampleIndex = 0;
             accumWriteIdx_ = 0;
             prevCameraValid = false;
             prevWorldMats.clear();
+            if (frameState_ != FrameState::Idle) {
+                pendingAccumulationReset_ = true;
+                return;
+            }
+            vkDeviceWaitIdle(ctx->device());
+            clearGbufImages();
         }
 
         // ── Hybrid raster G-buffer prepass implementation ───────────────────
@@ -9665,15 +9681,22 @@ namespace threepp {
         }
 
         // Runtime render-scale change. Reallocates every render-extent
-        // resource and resets accumulation. Issues a vkDeviceWaitIdle — must
-        // not run inside a render() pass. No-op when the clamped value
-        // already matches the current scale.
+        // resource and resets accumulation. Issues a vkDeviceWaitIdle.
+        // Safe to call from inside the user's animate lambda — when a
+        // frame is already mid-record (frameState_ != Idle) the
+        // reallocation is deferred to the next beginFrameForPT, after
+        // that frame's fence has signalled. Otherwise (Idle) applies
+        // immediately. No-op when the clamped value already matches.
         void setRenderScale(float scale) {
             const float clamped = scale < 0.25f ? 0.25f
                                 : (scale > 1.0f ? 1.0f : scale);
             if (clamped == renderScale_) return;
-            vkDeviceWaitIdle(ctx->device());
             renderScale_ = clamped;
+            if (frameState_ != FrameState::Idle) {
+                pendingRenderScaleRealloc_ = true;
+                return;
+            }
+            vkDeviceWaitIdle(ctx->device());
             reallocateRenderExtentResources();
         }
 
@@ -10764,6 +10787,23 @@ namespace threepp {
             // we reset the pool and re-record. Result lands in
             // lastFrameTimings_ for the public getter to read.
             readBackTimingsFromPriorUse();
+
+            // Apply any setter requests deferred from mid-frame. setRenderScale
+            // / resetAccumulation issue vkDeviceWaitIdle + reallocate descriptor
+            // pool / clear images — both unsafe with an open cmd buffer in the
+            // prior frame. We're past the fence wait now so the GPU is idle for
+            // *this* slot at minimum; vkDeviceWaitIdle below drains the rest.
+            if (pendingRenderScaleRealloc_ || pendingAccumulationReset_) {
+                vkDeviceWaitIdle(d);
+                if (pendingRenderScaleRealloc_) {
+                    reallocateRenderExtentResources();
+                    pendingRenderScaleRealloc_ = false;
+                }
+                if (pendingAccumulationReset_) {
+                    clearGbufImages();
+                    pendingAccumulationReset_ = false;
+                }
+            }
 
             uint32_t imageIndex = 0;
             VkResult acq = vkAcquireNextImageKHR(d, ctx->swapchain(), UINT64_MAX,
