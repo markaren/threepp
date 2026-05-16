@@ -290,6 +290,13 @@ namespace threepp {
             Buffer    heightReadback2;
             uint32_t  heightReadbackDim = 0;
             std::weak_ptr<BufferGeometry> liveCheck;
+            // Per-frame BLAS-refit state. The initial AS is built (buildBlasFor)
+            // with ALLOW_UPDATE, so subsequent per-frame refreshes can use
+            // MODE_UPDATE (refit) instead of full BUILD — typically 3-10× faster
+            // for the same triangle count. AS quality degrades over many refits;
+            // force a full rebuild every kBlasFullRebuildInterval frames.
+            uint32_t  blasRefitCounter = 0;          // frames since last full BUILD
+            static constexpr uint32_t kBlasFullRebuildInterval = 64;
         };
         std::unordered_map<const DisplacedMesh*, std::unique_ptr<DisplacedMeshState>> displacedStates;
 
@@ -2607,14 +2614,25 @@ namespace threepp {
             blasGeom.geometry.triangles = triData;
             blasGeom.flags = 0;
 
+            // Refit after the initial buildBlasFor; periodic full rebuild
+            // keeps the BVH balanced over time. buildBlasFor itself counts as
+            // the first build, so blasRefitCounter starts at 0 and the very
+            // first refreshDisplacedBlas takes the UPDATE path.
+            const bool fullRebuild =
+                    st.blasRefitCounter >= DisplacedMeshState::kBlasFullRebuildInterval;
+            st.blasRefitCounter = fullRebuild ? 0u : (st.blasRefitCounter + 1u);
+
             VkAccelerationStructureBuildGeometryInfoKHR build{};
             build.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
             build.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
             build.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
                           VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
-            build.mode  = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            build.mode  = fullRebuild
+                    ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
+                    : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
             build.geometryCount = 1;
             build.pGeometries = &blasGeom;
+            build.srcAccelerationStructure = fullRebuild ? VK_NULL_HANDLE : st.blas->as;
             build.dstAccelerationStructure = st.blas->as;
 
             VkAccelerationStructureBuildSizesInfoKHR sizes{};
@@ -2623,7 +2641,9 @@ namespace threepp {
                     ctx->device(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                     &build, &primCount, &sizes);
 
-            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), sizes.buildScratchSize);
+            const VkDeviceSize scratchSize =
+                    fullRebuild ? sizes.buildScratchSize : sizes.updateScratchSize;
+            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), scratchSize);
             build.scratchData.deviceAddress = scratch.address;
 
             VkAccelerationStructureBuildRangeInfoKHR range{};
