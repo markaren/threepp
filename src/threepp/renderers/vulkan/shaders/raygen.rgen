@@ -773,15 +773,48 @@ void main() {
         }
     }
 
+    // Silhouette MSAA. 1-spp primary at a mesh/sky or mesh/mesh seam can't
+    // represent fractional sub-pixel coverage — one jittered pick lands
+    // fully on one side and atrous correctly refuses to bleed across the
+    // depth/ID edge, leaving visible speckles. Detect such pixels via a
+    // 4-neighbour mesh-ID test on the (unjittered) raster prepass and
+    // fire EDGE_MSAA_EXTRA extra primaries there. Each extra sample reuses
+    // the spp loop's per-sample blue-noise seed → naturally decorrelated
+    // sub-pixel positions, no new RNG plumbing. Hybrid-only (non-hybrid
+    // has no gbuf to read).
+    bool isSilhouette = false;
+    if (hybridOn) {
+        const ivec2 cpx = ivec2(gl_LaunchIDEXT.xy);
+        const ivec2 csz = ivec2(gl_LaunchSizeEXT.xy);
+        const uint  idC = texelFetch(gbufIdsTex, cpx, 0).x;
+        const ivec2 off4[4] = ivec2[4](ivec2( 1, 0), ivec2(-1, 0),
+                                       ivec2( 0, 1), ivec2( 0,-1));
+        for (int k = 0; k < 4; ++k) {
+            const ivec2 p = clamp(cpx + off4[k], ivec2(0), csz - ivec2(1));
+            if (texelFetch(gbufIdsTex, p, 0).x != idC) {
+                isSilhouette = true;
+                break;
+            }
+        }
+    }
+    // 2×2 MSAA pattern at silhouettes (1 base + 3 extra). Edge pixels are
+    // typically 5–15 % of frame, so absolute cost is modest even with the
+    // primary cache disabled below.
+    const uint EDGE_MSAA_EXTRA = 3u;
+    const uint effSpp = spp + (isSilhouette ? EDGE_MSAA_EXTRA : 0u);
+
     // Per-spp loop optimization controls.
     //   canCachePrimary: hybrid + !perSppJitter means primary direction is
     //     identical across spp samples → primary chit's NEE/RIS/GI/caustic
     //     gather (which depend on the surface, not bs.dir) can be computed
     //     once at s=0 and reused for s>=1 via inFlags bit 5 (BSDF_ONLY).
+    //     Disabled at silhouettes — each MSAA sub-sample needs its own
+    //     primary direction + fresh chit shade (different surface visible
+    //     at different sub-pixel positions, by definition).
     //   primaryHybridSky early-out below covers the sky-pixel case
     //     separately so the loop can skip entirely.
     const bool perSppJitter   = (pc.motionFlags & 32u) != 0u;
-    const bool canCachePrimary = hybridOn && !perSppJitter;
+    const bool canCachePrimary = hybridOn && !perSppJitter && !isSilhouette;
     vec3 cachedDirect = vec3(0.0);
 
     // Hybrid sky early-out: gbuf at this pixel is sky → primary direction is
@@ -791,23 +824,24 @@ void main() {
     // volumetric integrator needs per-spp scatter samples (each spp may
     // scatter at a different depth + direction), so we fall through to the
     // regular spp loop which performs the correct integration.
-    if (hybridOn && primaryHybridSky && !fogEnabled()) {
+    if (hybridOn && primaryHybridSky && !fogEnabled() && !isSilhouette) {
         const float sppF   = float(spp);
         radianceSum        = primarySkyEnv * sppF;
         const float lumSky = dot(primarySkyEnv, vec3(0.2126, 0.7152, 0.0722));
         lum2Sum            = lumSky * lumSky * sppF;
     } else
-    for (uint s = 0u; s < spp; ++s) {
+    for (uint s = 0u; s < effSpp; ++s) {
         // Per-sample sub-frame index — each in-frame sample needs its own
-        // jitter and seed to actually decorrelate.
+        // jitter and seed to actually decorrelate. spp (not effSpp) keeps
+        // the Halton/blue-noise stride invariant — silhouette MSAA samples
+        // (s ≥ spp) draw the next slots in the same global sequence.
         const uint subIdx = pc.sampleIndex * spp + s;
         const uint sIdx   = subIdx + 1u;
         // Per-spp blue-noise jitter from the void-and-cluster tile.
-        // When perSppJitter is on (motionFlags bit 5), hybrid also gets
-        // independent sub-pixel jitter per sample — combining hybrid TAA
-        // noise suppression with multi-sample AA convergence.
-        // (perSppJitter is hoisted above the spp loop now.)
-        const vec2 jitter = (hybridOn && !perSppJitter)
+        // canCachePrimary == hybridOn && !perSppJitter && !isSilhouette;
+        // when false (non-hybrid, perSppJitter, or silhouette MSAA), each
+        // sample needs its own sub-pixel jitter to decorrelate.
+        const vec2 jitter = canCachePrimary
                 ? vec2(0.0)
                 : vec2(blueNoise(gl_LaunchIDEXT.xy, sIdx, 0u) - 0.5,
                        blueNoise(gl_LaunchIDEXT.xy, sIdx, 1u) - 0.5);
@@ -825,10 +859,11 @@ void main() {
         vec3 radiance   = vec3(0.0);
         vec3 throughput = vec3(1.0);
         vec3 origin     = originWS.xyz;
-        // Hybrid without perSppJitter: every spp uses the same gbuf-derived
-        // primary direction. With perSppJitter (or non-hybrid): each spp
-        // gets its own jittered direction for multi-sample AA.
-        vec3 dir        = (hybridOn && !perSppJitter) ? primaryDirHybrid : dirWS;
+        // Hybrid + cacheable primary: every spp uses the same gbuf-derived
+        // primary direction. Otherwise (non-hybrid, perSppJitter, or
+        // silhouette MSAA): each spp gets its own jittered direction so
+        // the sub-pixel samples actually integrate fractional coverage.
+        vec3 dir        = canCachePrimary ? primaryDirHybrid : dirWS;
         // True when the prior shade event ran env NEE — used to gate the MIS
         // half-env weight on the next miss. Transmission events skip NEE and
         // clear this so the env is read at full strength on the bounce-into-miss.
@@ -1578,7 +1613,7 @@ void main() {
                         // without false-positives on sunlit diffuse surfaces
                         // (~1-3 lum scene-linear under typical exposure).
                         const float primaryLum = dot(radianceSum,
-                                vec3(0.2126, 0.7152, 0.0722)) / float(spp);
+                                vec3(0.2126, 0.7152, 0.0722)) / float(effSpp);
                         const float emissiveT = clamp((primaryLum - 10.0) / 20.0, 0.0, 1.0);
                         const float decayT = max(viewDepT, emissiveT);
                         // FC requirement from the view-dep math: to flush a
@@ -1628,11 +1663,13 @@ void main() {
     // Sky pixel with camMoved: falls through both branches → histFc=0 cold-start.
     // Sky pixel with only foreign-mesh motion: self-tapped above (no change).
 
-    // radianceSum is the SUM of `spp` per-sample radiance values. Treat each
-    // sample as one effective sample in the running mean: blend weight = spp,
-    // FC advances by spp. Equivalent to averaging then weighting by spp, but
-    // skips the divide.
-    const float sppF  = float(spp);
+    // radianceSum is the SUM of `effSpp` per-sample radiance values (= spp
+    // for interior pixels, spp + EDGE_MSAA_EXTRA at detected silhouettes).
+    // Each sample counts as one effective sample in the running mean:
+    // blend weight = effSpp, FC advances by effSpp. Silhouette pixels
+    // accumulate FC slightly faster, which is correct — they're genuinely
+    // less noisy per frame, so atrous's σ_lum sees lower variance there too.
+    const float sppF  = float(effSpp);
     const vec3  mean  = (histMean * histFc + radianceSum) / (histFc + sppF);
     const float newFc = min(histFc + sppF, 4096.0);
     // M2 update: same FC weight as mean. Equivalent to:
