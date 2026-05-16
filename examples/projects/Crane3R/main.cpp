@@ -82,9 +82,7 @@ int main() {
 
     Canvas canvas{"Crane3R", {{"size", WindowSize{1280, 720}}, {"antialiasing", 8}}};
     auto renderer = createRenderer(canvas);
-    renderer->autoClear = false;
     renderer->shadowMap().enabled = true;
-    renderer->setClearColor(Color::aliceblue);
 
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.01, 100);
     camera->position.set(-15, 8, 15);
@@ -92,6 +90,7 @@ int main() {
     OrbitControls controls(*camera, canvas);
 
     auto scene = Scene::create();
+    scene->background = Color::aliceblue;
 
     auto grid = createGrid();
     scene->add(grid);
@@ -111,16 +110,18 @@ int main() {
     scene->add(light1);
     scene->add(light2);
 
-    HUD hud(*renderer);
     FontLoader fontLoader;
     const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/helvetiker_regular.typeface.json");
 
-    auto handle = TextSprite(font, 20.f * monitor::contentScale().first);
-    handle.setText("Loading model..");
-    handle.setColor(Color::black);
-    hud.add(handle).setNormalizedPosition({0.5, 0.5})
-                            .setHorizontalAlignment(HUD::HorizontalAlignment::CENTER)
-                            .setVerticalAlignment(HUD::VerticalAlignment::CENTER);
+    auto handle = TextSprite::create(font, 20.f * monitor::contentScale().first);
+    handle->setText("Loading model..");
+    handle->setColor(Color::black);
+    handle->setVerticalAlignment(TextSprite::VerticalAlignment::Center);
+    handle->setHorizontalAlignment(TextSprite::HorizontalAlignment::Center);
+    handle->screenSpace = true;
+    handle->screenAnchor.set(0.5f, 0.5f);
+    handle->position.set(0.f, 0.f, 0.f);
+    scene->add(handle);
 
     Kine kine = KineBuilder()
                         .addRevoluteJoint(Vector3::Y(), {-90.f, 90.f})
@@ -148,7 +149,7 @@ int main() {
                 break;
             }
         }
-        hud.remove(handle);
+        scene->remove(*handle);
         endEffectorHelper->visible = true;
     });
 
@@ -190,7 +191,6 @@ int main() {
 
         transformControls.visible = targetHelper->visible;
 
-        renderer->clear();
         renderer->render(*scene, *camera);
 
         if (crane) {
@@ -219,10 +219,6 @@ int main() {
             crane->setTargetValues(asAngles(ui.values, Angle::Repr::DEG));
 
             crane->update(dt);
-
-        } else {
-
-            hud.render();
         }
     });
 }

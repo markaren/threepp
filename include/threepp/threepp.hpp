@@ -29,7 +29,6 @@
 
 #include "threepp/loaders/AsyncGroup.hpp"
 #include "threepp/objects/Group.hpp"
-#include "threepp/objects/HUD.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Points.hpp"

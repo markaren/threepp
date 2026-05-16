@@ -85,6 +85,16 @@ struct GLRenderer::Impl {
     gl::GLRenderList* currentRenderList = nullptr;
     gl::GLRenderState* currentRenderState = nullptr;
 
+    // Screen-space sprite overlay queue. Collected during projectObject
+    // when a Sprite has screenSpace=true; drained after the regular
+    // opaque/transparent passes by renderScreenSpaceSprites. Empty list =
+    // zero overhead for scenes without screen-space content.
+    std::vector<Sprite*> screenSpaceSprites_;
+    // Internal ortho camera the screen-space pass projects through. Lazy-
+    // created on first use; bounds rebuilt each frame from getSize() so
+    // window resize is implicit.
+    std::shared_ptr<OrthographicCamera> screenSpaceCam_;
+
     std::vector<gl::GLRenderList*> renderListStack;
     std::vector<gl::GLRenderState*> renderStateStack;
 
@@ -298,6 +308,14 @@ struct GLRenderer::Impl {
         if (!opaqueObjects.empty()) renderObjects(opaqueObjects, scene, camera);
         if (!transmissiveObjects.empty()) renderTransmissiveObjects(opaqueObjects, transmissiveObjects, scene, camera);
         if (!transparentObjects.empty()) renderObjects(transparentObjects, scene, camera);
+
+        // Screen-space sprite overlay. Drained after the main passes so
+        // these draws sit visually on top of all 3D content. List is
+        // populated during projectObject when a Sprite has screenSpace=true.
+        if (!screenSpaceSprites_.empty()) {
+            renderScreenSpaceSprites(scene);
+            screenSpaceSprites_.clear();
+        }
 
         //
 
@@ -515,7 +533,17 @@ struct GLRenderer::Impl {
 
             } else if (auto sprite = object->as<Sprite>()) {
 
-                if (!object->frustumCulled || _frustum.intersectsSprite(*sprite)) {
+                // Screen-space sprites bypass the regular opaque/transparent
+                // lists — they're drawn after main rendering through an
+                // internal ortho camera, with their world matrix synthesised
+                // from screenAnchor + viewport + position at draw time. They
+                // don't need frustum culling or sort-by-depth since they're
+                // overlaid 2D.
+                if (sprite->screenSpace) {
+                    if (sprite->material() && sprite->material()->visible) {
+                        screenSpaceSprites_.push_back(sprite);
+                    }
+                } else if (!object->frustumCulled || _frustum.intersectsSprite(*sprite)) {
 
                     if (sortObjects) {
 
@@ -612,6 +640,60 @@ struct GLRenderer::Impl {
         setRenderTarget(currentRenderTarget, 0, 0);
 
         renderObjects(transmissiveObjects, scene, camera);
+    }
+
+    // Drain screenSpaceSprites_, drawing each through an internal ortho
+    // camera sized to the current viewport. Sprite world matrices are
+    // synthesised from screenAnchor + viewport + position (CSS-style:
+    // negative offsets read as "from the opposite edge"). Depth test is
+    // disabled for the duration of the pass so screen-space sprites
+    // always sit visually on top of 3D content regardless of what's in
+    // the depth buffer.
+    void renderScreenSpaceSprites(Object3D* scene) {
+        const float w = static_cast<float>(_size.width());
+        const float h = static_cast<float>(_size.height());
+        if (w <= 0.f || h <= 0.f) return;
+
+        if (!screenSpaceCam_) {
+            screenSpaceCam_ = OrthographicCamera::create(0.f, w, h, 0.f, 0.1f, 10.f);
+            screenSpaceCam_->position.z = 1.f;
+        } else {
+            screenSpaceCam_->left   = 0.f;
+            screenSpaceCam_->right  = w;
+            screenSpaceCam_->top    = h;
+            screenSpaceCam_->bottom = 0.f;
+        }
+        screenSpaceCam_->updateProjectionMatrix();
+        screenSpaceCam_->updateMatrixWorld(true);
+
+        // Disable depth test for the pass — sprites always on top.
+        state.depthBuffer.setTest(false);
+
+        for (auto* sprite : screenSpaceSprites_) {
+            if (!sprite->visible) continue;
+
+            // Synthesise pixel-space world matrix from anchor + position.
+            // Save the user's matrixWorld and restore after the draw so the
+            // sprite's state is unchanged from external observers.
+            const float pxX = sprite->screenAnchor.x * w + static_cast<float>(sprite->position.x);
+            const float pxY = sprite->screenAnchor.y * h + static_cast<float>(sprite->position.y);
+            Matrix4 saved = *sprite->matrixWorld;
+            sprite->matrixWorld->compose(Vector3(pxX, pxY, 0.f),
+                                         sprite->quaternion,
+                                         sprite->scale);
+
+            const auto geometry = objects.update(sprite);
+            auto* material = sprite->material().get();
+            if (material && material->visible) {
+                renderObject(sprite, scene, screenSpaceCam_.get(),
+                             geometry, material, std::nullopt);
+            }
+
+            *sprite->matrixWorld = saved;
+        }
+
+        // Re-enable depth test for downstream / next-frame work.
+        state.depthBuffer.setTest(true);
     }
 
     void renderObjects(const std::vector<gl::RenderItem*>& renderList, Object3D* scene, Camera* camera) {

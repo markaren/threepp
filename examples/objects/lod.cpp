@@ -10,7 +10,6 @@ int main() {
 
     Canvas canvas("LOD", {{"aa", 4}});
     auto renderer = createRenderer(canvas);
-    renderer->autoClear = false;
 
     Scene scene;
     PerspectiveCamera camera(60, canvas.aspect(), 0.1f, 10);
@@ -43,24 +42,29 @@ int main() {
         renderer->setSize(size);
     });
 
-    HUD hud(*renderer);
     FontLoader fontLoader;
     const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/gentilis_bold.typeface.json");
 
-    TextSprite handle1(font, 20.f * monitor::contentScale().first);
-    handle1.setColor(Color::gray);
-    hud.add(handle1).setNormalizedPosition({0.f, 0.05f}).setVerticalAlignment(HUD::VerticalAlignment::ABOVE);
+    auto handle1 = TextSprite::create(font, 20.f * monitor::contentScale().first);
+    handle1->setColor(Color::gray);
+    handle1->setVerticalAlignment(TextSprite::VerticalAlignment::Above);
+    handle1->screenSpace = true;
+    handle1->screenAnchor.set(0.f, 0.05f);   // 5% from bottom
+    handle1->position.set(5.f, 5.f, 0.f);    // + 5 px margin
+    scene.add(handle1);
 
-    TextSprite handle2(font, 20.f * monitor::contentScale().first);
-    handle2.setColor(Color::gray);
-    hud.add(handle2).setVerticalAlignment(HUD::VerticalAlignment::ABOVE);
+    auto handle2 = TextSprite::create(font, 20.f * monitor::contentScale().first);
+    handle2->setColor(Color::gray);
+    handle2->setVerticalAlignment(TextSprite::VerticalAlignment::Above);
+    handle2->screenSpace = true;
+    handle2->screenAnchor.set(0.f, 0.f);     // bottom edge
+    handle2->position.set(5.f, 5.f, 0.f);    // 5 px margin
+    scene.add(handle2);
 
     canvas.animate([&] {
-        handle1.setText("LOD1 level: " + std::to_string(lod1.getCurrentLevel()));
-        handle2.setText("LOD2 level: " + std::to_string(lod2.getCurrentLevel()));
+        handle1->setText("LOD1 level: " + std::to_string(lod1.getCurrentLevel()));
+        handle2->setText("LOD2 level: " + std::to_string(lod2.getCurrentLevel()));
 
-        renderer->clear();
         renderer->render(scene, camera);
-        hud.render();
     });
 }

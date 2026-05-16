@@ -22,6 +22,7 @@
 #include "threepp/lights/lights.hpp"
 #include "threepp/lights/LightShadow.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
+#include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/renderers/wgpu/WgpuPathTracer.hpp"
@@ -296,6 +297,13 @@ struct WgpuRenderer::Impl {
 
     // Render list for opaque/transparent sorting
     RenderList renderList_;
+
+    // Screen-space sprite overlay queue. Collected in collectRenderables
+    // when Sprite::screenSpace=true; drained after the regular passes
+    // through an internal ortho camera. Empty list = zero overhead for
+    // scenes without screen-space content.
+    std::vector<Sprite*> screenSpaceSprites_;
+    std::shared_ptr<OrthographicCamera> screenSpaceCam_;
 
     // Render info/statistics
     struct {
@@ -2552,6 +2560,102 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             renderItem(pass, item, projectionMatrix, viewMatrix, camera, frameCtx);
         }
 
+        // Screen-space sprite overlay. Closes the main pass, opens a fresh
+        // one with depth cleared (so sprites are never occluded by 3D
+        // content) and color preserved. Each sprite's world matrix is
+        // synthesised from screenAnchor + viewport + position; original
+        // matrixWorld is saved + restored to avoid mutating user state.
+        if (!screenSpaceSprites_.empty()) {
+            wgpuRenderPassEncoderEnd(pass);
+            wgpuRenderPassEncoderRelease(pass);
+
+            const float wF = static_cast<float>(attachW);
+            const float hF = static_cast<float>(attachH);
+            if (!screenSpaceCam_) {
+                screenSpaceCam_ = OrthographicCamera::create(0.f, wF, hF, 0.f, 0.1f, 10.f);
+                screenSpaceCam_->position.z = 1.f;
+            } else {
+                screenSpaceCam_->left   = 0.f;
+                screenSpaceCam_->right  = wF;
+                screenSpaceCam_->top    = hF;
+                screenSpaceCam_->bottom = 0.f;
+            }
+            screenSpaceCam_->updateProjectionMatrix();
+            screenSpaceCam_->updateMatrixWorld(true);
+
+            WGPURenderPassColorAttachment ssColor{};
+            ssColor.view = colorView;
+            ssColor.resolveTarget = resolveView;
+            ssColor.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+            ssColor.loadOp = WGPULoadOp_Load;
+            ssColor.storeOp = WGPUStoreOp_Store;
+
+            WGPURenderPassDepthStencilAttachment ssDepth{};
+            ssDepth.view = depthView;
+            ssDepth.depthLoadOp = WGPULoadOp_Clear;
+            ssDepth.depthStoreOp = WGPUStoreOp_Store;
+            ssDepth.depthClearValue = 1.0f;
+
+            WGPURenderPassDescriptor ssDesc{};
+            ssDesc.label = WGPUStringView{"screenspace_pass", sizeof("screenspace_pass") - 1};
+            ssDesc.colorAttachmentCount = 1;
+            ssDesc.colorAttachments = &ssColor;
+            ssDesc.depthStencilAttachment = &ssDepth;
+
+            pass = wgpuCommandEncoderBeginRenderPass(encoder, &ssDesc);
+            if (currentRenderTarget_ && !viewportExplicit_) {
+                auto& rtVp = currentRenderTarget_->viewport;
+                wgpuRenderPassEncoderSetViewport(pass, rtVp.x, rtVp.y, rtVp.z, rtVp.w, 0.0f, 1.0f);
+            } else {
+                float vw = (std::min)(viewport_.w, static_cast<float>(attachW));
+                float vh = (std::min)(viewport_.h, static_cast<float>(attachH));
+                wgpuRenderPassEncoderSetViewport(pass, viewport_.x, viewport_.y, vw, vh, 0.0f, 1.0f);
+            }
+            wgpuRenderPassEncoderSetScissorRect(pass, 0, 0, attachW, attachH);
+
+            // threepp's projection matrices follow the GL convention: NDC z
+            // in [-1, 1]. WGPU clips on [0, 1] (matches Vulkan). Without
+            // this remap, the sprite at view-z near the ortho near plane
+            // produces clip.z < 0 and is culled — same failure mode I fixed
+            // for the Vulkan overlay shader earlier. Apply the same
+            // 0.5*z + 0.5*w transform the main render() body uses (line 2090).
+            Matrix4 ssProj = screenSpaceCam_->projectionMatrix;
+            {
+                auto& e = ssProj.elements;
+                e[2]  = 0.5f * e[2]  + 0.5f * e[3];
+                e[6]  = 0.5f * e[6]  + 0.5f * e[7];
+                e[10] = 0.5f * e[10] + 0.5f * e[11];
+                e[14] = 0.5f * e[14] + 0.5f * e[15];
+            }
+            const Matrix4& ssView = screenSpaceCam_->matrixWorldInverse;
+
+            // Cache one RenderItem per sprite via the existing pool so the
+            // resolver/sort machinery in RenderList works identically. We
+            // append to the same renderList_ — items are walked once via
+            // the local screenSpaceSprites_ vector, not through the lists.
+            for (auto* sprite : screenSpaceSprites_) {
+                if (!sprite->visible) continue;
+                auto* material = sprite->material().get();
+                if (!material || !material->visible) continue;
+
+                const float pxX = sprite->screenAnchor.x * wF + static_cast<float>(sprite->position.x);
+                const float pxY = sprite->screenAnchor.y * hF + static_cast<float>(sprite->position.y);
+                Matrix4 saved = *sprite->matrixWorld;
+                sprite->matrixWorld->compose(Vector3(pxX, pxY, 0.f),
+                                             sprite->quaternion,
+                                             sprite->scale);
+
+                RenderItem stub{};
+                stub.object   = sprite;
+                stub.geometry = getSpriteGeometry();
+                stub.material = material;
+                renderItem(pass, &stub, ssProj, ssView, *screenSpaceCam_, frameCtx);
+
+                *sprite->matrixWorld = saved;
+            }
+            screenSpaceSprites_.clear();
+        }
+
         wgpuRenderPassEncoderEnd(pass);
         wgpuRenderPassEncoderRelease(pass);
 
@@ -2837,7 +2941,15 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         } else if (auto lod = object.as<LOD>()) {
             if (lod->autoUpdate) lod->update(camera);
         } else if (auto sprite = object.as<Sprite>()) {
-            if (!object.frustumCulled || frustum_.intersectsSprite(*sprite)) {
+            // Screen-space sprites bypass the regular render lists — drained
+            // after the main passes by renderScreenSpaceSprites() with an
+            // internal ortho camera. No frustum culling / depth sort needed
+            // since they're 2D overlays.
+            if (sprite->screenSpace) {
+                if (sprite->material() && sprite->material()->visible) {
+                    screenSpaceSprites_.push_back(sprite);
+                }
+            } else if (!object.frustumCulled || frustum_.intersectsSprite(*sprite)) {
                 if (scope.sortObjects) {
                     _vector3.setFromMatrixPosition(*sprite->matrixWorld)
                             .applyMatrix4(projScreenMatrix);

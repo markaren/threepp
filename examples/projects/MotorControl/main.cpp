@@ -87,7 +87,6 @@ int main() {
     Canvas canvas("MotorController", {{"aa", 6}});
     const auto size = canvas.size();
     auto renderer = createRenderer(canvas);
-    renderer->autoClear = false;
 
     Scene scene;
     scene.background = Color::white;
@@ -111,22 +110,26 @@ int main() {
     auto motorVisuals = VisualisationObject();
     scene.add(motorVisuals);
 
-    HUD hud(*renderer);
-
     FontLoader fontLoader;
     auto font = fontLoader.defaultFont();
 
-    auto targetText = TextSprite(font, 20.f*monitor::contentScale().first);
-    targetText.setText("Target position: " + std::to_string(targetPosition));
-    targetText.setColor(Color::black);
-    targetText.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
-    hud.add(targetText).setNormalizedPosition({0.f, 0.05f});
+    auto targetText = TextSprite::create(font, 20.f*monitor::contentScale().first);
+    targetText->setText("Target position: " + std::to_string(targetPosition));
+    targetText->setColor(Color::black);
+    targetText->setVerticalAlignment(TextSprite::VerticalAlignment::Above);
+    targetText->screenSpace = true;
+    targetText->screenAnchor.set(0.f, 0.05f);     // 5% from bottom
+    targetText->position.set(5.f, 5.f, 0.f);
+    scene.add(targetText);
 
-    auto measuredText =  TextSprite(font, 20*monitor::contentScale().first);
-    measuredText.setText("Measured position: " + std::to_string(math::radToDeg(motor.getPosition())));
-    measuredText.setColor(Color::black);
-    measuredText.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
-    hud.add(measuredText);
+    auto measuredText = TextSprite::create(font, 20*monitor::contentScale().first);
+    measuredText->setText("Measured position: " + std::to_string(math::radToDeg(motor.getPosition())));
+    measuredText->setColor(Color::black);
+    measuredText->setVerticalAlignment(TextSprite::VerticalAlignment::Above);
+    measuredText->screenSpace = true;
+    measuredText->screenAnchor.set(0.f, 0.f);     // bottom-left
+    measuredText->position.set(5.f, 5.f, 0.f);
+    scene.add(measuredText);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.left = -frustumSize * size.aspect() / 2;
@@ -145,7 +148,7 @@ int main() {
 
         ImGui::Text("Target position");
         if (ImGui::SliderFloat("deg", &targetPosition, 0, 180)) {
-            targetText.setText("Target position: " + std::to_string(targetPosition));
+            targetText->setText("Target position: " + std::to_string(targetPosition));
         }
         ImGui::Text("PID gains");
         ImGui::SliderFloat("kp", &params.kp, 0.01f, 10.f);
@@ -163,7 +166,7 @@ int main() {
         double measuredPosition = motor.getPosition();
 
         if (it++ % 10 == 2) {
-            measuredText.setText("Measured position: " + std::to_string(math::radToDeg(measuredPosition)));
+            measuredText->setText("Measured position: " + std::to_string(math::radToDeg(measuredPosition)));
         }
 
         double error = math::degToRad(targetPosition) - measuredPosition;
@@ -171,9 +174,7 @@ int main() {
 
         motor.update(gain, dt);
 
-        renderer->clear();
         renderer->render(scene, camera);
-        hud.render();
         ui.render();
 
         motorVisuals.setTargetPos(math::degToRad(targetPosition));

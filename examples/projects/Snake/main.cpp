@@ -13,7 +13,6 @@ int main() {
     int height = monitor::monitorSize().height() / 2;
     canvas.setSize({height, height});
     auto renderer = createRenderer(canvas);
-    renderer->autoClear = false;
 
     auto scene = SnakeScene(game);
     canvas.addKeyListener(scene);
@@ -23,14 +22,16 @@ int main() {
         0, static_cast<float>(game.gridSize()));
     camera.position.z = 1;
 
-    HUD hud(*renderer);
     FontLoader fontLoader;
     const auto font = fontLoader.defaultFont();
 
-    TextSprite handle(font, 20.f * monitor::contentScale().first);
-    handle.setText("Press 'r' to reset");
-    handle.setColor(Color::red);
-    hud.add(handle).setNormalizedPosition({0, 1});
+    auto handle = TextSprite::create(font, 20.f * monitor::contentScale().first);
+    handle->setText("Press 'r' to reset");
+    handle->setColor(Color::red);
+    handle->screenSpace = true;
+    handle->screenAnchor.set(0.f, 1.f);    // top-left of viewport
+    handle->position.set(5.f, -5.f, 0.f);  // 5 px margin in from top-left
+    scene.add(handle);
 
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -52,8 +53,6 @@ int main() {
             scene.update();
         }
 
-        renderer->clear();
         renderer->render(scene, camera);
-        hud.render();
     });
 }

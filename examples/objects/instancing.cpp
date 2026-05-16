@@ -44,7 +44,6 @@ int main() {
 
     Canvas canvas("Instancing", {{"aa", 4}, {"vsync", false}});
     auto renderer = createRenderer(canvas);
-    renderer->autoClear = false;
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
@@ -87,13 +86,15 @@ int main() {
     };
     canvas.setIOCapture(&capture);
 
-    HUD hud(*renderer);
     FontLoader fontLoader;
     const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/helvetiker_regular.typeface.json");
 
-    auto handle = TextSprite(font, 20.f);
-    handle.setColor(Color::black);
-    hud.add(handle).setNormalizedPosition({0, 1});
+    auto handle = TextSprite::create(font, 20.f);
+    handle->setColor(Color::black);
+    handle->screenSpace = true;
+    handle->screenAnchor.set(0.f, 1.f);   // top-left
+    handle->position.set(5.f, -5.f, 0.f); // 5 px margin from top-left
+    scene->add(handle);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -129,13 +130,10 @@ int main() {
 
         counter.update(clock.getElapsedTime());
         if (it++ % 60 == 0) {
-            handle.setText("FPS: " + std::to_string(counter.fps));
+            handle->setText("FPS: " + std::to_string(counter.fps));
         }
 
-        renderer->clear();
         renderer->render(*scene, *camera);
-
-        hud.render();
         ui.render();
     });
 }
