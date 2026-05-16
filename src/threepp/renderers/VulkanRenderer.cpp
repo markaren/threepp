@@ -235,6 +235,15 @@ namespace threepp {
             // alloc/free that was the original oneshot cost.
             Buffer blasScratch {};
             VkDeviceSize blasScratchSize = 0;
+            // Per-frame BLAS-refit state. Same pattern as DisplacedMeshState:
+            // initial AS is BUILD (buildBlasFor) with ALLOW_UPDATE, then per-
+            // frame refits via MODE_UPDATE for 63 of every 64 frames. Periodic
+            // full rebuild keeps the BVH quality from drifting under large
+            // articulated pose changes. Skinned-mesh vertex movement is
+            // typically larger frame-to-frame than ocean displacement, so the
+            // periodic rebuild matters more here.
+            uint32_t blasRefitCounter = 0;
+            static constexpr uint32_t kBlasFullRebuildInterval = 64;
         };
         std::unordered_map<const SkinnedMesh*, std::unique_ptr<SkinnedMeshState>> skinnedMeshStates;
 
@@ -9062,10 +9071,17 @@ namespace threepp {
                     vkCmdPipelineBarrier2(cb, &dep);
                 }
 
-                // BLAS rebuild per state — same code path as the old
-                // refreshSkinnedBlas, but recorded into the main cmd buffer
-                // and using each state's persistent scratch buffer.
+                // BLAS rebuild per state — refit (MODE_UPDATE) by default,
+                // with periodic full rebuild every kBlasFullRebuildInterval
+                // frames to keep the BVH balanced under articulated motion.
+                // Persistent scratch is sized to buildScratchSize, which is
+                // always >= updateScratchSize, so the same buffer serves both.
                 for (auto* st : pendingSkinnedRebuilds_) {
+                    const bool fullRebuild =
+                            st->blasRefitCounter >=
+                            SkinnedMeshState::kBlasFullRebuildInterval;
+                    st->blasRefitCounter = fullRebuild ? 0u
+                                                       : (st->blasRefitCounter + 1u);
                     VkAccelerationStructureGeometryTrianglesDataKHR triData{};
                     triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
                     triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
@@ -9088,9 +9104,13 @@ namespace threepp {
                     blasBuild.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
                     blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
                                       VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
-                    blasBuild.mode  = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+                    blasBuild.mode  = fullRebuild
+                            ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
+                            : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
                     blasBuild.geometryCount = 1;
                     blasBuild.pGeometries   = &blasGeom;
+                    blasBuild.srcAccelerationStructure =
+                            fullRebuild ? VK_NULL_HANDLE : st->blas->as;
                     blasBuild.dstAccelerationStructure = st->blas->as;
                     blasBuild.scratchData.deviceAddress = st->blasScratch.address;
                     VkAccelerationStructureBuildRangeInfoKHR range{};
