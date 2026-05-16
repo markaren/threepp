@@ -79,7 +79,6 @@ int main() {
 
     Canvas canvas{Canvas::Parameters().title("Youbot-kine").size({1280, 720}).antialiasing(8)};
     auto renderer = createRenderer(canvas);
-    renderer->autoClear = false;
     renderer->toneMapping = ToneMapping::ACESFilmic;
 
 
@@ -105,15 +104,16 @@ int main() {
     FontLoader fontLoader;
     const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/helvetiker_regular.typeface.json");
 
-    TextSprite textHandle(font);
-    textHandle.setColor(Color::black);
-    textHandle.setText("Loading model..");
-    textHandle.setVerticalAlignment(TextSprite::VerticalAlignment::Center);
-    textHandle.setHorizontalAlignment(TextSprite::HorizontalAlignment::Center);
-    textHandle.setWorldScale(20*monitor::contentScale().first);
-
-    HUD hud(*renderer);
-    hud.add(textHandle).setNormalizedPosition({0.5, 0.5});
+    auto textHandle = TextSprite::create(font);
+    textHandle->setColor(Color::black);
+    textHandle->setText("Loading model..");
+    textHandle->setVerticalAlignment(TextSprite::VerticalAlignment::Center);
+    textHandle->setHorizontalAlignment(TextSprite::HorizontalAlignment::Center);
+    textHandle->setWorldScale(20*monitor::contentScale().first);
+    textHandle->screenSpace = true;
+    textHandle->screenAnchor.set(0.5f, 0.5f);          // viewport centre
+    textHandle->position.set(-5.f, -5.f, 0.f);         // matches old HUD margin sign at pos.x/y >= 0.5
+    scene->add(textHandle);
 
     Youbot* youbot = nullptr;
     std::unique_ptr<KeyController> keyController;
@@ -138,12 +138,13 @@ int main() {
             endEffectorHelper->visible = true;
             keyController = std::make_unique<KeyController>(*youbot);
             canvas.addKeyListener(*keyController);
-            textHandle.setText("Use WASD keys to steer robot");
-            hud.getStoredOptions(textHandle)->setNormalizedPosition(0, 0)
-                    .setVerticalAlignment(HUD::VerticalAlignment::ABOVE)
-                    .setHorizontalAlignment(HUD::HorizontalAlignment::LEFT);
+            textHandle->setText("Use WASD keys to steer robot");
+            textHandle->setVerticalAlignment(TextSprite::VerticalAlignment::Above);
+            textHandle->setHorizontalAlignment(TextSprite::HorizontalAlignment::Left);
+            textHandle->screenAnchor.set(0.f, 0.f);    // bottom-left
+            textHandle->position.set(5.f, 5.f, 0.f);   // 5 px margin
         } else {
-            textHandle.setText("Error loading model");
+            textHandle->setText("Error loading model");
         }
     });
 
@@ -182,7 +183,6 @@ int main() {
     canvas.animate([&] {
         const auto dt = clock.getDelta();
 
-        renderer->clear();
         renderer->render(*scene, *camera);
 
         if (youbot) {
@@ -210,7 +210,5 @@ int main() {
             youbot->setJointValues(ui.values);
             keyController->update(dt);
         }
-
-        hud.render();
     });
 }

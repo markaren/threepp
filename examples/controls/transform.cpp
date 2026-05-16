@@ -30,7 +30,6 @@ int main() {
     auto renderer = createRenderer(canvas);
     renderer->shadowMap().enabled = true;
     renderer->shadowMap().type = ShadowMap::PFC;
-    renderer->autoClear = false;
 
     PerspectiveCamera camera(60, canvas.aspect(), 0.1f, 1000.f);
     camera.position.set(0, 5, 5);
@@ -69,15 +68,17 @@ int main() {
     canvas.addKeyListener(keyListener);
 
 
-    HUD hud(*renderer);
     FontLoader fontLoader;
-    TextSprite text(fontLoader.defaultFont(), 20.f * monitor::contentScale().first);
-    text.setText("Press Q to toggle space, W/E/R to change mode, X/Y/Z to toggle axis, hold SHIFT for snapping");
-    text.setColor(Color::white);
-    hud.add(text)
-            .setNormalizedPosition({0.f, 0.f})
-            .setVerticalAlignment(HUD::VerticalAlignment::ABOVE)
-            .setHorizontalAlignment(HUD::HorizontalAlignment::LEFT);
+    auto text = TextSprite::create(fontLoader.defaultFont(),
+                                   20.f * monitor::contentScale().first);
+    text->setText("Press Q to toggle space, W/E/R to change mode, X/Y/Z to toggle axis, hold SHIFT for snapping");
+    text->setColor(Color::white);
+    text->setVerticalAlignment(TextSprite::VerticalAlignment::Above);
+    text->setHorizontalAlignment(TextSprite::HorizontalAlignment::Left);
+    text->screenSpace = true;
+    text->screenAnchor.set(0.f, 0.f);  // bottom-left of viewport
+    text->position.set(5.f, 5.f, 0.f); // 5 px margin
+    scene.add(text);
 
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -88,9 +89,7 @@ int main() {
     });
 
     canvas.animate([&] {
-        renderer->clear();
         renderer->render(scene, camera);
-        hud.render();
     });
 }
 

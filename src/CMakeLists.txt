@@ -170,7 +170,6 @@ set(publicHeaders
 
         "threepp/objects/Bone.hpp"
         "threepp/objects/Group.hpp"
-        "threepp/objects/HUD.hpp"
         "threepp/objects/InstancedMesh.hpp"
         "threepp/objects/Line.hpp"
         "threepp/objects/LineLoop.hpp"
@@ -442,7 +441,6 @@ set(sources
         "threepp/scenes/FogExp2.cpp"
 
         "threepp/objects/Group.cpp"
-        "threepp/objects/HUD.cpp"
         "threepp/objects/Line.cpp"
         "threepp/objects/LineLoop.cpp"
         "threepp/objects/LineSegments.cpp"

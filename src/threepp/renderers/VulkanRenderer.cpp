@@ -1145,6 +1145,14 @@ namespace threepp {
         //                     swapchain). Rare; mostly defensive.
         enum class FrameState { Idle, RecordingPostPT, RecordingOrthoOnly };
         FrameState frameState_ = FrameState::Idle;
+
+        // Internal ortho camera used for the screen-space sprite overlay
+        // auto-call from beginFrameForPT. Lazy-created on first use, then
+        // its bounds + projection are rebuilt each frame to track the
+        // current swapchain extent. Lives here (vs. stack-allocated each
+        // frame) so its matrixWorldInverse / projectionMatrix don't get
+        // rebuilt from scratch when the size hasn't changed.
+        std::shared_ptr<OrthographicCamera> screenSpaceCam_;
         uint32_t   frameImageIndex_ = 0;
         std::chrono::high_resolution_clock::time_point frameStartTp_;
 
@@ -7088,14 +7096,20 @@ namespace threepp {
             return &ins->second;
         }
 
-        // Records HUD-style ortho overlay draws (Sprite / TextSprite) onto
-        // the open swapchain cmd buffer. Called from the renderFrame
-        // dispatcher when render(orthoCamera) is invoked mid-frame.
-        // Walks scene.children, finds Sprite-derived objects, ensures each
-        // atlas is uploaded, allocates a descriptor set bound to the atlas
-        // from this frame's spriteDescPools_ slot, and issues a 6-index
-        // draw. Mesh + Line overlay support is Phase 2's follow-up.
-        void recordOrthoOverlay(Object3D& scene, Camera& camera) {
+        // Records Sprite / TextSprite draws onto the open swapchain cmd
+        // buffer. Two callers:
+        //   1. renderFrame dispatcher when the user calls render(orthoCamera)
+        //      — the legacy HUD pattern. screenSpaceOnly=false: all visible
+        //      Sprites in the supplied scene are drawn at their matrixWorld
+        //      positions through the supplied ortho camera's projection.
+        //   2. beginFrameForPT auto-call after PT body, with the main scene
+        //      and the renderer's internal screen-space ortho camera —
+        //      screenSpaceOnly=true: only Sprites flagged screenSpace are
+        //      drawn, with worldMatrix synthesised from screenAnchor +
+        //      viewportSize + position. Lets users drop a sprite into the
+        //      main scene and have it appear in screen space without a
+        //      separate scene/camera.
+        void recordOrthoOverlay(Object3D& scene, Camera& camera, bool screenSpaceOnly) {
             // Lazy pipeline setup on first HUD overlay of the program.
             if (overlaySpritePipeline_ == VK_NULL_HANDLE) {
                 createSpriteOverlayPipeline();
@@ -7117,17 +7131,24 @@ namespace threepp {
                   "vkResetDescriptorPool(sprite)");
 
             // Collect visible sprites. traverseVisible skips invisible
-            // subtrees the same way the PT walk does.
+            // subtrees the same way the PT walk does. effWorld captures the
+            // world matrix used for the draw — for screenSpace sprites we
+            // synthesise this from screenAnchor + viewport + position
+            // instead of using sp->matrixWorld (which carries the user's
+            // 3D placement, irrelevant in screen-space mode).
+            const VkExtent2D extEarly = ctx->swapchainExtent();
             struct SpriteDraw {
                 Sprite* sprite = nullptr;
                 std::shared_ptr<Texture> atlas;
                 float color[4]{1.f,1.f,1.f,1.f};
                 float rotation = 0.f;
+                Matrix4 effWorld;
             };
             std::vector<SpriteDraw> draws;
             scene.traverseVisible([&](Object3D& o) {
                 auto* sp = dynamic_cast<Sprite*>(&o);
                 if (!sp) return;
+                if (screenSpaceOnly && !sp->screenSpace) return;
                 auto mat = sp->material();
                 if (!mat) return;
                 auto* mm = dynamic_cast<MaterialWithMap*>(mat.get());
@@ -7143,6 +7164,23 @@ namespace threepp {
                 d.color[3] = mat->opacity;
                 if (auto* mr = dynamic_cast<MaterialWithRotation*>(mat.get())) {
                     d.rotation = mr->rotation;
+                }
+                if (sp->screenSpace) {
+                    // Pixel position = anchor·viewport + position.xy.
+                    // Negative offsets read as "from the opposite edge".
+                    const float pxX = sp->screenAnchor.x * float(extEarly.width)
+                                    + static_cast<float>(sp->position.x);
+                    const float pxY = sp->screenAnchor.y * float(extEarly.height)
+                                    + static_cast<float>(sp->position.y);
+                    // Compose: T(pxX,pxY,0) * R(quaternion) * S(scale). Reuse
+                    // the sprite's own quaternion + scale (TextSprite::applyScale
+                    // packs glyph-atlas pixel dimensions into scale.xy).
+                    d.effWorld.compose(Vector3(pxX, pxY, 0.f),
+                                       sp->quaternion,
+                                       sp->scale);
+                } else {
+                    std::memcpy(d.effWorld.elements.data(),
+                                sp->matrixWorld->elements.data(), 64);
                 }
                 draws.push_back(std::move(d));
             });
@@ -7260,11 +7298,13 @@ namespace threepp {
                                         spritePipelineLayout_, 0, 1, &set, 0, nullptr);
 
                 Sprite* sp = d.sprite;
-                // modelView = viewInverse * sprite.matrixWorld
+                // modelView = viewInverse * effWorld. effWorld is either
+                // sp->matrixWorld (3D) or a screen-space composite built
+                // from screenAnchor + viewport + position (screen-space).
                 Matrix4 modelView;
-                modelView.multiplyMatrices(camera.matrixWorldInverse, *sp->matrixWorld);
+                modelView.multiplyMatrices(camera.matrixWorldInverse, d.effWorld);
                 Vector3 worldScale;
-                worldScale.setFromMatrixScale(*sp->matrixWorld);
+                worldScale.setFromMatrixScale(d.effWorld);
                 Vector3 mvPos;
                 mvPos.setFromMatrixPosition(modelView);
 
@@ -10909,6 +10949,27 @@ namespace threepp {
             // Record the full PT body into the now-open cmd buffer. Leaves
             // the swapchain image in GENERAL.
             recordCommandBuffer(cmdBuffers[currentFrame], imageIndex);
+
+            // Screen-space sprite auto-overlay. Walks the main scene for
+            // Sprites with screenSpace=true and composites them through
+            // an internal ortho camera derived from the swapchain extent —
+            // no user code beyond setting the flag on the sprite.
+            // recordOrthoOverlay short-circuits when no eligible sprites
+            // are found, so the typical no-sprite case pays only the walk.
+            const VkExtent2D extPT = ctx->swapchainExtent();
+            if (!screenSpaceCam_) {
+                screenSpaceCam_ = OrthographicCamera::create(
+                        0.f, float(extPT.width), float(extPT.height), 0.f,
+                        0.1f, 10.f);
+                screenSpaceCam_->position.z = 1.f;
+            } else {
+                screenSpaceCam_->left   = 0.f;
+                screenSpaceCam_->right  = float(extPT.width);
+                screenSpaceCam_->top    = float(extPT.height);
+                screenSpaceCam_->bottom = 0.f;
+                screenSpaceCam_->updateProjectionMatrix();
+            }
+            recordOrthoOverlay(scene, *screenSpaceCam_, /*screenSpaceOnly=*/true);
             return true;
         }
 
@@ -11106,7 +11167,7 @@ namespace threepp {
             // cmd buffer's swapchain image. Mesh / Line HUD overlays are
             // a follow-up — the no-op branch falls through to here so the
             // present still completes from endFrame().
-            recordOrthoOverlay(scene, camera);
+            recordOrthoOverlay(scene, camera, /*screenSpaceOnly=*/false);
         }
     };
 

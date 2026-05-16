@@ -102,7 +102,6 @@ int main() {
 
     Canvas canvas("threepp demo", {{"aa", 4}});
     auto renderer = createRenderer(canvas);
-    renderer->autoClear = false;
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
@@ -119,23 +118,33 @@ int main() {
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
 
-    HUD hud(*renderer);
     FontLoader fontLoader;
     const auto font1 = fontLoader.defaultFont();
     const auto font2 = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/gentilis_regular.typeface.json");
 
-    auto hudText1 = TextSprite(font1, 40 * monitor::contentScale().first);
-    hudText1.setText("Hello World!");
-    hudText1.setColor(Color::black);
-    hudText1.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
-    hud.add(hudText1);
+    // Screen-space text labels — Sprite::screenSpace + screenAnchor route
+    // these through the renderer's ortho overlay automatically, no separate
+    // HUD scene / camera / autoClear ritual. Anchor (0,0) = bottom-left of
+    // the viewport; (1,1) = top-right. position.xy is the pixel offset from
+    // the anchor (negative = "from the opposite edge", CSS-style). Resize
+    // is implicit — the renderer samples viewport size each frame.
+    auto hudText1 = TextSprite::create(font1, 40 * monitor::contentScale().first);
+    hudText1->setText("Hello World!");
+    hudText1->setColor(Color::black);
+    hudText1->setVerticalAlignment(TextSprite::VerticalAlignment::Above);
+    hudText1->screenSpace = true;
+    hudText1->screenAnchor.set(0.f, 0.f);
+    hudText1->position.set(5.f, 5.f, 0.f);
+    scene->add(hudText1);
 
-    auto hudText2 = TextSprite(font2, 10 * monitor::contentScale().first);
-    hudText2.setColor(Color::red);
-    hudText2.setVerticalAlignment(TextSprite::VerticalAlignment::Below);
-    hudText2.setHorizontalAlignment(TextSprite::HorizontalAlignment::Right);
-    hud.add(hudText2)
-            .setNormalizedPosition({1, 1});
+    auto hudText2 = TextSprite::create(font2, 10 * monitor::contentScale().first);
+    hudText2->setColor(Color::red);
+    hudText2->setVerticalAlignment(TextSprite::VerticalAlignment::Below);
+    hudText2->setHorizontalAlignment(TextSprite::HorizontalAlignment::Right);
+    hudText2->screenSpace = true;
+    hudText2->screenAnchor.set(1.f, 1.f);
+    hudText2->position.set(-5.f, -5.f, 0.f);
+    scene->add(hudText2);
 
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -153,12 +162,9 @@ int main() {
 
         box->rotation.y += 0.5f * dt;
 
-        hudText2.setText("Delta=" + std::to_string(dt));
+        hudText2->setText("Delta=" + std::to_string(dt));
 
-        renderer->clear();
         renderer->render(*scene, *camera);
-
-        hud.render();
         ui.render();
 
         plane->position.copy(ui.position());
