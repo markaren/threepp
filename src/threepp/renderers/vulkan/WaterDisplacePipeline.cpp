@@ -9,8 +9,8 @@
 
 namespace threepp::vulkan {
 
-    static_assert(sizeof(WaterDisplacePipeline::PushConstants) == 88,
-                  "WaterDisplacePipeline::PushConstants must match water_displace.comp's Pc layout (88 bytes)");
+    static_assert(sizeof(WaterDisplacePipeline::PushConstants) == 104,
+                  "WaterDisplacePipeline::PushConstants must match water_displace.comp's Pc layout (104 bytes)");
 
     WaterDisplacePipeline::WaterDisplacePipeline(VulkanContext& ctx)
         : ctx_(ctx) {

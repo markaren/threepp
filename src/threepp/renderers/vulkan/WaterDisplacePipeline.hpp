@@ -29,12 +29,14 @@ namespace threepp::vulkan {
         // combined-image-samplers (3 cascades × 2 images).
         static constexpr uint32_t kMaxOceans = 16;
 
-        // Must match water_displace.comp's `Pc` struct (88 bytes total):
-        // 3 × VkDeviceAddress (24) + 16 × u32/float (64).
+        // Must match water_displace.comp's `Pc` struct (104 bytes total):
+        // 4 × VkDeviceAddress (32) + 17 × u32/float (68) + 1 trailing u32 pad
+        // to keep the struct's 8-byte alignment on VkDeviceAddress.
         struct PushConstants {
             VkDeviceAddress posOut;
             VkDeviceAddress normOut;
             VkDeviceAddress foamOut;
+            VkDeviceAddress disturbAddr;  // 0 = no disturbance buffer
             uint32_t        vertexCount;
             uint32_t        gridDim;
             float           planeSize;
@@ -51,6 +53,7 @@ namespace threepp::vulkan {
             float           hullSinYaw;
             float           hullCosYaw;
             float           forwardSpeed;
+            uint32_t        disturbCount;
         };
 
         explicit WaterDisplacePipeline(VulkanContext& ctx);

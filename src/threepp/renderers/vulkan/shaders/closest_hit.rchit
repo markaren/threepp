@@ -524,6 +524,34 @@ float hash21(vec2 p) {
     return fract(p.x * p.y);
 }
 
+// 2D value noise: smoothstep-interpolated cell hash. Cheap Perlin
+// substitute — gives spatial coherence the raw hash lacks. Cost: 4
+// hashes + smoothstep + 3 mixes per sample.
+float vnoise21(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// 4-octave fBm in [0..1] (approximately, given amplitude geometric sum).
+// Used by the foam shading block to give the macro "pool" mask coherent
+// large-scale structure instead of pure speckle.
+float fbm4(vec2 p) {
+    float a = 0.0;
+    float w = 0.5;
+    for (int i = 0; i < 4; ++i) {
+        a += w * vnoise21(p);
+        p *= 2.03;     // slight off-2 to break grid alignment
+        w *= 0.5;
+    }
+    return a;
+}
+
 // ───── ReSTIR DI — Stage 1a (init RIS, no temporal/spatial reuse) ─────
 // One reservoir per primary-shading invocation; lives in registers and is
 // not persisted across frames (no SSBO yet — Stage 1b adds temporal reuse).
@@ -1166,20 +1194,50 @@ void main() {
     // rather than tinted glass-foam. No-op when foamCoverage = 0.
     float foamMask = 0.0;
     if (foamCoverage > 0.0) {
-        // Break up the bilinear-interpolated per-vertex coverage into crisp
-        // whitewater speckle. 3 octaves of hash noise on world-XZ at scales
-        // matching the WGPU webtide raster pass (≈2.5 m / 0.48 m / 0.15 m).
-        // Subtraction punches holes in the coverage; smoothstep softens the
-        // fleck edges so individual spots fade rather than alias.
+        // Foam shading is two-layer:
+        //   - MACRO fBm (~5 m features) gates the coverage mask so the foam
+        //     pool edges break up organically rather than reading as a
+        //     bilinear ramp from per-vertex interpolation.
+        //   - MICRO value-noise (~0.15 m features) modulates the WITHIN-foam
+        //     brightness and roughness — this is what gives dense foam its
+        //     bubble look instead of flat paint. Two-tone (off-white peaks,
+        //     mid-gray valleys) + a small specular catch on peaks via the
+        //     roughness lerp produces the look the reference image has.
+        // A slow time drift (driven by sampleIndex so it works without a
+        // separate time uniform) prevents dense foam from reading as a
+        // static texture during long stationary camera shots.
         const vec3 hpFoam = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
         const vec2 wxz = hpFoam.xz;
-        const float fn1 = hash21(wxz * 0.4);
-        const float fn2 = hash21(wxz * 2.1);
-        const float fn3 = hash21(wxz * 6.5);
-        const float foamN = fn1 * 0.12 + fn2 * 0.20 + fn3 * 0.13;
-        foamMask = smoothstep(0.10, 0.55, foamCoverage - foamN);
-        albedo    = mix(albedo,    vec3(0.85, 0.90, 0.92), foamMask);
-        roughness = mix(roughness, 1.0,                    foamMask);
+        const float t = float(pc.sampleIndex) * (1.0 / 60.0);   // seconds-ish
+        const vec2 drift = vec2(0.42, 0.71) * t * 0.18;          // m/s scale
+
+        // MACRO mask noise. fBm at low frequency (~5 m features) gives
+        // soft, organic pool edges. Scaled to subtract a sizable chunk
+        // from coverage so foam appears only where coverage clearly wins.
+        const vec2 wxzMacro = wxz * 0.18 + drift;
+        const float macroN  = fbm4(wxzMacro);
+        foamMask = smoothstep(0.05, 0.70, foamCoverage - macroN * 0.45);
+
+        // MICRO bubble detail. Two octaves of value noise at small scale
+        // (~0.15 m). Animated with anti-phase drift so the bubble pattern
+        // shifts independently of the pool boundary.
+        const vec2 wxzMicro = wxz * 6.5 - drift * 0.4;
+        const float micro   = vnoise21(wxzMicro) * 0.65 +
+                              vnoise21(wxzMicro * 2.3) * 0.35;
+
+        // Two-tone foam colour: peaks light (off-white with slight blue),
+        // valleys mid-gray. The luminance variation alone is responsible
+        // for ~80% of the "looks like foam" effect.
+        const vec3 foamHi = vec3(0.97, 0.99, 1.00);
+        const vec3 foamLo = vec3(0.55, 0.62, 0.66);
+        const vec3 foamCol = mix(foamLo, foamHi, micro);
+
+        albedo = mix(albedo, foamCol, foamMask);
+        // Roughness: 0.45..1.0 range. Bubble peaks (high micro) get the
+        // lower end → a faint specular catch. Pure 1.0 reads chalky and
+        // kills the bright glints visible in real foam.
+        const float foamRough = mix(1.0, 0.45, micro);
+        roughness = mix(roughness, foamRough, foamMask);
     }
 
     vec3 F0 = mix(vec3(0.04) * mdesc.specularIntensity * mdesc.specularColor, albedo, metalness);

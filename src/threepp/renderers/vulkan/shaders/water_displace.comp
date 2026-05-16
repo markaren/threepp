@@ -39,10 +39,22 @@ layout(buffer_reference, scalar) buffer PosBuf  { float v[]; };
 layout(buffer_reference, scalar) buffer NormBuf { float v[]; };
 layout(buffer_reference, scalar) buffer FoamBuf { float v[]; };
 
+// Per-disturbance point source — splatted into the per-vertex foam buffer
+// with a gaussian falloff. Populated by host code each frame from boat
+// hull / propeller / splash sources. Layout matches DisplacedMesh::FoamDisturbance.
+struct DisturbPoint {
+    float worldX;
+    float worldZ;
+    float radius;     // metres
+    float intensity;  // peak foam value at centre, [0..1]
+};
+layout(buffer_reference, scalar) buffer DisturbBuf { DisturbPoint p[]; };
+
 layout(push_constant, scalar) uniform Pc {
     PosBuf   posOut;
     NormBuf  normOut;
     uint64_t foamAddr;      // 0 = no foam buffer; non-zero is constructed into a FoamBuf below
+    uint64_t disturbAddr;   // 0 = no disturbance buffer
     uint    vertexCount;
     uint    gridDim;        // sqrt(vertexCount), assumes square grid
     float   planeSize;      // total mesh edge length, world metres
@@ -59,6 +71,7 @@ layout(push_constant, scalar) uniform Pc {
     float   hullSinYaw;
     float   hullCosYaw;
     float   forwardSpeed;   // m/s along +heading; 0 disables wake
+    uint    disturbCount;   // number of valid entries in DisturbBuf
 } pc;
 
 vec3 sampleDisplacement(vec2 worldXZ) {
@@ -291,12 +304,33 @@ void main() {
         const float foamThresh = 0.97;
         const float foamWidth  = 0.04;
         const float foamInstant = clamp((foamThresh - J) / foamWidth, 0.0, 1.0);
-        // Combine natural-wave (Jacobian) foam with vessel-wake foam injected
-        // above. Both are instantaneous values for THIS frame; the persistence
-        // decay below is the same trail mechanism. wakeFoam == 0 when there is
-        // no vessel or the wake gate is inactive, so the natural-wave path is
-        // unchanged.
-        const float foamInstantTotal = max(foamInstant, wakeFoam);
+        // External disturbance splats — host populates DisturbBuf each frame
+        // with point sources (hull waterline contacts, prop wash, splashes).
+        // Each contributes a gaussian centred at (worldX, worldZ); we take
+        // the max across all sources so overlapping splats build up to
+        // saturation without ever exceeding 1.0. Pre-divides the radius
+        // squared once per source — the inner loop is then two mads + an exp.
+        float disturbFoam = 0.0;
+        if (pc.disturbAddr != 0ul && pc.disturbCount > 0u) {
+            DisturbBuf db = DisturbBuf(pc.disturbAddr);
+            for (uint k = 0u; k < pc.disturbCount; ++k) {
+                const DisturbPoint dp = db.p[k];
+                const float ddx = rest.x - dp.worldX;
+                const float ddz = rest.z - dp.worldZ;
+                const float r2  = dp.radius * dp.radius;
+                if (r2 <= 0.0) continue;
+                const float d2  = ddx * ddx + ddz * ddz;
+                const float g   = dp.intensity * exp(-d2 / r2);
+                disturbFoam = max(disturbFoam, g);
+            }
+        }
+        // Combine natural-wave (Jacobian) foam with vessel-wake foam and
+        // external disturbance splats injected above. All are instantaneous
+        // values for THIS frame; the persistence decay below is the same
+        // trail mechanism. Any of {wakeFoam, disturbFoam} == 0 when the
+        // corresponding source is inactive, so the natural-wave-only path
+        // is unchanged from prior behaviour.
+        const float foamInstantTotal = max(foamInstant, max(wakeFoam, disturbFoam));
         // Temporal persistence: real foam lingers seconds after the
         // breaking event as bubbles dissipate. Without this, foam tracks
         // wave-crest motion frame-by-frame and reads as too fast / too

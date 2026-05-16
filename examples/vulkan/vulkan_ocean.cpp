@@ -774,6 +774,49 @@ int main() {
         // injected in water_displace.comp from the same pose plus speed.
         ocean->wake.forwardSpeed = bs.forwardSpeed;
 
+        // Hull-contact foam disturbances. Splats gaussian foam blobs along
+        // the port + starboard hull perimeter (where the hull pushes water
+        // aside at the waterline) and an extra one off the stern for prop
+        // wash when the boat is moving. Decays naturally via the existing
+        // foam decay (~1.4 s half-life), so a fast-moving boat leaves a
+        // visible trail of agitated water in addition to the analytical
+        // wake foam. Always-on perimeter base intensity even at zero speed
+        // — the hull still displaces water, just less dramatically.
+        ocean->clearFoamDisturbances();
+        {
+            const float L = kBoatLength * 0.5f;
+            const float B = kBoatBeam   * 0.5f;
+            const float spd = std::abs(bs.forwardSpeed);
+            const float speedNorm = std::clamp(spd / 4.0f, 0.0f, 1.0f);
+            const float baseI     = 0.4f + 0.55f * speedNorm;
+            // 4 points each side, bow → stern. Splats overlap (~radius 1.8m
+            // at ~halfLength/1.5 spacing) so dense saturation builds where
+            // they cluster (e.g. tight at the bow).
+            constexpr int  kSamples = 4;
+            constexpr float kRadius = 1.8f;
+            for (int side = -1; side <= 1; side += 2) {
+                for (int i = 0; i < kSamples; ++i) {
+                    const float t       = float(i) / float(kSamples - 1);
+                    const float localZ  = L - 2.0f * L * t;   // +L (bow) → -L (stern)
+                    const float localX  = float(side) * (B + 0.2f);
+                    const float worldX  = bs.position.x + cosY * localX + sinY * localZ;
+                    const float worldZ  = bs.position.z - sinY * localX + cosY * localZ;
+                    ocean->addFoamDisturbance(worldX, worldZ, kRadius, baseI);
+                }
+            }
+            // Prop wash: larger, brighter splat just behind the stern.
+            // Only active when actually moving — a docked boat shouldn't
+            // be churning. The +0.5m localZ offset puts it just aft of
+            // the hull rectangle so it doesn't fight hull exclusion.
+            if (speedNorm > 0.1f) {
+                const float localZ  = -L - 1.0f;
+                const float worldX  = bs.position.x + sinY * localZ;
+                const float worldZ  = bs.position.z + cosY * localZ;
+                const float propI   = std::min(0.7f + 0.4f * speedNorm, 1.0f);
+                ocean->addFoamDisturbance(worldX, worldZ, 3.0f, propI);
+            }
+        }
+
         // ── Buoy buoyancy ──────────────────────────────────────────────────
         // Each buoy spring-damps toward the wave height at its fixed waypoint
         // position. Stiffer than the boat (1.6 Hz natural freq vs 0.8) so the

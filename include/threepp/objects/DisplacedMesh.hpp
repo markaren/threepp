@@ -85,6 +85,30 @@ namespace threepp {
         };
         VesselWake wake;
 
+        // Per-frame point sources of foam — splatted by water_displace.comp
+        // into the per-vertex foam buffer with a gaussian falloff, persisted
+        // via the existing decay (~1.4 s half-life). Use for boat-hull
+        // waterline contacts, propeller wash, dynamic splashes — anything
+        // not captured by the analytical hull/wake. Clear and repopulate
+        // each frame before render(); the renderer uploads on demand.
+        //
+        // Capacity is bounded by a fixed compile-time max (currently 64);
+        // overflow is dropped silently. Tile-local — worldXZ should be in
+        // the same frame as the ocean mesh (typically world space).
+        struct FoamDisturbance {
+            float worldX = 0.f;
+            float worldZ = 0.f;
+            float radius = 1.0f;    // metres
+            float intensity = 1.0f; // [0,1] foam value at centre
+        };
+        std::vector<FoamDisturbance> foamDisturbances;
+
+        void clearFoamDisturbances() { foamDisturbances.clear(); }
+        void addFoamDisturbance(float worldX, float worldZ,
+                                float radius, float intensity) {
+            foamDisturbances.push_back({worldX, worldZ, radius, intensity});
+        }
+
         DisplacedMesh(const std::shared_ptr<BufferGeometry>& geometry,
                       const std::shared_ptr<Material>& material);
 

@@ -312,6 +312,13 @@ namespace threepp {
             // force a full rebuild every kBlasFullRebuildInterval frames.
             uint32_t  blasRefitCounter = 0;          // frames since last full BUILD
             static constexpr uint32_t kBlasFullRebuildInterval = 64;
+
+            // Per-mesh foam-disturbance SSBO. Host-mapped, written from
+            // dm.foamDisturbances each frame before the water_displace
+            // dispatch. Sized to kMaxFoamDisturbances × 16B; extra
+            // entries are dropped. .address == 0 until first allocation.
+            Buffer    foamDisturbBuffer{};
+            static constexpr uint32_t kMaxFoamDisturbances = 64;
         };
         std::unordered_map<const DisplacedMesh*, std::unique_ptr<DisplacedMeshState>> displacedStates;
 
@@ -1293,6 +1300,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), st->heightReadback);
                 destroyBuffer(ctx->allocator(), st->heightReadback1);
                 destroyBuffer(ctx->allocator(), st->heightReadback2);
+                destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
                 // Per-cascade Phillips / DynamicSpectrum / IFFT are RAII; their
                 // destructors handle their own VkImage / VkPipeline / DSet cleanup.
             }
@@ -2634,10 +2642,40 @@ namespace threepp {
 
             // (4) Dispatch water_displace.comp → writes positions + normals
             // into the BLAS vertex/normal buffers.
+
+            // (4a) Foam-disturbance SSBO upload. Lazy-allocate the host-
+            // mapped buffer on first use, then memcpy the (possibly empty)
+            // user-supplied list each frame. Capped at kMaxFoamDisturbances;
+            // extras are dropped silently. The fence wait at frame start
+            // guarantees the GPU is done reading last frame's disturbances
+            // before we overwrite, so no double-buffering is needed.
+            const uint32_t kFoamDisturbStride = 16u;  // 4 floats per entry
+            const uint32_t kFoamDisturbBytes  =
+                    DisplacedMeshState::kMaxFoamDisturbances * kFoamDisturbStride;
+            if (st.foamDisturbBuffer.handle == VK_NULL_HANDLE) {
+                st.foamDisturbBuffer = createBuffer(
+                        ctx->allocator(), ctx->device(), kFoamDisturbBytes,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            }
+            const uint32_t disturbCount = static_cast<uint32_t>(std::min<size_t>(
+                    dm.foamDisturbances.size(),
+                    DisplacedMeshState::kMaxFoamDisturbances));
+            if (disturbCount > 0u) {
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), st.foamDisturbBuffer.alloc, &mapped);
+                std::memcpy(mapped, dm.foamDisturbances.data(),
+                            disturbCount * kFoamDisturbStride);
+                vmaUnmapMemory(ctx->allocator(), st.foamDisturbBuffer.alloc);
+            }
+
             vulkan::WaterDisplacePipeline::PushConstants pc{};
             pc.posOut       = st.blas->vertex.address;
             pc.normOut      = st.blas->normal.address;
             pc.foamOut      = st.blas->foam.address;
+            pc.disturbAddr  = st.foamDisturbBuffer.address;
             pc.vertexCount  = st.vertexCount;
             pc.gridDim      = st.gridDim;
             pc.planeSize    = st.planeSize;
@@ -2654,6 +2692,7 @@ namespace threepp {
             pc.hullSinYaw     = dm.hullExclusion.sinYaw;
             pc.hullCosYaw     = dm.hullExclusion.cosYaw;
             pc.forwardSpeed   = dm.wake.enabled ? dm.wake.forwardSpeed : 0.0f;
+            pc.disturbCount   = disturbCount;
             waterDisplace_->recordDispatch(cb, st.displaceDS, pc);
 
             // Buffer barrier: compute write → AS-build read on the vertex/normal buffers.
