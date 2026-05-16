@@ -119,6 +119,15 @@ namespace threepp {
         void setDenoise(bool enabled);
         [[nodiscard]] bool denoise() const;
 
+        // Extra primary rays fired at detected silhouette pixels (mesh-ID,
+        // depth-gradient, or diagonal neighbour mismatch in the raster
+        // prepass). 0 disables silhouette MSAA. N gives (N+1)× total
+        // samples at edge pixels — default 7 (8× MSAA). Capped internally
+        // at 31. Edge pixels are typically 5–15 % of frame; cost scales
+        // ~linearly with N on those pixels only.
+        void setSilhouetteMsaaExtra(uint32_t extra);
+        [[nodiscard]] uint32_t silhouetteMsaaExtra() const;
+
         // Per-NEE-sample firefly clamp: any direct-lighting contribution whose
         // luminance exceeds `cap` is rescaled down to `cap`. Default 30.0.
         // Pass 0 to disable (stored as a 1e30 sentinel — gates never fire).

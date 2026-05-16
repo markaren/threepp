@@ -521,6 +521,11 @@ int main() {
             renderer.setRestirGIEnabled(restirGI);
         if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
             renderer.setSamplesPerPixel(spp);
+        // Silhouette MSAA: extra primary rays at edge pixels only.
+        // 0 disables; default 7 → 8× MSAA at edges.
+        int edgeMsaa = static_cast<int>(renderer.silhouetteMsaaExtra());
+        if (ImGui::SliderInt("Silhouette MSAA extras", &edgeMsaa, 0, 15))
+            renderer.setSilhouetteMsaaExtra(static_cast<uint32_t>(edgeMsaa));
         // Path-trace render scale: < 1 traces fewer pixels, then upscales.
         if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f, "%.2f"))
             renderer.setRenderScale(renderScale);

@@ -547,6 +547,10 @@ namespace threepp {
         // jittered primary ray; raygen sums them and the accumulator
         // advances FC by `spp` so the running mean stays correctly weighted.
         uint32_t samplesPerPixel_ = 1;
+        // # of extra primary rays fired at detected silhouette pixels
+        // (gbufIds-mismatch / depth-gradient / diagonal neighbour). Default
+        // 7 → 8× MSAA at edges. 0 disables silhouette MSAA entirely.
+        uint32_t edgeMsaaExtra_   = 3;
         // Prev-frame camera packed as four vec4s (matches PrevCameraUbo):
         //   [0..3]  = vec4(pos.xyz,  projScaleX)   → prevCamPosX
         //   [4..7]  = vec4(fwd.xyz,  projScaleY)   → prevCamFwdY
@@ -8611,13 +8615,15 @@ namespace threepp {
             //   [11] fireflyClamp bits   (float — per-NEE luminance cap; 1e30 disables)
             //   [12] oceanFineTileSize bits (float — fine-cascade tile size in m;
             //        0 disables FFT-fine-normal perturbation on thinWalled hits)
+            //   [13] edgeMsaaExtra      (raygen — extra primary samples at detected
+            //        silhouettes; 0 disables, N → (N+1)× total samples at edges)
             VkPushConstantRange pcRange{};
             pcRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                  VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
                                  VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
                                  VK_SHADER_STAGE_MISS_BIT_KHR;
             pcRange.offset = 0;
-            pcRange.size   = 52;
+            pcRange.size   = 56;
 
             VkPipelineLayoutCreateInfo plci{};
             plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -10321,7 +10327,7 @@ namespace threepp {
             std::memcpy(&fireflyBits, &fireflyClamp_, sizeof(fireflyBits));
             uint32_t oceanFineBits;
             std::memcpy(&oceanFineBits, &oceanFineTileSize, sizeof(oceanFineBits));
-            const uint32_t pc[13] = {
+            const uint32_t pc[14] = {
                     sampleIndex,
                     envImage.mipLevels,
                     static_cast<uint32_t>(toneMapping_),
@@ -10335,6 +10341,7 @@ namespace threepp {
                     envSumBits,
                     fireflyBits,
                     oceanFineBits,
+                    edgeMsaaExtra_,
             };
             vkCmdPushConstants(cb, rtPipelineLayout,
                                VK_SHADER_STAGE_RAYGEN_BIT_KHR |
@@ -11360,6 +11367,17 @@ namespace threepp {
 
     bool VulkanRenderer::denoise() const {
         return pimpl_->denoiseEnabled_;
+    }
+
+    void VulkanRenderer::setSilhouetteMsaaExtra(uint32_t extra) {
+        // Cap at 31 so spp + extra fits comfortably in the Halton stride
+        // (subIdx = sampleIndex * spp + s); also guards against pathological
+        // values that would tank framerate on edge-heavy scenes.
+        pimpl_->edgeMsaaExtra_ = (extra > 31u) ? 31u : extra;
+    }
+
+    uint32_t VulkanRenderer::silhouetteMsaaExtra() const {
+        return pimpl_->edgeMsaaExtra_;
     }
 
     void VulkanRenderer::setFireflyClamp(float cap) {

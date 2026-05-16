@@ -355,6 +355,8 @@ layout(push_constant) uniform Pc {
     float envCdfTotalSum;     // env importance pdf normaliser; 0 disables CDF
     float fireflyClamp;       // per-NEE luminance cap (closest_hit reads); 1e30 disables
     float oceanFineTileSize;  // fine-cascade tile size (closest_hit reads); 0 disables
+    uint edgeMsaaExtra;       // # of EXTRA primary samples at detected silhouettes
+                              // (0 = disable silhouette MSAA, N = (N+1)× MSAA at edges)
 } pc;
 
 bool isMeshMoved(uint idx) {
@@ -776,32 +778,65 @@ void main() {
     // Silhouette MSAA. 1-spp primary at a mesh/sky or mesh/mesh seam can't
     // represent fractional sub-pixel coverage — one jittered pick lands
     // fully on one side and atrous correctly refuses to bleed across the
-    // depth/ID edge, leaving visible speckles. Detect such pixels via a
-    // 4-neighbour mesh-ID test on the (unjittered) raster prepass and
-    // fire EDGE_MSAA_EXTRA extra primaries there. Each extra sample reuses
+    // depth/ID edge, leaving visible speckles. Detect such pixels and fire
+    // EDGE_MSAA_EXTRA extra primaries there. Each extra sample reuses
     // the spp loop's per-sample blue-noise seed → naturally decorrelated
     // sub-pixel positions, no new RNG plumbing. Hybrid-only (non-hybrid
     // has no gbuf to read).
+    //
+    // Detection runs three tests on the 8-neighbourhood of the raster
+    // prepass:
+    //   (1) mesh-ID mismatch — classic silhouette (mesh-vs-mesh, mesh-vs-sky).
+    //   (2) depth gradient — same mesh ID but a sharp depth crease (ship
+    //       hull-plate folds, roof corners, pole bends). Threshold scales
+    //       with centre depth so far surfaces don't false-positive on
+    //       sub-pixel jitter.
+    //   (3) diagonal neighbours — pure-diagonal seams (a panel corner
+    //       where the only differing pixel is the diagonal one) were
+    //       missed by the 4-cardinal test, leaving single-pixel
+    //       speckles against the sky on bent geometry.
     bool isSilhouette = false;
     if (hybridOn) {
         const ivec2 cpx = ivec2(gl_LaunchIDEXT.xy);
         const ivec2 csz = ivec2(gl_LaunchSizeEXT.xy);
-        const uint  idC = texelFetch(gbufIdsTex, cpx, 0).x;
-        const ivec2 off4[4] = ivec2[4](ivec2( 1, 0), ivec2(-1, 0),
-                                       ivec2( 0, 1), ivec2( 0,-1));
-        for (int k = 0; k < 4; ++k) {
-            const ivec2 p = clamp(cpx + off4[k], ivec2(0), csz - ivec2(1));
-            if (texelFetch(gbufIdsTex, p, 0).x != idC) {
+        const uint  idC = texelFetch(gbufIdsTex,   cpx, 0).x;
+        const float zC  = texelFetch(gbufDepthTex, cpx, 0).x;
+        // Depth-gradient tolerance: 1 % of centre depth, with a 1e-3
+        // absolute floor so near-plane geometry (zC small) doesn't fire
+        // on sub-pixel jitter alone. Far surfaces (zC → 1) get a looser
+        // tolerance which avoids false positives on slopes.
+        const float depthEps = max(1e-3, zC * 0.01);
+        // 8-neighbourhood: 4 cardinals followed by 4 diagonals. Order
+        // matters slightly — cardinals are more likely to differ on a
+        // typical silhouette so they short-circuit first.
+        const ivec2 off8[8] = ivec2[8](
+                ivec2( 1,  0), ivec2(-1,  0), ivec2( 0,  1), ivec2( 0, -1),
+                ivec2( 1,  1), ivec2(-1, -1), ivec2( 1, -1), ivec2(-1,  1));
+        for (int k = 0; k < 8; ++k) {
+            const ivec2 p   = clamp(cpx + off8[k], ivec2(0), csz - ivec2(1));
+            const uint  idN = texelFetch(gbufIdsTex,   p, 0).x;
+            if (idN != idC) {
+                isSilhouette = true;
+                break;
+            }
+            // Same mesh ID: check for a sharp depth crease (corner /
+            // self-occlusion edge). Sky pixels (idC == 0) all share
+            // depth ≈ 1 so this branch never fires on a sky run.
+            const float zN = texelFetch(gbufDepthTex, p, 0).x;
+            if (abs(zN - zC) > depthEps) {
                 isSilhouette = true;
                 break;
             }
         }
     }
-    // 2×2 MSAA pattern at silhouettes (1 base + 3 extra). Edge pixels are
-    // typically 5–15 % of frame, so absolute cost is modest even with the
-    // primary cache disabled below.
-    const uint EDGE_MSAA_EXTRA = 3u;
-    const uint effSpp = spp + (isSilhouette ? EDGE_MSAA_EXTRA : 0u);
+    // Per-pixel MSAA budget at detected silhouettes. Runtime-tunable via
+    // VulkanRenderer::setSilhouetteMsaaExtra(N) — 0 disables, N gives
+    // (N+1)× total samples at edge pixels. Default 7 → 8× MSAA. The
+    // primary cache stays disabled at silhouettes (each sub-sample
+    // re-traces the full chit), so each extra sample is a full primary
+    // shade including NEE / RIS / GI. Edge pixels are typically 5–15 %
+    // of frame, so absolute cost scales gently with the knob.
+    const uint effSpp = spp + (isSilhouette ? pc.edgeMsaaExtra : 0u);
 
     // Per-spp loop optimization controls.
     //   canCachePrimary: hybrid + !perSppJitter means primary direction is
@@ -837,14 +872,62 @@ void main() {
         // (s ≥ spp) draw the next slots in the same global sequence.
         const uint subIdx = pc.sampleIndex * spp + s;
         const uint sIdx   = subIdx + 1u;
-        // Per-spp blue-noise jitter from the void-and-cluster tile.
-        // canCachePrimary == hybridOn && !perSppJitter && !isSilhouette;
-        // when false (non-hybrid, perSppJitter, or silhouette MSAA), each
-        // sample needs its own sub-pixel jitter to decorrelate.
-        const vec2 jitter = canCachePrimary
-                ? vec2(0.0)
-                : vec2(blueNoise(gl_LaunchIDEXT.xy, sIdx, 0u) - 0.5,
-                       blueNoise(gl_LaunchIDEXT.xy, sIdx, 1u) - 0.5);
+        // Sub-pixel jitter source.
+        //   canCachePrimary (hybrid + !perSppJitter + !isSilhouette): no jitter
+        //     — the cached primary direction is shared across spp.
+        //   isSilhouette: deterministic stratified pattern. Sub-pixel
+        //     coverage at edges has to be sampled accurately, not
+        //     stochastically — Halton-style jitter on 4–8 samples can
+        //     cluster on one side of a thin feature, producing the
+        //     dotted-line / sawtooth pattern that no amount of post-AA
+        //     can recover. The 4×4 stratified grid below guarantees one
+        //     sample per sub-pixel cell up to s=15, so a 30 %-coverage
+        //     wire gets ~5/16 hits every frame regardless of frame index
+        //     or pixel position. Temporal Halton offset on top keeps
+        //     samples decorrelated across frames so TAA can still build
+        //     history. For s ≥ 16 (unlikely with default extras=7), wrap
+        //     back to Halton.
+        //   otherwise (non-hybrid, perSppJitter on flat surface): standard
+        //     blue-noise jitter from the void-and-cluster tile.
+        vec2 jitter;
+        if (canCachePrimary) {
+            jitter = vec2(0.0);
+        } else if (isSilhouette) {
+            // Stratified grid sized so the FULL pixel is covered by effSpp
+            // samples — covering only a portion would miss sub-pixel features
+            // in the unsampled region (a horizontal edge in the top half of
+            // the pixel reports 0 % coverage if all samples land in the
+            // bottom half → staircase). Power-of-2 dimensions for bit-shift
+            // indexing.
+            //   effSpp ≤ 2:  2×1  (2 cols, 1 row)
+            //   effSpp ≤ 4:  2×2
+            //   effSpp ≤ 8:  4×2  (default — base spp=1 + extras=7)
+            //   effSpp ≤ 16: 4×4
+            //   effSpp > 16: 8×4
+            uint colsLog2, rowsLog2;
+            if      (effSpp <= 2u)  { colsLog2 = 1u; rowsLog2 = 0u; }
+            else if (effSpp <= 4u)  { colsLog2 = 1u; rowsLog2 = 1u; }
+            else if (effSpp <= 8u)  { colsLog2 = 2u; rowsLog2 = 1u; }
+            else if (effSpp <= 16u) { colsLog2 = 2u; rowsLog2 = 2u; }
+            else                    { colsLog2 = 3u; rowsLog2 = 2u; }
+            const uint colMask = (1u << colsLog2) - 1u;
+            const uint rowMask = (1u << rowsLog2) - 1u;
+            const uint cellX = s & colMask;
+            const uint cellY = (s >> colsLog2) & rowMask;
+            // Per-frame Halton offset within each cell so TAA history sees
+            // fresh sub-cell positions across frames (within-frame stratified,
+            // across-frame randomised).
+            const float tx = blueNoise(gl_LaunchIDEXT.xy, sIdx, 0u);
+            const float ty = blueNoise(gl_LaunchIDEXT.xy, sIdx, 1u);
+            const float invCols = 1.0 / float(1u << colsLog2);
+            const float invRows = 1.0 / float(1u << rowsLog2);
+            jitter = vec2(
+                    (float(cellX) + tx) * invCols - 0.5,
+                    (float(cellY) + ty) * invRows - 0.5);
+        } else {
+            jitter = vec2(blueNoise(gl_LaunchIDEXT.xy, sIdx, 0u) - 0.5,
+                          blueNoise(gl_LaunchIDEXT.xy, sIdx, 1u) - 0.5);
+        }
 
         const vec2 pix = vec2(gl_LaunchIDEXT.xy) + 0.5 + jitter;
         vec2 ndc = pix / size * 2.0 - 1.0;
