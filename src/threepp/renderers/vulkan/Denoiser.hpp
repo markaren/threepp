@@ -61,7 +61,8 @@ namespace threepp::vulkan {
                             VkExtent2D      extent,
                             bool            denoiseEnabled,
                             uint32_t        toneMapping,
-                            uint32_t        exposureBits);
+                            uint32_t        exposureBits,
+                            bool            bgIsSolidColor);
 
         // View / image accessors for descriptor wiring and pre-RT
         // barriers in the renderer. Binding 20 takes both filtered

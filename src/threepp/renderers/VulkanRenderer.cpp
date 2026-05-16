@@ -10340,7 +10340,8 @@ namespace threepp {
             denoiser_->recordDispatch(cb, descriptorSets[setIdx], ptExt,
                                       denoiseEnabled_,
                                       static_cast<uint32_t>(toneMapping_),
-                                      exposureBits);
+                                      exposureBits,
+                                      envIsBgColor);
             timingEnd(cb, TP_Denoise);
             // ── End denoise ─────────────────────────────────────────────────────
 

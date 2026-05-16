@@ -231,7 +231,8 @@ namespace threepp::vulkan {
                                   VkExtent2D      extent,
                                   bool            denoiseEnabled,
                                   uint32_t        toneMapping,
-                                  uint32_t        exposureBits) {
+                                  uint32_t        exposureBits,
+                                  bool            bgIsSolidColor) {
         const uint32_t gx = (extent.width  + 7u) / 8u;
         const uint32_t gy = (extent.height + 7u) / 8u;
 
@@ -306,7 +307,7 @@ namespace threepp::vulkan {
                 toneMapping,
                 exposureBits,
                 denoiseEnabled ? 1u : 0u,
-                0u,
+                bgIsSolidColor ? 1u : 0u,
         };
         vkCmdPushConstants(cb, pipelineLayout_,
                            VK_SHADER_STAGE_COMPUTE_BIT,

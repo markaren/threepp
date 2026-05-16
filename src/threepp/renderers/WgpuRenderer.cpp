@@ -208,6 +208,10 @@ struct WgpuRenderer::Impl {
     float uniformPad_ = 1.0f;  // written to transformData[63] (_pad), used by path tracer display shader
     Color clearColor_{0x000000};
     float clearAlpha_ = 1.0f;
+    // Effective clear color from the most recent render() call (scene.background
+    // wins over clearColor_). Read by the tone-map blit so it can output the
+    // unmodified clear color for background pixels (alpha==0 in intermediate).
+    Color lastFrameClearColor_{0x000000};
 
     // MSAA configuration
     uint32_t sampleCount_ = 1;
@@ -439,6 +443,7 @@ struct WgpuRenderer::Impl {
         WGPUTextureView cachedInputView = nullptr;
         WGPUBindGroup  cachedBindGroup  = nullptr;
         float          lastExposure     = -1.f;
+        float          lastClear[3]     = {-1.f, -1.f, -1.f};
 
         bool initialized = false;
     } toneMap_;
@@ -1407,7 +1412,13 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
         s << R"(
 @group(0) @binding(0) var inputTex: texture_2d<f32>;
 @group(0) @binding(1) var inputSampler: sampler;
-@group(0) @binding(2) var<uniform> params: vec4<f32>; // x=exposure
+struct Params {
+    exposure: f32,
+    clearR: f32,
+    clearG: f32,
+    clearB: f32,
+};
+@group(0) @binding(2) var<uniform> params: Params;
 
 struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
 
@@ -1423,8 +1434,15 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
 @fragment fn fs(in: VSOutput) -> @location(0) vec4<f32> {
     var color = textureSample(inputTex, inputSampler, in.uv);
+    // Background detection: intermediate is cleared with alpha=0, scene shaders
+    // write alpha=1 for opaque content. Cleared pixels bypass tone mapping so
+    // the user-set clear color displays unaltered — matches three.js / GL where
+    // glClearColor isn't routed through the shader tone-map.
+    if (color.a < 0.001) {
+        return vec4<f32>(params.clearR, params.clearG, params.clearB, 1.0);
+    }
     var rgb = color.rgb;
-    let exposure = params.x;
+    let exposure = params.exposure;
 )";
         // Tone mapping
         switch (mode) {
@@ -1731,12 +1749,24 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         int idx = toneMapPipelineIndex();
         if (!toneMap_.pipelines[idx]) return;
 
-        // Upload exposure uniform only when it changes
+        // Use the clear color captured during the most recent render() call.
+        // The shader bypasses tone mapping for cleared (background) pixels so
+        // the user-set color displays without ACES desaturation — matches three.js
+        // / GL where glClearColor never goes through the shader tone-map path.
+        const Color& encodedClear = lastFrameClearColor_;
+
+        // Upload exposure + clear color uniform when any input changes
         const float exposure = scope.toneMappingExposure;
-        if (exposure != toneMap_.lastExposure) {
-            float params[4] = {exposure, 0, 0, 0};
+        if (exposure != toneMap_.lastExposure
+            || encodedClear.r != toneMap_.lastClear[0]
+            || encodedClear.g != toneMap_.lastClear[1]
+            || encodedClear.b != toneMap_.lastClear[2]) {
+            float params[4] = {exposure, encodedClear.r, encodedClear.g, encodedClear.b};
             wgpuQueueWriteBuffer(queue, toneMap_.uniformBuf, 0, params, 16);
             toneMap_.lastExposure = exposure;
+            toneMap_.lastClear[0] = encodedClear.r;
+            toneMap_.lastClear[1] = encodedClear.g;
+            toneMap_.lastClear[2] = encodedClear.b;
         }
 
         // Input texture view and bind group are stable until the RT is resized — cache them.
@@ -1824,11 +1854,18 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         // skip the encode (the sRGB surface format does it instead).
         if (!toneMap_.linearPipelines[idx]) return;
 
+        const Color& encodedClear = lastFrameClearColor_;
         const float exposure = scope.toneMappingExposure;
-        if (exposure != toneMap_.lastExposure) {
-            float params[4] = {exposure, 0, 0, 0};
+        if (exposure != toneMap_.lastExposure
+            || encodedClear.r != toneMap_.lastClear[0]
+            || encodedClear.g != toneMap_.lastClear[1]
+            || encodedClear.b != toneMap_.lastClear[2]) {
+            float params[4] = {exposure, encodedClear.r, encodedClear.g, encodedClear.b};
             wgpuQueueWriteBuffer(queue, toneMap_.uniformBuf, 0, params, 16);
             toneMap_.lastExposure = exposure;
+            toneMap_.lastClear[0] = encodedClear.r;
+            toneMap_.lastClear[1] = encodedClear.g;
+            toneMap_.lastClear[2] = encodedClear.b;
         }
 
         // Build a fresh bind group pointing at the RGBA16Float source texture.
@@ -2322,6 +2359,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             effectiveClearColor = sceneObj->background.color();
             effectiveClearAlpha = 1.0f;
         }
+        // Cache for toneMapBlit() — it runs in endFrame() and needs to know the
+        // user's clear color so background pixels can bypass tone mapping.
+        lastFrameClearColor_ = effectiveClearColor;
 
         // Decide whether to clear on this render pass.
         // Like the GL renderer: when autoClear is on, every render() clears.
@@ -2353,11 +2393,19 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         bool scissoredClear = scissorTest_ && shouldClearColor;
         colorAttachment.loadOp = (shouldClearColor && !scissoredClear) ? WGPULoadOp_Clear : WGPULoadOp_Load;
         colorAttachment.storeOp = WGPUStoreOp_Store;
+        // When routing through the RGBA16Float tone-map intermediate, force the
+        // clear alpha to 0 so the tone-map blit shader can identify background
+        // pixels (opaque scene shaders write alpha=1). Surface-direct path keeps
+        // the user-set alpha.
+        const bool useToneMapIntermediate = needsToneMapPass();
+        const double clearA = useToneMapIntermediate
+                ? 0.0
+                : static_cast<double>(effectiveClearAlpha);
         colorAttachment.clearValue = {
                 static_cast<double>(effectiveClearColor.r),
                 static_cast<double>(effectiveClearColor.g),
                 static_cast<double>(effectiveClearColor.b),
-                static_cast<double>(effectiveClearAlpha)};
+                clearA};
 
         WGPURenderPassDepthStencilAttachment depthAttachment{};
         depthAttachment.view = depthView;
@@ -2399,7 +2447,13 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         // When scissorTest_ is active we couldn't use loadOp_Clear (it ignores scissor).
         // Draw a fullscreen triangle at z=1 with the clear color to fill only the scissored region.
         if (scissoredClear) {
-            drawScissoredClear(pass, effectiveClearColor, effectiveClearAlpha,
+            // Match clearValue alpha for the tone-map intermediate so background
+            // detection in the tone-map blit shader stays consistent across the
+            // scissor-and-non-scissor paths.
+            const float scissorAlpha = useToneMapIntermediate
+                    ? 0.0f
+                    : effectiveClearAlpha;
+            drawScissoredClear(pass, effectiveClearColor, scissorAlpha,
                                activeColorFormat_, effectiveSampleCount_);
         }
 
@@ -2700,11 +2754,18 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             ensureToneMapResources();
             int idx = toneMapPipelineIndex();
             if (toneMap_.retainPipelines[idx]) {
+                const Color& encodedClear = lastFrameClearColor_;
                 const float exposure = scope.toneMappingExposure;
-                if (exposure != toneMap_.lastExposure) {
-                    float params[4] = {exposure, 0, 0, 0};
+                if (exposure != toneMap_.lastExposure
+                    || encodedClear.r != toneMap_.lastClear[0]
+                    || encodedClear.g != toneMap_.lastClear[1]
+                    || encodedClear.b != toneMap_.lastClear[2]) {
+                    float params[4] = {exposure, encodedClear.r, encodedClear.g, encodedClear.b};
                     wgpuQueueWriteBuffer(queue, toneMap_.uniformBuf, 0, params, 16);
                     toneMap_.lastExposure = exposure;
+                    toneMap_.lastClear[0] = encodedClear.r;
+                    toneMap_.lastClear[1] = encodedClear.g;
+                    toneMap_.lastClear[2] = encodedClear.b;
                 }
                 if (!toneMap_.cachedInputView) {
                     toneMap_.cachedInputView = wgpuTextureCreateView(toneMap_.colorTexture, nullptr);
