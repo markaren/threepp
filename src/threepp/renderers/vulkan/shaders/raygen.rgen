@@ -876,6 +876,17 @@ void main() {
                 } else {
                     effectiveBounces = kMaxBounces;
                 }
+                // Dense-medium cap: when the path is inside a scattering medium
+                // (underwater ocean fog, thick atmospheric haze), the bounce
+                // loop fires many extra iterations because every segment may
+                // scatter. Multi-scatter contribution falls off via
+                // Beer-Lambert anyway, so single-scatter captures most of the
+                // god-ray visual. Profiling showed PT megakernel went from
+                // 5.5ms above-water to 26.2ms underwater on vulkan_ocean —
+                // capping bounces here is the lever that targets that delta.
+                if (fogEnabled() && fog.sigmaT.x > 0.01) {
+                    effectiveBounces = min(effectiveBounces, 2);
+                }
             }
         payload.radianceDiff = vec3(0.0);
         payload.radianceSpec = vec3(0.0);
