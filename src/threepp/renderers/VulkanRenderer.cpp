@@ -35,7 +35,9 @@
 #include "wgpu/pathtracer/WgpuPathTracerEnvCdf.hpp"// reused: pure C++ template, no WGPU deps
 
 #include "threepp/cameras/Camera.hpp"
+#include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/canvas/Canvas.hpp"
+#include "threepp/core/InterleavedBufferAttribute.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
@@ -57,6 +59,8 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Skeleton.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
+#include "threepp/objects/Sprite.hpp"
+#include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/renderers/vulkan/water/OceanFFT.hpp"
 #include "threepp/scenes/Scene.hpp"
@@ -83,6 +87,8 @@
 #include "threepp/renderers/vulkan/shaders/overlay_depth.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_color.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_color.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_sprite.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_sprite.frag.spv.h"
 
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.hpp"
 
@@ -864,6 +870,35 @@ namespace threepp {
         // recordRasterGbufPass and only renders non-overlay geometry.
         VkPipeline       overlayDepthPrepassPipeline = VK_NULL_HANDLE;
 
+        // HUD sprite pipeline (overlay_sprite.vert/.frag). One pipeline for
+        // all Sprite/TextSprite draws — alpha-blended, depth-disabled,
+        // triangle-list. Per-sprite atlas texture bound via a descriptor
+        // set allocated from spriteDescPool_ each frame. Push constant
+        // carries projection + per-sprite math (mvPos, scale, center,
+        // rotation, color). See createSpriteOverlayPipeline().
+        VkDescriptorSetLayout spriteDescSetLayout_   = VK_NULL_HANDLE;
+        VkPipelineLayout      spritePipelineLayout_  = VK_NULL_HANDLE;
+        VkPipeline            overlaySpritePipeline_ = VK_NULL_HANDLE;
+        // Per-frame-in-flight descriptor pool for sprite combined-image-
+        // sampler sets. Reset at the top of each ortho overlay record so
+        // freed sets from the prior use of this frame's slot come back to
+        // the pool. Sized to kMaxSpritesPerFrame per slot.
+        static constexpr uint32_t kMaxSpritesPerFrame = 64;
+        std::array<VkDescriptorPool, kFramesInFlight> spriteDescPools_{};
+        // Cached uploaded sprite atlases. Keyed by Texture*; weak_ptr
+        // detects dangling pointers if the user destroys a TextSprite then
+        // creates a new one whose Texture happens to land at the same
+        // address. textureVersion mirrors Texture::version() so setText()
+        // (which bumps the version via needsUpdate()) triggers a re-upload.
+        struct SpriteAtlasRec {
+            Image2D image{};
+            unsigned int textureVersion = ~0u;
+            uint32_t width  = 0;
+            uint32_t height = 0;
+            std::weak_ptr<Texture> liveCheck;
+        };
+        std::unordered_map<const Texture*, SpriteAtlasRec> spriteAtlasCache_;
+
         // Per-BufferGeometry vertex/index upload cache for Line objects.
         // Lines never go through the BLAS path — they don't ray-trace —
         // so they need an independent host-visible upload. Keyed by raw
@@ -941,7 +976,7 @@ namespace threepp {
         // Master toggle for the hybrid path. setHybridEnabled(true) flips it
         // on; off keeps the existing full-PT primary path. Defaults on now
         // that the raster prepass has been validated end-to-end.
-        bool hybridEnabled_ = false;
+        bool hybridEnabled_ = true;
         bool perSppJitterHybrid_ = true;
         bool taaEnabled_ = true;
         // Tracks what each per-frame slot's binding 1 (RT denoise output)
@@ -1088,6 +1123,24 @@ namespace threepp {
         // draws into it, then we transition to PRESENT_SRC.
         std::function<void(void*)> overlayCallback;
 
+        // Per-frame lifecycle state. Mirrors the WgpuRenderer multi-pass /
+        // HUD pattern: the first render() of a user animate iteration runs
+        // beginFrame() (acquire + per-frame UBO uploads + cmd buffer record),
+        // subsequent render() calls in the same iteration append to that
+        // same cmd buffer, and the Canvas frame-end callback fires endFrame()
+        // (ImGui overlay, swapchain → PRESENT_SRC, submit, vkQueuePresentKHR).
+        //
+        // Idle              : no frame in flight; next render() runs beginFrame.
+        // RecordingPostPT   : PT pass recorded; further render(ortho) calls
+        //                     append HUD overlay draws to the same cb (Phase 2).
+        // RecordingOrthoOnly: render(ortho) called with no prior PT — frame
+        //                     was opened with an empty PT result (cleared
+        //                     swapchain). Rare; mostly defensive.
+        enum class FrameState { Idle, RecordingPostPT, RecordingOrthoOnly };
+        FrameState frameState_ = FrameState::Idle;
+        uint32_t   frameImageIndex_ = 0;
+        std::chrono::high_resolution_clock::time_point frameStartTp_;
+
         explicit Impl(Canvas& c) : canvas(c), size(c.size()) {
             ctx = std::make_unique<VulkanContext>(
                     static_cast<GLFWwindow*>(canvas.windowPtr()),
@@ -1151,6 +1204,16 @@ namespace threepp {
         ~Impl() {
             if (!ctx) return;
             VkDevice d = ctx->device();
+            // If a frame was mid-record when the renderer was destroyed (the
+            // canvas frame-end callback never got to fire, or the user tore
+            // down the renderer from inside the animate lambda), close the
+            // open cmd buffer without submitting. The reset-but-unsignaled
+            // fence is fine — no queued work depends on it — and the cmd
+            // pool destroy below releases the buffer regardless.
+            if (frameState_ != FrameState::Idle) {
+                vkEndCommandBuffer(cmdBuffers[currentFrame]);
+                frameState_ = FrameState::Idle;
+            }
             vkDeviceWaitIdle(d);
 
             for (auto s : imageAvailable) if (s) vkDestroySemaphore(d, s, nullptr);
@@ -1307,6 +1370,21 @@ namespace threepp {
             if (overlayLineStripColoredPipeline)  vkDestroyPipeline(d, overlayLineStripColoredPipeline, nullptr);
             if (overlayDepthPrepassPipeline)      vkDestroyPipeline(d, overlayDepthPrepassPipeline, nullptr);
             if (overlayPipelineLayout)      vkDestroyPipelineLayout(d, overlayPipelineLayout, nullptr);
+            if (overlaySpritePipeline_)     vkDestroyPipeline(d, overlaySpritePipeline_, nullptr);
+            if (spritePipelineLayout_)      vkDestroyPipelineLayout(d, spritePipelineLayout_, nullptr);
+            if (spriteDescSetLayout_)       vkDestroyDescriptorSetLayout(d, spriteDescSetLayout_, nullptr);
+            for (auto& pool : spriteDescPools_) {
+                if (pool) vkDestroyDescriptorPool(d, pool, nullptr);
+            }
+            for (auto& [t, rec] : spriteAtlasCache_) {
+                destroyImage2D(ctx->allocator(), d, rec.image);
+            }
+            spriteAtlasCache_.clear();
+            for (auto& [g, rec] : spriteGeomCache_) {
+                destroyBuffer(ctx->allocator(), rec.vertex);
+                if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.index);
+            }
+            spriteGeomCache_.clear();
             for (auto& [g, rec] : lineGeomCache_) {
                 destroyBuffer(ctx->allocator(), rec.vertex);
                 if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.index);
@@ -6700,6 +6778,579 @@ namespace threepp {
             }
         }
 
+        // HUD sprite (TextSprite + Sprite) pipeline. Alpha-blended quad
+        // drawn over the swapchain in the ortho overlay pass — no depth,
+        // CULL_NONE, triangle-list, vertex layout matching Sprite's
+        // InterleavedBuffer (5 floats: pos.xyz at offset 0, uv.xy at
+        // offset 12). One per-sprite combined-image-sampler descriptor at
+        // set 0 binding 0, allocated each frame from spriteDescPools_.
+        // Push constant carries projection + per-sprite scale/center/
+        // rotation/mvPos/color (128 bytes — fits the 128B minimum guarantee).
+        void createSpriteOverlayPipeline() {
+            if (overlaySpritePipeline_ != VK_NULL_HANDLE) return;
+
+            VkDescriptorSetLayoutBinding b{};
+            b.binding         = 0;
+            b.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b.descriptorCount = 1;
+            b.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+            VkDescriptorSetLayoutCreateInfo dslci{};
+            dslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            dslci.bindingCount = 1;
+            dslci.pBindings    = &b;
+            check(vkCreateDescriptorSetLayout(ctx->device(), &dslci, nullptr, &spriteDescSetLayout_),
+                  "vkCreateDescriptorSetLayout(spriteOverlay)");
+
+            VkPushConstantRange pcRange{};
+            pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+            pcRange.offset     = 0;
+            pcRange.size       = 128;
+
+            VkPipelineLayoutCreateInfo plci{};
+            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            plci.setLayoutCount         = 1;
+            plci.pSetLayouts            = &spriteDescSetLayout_;
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges    = &pcRange;
+            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &spritePipelineLayout_),
+                  "vkCreatePipelineLayout(spriteOverlay)");
+
+            // Per-frame-in-flight descriptor pool. Reset before each ortho
+            // overlay record so the prior frame's allocations return to the
+            // pool without per-set vkFreeDescriptorSets calls.
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                VkDescriptorPoolSize ps{};
+                ps.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                ps.descriptorCount = kMaxSpritesPerFrame;
+                VkDescriptorPoolCreateInfo dpci{};
+                dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+                dpci.maxSets       = kMaxSpritesPerFrame;
+                dpci.poolSizeCount = 1;
+                dpci.pPoolSizes    = &ps;
+                check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &spriteDescPools_[f]),
+                      "vkCreateDescriptorPool(spriteOverlay)");
+            }
+
+            VkShaderModuleCreateInfo vsmci{};
+            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            vsmci.codeSize = sizeof(kOverlaySpriteVertSpv);
+            vsmci.pCode    = kOverlaySpriteVertSpv;
+            VkShaderModule vert = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vert),
+                  "vkCreateShaderModule(overlay_sprite.vert)");
+            VkShaderModuleCreateInfo fsmci{};
+            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            fsmci.codeSize = sizeof(kOverlaySpriteFragSpv);
+            fsmci.pCode    = kOverlaySpriteFragSpv;
+            VkShaderModule frag = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &frag),
+                  "vkCreateShaderModule(overlay_sprite.frag)");
+
+            VkPipelineShaderStageCreateInfo stages[2]{};
+            stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+            stages[0].module = vert;
+            stages[0].pName  = "main";
+            stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stages[1].module = frag;
+            stages[1].pName  = "main";
+
+            // Sprite's InterleavedBuffer: 5 floats per vertex (pos.xyz at 0..2,
+            // uv.xy at 3..4). One binding, two attributes.
+            VkVertexInputBindingDescription vib{};
+            vib.binding   = 0;
+            vib.stride    = 5 * sizeof(float);
+            vib.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            VkVertexInputAttributeDescription vias[2]{};
+            vias[0].location = 0; vias[0].binding = 0;
+            vias[0].format   = VK_FORMAT_R32G32B32_SFLOAT;
+            vias[0].offset   = 0;
+            vias[1].location = 1; vias[1].binding = 0;
+            vias[1].format   = VK_FORMAT_R32G32_SFLOAT;
+            vias[1].offset   = 3 * sizeof(float);
+            VkPipelineVertexInputStateCreateInfo vi{};
+            vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            vi.vertexBindingDescriptionCount   = 1;
+            vi.pVertexBindingDescriptions      = &vib;
+            vi.vertexAttributeDescriptionCount = 2;
+            vi.pVertexAttributeDescriptions    = vias;
+
+            VkPipelineInputAssemblyStateCreateInfo ia{};
+            ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+            VkPipelineViewportStateCreateInfo vp{};
+            vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+            vp.viewportCount = 1;
+            vp.scissorCount  = 1;
+
+            VkPipelineRasterizationStateCreateInfo rs{};
+            rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            rs.polygonMode = VK_POLYGON_MODE_FILL;
+            rs.cullMode    = VK_CULL_MODE_NONE;
+            rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rs.lineWidth   = 1.0f;
+
+            VkPipelineMultisampleStateCreateInfo ms{};
+            ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+            ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+            VkPipelineDepthStencilStateCreateInfo ds{};
+            ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+            ds.depthTestEnable  = VK_FALSE;
+            ds.depthWriteEnable = VK_FALSE;
+
+            // Standard non-premultiplied alpha.
+            VkPipelineColorBlendAttachmentState cbas{};
+            cbas.blendEnable         = VK_TRUE;
+            cbas.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            cbas.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbas.colorBlendOp        = VK_BLEND_OP_ADD;
+            cbas.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbas.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbas.alphaBlendOp        = VK_BLEND_OP_ADD;
+            cbas.colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                       VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            VkPipelineColorBlendStateCreateInfo cb{};
+            cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            cb.attachmentCount = 1;
+            cb.pAttachments    = &cbas;
+
+            VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                           VK_DYNAMIC_STATE_SCISSOR};
+            VkPipelineDynamicStateCreateInfo dyn{};
+            dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            dyn.dynamicStateCount = 2;
+            dyn.pDynamicStates    = dynStates;
+
+            // Dynamic rendering — color attachment only, no depth attachment.
+            // HUD draws after the existing overlay pass so the swapchain has
+            // already been transitioned through COLOR_ATTACHMENT_OPTIMAL.
+            const VkFormat colorFmt = ctx->swapchainFormat();
+            VkPipelineRenderingCreateInfo prci{};
+            prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+            prci.colorAttachmentCount    = 1;
+            prci.pColorAttachmentFormats = &colorFmt;
+
+            VkGraphicsPipelineCreateInfo gpci{};
+            gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            gpci.pNext               = &prci;
+            gpci.stageCount          = 2;
+            gpci.pStages             = stages;
+            gpci.pVertexInputState   = &vi;
+            gpci.pInputAssemblyState = &ia;
+            gpci.pViewportState      = &vp;
+            gpci.pRasterizationState = &rs;
+            gpci.pMultisampleState   = &ms;
+            gpci.pDepthStencilState  = &ds;
+            gpci.pColorBlendState    = &cb;
+            gpci.pDynamicState       = &dyn;
+            gpci.layout              = spritePipelineLayout_;
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpci, nullptr,
+                                            &overlaySpritePipeline_),
+                  "vkCreateGraphicsPipelines(overlaySprite)");
+
+            vkDestroyShaderModule(ctx->device(), vert, nullptr);
+            vkDestroyShaderModule(ctx->device(), frag, nullptr);
+        }
+
+        // Upload / refresh a sprite atlas texture. Returns nullptr on
+        // failure (no image, unsupported pixel layout, or dimensions zero).
+        // Re-uploads when Texture::version() bumps (TextSprite::setText
+        // calls Texture::needsUpdate() → version() increments) or when the
+        // image dimensions change. Cache is keyed by raw Texture* with a
+        // weak_ptr live-check to detect address reuse.
+        const SpriteAtlasRec* ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp) {
+            if (!texSp) return nullptr;
+            const Texture* tex = texSp.get();
+            Image& img = const_cast<Texture*>(tex)->image();
+            const uint32_t w = img.width;
+            const uint32_t h = img.height;
+            if (w == 0 || h == 0) return nullptr;
+
+            const unsigned int curVersion = tex->version();
+            auto it = spriteAtlasCache_.find(tex);
+            if (it != spriteAtlasCache_.end()) {
+                SpriteAtlasRec& rec = it->second;
+                const bool stale = rec.liveCheck.expired() ||
+                                   rec.liveCheck.lock().get() != tex ||
+                                   rec.textureVersion != curVersion ||
+                                   rec.width != w || rec.height != h;
+                if (!stale) return &rec;
+                // Stale — destroy and re-upload.
+                vkDeviceWaitIdle(ctx->device());
+                destroyImage2D(ctx->allocator(), ctx->device(), rec.image);
+                spriteAtlasCache_.erase(it);
+            }
+
+            // TextSprite / Font::rasterize emits RGBA8. Other sprite atlases
+            // (image-file loaded textures) usually do too. Anything else
+            // we don't bother supporting here — the user can manually
+            // upload via the bindless texture path before render().
+            std::vector<unsigned char> rgba;
+            const size_t pixels = static_cast<size_t>(w) * h;
+            try {
+                auto& src = img.data<unsigned char>();
+                if (src.size() == pixels * 4) {
+                    rgba.assign(src.begin(), src.end());
+                } else if (src.size() == pixels * 3) {
+                    rgba.resize(pixels * 4);
+                    for (size_t i = 0; i < pixels; ++i) {
+                        rgba[i*4+0] = src[i*3+0];
+                        rgba[i*4+1] = src[i*3+1];
+                        rgba[i*4+2] = src[i*3+2];
+                        rgba[i*4+3] = 255u;
+                    }
+                } else {
+                    return nullptr;
+                }
+            } catch (const std::bad_variant_access&) {
+                return nullptr;
+            }
+
+            // Sprite/text atlases are display-space data — default to sRGB
+            // (font rasterizer outputs glyph alpha + tint values in the
+            // same encoding the swapchain expects) unless the user has
+            // explicitly tagged the texture as Linear.
+            const VkFormat fmt = (tex->colorSpace == ColorSpace::Linear)
+                                         ? VK_FORMAT_R8G8B8A8_UNORM
+                                         : VK_FORMAT_R8G8B8A8_SRGB;
+            Image2D up = createSampledImage2D(
+                    w, h, fmt,
+                    rgba.data(), rgba.size(),
+                    VK_FILTER_LINEAR,
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+
+            SpriteAtlasRec rec{};
+            rec.image          = up;
+            rec.textureVersion = curVersion;
+            rec.width          = w;
+            rec.height         = h;
+            rec.liveCheck      = std::weak_ptr<Texture>(texSp);
+            auto [ins, _] = spriteAtlasCache_.emplace(tex, std::move(rec));
+            return &ins->second;
+        }
+
+        // Records HUD-style ortho overlay draws (Sprite / TextSprite) onto
+        // the open swapchain cmd buffer. Called from the renderFrame
+        // dispatcher when render(orthoCamera) is invoked mid-frame.
+        // Walks scene.children, finds Sprite-derived objects, ensures each
+        // atlas is uploaded, allocates a descriptor set bound to the atlas
+        // from this frame's spriteDescPools_ slot, and issues a 6-index
+        // draw. Mesh + Line overlay support is Phase 2's follow-up.
+        void recordOrthoOverlay(Object3D& scene, Camera& camera) {
+            // Lazy pipeline setup on first HUD overlay of the program.
+            if (overlaySpritePipeline_ == VK_NULL_HANDLE) {
+                createSpriteOverlayPipeline();
+            }
+            // Ensure scene + camera matrices are current — the user's HUD
+            // class typically only updates the camera's projection on
+            // resize and the sprite positions per-frame; matrixWorld
+            // computation here keeps us self-contained (no implicit
+            // requirement that the user call updateMatrixWorld).
+            scene.updateMatrixWorld(true);
+            camera.updateMatrixWorld(true);
+
+            // Reset the per-frame descriptor pool before allocating this
+            // frame's sprite sets. Safe because the inFlight fence wait
+            // at frame start already guarantees the prior frame's sets
+            // aren't bound on any in-flight cmd buffer.
+            check(vkResetDescriptorPool(ctx->device(),
+                                        spriteDescPools_[currentFrame], 0),
+                  "vkResetDescriptorPool(sprite)");
+
+            // Collect visible sprites. traverseVisible skips invisible
+            // subtrees the same way the PT walk does.
+            struct SpriteDraw {
+                Sprite* sprite = nullptr;
+                std::shared_ptr<Texture> atlas;
+                float color[4]{1.f,1.f,1.f,1.f};
+                float rotation = 0.f;
+            };
+            std::vector<SpriteDraw> draws;
+            scene.traverseVisible([&](Object3D& o) {
+                auto* sp = dynamic_cast<Sprite*>(&o);
+                if (!sp) return;
+                auto mat = sp->material();
+                if (!mat) return;
+                auto* mm = dynamic_cast<MaterialWithMap*>(mat.get());
+                if (!mm || !mm->map) return;
+                SpriteDraw d;
+                d.sprite = sp;
+                d.atlas  = mm->map;
+                if (auto* mc = dynamic_cast<MaterialWithColor*>(mat.get())) {
+                    d.color[0] = mc->color.r;
+                    d.color[1] = mc->color.g;
+                    d.color[2] = mc->color.b;
+                }
+                d.color[3] = mat->opacity;
+                if (auto* mr = dynamic_cast<MaterialWithRotation*>(mat.get())) {
+                    d.rotation = mr->rotation;
+                }
+                draws.push_back(std::move(d));
+            });
+            if (draws.empty()) return;
+            if (draws.size() > kMaxSpritesPerFrame) {
+                std::cerr << "[VulkanRenderer] HUD sprite count " << draws.size()
+                          << " exceeds kMaxSpritesPerFrame=" << kMaxSpritesPerFrame
+                          << "; extras dropped\n";
+                draws.resize(kMaxSpritesPerFrame);
+            }
+
+            const VkExtent2D ext = ctx->swapchainExtent();
+            VkCommandBuffer cb = cmdBuffers[currentFrame];
+            const uint32_t imageIndex = frameImageIndex_;
+
+            // Open a fresh dynamic render pass on the swapchain so we can
+            // emit draw commands. The hybrid 3D overlay pass earlier in
+            // recordCommandBuffer leaves the swapchain in GENERAL; we
+            // transition GENERAL → COLOR_ATTACHMENT_OPTIMAL, draw, then
+            // transition back to GENERAL so endFrame's overlay/present
+            // logic sees the layout it expects.
+            const VkImage img = ctx->swapchainImages()[imageIndex];
+            {
+                VkImageMemoryBarrier2 toColor{};
+                toColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                toColor.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                        VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+                                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                toColor.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                        VK_ACCESS_2_TRANSFER_WRITE_BIT |
+                                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                toColor.dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                toColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                toColor.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                toColor.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                toColor.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toColor.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toColor.image = img;
+                toColor.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                toColor.subresourceRange.levelCount = 1;
+                toColor.subresourceRange.layerCount = 1;
+                VkDependencyInfo dep{};
+                dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.imageMemoryBarrierCount = 1;
+                dep.pImageMemoryBarriers = &toColor;
+                vkCmdPipelineBarrier2(cb, &dep);
+            }
+
+            VkRenderingAttachmentInfo colorAtt{};
+            colorAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            colorAtt.imageView   = ctx->swapchainImageViews()[imageIndex];
+            colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            colorAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+            colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo ri{};
+            ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            ri.renderArea.offset = {0, 0};
+            ri.renderArea.extent = ext;
+            ri.layerCount = 1;
+            ri.colorAttachmentCount = 1;
+            ri.pColorAttachments = &colorAtt;
+            vkCmdBeginRendering(cb, &ri);
+
+            VkViewport vp{0.f, 0.f, float(ext.width), float(ext.height), 0.f, 1.f};
+            vkCmdSetViewport(cb, 0, 1, &vp);
+            VkRect2D sc{{0,0}, ext};
+            vkCmdSetScissor(cb, 0, 1, &sc);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, overlaySpritePipeline_);
+
+            // Per-frame projection (ortho) extracted from the camera. matrixWorldInverse
+            // is the view matrix; we precompute modelView for each sprite below.
+            Matrix4 projMat;
+            std::memcpy(projMat.elements.data(),
+                        camera.projectionMatrix.elements.data(), 64);
+
+            // 128-byte push constant layout, matches overlay_sprite.vert/frag.
+            struct SpritePC {
+                float projection[16];   // 64
+                float mvPos[4];         // 16
+                float scale[2];         // 8
+                float center[2];        // 8
+                float color[4];         // 16
+                float rotation;         // 4
+                float _pad[3];          // 12
+            };
+            static_assert(sizeof(SpritePC) == 128,
+                          "SpritePC must match push-constant layout");
+
+            for (const auto& d : draws) {
+                const auto* atlas = ensureSpriteAtlasTexture(d.atlas);
+                if (!atlas) continue;
+
+                // Per-sprite descriptor set bound to the atlas texture.
+                VkDescriptorSetAllocateInfo asi{};
+                asi.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                asi.descriptorPool     = spriteDescPools_[currentFrame];
+                asi.descriptorSetCount = 1;
+                asi.pSetLayouts        = &spriteDescSetLayout_;
+                VkDescriptorSet set = VK_NULL_HANDLE;
+                if (vkAllocateDescriptorSets(ctx->device(), &asi, &set) != VK_SUCCESS) continue;
+                VkDescriptorImageInfo dii{};
+                dii.imageView   = atlas->image.view;
+                dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                dii.sampler     = atlas->image.sampler;
+                VkWriteDescriptorSet w{};
+                w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                w.dstSet          = set;
+                w.dstBinding      = 0;
+                w.descriptorCount = 1;
+                w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                w.pImageInfo      = &dii;
+                vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        spritePipelineLayout_, 0, 1, &set, 0, nullptr);
+
+                Sprite* sp = d.sprite;
+                // modelView = viewInverse * sprite.matrixWorld
+                Matrix4 modelView;
+                modelView.multiplyMatrices(camera.matrixWorldInverse, *sp->matrixWorld);
+                Vector3 worldScale;
+                worldScale.setFromMatrixScale(*sp->matrixWorld);
+                Vector3 mvPos;
+                mvPos.setFromMatrixPosition(modelView);
+
+                SpritePC pc{};
+                std::memcpy(pc.projection, projMat.elements.data(), 64);
+                pc.mvPos[0] = static_cast<float>(mvPos.x);
+                pc.mvPos[1] = static_cast<float>(mvPos.y);
+                pc.mvPos[2] = static_cast<float>(mvPos.z);
+                pc.mvPos[3] = 1.f;
+                pc.scale[0] = static_cast<float>(worldScale.x);
+                pc.scale[1] = static_cast<float>(worldScale.y);
+                pc.center[0] = sp->center.x;
+                pc.center[1] = sp->center.y;
+                pc.color[0] = d.color[0];
+                pc.color[1] = d.color[1];
+                pc.color[2] = d.color[2];
+                pc.color[3] = d.color[3];
+                pc.rotation = d.rotation;
+
+                vkCmdPushConstants(cb, spritePipelineLayout_,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0, sizeof(pc), &pc);
+
+                // Sprite geometry: shared 4-vertex interleaved quad + 6-index
+                // buffer. Upload through the existing line-geometry helper —
+                // it doesn't know about Lines specifically, it just stages
+                // a position+optional-color vertex buffer. We need a slightly
+                // different uploader for the 5-float interleaved layout.
+                const BufferGeometry* geom = sp->geometry().get();
+                const SpriteGeomRec* gr = ensureSpriteGeometryUploaded(geom);
+                if (!gr || gr->vertex.handle == VK_NULL_HANDLE) continue;
+
+                VkBuffer     vbufs[1] = {gr->vertex.handle};
+                VkDeviceSize voffs[1] = {0};
+                vkCmdBindVertexBuffers(cb, 0, 1, vbufs, voffs);
+                vkCmdBindIndexBuffer(cb, gr->index.handle, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cb, gr->indexCount, 1, 0, 0, 0);
+            }
+
+            vkCmdEndRendering(cb);
+
+            // Back to GENERAL for endFrame's overlay/present transition.
+            {
+                VkImageMemoryBarrier2 toGeneral{};
+                toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                toGeneral.srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                toGeneral.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                toGeneral.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                          VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+                                          VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                          VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
+                toGeneral.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                          VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                          VK_ACCESS_2_TRANSFER_READ_BIT |
+                                          VK_ACCESS_2_TRANSFER_WRITE_BIT |
+                                          VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                                          VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                toGeneral.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                toGeneral.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toGeneral.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toGeneral.image = img;
+                toGeneral.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                toGeneral.subresourceRange.levelCount = 1;
+                toGeneral.subresourceRange.layerCount = 1;
+                VkDependencyInfo dep{};
+                dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.imageMemoryBarrierCount = 1;
+                dep.pImageMemoryBarriers = &toGeneral;
+                vkCmdPipelineBarrier2(cb, &dep);
+            }
+        }
+
+        // Per-BufferGeometry vertex/index upload for Sprite quads. Sprite
+        // shares one 5-float interleaved buffer per instance (Sprite.cpp
+        // builds the geometry in its constructor); we upload it once on
+        // first encounter and reuse from then on.
+        struct SpriteGeomRec {
+            Buffer   vertex;
+            Buffer   index;
+            uint32_t indexCount = 0;
+            std::weak_ptr<BufferGeometry> liveCheck;
+        };
+        std::unordered_map<const BufferGeometry*, SpriteGeomRec> spriteGeomCache_;
+
+        const SpriteGeomRec* ensureSpriteGeometryUploaded(const BufferGeometry* geom) {
+            if (!geom) return nullptr;
+            auto it = spriteGeomCache_.find(geom);
+            if (it != spriteGeomCache_.end()) return &it->second;
+
+            // Sprite's geometry uses one InterleavedBuffer (5 floats /
+            // vertex: pos.xyz at 0..2, uv.xy at 3..4). Pull the underlying
+            // shared array via the interleaved attribute, not the position
+            // attribute's stride-aware accessor, so we upload the full
+            // interleaved 5-float layout the pipeline's vertex input
+            // expects.
+            auto* posAttr = geom->getAttribute<float>("position");
+            const auto* idxAttr = geom->getIndex();
+            if (!posAttr || !idxAttr) return nullptr;
+            const auto* posIB = dynamic_cast<const InterleavedBufferAttribute*>(posAttr);
+            if (!posIB) return nullptr;
+            const auto& packed = posIB->data->array();
+            if (packed.empty()) return nullptr;
+
+            SpriteGeomRec rec{};
+            const VkDeviceSize vbSize = packed.size() * sizeof(float);
+            rec.vertex = createBuffer(
+                    ctx->allocator(), ctx->device(), vbSize,
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            {
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), rec.vertex.alloc, &mapped);
+                std::memcpy(mapped, packed.data(), vbSize);
+                vmaUnmapMemory(ctx->allocator(), rec.vertex.alloc);
+            }
+
+            const auto& indices = idxAttr->array();
+            std::vector<uint32_t> idx32(indices.size());
+            for (size_t i = 0; i < indices.size(); ++i) {
+                idx32[i] = static_cast<uint32_t>(indices[i]);
+            }
+            const VkDeviceSize ibSize = idx32.size() * sizeof(uint32_t);
+            rec.index = createBuffer(
+                    ctx->allocator(), ctx->device(), ibSize,
+                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            {
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), rec.index.alloc, &mapped);
+                std::memcpy(mapped, idx32.data(), ibSize);
+                vmaUnmapMemory(ctx->allocator(), rec.index.alloc);
+            }
+            rec.indexCount = static_cast<uint32_t>(idx32.size());
+
+            auto [ins, _] = spriteGeomCache_.emplace(geom, std::move(rec));
+            return &ins->second;
+        }
+
         // Lazy-upload Line / LineSegments geometry into a host-visible
         // vertex (+ optional index) buffer pair. Returns nullptr if the
         // geometry has no usable position attribute. Cached by raw pointer
@@ -8987,21 +9638,14 @@ namespace threepp {
             reallocateRenderExtentResources();
         }
 
+        // Records the PT pipeline body into an already-open command buffer.
+        // beginFrame() is responsible for vkBeginCommandBuffer + timing-pool
+        // reset *before* this call; endFrame() handles the overlay/ImGui
+        // pass, the swapchain → PRESENT_SRC transition, vkEndCommandBuffer,
+        // and submission *after*. On exit, the swapchain image is in
+        // VK_IMAGE_LAYOUT_GENERAL (per the post-TAA / upscale path) so the
+        // endFrame transitions can rely on a known layout.
         void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
-            recordStartTp_ = std::chrono::high_resolution_clock::now();
-            VkCommandBufferBeginInfo bi{};
-            bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer");
-
-            // Timing pool reset must run on the command stream (CPU-side
-            // vkResetQueryPool also works on 1.2+ but we keep the GPU-side
-            // reset for portability with older Vulkan toolchains). Clear
-            // the host-side recorded-mask in lockstep.
-            if (timingsSupported_ && timestampPools[currentFrame] != VK_NULL_HANDLE) {
-                vkCmdResetQueryPool(cb, timestampPools[currentFrame],
-                                    0, kTimingSlots);
-                timingMaskRecorded_[currentFrame] = 0u;
-            }
 
             // ── Skinned-mesh GPU pipeline ──────────────────────────────────
             // ensureSceneBuilt populated pendingSkinnedRebuilds_ with the
@@ -9944,8 +10588,23 @@ namespace threepp {
             }
             // ── End upscale fallback ───────────────────────────────────────────
 
-            // If an overlay (ImGui) is registered, draw it on top of the
-            // ray-traced image inside a dynamic render pass before presenting.
+            // ── End of PT recording. ───────────────────────────────────────────
+            // The swapchain image is left in VK_IMAGE_LAYOUT_GENERAL — endFrame
+            // handles the ImGui overlay pass + GENERAL → PRESENT_SRC transition,
+            // closes the command buffer, and submits.
+        }
+
+        // Records the ImGui (or any overlay) callback inside a dynamic render
+        // pass, then transitions the swapchain image GENERAL → PRESENT_SRC.
+        // When no overlay callback is set, just emits the GENERAL → PRESENT_SRC
+        // barrier directly. Called from endFrame() immediately before
+        // vkEndCommandBuffer + submit.
+        void recordOverlayAndPresentTransition(VkCommandBuffer cb, uint32_t imageIndex) {
+            const VkImage    img = ctx->swapchainImages()[imageIndex];
+            const VkExtent2D ext = ctx->swapchainExtent();
+            VkDependencyInfo dep{};
+            dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+
             if (overlayCallback) {
                 VkImageMemoryBarrier2 toColor{};
                 toColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -10030,16 +10689,35 @@ namespace threepp {
                 dep.pImageMemoryBarriers = &toPresent;
                 vkCmdPipelineBarrier2(cb, &dep);
             }
+        }
 
-            check(vkEndCommandBuffer(cb), "vkEndCommandBuffer");
-            {
-                using namespace std::chrono;
-                const auto dt = high_resolution_clock::now() - recordStartTp_;
-                lastFrameTimings_.cpuRecordMs = duration<float, std::milli>(dt).count();
+        // Common cmd-buffer-begin epilogue used by both PT and ortho-only
+        // frame starts: opens the command buffer and resets the per-frame
+        // timestamp pool. Caller must have already acquired the swap image,
+        // reset the fence, and reset the cmd buffer.
+        void beginCommandRecording(VkCommandBuffer cb) {
+            recordStartTp_ = std::chrono::high_resolution_clock::now();
+            VkCommandBufferBeginInfo bi{};
+            bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer");
+
+            // Timing pool reset must run on the command stream (CPU-side
+            // vkResetQueryPool also works on 1.2+ but we keep the GPU-side
+            // reset for portability with older Vulkan toolchains). Clear
+            // the host-side recorded-mask in lockstep.
+            if (timingsSupported_ && timestampPools[currentFrame] != VK_NULL_HANDLE) {
+                vkCmdResetQueryPool(cb, timestampPools[currentFrame],
+                                    0, kTimingSlots);
+                timingMaskRecorded_[currentFrame] = 0u;
             }
         }
 
-        void renderFrame(Object3D& scene, Camera& camera) {
+        // Acquire next swapchain image, run all per-frame UBO / descriptor
+        // uploads, open the cmd buffer, and record the full PT body. On exit,
+        // the swapchain image is in GENERAL and the cmd buffer is open;
+        // endFrame() finishes it (overlay + present-src + submit + present).
+        // Returns false on swapchain OUT_OF_DATE — caller leaves state Idle.
+        bool beginFrameForPT(Object3D& scene, Camera& camera) {
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
             // Fence has signaled → the previous render that wrote into
@@ -10053,11 +10731,12 @@ namespace threepp {
                                                  imageAvailable[currentFrame], VK_NULL_HANDLE, &imageIndex);
             if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
                 recreateSwapchainAndDescriptors();
-                return;
+                return false;
             }
             if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) {
                 check(acq, "vkAcquireNextImageKHR");
             }
+            frameImageIndex_ = imageIndex;
 
             updateCameraUbo(currentFrame, camera);
             updateLightsUbo(currentFrame, scene);
@@ -10147,7 +10826,119 @@ namespace threepp {
 
             vkResetFences(d, 1, &inFlight[currentFrame]);
             vkResetCommandBuffer(cmdBuffers[currentFrame], 0);
+            beginCommandRecording(cmdBuffers[currentFrame]);
+            // Record the full PT body into the now-open cmd buffer. Leaves
+            // the swapchain image in GENERAL.
             recordCommandBuffer(cmdBuffers[currentFrame], imageIndex);
+            return true;
+        }
+
+        // Ortho-only frame start: no PT, no per-frame uploads. Acquires the
+        // swap image, opens the cmd buffer, and clears the swapchain to the
+        // configured clearColor (leaves layout = GENERAL). Phase 2 will add
+        // recordOrthoOverlay() to draw the HUD scene atop this cleared image.
+        bool beginFrameOrthoOnly() {
+            VkDevice d = ctx->device();
+            vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
+            readBackTimingsFromPriorUse();
+
+            uint32_t imageIndex = 0;
+            VkResult acq = vkAcquireNextImageKHR(d, ctx->swapchain(), UINT64_MAX,
+                                                 imageAvailable[currentFrame], VK_NULL_HANDLE, &imageIndex);
+            if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
+                recreateSwapchainAndDescriptors();
+                return false;
+            }
+            if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) {
+                check(acq, "vkAcquireNextImageKHR");
+            }
+            frameImageIndex_ = imageIndex;
+
+            vkResetFences(d, 1, &inFlight[currentFrame]);
+            vkResetCommandBuffer(cmdBuffers[currentFrame], 0);
+            VkCommandBuffer cb = cmdBuffers[currentFrame];
+            beginCommandRecording(cb);
+
+            // UNDEFINED → TRANSFER_DST, vkCmdClearColorImage, TRANSFER_DST → GENERAL.
+            const VkImage img = ctx->swapchainImages()[imageIndex];
+            VkImageSubresourceRange range{};
+            range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            range.levelCount = 1;
+            range.layerCount = 1;
+            {
+                VkImageMemoryBarrier2 b{};
+                b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                b.srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                b.srcAccessMask = 0;
+                b.dstStageMask  = VK_PIPELINE_STAGE_2_CLEAR_BIT;
+                b.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image = img;
+                b.subresourceRange = range;
+                VkDependencyInfo dep{};
+                dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.imageMemoryBarrierCount = 1;
+                dep.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cb, &dep);
+            }
+            VkClearColorValue cv{};
+            cv.float32[0] = clearColor.r;
+            cv.float32[1] = clearColor.g;
+            cv.float32[2] = clearColor.b;
+            cv.float32[3] = clearAlpha;
+            vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                 &cv, 1, &range);
+            {
+                VkImageMemoryBarrier2 b{};
+                b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                b.srcStageMask  = VK_PIPELINE_STAGE_2_CLEAR_BIT;
+                b.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                b.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                  VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+                                  VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                  VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                  VK_ACCESS_2_TRANSFER_READ_BIT |
+                                  VK_ACCESS_2_TRANSFER_WRITE_BIT |
+                                  VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                                  VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image = img;
+                b.subresourceRange = range;
+                VkDependencyInfo dep{};
+                dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.imageMemoryBarrierCount = 1;
+                dep.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cb, &dep);
+            }
+            return true;
+        }
+
+        // Finish the open frame: record overlay/ImGui pass + PRESENT_SRC
+        // transition, close the cmd buffer, submit and present, advance the
+        // frame slot, bump sampleIndex. No-op when no frame is open.
+        // Registered as Canvas frame-end callback (fires after the user's
+        // animate lambda returns); also invoked from render() when the user
+        // unexpectedly starts a second perspective render mid-frame.
+        void endFrame() {
+            if (frameState_ == FrameState::Idle) return;
+
+            const uint32_t imageIndex = frameImageIndex_;
+            VkCommandBuffer cb = cmdBuffers[currentFrame];
+
+            recordOverlayAndPresentTransition(cb, imageIndex);
+            check(vkEndCommandBuffer(cb), "vkEndCommandBuffer");
+            {
+                using namespace std::chrono;
+                const auto dt = high_resolution_clock::now() - recordStartTp_;
+                lastFrameTimings_.cpuRecordMs = duration<float, std::milli>(dt).count();
+            }
 
             VkSemaphoreSubmitInfo waitInfo{};
             waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
@@ -10161,7 +10952,7 @@ namespace threepp {
 
             VkCommandBufferSubmitInfo cbInfo{};
             cbInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
-            cbInfo.commandBuffer = cmdBuffers[currentFrame];
+            cbInfo.commandBuffer = cb;
 
             VkSubmitInfo2 submit{};
             submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
@@ -10200,13 +10991,58 @@ namespace threepp {
             // toward biased noise. 16M ≈ 75 hours at 60 fps, no longer reachable.
             if (sampleIndex < (1u << 24)) ++sampleIndex;
 
-            currentFrame = (currentFrame + 1) % kFramesInFlight;
+            currentFrame  = (currentFrame + 1) % kFramesInFlight;
+            frameState_   = FrameState::Idle;
+        }
+
+        // State-machine dispatcher for VulkanRenderer::render(). First call
+        // of a user animate iteration runs beginFrame*, subsequent calls
+        // either append HUD overlay draws (Phase 2 — ortho path) or finalize
+        // the prior frame and restart (defensive — second perspective call).
+        // endFrame() runs from the Canvas frame-end callback at the tail of
+        // animateOnce().
+        void renderFrame(Object3D& scene, Camera& camera) {
+            const bool isOrtho = camera.is<OrthographicCamera>();
+
+            if (frameState_ == FrameState::Idle) {
+                if (isOrtho) {
+                    if (!beginFrameOrthoOnly()) return;
+                    frameState_ = FrameState::RecordingOrthoOnly;
+                } else {
+                    if (!beginFrameForPT(scene, camera)) return;
+                    frameState_ = FrameState::RecordingPostPT;
+                }
+                return;
+            }
+
+            // Frame already in flight from a prior render() call this iteration.
+            if (!isOrtho) {
+                // User issued a second perspective render — finalize the
+                // prior frame, then re-enter from Idle for the new one.
+                endFrame();
+                renderFrame(scene, camera);
+                return;
+            }
+            // HUD-style ortho render: append Sprite draws onto the open
+            // cmd buffer's swapchain image. Mesh / Line HUD overlays are
+            // a follow-up — the no-op branch falls through to here so the
+            // present still completes from endFrame().
+            recordOrthoOverlay(scene, camera);
         }
     };
 
     VulkanRenderer::VulkanRenderer(Canvas& canvas) {
         canvas.initWindow(GraphicsAPI::Vulkan);
         pimpl_ = std::make_unique<Impl>(canvas);
+        // Mirror WgpuRenderer: the user's animate lambda may call render()
+        // multiple times in one iteration (e.g. main scene + HUD overlay
+        // via threepp::HUD). Each render() opens or extends the in-flight
+        // frame; the present is deferred to the canvas frame-end callback
+        // so all draws land on the same swapchain image. See
+        // Impl::endFrame() for the submit+present body.
+        canvas.setFrameEndCallback([this] {
+            if (pimpl_) pimpl_->endFrame();
+        });
     }
 
     VulkanRenderer::~VulkanRenderer() = default;
@@ -10222,15 +11058,23 @@ namespace threepp {
         // can flip toneMapping / toneMappingExposure freely between frames.
         pimpl_->toneMapping_         = toneMapping;
         pimpl_->toneMappingExposure_ = toneMappingExposure;
-        // Time ensureSceneBuilt into the pending CPU slot; renderFrame's
-        // readback consumes it after the fence wait so the public getter
-        // matches the same frame whose GPU timings we expose.
-        const auto sceneStart = std::chrono::high_resolution_clock::now();
-        pimpl_->ensureSceneBuilt(scene);
-        pimpl_->pendingCpuEnsureSceneMs_ =
-                std::chrono::duration<float, std::milli>(
-                        std::chrono::high_resolution_clock::now() - sceneStart)
-                        .count();
+        // Only the PT-bound (perspective-camera) render() call needs the
+        // scene-build pass — it populates lastVisibleEntries_, the BLAS
+        // cache, motion bits and the per-mesh fingerprint state the PT
+        // pipeline reads. The HUD pattern's second call (ortho camera over
+        // a separate HUD scene) must not touch any of that, or it clobbers
+        // motionThisFrame_ / meshMovedBits_ / lastVisibleEntries_ and the
+        // next PT frame cold-starts (visibly drops to ~1-spp quality).
+        // Phase 2 walks the HUD scene directly inside the ortho overlay
+        // record path instead.
+        if (!camera.is<OrthographicCamera>()) {
+            const auto sceneStart = std::chrono::high_resolution_clock::now();
+            pimpl_->ensureSceneBuilt(scene);
+            pimpl_->pendingCpuEnsureSceneMs_ =
+                    std::chrono::duration<float, std::milli>(
+                            std::chrono::high_resolution_clock::now() - sceneStart)
+                            .count();
+        }
         pimpl_->renderFrame(scene, camera);
         pimpl_->lastFrameTimings_.cpuFrameMs =
                 std::chrono::duration<float, std::milli>(

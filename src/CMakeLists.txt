@@ -1006,6 +1006,17 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_color.frag"
         kOverlayColorFragSpv
         _overlay_color_frag_spv_h)
+    # HUD sprite (TextSprite + Sprite) — alpha-blended quad with per-sprite
+    # combined-image-sampler binding. Walked from the user's HUD scene during
+    # the ortho overlay pass, post-PT/TAA, depth disabled.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_sprite.vert"
+        kOverlaySpriteVertSpv
+        _overlay_sprite_vert_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_sprite.frag"
+        kOverlaySpriteFragSpv
+        _overlay_sprite_frag_spv_h)
 endif ()
 
 
