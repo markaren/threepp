@@ -8923,7 +8923,13 @@ namespace threepp {
             descriptorPool = VK_NULL_HANDLE;
             descriptorSets.clear();
             createDescriptorPool();
-            allocateAndUpdateDescriptors();
+            // Only repopulate descriptors if scene resources exist. Pre-first-
+            // render callers (e.g. setRenderScale during init) hit a fresh pool
+            // with no TLAS/buffers; the first ensureSceneBuilt would then
+            // double-allocate into a full pool and fail with OUT_OF_POOL_MEMORY.
+            if (sceneBuilt_) {
+                allocateAndUpdateDescriptors();
+            }
             // TAA descriptor sets are persistent (pool lives inside TaaResolve);
             // just rewrite them to the new image / view handles.
             rewriteTaaDescriptors();
