@@ -85,12 +85,19 @@ namespace threepp::vulkan_pt {
         float dispersion;
         float thickness;
         int32_t thinWalled;
+        // Stable per-Material-asset index, deduplicated by Material* pointer
+        // when the matDescs buffer is built (VulkanRenderer.cpp). Adjacent
+        // meshes that share one Material C++ object get the SAME value, so
+        // the raygen bilinear reproject can accept cross-mesh-same-material
+        // taps — kills the visible seam at tiled-wall boundaries during
+        // camera motion. mesh-asset/material-asset only; not a hash.
+        uint32_t materialAssetIdx;
     };
 
     // Catches silent layout drift: if any field is added/removed/reordered
     // above, the size changes and this fires. Update the GLSL `MaterialDesc`
     // mirror below to match before bumping the expected size.
-    static_assert(sizeof(MaterialDesc) == 464,
+    static_assert(sizeof(MaterialDesc) == 468,
                   "MaterialDesc size changed — update the GLSL mirror in this file too.");
 }
 
@@ -139,6 +146,7 @@ struct MaterialDesc {
     float dispersion;
     float thickness;
     int   thinWalled;
+    uint  materialAssetIdx;
 };
 
 #endif  // __cplusplus

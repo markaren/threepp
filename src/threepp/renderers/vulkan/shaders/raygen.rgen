@@ -1262,6 +1262,16 @@ void main() {
     const bool primaryMoved = isMeshMoved(primaryMeshU);
     const bool camMoved     = (pc.motionFlags & 2u) != 0u;
 
+    // Stable material-asset id at this pixel (deduplicated by Material* in
+    // the renderer). Tiled walls built from multiple Mesh objects sharing one
+    // Material C++ object all carry the same value here, so the bilinear
+    // reproject gate below can accept their cross-mesh taps instead of
+    // cold-starting the seam between every adjacent tile during camera
+    // motion. Sky/miss → sentinel that never compares equal to a real one.
+    const uint primaryMatAssetIdx = (primaryInstanceId != 0u)
+            ? mats[primaryMeshU].materialAssetIdx
+            : 0xFFFFFFFFu;
+
     if ((pc.motionFlags & 1u) == 0u || (!primaryMoved && !camMoved)) {
         // ── Static for this pixel: self-tap ───────────────────────────
         //
@@ -1455,10 +1465,28 @@ void main() {
                 // strict all-or-nothing, silhouette pixels disocclude
                 // cleanly (FC=0 there) and the demod stays mathematically
                 // consistent (radiance and albedo both fresh-current).
-                const bool m00 = (uint(g00v.w) == primaryInstanceId) && (!depthGate || dot(d00,d00) < dEps2);
-                const bool m10 = (uint(g10v.w) == primaryInstanceId) && (!depthGate || dot(d10,d10) < dEps2);
-                const bool m01 = (uint(g01v.w) == primaryInstanceId) && (!depthGate || dot(d01,d01) < dEps2);
-                const bool m11 = (uint(g11v.w) == primaryInstanceId) && (!depthGate || dot(d11,d11) < dEps2);
+                //
+                // Tap-match relaxation: accept on same-instance-id OR
+                // same-material-asset-id. Two Mesh objects sharing one
+                // Material C++ object (tiled wall, brick row, fence
+                // sections) have different instance ids but identical
+                // materialAssetIdx → bilinear sees the seam pixels as one
+                // logical surface, reproject succeeds, no cold-start
+                // sparkle along the join. The depth gate stays in place
+                // and still rejects across genuine geometric breaks
+                // (corner where two same-material planes meet at angle).
+                const uint mesh00 = uint(g00v.w);
+                const uint mesh10 = uint(g10v.w);
+                const uint mesh01 = uint(g01v.w);
+                const uint mesh11 = uint(g11v.w);
+                const bool mat00 = (mesh00 != 0u) && (mats[mesh00 - 1u].materialAssetIdx == primaryMatAssetIdx);
+                const bool mat10 = (mesh10 != 0u) && (mats[mesh10 - 1u].materialAssetIdx == primaryMatAssetIdx);
+                const bool mat01 = (mesh01 != 0u) && (mats[mesh01 - 1u].materialAssetIdx == primaryMatAssetIdx);
+                const bool mat11 = (mesh11 != 0u) && (mats[mesh11 - 1u].materialAssetIdx == primaryMatAssetIdx);
+                const bool m00 = (mesh00 == primaryInstanceId || mat00) && (!depthGate || dot(d00,d00) < dEps2);
+                const bool m10 = (mesh10 == primaryInstanceId || mat10) && (!depthGate || dot(d10,d10) < dEps2);
+                const bool m01 = (mesh01 == primaryInstanceId || mat01) && (!depthGate || dot(d01,d01) < dEps2);
+                const bool m11 = (mesh11 == primaryInstanceId || mat11) && (!depthGate || dot(d11,d11) < dEps2);
                 const bool allMatch = m00 && m10 && m01 && m11;
                 const float v00 = allMatch ? w00 : 0.0;
                 const float v10 = allMatch ? w10 : 0.0;

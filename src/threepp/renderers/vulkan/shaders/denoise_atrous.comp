@@ -1,5 +1,10 @@
 #version 460
 
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+#include "vulkan_shared.h"
+
 // Multi-pass à-trous spatial denoiser pass. Reads from accumImage (pass 0)
 // or the other ping-pong intermediate (pass 1), applies a 5×5 edge-aware
 // atrous filter with the per-pass stride (1, 2), writes to the other
@@ -8,7 +13,9 @@
 // to the swap chain.
 //
 // Edge stops match the single-pass shader:
-//   1. Mesh ID (gbuf.w == instanceId+1; 0 = sky/miss)
+//   1. Mesh ID (gbuf.w == instanceId+1; 0 = sky/miss) — relaxed via
+//      materialAssetIdx so adjacent same-material meshes filter as one
+//      logical surface (no visible seam at tiled-wall joins).
 //   2. World-space depth — exp(-Δd / σd), σd scaled by center depth
 //   3. Luminance — exp(-Δl / σl)
 //
@@ -21,6 +28,13 @@ layout(set = 0, binding = 2) uniform CameraUbo {
     mat4 viewInverse;
     mat4 projInverse;
 } cam;
+// MaterialDesc SSBO — same binding as raygen/chit (the RT descriptor set
+// layout is shared with this compute pipeline, so the buffer is already
+// bound). Read here only to look up materialAssetIdx for the cross-mesh
+// same-material gate; no other MaterialDesc fields are consulted.
+layout(set = 0, binding = 4, scalar) readonly buffer MatDescBuf {
+    MaterialDesc mats[];
+};
 layout(set = 0, binding = 7,  rgba32f) uniform readonly image2D accumImage;
 layout(set = 0, binding = 12, rgba32f) uniform readonly image2D gbufImage;
 layout(set = 0, binding = 20, rgba32f) uniform image2D filteredArray[2];
@@ -73,6 +87,13 @@ void main() {
         return;
     }
 
+    // Stable material-asset id at this pixel (deduped by Material* in the
+    // renderer). Tap gate below accepts neighbours sharing the same value
+    // even when their instance id differs, so a wall built from many
+    // same-material meshes filters as one logical surface.
+    const uint cMesh    = uint(g.w);
+    const uint cMatIdx  = mats[cMesh - 1u].materialAssetIdx;
+
     // Albedo demodulation. .a=1 means chit wrote a valid albedo this
     // frame (diffuse-dominant primary surface) → divide center radiance
     // by it, filter the demodulated signal (smoother across textured
@@ -111,8 +132,17 @@ void main() {
     const vec4 g_R = imageLoad(gbufImage, clamp(px + ivec2(+1,  0), ivec2(0), size - ivec2(1)));
     const vec4 g_D = imageLoad(gbufImage, clamp(px + ivec2( 0, -1), ivec2(0), size - ivec2(1)));
     const vec4 g_U = imageLoad(gbufImage, clamp(px + ivec2( 0, +1), ivec2(0), size - ivec2(1)));
-    const bool xValid = (abs(g_L.w - g.w) < 0.5) && (abs(g_R.w - g.w) < 0.5);
-    const bool yValid = (abs(g_D.w - g.w) < 0.5) && (abs(g_U.w - g.w) < 0.5);
+    // Same relaxation as the tap gate below: accept cross-mesh neighbours
+    // that share the center's materialAssetIdx so the finite-diff normal
+    // estimate works across a same-material seam (otherwise it falls back
+    // to linear depth at every join, and the wider σ_depth there leaks
+    // noise across the seam — visible as the residual stripe pattern).
+    bool sameSurfL = (uint(g_L.w) == cMesh) || (uint(g_L.w) != 0u && mats[uint(g_L.w) - 1u].materialAssetIdx == cMatIdx);
+    bool sameSurfR = (uint(g_R.w) == cMesh) || (uint(g_R.w) != 0u && mats[uint(g_R.w) - 1u].materialAssetIdx == cMatIdx);
+    bool sameSurfD = (uint(g_D.w) == cMesh) || (uint(g_D.w) != 0u && mats[uint(g_D.w) - 1u].materialAssetIdx == cMatIdx);
+    bool sameSurfU = (uint(g_U.w) == cMesh) || (uint(g_U.w) != 0u && mats[uint(g_U.w) - 1u].materialAssetIdx == cMatIdx);
+    const bool xValid = sameSurfL && sameSurfR;
+    const bool yValid = sameSurfD && sameSurfU;
     const vec3 dX = xValid ? (g_R.xyz - g_L.xyz) : vec3(0.0);
     const vec3 dY = yValid ? (g_U.xyz - g_D.xyz) : vec3(0.0);
     // cross(dY, dX) so the normal points roughly toward camera in a right-
@@ -209,9 +239,17 @@ void main() {
             const vec4  cq = readSrc(q);
             const vec4  gq = imageLoad(gbufImage, q);
 
-            // Mesh-ID stop — different mesh fully rejects. Catches silhouettes
-            // without needing a normal channel.
-            if (abs(gq.w - g.w) > 0.5) continue;
+            // Mesh-ID stop, relaxed for same-material meshes. Different
+            // instance id is OK as long as the tap's MaterialDesc carries
+            // the same materialAssetIdx (deduped by Material* in the
+            // renderer) — kills the visible seam where a wall built from
+            // multiple same-material Mesh objects meets, while still
+            // rejecting genuine silhouette crossings via the depth gate
+            // below. Sky/miss taps (qMesh==0) hard-reject.
+            const uint qMesh = uint(gq.w);
+            if (qMesh == 0u) continue;
+            if (qMesh != cMesh &&
+                mats[qMesh - 1u].materialAssetIdx != cMatIdx) continue;
 
             // Per-tap demod gate: both center and tap must share the SAME
             // demod regime, otherwise the kernel ends up summing

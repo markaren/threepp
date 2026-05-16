@@ -3752,10 +3752,21 @@ namespace threepp {
                         // in-flight RT trace right now).
                         matDescsCached_.clear();
                         matDescsCached_.reserve(entries.size());
+                        // Same dedup as the full-rebuild path below: entries
+                        // order is identical (overlay skip matches), so
+                        // identical Material* pointers produce identical
+                        // materialAssetIdx values frame-to-frame.
+                        std::unordered_map<const Material*, uint32_t> matAssetMap;
                         for (const MeshEntry& en : entries) {
                             if (en.isOverlay) continue;// raster-overlay only — no MaterialDesc slot
                             Mesh* m = en.mesh;
                             MaterialDesc md = materialFromMesh(*m);
+                            {
+                                const Material* matKey = m->material().get();
+                                auto [matIt, inserted] = matAssetMap.try_emplace(
+                                        matKey, static_cast<uint32_t>(matAssetMap.size()));
+                                md.materialAssetIdx = matIt->second;
+                            }
                             if (auto tex = albedoTexOf(*m)) {
                                 md.albedoTexIndex = ensureMaterialTexture(tex);
                                 copyTexUvTransform(md.uvTransform, tex);
@@ -3959,6 +3970,13 @@ namespace threepp {
             geomDescs.reserve(entries.size());
             matDescs.reserve(entries.size());
 
+            // Material-asset dedup. Meshes sharing one Material C++ pointer
+            // get the same matAssetIdx so raygen's bilinear reproject gate
+            // can accept their cross-mesh taps (tiled walls etc.). The map
+            // grows by ~one entry per UNIQUE Material in the scene — well
+            // below entries.size() in typical content.
+            std::unordered_map<const Material*, uint32_t> matAssetMap;
+
             for (const MeshEntry& en : entries) {
                 Mesh* m = en.mesh;
                 const BufferGeometry* geomKey = m->geometry().get();
@@ -4055,6 +4073,12 @@ namespace threepp {
                 geomDescs.push_back(gdesc);
 
                 MaterialDesc md = materialFromMesh(*m);
+                {
+                    const Material* matKey = m->material().get();
+                    auto [matIt, inserted] = matAssetMap.try_emplace(
+                            matKey, static_cast<uint32_t>(matAssetMap.size()));
+                    md.materialAssetIdx = matIt->second;
+                }
                 if (auto tex = albedoTexOf(*m)) {
                     md.albedoTexIndex = ensureMaterialTexture(tex);
                     copyTexUvTransform(md.uvTransform, tex);
@@ -8287,8 +8311,11 @@ namespace threepp {
             bindings[4].binding = 4;
             bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[4].descriptorCount = 1;
+            // COMPUTE added so denoise_atrous can read mats[].materialAssetIdx
+            // for the cross-mesh same-material tap-acceptance gate.
             bindings[4].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                     VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+                                     VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
+                                     VK_SHADER_STAGE_COMPUTE_BIT;
             bindings[5].binding = 5;
             bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[5].descriptorCount = 1;
