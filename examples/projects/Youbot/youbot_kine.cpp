@@ -80,9 +80,11 @@ int main() {
     Canvas canvas{Canvas::Parameters().title("Youbot-kine").size({1280, 720}).antialiasing(8)};
     auto renderer = createRenderer(canvas);
     renderer->autoClear = false;
-    renderer->setClearColor(Color::aliceblue);
+    renderer->toneMapping = ToneMapping::ACESFilmic;
+
 
     auto scene = Scene::create();
+    scene->background = Color::aliceblue;
 
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.01, 100);
     camera->position.set(-15, 8, 15);
