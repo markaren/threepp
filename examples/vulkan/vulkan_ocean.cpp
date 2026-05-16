@@ -66,7 +66,7 @@ namespace {
 namespace {
 
     constexpr float kTileSize    = 1000.0f;  // metres — full mesh extent and cascade-0 tile
-    constexpr uint32_t kFftSize  = 1024;     // 4× cost vs 512² → 0.98 m vertex spacing, resolves λ ≥ 2 m
+    constexpr uint32_t kFftSize  = 512;     // 4× cost vs 512² → 0.98 m vertex spacing, resolves λ ≥ 2 m
     constexpr float kPlaneEdge   = kTileSize;  // mesh extends one full FFT tile in X and Z
     constexpr int   kSubdiv      = static_cast<int>(kFftSize) - 1;  // 1024² verts ≈ 1 M; BLAS rebuild scales with this
 
@@ -130,6 +130,9 @@ int main() {
     renderer.setRestirDIEnabled(true);
     renderer.setHybridEnabled(true);
     renderer.setFireflyClamp(6.0f);
+    // Trace PT at 75% resolution; TAA upsamples to full swapchain by
+    // accumulating jittered low-res samples into the full-res history.
+    renderer.setRenderScale(0.75f);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 0.7f;
 
@@ -499,10 +502,10 @@ int main() {
             ocean->params.waveScale = waveScale;
         if (ImGui::SliderFloat("Choppiness", &choppiness, 0.f, 1.0f, "%.2f"))
             ocean->params.choppiness = choppiness;
-        if (ImGui::SliderFloat("Wind speed (m/s)", &windSpeed, 1.f, 30.f, "%.1f"))
-            ocean->params.windSpeed = windSpeed;
-        if (ImGui::SliderFloat("Wind direction (rad)", &windTheta, -3.14f, 3.14f, "%.2f"))
-            ocean->params.windTheta = windTheta;
+        // if (ImGui::SliderFloat("Wind speed (m/s)", &windSpeed, 1.f, 30.f, "%.1f"))
+        //     ocean->params.windSpeed = windSpeed;
+        // if (ImGui::SliderFloat("Wind direction (rad)", &windTheta, -3.14f, 3.14f, "%.2f"))
+        //     ocean->params.windTheta = windTheta;
         ImGui::TextDisabled("Wind changes apply on scene reload.");
         ImGui::Separator();
         if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f, "%.2f"))
