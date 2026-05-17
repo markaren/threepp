@@ -1,0 +1,190 @@
+#version 460
+#extension GL_EXT_scalar_block_layout                    : require
+#extension GL_EXT_buffer_reference                       : require
+#extension GL_EXT_buffer_reference2                      : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+// World-space foam accumulator. One texel = one fixed point in world XZ;
+// foam value is preserved frame-to-frame regardless of how the ocean's
+// vertices are laid out. This is the foundation for adaptive-resolution
+// ocean meshes: the mesh can re-tessellate however it likes and foam
+// stays where it was deposited.
+//
+// Coverage is the cascade-0 tile (typically 1000 m), REPEAT-sampled.
+// That matches the FFT's intrinsic periodicity — natural-foam crests
+// repeat with the FFT pattern, so wrapping at the tile boundary is
+// consistent with the wave field underneath. Texel size = tileSize /
+// res; at 1024² over 1000 m that's ≈0.98 m, similar to the base mesh's
+// vertex spacing. Bump res to 2048 for ~0.5 m foam detail (4× memory).
+//
+// Per frame: decay last frame's foam, recompute the three instant
+// sources at every texel, take the max, write to the current target.
+// Ping-pong via prevFoam (sampler) / currFoam (storage image) bindings.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// FFT cascades — needed to compute the Jacobian of the horizontal
+// displacement, which drives natural-wave whitewater foam.
+layout(set = 0, binding = 0) uniform sampler2D height0;
+layout(set = 0, binding = 1) uniform sampler2D displace0;
+layout(set = 0, binding = 2) uniform sampler2D height1;
+layout(set = 0, binding = 3) uniform sampler2D displace1;
+layout(set = 0, binding = 4) uniform sampler2D height2;
+layout(set = 0, binding = 5) uniform sampler2D displace2;
+
+// Foam accumulator — read previous value (imageLoad) and write the new
+// one (imageStore) on the same image. Each invocation only touches its
+// own texel, so there's no cross-thread race; ping-pong textures aren't
+// needed. The chit samples this same image via a separate sampler-typed
+// descriptor for filtered reads at arbitrary world XZ.
+layout(set = 0, binding = 6, r32f) uniform image2D foam;
+
+// Per-disturbance point source — splatted into the foam texture with a
+// gaussian falloff. Layout matches DisplacedMesh::FoamDisturbance.
+struct DisturbPoint {
+    float worldX;
+    float worldZ;
+    float radius;
+    float intensity;
+};
+layout(buffer_reference, scalar) buffer DisturbBuf { DisturbPoint p[]; };
+
+layout(push_constant, scalar) uniform Pc {
+    uint64_t disturbAddr;   // 0 = no disturbance buffer
+    uint   foamRes;         // texels per side of the foam tile
+    float  foamTileSize;    // world extent the texture covers (= cascade-0 tile size)
+    float  tileSize0;       // cascade-0 FFT tile
+    float  tileSize1;
+    float  tileSize2;
+    float  waveScale;
+    float  choppiness;
+    uint   cascadeMask;     // bit i = cascade i enabled
+    float  hullCenterX;     // vessel pose for wake formulas
+    float  hullCenterZ;
+    float  hullHalfLength;  // 0 = no vessel
+    float  hullHalfBeam;
+    float  hullSinYaw;
+    float  hullCosYaw;
+    float  forwardSpeed;    // m/s along +heading; 0 disables wake
+    uint   disturbCount;
+    float  decay;           // 0.992 ≈ 1.4 s half-life at 60 FPS
+} pc;
+
+vec3 sampleDisplacement(vec2 worldXZ) {
+    vec3 d = vec3(0.0);
+    if ((pc.cascadeMask & 1u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize0;
+        const vec2 uv = worldXZ * invTile;
+        d.y += texture(height0,   uv).r * invTile;
+        const vec2 dxz = texture(displace0, uv).rg * invTile;
+        d.x += dxz.x;
+        d.z += dxz.y;
+    }
+    if ((pc.cascadeMask & 2u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize1;
+        const vec2 uv = worldXZ * invTile;
+        d.y += texture(height1,   uv).r * invTile;
+        const vec2 dxz = texture(displace1, uv).rg * invTile;
+        d.x += dxz.x;
+        d.z += dxz.y;
+    }
+    if ((pc.cascadeMask & 4u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize2;
+        const vec2 uv = worldXZ * invTile;
+        d.y += texture(height2,   uv).r * invTile;
+        const vec2 dxz = texture(displace2, uv).rg * invTile;
+        d.x += dxz.x;
+        d.z += dxz.y;
+    }
+    return vec3(d.x * pc.choppiness,
+                d.y * pc.waveScale,
+                d.z * pc.choppiness);
+}
+
+void main() {
+    const uvec2 px = gl_GlobalInvocationID.xy;
+    if (px.x >= pc.foamRes || px.y >= pc.foamRes) return;
+
+    // World XZ this texel anchors. UV is [0,1)² mapped onto the foam tile.
+    const vec2 uv      = (vec2(px) + 0.5) / float(pc.foamRes);
+    const vec2 worldXZ = uv * pc.foamTileSize;
+
+    // ── Natural Jacobian foam ────────────────────────────────────────
+    // J of (x, z) → (x + Dx, z + Dz). Below ~1 the surface is folding;
+    // map J ∈ [foamThresh−foamWidth, foamThresh] onto [1, 0].
+    const float eps = pc.tileSize0 / 256.0;
+    const vec3 dL = sampleDisplacement(worldXZ + vec2(-eps, 0.0));
+    const vec3 dR = sampleDisplacement(worldXZ + vec2( eps, 0.0));
+    const vec3 dD = sampleDisplacement(worldXZ + vec2(0.0, -eps));
+    const vec3 dU = sampleDisplacement(worldXZ + vec2(0.0,  eps));
+    const float dDxDx = (dR.x - dL.x) * 0.5 / eps;
+    const float dDxDz = (dU.x - dD.x) * 0.5 / eps;
+    const float dDzDx = (dR.z - dL.z) * 0.5 / eps;
+    const float dDzDz = (dU.z - dD.z) * 0.5 / eps;
+    const float J = (1.0 + dDxDx) * (1.0 + dDzDz) - dDxDz * dDzDx;
+    const float foamThresh  = 0.97;
+    const float foamWidth   = 0.04;
+    const float foamInstant = clamp((foamThresh - J) / foamWidth, 0.0, 1.0);
+
+    // ── Vessel wake foam ─────────────────────────────────────────────
+    // Mirrors the wake-formula block from water_displace.comp, but
+    // evaluated per world-space texel instead of per mesh vertex. With
+    // foam pinned to world coords the trail correctly stays behind a
+    // moving vessel rather than being dragged with mesh-local vertex
+    // indices.
+    float wakeFoam = 0.0;
+    if (pc.hullHalfLength > 0.0) {
+        const float wakeSpeed = abs(pc.forwardSpeed);
+        const float wakeGate  = smoothstep(0.5, 1.5, wakeSpeed);
+        if (wakeGate > 0.0) {
+            const float dx = worldXZ.x - pc.hullCenterX;
+            const float dz = worldXZ.y - pc.hullCenterZ;
+            const float lX = pc.hullCosYaw * dx - pc.hullSinYaw * dz;
+            const float lZ = pc.hullSinYaw * dx + pc.hullCosYaw * dz;
+            const float distBehind = -lZ - pc.hullHalfLength;
+            // A — straight foam trail behind the stern
+            if (distBehind > 0.0) {
+                const float lenDecay   = 30.0;
+                const float beamSpread = pc.hullHalfBeam * 1.5;
+                const float lateral    = exp(-(lX * lX) / (beamSpread * beamSpread));
+                const float along      = exp(-distBehind / lenDecay);
+                wakeFoam = wakeGate * 0.95 * along * lateral;
+            }
+            // D — bow V-wedge ridge foam (the breaking crest where
+            // water is pushed aside as the hull moves forward).
+            const float distAft = pc.hullHalfLength - lZ;
+            if (distAft > 0.0 && distAft < pc.hullHalfLength * 5.0) {
+                const float tanAV     = 0.36;
+                const float expectedX = tanAV * distAft;
+                const float dRidge    = abs(abs(lX) - expectedX);
+                const float ridgeFoam = exp(-(dRidge * dRidge) / (0.5 * 0.5));
+                const float alongDecay = exp(-distAft / (pc.hullHalfLength * 3.0));
+                const float wedgeFoamAmt = wakeGate * 0.6 * ridgeFoam * alongDecay;
+                wakeFoam = max(wakeFoam, wedgeFoamAmt);
+            }
+        }
+    }
+
+    // ── External disturbance splats ───────────────────────────────────
+    float disturbFoam = 0.0;
+    if (pc.disturbAddr != 0ul && pc.disturbCount > 0u) {
+        DisturbBuf db = DisturbBuf(pc.disturbAddr);
+        for (uint k = 0u; k < pc.disturbCount; ++k) {
+            const DisturbPoint dp = db.p[k];
+            const float ddx = worldXZ.x - dp.worldX;
+            const float ddz = worldXZ.y - dp.worldZ;
+            const float r2  = dp.radius * dp.radius;
+            if (r2 <= 0.0) continue;
+            const float d2  = ddx * ddx + ddz * ddz;
+            const float g   = dp.intensity * exp(-d2 / r2);
+            disturbFoam = max(disturbFoam, g);
+        }
+    }
+
+    // ── Combine + decay ──────────────────────────────────────────────
+    const float instantTotal = max(foamInstant, max(wakeFoam, disturbFoam));
+    const float prev         = imageLoad(foam, ivec2(px)).r;
+    const float result       = max(instantTotal, prev * pc.decay);
+
+    imageStore(foam, ivec2(px), vec4(result));
+}

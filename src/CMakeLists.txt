@@ -619,6 +619,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/SkinningPipeline.cpp"
             "threepp/renderers/vulkan/TaaResolve.cpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
+            "threepp/renderers/vulkan/FoamWorldPipeline.cpp"
             "threepp/renderers/vulkan/water/OceanFFT.cpp"
     )
 endif ()
@@ -942,6 +943,10 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/water_displace.comp"
         kWaterDisplaceCompSpv
         _water_displace_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/foam_world.comp"
+        kFoamWorldCompSpv
+        _foam_world_spv_h)
     # Hybrid raster G-buffer prepass — produces depth/normal/motion/IDs
     # for the path tracer to skip its primary BVH trace. See raygen.rgen
     # for the consumer side.

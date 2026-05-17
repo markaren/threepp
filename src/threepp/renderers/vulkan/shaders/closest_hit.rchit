@@ -145,6 +145,14 @@ layout(set = 0, binding = 8) uniform sampler2D albedoMaps[kMaxMaterialTextures];
 // with sub-mesh-resolution wave detail. Gated by pc.oceanFineTileSize > 0.
 layout(set = 0, binding = 32) uniform sampler2D oceanFineHeight;
 
+// World-space foam accumulator (R32F, REPEAT-sampled). Written by
+// foam_world.comp each frame; we sample here at the hit's world XZ to
+// shade water surfaces. Wraps with `oceanFoamTileSize`. Replaces the
+// per-vertex foam buffer that used to live on the BLAS — foam is now
+// world-anchored, so ocean meshes can re-tessellate without dragging
+// foam values with their vertex indices. Gated by pc.oceanFoamTileSize > 0.
+layout(set = 0, binding = 44) uniform sampler2D oceanFoamWorld;
+
 // Emissive-mesh NEE: each emissive triangle is packed as 4 vec4
 // (v0.xyz/area, v1.xyz/cumPower, v2.xyz/power, emission.rgb/_pad).
 // The host walks the scene each frame, transforms triangle vertices to
@@ -225,6 +233,8 @@ layout(push_constant) uniform Pc {
     float envCdfTotalSum;   // pdf normaliser; 0 disables env importance sampling
     float fireflyClamp;     // per-NEE luminance cap; 1e30 disables (gates never fire)
     float oceanFineTileSize;// FFT fine-cascade tile size in m; 0 = no ocean fine normal
+    uint _padEdgeMsaa;      // raygen-only; reserved here so foam-tile lands at slot [14]
+    float oceanFoamTileSize;// world-space foam tile size in m; 0 = no foam sampling
 } pc;
 
 hitAttributeEXT vec2 attribs;
@@ -969,17 +979,18 @@ void main() {
     const vec3 n1 = vec3(nb.n[idx.y * 3 + 0], nb.n[idx.y * 3 + 1], nb.n[idx.y * 3 + 2]);
     const vec3 n2 = vec3(nb.n[idx.z * 3 + 0], nb.n[idx.z * 3 + 1], nb.n[idx.z * 3 + 2]);
 
-    // Per-vertex foam coverage [0..1] (FFT-Tessendorf Jacobian < 1 → folding
-    // → whitewater). Interpolated across the triangle and used downstream to
-    // bleach albedo and pin roughness toward 1 where the surface breaks. 0
-    // for any non-DisplacedMesh geometry (foamAddress is null).
+    // World-space foam coverage [0..1] (FFT-Tessendorf Jacobian < 1 →
+    // folding → whitewater, plus wake-formula trails and disturbance
+    // splats). Sampled from a 2D texture indexed by world XZ instead of
+    // interpolated from per-vertex attributes — pins foam to world
+    // coordinates so it stays put as ocean meshes re-tessellate. The
+    // `foamAddress` payload bit still gates whether this surface should
+    // pick up foam (set on DisplacedMesh, cleared otherwise).
     float foamCoverage = 0.0;
-    if (gdesc.foamAddress != 0ul) {
-        FoamBuf fb = FoamBuf(gdesc.foamAddress);
-        const float f0 = fb.f[idx.x];
-        const float f1 = fb.f[idx.y];
-        const float f2 = fb.f[idx.z];
-        foamCoverage = clamp(w * f0 + attribs.x * f1 + attribs.y * f2, 0.0, 1.0);
+    if (gdesc.foamAddress != 0ul && pc.oceanFoamTileSize > 0.0) {
+        const vec3 hitWorld = gl_WorldRayOriginEXT + gl_HitTEXT * gl_WorldRayDirectionEXT;
+        const vec2 uv = hitWorld.xz / pc.oceanFoamTileSize;
+        foamCoverage = clamp(texture(oceanFoamWorld, uv).r, 0.0, 1.0);
     }
 
     const vec3 nObj = normalize(w * n0 + attribs.x * n1 + attribs.y * n2);

@@ -282,71 +282,11 @@ void main() {
     pc.normOut.v[i * 3u + 1u] = n.y;
     pc.normOut.v[i * 3u + 2u] = n.z;
 
-    // Jacobian of the horizontal map (x, z) → (x + Dx, z + Dz). When the
-    // determinant goes below ~1, the surface is compressing — at and below 0
-    // it has folded over itself, the classic Tessendorf signature of a
-    // breaking wave / whitewater region.
-    //   J = (1 + ∂Dx/∂x)(1 + ∂Dz/∂z) − (∂Dx/∂z)(∂Dz/∂x)
-    // Foam coverage maps this onto [0..1] by remapping the band where J
-    // crosses 1: clamp((foamThresh − J) / foamWidth, 0, 1). Threshold and
-    // width are taste-tuned for "whitecaps on the steepest crests, not the
-    // entire surface". Closest_hit shader interpolates this per-fragment.
-    if (pc.foamAddr != 0ul) {
-        FoamBuf foamOut = FoamBuf(pc.foamAddr);
-        const float dDxDx = (dR.x - dL.x) * 0.5 / eps;
-        const float dDxDz = (dU.x - dD.x) * 0.5 / eps;
-        const float dDzDx = (dR.z - dL.z) * 0.5 / eps;
-        const float dDzDz = (dU.z - dD.z) * 0.5 / eps;
-        const float J = (1.0 + dDxDx) * (1.0 + dDzDz) - dDxDz * dDzDx;
-        // Instantaneous foam from Jacobian compression. Calibrated for
-        // Phillips A = 0.01 — J deviates a few percent on the steepest
-        // crests, so foam appears in J ∈ [0.93, 0.97].
-        const float foamThresh = 0.97;
-        const float foamWidth  = 0.04;
-        const float foamInstant = clamp((foamThresh - J) / foamWidth, 0.0, 1.0);
-        // External disturbance splats — host populates DisturbBuf each frame
-        // with point sources (hull waterline contacts, prop wash, splashes).
-        // Each contributes a gaussian centred at (worldX, worldZ); we take
-        // the max across all sources so overlapping splats build up to
-        // saturation without ever exceeding 1.0. Pre-divides the radius
-        // squared once per source — the inner loop is then two mads + an exp.
-        float disturbFoam = 0.0;
-        if (pc.disturbAddr != 0ul && pc.disturbCount > 0u) {
-            DisturbBuf db = DisturbBuf(pc.disturbAddr);
-            for (uint k = 0u; k < pc.disturbCount; ++k) {
-                const DisturbPoint dp = db.p[k];
-                const float ddx = rest.x - dp.worldX;
-                const float ddz = rest.z - dp.worldZ;
-                const float r2  = dp.radius * dp.radius;
-                if (r2 <= 0.0) continue;
-                const float d2  = ddx * ddx + ddz * ddz;
-                const float g   = dp.intensity * exp(-d2 / r2);
-                disturbFoam = max(disturbFoam, g);
-            }
-        }
-        // Combine natural-wave (Jacobian) foam with vessel-wake foam and
-        // external disturbance splats injected above. All are instantaneous
-        // values for THIS frame; the persistence decay below is the same
-        // trail mechanism. Any of {wakeFoam, disturbFoam} == 0 when the
-        // corresponding source is inactive, so the natural-wave-only path
-        // is unchanged from prior behaviour.
-        const float foamInstantTotal = max(foamInstant, max(wakeFoam, disturbFoam));
-        // Temporal persistence: real foam lingers seconds after the
-        // breaking event as bubbles dissipate. Without this, foam tracks
-        // wave-crest motion frame-by-frame and reads as too fast / too
-        // synchronised with wave geometry. We read the previous frame's
-        // foam at this vertex (the buffer isn't cleared between frames),
-        // decay it slightly, and take the max with the new instantaneous
-        // value. Foam born this frame writes its full value; older foam
-        // fades on its own. Decay 0.992/frame → ~1.4 s half-life at 60 fps:
-        // wave passes, foam stays behind as a fading trail rather than
-        // moving lock-step with the crest. Frame-rate-dependent — pin the
-        // example FPS or wire dt through if running variable frame rates.
-        // The wake trail "automatically" trails behind the moving vessel
-        // because each vertex that was once in the stern injection region
-        // keeps decaying after the boat moves on.
-        const float prev = foamOut.v[i];
-        const float decay = 0.992;
-        foamOut.v[i] = max(foamInstantTotal, prev * decay);
-    }
+    // Foam used to be computed per-vertex right here (Jacobian + wake
+    // formulas + disturbance splats + persistence decay, all written to
+    // pc.foamAddr). It now lives in a world-space texture built by
+    // foam_world.comp, so foam stays pinned to world XZ regardless of
+    // mesh layout. The per-vertex foam buffer + the wakeFoam variable
+    // computed above are kept inert for the moment — the next cleanup
+    // pass strips them along with the foamAddr push-constant.
 }

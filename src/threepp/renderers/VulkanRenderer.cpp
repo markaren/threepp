@@ -31,6 +31,7 @@
 #include "vulkan/SkinningPipeline.hpp"
 #include "vulkan/TaaResolve.hpp"
 #include "vulkan/WaterDisplacePipeline.hpp"
+#include "vulkan/FoamWorldPipeline.hpp"
 #include "vulkan/shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
 #include "wgpu/pathtracer/WgpuPathTracerEnvCdf.hpp"// reused: pure C++ template, no WGPU deps
 
@@ -319,6 +320,23 @@ namespace threepp {
             // entries are dropped. .address == 0 until first allocation.
             Buffer    foamDisturbBuffer{};
             static constexpr uint32_t kMaxFoamDisturbances = 64;
+
+            // World-space foam texture — 2D R32F covering the cascade-0
+            // tile (foamTileSize × foamTileSize world m), REPEAT-sampled
+            // in both compute and chit so wrapping at the tile boundary
+            // aligns with the FFT pattern's periodicity. Replaces the old
+            // per-vertex `foam` buffer on the BLAS: with foam pinned to
+            // world coords, the ocean mesh can be re-tessellated freely
+            // without dragging foam along with the vertex indices.
+            //
+            // No ping-pong needed because foam_world.comp only reads and
+            // writes its own texel each invocation — no cross-texel
+            // dependency, so `imageLoad` + `imageStore` on the same image
+            // is race-free.
+            water::OceanImage foamImage;
+            uint32_t foamRes      = 0;          // texels per side
+            float    foamTileSize = 0.f;        // world extent (m) covered
+            VkDescriptorSet foamWorldDS = VK_NULL_HANDLE;
         };
         std::unordered_map<const DisplacedMesh*, std::unique_ptr<DisplacedMeshState>> displacedStates;
 
@@ -329,6 +347,12 @@ namespace threepp {
         // Owns the shared compute pipeline + descriptor pool + sampler;
         // per-mesh descriptor sets (state->displaceDS) live in DisplacedMeshState.
         std::unique_ptr<vulkan::WaterDisplacePipeline> waterDisplace_;
+
+        // World-space foam pipeline — see vulkan/FoamWorldPipeline.{hpp,cpp}.
+        // Same one-pipeline-shared / per-mesh-descriptor-set pattern as
+        // waterDisplace. Builds the per-DisplacedMesh foam texture each
+        // frame; replaces the per-vertex foam buffer.
+        std::unique_ptr<vulkan::FoamWorldPipeline> foamWorld_;
 
         // Single TLAS over all mesh instances in the scene.
         VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
@@ -459,6 +483,16 @@ namespace threepp {
         VkImageView oceanFineHeightView   = VK_NULL_HANDLE;// either dummy or cascade-2 view
         VkSampler   oceanFineHeightSampler = VK_NULL_HANDLE;
         float       oceanFineTileSize     = 0.f;          // 0 disables sampling in shader
+
+        // World-space foam (binding 33). Built by FoamWorldPipeline each
+        // frame from a DisplacedMesh's foamImage. closest_hit samples it
+        // at world XZ on water hits — replaces the per-vertex foam buffer
+        // that used to live on the BLAS. Held as a dummy 1×1 R32F when no
+        // DisplacedMesh is in the scene.
+        Image2D oceanFoamDummy{};
+        VkImageView oceanFoamView   = VK_NULL_HANDLE;
+        VkSampler   oceanFoamSampler = VK_NULL_HANDLE;
+        float       oceanFoamTileSize = 0.f;              // 0 disables sampling
 
         // Env luminance CDF (Phase A: env importance sampling).
         // Conditional CDF: w×h R32F texture; row r holds the cumulative
@@ -1200,6 +1234,7 @@ namespace threepp {
             skinning_ = std::make_unique<vulkan::SkinningPipeline>(*ctx);
             photon_ = std::make_unique<vulkan::PhotonCaustics>(*ctx, rtPipelineLayout);
             waterDisplace_ = std::make_unique<vulkan::WaterDisplacePipeline>(*ctx);
+            foamWorld_     = std::make_unique<vulkan::FoamWorldPipeline>(*ctx);
             // Hybrid raster G-buffer infrastructure is always allocated so
             // the RT descriptor sets can include valid gbuffer-attachment
             // bindings even when hybridEnabled_ stays false. Costs a few
@@ -1225,6 +1260,7 @@ namespace threepp {
             createDescriptorPool();
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             createOceanFineDummy_();// must run before descriptor writes (binding 32)
+            createOceanFoamDummy_();// must run before descriptor writes (binding 33)
             rewriteTaaDescriptors();// after ensureHybridResources gave us raster gbuf views
             createTimestampPools();// per-frame VkQueryPool for the timings API
         }
@@ -1318,6 +1354,8 @@ namespace threepp {
                 }
                 if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->scratchA.view, nullptr);
                 if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
+                if (st->foamImage.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->foamImage.view, nullptr);
+                if (st->foamImage.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->foamImage.image, st->foamImage.alloc);
                 destroyBuffer(ctx->allocator(), st->heightReadback);
                 destroyBuffer(ctx->allocator(), st->heightReadback1);
                 destroyBuffer(ctx->allocator(), st->heightReadback2);
@@ -1353,6 +1391,7 @@ namespace threepp {
             destroyImage2D(ctx->allocator(), d, envMargImage);
             destroyImage2D(ctx->allocator(), d, blueNoiseImage);
             destroyImage2D(ctx->allocator(), d, oceanFineHeightDummy);
+            destroyImage2D(ctx->allocator(), d, oceanFoamDummy);
             for (auto& img : accumImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, img);
@@ -1375,6 +1414,9 @@ namespace threepp {
 
             // Water displace pipeline owns its handles + sampler.
             waterDisplace_.reset();
+            // World-space foam pipeline; foam ping-pong images are owned by
+            // each DisplacedMeshState and destroyed there.
+            foamWorld_.reset();
 
             // Hybrid raster G-buffer cleanup. All resources are lazy-created
             // on first render() with hybridEnabled_ true; if hybrid was never
@@ -2505,6 +2547,94 @@ namespace threepp {
                       "vkCreateImageView(displaceScratch)");
             }
 
+            // World-space foam image. Coverage equals the cascade-0 tile
+            // (matches the FFT periodicity, so REPEAT-sampling at any
+            // world XZ folds back into the same texture cell). Resolution
+            // 1024² over 1000 m → ~0.98 m per texel, comparable to the
+            // base ocean's vertex spacing. R32F storage so both compute
+            // imageLoad/Store and chit linear sampling work without
+            // format conversions.
+            {
+                state->foamRes      = 1024u;
+                state->foamTileSize = dm.params.tileSize0;
+                VkImageCreateInfo ici{};
+                ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+                ici.imageType     = VK_IMAGE_TYPE_2D;
+                ici.format        = VK_FORMAT_R32_SFLOAT;
+                ici.extent        = {state->foamRes, state->foamRes, 1};
+                ici.mipLevels     = 1;
+                ici.arrayLayers   = 1;
+                ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+                ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+                ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT |
+                                    VK_IMAGE_USAGE_SAMPLED_BIT |
+                                    VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+                ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+                ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                VmaAllocationCreateInfo aci{};
+                aci.usage = VMA_MEMORY_USAGE_AUTO;
+                check(vmaCreateImage(ctx->allocator(), &ici, &aci,
+                                     &state->foamImage.image, &state->foamImage.alloc, nullptr),
+                      "vmaCreateImage(foamWorld)");
+                state->foamImage.format = VK_FORMAT_R32_SFLOAT;
+                state->foamImage.width  = state->foamRes;
+                state->foamImage.height = state->foamRes;
+                VkImageViewCreateInfo vci{};
+                vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                vci.image = state->foamImage.image;
+                vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                vci.format = VK_FORMAT_R32_SFLOAT;
+                vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                check(vkCreateImageView(ctx->device(), &vci, nullptr, &state->foamImage.view),
+                      "vkCreateImageView(foamWorld)");
+
+                // Initial clear to zero + layout transition to GENERAL so the
+                // first foam_world dispatch's imageLoad reads 0 (no foam yet)
+                // and the chit's linear sampler reads from a defined image.
+                VkCommandBuffer cb = beginOneShot();
+                {
+                    VkImageMemoryBarrier imb{};
+                    imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                    imb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    imb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    imb.srcAccessMask = 0;
+                    imb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    imb.image = state->foamImage.image;
+                    imb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    vkCmdPipelineBarrier(cb,
+                            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            0, 0, nullptr, 0, nullptr, 1, &imb);
+                }
+                VkClearColorValue cc{};
+                cc.float32[0] = 0.0f;
+                VkImageSubresourceRange sub{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cb, state->foamImage.image,
+                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                     &cc, 1, &sub);
+                {
+                    VkImageMemoryBarrier imb{};
+                    imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                    imb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    imb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    imb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    imb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                    imb.image = state->foamImage.image;
+                    imb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    vkCmdPipelineBarrier(cb,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                    VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                            0, 0, nullptr, 0, nullptr, 1, &imb);
+                }
+                endAndSubmitOneShot(cb);
+                state->foamImage.currentLayout = VK_IMAGE_LAYOUT_GENERAL;
+            }
+
             // Allocate this mesh's displace descriptor set + write bindings.
             state->displaceDS = waterDisplace_->allocateMeshDescriptorSet();
 
@@ -2534,6 +2664,41 @@ namespace threepp {
             }
             vkUpdateDescriptorSets(ctx->device(), uint32_t(ws.size()), ws.data(), 0, nullptr);
 
+            // Foam-world descriptor set — same cascade bindings 0..5 as the
+            // displace set, plus binding 6 = the storage image foam target.
+            state->foamWorldDS = foamWorld_->allocateMeshDescriptorSet();
+            std::array<VkDescriptorImageInfo, 6> foamCascadeInfos{};
+            for (uint32_t i = 0; i < 3; ++i) {
+                const uint32_t srcCascade = (state->cascadeMask & (1u << i)) ? i : 0u;
+                const auto& c = state->cascades[srcCascade];
+                foamCascadeInfos[i * 2 + 0].sampler     = foamWorld_->sampler();
+                foamCascadeInfos[i * 2 + 0].imageView   = c.dyn->ht().view;
+                foamCascadeInfos[i * 2 + 0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                foamCascadeInfos[i * 2 + 1].sampler     = foamWorld_->sampler();
+                foamCascadeInfos[i * 2 + 1].imageView   = c.dyn->displacement().view;
+                foamCascadeInfos[i * 2 + 1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            }
+            VkDescriptorImageInfo foamStorageInfo{};
+            foamStorageInfo.sampler     = VK_NULL_HANDLE;
+            foamStorageInfo.imageView   = state->foamImage.view;
+            foamStorageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            std::array<VkWriteDescriptorSet, 7> fws{};
+            for (uint32_t i = 0; i < 6; ++i) {
+                fws[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                fws[i].dstSet = state->foamWorldDS;
+                fws[i].dstBinding = i;
+                fws[i].descriptorCount = 1;
+                fws[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                fws[i].pImageInfo = &foamCascadeInfos[i];
+            }
+            fws[6].sType          = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            fws[6].dstSet         = state->foamWorldDS;
+            fws[6].dstBinding     = 6;
+            fws[6].descriptorCount= 1;
+            fws[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            fws[6].pImageInfo     = &foamStorageInfo;
+            vkUpdateDescriptorSets(ctx->device(), uint32_t(fws.size()), fws.data(), 0, nullptr);
+
             // Hand the smallest enabled cascade's height image to closest_hit
             // (binding 32) for sub-mesh-resolution normal perturbation. Picks
             // the highest enabled bit — the cascade with the smallest tileSize
@@ -2555,6 +2720,14 @@ namespace threepp {
                     rewriteOceanFineDescriptors_();
                 }
             }
+
+            // Hand this mesh's world-foam view to closest_hit (binding 33) so
+            // the chit can sample foam at arbitrary world XZ during shading.
+            // Like oceanFineHeight above, the foam VkImage handle is stable
+            // until the DisplacedMesh is destroyed, so we only rewrite once.
+            oceanFoamView     = state->foamImage.view;
+            oceanFoamTileSize = state->foamTileSize;
+            rewriteOceanFoamDescriptors_();
 
             auto* raw = state.get();
             displacedStates.emplace(&dm, std::move(state));
@@ -2715,6 +2888,55 @@ namespace threepp {
             pc.forwardSpeed   = dm.wake.enabled ? dm.wake.forwardSpeed : 0.0f;
             pc.disturbCount   = disturbCount;
             waterDisplace_->recordDispatch(cb, st.displaceDS, pc);
+
+            // (4c) World-space foam pass — same inputs as water_displace
+            // (cascades, disturbances, hull/wake state) but evaluated per
+            // foam-texel rather than per mesh vertex. Replaces the per-
+            // vertex foam buffer that water_displace used to write. Run
+            // AFTER water_displace finishes so we share the descriptor
+            // pool's cascade-image bindings without a layout flip; the
+            // cascades stay in GENERAL throughout.
+            {
+                vulkan::FoamWorldPipeline::PushConstants fpc{};
+                fpc.disturbAddr    = st.foamDisturbBuffer.address;
+                fpc.foamRes        = st.foamRes;
+                fpc.foamTileSize   = st.foamTileSize;
+                fpc.tileSize0      = dm.params.tileSize0;
+                fpc.tileSize1      = dm.params.tileSize1;
+                fpc.tileSize2      = dm.params.tileSize2;
+                fpc.waveScale      = dm.params.waveScale;
+                fpc.choppiness     = dm.params.choppiness;
+                fpc.cascadeMask    = st.cascadeMask;
+                fpc.hullCenterX    = dm.hullExclusion.centerX;
+                fpc.hullCenterZ    = dm.hullExclusion.centerZ;
+                fpc.hullHalfLength = dm.hullExclusion.halfLength;
+                fpc.hullHalfBeam   = dm.hullExclusion.halfBeam;
+                fpc.hullSinYaw     = dm.hullExclusion.sinYaw;
+                fpc.hullCosYaw     = dm.hullExclusion.cosYaw;
+                fpc.forwardSpeed   = dm.wake.enabled ? dm.wake.forwardSpeed : 0.0f;
+                fpc.disturbCount   = disturbCount;
+                fpc.decay          = 0.992f;
+                fpc._pad           = 0;
+                foamWorld_->recordDispatch(cb, st.foamWorldDS, fpc);
+
+                // Barrier: compute WRITE → ray-trace shader READ on the foam
+                // image. chit (binding 44) samples it via a combined image-
+                // sampler in the same frame.
+                VkImageMemoryBarrier fmb{};
+                fmb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                fmb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                fmb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                fmb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                fmb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                fmb.image = st.foamImage.image;
+                fmb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                fmb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                fmb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                vkCmdPipelineBarrier(cb,
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                        0, 0, nullptr, 0, nullptr, 1, &fmb);
+            }
 
             // Buffer barrier: compute write → AS-build read on the vertex/normal buffers.
             VkBufferMemoryBarrier bbs[2]{};
@@ -3927,6 +4149,8 @@ namespace threepp {
                         }
                         if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->scratchA.view, nullptr);
                         if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
+                        if (st->foamImage.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->foamImage.view, nullptr);
+                        if (st->foamImage.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->foamImage.image, st->foamImage.alloc);
                         // PhillipsSpectrum / DynamicSpectrum / IFFT destructors
                         // run on unique_ptr reset.
                         it = displacedStates.erase(it);
@@ -8151,6 +8375,44 @@ namespace threepp {
             oceanFineTileSize      = 0.0f;
         }
 
+        // 1×1 R32F dummy for binding 33 (world-space foam) when no
+        // DisplacedMesh is in the scene. closest_hit gates on
+        // pc.oceanFoamTileSize > 0 so the sampler result is unread; the
+        // descriptor still needs a valid view/sampler.
+        void createOceanFoamDummy_() {
+            const float zero = 0.0f;
+            oceanFoamDummy = createSampledImage2D(
+                    /*w*/ 1u, /*h*/ 1u,
+                    VK_FORMAT_R32_SFLOAT,
+                    &zero, sizeof(zero),
+                    VK_FILTER_LINEAR,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT);
+            // Transition to GENERAL so the binding matches the foam image's
+            // layout (compute leaves it in GENERAL; chit reads from there).
+            {
+                VkCommandBuffer cb = beginOneShot();
+                VkImageMemoryBarrier imb{};
+                imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                imb.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                imb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                imb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                imb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                imb.image = oceanFoamDummy.image;
+                imb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                vkCmdPipelineBarrier(cb,
+                        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                        0, 0, nullptr, 0, nullptr, 1, &imb);
+                endAndSubmitOneShot(cb);
+            }
+            oceanFoamView     = oceanFoamDummy.view;
+            oceanFoamSampler  = oceanFoamDummy.sampler;
+            oceanFoamTileSize = 0.0f;
+        }
+
         // Re-write descriptor binding 32 across all sets to point at the
         // currently active view/sampler/tileSize. Called from ensureDisplacedState
         // after the FFT cascades are constructed (and on first switchover from
@@ -8173,6 +8435,32 @@ namespace threepp {
                 writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 writes[i].dstSet = descriptorSets[i];
                 writes[i].dstBinding = 32;
+                writes[i].descriptorCount = 1;
+                writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[i].pImageInfo = &infos[i];
+            }
+            vkUpdateDescriptorSets(ctx->device(),
+                                   static_cast<uint32_t>(writes.size()),
+                                   writes.data(), 0, nullptr);
+        }
+
+        // Re-write descriptor binding 44 (world-space foam) across all chit
+        // sets. Mirrors rewriteOceanFineDescriptors_; called once when a
+        // DisplacedMesh appears (the foam VkImage handle stays put for the
+        // lifetime of that mesh, so per-frame writes aren't needed).
+        void rewriteOceanFoamDescriptors_() {
+            if (descriptorSets.empty()) return;
+            const uint32_t totalSets = imageCount_ * kFramesInFlight;
+            std::vector<VkDescriptorImageInfo> infos(totalSets);
+            std::vector<VkWriteDescriptorSet>  writes(totalSets);
+            for (uint32_t i = 0; i < totalSets; ++i) {
+                infos[i].sampler     = oceanFoamSampler;
+                infos[i].imageView   = oceanFoamView;
+                infos[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                writes[i] = VkWriteDescriptorSet{};
+                writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[i].dstSet = descriptorSets[i];
+                writes[i].dstBinding = 44;
                 writes[i].descriptorCount = 1;
                 writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 writes[i].pImageInfo = &infos[i];
@@ -8287,7 +8575,7 @@ namespace threepp {
             // for material lookup, UV for texture sampling on the primary).
             // Always present in the layout; raygen gates use on the hybrid
             // push-constant bit.
-            std::array<VkDescriptorSetLayoutBinding, 44> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 45> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -8583,6 +8871,17 @@ namespace threepp {
             bindings[43].descriptorCount = 1;
             bindings[43].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
+            // Binding 44 — world-space foam (R32F via combined-image-sampler).
+            // Built by FoamWorldPipeline each frame; closest_hit samples at
+            // hit-position world XZ to apply foam coverage on water surfaces.
+            // Default 1×1 dummy when no DisplacedMesh exists; swapped to the
+            // active mesh's foam image once one comes online. Gated in the
+            // shader by pc.oceanFoamTileSize > 0.
+            bindings[44].binding = 44;
+            bindings[44].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[44].descriptorCount = 1;
+            bindings[44].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
             dlci.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -8617,13 +8916,15 @@ namespace threepp {
             //        0 disables FFT-fine-normal perturbation on thinWalled hits)
             //   [13] edgeMsaaExtra      (raygen — extra primary samples at detected
             //        silhouettes; 0 disables, N → (N+1)× total samples at edges)
+            //   [14] oceanFoamTileSize bits (float — world-space foam tile size in m;
+            //        0 disables foam sampling on water hits)
             VkPushConstantRange pcRange{};
             pcRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                  VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
                                  VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
                                  VK_SHADER_STAGE_MISS_BIT_KHR;
             pcRange.offset = 0;
-            pcRange.size   = 56;
+            pcRange.size   = 60;
 
             VkPipelineLayoutCreateInfo plci{};
             plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -8901,7 +9202,7 @@ namespace threepp {
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             ps[3].descriptorCount = totalSets * 7;// bindings 3,4,10,14 (existing) + 15,16 (photon) + 21 (meshMovedBits)
             ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures + 5 + 1 + 1);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF) + bindings 22-26 (hybrid gbuffer attachments incl. UV) + binding 27 (blue noise tile) + binding 32 (ocean fine-cascade height)
+            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures + 5 + 1 + 1 + 1);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF) + bindings 22-26 (hybrid gbuffer attachments incl. UV) + binding 27 (blue noise tile) + binding 32 (ocean fine-cascade height) + binding 44 (world-space foam)
 
             VkDescriptorPoolCreateInfo ci{};
             ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -9477,7 +9778,22 @@ namespace threepp {
                     wGiLoRead.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                     wGiLoRead.pImageInfo = &giLoReadInfo;
 
-                    std::array<VkWriteDescriptorSet, 44> writes{
+                    // Binding 44 — world-space foam (dummy by default; the
+                    // active DisplacedMesh rewrites this once it comes online
+                    // via rewriteOceanFoamDescriptors_).
+                    VkDescriptorImageInfo oceanFoamInfo{};
+                    oceanFoamInfo.sampler     = oceanFoamSampler;
+                    oceanFoamInfo.imageView   = oceanFoamView;
+                    oceanFoamInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wOceanFoam{};
+                    wOceanFoam.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wOceanFoam.dstSet = descriptorSets[idx];
+                    wOceanFoam.dstBinding = 44;
+                    wOceanFoam.descriptorCount = 1;
+                    wOceanFoam.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wOceanFoam.pImageInfo = &oceanFoamInfo;
+
+                    std::array<VkWriteDescriptorSet, 45> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
                             wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered,
@@ -9489,7 +9805,8 @@ namespace threepp {
                             wMomentsWrite, wMomentsRead,
                             wAlbedoWrite, wAlbedoRead, wAlbedoSnap,
                             wGiXsWrite, wGiXsRead, wGiNsWrite, wGiNsRead,
-                            wGiLoWrite, wGiLoRead};
+                            wGiLoWrite, wGiLoRead,
+                            wOceanFoam};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -10327,7 +10644,9 @@ namespace threepp {
             std::memcpy(&fireflyBits, &fireflyClamp_, sizeof(fireflyBits));
             uint32_t oceanFineBits;
             std::memcpy(&oceanFineBits, &oceanFineTileSize, sizeof(oceanFineBits));
-            const uint32_t pc[14] = {
+            uint32_t oceanFoamBits;
+            std::memcpy(&oceanFoamBits, &oceanFoamTileSize, sizeof(oceanFoamBits));
+            const uint32_t pc[15] = {
                     sampleIndex,
                     envImage.mipLevels,
                     static_cast<uint32_t>(toneMapping_),
@@ -10342,6 +10661,7 @@ namespace threepp {
                     fireflyBits,
                     oceanFineBits,
                     edgeMsaaExtra_,
+                    oceanFoamBits,
             };
             vkCmdPushConstants(cb, rtPipelineLayout,
                                VK_SHADER_STAGE_RAYGEN_BIT_KHR |
