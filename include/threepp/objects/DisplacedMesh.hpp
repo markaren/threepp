@@ -73,15 +73,56 @@ namespace threepp {
         };
         HullExclusion hullExclusion;
 
+        // Adaptive resolution: instead of laying vertices on a uniform
+        // grid, the compute shader remaps each (u,v) ∈ [-1,1]² through
+        // a cubic blend before scaling so density packs toward the
+        // `center`. Topology stays fixed (same triangle indices, same
+        // vertex count, same BLAS shape) — only positions move, so the
+        // ocean's BLAS-rebuild + per-vertex history paths are unchanged.
+        // Pair with the world-space foam texture so foam doesn't drag
+        // along with vertex indices as the warp follows the camera.
+        //
+        // Mapping per axis: `x = halfRange * (coefA·u + (1-coefA)·u³)`
+        //   - coefA = 1: uniform (no warp).
+        //   - coefA = 0: pure cubic; vertices cluster tightly at the
+        //     centre but the edge spacing balloons by 3× the average.
+        //   - coefA ≈ 0.1: ~10 cm centre / ~2.7 m edge at 512² verts
+        //     over a 1 km tile, with a ~28× density ratio.
+        //
+        // Set `halfRange = 0` to disable the warp (default).
+        struct MeshWarp {
+            float centerX   = 0.f;
+            float centerZ   = 0.f;
+            float halfRange = 0.f;   // 0 = disabled (uniform grid)
+            float coefA     = 1.f;   // 1 = linear (no warp); lower = denser centre
+        };
+        MeshWarp warp;
+
         // Vessel wake: per-frame state used by water_displace.comp to inject a
         // Kelvin V-wake (geometric height), a bow bump, and a foam trail behind
         // the vessel. Reuses the HullExclusion pose (centerX/Z, sin/cosYaw,
-        // halfLength, halfBeam) — only forward speed is wake-specific. Set
-        // forwardSpeed = 0 (or enabled = false) to disable on stationary
-        // vessels (buoys, anchored ships) that still need a hull exclusion.
+        // halfLength, halfBeam) for the immediate-pose wake formulas; the
+        // historical trail uses snapshot samples for the Kelvin V-wake so the
+        // wake actually traces the boat's past path through turns instead of
+        // snapping to the current heading.
+        //
+        // Sample emission cadence + trail length are owned by the application
+        // (see examples/vulkan/vulkan_ocean.cpp). Compile-time cap matches
+        // the renderer's allocated trail SSBO; overflow is dropped silently.
+        struct WakeSample {
+            float worldX   = 0.f;
+            float worldZ   = 0.f;
+            float sinYaw   = 0.f;
+            float cosYaw   = 1.f;
+            float speed    = 0.f;
+            float age      = 0.f;       // seconds since emission
+            float _pad0    = 0.f;
+            float _pad1    = 0.f;
+        };
         struct VesselWake {
             float forwardSpeed = 0.f;   // m/s along +heading; 0 disables wake
             bool  enabled      = true;
+            std::vector<WakeSample> trail;
         };
         VesselWake wake;
 
@@ -152,6 +193,15 @@ namespace threepp {
         // the integrating behaviour of a long hull.
         float sampleHeight(float worldX, float worldZ,
                            uint32_t cascadeMask = 0b111u) const;
+
+        // CPU mirror of the wake-height block in water_displace.comp —
+        // bow bump (B), bow V-wedge (D), and the bow-anchored Kelvin
+        // V-wake (C, summed over `wake.trail`). Mirrors the shader
+        // formulas closely enough that buoys spring-damping against
+        // (sampleHeight + sampleWakeHeight) bob through a passing
+        // V-wake the way the rendered mesh does. Returns 0 if there is
+        // no active vessel or the speed gate hasn't engaged.
+        float sampleWakeHeight(float worldX, float worldZ) const;
     };
 
 }// namespace threepp

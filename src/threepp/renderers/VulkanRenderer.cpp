@@ -321,6 +321,15 @@ namespace threepp {
             Buffer    foamDisturbBuffer{};
             static constexpr uint32_t kMaxFoamDisturbances = 64;
 
+            // Per-mesh wake-trail SSBO. Host-mapped, written from
+            // dm.wake.trail each frame. Each sample is 32 bytes (matches
+            // DisplacedMesh::WakeSample). The water_displace shader
+            // iterates all valid samples and sums age-decayed Kelvin
+            // V-wake contributions so the wake traces the boat's past
+            // path rather than snapping to the current pose.
+            Buffer    wakeTrailBuffer{};
+            static constexpr uint32_t kMaxWakeSamples = 64;
+
             // World-space foam texture — 2D R32F covering the cascade-0
             // tile (foamTileSize × foamTileSize world m), REPEAT-sampled
             // in both compute and chit so wrapping at the tile boundary
@@ -1360,6 +1369,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), st->heightReadback1);
                 destroyBuffer(ctx->allocator(), st->heightReadback2);
                 destroyBuffer(ctx->allocator(), st->foamDisturbBuffer);
+                destroyBuffer(ctx->allocator(), st->wakeTrailBuffer);
                 // Per-cascade Phillips / DynamicSpectrum / IFFT are RAII; their
                 // destructors handle their own VkImage / VkPipeline / DSet cleanup.
             }
@@ -2865,6 +2875,31 @@ namespace threepp {
                 vmaUnmapMemory(ctx->allocator(), st.foamDisturbBuffer.alloc);
             }
 
+            // (4b) Wake-trail SSBO upload. Same pattern as disturbance buffer:
+            // lazy-allocate, memcpy newest-first list, drop the tail beyond
+            // kMaxWakeSamples. Each entry is 32 B = DisplacedMesh::WakeSample.
+            const uint32_t kWakeSampleStride = 32u;
+            const uint32_t kWakeTrailBytes   =
+                    DisplacedMeshState::kMaxWakeSamples * kWakeSampleStride;
+            if (st.wakeTrailBuffer.handle == VK_NULL_HANDLE) {
+                st.wakeTrailBuffer = createBuffer(
+                        ctx->allocator(), ctx->device(), kWakeTrailBytes,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            }
+            const uint32_t wakeSampleCount = static_cast<uint32_t>(std::min<size_t>(
+                    dm.wake.trail.size(),
+                    DisplacedMeshState::kMaxWakeSamples));
+            if (wakeSampleCount > 0u) {
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), st.wakeTrailBuffer.alloc, &mapped);
+                std::memcpy(mapped, dm.wake.trail.data(),
+                            wakeSampleCount * kWakeSampleStride);
+                vmaUnmapMemory(ctx->allocator(), st.wakeTrailBuffer.alloc);
+            }
+
             vulkan::WaterDisplacePipeline::PushConstants pc{};
             pc.posOut       = st.blas->vertex.address;
             pc.normOut      = st.blas->normal.address;
@@ -2887,6 +2922,12 @@ namespace threepp {
             pc.hullCosYaw     = dm.hullExclusion.cosYaw;
             pc.forwardSpeed   = dm.wake.enabled ? dm.wake.forwardSpeed : 0.0f;
             pc.disturbCount   = disturbCount;
+            pc.warpCenterX    = dm.warp.centerX;
+            pc.warpCenterZ    = dm.warp.centerZ;
+            pc.warpHalfRange  = dm.warp.halfRange;
+            pc.warpCoefA      = dm.warp.coefA;
+            pc.wakeTrailAddr  = st.wakeTrailBuffer.address;
+            pc.wakeTrailCount = wakeSampleCount;
             waterDisplace_->recordDispatch(cb, st.displaceDS, pc);
 
             // (4c) World-space foam pass — same inputs as water_displace
@@ -2916,6 +2957,8 @@ namespace threepp {
                 fpc.forwardSpeed   = dm.wake.enabled ? dm.wake.forwardSpeed : 0.0f;
                 fpc.disturbCount   = disturbCount;
                 fpc.decay          = 0.992f;
+                fpc.wakeTrailAddr  = st.wakeTrailBuffer.address;
+                fpc.wakeTrailCount = wakeSampleCount;
                 fpc._pad           = 0;
                 foamWorld_->recordDispatch(cb, st.foamWorldDS, fpc);
 

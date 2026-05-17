@@ -27,12 +27,12 @@ namespace threepp::vulkan {
         // descriptor set here.
         static constexpr uint32_t kMaxOceans = 16;
 
-        // Must match foam_world.comp's `Pc` struct (80 bytes total):
-        // 1 × VkDeviceAddress (8) + 18 × u32/float (72) — final `_pad` slot
-        // brings the C++ struct to a multiple of 8 to match scalar-layout
-        // sizing on the shader side.
+        // Must match foam_world.comp's `Pc` struct (96 bytes total):
+        // 2 × VkDeviceAddress (16) + 20 × u32/float (80) — final `_pad`
+        // slot brings the C++ struct to a multiple of 8.
         struct PushConstants {
-            VkDeviceAddress disturbAddr;  // 0 = no disturbance buffer
+            VkDeviceAddress disturbAddr;   // 0 = no disturbance buffer
+            VkDeviceAddress wakeTrailAddr; // 0 = no historical trail
             uint32_t        foamRes;
             float           foamTileSize;
             float           tileSize0;
@@ -50,6 +50,7 @@ namespace threepp::vulkan {
             float           forwardSpeed;
             uint32_t        disturbCount;
             float           decay;
+            uint32_t        wakeTrailCount;// # valid samples in wakeTrailAddr
             uint32_t        _pad;
         };
 

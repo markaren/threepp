@@ -66,7 +66,7 @@ namespace {
 namespace {
 
     constexpr float kTileSize    = 1000.0f;  // metres — full mesh extent and cascade-0 tile
-    constexpr uint32_t kFftSize  = 512;     // 4× cost vs 512² → 0.98 m vertex spacing, resolves λ ≥ 2 m
+    constexpr uint32_t kFftSize  = 1024;     // 4× cost vs 512² → 0.98 m vertex spacing, resolves λ ≥ 2 m
     constexpr float kPlaneEdge   = kTileSize;  // mesh extends one full FFT tile in X and Z
     constexpr int   kSubdiv      = static_cast<int>(kFftSize) - 1;  // 1024² verts ≈ 1 M; BLAS rebuild scales with this
 
@@ -775,9 +775,76 @@ int main() {
         ocean->hullExclusion.sinYaw     = sinY;
         ocean->hullExclusion.cosYaw     = cosY;
 
+        // Adaptive vertex density follows the vessel. The 1 km × 512² grid
+        // is uniform-natural at ~1.96 m spacing; the cubic warp packs it
+        // toward the boat to roughly 0.15 m at the centre while edge
+        // spacing only grows to ~2.7 m. Vertex history (foam) is in a
+        // world-space texture now, so vertices reflowing per frame is
+        // realism-safe — wake trails stay where they were deposited.
+        ocean->warp.centerX   = bs.position.x;
+        ocean->warp.centerZ   = bs.position.z;
+        ocean->warp.halfRange = kPlaneEdge * 0.5f;
+        ocean->warp.coefA     = 0.1f;
+
         // Vessel wake — analytical foam trail + bow bump + Kelvin V-wake
         // injected in water_displace.comp from the same pose plus speed.
+        // The Kelvin V-wake additionally uses a historical sample trail
+        // so it traces the boat's actual sailed curve through turns,
+        // instead of snapping to the current heading every frame. Trail
+        // is maintained below: emit at 4 Hz, drop samples older than 10 s,
+        // cap at the renderer's kMaxWakeSamples (32) — that's ~8 s of
+        // path at 4 m/s ≈ 32 m of wake trail, comfortably longer than
+        // the Kelvin 5·λ visible decay (~50 m at v=4 m/s).
         ocean->wake.forwardSpeed = bs.forwardSpeed;
+        {
+            constexpr float kEmitInterval     = 0.10f;     // 10 Hz cadence
+            constexpr float kEmitDistance     = 1.0f;      // also emit on > 1 m travel
+            constexpr float kMaxAge           = 6.0f;      // seconds
+            constexpr size_t kMaxSamples      = 64;
+            static float emitAccum = 0.f;
+            static float lastEmitX = std::numeric_limits<float>::quiet_NaN();
+            static float lastEmitZ = std::numeric_limits<float>::quiet_NaN();
+
+            // Age all samples and drop expired ones.
+            auto& trail = ocean->wake.trail;
+            for (auto& s : trail) s.age += dt;
+            trail.erase(std::remove_if(trail.begin(), trail.end(),
+                                       [](const DisplacedMesh::WakeSample& s){
+                                           return s.age > kMaxAge;
+                                       }),
+                        trail.end());
+
+            // Emit a new sample on whichever fires first: cadence elapsed
+            // OR the boat has travelled > kEmitDistance since the last
+            // emission. The distance trigger gives an immediate sample
+            // when the boat speeds up from rest (no 100 ms gap of missing
+            // wake while emitAccum builds), and the cadence keeps the
+            // trail well-sampled during steady-state cruising.
+            emitAccum += dt;
+            const float spd = std::abs(bs.forwardSpeed);
+            const float dxLast = std::isnan(lastEmitX) ? 1e9f : (bs.position.x - lastEmitX);
+            const float dzLast = std::isnan(lastEmitZ) ? 1e9f : (bs.position.z - lastEmitZ);
+            const float distLast = std::sqrt(dxLast * dxLast + dzLast * dzLast);
+            const bool shouldEmit = spd > 0.3f &&
+                                    (emitAccum >= kEmitInterval ||
+                                     distLast >= kEmitDistance);
+            if (shouldEmit) {
+                emitAccum = 0.f;
+                lastEmitX = bs.position.x;
+                lastEmitZ = bs.position.z;
+                if (trail.size() >= kMaxSamples) {
+                    trail.erase(trail.begin());// drop oldest
+                }
+                DisplacedMesh::WakeSample s{};
+                s.worldX = bs.position.x;
+                s.worldZ = bs.position.z;
+                s.sinYaw = sinY;
+                s.cosYaw = cosY;
+                s.speed  = bs.forwardSpeed;
+                s.age    = 0.f;
+                trail.push_back(s);
+            }
+        }
 
         // Hull-contact foam disturbances. Splats gaussian foam blobs along
         // the port + starboard hull perimeter (where the hull pushes water
@@ -857,7 +924,8 @@ int main() {
             constexpr float kBuoyC     = 2.f * 0.55f * kBuoyOmega;
             for (size_t i = 0; i < buoyStates.size(); ++i) {
                 BuoyState& s = buoyStates[i];
-                const float h = ocean->sampleHeight(s.worldX, s.worldZ, kBuoyancyMask);
+                const float h = ocean->sampleHeight(s.worldX, s.worldZ, kBuoyancyMask)
+                              + ocean->sampleWakeHeight(s.worldX, s.worldZ);
                 const float err = h - s.worldYOffset;
                 const float accel = err * kBuoyK - s.vY * kBuoyC;
                 s.vY += accel * dt;

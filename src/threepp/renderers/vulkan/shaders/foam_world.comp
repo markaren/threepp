@@ -49,26 +49,53 @@ struct DisturbPoint {
 };
 layout(buffer_reference, scalar) buffer DisturbBuf { DisturbPoint p[]; };
 
+// Historical wake sample — mirrors DisplacedMesh::WakeSample / the
+// matching struct in water_displace.comp.
+struct WakeSample {
+    float worldX;
+    float worldZ;
+    float sinYaw;
+    float cosYaw;
+    float speed;
+    float age;
+    float _p0;
+    float _p1;
+};
+layout(buffer_reference, scalar) buffer WakeTrailBuf { WakeSample s[]; };
+
 layout(push_constant, scalar) uniform Pc {
     uint64_t disturbAddr;   // 0 = no disturbance buffer
-    uint   foamRes;         // texels per side of the foam tile
-    float  foamTileSize;    // world extent the texture covers (= cascade-0 tile size)
-    float  tileSize0;       // cascade-0 FFT tile
+    uint64_t wakeTrailAddr; // 0 = no historical trail (falls back to current pose)
+    uint   foamRes;
+    float  foamTileSize;
+    float  tileSize0;
     float  tileSize1;
     float  tileSize2;
     float  waveScale;
     float  choppiness;
-    uint   cascadeMask;     // bit i = cascade i enabled
-    float  hullCenterX;     // vessel pose for wake formulas
+    uint   cascadeMask;
+    float  hullCenterX;
     float  hullCenterZ;
-    float  hullHalfLength;  // 0 = no vessel
+    float  hullHalfLength;
     float  hullHalfBeam;
     float  hullSinYaw;
     float  hullCosYaw;
-    float  forwardSpeed;    // m/s along +heading; 0 disables wake
+    float  forwardSpeed;
     uint   disturbCount;
-    float  decay;           // 0.992 ≈ 1.4 s half-life at 60 FPS
+    float  decay;
+    uint   wakeTrailCount;  // # valid samples in wakeTrailAddr
 } pc;
+
+// Toroidal world-XZ delta: a − b, wrapped into (−tileSize/2, +tileSize/2].
+// The foam texture covers one cascade-0 tile and REPEAT-samples beyond,
+// so any boat/disturbance world position folds modulo `tileSize` into the
+// texel domain. Without this wrap, a boat at world (−200, 0) gets distance
+// ≈ tileSize from any texel covering its modular twin at (+800, 0) — and
+// the wake/disturbance gaussians fall to zero, so no foam appears at all.
+vec2 toroidalDelta(vec2 a, vec2 b, float tileSize) {
+    vec2 d = a - b;
+    return d - tileSize * floor(d / tileSize + 0.5);
+}
 
 vec3 sampleDisplacement(vec2 worldXZ) {
     vec3 d = vec3(0.0);
@@ -127,40 +154,110 @@ void main() {
     const float foamInstant = clamp((foamThresh - J) / foamWidth, 0.0, 1.0);
 
     // ── Vessel wake foam ─────────────────────────────────────────────
-    // Mirrors the wake-formula block from water_displace.comp, but
-    // evaluated per world-space texel instead of per mesh vertex. With
-    // foam pinned to world coords the trail correctly stays behind a
-    // moving vessel rather than being dragged with mesh-local vertex
-    // indices.
+    // Iterates the historical pose trail and takes MAX over each
+    // sample's contribution, so the foam line traces the boat's
+    // actual sailed curve through turns instead of snapping to the
+    // current heading every frame. Two contributions per sample:
+    //   A — straight foam trail behind the stern (gaussian × exp)
+    //   D — bow V-wedge ridge foam (sharp crest along the V boundary)
+    // Toroidal delta handles the cascade-tile wrap so the boat at
+    // negative world coords still gets foam at its modular twin texel.
+    //
+    // Falls back to a single current-pose evaluation when no trail is
+    // populated (no historical buffer set, or vessel just spawned).
     float wakeFoam = 0.0;
     if (pc.hullHalfLength > 0.0) {
-        const float wakeSpeed = abs(pc.forwardSpeed);
-        const float wakeGate  = smoothstep(0.5, 1.5, wakeSpeed);
-        if (wakeGate > 0.0) {
-            const float dx = worldXZ.x - pc.hullCenterX;
-            const float dz = worldXZ.y - pc.hullCenterZ;
-            const float lX = pc.hullCosYaw * dx - pc.hullSinYaw * dz;
-            const float lZ = pc.hullSinYaw * dx + pc.hullCosYaw * dz;
-            const float distBehind = -lZ - pc.hullHalfLength;
-            // A — straight foam trail behind the stern
-            if (distBehind > 0.0) {
-                const float lenDecay   = 30.0;
-                const float beamSpread = pc.hullHalfBeam * 1.5;
-                const float lateral    = exp(-(lX * lX) / (beamSpread * beamSpread));
-                const float along      = exp(-distBehind / lenDecay);
-                wakeFoam = wakeGate * 0.95 * along * lateral;
+        if (pc.wakeTrailAddr != 0ul && pc.wakeTrailCount > 0u) {
+            WakeTrailBuf wt = WakeTrailBuf(pc.wakeTrailAddr);
+            for (uint si = 0u; si < pc.wakeTrailCount; ++si) {
+                const WakeSample s = wt.s[si];
+                const float sSpeed = abs(s.speed);
+                const float sGate  = smoothstep(0.5, 1.5, sSpeed);
+                if (sGate <= 0.0) continue;
+                const vec2 d = toroidalDelta(worldXZ,
+                                             vec2(s.worldX, s.worldZ),
+                                             pc.foamTileSize);
+                const float sLX = s.cosYaw * d.x - s.sinYaw * d.y;
+                const float sLZ = s.sinYaw * d.x + s.cosYaw * d.y;
+                const float sAgeFade = exp(-s.age / 5.0);
+                // A — foam trail behind stern (along the sample's local −Z).
+                const float sDistBehind = -sLZ - pc.hullHalfLength;
+                if (sDistBehind > 0.0) {
+                    const float lenDecay   = 30.0;
+                    const float beamSpread = pc.hullHalfBeam * 1.5;
+                    const float lateral    = exp(-(sLX * sLX) /
+                                                 (beamSpread * beamSpread));
+                    const float along      = exp(-sDistBehind / lenDecay);
+                    wakeFoam = max(wakeFoam,
+                                   sGate * 0.95 * along * lateral * sAgeFade);
+                }
+                // D — bow V-wedge ridge foam, gated by per-sample
+                // hullFade so foam doesn't appear under the boat's
+                // historical hull footprint.
+                const float sDistAft = pc.hullHalfLength - sLZ;
+                if (sDistAft > 0.0 && sDistAft < pc.hullHalfLength * 5.0) {
+                    const float uHull = clamp(-sLZ / pc.hullHalfLength, -1.0, 1.0);
+                    float sHalfBeamAtLZ;
+                    if (uHull <= 0.0) {
+                        sHalfBeamAtLZ = pc.hullHalfBeam *
+                                        pow(max(1.0 - uHull * uHull, 0.0), 0.6);
+                    } else {
+                        sHalfBeamAtLZ = pc.hullHalfBeam *
+                                        (1.0 - 0.25 * uHull * uHull);
+                    }
+                    const float sHullEdgeX = abs(sLX) - sHalfBeamAtLZ;
+                    const float sHullEdgeZ = abs(sLZ) - pc.hullHalfLength;
+                    const float sHullFade  = smoothstep(0.0, 2.0,
+                                                        max(sHullEdgeX, sHullEdgeZ));
+                    if (sHullFade <= 0.0) continue;
+                    const float tanAV     = 0.36;
+                    const float expectedX = tanAV * sDistAft;
+                    const float dRidge    = abs(abs(sLX) - expectedX);
+                    const float ridgeFoam = exp(-(dRidge * dRidge) / (0.5 * 0.5));
+                    const float alongDec  = exp(-sDistAft / (pc.hullHalfLength * 3.0));
+                    wakeFoam = max(wakeFoam,
+                                   sGate * 0.6 * ridgeFoam * alongDec * sAgeFade * sHullFade);
+                }
             }
-            // D — bow V-wedge ridge foam (the breaking crest where
-            // water is pushed aside as the hull moves forward).
-            const float distAft = pc.hullHalfLength - lZ;
-            if (distAft > 0.0 && distAft < pc.hullHalfLength * 5.0) {
-                const float tanAV     = 0.36;
-                const float expectedX = tanAV * distAft;
-                const float dRidge    = abs(abs(lX) - expectedX);
-                const float ridgeFoam = exp(-(dRidge * dRidge) / (0.5 * 0.5));
-                const float alongDecay = exp(-distAft / (pc.hullHalfLength * 3.0));
-                const float wedgeFoamAmt = wakeGate * 0.6 * ridgeFoam * alongDecay;
-                wakeFoam = max(wakeFoam, wedgeFoamAmt);
+        } else {
+            const float wakeSpeed = abs(pc.forwardSpeed);
+            const float wakeGate  = smoothstep(0.5, 1.5, wakeSpeed);
+            if (wakeGate > 0.0) {
+                const vec2 d = toroidalDelta(worldXZ,
+                                             vec2(pc.hullCenterX, pc.hullCenterZ),
+                                             pc.foamTileSize);
+                const float lX = pc.hullCosYaw * d.x - pc.hullSinYaw * d.y;
+                const float lZ = pc.hullSinYaw * d.x + pc.hullCosYaw * d.y;
+                const float distBehind = -lZ - pc.hullHalfLength;
+                if (distBehind > 0.0) {
+                    const float lenDecay   = 30.0;
+                    const float beamSpread = pc.hullHalfBeam * 1.5;
+                    const float lateral    = exp(-(lX * lX) / (beamSpread * beamSpread));
+                    const float along      = exp(-distBehind / lenDecay);
+                    wakeFoam = max(wakeFoam, wakeGate * 0.95 * along * lateral);
+                }
+                const float distAft = pc.hullHalfLength - lZ;
+                if (distAft > 0.0 && distAft < pc.hullHalfLength * 5.0) {
+                    const float uHull = clamp(-lZ / pc.hullHalfLength, -1.0, 1.0);
+                    float halfBeamAtLZ;
+                    if (uHull <= 0.0) {
+                        halfBeamAtLZ = pc.hullHalfBeam *
+                                       pow(max(1.0 - uHull * uHull, 0.0), 0.6);
+                    } else {
+                        halfBeamAtLZ = pc.hullHalfBeam * (1.0 - 0.25 * uHull * uHull);
+                    }
+                    const float hullEdgeX = abs(lX) - halfBeamAtLZ;
+                    const float hullEdgeZ = abs(lZ) - pc.hullHalfLength;
+                    const float curHullFade = smoothstep(0.0, 2.0,
+                                                         max(hullEdgeX, hullEdgeZ));
+                    const float tanAV     = 0.36;
+                    const float expectedX = tanAV * distAft;
+                    const float dRidge    = abs(abs(lX) - expectedX);
+                    const float ridgeFoam = exp(-(dRidge * dRidge) / (0.5 * 0.5));
+                    const float alongDec  = exp(-distAft / (pc.hullHalfLength * 3.0));
+                    wakeFoam = max(wakeFoam,
+                                   wakeGate * 0.6 * ridgeFoam * alongDec * curHullFade);
+                }
             }
         }
     }
@@ -171,11 +268,12 @@ void main() {
         DisturbBuf db = DisturbBuf(pc.disturbAddr);
         for (uint k = 0u; k < pc.disturbCount; ++k) {
             const DisturbPoint dp = db.p[k];
-            const float ddx = worldXZ.x - dp.worldX;
-            const float ddz = worldXZ.y - dp.worldZ;
+            const vec2 dd = toroidalDelta(worldXZ,
+                                          vec2(dp.worldX, dp.worldZ),
+                                          pc.foamTileSize);
             const float r2  = dp.radius * dp.radius;
             if (r2 <= 0.0) continue;
-            const float d2  = ddx * ddx + ddz * ddz;
+            const float d2  = dd.x * dd.x + dd.y * dd.y;
             const float g   = dp.intensity * exp(-d2 / r2);
             disturbFoam = max(disturbFoam, g);
         }
