@@ -794,16 +794,38 @@ int main() {
             const float spd = std::abs(bs.forwardSpeed);
             const float speedNorm = std::clamp(spd / 4.0f, 0.0f, 1.0f);
             const float baseI     = 0.4f + 0.55f * speedNorm;
-            // 4 points each side, bow → stern. Splats overlap (~radius 1.8m
-            // at ~halfLength/1.5 spacing) so dense saturation builds where
-            // they cluster (e.g. tight at the bow).
-            constexpr int  kSamples = 4;
-            constexpr float kRadius = 1.8f;
+            // Analytical hull plan-form half-width at fraction t ∈ [0,1]
+            // along the length (0 = bow, 1 = stern). Bow is sharp (≈0 at
+            // tip) so foam pinches to the centreline at the prow rather
+            // than sitting on the bbox front corners; stern keeps ~75 %
+            // beam (Gunnerus has a roughly transom aft form). Without
+            // this taper the perimeter splats below sit on the corners
+            // of the 28×9 bounding box and read as a rectangular foam
+            // outline that doesn't match the hull silhouette.
+            auto hullHalfWidth = [B](float t) -> float {
+                const float u = 2.0f * t - 1.0f;          // -1 at bow, +1 at stern
+                if (u <= 0.0f) {
+                    // Elliptical bow with sharpening exponent < 1 — pinches
+                    // tighter toward the tip than a pure ellipse would.
+                    const float k = 1.0f - u * u;          // 0 at bow tip, 1 amidships
+                    return B * std::pow(k, 0.6f);
+                }
+                // Stern: stays near full beam, fading slightly toward the transom.
+                return B * (1.0f - 0.25f * u * u);
+            };
+            // 8 points each side, bow → stern. Splats are positioned just
+            // outside the tapered hull silhouette (+0.2 m offset) so their
+            // gaussian halos paint visible foam on the surrounding ocean
+            // rather than on the flat hull-excluded zone below the boat.
+            // Spacing ≈ 4 m at midship × radius 1.6 m gives partial overlap
+            // along the length so the foam reads as a continuous band.
+            constexpr int   kSamples = 8;
+            constexpr float kRadius  = 1.6f;
             for (int side = -1; side <= 1; side += 2) {
                 for (int i = 0; i < kSamples; ++i) {
                     const float t       = float(i) / float(kSamples - 1);
-                    const float localZ  = L - 2.0f * L * t;   // +L (bow) → -L (stern)
-                    const float localX  = float(side) * (B + 0.2f);
+                    const float localZ  = L - 2.0f * L * t;       // +L (bow) → -L (stern)
+                    const float localX  = float(side) * (hullHalfWidth(t) + 0.2f);
                     const float worldX  = bs.position.x + cosY * localX + sinY * localZ;
                     const float worldZ  = bs.position.z - sinY * localX + cosY * localZ;
                     ocean->addFoamDisturbance(worldX, worldZ, kRadius, baseI);
