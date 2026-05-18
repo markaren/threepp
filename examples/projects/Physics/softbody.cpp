@@ -119,12 +119,16 @@ int main() {
     canvas.setIOCapture(&capture);
 
     bool showDebug = false;
+    float fps = 0.f, fpsAccum = 0.f;
+    int fpsFrames = 0;
 
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
         const float width = 280 * ui.dpiScale();
         ImGui::SetNextWindowPos({float(canvas.size().width()) - width, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({width, 0}, 0);
         ImGui::Begin("Soft Body Demo");
+        ImGui::Text("FPS: %.1f", fps);
+        ImGui::Separator();
         ImGui::Text("Press SPACE to drop a soft body");
         ImGui::Separator();
         if (ImGui::Checkbox("Show PhysX debug", &showDebug)) {
@@ -141,8 +145,18 @@ int main() {
     });
 
     constexpr float dt = 1.f / 60.f;
+    Clock clock;
 
     canvas.animate([&] {
+        const float realDt = clock.getDelta();
+        fpsAccum += realDt;
+        ++fpsFrames;
+        if (fpsAccum >= 0.5f) {
+            fps = fpsFrames / fpsAccum;
+            fpsAccum = 0.f;
+            fpsFrames = 0;
+        }
+
         if (spawnPending) {
             spawnPending = false;
             Vector3 dir;
