@@ -99,6 +99,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <random>
 #include <cstring>
@@ -2618,6 +2619,8 @@ namespace threepp {
                 vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 check(vkCreateImageView(ctx->device(), &vci, nullptr, &state->scratchA.view),
                       "vkCreateImageView(displaceScratch)");
+                ctx->setObjectName(state->scratchA.image, "ocean.scratchA (IFFT ping-pong)");
+                ctx->setObjectName(state->scratchA.view,  "ocean.scratchA (IFFT ping-pong)");
             }
 
             // World-space foam image. Coverage equals the cascade-0 tile
@@ -2660,6 +2663,8 @@ namespace threepp {
                 vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 check(vkCreateImageView(ctx->device(), &vci, nullptr, &state->foamImage.view),
                       "vkCreateImageView(foamWorld)");
+                ctx->setObjectName(state->foamImage.image, "ocean.foamWorld (1024x1024 R32F)");
+                ctx->setObjectName(state->foamImage.view,  "ocean.foamWorld (1024x1024 R32F)");
 
                 // Initial clear to zero + layout transition to GENERAL so the
                 // first foam_world dispatch's imageLoad reads 0 (no foam yet)
@@ -5916,7 +5921,8 @@ namespace threepp {
         Image2D createSampledImage2D(uint32_t w, uint32_t h, VkFormat format,
                                      const void* pixels, VkDeviceSize byteSize,
                                      VkFilter filter, VkSamplerAddressMode addrU,
-                                     VkSamplerAddressMode addrV) {
+                                     VkSamplerAddressMode addrV,
+                                     const char* debugName = nullptr) {
             Image2D out{};
             out.width  = w;
             out.height = h;
@@ -6139,6 +6145,10 @@ namespace threepp {
             check(vkCreateSampler(ctx->device(), &sci, nullptr, &out.sampler),
                   "vkCreateSampler(env)");
 
+            if (debugName) {
+                ctx->setObjectName(out.image, debugName);
+                ctx->setObjectName(out.view,  debugName);
+            }
             return out;
         }
 
@@ -6148,7 +6158,8 @@ namespace threepp {
         // raygen reads/writes this every frame, so we transition once at
         // creation and keep it in GENERAL forever after.
         Image2D createStorageImage2D(uint32_t w, uint32_t h, VkFormat format,
-                                     VkImageUsageFlags extraUsage = 0) {
+                                     VkImageUsageFlags extraUsage = 0,
+                                     const char* debugName = nullptr) {
             Image2D out{};
             out.width  = w;
             out.height = h;
@@ -6207,6 +6218,10 @@ namespace threepp {
             check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
                   "vkCreateImageView(accum)");
 
+            if (debugName) {
+                ctx->setObjectName(out.image, debugName);
+                ctx->setObjectName(out.view,  debugName);
+            }
             return out;
         }
 
@@ -6216,36 +6231,43 @@ namespace threepp {
             // resolution raygen actually launches at. Equal to the
             // swapchain extent unless renderScale_ < 1.
             const VkExtent2D ext = renderExtent();
-            for (auto& img : accumImagesPP) {
-                img = createStorageImage2D(ext.width, ext.height,
-                                           VK_FORMAT_R32G32B32A32_SFLOAT);
+            for (size_t i = 0; i < accumImagesPP.size(); ++i) {
+                accumImagesPP[i] = createStorageImage2D(
+                        ext.width, ext.height, VK_FORMAT_R32G32B32A32_SFLOAT,
+                        0, i == 0 ? "accumImagePP[0]" : "accumImagePP[1]");
             }
-            for (auto& img : gbufImagesPP) {
-                img = createStorageImage2D(ext.width, ext.height,
-                                           VK_FORMAT_R32G32B32A32_SFLOAT);
+            for (size_t i = 0; i < gbufImagesPP.size(); ++i) {
+                gbufImagesPP[i] = createStorageImage2D(
+                        ext.width, ext.height, VK_FORMAT_R32G32B32A32_SFLOAT,
+                        0, i == 0 ? "gbufImagePP[0]" : "gbufImagePP[1]");
             }
-            for (auto& img : reservoirPosImagesPP) {
-                img = createStorageImage2D(ext.width, ext.height,
-                                           VK_FORMAT_R32G32B32A32_SFLOAT);
+            for (size_t i = 0; i < reservoirPosImagesPP.size(); ++i) {
+                reservoirPosImagesPP[i] = createStorageImage2D(
+                        ext.width, ext.height, VK_FORMAT_R32G32B32A32_SFLOAT,
+                        0, i == 0 ? "reservoirPosImagePP[0]" : "reservoirPosImagePP[1]");
             }
-            for (auto& img : reservoirWImagesPP) {
-                img = createStorageImage2D(ext.width, ext.height,
-                                           VK_FORMAT_R16G16B16A16_SFLOAT);
+            for (size_t i = 0; i < reservoirWImagesPP.size(); ++i) {
+                reservoirWImagesPP[i] = createStorageImage2D(
+                        ext.width, ext.height, VK_FORMAT_R16G16B16A16_SFLOAT,
+                        0, i == 0 ? "reservoirWImagePP[0]" : "reservoirWImagePP[1]");
             }
             // ReSTIR GI reservoir ping-pong — all rgba32f for world-space xs
             // precision (rgba16f would lose ~mm-level accuracy at typical
             // scene scales and break the visibility test's distance check).
-            for (auto& img : giResXsImagesPP) {
-                img = createStorageImage2D(ext.width, ext.height,
-                                           VK_FORMAT_R32G32B32A32_SFLOAT);
+            for (size_t i = 0; i < giResXsImagesPP.size(); ++i) {
+                giResXsImagesPP[i] = createStorageImage2D(
+                        ext.width, ext.height, VK_FORMAT_R32G32B32A32_SFLOAT,
+                        0, i == 0 ? "giResXsImagePP[0]" : "giResXsImagePP[1]");
             }
-            for (auto& img : giResNsImagesPP) {
-                img = createStorageImage2D(ext.width, ext.height,
-                                           VK_FORMAT_R32G32B32A32_SFLOAT);
+            for (size_t i = 0; i < giResNsImagesPP.size(); ++i) {
+                giResNsImagesPP[i] = createStorageImage2D(
+                        ext.width, ext.height, VK_FORMAT_R32G32B32A32_SFLOAT,
+                        0, i == 0 ? "giResNsImagePP[0]" : "giResNsImagePP[1]");
             }
-            for (auto& img : giResLoImagesPP) {
-                img = createStorageImage2D(ext.width, ext.height,
-                                           VK_FORMAT_R32G32B32A32_SFLOAT);
+            for (size_t i = 0; i < giResLoImagesPP.size(); ++i) {
+                giResLoImagesPP[i] = createStorageImage2D(
+                        ext.width, ext.height, VK_FORMAT_R32G32B32A32_SFLOAT,
+                        0, i == 0 ? "giResLoImagePP[0]" : "giResLoImagePP[1]");
             }
             // Filtered + moments ping-pong are owned by Denoiser; ctor must
             // have already constructed denoiser_ before this is reached.
@@ -6311,7 +6333,8 @@ namespace threepp {
 
         Image2D createAttachmentImage2D(uint32_t w, uint32_t h, VkFormat format,
                                         VkImageUsageFlags usage,
-                                        VkImageAspectFlags aspect) {
+                                        VkImageAspectFlags aspect,
+                                        const char* debugName = nullptr) {
             Image2D out{};
             out.width  = w;
             out.height = h;
@@ -6346,6 +6369,10 @@ namespace threepp {
             vci.subresourceRange.layerCount = 1;
             check(vkCreateImageView(ctx->device(), &vci, nullptr, &out.view),
                   "vkCreateImageView(rasterGbuf attachment)");
+            if (debugName) {
+                ctx->setObjectName(out.image, debugName);
+                ctx->setObjectName(out.view,  debugName);
+            }
             return out;
         }
 
@@ -6449,17 +6476,28 @@ namespace threepp {
             const VkImageUsageFlags depthUsage =
                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                     VK_IMAGE_USAGE_SAMPLED_BIT;
-            for (auto& g : rasterGbufs) {
+            for (size_t fi = 0; fi < rasterGbufs.size(); ++fi) {
+                auto& g = rasterGbufs[fi];
+                char nameBuf[64];
+                auto N = [&](const char* tag) {
+                    std::snprintf(nameBuf, sizeof(nameBuf), "rasterGbuf[%zu].%s", fi, tag);
+                    return nameBuf;
+                };
                 g.normal = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                   colorUsage, VK_IMAGE_ASPECT_COLOR_BIT);
+                                                   colorUsage, VK_IMAGE_ASPECT_COLOR_BIT,
+                                                   N("normal"));
                 g.motion = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                   colorUsage, VK_IMAGE_ASPECT_COLOR_BIT);
+                                                   colorUsage, VK_IMAGE_ASPECT_COLOR_BIT,
+                                                   N("motion"));
                 g.ids    = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_UINT,
-                                                   colorUsage, VK_IMAGE_ASPECT_COLOR_BIT);
+                                                   colorUsage, VK_IMAGE_ASPECT_COLOR_BIT,
+                                                   N("ids"));
                 g.uv     = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                   colorUsage, VK_IMAGE_ASPECT_COLOR_BIT);
+                                                   colorUsage, VK_IMAGE_ASPECT_COLOR_BIT,
+                                                   N("uv"));
                 g.depth  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
-                                                   depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT);
+                                                   depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
+                                                   N("depth"));
                 // Unjittered depth, written by the overlay depth prepass and
                 // read by the post-TAA wireframe overlay's depth-test. Lives
                 // outside the main G-buffer render pass — bound only via
@@ -6471,7 +6509,8 @@ namespace threepp {
                 const VkExtent2D swapExt = ctx->swapchainExtent();
                 g.unjitDepth = createAttachmentImage2D(swapExt.width, swapExt.height,
                                                        VK_FORMAT_D32_SFLOAT,
-                                                       depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT);
+                                                       depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
+                                                       N("unjitDepth"));
 
                 VkImageView views[5] = {g.normal.view, g.motion.view, g.ids.view,
                                         g.uv.view, g.depth.view};
@@ -7442,12 +7481,16 @@ namespace threepp {
             const VkFormat fmt = (tex->colorSpace == ColorSpace::Linear)
                                          ? VK_FORMAT_R8G8B8A8_UNORM
                                          : VK_FORMAT_R8G8B8A8_SRGB;
+            char spriteName[64];
+            std::snprintf(spriteName, sizeof(spriteName),
+                          "spriteAtlas[%p]", static_cast<const void*>(tex));
             Image2D up = createSampledImage2D(
                     w, h, fmt,
                     rgba.data(), rgba.size(),
                     VK_FILTER_LINEAR,
                     VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                    spriteName);
 
             SpriteAtlasRec rec{};
             rec.image          = up;
@@ -8044,7 +8087,8 @@ namespace threepp {
                     pixels, sizeof(pixels),
                     VK_FILTER_NEAREST,
                     VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                    "envImage(default 1x1 black)");
             envIsDefault = true;
             envIsBgColor = false;
             envTextureIdUploaded = 0xFFFFFFFFu;
@@ -8090,7 +8134,8 @@ namespace threepp {
                     white, sizeof(white),
                     VK_FILTER_NEAREST,
                     VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                    VK_SAMPLER_ADDRESS_MODE_REPEAT);
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    "materialTexture[0] (default white)");
             // The Image2D's own sampler is unused (we share textureSampler_),
             // but kept alive so destroyImage2D's clean-up still works.
             materialTextures.push_back(tex);
@@ -8240,12 +8285,23 @@ namespace threepp {
             const VkFormat fmt = (tex->colorSpace == ColorSpace::sRGB)
                                          ? VK_FORMAT_R8G8B8A8_SRGB
                                          : VK_FORMAT_R8G8B8A8_UNORM;
+            // Pre-compute the slot so the debug name can include it. The
+            // allocation order below (free list pop, else push_back) is
+            // mirrored in the actual assignment below.
+            const uint32_t plannedSlot = freeTextureSlots.empty()
+                    ? static_cast<uint32_t>(materialTextures.size())
+                    : freeTextureSlots.back();
+            char texName[80];
+            std::snprintf(texName, sizeof(texName),
+                          "materialTexture[%u] (%ux%u, tex=%p)",
+                          plannedSlot, w, h, static_cast<const void*>(tex));
             Image2D out = createSampledImage2D(
                     w, h, fmt,
                     rgba.data(), rgba.size(),
                     VK_FILTER_LINEAR,
                     wrapToVk(tex->wrapS),
-                    wrapToVk(tex->wrapT));
+                    wrapToVk(tex->wrapT),
+                    texName);
             uint32_t slot;
             if (!freeTextureSlots.empty()) {
                 slot = freeTextureSlots.back();
@@ -8276,7 +8332,8 @@ namespace threepp {
                     cdf.conditional.size() * sizeof(float),
                     VK_FILTER_NEAREST,
                     VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                    "envCdfImage (conditional)");
             // Marginal is uploaded as h×1 (width=h, height=1) so the shader
             // can fetch entry mid via `texelFetch(envMargTex, ivec2(mid, 0))`,
             // matching WGPU's `cdfSearch(envMargTex, 0, envH, xi)` access
@@ -8290,7 +8347,8 @@ namespace threepp {
                     cdf.marginal.size() * sizeof(float),
                     VK_FILTER_NEAREST,
                     VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                    "envMargImage (marginal CDF)");
             envCdfWidth_    = static_cast<uint32_t>(cdf.width);
             envCdfHeight_   = static_cast<uint32_t>(cdf.height);
             envCdfTotalSum_ = cdf.totalSum;
@@ -8443,7 +8501,8 @@ namespace threepp {
                     tile.data(), tile.size(),
                     VK_FILTER_NEAREST,
                     VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                    VK_SAMPLER_ADDRESS_MODE_REPEAT);
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    "blueNoiseImage (64x64 void-and-cluster tile)");
         }
 
         // 1×1 R32F dummy used at binding 32 when no DisplacedMesh is in the
@@ -8459,7 +8518,8 @@ namespace threepp {
                     &zero, sizeof(zero),
                     VK_FILTER_LINEAR,
                     VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                    VK_SAMPLER_ADDRESS_MODE_REPEAT);
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    "oceanFineHeightDummy (1x1, binding 32 placeholder)");
             // Transition to GENERAL so the descriptor layout matches the
             // cascade-2 storage image's layout (also GENERAL after IFFT). One
             // declared layout simplifies rewriteOceanFineDescriptors_().
@@ -8498,7 +8558,8 @@ namespace threepp {
                     &zero, sizeof(zero),
                     VK_FILTER_LINEAR,
                     VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                    VK_SAMPLER_ADDRESS_MODE_REPEAT);
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    "oceanFoamDummy (1x1, binding 44 placeholder)");
             // Transition to GENERAL so the binding matches the foam image's
             // layout (compute leaves it in GENERAL; chit reads from there).
             {
@@ -8617,7 +8678,8 @@ namespace threepp {
                             px, sizeof(px),
                             VK_FILTER_NEAREST,
                             VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                            VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+                            VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                            "envImage(scene.background color)");
                     envIsDefault  = false;
                     envIsBgColor  = true;
                     envBgColor    = c;

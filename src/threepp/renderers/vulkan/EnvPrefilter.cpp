@@ -148,6 +148,7 @@ namespace threepp::vulkan {
         check(vmaCreateImage(ctx_.allocator(), &ici, &aci,
                              &out.image, &out.alloc, nullptr),
               "vmaCreateImage(envPmrem)");
+        ctx_.setObjectName(out.image, "envPmrem (HDR env prefilter)");
 
         // Staging buffer for mip 0.
         Buffer staging = createBuffer(
@@ -251,6 +252,7 @@ namespace threepp::vulkan {
             vci.subresourceRange.layerCount = 1;
             check(vkCreateImageView(ctx_.device(), &vci, nullptr, &out.view),
                   "vkCreateImageView(envPmrem)");
+            ctx_.setObjectName(out.view, "envPmrem (HDR env prefilter)");
         }
 
         // Sampler with LINEAR mip filtering so trilinear blends across mips.

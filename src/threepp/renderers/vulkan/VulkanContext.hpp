@@ -58,6 +58,14 @@ namespace threepp::vulkan {
 
         bool rayTracingEnabled() const { return rayTracingEnabled_; }
 
+        // Attach a debug-utils name to a Vulkan object so validation messages
+        // and RenderDoc / Nsight reports identify it by label instead of by
+        // raw uint64 handle. No-op when validation is off (the EXT extension
+        // isn't loaded). Cheap; safe to call from any image-creation helper.
+        void setObjectName(VkImage image, const char* name) const;
+        void setObjectName(VkImageView view, const char* name) const;
+        void setObjectName(VkBuffer buffer, const char* name) const;
+
         // Ray-tracing pipeline properties. Only valid when rayTracingEnabled().
         // Needed by callers building Shader Binding Tables.
         const VkPhysicalDeviceRayTracingPipelinePropertiesKHR& rtPipelineProperties() const {
@@ -104,6 +112,9 @@ namespace threepp::vulkan {
         bool rayTracingEnabled_ = false;
         VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtPipelineProperties_{};
         RtFunctions rt_{};
+        // Non-null only when VK_EXT_debug_utils is enabled (i.e. validation
+        // is on). Loaded via vkGetDeviceProcAddr at device creation.
+        PFN_vkSetDebugUtilsObjectNameEXT setObjectNameFn_ = nullptr;
 
         void createInstance(bool enableValidation);
         void createDebugMessenger();

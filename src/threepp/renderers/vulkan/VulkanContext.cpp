@@ -331,6 +331,12 @@ namespace threepp::vulkan {
             computeQueue_ = graphicsQueue_;
         }
 
+        // EXT_debug_utils object-name function — loaded once for the whole
+        // app, used by setObjectName helpers. Null when the extension isn't
+        // enabled (validation off); the helpers detect that and no-op.
+        setObjectNameFn_ = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
+                vkGetDeviceProcAddr(device_, "vkSetDebugUtilsObjectNameEXT"));
+
         if (rayTracingEnabled_) {
             auto load = [this](const char* name, void** dst) {
                 *dst = reinterpret_cast<void*>(vkGetDeviceProcAddr(device_, name));
@@ -349,6 +355,38 @@ namespace threepp::vulkan {
             load("vkGetRayTracingShaderGroupHandlesKHR", reinterpret_cast<void**>(&rt_.getRayTracingShaderGroupHandles));
             load("vkCmdTraceRaysKHR",                    reinterpret_cast<void**>(&rt_.cmdTraceRays));
         }
+    }
+
+    namespace {
+        // Shared body of the three setObjectName overloads — same call shape,
+        // only objectType + handle differ. Validation-off path early-outs at
+        // the null function-pointer check.
+        void setObjectNameImpl(PFN_vkSetDebugUtilsObjectNameEXT fn,
+                               VkDevice device, VkObjectType type,
+                               uint64_t handle, const char* name) {
+            if (!fn || handle == 0 || !name) return;
+            VkDebugUtilsObjectNameInfoEXT info{};
+            info.sType        = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+            info.objectType   = type;
+            info.objectHandle = handle;
+            info.pObjectName  = name;
+            fn(device, &info);
+        }
+    }
+
+    void VulkanContext::setObjectName(VkImage image, const char* name) const {
+        setObjectNameImpl(setObjectNameFn_, device_, VK_OBJECT_TYPE_IMAGE,
+                          reinterpret_cast<uint64_t>(image), name);
+    }
+
+    void VulkanContext::setObjectName(VkImageView view, const char* name) const {
+        setObjectNameImpl(setObjectNameFn_, device_, VK_OBJECT_TYPE_IMAGE_VIEW,
+                          reinterpret_cast<uint64_t>(view), name);
+    }
+
+    void VulkanContext::setObjectName(VkBuffer buffer, const char* name) const {
+        setObjectNameImpl(setObjectNameFn_, device_, VK_OBJECT_TYPE_BUFFER,
+                          reinterpret_cast<uint64_t>(buffer), name);
     }
 
     void VulkanContext::createAllocator() {

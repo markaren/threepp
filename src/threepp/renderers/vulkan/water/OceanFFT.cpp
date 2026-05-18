@@ -64,7 +64,8 @@ namespace threepp::water {
         }
 
         OceanImage makeStorageSampledImage(vulkan::VulkanContext& ctx,
-                                           uint32_t w, uint32_t h, VkFormat fmt) {
+                                           uint32_t w, uint32_t h, VkFormat fmt,
+                                           const char* debugName = nullptr) {
             OceanImage img{};
             img.format = fmt;
             img.width  = w;
@@ -100,6 +101,10 @@ namespace threepp::water {
             check(vkCreateImageView(ctx.device(), &vci, nullptr, &img.view),
                   "vkCreateImageView");
 
+            if (debugName) {
+                ctx.setObjectName(img.image, debugName);
+                ctx.setObjectName(img.view,  debugName);
+            }
             return img;
         }
 
@@ -229,10 +234,12 @@ namespace threepp::water {
     void PhillipsSpectrum::createImages() {
         // Output h0 packs h0(k) and conj(h0(-k)) into RGBA32F.
         h0_ = makeStorageSampledImage(ctx_, settings_.textureSize, settings_.textureSize,
-                                      VK_FORMAT_R32G32B32A32_SFLOAT);
+                                      VK_FORMAT_R32G32B32A32_SFLOAT,
+                                      "ocean.phillips.h0");
         // Noise: complex Gaussian, 2 channels.
         noise_ = makeStorageSampledImage(ctx_, settings_.textureSize, settings_.textureSize,
-                                         VK_FORMAT_R32G32_SFLOAT);
+                                         VK_FORMAT_R32G32_SFLOAT,
+                                         "ocean.phillips.noise");
     }
 
     void PhillipsSpectrum::uploadNoise() {
@@ -486,10 +493,10 @@ namespace threepp::water {
     }
 
     void DynamicSpectrum::createImages() {
-        ht_           = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT);
-        dht_          = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT);
-        displacement_ = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT);
-        jacDiag_      = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT);
+        ht_           = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.ht");
+        dht_          = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.dht");
+        displacement_ = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.displacement");
+        jacDiag_      = makeStorageSampledImage(ctx_, textureSize_, textureSize_, VK_FORMAT_R32G32_SFLOAT, "ocean.dyn.jacDiag");
     }
 
     void DynamicSpectrum::createPipeline() {
@@ -639,7 +646,7 @@ namespace threepp::water {
 
     void IFFT::createTwiddleImage() {
         // Twiddle table: width = log2(N), height = N. Storage in RGBA32F.
-        twiddle_ = makeStorageSampledImage(ctx_, logSize_, textureSize_, VK_FORMAT_R32G32B32A32_SFLOAT);
+        twiddle_ = makeStorageSampledImage(ctx_, logSize_, textureSize_, VK_FORMAT_R32G32B32A32_SFLOAT, "ocean.ifft.twiddle");
     }
 
     void IFFT::createPipelines() {

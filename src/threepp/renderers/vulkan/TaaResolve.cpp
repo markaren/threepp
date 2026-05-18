@@ -75,6 +75,8 @@ namespace threepp::vulkan {
         vci.subresourceRange.layerCount = 1;
         check(vkCreateImageView(ctx_.device(), &vci, nullptr, &out.view),
               "vkCreateImageView(taa)");
+        ctx_.setObjectName(out.image, label);
+        ctx_.setObjectName(out.view,  label);
         return out;
     }
 
