@@ -609,9 +609,9 @@ namespace threepp {
         // advances FC by `spp` so the running mean stays correctly weighted.
         uint32_t samplesPerPixel_ = 1;
         // # of extra primary rays fired at detected silhouette pixels
-        // (gbufIds-mismatch / depth-gradient / diagonal neighbour). Default
-        // 7 → 8× MSAA at edges. 0 disables silhouette MSAA entirely.
-        uint32_t edgeMsaaExtra_   = 3;
+        // (gbufIds-mismatch / depth-gradient / diagonal neighbour).
+        // 0 disables silhouette MSAA entirely.
+        uint32_t edgeMsaaExtra_   = 1;
         // Max real scatter events per path (raygen kMaxBounces). 4 matches the
         // prior compile-time value; setMaxBounces clamps to [1, 16]. Diffuse /
         // glossy primaries further cap themselves at 3 / 4 in raygen, so this
