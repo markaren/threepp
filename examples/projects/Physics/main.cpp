@@ -141,9 +141,10 @@ int main() {
         renderer->setSize(size);
     });
 
-    constexpr float dt = 1.f / 60.f;
+    Clock clock;
 
     canvas.animate([&] {
+        const float dt = clock.getDelta();
 
         if (throwPending) {
             throwPending = false;

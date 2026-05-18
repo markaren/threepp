@@ -332,9 +332,10 @@ int main() {
         sensorScene->add(*depthPoints);
     }
 
-    constexpr float dt = 1.f / 60.f;
+    Clock clock;
 
     canvas.animate([&] {
+        const float dt = clock.getDelta();
         // Build commands from keyboard.
         const float steerInput = (steerLeftDown ? 1.f : 0.f) - (steerRightDown ? 1.f : 0.f);
         // Speed-sensitive steering: full lock at standstill, attenuated at speed
