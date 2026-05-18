@@ -1729,11 +1729,18 @@ void main() {
 
         // Emissive candidates — 4 samples from per-frame power CDF.
         if (pc.emissiveCount > 0u && pc.emissiveTotalPower > 0.0) {
+            // Tightest binary-search iteration count: ceil(log2(emissiveCount)).
+            // The old 32-cap supported up to 2^32 entries — far beyond what any
+            // real scene needs (typical scenes: 1-10000 emissive tris). findMSB
+            // returns the highest set bit; max(...,1u) sidesteps findMSB(0)=-1
+            // when emissiveCount==1 (1 iter is enough; the lo>=hi break inside
+            // short-circuits before the first body run).
+            const int emIters = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
             for (int s = 0; s < 4; ++s) {
                 const float xi = urand(seed) * pc.emissiveTotalPower;
                 uint lo = 0u;
                 uint hi = pc.emissiveCount - 1u;
-                for (int it = 0; it < 32; ++it) {
+                for (int it = 0; it < emIters; ++it) {
                     if (lo >= hi) break;
                     const uint mid = (lo + hi) >> 1u;
                     if (emissiveTris[mid].v1.w < xi) lo = mid + 1u;
@@ -2266,10 +2273,13 @@ void main() {
     // emissiveOut on that bit.
     if (pc.emissiveCount > 0u && pc.emissiveTotalPower > 0.0) {
         // Binary search the cumulative-power CDF (stored in v1.w of each tri).
+        // Iteration count tightened from 32 to ceil(log2(emissiveCount)) — same
+        // reasoning as the RIS-init block above.
         const float xi = urand(seed) * pc.emissiveTotalPower;
         uint lo = 0u;
         uint hi = pc.emissiveCount - 1u;
-        for (int s = 0; s < 32; ++s) {
+        const int emIters = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
+        for (int s = 0; s < emIters; ++s) {
             if (lo >= hi) break;
             const uint mid = (lo + hi) >> 1u;
             if (emissiveTris[mid].v1.w < xi) lo = mid + 1u;

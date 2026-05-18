@@ -516,7 +516,11 @@ EmissiveSample sampleEmissiveTriCdfFog(inout uint seed) {
     const float xi = urand(seed) * pc.emissiveTotalPower;
     uint lo = 0u;
     uint hi = pc.emissiveCount - 1u;
-    for (int s = 0; s < 32; ++s) {
+    // Tightest binary-search bound: ceil(log2(emissiveCount)). Old 32-cap
+    // supported up to 2^32 entries — far beyond any real scene. See the
+    // matching block in closest_hit.rchit for the same fix.
+    const int emIters = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
+    for (int s = 0; s < emIters; ++s) {
         if (lo >= hi) break;
         const uint mid = (lo + hi) >> 1u;
         if (emissiveTris[mid].v1.w < xi) lo = mid + 1u;
