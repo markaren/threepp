@@ -318,7 +318,10 @@ namespace threepp {
             Buffer    heightReadback;
             Buffer    heightReadback1;
             Buffer    heightReadback2;
-            uint32_t  heightReadbackDim = 0;
+            // Per-cascade readback texture dimension. Cascades can run at
+            // different FFT resolutions — each cascade's readback buffer is
+            // sized to its own dim²·8 bytes (RG32F).
+            uint32_t  heightReadbackDim[3] = {0, 0, 0};
             std::weak_ptr<BufferGeometry> liveCheck;
             // Per-frame BLAS-refit state. The initial AS is built (buildBlasFor)
             // with ALLOW_UPDATE, so subsequent per-frame refreshes can use
@@ -2492,7 +2495,11 @@ namespace threepp {
                     dm.params.tileSize1,
                     dm.params.tileSize2,
             };
-            const float texN = float(dm.params.textureSize);
+            const uint32_t textureSizes[3] = {
+                    dm.params.textureSize0,
+                    dm.params.textureSize1,
+                    dm.params.textureSize2,
+            };
             // Hand-off k between adjacent cascades = the SMALLER tile's lowest
             // natural k = 2π / tileSize_(smaller). Each cascade then covers
             // wavelengths between its own tile and the next-smaller tile:
@@ -2513,16 +2520,18 @@ namespace threepp {
                     ? kTwoPi / tileSizes[2] : 0.f;
             for (uint32_t i = 0; i < 3; ++i) {
                 if (!(tileSizes[i] > 0.f)) continue;
+                const uint32_t texSize = textureSizes[i];
                 water::PhillipsSpectrum::Settings ps{};
-                ps.textureSize = dm.params.textureSize;
+                ps.textureSize = texSize;
                 ps.tileSize    = tileSizes[i];
                 ps.windTheta   = dm.params.windTheta;
                 ps.windSpeed   = dm.params.windSpeed;
                 // Suppress wavelengths shorter than ~5× the cascade's sample
                 // spacing. Without this, single-cascade Phillips puts energy
                 // into bands the FFT can't resolve, producing spike-crest
-                // aliasing.
-                ps.smallWaveCutoff = 5.f * tileSizes[i] / texN;
+                // aliasing. Per-cascade `texSize` so each cascade's cutoff
+                // tracks its own resolution.
+                ps.smallWaveCutoff = 5.f * tileSizes[i] / float(texSize);
                 if (i == 0) {
                     ps.kMin = 0.f;
                     ps.kMax = kHandoff01; // 0 if no cascade 1 → no upper bound
@@ -2537,44 +2546,52 @@ namespace threepp {
                 c.tileSize = tileSizes[i];
                 c.phillips = std::make_unique<water::PhillipsSpectrum>(*ctx, ps);
                 c.dyn      = std::make_unique<water::DynamicSpectrum>(
-                        *ctx, *c.phillips, dm.params.textureSize, tileSizes[i]);
-                c.ifft     = std::make_unique<water::IFFT>(*ctx, dm.params.textureSize);
+                        *ctx, *c.phillips, texSize, tileSizes[i]);
+                c.ifft     = std::make_unique<water::IFFT>(*ctx, texSize);
                 state->cascadeMask |= (1u << i);
             }
             if (state->cascadeMask == 0u) return nullptr; // no cascades → invalid setup
 
-            // Cascade-0 height readback buffer (host-mapped). Sized for one
-            // RG32F texel per FFT cell; the renderer issues a
-            // vkCmdCopyImageToBuffer after each IFFT pass to fill it, then
-            // memcpys into DisplacedMesh.heightField for CPU-side wave
-            // sampling (boat hydrodynamics, etc.). Kept persistent so the
-            // mapping survives between frames.
-            const VkDeviceSize readbackBytes =
-                    VkDeviceSize(dm.params.textureSize) * VkDeviceSize(dm.params.textureSize) * 8u;
-            auto makeReadback = [&]() {
+            // Per-cascade height readback buffers (host-mapped). Each cascade
+            // can run at a different FFT resolution, so each readback is
+            // sized to its own dim²·8 bytes (RG32F). Kept persistent so the
+            // mappings survive between frames.
+            auto makeReadback = [&](uint32_t dim) {
+                const VkDeviceSize bytes =
+                        VkDeviceSize(dim) * VkDeviceSize(dim) * 8u;
                 return createBuffer(
-                        ctx->allocator(), ctx->device(), readbackBytes,
+                        ctx->allocator(), ctx->device(), bytes,
                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                         VMA_MEMORY_USAGE_AUTO,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
                                 VMA_ALLOCATION_CREATE_MAPPED_BIT);
             };
-            state->heightReadback  = makeReadback();
-            if (dm.params.tileSize1 > 0.f) state->heightReadback1 = makeReadback();
-            if (dm.params.tileSize2 > 0.f) state->heightReadback2 = makeReadback();
-            state->heightReadbackDim = dm.params.textureSize;
+            state->heightReadback  = makeReadback(textureSizes[0]);
+            state->heightReadbackDim[0] = textureSizes[0];
+            if (dm.params.tileSize1 > 0.f) {
+                state->heightReadback1 = makeReadback(textureSizes[1]);
+                state->heightReadbackDim[1] = textureSizes[1];
+            }
+            if (dm.params.tileSize2 > 0.f) {
+                state->heightReadback2 = makeReadback(textureSizes[2]);
+                state->heightReadbackDim[2] = textureSizes[2];
+            }
 
-            // Scratch image for IFFT ping-pong (RG32F, same size as the dyn
-            // images). One is enough for Phase 1 — both IFFT calls in a
-            // frame can share since they run sequentially on the same queue.
-            // Use the same helper OceanFFT.cpp uses internally — create directly.
-            // (Kept duplicated rather than exposing OceanFFT's internal helpers.)
+            // Scratch image for IFFT ping-pong (RG32F). Cascades dispatch
+            // back-to-back on the same queue and share this scratch, so size
+            // it to the largest enabled cascade. Smaller cascades' IFFT runs
+            // only touch their own extent within the scratch — the unused
+            // tail is harmless.
+            uint32_t scratchDim = 0;
+            for (uint32_t i = 0; i < 3; ++i) {
+                if (tileSizes[i] > 0.f) scratchDim = std::max(scratchDim, textureSizes[i]);
+            }
             {
                 VkImageCreateInfo ici{};
                 ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
                 ici.imageType     = VK_IMAGE_TYPE_2D;
                 ici.format        = VK_FORMAT_R32G32_SFLOAT;
-                ici.extent        = {dm.params.textureSize, dm.params.textureSize, 1};
+                ici.extent        = {scratchDim, scratchDim, 1};
                 ici.mipLevels     = 1;
                 ici.arrayLayers   = 1;
                 ici.samples       = VK_SAMPLE_COUNT_1_BIT;
@@ -2591,8 +2608,8 @@ namespace threepp {
                                      &state->scratchA.image, &state->scratchA.alloc, nullptr),
                       "vmaCreateImage(displaceScratch)");
                 state->scratchA.format = VK_FORMAT_R32G32_SFLOAT;
-                state->scratchA.width  = dm.params.textureSize;
-                state->scratchA.height = dm.params.textureSize;
+                state->scratchA.width  = scratchDim;
+                state->scratchA.height = scratchDim;
                 VkImageViewCreateInfo vci{};
                 vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
                 vci.image = state->scratchA.image;
@@ -2845,7 +2862,7 @@ namespace threepp {
                     bic.bufferImageHeight = 0;
                     bic.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
                     bic.imageOffset = {0, 0, 0};
-                    bic.imageExtent = {st.heightReadbackDim, st.heightReadbackDim, 1};
+                    bic.imageExtent = {st.heightReadbackDim[i], st.heightReadbackDim[i], 1};
                     vkCmdCopyImageToBuffer(cb, c.dyn->ht().image, VK_IMAGE_LAYOUT_GENERAL,
                                            rb->handle, 1, &bic);
 
@@ -3116,8 +3133,6 @@ namespace threepp {
             // endAndSubmit waits for completion, so the staging buffers are
             // fully written by the time we get here.
             {
-                const size_t cells = size_t(st.heightReadbackDim) * size_t(st.heightReadbackDim);
-                const size_t bytes = cells * 2 * sizeof(float);
                 struct { Buffer* buf; float tileSize; } cascades[] = {
                     {&st.heightReadback,  dm.params.tileSize0},
                     {&st.heightReadback1, dm.params.tileSize1},
@@ -3125,14 +3140,17 @@ namespace threepp {
                 };
                 for (int ci = 0; ci < 3; ++ci) {
                     auto& cf = dm.heightFields[ci];
-                    if (cascades[ci].buf->handle != VK_NULL_HANDLE && st.heightReadbackDim > 0) {
+                    const uint32_t dim = st.heightReadbackDim[ci];
+                    if (cascades[ci].buf->handle != VK_NULL_HANDLE && dim > 0) {
+                        const size_t cells = size_t(dim) * size_t(dim);
+                        const size_t bytes = cells * 2 * sizeof(float);
                         if (cf.data.size() != cells * 2)
                             cf.data.assign(cells * 2, 0.f);
                         void* mapped = nullptr;
                         vmaMapMemory(ctx->allocator(), cascades[ci].buf->alloc, &mapped);
                         std::memcpy(cf.data.data(), mapped, bytes);
                         vmaUnmapMemory(ctx->allocator(), cascades[ci].buf->alloc);
-                        cf.dim      = st.heightReadbackDim;
+                        cf.dim      = dim;
                         cf.tileSize = cascades[ci].tileSize;
                     }
                 }

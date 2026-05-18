@@ -66,9 +66,16 @@ namespace {
 namespace {
 
     constexpr float kTileSize    = 1000.0f;  // metres — full mesh extent and cascade-0 tile
-    constexpr uint32_t kFftSize  = 1024;     // 4× cost vs 512² → 0.98 m vertex spacing, resolves λ ≥ 2 m
+    constexpr uint32_t kFftSize  = 1024;     // FFT resolution per cascade — drives wave detail, NOT mesh density.
     constexpr float kPlaneEdge   = kTileSize;  // mesh extends one full FFT tile in X and Z
-    constexpr int   kSubdiv      = static_cast<int>(kFftSize) - 1;  // 1024² verts ≈ 1 M; BLAS rebuild scales with this
+    // Mesh density is decoupled from FFT size: the water_displace.comp samples
+    // the height texture via normalised UVs (u = i / (gridDim-1)) so the mesh
+    // can be any tessellation while the wave field stays at kFftSize². Halving
+    // the subdivision from kFftSize-1 to kFftSize/2-1 drops the vertex count
+    // from ~1 M to ~262 K — a 4× win on BLAS rebuild/refit and the per-vertex
+    // displace dispatch, while wave geometry stays crisp (vertex spacing ~2 m
+    // still resolves λ ≥ 4 m, and Phillips 1/k⁴ puts most energy above that).
+    constexpr int   kSubdiv      = static_cast<int>(kFftSize) / 2 - 1;
 
     auto makeOceanMaterial() {
         auto mat = MeshPhysicalMaterial::create();
@@ -196,7 +203,14 @@ int main() {
     ocean->params.windSpeed   = 10.0f;
     ocean->params.waveScale   = 1.0f;
     ocean->params.choppiness  = 0.55f;      // sharper crests, more visible wave-folding
-    ocean->params.textureSize = kFftSize;
+    // Per-cascade FFT resolution. Cascade-0 (big swells, 1 km tile) needs the
+    // full kFftSize to keep macro-shape fidelity. Cascades 1 and 2 carry
+    // shorter wavelengths whose resolvable detail saturates well below the
+    // cascade-0 resolution — halving them cuts FFT cost ~2× with no visible
+    // loss.
+    ocean->params.textureSize0 = kFftSize;
+    ocean->params.textureSize1 = kFftSize / 2;
+    ocean->params.textureSize2 = kFftSize / 2;
     scene.add(ocean);
 
     constexpr float kBoatLength = 28.0f;

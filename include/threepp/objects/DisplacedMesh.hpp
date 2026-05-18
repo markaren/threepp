@@ -53,9 +53,16 @@ namespace threepp {
             // wave-folding artefacts (white spike crests).
             float choppiness = 0.45f;
 
-            // FFT texture resolution (must be power of two; 256 is the
-            // WebTide default; 128 is a good budget tradeoff).
-            uint32_t textureSize = 256;
+            // FFT texture resolution per cascade (must be power of two).
+            // Decoupled per-cascade because the smaller-tile cascades carry
+            // shorter wavelengths whose resolvable detail saturates at lower
+            // resolution — running every cascade at the same size as
+            // cascade-0 is wasted compute. Typical setting for a 1 km / 100 m
+            // / 8 m cascade trio: {1024, 512, 512} — cascade-0 keeps macro-
+            // shape fidelity, cascades 1 & 2 halve to cut FFT cost ~2×.
+            uint32_t textureSize0 = 256;
+            uint32_t textureSize1 = 256;
+            uint32_t textureSize2 = 256;
         };
 
         Params params;
