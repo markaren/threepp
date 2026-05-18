@@ -26,10 +26,20 @@ if (NOT GLSLANG_VALIDATOR)
 endif ()
 
 function(compile_vulkan_shader target shader_src var_name out_header_var)
+    # Optional 5th positional arg: variant suffix used in the output filename
+    # so two compiles of the same source (e.g. raygen.rgen with/without SER)
+    # don't collide. Optional 6th+ args become `-D<MACRO>` flags to
+    # glslangValidator.
+    cmake_parse_arguments(ARG "" "VARIANT_SUFFIX" "DEFINES" ${ARGN})
+
     get_filename_component(_name "${shader_src}" NAME)
     get_filename_component(_src_dir "${shader_src}" DIRECTORY)
     set(_gen_dir "${CMAKE_BINARY_DIR}/generated/threepp/renderers/vulkan/shaders")
-    set(_out_header "${_gen_dir}/${_name}.spv.h")
+    if (ARG_VARIANT_SUFFIX)
+        set(_out_header "${_gen_dir}/${_name}.${ARG_VARIANT_SUFFIX}.spv.h")
+    else()
+        set(_out_header "${_gen_dir}/${_name}.spv.h")
+    endif()
     set(_shared_header "${_src_dir}/vulkan_shared.h")
     # raygen.rgen #includes shade_primary.glsl; we list it here as a global
     # dep so edits to shade_primary trigger a raygen rebuild. Cheap (<1s
@@ -39,10 +49,16 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
 
     file(MAKE_DIRECTORY "${_gen_dir}")
 
+    set(_define_flags "")
+    foreach(_d ${ARG_DEFINES})
+        list(APPEND _define_flags "-D${_d}")
+    endforeach()
+
     add_custom_command(
         OUTPUT  "${_out_header}"
         COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.3
                 "-I${_src_dir}"
+                ${_define_flags}
                 --vn "${var_name}"
                 "${shader_src}"
                 -o   "${_out_header}"

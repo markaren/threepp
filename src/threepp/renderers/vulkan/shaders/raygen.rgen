@@ -3,6 +3,18 @@
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_GOOGLE_include_directive : enable
 
+// SER variant — compiled when CMake passes `-DSER=1`. Adds shader-execution
+// reordering around the bounce trace: hitObjectTraceNV records the hit data
+// without invoking the closest_hit, reorderThreadNV groups warp threads by
+// hit material, hitObjectExecuteShaderNV then dispatches the closest_hit
+// with coherent neighbours. NVIDIA Ada/Ampere HW-accelerates the reorder;
+// older NVIDIA falls through the driver SW path. The non-SER SPV is loaded
+// for AMD / Intel / older NVIDIA (kRaygenRgenSpv vs kRaygenRgenSerSpv pick
+// happens at RT pipeline creation in VulkanRenderer.cpp).
+#ifdef SER
+#extension GL_NV_shader_invocation_reorder : require
+#endif
+
 #include "vulkan_shared.h"
 
 // Phase 4a: derive ray origin / direction from a real threepp Camera. The
@@ -1092,8 +1104,40 @@ void main() {
         // No OpaqueEXT — alpha-test materials need the any-hit shader to fire.
         // Materials with alphaCutoff <= 0 short-circuit in the any-hit shader.
         if (!primaryViaHybrid) {
+#ifdef SER
+            // SER path: split BVH traversal from closest-hit invocation. The
+            // hitObject captures traversal result + barycentrics + instance
+            // info WITHOUT firing any shader; reorderThreadNV then rebalances
+            // the warp so neighbouring threads sharing a material asset fire
+            // the same chit branch coherently.
+            //
+            // Material-hint variant (not the naive `reorderThreadNV(hit)`):
+            // threepp uses ONE monolithic closest_hit that branches on
+            // metalness / transmission / clearcoat / emissive internally, so
+            // reordering by hit-instance alone leaves divergent material code
+            // inside the chit and the indirection becomes net-negative —
+            // measured as a regression when ReSTIR GI is on (Stage 2's
+            // recursive sub-trace amplifies the chit cost). Pre-fetching
+            // mats[i].materialAssetIdx and feeding it as the reorder hint
+            // groups threads by *material branch*, which is what a single-
+            // chit pipeline needs. 8 hint bits = 256 buckets; matAssetMap
+            // typically yields ≤ ~50 unique materials per scene. matHint=0
+            // is reserved for misses so sky threads cluster together.
+            hitObjectNV hit;
+            hitObjectRecordEmptyNV(hit);
+            hitObjectTraceRayNV(hit, topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
+                                origin, tmin, dir, 10000.0, 0);
+            uint matHint = 0u;
+            if (hitObjectIsHitNV(hit)) {
+                const uint instIdx = uint(hitObjectGetInstanceCustomIndexNV(hit));
+                matHint = mats[instIdx].materialAssetIdx + 1u;
+            }
+            reorderThreadNV(hit, matHint, 8);
+            hitObjectExecuteShaderNV(hit, 0);
+#else
             traceRayEXT(topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
                         origin, tmin, dir, 10000.0, 0);
+#endif
         }
 
         // ─── Unbiased volumetric path step ──────────────────────────────────

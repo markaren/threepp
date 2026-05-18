@@ -58,6 +58,17 @@ namespace threepp::vulkan {
 
         bool rayTracingEnabled() const { return rayTracingEnabled_; }
 
+        // NVIDIA Shader Execution Reordering (VK_NV_ray_tracing_invocation_reorder).
+        // When true, the raygen pipeline loads the SER variant of the raygen
+        // SPV (hitObjectNV / reorderThreadNV / hitObjectExecuteShaderNV around
+        // the bounce trace) which warp-reorders threads by hit material before
+        // the closest_hit invocation — typically a 10-30% speed-up on incoherent
+        // diffuse-bounce paths on Ada / Ampere. Falls back to plain traceRayEXT
+        // when unsupported (AMD, Intel, older NVIDIA, software fallback).
+        bool rayTracingInvocationReorderSupported() const {
+            return rayTracingInvocationReorderSupported_;
+        }
+
         // Attach a debug-utils name to a Vulkan object so validation messages
         // and RenderDoc / Nsight reports identify it by label instead of by
         // raw uint64 handle. No-op when validation is off (the EXT extension
@@ -110,6 +121,7 @@ namespace threepp::vulkan {
         std::vector<VkImageView> swapchainImageViews_;
 
         bool rayTracingEnabled_ = false;
+        bool rayTracingInvocationReorderSupported_ = false;
         VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtPipelineProperties_{};
         RtFunctions rt_{};
         // Non-null only when VK_EXT_debug_utils is enabled (i.e. validation

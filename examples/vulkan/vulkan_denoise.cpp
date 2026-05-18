@@ -7,8 +7,6 @@
 // Differences vs the WGPU example:
 //   • VulkanRenderer is always a path tracer (no `usePathTracer` toggle and
 //     no separate `pathTracer()` object — settings live on the renderer).
-//   • ReSTIR GI is not yet implemented on the Vulkan backend, so the UI
-//     toggle is omitted.
 //   • Max bounce count is not yet plumbed to a setter on Vulkan
 //     (compile-time `kMaxBounces = 4` in raygen.rgen), so the slider is
 //     omitted.
@@ -161,6 +159,7 @@ int main() {
     // ---- UI state ----
     bool denoiserOn   = renderer.denoise();
     bool restirOn     = renderer.restirDIEnabled();
+    bool restirGiOn   = renderer.restirGIEnabled();
     bool hybridOn     = renderer.hybridEnabled();
     bool perSppJitter = renderer.perSppJitterHybrid();
     bool taaOn        = renderer.taaEnabled();
@@ -191,6 +190,8 @@ int main() {
             renderer.setDenoise(denoiserOn);
         if (ImGui::Checkbox("ReSTIR DI", &restirOn))
             renderer.setRestirDIEnabled(restirOn);
+        if (ImGui::Checkbox("ReSTIR GI", &restirGiOn))
+            renderer.setRestirGIEnabled(restirGiOn);
         if (ImGui::Checkbox("Hybrid raster G-buffer", &hybridOn))
             renderer.setHybridEnabled(hybridOn);
         if (hybridOn) {

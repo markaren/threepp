@@ -68,6 +68,7 @@
 #include "threepp/textures/Texture.hpp"
 
 #include "threepp/renderers/vulkan/shaders/raygen.rgen.spv.h"
+#include "threepp/renderers/vulkan/shaders/raygen.rgen.ser.spv.h"
 #include "threepp/renderers/vulkan/shaders/miss.rmiss.spv.h"
 #include "threepp/renderers/vulkan/shaders/shadow_miss.rmiss.spv.h"
 #include "threepp/renderers/vulkan/shaders/closest_hit.rchit.spv.h"
@@ -828,14 +829,32 @@ namespace threepp {
         // Ray-tracing pipeline.
         VkDescriptorSetLayout rtDsLayout = VK_NULL_HANDLE;
         VkPipelineLayout      rtPipelineLayout = VK_NULL_HANDLE;
-        VkPipeline            rtPipeline = VK_NULL_HANDLE;
 
-        // Shader Binding Table (one record per group: rgen / miss / hit).
-        Buffer sbtBuffer;
-        VkStridedDeviceAddressRegionKHR rgenRegion{};
-        VkStridedDeviceAddressRegionKHR missRegion{};
-        VkStridedDeviceAddressRegionKHR hitRegion{};
-        VkStridedDeviceAddressRegionKHR callRegion{};// unused
+        // SER + fallback RT pipelines are both built at init when the device
+        // supports VK_NV_ray_tracing_invocation_reorder. setRestirGIEnabled
+        // picks which is active by index (0=fallback, 1=SER) — runtime
+        // rebuild was attempted but vkCreateRayTracingPipelinesKHR hangs on
+        // a second call against the same pipeline layout on NVIDIA drivers,
+        // so we eat the extra ~100ms one-time init cost instead. Devices
+        // without SER only populate index 0.
+        struct RtPipelineVariant {
+            VkPipeline pipeline = VK_NULL_HANDLE;
+            Buffer     sbtBuffer{};
+            VkStridedDeviceAddressRegionKHR rgenRegion{};
+            VkStridedDeviceAddressRegionKHR missRegion{};
+            VkStridedDeviceAddressRegionKHR hitRegion{};
+        };
+        std::array<RtPipelineVariant, 2> rtVariants_{};
+        // Convenience accessors — read which variant is active from
+        // shouldUseSerRaygen() (which folds restirGIEnabled_ + driver
+        // support into a single bool).
+        const RtPipelineVariant& activeRtVariant() const {
+            return rtVariants_[shouldUseSerRaygen() ? 1u : 0u];
+        }
+        RtPipelineVariant& activeRtVariant() {
+            return rtVariants_[shouldUseSerRaygen() ? 1u : 0u];
+        }
+        VkStridedDeviceAddressRegionKHR callRegion{};// unused (no callable shaders)
 
         // Photon caustics subsystem (pipeline + SBT + count/data buffers).
         // Encapsulated as a separate module — see vulkan/PhotonCaustics.{hpp,cpp}.
@@ -1150,6 +1169,14 @@ namespace threepp {
         // 1c spatial) provide the actual variance reduction. Forwarded to
         // chit via pc.motionFlags bit 6 each frame.
         bool restirGIEnabled_ = false;
+        // SER helps the GI-off case but *hurts* the GI-on case because
+        // ReSTIR GI Stage 2's recursive sub-trace inside the chit undoes
+        // the warp-reorder coherence the raygen reorderThreadNV bought us.
+        // Both pipelines are pre-built (see rtVariants_); activeRtVariant()
+        // picks each frame based on this gate.
+        bool shouldUseSerRaygen() const {
+            return ctx->rayTracingInvocationReorderSupported() && !restirGIEnabled_;
+        }
         // Hybrid raster overlay: layer index for opt-in overlay objects
         // (alongside auto-detected wireframe materials + Line/LineSegments).
         // -1 disables layer-based selection. Mirrors WGPU PT's overlayLayer_.
@@ -1254,8 +1281,9 @@ namespace threepp {
             rebuildDefaultEnvCdfImages();// 1×1 dummy so descriptors are valid before any HDR upload
             createTextureSampler();
             createDefaultMaterialTexture();
+            // Builds both fallback + SER variants (when supported) and their
+            // SBTs in one pass.
             createRtPipeline();
-            createShaderBindingTable();
             // Denoiser reuses rtDsLayout for its descriptor set (single
             // per-frame set drives raygen + atrous + finalize) and needs
             // cmdPool for one-shot image transitions in createImages. Must
@@ -1320,8 +1348,10 @@ namespace threepp {
 
             if (descriptorPool) vkDestroyDescriptorPool(d, descriptorPool, nullptr);
 
-            destroyBuffer(ctx->allocator(), sbtBuffer);
-            if (rtPipeline)       vkDestroyPipeline(d, rtPipeline, nullptr);
+            for (auto& v : rtVariants_) {
+                destroyBuffer(ctx->allocator(), v.sbtBuffer);
+                if (v.pipeline) vkDestroyPipeline(d, v.pipeline, nullptr);
+            }
             // Photon caustics owns its pipeline + SBT + buffers; reset
             // before destroying the shared rtPipelineLayout it references.
             photon_.reset();
@@ -9236,6 +9266,23 @@ namespace threepp {
             check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &rtPipelineLayout),
                   "vkCreatePipelineLayout(RT)");
 
+            // Build fallback (index 0) always; build SER (index 1) only
+            // when the driver supports it. setRestirGIEnabled then just
+            // picks between the two at zero per-frame cost.
+            buildRtPipelineHandle(/*useSer*/ false);
+            createShaderBindingTable(/*useSer*/ false);
+            if (ctx->rayTracingInvocationReorderSupported()) {
+                buildRtPipelineHandle(/*useSer*/ true);
+                createShaderBindingTable(/*useSer*/ true);
+            }
+        }
+
+        // Pipeline-only build for one variant. Both variants share the
+        // rtDsLayout / rtPipelineLayout — only the raygen SPV differs. Called
+        // once per supported variant at init; never re-invoked, because
+        // vkCreateRayTracingPipelinesKHR hangs on a second call against the
+        // same pipeline layout on NVIDIA drivers.
+        void buildRtPipelineHandle(bool useSer) {
             auto loadModule = [this](const uint32_t* code, size_t size) {
                 VkShaderModuleCreateInfo smci{};
                 smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -9247,7 +9294,11 @@ namespace threepp {
                 return m;
             };
 
-            VkShaderModule rgenMod    = loadModule(kRaygenRgenSpv,           sizeof(kRaygenRgenSpv));
+            // SER variant when caller asked for it AND the device supports
+            // it. activeRtVariant() picks between the two at dispatch time.
+            VkShaderModule rgenMod = useSer
+                    ? loadModule(kRaygenRgenSerSpv, sizeof(kRaygenRgenSerSpv))
+                    : loadModule(kRaygenRgenSpv,    sizeof(kRaygenRgenSpv));
             VkShaderModule missMod    = loadModule(kMissRmissSpv,            sizeof(kMissRmissSpv));
             VkShaderModule sMissMod   = loadModule(kShadowMissRmissSpv,      sizeof(kShadowMissRmissSpv));
             VkShaderModule chitMod    = loadModule(kClosestHitRchitSpv,      sizeof(kClosestHitRchitSpv));
@@ -9321,7 +9372,7 @@ namespace threepp {
 
             check(ctx->rt().createRayTracingPipelines(
                           ctx->device(), VK_NULL_HANDLE, VK_NULL_HANDLE,
-                          1, &rci, nullptr, &rtPipeline),
+                          1, &rci, nullptr, &rtVariants_[useSer ? 1u : 0u].pipeline),
                   "vkCreateRayTracingPipelinesKHR");
 
             vkDestroyShaderModule(ctx->device(), rgenMod,  nullptr);
@@ -9332,7 +9383,8 @@ namespace threepp {
             vkDestroyShaderModule(ctx->device(), sahitMod, nullptr);
         }
 
-        void createShaderBindingTable() {
+        void createShaderBindingTable(bool useSer) {
+            RtPipelineVariant& v = rtVariants_[useSer ? 1u : 0u];
             const auto& props = ctx->rtPipelineProperties();
             const uint32_t handleSize = props.shaderGroupHandleSize;
             const uint32_t handleAlignment = props.shaderGroupHandleAlignment;
@@ -9345,7 +9397,7 @@ namespace threepp {
             const uint32_t handlesDataSize = groupCount * handleSize;
             std::vector<uint8_t> handles(handlesDataSize);
             check(ctx->rt().getRayTracingShaderGroupHandles(
-                          ctx->device(), rtPipeline, 0, groupCount,
+                          ctx->device(), v.pipeline, 0, groupCount,
                           handlesDataSize, handles.data()),
                   "vkGetRayTracingShaderGroupHandlesKHR");
 
@@ -9359,7 +9411,7 @@ namespace threepp {
                     static_cast<VkDeviceSize>(missRegionBytes) +
                     static_cast<VkDeviceSize>(hitRegionBytes);
 
-            sbtBuffer = createBuffer(
+            v.sbtBuffer = createBuffer(
                     ctx->allocator(), ctx->device(), sbtSize,
                     VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
                             VK_BUFFER_USAGE_TRANSFER_DST_BIT |
@@ -9369,7 +9421,7 @@ namespace threepp {
                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
 
             void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), sbtBuffer.alloc, &mapped);
+            vmaMapMemory(ctx->allocator(), v.sbtBuffer.alloc, &mapped);
             std::memset(mapped, 0, sbtSize);
             uint8_t* dst = static_cast<uint8_t*>(mapped);
 
@@ -9385,18 +9437,18 @@ namespace threepp {
                         handles.data() + 3 * handleSize, handleSize);
             std::memcpy(dst + rgenRegionBytes + missRegionBytes + 1 * handleSizeAligned,
                         handles.data() + 4 * handleSize, handleSize);
-            vmaUnmapMemory(ctx->allocator(), sbtBuffer.alloc);
+            vmaUnmapMemory(ctx->allocator(), v.sbtBuffer.alloc);
 
-            const VkDeviceAddress base = sbtBuffer.address;
-            rgenRegion.deviceAddress = base;
-            rgenRegion.stride = rgenRegionBytes;
-            rgenRegion.size   = rgenRegionBytes;
-            missRegion.deviceAddress = base + rgenRegionBytes;
-            missRegion.stride = handleSizeAligned;
-            missRegion.size   = missRegionBytes;
-            hitRegion.deviceAddress = base + rgenRegionBytes + missRegionBytes;
-            hitRegion.stride = handleSizeAligned;
-            hitRegion.size   = hitRegionBytes;
+            const VkDeviceAddress base = v.sbtBuffer.address;
+            v.rgenRegion.deviceAddress = base;
+            v.rgenRegion.stride = rgenRegionBytes;
+            v.rgenRegion.size   = rgenRegionBytes;
+            v.missRegion.deviceAddress = base + rgenRegionBytes;
+            v.missRegion.stride = handleSizeAligned;
+            v.missRegion.size   = missRegionBytes;
+            v.hitRegion.deviceAddress = base + rgenRegionBytes + missRegionBytes;
+            v.hitRegion.stride = handleSizeAligned;
+            v.hitRegion.size   = hitRegionBytes;
             callRegion = {};
         }
 
@@ -10906,7 +10958,8 @@ namespace threepp {
             }
             // ── End photon emit ─────────────────────────────────────────────────
 
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rtPipeline);
+            const RtPipelineVariant& rtv = activeRtVariant();
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rtv.pipeline);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
                                     rtPipelineLayout, 0, 1,
                                     &descriptorSets[setIdx], 0, nullptr);
@@ -10982,8 +11035,8 @@ namespace threepp {
             const bool       scaled  = ptScaled();
             const bool       taaRuns = hybridEnabled_ || taaEnabled_;
             timingBegin(cb, TP_PathTrace);
-            ctx->rt().cmdTraceRays(cb, &rgenRegion, &missRegion, &hitRegion, &callRegion,
-                                   ptExt.width, ptExt.height, 1);
+            ctx->rt().cmdTraceRays(cb, &rtv.rgenRegion, &rtv.missRegion, &rtv.hitRegion,
+                                   &callRegion, ptExt.width, ptExt.height, 1);
             timingEnd(cb, TP_PathTrace);
 
             // ── Spatial denoiser: 2-pass à-trous + finalize tonemap + sRGB ──────
@@ -12066,6 +12119,13 @@ namespace threepp {
     }
 
     void VulkanRenderer::setRestirGIEnabled(bool enabled) {
+        // Both raygen variants (SER + fallback) are pre-built at init when
+        // the device supports SER, so this is just a flag flip — the
+        // dispatch site reads `activeRtVariant()` each frame and binds the
+        // appropriate pipeline + SBT regions. No GPU work, no rebuild.
+        // (We attempted a runtime rebuild here originally; NVIDIA drivers
+        // hang on a second vkCreateRayTracingPipelinesKHR against the same
+        // pipeline layout, hence the pre-build-both workaround.)
         pimpl_->restirGIEnabled_ = enabled;
     }
 

@@ -862,6 +862,16 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/raygen.rgen"
         kRaygenRgenSpv
         _rgen_spv_h)
+    # SER variant — same raygen with `-DSER=1`. Loaded at pipeline creation
+    # iff VulkanContext::rayTracingInvocationReorderSupported() is true (i.e.
+    # device exposes VK_NV_ray_tracing_invocation_reorder + the feature bit).
+    # Other vendors / older NVIDIA fall through to the fallback SPV above.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/raygen.rgen"
+        kRaygenRgenSerSpv
+        _rgen_ser_spv_h
+        VARIANT_SUFFIX ser
+        DEFINES SER=1)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/miss.rmiss"
         kMissRmissSpv

@@ -217,6 +217,28 @@ namespace threepp::vulkan {
             props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
             props2.pNext = &rtPipelineProperties_;
             vkGetPhysicalDeviceProperties2(physicalDevice_, &props2);
+
+            // Probe for VK_NV_ray_tracing_invocation_reorder (SER). Extension
+            // presence alone isn't enough — also need the feature's
+            // rayTracingInvocationReorder bit set on this device. Both are
+            // queried here so the rest of the renderer can branch on a single
+            // boolean. Non-NVIDIA GPUs and pre-Ampere NVIDIA fall through to
+            // the fallback raygen SPV.
+            const auto pickedExts = deviceExtensions(physicalDevice_);
+            if (hasExtension(pickedExts, VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME)) {
+                VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV reorderFeat{};
+                reorderFeat.sType =
+                        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV;
+                VkPhysicalDeviceFeatures2 feat2{};
+                feat2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+                feat2.pNext = &reorderFeat;
+                vkGetPhysicalDeviceFeatures2(physicalDevice_, &feat2);
+                rayTracingInvocationReorderSupported_ =
+                        reorderFeat.rayTracingInvocationReorder == VK_TRUE;
+            }
+            std::cerr << "[VulkanContext] SER (VK_NV_ray_tracing_invocation_reorder): "
+                      << (rayTracingInvocationReorderSupported_ ? "enabled" : "fallback")
+                      << "\n";
         }
 
         // Find queue families.
@@ -262,6 +284,9 @@ namespace threepp::vulkan {
         std::vector<const char*> extensions(kBaseDeviceExtensions.begin(), kBaseDeviceExtensions.end());
         if (rayTracingEnabled_) {
             extensions.insert(extensions.end(), kRayTracingExtensions.begin(), kRayTracingExtensions.end());
+            if (rayTracingInvocationReorderSupported_) {
+                extensions.push_back(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
+            }
         }
 
         // Required core 1.2 / 1.3 features (BDA, dynamic rendering, sync2).
@@ -286,9 +311,21 @@ namespace threepp::vulkan {
         fRT.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
         fRT.rayTracingPipeline = VK_TRUE;
 
+        // SER feature struct — only chained when both extension and feature
+        // probed positive at pickPhysicalDevice. Driver rejects vkCreateDevice
+        // if we chain it without the extension being in the enabled-extension
+        // list above (the conditional `extensions.push_back(...)` handles that).
+        VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV fReorder{};
+        fReorder.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV;
+        fReorder.rayTracingInvocationReorder = VK_TRUE;
+
         if (rayTracingEnabled_) {
             fRT.pNext = &f12;
             fAS.pNext = &fRT;
+            if (rayTracingInvocationReorderSupported_) {
+                // Splice fReorder at the head of the chain so it precedes fAS.
+                fReorder.pNext = &fAS;
+            }
         }
 
         VkPhysicalDeviceFeatures2 features2{};
@@ -311,7 +348,13 @@ namespace threepp::vulkan {
         // to BGRA8 swap targets without declaring rgba8 (which would mismatch
         // the underlying VkImageView format and produce a validation warning).
         features2.features.shaderStorageImageWriteWithoutFormat = VK_TRUE;
-        features2.pNext = rayTracingEnabled_ ? static_cast<void*>(&fAS) : static_cast<void*>(&f12);
+        if (rayTracingEnabled_) {
+            features2.pNext = rayTracingInvocationReorderSupported_
+                                      ? static_cast<void*>(&fReorder)
+                                      : static_cast<void*>(&fAS);
+        } else {
+            features2.pNext = &f12;
+        }
 
         VkDeviceCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
