@@ -3016,7 +3016,18 @@ namespace threepp {
             // (3.5) Per-vertex motion: copy current vertex positions into
             // prevVertex BEFORE water_displace overwrites them. Hybrid-only
             // (raster gbuffer reads prevVertex at attribute 3).
-            if ((hybridEnabled_ || taaEnabled_) && st.blas->prevVertex.handle != VK_NULL_HANDLE) {
+            //
+            // Skipped when the adaptive warp is active: the warp re-centres
+            // the grid on the vessel every frame, so vertex i is a different
+            // world point each frame and prevVertex (indexed by vertex id)
+            // can't track a stable surface point. The motion-vector consumers
+            // are pointed at the current vertex buffer instead (see the
+            // prevVertexAddress / prevPosAddr selection sites), making the
+            // ocean reproject as world-static — so the copy is dead work and
+            // skipping it also saves a full vertex-buffer transfer per frame.
+            const bool warpActive = dm.warp.halfRange > 0.0f;
+            if ((hybridEnabled_ || taaEnabled_) && st.blas->prevVertex.handle != VK_NULL_HANDLE
+                && !warpActive) {
                 VkBufferCopy region{};
                 region.size = VkDeviceSize(st.vertexCount) * 3u * sizeof(float);
                 vkCmdCopyBuffer(cb, st.blas->vertex.handle,
@@ -4557,9 +4568,22 @@ namespace threepp {
                 // prev-vertex buffer (different from current). Static meshes
                 // get vertex.address as a fallback — the chit reads the same
                 // buffer for both, prevHitWorldPos ends up equal to current.
-                gdesc.prevVertexAddress = (recPtr->prevVertex.handle != VK_NULL_HANDLE)
-                        ? recPtr->prevVertex.address
-                        : recPtr->vertex.address;
+                //
+                // A warp-enabled DisplacedMesh is the exception: its vertices
+                // reflow every frame as the adaptive grid re-centres on the
+                // vessel, so prevVertex (indexed by vertex id) doesn't track a
+                // stable world point — using it corrupts motion vectors. Fall
+                // back to the current buffer so the chit's prevWorldPos
+                // resolves to hitWorldPos: the ocean reprojects as world-
+                // static (camera-parallax only), matching the foam texture.
+                bool warpReproject = false;
+                if (en.isDisplaced) {
+                    warpReproject = static_cast<DisplacedMesh*>(m)->warp.halfRange > 0.0f;
+                }
+                gdesc.prevVertexAddress =
+                        (recPtr->prevVertex.handle != VK_NULL_HANDLE && !warpReproject)
+                                ? recPtr->prevVertex.address
+                                : recPtr->vertex.address;
                 gdesc.indexed = recPtr->index.handle != VK_NULL_HANDLE ? 1u : 0u;
                 gdesc._pad = 0;
                 geomDescs.push_back(gdesc);
@@ -5614,7 +5638,16 @@ namespace threepp {
                 di.posAddr     = rec->vertex.address;
                 di.nrmAddr     = rec->normal.address;
                 di.uvAddr      = (rec->uv.handle != VK_NULL_HANDLE) ? rec->uv.address : 0ull;
-                di.prevPosAddr = (rec->prevVertex.handle != VK_NULL_HANDLE)
+                // Warp-enabled DisplacedMesh: vertices reflow every frame, so
+                // prevVertex can't track a stable world point — point the
+                // motion-vector source at the current buffer so the ocean
+                // reprojects as world-static (see prevVertexAddress in the
+                // GeometryDesc build for the full rationale).
+                bool warpReproject = false;
+                if (en.isDisplaced) {
+                    warpReproject = static_cast<DisplacedMesh*>(en.mesh)->warp.halfRange > 0.0f;
+                }
+                di.prevPosAddr = (rec->prevVertex.handle != VK_NULL_HANDLE && !warpReproject)
                                          ? rec->prevVertex.address
                                          : rec->vertex.address;
                 di.indexAddr   = indexed ? rec->index.address : 0ull;
