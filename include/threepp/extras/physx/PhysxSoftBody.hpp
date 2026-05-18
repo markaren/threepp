@@ -330,26 +330,34 @@ namespace threepp {
         // Write the current pinned positions into the visual geometry's position
         // attribute. Fast path: direct copy when vertex counts match. Slow path:
         // barycentric skinning via precomputed bindings.
+        //
+        // Writes go straight through the attribute's backing `std::vector<float>`
+        // via `.data()` — `setXYZ` is virtual and bounds-checks per call, which
+        // dominated this loop on hot soft-body scenes (~3-5× speedup measured).
+        // The single `needsUpdate()` at the end bumps the version once, so the
+        // renderer's geomVersion dirty-detection still fires correctly.
         void applyDeformedPositions() const {
             auto vPosAttr = visualGeometry_->getAttribute<float>("position");
             if (!vPosAttr) return;
+            float* dst = vPosAttr->array().data();
             if (useDirectMapping_) {
                 for (::physx::PxU32 i = 0; i < nbCollVerts_; ++i) {
                     const auto& p = positionsInvMass_[i];
-                    vPosAttr->setXYZ(i, p.x, p.y, p.z);
+                    dst[i * 3 + 0] = p.x;
+                    dst[i * 3 + 1] = p.y;
+                    dst[i * 3 + 2] = p.z;
                 }
             } else {
                 const auto& binds = bindings_;
                 const auto* src = positionsInvMass_;
                 for (size_t i = 0; i < binds.size(); ++i) {
                     const auto& b = binds[i];
-                    const float x = b.w0 * src[b.i0].x + b.w1 * src[b.i1].x +
-                                    b.w2 * src[b.i2].x + b.w3 * src[b.i3].x;
-                    const float y = b.w0 * src[b.i0].y + b.w1 * src[b.i1].y +
-                                    b.w2 * src[b.i2].y + b.w3 * src[b.i3].y;
-                    const float z = b.w0 * src[b.i0].z + b.w1 * src[b.i1].z +
-                                    b.w2 * src[b.i2].z + b.w3 * src[b.i3].z;
-                    vPosAttr->setXYZ(i, x, y, z);
+                    dst[i * 3 + 0] = b.w0 * src[b.i0].x + b.w1 * src[b.i1].x +
+                                     b.w2 * src[b.i2].x + b.w3 * src[b.i3].x;
+                    dst[i * 3 + 1] = b.w0 * src[b.i0].y + b.w1 * src[b.i1].y +
+                                     b.w2 * src[b.i2].y + b.w3 * src[b.i3].y;
+                    dst[i * 3 + 2] = b.w0 * src[b.i0].z + b.w1 * src[b.i1].z +
+                                     b.w2 * src[b.i2].z + b.w3 * src[b.i3].z;
                 }
             }
             vPosAttr->needsUpdate();

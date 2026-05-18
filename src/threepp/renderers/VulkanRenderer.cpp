@@ -2106,154 +2106,212 @@ namespace threepp {
             pendingSkinnedRebuilds_.push_back(&st);
         }
 
-        // Re-upload vertex/normal/uv/index data from a BufferGeometry whose
-        // attributes were mutated in-place (user called needsUpdate()), then
-        // rebuild the BLAS against the same AS handle/storage so the device
-        // address — and every TLAS reference to it — stay valid. Caller must
-        // have already verified that vertex/index counts match the cached BLAS.
-        void refreshGeomBlas(const BufferGeometry& geom, BlasRecord& rec) {
-            auto* posAttr  = geom.getAttribute<float>("position");
-            auto* nrmAttr  = geom.getAttribute<float>("normal");
-            if (!posAttr || !nrmAttr) return;
+        // Per-frame refresh op for a plain (non-skinned/non-displaced/non-morphed)
+        // dynamic geometry whose BufferAttribute versions just bumped. Batched
+        // through refreshGeomBlasBatch so N soft bodies cost 2 GPU submits
+        // total, not 2N.
+        struct GeomRefreshOp {
+            const BufferGeometry* geom;
+            BlasRecord*           rec;
+        };
 
-            // BLAS build is undefined behavior on non-finite positions — drivers
-            // respond with device-lost. buildBlasFor validates in the slow path;
-            // the per-frame refresh path needs the same guard because dynamic
-            // geometry (soft body collapse, skinning singularities) can leak NaN
-            // even when the source simulation is supposed to be stabilized.
-            {
+        // Batched per-frame BLAS refresh. For each op:
+        //   (1) snapshot rec.vertex → rec.prevVertex (chit motion-vector channel)
+        //   (2) host memcpy of new positions/normals/uv/index into rec.vertex etc.
+        //   (3) refit rec.as in place (MODE_UPDATE, periodic MODE_BUILD every
+        //       kBlasFullRebuildInterval frames to keep the BVH balanced)
+        //
+        // Phase (1) and (3) record into one shared command buffer each, so the
+        // whole batch costs 2 vkQueueSubmit + 2 vkQueueWaitIdle pairs regardless
+        // of N. Previously, looping refreshGeomBlas paid that pair per geometry
+        // — at ~30 µs queue overhead per submit, 5 soft bodies = 300 µs/frame
+        // wasted on submit round-trips alone.
+        //
+        // Caller must (a) gate on equal vertex/index counts (topology must not
+        // change — fall through to fullRebuild if it does) and (b) have already
+        // drained in-flight GPU work; phase (2)'s host memcpys race in-flight
+        // closest_hit reads of rec.vertex otherwise.
+        void refreshGeomBlasBatch(const std::vector<GeomRefreshOp>& ops) {
+            if (ops.empty()) return;
+
+            // Phase A — validate positions are finite. Non-finite values cause
+            // VK_ERROR_DEVICE_LOST during BLAS build on NVIDIA. Skip individual
+            // bad ops rather than throwing the whole batch out.
+            std::vector<size_t> liveOps;
+            liveOps.reserve(ops.size());
+            for (size_t k = 0; k < ops.size(); ++k) {
+                auto* posAttr = ops[k].geom->getAttribute<float>("position");
+                if (!posAttr) continue;
+                if (!ops[k].geom->getAttribute<float>("normal")) continue;
+                bool ok = true;
                 const auto& p = posAttr->array();
                 for (size_t i = 0; i < p.size(); ++i) {
                     if (!std::isfinite(p[i])) {
-                        std::cerr << "[VulkanRenderer] refreshGeomBlas: skipping refresh — "
+                        std::cerr << "[VulkanRenderer] refreshGeomBlasBatch: skipping geom — "
                                   << "position[" << i << "] is non-finite (" << p[i] << ")\n";
-                        return;
+                        ok = false;
+                        break;
                     }
+                }
+                if (ok) liveOps.push_back(k);
+            }
+            if (liveOps.empty()) return;
+
+            // Phase B — snapshot current vertex into prevVertex for the chit's
+            // per-vertex motion vector. Recorded into one shared cmdbuf; submit
+            // + wait once. Must run before the host memcpy of new positions
+            // below or we'd snapshot the new state, not last frame's.
+            {
+                bool any = false;
+                VkCommandBuffer cb = beginOneShot();
+                for (size_t k : liveOps) {
+                    auto& rec = *ops[k].rec;
+                    if (rec.prevVertex.handle == VK_NULL_HANDLE) continue;
+                    auto* posAttr = ops[k].geom->getAttribute<float>("position");
+                    VkBufferCopy region{};
+                    region.size = posAttr->array().size() * sizeof(float);
+                    vkCmdCopyBuffer(cb, rec.vertex.handle, rec.prevVertex.handle, 1, &region);
+                    any = true;
+                }
+                if (any) {
+                    endAndSubmitOneShot(cb, "refreshGeomBlasBatch (prevVertex)");
+                } else {
+                    // No prev buffers attached — skip the empty submit so we
+                    // don't round-trip the queue for zero work.
+                    vkEndCommandBuffer(cb);
+                    vkFreeCommandBuffers(ctx->device(), cmdPool, 1, &cb);
                 }
             }
 
-            // Snapshot last frame's positions into prevVertex before the host
-            // memcpy overwrites the current vertex buffer. Without this the
-            // chit's per-vertex motion vector is always zero and the temporal
-            // accumulator blends mismatched frames at any pixel hitting an
-            // actively-deforming surface (PhysX soft bodies just spawned,
-            // particle systems with high vertex velocity). Submit + wait
-            // inline so the host memcpy below is ordered after the GPU copy.
-            if (rec.prevVertex.handle != VK_NULL_HANDLE) {
-                const VkDeviceSize vbBytes = posAttr->array().size() * sizeof(float);
-                VkCommandBuffer cb = beginOneShot();
-                VkBufferCopy region{};
-                region.size = vbBytes;
-                vkCmdCopyBuffer(cb, rec.vertex.handle, rec.prevVertex.handle, 1, &region);
-                endAndSubmitOneShot(cb, "refreshGeomBlas (prevVertex)");
+            // Phase C — host writes into the now-snapshotted vertex/normal/uv/
+            // index buffers. Each is host-coherent (HOST_ACCESS_SEQUENTIAL_WRITE
+            // at buildBlasFor time); the implicit submit barrier on the next
+            // phase makes these visible to the BLAS build.
+            for (size_t k : liveOps) {
+                const auto& geom = *ops[k].geom;
+                auto& rec = *ops[k].rec;
+                auto* posAttr = geom.getAttribute<float>("position");
+                auto* nrmAttr = geom.getAttribute<float>("normal");
+
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), rec.vertex.alloc, &mapped);
+                std::memcpy(mapped, posAttr->array().data(),
+                            posAttr->array().size() * sizeof(float));
+                vmaUnmapMemory(ctx->allocator(), rec.vertex.alloc);
+
+                vmaMapMemory(ctx->allocator(), rec.normal.alloc, &mapped);
+                std::memcpy(mapped, nrmAttr->array().data(),
+                            nrmAttr->array().size() * sizeof(float));
+                vmaUnmapMemory(ctx->allocator(), rec.normal.alloc);
+
+                if (auto* uvAttr = geom.getAttribute<float>("uv");
+                    uvAttr && rec.uv.handle != VK_NULL_HANDLE) {
+                    vmaMapMemory(ctx->allocator(), rec.uv.alloc, &mapped);
+                    std::memcpy(mapped, uvAttr->array().data(),
+                                uvAttr->array().size() * sizeof(float));
+                    vmaUnmapMemory(ctx->allocator(), rec.uv.alloc);
+                }
+
+                if (auto* idxAttr = geom.getIndex();
+                    idxAttr && rec.index.handle != VK_NULL_HANDLE) {
+                    vmaMapMemory(ctx->allocator(), rec.index.alloc, &mapped);
+                    std::memcpy(mapped, idxAttr->array().data(),
+                                idxAttr->array().size() * sizeof(unsigned int));
+                    vmaUnmapMemory(ctx->allocator(), rec.index.alloc);
+                }
             }
 
-            void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), rec.vertex.alloc, &mapped);
-            std::memcpy(mapped, posAttr->array().data(),
-                        posAttr->array().size() * sizeof(float));
-            vmaUnmapMemory(ctx->allocator(), rec.vertex.alloc);
+            // Phase D — refit each BLAS. The build-info structs need to outlive
+            // the cmdBuildAccelerationStructures call until the GPU executes
+            // them, so we hold them in vectors that live until after the submit-
+            // wait below. Each op uses its own (persistent) scratch buffer so
+            // concurrent builds within the cmdbuf don't alias.
+            const uint32_t N = static_cast<uint32_t>(liveOps.size());
+            std::vector<VkAccelerationStructureGeometryTrianglesDataKHR> triDatas(N);
+            std::vector<VkAccelerationStructureGeometryKHR>              blasGeoms(N);
+            std::vector<VkAccelerationStructureBuildGeometryInfoKHR>     blasBuilds(N);
+            std::vector<VkAccelerationStructureBuildRangeInfoKHR>        ranges(N);
+            std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> rangePtrs(N);
 
-            vmaMapMemory(ctx->allocator(), rec.normal.alloc, &mapped);
-            std::memcpy(mapped, nrmAttr->array().data(),
-                        nrmAttr->array().size() * sizeof(float));
-            vmaUnmapMemory(ctx->allocator(), rec.normal.alloc);
+            for (uint32_t kk = 0; kk < N; ++kk) {
+                const size_t k = liveOps[kk];
+                const auto& geom = *ops[k].geom;
+                auto& rec = *ops[k].rec;
+                auto* posAttr = geom.getAttribute<float>("position");
+                const auto* idxAttr = geom.getIndex();
+                const bool indexed = idxAttr != nullptr;
+                const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
+                const uint32_t primitiveCount = indexed
+                        ? static_cast<uint32_t>(idxAttr->count() / 3)
+                        : vertexCount / 3;
 
-            if (auto* uvAttr = geom.getAttribute<float>("uv");
-                uvAttr && rec.uv.handle != VK_NULL_HANDLE) {
-                vmaMapMemory(ctx->allocator(), rec.uv.alloc, &mapped);
-                std::memcpy(mapped, uvAttr->array().data(),
-                            uvAttr->array().size() * sizeof(float));
-                vmaUnmapMemory(ctx->allocator(), rec.uv.alloc);
+                triDatas[kk].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+                triDatas[kk].vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+                triDatas[kk].vertexData.deviceAddress = rec.vertex.address;
+                triDatas[kk].vertexStride = 3 * sizeof(float);
+                triDatas[kk].maxVertex = vertexCount - 1;
+                if (indexed) {
+                    triDatas[kk].indexType = VK_INDEX_TYPE_UINT32;
+                    triDatas[kk].indexData.deviceAddress = rec.index.address;
+                } else {
+                    triDatas[kk].indexType = VK_INDEX_TYPE_NONE_KHR;
+                }
+
+                blasGeoms[kk].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+                blasGeoms[kk].geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+                blasGeoms[kk].geometry.triangles = triDatas[kk];
+                blasGeoms[kk].flags = 0;
+
+                // Periodic MODE_BUILD every kBlasFullRebuildInterval frames
+                // keeps the BVH balanced under sustained vertex motion (soft
+                // body collapse, particle swarms) where pure refits drift the
+                // tree away from optimal.
+                const bool fullRebuild =
+                        rec.blasRefitCounter >= BlasRecord::kBlasFullRebuildInterval;
+                rec.blasRefitCounter = fullRebuild ? 0u : (rec.blasRefitCounter + 1u);
+
+                blasBuilds[kk].sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+                blasBuilds[kk].type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                blasBuilds[kk].flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                                       VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+                blasBuilds[kk].mode = fullRebuild
+                        ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
+                        : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+                blasBuilds[kk].geometryCount = 1;
+                blasBuilds[kk].pGeometries = &blasGeoms[kk];
+                blasBuilds[kk].srcAccelerationStructure = fullRebuild ? VK_NULL_HANDLE : rec.as;
+                blasBuilds[kk].dstAccelerationStructure = rec.as;
+
+                VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
+                blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+                ctx->rt().getAccelerationStructureBuildSizes(
+                        ctx->device(),
+                        VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                        &blasBuilds[kk], &primitiveCount, &blasSizes);
+
+                // Persistent scratch: size to max(buildScratch, updateScratch)
+                // on first use (buildScratch is always >= updateScratch per
+                // spec), then reuse across frames. Reallocate only if a future
+                // topology change grew the required size — current refresh
+                // path is fixed-topology (caller gates on counts).
+                const VkDeviceSize neededScratch = blasSizes.buildScratchSize;
+                if (rec.blasScratch.handle == VK_NULL_HANDLE || rec.blasScratchSize < neededScratch) {
+                    destroyBuffer(ctx->allocator(), rec.blasScratch);
+                    rec.blasScratch = createAsScratchBuffer(
+                            ctx->allocator(), ctx->device(), neededScratch);
+                    rec.blasScratchSize = neededScratch;
+                }
+                blasBuilds[kk].scratchData.deviceAddress = rec.blasScratch.address;
+
+                ranges[kk].primitiveCount = primitiveCount;
+                rangePtrs[kk] = &ranges[kk];
+
+                rec.geomVersion = geomVersionOf(geom);
             }
-
-            if (auto* idxAttr = geom.getIndex();
-                idxAttr && rec.index.handle != VK_NULL_HANDLE) {
-                vmaMapMemory(ctx->allocator(), rec.index.alloc, &mapped);
-                std::memcpy(mapped, idxAttr->array().data(),
-                            idxAttr->array().size() * sizeof(unsigned int));
-                vmaUnmapMemory(ctx->allocator(), rec.index.alloc);
-            }
-
-            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
-            const auto* idxAttr = geom.getIndex();
-            const bool indexed = idxAttr != nullptr;
-            const uint32_t primitiveCount = indexed
-                    ? static_cast<uint32_t>(idxAttr->count() / 3)
-                    : vertexCount / 3;
-
-            VkAccelerationStructureGeometryTrianglesDataKHR triData{};
-            triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-            triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-            triData.vertexData.deviceAddress = rec.vertex.address;
-            triData.vertexStride = 3 * sizeof(float);
-            triData.maxVertex = vertexCount - 1;
-            if (indexed) {
-                triData.indexType = VK_INDEX_TYPE_UINT32;
-                triData.indexData.deviceAddress = rec.index.address;
-            } else {
-                triData.indexType = VK_INDEX_TYPE_NONE_KHR;
-            }
-
-            VkAccelerationStructureGeometryKHR blasGeom{};
-            blasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-            blasGeom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-            blasGeom.geometry.triangles = triData;
-            blasGeom.flags = 0;
-
-            // Per-frame refit via MODE_UPDATE; the initial AS was built with
-            // ALLOW_UPDATE (buildBlasFor sets the flag), so the refit chain is
-            // valid from the very first refresh. Periodic full BUILD every
-            // kBlasFullRebuildInterval frames keeps the BVH balanced under
-            // sustained vertex motion (PhysX soft body collapse, particle
-            // swarms) where pure refits drift the tree away from optimal.
-            const bool fullRebuild =
-                    rec.blasRefitCounter >= BlasRecord::kBlasFullRebuildInterval;
-            rec.blasRefitCounter = fullRebuild ? 0u : (rec.blasRefitCounter + 1u);
-
-            VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
-            blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-            blasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-            blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
-                              VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
-            blasBuild.mode = fullRebuild
-                    ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
-                    : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
-            blasBuild.geometryCount = 1;
-            blasBuild.pGeometries = &blasGeom;
-            blasBuild.srcAccelerationStructure = fullRebuild ? VK_NULL_HANDLE : rec.as;
-            blasBuild.dstAccelerationStructure = rec.as;
-
-            VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
-            blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-            ctx->rt().getAccelerationStructureBuildSizes(
-                    ctx->device(),
-                    VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                    &blasBuild, &primitiveCount, &blasSizes);
-
-            // Persistent scratch: size to max(buildScratch, updateScratch) on
-            // first use (buildScratch is always >= updateScratch per spec), then
-            // reuse across frames. Reallocate only if a future topology change
-            // grew the required size — current refresh path is fixed-topology
-            // (caller already gated on counts), so this is effectively one-shot.
-            const VkDeviceSize neededScratch = blasSizes.buildScratchSize;
-            if (rec.blasScratch.handle == VK_NULL_HANDLE || rec.blasScratchSize < neededScratch) {
-                destroyBuffer(ctx->allocator(), rec.blasScratch);
-                rec.blasScratch = createAsScratchBuffer(
-                        ctx->allocator(), ctx->device(), neededScratch);
-                rec.blasScratchSize = neededScratch;
-            }
-            blasBuild.scratchData.deviceAddress = rec.blasScratch.address;
-
-            VkAccelerationStructureBuildRangeInfoKHR range{};
-            range.primitiveCount = primitiveCount;
-            const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
 
             VkCommandBuffer cb = beginOneShot();
-            ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
-            endAndSubmitOneShot(cb, "refreshGeomBlas");
-
-            rec.geomVersion = geomVersionOf(geom);
+            ctx->rt().cmdBuildAccelerationStructures(cb, N, blasBuilds.data(), rangePtrs.data());
+            endAndSubmitOneShot(cb, "refreshGeomBlasBatch (BLAS)");
         }
 
         // ── Morph-target helpers ─────────────────────────────────────────
@@ -4042,6 +4100,8 @@ namespace threepp {
                         check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (pre-BLAS-refresh)");
                         bool topologyChanged = false;
                         std::unordered_set<const BufferGeometry*> refreshedGeoms;
+                        std::vector<GeomRefreshOp> refreshOps;
+                        refreshOps.reserve(entries.size());
                         for (size_t i = 0; i < entries.size(); ++i) {
                             if (!entryGeomDirty[i]) continue;
                             if (entries[i].isSkinned)   continue;
@@ -4065,7 +4125,7 @@ namespace threepp {
                                 break;
                             }
 
-                            refreshGeomBlas(*entries[i].mesh->geometry(), rec);
+                            refreshOps.push_back({entries[i].mesh->geometry().get(), &rec});
                             refreshedGeoms.insert(geomKey);
                         }
                         if (topologyChanged) {
@@ -4074,6 +4134,7 @@ namespace threepp {
                             // rebuild path below.
                             goto fullRebuild;
                         }
+                        refreshGeomBlasBatch(refreshOps);
                     }
                     if (!matricesSame || bonesDirtyAny || displacedDirtyAny || geomDirtyAny || morphDirtyAny) {
                         // TLAS refit: needed when instance transforms change
