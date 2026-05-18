@@ -4362,7 +4362,14 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), old->uv);
                             destroyBuffer(ctx->allocator(), old->foam);
                             destroyBuffer(ctx->allocator(), old->prevVertex);
-                            it = blasCache.erase(it);
+                            destroyBuffer(ctx->allocator(), old->blasScratch);
+                            blasCache.erase(it);
+                            // erase() returns the next bucket entry, not end().
+                            // Force a fresh lookup so the "missing → build" branch
+                            // below fires; otherwise recPtr binds to a sibling
+                            // cache entry (different mesh's BLAS) and the TLAS
+                            // instance ends up referencing the wrong AS.
+                            it = blasCache.end();
                         }
                     }
                     if (it == blasCache.end()) {
