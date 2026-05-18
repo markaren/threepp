@@ -177,11 +177,10 @@ layout(set = 0, binding = 25) uniform usampler2D gbufIdsTex;   // .x = instanceC
 layout(set = 0, binding = 26) uniform sampler2D  gbufUvTex;    // .rg = material UV
 layout(set = 0, binding = 27) uniform sampler2D  blueNoiseTex; // 64×64 R8 void-and-cluster tile, sampled at (px+frame_offset, py+frame_offset) % 64
 
-// Material + bindless texture descriptors. These were added for the
-// in-raygen shadePrimaryHitOpaque path (shade_primary.glsl); that path is
-// no longer used (see note above main()), so raygen does not currently
-// read mats[] / albedoMaps[]. The declarations remain in set 0 with a
-// raygen stage flag so the shared descriptor set still validates.
+// Material + bindless texture descriptors. mats[] is read by the hybrid
+// reproject bilinear-tap material-acceptance gate and by primary-hit
+// material asset capture; albedoMaps[] is sampled for primary albedo.
+// C++ side adds VK_SHADER_STAGE_RAYGEN_BIT_KHR to bindings 4 and 8.
 layout(set = 0, binding = 4, scalar) readonly buffer MatDescBuf {
     MaterialDesc mats[];
 };

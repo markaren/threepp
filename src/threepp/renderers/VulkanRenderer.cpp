@@ -6140,7 +6140,10 @@ namespace threepp {
             ici.arrayLayers   = 1;
             ici.samples       = VK_SAMPLE_COUNT_1_BIT;
             ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
-            ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT | extraUsage;
+            // TRANSFER_DST so render-extent re-allocation can vkCmdClearColorImage
+            // (and any other transfer-dst clears) without spec violation.
+            ici.usage         = VK_IMAGE_USAGE_STORAGE_BIT |
+                                VK_IMAGE_USAGE_TRANSFER_DST_BIT | extraUsage;
             ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
             ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
@@ -8690,9 +8693,12 @@ namespace threepp {
             bindings[4].descriptorCount = 1;
             // COMPUTE added so denoise_atrous can read mats[].materialAssetIdx
             // for the cross-mesh same-material tap-acceptance gate.
+            // RAYGEN added for the hybrid reproject bilinear-tap material gate
+            // and primary-hit material asset capture.
             bindings[4].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
                                      VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
-                                     VK_SHADER_STAGE_COMPUTE_BIT;
+                                     VK_SHADER_STAGE_COMPUTE_BIT |
+                                     VK_SHADER_STAGE_RAYGEN_BIT_KHR;
             bindings[5].binding = 5;
             bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[5].descriptorCount = 1;
@@ -8722,8 +8728,10 @@ namespace threepp {
             bindings[8].binding = 8;
             bindings[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[8].descriptorCount = kMaxMaterialTextures;
+            // RAYGEN added for primary-hit albedo capture from bindless array.
             bindings[8].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                     VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+                                     VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
+                                     VK_SHADER_STAGE_RAYGEN_BIT_KHR;
             // Continuous-motion bindings.
             bindings[9].binding = 9;
             bindings[9].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
