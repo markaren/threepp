@@ -1763,7 +1763,30 @@ namespace threepp {
             range.primitiveCount = primitiveCount;
             const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
 
+            // Per-vertex previous-pose buffer for the chit's per-vertex motion
+            // vector path. Skinned / displaced / morphed meshes own their own
+            // prev buffer in their state struct; plain meshes that go through
+            // refreshGeomBlas (PhysX soft bodies, ParticleSystems updating
+            // vertices in place) need one here too — without it, the chit reads
+            // gdesc.prevVertexAddress == vertexAddress, motion is zero, and
+            // freshly-spawned dynamic bodies look noisy because the temporal
+            // accumulator blends mismatched history. Static meshes get a free
+            // copy (prev == current forever) — chit motion vector resolves to
+            // zero, matching the previous fallback behavior.
+            rec->prevVertex = createBuffer(
+                    ctx->allocator(), ctx->device(), vbBytes,
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO);
+
             VkCommandBuffer cb = beginOneShot();
+            // Seed prevVertex with the initial (current) vertex data — first
+            // refresh would otherwise copy garbage into prev. Fold into the
+            // same one-shot as the BLAS build to avoid an extra submit.
+            VkBufferCopy seedCopy{};
+            seedCopy.size = vbBytes;
+            vkCmdCopyBuffer(cb, rec->vertex.handle, rec->prevVertex.handle, 1, &seedCopy);
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
             endAndSubmitOneShot(cb, "buildBlasFor");
             destroyBuffer(ctx->allocator(), scratch);
@@ -2107,6 +2130,22 @@ namespace threepp {
                         return;
                     }
                 }
+            }
+
+            // Snapshot last frame's positions into prevVertex before the host
+            // memcpy overwrites the current vertex buffer. Without this the
+            // chit's per-vertex motion vector is always zero and the temporal
+            // accumulator blends mismatched frames at any pixel hitting an
+            // actively-deforming surface (PhysX soft bodies just spawned,
+            // particle systems with high vertex velocity). Submit + wait
+            // inline so the host memcpy below is ordered after the GPU copy.
+            if (rec.prevVertex.handle != VK_NULL_HANDLE) {
+                const VkDeviceSize vbBytes = posAttr->array().size() * sizeof(float);
+                VkCommandBuffer cb = beginOneShot();
+                VkBufferCopy region{};
+                region.size = vbBytes;
+                vkCmdCopyBuffer(cb, rec.vertex.handle, rec.prevVertex.handle, 1, &region);
+                endAndSubmitOneShot(cb, "refreshGeomBlas (prevVertex)");
             }
 
             void* mapped = nullptr;
@@ -3908,7 +3947,21 @@ namespace threepp {
                     if (matChanged) materialValuesSame = false;
                     if (bonesChanged) bonesDirtyAny = true;
                     if (dispChanged)  displacedDirtyAny = true;
-                    if (geomChanged) { geomDirtyAny = true; entryGeomDirty[i] = true; }
+                    if (geomChanged) {
+                        geomDirtyAny = true;
+                        entryGeomDirty[i] = true;
+                        // Invalidate the cached boundingBox so the next
+                        // cullEntriesAgainstFrustum recomputes it from the
+                        // current positions. Without this, plain meshes with
+                        // in-place vertex updates (PhysX soft bodies) keep
+                        // the rest-pose AABB and get culled out by the raster
+                        // pass once the body settles outside that stale box —
+                        // gbuffer ends up with sky at those pixels and the
+                        // hybrid raygen renders the background through them.
+                        if (auto g = entries[i].mesh->geometry()) {
+                            g->boundingBox.reset();
+                        }
+                    }
                     if (morphChanged) morphDirtyAny = true;
                     // All flavors of change invalidate this pixel's history —
                     // share the same per-mesh bit. Reproject+halve FC for any
