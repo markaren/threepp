@@ -356,6 +356,10 @@ layout(push_constant) uniform Pc {
     float oceanFineTileSize;  // fine-cascade tile size (closest_hit reads); 0 disables
     uint edgeMsaaExtra;       // # of EXTRA primary samples at detected silhouettes
                               // (0 = disable silhouette MSAA, N = (N+1)× MSAA at edges)
+    float _padFoam;           // closest_hit-only (world-space foam tile size); reserved
+                              // here so the slot offsets stay aligned across stages.
+    uint maxBounces;          // max real scatter events per path (raygen reads); cap for
+                              // diffuse/glossy is further reduced in main() via kMaxBounces.
 } pc;
 
 bool isMeshMoved(uint idx) {
@@ -370,15 +374,12 @@ layout(location = 0) rayPayloadEXT Payload payload;
 // shadow miss sets this to 1.0, shadow_anyhit multiplies it down through glass.
 layout(location = 1) rayPayloadEXT float shadowVisibility;
 
-const int kMaxBounces = 4; // max real scatter events (opaque shade + indirect).
-                            // Was 6; lowered to 4 for FPS on metal/mirror/glass
-                            // scenes. Diffuse/glossy already adaptively cap at
-                            // 3/4 below — so this only affects the
-                            // "metal/mirror/glass" branch's deeper indirect
-                            // bounces, which the denoiser absorbs cleanly at
-                            // 4 in practice. If you start seeing under-lit
-                            // metal cavities or missing glass→glass→sky paths,
-                            // bump back up.
+// kMaxBounces is set per-frame from `pc.maxBounces` at the top of main() — the
+// host's setMaxBounces(int) API drives it. Default is 4 (the previous compile-
+// time value). Diffuse/glossy adaptively cap further at 3/4 below, so the
+// runtime value only directly affects the metal/mirror/glass branch's deeper
+// indirect bounces — bump it up if you start seeing under-lit metal cavities
+// or missing glass→glass→sky paths.
 const int kMaxSteps   = 24;// hard cap including glass traversal (each glass layer = 2 steps)
 
 // Halton low-discrepancy sequence — base 2 / base 3 give the standard
@@ -691,6 +692,9 @@ vec3 volumeNeeSingle(vec3 x, vec3 wi, float g, inout uint seed) {
 
 void main() {
     const uint spp = max(pc.samplesPerPixel, 1u);
+    // Host-driven via VulkanRenderer::setMaxBounces. clamp to [1,16] so a
+    // zero or absurd value can't break the bounce loop / kMaxSteps budget.
+    const int kMaxBounces = int(clamp(pc.maxBounces, 1u, 16u));
 
     const vec2 size = vec2(gl_LaunchSizeEXT.xy);
     const vec4 originWS = cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0);

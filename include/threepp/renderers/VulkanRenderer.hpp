@@ -135,6 +135,14 @@ namespace threepp {
         void setFireflyClamp(float cap);
         [[nodiscard]] float fireflyClamp() const;
 
+        // Max real scatter events per path. Default 4. Clamped internally to
+        // [1, 16]. Diffuse / glossy primaries adaptively cap themselves at 3 / 4
+        // in raygen, so raising this mainly affects deeper metal / mirror /
+        // glass paths. Changing the value resets accumulation.
+        // Mirrors WgpuPathTracer::setMaxBounces.
+        void setMaxBounces(int bounces);
+        [[nodiscard]] int maxBounces() const;
+
         // Manually reset path-tracer frame accumulation. Wipes per-pixel
         // running mean + history (gbuf + accum + ReSTIR DI reservoirs),
         // invalidates reproject state (prev camera + per-mesh prevWorld),

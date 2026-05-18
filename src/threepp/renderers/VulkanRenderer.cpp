@@ -608,6 +608,11 @@ namespace threepp {
         // (gbufIds-mismatch / depth-gradient / diagonal neighbour). Default
         // 7 → 8× MSAA at edges. 0 disables silhouette MSAA entirely.
         uint32_t edgeMsaaExtra_   = 3;
+        // Max real scatter events per path (raygen kMaxBounces). 4 matches the
+        // prior compile-time value; setMaxBounces clamps to [1, 16]. Diffuse /
+        // glossy primaries further cap themselves at 3 / 4 in raygen, so this
+        // mostly affects deeper metal / mirror / glass paths.
+        uint32_t maxBounces_      = 4;
         // Prev-frame camera packed as four vec4s (matches PrevCameraUbo):
         //   [0..3]  = vec4(pos.xyz,  projScaleX)   → prevCamPosX
         //   [4..7]  = vec4(fwd.xyz,  projScaleY)   → prevCamFwdY
@@ -9011,13 +9016,15 @@ namespace threepp {
             //        silhouettes; 0 disables, N → (N+1)× total samples at edges)
             //   [14] oceanFoamTileSize bits (float — world-space foam tile size in m;
             //        0 disables foam sampling on water hits)
+            //   [15] maxBounces        (raygen — host-driven scatter-event cap;
+            //        replaces the prior compile-time kMaxBounces in raygen.rgen)
             VkPushConstantRange pcRange{};
             pcRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR |
                                  VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
                                  VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
                                  VK_SHADER_STAGE_MISS_BIT_KHR;
             pcRange.offset = 0;
-            pcRange.size   = 60;
+            pcRange.size   = 64;
 
             VkPipelineLayoutCreateInfo plci{};
             plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -10739,7 +10746,7 @@ namespace threepp {
             std::memcpy(&oceanFineBits, &oceanFineTileSize, sizeof(oceanFineBits));
             uint32_t oceanFoamBits;
             std::memcpy(&oceanFoamBits, &oceanFoamTileSize, sizeof(oceanFoamBits));
-            const uint32_t pc[15] = {
+            const uint32_t pc[16] = {
                     sampleIndex,
                     envImage.mipLevels,
                     static_cast<uint32_t>(toneMapping_),
@@ -10755,6 +10762,7 @@ namespace threepp {
                     oceanFineBits,
                     edgeMsaaExtra_,
                     oceanFoamBits,
+                    maxBounces_,
             };
             vkCmdPushConstants(cb, rtPipelineLayout,
                                VK_SHADER_STAGE_RAYGEN_BIT_KHR |
@@ -11800,6 +11808,20 @@ namespace threepp {
     float VulkanRenderer::fireflyClamp() const {
         const float v = pimpl_->fireflyClamp_;
         return (v > 1e20f) ? 0.0f : v;
+    }
+
+    void VulkanRenderer::setMaxBounces(int bounces) {
+        // raygen also clamps; clamp on the host too so maxBounces() reads back
+        // the actual value used and accumulation resets only on real changes.
+        const int clamped = (bounces < 1) ? 1 : (bounces > 16 ? 16 : bounces);
+        const uint32_t v = static_cast<uint32_t>(clamped);
+        if (pimpl_->maxBounces_ == v) return;
+        pimpl_->maxBounces_ = v;
+        pimpl_->resetAccumulation();
+    }
+
+    int VulkanRenderer::maxBounces() const {
+        return static_cast<int>(pimpl_->maxBounces_);
     }
 
     void VulkanRenderer::resetAccumulation() {
