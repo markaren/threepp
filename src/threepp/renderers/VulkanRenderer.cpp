@@ -197,6 +197,20 @@ namespace threepp {
             unsigned int geomVersion = 0;
             uint32_t vertexCount = 0;
             uint32_t indexCount  = 0;
+            // Persistent scratch buffer for per-frame refit. Sized to
+            // buildScratchSize on first use (which is always >= updateScratchSize),
+            // reused every frame to avoid the create+destroy pair that
+            // dominated refreshGeomBlas's cost. Empty until the first
+            // refreshGeomBlas; cleaned up in deinit / prune paths.
+            Buffer blasScratch{};
+            VkDeviceSize blasScratchSize = 0;
+            // Per-frame BLAS-refit state — same pattern as SkinnedMeshState /
+            // DisplacedMeshState. refreshGeomBlas refits via MODE_UPDATE for 63
+            // of every 64 frames; the periodic full rebuild keeps the BVH
+            // balanced under sustained geometry mutation (PhysX soft bodies,
+            // dynamic ParticleSystems).
+            uint32_t blasRefitCounter = 0;
+            static constexpr uint32_t kBlasFullRebuildInterval = 64;
         };
         std::unordered_map<const BufferGeometry*, std::unique_ptr<BlasRecord>> blasCache;
 
@@ -1324,6 +1338,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->uv);
                 destroyBuffer(ctx->allocator(), rec->foam);
                 destroyBuffer(ctx->allocator(), rec->prevVertex);
+                destroyBuffer(ctx->allocator(), rec->blasScratch);
             }
             blasCache.clear();
 
@@ -1346,6 +1361,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->uv);
                 destroyBuffer(ctx->allocator(), rec->foam);
                 destroyBuffer(ctx->allocator(), rec->prevVertex);
+                destroyBuffer(ctx->allocator(), rec->blasScratch);
             }
             skinnedMeshStates.clear();
 
@@ -1360,6 +1376,7 @@ namespace threepp {
                     destroyBuffer(ctx->allocator(), rec->uv);
                     destroyBuffer(ctx->allocator(), rec->foam);
                     destroyBuffer(ctx->allocator(), rec->prevVertex);
+                    destroyBuffer(ctx->allocator(), rec->blasScratch);
                 }
                 if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(d, st->scratchA.view, nullptr);
                 if (st->scratchA.image != VK_NULL_HANDLE) vmaDestroyImage(ctx->allocator(), st->scratchA.image, st->scratchA.alloc);
@@ -1386,6 +1403,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->uv);
                 destroyBuffer(ctx->allocator(), rec->foam);
                 destroyBuffer(ctx->allocator(), rec->prevVertex);
+                destroyBuffer(ctx->allocator(), rec->blasScratch);
             }
             morphedMeshStates.clear();
 
@@ -2135,14 +2153,27 @@ namespace threepp {
             blasGeom.geometry.triangles = triData;
             blasGeom.flags = 0;
 
+            // Per-frame refit via MODE_UPDATE; the initial AS was built with
+            // ALLOW_UPDATE (buildBlasFor sets the flag), so the refit chain is
+            // valid from the very first refresh. Periodic full BUILD every
+            // kBlasFullRebuildInterval frames keeps the BVH balanced under
+            // sustained vertex motion (PhysX soft body collapse, particle
+            // swarms) where pure refits drift the tree away from optimal.
+            const bool fullRebuild =
+                    rec.blasRefitCounter >= BlasRecord::kBlasFullRebuildInterval;
+            rec.blasRefitCounter = fullRebuild ? 0u : (rec.blasRefitCounter + 1u);
+
             VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
             blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
             blasBuild.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
             blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
                               VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
-            blasBuild.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            blasBuild.mode = fullRebuild
+                    ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
+                    : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
             blasBuild.geometryCount = 1;
             blasBuild.pGeometries = &blasGeom;
+            blasBuild.srcAccelerationStructure = fullRebuild ? VK_NULL_HANDLE : rec.as;
             blasBuild.dstAccelerationStructure = rec.as;
 
             VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
@@ -2152,8 +2183,19 @@ namespace threepp {
                     VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                     &blasBuild, &primitiveCount, &blasSizes);
 
-            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), blasSizes.buildScratchSize);
-            blasBuild.scratchData.deviceAddress = scratch.address;
+            // Persistent scratch: size to max(buildScratch, updateScratch) on
+            // first use (buildScratch is always >= updateScratch per spec), then
+            // reuse across frames. Reallocate only if a future topology change
+            // grew the required size — current refresh path is fixed-topology
+            // (caller already gated on counts), so this is effectively one-shot.
+            const VkDeviceSize neededScratch = blasSizes.buildScratchSize;
+            if (rec.blasScratch.handle == VK_NULL_HANDLE || rec.blasScratchSize < neededScratch) {
+                destroyBuffer(ctx->allocator(), rec.blasScratch);
+                rec.blasScratch = createAsScratchBuffer(
+                        ctx->allocator(), ctx->device(), neededScratch);
+                rec.blasScratchSize = neededScratch;
+            }
+            blasBuild.scratchData.deviceAddress = rec.blasScratch.address;
 
             VkAccelerationStructureBuildRangeInfoKHR range{};
             range.primitiveCount = primitiveCount;
@@ -2162,7 +2204,6 @@ namespace threepp {
             VkCommandBuffer cb = beginOneShot();
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
             endAndSubmitOneShot(cb, "refreshGeomBlas");
-            destroyBuffer(ctx->allocator(), scratch);
 
             rec.geomVersion = geomVersionOf(geom);
         }
@@ -4139,6 +4180,7 @@ namespace threepp {
                         destroyBuffer(ctx->allocator(), rec->uv);
                         destroyBuffer(ctx->allocator(), rec->foam);
                         destroyBuffer(ctx->allocator(), rec->prevVertex);
+                        destroyBuffer(ctx->allocator(), rec->blasScratch);
                         it = blasCache.erase(it);
                     } else {
                         ++it;
