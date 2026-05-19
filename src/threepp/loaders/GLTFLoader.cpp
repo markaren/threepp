@@ -167,6 +167,11 @@ namespace threepp {
             std::unordered_map<int, std::shared_ptr<Skeleton>> skinCache;
             std::unordered_set<int> builtNodes;
 
+            // Non-joint mesh nodes whose pre-created Group wrapper has been
+            // replaced with the actual meshObj (Mesh or multi-prim Group) —
+            // avoids attaching the mesh twice in buildNode.
+            std::unordered_set<int> collapsedMeshNodes;
+
             // KHR_animation_pointer: one invisible proxy per animated material,
             // attached to the scene root so the AnimationMixer can resolve it.
             std::unordered_map<int, std::shared_ptr<MaterialAnimationProxy>> matAnimProxies;
@@ -1007,37 +1012,90 @@ namespace threepp {
                 return group;
             }
 
+            // Build the Mesh / multi-prim Group for a node (with skin + instancing
+            // applied). Caller decides whether to attach it as a child of the node's
+            // wrapper (joint case) or replace the wrapper outright (collapse case).
+            std::shared_ptr<Object3D> buildMeshObjForNode(int nodeIdx) {
+                const auto& nodeDef = gltf["nodes"][nodeIdx];
+                int meshIdx = nodeDef["mesh"].get<int>();
+                int skinIdx = nodeDef.value("skin", -1);
+                bool hasSkin = skinIdx >= 0 && gltf.contains("skins");
+
+                auto meshObj = loadMesh(meshIdx, hasSkin);
+
+                if (hasSkin) {
+                    auto skel = loadSkin(skinIdx);
+                    // meshObj is always a Group when hasSkin (no unwrap)
+                    for (auto child : meshObj->children) {
+                        if (auto sm = dynamic_cast<SkinnedMesh*>(child))
+                            sm->bind(skel, Matrix4());
+                    }
+                }
+
+                // EXT_mesh_gpu_instancing — replace Mesh children with
+                // InstancedMesh driven by the extension's per-instance TRS
+                // accessor arrays. Skipped for skinned meshes (spec advises
+                // against combining with KHR_skin).
+                if (!hasSkin && nodeDef.contains("extensions") &&
+                    nodeDef["extensions"].contains("EXT_mesh_gpu_instancing")) {
+                    meshObj = applyGpuInstancing(
+                            nodeDef["extensions"]["EXT_mesh_gpu_instancing"], meshObj);
+                }
+
+                return meshObj;
+            }
+
+            // For non-joint nodes with a mesh, replace the pre-created Group
+            // wrapper with the actual meshObj — transferring transform + name.
+            // This eliminates a redundant Object3D layer per mesh node
+            // (Group("X") → Mesh("X") collapses to a single Mesh("X")).
+            //
+            // Joint nodes (Bones) keep their wrapper so skin binding / skeleton
+            // wiring remains intact.
+            void tryCollapseMeshWrapper(int nodeIdx) {
+                if (collapsedMeshNodes.count(nodeIdx)) return;
+                const auto& nodeDef = gltf["nodes"][nodeIdx];
+                if (!nodeDef.contains("mesh") || !gltf.contains("meshes")) return;
+                if (jointNodeSet.count(nodeIdx)) return;
+
+                auto meshObj = buildMeshObjForNode(nodeIdx);
+
+                auto& wrapper = nodeObjects[nodeIdx];
+                meshObj->position.copy(wrapper->position);
+                meshObj->quaternion.copy(wrapper->quaternion);
+                meshObj->scale.copy(wrapper->scale);
+                // Adopt wrapper's name (set in preCreateNodes from the node's
+                // glTF name or the synthetic "node_N" fallback). Animation
+                // tracks reference nodes by this name — see loadAnimations.
+                meshObj->name = wrapper->name;
+
+                // Multi-primitive meshes (Group containing several Meshes):
+                // propagate the node's name to inner primitives so traversal
+                // by name still finds them.
+                if (meshObj->children.size() > 1) {
+                    int idx = 0;
+                    for (auto* child : meshObj->children) {
+                        child->name = wrapper->name + "_" + std::to_string(idx++);
+                    }
+                }
+
+                nodeObjects[nodeIdx] = meshObj;
+                collapsedMeshNodes.insert(nodeIdx);
+            }
+
             // Build node hierarchy using pre-created node objects
             void buildNode(int nodeIdx) {
                 if (!builtNodes.insert(nodeIdx).second) return; // already built
                 const auto& nodeDef = gltf["nodes"][nodeIdx];
                 auto& obj = nodeObjects[nodeIdx];
 
-                if (nodeDef.contains("mesh") && gltf.contains("meshes")) {
-                    int meshIdx = nodeDef["mesh"].get<int>();
-                    int skinIdx = nodeDef.value("skin", -1);
-                    bool hasSkin = skinIdx >= 0 && gltf.contains("skins");
+                // Mesh attachment is only needed here for joints (Bones) that
+                // also carry a mesh — non-joint mesh nodes were already
+                // collapsed (their meshObj IS nodeObjects[nodeIdx]).
+                if (!collapsedMeshNodes.count(nodeIdx) &&
+                    nodeDef.contains("mesh") && gltf.contains("meshes")) {
 
-                    auto meshObj = loadMesh(meshIdx, hasSkin);
-
-                    if (hasSkin) {
-                        auto skel = loadSkin(skinIdx);
-                        // meshObj is always a Group when hasSkin (no unwrap)
-                        for (auto child : meshObj->children) {
-                            if (auto sm = dynamic_cast<SkinnedMesh*>(child))
-                                sm->bind(skel, Matrix4());
-                        }
-                    }
-
-                    // EXT_mesh_gpu_instancing — replace Mesh children with
-                    // InstancedMesh driven by the extension's per-instance TRS
-                    // accessor arrays. Skipped for skinned meshes (spec advises
-                    // against combining with KHR_skin).
-                    if (!hasSkin && nodeDef.contains("extensions") &&
-                        nodeDef["extensions"].contains("EXT_mesh_gpu_instancing")) {
-                        meshObj = applyGpuInstancing(
-                                nodeDef["extensions"]["EXT_mesh_gpu_instancing"], meshObj);
-                    }
+                    auto meshObj = buildMeshObjForNode(nodeIdx);
 
                     // DCC tools (Blender, Maya, ...) put the user-facing object name on
                     // the glTF node; the mesh name is the mesh-data name and is often
@@ -1112,6 +1170,14 @@ namespace threepp {
 
                 if (sceneDef.contains("nodes")) {
                     int numNodes = gltf.contains("nodes") ? static_cast<int>(gltf["nodes"].size()) : 0;
+
+                    // Pass 1: collapse Group-wrapper-around-Mesh layers for
+                    // every non-joint mesh node. Must run before buildNode's
+                    // child-attach so parent nodes pick up the collapsed
+                    // (Mesh) child, not the discarded Group wrapper.
+                    for (int i = 0; i < numNodes; ++i) tryCollapseMeshWrapper(i);
+
+                    // Pass 2: attach lights / joint-meshes / children.
                     for (int i = 0; i < numNodes; ++i) buildNode(i);
 
                     for (int nodeIdx : sceneDef["nodes"].get<std::vector<int>>())
@@ -1123,10 +1189,14 @@ namespace threepp {
                 // wrapper carries the user-facing name. Walk up from each Mesh through
                 // single-child wrapper groups and adopt the topmost wrapper's name so
                 // traverseType<Mesh> / getObjectByName see Blender's names.
-                root->traverseType<Mesh>([](Mesh& m) {
+                //
+                // Stop at the scene root: its name is the scene's name ("Scene" fallback)
+                // and shouldn't propagate onto a single-child mesh.
+                Object3D* rootPtr = root.get();
+                root->traverseType<Mesh>([rootPtr](Mesh& m) {
                     Object3D* candidate = &m;
                     Object3D* cur = &m;
-                    while (cur->parent &&
+                    while (cur->parent && cur->parent != rootPtr &&
                            cur->parent->children.size() == 1 &&
                            !dynamic_cast<Mesh*>(cur->parent)) {
                         candidate = cur->parent;
