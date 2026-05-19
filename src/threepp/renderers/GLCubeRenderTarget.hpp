@@ -101,8 +101,13 @@ namespace threepp {
 
             const auto currentMinFilter = texture.minFilter;
 
+            const bool oldAutoClear = renderer.autoClear;
+            renderer.autoClear = true;
+
             auto camera = CubeCamera(1, 10, *this);
             camera.update(renderer, mesh);
+
+            renderer.autoClear = oldAutoClear;
 
             // Avoid blurred poles
             if (texture.minFilter == Filter::LinearMipmapLinear) texture.minFilter = Filter::Linear;
