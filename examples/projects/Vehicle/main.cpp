@@ -385,12 +385,11 @@ int main() {
         }
 
         // Build chase/orbit camera in chassis-local space, then transform to world.
-        const PxTransform pose = vehicle.chassisPose();
-        Matrix4 chassisMat;
-        chassisMat.compose(
-                Vector3(pose.p.x, pose.p.y, pose.p.z),
-                Quaternion(pose.q.x, pose.q.y, pose.q.z, pose.q.w),
-                Vector3(1, 1, 1));
+        // Read from the bound chassisMesh (which carries PhysxWorld's substep
+        // interpolation) rather than vehicle.chassisPose() — the raw actor pose
+        // is un-interpolated and produces a jittery chase view under vsync.
+        chassisMesh->updateMatrixWorld();
+        const Matrix4& chassisMat = *chassisMesh->matrixWorld;
         const float cosP = std::cos(orbitPitch);
         Vector3 desiredCam(
                 orbitDist * std::sin(orbitYaw) * cosP,

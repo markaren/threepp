@@ -53,6 +53,26 @@ namespace threepp {
         return Quaternion(q.x, q.y, q.z, q.w);
     }
 
+    // Interpolate between two PxTransforms. Position is linear; orientation uses
+    // shortest-arc nlerp, which is visually indistinguishable from slerp for the
+    // small angles between fixed-timestep substeps and cheaper. Used by
+    // PhysxWorld to interpolate bound visuals between physics ticks.
+    inline ::physx::PxTransform lerpPxTransform(const ::physx::PxTransform& a,
+                                                const ::physx::PxTransform& b,
+                                                float t) {
+        using namespace ::physx;
+        const PxVec3 p = a.p * (1.f - t) + b.p * t;
+        const float dot = a.q.x * b.q.x + a.q.y * b.q.y + a.q.z * b.q.z + a.q.w * b.q.w;
+        const float s = (dot < 0.f) ? -1.f : 1.f;// pick shortest arc
+        PxQuat q(
+                a.q.x * (1.f - t) + b.q.x * t * s,
+                a.q.y * (1.f - t) + b.q.y * t * s,
+                a.q.z * (1.f - t) + b.q.z * t * s,
+                a.q.w * (1.f - t) + b.q.w * t * s);
+        q.normalize();
+        return PxTransform(p, q);
+    }
+
     // Owns PhysX foundation/physics/scene. Single-scene wrapper aimed at scene-graph
     // integration; advanced use (multiple scenes, custom filter shaders, GPU dynamics)
     // can drop down to physics() / scene() / foundation() and ignore the helpers.
@@ -171,11 +191,18 @@ namespace threepp {
         PhysxWorld& operator=(const PhysxWorld&) = delete;
 
         // Variable-rate caller, fixed-rate physics. Pre/post substep hooks fire
-        // around each fetchResults boundary; bindings re-sync after the final substep.
+        // around each fetchResults boundary. Visual bindings (Object3D / InstancedMesh)
+        // are interpolated between the last two substep states using the leftover
+        // accumulator fraction as alpha — this smooths out the 0-or-2-substeps-per-frame
+        // pattern that variable real-frame dt produces under vsync jitter (the
+        // classic "fix your timestep" problem; see Glenn Fiedler 2004).
+        // Soft bodies are NOT interpolated — their GPU positions only get pulled
+        // when at least one substep ran this call.
         void step(float dt) {
             accumulator_ += dt;
             int steps = 0;
             while (accumulator_ >= settings_.fixedTimestep && steps < settings_.maxSubSteps) {
+                snapshotPrevPoses();
                 substep(settings_.fixedTimestep);
                 accumulator_ -= settings_.fixedTimestep;
                 ++steps;
@@ -184,8 +211,13 @@ namespace threepp {
                 accumulator_ = 0;// avoid spiral of death on hitches
             }
             if (steps > 0) {
-                syncBindings();
+                syncSoftBodies();
             }
+            // alpha = how far past the last completed substep we are. Always sync
+            // rigid bindings, even on frames with 0 substeps — that's exactly when
+            // alpha advancing produces the smoothing benefit.
+            const float alpha = std::clamp(accumulator_ / settings_.fixedTimestep, 0.f, 1.f);
+            syncRigidBindings(alpha);
         }
 
         void onPreSubstep(std::function<void(float)> cb) { preSubstep_.push_back(std::move(cb)); }
@@ -514,13 +546,21 @@ namespace threepp {
         void removeSoftBody(SoftBody* softBody);
 
     private:
+        // Bindings carry a `prevPose` snapshot taken right before each substep so
+        // visual output can lerp(prev, current, alpha) where alpha is the leftover
+        // accumulator fraction. `hasPrev` gates the first frame before any
+        // snapshot has been taken (avoids interpolating against an identity pose).
         struct ObjBinding {
             Object3D* obj;
             ::physx::PxRigidActor* actor;
+            ::physx::PxTransform prevPose{::physx::PxIdentity};
+            bool hasPrev = false;
         };
         struct InstBinding {
             InstancedMesh* mesh;
             std::vector<::physx::PxRigidActor*> actors;
+            std::vector<::physx::PxTransform> prevPoses;
+            bool hasPrev = false;
         };
 
         struct InferredShape {
@@ -563,10 +603,31 @@ namespace threepp {
 
         ::physx::PxDeformableVolumeMaterial* defaultSoftBodyMaterial();
 
-        void syncBindings() {
-            syncSoftBodies();
+        // Snapshot every bound actor's current pose as the "before this substep"
+        // state. Called once per substep iteration so prev = pose just before the
+        // most recent simulate(); current = pose just after fetchResults().
+        void snapshotPrevPoses() {
             for (auto& b : objBindings_) {
-                auto t = b.actor->getGlobalPose();
+                b.prevPose = b.actor->getGlobalPose();
+                b.hasPrev = true;
+            }
+            for (auto& b : instBindings_) {
+                if (b.prevPoses.size() != b.actors.size()) {
+                    b.prevPoses.resize(b.actors.size());
+                }
+                for (size_t i = 0; i < b.actors.size(); ++i) {
+                    b.prevPoses[i] = b.actors[i]->getGlobalPose();
+                }
+                b.hasPrev = true;
+            }
+        }
+
+        // Write actor poses (interpolated between prev and current by alpha) into
+        // bound Object3D / InstancedMesh transforms.
+        void syncRigidBindings(float alpha) {
+            for (auto& b : objBindings_) {
+                const auto cur = b.actor->getGlobalPose();
+                const auto t = b.hasPrev ? lerpPxTransform(b.prevPose, cur, alpha) : cur;
                 const Vector3 worldPos = fromPxVec3(t.p);
                 const Quaternion worldRot = fromPxQuat(t.q);
                 if (auto* parent = b.obj->parent) {
@@ -593,7 +654,8 @@ namespace threepp {
                 for (size_t i = 0; i < b.actors.size(); ++i) {
                     b.mesh->getMatrixAt(i, m);
                     m.decompose(pos, rot, scale);
-                    auto t = b.actors[i]->getGlobalPose();
+                    const auto cur = b.actors[i]->getGlobalPose();
+                    const auto t = b.hasPrev ? lerpPxTransform(b.prevPoses[i], cur, alpha) : cur;
                     m.compose(fromPxVec3(t.p), fromPxQuat(t.q), scale);
                     b.mesh->setMatrixAt(i, m);
                 }
