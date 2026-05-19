@@ -9360,6 +9360,15 @@ namespace threepp {
         // SER × hybrid × restirDI (runtime-toggleable); scene features go in
         // as a uint bitmask spec constant on chit and don't multiply variants.
         bool rtPipelinesBuilt_ = false;
+        // Snapshot of currentSceneFeatures() used at the most recent variant
+        // build. Compared every frame against the live value; if the scene
+        // swapped to a model with different features (gltf_samples-style),
+        // we invalidate all baked variants and rebuild the active one fresh.
+        // Sentinel 0xFFFFFFFFu means "no build has happened yet" — initial
+        // mismatch on first frame is fine because rtPipelinesBuilt_ gates
+        // the invalidation path.
+        uint32_t lastBuiltSceneFeatures_ = 0xFFFFFFFFu;
+
         // First-frame entry. Builds only the variant matching the user's
         // current toggle state; the other 7 (or 3, non-SER) variants are
         // built lazily by ensureCurrentRtVariantBuilt() on first toggle.
@@ -9371,24 +9380,55 @@ namespace threepp {
             const uint32_t sceneFeats = currentSceneFeatures();
             buildSingleRtVariant(shouldUseSerRaygen(), hybridEnabled_,
                                  restirDIEnabled_, sceneFeats);
+            lastBuiltSceneFeatures_ = sceneFeats;
             rtPipelinesBuilt_ = true;
         }
 
+        // Throws out every built pipeline + SBT after a scene swap. Called
+        // from ensureCurrentRtVariantBuilt() when currentSceneFeatures() has
+        // changed since the last build (e.g. a glass model replaced a glass-
+        // free one — kSceneFeatHasGlass flips and the caustic gather DCE is
+        // now wrong). vkDeviceWaitIdle drains any in-flight GPU work using
+        // the old pipelines before we destroy them.
+        void invalidateAllRtVariants() {
+            vkDeviceWaitIdle(ctx->device());
+            for (auto& v : rtVariants_) {
+                if (v.pipeline != VK_NULL_HANDLE) {
+                    vkDestroyPipeline(ctx->device(), v.pipeline, nullptr);
+                    v.pipeline = VK_NULL_HANDLE;
+                }
+                destroyBuffer(ctx->allocator(), v.sbtBuffer);
+                v.sbtBuffer  = {};
+                v.rgenRegion = {};
+                v.missRegion = {};
+                v.hitRegion  = {};
+            }
+        }
+
         // Lazy build of the active variant. Called every frame (cheap null
-        // check); if the user has toggled into an unbuilt variant slot, fill
-        // it now. vkDeviceWaitIdle before the create call so any in-flight
-        // GPU work using a different variant is drained — NVIDIA's reported
-        // hang on subsequent vkCreateRayTracingPipelinesKHR calls against the
-        // same pipeline layout appears to be tied to overlapping in-flight
-        // work; an explicit drain sidesteps it.
+        // check); also detects scene-feature drift (gltf_samples model swap)
+        // and tears down baked-stale variants. vkDeviceWaitIdle before the
+        // create call drains any in-flight GPU work — NVIDIA's reported
+        // hang on subsequent vkCreateRayTracingPipelinesKHR calls against
+        // the same pipeline layout appears to be tied to overlapping work.
         void ensureCurrentRtVariantBuilt() {
+            const uint32_t newFeats = currentSceneFeatures();
+            if (rtPipelinesBuilt_ && newFeats != lastBuiltSceneFeatures_) {
+                // Scene features changed since last build (model swap).
+                // All baked spec-constant variants are stale — caustic
+                // gather / clearcoat lobe / iridescence Fresnel / sheen NEE
+                // DCE states no longer match what the chit needs. Discard
+                // everything; the active variant will rebuild below.
+                invalidateAllRtVariants();
+                lastBuiltSceneFeatures_ = newFeats;
+            }
             const bool useSer = shouldUseSerRaygen();
             const bool hyb = hybridEnabled_;
             const bool rdi = restirDIEnabled_;
             const uint32_t idx = rtVariantIndex(useSer, hyb, rdi);
             if (rtVariants_[idx].pipeline != VK_NULL_HANDLE) return;
             vkDeviceWaitIdle(ctx->device());
-            buildSingleRtVariant(useSer, hyb, rdi, currentSceneFeatures());
+            buildSingleRtVariant(useSer, hyb, rdi, newFeats);
         }
 
         // Scene-feature bitmask matching chit's kSceneFeatures spec constant.
