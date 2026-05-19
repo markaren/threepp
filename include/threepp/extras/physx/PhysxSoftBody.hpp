@@ -602,8 +602,16 @@ namespace threepp {
             bakedPos[i * 3 + 2] = v.z;
         }
         bakedGeom->setAttribute("position", FloatBufferAttribute::create(bakedPos, 3));
+        for (const auto& [name, attr] : geom->getAttributes()) {
+            if (name != "position") {
+                bakedGeom->setAttribute(name, attr);
+            }
+        }
         if (auto* idx = geom->getIndex()) {
             bakedGeom->setIndex(std::vector<unsigned int>(idx->array().begin(), idx->array().end()));
+        }
+        if (!geom->groups.empty()) {
+            bakedGeom->groups = geom->groups;
         }
         mesh.setGeometry(bakedGeom);
         mesh.position.set(0, 0, 0);
