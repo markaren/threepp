@@ -1,6 +1,10 @@
 
 #include "threepp/utils/BufferGeometryUtils.hpp"
 
+#ifdef THREEPP_WITH_MESHOPT
+#include <meshoptimizer.h>
+#endif
+
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -327,3 +331,97 @@ std::shared_ptr<BufferGeometry> threepp::mergeVertices(const BufferGeometry& geo
 
     return result;
 }
+
+#ifdef THREEPP_WITH_MESHOPT
+
+std::shared_ptr<BufferGeometry> threepp::simplifyGeometry(const BufferGeometry& geometry, float ratio, float error) {
+
+    std::shared_ptr<BufferGeometry> geom;
+    if (!geometry.getIndex()) {
+        geom = mergeVertices(geometry);
+    } else {
+        geom = geometry.clone();
+    }
+
+    auto* pos = geom->getAttribute<float>("position");
+    auto* uv = geom->getAttribute<float>("uv");
+    auto* idx = geom->getIndex();
+    if (!pos || !idx) return geom;
+
+    const size_t vertexCount = pos->count();
+    const size_t indexCount = idx->count();
+    const auto* indices = idx->array().data();
+
+    std::vector<float> positions(vertexCount * 3);
+    for (size_t i = 0; i < vertexCount; ++i) {
+        positions[i * 3 + 0] = pos->getX(i);
+        positions[i * 3 + 1] = pos->getY(i);
+        positions[i * 3 + 2] = pos->getZ(i);
+    }
+
+    std::vector<float> uvs;
+    const bool hasUV = uv != nullptr;
+    if (hasUV) {
+        uvs.resize(vertexCount * 2);
+        for (size_t i = 0; i < vertexCount; ++i) {
+            uvs[i * 2 + 0] = uv->getX(i);
+            uvs[i * 2 + 1] = uv->getY(i);
+        }
+    }
+
+    size_t targetIndexCount = (static_cast<size_t>(static_cast<float>(indexCount) * ratio) / 3) * 3;
+    std::vector<unsigned int> outIndices(indexCount);
+    float resultError = 0.f;
+
+    size_t outCount;
+    if (hasUV) {
+        float attrWeights[2] = {0.2f, 0.2f};
+        outCount = meshopt_simplifyWithAttributes(
+                outIndices.data(), indices, indexCount,
+                positions.data(), vertexCount, sizeof(float) * 3,
+                uvs.data(), sizeof(float) * 2, attrWeights, 2,
+                nullptr, targetIndexCount, error, 0, &resultError);
+    } else {
+        outCount = meshopt_simplify(
+                outIndices.data(), indices, indexCount,
+                positions.data(), vertexCount, sizeof(float) * 3,
+                targetIndexCount, error, 0, &resultError);
+    }
+    outIndices.resize(outCount);
+
+    struct Vertex {
+        float px, py, pz, u, v;
+    };
+    std::vector<Vertex> vertices(vertexCount);
+    for (size_t i = 0; i < vertexCount; ++i) {
+        vertices[i] = {
+                pos->getX(i), pos->getY(i), pos->getZ(i),
+                hasUV ? uv->getX(i) : 0.f,
+                hasUV ? uv->getY(i) : 0.f};
+    }
+
+    std::vector<unsigned int> remap(vertexCount);
+    size_t newVertexCount = meshopt_generateVertexRemap(
+            remap.data(), outIndices.data(), outCount,
+            vertices.data(), vertexCount, sizeof(Vertex));
+    meshopt_remapIndexBuffer(outIndices.data(), outIndices.data(), outCount, remap.data());
+    std::vector<Vertex> newVerts(newVertexCount);
+    meshopt_remapVertexBuffer(newVerts.data(), vertices.data(), vertexCount,
+                              sizeof(Vertex), remap.data());
+
+    std::vector<float> outPos, outUV;
+    outPos.reserve(newVertexCount * 3);
+    outUV.reserve(newVertexCount * 2);
+    for (const auto& v : newVerts) {
+        outPos.insert(outPos.end(), {v.px, v.py, v.pz});
+        outUV.insert(outUV.end(), {v.u, v.v});
+    }
+
+    auto out = BufferGeometry::create();
+    out->setAttribute("position", FloatBufferAttribute::create(outPos, 3));
+    if (hasUV) out->setAttribute("uv", FloatBufferAttribute::create(outUV, 2));
+    out->setIndex(outIndices);
+    return out;
+}
+
+#endif

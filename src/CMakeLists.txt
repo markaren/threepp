@@ -737,6 +737,18 @@ if (THREEPP_WITH_FBX)
     target_compile_definitions(threepp PRIVATE THREEPP_WITH_FBX)
 endif ()
 
+if (THREEPP_WITH_MESHOPT)
+    target_sources(threepp PRIVATE
+        "external/meshoptimizer/allocator.cpp"
+        "external/meshoptimizer/indexgenerator.cpp"
+        "external/meshoptimizer/simplifier.cpp"
+    )
+    target_include_directories(threepp PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/meshoptimizer>"
+    )
+    target_compile_definitions(threepp PUBLIC THREEPP_WITH_MESHOPT=1)
+endif ()
+
 if (NOT DEFINED EMSCRIPTEN)
 
     target_include_directories(threepp
