@@ -507,6 +507,10 @@ namespace threepp {
                 bool selfCollision = false,
                 const std::string& cacheKey = "");
 
+        // Destroy a soft body. Releases the PhysX actor + GPU/pinned resources and
+        // — when the body was created via the Mesh& overload — also removes the
+        // visual Mesh from its parent in the scene graph (single-call cleanup).
+        // Soft bodies created from a bare BufferGeometry leave the scene graph alone.
         void removeSoftBody(SoftBody* softBody);
 
     private:

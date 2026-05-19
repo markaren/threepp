@@ -368,6 +368,12 @@ namespace threepp {
         [[nodiscard]] ::physx::PxDeformableVolume* actor() const { return volume_; }
         [[nodiscard]] const std::shared_ptr<BufferGeometry>& visualGeometry() const { return visualGeometry_; }
 
+        // Non-owning back-pointer to the visual Mesh, set by PhysxWorld::addSoftBody(Mesh&).
+        // Null when the soft body was created from a bare BufferGeometry overload.
+        // PhysxWorld::removeSoftBody() uses it to detach the Mesh from its parent so
+        // a single call cleans up both physics and scene graph.
+        [[nodiscard]] Mesh* mesh() const { return mesh_; }
+
         // Compute normals each frame after the deformation is applied; default on.
         // Disable when the caller updates normals separately (or doesn't need them).
         void setRecomputeNormals(bool enabled) { recomputeNormals_ = enabled; }
@@ -379,6 +385,7 @@ namespace threepp {
         ::physx::PxVec4* positionsInvMass_ = nullptr;
         ::physx::PxU32 nbCollVerts_ = 0;
         std::shared_ptr<BufferGeometry> visualGeometry_;
+        Mesh* mesh_ = nullptr;
         bool useDirectMapping_ = true;
         std::vector<TetBind> bindings_;
         bool recomputeNormals_ = true;
@@ -629,7 +636,9 @@ namespace threepp {
         mesh.scale.set(1, 1, 1);
 
         if (cacheKey.empty()) {
-            return addSoftBody(bakedGeom, material, voxelResolution, solverIterations, selfCollision);
+            SoftBody* raw = addSoftBody(bakedGeom, material, voxelResolution, solverIterations, selfCollision);
+            raw->mesh_ = &mesh;
+            return raw;
         }
 
         // --- Cached path: cook from local geometry, apply world transform ---
@@ -731,12 +740,16 @@ namespace threepp {
         }
 
         SoftBody* raw = sb.get();
+        raw->mesh_ = &mesh;
         softBodies_.push_back(std::move(sb));
         return raw;
     }
 
     inline void PhysxWorld::removeSoftBody(SoftBody* softBody) {
         if (!softBody) return;
+        if (auto* m = softBody->mesh(); m && m->parent) {
+            m->removeFromParent();
+        }
         if (auto* a = softBody->actor()) {
             scene_->removeActor(*a);
         }

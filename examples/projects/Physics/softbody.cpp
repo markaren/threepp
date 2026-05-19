@@ -146,6 +146,7 @@ int main() {
 
     Clock clock;
 
+    TaskManager tm;
     canvas.animate([&] {
         const float realDt = clock.getDelta();
         fpsAccum += realDt;
@@ -163,9 +164,16 @@ int main() {
             Vector3 spawn;
             spawn.copy(camera->position).addScaledVector(dir, 5.f);
             spawn.y = std::max(spawn.y, 5.f);
-            spawnSoftBody(world, *scene, sbMaterial, spawn, sbPhysicsMat, rng);
+            auto ptr = spawnSoftBody(world, *scene, sbMaterial, spawn, sbPhysicsMat, rng);
+
+            // removeSoftBody also detaches the Mesh from the scene graph because
+            // the body was created via the Mesh& overload.
+            tm.invokeLater([&world, ptr] {
+                world.removeSoftBody(ptr);
+            }, 2);
         }
 
+        tm.handleTasks();
         world.step(realDt);
         debugRenderer.update();
 
