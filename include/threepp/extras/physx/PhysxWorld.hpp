@@ -20,9 +20,16 @@
 #include <functional>
 #include <memory>
 #include <stdexcept>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace threepp {
+
+    struct SoftBodyTetBind {
+        ::physx::PxU32 i0, i1, i2, i3;
+        float w0, w1, w2, w3;
+    };
 
     class SoftBody;// defined in PhysxSoftBody.hpp, included at the bottom of this file
 
@@ -128,6 +135,10 @@ namespace threepp {
             // their destructor releases the PxDeformableVolume actor and frees pinned
             // host memory through the CUDA context.
             softBodies_.clear();
+            for (auto& [_, entry] : cookCache_) {
+                if (entry.mesh) entry.mesh->release();
+            }
+            cookCache_.clear();
             if (scene_) {
                 scene_->release();
                 scene_ = nullptr;
@@ -484,12 +495,17 @@ namespace threepp {
         // Convenience: bake mesh.matrixWorld into the geometry positions, reset
         // the mesh's local transform to identity, then add as a soft body. Useful
         // for typical scene-graph workflows (`mesh->position.set(...)` then add).
+        // When cacheKey is non-empty, the expensive tet mesh cooking and per-vertex
+        // binding computation are cached and reused for subsequent calls with the
+        // same key (e.g. fish species ID). Only the first spawn of each key pays
+        // the full cook cost.
         SoftBody* addSoftBody(
                 Mesh& mesh,
                 ::physx::PxDeformableVolumeMaterial* material = nullptr,
                 int voxelResolution = 10,
                 unsigned solverIterations = 20,
-                bool selfCollision = false);
+                bool selfCollision = false,
+                const std::string& cacheKey = "");
 
         void removeSoftBody(SoftBody* softBody);
 
@@ -593,6 +609,12 @@ namespace threepp {
         ::physx::PxCudaContextManager* cuda_ = nullptr;
         CUstream cudaCopyStream_ = nullptr;
         ::physx::PxDeformableVolumeMaterial* defaultSoftBodyMat_ = nullptr;
+        struct CookCacheEntry {
+            ::physx::PxDeformableVolumeMesh* mesh = nullptr;
+            std::vector<SoftBodyTetBind> bindings;
+            bool hasBindings = false;
+        };
+        std::unordered_map<std::string, CookCacheEntry> cookCache_;
         std::vector<std::unique_ptr<SoftBody>> softBodies_;
         float accumulator_ = 0.f;
 

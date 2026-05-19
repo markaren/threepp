@@ -257,15 +257,15 @@ namespace threepp {
     class SoftBody {
 
     public:
-        struct TetBind {
-            ::physx::PxU32 i0, i1, i2, i3;
-            float w0, w1, w2, w3;
-        };
+        using TetBind = SoftBodyTetBind;
 
         // Constructor — internal use; prefer PhysxWorld::addSoftBody.
+        // When cachedBindings is non-null, the expensive per-vertex binding
+        // computation is skipped and the cached values are used directly.
         SoftBody(::physx::PxDeformableVolume* volume,
                  ::physx::PxCudaContextManager* cuda,
-                 const std::shared_ptr<BufferGeometry>& visualGeometry)
+                 const std::shared_ptr<BufferGeometry>& visualGeometry,
+                 const std::vector<TetBind>* cachedBindings = nullptr)
             : volume_(volume), cuda_(cuda), visualGeometry_(visualGeometry) {
 
             using namespace ::physx;
@@ -273,8 +273,6 @@ namespace threepp {
             nbCollVerts_ = tetMesh->getNbVertices();
             positionsInvMass_ = PX_EXT_PINNED_MEMORY_ALLOC(PxVec4, *cuda_, nbCollVerts_);
 
-            // Need an initial GPU->CPU sync so we can establish the binding before the
-            // first sim step (visual geom otherwise stays at rest pose of the cooked tet).
             pullDeformedPositionsSync();
 
             auto vPosAttr = visualGeometry_->getAttribute<float>("position");
@@ -285,7 +283,11 @@ namespace threepp {
             useDirectMapping_ = (visualVerts == static_cast<size_t>(nbCollVerts_));
 
             if (!useDirectMapping_) {
-                buildBindings();
+                if (cachedBindings) {
+                    bindings_ = *cachedBindings;
+                } else {
+                    buildBindings();
+                }
             }
             applyDeformedPositions();
             visualGeometry_->computeVertexNormals();
@@ -390,7 +392,14 @@ namespace threepp {
             auto vPosAttr = visualGeometry_->getAttribute<float>("position");
             if (!vPosAttr) return;
             auto* tetMesh = volume_->getCollisionMesh();
-            const PxVec3* verts = tetMesh->getVertices();
+            // Tet positions come from positionsInvMass_ (synced just above), NOT
+            // tetMesh->getVertices(). getVertices() is the cooked rest pose in the
+            // mesh's local space; when the volume is reused from PhysxWorld's cook
+            // cache that local space differs from the world-space visual geometry,
+            // so every barycentric containment test would miss. positionsInvMass_
+            // is the live collision pose in the same world space as the visual
+            // geometry — and the same array applyDeformedPositions() skins against.
+            const PxVec4* verts = positionsInvMass_;
             const auto* tets = static_cast<const PxU32*>(tetMesh->getTetrahedrons());
             const PxU32 nbTets = tetMesh->getNbTetrahedrons();
             const size_t vVerts = vPosAttr->count();
@@ -409,7 +418,8 @@ namespace threepp {
                 PxU32 i1 = tets[ti * 4 + 1];
                 PxU32 i2 = tets[ti * 4 + 2];
                 PxU32 i3 = tets[ti * 4 + 3];
-                PxVec3 p0 = verts[i0], p1 = verts[i1], p2 = verts[i2], p3 = verts[i3];
+                PxVec3 p0 = verts[i0].getXYZ(), p1 = verts[i1].getXYZ(),
+                       p2 = verts[i2].getXYZ(), p3 = verts[i3].getXYZ();
                 PxVec3 mn(std::min({p0.x, p1.x, p2.x, p3.x}),
                           std::min({p0.y, p1.y, p2.y, p3.y}),
                           std::min({p0.z, p1.z, p2.z, p3.z}));
@@ -580,17 +590,17 @@ namespace threepp {
             ::physx::PxDeformableVolumeMaterial* material,
             int voxelResolution,
             unsigned solverIterations,
-            bool selfCollision) {
-        // Bake mesh.matrixWorld into the geometry, then reset the mesh's transform.
-        // After this, the geometry's positions are world-space and PhysX writes them
-        // back in place each frame; the mesh's local transform must stay identity.
+            bool selfCollision,
+            const std::string& cacheKey) {
+        using namespace ::physx;
         auto geom = mesh.geometry();
         if (!geom) throw std::runtime_error("PhysxWorld::addSoftBody(Mesh): no geometry");
         mesh.updateMatrixWorld();
-        // Clone the geometry's position attribute so we don't mutate any shared
-        // template (e.g. a geometry shared across instances).
         auto* posAttr = geom->getAttribute<float>("position");
         if (!posAttr) throw std::runtime_error("PhysxWorld::addSoftBody(Mesh): geometry has no position attribute");
+
+        // Bake mesh.matrixWorld into a visual geometry clone; reset mesh transform
+        // to identity. PhysX writes world-space positions back each frame.
         auto bakedGeom = BufferGeometry::create();
         std::vector<float> bakedPos(posAttr->array());
         Matrix4 mw = *mesh.matrixWorld;
@@ -617,7 +627,112 @@ namespace threepp {
         mesh.position.set(0, 0, 0);
         mesh.quaternion.set(0, 0, 0, 1);
         mesh.scale.set(1, 1, 1);
-        return addSoftBody(bakedGeom, material, voxelResolution, solverIterations, selfCollision);
+
+        if (cacheKey.empty()) {
+            return addSoftBody(bakedGeom, material, voxelResolution, solverIterations, selfCollision);
+        }
+
+        // --- Cached path: cook from local geometry, apply world transform ---
+        if (!cuda_) throw std::runtime_error("PhysxWorld::addSoftBody: enableGpuDynamics is false");
+        if (!material) material = defaultSoftBodyMaterial();
+
+        Vector3 wPos, wScl;
+        Quaternion wRot;
+        mw.decompose(wPos, wRot, wScl);
+        PxTransform spawnTf(toPxVec3(wPos), toPxQuat(wRot));
+
+        std::string fullKey = cacheKey + "_v" + std::to_string(voxelResolution);
+        CookCacheEntry* entry = nullptr;
+        PxDeformableVolumeMesh* cookedMesh;
+
+        auto it = cookCache_.find(fullKey);
+        if (it != cookCache_.end()) {
+            entry = &it->second;
+            cookedMesh = entry->mesh;
+        } else {
+            // Cook from LOCAL geometry (before world baking). This is the expensive
+            // part that the cache eliminates on subsequent spawns.
+            PxArray<PxVec3> triVerts;
+            PxArray<PxU32> triIndices;
+            const auto count = static_cast<PxU32>(posAttr->count());
+            triVerts.resize(count);
+            for (PxU32 i = 0; i < count; ++i) {
+                triVerts[i] = PxVec3(posAttr->getX(i), posAttr->getY(i), posAttr->getZ(i));
+            }
+            const auto* idx = geom->getIndex();
+            if (idx) {
+                const auto n = static_cast<PxU32>(idx->count());
+                triIndices.resize(n);
+                for (PxU32 i = 0; i < n; ++i) triIndices[i] = idx->getX(i);
+            } else {
+                triIndices.reserve(count);
+                for (PxU32 i = 0; i < count; ++i) triIndices.pushBack(i);
+            }
+
+            if (voxelResolution > 0) {
+                PxRemeshingExt::limitMaxEdgeLength(triIndices, triVerts, 1.0f);
+                PxTetMaker::remeshTriangleMesh(triVerts, triIndices,
+                                               static_cast<PxU32>(voxelResolution), triVerts, triIndices);
+            }
+
+            PxCookingParams params(physics_->getTolerancesScale());
+            params.meshWeldTolerance = 0.001f;
+            params.meshPreprocessParams = PxMeshPreprocessingFlags(PxMeshPreprocessingFlag::eWELD_VERTICES);
+            params.buildTriangleAdjacencies = false;
+            params.buildGPUData = true;
+            const int res = (voxelResolution > 0) ? voxelResolution : 6;
+            cookedMesh = cookDeformableVolumeMesh(*physics_, params, triVerts, triIndices,
+                                                  static_cast<unsigned>(res));
+            if (!cookedMesh) throw std::runtime_error("PhysxWorld::addSoftBody: failed to cook deformable volume mesh");
+
+            cookCache_[fullKey] = {cookedMesh, {}, false};
+            entry = &cookCache_[fullKey];
+        }
+
+        // Instantiate a new deformable volume from the (possibly cached) mesh.
+        PxDeformableVolume* volume = physics_->createDeformableVolume(*cuda_);
+        const PxShapeFlags shapeFlags = PxShapeFlag::eVISUALIZATION | PxShapeFlag::eSIMULATION_SHAPE;
+        PxTetrahedronMeshGeometry tetGeom(cookedMesh->getCollisionMesh());
+        PxShape* shape = physics_->createShape(tetGeom, &material, 1, true, shapeFlags);
+        volume->attachShape(*shape);
+        volume->attachSimulationMesh(*cookedMesh->getSimulationMesh(), *cookedMesh->getDeformableVolumeAuxData());
+        shape->release();
+
+        PxVec4 *simPos, *simVel, *collPos, *restPos;
+        PxDeformableVolumeExt::allocateAndInitializeHostMirror(
+                *volume, cuda_, simPos, simVel, collPos, restPos);
+        constexpr PxReal maxInvMassRatio = 50.f;
+        constexpr PxReal density = 1.f;
+        PxDeformableVolumeExt::transform(*volume, spawnTf, 1.f, simPos, simVel, collPos, restPos);
+        PxDeformableVolumeExt::updateMass(*volume, density, maxInvMassRatio, simPos);
+        PxDeformableVolumeExt::copyToDevice(*volume, PxDeformableVolumeDataFlag::eALL,
+                                            simPos, simVel, collPos, restPos);
+        PX_EXT_PINNED_MEMORY_FREE(*cuda_, simPos);
+        PX_EXT_PINNED_MEMORY_FREE(*cuda_, simVel);
+        PX_EXT_PINNED_MEMORY_FREE(*cuda_, collPos);
+        PX_EXT_PINNED_MEMORY_FREE(*cuda_, restPos);
+
+        volume->setDeformableBodyFlag(PxDeformableBodyFlag::eDISABLE_SELF_COLLISION, !selfCollision);
+        volume->setSolverIterationCounts(solverIterations);
+        scene_->addActor(*volume);
+
+        // Build or reuse bindings. Bindings are barycentric weights + tet indices,
+        // invariant under rigid transforms, so the set built for the first spawn of
+        // this cooked mesh is valid for every later spawn regardless of placement.
+        const std::vector<SoftBodyTetBind>* cachedBindings = nullptr;
+        if (entry->hasBindings) {
+            cachedBindings = &entry->bindings;
+        }
+
+        auto sb = std::make_unique<SoftBody>(volume, cuda_, bakedGeom, cachedBindings);
+        if (!entry->hasBindings && !sb->useDirectMapping_) {
+            entry->bindings = sb->bindings_;
+            entry->hasBindings = true;
+        }
+
+        SoftBody* raw = sb.get();
+        softBodies_.push_back(std::move(sb));
+        return raw;
     }
 
     inline void PhysxWorld::removeSoftBody(SoftBody* softBody) {
