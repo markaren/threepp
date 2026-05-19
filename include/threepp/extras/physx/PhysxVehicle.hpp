@@ -95,6 +95,20 @@ namespace threepp {
             // Longitudinal stiffness (N / unit slip ratio). Determines how quickly
             // the tire responds to throttle/brake. Pre-friction-cap value.
             float longitudinalStiffness = 50'000.f;
+
+            // Sticky-tire engagement. Once the tire's slip speed has stayed below
+            // `stickySpeedThreshold` for `stickyTimeThreshold` seconds (without a
+            // drive torque applied), a velocity constraint pins the contact patch
+            // to the road, killing residual drift that the slip-based tire force
+            // can't fully resolve at near-zero speeds. PhysX's stock defaults
+            // (time = 1.0 s, lateral damping = 0.1) let the car visibly creep
+            // forward and slide sideways while stopping — tighter values here
+            // make stops decisive without hurting normal driving (sticky only
+            // engages near 0 m/s).
+            float stickySpeedThreshold = 0.2f;     // m/s; same as PhysX default
+            float stickyTimeThreshold = 0.1f;      // s;   PhysX default is 1.0
+            float stickyDampingLongitudinal = 1.0f;// same as PhysX default
+            float stickyDampingLateral = 1.0f;     // PhysX default is 0.1
         };
 
         enum class Gear : int { Reverse = 0,
@@ -365,6 +379,15 @@ namespace threepp {
             simContext_.physxScene = &world_->scene();
             simContext_.physxUnitCylinderSweepMesh = nullptr;// raycast mode -> not needed
             simContext_.physxActorUpdateMode = ::physx::vehicle2::PxVehiclePhysXActorUpdateMode::eAPPLY_VELOCITY;
+
+            // Override the stock sticky-tire defaults — see Settings docs above.
+            auto& sticky = simContext_.tireStickyParams;
+            sticky.stickyParams[PxVehicleTireDirectionModes::eLONGITUDINAL].thresholdSpeed = settings_.stickySpeedThreshold;
+            sticky.stickyParams[PxVehicleTireDirectionModes::eLONGITUDINAL].thresholdTime = settings_.stickyTimeThreshold;
+            sticky.stickyParams[PxVehicleTireDirectionModes::eLONGITUDINAL].damping = settings_.stickyDampingLongitudinal;
+            sticky.stickyParams[PxVehicleTireDirectionModes::eLATERAL].thresholdSpeed = settings_.stickySpeedThreshold;
+            sticky.stickyParams[PxVehicleTireDirectionModes::eLATERAL].thresholdTime = settings_.stickyTimeThreshold;
+            sticky.stickyParams[PxVehicleTireDirectionModes::eLATERAL].damping = settings_.stickyDampingLateral;
         }
 
         void createPhysxActor() {
