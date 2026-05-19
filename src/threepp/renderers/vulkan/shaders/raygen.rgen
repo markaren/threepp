@@ -108,6 +108,36 @@ struct Payload {
                           //  drive reproject, this drives the GI target function.
 };
 
+// ── Specialization constants ──────────────────────────────────────────────
+// Pipeline-time feature gates. Compiled into the SPIR-V at vkCreate...; the
+// optimizer DCEs the unreachable branch entirely. Host picks the right
+// variant (see rtVariants_) per frame based on which features are enabled —
+// no runtime branch on motionFlags, no register pressure for the dead path.
+// constant_id values are stable: don't renumber, or stored caches go stale.
+// Raygen's namespace is independent of chit's; both can start at 0.
+layout(constant_id = 0) const bool kHybridEnabled = false;
+// Scene-feature bitmask — set at first-frame pipeline build by the host
+// (currentSceneFeatures() in VulkanRenderer.cpp). Bit assignments match
+// chit's kSceneFeatures one-for-one:
+//   1 = kSceneFeatHasGlass
+//   2 = kSceneFeatHasClearcoat
+//   4 = kSceneFeatHasIridescence
+//   8 = kSceneFeatHasSheen
+// Used by the bounce-0-on-raster gbuf-shade path for the same DCE that chit
+// gets — caustic gather / clearcoat lobe / iridescence Fresnel mix / sheen
+// NEE terms vanish from the raygen SPV when the scene doesn't use them.
+layout(constant_id = 1) const uint kSceneFeatures = 0u;
+const uint kSceneFeatHasGlass       = 1u;
+const uint kSceneFeatHasClearcoat   = 2u;
+const uint kSceneFeatHasIridescence = 4u;
+const uint kSceneFeatHasSheen       = 8u;
+// (constant_id = 2 was the bounce-0-on-raster gate — removed because the
+// gbuf-shade primary path proved slower than the traced primary on hybrid +
+// SER hardware; warp divergence at silhouette/glass/water boundaries plus
+// the lost SER coherence at primary cost more than the BVH-traversal save.
+// Reserved here to avoid renumbering if a different raygen spec constant
+// lands in the future.)
+
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
 // Binding 1 (outImage, rgba8) is written by denoise.comp after the RT pass —
 // raygen no longer touches it. The descriptor remains in set 0 with a
@@ -177,7 +207,10 @@ layout(set = 0, binding = 36, rgba8) uniform readonly  image2D prevPrimaryAlbedo
 layout(set = 0, binding = 37, rgba8) uniform writeonly image2D primaryAlbedoSnapshotImage;
 
 // Hybrid raster G-buffer attachments. Always bound (allocated at startup);
-// raygen samples them only when (pc.motionFlags & 8u) != 0 (hybrid mode).
+// raygen samples them only when `kHybridEnabled` is true. That branch is a
+// specialization constant so the dead code is DCEd in the non-hybrid pipeline
+// variant — descriptor set still lists these slots, but the SPV never reads
+// from them in that variant.
 // Hybrid uses the motion vector for reproject and the ids texture for the
 // sky early-out; normal/depth/uv are bound but currently unused (they were
 // wired for the abandoned in-raygen skip-primary path). Sampler is
@@ -201,8 +234,7 @@ layout(set = 0, binding = 8) uniform sampler2D albedoMaps[kMaxMaterialTextures];
 layout(set = 0, binding = 18) uniform sampler2D envCdfTex; // conditional CDF
 layout(set = 0, binding = 19) uniform sampler2D envMargTex;// marginal CDF
 
-const float PI     = 3.14159265358979;
-const float TWO_PI = 6.28318530717958;
+// PI / TWO_PI live in shade_common.glsl (included below, after the bindings).
 
 // ─── Fog (homogeneous participating media) ─────────────────────────────────
 // Bindings 5/6/14/17 are also bound to closest_hit; they're re-staged into
@@ -262,6 +294,11 @@ layout(set = 0, binding = 14, scalar) readonly buffer EmissiveTriBuf {
     EmTri emissiveTris[];
 };
 
+// Photon-map storage (written by photon_emit.rgen, gathered by the hybrid
+// bounce-0-on-raster path via gatherCaustics() — same bindings the chit reads).
+layout(set = 0, binding = 15, std430) readonly buffer PhotonCountBuf { uint photonCounts[]; };
+layout(set = 0, binding = 16, scalar) readonly buffer PhotonDataBuf  { vec3 photonData[];   };
+
 // Per-instance moved-bitmask: bit i of meshMovedBits[i>>5] is set when TLAS
 // instance i had any kind of change this frame (xfm, material, bones, displ).
 // Sized at scene rebuild to cover every visible instance.
@@ -277,11 +314,10 @@ layout(set = 0, binding = 17) uniform FogUbo {
     float waterSurfaceY;
 } fog;
 
-bool fogEnabled() { return fog.enabled > 0.5; }
-vec3 fogTransmittance(float dist) {
-    const float d = clamp(dist, 0.0, 1e6);
-    return exp(-fog.sigmaT * d);
-}
+// fogEnabled() / fogTransmittance() live in shade_common.glsl (included
+// below, after main()'s prelude — but only AFTER the binding declarations
+// they reference). The forward-decl block in shade_common.glsl handles
+// the call sites in this file that come before #include.
 
 // Effective participating-medium length along a ray segment.
 //  * Unbounded medium (waterSurfaceY ≥ 1e20): full segment, except env miss
@@ -386,6 +422,13 @@ layout(location = 0) rayPayloadEXT Payload payload;
 // shadow miss sets this to 1.0, shadow_anyhit multiplies it down through glass.
 layout(location = 1) rayPayloadEXT float shadowVisibility;
 
+// Shared BSDF / NEE / sampling helpers — same source the chit uses.
+// References envTex, fog, envCdf/Marg, photonCounts/Data, lights,
+// emissiveTris, topAS, shadowVisibility, pc — all declared above.
+// Provides: PI, TWO_PI, pcgNext, urand, lum3, BSDF math, env CDF,
+// VNDF sampling, sampleBsdf, envNeeOpaque, analyticNeeOpaque, etc.
+#include "shade_common.glsl"
+
 // kMaxBounces is set per-frame from `pc.maxBounces` at the top of main() — the
 // host's setMaxBounces(int) API drives it. Default is 4 (the previous compile-
 // time value). Diffuse/glossy adaptively cap further at 3/4 below, so the
@@ -435,16 +478,7 @@ float blueNoise(uvec2 px, uint frame, uint salt) {
     return texture(blueNoiseTex, uv).r;
 }
 
-// PCG XSH-RR — same generator as closest_hit so the two share a stream.
-uint pcgNext(inout uint state) {
-    state = state * 747796405u + 2891336453u;
-    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-    return (word >> 22u) ^ word;
-}
-
-float urand(inout uint state) {
-    return float(pcgNext(state)) / 4294967296.0;
-}
+// pcgNext / urand live in shade_common.glsl (same source the chit uses).
 
 // Swapchain is B8G8R8A8_UNORM but presented under SRGB_NONLINEAR — display
 // expects sRGB-encoded values. closest_hit returns linear HDR radiance, so
@@ -697,10 +731,10 @@ vec3 volumeNeeSingle(vec3 x, vec3 wi, float g, inout uint seed) {
     return nee;
 }
 
-// shade_primary.glsl was the in-raygen primary shader for hybrid mode; it had
-// subtle BSDF/sampling divergences from chit and is no longer used. Hybrid
-// now traces a primary ray and lets chit shade it (see hybridOn block at the
-// top of main()). Header file kept on disk for reference but not included.
+// shade_primary.glsl was the prior in-raygen primary shader; it had subtle
+// divergences from chit. Replaced by the bounce-0-on-raster path further
+// down in main() which calls into shade_common.glsl (included near the top
+// of this file, after the bindings + push constant + payload declarations).
 
 void main() {
     const uint spp = max(pc.samplesPerPixel, 1u);
@@ -748,7 +782,17 @@ void main() {
     // is gated off — confirmed empirically (2026-05-06) that Monte Carlo
     // primary produces shake regardless of motion-vec accuracy. Raster owns
     // primary visibility (raster jitter on for AA).
-    const bool hybridOn = (pc.motionFlags & 8u) != 0u;
+    // Pulled from a specialization constant at pipeline-compile time, not
+    // a per-frame push-constant read. The dead branch is DCEd from the SPV.
+    const bool hybridOn = kHybridEnabled;
+
+    // Debug timing knob. When set, the step + spp loops break out
+    // immediately after the step-0 primary traceRayEXT and main() returns
+    // before the post-loop history / accumulator writes. pathTraceMs then
+    // reflects (primary trace + minimal payload setup + dispatch overhead),
+    // letting us size the bounce-0-on-raster opportunity. Image goes black
+    // while on; not meant for gameplay use.
+    const bool measurePrimaryTraceOnly = (pc.motionFlags & 128u) != 0u;
 
     // Hybrid primary path: raster G-buffer determines visibility, but we let
     // chit handle primary shading by tracing a primary ray from camera origin
@@ -1101,6 +1145,7 @@ void main() {
             primaryViaHybrid = true;
         }
 
+
         // No OpaqueEXT — alpha-test materials need the any-hit shader to fire.
         // Materials with alphaCutoff <= 0 short-circuit in the any-hit shader.
         if (!primaryViaHybrid) {
@@ -1139,6 +1184,13 @@ void main() {
                         origin, tmin, dir, 10000.0, 0);
 #endif
         }
+
+        // Measurement gate: exit the step loop immediately after step-0
+        // primary trace so pathTraceMs isolates the primary-trace cost.
+        // Placed AFTER the trace so the actual traversal+chit work runs
+        // and is included in the timing. The outer spp loop continues so
+        // silhouette MSAA inflation is reflected in the measurement.
+        if (measurePrimaryTraceOnly && step == 0) break;
 
         // ─── Unbiased volumetric path step ──────────────────────────────────
         // Analog free-flight sampling. Given current segment of length tSurf
@@ -1352,6 +1404,13 @@ void main() {
         const float lumS = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
         lum2Sum += lumS * lumS;
     }// end outer spp loop
+
+    // Measurement-mode early-out: skip reproject + accumulator / gbuf /
+    // albedo / motion-mat writes. pathTraceMs from the surrounding
+    // timestamp pair already includes only the spp-loop body (primary
+    // trace) above; downstream passes operate on stale data which is fine
+    // for a few-frame timing read.
+    if (measurePrimaryTraceOnly) return;
 
     // ── history tap (mirrors WGPU PT design) ─────────────────────────────
     // Per-pixel motion gating, matching WGPU's primaryMoved logic:

@@ -213,6 +213,20 @@ namespace threepp {
         void setHybridDebugView(int view);
         [[nodiscard]] int hybridDebugView() const;
 
+        // Debug timing knob: when on, raygen exits the bounce loop and the
+        // spp loop immediately after the step-0 primary traceRayEXT (no NEE,
+        // no env, no RIS / GI, no bounce continuation, no accumulator write).
+        // `lastFrameTimings().pathTraceMs` then measures roughly the primary-
+        // trace + dispatch overhead. Compare against the same field with the
+        // toggle off to estimate what fraction of PT time the primary trace
+        // accounts for — i.e. the upper bound on savings if bounce 0 were
+        // shaded from the raster G-buffer instead of traced. The image goes
+        // black while on; intended for a few-frame measurement, not gameplay.
+        // Default off.
+        void setMeasurePrimaryTraceOnly(bool enabled);
+        [[nodiscard]] bool measurePrimaryTraceOnly() const;
+
+
         // Per-frame timings (milliseconds). CPU values come from
         // std::chrono around the host-side hot path of the most recent
         // render() call. GPU values come from VkQueryPool timestamps and

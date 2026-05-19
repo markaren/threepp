@@ -743,6 +743,14 @@ namespace threepp {
         // from the world-space photon grid until it's overwritten by the
         // next emit pass).
         bool     sceneHasGlass_ = false;
+        // Scene-feature flags fed into the chit's kSceneFeatures spec constant
+        // at first-frame pipeline build (see currentSceneFeatures()). When a
+        // feature is absent in the scene's materials, the corresponding chit
+        // branch (iridescence Fresnel mix / clearcoat lobe / sheen NEE) is
+        // DCEd out of the SPV entirely. Detected once per matDescs rebuild.
+        bool     sceneHasClearcoat_ = false;
+        bool     sceneHasIridescence_ = false;
+        bool     sceneHasSheen_ = false;
         // Per-frame frustum-cull result: any glass-flagged entry visible?
         // Resolved by cullEntriesAgainstFrustum() as a side effect of the
         // pass that tags every entry's MeshEntry::inFrustum.
@@ -830,13 +838,17 @@ namespace threepp {
         VkDescriptorSetLayout rtDsLayout = VK_NULL_HANDLE;
         VkPipelineLayout      rtPipelineLayout = VK_NULL_HANDLE;
 
-        // SER + fallback RT pipelines are both built at init when the device
-        // supports VK_NV_ray_tracing_invocation_reorder. setRestirGIEnabled
-        // picks which is active by index (0=fallback, 1=SER) — runtime
-        // rebuild was attempted but vkCreateRayTracingPipelinesKHR hangs on
-        // a second call against the same pipeline layout on NVIDIA drivers,
-        // so we eat the extra ~100ms one-time init cost instead. Devices
-        // without SER only populate index 0.
+        // RT pipeline variants. Cross product of (SER on/off) × (hybrid
+        // raygen spec constant) × (restirDI chit spec constant). Up to 8
+        // variants; SER ones only built on supported devices. All variants
+        // are built at first-frame pipeline build — vkCreateRayTracingPipelinesKHR
+        // hangs on a second call against the same pipeline layout on NVIDIA
+        // drivers, so we eat the per-variant one-time cost instead of
+        // rebuilding on toggle. setHybridEnabled / setRestirDIEnabled are
+        // zero-cost (just change which slot activeRtVariant picks).
+        //
+        // Index layout: variantIndex(useSer, hybrid, restirDI) =
+        //     (useSer ? 4 : 0) + (restirDI ? 2 : 0) + (hybrid ? 1 : 0)
         struct RtPipelineVariant {
             VkPipeline pipeline = VK_NULL_HANDLE;
             Buffer     sbtBuffer{};
@@ -844,15 +856,20 @@ namespace threepp {
             VkStridedDeviceAddressRegionKHR missRegion{};
             VkStridedDeviceAddressRegionKHR hitRegion{};
         };
-        std::array<RtPipelineVariant, 2> rtVariants_{};
+        std::array<RtPipelineVariant, 8> rtVariants_{};
+        static uint32_t rtVariantIndex(bool useSer, bool hybrid, bool restirDI) {
+            return (useSer ? 4u : 0u) + (restirDI ? 2u : 0u) + (hybrid ? 1u : 0u);
+        }
         // Convenience accessors — read which variant is active from
         // shouldUseSerRaygen() (which folds restirGIEnabled_ + driver
         // support into a single bool).
         const RtPipelineVariant& activeRtVariant() const {
-            return rtVariants_[shouldUseSerRaygen() ? 1u : 0u];
+            return rtVariants_[rtVariantIndex(shouldUseSerRaygen(), hybridEnabled_,
+                                              restirDIEnabled_)];
         }
         RtPipelineVariant& activeRtVariant() {
-            return rtVariants_[shouldUseSerRaygen() ? 1u : 0u];
+            return rtVariants_[rtVariantIndex(shouldUseSerRaygen(), hybridEnabled_,
+                                              restirDIEnabled_)];
         }
         VkStridedDeviceAddressRegionKHR callRegion{};// unused (no callable shaders)
 
@@ -1200,6 +1217,11 @@ namespace threepp {
             Ids    = 4,
         };
         HybridDebugView hybridDebugView_ = HybridDebugView::Off;
+
+        // Debug: gate raygen to exit immediately after step-0 primary trace
+        // so pathTraceMs measures roughly the primary-trace cost. See
+        // VulkanRenderer::setMeasurePrimaryTraceOnly.
+        bool measurePrimaryTraceOnly_ = false;
 
         // Per-frame-in-flight camera UBO (viewInverse + projInverse).
         // 2 mat4 packed back-to-back, std140 layout.
@@ -4300,6 +4322,9 @@ namespace threepp {
                         }
                         for (auto& d : matDescsDirty_) d = true;
                         sceneHasGlass_ = false;
+                        sceneHasClearcoat_ = false;
+                        sceneHasIridescence_ = false;
+                        sceneHasSheen_ = false;
                         glassEntryIndices_.clear();
                         // matDescsCached_ skips overlay entries (raster-only),
                         // so the mat-index lags behind the entry-index whenever
@@ -4310,6 +4335,13 @@ namespace threepp {
                             if (md.transmission > 0.0f) {
                                 sceneHasGlass_ = true;
                                 glassEntryIndices_.push_back(i);
+                            }
+                            if (md.clearcoat > 0.0f) sceneHasClearcoat_ = true;
+                            if (md.iridescence > 0.0f) sceneHasIridescence_ = true;
+                            if (md.sheenRoughness > 0.0f &&
+                                (md.sheenColor[0] > 0.0f || md.sheenColor[1] > 0.0f ||
+                                 md.sheenColor[2] > 0.0f)) {
+                                sceneHasSheen_ = true;
                             }
                         }
                         cacheCullFlags(matDescsCached_);
@@ -4646,6 +4678,9 @@ namespace threepp {
             matDescsCached_ = matDescs;
             for (auto& d : matDescsDirty_) d = false;
             sceneHasGlass_ = false;
+            sceneHasClearcoat_ = false;
+            sceneHasIridescence_ = false;
+            sceneHasSheen_ = false;
             glassEntryIndices_.clear();
             for (size_t i = 0, mi = 0; i < entries.size(); ++i) {
                 if (entries[i].isOverlay) continue;
@@ -4653,6 +4688,13 @@ namespace threepp {
                 if (md.transmission > 0.0f) {
                     sceneHasGlass_ = true;
                     glassEntryIndices_.push_back(i);
+                }
+                if (md.clearcoat > 0.0f) sceneHasClearcoat_ = true;
+                if (md.iridescence > 0.0f) sceneHasIridescence_ = true;
+                if (md.sheenRoughness > 0.0f &&
+                    (md.sheenColor[0] > 0.0f || md.sheenColor[1] > 0.0f ||
+                     md.sheenColor[2] > 0.0f)) {
+                    sceneHasSheen_ = true;
                 }
             }
             cacheCullFlags(matDescs);
@@ -9067,15 +9109,22 @@ namespace threepp {
             bindings[18].binding = 18;
             bindings[18].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[18].descriptorCount = 1;
+            // RAYGEN added so the hybrid bounce-0-on-raster path can call
+            // envNeeOpaque (which calls sampleEnvImportance / envImportancePdf)
+            // for opaque non-silhouette primary pixels.
             bindings[18].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                      VK_SHADER_STAGE_MISS_BIT_KHR;
+                                      VK_SHADER_STAGE_MISS_BIT_KHR |
+                                      VK_SHADER_STAGE_RAYGEN_BIT_KHR;
             // Binding 19 — env marginal luminance CDF (R32F, 1×h). Picks a row
             // (latitude) before sampling the conditional row at that latitude.
             bindings[19].binding = 19;
             bindings[19].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[19].descriptorCount = 1;
+            // RAYGEN added (paired with binding 18) for the bounce-0-on-raster
+            // env CDF NEE path.
             bindings[19].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                                      VK_SHADER_STAGE_MISS_BIT_KHR;
+                                      VK_SHADER_STAGE_MISS_BIT_KHR |
+                                      VK_SHADER_STAGE_RAYGEN_BIT_KHR;
             // Binding 20 — multi-pass à-trous ping-pong intermediates. 2-element
             // storage image array (rgba32f). Pass 0 reads accumImage and writes
             // [0]; pass 1 reads [0] and writes [1]; pass 2 reads [1] and writes
@@ -9299,23 +9348,70 @@ namespace threepp {
             check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &rtPipelineLayout),
                   "vkCreatePipelineLayout(RT)");
 
-            // Build fallback (index 0) always; build SER (index 1) only
-            // when the driver supports it. setRestirGIEnabled then just
-            // picks between the two at zero per-frame cost.
-            buildRtPipelineHandle(/*useSer*/ false);
-            createShaderBindingTable(/*useSer*/ false);
-            if (ctx->rayTracingInvocationReorderSupported()) {
-                buildRtPipelineHandle(/*useSer*/ true);
-                createShaderBindingTable(/*useSer*/ true);
-            }
+            // Pipeline + SBT creation is deferred to buildAllRtPipelines(),
+            // called lazily on first frame once ensureSceneBuilt has detected
+            // scene features (sceneHasGlass_ etc.). That lets us spec-constant
+            // those features into chit without bloating the variant matrix.
         }
 
-        // Pipeline-only build for one variant. Both variants share the
-        // rtDsLayout / rtPipelineLayout — only the raygen SPV differs. Called
-        // once per supported variant at init; never re-invoked, because
-        // vkCreateRayTracingPipelinesKHR hangs on a second call against the
-        // same pipeline layout on NVIDIA drivers.
-        void buildRtPipelineHandle(bool useSer) {
+        // Builds all RT pipeline variants for the current scene-feature set.
+        // Called lazily on first frame after ensureSceneBuilt has detected
+        // sceneHasGlass_ and other scene-fixed properties. Variant axes are
+        // SER × hybrid × restirDI (runtime-toggleable); scene features go in
+        // as a uint bitmask spec constant on chit and don't multiply variants.
+        bool rtPipelinesBuilt_ = false;
+        // First-frame entry. Builds only the variant matching the user's
+        // current toggle state; the other 7 (or 3, non-SER) variants are
+        // built lazily by ensureCurrentRtVariantBuilt() on first toggle.
+        // RT-pipeline compile is expensive (~1-2s each on NVIDIA for
+        // threepp's chit), so eager-building all 8 was costing 10+s. Most
+        // users never toggle, so we pay 1 compile at startup and only the
+        // others if the user actually flips a switch.
+        void buildAllRtPipelines() {
+            const uint32_t sceneFeats = currentSceneFeatures();
+            buildSingleRtVariant(shouldUseSerRaygen(), hybridEnabled_,
+                                 restirDIEnabled_, sceneFeats);
+            rtPipelinesBuilt_ = true;
+        }
+
+        // Lazy build of the active variant. Called every frame (cheap null
+        // check); if the user has toggled into an unbuilt variant slot, fill
+        // it now. vkDeviceWaitIdle before the create call so any in-flight
+        // GPU work using a different variant is drained — NVIDIA's reported
+        // hang on subsequent vkCreateRayTracingPipelinesKHR calls against the
+        // same pipeline layout appears to be tied to overlapping in-flight
+        // work; an explicit drain sidesteps it.
+        void ensureCurrentRtVariantBuilt() {
+            const bool useSer = shouldUseSerRaygen();
+            const bool hyb = hybridEnabled_;
+            const bool rdi = restirDIEnabled_;
+            const uint32_t idx = rtVariantIndex(useSer, hyb, rdi);
+            if (rtVariants_[idx].pipeline != VK_NULL_HANDLE) return;
+            vkDeviceWaitIdle(ctx->device());
+            buildSingleRtVariant(useSer, hyb, rdi, currentSceneFeatures());
+        }
+
+        // Scene-feature bitmask matching chit's kSceneFeatures spec constant.
+        // Bit assignments must stay in lock-step with closest_hit.rchit
+        // (kSceneFeatHasGlass / Clearcoat / Iridescence / Sheen).
+        //   bit 0 = sceneHasGlass        — gates caustic photon gather
+        //   bit 1 = sceneHasClearcoat    — gates clearcoat lobe setup
+        //   bit 2 = sceneHasIridescence  — gates evalIridescence Fresnel mix
+        //   bit 3 = sceneHasSheen        — gates Charlie NDF sheen NEE terms
+        uint32_t currentSceneFeatures() const {
+            uint32_t f = 0;
+            if (sceneHasGlass_)        f |= 1u;
+            if (sceneHasClearcoat_)    f |= 2u;
+            if (sceneHasIridescence_)  f |= 4u;
+            if (sceneHasSheen_)        f |= 8u;
+            return f;
+        }
+
+        // Single-variant pipeline build. Called once at first frame for the
+        // active variant, and again by ensureCurrentRtVariantBuilt() on each
+        // toggle that lands in an unbuilt slot.
+        void buildSingleRtVariant(bool useSer, bool hybridSpec, bool restirDISpec,
+                                  uint32_t sceneFeatures) {
             auto loadModule = [this](const uint32_t* code, size_t size) {
                 VkShaderModuleCreateInfo smci{};
                 smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -9327,8 +9423,6 @@ namespace threepp {
                 return m;
             };
 
-            // SER variant when caller asked for it AND the device supports
-            // it. activeRtVariant() picks between the two at dispatch time.
             VkShaderModule rgenMod = useSer
                     ? loadModule(kRaygenRgenSerSpv, sizeof(kRaygenRgenSerSpv))
                     : loadModule(kRaygenRgenSpv,    sizeof(kRaygenRgenSpv));
@@ -9338,34 +9432,7 @@ namespace threepp {
             VkShaderModule ahitMod    = loadModule(kClosestHitAlphaRahitSpv, sizeof(kClosestHitAlphaRahitSpv));
             VkShaderModule sahitMod   = loadModule(kShadowAnyhitRahitSpv,    sizeof(kShadowAnyhitRahitSpv));
 
-            // Stages: 0=rgen, 1=primary miss, 2=shadow miss, 3=path closest-hit,
-            //         4=path any-hit (alpha), 5=shadow any-hit (glass+cutout).
-            std::array<VkPipelineShaderStageCreateInfo, 6> stages{};
-            for (auto& s : stages) {
-                s.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-                s.pName = "main";
-            }
-            stages[0].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-            stages[0].module = rgenMod;
-            stages[1].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
-            stages[1].module = missMod;
-            stages[2].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
-            stages[2].module = sMissMod;
-            stages[3].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-            stages[3].module = chitMod;
-            stages[4].stage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
-            stages[4].module = ahitMod;
-            stages[5].stage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
-            stages[5].module = sahitMod;
-
-            // Groups:
-            //   0 = rgen
-            //   1 = primary miss
-            //   2 = shadow miss
-            //   3 = path hit  (chit=3, ahit=4) — selected by sbtOffset=0
-            //   4 = shadow hit (chit=UNUSED, ahit=5) — selected by sbtOffset=1
-            //       NoOpaqueEXT on shadow rays forces all geometry through ahit=5;
-            //       opaque hits set shadow=0 and accept; glass multiplies and ignores.
+            // Shader groups: same layout as other variants.
             std::array<VkRayTracingShaderGroupCreateInfoKHR, 5> groups{};
             for (auto& g : groups) {
                 g.sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
@@ -9384,29 +9451,89 @@ namespace threepp {
             groups[3].closestHitShader = 3;
             groups[3].anyHitShader = 4;
             groups[4].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-            groups[4].anyHitShader = 5;// closestHitShader stays UNUSED
+            groups[4].anyHitShader = 5;
+
+            // Raygen spec data (kHybridEnabled + kSceneFeatures).
+            struct RgenSpecData {
+                VkBool32 hybridEnabled;
+                uint32_t sceneFeatures;
+            } rgenSpecData{
+                hybridSpec ? VK_TRUE : VK_FALSE,
+                sceneFeatures,
+            };
+            VkSpecializationMapEntry rgenMapEntries[2]{};
+            rgenMapEntries[0].constantID = 0;
+            rgenMapEntries[0].offset = offsetof(RgenSpecData, hybridEnabled);
+            rgenMapEntries[0].size = sizeof(VkBool32);
+            rgenMapEntries[1].constantID = 1;
+            rgenMapEntries[1].offset = offsetof(RgenSpecData, sceneFeatures);
+            rgenMapEntries[1].size = sizeof(uint32_t);
+            VkSpecializationInfo rgenSpecInfo{};
+            rgenSpecInfo.mapEntryCount = 2;
+            rgenSpecInfo.pMapEntries = rgenMapEntries;
+            rgenSpecInfo.dataSize = sizeof(RgenSpecData);
+            rgenSpecInfo.pData = &rgenSpecData;
+
+            // Chit spec data (kRestirDIEnabled + kSceneFeatures).
+            struct ChitSpecData {
+                VkBool32 restirDIEnabled;
+                uint32_t sceneFeatures;
+            } chitSpecData{
+                restirDISpec ? VK_TRUE : VK_FALSE,
+                sceneFeatures,
+            };
+            VkSpecializationMapEntry chitMapEntries[2]{};
+            chitMapEntries[0].constantID = 0;
+            chitMapEntries[0].offset = offsetof(ChitSpecData, restirDIEnabled);
+            chitMapEntries[0].size = sizeof(VkBool32);
+            chitMapEntries[1].constantID = 1;
+            chitMapEntries[1].offset = offsetof(ChitSpecData, sceneFeatures);
+            chitMapEntries[1].size = sizeof(uint32_t);
+            VkSpecializationInfo chitSpecInfo{};
+            chitSpecInfo.mapEntryCount = 2;
+            chitSpecInfo.pMapEntries = chitMapEntries;
+            chitSpecInfo.dataSize = sizeof(ChitSpecData);
+            chitSpecInfo.pData = &chitSpecData;
+
+            // Stages: 0=rgen, 1=primary miss, 2=shadow miss,
+            //         3=path closest-hit, 4=path any-hit (alpha),
+            //         5=shadow any-hit (glass+cutout).
+            std::array<VkPipelineShaderStageCreateInfo, 6> stages{};
+            for (auto& s : stages) {
+                s.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                s.pName = "main";
+            }
+            stages[0].stage  = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            stages[0].module = rgenMod;
+            stages[0].pSpecializationInfo = &rgenSpecInfo;
+            stages[1].stage  = VK_SHADER_STAGE_MISS_BIT_KHR;
+            stages[1].module = missMod;
+            stages[2].stage  = VK_SHADER_STAGE_MISS_BIT_KHR;
+            stages[2].module = sMissMod;
+            stages[3].stage  = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            stages[3].module = chitMod;
+            stages[3].pSpecializationInfo = &chitSpecInfo;
+            stages[4].stage  = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+            stages[4].module = ahitMod;
+            stages[5].stage  = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+            stages[5].module = sahitMod;
 
             VkRayTracingPipelineCreateInfoKHR rci{};
             rci.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
             rci.stageCount = static_cast<uint32_t>(stages.size());
-            rci.pStages = stages.data();
+            rci.pStages    = stages.data();
             rci.groupCount = static_cast<uint32_t>(groups.size());
-            rci.pGroups = groups.data();
-            // depth 4 — primary chit (1) → ReSTIR GI sub-trace chit (2) →
-            // recursive sub-sub-trace chit (3, Stage 2 bounce-2 in Lo) →
-            // shadow ray at the sub-sub-trace hit (4). Without GI the deepest
-            // path is primary + 1 shadow ray = depth 2; Stages 1a-1c needed
-            // depth 3; Stage 2's full-path-Lo (one recursive bounce inside
-            // the sub-trace) adds one more level. Stays well under the spec's
-            // VkPhysicalDeviceRayTracingPipelinePropertiesKHR::maxRayRecursionDepth
-            // floor (commonly 31 on desktop / 8+ on mobile).
+            rci.pGroups    = groups.data();
+            // depth 4: primary chit → GI sub-trace → sub-sub-trace → shadow.
             rci.maxPipelineRayRecursionDepth = 4;
             rci.layout = rtPipelineLayout;
 
+            const uint32_t idx = rtVariantIndex(useSer, hybridSpec, restirDISpec);
             check(ctx->rt().createRayTracingPipelines(
                           ctx->device(), VK_NULL_HANDLE, VK_NULL_HANDLE,
-                          1, &rci, nullptr, &rtVariants_[useSer ? 1u : 0u].pipeline),
-                  "vkCreateRayTracingPipelinesKHR");
+                          1, &rci, nullptr, &rtVariants_[idx].pipeline),
+                  "vkCreateRayTracingPipelinesKHR (single)");
+            createShaderBindingTable(useSer, hybridSpec, restirDISpec);
 
             vkDestroyShaderModule(ctx->device(), rgenMod,  nullptr);
             vkDestroyShaderModule(ctx->device(), missMod,  nullptr);
@@ -9416,8 +9543,8 @@ namespace threepp {
             vkDestroyShaderModule(ctx->device(), sahitMod, nullptr);
         }
 
-        void createShaderBindingTable(bool useSer) {
-            RtPipelineVariant& v = rtVariants_[useSer ? 1u : 0u];
+        void createShaderBindingTable(bool useSer, bool hybridSpec, bool restirDISpec) {
+            RtPipelineVariant& v = rtVariants_[rtVariantIndex(useSer, hybridSpec, restirDISpec)];
             const auto& props = ctx->rtPipelineProperties();
             const uint32_t handleSize = props.shaderGroupHandleSize;
             const uint32_t handleAlignment = props.shaderGroupHandleAlignment;
@@ -11009,20 +11136,26 @@ namespace threepp {
             //                          is taken per-sample instead of once),
             //                  bit 6 = ReSTIR GI enabled (Stage 1a single-
             //                          sample indirect reservoir at primary;
-            //                          off = classic bounce-1 continuation)),
+            //                          off = classic bounce-1 continuation),
+            //                  bit 7 = measure primary trace only — raygen
+            //                          exits the step + spp loops immediately
+            //                          after the step-0 traceRayEXT; debug
+            //                          knob for sizing the bounce-0-on-raster
+            //                          opportunity, image goes black),
             // [5] emissiveCount, [6] emissiveTotalPower (float bits).
             // Per-instance moved bits live in the binding 21 SSBO.
             const float exposure = toneMappingExposure_;
             uint32_t exposureBits;
             std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
             const uint32_t motionFlags =
-                    (motionThisFrame_      ? 1u  : 0u) |
-                    (cameraMovedThisFrame_ ? 2u  : 0u) |
-                    (sceneHasGlass_        ? 4u  : 0u) |
-                    (hybridEnabled_        ? 8u  : 0u) |
-                    (restirDIEnabled_      ? 16u : 0u) |
-                    (perSppJitterHybrid_   ? 32u : 0u) |
-                    (restirGIEnabled_      ? 64u : 0u);
+                    (motionThisFrame_           ? 1u   : 0u) |
+                    (cameraMovedThisFrame_      ? 2u   : 0u) |
+                    (sceneHasGlass_             ? 4u   : 0u) |
+                    (hybridEnabled_             ? 8u   : 0u) |
+                    (restirDIEnabled_           ? 16u  : 0u) |
+                    (perSppJitterHybrid_        ? 32u  : 0u) |
+                    (restirGIEnabled_           ? 64u  : 0u) |
+                    (measurePrimaryTraceOnly_   ? 128u : 0u);
             uint32_t emPowerBits;
             std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
             uint32_t envSumBits;
@@ -11958,6 +12091,19 @@ namespace threepp {
                             std::chrono::high_resolution_clock::now() - sceneStart)
                             .count();
         }
+        // Lazy RT pipeline build (first frame). Deferred from constructor so
+        // scene-feature spec constants (kSceneFeatures bitmask, e.g. has-glass
+        // gating the caustic gather DCE) can be baked into chit with the
+        // detected values from ensureSceneBuilt above. Subsequent frames hit
+        // the early-out for free.
+        if (!pimpl_->rtPipelinesBuilt_) {
+            pimpl_->buildAllRtPipelines();
+        }
+        // After init, also ensure the *current* variant is built. The first-
+        // frame build only constructs the active variant; if the user has
+        // since toggled into an unbuilt slot, fill it in now (pays a one-time
+        // pipeline-compile cost on first toggle, then never again).
+        pimpl_->ensureCurrentRtVariantBuilt();
         pimpl_->renderFrame(scene, camera);
         pimpl_->lastFrameTimings_.cpuFrameMs =
                 std::chrono::duration<float, std::milli>(
@@ -12196,6 +12342,14 @@ namespace threepp {
             case V::Ids:    return 3;
             default:        return 0;
         }
+    }
+
+    void VulkanRenderer::setMeasurePrimaryTraceOnly(bool enabled) {
+        pimpl_->measurePrimaryTraceOnly_ = enabled;
+    }
+
+    bool VulkanRenderer::measurePrimaryTraceOnly() const {
+        return pimpl_->measurePrimaryTraceOnly_;
     }
 
 }// namespace threepp

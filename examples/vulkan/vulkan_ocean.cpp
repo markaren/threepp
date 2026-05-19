@@ -450,6 +450,16 @@ int main() {
     float fps = 0.f, fpsAccum = 0.f;
     int   fpsFrames = 0;
 
+    // ── Primary-trace cost measurement ─────────────────────────────────
+    // Toggle `setMeasurePrimaryTraceOnly` and watch the delta on
+    // pathTraceMs. EMA-smoothed so the readouts don't dance frame-to-frame;
+    // both numbers persist across toggle changes so the comparison stays
+    // visible after flipping back to "full".
+    bool measurePrimaryOnly = renderer.measurePrimaryTraceOnly();
+    float fullPtMs = 0.f;
+    float primaryOnlyMs = 0.f;
+    constexpr float ptEmaAlpha = 0.10f;
+
     // ── Underwater fog parameters ─────────────────────────────────────────
     // Controlled by ImGui; applied per-frame when the camera is submerged.
     // fogDensity = σ_t (extinction per metre, uniform across channels).
@@ -545,6 +555,24 @@ int main() {
         if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f, "%.2f"))
             renderer.setRenderScale(renderScale);
         ImGui::Separator();
+
+        {
+            const auto t = renderer.lastFrameTimings();
+            if (t.pathTraceMs > 0.f) {
+                float& bucket = measurePrimaryOnly ? primaryOnlyMs : fullPtMs;
+                bucket = (bucket > 0.f) ? bucket * (1.f - ptEmaAlpha) + t.pathTraceMs * ptEmaAlpha
+                                        : t.pathTraceMs;
+            }
+            if (ImGui::Checkbox("Measure primary trace only", &measurePrimaryOnly))
+                renderer.setMeasurePrimaryTraceOnly(measurePrimaryOnly);
+            if (measurePrimaryOnly)
+                ImGui::TextDisabled("Image is black while measuring.");
+            ImGui::Text("Full PT:      %6.2f ms", fullPtMs);
+            ImGui::Text("Primary only: %6.2f ms", primaryOnlyMs);
+            if (fullPtMs > 1e-3f && primaryOnlyMs > 0.f)
+                ImGui::Text("Primary share: %5.1f %%", 100.f * primaryOnlyMs / fullPtMs);
+            ImGui::Separator();
+        }
 
         ImGui::TextUnformatted("Underwater fog");
         ImGui::SliderFloat("Density (1/m)", &uwFogDensity, 0.01f, 0.20f, "%.3f");
