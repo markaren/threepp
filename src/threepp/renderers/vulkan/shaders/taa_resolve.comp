@@ -111,23 +111,6 @@ void main() {
     // sampler returns that exact texel (equivalent to the old texelFetch).
     const vec3 curr = texture(taaInputTex, uv).rgb;
 
-    // 3×3 neighbourhood colour AABB, sampled in INPUT texels — the clamp
-    // must bound the history against the resolution the samples were
-    // actually traced at. (A full-res-texel offset would collapse the
-    // window to a single input texel when renderScale < 1.)
-    const ivec2 inSz = ivec2(int(pc.inWidth), int(pc.inHeight));
-    const ivec2 ipx  = clamp(ivec2(uv * vec2(inSz)), ivec2(0), inSz - 1);
-    vec3 nMin = vec3(1e30);
-    vec3 nMax = vec3(-1e30);
-    for (int dy = -1; dy <= 1; ++dy) {
-        for (int dx = -1; dx <= 1; ++dx) {
-            const ivec2 q = clamp(ipx + ivec2(dx, dy), ivec2(0), inSz - 1);
-            const vec3 n = texelFetch(taaInputTex, q, 0).rgb;
-            nMin = min(nMin, n);
-            nMax = max(nMax, n);
-        }
-    }
-
     // Reproject prev frame via gbuffer motion vec. Motion is in GL-NDC delta
     // (Y-up); convert UV → GL-NDC → add motion → back to screen UV.
     const vec2 motionGL = texture(gbufMotionTex, uv).rg;
@@ -149,6 +132,39 @@ void main() {
     const bool isSkinned = (currIds.z & 8u) != 0u;
     // Mesh-ID disagreement at the reprojected pixel = disocclusion. Reject.
     if (reprojValid && currIds.x != prevIds.x) reprojValid = false;
+
+    // 3×3 neighbourhood colour AABB — bounds the Catmull-Rom history
+    // reconstruction (catches slight overshoot from the cubic weights,
+    // softens disocclusion edges).
+    //
+    // Same-mesh gate: cross-mesh neighbours contribute nothing to the
+    // AABB. Without the gate, a ceiling pixel adjacent to a bright
+    // emissive ring lets the ring's HDR brightness into nMax, and any
+    // bilinear bleed of the ring's history into the ceiling pixel
+    // survives the clamp → halo grows outward 1 pixel per motion frame
+    // and decays slowly at α=0.1 when motion stops (visible "stop-and-go
+    // artifact" around emissives). Same-mesh AABB tightens the bound
+    // so cross-mesh bleed is clamped to the ceiling's own value range.
+    const ivec2 inSz = ivec2(int(pc.inWidth), int(pc.inHeight));
+    const ivec2 ipx  = clamp(ivec2(uv * vec2(inSz)), ivec2(0), inSz - 1);
+    const uint centerMesh = currIds.x;
+    vec3 nMin = vec3(1e30);
+    vec3 nMax = vec3(-1e30);
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            const ivec2 q = clamp(ipx + ivec2(dx, dy), ivec2(0), inSz - 1);
+            const uint qMesh = texelFetch(gbufIdsCurrTex, q, 0).x;
+            if (qMesh != centerMesh) continue;
+            const vec3 n = texelFetch(taaInputTex, q, 0).rgb;
+            nMin = min(nMin, n);
+            nMax = max(nMax, n);
+        }
+    }
+    // Fallback: if every neighbour rejected (lone-pixel of one mesh
+    // embedded in another), collapse the AABB to curr so the clamp
+    // pins history to this pixel rather than letting the un-tightened
+    // bound through.
+    if (nMin.x > nMax.x) { nMin = curr; nMax = curr; }
 
     vec3 history = curr;
     if (reprojValid) {
