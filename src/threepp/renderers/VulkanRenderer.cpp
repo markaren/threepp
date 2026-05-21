@@ -12429,7 +12429,133 @@ namespace threepp {
     RenderTarget* VulkanRenderer::getRenderTarget() { return nullptr; }
     void VulkanRenderer::setRenderTarget(RenderTarget*, int, int) {}
 
-    std::vector<unsigned char> VulkanRenderer::readRGBPixels() { return {}; }
+    std::vector<unsigned char> VulkanRenderer::readRGBPixels() {
+        auto& impl = *pimpl_;
+        auto* ctx  = impl.ctx.get();
+        if (!ctx || ctx->swapchainImages().empty()) return {};
+
+        const VkExtent2D ext   = ctx->swapchainExtent();
+        const auto       w     = ext.width;
+        const auto       h     = ext.height;
+        const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
+        if (w == 0 || h == 0) return {};
+
+        // Wait so the previously presented swapchain image is fully written
+        // and stable. Cheap unless the user is hammering render() — they
+        // usually aren't between an interactive render() and a readback.
+        vkDeviceWaitIdle(ctx->device());
+
+        // Allocate a host-visible staging buffer. Reuses the same allocator
+        // pattern the LIDAR scanner uses for its readback path.
+        vulkan::Buffer staging = vulkan::createBuffer(
+                ctx->allocator(), ctx->device(), bytes,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                        VMA_ALLOCATION_CREATE_MAPPED_BIT);
+
+        // One-shot transient command buffer. Doesn't share the main
+        // per-frame command pool because we need to submit + wait
+        // synchronously without disturbing the in-flight frame state.
+        VkCommandPoolCreateInfo cpci{};
+        cpci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        cpci.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        cpci.queueFamilyIndex = ctx->queueFamilies().graphics;
+        VkCommandPool cpool = VK_NULL_HANDLE;
+        vulkan::check(vkCreateCommandPool(ctx->device(), &cpci, nullptr, &cpool),
+                      "vkCreateCommandPool(readRGBPixels)");
+
+        VkCommandBufferAllocateInfo cbai{};
+        cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cbai.commandPool        = cpool;
+        cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cbai.commandBufferCount = 1;
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        vulkan::check(vkAllocateCommandBuffers(ctx->device(), &cbai, &cb),
+                      "vkAllocateCommandBuffers(readRGBPixels)");
+
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vulkan::check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer(readRGBPixels)");
+
+        const VkImage src = ctx->swapchainImages()[impl.frameImageIndex_];
+
+        // Transition swapchain image PRESENT_SRC → TRANSFER_SRC for the copy.
+        VkImageMemoryBarrier toSrc{};
+        toSrc.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toSrc.oldLayout                   = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        toSrc.newLayout                   = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toSrc.srcAccessMask               = 0;
+        toSrc.dstAccessMask               = VK_ACCESS_TRANSFER_READ_BIT;
+        toSrc.srcQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+        toSrc.dstQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+        toSrc.image                       = src;
+        toSrc.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        toSrc.subresourceRange.levelCount = 1;
+        toSrc.subresourceRange.layerCount = 1;
+        vkCmdPipelineBarrier(cb,
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+        VkBufferImageCopy region{};
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.layerCount = 1;
+        region.imageExtent                 = {w, h, 1};
+        vkCmdCopyImageToBuffer(cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               staging.handle, 1, &region);
+
+        // Restore PRESENT_SRC layout so the next frame can present this slot.
+        VkImageMemoryBarrier toPresent = toSrc;
+        toPresent.oldLayout            = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toPresent.newLayout            = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        toPresent.srcAccessMask        = VK_ACCESS_TRANSFER_READ_BIT;
+        toPresent.dstAccessMask        = 0;
+        vkCmdPipelineBarrier(cb,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &toPresent);
+
+        vulkan::check(vkEndCommandBuffer(cb), "vkEndCommandBuffer(readRGBPixels)");
+
+        VkFenceCreateInfo fci{};
+        fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        VkFence fence = VK_NULL_HANDLE;
+        vulkan::check(vkCreateFence(ctx->device(), &fci, nullptr, &fence),
+                      "vkCreateFence(readRGBPixels)");
+
+        VkSubmitInfo si{};
+        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers    = &cb;
+        vulkan::check(vkQueueSubmit(ctx->graphicsQueue(), 1, &si, fence),
+                      "vkQueueSubmit(readRGBPixels)");
+        vulkan::check(vkWaitForFences(ctx->device(), 1, &fence, VK_TRUE, UINT64_MAX),
+                      "vkWaitForFences(readRGBPixels)");
+
+        // Map staging, convert BGRA8_UNORM → RGB8 (Vulkan picks BGRA in
+        // VulkanContext::createSwapchain; the surface format is fixed).
+        std::vector<unsigned char> rgb(static_cast<size_t>(w) * h * 3);
+        void* mapped = nullptr;
+        vmaInvalidateAllocation(ctx->allocator(), staging.alloc, 0, bytes);
+        vulkan::check(vmaMapMemory(ctx->allocator(), staging.alloc, &mapped),
+                      "vmaMapMemory(readRGBPixels)");
+        const auto* bgra = static_cast<const unsigned char*>(mapped);
+        const size_t pixels = static_cast<size_t>(w) * h;
+        for (size_t i = 0; i < pixels; ++i) {
+            rgb[i * 3 + 0] = bgra[i * 4 + 2];// R ← B-channel of source
+            rgb[i * 3 + 1] = bgra[i * 4 + 1];// G ← G
+            rgb[i * 3 + 2] = bgra[i * 4 + 0];// B ← R
+        }
+        vmaUnmapMemory(ctx->allocator(), staging.alloc);
+
+        vkDestroyFence(ctx->device(), fence, nullptr);
+        vkDestroyCommandPool(ctx->device(), cpool, nullptr);
+        vulkan::destroyBuffer(ctx->allocator(), staging);
+
+        return rgb;
+    }
 
     void VulkanRenderer::dispose() { pimpl_.reset(); }
 

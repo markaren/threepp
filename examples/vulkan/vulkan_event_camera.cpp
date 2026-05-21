@@ -1,0 +1,231 @@
+// Vulkan PT — event camera (DVS) sensor demo.
+//
+// Three pendulums swinging at different frequencies in front of a striped
+// wall. The event camera helper (EventCameraSensor) reads the renderer's
+// current frame each tick and emits per-pixel events whenever
+// |Δlog luminance| crosses the configured contrast threshold — exactly
+// the model real DVS sensors implement at the analog photoreceptor.
+//
+// The right-hand panel shows the live event accumulator: bright pixels
+// where a recent positive (brighter) event fired, dark where negative,
+// mid-grey where nothing changed. The decay rate controls how long
+// trails persist; high values give the smooth swooping motion blur a
+// real DVS captures; low values strip everything to instantaneous
+// silhouettes.
+//
+// The pendulums' phases are deliberately offset so the demo never has
+// a frame of zero events — handy for spotting whether the detection
+// pipeline is alive.
+
+#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/helpers/EventCameraSensor.hpp"
+#include "threepp/lights/AmbientLight.hpp"
+#include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/threepp.hpp"
+
+#include <array>
+#include <chrono>
+#include <cmath>
+
+using namespace threepp;
+
+namespace {
+
+    struct Pendulum {
+        std::shared_ptr<Object3D> pivot;    // attached to the scene; rotates
+        std::shared_ptr<Mesh>     rod;      // child of pivot, points -Y
+        std::shared_ptr<Mesh>     bob;      // sphere at the end of the rod
+        float                     amplitude;// radians
+        float                     omega;    // rad/s
+        float                     phase;    // radians
+        float                     length;
+    };
+
+    Pendulum makePendulum(Scene& scene, const Vector3& pivotPos,
+                          float length, float amplitude, float omega, float phase,
+                          const Color& bobColor) {
+        Pendulum p;
+        p.amplitude = amplitude;
+        p.omega     = omega;
+        p.phase     = phase;
+        p.length    = length;
+
+        p.pivot = std::make_shared<Object3D>();
+        p.pivot->position.copy(pivotPos);
+        scene.add(p.pivot);
+
+        auto rodMat = MeshStandardMaterial::create({
+                {"color", Color(0x444444)},
+                {"roughness", 0.6f},
+                {"metalness", 0.3f},
+        });
+        p.rod = Mesh::create(CylinderGeometry::create(0.025f, 0.025f, length, 16, 1), rodMat);
+        // Cylinder is local +Y axis-aligned; centre it so its top sits at the
+        // pivot and the bob attaches at the bottom.
+        p.rod->position.set(0.f, -length * 0.5f, 0.f);
+        p.pivot->add(p.rod);
+
+        auto bobMat = MeshStandardMaterial::create({
+                {"color", bobColor},
+                {"roughness", 0.35f},
+                {"metalness", 0.1f},
+        });
+        p.bob = Mesh::create(SphereGeometry::create(0.15f, 32, 24), bobMat);
+        p.bob->position.set(0.f, -length, 0.f);
+        p.pivot->add(p.bob);
+        return p;
+    }
+
+    // Striped wall behind the pendulums — gives the event camera per-pixel
+    // contrast to trigger off when the pendulum silhouette sweeps across.
+    void addBackdrop(Scene& scene) {
+        constexpr int stripeCount = 9;
+        constexpr float wallW = 6.f;
+        constexpr float wallH = 4.f;
+        constexpr float stripeW = wallW / stripeCount;
+
+        auto darkMat   = MeshStandardMaterial::create({{"color", Color(0x222222)}, {"roughness", 0.95f}});
+        auto lightMat  = MeshStandardMaterial::create({{"color", Color(0xdddddd)}, {"roughness", 0.95f}});
+
+        for (int i = 0; i < stripeCount; ++i) {
+            const float x = -wallW * 0.5f + (static_cast<float>(i) + 0.5f) * stripeW;
+            auto stripe = Mesh::create(BoxGeometry::create(stripeW, wallH, 0.05f),
+                                       (i % 2 == 0) ? lightMat : darkMat);
+            stripe->position.set(x, 1.5f, -2.5f);
+            scene.add(stripe);
+        }
+
+        // Matte floor for context. Floor never moves, so it won't generate
+        // events on its own — only when pendulum shadows sweep across it.
+        auto floor = Mesh::create(BoxGeometry::create(8.f, 0.1f, 6.f),
+                                  MeshStandardMaterial::create({{"color", Color(0x888888)}, {"roughness", 0.95f}}));
+        floor->position.set(0.f, -0.05f, 0.f);
+        scene.add(floor);
+    }
+
+}// namespace
+
+int main() {
+
+    Canvas canvas("Vulkan PT - event camera (DVS)",
+                  {{"vsync", false}, {"size", WindowSize{1280, 720}}});
+    VulkanRenderer renderer(canvas);
+    renderer.toneMapping = ToneMapping::ACESFilmic;
+    renderer.toneMappingExposure = 1.0f;
+
+    Scene scene;
+    scene.background = Color(0.05f, 0.05f, 0.06f);
+    addBackdrop(scene);
+
+    // Three pendulums with offset phases / frequencies so the event
+    // accumulator is always busy somewhere.
+    std::array<Pendulum, 3> pendulums{
+            makePendulum(scene, Vector3(-1.6f, 3.0f, -1.2f), 2.2f, 0.7f, 2.2f, 0.0f, Color(0xff5060)),
+            makePendulum(scene, Vector3( 0.0f, 3.0f, -1.2f), 2.0f, 0.5f, 2.8f, 1.2f, Color(0x60ff70)),
+            makePendulum(scene, Vector3( 1.6f, 3.0f, -1.2f), 2.4f, 0.6f, 2.5f, 2.4f, Color(0x6080ff)),
+    };
+
+    scene.add(AmbientLight::create(Color(0xffffff), 0.3f));
+    auto sun = DirectionalLight::create(Color(0xfff0d6), 2.0f);
+    sun->position.set(2.5f, 6.f, 3.f);
+    scene.add(sun);
+
+    auto camera = PerspectiveCamera::create(50.f, canvas.aspect(), 0.1f, 50.f);
+    camera->position.set(0.f, 2.0f, 4.5f);
+    camera->lookAt(Vector3(0.f, 1.5f, -1.5f));
+
+    // ── Event camera sensor ────────────────────────────────────────────
+    // Resolution matches the swapchain — readRGBPixels returns the full
+    // swapchain image. The accumulator visualisation is shown at quarter
+    // size in the corner via a screen-space Sprite.
+    const auto canvasSize = canvas.size();
+    auto eventSensor = std::make_unique<EventCameraSensor>(
+            static_cast<unsigned>(canvasSize.width()),
+            static_cast<unsigned>(canvasSize.height()));
+    eventSensor->params.contrastThreshold = 0.20f;
+    eventSensor->params.vizDecay          = 0.88f;
+
+    auto eventVizMat = SpriteMaterial::create();
+    eventVizMat->map = eventSensor->visualisation();
+    auto eventViz = Sprite::create(eventVizMat);
+    constexpr float kPanelDispW = 480.f;
+    constexpr float kPanelDispH = 270.f;
+    eventViz->scale.set(kPanelDispW, kPanelDispH, 1.f);
+    eventViz->screenSpace = true;
+    eventViz->screenAnchor.set(1.f, 1.f);
+    eventViz->center.set(1.f, 1.f);
+    eventViz->position.set(-10.f, -10.f, 0.f);
+    scene.add(eventViz);
+
+    canvas.onWindowResize([&](WindowSize size) {
+        camera->aspect = size.aspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
+        eventSensor->setSize(static_cast<unsigned>(size.width()),
+                              static_cast<unsigned>(size.height()));
+        eventVizMat->map = eventSensor->visualisation();// new texture object
+    });
+
+    // ── UI ─────────────────────────────────────────────────────────────
+    float lastEventsPerFrame = 0.f;
+    float lastCaptureMs      = 0.f;
+    double cumulativeEvents  = 0.0;
+    bool   animatePendulums  = true;
+
+    ImguiFunctionalContext ui(canvas, renderer, [&] {
+        ImGui::SetNextWindowPos({0, 0});
+        ImGui::SetNextWindowSize({360, 0});
+        ImGui::Begin("Vulkan PT - event camera (DVS)");
+        ImGui::TextWrapped(
+                "Three pendulums swing in front of a striped wall. "
+                "Each frame the renderer's output is read back, log-"
+                "intensity changes are detected per pixel, and events "
+                "are emitted where |Δlog I| exceeds the threshold. "
+                "Right-corner panel = live event accumulator.");
+        ImGui::Separator();
+        ImGui::Checkbox("Animate pendulums", &animatePendulums);
+        ImGui::SliderFloat("Contrast threshold (log)", &eventSensor->params.contrastThreshold,
+                           0.05f, 0.6f, "%.3f");
+        ImGui::SliderFloat("Viz decay / frame", &eventSensor->params.vizDecay, 0.f, 0.995f, "%.3f");
+        ImGui::SliderInt("Max events / pixel / frame", &eventSensor->params.maxEventsPerPixel, 1, 20);
+        ImGui::Separator();
+        ImGui::Text("Events / frame: %.0f", static_cast<double>(lastEventsPerFrame));
+        ImGui::Text("Capture cost:   %.2f ms", static_cast<double>(lastCaptureMs));
+        ImGui::Text("Cumulative:     %.1f million", cumulativeEvents / 1.0e6);
+        ImGui::Text("Sensor res:     %u × %u", eventSensor->width(), eventSensor->height());
+        ImGui::End();
+    });
+
+    IOCapture capture;
+    capture.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
+    canvas.setIOCapture(&capture);
+
+    std::vector<EventCameraEvent> events;
+    Clock clock;
+
+    canvas.animate([&] {
+        const float t = clock.getElapsedTime();
+        if (animatePendulums) {
+            for (auto& p : pendulums) {
+                const float theta = p.amplitude * std::sin(p.omega * t + p.phase);
+                p.pivot->rotation.set(0.f, 0.f, theta);
+            }
+        }
+
+        renderer.render(scene, *camera);
+
+        // Capture events from the just-rendered swapchain BEFORE ImGui
+        // overlays it. The event sensor only sees the path-traced output,
+        // not the UI panel.
+        const auto t0 = std::chrono::steady_clock::now();
+        eventSensor->captureEvents(renderer, events);
+        const auto t1 = std::chrono::steady_clock::now();
+        lastCaptureMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
+
+        lastEventsPerFrame = static_cast<float>(events.size());
+        cumulativeEvents += static_cast<double>(events.size());
+
+        ui.render();
+    });
+}
