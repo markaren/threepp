@@ -98,9 +98,25 @@ namespace threepp {
         /**
          * Sample the renderer's current output, detect events relative
          * to the previous capture, and update the visualisation
-         * accumulator.
+         * accumulator. Reads pixels via `renderer.readRGBPixels()` —
+         * note this captures the FINAL composed swapchain (including
+         * any sprite or ImGui overlays). For sensor pipelines that
+         * need a clean scene-only image, use the lower-level
+         * `ingestPixels` overload with the renderer's
+         * `readSceneRGBPixels()` output.
          */
         void captureEvents(Renderer& renderer, std::vector<EventCameraEvent>& events);
+
+        /**
+         * Run event detection against externally-supplied RGB byte data.
+         * Length must be at least `width * height * 3`. Useful when the
+         * caller has its own readback path (e.g. VulkanRenderer's
+         * `readSceneRGBPixels` for pre-overlay sampling) or wants to
+         * inject synthetic frames.
+         */
+        void ingestPixels(const unsigned char* rgb,
+                          std::size_t bytes,
+                          std::vector<EventCameraEvent>& events);
 
         /**
          * Resize the sensor (call after the canvas resizes). Clears

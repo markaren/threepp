@@ -58,14 +58,17 @@ void EventCameraSensor::setSize(unsigned int width, unsigned int height) {
 
 void EventCameraSensor::captureEvents(Renderer& renderer,
                                        std::vector<EventCameraEvent>& events) {
+    auto pixels = renderer.readRGBPixels();
+    ingestPixels(pixels.data(), pixels.size(), events);
+}
+
+void EventCameraSensor::ingestPixels(const unsigned char* rgb,
+                                      std::size_t bytes,
+                                      std::vector<EventCameraEvent>& events) {
     events.clear();
 
-    // Grab the renderer's current swapchain image. readRGBPixels is
-    // implemented for both GLRenderer and VulkanRenderer; it returns a
-    // tightly-packed RGB byte buffer of swapchain dimensions.
-    readbackBuf_ = renderer.readRGBPixels();
     const size_t expected = static_cast<size_t>(width_) * height_ * 3;
-    if (readbackBuf_.size() < expected) {
+    if (rgb == nullptr || bytes < expected) {
         // Renderer hasn't rendered yet, or size mismatches — bail out
         // without touching the accumulator. Caller will retry next frame.
         return;
@@ -92,9 +95,9 @@ void EventCameraSensor::captureEvents(Renderer& renderer,
             // SI radiance log units — fine for visualisation + relative
             // perception research, not directly comparable to DVS128
             // datasheet C values.
-            const float r = static_cast<float>(readbackBuf_[pix + 0]) * (1.f / 255.f);
-            const float g = static_cast<float>(readbackBuf_[pix + 1]) * (1.f / 255.f);
-            const float b = static_cast<float>(readbackBuf_[pix + 2]) * (1.f / 255.f);
+            const float r = static_cast<float>(rgb[pix + 0]) * (1.f / 255.f);
+            const float g = static_cast<float>(rgb[pix + 1]) * (1.f / 255.f);
+            const float b = static_cast<float>(rgb[pix + 2]) * (1.f / 255.f);
             const float luma   = std::max(minLuma, 0.2126f * r + 0.7152f * g + 0.0722f * b);
             const float logLum = std::log(luma);
 
@@ -134,16 +137,26 @@ void EventCameraSensor::captureEvents(Renderer& renderer,
 
     // Project accumulator into the visualisation texture. Map [-1, +1]
     // into [0, 1] with 0.5 = "no recent event". sRGB byte encoding.
-    const size_t totalPix = static_cast<size_t>(width_) * height_;
-    for (size_t i = 0; i < totalPix; ++i) {
-        const float v   = std::clamp(vizAccum_[i], -1.f, 1.f);
-        const float vis = 0.5f + 0.5f * v;
-        const auto  byte = static_cast<unsigned char>(std::clamp(vis * 255.f, 0.f, 255.f));
-        const size_t b = i * 4;
-        vizBytes[b + 0] = byte;
-        vizBytes[b + 1] = byte;
-        vizBytes[b + 2] = byte;
-        vizBytes[b + 3] = 255;
+    //
+    // We flip Y when writing: the renderer's readRGBPixels delivers pixels
+    // in Vulkan top-down order (row 0 = top of image), but the sprite
+    // sampler treats V = 0 as the bottom of the texture, so a direct copy
+    // would render upside-down. Flipping during the projection costs the
+    // same as iterating in order.
+    for (unsigned y = 0; y < height_; ++y) {
+        const unsigned dstY = height_ - 1u - y;
+        for (unsigned x = 0; x < width_; ++x) {
+            const size_t srcIdx = static_cast<size_t>(y) * width_ + x;
+            const size_t dstIdx = static_cast<size_t>(dstY) * width_ + x;
+            const float v   = std::clamp(vizAccum_[srcIdx], -1.f, 1.f);
+            const float vis = 0.5f + 0.5f * v;
+            const auto  byte = static_cast<unsigned char>(std::clamp(vis * 255.f, 0.f, 255.f));
+            const size_t b = dstIdx * 4;
+            vizBytes[b + 0] = byte;
+            vizBytes[b + 1] = byte;
+            vizBytes[b + 2] = byte;
+            vizBytes[b + 3] = 255;
+        }
     }
     vizTex_->needsUpdate();
 }

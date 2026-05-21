@@ -1303,6 +1303,16 @@ namespace threepp {
         uint32_t   frameImageIndex_ = 0;
         std::chrono::high_resolution_clock::time_point frameStartTp_;
 
+        // Scene-only swapchain capture (for event-camera and similar
+        // sensors that need a pre-overlay readback). When enabled, the
+        // renderer copies the post-TAA swapchain image into this host-
+        // visible buffer BEFORE the sprite + ImGui overlays composite,
+        // so sensor pipelines don't see their own visualisation.
+        bool             sceneCaptureEnabled_ = false;
+        vulkan::Buffer   sceneCaptureBuf_{};
+        uint32_t         sceneCaptureBufW_ = 0;
+        uint32_t         sceneCaptureBufH_ = 0;
+
         // Deferred-apply queue for setters that issue vkDeviceWaitIdle +
         // realloc descriptor/image resources. These collide with an open
         // cmd buffer (frameState_ != Idle), so when called mid-frame we
@@ -1417,6 +1427,7 @@ namespace threepp {
             destroyBuffer(ctx->allocator(), tlasInstancesBuffer);
             destroyBuffer(ctx->allocator(), geometryDescsBuffer);
             for (auto& b : materialDescsBuffers) destroyBuffer(ctx->allocator(), b);
+            destroyBuffer(ctx->allocator(), sceneCaptureBuf_);
 
             for (auto& [_, rec] : blasCache) {
                 if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
@@ -11859,6 +11870,73 @@ namespace threepp {
         // When no overlay callback is set, just emits the GENERAL → PRESENT_SRC
         // barrier directly. Called from endFrame() immediately before
         // vkEndCommandBuffer + submit.
+        // Snapshot the post-TAA swapchain image into the host-visible
+        // sceneCaptureBuf_ before any overlay (sprites, ImGui) composites.
+        // Allocates / resizes the buffer lazily on first use or swapchain
+        // resize. Inserts GENERAL → TRANSFER_SRC → GENERAL barriers so the
+        // downstream overlay passes see the swapchain in the layout they
+        // expect.
+        void recordSceneCapture(VkCommandBuffer cb, uint32_t imageIndex) {
+            const VkExtent2D ext = ctx->swapchainExtent();
+            if (ext.width == 0 || ext.height == 0) return;
+            if (sceneCaptureBufW_ != ext.width || sceneCaptureBufH_ != ext.height ||
+                sceneCaptureBuf_.handle == VK_NULL_HANDLE) {
+                destroyBuffer(ctx->allocator(), sceneCaptureBuf_);
+                const VkDeviceSize bytes =
+                        static_cast<VkDeviceSize>(ext.width) * ext.height * 4;
+                sceneCaptureBuf_ = createBuffer(
+                        ctx->allocator(), ctx->device(), bytes,
+                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                        VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                                VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                sceneCaptureBufW_ = ext.width;
+                sceneCaptureBufH_ = ext.height;
+            }
+
+            const VkImage img = ctx->swapchainImages()[imageIndex];
+
+            VkImageMemoryBarrier toSrc{};
+            toSrc.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            toSrc.oldLayout                   = VK_IMAGE_LAYOUT_GENERAL;
+            toSrc.newLayout                   = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            toSrc.srcAccessMask               = VK_ACCESS_SHADER_WRITE_BIT |
+                                                VK_ACCESS_TRANSFER_WRITE_BIT;
+            toSrc.dstAccessMask               = VK_ACCESS_TRANSFER_READ_BIT;
+            toSrc.srcQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+            toSrc.dstQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+            toSrc.image                       = img;
+            toSrc.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            toSrc.subresourceRange.levelCount = 1;
+            toSrc.subresourceRange.layerCount = 1;
+            vkCmdPipelineBarrier(cb,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+            VkBufferImageCopy region{};
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.layerCount = 1;
+            region.imageExtent                 = {ext.width, ext.height, 1};
+            vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   sceneCaptureBuf_.handle, 1, &region);
+
+            VkImageMemoryBarrier toGeneral = toSrc;
+            toGeneral.oldLayout      = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            toGeneral.newLayout      = VK_IMAGE_LAYOUT_GENERAL;
+            toGeneral.srcAccessMask  = VK_ACCESS_TRANSFER_READ_BIT;
+            toGeneral.dstAccessMask  = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                       VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                       VK_ACCESS_SHADER_READ_BIT |
+                                       VK_ACCESS_SHADER_WRITE_BIT;
+            vkCmdPipelineBarrier(cb,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &toGeneral);
+        }
+
         void recordOverlayAndPresentTransition(VkCommandBuffer cb, uint32_t imageIndex) {
             const VkImage    img = ctx->swapchainImages()[imageIndex];
             const VkExtent2D ext = ctx->swapchainExtent();
@@ -12107,6 +12185,15 @@ namespace threepp {
             // Record the full PT body into the now-open cmd buffer. Leaves
             // the swapchain image in GENERAL.
             recordCommandBuffer(cmdBuffers[currentFrame], imageIndex);
+
+            // Scene-only swapchain capture. Runs BEFORE the sprite + ImGui
+            // overlays composite — sensor pipelines that consume the
+            // renderer's output need a clean image without their own
+            // visualisation drawn on top of it, otherwise they'd see
+            // their own readout as scene motion and feedback-loop.
+            if (sceneCaptureEnabled_) {
+                recordSceneCapture(cmdBuffers[currentFrame], imageIndex);
+            }
 
             // Screen-space sprite auto-overlay. Walks the main scene for
             // Sprites with screenSpace=true and composites them through
@@ -12554,6 +12641,47 @@ namespace threepp {
         vkDestroyCommandPool(ctx->device(), cpool, nullptr);
         vulkan::destroyBuffer(ctx->allocator(), staging);
 
+        return rgb;
+    }
+
+    void VulkanRenderer::setSceneCaptureEnabled(bool enabled) {
+        pimpl_->sceneCaptureEnabled_ = enabled;
+    }
+
+    bool VulkanRenderer::sceneCaptureEnabled() const {
+        return pimpl_->sceneCaptureEnabled_;
+    }
+
+    std::vector<unsigned char> VulkanRenderer::readSceneRGBPixels() {
+        auto& impl = *pimpl_;
+        if (!impl.sceneCaptureEnabled_ || impl.sceneCaptureBuf_.handle == VK_NULL_HANDLE) {
+            return {};
+        }
+
+        // Wait so the most recent frame's capture is flushed before we
+        // memcpy. Same trade-off as readRGBPixels — cheap unless the
+        // caller hammers it back-to-back.
+        vkDeviceWaitIdle(impl.ctx->device());
+
+        const uint32_t w = impl.sceneCaptureBufW_;
+        const uint32_t h = impl.sceneCaptureBufH_;
+        const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
+        if (bytes == 0) return {};
+
+        vmaInvalidateAllocation(impl.ctx->allocator(), impl.sceneCaptureBuf_.alloc, 0, bytes);
+        void* mapped = nullptr;
+        if (vmaMapMemory(impl.ctx->allocator(), impl.sceneCaptureBuf_.alloc, &mapped) != VK_SUCCESS) {
+            return {};
+        }
+        const auto* bgra = static_cast<const unsigned char*>(mapped);
+        std::vector<unsigned char> rgb(static_cast<size_t>(w) * h * 3);
+        const size_t pixels = static_cast<size_t>(w) * h;
+        for (size_t i = 0; i < pixels; ++i) {
+            rgb[i * 3 + 0] = bgra[i * 4 + 2];// R ← B
+            rgb[i * 3 + 1] = bgra[i * 4 + 1];// G ← G
+            rgb[i * 3 + 2] = bgra[i * 4 + 0];// B ← R
+        }
+        vmaUnmapMemory(impl.ctx->allocator(), impl.sceneCaptureBuf_.alloc);
         return rgb;
     }
 

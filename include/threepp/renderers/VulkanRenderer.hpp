@@ -60,6 +60,20 @@ namespace threepp {
 
         [[nodiscard]] std::vector<unsigned char> readRGBPixels() override;
 
+        // Toggle scene-only swapchain capture. When enabled, the renderer
+        // snapshots the post-TAA / pre-overlay swapchain image into a
+        // host-visible staging buffer each frame. `readSceneRGBPixels`
+        // returns that snapshot — *without* any sprite / ImGui overlays
+        // composited on top, which is what sensor pipelines (event
+        // cameras, photometric trackers) need to avoid feedback-looping
+        // through their own on-screen visualisation.
+        //
+        // Pays a per-frame swapchain-sized copy when enabled (~0.5 ms at
+        // 1080p on a 4070). No cost when disabled.
+        void setSceneCaptureEnabled(bool enabled);
+        [[nodiscard]] bool sceneCaptureEnabled() const;
+        [[nodiscard]] std::vector<unsigned char> readSceneRGBPixels();
+
         void dispose() override;
 
         // ImGui integration handles. All Vulkan types are erased to void* /

@@ -146,6 +146,11 @@ int main() {
     eventSensor->params.contrastThreshold = 0.20f;
     eventSensor->params.vizDecay          = 0.88f;
 
+    // Tap the pre-overlay swapchain so the sensor doesn't see its own
+    // sprite visualisation or the ImGui panel — those compose AFTER
+    // the scene-capture copy is recorded.
+    renderer.setSceneCaptureEnabled(true);
+
     auto eventVizMat = SpriteMaterial::create();
     eventVizMat->map = eventSensor->visualisation();
     auto eventViz = Sprite::create(eventVizMat);
@@ -215,11 +220,13 @@ int main() {
 
         renderer.render(scene, *camera);
 
-        // Capture events from the just-rendered swapchain BEFORE ImGui
-        // overlays it. The event sensor only sees the path-traced output,
-        // not the UI panel.
+        // Read the pre-overlay scene snapshot the renderer staged inside
+        // its frame, then feed it to the event detector. This sidesteps
+        // the feedback loop that would otherwise occur from the sensor
+        // overlay drawing itself + ImGui into the next frame's readback.
         const auto t0 = std::chrono::steady_clock::now();
-        eventSensor->captureEvents(renderer, events);
+        auto scenePixels = renderer.readSceneRGBPixels();
+        eventSensor->ingestPixels(scenePixels.data(), scenePixels.size(), events);
         const auto t1 = std::chrono::steady_clock::now();
         lastCaptureMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
 
