@@ -29,6 +29,21 @@ layout(set = 0, binding = 3, scalar) readonly buffer BeamBuf {
 layout(set = 0, binding = 4, scalar) buffer ResultBuf {
     LidarResult results[];
 };
+// Mirrors VulkanRenderer::GpuFogUbo. enabled = 1 when scene.fog is set;
+// sigmaT.{r,g,b} are per-channel extinction. We collapse to a luminance
+// scalar for the LIDAR delta-tracking step (near-IR sensors don't resolve
+// colour; using rec.709 luminance keeps wavelength-agnostic behaviour
+// consistent with the rest of the LIDAR pipeline).
+layout(set = 0, binding = 5) uniform FogUbo {
+    vec3  sigmaT;
+    float enabled;
+    vec3  color;
+    float anisotropy;
+    float waterSurfaceY;
+    float _pad0;
+    float _pad1;
+    float _pad2;
+} fog;
 
 layout(push_constant) uniform Pc {
     uint  numBeams;
@@ -69,6 +84,27 @@ void writeMiss(uint idx) {
     results[idx] = r;
 }
 
+// PCG hash → uniform float in [0, 1). One-liner state used per-beam,
+// per-iteration so the volumetric delta-tracking sample is decorrelated
+// across beams + bounces without needing a persistent RNG state.
+uint pcg(uint v) {
+    uint state = v * 747796405u + 2891336453u;
+    uint word  = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+float urand(uint key) {
+    return float(pcg(key)) / 4294967296.0;
+}
+
+// Henyey-Greenstein phase function at back-scatter (cos θ = -1). Closed
+// form: (1 - g) / (4π (1 + g)²). For g = 0 (isotropic) returns 1/(4π).
+// For g → 1 (full forward scatter) the back-scatter peak shrinks to 0.
+float hgBackscatter(float g) {
+    const float oneMg = 1.0 - g;
+    const float oneAg = 1.0 + g;
+    return oneMg / (12.56637 * oneAg * oneAg);
+}
+
 void main() {
     const uint i = gl_LaunchIDEXT.x;
     if (i >= pc.numBeams) return;
@@ -77,14 +113,38 @@ void main() {
     const uint maxRet    = max(pc.maxReturns, 1u);
     const uint baseIdx   = i * maxRet;
 
-    vec3  rayOrigin    = beam.origin;
-    const vec3 rayDir  = beam.direction;
-    float totalRange   = 0.0;
-    float throughput   = 1.0;
-    uint  slot         = 0;
+    // Collapse per-channel fog extinction + albedo to scalars. Near-IR
+    // LIDAR doesn't resolve colour, and the rest of the LIDAR pipeline
+    // already uses rec.709 luminance for the surface back-scatter
+    // intensity. Using the same projection for fog keeps fog/surface
+    // returns on a comparable intensity scale.
+    const float fogOn     = fog.enabled;
+    const float sigmaT    = fogOn * dot(fog.sigmaT, vec3(0.2126, 0.7152, 0.0722));
+    const float fogAlbedo = fogOn * dot(fog.color,  vec3(0.2126, 0.7152, 0.0722));
+    const float pBack     = hgBackscatter(clamp(fog.anisotropy, -0.95, 0.95));
+
+    vec3  rayOrigin   = beam.origin;
+    const vec3 rayDir = beam.direction;
+    float totalRange  = 0.0;
+    float throughput  = 1.0;
+    uint  slot        = 0;
 
     for (uint b = 0u; b < maxRet; ++b) {
-        // Reset payload defaults so the rmiss path is well-defined.
+        const float segmentMax = pc.maxRange - totalRange;
+        if (segmentMax <= 0.0) break;
+
+        // ── Delta tracking: sample a candidate fog scatter distance ──
+        // Free-flight from PDF σ_t · exp(-σ_t s). If sigmaT == 0 the
+        // sampled distance is sentinel-infinity and the surface trace
+        // always wins, so the fog-disabled path is bit-identical to the
+        // pre-fog rgen behaviour.
+        const uint seedKey = pcg(i ^ pc.rngSeed ^ (b * 2654435769u));
+        const float u01    = float(seedKey) / 4294967296.0;
+        const float fogS   = (sigmaT > 1e-6)
+                ? (-log(max(1e-6, 1.0 - u01)) / sigmaT)
+                : 1.0e30;
+
+        // ── Surface trace ──
         pl.hitPos           = vec3(0.0);
         pl.hitNormal        = vec3(0.0);
         pl.distance         = 0.0;
@@ -92,13 +152,6 @@ void main() {
         pl.instanceId       = -1;
         pl.continueFraction = 0.0;
 
-        const float segmentMax = pc.maxRange - totalRange;
-        if (segmentMax <= 0.0) break;
-
-        // Opaque flag means we skip any-hit on alpha-tested triangles. The
-        // main path tracer's alpha handling is complex and irrelevant here —
-        // LIDAR sees alpha-masked fronds as solid, which matches real sensor
-        // behaviour for foliage where the leaf surface reflects the pulse.
         traceRayEXT(topAS,
                     gl_RayFlagsOpaqueEXT,
                     0xFF, 0, 0, 0,
@@ -106,9 +159,60 @@ void main() {
                     rayDir,    segmentMax,
                     0);
 
-        if (pl.instanceId < 0) break;// miss — no further returns possible
+        const bool  surfaceHit = (pl.instanceId >= 0) &&
+                                 (pl.distance > 0.0) &&
+                                 (pl.distance <= segmentMax);
+        const float surfaceD   = surfaceHit ? pl.distance : 1.0e30;
 
-        const float scaledIntensity = pl.intensity * throughput;
+        const bool fogWins = (sigmaT > 1e-6) && (fogS < surfaceD) && (fogS < segmentMax);
+
+        if (fogWins) {
+            // ── Fog scatter event ──
+            // Unbiased single-scatter MC estimator at the sampled depth:
+            //   I_fog = laserPower · throughput · albedo · p_back · exp(-σ s)
+            //         · invReferenceIntensity (π · refRange²)
+            // No 1/r² spreading because the LIDAR equation through a medium
+            // is per-unit-depth, not surface-spreading.
+            const float fogI = clamp(
+                    pc.laserPower * throughput * fogAlbedo * pBack
+                    * exp(-sigmaT * fogS) * pc.invReferenceIntensity,
+                    0.0, 1.0);
+            if (fogI >= pc.detectorThreshold) {
+                LidarResult r;
+                r.position   = rayOrigin + rayDir * fogS;
+                r.distance   = totalRange + fogS;
+                r.normal     = -rayDir;       // back-toward-sensor convention
+                r.intensity  = fogI;
+                r.instanceId = -2;            // sentinel: fog return (not a surface)
+                r.returnNo   = int(slot + 1u);
+                r._pad       = vec2(0.0);
+                results[baseIdx + slot] = r;
+                ++slot;
+                if (slot >= maxRet) break;
+            }
+
+            // Continue past the scatter point with the surviving forward
+            // throughput. (1 - albedo) was absorbed; the remainder keeps
+            // going. For dense fog this terminates the walk quickly via
+            // the throughput < threshold gate.
+            throughput *= max(0.0, 1.0 - fogAlbedo) * exp(-sigmaT * fogS);
+            if (throughput < pc.detectorThreshold) break;
+
+            rayOrigin   = rayOrigin + rayDir * (fogS + 0.001);
+            totalRange += fogS + 0.001;
+            continue;
+        }
+
+        if (!surfaceHit) break;// miss — no further returns possible
+
+        // ── Surface return ──
+        // Apply the medium's round-trip attenuation along the actual
+        // travelled distance (the chit's atmosphericExtinction PC slot
+        // is preserved for backwards compatibility with the old single-
+        // exp model; if fogUbo is set, the chit's atm factor would
+        // double-count, but the example currently sets atmosphericExtinction = 0
+        // when fog is active).
+        const float scaledIntensity = pl.intensity * throughput * exp(-sigmaT * pl.distance);
         const bool detected =
                 scaledIntensity >= pc.detectorThreshold &&
                 pl.distance > 0.0 &&
@@ -134,12 +238,11 @@ void main() {
         // media; 0 for opaque hits — which terminates the walk).
         if (pl.continueFraction <= 0.0) break;
 
-        throughput *= pl.continueFraction;
+        // Medium absorbs along the leg we just traversed; downstream
+        // attenuation applies on subsequent legs.
+        throughput *= pl.continueFraction * exp(-sigmaT * pl.distance);
         if (throughput < pc.detectorThreshold) break;
 
-        // Step the ray origin past the hit point along the beam direction
-        // (cheap self-hit avoidance — the next trace's tMin = 0.001 adds
-        // another safety margin).
         rayOrigin   = pl.hitPos + rayDir * 0.001;
         totalRange += pl.distance + 0.001;
     }

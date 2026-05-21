@@ -51,13 +51,14 @@ namespace threepp::vulkan {
     }
 
     void LidarScanner::createDescriptorLayout() {
-        // Five bindings:
+        // Six bindings:
         //   0 = TLAS (acceleration structure)
         //   1 = GeomDescBuf  (SSBO, read)
         //   2 = MatDescBuf   (SSBO, read)
         //   3 = BeamBuf      (SSBO, read)
         //   4 = ResultBuf    (SSBO, write)
-        std::array<VkDescriptorSetLayoutBinding, 5> b{};
+        //   5 = FogUbo       (uniform, read — shared with main RT's GpuFogUbo)
+        std::array<VkDescriptorSetLayoutBinding, 6> b{};
         b[0].binding = 0;
         b[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         b[0].descriptorCount = 1;
@@ -79,6 +80,10 @@ namespace threepp::vulkan {
         b[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         b[4].descriptorCount = 1;
         b[4].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        b[5].binding = 5;
+        b[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        b[5].descriptorCount = 1;
+        b[5].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -106,11 +111,13 @@ namespace threepp::vulkan {
               "vkCreatePipelineLayout(lidar)");
 
         // Descriptor pool sized for exactly one set.
-        std::array<VkDescriptorPoolSize, 2> ps{};
+        std::array<VkDescriptorPoolSize, 3> ps{};
         ps[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         ps[0].descriptorCount = 1;
         ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         ps[1].descriptorCount = 4;
+        ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        ps[2].descriptorCount = 1;
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -336,7 +343,8 @@ namespace threepp::vulkan {
 
     void LidarScanner::updateSceneBindings(VkAccelerationStructureKHR tlas,
                                            VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
-                                           VkBuffer matDescsBuffer, VkDeviceSize matDescsSize) {
+                                           VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
+                                           VkBuffer fogUbo, VkDeviceSize fogUboSize) {
         VkWriteDescriptorSetAccelerationStructureKHR asi{};
         asi.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
         asi.accelerationStructureCount = 1;
@@ -352,7 +360,12 @@ namespace threepp::vulkan {
         matInfo.offset = 0;
         matInfo.range  = matDescsSize ? matDescsSize : VK_WHOLE_SIZE;
 
-        std::array<VkWriteDescriptorSet, 3> w{};
+        VkDescriptorBufferInfo fogInfo{};
+        fogInfo.buffer = fogUbo;
+        fogInfo.offset = 0;
+        fogInfo.range  = fogUboSize ? fogUboSize : VK_WHOLE_SIZE;
+
+        std::array<VkWriteDescriptorSet, 4> w{};
         w[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[0].pNext           = &asi;
         w[0].dstSet          = descSet_;
@@ -374,6 +387,13 @@ namespace threepp::vulkan {
         w[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w[2].pBufferInfo     = &matInfo;
 
+        w[3].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[3].dstSet          = descSet_;
+        w[3].dstBinding      = 5;
+        w[3].descriptorCount = 1;
+        w[3].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        w[3].pBufferInfo     = &fogInfo;
+
         vkUpdateDescriptorSets(ctx_.device(),
                                static_cast<uint32_t>(w.size()), w.data(),
                                0, nullptr);
@@ -383,6 +403,7 @@ namespace threepp::vulkan {
                             VkAccelerationStructureKHR tlas,
                             VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
                             VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
+                            VkBuffer fogUbo, VkDeviceSize fogUboSize,
                             const vulkan_lidar::LidarPushConstants& pc,
                             const vulkan_lidar::LidarBeam* beams, uint32_t numBeams,
                             vulkan_lidar::LidarResult* outResults) {
@@ -394,7 +415,8 @@ namespace threepp::vulkan {
         // Bail out gracefully if the scene isn't ready — write all misses.
         const bool sceneReady = (tlas != VK_NULL_HANDLE) &&
                                 (geomDescsBuffer != VK_NULL_HANDLE) &&
-                                (matDescsBuffer != VK_NULL_HANDLE);
+                                (matDescsBuffer != VK_NULL_HANDLE) &&
+                                (fogUbo != VK_NULL_HANDLE);
         if (!sceneReady) {
             for (uint32_t i = 0; i < totalSlots; ++i) {
                 vulkan_lidar::LidarResult& r = outResults[i];
@@ -421,7 +443,8 @@ namespace threepp::vulkan {
         }
 
         updateSceneBindings(tlas, geomDescsBuffer, geomDescsSize,
-                            matDescsBuffer, matDescsSize);
+                            matDescsBuffer, matDescsSize,
+                            fogUbo, fogUboSize);
 
         // Reset cmd buffer + fence and re-record.
         check(vkResetCommandBuffer(cmdBuf_, 0), "vkResetCommandBuffer(lidar)");

@@ -31,16 +31,24 @@ namespace threepp {
     };
 
     /**
-     * One LIDAR return. `hitInstanceId == -1` indicates a miss or a
-     * detection dropped below the configured detector threshold; all
-     * other fields are undefined in that case.
+     * One LIDAR return. Sentinel values in `hitInstanceId`:
+     *    >= 0   surface hit; ID indexes the renderer's per-instance
+     *           MaterialDesc / GeometryDesc tables
+     *    -1     miss / sub-threshold / source can't tell
+     *    -2     volume scatter event (fog / haze / participating media);
+     *           `position` is the scatter location, `normal` points
+     *           back toward the sensor, `hitInstanceId == -2` lets the
+     *           consumer distinguish a soft fog return from a real
+     *           surface hit
+     *
+     * `returnNo > 0` is the simplest "is this a real return?" predicate.
      */
     struct LidarReturn {
-        Vector3 position;       // world-space hit point
-        Vector3 normal;         // world-space surface normal (0 when unknown)
+        Vector3 position;       // world-space hit point / scatter point
+        Vector3 normal;         // world surface normal; back-toward-sensor for fog; 0 on miss
         float   distance;       // slant range from sensor (m); 0 on miss
         float   intensity;      // normalised return strength [0, 1]; 0 on miss
-        int32_t hitInstanceId;  // -1 = miss / sub-threshold / source can't tell
+        int32_t hitInstanceId;  // see above for sentinel meanings
         int32_t returnNo;       // 1 = first return; 0 = miss
     };
 

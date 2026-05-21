@@ -1312,7 +1312,7 @@ int main() {
             Color col;
             int validHits = 0;
             for (const auto& r : lidarReturns) {
-                if (r.hitInstanceId < 0) continue;
+                if (r.returnNo <= 0) continue;// miss / sub-threshold
                 ++validHits;
                 if (vi >= cloudPos->count()) break;
                 const float t = std::clamp(r.intensity * 3.f, 0.f, 1.f);
@@ -1350,7 +1350,7 @@ int main() {
                     const size_t b = beam * maxRet;
                     if (b >= lidarReturns.size()) break;
                     const auto& r = lidarReturns[b];
-                    if (r.hitInstanceId < 0) continue;
+                    if (r.returnNo <= 0) continue;// miss
                     const int ai = static_cast<int>(beam) / numElev;
                     const int ei = static_cast<int>(beam) % numElev;
                     const int px0 = std::clamp(ai * static_cast<int>(kLidarPanelW) / numAz,

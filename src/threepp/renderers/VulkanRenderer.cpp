@@ -6665,10 +6665,18 @@ namespace threepp {
             const size_t totalSlots = beams.size() * pc.maxReturns;
             std::vector<vulkan_lidar::LidarResult> raw(totalSlots);
 
+            // Pick the most recently uploaded fog slot. render() bumps
+            // currentFrame at the end, so the just-used slot is
+            // (currentFrame - 1) mod N. The slot's contents reflect the
+            // scene's current fog state because updateFogUbo runs every
+            // frame from render().
+            const uint32_t fogSlot = (currentFrame + kFramesInFlight - 1) % kFramesInFlight;
+
             lidar_->scan(ctx->graphicsQueue(),
                          tlas,
                          geometryDescsBuffer.handle, geometryDescsBuffer.size,
                          materialDescsBuffers[0].handle, materialDescsBuffers[0].size,
+                         fogUbos[fogSlot].handle, fogUbos[fogSlot].size,
                          pc,
                          packed.data(), static_cast<uint32_t>(packed.size()),
                          raw.data());

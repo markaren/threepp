@@ -55,6 +55,7 @@ namespace threepp::vulkan {
                   VkAccelerationStructureKHR tlas,
                   VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
                   VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
+                  VkBuffer fogUbo, VkDeviceSize fogUboSize,
                   const vulkan_lidar::LidarPushConstants& pc,
                   const vulkan_lidar::LidarBeam* beams, uint32_t numBeams,
                   vulkan_lidar::LidarResult* outResults);
@@ -104,12 +105,13 @@ namespace threepp::vulkan {
         // change.
         void ensureCapacity(uint32_t numBeams, uint32_t maxReturns);
 
-        // Update the four shared bindings (TLAS, geomDescs, matDescs)
+        // Update the shared bindings (TLAS, geomDescs, matDescs, fogUbo)
         // before dispatch. The beam/result bindings are updated only when
         // ensureCapacity recreates the buffers.
         void updateSceneBindings(VkAccelerationStructureKHR tlas,
                                  VkBuffer geomDescsBuffer, VkDeviceSize geomDescsSize,
-                                 VkBuffer matDescsBuffer, VkDeviceSize matDescsSize);
+                                 VkBuffer matDescsBuffer, VkDeviceSize matDescsSize,
+                                 VkBuffer fogUbo, VkDeviceSize fogUboSize);
     };
 
 }// namespace threepp::vulkan

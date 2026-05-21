@@ -125,7 +125,7 @@ namespace {
         int vi = 0;
         Color c;
         for (const auto& r : returns) {
-            if (r.hitInstanceId < 0) continue;
+            if (r.returnNo <= 0) continue;// miss
             if (vi >= maxVerts) break;
 
             // Colour: intensity → hue. Low intensity = deep blue,
@@ -352,7 +352,7 @@ int main() {
 
         lastReturns = 0;
         for (const auto& r : returns) {
-            if (r.hitInstanceId >= 0) ++lastReturns;
+            if (r.returnNo > 0) ++lastReturns;
         }
 
         updateLidarVisualization(*cloud, returns, colorGain);
@@ -385,7 +385,7 @@ int main() {
             Color c;
             for (size_t b = 0; b < returns.size(); ++b) {
                 const auto& r = returns[b];
-                if (r.hitInstanceId < 0) continue;
+                if (r.returnNo <= 0) continue;// miss
 
                 const int ai = static_cast<int>(b) / numElev;
                 const int ei = static_cast<int>(b) % numElev;
