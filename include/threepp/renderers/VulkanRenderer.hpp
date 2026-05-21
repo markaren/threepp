@@ -96,6 +96,19 @@ namespace threepp {
             float    decay            = 0.85f;
             float    minLuma          = 0.005f;
             uint32_t maxEventsPerPixel = 5;
+            // Microsecond timestamp tagged onto every event emitted this
+            // frame. Set this per-frame from your sim or wall clock; all
+            // events from one render() share this value (matches real DVS
+            // "event packet" semantics — sub-frame timing isn't available).
+            uint32_t frameTimeUs       = 0u;
+        };
+
+        // 16-byte event record. Matches the GPU layout byte-for-byte.
+        struct Event {
+            uint32_t x;
+            uint32_t y;
+            int32_t  polarity;  // +1 (bright) / -1 (dark)
+            uint32_t t_us;
         };
         void setEventCameraEnabled(bool enabled);
         [[nodiscard]] bool eventCameraEnabled() const;
@@ -111,6 +124,32 @@ namespace threepp {
         // returning-vector overload forces, so it's the right call from a
         // tight events-only animate() loop targeting 500 Hz+.
         size_t readEventCameraVisualisationInto(unsigned char* dst, size_t cap) const;
+
+        // Pin the sensor's pixel resolution. The event_shade pass nearest-
+        // samples the (typically larger) gbuf into a sensor-res luma buffer,
+        // and event_detect runs at the sensor extent — so smaller values cut
+        // detector + readback work by the squared scale factor. Pass (0, 0)
+        // to match the swapchain (default).
+        //
+        // Typical real DVS hardware sits in the 128² – 640×480 range; values
+        // outside [16, swapchainExtent] are clamped. Issues a vkDeviceWaitIdle
+        // internally to recreate the detector's persistent images at the new
+        // resolution, so don't call this inside render().
+        void setEventCameraResolution(uint32_t width, uint32_t height);
+        [[nodiscard]] std::pair<uint32_t, uint32_t> eventCameraResolution() const;
+
+        // Sparse event-stream readback. Writes up to `cap` events into
+        // `dst` and returns the count written; `overflowed` (if non-null)
+        // is set to true when the shader dropped events for that frame
+        // because the GPU buffer hit capacity (~256k events). Two-frame
+        // display latency, no GPU wait. Pair this with frameTimeUs in
+        // EventCameraParams set on the frame you want timestamped.
+        //
+        // This is the "real sensor" output — analogous to what hardware
+        // DVS readout interfaces produce. Suitable for ROS bridges,
+        // .aedat exports, ML training pipelines, etc.
+        size_t readEventStreamInto(Event* dst, size_t cap,
+                                   bool* overflowed = nullptr) const;
 
         // Events-only render mode. When on, recordCommandBuffer runs the
         // raster G-buffer prepass and then short-circuits — no photon

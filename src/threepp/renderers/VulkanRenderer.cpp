@@ -928,6 +928,15 @@ namespace threepp {
         uint32_t              eventLumaW_ = 0;
         uint32_t              eventLumaH_ = 0;
 
+        // User-requested sensor resolution. 0 means "track swapchain";
+        // any non-zero pair pins the detector + luma buffer at that res
+        // and the event_shade pass nearest-samples the (typically larger)
+        // gbuf into it. Real DVS sensors live in the 128² – 640×480 range,
+        // far below the swapchain — running the detector at sensor-native
+        // res cuts the per-frame work by the squared scale factor.
+        uint32_t eventCamUserW_ = 0;
+        uint32_t eventCamUserH_ = 0;
+
         // Spatial denoiser — see vulkan/Denoiser.{hpp,cpp}. Owns the atrous
         // + finalize compute pipelines and the filtered + moments ping-pong
         // images. Shares rtDsLayout so a single per-frame descriptor set
@@ -12108,7 +12117,12 @@ namespace threepp {
             check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &eventShadeDsLayout_),
                   "vkCreateDescriptorSetLayout(event_shade)");
 
-            struct ShadePC { uint32_t width; uint32_t height; };
+            struct ShadePC {
+                uint32_t width;
+                uint32_t height;
+                uint32_t gbufWidth;
+                uint32_t gbufHeight;
+            };
             VkPushConstantRange pcr{};
             pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
             pcr.offset     = 0;
@@ -12260,9 +12274,17 @@ namespace threepp {
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                      eventShadePipelineLayout_, 0, 1, &eventShadeDescSet_, 0, nullptr);
 
-            struct ShadePC { uint32_t width; uint32_t height; } pc{};
+            struct ShadePC {
+                uint32_t width;       // sensor (output) dims
+                uint32_t height;
+                uint32_t gbufWidth;   // gbuf (input) dims — gbuf is sized to
+                uint32_t gbufHeight;  // the render extent (≤ swapchain)
+            } pc{};
             pc.width  = eventLumaW_;
             pc.height = eventLumaH_;
+            const VkExtent2D rext = renderExtent();
+            pc.gbufWidth  = rext.width;
+            pc.gbufHeight = rext.height;
             vkCmdPushConstants(cb, eventShadePipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                                 0, sizeof(pc), &pc);
 
@@ -13055,17 +13077,26 @@ namespace threepp {
                 impl.eventCam_ = std::make_unique<vulkan::EventCameraDetector>(*impl.ctx);
             }
             const VkExtent2D ext = impl.ctx->swapchainExtent();
+            // Honour any user-pinned sensor resolution; 0 means "track
+            // swapchain". Clamp to [16, swapchain] so we never dispatch
+            // an empty grid or oversample the gbuf source.
+            const uint32_t w = (impl.eventCamUserW_ == 0)
+                    ? ext.width
+                    : std::clamp(impl.eventCamUserW_, 16u, ext.width);
+            const uint32_t h = (impl.eventCamUserH_ == 0)
+                    ? ext.height
+                    : std::clamp(impl.eventCamUserH_, 16u, ext.height);
             // Wait for any in-flight work that might reference the old
             // images before resize() destroys them.
             vkDeviceWaitIdle(impl.ctx->device());
-            impl.eventCam_->resize(ext.width, ext.height);
+            impl.eventCam_->resize(w, h);
             // Set up the deterministic shade pipeline — eliminates PT
             // noise as a source of false events. The detector now reads
             // the shade output (eventLumaBuf_) instead of the scene
             // capture buffer, so we don't need to enable sceneCapture
             // for the event camera to work.
             impl.createEventShadePipeline();
-            impl.allocateEventLumaBuffer(ext.width, ext.height);
+            impl.allocateEventLumaBuffer(w, h);
         }
     }
 
@@ -13079,6 +13110,7 @@ namespace threepp {
         impl.eventCamParams_.decay             = p.decay;
         impl.eventCamParams_.minLuma           = p.minLuma;
         impl.eventCamParams_.maxEventsPerPixel = p.maxEventsPerPixel;
+        impl.eventCamParams_.frameTimeUs       = p.frameTimeUs;
     }
 
     VulkanRenderer::EventCameraParams VulkanRenderer::eventCameraParams() const {
@@ -13088,6 +13120,7 @@ namespace threepp {
         p.decay             = src.decay;
         p.minLuma           = src.minLuma;
         p.maxEventsPerPixel = src.maxEventsPerPixel;
+        p.frameTimeUs       = src.frameTimeUs;
         return p;
     }
 
@@ -13103,12 +13136,53 @@ namespace threepp {
         return impl.eventCam_->readVisualisationInto(dst, cap);
     }
 
+    size_t VulkanRenderer::readEventStreamInto(Event* dst, size_t cap,
+                                               bool* overflowed) const {
+        const auto& impl = *pimpl_;
+        if (!impl.eventCamEnabled_ || !impl.eventCam_) {
+            if (overflowed) *overflowed = false;
+            return 0;
+        }
+        // Public Event and detector Event are layout-identical (both 16B
+        // {x, y, polarity, t_us}); reinterpret is safe and avoids any
+        // per-event marshalling cost.
+        static_assert(sizeof(Event) == sizeof(vulkan::EventCameraDetector::Event),
+                      "Public Event must match detector Event byte-for-byte");
+        return impl.eventCam_->readEventStreamInto(
+                reinterpret_cast<vulkan::EventCameraDetector::Event*>(dst),
+                cap, overflowed);
+    }
+
     void VulkanRenderer::setEventsOnlyMode(bool enabled) {
         pimpl_->eventsOnlyMode_ = enabled;
     }
 
     bool VulkanRenderer::eventsOnlyMode() const {
         return pimpl_->eventsOnlyMode_;
+    }
+
+    void VulkanRenderer::setEventCameraResolution(uint32_t width, uint32_t height) {
+        auto& impl = *pimpl_;
+        impl.eventCamUserW_ = width;
+        impl.eventCamUserH_ = height;
+        if (!impl.eventCamEnabled_ || !impl.eventCam_) return;
+
+        // Effective sensor dims: zero means "track swapchain"; otherwise
+        // clamp to [16, swapchain] so we never request 0-pixel dispatches
+        // or values larger than the gbuf can possibly source.
+        const VkExtent2D ext = impl.ctx->swapchainExtent();
+        uint32_t w = (width  == 0) ? ext.width  : std::clamp(width,  16u, ext.width);
+        uint32_t h = (height == 0) ? ext.height : std::clamp(height, 16u, ext.height);
+
+        vkDeviceWaitIdle(impl.ctx->device());
+        impl.eventCam_->resize(w, h);
+        impl.allocateEventLumaBuffer(w, h);
+    }
+
+    std::pair<uint32_t, uint32_t> VulkanRenderer::eventCameraResolution() const {
+        const auto& impl = *pimpl_;
+        if (!impl.eventCam_) return {impl.eventCamUserW_, impl.eventCamUserH_};
+        return {impl.eventCam_->width(), impl.eventCam_->height()};
     }
 
     void VulkanRenderer::dispose() { pimpl_.reset(); }

@@ -4,6 +4,7 @@
 
 #include "threepp/renderers/vulkan/shaders/event_detect.comp.spv.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <vector>
@@ -20,8 +21,22 @@ namespace threepp::vulkan {
             float    minLuma;
             uint32_t maxEventsPerPixel;
             uint32_t firstFrame;
-            uint32_t _pad;
+            uint32_t frameTimeUs;
         };
+
+        // 16-byte header at the front of every event-stream buffer.
+        // Layout matches the GLSL block in event_detect.comp:
+        // {count, capacity, overflow, frameTimeUs}.
+        struct EventStreamHeader {
+            uint32_t count;
+            uint32_t capacity;
+            uint32_t overflow;
+            uint32_t frameTimeUs;
+        };
+        static_assert(sizeof(EventStreamHeader) == 16,
+                      "EventStreamHeader must match GLSL layout");
+        static_assert(sizeof(EventCameraDetector::Event) == 16,
+                      "Event must match GLSL layout");
 
         // 16x16 = 256 threads is a sensible compute-shader block size on
         // all desktop GPUs; matches the dispatch math in event_detect.comp.
@@ -57,7 +72,8 @@ namespace threepp::vulkan {
     EventCameraDetector::~EventCameraDetector() {
         const VkDevice d = ctx_.device();
         destroyImages();
-        for (auto& b : readbackRing_) destroyBuffer(ctx_.allocator(), b);
+        for (auto& b : readbackRing_)     destroyBuffer(ctx_.allocator(), b);
+        for (auto& b : eventStreamRing_)  destroyBuffer(ctx_.allocator(), b);
         if (descPool_)       vkDestroyDescriptorPool(d, descPool_, nullptr);
         if (pipeline_)       vkDestroyPipeline(d, pipeline_, nullptr);
         if (pipelineLayout_) vkDestroyPipelineLayout(d, pipelineLayout_, nullptr);
@@ -73,11 +89,12 @@ namespace threepp::vulkan {
         check(vkCreateShaderModule(ctx_.device(), &smci, nullptr, &shader),
               "vkCreateShaderModule(event_detect)");
 
-        // Three bindings:
+        // Four bindings:
         //   0 = scene buffer (storage, read)
         //   1 = log-history image (r32f storage, read/write)
         //   2 = accumulator image (rgba8 storage, read/write)
-        std::array<VkDescriptorSetLayoutBinding, 3> b{};
+        //   3 = event stream buffer (storage, atomic append)
+        std::array<VkDescriptorSetLayoutBinding, 4> b{};
         b[0].binding         = 0;
         b[0].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         b[0].descriptorCount = 1;
@@ -90,6 +107,10 @@ namespace threepp::vulkan {
         b[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         b[2].descriptorCount = 1;
         b[2].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+        b[3].binding         = 3;
+        b[3].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        b[3].descriptorCount = 1;
+        b[3].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -131,7 +152,7 @@ namespace threepp::vulkan {
     void EventCameraDetector::allocateDescriptorPool() {
         std::array<VkDescriptorPoolSize, 2> ps{};
         ps[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        ps[0].descriptorCount = 1;
+        ps[0].descriptorCount = 2;  // scene buf + event stream buf
         ps[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         ps[1].descriptorCount = 2;
 
@@ -281,6 +302,25 @@ namespace threepp::vulkan {
                             VMA_ALLOCATION_CREATE_MAPPED_BIT);
         }
 
+        // (Re)allocate the per-ring-slot event stream buffers. Host-visible
+        // so the host can mmap and read directly; STORAGE_BUFFER_BIT for the
+        // shader's atomic appends, TRANSFER_DST_BIT so we can vkCmdFillBuffer
+        // the header to zero at frame start. Size = 16B header + capacity
+        // events.
+        const VkDeviceSize streamBytes =
+                sizeof(EventStreamHeader) +
+                static_cast<VkDeviceSize>(kEventStreamCapacity) * sizeof(Event);
+        for (auto& b : eventStreamRing_) {
+            destroyBuffer(ctx_.allocator(), b);
+            b = createBuffer(
+                    ctx_.allocator(), ctx_.device(), streamBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+        }
+
         // Update descriptor binding for the storage images. The scene-buffer
         // binding is rewritten lazily by updateSceneBinding() when the host
         // hands us a new VkBuffer handle.
@@ -338,22 +378,59 @@ namespace threepp::vulkan {
 
         updateSceneBinding(sceneBuf);
 
-        // Barrier: sceneBuf (just written by the renderer's image→buffer
-        // copy in recordSceneCapture) must be visible to the compute
-        // shader's buffer reads. Use a global memory barrier for
-        // simplicity — the cost is negligible.
-        VkBufferMemoryBarrier sceneBarrier{};
-        sceneBarrier.sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        sceneBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        sceneBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        sceneBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        sceneBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        sceneBarrier.buffer = sceneBuf;
-        sceneBarrier.size   = VK_WHOLE_SIZE;
+        // Rebind the current ring slot's event-stream buffer to binding 3.
+        // Slot rotates per frame so the host's readEventStreamInto (which
+        // reads the OLDEST slot) never collides with the GPU's writes.
+        {
+            VkDescriptorBufferInfo streamInfo{};
+            streamInfo.buffer = eventStreamRing_[writeSlot_].handle;
+            streamInfo.offset = 0;
+            streamInfo.range  = VK_WHOLE_SIZE;
+            VkWriteDescriptorSet w{};
+            w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet          = descSet_;
+            w.dstBinding      = 3;
+            w.descriptorCount = 1;
+            w.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w.pBufferInfo     = &streamInfo;
+            vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+        }
+
+        // Zero the event-stream header for this slot. {count=0, capacity,
+        // overflow=0, frameTimeUs} — capacity is constant and we don't
+        // strictly need to rewrite it every frame, but vkCmdFillBuffer
+        // with a single 32-bit value can't hand-place capacity, so we
+        // overwrite all 16 bytes with the desired values via vkCmdUpdateBuffer.
+        // Cheaper than a roundtrip mapped write.
+        const EventStreamHeader hdr{
+                0u, kEventStreamCapacity, 0u, params.frameTimeUs};
+        vkCmdUpdateBuffer(cb, eventStreamRing_[writeSlot_].handle,
+                          0, sizeof(hdr), &hdr);
+
+        // Make both buffer writes (sceneBuf transfer + stream header
+        // transfer) visible to the compute shader.
+        std::array<VkBufferMemoryBarrier, 2> preBarriers{};
+        preBarriers[0].sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        preBarriers[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        preBarriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        preBarriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        preBarriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        preBarriers[0].buffer = sceneBuf;
+        preBarriers[0].size   = VK_WHOLE_SIZE;
+        preBarriers[1].sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        preBarriers[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        preBarriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                                       VK_ACCESS_SHADER_WRITE_BIT;
+        preBarriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        preBarriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        preBarriers[1].buffer = eventStreamRing_[writeSlot_].handle;
+        preBarriers[1].size   = VK_WHOLE_SIZE;
         vkCmdPipelineBarrier(cb,
                               VK_PIPELINE_STAGE_TRANSFER_BIT,
                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                              0, 0, nullptr, 1, &sceneBarrier, 0, nullptr);
+                              0, 0, nullptr,
+                              static_cast<uint32_t>(preBarriers.size()), preBarriers.data(),
+                              0, nullptr);
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -367,13 +444,32 @@ namespace threepp::vulkan {
         pc.minLuma          = params.minLuma;
         pc.maxEventsPerPixel = params.maxEventsPerPixel;
         pc.firstFrame       = firstFrame_ ? 1u : 0u;
-        pc._pad             = 0;
+        pc.frameTimeUs      = params.frameTimeUs;
         vkCmdPushConstants(cb, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                             0, sizeof(pc), &pc);
 
         const uint32_t gx = (width_  + kLocalX - 1) / kLocalX;
         const uint32_t gy = (height_ + kLocalY - 1) / kLocalY;
         vkCmdDispatch(cb, gx, gy, 1);
+
+        // Event-stream writes need to be flushed to the host visibility
+        // domain. The buffer is HOST_VISIBLE but the GPU's storage-buffer
+        // writes aren't guaranteed visible to host reads without a barrier
+        // pairing SHADER_WRITE → HOST_READ across COMPUTE → HOST stages.
+        // The host-side readEventStreamInto will also vmaInvalidateAllocation
+        // before reading; both are required for correctness on discrete GPUs.
+        VkBufferMemoryBarrier streamHostBarrier{};
+        streamHostBarrier.sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        streamHostBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        streamHostBarrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        streamHostBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        streamHostBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        streamHostBarrier.buffer = eventStreamRing_[writeSlot_].handle;
+        streamHostBarrier.size   = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cb,
+                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                              VK_PIPELINE_STAGE_HOST_BIT,
+                              0, 0, nullptr, 1, &streamHostBarrier, 0, nullptr);
 
         // Barrier: accumulator GENERAL → TRANSFER_SRC for the copy.
         VkImageMemoryBarrier toSrc = fullColorBarrier(
@@ -438,6 +534,42 @@ namespace threepp::vulkan {
         std::memcpy(dst, mapped, static_cast<size_t>(bytes));
         vmaUnmapMemory(ctx_.allocator(), src.alloc);
         return static_cast<size_t>(bytes);
+    }
+
+    size_t EventCameraDetector::readEventStreamInto(Event* dst, size_t cap,
+                                                    bool* overflowed) const {
+        if (overflowed) *overflowed = false;
+        if (!dst || width_ == 0 || height_ == 0) return 0;
+
+        // Same OLDEST-slot rule as visualisation readback — guaranteed
+        // complete by the in-flight-fence wait two frames ago. The
+        // event-stream buffer for that slot was also written, then
+        // flushed by the COMPUTE → HOST barrier the record() emitted.
+        const uint32_t oldestSlot = writeSlot_;
+        const Buffer& src = eventStreamRing_[oldestSlot];
+        if (src.handle == VK_NULL_HANDLE) return 0;
+        const VkDeviceSize hdrBytes = sizeof(EventStreamHeader);
+        if (src.size < hdrBytes) return 0;
+
+        vmaInvalidateAllocation(ctx_.allocator(), src.alloc, 0, src.size);
+        void* mapped = nullptr;
+        if (vmaMapMemory(ctx_.allocator(), src.alloc, &mapped) != VK_SUCCESS) {
+            return 0;
+        }
+
+        const auto* hdr = static_cast<const EventStreamHeader*>(mapped);
+        const uint32_t count    = hdr->count;
+        const uint32_t capacity = hdr->capacity;
+        if (overflowed) *overflowed = (hdr->overflow != 0u);
+        const uint32_t effective = std::min(count, capacity);
+        const size_t toCopy = std::min(static_cast<size_t>(effective), cap);
+        if (toCopy > 0) {
+            const auto* events = reinterpret_cast<const Event*>(
+                    static_cast<const uint8_t*>(mapped) + sizeof(EventStreamHeader));
+            std::memcpy(dst, events, toCopy * sizeof(Event));
+        }
+        vmaUnmapMemory(ctx_.allocator(), src.alloc);
+        return toCopy;
     }
 
 }// namespace threepp::vulkan

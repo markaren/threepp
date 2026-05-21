@@ -151,20 +151,26 @@ int main() {
         p.threshold = 0.20f;
         p.decay     = 0.88f;
         renderer.setEventCameraParams(p);
+        // Pin a DVS-realistic sensor resolution. 640×480 is roughly
+        // Prophesee Gen3/4 territory; physically meaningful AND about
+        // 3× fewer pixels than the swapchain → smaller detector + readback
+        // work. Pass (0,0) instead to match the swapchain.
+        renderer.setEventCameraResolution(640, 480);
         renderer.setEventCameraEnabled(true);
     }
 
-    // The accumulator is a swapchain-sized RGBA8 image readable via
+    // The accumulator is a sensor-resolution RGBA8 image readable via
     // renderer.readEventCameraVisualisation(); we drop those bytes into
     // a DataTexture each frame so the existing sprite path can display
-    // it. Same pattern the LIDAR readout panel uses.
+    // it (the sprite then upscales to the configured panel size).
+    // Same pattern the LIDAR readout panel uses.
+    const auto sensorRes = renderer.eventCameraResolution();
     auto eventVizTex = DataTexture::create(
             ImageData{std::vector<unsigned char>(
-                    static_cast<size_t>(canvasSize.width()) *
-                            static_cast<size_t>(canvasSize.height()) * 4,
+                    static_cast<size_t>(sensorRes.first) *
+                            static_cast<size_t>(sensorRes.second) * 4,
                     128u)},
-            static_cast<unsigned>(canvasSize.width()),
-            static_cast<unsigned>(canvasSize.height()));
+            sensorRes.first, sensorRes.second);
     eventVizTex->colorSpace = ColorSpace::sRGB;
 
     auto eventVizMat = SpriteMaterial::create();
@@ -206,22 +212,30 @@ int main() {
     bool  eventsOnly        = false;
     auto  evParams          = renderer.eventCameraParams();
 
+    // Sparse event-stream buffer — reused frame-to-frame; the demo
+    // pulls events into it after every render() and the UI lambda
+    // reads `lastEventCount` for the count display.
+    std::vector<VulkanRenderer::Event> events(256u * 1024u);
+    size_t lastEventCount = 0;
+    bool   lastOverflowed = false;
+
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
         // Re-enable: the renderer will idle and resize the detector's
-        // images to the new swapchain size; we also resize the host-
-        // side DataTexture to match.
+        // images. With a user-pinned sensor resolution the detector
+        // stays at sensor res (not the new swapchain); the host-side
+        // DataTexture follows whatever the detector reports.
         renderer.setEventCameraEnabled(false);
         renderer.setEventCameraEnabled(true);
 
-        const size_t pixels = static_cast<size_t>(size.width()) *
-                              static_cast<size_t>(size.height());
+        const auto sr = renderer.eventCameraResolution();
+        const size_t pixels = static_cast<size_t>(sr.first) *
+                              static_cast<size_t>(sr.second);
         eventVizTex = DataTexture::create(
                 ImageData{std::vector<unsigned char>(pixels * 4, 128u)},
-                static_cast<unsigned>(size.width()),
-                static_cast<unsigned>(size.height()));
+                sr.first, sr.second);
         eventVizTex->colorSpace = ColorSpace::sRGB;
         eventVizMat->map = eventVizTex;
 
@@ -276,6 +290,24 @@ int main() {
         ImGui::Text("Sensor res:     %u × %u",
                     static_cast<unsigned>(eventVizTex->image().width),
                     static_cast<unsigned>(eventVizTex->image().height));
+        // Sparse event stream stats. Counts of bright vs dark events
+        // computed by walking the host buffer — costs ~10 µs for typical
+        // counts so safe to do inline; switch to a GPU-side polarity
+        // histogram if events climb to many-millions.
+        size_t nPos = 0, nNeg = 0;
+        for (size_t i = 0; i < lastEventCount; ++i) {
+            if (events[i].polarity > 0) ++nPos;
+            else                        ++nNeg;
+        }
+        ImGui::Text("Events / frame: %zu  (+%zu / -%zu)",
+                    lastEventCount, nPos, nNeg);
+        ImGui::Text("Event rate:     %.1f kHz",
+                    static_cast<double>(lastEventCount) *
+                            static_cast<double>(smoothedFps) / 1000.0);
+        if (lastOverflowed) {
+            ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f),
+                               "OVERFLOW — events dropped this frame");
+        }
         // Per-stage timings — GPU values come from VkQueryPool, CPU
         // values from std::chrono around the host hot path.
         // cpuRecord covers record-start → vkEndCommandBuffer (so it
@@ -316,6 +348,15 @@ int main() {
             }
         }
 
+        // Stamp this render() with a microsecond clock. Carried via
+        // EventCameraParams.frameTimeUs and tagged onto every event the
+        // shader emits this frame.
+        {
+            auto p = renderer.eventCameraParams();
+            p.frameTimeUs = static_cast<uint32_t>(t * 1.0e6f);
+            renderer.setEventCameraParams(p);
+        }
+
         renderer.render(scene, *camera);
 
         // Pull the accumulator the renderer's GPU compute pass painted
@@ -334,6 +375,13 @@ int main() {
         if (got > 0) {
             eventVizTex->needsUpdate();
         }
+
+        // Pull the sparse event stream (oldest ring slot — already
+        // complete; no GPU wait). This is what a real DVS sensor outputs
+        // to its consumer; the visualisation above is for the demo's
+        // sake. Counts and overflow shown in the HUD.
+        lastEventCount = renderer.readEventStreamInto(
+                events.data(), events.size(), &lastOverflowed);
 
         // Smoothed FPS for the HUD. Single-pole IIR (~1 s half-life at
         // ~60 Hz, faster at higher rates where the demo gets useful) so

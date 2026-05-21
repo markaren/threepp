@@ -37,7 +37,30 @@ namespace threepp::vulkan {
             float    decay            = 0.85f;
             float    minLuma          = 0.005f;
             uint32_t maxEventsPerPixel = 5;
+            // Microsecond timestamp tagged onto every event emitted this
+            // frame. Caller-supplied so it can carry a sim or wall clock.
+            // All events from one record() call share this value (sub-
+            // frame timing isn't available — match real DVS semantics:
+            // a "packet" of events at frame time).
+            uint32_t frameTimeUs       = 0u;
         };
+
+        // 16-byte event record. Layout matches event_detect.comp's EvtRec
+        // byte-for-byte; do NOT reorder or add padding without also
+        // updating the shader.
+        struct Event {
+            uint32_t x;
+            uint32_t y;
+            int32_t  polarity;  // +1 or -1
+            uint32_t t_us;
+        };
+
+        // Capacity = max events the stream buffer can hold per frame.
+        // Beyond this the shader sets the overflow flag and drops further
+        // events for that frame. Default sized for a busy 640×480 scene
+        // (real DVS payloads top out around 50–100k events/frame in
+        // typical motion).
+        static constexpr uint32_t kEventStreamCapacity = 256u * 1024u;
 
         explicit EventCameraDetector(VulkanContext& ctx);
         ~EventCameraDetector();
@@ -73,6 +96,16 @@ namespace threepp::vulkan {
         // mapped → DataTexture directly.
         size_t readVisualisationInto(unsigned char* dst, size_t cap) const;
 
+        // Sparse event stream from the OLDEST ring slot — the same
+        // 2-frame-latency guarantee that visualisation readback uses,
+        // so no GPU wait. Returns the event count actually written to
+        // `dst` (clamped to `cap`); `overflowed` (if non-null) is set to
+        // true when the shader dropped events because the GPU stream
+        // buffer hit its capacity. The frame timestamp tagged onto the
+        // events is the value the caller passed via Params.frameTimeUs
+        // when that frame was recorded.
+        size_t readEventStreamInto(Event* dst, size_t cap, bool* overflowed) const;
+
         [[nodiscard]] uint32_t width() const { return width_; }
         [[nodiscard]] uint32_t height() const { return height_; }
 
@@ -88,6 +121,9 @@ namespace threepp::vulkan {
 
         static constexpr uint32_t kRingSize = 3;
         std::array<Buffer, kRingSize> readbackRing_{};
+        // Per-ring-slot event stream buffer. 16B header + capacity·sizeof(Event)
+        // bytes of payload. Host-visible so readEventStreamInto can read directly.
+        std::array<Buffer, kRingSize> eventStreamRing_{};
         // Slot we'll WRITE next on record(); we then advance.
         uint32_t writeSlot_ = 0;
 

@@ -12,6 +12,12 @@
 // toward grey otherwise. The accumulator gets copied to a host-visible
 // readback ring by the host immediately after this dispatch.
 //
+// In parallel with the accumulator paint, every threshold crossing
+// atomically appends an Event {x, y, polarity, t_us} record into the
+// per-frame event stream buffer (binding 3). The host reads the OLDEST
+// ring slot's events list — this is the sparse output a real DVS
+// sensor produces (suitable for .aedat files, ROS bridges, etc.).
+//
 // Threshold quantisation matches the CPU implementation: emit up to
 // `maxEventsPerPixel` events when |Δ| > N · threshold, advance the
 // reference by polarity · N · threshold so the residual carries to
@@ -29,6 +35,24 @@ layout(set = 0, binding = 0, scalar) readonly buffer SceneBuf {
 layout(set = 0, binding = 1, r32f) uniform image2D logHistory;
 layout(set = 0, binding = 2, rgba8) uniform image2D accumulator;
 
+// Sparse event stream. Header (count/capacity/overflow/frameTimeUs) at
+// offset 0, then a flat array of Event records. Layout must match the
+// host's threepp::vulkan::EventCameraDetector::Event byte-for-byte —
+// scalar block layout is mandatory.
+struct EvtRec {
+    uint x;
+    uint y;
+    int  polarity;  // +1 (bright) / -1 (dark)
+    uint t_us;
+};
+layout(set = 0, binding = 3, scalar) buffer EventStream {
+    uint   count;
+    uint   capacity;
+    uint   overflow;
+    uint   frameTimeUs;
+    EvtRec events[];
+} stream;
+
 layout(push_constant) uniform Pc {
     uint  width;
     uint  height;
@@ -37,7 +61,9 @@ layout(push_constant) uniform Pc {
     float minLuma;
     uint  maxEventsPerPixel;
     uint  firstFrame;
-    uint  _pad;
+    uint  frameTimeUs;  // host-supplied microsecond clock — every event
+                        // emitted this frame is tagged with this value
+                        // (sub-frame timing isn't available)
 } pc;
 
 void main() {
@@ -82,6 +108,25 @@ void main() {
         imageStore(logHistory, pix, vec4(newRef, 0.0, 0.0, 0.0));
         const float v = (pol > 0.0) ? 1.0 : 0.0;
         imageStore(accumulator, pix, vec4(v, v, v, 1.0));
+
+        // Sparse event stream emit. atomicAdd is the standard append-list
+        // primitive; the returned index is per-thread-unique. Past the
+        // buffer's capacity we mark overflow and stop writing — real DVS
+        // sensors also drop events when their readout interface saturates,
+        // so this is a faithful failure mode rather than a bug.
+        const int  polInt = (pol > 0.0) ? 1 : -1;
+        for (uint i = 0u; i < n; ++i) {
+            const uint idx = atomicAdd(stream.count, 1u);
+            if (idx < stream.capacity) {
+                stream.events[idx].x        = uint(pix.x);
+                stream.events[idx].y        = uint(pix.y);
+                stream.events[idx].polarity = polInt;
+                stream.events[idx].t_us     = pc.frameTimeUs;
+            } else {
+                atomicMax(stream.overflow, 1u);
+                break;
+            }
+        }
     } else {
         // Decay toward mid-grey (no recent event). cur.rgb is already
         // in [0, 1] from a prior emit or decay step.

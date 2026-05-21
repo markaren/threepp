@@ -94,15 +94,27 @@ layout(set = 0, binding = 4, scalar) writeonly buffer LumaBuf {
 };
 
 layout(push_constant) uniform Pc {
-    uint width;
+    uint width;       // sensor (output) extent — drives the dispatch
     uint height;
+    uint gbufWidth;   // gbuf (input) extent — may exceed sensor when the
+    uint gbufHeight;  // user has set a sub-swapchain sensor resolution
 } pc;
 
 void main() {
     const ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
     if (pix.x >= int(pc.width) || pix.y >= int(pc.height)) return;
 
-    const uvec4 ids = texelFetch(gbufIds, pix, 0);
+    // Map sensor-space pixel → gbuf-space texel (nearest-centre). When
+    // gbufW/H == sensorW/H this collapses to identity. Nearest sampling
+    // for both attachments: ids MUST be NN (usampler can't do LINEAR);
+    // normal at < 2× downsample is visually indistinguishable from a
+    // bilinear filter for the events output (the detector cares about
+    // silhouette stability, not surface gradient).
+    const ivec2 srcPix = ivec2(
+        int((float(pix.x) + 0.5) * float(pc.gbufWidth)  / float(pc.width)),
+        int((float(pix.y) + 0.5) * float(pc.gbufHeight) / float(pc.height))
+    );
+    const uvec4 ids = texelFetch(gbufIds, srcPix, 0);
     const uint  instCustomIdx = ids.r;
 
     vec3 color = vec3(0.0);
@@ -111,7 +123,7 @@ void main() {
     // shifts so 0 means "no surface / sky" in the gbuf).
     if (instCustomIdx > 0u) {
         const uint instId = instCustomIdx - 1u;
-        const vec3 normal = normalize(texelFetch(gbufNormal, pix, 0).xyz);
+        const vec3 normal = normalize(texelFetch(gbufNormal, srcPix, 0).xyz);
         const MaterialDesc mat = mats[instId];
 
         // Metals route most of their incoming light into the specular
