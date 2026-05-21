@@ -79,7 +79,9 @@ layout(push_constant) uniform Pc {
     float atmosphericExtinction;
     float detectorThreshold;
     uint  rngSeed;
-    uint  _pad;
+    uint  maxReturns;
+    uint  _pad0;
+    uint  _pad1;
 } pc;
 
 struct Payload {
@@ -88,6 +90,10 @@ struct Payload {
     float distance;
     float intensity;
     int   instanceId;
+    // Fraction of incoming power that continues past this hit.
+    // 0 → opaque (rgen stops); > 0 → rgen multiplies throughput by this
+    // and re-traces from just past the hit point.
+    float continueFraction;
 };
 layout(location = 0) rayPayloadInEXT Payload pl;
 
@@ -224,9 +230,20 @@ void main() {
     I *= pc.invReferenceIntensity;
     I = clamp(I, 0.0, 1.0);
 
-    pl.hitPos     = hitWorld;
-    pl.hitNormal  = nWorld;
-    pl.distance   = r;
-    pl.intensity  = I;
-    pl.instanceId = int(instId);
+    // Throughput continuing past this surface for multi-return walks.
+    // For an opaque hit (transmission = 0) the beam terminates here.
+    // For transmissive media (clear glass / water) the fraction that
+    // didn't reflect at the Fresnel boundary keeps going; we approximate
+    // that as transmission · (1 - F_lum) where F_lum is the luminance of
+    // the Schlick Fresnel vector. The rgen will multiply this into its
+    // running throughput before recording subsequent returns.
+    const float F_lum     = 0.2126 * F.r + 0.7152 * F.g + 0.0722 * F.b;
+    const float continueT = mat.transmission * max(0.0, 1.0 - F_lum);
+
+    pl.hitPos           = hitWorld;
+    pl.hitNormal        = nWorld;
+    pl.distance         = r;
+    pl.intensity        = I;
+    pl.instanceId       = int(instId);
+    pl.continueFraction = continueT;
 }

@@ -6644,7 +6644,9 @@ namespace threepp {
             pc.atmosphericExtinction = std::max(0.f, params.atmosphericExtinction);
             pc.detectorThreshold = std::max(0.f, params.detectorThreshold);
             pc.rngSeed = 0;
-            pc._pad = 0;
+            pc.maxReturns = std::max(1u, params.maxReturns);
+            pc._pad0 = 0;
+            pc._pad1 = 0;
 
             // Pack beams into the shader-side struct (vec3 + pad).
             std::vector<vulkan_lidar::LidarBeam> packed(beams.size());
@@ -6659,7 +6661,9 @@ namespace threepp {
                 packed[i]._pad1        = 0.f;
             }
 
-            std::vector<vulkan_lidar::LidarResult> raw(beams.size());
+            // results[beamIdx * maxReturns + slot]
+            const size_t totalSlots = beams.size() * pc.maxReturns;
+            std::vector<vulkan_lidar::LidarResult> raw(totalSlots);
 
             lidar_->scan(ctx->graphicsQueue(),
                          tlas,
@@ -6669,9 +6673,11 @@ namespace threepp {
                          packed.data(), static_cast<uint32_t>(packed.size()),
                          raw.data());
 
-            // Unpack into the public LidarReturn struct.
-            outResults.resize(raw.size());
-            for (size_t i = 0; i < raw.size(); ++i) {
+            // Unpack into the public LidarReturn struct. We preserve the
+            // fixed-stride layout (numBeams * maxReturns) — caller filters
+            // entries with hitInstanceId < 0.
+            outResults.resize(totalSlots);
+            for (size_t i = 0; i < totalSlots; ++i) {
                 const auto& r = raw[i];
                 auto& o = outResults[i];
                 o.position.set(r.position[0], r.position[1], r.position[2]);

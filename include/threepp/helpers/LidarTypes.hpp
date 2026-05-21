@@ -68,6 +68,16 @@ namespace threepp {
         // Returns with normalised intensity below this are dropped
         // (hitInstanceId = -1).
         float detectorThreshold = 0.005f;
+
+        // Maximum returns emitted per beam. When > 1, the path-traced
+        // backend continues the beam through transmissive surfaces
+        // (water, glass, foliage) and may record subsequent hits —
+        // closes the sim-to-real gap on the "second return from the
+        // seafloor" / "see-through-glass" signals real LIDAR sensors
+        // output. The raster cube-face LidarSensor always reports 1.
+        // The result vector can be up to numBeams * maxReturns long;
+        // callers filter entries with hitInstanceId < 0.
+        uint32_t maxReturns = 1;
     };
 
 }// namespace threepp

@@ -257,43 +257,49 @@ namespace threepp::vulkan {
               "vkCreateFence(lidar)");
     }
 
-    void LidarScanner::ensureCapacity(uint32_t numBeams) {
-        const uint32_t needed = roundUpPow2(std::max(1u, numBeams));
-        if (needed <= capacityBeams_) return;
+    void LidarScanner::ensureCapacity(uint32_t numBeams, uint32_t maxReturns) {
+        const uint32_t beamsNeeded   = roundUpPow2(std::max(1u, numBeams));
+        const uint32_t resultsNeeded = roundUpPow2(std::max(1u, numBeams * std::max(1u, maxReturns)));
+        const bool beamsGrew   = (beamsNeeded   > capacityBeams_);
+        const bool resultsGrew = (resultsNeeded > capacityResults_);
+        if (!beamsGrew && !resultsGrew) return;
 
-        // Wait for any in-flight work on these buffers before freeing.
-        // The scanner's own dispatch is the only thing that touches them,
-        // and we've either never submitted (first call) or already waited
-        // on fence_ at the end of the previous scan().
-        destroyBuffer(ctx_.allocator(), beamBuf_);
-        destroyBuffer(ctx_.allocator(), resultBuf_);
-        destroyBuffer(ctx_.allocator(), readbackBuf_);
+        // Wait for any in-flight work on these buffers before freeing. The
+        // scanner's own dispatch is the only thing that touches them, and
+        // we've either never submitted (first call) or already waited on
+        // fence_ at the end of the previous scan().
+        if (beamsGrew) {
+            destroyBuffer(ctx_.allocator(), beamBuf_);
+            const VkDeviceSize beamBytes =
+                    static_cast<VkDeviceSize>(beamsNeeded) * sizeof(vulkan_lidar::LidarBeam);
+            beamBuf_ = createBuffer(
+                    ctx_.allocator(), ctx_.device(), beamBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            capacityBeams_ = beamsNeeded;
+        }
 
-        const VkDeviceSize beamBytes   = static_cast<VkDeviceSize>(needed) * sizeof(vulkan_lidar::LidarBeam);
-        const VkDeviceSize resultBytes = static_cast<VkDeviceSize>(needed) * sizeof(vulkan_lidar::LidarResult);
-
-        beamBuf_ = createBuffer(
-                ctx_.allocator(), ctx_.device(), beamBytes,
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                VMA_MEMORY_USAGE_AUTO,
-                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                        VMA_ALLOCATION_CREATE_MAPPED_BIT);
-
-        resultBuf_ = createBuffer(
-                ctx_.allocator(), ctx_.device(), resultBytes,
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                0);
-
-        readbackBuf_ = createBuffer(
-                ctx_.allocator(), ctx_.device(), resultBytes,
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
-                VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-                        VMA_ALLOCATION_CREATE_MAPPED_BIT);
-
-        capacityBeams_ = needed;
+        if (resultsGrew) {
+            destroyBuffer(ctx_.allocator(), resultBuf_);
+            destroyBuffer(ctx_.allocator(), readbackBuf_);
+            const VkDeviceSize resultBytes =
+                    static_cast<VkDeviceSize>(resultsNeeded) * sizeof(vulkan_lidar::LidarResult);
+            resultBuf_ = createBuffer(
+                    ctx_.allocator(), ctx_.device(), resultBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                    0);
+            readbackBuf_ = createBuffer(
+                    ctx_.allocator(), ctx_.device(), resultBytes,
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+            capacityResults_ = resultsNeeded;
+        }
 
         // Update descriptor set bindings 3 (beams) and 4 (results) to point
         // at the new buffers. The scene bindings (0/1/2) are touched per
@@ -382,12 +388,15 @@ namespace threepp::vulkan {
                             vulkan_lidar::LidarResult* outResults) {
         if (numBeams == 0 || outResults == nullptr || beams == nullptr) return;
 
+        const uint32_t maxReturns = std::max(pc.maxReturns, 1u);
+        const uint32_t totalSlots = numBeams * maxReturns;
+
         // Bail out gracefully if the scene isn't ready — write all misses.
         const bool sceneReady = (tlas != VK_NULL_HANDLE) &&
                                 (geomDescsBuffer != VK_NULL_HANDLE) &&
                                 (matDescsBuffer != VK_NULL_HANDLE);
         if (!sceneReady) {
-            for (uint32_t i = 0; i < numBeams; ++i) {
+            for (uint32_t i = 0; i < totalSlots; ++i) {
                 vulkan_lidar::LidarResult& r = outResults[i];
                 r.position[0] = r.position[1] = r.position[2] = 0.f;
                 r.normal[0]   = r.normal[1]   = r.normal[2]   = 0.f;
@@ -400,7 +409,7 @@ namespace threepp::vulkan {
             return;
         }
 
-        ensureCapacity(numBeams);
+        ensureCapacity(numBeams, maxReturns);
 
         // Upload beams (mapped, sequential write).
         {
@@ -450,9 +459,10 @@ namespace threepp::vulkan {
         rtDep.pBufferMemoryBarriers = &rtToCopy;
         vkCmdPipelineBarrier2(cmdBuf_, &rtDep);
 
-        // Copy device → host-visible.
+        // Copy device → host-visible. Copy `numBeams * maxReturns` slots
+        // — the rgen lays out results as beamIdx * maxReturns + returnSlot.
         VkBufferCopy region{};
-        region.size = static_cast<VkDeviceSize>(numBeams) * sizeof(vulkan_lidar::LidarResult);
+        region.size = static_cast<VkDeviceSize>(totalSlots) * sizeof(vulkan_lidar::LidarResult);
         vkCmdCopyBuffer(cmdBuf_, resultBuf_.handle, readbackBuf_.handle, 1, &region);
 
         // Barrier: transfer write → host read.
@@ -488,11 +498,11 @@ namespace threepp::vulkan {
         // is a no-op when the memory is coherent.
         vmaInvalidateAllocation(ctx_.allocator(), readbackBuf_.alloc,
                                 0,
-                                static_cast<VkDeviceSize>(numBeams) * sizeof(vulkan_lidar::LidarResult));
+                                static_cast<VkDeviceSize>(totalSlots) * sizeof(vulkan_lidar::LidarResult));
         void* mapped = nullptr;
         check(vmaMapMemory(ctx_.allocator(), readbackBuf_.alloc, &mapped),
               "vmaMapMemory(lidar readback)");
-        std::memcpy(outResults, mapped, numBeams * sizeof(vulkan_lidar::LidarResult));
+        std::memcpy(outResults, mapped, totalSlots * sizeof(vulkan_lidar::LidarResult));
         vmaUnmapMemory(ctx_.allocator(), readbackBuf_.alloc);
     }
 

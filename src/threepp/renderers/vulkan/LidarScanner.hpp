@@ -39,9 +39,14 @@ namespace threepp::vulkan {
         LidarScanner& operator=(const LidarScanner&) = delete;
 
         // Synchronous scan. Submits an RT dispatch of `numBeams` invocations,
-        // waits for completion, and writes the per-beam results into
-        // outResults[0..numBeams-1]. The caller owns the storage; this class
-        // does not retain pointers.
+        // waits for completion, and writes up to `pc.maxReturns` per-beam
+        // results into outResults[0 .. numBeams * pc.maxReturns - 1]. Slot
+        // layout: outResults[beamIdx * maxReturns + returnSlot]. Unused
+        // slots are filled with miss sentinels (hitInstanceId = -1) so the
+        // host iterates a fixed-stride array and filters.
+        //
+        // The caller owns the storage and must size it for at least
+        // numBeams * max(pc.maxReturns, 1) LidarResult entries.
         //
         // Bails out gracefully (writes all-miss results) when the scene is
         // not yet built (tlas == VK_NULL_HANDLE or buffers null/empty) so
@@ -85,17 +90,19 @@ namespace threepp::vulkan {
         Buffer   beamBuf_{};
         Buffer   resultBuf_{};
         Buffer   readbackBuf_{};
-        uint32_t capacityBeams_ = 0;
+        uint32_t capacityBeams_   = 0;// beam-buffer rows
+        uint32_t capacityResults_ = 0;// result-buffer rows (= beams × maxReturns)
 
         void createDescriptorLayout();
         void createPipeline();
         void createSbt();
         void createCommandObjects();
 
-        // Round numBeams up to a power of two and reallocate buffers if
-        // larger than current capacity. Updates the descriptor set bindings
-        // for beamBuf_ + resultBuf_ since the VkBuffer handles change.
-        void ensureCapacity(uint32_t numBeams);
+        // Round (numBeams, maxReturns) up to powers of two and reallocate
+        // buffers if larger than current capacity. Updates the descriptor
+        // set bindings for beamBuf_ + resultBuf_ since the VkBuffer handles
+        // change.
+        void ensureCapacity(uint32_t numBeams, uint32_t maxReturns);
 
         // Update the four shared bindings (TLAS, geomDescs, matDescs)
         // before dispatch. The beam/result bindings are updated only when

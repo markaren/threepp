@@ -45,7 +45,7 @@ namespace threepp::vulkan_lidar {
     static_assert(sizeof(LidarResult) == 48,
                   "LidarResult layout drifted — update the GLSL mirror below.");
 
-    // 32-byte push constant block. Fits well within the 128-byte minimum
+    // 40-byte push constant block. Fits well within the 128-byte minimum
     // pushConstants size that every Vulkan implementation guarantees.
     struct LidarPushConstants {
         uint32_t numBeams;
@@ -55,9 +55,16 @@ namespace threepp::vulkan_lidar {
         float atmosphericExtinction;
         float detectorThreshold;
         uint32_t rngSeed;
-        uint32_t _pad;
+        // Maximum returns the rgen will emit per beam. Beam continues
+        // through transmissive surfaces and records subsequent hits
+        // until either: maxReturns reached, ray misses, or remaining
+        // throughput falls below detectorThreshold. 1 = legacy single-
+        // return behaviour.
+        uint32_t maxReturns;
+        uint32_t _pad0;
+        uint32_t _pad1;
     };
-    static_assert(sizeof(LidarPushConstants) == 32,
+    static_assert(sizeof(LidarPushConstants) == 40,
                   "LidarPushConstants layout drifted — update the GLSL mirror below.");
 
 }// namespace threepp::vulkan_lidar

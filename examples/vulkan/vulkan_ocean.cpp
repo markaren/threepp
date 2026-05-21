@@ -495,7 +495,7 @@ int main() {
     // via the same closest-hit BSDF the path tracer uses.
     constexpr float kLidarMountHeight  = 11.0f;      // m above waterline — clears wheelhouse + mast roof
     constexpr float kLidarMountForward = 8.0f;       // m forward of boat origin (near the bow)
-    constexpr int   kLidarMaxBeams     = 200000;     // enough for OS0-128
+    constexpr int   kLidarMaxBeams     = 500000;     // enough for OS0-128 × maxReturns 4
 
     // Forward-only scan (azimuth ∈ [-90°, +90°]). Sensor convention puts
     // azimuth = 0 along the sensor's local -Z (forward), so this carves
@@ -674,7 +674,15 @@ int main() {
         ImGui::SliderFloat("Laser power##lidar",        &lidarSensor->params.laserPower, 0.1f, 10.f);
         ImGui::SliderFloat("Atmospheric ext##lidar",    &lidarSensor->params.atmosphericExtinction, 0.f, 0.05f, "%.4f");
         ImGui::SliderFloat("Detector thresh##lidar",    &lidarSensor->params.detectorThreshold, 0.f, 0.02f, "%.4f");
-        ImGui::Text("Returns: %d / %u   Scan: %.2f ms",
+        {
+            // Multi-return through the water surface: maxReturns=2 lets the
+            // sensor see the seafloor below the wave crests where the
+            // surface Fresnel return doesn't fully attenuate the beam.
+            int maxRet = static_cast<int>(lidarSensor->params.maxReturns);
+            if (ImGui::SliderInt("Max returns##lidar", &maxRet, 1, 4))
+                lidarSensor->params.maxReturns = static_cast<uint32_t>(std::max(1, maxRet));
+        }
+        ImGui::Text("Returns: %d / %u beams   Scan: %.2f ms",
                     lidarLastReturns,
                     lidarSensor->beamCount(),
                     static_cast<double>(lidarLastScanMs));
@@ -1334,11 +1342,17 @@ int main() {
                 auto& panelBytes = lidarPanelTex->image().data<unsigned char>();
                 std::fill(panelBytes.begin(), panelBytes.end(), 0u);
 
-                for (size_t b = 0; b < lidarReturns.size(); ++b) {
+                // Panel shows the FIRST return per beam (real LIDAR
+                // sensors' default debug view). Multi-returns appear in
+                // the 3-D cloud where they don't overlap spatially.
+                const uint32_t maxRet = std::max(1u, lidarSensor->params.maxReturns);
+                for (size_t beam = 0; beam < lidarSensor->beamCount(); ++beam) {
+                    const size_t b = beam * maxRet;
+                    if (b >= lidarReturns.size()) break;
                     const auto& r = lidarReturns[b];
                     if (r.hitInstanceId < 0) continue;
-                    const int ai = static_cast<int>(b) / numElev;
-                    const int ei = static_cast<int>(b) % numElev;
+                    const int ai = static_cast<int>(beam) / numElev;
+                    const int ei = static_cast<int>(beam) % numElev;
                     const int px0 = std::clamp(ai * static_cast<int>(kLidarPanelW) / numAz,
                                                 0, static_cast<int>(kLidarPanelW) - 1);
                     const int py0 = std::clamp(ei * static_cast<int>(kLidarPanelH) / numElev,

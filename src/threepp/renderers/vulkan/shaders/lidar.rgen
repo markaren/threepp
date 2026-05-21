@@ -8,12 +8,17 @@
 // Path-traced LIDAR — raygen.
 //
 // One beam per launched thread. Reads (origin, direction) from a host-uploaded
-// BeamBuf, traces a single ray against the same TLAS the main path tracer
-// uses, and writes a per-beam LidarResult (hit position, distance, surface
-// normal, normalised intensity, instance id). The closest-hit shader
+// BeamBuf, traces against the same TLAS the main path tracer uses, and writes
+// up to `maxReturns` per-beam LidarResult entries (hit position, distance,
+// surface normal, normalised intensity, instance id). The closest-hit shader
 // (lidar.rchit) evaluates the LIDAR equation — Lambertian back-scatter
 // damped by metal specular loss × Beer-Lambert atmospheric attenuation × 1/r²
-// — and writes the result into our local Payload.
+// — and signals to the rgen via `pl.continueFraction` whether the surface
+// is transmissive enough to keep walking the beam.
+//
+// Result layout: results[beamIdx * maxReturns + slot]. Slots that didn't
+// produce a return are filled with sentinel-miss values (hitInstanceId=-1,
+// returnNo=0) so the host can iterate over a fixed-stride array and filter.
 
 #include "lidar_shared.h"
 
@@ -33,7 +38,9 @@ layout(push_constant) uniform Pc {
     float atmosphericExtinction;
     float detectorThreshold;
     uint  rngSeed;
-    uint  _pad;
+    uint  maxReturns;
+    uint  _pad0;
+    uint  _pad1;
 } pc;
 
 struct Payload {
@@ -42,60 +49,104 @@ struct Payload {
     float distance;
     float intensity;
     int   instanceId;
+    // Fraction of incident power that continues forward past this hit.
+    // 0 for opaque surfaces; ~transmission · (1 - Fresnel) for clear
+    // glass / water. The rgen multiplies this into the running throughput
+    // before recording the next return slot.
+    float continueFraction;
 };
 layout(location = 0) rayPayloadEXT Payload pl;
+
+void writeMiss(uint idx) {
+    LidarResult r;
+    r.position   = vec3(0.0);
+    r.distance   = 0.0;
+    r.normal     = vec3(0.0);
+    r.intensity  = 0.0;
+    r.instanceId = -1;
+    r.returnNo   = 0;
+    r._pad       = vec2(0.0);
+    results[idx] = r;
+}
 
 void main() {
     const uint i = gl_LaunchIDEXT.x;
     if (i >= pc.numBeams) return;
 
-    LidarBeam beam = beams[i];
+    const LidarBeam beam = beams[i];
+    const uint maxRet    = max(pc.maxReturns, 1u);
+    const uint baseIdx   = i * maxRet;
 
-    // Default to miss — the rmiss shader rewrites these but defending in
-    // case of degenerate beam direction.
-    pl.hitPos     = vec3(0.0);
-    pl.hitNormal  = vec3(0.0);
-    pl.distance   = 0.0;
-    pl.intensity  = 0.0;
-    pl.instanceId = -1;
+    vec3  rayOrigin    = beam.origin;
+    const vec3 rayDir  = beam.direction;
+    float totalRange   = 0.0;
+    float throughput   = 1.0;
+    uint  slot         = 0;
 
-    // Opaque flag means we skip any-hit on alpha-tested triangles. The main
-    // path tracer's alpha handling is complex and irrelevant here — LIDAR
-    // sees alpha-masked fronds as solid; matches real sensor behaviour for
-    // foliage where the leaf surface is what reflects the pulse.
-    traceRayEXT(topAS,
-                gl_RayFlagsOpaqueEXT,
-                0xFF,           // cull mask — accept everything
-                0, 0, 0,        // sbtRecordOffset, sbtRecordStride, missIndex
-                beam.origin,
-                0.001,          // tMin: slight bias to avoid self-hit when
-                                // the beam origin sits exactly on a previous
-                                // hit point (multi-return support later).
-                beam.direction,
-                pc.maxRange,
-                0);             // payload location
+    for (uint b = 0u; b < maxRet; ++b) {
+        // Reset payload defaults so the rmiss path is well-defined.
+        pl.hitPos           = vec3(0.0);
+        pl.hitNormal        = vec3(0.0);
+        pl.distance         = 0.0;
+        pl.intensity        = 0.0;
+        pl.instanceId       = -1;
+        pl.continueFraction = 0.0;
 
-    LidarResult r;
-    const bool detected =
-            pl.instanceId >= 0 &&
-            pl.intensity >= pc.detectorThreshold &&
-            pl.distance > 0.0 &&
-            pl.distance <= pc.maxRange;
-    if (detected) {
-        r.position   = pl.hitPos;
-        r.distance   = pl.distance;
-        r.normal     = pl.hitNormal;
-        r.intensity  = pl.intensity;
-        r.instanceId = pl.instanceId;
-        r.returnNo   = 1;
-    } else {
-        r.position   = vec3(0.0);
-        r.distance   = 0.0;
-        r.normal     = vec3(0.0);
-        r.intensity  = 0.0;
-        r.instanceId = -1;
-        r.returnNo   = 0;
+        const float segmentMax = pc.maxRange - totalRange;
+        if (segmentMax <= 0.0) break;
+
+        // Opaque flag means we skip any-hit on alpha-tested triangles. The
+        // main path tracer's alpha handling is complex and irrelevant here —
+        // LIDAR sees alpha-masked fronds as solid, which matches real sensor
+        // behaviour for foliage where the leaf surface reflects the pulse.
+        traceRayEXT(topAS,
+                    gl_RayFlagsOpaqueEXT,
+                    0xFF, 0, 0, 0,
+                    rayOrigin, 0.001,
+                    rayDir,    segmentMax,
+                    0);
+
+        if (pl.instanceId < 0) break;// miss — no further returns possible
+
+        const float scaledIntensity = pl.intensity * throughput;
+        const bool detected =
+                scaledIntensity >= pc.detectorThreshold &&
+                pl.distance > 0.0 &&
+                pl.distance <= segmentMax;
+
+        if (detected) {
+            LidarResult r;
+            r.position   = pl.hitPos;
+            r.distance   = totalRange + pl.distance;
+            r.normal     = pl.hitNormal;
+            r.intensity  = clamp(scaledIntensity, 0.0, 1.0);
+            r.instanceId = pl.instanceId;
+            r.returnNo   = int(slot + 1u);
+            r._pad       = vec2(0.0);
+            results[baseIdx + slot] = r;
+            ++slot;
+            if (slot >= maxRet) break;
+        }
+
+        // Continue the ray past this surface if it's transmissive enough
+        // to carry useful power. The chit packed the post-surface throughput
+        // factor into pl.continueFraction (transmission · (1 - F) for clear
+        // media; 0 for opaque hits — which terminates the walk).
+        if (pl.continueFraction <= 0.0) break;
+
+        throughput *= pl.continueFraction;
+        if (throughput < pc.detectorThreshold) break;
+
+        // Step the ray origin past the hit point along the beam direction
+        // (cheap self-hit avoidance — the next trace's tMin = 0.001 adds
+        // another safety margin).
+        rayOrigin   = pl.hitPos + rayDir * 0.001;
+        totalRange += pl.distance + 0.001;
     }
-    r._pad = vec2(0.0);
-    results[i] = r;
+
+    // Fill unused slots with miss sentinels so the host sees a clean
+    // fixed-stride layout.
+    for (uint s = slot; s < maxRet; ++s) {
+        writeMiss(baseIdx + s);
+    }
 }
