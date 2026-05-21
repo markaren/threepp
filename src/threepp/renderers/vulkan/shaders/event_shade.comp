@@ -1,0 +1,140 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_GOOGLE_include_directive : enable
+
+// Fast deterministic shader for the event-camera path. Reads the hybrid
+// raster G-buffer (normal + instanceCustomIndex), looks up the hit's
+// MaterialDesc, and shades it with the scene's directional lights only —
+// no shadows, no bounces, no path tracing. Output is packed BGRA8
+// (matching swapchain format) in the same buffer event_detect.comp would
+// otherwise read from the PT-noisy swapchain copy, so the downstream
+// detector pipeline is unchanged.
+//
+// What's modelled:
+//   • Lambertian diffuse:  albedo · max(0, N·L) · lightColor, summed over
+//     up to 8 directional lights.
+//   • Ambient: lights.ambient · albedo.
+//   • Emissive: mat.emissive · mat.emissiveIntensity (so glowing surfaces
+//     light up the event accumulator when they appear / move).
+//   • Metalness damping on the diffuse: metals lose most of their light
+//     to the specular lobe we deliberately don't compute here. Better
+//     to under-shade chrome than to fake a noisy specular term.
+//
+// What's NOT modelled (intentional, for sim-to-real noise reasons):
+//   • Specular highlights — they'd require either ray-traced reflections
+//     (slow) or screen-space hacks (noisy). Real DVS sensors smooth most
+//     specular flicker via their photoreceptor bandwidth, so leaving it
+//     out matches the typical event signature better than approximating.
+//   • Shadows — would need ray traces, defeating the "fast deterministic"
+//     point. Static shadow edges don't fire DVS events anyway; only
+//     moving shadows do, and those are caught downstream by detecting
+//     events on the surfaces the shadow sweeps across.
+//   • Indirect / GI — by definition, the PT branch we're avoiding.
+//
+// The output deliberately matches the swapchain BGRA8 layout so the
+// existing event_detect.comp consumes it without modification.
+
+#include "vulkan_shared.h"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D  gbufNormal;
+layout(set = 0, binding = 1) uniform usampler2D gbufIds;
+
+layout(set = 0, binding = 2, scalar) readonly buffer MatBuf {
+    MaterialDesc mats[];
+};
+
+struct DirLight {
+    vec3 direction;
+    vec3 color;
+};
+// Same layout as the main RT pipeline's LightsUbo — we read only the
+// ambient + directional block, but declare the full struct so scalar
+// block layout matches byte-for-byte against the host-side upload.
+struct PointLight {
+    vec3 position;
+    float range;
+    vec3 color;
+    float decay;
+};
+struct SpotLight {
+    vec3 position;
+    float range;
+    vec3 color;
+    float decay;
+    vec3 direction;
+    float cosAngleOuter;
+    float cosAngleInner;
+};
+struct RectLight {
+    vec3 position;
+    vec3 halfU;
+    vec3 halfV;
+    vec3 normal;
+    vec3 color;
+};
+layout(set = 0, binding = 3, scalar) uniform LightsUbo {
+    vec3       ambient;
+    uint       dirCount;
+    DirLight   dirLights[8];
+    uint       pointCount;
+    uint       spotCount;
+    uint       rectCount;
+    PointLight pointLights[8];
+    SpotLight  spotLights[8];
+    RectLight  rectLights[4];
+} lights;
+
+// Packed BGRA8 output — one uint per pixel, byte 0 = B, byte 1 = G,
+// byte 2 = R, byte 3 = 0xFF. Matches the swapchain format event_detect
+// already knows how to read.
+layout(set = 0, binding = 4, scalar) writeonly buffer LumaBuf {
+    uint pixels[];
+};
+
+layout(push_constant) uniform Pc {
+    uint width;
+    uint height;
+} pc;
+
+void main() {
+    const ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    if (pix.x >= int(pc.width) || pix.y >= int(pc.height)) return;
+
+    const uvec4 ids = texelFetch(gbufIds, pix, 0);
+    const uint  instCustomIdx = ids.r;
+
+    vec3 color = vec3(0.0);
+
+    // instCustomIdx is gl_InstanceCustomIndexEXT + 1 (the renderer
+    // shifts so 0 means "no surface / sky" in the gbuf).
+    if (instCustomIdx > 0u) {
+        const uint instId = instCustomIdx - 1u;
+        const vec3 normal = normalize(texelFetch(gbufNormal, pix, 0).xyz);
+        const MaterialDesc mat = mats[instId];
+
+        // Metals route most of their incoming light into the specular
+        // lobe; the diffuse contribution is small. Reduces brightness
+        // for shiny surfaces while keeping the geometry visible.
+        const vec3 albedo = mat.albedo * (1.0 - 0.7 * mat.metalness);
+
+        color = lights.ambient * albedo;
+        for (uint i = 0u; i < lights.dirCount; ++i) {
+            const float NdotL = max(0.0, dot(normal, lights.dirLights[i].direction));
+            color += NdotL * lights.dirLights[i].color * albedo;
+        }
+
+        // Emissive surfaces stay bright regardless of light direction —
+        // important for catching DVS events from blinking / oscillating
+        // emissive features (LEDs, indicator lights, displays).
+        color += mat.emissive * max(0.0, mat.emissiveIntensity);
+    }
+
+    color = clamp(color, vec3(0.0), vec3(1.0));
+    const uint r = uint(color.r * 255.0);
+    const uint g = uint(color.g * 255.0);
+    const uint b = uint(color.b * 255.0);
+    pixels[uint(pix.y) * pc.width + uint(pix.x)] =
+            b | (g << 8u) | (r << 16u) | (0xFFu << 24u);
+}

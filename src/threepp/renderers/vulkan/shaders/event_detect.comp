@@ -41,10 +41,17 @@ layout(push_constant) uniform Pc {
 } pc;
 
 void main() {
+    // `pix` is the accumulator / log-history coordinate. The sprite
+    // sampler convention puts V=0 at the bottom of the texture, so for
+    // the visualisation to display right-side-up we store the scene's
+    // BOTTOM row at accumulator row 0. The scene buffer is in Vulkan
+    // top-down layout (row 0 = top of scene), so we read scene row
+    // `height - 1 - pix.y` to feed accumulator row `pix.y`.
     const ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
     if (pix.x >= int(pc.width) || pix.y >= int(pc.height)) return;
 
-    const uint linear = uint(pix.y) * pc.width + uint(pix.x);
+    const uint sceneY = uint(int(pc.height) - 1 - pix.y);
+    const uint linear = sceneY * pc.width + uint(pix.x);
     const uint packed = sceneBuf.pixels[linear];
 
     const float b = float((packed >>  0u) & 0xFFu) * (1.0 / 255.0);

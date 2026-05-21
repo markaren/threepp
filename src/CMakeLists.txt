@@ -951,6 +951,14 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/event_detect.comp"
         kEventDetectCompSpv
         _event_detect_spv_h)
+    # Fast deterministic shading for the event-camera pipeline. Reads the
+    # raster G-buffer + material/light buffers, outputs a packed BGRA8
+    # luma buffer matching the swapchain layout — feeds event_detect
+    # without the path tracer's stochastic noise.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/event_shade.comp"
+        kEventShadeCompSpv
+        _event_shade_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/prefilter_env.comp"
         kPrefilterEnvCompSpv
