@@ -13,6 +13,7 @@
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
+#include "threepp/helpers/LidarWaveform.hpp"
 #include "threepp/helpers/PathTracedLidarSensor.hpp"
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/lights/AmbientLight.hpp"
@@ -565,6 +566,21 @@ int main() {
 
     std::vector<LidarReturn> lidarReturns;
 
+    // ── Time-of-flight waveform synthesis ──────────────────────────────
+    // The discrete returns above are what the host gets from the GPU
+    // pipeline; a real LIDAR detector sees a continuous waveform that's
+    // the Gaussian-pulse convolution of those returns. We synthesise
+    // that waveform CPU-side and plot a single representative beam in
+    // ImGui so the demo shows both views (point cloud + analog signal).
+    LidarWaveformParams lidarWavParams;
+    lidarWavParams.maxRange   = 120.f;
+    lidarWavParams.bins       = 256;
+    lidarWavParams.pulseFWHM  = 0.75f;
+    lidarWavParams.noiseFloor = 0.f;
+    bool  lidarShowWave    = true;
+    int   lidarWaveBeamIdx = 0;
+    std::vector<float> lidarWaveform;
+
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({0, 0});
         ImGui::SetNextWindowSize({340, 0});
@@ -697,6 +713,29 @@ int main() {
                     lidarLastReturns,
                     lidarSensor->beamCount(),
                     static_cast<double>(lidarLastScanMs));
+
+        ImGui::Separator();
+        ImGui::Checkbox("Show ToF waveform", &lidarShowWave);
+        if (lidarShowWave) {
+            ImGui::SliderFloat("Pulse FWHM (m)##lidar", &lidarWavParams.pulseFWHM, 0.1f, 5.f, "%.2f");
+            const int maxBeam = std::max(0, static_cast<int>(lidarSensor->beamCount()) - 1);
+            ImGui::SliderInt("Beam##wave", &lidarWaveBeamIdx, 0, maxBeam);
+            // Plot the selected beam's analog waveform.
+            const size_t bins = lidarWavParams.bins;
+            if (!lidarWaveform.empty()) {
+                const size_t off = static_cast<size_t>(lidarWaveBeamIdx) * bins;
+                if (off + bins <= lidarWaveform.size()) {
+                    ImGui::PlotLines("Intensity",
+                                     &lidarWaveform[off],
+                                     static_cast<int>(bins),
+                                     0,
+                                     nullptr,
+                                     0.f, 1.f,
+                                     ImVec2(0, 80));
+                    ImGui::TextDisabled("X = distance 0 .. %.1f m", static_cast<double>(lidarWavParams.maxRange));
+                }
+            }
+        }
         ImGui::End();
 
         // ── Radar HUD ─────────────────────────────────────────────────────
@@ -1390,6 +1429,18 @@ int main() {
                     }
                 }
                 lidarPanelTex->needsUpdate();
+            }
+
+            // Synthesize the per-beam analog waveform from the discrete
+            // returns. Cheap (<1 ms) for one beam per frame.
+            if (lidarShowWave) {
+                const uint32_t mr = std::max(1u, lidarSensor->params.maxReturns);
+                const uint32_t sp = std::max(1u, lidarSensor->params.samplesPerBeam);
+                lidarWavParams.maxRange = lidarSensor->params.maxRange;
+                synthesizeLidarWaveform(lidarReturns,
+                                        lidarSensor->beamCount(),
+                                        static_cast<size_t>(mr) * sp,
+                                        lidarWavParams, lidarWaveform);
             }
         } else {
             lidarCloudGeom->setDrawRange(0, 0);
