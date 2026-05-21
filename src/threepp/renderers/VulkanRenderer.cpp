@@ -94,6 +94,7 @@
 #include "threepp/renderers/vulkan/shaders/overlay_color.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_point.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_point.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/event_shade.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_sprite.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_sprite.frag.spv.h"
 
@@ -899,6 +900,21 @@ namespace threepp {
         bool eventCamEnabled_ = false;
         vulkan::EventCameraDetector::Params eventCamParams_{};
 
+        // Event-camera shade pipeline. Runs immediately after the raster
+        // G-buffer pass (when event camera is on) and writes a clean
+        // deterministic luma buffer that the detector consumes instead
+        // of the PT-noisy swapchain copy. Allocated lazily alongside
+        // the detector; descriptor bindings refresh per-frame to track
+        // the current frame's gbuf views + material/light buffers.
+        vulkan::Buffer        eventLumaBuf_{};
+        VkDescriptorSetLayout eventShadeDsLayout_       = VK_NULL_HANDLE;
+        VkPipelineLayout      eventShadePipelineLayout_ = VK_NULL_HANDLE;
+        VkPipeline            eventShadePipeline_       = VK_NULL_HANDLE;
+        VkDescriptorPool      eventShadeDescPool_       = VK_NULL_HANDLE;
+        VkDescriptorSet       eventShadeDescSet_        = VK_NULL_HANDLE;
+        uint32_t              eventLumaW_ = 0;
+        uint32_t              eventLumaH_ = 0;
+
         // Spatial denoiser — see vulkan/Denoiser.{hpp,cpp}. Owns the atrous
         // + finalize compute pipelines and the filtered + moments ping-pong
         // images. Shares rtDsLayout so a single per-frame descriptor set
@@ -1436,6 +1452,11 @@ namespace threepp {
             destroyBuffer(ctx->allocator(), geometryDescsBuffer);
             for (auto& b : materialDescsBuffers) destroyBuffer(ctx->allocator(), b);
             destroyBuffer(ctx->allocator(), sceneCaptureBuf_);
+            destroyBuffer(ctx->allocator(), eventLumaBuf_);
+            if (eventShadePipeline_)       vkDestroyPipeline(d, eventShadePipeline_, nullptr);
+            if (eventShadePipelineLayout_) vkDestroyPipelineLayout(d, eventShadePipelineLayout_, nullptr);
+            if (eventShadeDescPool_)       vkDestroyDescriptorPool(d, eventShadeDescPool_, nullptr);
+            if (eventShadeDsLayout_)       vkDestroyDescriptorSetLayout(d, eventShadeDsLayout_, nullptr);
 
             for (auto& [_, rec] : blasCache) {
                 if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
@@ -11946,6 +11967,221 @@ namespace threepp {
                                  0, 0, nullptr, 0, nullptr, 1, &toGeneral);
         }
 
+        // ── Event-camera shade compute ─────────────────────────────────
+        // Creates the event_shade compute pipeline + descriptor set
+        // layout. Called once, lazily, on first setEventCameraEnabled.
+        void createEventShadePipeline() {
+            if (eventShadePipeline_ != VK_NULL_HANDLE) return;
+
+            // 5 bindings: gbufNormal, gbufIds (combined image samplers),
+            // matDesc (storage buffer), lightsUbo (uniform), lumaBuf (storage).
+            std::array<VkDescriptorSetLayoutBinding, 5> b{};
+            b[0].binding         = 0;
+            b[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b[0].descriptorCount = 1;
+            b[0].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[1].binding         = 1;
+            b[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b[1].descriptorCount = 1;
+            b[1].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[2].binding         = 2;
+            b[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            b[2].descriptorCount = 1;
+            b[2].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[3].binding         = 3;
+            b[3].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            b[3].descriptorCount = 1;
+            b[3].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[4].binding         = 4;
+            b[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            b[4].descriptorCount = 1;
+            b[4].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+
+            VkDescriptorSetLayoutCreateInfo dlci{};
+            dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            dlci.bindingCount = static_cast<uint32_t>(b.size());
+            dlci.pBindings    = b.data();
+            check(vkCreateDescriptorSetLayout(ctx->device(), &dlci, nullptr, &eventShadeDsLayout_),
+                  "vkCreateDescriptorSetLayout(event_shade)");
+
+            struct ShadePC { uint32_t width; uint32_t height; };
+            VkPushConstantRange pcr{};
+            pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            pcr.offset     = 0;
+            pcr.size       = sizeof(ShadePC);
+
+            VkPipelineLayoutCreateInfo plci{};
+            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            plci.setLayoutCount         = 1;
+            plci.pSetLayouts            = &eventShadeDsLayout_;
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges    = &pcr;
+            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &eventShadePipelineLayout_),
+                  "vkCreatePipelineLayout(event_shade)");
+
+            VkShaderModuleCreateInfo smci{};
+            smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            smci.codeSize = sizeof(kEventShadeCompSpv);
+            smci.pCode    = kEventShadeCompSpv;
+            VkShaderModule mod = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &smci, nullptr, &mod),
+                  "vkCreateShaderModule(event_shade)");
+
+            VkPipelineShaderStageCreateInfo ssci{};
+            ssci.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            ssci.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+            ssci.module = mod;
+            ssci.pName  = "main";
+
+            VkComputePipelineCreateInfo cpci{};
+            cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            cpci.stage  = ssci;
+            cpci.layout = eventShadePipelineLayout_;
+            check(vkCreateComputePipelines(ctx->device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &eventShadePipeline_),
+                  "vkCreateComputePipelines(event_shade)");
+            vkDestroyShaderModule(ctx->device(), mod, nullptr);
+
+            // Single descriptor pool + set, reused every frame; descriptor
+            // writes per-frame because gbuf views + material/light buffers
+            // are per-frame and the swapchain can be resized.
+            std::array<VkDescriptorPoolSize, 3> ps{};
+            ps[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            ps[0].descriptorCount = 2;
+            ps[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            ps[1].descriptorCount = 2;
+            ps[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            ps[2].descriptorCount = 1;
+            VkDescriptorPoolCreateInfo dpci{};
+            dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            dpci.maxSets       = 1;
+            dpci.poolSizeCount = static_cast<uint32_t>(ps.size());
+            dpci.pPoolSizes    = ps.data();
+            check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &eventShadeDescPool_),
+                  "vkCreateDescriptorPool(event_shade)");
+            VkDescriptorSetAllocateInfo dsai{};
+            dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            dsai.descriptorPool     = eventShadeDescPool_;
+            dsai.descriptorSetCount = 1;
+            dsai.pSetLayouts        = &eventShadeDsLayout_;
+            check(vkAllocateDescriptorSets(ctx->device(), &dsai, &eventShadeDescSet_),
+                  "vkAllocateDescriptorSets(event_shade)");
+        }
+
+        // (Re-)allocate eventLumaBuf_ at the swapchain dimensions.
+        // Called from setEventCameraEnabled and on resize.
+        void allocateEventLumaBuffer(uint32_t w, uint32_t h) {
+            if (eventLumaW_ == w && eventLumaH_ == h && eventLumaBuf_.handle != VK_NULL_HANDLE) return;
+            destroyBuffer(ctx->allocator(), eventLumaBuf_);
+            const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
+            eventLumaBuf_ = createBuffer(
+                    ctx->allocator(), ctx->device(), bytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                    0);
+            eventLumaW_ = w;
+            eventLumaH_ = h;
+        }
+
+        // Refresh descriptor set bindings + dispatch the event_shade
+        // compute. Called once per frame after the gbuf prepass, before
+        // the event_detect dispatch. Gbuf images are in
+        // SHADER_READ_ONLY_OPTIMAL at this point (same as for the main
+        // RT pipeline's gbuf consumption).
+        void recordEventShade(VkCommandBuffer cb, uint32_t frame) {
+            if (eventShadePipeline_ == VK_NULL_HANDLE ||
+                eventLumaBuf_.handle == VK_NULL_HANDLE) return;
+
+            // Per-frame descriptor writes. Cheap; no descriptor indexing
+            // shenanigans needed.
+            VkDescriptorImageInfo normalInfo{};
+            normalInfo.sampler     = gbufSampler_;
+            normalInfo.imageView   = rasterGbufs[frame].normal.view;
+            normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            VkDescriptorImageInfo idsInfo{};
+            idsInfo.sampler     = gbufSampler_;
+            idsInfo.imageView   = rasterGbufs[frame].ids.view;
+            idsInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            VkDescriptorBufferInfo matInfo{};
+            matInfo.buffer = materialDescsBuffers[frame].handle;
+            matInfo.offset = 0;
+            matInfo.range  = materialDescsBuffers[frame].size
+                                     ? materialDescsBuffers[frame].size
+                                     : VK_WHOLE_SIZE;
+
+            VkDescriptorBufferInfo lightsInfo{};
+            lightsInfo.buffer = lightsUbos[frame].handle;
+            lightsInfo.offset = 0;
+            lightsInfo.range  = lightsUbos[frame].size ? lightsUbos[frame].size : VK_WHOLE_SIZE;
+
+            VkDescriptorBufferInfo lumaInfo{};
+            lumaInfo.buffer = eventLumaBuf_.handle;
+            lumaInfo.offset = 0;
+            lumaInfo.range  = VK_WHOLE_SIZE;
+
+            std::array<VkWriteDescriptorSet, 5> w{};
+            for (auto& it : w) it.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[0].dstSet = eventShadeDescSet_;
+            w[0].dstBinding = 0;
+            w[0].descriptorCount = 1;
+            w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[0].pImageInfo = &normalInfo;
+            w[1].dstSet = eventShadeDescSet_;
+            w[1].dstBinding = 1;
+            w[1].descriptorCount = 1;
+            w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[1].pImageInfo = &idsInfo;
+            w[2].dstSet = eventShadeDescSet_;
+            w[2].dstBinding = 2;
+            w[2].descriptorCount = 1;
+            w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[2].pBufferInfo = &matInfo;
+            w[3].dstSet = eventShadeDescSet_;
+            w[3].dstBinding = 3;
+            w[3].descriptorCount = 1;
+            w[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            w[3].pBufferInfo = &lightsInfo;
+            w[4].dstSet = eventShadeDescSet_;
+            w[4].dstBinding = 4;
+            w[4].descriptorCount = 1;
+            w[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            w[4].pBufferInfo = &lumaInfo;
+
+            vkUpdateDescriptorSets(ctx->device(),
+                                    static_cast<uint32_t>(w.size()), w.data(),
+                                    0, nullptr);
+
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, eventShadePipeline_);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                     eventShadePipelineLayout_, 0, 1, &eventShadeDescSet_, 0, nullptr);
+
+            struct ShadePC { uint32_t width; uint32_t height; } pc{};
+            pc.width  = eventLumaW_;
+            pc.height = eventLumaH_;
+            vkCmdPushConstants(cb, eventShadePipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                                0, sizeof(pc), &pc);
+
+            const uint32_t gx = (eventLumaW_ + 7u) / 8u;
+            const uint32_t gy = (eventLumaH_ + 7u) / 8u;
+            vkCmdDispatch(cb, gx, gy, 1);
+
+            // Barrier: shade's storage-buffer writes → event_detect's
+            // reads (also compute stage).
+            VkBufferMemoryBarrier toDetect{};
+            toDetect.sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            toDetect.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            toDetect.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            toDetect.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toDetect.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toDetect.buffer = eventLumaBuf_.handle;
+            toDetect.size   = VK_WHOLE_SIZE;
+            vkCmdPipelineBarrier(cb,
+                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                  0, 0, nullptr, 1, &toDetect, 0, nullptr);
+        }
+
         void recordOverlayAndPresentTransition(VkCommandBuffer cb, uint32_t imageIndex) {
             const VkImage    img = ctx->swapchainImages()[imageIndex];
             const VkExtent2D ext = ctx->swapchainExtent();
@@ -12204,12 +12440,15 @@ namespace threepp {
                 recordSceneCapture(cmdBuffers[currentFrame], imageIndex);
             }
 
-            // GPU event camera detection. Consumes the scene-capture
-            // buffer above, writes its accumulator + log-history images,
-            // and copies the accumulator to the readback ring.
-            if (eventCamEnabled_ && eventCam_) {
+            // GPU event camera detection. Run event_shade first to fill
+            // eventLumaBuf_ with deterministic Lambert lighting from the
+            // gbuf (eliminates PT noise as a source of false events),
+            // then dispatch the detector against that buffer.
+            if (eventCamEnabled_ && eventCam_ &&
+                eventShadePipeline_ != VK_NULL_HANDLE) {
+                recordEventShade(cmdBuffers[currentFrame], currentFrame);
                 eventCam_->record(cmdBuffers[currentFrame],
-                                  sceneCaptureBuf_.handle,
+                                  eventLumaBuf_.handle,
                                   eventCamParams_);
             }
 
@@ -12708,10 +12947,6 @@ namespace threepp {
         if (enabled == impl.eventCamEnabled_) return;
         impl.eventCamEnabled_ = enabled;
         if (enabled) {
-            // Event detector consumes the scene-capture buffer as input;
-            // turn that path on too. (It's a single sustained 0.5 ms
-            // image-to-buffer copy — cheap.)
-            impl.sceneCaptureEnabled_ = true;
             if (!impl.eventCam_) {
                 impl.eventCam_ = std::make_unique<vulkan::EventCameraDetector>(*impl.ctx);
             }
@@ -12720,6 +12955,13 @@ namespace threepp {
             // images before resize() destroys them.
             vkDeviceWaitIdle(impl.ctx->device());
             impl.eventCam_->resize(ext.width, ext.height);
+            // Set up the deterministic shade pipeline — eliminates PT
+            // noise as a source of false events. The detector now reads
+            // the shade output (eventLumaBuf_) instead of the scene
+            // capture buffer, so we don't need to enable sceneCapture
+            // for the event camera to work.
+            impl.createEventShadePipeline();
+            impl.allocateEventLumaBuffer(ext.width, ext.height);
         }
     }
 
