@@ -1,0 +1,85 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+
+// GPU-side event camera (DVS) detector.
+//
+// Per-pixel: read the renderer's post-TAA scene image from a packed
+// BGRA8 storage buffer (one uint per pixel, packed B/G/R/A in low→high
+// bits), compute log-luminance, compare against a persistent
+// per-pixel reference stored in `logHistory`, and emit events when
+// |Δlog I| crosses `threshold`. Events drive the accumulator image —
+// bright pixel on positive event, dark pixel on negative, decaying
+// toward grey otherwise. The accumulator gets copied to a host-visible
+// readback ring by the host immediately after this dispatch.
+//
+// Threshold quantisation matches the CPU implementation: emit up to
+// `maxEventsPerPixel` events when |Δ| > N · threshold, advance the
+// reference by polarity · N · threshold so the residual carries to
+// the next frame.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Packed BGRA8 pixels of the post-TAA scene, one uint per pixel.
+// Vulkan swapchain is VK_FORMAT_B8G8R8A8_UNORM, so byte 0 = B, byte 1 = G,
+// byte 2 = R, byte 3 = A. We swizzle back to RGB for the luminance.
+layout(set = 0, binding = 0, scalar) readonly buffer SceneBuf {
+    uint pixels[];
+} sceneBuf;
+
+layout(set = 0, binding = 1, r32f) uniform image2D logHistory;
+layout(set = 0, binding = 2, rgba8) uniform image2D accumulator;
+
+layout(push_constant) uniform Pc {
+    uint  width;
+    uint  height;
+    float threshold;
+    float decay;
+    float minLuma;
+    uint  maxEventsPerPixel;
+    uint  firstFrame;
+    uint  _pad;
+} pc;
+
+void main() {
+    const ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    if (pix.x >= int(pc.width) || pix.y >= int(pc.height)) return;
+
+    const uint linear = uint(pix.y) * pc.width + uint(pix.x);
+    const uint packed = sceneBuf.pixels[linear];
+
+    const float b = float((packed >>  0u) & 0xFFu) * (1.0 / 255.0);
+    const float g = float((packed >>  8u) & 0xFFu) * (1.0 / 255.0);
+    const float r = float((packed >> 16u) & 0xFFu) * (1.0 / 255.0);
+
+    // sRGB-domain luminance. See helpers/EventCameraSensor for the
+    // rationale — sRGB encoding is already log-ish, so relative
+    // log-differences track the right events; absolute thresholds are
+    // in sRGB-log units rather than SI radiance log units.
+    const float luma   = max(pc.minLuma, 0.2126 * r + 0.7152 * g + 0.0722 * b);
+    const float logLum = log(luma);
+
+    if (pc.firstFrame != 0u) {
+        imageStore(logHistory, pix, vec4(logLum, 0.0, 0.0, 0.0));
+        imageStore(accumulator, pix, vec4(0.5, 0.5, 0.5, 1.0));
+        return;
+    }
+
+    const float prev  = imageLoad(logHistory, pix).x;
+    const float delta = logLum - prev;
+    const float absD  = abs(delta);
+
+    if (absD >= pc.threshold) {
+        const float pol = (delta > 0.0) ? 1.0 : -1.0;
+        const uint  n   = min(pc.maxEventsPerPixel, uint(absD / pc.threshold));
+        const float newRef = prev + pol * float(n) * pc.threshold;
+        imageStore(logHistory, pix, vec4(newRef, 0.0, 0.0, 0.0));
+        const float v = (pol > 0.0) ? 1.0 : 0.0;
+        imageStore(accumulator, pix, vec4(v, v, v, 1.0));
+    } else {
+        // Decay toward mid-grey (no recent event). cur.rgb is already
+        // in [0, 1] from a prior emit or decay step.
+        const vec4 cur    = imageLoad(accumulator, pix);
+        const vec3 newRgb = mix(vec3(0.5), cur.rgb, pc.decay);
+        imageStore(accumulator, pix, vec4(newRgb, 1.0));
+    }
+}

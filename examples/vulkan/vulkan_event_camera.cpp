@@ -18,15 +18,16 @@
 // pipeline is alive.
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
-#include "threepp/helpers/EventCameraSensor.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
 
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 
 using namespace threepp;
 
@@ -140,19 +141,34 @@ int main() {
     // swapchain image. The accumulator visualisation is shown at quarter
     // size in the corner via a screen-space Sprite.
     const auto canvasSize = canvas.size();
-    auto eventSensor = std::make_unique<EventCameraSensor>(
+    // GPU-side event camera. Implicit: enables sceneCapture (its input)
+    // and lazy-creates the compute pipeline + accumulator/history images
+    // at the current swapchain size. No CPU per-pixel loop, no
+    // vkDeviceWaitIdle — reads from a 3-slot ring with 2 frames of
+    // display latency.
+    {
+        VulkanRenderer::EventCameraParams p{};
+        p.threshold = 0.20f;
+        p.decay     = 0.88f;
+        renderer.setEventCameraParams(p);
+        renderer.setEventCameraEnabled(true);
+    }
+
+    // The accumulator is a swapchain-sized RGBA8 image readable via
+    // renderer.readEventCameraVisualisation(); we drop those bytes into
+    // a DataTexture each frame so the existing sprite path can display
+    // it. Same pattern the LIDAR readout panel uses.
+    auto eventVizTex = DataTexture::create(
+            ImageData{std::vector<unsigned char>(
+                    static_cast<size_t>(canvasSize.width()) *
+                            static_cast<size_t>(canvasSize.height()) * 4,
+                    128u)},
             static_cast<unsigned>(canvasSize.width()),
             static_cast<unsigned>(canvasSize.height()));
-    eventSensor->params.contrastThreshold = 0.20f;
-    eventSensor->params.vizDecay          = 0.88f;
-
-    // Tap the pre-overlay swapchain so the sensor doesn't see its own
-    // sprite visualisation or the ImGui panel — those compose AFTER
-    // the scene-capture copy is recorded.
-    renderer.setSceneCaptureEnabled(true);
+    eventVizTex->colorSpace = ColorSpace::sRGB;
 
     auto eventVizMat = SpriteMaterial::create();
-    eventVizMat->map = eventSensor->visualisation();
+    eventVizMat->map = eventVizTex;
     auto eventViz = Sprite::create(eventVizMat);
     constexpr float kPanelDispW = 480.f;
     constexpr float kPanelDispH = 270.f;
@@ -167,16 +183,26 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-        eventSensor->setSize(static_cast<unsigned>(size.width()),
-                              static_cast<unsigned>(size.height()));
-        eventVizMat->map = eventSensor->visualisation();// new texture object
+        // Re-enable: the renderer will idle and resize the detector's
+        // images to the new swapchain size; we also resize the host-
+        // side DataTexture to match.
+        renderer.setEventCameraEnabled(false);
+        renderer.setEventCameraEnabled(true);
+
+        const size_t pixels = static_cast<size_t>(size.width()) *
+                              static_cast<size_t>(size.height());
+        eventVizTex = DataTexture::create(
+                ImageData{std::vector<unsigned char>(pixels * 4, 128u)},
+                static_cast<unsigned>(size.width()),
+                static_cast<unsigned>(size.height()));
+        eventVizTex->colorSpace = ColorSpace::sRGB;
+        eventVizMat->map = eventVizTex;
     });
 
     // ── UI ─────────────────────────────────────────────────────────────
-    float lastEventsPerFrame = 0.f;
-    float lastCaptureMs      = 0.f;
-    double cumulativeEvents  = 0.0;
-    bool   animatePendulums  = true;
+    float lastCaptureMs     = 0.f;
+    bool  animatePendulums  = true;
+    auto  evParams          = renderer.eventCameraParams();
 
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({0, 0});
@@ -184,21 +210,31 @@ int main() {
         ImGui::Begin("Vulkan PT - event camera (DVS)");
         ImGui::TextWrapped(
                 "Three pendulums swing in front of a striped wall. "
-                "Each frame the renderer's output is read back, log-"
-                "intensity changes are detected per pixel, and events "
-                "are emitted where |Δlog I| exceeds the threshold. "
-                "Right-corner panel = live event accumulator.");
+                "A GPU compute pass detects per-pixel log-intensity "
+                "changes against a persistent reference; events fire "
+                "where |Δlog I| exceeds the threshold. Right-corner "
+                "panel = live accumulator (white = +pol, black = -pol).");
         ImGui::Separator();
         ImGui::Checkbox("Animate pendulums", &animatePendulums);
-        ImGui::SliderFloat("Contrast threshold (log)", &eventSensor->params.contrastThreshold,
-                           0.05f, 0.6f, "%.3f");
-        ImGui::SliderFloat("Viz decay / frame", &eventSensor->params.vizDecay, 0.f, 0.995f, "%.3f");
-        ImGui::SliderInt("Max events / pixel / frame", &eventSensor->params.maxEventsPerPixel, 1, 20);
+        bool changed = false;
+        changed |= ImGui::SliderFloat("Contrast threshold (log)", &evParams.threshold,
+                                      0.05f, 0.6f, "%.3f");
+        changed |= ImGui::SliderFloat("Viz decay / frame", &evParams.decay,
+                                      0.f, 0.995f, "%.3f");
+        int maxEv = static_cast<int>(evParams.maxEventsPerPixel);
+        if (ImGui::SliderInt("Max events / pixel / frame", &maxEv, 1, 20)) {
+            evParams.maxEventsPerPixel = static_cast<uint32_t>(std::max(1, maxEv));
+            changed = true;
+        }
+        if (changed) renderer.setEventCameraParams(evParams);
         ImGui::Separator();
-        ImGui::Text("Events / frame: %.0f", static_cast<double>(lastEventsPerFrame));
-        ImGui::Text("Capture cost:   %.2f ms", static_cast<double>(lastCaptureMs));
-        ImGui::Text("Cumulative:     %.1f million", cumulativeEvents / 1.0e6);
-        ImGui::Text("Sensor res:     %u × %u", eventSensor->width(), eventSensor->height());
+        ImGui::Text("Readback cost:  %.2f ms", static_cast<double>(lastCaptureMs));
+        ImGui::Text("Sensor res:     %u × %u",
+                    static_cast<unsigned>(eventVizTex->image().width),
+                    static_cast<unsigned>(eventVizTex->image().height));
+        ImGui::TextWrapped("Detection runs on GPU; only the visualisation "
+                           "memcpy is host-side. 2-frame display latency "
+                           "due to the readback ring.");
         ImGui::End();
     });
 
@@ -206,7 +242,6 @@ int main() {
     capture.preventMouseEvent = [] { return ImGui::GetIO().WantCaptureMouse; };
     canvas.setIOCapture(&capture);
 
-    std::vector<EventCameraEvent> events;
     Clock clock;
 
     canvas.animate([&] {
@@ -220,18 +255,21 @@ int main() {
 
         renderer.render(scene, *camera);
 
-        // Read the pre-overlay scene snapshot the renderer staged inside
-        // its frame, then feed it to the event detector. This sidesteps
-        // the feedback loop that would otherwise occur from the sensor
-        // overlay drawing itself + ImGui into the next frame's readback.
+        // Pull the accumulator the renderer's GPU compute pass painted
+        // this frame. No vkDeviceWaitIdle — the ring's oldest slot is
+        // guaranteed complete by the kFramesInFlight in-flight fences.
         const auto t0 = std::chrono::steady_clock::now();
-        auto scenePixels = renderer.readSceneRGBPixels();
-        eventSensor->ingestPixels(scenePixels.data(), scenePixels.size(), events);
+        auto vizBytes = renderer.readEventCameraVisualisation();
         const auto t1 = std::chrono::steady_clock::now();
         lastCaptureMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
 
-        lastEventsPerFrame = static_cast<float>(events.size());
-        cumulativeEvents += static_cast<double>(events.size());
+        if (!vizBytes.empty()) {
+            auto& dst = eventVizTex->image().data<unsigned char>();
+            if (dst.size() == vizBytes.size()) {
+                std::memcpy(dst.data(), vizBytes.data(), vizBytes.size());
+                eventVizTex->needsUpdate();
+            }
+        }
 
         ui.render();
     });

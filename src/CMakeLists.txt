@@ -611,6 +611,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/PhotonCaustics.hpp"
             "threepp/renderers/vulkan/Denoiser.hpp"
             "threepp/renderers/vulkan/EnvPrefilter.hpp"
+            "threepp/renderers/vulkan/EventCameraDetector.hpp"
             "threepp/renderers/vulkan/SkinningPipeline.hpp"
             "threepp/renderers/vulkan/TaaResolve.hpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.hpp"
@@ -625,6 +626,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/PhotonCaustics.cpp"
             "threepp/renderers/vulkan/Denoiser.cpp"
             "threepp/renderers/vulkan/EnvPrefilter.cpp"
+            "threepp/renderers/vulkan/EventCameraDetector.cpp"
             "threepp/renderers/vulkan/SkinningPipeline.cpp"
             "threepp/renderers/vulkan/TaaResolve.cpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
@@ -941,6 +943,14 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/lidar.rmiss"
         kLidarRmissSpv
         _lidar_rmiss_spv_h)
+    # GPU event camera (DVS) detector — reads sceneCaptureBuf written by
+    # the renderer's per-frame scene-capture path, updates per-pixel
+    # log-luminance history, paints an RGBA8 accumulator image, copies
+    # it into the host-visible readback ring.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/event_detect.comp"
+        kEventDetectCompSpv
+        _event_detect_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/prefilter_env.comp"
         kPrefilterEnvCompSpv

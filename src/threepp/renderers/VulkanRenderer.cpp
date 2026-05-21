@@ -27,6 +27,7 @@
 #include "vulkan/VulkanResources.hpp"
 #include "vulkan/Denoiser.hpp"
 #include "vulkan/EnvPrefilter.hpp"
+#include "vulkan/EventCameraDetector.hpp"
 #include "vulkan/LidarScanner.hpp"
 #include "vulkan/PhotonCaustics.hpp"
 #include "vulkan/SkinningPipeline.hpp"
@@ -890,6 +891,13 @@ namespace threepp {
         // VulkanRenderer::scanLidar. Constructed lazily on first use so
         // the SPV + RT pipeline cost is paid only when a user wants it.
         std::unique_ptr<vulkan::LidarScanner> lidar_;
+
+        // GPU event-camera detector. Lazy-constructed on first
+        // setEventCameraEnabled call. Owns the persistent log-history
+        // image, the accumulator image, and the per-frame readback ring.
+        std::unique_ptr<vulkan::EventCameraDetector> eventCam_;
+        bool eventCamEnabled_ = false;
+        vulkan::EventCameraDetector::Params eventCamParams_{};
 
         // Spatial denoiser — see vulkan/Denoiser.{hpp,cpp}. Owns the atrous
         // + finalize compute pipelines and the filtered + moments ping-pong
@@ -11886,7 +11894,8 @@ namespace threepp {
                         static_cast<VkDeviceSize>(ext.width) * ext.height * 4;
                 sceneCaptureBuf_ = createBuffer(
                         ctx->allocator(), ctx->device(), bytes,
-                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                        VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                         VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
                         VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
                                 VMA_ALLOCATION_CREATE_MAPPED_BIT);
@@ -12193,6 +12202,15 @@ namespace threepp {
             // their own readout as scene motion and feedback-loop.
             if (sceneCaptureEnabled_) {
                 recordSceneCapture(cmdBuffers[currentFrame], imageIndex);
+            }
+
+            // GPU event camera detection. Consumes the scene-capture
+            // buffer above, writes its accumulator + log-history images,
+            // and copies the accumulator to the readback ring.
+            if (eventCamEnabled_ && eventCam_) {
+                eventCam_->record(cmdBuffers[currentFrame],
+                                  sceneCaptureBuf_.handle,
+                                  eventCamParams_);
             }
 
             // Screen-space sprite auto-overlay. Walks the main scene for
@@ -12683,6 +12701,54 @@ namespace threepp {
         }
         vmaUnmapMemory(impl.ctx->allocator(), impl.sceneCaptureBuf_.alloc);
         return rgb;
+    }
+
+    void VulkanRenderer::setEventCameraEnabled(bool enabled) {
+        auto& impl = *pimpl_;
+        if (enabled == impl.eventCamEnabled_) return;
+        impl.eventCamEnabled_ = enabled;
+        if (enabled) {
+            // Event detector consumes the scene-capture buffer as input;
+            // turn that path on too. (It's a single sustained 0.5 ms
+            // image-to-buffer copy — cheap.)
+            impl.sceneCaptureEnabled_ = true;
+            if (!impl.eventCam_) {
+                impl.eventCam_ = std::make_unique<vulkan::EventCameraDetector>(*impl.ctx);
+            }
+            const VkExtent2D ext = impl.ctx->swapchainExtent();
+            // Wait for any in-flight work that might reference the old
+            // images before resize() destroys them.
+            vkDeviceWaitIdle(impl.ctx->device());
+            impl.eventCam_->resize(ext.width, ext.height);
+        }
+    }
+
+    bool VulkanRenderer::eventCameraEnabled() const {
+        return pimpl_->eventCamEnabled_;
+    }
+
+    void VulkanRenderer::setEventCameraParams(const EventCameraParams& p) {
+        auto& impl = *pimpl_;
+        impl.eventCamParams_.threshold         = p.threshold;
+        impl.eventCamParams_.decay             = p.decay;
+        impl.eventCamParams_.minLuma           = p.minLuma;
+        impl.eventCamParams_.maxEventsPerPixel = p.maxEventsPerPixel;
+    }
+
+    VulkanRenderer::EventCameraParams VulkanRenderer::eventCameraParams() const {
+        const auto& src = pimpl_->eventCamParams_;
+        EventCameraParams p{};
+        p.threshold         = src.threshold;
+        p.decay             = src.decay;
+        p.minLuma           = src.minLuma;
+        p.maxEventsPerPixel = src.maxEventsPerPixel;
+        return p;
+    }
+
+    std::vector<unsigned char> VulkanRenderer::readEventCameraVisualisation() const {
+        const auto& impl = *pimpl_;
+        if (!impl.eventCamEnabled_ || !impl.eventCam_) return {};
+        return impl.eventCam_->readVisualisation();
     }
 
     void VulkanRenderer::dispose() { pimpl_.reset(); }

@@ -74,6 +74,35 @@ namespace threepp {
         [[nodiscard]] bool sceneCaptureEnabled() const;
         [[nodiscard]] std::vector<unsigned char> readSceneRGBPixels();
 
+        // ── GPU event camera (DVS) detector ───────────────────────────────
+        // Lightweight compute pass that runs immediately after the
+        // scene-capture copy: reads the post-TAA scene buffer, updates a
+        // persistent per-pixel log-luminance reference, and paints a
+        // black/white/grey accumulator image (positive event → white,
+        // negative → black, no recent event → mid-grey with exponential
+        // decay). The accumulator is copied to a 3-slot host-visible ring
+        // buffer at the end of the dispatch.
+        //
+        // readEventCameraVisualisation() returns the RGBA8 bytes of the
+        // OLDEST ring slot (guaranteed complete — no vkDeviceWaitIdle
+        // needed), so the call is a plain memcpy. Two-frame display lag
+        // is the cost; capture overhead drops from ~25 ms (CPU readback
+        // + per-pixel loop) to <2 ms (compute dispatch + small memcpy).
+        //
+        // Enabling the event camera implicitly enables scene capture —
+        // the detector consumes that buffer as its input.
+        struct EventCameraParams {
+            float    threshold        = 0.15f;
+            float    decay            = 0.85f;
+            float    minLuma          = 0.005f;
+            uint32_t maxEventsPerPixel = 5;
+        };
+        void setEventCameraEnabled(bool enabled);
+        [[nodiscard]] bool eventCameraEnabled() const;
+        void setEventCameraParams(const EventCameraParams& params);
+        [[nodiscard]] EventCameraParams eventCameraParams() const;
+        [[nodiscard]] std::vector<unsigned char> readEventCameraVisualisation() const;
+
         void dispose() override;
 
         // ImGui integration handles. All Vulkan types are erased to void* /
