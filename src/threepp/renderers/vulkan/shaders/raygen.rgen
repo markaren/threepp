@@ -1487,6 +1487,18 @@ void main() {
                 selfTapValid = false;
             }
         }
+        // Sky pixels (primaryInstanceId == 0 → no sample hit a surface) get
+        // no benefit from temporal accumulation: the env is already smooth
+        // and low-variance, and accumulating across frames CARRIES FORWARD
+        // any sub-pixel-jittered surface radiance that may have leaked into
+        // accumImage on prior frames when the now-moved mesh was closer.
+        // Forcing fresh-radiance here breaks the chain → no slow-decay
+        // "fan of past positions" ghost behind moving URDF child links.
+        // Surface pixels keep their accumulator path (which is what we want
+        // for noise reduction on actual shaded surfaces).
+        if (primaryInstanceId == 0u) {
+            selfTapValid = false;
+        }
         if (selfTapValid) {
             const vec4 pa = imageLoad(prevAccumImage, px);
             const vec3 m  = pa.rgb;
