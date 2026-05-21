@@ -43,10 +43,10 @@ namespace {
         scene.add(dirLight);
     }
 
-    // Update a Points object's position and color attributes from a point cloud.
+    // Update a Points object's position and color attributes from a return set.
     // Colors are mapped by distance: near=green, far=red.
-    void updatePointCloud(const Points& points, const std::vector<Vector3>& cloud,
-                          const Vector3& sensorPos, float maxDist) {
+    void updatePointCloud(const Points& points, const std::vector<LidarReturn>& cloud,
+                          float maxDist) {
 
         auto& geom = *points.geometry();
         auto* posAttr = geom.getAttribute<float>("position");
@@ -54,10 +54,10 @@ namespace {
 
         Color c;
         int i = 0;
-        for (const auto& p : cloud) {
-            posAttr->setXYZ(i, p.x, p.y, p.z);
+        for (const auto& r : cloud) {
+            posAttr->setXYZ(i, r.position.x, r.position.y, r.position.z);
 
-            c.setHSL(0.33f * (1.f - std::min(p.distanceTo(sensorPos) / maxDist, 1.f)), 1.f, 0.5f);
+            c.setHSL(0.33f * (1.f - std::min(r.distance / maxDist, 1.f)), 1.f, 0.5f);
             colAttr->setXYZ(i, c.r, c.g, c.b);
 
             ++i;
@@ -153,7 +153,7 @@ int main() {
     });
 
     Clock clock;
-    std::vector<Vector3> cloud;
+    std::vector<LidarReturn> cloud;
     std::vector<Color> colors;
     canvas.animate([&] {
         const float t = clock.getElapsedTime();
@@ -168,9 +168,7 @@ int main() {
         lidar->scan(renderer, *scene, cloud);
         points->visible = true;
 
-        Vector3 sensorWorld;
-        lidar->getWorldPosition(sensorWorld);
-        updatePointCloud(*points, cloud, sensorWorld, lidar->far());
+        updatePointCloud(*points, cloud, lidar->far());
 
         if (senorDataOnly) {
             camera->layers.set(1);

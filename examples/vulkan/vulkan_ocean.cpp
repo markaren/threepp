@@ -13,6 +13,7 @@
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
+#include "threepp/helpers/PathTracedLidarSensor.hpp"
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
@@ -25,6 +26,7 @@
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/objects/DisplacedMesh.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
 
 #include <algorithm>
@@ -485,6 +487,84 @@ int main() {
     constexpr int   kMaxRadarTargets  = 16;
     std::array<float, kMaxRadarTargets> radarBlipIntensity{};
 
+    // ── LIDAR mast (mounted above the Gunnerus bow, forward-facing 180°) ──
+    // OS0-128 beam pattern restricted to the forward hemisphere — matches
+    // typical maritime "bow-mounted" sensor coverage, and avoids the
+    // beams that would otherwise have to crawl through the wheelhouse and
+    // hull bbox behind the sensor origin. Intensity is physically correct
+    // via the same closest-hit BSDF the path tracer uses.
+    constexpr float kLidarMountHeight  = 11.0f;      // m above waterline — clears wheelhouse + mast roof
+    constexpr float kLidarMountForward = 8.0f;       // m forward of boat origin (near the bow)
+    constexpr int   kLidarMaxBeams     = 200000;     // enough for OS0-128
+
+    // Forward-only scan (azimuth ∈ [-90°, +90°]). Sensor convention puts
+    // azimuth = 0 along the sensor's local -Z (forward), so this carves
+    // out the rear half-sphere.
+    LidarModel lidarModel = LidarModel::OS0_128();
+    lidarModel.azimuthMin = -90.f;
+    lidarModel.azimuthMax =  90.f;
+
+    auto lidarSensor = std::make_unique<PathTracedLidarSensor>(lidarModel);
+    lidarSensor->params.maxRange = 120.f;            // ~half a buoy spacing
+    lidarSensor->params.referenceRange = 30.f;       // calibrate intensity for ocean scale
+    lidarSensor->params.laserPower = 2.0f;           // bump so distant buoys still register
+    lidarSensor->params.atmosphericExtinction = 0.f;
+    lidarSensor->params.detectorThreshold = 0.005f;
+    scene.add(*lidarSensor);
+    bool lidarEnabled = true;
+    bool lidarShowPanel = true;
+
+    // Live stats reflected in the UI panel.
+    int   lidarLastReturns = 0;
+    float lidarLastScanMs  = 0.f;
+
+    // ── LIDAR point-cloud overlay ──────────────────────────────────────────
+    // One vertex per return, intensity-mapped colour. Vulkan PT auto-detects
+    // Points objects and routes them through the POINT_LIST overlay pipeline,
+    // excluded from the TLAS so beams don't see their own visualisation.
+    auto lidarCloudGeom = BufferGeometry::create();
+    lidarCloudGeom->setAttribute("position",
+                                  FloatBufferAttribute::create(std::vector<float>(kLidarMaxBeams * 3), 3));
+    lidarCloudGeom->setAttribute("color",
+                                  FloatBufferAttribute::create(std::vector<float>(kLidarMaxBeams * 3), 3));
+    lidarCloudGeom->getAttribute<float>("position")->setUsage(DrawUsage::Dynamic);
+    lidarCloudGeom->getAttribute<float>("color")->setUsage(DrawUsage::Dynamic);
+    lidarCloudGeom->setDrawRange(0, 0);
+
+    auto lidarCloudMat = PointsMaterial::create({
+            {"size", 3.f},
+            {"vertexColors", true},
+    });
+    auto lidarCloud = Points::create(lidarCloudGeom, lidarCloudMat);
+    lidarCloud->frustumCulled = false;
+    scene.add(lidarCloud);
+
+    // ── LIDAR readout panel (screen-space sprite, top-left below FPS) ──────
+    // 720×128 RGBA8 grid laid out as (azimuth × elevation); same colormap as
+    // the cloud. We tag it sRGB so the sampler decodes correctly and the
+    // bytes we write display vibrantly post-pipeline.
+    constexpr unsigned int kLidarPanelW = 720;
+    constexpr unsigned int kLidarPanelH = 128;
+    constexpr float        kLidarPanelDispW = 360.f;
+    constexpr float        kLidarPanelDispH = 64.f;
+
+    auto lidarPanelTex = DataTexture::create(
+            ImageData{std::vector<unsigned char>(kLidarPanelW * kLidarPanelH * 4, 0u)},
+            kLidarPanelW, kLidarPanelH);
+    lidarPanelTex->colorSpace = ColorSpace::sRGB;
+
+    auto lidarPanelMat = SpriteMaterial::create();
+    lidarPanelMat->map = lidarPanelTex;
+    auto lidarPanel = Sprite::create(lidarPanelMat);
+    lidarPanel->scale.set(kLidarPanelDispW, kLidarPanelDispH, 1.f);
+    lidarPanel->screenSpace = true;
+    lidarPanel->screenAnchor.set(1.f, 1.f);   // viewport top-right
+    lidarPanel->center.set(1.f, 1.f);
+    lidarPanel->position.set(-10.f, -10.f, 0.f);
+    scene.add(lidarPanel);
+
+    std::vector<LidarReturn> lidarReturns;
+
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({0, 0});
         ImGui::SetNextWindowSize({340, 0});
@@ -583,6 +663,21 @@ int main() {
             ImGui::Text("Submerged: %.1f%%", uwDepthSmooth * 100.f);
         else
             ImGui::TextDisabled("Camera above water.");
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("LIDAR mast (OS0-128, path-traced)");
+        ImGui::Checkbox("Enable LIDAR",    &lidarEnabled);
+        ImGui::SameLine();
+        ImGui::Checkbox("Range panel",     &lidarShowPanel);
+        ImGui::SliderFloat("Max range (m)##lidar",      &lidarSensor->params.maxRange, 10.f, 250.f);
+        ImGui::SliderFloat("Reference range (m)##lidar",&lidarSensor->params.referenceRange, 1.f, 80.f);
+        ImGui::SliderFloat("Laser power##lidar",        &lidarSensor->params.laserPower, 0.1f, 10.f);
+        ImGui::SliderFloat("Atmospheric ext##lidar",    &lidarSensor->params.atmosphericExtinction, 0.f, 0.05f, "%.4f");
+        ImGui::SliderFloat("Detector thresh##lidar",    &lidarSensor->params.detectorThreshold, 0.f, 0.02f, "%.4f");
+        ImGui::Text("Returns: %d / %u   Scan: %.2f ms",
+                    lidarLastReturns,
+                    lidarSensor->beamCount(),
+                    static_cast<double>(lidarLastScanMs));
         ImGui::End();
 
         // ── Radar HUD ─────────────────────────────────────────────────────
@@ -810,6 +905,28 @@ int main() {
         // around the waterline).
         boat->position.set(bs.position.x, bs.y - 0.2f, bs.position.z);
         boat->rotation.set(-bs.smoothPitch, bs.yaw, bs.smoothRoll, Euler::YXZ);
+
+        // LIDAR mast: tracks the boat with a vertical offset for wheelhouse
+        // clearance + a forward offset so the sensor sits near the bow
+        // (otherwise the wheelhouse occludes the rear half of the scan and
+        // the forward 180° starts blocked by the hull's superstructure).
+        // Inherits pitch + yaw so the beam pattern sweeps with the hull;
+        // roll is intentionally damped so the range panel stays readable
+        // when the boat heels.
+        //
+        // The +π yaw offset reconciles two competing forward conventions:
+        // the boat moves along (sinY, 0, +cosY) at yaw=0, but the
+        // LidarModel puts azimuth=0 along sensor-local -Z so its forward
+        // is (-sinY, 0, -cosY) before the offset. Rotating by π makes the
+        // sensor look in the direction the boat is heading.
+        lidarSensor->position.set(bs.position.x + sinY * kLidarMountForward,
+                                  bs.y + kLidarMountHeight,
+                                  bs.position.z + cosY * kLidarMountForward);
+        lidarSensor->rotation.set(-bs.smoothPitch * 0.5f,
+                                  bs.yaw + math::PI,
+                                  0.f, Euler::YXZ);
+        lidarCloud->visible = lidarEnabled;
+        lidarPanel->visible = lidarEnabled && lidarShowPanel;
 
         ocean->hullExclusion.centerX    = bs.position.x;
         ocean->hullExclusion.centerZ    = bs.position.z;
@@ -1170,6 +1287,86 @@ int main() {
         }
 
         renderer.render(scene, camera);
+
+        // ── LIDAR scan + visualisation update ─────────────────────────────
+        // Must follow render() so the TLAS is built; the cloud/panel show
+        // last frame's data when re-rendered next frame.
+        if (lidarEnabled) {
+            const auto t0 = std::chrono::steady_clock::now();
+            lidarSensor->scan(renderer, lidarReturns);
+            const auto t1 = std::chrono::steady_clock::now();
+            lidarLastScanMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
+
+            // Cloud refresh.
+            auto* cloudPos = lidarCloudGeom->getAttribute<float>("position");
+            auto* cloudCol = lidarCloudGeom->getAttribute<float>("color");
+            int vi = 0;
+            Color col;
+            int validHits = 0;
+            for (const auto& r : lidarReturns) {
+                if (r.hitInstanceId < 0) continue;
+                ++validHits;
+                if (vi >= cloudPos->count()) break;
+                const float t = std::clamp(r.intensity * 3.f, 0.f, 1.f);
+                col.setHSL((1.f - t) * 0.66f, 1.f, 0.5f);
+                cloudPos->setXYZ(vi, r.position.x, r.position.y, r.position.z);
+                cloudCol->setXYZ(vi, col.r, col.g, col.b);
+                ++vi;
+            }
+            lidarCloudGeom->setDrawRange(0, vi);
+            cloudPos->needsUpdate();
+            cloudCol->needsUpdate();
+            lidarLastReturns = validHits;
+
+            // Panel refresh — (azimuth × elevation) grid filled in blocks so
+            // the linear sprite sampler doesn't blend bright cells with
+            // empty rows. The Ouster pattern uses 1028 azimuth × 128
+            // elevation, so the panel naturally renders dense even though
+            // the source texture is sparse-by-design.
+            if (lidarShowPanel) {
+                const int numAz = std::max(1, static_cast<int>(std::round(
+                                                  (lidarModel.azimuthMax - lidarModel.azimuthMin) /
+                                                  lidarModel.azimuthResolution)));
+                const int numElev = static_cast<int>(lidarModel.elevationAngles.size());
+                const int blockW = std::max(1, static_cast<int>(kLidarPanelW) / numAz);
+                const int blockH = std::max(1, static_cast<int>(kLidarPanelH) / numElev);
+
+                auto& panelBytes = lidarPanelTex->image().data<unsigned char>();
+                std::fill(panelBytes.begin(), panelBytes.end(), 0u);
+
+                for (size_t b = 0; b < lidarReturns.size(); ++b) {
+                    const auto& r = lidarReturns[b];
+                    if (r.hitInstanceId < 0) continue;
+                    const int ai = static_cast<int>(b) / numElev;
+                    const int ei = static_cast<int>(b) % numElev;
+                    const int px0 = std::clamp(ai * static_cast<int>(kLidarPanelW) / numAz,
+                                                0, static_cast<int>(kLidarPanelW) - 1);
+                    const int py0 = std::clamp(ei * static_cast<int>(kLidarPanelH) / numElev,
+                                                0, static_cast<int>(kLidarPanelH) - 1);
+                    const float t = std::clamp(r.intensity * 3.f, 0.f, 1.f);
+                    col.setHSL((1.f - t) * 0.66f, 1.f, 0.5f);
+                    const unsigned char rByte = static_cast<unsigned char>(col.r * 255.f);
+                    const unsigned char gByte = static_cast<unsigned char>(col.g * 255.f);
+                    const unsigned char bByte = static_cast<unsigned char>(col.b * 255.f);
+                    for (int dy = 0; dy < blockH; ++dy) {
+                        const int y = std::min(py0 + dy, static_cast<int>(kLidarPanelH) - 1);
+                        size_t row = static_cast<size_t>(y) * kLidarPanelW * 4;
+                        for (int dx = 0; dx < blockW; ++dx) {
+                            const int x = std::min(px0 + dx, static_cast<int>(kLidarPanelW) - 1);
+                            const size_t idx = row + static_cast<size_t>(x) * 4;
+                            panelBytes[idx + 0] = rByte;
+                            panelBytes[idx + 1] = gByte;
+                            panelBytes[idx + 2] = bByte;
+                            panelBytes[idx + 3] = 255u;
+                        }
+                    }
+                }
+                lidarPanelTex->needsUpdate();
+            }
+        } else {
+            lidarCloudGeom->setDrawRange(0, 0);
+        }
+
         ui.render();
     });
 

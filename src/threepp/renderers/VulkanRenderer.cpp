@@ -27,6 +27,7 @@
 #include "vulkan/VulkanResources.hpp"
 #include "vulkan/Denoiser.hpp"
 #include "vulkan/EnvPrefilter.hpp"
+#include "vulkan/LidarScanner.hpp"
 #include "vulkan/PhotonCaustics.hpp"
 #include "vulkan/SkinningPipeline.hpp"
 #include "vulkan/TaaResolve.hpp"
@@ -50,6 +51,7 @@
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineSegments.hpp"
+#include "threepp/objects/Points.hpp"
 #include "threepp/math/Box3.hpp"
 #include "threepp/math/Frustum.hpp"
 #include "threepp/math/Matrix4.hpp"
@@ -89,6 +91,8 @@
 #include "threepp/renderers/vulkan/shaders/overlay_depth.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_color.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_color.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_point.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_point.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_sprite.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_sprite.frag.spv.h"
 
@@ -879,6 +883,14 @@ namespace threepp {
         // descriptor binding + dispatch through the class.
         std::unique_ptr<vulkan::PhotonCaustics> photon_;
 
+        // Path-traced LIDAR scanner — see vulkan/LidarScanner.{hpp,cpp}.
+        // Owns its own RT pipeline + SBT + descriptor set; reuses the
+        // main TLAS + geomDescs + matDescs via per-scan binding updates.
+        // Synchronous scan API exposed publicly via
+        // VulkanRenderer::scanLidar. Constructed lazily on first use so
+        // the SPV + RT pipeline cost is paid only when a user wants it.
+        std::unique_ptr<vulkan::LidarScanner> lidar_;
+
         // Spatial denoiser — see vulkan/Denoiser.{hpp,cpp}. Owns the atrous
         // + finalize compute pipelines and the filtered + moments ping-pong
         // images. Shares rtDsLayout so a single per-frame descriptor set
@@ -977,6 +989,14 @@ namespace threepp {
         // material has vertexColors == true (matches three.js semantics).
         VkPipeline       overlayLineListColoredPipeline  = VK_NULL_HANDLE;
         VkPipeline       overlayLineStripColoredPipeline = VK_NULL_HANDLE;
+        // Points pipeline — POINT_LIST topology. Always vertex-coloured;
+        // a Points object without a "color" attribute renders as plain
+        // material colour (vertex colour defaults to white in that case
+        // because we still bind the geometry's color buffer if present,
+        // and skip the draw if it's missing in the dispatch path below).
+        // Writes gl_PointSize from PointsMaterial::size, encoded in the
+        // push constant's color.w slot for this pipeline only.
+        VkPipeline       overlayPointListPipeline        = VK_NULL_HANDLE;
         // Depth prepass that fills rasterGbufs[f].unjitDepth using the
         // unjittered VP. Reuses the raster pipeline's descriptor set + push
         // constants (same camera UBO, same model matrix push). Runs after
@@ -1035,9 +1055,17 @@ namespace threepp {
         // lastVisibleEntries_. Lives only for the overlay record's draw
         // loop — neither PT nor the raster G-buffer touches this.
         struct LineEntry {
+            // For Line / LineSegments the `line` pointer is the object; for
+            // Points entries it is null and `points` holds the object instead.
+            // Keeping a single entry struct (rather than a separate
+            // PointEntry) avoids duplicating the overlay walk + geometry
+            // upload paths, since both topologies share the same vertex
+            // buffer layout (position + optional color).
             Line*    line;
+            Points*  points;
             std::array<float, 16> worldMatrix;
-            bool     isSegments;// true → LINE_LIST topology, false → LINE_STRIP
+            bool     isSegments; // true → LINE_LIST, false → LINE_STRIP (ignored when isPoints)
+            bool     isPoints;   // true → POINT_LIST topology, overrides the line topology
         };
         std::vector<LineEntry> lastVisibleLines_;
         // Cached unjittered view-projection matrix (column-major,
@@ -1528,6 +1556,7 @@ namespace threepp {
             if (overlayLineStripPipeline)         vkDestroyPipeline(d, overlayLineStripPipeline, nullptr);
             if (overlayLineListColoredPipeline)   vkDestroyPipeline(d, overlayLineListColoredPipeline, nullptr);
             if (overlayLineStripColoredPipeline)  vkDestroyPipeline(d, overlayLineStripColoredPipeline, nullptr);
+            if (overlayPointListPipeline)         vkDestroyPipeline(d, overlayPointListPipeline, nullptr);
             if (overlayDepthPrepassPipeline)      vkDestroyPipeline(d, overlayDepthPrepassPipeline, nullptr);
             if (overlayPipelineLayout)      vkDestroyPipelineLayout(d, overlayPipelineLayout, nullptr);
             if (overlaySpritePipeline_)     vkDestroyPipeline(d, overlaySpritePipeline_, nullptr);
@@ -3823,12 +3852,31 @@ namespace threepp {
                     if (geom && geom->hasAttribute("position")) {
                         LineEntry le{};
                         le.line       = line;
+                        le.points     = nullptr;
                         le.isSegments = (dynamic_cast<LineSegments*>(line) != nullptr);
+                        le.isPoints   = false;
                         std::memcpy(le.worldMatrix.data(),
                                     line->matrixWorld->elements.data(), 64);
                         lineEntries.push_back(le);
                     }
                     return;// Lines aren't Meshes; nothing more to do
+                }
+                // Points (point clouds) — never path-trace, always rasterise
+                // as POINT_LIST in the overlay pass. Shares the same geometry
+                // cache as Line via the BufferGeometry* key.
+                if (auto* pts = dynamic_cast<Points*>(&o); pts && pts->visible) {
+                    auto geom = pts->geometry();
+                    if (geom && geom->hasAttribute("position")) {
+                        LineEntry le{};
+                        le.line       = nullptr;
+                        le.points     = pts;
+                        le.isSegments = false;
+                        le.isPoints   = true;
+                        std::memcpy(le.worldMatrix.data(),
+                                    pts->matrixWorld->elements.data(), 64);
+                        lineEntries.push_back(le);
+                    }
+                    return;
                 }
                 auto* m = dynamic_cast<Mesh*>(&o);
                 if (!m || !m->visible) return;
@@ -6552,6 +6600,89 @@ namespace threepp {
             clearGbufImages();
         }
 
+        // Path-traced LIDAR scan entry-point. Re-uses the main TLAS and the
+        // current frame's geom/mat descriptors via a private RT pipeline owned
+        // by `lidar_`. Synchronous: blocks the calling thread until per-beam
+        // results land in `outResults`.
+        void scanLidar(const std::vector<LidarBeam>& beams,
+                       std::vector<LidarReturn>& outResults,
+                       const LidarParams& params) {
+            outResults.clear();
+            if (beams.empty()) return;
+
+            // Lazy-construct the LIDAR pipeline. Idempotent; if the user
+            // never calls scanLidar, the pipeline + SBT cost is never paid.
+            if (!lidar_) lidar_ = std::make_unique<vulkan::LidarScanner>(*ctx);
+
+            // Drain all in-flight frames so the TLAS + geom/mat buffers
+            // are stable while we read them.
+            vkDeviceWaitIdle(ctx->device());
+
+            // Force-flush MaterialDescs into buffer slot 0 — gives us a
+            // known-good frame target without having to chase `currentFrame`
+            // semantics across render() calls.
+            matDescsDirty_[0] = true;
+            flushMaterialDescsIfDirty(0);
+
+            // Push constants encode the LIDAR equation parameters. The
+            // shader multiplies the raw `laserPower · f_back · cos θ · η / r²`
+            // contribution by `invReferenceIntensity` so that, AT laserPower = 1,
+            // a perpendicular 1.0-albedo *Lambertian* surface at `referenceRange`
+            // reads as 1.0. The reference is purely geometric (π · refRange²)
+            // — it does NOT include laserPower, so raising the power slider
+            // scales every return linearly (the whole point of the knob).
+            // The π factor absorbs the 1/π in the Lambert BRDF — without it
+            // a "100% reflective" Lambertian at the reference range would
+            // read as 1/π ≈ 0.318 instead of 1.0.
+            vulkan_lidar::LidarPushConstants pc{};
+            pc.numBeams = static_cast<uint32_t>(beams.size());
+            pc.maxRange = std::max(0.001f, params.maxRange);
+            pc.laserPower = std::max(0.f, params.laserPower);
+            const float refRange = std::max(0.001f, params.referenceRange);
+            constexpr float kPi = 3.14159265358979323846f;
+            pc.invReferenceIntensity = kPi * refRange * refRange;
+            pc.atmosphericExtinction = std::max(0.f, params.atmosphericExtinction);
+            pc.detectorThreshold = std::max(0.f, params.detectorThreshold);
+            pc.rngSeed = 0;
+            pc._pad = 0;
+
+            // Pack beams into the shader-side struct (vec3 + pad).
+            std::vector<vulkan_lidar::LidarBeam> packed(beams.size());
+            for (size_t i = 0; i < beams.size(); ++i) {
+                packed[i].origin[0]    = beams[i].origin.x;
+                packed[i].origin[1]    = beams[i].origin.y;
+                packed[i].origin[2]    = beams[i].origin.z;
+                packed[i]._pad0        = 0.f;
+                packed[i].direction[0] = beams[i].direction.x;
+                packed[i].direction[1] = beams[i].direction.y;
+                packed[i].direction[2] = beams[i].direction.z;
+                packed[i]._pad1        = 0.f;
+            }
+
+            std::vector<vulkan_lidar::LidarResult> raw(beams.size());
+
+            lidar_->scan(ctx->graphicsQueue(),
+                         tlas,
+                         geometryDescsBuffer.handle, geometryDescsBuffer.size,
+                         materialDescsBuffers[0].handle, materialDescsBuffers[0].size,
+                         pc,
+                         packed.data(), static_cast<uint32_t>(packed.size()),
+                         raw.data());
+
+            // Unpack into the public LidarReturn struct.
+            outResults.resize(raw.size());
+            for (size_t i = 0; i < raw.size(); ++i) {
+                const auto& r = raw[i];
+                auto& o = outResults[i];
+                o.position.set(r.position[0], r.position[1], r.position[2]);
+                o.normal.set(r.normal[0], r.normal[1], r.normal[2]);
+                o.distance      = r.distance;
+                o.intensity     = r.intensity;
+                o.hitInstanceId = r.instanceId;
+                o.returnNo      = r.returnNo;
+            }
+        }
+
         // ── Hybrid raster G-buffer prepass implementation ───────────────────
         // Lazy-initialized on first render() with hybridEnabled_ = true.
         // All resources owned by Impl; cleanup in dtor + destroyRasterGbufImages
@@ -7342,10 +7473,58 @@ namespace threepp {
                                             &overlayLineStripColoredPipeline),
                   "vkCreateGraphicsPipelines(overlayLineStripColored)");
 
+            // ── Point list pipeline ─────────────────────────────────────────
+            // POINT_LIST topology. Uses overlay_point.vert/.frag which write
+            // gl_PointSize from the push constant's color.w slot and discard
+            // fragments outside a unit-radius disk (round sprite). Shares the
+            // same overlayPipelineLayout + 2-binding vertex input (pos + color)
+            // as the colored line variants — a Points object without a "color"
+            // attribute is skipped at draw-record time.
+            VkShaderModuleCreateInfo pvsmci{};
+            pvsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            pvsmci.codeSize = sizeof(kOverlayPointVertSpv);
+            pvsmci.pCode    = kOverlayPointVertSpv;
+            VkShaderModule pvert = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &pvsmci, nullptr, &pvert),
+                  "vkCreateShaderModule(overlay_point.vert)");
+
+            VkShaderModuleCreateInfo pfsmci{};
+            pfsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            pfsmci.codeSize = sizeof(kOverlayPointFragSpv);
+            pfsmci.pCode    = kOverlayPointFragSpv;
+            VkShaderModule pfrag = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &pfsmci, nullptr, &pfrag),
+                  "vkCreateShaderModule(overlay_point.frag)");
+
+            VkPipelineShaderStageCreateInfo pStages[2]{};
+            pStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            pStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+            pStages[0].module = pvert;
+            pStages[0].pName  = "main";
+            pStages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            pStages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            pStages[1].module = pfrag;
+            pStages[1].pName  = "main";
+
+            VkPipelineInputAssemblyStateCreateInfo iaPointList{};
+            iaPointList.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            iaPointList.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+
+            VkGraphicsPipelineCreateInfo gpciPointList = gpciLineList;
+            gpciPointList.stageCount        = 2;
+            gpciPointList.pStages           = pStages;
+            gpciPointList.pVertexInputState = &cvi;
+            gpciPointList.pInputAssemblyState = &iaPointList;
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciPointList, nullptr,
+                                            &overlayPointListPipeline),
+                  "vkCreateGraphicsPipelines(overlayPointList)");
+
             vkDestroyShaderModule(ctx->device(), vertModule, nullptr);
             vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
             vkDestroyShaderModule(ctx->device(), cvert, nullptr);
             vkDestroyShaderModule(ctx->device(), cfrag, nullptr);
+            vkDestroyShaderModule(ctx->device(), pvert, nullptr);
+            vkDestroyShaderModule(ctx->device(), pfrag, nullptr);
 
             // ── Overlay depth prepass pipeline ──────────────────────────────
             // Renders all non-overlay scene geometry with the unjittered VP
@@ -11444,32 +11623,60 @@ namespace threepp {
                         }
                     }
 
-                    // ── Line / LineSegments draws ──────────────────────────
-                    // Always-drawn (no isOverlay flag — Lines are inherently
-                    // overlay; they don't ray-trace). Per-Line: ensure geom
-                    // upload, push MVP+color, switch topology pipeline. When
-                    // material.vertexColors is true AND geometry has a color
-                    // attribute → bind the colored pipeline variant + a
-                    // second vertex binding at location 1.
+                    // ── Line / LineSegments / Points draws ─────────────────
+                    // Always-drawn (no isOverlay flag — these are inherently
+                    // overlay; they don't ray-trace). For each entry: ensure
+                    // geom upload, push MVP+color, switch topology pipeline.
+                    // When material.vertexColors is true AND the geometry has
+                    // a color attribute → bind the colored pipeline variant +
+                    // a second vertex binding at location 1.
+                    //
+                    // Points entries (isPoints == true) always use the
+                    // POINT_LIST pipeline; the push constant's color.w slot
+                    // carries PointsMaterial::size instead of opacity.
                     for (const auto& le : lastVisibleLines_) {
-                        if (!le.line) continue;
-                        const LineRec* lrec = ensureLineGeometryUploaded(le.line->geometry().get());
+                        std::shared_ptr<BufferGeometry> geomPtr;
+                        std::shared_ptr<Material>       matPtr;
+                        if (le.isPoints) {
+                            if (!le.points) continue;
+                            geomPtr = le.points->geometry();
+                            matPtr  = le.points->material();
+                        } else {
+                            if (!le.line) continue;
+                            geomPtr = le.line->geometry();
+                            matPtr  = le.line->material();
+                        }
+                        if (!geomPtr) continue;
+                        const LineRec* lrec = ensureLineGeometryUploaded(geomPtr.get());
                         if (!lrec || lrec->vertex.handle == VK_NULL_HANDLE) continue;
 
                         Color color(1.f, 1.f, 1.f);
-                        float opacity = 1.0f;
+                        float pcW           = 1.0f;// opacity for lines, point-size for points
                         bool useVertexColors = false;
-                        if (auto mat = le.line->material()) {
-                            if (auto* mc = dynamic_cast<MaterialWithColor*>(mat.get())) {
+                        if (matPtr) {
+                            if (auto* mc = dynamic_cast<MaterialWithColor*>(matPtr.get())) {
                                 color = mc->color;
                             }
-                            opacity         = mat->opacity;
-                            useVertexColors = mat->vertexColors &&
+                            if (le.isPoints) {
+                                if (auto* ms = dynamic_cast<MaterialWithSize*>(matPtr.get())) {
+                                    pcW = std::max(1.0f, ms->size);
+                                } else {
+                                    pcW = 3.0f;// sensible default for sizeless materials
+                                }
+                            } else {
+                                pcW = matPtr->opacity;
+                            }
+                            useVertexColors = matPtr->vertexColors &&
                                               lrec->color.handle != VK_NULL_HANDLE;
                         }
 
                         VkPipeline want;
-                        if (useVertexColors) {
+                        if (le.isPoints) {
+                            // Point pipeline always reads the color binding;
+                            // skip the draw if the geometry has none.
+                            if (lrec->color.handle == VK_NULL_HANDLE) continue;
+                            want = overlayPointListPipeline;
+                        } else if (useVertexColors) {
                             want = le.isSegments ? overlayLineListColoredPipeline
                                                  : overlayLineStripColoredPipeline;
                         } else {
@@ -11494,13 +11701,14 @@ namespace threepp {
                         pcL.color[0] = color.r;
                         pcL.color[1] = color.g;
                         pcL.color[2] = color.b;
-                        pcL.color[3] = opacity;
+                        pcL.color[3] = pcW;
                         vkCmdPushConstants(cb, overlayPipelineLayout,
                                            VK_SHADER_STAGE_VERTEX_BIT |
                                                    VK_SHADER_STAGE_FRAGMENT_BIT,
                                            0, sizeof(pcL), &pcL);
 
-                        if (useVertexColors) {
+                        const bool twoBindings = le.isPoints || useVertexColors;
+                        if (twoBindings) {
                             VkBuffer     vbufsL[2] = {lrec->vertex.handle, lrec->color.handle};
                             VkDeviceSize voffsL[2] = {0, 0};
                             vkCmdBindVertexBuffers(cb, 0, 2, vbufsL, voffsL);
@@ -11509,11 +11717,23 @@ namespace threepp {
                             VkDeviceSize voffsL[1] = {0};
                             vkCmdBindVertexBuffers(cb, 0, 1, vbufsL, voffsL);
                         }
+                        // Honour BufferGeometry::drawRange — the example
+                        // sets it to limit how many of an over-allocated
+                        // dynamic vertex buffer are actually rendered.
+                        const auto& drawRange = geomPtr->drawRange;
                         if (lrec->index.handle != VK_NULL_HANDLE) {
                             vkCmdBindIndexBuffer(cb, lrec->index.handle, 0, VK_INDEX_TYPE_UINT32);
-                            vkCmdDrawIndexed(cb, lrec->indexCount, 1, 0, 0, 0);
+                            const uint32_t start = static_cast<uint32_t>(std::max(0, drawRange.start));
+                            const uint32_t cap   = (lrec->indexCount > start) ? (lrec->indexCount - start) : 0u;
+                            const uint32_t cnt   = std::min(cap,
+                                    static_cast<uint32_t>(std::max(0, drawRange.count)));
+                            if (cnt > 0) vkCmdDrawIndexed(cb, cnt, 1, start, 0, 0);
                         } else {
-                            vkCmdDraw(cb, lrec->vertexCount, 1, 0, 0);
+                            const uint32_t start = static_cast<uint32_t>(std::max(0, drawRange.start));
+                            const uint32_t cap   = (lrec->vertexCount > start) ? (lrec->vertexCount - start) : 0u;
+                            const uint32_t cnt   = std::min(cap,
+                                    static_cast<uint32_t>(std::max(0, drawRange.count)));
+                            if (cnt > 0) vkCmdDraw(cb, cnt, 1, start, 0);
                         }
                     }
 
@@ -12354,6 +12574,12 @@ namespace threepp {
 
     VulkanRenderer::FrameTimings VulkanRenderer::lastFrameTimings() const {
         return pimpl_->lastFrameTimings_;
+    }
+
+    void VulkanRenderer::scanLidar(const std::vector<LidarBeam>& beams,
+                                   std::vector<LidarReturn>& results,
+                                   const LidarParams& params) {
+        pimpl_->scanLidar(beams, results, params);
     }
 
     void VulkanRenderer::setOverlayLayer(int channel) {

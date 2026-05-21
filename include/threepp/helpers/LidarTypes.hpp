@@ -1,0 +1,75 @@
+// Renderer-agnostic types shared by both LIDAR implementations:
+//
+//   - LidarSensor          (GL backend, cube-face depth raster, positions only)
+//   - PathTracedLidarSensor (Vulkan backend, GPU ray tracing, full BRDF intensity)
+//
+// Both produce LidarReturn so downstream code (point-cloud visualisation,
+// perception pipelines, recording) can consume either source uniformly.
+// PathTracedLidarSensor populates every field; the raster LidarSensor fills
+// only `position` / `distance` and leaves the rest at sentinel defaults
+// (intensity = 0, normal = 0, hitInstanceId = -1) because the cube-face
+// depth path doesn't have access to the underlying material / geometry
+// data that the ray-traced path can read from the TLAS.
+
+#ifndef THREEPP_LIDARTYPES_HPP
+#define THREEPP_LIDARTYPES_HPP
+
+#include "threepp/math/Vector3.hpp"
+
+#include <cstdint>
+
+namespace threepp {
+
+    /**
+     * One world-space beam. The direction must be unit length; callers in
+     * possession of a sensor pose typically derive this from a LidarModel
+     * beam pattern transformed through the sensor's world matrix.
+     */
+    struct LidarBeam {
+        Vector3 origin;
+        Vector3 direction;
+    };
+
+    /**
+     * One LIDAR return. `hitInstanceId == -1` indicates a miss or a
+     * detection dropped below the configured detector threshold; all
+     * other fields are undefined in that case.
+     */
+    struct LidarReturn {
+        Vector3 position;       // world-space hit point
+        Vector3 normal;         // world-space surface normal (0 when unknown)
+        float   distance;       // slant range from sensor (m); 0 on miss
+        float   intensity;      // normalised return strength [0, 1]; 0 on miss
+        int32_t hitInstanceId;  // -1 = miss / sub-threshold / source can't tell
+        int32_t returnNo;       // 1 = first return; 0 = miss
+    };
+
+    /**
+     * Live-tweakable parameters of the LIDAR equation. Used by the path-
+     * traced sensor; the raster sensor only honours `maxRange`.
+     */
+    struct LidarParams {
+        // Maximum slant range. Beams that hit no surface within this
+        // distance produce miss results.
+        float maxRange = 100.f;
+
+        // Reference transmit power. The product
+        //     laserPower · f_back(material) · cos θ · η(r) / r²
+        // is multiplied by π·referenceRange² so that, at laserPower = 1,
+        // a perpendicular 1.0-albedo Lambertian surface at `referenceRange`
+        // reads as 1.0. Raising laserPower scales every return linearly.
+        float laserPower = 1.f;
+        float referenceRange = 5.f;
+
+        // Beer-Lambert atmospheric extinction (1/m), applied over the
+        // round trip. 0 = vacuum; 0.01 ≈ light haze; 0.1 ≈ heavy fog.
+        float atmosphericExtinction = 0.f;
+
+        // Returns with normalised intensity below this are dropped
+        // (hitInstanceId = -1).
+        float detectorThreshold = 0.005f;
+    };
+
+}// namespace threepp
+
+#endif//THREEPP_LIDARTYPES_HPP

@@ -2,6 +2,7 @@
 #define THREEPP_LIDARSENSOR_HPP
 
 #include "LidarModel.hpp"
+#include "LidarTypes.hpp"
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/core/Object3D.hpp"
@@ -54,10 +55,16 @@ namespace threepp {
         LidarSensor(const LidarModel& model, unsigned int faceSize, float near = 0.1f, float far = 100.f);
 
         /**
-         * Performs a scan and returns hit points in world space.
+         * Performs a scan and writes per-beam returns into `cloud`. Position
+         * and distance are populated from the cube-face depth read; the
+         * remaining `LidarReturn` fields are left at sentinel defaults
+         * (intensity = 0, normal = 0, hitInstanceId = -1) because the raster
+         * cube-face pipeline does not have access to material or geometry
+         * data. Use `PathTracedLidarSensor` (Vulkan) for those.
+         *
          * The renderer's active render target is restored to nullptr after the scan.
          */
-        void scan(GLRenderer& renderer, Scene& scene, std::vector<Vector3>& cloud);
+        void scan(GLRenderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud);
 
         [[nodiscard]] unsigned int faceSize() const { return faceSize_; }
         [[nodiscard]] float near() const { return near_; }
@@ -94,8 +101,8 @@ namespace threepp {
         void buildBeamTable(const LidarModel& model);
 
         void renderFaces(GLRenderer& renderer, Scene& scene);
-        void unprojectDense(std::vector<Vector3>& points) const;
-        void unprojectBeams(std::vector<Vector3>& points) const;
+        void unprojectDense(std::vector<LidarReturn>& points) const;
+        void unprojectBeams(std::vector<LidarReturn>& points) const;
     };
 
 }// namespace threepp

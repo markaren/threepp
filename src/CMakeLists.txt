@@ -98,6 +98,7 @@ set(publicHeaders
         "threepp/helpers/DepthSensor.hpp"
         "threepp/helpers/LidarModel.hpp"
         "threepp/helpers/LidarSensor.hpp"
+        "threepp/helpers/LidarTypes.hpp"
         "threepp/helpers/DirectionalLightHelper.hpp"
         "threepp/helpers/GridHelper.hpp"
         "threepp/helpers/HemisphereLightHelper.hpp"
@@ -597,10 +598,12 @@ endif ()
 if (THREEPP_WITH_VULKAN)
     list(APPEND publicHeaders
             "threepp/renderers/VulkanRenderer.hpp"
+            "threepp/helpers/PathTracedLidarSensor.hpp"
     )
     list(APPEND privateHeaders
             "threepp/renderers/vulkan/VulkanContext.hpp"
             "threepp/renderers/vulkan/VulkanResources.hpp"
+            "threepp/renderers/vulkan/LidarScanner.hpp"
             "threepp/renderers/vulkan/PhotonCaustics.hpp"
             "threepp/renderers/vulkan/Denoiser.hpp"
             "threepp/renderers/vulkan/EnvPrefilter.hpp"
@@ -611,8 +614,10 @@ if (THREEPP_WITH_VULKAN)
     )
     list(APPEND sources
             "threepp/renderers/VulkanRenderer.cpp"
+            "threepp/helpers/PathTracedLidarSensor.cpp"
             "threepp/renderers/vulkan/VulkanContext.cpp"
             "threepp/renderers/vulkan/VulkanResources.cpp"
+            "threepp/renderers/vulkan/LidarScanner.cpp"
             "threepp/renderers/vulkan/PhotonCaustics.cpp"
             "threepp/renderers/vulkan/Denoiser.cpp"
             "threepp/renderers/vulkan/EnvPrefilter.cpp"
@@ -916,6 +921,22 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/photon_chit.rchit"
         kPhotonChitRchitSpv
         _photon_chit_spv_h)
+    # Path-traced LIDAR scanner — private ray-tracing pipeline that emits
+    # one beam per launched thread, evaluates the LIDAR equation in the
+    # closest-hit shader, and writes per-beam returns back to the host
+    # via a small SSBO. See vulkan/LidarScanner.{hpp,cpp}.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/lidar.rgen"
+        kLidarRgenSpv
+        _lidar_rgen_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/lidar.rchit"
+        kLidarRchitSpv
+        _lidar_rchit_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/lidar.rmiss"
+        kLidarRmissSpv
+        _lidar_rmiss_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/prefilter_env.comp"
         kPrefilterEnvCompSpv
@@ -1031,6 +1052,17 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_color.frag"
         kOverlayColorFragSpv
         _overlay_color_frag_spv_h)
+    # Overlay variant for Points objects — POINT_LIST topology, writes
+    # gl_PointSize from the push constant, discards fragments outside
+    # a unit-radius disk for round LIDAR-style dots.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_point.vert"
+        kOverlayPointVertSpv
+        _overlay_point_vert_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_point.frag"
+        kOverlayPointFragSpv
+        _overlay_point_frag_spv_h)
     # HUD sprite (TextSprite + Sprite) — alpha-blended quad with per-sprite
     # combined-image-sampler binding. Walked from the user's HUD scene during
     # the ortho overlay pass, post-PT/TAA, depth disabled.

@@ -1,0 +1,101 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive : enable
+
+// Path-traced LIDAR — raygen.
+//
+// One beam per launched thread. Reads (origin, direction) from a host-uploaded
+// BeamBuf, traces a single ray against the same TLAS the main path tracer
+// uses, and writes a per-beam LidarResult (hit position, distance, surface
+// normal, normalised intensity, instance id). The closest-hit shader
+// (lidar.rchit) evaluates the LIDAR equation — Lambertian back-scatter
+// damped by metal specular loss × Beer-Lambert atmospheric attenuation × 1/r²
+// — and writes the result into our local Payload.
+
+#include "lidar_shared.h"
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
+layout(set = 0, binding = 3, scalar) readonly buffer BeamBuf {
+    LidarBeam beams[];
+};
+layout(set = 0, binding = 4, scalar) buffer ResultBuf {
+    LidarResult results[];
+};
+
+layout(push_constant) uniform Pc {
+    uint  numBeams;
+    float maxRange;
+    float laserPower;
+    float invReferenceIntensity;
+    float atmosphericExtinction;
+    float detectorThreshold;
+    uint  rngSeed;
+    uint  _pad;
+} pc;
+
+struct Payload {
+    vec3  hitPos;
+    vec3  hitNormal;
+    float distance;
+    float intensity;
+    int   instanceId;
+};
+layout(location = 0) rayPayloadEXT Payload pl;
+
+void main() {
+    const uint i = gl_LaunchIDEXT.x;
+    if (i >= pc.numBeams) return;
+
+    LidarBeam beam = beams[i];
+
+    // Default to miss — the rmiss shader rewrites these but defending in
+    // case of degenerate beam direction.
+    pl.hitPos     = vec3(0.0);
+    pl.hitNormal  = vec3(0.0);
+    pl.distance   = 0.0;
+    pl.intensity  = 0.0;
+    pl.instanceId = -1;
+
+    // Opaque flag means we skip any-hit on alpha-tested triangles. The main
+    // path tracer's alpha handling is complex and irrelevant here — LIDAR
+    // sees alpha-masked fronds as solid; matches real sensor behaviour for
+    // foliage where the leaf surface is what reflects the pulse.
+    traceRayEXT(topAS,
+                gl_RayFlagsOpaqueEXT,
+                0xFF,           // cull mask — accept everything
+                0, 0, 0,        // sbtRecordOffset, sbtRecordStride, missIndex
+                beam.origin,
+                0.001,          // tMin: slight bias to avoid self-hit when
+                                // the beam origin sits exactly on a previous
+                                // hit point (multi-return support later).
+                beam.direction,
+                pc.maxRange,
+                0);             // payload location
+
+    LidarResult r;
+    const bool detected =
+            pl.instanceId >= 0 &&
+            pl.intensity >= pc.detectorThreshold &&
+            pl.distance > 0.0 &&
+            pl.distance <= pc.maxRange;
+    if (detected) {
+        r.position   = pl.hitPos;
+        r.distance   = pl.distance;
+        r.normal     = pl.hitNormal;
+        r.intensity  = pl.intensity;
+        r.instanceId = pl.instanceId;
+        r.returnNo   = 1;
+    } else {
+        r.position   = vec3(0.0);
+        r.distance   = 0.0;
+        r.normal     = vec3(0.0);
+        r.intensity  = 0.0;
+        r.instanceId = -1;
+        r.returnNo   = 0;
+    }
+    r._pad = vec2(0.0);
+    results[i] = r;
+}

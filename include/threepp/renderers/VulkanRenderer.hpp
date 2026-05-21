@@ -12,11 +12,14 @@
 #define THREEPP_VULKANRENDERER_HPP
 
 #include "threepp/canvas/Canvas.hpp"
+#include "threepp/helpers/LidarTypes.hpp"
+#include "threepp/math/Vector3.hpp"
 #include "threepp/renderers/Renderer.hpp"
 
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace threepp {
 
@@ -225,6 +228,34 @@ namespace threepp {
         // Default off.
         void setMeasurePrimaryTraceOnly(bool enabled);
         [[nodiscard]] bool measurePrimaryTraceOnly() const;
+
+
+        // ── Path-traced LIDAR scanner ─────────────────────────────────────
+        // Synchronously trace `beams.size()` rays against the same TLAS the
+        // path tracer uses, evaluate a back-scatter LIDAR equation at the
+        // first hit (Lambertian luminance damped by metal specular loss ×
+        // |cos θ| × Beer-Lambert atmospheric attenuation / r²), and return
+        // per-beam (position, normal, distance, intensity, hit-instance)
+        // tuples. Lets simulation users obtain physically-grounded LIDAR
+        // returns from the same GPU-accelerated geometry the renderer
+        // sees, rather than rasterising depth into cube faces and reading
+        // pixels back (the existing GL `LidarSensor` path).
+        //
+        // Intensity is normalised so that a perpendicular, 1.0-albedo
+        // surface at `params.referenceRange` reads as 1.0; returns below
+        // `params.detectorThreshold` are dropped (instanceId = -1).
+        //
+        // Submits its own command buffer + fence and blocks until results
+        // come back. Typical cadence for a real LIDAR is 10-30 Hz, so the
+        // round-trip overhead is acceptable. Calling between render()
+        // invocations is safe; calling concurrently with render() is not.
+        //
+        // Beam / return / params types live in helpers/LidarTypes.hpp so
+        // GL-side LidarSensor and Vulkan-side PathTracedLidarSensor can
+        // share the same output container.
+        void scanLidar(const std::vector<LidarBeam>& beams,
+                       std::vector<LidarReturn>& results,
+                       const LidarParams& params = {});
 
 
         // Per-frame timings (milliseconds). CPU values come from

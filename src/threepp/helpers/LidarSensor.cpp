@@ -225,7 +225,7 @@ LidarSensor::LidarSensor(const LidarModel& model, unsigned int faceSize, float n
 // Scan
 // ---------------------------------------------------------------------------
 
-void LidarSensor::scan(GLRenderer& renderer, Scene& scene, std::vector<Vector3>& cloud) {
+void LidarSensor::scan(GLRenderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud) {
     cloud.clear();
     renderFaces(renderer, scene);
 
@@ -256,7 +256,7 @@ void LidarSensor::renderFaces(GLRenderer& renderer, Scene& scene) {
 // Unprojection
 // ---------------------------------------------------------------------------
 
-void LidarSensor::unprojectDense(std::vector<Vector3>& points) const {
+void LidarSensor::unprojectDense(std::vector<LidarReturn>& points) const {
     static std::mt19937 rng_{std::random_device{}()};
 
     const bool addNoise = rangeNoise > 0.f;
@@ -290,16 +290,27 @@ void LidarSensor::unprojectDense(std::vector<Vector3>& points) const {
                 }
 
                 const float xd = dir_[x];
-                points.emplace_back(
+                // Slant range (Euclidean): depth is along the cube-face camera's
+                // view axis; off-axis beams travel further per unit of view-z.
+                const float slant = depth * std::sqrt(xd * xd + yd * yd + 1.f);
+
+                LidarReturn r;
+                r.position.set(
                         (m0 * xd + ry0 - m8) * depth + m12,
                         (m1 * xd + ry1 - m9) * depth + m13,
                         (m2 * xd + ry2 - m10) * depth + m14);
+                r.normal.set(0.f, 0.f, 0.f);
+                r.distance      = slant;
+                r.intensity     = 0.f;
+                r.hitInstanceId = -1;
+                r.returnNo      = 1;
+                points.push_back(std::move(r));
             }
         }
     }
 }
 
-void LidarSensor::unprojectBeams(std::vector<Vector3>& points) const {
+void LidarSensor::unprojectBeams(std::vector<LidarReturn>& points) const {
     static std::mt19937 rng_{std::random_device{}()};
 
     points.reserve(beams_.size());
@@ -331,9 +342,18 @@ void LidarSensor::unprojectBeams(std::vector<Vector3>& points) const {
         // view-space point for this beam: (u*depth, v*depth, -depth)
         // transformed to world space via the face camera's world matrix
         const float* me = faceMat[b.face];
-        points.emplace_back(
+        const float slant = depth * std::sqrt(b.u * b.u + b.v * b.v + 1.f);
+
+        LidarReturn r;
+        r.position.set(
                 (me[0] * b.u + me[4] * b.v - me[8]) * depth + me[12],
                 (me[1] * b.u + me[5] * b.v - me[9]) * depth + me[13],
                 (me[2] * b.u + me[6] * b.v - me[10]) * depth + me[14]);
+        r.normal.set(0.f, 0.f, 0.f);
+        r.distance      = slant;
+        r.intensity     = 0.f;
+        r.hitInstanceId = -1;
+        r.returnNo      = 1;
+        points.push_back(std::move(r));
     }
 }
