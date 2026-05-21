@@ -6643,10 +6643,14 @@ namespace threepp {
             pc.invReferenceIntensity = kPi * refRange * refRange;
             pc.atmosphericExtinction = std::max(0.f, params.atmosphericExtinction);
             pc.detectorThreshold = std::max(0.f, params.detectorThreshold);
-            pc.rngSeed = 0;
+            // Frame-varying seed so the Monte Carlo fog scatter + sub-beam
+            // jitter decorrelate across successive scans; sharing the path
+            // tracer's accum index gives a stable, monotonically growing
+            // stream that resets on accumulation reset.
+            pc.rngSeed = sampleIndex;
             pc.maxReturns = std::max(1u, params.maxReturns);
-            pc._pad0 = 0;
-            pc._pad1 = 0;
+            pc.samplesPerBeam = std::max(1u, params.samplesPerBeam);
+            pc.beamDivergenceTan = std::tan(0.5f * std::max(0.f, params.beamDivergenceMrad) * 0.001f);
 
             // Pack beams into the shader-side struct (vec3 + pad).
             std::vector<vulkan_lidar::LidarBeam> packed(beams.size());
@@ -6661,8 +6665,8 @@ namespace threepp {
                 packed[i]._pad1        = 0.f;
             }
 
-            // results[beamIdx * maxReturns + slot]
-            const size_t totalSlots = beams.size() * pc.maxReturns;
+            // results[(beam * samplesPerBeam + sample) * maxReturns + slot]
+            const size_t totalSlots = beams.size() * pc.samplesPerBeam * pc.maxReturns;
             std::vector<vulkan_lidar::LidarResult> raw(totalSlots);
 
             // Pick the most recently uploaded fog slot. render() bumps

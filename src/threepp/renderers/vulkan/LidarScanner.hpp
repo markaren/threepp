@@ -99,11 +99,12 @@ namespace threepp::vulkan {
         void createSbt();
         void createCommandObjects();
 
-        // Round (numBeams, maxReturns) up to powers of two and reallocate
-        // buffers if larger than current capacity. Updates the descriptor
-        // set bindings for beamBuf_ + resultBuf_ since the VkBuffer handles
-        // change.
-        void ensureCapacity(uint32_t numBeams, uint32_t maxReturns);
+        // Round (numBeams, slotsPerBeam) up to powers of two and reallocate
+        // buffers if larger than current capacity. `slotsPerBeam` is the
+        // total result slots per beam = samplesPerBeam · maxReturns.
+        // Updates the descriptor set bindings for beamBuf_ + resultBuf_
+        // since the VkBuffer handles change.
+        void ensureCapacity(uint32_t numBeams, uint32_t slotsPerBeam);
 
         // Update the shared bindings (TLAS, geomDescs, matDescs, fogUbo)
         // before dispatch. The beam/result bindings are updated only when

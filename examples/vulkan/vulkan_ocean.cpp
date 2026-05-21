@@ -495,7 +495,7 @@ int main() {
     // via the same closest-hit BSDF the path tracer uses.
     constexpr float kLidarMountHeight  = 11.0f;      // m above waterline — clears wheelhouse + mast roof
     constexpr float kLidarMountForward = 8.0f;       // m forward of boat origin (near the bow)
-    constexpr int   kLidarMaxBeams     = 500000;     // enough for OS0-128 × maxReturns 4
+    constexpr int   kLidarMaxBeams     = 1100000;    // OS0-128 forward × maxReturns 4 × samples 4
 
     // Forward-only scan (azimuth ∈ [-90°, +90°]). Sensor convention puts
     // azimuth = 0 along the sensor's local -Z (forward), so this carves
@@ -682,6 +682,17 @@ int main() {
             if (ImGui::SliderInt("Max returns##lidar", &maxRet, 1, 4))
                 lidarSensor->params.maxReturns = static_cast<uint32_t>(std::max(1, maxRet));
         }
+        {
+            // Monte Carlo samples per beam: jitters direction within the
+            // beam-divergence cone and uses a fresh RNG stream per sample
+            // for the fog scatter. >1 averages volumetric noise and shows
+            // the beam's true angular footprint.
+            int samples = static_cast<int>(lidarSensor->params.samplesPerBeam);
+            if (ImGui::SliderInt("Samples / beam##lidar", &samples, 1, 8))
+                lidarSensor->params.samplesPerBeam = static_cast<uint32_t>(std::max(1, samples));
+        }
+        ImGui::SliderFloat("Beam divergence (mrad)##lidar",
+                           &lidarSensor->params.beamDivergenceMrad, 0.f, 10.f, "%.2f");
         ImGui::Text("Returns: %d / %u beams   Scan: %.2f ms",
                     lidarLastReturns,
                     lidarSensor->beamCount(),
@@ -1342,12 +1353,15 @@ int main() {
                 auto& panelBytes = lidarPanelTex->image().data<unsigned char>();
                 std::fill(panelBytes.begin(), panelBytes.end(), 0u);
 
-                // Panel shows the FIRST return per beam (real LIDAR
-                // sensors' default debug view). Multi-returns appear in
-                // the 3-D cloud where they don't overlap spatially.
-                const uint32_t maxRet = std::max(1u, lidarSensor->params.maxReturns);
+                // Panel shows the FIRST sample's FIRST return per beam
+                // (real LIDAR sensors' default debug view). Other samples
+                // / multi-returns appear in the 3-D cloud where they don't
+                // overlap spatially.
+                const uint32_t maxRet  = std::max(1u, lidarSensor->params.maxReturns);
+                const uint32_t samples = std::max(1u, lidarSensor->params.samplesPerBeam);
+                const uint32_t slotsPerBeam = maxRet * samples;
                 for (size_t beam = 0; beam < lidarSensor->beamCount(); ++beam) {
-                    const size_t b = beam * maxRet;
+                    const size_t b = beam * slotsPerBeam;
                     if (b >= lidarReturns.size()) break;
                     const auto& r = lidarReturns[b];
                     if (r.returnNo <= 0) continue;// miss

@@ -54,8 +54,8 @@ layout(push_constant) uniform Pc {
     float detectorThreshold;
     uint  rngSeed;
     uint  maxReturns;
-    uint  _pad0;
-    uint  _pad1;
+    uint  samplesPerBeam;
+    float beamDivergenceTan;// tan(half-angle in radians), precomputed on the host
 } pc;
 
 struct Payload {
@@ -111,7 +111,9 @@ void main() {
 
     const LidarBeam beam = beams[i];
     const uint maxRet    = max(pc.maxReturns, 1u);
-    const uint baseIdx   = i * maxRet;
+    const uint samples   = max(pc.samplesPerBeam, 1u);
+    const uint slotsPerBeam = samples * maxRet;
+    const uint beamBase  = i * slotsPerBeam;
 
     // Collapse per-channel fog extinction + albedo to scalars. Near-IR
     // LIDAR doesn't resolve colour, and the rest of the LIDAR pipeline
@@ -123,13 +125,38 @@ void main() {
     const float fogAlbedo = fogOn * dot(fog.color,  vec3(0.2126, 0.7152, 0.0722));
     const float pBack     = hgBackscatter(clamp(fog.anisotropy, -0.95, 0.95));
 
-    vec3  rayOrigin   = beam.origin;
-    const vec3 rayDir = beam.direction;
-    float totalRange  = 0.0;
-    float throughput  = 1.0;
-    uint  slot        = 0;
+    // Orthonormal basis around the beam direction, used to jitter
+    // within a divergence cone when samples > 1.
+    const vec3 fwd   = beam.direction;
+    const vec3 upRef = (abs(fwd.y) < 0.99) ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    const vec3 right = normalize(cross(upRef, fwd));
+    const vec3 up    = cross(fwd, right);
+    const bool jitter = (samples > 1u) && (pc.beamDivergenceTan > 0.0);
 
-    for (uint b = 0u; b < maxRet; ++b) {
+    for (uint sIdx = 0u; sIdx < samples; ++sIdx) {
+      const uint sampleBase = beamBase + sIdx * maxRet;
+
+      // Pick this sample's ray direction. Sample 0 with no jitter
+      // reproduces the deterministic single-ray legacy behaviour.
+      vec3 rayDir;
+      if (jitter) {
+          const uint sk1 = pcg(i ^ pc.rngSeed ^ (sIdx * 0x9E3779B9u + 0xCAFEBABEu));
+          const uint sk2 = pcg(sk1 ^ 0xDEADBEEFu);
+          const float u1 = float(sk1) / 4294967296.0;
+          const float u2 = float(sk2) / 4294967296.0;
+          const float r   = pc.beamDivergenceTan * sqrt(u1); // uniform disk
+          const float phi = 6.2831853 * u2;
+          rayDir = normalize(fwd + right * (r * cos(phi)) + up * (r * sin(phi)));
+      } else {
+          rayDir = fwd;
+      }
+
+      vec3  rayOrigin  = beam.origin;
+      float totalRange = 0.0;
+      float throughput = 1.0;
+      uint  slot       = 0;
+
+      for (uint b = 0u; b < maxRet; ++b) {
         const float segmentMax = pc.maxRange - totalRange;
         if (segmentMax <= 0.0) break;
 
@@ -138,7 +165,7 @@ void main() {
         // sampled distance is sentinel-infinity and the surface trace
         // always wins, so the fog-disabled path is bit-identical to the
         // pre-fog rgen behaviour.
-        const uint seedKey = pcg(i ^ pc.rngSeed ^ (b * 2654435769u));
+        const uint seedKey = pcg(i ^ pc.rngSeed ^ (sIdx * 0xBF58476Du + b * 2654435769u));
         const float u01    = float(seedKey) / 4294967296.0;
         const float fogS   = (sigmaT > 1e-6)
                 ? (-log(max(1e-6, 1.0 - u01)) / sigmaT)
@@ -186,7 +213,7 @@ void main() {
                 r.instanceId = -2;            // sentinel: fog return (not a surface)
                 r.returnNo   = int(slot + 1u);
                 r._pad       = vec2(0.0);
-                results[baseIdx + slot] = r;
+                results[sampleBase + slot] = r;
                 ++slot;
                 if (slot >= maxRet) break;
             }
@@ -227,7 +254,7 @@ void main() {
             r.instanceId = pl.instanceId;
             r.returnNo   = int(slot + 1u);
             r._pad       = vec2(0.0);
-            results[baseIdx + slot] = r;
+            results[sampleBase + slot] = r;
             ++slot;
             if (slot >= maxRet) break;
         }
@@ -245,11 +272,12 @@ void main() {
 
         rayOrigin   = pl.hitPos + rayDir * 0.001;
         totalRange += pl.distance + 0.001;
-    }
+      }// end multi-return loop
 
-    // Fill unused slots with miss sentinels so the host sees a clean
-    // fixed-stride layout.
-    for (uint s = slot; s < maxRet; ++s) {
-        writeMiss(baseIdx + s);
-    }
+      // Fill unused slots in this sample's range with miss sentinels so
+      // the host sees a clean fixed-stride layout.
+      for (uint s = slot; s < maxRet; ++s) {
+          writeMiss(sampleBase + s);
+      }
+    }// end samples loop
 }

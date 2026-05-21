@@ -264,9 +264,9 @@ namespace threepp::vulkan {
               "vkCreateFence(lidar)");
     }
 
-    void LidarScanner::ensureCapacity(uint32_t numBeams, uint32_t maxReturns) {
+    void LidarScanner::ensureCapacity(uint32_t numBeams, uint32_t slotsPerBeam) {
         const uint32_t beamsNeeded   = roundUpPow2(std::max(1u, numBeams));
-        const uint32_t resultsNeeded = roundUpPow2(std::max(1u, numBeams * std::max(1u, maxReturns)));
+        const uint32_t resultsNeeded = roundUpPow2(std::max(1u, numBeams * std::max(1u, slotsPerBeam)));
         const bool beamsGrew   = (beamsNeeded   > capacityBeams_);
         const bool resultsGrew = (resultsNeeded > capacityResults_);
         if (!beamsGrew && !resultsGrew) return;
@@ -409,8 +409,10 @@ namespace threepp::vulkan {
                             vulkan_lidar::LidarResult* outResults) {
         if (numBeams == 0 || outResults == nullptr || beams == nullptr) return;
 
-        const uint32_t maxReturns = std::max(pc.maxReturns, 1u);
-        const uint32_t totalSlots = numBeams * maxReturns;
+        const uint32_t maxReturns   = std::max(pc.maxReturns, 1u);
+        const uint32_t samples      = std::max(pc.samplesPerBeam, 1u);
+        const uint32_t slotsPerBeam = maxReturns * samples;
+        const uint32_t totalSlots   = numBeams * slotsPerBeam;
 
         // Bail out gracefully if the scene isn't ready — write all misses.
         const bool sceneReady = (tlas != VK_NULL_HANDLE) &&
@@ -431,7 +433,7 @@ namespace threepp::vulkan {
             return;
         }
 
-        ensureCapacity(numBeams, maxReturns);
+        ensureCapacity(numBeams, slotsPerBeam);
 
         // Upload beams (mapped, sequential write).
         {

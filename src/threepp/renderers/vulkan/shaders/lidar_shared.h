@@ -61,8 +61,14 @@ namespace threepp::vulkan_lidar {
         // throughput falls below detectorThreshold. 1 = legacy single-
         // return behaviour.
         uint32_t maxReturns;
-        uint32_t _pad0;
-        uint32_t _pad1;
+        // Stochastic samples fired per logical beam. >1 jitters direction
+        // within `beamDivergenceTan`-half-angle cone and runs an
+        // independent multi-return + delta-tracking chain per sample.
+        uint32_t samplesPerBeam;
+        // tan(beamDivergenceMrad · 0.001 · 0.5) precomputed on the host —
+        // the cone half-angle as a tangent so the GLSL jitter is one
+        // multiply + sqrt.
+        float beamDivergenceTan;
     };
     static_assert(sizeof(LidarPushConstants) == 40,
                   "LidarPushConstants layout drifted — update the GLSL mirror below.");

@@ -86,6 +86,26 @@ namespace threepp {
         // The result vector can be up to numBeams * maxReturns long;
         // callers filter entries with hitInstanceId < 0.
         uint32_t maxReturns = 1;
+
+        // Stochastic samples fired per logical beam. Each sample jitters
+        // the direction within a `beamDivergenceMrad`-wide cone and runs
+        // an independent multi-return + delta-tracking chain, with its
+        // own RNG state for the fog scatter free-flight sample. Raising
+        // `samplesPerBeam` averages out the variance from fog scattering
+        // and reveals the beam's true angular footprint on small
+        // features. Default 1 reproduces the deterministic legacy
+        // behaviour bit-for-bit (sample 0 with zero divergence).
+        //
+        // Result layout grows to
+        //     numBeams × samplesPerBeam × maxReturns
+        // indexed as `(beam * samplesPerBeam + sample) * maxReturns + slot`.
+        uint32_t samplesPerBeam = 1;
+
+        // Full-cone beam divergence in milliradians (real Velodyne /
+        // Ouster sensors run 1.5–3 mrad). Only sampled when
+        // `samplesPerBeam > 1`; at 1 sample/beam the direction is the
+        // unjittered beam direction regardless of this value.
+        float    beamDivergenceMrad = 0.f;
     };
 
 }// namespace threepp
