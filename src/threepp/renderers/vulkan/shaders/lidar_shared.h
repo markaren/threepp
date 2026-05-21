@@ -45,7 +45,7 @@ namespace threepp::vulkan_lidar {
     static_assert(sizeof(LidarResult) == 48,
                   "LidarResult layout drifted — update the GLSL mirror below.");
 
-    // 40-byte push constant block. Fits well within the 128-byte minimum
+    // 56-byte push constant block. Fits well within the 128-byte minimum
     // pushConstants size that every Vulkan implementation guarantees.
     struct LidarPushConstants {
         uint32_t numBeams;
@@ -69,8 +69,17 @@ namespace threepp::vulkan_lidar {
         // the cone half-angle as a tangent so the GLSL jitter is one
         // multiply + sqrt.
         float beamDivergenceTan;
+        // Dedicated LIDAR medium (water / dust). Applied only along the
+        // segment of each beam below `mediumSurfaceY`. When
+        // `mediumExtinction > 0`, overrides the shared FogUbo for LIDAR
+        // volumetric handling — keeps the sensor physics correct even
+        // when the renderer disables visual fog (e.g. camera above water).
+        float mediumSurfaceY;
+        float mediumExtinction;
+        float mediumAlbedo;
+        float mediumAnisotropy;
     };
-    static_assert(sizeof(LidarPushConstants) == 40,
+    static_assert(sizeof(LidarPushConstants) == 56,
                   "LidarPushConstants layout drifted — update the GLSL mirror below.");
 
 }// namespace threepp::vulkan_lidar

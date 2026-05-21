@@ -511,6 +511,16 @@ int main() {
     lidarSensor->params.laserPower = 2.0f;           // bump so distant buoys still register
     lidarSensor->params.atmosphericExtinction = 0.f;
     lidarSensor->params.detectorThreshold = 0.005f;
+
+    // Dedicated LIDAR water column. Attenuates beams crossing into the
+    // ocean regardless of where the camera is, so the seafloor doesn't
+    // pop in unattenuated when the eye floats above the waterline.
+    // mediumSurfaceY is updated each frame to follow the live wave
+    // surface height under the sensor.
+    lidarSensor->params.mediumExtinction = 0.30f;
+    lidarSensor->params.mediumAlbedo     = 0.85f;
+    lidarSensor->params.mediumAnisotropy = 0.85f;
+    lidarSensor->params.mediumSurfaceY   = 0.f;
     scene.add(*lidarSensor);
     bool lidarEnabled = true;
     bool lidarShowPanel = true;
@@ -709,6 +719,13 @@ int main() {
         }
         ImGui::SliderFloat("Beam divergence (mrad)##lidar",
                            &lidarSensor->params.beamDivergenceMrad, 0.f, 10.f, "%.2f");
+        ImGui::TextDisabled("Water column (dedicated LIDAR medium)");
+        ImGui::SliderFloat("Extinction (1/m)##wat",
+                           &lidarSensor->params.mediumExtinction, 0.f, 1.f, "%.3f");
+        ImGui::SliderFloat("Albedo##wat",
+                           &lidarSensor->params.mediumAlbedo, 0.f, 1.f, "%.2f");
+        ImGui::SliderFloat("Anisotropy g##wat",
+                           &lidarSensor->params.mediumAnisotropy, -0.95f, 0.95f, "%.2f");
         ImGui::Text("Returns: %d / %u beams   Scan: %.2f ms",
                     lidarLastReturns,
                     lidarSensor->beamCount(),
@@ -983,6 +1000,12 @@ int main() {
         lidarSensor->rotation.set(-bs.smoothPitch * 0.5f,
                                   bs.yaw + math::PI,
                                   0.f, Euler::YXZ);
+
+        // Track the live wave height under the boat so the LIDAR water
+        // column clamp matches the actual sea surface. Beams crossing
+        // this Y get water-column extinction; segments above stay in
+        // air and pass through unattenuated.
+        lidarSensor->params.mediumSurfaceY = ocean->sampleHeight(bs.position.x, bs.position.z);
         lidarCloud->visible = lidarEnabled;
         lidarPanel->visible = lidarEnabled && lidarShowPanel;
 

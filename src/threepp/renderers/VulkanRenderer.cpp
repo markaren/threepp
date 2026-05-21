@@ -6651,6 +6651,10 @@ namespace threepp {
             pc.maxReturns = std::max(1u, params.maxReturns);
             pc.samplesPerBeam = std::max(1u, params.samplesPerBeam);
             pc.beamDivergenceTan = std::tan(0.5f * std::max(0.f, params.beamDivergenceMrad) * 0.001f);
+            pc.mediumSurfaceY   = params.mediumSurfaceY;
+            pc.mediumExtinction = std::max(0.f, params.mediumExtinction);
+            pc.mediumAlbedo     = std::clamp(params.mediumAlbedo, 0.f, 1.f);
+            pc.mediumAnisotropy = std::clamp(params.mediumAnisotropy, -0.95f, 0.95f);
 
             // Pack beams into the shader-side struct (vec3 + pad).
             std::vector<vulkan_lidar::LidarBeam> packed(beams.size());

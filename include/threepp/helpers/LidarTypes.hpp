@@ -106,6 +106,23 @@ namespace threepp {
         // `samplesPerBeam > 1`; at 1 sample/beam the direction is the
         // unjittered beam direction regardless of this value.
         float    beamDivergenceMrad = 0.f;
+
+        // ── Dedicated LIDAR medium (water column / dust layer / …) ────
+        // Independent of the renderer's visual fog state. When
+        // `mediumExtinction > 0`, the LIDAR applies its own volumetric
+        // back-scatter + Beer-Lambert attenuation along the segment of
+        // each beam that lies below `mediumSurfaceY`. The renderer's
+        // visual fog is still rendered separately based on camera
+        // position; this is purely the LIDAR's sensor-side model so the
+        // physics is correct regardless of where the camera is.
+        //
+        // Default `mediumSurfaceY = +∞` and `mediumExtinction = 0`
+        // disables this path entirely; the rgen falls back to the
+        // renderer's shared FogUbo (the legacy step-1 behaviour).
+        float mediumSurfaceY   = 1.0e30f;
+        float mediumExtinction = 0.f;     // 1/m, isotropic
+        float mediumAlbedo     = 0.f;     // [0, 1] single-scattering albedo
+        float mediumAnisotropy = 0.f;     // Henyey-Greenstein g, [-0.95, 0.95]
     };
 
 }// namespace threepp
