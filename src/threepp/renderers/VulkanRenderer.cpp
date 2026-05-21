@@ -900,6 +900,19 @@ namespace threepp {
         bool eventCamEnabled_ = false;
         vulkan::EventCameraDetector::Params eventCamParams_{};
 
+        // Events-only render mode. When on, recordCommandBuffer skips
+        // every pass downstream of the raster G-buffer prepass:
+        // photon emit, PT raygen, denoise, TAA, hybrid overlay, upscale.
+        // The swapchain is cleared to black so the sprite overlay (event
+        // accumulator) has a clean canvas; event_shade + event_detect
+        // run in the outer beginFrameAndRecord flow exactly as in the
+        // normal PT path. Designed for high-rate event-camera sampling
+        // (~500 Hz target) where the renderer's visual output isn't
+        // displayed at all — only the event accumulator readout matters.
+        // Requires hybrid OR TAA to be on so the gbuf prepass actually
+        // runs (event_shade reads its normal + ids attachments).
+        bool eventsOnlyMode_ = false;
+
         // Event-camera shade pipeline. Runs immediately after the raster
         // G-buffer pass (when event camera is on) and writes a clean
         // deterministic luma buffer that the detector consumes instead
@@ -11267,6 +11280,97 @@ namespace threepp {
                 }
             }
 
+            // ── Events-only render mode early-return ───────────────────────
+            // High-rate event-camera path (~500 Hz target): the gbuf prepass
+            // above wrote everything event_shade needs to produce a clean
+            // deterministic luma image. Skip PT/denoise/TAA/overlay/upscale
+            // entirely. The swapchain is cleared to black so the sprite
+            // overlay (event accumulator) has a known starting canvas;
+            // event_shade + event_detect run after recordCommandBuffer
+            // exactly as in the normal PT path.
+            //
+            // Requires the gbuf prepass to have actually run — gated above
+            // on (hybridEnabled_ || taaEnabled_) && rasterGbufPipeline.
+            // If either is missing the events-only flag is ignored and we
+            // fall through to the full PT path.
+            if (eventsOnlyMode_ && eventCamEnabled_ &&
+                (hybridEnabled_ || taaEnabled_) &&
+                rasterGbufPipeline != VK_NULL_HANDLE) {
+                const VkImage swap = ctx->swapchainImages()[imageIndex];
+
+                // UNDEFINED → GENERAL so vkCmdClearColorImage can write it,
+                // and so the downstream sprite overlay + ImGui pass see the
+                // layout they expect (matching the normal recordCommandBuffer
+                // tail comment at line 11892).
+                VkImageMemoryBarrier2 toGen{};
+                toGen.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                toGen.srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                toGen.srcAccessMask = 0;
+                toGen.dstStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                toGen.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                toGen.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                toGen.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                toGen.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toGen.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toGen.image = swap;
+                toGen.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                toGen.subresourceRange.levelCount = 1;
+                toGen.subresourceRange.layerCount = 1;
+                VkDependencyInfo dGen{};
+                dGen.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dGen.imageMemoryBarrierCount = 1;
+                dGen.pImageMemoryBarriers = &toGen;
+                vkCmdPipelineBarrier2(cb, &dGen);
+
+                VkClearColorValue cc{};
+                cc.float32[0] = 0.f;
+                cc.float32[1] = 0.f;
+                cc.float32[2] = 0.f;
+                cc.float32[3] = 1.f;
+                VkImageSubresourceRange clrRange{};
+                clrRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                clrRange.levelCount = 1;
+                clrRange.layerCount = 1;
+                vkCmdClearColorImage(cb, swap, VK_IMAGE_LAYOUT_GENERAL,
+                                     &cc, 1, &clrRange);
+
+                // Transfer-write → downstream consumers (sprite overlay
+                // composites in COLOR_ATTACHMENT, ImGui in same, the
+                // potential scene-capture in TRANSFER_SRC). Layout stays
+                // GENERAL — caller pipelines transition out of GENERAL
+                // as needed (recordOverlayAndPresentTransition handles
+                // the GENERAL → PRESENT_SRC at the end).
+                VkImageMemoryBarrier2 visBar{};
+                visBar.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                visBar.srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                visBar.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                visBar.dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                       VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                       VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                visBar.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                                       VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                       VK_ACCESS_2_TRANSFER_READ_BIT;
+                visBar.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                visBar.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                visBar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                visBar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                visBar.image = swap;
+                visBar.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                visBar.subresourceRange.levelCount = 1;
+                visBar.subresourceRange.layerCount = 1;
+                VkDependencyInfo dVis{};
+                dVis.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dVis.imageMemoryBarrierCount = 1;
+                dVis.pImageMemoryBarriers = &visBar;
+                vkCmdPipelineBarrier2(cb, &dVis);
+
+                return;
+            }
+            // ── End events-only render mode ─────────────────────────────────
+
             const VkImage img = ctx->swapchainImages()[imageIndex];
 
             // UNDEFINED -> GENERAL. Swapchain is now written by either the
@@ -12991,6 +13095,20 @@ namespace threepp {
         const auto& impl = *pimpl_;
         if (!impl.eventCamEnabled_ || !impl.eventCam_) return {};
         return impl.eventCam_->readVisualisation();
+    }
+
+    size_t VulkanRenderer::readEventCameraVisualisationInto(unsigned char* dst, size_t cap) const {
+        const auto& impl = *pimpl_;
+        if (!impl.eventCamEnabled_ || !impl.eventCam_) return 0;
+        return impl.eventCam_->readVisualisationInto(dst, cap);
+    }
+
+    void VulkanRenderer::setEventsOnlyMode(bool enabled) {
+        pimpl_->eventsOnlyMode_ = enabled;
+    }
+
+    bool VulkanRenderer::eventsOnlyMode() const {
+        return pimpl_->eventsOnlyMode_;
     }
 
     void VulkanRenderer::dispose() { pimpl_.reset(); }

@@ -410,6 +410,15 @@ namespace threepp::vulkan {
 
     std::vector<unsigned char> EventCameraDetector::readVisualisation() const {
         if (width_ == 0 || height_ == 0) return {};
+        const size_t bytes = static_cast<size_t>(width_) * height_ * 4;
+        std::vector<unsigned char> rgba(bytes);
+        const size_t got = readVisualisationInto(rgba.data(), rgba.size());
+        if (got == 0) return {};
+        return rgba;
+    }
+
+    size_t EventCameraDetector::readVisualisationInto(unsigned char* dst, size_t cap) const {
+        if (!dst || width_ == 0 || height_ == 0) return 0;
 
         // The OLDEST ring slot (the one we'll WRITE next) is guaranteed
         // complete: it was filled at least `kRingSize` record() calls ago,
@@ -418,17 +427,17 @@ namespace threepp::vulkan {
         const uint32_t oldestSlot = writeSlot_;
         const Buffer& src = readbackRing_[oldestSlot];
         const VkDeviceSize bytes = static_cast<VkDeviceSize>(width_) * height_ * 4;
-        if (src.handle == VK_NULL_HANDLE || src.size < bytes) return {};
+        if (src.handle == VK_NULL_HANDLE || src.size < bytes) return 0;
+        if (cap < static_cast<size_t>(bytes)) return 0;
 
         vmaInvalidateAllocation(ctx_.allocator(), src.alloc, 0, bytes);
         void* mapped = nullptr;
         if (vmaMapMemory(ctx_.allocator(), src.alloc, &mapped) != VK_SUCCESS) {
-            return {};
+            return 0;
         }
-        std::vector<unsigned char> rgba(static_cast<size_t>(bytes));
-        std::memcpy(rgba.data(), mapped, rgba.size());
+        std::memcpy(dst, mapped, static_cast<size_t>(bytes));
         vmaUnmapMemory(ctx_.allocator(), src.alloc);
-        return rgba;
+        return static_cast<size_t>(bytes);
     }
 
 }// namespace threepp::vulkan

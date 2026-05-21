@@ -179,6 +179,33 @@ int main() {
     eventViz->position.set(-10.f, -10.f, 0.f);
     scene.add(eventViz);
 
+    // Helper used by the UI toggle + resize hook to flip the sprite
+    // between corner-panel and full-screen layouts. In events-only mode
+    // the path tracer doesn't produce a visual at all (swapchain is
+    // cleared to black), so the accumulator IS the only content the
+    // user sees — it gets the whole window.
+    auto applySpriteLayout = [&](bool fullScreen, WindowSize sz) {
+        if (fullScreen) {
+            eventViz->scale.set(static_cast<float>(sz.width()),
+                                static_cast<float>(sz.height()),
+                                1.f);
+            eventViz->screenAnchor.set(0.f, 0.f);
+            eventViz->center.set(0.f, 0.f);
+            eventViz->position.set(0.f, 0.f, 0.f);
+        } else {
+            eventViz->scale.set(kPanelDispW, kPanelDispH, 1.f);
+            eventViz->screenAnchor.set(1.f, 1.f);
+            eventViz->center.set(1.f, 1.f);
+            eventViz->position.set(-10.f, -10.f, 0.f);
+        }
+    };
+
+    // ── UI ─────────────────────────────────────────────────────────────
+    float lastCaptureMs     = 0.f;
+    bool  animatePendulums  = true;
+    bool  eventsOnly        = false;
+    auto  evParams          = renderer.eventCameraParams();
+
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
@@ -197,25 +224,41 @@ int main() {
                 static_cast<unsigned>(size.height()));
         eventVizTex->colorSpace = ColorSpace::sRGB;
         eventVizMat->map = eventVizTex;
+
+        applySpriteLayout(eventsOnly, size);
     });
 
-    // ── UI ─────────────────────────────────────────────────────────────
-    float lastCaptureMs     = 0.f;
-    bool  animatePendulums  = true;
-    auto  evParams          = renderer.eventCameraParams();
-
+    float smoothedFps = 0.f;
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({0, 0});
-        ImGui::SetNextWindowSize({360, 0});
+        ImGui::SetNextWindowSize({380, 0});
         ImGui::Begin("Vulkan PT - event camera (DVS)");
         ImGui::TextWrapped(
                 "Three pendulums swing in front of a striped wall. "
                 "A GPU compute pass detects per-pixel log-intensity "
                 "changes against a persistent reference; events fire "
-                "where |Δlog I| exceeds the threshold. Right-corner "
-                "panel = live accumulator (white = +pol, black = -pol).");
+                "where |Δlog I| exceeds the threshold.");
         ImGui::Separator();
         ImGui::Checkbox("Animate pendulums", &animatePendulums);
+
+        // Events-only mode: when on, the renderer skips PT/denoise/TAA
+        // entirely — only the raster gbuf prepass + event_shade +
+        // event_detect run. The pendulums no longer appear in the
+        // swapchain (just a black clear), but the event camera readout
+        // covers the full window so the sensor is still observable.
+        if (ImGui::Checkbox("Events-only render (~500 Hz path)", &eventsOnly)) {
+            renderer.setEventsOnlyMode(eventsOnly);
+            applySpriteLayout(eventsOnly, canvas.size());
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::TextWrapped("Skips path tracing entirely. The accumulator "
+                               "fills the window; the rendered scene is not "
+                               "drawn. Use to maximise the event rate.");
+            ImGui::EndTooltip();
+        }
         bool changed = false;
         changed |= ImGui::SliderFloat("Contrast threshold (log)", &evParams.threshold,
                                       0.05f, 0.6f, "%.3f");
@@ -228,10 +271,29 @@ int main() {
         }
         if (changed) renderer.setEventCameraParams(evParams);
         ImGui::Separator();
+        ImGui::Text("Frame rate:     %.0f Hz", static_cast<double>(smoothedFps));
         ImGui::Text("Readback cost:  %.2f ms", static_cast<double>(lastCaptureMs));
         ImGui::Text("Sensor res:     %u × %u",
                     static_cast<unsigned>(eventVizTex->image().width),
                     static_cast<unsigned>(eventVizTex->image().height));
+        // Per-stage timings — GPU values come from VkQueryPool, CPU
+        // values from std::chrono around the host hot path.
+        // cpuRecord covers record-start → vkEndCommandBuffer (so it
+        // INCLUDES the post-render() endFrame work: ImGui overlay record +
+        // present transition); cpuFrame is just render() wall time. They
+        // overlap by recordCommandBuffer; cpuRecord - (cpuFrame - cpuEnsureScene)
+        // ≈ endFrame's host-side cost.
+        const auto ft = renderer.lastFrameTimings();
+        ImGui::Separator();
+        ImGui::Text("GPU raster gbuf:   %.2f ms", static_cast<double>(ft.rasterGbufMs));
+        ImGui::Text("GPU path trace:    %.2f ms", static_cast<double>(ft.pathTraceMs));
+        ImGui::Text("GPU denoise:       %.2f ms", static_cast<double>(ft.denoiseMs));
+        ImGui::Text("GPU TAA:           %.2f ms", static_cast<double>(ft.taaMs));
+        ImGui::Text("CPU ensureScene:   %.2f ms", static_cast<double>(ft.cpuEnsureSceneMs));
+        ImGui::Text("CPU render():      %.2f ms", static_cast<double>(ft.cpuFrameMs));
+        ImGui::Text("CPU record→submit: %.2f ms", static_cast<double>(ft.cpuRecordMs));
+        const float endFrameMs = ft.cpuRecordMs - (ft.cpuFrameMs - ft.cpuEnsureSceneMs);
+        ImGui::Text("  ↳ endFrame:      %.2f ms", static_cast<double>(endFrameMs));
         ImGui::TextWrapped("Detection runs on GPU; only the visualisation "
                            "memcpy is host-side. 2-frame display latency "
                            "due to the readback ring.");
@@ -243,6 +305,7 @@ int main() {
     canvas.setIOCapture(&capture);
 
     Clock clock;
+    auto frameTp = std::chrono::steady_clock::now();
 
     canvas.animate([&] {
         const float t = clock.getElapsedTime();
@@ -258,17 +321,31 @@ int main() {
         // Pull the accumulator the renderer's GPU compute pass painted
         // this frame. No vkDeviceWaitIdle — the ring's oldest slot is
         // guaranteed complete by the kFramesInFlight in-flight fences.
+        // Zero-copy variant: writes straight into the DataTexture's
+        // backing buffer, skipping the per-frame std::vector alloc and
+        // the redundant mapped→vec→DataTexture double copy.
         const auto t0 = std::chrono::steady_clock::now();
-        auto vizBytes = renderer.readEventCameraVisualisation();
+        auto& dstBytes = eventVizTex->image().data<unsigned char>();
+        const size_t got = renderer.readEventCameraVisualisationInto(
+                dstBytes.data(), dstBytes.size());
         const auto t1 = std::chrono::steady_clock::now();
         lastCaptureMs = std::chrono::duration<float, std::milli>(t1 - t0).count();
 
-        if (!vizBytes.empty()) {
-            auto& dst = eventVizTex->image().data<unsigned char>();
-            if (dst.size() == vizBytes.size()) {
-                std::memcpy(dst.data(), vizBytes.data(), vizBytes.size());
-                eventVizTex->needsUpdate();
-            }
+        if (got > 0) {
+            eventVizTex->needsUpdate();
+        }
+
+        // Smoothed FPS for the HUD. Single-pole IIR (~1 s half-life at
+        // ~60 Hz, faster at higher rates where the demo gets useful) so
+        // the events-only number is readable without bouncing.
+        const auto nowTp = std::chrono::steady_clock::now();
+        const float frameMs = std::chrono::duration<float, std::milli>(
+                                      nowTp - frameTp).count();
+        frameTp = nowTp;
+        if (frameMs > 0.f) {
+            const float inst = 1000.f / frameMs;
+            smoothedFps = (smoothedFps == 0.f) ? inst
+                                                : 0.9f * smoothedFps + 0.1f * inst;
         }
 
         ui.render();

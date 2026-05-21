@@ -62,6 +62,17 @@ namespace threepp::vulkan {
         // No GPU wait — uses the oldest ring slot.
         [[nodiscard]] std::vector<unsigned char> readVisualisation() const;
 
+        // Zero-allocation variant: write RGBA8 bytes straight into a
+        // caller-provided buffer. Returns the number of bytes written
+        // (always width × height × 4 on success, 0 on failure / not
+        // yet initialised). The caller's buffer must have capacity ≥
+        // width × height × 4. Used by the events-only fast path to
+        // avoid the per-frame std::vector allocation + the redundant
+        // memcpy that the std::vector return path forces (mapped → vec,
+        // then vec → DataTexture inside the caller); this version goes
+        // mapped → DataTexture directly.
+        size_t readVisualisationInto(unsigned char* dst, size_t cap) const;
+
         [[nodiscard]] uint32_t width() const { return width_; }
         [[nodiscard]] uint32_t height() const { return height_; }
 

@@ -103,6 +103,31 @@ namespace threepp {
         [[nodiscard]] EventCameraParams eventCameraParams() const;
         [[nodiscard]] std::vector<unsigned char> readEventCameraVisualisation() const;
 
+        // Zero-allocation variant — writes the accumulator's RGBA8 bytes
+        // straight into the caller's buffer. Returns the byte count written
+        // (width × height × 4 on success, 0 on failure). The buffer must
+        // have capacity ≥ width × height × 4. Bypasses the per-frame
+        // std::vector allocation AND the caller-side memcpy that the
+        // returning-vector overload forces, so it's the right call from a
+        // tight events-only animate() loop targeting 500 Hz+.
+        size_t readEventCameraVisualisationInto(unsigned char* dst, size_t cap) const;
+
+        // Events-only render mode. When on, recordCommandBuffer runs the
+        // raster G-buffer prepass and then short-circuits — no photon
+        // emit, no PT raygen, no denoise, no TAA, no upscale, no overlay
+        // draws. The swapchain is cleared to black; event_shade and
+        // event_detect run in the outer flow exactly as in the normal
+        // path, so the screen-space sprite overlay (event accumulator)
+        // remains the only visible content.
+        //
+        // Designed for high-rate event-camera sampling (~500 Hz target)
+        // where the renderer's visual output isn't displayed at all —
+        // only the event readout matters. Requires hybrid OR TAA to be
+        // on so the gbuf prepass runs (event_shade reads its normal +
+        // ids attachments). Has no effect when the event camera is off.
+        void setEventsOnlyMode(bool enabled);
+        [[nodiscard]] bool eventsOnlyMode() const;
+
         void dispose() override;
 
         // ImGui integration handles. All Vulkan types are erased to void* /
