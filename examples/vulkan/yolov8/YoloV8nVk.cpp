@@ -442,7 +442,6 @@ Tensor YoloV8nVk::preprocess_(const unsigned char* rgba, int srcW, int srcH) {
 // ============================================================
 std::vector<Detection> YoloV8nVk::infer(const unsigned char* rgba, int width, int height,
                                         float confThresh, float iouThresh) {
-    vk_.zero(detCounter_.buffer);// reset the shared atomic counter for this inference
     vk_.beginFrame();
 
     // ---- Backbone ----
@@ -476,6 +475,7 @@ std::vector<Detection> YoloV8nVk::infer(const unsigned char* rgba, int width, in
     Tensor h5 = c2f_(x, "model.21", 1, false);
 
     // ---- Detect head (model.22): GPU pre-filter ----
+    vk_.recordFill(detCounter_.buffer, sizeof(uint32_t));// reset shared atomic counter (in-frame)
     const Tensor* scales[3] = {&h3, &h4, &h5};
     float strides[3] = {8.f, 16.f, 32.f};
     for (int i = 0; i < 3; ++i)
@@ -483,13 +483,12 @@ std::vector<Detection> YoloV8nVk::infer(const unsigned char* rgba, int width, in
 
     vk_.endFrame();// single submit + wait for the whole forward pass
 
-    // ---- Readback + CPU NMS ----
+    // ---- Readback (counter + dets in one GPU round-trip) + CPU NMS ----
     uint32_t count = 0;
-    vk_.readback(detCounter_.buffer, &count, sizeof(uint32_t));
+    std::vector<float> raw(size_t(MAX_DETS) * 6, 0.f);
+    vk_.readback2(detCounter_.buffer, &count, sizeof(uint32_t),
+                  detDets_.buffer, raw.data(), size_t(MAX_DETS) * 6 * sizeof(float));
     if (count > MAX_DETS) count = MAX_DETS;
-
-    std::vector<float> raw(size_t(count) * 6, 0.f);
-    if (count > 0) vk_.readback(detDets_.buffer, raw.data(), size_t(count) * 6 * sizeof(float));
 
     std::vector<Detection> all;
     all.reserve(count);

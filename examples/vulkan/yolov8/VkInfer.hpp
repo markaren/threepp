@@ -119,6 +119,9 @@ namespace yolo {
         // ── data movement (one-shot submit+wait; safe any time) ────────────
         void upload(VkBuffer dst, const void* data, VkDeviceSize bytes);
         void readback(VkBuffer src, void* dst, VkDeviceSize bytes);
+        // Two device->host copies in a single submit (one GPU round-trip).
+        void readback2(VkBuffer srcA, void* dstA, VkDeviceSize bytesA,
+                       VkBuffer srcB, void* dstB, VkDeviceSize bytesB);
         void zero(VkBuffer buf);
 
         [[nodiscard]] VkBuffer dummy() const { return dummy_.buffer; }
@@ -129,6 +132,7 @@ namespace yolo {
 
         // ── batched dispatch ───────────────────────────────────────────────
         void beginFrame();// reset per-frame descriptor pool + start command buffer
+        void recordFill(VkBuffer dst, VkDeviceSize bytes);// zero-fill recorded into the frame
         void dispatch(const VkPipe& pipe, const std::vector<VkBuffer>& ssbos,
                       const void* push, uint32_t pushBytes,
                       uint32_t gx, uint32_t gy, uint32_t gz);
@@ -139,6 +143,7 @@ namespace yolo {
     private:
         uint32_t findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags props) const;
         VkTensor allocBuffer(VkDeviceSize bytes, VkBufferUsageFlags usage, VkMemoryPropertyFlags props);
+        VkBuffer acquireArena(VkDeviceSize bytes);// pooled activation buffer (reused across frames)
         template<typename Fn>
         void oneShot(Fn&& fn);
 
@@ -154,7 +159,10 @@ namespace yolo {
         VkCommandBuffer frameCb_ = VK_NULL_HANDLE;
         bool recording_ = false;
 
-        std::deque<VkTensor> arena_;// intermediates; stable addresses, freed by resetArena
+        // Activation buffers, pooled + reused across inferences (the op sequence
+        // is identical every frame), so steady state does zero buffer allocation.
+        std::vector<VkTensor> arenaSlots_;
+        size_t arenaCursor_ = 0;
         VkTensor dummy_;
     };
 

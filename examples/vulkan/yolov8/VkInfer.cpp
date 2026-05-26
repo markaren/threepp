@@ -48,7 +48,7 @@ VkInfer::VkInfer(VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t
 }
 
 VkInfer::~VkInfer() {
-    arena_.clear();// free intermediates before pools/device teardown
+    arenaSlots_.clear();// free pooled buffers before pools/device teardown
     if (descPool_) vkDestroyDescriptorPool(device_, descPool_, nullptr);
     if (oneShotPool_) vkDestroyCommandPool(device_, oneShotPool_, nullptr);
     if (cmdPool_) vkDestroyCommandPool(device_, cmdPool_, nullptr);
@@ -113,18 +113,34 @@ Tensor VkInfer::createTensor(std::initializer_list<uint32_t> shape) {
     return createTensorV(std::vector<uint32_t>(shape));
 }
 
+VkBuffer VkInfer::acquireArena(VkDeviceSize bytes) {
+    if (bytes < 4) bytes = 4;
+    const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                     VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    if (arenaCursor_ >= arenaSlots_.size()) {
+        // First time this slot is needed: allocate it (once, ever).
+        arenaSlots_.push_back(allocBuffer(bytes, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
+    } else if (arenaSlots_[arenaCursor_].capacity < bytes) {
+        // Slot exists but is too small (only happens if a shape grows): regrow.
+        arenaSlots_[arenaCursor_] = allocBuffer(bytes, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    }
+    return arenaSlots_[arenaCursor_++].buffer;
+}
+
 Tensor VkInfer::createTensorV(const std::vector<uint32_t>& shape) {
-    arena_.push_back(createOwned(shape));
-    return Tensor{arena_.back().buffer, shape};
+    uint32_t n = 1;
+    for (auto s : shape) n *= s;
+    VkDeviceSize bytes = static_cast<VkDeviceSize>(n ? n : 1u) * sizeof(float);
+    return Tensor{acquireArena(bytes), shape};
 }
 
 Tensor VkInfer::createRaw(VkDeviceSize bytes) {
-    arena_.push_back(createOwnedRaw(bytes));
-    return Tensor{arena_.back().buffer, {}};
+    return Tensor{acquireArena(bytes), {}};
 }
 
 void VkInfer::resetArena() {
-    arena_.clear();
+    arenaCursor_ = 0;// rewind; buffers are kept and reused next inference
 }
 
 template<typename Fn>
@@ -192,6 +208,40 @@ void VkInfer::zero(VkBuffer buf) {
     oneShot([&](VkCommandBuffer cb) { vkCmdFillBuffer(cb, buf, 0, VK_WHOLE_SIZE, 0u); });
 }
 
+void VkInfer::recordFill(VkBuffer dst, VkDeviceSize bytes) {
+    if (!recording_) throw std::runtime_error("VkInfer::recordFill outside beginFrame()/endFrame()");
+    // Folded into the frame command buffer (no extra submit). A later dispatch
+    // that reads `dst` carries a leading TRANSFER_WRITE->SHADER barrier.
+    vkCmdFillBuffer(frameCb_, dst, 0, bytes, 0u);
+}
+
+void VkInfer::readback2(VkBuffer srcA, void* dstA, VkDeviceSize bytesA,
+                        VkBuffer srcB, void* dstB, VkDeviceSize bytesB) {
+    VkDeviceSize total = bytesA + bytesB;
+    VkTensor staging = allocBuffer(total, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    oneShot([&](VkCommandBuffer cb) {
+        VkMemoryBarrier mb{};
+        mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 1, &mb, 0, nullptr, 0, nullptr);
+        VkBufferCopy ra{};
+        ra.size = bytesA;
+        vkCmdCopyBuffer(cb, srcA, staging.buffer, 1, &ra);
+        VkBufferCopy rb{};
+        rb.size = bytesB;
+        rb.dstOffset = bytesA;
+        vkCmdCopyBuffer(cb, srcB, staging.buffer, 1, &rb);
+    });
+    void* mapped = nullptr;
+    vkCheck(vkMapMemory(device_, staging.memory, 0, total, 0, &mapped), "map staging (readback2)");
+    std::memcpy(dstA, mapped, bytesA);
+    std::memcpy(dstB, static_cast<const char*>(mapped) + bytesA, bytesB);
+    vkUnmapMemory(device_, staging.memory);
+}
+
 VkPipe VkInfer::createPipe(const uint32_t* spv, size_t spvByteCount, uint32_t nSSBO, uint32_t pushBytes) {
     VkPipe p;
     p.nSSBO = nSSBO;
@@ -252,6 +302,7 @@ void VkInfer::destroyPipe(VkPipe& p) {
 }
 
 void VkInfer::beginFrame() {
+    arenaCursor_ = 0;// rewind the activation pool for this inference
     vkCheck(vkResetDescriptorPool(device_, descPool_, 0), "reset descriptor pool");
     if (frameCb_ == VK_NULL_HANDLE) {
         VkCommandBufferAllocateInfo ai{};
