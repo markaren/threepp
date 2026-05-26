@@ -183,7 +183,8 @@ set(THREEPP_BUILD_EXAMPLES OFF)
 FetchContent_Declare(
         threepp
         GIT_REPOSITORY https://github.com/markaren/threepp.git
-        GIT_TAG tag_or_commit_hash
+        GIT_TAG tag_or_branch   # use a tag/branch (required for GIT_SHALLOW)
+        GIT_SHALLOW TRUE        # fetch only the tip to keep the download small
 )
 FetchContent_MakeAvailable(threepp)
 #...
@@ -191,6 +192,8 @@ target_link_libraries(main PUBLIC threepp::threepp)
 ```
 
 This is the preferred approach, as it enables users to update the targeted threepp version at will.
+
+With `THREEPP_BUILD_EXAMPLES` and `THREEPP_BUILD_TESTS` off (as above), only the library is fetched. The example/test assets (models, textures, fonts, sounds, …) live in a separate [`threepp_data`](https://github.com/markaren/threepp_data) repository, fetched automatically *only* when examples or tests are enabled — library consumers never download them. For local development against a working copy of the assets, configure with `-DFETCHCONTENT_SOURCE_DIR_THREEPP_DATA=/path/to/threepp_data`.
 
 > Tip: Since threepp examples bundles _imgui_, you can link against it by including:
 >```cmake
