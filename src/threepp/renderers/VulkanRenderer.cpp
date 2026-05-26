@@ -8233,23 +8233,32 @@ namespace threepp {
             // "Mesh / Line HUD overlay" follow-up). ensureSceneBuilt is skipped
             // for ortho cameras, so lastVisibleLines_ isn't populated — gather
             // straight from the scene here.
+            //
+            // ONLY in the true ortho/HUD path (screenSpaceOnly == false). The
+            // screenSpaceOnly == true call comes from the perspective path
+            // (beginFrameForPT, compositing screen-space Sprites over the PT
+            // image): a perspective scene's Lines are already drawn correctly by
+            // the 3D hybrid overlay, so collecting them here would double-draw
+            // them through the internal screen-space camera at wrong positions.
             struct OrthoLineDraw {
                 Line* line = nullptr;
                 bool  isSegments = false;
                 Matrix4 world;
             };
             std::vector<OrthoLineDraw> lineDraws;
-            scene.traverseVisible([&](Object3D& o) {
-                auto* ln = dynamic_cast<Line*>(&o);
-                if (!ln) return;
-                auto g = ln->geometry();
-                if (!g || !g->hasAttribute("position")) return;
-                OrthoLineDraw ld;
-                ld.line = ln;
-                ld.isSegments = (dynamic_cast<LineSegments*>(ln) != nullptr);
-                std::memcpy(ld.world.elements.data(), ln->matrixWorld->elements.data(), 64);
-                lineDraws.push_back(ld);
-            });
+            if (!screenSpaceOnly) {
+                scene.traverseVisible([&](Object3D& o) {
+                    auto* ln = dynamic_cast<Line*>(&o);
+                    if (!ln) return;
+                    auto g = ln->geometry();
+                    if (!g || !g->hasAttribute("position")) return;
+                    OrthoLineDraw ld;
+                    ld.line = ln;
+                    ld.isSegments = (dynamic_cast<LineSegments*>(ln) != nullptr);
+                    std::memcpy(ld.world.elements.data(), ln->matrixWorld->elements.data(), 64);
+                    lineDraws.push_back(ld);
+                });
+            }
 
             if (draws.empty() && lineDraws.empty()) return;
             if (draws.size() > kMaxSpritesPerFrame) {
