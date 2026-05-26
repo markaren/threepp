@@ -82,7 +82,7 @@ function(add_example)
                 LINK_FLAGS "${LINK_FLAGS}")
 
     else ()
-        target_compile_definitions(${arg_NAME} PRIVATE DATA_FOLDER="${PROJECT_SOURCE_DIR}/data")
+        target_compile_definitions(${arg_NAME} PRIVATE DATA_FOLDER="${THREEPP_DATA_DIR}")
     endif (DEFINED EMSCRIPTEN)
 
 endfunction()

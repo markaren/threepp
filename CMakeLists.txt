@@ -69,6 +69,21 @@ include(cmake/FetchOptionalDeps.cmake)
 
 add_subdirectory(src)
 
+# Example/test assets live in a separate
+# repo, fetched only when building examples or tests so library consumers stay
+# lean. Point at a local checkout with -DFETCHCONTENT_SOURCE_DIR_THREEPP_DATA=<dir>.
+if (THREEPP_BUILD_EXAMPLES OR THREEPP_BUILD_TESTS)
+    include(FetchContent)
+    FetchContent_Declare(
+            threepp_data
+            GIT_REPOSITORY https://github.com/markaren/threepp_data.git
+            GIT_TAG main  # pin a release tag for reproducible builds
+            GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(threepp_data)
+    set(THREEPP_DATA_DIR "${threepp_data_SOURCE_DIR}" CACHE INTERNAL "threepp-data asset path")
+endif ()
+
 if (THREEPP_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif ()

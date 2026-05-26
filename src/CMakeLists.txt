@@ -801,8 +801,8 @@ if (THREEPP_WITH_WGPU)
         include(${PROJECT_SOURCE_DIR}/cmake/EmbedWgslFromGlsl.cmake)
 
         embed_wgsl_from_glsl(threepp water
-            "${PROJECT_SOURCE_DIR}/data/shaders/wgsl_input/water.vert"
-            "${PROJECT_SOURCE_DIR}/data/shaders/wgsl_input/water.frag"
+            "${PROJECT_SOURCE_DIR}/src/shaders/wgsl_input/water.vert"
+            "${PROJECT_SOURCE_DIR}/src/shaders/wgsl_input/water.frag"
         )
     else ()
         include(${PROJECT_SOURCE_DIR}/cmake/FetchWgpuNative.cmake)

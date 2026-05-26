@@ -10,7 +10,7 @@ set(THREEPP_SHADER_INCLUDES)
 set(THREEPP_SHADERCHUNK_CODE)
 set(THREEPP_SHADERLIB_CODE)
 
-file(GLOB files "${PROJECT_SOURCE_DIR}/data/shaders/ShaderChunk/*.glsl")
+file(GLOB files "${PROJECT_SOURCE_DIR}/src/shaders/ShaderChunk/*.glsl")
 foreach (shaderFile ${files})
 
     get_filename_component(fileName ${shaderFile} NAME_WLE)
@@ -33,7 +33,7 @@ const char* ${fileName}=R\"(${text})\";\n\n\
 
 endforeach ()
 
-file(GLOB files "${PROJECT_SOURCE_DIR}/data/shaders/ShaderLib/*.glsl")
+file(GLOB files "${PROJECT_SOURCE_DIR}/src/shaders/ShaderLib/*.glsl")
 foreach (shaderFile ${files})
 
     get_filename_component(fileName ${shaderFile} NAME_WLE)
@@ -66,7 +66,7 @@ configure_file(
 # favicon
 # ==============================================================================
 
-set(favicon_in "${PROJECT_SOURCE_DIR}/data/favicon.bmp")
+set(favicon_in "${PROJECT_SOURCE_DIR}/src/resources/favicon.bmp")
 set(favicon_out "${generatedSourcesDir}/threepp/favicon.hpp")
 
 #https://jonathanhamberg.com/post/cmake-file-embedding/
@@ -111,7 +111,7 @@ file(APPEND "${favicon_out}" "\n\n#endif\n")
 set(embeddedFonts_out "${generatedSourcesDir}/threepp/EmbeddedFonts.cpp")
 
 set(fontName "helvetiker_bold")
-set(fontFile "${PROJECT_SOURCE_DIR}/data/fonts/typeface/${fontName}.typeface.json")
+set(fontFile "${PROJECT_SOURCE_DIR}/src/resources/${fontName}.typeface.json")
 file(READ ${fontFile} FILE_CONTENTS HEX)
 string(REGEX REPLACE "(..)" "0x\\0," FILE_CONTENTS "${FILE_CONTENTS}")
 get_filename_component(fontName ${fontFile} NAME)

@@ -12,7 +12,7 @@ if (THREEPP_WITH_WGPU AND THREEPP_WITH_GLFW)
                 "${CMAKE_CURRENT_SOURCE_DIR}"
         )
         target_link_libraries(${name} PRIVATE ${WGPU_LIBRARY})
-        target_compile_definitions(${name} PRIVATE DATA_FOLDER="${PROJECT_SOURCE_DIR}/data")
+        target_compile_definitions(${name} PRIVATE DATA_FOLDER="${THREEPP_DATA_DIR}")
 
         # These tests need a display server (GLFW for Canvas).
         # Use xvfb-run when available so they work in headless CI.
