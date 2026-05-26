@@ -1,0 +1,60 @@
+#version 450
+// Letterbox bilinear resize + RGBA u8 -> RGB f32 NCHW normalisation.
+// Bindings: 0 packed RGBA source (u32 per pixel), 1 output [3,H,W] f32.
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint src_w, src_h, dst_w, dst_h;
+    float inv_scale, pad_x, pad_y;
+    uint _p2;
+} p;
+
+layout(std430, binding = 0) readonly buffer Src { uint  src[]; };
+layout(std430, binding = 1)          buffer Dst { float dst[]; };
+
+vec3 load_rgba(uint x, uint y) {
+    uint packed = src[y * p.src_w + x];
+    float r = float(packed & 0xFFu);
+    float g = float((packed >> 8u) & 0xFFu);
+    float b = float((packed >> 16u) & 0xFFu);
+    return vec3(r, g, b) * (1.0 / 255.0);
+}
+
+void main() {
+    uint dx = gl_GlobalInvocationID.x;
+    uint dy = gl_GlobalInvocationID.y;
+    if (dx >= p.dst_w || dy >= p.dst_h) return;
+
+    float fx = ((float(dx) + 0.5) - p.pad_x) * p.inv_scale - 0.5;
+    float fy = ((float(dy) + 0.5) - p.pad_y) * p.inv_scale - 0.5;
+
+    uint hw  = p.dst_h * p.dst_w;
+    uint idx = dy * p.dst_w + dx;
+
+    if (fx < 0.0 || fy < 0.0 || fx > float(p.src_w) - 1.0 || fy > float(p.src_h) - 1.0) {
+        dst[0u * hw + idx] = 0.4470588;
+        dst[1u * hw + idx] = 0.4470588;
+        dst[2u * hw + idx] = 0.4470588;
+        return;
+    }
+
+    uint x0 = uint(clamp(int(floor(fx)), 0, int(p.src_w) - 1));
+    uint y0 = uint(clamp(int(floor(fy)), 0, int(p.src_h) - 1));
+    uint x1 = min(x0 + 1u, p.src_w - 1u);
+    uint y1 = min(y0 + 1u, p.src_h - 1u);
+    float tx = fx - floor(fx);
+    float ty = fy - floor(fy);
+
+    vec3 v00 = load_rgba(x0, y0);
+    vec3 v01 = load_rgba(x1, y0);
+    vec3 v10 = load_rgba(x0, y1);
+    vec3 v11 = load_rgba(x1, y1);
+    vec3 v = v00 * (1.0 - tx) * (1.0 - ty)
+           + v01 * tx         * (1.0 - ty)
+           + v10 * (1.0 - tx) * ty
+           + v11 * tx         * ty;
+
+    dst[0u * hw + idx] = v.x;
+    dst[1u * hw + idx] = v.y;
+    dst[2u * hw + idx] = v.z;
+}

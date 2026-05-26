@@ -1,0 +1,70 @@
+#version 450
+// Conv2d specialised k=1, stride=1, pad=0. Each thread computes 4 output
+// channels for one (ox,oy), reusing each input load across 4 accumulators.
+// Bindings: 0 input, 1 weight (packed f16), 2 bias, 3 output.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint in_c, out_c, in_h, in_w;
+    uint out_h, out_w, k_h, k_w;
+    uint stride_h, stride_w, pad_h, pad_w;
+    uint has_bias, has_silu, has_residual, _p2;
+} p;
+
+layout(std430, binding = 0) readonly buffer Inp  { float inp[]; };
+layout(std430, binding = 1) readonly buffer Wt   { uint  wt[]; };
+layout(std430, binding = 2) readonly buffer Bias { float bias[]; };
+layout(std430, binding = 3)          buffer Out  { float outp[]; };
+
+float load_weight(uint i) {
+    vec2 pr = unpackHalf2x16(wt[i >> 1u]);
+    return (i & 1u) == 1u ? pr.y : pr.x;
+}
+
+void main() {
+    uint ox = gl_GlobalInvocationID.x;
+    uint oy = gl_GlobalInvocationID.y;
+    uint oc_base = gl_WorkGroupID.z * 4u;
+    if (ox >= p.out_w || oy >= p.out_h) return;
+
+    uint in_pitch = p.in_h * p.in_w;
+    uint in_off   = oy * p.in_w + ox;
+    uint kstride  = p.in_c;// k_h*k_w == 1
+
+    float s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+    for (uint ic = 0u; ic < p.in_c; ic++) {
+        float v = inp[ic * in_pitch + in_off];
+        s0 += v * load_weight((oc_base + 0u) * kstride + ic);
+        s1 += v * load_weight((oc_base + 1u) * kstride + ic);
+        s2 += v * load_weight((oc_base + 2u) * kstride + ic);
+        s3 += v * load_weight((oc_base + 3u) * kstride + ic);
+    }
+
+    uint out_pitch = p.out_h * p.out_w;
+    uint out_off   = oy * p.out_w + ox;
+
+    if (oc_base + 0u < p.out_c) {
+        float v = s0;
+        if (p.has_bias != 0u) v += bias[oc_base + 0u];
+        if (p.has_silu != 0u) v = v / (1.0 + exp(-v));
+        outp[(oc_base + 0u) * out_pitch + out_off] = v;
+    }
+    if (oc_base + 1u < p.out_c) {
+        float v = s1;
+        if (p.has_bias != 0u) v += bias[oc_base + 1u];
+        if (p.has_silu != 0u) v = v / (1.0 + exp(-v));
+        outp[(oc_base + 1u) * out_pitch + out_off] = v;
+    }
+    if (oc_base + 2u < p.out_c) {
+        float v = s2;
+        if (p.has_bias != 0u) v += bias[oc_base + 2u];
+        if (p.has_silu != 0u) v = v / (1.0 + exp(-v));
+        outp[(oc_base + 2u) * out_pitch + out_off] = v;
+    }
+    if (oc_base + 3u < p.out_c) {
+        float v = s3;
+        if (p.has_bias != 0u) v += bias[oc_base + 3u];
+        if (p.has_silu != 0u) v = v / (1.0 + exp(-v));
+        outp[(oc_base + 3u) * out_pitch + out_off] = v;
+    }
+}
