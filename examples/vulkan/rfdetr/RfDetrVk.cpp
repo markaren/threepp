@@ -129,6 +129,7 @@ RfDetrVk::~RfDetrVk() {
 
 void RfDetrVk::loadWeights(const std::string& path) {
     auto w = parseWeightBinary(path);
+    vk_.resetDescriptorCache();// cached sets reference the previous weight buffers
     weights_.clear();
     for (auto& [name, data] : w.data) {
         const auto& sh = w.shapes.at(name);

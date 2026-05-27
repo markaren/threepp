@@ -33,12 +33,14 @@ VkInfer::VkInfer(VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t
 
     // One descriptor set per dispatch in a frame; a YOLOv8n pass is a few
     // hundred dispatches. Reset per beginFrame().
+    // Descriptor sets are cached and reused across inferences (not reset per frame),
+    // so the pool must hold every unique (pipeline, buffers) set for the whole run.
     VkDescriptorPoolSize ps{};
     ps.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    ps.descriptorCount = 8192;
+    ps.descriptorCount = 32768;
     VkDescriptorPoolCreateInfo dpci{};
     dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    dpci.maxSets = 2048;
+    dpci.maxSets = 8192;
     dpci.poolSizeCount = 1;
     dpci.pPoolSizes = &ps;
     vkCheck(vkCreateDescriptorPool(device_, &dpci, nullptr, &descPool_), "create descriptor pool");
@@ -356,9 +358,16 @@ void VkInfer::destroyPipe(VkPipe& p) {
     p = VkPipe{};
 }
 
+void VkInfer::resetDescriptorCache() {
+    // Free all cached sets — their bound buffers are about to become stale.
+    dsCache_.clear();
+    vkResetDescriptorPool(device_, descPool_, 0);
+}
+
 void VkInfer::beginFrame() {
     arenaCursor_ = 0;// rewind the activation pool for this inference
-    vkCheck(vkResetDescriptorPool(device_, descPool_, 0), "reset descriptor pool");
+    // NOTE: the descriptor pool is intentionally NOT reset — sets are cached and
+    // reused across inferences (see dispatch()/dsCache_).
     if (frameCb_ == VK_NULL_HANDLE) {
         VkCommandBufferAllocateInfo ai{};
         ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -388,28 +397,38 @@ void VkInfer::dispatch(const VkPipe& pipe, const std::vector<VkBuffer>& ssbos,
     if (static_cast<uint32_t>(ssbos.size()) != pipe.nSSBO)
         throw std::runtime_error("VkInfer::dispatch ssbo count mismatch");
 
-    VkDescriptorSetAllocateInfo dsai{};
-    dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    dsai.descriptorPool = descPool_;
-    dsai.descriptorSetCount = 1;
-    dsai.pSetLayouts = &pipe.dsLayout;
+    // Reuse the cached set for this (pipeline, buffers) combo if seen before — the
+    // op sequence and its arena/weight buffers are identical every inference, so the
+    // set only needs allocating + writing once.
     VkDescriptorSet set = VK_NULL_HANDLE;
-    vkCheck(vkAllocateDescriptorSets(device_, &dsai, &set), "allocate descriptor set");
+    auto key = std::make_pair(pipe.pipeline, ssbos);
+    auto cached = dsCache_.find(key);
+    if (cached != dsCache_.end()) {
+        set = cached->second;
+    } else {
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool = descPool_;
+        dsai.descriptorSetCount = 1;
+        dsai.pSetLayouts = &pipe.dsLayout;
+        vkCheck(vkAllocateDescriptorSets(device_, &dsai, &set), "allocate descriptor set");
 
-    std::vector<VkDescriptorBufferInfo> infos(pipe.nSSBO);
-    std::vector<VkWriteDescriptorSet> writes(pipe.nSSBO);
-    for (uint32_t i = 0; i < pipe.nSSBO; ++i) {
-        infos[i].buffer = ssbos[i];
-        infos[i].offset = 0;
-        infos[i].range = VK_WHOLE_SIZE;
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = set;
-        writes[i].dstBinding = i;
-        writes[i].descriptorCount = 1;
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[i].pBufferInfo = &infos[i];
+        std::vector<VkDescriptorBufferInfo> infos(pipe.nSSBO);
+        std::vector<VkWriteDescriptorSet> writes(pipe.nSSBO);
+        for (uint32_t i = 0; i < pipe.nSSBO; ++i) {
+            infos[i].buffer = ssbos[i];
+            infos[i].offset = 0;
+            infos[i].range = VK_WHOLE_SIZE;
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = set;
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[i].pBufferInfo = &infos[i];
+        }
+        vkUpdateDescriptorSets(device_, pipe.nSSBO, writes.data(), 0, nullptr);
+        dsCache_.emplace(std::move(key), set);
     }
-    vkUpdateDescriptorSets(device_, pipe.nSSBO, writes.data(), 0, nullptr);
 
     // Leading barrier: make prior compute writes / transfer uploads (earlier in
     // submission order, incl. one-shot uploads) visible to this dispatch.

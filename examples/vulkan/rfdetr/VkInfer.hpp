@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <deque>
 #include <initializer_list>
+#include <map>
 #include <utility>
 #include <vector>
 
@@ -130,6 +131,10 @@ namespace rfdetr {
         VkPipe createPipe(const uint32_t* spv, size_t spvByteCount, uint32_t nSSBO, uint32_t pushBytes);
         void destroyPipe(VkPipe& p);
 
+        // Drop all cached descriptor sets (call when weight buffers are replaced,
+        // e.g. on loadWeights, since cached sets reference the old buffer handles).
+        void resetDescriptorCache();
+
         // ── batched dispatch ───────────────────────────────────────────────
         void beginFrame();// reset per-frame descriptor pool + start command buffer
         void recordFill(VkBuffer dst, VkDeviceSize bytes);// zero-fill recorded into the frame
@@ -170,6 +175,12 @@ namespace rfdetr {
         VkCommandPool cmdPool_ = VK_NULL_HANDLE;    // frame command buffer
         VkCommandPool oneShotPool_ = VK_NULL_HANDLE;// transient upload/readback/zero buffers
         VkDescriptorPool descPool_ = VK_NULL_HANDLE;
+
+        // Descriptor-set cache keyed by (pipeline, bound buffers). The op sequence and
+        // its arena buffers are identical every inference, so each dispatch's set is
+        // allocated+written once and reused — eliminating ~250 vkAllocateDescriptorSets
+        // + vkUpdateDescriptorSets per inference in steady state.
+        std::map<std::pair<VkPipeline, std::vector<VkBuffer>>, VkDescriptorSet> dsCache_;
 
         VkCommandBuffer frameCb_ = VK_NULL_HANDLE;
         bool recording_ = false;
