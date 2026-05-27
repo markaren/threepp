@@ -93,7 +93,7 @@ static int runValidation(rtdetr::RtDetrVk& model, const std::string& weightsPath
     if (inIt == ref.data.end()) { std::cerr << "ERROR: ref has no 'input'\n"; return 1; }
 
     std::cout << "\nRunning full forward pass..." << std::endl;
-    auto fw = model.runForward(inIt->second);
+    auto fw = model.runForward(inIt->second, /*captureIntermediates=*/true);
 
     std::cout << "\nNumeric validation vs captured reference:\n";
     compare("P3", fw.p3, ref, "model.3");

@@ -183,9 +183,23 @@ void VkInfer::upload(VkBuffer dst, const void* data, VkDeviceSize bytes) {
     });
 }
 
+VkTensor VkInfer::allocReadbackStaging(VkDeviceSize bytes) {
+    // Prefer HOST_CACHED so the host-side memcpy reads from cached (not write-
+    // combined) memory — uncached PCIe reads run at ~0.2 GB/s and dominate large
+    // readbacks. Keep COHERENT so no manual invalidate is needed.
+    const auto usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    try {
+        return allocBuffer(bytes, usage,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                   VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+    } catch (const std::runtime_error&) {
+        return allocBuffer(bytes, usage,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    }
+}
+
 void VkInfer::readback(VkBuffer src, void* dst, VkDeviceSize bytes) {
-    VkTensor staging = allocBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VkTensor staging = allocReadbackStaging(bytes);
     oneShot([&](VkCommandBuffer cb) {
         // Make the producing compute writes available to the copy.
         VkMemoryBarrier mb{};
@@ -218,8 +232,7 @@ void VkInfer::recordFill(VkBuffer dst, VkDeviceSize bytes) {
 void VkInfer::readback2(VkBuffer srcA, void* dstA, VkDeviceSize bytesA,
                         VkBuffer srcB, void* dstB, VkDeviceSize bytesB) {
     VkDeviceSize total = bytesA + bytesB;
-    VkTensor staging = allocBuffer(total, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VkTensor staging = allocReadbackStaging(total);
     oneShot([&](VkCommandBuffer cb) {
         VkMemoryBarrier mb{};
         mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;

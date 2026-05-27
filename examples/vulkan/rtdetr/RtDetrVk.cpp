@@ -3,7 +3,9 @@
 #include "WeightLoader.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -73,6 +75,20 @@ namespace {
     struct TMaskParams    { uint32_t C, H, W, outOffset, level, _p0, _p1, _p2; };
 
     uint32_t divCeil(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
+
+    // Per-stage wall-clock timing, enabled by setting RTDETR_PROFILE. Each
+    // endFrame()/readback does a vkQueueWaitIdle, so laps reflect real GPU time.
+    struct Prof {
+        bool on = std::getenv("RTDETR_PROFILE") != nullptr;
+        std::chrono::steady_clock::time_point t = std::chrono::steady_clock::now();
+        void lap(const char* label) {
+            if (!on) return;
+            auto now = std::chrono::steady_clock::now();
+            std::cerr << "  [prof] " << label << ": "
+                      << std::chrono::duration<double, std::milli>(now - t).count() << " ms\n";
+            t = now;
+        }
+    };
 
     bool endsWith(const std::string& s, const std::string& suf) {
         return s.size() >= suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0;
@@ -694,7 +710,7 @@ Tensor RtDetrVk::msDeformAttn_(const Tensor& value,
     return out;
 }
 
-RtDetrVk::DecoderOut RtDetrVk::decoder_(const std::vector<float>& memoryCpu, uint32_t totalTokens,
+RtDetrVk::DecoderOut RtDetrVk::decoder_(VkBuffer memoryBuf, uint32_t totalTokens,
                                         const std::vector<float>& encOutCpu,
                                         const std::vector<float>& encScoresCpu,
                                         const std::vector<std::pair<uint32_t, uint32_t>>& spatialShapes) {
@@ -705,11 +721,8 @@ RtDetrVk::DecoderOut RtDetrVk::decoder_(const std::vector<float>& memoryCpu, uin
     auto sigmoidF   = [](float x) { return 1.0f / (1.0f + std::exp(-x)); };
     auto invSigmoid = [](float x) { x = std::clamp(x, 1e-5f, 1.0f - 1e-5f); return std::log(x / (1.0f - x)); };
 
-    // memory is consumed by value_proj in every layer → keep it GPU-resident in
-    // an owning buffer (survives the per-layer beginFrame arena rewinds).
-    VkTensor memOwned = vk_.createOwnedRaw(memoryCpu.size() * sizeof(float));
-    vk_.upload(memOwned.buffer, memoryCpu.data(), memoryCpu.size() * sizeof(float));
-    Tensor memView{memOwned.buffer, {totalTokens, D}};
+    // memory stays GPU-resident (built in frame 1); value_proj reads it directly.
+    Tensor memView{memoryBuf, {totalTokens, D}};
 
     // Step 1: enc_score top-K selection (CPU; enc_score already computed in frame 1).
     std::vector<std::pair<float, uint32_t>> maxScores(totalTokens);
@@ -779,6 +792,19 @@ RtDetrVk::DecoderOut RtDetrVk::decoder_(const std::vector<float>& memoryCpu, uin
         for (size_t i = 0; i < refPts.size(); ++i)
             refPts[i] = sigmoidF(bboxRawCpu[i] + topkAnchors[i]);
     }
+    Prof dprof;
+    dprof.lap("decoder enc_bbox+topk");
+
+    // Level shapes are constant across layers — upload once (owning buffer).
+    VkTensor levelOwned = vk_.createOwnedRaw(numLevels * 2 * sizeof(uint32_t));
+    {
+        std::vector<uint32_t> levelData(numLevels * 2);
+        for (uint32_t ll = 0; ll < numLevels; ++ll) {
+            levelData[ll * 2 + 0] = spatialShapes[ll].first;
+            levelData[ll * 2 + 1] = spatialShapes[ll].second;
+        }
+        vk_.upload(levelOwned.buffer, levelData.data(), levelData.size() * sizeof(uint32_t));
+    }
 
     // Step 3: 6 decoder layers (one batched frame each; CPU bbox-refine between).
     for (uint32_t layer = 0; layer < numLayers; ++layer) {
@@ -824,17 +850,11 @@ RtDetrVk::DecoderOut RtDetrVk::decoder_(const std::vector<float>& memoryCpu, uin
         auto attnWSm = softmaxLast_(rawAttnW);
         attnWSm.shape = {numQueries, numHeads * LP};
         {
-            Tensor refPts4 = uploadArena_({numQueries, 4u}, refPts.data());
-            std::vector<uint32_t> levelData(numLevels * 2);
-            for (uint32_t ll = 0; ll < numLevels; ++ll) {
-                levelData[ll * 2 + 0] = spatialShapes[ll].first;
-                levelData[ll * 2 + 1] = spatialShapes[ll].second;
-            }
-            Tensor levelBuf = vk_.createRaw(numLevels * 2 * sizeof(uint32_t));
-            vk_.upload(levelBuf.buffer, levelData.data(), levelData.size() * sizeof(uint32_t));
+            // refTensor already holds refPts [300,4]; reuse it (offset_preprocess
+            // reads cols 2,3). levelOwned is the once-uploaded constant.
             OffPreParams opp{numQueries, numHeads, numLevels, numPoints};
             uint32_t offStride = numHeads * numLevels * numPoints * 2;
-            std::vector<VkBuffer> ssbos = {refPts4.buffer, levelBuf.buffer, rawOffsets.buffer};
+            std::vector<VkBuffer> ssbos = {refTensor.buffer, levelOwned.buffer, rawOffsets.buffer};
             vk_.dispatch(offsetPreprocessPipe_, ssbos, &opp, sizeof(opp), divCeil(numQueries * offStride, 64), 1, 1);
         }
         std::vector<float> refXy2(size_t(numQueries) * 2);
@@ -856,8 +876,9 @@ RtDetrVk::DecoderOut RtDetrVk::decoder_(const std::vector<float>& memoryCpu, uin
         auto bboxDelta = bboxMLP(n3, "model.28.dec_bbox_head." + std::to_string(layer));
         vk_.endFrame();
 
-        vk_.readback(n3.buffer, nextTarget.data(), n3.bytes());
-        vk_.readback(bboxDelta.buffer, bboxDeltaCpu.data(), bboxDelta.bytes());
+        // next target + bbox delta in one device→host round-trip.
+        vk_.readback2(n3.buffer, nextTarget.data(), n3.bytes(),
+                      bboxDelta.buffer, bboxDeltaCpu.data(), bboxDelta.bytes());
 
         targetCpu = std::move(nextTarget);
         for (uint32_t q = 0; q < numQueries; ++q)
@@ -867,6 +888,7 @@ RtDetrVk::DecoderOut RtDetrVk::decoder_(const std::vector<float>& memoryCpu, uin
             }
         vk_.resetArena();
     }
+    dprof.lap("decoder 6 layers");
 
     // Step 4: final class logits from the last layer's score head.
     std::vector<float> finalScores(size_t(numQueries) * numClasses);
@@ -877,6 +899,7 @@ RtDetrVk::DecoderOut RtDetrVk::decoder_(const std::vector<float>& memoryCpu, uin
         vk_.endFrame();
         vk_.readback(fs.buffer, finalScores.data(), fs.bytes());
     }
+    dprof.lap("decoder final score");
 
     return DecoderOut{std::move(finalScores), std::move(refPts)};
 }
@@ -979,15 +1002,17 @@ std::vector<float> RtDetrVk::selfTestMsDeform() {
 // ============================================================
 //  Phased validation entry
 // ============================================================
-RtDetrVk::ForwardOut RtDetrVk::runForward(const std::vector<float>& chw) {
+RtDetrVk::ForwardOut RtDetrVk::runForward(const std::vector<float>& chw, bool captureIntermediates) {
     const uint32_t dstW = INPUT_SIZE, dstH = INPUT_SIZE;
     if (chw.size() != size_t(3) * dstH * dstW)
         throw std::runtime_error("RtDetrVk::runForward: input must be 3*640*640 floats");
 
+    Prof prof;
     ForwardOut out;
     std::vector<std::pair<uint32_t, uint32_t>> shapes;
     std::vector<float> encScoresCpu;
     uint32_t totalTokens = 0;
+    VkTensor memOwned;// memory kept GPU-resident for the decoder (no host round-trip)
 
     auto rb = [&](const Tensor& t, std::vector<float>& dst, std::array<uint32_t, 3>& dim) {
         dst.resize(t.numel());
@@ -1009,7 +1034,10 @@ RtDetrVk::ForwardOut RtDetrVk::runForward(const std::vector<float>& chw) {
 
         uint32_t M0 = ip0.H() * ip0.W(), M1 = ip1.H() * ip1.W(), M2 = ip2.H() * ip2.W();
         totalTokens = M0 + M1 + M2;
-        Tensor memory = vk_.createTensorV({totalTokens, 256u});
+        // Build memory straight into an owning buffer so the decoder reads it on
+        // the GPU — no device→host→device round-trip.
+        memOwned = vk_.createOwnedRaw(VkDeviceSize(totalTokens) * 256u * sizeof(float));
+        Tensor memory{memOwned.buffer, {totalTokens, 256u}};
         buildMemoryLevel_(ip0, memory.buffer, 0, 0);
         buildMemoryLevel_(ip1, memory.buffer, M0, 1);
         buildMemoryLevel_(ip2, memory.buffer, M0 + M1, 2);
@@ -1018,32 +1046,39 @@ RtDetrVk::ForwardOut RtDetrVk::runForward(const std::vector<float>& chw) {
         auto enc       = layerNorm_(encLin, "model.28.enc_output.1.weight", "model.28.enc_output.1.bias");
         auto encScores = linear_(enc, "model.28.enc_score_head.weight", "model.28.enc_score_head.bias");
         vk_.endFrame();
+        prof.lap("frame1 GPU (backbone+AIFI+neck+enc)");
 
-        rb(bp.p3, out.p3, out.p3dim);
-        rb(bp.p4, out.p4, out.p4dim);
-        rb(bp.p5, out.p5, out.p5dim);
-        rb(f5, out.aifi, out.aifidim);
-        rb(neck.s3, out.s3, out.s3dim);
-        rb(neck.s4, out.s4, out.s4dim);
-        rb(neck.s5, out.s5, out.s5dim);
-        rb(ip0, out.ip0, out.ip0dim);
-        rb(ip1, out.ip1, out.ip1dim);
-        rb(ip2, out.ip2, out.ip2dim);
-        out.memory.resize(memory.numel());
-        vk_.readback(memory.buffer, out.memory.data(), memory.bytes());
+        // Validation-only intermediates (skipped on the detection path).
+        if (captureIntermediates) {
+            rb(bp.p3, out.p3, out.p3dim);
+            rb(bp.p4, out.p4, out.p4dim);
+            rb(bp.p5, out.p5, out.p5dim);
+            rb(f5, out.aifi, out.aifidim);
+            rb(neck.s3, out.s3, out.s3dim);
+            rb(neck.s4, out.s4, out.s4dim);
+            rb(neck.s5, out.s5, out.s5dim);
+            rb(ip0, out.ip0, out.ip0dim);
+            rb(ip1, out.ip1, out.ip1dim);
+            rb(ip2, out.ip2, out.ip2dim);
+            out.memory.resize(memory.numel());
+            vk_.readback(memory.buffer, out.memory.data(), memory.bytes());
+        }
+        // Decoder inputs: enc_output (CPU gather) + enc_score (CPU top-K), one round-trip.
         out.encOutput.resize(enc.numel());
-        vk_.readback(enc.buffer, out.encOutput.data(), enc.bytes());
         encScoresCpu.resize(encScores.numel());
-        vk_.readback(encScores.buffer, encScoresCpu.data(), encScores.bytes());
+        vk_.readback2(encScores.buffer, encScoresCpu.data(), encScores.bytes(),
+                      enc.buffer, out.encOutput.data(), enc.bytes());
 
         shapes = {{ip0.H(), ip0.W()}, {ip1.H(), ip1.W()}, {ip2.H(), ip2.W()}};
         vk_.resetArena();
+        prof.lap("frame1 readbacks");
     }
 
     // ── Decoder (multi-frame: GPU bursts + CPU top-K / iterative bbox refine) ──
-    auto dec = decoder_(out.memory, totalTokens, out.encOutput, encScoresCpu, shapes);
+    auto dec = decoder_(memOwned.buffer, totalTokens, out.encOutput, encScoresCpu, shapes);
     out.decScores = std::move(dec.scores);
     out.decBboxes = std::move(dec.bboxes);
+    prof.lap("decoder");
 
     return out;
 }

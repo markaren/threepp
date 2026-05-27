@@ -143,6 +143,9 @@ namespace rtdetr {
     private:
         uint32_t findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags props) const;
         VkTensor allocBuffer(VkDeviceSize bytes, VkBufferUsageFlags usage, VkMemoryPropertyFlags props);
+        // HOST_CACHED transfer-dst staging (fast device->host reads); falls back
+        // to plain HOST_COHERENT if the device has no cached host-visible heap.
+        VkTensor allocReadbackStaging(VkDeviceSize bytes);
         VkBuffer acquireArena(VkDeviceSize bytes);// pooled activation buffer (reused across frames)
         template<typename Fn>
         void oneShot(Fn&& fn);

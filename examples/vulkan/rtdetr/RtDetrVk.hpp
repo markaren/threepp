@@ -69,7 +69,10 @@ namespace rtdetr {
             std::vector<float>     decScores;// [300, 80] class logits
             std::vector<float>     decBboxes;// [300, 4]  cx,cy,w,h in [0,1]
         };
-        ForwardOut runForward(const std::vector<float>& chw);
+        // captureIntermediates reads back every layer (P3..enc_output) for the
+        // --validate path. Detection (infer) leaves it false: only the decoder
+        // inputs (memory / enc_output / enc_score) are read back.
+        ForwardOut runForward(const std::vector<float>& chw, bool captureIntermediates = false);
 
         // Analytical MSDeformAttn self-test (no weights). Mirrors the WGPU
         // milestone-9 case; expected output is {12, 13, 14, 15}. Isolates the
@@ -145,11 +148,12 @@ namespace rtdetr {
                              const Tensor& attnWeights, uint32_t numHeads);
 
         struct DecoderOut { std::vector<float> scores, bboxes; };
-        // Runs the 6-layer decoder. memory/encOutput/encScores arrive on the host
-        // (the decoder interleaves GPU bursts with CPU top-K + iterative bbox
-        // refinement, so it cannot be a single batched frame). Returns the final
-        // class logits [300,80] and refined boxes [300,4].
-        DecoderOut decoder_(const std::vector<float>& memoryCpu, uint32_t totalTokens,
+        // Runs the 6-layer decoder. `memoryBuf` stays GPU-resident (value_proj
+        // reads it every layer); encOutput/encScores arrive on the host (the
+        // decoder interleaves GPU bursts with CPU top-K + iterative bbox refine,
+        // so it cannot be a single batched frame). Returns the final class logits
+        // [300,80] and refined boxes [300,4].
+        DecoderOut decoder_(VkBuffer memoryBuf, uint32_t totalTokens,
                             const std::vector<float>& encOutCpu,
                             const std::vector<float>& encScoresCpu,
                             const std::vector<std::pair<uint32_t, uint32_t>>& spatialShapes);
