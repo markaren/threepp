@@ -1,0 +1,24 @@
+#version 450
+// 2x nearest-neighbor upsample along H and W. Workgroup 8x8x4.
+// Bindings: 0 input, 1 output. Params via push constant.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant, std430) uniform PC {
+    uint C, inH, inW, _p;
+} p;
+
+layout(std430, binding = 0) readonly buffer Inp { float inp[]; };
+layout(std430, binding = 1)          buffer Out { float outp[]; };
+
+void main() {
+    uint outH = p.inH * 2u;
+    uint outW = p.inW * 2u;
+    uint ox = gl_GlobalInvocationID.x;
+    uint oy = gl_GlobalInvocationID.y;
+    uint oc = gl_GlobalInvocationID.z;
+    if (ox >= outW || oy >= outH || oc >= p.C) return;
+    uint ix = ox >> 1u;
+    uint iy = oy >> 1u;
+    float v = inp[oc * p.inH * p.inW + iy * p.inW + ix];
+    outp[oc * outH * outW + oy * outW + ox] = v;
+}

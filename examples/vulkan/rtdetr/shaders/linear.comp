@@ -1,0 +1,50 @@
+#version 450
+// Linear / GEMM  Y[M,N] = X[M,K] @ W[N,K]^T + b[N]. Tiled 16x16 GEMM.
+// Bindings: 0 x [M,K], 1 w [N,K], 2 b [N], 3 y [M,N]. Params via push constant.
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint M, N, K, hasBias;
+} p;
+
+layout(std430, binding = 0) readonly buffer X { float x[]; };
+layout(std430, binding = 1) readonly buffer W { float w[]; };
+layout(std430, binding = 2) readonly buffer B { float b[]; };
+layout(std430, binding = 3)          buffer Y { float y[]; };
+
+const uint TILE = 16u;
+shared float tileX[256];
+shared float tileW[256];
+
+void main() {
+    uint m  = gl_GlobalInvocationID.y;
+    uint n  = gl_GlobalInvocationID.x;
+    uint lm = gl_LocalInvocationID.y;
+    uint ln = gl_LocalInvocationID.x;
+
+    float acc = 0.0;
+    uint numTiles = (p.K + TILE - 1u) / TILE;
+    for (uint t = 0u; t < numTiles; t++) {
+        uint kOff = t * TILE;
+
+        uint xk = kOff + ln;
+        if (m < p.M && xk < p.K) tileX[lm * TILE + ln] = x[m * p.K + xk];
+        else                     tileX[lm * TILE + ln] = 0.0;
+
+        uint wk = kOff + lm;
+        if (n < p.N && wk < p.K) tileW[lm * TILE + ln] = w[n * p.K + wk];
+        else                     tileW[lm * TILE + ln] = 0.0;
+
+        barrier();
+
+        for (uint k = 0u; k < TILE; k++)
+            acc += tileX[lm * TILE + k] * tileW[k * TILE + ln];
+
+        barrier();
+    }
+
+    if (m < p.M && n < p.N) {
+        if (p.hasBias != 0u) acc += b[n];
+        y[m * p.N + n] = acc;
+    }
+}

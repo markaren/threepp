@@ -1,0 +1,22 @@
+#version 450
+// QKV splice for self-attention. Given yqk [M, 3D] (q=k=target+pos linear) and
+// yt [M, 3D] (v=target linear), produce qkv [M, 3D] = [yqk.Q | yqk.K | yt.V].
+// One thread per element. Bindings: 0 yqk, 1 yt, 2 out.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint M, D, _p0, _p1;
+} p;
+
+layout(std430, binding = 0) readonly buffer Yqk { float yqk[]; };// [M, 3D]
+layout(std430, binding = 1) readonly buffer Yt  { float yt[]; }; // [M, 3D]
+layout(std430, binding = 2)          buffer Out { float outp[]; };// [M, 3D]
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    uint total = p.M * 3u * p.D;
+    if (idx >= total) return;
+    uint col = idx % (3u * p.D);
+    // col in [0, 2D): Q/K from yqk; [2D, 3D): V from yt.
+    outp[idx] = (col < 2u * p.D) ? yqk[idx] : yt[idx];
+}

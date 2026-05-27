@@ -1,0 +1,30 @@
+#version 450
+// Exact GELU (erf form) via Abramowitz-Stegun 7.1.26 (max abs err ~1.5e-7).
+// Bindings: 0 x, 1 y. Params via push constant.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint n, _p0, _p1, _p2;
+} p;
+
+layout(std430, binding = 0) readonly buffer X { float x[]; };
+layout(std430, binding = 1)          buffer Y { float y[]; };
+
+float erf_approx(float z) {
+    float sign = z < 0.0 ? -1.0 : 1.0;
+    float a = abs(z);
+    float t = 1.0 / (1.0 + 0.3275911 * a);
+    float poly = (((( 1.061405429 * t
+                    - 1.453152027) * t
+                    + 1.421413741) * t
+                    - 0.284496736) * t
+                    + 0.254829592) * t;
+    return sign * (1.0 - poly * exp(-a * a));
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= p.n) return;
+    float v = x[i];
+    y[i] = 0.5 * v * (1.0 + erf_approx(v * 0.7071067811865475));
+}

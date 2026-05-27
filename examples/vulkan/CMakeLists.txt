@@ -44,4 +44,41 @@ if (THREEPP_WITH_INFERENCE)
         compile_vulkan_shader(vulkan_yolov8_inference "${_yolo_sh}/detect.comp"       kDetectSpv      _yh11)
         compile_vulkan_shader(vulkan_yolov8_inference "${_yolo_sh}/detect_fused.comp" kDetectFusedSpv _yh12)
     endif ()
+
+    add_example(NAME "vulkan_rtdetr_inference"
+            SOURCES vulkan_rtdetr_inference.cpp
+            rtdetr/RtDetrVk.cpp
+            rtdetr/VkInfer.cpp
+            rtdetr/WeightLoader.cpp)
+
+    if (TARGET vulkan_rtdetr_inference)
+        target_include_directories(vulkan_rtdetr_inference PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        target_link_libraries(vulkan_rtdetr_inference PRIVATE Vulkan::Vulkan)
+
+        # VARIANT_SUFFIX=rtdetr keeps the generated headers from colliding with
+        # the YOLO kernels that share a basename (conv2d/add/maxpool/concat/upsample).
+        set(_rt_sh "${CMAKE_CURRENT_SOURCE_DIR}/rtdetr/shaders")
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/conv2d.comp"   kRtConv2dSpv   _rh0 VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/dwconv.comp"   kRtDwConvSpv   _rh1 VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/maxpool.comp"  kRtMaxPoolSpv  _rh2 VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/concat.comp"   kRtConcatSpv   _rh3 VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/add.comp"      kRtAddSpv      _rh4 VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/add_silu.comp" kRtAddSiluSpv  _rh5 VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/upsample.comp" kRtUpsampleSpv _rh6 VARIANT_SUFFIX rtdetr)
+        # Phase B: AIFI transformer encoder.
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/linear.comp"               kRtLinearSpv     _rh7  VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/layernorm.comp"            kRtLayerNormSpv  _rh8  VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/softmax.comp"              kRtSoftmaxSpv    _rh9  VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/gelu.comp"                 kRtGeluSpv       _rh10 VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/transpose_chw2tokens.comp" kRtT2tSpv        _rh11 VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/transpose_tokens2chw.comp" kRtT2cSpv        _rh12 VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/qkv_splice.comp"           kRtQkvSpliceSpv  _rh13 VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/attn_scores.comp"          kRtAttnScoresSpv _rh14 VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/attn_apply.comp"           kRtAttnApplySpv  _rh15 VARIANT_SUFFIX rtdetr)
+        # Phase D: deformable decoder.
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/relu.comp"             kRtReluSpv     _rh16 VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/transpose_mask.comp"   kRtTMaskSpv    _rh17 VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/offset_preprocess.comp" kRtOffPreSpv  _rh18 VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/msdeformattn.comp"     kRtMsDeformSpv _rh19 VARIANT_SUFFIX rtdetr)
+    endif ()
 endif ()
