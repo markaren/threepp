@@ -1,0 +1,48 @@
+#version 450
+// Generic conv2d (any k / stride / pad). Bindings: 0 input, 1 weight (packed
+// f16 pairs), 2 bias, 3 output. Params via push constant.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant, std430) uniform PC {
+    uint in_c, out_c, in_h, in_w;
+    uint out_h, out_w, k_h, k_w;
+    uint stride_h, stride_w, pad_h, pad_w;
+    uint has_bias, has_silu, has_residual, _p2;
+} p;
+
+layout(std430, binding = 0) readonly buffer Inp  { float inp[]; };
+layout(std430, binding = 1) readonly buffer Wt   { uint  wt[]; };
+layout(std430, binding = 2) readonly buffer Bias { float bias[]; };
+layout(std430, binding = 3)          buffer Out  { float outp[]; };
+
+float load_weight(uint i) {
+    vec2 pr = unpackHalf2x16(wt[i >> 1u]);
+    return (i & 1u) == 1u ? pr.y : pr.x;
+}
+
+void main() {
+    uint ox = gl_GlobalInvocationID.x;
+    uint oy = gl_GlobalInvocationID.y;
+    uint oc = gl_GlobalInvocationID.z;
+    if (ox >= p.out_w || oy >= p.out_h || oc >= p.out_c) return;
+
+    float sum = 0.0;
+    for (uint ic = 0u; ic < p.in_c; ic++) {
+        for (uint ky = 0u; ky < p.k_h; ky++) {
+            for (uint kx = 0u; kx < p.k_w; kx++) {
+                int iy = int(oy * p.stride_h + ky) - int(p.pad_h);
+                int ix = int(ox * p.stride_w + kx) - int(p.pad_w);
+                if (iy >= 0 && iy < int(p.in_h) && ix >= 0 && ix < int(p.in_w)) {
+                    uint ii = ic * p.in_h * p.in_w + uint(iy) * p.in_w + uint(ix);
+                    uint wi = oc * p.in_c * p.k_h * p.k_w
+                            + ic * p.k_h * p.k_w
+                            + ky * p.k_w + kx;
+                    sum += inp[ii] * load_weight(wi);
+                }
+            }
+        }
+    }
+    if (p.has_bias != 0u) sum += bias[oc];
+    if (p.has_silu != 0u) sum = sum / (1.0 + exp(-sum));
+    outp[oc * p.out_h * p.out_w + oy * p.out_w + ox] = sum;
+}

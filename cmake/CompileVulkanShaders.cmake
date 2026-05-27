@@ -54,6 +54,18 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
         list(APPEND _define_flags "-D${_d}")
     endforeach()
 
+    # Only depend on the shared headers when they actually sit beside the shader
+    # source. Core shaders live next to vulkan_shared.h / shade_primary.glsl;
+    # out-of-tree shaders (e.g. example inference kernels) don't, and a DEPENDS
+    # on a missing file would break the build graph.
+    set(_extra_deps "")
+    if (EXISTS "${_shared_header}")
+        list(APPEND _extra_deps "${_shared_header}")
+    endif ()
+    if (EXISTS "${_shade_primary}")
+        list(APPEND _extra_deps "${_shade_primary}")
+    endif ()
+
     add_custom_command(
         OUTPUT  "${_out_header}"
         COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.3
@@ -62,7 +74,7 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
                 --vn "${var_name}"
                 "${shader_src}"
                 -o   "${_out_header}"
-        DEPENDS "${shader_src}" "${_shared_header}" "${_shade_primary}"
+        DEPENDS "${shader_src}" ${_extra_deps}
         COMMENT "Compiling Vulkan shader ${_name} -> ${var_name}"
         VERBATIM)
 

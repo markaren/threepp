@@ -1,0 +1,22 @@
+#version 450
+// 2x nearest-neighbour upsample. Bindings: 0 input, 1 output.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant, std430) uniform PC {
+    uint channels, in_h, in_w, _p;
+} p;
+
+layout(std430, binding = 0) readonly buffer Inp { float inp[]; };
+layout(std430, binding = 1)          buffer Out { float outp[]; };
+
+void main() {
+    uint ox = gl_GlobalInvocationID.x;
+    uint oy = gl_GlobalInvocationID.y;
+    uint c  = gl_GlobalInvocationID.z;
+    uint out_h = p.in_h * 2u;
+    uint out_w = p.in_w * 2u;
+    if (ox >= out_w || oy >= out_h || c >= p.channels) return;
+    uint ix = ox / 2u;
+    uint iy = oy / 2u;
+    outp[c * out_h * out_w + oy * out_w + ox] = inp[c * p.in_h * p.in_w + iy * p.in_w + ix];
+}

@@ -1,0 +1,28 @@
+#version 450
+// MaxPool2D. Bindings: 0 input, 1 output.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant, std430) uniform PC {
+    uint channels, in_h, in_w, out_h;
+    uint out_w, k, stride, pad;
+} p;
+
+layout(std430, binding = 0) readonly buffer Inp { float inp[]; };
+layout(std430, binding = 1)          buffer Out { float outp[]; };
+
+void main() {
+    uint ox = gl_GlobalInvocationID.x;
+    uint oy = gl_GlobalInvocationID.y;
+    uint c  = gl_GlobalInvocationID.z;
+    if (ox >= p.out_w || oy >= p.out_h || c >= p.channels) return;
+    float mx = -1.0e38;
+    for (uint ky = 0u; ky < p.k; ky++) {
+        for (uint kx = 0u; kx < p.k; kx++) {
+            int iy = int(oy * p.stride + ky) - int(p.pad);
+            int ix = int(ox * p.stride + kx) - int(p.pad);
+            if (iy >= 0 && iy < int(p.in_h) && ix >= 0 && ix < int(p.in_w))
+                mx = max(mx, inp[c * p.in_h * p.in_w + uint(iy) * p.in_w + uint(ix)]);
+        }
+    }
+    outp[c * p.out_h * p.out_w + oy * p.out_w + ox] = mx;
+}

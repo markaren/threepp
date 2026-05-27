@@ -19,7 +19,7 @@ cmake_dependent_option(THREEPP_WGPU_GLSL_COMPAT
     "Enable GLSL->SPIR-V translation for ShaderMaterial on the Wgpu backend (requires glslang)"
     ON "THREEPP_WITH_WGPU" OFF)
 
-cmake_dependent_option(THREEPP_WITH_INFERENCE "Build with Inference support" OFF "THREEPP_WITH_WGPU" OFF)
+cmake_dependent_option(THREEPP_WITH_INFERENCE "Build with Inference support" OFF "THREEPP_WITH_WGPU OR THREEPP_WITH_VULKAN" OFF)
 
 # Force THREEPP_WITH_GLFW ON when targeting Emscripten
 cmake_dependent_option(THREEPP_WITH_GLFW "Build with GLFW frontend" ON "NOT DEFINED EMSCRIPTEN" ON)

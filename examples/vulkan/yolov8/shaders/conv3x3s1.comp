@@ -1,0 +1,130 @@
+#version 450
+// Conv2d specialised k=3, stride=1, pad=1. 8x8x4 threads cover a 16x16 output
+// x 4 oc block; an 18x18 input tile + 4x9 weight slab are staged in shared
+// memory per input-channel iteration. Each thread computes a 2x2 output tile.
+// Bindings: 0 input, 1 weight (packed f16), 2 bias, 3 output, 4 residual (opt).
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant, std430) uniform PC {
+    uint in_c, out_c, in_h, in_w;
+    uint out_h, out_w, k_h, k_w;
+    uint stride_h, stride_w, pad_h, pad_w;
+    uint has_bias, has_silu, has_residual, _p2;
+} p;
+
+layout(std430, binding = 0) readonly buffer Inp  { float inp[]; };
+layout(std430, binding = 1) readonly buffer Wt   { uint  wt[]; };
+layout(std430, binding = 2) readonly buffer Bias { float bias[]; };
+layout(std430, binding = 3)          buffer Out  { float outp[]; };
+layout(std430, binding = 4) readonly buffer Res  { float residual[]; };
+
+shared float in_tile[324];// 18 x 18
+shared float wt_slab[36]; // 4 oc x 9 kernel
+
+float load_weight(uint i) {
+    vec2 pr = unpackHalf2x16(wt[i >> 1u]);
+    return (i & 1u) == 1u ? pr.y : pr.x;
+}
+
+void main() {
+    uvec3 lid = gl_LocalInvocationID;
+    uvec3 wid = gl_WorkGroupID;
+    uint tid = (lid.z * 8u + lid.y) * 8u + lid.x;
+
+    uint wg_ox = wid.x * 16u;
+    uint wg_oy = wid.y * 16u;
+    uint oc    = wid.z * 4u + lid.z;
+
+    uint ox0 = wg_ox + lid.x * 2u;
+    uint oy0 = wg_oy + lid.y * 2u;
+
+    float s00 = 0.0, s01 = 0.0, s10 = 0.0, s11 = 0.0;
+    uint kstride = p.in_c * 9u;
+
+    for (uint ic = 0u; ic < p.in_c; ic++) {
+        uint i = tid;
+        while (i < 324u) {
+            uint ty = i / 18u;
+            uint tx = i % 18u;
+            int iy = int(wg_oy + ty) - 1;
+            int ix = int(wg_ox + tx) - 1;
+            float v = 0.0;
+            if (iy >= 0 && iy < int(p.in_h) && ix >= 0 && ix < int(p.in_w))
+                v = inp[ic * p.in_h * p.in_w + uint(iy) * p.in_w + uint(ix)];
+            in_tile[i] = v;
+            i += 256u;
+        }
+        if (tid < 36u) {
+            uint slab_oc = tid / 9u;
+            uint k_idx   = tid % 9u;
+            uint wt_oc   = wid.z * 4u + slab_oc;
+            wt_slab[tid] = (wt_oc < p.out_c) ? load_weight(wt_oc * kstride + ic * 9u + k_idx) : 0.0;
+        }
+        barrier();
+
+        uint wo = lid.z * 9u;
+        uint y0 = lid.y * 2u;
+        uint x0 = lid.x * 2u;
+
+        float v00 = in_tile[(y0+0u)*18u + x0+0u];
+        float v01 = in_tile[(y0+0u)*18u + x0+1u];
+        float v02 = in_tile[(y0+0u)*18u + x0+2u];
+        float v03 = in_tile[(y0+0u)*18u + x0+3u];
+        float v10 = in_tile[(y0+1u)*18u + x0+0u];
+        float v11 = in_tile[(y0+1u)*18u + x0+1u];
+        float v12 = in_tile[(y0+1u)*18u + x0+2u];
+        float v13 = in_tile[(y0+1u)*18u + x0+3u];
+        float v20 = in_tile[(y0+2u)*18u + x0+0u];
+        float v21 = in_tile[(y0+2u)*18u + x0+1u];
+        float v22 = in_tile[(y0+2u)*18u + x0+2u];
+        float v23 = in_tile[(y0+2u)*18u + x0+3u];
+        float v30 = in_tile[(y0+3u)*18u + x0+0u];
+        float v31 = in_tile[(y0+3u)*18u + x0+1u];
+        float v32 = in_tile[(y0+3u)*18u + x0+2u];
+        float v33 = in_tile[(y0+3u)*18u + x0+3u];
+
+        float w0 = wt_slab[wo+0u], w1 = wt_slab[wo+1u], w2 = wt_slab[wo+2u];
+        float w3 = wt_slab[wo+3u], w4 = wt_slab[wo+4u], w5 = wt_slab[wo+5u];
+        float w6 = wt_slab[wo+6u], w7 = wt_slab[wo+7u], w8 = wt_slab[wo+8u];
+
+        s00 += v00*w0 + v01*w1 + v02*w2 + v10*w3 + v11*w4 + v12*w5 + v20*w6 + v21*w7 + v22*w8;
+        s01 += v01*w0 + v02*w1 + v03*w2 + v11*w3 + v12*w4 + v13*w5 + v21*w6 + v22*w7 + v23*w8;
+        s10 += v10*w0 + v11*w1 + v12*w2 + v20*w3 + v21*w4 + v22*w5 + v30*w6 + v31*w7 + v32*w8;
+        s11 += v11*w0 + v12*w1 + v13*w2 + v21*w3 + v22*w4 + v23*w5 + v31*w6 + v32*w7 + v33*w8;
+
+        barrier();
+    }
+
+    if (oc >= p.out_c) return;
+    uint hw = p.out_h * p.out_w;
+    float b = (p.has_bias != 0u) ? bias[oc] : 0.0;
+
+    if (ox0 + 0u < p.out_w && oy0 + 0u < p.out_h) {
+        float v = s00 + b;
+        if (p.has_silu != 0u) v = v / (1.0 + exp(-v));
+        uint idx = oc * hw + (oy0 + 0u) * p.out_w + (ox0 + 0u);
+        if (p.has_residual != 0u) v += residual[idx];
+        outp[idx] = v;
+    }
+    if (ox0 + 1u < p.out_w && oy0 + 0u < p.out_h) {
+        float v = s01 + b;
+        if (p.has_silu != 0u) v = v / (1.0 + exp(-v));
+        uint idx = oc * hw + (oy0 + 0u) * p.out_w + (ox0 + 1u);
+        if (p.has_residual != 0u) v += residual[idx];
+        outp[idx] = v;
+    }
+    if (ox0 + 0u < p.out_w && oy0 + 1u < p.out_h) {
+        float v = s10 + b;
+        if (p.has_silu != 0u) v = v / (1.0 + exp(-v));
+        uint idx = oc * hw + (oy0 + 1u) * p.out_w + (ox0 + 0u);
+        if (p.has_residual != 0u) v += residual[idx];
+        outp[idx] = v;
+    }
+    if (ox0 + 1u < p.out_w && oy0 + 1u < p.out_h) {
+        float v = s11 + b;
+        if (p.has_silu != 0u) v = v / (1.0 + exp(-v));
+        uint idx = oc * hw + (oy0 + 1u) * p.out_w + (ox0 + 1u);
+        if (p.has_residual != 0u) v += residual[idx];
+        outp[idx] = v;
+    }
+}

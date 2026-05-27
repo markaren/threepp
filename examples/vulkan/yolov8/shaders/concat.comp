@@ -1,0 +1,27 @@
+#version 450
+// Channel concatenation of 2 tensors (same H/W). Bindings: 0 a, 1 b, 2 output.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant, std430) uniform PC {
+    uint c_a, c_b, height, width;
+} p;
+
+layout(std430, binding = 0) readonly buffer A   { float a[]; };
+layout(std430, binding = 1) readonly buffer B   { float b[]; };
+layout(std430, binding = 2)          buffer Out { float outp[]; };
+
+void main() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    uint c = gl_GlobalInvocationID.z;
+    uint total_c = p.c_a + p.c_b;
+    if (x >= p.width || y >= p.height || c >= total_c) return;
+    uint hw  = p.height * p.width;
+    uint ofs = y * p.width + x;
+    if (c < p.c_a) {
+        outp[c * hw + ofs] = a[c * hw + ofs];
+    } else {
+        uint bc = c - p.c_a;
+        outp[c * hw + ofs] = b[bc * hw + ofs];
+    }
+}

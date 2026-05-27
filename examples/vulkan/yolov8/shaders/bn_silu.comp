@@ -1,0 +1,27 @@
+#version 450
+// Fused BatchNorm + SiLU. Bindings: 0 input, 1 mean, 2 var, 3 gamma, 4 beta,
+// 5 output.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant, std430) uniform PC {
+    uint channels, height, width;
+    float eps;
+} p;
+
+layout(std430, binding = 0) readonly buffer Inp   { float inp[]; };
+layout(std430, binding = 1) readonly buffer Mean  { float mean[]; };
+layout(std430, binding = 2) readonly buffer Var   { float var_[]; };
+layout(std430, binding = 3) readonly buffer Gamma { float gamma[]; };
+layout(std430, binding = 4) readonly buffer Beta  { float beta[]; };
+layout(std430, binding = 5)          buffer Out   { float outp[]; };
+
+void main() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    uint c = gl_GlobalInvocationID.z;
+    if (x >= p.width || y >= p.height || c >= p.channels) return;
+    uint idx = c * p.height * p.width + y * p.width + x;
+    float v = inp[idx];
+    float norm = (v - mean[c]) / sqrt(var_[c] + p.eps) * gamma[c] + beta[c];
+    outp[idx] = norm / (1.0 + exp(-norm));
+}

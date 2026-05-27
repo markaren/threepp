@@ -1,0 +1,66 @@
+#version 450
+// Detect decode (DFL + anchor-free box) from separate box_raw / cls_raw.
+// Bindings: 0 box_raw, 1 cls_raw, 2 counter (atomic), 3 dets.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint grid_h, grid_w, reg_max, num_classes;
+    float stride, conf_thresh, _p1, _p2;
+    uint in_c_box, in_c_cls, max_dets, _p4;
+} p;
+
+layout(std430, binding = 0) readonly buffer BoxRaw  { float box_raw[]; };
+layout(std430, binding = 1) readonly buffer ClsRaw  { float cls_raw[]; };
+layout(std430, binding = 2)          buffer Counter { uint counter; };
+layout(std430, binding = 3)          buffer Dets    { float dets[]; };
+
+float dfl_side(uint anchor, uint hw, uint side) {
+    float max_v = -1.0e38;
+    for (uint i = 0u; i < p.reg_max; i++)
+        max_v = max(max_v, box_raw[(side * p.reg_max + i) * hw + anchor]);
+    float sum_e = 0.0, wsum = 0.0;
+    for (uint i = 0u; i < p.reg_max; i++) {
+        float e = exp(box_raw[(side * p.reg_max + i) * hw + anchor] - max_v);
+        sum_e += e;
+        wsum  += e * float(i);
+    }
+    return wsum / sum_e;
+}
+
+void main() {
+    uint gx = gl_GlobalInvocationID.x;
+    uint gy = gl_GlobalInvocationID.y;
+    if (gx >= p.grid_w || gy >= p.grid_h) return;
+
+    uint hw         = p.grid_h * p.grid_w;
+    uint anchor_idx = gy * p.grid_w + gx;
+
+    float dl = dfl_side(anchor_idx, hw, 0u);
+    float dt = dfl_side(anchor_idx, hw, 1u);
+    float dr = dfl_side(anchor_idx, hw, 2u);
+    float db = dfl_side(anchor_idx, hw, 3u);
+
+    float cx = (float(gx) + 0.5) * p.stride;
+    float cy = (float(gy) + 0.5) * p.stride;
+
+    float max_cls = -1.0e38;
+    uint  cls_id  = 0u;
+    for (uint i = 0u; i < p.num_classes; i++) {
+        float logit = cls_raw[i * hw + anchor_idx];
+        if (logit > max_cls) { max_cls = logit; cls_id = i; }
+    }
+
+    float conf = 1.0 / (1.0 + exp(-max_cls));
+    if (conf < p.conf_thresh) return;
+
+    uint slot = atomicAdd(counter, 1u);
+    if (slot >= p.max_dets) return;
+
+    uint base = slot * 6u;
+    dets[base + 0u] = cx - dl * p.stride;
+    dets[base + 1u] = cy - dt * p.stride;
+    dets[base + 2u] = cx + dr * p.stride;
+    dets[base + 3u] = cy + db * p.stride;
+    dets[base + 4u] = conf;
+    dets[base + 5u] = float(cls_id);
+}

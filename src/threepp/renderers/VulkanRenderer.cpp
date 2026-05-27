@@ -1057,6 +1057,14 @@ namespace threepp {
         // rotation, color). See createSpriteOverlayPipeline().
         VkDescriptorSetLayout spriteDescSetLayout_   = VK_NULL_HANDLE;
         VkPipelineLayout      spritePipelineLayout_  = VK_NULL_HANDLE;
+
+        // Ortho HUD overlay line pipelines (color-only, depth-test off) — the
+        // "Mesh / Line HUD overlay" follow-up so Line/LineSegments draw under an
+        // OrthographicCamera, not just Sprites. Reuse overlay.vert/frag; the
+        // GL->Vulkan clip-z remap is baked into the MVP (overlay.vert only flips Y).
+        VkPipeline       orthoLineListPipeline_   = VK_NULL_HANDLE;
+        VkPipeline       orthoLineStripPipeline_  = VK_NULL_HANDLE;
+        VkPipelineLayout orthoLinePipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline            overlaySpritePipeline_ = VK_NULL_HANDLE;
         // Per-frame-in-flight descriptor pool for sprite combined-image-
         // sampler sets. Reset at the top of each ortho overlay record so
@@ -1623,6 +1631,9 @@ namespace threepp {
             if (overlayPipelineLayout)      vkDestroyPipelineLayout(d, overlayPipelineLayout, nullptr);
             if (overlaySpritePipeline_)     vkDestroyPipeline(d, overlaySpritePipeline_, nullptr);
             if (spritePipelineLayout_)      vkDestroyPipelineLayout(d, spritePipelineLayout_, nullptr);
+            if (orthoLineListPipeline_)     vkDestroyPipeline(d, orthoLineListPipeline_, nullptr);
+            if (orthoLineStripPipeline_)    vkDestroyPipeline(d, orthoLineStripPipeline_, nullptr);
+            if (orthoLinePipelineLayout_)   vkDestroyPipelineLayout(d, orthoLinePipelineLayout_, nullptr);
             if (spriteDescSetLayout_)       vkDestroyDescriptorSetLayout(d, spriteDescSetLayout_, nullptr);
             for (auto& pool : spriteDescPools_) {
                 if (pool) vkDestroyDescriptorPool(d, pool, nullptr);
@@ -7268,6 +7279,144 @@ namespace threepp {
         // per-draw on material.wireframe / overlayLayer membership.
         // Line/LineSegments get their own pipeline variants + cached
         // vertex buffer, also built below.
+        // Color-only, depth-test-off Line/LineSegments pipelines for the ortho
+        // HUD overlay pass (recordOrthoOverlay). Reuses overlay.vert/frag — the
+        // GL->Vulkan clip-z remap that overlay.vert omits is baked into the MVP
+        // on the CPU side, and Y is flipped in the shader (same NDC convention as
+        // the sprite pass, so lines align with sprites). No depth attachment.
+        void createOrthoLinePipelines() {
+            VkShaderModuleCreateInfo vsmci{};
+            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            vsmci.codeSize = sizeof(kOverlayVertSpv);
+            vsmci.pCode    = kOverlayVertSpv;
+            VkShaderModule vertModule = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vertModule),
+                  "vkCreateShaderModule(ortho overlay.vert)");
+            VkShaderModuleCreateInfo fsmci{};
+            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            fsmci.codeSize = sizeof(kOverlayFragSpv);
+            fsmci.pCode    = kOverlayFragSpv;
+            VkShaderModule fragModule = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &fragModule),
+                  "vkCreateShaderModule(ortho overlay.frag)");
+
+            VkPipelineShaderStageCreateInfo stages[2]{};
+            stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+            stages[0].module = vertModule;
+            stages[0].pName  = "main";
+            stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stages[1].module = fragModule;
+            stages[1].pName  = "main";
+
+            VkVertexInputBindingDescription vib{};
+            vib.binding   = 0;
+            vib.stride    = 3 * sizeof(float);
+            vib.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            VkVertexInputAttributeDescription via{};
+            via.location = 0;
+            via.binding  = 0;
+            via.format   = VK_FORMAT_R32G32B32_SFLOAT;
+            via.offset   = 0;
+            VkPipelineVertexInputStateCreateInfo vi{};
+            vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            vi.vertexBindingDescriptionCount   = 1;
+            vi.pVertexBindingDescriptions      = &vib;
+            vi.vertexAttributeDescriptionCount = 1;
+            vi.pVertexAttributeDescriptions    = &via;
+
+            VkPipelineInputAssemblyStateCreateInfo iaList{};
+            iaList.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            iaList.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+            VkPipelineInputAssemblyStateCreateInfo iaStrip = iaList;
+            iaStrip.topology = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+
+            VkPipelineViewportStateCreateInfo vp{};
+            vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+            vp.viewportCount = 1;
+            vp.scissorCount  = 1;
+
+            VkPipelineRasterizationStateCreateInfo rs{};
+            rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            rs.polygonMode = VK_POLYGON_MODE_FILL;
+            rs.cullMode    = VK_CULL_MODE_NONE;
+            rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rs.lineWidth   = 1.0f;
+
+            VkPipelineMultisampleStateCreateInfo ms{};
+            ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+            ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+            // No depth attachment in the ortho overlay pass → depth test off.
+            VkPipelineDepthStencilStateCreateInfo ds{};
+            ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+            ds.depthTestEnable  = VK_FALSE;
+            ds.depthWriteEnable = VK_FALSE;
+
+            VkPipelineColorBlendAttachmentState cbas{};
+            cbas.blendEnable    = VK_FALSE;
+            cbas.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                  VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            VkPipelineColorBlendStateCreateInfo cb{};
+            cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            cb.attachmentCount = 1;
+            cb.pAttachments    = &cbas;
+
+            VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+            VkPipelineDynamicStateCreateInfo dyn{};
+            dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            dyn.dynamicStateCount = 2;
+            dyn.pDynamicStates    = dynStates;
+
+            if (orthoLinePipelineLayout_ == VK_NULL_HANDLE) {
+                VkPushConstantRange pcRange{};// mat4 mvp (64) + vec4 color (16) = 80
+                pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+                pcRange.offset     = 0;
+                pcRange.size       = 80;
+                VkPipelineLayoutCreateInfo plci{};
+                plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+                plci.pushConstantRangeCount = 1;
+                plci.pPushConstantRanges    = &pcRange;
+                check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &orthoLinePipelineLayout_),
+                      "vkCreatePipelineLayout(orthoLine)");
+            }
+
+            const VkFormat colorFmt = ctx->swapchainFormat();
+            VkPipelineRenderingCreateInfo prci{};
+            prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+            prci.colorAttachmentCount    = 1;
+            prci.pColorAttachmentFormats = &colorFmt;
+            prci.depthAttachmentFormat   = VK_FORMAT_UNDEFINED;// color-only pass
+
+            VkGraphicsPipelineCreateInfo gpci{};
+            gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            gpci.pNext               = &prci;
+            gpci.stageCount          = 2;
+            gpci.pStages             = stages;
+            gpci.pVertexInputState   = &vi;
+            gpci.pInputAssemblyState = &iaList;
+            gpci.pViewportState      = &vp;
+            gpci.pRasterizationState = &rs;
+            gpci.pMultisampleState   = &ms;
+            gpci.pDepthStencilState  = &ds;
+            gpci.pColorBlendState    = &cb;
+            gpci.pDynamicState       = &dyn;
+            gpci.layout              = orthoLinePipelineLayout_;
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpci, nullptr,
+                                            &orthoLineListPipeline_),
+                  "vkCreateGraphicsPipelines(orthoLineList)");
+
+            VkGraphicsPipelineCreateInfo gpciStrip = gpci;
+            gpciStrip.pInputAssemblyState = &iaStrip;
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciStrip, nullptr,
+                                            &orthoLineStripPipeline_),
+                  "vkCreateGraphicsPipelines(orthoLineStrip)");
+
+            vkDestroyShaderModule(ctx->device(), vertModule, nullptr);
+            vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
+        }
+
         void createOverlayPipeline() {
             VkShaderModuleCreateInfo vsmci{};
             vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -8079,7 +8228,39 @@ namespace threepp {
                 }
                 draws.push_back(std::move(d));
             });
-            if (draws.empty()) return;
+
+            // Collect Line / LineSegments for the ortho overlay (the deferred
+            // "Mesh / Line HUD overlay" follow-up). ensureSceneBuilt is skipped
+            // for ortho cameras, so lastVisibleLines_ isn't populated — gather
+            // straight from the scene here.
+            //
+            // ONLY in the true ortho/HUD path (screenSpaceOnly == false). The
+            // screenSpaceOnly == true call comes from the perspective path
+            // (beginFrameForPT, compositing screen-space Sprites over the PT
+            // image): a perspective scene's Lines are already drawn correctly by
+            // the 3D hybrid overlay, so collecting them here would double-draw
+            // them through the internal screen-space camera at wrong positions.
+            struct OrthoLineDraw {
+                Line* line = nullptr;
+                bool  isSegments = false;
+                Matrix4 world;
+            };
+            std::vector<OrthoLineDraw> lineDraws;
+            if (!screenSpaceOnly) {
+                scene.traverseVisible([&](Object3D& o) {
+                    auto* ln = dynamic_cast<Line*>(&o);
+                    if (!ln) return;
+                    auto g = ln->geometry();
+                    if (!g || !g->hasAttribute("position")) return;
+                    OrthoLineDraw ld;
+                    ld.line = ln;
+                    ld.isSegments = (dynamic_cast<LineSegments*>(ln) != nullptr);
+                    std::memcpy(ld.world.elements.data(), ln->matrixWorld->elements.data(), 64);
+                    lineDraws.push_back(ld);
+                });
+            }
+
+            if (draws.empty() && lineDraws.empty()) return;
             if (draws.size() > kMaxSpritesPerFrame) {
                 std::cerr << "[VulkanRenderer] HUD sprite count " << draws.size()
                           << " exceeds kMaxSpritesPerFrame=" << kMaxSpritesPerFrame
@@ -8237,6 +8418,80 @@ namespace threepp {
                 vkCmdBindVertexBuffers(cb, 0, 1, vbufs, voffs);
                 vkCmdBindIndexBuffer(cb, gr->index.handle, 0, VK_INDEX_TYPE_UINT32);
                 vkCmdDrawIndexed(cb, gr->indexCount, 1, 0, 0, 0);
+            }
+
+            // ── Line / LineSegments overlay ─────────────────────────────────
+            // Drawn after the sprites in the same color-only pass, so boxes /
+            // gizmos land on top of any image sprite.
+            if (!lineDraws.empty()) {
+                if (orthoLineListPipeline_ == VK_NULL_HANDLE) createOrthoLinePipelines();
+
+                // overlay.vert flips Y but does NOT remap GL clip-z to Vulkan's
+                // [0,w] range; bake that remap (z' = 0.5z + 0.5w) into the MVP so
+                // the ortho near/far range isn't clipped away.
+                Matrix4 zfix;
+                zfix.set(1.f, 0.f, 0.f, 0.f,
+                         0.f, 1.f, 0.f, 0.f,
+                         0.f, 0.f, 0.5f, 0.5f,
+                         0.f, 0.f, 0.f, 1.f);
+                Matrix4 vpMat;
+                vpMat.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+                Matrix4 cvp;
+                cvp.multiplyMatrices(zfix, vpMat);
+
+                struct LinePC {
+                    float mvp[16];
+                    float color[4];
+                };
+                VkPipeline curLine = VK_NULL_HANDLE;
+                for (const auto& ld : lineDraws) {
+                    auto g = ld.line->geometry();
+                    const LineRec* lrec = ensureLineGeometryUploaded(g.get());
+                    if (!lrec || lrec->vertex.handle == VK_NULL_HANDLE) continue;
+
+                    Color color(1.f, 1.f, 1.f);
+                    float opacity = 1.f;
+                    if (auto m = ld.line->material()) {
+                        if (auto* mc = dynamic_cast<MaterialWithColor*>(m.get())) color = mc->color;
+                        opacity = m->opacity;
+                    }
+
+                    VkPipeline want = ld.isSegments ? orthoLineListPipeline_ : orthoLineStripPipeline_;
+                    if (want != curLine) {
+                        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                        curLine = want;
+                    }
+
+                    Matrix4 mvp;
+                    mvp.multiplyMatrices(cvp, ld.world);
+                    LinePC pc{};
+                    std::memcpy(pc.mvp, mvp.elements.data(), 64);
+                    pc.color[0] = color.r;
+                    pc.color[1] = color.g;
+                    pc.color[2] = color.b;
+                    pc.color[3] = opacity;
+                    vkCmdPushConstants(cb, orthoLinePipelineLayout_,
+                                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                       0, sizeof(pc), &pc);
+
+                    VkBuffer     vb[1] = {lrec->vertex.handle};
+                    VkDeviceSize vo[1] = {0};
+                    vkCmdBindVertexBuffers(cb, 0, 1, vb, vo);
+
+                    const auto& dr = g->drawRange;
+                    if (lrec->index.handle != VK_NULL_HANDLE) {
+                        vkCmdBindIndexBuffer(cb, lrec->index.handle, 0, VK_INDEX_TYPE_UINT32);
+                        const uint32_t start = static_cast<uint32_t>(std::max(0, dr.start));
+                        const uint32_t cap   = (lrec->indexCount > start) ? (lrec->indexCount - start) : 0u;
+                        const uint32_t cnt   = std::min(cap, static_cast<uint32_t>(std::max(0, dr.count)));
+                        if (cnt > 0) vkCmdDrawIndexed(cb, cnt, 1, start, 0, 0);
+                    } else {
+                        const uint32_t start = static_cast<uint32_t>(std::max(0, dr.start));
+                        const uint32_t cap   = (lrec->vertexCount > start) ? (lrec->vertexCount - start) : 0u;
+                        const uint32_t cnt   = std::min(cap, static_cast<uint32_t>(std::max(0, dr.count)));
+                        if (cnt > 0) vkCmdDraw(cb, cnt, 1, start, 0);
+                    }
+                }
             }
 
             vkCmdEndRendering(cb);
@@ -12776,6 +13031,12 @@ namespace threepp {
                 if (isOrtho) {
                     if (!beginFrameOrthoOnly()) return;
                     frameState_ = FrameState::RecordingOrthoOnly;
+                    // Standalone 2D render: draw the ortho overlay (Sprites +
+                    // Line/LineSegments) now, so a single render(scene, orthoCam)
+                    // call produces output. The HUD pattern (a perspective render
+                    // first, then ortho) instead reaches recordOrthoOverlay via the
+                    // frame-already-in-flight path below.
+                    recordOrthoOverlay(scene, camera, /*screenSpaceOnly=*/false);
                 } else {
                     if (!beginFrameForPT(scene, camera)) return;
                     frameState_ = FrameState::RecordingPostPT;

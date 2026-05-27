@@ -1,0 +1,22 @@
+#version 450
+// Channel slice: copy c_out channels from offset_c (src) to dst_offset_c (dst).
+// Bindings: 0 input, 1 output.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant, std430) uniform PC {
+    uint c_in, c_out, offset_c, height;
+    uint width, dst_offset_c, _p1, _p2;
+} p;
+
+layout(std430, binding = 0) readonly buffer Inp { float inp[]; };
+layout(std430, binding = 1)          buffer Out { float outp[]; };
+
+void main() {
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    uint c = gl_GlobalInvocationID.z;
+    if (x >= p.width || y >= p.height || c >= p.c_out) return;
+    uint hw  = p.height * p.width;
+    uint ofs = y * p.width + x;
+    outp[(c + p.dst_offset_c) * hw + ofs] = inp[(c + p.offset_c) * hw + ofs];
+}

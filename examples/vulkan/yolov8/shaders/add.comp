@@ -1,0 +1,17 @@
+#version 450
+// Element-wise add. Bindings: 0 a, 1 b, 2 output.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint count, _p0, _p1, _p2;
+} p;
+
+layout(std430, binding = 0) readonly buffer A   { float a[]; };
+layout(std430, binding = 1) readonly buffer B   { float b[]; };
+layout(std430, binding = 2)          buffer Out { float outp[]; };
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= p.count) return;
+    outp[i] = a[i] + b[i];
+}
