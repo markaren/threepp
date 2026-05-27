@@ -1,0 +1,21 @@
+#version 450
+// Transpose [C, H, W] spatial tensor → [H*W, C] token layout.
+// One thread per output element. Bindings: 0 inp, 1 out.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint C, H, W, _p;
+} p;
+
+layout(std430, binding = 0) readonly buffer Inp { float inp[]; };// [C, H, W]
+layout(std430, binding = 1)          buffer Out { float outp[]; };// [H*W, C]
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    uint M = p.H * p.W;
+    uint total = M * p.C;
+    if (idx >= total) return;
+    uint token = idx / p.C;
+    uint c     = idx % p.C;
+    outp[token * p.C + c] = inp[c * M + token];
+}

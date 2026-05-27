@@ -1,0 +1,30 @@
+#version 450
+// Channel-axis concat of two tensors with matching H, W. Workgroup 8x8x4.
+// Bindings: 0 a, 1 b, 2 output. Params via push constant.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(push_constant, std430) uniform PC {
+    uint c_a, c_b, h, w;
+} p;
+
+layout(std430, binding = 0) readonly buffer A   { float a[]; };
+layout(std430, binding = 1) readonly buffer B   { float b[]; };
+layout(std430, binding = 2)          buffer Out { float outp[]; };
+
+void main() {
+    uint x  = gl_GlobalInvocationID.x;
+    uint y  = gl_GlobalInvocationID.y;
+    uint oc = gl_GlobalInvocationID.z;
+    uint c_total = p.c_a + p.c_b;
+    if (x >= p.w || y >= p.h || oc >= c_total) return;
+
+    uint pitch = p.h * p.w;
+    uint off   = y * p.w + x;
+    float v;
+    if (oc < p.c_a) {
+        v = a[oc * pitch + off];
+    } else {
+        v = b[(oc - p.c_a) * pitch + off];
+    }
+    outp[oc * pitch + off] = v;
+}
