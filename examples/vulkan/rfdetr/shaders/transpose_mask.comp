@@ -1,0 +1,37 @@
+#version 450
+// Transpose [C, H, W] → [H*W, C] at a token offset in the output buffer, zeroing
+// elements where the anchor falls on the border (valid_mask). Used by buildMemory.
+// wh = 0.05 * 2^level; eps = 0.01. Bindings: 0 inp, 1 out.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint C, H, W;
+    uint outOffset;
+    uint level;
+    uint _p0, _p1, _p2;
+} p;
+
+layout(std430, binding = 0) readonly buffer Inp { float inp[]; };// [C, H, W]
+layout(std430, binding = 1)          buffer Out { float outp[]; };// [totalTokens, C]
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    uint M = p.H * p.W;
+    uint total = M * p.C;
+    if (idx >= total) return;
+    uint token = idx / p.C;
+    uint c     = idx % p.C;
+
+    uint gy = token / p.W;
+    uint gx = token % p.W;
+    float cx = (float(gx) + 0.5) / float(p.W);
+    float cy = (float(gy) + 0.5) / float(p.H);
+    float wh = 0.05 * float(1u << p.level);
+    float eps = 0.01;
+    bool valid = cx > eps && cx < (1.0 - eps)
+              && cy > eps && cy < (1.0 - eps)
+              && wh > eps && wh < (1.0 - eps);
+
+    float v = valid ? inp[c * M + token] : 0.0;
+    outp[(p.outOffset + token) * p.C + c] = v;
+}

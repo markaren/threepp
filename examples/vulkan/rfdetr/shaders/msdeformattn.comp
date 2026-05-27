@@ -1,0 +1,76 @@
+#version 450
+// Multi-Scale Deformable Attention. RT-DETR-L: H=8, L=3, P=4, d=32.
+// One thread per (query, head_dim_k), iterating L*P sampling points and
+// accumulating bilinearly-interpolated value weighted by attention.
+// Bindings: 0 value [tot,H*d], 1 shapes [L*2] u32, 2 lvlStart [L] u32,
+//           3 refPts [Nq,2], 4 offsets [Nq,H*L*P*2], 5 attnW [Nq,H*L*P], 6 out [Nq,H*d].
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint Nq, H, d, L, P;
+    uint _p0, _p1, _p2;
+} p;
+
+layout(std430, binding = 0) readonly buffer Value    { float value[]; };
+layout(std430, binding = 1) readonly buffer Shapes   { uint  shapes[]; };  // H0,W0,H1,W1,...
+layout(std430, binding = 2) readonly buffer LvlStart { uint  lvlStart[]; };
+layout(std430, binding = 3) readonly buffer RefPts   { float refPts[]; };  // [Nq,2]
+layout(std430, binding = 4) readonly buffer Offsets  { float offsets[]; }; // [Nq,H*L*P*2]
+layout(std430, binding = 5) readonly buffer AttnW    { float attnW[]; };   // [Nq,H*L*P]
+layout(std430, binding = 6)          buffer Out      { float outp[]; };    // [Nq,H*d]
+
+float bilinear(uint h, uint k, uint base, uint Hl, uint Wl, float sx, float sy) {
+    uint Hd = p.H * p.d;
+    float fx = sx - 0.5;
+    float fy = sy - 0.5;
+    int x0 = int(floor(fx));
+    int y0 = int(floor(fy));
+    int x1 = x0 + 1;
+    int y1 = y0 + 1;
+    float wx = fx - float(x0);
+    float wy = fy - float(y0);
+    int iW = int(Wl);
+    int iH = int(Hl);
+    uint col = h * p.d + k;
+    float acc = 0.0;
+    if (x0 >= 0 && x0 < iW && y0 >= 0 && y0 < iH)
+        acc += (1.0 - wx) * (1.0 - wy) * value[(base + uint(y0) * Wl + uint(x0)) * Hd + col];
+    if (x1 >= 0 && x1 < iW && y0 >= 0 && y0 < iH)
+        acc += wx * (1.0 - wy) * value[(base + uint(y0) * Wl + uint(x1)) * Hd + col];
+    if (x0 >= 0 && x0 < iW && y1 >= 0 && y1 < iH)
+        acc += (1.0 - wx) * wy * value[(base + uint(y1) * Wl + uint(x0)) * Hd + col];
+    if (x1 >= 0 && x1 < iW && y1 >= 0 && y1 < iH)
+        acc += wx * wy * value[(base + uint(y1) * Wl + uint(x1)) * Hd + col];
+    return acc;
+}
+
+void main() {
+    uint k = gl_GlobalInvocationID.x;// head-dim index
+    uint q = gl_GlobalInvocationID.y;// query index
+    uint h = gl_GlobalInvocationID.z;// head index
+    if (k >= p.d || q >= p.Nq || h >= p.H) return;
+
+    float ref_x = refPts[q * 2u + 0u];
+    float ref_y = refPts[q * 2u + 1u];
+
+    uint LP = p.L * p.P;
+    uint offStride = p.H * LP * 2u;
+    uint awStride  = p.H * LP;
+
+    float acc = 0.0;
+    for (uint l = 0u; l < p.L; l++) {
+        uint Hl = shapes[l * 2u + 0u];
+        uint Wl = shapes[l * 2u + 1u];
+        uint base = lvlStart[l];
+        for (uint pt = 0u; pt < p.P; pt++) {
+            uint offIdx = q * offStride + (h * LP + l * p.P + pt) * 2u;
+            float ox = offsets[offIdx + 0u];
+            float oy = offsets[offIdx + 1u];
+            float aw = attnW[q * awStride + h * LP + l * p.P + pt];
+            float sx = ref_x * float(Wl) + ox;
+            float sy = ref_y * float(Hl) + oy;
+            acc += aw * bilinear(h, k, base, Hl, Wl, sx, sy);
+        }
+    }
+    outp[q * (p.H * p.d) + h * p.d + k] = acc;
+}
