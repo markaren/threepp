@@ -124,5 +124,7 @@ if (THREEPP_WITH_INFERENCE)
         compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/relu.comp"                 kRfReluSpv      _rf21 VARIANT_SUFFIX rfdetr)
         compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/offset_preprocess.comp"    kRfOffPreSpv    _rf22 VARIANT_SUFFIX rfdetr)
         compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/msdeformattn.comp"         kRfMsDeformSpv  _rf23 VARIANT_SUFFIX rfdetr)
+        # Fused DINOv2 residual (LayerScale + add).
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/scale_add.comp"            kRfScaleAddSpv  _rf24 VARIANT_SUFFIX rfdetr)
     endif ()
 endif ()

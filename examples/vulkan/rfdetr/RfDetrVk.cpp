@@ -32,6 +32,7 @@
 #include "threepp/renderers/vulkan/shaders/relu.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/offset_preprocess.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/msdeformattn.comp.rfdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/scale_add.comp.rfdetr.spv.h"
 
 using threepp::VulkanRenderer;
 
@@ -44,7 +45,7 @@ namespace {
         uint32_t stride_h, stride_w, pad_h, pad_w;
         uint32_t has_bias, activation, _p0, _p1;
     };
-    struct LinearParams    { uint32_t M, N, K, hasBias; };
+    struct LinearParams    { uint32_t M, N, K, hasBias, act, _p0, _p1, _p2; };
     struct LNParams        { uint32_t M, D; float eps, _pad; };
     struct SoftmaxParams   { uint32_t M, N, _p0, _p1; };
     struct GeluParams      { uint32_t n, _p0, _p1, _p2; };
@@ -85,7 +86,7 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r)
     addPipe_        = vk_.createPipe(kRfAddSpv,       sizeof(kRfAddSpv),       3, sizeof(AddParams));
     concatPipe_     = vk_.createPipe(kRfConcatSpv,    sizeof(kRfConcatSpv),    3, sizeof(ConcatParams));
     buildEmbeddingsPipe_ = vk_.createPipe(kRfBuildEmbedSpv, sizeof(kRfBuildEmbedSpv), 4, sizeof(EmbedParams));
-    attnVitScoresPipe_ = vk_.createPipe(kRfAttnVitScoresSpv, sizeof(kRfAttnVitScoresSpv), 3, sizeof(AttnVitParams));
+    attnVitScoresPipe_ = vk_.createPipe(kRfAttnVitScoresSpv, sizeof(kRfAttnVitScoresSpv), 2, sizeof(AttnVitParams));
     attnVitApplyPipe_  = vk_.createPipe(kRfAttnVitApplySpv,  sizeof(kRfAttnVitApplySpv),  3, sizeof(AttnVitParams));
     unwindowPipe_ = vk_.createPipe(kRfUnwindowSpv, sizeof(kRfUnwindowSpv), 2, sizeof(UnwindowParams));
     lnChwPipe_    = vk_.createPipe(kRfLnChwSpv,    sizeof(kRfLnChwSpv),    4, sizeof(LnChwParams));
@@ -95,6 +96,7 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r)
     reluPipe_             = vk_.createPipe(kRfReluSpv,      sizeof(kRfReluSpv),      2, sizeof(GeluParams));
     offsetPreprocessPipe_ = vk_.createPipe(kRfOffPreSpv,   sizeof(kRfOffPreSpv),    3, sizeof(OffPreParams));
     msDeformAttnPipe_     = vk_.createPipe(kRfMsDeformSpv,  sizeof(kRfMsDeformSpv),  7, sizeof(MsDeformParams));
+    scaleAddPipe_         = vk_.createPipe(kRfScaleAddSpv,  sizeof(kRfScaleAddSpv),  4, sizeof(LayerScaleParams));
 }
 
 RfDetrVk::~RfDetrVk() {
@@ -122,6 +124,7 @@ RfDetrVk::~RfDetrVk() {
     vk_.destroyPipe(reluPipe_);
     vk_.destroyPipe(offsetPreprocessPipe_);
     vk_.destroyPipe(msDeformAttnPipe_);
+    vk_.destroyPipe(scaleAddPipe_);
 }
 
 void RfDetrVk::loadWeights(const std::string& path) {
@@ -133,6 +136,41 @@ void RfDetrVk::loadWeights(const std::string& path) {
         vk_.upload(t.buffer, data.data(), data.size() * sizeof(float));
         weights_.emplace(name, std::move(t));
     }
+
+    // Pre-fuse per-layer Q/K/V projections into one [3D, D] weight (+ [3D] bias) so
+    // each ViT block runs a single GEMM instead of three. Concatenated along the
+    // output dim: rows [0,D)=Q, [D,2D)=K, [2D,3D)=V, matching the fused attn shaders.
+    auto concat3 = [](const std::vector<float>& a, const std::vector<float>& b, const std::vector<float>& c) {
+        std::vector<float> out;
+        out.reserve(a.size() + b.size() + c.size());
+        out.insert(out.end(), a.begin(), a.end());
+        out.insert(out.end(), b.begin(), b.end());
+        out.insert(out.end(), c.begin(), c.end());
+        return out;
+    };
+    for (int L = 0; L < NUM_LAYERS; ++L) {
+        std::string p = "backbone.0.encoder.encoder.encoder.layer." + std::to_string(L) + ".attention.attention.";
+        auto qw = w.data.find(p + "query.weight"), kw = w.data.find(p + "key.weight"), vw = w.data.find(p + "value.weight");
+        if (qw == w.data.end() || kw == w.data.end() || vw == w.data.end()) continue;
+        uint32_t K = w.shapes.at(p + "query.weight")[1];
+        auto fw = concat3(qw->second, kw->second, vw->second);
+        VkTensor tw = vk_.createOwned({uint32_t(fw.size() / K), K});
+        vk_.upload(tw.buffer, fw.data(), fw.size() * sizeof(float));
+        weights_.emplace(p + "qkv.weight", std::move(tw));
+        auto qb = w.data.find(p + "query.bias"), kb = w.data.find(p + "key.bias"), vb = w.data.find(p + "value.bias");
+        if (qb != w.data.end() && kb != w.data.end() && vb != w.data.end()) {
+            auto fb = concat3(qb->second, kb->second, vb->second);
+            VkTensor tb = vk_.createOwned({uint32_t(fb.size())});
+            vk_.upload(tb.buffer, fb.data(), fb.size() * sizeof(float));
+            weights_.emplace(p + "qkv.bias", std::move(tb));
+        }
+    }
+    // refpoint_embed is a constant — cache the first NUM_QUERIES rows on the CPU so
+    // the decoder doesn't read it back from the GPU on every inference.
+    auto rp = w.data.find("refpoint_embed.weight");
+    if (rp != w.data.end() && rp->second.size() >= size_t(NUM_QUERIES) * 4)
+        learnedRefCpu_.assign(rp->second.begin(), rp->second.begin() + size_t(NUM_QUERIES) * 4);
+
     std::cout << "RfDetrVk::loadWeights: " << weights_.size() << " GPU tensors (fp32)\n";
 }
 
@@ -179,16 +217,16 @@ Tensor RfDetrVk::buildEmbeddings_(const Tensor& patchEmbed) {
 }
 
 // Y[M,N] = X[M,K] · W[N,K]^T + b[N]. W is nn.Linear weight [out=N, in=K] row-major.
-Tensor RfDetrVk::linear_(const Tensor& x, const std::string& wKey, const std::string& bKey) {
+Tensor RfDetrVk::linear_(const Tensor& x, const std::string& wKey, const std::string& bKey, uint32_t act) {
     auto& wt = weights_.at(wKey);
     uint32_t N = wt.shape[0], K = wt.shape[1];
     uint32_t M = x.numel() / K;
     bool hasBias = !bKey.empty() && weights_.count(bKey);
-    LinearParams lp{M, N, K, hasBias ? 1u : 0u};
+    LinearParams lp{M, N, K, hasBias ? 1u : 0u, act, 0u, 0u, 0u};
     Tensor out = vk_.createTensorV({M, N});
     VkBuffer biasBuf = hasBias ? weights_.at(bKey).buffer : vk_.dummy();
     std::vector<VkBuffer> ssbos = {x.buffer, wt.buffer, biasBuf, out.buffer};
-    vk_.dispatch(linearPipe_, ssbos, &lp, sizeof(lp), divCeil(N, 64), divCeil(M, 64), 1);
+    vk_.dispatch(linearPipe_, ssbos, &lp, sizeof(lp), divCeil(N, 64), divCeil(M, 64), 1);// BN=64, BM=64
     return out;
 }
 
@@ -228,6 +266,15 @@ Tensor RfDetrVk::add_(const Tensor& a, const Tensor& b) {
     return out;
 }
 
+Tensor RfDetrVk::scaleAdd_(const Tensor& residual, const Tensor& branch, const std::string& gammaKey, uint32_t C) {
+    uint32_t M = residual.numel() / C;
+    LayerScaleParams lp{M, C, 0u, 0u};
+    Tensor out = vk_.createTensorV(residual.shape);
+    std::vector<VkBuffer> ssbos = {residual.buffer, branch.buffer, weights_.at(gammaKey).buffer, out.buffer};
+    vk_.dispatch(scaleAddPipe_, ssbos, &lp, sizeof(lp), divCeil(residual.numel(), 64), 1, 1);
+    return out;
+}
+
 Tensor RfDetrVk::softmaxRows_(const Tensor& x, uint32_t rows, uint32_t n) {
     SoftmaxParams sp{rows, n, 0u, 0u};
     Tensor out = vk_.createTensorV(x.shape);
@@ -236,20 +283,20 @@ Tensor RfDetrVk::softmaxRows_(const Tensor& x, uint32_t rows, uint32_t n) {
     return out;
 }
 
-Tensor RfDetrVk::attnVitScores_(const Tensor& q, const Tensor& k, uint32_t T, uint32_t B) {
+Tensor RfDetrVk::attnVitScores_(const Tensor& qkv, uint32_t T, uint32_t B) {
     const uint32_t H = NUM_HEADS, d = EMBED_DIM / NUM_HEADS;
     AttnVitParams ap{T, H, d, B, 1.0f / std::sqrt(float(d)), 0u, 0u, 0u};
     Tensor out = vk_.createTensorV({B * H * T, T});
-    std::vector<VkBuffer> ssbos = {q.buffer, k.buffer, out.buffer};
+    std::vector<VkBuffer> ssbos = {qkv.buffer, out.buffer};
     vk_.dispatch(attnVitScoresPipe_, ssbos, &ap, sizeof(ap), divCeil(T, 8), divCeil(T, 8), B * H);
     return out;
 }
 
-Tensor RfDetrVk::attnVitApply_(const Tensor& attn, const Tensor& v, uint32_t T, uint32_t B) {
+Tensor RfDetrVk::attnVitApply_(const Tensor& attn, const Tensor& qkv, uint32_t T, uint32_t B) {
     const uint32_t H = NUM_HEADS, d = EMBED_DIM / NUM_HEADS;
     AttnVitParams ap{T, H, d, B, 1.0f / std::sqrt(float(d)), 0u, 0u, 0u};
     Tensor out = vk_.createTensorV({B * T, H * d});
-    std::vector<VkBuffer> ssbos = {attn.buffer, v.buffer, out.buffer};
+    std::vector<VkBuffer> ssbos = {attn.buffer, qkv.buffer, out.buffer};
     vk_.dispatch(attnVitApplyPipe_, ssbos, &ap, sizeof(ap), divCeil(d, 8), divCeil(T, 8), B * H);
     return out;
 }
@@ -267,22 +314,19 @@ Tensor RfDetrVk::vitLayer_(const Tensor& x, int layerIdx, bool global) {
     const std::string pfx = "backbone.0.encoder.encoder.encoder.layer." + std::to_string(layerIdx) + ".";
 
     Tensor n1 = layerNorm_(x, pfx + "norm1.weight", pfx + "norm1.bias", C);
-    Tensor q = linear_(n1, pfx + "attention.attention.query.weight", pfx + "attention.attention.query.bias");
-    Tensor k = linear_(n1, pfx + "attention.attention.key.weight",   pfx + "attention.attention.key.bias");
-    Tensor v = linear_(n1, pfx + "attention.attention.value.weight", pfx + "attention.attention.value.bias");
-    Tensor scores = attnVitScores_(q, k, T, B);
+    // Fused QKV: one [M,3D] GEMM instead of three [M,D] GEMMs (better occupancy,
+    // n1 read once); the attention shaders index Q/K/V out of the fused buffer.
+    Tensor qkv = linear_(n1, pfx + "attention.attention.qkv.weight", pfx + "attention.attention.qkv.bias");
+    Tensor scores = attnVitScores_(qkv, T, B);
     Tensor probs  = softmaxRows_(scores, B * NUM_HEADS * T, T);
-    Tensor ctx = attnVitApply_(probs, v, T, B);
+    Tensor ctx = attnVitApply_(probs, qkv, T, B);
     Tensor ao = linear_(ctx, pfx + "attention.output.dense.weight", pfx + "attention.output.dense.bias");
-    Tensor ls1 = layerScale_(ao, pfx + "layer_scale1.lambda1", C);
-    Tensor x1 = add_(x, ls1);
+    Tensor x1 = scaleAdd_(x, ao, pfx + "layer_scale1.lambda1", C);// x + ao*lambda1
 
     Tensor n2 = layerNorm_(x1, pfx + "norm2.weight", pfx + "norm2.bias", C);
-    Tensor h1 = linear_(n2, pfx + "mlp.fc1.weight", pfx + "mlp.fc1.bias");
-    Tensor hg = gelu_(h1);
-    Tensor h2 = linear_(hg, pfx + "mlp.fc2.weight", pfx + "mlp.fc2.bias");
-    Tensor ls2 = layerScale_(h2, pfx + "layer_scale2.lambda1", C);
-    return add_(x1, ls2);
+    Tensor h1 = linear_(n2, pfx + "mlp.fc1.weight", pfx + "mlp.fc1.bias", /*act=GELU*/ 1u);
+    Tensor h2 = linear_(h1, pfx + "mlp.fc2.weight", pfx + "mlp.fc2.bias");
+    return scaleAdd_(x1, h2, pfx + "layer_scale2.lambda1", C);// x1 + h2*lambda2
 }
 
 // ── projector primitives (CHW feature maps stored [C, HW]) ──
@@ -446,14 +490,15 @@ void RfDetrVk::decoder_(const Tensor& memory, uint32_t gridH, uint32_t gridW, Fo
         Tensor cls = linear_(om, "transformer.enc_out_class_embed.0.weight", "transformer.enc_out_class_embed.0.bias");
         Tensor bbx = bboxMLP_(om, "transformer.enc_out_bbox_embed.0");
         vk_.endFrame();
-        vk_.readback(cls.buffer, encClass.data(), cls.bytes());
-        vk_.readback(bbx.buffer, encBboxDelta.data(), bbx.bytes());
+        // One GPU round-trip for both first-stage outputs instead of two.
+        vk_.readback2(cls.buffer, encClass.data(), cls.bytes(),
+                      bbx.buffer, encBboxDelta.data(), bbx.bytes());
         vk_.resetArena();
     }
 
-    // learned refpoint_embed[:Nq] (modulates the two-stage proposals via reparam).
-    std::vector<float> learnedRef(size_t(Nq) * 4);
-    vk_.readback(weights_.at("refpoint_embed.weight").buffer, learnedRef.data(), Nq * 4 * sizeof(float));
+    // learned refpoint_embed[:Nq] (modulates the two-stage proposals via reparam),
+    // cached on the CPU at load — no per-inference readback.
+    const std::vector<float>& learnedRef = learnedRefCpu_;
 
     // ── CPU: grid proposals → reparam coords → top-Nq by max class logit ──
     std::vector<float> encCoord(size_t(totalTokens) * 4);
@@ -563,8 +608,9 @@ void RfDetrVk::decoder_(const Tensor& memory, uint32_t gridH, uint32_t gridW, Fo
         Tensor bboxDelta = bboxMLP_(hs, "bbox_embed");
         vk_.endFrame();
         out.predLogits.resize(logits.numel());
-        vk_.readback(logits.buffer, out.predLogits.data(), logits.bytes());
-        vk_.readback(bboxDelta.buffer, bboxDeltaCpu.data(), bboxDelta.bytes());
+        // One round-trip for both head outputs.
+        vk_.readback2(logits.buffer, out.predLogits.data(), logits.bytes(),
+                      bboxDelta.buffer, bboxDeltaCpu.data(), bboxDelta.bytes());
         vk_.resetArena();
     }
 
@@ -589,7 +635,9 @@ RfDetrVk::ForwardOut RfDetrVk::runForward(const std::vector<float>& chw, bool ca
     Tensor input = vk_.createTensorV({3u, R, R});
     vk_.upload(input.buffer, chw.data(), chw.size() * sizeof(float));
     auto pe  = patchEmbed_(input);    // [384, 24, 24]
+    vk_.markTimestamp("patch");
     auto emb = buildEmbeddings_(pe);  // [4, 145, 384] windowed tokens
+    vk_.markTimestamp("embed");
 
     // Flatten the windowed tokens to [M, C] (window-major) for the layer loop.
     const uint32_t C = EMBED_DIM;
@@ -599,6 +647,8 @@ RfDetrVk::ForwardOut RfDetrVk::runForward(const std::vector<float>& chw, bool ca
 
     // 12 DINOv2 blocks; full attention at layers {3,6,9}. Capture layers 0 & 3
     // for debugging and the tap outputs at layers {2,5,8,11} for the projector.
+    static const char* kVitLbl[12] = {"vit0","vit1","vit2","vit3","vit4","vit5",
+                                      "vit6","vit7","vit8","vit9","vit10","vit11"};
     Tensor vit0, vit3;
     std::array<Tensor, 4> tapHidden;
     const int tapLayers[4] = {2, 5, 8, 11};
@@ -609,6 +659,7 @@ RfDetrVk::ForwardOut RfDetrVk::runForward(const std::vector<float>& chw, bool ca
         if (i == 3) vit3 = tok;
         for (int t = 0; t < 4; ++t)
             if (i == tapLayers[t]) tapHidden[t] = tok;
+        vk_.markTimestamp(kVitLbl[i]);
     }
 
     // Each tap: final ViT LayerNorm (per-token over C), then de-window to [C,G,G].
@@ -618,7 +669,9 @@ RfDetrVk::ForwardOut RfDetrVk::runForward(const std::vector<float>& chw, bool ca
                                "backbone.0.encoder.encoder.layernorm.bias", C);
         taps[t] = unwindow_(ln, C, GRID);
     }
+    vk_.markTimestamp("taps");
     Tensor proj0 = projector_(taps, GRID);
+    vk_.markTimestamp("proj");
     // Flatten proj0 [256,G,G] -> memory tokens [G*G,256] and stash in an owning
     // buffer so it survives the decoder's per-frame arena resets.
     Tensor memTok = transposeChw2Tokens_(proj0);

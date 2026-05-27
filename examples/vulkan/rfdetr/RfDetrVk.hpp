@@ -86,8 +86,10 @@ namespace rfdetr {
         VkPipe attnVitScoresPipe_, attnVitApplyPipe_;
         VkPipe unwindowPipe_, lnChwPipe_, chCopyPipe_;
         VkPipe transposeT2tPipe_, qkvSplicePipe_, reluPipe_, offsetPreprocessPipe_, msDeformAttnPipe_;
+        VkPipe scaleAddPipe_;
 
         std::unordered_map<std::string, VkTensor> weights_;
+        std::vector<float> learnedRefCpu_;// refpoint_embed[:NUM_QUERIES] cached at load
 
         // ── ops ──
         Tensor conv_(const Tensor& x, const std::string& wKey, const std::string& bKey,
@@ -96,16 +98,19 @@ namespace rfdetr {
         Tensor buildEmbeddings_(const Tensor& patchEmbed);
 
         // ── ViT primitives (token buffer is flat [M, D] window-major) ──
-        Tensor linear_(const Tensor& x, const std::string& wKey, const std::string& bKey);
+        // act: 0 = none, 1 = GELU fused on the GEMM output (saves a round-trip).
+        Tensor linear_(const Tensor& x, const std::string& wKey, const std::string& bKey, uint32_t act = 0);
         Tensor layerNorm_(const Tensor& x, const std::string& wKey, const std::string& bKey, uint32_t D);
         Tensor gelu_(const Tensor& x);
         Tensor layerScale_(const Tensor& x, const std::string& gammaKey, uint32_t C);
         Tensor add_(const Tensor& a, const Tensor& b);
+        // Fused residual: out = residual + branch * gamma (LayerScale folded in).
+        Tensor scaleAdd_(const Tensor& residual, const Tensor& branch, const std::string& gammaKey, uint32_t C);
         Tensor softmaxRows_(const Tensor& x, uint32_t rows, uint32_t n);
-        // out[b,h,i,j] = scale * dot(Q[b,i,h], K[b,j,h]); separate-Q/K DINOv2 attn.
-        Tensor attnVitScores_(const Tensor& q, const Tensor& k, uint32_t T, uint32_t B);
-        // out[b,i,h*d+e] = Σ_j attn[b,h,i,j] * V[b,j,h,e].
-        Tensor attnVitApply_(const Tensor& attn, const Tensor& v, uint32_t T, uint32_t B);
+        // Batched DINOv2 attention from a fused qkv [M,3D]: scores [B,H,T,T].
+        Tensor attnVitScores_(const Tensor& qkv, uint32_t T, uint32_t B);
+        // out[b,i,h*d+e] = Σ_j attn[b,h,i,j] * V (qkv offset 2D).
+        Tensor attnVitApply_(const Tensor& attn, const Tensor& qkv, uint32_t T, uint32_t B);
         // One DINOv2 transformer block. global=true runs full attention (B=1,T=M).
         Tensor vitLayer_(const Tensor& x, int layerIdx, bool global);
 

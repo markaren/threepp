@@ -1,6 +1,7 @@
 #version 450
 // Batched attention apply (DINOv2 ViT): out[b,i,h*d+e] = Σ_j attn[b,h,i,j] * V[b,j,h,e].
-// attn is [B,H,T,T], V is [M=B*T, D=H*d], out is [M, D]. Bindings: 0 attn, 1 V, 2 out.
+// attn is [B,H,T,T]; V comes from the FUSED qkv [M=B*T, 3D] at offset 2D per token.
+// out is [M, D]. Bindings: 0 attn, 1 qkv, 2 out.
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(push_constant, std430) uniform PC {
@@ -10,7 +11,7 @@ layout(push_constant, std430) uniform PC {
 } p;
 
 layout(std430, binding = 0) readonly buffer Attn { float attn[]; };// [B,H,T,T]
-layout(std430, binding = 1) readonly buffer V    { float v[]; };   // [M, D]
+layout(std430, binding = 1) readonly buffer Qkv  { float qkv[]; }; // [M, 3D]
 layout(std430, binding = 2)          buffer Out  { float outp[]; };// [M, D]
 
 void main() {
@@ -20,10 +21,10 @@ void main() {
     uint h = z % p.H, b = z / p.H;
     if (e >= p.d || i >= p.T || b >= p.B) return;
 
-    uint D = p.H * p.d;
+    uint D = p.H * p.d, S = 3u * D;
     uint aBase = ((b * p.H + h) * p.T + i) * p.T;
     float acc = 0.0;
     for (uint jj = 0u; jj < p.T; jj++)
-        acc += attn[aBase + jj] * v[(b * p.T + jj) * D + h * p.d + e];
+        acc += attn[aBase + jj] * qkv[(b * p.T + jj) * S + 2u * D + h * p.d + e];
     outp[(b * p.T + i) * D + h * p.d + e] = acc;
 }
