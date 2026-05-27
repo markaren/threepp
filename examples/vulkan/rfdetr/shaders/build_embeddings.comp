@@ -1,0 +1,44 @@
+#version 450
+// Build the windowed DINOv2 embeddings for RF-DETR.
+// patch_embed [C, G, G] (+ pos) and a CLS token are gathered into windowed token
+// layout [W*W, 1+T, C] (T = winSide*winSide patches per window, +1 CLS at index 0).
+// Mapping: window w=(gh/winSide)*W + (gw/winSide); in-window patch p; token=1+p where
+// gh=(w/W)*winSide + p/winSide, gw=(w%W)*winSide + p%winSide. pos[0]=CLS, pos[1+patch].
+// Bindings: 0 patch[C,G,G], 1 pos[1+G*G, C], 2 cls[C], 3 out[W*W,1+T,C].
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint C, grid, winSide, numWin;// numWin per axis (W); tokensPerWin = winSide^2 + 1
+} p;
+
+layout(std430, binding = 0) readonly buffer Patch { float pe[]; };// [C, grid, grid]
+layout(std430, binding = 1) readonly buffer Pos   { float pos[]; };  // [1+grid*grid, C]
+layout(std430, binding = 2) readonly buffer Cls   { float cls[]; };  // [C]
+layout(std430, binding = 3)          buffer Out   { float outp[]; }; // [numWin^2, 1+winSide^2, C]
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    uint patchesPerWin = p.winSide * p.winSide;
+    uint tokensPerWin = patchesPerWin + 1u;
+    uint numWinSq = p.numWin * p.numWin;
+    uint total = numWinSq * tokensPerWin * p.C;
+    if (idx >= total) return;
+
+    uint c = idx % p.C;
+    uint tw = idx / p.C;          // (window, token) flat
+    uint t = tw % tokensPerWin;
+    uint w = tw / tokensPerWin;
+
+    float v;
+    if (t == 0u) {
+        v = cls[c] + pos[c];      // CLS + pos[0]
+    } else {
+        uint pp = t - 1u;
+        uint gh = (w / p.numWin) * p.winSide + (pp / p.winSide);
+        uint gw = (w % p.numWin) * p.winSide + (pp % p.winSide);
+        uint patchIdx = gh * p.grid + gw;
+        uint G2 = p.grid * p.grid;
+        v = pe[c * G2 + patchIdx] + pos[(1u + patchIdx) * p.C + c];
+    }
+    outp[idx] = v;
+}

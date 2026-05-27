@@ -1,0 +1,39 @@
+#version 450
+// ConvNeXt-style LayerNorm over the channel dim of a [C, HW] feature map
+// (normalize the C-vector at each spatial position). One thread per position.
+// Optional fused activation on the output: act 0 = none, 2 = SiLU.
+// Bindings: 0 x, 1 gamma, 2 beta, 3 y. Params via push constant.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint C, HW;
+    float eps;
+    uint act;
+} p;
+
+layout(std430, binding = 0) readonly buffer X     { float x[]; };
+layout(std430, binding = 1) readonly buffer Gamma { float gamma[]; };
+layout(std430, binding = 2) readonly buffer Beta  { float beta[]; };
+layout(std430, binding = 3)          buffer Y     { float y[]; };
+
+void main() {
+    uint pos = gl_GlobalInvocationID.x;
+    if (pos >= p.HW) return;
+
+    float sum = 0.0;
+    for (uint c = 0u; c < p.C; c++) sum += x[c * p.HW + pos];
+    float mean = sum / float(p.C);
+
+    float sq = 0.0;
+    for (uint c = 0u; c < p.C; c++) {
+        float d = x[c * p.HW + pos] - mean;
+        sq += d * d;
+    }
+    float inv = inversesqrt(sq / float(p.C) + p.eps);
+
+    for (uint c = 0u; c < p.C; c++) {
+        float v = (x[c * p.HW + pos] - mean) * inv * gamma[c] + beta[c];
+        if (p.act == 2u) v = v / (1.0 + exp(-v));// SiLU
+        y[c * p.HW + pos] = v;
+    }
+}

@@ -29,7 +29,30 @@ def main():
     hooks = []
 
     backbone0 = net.backbone[0]
+    enc = backbone0.encoder.encoder  # WindowedDinov2WithRegistersBackbone
+    # patch-embed conv output [1,384,24,24]
+    pe = enc.embeddings.patch_embeddings.projection
+    hooks.append(pe.register_forward_hook(
+        lambda _m, _i, out: acts.__setitem__('patch', out.detach().cpu().float().contiguous())))
+    # embeddings output (windowed token layout [W*W, 1+T, C])
+    hooks.append(enc.embeddings.register_forward_hook(
+        lambda _m, _i, out: acts.__setitem__('embed',
+            (out[0] if isinstance(out, (list, tuple)) else out).detach().cpu().float().contiguous())))
+    # a couple of ViT layer outputs (windowed layout) for finer debugging
+    for li in (0, 3):
+        def mk(idx):
+            return lambda _m, _i, out: acts.__setitem__(
+                f'vit{idx}', (out[0] if isinstance(out, (list, tuple)) else out).detach().cpu().float().contiguous())
+        hooks.append(enc.encoder.layer[li].register_forward_hook(mk(li)))
+
     if hasattr(backbone0, 'projector'):
+        # projector INPUT = the de-windowed tap features (list of [1,384,24,24]).
+        def proj_pre(_m, inp):
+            feats = inp[0] if isinstance(inp, tuple) else inp
+            feats = feats if isinstance(feats, (list, tuple)) else [feats]
+            for k, t in enumerate(feats):
+                acts[f'tap.{k}'] = t.detach().cpu().float().contiguous()
+        hooks.append(backbone0.projector.register_forward_pre_hook(proj_pre))
         def proj_hook(_m, _i, out):
             feats = out if isinstance(out, (list, tuple)) else [out]
             for k, t in enumerate(feats):
