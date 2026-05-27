@@ -89,11 +89,11 @@ static int runValidation(rtdetr::RtDetrVk& model, const std::string& weightsPath
     model.loadWeights(weightsPath);
     std::cout << "Loading reference '" << refPath << "' ..." << std::endl;
     auto ref = rtdetr::parseWeightBinary(refPath);
-    auto inIt = ref.data.find("input");
+    const auto inIt = ref.data.find("input");
     if (inIt == ref.data.end()) { std::cerr << "ERROR: ref has no 'input'\n"; return 1; }
 
     std::cout << "\nRunning full forward pass..." << std::endl;
-    auto fw = model.runForward(inIt->second, /*captureIntermediates=*/true);
+    const auto fw = model.runForward(inIt->second, /*captureIntermediates=*/true);
 
     std::cout << "\nNumeric validation vs captured reference:\n";
     compare("P3", fw.p3, ref, "model.3");
@@ -156,16 +156,23 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rtdetr::RtDetr
     auto& rgba = img.data<unsigned char>();
     using clk = std::chrono::steady_clock;
 
-    // Warmup + timed runs.
+    // Warmup, then average a few timed runs for a stable ms / FPS figure.
     std::vector<rtdetr::Detection> detections;
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < 2; ++i) {
+        detections = model.infer(rgba.data(), static_cast<int>(img.width), static_cast<int>(img.height));
+    }
+    constexpr int kRuns = 5;
+    double total = 0.0;
+    for (int i = 0; i < kRuns; ++i) {
+        auto t0 = clk::now();
         detections = model.infer(rgba.data(), int(img.width), int(img.height));
-    auto t0 = clk::now();
-    detections = model.infer(rgba.data(), int(img.width), int(img.height));
-    double ms = std::chrono::duration<double, std::milli>(clk::now() - t0).count();
+        total += std::chrono::duration<double, std::milli>(clk::now() - t0).count();
+    }
+    const double ms = total / kRuns;
 
     std::cout << "\nDetections (" << detections.size() << ") in "
-              << std::fixed << std::setprecision(1) << ms << " ms:\n";
+              << std::fixed << std::setprecision(1) << ms << " ms  ("
+              << std::setprecision(1) << (1000.0 / ms) << " FPS):\n";
     for (auto& d : detections) {
         const char* name = (d.classId >= 0 && d.classId < 80) ? kCocoNames[d.classId] : "?";
         std::cout << "  " << std::left << std::setw(16) << name << std::right
@@ -228,7 +235,7 @@ int main(int argc, char** argv) {
         if (selfTest) {
             auto r = model.selfTestMsDeform();
             double maxErr = 0;
-            const float exp[4] = {12.f, 13.f, 14.f, 15.f};
+            constexpr float exp[4] = {12.f, 13.f, 14.f, 15.f};
             for (size_t i = 0; i < 4 && i < r.size(); ++i) maxErr = std::max(maxErr, std::abs(double(r[i]) - exp[i]));
             std::cout << "MSDeformAttn self-test: got [";
             for (float v : r) std::cout << v << " ";

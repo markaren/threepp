@@ -138,14 +138,22 @@ namespace rtdetr {
                       uint32_t gx, uint32_t gy, uint32_t gz);
         void endFrame();// end + submit + wait
 
+        // GPU timestamp between dispatches (no-op unless RTDETR_PROFILE is set).
+        // endFrame() prints per-mark GPU deltas, isolating GPU time from CPU
+        // command-recording overhead.
+        void markTimestamp(const char* label);
+
         [[nodiscard]] VkDevice device() const { return device_; }
 
     private:
         uint32_t findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags props) const;
         VkTensor allocBuffer(VkDeviceSize bytes, VkBufferUsageFlags usage, VkMemoryPropertyFlags props);
-        // HOST_CACHED transfer-dst staging (fast device->host reads); falls back
-        // to plain HOST_COHERENT if the device has no cached host-visible heap.
-        VkTensor allocReadbackStaging(VkDeviceSize bytes);
+        // Persistent staging buffers (grown on demand, reused) so uploads/readbacks
+        // don't vkAllocateMemory/vkFreeMemory every call. uploadStaging_ is
+        // HOST_COHERENT (fast writes); readbackStaging_ prefers HOST_CACHED (fast
+        // device->host reads), falling back to HOST_COHERENT.
+        void ensureUploadStaging(VkDeviceSize bytes);
+        void ensureReadbackStaging(VkDeviceSize bytes);
         VkBuffer acquireArena(VkDeviceSize bytes);// pooled activation buffer (reused across frames)
         template<typename Fn>
         void oneShot(Fn&& fn);
@@ -167,6 +175,15 @@ namespace rtdetr {
         std::vector<VkTensor> arenaSlots_;
         size_t arenaCursor_ = 0;
         VkTensor dummy_;
+        VkTensor uploadStaging_;  // persistent host-visible upload scratch
+        VkTensor readbackStaging_;// persistent host-cached readback scratch
+
+        // Profiling timestamps (enabled by RTDETR_PROFILE).
+        VkQueryPool tsPool_ = VK_NULL_HANDLE;
+        float tsPeriodNs_ = 1.0f;
+        bool tsEnabled_ = false;
+        uint32_t tsCount_ = 0;
+        std::vector<const char*> tsLabels_;
     };
 
 }// namespace rtdetr

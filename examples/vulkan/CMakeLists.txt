@@ -59,6 +59,8 @@ if (THREEPP_WITH_INFERENCE)
         # the YOLO kernels that share a basename (conv2d/add/maxpool/concat/upsample).
         set(_rt_sh "${CMAKE_CURRENT_SOURCE_DIR}/rtdetr/shaders")
         compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/conv2d.comp"   kRtConv2dSpv   _rh0 VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/conv3x3.comp"  kRtConv3x3Spv  _rh0b VARIANT_SUFFIX rtdetr)
+        compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/conv1x1.comp"  kRtConv1x1Spv  _rh0c VARIANT_SUFFIX rtdetr)
         compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/dwconv.comp"   kRtDwConvSpv   _rh1 VARIANT_SUFFIX rtdetr)
         compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/maxpool.comp"  kRtMaxPoolSpv  _rh2 VARIANT_SUFFIX rtdetr)
         compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/concat.comp"   kRtConcatSpv   _rh3 VARIANT_SUFFIX rtdetr)

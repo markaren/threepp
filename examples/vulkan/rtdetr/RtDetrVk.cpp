@@ -14,6 +14,8 @@
 // (VARIANT_SUFFIX=rtdetr so they don't collide with the YOLO kernels of the
 // same basename).
 #include "threepp/renderers/vulkan/shaders/conv2d.comp.rtdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/conv1x1.comp.rtdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/conv3x3.comp.rtdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/dwconv.comp.rtdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/maxpool.comp.rtdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/concat.comp.rtdetr.spv.h"
@@ -106,6 +108,8 @@ RtDetrVk::RtDetrVk(VulkanRenderer& r)
           r.graphicsQueueFamily()) {
 
     convPipe_     = vk_.createPipe(kRtConv2dSpv,   sizeof(kRtConv2dSpv),   4, sizeof(ConvParams));
+    conv1x1Pipe_  = vk_.createPipe(kRtConv1x1Spv,  sizeof(kRtConv1x1Spv),  4, sizeof(ConvParams));
+    conv3x3Pipe_  = vk_.createPipe(kRtConv3x3Spv,  sizeof(kRtConv3x3Spv),  4, sizeof(ConvParams));
     dwConvPipe_   = vk_.createPipe(kRtDwConvSpv,   sizeof(kRtDwConvSpv),   4, sizeof(ConvParams));
     maxPoolPipe_  = vk_.createPipe(kRtMaxPoolSpv,  sizeof(kRtMaxPoolSpv),  2, sizeof(PoolParams));
     concatPipe_   = vk_.createPipe(kRtConcatSpv,   sizeof(kRtConcatSpv),   3, sizeof(ConcatParams));
@@ -131,6 +135,8 @@ RtDetrVk::RtDetrVk(VulkanRenderer& r)
 
 RtDetrVk::~RtDetrVk() {
     vk_.destroyPipe(convPipe_);
+    vk_.destroyPipe(conv1x1Pipe_);
+    vk_.destroyPipe(conv3x3Pipe_);
     vk_.destroyPipe(dwConvPipe_);
     vk_.destroyPipe(maxPoolPipe_);
     vk_.destroyPipe(concatPipe_);
@@ -271,7 +277,15 @@ Tensor RtDetrVk::conv_(const Tensor& x, const std::string& weightKey, const std:
 
     std::vector<VkBuffer> ssbos = {x.buffer, wt.buffer, biasBuf, out.buffer};
     uint32_t totalPos = out_h * out_w;
-    vk_.dispatch(convPipe_, ssbos, &cp, sizeof(cp), divCeil(totalPos, 16), divCeil(out_c, 16), 1);
+    if (k_h == 1u && k_w == 1u && strideH == 1 && strideW == 1) {
+        // 1x1 s1 == GEMM → register-blocked 64x64-tile kernel.
+        vk_.dispatch(conv1x1Pipe_, ssbos, &cp, sizeof(cp), divCeil(totalPos, 64), divCeil(out_c, 64), 1);
+    } else if (k_h == 3u && k_w == 3u) {
+        // 3x3 → register-blocked (4 out-channels/thread; workgroup 16x4 → 16 oc).
+        vk_.dispatch(conv3x3Pipe_, ssbos, &cp, sizeof(cp), divCeil(totalPos, 16), divCeil(out_c, 16), 1);
+    } else {
+        vk_.dispatch(convPipe_, ssbos, &cp, sizeof(cp), divCeil(totalPos, 16), divCeil(out_c, 16), 1);
+    }
     return out;
 }
 
@@ -429,18 +443,24 @@ Tensor RtDetrVk::hgBlock_(const Tensor& x, const std::string& prefix,
 RtDetrVk::BackboneFeatures RtDetrVk::backbone_(const Tensor& x) {
     using A = Activation;
     auto f0 = hgStem_(x);                                       // model.0  HGStem        3→48   s4
+    vk_.markTimestamp("  hgStem");
     auto f1 = hgBlock_(f0, "model.1", 6, 3, false, false);      // model.1  HGBlock        48→128 s4
+    vk_.markTimestamp("  model.1");
     auto f2 = dwConv_(f1, "model.2.fused.weight", "model.2.fused.bias",
                       2, 2, 1, 1, A::None);                      // model.2  DWConv s2      128→128 s8
     auto p3 = hgBlock_(f2, "model.3", 6, 3, false, false);      // model.3  HGBlock        128→512 s8  <- P3
+    vk_.markTimestamp("  model.3 (P3)");
     auto f4 = dwConv_(p3, "model.4.fused.weight", "model.4.fused.bias",
                       2, 2, 1, 1, A::None);                      // model.4  DWConv s2      512→512 s16
     auto f5 = hgBlock_(f4, "model.5", 6, 5, false, true);       // model.5  HGBlockLight   512→1024 s16
+    vk_.markTimestamp("  model.5");
     auto f6 = hgBlock_(f5, "model.6", 6, 5, true, true);        // model.6  HGBlockLight   1024→1024 s16
     auto p4 = hgBlock_(f6, "model.7", 6, 5, true, true);        // model.7  HGBlockLight   1024→1024 s16 <- P4
+    vk_.markTimestamp("  model.6-7 (P4)");
     auto f8 = dwConv_(p4, "model.8.fused.weight", "model.8.fused.bias",
                       2, 2, 1, 1, A::None);                      // model.8  DWConv s2      1024→1024 s32
     auto f9 = hgBlock_(f8, "model.9", 6, 5, false, true);       // model.9  HGBlockLight   1024→2048 s32
+    vk_.markTimestamp("  model.9");
     auto p5 = conv_(f9, "model.10.fused.weight", "model.10.fused.bias",
                     1, 1, 0, 0, A::None);                        // model.10 Conv1x1        2048→256 s32 <- P5
     return { std::move(p3), std::move(p4), std::move(p5) };
@@ -1026,8 +1046,11 @@ RtDetrVk::ForwardOut RtDetrVk::runForward(const std::vector<float>& chw, bool ca
         Tensor input = vk_.createTensorV({3u, dstH, dstW});
         vk_.upload(input.buffer, chw.data(), chw.size() * sizeof(float));
         auto bp   = backbone_(input);
+        vk_.markTimestamp("backbone");
         auto f5   = aifi_(bp.p5);
+        vk_.markTimestamp("aifi");
         auto neck = ccfm_(bp.p3, bp.p4, f5);
+        vk_.markTimestamp("ccfm");
         auto ip0  = inputProj_(neck.s3, 0);
         auto ip1  = inputProj_(neck.s4, 1);
         auto ip2  = inputProj_(neck.s5, 2);

@@ -83,7 +83,7 @@ namespace rtdetr {
         VkInfer vk_;
 
         // One pipeline per op type (reused for every layer of that type).
-        VkPipe convPipe_, dwConvPipe_, maxPoolPipe_, concatPipe_;
+        VkPipe convPipe_, conv1x1Pipe_, conv3x3Pipe_, dwConvPipe_, maxPoolPipe_, concatPipe_;
         VkPipe addPipe_, addSiluPipe_, upsamplePipe_;
         // Phase B: AIFI transformer encoder.
         VkPipe linearPipe_, layerNormPipe_, softmaxPipe_, geluPipe_;

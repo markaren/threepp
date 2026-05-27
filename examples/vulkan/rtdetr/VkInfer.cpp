@@ -1,6 +1,8 @@
 #include "VkInfer.hpp"
 
+#include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 
@@ -45,13 +47,33 @@ VkInfer::VkInfer(VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t
                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     zero(dummy_.buffer);
+
+    tsEnabled_ = std::getenv("RTDETR_PROFILE") != nullptr;
+    if (tsEnabled_) {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(phys_, &props);
+        tsPeriodNs_ = props.limits.timestampPeriod;
+        VkQueryPoolCreateInfo qpci{};
+        qpci.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        qpci.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        qpci.queryCount = 64;
+        if (vkCreateQueryPool(device_, &qpci, nullptr, &tsPool_) != VK_SUCCESS) tsPool_ = VK_NULL_HANDLE;
+    }
 }
 
 VkInfer::~VkInfer() {
     arenaSlots_.clear();// free pooled buffers before pools/device teardown
+    if (tsPool_) vkDestroyQueryPool(device_, tsPool_, nullptr);
     if (descPool_) vkDestroyDescriptorPool(device_, descPool_, nullptr);
     if (oneShotPool_) vkDestroyCommandPool(device_, oneShotPool_, nullptr);
     if (cmdPool_) vkDestroyCommandPool(device_, cmdPool_, nullptr);
+}
+
+void VkInfer::markTimestamp(const char* label) {
+    if (!tsEnabled_ || !tsPool_ || !recording_ || tsCount_ >= 64) return;
+    vkCmdWriteTimestamp(frameCb_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, tsPool_, tsCount_);
+    tsLabels_.push_back(label);
+    ++tsCount_;
 }
 
 uint32_t VkInfer::findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags props) const {
@@ -170,36 +192,42 @@ void VkInfer::oneShot(Fn&& fn) {
 }
 
 void VkInfer::upload(VkBuffer dst, const void* data, VkDeviceSize bytes) {
-    VkTensor staging = allocBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    ensureUploadStaging(bytes);
     void* mapped = nullptr;
-    vkCheck(vkMapMemory(device_, staging.memory, 0, bytes, 0, &mapped), "map staging (upload)");
+    vkCheck(vkMapMemory(device_, uploadStaging_.memory, 0, bytes, 0, &mapped), "map staging (upload)");
     std::memcpy(mapped, data, bytes);
-    vkUnmapMemory(device_, staging.memory);
+    vkUnmapMemory(device_, uploadStaging_.memory);
     oneShot([&](VkCommandBuffer cb) {
         VkBufferCopy region{};
         region.size = bytes;
-        vkCmdCopyBuffer(cb, staging.buffer, dst, 1, &region);
+        vkCmdCopyBuffer(cb, uploadStaging_.buffer, dst, 1, &region);
     });
 }
 
-VkTensor VkInfer::allocReadbackStaging(VkDeviceSize bytes) {
+void VkInfer::ensureUploadStaging(VkDeviceSize bytes) {
+    if (uploadStaging_.buffer && uploadStaging_.capacity >= bytes) return;
+    uploadStaging_ = allocBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+}
+
+void VkInfer::ensureReadbackStaging(VkDeviceSize bytes) {
+    if (readbackStaging_.buffer && readbackStaging_.capacity >= bytes) return;
     // Prefer HOST_CACHED so the host-side memcpy reads from cached (not write-
-    // combined) memory — uncached PCIe reads run at ~0.2 GB/s and dominate large
-    // readbacks. Keep COHERENT so no manual invalidate is needed.
+    // combined) memory — uncached PCIe reads run at ~0.2 GB/s. Keep COHERENT so
+    // no manual invalidate is needed.
     const auto usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     try {
-        return allocBuffer(bytes, usage,
-                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
-                                   VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+        readbackStaging_ = allocBuffer(bytes, usage,
+                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                               VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
     } catch (const std::runtime_error&) {
-        return allocBuffer(bytes, usage,
-                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        readbackStaging_ = allocBuffer(bytes, usage,
+                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     }
 }
 
 void VkInfer::readback(VkBuffer src, void* dst, VkDeviceSize bytes) {
-    VkTensor staging = allocReadbackStaging(bytes);
+    ensureReadbackStaging(bytes);
     oneShot([&](VkCommandBuffer cb) {
         // Make the producing compute writes available to the copy.
         VkMemoryBarrier mb{};
@@ -210,12 +238,12 @@ void VkInfer::readback(VkBuffer src, void* dst, VkDeviceSize bytes) {
                              0, 1, &mb, 0, nullptr, 0, nullptr);
         VkBufferCopy region{};
         region.size = bytes;
-        vkCmdCopyBuffer(cb, src, staging.buffer, 1, &region);
+        vkCmdCopyBuffer(cb, src, readbackStaging_.buffer, 1, &region);
     });
     void* mapped = nullptr;
-    vkCheck(vkMapMemory(device_, staging.memory, 0, bytes, 0, &mapped), "map staging (readback)");
+    vkCheck(vkMapMemory(device_, readbackStaging_.memory, 0, bytes, 0, &mapped), "map staging (readback)");
     std::memcpy(dst, mapped, bytes);
-    vkUnmapMemory(device_, staging.memory);
+    vkUnmapMemory(device_, readbackStaging_.memory);
 }
 
 void VkInfer::zero(VkBuffer buf) {
@@ -232,7 +260,7 @@ void VkInfer::recordFill(VkBuffer dst, VkDeviceSize bytes) {
 void VkInfer::readback2(VkBuffer srcA, void* dstA, VkDeviceSize bytesA,
                         VkBuffer srcB, void* dstB, VkDeviceSize bytesB) {
     VkDeviceSize total = bytesA + bytesB;
-    VkTensor staging = allocReadbackStaging(total);
+    ensureReadbackStaging(total);
     oneShot([&](VkCommandBuffer cb) {
         VkMemoryBarrier mb{};
         mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -242,17 +270,17 @@ void VkInfer::readback2(VkBuffer srcA, void* dstA, VkDeviceSize bytesA,
                              0, 1, &mb, 0, nullptr, 0, nullptr);
         VkBufferCopy ra{};
         ra.size = bytesA;
-        vkCmdCopyBuffer(cb, srcA, staging.buffer, 1, &ra);
+        vkCmdCopyBuffer(cb, srcA, readbackStaging_.buffer, 1, &ra);
         VkBufferCopy rb{};
         rb.size = bytesB;
         rb.dstOffset = bytesA;
-        vkCmdCopyBuffer(cb, srcB, staging.buffer, 1, &rb);
+        vkCmdCopyBuffer(cb, srcB, readbackStaging_.buffer, 1, &rb);
     });
     void* mapped = nullptr;
-    vkCheck(vkMapMemory(device_, staging.memory, 0, total, 0, &mapped), "map staging (readback2)");
+    vkCheck(vkMapMemory(device_, readbackStaging_.memory, 0, total, 0, &mapped), "map staging (readback2)");
     std::memcpy(dstA, mapped, bytesA);
     std::memcpy(dstB, static_cast<const char*>(mapped) + bytesA, bytesB);
-    vkUnmapMemory(device_, staging.memory);
+    vkUnmapMemory(device_, readbackStaging_.memory);
 }
 
 VkPipe VkInfer::createPipe(const uint32_t* spv, size_t spvByteCount, uint32_t nSSBO, uint32_t pushBytes) {
@@ -331,6 +359,12 @@ void VkInfer::beginFrame() {
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkCheck(vkBeginCommandBuffer(frameCb_, &bi), "begin frame cmd buffer");
     recording_ = true;
+    if (tsEnabled_ && tsPool_) {
+        vkCmdResetQueryPool(frameCb_, tsPool_, 0, 64);
+        tsCount_ = 0;
+        tsLabels_.clear();
+        markTimestamp("begin");
+    }
 }
 
 void VkInfer::dispatch(const VkPipe& pipe, const std::vector<VkBuffer>& ssbos,
@@ -383,6 +417,8 @@ void VkInfer::dispatch(const VkPipe& pipe, const std::vector<VkBuffer>& ssbos,
 
 void VkInfer::endFrame() {
     if (!recording_) return;
+    const bool prof = tsEnabled_ && tsPool_ && tsCount_ > 0;
+    if (prof) markTimestamp("end");
     vkCheck(vkEndCommandBuffer(frameCb_), "end frame cmd buffer");
     VkSubmitInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -391,6 +427,20 @@ void VkInfer::endFrame() {
     vkCheck(vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE), "submit frame");
     vkCheck(vkQueueWaitIdle(queue_), "wait frame");
     recording_ = false;
+
+    if (prof) {
+        std::vector<uint64_t> ts(tsCount_);
+        if (vkGetQueryPoolResults(device_, tsPool_, 0, tsCount_, tsCount_ * sizeof(uint64_t),
+                                  ts.data(), sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS) {
+            double total = double(ts[tsCount_ - 1] - ts[0]) * double(tsPeriodNs_) / 1e6;
+            std::cerr << "    [gpu] frame total: " << total << " ms\n";
+            for (uint32_t i = 1; i < tsCount_; ++i) {
+                double ms = double(ts[i] - ts[i - 1]) * double(tsPeriodNs_) / 1e6;
+                if (ms > 0.30) std::cerr << "    [gpu]   " << tsLabels_[i] << ": " << ms << " ms\n";
+            }
+        }
+    }
 }
 
 }// namespace rtdetr
