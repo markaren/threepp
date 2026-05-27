@@ -133,6 +133,10 @@ namespace rtdetr {
         // ── batched dispatch ───────────────────────────────────────────────
         void beginFrame();// reset per-frame descriptor pool + start command buffer
         void recordFill(VkBuffer dst, VkDeviceSize bytes);// zero-fill recorded into the frame
+        // Device→device copy recorded into the frame (no submit/wait); leading
+        // barrier makes prior compute writes to src visible. Lets a value stay
+        // GPU-resident across frames without a host round-trip.
+        void recordCopy(VkBuffer dst, VkBuffer src, VkDeviceSize bytes);
         void dispatch(const VkPipe& pipe, const std::vector<VkBuffer>& ssbos,
                       const void* push, uint32_t pushBytes,
                       uint32_t gx, uint32_t gy, uint32_t gz);

@@ -817,12 +817,17 @@ RtDetrVk::DecoderOut RtDetrVk::decoder_(VkBuffer memoryBuf, uint32_t totalTokens
         return linear_(h2, prefix + ".layers.2.weight", prefix + ".layers.2.bias");
     };
 
+    // target stays GPU-resident across all 6 layers (each layer writes the next
+    // target with a device copy, not a host round-trip). Seed it from the gather.
+    VkTensor targetOwned = vk_.createOwnedRaw(VkDeviceSize(numQueries) * D * sizeof(float));
+    vk_.upload(targetOwned.buffer, targetCpu.data(), targetCpu.size() * sizeof(float));
+    Tensor targetView{targetOwned.buffer, {numQueries, D}};
+
     // enc_bbox_head → reference points.
     std::vector<float> refPts(size_t(numQueries) * 4);
     {
         vk_.beginFrame();
-        Tensor target = uploadArena_({numQueries, D}, targetCpu.data());
-        auto encBboxRaw = bboxMLP(target, "model.28.enc_bbox_head");
+        auto encBboxRaw = bboxMLP(targetView, "model.28.enc_bbox_head");
         vk_.endFrame();
         std::vector<float> bboxRawCpu(encBboxRaw.numel());
         vk_.readback(encBboxRaw.buffer, bboxRawCpu.data(), encBboxRaw.bytes());
@@ -846,11 +851,10 @@ RtDetrVk::DecoderOut RtDetrVk::decoder_(VkBuffer memoryBuf, uint32_t totalTokens
     // Step 3: 6 decoder layers (one batched frame each; CPU bbox-refine between).
     for (uint32_t layer = 0; layer < numLayers; ++layer) {
         std::string p = "model.28.decoder.layers." + std::to_string(layer);
-        std::vector<float> nextTarget(targetCpu.size());
         std::vector<float> bboxDeltaCpu(size_t(numQueries) * 4);
 
         vk_.beginFrame();
-        Tensor target = uploadArena_({numQueries, D}, targetCpu.data());
+        Tensor target = targetView;// GPU-resident from the previous layer's copy
         Tensor refTensor = uploadArena_({numQueries, 4u}, refPts.data());
 
         auto qp1 = linear_(refTensor, "model.28.query_pos_head.layers.0.weight",
@@ -911,13 +915,12 @@ RtDetrVk::DecoderOut RtDetrVk::decoder_(VkBuffer memoryBuf, uint32_t totalTokens
         auto n3 = layerNorm_(addTensor_(n2, ff2), p + ".norm3.weight", p + ".norm3.bias");
 
         auto bboxDelta = bboxMLP(n3, "model.28.dec_bbox_head." + std::to_string(layer));
+        // Keep n3 (the next layer's target) on the GPU — device copy, no host trip.
+        vk_.recordCopy(targetOwned.buffer, n3.buffer, n3.bytes());
         vk_.endFrame();
 
-        // next target + bbox delta in one device→host round-trip.
-        vk_.readback2(n3.buffer, nextTarget.data(), n3.bytes(),
-                      bboxDelta.buffer, bboxDeltaCpu.data(), bboxDelta.bytes());
-
-        targetCpu = std::move(nextTarget);
+        // Only the bbox delta needs the host (iterative refine is on the CPU).
+        vk_.readback(bboxDelta.buffer, bboxDeltaCpu.data(), bboxDelta.bytes());
         for (uint32_t q = 0; q < numQueries; ++q)
             for (uint32_t c = 0; c < 4; ++c) {
                 size_t i = size_t(q) * 4 + c;
@@ -927,12 +930,11 @@ RtDetrVk::DecoderOut RtDetrVk::decoder_(VkBuffer memoryBuf, uint32_t totalTokens
     }
     dprof.lap("decoder 6 layers");
 
-    // Step 4: final class logits from the last layer's score head.
+    // Step 4: final class logits from the last layer's score head (target on GPU).
     std::vector<float> finalScores(size_t(numQueries) * numClasses);
     {
         vk_.beginFrame();
-        Tensor target = uploadArena_({numQueries, D}, targetCpu.data());
-        auto fs = linear_(target, "model.28.dec_score_head.5.weight", "model.28.dec_score_head.5.bias");
+        auto fs = linear_(targetView, "model.28.dec_score_head.5.weight", "model.28.dec_score_head.5.bias");
         vk_.endFrame();
         vk_.readback(fs.buffer, finalScores.data(), fs.bytes());
     }

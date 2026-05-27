@@ -257,6 +257,20 @@ void VkInfer::recordFill(VkBuffer dst, VkDeviceSize bytes) {
     vkCmdFillBuffer(frameCb_, dst, 0, bytes, 0u);
 }
 
+void VkInfer::recordCopy(VkBuffer dst, VkBuffer src, VkDeviceSize bytes) {
+    if (!recording_) throw std::runtime_error("VkInfer::recordCopy outside beginFrame()/endFrame()");
+    // Make the producing compute writes to src available to the transfer read.
+    VkMemoryBarrier mb{};
+    mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(frameCb_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 1, &mb, 0, nullptr, 0, nullptr);
+    VkBufferCopy region{};
+    region.size = bytes;
+    vkCmdCopyBuffer(frameCb_, src, dst, 1, &region);
+}
+
 void VkInfer::readback2(VkBuffer srcA, void* dstA, VkDeviceSize bytesA,
                         VkBuffer srcB, void* dstB, VkDeviceSize bytesB) {
     VkDeviceSize total = bytesA + bytesB;
