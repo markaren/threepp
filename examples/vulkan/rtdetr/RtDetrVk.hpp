@@ -83,7 +83,12 @@ namespace rtdetr {
         VkInfer vk_;
 
         // One pipeline per op type (reused for every layer of that type).
-        VkPipe convPipe_, conv1x1Pipe_, conv3x3Pipe_, dwConvPipe_, maxPoolPipe_, concatPipe_;
+        VkPipe convPipe_, conv1x1Pipe_, conv3x3Pipe_, im2colPipe_, dwConvPipe_, maxPoolPipe_, concatPipe_;
+        VkTensor im2colScratch_;// persistent [in_c*kArea, out_pitch] column matrix, reused per 3x3
+        // When the scratch grows mid-frame, the old buffer may still be referenced
+        // by already-recorded dispatches — retire (don't free) it until the next
+        // inference, when the frame that used it has completed.
+        std::vector<VkTensor> retiredScratch_;
         VkPipe addPipe_, addSiluPipe_, upsamplePipe_;
         // Phase B: AIFI transformer encoder.
         VkPipe linearPipe_, layerNormPipe_, softmaxPipe_, geluPipe_;

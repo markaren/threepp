@@ -16,6 +16,7 @@
 #include "threepp/renderers/vulkan/shaders/conv2d.comp.rtdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/conv1x1.comp.rtdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/conv3x3.comp.rtdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/im2col.comp.rtdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/dwconv.comp.rtdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/maxpool.comp.rtdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/concat.comp.rtdetr.spv.h"
@@ -110,6 +111,7 @@ RtDetrVk::RtDetrVk(VulkanRenderer& r)
     convPipe_     = vk_.createPipe(kRtConv2dSpv,   sizeof(kRtConv2dSpv),   4, sizeof(ConvParams));
     conv1x1Pipe_  = vk_.createPipe(kRtConv1x1Spv,  sizeof(kRtConv1x1Spv),  4, sizeof(ConvParams));
     conv3x3Pipe_  = vk_.createPipe(kRtConv3x3Spv,  sizeof(kRtConv3x3Spv),  4, sizeof(ConvParams));
+    im2colPipe_   = vk_.createPipe(kRtIm2colSpv,   sizeof(kRtIm2colSpv),   2, sizeof(ConvParams));
     dwConvPipe_   = vk_.createPipe(kRtDwConvSpv,   sizeof(kRtDwConvSpv),   4, sizeof(ConvParams));
     maxPoolPipe_  = vk_.createPipe(kRtMaxPoolSpv,  sizeof(kRtMaxPoolSpv),  2, sizeof(PoolParams));
     concatPipe_   = vk_.createPipe(kRtConcatSpv,   sizeof(kRtConcatSpv),   3, sizeof(ConcatParams));
@@ -137,6 +139,7 @@ RtDetrVk::~RtDetrVk() {
     vk_.destroyPipe(convPipe_);
     vk_.destroyPipe(conv1x1Pipe_);
     vk_.destroyPipe(conv3x3Pipe_);
+    vk_.destroyPipe(im2colPipe_);
     vk_.destroyPipe(dwConvPipe_);
     vk_.destroyPipe(maxPoolPipe_);
     vk_.destroyPipe(concatPipe_);
@@ -281,8 +284,21 @@ Tensor RtDetrVk::conv_(const Tensor& x, const std::string& weightKey, const std:
         // 1x1 s1 == GEMM → register-blocked 64x64-tile kernel.
         vk_.dispatch(conv1x1Pipe_, ssbos, &cp, sizeof(cp), divCeil(totalPos, 64), divCeil(out_c, 64), 1);
     } else if (k_h == 3u && k_w == 3u) {
-        // 3x3 → register-blocked (4 out-channels/thread; workgroup 16x4 → 16 oc).
-        vk_.dispatch(conv3x3Pipe_, ssbos, &cp, sizeof(cp), divCeil(totalPos, 16), divCeil(out_c, 16), 1);
+        // 3x3 → im2col into a reused scratch matrix [in_c*9, totalPos], then the
+        // same register-blocked GEMM. Weights are already [out_c, in_c*9].
+        uint32_t K = in_c * 9u;
+        VkDeviceSize colBytes = VkDeviceSize(K) * totalPos * sizeof(float);
+        if (im2colScratch_.capacity < colBytes) {
+            retiredScratch_.push_back(std::move(im2colScratch_));// keep alive until frame completes
+            im2colScratch_ = vk_.createOwnedRaw(colBytes);
+        }
+        std::vector<VkBuffer> colSsbos = {x.buffer, im2colScratch_.buffer};
+        vk_.dispatch(im2colPipe_, colSsbos, &cp, sizeof(cp), divCeil(totalPos, 16), divCeil(K, 16), 1);
+
+        ConvParams gcp = cp;
+        gcp.in_c = K;// GEMM contraction dim
+        std::vector<VkBuffer> gemmSsbos = {im2colScratch_.buffer, wt.buffer, biasBuf, out.buffer};
+        vk_.dispatch(conv1x1Pipe_, gemmSsbos, &gcp, sizeof(gcp), divCeil(totalPos, 64), divCeil(out_c, 64), 1);
     } else {
         vk_.dispatch(convPipe_, ssbos, &cp, sizeof(cp), divCeil(totalPos, 16), divCeil(out_c, 16), 1);
     }
@@ -489,7 +505,8 @@ Tensor RtDetrVk::linear_(const Tensor& x, const std::string& wKey, const std::st
     Tensor out = vk_.createTensorV({M, N});
     VkBuffer bBuf = hasBias ? weights_.at(bKey).buffer : vk_.dummy();
     std::vector<VkBuffer> ssbos = {x.buffer, wt.buffer, bBuf, out.buffer};
-    vk_.dispatch(linearPipe_, ssbos, &lp, sizeof(lp), divCeil(N, 16), divCeil(M, 16), 1);
+    // register-blocked 64x64-tile GEMM (see linear.comp)
+    vk_.dispatch(linearPipe_, ssbos, &lp, sizeof(lp), divCeil(N, 64), divCeil(M, 64), 1);
     return out;
 }
 
@@ -1028,6 +1045,7 @@ RtDetrVk::ForwardOut RtDetrVk::runForward(const std::vector<float>& chw, bool ca
         throw std::runtime_error("RtDetrVk::runForward: input must be 3*640*640 floats");
 
     Prof prof;
+    retiredScratch_.clear();// prior inference's frames are done — safe to free now
     ForwardOut out;
     std::vector<std::pair<uint32_t, uint32_t>> shapes;
     std::vector<float> encScoresCpu;

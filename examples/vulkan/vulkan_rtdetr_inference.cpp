@@ -156,9 +156,10 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rtdetr::RtDetr
     auto& rgba = img.data<unsigned char>();
     using clk = std::chrono::steady_clock;
 
-    // Warmup, then average a few timed runs for a stable ms / FPS figure.
+    // Warmup (first inference compiles all compute pipelines — ~70 ms cold),
+    // then average a few timed runs for a stable ms / FPS figure.
     std::vector<rtdetr::Detection> detections;
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < 4; ++i) {
         detections = model.infer(rgba.data(), static_cast<int>(img.width), static_cast<int>(img.height));
     }
     constexpr int kRuns = 5;
