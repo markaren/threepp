@@ -2460,8 +2460,15 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         // Draw background texture (scene.background) or environment map as skybox.
         // Only on primary renders (shouldClearColor), not overlay passes.
         if (shouldClearColor && sceneObj) {
+            // The background/skybox is at infinity, so strip the camera
+            // translation: the skybox shaders use normalize(world.xyz/world.w)
+            // as the view ray, which is only the true direction when the camera
+            // sits at the world origin. With the full view matrix, dollying the
+            // camera (zoom) shifts the unprojected point and the envmap slides.
+            Matrix4 viewNoTranslation;
+            viewNoTranslation.copy(viewMatrix).setPosition(0, 0, 0);
             Matrix4 vp;
-            vp.multiplyMatrices(projectionMatrix, viewMatrix);
+            vp.multiplyMatrices(projectionMatrix, viewNoTranslation);
             Matrix4 invVP;
             invVP.copy(vp).invert();
 
