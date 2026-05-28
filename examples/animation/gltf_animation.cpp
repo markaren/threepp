@@ -94,7 +94,7 @@ int main() {
     };
 
     // Keyboard: S = toggle skeleton, Space = next animation
-    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt) {
+    canvas.onKeyPressed([&](KeyEvent evt) {
         if (evt.key == Key::S) {
             skeletonHelper->visible = !skeletonHelper->visible;
         } else if (evt.key == Key::SPACE) {
@@ -102,7 +102,6 @@ int main() {
             crossfadeToNext();
         }
     });
-    canvas.addKeyListener(keyAdapter);
 
     OrbitControls controls{camera, canvas};
     controls.target.set(0, 1, 0);

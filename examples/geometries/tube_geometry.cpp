@@ -91,7 +91,7 @@ int main() {
     BVH bvh2;
     bvh2.build(*tube2->geometry());
 
-    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](const KeyEvent& evt) {
+    canvas.onKeyPressed([&](const KeyEvent& evt) {
         static bool show = boxesGroup->visible;
         if (evt.key == Key::B) {
             show = !show;
@@ -99,8 +99,6 @@ int main() {
         }
     });
     std::cout << "Press 'B' to toggle BVH visibility." << std::endl;
-
-    canvas.addKeyListener(keyAdapter);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();

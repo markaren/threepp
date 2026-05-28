@@ -223,7 +223,7 @@ int main() {
     };
     canvas.setIOCapture(&capture);
 
-    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt) {
+    canvas.onKeyPressed([&](KeyEvent evt) {
         std::optional<size_t> key;
         if (evt.key == Key::NUM_1) {
             key = 0;
@@ -256,7 +256,6 @@ int main() {
             changeFunction(it->first);
         }
     });
-    canvas.addKeyListener(keyAdapter);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
