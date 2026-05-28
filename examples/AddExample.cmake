@@ -83,6 +83,7 @@ function(add_example)
 
     else ()
         target_compile_definitions(${arg_NAME} PRIVATE DATA_FOLDER="${THREEPP_DATA_DIR}")
+        target_compile_definitions(${arg_NAME} PRIVATE PROJECT_FOLDER="${PROJECT_SOURCE_DIR}")
     endif (DEFINED EMSCRIPTEN)
 
 endfunction()
