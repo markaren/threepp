@@ -87,6 +87,12 @@ namespace rfdetr {
         VkPipe unwindowPipe_, lnChwPipe_, chCopyPipe_;
         VkPipe transposeT2tPipe_, qkvSplicePipe_, reluPipe_, offsetPreprocessPipe_, msDeformAttnPipe_;
         VkPipe scaleAddPipe_;
+        VkPipe linearSplitKPipe_, reduceSplitKPipe_;
+
+        // Scratch for split-K partial sums [splitK, M, N], reused across all
+        // split-K linears (serialized by VkInfer's per-dispatch barriers).
+        VkTensor splitKPartials_;
+        bool useSplitK_ = true;// off via env RF_NOSPLITK=1 for A/B baseline
 
         std::unordered_map<std::string, VkTensor> weights_;
         std::vector<float> learnedRefCpu_;// refpoint_embed[:NUM_QUERIES] cached at load

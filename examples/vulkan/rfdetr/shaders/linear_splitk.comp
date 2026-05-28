@@ -1,0 +1,78 @@
+#version 450
+// Split-K partial GEMM. Each workgroup computes a 64x64 output tile over only a
+// K-slice [z*kChunk, min((z+1)*kChunk, K)) and writes its partial sum (NO bias,
+// NO activation) into partials[z*M*N + ...]. reduce_splitk.comp then sums the
+// splitK planes and applies bias + activation.
+//
+// Why: the monolithic GEMM (linear.comp) spawns ceil(M/64)*ceil(N/64) workgroups.
+// For low-N layers (fc2: M=580,N=384 -> 60 workgroups) that can't fill the GPU
+// (~46 SMs), so latency isn't hidden and the op runs at a fraction of peak —
+// despite identical MACs to the fast high-N fc1 (240 workgroups). Partitioning K
+// multiplies the workgroup count by splitK (60 -> 240), restoring occupancy while
+// keeping the full 64x64 tile (so arithmetic intensity is untouched — the gain a
+// narrower-tile occupancy hack throws away). Cost: one cheap reduce pass.
+//
+// Bindings: 0 x[M,K], 1 w[N,K], 2 partials[splitK,M,N].
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint M, N, K, splitK, kChunk, _p0, _p1, _p2;
+} p;
+
+layout(std430, binding = 0) readonly buffer X { float Xb[]; };// [M, K]
+layout(std430, binding = 1) readonly buffer W { float Wb[]; };// [N, K]
+layout(std430, binding = 2)          buffer P { float Pb[]; };// [splitK, M, N]
+
+const uint BM = 64u, BN = 64u, BK = 32u, TM = 4u, TN = 4u;
+shared float As[BK * BM];// As[k*BM + m] = X[bm0+m, k0+k]
+shared float Bs[BK * BN];// Bs[k*BN + n] = W[bn0+n, k0+k]
+
+void main() {
+    uint bm0 = gl_WorkGroupID.y * BM;
+    uint bn0 = gl_WorkGroupID.x * BN;
+    uint sk  = gl_WorkGroupID.z;// which K-slice this workgroup owns
+    uint tr = gl_LocalInvocationID.y, tc = gl_LocalInvocationID.x;
+    uint tid = tr * 16u + tc;
+
+    uint kStart = sk * p.kChunk;
+    uint kEnd   = min(kStart + p.kChunk, p.K);// guards the (possibly short) last slice
+
+    float acc[TM][TN];
+    for (uint i = 0u; i < TM; i++)
+        for (uint j = 0u; j < TN; j++) acc[i][j] = 0.0;
+
+    for (uint k0 = kStart; k0 < kEnd; k0 += BK) {
+        for (uint r = 0u; r < 8u; r++) {// As: BK*BM = 2048 elems, 8 per thread
+            uint idx = tid + r * 256u;
+            uint k = idx / BM, m = idx % BM;
+            uint gm = bm0 + m, gk = k0 + k;
+            As[idx] = (gm < p.M && gk < kEnd) ? Xb[gm * p.K + gk] : 0.0;
+        }
+        for (uint r = 0u; r < 8u; r++) {// Bs: BK*BN = 2048 elems, 8 per thread
+            uint idx = tid + r * 256u;
+            uint k = idx / BN, n = idx % BN;
+            uint gn = bn0 + n, gk = k0 + k;
+            Bs[idx] = (gn < p.N && gk < kEnd) ? Wb[gn * p.K + gk] : 0.0;
+        }
+        barrier();
+        for (uint k = 0u; k < BK; k++) {
+            float aR[TM], bR[TN];
+            for (uint i = 0u; i < TM; i++) aR[i] = As[k * BM + tr * TM + i];
+            for (uint j = 0u; j < TN; j++) bR[j] = Bs[k * BN + tc * TN + j];
+            for (uint i = 0u; i < TM; i++)
+                for (uint j = 0u; j < TN; j++) acc[i][j] += aR[i] * bR[j];
+        }
+        barrier();
+    }
+
+    uint planeBase = sk * p.M * p.N;
+    for (uint i = 0u; i < TM; i++) {
+        uint gm = bm0 + tr * TM + i;
+        if (gm >= p.M) continue;
+        for (uint j = 0u; j < TN; j++) {
+            uint gn = bn0 + tc * TN + j;
+            if (gn >= p.N) continue;
+            Pb[planeBase + gm * p.N + gn] = acc[i][j];
+        }
+    }
+}

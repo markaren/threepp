@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -33,6 +34,8 @@
 #include "threepp/renderers/vulkan/shaders/offset_preprocess.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/msdeformattn.comp.rfdetr.spv.h"
 #include "threepp/renderers/vulkan/shaders/scale_add.comp.rfdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/linear_splitk.comp.rfdetr.spv.h"
+#include "threepp/renderers/vulkan/shaders/reduce_splitk.comp.rfdetr.spv.h"
 
 using threepp::VulkanRenderer;
 
@@ -46,6 +49,8 @@ namespace {
         uint32_t has_bias, activation, _p0, _p1;
     };
     struct LinearParams    { uint32_t M, N, K, hasBias, act, _p0, _p1, _p2; };
+    struct SplitKParams    { uint32_t M, N, K, splitK, kChunk, _p0, _p1, _p2; };
+    struct ReduceParams    { uint32_t M, N, splitK, hasBias, act, _p0, _p1, _p2; };
     struct LNParams        { uint32_t M, D; float eps, _pad; };
     struct SoftmaxParams   { uint32_t M, N, _p0, _p1; };
     struct GeluParams      { uint32_t n, _p0, _p1, _p2; };
@@ -97,6 +102,13 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r)
     offsetPreprocessPipe_ = vk_.createPipe(kRfOffPreSpv,   sizeof(kRfOffPreSpv),    3, sizeof(OffPreParams));
     msDeformAttnPipe_     = vk_.createPipe(kRfMsDeformSpv,  sizeof(kRfMsDeformSpv),  7, sizeof(MsDeformParams));
     scaleAddPipe_         = vk_.createPipe(kRfScaleAddSpv,  sizeof(kRfScaleAddSpv),  4, sizeof(LayerScaleParams));
+    linearSplitKPipe_     = vk_.createPipe(kRfLinearSplitKSpv, sizeof(kRfLinearSplitKSpv), 3, sizeof(SplitKParams));
+    reduceSplitKPipe_     = vk_.createPipe(kRfReduceSplitKSpv, sizeof(kRfReduceSplitKSpv), 3, sizeof(ReduceParams));
+
+    // Partial-sum scratch sized for the largest split-K linear we route (splitK<=4,
+    // M<=640, N<=512). One buffer reused across calls; barriers serialize access.
+    splitKPartials_ = vk_.createOwnedRaw(VkDeviceSize(4) * 640 * 512 * sizeof(float));
+    useSplitK_ = std::getenv("RF_NOSPLITK") == nullptr;
 }
 
 RfDetrVk::~RfDetrVk() {
@@ -125,6 +137,8 @@ RfDetrVk::~RfDetrVk() {
     vk_.destroyPipe(offsetPreprocessPipe_);
     vk_.destroyPipe(msDeformAttnPipe_);
     vk_.destroyPipe(scaleAddPipe_);
+    vk_.destroyPipe(linearSplitKPipe_);
+    vk_.destroyPipe(reduceSplitKPipe_);
 }
 
 void RfDetrVk::loadWeights(const std::string& path) {
@@ -223,9 +237,28 @@ Tensor RfDetrVk::linear_(const Tensor& x, const std::string& wKey, const std::st
     uint32_t N = wt.shape[0], K = wt.shape[1];
     uint32_t M = x.numel() / K;
     bool hasBias = !bKey.empty() && weights_.count(bKey);
-    LinearParams lp{M, N, K, hasBias ? 1u : 0u, act, 0u, 0u, 0u};
     Tensor out = vk_.createTensorV({M, N});
     VkBuffer biasBuf = hasBias ? weights_.at(bKey).buffer : vk_.dummy();
+
+    // Split-K for low-N GEMMs (fc2, attention out-proj, ...). The monolithic GEMM
+    // makes ceil(M/64)*ceil(N/64) workgroups; at N<=512 that's too few to fill the
+    // GPU, so the op is occupancy-bound (fc2 runs far slower than fc1 despite equal
+    // MACs — only the workgroup count differs). Partition K into `splitK` planes to
+    // multiply the workgroup count, then reduce. Guarded so the partials fit scratch.
+    const uint32_t splitK = 4u;
+    const uint32_t kChunk = divCeil(K, splitK);
+    if (useSplitK_ && N <= 512u && K >= 256u && M >= 256u &&
+        static_cast<uint64_t>(splitK) * M * N <= static_cast<uint64_t>(640) * 512 * 4) {
+        SplitKParams sp{M, N, K, splitK, kChunk, 0u, 0u, 0u};
+        std::vector<VkBuffer> pssbos = {x.buffer, wt.buffer, splitKPartials_.buffer};
+        vk_.dispatch(linearSplitKPipe_, pssbos, &sp, sizeof(sp), divCeil(N, 64), divCeil(M, 64), splitK);
+        ReduceParams rp{M, N, splitK, hasBias ? 1u : 0u, act, 0u, 0u, 0u};
+        std::vector<VkBuffer> rssbos = {splitKPartials_.buffer, biasBuf, out.buffer};
+        vk_.dispatch(reduceSplitKPipe_, rssbos, &rp, sizeof(rp), divCeil(M * N, 256u), 1, 1);
+        return out;
+    }
+
+    LinearParams lp{M, N, K, hasBias ? 1u : 0u, act, 0u, 0u, 0u};
     std::vector<VkBuffer> ssbos = {x.buffer, wt.buffer, biasBuf, out.buffer};
     vk_.dispatch(linearPipe_, ssbos, &lp, sizeof(lp), divCeil(N, 64), divCeil(M, 64), 1);// BN=64, BM=64
     return out;

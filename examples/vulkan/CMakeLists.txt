@@ -126,5 +126,8 @@ if (THREEPP_WITH_INFERENCE)
         compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/msdeformattn.comp"         kRfMsDeformSpv  _rf23 VARIANT_SUFFIX rfdetr)
         # Fused DINOv2 residual (LayerScale + add).
         compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/scale_add.comp"            kRfScaleAddSpv  _rf24 VARIANT_SUFFIX rfdetr)
+        # Split-K GEMM (partial accumulation + reduction) for low-N occupancy-bound linears.
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/linear_splitk.comp"        kRfLinearSplitKSpv _rf25 VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/reduce_splitk.comp"        kRfReduceSplitKSpv _rf26 VARIANT_SUFFIX rfdetr)
     endif ()
 endif ()
