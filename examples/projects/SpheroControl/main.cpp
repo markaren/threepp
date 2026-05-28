@@ -82,8 +82,7 @@ int main() {
     auto cameraHelper = CameraHelper::create(spheroCamera);
     scene.add(cameraHelper);
 
-    SpheroKeyController keyController(sphero);
-    canvas.addKeyListener(keyController);
+    SpheroKeyController keyController(sphero, canvas);
     std::cout << "Press 'r' to change driving mode. " << std::endl;
 
     OrbitControls controls(camera, canvas);

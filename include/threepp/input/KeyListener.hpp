@@ -42,15 +42,15 @@ namespace threepp {
             : mode_(mode), f_(std::move(f)) {}
 
         void onKeyPressed(KeyEvent evt) override {
-            if (mode_ == 1 || mode_ == 3 || mode_ == 5) f_(evt);
+            if (mode_ & KEY_PRESSED) f_(evt);
         }
 
         void onKeyReleased(KeyEvent evt) override {
-            if (mode_ == 2 || mode_ == 3 || mode_ == 6) f_(evt);
+            if (mode_ & KEY_RELEASED) f_(evt);
         }
 
         void onKeyRepeat(KeyEvent evt) override {
-            if (mode_ == 4 || mode_ == 5 || mode_ == 6) f_(evt);
+            if (mode_ & KEY_REPEAT) f_(evt);
         }
 
     private:

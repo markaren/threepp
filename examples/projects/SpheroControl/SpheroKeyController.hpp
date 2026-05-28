@@ -3,120 +3,58 @@
 #define SPHEROSIM_KEYCONTROLLER_HPP
 
 #include "Sphero.hpp"
-#include "threepp/input/KeyListener.hpp"
+#include "threepp/input/PeripheralsEventSource.hpp"
 
 #include <cmath>
 
-class SpheroKeyController : public threepp::KeyListener {
+// Drive/steer keys are polled each frame via isKeyDown (no manual press/release
+// state). The one edge action — R toggles raw mode — is an owning onKeyPressed
+// callback, so this is no longer a KeyListener subclass.
+class SpheroKeyController {
 
 public:
-    explicit SpheroKeyController(Sphero &sphero)
-        : sphero_(&sphero) {}
+    SpheroKeyController(Sphero& sphero, threepp::PeripheralsEventSource& input)
+        : sphero_(&sphero), input_(&input) {
+        input.onKeyPressed([this](threepp::KeyEvent evt) {
+            if (evt.key == threepp::Key::R) raw_ = !raw_;
+        });
+    }
 
     void update() {
+        using threepp::Key;
 
         if (raw_) {
-
-            keyState_.heading = static_cast<uint16_t>(std::round(normalizeRotation(sphero_->rotation.y * threepp::math::RAD2DEG)));
-            sphero_->driveRaw(rawKeyState_.left, 255, rawKeyState_.right, 255);
-
-        } else {
-
-            if (rotating.first) {
-                if (keyState_.heading == 360) {
-                    keyState_.heading = 1;
-                } else {
-                    keyState_.heading += 1;
-                }
-            }
-
-            if (rotating.second) {
-                if (keyState_.heading == 0) {
-                    keyState_.heading = 359;
-                } else {
-                    keyState_.heading -= 1;
-                }
-            }
-
-            sphero_->driveWithHeading(keyState_.speed, keyState_.heading, keyState_.flags);
-        }
-    }
-
-    void onKeyPressed(threepp::KeyEvent evt) override {
-
-        if (evt.key == threepp::Key::R) {
-            raw_ = !raw_;
+            const uint8_t left = input_->isKeyDown(Key::W) ? 0x01 : input_->isKeyDown(Key::S) ? 0x02
+                                                                                              : 0x00;
+            const uint8_t right = input_->isKeyDown(Key::UP) ? 0x01 : input_->isKeyDown(Key::DOWN) ? 0x02
+                                                                                                  : 0x00;
+            heading_ = static_cast<uint16_t>(std::round(normalizeRotation(sphero_->rotation.y * threepp::math::RAD2DEG)));
+            sphero_->driveRaw(left, 255, right, 255);
+            return;
         }
 
-        if (raw_) {
-            if (evt.key == threepp::Key::W) {
-                rawKeyState_.left = 0x01;
-            } else if (evt.key == threepp::Key::S) {
-                rawKeyState_.left = 0x02;
-            } else if (evt.key == threepp::Key::UP) {
-                rawKeyState_.right = 0x1;
-            } else if (evt.key == threepp::Key::DOWN) {
-                rawKeyState_.right = 0x02;
-            }
-        } else {
-            if (evt.key == threepp::Key::W) {
-                keyState_.speed = 255;
-                keyState_.flags.clearFlag(Sphero::Flags::DriveReverse);
-            } else if (evt.key == threepp::Key::S) {
-                keyState_.speed = 255;
-                keyState_.flags.setFlag(Sphero::Flags::DriveReverse);
-            } else if (evt.key == threepp::Key::A) {
-                rotating.first = true;
-            } else if (evt.key == threepp::Key::D) {
-                rotating.second = true;
-            } else if (evt.key == threepp::Key::SPACE) {
-                keyState_.flags.setFlag(Sphero::Flags::Boost);
-            }
-        }
-    }
+        if (input_->isKeyDown(Key::A)) heading_ = (heading_ == 360) ? 1 : heading_ + 1;
+        if (input_->isKeyDown(Key::D)) heading_ = (heading_ == 0) ? 359 : heading_ - 1;
 
-    void onKeyReleased(threepp::KeyEvent evt) override {
-        if (raw_) {
-            if (evt.key == threepp::Key::W) {
-                rawKeyState_.left = 0x0;
-            } else if (evt.key == threepp::Key::S) {
-                rawKeyState_.left = 0x0;
-            } else if (evt.key == threepp::Key::UP) {
-                rawKeyState_.right = 0x0;
-            } else if (evt.key == threepp::Key::DOWN) {
-                rawKeyState_.right = 0x0;
-            }
-        } else {
-            if (evt.key == threepp::Key::W) {
-                keyState_.speed = 0;
-            } else if (evt.key == threepp::Key::S) {
-                keyState_.speed = 0;
-            } else if (evt.key == threepp::Key::A) {
-                rotating.first = false;
-            } else if (evt.key == threepp::Key::D) {
-                rotating.second = false;
-            } else if (evt.key == threepp::Key::SPACE) {
-                keyState_.flags.clearFlag(Sphero::Flags::Boost);
-            }
+        Sphero::Flags flags;
+        uint8_t speed = 0;
+        if (input_->isKeyDown(Key::W)) {
+            speed = 255;
+            flags.clearFlag(Sphero::Flags::DriveReverse);
+        } else if (input_->isKeyDown(Key::S)) {
+            speed = 255;
+            flags.setFlag(Sphero::Flags::DriveReverse);
         }
+        if (input_->isKeyDown(Key::SPACE)) flags.setFlag(Sphero::Flags::Boost);
+
+        sphero_->driveWithHeading(speed, heading_, flags);
     }
 
 private:
-    struct RawKeyState {
-        uint8_t left = 0x0;
-        uint8_t right = 0x0;
-    } rawKeyState_;
-
-    struct KeyState {
-        uint16_t heading{0};
-        uint8_t speed{0};
-        Sphero::Flags flags;
-    } keyState_;
-
-
-    Sphero *sphero_;
+    Sphero* sphero_;
+    threepp::PeripheralsEventSource* input_;
     bool raw_{false};
-    std::pair<bool, bool> rotating{false, false};
+    uint16_t heading_{0};
 
     static float normalizeRotation(float rotation) {
         while (rotation < 0) {

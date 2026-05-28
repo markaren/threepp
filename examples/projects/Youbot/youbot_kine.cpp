@@ -5,7 +5,6 @@
 #include "kine/Kine.hpp"
 #include "kine/ik/CCDSolver.hpp"
 
-#include "KeyController.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/objects/TextSprite.hpp"
 
@@ -116,7 +115,6 @@ int main() {
     scene->add(textHandle);
 
     Youbot* youbot = nullptr;
-    std::unique_ptr<KeyController> keyController;
     auto youbotGroup = loadAsync([path = std::string(DATA_FOLDER) + "/models/collada/youbot.dae"]() -> std::shared_ptr<Group> {
         auto y = Youbot::create(path);
         auto wrapper = Group::create();
@@ -136,8 +134,6 @@ int main() {
             youbot->add(targetHelper);
             youbot->add(endEffectorHelper);
             endEffectorHelper->visible = true;
-            keyController = std::make_unique<KeyController>(*youbot);
-            canvas.addKeyListener(*keyController);
             textHandle->setText("Use WASD keys to steer robot");
             textHandle->setVerticalAlignment(TextSprite::VerticalAlignment::Above);
             textHandle->setHorizontalAlignment(TextSprite::HorizontalAlignment::Left);
@@ -208,7 +204,12 @@ int main() {
             }
 
             youbot->setJointValues(ui.values);
-            keyController->update(dt);
+
+            // WASD steering — poll held keys directly (no listener class, no manual state).
+            if (canvas.isKeyDown(Key::W)) youbot->driveForwards(dt);
+            if (canvas.isKeyDown(Key::S)) youbot->driveBackwards(dt);
+            if (canvas.isKeyDown(Key::D)) youbot->driveRight(dt);
+            if (canvas.isKeyDown(Key::A)) youbot->driveLeft(dt);
         }
     });
 }
