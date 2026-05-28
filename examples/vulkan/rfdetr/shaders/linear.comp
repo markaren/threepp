@@ -1,0 +1,81 @@
+#version 450
+// Linear / GEMM  Y[M,N] = X[M,K] · W[N,K]^T + b[N]  (W stored row-major [N,K]).
+// Register-blocked tiled SGEMM: 64x64 output tile, 16x16 threads each computing a
+// 4x4 micro-tile (16 outputs). BK=32 (vs 16) halves the K-loop barrier count,
+// which helps the K-heavy MLP fc2 (K=1536) where few workgroups can't hide the
+// per-k-tile barrier latency.
+// Bindings: 0 x[M,K], 1 w[N,K], 2 b[N], 3 y[M,N].
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint M, N, K, hasBias;
+    uint act, _p0, _p1, _p2;// act: 0 = none, 1 = GELU (erf form)
+} p;
+
+layout(std430, binding = 0) readonly buffer X { float Xb[]; };// [M, K]
+layout(std430, binding = 1) readonly buffer W { float Wb[]; };// [N, K]
+layout(std430, binding = 2) readonly buffer B { float bias[]; };
+layout(std430, binding = 3)          buffer Y { float Yb[]; };// [M, N]
+
+float erf_approx(float z) {
+    float s = z < 0.0 ? -1.0 : 1.0;
+    float a = abs(z);
+    float t = 1.0 / (1.0 + 0.3275911 * a);
+    float poly = (((( 1.061405429 * t - 1.453152027) * t + 1.421413741) * t
+                    - 0.284496736) * t + 0.254829592) * t;
+    return s * (1.0 - poly * exp(-a * a));
+}
+
+const uint BM = 64u, BN = 64u, BK = 32u, TM = 4u, TN = 4u;
+shared float As[BK * BM];// As[k*BM + m] = X[bm0+m, k0+k]   (2048)
+shared float Bs[BK * BN];// Bs[k*BN + n] = W[bn0+n, k0+k]   (2048)
+
+void main() {
+    uint bm0 = gl_WorkGroupID.y * BM;
+    uint bn0 = gl_WorkGroupID.x * BN;
+    uint tr = gl_LocalInvocationID.y, tc = gl_LocalInvocationID.x;
+    uint tid = tr * 16u + tc;
+
+    float acc[TM][TN];
+    for (uint i = 0u; i < TM; i++)
+        for (uint j = 0u; j < TN; j++) acc[i][j] = 0.0;
+
+    uint numK = (p.K + BK - 1u) / BK;
+    for (uint kt = 0u; kt < numK; kt++) {
+        uint k0 = kt * BK;
+        for (uint r = 0u; r < 8u; r++) {// As: BK*BM = 2048 elems, 8 per thread
+            uint idx = tid + r * 256u;
+            uint k = idx / BM, m = idx % BM;
+            uint gm = bm0 + m, gk = k0 + k;
+            As[idx] = (gm < p.M && gk < p.K) ? Xb[gm * p.K + gk] : 0.0;
+        }
+        for (uint r = 0u; r < 8u; r++) {// Bs: BK*BN = 2048 elems, 8 per thread
+            uint idx = tid + r * 256u;
+            uint k = idx / BN, n = idx % BN;
+            uint gn = bn0 + n, gk = k0 + k;
+            Bs[idx] = (gn < p.N && gk < p.K) ? Wb[gn * p.K + gk] : 0.0;
+        }
+        barrier();
+        for (uint k = 0u; k < BK; k++) {
+            float aR[TM], bR[TN];
+            for (uint i = 0u; i < TM; i++) aR[i] = As[k * BM + tr * TM + i];
+            for (uint j = 0u; j < TN; j++) bR[j] = Bs[k * BN + tc * TN + j];
+            for (uint i = 0u; i < TM; i++)
+                for (uint j = 0u; j < TN; j++) acc[i][j] += aR[i] * bR[j];
+        }
+        barrier();
+    }
+
+    for (uint i = 0u; i < TM; i++) {
+        uint gm = bm0 + tr * TM + i;
+        if (gm >= p.M) continue;
+        for (uint j = 0u; j < TN; j++) {
+            uint gn = bn0 + tc * TN + j;
+            if (gn >= p.N) continue;
+            float v = acc[i][j];
+            if (p.hasBias != 0u) v += bias[gn];
+            if (p.act == 1u) v = 0.5 * v * (1.0 + erf_approx(v * 0.7071067811865475));
+            Yb[gm * p.N + gn] = v;
+        }
+    }
+}

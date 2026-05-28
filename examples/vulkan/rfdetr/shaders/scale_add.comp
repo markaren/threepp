@@ -1,0 +1,21 @@
+#version 450
+// Fused DINOv2 residual branch: out[t,c] = residual[t,c] + branch[t,c] * gamma[c].
+// Folds LayerScale (per-channel scale) into the residual add, saving one full
+// read+write of the [M,C] activation. Bindings: 0 residual, 1 branch, 2 gamma, 3 out.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint M, C, _p0, _p1;
+} p;
+
+layout(std430, binding = 0) readonly buffer R     { float r[]; };
+layout(std430, binding = 1) readonly buffer B     { float b[]; };
+layout(std430, binding = 2) readonly buffer Gamma { float gamma[]; };
+layout(std430, binding = 3)          buffer O     { float o[]; };
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    uint total = p.M * p.C;
+    if (i >= total) return;
+    o[i] = r[i] + b[i] * gamma[i % p.C];
+}

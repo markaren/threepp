@@ -1,0 +1,40 @@
+#version 450
+// im2col for 3x3 (general k) conv: gather input [in_c, in_h, in_w] into a column
+// matrix Col[in_c*kArea, out_pitch] so the conv becomes a plain GEMM
+//   out[out_c, out_pitch] = W[out_c, in_c*kArea] · Col[in_c*kArea, out_pitch]
+// run by the register-blocked conv1x1 (GEMM) kernel. Weights are already stored
+// [out_c, in_c, kH, kW] = [out_c, in_c*kArea], so no weight transform is needed.
+// Bindings: 0 input, 1 col. Params via push constant (k_h/k_w/stride/pad used).
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint in_c, out_c, in_h, in_w;
+    uint out_h, out_w, k_h, k_w;
+    uint stride_h, stride_w, pad_h, pad_w;
+    uint has_bias, activation, _p0, _p1;
+} p;
+
+layout(std430, binding = 0) readonly buffer Inp { float inp[]; };// [in_c, in_h, in_w]
+layout(std430, binding = 1)          buffer Col { float col[]; };// [in_c*kArea, out_pitch]
+
+void main() {
+    uint pos = gl_GlobalInvocationID.x;// output spatial position
+    uint k   = gl_GlobalInvocationID.y;// row in the column matrix: ic*kArea + tap
+    uint out_pitch = p.out_h * p.out_w;
+    uint kArea = p.k_h * p.k_w;
+    uint K = p.in_c * kArea;
+    if (pos >= out_pitch || k >= K) return;
+
+    uint ic  = k / kArea;
+    uint tap = k % kArea;
+    uint ky  = tap / p.k_w;
+    uint kx  = tap % p.k_w;
+    uint oy = pos / p.out_w, ox = pos % p.out_w;
+    int iy = int(oy * p.stride_h + ky) - int(p.pad_h);
+    int ix = int(ox * p.stride_w + kx) - int(p.pad_w);
+
+    float v = 0.0;
+    if (iy >= 0 && iy < int(p.in_h) && ix >= 0 && ix < int(p.in_w))
+        v = inp[ic * p.in_h * p.in_w + uint(iy) * p.in_w + uint(ix)];
+    col[k * out_pitch + pos] = v;
+}

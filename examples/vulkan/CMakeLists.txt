@@ -84,4 +84,47 @@ if (THREEPP_WITH_INFERENCE)
         compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/offset_preprocess.comp" kRtOffPreSpv  _rh18 VARIANT_SUFFIX rtdetr)
         compile_vulkan_shader(vulkan_rtdetr_inference "${_rt_sh}/msdeformattn.comp"     kRtMsDeformSpv _rh19 VARIANT_SUFFIX rtdetr)
     endif ()
+
+    add_example(NAME "vulkan_rfdetr_inference"
+            SOURCES vulkan_rfdetr_inference.cpp
+            rfdetr/RfDetrVk.cpp
+            rfdetr/VkInfer.cpp
+            rfdetr/WeightLoader.cpp)
+
+    if (TARGET vulkan_rfdetr_inference)
+        target_include_directories(vulkan_rfdetr_inference PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        target_link_libraries(vulkan_rfdetr_inference PRIVATE Vulkan::Vulkan)
+
+        # VARIANT_SUFFIX=rfdetr — distinct generated headers from the rtdetr set.
+        set(_rf_sh "${CMAKE_CURRENT_SOURCE_DIR}/rfdetr/shaders")
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/conv2d.comp"     kRfConv2dSpv     _rf0  VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/conv1x1.comp"    kRfConv1x1Spv    _rf1  VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/conv3x3.comp"    kRfConv3x3Spv    _rf2  VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/im2col.comp"     kRfIm2colSpv     _rf3  VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/linear.comp"     kRfLinearSpv     _rf4  VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/layernorm.comp"  kRfLayerNormSpv  _rf5  VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/softmax.comp"    kRfSoftmaxSpv    _rf6  VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/gelu.comp"       kRfGeluSpv       _rf7  VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/layerscale.comp" kRfLayerScaleSpv _rf8  VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/attn_scores.comp" kRfAttnScoresSpv _rf9 VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/attn_apply.comp" kRfAttnApplySpv  _rf10 VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/add.comp"        kRfAddSpv        _rf11 VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/concat.comp"     kRfConcatSpv     _rf12 VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/build_embeddings.comp" kRfBuildEmbedSpv _rf13 VARIANT_SUFFIX rfdetr)
+        # Batched separate-Q/K/V ViT attention (DINOv2 backbone).
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/attn_vit_scores.comp" kRfAttnVitScoresSpv _rf14 VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/attn_vit_apply.comp"  kRfAttnVitApplySpv  _rf15 VARIANT_SUFFIX rfdetr)
+        # C2f projector: de-window taps, channel-wise LayerNorm (+SiLU), channel slice/concat.
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/unwindow.comp"      kRfUnwindowSpv  _rf16 VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/layernorm_chw.comp" kRfLnChwSpv     _rf17 VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/chcopy.comp"        kRfChCopySpv    _rf18 VARIANT_SUFFIX rfdetr)
+        # Two-stage deformable decoder.
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/transpose_chw2tokens.comp" kRfT2tSpv       _rf19 VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/qkv_splice.comp"           kRfQkvSpliceSpv _rf20 VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/relu.comp"                 kRfReluSpv      _rf21 VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/offset_preprocess.comp"    kRfOffPreSpv    _rf22 VARIANT_SUFFIX rfdetr)
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/msdeformattn.comp"         kRfMsDeformSpv  _rf23 VARIANT_SUFFIX rfdetr)
+        # Fused DINOv2 residual (LayerScale + add).
+        compile_vulkan_shader(vulkan_rfdetr_inference "${_rf_sh}/scale_add.comp"            kRfScaleAddSpv  _rf24 VARIANT_SUFFIX rfdetr)
+    endif ()
 endif ()

@@ -1,0 +1,33 @@
+#version 450
+// LayerNorm along the last axis. One thread per row (M rows of width D).
+// Bindings: 0 x, 1 gamma, 2 beta, 3 y. Params via push constant.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint M, D;
+    float eps, _pad;
+} p;
+
+layout(std430, binding = 0) readonly buffer X     { float x[]; };
+layout(std430, binding = 1) readonly buffer Gamma { float gamma[]; };
+layout(std430, binding = 2) readonly buffer Beta  { float beta[]; };
+layout(std430, binding = 3)          buffer Y     { float y[]; };
+
+void main() {
+    uint m = gl_GlobalInvocationID.x;
+    if (m >= p.M) return;
+    uint base = m * p.D;
+
+    float sum = 0.0;
+    for (uint k = 0u; k < p.D; k++) sum += x[base + k];
+    float mean = sum / float(p.D);
+
+    float sqsum = 0.0;
+    for (uint k = 0u; k < p.D; k++) {
+        float d = x[base + k] - mean;
+        sqsum += d * d;
+    }
+    float inv = inversesqrt(sqsum / float(p.D) + p.eps);
+    for (uint k = 0u; k < p.D; k++)
+        y[base + k] = (x[base + k] - mean) * inv * gamma[k] + beta[k];
+}

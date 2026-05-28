@@ -1,0 +1,31 @@
+#version 450
+// Batched multi-head attention scores from a FUSED qkv buffer (DINOv2 ViT style).
+// qkv is [M, 3D] (M = B*T tokens, D = H*d) laid out [Q(D) | K(D) | V(D)] per token.
+// Computes B independent T x T attentions (B = num windows, T = tokens/window;
+// global layers use B=1, T=M). out[b,h,i,j] = scale * dot(Q[b,i,h], K[b,j,h]).
+// Bindings: 0 qkv, 1 out[B,H,T,T].
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint T, H, d, B;
+    float scale;
+    uint _p0, _p1, _p2;
+} p;
+
+layout(std430, binding = 0) readonly buffer Qkv { float qkv[]; };// [M, 3D]
+layout(std430, binding = 1)          buffer Out { float outp[]; };
+
+void main() {
+    uint j = gl_GlobalInvocationID.x;
+    uint i = gl_GlobalInvocationID.y;
+    uint z = gl_GlobalInvocationID.z;// b*H + h
+    uint h = z % p.H, b = z / p.H;
+    if (i >= p.T || j >= p.T || b >= p.B) return;
+
+    uint D = p.H * p.d, S = 3u * D;
+    uint qBase = (b * p.T + i) * S + 0u * D + h * p.d;
+    uint kBase = (b * p.T + j) * S + 1u * D + h * p.d;
+    float acc = 0.0;
+    for (uint e = 0u; e < p.d; e++) acc += qkv[qBase + e] * qkv[kBase + e];
+    outp[((b * p.H + h) * p.T + i) * p.T + j] = acc * p.scale;
+}
