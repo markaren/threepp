@@ -101,6 +101,10 @@ namespace rfdetr {
         uint64_t splitKPartialFloats_ = 0;// capacity of splitKPartials_ in floats
         bool useSplitK_ = true;// off via env RF_NOSPLITK=1 for A/B baseline
 
+        // Deformable-attention spatial_shapes [grid,grid] + level_start [0], constant
+        // for the single-scale P4 decoder — uploaded once (ctor), not per layer.
+        VkTensor msShapeBuf_, msStartBuf_;
+
         std::unordered_map<std::string, VkTensor> weights_;
         std::vector<float> learnedRefCpu_;// refpoint_embed[:NUM_QUERIES] cached at load
 

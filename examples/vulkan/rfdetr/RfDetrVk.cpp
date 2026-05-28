@@ -125,6 +125,16 @@ RfDetrVk::RfDetrVk(VulkanRenderer& r, RfDetrVariant variant)
     splitKPartialFloats_ = uint64_t(4) * uint64_t(cfg_.maxTokens()) * 512ull;
     splitKPartials_ = vk_.createOwnedRaw(VkDeviceSize(splitKPartialFloats_) * sizeof(float));
     useSplitK_ = std::getenv("RF_NOSPLITK") == nullptr;
+
+    // Deformable-attention spatial_shapes [grid,grid] + level_start [0] are constant
+    // for the single-scale P4 decoder — upload once here instead of twice per layer.
+    const uint32_t g = cfg_.grid();
+    const uint32_t shapeInit[2] = {g, g};
+    const uint32_t startInit = 0u;
+    msShapeBuf_ = vk_.createOwnedRaw(sizeof(shapeInit));
+    vk_.upload(msShapeBuf_.buffer, shapeInit, sizeof(shapeInit));
+    msStartBuf_ = vk_.createOwnedRaw(sizeof(startInit));
+    vk_.upload(msStartBuf_.buffer, &startInit, sizeof(startInit));
 }
 
 RfDetrVk::~RfDetrVk() {
@@ -524,15 +534,12 @@ Tensor RfDetrVk::msDeformAttn_(const Tensor& value, uint32_t H, uint32_t W,
     uint32_t d = D / numHeads;
     uint32_t Nq = refPtsXy.shape[0];
     uint32_t L = 1u, P = cfg_.decPoints;
-    std::vector<uint32_t> shapesBuf = {H, W};
-    Tensor shapeGpu = vk_.createRaw(2 * sizeof(uint32_t));
-    vk_.upload(shapeGpu.buffer, shapesBuf.data(), 2 * sizeof(uint32_t));
-    uint32_t zero = 0u;
-    Tensor startGpu = vk_.createRaw(sizeof(uint32_t));
-    vk_.upload(startGpu.buffer, &zero, sizeof(uint32_t));
+    // spatial_shapes [H,W] + level_start [0] are constant (single-scale P4, H==W==grid)
+    // and preuploaded into msShapeBuf_/msStartBuf_ in the ctor — no per-layer upload.
+    (void) H; (void) W;
     MsDeformParams mp{Nq, numHeads, d, L, P, 0u, 0u, 0u};
     Tensor out = vk_.createTensorV({Nq, D});
-    std::vector<VkBuffer> ssbos = {value.buffer, shapeGpu.buffer, startGpu.buffer,
+    std::vector<VkBuffer> ssbos = {value.buffer, msShapeBuf_.buffer, msStartBuf_.buffer,
                                    refPtsXy.buffer, offsets.buffer, attnW.buffer, out.buffer};
     vk_.dispatch(msDeformAttnPipe_, ssbos, &mp, sizeof(mp), divCeil(d, 8), divCeil(Nq, 8), numHeads);
     return out;
@@ -617,12 +624,19 @@ void RfDetrVk::decoder_(const Tensor& memory, uint32_t gridH, uint32_t gridW, Fo
     std::vector<float> bboxDeltaCpu(size_t(Nq) * 4);
     {
         vk_.beginFrame();
-        Tensor qsineT = uploadArena_({Nq, 512u}, qsine.data());
-        Tensor refT   = uploadArena_({Nq, 4u}, refCpu.data());
-        Tensor refXyT = uploadArena_({Nq, 2u}, refXyCpu.data());
+        // Batch the four per-inference decoder inputs into one submit (was 4 separate
+        // upload() drains mid-frame).
+        Tensor qsineT = vk_.createTensorV({Nq, 512u});
+        Tensor refT   = vk_.createTensorV({Nq, 4u});
+        Tensor refXyT = vk_.createTensorV({Nq, 2u});
         std::vector<uint32_t> lvl = {gridH, gridW};
         Tensor lvlT = vk_.createRaw(2 * sizeof(uint32_t));
-        vk_.upload(lvlT.buffer, lvl.data(), 2 * sizeof(uint32_t));
+        vk_.uploadMany({
+                {qsineT.buffer, qsine.data(), qsineT.bytes()},
+                {refT.buffer, refCpu.data(), refT.bytes()},
+                {refXyT.buffer, refXyCpu.data(), refXyT.bytes()},
+                {lvlT.buffer, lvl.data(), VkDeviceSize(2 * sizeof(uint32_t))},
+        });
 
         Tensor qp = relu_(linear_(qsineT, "transformer.decoder.ref_point_head.layers.0.weight",
                                           "transformer.decoder.ref_point_head.layers.0.bias"));

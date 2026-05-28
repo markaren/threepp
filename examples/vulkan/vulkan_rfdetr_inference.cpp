@@ -148,9 +148,16 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rfdetr::RfDetr
     using clk = std::chrono::steady_clock;
 
     std::vector<rfdetr::Detection> dets;
-    for (int i = 0; i < 3; ++i)// warmup (first inference compiles all pipelines)
-        dets = model.infer(rgba.data(), int(img.width), int(img.height), 0.5f);
-    constexpr int kRuns = 5;
+    // Sustained warmup: short bursty runs leave the GPU idle-clocked (~1/3 of boost),
+    // which understates throughput and makes comparisons (esp. vs PyTorch, which boosts
+    // during its 50-iter loop) unfair. Drive load ~2s so the boost clock settles, then
+    // time enough runs to stay boosted throughout.
+    {
+        auto wt0 = clk::now();
+        do { dets = model.infer(rgba.data(), int(img.width), int(img.height), 0.5f); }
+        while (std::chrono::duration<double>(clk::now() - wt0).count() < 2.0);
+    }
+    constexpr int kRuns = 50;
     double total = 0.0;
     for (int i = 0; i < kRuns; ++i) {
         auto t0 = clk::now();

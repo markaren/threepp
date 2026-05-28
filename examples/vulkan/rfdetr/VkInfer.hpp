@@ -99,6 +99,13 @@ namespace rfdetr {
         uint32_t pushBytes = 0;
     };
 
+    /// One host->device copy for uploadMany (batches N uploads into a single submit).
+    struct UploadItem {
+        VkBuffer dst = VK_NULL_HANDLE;
+        const void* data = nullptr;
+        VkDeviceSize bytes = 0;
+    };
+
     class VkInfer {
     public:
         VkInfer(VkDevice device, VkPhysicalDevice phys, VkQueue queue, uint32_t queueFamily);
@@ -119,6 +126,9 @@ namespace rfdetr {
 
         // ── data movement (one-shot submit+wait; safe any time) ────────────
         void upload(VkBuffer dst, const void* data, VkDeviceSize bytes);
+        // N host->device copies in a single submit+wait (one staging pack, one round-trip)
+        // — collapses what would be N separate upload() drains into one.
+        void uploadMany(const std::vector<UploadItem>& items);
         void readback(VkBuffer src, void* dst, VkDeviceSize bytes);
         // Two device->host copies in a single submit (one GPU round-trip).
         void readback2(VkBuffer srcA, void* dstA, VkDeviceSize bytesA,

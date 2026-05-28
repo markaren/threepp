@@ -206,6 +206,35 @@ void VkInfer::upload(VkBuffer dst, const void* data, VkDeviceSize bytes) {
     });
 }
 
+void VkInfer::uploadMany(const std::vector<UploadItem>& items) {
+    VkDeviceSize total = 0;
+    for (const auto& it : items) total += it.bytes;
+    if (total == 0) return;
+    ensureUploadStaging(total);
+
+    // Pack every source contiguously into the staging buffer, then issue one
+    // copy per item from its slice — all in a single submit+wait.
+    void* mapped = nullptr;
+    vkCheck(vkMapMemory(device_, uploadStaging_.memory, 0, total, 0, &mapped), "map staging (uploadMany)");
+    std::vector<VkDeviceSize> offsets(items.size());
+    VkDeviceSize off = 0;
+    for (size_t i = 0; i < items.size(); ++i) {
+        offsets[i] = off;
+        std::memcpy(static_cast<char*>(mapped) + off, items[i].data, items[i].bytes);
+        off += items[i].bytes;
+    }
+    vkUnmapMemory(device_, uploadStaging_.memory);
+
+    oneShot([&](VkCommandBuffer cb) {
+        for (size_t i = 0; i < items.size(); ++i) {
+            VkBufferCopy region{};
+            region.srcOffset = offsets[i];
+            region.size = items[i].bytes;
+            vkCmdCopyBuffer(cb, uploadStaging_.buffer, items[i].dst, 1, &region);
+        }
+    });
+}
+
 void VkInfer::ensureUploadStaging(VkDeviceSize bytes) {
     if (uploadStaging_.buffer && uploadStaging_.capacity >= bytes) return;
     uploadStaging_ = allocBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
