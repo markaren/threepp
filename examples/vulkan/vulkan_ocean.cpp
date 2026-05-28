@@ -522,7 +522,7 @@ int main() {
     lidarSensor->params.mediumAnisotropy = 0.85f;
     lidarSensor->params.mediumSurfaceY   = 0.f;
     scene.add(*lidarSensor);
-    bool lidarEnabled = true;
+    bool lidarEnabled = false;
     bool lidarShowPanel = true;
 
     // Live stats reflected in the UI panel.
@@ -691,65 +691,66 @@ int main() {
             ImGui::TextDisabled("Camera above water.");
 
         ImGui::Separator();
-        ImGui::TextUnformatted("LIDAR mast (OS0-128, path-traced)");
-        ImGui::Checkbox("Enable LIDAR",    &lidarEnabled);
-        ImGui::SameLine();
-        ImGui::Checkbox("Range panel",     &lidarShowPanel);
-        ImGui::SliderFloat("Max range (m)##lidar",      &lidarSensor->params.maxRange, 10.f, 250.f);
-        ImGui::SliderFloat("Reference range (m)##lidar",&lidarSensor->params.referenceRange, 1.f, 80.f);
-        ImGui::SliderFloat("Laser power##lidar",        &lidarSensor->params.laserPower, 0.1f, 10.f);
-        ImGui::SliderFloat("Atmospheric ext##lidar",    &lidarSensor->params.atmosphericExtinction, 0.f, 0.05f, "%.4f");
-        ImGui::SliderFloat("Detector thresh##lidar",    &lidarSensor->params.detectorThreshold, 0.f, 0.02f, "%.4f");
-        {
-            // Multi-return through the water surface: maxReturns=2 lets the
-            // sensor see the seafloor below the wave crests where the
-            // surface Fresnel return doesn't fully attenuate the beam.
-            int maxRet = static_cast<int>(lidarSensor->params.maxReturns);
-            if (ImGui::SliderInt("Max returns##lidar", &maxRet, 1, 4))
-                lidarSensor->params.maxReturns = static_cast<uint32_t>(std::max(1, maxRet));
-        }
-        {
-            // Monte Carlo samples per beam: jitters direction within the
-            // beam-divergence cone and uses a fresh RNG stream per sample
-            // for the fog scatter. >1 averages volumetric noise and shows
-            // the beam's true angular footprint.
-            int samples = static_cast<int>(lidarSensor->params.samplesPerBeam);
-            if (ImGui::SliderInt("Samples / beam##lidar", &samples, 1, 8))
-                lidarSensor->params.samplesPerBeam = static_cast<uint32_t>(std::max(1, samples));
-        }
-        ImGui::SliderFloat("Beam divergence (mrad)##lidar",
-                           &lidarSensor->params.beamDivergenceMrad, 0.f, 10.f, "%.2f");
-        ImGui::TextDisabled("Water column (dedicated LIDAR medium)");
-        ImGui::SliderFloat("Extinction (1/m)##wat",
-                           &lidarSensor->params.mediumExtinction, 0.f, 1.f, "%.3f");
-        ImGui::SliderFloat("Albedo##wat",
-                           &lidarSensor->params.mediumAlbedo, 0.f, 1.f, "%.2f");
-        ImGui::SliderFloat("Anisotropy g##wat",
-                           &lidarSensor->params.mediumAnisotropy, -0.95f, 0.95f, "%.2f");
-        ImGui::Text("Returns: %d / %u beams   Scan: %.2f ms",
-                    lidarLastReturns,
-                    lidarSensor->beamCount(),
-                    static_cast<double>(lidarLastScanMs));
+        if (ImGui::CollapsingHeader("LIDAR mast (OS0-128, path-traced)")) {
+            ImGui::Checkbox("Enable LIDAR",    &lidarEnabled);
+            ImGui::SameLine();
+            ImGui::Checkbox("Range panel",     &lidarShowPanel);
+            ImGui::SliderFloat("Max range (m)##lidar",      &lidarSensor->params.maxRange, 10.f, 250.f);
+            ImGui::SliderFloat("Reference range (m)##lidar",&lidarSensor->params.referenceRange, 1.f, 80.f);
+            ImGui::SliderFloat("Laser power##lidar",        &lidarSensor->params.laserPower, 0.1f, 10.f);
+            ImGui::SliderFloat("Atmospheric ext##lidar",    &lidarSensor->params.atmosphericExtinction, 0.f, 0.05f, "%.4f");
+            ImGui::SliderFloat("Detector thresh##lidar",    &lidarSensor->params.detectorThreshold, 0.f, 0.02f, "%.4f");
+            {
+                // Multi-return through the water surface: maxReturns=2 lets the
+                // sensor see the seafloor below the wave crests where the
+                // surface Fresnel return doesn't fully attenuate the beam.
+                int maxRet = static_cast<int>(lidarSensor->params.maxReturns);
+                if (ImGui::SliderInt("Max returns##lidar", &maxRet, 1, 4))
+                    lidarSensor->params.maxReturns = static_cast<uint32_t>(std::max(1, maxRet));
+            }
+            {
+                // Monte Carlo samples per beam: jitters direction within the
+                // beam-divergence cone and uses a fresh RNG stream per sample
+                // for the fog scatter. >1 averages volumetric noise and shows
+                // the beam's true angular footprint.
+                int samples = static_cast<int>(lidarSensor->params.samplesPerBeam);
+                if (ImGui::SliderInt("Samples / beam##lidar", &samples, 1, 8))
+                    lidarSensor->params.samplesPerBeam = static_cast<uint32_t>(std::max(1, samples));
+            }
+            ImGui::SliderFloat("Beam divergence (mrad)##lidar",
+                               &lidarSensor->params.beamDivergenceMrad, 0.f, 10.f, "%.2f");
+            ImGui::TextDisabled("Water column (dedicated LIDAR medium)");
+            ImGui::SliderFloat("Extinction (1/m)##wat",
+                               &lidarSensor->params.mediumExtinction, 0.f, 1.f, "%.3f");
+            ImGui::SliderFloat("Albedo##wat",
+                               &lidarSensor->params.mediumAlbedo, 0.f, 1.f, "%.2f");
+            ImGui::SliderFloat("Anisotropy g##wat",
+                               &lidarSensor->params.mediumAnisotropy, -0.95f, 0.95f, "%.2f");
+            ImGui::Text("Returns: %d / %u beams   Scan: %.2f ms",
+                        lidarLastReturns,
+                        lidarSensor->beamCount(),
+                        static_cast<double>(lidarLastScanMs));
 
-        ImGui::Separator();
-        ImGui::Checkbox("Show ToF waveform", &lidarShowWave);
-        if (lidarShowWave) {
-            ImGui::SliderFloat("Pulse FWHM (m)##lidar", &lidarWavParams.pulseFWHM, 0.1f, 5.f, "%.2f");
-            const int maxBeam = std::max(0, static_cast<int>(lidarSensor->beamCount()) - 1);
-            ImGui::SliderInt("Beam##wave", &lidarWaveBeamIdx, 0, maxBeam);
-            // Plot the selected beam's analog waveform.
-            const size_t bins = lidarWavParams.bins;
-            if (!lidarWaveform.empty()) {
-                const size_t off = static_cast<size_t>(lidarWaveBeamIdx) * bins;
-                if (off + bins <= lidarWaveform.size()) {
-                    ImGui::PlotLines("Intensity",
-                                     &lidarWaveform[off],
-                                     static_cast<int>(bins),
-                                     0,
-                                     nullptr,
-                                     0.f, 1.f,
-                                     ImVec2(0, 80));
-                    ImGui::TextDisabled("X = distance 0 .. %.1f m", static_cast<double>(lidarWavParams.maxRange));
+            ImGui::Separator();
+            ImGui::Checkbox("Show ToF waveform", &lidarShowWave);
+            if (lidarShowWave) {
+                ImGui::SliderFloat("Pulse FWHM (m)##lidar", &lidarWavParams.pulseFWHM, 0.1f, 5.f, "%.2f");
+                const int maxBeam = std::max(0, static_cast<int>(lidarSensor->beamCount()) - 1);
+                ImGui::SliderInt("Beam##wave", &lidarWaveBeamIdx, 0, maxBeam);
+                // Plot the selected beam's analog waveform.
+                const size_t bins = lidarWavParams.bins;
+                if (!lidarWaveform.empty()) {
+                    const size_t off = static_cast<size_t>(lidarWaveBeamIdx) * bins;
+                    if (off + bins <= lidarWaveform.size()) {
+                        ImGui::PlotLines("Intensity",
+                                         &lidarWaveform[off],
+                                         static_cast<int>(bins),
+                                         0,
+                                         nullptr,
+                                         0.f, 1.f,
+                                         ImVec2(0, 80));
+                        ImGui::TextDisabled("X = distance 0 .. %.1f m", static_cast<double>(lidarWavParams.maxRange));
+                    }
                 }
             }
         }
