@@ -297,6 +297,21 @@ namespace threepp {
         void setRestirGIEnabled(bool enabled);
         [[nodiscard]] bool restirGIEnabled() const;
 
+        // NVIDIA Shader Execution Reordering (SER) opt-out. SER warp-reorders
+        // path-tracer threads by hit material before the closest-hit
+        // invocation — a 10-30% speed-up on incoherent diffuse bounces on
+        // supported hardware (Ada / Ampere). On by default wherever the driver
+        // advertises VK_NV_ray_tracing_invocation_reorder. Pass false to force
+        // the plain-traceRayEXT fallback raygen (A/B perf comparison, or to
+        // sidestep a driver-specific SER issue). No-op on unsupported devices
+        // (already on the fallback) and while ReSTIR GI is on (SER is
+        // auto-disabled there). Zero-cost flip: both raygen variants are
+        // pre-built, so this only selects which one runs — no pipeline rebuild,
+        // and the rendered result is unchanged. serEnabled() returns the user
+        // preference, not whether SER is actually active.
+        void setSerEnabled(bool enabled);
+        [[nodiscard]] bool serEnabled() const;
+
         // Hybrid-mode raster overlay: post-TAA, draws wireframe-flagged
         // meshes (any material with `wireframe = true`) and Line/LineSegments
         // objects on top of the path-traced image, depth-tested against the

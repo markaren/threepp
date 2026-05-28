@@ -1268,13 +1268,20 @@ namespace threepp {
         // 1c spatial) provide the actual variance reduction. Forwarded to
         // chit via pc.motionFlags bit 6 each frame.
         bool restirGIEnabled_ = false;
+        // User opt-out for SER (setSerEnabled). Default true; when false the
+        // path tracer runs the plain-traceRayEXT fallback raygen even on
+        // SER-capable hardware. Folded into shouldUseSerRaygen() below so the
+        // flip just selects the already-built fallback variant — no rebuild.
+        bool serEnabled_ = true;
         // SER helps the GI-off case but *hurts* the GI-on case because
         // ReSTIR GI Stage 2's recursive sub-trace inside the chit undoes
         // the warp-reorder coherence the raygen reorderThreadNV bought us.
         // Both pipelines are pre-built (see rtVariants_); activeRtVariant()
-        // picks each frame based on this gate.
+        // picks each frame based on this gate — which also folds in the
+        // user opt-out (serEnabled_) and driver support.
         bool shouldUseSerRaygen() const {
-            return ctx->rayTracingInvocationReorderSupported() && !restirGIEnabled_;
+            return serEnabled_ && ctx->rayTracingInvocationReorderSupported()
+                   && !restirGIEnabled_;
         }
         // Hybrid raster overlay: layer index for opt-in overlay objects
         // (alongside auto-detected wireframe materials + Line/LineSegments).
@@ -13607,6 +13614,19 @@ namespace threepp {
 
     bool VulkanRenderer::restirGIEnabled() const {
         return pimpl_->restirGIEnabled_;
+    }
+
+    void VulkanRenderer::setSerEnabled(bool enabled) {
+        // Pure flag flip — shouldUseSerRaygen() folds this in and
+        // activeRtVariant() picks the matching pre-built raygen each frame
+        // (same mechanism as setRestirGIEnabled; no pipeline rebuild). SER is
+        // a performance-only optimization, so the image is unchanged and no
+        // accumulation reset is needed.
+        pimpl_->serEnabled_ = enabled;
+    }
+
+    bool VulkanRenderer::serEnabled() const {
+        return pimpl_->serEnabled_;
     }
 
     VulkanRenderer::FrameTimings VulkanRenderer::lastFrameTimings() const {
