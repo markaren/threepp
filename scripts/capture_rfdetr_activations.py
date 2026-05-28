@@ -1,29 +1,46 @@
-"""Capture RF-DETR-Nano intermediate activations for strict C++ validation.
+"""Capture RF-DETR intermediate activations for strict C++ validation.
 Seeded deterministic input (raw floats, no normalization — the C++ side uploads
-the same bytes). Saves to rfdetr_nano_ref.bin in the 'YOLO' format.
+the same bytes). Saves to rfdetr_<variant>_ref.bin in the 'YOLO' format.
 
-Validation checkpoints (normal NCHW / token layout, i.e. not windowed):
+    python scripts/capture_rfdetr_activations.py                   # -> rfdetr_nano_ref.bin
+    python scripts/capture_rfdetr_activations.py --variant medium  # -> rfdetr_medium_ref.bin
+
+Input resolution is the variant's native size (nano 384 / small 512 / medium 576);
+the backbone (dinov2_windowed_small, no register tokens) and hook points are the
+same across variants — only the token count and decoder depth change.
+
+Validation checkpoints (normal NCHW / token layout, i.e. not windowed), e.g. nano:
     input          [3, 384, 384]
     proj.P4        projector output  [256, 24, 24]   (validates patch-embed + 12
                                                        windowed ViT layers + taps)
     pred_logits    [300, 90]         final class logits
     pred_boxes     [300, 4]          final boxes (cx,cy,w,h, normalized)
 """
+import argparse
 import struct
 from pathlib import Path
 
 import torch
-from rfdetr import RFDETRNano
+from rfdetr import RFDETRNano, RFDETRSmall, RFDETRMedium
+
+# class + native input resolution (from rfdetr/config.py); must match the C++ RfDetrConfig.
+VARIANTS = {'nano': (RFDETRNano, 384), 'small': (RFDETRSmall, 512), 'medium': (RFDETRMedium, 576)}
 
 
 def main():
-    out_path = Path(__file__).with_name('rfdetr_nano_ref.bin')
-    det = RFDETRNano()
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--variant', choices=list(VARIANTS), default='nano')
+    args = ap.parse_args()
+
+    cls, res = VARIANTS[args.variant]
+    out_path = Path(__file__).with_name(f'rfdetr_{args.variant}_ref.bin')
+    det = cls()
     net = det.model.model
     net.eval()
 
     torch.manual_seed(42)
-    x = torch.randn(1, 3, 384, 384)
+    x = torch.randn(1, 3, res, res)
 
     acts = {}
     hooks = []
@@ -96,7 +113,7 @@ def main():
             print(f"  {name:<14s} {tuple(arr.shape)}  mean {arr.mean():+.4f}  std {arr.std():.4f}")
         f.seek(8)
         f.write(struct.pack('<I', n))
-    print(f"\nWrote {n} activations -> {out_path.name}")
+    print(f"\n[{args.variant}] Wrote {n} activations -> {out_path.name}")
 
 
 if __name__ == '__main__':

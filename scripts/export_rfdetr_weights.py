@@ -1,22 +1,32 @@
-"""Export RF-DETR-Nano weights to the 'YOLO' binary format used by the threepp
+"""Export RF-DETR weights to the 'YOLO' binary format used by the threepp
 Vulkan inference examples (same format as export_rtdetr_weights.py).
 
-    python scripts/export_rfdetr_weights.py   # -> rfdetr-nano.weights
+    python scripts/export_rfdetr_weights.py                   # -> rfdetr-nano.weights
+    python scripts/export_rfdetr_weights.py --variant medium  # -> rfdetr-medium.weights
 
 LWDETR state_dict is dumped verbatim (fp32). The C++ side folds nothing here —
 RF-DETR's norms are LayerNorm (folded at runtime in the shaders), not Conv+BN,
-so weights are uploaded as-is.
+so weights are uploaded as-is. Variant must match the RfDetrVariant passed C++-side
+(the loader asserts dec_layers agree).
 """
+import argparse
 import struct
 from pathlib import Path
 
 import torch
-from rfdetr import RFDETRNano
+from rfdetr import RFDETRNano, RFDETRSmall, RFDETRMedium
+
+VARIANTS = {'nano': RFDETRNano, 'small': RFDETRSmall, 'medium': RFDETRMedium}
 
 
 def main():
-    out_path = Path(__file__).with_name('rfdetr-nano.weights')
-    det = RFDETRNano()
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--variant', choices=list(VARIANTS), default='nano')
+    args = ap.parse_args()
+
+    out_path = Path(__file__).with_name(f'rfdetr-{args.variant}.weights')
+    det = VARIANTS[args.variant]()
     net = det.model.model  # LWDETR nn.Module
     net.eval()
     sd = net.state_dict()
@@ -40,7 +50,7 @@ def main():
         f.write(struct.pack('<I', n))
 
     size_mb = out_path.stat().st_size / (1024 * 1024)
-    print(f"Wrote {n} tensors -> {out_path.name}  ({size_mb:.1f} MB)")
+    print(f"[{args.variant}] Wrote {n} tensors -> {out_path.name}  ({size_mb:.1f} MB)")
 
 
 if __name__ == '__main__':

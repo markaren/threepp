@@ -17,6 +17,26 @@ namespace rfdetr {
         float x1, y1, x2, y2;
     };
 
+    enum class RfDetrVariant { Nano, Small, Medium };
+
+    /// Per-variant architecture config. Nano/Small/Medium share the
+    /// dinov2_windowed_small backbone (384-d, 6 heads, 12 layers) and a single-scale
+    /// P4 projector; they differ only in input resolution and decoder depth.
+    /// forVariant() pins the numbers from the rfdetr package (rfdetr/config.py).
+    struct RfDetrConfig {
+        int resolution = 384, patch = 16;
+        int embedDim = 384, numLayers = 12, numHeads = 6, numWindows = 2;
+        int hiddenDim = 256, numQueries = 300, decLayers = 2;
+        int saHeads = 8, caHeads = 16, decPoints = 2, dimFF = 2048, numClasses = 91;
+        std::array<int, 4> tapLayers{2, 5, 8, 11};
+
+        [[nodiscard]] uint32_t grid() const { return uint32_t(resolution / patch); }
+        [[nodiscard]] uint32_t tokensPerWindow() const { uint32_t s = grid() / uint32_t(numWindows); return s * s + 1u; }
+        [[nodiscard]] uint32_t maxTokens() const { return uint32_t(numWindows * numWindows) * tokensPerWindow(); }
+
+        static RfDetrConfig forVariant(RfDetrVariant v);
+    };
+
     /// RF-DETR-Nano object detector on the Vulkan compute pipeline. Port of the
     /// LWDETR / DINOv2-windowed-ViT model (rfdetr package). Same VkInfer harness
     /// and most shaders as the RT-DETR port; the new piece is the windowed ViT
@@ -29,23 +49,8 @@ namespace rfdetr {
     /// the captured proj.0 reference.
     class RfDetrVk {
     public:
-        static constexpr int   RESOLUTION = 384;
-        static constexpr int   PATCH      = 16;
-        static constexpr int   GRID       = RESOLUTION / PATCH;// 24
-        static constexpr int   EMBED_DIM  = 384;
-        static constexpr int   NUM_LAYERS = 12;
-        static constexpr int   NUM_WINDOWS = 2;
-        static constexpr int   NUM_HEADS  = 6;// DINOv2 ViT-S
-        static constexpr int   NUM_CLASSES = 91;
-        static constexpr int   HIDDEN_DIM = 256;
-        static constexpr int   NUM_QUERIES = 300;
-        static constexpr int   DEC_LAYERS = 2;// RF-DETR-Nano overrides dec_layers=2
-        static constexpr int   SA_HEADS   = 8; // decoder self-attention
-        static constexpr int   CA_HEADS   = 16;// decoder cross-attention (deformable)
-        static constexpr int   DEC_POINTS = 2;
-        static constexpr int   DIM_FF     = 2048;
-
-        explicit RfDetrVk(threepp::VulkanRenderer& renderer);
+        explicit RfDetrVk(threepp::VulkanRenderer& renderer,
+                          RfDetrVariant variant = RfDetrVariant::Nano);
         ~RfDetrVk();
         RfDetrVk(const RfDetrVk&) = delete;
         RfDetrVk& operator=(const RfDetrVk&) = delete;
@@ -79,6 +84,7 @@ namespace rfdetr {
 
     private:
         VkInfer vk_;
+        RfDetrConfig cfg_;
         VkPipe convPipe_, conv1x1Pipe_, conv3x3Pipe_, im2colPipe_;
         VkPipe linearPipe_, layerNormPipe_, softmaxPipe_, geluPipe_, layerScalePipe_;
         VkPipe attnScoresPipe_, attnApplyPipe_, addPipe_, concatPipe_;
@@ -92,6 +98,7 @@ namespace rfdetr {
         // Scratch for split-K partial sums [splitK, M, N], reused across all
         // split-K linears (serialized by VkInfer's per-dispatch barriers).
         VkTensor splitKPartials_;
+        uint64_t splitKPartialFloats_ = 0;// capacity of splitKPartials_ in floats
         bool useSplitK_ = true;// off via env RF_NOSPLITK=1 for A/B baseline
 
         std::unordered_map<std::string, VkTensor> weights_;

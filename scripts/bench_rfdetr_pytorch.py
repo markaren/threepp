@@ -48,6 +48,7 @@ def timed(fn, runs: int, warmup: int, cuda: bool) -> float:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", default=find_default_image())
+    ap.add_argument("--variant", choices=("nano", "small", "medium"), default="nano")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--runs", type=int, default=50)
     ap.add_argument("--warmup", type=int, default=10)
@@ -61,11 +62,14 @@ def main() -> None:
     if cuda and not torch.cuda.is_available():
         print("CUDA requested but unavailable; falling back to CPU.")
         dev, cuda = "cpu", False
+    if cuda:
+        torch.backends.cudnn.benchmark = True  # autotune conv algos (fair-baseline protocol)
 
-    print(f"Loading RFDETRNano (downloads pretrained weights on first run)...")
-    from rfdetr import RFDETRNano
-    det = RFDETRNano()
-    R = det.model_config.resolution  # 384
+    from rfdetr import RFDETRNano, RFDETRSmall, RFDETRMedium
+    variants = {"nano": RFDETRNano, "small": RFDETRSmall, "medium": RFDETRMedium}
+    print(f"Loading RF-DETR-{args.variant} (downloads pretrained weights on first run)...")
+    det = variants[args.variant]()
+    R = det.model_config.resolution
     module = det.model.model.eval().to(dev)
 
     if cuda:
@@ -184,7 +188,7 @@ def main() -> None:
     except Exception as e:  # noqa: BLE001
         print(f"detections failed ({type(e).__name__}: {e})")
 
-    print("\n=== summary (RTX 4070, 384x384, fp32 unless noted) ===")
+    print(f"\n=== summary (RTX 4070, {R}x{R}, fp32 unless noted) ===")
     cell = lambda v: f"{v:6.1f}" if v else f"{'-':>6s}"  # noqa: E731
     fps = lambda v: f"{1000.0 / v:5.1f}" if v else f"{'-':>5s}"  # noqa: E731
     hdr = f"  {'config':22s} {'fwd ms':>7s} {'lean-e2e ms':>12s} {'lean FPS':>9s} {'predict() ms':>13s}"

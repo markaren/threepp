@@ -198,10 +198,27 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rfdetr::RfDetr
 
 int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
+
+    // Optional --variant nano|small|medium (default nano), stripped from args so
+    // the positional <image>/<weights> handling below is unchanged.
+    auto variant = rfdetr::RfDetrVariant::Nano;
+    for (size_t i = 0; i + 1 < args.size();) {
+        if (args[i] == "--variant") {
+            const std::string& v = args[i + 1];
+            if (v == "nano") variant = rfdetr::RfDetrVariant::Nano;
+            else if (v == "small") variant = rfdetr::RfDetrVariant::Small;
+            else if (v == "medium") variant = rfdetr::RfDetrVariant::Medium;
+            else { std::cerr << "Unknown --variant '" << v << "' (nano|small|medium)\n"; return 1; }
+            args.erase(args.begin() + i, args.begin() + i + 2);
+        } else {
+            ++i;
+        }
+    }
+
     const bool validate = !args.empty() && args[0] == "--validate";
     if ((validate && args.size() < 3) || (!validate && args.size() < 2)) {
-        std::cerr << "Usage: " << argv[0] << " <image> <weights>\n"
-                  << "   or: " << argv[0] << " --validate <weights> <ref.bin>\n";
+        std::cerr << "Usage: " << argv[0] << " [--variant nano|small|medium] <image> <weights>\n"
+                  << "   or: " << argv[0] << " [--variant nano|small|medium] --validate <weights> <ref.bin>\n";
         return 1;
     }
 
@@ -212,7 +229,7 @@ int main(int argc, char** argv) {
     renderer.setClearColor(Color(0x1a1a2e));
 
     try {
-        rfdetr::RfDetrVk model(renderer);
+        rfdetr::RfDetrVk model(renderer, variant);
         if (validate)
             return runValidation(model, args[1], args[2]);
         return runDetection(canvas, renderer, model, args[0], args[1]);
