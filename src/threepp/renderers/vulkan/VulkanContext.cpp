@@ -72,8 +72,8 @@ namespace threepp::vulkan {
 
     }// namespace
 
-    VulkanContext::VulkanContext(GLFWwindow* window, bool enableRayTracing)
-        : window_(window) {
+    VulkanContext::VulkanContext(GLFWwindow* window, bool enableRayTracing, bool vsync)
+        : window_(window), vsync_(vsync) {
 
 #ifndef NDEBUG
         const bool enableValidation = hasInstanceLayer(kValidationLayer);
@@ -466,13 +466,27 @@ namespace threepp::vulkan {
         vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface_, &pmN, nullptr);
         std::vector<VkPresentModeKHR> presentModes(pmN);
         vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface_, &pmN, presentModes.data());
-        VkPresentModeKHR chosenMode = VK_PRESENT_MODE_FIFO_KHR;// guaranteed
-        for (auto m : presentModes) {
-            if (m == VK_PRESENT_MODE_MAILBOX_KHR) {
-                chosenMode = m;
-                break;
+        // Honor the canvas vsync flag. vsync (default) -> FIFO: present blocks on
+        // the display refresh, capping the render loop to the monitor rate instead
+        // of spinning the GPU at 100% (matches the WGPU backend, and avoids starving
+        // co-resident compute such as on-device inference). vsync off -> prefer
+        // MAILBOX (uncapped, no tearing) then IMMEDIATE, for lowest latency / fastest
+        // progressive path-tracer convergence.
+        VkPresentModeKHR chosenMode = VK_PRESENT_MODE_FIFO_KHR;// guaranteed; vsync-capped
+        if (!vsync_) {
+            bool hasMailbox = false, hasImmediate = false;
+            for (auto m : presentModes) {
+                if (m == VK_PRESENT_MODE_MAILBOX_KHR) hasMailbox = true;
+                if (m == VK_PRESENT_MODE_IMMEDIATE_KHR) hasImmediate = true;
             }
+            if (hasMailbox) chosenMode = VK_PRESENT_MODE_MAILBOX_KHR;
+            else if (hasImmediate) chosenMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
         }
+        std::cout << "[VulkanContext] present mode: "
+                  << (chosenMode == VK_PRESENT_MODE_FIFO_KHR      ? "FIFO (vsync)"
+                      : chosenMode == VK_PRESENT_MODE_MAILBOX_KHR ? "MAILBOX"
+                                                                  : "IMMEDIATE")
+                  << "\n";
 
         VkExtent2D extent = caps.currentExtent;
         if (extent.width == UINT32_MAX) {

@@ -28,7 +28,7 @@ namespace threepp::vulkan {
     class VulkanContext {
 
     public:
-        explicit VulkanContext(GLFWwindow* window, bool enableRayTracing);
+        explicit VulkanContext(GLFWwindow* window, bool enableRayTracing, bool vsync = true);
         ~VulkanContext();
 
         VulkanContext(const VulkanContext&) = delete;
@@ -120,6 +120,7 @@ namespace threepp::vulkan {
         std::vector<VkImage>     swapchainImages_;
         std::vector<VkImageView> swapchainImageViews_;
 
+        bool vsync_ = true;// FIFO when true, else MAILBOX/IMMEDIATE (see createSwapchain)
         bool rayTracingEnabled_ = false;
         bool rayTracingInvocationReorderSupported_ = false;
         VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtPipelineProperties_{};

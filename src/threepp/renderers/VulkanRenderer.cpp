@@ -1386,7 +1386,8 @@ namespace threepp {
         explicit Impl(Canvas& c) : canvas(c), size(c.size()) {
             ctx = std::make_unique<VulkanContext>(
                     static_cast<GLFWwindow*>(canvas.windowPtr()),
-                    /*enableRayTracing*/ true);
+                    /*enableRayTracing*/ true,
+                    /*vsync*/ canvas.vsync());
 
             // The scene-dependent AS build runs lazily on the first render()
             // call. Everything below is scene-independent and safe at ctor time.
