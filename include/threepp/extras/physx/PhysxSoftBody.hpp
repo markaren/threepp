@@ -28,6 +28,21 @@
 #include <extensions/PxRemeshingExt.h>
 #include <extensions/PxTetMakerExt.h>
 
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+#ifdef _WIN32
+// <GL/gl.h> (pulled in by cudaGL.h) needs the Win32 WINGDIAPI/APIENTRY macros from
+// windows.h. NOMINMAX keeps windows.h from clobbering the std::min/std::max used below.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+#include <cudaGL.h>// CUDA driver-API GL interop (pulls in cuda.h + GL/gl.h)
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cfloat>
@@ -300,6 +315,13 @@ namespace threepp {
         SoftBody& operator=(const SoftBody&) = delete;
 
         ~SoftBody() {
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+            if (cudaTexResource_) {
+                ::physx::PxScopedCudaLock _lock(*cuda_);
+                cuGraphicsUnregisterResource(cudaTexResource_);
+                cudaTexResource_ = nullptr;
+            }
+#endif
             if (positionsInvMass_) {
                 PX_EXT_PINNED_MEMORY_FREE(*cuda_, positionsInvMass_);
                 positionsInvMass_ = nullptr;
@@ -462,6 +484,29 @@ namespace threepp {
             gpuSkin_ = true;
         }
 
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+        // CUDA-GL interop: after the renderer has uploaded tetTex_ (so a GL texture
+        // id exists), the example calls registerGlTexture() once. Thereafter the
+        // deformed tet positions are copied device->device straight into the texture
+        // in syncSoftBodies — no GPU->CPU->GPU round-trip and no host position readback.
+        [[nodiscard]] bool needsInteropRegister() const { return gpuSkin_ && !interopRegistered_ && !interopTried_; }
+        [[nodiscard]] Texture* interopTexture() const { return tetTex_.get(); }
+
+        void registerGlTexture(unsigned int glTexId) {
+            if (interopRegistered_ || interopTried_ || !gpuSkin_ || glTexId == 0) return;
+            interopTried_ = true;// attempt once; on failure stay on the CPU bridge (no per-frame retry)
+            ::physx::PxScopedCudaLock _lock(*cuda_);
+            const CUresult res = cuGraphicsGLRegisterImage(
+                    &cudaTexResource_, glTexId, GL_TEXTURE_2D,
+                    CU_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD);
+            if (res != CUDA_SUCCESS) {
+                cudaTexResource_ = nullptr;// stay on the CPU bridge
+                return;
+            }
+            interopRegistered_ = true;
+        }
+#endif
+
     private:
         ::physx::PxDeformableVolume* volume_;
         ::physx::PxCudaContextManager* cuda_;
@@ -476,7 +521,69 @@ namespace threepp {
         bool gpuSkin_ = false;
         std::shared_ptr<DataTexture> tetTex_;
         int tetTexSize_ = 0;
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+        CUgraphicsResource cudaTexResource_ = nullptr;
+        bool interopRegistered_ = false;
+        bool interopTried_ = false;
+#endif
         friend class PhysxWorld;
+
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+        // GPU-skin interop: copy the deformed collision-tet positions device->device
+        // straight into the registered GL texture's CUDA array. The resource is mapped
+        // in a single batch by syncSoftBodies (map/unmap are heavyweight GL<->CUDA sync
+        // points, so per-body mapping is an anti-pattern). The PhysX position buffer is
+        // PxVec4 (== one RGBA32F texel) laid out row-major, exactly matching the
+        // texture, and the shader only reads .xyz.
+        void copyToMappedArray(CUstream stream) {
+            using namespace ::physx;
+            if (!interopRegistered_) return;
+            CUarray array = nullptr;
+            cuGraphicsSubResourceGetMappedArray(&array, cudaTexResource_, 0, 0);
+
+            const auto src = reinterpret_cast<CUdeviceptr>(volume_->getPositionInvMassBufferD());
+            const unsigned int rowTexels = static_cast<unsigned int>(tetTexSize_);
+            const unsigned int fullRows = nbCollVerts_ / rowTexels;
+            const unsigned int rem = nbCollVerts_ % rowTexels;
+
+            if (fullRows > 0) {
+                CUDA_MEMCPY2D cp{};
+                cp.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+                cp.srcDevice = src;
+                cp.srcPitch = rowTexels * sizeof(PxVec4);
+                cp.dstMemoryType = CU_MEMORYTYPE_ARRAY;
+                cp.dstArray = array;
+                cp.WidthInBytes = rowTexels * sizeof(PxVec4);
+                cp.Height = fullRows;
+                cuMemcpy2DAsync(&cp, stream);
+            }
+            if (rem > 0) {
+                CUDA_MEMCPY2D cp{};
+                cp.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+                cp.srcDevice = src + static_cast<size_t>(fullRows) * rowTexels * sizeof(PxVec4);
+                cp.srcPitch = rem * sizeof(PxVec4);
+                cp.dstMemoryType = CU_MEMORYTYPE_ARRAY;
+                cp.dstArray = array;
+                cp.dstY = fullRows;
+                cp.WidthInBytes = rem * sizeof(PxVec4);
+                cp.Height = 1;
+                cuMemcpy2DAsync(&cp, stream);
+            }
+        }
+
+        // GPU-skin interop: bounds from PhysX's world AABB (no host position copy).
+        void updateBoundsFromWorld() {
+            using namespace ::physx;
+            const PxBounds3 b = volume_->getWorldBounds(1.0f);
+            if (b.isEmpty()) return;
+            const Vector3 mn(b.minimum.x, b.minimum.y, b.minimum.z);
+            const Vector3 mx(b.maximum.x, b.maximum.y, b.maximum.z);
+            Vector3 c;
+            c.addVectors(mn, mx).multiplyScalar(0.5f);
+            visualGeometry_->boundingBox = Box3(mn, mx);
+            visualGeometry_->boundingSphere = Sphere(c, c.distanceTo(mx));
+        }
+#endif
 
         // GPU-skin: copy the (just-pulled) tet positions into the texture, flag for re-upload.
         void uploadTetTexture() {
@@ -897,15 +1004,51 @@ namespace threepp {
         {
             // Batch GPU->CPU copies on a dedicated stream, then sync once.
             PxScopedCudaLock _lock(*cuda_);
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+            // Map every interop texture in ONE call. map/unmap are heavyweight
+            // GL<->CUDA sync points; per-body mapping was the regression.
+            std::vector<CUgraphicsResource> interopRes;
+            interopRes.reserve(softBodies_.size());
             for (auto& sb : softBodies_) {
+                if (sb->interopRegistered_) interopRes.push_back(sb->cudaTexResource_);
+            }
+            if (!interopRes.empty()) {
+                cuGraphicsMapResources(static_cast<unsigned int>(interopRes.size()),
+                                       interopRes.data(), cudaCopyStream_);
+            }
+#endif
+            for (auto& sb : softBodies_) {
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+                if (sb->interopRegistered_) {
+                    // Texture mapped in the batch above: copy deformed tets device->device
+                    // straight into its array, skipping the device->host pull entirely.
+                    sb->copyToMappedArray(cudaCopyStream_);
+                    continue;
+                }
+#endif
                 sb->pullDeformedPositionsAsync(cudaCopyStream_);
             }
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+            if (!interopRes.empty()) {
+                cuGraphicsUnmapResources(static_cast<unsigned int>(interopRes.size()),
+                                         interopRes.data(), cudaCopyStream_);
+            }
+#endif
             cuda_->getCudaContext()->streamSynchronize(cudaCopyStream_);
         }
         for (auto& sb : softBodies_) {
             if (sb->gpuSkin_) {
-                // GPU skinning: only the small tet texture is updated; the full-res
-                // visual is blended in the vertex shader, so no CPU skin / re-upload.
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+                if (sb->interopRegistered_) {
+                    // Texture was filled device-side above; bounds come from PhysX's
+                    // world AABB (no host positions this frame).
+                    sb->updateBoundsFromWorld();
+                    continue;
+                }
+#endif
+                // GPU skinning (CPU bridge, pre-registration or interop disabled): only
+                // the small tet texture is updated; the full-res visual is blended in
+                // the vertex shader, so no CPU skin / re-upload.
                 sb->uploadTetTexture();
                 sb->updateBoundsFromTets();
                 continue;

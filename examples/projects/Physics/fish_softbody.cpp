@@ -3,6 +3,7 @@
 
 #include "threepp/threepp.hpp"
 
+#include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/extras/physx/PhysxDebugRenderer.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
@@ -186,7 +187,7 @@ int main(int argc, char** argv) {
     }
 
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.01f, 1000);
-    camera->position.set(1.5f, 1.2f, 2.0f);
+    camera->position.set(2.f, 5.f, 5.0f);
 
     OrbitControls controls{*camera, canvas};
     controls.target.set(0, 0.3f, 0);
@@ -194,7 +195,6 @@ int main(int argc, char** argv) {
     auto sun = DirectionalLight::create(0xffffff, 2.5f);
     sun->position.set(5, 10, 7);
     scene.add(sun);
-    // scene.add(AmbientLight::create(0xffffff, 0.3f));
 
     PhysxWorld::Settings settings;
     settings.enableGpuDynamics = true;
@@ -747,6 +747,22 @@ int main(int argc, char** argv) {
         }
 
         renderer->render(scene, *camera);
+#ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
+        // Once the renderer has uploaded a fish's tet texture, hand its GL handle to
+        // the soft body so subsequent frames feed it via CUDA-GL interop
+        // (device->device) instead of the GPU->CPU->GPU bridge.
+        if (auto* glr = dynamic_cast<GLRenderer*>(renderer.get())) {
+            for (auto& f : spawnedFish) {
+                if (f.body && f.body->needsInteropRegister()) {
+                    if (auto* tex = f.body->interopTexture()) {
+                        if (auto id = glr->getGlTextureId(*tex)) {
+                            f.body->registerGlTexture(*id);
+                        }
+                    }
+                }
+            }
+        }
+#endif
         ui.render();
     });
 }
