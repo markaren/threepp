@@ -4,6 +4,9 @@
 #include "threepp/threepp.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
+#ifdef THREEPP_WITH_VULKAN
+#include "threepp/renderers/VulkanRenderer.hpp"
+#endif
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/extras/physx/PhysxDebugRenderer.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
@@ -555,7 +558,18 @@ int main(int argc, char** argv) {
     int selectedFish = 0;
     int voxelRes = 10;
     int solverIters = 10;// soft-body solver iterations (lower = faster, less stiff)
-    bool gpuSkin = true;// skin the visual on the GPU (tet texture) instead of CPU
+    // GPU tet-skinning is supported on the GL forward renderer (vertex-shader tet
+    // blend from a tet texture) and on the Vulkan path tracer (tet_skinning.comp
+    // writes the deformed verts straight into the BLAS). Other renderers (WGPU/Cross)
+    // fall back to CPU skin. The toggle stays enabled on supported renderers so it can
+    // be turned off to A/B against the CPU path.
+    const bool tetSkinSupported =
+            dynamic_cast<GLRenderer*>(renderer.get()) != nullptr
+#ifdef THREEPP_WITH_VULKAN
+            || dynamic_cast<VulkanRenderer*>(renderer.get()) != nullptr
+#endif
+            ;
+    bool gpuSkin = tetSkinSupported;// skin the visual on the GPU (tet texture) instead of CPU
     int beltSurface = 2;// 0=steel, 1=perforated steel, 2=plastic module belt (the belt)
 
     auto paramFor = [&](const std::string& id) -> const FishParams& {
@@ -606,7 +620,7 @@ int main(int argc, char** argv) {
             auto fish = spawnFish(world, scene, getFish(idx), pos,
                                   materialFor(id), yawDist(rng), voxelRes, solverIters, id,
                                   paramFor(id).weightKg);
-            if (gpuSkin && fish.body) fish.body->enableGpuSkinning();
+            if (gpuSkin && tetSkinSupported && fish.body) fish.body->enableGpuSkinning();
             spawnedFish.push_back(fish);
         } catch (const std::exception& e) {
             std::cerr << "Spawn failed: " << e.what() << std::endl;
@@ -672,7 +686,10 @@ int main(int argc, char** argv) {
         ImGui::SliderFloat("Spawn interval (s)", &spawnInterval, 0.3f, 6.f);
         ImGui::SliderInt("Voxel resolution", &voxelRes, 5, 30);
         ImGui::SliderInt("Solver iterations", &solverIters, 4, 30);
+        if (!tetSkinSupported) ImGui::BeginDisabled();
         ImGui::Checkbox("GPU skinning", &gpuSkin);
+        if (!tetSkinSupported) ImGui::EndDisabled();
+        if (!tetSkinSupported) ImGui::TextDisabled("(GPU skinning unsupported on this renderer; using CPU skin)");
         ImGui::TextDisabled("(voxel/solver/GPU-skin apply to NEW fish)");
         ImGui::Separator();
         ImGui::Text("SPACE drops a fish where you aim");
