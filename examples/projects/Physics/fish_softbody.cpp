@@ -116,6 +116,17 @@ namespace {
         });
         if (!geom) throw std::runtime_error("No mesh found in " + fishId);
 
+        // Make the fish diffuse-dominant so the Vulkan path tracer albedo-demodulates
+        // them (chit gate: specFrac < 0.3). Demod lets the denoiser smooth only the
+        // lighting while keeping the skin/scale albedo crisp; otherwise it filters in
+        // radiance space and washes the texture out. The usual culprit is authored
+        // metalness (F0 -> albedo -> high spec fraction), so drop it; wet cod read
+        // matte anyway. MeshPhysicalMaterial also derives from MeshStandardMaterial.
+        if (auto stdMat = std::dynamic_pointer_cast<MeshStandardMaterial>(mat)) {
+            stdMat->metalness = 0.f;
+            stdMat->roughness = std::max(stdMat->roughness, 0.7f);
+        }
+
         // Keep the visual geometry at full resolution. The physics mesh is
         // simplified internally by addSoftBody (remesh + voxelise into a coarse
         // tet cage), and these full-res vertices are skinned barycentrically
@@ -180,6 +191,13 @@ int main(int argc, char** argv) {
 
     Canvas canvas("PhysX Fish Softbody", {{"aa", 4}, {"vsync", true}});
     auto renderer = createRenderer(canvas);
+
+    if (auto pt = dynamic_cast<VulkanRenderer*>(renderer.get())) {
+        pt->setSamplesPerPixel(4);
+        pt->setDenoise(true);
+        pt->setRestirDIEnabled(true);
+        pt->setSilhouetteMsaaExtra(4);
+    }
 
     Scene scene;
     RGBELoader hdrLoader;
