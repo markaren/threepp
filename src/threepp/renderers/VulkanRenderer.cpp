@@ -3873,8 +3873,11 @@ namespace threepp {
             const size_t gN = glassEntryIndices_.size();
             for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
                 auto& en = lastVisibleEntries_[i];
-                // Default-include conservative cases — they always draw.
-                if (en.isOverlay || en.isSkinned || en.isDisplaced || en.isMorphed) {
+                // Default-include conservative cases — they always draw. Deformers
+                // (skinned/displaced/morphed/tet) are here because their cached local
+                // AABB doesn't reflect the per-frame deformed extents, so frustum-
+                // culling them risks popping a still-on-screen body out of the gbuffer.
+                if (en.isOverlay || en.isSkinned || en.isDisplaced || en.isMorphed || en.isTet) {
                     en.inFrustum = true;
                 } else {
                     auto geom = en.mesh->geometry();
@@ -5117,17 +5120,39 @@ namespace threepp {
             }
             cacheCullFlags(matDescs);
 
-            // Topology rebuild: prev gbuf + accum hold mesh IDs from the old
-            // scene, but the gl_InstanceCustomIndexEXT space just changed
-            // meaning. Clearing the gbuf to 0 (mesh ID = 0 = sky) makes the
-            // reproject mesh-ID guard miss everywhere → histFc=0 globally
-            // on the very next frame, mirroring the old sampleIndex=0 reset
-            // without throwing away a valid history when meshes happen to
-            // re-shuffle into the same slots. We're already past
-            // vkDeviceWaitIdle so the clear is safely synchronous.
-            clearGbufImages();
-            sampleIndex = 0;
-            prevWorldMats.clear();
+            // Topology rebuild: the prev gbuf holds mesh IDs keyed by
+            // gl_InstanceCustomIndexEXT (= entry order). If that ordering shifted,
+            // those IDs no longer name the same surface, so the reproject mesh-ID
+            // guard would accept stale taps — clearing the gbuf (→ guard misses
+            // everywhere → histFc=0 globally, a full cold-start) is the safe path.
+            //
+            // But the dominant dynamic case is APPEND-ONLY: existing entries keep
+            // their slots and new geometry is tacked on the end (a spawned PhysX
+            // body, a grown ParticleSystem, streamed-in meshes). There, every
+            // existing pixel's mesh ID is still valid and only the new entries lack
+            // history — which the per-pixel mesh-ID guard already cold-starts on its
+            // own. Clearing globally on every add throws away the whole scene's
+            // converged accumulation (the visible reconverge flash + smeared motion
+            // on every spawn). So detect the stable prefix and skip the reset.
+            // prevWorldMats is keyed by (Mesh*, instanceIndex), so it stays valid
+            // across an append too — new bodies are first-seen → identity motion.
+            // Reorder / removal-from-the-middle shifts the prefix → falls back to
+            // the clear.
+            bool appendOnly = sceneBuilt_ && currFp.size() >= prevSceneFingerprint.size();
+            for (size_t i = 0; appendOnly && i < prevSceneFingerprint.size(); ++i) {
+                const auto& a = currFp[i];
+                const auto& b = prevSceneFingerprint[i];
+                if (a.mesh != b.mesh || a.geom != b.geom || a.mat != b.mat ||
+                    a.instanceIndex != b.instanceIndex) {
+                    appendOnly = false;
+                }
+            }
+            if (!appendOnly) {
+                // We're already past vkDeviceWaitIdle so the clear is synchronous.
+                clearGbufImages();
+                sampleIndex = 0;
+                prevWorldMats.clear();
+            }
 
             // Grow motion-mat + mesh-moved-bits buffers if the new instance
             // count exceeds the current capacity. The descriptor write below
