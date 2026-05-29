@@ -32,13 +32,12 @@ namespace threepp {
         // sets each vertex to a barycentric blend of 4 collision-tet positions read
         // from tetTexture, addressed by the tetIndex/tetWeight vertex attributes.
         // tetTexture holds world-space tet positions (1 RGB texel per tet, packed
-        // row-major into a tetTextureSize x tetTextureSize float texture).
-        // tetRestTexture holds the rest-pose tet positions in the same layout; with
-        // both, the shader builds the per-tet deformation gradient F (rest -> current)
-        // to skin the rest normals so lighting tracks the deforming surface.
+        // row-major into a tetTextureSize x tetTextureSize float texture). The rest
+        // pose enters through baked per-vertex attributes (the rest tet edge-matrix
+        // inverse), so the shader skins normals by the per-tet deformation gradient
+        // without a per-frame matrix inverse or a second rest-position texture.
         bool tetSkinning = false;
         std::shared_ptr<Texture> tetTexture;
-        std::shared_ptr<Texture> tetRestTexture;
         int tetTextureSize = 0;
 
         float opacity = 1;

@@ -19,6 +19,7 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/textures/DataTexture.hpp"
+#include "threepp/math/Matrix3.hpp"
 
 #include <PxPhysicsAPI.h>
 #include <cudamanager/PxCudaContext.h>
@@ -394,8 +395,11 @@ namespace threepp {
             if (!vPosAttr) return;
             const size_t vVerts = vPosAttr->count();
 
-            // Per-vertex tet indices + weights (the barycentric bindings).
+            // Per-vertex tet indices + weights (the barycentric bindings), plus the
+            // bound tet's rest edge-matrix inverse Dr^-1 baked once here so the vertex
+            // shader can build F = Dc * Dr^-1 without a per-frame matrix inverse.
             std::vector<float> idx(vVerts * 4, 0.f), wgt(vVerts * 4, 0.f);
+            std::vector<float> ri0(vVerts * 3, 0.f), ri1(vVerts * 3, 0.f), ri2(vVerts * 3, 0.f);
             for (size_t i = 0; i < vVerts; ++i) {
                 if (useDirectMapping_) {
                     idx[i * 4] = static_cast<float>(i);
@@ -410,10 +414,32 @@ namespace threepp {
                     wgt[i * 4 + 1] = b.w1;
                     wgt[i * 4 + 2] = b.w2;
                     wgt[i * 4 + 3] = b.w3;
+
+                    // Rest edge matrix Dr (columns r1-r0, r2-r0, r3-r0) from the rest
+                    // collision positions; bake its inverse (left zero when degenerate,
+                    // which makes the shader's F singular and keeps the rest normal).
+                    const auto& R0 = positionsInvMass_[b.i0];
+                    const auto& R1 = positionsInvMass_[b.i1];
+                    const auto& R2 = positionsInvMass_[b.i2];
+                    const auto& R3 = positionsInvMass_[b.i3];
+                    Matrix3 Dr;
+                    Dr.set(R1.x - R0.x, R2.x - R0.x, R3.x - R0.x,
+                           R1.y - R0.y, R2.y - R0.y, R3.y - R0.y,
+                           R1.z - R0.z, R2.z - R0.z, R3.z - R0.z);
+                    if (std::fabs(Dr.determinant()) > 1e-12f) {
+                        Dr.invert();
+                        const auto& e = Dr.elements;
+                        ri0[i * 3 + 0] = e[0]; ri0[i * 3 + 1] = e[1]; ri0[i * 3 + 2] = e[2];
+                        ri1[i * 3 + 0] = e[3]; ri1[i * 3 + 1] = e[4]; ri1[i * 3 + 2] = e[5];
+                        ri2[i * 3 + 0] = e[6]; ri2[i * 3 + 1] = e[7]; ri2[i * 3 + 2] = e[8];
+                    }
                 }
             }
             visualGeometry_->setAttribute("tetIndex", FloatBufferAttribute::create(idx, 4));
             visualGeometry_->setAttribute("tetWeight", FloatBufferAttribute::create(wgt, 4));
+            visualGeometry_->setAttribute("tetRestInv0", FloatBufferAttribute::create(ri0, 3));
+            visualGeometry_->setAttribute("tetRestInv1", FloatBufferAttribute::create(ri1, 3));
+            visualGeometry_->setAttribute("tetRestInv2", FloatBufferAttribute::create(ri2, 3));
 
             // Square RGBA-float texture holding one tet world-position per texel.
             tetTexSize_ = 1;
@@ -422,30 +448,11 @@ namespace threepp {
             tetTex_->type = Type::Float;
             uploadTetTexture();
 
-            // Rest tet positions, captured ONCE now (enableGpuSkinning runs right
-            // after spawn, before any sim step, so positionsInvMass_ is the rest
-            // pose). The vertex shader diffs current vs rest tet edges to build the
-            // per-tet deformation gradient F and skin the rest normals.
-            restTetTex_ = DataTexture::create<float>(4, tetTexSize_, tetTexSize_);
-            restTetTex_->type = Type::Float;
-            {
-                auto& rdata = restTetTex_->image().data<float>();
-                for (::physx::PxU32 i = 0; i < nbCollVerts_; ++i) {
-                    const auto& p = positionsInvMass_[i];
-                    rdata[i * 4 + 0] = p.x;
-                    rdata[i * 4 + 1] = p.y;
-                    rdata[i * 4 + 2] = p.z;
-                    rdata[i * 4 + 3] = 1.f;
-                }
-                restTetTex_->needsUpdate();
-            }
-
             // Per-body material clone (the tet texture is per-body) flagged for skinning.
             if (auto mat = mesh_->material()) {
                 auto cloned = mat->clone();
                 cloned->tetSkinning = true;
                 cloned->tetTexture = tetTex_;
-                cloned->tetRestTexture = restTetTex_;
                 cloned->tetTextureSize = tetTexSize_;
                 mesh_->setMaterial(cloned);
             }
@@ -468,7 +475,6 @@ namespace threepp {
 
         bool gpuSkin_ = false;
         std::shared_ptr<DataTexture> tetTex_;
-        std::shared_ptr<DataTexture> restTetTex_;
         int tetTexSize_ = 0;
         friend class PhysxWorld;
 

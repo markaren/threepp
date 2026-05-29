@@ -535,6 +535,9 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
 
                     "	attribute vec4 tetIndex;",
                     "	attribute vec4 tetWeight;",
+                    "	attribute vec3 tetRestInv0;",
+                    "	attribute vec3 tetRestInv1;",
+                    "	attribute vec3 tetRestInv2;",
 
                     "#endif",
 

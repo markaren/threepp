@@ -1103,9 +1103,6 @@ struct GLRenderer::Impl {
         if (material->tetSkinning && material->tetTexture) {
             p_uniforms->setValue("tetTexture", material->tetTexture.get(), &textures);
             p_uniforms->setValue("tetTextureSize", material->tetTextureSize);
-            if (material->tetRestTexture) {
-                p_uniforms->setValue("restTetTexture", material->tetRestTexture.get(), &textures);
-            }
         }
 
         if (refreshMaterial || materialProperties->receiveShadow != object->receiveShadow) {
