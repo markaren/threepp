@@ -1098,6 +1098,16 @@ struct GLRenderer::Impl {
             }
         }
 
+        // Tet-skinning: bind the (per-frame updated) tet-position texture. Like the
+        // bone texture, set every frame since its contents change with the sim.
+        if (material->tetSkinning && material->tetTexture) {
+            p_uniforms->setValue("tetTexture", material->tetTexture.get(), &textures);
+            p_uniforms->setValue("tetTextureSize", material->tetTextureSize);
+            if (material->tetRestTexture) {
+                p_uniforms->setValue("restTetTexture", material->tetRestTexture.get(), &textures);
+            }
+        }
+
         if (refreshMaterial || materialProperties->receiveShadow != object->receiveShadow) {
 
             materialProperties->receiveShadow = object->receiveShadow;

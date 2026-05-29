@@ -517,12 +517,15 @@ namespace threepp {
         // the deformed simulation. The geometry's positions are taken as-is (world
         // space). voxelResolution sets the simulation mesh detail (~10 default;
         // higher = finer simulation + more solver work).
+        // mass (kg): when > 0 the body's total mass is set to this value; 0 leaves
+        // the default unit-density mass derived from the tet volume.
         SoftBody* addSoftBody(
                 const std::shared_ptr<BufferGeometry>& visualGeometry,
                 ::physx::PxDeformableVolumeMaterial* material = nullptr,
                 int voxelResolution = 10,
                 unsigned solverIterations = 20,
-                bool selfCollision = false);
+                bool selfCollision = false,
+                float mass = 0.f);
 
         // Convenience: bake mesh.matrixWorld into the geometry positions, reset
         // the mesh's local transform to identity, then add as a soft body. Useful
@@ -537,7 +540,8 @@ namespace threepp {
                 int voxelResolution = 10,
                 unsigned solverIterations = 20,
                 bool selfCollision = false,
-                const std::string& cacheKey = "");
+                const std::string& cacheKey = "",
+                float mass = 0.f);
 
         // Destroy a soft body. Releases the PhysX actor + GPU/pinned resources and
         // — when the body was created via the Mesh& overload — also removes the

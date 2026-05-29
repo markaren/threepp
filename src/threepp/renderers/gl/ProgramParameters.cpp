@@ -169,6 +169,8 @@ ProgramParameters::ProgramParameters(
     maxBones = 64;// TODO
     useVertexTexture = capabilities.floatVertexTextures;
 
+    tetSkinning = material->tetSkinning;
+
     if (auto m = material->as<MaterialWithMorphTargets>()) {
         morphTargets = m->morphTargets;
         morphNormals = m->morphNormals;
@@ -278,6 +280,7 @@ std::string ProgramParameters::hash() const {
 
     s << std::to_string(skinning) << '\n';
     s << std::to_string(useVertexTexture) << '\n';
+    s << std::to_string(tetSkinning) << '\n';
 
     s << std::to_string(numDirLights) << '\n';
     s << std::to_string(numPointLights) << '\n';

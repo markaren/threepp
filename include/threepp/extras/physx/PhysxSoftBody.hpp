@@ -15,8 +15,10 @@
 
 #include "threepp/extras/physx/PhysxWorld.hpp"
 
+#include "threepp/core/BufferAttribute.hpp"
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/textures/DataTexture.hpp"
 
 #include <PxPhysicsAPI.h>
 #include <cudamanager/PxCudaContext.h>
@@ -379,6 +381,80 @@ namespace threepp {
         void setRecomputeNormals(bool enabled) { recomputeNormals_ = enabled; }
         [[nodiscard]] bool recomputeNormals() const { return recomputeNormals_; }
 
+        // Switch this body to GPU skinning: the deformed tet positions are uploaded
+        // to a small texture each frame and the visual is blended in the vertex
+        // shader (USE_TET_SKIN), instead of skinning the full-res mesh on the CPU and
+        // re-uploading it. Requires the Mesh& overload (needs the visual Mesh to swap
+        // in a per-body material carrying the tet texture). Normals become rest
+        // normals (no per-frame recompute). Call once, after construction.
+        void enableGpuSkinning() {
+            using namespace ::physx;
+            if (gpuSkin_ || !mesh_) return;
+            auto vPosAttr = visualGeometry_->getAttribute<float>("position");
+            if (!vPosAttr) return;
+            const size_t vVerts = vPosAttr->count();
+
+            // Per-vertex tet indices + weights (the barycentric bindings).
+            std::vector<float> idx(vVerts * 4, 0.f), wgt(vVerts * 4, 0.f);
+            for (size_t i = 0; i < vVerts; ++i) {
+                if (useDirectMapping_) {
+                    idx[i * 4] = static_cast<float>(i);
+                    wgt[i * 4] = 1.f;
+                } else {
+                    const auto& b = bindings_[i];
+                    idx[i * 4 + 0] = static_cast<float>(b.i0);
+                    idx[i * 4 + 1] = static_cast<float>(b.i1);
+                    idx[i * 4 + 2] = static_cast<float>(b.i2);
+                    idx[i * 4 + 3] = static_cast<float>(b.i3);
+                    wgt[i * 4 + 0] = b.w0;
+                    wgt[i * 4 + 1] = b.w1;
+                    wgt[i * 4 + 2] = b.w2;
+                    wgt[i * 4 + 3] = b.w3;
+                }
+            }
+            visualGeometry_->setAttribute("tetIndex", FloatBufferAttribute::create(idx, 4));
+            visualGeometry_->setAttribute("tetWeight", FloatBufferAttribute::create(wgt, 4));
+
+            // Square RGBA-float texture holding one tet world-position per texel.
+            tetTexSize_ = 1;
+            while (tetTexSize_ * tetTexSize_ < static_cast<int>(nbCollVerts_)) tetTexSize_ *= 2;
+            tetTex_ = DataTexture::create<float>(4, tetTexSize_, tetTexSize_);
+            tetTex_->type = Type::Float;
+            uploadTetTexture();
+
+            // Rest tet positions, captured ONCE now (enableGpuSkinning runs right
+            // after spawn, before any sim step, so positionsInvMass_ is the rest
+            // pose). The vertex shader diffs current vs rest tet edges to build the
+            // per-tet deformation gradient F and skin the rest normals.
+            restTetTex_ = DataTexture::create<float>(4, tetTexSize_, tetTexSize_);
+            restTetTex_->type = Type::Float;
+            {
+                auto& rdata = restTetTex_->image().data<float>();
+                for (::physx::PxU32 i = 0; i < nbCollVerts_; ++i) {
+                    const auto& p = positionsInvMass_[i];
+                    rdata[i * 4 + 0] = p.x;
+                    rdata[i * 4 + 1] = p.y;
+                    rdata[i * 4 + 2] = p.z;
+                    rdata[i * 4 + 3] = 1.f;
+                }
+                restTetTex_->needsUpdate();
+            }
+
+            // Per-body material clone (the tet texture is per-body) flagged for skinning.
+            if (auto mat = mesh_->material()) {
+                auto cloned = mat->clone();
+                cloned->tetSkinning = true;
+                cloned->tetTexture = tetTex_;
+                cloned->tetRestTexture = restTetTex_;
+                cloned->tetTextureSize = tetTexSize_;
+                mesh_->setMaterial(cloned);
+            }
+
+            updateBoundsFromTets();// valid bounds without touching visual positions
+            recomputeNormals_ = false;
+            gpuSkin_ = true;
+        }
+
     private:
         ::physx::PxDeformableVolume* volume_;
         ::physx::PxCudaContextManager* cuda_;
@@ -389,7 +465,42 @@ namespace threepp {
         bool useDirectMapping_ = true;
         std::vector<TetBind> bindings_;
         bool recomputeNormals_ = true;
+
+        bool gpuSkin_ = false;
+        std::shared_ptr<DataTexture> tetTex_;
+        std::shared_ptr<DataTexture> restTetTex_;
+        int tetTexSize_ = 0;
         friend class PhysxWorld;
+
+        // GPU-skin: copy the (just-pulled) tet positions into the texture, flag for re-upload.
+        void uploadTetTexture() {
+            if (!tetTex_) return;
+            auto& data = tetTex_->image().data<float>();
+            for (::physx::PxU32 i = 0; i < nbCollVerts_; ++i) {
+                const auto& p = positionsInvMass_[i];
+                data[i * 4 + 0] = p.x;
+                data[i * 4 + 1] = p.y;
+                data[i * 4 + 2] = p.z;
+                data[i * 4 + 3] = 1.f;
+            }
+            tetTex_->needsUpdate();
+        }
+
+        // GPU-skin: bounds from the few hundred tet positions (the visual position
+        // attribute is never updated, so the renderer needs these for frustum culling).
+        void updateBoundsFromTets() {
+            if (nbCollVerts_ == 0) return;
+            Vector3 mn(1e30f, 1e30f, 1e30f), mx(-1e30f, -1e30f, -1e30f);
+            for (::physx::PxU32 i = 0; i < nbCollVerts_; ++i) {
+                const auto& p = positionsInvMass_[i];
+                mn.x = std::min(mn.x, p.x); mn.y = std::min(mn.y, p.y); mn.z = std::min(mn.z, p.z);
+                mx.x = std::max(mx.x, p.x); mx.y = std::max(mx.y, p.y); mx.z = std::max(mx.z, p.z);
+            }
+            Vector3 c;
+            c.addVectors(mn, mx).multiplyScalar(0.5f);
+            visualGeometry_->boundingBox = Box3(mn, mx);
+            visualGeometry_->boundingSphere = Sphere(c, c.distanceTo(mx));
+        }
 
         // Build per-vertex bindings from visual mesh into the collision tet mesh.
         // Walks every tet's AABB (with a small pad) and tests barycentric containment.
@@ -506,7 +617,8 @@ namespace threepp {
             ::physx::PxDeformableVolumeMaterial* material,
             int voxelResolution,
             unsigned solverIterations,
-            bool selfCollision) {
+            bool selfCollision,
+            float mass) {
         using namespace ::physx;
         if (!cuda_) throw std::runtime_error("PhysxWorld::addSoftBody: enableGpuDynamics is false");
         if (!visualGeometry) throw std::runtime_error("PhysxWorld::addSoftBody: visualGeometry is null");
@@ -569,11 +681,14 @@ namespace threepp {
         PxDeformableVolumeExt::allocateAndInitializeHostMirror(
                 *volume, cuda_, simPos, simVel, collPos, restPos);
         constexpr PxReal maxInvMassRatio = 50.f;
-        constexpr PxReal density = 1.f;
         constexpr PxReal scale = 1.f;
         PxDeformableVolumeExt::transform(*volume, PxTransform(PxIdentity), scale,
                                          simPos, simVel, collPos, restPos);
-        PxDeformableVolumeExt::updateMass(*volume, density, maxInvMassRatio, simPos);
+        if (mass > 0.f) {
+            PxDeformableVolumeExt::setMass(*volume, mass, maxInvMassRatio, simPos);
+        } else {
+            PxDeformableVolumeExt::updateMass(*volume, 1.f, maxInvMassRatio, simPos);
+        }
         PxDeformableVolumeExt::copyToDevice(*volume, PxDeformableVolumeDataFlag::eALL,
                                             simPos, simVel, collPos, restPos);
         PX_EXT_PINNED_MEMORY_FREE(*cuda_, simPos);
@@ -598,7 +713,8 @@ namespace threepp {
             int voxelResolution,
             unsigned solverIterations,
             bool selfCollision,
-            const std::string& cacheKey) {
+            const std::string& cacheKey,
+            float mass) {
         using namespace ::physx;
         auto geom = mesh.geometry();
         if (!geom) throw std::runtime_error("PhysxWorld::addSoftBody(Mesh): no geometry");
@@ -636,7 +752,7 @@ namespace threepp {
         mesh.scale.set(1, 1, 1);
 
         if (cacheKey.empty()) {
-            SoftBody* raw = addSoftBody(bakedGeom, material, voxelResolution, solverIterations, selfCollision);
+            SoftBody* raw = addSoftBody(bakedGeom, material, voxelResolution, solverIterations, selfCollision, mass);
             raw->mesh_ = &mesh;
             return raw;
         }
@@ -711,9 +827,12 @@ namespace threepp {
         PxDeformableVolumeExt::allocateAndInitializeHostMirror(
                 *volume, cuda_, simPos, simVel, collPos, restPos);
         constexpr PxReal maxInvMassRatio = 50.f;
-        constexpr PxReal density = 1.f;
         PxDeformableVolumeExt::transform(*volume, spawnTf, 1.f, simPos, simVel, collPos, restPos);
-        PxDeformableVolumeExt::updateMass(*volume, density, maxInvMassRatio, simPos);
+        if (mass > 0.f) {
+            PxDeformableVolumeExt::setMass(*volume, mass, maxInvMassRatio, simPos);
+        } else {
+            PxDeformableVolumeExt::updateMass(*volume, 1.f, maxInvMassRatio, simPos);
+        }
         PxDeformableVolumeExt::copyToDevice(*volume, PxDeformableVolumeDataFlag::eALL,
                                             simPos, simVel, collPos, restPos);
         PX_EXT_PINNED_MEMORY_FREE(*cuda_, simPos);
@@ -778,6 +897,13 @@ namespace threepp {
             cuda_->getCudaContext()->streamSynchronize(cudaCopyStream_);
         }
         for (auto& sb : softBodies_) {
+            if (sb->gpuSkin_) {
+                // GPU skinning: only the small tet texture is updated; the full-res
+                // visual is blended in the vertex shader, so no CPU skin / re-upload.
+                sb->uploadTetTexture();
+                sb->updateBoundsFromTets();
+                continue;
+            }
             sb->applyDeformedPositions();
             // Recompute bounds so frustum culling tracks the deformed body — the
             // initial bounds only cover the rest pose. Both sphere AND box are

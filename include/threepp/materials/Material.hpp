@@ -28,6 +28,19 @@ namespace threepp {
         Side side{Side::Front};
         bool vertexColors = false;
 
+        // GPU tet-skinning (deformable/soft bodies): when enabled the vertex shader
+        // sets each vertex to a barycentric blend of 4 collision-tet positions read
+        // from tetTexture, addressed by the tetIndex/tetWeight vertex attributes.
+        // tetTexture holds world-space tet positions (1 RGB texel per tet, packed
+        // row-major into a tetTextureSize x tetTextureSize float texture).
+        // tetRestTexture holds the rest-pose tet positions in the same layout; with
+        // both, the shader builds the per-tet deformation gradient F (rest -> current)
+        // to skin the rest normals so lighting tracks the deforming surface.
+        bool tetSkinning = false;
+        std::shared_ptr<Texture> tetTexture;
+        std::shared_ptr<Texture> tetRestTexture;
+        int tetTextureSize = 0;
+
         float opacity = 1;
         bool transparent = false;
 

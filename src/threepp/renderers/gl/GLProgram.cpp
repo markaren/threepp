@@ -445,6 +445,8 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     parameters->skinning ? "#define USE_SKINNING" : "",
                     parameters->useVertexTexture ? "#define BONE_TEXTURE" : "",
 
+                    parameters->tetSkinning ? "#define USE_TET_SKIN" : "",
+
                     parameters->morphTargets ? "#define USE_MORPHTARGETS" : "",
                     parameters->morphNormals && !parameters->flatShading ? "#define USE_MORPHNORMALS" : "",
                     parameters->doubleSided ? "#define DOUBLE_SIDED" : "",
@@ -526,6 +528,13 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
 
                     "	attribute vec4 skinIndex;",
                     "	attribute vec4 skinWeight;",
+
+                    "#endif",
+
+                    "#ifdef USE_TET_SKIN",
+
+                    "	attribute vec4 tetIndex;",
+                    "	attribute vec4 tetWeight;",
 
                     "#endif",
 
