@@ -731,6 +731,146 @@ vec3 volumeNeeSingle(vec3 x, vec3 wi, float g, inout uint seed) {
     return nee;
 }
 
+// ── Stratified single-scattering volumetric inscatter (primary camera ray) ──
+// N=4 stratified depth samples along the segment, NEE to emissive tris, analytic
+// lights, and the env. RESTORED from before the 2026-05-16 analog-integrator
+// rewrite. The analog free-flight is unbiased over all scatter orders, but at
+// 1-2 spp its binary scatter decision + HG phase sample make the CAMERA-segment
+// single-scatter extremely grainy. This is an unbiased SINGLE-scatter estimator
+// (truncated to single-scatter) and far quieter. raygen uses it for the primary
+// segment only; secondary segments keep the analog free-flight (which carries
+// the multi-scatter the camera segment drops — negligible for low-albedo fog).
+vec3 volumeInscatter(vec3 rayOrigin, vec3 rayDir, float maxT, inout uint seed) {
+    const float sigmaT = fog.sigmaT.x;
+    if (sigmaT <= 0.0) return vec3(0.0);
+    const float tMax  = min(maxT, 1e5);
+    const float T_max = exp(-sigmaT * tMax);
+    const float p1    = 1.0 - T_max;
+    if (p1 < 1e-4) return vec3(0.0);
+
+    // Estimator factor: σ_s·T(t)/p(t) = (σ_s/σ_t)·(1 − T_max).
+    // fog.color is the single-scattering albedo σ_s/σ_t.
+    const vec3  scatterFactor = fog.color * p1;
+    const float g             = clamp(fog.anisotropy, -0.95, 0.95);
+
+    const uint N = 4u;
+    vec3 inscatter = vec3(0.0);
+
+    for (uint i = 0u; i < N; ++i) {
+        // Truncated free-flight, stratified ξ ∈ [i/N, (i+1)/N).
+        const float xi = (float(i) + urand(seed)) / float(N);
+        const float tScatter = -log(max(1.0 - xi * p1, 1e-30)) / sigmaT;
+        const vec3  x        = rayOrigin + rayDir * tScatter;
+
+        // (a) Emissive-tri NEE
+        if (pc.emissiveCount > 0u && pc.emissiveTotalPower > 0.0) {
+            const EmissiveSample es = sampleEmissiveTriCdfFog(seed);
+            if (es.area > 1e-20 && es.power > 0.0) {
+                vec3 toL = es.point - x;
+                const float dist = max(length(toL), 1e-4);
+                toL /= dist;
+                const float cosLight = abs(dot(-toL, es.normal));
+                if (cosLight > 1e-4) {
+                    const vec3 atten = traceFogShadowRay(x, toL, dist - 1e-2);
+                    const float pickPdf  = es.power / pc.emissiveTotalPower;
+                    const float pdfArea  = pickPdf / es.area;
+                    const float pdfOmega = pdfArea * dist * dist / cosLight;
+                    if (pdfOmega > 1e-10) {
+                        const float ph = phaseHG(dot(rayDir, toL), g);
+                        addInscatter(inscatter, ph * es.emission * atten / pdfOmega);
+                    }
+                }
+            }
+        }
+
+        // (b) Analytical lights — dir / point / spot / rect
+        for (uint li = 0u; li < lights.dirCount; ++li) {
+            const vec3 L = normalize(lights.dirLights[li].direction);
+            const vec3 atten = traceFogShadowRay(x, L, 1e30);
+            const float ph = phaseHG(dot(rayDir, L), g);
+            addInscatter(inscatter, ph * lights.dirLights[li].color * atten);
+        }
+        for (uint li = 0u; li < lights.pointCount; ++li) {
+            vec3 toL = lights.pointLights[li].position - x;
+            const float dist = length(toL);
+            if (dist < 1e-4) continue;
+            toL /= dist;
+            const float decay = lights.pointLights[li].decay;
+            float att = 1.0 / max(pow(dist, decay), 0.1);
+            const float range = lights.pointLights[li].range;
+            if (range > 0.0) {
+                const float t  = dist / range;
+                const float t4 = t * t * t * t;
+                const float w  = max(1.0 - t4, 0.0);
+                att *= w * w;
+            }
+            const vec3 atten = traceFogShadowRay(x, toL, dist - 1e-2);
+            const float ph = phaseHG(dot(rayDir, toL), g);
+            addInscatter(inscatter, ph * lights.pointLights[li].color * att * atten);
+        }
+        for (uint li = 0u; li < lights.spotCount; ++li) {
+            vec3 toL = lights.spotLights[li].position - x;
+            const float dist = length(toL);
+            if (dist < 1e-4) continue;
+            toL /= dist;
+            const float spotCos = dot(-toL, lights.spotLights[li].direction);
+            const float spotAtten = smoothstep(lights.spotLights[li].cosAngleOuter,
+                                               lights.spotLights[li].cosAngleInner,
+                                               spotCos);
+            if (spotAtten <= 0.0) continue;
+            const float decay = lights.spotLights[li].decay;
+            float att = 1.0 / max(pow(dist, decay), 0.1);
+            const float range = lights.spotLights[li].range;
+            if (range > 0.0) {
+                const float t  = dist / range;
+                const float t4 = t * t * t * t;
+                const float w  = max(1.0 - t4, 0.0);
+                att *= w * w;
+            }
+            att *= spotAtten;
+            const vec3 atten = traceFogShadowRay(x, toL, dist - 1e-2);
+            const float ph = phaseHG(dot(rayDir, toL), g);
+            addInscatter(inscatter, ph * lights.spotLights[li].color * att * atten);
+        }
+        for (uint li = 0u; li < lights.rectCount; ++li) {
+            const float ru = urand(seed) * 2.0 - 1.0;
+            const float rv = urand(seed) * 2.0 - 1.0;
+            const vec3 samplePos = lights.rectLights[li].position
+                                 + ru * lights.rectLights[li].halfU
+                                 + rv * lights.rectLights[li].halfV;
+            vec3 toL = samplePos - x;
+            const float dist = length(toL);
+            if (dist < 1e-4) continue;
+            toL /= dist;
+            const float cosEmitter = max(dot(-toL, lights.rectLights[li].normal), 0.0);
+            if (cosEmitter <= 0.0) continue;
+            const float area = length(cross(lights.rectLights[li].halfU,
+                                            lights.rectLights[li].halfV)) * 4.0;
+            const float geomTerm = cosEmitter * area / max(dist * dist, 0.01);
+            const vec3 atten = traceFogShadowRay(x, toL, dist - 1e-2);
+            const float ph = phaseHG(dot(rayDir, toL), g);
+            addInscatter(inscatter, ph * lights.rectLights[li].color * geomTerm * atten);
+        }
+
+        // (c) Env NEE — uniform sphere sample.
+        {
+            const float u1 = urand(seed);
+            const float u2 = urand(seed);
+            const float z  = 1.0 - 2.0 * u1;
+            const float r  = sqrt(max(0.0, 1.0 - z * z));
+            const float ph = 6.2831853 * u2;
+            const vec3  dirE = vec3(r * cos(ph), r * sin(ph), z);
+            const float pdfE = 1.0 / (4.0 * 3.14159265358979);
+            const vec3 atten = traceFogShadowRay(x, dirE, 1e30);
+            const vec3 Le    = sampleEquirectFog(dirE);
+            const float phV  = phaseHG(dot(rayDir, dirE), g);
+            addInscatter(inscatter, phV * Le * atten / pdfE);
+        }
+    }
+
+    return inscatter * scatterFactor / float(N);
+}
+
 // shade_primary.glsl was the prior in-raygen primary shader; it had subtle
 // divergences from chit. Replaced by the bounce-0-on-raster path further
 // down in main() which calls into shade_common.glsl (included near the top
@@ -1217,6 +1357,21 @@ void main() {
             // Length of the medium-active portion of this segment. Honours the
             // water-column waterSurfaceY clip and the env-miss atmospheric cap.
             const float mediumLen = fogSegmentLength(origin, dir, tSurf, isEnvMiss);
+
+            // Primary camera segment (step 0): use the quiet stratified single-
+            // scatter overlay instead of the grainy analog scatter. The analog's
+            // binary scatter decision + HG phase sample at 1-2 spp is the
+            // dominant source of visible fog noise, and it's worst on the camera
+            // ray. The camera ray then proceeds to the surface (a valid reproject
+            // anchor) with Beer-Lambert applied past the medium segment; multi-
+            // scatter on the camera segment itself is dropped (negligible for the
+            // low-albedo fog this targets). Secondary segments (step >= 1) keep
+            // the unbiased analog free-flight below, so indirect-through-fog
+            // multi-scatter is preserved.
+            if (step == 0) {
+                radiance   += throughput * volumeInscatter(origin, dir, mediumLen, seed);
+                throughput *= fogTransmittance(mediumLen);
+            } else {
             const float xi        = urand(seed);
             const float tScatter  = -log(max(1.0 - xi, 1e-30)) / fog.sigmaT.x;
 
@@ -1281,6 +1436,7 @@ void main() {
             // water portion of a ray exiting the water column, or anything
             // past the env-miss atmospheric cap) is treated as clear air.
             throughput *= fogTransmittance(mediumLen);
+            }// end secondary-segment (step >= 1) analog free-flight
         }
 
         // Capture the primary hit (first iteration only) for reprojection
