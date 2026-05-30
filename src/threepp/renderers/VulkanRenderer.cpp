@@ -150,7 +150,21 @@ namespace threepp {
         // (N+2)&1 the prior owner of that slot (frame N) has fully completed
         // on the GPU. Temporal reproject still reads "the previous frame"
         // because readSlot = 1 - writeSlot, which alternates correctly.
-        constexpr uint32_t kFramesInFlight = 3;
+        //
+        // MUST stay EVEN. The ping-pong slot is `currentFrame & 1`, and
+        // currentFrame cycles mod kFramesInFlight. Only an even count makes
+        // `currentFrame & 1` track the true monotonic frame parity, so the
+        // slot actually alternates frame-to-frame. An ODD count (e.g. 3)
+        // desyncs it: the write-slot sequence becomes 0,1,0,0,1,0,… so every
+        // 3rd frame the temporal read samples a 2-frame-STALE slot while the
+        // immediately-previous frame's output is overwritten unread —
+        // corrupting accum/gbuf/moments/albedo/ReSTIR/TAA history on a 3-frame
+        // beat (periodic ghosting + reprojection reading the wrong frame).
+        // If a deeper pipeline is ever wanted, decouple the ping-pong parity
+        // from this sync ring (drive the slot from a monotonic `++parity & 1`
+        // and rewrite the temporal image bindings per frame) instead of
+        // bumping this to an odd value.
+        constexpr uint32_t kFramesInFlight = 2;
     }// namespace
 
     struct VulkanRenderer::Impl {
