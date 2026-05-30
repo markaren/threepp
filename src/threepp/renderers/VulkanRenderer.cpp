@@ -4608,7 +4608,12 @@ namespace threepp {
                         // tlasInstancesBuffer in place and call MODE_UPDATE.
                         std::vector<VkAccelerationStructureInstanceKHR> instances;
                         instances.reserve(entries.size());
-                        for (const MeshEntry& en : entries) {
+                        // instanceCustomIndex == entry index (matches the entries-
+                        // indexed geomDescs/matDescs built in the full rebuild);
+                        // overlay/skipped entries push no instance, exactly as
+                        // their geomDescs/matDescs slots are left default.
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            const MeshEntry& en = entries[i];
                             if (en.isOverlay) continue;// raster-overlay only
                             VkDeviceAddress blasAddr = 0;
                             if (en.isSkinned) {
@@ -4643,7 +4648,7 @@ namespace threepp {
                                     inst.transform.matrix[r][c] = e[c * 4 + r];
                                 }
                             }
-                            inst.instanceCustomIndex = static_cast<uint32_t>(instances.size());
+                            inst.instanceCustomIndex = static_cast<uint32_t>(i);
                             inst.mask = 0xFFu;
                             inst.instanceShaderBindingTableRecordOffset = 0;
                             inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
@@ -4666,14 +4671,18 @@ namespace threepp {
                         // post-fence; the other slot gets flushed when its turn
                         // comes around (it's still serving the previous frame's
                         // in-flight RT trace right now).
-                        matDescsCached_.clear();
-                        matDescsCached_.reserve(entries.size());
+                        // ENTRIES-indexed (one slot per entry, overlay/skipped
+                        // slots left default) to match the full-rebuild layout so
+                        // gl_InstanceCustomIndexEXT (== entry index) keeps indexing
+                        // the right material. Dummy slots are never sampled.
+                        matDescsCached_.assign(entries.size(), MaterialDesc{});
                         // Same dedup as the full-rebuild path below: entries
                         // order is identical (overlay skip matches), so
                         // identical Material* pointers produce identical
                         // materialAssetIdx values frame-to-frame.
                         std::unordered_map<const Material*, uint32_t> matAssetMap;
-                        for (const MeshEntry& en : entries) {
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            const MeshEntry& en = entries[i];
                             if (en.isOverlay) continue;// raster-overlay only — no MaterialDesc slot
                             Mesh* m = en.mesh;
                             MaterialDesc md = materialFromMesh(*m);
@@ -4719,7 +4728,7 @@ namespace threepp {
                                 md.occlusionTexIndex = ensureMaterialTexture(tex);
                                 copyTexUvTransform(md.uvTransformOcclusion, tex);
                             }
-                            matDescsCached_.push_back(md);
+                            matDescsCached_[i] = md;
                         }
                         for (auto& d : matDescsDirty_) d = true;
                         sceneHasGlass_ = false;
@@ -4727,12 +4736,13 @@ namespace threepp {
                         sceneHasIridescence_ = false;
                         sceneHasSheen_ = false;
                         glassEntryIndices_.clear();
-                        // matDescsCached_ skips overlay entries (raster-only),
-                        // so the mat-index lags behind the entry-index whenever
-                        // an overlay precedes glass in the entry list.
-                        for (size_t i = 0, mi = 0; i < entries.size(); ++i) {
+                        // matDescsCached_ is ENTRIES-indexed (overlay slots left
+                        // default), so index it directly by i. glassEntryIndices_
+                        // stays entry-index based (cullEntriesAgainstFrustum walks
+                        // it in lockstep with i).
+                        for (size_t i = 0; i < entries.size(); ++i) {
                             if (entries[i].isOverlay) continue;
-                            const auto& md = matDescsCached_[mi++];
+                            const auto& md = matDescsCached_[i];
                             if (md.transmission > 0.0f) {
                                 sceneHasGlass_ = true;
                                 glassEntryIndices_.push_back(i);
@@ -4923,11 +4933,19 @@ namespace threepp {
             }
 
             std::vector<VkAccelerationStructureInstanceKHR> instances;
-            std::vector<GeometryDesc> geomDescs;
-            std::vector<MaterialDesc> matDescs;
             instances.reserve(entries.size());
-            geomDescs.reserve(entries.size());
-            matDescs.reserve(entries.size());
+            // geomDescs / matDescs are ENTRIES-indexed: one slot per entry, with
+            // overlay/skipped entries left default. This makes
+            // gl_InstanceCustomIndexEXT == the entry index, so the raster gbuffer
+            // id, RT gbuffer id, motionMat and meshMovedBits all live in ONE index
+            // space. (Previously these were filtered/contiguous, so any overlay or
+            // skipped entry shifted the filtered index away from the entry index —
+            // corrupting gbuffer.frag's material/normal-map lookup and raygen's
+            // motionMat[] / isMeshMoved() reads for every mesh after the skip.)
+            // Dummy slots are never referenced: skipped entries get no TLAS
+            // instance and are not drawn in the gbuffer (both skip on isOverlay).
+            std::vector<GeometryDesc> geomDescs(entries.size());
+            std::vector<MaterialDesc> matDescs(entries.size());
 
             // Material-asset dedup. Meshes sharing one Material C++ pointer
             // get the same matAssetIdx so raygen's bilinear reproject gate
@@ -4936,7 +4954,8 @@ namespace threepp {
             // below entries.size() in typical content.
             std::unordered_map<const Material*, uint32_t> matAssetMap;
 
-            for (const MeshEntry& en : entries) {
+            for (size_t i = 0; i < entries.size(); ++i) {
+                const MeshEntry& en = entries[i];
                 Mesh* m = en.mesh;
                 const BufferGeometry* geomKey = m->geometry().get();
 
@@ -5018,7 +5037,7 @@ namespace threepp {
                         inst.transform.matrix[r][c] = e[c * 4 + r];
                     }
                 }
-                inst.instanceCustomIndex = static_cast<uint32_t>(geomDescs.size());
+                inst.instanceCustomIndex = static_cast<uint32_t>(i);
                 inst.mask = 0xFFu;
                 inst.instanceShaderBindingTableRecordOffset = 0;
                 inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
@@ -5053,7 +5072,7 @@ namespace threepp {
                                 : recPtr->vertex.address;
                 gdesc.indexed = recPtr->index.handle != VK_NULL_HANDLE ? 1u : 0u;
                 gdesc._pad = 0;
-                geomDescs.push_back(gdesc);
+                geomDescs[i] = gdesc;
 
                 MaterialDesc md = materialFromMesh(*m);
                 {
@@ -5098,7 +5117,7 @@ namespace threepp {
                     md.occlusionTexIndex = ensureMaterialTexture(tex);
                     copyTexUvTransform(md.uvTransformOcclusion, tex);
                 }
-                matDescs.push_back(md);
+                matDescs[i] = md;
             }
 
             buildTlas(instances);
@@ -5117,9 +5136,12 @@ namespace threepp {
             sceneHasIridescence_ = false;
             sceneHasSheen_ = false;
             glassEntryIndices_.clear();
-            for (size_t i = 0, mi = 0; i < entries.size(); ++i) {
+            // matDescs is now ENTRIES-indexed, so index it directly by i (was a
+            // separate filtered counter mi). glassEntryIndices_ stays entry-index
+            // based — cullEntriesAgainstFrustum walks it in lockstep with i.
+            for (size_t i = 0; i < entries.size(); ++i) {
                 if (entries[i].isOverlay) continue;
-                const auto& md = matDescs[mi++];
+                const auto& md = matDescs[i];
                 if (md.transmission > 0.0f) {
                     sceneHasGlass_ = true;
                     glassEntryIndices_.push_back(i);
