@@ -613,6 +613,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/EnvPrefilter.hpp"
             "threepp/renderers/vulkan/EventCameraDetector.hpp"
             "threepp/renderers/vulkan/SkinningPipeline.hpp"
+            "threepp/renderers/vulkan/TetSkinningPipeline.hpp"
             "threepp/renderers/vulkan/TaaResolve.hpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.hpp"
             "threepp/renderers/vulkan/water/OceanFFT.hpp"
@@ -628,6 +629,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/EnvPrefilter.cpp"
             "threepp/renderers/vulkan/EventCameraDetector.cpp"
             "threepp/renderers/vulkan/SkinningPipeline.cpp"
+            "threepp/renderers/vulkan/TetSkinningPipeline.cpp"
             "threepp/renderers/vulkan/TaaResolve.cpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
             "threepp/renderers/vulkan/FoamWorldPipeline.cpp"
@@ -975,6 +977,10 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/skinning.comp"
         kSkinningCompSpv
         _skinning_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/tet_skinning.comp"
+        kTetSkinningCompSpv
+        _tet_skinning_spv_h)
     # FFT-based ocean (DisplacedMesh): Phillips spectrum, time-evolution,
     # IFFT (twiddle table + horizontal/vertical butterflies + permute) and
     # a vertex-displacement compute that writes into the BLAS vertex buffer.

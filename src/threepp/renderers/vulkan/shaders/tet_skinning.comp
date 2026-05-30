@@ -1,0 +1,82 @@
+#version 460
+
+// GPU tetrahedral skinning for PhysX soft bodies — the Vulkan path-tracer
+// counterpart of the GL <tetskinning_*> shader chunks. Runs once per tet-skinned
+// mesh per frame, writing deformed positions/normals into the BLAS vertex/normal
+// buffers; the BLAS refit then reads them (same pattern as skinning.comp and
+// water_displace.comp).
+//
+// Each visual vertex is embedded in one collision tetrahedron: tetIndex holds its
+// four tet-vertex indices, tetWeight the barycentric weights. The deformed position
+// is the barycentric blend of the four current tet positions. Normals are carried
+// by the per-tet deformation gradient F = Dc · Dr^-1, where Dr^-1 (the rest edge-
+// matrix inverse) is baked per-vertex on the host (restInv0/1/2 columns) so there's
+// no inverse here; the inverse-transpose for the normal uses the cofactor (cross-
+// product) form, so no matrix inverse at all in the hot loop.
+//
+// tetPos = current collision-tet world positions, one vec4 per tet vertex (.xyz
+// used; .w is invMass and ignored). Uploaded by the renderer each frame from the
+// soft body's tet texture image.
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer TetIdx  { vec4  tetIndex[]; };
+layout(set = 0, binding = 1, std430) readonly buffer TetW    { vec4  tetWeight[]; };
+layout(set = 0, binding = 2, std430) readonly buffer BaseNrm { float baseNrm[]; };
+layout(set = 0, binding = 3, std430) readonly buffer RestI0  { float restInv0[]; };
+layout(set = 0, binding = 4, std430) readonly buffer RestI1  { float restInv1[]; };
+layout(set = 0, binding = 5, std430) readonly buffer RestI2  { float restInv2[]; };
+layout(set = 0, binding = 6, std430) readonly buffer TetPos  { vec4  tetPos[]; };
+layout(set = 0, binding = 7, std430)         buffer OutPos   { float outPos[]; };
+layout(set = 0, binding = 8, std430)         buffer OutNrm   { float outNrm[]; };
+
+layout(push_constant) uniform Pc {
+    uint vertexCount;
+} pc;
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.vertexCount) return;
+
+    const vec4 idx = tetIndex[i];
+    const vec4 w   = tetWeight[i];
+
+    const vec3 c0 = tetPos[uint(idx.x)].xyz;
+    const vec3 c1 = tetPos[uint(idx.y)].xyz;
+    const vec3 c2 = tetPos[uint(idx.z)].xyz;
+    const vec3 c3 = tetPos[uint(idx.w)].xyz;
+
+    // Barycentric blend -> deformed world position.
+    const vec3 p = c0 * w.x + c1 * w.y + c2 * w.z + c3 * w.w;
+
+    // Deformation gradient F = Dc · Dr^-1 (Dr^-1 baked into restInv0/1/2 columns).
+    const mat3 Dc = mat3(c1 - c0, c2 - c0, c3 - c0);
+    const mat3 restInv = mat3(
+        vec3(restInv0[i * 3 + 0], restInv0[i * 3 + 1], restInv0[i * 3 + 2]),
+        vec3(restInv1[i * 3 + 0], restInv1[i * 3 + 1], restInv1[i * 3 + 2]),
+        vec3(restInv2[i * 3 + 0], restInv2[i * 3 + 1], restInv2[i * 3 + 2]));
+    const mat3 F = Dc * restInv;
+
+    // Inverse-transpose for the normal via the cofactor (cross-product) form. det(F)
+    // scales out under normalize; sign(det) preserves orientation through a rare
+    // inverted tet; the guard keeps the rest normal for degenerate / collapsed tets.
+    vec3 nrm = vec3(baseNrm[i * 3 + 0], baseNrm[i * 3 + 1], baseNrm[i * 3 + 2]);
+    const vec3 f0 = F[0];
+    const vec3 f1 = F[1];
+    const vec3 f2 = F[2];
+    const vec3 cof0 = cross(f1, f2);
+    const float detF = dot(f0, cof0);
+    if (abs(detF) > 1e-12) {
+        const mat3 cofF = mat3(cof0, cross(f2, f0), cross(f0, f1));
+        nrm = sign(detF) * (cofF * nrm);
+    }
+    const float nl = length(nrm);
+    nrm = nl > 0.0 ? nrm / nl : vec3(0.0, 1.0, 0.0);
+
+    outPos[i * 3 + 0] = p.x;
+    outPos[i * 3 + 1] = p.y;
+    outPos[i * 3 + 2] = p.z;
+    outNrm[i * 3 + 0] = nrm.x;
+    outNrm[i * 3 + 1] = nrm.y;
+    outNrm[i * 3 + 2] = nrm.z;
+}

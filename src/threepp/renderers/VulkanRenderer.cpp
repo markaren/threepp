@@ -31,6 +31,7 @@
 #include "vulkan/LidarScanner.hpp"
 #include "vulkan/PhotonCaustics.hpp"
 #include "vulkan/SkinningPipeline.hpp"
+#include "vulkan/TetSkinningPipeline.hpp"
 #include "vulkan/TaaResolve.hpp"
 #include "vulkan/WaterDisplacePipeline.hpp"
 #include "vulkan/FoamWorldPipeline.hpp"
@@ -149,7 +150,21 @@ namespace threepp {
         // (N+2)&1 the prior owner of that slot (frame N) has fully completed
         // on the GPU. Temporal reproject still reads "the previous frame"
         // because readSlot = 1 - writeSlot, which alternates correctly.
-        constexpr uint32_t kFramesInFlight = 3;
+        //
+        // MUST stay EVEN. The ping-pong slot is `currentFrame & 1`, and
+        // currentFrame cycles mod kFramesInFlight. Only an even count makes
+        // `currentFrame & 1` track the true monotonic frame parity, so the
+        // slot actually alternates frame-to-frame. An ODD count (e.g. 3)
+        // desyncs it: the write-slot sequence becomes 0,1,0,0,1,0,… so every
+        // 3rd frame the temporal read samples a 2-frame-STALE slot while the
+        // immediately-previous frame's output is overwritten unread —
+        // corrupting accum/gbuf/moments/albedo/ReSTIR/TAA history on a 3-frame
+        // beat (periodic ghosting + reprojection reading the wrong frame).
+        // If a deeper pipeline is ever wanted, decouple the ping-pong parity
+        // from this sync ring (drive the slot from a monotonic `++parity & 1`
+        // and rewrite the temporal image bindings per frame) instead of
+        // bumping this to an odd value.
+        constexpr uint32_t kFramesInFlight = 2;
     }// namespace
 
     struct VulkanRenderer::Impl {
@@ -282,6 +297,38 @@ namespace threepp {
         // dispatch + BLAS rebuild into the main per-frame cmd buffer with
         // barriers. Cleared at the end of recordCommandBuffer.
         std::vector<SkinnedMeshState*> pendingSkinnedRebuilds_;
+
+        // Per-Mesh tet-skinned (PhysX soft body) deformed BLAS. Like SkinnedMesh,
+        // each body has its own pose so it can't share a BLAS. The static tet
+        // bindings (tetIndex/tetWeight/restInv*) + rest normals are uploaded once;
+        // the per-frame collision-tet positions are re-uploaded from the soft body's
+        // tet texture each frame, then tet_skinning.comp blends the full-res visual
+        // into the BLAS vertex/normal buffers and the BLAS is refit in place.
+        struct TetMeshState {
+            std::unique_ptr<BlasRecord> blas;
+            std::weak_ptr<BufferGeometry> liveCheck;
+            // Static per-vertex inputs (uploaded once at ensureTetBlas).
+            Buffer tetIndex   {};// vec4<float> — 4 tet-vertex indices
+            Buffer tetWeight  {};// vec4<float> — barycentric weights
+            Buffer baseNormal {};// vec3<float> — rest normals
+            Buffer restInv0   {};// vec3<float> — baked Dr^-1 column 0
+            Buffer restInv1   {};// vec3<float> — baked Dr^-1 column 1
+            Buffer restInv2   {};// vec3<float> — baked Dr^-1 column 2
+            // Per-frame collision-tet world positions (vec4/texel), re-uploaded each
+            // frame from the soft body's tet texture image.
+            Buffer tetPos     {};
+            VkDeviceSize tetPosBytes = 0;
+            uint32_t vertexCount    = 0;
+            uint32_t primitiveCount = 0;
+            bool     indexed        = false;
+            VkDescriptorSet tetDescSet = VK_NULL_HANDLE;
+            Buffer blasScratch {};
+            VkDeviceSize blasScratchSize = 0;
+            uint32_t blasRefitCounter = 0;
+            static constexpr uint32_t kBlasFullRebuildInterval = 64;
+        };
+        std::unordered_map<const Mesh*, std::unique_ptr<TetMeshState>> tetMeshStates;
+        std::vector<TetMeshState*> pendingTetRebuilds_;
 
         // Per-Mesh morphed-geometry BLAS. Two meshes sharing the same
         // BufferGeometry can have different morphTargetInfluences, so each
@@ -690,6 +737,7 @@ namespace threepp {
             bool     isSkinned   = false;
             bool     isDisplaced = false;
             bool     isMorphed   = false;
+            bool     isTet       = false;
             // Frustum-cull bit, populated once per frame by
             // cullEntriesAgainstFrustum() right before record. Raster passes
             // skip entries with inFrustum == false to dodge the GPU's per-
@@ -954,6 +1002,8 @@ namespace threepp {
         // Pipeline + descriptor pool live in vulkan/SkinningPipeline.{hpp,cpp};
         // per-mesh descriptor sets (state->skinDescSet) live in SkinnedMeshState.
         std::unique_ptr<vulkan::SkinningPipeline> skinning_;
+        // GPU tetrahedral-skinning pipeline for PhysX soft bodies (mirrors skinning_).
+        std::unique_ptr<vulkan::TetSkinningPipeline> tetSkinning_;
 
         // ── Hybrid raster G-buffer prepass ──────────────────────────────────
         // Replaces PT primary-ray traversal: raster writes depth/normal/motion/IDs
@@ -1414,6 +1464,7 @@ namespace threepp {
             denoiser_ = std::make_unique<vulkan::Denoiser>(*ctx, rtDsLayout, cmdPool);
             createAccumImage();
             skinning_ = std::make_unique<vulkan::SkinningPipeline>(*ctx);
+            tetSkinning_ = std::make_unique<vulkan::TetSkinningPipeline>(*ctx);
             photon_ = std::make_unique<vulkan::PhotonCaustics>(*ctx, rtPipelineLayout);
             waterDisplace_ = std::make_unique<vulkan::WaterDisplacePipeline>(*ctx);
             foamWorld_     = std::make_unique<vulkan::FoamWorldPipeline>(*ctx);
@@ -1532,6 +1583,29 @@ namespace threepp {
             }
             skinnedMeshStates.clear();
 
+            for (auto& [_, st] : tetMeshStates) {
+                destroyBuffer(ctx->allocator(), st->tetIndex);
+                destroyBuffer(ctx->allocator(), st->tetWeight);
+                destroyBuffer(ctx->allocator(), st->baseNormal);
+                destroyBuffer(ctx->allocator(), st->restInv0);
+                destroyBuffer(ctx->allocator(), st->restInv1);
+                destroyBuffer(ctx->allocator(), st->restInv2);
+                destroyBuffer(ctx->allocator(), st->tetPos);
+                destroyBuffer(ctx->allocator(), st->blasScratch);
+                auto& rec = st->blas;
+                if (!rec) continue;
+                if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
+                destroyBuffer(ctx->allocator(), rec->storage);
+                destroyBuffer(ctx->allocator(), rec->vertex);
+                destroyBuffer(ctx->allocator(), rec->index);
+                destroyBuffer(ctx->allocator(), rec->normal);
+                destroyBuffer(ctx->allocator(), rec->uv);
+                destroyBuffer(ctx->allocator(), rec->foam);
+                destroyBuffer(ctx->allocator(), rec->prevVertex);
+                destroyBuffer(ctx->allocator(), rec->blasScratch);
+            }
+            tetMeshStates.clear();
+
             for (auto& [_, st] : displacedStates) {
                 if (st->blas) {
                     auto& rec = st->blas;
@@ -1606,6 +1680,7 @@ namespace threepp {
             // destroyed alongside the BLAS in the skinnedMeshStates clear
             // (see below); the shared pipeline + pool live in skinning_.
             skinning_.reset();
+            tetSkinning_.reset();
 
             // Water displace pipeline owns its handles + sampler.
             waterDisplace_.reset();
@@ -2266,6 +2341,172 @@ namespace threepp {
             // GPU work is recorded into the main command buffer at the start
             // of recordCommandBuffer — no blocking submit here.
             pendingSkinnedRebuilds_.push_back(&st);
+        }
+
+        // Allocate or look up the per-tet-skinned-mesh BLAS state (PhysX soft body).
+        // Mirrors ensureSkinnedBlas: build the BLAS once at rest pose, upload the
+        // static tet bindings + rest normals + baked Dr^-1 columns, allocate the
+        // per-frame tet-position buffer + descriptor set, then queue a first refresh.
+        // Returns null if the geometry/material lack the tet attributes that
+        // SoftBody::enableGpuSkinning() sets.
+        TetMeshState* ensureTetBlas(Mesh& m) {
+            auto found = tetMeshStates.find(&m);
+            if (found != tetMeshStates.end()) return found->second.get();
+
+            auto geom = m.geometry();
+            if (!geom) return nullptr;
+            auto* posAttr = geom->getAttribute<float>("position");
+            auto* nrmAttr = geom->getAttribute<float>("normal");
+            auto* tiAttr  = geom->getAttribute<float>("tetIndex");
+            auto* twAttr  = geom->getAttribute<float>("tetWeight");
+            auto* r0Attr  = geom->getAttribute<float>("tetRestInv0");
+            auto* r1Attr  = geom->getAttribute<float>("tetRestInv1");
+            auto* r2Attr  = geom->getAttribute<float>("tetRestInv2");
+            auto mat = m.material();
+            if (!posAttr || !nrmAttr || !tiAttr || !twAttr || !r0Attr || !r1Attr || !r2Attr) return nullptr;
+            if (!mat || !mat->tetTexture) return nullptr;
+
+            // BLAS built from the rest positions; the tet_skinning compute then
+            // rewrites the vertex/normal buffers each frame and the BLAS is refit.
+            auto rec = buildBlasFor(*geom);
+            if (!rec) return nullptr;
+            rec->liveCheck = geom;
+
+            // Previous-frame vertex buffer for per-vertex motion vectors (same role
+            // as the skinned path; copied current->prev before each compute).
+            const VkDeviceSize vbBytes = posAttr->array().size() * sizeof(float);
+            rec->prevVertex = createBuffer(
+                    ctx->allocator(), ctx->device(), vbBytes,
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO);
+
+            auto state = std::make_unique<TetMeshState>();
+            state->blas = std::move(rec);
+            state->liveCheck = geom;
+            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
+            state->vertexCount = vertexCount;
+            auto* idxAttr = geom->getIndex();
+            state->indexed = idxAttr != nullptr;
+            state->primitiveCount = state->indexed
+                    ? static_cast<uint32_t>(idxAttr->count() / 3)
+                    : vertexCount / 3;
+
+            auto allocAndUpload = [&](Buffer& dst, const void* src, VkDeviceSize bytes) {
+                dst = createBuffer(
+                        ctx->allocator(), ctx->device(), bytes,
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), dst.alloc, &mapped);
+                std::memcpy(mapped, src, bytes);
+                vmaUnmapMemory(ctx->allocator(), dst.alloc);
+            };
+            allocAndUpload(state->tetIndex,   tiAttr->array().data(),  vertexCount * 4 * sizeof(float));
+            allocAndUpload(state->tetWeight,  twAttr->array().data(),  vertexCount * 4 * sizeof(float));
+            allocAndUpload(state->baseNormal, nrmAttr->array().data(), vertexCount * 3 * sizeof(float));
+            allocAndUpload(state->restInv0,   r0Attr->array().data(),  vertexCount * 3 * sizeof(float));
+            allocAndUpload(state->restInv1,   r1Attr->array().data(),  vertexCount * 3 * sizeof(float));
+            allocAndUpload(state->restInv2,   r2Attr->array().data(),  vertexCount * 3 * sizeof(float));
+
+            // Per-frame tet positions buffer, sized to the tet texture image (one
+            // RGBA32F texel per collision-tet vertex). Filled by refreshTetBlas.
+            const auto& tetImg = mat->tetTexture->image().data<float>();
+            state->tetPosBytes = static_cast<VkDeviceSize>(tetImg.size()) * sizeof(float);
+            state->tetPos = createBuffer(
+                    ctx->allocator(), ctx->device(), state->tetPosBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+
+            // Descriptor set — 9 storage buffers (see tet_skinning.comp).
+            state->tetDescSet = tetSkinning_->allocateMeshDescriptorSet();
+            std::array<VkDescriptorBufferInfo, 9> bi{};
+            const Buffer* bufs[9] = {
+                    &state->tetIndex, &state->tetWeight, &state->baseNormal,
+                    &state->restInv0, &state->restInv1, &state->restInv2,
+                    &state->tetPos,
+                    &state->blas->vertex, &state->blas->normal,
+            };
+            std::array<VkWriteDescriptorSet, 9> wr{};
+            for (uint32_t i = 0; i < 9; ++i) {
+                bi[i].buffer          = bufs[i]->handle;
+                bi[i].offset          = 0;
+                bi[i].range           = VK_WHOLE_SIZE;
+                wr[i]                 = {};
+                wr[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                wr[i].dstSet          = state->tetDescSet;
+                wr[i].dstBinding      = i;
+                wr[i].descriptorCount = 1;
+                wr[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                wr[i].pBufferInfo     = &bi[i];
+            }
+            vkUpdateDescriptorSets(ctx->device(),
+                                   static_cast<uint32_t>(wr.size()), wr.data(), 0, nullptr);
+
+            // Persistent BLAS-rebuild scratch (sized once, reused every frame).
+            VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+            triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+            triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            triData.vertexData.deviceAddress = state->blas->vertex.address;
+            triData.vertexStride = 3 * sizeof(float);
+            triData.maxVertex    = vertexCount - 1;
+            if (state->indexed) {
+                triData.indexType = VK_INDEX_TYPE_UINT32;
+                triData.indexData.deviceAddress = state->blas->index.address;
+            } else {
+                triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+            }
+            VkAccelerationStructureGeometryKHR blasGeom{};
+            blasGeom.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            blasGeom.geometryType  = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            blasGeom.geometry.triangles = triData;
+            blasGeom.flags         = 0;
+            VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
+            blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+            blasBuild.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                              VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+            blasBuild.mode  = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            blasBuild.geometryCount = 1;
+            blasBuild.pGeometries   = &blasGeom;
+            blasBuild.dstAccelerationStructure = state->blas->as;
+            VkAccelerationStructureBuildSizesInfoKHR blasSizes{};
+            blasSizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+            ctx->rt().getAccelerationStructureBuildSizes(
+                    ctx->device(),
+                    VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                    &blasBuild, &state->primitiveCount, &blasSizes);
+            state->blasScratchSize = blasSizes.buildScratchSize;
+            state->blasScratch = createAsScratchBuffer(
+                    ctx->allocator(), ctx->device(), state->blasScratchSize);
+
+            auto* raw = state.get();
+            tetMeshStates.emplace(&m, std::move(state));
+            // First-frame refresh so the BLAS reflects the current deformation.
+            refreshTetBlas(m, *raw);
+            return raw;
+        }
+
+        // Per-frame: upload the soft body's current collision-tet positions into the
+        // tet-position buffer (read from the material's tet texture image, which
+        // PhysxWorld::syncSoftBodies refreshes each frame), then queue the GPU skin +
+        // BLAS rebuild — recorded in recordCommandBuffer next to the skinned path.
+        void refreshTetBlas(Mesh& m, TetMeshState& st) {
+            if (!st.blas) return;
+            auto mat = m.material();
+            if (!mat || !mat->tetTexture) return;
+            const auto& tetImg = mat->tetTexture->image().data<float>();
+            const VkDeviceSize bytes = std::min<VkDeviceSize>(
+                    st.tetPosBytes, static_cast<VkDeviceSize>(tetImg.size()) * sizeof(float));
+            if (bytes == 0) return;
+            void* mapped = nullptr;
+            vmaMapMemory(ctx->allocator(), st.tetPos.alloc, &mapped);
+            std::memcpy(mapped, tetImg.data(), bytes);
+            vmaUnmapMemory(ctx->allocator(), st.tetPos.alloc);
+            pendingTetRebuilds_.push_back(&st);
         }
 
         // Per-frame refresh op for a plain (non-skinned/non-displaced/non-morphed)
@@ -3646,8 +3887,11 @@ namespace threepp {
             const size_t gN = glassEntryIndices_.size();
             for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
                 auto& en = lastVisibleEntries_[i];
-                // Default-include conservative cases — they always draw.
-                if (en.isOverlay || en.isSkinned || en.isDisplaced || en.isMorphed) {
+                // Default-include conservative cases — they always draw. Deformers
+                // (skinned/displaced/morphed/tet) are here because their cached local
+                // AABB doesn't reflect the per-frame deformed extents, so frustum-
+                // culling them risks popping a still-on-screen body out of the gbuffer.
+                if (en.isOverlay || en.isSkinned || en.isDisplaced || en.isMorphed || en.isTet) {
                     en.inFrustum = true;
                 } else {
                     auto geom = en.mesh->geometry();
@@ -3985,6 +4229,13 @@ namespace threepp {
                 const bool isSkinned   = (dynamic_cast<SkinnedMesh*>(m)   != nullptr);
                 const bool isDisplaced = (dynamic_cast<DisplacedMesh*>(m) != nullptr);
                 const bool isMorphed   = isMorphedMesh(*m);
+                // Tet-skinned PhysX soft body — detected via the material flag set by
+                // SoftBody::enableGpuSkinning() (which also carries the per-frame tet
+                // texture and the static tetIndex/tetWeight/tetRestInv* attributes).
+                // Mutually exclusive with the other deformers.
+                const bool isTet = !isSkinned && !isDisplaced && !isMorphed &&
+                                   m->material() && m->material()->tetSkinning &&
+                                   m->material()->tetTexture != nullptr;
                 if (auto* inst = dynamic_cast<InstancedMesh*>(m); inst && inst->count() > 0) {
                     Matrix4 instMat;
                     Matrix4 world;
@@ -3998,6 +4249,7 @@ namespace threepp {
                         e.isSkinned    = isSkinned;
                         e.isDisplaced  = isDisplaced;
                         e.isMorphed    = isMorphed;
+                        e.isTet        = isTet;
                         std::memcpy(e.worldMatrix.data(), world.elements.data(), 64);
                         entries.push_back(e);
                     }
@@ -4009,6 +4261,7 @@ namespace threepp {
                     e.isSkinned    = isSkinned;
                     e.isDisplaced  = isDisplaced;
                     e.isMorphed    = isMorphed;
+                    e.isTet        = isTet;
                     std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
                     entries.push_back(e);
                 }
@@ -4164,6 +4417,7 @@ namespace threepp {
                 bool materialValuesSame = true;
                 bool bonesDirtyAny = false;
                 bool displacedDirtyAny = false;
+                bool tetDirtyAny = false;
                 bool geomDirtyAny = false;
                 bool morphDirtyAny = false;
                 std::vector<bool> entryGeomDirty(entries.size(), false);
@@ -4269,6 +4523,20 @@ namespace threepp {
                             refreshMorphedBlas(*m, *mIt->second);
                         }
                     }
+                    // Tet-skinned soft bodies (PhysX) deform every frame — re-upload
+                    // their collision-tet positions, queue the GPU skin + BLAS refit,
+                    // and flag motion for reprojection/TAA like the other deformers.
+                    for (size_t i = 0; i < entries.size(); ++i) {
+                        if (!entries[i].isTet) continue;
+                        auto tIt = tetMeshStates.find(entries[i].mesh);
+                        if (tIt == tetMeshStates.end()) continue;
+                        refreshTetBlas(*entries[i].mesh, *tIt->second);
+                        tetDirtyAny = true;
+                        const size_t w = i >> 5;
+                        if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
+                        meshMovedBits_[w] |= (1u << (i & 31u));
+                    }
+                    if (tetDirtyAny) motionThisFrame_ = true;
                     if (geomDirtyAny) {
                         // Re-upload vertex data for geometries whose
                         // BufferAttribute versions changed and rebuild their
@@ -4328,7 +4596,7 @@ namespace threepp {
                         }
                         refreshGeomBlasBatch(refreshOps);
                     }
-                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny || geomDirtyAny || morphDirtyAny) {
+                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny) {
                         // TLAS refit: needed when instance transforms change
                         // (matricesSame=false) AND when any skinned BLAS was
                         // just rebuilt — the TLAS's per-instance wrapped AABB
@@ -4340,7 +4608,12 @@ namespace threepp {
                         // tlasInstancesBuffer in place and call MODE_UPDATE.
                         std::vector<VkAccelerationStructureInstanceKHR> instances;
                         instances.reserve(entries.size());
-                        for (const MeshEntry& en : entries) {
+                        // instanceCustomIndex == entry index (matches the entries-
+                        // indexed geomDescs/matDescs built in the full rebuild);
+                        // overlay/skipped entries push no instance, exactly as
+                        // their geomDescs/matDescs slots are left default.
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            const MeshEntry& en = entries[i];
                             if (en.isOverlay) continue;// raster-overlay only
                             VkDeviceAddress blasAddr = 0;
                             if (en.isSkinned) {
@@ -4354,6 +4627,10 @@ namespace threepp {
                                 auto dmIt = displacedStates.find(dm);
                                 if (dmIt == displacedStates.end()) continue;
                                 blasAddr = dmIt->second->blas->address;
+                            } else if (en.isTet) {
+                                auto tIt = tetMeshStates.find(en.mesh);
+                                if (tIt == tetMeshStates.end()) continue;
+                                blasAddr = tIt->second->blas->address;
                             } else if (en.isMorphed) {
                                 auto mIt = morphedMeshStates.find(en.mesh);
                                 if (mIt == morphedMeshStates.end()) continue;
@@ -4371,14 +4648,14 @@ namespace threepp {
                                     inst.transform.matrix[r][c] = e[c * 4 + r];
                                 }
                             }
-                            inst.instanceCustomIndex = static_cast<uint32_t>(instances.size());
+                            inst.instanceCustomIndex = static_cast<uint32_t>(i);
                             inst.mask = 0xFFu;
                             inst.instanceShaderBindingTableRecordOffset = 0;
                             inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
                             inst.accelerationStructureReference = blasAddr;
                             instances.push_back(inst);
                         }
-                        const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || morphDirtyAny || geomDirtyAny;
+                        const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny;
                         refitTlas(instances, blasDeformed);
                     }
                     if (!materialValuesSame) {
@@ -4394,14 +4671,18 @@ namespace threepp {
                         // post-fence; the other slot gets flushed when its turn
                         // comes around (it's still serving the previous frame's
                         // in-flight RT trace right now).
-                        matDescsCached_.clear();
-                        matDescsCached_.reserve(entries.size());
+                        // ENTRIES-indexed (one slot per entry, overlay/skipped
+                        // slots left default) to match the full-rebuild layout so
+                        // gl_InstanceCustomIndexEXT (== entry index) keeps indexing
+                        // the right material. Dummy slots are never sampled.
+                        matDescsCached_.assign(entries.size(), MaterialDesc{});
                         // Same dedup as the full-rebuild path below: entries
                         // order is identical (overlay skip matches), so
                         // identical Material* pointers produce identical
                         // materialAssetIdx values frame-to-frame.
                         std::unordered_map<const Material*, uint32_t> matAssetMap;
-                        for (const MeshEntry& en : entries) {
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            const MeshEntry& en = entries[i];
                             if (en.isOverlay) continue;// raster-overlay only — no MaterialDesc slot
                             Mesh* m = en.mesh;
                             MaterialDesc md = materialFromMesh(*m);
@@ -4447,7 +4728,7 @@ namespace threepp {
                                 md.occlusionTexIndex = ensureMaterialTexture(tex);
                                 copyTexUvTransform(md.uvTransformOcclusion, tex);
                             }
-                            matDescsCached_.push_back(md);
+                            matDescsCached_[i] = md;
                         }
                         for (auto& d : matDescsDirty_) d = true;
                         sceneHasGlass_ = false;
@@ -4455,12 +4736,13 @@ namespace threepp {
                         sceneHasIridescence_ = false;
                         sceneHasSheen_ = false;
                         glassEntryIndices_.clear();
-                        // matDescsCached_ skips overlay entries (raster-only),
-                        // so the mat-index lags behind the entry-index whenever
-                        // an overlay precedes glass in the entry list.
-                        for (size_t i = 0, mi = 0; i < entries.size(); ++i) {
+                        // matDescsCached_ is ENTRIES-indexed (overlay slots left
+                        // default), so index it directly by i. glassEntryIndices_
+                        // stays entry-index based (cullEntriesAgainstFrustum walks
+                        // it in lockstep with i).
+                        for (size_t i = 0; i < entries.size(); ++i) {
                             if (entries[i].isOverlay) continue;
-                            const auto& md = matDescsCached_[mi++];
+                            const auto& md = matDescsCached_[i];
                             if (md.transmission > 0.0f) {
                                 sceneHasGlass_ = true;
                                 glassEntryIndices_.push_back(i);
@@ -4562,6 +4844,36 @@ namespace threepp {
                         ++it;
                     }
                 }
+                for (auto it = tetMeshStates.begin(); it != tetMeshStates.end(); ) {
+                    if (it->second->liveCheck.expired()) {
+                        destroyBuffer(ctx->allocator(), it->second->tetIndex);
+                        destroyBuffer(ctx->allocator(), it->second->tetWeight);
+                        destroyBuffer(ctx->allocator(), it->second->baseNormal);
+                        destroyBuffer(ctx->allocator(), it->second->restInv0);
+                        destroyBuffer(ctx->allocator(), it->second->restInv1);
+                        destroyBuffer(ctx->allocator(), it->second->restInv2);
+                        destroyBuffer(ctx->allocator(), it->second->tetPos);
+                        destroyBuffer(ctx->allocator(), it->second->blasScratch);
+                        auto& rec = it->second->blas;
+                        if (rec) {
+                            if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);
+                            destroyBuffer(ctx->allocator(), rec->storage);
+                            destroyBuffer(ctx->allocator(), rec->vertex);
+                            destroyBuffer(ctx->allocator(), rec->index);
+                            destroyBuffer(ctx->allocator(), rec->normal);
+                            destroyBuffer(ctx->allocator(), rec->uv);
+                            destroyBuffer(ctx->allocator(), rec->foam);
+                            destroyBuffer(ctx->allocator(), rec->prevVertex);
+                        }
+                        if (it->second->tetDescSet != VK_NULL_HANDLE) {
+                            tetSkinning_->freeMeshDescriptorSet(it->second->tetDescSet);
+                            it->second->tetDescSet = VK_NULL_HANDLE;
+                        }
+                        it = tetMeshStates.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
                 for (auto it = displacedStates.begin(); it != displacedStates.end(); ) {
                     if (it->second->liveCheck.expired()) {
                         auto& st = it->second;
@@ -4621,11 +4933,19 @@ namespace threepp {
             }
 
             std::vector<VkAccelerationStructureInstanceKHR> instances;
-            std::vector<GeometryDesc> geomDescs;
-            std::vector<MaterialDesc> matDescs;
             instances.reserve(entries.size());
-            geomDescs.reserve(entries.size());
-            matDescs.reserve(entries.size());
+            // geomDescs / matDescs are ENTRIES-indexed: one slot per entry, with
+            // overlay/skipped entries left default. This makes
+            // gl_InstanceCustomIndexEXT == the entry index, so the raster gbuffer
+            // id, RT gbuffer id, motionMat and meshMovedBits all live in ONE index
+            // space. (Previously these were filtered/contiguous, so any overlay or
+            // skipped entry shifted the filtered index away from the entry index —
+            // corrupting gbuffer.frag's material/normal-map lookup and raygen's
+            // motionMat[] / isMeshMoved() reads for every mesh after the skip.)
+            // Dummy slots are never referenced: skipped entries get no TLAS
+            // instance and are not drawn in the gbuffer (both skip on isOverlay).
+            std::vector<GeometryDesc> geomDescs(entries.size());
+            std::vector<MaterialDesc> matDescs(entries.size());
 
             // Material-asset dedup. Meshes sharing one Material C++ pointer
             // get the same matAssetIdx so raygen's bilinear reproject gate
@@ -4634,7 +4954,8 @@ namespace threepp {
             // below entries.size() in typical content.
             std::unordered_map<const Material*, uint32_t> matAssetMap;
 
-            for (const MeshEntry& en : entries) {
+            for (size_t i = 0; i < entries.size(); ++i) {
+                const MeshEntry& en = entries[i];
                 Mesh* m = en.mesh;
                 const BufferGeometry* geomKey = m->geometry().get();
 
@@ -4660,6 +4981,10 @@ namespace threepp {
                     // contents (rest grid right now) become the displaced
                     // surface before the first ray-trace sees it.
                     refreshDisplacedBlas(*dm, *st, static_cast<float>(glfwGetTime()));
+                } else if (en.isTet) {
+                    auto* st = ensureTetBlas(*m);
+                    if (!st) continue;
+                    recPtr = st->blas.get();
                 } else if (en.isMorphed) {
                     auto* st = ensureMorphedBlas(*m);
                     if (!st) continue;
@@ -4712,7 +5037,7 @@ namespace threepp {
                         inst.transform.matrix[r][c] = e[c * 4 + r];
                     }
                 }
-                inst.instanceCustomIndex = static_cast<uint32_t>(geomDescs.size());
+                inst.instanceCustomIndex = static_cast<uint32_t>(i);
                 inst.mask = 0xFFu;
                 inst.instanceShaderBindingTableRecordOffset = 0;
                 inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
@@ -4747,7 +5072,7 @@ namespace threepp {
                                 : recPtr->vertex.address;
                 gdesc.indexed = recPtr->index.handle != VK_NULL_HANDLE ? 1u : 0u;
                 gdesc._pad = 0;
-                geomDescs.push_back(gdesc);
+                geomDescs[i] = gdesc;
 
                 MaterialDesc md = materialFromMesh(*m);
                 {
@@ -4792,7 +5117,7 @@ namespace threepp {
                     md.occlusionTexIndex = ensureMaterialTexture(tex);
                     copyTexUvTransform(md.uvTransformOcclusion, tex);
                 }
-                matDescs.push_back(md);
+                matDescs[i] = md;
             }
 
             buildTlas(instances);
@@ -4811,9 +5136,12 @@ namespace threepp {
             sceneHasIridescence_ = false;
             sceneHasSheen_ = false;
             glassEntryIndices_.clear();
-            for (size_t i = 0, mi = 0; i < entries.size(); ++i) {
+            // matDescs is now ENTRIES-indexed, so index it directly by i (was a
+            // separate filtered counter mi). glassEntryIndices_ stays entry-index
+            // based — cullEntriesAgainstFrustum walks it in lockstep with i.
+            for (size_t i = 0; i < entries.size(); ++i) {
                 if (entries[i].isOverlay) continue;
-                const auto& md = matDescs[mi++];
+                const auto& md = matDescs[i];
                 if (md.transmission > 0.0f) {
                     sceneHasGlass_ = true;
                     glassEntryIndices_.push_back(i);
@@ -4828,17 +5156,39 @@ namespace threepp {
             }
             cacheCullFlags(matDescs);
 
-            // Topology rebuild: prev gbuf + accum hold mesh IDs from the old
-            // scene, but the gl_InstanceCustomIndexEXT space just changed
-            // meaning. Clearing the gbuf to 0 (mesh ID = 0 = sky) makes the
-            // reproject mesh-ID guard miss everywhere → histFc=0 globally
-            // on the very next frame, mirroring the old sampleIndex=0 reset
-            // without throwing away a valid history when meshes happen to
-            // re-shuffle into the same slots. We're already past
-            // vkDeviceWaitIdle so the clear is safely synchronous.
-            clearGbufImages();
-            sampleIndex = 0;
-            prevWorldMats.clear();
+            // Topology rebuild: the prev gbuf holds mesh IDs keyed by
+            // gl_InstanceCustomIndexEXT (= entry order). If that ordering shifted,
+            // those IDs no longer name the same surface, so the reproject mesh-ID
+            // guard would accept stale taps — clearing the gbuf (→ guard misses
+            // everywhere → histFc=0 globally, a full cold-start) is the safe path.
+            //
+            // But the dominant dynamic case is APPEND-ONLY: existing entries keep
+            // their slots and new geometry is tacked on the end (a spawned PhysX
+            // body, a grown ParticleSystem, streamed-in meshes). There, every
+            // existing pixel's mesh ID is still valid and only the new entries lack
+            // history — which the per-pixel mesh-ID guard already cold-starts on its
+            // own. Clearing globally on every add throws away the whole scene's
+            // converged accumulation (the visible reconverge flash + smeared motion
+            // on every spawn). So detect the stable prefix and skip the reset.
+            // prevWorldMats is keyed by (Mesh*, instanceIndex), so it stays valid
+            // across an append too — new bodies are first-seen → identity motion.
+            // Reorder / removal-from-the-middle shifts the prefix → falls back to
+            // the clear.
+            bool appendOnly = sceneBuilt_ && currFp.size() >= prevSceneFingerprint.size();
+            for (size_t i = 0; appendOnly && i < prevSceneFingerprint.size(); ++i) {
+                const auto& a = currFp[i];
+                const auto& b = prevSceneFingerprint[i];
+                if (a.mesh != b.mesh || a.geom != b.geom || a.mat != b.mat ||
+                    a.instanceIndex != b.instanceIndex) {
+                    appendOnly = false;
+                }
+            }
+            if (!appendOnly) {
+                // We're already past vkDeviceWaitIdle so the clear is synchronous.
+                clearGbufImages();
+                sampleIndex = 0;
+                prevWorldMats.clear();
+            }
 
             // Grow motion-mat + mesh-moved-bits buffers if the new instance
             // count exceeds the current capacity. The descriptor write below
@@ -5534,6 +5884,12 @@ namespace threepp {
                 auto* dm = static_cast<DisplacedMesh*>(en.mesh);
                 auto it = displacedStates.find(dm);
                 if (it != displacedStates.end() && it->second->blas)
+                    return it->second->blas.get();
+                return nullptr;
+            }
+            if (en.isTet) {
+                auto it = tetMeshStates.find(en.mesh);
+                if (it != tetMeshStates.end() && it->second->blas)
                     return it->second->blas.get();
                 return nullptr;
             }
@@ -11311,6 +11667,115 @@ namespace threepp {
                 }
 
                 pendingSkinnedRebuilds_.clear();
+            }
+
+            // ── Tet-skinning (PhysX soft bodies) — same structure as the skinned
+            // block above: prevVertex snapshot → barrier → tet_skinning dispatch →
+            // barrier → BLAS refit → barrier. Separate pipeline + pending list.
+            if (!pendingTetRebuilds_.empty() && tetSkinning_) {
+                for (auto* st : pendingTetRebuilds_) {
+                    if (st->blas->prevVertex.handle == VK_NULL_HANDLE) continue;
+                    VkBufferCopy region{};
+                    region.size = VkDeviceSize(st->vertexCount) * 3u * sizeof(float);
+                    vkCmdCopyBuffer(cb, st->blas->vertex.handle,
+                                    st->blas->prevVertex.handle, 1, &region);
+                }
+                {
+                    VkMemoryBarrier2 mb{};
+                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+                    mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                       VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    VkDependencyInfo dep{};
+                    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep.memoryBarrierCount = 1;
+                    dep.pMemoryBarriers    = &mb;
+                    vkCmdPipelineBarrier2(cb, &dep);
+                }
+
+                tetSkinning_->bindPipeline(cb);
+                for (auto* st : pendingTetRebuilds_) {
+                    tetSkinning_->recordDispatch(cb, st->tetDescSet, st->vertexCount);
+                }
+
+                {
+                    VkMemoryBarrier2 mb{};
+                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                       VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
+                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                    mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                       VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
+                                       VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                    VkDependencyInfo dep{};
+                    dep.sType               = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep.memoryBarrierCount  = 1;
+                    dep.pMemoryBarriers     = &mb;
+                    vkCmdPipelineBarrier2(cb, &dep);
+                }
+
+                for (auto* st : pendingTetRebuilds_) {
+                    const bool fullRebuild =
+                            st->blasRefitCounter >= TetMeshState::kBlasFullRebuildInterval;
+                    st->blasRefitCounter = fullRebuild ? 0u : (st->blasRefitCounter + 1u);
+                    VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+                    triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+                    triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+                    triData.vertexData.deviceAddress = st->blas->vertex.address;
+                    triData.vertexStride = 3 * sizeof(float);
+                    triData.maxVertex    = st->vertexCount - 1;
+                    if (st->indexed) {
+                        triData.indexType = VK_INDEX_TYPE_UINT32;
+                        triData.indexData.deviceAddress = st->blas->index.address;
+                    } else {
+                        triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+                    }
+                    VkAccelerationStructureGeometryKHR blasGeom{};
+                    blasGeom.sType         = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+                    blasGeom.geometryType  = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+                    blasGeom.geometry.triangles = triData;
+                    blasGeom.flags         = 0;
+                    VkAccelerationStructureBuildGeometryInfoKHR blasBuild{};
+                    blasBuild.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+                    blasBuild.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                    blasBuild.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                                      VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+                    blasBuild.mode  = fullRebuild
+                            ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
+                            : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+                    blasBuild.geometryCount = 1;
+                    blasBuild.pGeometries   = &blasGeom;
+                    blasBuild.srcAccelerationStructure =
+                            fullRebuild ? VK_NULL_HANDLE : st->blas->as;
+                    blasBuild.dstAccelerationStructure = st->blas->as;
+                    blasBuild.scratchData.deviceAddress = st->blasScratch.address;
+                    VkAccelerationStructureBuildRangeInfoKHR range{};
+                    range.primitiveCount = st->primitiveCount;
+                    const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+                    ctx->rt().cmdBuildAccelerationStructures(cb, 1, &blasBuild, &pRange);
+                }
+
+                {
+                    VkMemoryBarrier2 mb{};
+                    mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+                    mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                    mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                       VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                    mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+                    VkDependencyInfo dep{};
+                    dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep.memoryBarrierCount = 1;
+                    dep.pMemoryBarriers    = &mb;
+                    vkCmdPipelineBarrier2(cb, &dep);
+                }
+
+                pendingTetRebuilds_.clear();
             }
 
             // ── Hybrid raster G-buffer pass ─────────────────────────────────

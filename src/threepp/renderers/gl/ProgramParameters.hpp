@@ -93,6 +93,7 @@ namespace threepp {
             bool skinning{};
             size_t maxBones{};
             bool useVertexTexture{};
+            bool tetSkinning{};
 
             bool morphTargets{};
             bool morphNormals{};
