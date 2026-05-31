@@ -1,53 +1,55 @@
-// Classical white-furnace test (Option A — env-only).
+// Classical white-furnace test for the Vulkan path tracer (env-only).
+// Port of the (removed) examples/wgpu/wgpu_furnace_env_test.cpp.
 //
-// A diffuse-white sphere (albedo=1, metalness=0, roughness=1) sits alone in
-// a constant-radiance environment (scene.environment = (1,1,1) everywhere).
-// For a Lambertian surface with albedo 1 lit by uniform Le=1 over the full
-// upper hemisphere, the reflected radiance is:
+// A diffuse-white sphere (albedo=1, metalness=0, roughness=1) sits alone in a
+// constant-radiance environment (scene.environment = (1,1,1) everywhere). For
+// a Lambertian surface with albedo 1 lit by uniform Le=1 over the hemisphere:
 //
-//     L_o = (ρ/π) * ∫ L_i cos θ dω = (1/π) * Le * π = Le = 1.0
+//     L_o = (ρ/π) · ∫ L_i cos θ dω = (1/π) · Le · π = Le = 1.0
 //
-// Every pixel covering the sphere must read exactly 1.0 — in one bounce,
-// no convergence delay, no geometric form-factor concerns. Any deviation
-// is a direct BRDF / throughput / sampling bug.
+// So every pixel covering the sphere must read exactly 1.0. Any deviation is a
+// direct BRDF / throughput / sampling bug (energy gain or loss). The white
+// furnace is the canonical correctness check for a path tracer's BSDF — now
+// the more important since the Vulkan PT is the project's sole path tracer and
+// ground-truth source.
 //
-// Readback is 8-bit LDR so Le > 1 would clip; we keep Le = 1.
+// Tonemap=None + outputColorSpace=Linear → readback bytes are raw linear, so
+// 1.0 ↔ 255. Readback uses the renderer's scene-capture buffer
+// (setSceneCaptureEnabled / readSceneRGBPixels): the post-TAA, *pre-overlay*
+// swapchain image, so the measurement is never contaminated by the ImGui HUD.
 //
-// The pathtracer renders to an offscreen RenderTarget; pixels are read
-// back (readRGBPixels only works on a RenderTarget) and displayed via a
-// fullscreen preview quad.
-//
-// See wgpu_furnace_test.cpp for the harder enclosed-box variant.
+// VulkanRenderer differences vs the WGPU original:
+//   • It IS the path tracer — no `usePathTracer` toggle, no separate
+//     `pathTracer()` object; settings live directly on the renderer.
+//   • No `frameCount()` accessor — we track accumulated frames ourselves
+//     (reset on camera move / material change, mirroring the renderer's own
+//     accumulation reset).
+//   • Clean readback via scene capture instead of an offscreen RenderTarget +
+//     fullscreen preview quad.
+//   • Runtime material edits propagate via Material::needsUpdate() (the
+//     renderer re-uploads on a material->version() bump) — Vulkan has no
+//     markDirty() and needs none.
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
-#include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
-#include "threepp/renderers/RenderTarget.hpp"
-#include "threepp/renderers/WgpuRenderer.hpp"
-#include "threepp/renderers/wgpu/WgpuPathTracer.hpp"
-#include "threepp/textures/DataTexture.hpp"
+#include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/textures/Texture.hpp"
 #include "threepp/threepp.hpp"
 
+#include <algorithm>
 #include <cmath>
-#include <cstring>
+#include <cstdint>
+#include <vector>
 
 using namespace threepp;
 
 namespace {
 
-    // Tiny equirect HDR texture with every texel = (1,1,1,1).
-    // scene.environment feeds the IBL sampling path at full strength,
-    // so final L_env = 1.0 (per-texel value).
+    // Tiny equirect HDR texture with every texel = (1,1,1,1). scene.environment
+    // feeds the IBL sampling path at full strength, so final L_env = 1.0.
     std::shared_ptr<Texture> makeConstantEnv() {
         constexpr int W = 8, H = 4;// 2:1 equirect aspect
-        std::vector<float> data(W * H * 4);
-        for (int i = 0; i < W * H; ++i) {
-            data[4 * i + 0] = 1.f;
-            data[4 * i + 1] = 1.f;
-            data[4 * i + 2] = 1.f;
-            data[4 * i + 3] = 1.f;
-        }
+        std::vector<float> data(static_cast<size_t>(W) * H * 4, 1.f);
         Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
         auto tex = Texture::create(img);
         tex->format = Format::RGBA;
@@ -63,9 +65,9 @@ namespace {
         float mean = 0.f;
         float stddev = 0.f;
         int samples = 0;
-        // Center-crop stats: pixels within 15% of min(w,h) radius from image center.
-        // This circle is always inside the sphere's projection, so it's uncontaminated
-        // by background env pixels (which sit around the sphere's perimeter).
+        // Center-crop stats: pixels within 15% of min(w,h) radius from image
+        // center. That circle is always inside the sphere's projection, so it's
+        // uncontaminated by the background env pixels around the perimeter.
         float cropMean = 0.f;
         float cropStddev = 0.f;
         int cropSamples = 0;
@@ -73,14 +75,14 @@ namespace {
         float centerLum = -1.f;
     };
 
-    // All pixels with luminance > bgThreshold (includes sphere + env background at 1.0).
-    // bgMean is contaminated upward by background; use cropMean for clean sphere measurement.
+    // px is tightly-packed RGB (3 bytes/pixel). All pixels with luminance >
+    // bgThreshold feed the (background-contaminated) all-pixel mean; the
+    // center-crop circle feeds the clean sphere-only mean.
     Stats computeStats(const std::vector<unsigned char>& px, int w, int h, float bgThreshold = 0.01f) {
         Stats s{};
         if (px.empty() || w <= 0 || h <= 0) return s;
+        if (px.size() < static_cast<size_t>(w) * h * 3) return s;
 
-        // Center-crop radius: 15% of min dimension. Sphere projected radius is ~80%
-        // of half-height, so r=0.15 is well inside and never clips background pixels.
         const float cropR = 0.15f * static_cast<float>(std::min(w, h));
         const float cropR2 = cropR * cropR;
         const float cx = (w - 1) * 0.5f;
@@ -111,13 +113,11 @@ namespace {
             const double b = px[3 * i + 2] / 255.0;
             const double l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
 
-            // All-pixel stats (contaminated by background).
             if (l >= bgThreshold) {
                 sr += r; sg += g; sb += b; sl += l; sl2 += l * l;
                 ++kept;
             }
 
-            // Center-crop stats (sphere-only, no background contamination).
             const float px_x = static_cast<float>(i % w);
             const float px_y = static_cast<float>(i / w);
             const float dx = px_x - cx;
@@ -132,13 +132,13 @@ namespace {
             s.meanR = static_cast<float>(sr / kept);
             s.meanG = static_cast<float>(sg / kept);
             s.meanB = static_cast<float>(sb / kept);
-            s.mean  = static_cast<float>(sl / kept);
+            s.mean = static_cast<float>(sl / kept);
             const double var = sl2 / kept - (sl / kept) * (sl / kept);
             s.stddev = static_cast<float>(std::sqrt(std::max(0.0, var)));
             s.samples = static_cast<int>(kept);
         }
         if (ckept > 0) {
-            s.cropMean   = static_cast<float>(csl / ckept);
+            s.cropMean = static_cast<float>(csl / ckept);
             const double cvar = csl2 / ckept - (csl / ckept) * (csl / ckept);
             s.cropStddev = static_cast<float>(std::sqrt(std::max(0.0, cvar)));
             s.cropSamples = static_cast<int>(ckept);
@@ -149,42 +149,30 @@ namespace {
 }// namespace
 
 int main() {
-    Canvas canvas("WgpuPathTracer — White Furnace (Env-only)", {{"vsync", false}});
+    Canvas canvas("Vulkan PT - White Furnace (Env-only)", {{"vsync", false}});
 
-    WgpuRenderer renderer(canvas);
+    VulkanRenderer renderer(canvas);
+    // Raw linear readback: 1.0 ↔ 255, no tone curve, no sRGB encode.
     renderer.outputColorSpace = ColorSpace::Linear;
     renderer.toneMapping = ToneMapping::None;
     renderer.toneMappingExposure = 1.0f;
 
-    auto& pathTracer = renderer.pathTracer();
-    pathTracer.setMaxBounces(4);// env-only — 1 bounce suffices, extra headroom is free
-    pathTracer.setDenoiserEnabled(false);
-    pathTracer.setReSTIREnabled(true);
-    pathTracer.setFoveatedRendering(false);
-    pathTracer.setFireflyClamp(0);// 0 → 1e30 sentinel: no cap during furnace validation
-    pathTracer.setExposure(1.f);
+    // Measurement config: denoiser OFF (it biases/blurs the per-pixel mean),
+    // firefly clamp OFF (a furnace must not clamp anything), env-only so a few
+    // bounces are plenty.
+    renderer.setDenoise(false);
+    renderer.setRestirDIEnabled(true);
+    renderer.setFireflyClamp(0.f);// 0 → 1e30 sentinel: no cap during validation
+    renderer.setMaxBounces(4);
 
-    // ── Offscreen target + preview quad ──
-    auto [cw, ch] = canvas.size();
-    auto rt = RenderTarget::create(static_cast<unsigned>(cw),
-                                   static_cast<unsigned>(ch),
-                                   RenderTarget::Options{});
-    auto previewTex = DataTexture::create(3, cw, ch);
-    previewTex->format = Format::RGBA;
-    previewTex->magFilter = Filter::Linear;
-    previewTex->minFilter = Filter::Linear;
-
-    auto previewScene = Scene::create();
-    auto previewCam = OrthographicCamera::create(-1, 1, 1, -1, 0, 1);
-    auto previewMat = MeshBasicMaterial::create();
-    previewMat->map = previewTex;
-    previewScene->add(Mesh::create(PlaneGeometry::create(2, 2), previewMat));
+    // Clean, overlay-free readback of the post-TAA scene image.
+    renderer.setSceneCaptureEnabled(true);
 
     // ── Scene: constant-(1,1,1) env + white diffuse sphere ──
     Scene scene;
     auto envTex = makeConstantEnv();
     scene.environment = envTex;
-    scene.background = envTex;// also show env as backdrop so "1.0" is obvious
+    scene.background = envTex;// show env as backdrop so "1.0" everywhere is obvious
 
     auto sphereMat = MeshStandardMaterial::create({{"color", Color(1.f, 1.f, 1.f)},
                                                    {"roughness", 1.f},
@@ -198,46 +186,52 @@ int main() {
     controls.target.set(0.f, 0.f, 0.f);
     controls.update();
 
-    // ── State ──
-    bool restirOn = true;
-    int maxBounces = pathTracer.maxBounces();
-    int measureEveryN = 16;
+    // ── UI / measurement state ──
+    bool denoiserOn = renderer.denoise();
+    bool restirOn = renderer.restirDIEnabled();
+    bool restirGiOn = renderer.restirGIEnabled();
+    bool hybridOn = renderer.hybridEnabled();
+    bool taaOn = renderer.taaEnabled();
+    int spp = renderer.samplesPerPixel();
+    int maxBounces = renderer.maxBounces();
+    int measureEveryN = 32;
     float roughness = 1.0f;
     float metalness = 0.0f;
-    int presetIdx = 0;// 0 = rough dielectric, 1 = mirror metal, 2 = rough metal, 3 = glossy dielectric
+    int presetIdx = 0;// 0 rough dielectric, 1 mirror metal, 2 rough metal, 3 glossy dielectric
+
+    // We track our own accumulated-frame counter because VulkanRenderer has no
+    // frameCount(); it advances each rendered frame and resets whenever the
+    // image must re-converge (camera move, material edit, config toggle).
+    int accumFrames = 0;
     Stats stats{};
     int statsFrame = -1;
     bool fresh = true;
+    bool pendingReset = false;// deferred: resetAccumulation() must run outside render()
     std::vector<unsigned char> pixels;
-    std::vector<unsigned char> flipped;
 
-    auto resetStats = [&] {
+    auto resetMeasurement = [&] {
+        accumFrames = 0;
         stats = Stats{};
         statsFrame = -1;
         fresh = true;
     };
-    auto resetAll = [&] {
-        pathTracer.resetAccumulation();
-        resetStats();
+    auto requestReset = [&] {
+        pendingReset = true;
+        resetMeasurement();
     };
-    // Material uniforms are baked into matBuffer during atlas build; toggling
-    // MeshStandardMaterial props at runtime does not propagate until we force
-    // a topology rebuild via markDirty().
     auto applyMaterial = [&] {
         sphereMat->roughness = roughness;
         sphereMat->metalness = metalness;
-        sphereMat->needsUpdate();
-        pathTracer.markDirty();
-        resetAll();
+        sphereMat->needsUpdate();// renderer re-uploads on the version bump
+        requestReset();
     };
 
-    // ── ImGui ──
     ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({10, 10});
-        ImGui::SetNextWindowSize({380, 0});
-        ImGui::Begin("White Furnace — Env-Only");
+        ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Once);
+        ImGui::SetNextWindowSize({390, 0}, ImGuiCond_Once);
+        ImGui::Begin("White Furnace - Env-Only");
 
-        ImGui::Text("Frames accumulated: %d", pathTracer.frameCount());
+        ImGui::Text("Frames accumulated: %d", accumFrames);
         if (!fresh) ImGui::Text("(measured @ frame %d, fg pixels=%d)", statsFrame, stats.samples);
         ImGui::Separator();
 
@@ -247,12 +241,12 @@ int main() {
         } else {
             constexpr float tgt = 1.0f;
 
-            // ── Center pixel (single unambiguous sphere measurement) ──
+            // ── Center pixel (single unambiguous sphere sample) ──
             if (stats.centerLum >= 0.f) {
                 const float cDev = 100.f * (stats.centerLum - tgt) / tgt;
-                ImVec4 cc = (std::abs(cDev) < 1.f)  ? ImVec4(0.4f, 1.f, 0.4f, 1.f)
-                           : (std::abs(cDev) < 5.f) ? ImVec4(1.f, 1.f, 0.4f, 1.f)
-                                                    : ImVec4(1.f, 0.4f, 0.4f, 1.f);
+                const ImVec4 cc = (std::abs(cDev) < 1.f)   ? ImVec4(0.4f, 1.f, 0.4f, 1.f)
+                                  : (std::abs(cDev) < 5.f) ? ImVec4(1.f, 1.f, 0.4f, 1.f)
+                                                           : ImVec4(1.f, 0.4f, 0.4f, 1.f);
                 ImGui::Text("Center pixel lum: %.4f", stats.centerLum);
                 ImGui::TextColored(cc, "  Deviation: %+.2f%%", cDev);
             }
@@ -263,16 +257,16 @@ int main() {
             ImGui::Text("Center-crop mean (sphere-only, n=%d):", stats.cropSamples);
             if (stats.cropSamples > 0) {
                 const float crDev = 100.f * (stats.cropMean - tgt) / tgt;
-                ImVec4 crc = (std::abs(crDev) < 1.f)  ? ImVec4(0.4f, 1.f, 0.4f, 1.f)
-                             : (std::abs(crDev) < 5.f) ? ImVec4(1.f, 1.f, 0.4f, 1.f)
-                                                       : ImVec4(1.f, 0.4f, 0.4f, 1.f);
+                const ImVec4 crc = (std::abs(crDev) < 1.f)   ? ImVec4(0.4f, 1.f, 0.4f, 1.f)
+                                   : (std::abs(crDev) < 5.f) ? ImVec4(1.f, 1.f, 0.4f, 1.f)
+                                                             : ImVec4(1.f, 0.4f, 0.4f, 1.f);
                 ImGui::Text("  Lum %.4f  stddev %.4f", stats.cropMean, stats.cropStddev);
                 ImGui::TextColored(crc, "  Deviation: %+.2f%%", crDev);
             }
 
             ImGui::Separator();
 
-            // ── All-pixel mean (contaminated by bg env at 1.0, shown for reference) ──
+            // ── All-pixel mean (contaminated by bg env at 1.0; reference only) ──
             const float devPct = 100.f * (stats.mean - tgt) / tgt;
             ImGui::TextDisabled("All-pixel mean (bg-contaminated, n=%d): %.4f  (%+.2f%%)",
                                 stats.samples, stats.mean, devPct);
@@ -281,14 +275,36 @@ int main() {
         }
         ImGui::Separator();
 
-        bool dirty = false;
+        // ── Render-path toggles (energy conservation should hold for all) ──
+        if (ImGui::Checkbox("Denoiser", &denoiserOn)) {
+            renderer.setDenoise(denoiserOn);
+            requestReset();
+        }
         if (ImGui::Checkbox("ReSTIR DI", &restirOn)) {
-            pathTracer.setReSTIREnabled(restirOn);
-            dirty = true;
+            renderer.setRestirDIEnabled(restirOn);
+            requestReset();
+        }
+        if (ImGui::Checkbox("ReSTIR GI", &restirGiOn)) {
+            renderer.setRestirGIEnabled(restirGiOn);
+            requestReset();
+        }
+        if (ImGui::Checkbox("Hybrid raster G-buffer", &hybridOn)) {
+            renderer.setHybridEnabled(hybridOn);
+            requestReset();
+        }
+        if (!hybridOn) {
+            if (ImGui::Checkbox("TAA (standalone)", &taaOn)) {
+                renderer.setTaaEnabled(taaOn);
+                requestReset();
+            }
         }
         if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8)) {
-            pathTracer.setMaxBounces(maxBounces);
-            dirty = true;
+            renderer.setMaxBounces(maxBounces);
+            requestReset();
+        }
+        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 8)) {
+            renderer.setSamplesPerPixel(spp);
+            requestReset();
         }
 
         ImGui::Separator();
@@ -306,91 +322,81 @@ int main() {
             }
             applyMaterial();
         }
-        ImGui::SliderFloat("roughness", &roughness, 0.000f, 1.0f);
+        ImGui::SliderFloat("roughness", &roughness, 0.0f, 1.0f);
         ImGui::SliderFloat("metalness", &metalness, 0.0f, 1.0f);
         if (ImGui::Button("Apply material")) applyMaterial();
-        ImGui::Separator();
 
+        ImGui::Separator();
         ImGui::SliderInt("Measure every N frames", &measureEveryN, 1, 256);
-        if (ImGui::Button("Reset accumulation")) dirty = true;
-        if (dirty) resetAll();
+        if (ImGui::Button("Reset accumulation")) requestReset();
 
         ImGui::Separator();
         ImGui::TextDisabled("Method");
         ImGui::TextDisabled("  Env = constant (1,1,1) equirect");
         ImGui::TextDisabled("  Sphere: albedo=1, rough=1, metal=0");
-        ImGui::TextDisabled("  Tonemap=None, Encoding=Linear");
+        ImGui::TextDisabled("  Tonemap=None, Encoding=Linear, clamp off");
         ImGui::TextDisabled("Interpretation");
-        ImGui::TextDisabled("  mean ≠ 1.0 → BRDF/throughput bug");
-        ImGui::TextDisabled("  (unlike the enclosed box, this is one-bounce)");
+        ImGui::TextDisabled("  mean != 1.0 -> BRDF/throughput bug");
+        ImGui::TextDisabled("  (one-bounce; metals/glossy stress other lobes)");
 
         ImGui::End();
     });
 
-    IOCapture io;
-    io.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
-    canvas.setIOCapture(&io);
+    IOCapture ioCapture;
+    ioCapture.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
+    ioCapture.preventScrollEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
+    ioCapture.preventKeyboardEvent = []() -> bool { return ImGui::GetIO().WantCaptureKeyboard; };
+    canvas.setIOCapture(&ioCapture);
 
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
         camera.aspect = canvas.aspect();
         camera.updateProjectionMatrix();
-        rt = RenderTarget::create(static_cast<unsigned>(ns.width()),
-                                  static_cast<unsigned>(ns.height()),
-                                  RenderTarget::Options{});
-        previewTex = DataTexture::create(3, ns.width(), ns.height());
-        previewTex->format = Format::RGB;
-        previewTex->magFilter = Filter::Linear;
-        previewTex->minFilter = Filter::Linear;
-        previewMat->map = previewTex;
-        previewMat->needsUpdate();
-        resetStats();
+        resetMeasurement();
     });
 
     Vector3 lastCamPos = camera.position;
     Vector3 lastCamTgt = controls.target;
 
     canvas.animate([&] {
+        // Deferred accumulation reset (resetAccumulation issues a
+        // vkDeviceWaitIdle and must not run inside render()).
+        if (pendingReset) {
+            renderer.resetAccumulation();
+            pendingReset = false;
+        }
+
         controls.update();
 
+        // Camera motion resets the renderer's own accumulation; keep our frame
+        // counter and stats in sync so we never measure a half-converged frame.
         if (!camera.position.equals(lastCamPos) || !controls.target.equals(lastCamTgt)) {
             lastCamPos = camera.position;
             lastCamTgt = controls.target;
-            resetStats();
+            resetMeasurement();
         }
 
-        renderer.setRenderTarget(rt.get());
-        renderer.usePathTracer = true;
         renderer.render(scene, camera);
+        ++accumFrames;
 
-        pixels = renderer.readRGBPixels();
+        // Clean (overlay-free) scene readback; measure periodically.
+        pixels = renderer.readSceneRGBPixels();
         const auto sz = canvas.size();
         const int w = sz.width();
         const int h = sz.height();
-
-        if (!pixels.empty()) {
-            const int rowBytes = w * 3;
-            flipped.resize(pixels.size());
-            for (int row = 0; row < h; ++row) {
-                std::memcpy(&flipped[row * rowBytes],
-                            &pixels[(h - 1 - row) * rowBytes],
-                            rowBytes);
-            }
-            previewTex->image().setData(flipped);
-            previewTex->needsUpdate();
-
-            const int fc = pathTracer.frameCount();
-            if (fc > 0 && fc >= measureEveryN && (fc % measureEveryN == 0) && fc != statsFrame) {
-                stats = computeStats(pixels, w, h);
-                statsFrame = fc;
-                fresh = false;
-            }
+        // The scene-capture buffer is at the swapchain extent, which equals
+        // canvas.size() at the default pixel ratio. If they ever diverge (HiDPI
+        // scaling), skip the measurement rather than read with a wrong stride.
+        const bool sizeMatches = pixels.size() == static_cast<size_t>(w) * h * 3;
+        if (sizeMatches && accumFrames >= measureEveryN &&
+            (accumFrames % measureEveryN == 0) && accumFrames != statsFrame) {
+            stats = computeStats(pixels, w, h);
+            statsFrame = accumFrames;
+            fresh = false;
         }
-
-        renderer.setRenderTarget(nullptr);
-        renderer.usePathTracer = false;
-        renderer.render(*previewScene, *previewCam);
 
         ui.render();
     });
+
+    return 0;
 }

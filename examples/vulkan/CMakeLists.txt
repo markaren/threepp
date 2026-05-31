@@ -8,6 +8,7 @@ add_example(NAME "vulkan_denoise" LINK_IMGUI)
 add_example(NAME "vulkan_animation" LINK_IMGUI)
 add_example(NAME "vulkan_gallery" LINK_IMGUI)
 add_example(NAME "vulkan_restir_test" LINK_IMGUI)
+add_example(NAME "vulkan_furnace_test" LINK_IMGUI)
 add_example(NAME "vulkan_lidar" LINK_IMGUI)
 add_example(NAME "vulkan_event_camera" LINK_IMGUI)
 

@@ -25,7 +25,6 @@
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
-#include "threepp/renderers/wgpu/WgpuPathTracer.hpp"
 #include "threepp/renderers/wgpu/WgpuTexture.hpp"
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
@@ -272,16 +271,6 @@ struct WgpuRenderer::Impl {
 
     // Subsystem: bind group cache — avoids per-draw wgpuDeviceCreateBindGroup()
     std::unique_ptr<wgpu::WgpuBindGroupCache> bindGroupCache;
-
-    // Embedded path tracer — lazily constructed when WgpuRenderer::usePathTracer
-    // is first set true.  Lives here so toggling the flag between frames keeps the
-    // accumulated state intact.  Reset early in dispose() so its GPU resources are
-    // freed before the device is released.
-    std::unique_ptr<WgpuPathTracer> pathTracer_;
-    // Re-entry guard: WgpuPathTracer::render() internally calls back into
-    // WgpuRenderer::render() to blit its display scene; that nested call must
-    // route through the raster path even when usePathTracer is true.
-    bool inPathTracerRender_ = false;
 
     // Material dispose listener and set of materials with the listener registered
     OnMaterialDispose onMaterialDispose;
@@ -3551,10 +3540,6 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
     void dispose() {
         if (!initialized) return;
 
-        // Tear down the embedded path tracer first — it owns GPU resources tied
-        // to `device`, so it must be destroyed before any device release below.
-        pathTracer_.reset();
-
         // Unregister all dispose listeners before destroying so objects/materials disposed
         // after the renderer don't call back into freed memory.
         for (auto* mat : trackedMaterials_) {
@@ -3658,30 +3643,7 @@ WgpuRenderer::WgpuRenderer(Canvas& canvas) {
 }
 
 void WgpuRenderer::render(Object3D& scene, Camera& camera) {
-    // Route to the embedded path tracer when enabled.  The PT internally calls
-    // back into this same render() to blit its display scene, so the re-entry
-    // guard ensures that nested call goes through the raster path.
-    if (usePathTracer && !pimpl_->inPathTracerRender_) {
-        if (!pimpl_->pathTracer_) {
-            pimpl_->pathTracer_ = std::make_unique<WgpuPathTracer>(
-                    *this,
-                    std::make_pair(pimpl_->size_.width(), pimpl_->size_.height()));
-        }
-        pimpl_->inPathTracerRender_ = true;
-        pimpl_->pathTracer_->render(scene, camera);
-        pimpl_->inPathTracerRender_ = false;
-        return;
-    }
     pimpl_->render(scene, camera);
-}
-
-WgpuPathTracer& WgpuRenderer::pathTracer() {
-    if (!pimpl_->pathTracer_) {
-        pimpl_->pathTracer_ = std::make_unique<WgpuPathTracer>(
-                *this,
-                std::make_pair(pimpl_->size_.width(), pimpl_->size_.height()));
-    }
-    return *pimpl_->pathTracer_;
 }
 
 void WgpuRenderer::endFrame() {
@@ -3701,9 +3663,6 @@ void WgpuRenderer::setSize(const std::pair<int, int>& size) {
                         static_cast<uint32_t>(size.second)};
     if (pimpl_->initialized) {
         pimpl_->configureSurface();
-    }
-    if (pimpl_->pathTracer_) {
-        pimpl_->pathTracer_->setSize(size);
     }
 }
 

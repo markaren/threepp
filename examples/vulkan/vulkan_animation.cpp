@@ -7,7 +7,6 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
-#include "threepp/renderers/wgpu/WgpuPathTracer.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;

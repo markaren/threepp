@@ -17,7 +17,7 @@ namespace threepp {
     /// MeshStandardMaterial with emissive=color, emissiveIntensity=intensity).
     /// The path tracer picks it up through the regular emissive-triangle path
     /// (emissive-tri CDF + NEE). Mutating color/intensity after construction
-    /// requires calling WgpuPathTracer::markDirty() to rebuild the emissive CDF.
+    /// requires the path tracer to rebuild the emissive CDF.
     class RectAreaLight: public Light {
 
     public:
@@ -34,8 +34,8 @@ namespace threepp {
         void setPower(float power);
 
         /// Child mesh representing the emissive quad. Exposed so users can
-        /// configure visibility, layers, or material overrides. Mutations
-        /// to the material require WgpuPathTracer::markDirty().
+        /// configure visibility, layers, or material overrides. Material
+        /// mutations require the path tracer to rebuild its emissive CDF.
         [[nodiscard]] const std::shared_ptr<Mesh>& mesh() const;
 
         void updateMatrixWorld(bool force = false) override;

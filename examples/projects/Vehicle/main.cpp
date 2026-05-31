@@ -11,7 +11,7 @@
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
 #include "threepp/objects/Points.hpp"
-#include "threepp/renderers/wgpu/WgpuPathTracer.hpp"
+#include "threepp/renderers/WgpuRenderer.hpp"
 
 #include "LandRoverScene.hpp"
 
@@ -25,15 +25,6 @@ int main() {
 
     Canvas canvas("PhysX Vehicle", {{"aa", 4}, {"vsync", true}});
     auto renderer = createRenderer(canvas);
-
-    if (false) {
-        if (auto wgpu = dynamic_cast<WgpuRenderer*>(renderer.get())) {
-            wgpu->usePathTracer = true;
-            auto& pt = wgpu->pathTracer();
-            pt.setMaxBounces(1);
-            pt.setDenoiserEnabled(false);
-        }
-    }
 
     auto scene = Scene::create();
     auto sensorScene = Scene::create();

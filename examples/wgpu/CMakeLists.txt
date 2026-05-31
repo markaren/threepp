@@ -1,13 +1,5 @@
 
 add_example(NAME "wgpu_triangle")
-add_example(NAME "wgpu_raytracer" LINK_IMGUI)
-add_example(NAME "wgpu_cornell_box" LINK_IMGUI WEB)
-add_example(NAME "wgpu_gallery" LINK_IMGUI)
-add_example(NAME "wgpu_gltf_samples" LINK_IMGUI)
-add_example(NAME "wgpu_restir_test" LINK_IMGUI)
-add_example(NAME "wgpu_furnace_test" LINK_IMGUI)
-add_example(NAME "wgpu_furnace_env_test" LINK_IMGUI)
-add_example(NAME "wgpu_denoise" LINK_IMGUI)
 add_example(NAME "wgpu_postprocess")
 
 if (THREEPP_WITH_INFERENCE)
