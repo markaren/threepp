@@ -118,6 +118,40 @@ vec3 kcBoost(vec3 F0, float NdotV, float alpha) {
     return vec3(1.0) + F_avg * max(0.0, 1.0 - E_kc);
 }
 
+// ── Specular multi-scattering energy compensation (Kulla-Conty 2017) ────────
+// Single-scatter GGX drops the energy of inter-microfacet bounces — the light
+// a VNDF sample reflects back below the surface — so a rough CONDUCTOR loses a
+// lot of energy (white-furnace reads ~0.6 / −40% at roughness 1). The diffuse
+// kcDiff term above is gated by (1−metalness) and so does nothing for metals;
+// this is the missing specular half. (The WGPU PT did this with a 32×32 MC
+// LUT; here we use a closed-form fit to avoid the descriptor scaffolding.)
+//
+// Karis 2014 split-sum environment-BRDF fit: returns (scale, bias) so the
+// specular directional albedo for reflectance F0 is F0·scale + bias. `r` is
+// PERCEPTUAL roughness (not alpha). Unlike the older ggxEApprox (which is
+// unsound — 0.5 at α=0 and rising with roughness), this is ~1 at mirror and
+// falls toward ~0.5 at roughness 1, matching the real furnace response.
+vec2 envBRDFApprox(float NdotV, float r) {
+    const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
+    const vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
+    const vec4 v  = r * c0 + c1;
+    const float a004 = min(v.x * v.x, exp2(-9.28 * NdotV)) * v.x + v.y;
+    return vec2(-1.04, 1.04) * a004 + v.zw;
+}
+
+// Multiplicative compensation applied to every specular lobe (NEE eval sites
+// AND the BSDF sampler weight, so MIS stays balanced): scale by
+//   1 + F_avg·(1 − Ess)/Ess
+// where Ess is the white-furnace (F0=1) single-scatter directional albedo.
+// Furnace check: F0=1 → F_avg=1, Ess≈0.6 → ×1.67 → 0.6·1.67 = 1.0. At
+// roughness→0, Ess→1 → ×1 (mirrors and low-roughness specular unchanged).
+vec3 kcSpec(vec3 F0, float NdotV, float r) {
+    const vec2  ab    = envBRDFApprox(NdotV, r);
+    const float Ess   = clamp(ab.x + ab.y, 1e-3, 1.0);
+    const vec3  F_avg = (20.0 * F0 + vec3(1.0)) / 21.0;
+    return vec3(1.0) + F_avg * (1.0 - Ess) / Ess;
+}
+
 // ── Thin-film iridescence (Belcour & Barla 2017, glTF reference) ────────────
 // Modulates dielectric F0 with wavelength-dependent thin-film interference.
 // Inputs:
@@ -516,7 +550,7 @@ BsdfSample sampleBsdf(
             const float VdotH = max(0.0, dot(V, H));
             const vec3  F     = fresnelSchlick(VdotH, F0);
             const float G1L   = smithG1(NdotL, alpha);
-            r.weight = F * G1L * baseScale * invBaseProb / pSpec;
+            r.weight = F * G1L * kcSpec(F0, NdotV, sqrt(alpha)) * baseScale * invBaseProb / pSpec;
         } else {
             const vec2 u2 = vec2(urand(seed), urand(seed));
             const vec3 localDir = cosineHemisphere(u2);
@@ -575,7 +609,7 @@ vec3 envNeeOpaque(
                 const vec3  F_e   = fresnelSchlick(VdotH, F0);
                 const float D_e   = distGGX(NdotH, roughness);
                 const float G_e   = geomSmithG1(NdotV, k) * geomSmithG1(NdotL_e, k);
-                const vec3  spec_e = (D_e * G_e * F_e) / max(4.0 * NdotV * NdotL_e, 1e-4);
+                const vec3  spec_e = (D_e * G_e * F_e) / max(4.0 * NdotV * NdotL_e, 1e-4) * kcSpec(F0, NdotV, roughness);
                 const vec3  kd_e   = (vec3(1.0) - F_e) * (1.0 - metalness);
                 const vec3  diff_e = kd_e * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
                 vec3 lobeSum = (diff_e + spec_e) * baseScale;
@@ -706,7 +740,7 @@ vec3 analyticNeeOpaque(
         const vec3  F        = fresnelSchlick(VdotH, F0);
         const float D        = distGGX(NdotH, roughness);
         const float G        = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
-        const vec3  specular = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4);
+        const vec3  specular = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4) * kcSpec(F0, NdotV, roughness);
         const vec3  kd       = (vec3(1.0) - F) * (1.0 - metalness);
         const vec3  diffuse  = kd * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
 
@@ -772,7 +806,7 @@ vec3 analyticNeeOpaque(
         const vec3  F_p   = fresnelSchlick(VdotH, F0);
         const float D_p   = distGGX(NdotH, roughness);
         const float G_p   = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
-        const vec3  spec  = (D_p * G_p * F_p) / max(4.0 * NdotV * NdotL, 1e-4);
+        const vec3  spec  = (D_p * G_p * F_p) / max(4.0 * NdotV * NdotL, 1e-4) * kcSpec(F0, NdotV, roughness);
         const vec3  kd_p  = (vec3(1.0) - F_p) * (1.0 - metalness);
         const vec3  diff  = kd_p * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
         vec3 perPt = (diff + spec) * baseScale * sheenScaling;
@@ -833,7 +867,7 @@ vec3 analyticNeeOpaque(
         const vec3  F_s   = fresnelSchlick(VdotH, F0);
         const float D_s   = distGGX(NdotH, roughness);
         const float G_s   = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
-        const vec3  spec  = (D_s * G_s * F_s) / max(4.0 * NdotV * NdotL, 1e-4);
+        const vec3  spec  = (D_s * G_s * F_s) / max(4.0 * NdotV * NdotL, 1e-4) * kcSpec(F0, NdotV, roughness);
         const vec3  kd_s  = (vec3(1.0) - F_s) * (1.0 - metalness);
         const vec3  diff  = kd_s * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
         vec3 perSp = (diff + spec) * baseScale * sheenScaling;
@@ -894,7 +928,7 @@ vec3 analyticNeeOpaque(
         const vec3  F_r   = fresnelSchlick(VdotH, F0);
         const float D_r   = distGGX(NdotH, roughness);
         const float G_r   = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
-        const vec3  spec  = (D_r * G_r * F_r) / max(4.0 * NdotV * NdotL, 1e-4);
+        const vec3  spec  = (D_r * G_r * F_r) / max(4.0 * NdotV * NdotL, 1e-4) * kcSpec(F0, NdotV, roughness);
         const vec3  kd_r  = (vec3(1.0) - F_r) * (1.0 - metalness);
         const vec3  diff  = kd_r * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
         vec3 perRect = (diff + spec) * baseScale;
@@ -970,7 +1004,7 @@ vec3 analyticNeeOpaque(
                         const vec3  F_e   = fresnelSchlick(VdotH, F0);
                         const float D_e   = distGGX(NdotH, roughness);
                         const float G_e   = geomSmithG1(NdotV, k) * geomSmithG1(NdotLe, k);
-                        const vec3  spec_e = (D_e * G_e * F_e) / max(4.0 * NdotV * NdotLe, 1e-4);
+                        const vec3  spec_e = (D_e * G_e * F_e) / max(4.0 * NdotV * NdotLe, 1e-4) * kcSpec(F0, NdotV, roughness);
                         const vec3  kd_e   = (vec3(1.0) - F_e) * (1.0 - metalness);
                         const vec3  diff_e = kd_e * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
                         vec3 perEm = (diff_e + spec_e) * baseScale;
