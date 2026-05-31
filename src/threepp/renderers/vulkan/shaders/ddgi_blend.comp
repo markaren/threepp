@@ -1,0 +1,77 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+
+#include "ddgi_common.glsl"
+
+// DDGI irradiance blend — one invocation per atlas texel. Each interior texel
+// of a probe's octahedral tile integrates the probe's rays weighted by
+// max(dot(rayDir, texelDir), 0), then blends the result into the previous
+// frame's value with temporal hysteresis. Ray directions are regenerated from
+// the SAME spherical-Fibonacci + per-frame rotation the update pass used
+// (ddgi_common), so the two sides agree by construction.
+//
+// THIS INCREMENT: irradiance only, and gutter (border) texels are clamped to
+// the nearest interior texel rather than octahedrally wrapped. Clamping is
+// leak-safe for bring-up (a bilinear tap into the gutter reads a plausible
+// edge value); the proper RTXGI border-copy wrap lands with the visibility
+// atlas in P2.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer RayBuf {
+    vec4 rayRadiance[];  // (radiance.rgb, hitDist) per (probe * raysPerProbe + ray)
+};
+layout(set = 0, binding = 1, rgba16f) uniform readonly  image2D irrPrev;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D irrCurr;
+
+layout(push_constant) uniform Pc {
+    ivec4 cfg0;   // x = interiorRes, y = border, z = tilesPerRow, w = totalProbes
+    ivec4 cfg1;   // x = raysPerProbe
+    vec4  blend;  // x = hysteresis (prev weight)
+    vec4  rot0;   // per-frame ray rotation rows (xyz used)
+    vec4  rot1;
+    vec4  rot2;
+} pc;
+
+void main() {
+    const ivec2 gid   = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 asize = imageSize(irrCurr);
+    if (gid.x >= asize.x || gid.y >= asize.y) return;
+
+    const int interiorRes = pc.cfg0.x;
+    const int border      = pc.cfg0.y;
+    const int tilesPerRow = pc.cfg0.z;
+    const int totalProbes = pc.cfg0.w;
+    const int raysPerProbe = pc.cfg1.x;
+    const int tileSide     = interiorRes + 2 * border;
+
+    const ivec2 tile  = gid / tileSide;
+    const ivec2 local = gid - tile * tileSide;
+    const int probeIndex = tile.y * tilesPerRow + tile.x;
+    if (probeIndex >= totalProbes) {
+        imageStore(irrCurr, gid, vec4(0.0));
+        return;
+    }
+
+    // Gutter-clamped interior coord (proper octahedral wrap is a P2 follow-up).
+    const ivec2 ic = clamp(local - ivec2(border), ivec2(0), ivec2(interiorRes - 1));
+    const vec2  octUv    = (vec2(ic) + 0.5) / float(interiorRes);
+    const vec3  texelDir = ddgiOctUvToDir(octUv);
+
+    const mat3 rot = mat3(pc.rot0.xyz, pc.rot1.xyz, pc.rot2.xyz);
+
+    vec3  sum  = vec3(0.0);
+    float sumW = 0.0;
+    for (int r = 0; r < raysPerProbe; ++r) {
+        const vec3  dir = normalize(rot * ddgiSphericalFibonacci(float(r), float(raysPerProbe)));
+        const float w   = max(dot(dir, texelDir), 0.0);
+        if (w <= 0.0) continue;
+        sum  += w * rayRadiance[probeIndex * raysPerProbe + r].rgb;
+        sumW += w;
+    }
+    const vec3 result = sumW > 1e-6 ? sum / sumW : vec3(0.0);
+
+    const vec3  prev = imageLoad(irrPrev, gid).rgb;
+    const float hyst = clamp(pc.blend.x, 0.0, 0.999);
+    imageStore(irrCurr, gid, vec4(mix(result, prev, hyst), 1.0));
+}

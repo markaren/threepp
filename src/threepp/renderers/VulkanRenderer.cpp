@@ -25,6 +25,7 @@
 #define VMA_IMPLEMENTATION
 #include "vulkan/VulkanContext.hpp"
 #include "vulkan/VulkanResources.hpp"
+#include "vulkan/DdgiPipeline.hpp"
 #include "vulkan/Denoiser.hpp"
 #include "vulkan/EnvPrefilter.hpp"
 #include "vulkan/EventCameraDetector.hpp"
@@ -933,6 +934,13 @@ namespace threepp {
         // descriptor binding + dispatch through the class.
         std::unique_ptr<vulkan::PhotonCaustics> photon_;
 
+        // DDGI probe field (dynamic diffuse GI). Constructed unconditionally
+        // (allocates atlases + buffers + builds its own pipelines), but its
+        // update/blend passes are only dispatched when ddgiEnabled_ is set —
+        // until then it's inert. See vulkan/DdgiPipeline.{hpp,cpp}.
+        std::unique_ptr<vulkan::DdgiPipeline> ddgi_;
+        bool ddgiEnabled_ = false;
+
         // Path-traced LIDAR scanner — see vulkan/LidarScanner.{hpp,cpp}.
         // Owns its own RT pipeline + SBT + descriptor set; reuses the
         // main TLAS + geomDescs + matDescs via per-scan binding updates.
@@ -1480,6 +1488,10 @@ namespace threepp {
             skinning_ = std::make_unique<vulkan::SkinningPipeline>(*ctx);
             tetSkinning_ = std::make_unique<vulkan::TetSkinningPipeline>(*ctx);
             photon_ = std::make_unique<vulkan::PhotonCaustics>(*ctx, rtPipelineLayout);
+            // DDGI probe field — self-contained (own descriptor layouts), inert
+            // until ddgiEnabled_ flips. Allocates atlases/buffers + builds its
+            // update (RT) and blend (compute) pipelines.
+            ddgi_ = std::make_unique<vulkan::DdgiPipeline>(*ctx, cmdPool);
             waterDisplace_ = std::make_unique<vulkan::WaterDisplacePipeline>(*ctx);
             foamWorld_     = std::make_unique<vulkan::FoamWorldPipeline>(*ctx);
             // Hybrid raster G-buffer infrastructure is always allocated so

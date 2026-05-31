@@ -34,6 +34,22 @@
 // photons land in cells the gather can't find.
 #define kGatherRadius    0.15
 
+// ── DDGI (dynamic diffuse global illumination) probe grid ───────────────────
+// Default probe-grid resolution; the host re-sizes spacing to the scene AABB
+// at build time but keeps these counts unless overridden. 16×8×16 = 2048
+// probes (wider in the horizontal XZ plane, shorter vertically).
+#define kDdgiDefaultProbesX 16
+#define kDdgiDefaultProbesY 8
+#define kDdgiDefaultProbesZ 16
+// Interior octahedral texels per probe (irradiance + depth/visibility), each
+// surrounded by a 1-texel gutter so hardware bilinear filtering stays correct
+// across the octahedral seam (the gutter is filled by the blend pass).
+#define kDdgiIrradianceRes  8
+#define kDdgiVisibilityRes  16
+#define kDdgiProbeBorder    1
+// Rays cast per probe per frame for the temporal irradiance/visibility update.
+#define kDdgiRaysPerProbe   128
+
 #ifdef __cplusplus
 
 #include <cstdint>

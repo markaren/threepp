@@ -626,6 +626,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/LidarScanner.cpp"
             "threepp/renderers/vulkan/PhotonCaustics.cpp"
             "threepp/renderers/vulkan/Denoiser.cpp"
+            "threepp/renderers/vulkan/DdgiPipeline.cpp"
             "threepp/renderers/vulkan/EnvPrefilter.cpp"
             "threepp/renderers/vulkan/EventCameraDetector.cpp"
             "threepp/renderers/vulkan/SkinningPipeline.cpp"
@@ -916,6 +917,21 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/photon_chit.rchit"
         kPhotonChitRchitSpv
         _photon_chit_spv_h)
+    # DDGI (dynamic diffuse global illumination) probe field — update raygen +
+    # env miss + octahedral irradiance blend. Gated behind ddgiEnabled_ at
+    # runtime; the SPV is always compiled so the headers exist for DdgiPipeline.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ddgi_update.rgen"
+        kDdgiUpdateRgenSpv
+        _ddgi_update_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ddgi_miss.rmiss"
+        kDdgiMissRmissSpv
+        _ddgi_miss_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/ddgi_blend.comp"
+        kDdgiBlendCompSpv
+        _ddgi_blend_spv_h)
     # Path-traced LIDAR scanner — private ray-tracing pipeline that emits
     # one beam per launched thread, evaluates the LIDAR equation in the
     # closest-hit shader, and writes per-beam returns back to the host
