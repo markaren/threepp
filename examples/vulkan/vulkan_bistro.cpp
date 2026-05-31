@@ -3,7 +3,6 @@
 #include "threepp/loaders/FBXLoader.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
-#include "threepp/renderers/wgpu/WgpuPathTracer.hpp"
 #include "threepp/threepp.hpp"
 
 #include <algorithm>

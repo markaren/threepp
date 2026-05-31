@@ -637,9 +637,10 @@ if (THREEPP_WITH_VULKAN)
     )
 endif ()
 
-# BCn / DXT software decoder is shared between the WGPU and Vulkan path
-# tracers; compile it whenever either backend is enabled.
-if (THREEPP_WITH_VULKAN OR THREEPP_WITH_WGPU)
+# BCn / DXT software decoder used by the Vulkan path tracer's texture atlas
+# builder. (Originally shared with the now-removed WGPU path tracer; the WGPU
+# forward-raster backend does not use it.)
+if (THREEPP_WITH_VULKAN)
     list(APPEND sources
             "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.cpp"
     )
@@ -652,7 +653,6 @@ if (THREEPP_WITH_WGPU)
             "threepp/renderers/wgpu/WgpuComputePipeline.hpp"
             "threepp/renderers/wgpu/EffectComposer.hpp"
             "threepp/renderers/wgpu/ShaderPass.hpp"
-            "threepp/renderers/wgpu/WgpuPathTracer.hpp"
     )
     list(APPEND sources
             "threepp/renderers/WgpuRenderer.cpp"
@@ -676,12 +676,6 @@ if (THREEPP_WITH_WGPU)
             "threepp/renderers/wgpu/WgpuComputePipeline.cpp"
             "threepp/renderers/wgpu/EffectComposer.cpp"
             "threepp/renderers/wgpu/ShaderPass.cpp"
-
-            "threepp/renderers/wgpu/pathtracer/WgpuPathTracer.cpp"
-            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerAtlas.cpp"
-            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerGeometry.cpp"
-            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBvh.cpp"
-            "threepp/renderers/wgpu/pathtracer/WgpuPathTracerShaders.cpp"
     )
     if (APPLE)
         list(APPEND sources
@@ -785,13 +779,6 @@ endif ()
 
 if (THREEPP_WITH_WGPU)
     target_compile_definitions(threepp PRIVATE THREEPP_WITH_WGPU=1)
-
-    # Embed the path tracer's .wgsl shader sources as chunked C++ raw string
-    # literals at build time. Source files live under
-    #   src/threepp/renderers/wgpu/pathtracer/shaders/
-    # and the generated .cpp is placed under ${CMAKE_BINARY_DIR}/generated/.
-    include(${PROJECT_SOURCE_DIR}/cmake/EmbedWgslPathTracer.cmake)
-    embed_wgsl_path_tracer(threepp)
 
     if (DEFINED EMSCRIPTEN)
         # Emscripten exposes the browser's native WebGPU — no wgpu-native needed.
