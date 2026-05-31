@@ -1232,6 +1232,20 @@ namespace threepp {
         // reruns that path. Used to be rewritten unconditionally every frame,
         // burning imageCount_ vkUpdateDescriptorSets calls for nothing.
         std::array<int8_t, kFramesInFlight> binding1Mode_{};
+        // Per-frame-slot gate for the raster descriptor's binding 3 — the
+        // 2048-entry bindless material-texture array. Its contents are
+        // identical every frame and only change when the scene texture table
+        // is rebuilt (the same event that rebinds the RT side's binding 8 in
+        // rewriteSceneDescriptors / allocateAndUpdateDescriptors). Rewriting
+        // all 2048 entries every frame burned a vkUpdateDescriptorSets call +
+        // a ~48 KB host array fill for nothing. 1 = current, 0 = needs
+        // (re)write; value-inits to 0 so the first frame writes it. Invalidated
+        // (->0) at scene (re)build; each slot rewrites on its next
+        // uploadRasterCameraUbo, before recordCommandBuffer binds the set.
+        // Mirrors binding1Mode_. rasterDescSets live in their own pool
+        // (rasterDescPool, init-only) so swapchain / main-pool rebuilds don't
+        // affect them — only a texture-table change does.
+        std::array<int8_t, kFramesInFlight> rasterMatTexValid_{};
 
         // ── Lower-resolution path-trace mode ────────────────────────────
         // renderScale_ < 1 runs raygen, denoise, and the raster G-buffer at
@@ -5207,6 +5221,13 @@ namespace threepp {
             } else {
                 allocateAndUpdateDescriptors();
             }
+            // The (re)build above rebound the RT bindless texture array
+            // (binding 8). The raster descriptor's binding 3 mirrors that same
+            // table, so invalidate its per-slot cache — each frame slot then
+            // re-writes binding 3 on its next uploadRasterCameraUbo. This is
+            // the only event that changes the table, so it's the only place
+            // the raster mirror needs invalidating.
+            rasterMatTexValid_.fill(0);
             prevSceneFingerprint = std::move(currFp);
             sceneBuilt_ = true;
             // Structural change invalidates the photon grid: cells from the
@@ -6009,10 +6030,10 @@ namespace threepp {
             // enough that any drift in the host counter never overflows.
             haltonFrame_ = (haltonFrame_ + 1u) & 15u;
 
-            // Refresh the per-frame descriptor set: UBO at binding 0, the
-            // current motionMat slot at binding 1. motionMatBuffers can grow
-            // (handle change) when scene instance count increases — rewriting
-            // every frame absorbs that automatically.
+            // Refresh the per-frame descriptor set. Bindings 0-2 (UBO,
+            // motionMat, matDescs) are tiny, and motionMat/matDescs handles can
+            // grow (handle change) when the scene instance/material count
+            // increases — rewriting them every frame absorbs that automatically.
             VkDescriptorBufferInfo ubInfo{};
             ubInfo.buffer = rasterCameraUbos[frame].handle;
             ubInfo.offset = 0;
@@ -6027,13 +6048,6 @@ namespace threepp {
             matsInfo.buffer = materialDescsBuffers[frame].handle;
             matsInfo.offset = 0;
             matsInfo.range  = VK_WHOLE_SIZE;
-
-            // Bindless material texture array — same VkImage/VkSampler
-            // handles raygen sees at its own binding 8. fillMaterialTextureInfos
-            // pads any unused slots with the white default so the array is
-            // always fully populated.
-            std::array<VkDescriptorImageInfo, kMaxMaterialTextures> matTexInfos{};
-            fillMaterialTextureInfos(matTexInfos);
 
             VkWriteDescriptorSet writes[4]{};
             writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -6054,14 +6068,31 @@ namespace threepp {
             writes[2].descriptorCount = 1;
             writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             writes[2].pBufferInfo     = &matsInfo;
-            writes[3].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[3].dstSet          = rasterDescSets[frame];
-            writes[3].dstBinding      = 3;
-            writes[3].dstArrayElement = 0;
-            writes[3].descriptorCount = kMaxMaterialTextures;
-            writes[3].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[3].pImageInfo      = matTexInfos.data();
-            vkUpdateDescriptorSets(ctx->device(), 4, writes, 0, nullptr);
+            uint32_t writeCount = 3;
+
+            // Binding 3 — the bindless material-texture array (same VkImage/
+            // VkSampler handles raygen sees at its own binding 8, white-default
+            // padded). Its contents are identical frame-to-frame and only
+            // change when the scene texture table is rebuilt, which sets
+            // rasterMatTexValid_ to 0 (see the member declaration). Skip the
+            // 2048-element write + the ~48 KB fillMaterialTextureInfos array
+            // fill on every frame the table is unchanged for this slot (the
+            // common case). matTexInfos must outlive the vkUpdateDescriptorSets
+            // call below, so it is declared here in function scope.
+            std::array<VkDescriptorImageInfo, kMaxMaterialTextures> matTexInfos{};
+            if (rasterMatTexValid_[frame] == 0) {
+                fillMaterialTextureInfos(matTexInfos);
+                writes[3].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[3].dstSet          = rasterDescSets[frame];
+                writes[3].dstBinding      = 3;
+                writes[3].dstArrayElement = 0;
+                writes[3].descriptorCount = kMaxMaterialTextures;
+                writes[3].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[3].pImageInfo      = matTexInfos.data();
+                writeCount = 4;
+                rasterMatTexValid_[frame] = 1;
+            }
+            vkUpdateDescriptorSets(ctx->device(), writeCount, writes, 0, nullptr);
         }
 
         // Host mirror of gbuffer_indirect.vert's DrawInfo struct. Tight-
