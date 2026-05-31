@@ -5800,7 +5800,21 @@ namespace threepp {
                 const float fz = curBuf[6] - prevCamBufData_[6];
                 const float sx = curBuf[3] - prevCamBufData_[3];// projScaleX
                 const float sy = curBuf[7] - prevCamBufData_[7];// projScaleY
-                if (dx*dx + dy*dy + dz*dz > 1e-6f ||
+                // Position threshold lowered 1e-6 → 1e-10 (|Δpos| 1e-3 → 1e-5
+                // world units). The old 1e-3 was far too coarse for PURE
+                // TRANSLATION: a slow pan moves the camera only ~1e-4 units/frame,
+                // which fell under 1e-3 → cameraMoved stayed false → the
+                // accumulator took the SELF-TAP path (reuse prev accum at the
+                // SAME pixel, full FC). But the camera HAD moved, so that reused
+                // image sat slightly off and dragged with the camera — the "old
+                // image follows the camera" smear, textured-surface-only because
+                // uniform albedo hides a misplaced reuse. Orbit never hit this:
+                // rotation moves the forward vector, which trips the far more
+                // sensitive 1e-8 rotation threshold, so orbit always took the
+                // correct reproject path. 1e-5 units is still well above static
+                // float noise (an untouched camera has an identical matrix →
+                // exactly zero delta) but catches the slowest deliberate pan.
+                if (dx*dx + dy*dy + dz*dz > 1e-10f ||
                     fx*fx + fy*fy + fz*fz > 1e-8f ||
                     sx*sx + sy*sy > 1e-10f) {
                     motionThisFrame_ = true;
