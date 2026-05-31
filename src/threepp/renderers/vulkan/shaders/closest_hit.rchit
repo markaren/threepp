@@ -389,7 +389,7 @@ vec3 evalGiTarget(vec3 V, vec3 L, vec3 N, vec3 F0, vec3 albedo,
     const vec3  F_e   = fresnelSchlick(VdotH, F0);
     const float D_e   = distGGX(NdotH, roughness);
     const float G_e   = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
-    const vec3  spec  = (D_e * G_e * F_e) / max(4.0 * NdotV * NdotL, 1e-4);
+    const vec3  spec  = (D_e * G_e * F_e) / max(4.0 * NdotV * NdotL, 1e-4) * kcSpec(F0, NdotV, roughness);
     const vec3  kd    = (vec3(1.0) - F_e) * (1.0 - metalness);
     const vec3  diff  = kd * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
     vec3 brdf = (diff + spec) * baseScale;
@@ -1537,7 +1537,7 @@ void main() {
                     const vec3 F = fresnelSchlick(VdotH, F0);
                     const float D = distGGX(NdotH, roughness);
                     const float G = geomSmithG1(NdotV, k) * geomSmithG1(NdotL_c, k);
-                    const vec3  spec_c = (D * G * F) / max(4.0 * NdotV * NdotL_c, 1e-4);
+                    const vec3  spec_c = (D * G * F) / max(4.0 * NdotV * NdotL_c, 1e-4) * kcSpec(F0, NdotV, roughness);
                     const vec3  kd_c   = (vec3(1.0) - F) * (1.0 - metalness);
                     const vec3  diff_c = kd_c * albedo / PI + kcDiff(albedo, metalness, F0, NdotV, alpha);
                     vec3 perChosen = (diff_c + spec_c) * baseScale * sheenScaling;
