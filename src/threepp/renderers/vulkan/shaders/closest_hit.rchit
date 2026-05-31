@@ -171,6 +171,23 @@ layout(set = 0, binding = 32) uniform sampler2D oceanFineHeight;
 // foam values with their vertex indices. Gated by pc.oceanFoamTileSize > 0.
 layout(set = 0, binding = 44) uniform sampler2D oceanFoamWorld;
 
+// DDGI probe field (written by DdgiPipeline). 45 = octahedral irradiance atlas
+// (storage image, read via imageLoad — no sampler); 46 = grid uniform. Read by
+// sampleDDGI() below, gated by the DDGI-enabled push-constant bit (256) so it
+// is inert unless setDdgiEnabled(true). Layout must match DdgiUboHost (host)
+// and ddgi_update.rgen's DdgiUbo (scalar block layout).
+layout(set = 0, binding = 45, rgba16f) uniform readonly image2D ddgiIrradiance;
+layout(set = 0, binding = 46, scalar) uniform DdgiUbo {
+    vec3  gridOrigin;
+    vec3  gridSpacing;
+    ivec3 probeCounts;
+    int   raysPerProbe;
+    int   totalProbes;
+    vec3  rayRot0;
+    vec3  rayRot1;
+    vec3  rayRot2;
+} ddgi;
+
 // Emissive-mesh NEE: each emissive triangle is packed as 4 vec4
 // (v0.xyz/area, v1.xyz/cumPower, v2.xyz/power, emission.rgb/_pad).
 // The host walks the scene each frame, transforms triangle vertices to
@@ -276,6 +293,38 @@ layout(location = 2) rayPayloadEXT Payload giSubPayload;
 // Must come AFTER the binding declarations (envTex, fog, photonCounts /
 // photonData) that some of the helpers reference.
 #include "shade_common.glsl"
+#include "ddgi_common.glsl"
+
+// DDGI diffuse-indirect lookup. Trilinear blend of the 8 probes surrounding
+// `worldPos`, each sampled in the surface-normal direction `N` from the
+// octahedral irradiance atlas (storage image, imageLoad). Bring-up: plain
+// trilinear, NO visibility/Chebyshev weighting yet (that's P2), so expect light
+// leaking through thin geometry. `tilesPerRow` is derived from the actual atlas
+// width so it matches the host's layout exactly (no ceil(sqrt) drift).
+vec3 sampleDDGI(vec3 worldPos, vec3 N) {
+    const ivec3 counts = ddgi.probeCounts;
+    const ivec3 base   = ddgiBaseProbeCoord(worldPos, ddgi.gridOrigin, ddgi.gridSpacing, counts);
+    const vec3  alpha  = ddgiTrilinearAlpha(worldPos, ddgi.gridOrigin, ddgi.gridSpacing, base);
+    const ivec2 atlasSz     = imageSize(ddgiIrradiance);
+    const int   tileSide    = kDdgiIrradianceRes + 2 * kDdgiProbeBorder;
+    const int   tilesPerRow = atlasSz.x / tileSide;
+    const vec2  octUv       = ddgiDirToOctUv(N);
+
+    vec3  sum  = vec3(0.0);
+    float wsum = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        const ivec3 off = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
+        const ivec3 c   = clamp(base + off, ivec3(0), counts - ivec3(1));
+        const int   pi  = ddgiProbeCoordToIndex(c, counts);
+        const vec3  tw  = mix(vec3(1.0) - alpha, alpha, vec3(off));
+        const float w   = tw.x * tw.y * tw.z;
+        if (w <= 0.0) continue;
+        const ivec2 texel = ddgiProbeAtlasTexel(pi, octUv, kDdgiIrradianceRes, kDdgiProbeBorder, tilesPerRow);
+        sum  += w * imageLoad(ddgiIrradiance, texel).rgb;
+        wsum += w;
+    }
+    return wsum > 1e-6 ? sum / wsum : vec3(0.0);
+}
 
 // ───── ReSTIR DI — Stage 1a (init RIS, no temporal/spatial reuse) ─────
 // One reservoir per primary-shading invocation; lives in registers and is
@@ -1631,7 +1680,14 @@ void main() {
         const int oi = clamp(mdesc.occlusionTexIndex, 0, int(kMaxMaterialTextures) - 1);
         ao = texture(albedoMaps[oi], uvOcclusion).r;
     }
-    const vec3 ambient = albedo * (1.0 - metalness) * lights.ambient * baseScale * ao;
+    // Diffuse indirect = flat ambient + (when DDGI is enabled) probe irradiance.
+    // motionFlags bit 256 is the DDGI-enabled gate; off → identical to before.
+    // Bring-up adds probe irradiance directly as an ambient-style term (exact
+    // normalization is a tuning knob). Double-counts if ReSTIR GI is also on —
+    // they're not meant to run together.
+    vec3 indirectIrr = lights.ambient;
+    if ((pc.motionFlags & 256u) != 0u) indirectIrr += sampleDDGI(hitPos, N);
+    const vec3 ambient = albedo * (1.0 - metalness) * indirectIrr * baseScale * ao;
 
     // Phase 9 v2: probabilistic spec/diffuse lobe selection so polished
     // metals reflect nearby geometry, not just the env probe. p_spec mirrors

@@ -46,6 +46,10 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
     # extra glslangValidator invocations on the unrelated shaders that
     # don't include it).
     set(_shade_primary "${_src_dir}/shade_primary.glsl")
+    # ddgi_update.rgen / ddgi_blend.comp / closest_hit.rchit #include
+    # ddgi_common.glsl; track it as a global dep so edits to the probe math
+    # rebuild every consumer (same pattern as shade_primary above).
+    set(_ddgi_common "${_src_dir}/ddgi_common.glsl")
 
     file(MAKE_DIRECTORY "${_gen_dir}")
 
@@ -80,6 +84,9 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
     endif ()
     if (EXISTS "${_shade_primary}")
         list(APPEND _extra_deps "${_shade_primary}")
+    endif ()
+    if (EXISTS "${_ddgi_common}")
+        list(APPEND _extra_deps "${_ddgi_common}")
     endif ()
 
     add_custom_command(

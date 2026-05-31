@@ -297,6 +297,14 @@ namespace threepp {
         void setRestirGIEnabled(bool enabled);
         [[nodiscard]] bool restirGIEnabled() const;
 
+        // DDGI (dynamic diffuse global illumination) probe field. When enabled,
+        // the renderer dispatches the probe update + irradiance blend each frame.
+        // Experimental / in development: sampling the probe field into the
+        // shaded image is not wired yet, so enabling currently only builds the
+        // probe atlas (verifies the update/blend run). Default off.
+        void setDdgiEnabled(bool enabled);
+        [[nodiscard]] bool ddgiEnabled() const;
+
         // NVIDIA Shader Execution Reordering (SER) opt-out. SER warp-reorders
         // path-tracer threads by hit material before the closest-hit
         // invocation — a 10-30% speed-up on incoherent diffuse bounces on

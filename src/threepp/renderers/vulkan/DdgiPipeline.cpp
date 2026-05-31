@@ -53,7 +53,7 @@ namespace threepp::vulkan {
         if (updateLayout_)   vkDestroyPipelineLayout(d, updateLayout_, nullptr);
         if (updateDsLayout_) vkDestroyDescriptorSetLayout(d, updateDsLayout_, nullptr);
         destroyBuffer(ctx_.allocator(), ddgiUbo_);
-        destroyBuffer(ctx_.allocator(), rayRadiance_);
+        for (auto& b : rayRadiance_) destroyBuffer(ctx_.allocator(), b);
         for (auto& img : irradiance_) destroyImage2D(ctx_.allocator(), d, img);
     }
 
@@ -71,6 +71,26 @@ namespace threepp::vulkan {
         tileRows_    = (totalProbes_ + tilesPerRow_ - 1) / tilesPerRow_;
         atlasW_ = static_cast<uint32_t>(tilesPerRow_ * tileSide_);
         atlasH_ = static_cast<uint32_t>(tileRows_ * tileSide_);
+
+        // Default grid: a ~20×10×20 m box centred horizontally on the origin,
+        // floor a little below y=0. Spacing puts probe (0,0,0) at the min
+        // corner and probe (counts-1) at the max corner. The renderer overrides
+        // this via setGrid() once scene-AABB sizing lands.
+        const float spanX = 20.f, spanY = 10.f, spanZ = 20.f;
+        gridOrigin_[0] = -spanX * 0.5f;
+        gridOrigin_[1] = -2.f;
+        gridOrigin_[2] = -spanZ * 0.5f;
+        gridSpacing_[0] = spanX / float(probesX_ > 1 ? probesX_ - 1 : 1);
+        gridSpacing_[1] = spanY / float(probesY_ > 1 ? probesY_ - 1 : 1);
+        gridSpacing_[2] = spanZ / float(probesZ_ > 1 ? probesZ_ - 1 : 1);
+    }
+
+    void DdgiPipeline::setGrid(const float originXYZ[3], const float spacingXYZ[3]) {
+        for (int i = 0; i < 3; ++i) {
+            gridOrigin_[i]  = originXYZ[i];
+            gridSpacing_[i] = spacingXYZ[i];
+        }
+        uboWritten_ = false;// re-upload on next update
     }
 
     void DdgiPipeline::transitionFreshImage(VkImage img) {
@@ -157,11 +177,12 @@ namespace threepp::vulkan {
     }
 
     void DdgiPipeline::createBuffers() {
-        rayRadiance_ = createBuffer(
-                ctx_.allocator(), ctx_.device(),
-                static_cast<VkDeviceSize>(totalProbes_) * raysPerProbe_ * sizeof(float) * 4,
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
+        for (auto& b : rayRadiance_)
+            b = createBuffer(
+                    ctx_.allocator(), ctx_.device(),
+                    static_cast<VkDeviceSize>(totalProbes_) * raysPerProbe_ * sizeof(float) * 4,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, 0);
 
         ddgiUbo_ = createBuffer(
                 ctx_.allocator(), ctx_.device(), sizeof(DdgiUboHost),
@@ -342,43 +363,172 @@ namespace threepp::vulkan {
     }
 
     void DdgiPipeline::createDescriptors() {
-        std::array<VkDescriptorPoolSize, 4> sizes{};
-        sizes[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR; sizes[0].descriptorCount = 1;
-        sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;             sizes[1].descriptorCount = 1;
-        sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;             sizes[2].descriptorCount = 1 + kPingPong;
-        sizes[3].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;              sizes[3].descriptorCount = 2 * kPingPong;
-        // (one COMBINED_IMAGE_SAMPLER for the update set's env binding)
-        std::array<VkDescriptorPoolSize, 5> allSizes{};
-        for (size_t i = 0; i < sizes.size(); ++i) allSizes[i] = sizes[i];
-        allSizes[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; allSizes[4].descriptorCount = 1;
+        // kPingPong update sets (TLAS + UBO + ray buffer + env) and kPingPong
+        // blend sets (ray buffer + 2 atlas images).
+        std::array<VkDescriptorPoolSize, 5> sizes{};
+        sizes[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR; sizes[0].descriptorCount = kPingPong;
+        sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;             sizes[1].descriptorCount = kPingPong;
+        sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;             sizes[2].descriptorCount = 2 * kPingPong;
+        sizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;     sizes[3].descriptorCount = kPingPong;
+        sizes[4].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;              sizes[4].descriptorCount = 2 * kPingPong;
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpci.maxSets       = 1 + kPingPong;// update set + 2 blend sets
-        dpci.poolSizeCount = static_cast<uint32_t>(allSizes.size());
-        dpci.pPoolSizes    = allSizes.data();
+        dpci.maxSets       = 2 * kPingPong;// kPingPong update + kPingPong blend
+        dpci.poolSizeCount = static_cast<uint32_t>(sizes.size());
+        dpci.pPoolSizes    = sizes.data();
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
               "vkCreateDescriptorPool(ddgi)");
 
-        VkDescriptorSetAllocateInfo uai{};
-        uai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        uai.descriptorPool     = descPool_;
-        uai.descriptorSetCount = 1;
-        uai.pSetLayouts        = &updateDsLayout_;
-        check(vkAllocateDescriptorSets(ctx_.device(), &uai, &updateSet_),
-              "vkAllocateDescriptorSets(ddgi.update)");
-
+        for (auto& set : updateSets_) {
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool     = descPool_;
+            ai.descriptorSetCount = 1;
+            ai.pSetLayouts        = &updateDsLayout_;
+            check(vkAllocateDescriptorSets(ctx_.device(), &ai, &set),
+                  "vkAllocateDescriptorSets(ddgi.update)");
+        }
         for (auto& set : blendSets_) {
-            VkDescriptorSetAllocateInfo bai{};
-            bai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            bai.descriptorPool     = descPool_;
-            bai.descriptorSetCount = 1;
-            bai.pSetLayouts        = &blendDsLayout_;
-            check(vkAllocateDescriptorSets(ctx_.device(), &bai, &set),
+            VkDescriptorSetAllocateInfo ai{};
+            ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            ai.descriptorPool     = descPool_;
+            ai.descriptorSetCount = 1;
+            ai.pSetLayouts        = &blendDsLayout_;
+            check(vkAllocateDescriptorSets(ctx_.device(), &ai, &set),
                   "vkAllocateDescriptorSets(ddgi.blend)");
         }
-        // Descriptor *contents* (TLAS / env / atlas / ray buffer) are wired when
-        // DDGI is enabled — until then the sets are allocated but unused.
+        // Descriptor *contents* are written lazily on first record* per parity.
+    }
+
+    void DdgiPipeline::recordUpdate(VkCommandBuffer cb, VkAccelerationStructureKHR tlas,
+                                    VkImageView envView, VkSampler envSampler, uint32_t frame) {
+        const uint32_t idx = frame % kPingPong;
+
+        // Upload the static DDGI uniform once (grid params + identity ray
+        // rotation; per-frame rotation is a tuning follow-up needing a
+        // double-buffered UBO).
+        if (!uboWritten_) {
+            DdgiUboHost u{};
+            for (int i = 0; i < 3; ++i) { u.gridOrigin[i] = gridOrigin_[i]; u.gridSpacing[i] = gridSpacing_[i]; }
+            u.probeCounts[0] = probesX_; u.probeCounts[1] = probesY_; u.probeCounts[2] = probesZ_;
+            u.raysPerProbe = raysPerProbe_;
+            u.totalProbes  = totalProbes_;
+            u.rayRot0[0] = 1.f; u.rayRot1[1] = 1.f; u.rayRot2[2] = 1.f;// identity
+            void* mapped = nullptr;
+            vmaMapMemory(ctx_.allocator(), ddgiUbo_.alloc, &mapped);
+            std::memcpy(mapped, &u, sizeof(u));
+            vmaUnmapMemory(ctx_.allocator(), ddgiUbo_.alloc);
+            uboWritten_ = true;
+        }
+
+        // Populate this parity's update set once (TLAS / env stable for bring-up;
+        // rewiring on scene-rebuild TLAS change is a follow-up).
+        if (!updateWired_[idx]) {
+            VkWriteDescriptorSetAccelerationStructureKHR asInfo{};
+            asInfo.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+            asInfo.accelerationStructureCount = 1;
+            asInfo.pAccelerationStructures    = &tlas;
+            VkDescriptorBufferInfo uboInfo{ddgiUbo_.handle, 0, VK_WHOLE_SIZE};
+            VkDescriptorBufferInfo rayInfo{rayRadiance_[idx].handle, 0, VK_WHOLE_SIZE};
+            VkDescriptorImageInfo  envInfo{envSampler, envView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+
+            std::array<VkWriteDescriptorSet, 4> w{};
+            for (auto& x : w) {
+                x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                x.dstSet = updateSets_[idx];
+                x.descriptorCount = 1;
+            }
+            w[0].dstBinding = 0; w[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR; w[0].pNext = &asInfo;
+            w[1].dstBinding = 1; w[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;             w[1].pBufferInfo = &uboInfo;
+            w[2].dstBinding = 2; w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;             w[2].pBufferInfo = &rayInfo;
+            w[3].dstBinding = 3; w[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;     w[3].pImageInfo = &envInfo;
+            vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
+            updateWired_[idx] = true;
+        }
+
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, updatePipeline_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+                                updateLayout_, 0, 1, &updateSets_[idx], 0, nullptr);
+        ctx_.rt().cmdTraceRays(cb, &rgenRgn_, &missRgn_, &hitRgn_, &callRgn_,
+                               static_cast<uint32_t>(raysPerProbe_),
+                               static_cast<uint32_t>(totalProbes_), 1);
+
+        VkBufferMemoryBarrier2 bb{};
+        bb.sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        bb.srcStageMask  = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+        bb.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        bb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        bb.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        bb.srcQueueFamilyIndex = bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bb.buffer = rayRadiance_[idx].handle;
+        bb.size   = VK_WHOLE_SIZE;
+        VkDependencyInfo dep{};
+        dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dep.bufferMemoryBarrierCount = 1;
+        dep.pBufferMemoryBarriers    = &bb;
+        vkCmdPipelineBarrier2(cb, &dep);
+    }
+
+    void DdgiPipeline::recordBlend(VkCommandBuffer cb, uint32_t frame) {
+        const uint32_t idx = frame % kPingPong;
+
+        if (!blendWired_[idx]) {
+            VkDescriptorBufferInfo rayInfo{rayRadiance_[idx].handle, 0, VK_WHOLE_SIZE};
+            // Bring-up has no temporal accumulation (hysteresis 0), so prev and
+            // curr point at the same image; the read value is multiplied by 0.
+            VkDescriptorImageInfo prevInfo{VK_NULL_HANDLE, irradiance_[idx].view, VK_IMAGE_LAYOUT_GENERAL};
+            VkDescriptorImageInfo currInfo{VK_NULL_HANDLE, irradiance_[idx].view, VK_IMAGE_LAYOUT_GENERAL};
+            std::array<VkWriteDescriptorSet, 3> w{};
+            for (auto& x : w) {
+                x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                x.dstSet = blendSets_[idx];
+                x.descriptorCount = 1;
+            }
+            w[0].dstBinding = 0; w[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[0].pBufferInfo = &rayInfo;
+            w[1].dstBinding = 1; w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;  w[1].pImageInfo = &prevInfo;
+            w[2].dstBinding = 2; w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;  w[2].pImageInfo = &currInfo;
+            vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
+            blendWired_[idx] = true;
+        }
+
+        struct BlendPc {
+            int32_t cfg0[4];// interiorRes, border, tilesPerRow, totalProbes
+            int32_t cfg1[4];// raysPerProbe, _, _, _
+            float   blend[4];// hysteresis, _, _, _
+            float   rot0[4]; float rot1[4]; float rot2[4];
+        } pc{};
+        pc.cfg0[0] = irrRes_; pc.cfg0[1] = border_; pc.cfg0[2] = tilesPerRow_; pc.cfg0[3] = totalProbes_;
+        pc.cfg1[0] = raysPerProbe_;
+        pc.blend[0] = 0.f;// no temporal accumulation for bring-up
+        pc.rot0[0] = 1.f; pc.rot1[1] = 1.f; pc.rot2[2] = 1.f;// identity (matches update)
+
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, blendPipeline_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                blendLayout_, 0, 1, &blendSets_[idx], 0, nullptr);
+        vkCmdPushConstants(cb, blendLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        // One workgroup per probe — the blend shader's local size covers a full
+        // probe tile and loads that probe's rays into shared memory once.
+        vkCmdDispatch(cb, static_cast<uint32_t>(totalProbes_), 1, 1);
+
+        VkImageMemoryBarrier2 ib{};
+        ib.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        ib.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        ib.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        ib.dstStageMask  = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        ib.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        ib.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        ib.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        ib.srcQueueFamilyIndex = ib.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        ib.image = irradiance_[idx].image;
+        ib.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        ib.subresourceRange.levelCount = 1;
+        ib.subresourceRange.layerCount = 1;
+        VkDependencyInfo dep{};
+        dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dep.imageMemoryBarrierCount = 1;
+        dep.pImageMemoryBarriers    = &ib;
+        vkCmdPipelineBarrier2(cb, &dep);
     }
 
 }// namespace threepp::vulkan

@@ -101,6 +101,18 @@ vec2 ddgiProbeAtlasUv(int probeIndex, vec2 octUv01,
     return texel / atlasSize;
 }
 
+// Integer atlas texel for a probe's octahedral tile — the storage-image
+// (imageLoad) counterpart of ddgiProbeAtlasUv. `octUv01` in [0,1] selects the
+// interior texel; the result lands inside the gutter-padded tile.
+ivec2 ddgiProbeAtlasTexel(int probeIndex, vec2 octUv01,
+                          int interiorRes, int border, int tilesPerRow) {
+    const int tileSide = interiorRes + 2 * border;
+    const ivec2 tile   = ivec2(probeIndex % tilesPerRow, probeIndex / tilesPerRow);
+    const ivec2 interior = clamp(ivec2(clamp(octUv01, 0.0, 1.0) * float(interiorRes)),
+                                 ivec2(0), ivec2(interiorRes - 1));
+    return tile * tileSide + ivec2(border) + interior;
+}
+
 // ── Probe ray directions ────────────────────────────────────────────────────
 // Spherical-Fibonacci point set — near-uniform sphere coverage for the probe
 // update rays. Both ddgi_update.rgen (casting rays) and ddgi_blend.comp

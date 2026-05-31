@@ -259,6 +259,15 @@ int main(int argc, char** argv) {
             renderer.setRestirGIEnabled(restirGI);
         }
 
+        // DDGI probe field (experimental). Currently shades sky-visibility only
+        // and uses a default 20×10×20 m grid at the origin, so on a scene that
+        // doesn't fit that box it'll look wrong — placement tuning (setGrid) is
+        // the next step. Don't run together with ReSTIR GI (double-counts).
+        bool ddgi = renderer.ddgiEnabled();
+        if (ImGui::Checkbox("DDGI (experimental)", &ddgi)) {
+            renderer.setDdgiEnabled(ddgi);
+        }
+
         if (ImGui::CollapsingHeader("Fog (FogExp2 + HG)")) {
             ImGui::Checkbox("Fog", &fogOn);
             if (fogOn) {

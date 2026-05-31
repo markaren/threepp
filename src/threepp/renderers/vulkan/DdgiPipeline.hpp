@@ -41,6 +41,29 @@ namespace threepp::vulkan {
         [[nodiscard]] uint32_t atlasHeight() const { return atlasH_; }
         [[nodiscard]] int      totalProbes() const { return totalProbes_; }
 
+        // Wired into the shared RT descriptor set so closest_hit's sampleDDGI
+        // can read this frame's irradiance atlas + the grid uniform. The atlas
+        // is read as a storage image (GENERAL layout) — no sampler needed.
+        [[nodiscard]] VkImageView irradianceView(uint32_t frame) const {
+            return irradiance_[frame % kPingPong].view;
+        }
+        [[nodiscard]] VkBuffer uboBuffer() const { return ddgiUbo_.handle; }
+
+        // Override the probe-grid placement (world AABB the grid spans). Until
+        // a scene-AABB auto-sizer lands, the renderer can call this; otherwise
+        // the constructor's defaults are used.
+        void setGrid(const float originXYZ[3], const float spacingXYZ[3]);
+
+        // Per-frame passes. recordUpdate casts the probe rays into `tlas`
+        // (env sampled in the miss shader) and fills the ray-radiance buffer;
+        // recordBlend folds them into the irradiance atlas. Both are no-ops at
+        // the renderer level until ddgiEnabled_ — the renderer simply doesn't
+        // call them otherwise. `frame` is the frame-in-flight index (parity
+        // selects the double-buffered ray buffer / descriptor set / atlas).
+        void recordUpdate(VkCommandBuffer cb, VkAccelerationStructureKHR tlas,
+                          VkImageView envView, VkSampler envSampler, uint32_t frame);
+        void recordBlend(VkCommandBuffer cb, uint32_t frame);
+
     private:
         static constexpr uint32_t kPingPong = 2;
 
@@ -54,10 +77,20 @@ namespace threepp::vulkan {
         int irrRes_ = 0, border_ = 0, tileSide_ = 0, tilesPerRow_ = 0, tileRows_ = 0;
         uint32_t atlasW_ = 0, atlasH_ = 0;
 
-        // Resources.
-        std::array<Image2D, kPingPong> irradiance_{}; // ping-pong octahedral irradiance atlas
-        Buffer rayRadiance_{};                        // per (probe,ray) radiance + hitDist
-        Buffer ddgiUbo_{};                            // grid params + per-frame ray rotation
+        // Probe-grid world placement (defaults set in computeGridDims; the
+        // renderer may override via setGrid once it knows the scene AABB).
+        float gridOrigin_[3]  = {0.f, 0.f, 0.f};
+        float gridSpacing_[3] = {1.f, 1.f, 1.f};
+
+        // Resources. The ray buffer + per-frame descriptor sets are
+        // double-buffered by frame parity so frame N+1's update can't clobber
+        // data frame N's blend is still reading. The atlas is per-frame for the
+        // same reason on the sampling side. The UBO is static (grid params,
+        // identity ray rotation for now) so a single copy is race-free.
+        std::array<Image2D, kPingPong> irradiance_{};   // per-frame octahedral irradiance atlas
+        std::array<Buffer,  kPingPong> rayRadiance_{};  // per (probe,ray) radiance + hitDist
+        Buffer ddgiUbo_{};                              // grid params (static for now)
+        bool   uboWritten_ = false;
 
         // Update (ray tracing) pipeline — own layout, not the shared RT set.
         VkDescriptorSetLayout updateDsLayout_ = VK_NULL_HANDLE;
@@ -74,10 +107,13 @@ namespace threepp::vulkan {
         VkPipelineLayout      blendLayout_   = VK_NULL_HANDLE;
         VkPipeline            blendPipeline_  = VK_NULL_HANDLE;
 
-        // Descriptor pool + sets (allocated now; populated when DDGI is enabled).
-        VkDescriptorPool descPool_  = VK_NULL_HANDLE;
-        VkDescriptorSet  updateSet_ = VK_NULL_HANDLE;
+        // Descriptor pool + sets (allocated up front; their contents are
+        // written lazily on the first recordUpdate/recordBlend per parity).
+        VkDescriptorPool descPool_ = VK_NULL_HANDLE;
+        std::array<VkDescriptorSet, kPingPong> updateSets_{};
         std::array<VkDescriptorSet, kPingPong> blendSets_{};
+        std::array<bool, kPingPong> updateWired_{};
+        std::array<bool, kPingPong> blendWired_{};
 
         void computeGridDims();
         void createImages();

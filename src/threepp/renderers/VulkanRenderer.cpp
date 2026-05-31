@@ -9913,7 +9913,7 @@ namespace threepp {
             // for material lookup, UV for texture sampling on the primary).
             // Always present in the layout; raygen gates use on the hybrid
             // push-constant bit.
-            std::array<VkDescriptorSetLayoutBinding, 45> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 47> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -10231,6 +10231,20 @@ namespace threepp {
             bindings[44].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[44].descriptorCount = 1;
             bindings[44].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+            // Bindings 45/46 — DDGI probe field. 45 = irradiance atlas (storage
+            // image, read via imageLoad in closest_hit's sampleDDGI); 46 = DDGI
+            // grid uniform. Always present + written (DdgiPipeline is always
+            // constructed); closest_hit only reads them when DDGI is enabled
+            // (gated by a push-constant bit), so output is unchanged when off.
+            bindings[45].binding = 45;
+            bindings[45].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            bindings[45].descriptorCount = 1;
+            bindings[45].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[46].binding = 46;
+            bindings[46].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            bindings[46].descriptorCount = 1;
+            bindings[46].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -10688,9 +10702,9 @@ namespace threepp {
             ps[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             ps[0].descriptorCount = totalSets;
             ps[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            ps[1].descriptorCount = totalSets * 22;// bindings 1, 7, 11, 12, 13 + 20×2 (filtered ping-pong) + 28-31 (ReSTIR DI reservoir ping-pong) + 33,34 (moments ping-pong) + 35,36,37 (albedo ping-pong + snapshot) + 38-43 (ReSTIR GI reservoir ping-pong)
+            ps[1].descriptorCount = totalSets * 23;// bindings 1, 7, 11, 12, 13 + 20×2 (filtered ping-pong) + 28-31 (ReSTIR DI reservoir ping-pong) + 33,34 (moments ping-pong) + 35,36,37 (albedo ping-pong + snapshot) + 38-43 (ReSTIR GI reservoir ping-pong) + 45 (DDGI irradiance atlas)
             ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            ps[2].descriptorCount = totalSets * 4;// bindings 2 (camera), 5 (lights), 9 (prevCamera), 17 (fog)
+            ps[2].descriptorCount = totalSets * 5;// bindings 2 (camera), 5 (lights), 9 (prevCamera), 17 (fog), 46 (DDGI grid)
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             ps[3].descriptorCount = totalSets * 7;// bindings 3,4,10,14 (existing) + 15,16 (photon) + 21 (meshMovedBits)
             ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -11285,7 +11299,34 @@ namespace threepp {
                     wOceanFoam.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                     wOceanFoam.pImageInfo = &oceanFoamInfo;
 
-                    std::array<VkWriteDescriptorSet, 45> writes{
+                    // Bindings 45/46 — DDGI irradiance atlas (this frame's
+                    // parity) + grid uniform. Always written so the descriptors
+                    // are valid; closest_hit only reads them when DDGI is
+                    // enabled. DdgiPipeline is constructed before this runs.
+                    VkDescriptorImageInfo ddgiAtlasInfo{};
+                    ddgiAtlasInfo.imageView   = ddgi_->irradianceView(f);
+                    ddgiAtlasInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    VkWriteDescriptorSet wDdgiAtlas{};
+                    wDdgiAtlas.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wDdgiAtlas.dstSet = descriptorSets[idx];
+                    wDdgiAtlas.dstBinding = 45;
+                    wDdgiAtlas.descriptorCount = 1;
+                    wDdgiAtlas.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    wDdgiAtlas.pImageInfo = &ddgiAtlasInfo;
+
+                    VkDescriptorBufferInfo ddgiUboInfo{};
+                    ddgiUboInfo.buffer = ddgi_->uboBuffer();
+                    ddgiUboInfo.offset = 0;
+                    ddgiUboInfo.range  = VK_WHOLE_SIZE;
+                    VkWriteDescriptorSet wDdgiUbo{};
+                    wDdgiUbo.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wDdgiUbo.dstSet = descriptorSets[idx];
+                    wDdgiUbo.dstBinding = 46;
+                    wDdgiUbo.descriptorCount = 1;
+                    wDdgiUbo.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                    wDdgiUbo.pBufferInfo = &ddgiUboInfo;
+
+                    std::array<VkWriteDescriptorSet, 47> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
                             wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered,
@@ -11298,7 +11339,8 @@ namespace threepp {
                             wAlbedoWrite, wAlbedoRead, wAlbedoSnap,
                             wGiXsWrite, wGiXsRead, wGiNsWrite, wGiNsRead,
                             wGiLoWrite, wGiLoRead,
-                            wOceanFoam};
+                            wOceanFoam,
+                            wDdgiAtlas, wDdgiUbo};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -12297,6 +12339,16 @@ namespace threepp {
             }
             // ── End photon emit ─────────────────────────────────────────────────
 
+            // ── DDGI probe field (gated) ────────────────────────────────────────
+            // Update (cast probe rays) + blend (octahedral irradiance) before
+            // the main path-trace, so a future sampling step can read this
+            // frame's atlas. No-op until ddgiEnabled_ — renderer is byte-
+            // identical when off. Sampling into the shaded image is a later step.
+            if (ddgiEnabled_ && ddgi_) {
+                ddgi_->recordUpdate(cb, tlas, envImage.view, envImage.sampler, currentFrame);
+                ddgi_->recordBlend(cb, currentFrame);
+            }
+
             const RtPipelineVariant& rtv = activeRtVariant();
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rtv.pipeline);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
@@ -12334,7 +12386,8 @@ namespace threepp {
                     (restirDIEnabled_           ? 16u  : 0u) |
                     (perSppJitterHybrid_        ? 32u  : 0u) |
                     (restirGIEnabled_           ? 64u  : 0u) |
-                    (measurePrimaryTraceOnly_   ? 128u : 0u);
+                    (measurePrimaryTraceOnly_   ? 128u : 0u) |
+                    (ddgiEnabled_               ? 256u : 0u);
             uint32_t emPowerBits;
             std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
             uint32_t envSumBits;
@@ -14137,6 +14190,17 @@ namespace threepp {
 
     bool VulkanRenderer::restirGIEnabled() const {
         return pimpl_->restirGIEnabled_;
+    }
+
+    void VulkanRenderer::setDdgiEnabled(bool enabled) {
+        // Flag flip — the per-frame command recording dispatches the DDGI
+        // update + blend only when this is set. The DdgiPipeline is already
+        // constructed; nothing rebuilds here.
+        pimpl_->ddgiEnabled_ = enabled;
+    }
+
+    bool VulkanRenderer::ddgiEnabled() const {
+        return pimpl_->ddgiEnabled_;
     }
 
     void VulkanRenderer::setSerEnabled(bool enabled) {
