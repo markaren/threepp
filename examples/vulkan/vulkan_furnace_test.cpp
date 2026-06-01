@@ -190,8 +190,6 @@ int main() {
     bool denoiserOn = renderer.denoise();
     bool restirOn = renderer.restirDIEnabled();
     bool restirGiOn = renderer.restirGIEnabled();
-    bool hybridOn = renderer.hybridEnabled();
-    bool taaOn = renderer.taaEnabled();
     int spp = renderer.samplesPerPixel();
     int maxBounces = renderer.maxBounces();
     int measureEveryN = 32;
@@ -287,16 +285,6 @@ int main() {
         if (ImGui::Checkbox("ReSTIR GI", &restirGiOn)) {
             renderer.setRestirGIEnabled(restirGiOn);
             requestReset();
-        }
-        if (ImGui::Checkbox("Hybrid raster G-buffer", &hybridOn)) {
-            renderer.setHybridEnabled(hybridOn);
-            requestReset();
-        }
-        if (!hybridOn) {
-            if (ImGui::Checkbox("TAA (standalone)", &taaOn)) {
-                renderer.setTaaEnabled(taaOn);
-                requestReset();
-            }
         }
         if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 8)) {
             renderer.setMaxBounces(maxBounces);

@@ -1027,8 +1027,7 @@ if (THREEPP_WITH_VULKAN)
         kGbufferIndirectVertSpv
         _gbuffer_indirect_vert_spv_h)
     # Hybrid raster TAA: post-denoise temporal resolve. Reads taaInput +
-    # history + gbufMotion → writes swapchain + new history. Runs only
-    # when hybridEnabled_; non-hybrid path copies taaInput → swapchain.
+    # history + gbufMotion → writes swapchain + new history.
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/taa_resolve.comp"
         kTaaResolveCompSpv
@@ -1036,7 +1035,7 @@ if (THREEPP_WITH_VULKAN)
     # Hybrid raster overlay: wireframe + Line/LineSegments draw on top of
     # the post-TAA swapchain image. Depth-tested against the G-buffer's
     # depth attachment so overlays are correctly occluded by path-traced
-    # geometry. Only runs when hybridEnabled_ + scene has overlay objects.
+    # geometry. Only runs when the scene has overlay objects.
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay.vert"
         kOverlayVertSpv

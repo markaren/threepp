@@ -893,17 +893,17 @@ namespace threepp {
         VkDescriptorSetLayout rtDsLayout = VK_NULL_HANDLE;
         VkPipelineLayout      rtPipelineLayout = VK_NULL_HANDLE;
 
-        // RT pipeline variants. Cross product of (SER on/off) × (hybrid
-        // raygen spec constant) × (restirDI chit spec constant). Up to 8
-        // variants; SER ones only built on supported devices. All variants
-        // are built at first-frame pipeline build — vkCreateRayTracingPipelinesKHR
-        // hangs on a second call against the same pipeline layout on NVIDIA
-        // drivers, so we eat the per-variant one-time cost instead of
-        // rebuilding on toggle. setHybridEnabled / setRestirDIEnabled are
-        // zero-cost (just change which slot activeRtVariant picks).
+        // RT pipeline variants. Cross product of (SER on/off) × (restirDI
+        // chit spec constant). Up to 4 variants; SER ones only built on
+        // supported devices. All variants are built at first-frame pipeline
+        // build — vkCreateRayTracingPipelinesKHR hangs on a second call
+        // against the same pipeline layout on NVIDIA drivers, so we eat the
+        // per-variant one-time cost instead of rebuilding on toggle.
+        // setRestirDIEnabled is zero-cost (just changes which slot
+        // activeRtVariant picks).
         //
-        // Index layout: variantIndex(useSer, hybrid, restirDI) =
-        //     (useSer ? 4 : 0) + (restirDI ? 2 : 0) + (hybrid ? 1 : 0)
+        // Index layout: variantIndex(useSer, restirDI) =
+        //     (useSer ? 2 : 0) + (restirDI ? 1 : 0)
         struct RtPipelineVariant {
             VkPipeline pipeline = VK_NULL_HANDLE;
             Buffer     sbtBuffer{};
@@ -911,20 +911,18 @@ namespace threepp {
             VkStridedDeviceAddressRegionKHR missRegion{};
             VkStridedDeviceAddressRegionKHR hitRegion{};
         };
-        std::array<RtPipelineVariant, 8> rtVariants_{};
-        static uint32_t rtVariantIndex(bool useSer, bool hybrid, bool restirDI) {
-            return (useSer ? 4u : 0u) + (restirDI ? 2u : 0u) + (hybrid ? 1u : 0u);
+        std::array<RtPipelineVariant, 4> rtVariants_{};
+        static uint32_t rtVariantIndex(bool useSer, bool restirDI) {
+            return (useSer ? 2u : 0u) + (restirDI ? 1u : 0u);
         }
         // Convenience accessors — read which variant is active from
         // shouldUseSerRaygen() (which folds restirGIEnabled_ + driver
         // support into a single bool).
         const RtPipelineVariant& activeRtVariant() const {
-            return rtVariants_[rtVariantIndex(shouldUseSerRaygen(), hybridEnabled_,
-                                              restirDIEnabled_)];
+            return rtVariants_[rtVariantIndex(shouldUseSerRaygen(), restirDIEnabled_)];
         }
         RtPipelineVariant& activeRtVariant() {
-            return rtVariants_[rtVariantIndex(shouldUseSerRaygen(), hybridEnabled_,
-                                              restirDIEnabled_)];
+            return rtVariants_[rtVariantIndex(shouldUseSerRaygen(), restirDIEnabled_)];
         }
         VkStridedDeviceAddressRegionKHR callRegion{};// unused (no callable shaders)
 
@@ -1233,12 +1231,7 @@ namespace threepp {
         std::unique_ptr<vulkan::TaaResolve> taa_;
         float taaBlendAlpha_ = 0.1f;// 10% current, 90% history
 
-        // Master toggle for the hybrid path. setHybridEnabled(true) flips it
-        // on; off keeps the existing full-PT primary path. Defaults on now
-        // that the raster prepass has been validated end-to-end.
-        bool hybridEnabled_ = true;
         bool perSppJitterHybrid_ = true;
-        bool taaEnabled_ = true;
         // Tracks what each per-frame slot's binding 1 (RT denoise output)
         // currently points at, so the per-frame rewrite block only fires on
         // a real state change: -1 = unknown/needs rewrite, 0 = swapchain
@@ -1271,13 +1264,7 @@ namespace threepp {
         // renderExtent() equals the swapchain extent and every pass behaves
         // exactly as before.
         float renderScale_ = 1.0f;
-        // Upscale source — the render-extent intermediate the denoise pass
-        // resolves into in the TAA-OFF + scaled fallback path; the bilinear
-        // upscale blit reads it. (When TAA runs it is the upsampler and
-        // writes the swapchain directly, so these are unused then.) One per
-        // frame-in-flight; BGRA8_UNORM to match the swapchain. Allocated only
-        // while scaled — slots stay null (and unreferenced) at renderScale 1.
-        std::array<Image2D, kFramesInFlight> upscaleSrcImages_{};
+        // (renderScale < 1 is upsampled by TAA straight to the swapchain.)
 
         // PT render extent: swapchain extent × renderScale_, each axis
         // clamped to ≥ 1px. Exactly equal to the swapchain extent when
@@ -1508,15 +1495,11 @@ namespace threepp {
             ddgi_ = std::make_unique<vulkan::DdgiPipeline>(*ctx, cmdPool, rtPipelineLayout);
             waterDisplace_ = std::make_unique<vulkan::WaterDisplacePipeline>(*ctx);
             foamWorld_     = std::make_unique<vulkan::FoamWorldPipeline>(*ctx);
-            // Hybrid raster G-buffer infrastructure is always allocated so
-            // the RT descriptor sets can include valid gbuffer-attachment
-            // bindings even when hybridEnabled_ stays false. Costs a few
-            // hundred MB at 1080p for six attachments × kFramesInFlight.
+            // Hybrid raster G-buffer infrastructure. Costs a few hundred MB
+            // at 1080p for six attachments × kFramesInFlight.
             ensureHybridResources();
-            // TAA pipeline + images. Allocated unconditionally so the RT
-            // descriptor's binding 1 (denoise output target) always has a
-            // valid view to point at. When hybridEnabled_ is false we copy
-            // taaInput → swapchain in place of the TAA dispatch.
+            // TAA pipeline + images. The RT descriptor's binding 1 (denoise
+            // output target) always points at the TAA input view.
             imageCount_ = static_cast<uint32_t>(ctx->swapchainImages().size());
             taa_ = std::make_unique<vulkan::TaaResolve>(
                     *ctx, cmdPool, imageCount_, kFramesInFlight);
@@ -1529,7 +1512,6 @@ namespace threepp {
                 taa_->createImages(inExt.width, inExt.height,
                                    outExt.width, outExt.height);
             }
-            createUpscaleSrcImages();// no-op at the default renderScale_ == 1
             createDescriptorPool();
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             createOceanFineDummy_();// must run before descriptor writes (binding 32)
@@ -1708,7 +1690,6 @@ namespace threepp {
             for (auto& img : giResXsImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : giResNsImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : giResLoImagesPP) destroyImage2D(ctx->allocator(), d, img);
-            destroyUpscaleSrcImages();
             for (auto& img : materialTextures) destroyImage2D(ctx->allocator(), d, img);
             materialTextures.clear();
             if (textureSampler_) vkDestroySampler(d, textureSampler_, nullptr);
@@ -1728,10 +1709,9 @@ namespace threepp {
             // each DisplacedMeshState and destroyed there.
             foamWorld_.reset();
 
-            // Hybrid raster G-buffer cleanup. All resources are lazy-created
-            // on first render() with hybridEnabled_ true; if hybrid was never
-            // turned on, all handles stay VK_NULL_HANDLE and these calls
-            // become no-ops.
+            // Hybrid raster G-buffer cleanup. Resources are lazy-created on
+            // first render(); if render() was never called, all handles stay
+            // VK_NULL_HANDLE and these calls become no-ops.
             destroyRasterGbufImages();
             for (auto& b : rasterCameraUbos)    destroyBuffer(ctx->allocator(), b);
             for (auto& b : drawInfoBuffers)     destroyBuffer(ctx->allocator(), b);
@@ -3439,8 +3419,7 @@ namespace threepp {
             // ocean reproject as world-static — so the copy is dead work and
             // skipping it also saves a full vertex-buffer transfer per frame.
             const bool warpActive = dm.warp.halfRange > 0.0f;
-            if ((hybridEnabled_ || taaEnabled_) && st.blas->prevVertex.handle != VK_NULL_HANDLE
-                && !warpActive) {
+            if (st.blas->prevVertex.handle != VK_NULL_HANDLE && !warpActive) {
                 VkBufferCopy region{};
                 region.size = VkDeviceSize(st.vertexCount) * 3u * sizeof(float);
                 vkCmdCopyBuffer(cb, st.blas->vertex.handle,
@@ -5860,8 +5839,8 @@ namespace threepp {
             const uint32_t hi = haltonFrame_ + 1u;
             const float jx = halton_(hi, 2) - 0.5f;
             const float jy = halton_(hi, 3) - 0.5f;
-            const float jClipX = (hybridEnabled_ ? 2.f * jx / float(ext.width)  : 0.f);
-            const float jClipY = (hybridEnabled_ ? 2.f * jy / float(ext.height) : 0.f);
+            const float jClipX = 2.f * jx / float(ext.width);
+            const float jClipY = 2.f * jy / float(ext.height);
             data[32] = jClipX;
             data[33] = jClipY;
             // .zw = previous frame's jitter so raygen's hybrid reproject can
@@ -7117,26 +7096,6 @@ namespace threepp {
             prevWorldMats.clear();
         }
 
-        void destroyUpscaleSrcImages() {
-            for (auto& img : upscaleSrcImages_)
-                destroyImage2D(ctx->allocator(), ctx->device(), img);
-        }
-
-        // Allocate the render-extent upscale intermediates — only while
-        // scaled; at renderScale_ == 1, or whenever TAA runs (it upsamples
-        // straight to the swapchain), the slots go unused. BGRA8_UNORM
-        // matches the swapchain so the upscale is a same-format linear blit;
-        // STORAGE feeds the denoise write, TRANSFER_SRC the blit.
-        void createUpscaleSrcImages() {
-            destroyUpscaleSrcImages();
-            if (!ptScaled()) return;
-            const VkExtent2D ext = renderExtent();
-            for (auto& img : upscaleSrcImages_) {
-                img = createStorageImage2D(ext.width, ext.height,
-                                           VK_FORMAT_B8G8R8A8_UNORM,
-                                           VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-            }
-        }
 
         // Manual accumulation reset. Mirrors the post-create reset block above:
         // wipes gbuf + accum + ReSTIR DI reservoirs, rewinds sampleIndex, and
@@ -7265,7 +7224,7 @@ namespace threepp {
         }
 
         // ── Hybrid raster G-buffer prepass implementation ───────────────────
-        // Lazy-initialized on first render() with hybridEnabled_ = true.
+        // Lazy-initialized on first render().
         // All resources owned by Impl; cleanup in dtor + destroyRasterGbufImages
         // is also called on swapchain resize.
 
@@ -10407,8 +10366,7 @@ namespace threepp {
         // others if the user actually flips a switch.
         void buildAllRtPipelines() {
             const uint32_t sceneFeats = currentSceneFeatures();
-            buildSingleRtVariant(shouldUseSerRaygen(), hybridEnabled_,
-                                 restirDIEnabled_, sceneFeats);
+            buildSingleRtVariant(shouldUseSerRaygen(), restirDIEnabled_, sceneFeats);
             lastBuiltSceneFeatures_ = sceneFeats;
             rtPipelinesBuilt_ = true;
         }
@@ -10452,12 +10410,11 @@ namespace threepp {
                 lastBuiltSceneFeatures_ = newFeats;
             }
             const bool useSer = shouldUseSerRaygen();
-            const bool hyb = hybridEnabled_;
             const bool rdi = restirDIEnabled_;
-            const uint32_t idx = rtVariantIndex(useSer, hyb, rdi);
+            const uint32_t idx = rtVariantIndex(useSer, rdi);
             if (rtVariants_[idx].pipeline != VK_NULL_HANDLE) return;
             vkDeviceWaitIdle(ctx->device());
-            buildSingleRtVariant(useSer, hyb, rdi, newFeats);
+            buildSingleRtVariant(useSer, rdi, newFeats);
         }
 
         // Scene-feature bitmask matching chit's kSceneFeatures spec constant.
@@ -10479,7 +10436,7 @@ namespace threepp {
         // Single-variant pipeline build. Called once at first frame for the
         // active variant, and again by ensureCurrentRtVariantBuilt() on each
         // toggle that lands in an unbuilt slot.
-        void buildSingleRtVariant(bool useSer, bool hybridSpec, bool restirDISpec,
+        void buildSingleRtVariant(bool useSer, bool restirDISpec,
                                   uint32_t sceneFeatures) {
             auto loadModule = [this](const uint32_t* code, size_t size) {
                 VkShaderModuleCreateInfo smci{};
@@ -10522,23 +10479,18 @@ namespace threepp {
             groups[4].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
             groups[4].anyHitShader = 5;
 
-            // Raygen spec data (kHybridEnabled + kSceneFeatures).
+            // Raygen spec data (kSceneFeatures at constant_id 1).
             struct RgenSpecData {
-                VkBool32 hybridEnabled;
                 uint32_t sceneFeatures;
             } rgenSpecData{
-                hybridSpec ? VK_TRUE : VK_FALSE,
                 sceneFeatures,
             };
-            VkSpecializationMapEntry rgenMapEntries[2]{};
-            rgenMapEntries[0].constantID = 0;
-            rgenMapEntries[0].offset = offsetof(RgenSpecData, hybridEnabled);
-            rgenMapEntries[0].size = sizeof(VkBool32);
-            rgenMapEntries[1].constantID = 1;
-            rgenMapEntries[1].offset = offsetof(RgenSpecData, sceneFeatures);
-            rgenMapEntries[1].size = sizeof(uint32_t);
+            VkSpecializationMapEntry rgenMapEntries[1]{};
+            rgenMapEntries[0].constantID = 1;
+            rgenMapEntries[0].offset = offsetof(RgenSpecData, sceneFeatures);
+            rgenMapEntries[0].size = sizeof(uint32_t);
             VkSpecializationInfo rgenSpecInfo{};
-            rgenSpecInfo.mapEntryCount = 2;
+            rgenSpecInfo.mapEntryCount = 1;
             rgenSpecInfo.pMapEntries = rgenMapEntries;
             rgenSpecInfo.dataSize = sizeof(RgenSpecData);
             rgenSpecInfo.pData = &rgenSpecData;
@@ -10597,12 +10549,12 @@ namespace threepp {
             rci.maxPipelineRayRecursionDepth = 4;
             rci.layout = rtPipelineLayout;
 
-            const uint32_t idx = rtVariantIndex(useSer, hybridSpec, restirDISpec);
+            const uint32_t idx = rtVariantIndex(useSer, restirDISpec);
             check(ctx->rt().createRayTracingPipelines(
                           ctx->device(), VK_NULL_HANDLE, VK_NULL_HANDLE,
                           1, &rci, nullptr, &rtVariants_[idx].pipeline),
                   "vkCreateRayTracingPipelinesKHR (single)");
-            createShaderBindingTable(useSer, hybridSpec, restirDISpec);
+            createShaderBindingTable(useSer, restirDISpec);
 
             vkDestroyShaderModule(ctx->device(), rgenMod,  nullptr);
             vkDestroyShaderModule(ctx->device(), missMod,  nullptr);
@@ -10612,8 +10564,8 @@ namespace threepp {
             vkDestroyShaderModule(ctx->device(), sahitMod, nullptr);
         }
 
-        void createShaderBindingTable(bool useSer, bool hybridSpec, bool restirDISpec) {
-            RtPipelineVariant& v = rtVariants_[rtVariantIndex(useSer, hybridSpec, restirDISpec)];
+        void createShaderBindingTable(bool useSer, bool restirDISpec) {
+            RtPipelineVariant& v = rtVariants_[rtVariantIndex(useSer, restirDISpec)];
             const auto& props = ctx->rtPipelineProperties();
             const uint32_t handleSize = props.shaderGroupHandleSize;
             const uint32_t handleAlignment = props.shaderGroupHandleAlignment;
@@ -10707,7 +10659,7 @@ namespace threepp {
         // Bracket helpers — write a timestamp at BOTTOM_OF_PIPE (= once all
         // prior commands have finished). Marking the pass bit lets readback
         // skip pairs that didn't run this frame (photon emit when glass not
-        // visible, overlay passes in non-hybrid mode, etc.).
+        // visible, overlay passes when no overlay objects are visible, etc.).
         void timingBegin(VkCommandBuffer cb, TimingPass p) {
             if (!timingsSupported_) return;
             vkCmdWriteTimestamp2(cb,
@@ -10824,11 +10776,10 @@ namespace threepp {
                     wAS.descriptorCount = 1;
                     wAS.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
 
-                    // Binding 1 (denoise output) defaults to the swapchain
-                    // image — preserves pre-TAA-commit behaviour for non-
-                    // hybrid renders. When hybridEnabled_ flips on, renderFrame
-                    // rewrites this binding per-frame to taa_->inputView(f)
-                    // so TAA can resolve it before swapchain present.
+                    // Binding 1 (denoise output) is initialised to the
+                    // swapchain image as a placeholder; renderFrame rewrites
+                    // it per-frame to taa_->inputView(f) so TAA can resolve
+                    // it before swapchain present.
                     VkDescriptorImageInfo imgInfo{};
                     imgInfo.imageView = ctx->swapchainImageViews()[i];
                     imgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -11667,7 +11618,6 @@ namespace threepp {
                 taa_->createImages(inExt.width, inExt.height,
                                    outExt.width, outExt.height);
             }
-            createUpscaleSrcImages();
             vkDestroyDescriptorPool(ctx->device(), descriptorPool, nullptr);
             descriptorPool = VK_NULL_HANDLE;
             descriptorSets.clear();
@@ -11973,7 +11923,7 @@ namespace threepp {
             // a chosen channel directly to the swapchain, draw the ImGui
             // overlay on top (mirrors the PT path's overlay flow), then
             // present — bypassing the entire RT pipeline.
-            if ((hybridEnabled_ || taaEnabled_) && rasterGbufPipeline != VK_NULL_HANDLE) {
+            if (rasterGbufPipeline != VK_NULL_HANDLE) {
                 timingBegin(cb, TP_RasterGbuf);
                 recordRasterGbufPass(cb, currentFrame);
                 timingEnd(cb, TP_RasterGbuf);
@@ -12216,11 +12166,9 @@ namespace threepp {
             // exactly as in the normal PT path.
             //
             // Requires the gbuf prepass to have actually run — gated above
-            // on (hybridEnabled_ || taaEnabled_) && rasterGbufPipeline.
-            // If either is missing the events-only flag is ignored and we
-            // fall through to the full PT path.
+            // on rasterGbufPipeline. If it's missing the events-only flag is
+            // ignored and we fall through to the full PT path.
             if (eventsOnlyMode_ && eventCamEnabled_ &&
-                (hybridEnabled_ || taaEnabled_) &&
                 rasterGbufPipeline != VK_NULL_HANDLE) {
                 const VkImage swap = ctx->swapchainImages()[imageIndex];
 
@@ -12466,7 +12414,6 @@ namespace threepp {
                     (motionThisFrame_           ? 1u   : 0u) |
                     (cameraMovedThisFrame_      ? 2u   : 0u) |
                     (sceneHasGlass_             ? 4u   : 0u) |
-                    (hybridEnabled_             ? 8u   : 0u) |
                     (restirDIEnabled_           ? 16u  : 0u) |
                     (perSppJitterHybrid_        ? 32u  : 0u) |
                     (restirGIEnabled_           ? 64u  : 0u) |
@@ -12533,12 +12480,9 @@ namespace threepp {
             const VkExtent2D ext = ctx->swapchainExtent();
             // Path-trace render extent — equals `ext` unless renderScale_ < 1.
             // raygen + denoise dispatch over it. When it is smaller than the
-            // swapchain, the result is brought up to full resolution by one
-            // of two paths: TAA runs as a temporal upsampler (taaRuns), or —
-            // with TAA off — a plain linear blit (scaled && !taaRuns).
+            // swapchain, TAA brings the result up to full resolution as a
+            // temporal upsampler (it resolves straight to the swapchain).
             const VkExtent2D ptExt   = renderExtent();
-            const bool       scaled  = ptScaled();
-            const bool       taaRuns = hybridEnabled_ || taaEnabled_;
             timingBegin(cb, TP_PathTrace);
             ctx->rt().cmdTraceRays(cb, &rtv.rgenRegion, &rtv.missRegion, &rtv.hitRegion,
                                    &callRegion, ptExt.width, ptExt.height, 1);
@@ -12568,13 +12512,11 @@ namespace threepp {
             // res history, reconstructing detail (no separate blit needed).
             // The spatial neighborhood clamp + motion-vec reproject smooths
             // per-frame Halton jitter shake on moving objects.
-            if (taaRuns) {
-                timingBegin(cb, TP_TAA);
-                taa_->recordResolve(cb, currentFrame, imageIndex,
-                                    ptExt.width, ptExt.height,
-                                    ext.width, ext.height, taaBlendAlpha_);
-                timingEnd(cb, TP_TAA);
-            }
+            timingBegin(cb, TP_TAA);
+            taa_->recordResolve(cb, currentFrame, imageIndex,
+                                ptExt.width, ptExt.height,
+                                ext.width, ext.height, taaBlendAlpha_);
+            timingEnd(cb, TP_TAA);
             // ── End raster TAA ─────────────────────────────────────────────────
 
             // ── Hybrid raster overlay pass ─────────────────────────────────────
@@ -12590,7 +12532,7 @@ namespace threepp {
             // Skip the whole block when not in hybrid (depth attachment isn't
             // built), pipeline failed to create, or the early scan didn't
             // find any overlay candidates this frame.
-            if (hybridEnabled_ && overlayWireframePipeline != VK_NULL_HANDLE) {
+            if (overlayWireframePipeline != VK_NULL_HANDLE) {
                 bool hasOverlay = !lastVisibleLines_.empty();
                 if (!hasOverlay) {
                     for (const auto& en : lastVisibleEntries_) {
@@ -12894,57 +12836,6 @@ namespace threepp {
             }
             // ── End hybrid raster overlay pass ─────────────────────────────────
 
-            // ── Upscale fallback: render-extent denoise output → swapchain ─────
-            // Only the scaled + TAA-off case reaches here: denoise wrote a
-            // render-extent intermediate (upscaleSrcImages_[currentFrame]),
-            // expanded to the swapchain with a hardware linear blit. When TAA
-            // runs it IS the upscaler (it resolved straight to the swapchain),
-            // and at renderScale 1 the denoise pass wrote the swapchain
-            // directly — both skip this block.
-            //
-            // Both blit endpoints stay in GENERAL — a layout vkCmdBlitImage
-            // accepts for src and dst alike — so no transitions are needed:
-            // upscaleSrc rests in GENERAL like every other PT storage image,
-            // and the swapchain is already GENERAL from the frame-start
-            // barrier. Only an execution+memory barrier is required, to make
-            // the denoise write visible to the blit read.
-            if (scaled && !taaRuns) {
-                const VkImage upImg = upscaleSrcImages_[currentFrame].image;
-                VkImageMemoryBarrier2 ub{};
-                ub.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                ub.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                ub.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                ub.dstStageMask  = VK_PIPELINE_STAGE_2_BLIT_BIT;
-                ub.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-                ub.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                ub.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                ub.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                ub.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                ub.image = upImg;
-                ub.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                ub.subresourceRange.levelCount = 1;
-                ub.subresourceRange.layerCount = 1;
-                VkDependencyInfo dUp{};
-                dUp.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                dUp.imageMemoryBarrierCount = 1;
-                dUp.pImageMemoryBarriers = &ub;
-                vkCmdPipelineBarrier2(cb, &dUp);
-
-                // sRGB-encoded BGRA8 → same-format BGRA8: a linear filter
-                // interpolating in the encoded domain — the standard "render
-                // scale" upscale, matching a hardware bilinear sampler.
-                VkImageBlit blit{};
-                blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                blit.srcSubresource.layerCount = 1;
-                blit.srcOffsets[1] = {int32_t(ptExt.width), int32_t(ptExt.height), 1};
-                blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                blit.dstSubresource.layerCount = 1;
-                blit.dstOffsets[1] = {int32_t(ext.width), int32_t(ext.height), 1};
-                vkCmdBlitImage(cb, upImg, VK_IMAGE_LAYOUT_GENERAL,
-                               img, VK_IMAGE_LAYOUT_GENERAL,
-                               1, &blit, VK_FILTER_LINEAR);
-            }
-            // ── End upscale fallback ───────────────────────────────────────────
 
             // ── End of PT recording. ───────────────────────────────────────────
             // The swapchain image is left in VK_IMAGE_LAYOUT_GENERAL — endFrame
@@ -13262,9 +13153,9 @@ namespace threepp {
             if (overlayCallback) {
                 VkImageMemoryBarrier2 toColor{};
                 toColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                // Swapchain was last written by the TAA dispatch (compute),
-                // the non-hybrid denoise write (compute), or — when scaled —
-                // the upscale blit (transfer). Cover all three.
+                // Swapchain was last written by the TAA dispatch (compute).
+                // TRANSFER bits defensively cover any transfer-stage write to
+                // the image. Cover both.
                 toColor.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
                                        VK_PIPELINE_STAGE_2_TRANSFER_BIT;
                 toColor.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
@@ -13322,9 +13213,9 @@ namespace threepp {
             } else {
                 VkImageMemoryBarrier2 toPresent{};
                 toPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                // Swapchain was last written by the TAA dispatch (compute),
-                // the non-hybrid denoise write (compute), or — when scaled —
-                // the upscale blit (transfer). Cover all three.
+                // Swapchain was last written by the TAA dispatch (compute).
+                // TRANSFER bits defensively cover any transfer-stage write to
+                // the image. Cover both.
                 toPresent.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
                                          VK_PIPELINE_STAGE_2_TRANSFER_BIT;
                 toPresent.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
@@ -13430,21 +13321,15 @@ namespace threepp {
             // camera VPs (curr jittered, curr unjittered, prev unjittered).
             // Must run after computeAndUploadMotionMatrices so the descriptor
             // rewrite picks up the populated motionMat buffer for this frame.
-            if (hybridEnabled_ || taaEnabled_) {
-                ensureHybridResources();
-                uploadRasterCameraUbo(currentFrame, camera);
-                // Build the per-frame DrawInfo + indirect-cmd buffers used
-                // by the indirect-drawing gbuf pass. Runs after the cull
-                // pass + camera upload (depends on both) and before record.
-                buildIndirectDrawData(currentFrame);
-            }
-            // Binding 1 (RT denoise output) target — three modes:
-            //   1 = TAA input  : TAA on (hybrid || taa); TAA resolves it.
-            //   2 = upscale src : TAA off but renderScale_ < 1; the upscale
-            //                     blit expands it to the swapchain.
-            //   0 = swapchain   : TAA off and unscaled; denoise writes the
-            //                     swapchain image directly (per swap image).
-            // Only rewrite when this slot's actual binding differs from the
+            ensureHybridResources();
+            uploadRasterCameraUbo(currentFrame, camera);
+            // Build the per-frame DrawInfo + indirect-cmd buffers used
+            // by the indirect-drawing gbuf pass. Runs after the cull
+            // pass + camera upload (depends on both) and before record.
+            buildIndirectDrawData(currentFrame);
+            // Binding 1 (RT denoise output) always targets the TAA input;
+            // TAA resolves it to the swapchain (upsampling when renderScale_
+            // < 1). Only rewrite when this slot's actual binding differs from the
             // desired mode — avoids firing imageCount_ vkUpdateDescriptorSets
             // calls per frame for nothing once the steady state was reached.
             //
@@ -13453,18 +13338,12 @@ namespace threepp {
             // gives stills quality (chit primary is high-quality input), TAA
             // sits on top to handle motion.
             {
-                const int8_t desired = (hybridEnabled_ || taaEnabled_) ? 1
-                                     : (ptScaled()                    ? 2
-                                                                       : 0);
+                const int8_t desired = 1;// binding 1 always targets the TAA input
                 if (binding1Mode_[currentFrame] != desired) {
                     for (uint32_t i = 0; i < imageCount_; ++i) {
                         const uint32_t idx = currentFrame * imageCount_ + i;
                         VkDescriptorImageInfo info{};
-                        info.imageView   = (desired == 1)
-                                ? taa_->inputView(currentFrame)
-                                : (desired == 2)
-                                          ? upscaleSrcImages_[currentFrame].view
-                                          : ctx->swapchainImageViews()[i];
+                        info.imageView   = taa_->inputView(currentFrame);
                         info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                         VkWriteDescriptorSet w{};
                         w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -14255,32 +14134,12 @@ namespace threepp {
         pimpl_->resetAccumulation();
     }
 
-    void VulkanRenderer::setHybridEnabled(bool enabled) {
-        pimpl_->hybridEnabled_ = enabled;
-    }
-
-    bool VulkanRenderer::hybridEnabled() const {
-        return pimpl_->hybridEnabled_;
-    }
-
     void VulkanRenderer::setPerSppJitterHybrid(bool enabled) {
         pimpl_->perSppJitterHybrid_ = enabled;
     }
 
     bool VulkanRenderer::perSppJitterHybrid() const {
         return pimpl_->perSppJitterHybrid_;
-    }
-
-    void VulkanRenderer::setTaaEnabled(bool enabled) {
-        if (pimpl_->taaEnabled_ != enabled) {
-            pimpl_->taaEnabled_ = enabled;
-            if (pimpl_->taa_) pimpl_->taa_->invalidateHistory();
-            for (auto& m : pimpl_->binding1Mode_) m = -1;
-        }
-    }
-
-    bool VulkanRenderer::taaEnabled() const {
-        return pimpl_->taaEnabled_;
     }
 
     void VulkanRenderer::setRestirDIEnabled(bool enabled) {
