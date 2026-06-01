@@ -1323,6 +1323,13 @@ namespace threepp {
         // (same pattern as bounces). Default off. Forwarded to chit via
         // pc.motionFlags bit 4 each frame.
         bool restirDIEnabled_ = false;
+        // ReSTIR DI visibility reuse (Bitterli 2020 §5). When on, the chit
+        // shadow-tests the RIS-selected candidate before temporal/spatial reuse
+        // and discards occluded ones, so history converges onto visible lights.
+        // One extra shadow ray per RIS pixel. Forwarded via pc.motionFlags bit 8.
+        // Default on — it's the quality win that makes DI worthwhile in interiors;
+        // only meaningful while restirDIEnabled_ is also set.
+        bool restirDIVisibilityReuse_ = true;
         // ReSTIR GI master toggle. Stage 1a: when on, primary chit launches a
         // BSDF-sampled sub-ray to generate a single-sample reservoir for the
         // indirect contribution at primary, then hands off to raygen with the
@@ -12309,6 +12316,9 @@ namespace threepp {
             //                          after the step-0 traceRayEXT; debug
             //                          knob for sizing the bounce-0-on-raster
             //                          opportunity, image goes black),
+            //                  bit 8 = ReSTIR DI visibility reuse (shadow-test
+            //                          the RIS pick before reuse, discard if
+            //                          occluded; only set when bit 4 is too),
             // [5] emissiveCount, [6] emissiveTotalPower (float bits).
             // Per-instance moved bits live in the binding 21 SSBO.
             const float exposure = toneMappingExposure_;
@@ -12322,7 +12332,8 @@ namespace threepp {
                     (restirDIEnabled_           ? 16u  : 0u) |
                     (perSppJitterHybrid_        ? 32u  : 0u) |
                     (restirGIEnabled_           ? 64u  : 0u) |
-                    (measurePrimaryTraceOnly_   ? 128u : 0u);
+                    (measurePrimaryTraceOnly_   ? 128u : 0u) |
+                    ((restirDIEnabled_ && restirDIVisibilityReuse_) ? 256u : 0u);
             uint32_t emPowerBits;
             std::memcpy(&emPowerBits, &emissiveTotalPowerThisFrame_, sizeof(emPowerBits));
             uint32_t envSumBits;
@@ -14112,11 +14123,32 @@ namespace threepp {
     }
 
     void VulkanRenderer::setRestirDIEnabled(bool enabled) {
+        if (pimpl_->restirDIEnabled_ == enabled) return;
         pimpl_->restirDIEnabled_ = enabled;
+        // ReSTIR is unbiased, so toggling it changes the convergence rate, not
+        // the converged mean — on a settled frame the running-mean accumulator
+        // would hide the switch entirely. Reset accumulation so the change is
+        // actually visible. Gated on sceneBuilt_: before the first render there
+        // is nothing accumulated and the gbuf/reservoir images aren't allocated
+        // yet (clearGbufImages would touch null handles).
+        if (pimpl_->sceneBuilt_) pimpl_->resetAccumulation();
     }
 
     bool VulkanRenderer::restirDIEnabled() const {
         return pimpl_->restirDIEnabled_;
+    }
+
+    void VulkanRenderer::setRestirDIVisibilityReuse(bool enabled) {
+        if (pimpl_->restirDIVisibilityReuse_ == enabled) return;
+        pimpl_->restirDIVisibilityReuse_ = enabled;
+        // Changes the sampling, not the converged mean — reset so it's visible
+        // on a settled frame (same reasoning + pre-first-render gate as
+        // setRestirDIEnabled).
+        if (pimpl_->sceneBuilt_) pimpl_->resetAccumulation();
+    }
+
+    bool VulkanRenderer::restirDIVisibilityReuse() const {
+        return pimpl_->restirDIVisibilityReuse_;
     }
 
     void VulkanRenderer::setRestirGIEnabled(bool enabled) {
@@ -14127,7 +14159,12 @@ namespace threepp {
         // (We attempted a runtime rebuild here originally; NVIDIA drivers
         // hang on a second vkCreateRayTracingPipelinesKHR against the same
         // pipeline layout, hence the pre-build-both workaround.)
+        if (pimpl_->restirGIEnabled_ == enabled) return;
         pimpl_->restirGIEnabled_ = enabled;
+        // Reset accumulation so the toggle is visible on a settled frame — same
+        // reasoning as setRestirDIEnabled. Gated on sceneBuilt_ for the same
+        // pre-first-render safety.
+        if (pimpl_->sceneBuilt_) pimpl_->resetAccumulation();
     }
 
     bool VulkanRenderer::restirGIEnabled() const {

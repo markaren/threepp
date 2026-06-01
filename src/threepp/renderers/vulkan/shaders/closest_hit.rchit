@@ -1341,6 +1341,39 @@ void main() {
 
         finalizeReservoir(r);
 
+        // ── Visibility reuse (Bitterli 2020, §5) ──
+        // The RIS target p_hat = NdotL·lum(Le) is UNSHADOWED, so the chosen
+        // candidate may be occluded — common in interiors where each shading
+        // point sees only a subset of the emitters. Shadow-test the selected
+        // sample now, BEFORE temporal/spatial reuse, and discard the reservoir
+        // if occluded (W←0, W_sum←0; keep M so the "we drew M candidates"
+        // count still normalises the merge). This stops occluded emitters from
+        // (a) being persisted into temporal history with positive weight and
+        // (b) propagating through spatial taps — so each pixel's reservoir
+        // converges onto a *visible* important light instead of repeatedly
+        // betting its single slot on something behind a wall. Costs one extra
+        // shadow ray per RIS pixel; introduces the small, well-known
+        // conservative bias of the visibility-reuse optimisation. Runtime-gated
+        // (pc.motionFlags bit 8) so it can be A/B'd against plain DI.
+        if ((pc.motionFlags & 256u) != 0u
+                && r.W > 0.0 && r.p_hat > 0.0 && r.lightType >= -0.5) {
+            const LightInfo liV = evalLightInfoForReservoir(int(r.lightType), r.lightPos, hitPos);
+            if (max(dot(N, liV.dir), 0.0) <= 0.0) {
+                r.W = 0.0; r.W_sum = 0.0;// below the horizon — unusable
+            } else {
+                shadowVisibility = 1.0;
+                traceRayEXT(topAS,
+                            gl_RayFlagsTerminateOnFirstHitEXT |
+                            gl_RayFlagsSkipClosestHitShaderEXT |
+                            gl_RayFlagsNoOpaqueEXT,
+                            0xff, 1, 0, 1,
+                            hitPos + N * 1e-3, 0.0, liV.dir, liV.maxDist, 1);
+                if (shadowVisibility <= 0.0) {
+                    r.W = 0.0; r.W_sum = 0.0;// occluded — let reuse recover a visible sample
+                }
+            }
+        }
+
         // ── Stage 1b: temporal reuse ──
         // Reproject world hit into prev frame's pixel grid; if mesh-ID + depth
         // gates pass, merge with prev reservoir. WGPU PT validates with

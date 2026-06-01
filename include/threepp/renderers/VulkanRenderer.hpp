@@ -287,6 +287,14 @@ namespace threepp {
         void setRestirDIEnabled(bool enabled);
         [[nodiscard]] bool restirDIEnabled() const;
 
+        // ReSTIR DI visibility reuse (Bitterli 2020 §5). Shadow-tests the
+        // RIS-selected candidate before temporal/spatial reuse and discards it
+        // if occluded, so per-pixel history converges onto visible lights — the
+        // main DI quality win in occluded interiors. Costs one extra shadow ray
+        // per RIS pixel; only active while ReSTIR DI is enabled. Default on.
+        void setRestirDIVisibilityReuse(bool enabled);
+        [[nodiscard]] bool restirDIVisibilityReuse() const;
+
         // ReSTIR GI master toggle (Stage 1a). When on, primary chit launches
         // a BSDF-sampled indirect sub-ray and assembles a single-sample
         // reservoir for the bounce-1 contribution; raygen's step-1 continues

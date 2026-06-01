@@ -73,5 +73,32 @@ vec3 ACESFilmicToneMapping( vec3 color ) {
 
 }
 
+// Khronos PBR Neutral tone mapper. Compresses luminance while preserving the
+// hue of bright colours (no ACES path-to-white), so saturated emitters/albedos
+// stay coloured at high intensity. Verbatim from three.js NeutralToneMapping.
+// source: https://modelviewer.dev/examples/tone-mapping.html
+vec3 NeutralToneMapping( vec3 color ) {
+
+	const float StartCompression = 0.8 - 0.04;
+	const float Desaturation = 0.15;
+
+	color *= toneMappingExposure;
+
+	float x = min( color.r, min( color.g, color.b ) );
+	float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+	color -= offset;
+
+	float peak = max( color.r, max( color.g, color.b ) );
+	if ( peak < StartCompression ) return color;
+
+	float d = 1. - StartCompression;
+	float newPeak = 1. - d * d / ( peak + d - StartCompression );
+	color *= newPeak / peak;
+
+	float g = 1. - 1. / ( Desaturation * ( peak - newPeak ) + 1. );
+	return mix( color, vec3( newPeak ), g );
+
+}
+
 vec3 CustomToneMapping( vec3 color ) { return color; }
 

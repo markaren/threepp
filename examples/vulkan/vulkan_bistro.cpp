@@ -31,7 +31,10 @@ int main(int argc, char** argv) {
 
     VulkanRenderer renderer(canvas);
     renderer.outputColorSpace = ColorSpace::sRGB;
-    renderer.toneMapping = ToneMapping::ACESFilmic;
+    renderer.toneMapping = ToneMapping::Neutral;
+    renderer.setRestirDIEnabled(true);
+    renderer.setFireflyClamp(8.f);
+    renderer.setRenderScale(0.8f);
 
     RGBELoader imgLoader;
     auto env = imgLoader.load(modelFolder / "san_giuseppe_bridge_4k.hdr");
@@ -50,6 +53,10 @@ int main(int argc, char** argv) {
 
     // ---- Async model loading ----
     FBXLoader loader;
+    // Bistro emissives (lamps, signs, string lights) are authored at low factors;
+    // the official Falcor scene multiplies every emissive factor by 1000 to get a
+    // well-exposed image, so do the same here for interior lighting to read.
+    loader.emissiveScale = 1000.0f;
     auto interior = loadAsync(loader, modelFolder / "BistroInterior_Wine.fbx");
     auto exterior = loadAsync(loader, modelFolder / "BistroExterior.fbx");
 
@@ -65,31 +72,45 @@ int main(int argc, char** argv) {
     // ---- UI ----
     bool denoiserOn = renderer.denoise();
     bool restdirOn = renderer.restirDIEnabled();
+    bool restdirVisReuse = renderer.restirDIVisibilityReuse();
     bool restdirGiOn = renderer.restirGIEnabled();
+    // Tone-map dropdown state, initialized from the renderer's current setting so
+    // the label matches what's actually applied at startup. The selection maps
+    // straight to ToneMapping (index 2 -> Reinhard, etc.).
+    const char* tmNames[] = {"ACES Filmic", "Neutral (PBR)", "Reinhard", "Cineon", "Linear"};
+    const ToneMapping tmVals[] = {ToneMapping::ACESFilmic, ToneMapping::Neutral,
+                                  ToneMapping::Reinhard, ToneMapping::Cineon, ToneMapping::Linear};
+    int tmIdx = 0;
+    for (int i = 0; i < IM_ARRAYSIZE(tmVals); ++i)
+        if (tmVals[i] == renderer.toneMapping) { tmIdx = i; break; }
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
-    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
-
-    });
-    canvas.addKeyListener(keyAdapter);
 
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({0, 0});
         ImGui::SetNextWindowSize({300, 0});
         ImGui::Begin("Bistro scene");
         ImGui::Text("FPS: %.1f", fps);
-        // if (!raster) ImGui::Text("Frames: %d", renderer.frameCount());
 
         ImGui::Separator();
         ImGui::SliderFloat("Exposure", &renderer.toneMappingExposure, 0.1f, 2.0f);
 
+        // Tone-map selector. Reinhard is per-channel so it keeps saturated
+        // emitters (blue/green bulbs) coloured; ACES and Neutral desaturate very
+        // bright values toward white. Switchable live.
+        if (ImGui::Combo("Tone map", &tmIdx, tmNames, IM_ARRAYSIZE(tmNames))) {
+            renderer.toneMapping = tmVals[tmIdx];
+        }
 
         if (ImGui::Checkbox("Denoiser", &denoiserOn)) {
             renderer.setDenoise(denoiserOn);
         }
         if (ImGui::Checkbox("REsTDIR DI", &restdirOn)) {
             renderer.setRestirDIEnabled(restdirOn);
+        }
+        if (ImGui::Checkbox("  DI visibility reuse", &restdirVisReuse)) {
+            renderer.setRestirDIVisibilityReuse(restdirVisReuse);
         }
         if (ImGui::Checkbox("REsTDIR GI", &restdirGiOn)) {
             renderer.setRestirGIEnabled(restdirGiOn);
