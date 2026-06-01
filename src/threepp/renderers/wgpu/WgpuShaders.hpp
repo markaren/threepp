@@ -81,6 +81,7 @@ namespace threepp::wgpu {
         constexpr uint64_t TonemapReinhard = 2ULL << TonemapShift;
         constexpr uint64_t TonemapCineon   = 3ULL << TonemapShift;
         constexpr uint64_t TonemapACES     = 4ULL << TonemapShift;
+        constexpr uint64_t TonemapNeutral  = 5ULL << TonemapShift;
 
         // Environment map (bit 35)
         constexpr uint64_t EnvMap          = 1ULL << 35;

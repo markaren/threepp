@@ -98,7 +98,12 @@ namespace threepp {
         Reinhard = 2,
         Cineon = 3,
         ACESFilmic = 4,
-        Custom = 5
+        Custom = 5,
+        // Khronos PBR Neutral (three.js NeutralToneMapping): compresses
+        // luminance while preserving a bright colour's hue, instead of ACES's
+        // path-to-white. Good for keeping coloured emitters/albedos from
+        // desaturating toward white at high intensity.
+        Neutral = 6
     };
 
     enum class Mapping {

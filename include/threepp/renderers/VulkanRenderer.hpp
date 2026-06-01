@@ -161,9 +161,9 @@ namespace threepp {
         //
         // Designed for high-rate event-camera sampling (~500 Hz target)
         // where the renderer's visual output isn't displayed at all —
-        // only the event readout matters. Requires hybrid OR TAA to be
-        // on so the gbuf prepass runs (event_shade reads its normal +
-        // ids attachments). Has no effect when the event camera is off.
+        // only the event readout matters. The raster G-buffer prepass
+        // always runs (event_shade reads its normal + ids attachments).
+        // Has no effect when the event camera is off.
         void setEventsOnlyMode(bool enabled);
         [[nodiscard]] bool eventsOnlyMode() const;
 
@@ -263,19 +263,15 @@ namespace threepp {
         // Mirrors WgpuPathTracer::resetAccumulation.
         void resetAccumulation();
 
-        // Hybrid raster + path tracer mode (UE/Omniverse-style). Raster runs
-        // a deterministic G-buffer prepass (depth, normal, motion vectors,
-        // per-pixel IDs); the path tracer reads that as primary visibility
-        // and starts at bounce 1. Eliminates moving-object shake from PT
-        // primary jitter; AA happens via TAA on the raster side. Default on.
-        void setHybridEnabled(bool enabled);
-        [[nodiscard]] bool hybridEnabled() const;
+        // The renderer always runs in hybrid raster + path-tracer mode
+        // (UE/Omniverse-style): a deterministic raster G-buffer prepass
+        // (depth, normal, motion vectors, per-pixel IDs) supplies primary
+        // visibility and the path tracer starts at bounce 1. This eliminates
+        // moving-object shake from PT primary jitter; AA happens via TAA on
+        // the raster side.
 
         void setPerSppJitterHybrid(bool enabled);
         [[nodiscard]] bool perSppJitterHybrid() const;
-
-        void setTaaEnabled(bool enabled);
-        [[nodiscard]] bool taaEnabled() const;
 
         // ReSTIR DI master toggle. When on, the path tracer uses
         // streaming RIS + temporal + spatial reuse at primary surfaces — one
@@ -286,6 +282,14 @@ namespace threepp {
         // and env NEE are unaffected either way.
         void setRestirDIEnabled(bool enabled);
         [[nodiscard]] bool restirDIEnabled() const;
+
+        // ReSTIR DI visibility reuse (Bitterli 2020 §5). Shadow-tests the
+        // RIS-selected candidate before temporal/spatial reuse and discards it
+        // if occluded, so per-pixel history converges onto visible lights — the
+        // main DI quality win in occluded interiors. Costs one extra shadow ray
+        // per RIS pixel; only active while ReSTIR DI is enabled. Default on.
+        void setRestirDIVisibilityReuse(bool enabled);
+        [[nodiscard]] bool restirDIVisibilityReuse() const;
 
         // ReSTIR GI master toggle (Stage 1a). When on, primary chit launches
         // a BSDF-sampled indirect sub-ray and assembles a single-sample
@@ -324,7 +328,6 @@ namespace threepp {
         // Pass `-1` (default) to disable layer-based selection — material
         // wireframe + Line objects are still drawn. Pass `0..31` to also
         // include any object on that layer (`obj.layers.enable(channel)`).
-        // Has no effect when hybridEnabled is false.
         void setOverlayLayer(int channel);
         [[nodiscard]] int overlayLayer() const;
 
@@ -334,7 +337,6 @@ namespace threepp {
         //   1 = world-space normal
         //   2 = motion vector (NDC delta in red/green)
         //   3 = per-pixel instanceCustomIndex (raw uint16)
-        // Has no effect when hybridEnabled is false.
         void setHybridDebugView(int view);
         [[nodiscard]] int hybridDebugView() const;
 

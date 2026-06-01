@@ -417,16 +417,19 @@ struct WgpuRenderer::Impl {
         // linearPipelines[]: target = surfaceFormatLinear (e.g. BGRA8Unorm).
         //   Shader does in-shader sRGB encode (when outputColorSpace == sRGB) so
         //   the linear-format RT ends up with sRGB-encoded bytes.
-        WGPURenderPipeline pipelines[5]{};
-        WGPURenderPipeline linearPipelines[5]{};
-        WGPUShaderModule shaderModules[5]{};        // for surface (no in-shader sRGB)
-        WGPUShaderModule linearShaderModules[5]{};  // for linear targets (in-shader sRGB)
+        // Indexed by toneMapPipelineIndex(): 0=Linear 1=Reinhard 2=Cineon
+        // 3=ACES 4=None/sRGB-only 5=Neutral. Range-based cleanup loops below
+        // adapt to the size automatically.
+        WGPURenderPipeline pipelines[6]{};
+        WGPURenderPipeline linearPipelines[6]{};
+        WGPUShaderModule shaderModules[6]{};        // for surface (no in-shader sRGB)
+        WGPUShaderModule linearShaderModules[6]{};  // for linear targets (in-shader sRGB)
 
         // Sister pipelines that reuse the linear shader module but target Rgba8Unorm,
         // used to write the tone-mapped + sRGB-encoded result into retainedFB so
         // copyFramebufferToTexture sees the same bytes as the surface (matches
         // GL / three.js semantics).
-        WGPURenderPipeline retainPipelines[5]{};
+        WGPURenderPipeline retainPipelines[6]{};
 
         // Per-blit cached objects — valid as long as colorTexture doesn't change (no resize)
         WGPUTextureView cachedInputView = nullptr;
@@ -1423,15 +1426,17 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
 @fragment fn fs(in: VSOutput) -> @location(0) vec4<f32> {
     var color = textureSample(inputTex, inputSampler, in.uv);
-    // Background detection: intermediate is cleared with alpha=0, scene shaders
-    // write alpha=1 for opaque content. Cleared pixels bypass tone mapping so
-    // the user-set clear color displays unaltered — matches three.js / GL where
-    // glClearColor isn't routed through the shader tone-map.
-    if (color.a < 0.001) {
-        return vec4<f32>(params.clearR, params.clearG, params.clearB, 1.0);
-    }
+    // Background detection: the intermediate is cleared with alpha=0; scene shaders
+    // write alpha=1 for opaque content. Cleared (background) pixels skip tone mapping
+    // (so the flat clear color isn't ACES-desaturated) but still flow through the sRGB
+    // encode below, keeping them consistent with shaded pixels. In the surface variant
+    // srgb=false here and the sRGB-format surface hardware-encodes the result instead.
+    let isBackground = color.a < 0.001;
     var rgb = color.rgb;
     let exposure = params.exposure;
+    if (isBackground) {
+        rgb = vec3<f32>(params.clearR, params.clearG, params.clearB);
+    } else {
 )";
         // Tone mapping
         switch (mode) {
@@ -1469,9 +1474,29 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                   << "    }\n";
                 break;
             }
+            case ToneMapping::Neutral: {
+                // Khronos PBR Neutral (three.js NeutralToneMapping). Preserves a
+                // bright colour's hue instead of ACES's path-to-white.
+                // StartCompression 0.76, d 0.24 (d*d = 0.0576), Desaturation 0.15.
+                s << "    {\n"
+                  << "        rgb = rgb * exposure;\n"
+                  << "        let nx = min(rgb.r, min(rgb.g, rgb.b));\n"
+                  << "        let noff = select(0.04, nx - 6.25 * nx * nx, nx < 0.08);\n"
+                  << "        rgb = rgb - vec3<f32>(noff);\n"
+                  << "        let peak = max(rgb.r, max(rgb.g, rgb.b));\n"
+                  << "        if (peak >= 0.76) {\n"
+                  << "            let newPeak = 1.0 - 0.0576 / (peak - 0.52);\n"
+                  << "            rgb = rgb * (newPeak / peak);\n"
+                  << "            let g = 1.0 - 1.0 / (0.15 * (peak - newPeak) + 1.0);\n"
+                  << "            rgb = mix(rgb, vec3<f32>(newPeak), g);\n"
+                  << "        }\n"
+                  << "    }\n";
+                break;
+            }
             default:
                 break;
         }
+        s << "    }\n";// end else (non-background tone mapping)
         if (srgb) {
             // Proper sRGB OETF (matches GL's LinearTosRGB / three.js sRGBTransferOETF).
             // Gamma 2.2 (pow(rgb, 1/2.2)) is brighter in midtones — use the piecewise
@@ -1483,7 +1508,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
               << "        rgb = select(hi, lo, rgbClamped <= vec3<f32>(0.0031308));\n"
               << "    }\n";
         }
-        s << "    return vec4<f32>(rgb, color.a);\n}\n";
+        s << "    return vec4<f32>(rgb, select(color.a, 1.0, isBackground));\n}\n";
         return s.str();
     }
 
@@ -1494,6 +1519,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             case ToneMapping::Reinhard: return 1;
             case ToneMapping::Cineon: return 2;
             case ToneMapping::ACESFilmic: return 3;
+            case ToneMapping::Neutral: return 5;
             default: return 4; // sRGB only, no tone mapping
         }
     }
@@ -2390,10 +2416,20 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         const double clearA = useToneMapIntermediate
                 ? 0.0
                 : static_cast<double>(effectiveClearAlpha);
+        // Surface-direct clear: clearValue is written straight to the sRGB swapchain.
+        // WebGPU does NOT sRGB-encode clearValue (unlike shader fragment writes, which
+        // the sRGB surface encodes in hardware), so a color-managed (linear) clear color
+        // must be encoded here or the background renders too dark. The tone-map-intermediate
+        // path clears a linear RGBA16Float target whose background is re-emitted (and thus
+        // hardware-encoded) by toneMapBlit, so it stays linear. No-op when management is off.
+        Color clearRGB = effectiveClearColor;
+        if (!useToneMapIntermediate) {
+            ColorManagement::workingToColorSpace(clearRGB, SRGBColorSpace);
+        }
         colorAttachment.clearValue = {
-                static_cast<double>(effectiveClearColor.r),
-                static_cast<double>(effectiveClearColor.g),
-                static_cast<double>(effectiveClearColor.b),
+                static_cast<double>(clearRGB.r),
+                static_cast<double>(clearRGB.g),
+                static_cast<double>(clearRGB.b),
                 clearA};
 
         WGPURenderPassDepthStencilAttachment depthAttachment{};
@@ -2499,6 +2535,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 case ToneMapping::Reinhard:  frameCtx.tonemapBits = SF::TonemapReinhard; break;
                 case ToneMapping::Cineon:    frameCtx.tonemapBits = SF::TonemapCineon; break;
                 case ToneMapping::ACESFilmic:frameCtx.tonemapBits = SF::TonemapACES; break;
+                case ToneMapping::Neutral:   frameCtx.tonemapBits = SF::TonemapNeutral; break;
                 default: break;
             }
             if (scope.outputColorSpace == ColorSpace::sRGB) {

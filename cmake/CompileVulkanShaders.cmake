@@ -54,6 +54,22 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
         list(APPEND _define_flags "-D${_d}")
     endforeach()
 
+    # SPIR-V optimization. -Os runs glslang's spirv-opt size recipe (dead-code
+    # elimination, CSE, function inlining, loop-invariant code motion, dead-
+    # branch elimination). These passes are FP-bit-preserving — they do not
+    # reassociate or reorder floating-point arithmetic — so the rendered image
+    # is unchanged; they shrink the embedded SPIR-V and hand the driver a
+    # cleaner starting point. Skipped for Debug builds so shader stepping in
+    # Nsight / RenderDoc sees unoptimized SPIR-V; enabled for the optimized
+    # configs (Release, RelWithDebInfo, MinSizeRel). Empty/unset build type
+    # keeps the prior unoptimized behaviour.
+    set(_opt_flags "")
+    if (CMAKE_BUILD_TYPE STREQUAL "Release"
+            OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"
+            OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
+        list(APPEND _opt_flags "-Os")
+    endif ()
+
     # Only depend on the shared headers when they actually sit beside the shader
     # source. Core shaders live next to vulkan_shared.h / shade_primary.glsl;
     # out-of-tree shaders (e.g. example inference kernels) don't, and a DEPENDS
@@ -69,6 +85,7 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
     add_custom_command(
         OUTPUT  "${_out_header}"
         COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.3
+                ${_opt_flags}
                 "-I${_src_dir}"
                 ${_define_flags}
                 --vn "${var_name}"

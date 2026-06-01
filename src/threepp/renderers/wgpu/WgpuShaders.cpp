@@ -79,6 +79,7 @@ std::string ShaderFeatures::describe(uint64_t features) {
         case TonemapReinhard: append("TonemapReinhard"); break;
         case TonemapCineon:   append("TonemapCineon");   break;
         case TonemapACES:     append("TonemapACES");     break;
+        case TonemapNeutral:  append("TonemapNeutral");  break;
         default:              append("TonemapUnknown");  break;
     }
 
@@ -1133,6 +1134,21 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
             s << "    let a = baseColor * (baseColor * 2.51 + vec3<f32>(0.03));\n";
             s << "    let b = baseColor * (baseColor * 2.43 + vec3<f32>(0.59)) + vec3<f32>(0.14);\n";
             s << "    baseColor = clamp(a / b, vec3<f32>(0.0), vec3<f32>(1.0));\n";
+        } else if ((features & ShaderFeatures::TonemapMask) == ShaderFeatures::TonemapNeutral) {
+            // Khronos PBR Neutral (three.js NeutralToneMapping). StartCompression
+            // = 0.8 - 0.04 = 0.76, d = 1 - 0.76 = 0.24, Desaturation = 0.15.
+            s << "    {\n";
+            s << "        let nx = min(baseColor.r, min(baseColor.g, baseColor.b));\n";
+            s << "        let noff = select(0.04, nx - 6.25 * nx * nx, nx < 0.08);\n";
+            s << "        baseColor = baseColor - vec3<f32>(noff);\n";
+            s << "        let peak = max(baseColor.r, max(baseColor.g, baseColor.b));\n";
+            s << "        if (peak >= 0.76) {\n";
+            s << "            let newPeak = 1.0 - 0.0576 / (peak - 0.52);\n";
+            s << "            baseColor = baseColor * (newPeak / peak);\n";
+            s << "            let g = 1.0 - 1.0 / (0.15 * (peak - newPeak) + 1.0);\n";
+            s << "            baseColor = mix(baseColor, vec3<f32>(newPeak), g);\n";
+            s << "        }\n";
+            s << "    }\n";
         }
         // TonemapLinear: just exposure multiplication (done above)
     }

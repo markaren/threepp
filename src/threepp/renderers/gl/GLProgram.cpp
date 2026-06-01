@@ -117,6 +117,10 @@ namespace {
                 toneMappingName = "ACESFilmic";
                 break;
 
+            case ToneMapping::Neutral:
+                toneMappingName = "Neutral";
+                break;
+
             case ToneMapping::Custom:
                 toneMappingName = "Custom";
                 break;

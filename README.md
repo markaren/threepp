@@ -32,8 +32,8 @@ but is not a direct port of the three.js WebGPU renderer.
 * Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
-* OpenGL 3.3 and WebGPU backends
-* Real-time pathtracing (on WebGPU backend)
+* OpenGL 3.3 and WebGPU raster backends
+* Real-time path tracing (on Vulkan backend)
 
 Builds on Windows, Linux, MacOS, MinGW and with Emscripten.
 
@@ -92,9 +92,9 @@ some headers will require additional dependencies to compile.
 ### Implementation notes
 
 In general, you'll find that math classes are value types, while `threepp` expect smart pointers for other types. 
-For convenience, geometries, materials etc. has a static `::create` function that returns a `std::shared_ptr`.
+For convenience, geometries, materials, etc. have a static `::create` function that returns a `std::shared_ptr`.
 Thus, you don't necessarily need to handle memory explicitly using `threepp`.
-Furthermore, materials, geometries and textures are automatically disposed when they go out of scope.
+Furthermore, materials, geometries and textures are automatically disposed of when they go out of scope.
 Yay!
 
 ### Example
@@ -134,7 +134,7 @@ int main() {
     GLRenderer renderer{canvas};
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100.f);
     camera->position.z = 5;
     
     OrbitControls controls{*camera, canvas};
@@ -251,21 +251,22 @@ set_languages("c++20")
 ```
 
 
-
-
 ### Screenshots
 ![Fonts](doc/screenshots/fonts.png)
+![Ocean](doc/screenshots/pt_ocean.png)
 ![Spline Editor](doc/screenshots/spline_editor.png)
 ![colnav](doc/screenshots/colnav.png)
 ![Shadows](doc/screenshots/Shadows.PNG)
 ![Crane](doc/screenshots/crane.png)
 ![FlyControls](doc/screenshots/fly.PNG)
 ![Optimization](doc/screenshots/Optimization.PNG)
-![Lidar](doc/screenshots/lidar.png)
+![Bistro](doc/screenshots/bistro.png)
 ![Animation](doc/screenshots/animation.png)
+![Lidar](doc/screenshots/lidar.png)
 ![Water+sky](doc/screenshots/water_sky.png)
 ![MotorController](doc/screenshots/motor_controller.PNG)
 ![SVG](doc/screenshots/tiger_svg.png)
 ![Depth sensor](doc/screenshots/depth_sensor.png)
 ![LeePerrySmith](doc/screenshots/LeePerrySmith.png)
-![Cubemap](doc/screenshots/cubemap.png)
+![Chess](doc/screenshots/chess.png)
+

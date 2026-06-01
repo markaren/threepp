@@ -160,9 +160,7 @@ int main() {
     bool denoiserOn   = renderer.denoise();
     bool restirOn     = renderer.restirDIEnabled();
     bool restirGiOn   = renderer.restirGIEnabled();
-    bool hybridOn     = renderer.hybridEnabled();
     bool perSppJitter = renderer.perSppJitterHybrid();
-    bool taaOn        = renderer.taaEnabled();
     bool rotating     = true;
     float rotSpeed    = 0.5f;
     float exposure    = renderer.toneMappingExposure;
@@ -192,16 +190,8 @@ int main() {
             renderer.setRestirDIEnabled(restirOn);
         if (ImGui::Checkbox("ReSTIR GI", &restirGiOn))
             renderer.setRestirGIEnabled(restirGiOn);
-        if (ImGui::Checkbox("Hybrid raster G-buffer", &hybridOn))
-            renderer.setHybridEnabled(hybridOn);
-        if (hybridOn) {
-            if (ImGui::Checkbox("  Per-spp AA jitter", &perSppJitter))
-                renderer.setPerSppJitterHybrid(perSppJitter);
-        }
-        if (!hybridOn) {
-            if (ImGui::Checkbox("TAA (standalone)", &taaOn))
-                renderer.setTaaEnabled(taaOn);
-        }
+        if (ImGui::Checkbox("Per-spp AA jitter", &perSppJitter))
+            renderer.setPerSppJitterHybrid(perSppJitter);
 
         if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
             renderer.toneMappingExposure = exposure;
@@ -211,9 +201,7 @@ int main() {
         ImGui::Separator();
         const auto t = renderer.lastFrameTimings();
         ImGui::Text("GPU: PT %.2f ms  Denoise %.2f ms", t.pathTraceMs, t.denoiseMs);
-        if (hybridOn) {
-            ImGui::Text("     raster %.2f ms  TAA %.2f ms", t.rasterGbufMs, t.taaMs);
-        }
+        ImGui::Text("     raster %.2f ms  TAA %.2f ms", t.rasterGbufMs, t.taaMs);
 
         ImGui::End();
     });
