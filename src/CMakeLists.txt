@@ -290,6 +290,9 @@ set(privateHeaders
 set(sources
 
         "external/pugixml/pugixml.cpp"
+        "external/meshoptimizer/allocator.cpp"
+        "external/meshoptimizer/indexgenerator.cpp"
+        "external/meshoptimizer/simplifier.cpp"
 
         "threepp/animation/AnimationAction.cpp"
         "threepp/animation/AnimationClip.cpp"
@@ -721,6 +724,7 @@ target_include_directories(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/external/quickhull"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/stb"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/pugixml"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/meshoptimizer"
 )
 
 if (THREEPP_WITH_AUDIO)
@@ -742,18 +746,6 @@ endif ()
 if (THREEPP_WITH_FBX)
     target_include_directories(threepp PRIVATE "${openfbx_SOURCE_DIR}/src")
     target_compile_definitions(threepp PRIVATE THREEPP_WITH_FBX)
-endif ()
-
-if (THREEPP_WITH_MESHOPT)
-    target_sources(threepp PRIVATE
-        "external/meshoptimizer/allocator.cpp"
-        "external/meshoptimizer/indexgenerator.cpp"
-        "external/meshoptimizer/simplifier.cpp"
-    )
-    target_include_directories(threepp PUBLIC
-        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/meshoptimizer>"
-    )
-    target_compile_definitions(threepp PUBLIC THREEPP_WITH_MESHOPT=1)
 endif ()
 
 if (NOT DEFINED EMSCRIPTEN)
