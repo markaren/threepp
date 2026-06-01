@@ -125,6 +125,7 @@ set(publicHeaders
         "threepp/loaders/ModelLoader.hpp"
         "threepp/loaders/OBJLoader.hpp"
         "threepp/loaders/STLLoader.hpp"
+        "threepp/loaders/SVGLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
         "threepp/loaders/URDFLoader.hpp"
 
@@ -389,6 +390,7 @@ set(sources
         "threepp/loaders/ModelLoader.cpp"
         "threepp/loaders/OBJLoader.cpp"
         "threepp/loaders/STLLoader.cpp"
+        "threepp/loaders/SVGLoader.cpp"
         "threepp/loaders/TextureLoader.cpp"
         "threepp/loaders/URDFLoader.cpp"
 
@@ -509,16 +511,6 @@ set(sources
         "threepp/renderers/shaders/ShaderLib.cpp"
 
 )
-
-if (THREEPP_WITH_SVG)
-    list(APPEND publicHeaders
-            "threepp/loaders/SVGLoader.hpp"
-    )
-
-    list(APPEND sources
-            "threepp/loaders/SVGLoader.cpp"
-    )
-endif ()
 
 if (THREEPP_WITH_USD)
     list(APPEND publicHeaders
