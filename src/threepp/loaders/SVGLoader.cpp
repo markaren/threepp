@@ -668,8 +668,11 @@ unsigned int pointsToStrokeWithBuffers(
 
                         if (style.strokeLineJoin != "miter-clip") {
 
+                            // NOTE: in three.js this lives in a `switch (strokeLineJoin)` and the
+                            // following `break` exits that switch. Here the switch was flattened to
+                            // if/else, so a `break` would wrongly terminate the per-point for-loop and
+                            // cut the stroke short at the first over-limit miter (e.g. sharp mane spikes).
                             makeSegmentWithBevelJoin(joinIsOnLeftSide, innerSideModified, u1);
-                            break;
 
                         } else {
 
@@ -1051,6 +1054,8 @@ void SVGLoader::Impl::parseNode(const pugi::xml_node& node, Style style) {
 
         if (style.fill && !style.fill->empty() && *style.fill != "none") {
 
+            // setStyle linearizes from sRGB by default (ColorManagement), matching
+            // three.js's path.color.setStyle(fill, SRGBColorSpace).
             path->color.setStyle(*style.fill);
         }
 

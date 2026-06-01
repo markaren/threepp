@@ -21,11 +21,6 @@ function(add_example)
         return()
     endif ()
 
-    if (arg_LINK_MESHOPT AND (NOT THREEPP_WITH_MESHOPT))
-        message(AUTHOR_WARNING "meshoptimizer not enabled, skipping '${arg_NAME}' example..")
-        return()
-    endif ()
-
     if (NOT arg_SOURCES)
         add_executable("${arg_NAME}" "${arg_NAME}.cpp")
     else ()

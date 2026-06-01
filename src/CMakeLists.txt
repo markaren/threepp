@@ -125,6 +125,7 @@ set(publicHeaders
         "threepp/loaders/ModelLoader.hpp"
         "threepp/loaders/OBJLoader.hpp"
         "threepp/loaders/STLLoader.hpp"
+        "threepp/loaders/SVGLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
         "threepp/loaders/URDFLoader.hpp"
 
@@ -290,6 +291,9 @@ set(privateHeaders
 set(sources
 
         "external/pugixml/pugixml.cpp"
+        "external/meshoptimizer/allocator.cpp"
+        "external/meshoptimizer/indexgenerator.cpp"
+        "external/meshoptimizer/simplifier.cpp"
 
         "threepp/animation/AnimationAction.cpp"
         "threepp/animation/AnimationClip.cpp"
@@ -386,6 +390,7 @@ set(sources
         "threepp/loaders/ModelLoader.cpp"
         "threepp/loaders/OBJLoader.cpp"
         "threepp/loaders/STLLoader.cpp"
+        "threepp/loaders/SVGLoader.cpp"
         "threepp/loaders/TextureLoader.cpp"
         "threepp/loaders/URDFLoader.cpp"
 
@@ -506,16 +511,6 @@ set(sources
         "threepp/renderers/shaders/ShaderLib.cpp"
 
 )
-
-if (THREEPP_WITH_SVG)
-    list(APPEND publicHeaders
-            "threepp/loaders/SVGLoader.hpp"
-    )
-
-    list(APPEND sources
-            "threepp/loaders/SVGLoader.cpp"
-    )
-endif ()
 
 if (THREEPP_WITH_USD)
     list(APPEND publicHeaders
@@ -722,6 +717,7 @@ target_include_directories(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/external/quickhull"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/stb"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/pugixml"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/meshoptimizer"
 )
 
 if (THREEPP_WITH_AUDIO)
@@ -743,18 +739,6 @@ endif ()
 if (THREEPP_WITH_FBX)
     target_include_directories(threepp PRIVATE "${openfbx_SOURCE_DIR}/src")
     target_compile_definitions(threepp PRIVATE THREEPP_WITH_FBX)
-endif ()
-
-if (THREEPP_WITH_MESHOPT)
-    target_sources(threepp PRIVATE
-        "external/meshoptimizer/allocator.cpp"
-        "external/meshoptimizer/indexgenerator.cpp"
-        "external/meshoptimizer/simplifier.cpp"
-    )
-    target_include_directories(threepp PUBLIC
-        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/external/meshoptimizer>"
-    )
-    target_compile_definitions(threepp PUBLIC THREEPP_WITH_MESHOPT=1)
 endif ()
 
 if (NOT DEFINED EMSCRIPTEN)

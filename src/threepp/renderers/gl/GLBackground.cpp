@@ -126,9 +126,15 @@ void GLBackground::setClearAlpha(float alpha) {
 
 void GLBackground::setClear(const Color& color, float alpha) {
 
-    // Pass linear values straight to glClearColor — matches three.js WebGL,
-    // which never sRGB-encodes the clear color. The display interprets the
-    // resulting linear bytes as sRGB-encoded, which is consistent across all
-    // three renderers (GL / WGPU / Vulkan).
-    state.colorBuffer.setClear(color.r, color.g, color.b, alpha, premultipliedAlpha);
+    // Encode the clear color into the output color space before handing it to
+    // glClearColor. The clear bypasses the fragment shader's output encode
+    // (linearToOutputTexel), so without this an already color-managed (linear)
+    // clear color would render too dark. Mirrors three.js WebGLBackground.setClear,
+    // which does color.getRGB(_rgb, getUnlitUniformColorSpace(renderer)).
+    // When ColorManagement is disabled this is a no-op (legacy raw behaviour).
+    Color c;
+    c.copy(color);
+    ColorManagement::workingToColorSpace(c, renderer.outputColorSpace);
+
+    state.colorBuffer.setClear(c.r, c.g, c.b, alpha, premultipliedAlpha);
 }

@@ -2,6 +2,8 @@
 #ifndef THREEPP_COLOR_HPP
 #define THREEPP_COLOR_HPP
 
+#include "threepp/constants.hpp"
+
 #include <ostream>
 
 namespace threepp {
@@ -10,6 +12,26 @@ namespace threepp {
         float h{};
         float s{};
         float l{};
+    };
+
+    class Color;
+
+    // Mirror of three.js ColorManagement. The renderer works in a linear color
+    // space and encodes to sRGB on output, so colors authored as sRGB (hex / CSS
+    // strings / color names) must be linearized on input. When `enabled`, the
+    // set*/get* methods convert between the given color space and `workingColorSpace`.
+    // Set `enabled = false` for the legacy (raw, unmanaged) behaviour.
+    struct ColorManagement {
+
+        static bool enabled;
+        static ColorSpace workingColorSpace;
+
+        // Converts `color` in place from `source` to `target` color space.
+        static Color& convert(Color& color, ColorSpace source, ColorSpace target);
+
+        static Color& colorSpaceToWorking(Color& color, ColorSpace source);
+
+        static Color& workingToColorSpace(Color& color, ColorSpace target);
     };
 
     class Color {
@@ -29,13 +51,19 @@ namespace threepp {
 
         Color& setScalar(float scalar);
 
-        Color& setRGB(float r, float g, float b);
+        Color& setRGB(float r, float g, float b, ColorSpace colorSpace = ColorManagement::workingColorSpace);
 
-        Color& setHSL(float h, float s, float l);
+        Color& setHSL(float h, float s, float l, ColorSpace colorSpace = ColorManagement::workingColorSpace);
 
-        Color& setHex(unsigned int hex);
+        Color& setHex(unsigned int hex, ColorSpace colorSpace = SRGBColorSpace);
 
         Color& copy(const Color& color);
+
+        // Copies `color` and converts it from sRGB to linear-sRGB (in place).
+        Color& copySRGBToLinear(const Color& color);
+
+        // Copies `color` and converts it from linear-sRGB to sRGB (in place).
+        Color& copyLinearToSRGB(const Color& color);
 
         Color& add(const Color& color);
 
@@ -59,19 +87,28 @@ namespace threepp {
 
         Color& lerpHSL(const Color& color, float alpha);
 
-        HSL& getHSL(HSL& target) const;
+        HSL& getHSL(HSL& target, ColorSpace colorSpace = ColorManagement::workingColorSpace) const;
 
         Color& randomize();
 
-        Color& setStyle(const std::string& style);
+        Color& setStyle(const std::string& style, ColorSpace colorSpace = SRGBColorSpace);
 
-        [[nodiscard]] unsigned int getHex() const;
+        [[nodiscard]] unsigned int getHex(ColorSpace colorSpace = SRGBColorSpace) const;
 
-        [[nodiscard]] std::string getHexString() const;
+        [[nodiscard]] std::string getHexString(ColorSpace colorSpace = SRGBColorSpace) const;
 
-        [[nodiscard]] std::string getStyle() const;
+        [[nodiscard]] std::string getStyle(ColorSpace colorSpace = SRGBColorSpace) const;
 
-        Color& setColorName(const std::string& style);
+        Color& setColorName(const std::string& style, ColorSpace colorSpace = SRGBColorSpace);
+
+        // Converts this color from sRGB to linear-sRGB color space (in place).
+        // SVG/CSS colors are authored in sRGB; the renderer works in linear space
+        // and encodes back to sRGB on output, so colors parsed from strings must be
+        // linearized to display as authored (matches three.js ColorManagement).
+        Color& convertSRGBToLinear();
+
+        // Converts this color from linear-sRGB to sRGB color space (in place).
+        Color& convertLinearToSRGB();
 
         [[nodiscard]] bool equals(const Color& c) const;
 

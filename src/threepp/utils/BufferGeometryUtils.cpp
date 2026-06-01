@@ -1,9 +1,7 @@
 
 #include "threepp/utils/BufferGeometryUtils.hpp"
 
-#ifdef THREEPP_WITH_MESHOPT
 #include <meshoptimizer.h>
-#endif
 
 #include <cmath>
 #include <iostream>
@@ -332,8 +330,6 @@ std::shared_ptr<BufferGeometry> threepp::mergeVertices(const BufferGeometry& geo
     return result;
 }
 
-#ifdef THREEPP_WITH_MESHOPT
-
 std::shared_ptr<BufferGeometry> threepp::simplifyGeometry(const BufferGeometry& geometry, float ratio, float error) {
 
     std::shared_ptr<BufferGeometry> geom;
@@ -423,5 +419,3 @@ std::shared_ptr<BufferGeometry> threepp::simplifyGeometry(const BufferGeometry& 
     out->setIndex(outIndices);
     return out;
 }
-
-#endif

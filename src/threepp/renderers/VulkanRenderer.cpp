@@ -13523,10 +13523,17 @@ namespace threepp {
                 dep.pImageMemoryBarriers = &b;
                 vkCmdPipelineBarrier2(cb, &dep);
             }
+            // Encode into the swapchain's display (sRGB) space. The swapchain is a
+            // plain UNORM image and this clear bypasses the shader's linearToSRGB,
+            // so a color-managed (linear) clear color must be encoded here to match
+            // shaded pixels. No-op when ColorManagement is disabled (legacy raw).
+            Color cc;
+            cc.copy(clearColor);
+            ColorManagement::workingToColorSpace(cc, SRGBColorSpace);
             VkClearColorValue cv{};
-            cv.float32[0] = clearColor.r;
-            cv.float32[1] = clearColor.g;
-            cv.float32[2] = clearColor.b;
+            cv.float32[0] = cc.r;
+            cv.float32[1] = cc.g;
+            cv.float32[2] = cc.b;
             cv.float32[3] = clearAlpha;
             vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                  &cv, 1, &range);
