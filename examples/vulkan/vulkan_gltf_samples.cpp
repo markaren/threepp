@@ -233,21 +233,9 @@ int main(int argc, char** argv) {
             renderer.setDenoise(denoise);
         }
 
-        bool hybrid = renderer.hybridEnabled();
-        if (ImGui::Checkbox("Hybrid (raster + PT)", &hybrid)) {
-            renderer.setHybridEnabled(hybrid);
-            renderer.resetAccumulation();
-        }
-        if (hybrid) {
-            bool perSpp = renderer.perSppJitterHybrid();
-            if (ImGui::Checkbox("  Per-spp AA jitter", &perSpp))
-                renderer.setPerSppJitterHybrid(perSpp);
-        }
-        if (!hybrid) {
-            bool taaOn = renderer.taaEnabled();
-            if (ImGui::Checkbox("TAA (standalone)", &taaOn))
-                renderer.setTaaEnabled(taaOn);
-        }
+        bool perSpp = renderer.perSppJitterHybrid();
+        if (ImGui::Checkbox("Per-spp AA jitter", &perSpp))
+            renderer.setPerSppJitterHybrid(perSpp);
 
         bool restirDI = renderer.restirDIEnabled();
         if (ImGui::Checkbox("ReSTIR DI", &restirDI)) {

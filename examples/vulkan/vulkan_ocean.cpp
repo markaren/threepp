@@ -138,7 +138,6 @@ int main() {
     VulkanRenderer renderer(canvas);
     renderer.setDenoise(true);
     renderer.setRestirDIEnabled(true);
-    renderer.setHybridEnabled(true);
     renderer.setFireflyClamp(6.0f);
     renderer.setMaxBounces(2);
     // Trace PT at lower resolution; TAA upsamples to full swapchain by

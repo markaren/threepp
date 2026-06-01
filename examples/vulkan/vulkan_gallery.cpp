@@ -256,12 +256,9 @@ int main() {
     // (TorusKnot 128×32, 25-sphere grid, stormtrooper). Bump in the UI for
     // less noise when stationary.
     renderer.setSamplesPerPixel(1);
-    // Hybrid raster G-buffer for primary visibility — the path tracer skips
-    // the primary trace and starts at bounce 1. Big FPS win on scenes with
-    // many high-poly meshes (primary is the most expensive ray). TAA on so
-    // the per-frame raster jitter is resolved properly.
-    renderer.setHybridEnabled(true);
-    renderer.setTaaEnabled(true);
+    // Hybrid raster G-buffer supplies primary visibility — the path tracer
+    // skips the primary trace and starts at bounce 1. Big FPS win on scenes
+    // with many high-poly meshes (primary is the most expensive ray).
 
     // ---- Scene ----
     Scene scene;
@@ -392,8 +389,6 @@ int main() {
     bool denoiseOn = renderer.denoise();
     bool restirOn = renderer.restirDIEnabled();
     bool restirGiOn = renderer.restirGIEnabled();
-    bool hybridOn = renderer.hybridEnabled();
-    bool taaOn = renderer.taaEnabled();
     bool rectOn = true;
     float rectIntensity = rectLight->intensity;
     float exposure = renderer.toneMappingExposure;
@@ -420,7 +415,7 @@ int main() {
 
         const auto t = renderer.lastFrameTimings();
         ImGui::Text("PT %.2f / Denoise %.2f ms", t.pathTraceMs, t.denoiseMs);
-        if (hybridOn) ImGui::Text("Gbuf %.2f / TAA %.2f ms", t.rasterGbufMs, t.taaMs);
+        ImGui::Text("Gbuf %.2f / TAA %.2f ms", t.rasterGbufMs, t.taaMs);
 
         // Update whichever EMA bucket matches the current measurement mode.
         if (t.pathTraceMs > 0.f) {
@@ -472,10 +467,6 @@ int main() {
             renderer.setRestirDIEnabled(restirOn);
         if (ImGui::Checkbox("ReSTIR GI", &restirGiOn))
             renderer.setRestirGIEnabled(restirGiOn);
-        if (ImGui::Checkbox("Hybrid (raster G-buf)", &hybridOn))
-            renderer.setHybridEnabled(hybridOn);
-        if (ImGui::Checkbox("TAA", &taaOn))
-            renderer.setTaaEnabled(taaOn);
 
         ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");
