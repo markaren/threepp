@@ -940,6 +940,13 @@ namespace threepp {
         // until then it's inert. See vulkan/DdgiPipeline.{hpp,cpp}.
         std::unique_ptr<vulkan::DdgiPipeline> ddgi_;
         bool ddgiEnabled_ = false;
+        // Last DDGI grid AABB pushed to ddgi_->setGridFromBounds, so the
+        // per-build refit (in ensureSceneBuilt) only re-uploads the grid UBO
+        // when the scene bounds actually move (avoids per-frame churn on a
+        // static scene). ddgiGridValid_ guards the first fit.
+        bool  ddgiGridValid_ = false;
+        float ddgiGridMin_[3] = {0.f, 0.f, 0.f};
+        float ddgiGridMax_[3] = {0.f, 0.f, 0.f};
 
         // Path-traced LIDAR scanner — see vulkan/LidarScanner.{hpp,cpp}.
         // Owns its own RT pipeline + SBT + descriptor set; reuses the
@@ -4424,6 +4431,57 @@ namespace threepp {
             // renderFrame so we can defer the host write past the fence wait.
             lastVisibleEntries_ = entries;
             lastVisibleLines_   = std::move(lineEntries);
+
+            // ── DDGI probe-grid sizing ──────────────────────────────────────
+            // Fit the probe lattice to the scene's world-space AABB so probes
+            // sit *inside* the geometry (where bounce light varies) rather than
+            // the constructor's default box at the origin — which on most
+            // scenes leaves every probe in empty space integrating the same
+            // sky, giving a flat, position-independent fill. Uses the cached
+            // per-geometry bounds (computeBoundingBox is a no-op once cached).
+            // Only runs while DDGI is enabled; the stored last-AABB gate keeps
+            // setGridFromBounds (and its UBO re-upload) from firing every frame
+            // on a static scene.
+            if (ddgi_ && ddgiEnabled_) {
+                Box3 sceneAabb;// default-constructed = empty
+                for (const auto& en : entries) {
+                    if (en.isOverlay || !en.mesh) continue;
+                    auto geom = en.mesh->geometry();
+                    if (!geom) continue;
+                    if (!geom->boundingBox) geom->computeBoundingBox();
+                    if (!geom->boundingBox) continue;
+                    Box3 wb = *geom->boundingBox;
+                    Matrix4 wm;
+                    std::memcpy(wm.elements.data(), en.worldMatrix.data(), 64);
+                    wb.applyMatrix4(wm);
+                    sceneAabb.union_(wb);
+                }
+                if (!sceneAabb.isEmpty()) {
+                    const Vector3 c = sceneAabb.getCenter();
+                    const Vector3 h = sceneAabb.getSize() * 0.5f;
+                    const float maxDim  = std::max(h.x, std::max(h.y, h.z));
+                    // Floor degenerate axes (flat ground planes have ~0 extent
+                    // on one axis → zero spacing) and pad 15% so surfaces near
+                    // a box face are still bracketed by a full 2×2×2 probe cage.
+                    const float minHalf = std::max(0.05f * maxDim, 0.01f);
+                    const float hx = std::max(h.x, minHalf) * 1.15f;
+                    const float hy = std::max(h.y, minHalf) * 1.15f;
+                    const float hz = std::max(h.z, minHalf) * 1.15f;
+                    const float mn[3] = {c.x - hx, c.y - hy, c.z - hz};
+                    const float mx[3] = {c.x + hx, c.y + hy, c.z + hz};
+                    bool changed = !ddgiGridValid_;
+                    for (int i = 0; i < 3 && !changed; ++i) {
+                        changed = std::abs(mn[i] - ddgiGridMin_[i]) > 1e-3f ||
+                                  std::abs(mx[i] - ddgiGridMax_[i]) > 1e-3f;
+                    }
+                    if (changed) {
+                        ddgi_->setGridFromBounds(mn, mx);
+                        for (int i = 0; i < 3; ++i) { ddgiGridMin_[i] = mn[i]; ddgiGridMax_[i] = mx[i]; }
+                        ddgiGridValid_ = true;
+                    }
+                }
+            }
+
             if (sceneBuilt_ && currFp.size() == prevSceneFingerprint.size()) {
                 // Four classes of change:
                 //   structural    — pointers (mesh/geom/mat/textures): full rebuild.
@@ -10237,6 +10295,10 @@ namespace threepp {
             // grid uniform. Always present + written (DdgiPipeline is always
             // constructed); closest_hit only reads them when DDGI is enabled
             // (gated by a push-constant bit), so output is unchanged when off.
+            // Binding 46 ALSO drives ddgi_update.rgen (it reads totalProbes /
+            // raysPerProbe / grid for the probe-ray bounds + spawn), so it must
+            // be visible to RAYGEN as well — without that flag the rgen reads the
+            // UBO as zeros and every probe ray bails at the bounds check.
             bindings[45].binding = 45;
             bindings[45].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             bindings[45].descriptorCount = 1;
@@ -10244,7 +10306,7 @@ namespace threepp {
             bindings[46].binding = 46;
             bindings[46].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[46].descriptorCount = 1;
-            bindings[46].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            bindings[46].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_RAYGEN_BIT_KHR;
             // Binding 47 — DDGI ray-radiance buffer, WRITTEN by ddgi_update.rgen
             // (the probe-update raygen runs against this shared layout). RAYGEN
             // stage only; the path-trace raygen / closest_hit don't touch it.
@@ -14241,6 +14303,17 @@ namespace threepp {
 
     bool VulkanRenderer::ddgiEnabled() const {
         return pimpl_->ddgiEnabled_;
+    }
+
+    void VulkanRenderer::setDdgiIntensity(float intensity) {
+        // Artistic multiplier on the sampled probe irradiance. 1.0 = physical;
+        // raise to make the (IBL-redundant, often subtle) indirect term clearly
+        // visible. Re-uploads the DDGI UBO on the next update pass.
+        if (pimpl_->ddgi_) pimpl_->ddgi_->setIntensity(intensity);
+    }
+
+    float VulkanRenderer::ddgiIntensity() const {
+        return pimpl_->ddgi_ ? pimpl_->ddgi_->intensity() : 1.0f;
     }
 
     void VulkanRenderer::setSerEnabled(bool enabled) {

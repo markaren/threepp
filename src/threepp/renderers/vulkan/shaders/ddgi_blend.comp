@@ -13,10 +13,11 @@
 // ~tileSide²× redundant trig. Loading rays once per workgroup cuts the blend's
 // transcendental work by ~100× and keeps the radiance reads in shared memory.
 //
-// Output is identical to the per-texel version (same weighted-average math).
-// THIS INCREMENT: irradiance only, gutter texels clamped to the nearest
-// interior texel (proper octahedral border wrap is P2); hysteresis 0 (no
-// temporal accumulation yet).
+// Writes both the irradiance (rgb) and a per-direction mean hit distance (a,
+// the visibility/Chebyshev term the sampler uses to reject light leaking
+// through walls), temporally blended against the previous atlas via the
+// hysteresis push constant. Gutter texels are still clamped to the nearest
+// interior texel (proper octahedral border wrap is a follow-up).
 
 layout(local_size_x = kDdgiIrradianceRes + 2 * kDdgiProbeBorder,
        local_size_y = kDdgiIrradianceRes + 2 * kDdgiProbeBorder,
@@ -38,8 +39,9 @@ layout(push_constant) uniform Pc {
 } pc;
 
 // This probe's rays, loaded once per workgroup. Sized to the compile-time max.
-shared vec3 sRayDir[kDdgiRaysPerProbe];
-shared vec3 sRayRad[kDdgiRaysPerProbe];
+shared vec3  sRayDir[kDdgiRaysPerProbe];
+shared vec3  sRayRad[kDdgiRaysPerProbe];
+shared float sRayDist[kDdgiRaysPerProbe];// per-ray hit distance → visibility atlas .a
 
 void main() {
     const int probeIndex  = int(gl_WorkGroupID.x);
@@ -59,7 +61,9 @@ void main() {
     const uint threads = gl_WorkGroupSize.x * gl_WorkGroupSize.y;
     for (uint r = tid; r < uint(raysPerProbe); r += threads) {
         sRayDir[r] = normalize(rot * ddgiSphericalFibonacci(float(r), float(raysPerProbe)));
-        sRayRad[r] = rayRadiance[uint(probeIndex) * uint(raysPerProbe) + r].rgb;
+        const vec4 rr = rayRadiance[uint(probeIndex) * uint(raysPerProbe) + r];
+        sRayRad[r]  = rr.rgb;
+        sRayDist[r] = rr.a;
     }
     barrier();
 
@@ -72,19 +76,33 @@ void main() {
     const vec2  octUv    = (vec2(ic) + 0.5) / float(interiorRes);
     const vec3  texelDir = ddgiOctUvToDir(octUv);
 
-    vec3  sum  = vec3(0.0);
-    float wsum = 0.0;
+    // Irradiance (broad cosine weight) + visibility distance (sharp cosine
+    // power). The distance is a per-direction mean of the rays' hit distances,
+    // concentrated around texelDir so it captures the nearest occluder that way;
+    // the sampler compares a shading point's probe distance against it to reject
+    // light leaking through walls (Chebyshev visibility). kDdgiDepthSharpness is
+    // high so each texel's distance reflects rays close to its own direction.
+    const float kDdgiDepthSharpness = 30.0;
+    vec3  sum      = vec3(0.0);
+    float wsum     = 0.0;
+    float distSum  = 0.0;
+    float distWsum = 0.0;
     for (int r = 0; r < raysPerProbe; ++r) {
-        const float w = max(dot(sRayDir[r], texelDir), 0.0);
-        if (w <= 0.0) continue;
-        sum  += w * sRayRad[r];
-        wsum += w;
+        const float c = max(dot(sRayDir[r], texelDir), 0.0);
+        if (c > 0.0) {
+            sum  += c * sRayRad[r];
+            wsum += c;
+            const float wd = pow(c, kDdgiDepthSharpness);
+            distSum  += wd * sRayDist[r];
+            distWsum += wd;
+        }
     }
-    const vec3 result = wsum > 1e-6 ? sum / wsum : vec3(0.0);
+    const vec3  result   = wsum > 1e-6 ? sum / wsum : vec3(0.0);
+    const float meanDist = distWsum > 1e-6 ? distSum / distWsum : 0.0;
 
     const ivec2 tile = ivec2(probeIndex % tilesPerRow, probeIndex / tilesPerRow);
     const ivec2 gid  = tile * tileSide + local;
-    const vec3  prev = imageLoad(irrPrev, gid).rgb;
+    const vec4  prev = imageLoad(irrPrev, gid);
     const float hyst = clamp(pc.blend.x, 0.0, 0.999);
-    imageStore(irrCurr, gid, vec4(mix(result, prev, hyst), 1.0));
+    imageStore(irrCurr, gid, vec4(mix(result, prev.rgb, hyst), mix(meanDist, prev.a, hyst)));
 }

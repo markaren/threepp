@@ -186,6 +186,7 @@ layout(set = 0, binding = 46, scalar) uniform DdgiUbo {
     vec3  rayRot0;
     vec3  rayRot1;
     vec3  rayRot2;
+    float intensity;
 } ddgi;
 
 // Emissive-mesh NEE: each emissive triangle is packed as 4 vec4
@@ -301,10 +302,39 @@ layout(location = 2) rayPayloadEXT Payload giSubPayload;
 // trilinear, NO visibility/Chebyshev weighting yet (that's P2), so expect light
 // leaking through thin geometry. `tilesPerRow` is derived from the actual atlas
 // width so it matches the host's layout exactly (no ceil(sqrt) drift).
+// Bilinear octahedral-atlas tap for probe `pi` at tile-uv `octUv01`, returning
+// rgba = irradiance.rgb + meanDist.a. imageLoad is point-sampled, so reading the
+// low-res (8×8) visibility distance with nearest filtering makes the Chebyshev
+// weight jump at octahedral texel boundaries — and those boundaries are diamond
+// shaped, so a flat wall shows diamond artifacts. Bilinear interpolation removes
+// them. Interior-clamped at the tile edge (octahedral seam wrap via the gutter
+// border is a follow-up).
+vec4 ddgiAtlasBilinear(int pi, vec2 octUv01, int tilesPerRow) {
+    const int   interiorRes = kDdgiIrradianceRes;
+    const int   tileSide    = kDdgiIrradianceRes + 2 * kDdgiProbeBorder;
+    const ivec2 tile        = ivec2(pi % tilesPerRow, pi / tilesPerRow);
+    const ivec2 base        = tile * tileSide + ivec2(kDdgiProbeBorder);
+    const vec2  t  = clamp(octUv01, 0.0, 1.0) * float(interiorRes) - 0.5;
+    const vec2  f  = fract(t);
+    const ivec2 t0 = clamp(ivec2(floor(t)),             ivec2(0), ivec2(interiorRes - 1));
+    const ivec2 t1 = clamp(ivec2(floor(t)) + ivec2(1),  ivec2(0), ivec2(interiorRes - 1));
+    const vec4 c00 = imageLoad(ddgiIrradiance, base + ivec2(t0.x, t0.y));
+    const vec4 c10 = imageLoad(ddgiIrradiance, base + ivec2(t1.x, t0.y));
+    const vec4 c01 = imageLoad(ddgiIrradiance, base + ivec2(t0.x, t1.y));
+    const vec4 c11 = imageLoad(ddgiIrradiance, base + ivec2(t1.x, t1.y));
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
 vec3 sampleDDGI(vec3 worldPos, vec3 N) {
     const ivec3 counts = ddgi.probeCounts;
-    const ivec3 base   = ddgiBaseProbeCoord(worldPos, ddgi.gridOrigin, ddgi.gridSpacing, counts);
-    const vec3  alpha  = ddgiTrilinearAlpha(worldPos, ddgi.gridOrigin, ddgi.gridSpacing, base);
+    // Normal bias: nudge the sample point off the surface so the trilinear cell
+    // isn't anchored by probes embedded in the very wall this point sits on
+    // (those would leak their far-side irradiance straight through). Scaled to
+    // the probe spacing so it's resolution-independent.
+    const float minSpacing = min(ddgi.gridSpacing.x, min(ddgi.gridSpacing.y, ddgi.gridSpacing.z));
+    const vec3  p      = worldPos + N * (0.20 * minSpacing);
+    const ivec3 base   = ddgiBaseProbeCoord(p, ddgi.gridOrigin, ddgi.gridSpacing, counts);
+    const vec3  alpha  = ddgiTrilinearAlpha(p, ddgi.gridOrigin, ddgi.gridSpacing, base);
     const ivec2 atlasSz     = imageSize(ddgiIrradiance);
     const int   tileSide    = kDdgiIrradianceRes + 2 * kDdgiProbeBorder;
     const int   tilesPerRow = atlasSz.x / tileSide;
@@ -317,10 +347,38 @@ vec3 sampleDDGI(vec3 worldPos, vec3 N) {
         const ivec3 c   = clamp(base + off, ivec3(0), counts - ivec3(1));
         const int   pi  = ddgiProbeCoordToIndex(c, counts);
         const vec3  tw  = mix(vec3(1.0) - alpha, alpha, vec3(off));
-        const float w   = tw.x * tw.y * tw.z;
+        float w   = tw.x * tw.y * tw.z;
         if (w <= 0.0) continue;
-        const ivec2 texel = ddgiProbeAtlasTexel(pi, octUv, kDdgiIrradianceRes, kDdgiProbeBorder, tilesPerRow);
-        sum  += w * imageLoad(ddgiIrradiance, texel).rgb;
+        // Smooth backface weight (RTXGI): a probe sitting on the far side of a
+        // wall lies roughly opposite the shading normal, so dot(dirToProbe, N)
+        // is negative there. (·*0.5+0.5)² drives those probes' weight toward 0.
+        const vec3  probePos   = ddgiProbeWorldPosition(c, ddgi.gridOrigin, ddgi.gridSpacing);
+        const vec3  dirToProbe = normalize(probePos - worldPos);
+        const float wrap = dot(dirToProbe, N) * 0.5 + 0.5;
+        w *= wrap * wrap;
+        if (w <= 1e-6) continue;
+
+        // Chebyshev-style visibility (the real leak fix). The atlas .a channel
+        // stores, per octahedral direction, the probe's mean hit distance. Look
+        // it up in the probe→point direction: if the point is farther from the
+        // probe than the nearest surface the probe saw that way, the point is
+        // occluded from the probe (e.g. behind a wall) and must not receive its
+        // irradiance. Variance is approximated (we only store the mean) so the
+        // hard occlusion boundary gets a soft falloff instead of a step.
+        const vec3  toPoint     = p - probePos;
+        const float distToProbe = length(toPoint);
+        const vec2  visUv       = ddgiDirToOctUv(distToProbe > 1e-5 ? toPoint / distToProbe : N);
+        const float meanDist    = ddgiAtlasBilinear(pi, visUv, tilesPerRow).a;
+        if (meanDist > 1e-4 && distToProbe > meanDist) {
+            const float d   = distToProbe - meanDist;
+            float       var = meanDist * 0.30;// assumed std ∝ mean (no stored variance)
+            var = var * var;
+            const float cheb = var / (var + d * d);
+            w *= cheb * cheb * cheb;// RTXGI sharpening
+            if (w <= 1e-6) continue;
+        }
+
+        sum  += w * ddgiAtlasBilinear(pi, octUv, tilesPerRow).rgb;
         wsum += w;
     }
     return wsum > 1e-6 ? sum / wsum : vec3(0.0);
@@ -1685,8 +1743,32 @@ void main() {
     // Bring-up adds probe irradiance directly as an ambient-style term (exact
     // normalization is a tuning knob). Double-counts if ReSTIR GI is also on —
     // they're not meant to run together.
-    vec3 indirectIrr = lights.ambient;
-    if ((pc.motionFlags & 256u) != 0u) indirectIrr += sampleDDGI(hitPos, N);
+    // Diffuse indirect. Architecture: "1 real bounce + DDGI tail". The path
+    // tracer traces the camera ray's FIRST real scatter for full detail (contact
+    // shadows, colour bleed); the probe field then supplies everything past that
+    // hit. So the probe term is added ONLY at a secondary (post-scatter) hit, and
+    // that hit terminates the path — otherwise the bounces the probe field
+    // already integrates would also be traced and double-counted (the old
+    // behaviour that read as a flat ambient lift). The primary hit gets no probe
+    // term; its indirect comes from the real bounce spawned below.
+    vec3 indirectIrr       = lights.ambient;
+    bool ddgiTailTerminate = false;
+    if ((pc.motionFlags & 256u) != 0u) {
+        if ((payload.inFlags & 64u) != 0u) {
+            // Probe-update mode: previous frame's field feeds back as the
+            // infinite-bounce tail (physical ×1 — scaling here would let the
+            // feedback loop diverge).
+            indirectIrr += sampleDDGI(hitPos, N);
+        } else if ((payload.inFlags & 128u) != 0u) {
+            // Secondary (bounce) hit in path-trace mode: the probe field stands
+            // in for every further bounce. Add it (artistic intensity applies to
+            // visible shading) and terminate the path.
+            indirectIrr += sampleDDGI(hitPos, N) * ddgi.intensity;
+            ddgiTailTerminate = true;
+        }
+        // Primary hit (scatter==0): no probe term — its indirect comes from the
+        // real bounce we spawn below.
+    }
     const vec3 ambient = albedo * (1.0 - metalness) * indirectIrr * baseScale * ao;
 
     // DDGI probe-update mode (inFlags bit 64): this ray was cast by
@@ -1709,6 +1791,7 @@ void main() {
         payload.flags         = 1u;// terminate
         payload.seed          = seed;
         payload.hitInstanceId = uint(gl_InstanceCustomIndexEXT) + 1u;
+        payload.hitWorldPos   = hitPos;// probe rgen needs the hit distance for the visibility atlas
         return;
     }
 
@@ -2432,6 +2515,16 @@ void main() {
         payload.nextOrigin   = giTerminate ? vec3(0.0) : giNextOrigin;
         payload.nextDir      = giTerminate ? vec3(0.0) : giNextDir;
         payload.flags        = giTerminate ? 1u : 8u;
+    } else if (ddgiTailTerminate) {
+        // The probe field supplied the multi-bounce tail at this first bounce
+        // hit — stop here instead of tracing (and double-counting) the bounces
+        // it already integrates.
+        payload.radianceDiff = emissiveOut + ambient + lit;
+        payload.radianceSpec = vec3(0.0);
+        payload.brdfWeight   = vec3(0.0);
+        payload.nextOrigin   = vec3(0.0);
+        payload.nextDir      = vec3(0.0);
+        payload.flags        = 1u;// terminate
     } else {
         payload.radianceDiff = emissiveOut + ambient + lit;
         payload.radianceSpec = vec3(0.0);

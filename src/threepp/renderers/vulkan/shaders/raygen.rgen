@@ -1246,7 +1246,8 @@ void main() {
         // bounce-continuation payload. raygen injects the cached direct
         // contribution from s=0 via the override below the trace.
         payload.inFlags    = ((scatter > 0 && !prevPassThrough && pc.emissiveCount > 0u) ? 1u : 0u)
-                           | ((canCachePrimary && step == 0 && s > 0u) ? 32u : 0u);
+                           | ((canCachePrimary && step == 0 && s > 0u) ? 32u : 0u)
+                           | ((scatter > 0) ? 128u : 0u);// ≥1 real scatter → secondary hit (DDGI "1 bounce + tail")
 
         // tmin selection: shaded bounces use 0.001 (1mm) to avoid self-
         // intersection acne on the surface we just left. Pass-through hops

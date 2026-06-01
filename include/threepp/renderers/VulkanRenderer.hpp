@@ -304,6 +304,10 @@ namespace threepp {
         // probe atlas (verifies the update/blend run). Default off.
         void setDdgiEnabled(bool enabled);
         [[nodiscard]] bool ddgiEnabled() const;
+        // Multiplier on the sampled DDGI irradiance (default 1.0 = physical).
+        // Raise to make the indirect term clearly visible / for A-B tuning.
+        void setDdgiIntensity(float intensity);
+        [[nodiscard]] float ddgiIntensity() const;
 
         // NVIDIA Shader Execution Reordering (SER) opt-out. SER warp-reorders
         // path-tracer threads by hit material before the closest-hit

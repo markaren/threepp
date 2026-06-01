@@ -267,6 +267,11 @@ int main(int argc, char** argv) {
         if (ImGui::Checkbox("DDGI (experimental)", &ddgi)) {
             renderer.setDdgiEnabled(ddgi);
         }
+        if (ddgi) {
+            float ddgiIntensity = renderer.ddgiIntensity();
+            if (ImGui::SliderFloat("  DDGI intensity", &ddgiIntensity, 0.0f, 8.0f))
+                renderer.setDdgiIntensity(ddgiIntensity);
+        }
 
         if (ImGui::CollapsingHeader("Fog (FogExp2 + HG)")) {
             ImGui::Checkbox("Fog", &fogOn);

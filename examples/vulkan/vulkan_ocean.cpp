@@ -651,6 +651,16 @@ int main() {
         bool restirGI = renderer.restirGIEnabled();
         if (ImGui::Checkbox("ReSTIR GI", &restirGI))
             renderer.setRestirGIEnabled(restirGI);
+        // DDGI probe field (diffuse GI). Don't run together with ReSTIR GI —
+        // they both supply indirect diffuse and would double-count.
+        bool ddgi = renderer.ddgiEnabled();
+        if (ImGui::Checkbox("DDGI", &ddgi))
+            renderer.setDdgiEnabled(ddgi);
+        if (ddgi) {
+            float ddgiIntensity = renderer.ddgiIntensity();
+            if (ImGui::SliderFloat("  DDGI intensity", &ddgiIntensity, 0.0f, 8.0f))
+                renderer.setDdgiIntensity(ddgiIntensity);
+        }
         if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
             renderer.setSamplesPerPixel(spp);
         // Silhouette MSAA: extra primary rays at edge pixels only.

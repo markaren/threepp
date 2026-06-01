@@ -48,6 +48,7 @@ layout(set = 0, binding = 46, scalar) uniform DdgiUbo {
     vec3  rayRot0;
     vec3  rayRot1;
     vec3  rayRot2;
+    float intensity;
 } ddgi;
 layout(set = 0, binding = 47, std430) writeonly buffer RayBuf {
     vec4 rayRadiance[];  // (radiance.rgb, hit-marker); <0 == miss/sky
@@ -65,19 +66,6 @@ uint ddgiSeed(uint probe, uint ray) {
 }
 
 void main() {
-    const uint ray   = gl_LaunchIDEXT.x;
-    const uint probe = gl_LaunchIDEXT.y;
-
-    // [DDGI DEBUG] Visualize the UBO values the GPU actually reads. r =
-    // totalProbes (×0.001 → ~2.0 if 2048), g = raysPerProbe (×0.01 → ~1.28 if
-    // 128). Bright yellow tint = UBO reads correctly (the early-return bug is
-    // elsewhere). Black/no tint = UBO (binding 46) reads zero — fix its
-    // upload/coherency/wiring. Index uses hardcoded 128 to not depend on the UBO.
-    rayRadiance[probe * 128u + ray] =
-            vec4(float(ddgi.totalProbes) * 0.001, float(ddgi.raysPerProbe) * 0.01, 0.0, 1.0);
-    return;
-}
-void mainReal() {
     const uint ray   = gl_LaunchIDEXT.x;
     const uint probe = gl_LaunchIDEXT.y;
     if (int(probe) >= ddgi.totalProbes || int(ray) >= ddgi.raysPerProbe) return;
@@ -111,7 +99,24 @@ void mainReal() {
 
     traceRayEXT(topAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, org, 0.0, dir, 1e30, 0);
 
-    const vec3 radiance = payload.radianceDiff + payload.radianceSpec;
-    rayRadiance[probe * uint(ddgi.raysPerProbe) + ray] =
-            vec4(radiance, payload.hitInstanceId == 0u ? -1.0 : 1.0);
+    vec3 radiance = payload.radianceDiff + payload.radianceSpec;
+    // Firefly clamp: a single probe ray can catch a very bright sample (sun
+    // glint on water, an NEE outlier); even with temporal hysteresis it flashes
+    // before averaging down (the "spark"). The probe field is low-frequency
+    // diffuse irradiance, so clamping per-ray luminance is cheap and visually
+    // unbiased — it just bounds the outliers the blend would otherwise smear.
+    const float kDdgiMaxRayLuminance = 25.0;
+    const float lum = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
+    if (lum > kDdgiMaxRayLuminance) radiance *= kDdgiMaxRayLuminance / lum;
+
+    // Hit distance for the visibility atlas (.a). The blend folds these per-ray
+    // distances into a per-direction mean the sampler reads back for Chebyshev
+    // occlusion. Clamp to ~1.5 cells: only intra-cell distances matter for the
+    // trilinear neighbourhood, and bounding it keeps the fp16 store well-defined
+    // (a miss = "no occluder this way" stores the max). org = probe position.
+    const float maxDist = length(ddgi.gridSpacing) * 1.5;
+    const float hitDist = payload.hitInstanceId == 0u
+            ? maxDist
+            : min(length(payload.hitWorldPos - org), maxDist);
+    rayRadiance[probe * uint(ddgi.raysPerProbe) + ray] = vec4(radiance, hitDist);
 }

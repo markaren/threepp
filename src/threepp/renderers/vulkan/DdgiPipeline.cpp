@@ -34,6 +34,7 @@ namespace threepp::vulkan {
             float   rayRot0[3];
             float   rayRot1[3];
             float   rayRot2[3];
+            float   intensity;// artistic multiplier on the sampled irradiance
         };
     }// namespace
 
@@ -97,6 +98,18 @@ namespace threepp::vulkan {
         uboWritten_ = false;// re-upload on next update
     }
 
+    void DdgiPipeline::setGridFromBounds(const float minXYZ[3], const float maxXYZ[3]) {
+        const int counts[3] = {probesX_, probesY_, probesZ_};
+        for (int i = 0; i < 3; ++i) {
+            gridOrigin_[i]  = minXYZ[i];
+            const float span = maxXYZ[i] - minXYZ[i];
+            // N probes span N-1 intervals; origin sits on probe 0, the opposite
+            // corner on probe N-1, so the lattice exactly covers [min, max].
+            gridSpacing_[i] = span / float(counts[i] > 1 ? counts[i] - 1 : 1);
+        }
+        uboWritten_ = false;// re-upload on next update
+    }
+
     void DdgiPipeline::transitionFreshImage(VkImage img) {
         VkCommandBufferAllocateInfo ai{};
         ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -111,10 +124,14 @@ namespace threepp::vulkan {
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         check(vkBeginCommandBuffer(cb, &bi), "begin one-shot cb(ddgi)");
 
+        // UNDEFINED → TRANSFER_DST so we can zero-clear the fresh atlas. Without
+        // the clear, the first frames of temporal accumulation (hysteresis) read
+        // undefined VMA contents as "previous irradiance" and that garbage —
+        // possibly NaN/Inf — persists for many frames before averaging out.
         VkImageMemoryBarrier b{};
         b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         b.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
-        b.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+        b.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b.image               = img;
@@ -122,11 +139,33 @@ namespace threepp::vulkan {
         b.subresourceRange.levelCount = 1;
         b.subresourceRange.layerCount = 1;
         b.srcAccessMask = 0;
-        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         vkCmdPipelineBarrier(cb,
                              VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
                              0, 0, nullptr, 0, nullptr, 1, &b);
+
+        VkClearColorValue clearVal{};// {0,0,0,0}
+        VkImageSubresourceRange clearRange{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearVal, 1, &clearRange);
+
+        // TRANSFER_DST → GENERAL for shader storage-image read/write.
+        VkImageMemoryBarrier b2{};
+        b2.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b2.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b2.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+        b2.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b2.image               = img;
+        b2.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        b2.subresourceRange.levelCount = 1;
+        b2.subresourceRange.layerCount = 1;
+        b2.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b2.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cb,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &b2);
 
         check(vkEndCommandBuffer(cb), "end one-shot cb(ddgi)");
         VkSubmitInfo si{};
@@ -432,9 +471,16 @@ namespace threepp::vulkan {
             u.raysPerProbe = raysPerProbe_;
             u.totalProbes  = totalProbes_;
             u.rayRot0[0] = 1.f; u.rayRot1[1] = 1.f; u.rayRot2[2] = 1.f;// identity
+            u.intensity    = intensity_;
             void* mapped = nullptr;
             vmaMapMemory(ctx_.allocator(), ddgiUbo_.alloc, &mapped);
             std::memcpy(mapped, &u, sizeof(u));
+            // Defensive flush in case the allocation lands on non-coherent
+            // host-visible memory; harmless no-op on coherent memory. (Note:
+            // the binding must also list RAYGEN in its stageFlags or the probe
+            // rgen reads the UBO as zeros regardless of flushing — see the
+            // shared RT layout, binding 46.)
+            vmaFlushAllocation(ctx_.allocator(), ddgiUbo_.alloc, 0, VK_WHOLE_SIZE);
             vmaUnmapMemory(ctx_.allocator(), ddgiUbo_.alloc);
             uboWritten_ = true;
         }
@@ -475,9 +521,15 @@ namespace threepp::vulkan {
 
         if (!blendWired_[idx]) {
             VkDescriptorBufferInfo rayInfo{rayRadiance_[idx].handle, 0, VK_WHOLE_SIZE};
-            // Bring-up has no temporal accumulation (hysteresis 0), so prev and
-            // curr point at the same image; the read value is multiplied by 0.
-            VkDescriptorImageInfo prevInfo{VK_NULL_HANDLE, irradiance_[idx].view, VK_IMAGE_LAYOUT_GENERAL};
+            // Temporal accumulation: `prev` is the OTHER parity's atlas — i.e.
+            // last frame's blended irradiance — and `curr` is this frame's
+            // target. The blend mixes mix(result, prev, hysteresis), so probe
+            // irradiance is filtered over many frames instead of recomputed
+            // from scratch each frame. Without this the per-frame Monte-Carlo
+            // noise in the probe-ray NEE makes the field flicker violently
+            // ("lightning storm"). prev/curr are fixed per parity, so caching
+            // the descriptor write per idx stays valid.
+            VkDescriptorImageInfo prevInfo{VK_NULL_HANDLE, irradiance_[idx ^ 1].view, VK_IMAGE_LAYOUT_GENERAL};
             VkDescriptorImageInfo currInfo{VK_NULL_HANDLE, irradiance_[idx].view, VK_IMAGE_LAYOUT_GENERAL};
             std::array<VkWriteDescriptorSet, 3> w{};
             for (auto& x : w) {
@@ -500,7 +552,7 @@ namespace threepp::vulkan {
         } pc{};
         pc.cfg0[0] = irrRes_; pc.cfg0[1] = border_; pc.cfg0[2] = tilesPerRow_; pc.cfg0[3] = totalProbes_;
         pc.cfg1[0] = raysPerProbe_;
-        pc.blend[0] = 0.f;// no temporal accumulation for bring-up
+        pc.blend[0] = hysteresis_;// temporal blend weight on the previous atlas
         pc.rot0[0] = 1.f; pc.rot1[1] = 1.f; pc.rot2[2] = 1.f;// identity (matches update)
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, blendPipeline_);

@@ -64,6 +64,21 @@ namespace threepp::vulkan {
         // the constructor's defaults are used.
         void setGrid(const float originXYZ[3], const float spacingXYZ[3]);
 
+        // Fit the grid to a world-space AABB [minXYZ, maxXYZ]; the per-axis
+        // probe spacing is derived from the (fixed) probe counts so the lattice
+        // exactly spans the box. Preferred over setGrid for scene-AABB sizing —
+        // keeps the counts→spacing math in one place. The renderer calls this
+        // each build with the (padded) union of the scene's mesh AABBs so the
+        // probes sit inside the geometry rather than the default origin box.
+        void setGridFromBounds(const float minXYZ[3], const float maxXYZ[3]);
+
+        // Artistic multiplier on the sampled probe irradiance (closest_hit's
+        // sampleDDGI). 1.0 = physically scaled; higher makes the (often subtle,
+        // IBL-redundant) indirect term clearly visible for tuning / A-B. Folded
+        // into the DDGI UBO, so it re-uploads on next update.
+        void  setIntensity(float v) { intensity_ = v; uboWritten_ = false; }
+        [[nodiscard]] float intensity() const { return intensity_; }
+
         // Per-frame passes. recordUpdate casts the probe rays into `tlas`
         // (env sampled in the miss shader) and fills the ray-radiance buffer;
         // recordBlend folds them into the irradiance atlas. Both are no-ops at
@@ -96,6 +111,12 @@ namespace threepp::vulkan {
         // renderer may override via setGrid once it knows the scene AABB).
         float gridOrigin_[3]  = {0.f, 0.f, 0.f};
         float gridSpacing_[3] = {1.f, 1.f, 1.f};
+
+        // Sampling intensity (UBO) + temporal blend weight (blend push const).
+        // hysteresis_ is the fraction of the PREVIOUS atlas kept each frame;
+        // ~0.95 filters the probe-ray Monte-Carlo noise into a stable field.
+        float intensity_  = 1.0f;
+        float hysteresis_ = 0.95f;
 
         // Resources. The ray buffer + per-frame descriptor sets are
         // double-buffered by frame parity so frame N+1's update can't clobber
