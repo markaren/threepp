@@ -114,8 +114,7 @@ struct Payload {
 // variant (see rtVariants_) per frame based on which features are enabled —
 // no runtime branch on motionFlags, no register pressure for the dead path.
 // constant_id values are stable: don't renumber, or stored caches go stale.
-// Raygen's namespace is independent of chit's; both can start at 0.
-layout(constant_id = 0) const bool kHybridEnabled = false;
+// Raygen's namespace is independent of chit's.
 // Scene-feature bitmask — set at first-frame pipeline build by the host
 // (currentSceneFeatures() in VulkanRenderer.cpp). Bit assignments match
 // chit's kSceneFeatures one-for-one:
@@ -206,11 +205,8 @@ layout(set = 0, binding = 36, rgba8) uniform readonly  image2D prevPrimaryAlbedo
 // stable lighting, snapshot * lighting = crisp textured output).
 layout(set = 0, binding = 37, rgba8) uniform writeonly image2D primaryAlbedoSnapshotImage;
 
-// Hybrid raster G-buffer attachments. Always bound (allocated at startup);
-// raygen samples them only when `kHybridEnabled` is true. That branch is a
-// specialization constant so the dead code is DCEd in the non-hybrid pipeline
-// variant — descriptor set still lists these slots, but the SPV never reads
-// from them in that variant.
+// Hybrid raster G-buffer attachments. Always bound (allocated at startup)
+// and always sampled — the renderer runs hybrid unconditionally.
 // Hybrid uses the motion vector for reproject and the ids texture for the
 // sky early-out; normal/depth/uv are bound but currently unused (they were
 // wired for the abandoned in-raygen skip-primary path). Sampler is
@@ -888,10 +884,6 @@ vec3 volumeInscatter(vec3 rayOrigin, vec3 rayDir, float maxT, inout uint seed) {
     return inscatter * scatterFactor / float(N);
 }
 
-// shade_primary.glsl was the prior in-raygen primary shader; it had subtle
-// divergences from chit. Replaced by the bounce-0-on-raster path further
-// down in main() which calls into shade_common.glsl (included near the top
-// of this file, after the bindings + push constant + payload declarations).
 
 void main() {
     const uint spp = max(pc.samplesPerPixel, 1u);
@@ -938,10 +930,10 @@ void main() {
     // Hybrid mode (gbuffer drives primary visibility): PT primary-ray jitter
     // is gated off — confirmed empirically (2026-05-06) that Monte Carlo
     // primary produces shake regardless of motion-vec accuracy. Raster owns
-    // primary visibility (raster jitter on for AA).
-    // Pulled from a specialization constant at pipeline-compile time, not
-    // a per-frame push-constant read. The dead branch is DCEd from the SPV.
-    const bool hybridOn = kHybridEnabled;
+    // primary visibility (raster jitter on for AA). Always on: the non-hybrid
+    // pure-PT primary path was removed, so the `else`/`!hybridOn` branches
+    // below are statically dead and DCEd from the SPV.
+    const bool hybridOn = true;
 
     // Debug timing knob. When set, the step + spp loops break out
     // immediately after the step-0 primary traceRayEXT and main() returns
@@ -953,11 +945,9 @@ void main() {
 
     // Hybrid primary path: raster G-buffer determines visibility, but we let
     // chit handle primary shading by tracing a primary ray from camera origin
-    // to the gbuf-derived surface direction. shade_primary.glsl's in-raygen
-    // BSDF had subtle divergences from chit (basis-rotation bug, weight-form
-    // numerics on low-roughness specular) that produced lower stills quality
-    // than non-hybrid. Routing through chit collapses the two paths to one
-    // BSDF implementation — hybrid quality matches non-hybrid by construction.
+    // to the gbuf-derived surface direction. Routing primary shading through
+    // chit (rather than a separate in-raygen BSDF) keeps a single BSDF
+    // implementation shared by the primary hit and all bounces.
     //
     // The shake fix is preserved: per-frame raster Halton jitter is applied
     // to the primary NDC, the PT accumulator integrates the result across
