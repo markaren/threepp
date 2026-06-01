@@ -71,7 +71,9 @@ TEST_CASE("getHSL") {
 
     Color c = 0x80ffff;
     HSL hsl = {0, 0, 0};
-    c.getHSL(hsl);
+    // the hex was authored in sRGB; ask for HSL back in sRGB (ColorManagement
+    // stores it linearized internally)
+    c.getHSL(hsl, SRGBColorSpace);
 
     CHECK_THAT(hsl.h, Catch::Matchers::WithinRel(0.5f));
     CHECK_THAT(hsl.s, Catch::Matchers::WithinRel(1.0f));
@@ -167,8 +169,10 @@ TEST_CASE("setStyleRGBAedWithSpaces") {
 
 TEST_CASE("setStyleRGBedPercent") {
 
+    // parse straight into the working space so percentages are checked verbatim,
+    // without the default sRGB->linear conversion
     Color c;
-    c.setStyle("rgb(100%,50%,10%)");
+    c.setStyle("rgb(100%,50%,10%)", LinearSRGBColorSpace);
     CHECK_THAT(c.r, Catch::Matchers::WithinRel(1.f));
     CHECK_THAT(c.g, Catch::Matchers::WithinRel(0.5f));
     CHECK_THAT(c.b, Catch::Matchers::WithinRel(0.1f));
@@ -177,7 +181,7 @@ TEST_CASE("setStyleRGBedPercent") {
 TEST_CASE("setStyleRGBedPercentWithSpaces") {
 
     Color c;
-    c.setStyle("rgb( 100%, 50%, 10%)");
+    c.setStyle("rgb( 100%, 50%, 10%)", LinearSRGBColorSpace);
     CHECK_THAT(c.r, Catch::Matchers::WithinRel(1.f));
     CHECK_THAT(c.g, Catch::Matchers::WithinRel(0.5f));
     CHECK_THAT(c.b, Catch::Matchers::WithinRel(0.1f));
@@ -186,7 +190,7 @@ TEST_CASE("setStyleRGBedPercentWithSpaces") {
 TEST_CASE("setStyleRGBAedPercentWithSpaces") {
 
     Color c;
-    c.setStyle("rgb( 100%, 50%, 10%, 0.5)");
+    c.setStyle("rgb( 100%, 50%, 10%, 0.5)", LinearSRGBColorSpace);
     CHECK_THAT(c.r, Catch::Matchers::WithinRel(1.f));
     CHECK_THAT(c.g, Catch::Matchers::WithinRel(0.5f));
     CHECK_THAT(c.b, Catch::Matchers::WithinRel(0.1f));
@@ -234,4 +238,32 @@ TEST_CASE("setStyleColorName") {
     Color c;
     c.setStyle("powderblue");
     CHECK(c.getHex() == 0xB0E0E6);
+}
+
+TEST_CASE("colorManagement linearizes sRGB input and round-trips") {
+
+    // with management enabled (the default), hex/style input is stored linearized
+    Color c(0x808080);
+    CHECK(c.r < 0.5f);// linear value of sRGB 0x80 is ~0.216
+    CHECK_THAT(c.r, Catch::Matchers::WithinAbs(0.2158f, 1e-3f));
+
+    // getHex converts back to sRGB by default -> original value recovered
+    CHECK(c.getHex() == 0x808080);
+    CHECK(c.getHexString() == "808080");
+
+    // copySRGBToLinear matches a managed setHex
+    Color viaCopy;
+    viaCopy.copySRGBToLinear(Color().setRGB(0x80 / 255.f, 0x80 / 255.f, 0x80 / 255.f));
+    CHECK_THAT(viaCopy.r, Catch::Matchers::WithinAbs(c.r, 1e-5f));
+}
+
+TEST_CASE("colorManagement can be disabled for raw values") {
+
+    ColorManagement::enabled = false;
+
+    Color c(0x808080);
+    CHECK_THAT(c.r, Catch::Matchers::WithinAbs(0.5019f, 1e-3f));// raw sRGB byte / 255
+    CHECK(c.getHex() == 0x808080);
+
+    ColorManagement::enabled = true;// restore default for subsequent tests
 }

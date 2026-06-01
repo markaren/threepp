@@ -1423,15 +1423,17 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
 @fragment fn fs(in: VSOutput) -> @location(0) vec4<f32> {
     var color = textureSample(inputTex, inputSampler, in.uv);
-    // Background detection: intermediate is cleared with alpha=0, scene shaders
-    // write alpha=1 for opaque content. Cleared pixels bypass tone mapping so
-    // the user-set clear color displays unaltered — matches three.js / GL where
-    // glClearColor isn't routed through the shader tone-map.
-    if (color.a < 0.001) {
-        return vec4<f32>(params.clearR, params.clearG, params.clearB, 1.0);
-    }
+    // Background detection: the intermediate is cleared with alpha=0; scene shaders
+    // write alpha=1 for opaque content. Cleared (background) pixels skip tone mapping
+    // (so the flat clear color isn't ACES-desaturated) but still flow through the sRGB
+    // encode below, keeping them consistent with shaded pixels. In the surface variant
+    // srgb=false here and the sRGB-format surface hardware-encodes the result instead.
+    let isBackground = color.a < 0.001;
     var rgb = color.rgb;
     let exposure = params.exposure;
+    if (isBackground) {
+        rgb = vec3<f32>(params.clearR, params.clearG, params.clearB);
+    } else {
 )";
         // Tone mapping
         switch (mode) {
@@ -1472,6 +1474,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             default:
                 break;
         }
+        s << "    }\n";// end else (non-background tone mapping)
         if (srgb) {
             // Proper sRGB OETF (matches GL's LinearTosRGB / three.js sRGBTransferOETF).
             // Gamma 2.2 (pow(rgb, 1/2.2)) is brighter in midtones — use the piecewise
@@ -1483,7 +1486,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
               << "        rgb = select(hi, lo, rgbClamped <= vec3<f32>(0.0031308));\n"
               << "    }\n";
         }
-        s << "    return vec4<f32>(rgb, color.a);\n}\n";
+        s << "    return vec4<f32>(rgb, select(color.a, 1.0, isBackground));\n}\n";
         return s.str();
     }
 
@@ -2390,10 +2393,20 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         const double clearA = useToneMapIntermediate
                 ? 0.0
                 : static_cast<double>(effectiveClearAlpha);
+        // Surface-direct clear: clearValue is written straight to the sRGB swapchain.
+        // WebGPU does NOT sRGB-encode clearValue (unlike shader fragment writes, which
+        // the sRGB surface encodes in hardware), so a color-managed (linear) clear color
+        // must be encoded here or the background renders too dark. The tone-map-intermediate
+        // path clears a linear RGBA16Float target whose background is re-emitted (and thus
+        // hardware-encoded) by toneMapBlit, so it stays linear. No-op when management is off.
+        Color clearRGB = effectiveClearColor;
+        if (!useToneMapIntermediate) {
+            ColorManagement::workingToColorSpace(clearRGB, SRGBColorSpace);
+        }
         colorAttachment.clearValue = {
-                static_cast<double>(effectiveClearColor.r),
-                static_cast<double>(effectiveClearColor.g),
-                static_cast<double>(effectiveClearColor.b),
+                static_cast<double>(clearRGB.r),
+                static_cast<double>(clearRGB.g),
+                static_cast<double>(clearRGB.b),
                 clearA};
 
         WGPURenderPassDepthStencilAttachment depthAttachment{};

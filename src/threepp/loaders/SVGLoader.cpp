@@ -1054,10 +1054,9 @@ void SVGLoader::Impl::parseNode(const pugi::xml_node& node, Style style) {
 
         if (style.fill && !style.fill->empty() && *style.fill != "none") {
 
-            // SVG colors are authored in sRGB; linearize so they display as authored
-            // once the renderer encodes back to sRGB on output (matches three.js, which
-            // parses fills via Color.setStyle(fill, SRGBColorSpace)).
-            path->color.setStyle(*style.fill).convertSRGBToLinear();
+            // setStyle linearizes from sRGB by default (ColorManagement), matching
+            // three.js's path.color.setStyle(fill, SRGBColorSpace).
+            path->color.setStyle(*style.fill);
         }
 
         svg::transformPath(*path, currentTransform);

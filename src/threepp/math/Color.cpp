@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <regex>
 #include <sstream>
@@ -215,6 +216,46 @@ namespace {
 
 }// namespace
 
+bool ColorManagement::enabled = true;
+ColorSpace ColorManagement::workingColorSpace = ColorSpace::Linear;
+
+Color& ColorManagement::convert(Color& color, ColorSpace source, ColorSpace target) {
+
+    if (!enabled || source == target ||
+        source == ColorSpace::NoColorSpace || target == ColorSpace::NoColorSpace) {
+
+        return color;
+    }
+
+    // threepp only deals with the sRGB and linear-sRGB working spaces, which share
+    // the same (Rec. 709) primaries, so only the transfer function differs.
+    if (source == ColorSpace::sRGB) {
+
+        color.r = SRGBToLinear(color.r);
+        color.g = SRGBToLinear(color.g);
+        color.b = SRGBToLinear(color.b);
+    }
+
+    if (target == ColorSpace::sRGB) {
+
+        color.r = LinearToSRGB(color.r);
+        color.g = LinearToSRGB(color.g);
+        color.b = LinearToSRGB(color.b);
+    }
+
+    return color;
+}
+
+Color& ColorManagement::colorSpaceToWorking(Color& color, ColorSpace source) {
+
+    return convert(color, source, workingColorSpace);
+}
+
+Color& ColorManagement::workingToColorSpace(Color& color, ColorSpace target) {
+
+    return convert(color, workingColorSpace, target);
+}
+
 Color::Color(float r, float g, float b)
     : r(r), g(g), b(b) {}
 
@@ -244,25 +285,29 @@ Color& Color::setScalar(float scalar) {
     return *this;
 }
 
-Color& Color::setHex(unsigned int hex) {
+Color& Color::setHex(unsigned int hex, ColorSpace colorSpace) {
 
     this->r = static_cast<float>(hex >> 16 & 255) / 255.f;
     this->g = static_cast<float>(hex >> 8 & 255) / 255.f;
     this->b = static_cast<float>(hex & 255) / 255.f;
 
+    ColorManagement::colorSpaceToWorking(*this, colorSpace);
+
     return *this;
 }
 
-Color& Color::setRGB(float r, float g, float b) {
+Color& Color::setRGB(float r, float g, float b, ColorSpace colorSpace) {
 
     this->r = r;
     this->g = g;
     this->b = b;
 
+    ColorManagement::colorSpaceToWorking(*this, colorSpace);
+
     return *this;
 }
 
-Color& Color::setHSL(float h, float s, float l) {
+Color& Color::setHSL(float h, float s, float l, ColorSpace colorSpace) {
 
     // h,s,l ranges are in 0.0 - 1.0
     h = math::euclideanModulo(h, 1.f);
@@ -282,6 +327,8 @@ Color& Color::setHSL(float h, float s, float l) {
         this->g = hue2rgb(q, p, h);
         this->b = hue2rgb(q, p, h - 1.f / 3);
     }
+
+    ColorManagement::colorSpaceToWorking(*this, colorSpace);
 
     return *this;
 }
@@ -401,15 +448,27 @@ bool Color::operator!=(const Color& c) const {
     return !equals(c);
 }
 
-unsigned int Color::getHex() const {
+unsigned int Color::getHex(ColorSpace colorSpace) const {
 
-    return static_cast<int>(this->r * 255) << 16 ^ static_cast<int>(this->g * 255) << 8 ^ static_cast<int>(this->b * 255) << 0;
+    Color c;
+    c.copy(*this);
+    ColorManagement::workingToColorSpace(c, colorSpace);
+
+    const auto r = static_cast<unsigned int>(std::round(std::clamp(c.r * 255.f, 0.f, 255.f)));
+    const auto g = static_cast<unsigned int>(std::round(std::clamp(c.g * 255.f, 0.f, 255.f)));
+    const auto b = static_cast<unsigned int>(std::round(std::clamp(c.b * 255.f, 0.f, 255.f)));
+
+    return (r << 16) | (g << 8) | b;
 }
 
-HSL& Color::getHSL(HSL& target) const {
+HSL& Color::getHSL(HSL& target, ColorSpace colorSpace) const {
     // h,s,l ranges are in 0.0 - 1.0
 
-    const float r = this->r, g = this->g, b = this->b;
+    Color c;
+    c.copy(*this);
+    ColorManagement::workingToColorSpace(c, colorSpace);
+
+    const float r = c.r, g = c.g, b = c.b;
 
     const auto max = std::max(r, std::max(g, b));
     const auto min = std::min(r, std::min(g, b));
@@ -446,23 +505,32 @@ HSL& Color::getHSL(HSL& target) const {
     return target;
 }
 
-std::string Color::getHexString() const {
+std::string Color::getHexString(ColorSpace colorSpace) const {
 
     std::stringstream ss;
-    ss << std::hex << getHex();
+    ss << std::setfill('0') << std::setw(6) << std::hex << getHex(colorSpace);
 
     return ss.str();
 }
 
-std::string Color::getStyle() const {
+std::string Color::getStyle(ColorSpace colorSpace) const {
+
+    Color c;
+    c.copy(*this);
+    ColorManagement::workingToColorSpace(c, colorSpace);
 
     std::stringstream ss;
-    ss << "rgb(" << (static_cast<int>(this->r * 255) | 0) << "," << (static_cast<int>(this->g * 255) | 0) << "," << (static_cast<int>(this->b * 255) | 0) << ")";
+    ss << "rgb(" << static_cast<int>(std::round(c.r * 255)) << ","
+       << static_cast<int>(std::round(c.g * 255)) << ","
+       << static_cast<int>(std::round(c.b * 255)) << ")";
 
     return ss.str();
 }
 
-Color& Color::setStyle(const std::string& style) {
+Color& Color::setStyle(const std::string& style, ColorSpace colorSpace) {
+
+    // Each terminal setter (setRGB/setHSL/setHex/setColorName) applies the
+    // colorSpace -> working conversion, so the parsing here just routes to them.
 
     static std::regex r1(R"(((?:rgb|hsl)a?)\(([^\)]*)\))", std::regex::icase);
     static std::regex r2("\\#([A-Fa-f\\d]+)$", std::regex::icase);
@@ -483,20 +551,20 @@ Color& Color::setStyle(const std::string& style) {
             if (std::regex_match(components, match, ra)) {
 
                 // rgb(255,0,0) rgba(255,0,0,0.5)
-                this->r = std::min(255.f, static_cast<float>(utils::parseInt(match[1].str()))) / 255;
-                this->g = std::min(255.f, static_cast<float>(utils::parseInt(match[2].str()))) / 255;
-                this->b = std::min(255.f, static_cast<float>(utils::parseInt(match[3].str()))) / 255;
-
-                return *this;
+                return this->setRGB(
+                        std::min(255.f, static_cast<float>(utils::parseInt(match[1].str()))) / 255,
+                        std::min(255.f, static_cast<float>(utils::parseInt(match[2].str()))) / 255,
+                        std::min(255.f, static_cast<float>(utils::parseInt(match[3].str()))) / 255,
+                        colorSpace);
 
             } else if (std::regex_match(components, match, rb)) {
 
                 // rgb(100%,0%,0%) rgba(100%,0%,0%,0.5)
-                this->r = std::min(100.f, static_cast<float>(utils::parseInt(match[1].str()))) / 100;
-                this->g = std::min(100.f, static_cast<float>(utils::parseInt(match[2].str()))) / 100;
-                this->b = std::min(100.f, static_cast<float>(utils::parseInt(match[3].str()))) / 100;
-
-                return *this;
+                return this->setRGB(
+                        std::min(100.f, static_cast<float>(utils::parseInt(match[1].str()))) / 100,
+                        std::min(100.f, static_cast<float>(utils::parseInt(match[2].str()))) / 100,
+                        std::min(100.f, static_cast<float>(utils::parseInt(match[3].str()))) / 100,
+                        colorSpace);
             }
 
         } else if (name == "hsl" || name == "hsla") {
@@ -510,7 +578,7 @@ Color& Color::setStyle(const std::string& style) {
                 const auto s = static_cast<float>(utils::parseInt(match[2].str())) / 100;
                 const auto l = static_cast<float>(utils::parseInt(match[3].str())) / 100;
 
-                return this->setHSL(h, s, l);
+                return this->setHSL(h, s, l, colorSpace);
             }
         }
 
@@ -524,57 +592,63 @@ Color& Color::setStyle(const std::string& style) {
         if (size == 3) {
 
             // #ff0
-            this->r = static_cast<float>(std::stoi(std::string{hex[0]} + std::string{hex[0]}, nullptr, 16)) / 255;
-            this->g = static_cast<float>(std::stoi(std::string{hex[1]} + std::string{hex[1]}, nullptr, 16)) / 255;
-            this->b = static_cast<float>(std::stoi(std::string{hex[2]} + std::string{hex[2]}, nullptr, 16)) / 255;
-
-            return *this;
+            return this->setRGB(
+                    static_cast<float>(std::stoi(std::string{hex[0]} + std::string{hex[0]}, nullptr, 16)) / 255,
+                    static_cast<float>(std::stoi(std::string{hex[1]} + std::string{hex[1]}, nullptr, 16)) / 255,
+                    static_cast<float>(std::stoi(std::string{hex[2]} + std::string{hex[2]}, nullptr, 16)) / 255,
+                    colorSpace);
 
         } else if (size == 6) {
 
             // #ff0000
-            this->r = static_cast<float>(std::stoi(std::string{hex[0]} + std::string{hex[1]}, nullptr, 16)) / 255;
-            this->g = static_cast<float>(std::stoi(std::string{hex[2]} + std::string{hex[3]}, nullptr, 16)) / 255;
-            this->b = static_cast<float>(std::stoi(std::string{hex[4]} + std::string{hex[5]}, nullptr, 16)) / 255;
-
-            return *this;
+            return this->setHex(static_cast<unsigned int>(std::stoul(hex, nullptr, 16)), colorSpace);
         }
     }
 
     if (style.length() > 0) {
 
-        return setColorName(style);
+        return setColorName(style, colorSpace);
     }
+
+    return *this;
+}
+
+Color& Color::copySRGBToLinear(const Color& color) {
+
+    this->r = SRGBToLinear(color.r);
+    this->g = SRGBToLinear(color.g);
+    this->b = SRGBToLinear(color.b);
+
+    return *this;
+}
+
+Color& Color::copyLinearToSRGB(const Color& color) {
+
+    this->r = LinearToSRGB(color.r);
+    this->g = LinearToSRGB(color.g);
+    this->b = LinearToSRGB(color.b);
 
     return *this;
 }
 
 Color& Color::convertSRGBToLinear() {
 
-    this->r = SRGBToLinear(this->r);
-    this->g = SRGBToLinear(this->g);
-    this->b = SRGBToLinear(this->b);
-
-    return *this;
+    return copySRGBToLinear(*this);
 }
 
 Color& Color::convertLinearToSRGB() {
 
-    this->r = LinearToSRGB(this->r);
-    this->g = LinearToSRGB(this->g);
-    this->b = LinearToSRGB(this->b);
-
-    return *this;
+    return copyLinearToSRGB(*this);
 }
 
-Color& Color::setColorName(const std::string& style) {
+Color& Color::setColorName(const std::string& style, ColorSpace colorSpace) {
 
     if (!colorKeywords.contains(style)) {
         std::cerr << "THREE.Color: Unknown color '" + style + "'" << std::endl;
         return *this;
     }
 
-    return setHex(colorKeywords.at(style));
+    return setHex(colorKeywords.at(style), colorSpace);
 }
 
 Color& Color::lerpHSL(const Color& color, float alpha) {
