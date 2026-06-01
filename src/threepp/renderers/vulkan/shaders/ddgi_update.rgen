@@ -5,38 +5,79 @@
 
 #include "ddgi_common.glsl"
 
-// DDGI probe update — one ray per (probe, ray-index) launch. Casts a
-// spherical-Fibonacci ray from each probe into the scene and writes the
-// resulting radiance + hit distance to the ray-radiance scratch buffer, which
-// ddgi_blend.comp then folds into the octahedral irradiance atlas.
-//
-// THIS INCREMENT shades sky-visibility only: a hit is treated as occluded
-// (no contribution) and a miss returns the environment radiance. That makes
-// the probe field a sky-occlusion / ambient term — enough to bring the whole
-// pipeline (atlases → blend → sample) up end-to-end. Richer probe shading
-// (direct analytic/emissive light at the hit + infinite-bounce by sampling the
-// previous frame's probe atlas) layers on top of this without changing the
-// data flow. Using gl_RayFlagsSkipClosestHitShaderEXT means no closest-hit
-// shader is needed yet — the hit SBT region can be empty.
+// DDGI probe update. Casts spherical-Fibonacci probe rays through the REAL
+// closest_hit in probe mode (Payload.inFlags bit 64) so the radiance gathered
+// for each probe matches the path tracer exactly — direct light + emission +
+// infinite bounce (closest_hit's `ambient` term folds in the previous frame's
+// probe field via sampleDDGI). Runs against the shared RT descriptor set + the
+// main hit/miss groups; this is just a different ray-generation entry point.
+// Per-(probe,ray) radiance is written to the ray buffer (binding 47);
+// ddgi_blend.comp folds it into the octahedral irradiance atlas.
+
+// MUST match closest_hit.rchit / raygen.rgen Payload layout exactly — we trace
+// the real closest_hit, which reads/writes this struct.
+struct Payload {
+    vec3 radianceDiff;
+    vec3 radianceSpec;
+    vec3 brdfWeight;
+    vec3 nextOrigin;
+    vec3 nextDir;
+    uint flags;
+    uint seed;
+    vec3 hitWorldPos;
+    uint hitInstanceId;
+    vec3 prevWorldPos;
+    float hitRoughness;
+    uint inFlags;
+    float hitMetalness;
+    float hitTransmission;
+    float bsdfPdf;
+    float currentIor;
+    float hitSpecFrac;
+    vec4 primaryAlbedo;
+    vec3 hitNormal;
+};
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topAS;
-layout(set = 0, binding = 1, scalar) uniform DdgiUbo {
-    vec3  gridOrigin;    // world position of probe (0,0,0)
-    vec3  gridSpacing;   // world distance between adjacent probes, per axis
-    ivec3 probeCounts;   // probes per axis
+layout(set = 0, binding = 46, scalar) uniform DdgiUbo {
+    vec3  gridOrigin;
+    vec3  gridSpacing;
+    ivec3 probeCounts;
     int   raysPerProbe;
     int   totalProbes;
-    vec3  rayRot0;       // per-frame ray rotation, row 0 (decorrelates frames)
+    vec3  rayRot0;
     vec3  rayRot1;
     vec3  rayRot2;
 } ddgi;
-layout(set = 0, binding = 2, std430) writeonly buffer RayBuf {
-    vec4 rayRadiance[];  // (radiance.rgb, hitDist); hitDist < 0 == miss/sky
+layout(set = 0, binding = 47, std430) writeonly buffer RayBuf {
+    vec4 rayRadiance[];  // (radiance.rgb, hit-marker); <0 == miss/sky
 };
 
-layout(location = 0) rayPayloadEXT vec4 prd;
+layout(location = 0) rayPayloadEXT Payload payload;
+
+// Per-(probe,ray) seed for closest_hit's NEE RNG.
+uint ddgiSeed(uint probe, uint ray) {
+    uint h = probe * 73856093u ^ ray * 19349663u;
+    h ^= h >> 16;
+    h *= 0x85EBCA6Bu;
+    h ^= h >> 13;
+    return h | 1u;
+}
 
 void main() {
+    const uint ray   = gl_LaunchIDEXT.x;
+    const uint probe = gl_LaunchIDEXT.y;
+
+    // [DDGI DEBUG] Visualize the UBO values the GPU actually reads. r =
+    // totalProbes (×0.001 → ~2.0 if 2048), g = raysPerProbe (×0.01 → ~1.28 if
+    // 128). Bright yellow tint = UBO reads correctly (the early-return bug is
+    // elsewhere). Black/no tint = UBO (binding 46) reads zero — fix its
+    // upload/coherency/wiring. Index uses hardcoded 128 to not depend on the UBO.
+    rayRadiance[probe * 128u + ray] =
+            vec4(float(ddgi.totalProbes) * 0.001, float(ddgi.raysPerProbe) * 0.01, 0.0, 1.0);
+    return;
+}
+void mainReal() {
     const uint ray   = gl_LaunchIDEXT.x;
     const uint probe = gl_LaunchIDEXT.y;
     if (int(probe) >= ddgi.totalProbes || int(ray) >= ddgi.raysPerProbe) return;
@@ -46,14 +87,31 @@ void main() {
     const mat3  rot = mat3(ddgi.rayRot0, ddgi.rayRot1, ddgi.rayRot2);
     const vec3  dir = normalize(rot * ddgiSphericalFibonacci(float(ray), float(ddgi.raysPerProbe)));
 
-    // Default = occluded hit (no contribution, positive sentinel distance).
-    // On a miss the miss shader overwrites prd with the env radiance and a
-    // negative distance; the closest-hit shader is skipped entirely.
-    prd = vec4(0.0, 0.0, 0.0, 1.0);
-    traceRayEXT(topAS,
-                gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
-                0xff, 0, 0, 0,
-                org, 0.0, dir, 1e30, 0);
+    // Probe-mode primary trace. closest_hit (bit 64) returns lit+ambient+
+    // emission and terminates; miss returns full-strength env (flags bit 1 = 0).
+    payload.radianceDiff    = vec3(0.0);
+    payload.radianceSpec    = vec3(0.0);
+    payload.brdfWeight      = vec3(0.0);
+    payload.nextOrigin      = vec3(0.0);
+    payload.nextDir         = vec3(0.0);
+    payload.flags           = 0u;
+    payload.seed            = ddgiSeed(probe, ray);
+    payload.hitWorldPos     = vec3(0.0);
+    payload.hitInstanceId   = 0u;   // miss leaves this 0 → sky marker below
+    payload.prevWorldPos    = vec3(0.0);
+    payload.hitRoughness    = 1.0;
+    payload.inFlags         = 64u;  // DDGI probe mode
+    payload.hitMetalness    = 0.0;
+    payload.hitTransmission = 0.0;
+    payload.bsdfPdf         = 0.0;
+    payload.currentIor      = 1.0;
+    payload.hitSpecFrac     = 0.0;
+    payload.primaryAlbedo   = vec4(0.0);
+    payload.hitNormal       = vec3(0.0);
 
-    rayRadiance[probe * uint(ddgi.raysPerProbe) + ray] = prd;
+    traceRayEXT(topAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, org, 0.0, dir, 1e30, 0);
+
+    const vec3 radiance = payload.radianceDiff + payload.radianceSpec;
+    rayRadiance[probe * uint(ddgi.raysPerProbe) + ray] =
+            vec4(radiance, payload.hitInstanceId == 0u ? -1.0 : 1.0);
 }

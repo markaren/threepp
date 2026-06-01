@@ -4,8 +4,14 @@
 
 #include "threepp/renderers/vulkan/shaders/vulkan_shared.h"
 #include "threepp/renderers/vulkan/shaders/ddgi_update.rgen.spv.h"
-#include "threepp/renderers/vulkan/shaders/ddgi_miss.rmiss.spv.h"
 #include "threepp/renderers/vulkan/shaders/ddgi_blend.comp.spv.h"
+// Main RT hit/miss groups — the probe update reuses them so probe rays shade
+// through the real closest_hit (probe mode), instead of a duplicated shader.
+#include "threepp/renderers/vulkan/shaders/miss.rmiss.spv.h"
+#include "threepp/renderers/vulkan/shaders/shadow_miss.rmiss.spv.h"
+#include "threepp/renderers/vulkan/shaders/closest_hit.rchit.spv.h"
+#include "threepp/renderers/vulkan/shaders/closest_hit_alpha.rahit.spv.h"
+#include "threepp/renderers/vulkan/shaders/shadow_anyhit.rahit.spv.h"
 
 #include <array>
 #include <cmath>
@@ -31,8 +37,8 @@ namespace threepp::vulkan {
         };
     }// namespace
 
-    DdgiPipeline::DdgiPipeline(VulkanContext& ctx, VkCommandPool cmdPool)
-        : ctx_(ctx), cmdPool_(cmdPool) {
+    DdgiPipeline::DdgiPipeline(VulkanContext& ctx, VkCommandPool cmdPool, VkPipelineLayout sharedRtLayout)
+        : ctx_(ctx), cmdPool_(cmdPool), sharedLayout_(sharedRtLayout) {
         computeGridDims();
         createImages();
         createBuffers();
@@ -50,8 +56,6 @@ namespace threepp::vulkan {
         if (blendDsLayout_)  vkDestroyDescriptorSetLayout(d, blendDsLayout_, nullptr);
         destroyBuffer(ctx_.allocator(), sbtBuf_);
         if (updatePipeline_) vkDestroyPipeline(d, updatePipeline_, nullptr);
-        if (updateLayout_)   vkDestroyPipelineLayout(d, updateLayout_, nullptr);
-        if (updateDsLayout_) vkDestroyDescriptorSetLayout(d, updateDsLayout_, nullptr);
         destroyBuffer(ctx_.allocator(), ddgiUbo_);
         for (auto& b : rayRadiance_) destroyBuffer(ctx_.allocator(), b);
         for (auto& img : irradiance_) destroyImage2D(ctx_.allocator(), d, img);
@@ -193,32 +197,11 @@ namespace threepp::vulkan {
     }
 
     void DdgiPipeline::createUpdatePipeline() {
-        // Own descriptor set layout: 0=TLAS, 1=DDGI UBO, 2=ray-radiance (write),
-        // 3=env sampler (read in the miss shader).
-        std::array<VkDescriptorSetLayoutBinding, 4> b{};
-        b[0].binding = 0; b[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-        b[0].descriptorCount = 1; b[0].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-        b[1].binding = 1; b[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        b[1].descriptorCount = 1; b[1].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-        b[2].binding = 2; b[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        b[2].descriptorCount = 1; b[2].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-        b[3].binding = 3; b[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        b[3].descriptorCount = 1; b[3].stageFlags = VK_SHADER_STAGE_MISS_BIT_KHR;
-
-        VkDescriptorSetLayoutCreateInfo dlci{};
-        dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = static_cast<uint32_t>(b.size());
-        dlci.pBindings    = b.data();
-        check(vkCreateDescriptorSetLayout(ctx_.device(), &dlci, nullptr, &updateDsLayout_),
-              "vkCreateDescriptorSetLayout(ddgi.update)");
-
-        VkPipelineLayoutCreateInfo plci{};
-        plci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        plci.setLayoutCount = 1;
-        plci.pSetLayouts    = &updateDsLayout_;
-        check(vkCreatePipelineLayout(ctx_.device(), &plci, nullptr, &updateLayout_),
-              "vkCreatePipelineLayout(ddgi.update)");
-
+        // Reuse the SHARED RT layout + the MAIN hit/miss groups, swapping in
+        // ddgi_update.rgen as the entry point. The 5-group structure mirrors the
+        // main pipeline EXACTLY so closest_hit's shadow-ray traceRayEXT
+        // (sbtRecordOffset 1 / missIndex 1) resolves the same way. closest_hit
+        // runs in probe mode (Payload.inFlags bit 64).
         auto loadModule = [this](const uint32_t* code, size_t size) {
             VkShaderModuleCreateInfo smci{};
             smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -228,38 +211,71 @@ namespace threepp::vulkan {
             check(vkCreateShaderModule(ctx_.device(), &smci, nullptr, &m), "vkCreateShaderModule(ddgi)");
             return m;
         };
-        VkShaderModule rgenMod = loadModule(kDdgiUpdateRgenSpv, sizeof(kDdgiUpdateRgenSpv));
-        VkShaderModule missMod = loadModule(kDdgiMissRmissSpv,  sizeof(kDdgiMissRmissSpv));
+        VkShaderModule rgenMod  = loadModule(kDdgiUpdateRgenSpv,        sizeof(kDdgiUpdateRgenSpv));
+        VkShaderModule missMod  = loadModule(kMissRmissSpv,            sizeof(kMissRmissSpv));
+        VkShaderModule sMissMod = loadModule(kShadowMissRmissSpv,      sizeof(kShadowMissRmissSpv));
+        VkShaderModule chitMod  = loadModule(kClosestHitRchitSpv,      sizeof(kClosestHitRchitSpv));
+        VkShaderModule ahitMod  = loadModule(kClosestHitAlphaRahitSpv, sizeof(kClosestHitAlphaRahitSpv));
+        VkShaderModule sahitMod = loadModule(kShadowAnyhitRahitSpv,    sizeof(kShadowAnyhitRahitSpv));
 
-        std::array<VkPipelineShaderStageCreateInfo, 2> stg{};
-        for (auto& s : stg) { s.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO; s.pName = "main"; }
-        stg[0].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR; stg[0].module = rgenMod;
-        stg[1].stage = VK_SHADER_STAGE_MISS_BIT_KHR;   stg[1].module = missMod;
+        // closest_hit spec constants: restirDI=false (classic NEE — the per-pixel
+        // ReSTIR reservoir doesn't apply to probe rays) and sceneFeatures=0 (skip
+        // clearcoat/sheen/iridescence/glass-caustic paths — irrelevant to
+        // low-frequency diffuse GI probes, smaller SPV, and no rebuild needed
+        // when the scene's feature set changes).
+        struct ChitSpecData { VkBool32 restirDIEnabled; uint32_t sceneFeatures; }
+            chitSpecData{VK_FALSE, 0u};
+        VkSpecializationMapEntry chitMapEntries[2]{};
+        chitMapEntries[0].constantID = 0; chitMapEntries[0].offset = offsetof(ChitSpecData, restirDIEnabled); chitMapEntries[0].size = sizeof(VkBool32);
+        chitMapEntries[1].constantID = 1; chitMapEntries[1].offset = offsetof(ChitSpecData, sceneFeatures);   chitMapEntries[1].size = sizeof(uint32_t);
+        VkSpecializationInfo chitSpecInfo{};
+        chitSpecInfo.mapEntryCount = 2;
+        chitSpecInfo.pMapEntries   = chitMapEntries;
+        chitSpecInfo.dataSize      = sizeof(ChitSpecData);
+        chitSpecInfo.pData         = &chitSpecData;
 
-        // Two general groups (rgen, miss); no hit group — the update rgen traces
-        // with gl_RayFlagsSkipClosestHitShaderEXT, so the hit SBT region is empty.
-        std::array<VkRayTracingShaderGroupCreateInfoKHR, 2> grp{};
-        for (auto& g : grp) {
+        std::array<VkPipelineShaderStageCreateInfo, 6> stages{};
+        for (auto& s : stages) { s.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO; s.pName = "main"; }
+        stages[0].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;      stages[0].module = rgenMod;
+        stages[1].stage = VK_SHADER_STAGE_MISS_BIT_KHR;        stages[1].module = missMod;
+        stages[2].stage = VK_SHADER_STAGE_MISS_BIT_KHR;        stages[2].module = sMissMod;
+        stages[3].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR; stages[3].module = chitMod;
+        stages[3].pSpecializationInfo = &chitSpecInfo;
+        stages[4].stage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;     stages[4].module = ahitMod;
+        stages[5].stage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;     stages[5].module = sahitMod;
+
+        std::array<VkRayTracingShaderGroupCreateInfoKHR, 5> groups{};
+        for (auto& g : groups) {
             g.sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
             g.generalShader = g.closestHitShader = g.anyHitShader = g.intersectionShader = VK_SHADER_UNUSED_KHR;
         }
-        grp[0].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR; grp[0].generalShader = 0;
-        grp[1].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR; grp[1].generalShader = 1;
+        groups[0].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;             groups[0].generalShader   = 0;
+        groups[1].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;             groups[1].generalShader   = 1;
+        groups[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;             groups[2].generalShader   = 2;
+        groups[3].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR; groups[3].closestHitShader = 3; groups[3].anyHitShader = 4;
+        groups[4].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR; groups[4].anyHitShader     = 5;
 
         VkRayTracingPipelineCreateInfoKHR rci{};
         rci.sType      = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
-        rci.stageCount = static_cast<uint32_t>(stg.size());
-        rci.pStages    = stg.data();
-        rci.groupCount = static_cast<uint32_t>(grp.size());
-        rci.pGroups    = grp.data();
-        rci.maxPipelineRayRecursionDepth = 1;
-        rci.layout     = updateLayout_;
+        rci.stageCount = static_cast<uint32_t>(stages.size());
+        rci.pStages    = stages.data();
+        rci.groupCount = static_cast<uint32_t>(groups.size());
+        rci.pGroups    = groups.data();
+        // Probe ray → closest_hit (probe mode) → NEE shadow ray is depth 1;
+        // match the main pipeline's 4 for margin (probe mode terminates, never
+        // recursing into the GI sub-traces).
+        rci.maxPipelineRayRecursionDepth = 4;
+        rci.layout     = sharedLayout_;
         check(ctx_.rt().createRayTracingPipelines(
                       ctx_.device(), VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &rci, nullptr, &updatePipeline_),
               "vkCreateRayTracingPipelinesKHR(ddgi.update)");
 
-        vkDestroyShaderModule(ctx_.device(), rgenMod, nullptr);
-        vkDestroyShaderModule(ctx_.device(), missMod, nullptr);
+        vkDestroyShaderModule(ctx_.device(), rgenMod,  nullptr);
+        vkDestroyShaderModule(ctx_.device(), missMod,  nullptr);
+        vkDestroyShaderModule(ctx_.device(), sMissMod, nullptr);
+        vkDestroyShaderModule(ctx_.device(), chitMod,  nullptr);
+        vkDestroyShaderModule(ctx_.device(), ahitMod,  nullptr);
+        vkDestroyShaderModule(ctx_.device(), sahitMod, nullptr);
     }
 
     void DdgiPipeline::createSbt() {
@@ -269,7 +285,10 @@ namespace threepp::vulkan {
         const uint32_t baseAlignment     = props.shaderGroupBaseAlignment;
         const uint32_t handleSizeAligned = alignUp(handleSize, handleAlignment);
 
-        constexpr uint32_t groupCount = 2;// rgen, miss
+        // 5 groups: rgen, primary miss, shadow miss, path hit, shadow hit —
+        // identical layout to the main pipeline's SBT so closest_hit's shadow
+        // traceRayEXT (sbtRecordOffset 1, missIndex 1) resolves correctly.
+        constexpr uint32_t groupCount = 5;
         const uint32_t handlesSize = groupCount * handleSize;
         std::vector<uint8_t> handles(handlesSize);
         check(ctx_.rt().getRayTracingShaderGroupHandles(
@@ -277,8 +296,9 @@ namespace threepp::vulkan {
               "vkGetRayTracingShaderGroupHandlesKHR(ddgi)");
 
         const uint32_t rgenBytes = alignUp(handleSizeAligned, baseAlignment);
-        const uint32_t missBytes = alignUp(handleSizeAligned, baseAlignment);
-        const VkDeviceSize sbtSize = static_cast<VkDeviceSize>(rgenBytes) + missBytes;
+        const uint32_t missBytes = alignUp(2 * handleSizeAligned, baseAlignment);
+        const uint32_t hitBytes  = alignUp(2 * handleSizeAligned, baseAlignment);
+        const VkDeviceSize sbtSize = static_cast<VkDeviceSize>(rgenBytes) + missBytes + hitBytes;
 
         sbtBuf_ = createBuffer(
                 ctx_.allocator(), ctx_.device(), sbtSize,
@@ -293,8 +313,14 @@ namespace threepp::vulkan {
         vmaMapMemory(ctx_.allocator(), sbtBuf_.alloc, &mapped);
         std::memset(mapped, 0, sbtSize);
         uint8_t* dst = static_cast<uint8_t*>(mapped);
-        std::memcpy(dst,            handles.data() + 0 * handleSize, handleSize);
-        std::memcpy(dst + rgenBytes, handles.data() + 1 * handleSize, handleSize);
+        // rgen.
+        std::memcpy(dst, handles.data() + 0 * handleSize, handleSize);
+        // miss[0]=primary, miss[1]=shadow.
+        std::memcpy(dst + rgenBytes + 0 * handleSizeAligned, handles.data() + 1 * handleSize, handleSize);
+        std::memcpy(dst + rgenBytes + 1 * handleSizeAligned, handles.data() + 2 * handleSize, handleSize);
+        // hit[0]=path (sbtOffset 0), hit[1]=shadow (sbtOffset 1).
+        std::memcpy(dst + rgenBytes + missBytes + 0 * handleSizeAligned, handles.data() + 3 * handleSize, handleSize);
+        std::memcpy(dst + rgenBytes + missBytes + 1 * handleSizeAligned, handles.data() + 4 * handleSize, handleSize);
         vmaUnmapMemory(ctx_.allocator(), sbtBuf_.alloc);
 
         const VkDeviceAddress base = sbtBuf_.address;
@@ -304,7 +330,9 @@ namespace threepp::vulkan {
         missRgn_.deviceAddress = base + rgenBytes;
         missRgn_.stride        = handleSizeAligned;
         missRgn_.size          = missBytes;
-        hitRgn_  = {};// no hit shaders (SkipClosestHit)
+        hitRgn_.deviceAddress  = base + rgenBytes + missBytes;
+        hitRgn_.stride         = handleSizeAligned;
+        hitRgn_.size           = hitBytes;
         callRgn_ = {};
     }
 
@@ -363,32 +391,21 @@ namespace threepp::vulkan {
     }
 
     void DdgiPipeline::createDescriptors() {
-        // kPingPong update sets (TLAS + UBO + ray buffer + env) and kPingPong
-        // blend sets (ray buffer + 2 atlas images).
-        std::array<VkDescriptorPoolSize, 5> sizes{};
-        sizes[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR; sizes[0].descriptorCount = kPingPong;
-        sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;             sizes[1].descriptorCount = kPingPong;
-        sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;             sizes[2].descriptorCount = 2 * kPingPong;
-        sizes[3].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;     sizes[3].descriptorCount = kPingPong;
-        sizes[4].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;              sizes[4].descriptorCount = 2 * kPingPong;
+        // Only the blend pass needs DDGI-owned descriptor sets — the update pass
+        // uses the shared RT set. Each blend set: 1 storage buffer (ray buffer)
+        // + 2 storage images (irradiance prev/curr).
+        std::array<VkDescriptorPoolSize, 2> sizes{};
+        sizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; sizes[0].descriptorCount = kPingPong;
+        sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;  sizes[1].descriptorCount = 2 * kPingPong;
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpci.maxSets       = 2 * kPingPong;// kPingPong update + kPingPong blend
+        dpci.maxSets       = kPingPong;
         dpci.poolSizeCount = static_cast<uint32_t>(sizes.size());
         dpci.pPoolSizes    = sizes.data();
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
               "vkCreateDescriptorPool(ddgi)");
 
-        for (auto& set : updateSets_) {
-            VkDescriptorSetAllocateInfo ai{};
-            ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            ai.descriptorPool     = descPool_;
-            ai.descriptorSetCount = 1;
-            ai.pSetLayouts        = &updateDsLayout_;
-            check(vkAllocateDescriptorSets(ctx_.device(), &ai, &set),
-                  "vkAllocateDescriptorSets(ddgi.update)");
-        }
         for (auto& set : blendSets_) {
             VkDescriptorSetAllocateInfo ai{};
             ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -401,13 +418,13 @@ namespace threepp::vulkan {
         // Descriptor *contents* are written lazily on first record* per parity.
     }
 
-    void DdgiPipeline::recordUpdate(VkCommandBuffer cb, VkAccelerationStructureKHR tlas,
-                                    VkImageView envView, VkSampler envSampler, uint32_t frame) {
+    void DdgiPipeline::recordUpdate(VkCommandBuffer cb, VkDescriptorSet sharedSet, uint32_t frame,
+                                    const void* pcData, uint32_t pcSize) {
         const uint32_t idx = frame % kPingPong;
 
         // Upload the static DDGI uniform once (grid params + identity ray
         // rotation; per-frame rotation is a tuning follow-up needing a
-        // double-buffered UBO).
+        // double-buffered UBO). Lives at binding 46 of the shared set.
         if (!uboWritten_) {
             DdgiUboHost u{};
             for (int i = 0; i < 3; ++i) { u.gridOrigin[i] = gridOrigin_[i]; u.gridSpacing[i] = gridSpacing_[i]; }
@@ -422,34 +439,17 @@ namespace threepp::vulkan {
             uboWritten_ = true;
         }
 
-        // Populate this parity's update set once (TLAS / env stable for bring-up;
-        // rewiring on scene-rebuild TLAS change is a follow-up).
-        if (!updateWired_[idx]) {
-            VkWriteDescriptorSetAccelerationStructureKHR asInfo{};
-            asInfo.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
-            asInfo.accelerationStructureCount = 1;
-            asInfo.pAccelerationStructures    = &tlas;
-            VkDescriptorBufferInfo uboInfo{ddgiUbo_.handle, 0, VK_WHOLE_SIZE};
-            VkDescriptorBufferInfo rayInfo{rayRadiance_[idx].handle, 0, VK_WHOLE_SIZE};
-            VkDescriptorImageInfo  envInfo{envSampler, envView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-
-            std::array<VkWriteDescriptorSet, 4> w{};
-            for (auto& x : w) {
-                x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                x.dstSet = updateSets_[idx];
-                x.descriptorCount = 1;
-            }
-            w[0].dstBinding = 0; w[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR; w[0].pNext = &asInfo;
-            w[1].dstBinding = 1; w[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;             w[1].pBufferInfo = &uboInfo;
-            w[2].dstBinding = 2; w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;             w[2].pBufferInfo = &rayInfo;
-            w[3].dstBinding = 3; w[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;     w[3].pImageInfo = &envInfo;
-            vkUpdateDescriptorSets(ctx_.device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
-            updateWired_[idx] = true;
-        }
+        // Forward the path-trace push constants — closest_hit reads them in
+        // probe mode (emissiveCount, env CDF, fireflyClamp, and motionFlags incl.
+        // the DDGI-enabled bit that drives the infinite-bounce ambient term).
+        vkCmdPushConstants(cb, sharedLayout_,
+                           VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                   VK_SHADER_STAGE_ANY_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR,
+                           0, pcSize, pcData);
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, updatePipeline_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
-                                updateLayout_, 0, 1, &updateSets_[idx], 0, nullptr);
+                                sharedLayout_, 0, 1, &sharedSet, 0, nullptr);
         ctx_.rt().cmdTraceRays(cb, &rgenRgn_, &missRgn_, &hitRgn_, &callRgn_,
                                static_cast<uint32_t>(raysPerProbe_),
                                static_cast<uint32_t>(totalProbes_), 1);

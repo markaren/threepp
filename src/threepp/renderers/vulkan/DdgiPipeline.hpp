@@ -31,7 +31,11 @@ namespace threepp::vulkan {
     class DdgiPipeline {
 
     public:
-        DdgiPipeline(VulkanContext& ctx, VkCommandPool cmdPool);
+        // `sharedRtLayout` is the main RT pipeline layout. The update pass runs
+        // ddgi_update.rgen against it + the main hit/miss groups (so probe rays
+        // shade through the real closest_hit in probe mode), exactly like
+        // PhotonCaustics reuses the shared layout.
+        DdgiPipeline(VulkanContext& ctx, VkCommandPool cmdPool, VkPipelineLayout sharedRtLayout);
         ~DdgiPipeline();
         DdgiPipeline(const DdgiPipeline&) = delete;
         DdgiPipeline& operator=(const DdgiPipeline&) = delete;
@@ -48,6 +52,12 @@ namespace threepp::vulkan {
             return irradiance_[frame % kPingPong].view;
         }
         [[nodiscard]] VkBuffer uboBuffer() const { return ddgiUbo_.handle; }
+        // This frame's ray-radiance buffer (double-buffered by parity). Wired
+        // into the shared RT set so ddgi_update.rgen can write it while running
+        // the real closest_hit (probe-mode shading).
+        [[nodiscard]] VkBuffer rayBuffer(uint32_t frame) const {
+            return rayRadiance_[frame % kPingPong].handle;
+        }
 
         // Override the probe-grid placement (world AABB the grid spans). Until
         // a scene-AABB auto-sizer lands, the renderer can call this; otherwise
@@ -60,15 +70,20 @@ namespace threepp::vulkan {
         // the renderer level until ddgiEnabled_ — the renderer simply doesn't
         // call them otherwise. `frame` is the frame-in-flight index (parity
         // selects the double-buffered ray buffer / descriptor set / atlas).
-        void recordUpdate(VkCommandBuffer cb, VkAccelerationStructureKHR tlas,
-                          VkImageView envView, VkSampler envSampler, uint32_t frame);
+        // `sharedSet` is the frame's main RT descriptor set (carries TLAS,
+        // lights, env, materials, geometry, the DDGI UBO@46 + ray buffer@47,
+        // etc.). `pcData`/`pcSize` is the same path-trace push constant block,
+        // forwarded so closest_hit's NEE works in probe mode.
+        void recordUpdate(VkCommandBuffer cb, VkDescriptorSet sharedSet, uint32_t frame,
+                          const void* pcData, uint32_t pcSize);
         void recordBlend(VkCommandBuffer cb, uint32_t frame);
 
     private:
         static constexpr uint32_t kPingPong = 2;
 
-        VulkanContext& ctx_;
-        VkCommandPool  cmdPool_ = VK_NULL_HANDLE;
+        VulkanContext&   ctx_;
+        VkCommandPool    cmdPool_      = VK_NULL_HANDLE;
+        VkPipelineLayout sharedLayout_ = VK_NULL_HANDLE;// main RT layout (reused by the update pass)
 
         // Probe grid + octahedral atlas geometry (defaults from vulkan_shared.h;
         // the grid origin/spacing get sized to the scene AABB in a later pass).
@@ -92,10 +107,10 @@ namespace threepp::vulkan {
         Buffer ddgiUbo_{};                              // grid params (static for now)
         bool   uboWritten_ = false;
 
-        // Update (ray tracing) pipeline — own layout, not the shared RT set.
-        VkDescriptorSetLayout updateDsLayout_ = VK_NULL_HANDLE;
-        VkPipelineLayout      updateLayout_   = VK_NULL_HANDLE;
-        VkPipeline            updatePipeline_ = VK_NULL_HANDLE;
+        // Update (ray tracing) pipeline — built against the SHARED layout +
+        // the main hit/miss groups, so probe rays shade via the real
+        // closest_hit (probe mode). Only the pipeline + SBT are owned here.
+        VkPipeline updatePipeline_ = VK_NULL_HANDLE;
         Buffer                          sbtBuf_{};
         VkStridedDeviceAddressRegionKHR rgenRgn_{};
         VkStridedDeviceAddressRegionKHR missRgn_{};
@@ -109,10 +124,10 @@ namespace threepp::vulkan {
 
         // Descriptor pool + sets (allocated up front; their contents are
         // written lazily on the first recordUpdate/recordBlend per parity).
+        // Update uses the shared RT descriptor set (passed to recordUpdate), so
+        // only the blend pass needs DDGI-owned descriptor sets.
         VkDescriptorPool descPool_ = VK_NULL_HANDLE;
-        std::array<VkDescriptorSet, kPingPong> updateSets_{};
         std::array<VkDescriptorSet, kPingPong> blendSets_{};
-        std::array<bool, kPingPong> updateWired_{};
         std::array<bool, kPingPong> blendWired_{};
 
         void computeGridDims();

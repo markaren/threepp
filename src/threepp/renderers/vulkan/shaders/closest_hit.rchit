@@ -1689,6 +1689,29 @@ void main() {
     if ((pc.motionFlags & 256u) != 0u) indirectIrr += sampleDDGI(hitPos, N);
     const vec3 ambient = albedo * (1.0 - metalness) * indirectIrr * baseScale * ao;
 
+    // DDGI probe-update mode (inFlags bit 64): this ray was cast by
+    // ddgi_update.rgen to gather radiance for the probe field. Return the
+    // outgoing radiance — direct light (lit) + flat/DDGI indirect (ambient,
+    // which folds in the previous frame's probe field → infinite bounce) +
+    // emission — and terminate. No BSDF bounce, no GI reservoir, no primary
+    // tagging. Reuses the real shading above so probe radiance matches the
+    // path tracer exactly (no shading divergence). Nothing sets bit 64 until
+    // the update pipeline + rgen land (B-step 2), so this is dead code today.
+    if ((payload.inFlags & 64u) != 0u) {
+        vec3 emProbe = mdesc.emissive * mdesc.emissiveIntensity;
+        if (mdesc.emissiveTexIndex >= 0) {
+            const int ei = clamp(mdesc.emissiveTexIndex, 0, int(kMaxMaterialTextures) - 1);
+            emProbe *= texture(albedoMaps[ei], uvEmissive).rgb;
+        }
+        payload.radianceDiff  = lit + ambient + emProbe;
+        payload.radianceSpec  = vec3(0.0);
+        payload.brdfWeight    = vec3(0.0);
+        payload.flags         = 1u;// terminate
+        payload.seed          = seed;
+        payload.hitInstanceId = uint(gl_InstanceCustomIndexEXT) + 1u;
+        return;
+    }
+
     // Phase 9 v2: probabilistic spec/diffuse lobe selection so polished
     // metals reflect nearby geometry, not just the env probe. p_spec mirrors
     // the WGPU PT (mix(0.5, 0.98, metalness)). The selected lobe's BRDF·cos

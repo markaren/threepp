@@ -415,6 +415,7 @@ int main() {
     // ── State ──────────────────────────────────────────────────────────────────
     bool restirDI = renderer.restirDIEnabled();
     bool restirGI = renderer.restirGIEnabled();
+    bool ddgi = renderer.ddgiEnabled();
     bool denoiserOn = renderer.denoise();
     bool animating = true;
     float exposure = renderer.toneMappingExposure;
@@ -460,6 +461,10 @@ int main() {
             renderer.setRestirDIEnabled(restirDI);
         if (ImGui::Checkbox("ReSTIR GI (G)", &restirGI))
             renderer.setRestirGIEnabled(restirGI);
+        // DDGI is an alternative diffuse-GI source — turn ReSTIR GI off when
+        // enabling it (otherwise indirect is double-counted).
+        if (ImGui::Checkbox("DDGI", &ddgi))
+            renderer.setDdgiEnabled(ddgi);
         if (ImGui::Checkbox("Denoiser (D)", &denoiserOn))
             renderer.setDenoise(denoiserOn);
         ImGui::Checkbox("Animate (A)", &animating);

@@ -1491,7 +1491,7 @@ namespace threepp {
             // DDGI probe field — self-contained (own descriptor layouts), inert
             // until ddgiEnabled_ flips. Allocates atlases/buffers + builds its
             // update (RT) and blend (compute) pipelines.
-            ddgi_ = std::make_unique<vulkan::DdgiPipeline>(*ctx, cmdPool);
+            ddgi_ = std::make_unique<vulkan::DdgiPipeline>(*ctx, cmdPool, rtPipelineLayout);
             waterDisplace_ = std::make_unique<vulkan::WaterDisplacePipeline>(*ctx);
             foamWorld_     = std::make_unique<vulkan::FoamWorldPipeline>(*ctx);
             // Hybrid raster G-buffer infrastructure is always allocated so
@@ -9913,7 +9913,7 @@ namespace threepp {
             // for material lookup, UV for texture sampling on the primary).
             // Always present in the layout; raygen gates use on the hybrid
             // push-constant bit.
-            std::array<VkDescriptorSetLayoutBinding, 47> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 48> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -10245,6 +10245,13 @@ namespace threepp {
             bindings[46].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[46].descriptorCount = 1;
             bindings[46].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            // Binding 47 — DDGI ray-radiance buffer, WRITTEN by ddgi_update.rgen
+            // (the probe-update raygen runs against this shared layout). RAYGEN
+            // stage only; the path-trace raygen / closest_hit don't touch it.
+            bindings[47].binding = 47;
+            bindings[47].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            bindings[47].descriptorCount = 1;
+            bindings[47].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -10706,7 +10713,7 @@ namespace threepp {
             ps[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             ps[2].descriptorCount = totalSets * 5;// bindings 2 (camera), 5 (lights), 9 (prevCamera), 17 (fog), 46 (DDGI grid)
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            ps[3].descriptorCount = totalSets * 7;// bindings 3,4,10,14 (existing) + 15,16 (photon) + 21 (meshMovedBits)
+            ps[3].descriptorCount = totalSets * 8;// bindings 3,4,10,14 (existing) + 15,16 (photon) + 21 (meshMovedBits) + 47 (DDGI ray buffer)
             ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures + 5 + 1 + 1 + 1);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF) + bindings 22-26 (hybrid gbuffer attachments incl. UV) + binding 27 (blue noise tile) + binding 32 (ocean fine-cascade height) + binding 44 (world-space foam)
 
@@ -11326,7 +11333,21 @@ namespace threepp {
                     wDdgiUbo.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
                     wDdgiUbo.pBufferInfo = &ddgiUboInfo;
 
-                    std::array<VkWriteDescriptorSet, 47> writes{
+                    // Binding 47 — DDGI ray-radiance buffer (this frame's
+                    // parity), written by ddgi_update.rgen.
+                    VkDescriptorBufferInfo ddgiRayInfo{};
+                    ddgiRayInfo.buffer = ddgi_->rayBuffer(f);
+                    ddgiRayInfo.offset = 0;
+                    ddgiRayInfo.range  = VK_WHOLE_SIZE;
+                    VkWriteDescriptorSet wDdgiRay{};
+                    wDdgiRay.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wDdgiRay.dstSet = descriptorSets[idx];
+                    wDdgiRay.dstBinding = 47;
+                    wDdgiRay.descriptorCount = 1;
+                    wDdgiRay.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    wDdgiRay.pBufferInfo = &ddgiRayInfo;
+
+                    std::array<VkWriteDescriptorSet, 48> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
                             wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered,
@@ -11340,7 +11361,7 @@ namespace threepp {
                             wGiXsWrite, wGiXsRead, wGiNsWrite, wGiNsRead,
                             wGiLoWrite, wGiLoRead,
                             wOceanFoam,
-                            wDdgiAtlas, wDdgiUbo};
+                            wDdgiAtlas, wDdgiUbo, wDdgiRay};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -12339,16 +12360,6 @@ namespace threepp {
             }
             // ── End photon emit ─────────────────────────────────────────────────
 
-            // ── DDGI probe field (gated) ────────────────────────────────────────
-            // Update (cast probe rays) + blend (octahedral irradiance) before
-            // the main path-trace, so a future sampling step can read this
-            // frame's atlas. No-op until ddgiEnabled_ — renderer is byte-
-            // identical when off. Sampling into the shaded image is a later step.
-            if (ddgiEnabled_ && ddgi_) {
-                ddgi_->recordUpdate(cb, tlas, envImage.view, envImage.sampler, currentFrame);
-                ddgi_->recordBlend(cb, currentFrame);
-            }
-
             const RtPipelineVariant& rtv = activeRtVariant();
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rtv.pipeline);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
@@ -12422,6 +12433,28 @@ namespace threepp {
                                        VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
                                        VK_SHADER_STAGE_MISS_BIT_KHR,
                                0, sizeof(pc), pc);
+
+            // ── DDGI probe field (gated) ────────────────────────────────────────
+            // Probe update (rays shaded via closest_hit probe mode) + irradiance
+            // blend, BEFORE the main path-trace dispatch so this frame's
+            // closest_hit samples the freshened atlas (recordBlend's barrier
+            // orders the atlas write before the RT read). The probe pass reuses
+            // the shared layout + `pc`, but binds its own pipeline + a compute
+            // pipeline, so the main RT pipeline / descriptor set / push constants
+            // are restored afterward. No-op when off → renderer byte-identical.
+            if (ddgiEnabled_ && ddgi_) {
+                ddgi_->recordUpdate(cb, descriptorSets[setIdx], currentFrame, pc, sizeof(pc));
+                ddgi_->recordBlend(cb, currentFrame);
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rtv.pipeline);
+                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+                                        rtPipelineLayout, 0, 1, &descriptorSets[setIdx], 0, nullptr);
+                vkCmdPushConstants(cb, rtPipelineLayout,
+                                   VK_SHADER_STAGE_RAYGEN_BIT_KHR |
+                                           VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                                           VK_SHADER_STAGE_ANY_HIT_BIT_KHR |
+                                           VK_SHADER_STAGE_MISS_BIT_KHR,
+                                   0, sizeof(pc), pc);
+            }
 
             const VkExtent2D ext = ctx->swapchainExtent();
             // Path-trace render extent — equals `ext` unless renderScale_ < 1.
