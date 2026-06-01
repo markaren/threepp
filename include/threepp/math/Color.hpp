@@ -73,6 +73,15 @@ namespace threepp {
 
         Color& setColorName(const std::string& style);
 
+        // Converts this color from sRGB to linear-sRGB color space (in place).
+        // SVG/CSS colors are authored in sRGB; the renderer works in linear space
+        // and encodes back to sRGB on output, so colors parsed from strings must be
+        // linearized to display as authored (matches three.js ColorManagement).
+        Color& convertSRGBToLinear();
+
+        // Converts this color from linear-sRGB to sRGB color space (in place).
+        Color& convertLinearToSRGB();
+
         [[nodiscard]] bool equals(const Color& c) const;
 
         bool operator==(const Color& c) const;

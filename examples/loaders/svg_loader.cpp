@@ -88,7 +88,7 @@ namespace {
             auto strokeColor = data.style.stroke;
             if (strokeColor && *strokeColor != "none") {
                 auto strokeMaterial = MeshBasicMaterial::create(
-                        {{"color", Color().setStyle(*data.style.stroke)},
+                        {{"color", Color().setStyle(*data.style.stroke).convertSRGBToLinear()},
                          {"opacity", data.style.strokeOpacity},
                          {"transparent", true},
                          {"side", Side::Double},

@@ -5,6 +5,7 @@
 #include "threepp/utils/StringUtils.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <regex>
 #include <sstream>
@@ -13,6 +14,17 @@
 using namespace threepp;
 
 namespace {
+
+    // sRGB <-> linear transfer functions. Must match the GLSL sRGBToLinear /
+    // LinearTosRGB in ShaderChunk/encodings_pars_fragment.glsl so a color
+    // linearized on the CPU round-trips exactly through the renderer's output encode.
+    float SRGBToLinear(float c) {
+        return (c < 0.04045f) ? c * 0.0773993808f : std::pow(c * 0.9478672986f + 0.0521327014f, 2.4f);
+    }
+
+    float LinearToSRGB(float c) {
+        return (c < 0.0031308f) ? c * 12.92f : 1.055f * std::pow(c, 0.41666f) - 0.055f;
+    }
 
     float hue2rgb(float p, float q, float t) {
 
@@ -533,6 +545,24 @@ Color& Color::setStyle(const std::string& style) {
 
         return setColorName(style);
     }
+
+    return *this;
+}
+
+Color& Color::convertSRGBToLinear() {
+
+    this->r = SRGBToLinear(this->r);
+    this->g = SRGBToLinear(this->g);
+    this->b = SRGBToLinear(this->b);
+
+    return *this;
+}
+
+Color& Color::convertLinearToSRGB() {
+
+    this->r = LinearToSRGB(this->r);
+    this->g = LinearToSRGB(this->g);
+    this->b = LinearToSRGB(this->b);
 
     return *this;
 }
