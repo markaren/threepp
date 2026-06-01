@@ -141,7 +141,7 @@ int main() {
     renderer.setHybridEnabled(true);
     renderer.setFireflyClamp(6.0f);
     renderer.setMaxBounces(2);
-    // Trace PT at 75% resolution; TAA upsamples to full swapchain by
+    // Trace PT at lower resolution; TAA upsamples to full swapchain by
     // accumulating jittered low-res samples into the full-res history.
     renderer.setRenderScale(0.9f);
     renderer.toneMapping = ToneMapping::ACESFilmic;
