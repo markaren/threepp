@@ -251,21 +251,22 @@ set_languages("c++20")
 ```
 
 
-
-
 ### Screenshots
 ![Fonts](doc/screenshots/fonts.png)
+![Ocean](doc/screenshots/pt_ocean.png)
 ![Spline Editor](doc/screenshots/spline_editor.png)
 ![colnav](doc/screenshots/colnav.png)
 ![Shadows](doc/screenshots/Shadows.PNG)
 ![Crane](doc/screenshots/crane.png)
 ![FlyControls](doc/screenshots/fly.PNG)
 ![Optimization](doc/screenshots/Optimization.PNG)
-![Lidar](doc/screenshots/lidar.png)
+![Bistro](doc/screenshots/bistro.PNG)
 ![Animation](doc/screenshots/animation.png)
+![Lidar](doc/screenshots/lidar.png)
 ![Water+sky](doc/screenshots/water_sky.png)
 ![MotorController](doc/screenshots/motor_controller.PNG)
 ![SVG](doc/screenshots/tiger_svg.png)
 ![Depth sensor](doc/screenshots/depth_sensor.png)
 ![LeePerrySmith](doc/screenshots/LeePerrySmith.png)
-![Cubemap](doc/screenshots/cubemap.png)
+![Chess](doc/screenshots/chess.png)
+

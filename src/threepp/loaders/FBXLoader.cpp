@@ -151,8 +151,7 @@ namespace threepp {
         // Returns true when the filename suggests a PBR ORM-packed texture
         // (R=AO, G=Roughness, B=Metalness).  This heuristic covers Unreal Engine
         // exports (e.g. "_Specular") and common explicit ORM naming.
-        // Without this guard, traditional Phong specular maps would be
-        // misinterpreted as roughness/metalness data.
+        // Used only in MaterialMode::Auto; Phong/PBR override it via the loader flag.
         bool looksLikeORM(const std::filesystem::path& p) {
             const auto stem = p.stem().string();
             // Case-insensitive search for known ORM suffixes/substrings.
@@ -212,28 +211,64 @@ namespace threepp {
         template<typename M>
         void applyCommon(M& m, const ofbx::Material* mat,
                          const std::filesystem::path& baseDir,
-                         TextureLoader& texLoader) {
+                         TextureLoader& texLoader,
+                         float emissiveScale) {
             if (auto tex = loadTex(mat->getTexture(ofbx::Texture::NORMAL), baseDir, texLoader, ColorSpace::Linear)) {
                 m.normalMap   = tex;
                 m.normalScale = {1.0f, -1.0f};  // DirectX → OpenGL Y-flip
             }
-            if (auto tex = loadTex(mat->getTexture(ofbx::Texture::EMISSIVE), baseDir, texLoader)) {
-                m.emissiveMap = tex;
-                m.emissive.setHex(0xffffff);
+
+            // Emissive. OpenFBX returns its struct default of white (1,1,1) /
+            // factor 1 when the FBX omits these properties — it can't report
+            // "absent" — so reading them unconditionally would make every
+            // non-emissive material glow. Treat a material as emissive only when
+            // it has an emissive texture or an explicit, non-default emissive
+            // colour. (A genuine white emitter with no texture is therefore
+            // skipped, which is rare; real assets either tint it or use a map.)
+            const auto ec = mat->getEmissiveColor();
+            const auto emissiveTex = loadTex(mat->getTexture(ofbx::Texture::EMISSIVE), baseDir, texLoader);
+            const bool ecBlack = ec.r <= 0.f && ec.g <= 0.f && ec.b <= 0.f;
+            const bool ecDefaultWhite = ec.r == 1.f && ec.g == 1.f && ec.b == 1.f;
+            if (emissiveTex || (!ecBlack && !ecDefaultWhite)) {
+                if (emissiveTex) {
+                    m.emissiveMap = emissiveTex;
+                    // A map modulates against the emissive colour; fall back to
+                    // white when the colour was left unset so the map stays visible.
+                    if (ecBlack) m.emissive.setHex(0xffffff);
+                    else         m.emissive.setRGB(ec.r, ec.g, ec.b);
+                } else {
+                    m.emissive.setRGB(ec.r, ec.g, ec.b);
+                }
+                m.emissiveIntensity = static_cast<float>(mat->getEmissiveFactor()) * emissiveScale;
             }
         }
 
         std::shared_ptr<Material> buildMaterial(
                 const ofbx::Material* mat,
                 const std::filesystem::path& baseDir,
-                TextureLoader& texLoader) {
+                TextureLoader& texLoader,
+                FBXLoader::MaterialMode materialMode,
+                float emissiveScale) {
             if (!mat) return MeshStandardMaterial::create();
 
-            // Detect PBR workflow: SPECULAR slot contains an ORM-packed texture.
+            // Decide whether the SPECULAR slot is an ORM-packed PBR texture or a
+            // traditional specular map. The loader flag overrides the filename guess.
             const ofbx::Texture* specSlot = mat->getTexture(ofbx::Texture::SPECULAR);
             const auto specPath = resolveTexturePath(specSlot, baseDir);
-            const bool isPBR = !specPath.empty() && isSupportedImageFormat(specPath)
-                               && looksLikeORM(specPath);
+            const bool hasSpecTex = !specPath.empty() && isSupportedImageFormat(specPath);
+            bool isPBR;
+            switch (materialMode) {
+                case FBXLoader::MaterialMode::Phong:
+                    isPBR = false;
+                    break;
+                case FBXLoader::MaterialMode::PBR:
+                    isPBR = hasSpecTex;
+                    break;
+                case FBXLoader::MaterialMode::Auto:
+                default:
+                    isPBR = hasSpecTex && looksLikeORM(specPath);
+                    break;
+            }
 
             const auto dc = mat->getDiffuseColor();
             const float opacity = static_cast<float>(mat->getOpacity());
@@ -258,7 +293,7 @@ namespace threepp {
                     m->metalnessMap = tex;
                     m->roughness    = 1.0f;  // texture drives; keep metalness default 0
                 }
-                applyCommon(*m, mat, baseDir, texLoader);
+                applyCommon(*m, mat, baseDir, texLoader, emissiveScale);
                 if (isGlass) {
                     m->transmission = opacity < 0.99f ? std::max(0.01f, 1.0f - opacity) : 1.0f;
                     m->setIor(1.5f);
@@ -276,7 +311,7 @@ namespace threepp {
                 m->transmission = opacity < 0.99f ? std::max(0.01f, 1.0f - opacity) : 1.0f;
                 m->setIor(1.5f);
                 m->side = Side::Double;
-                applyCommon(*m, mat, baseDir, texLoader);
+                applyCommon(*m, mat, baseDir, texLoader, emissiveScale);
                 return m;
             } else {
                 // ---- Phong / MeshPhongMaterial ----------------------------------
@@ -293,7 +328,7 @@ namespace threepp {
                 if (shin > 0.0) m->shininess = static_cast<float>(shin);
                 if (auto tex = loadTex(specSlot, baseDir, texLoader, ColorSpace::Linear))
                     m->specularMap = tex;
-                applyCommon(*m, mat, baseDir, texLoader);
+                applyCommon(*m, mat, baseDir, texLoader, emissiveScale);
                 if (opacity < 0.99f) {
                     m->opacity     = std::max(0.01f, opacity);
                     m->transparent = true;
@@ -365,7 +400,7 @@ namespace threepp {
                 auto geometry = buildPartitionGeometry(geomData, part);
                 const ofbx::Material* mat = fbxMesh->getMaterialCount() > 0
                         ? fbxMesh->getMaterial(0) : nullptr;
-                auto material = buildMaterial(mat, baseDir, pimpl_->texLoader);
+                auto material = buildMaterial(mat, baseDir, pimpl_->texLoader, materialMode, emissiveScale);
 
                 auto mesh = Mesh::create(geometry, material);
                 mesh->name = fbxMesh->name;
@@ -383,7 +418,7 @@ namespace threepp {
                     auto geometry = buildPartitionGeometry(geomData, part);
                     const ofbx::Material* mat = pi < fbxMesh->getMaterialCount()
                             ? fbxMesh->getMaterial(pi) : nullptr;
-                    auto material = buildMaterial(mat, baseDir, pimpl_->texLoader);
+                    auto material = buildMaterial(mat, baseDir, pimpl_->texLoader, materialMode, emissiveScale);
                     meshGroup->add(Mesh::create(geometry, material));
                 }
                 root->add(meshGroup);

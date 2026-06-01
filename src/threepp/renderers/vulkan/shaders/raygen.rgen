@@ -514,11 +514,28 @@ vec3 acesFilmic(vec3 c) {
     const vec3 b = c * (0.983729 * c + 0.4329510) + 0.238081;
     return clamp(outMat * (a / b), 0.0, 1.0);
 }
+// Khronos PBR Neutral (three.js NeutralToneMapping): compresses luminance while
+// preserving a bright colour's hue — no ACES path-to-white. Input pre-exposed.
+vec3 neutral(vec3 color) {
+    const float startCompression = 0.8 - 0.04;
+    const float desaturation = 0.15;
+    float x = min(color.r, min(color.g, color.b));
+    float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+    color -= offset;
+    float peak = max(color.r, max(color.g, color.b));
+    if (peak < startCompression) return color;
+    float d = 1.0 - startCompression;
+    float newPeak = 1.0 - d * d / (peak + d - startCompression);
+    color *= newPeak / peak;
+    float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
+    return mix(color, vec3(newPeak), g);
+}
 vec3 toneMap(vec3 c, uint mode, float exposure) {
     if (mode == 1u) return c * exposure;                  // Linear
     if (mode == 2u) return reinhard(c * exposure);        // Reinhard
     if (mode == 3u) return cineon(c * exposure);          // OptimizedCineon
     if (mode == 4u) return acesFilmic(c * (exposure / 0.6));// ACESFilmic
+    if (mode == 6u) return neutral(c * exposure);         // Khronos PBR Neutral
     return c;// None / Custom — pass-through
 }
 
