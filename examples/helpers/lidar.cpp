@@ -4,6 +4,7 @@
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/helpers/LidarSensor.hpp"
 #include "threepp/objects/Points.hpp"
+#include "threepp/renderers/RendererFactory.hpp"
 #include "threepp/threepp.hpp"
 
 #include <cmath>
@@ -73,7 +74,9 @@ namespace {
 int main() {
 
     Canvas canvas("Lidar", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas);
+    // Works with any backend (OpenGL / WebGPU) — the sensor handles all
+    // backend differences internally, so no extra setup is needed here.
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     scene->background = Color(0x111122);
@@ -118,7 +121,7 @@ int main() {
     };
 
     bool senorDataOnly = false;
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({});
         ImGui::SetNextWindowSize({});
         ImGui::Begin("Settings");
@@ -149,7 +152,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -165,7 +168,7 @@ int main() {
         // Scan the scene and update the visualised point cloud
         points->visible = false;
         colors.clear();
-        lidar->scan(renderer, *scene, cloud);
+        lidar->scan(*renderer, *scene, cloud);
         points->visible = true;
 
         updatePointCloud(*points, cloud, lidar->far());
@@ -176,7 +179,7 @@ int main() {
             camera->layers.enableAll();
         }
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
         ui.render();
     });
 }

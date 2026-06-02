@@ -6,7 +6,7 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/GLRenderTarget.hpp"
-#include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/Renderer.hpp"
 #include "threepp/textures/DepthTexture.hpp"
 
 #include <algorithm>
@@ -79,6 +79,26 @@ namespace {
         u = num_u * inv;
         v = num_v * inv;
     }
+
+    // Sensors render *data* (linearized + packed depth) into render targets and
+    // read it back. Color management (sRGB encode / tone mapping) would corrupt
+    // those bytes — silently on WebGPU, which applies the output encode to render
+    // targets. Force a linear, un-tonemapped pass for the scan and restore the
+    // renderer's settings afterwards, so callers need no backend-specific setup.
+    struct DataPassGuard {
+        Renderer& r;
+        ColorSpace cs;
+        ToneMapping tm;
+        explicit DataPassGuard(Renderer& renderer)
+            : r(renderer), cs(renderer.outputColorSpace), tm(renderer.toneMapping) {
+            r.outputColorSpace = LinearSRGBColorSpace;
+            r.toneMapping = ToneMapping::None;
+        }
+        ~DataPassGuard() {
+            r.outputColorSpace = cs;
+            r.toneMapping = tm;
+        }
+    };
 
 }// namespace
 
@@ -225,8 +245,9 @@ LidarSensor::LidarSensor(const LidarModel& model, unsigned int faceSize, float n
 // Scan
 // ---------------------------------------------------------------------------
 
-void LidarSensor::scan(GLRenderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud) {
+void LidarSensor::scan(Renderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud) {
     cloud.clear();
+    DataPassGuard guard(renderer);
     renderFaces(renderer, scene);
 
     if (beams_.empty())
@@ -235,7 +256,7 @@ void LidarSensor::scan(GLRenderer& renderer, Scene& scene, std::vector<LidarRetu
         unprojectBeams(cloud);
 }
 
-void LidarSensor::renderFaces(GLRenderer& renderer, Scene& scene) {
+void LidarSensor::renderFaces(Renderer& renderer, Scene& scene) {
     if (!parent) updateMatrixWorld();
 
     for (int f = 0; f < kNumFaces; ++f) {
