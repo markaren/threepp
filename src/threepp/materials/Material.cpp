@@ -278,6 +278,7 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
         } else if (key == "blendDstAlpha") {
 
             blendDstAlpha = std::get<BlendFactor>(value);
+            used = true;
 
         } else if (key == "blendEquationAlpha") {
 
