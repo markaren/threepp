@@ -234,7 +234,7 @@ bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue&
         flatShading = std::get<bool>(value);
         return true;
 
-    } else if (key == "refractionRatio") {
+    } else if (key == "vertexTangents") {
 
         vertexTangents = std::get<bool>(value);
         return true;
