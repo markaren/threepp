@@ -1112,6 +1112,12 @@ namespace threepp {
         // GL->Vulkan clip-z remap is baked into the MVP (overlay.vert only flips Y).
         VkPipeline       orthoLineListPipeline_   = VK_NULL_HANDLE;
         VkPipeline       orthoLineStripPipeline_  = VK_NULL_HANDLE;
+        // Filled triangle counterparts so MeshBasicMaterial geometry (e.g. SVG
+        // ShapeGeometry HUD art) draws under an OrthographicCamera too. Same
+        // overlay.vert/frag + push-constant layout as the line pipelines; only
+        // topology (TRIANGLE_LIST) and the transparent variant's blend differ.
+        VkPipeline       orthoMeshPipeline_            = VK_NULL_HANDLE;
+        VkPipeline       orthoMeshTransparentPipeline_ = VK_NULL_HANDLE;
         VkPipelineLayout orthoLinePipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline            overlaySpritePipeline_ = VK_NULL_HANDLE;
         // Per-frame-in-flight descriptor pool for sprite combined-image-
@@ -1717,6 +1723,8 @@ namespace threepp {
             if (spritePipelineLayout_)      vkDestroyPipelineLayout(d, spritePipelineLayout_, nullptr);
             if (orthoLineListPipeline_)     vkDestroyPipeline(d, orthoLineListPipeline_, nullptr);
             if (orthoLineStripPipeline_)    vkDestroyPipeline(d, orthoLineStripPipeline_, nullptr);
+            if (orthoMeshPipeline_)            vkDestroyPipeline(d, orthoMeshPipeline_, nullptr);
+            if (orthoMeshTransparentPipeline_) vkDestroyPipeline(d, orthoMeshTransparentPipeline_, nullptr);
             if (orthoLinePipelineLayout_)   vkDestroyPipelineLayout(d, orthoLinePipelineLayout_, nullptr);
             if (spriteDescSetLayout_)       vkDestroyDescriptorSetLayout(d, spriteDescSetLayout_, nullptr);
             for (auto& pool : spriteDescPools_) {
@@ -7788,6 +7796,35 @@ namespace threepp {
                                             &orthoLineStripPipeline_),
                   "vkCreateGraphicsPipelines(orthoLineStrip)");
 
+            // Filled-triangle variants for MeshBasicMaterial HUD geometry.
+            // Identical state to the line pipelines (position-only input,
+            // depth off, CULL_NONE, same layout) but TRIANGLE_LIST topology;
+            // the transparent variant adds standard src-alpha blending.
+            VkPipelineInputAssemblyStateCreateInfo iaTri = iaList;
+            iaTri.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+            VkGraphicsPipelineCreateInfo gpciMesh = gpci;
+            gpciMesh.pInputAssemblyState = &iaTri;
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciMesh, nullptr,
+                                            &orthoMeshPipeline_),
+                  "vkCreateGraphicsPipelines(orthoMesh)");
+
+            VkPipelineColorBlendAttachmentState cbasT = cbas;
+            cbasT.blendEnable         = VK_TRUE;
+            cbasT.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            cbasT.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbasT.colorBlendOp        = VK_BLEND_OP_ADD;
+            cbasT.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbasT.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbasT.alphaBlendOp        = VK_BLEND_OP_ADD;
+            VkPipelineColorBlendStateCreateInfo cbT = cb;
+            cbT.pAttachments = &cbasT;
+            VkGraphicsPipelineCreateInfo gpciMeshT = gpciMesh;
+            gpciMeshT.pColorBlendState = &cbT;
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciMeshT, nullptr,
+                                            &orthoMeshTransparentPipeline_),
+                  "vkCreateGraphicsPipelines(orthoMeshTransparent)");
+
             vkDestroyShaderModule(ctx->device(), vertModule, nullptr);
             vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
         }
@@ -8487,13 +8524,17 @@ namespace threepp {
                 return nullptr;
             }
 
-            // Sprite/text atlases are display-space data — default to sRGB
-            // (font rasterizer outputs glyph alpha + tint values in the
-            // same encoding the swapchain expects) unless the user has
-            // explicitly tagged the texture as Linear.
-            const VkFormat fmt = (tex->colorSpace == ColorSpace::Linear)
-                                         ? VK_FORMAT_R8G8B8A8_UNORM
-                                         : VK_FORMAT_R8G8B8A8_SRGB;
+            // Match GL/WGPU's colorSpace→format rule (`isSrgb = colorSpace
+            // == sRGB`): ONLY an explicitly sRGB-tagged texture gets hardware
+            // sRGB decode on sample. Linear AND NoColorSpace are sampled raw.
+            // The TextSprite glyph atlas is NoColorSpace but Font::rasterize
+            // bakes LINEAR bytes (color.r*255) into it — so it must be sampled
+            // raw (UNORM), and overlay_sprite.frag applies the linear→sRGB
+            // output encode for the UNORM swapchain. (Was: NoColorSpace fell
+            // to SRGB here → double sRGB decode → dark non-white text.)
+            const VkFormat fmt = (tex->colorSpace == ColorSpace::sRGB)
+                                         ? VK_FORMAT_R8G8B8A8_SRGB
+                                         : VK_FORMAT_R8G8B8A8_UNORM;
             char spriteName[64];
             std::snprintf(spriteName, sizeof(spriteName),
                           "spriteAtlas[%p]", static_cast<const void*>(tex));
@@ -8635,7 +8676,37 @@ namespace threepp {
                 });
             }
 
-            if (draws.empty() && lineDraws.empty()) return;
+            // Collect filled Mesh overlays (flat MeshBasicMaterial-style fills,
+            // e.g. SVG ShapeGeometry HUD art). Same gating as lines: only the
+            // explicit ortho/HUD render, never the PT screen-space auto-pass
+            // (which would wrongly flatten the path-traced 3D scene's meshes).
+            struct OrthoMeshDraw {
+                Mesh*   mesh = nullptr;
+                Matrix4 world;
+                Color   color{1.f, 1.f, 1.f};
+                float   opacity = 1.f;
+                bool    transparent = false;
+            };
+            std::vector<OrthoMeshDraw> meshDraws;
+            if (!screenSpaceOnly) {
+                scene.traverseVisible([&](Object3D& o) {
+                    auto* m = dynamic_cast<Mesh*>(&o);
+                    if (!m) return;// Sprites/Lines aren't Meshes — handled above
+                    auto g = m->geometry();
+                    if (!g || !g->hasAttribute("position")) return;
+                    auto mat = m->material();
+                    if (!mat) return;
+                    OrthoMeshDraw md;
+                    md.mesh = m;
+                    std::memcpy(md.world.elements.data(), m->matrixWorld->elements.data(), 64);
+                    if (auto* mc = dynamic_cast<MaterialWithColor*>(mat.get())) md.color = mc->color;
+                    md.opacity     = mat->opacity;
+                    md.transparent = mat->transparent;
+                    meshDraws.push_back(md);
+                });
+            }
+
+            if (draws.empty() && lineDraws.empty() && meshDraws.empty()) return;
             if (draws.size() > kMaxSpritesPerFrame) {
                 std::cerr << "[VulkanRenderer] HUD sprite count " << draws.size()
                           << " exceeds kMaxSpritesPerFrame=" << kMaxSpritesPerFrame
@@ -8700,6 +8771,62 @@ namespace threepp {
             vkCmdSetViewport(cb, 0, 1, &vp);
             VkRect2D sc{{0,0}, ext};
             vkCmdSetScissor(cb, 0, 1, &sc);
+
+            // ── Filled Mesh overlays ────────────────────────────────────────
+            // Drawn FIRST so Sprites/TextSprites composite on top of the vector
+            // art (panels behind labels). Uses the same flat-color overlay
+            // shader + ortho MVP (with GL→Vulkan clip-z remap) as the lines.
+            if (!meshDraws.empty()) {
+                if (orthoMeshPipeline_ == VK_NULL_HANDLE) createOrthoLinePipelines();
+                Matrix4 zfix;
+                zfix.set(1.f, 0.f, 0.f, 0.f,
+                         0.f, 1.f, 0.f, 0.f,
+                         0.f, 0.f, 0.5f, 0.5f,
+                         0.f, 0.f, 0.f, 1.f);
+                Matrix4 vpMat;
+                vpMat.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+                Matrix4 cvp;
+                cvp.multiplyMatrices(zfix, vpMat);
+
+                struct MeshPC {
+                    float mvp[16];
+                    float color[4];
+                };
+                VkPipeline curMesh = VK_NULL_HANDLE;
+                for (const auto& md : meshDraws) {
+                    const LineRec* rec = ensureLineGeometryUploaded(md.mesh->geometry().get());
+                    if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
+
+                    VkPipeline want = md.transparent ? orthoMeshTransparentPipeline_ : orthoMeshPipeline_;
+                    if (want != curMesh) {
+                        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                        curMesh = want;
+                    }
+
+                    Matrix4 mvp;
+                    mvp.multiplyMatrices(cvp, md.world);
+                    MeshPC pc{};
+                    std::memcpy(pc.mvp, mvp.elements.data(), 64);
+                    pc.color[0] = md.color.r;
+                    pc.color[1] = md.color.g;
+                    pc.color[2] = md.color.b;
+                    pc.color[3] = md.opacity;
+                    vkCmdPushConstants(cb, orthoLinePipelineLayout_,
+                                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                       0, sizeof(pc), &pc);
+
+                    VkBuffer     vb[1] = {rec->vertex.handle};
+                    VkDeviceSize vo[1] = {0};
+                    vkCmdBindVertexBuffers(cb, 0, 1, vb, vo);
+                    if (rec->index.handle != VK_NULL_HANDLE) {
+                        vkCmdBindIndexBuffer(cb, rec->index.handle, 0, VK_INDEX_TYPE_UINT32);
+                        vkCmdDrawIndexed(cb, rec->indexCount, 1, 0, 0, 0);
+                    } else {
+                        vkCmdDraw(cb, rec->vertexCount, 1, 0, 0);
+                    }
+                }
+            }
+
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, overlaySpritePipeline_);
 
             // Per-frame projection (ortho) extracted from the camera. matrixWorldInverse
