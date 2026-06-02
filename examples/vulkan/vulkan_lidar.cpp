@@ -34,20 +34,14 @@ namespace {
 
     void setupScene(Scene& scene) {
         // Ground — slightly off-white concrete.
-        auto groundMat = MeshStandardMaterial::create({
-                {"color", Color(0xb0b0b0)},
-                {"roughness", 0.95f},
-        });
+        auto groundMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0xb0b0b0)).roughness(0.95f));
         auto ground = Mesh::create(BoxGeometry::create(60.f, 0.2f, 60.f), groundMat);
         ground->position.y = -0.1f;
         scene.add(ground);
 
         // Matte concrete pillars — bright LIDAR returns. Arranged in a
         // ring so a yaw sweep produces a clear angular signature.
-        auto pillarMat = MeshStandardMaterial::create({
-                {"color", Color(0xdedede)},
-                {"roughness", 0.9f},
-        });
+        auto pillarMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0xdedede)).roughness(0.9f));
         for (int i = 0; i < 8; ++i) {
             auto cyl = Mesh::create(CylinderGeometry::create(0.4f, 0.4f, 3.f), pillarMat);
             const float a = static_cast<float>(i) * math::TWO_PI / 8.f;
@@ -59,11 +53,7 @@ namespace {
         // (1 - metalness · √(1-roughness)) kills the diffuse term, so the
         // sensor sees almost nothing here unless a beam strikes near-
         // perpendicular. Visible as "holes" in the point cloud.
-        auto chromeMat = MeshStandardMaterial::create({
-                {"color", Color(0xeeeeee)},
-                {"roughness", 0.05f},
-                {"metalness", 1.0f},
-        });
+        auto chromeMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0xeeeeee)).roughness(0.05f).metalness(1.0f));
         for (int i = 0; i < 4; ++i) {
             auto sph = Mesh::create(SphereGeometry::create(0.6f, 48, 32), chromeMat);
             const float a = static_cast<float>(i) * math::TWO_PI / 4.f + 0.3f;
@@ -72,11 +62,7 @@ namespace {
         }
 
         // Brushed-metal boxes — rough metal, mid-strength returns.
-        auto brushedMat = MeshStandardMaterial::create({
-                {"color", Color(0xa9a9a9)},
-                {"roughness", 0.55f},
-                {"metalness", 0.8f},
-        });
+        auto brushedMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0xa9a9a9)).roughness(0.55f).metalness(0.8f));
         for (int i = 0; i < 5; ++i) {
             auto box = Mesh::create(BoxGeometry::create(0.9f, 1.6f, 0.4f), brushedMat);
             const float a = static_cast<float>(i) * math::TWO_PI / 5.f + 0.7f;
@@ -88,17 +74,14 @@ namespace {
         // Coloured target rods — verify intensity tracks albedo luminance.
         std::array<Color, 4> rodColors{Color(0xff5050), Color(0x60ff60), Color(0x6080ff), Color(0xffffff)};
         for (size_t i = 0; i < rodColors.size(); ++i) {
-            auto mat = MeshStandardMaterial::create({{"color", rodColors[i]}, {"roughness", 0.9f}});
+            auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(rodColors[i]).roughness(0.9f));
             auto rod = Mesh::create(CylinderGeometry::create(0.12f, 0.12f, 2.5f), mat);
             rod->position.set(-12.f + 2.f * static_cast<float>(i), 1.25f, 6.f);
             scene.add(rod);
         }
 
         // Back wall — long range reference.
-        auto wallMat = MeshStandardMaterial::create({
-                {"color", Color(0xc0c0c0)},
-                {"roughness", 0.95f},
-        });
+        auto wallMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0xc0c0c0)).roughness(0.95f));
         auto wall = Mesh::create(BoxGeometry::create(60.f, 5.f, 0.4f), wallMat);
         wall->position.set(0.f, 2.5f, -18.f);
         scene.add(wall);
@@ -202,10 +185,7 @@ int main() {
     cloudGeom->getAttribute<float>("color")->setUsage(DrawUsage::Dynamic);
     cloudGeom->setDrawRange(0, 0);
 
-    auto cloudMat = PointsMaterial::create({
-            {"size", 4.f},
-            {"vertexColors", true},
-    });
+    auto cloudMat = PointsMaterial::create(PointsMaterial::Params{}.size(4.f).vertexColors(true));
 
     auto cloud = Points::create(cloudGeom, cloudMat);
     cloud->frustumCulled = false;

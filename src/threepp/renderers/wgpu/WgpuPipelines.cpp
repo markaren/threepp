@@ -6,6 +6,9 @@
 
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/renderers/wgpu/WgpuTexture.hpp"
+#include "threepp/textures/DepthTexture.hpp"
+
+#include <set>
 
 #include <algorithm>
 #include <iostream>
@@ -690,13 +693,17 @@ namespace threepp::wgpu {
             // GPU texture bindings (texture + sampler pairs, sorted by name for determinism)
             // Collect from both customTextures and Texture* uniforms
             std::vector<std::string> texNames;
+            std::set<std::string> depthTexNames; // DepthTexture uniforms -> unfilterable
             for (auto& [name, ptr] : sm->customTextures) {
                 texNames.push_back(name);
             }
             for (auto& [name, uniform] : sm->uniforms) {
                 if (!uniform.hasValue()) continue;
                 auto& val = const_cast<Uniform&>(uniform).value();
-                if (std::get_if<Texture*>(&val)) texNames.push_back(name);
+                if (auto* tp = std::get_if<Texture*>(&val)) {
+                    texNames.push_back(name);
+                    if (*tp && dynamic_cast<DepthTexture*>(*tp)) depthTexNames.insert(name);
+                }
             }
             std::sort(texNames.begin(), texNames.end());
             texNames.erase(std::unique(texNames.begin(), texNames.end()), texNames.end());
@@ -714,9 +721,12 @@ namespace threepp::wgpu {
                         fmt == WgpuTexture::Format::RGBA16Float ||
                         fmt == WgpuTexture::Format::RGBA8Unorm;
                 }
-                // Textures from uniforms always use filtering; customTextures use filtering
-                // only when the format natively supports it (RGBA16Float, RGBA8Unorm, cube).
-                bool useFiltering = isFilterable || !fromCustomTextures;
+                // A DepthTexture uniform is bound to the RT's R32Float depth-resolve
+                // texture, which is unfilterable-float and must use a non-filtering sampler.
+                const bool isDepth = depthTexNames.count(name) > 0;
+                // Textures from uniforms use filtering (unless they're a DepthTexture);
+                // customTextures use filtering only when the format natively supports it.
+                bool useFiltering = !isDepth && (isFilterable || !fromCustomTextures);
                 {
                     WGPUBindGroupLayoutEntry e{};
                     e.binding = nextBinding++;

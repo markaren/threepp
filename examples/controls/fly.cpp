@@ -11,12 +11,13 @@ namespace {
         const auto specular = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_atmos_2048.jpg", ColorSpace::sRGB);
         const auto normal = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_normal_2048.jpg", ColorSpace::NoColorSpace);
         const auto materialNormalMap = MeshPhongMaterial::create(
-                {{"specular", 0x333333},
-                 {"shininess", 10.f},
-                 {"map", map},
-                 {"specularMap", specular},
-                 {"normalMap", normal},
-                 {"normalScale", Vector2(0.85f, -0.85f)}});
+                MeshPhongMaterial::Params{}
+                        .specular(0x333333)
+                        .shininess(10.f)
+                        .map(map)
+                        .specularMap(specular)
+                        .normalMap(normal)
+                        .normalScale(Vector2(0.85f, -0.85f)));
 
         auto geometry = SphereGeometry::create(radius, 100, 50);
 
@@ -30,9 +31,7 @@ namespace {
     auto createMoon(float radius, float moonScale) {
         TextureLoader loader;
         const auto tex = loader.load(std::string(DATA_FOLDER) + "/textures/planets/moon_1024.jpg", ColorSpace::sRGB);
-        const auto materialMoon = MeshPhongMaterial::create({
-                {"map", tex},
-        });
+        const auto materialMoon = MeshPhongMaterial::create(MeshPhongMaterial::Params{}.map(tex));
 
         auto geometry = SphereGeometry::create(radius, 100, 50);
 
@@ -48,8 +47,9 @@ namespace {
         TextureLoader loader;
         const auto tex = loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_clouds_1024.png", ColorSpace::sRGB);
         const auto materialMoon = MeshLambertMaterial::create(
-                {{"map", tex},
-                 {"transparent", true}});
+                MeshLambertMaterial::Params{}
+                        .map(tex)
+                        .transparent(true));
 
         auto geometry = SphereGeometry::create(radius, 100, 50);
 
@@ -97,12 +97,12 @@ namespace {
         starsGeometry[1]->setAttribute("position", FloatBufferAttribute::create(vertices2, 3));
 
         std::vector<std::shared_ptr<PointsMaterial>> starsMaterials{
-                PointsMaterial::create({{"color", 0x9c9c9c}, {"size", 2.f}, {"sizeAttenuation", false}}),
-                PointsMaterial::create({{"color", 0x9c9c9c}, {"size", 1.f}, {"sizeAttenuation", false}}),
-                PointsMaterial::create({{"color", 0x7c7c7c}, {"size", 2.f}, {"sizeAttenuation", false}}),
-                PointsMaterial::create({{"color", 0x838383}, {"size", 1.f}, {"sizeAttenuation", false}}),
-                PointsMaterial::create({{"color", 0x5a5a5a}, {"size", 2.f}, {"sizeAttenuation", false}}),
-                PointsMaterial::create({{"color", 0x5a5a5a}, {"size", 1.f}, {"sizeAttenuation", false}}),
+                PointsMaterial::create(PointsMaterial::Params{}.color(0x9c9c9c).size(2.f).sizeAttenuation(false)),
+                PointsMaterial::create(PointsMaterial::Params{}.color(0x9c9c9c).size(1.f).sizeAttenuation(false)),
+                PointsMaterial::create(PointsMaterial::Params{}.color(0x7c7c7c).size(2.f).sizeAttenuation(false)),
+                PointsMaterial::create(PointsMaterial::Params{}.color(0x838383).size(1.f).sizeAttenuation(false)),
+                PointsMaterial::create(PointsMaterial::Params{}.color(0x5a5a5a).size(2.f).sizeAttenuation(false)),
+                PointsMaterial::create(PointsMaterial::Params{}.color(0x5a5a5a).size(1.f).sizeAttenuation(false)),
         };
 
         for (unsigned i = 10; i < 30; i++) {

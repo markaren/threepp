@@ -120,12 +120,11 @@ int main() {
     Mesh* mesh = nullptr;
     model->traverseType<Mesh>([&](Mesh& _) {
         mesh = &_;
-        const auto mat = MeshPhongMaterial::create({{
-                {"map", tl.load(folder / "Map-COL.jpg", ColorSpace::sRGB)},
-                {"specularMap", tl.load(folder / "Map-SPEC.jpg", ColorSpace::NoColorSpace)},
-                {"normalMap", tl.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", ColorSpace::NoColorSpace)},
-                {"shininess", 25.f},
-        }});
+        const auto mat = MeshPhongMaterial::create(MeshPhongMaterial::Params{}
+                .map(tl.load(folder / "Map-COL.jpg", ColorSpace::sRGB))
+                .specularMap(tl.load(folder / "Map-SPEC.jpg", ColorSpace::NoColorSpace))
+                .normalMap(tl.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", ColorSpace::NoColorSpace))
+                .shininess(25.f));
         mesh->setMaterial(mat);
     });
     scene->add(model);

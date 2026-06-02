@@ -7,13 +7,13 @@ namespace {
 
     auto createWireframe(const BufferGeometry& geometry) {
         auto line = LineSegments::create(WireframeGeometry::create(geometry));
-        line->material()->as<LineBasicMaterial>()->color = Color::black;
+        line->materialAs<LineBasicMaterial>()->color = Color::black;
         return line;
     }
 
     auto createMesh() {
         const auto geometry = BoxGeometry::create();
-        const auto material = MeshBasicMaterial::create({{"side", Side::Double}});
+        const auto material = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.side(Side::Double));
         auto mesh = Mesh::create(geometry, material);
         mesh->add(createWireframe(*geometry));
         return mesh;

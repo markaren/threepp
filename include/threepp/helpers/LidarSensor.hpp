@@ -15,7 +15,7 @@
 namespace threepp {
 
     class ShaderMaterial;
-    class GLRenderer;
+    class Renderer;
 
     /**
      * Simulates a full 360-degree LiDAR sensor using six 90-degree perspective
@@ -63,8 +63,9 @@ namespace threepp {
          * data. Use `PathTracedLidarSensor` (Vulkan) for those.
          *
          * The renderer's active render target is restored to nullptr after the scan.
+         * Works with any backend (OpenGL or WebGPU).
          */
-        void scan(GLRenderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud);
+        void scan(Renderer& renderer, Scene& scene, std::vector<LidarReturn>& cloud);
 
         [[nodiscard]] unsigned int faceSize() const { return faceSize_; }
         [[nodiscard]] float near() const { return near_; }
@@ -100,7 +101,7 @@ namespace threepp {
         void init(float near, float far);
         void buildBeamTable(const LidarModel& model);
 
-        void renderFaces(GLRenderer& renderer, Scene& scene);
+        void renderFaces(Renderer& renderer, Scene& scene);
         void unprojectDense(std::vector<LidarReturn>& points) const;
         void unprojectBeams(std::vector<LidarReturn>& points) const;
     };

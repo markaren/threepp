@@ -23,8 +23,7 @@ int main() {
     // ground
 
     auto geometry = PlaneGeometry::create(500, 500);
-    auto material = MeshPhongMaterial::create({{"color", 0x999999},
-                                               {"depthWrite", false}});
+    auto material = MeshPhongMaterial::create(MeshPhongMaterial::Params{}.color(0x999999).depthWrite(false));
 
     auto ground = Mesh::create(geometry, material);
     ground->rotation.x = -math::PI / 2;
@@ -61,7 +60,7 @@ int main() {
     soldier->position.x = -2;
 
     auto skeletonHelperSoldier = SkeletonHelper::create(*soldier);
-    skeletonHelperSoldier->material()->as<LineBasicMaterial>()->linewidth = 2;
+    skeletonHelperSoldier->materialAs<LineBasicMaterial>()->linewidth = 2;
     scene.add(skeletonHelperSoldier);
 
     //
@@ -76,7 +75,7 @@ int main() {
     stormTrooper->position.x = 2;
 
     auto skeletonHelperTrooper = SkeletonHelper::create(*stormTrooper);
-    skeletonHelperTrooper->material()->as<LineBasicMaterial>()->linewidth = 2;
+    skeletonHelperTrooper->materialAs<LineBasicMaterial>()->linewidth = 2;
     scene.add(skeletonHelperTrooper);
 
     //

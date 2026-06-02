@@ -17,12 +17,7 @@ public:
 
     explicit TransformControlsPlane(State& state)
         : state(state), Mesh(PlaneGeometry::create(100000, 100000, 2, 2),
-                             MeshBasicMaterial::create({{"visible", false},
-                                                        {"wireframe", true},
-                                                        {"side", Side::Double},
-                                                        {"transparent", true},
-                                                        {"opacity", 0.1f},
-                                                        {"toneMapped", false}})) {}
+                             MeshBasicMaterial::create(MeshBasicMaterial::Params{}.visible(false).wireframe(true).side(Side::Double).transparent(true).opacity(0.1f).toneMapped(false))) {}
 
     void updateMatrixWorld(bool force) override {
 

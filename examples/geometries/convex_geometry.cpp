@@ -66,10 +66,10 @@ int main() {
         }
     }
 
-    auto points = Points::create(pointsGeometry, PointsMaterial::create({{"vertexColors", true}}));
+    auto points = Points::create(pointsGeometry, PointsMaterial::create(PointsMaterial::Params{}.vertexColors(true)));
     convex->add(points);
 
-    auto lineMaterial = LineBasicMaterial::create({{"color", Color::black}});
+    auto lineMaterial = LineBasicMaterial::create(LineBasicMaterial::Params{}.color(Color::black));
     auto edges = LineSegments::create(WireframeGeometry::create(*convexGeometry), lineMaterial);
     convex->add(edges);
 

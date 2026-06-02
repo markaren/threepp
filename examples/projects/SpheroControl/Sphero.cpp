@@ -124,7 +124,7 @@ Sphero::Sphero()
     camera_->position.set(0, 1, 0.5f);
     camera_->rotation.y = math::PI;
 
-    auto tofMaterial = MeshBasicMaterial::create({{"color", Color::green}});
+    auto tofMaterial = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::green));
 
     auto tof1Geometry = BufferGeometry::create();
     tof1Geometry->setAttribute("position", FloatBufferAttribute::create({0, 0, 0, 0, 0, 0}, 3));

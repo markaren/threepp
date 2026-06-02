@@ -56,22 +56,20 @@ namespace {
         p.pivot->position.copy(pivotPos);
         scene.add(p.pivot);
 
-        auto rodMat = MeshStandardMaterial::create({
-                {"color", Color(0x444444)},
-                {"roughness", 0.6f},
-                {"metalness", 0.3f},
-        });
+        auto rodMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0x444444))
+                .roughness(0.6f)
+                .metalness(0.3f));
         p.rod = Mesh::create(CylinderGeometry::create(0.025f, 0.025f, length, 16, 1), rodMat);
         // Cylinder is local +Y axis-aligned; centre it so its top sits at the
         // pivot and the bob attaches at the bottom.
         p.rod->position.set(0.f, -length * 0.5f, 0.f);
         p.pivot->add(p.rod);
 
-        auto bobMat = MeshStandardMaterial::create({
-                {"color", bobColor},
-                {"roughness", 0.35f},
-                {"metalness", 0.1f},
-        });
+        auto bobMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(bobColor)
+                .roughness(0.35f)
+                .metalness(0.1f));
         p.bob = Mesh::create(SphereGeometry::create(0.15f, 32, 24), bobMat);
         p.bob->position.set(0.f, -length, 0.f);
         p.pivot->add(p.bob);
@@ -86,8 +84,8 @@ namespace {
         constexpr float wallH = 4.f;
         constexpr float stripeW = wallW / stripeCount;
 
-        auto darkMat   = MeshStandardMaterial::create({{"color", Color(0x222222)}, {"roughness", 0.95f}});
-        auto lightMat  = MeshStandardMaterial::create({{"color", Color(0xdddddd)}, {"roughness", 0.95f}});
+        auto darkMat   = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0x222222)).roughness(0.95f));
+        auto lightMat  = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0xdddddd)).roughness(0.95f));
 
         for (int i = 0; i < stripeCount; ++i) {
             const float x = -wallW * 0.5f + (static_cast<float>(i) + 0.5f) * stripeW;
@@ -100,7 +98,7 @@ namespace {
         // Matte floor for context. Floor never moves, so it won't generate
         // events on its own — only when pendulum shadows sweep across it.
         auto floor = Mesh::create(BoxGeometry::create(8.f, 0.1f, 6.f),
-                                  MeshStandardMaterial::create({{"color", Color(0x888888)}, {"roughness", 0.95f}}));
+                                  MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0x888888)).roughness(0.95f)));
         floor->position.set(0.f, -0.05f, 0.f);
         scene.add(floor);
     }

@@ -475,6 +475,22 @@ struct WgpuRenderer::Impl {
     uint32_t retainedFBWidth = 0;
     uint32_t retainedFBHeight = 0;
 
+    // copyFramebufferToTexture vertical-flip resources. WebGPU render targets are
+    // top-origin, but threepp's loaded textures are bottom-origin (stb flips on load
+    // with flipY=true), so a straight CopyTextureToTexture of the top-origin
+    // framebuffer lands upside-down relative to every normal texture (GL gets this
+    // right because glReadPixels is bottom-origin). This blit re-reads the source
+    // region vertically flipped into a render-attachment temp, which is then copied
+    // into the destination texture.
+    WGPURenderPipeline fbFlipPipeline_ = nullptr;
+    WGPUPipelineLayout fbFlipPipelineLayout_ = nullptr;
+    WGPUBindGroupLayout fbFlipBGL_ = nullptr;
+    WGPUShaderModule fbFlipShader_ = nullptr;
+    WGPUBuffer fbFlipUniform_ = nullptr;// vec4<i32>: srcX, flipped srcY base, 0, 0
+    WGPUTexture fbFlipTemp_ = nullptr;
+    uint32_t fbFlipTempW_ = 0;
+    uint32_t fbFlipTempH_ = 0;
+
     // Scissored background clear pipeline (used when scissorTest_ is enabled and autoClear)
     WGPURenderPipeline clearPipeline_ = nullptr;
     WGPUPipelineLayout clearPipelineLayout_ = nullptr;
@@ -563,6 +579,102 @@ struct ClearColor { color: vec4<f32> }
         wgpuRenderPassEncoderSetPipeline(pass, clearPipeline_);
         wgpuRenderPassEncoderSetBindGroup(pass, 0, bg, 0, nullptr);
         wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+        wgpuBindGroupRelease(bg);
+    }
+
+    // ── Depth-resolve pipeline (user DepthTexture support) ───────────
+    // Copies a depth attachment (depth24plus) into an R32Float color texture so
+    // it can be sampled by user shaders. depth24plus only supports the "depth"
+    // texture sample type and can't be bound to a texture_2d<f32> uniform, so we
+    // read it here via textureLoad(texture_depth_2d) and write the raw [0,1] value.
+    WGPURenderPipeline depthResolvePipeline_ = nullptr;
+    WGPUPipelineLayout depthResolveLayout_ = nullptr;
+    WGPUBindGroupLayout depthResolveBGL_ = nullptr;
+    WGPUShaderModule depthResolveShader_ = nullptr;
+
+    void initDepthResolvePipeline() {
+        if (depthResolvePipeline_) return;
+
+        const char* wgsl = R"(
+@group(0) @binding(0) var depthTex: texture_depth_2d;
+@vertex fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+    var pos = array<vec2<f32>,3>(vec2<f32>(-1.,-1.),vec2<f32>(3.,-1.),vec2<f32>(-1.,3.));
+    return vec4<f32>(pos[vi], 0.0, 1.0);
+}
+@fragment fn fs_main(@builtin(position) fragCoord: vec4<f32>) -> @location(0) vec4<f32> {
+    let d = textureLoad(depthTex, vec2<i32>(fragCoord.xy), 0);
+    return vec4<f32>(d, d, d, 1.0);
+}
+)";
+        WGPUShaderSourceWGSL src{};
+        src.chain.sType = WGPUSType_ShaderSourceWGSL;
+        src.code = {.data = wgsl, .length = static_cast<size_t>(strlen(wgsl))};
+        WGPUShaderModuleDescriptor smd{};
+        smd.nextInChain = &src.chain;
+        depthResolveShader_ = wgpuDeviceCreateShaderModule(device, &smd);
+
+        WGPUBindGroupLayoutEntry bgle{};
+        bgle.binding = 0;
+        bgle.visibility = WGPUShaderStage_Fragment;
+        bgle.texture.sampleType = WGPUTextureSampleType_Depth;
+        bgle.texture.viewDimension = WGPUTextureViewDimension_2D;
+        WGPUBindGroupLayoutDescriptor bgld{};
+        bgld.entryCount = 1; bgld.entries = &bgle;
+        depthResolveBGL_ = wgpuDeviceCreateBindGroupLayout(device, &bgld);
+
+        WGPUPipelineLayoutDescriptor pld{};
+        pld.bindGroupLayoutCount = 1; pld.bindGroupLayouts = &depthResolveBGL_;
+        depthResolveLayout_ = wgpuDeviceCreatePipelineLayout(device, &pld);
+
+        WGPUColorTargetState ct{};
+        ct.format = WGPUTextureFormat_R32Float;
+        ct.writeMask = WGPUColorWriteMask_All;
+        auto fsEntry = WGPUStringView{"fs_main", sizeof("fs_main") - 1};
+        WGPUFragmentState fs{};
+        fs.module = depthResolveShader_; fs.entryPoint = fsEntry; fs.targetCount = 1; fs.targets = &ct;
+
+        WGPURenderPipelineDescriptor pd{};
+        pd.label = WGPUStringView{"depth_resolve_pipe", WGPU_STRLEN};
+        auto vsEntry = WGPUStringView{"vs_main", sizeof("vs_main") - 1};
+        pd.layout = depthResolveLayout_;
+        pd.vertex.module = depthResolveShader_; pd.vertex.entryPoint = vsEntry;
+        pd.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+        pd.multisample.count = 1; pd.multisample.mask = 0xFFFFFFFF;
+        pd.fragment = &fs;
+        depthResolvePipeline_ = wgpuDeviceCreateRenderPipeline(device, &pd);
+    }
+
+    // Encode a pass that copies srcDepthView into rt.depthResolveTexture.
+    void resolveDepthTexture(WGPUCommandEncoder encoder, WGPUTextureView srcDepthView,
+                             wgpu::RTEntry& rt) {
+        if (!srcDepthView || !rt.depthResolveView) return;
+        initDepthResolvePipeline();
+        if (!depthResolvePipeline_) return;
+
+        WGPUBindGroupEntry bge{};
+        bge.binding = 0; bge.textureView = srcDepthView;
+        WGPUBindGroupDescriptor bgd{};
+        bgd.layout = depthResolveBGL_; bgd.entryCount = 1; bgd.entries = &bge;
+        WGPUBindGroup bg = wgpuDeviceCreateBindGroup(device, &bgd);
+
+        WGPURenderPassColorAttachment ca{};
+        ca.view = rt.depthResolveView;
+        ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+        ca.loadOp = WGPULoadOp_Clear;
+        ca.storeOp = WGPUStoreOp_Store;
+        ca.clearValue = {1.0, 1.0, 1.0, 1.0};
+
+        WGPURenderPassDescriptor rpd{};
+        rpd.label = WGPUStringView{"depth_resolve_pass", WGPU_STRLEN};
+        rpd.colorAttachmentCount = 1;
+        rpd.colorAttachments = &ca;
+
+        WGPURenderPassEncoder rp = wgpuCommandEncoderBeginRenderPass(encoder, &rpd);
+        wgpuRenderPassEncoderSetPipeline(rp, depthResolvePipeline_);
+        wgpuRenderPassEncoderSetBindGroup(rp, 0, bg, 0, nullptr);
+        wgpuRenderPassEncoderDraw(rp, 3, 1, 0, 0);
+        wgpuRenderPassEncoderEnd(rp);
+        wgpuRenderPassEncoderRelease(rp);
         wgpuBindGroupRelease(bg);
     }
 
@@ -1745,6 +1857,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         }
 
         // Depth texture matches the color attachment's sample count (1 or sampleCount).
+        // TextureBinding lets the depth-resolve pass read it when a user RenderTarget
+        // routes its scene render through this tone-map intermediate (sampleCount is
+        // forced to 1 for such targets, so the depth stays sampleable).
         WGPUTextureDescriptor dtd{};
         dtd.label = WGPUStringView{"tonemap_depth", sizeof("tonemap_depth") - 1};
         dtd.size = {w, h, 1};
@@ -1752,7 +1867,8 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         dtd.sampleCount = sampleCount;
         dtd.dimension = WGPUTextureDimension_2D;
         dtd.format = WGPUTextureFormat_Depth24Plus;
-        dtd.usage = WGPUTextureUsage_RenderAttachment;
+        dtd.usage = WGPUTextureUsage_RenderAttachment
+                  | (sampleCount == 1 ? WGPUTextureUsage_TextureBinding : 0u);
         toneMap_.depthTexture = wgpuDeviceCreateTexture(device, &dtd);
         toneMap_.depthView = wgpuTextureCreateView(toneMap_.depthTexture, nullptr);
     }
@@ -2219,6 +2335,10 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         WGPUTextureView colorView = nullptr;
         WGPUTextureView depthView = nullptr;
         WGPUTextureView resolveView = nullptr;
+        // User DepthTexture: after the scene render, copy the depth attachment used
+        // here into the RT's R32Float resolve texture so a later pass can sample it.
+        bool needDepthResolve = false;
+        WGPUTextureView depthResolveSrcView = nullptr;
         bool useSurface = (currentRenderTarget_ == nullptr && surface != nullptr);
 
         if (currentRenderTarget_ == nullptr && surface == nullptr) {
@@ -2260,17 +2380,20 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             attachW = frame_.width;
             attachH = frame_.height;
         } else {
-            auto& rt = renderTargets->getOrCreate(currentRenderTarget_, sampleCount_);
+            // A user DepthTexture forces single-sample rendering (the depth
+            // attachment must be resolvable to a sampleable R32Float texture).
+            const uint32_t scForRT = currentRenderTarget_->depthTexture ? 1u : sampleCount_;
+            auto& rt = renderTargets->getOrCreate(currentRenderTarget_, scForRT);
             attachW = rt.width;
             attachH = rt.height;
             if (needsToneMapPass()) {
                 // Redirect scene through RGBA16Float intermediate so HDR values >1.0 are
                 // preserved. After the render pass, toneMapBlitToTexture() compresses to
                 // the BGRA8Unorm RT — same pattern as the surface path.
-                // When sampleCount_>1, attach the MSAA color/depth and resolve into the
+                // When sampleCount>1, attach the MSAA color/depth and resolve into the
                 // single-sample colorTexture so MSAA still applies on RT renders.
-                ensureToneMapRT(rt.width, rt.height, sampleCount_);
-                if (sampleCount_ > 1) {
+                ensureToneMapRT(rt.width, rt.height, scForRT);
+                if (scForRT > 1) {
                     colorView = toneMap_.msaaColorView;
                     resolveView = toneMap_.colorView;
                 } else {
@@ -2278,9 +2401,10 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 }
                 depthView = toneMap_.depthView;
                 activeColorFormat_ = WGPUTextureFormat_RGBA16Float;
+                effectiveSampleCount_ = scForRT;
             } else {
                 depthView = rt.depthView;
-                if (sampleCount_ > 1 && rt.msaaColorView) {
+                if (scForRT > 1 && rt.msaaColorView) {
                     colorView = rt.msaaColorView;
                     resolveView = rt.colorView;
                 } else {
@@ -2292,6 +2416,12 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 // sRGB encode path at line ~2347 is the one that writes correct
                 // bytes into them when outputColorSpace == sRGB.
                 activeColorFormat_ = surfaceFormatLinear;
+            }
+            // Capture the depth attachment that the scene was rendered into; the
+            // resolve pass (after the main pass) copies it into rt.depthResolveTexture.
+            if (currentRenderTarget_->depthTexture) {
+                needDepthResolve = true;
+                depthResolveSrcView = depthView;
             }
         }
 
@@ -2746,6 +2876,14 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         wgpuRenderPassEncoderEnd(pass);
         wgpuRenderPassEncoderRelease(pass);
 
+        // User DepthTexture: copy the depth attachment just rendered into the RT's
+        // sampleable R32Float resolve texture. Runs on the same encoder, so the
+        // later pass that samples it sees correct ordering via wgpu-native barriers.
+        if (needDepthResolve && currentRenderTarget_) {
+            auto& rtD = renderTargets->getOrCreate(currentRenderTarget_, 1);
+            resolveDepthTexture(encoder, depthResolveSrcView, rtD);
+        }
+
         // When rendering to a user RT through the RGBA16Float intermediate, blit
         // the HDR intermediate into the final BGRA8Unorm RT with tone mapping applied.
         // The encoder must be active (it is — submission is deferred to endFrame).
@@ -2848,6 +2986,24 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             }
         }
 #endif
+
+        // If this render produced a sampleable depth resolve, submit the encoder
+        // now. A later render() call samples rt.depthResolveTexture, and a
+        // render-pass write followed by a sampled read of the same texture within
+        // one encoder is not reliably synchronised on wgpu-native (observed:
+        // garbage/partial reads). Splitting it into its own submission guarantees
+        // ordering for the consumer — this is what makes DepthSensor/LidarSensor
+        // (and any RenderTarget+DepthTexture post pass) work without the caller
+        // needing a manual flush.
+        if (needDepthResolve && renderEncoder_) {
+            WGPUCommandBufferDescriptor cbd{};
+            cbd.label = WGPUStringView{"depth_resolve_submit", sizeof("depth_resolve_submit") - 1};
+            WGPUCommandBuffer cb = wgpuCommandEncoderFinish(renderEncoder_, &cbd);
+            wgpuQueueSubmit(queue, 1, &cb);
+            wgpuCommandBufferRelease(cb);
+            wgpuCommandEncoderRelease(renderEncoder_);
+            renderEncoder_ = nullptr;
+        }
 
         // Submission is deferred to endFrame() — all passes share renderEncoder_.
         if (useSurface) frame_.hasRendered = true;
@@ -2972,7 +3128,13 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             auto& val = const_cast<Uniform&>(uniform).value();
             if (auto* texPtr = std::get_if<Texture*>(&val)) {
                 if (!*texPtr) continue;
-                // Check render targets first (e.g. mirror texture)
+                // A user DepthTexture samples the RT's resolved R32Float depth.
+                auto* depthRt = renderTargets->findDepthByTextureId((*texPtr)->id);
+                if (depthRt && depthRt->depthResolveView) {
+                    unifiedTextures.push_back({name, {depthRt->depthResolveView, depthRt->depthResolveSampler}});
+                    continue;
+                }
+                // Check render targets next (e.g. mirror texture)
                 auto* rtEntry = renderTargets->findByTextureId((*texPtr)->id);
                 if (rtEntry) {
                     unifiedTextures.push_back({name, {rtEntry->colorView, rtEntry->colorSampler}});
@@ -3030,6 +3192,10 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                             Camera& camera, unsigned int groupOrder) {
         if (!object.visible) return;
 
+        // Respect camera/object layer masks (matches GLRenderer::projectObject):
+        // an object only contributes draws when its layers intersect the camera's.
+        // Children are still traversed so nested objects on visible layers render.
+        if (object.layers.test(camera.layers)) {
         if (object.is<Group>()) {
             groupOrder = object.renderOrder;
         } else if (auto lod = object.as<LOD>()) {
@@ -3082,6 +3248,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 }
             }
         }
+        }// end layer-visible gate
 
         for (auto& child : object.children) {
             collectRenderables(*child, projScreenMatrix, camera, groupOrder);
@@ -3610,6 +3777,13 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
         if (retainedFB) { wgpuTextureRelease(retainedFB); retainedFB = nullptr; }
 
+        if (fbFlipPipeline_)       { wgpuRenderPipelineRelease(fbFlipPipeline_);       fbFlipPipeline_ = nullptr; }
+        if (fbFlipPipelineLayout_) { wgpuPipelineLayoutRelease(fbFlipPipelineLayout_); fbFlipPipelineLayout_ = nullptr; }
+        if (fbFlipBGL_)            { wgpuBindGroupLayoutRelease(fbFlipBGL_);            fbFlipBGL_ = nullptr; }
+        if (fbFlipShader_)         { wgpuShaderModuleRelease(fbFlipShader_);            fbFlipShader_ = nullptr; }
+        if (fbFlipUniform_)        { wgpuBufferRelease(fbFlipUniform_);                fbFlipUniform_ = nullptr; }
+        if (fbFlipTemp_)           { wgpuTextureRelease(fbFlipTemp_);                  fbFlipTemp_ = nullptr; }
+
         for (auto& [id, entry] : instanceCache_) {
             if (entry.buffer) wgpuBufferRelease(entry.buffer);
         }
@@ -3646,6 +3820,11 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         if (clearPipelineLayout_) { wgpuPipelineLayoutRelease(clearPipelineLayout_); clearPipelineLayout_ = nullptr; }
         if (clearBGL_) { wgpuBindGroupLayoutRelease(clearBGL_); clearBGL_ = nullptr; }
         if (clearShader_) { wgpuShaderModuleRelease(clearShader_); clearShader_ = nullptr; }
+
+        if (depthResolvePipeline_) { wgpuRenderPipelineRelease(depthResolvePipeline_); depthResolvePipeline_ = nullptr; }
+        if (depthResolveLayout_) { wgpuPipelineLayoutRelease(depthResolveLayout_); depthResolveLayout_ = nullptr; }
+        if (depthResolveBGL_) { wgpuBindGroupLayoutRelease(depthResolveBGL_); depthResolveBGL_ = nullptr; }
+        if (depthResolveShader_) { wgpuShaderModuleRelease(depthResolveShader_); depthResolveShader_ = nullptr; }
 
         if (bindGroupCache) bindGroupCache->dispose();
         if (bufferPool) bufferPool->dispose();
@@ -4049,25 +4228,154 @@ void WgpuRenderer::copyFramebufferToTexture(const Vector2& position, Texture& te
     uint32_t copyH = (std::min)(texH, srcH > sy ? srcH - sy : 0u);
     if (copyW == 0 || copyH == 0) return;
 
-    // GPU copy from retained framebuffer to destination texture
+    // The source (retained framebuffer / render-target color) is top-origin, but
+    // threepp's loaded textures are bottom-origin (stb flips on load, flipY=true),
+    // so a straight copy would land the destination upside-down vs every normal
+    // texture. Re-read the region vertically flipped into a render-attachment temp,
+    // then copy that into the destination (which only has CopyDst usage, not
+    // RenderAttachment, so it can't be a blit target directly).
+
+    // Lazily build the flip-blit pipeline (textureLoad = exact texel copy, no filtering).
+    if (!pimpl_->fbFlipPipeline_) {
+        const char* wgsl = R"(
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var<uniform> p: vec4<i32>;
+struct V { @builtin(position) pos: vec4<f32> };
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> V {
+    var q = array<vec2<f32>,3>(vec2<f32>(-1.0,-1.0), vec2<f32>(3.0,-1.0), vec2<f32>(-1.0,3.0));
+    var o: V;
+    o.pos = vec4<f32>(q[vi], 0.0, 1.0);
+    return o;
+}
+@fragment fn fs(in: V) -> @location(0) vec4<f32> {
+    let d = vec2<i32>(in.pos.xy);
+    return textureLoad(src, vec2<i32>(p.x + d.x, p.y - d.y), 0);
+}
+)";
+        WGPUShaderSourceWGSL wsrc{};
+        wsrc.chain.sType = WGPUSType_ShaderSourceWGSL;
+        wsrc.code = WGPUStringView{wgsl, WGPU_STRLEN};
+        WGPUShaderModuleDescriptor smd{};
+        smd.nextInChain = &wsrc.chain;
+        pimpl_->fbFlipShader_ = wgpuDeviceCreateShaderModule(pimpl_->device, &smd);
+
+        WGPUBindGroupLayoutEntry bgle[2]{};
+        bgle[0].binding = 0;
+        bgle[0].visibility = WGPUShaderStage_Fragment;
+        bgle[0].texture.sampleType = WGPUTextureSampleType_Float;
+        bgle[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+        bgle[1].binding = 1;
+        bgle[1].visibility = WGPUShaderStage_Fragment;
+        bgle[1].buffer.type = WGPUBufferBindingType_Uniform;
+        bgle[1].buffer.minBindingSize = 16;
+        WGPUBindGroupLayoutDescriptor bgld{};
+        bgld.entryCount = 2;
+        bgld.entries = bgle;
+        pimpl_->fbFlipBGL_ = wgpuDeviceCreateBindGroupLayout(pimpl_->device, &bgld);
+
+        WGPUPipelineLayoutDescriptor pld{};
+        pld.bindGroupLayoutCount = 1;
+        pld.bindGroupLayouts = &pimpl_->fbFlipBGL_;
+        pimpl_->fbFlipPipelineLayout_ = wgpuDeviceCreatePipelineLayout(pimpl_->device, &pld);
+
+        WGPUVertexState vs{};
+        vs.module = pimpl_->fbFlipShader_;
+        vs.entryPoint = WGPUStringView{"vs", 2};
+        WGPUColorTargetState ct{};
+        ct.format = WGPUTextureFormat_RGBA8Unorm;
+        ct.writeMask = WGPUColorWriteMask_All;
+        WGPUFragmentState fs{};
+        fs.module = pimpl_->fbFlipShader_;
+        fs.entryPoint = WGPUStringView{"fs", 2};
+        fs.targetCount = 1;
+        fs.targets = &ct;
+        WGPURenderPipelineDescriptor rpd{};
+        rpd.label = WGPUStringView{"fb_flip_pipe", sizeof("fb_flip_pipe") - 1};
+        rpd.layout = pimpl_->fbFlipPipelineLayout_;
+        rpd.vertex = vs;
+        rpd.fragment = &fs;
+        rpd.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+        rpd.multisample.count = 1;
+        rpd.multisample.mask = 0xFFFFFFFF;
+        pimpl_->fbFlipPipeline_ = wgpuDeviceCreateRenderPipeline(pimpl_->device, &rpd);
+
+        WGPUBufferDescriptor ubd{};
+        ubd.label = WGPUStringView{"fb_flip_uniform", sizeof("fb_flip_uniform") - 1};
+        ubd.size = 16;
+        ubd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+        pimpl_->fbFlipUniform_ = wgpuDeviceCreateBuffer(pimpl_->device, &ubd);
+    }
+
+    // (Re)create the render-attachment temp sized to the copy region.
+    if (!pimpl_->fbFlipTemp_ || pimpl_->fbFlipTempW_ != copyW || pimpl_->fbFlipTempH_ != copyH) {
+        if (pimpl_->fbFlipTemp_) wgpuTextureRelease(pimpl_->fbFlipTemp_);
+        WGPUTextureDescriptor td{};
+        td.label = WGPUStringView{"fb_flip_temp", sizeof("fb_flip_temp") - 1};
+        td.size = {copyW, copyH, 1};
+        td.mipLevelCount = 1;
+        td.sampleCount = 1;
+        td.dimension = WGPUTextureDimension_2D;
+        td.format = WGPUTextureFormat_RGBA8Unorm;
+        td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc;
+        pimpl_->fbFlipTemp_ = wgpuDeviceCreateTexture(pimpl_->device, &td);
+        pimpl_->fbFlipTempW_ = copyW;
+        pimpl_->fbFlipTempH_ = copyH;
+    }
+
+    // Read base row = (srcH-1-sy): destination row 0 then maps to the band's bottom
+    // scanline, so the destination ends up bottom-origin like a normal loaded texture.
+    int32_t params[4] = {static_cast<int32_t>(sx), static_cast<int32_t>(srcH) - 1 - static_cast<int32_t>(sy), 0, 0};
+    wgpuQueueWriteBuffer(pimpl_->queue, pimpl_->fbFlipUniform_, 0, params, sizeof(params));
+
+    WGPUTextureView srcView = wgpuTextureCreateView(srcTexture, nullptr);
+    WGPUTextureView tmpView = wgpuTextureCreateView(pimpl_->fbFlipTemp_, nullptr);
+
+    WGPUBindGroupEntry bge[2]{};
+    bge[0].binding = 0;
+    bge[0].textureView = srcView;
+    bge[1].binding = 1;
+    bge[1].buffer = pimpl_->fbFlipUniform_;
+    bge[1].size = 16;
+    WGPUBindGroupDescriptor bgd{};
+    bgd.layout = pimpl_->fbFlipBGL_;
+    bgd.entryCount = 2;
+    bgd.entries = bge;
+    WGPUBindGroup bg = wgpuDeviceCreateBindGroup(pimpl_->device, &bgd);
+
     WGPUCommandEncoderDescriptor encDesc{};
     encDesc.label = WGPUStringView{"copy_fb", sizeof("copy_fb") - 1};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(pimpl_->device, &encDesc);
 
-    WGPUTexelCopyTextureInfo src{};
-    src.texture = srcTexture;
-    src.mipLevel = 0;
-    src.origin = {sx, sy, 0};
-    src.aspect = WGPUTextureAspect_All;
+    WGPURenderPassColorAttachment ca{};
+    ca.view = tmpView;
+    ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+    ca.loadOp = WGPULoadOp_Clear;
+    ca.storeOp = WGPUStoreOp_Store;
+    ca.clearValue = {0, 0, 0, 1};
+    WGPURenderPassDescriptor rp{};
+    rp.label = WGPUStringView{"fb_flip_pass", sizeof("fb_flip_pass") - 1};
+    rp.colorAttachmentCount = 1;
+    rp.colorAttachments = &ca;
+    WGPURenderPassEncoder rpe = wgpuCommandEncoderBeginRenderPass(encoder, &rp);
+    wgpuRenderPassEncoderSetPipeline(rpe, pimpl_->fbFlipPipeline_);
+    wgpuRenderPassEncoderSetBindGroup(rpe, 0, bg, 0, nullptr);
+    wgpuRenderPassEncoderDraw(rpe, 3, 1, 0, 0);
+    wgpuRenderPassEncoderEnd(rpe);
+    wgpuRenderPassEncoderRelease(rpe);
 
-    WGPUTexelCopyTextureInfo dst{};
-    dst.texture = dstEntry.texture;
-    dst.mipLevel = static_cast<uint32_t>(level);
-    dst.origin = {0, 0, 0};
-    dst.aspect = WGPUTextureAspect_All;
-
+    // Copy the flipped temp into the destination texture.
+    WGPUTexelCopyTextureInfo csrc{};
+    csrc.texture = pimpl_->fbFlipTemp_;
+    csrc.mipLevel = 0;
+    csrc.origin = {0, 0, 0};
+    csrc.aspect = WGPUTextureAspect_All;
+    WGPUTexelCopyTextureInfo cdst{};
+    cdst.texture = dstEntry.texture;
+    cdst.mipLevel = static_cast<uint32_t>(level);
+    cdst.origin = {0, 0, 0};
+    cdst.aspect = WGPUTextureAspect_All;
     WGPUExtent3D extent = {copyW, copyH, 1};
-    wgpuCommandEncoderCopyTextureToTexture(encoder, &src, &dst, &extent);
+    wgpuCommandEncoderCopyTextureToTexture(encoder, &csrc, &cdst, &extent);
 
     WGPUCommandBufferDescriptor cmdDesc{};
     cmdDesc.label = WGPUStringView{"copy_fb_cmd", sizeof("copy_fb_cmd") - 1};
@@ -4075,28 +4383,71 @@ void WgpuRenderer::copyFramebufferToTexture(const Vector2& position, Texture& te
     wgpuQueueSubmit(pimpl_->queue, 1, &cmd);
     wgpuCommandBufferRelease(cmd);
     wgpuCommandEncoderRelease(encoder);
+
+    wgpuBindGroupRelease(bg);
+    wgpuTextureViewRelease(srcView);
+    wgpuTextureViewRelease(tmpView);
 }
 
 void WgpuRenderer::copyTextureToImage(Texture& texture) {
     if (!pimpl_->initialized) return;
 
-    auto* entry = pimpl_->textures->findTexture(texture.id);
-    if (!entry || !entry->texture) return;
+    // Flush any deferred render commands first: the source is typically a render
+    // target that was just rendered into, and those passes live on the pending
+    // per-frame encoder. Without this the readback copies stale/uninitialised
+    // contents. (Mirrors readRGBPixels.)
+    if (pimpl_->renderEncoder_ && !pimpl_->frame_.active) {
+        WGPUCommandBufferDescriptor cbd{};
+        cbd.label = WGPUStringView{"copytex_flush", sizeof("copytex_flush") - 1};
+        WGPUCommandBuffer cb = wgpuCommandEncoderFinish(pimpl_->renderEncoder_, &cbd);
+        wgpuQueueSubmit(pimpl_->queue, 1, &cb);
+        wgpuCommandBufferRelease(cb);
+        wgpuCommandEncoderRelease(pimpl_->renderEncoder_);
+        pimpl_->renderEncoder_ = nullptr;
+    }
 
-    auto& image = texture.image();
-    uint32_t w = image.width;
-    uint32_t h = image.height;
-    if (w == 0 || h == 0) return;
+    // Resolve the source GPU texture + dimensions. Render-target textures live in
+    // the render-target cache (not the user-texture cache), so check there first —
+    // this is what makes DepthSensor / LidarSensor readback work on WebGPU.
+    WGPUTexture src = nullptr;
+    uint32_t w = 0, h = 0;
+    if (auto* rt = pimpl_->renderTargets->findByTextureId(texture.id)) {
+        src = rt->colorTexture;
+        w = rt->width;
+        h = rt->height;
+    } else if (auto* entry = pimpl_->textures->findTexture(texture.id); entry && entry->texture) {
+        src = entry->texture;
+        w = texture.image().width;
+        h = texture.image().height;
+    }
+    if (!src || w == 0 || h == 0) return;
 
     // readRGBPixels returns RGB data from a BGRA8 GPU texture
-    auto rgb = wgpu::readRGBPixels(pimpl_->device, pimpl_->queue, entry->texture, w, h);
+    auto rgb = wgpu::readRGBPixels(pimpl_->device, pimpl_->queue, src, w, h);
     if (rgb.empty()) return;
 
+    auto& image = texture.image();
     auto& data = image.data();
-    // Determine the channel count the texture expects
-    size_t srcChannels = 3;// readRGBPixels always returns RGB
-    size_t dstChannels = data.size() / (static_cast<size_t>(w) * h);
-    if (dstChannels == 0) dstChannels = srcChannels;
+    // Channel count must come from the texture format (the destination image may
+    // be empty for a freshly created render target). Matches gl::numChannels.
+    auto channelsFor = [](Format f) -> size_t {
+        switch (f) {
+            case Format::Red:
+            case Format::RedInteger:
+            case Format::Alpha:
+            case Format::Luminance:
+            case Format::Depth: return 1;
+            case Format::RG:
+            case Format::RGInteger:
+            case Format::LuminanceAlpha:
+            case Format::DepthStencil: return 2;
+            case Format::RGB:
+            case Format::BGR:
+            case Format::RGBInteger: return 3;
+            default: return 4;
+        }
+    };
+    size_t dstChannels = channelsFor(texture.format);
 
     data.resize(static_cast<size_t>(w) * h * dstChannels);
 

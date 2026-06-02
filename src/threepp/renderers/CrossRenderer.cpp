@@ -309,6 +309,17 @@ namespace threepp {
         return pimpl_->wgpuRenderer->readRGBPixels();
     }
 
+    // Render-target work (setRenderTarget / render-to-RT / readback) is routed to
+    // the WGPU renderer, so texture/framebuffer copies must go there too — the RT
+    // textures live in WGPU's caches. Without this, readback-based helpers such as
+    // DepthSensor / LidarSensor would copy nothing and then read an empty buffer.
+    void CrossRenderer::copyFramebufferToTexture(const Vector2& position, Texture& texture, int level) {
+        pimpl_->wgpuRenderer->copyFramebufferToTexture(position, texture, level);
+    }
+    void CrossRenderer::copyTextureToImage(Texture& texture) {
+        pimpl_->wgpuRenderer->copyTextureToImage(texture);
+    }
+
     bool CrossRenderer::renderTargetFlipY() const {
         return pimpl_->wgpuRenderer->renderTargetFlipY();
     }

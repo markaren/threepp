@@ -65,8 +65,8 @@ auto createBox() {
     auto box = Mesh::create(boxGeometry, boxMaterial);
 
     auto wiredBox = LineSegments::create(WireframeGeometry::create(*boxGeometry));
-    wiredBox->material()->as<LineBasicMaterial>()->depthTest = false;
-    wiredBox->material()->as<LineBasicMaterial>()->color = Color::gray;
+    wiredBox->materialAs<LineBasicMaterial>()->depthTest = false;
+    wiredBox->materialAs<LineBasicMaterial>()->color = Color::gray;
     box->add(wiredBox);
 
     return box;
@@ -115,7 +115,7 @@ int main() {
     box->add(sphere);
 
     auto plane = createPlane();
-    auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
+    auto planeMaterial = plane->materialAs<MeshBasicMaterial>();
     scene->add(plane);
 
     FontLoader fontLoader;

@@ -23,17 +23,16 @@ using namespace threepp;
 namespace {
 
     auto whiteMat(float roughness = 0.95f) {
-        return MeshStandardMaterial::create({{"color", Color(0.73f, 0.73f, 0.73f)}, {"roughness", roughness}});
+        return MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.73f, 0.73f, 0.73f)).roughness(roughness));
     }
 
     // Bright ceiling panel — primary emissive area light.
     auto makeLightPanel() {
-        auto mat = MeshStandardMaterial::create({
-                {"color", Color::white},
-                {"emissive", Color::white},
-                {"emissiveIntensity", 18.0f},
-                {"roughness", 1.0f},
-        });
+        auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color::white)
+                .emissive(Color::white)
+                .emissiveIntensity(18.0f)
+                .roughness(1.0f));
         auto mesh = Mesh::create(PlaneGeometry::create(2.6f, 2.6f), mat);
         mesh->rotation.x = math::PI / 2.f;
         mesh->position.set(0.f, 9.99f, 0.f);
@@ -57,13 +56,13 @@ namespace {
         back->position.set(0.f, S / 2.f, -S / 2.f);
         group->add(back);
 
-        auto leftMat = MeshStandardMaterial::create({{"color", Color(0.65f, 0.05f, 0.05f)}, {"roughness", 0.95f}});
+        auto leftMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.65f, 0.05f, 0.05f)).roughness(0.95f));
         auto left = Mesh::create(PlaneGeometry::create(S, S), leftMat);
         left->rotation.y = math::PI / 2.f;
         left->position.set(-S / 2.f, S / 2.f, 0.f);
         group->add(left);
 
-        auto rightMat = MeshStandardMaterial::create({{"color", Color(0.12f, 0.45f, 0.15f)}, {"roughness", 0.95f}});
+        auto rightMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.12f, 0.45f, 0.15f)).roughness(0.95f));
         auto right = Mesh::create(PlaneGeometry::create(S, S), rightMat);
         right->rotation.y = -math::PI / 2.f;
         right->position.set(S / 2.f, S / 2.f, 0.f);
@@ -87,24 +86,22 @@ namespace {
     }
 
     auto makeMetalSphere() {
-        auto mat = MeshStandardMaterial::create({
-                {"color", Color(0.95f, 0.93f, 0.88f)},
-                {"roughness", 0.04f},
-                {"metalness", 1.0f},
-        });
+        auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.95f, 0.93f, 0.88f))
+                .roughness(0.04f)
+                .metalness(1.0f));
         auto mesh = Mesh::create(SphereGeometry::create(0.6f, 48, 48), mat);
         mesh->position.set(1.5f, 2.1f, 1.0f);
         return mesh;
     }
 
     auto makeGlassSphere() {
-        auto mat = MeshPhysicalMaterial::create({
-                {"color", Color::white},
-                {"transmission", 0.95f},
-                {"ior", 1.5f},
-                {"roughness", 0.0f},
-                {"metalness", 0.0f},
-        });
+        auto mat = MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}
+                .color(Color::white)
+                .transmission(0.95f)
+                .ior(1.5f)
+                .roughness(0.0f)
+                .metalness(0.0f));
         auto mesh = Mesh::create(SphereGeometry::create(0.7f, 48, 48), mat);
         mesh->position.set(-1.5f, 0.7f, 1.8f);
         return mesh;

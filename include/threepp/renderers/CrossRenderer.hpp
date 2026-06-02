@@ -57,6 +57,9 @@ namespace threepp {
 
         [[nodiscard]] std::vector<unsigned char> readRGBPixels() override;
 
+        void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0) override;
+        void copyTextureToImage(Texture& texture) override;
+
         [[nodiscard]] bool renderTargetFlipY() const override;
 
         void dispose() override;

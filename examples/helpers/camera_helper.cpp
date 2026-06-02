@@ -14,7 +14,7 @@ namespace {
         auto sphereMesh = Mesh::create(sphereGeometry, sphereMaterial);
         sphereMesh->position.z = -8;
 
-        const auto sphereMaterialWireframe = MeshBasicMaterial::create({{"color", Color::black}, {"wireframe", true}});
+        const auto sphereMaterialWireframe = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::black).wireframe(true));
         sphereMaterialWireframe->wireframe = true;
         sphereMaterialWireframe->color = Color::black;
         const auto sphereMeshWireframe = Mesh::create(sphereGeometry, sphereMaterialWireframe);

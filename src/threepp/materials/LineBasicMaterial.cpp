@@ -37,6 +37,18 @@ std::shared_ptr<LineBasicMaterial> LineBasicMaterial::create(const std::unordere
     return m;
 }
 
+std::shared_ptr<LineBasicMaterial> LineBasicMaterial::create(const Params& p) {
+
+    auto m = std::shared_ptr<LineBasicMaterial>(new LineBasicMaterial());
+
+    p.applyBaseTo(*m);
+
+    if (p.color_) m->color = *p.color_;
+    if (p.linewidth_) m->linewidth = *p.linewidth_;
+
+    return m;
+}
+
 bool LineBasicMaterial::setValue(const std::string& key, const MaterialValue& value) {
 
     if (key == "color") {

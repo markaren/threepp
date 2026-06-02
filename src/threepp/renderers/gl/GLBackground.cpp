@@ -81,7 +81,7 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
             objects.update(boxMesh.get());
         }
 
-        auto shaderMaterial = boxMesh->material()->as<ShaderMaterial>();
+        auto shaderMaterial = boxMesh->materialAs<ShaderMaterial>();
         // Point envMap at the *resolved* cube texture so ProgramParameters reads
         // CubeReflection mapping (samplerCube path). The uniform carries the same ptr.
         shaderMaterial->envMap = resolvedShared;

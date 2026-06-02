@@ -55,13 +55,13 @@ void DirectionalLightHelper::update() {
 
     if (this->color) {
 
-        this->lightPlane->material()->as<MaterialWithColor>()->color.copy(*this->color);
-        this->targetLine->material()->as<MaterialWithColor>()->color.copy(*this->color);
+        this->lightPlane->materialAs<MaterialWithColor>()->color.copy(*this->color);
+        this->targetLine->materialAs<MaterialWithColor>()->color.copy(*this->color);
 
     } else {
 
-        this->lightPlane->material()->as<MaterialWithColor>()->color.copy(this->light.color);
-        this->targetLine->material()->as<MaterialWithColor>()->color.copy(this->light.color);
+        this->lightPlane->materialAs<MaterialWithColor>()->color.copy(this->light.color);
+        this->targetLine->materialAs<MaterialWithColor>()->color.copy(this->light.color);
     }
 
     this->targetLine->lookAt(_v2);

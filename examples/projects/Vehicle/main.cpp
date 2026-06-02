@@ -99,7 +99,7 @@ int main() {
     carBody->traverseType<Mesh>([isGL](Mesh& m) {
 
         if (isGL) {
-            if (auto* std = m.material()->as<MeshStandardMaterial>()) {
+            if (auto* std = m.materialAs<MeshStandardMaterial>()) {
                 std->aoMap = nullptr;
             }
         }
@@ -317,7 +317,7 @@ int main() {
         pcGeom->getAttribute<float>("position")->setUsage(DrawUsage::Dynamic);
         pcGeom->getAttribute<float>("color")->setUsage(DrawUsage::Dynamic);
 
-        auto pcMat = PointsMaterial::create({{"size", 0.05f}, {"vertexColors", true}});
+        auto pcMat = PointsMaterial::create(PointsMaterial::Params{}.size(0.05f).vertexColors(true));
         depthPoints = Points::create(pcGeom, pcMat);
         depthPoints->frustumCulled = false;
         sensorScene->add(*depthPoints);

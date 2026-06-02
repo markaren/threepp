@@ -76,13 +76,13 @@ int main(int argc, char** argv) {
     }
 
     auto skeletonHelper = SkeletonHelper::create(*result->scene);
-    skeletonHelper->material()->as<LineBasicMaterial>()->linewidth = 2;
+    skeletonHelper->materialAs<LineBasicMaterial>()->linewidth = 2;
     scene->add(skeletonHelper);
 
 
     auto floor = Mesh::create(
             BoxGeometry::create(10, 0.1f, 10),
-            MeshStandardMaterial::create({{"color", Color::lightgray}}));
+            MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::lightgray)));
     floor->position.set(0, 0, 0);
     floor->receiveShadow = true;
     scene->add(floor);

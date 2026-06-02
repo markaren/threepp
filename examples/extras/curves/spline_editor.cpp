@@ -79,7 +79,7 @@ int main() {
 
         auto geom = BufferGeometry::create();
         geom->setAttribute("position", FloatBufferAttribute::create(std::vector<float>(ARC_SEGMENTS * 3), 3));
-        auto line = Line::create(geom, LineBasicMaterial::create({{"color", color}}));
+        auto line = Line::create(geom, LineBasicMaterial::create(LineBasicMaterial::Params{}.color(color)));
         line->castShadow = true;
         splines[type] = line;
         scene->add(line);
@@ -96,7 +96,7 @@ int main() {
 
 
     auto createSplineHelper = [&](const Vector3& pos) {
-        auto mat = MeshLambertMaterial::create({{"color", Color().randomize()}});
+        auto mat = MeshLambertMaterial::create(MeshLambertMaterial::Params{}.color(Color().randomize()));
         auto obj = Mesh::create(boxGeo, mat);
         obj->position.copy(pos);
         obj->castShadow = true;

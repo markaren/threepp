@@ -31,14 +31,16 @@ namespace {
 
         const auto geometry = TubeGeometry::create(std::move(curve));
         const auto material = MeshBasicMaterial::create(
-                {{"color", 0xff0000},
-                 {"side", Side::Double}});
+                MeshBasicMaterial::Params{}
+                        .color(0xff0000)
+                        .side(Side::Double));
         auto mesh = Mesh::create(geometry, material);
 
         const auto lineMaterial = LineBasicMaterial::create(
-                {{"depthTest", false},
-                 {"opacity", 0.5f},
-                 {"transparent", true}});
+                LineBasicMaterial::Params{}
+                        .depthTest(false)
+                        .opacity(0.5f)
+                        .transparent(true));
         const auto line = LineSegments::create(WireframeGeometry::create(*geometry), lineMaterial);
         mesh->add(line);
 
@@ -108,7 +110,7 @@ int main() {
 
     auto collisions = InstancedMesh::create(
             SphereGeometry::create(0.5f, 16, 8),
-            MeshBasicMaterial::create({{"color", Color::yellow}}), 10000);
+            MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::yellow)), 10000);
     collisions->frustumCulled = false;// Disable frustum culling for collisions
     scene->add(collisions);
 

@@ -57,7 +57,7 @@ int main() {
     unsigned int textureSize = 128;
     auto texture = FramebufferTexture::create(textureSize, textureSize);
 
-    auto spriteMaterial = SpriteMaterial::create({{"map", texture}});
+    auto spriteMaterial = SpriteMaterial::create(SpriteMaterial::Params{}.map(texture));
     Sprite sprite(spriteMaterial);
     sprite.scale.set(textureSize, textureSize, 1);
     orthoScene.add(sprite);
@@ -67,14 +67,14 @@ int main() {
     TextureLoader tl;
 
     const auto sphereGeometry = SphereGeometry::create(0.5f, 16, 16);
-    const auto sphereMaterial = MeshBasicMaterial::create({{"map", tl.load(std::string(DATA_FOLDER) + "/textures/checker.png", ColorSpace::sRGB)}});
+    const auto sphereMaterial = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.map(tl.load(std::string(DATA_FOLDER) + "/textures/checker.png", ColorSpace::sRGB)));
     Mesh sphere(sphereGeometry, sphereMaterial);
     sphere.position.x = 1;
     scene.add(sphere);
 
     const auto boxGeometry = BoxGeometry::create(1, 1, 1);
     const auto boxMaterial = MeshBasicMaterial::create(
-            {{"map", tl.load(std::string(DATA_FOLDER) + "/textures/crate.gif", ColorSpace::sRGB)}});
+            MeshBasicMaterial::Params{}.map(tl.load(std::string(DATA_FOLDER) + "/textures/crate.gif", ColorSpace::sRGB)));
     Mesh box(boxGeometry, boxMaterial);
     box.position.x = -1;
     scene.add(box);

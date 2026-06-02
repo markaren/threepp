@@ -55,8 +55,8 @@ int main() {
 
     auto geometry = IcosahedronGeometry::create(1, 3);
 
-    auto materialLeft = MeshStandardMaterial::create({{"color", Color::lightgrey}});
-    auto materialRight = MeshStandardMaterial::create({{"color", Color::gray}});
+    auto materialLeft = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::lightgrey));
+    auto materialRight = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::gray));
     materialRight->wireframe = true;
 
     auto meshLeft = Mesh::create(geometry, materialLeft);

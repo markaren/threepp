@@ -34,6 +34,21 @@ std::shared_ptr<LineDashedMaterial> LineDashedMaterial::create(const std::unorde
     return m;
 }
 
+std::shared_ptr<LineDashedMaterial> LineDashedMaterial::create(const Params& p) {
+
+    auto m = std::shared_ptr<LineDashedMaterial>(new LineDashedMaterial());
+
+    p.applyBaseTo(*m);
+
+    if (p.color_) m->color = *p.color_;
+    if (p.linewidth_) m->linewidth = *p.linewidth_;
+    if (p.dashSize_) m->dashSize = *p.dashSize_;
+    if (p.gapSize_) m->gapSize = *p.gapSize_;
+    if (p.scale_) m->scale = *p.scale_;
+
+    return m;
+}
+
 bool LineDashedMaterial::setValue(const std::string& key, const MaterialValue& value) {
 
     if (key == "dashSize") {

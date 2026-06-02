@@ -3,6 +3,7 @@
 #define THREEPP_INTERFACES_HPP
 
 #include "threepp/materials/Material.hpp"
+#include "threepp/materials/MaterialParams.hpp"
 
 #include "threepp/textures/Texture.hpp"
 

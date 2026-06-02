@@ -782,14 +782,14 @@ public:
             if (!this->state.enabled) {
 
                 handle->material()->opacity *= 0.5;
-                handle->material()->as<MaterialWithColor>()->color.lerp(Color(1, 1, 1), 0.5);
+                handle->materialAs<MaterialWithColor>()->color.lerp(Color(1, 1, 1), 0.5);
 
             } else if (this->state.axis) {
 
                 if (handle->name == this->state.axis) {
 
                     handle->material()->opacity = 1.0;
-                    handle->material()->as<MaterialWithColor>()->color.lerp(Color(1, 1, 1), 0.5);
+                    handle->materialAs<MaterialWithColor>()->color.lerp(Color(1, 1, 1), 0.5);
 
                 } else if (std::ranges::any_of(this->state.axis.value(),
                                                [&](char a) {
@@ -797,12 +797,12 @@ public:
                                                })) {
 
                     handle->material()->opacity = 1.0;
-                    handle->material()->as<MaterialWithColor>()->color.lerp(Color(1, 1, 1), 0.5f);
+                    handle->materialAs<MaterialWithColor>()->color.lerp(Color(1, 1, 1), 0.5f);
 
                 } else {
 
                     handle->material()->opacity *= 0.25;
-                    handle->material()->as<MaterialWithColor>()->color.lerp(Color(1, 1, 1), 0.5f);
+                    handle->materialAs<MaterialWithColor>()->color.lerp(Color(1, 1, 1), 0.5f);
                 }
             }
         }

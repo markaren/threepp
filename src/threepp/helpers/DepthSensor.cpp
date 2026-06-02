@@ -8,11 +8,37 @@
 #include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/renderers/Renderer.hpp"
 #include "threepp/textures/DepthTexture.hpp"
+#include "threepp/utils/ImageUtils.hpp"
 
 #include <cmath>
 #include <random>
 
 using namespace threepp;
+
+namespace {
+
+    // Sensors render *data* (linearized + packed depth, raw color) into render
+    // targets and read it back. Color management (sRGB encode / tone mapping)
+    // would corrupt those bytes — silently on WebGPU, which applies the output
+    // encode to render targets. Force a linear, un-tonemapped pass for the scan
+    // and restore the renderer's settings afterwards, so callers don't need any
+    // backend-specific setup.
+    struct DataPassGuard {
+        Renderer& r;
+        ColorSpace cs;
+        ToneMapping tm;
+        explicit DataPassGuard(Renderer& renderer)
+            : r(renderer), cs(renderer.outputColorSpace), tm(renderer.toneMapping) {
+            r.outputColorSpace = LinearSRGBColorSpace;
+            r.toneMapping = ToneMapping::None;
+        }
+        ~DataPassGuard() {
+            r.outputColorSpace = cs;
+            r.toneMapping = tm;
+        }
+    };
+
+}// namespace
 
 DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, float near, float far)
     : width_(width),
@@ -97,6 +123,8 @@ DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, fl
 
 void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud) {
 
+    DataPassGuard guard(renderer);
+
     // Render scene from sensor viewpoint to capture depth
     renderer.setRenderTarget(sceneTarget_.get());
     renderer.render(scene, camera_);
@@ -116,12 +144,22 @@ void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& c
 
 void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud, std::vector<Color>& colors) {
 
+    DataPassGuard guard(renderer);
+
     // Render scene from sensor viewpoint — color buffer is captured alongside depth
     renderer.setRenderTarget(sceneTarget_.get());
     renderer.render(scene, camera_);
 
-    // Read back sRGB color from the scene color buffer
+    // Read back color from the scene color buffer
     renderer.copyTextureToImage(*sceneTarget_->texture);
+    // The depth path goes through a post-pass that, on flip-Y backends (WebGPU),
+    // already compensates for the render-target origin. The color is read back
+    // directly, so flip it to share the depth's row convention — keeping color
+    // and geometry aligned identically on every backend.
+    if (renderer.renderTargetFlipY()) {
+        flipImage(sceneTarget_->texture->image().data(), 3,
+                  static_cast<int>(width_), static_cast<int>(height_));
+    }
 
     // Linearize depth into packed RG16
     postMaterial_->uniforms.at("tDepth").setValue(sceneTarget_->depthTexture.get());

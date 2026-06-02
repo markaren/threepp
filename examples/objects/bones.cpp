@@ -75,10 +75,7 @@ namespace {
 
     auto createMesh(const std::shared_ptr<BufferGeometry>& geometry, const std::vector<std::shared_ptr<Bone>>& bones) {
 
-        auto material = MeshPhongMaterial::create({{"color", 0x156289},
-                                                   {"emissive", 0x072534},
-                                                   {"side", Side::Double},
-                                                   {"flatShading", true}});
+        auto material = MeshPhongMaterial::create(MeshPhongMaterial::Params{}.color(0x156289).emissive(0x072534).side(Side::Double).flatShading(true));
 
         auto mesh = SkinnedMesh::create(geometry, material);
         mesh->castShadow = true;
@@ -89,7 +86,7 @@ namespace {
         mesh->bind(skeleton);
 
         const auto skeletonHelper = SkeletonHelper::create(*mesh);
-        skeletonHelper->material()->as<LineBasicMaterial>()->linewidth = 2;
+        skeletonHelper->materialAs<LineBasicMaterial>()->linewidth = 2;
         mesh->add(skeletonHelper);
 
         return mesh;

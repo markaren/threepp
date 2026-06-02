@@ -16,7 +16,7 @@ using namespace threepp;
 namespace {
 
     auto createSprite(const std::shared_ptr<Texture> &texture) {
-        auto spriteMaterial = MeshBasicMaterial::create({{"map", texture}});
+        auto spriteMaterial = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.map(texture));
         auto sprite = Mesh::create(PlaneGeometry::create(), spriteMaterial);
         sprite->scale.set(2, 2, 1);
 
@@ -24,7 +24,7 @@ namespace {
     }
 
     void addWalls(Scene &scene) {
-        auto wallMaterial = MeshStandardMaterial::create({{"color", Color::black}});
+        auto wallMaterial = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::black));
         auto wall1 = Mesh::create(BoxGeometry::create(0.1, 1, 10), wallMaterial);
         wall1->position.set(-5, 0.5, 0);
         scene.add(wall1);
@@ -44,7 +44,7 @@ namespace {
 
         addWalls(scene);
 
-        auto sphereMaterial = MeshBasicMaterial::create({{"color", Color::blue}});
+        auto sphereMaterial = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::blue));
         auto sphere1 = Mesh::create(SphereGeometry::create(2.f), sphereMaterial);
         sphere1->name = "target";
         sphere1->position.set(0, 2, 50);
