@@ -177,7 +177,7 @@ int main() {
 
     TransformControls transformControls(*camera, canvas);
     transformControls.attach(*targetHelper);
-    scene->add(transformControls);
+    scene->addRef(transformControls);
 
     LambdaEventListener changeListener([&](Event& event) {
         controls.enabled = !std::any_cast<bool>(event.target);

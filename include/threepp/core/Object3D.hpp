@@ -169,7 +169,7 @@ namespace threepp {
         // Adds object as child of this object. An arbitrary number of objects may be added.
         // Any current parent on an object passed in here will be removed, since an object can have at most one parent.
         // This version of add does NOT take ownership of the passed in object
-        virtual void add(Object3D& object);
+        virtual void addRef(Object3D& object);
 
         // Removes object as child of this object.
         virtual void remove(Object3D& object);

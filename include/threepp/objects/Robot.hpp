@@ -128,8 +128,8 @@ namespace threepp {
                 });
 
                 if (parent != links_.end() && child != links_.end()) {
-                    (*parent)->add(*joint);
-                    (joint)->add(**child);
+                    (*parent)->addRef(*joint);
+                    (joint)->addRef(**child);
                 }
             }
 

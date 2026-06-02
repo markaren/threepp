@@ -153,7 +153,7 @@ int main() {
     TransformControls transformControl(*camera, canvas);
     transformControl.addEventListener("change", eventListener);
     transformControl.addEventListener("dragging-changed", changeListener);
-    scene->add(transformControl);
+    scene->addRef(transformControl);
 
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};

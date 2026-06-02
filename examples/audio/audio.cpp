@@ -65,10 +65,10 @@ int main() {
     audio.play();
 
     auto audioNode = createSmiley();
-    audioNode->add(audio);
+    audioNode->addRef(audio);
     scene.add(audioNode);
 
-    camera.add(listener);
+    camera.addRef(listener);
 
     OrbitControls controls{camera, canvas};
 
