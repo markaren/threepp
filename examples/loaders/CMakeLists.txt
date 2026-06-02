@@ -14,6 +14,7 @@ add_example(NAME "gltf_loader")
 add_example(NAME "gltf_material_variants" LINK_IMGUI)
 add_example(NAME "collada_loader")
 add_example(NAME "svg_loader" LINK_IMGUI)
+add_example(NAME "svg_ui")
 
 if (THREEPP_WITH_USD)
     add_example(NAME "usd_loader")
