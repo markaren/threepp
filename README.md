@@ -268,6 +268,6 @@ set_languages("c++20")
 ![MotorController](doc/screenshots/motor_controller.PNG)
 ![SVG](doc/screenshots/tiger_svg.png)
 ![Depth sensor](doc/screenshots/depth_sensor.png)
-![LeePerrySmith](doc/screenshots/LeePerrySmith.png)
+![Shooter](doc/screenshots/tps.png)
 ![Chess](doc/screenshots/chess.png)
 
