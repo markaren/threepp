@@ -475,6 +475,22 @@ struct WgpuRenderer::Impl {
     uint32_t retainedFBWidth = 0;
     uint32_t retainedFBHeight = 0;
 
+    // copyFramebufferToTexture vertical-flip resources. WebGPU render targets are
+    // top-origin, but threepp's loaded textures are bottom-origin (stb flips on load
+    // with flipY=true), so a straight CopyTextureToTexture of the top-origin
+    // framebuffer lands upside-down relative to every normal texture (GL gets this
+    // right because glReadPixels is bottom-origin). This blit re-reads the source
+    // region vertically flipped into a render-attachment temp, which is then copied
+    // into the destination texture.
+    WGPURenderPipeline fbFlipPipeline_ = nullptr;
+    WGPUPipelineLayout fbFlipPipelineLayout_ = nullptr;
+    WGPUBindGroupLayout fbFlipBGL_ = nullptr;
+    WGPUShaderModule fbFlipShader_ = nullptr;
+    WGPUBuffer fbFlipUniform_ = nullptr;// vec4<i32>: srcX, flipped srcY base, 0, 0
+    WGPUTexture fbFlipTemp_ = nullptr;
+    uint32_t fbFlipTempW_ = 0;
+    uint32_t fbFlipTempH_ = 0;
+
     // Scissored background clear pipeline (used when scissorTest_ is enabled and autoClear)
     WGPURenderPipeline clearPipeline_ = nullptr;
     WGPUPipelineLayout clearPipelineLayout_ = nullptr;
@@ -3761,6 +3777,13 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
         if (retainedFB) { wgpuTextureRelease(retainedFB); retainedFB = nullptr; }
 
+        if (fbFlipPipeline_)       { wgpuRenderPipelineRelease(fbFlipPipeline_);       fbFlipPipeline_ = nullptr; }
+        if (fbFlipPipelineLayout_) { wgpuPipelineLayoutRelease(fbFlipPipelineLayout_); fbFlipPipelineLayout_ = nullptr; }
+        if (fbFlipBGL_)            { wgpuBindGroupLayoutRelease(fbFlipBGL_);            fbFlipBGL_ = nullptr; }
+        if (fbFlipShader_)         { wgpuShaderModuleRelease(fbFlipShader_);            fbFlipShader_ = nullptr; }
+        if (fbFlipUniform_)        { wgpuBufferRelease(fbFlipUniform_);                fbFlipUniform_ = nullptr; }
+        if (fbFlipTemp_)           { wgpuTextureRelease(fbFlipTemp_);                  fbFlipTemp_ = nullptr; }
+
         for (auto& [id, entry] : instanceCache_) {
             if (entry.buffer) wgpuBufferRelease(entry.buffer);
         }
@@ -4205,25 +4228,154 @@ void WgpuRenderer::copyFramebufferToTexture(const Vector2& position, Texture& te
     uint32_t copyH = (std::min)(texH, srcH > sy ? srcH - sy : 0u);
     if (copyW == 0 || copyH == 0) return;
 
-    // GPU copy from retained framebuffer to destination texture
+    // The source (retained framebuffer / render-target color) is top-origin, but
+    // threepp's loaded textures are bottom-origin (stb flips on load, flipY=true),
+    // so a straight copy would land the destination upside-down vs every normal
+    // texture. Re-read the region vertically flipped into a render-attachment temp,
+    // then copy that into the destination (which only has CopyDst usage, not
+    // RenderAttachment, so it can't be a blit target directly).
+
+    // Lazily build the flip-blit pipeline (textureLoad = exact texel copy, no filtering).
+    if (!pimpl_->fbFlipPipeline_) {
+        const char* wgsl = R"(
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var<uniform> p: vec4<i32>;
+struct V { @builtin(position) pos: vec4<f32> };
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> V {
+    var q = array<vec2<f32>,3>(vec2<f32>(-1.0,-1.0), vec2<f32>(3.0,-1.0), vec2<f32>(-1.0,3.0));
+    var o: V;
+    o.pos = vec4<f32>(q[vi], 0.0, 1.0);
+    return o;
+}
+@fragment fn fs(in: V) -> @location(0) vec4<f32> {
+    let d = vec2<i32>(in.pos.xy);
+    return textureLoad(src, vec2<i32>(p.x + d.x, p.y - d.y), 0);
+}
+)";
+        WGPUShaderSourceWGSL wsrc{};
+        wsrc.chain.sType = WGPUSType_ShaderSourceWGSL;
+        wsrc.code = WGPUStringView{wgsl, WGPU_STRLEN};
+        WGPUShaderModuleDescriptor smd{};
+        smd.nextInChain = &wsrc.chain;
+        pimpl_->fbFlipShader_ = wgpuDeviceCreateShaderModule(pimpl_->device, &smd);
+
+        WGPUBindGroupLayoutEntry bgle[2]{};
+        bgle[0].binding = 0;
+        bgle[0].visibility = WGPUShaderStage_Fragment;
+        bgle[0].texture.sampleType = WGPUTextureSampleType_Float;
+        bgle[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+        bgle[1].binding = 1;
+        bgle[1].visibility = WGPUShaderStage_Fragment;
+        bgle[1].buffer.type = WGPUBufferBindingType_Uniform;
+        bgle[1].buffer.minBindingSize = 16;
+        WGPUBindGroupLayoutDescriptor bgld{};
+        bgld.entryCount = 2;
+        bgld.entries = bgle;
+        pimpl_->fbFlipBGL_ = wgpuDeviceCreateBindGroupLayout(pimpl_->device, &bgld);
+
+        WGPUPipelineLayoutDescriptor pld{};
+        pld.bindGroupLayoutCount = 1;
+        pld.bindGroupLayouts = &pimpl_->fbFlipBGL_;
+        pimpl_->fbFlipPipelineLayout_ = wgpuDeviceCreatePipelineLayout(pimpl_->device, &pld);
+
+        WGPUVertexState vs{};
+        vs.module = pimpl_->fbFlipShader_;
+        vs.entryPoint = WGPUStringView{"vs", 2};
+        WGPUColorTargetState ct{};
+        ct.format = WGPUTextureFormat_RGBA8Unorm;
+        ct.writeMask = WGPUColorWriteMask_All;
+        WGPUFragmentState fs{};
+        fs.module = pimpl_->fbFlipShader_;
+        fs.entryPoint = WGPUStringView{"fs", 2};
+        fs.targetCount = 1;
+        fs.targets = &ct;
+        WGPURenderPipelineDescriptor rpd{};
+        rpd.label = WGPUStringView{"fb_flip_pipe", sizeof("fb_flip_pipe") - 1};
+        rpd.layout = pimpl_->fbFlipPipelineLayout_;
+        rpd.vertex = vs;
+        rpd.fragment = &fs;
+        rpd.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+        rpd.multisample.count = 1;
+        rpd.multisample.mask = 0xFFFFFFFF;
+        pimpl_->fbFlipPipeline_ = wgpuDeviceCreateRenderPipeline(pimpl_->device, &rpd);
+
+        WGPUBufferDescriptor ubd{};
+        ubd.label = WGPUStringView{"fb_flip_uniform", sizeof("fb_flip_uniform") - 1};
+        ubd.size = 16;
+        ubd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+        pimpl_->fbFlipUniform_ = wgpuDeviceCreateBuffer(pimpl_->device, &ubd);
+    }
+
+    // (Re)create the render-attachment temp sized to the copy region.
+    if (!pimpl_->fbFlipTemp_ || pimpl_->fbFlipTempW_ != copyW || pimpl_->fbFlipTempH_ != copyH) {
+        if (pimpl_->fbFlipTemp_) wgpuTextureRelease(pimpl_->fbFlipTemp_);
+        WGPUTextureDescriptor td{};
+        td.label = WGPUStringView{"fb_flip_temp", sizeof("fb_flip_temp") - 1};
+        td.size = {copyW, copyH, 1};
+        td.mipLevelCount = 1;
+        td.sampleCount = 1;
+        td.dimension = WGPUTextureDimension_2D;
+        td.format = WGPUTextureFormat_RGBA8Unorm;
+        td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc;
+        pimpl_->fbFlipTemp_ = wgpuDeviceCreateTexture(pimpl_->device, &td);
+        pimpl_->fbFlipTempW_ = copyW;
+        pimpl_->fbFlipTempH_ = copyH;
+    }
+
+    // Read base row = (srcH-1-sy): destination row 0 then maps to the band's bottom
+    // scanline, so the destination ends up bottom-origin like a normal loaded texture.
+    int32_t params[4] = {static_cast<int32_t>(sx), static_cast<int32_t>(srcH) - 1 - static_cast<int32_t>(sy), 0, 0};
+    wgpuQueueWriteBuffer(pimpl_->queue, pimpl_->fbFlipUniform_, 0, params, sizeof(params));
+
+    WGPUTextureView srcView = wgpuTextureCreateView(srcTexture, nullptr);
+    WGPUTextureView tmpView = wgpuTextureCreateView(pimpl_->fbFlipTemp_, nullptr);
+
+    WGPUBindGroupEntry bge[2]{};
+    bge[0].binding = 0;
+    bge[0].textureView = srcView;
+    bge[1].binding = 1;
+    bge[1].buffer = pimpl_->fbFlipUniform_;
+    bge[1].size = 16;
+    WGPUBindGroupDescriptor bgd{};
+    bgd.layout = pimpl_->fbFlipBGL_;
+    bgd.entryCount = 2;
+    bgd.entries = bge;
+    WGPUBindGroup bg = wgpuDeviceCreateBindGroup(pimpl_->device, &bgd);
+
     WGPUCommandEncoderDescriptor encDesc{};
     encDesc.label = WGPUStringView{"copy_fb", sizeof("copy_fb") - 1};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(pimpl_->device, &encDesc);
 
-    WGPUTexelCopyTextureInfo src{};
-    src.texture = srcTexture;
-    src.mipLevel = 0;
-    src.origin = {sx, sy, 0};
-    src.aspect = WGPUTextureAspect_All;
+    WGPURenderPassColorAttachment ca{};
+    ca.view = tmpView;
+    ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+    ca.loadOp = WGPULoadOp_Clear;
+    ca.storeOp = WGPUStoreOp_Store;
+    ca.clearValue = {0, 0, 0, 1};
+    WGPURenderPassDescriptor rp{};
+    rp.label = WGPUStringView{"fb_flip_pass", sizeof("fb_flip_pass") - 1};
+    rp.colorAttachmentCount = 1;
+    rp.colorAttachments = &ca;
+    WGPURenderPassEncoder rpe = wgpuCommandEncoderBeginRenderPass(encoder, &rp);
+    wgpuRenderPassEncoderSetPipeline(rpe, pimpl_->fbFlipPipeline_);
+    wgpuRenderPassEncoderSetBindGroup(rpe, 0, bg, 0, nullptr);
+    wgpuRenderPassEncoderDraw(rpe, 3, 1, 0, 0);
+    wgpuRenderPassEncoderEnd(rpe);
+    wgpuRenderPassEncoderRelease(rpe);
 
-    WGPUTexelCopyTextureInfo dst{};
-    dst.texture = dstEntry.texture;
-    dst.mipLevel = static_cast<uint32_t>(level);
-    dst.origin = {0, 0, 0};
-    dst.aspect = WGPUTextureAspect_All;
-
+    // Copy the flipped temp into the destination texture.
+    WGPUTexelCopyTextureInfo csrc{};
+    csrc.texture = pimpl_->fbFlipTemp_;
+    csrc.mipLevel = 0;
+    csrc.origin = {0, 0, 0};
+    csrc.aspect = WGPUTextureAspect_All;
+    WGPUTexelCopyTextureInfo cdst{};
+    cdst.texture = dstEntry.texture;
+    cdst.mipLevel = static_cast<uint32_t>(level);
+    cdst.origin = {0, 0, 0};
+    cdst.aspect = WGPUTextureAspect_All;
     WGPUExtent3D extent = {copyW, copyH, 1};
-    wgpuCommandEncoderCopyTextureToTexture(encoder, &src, &dst, &extent);
+    wgpuCommandEncoderCopyTextureToTexture(encoder, &csrc, &cdst, &extent);
 
     WGPUCommandBufferDescriptor cmdDesc{};
     cmdDesc.label = WGPUStringView{"copy_fb_cmd", sizeof("copy_fb_cmd") - 1};
@@ -4231,6 +4383,10 @@ void WgpuRenderer::copyFramebufferToTexture(const Vector2& position, Texture& te
     wgpuQueueSubmit(pimpl_->queue, 1, &cmd);
     wgpuCommandBufferRelease(cmd);
     wgpuCommandEncoderRelease(encoder);
+
+    wgpuBindGroupRelease(bg);
+    wgpuTextureViewRelease(srcView);
+    wgpuTextureViewRelease(tmpView);
 }
 
 void WgpuRenderer::copyTextureToImage(Texture& texture) {
