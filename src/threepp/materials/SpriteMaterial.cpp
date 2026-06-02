@@ -45,6 +45,31 @@ std::shared_ptr<SpriteMaterial> SpriteMaterial::create(const std::unordered_map<
     return m;
 }
 
+std::shared_ptr<SpriteMaterial> SpriteMaterial::create(const Params& p) {
+
+    auto m = std::shared_ptr<SpriteMaterial>(new SpriteMaterial());
+
+    p.applyBaseTo(*m);
+
+    // Apply only the fields the caller set; everything else keeps the constructor default.
+    // Params stores each value in a `field_` member; the material's field is `field`.
+#define TPP_SET(field) \
+    if (p.field##_) m->field = *p.field##_;
+#define TPP_TEX(field) \
+    if (p.field##_) m->field = p.field##_;
+
+    TPP_SET(color)
+    TPP_TEX(map)
+    TPP_TEX(alphaMap)
+    TPP_SET(rotation)
+    TPP_SET(sizeAttenuation)
+
+#undef TPP_SET
+#undef TPP_TEX
+
+    return m;
+}
+
 bool SpriteMaterial::setValue(const std::string& key, const MaterialValue& value) {
 
     if (key == "color") {

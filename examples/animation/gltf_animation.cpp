@@ -25,7 +25,7 @@ int main() {
     // Ground
     auto ground = Mesh::create(
             PlaneGeometry::create(20, 20),
-            MeshPhongMaterial::create({{"color", 0x999999}, {"depthWrite", false}}));
+            MeshPhongMaterial::create(MeshPhongMaterial::Params{}.color(0x999999).depthWrite(false)));
     ground->rotation.x = -math::PI / 2;
     ground->receiveShadow = true;
     scene.add(ground);

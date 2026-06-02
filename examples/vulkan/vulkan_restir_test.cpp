@@ -37,15 +37,16 @@ namespace {
 
     // ── Tiny emissive sphere ──────────────────────────────────────────────────────
     std::shared_ptr<Mesh> emissiveBall(const Color& c, float intensity, float r = 0.20f) {
-        auto mat = MeshStandardMaterial::create({{"color", c}, {"emissive", c}, {"emissiveIntensity", intensity}, {"roughness", 1.f}});
+        auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(c).emissive(c).emissiveIntensity(intensity).roughness(1.f));
         return Mesh::create(SphereGeometry::create(r, 16, 16), mat);
     }
 
     // ── Slim dark-metal pedestal ──────────────────────────────────────────────────
     std::shared_ptr<Mesh> makePedestal() {
-        auto mat = MeshStandardMaterial::create({{"color", Color(0.10f, 0.10f, 0.12f)},
-                                                 {"roughness", 0.12f},
-                                                 {"metalness", 0.85f}});
+        auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                        .color(Color(0.10f, 0.10f, 0.12f))
+                                                        .roughness(0.12f)
+                                                        .metalness(0.85f));
         return Mesh::create(CylinderGeometry::create(0.36f, 0.48f, 1.5f, 32), mat);
     }
 
@@ -78,9 +79,10 @@ namespace {
         }};
 
         for (auto& w : walls) {
-            auto mat = MeshStandardMaterial::create({{"color", w.col},
-                                                     {"roughness", w.rough},
-                                                     {"metalness", w.metal}});
+            auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                            .color(w.col)
+                                                            .roughness(w.rough)
+                                                            .metalness(w.metal));
             mat->side = w.backSide ? Side::Back : Side::Front;
             auto m = Mesh::create(PlaneGeometry::create(w.pw, w.ph), mat);
             m->rotation.x = w.rx;
@@ -93,9 +95,10 @@ namespace {
     // ── 4 tall dark pillars for shadow complexity ─────────────────────────────────
     void buildPillars(Scene& scene) {
         constexpr float H = 13.f;
-        auto mat = MeshStandardMaterial::create({{"color", Color(0.16f, 0.16f, 0.18f)},
-                                                 {"roughness", 0.30f},
-                                                 {"metalness", 0.35f}});
+        auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                        .color(Color(0.16f, 0.16f, 0.18f))
+                                                        .roughness(0.30f)
+                                                        .metalness(0.35f));
         const float xs[] = {-5.5f, 5.5f, -5.5f, 5.5f};
         const float zs[] = {-5.0f, -5.0f, 2.5f, 2.5f};
         for (int i = 0; i < 4; ++i) {
@@ -127,10 +130,11 @@ namespace {
         }};
 
         for (auto& s : strips) {
-            auto mat = MeshStandardMaterial::create({{"color", s.col},
-                                                     {"emissive", s.col},
-                                                     {"emissiveIntensity", s.intensity},
-                                                     {"roughness", 1.f}});
+            auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                            .color(s.col)
+                                                            .emissive(s.col)
+                                                            .emissiveIntensity(s.intensity)
+                                                            .roughness(1.f));
             auto m = Mesh::create(PlaneGeometry::create(STRIP_LEN, STRIP_W), mat);
             m->position.set(0.f, Y, s.z);
             m->rotation.x = math::PI / 2;// flip normal to face downward into the room
@@ -141,7 +145,7 @@ namespace {
     // ── Central sapphire glass sphere ─────────────────────────────────────────────
     void buildCentreSphere(Scene& scene) {
         auto mat = MeshPhysicalMaterial::create(
-                {{"color", Color::white}, {"transmission", 1.f}, {"roughness", 0.f}, {"metalness", 0.f}});
+                MeshPhysicalMaterial::Params{}.color(Color::white).transmission(1.f).roughness(0.f).metalness(0.f));
         mat->setIor(1.65f);
         mat->attenuationColor = Color(0.08f, 0.20f, 1.f);
         mat->attenuationDistance = 2.5f;
@@ -171,23 +175,24 @@ namespace {
                 case 0: {
                     // Mirror gold
                     auto m = MeshStandardMaterial::create(
-                            {{"color", Color(1.f, 0.84f, 0.f)}, {"roughness", 0.01f}, {"metalness", 1.f}});
+                            MeshStandardMaterial::Params{}.color(Color(1.f, 0.84f, 0.f)).roughness(0.01f).metalness(1.f));
                     obj = Mesh::create(SphereGeometry::create(0.55f, 64, 64), m);
                     break;
                 }
                 case 1: {
                     // Rough copper
                     auto m = MeshStandardMaterial::create(
-                            {{"color", Color(0.95f, 0.54f, 0.31f)}, {"roughness", 0.38f}, {"metalness", 1.f}});
+                            MeshStandardMaterial::Params{}.color(Color(0.95f, 0.54f, 0.31f)).roughness(0.38f).metalness(1.f));
                     obj = Mesh::create(SphereGeometry::create(0.55f, 48, 48), m);
                     break;
                 }
                 case 2: {
                     // Crystal ball — clear glass + strong dispersion (prism effect)
-                    auto m = MeshPhysicalMaterial::create({{"color", Color::white},
-                                                           {"transmission", 1.f},
-                                                           {"roughness", 0.f},
-                                                           {"metalness", 0.f}});
+                    auto m = MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}
+                                                                  .color(Color::white)
+                                                                  .transmission(1.f)
+                                                                  .roughness(0.f)
+                                                                  .metalness(0.f));
                     m->setIor(1.75f);
                     m->dispersion = 0.45f;
                     obj = Mesh::create(SphereGeometry::create(0.55f, 64, 64), m);
@@ -195,10 +200,11 @@ namespace {
                 }
                 case 3: {
                     // Amber glass — Beer-Lambert warm tint
-                    auto m = MeshPhysicalMaterial::create({{"color", Color::white},
-                                                           {"transmission", 1.f},
-                                                           {"roughness", 0.f},
-                                                           {"metalness", 0.f}});
+                    auto m = MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}
+                                                                  .color(Color::white)
+                                                                  .transmission(1.f)
+                                                                  .roughness(0.f)
+                                                                  .metalness(0.f));
                     m->setIor(1.50f);
                     m->attenuationColor = Color(1.f, 0.55f, 0.08f);
                     m->attenuationDistance = 0.9f;
@@ -207,9 +213,10 @@ namespace {
                 }
                 case 4: {
                     // Piano-black clearcoat lacquer
-                    auto m = MeshPhysicalMaterial::create({{"color", Color(0.02f, 0.02f, 0.025f)},
-                                                           {"roughness", 0.55f},
-                                                           {"metalness", 0.f}});
+                    auto m = MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}
+                                                                  .color(Color(0.02f, 0.02f, 0.025f))
+                                                                  .roughness(0.55f)
+                                                                  .metalness(0.f));
                     m->clearcoat = 1.f;
                     m->clearcoatRoughness = 0.03f;
                     obj = Mesh::create(SphereGeometry::create(0.55f, 48, 48), m);
@@ -217,10 +224,11 @@ namespace {
                 }
                 case 5: {
                     // Emerald glass — Beer-Lambert green tint
-                    auto m = MeshPhysicalMaterial::create({{"color", Color::white},
-                                                           {"transmission", 1.f},
-                                                           {"roughness", 0.f},
-                                                           {"metalness", 0.f}});
+                    auto m = MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}
+                                                                  .color(Color::white)
+                                                                  .transmission(1.f)
+                                                                  .roughness(0.f)
+                                                                  .metalness(0.f));
                     m->setIor(1.58f);
                     m->attenuationColor = Color(0.08f, 1.f, 0.28f);
                     m->attenuationDistance = 0.8f;
@@ -229,17 +237,19 @@ namespace {
                 }
                 case 6: {
                     // Brushed chrome
-                    auto m = MeshStandardMaterial::create({{"color", Color(0.84f, 0.84f, 0.87f)},
-                                                           {"roughness", 0.26f},
-                                                           {"metalness", 1.f}});
+                    auto m = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                                  .color(Color(0.84f, 0.84f, 0.87f))
+                                                                  .roughness(0.26f)
+                                                                  .metalness(1.f));
                     obj = Mesh::create(SphereGeometry::create(0.55f, 48, 48), m);
                     break;
                 }
                 case 7: {
                     // Red velvet torus-knot — sheen material
-                    auto m = MeshPhysicalMaterial::create({{"color", Color(0.48f, 0.02f, 0.02f)},
-                                                           {"roughness", 0.88f},
-                                                           {"metalness", 0.f}});
+                    auto m = MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}
+                                                                  .color(Color(0.48f, 0.02f, 0.02f))
+                                                                  .roughness(0.88f)
+                                                                  .metalness(0.f));
                     m->sheenColor = Color(1.f, 0.12f, 0.12f);
                     m->sheenRoughness = 0.32f;
                     obj = Mesh::create(TorusKnotGeometry::create(0.36f, 0.13f, 128, 24, 2, 3), m);
@@ -264,12 +274,14 @@ namespace {
 
         // ── Back wall (z = -HALF): art-deco gold grille ───────────────────────────
         {
-            auto goldMat = MeshStandardMaterial::create({{"color", Color(0.72f, 0.58f, 0.38f)},
-                                                         {"roughness", 0.18f},
-                                                         {"metalness", 0.95f}});
-            auto accentMat = MeshStandardMaterial::create({{"color", Color(1.0f, 0.88f, 0.55f)},
-                                                           {"roughness", 0.05f},
-                                                           {"metalness", 1.0f}});
+            auto goldMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                                .color(Color(0.72f, 0.58f, 0.38f))
+                                                                .roughness(0.18f)
+                                                                .metalness(0.95f));
+            auto accentMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                                  .color(Color(1.0f, 0.88f, 0.55f))
+                                                                  .roughness(0.05f)
+                                                                  .metalness(1.0f));
             // 5 vertical fins running floor-to-ceiling
             const float finX[] = {-9.f, -4.5f, 0.f, 4.5f, 9.f};
             for (float x : finX) {
@@ -296,12 +308,14 @@ namespace {
 
         // ── Left wall (x = -HALF, crimson): 3 gold torus mirrors ─────────────────
         {
-            auto ringMat = MeshStandardMaterial::create({{"color", Color(1.f, 0.84f, 0.f)},
-                                                         {"roughness", 0.05f},
-                                                         {"metalness", 1.f}});
-            auto mirrorMat = MeshStandardMaterial::create({{"color", Color(0.95f, 0.96f, 1.f)},
-                                                           {"roughness", 0.01f},
-                                                           {"metalness", 1.f}});
+            auto ringMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                                .color(Color(1.f, 0.84f, 0.f))
+                                                                .roughness(0.05f)
+                                                                .metalness(1.f));
+            auto mirrorMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                                  .color(Color(0.95f, 0.96f, 1.f))
+                                                                  .roughness(0.01f)
+                                                                  .metalness(1.f));
             const float zPos[] = {-7.f, 0.f, 7.f};
             for (float z : zPos) {
                 // Gold ring frame
@@ -319,9 +333,10 @@ namespace {
 
         // ── Right wall (x = +HALF, cobalt): 3 chrome octahedra ───────────────────
         {
-            auto chromeMat = MeshStandardMaterial::create({{"color", Color(0.84f, 0.84f, 0.87f)},
-                                                           {"roughness", 0.06f},
-                                                           {"metalness", 1.f}});
+            auto chromeMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                                  .color(Color(0.84f, 0.84f, 0.87f))
+                                                                  .roughness(0.06f)
+                                                                  .metalness(1.f));
             const float zPos[] = {-7.f, 0.f, 7.f};
             for (int i = 0; i < 3; ++i) {
                 auto oct = Mesh::create(OctahedronGeometry::create(0.75f), chromeMat);

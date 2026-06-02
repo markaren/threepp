@@ -23,55 +23,27 @@ namespace {
     // --- Materials ---
 
     auto matChrome() {
-        return MeshStandardMaterial::create({
-                {"color", Color(0.95f, 0.93f, 0.88f)},
-                {"roughness", 0.02f},
-                {"metalness", 1.0f},
-        });
+        return MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.95f, 0.93f, 0.88f)).roughness(0.02f).metalness(1.0f));
     }
 
     auto matGold() {
-        return MeshStandardMaterial::create({
-                {"color", Color(1.0f, 0.76f, 0.33f)},
-                {"roughness", 0.1f},
-                {"metalness", 1.0f},
-        });
+        return MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(1.0f, 0.76f, 0.33f)).roughness(0.1f).metalness(1.0f));
     }
 
     auto matCopper() {
-        return MeshStandardMaterial::create({
-                {"color", Color(0.72f, 0.45f, 0.20f)},
-                {"roughness", 0.15f},
-                {"metalness", 1.0f},
-        });
+        return MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.72f, 0.45f, 0.20f)).roughness(0.15f).metalness(1.0f));
     }
 
     auto matGlass(Color tint = Color::white) {
-        return MeshPhysicalMaterial::create({
-                {"color", tint},
-                {"transmission", 0.95f},
-                {"ior", 1.5f},
-                {"roughness", 0.0f},
-                {"metalness", 0.0f},
-                {"attenuationDistance", 2.0f},
-        });
+        return MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}.color(tint).transmission(0.95f).ior(1.5f).roughness(0.0f).metalness(0.0f).attenuationDistance(2.0f));
     }
 
     auto matRoughDiffuse(Color c, float roughness = 0.9f, Side side = Side::Front) {
-        return MeshStandardMaterial::create({
-                {"color", c},
-                {"roughness", roughness},
-                {"side", side},
-        });
+        return MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(c).roughness(roughness).side(side));
     }
 
     auto matEmissive(Color c, float intensity) {
-        return MeshStandardMaterial::create({
-                {"color", c},
-                {"emissive", c},
-                {"emissiveIntensity", intensity},
-                {"roughness", 1.0f},
-        });
+        return MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(c).emissive(c).emissiveIntensity(intensity).roughness(1.0f));
     }
 
     // --- Room (open-front box, 20x10x20) ---
@@ -225,11 +197,7 @@ namespace {
                 Color c;
                 c.setHSL(hue, 0.7f, 0.5f);
 
-                auto mat = MeshStandardMaterial::create({
-                        {"color", c},
-                        {"roughness", roughness},
-                        {"metalness", metalness},
-                });
+                auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(c).roughness(roughness).metalness(metalness));
 
                 auto sphere = Mesh::create(SphereGeometry::create(0.3f, 24, 24), mat);
                 float x = -6.f + ix * 1.0f;

@@ -8,7 +8,7 @@ namespace {
 
     auto createBox(const Vector3& pos, const Color& color) {
         const auto boxGeometry = BoxGeometry::create();
-        const auto boxMaterial = MeshPhongMaterial::create({{"color", color}});
+        const auto boxMaterial = MeshPhongMaterial::create(MeshPhongMaterial::Params{}.color(color));
         auto box = Mesh::create(boxGeometry, boxMaterial);
         box->position.copy(pos);
 
@@ -17,7 +17,7 @@ namespace {
 
     auto createPlane() {
         const auto planeGeometry = PlaneGeometry::create(5, 5);
-        const auto planeMaterial = MeshPhongMaterial::create({{"color", Color::gray}, {"side", Side::Double}});
+        const auto planeMaterial = MeshPhongMaterial::create(MeshPhongMaterial::Params{}.color(Color::gray).side(Side::Double));
         auto plane = Mesh::create(planeGeometry, planeMaterial);
         plane->position.y = -1;
         plane->rotateX(math::degToRad(90));

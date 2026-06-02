@@ -40,8 +40,7 @@ namespace {
         shapeGeometry->center();
         shapeGeometry->scale(0.02f, 0.02f, 0.02f);
 
-        auto material = MeshBasicMaterial::create({{"color", Color::orange},
-                                                   {"side", Side::Double}});
+        auto material = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::orange).side(Side::Double));
 
         auto mesh = Mesh::create(shapeGeometry, material);
         mesh->rotateZ(math::PI);

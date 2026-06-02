@@ -33,6 +33,34 @@ std::shared_ptr<MeshNormalMaterial> MeshNormalMaterial::create(const std::unorde
     return m;
 }
 
+std::shared_ptr<MeshNormalMaterial> MeshNormalMaterial::create(const Params& p) {
+
+    auto m = std::shared_ptr<MeshNormalMaterial>(new MeshNormalMaterial());
+
+    p.applyBaseTo(*m);
+
+    // Apply only the fields the caller set; everything else keeps the constructor default.
+    // Params stores each value in a `field_` member; the material's field is `field`.
+#define TPP_SET(field) \
+    if (p.field##_) m->field = *p.field##_;
+#define TPP_TEX(field) \
+    if (p.field##_) m->field = p.field##_;
+
+    TPP_SET(wireframe)
+    TPP_SET(wireframeLinewidth)
+    TPP_SET(flatShading)
+    TPP_TEX(normalMap)
+    TPP_SET(normalMapType)
+    TPP_TEX(displacementMap)
+    TPP_SET(displacementBias)
+    TPP_SET(displacementScale)
+
+#undef TPP_SET
+#undef TPP_TEX
+
+    return m;
+}
+
 void MeshNormalMaterial::copyInto(Material& material) const {
 
     Material::copyInto(material);

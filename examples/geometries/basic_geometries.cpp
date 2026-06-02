@@ -13,7 +13,7 @@ namespace {
 
     auto createMesh() {
         const auto geometry = BoxGeometry::create();
-        const auto material = MeshBasicMaterial::create({{"side", Side::Double}});
+        const auto material = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.side(Side::Double));
         auto mesh = Mesh::create(geometry, material);
         mesh->add(createWireframe(*geometry));
         return mesh;

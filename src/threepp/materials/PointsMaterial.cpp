@@ -42,6 +42,31 @@ std::shared_ptr<PointsMaterial> PointsMaterial::create(const std::unordered_map<
     return m;
 }
 
+std::shared_ptr<PointsMaterial> PointsMaterial::create(const Params& p) {
+
+    auto m = std::shared_ptr<PointsMaterial>(new PointsMaterial());
+
+    p.applyBaseTo(*m);
+
+    // Apply only the fields the caller set; everything else keeps the constructor default.
+    // Params stores each value in a `field_` member; the material's field is `field`.
+#define TPP_SET(field) \
+    if (p.field##_) m->field = *p.field##_;
+#define TPP_TEX(field) \
+    if (p.field##_) m->field = p.field##_;
+
+    TPP_SET(color)
+    TPP_SET(size)
+    TPP_SET(sizeAttenuation)
+    TPP_TEX(map)
+    TPP_TEX(alphaMap)
+
+#undef TPP_SET
+#undef TPP_TEX
+
+    return m;
+}
+
 bool PointsMaterial::setValue(const std::string& key, const MaterialValue& value) {
 
     if (key == "color") {

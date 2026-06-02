@@ -39,7 +39,7 @@ int main() {
     std::vector<Object3D*> objects;
     for (unsigned i = 0; i < 200; i++) {
 
-        auto object = Mesh::create(geometry, MeshLambertMaterial::create({{"color", Color().randomize()}}));
+        auto object = Mesh::create(geometry, MeshLambertMaterial::create(MeshLambertMaterial::Params{}.color(Color().randomize())));
 
         object->position.x = math::randFloat() * 30 - 15;
         object->position.y = math::randFloat() * 15 - 7.5f;

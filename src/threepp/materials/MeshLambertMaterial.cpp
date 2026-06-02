@@ -64,6 +64,41 @@ std::shared_ptr<MeshLambertMaterial> MeshLambertMaterial::create(const std::unor
     return m;
 }
 
+std::shared_ptr<MeshLambertMaterial> MeshLambertMaterial::create(const Params& p) {
+
+    auto m = std::shared_ptr<MeshLambertMaterial>(new MeshLambertMaterial());
+
+    p.applyBaseTo(*m);
+
+    // Apply only the fields the caller set; everything else keeps the constructor default.
+    // Params stores each value in a `field_` member; the material's field is `field`.
+#define TPP_SET(field) \
+    if (p.field##_) m->field = *p.field##_;
+#define TPP_TEX(field) \
+    if (p.field##_) m->field = p.field##_;
+
+    TPP_SET(color)
+    TPP_SET(emissive)
+    TPP_TEX(map)
+    TPP_TEX(aoMap)
+    TPP_SET(aoMapIntensity)
+    TPP_TEX(alphaMap)
+    TPP_TEX(specularMap)
+    TPP_TEX(lightMap)
+    TPP_SET(lightMapIntensity)
+    TPP_SET(wireframe)
+    TPP_SET(wireframeLinewidth)
+    TPP_TEX(envMap)
+    TPP_SET(combine)
+    TPP_SET(reflectivity)
+    TPP_SET(refractionRatio)
+
+#undef TPP_SET
+#undef TPP_TEX
+
+    return m;
+}
+
 bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& value) {
 
     if (key == "color") {

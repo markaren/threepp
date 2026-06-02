@@ -31,7 +31,7 @@ namespace {
     constexpr float kRoomHeight = 5.0f;
 
     auto matteWhite() {
-        return MeshStandardMaterial::create({{"color", Color(0.78f, 0.78f, 0.78f)}, {"roughness", 0.9f}});
+        return MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.78f, 0.78f, 0.78f)).roughness(0.9f));
     }
 
     void addRoom(Scene& scene) {
@@ -47,7 +47,7 @@ namespace {
         // Ceiling — kept dark + matte so emissive panels above it don't lift
         // the unlit sections; lighting differences between sections stay visible.
         auto ceil = Mesh::create(PlaneGeometry::create(roomWidth, kRoomDepth),
-                                 MeshStandardMaterial::create({{"color", Color(0.15f, 0.15f, 0.15f)}, {"roughness", 1.0f}}));
+                                 MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.15f, 0.15f, 0.15f)).roughness(1.0f)));
         ceil->rotation.x = math::PI / 2.f;
         ceil->position.y = kRoomHeight;
         scene.add(ceil);
@@ -69,11 +69,7 @@ namespace {
     // Per-section receivers: a chrome sphere (highlights), a matte sphere
     // (diffuse + shadow), and a small cube (cast a hard shadow on the floor).
     void addReceivers(Scene& scene, float sectionX) {
-        auto chromeMat = MeshStandardMaterial::create({
-                {"color", Color(0.95f, 0.95f, 0.95f)},
-                {"roughness", 0.05f},
-                {"metalness", 1.0f},
-        });
+        auto chromeMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.95f, 0.95f, 0.95f)).roughness(0.05f).metalness(1.0f));
         auto chrome = Mesh::create(SphereGeometry::create(0.45f, 48, 32), chromeMat);
         chrome->position.set(sectionX - 0.85f, 0.45f, 0.6f);
         scene.add(chrome);
@@ -82,7 +78,7 @@ namespace {
         matte->position.set(sectionX + 0.0f, 0.45f, 0.0f);
         scene.add(matte);
 
-        auto cubeMat = MeshStandardMaterial::create({{"color", Color(0.85f, 0.85f, 0.85f)}, {"roughness", 0.6f}});
+        auto cubeMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.85f, 0.85f, 0.85f)).roughness(0.6f));
         auto cube = Mesh::create(BoxGeometry::create(0.55f, 0.55f, 0.55f), cubeMat);
         cube->position.set(sectionX + 0.85f, 0.275f, 0.5f);
         cube->rotation.y = 0.4f;
@@ -146,12 +142,7 @@ int main() {
     scene.add(rectLight);
     // Visualize the panel — emissive plane matched to the light dimensions.
     // PlaneGeometry's front face is +Z, so rotation.x = -π/2 turns it face-down.
-    auto rectPanelMat = MeshStandardMaterial::create({
-            {"color", Color::black},
-            {"emissive", Color(1.0f, 0.95f, 0.85f)},
-            {"emissiveIntensity", 6.0f},
-            {"roughness", 1.0f},
-    });
+    auto rectPanelMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::black).emissive(Color(1.0f, 0.95f, 0.85f)).emissiveIntensity(6.0f).roughness(1.0f));
     auto rectPanel = Mesh::create(PlaneGeometry::create(1.6f, 0.6f), rectPanelMat);
     rectPanel->position.copy(rectLight->position);
     rectPanel->rotation.x = -math::PI / 2.f;
@@ -161,12 +152,7 @@ int main() {
     // No analytic light here — illumination comes purely from a glowing torus
     // that the PT samples explicitly via emissive-triangle NEE. Cyan to make
     // the colour bleed obvious on the matte receivers.
-    auto neonMat = MeshStandardMaterial::create({
-            {"color", Color::black},
-            {"emissive", Color(0.1f, 0.95f, 1.0f)},
-            {"emissiveIntensity", 22.0f},
-            {"roughness", 1.0f},
-    });
+    auto neonMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::black).emissive(Color(0.1f, 0.95f, 1.0f)).emissiveIntensity(22.0f).roughness(1.0f));
     auto neon = Mesh::create(TorusGeometry::create(0.55f, 0.05f, 16, 64), neonMat);
     neon->rotation.x = math::PI / 2.f;
     neon->position.set(kSectionXs[4], 2.6f, 0.5f);

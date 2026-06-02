@@ -38,7 +38,7 @@ namespace {
         auto curvePoints = curve.getPoints(50);
         const auto geometry = BufferGeometry::create();
         geometry->setFromPoints(curvePoints);
-        auto curveObject = Line::create(geometry, LineBasicMaterial::create({{"color", Color::red}}));
+        auto curveObject = Line::create(geometry, LineBasicMaterial::create(LineBasicMaterial::Params{}.color(Color::red)));
 
         curveObject->add(createSpheres(curvePoints));
         curveObject->castShadow = true;

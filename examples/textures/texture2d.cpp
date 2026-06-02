@@ -17,24 +17,27 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     TextureLoader tl;
+    auto checkerTex = tl.load(std::string(DATA_FOLDER) + "/textures/checker.png", ColorSpace::sRGB);
+    auto crateTex = tl.load(std::string(DATA_FOLDER) + "/textures/crate.gif", ColorSpace::sRGB);
+    auto brickTex = tl.load(std::string(DATA_FOLDER) + "/textures/brick_bump.jpg", ColorSpace::sRGB);
 
     const auto sphereGeometry = SphereGeometry::create(0.5f, 16, 16);
-    const auto sphereMaterial = MeshBasicMaterial::create({{"map", tl.load(std::string(DATA_FOLDER) + "/textures/checker.png", ColorSpace::sRGB)}});
+    const auto sphereMaterial = MeshBasicMaterial::create(
+            MeshBasicMaterial::Params{}.map(checkerTex));
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
     sphere->position.setX(1);
     scene.add(sphere);
 
     const auto boxGeometry = BoxGeometry::create();
-    const auto boxMaterial = MeshBasicMaterial::create();
-    boxMaterial->map = tl.load(std::string(DATA_FOLDER) + "/textures/crate.gif", ColorSpace::sRGB);
-
+    const auto boxMaterial = MeshBasicMaterial::create(
+            MeshBasicMaterial::Params{}.map(crateTex));
     auto box = Mesh::create(boxGeometry, boxMaterial);
     box->position.setX(-1);
     scene.add(box);
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
-    const auto planeMaterial = MeshBasicMaterial::create({{"side", Side::Double},
-                                                          {"map", tl.load(std::string(DATA_FOLDER) + "/textures/brick_bump.jpg", ColorSpace::sRGB)}});
+    const auto planeMaterial = MeshBasicMaterial::create(
+            MeshBasicMaterial::Params{}.side(Side::Double).map(brickTex));
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setZ(-1);
     scene.add(plane);

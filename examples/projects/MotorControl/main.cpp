@@ -60,7 +60,7 @@ namespace {
             auto boxGeometry = BoxGeometry::create(0.1, 0.5, 0.1);
             boxGeometry->translate(0, boxGeometry->height / 2, 0);
 
-            auto material = MeshBasicMaterial::create({{"color", 0x000000}});
+            auto material = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(0x000000));
 
             auto cylinder = Mesh::create(cylinderGeometry, material);
             auto box = Mesh::create(boxGeometry, material);
@@ -72,7 +72,7 @@ namespace {
 
         static std::shared_ptr<Mesh> createRing() {
             auto ringGeometry = RingGeometry::create(0.5f, 0.75f, 32, 8, math::PI / 2, math::PI);
-            auto mat = MeshBasicMaterial::create({{"color", Color::red}});
+            auto mat = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::red));
             mat->opacity = 0.1f;
             mat->transparent = true;
 

@@ -317,7 +317,7 @@ int main() {
         pcGeom->getAttribute<float>("position")->setUsage(DrawUsage::Dynamic);
         pcGeom->getAttribute<float>("color")->setUsage(DrawUsage::Dynamic);
 
-        auto pcMat = PointsMaterial::create({{"size", 0.05f}, {"vertexColors", true}});
+        auto pcMat = PointsMaterial::create(PointsMaterial::Params{}.size(0.05f).vertexColors(true));
         depthPoints = Points::create(pcGeom, pcMat);
         depthPoints->frustumCulled = false;
         sensorScene->add(*depthPoints);

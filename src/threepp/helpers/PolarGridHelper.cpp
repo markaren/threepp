@@ -9,7 +9,7 @@
 using namespace threepp;
 
 PolarGridHelper::PolarGridHelper(float radius, unsigned int sectors, unsigned int rings, unsigned int divisions, const Color& color1, const Color& color2)
-    : LineSegments(BufferGeometry::create(), LineBasicMaterial::create()) {
+    : LineSegments(BufferGeometry::create(), LineBasicMaterial::create(LineBasicMaterial::Params{}.vertexColors(true).toneMapped(false))) {
 
     std::vector<float> vertices;
     std::vector<float> colors;
@@ -69,8 +69,6 @@ PolarGridHelper::PolarGridHelper(float radius, unsigned int sectors, unsigned in
 
     geometry_->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
     geometry_->setAttribute("color", FloatBufferAttribute::create(colors, 3));
-
-    material()->setValues({{"vertexColors", true}, {"toneMapped", false}});
 }
 
 

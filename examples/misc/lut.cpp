@@ -164,8 +164,8 @@ int main() {
     planeGeometry->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
     planeGeometry2->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
 
-    auto plane = Mesh::create(planeGeometry, MeshBasicMaterial::create({{"vertexColors", true}}));
-    auto wireframe = Mesh::create(planeGeometry2, MeshBasicMaterial::create({{"wireframe", true}}));
+    auto plane = Mesh::create(planeGeometry, MeshBasicMaterial::create(MeshBasicMaterial::Params{}.vertexColors(true)));
+    auto wireframe = Mesh::create(planeGeometry2, MeshBasicMaterial::create(MeshBasicMaterial::Params{}.wireframe(true)));
     wireframe->material()->depthTest = false;
     wireframe->material()->opacity = 0.25;
     wireframe->material()->transparent = true;

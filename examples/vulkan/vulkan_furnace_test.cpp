@@ -174,9 +174,10 @@ int main() {
     scene.environment = envTex;
     scene.background = envTex;// show env as backdrop so "1.0" everywhere is obvious
 
-    auto sphereMat = MeshStandardMaterial::create({{"color", Color(1.f, 1.f, 1.f)},
-                                                   {"roughness", 1.f},
-                                                   {"metalness", 0.f}});
+    auto sphereMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                           .color(Color(1.f, 1.f, 1.f))
+                                                           .roughness(1.f)
+                                                           .metalness(0.f));
     auto sphere = Mesh::create(SphereGeometry::create(1.f, 64, 64), sphereMat);
     scene.add(sphere);
 
