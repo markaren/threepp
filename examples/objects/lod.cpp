@@ -20,7 +20,7 @@ int main() {
     LOD lod1;
     scene.add(lod1);
 
-    auto material = MeshBasicMaterial::create({{"wireframe", true}});
+    auto material = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.wireframe(true));
     for (int z = 0; z <= 5; z++) {
         constexpr float radius = 0.5f;
         int detail = 6 - z;

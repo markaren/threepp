@@ -105,8 +105,8 @@ int main() {
     planeGeometry->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
     planeGeometry2->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
 
-    auto plane = Mesh::create(planeGeometry, MeshBasicMaterial::create({{"vertexColors", true}}));
-    auto wireframe = Mesh::create(planeGeometry2, MeshBasicMaterial::create({{"wireframe", true}}));
+    auto plane = Mesh::create(planeGeometry, MeshBasicMaterial::create(MeshBasicMaterial::Params{}.vertexColors(true)));
+    auto wireframe = Mesh::create(planeGeometry2, MeshBasicMaterial::create(MeshBasicMaterial::Params{}.wireframe(true)));
     wireframe->material()->depthTest = false;
     wireframe->material()->opacity = 0.25;
     wireframe->material()->transparent = true;
@@ -116,13 +116,13 @@ int main() {
 
     auto solutionMesh = InstancedMesh::create(
             CylinderGeometry::create(0.01, 0.01, maxHeight, 32),
-            MeshBasicMaterial::create({{"color", Color::greenyellow}}), 10);
+            MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::greenyellow)), 10);
     solutionMesh->setCount(0);
     scene.add(solutionMesh);
 
     auto searchSpace = InstancedMesh::create(
             SphereGeometry::create(0.05),
-            MeshBasicMaterial::create({{"color", Color::black}}), 500);
+            MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::black)), 500);
     searchSpace->setCount(algorithms[selectedAlgorithm]->size());
     scene.add(searchSpace);
 

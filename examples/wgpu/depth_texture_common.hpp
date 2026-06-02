@@ -29,7 +29,7 @@ namespace depthdemo {
         using namespace threepp;
 
         const auto geometry = TorusKnotGeometry::create(1, 0.3, 128, 64);
-        const auto material = MeshBasicMaterial::create({{"color", Color::blue}});
+        const auto material = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::blue));
 
         Rng rng;
         const int count = 50;

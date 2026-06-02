@@ -7,7 +7,7 @@ using namespace threepp;
 
 
 BoxHelper::BoxHelper(Object3D& object, const Color& color)
-    : LineSegments(BufferGeometry::create(), LineBasicMaterial::create()),
+    : LineSegments(BufferGeometry::create(), LineBasicMaterial::create(LineBasicMaterial::Params{}.color(color).toneMapped(false))),
       object(&object) {
 
     std::vector<unsigned int> indices{0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7};
@@ -15,8 +15,6 @@ BoxHelper::BoxHelper(Object3D& object, const Color& color)
 
     geometry_->setIndex(indices);
     geometry_->setAttribute("position", FloatBufferAttribute::create(positions, 3));
-
-    material()->setValues({{"color", color}, {"toneMapped", false}});
 
     this->matrixAutoUpdate = false;
 

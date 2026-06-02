@@ -21,7 +21,7 @@ using namespace threepp;
 namespace {
 
     auto whiteWallMat() {
-        return MeshStandardMaterial::create({{"color", Color(0.73f, 0.73f, 0.73f)}, {"roughness", 0.95f}});
+        return MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.73f, 0.73f, 0.73f)).roughness(0.95f));
     }
 
     struct Room {
@@ -45,13 +45,13 @@ namespace {
         back->position.set(0.f, S / 2.f, -S / 2.f);
         group->add(back);
 
-        auto leftMat = MeshStandardMaterial::create({{"color", Color(0.65f, 0.05f, 0.05f)}, {"roughness", 0.95f}});
+        auto leftMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.65f, 0.05f, 0.05f)).roughness(0.95f));
         auto left = Mesh::create(PlaneGeometry::create(S, S), leftMat);
         left->rotation.y = math::PI / 2.f;
         left->position.set(-S / 2.f, S / 2.f, 0.f);
         group->add(left);
 
-        auto rightMat = MeshStandardMaterial::create({{"color", Color(0.12f, 0.45f, 0.15f)}, {"roughness", 0.95f}});
+        auto rightMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.12f, 0.45f, 0.15f)).roughness(0.95f));
         auto right = Mesh::create(PlaneGeometry::create(S, S), rightMat);
         right->rotation.y = -math::PI / 2.f;
         right->position.set(S / 2.f, S / 2.f, 0.f);
@@ -62,12 +62,7 @@ namespace {
 
     // Bright emissive ceiling panel — primary area light for NEE.
     auto makeLightPanel() {
-        auto mat = MeshStandardMaterial::create({
-                {"color", Color::white},
-                {"emissive", Color::white},
-                {"emissiveIntensity", 18.0f},
-                {"roughness", 1.0f},
-        });
+        auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::white).emissive(Color::white).emissiveIntensity(18.0f).roughness(1.0f));
         auto mesh = Mesh::create(PlaneGeometry::create(3.0f, 3.0f), mat);
         mesh->rotation.x = math::PI / 2.f;
         mesh->position.set(0.f, 9.99f, 0.f);
@@ -84,45 +79,28 @@ namespace {
 
         // 1. Rough white diffuse
         {
-            auto mat = MeshStandardMaterial::create({
-                    {"color", Color(0.85f, 0.85f, 0.85f)},
-                    {"roughness", 0.95f},
-                    {"metalness", 0.0f},
-            });
+            auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.85f, 0.85f, 0.85f)).roughness(0.95f).metalness(0.0f));
             auto m = Mesh::create(sphereGeom, mat);
             m->position.set(x0 + 0 * dx, y, 2.5f);
             out.push_back(m);
         }
         // 2. Rough gold metal
         {
-            auto mat = MeshStandardMaterial::create({
-                    {"color", Color(1.0f, 0.78f, 0.32f)},
-                    {"roughness", 0.25f},
-                    {"metalness", 1.0f},
-            });
+            auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(1.0f, 0.78f, 0.32f)).roughness(0.25f).metalness(1.0f));
             auto m = Mesh::create(sphereGeom, mat);
             m->position.set(x0 + 1 * dx, y, 2.5f);
             out.push_back(m);
         }
         // 3. Smooth chrome mirror
         {
-            auto mat = MeshStandardMaterial::create({
-                    {"color", Color(0.97f, 0.97f, 0.97f)},
-                    {"roughness", 0.02f},
-                    {"metalness", 1.0f},
-            });
+            auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.97f, 0.97f, 0.97f)).roughness(0.02f).metalness(1.0f));
             auto m = Mesh::create(sphereGeom, mat);
             m->position.set(x0 + 2 * dx, y, 2.5f);
             out.push_back(m);
         }
         // 4. Glass (transmission + IOR)
         {
-            auto mat = MeshPhysicalMaterial::create({
-                    {"color", Color::white},
-                    {"transmission", 1.0f},
-                    {"roughness", 0.0f},
-                    {"metalness", 0.0f},
-            });
+            auto mat = MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}.color(Color::white).transmission(1.0f).roughness(0.0f).metalness(0.0f));
             mat->setIor(1.5f);
             auto m = Mesh::create(sphereGeom, mat);
             m->position.set(x0 + 3 * dx, y, 2.5f);
@@ -130,25 +108,14 @@ namespace {
         }
         // 5. Red clearcoat (car-paint)
         {
-            auto mat = MeshPhysicalMaterial::create({
-                    {"color", Color(0.65f, 0.05f, 0.05f)},
-                    {"roughness", 0.4f},
-                    {"metalness", 0.0f},
-                    {"clearcoat", 1.0f},
-                    {"clearcoatRoughness", 0.05f},
-            });
+            auto mat = MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}.color(Color(0.65f, 0.05f, 0.05f)).roughness(0.4f).metalness(0.0f).clearcoat(1.0f).clearcoatRoughness(0.05f));
             auto m = Mesh::create(sphereGeom, mat);
             m->position.set(x0 + 4 * dx, y, 2.5f);
             out.push_back(m);
         }
         // 6. Cyan emissive
         {
-            auto mat = MeshStandardMaterial::create({
-                    {"color", Color::black},
-                    {"emissive", Color(0.1f, 0.85f, 1.0f)},
-                    {"emissiveIntensity", 4.0f},
-                    {"roughness", 1.0f},
-            });
+            auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::black).emissive(Color(0.1f, 0.85f, 1.0f)).emissiveIntensity(4.0f).roughness(1.0f));
             auto m = Mesh::create(sphereGeom, mat);
             m->position.set(x0 + 5 * dx, y, 2.5f);
             out.push_back(m);
@@ -180,11 +147,7 @@ int main() {
     // Animated rotating torus knot — exercises the per-pixel motion gate.
     // Static walls behind it should keep accumulating cleanly while only
     // the moving pixels reset their FC.
-    auto knotMat = MeshPhysicalMaterial::create({
-            {"color", Color(0.95f, 0.93f, 0.88f)},
-            {"roughness", 0.15f},
-            {"metalness", 1.0f},
-    });
+    auto knotMat = MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}.color(Color(0.95f, 0.93f, 0.88f)).roughness(0.15f).metalness(1.0f));
     auto knot = Mesh::create(TorusKnotGeometry::create(0.55f, 0.18f, 128, 24), knotMat);
     knot->position.set(0.f, 4.5f, -1.0f);
     scene.add(knot);
@@ -223,11 +186,7 @@ int main() {
     // shadow-ray any-hit also fires on cutout textures.
     TextureLoader texLoader;
     auto cutoutTex = texLoader.load(std::string(DATA_FOLDER) + "/textures/three.png", SRGBColorSpace);
-    auto cutoutMat = MeshStandardMaterial::create({
-            {"color", Color::white},
-            {"roughness", 0.6f},
-            {"metalness", 0.0f},
-    });
+    auto cutoutMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::white).roughness(0.6f).metalness(0.0f));
     cutoutMat->map = cutoutTex;
     cutoutMat->alphaTest = 0.5f;
     cutoutMat->side = Side::Double;

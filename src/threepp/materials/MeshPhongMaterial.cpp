@@ -84,6 +84,54 @@ std::shared_ptr<MeshPhongMaterial> MeshPhongMaterial::create(const std::unordere
     return m;
 }
 
+std::shared_ptr<MeshPhongMaterial> MeshPhongMaterial::create(const Params& p) {
+
+    auto m = std::shared_ptr<MeshPhongMaterial>(new MeshPhongMaterial());
+
+    p.applyBaseTo(*m);
+
+    // Apply only the fields the caller set; everything else keeps the constructor default.
+    // Params stores each value in a `field_` member; the material's field is `field`.
+#define TPP_SET(field) \
+    if (p.field##_) m->field = *p.field##_;
+#define TPP_TEX(field) \
+    if (p.field##_) m->field = p.field##_;
+
+    TPP_SET(color)
+    TPP_SET(emissive)
+    TPP_SET(emissiveIntensity)
+    TPP_TEX(emissiveMap)
+    TPP_SET(wireframe)
+    TPP_SET(wireframeLinewidth)
+    TPP_SET(flatShading)
+    TPP_TEX(map)
+    TPP_TEX(aoMap)
+    TPP_SET(aoMapIntensity)
+    TPP_TEX(bumpMap)
+    TPP_SET(bumpScale)
+    TPP_TEX(lightMap)
+    TPP_SET(lightMapIntensity)
+    TPP_TEX(normalMap)
+    TPP_SET(normalMapType)
+    TPP_TEX(alphaMap)
+    TPP_TEX(specularMap)
+    TPP_SET(specular)
+    TPP_TEX(displacementMap)
+    TPP_SET(displacementBias)
+    TPP_SET(displacementScale)
+    TPP_SET(shininess)
+    TPP_TEX(envMap)
+    TPP_SET(combine)
+    TPP_SET(reflectivity)
+    TPP_SET(refractionRatio)
+    TPP_SET(normalScale)
+
+#undef TPP_SET
+#undef TPP_TEX
+
+    return m;
+}
+
 bool MeshPhongMaterial::setValue(const std::string& key, const MaterialValue& value) {
 
     if (key == "color") {

@@ -40,6 +40,79 @@ std::shared_ptr<MeshPhysicalMaterial> MeshPhysicalMaterial::create(const std::un
     return m;
 }
 
+std::shared_ptr<MeshPhysicalMaterial> MeshPhysicalMaterial::create(const Params& p) {
+
+    auto m = std::shared_ptr<MeshPhysicalMaterial>(new MeshPhysicalMaterial());
+
+    p.applyBaseTo(*m);
+
+    // Apply only the fields the caller set; everything else keeps the constructor default.
+    // Params stores each value in a `field_` member; the material's field is `field`.
+#define TPP_SET(field) \
+    if (p.field##_) m->field = *p.field##_;
+#define TPP_TEX(field) \
+    if (p.field##_) m->field = p.field##_;
+
+    // --- Standard (inherited) fields ---
+    TPP_SET(color)
+    TPP_SET(roughness)
+    TPP_SET(metalness)
+    TPP_TEX(map)
+    TPP_TEX(roughnessMap)
+    TPP_TEX(metalnessMap)
+    TPP_SET(emissive)
+    TPP_SET(emissiveIntensity)
+    TPP_TEX(emissiveMap)
+    TPP_TEX(normalMap)
+    TPP_SET(normalMapType)
+    TPP_SET(normalScale)
+    TPP_TEX(bumpMap)
+    TPP_SET(bumpScale)
+    TPP_TEX(aoMap)
+    TPP_SET(aoMapIntensity)
+    TPP_TEX(displacementMap)
+    TPP_SET(displacementScale)
+    TPP_SET(displacementBias)
+    TPP_TEX(alphaMap)
+    TPP_TEX(lightMap)
+    TPP_SET(lightMapIntensity)
+    TPP_TEX(envMap)
+    TPP_SET(envMapIntensity)
+    // refractionRatio is inherited via two base paths (MeshStandardMaterial and
+    // MaterialWithReflectivity -> MaterialWithRefractionRatio), so an unqualified m->refractionRatio
+    // is ambiguous here. Qualify through the MeshStandardMaterial path to disambiguate.
+    if (p.refractionRatio_) m->MeshStandardMaterial::refractionRatio = *p.refractionRatio_;
+    TPP_SET(wireframe)
+    TPP_SET(wireframeLinewidth)
+    TPP_SET(flatShading)
+    TPP_SET(vertexTangents)
+
+    // --- Physical-specific fields ---
+    TPP_SET(reflectivity)
+    // ior is special: setIor() also recomputes reflectivity (preserve the map-based side effect).
+    if (p.ior_) m->setIor(*p.ior_);
+    TPP_SET(clearcoat)
+    TPP_TEX(clearcoatMap)
+    TPP_SET(clearcoatRoughness)
+    TPP_TEX(clearcoatRoughnessMap)
+    TPP_TEX(clearcoatNormalMap)
+    TPP_SET(dispersion)
+    TPP_SET(transmission)
+    TPP_TEX(transmissionMap)
+    TPP_SET(thickness)
+    TPP_TEX(thicknessMap)
+    TPP_SET(attenuationDistance)
+    TPP_SET(attenuationColor)
+    TPP_SET(iridescence)
+    TPP_SET(iridescenceIOR)
+    TPP_SET(iridescenceThicknessNm)
+
+#undef TPP_SET
+#undef TPP_TEX
+
+    return m;
+}
+
 void MeshPhysicalMaterial::copyInto(Material& material) const {
 
     MeshStandardMaterial::copyInto(material);

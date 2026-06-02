@@ -16,7 +16,7 @@ namespace {
 
     std::shared_ptr<Mesh> createLathe() {
         const auto geometry = LatheGeometry::create(generateLathePoints());
-        const auto material = MeshNormalMaterial::create({{"side", Side::Double}});
+        const auto material = MeshNormalMaterial::create(MeshNormalMaterial::Params{}.side(Side::Double));
         auto mesh = Mesh::create(geometry, material);
 
         const auto line = LineSegments::create(WireframeGeometry::create(*geometry));

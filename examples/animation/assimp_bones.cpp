@@ -23,8 +23,7 @@ int main() {
     // ground
 
     auto geometry = PlaneGeometry::create(500, 500);
-    auto material = MeshPhongMaterial::create({{"color", 0x999999},
-                                               {"depthWrite", false}});
+    auto material = MeshPhongMaterial::create(MeshPhongMaterial::Params{}.color(0x999999).depthWrite(false));
 
     auto ground = Mesh::create(geometry, material);
     ground->rotation.x = -math::PI / 2;

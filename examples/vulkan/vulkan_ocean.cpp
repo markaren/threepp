@@ -124,10 +124,7 @@ namespace {
     }
 
     auto makeSandMaterial() {
-        return MeshStandardMaterial::create({
-                {"color", Color(0.02,0.02,0.02)},
-                {"roughness", 1.0f},
-        });
+        return MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.02,0.02,0.02)).roughness(1.0f));
     }
 
 }// namespace
@@ -224,7 +221,7 @@ int main() {
             std::cerr << "Failed to load Gunnerus.glb" << std::endl;
             auto fallback = Group::create();
             fallback->add(Mesh::create(BoxGeometry::create(kBoatBeam, 5.f, kBoatLength),
-                                       MeshStandardMaterial::create({{"color", Color::red}})));
+                                       MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::red))));
             return fallback;
         }
 
@@ -285,12 +282,7 @@ int main() {
     // Fallback path: if the GLB is missing or doesn't expose ≥5 children,
     // emissive spheres take over. Path tracer's emissive NEE picks them up
     // (low intensity so they don't double as light sources).
-    auto buoyFallbackMat = MeshStandardMaterial::create({
-            {"color", Color(0.95f, 0.25f, 0.1f)},
-            {"emissive", Color(0.95f, 0.25f, 0.1f)},
-            {"emissiveIntensity", 0.6f},
-            {"roughness", 0.8f},
-    });
+    auto buoyFallbackMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color(0.95f, 0.25f, 0.1f)).emissive(Color(0.95f, 0.25f, 0.1f)).emissiveIntensity(0.6f).roughness(0.8f));
     auto makeFallbackBuoy = [&] {
         return Mesh::create(SphereGeometry::create(1.0f, 16, 12), buoyFallbackMat);
     };
@@ -541,10 +533,7 @@ int main() {
     lidarCloudGeom->getAttribute<float>("color")->setUsage(DrawUsage::Dynamic);
     lidarCloudGeom->setDrawRange(0, 0);
 
-    auto lidarCloudMat = PointsMaterial::create({
-            {"size", 3.f},
-            {"vertexColors", true},
-    });
+    auto lidarCloudMat = PointsMaterial::create(PointsMaterial::Params{}.size(3.f).vertexColors(true));
     auto lidarCloud = Points::create(lidarCloudGeom, lidarCloudMat);
     lidarCloud->frustumCulled = false;
     scene.add(lidarCloud);

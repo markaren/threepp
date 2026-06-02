@@ -50,9 +50,7 @@ int main() {
 
     // Geometry
 
-    auto material = MeshPhongMaterial::create({{"color", 0x80ee10},
-                                               {"shininess", 100.f},
-                                               {"side", Side::Double}});
+    auto material = MeshPhongMaterial::create(MeshPhongMaterial::Params{}.color(0x80ee10).shininess(100.f).side(Side::Double));
 
     // ***** Clipping setup (material): *****
     auto& localPlane = material->clippingPlanes.emplace_back(Vector3(0, -1, 0), 0.8f);
@@ -66,7 +64,7 @@ int main() {
 
     auto ground = Mesh::create(
             PlaneGeometry::create(9, 9, 1, 1),
-            MeshPhongMaterial::create({{"color", 0xa0adaf}, {"shininess", 150.f}}));
+            MeshPhongMaterial::create(MeshPhongMaterial::Params{}.color(0xa0adaf).shininess(150.f)));
 
     ground->rotation.x = -math::PI / 2;// rotates X/Y to X/Z
     ground->receiveShadow = true;

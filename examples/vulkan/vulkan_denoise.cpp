@@ -28,11 +28,10 @@ namespace {
 
     // Ground plane — large, slightly rough.
     auto makeGround() {
-        auto mat = MeshStandardMaterial::create({
-                {"color", Color(0.4f, 0.4f, 0.4f)},
-                {"roughness", 0.8f},
-                {"metalness", 0.0f},
-        });
+        auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.4f, 0.4f, 0.4f))
+                .roughness(0.8f)
+                .metalness(0.0f));
         auto mesh = Mesh::create(PlaneGeometry::create(20.f, 20.f), mat);
         mesh->rotation.x = -math::PI / 2.f;
         return mesh;
@@ -40,12 +39,11 @@ namespace {
 
     // Pedestal — cylinder.
     auto makePedestal() {
-        auto mat = MeshStandardMaterial::create({
-                {"color", Color(0.7f, 0.7f, 0.72f)},
-                {"roughness", 0.6f},
-                {"metalness", 0.0f},
-                {"side", Side::Double},
-        });
+        auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.7f, 0.7f, 0.72f))
+                .roughness(0.6f)
+                .metalness(0.0f)
+                .side(Side::Double));
         auto mesh = Mesh::create(CylinderGeometry::create(1.0f, 1.2f, 1.5f, 64), mat);
         mesh->position.set(0.f, 0.75f - 0.05f, 0.f);
         return mesh;
@@ -54,11 +52,10 @@ namespace {
     // Hero object — torus knot. Slightly metallic so it picks up the colored
     // analytical lights without losing diffuse texture.
     auto makeHeroObject() {
-        auto mat = MeshStandardMaterial::create({
-                {"color", Color(0.9f, 0.15f, 0.1f)},
-                {"roughness", 0.9f},
-                {"metalness", 0.2f},
-        });
+        auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.9f, 0.15f, 0.1f))
+                .roughness(0.9f)
+                .metalness(0.2f));
         auto mesh = Mesh::create(TorusKnotGeometry::create(0.7f, 0.25f, 128, 32), mat);
         mesh->position.set(0.f, 2.8f, 0.f);
         return mesh;
@@ -66,11 +63,10 @@ namespace {
 
     // Back wall — polished metal so the scene shows up in reflection.
     auto makeBackWall() {
-        auto mat = MeshStandardMaterial::create({
-                {"color", Color(0.75f, 0.75f, 0.75f)},
-                {"roughness", 0.01f},
-                {"metalness", 0.9f},
-        });
+        auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.75f, 0.75f, 0.75f))
+                .roughness(0.01f)
+                .metalness(0.9f));
         auto mesh = Mesh::create(BoxGeometry::create(12.f, 8.f, 0.1f), mat);
         mesh->position.set(0.f, 4.f, -5.f);
         return mesh;
@@ -78,13 +74,12 @@ namespace {
 
     // Glass sphere beside the pedestal — clear, smooth, IOR 1.5.
     auto makeGlassSphere() {
-        auto mat = MeshPhysicalMaterial::create({
-                {"color", Color::steelblue},
-                {"transmission", 0.95f},
-                {"ior", 1.5f},
-                {"roughness", 0.0f},
-                {"metalness", 0.0f},
-        });
+        auto mat = MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}
+                .color(Color::steelblue)
+                .transmission(0.95f)
+                .ior(1.5f)
+                .roughness(0.0f)
+                .metalness(0.0f));
         auto mesh = Mesh::create(SphereGeometry::create(1.5f, 48, 48), mat);
         mesh->position.set(-4.5f, 1.5f, 1.5f);
         return mesh;
@@ -92,11 +87,10 @@ namespace {
 
     // Small metal sphere on the other side — tinted chrome.
     auto makeMetalSphere() {
-        auto mat = MeshStandardMaterial::create({
-                {"color", Color(0.95f, 0.85f, 0.4f)},
-                {"roughness", 0.05f},
-                {"metalness", 1.0f},
-        });
+        auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.95f, 0.85f, 0.4f))
+                .roughness(0.05f)
+                .metalness(1.0f));
         auto mesh = Mesh::create(SphereGeometry::create(0.4f, 48, 48), mat);
         mesh->position.set(2.2f, 0.4f, 1.8f);
         return mesh;

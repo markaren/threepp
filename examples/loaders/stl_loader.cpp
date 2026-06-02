@@ -17,7 +17,7 @@ int main() {
 
     STLLoader loader;
     auto geometry = loader.load(std::string(DATA_FOLDER) + "/models/stl/pr2_head_pan.stl");
-    auto material = MeshPhongMaterial::create({{"flatShading", true}, {"color", Color::brown}});
+    auto material = MeshPhongMaterial::create(MeshPhongMaterial::Params{}.flatShading(true).color(Color::brown));
     auto mesh = Mesh::create(geometry, material);
     mesh->scale *= 2;
     mesh->rotateX(-math::PI / 2).rotateZ(math::PI / 2);

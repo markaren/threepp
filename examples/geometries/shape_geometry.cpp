@@ -68,8 +68,9 @@ std::shared_ptr<Mesh> createMesh(const Shape& shape, float scale = 1) {
     shapeGeometry->center();
     shapeGeometry->scale(scale, scale, scale);
 
-    auto shapeMesh = Mesh::create(shapeGeometry, MeshPhongMaterial::create({{"color", Color::orange},
-                                                                            {"side", Side::Double}}));
+    auto shapeMesh = Mesh::create(shapeGeometry, MeshPhongMaterial::create(MeshPhongMaterial::Params{}
+                                                                                   .color(Color::orange)
+                                                                                   .side(Side::Double)));
     const auto wireframe = LineSegments::create(WireframeGeometry::create(*shapeGeometry));
     wireframe->position.z = -5;
     shapeMesh->add(wireframe);
@@ -83,7 +84,7 @@ std::shared_ptr<Mesh> createMesh(const Shape& shape, float scale = 1) {
     const auto extrudeGeometry = ExtrudeGeometry::create({shape}, opts);
     extrudeGeometry->center();
     extrudeGeometry->scale(scale, scale, scale);
-    const auto extrudeMesh = Mesh::create(extrudeGeometry, MeshPhongMaterial::create({{"color", Color::orange}, {"flatShading", true}}));
+    const auto extrudeMesh = Mesh::create(extrudeGeometry, MeshPhongMaterial::create(MeshPhongMaterial::Params{}.color(Color::orange).flatShading(true)));
     extrudeMesh->position.z = 10;
 
     shapeMesh->add(extrudeMesh);

@@ -25,44 +25,48 @@ int main() {
 
     auto boxMesh = Mesh::create(
             BoxGeometry::create(1.5f, 1.5f, 1.5f),
-            MeshStandardMaterial::create({{"map", tex}, {"roughness", 0.9f}}));
+            MeshStandardMaterial::create(MeshStandardMaterial::Params{}.map(tex).roughness(0.9f)));
     boxMesh->position.set(-2.8f, 1.f, 3.f);
 
     auto enclosingBox = Mesh::create(
             BoxGeometry::create(),
-            MeshBasicMaterial::create({{"color", Color::black}, {"side", Side::Back}}));
+            MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::black).side(Side::Back)));
     enclosingBox->scale *= 200;
 
     auto sphere1 = Mesh::create(
             SphereGeometry::create(0.85f, 32, 32),
-            MeshStandardMaterial::create({{"color", Color::orangered},
-                                          {"roughness", 0.85f},
-                                          {"emissive", Color::orangered},
-                                          {"emissiveIntensity", 5.8f}}));
+            MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                          .color(Color::orangered)
+                                          .roughness(0.85f)
+                                          .emissive(Color::orangered)
+                                          .emissiveIntensity(5.8f)));
     sphere1->position.set(2.8f, 2.f, -6.f);
 
     auto sphere2 = Mesh::create(
             SphereGeometry::create(0.85f, 32, 32),
-            MeshStandardMaterial::create({{"color", Color::steelblue},
-                                          {"roughness", 0.01f},
-                                          {"metalness", 0.9f}}));
+            MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                          .color(Color::steelblue)
+                                          .roughness(0.01f)
+                                          .metalness(0.9f)));
     sphere2->position.set(2.8f, 1.f, 0.f);
 
     auto glassSphere = Mesh::create(
             SphereGeometry::create(0.45f, 32, 32),
-            MeshPhysicalMaterial::create({{"color", Color::pink},
-                                          {"transmission", 0.8f},
-                                          {"ior", 1.5f},
-                                          {"roughness", 0.1f},
-                                          {"metalness", 0.f}}));
+            MeshPhysicalMaterial::create(MeshPhysicalMaterial::Params{}
+                                          .color(Color::pink)
+                                          .transmission(0.8f)
+                                          .ior(1.5f)
+                                          .roughness(0.1f)
+                                          .metalness(0.f)));
     glassSphere->position.set(0.f, 0.2f, 3.f);
 
     float floorSize = 32.f;
     auto floor = Mesh::create(
             PlaneGeometry::create(floorSize, floorSize),
-            MeshStandardMaterial::create({{"color", Color::darkgrey},
-                                          {"roughness", 0.99f},
-                                          {"side", Side::Double}}));
+            MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                          .color(Color::darkgrey)
+                                          .roughness(0.99f)
+                                          .side(Side::Double)));
     floor->rotation.x = -math::PI / 2.f;
     floor->position.y = -1.f;
 

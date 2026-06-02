@@ -14,7 +14,7 @@ namespace {
     void setupScene(Scene& scene) {
 
         const auto geometry = TorusKnotGeometry::create(1, 0.3, 128, 64);
-        const auto material = MeshBasicMaterial::create({{"color", Color::blue}});
+        const auto material = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.color(Color::blue));
 
         const auto count = 50;
         const auto scale = 5;
