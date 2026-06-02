@@ -1358,9 +1358,20 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
             case WGPUBackendType_OpenGLES:  backendName = "OpenGLES"; break;
             default: break;
         }
-        // std::cout << "WgpuRenderer: backend=" << backendName
-        //           << " adapter=\"" << std::string_view(info.device.data, info.device.length) << "\""
-        //           << std::endl;
+        // Report the selected adapter so GPU-selection issues (e.g. landing on an
+        // integrated GPU) are visible. Adapter type: 0=discrete, 1=integrated,
+        // 2=CPU/software — anything but discrete on a dGPU machine is a red flag.
+        const char* adapterType = "Other";
+        switch (info.adapterType) {
+            case WGPUAdapterType_DiscreteGPU:   adapterType = "DiscreteGPU"; break;
+            case WGPUAdapterType_IntegratedGPU: adapterType = "IntegratedGPU"; break;
+            case WGPUAdapterType_CPU:           adapterType = "CPU(software)"; break;
+            default: break;
+        }
+        std::cout << "WgpuRenderer: backend=" << backendName
+                  << " adapterType=" << adapterType
+                  << " adapter=\"" << std::string_view(info.device.data, info.device.length) << "\""
+                  << std::endl;
         wgpuAdapterInfoFreeMembers(info);
     }
 
