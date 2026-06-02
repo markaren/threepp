@@ -86,7 +86,7 @@ namespace {
         mesh->bind(skeleton);
 
         const auto skeletonHelper = SkeletonHelper::create(*mesh);
-        skeletonHelper->material()->as<LineBasicMaterial>()->linewidth = 2;
+        skeletonHelper->materialAs<LineBasicMaterial>()->linewidth = 2;
         mesh->add(skeletonHelper);
 
         return mesh;

@@ -285,6 +285,23 @@ namespace threepp {
             return dynamic_cast<const T*>(this) != nullptr;
         }
 
+        /**
+         * @brief Convenience for the common material()->as<T>() downcast.
+         *
+         * Returns this object's material viewed as T*, or nullptr if there is no material or it
+         * is not a T. T may be a concrete material (e.g. MeshStandardMaterial) or a capability
+         * mixin (e.g. MaterialWithColor). Null-safe (never dereferences a missing material) and
+         * returns nullptr rather than throwing on a type mismatch, so it doubles as a test:
+         *   if (auto* m = mesh->materialAs<MeshStandardMaterial>()) m->roughness = 0.4f;
+         */
+        template<class T>
+            requires std::is_base_of<Material, T>::value
+        [[nodiscard]] T* materialAs() const {
+
+            const auto m = material();
+            return m ? dynamic_cast<T*>(m.get()) : nullptr;
+        }
+
         virtual void copy(const Object3D& source, bool recursive = true);
 
         template<class T = Object3D>

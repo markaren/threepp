@@ -7,7 +7,7 @@ namespace {
 
     auto createWireframe(const BufferGeometry& geometry) {
         auto line = LineSegments::create(WireframeGeometry::create(geometry));
-        line->material()->as<LineBasicMaterial>()->color = Color::black;
+        line->materialAs<LineBasicMaterial>()->color = Color::black;
         return line;
     }
 

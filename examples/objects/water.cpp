@@ -62,7 +62,7 @@ int main() {
 
     auto sky = Sky::create();
     sky->scale.setScalar(10000);
-    auto& shaderUniforms = sky->material()->as<ShaderMaterial>()->uniforms;
+    auto& shaderUniforms = sky->materialAs<ShaderMaterial>()->uniforms;
     shaderUniforms.at("turbidity").value<float>() = 10;
     shaderUniforms.at("rayleigh").value<float>() = 1;
     shaderUniforms.at("mieCoefficient").value<float>() = 0.005;
@@ -111,7 +111,7 @@ int main() {
     canvas.setIOCapture(&capture);
 
     Clock clock;
-    auto& timeUniform = water->material()->as<ShaderMaterial>()->uniforms.at("time");
+    auto& timeUniform = water->materialAs<ShaderMaterial>()->uniforms.at("time");
     canvas.animate([&] {
         const auto t = clock.getElapsedTime();
 

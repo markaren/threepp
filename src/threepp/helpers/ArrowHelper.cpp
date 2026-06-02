@@ -80,8 +80,8 @@ void ArrowHelper::setLength(float length, std::optional<float> headLength_, std:
 
 void ArrowHelper::setColor(const Color& color) {
 
-    this->line->material()->as<MaterialWithColor>()->color.copy(color);
-    this->cone->material()->as<MaterialWithColor>()->color.copy(color);
+    this->line->materialAs<MaterialWithColor>()->color.copy(color);
+    this->cone->materialAs<MaterialWithColor>()->color.copy(color);
 }
 
 std::shared_ptr<ArrowHelper> ArrowHelper::create(Vector3 dir, Vector3 origin, float length, const Color& color, std::optional<float> headLength, std::optional<float> headWidth) {

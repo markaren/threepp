@@ -40,7 +40,7 @@ int main() {
         m.rotation.z = math::PI / 2;
         mesh = &m;
 
-        mesh->material()->as<MaterialWithMorphTargets>()->morphTargets = true;
+        mesh->materialAs<MaterialWithMorphTargets>()->morphTargets = true;
 
         auto points = Points::create(mesh->geometry(), pointsMaterial);
         points->copyMorphTargetInfluences(&mesh->morphTargetInfluences());

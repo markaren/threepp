@@ -68,7 +68,7 @@ int main() {
         void onEvent(Event& event) override {
 
             auto target = std::any_cast<Object3D*>(event.target);
-            auto& color = target->material()->as<MaterialWithColor>()->color;
+            auto& color = target->materialAs<MaterialWithColor>()->color;
 
             if (event.type == "hoveron") {
                 prevColor = color;

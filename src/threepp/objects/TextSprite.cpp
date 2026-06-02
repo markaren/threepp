@@ -19,7 +19,7 @@ struct TextSprite::Impl {
         that->setHorizontalAlignment(HorizontalAlignment::Left);
         that->setVerticalAlignment(VerticalAlignment::Below);
 
-        const auto material = that->material()->as<MaterialWithMap>();
+        const auto material = that->materialAs<MaterialWithMap>();
         material->map = Texture::create({});
     }
 
@@ -30,7 +30,7 @@ struct TextSprite::Impl {
         auto image = createText(text);
         imgAspect_ = static_cast<float>(image.width) / static_cast<float>(image.height);
 
-        const auto material = that->material()->as<MaterialWithMap>();
+        const auto material = that->materialAs<MaterialWithMap>();
         material->map->images() = {image};
         material->map->needsUpdate();
 
@@ -39,7 +39,7 @@ struct TextSprite::Impl {
 
     void setColor(const Color& color) {
         this->color_ = color;
-        const auto& map = that->material()->as<MaterialWithMap>()->map;
+        const auto& map = that->materialAs<MaterialWithMap>()->map;
         if (map->images().empty()) return;
         auto& image = map->image();
         for (int i = 0; i < image.width * image.height; ++i) {

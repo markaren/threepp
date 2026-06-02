@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
     }
 
     auto skeletonHelper = SkeletonHelper::create(*result->scene);
-    skeletonHelper->material()->as<LineBasicMaterial>()->linewidth = 2;
+    skeletonHelper->materialAs<LineBasicMaterial>()->linewidth = 2;
     scene->add(skeletonHelper);
 
 

@@ -99,7 +99,7 @@ int main() {
     carBody->traverseType<Mesh>([isGL](Mesh& m) {
 
         if (isGL) {
-            if (auto* std = m.material()->as<MeshStandardMaterial>()) {
+            if (auto* std = m.materialAs<MeshStandardMaterial>()) {
                 std->aoMap = nullptr;
             }
         }

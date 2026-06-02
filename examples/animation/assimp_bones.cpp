@@ -60,7 +60,7 @@ int main() {
     soldier->position.x = -2;
 
     auto skeletonHelperSoldier = SkeletonHelper::create(*soldier);
-    skeletonHelperSoldier->material()->as<LineBasicMaterial>()->linewidth = 2;
+    skeletonHelperSoldier->materialAs<LineBasicMaterial>()->linewidth = 2;
     scene.add(skeletonHelperSoldier);
 
     //
@@ -75,7 +75,7 @@ int main() {
     stormTrooper->position.x = 2;
 
     auto skeletonHelperTrooper = SkeletonHelper::create(*stormTrooper);
-    skeletonHelperTrooper->material()->as<LineBasicMaterial>()->linewidth = 2;
+    skeletonHelperTrooper->materialAs<LineBasicMaterial>()->linewidth = 2;
     scene.add(skeletonHelperTrooper);
 
     //

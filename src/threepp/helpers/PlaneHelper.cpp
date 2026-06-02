@@ -15,7 +15,7 @@ PlaneHelper::PlaneHelper(const Plane& plane, float size, const Color& color)
     geometry_->setAttribute("position", FloatBufferAttribute::create(positions, 3));
     geometry_->computeBoundingSphere();
 
-    auto _material = material()->as<MaterialWithColor>();
+    auto _material = materialAs<MaterialWithColor>();
     _material->color.copy(color);
     _material->toneMapped = false;
 

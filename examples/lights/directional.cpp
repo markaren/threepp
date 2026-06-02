@@ -15,7 +15,7 @@ namespace {
 
         auto sky = Sky::create();
         sky->scale.setScalar(1000);
-        auto& skyUniforms = sky->material()->as<ShaderMaterial>()->uniforms;
+        auto& skyUniforms = sky->materialAs<ShaderMaterial>()->uniforms;
         skyUniforms.at("turbidity").value<float>() = 10;
         skyUniforms.at("rayleigh").value<float>() = 1;
         skyUniforms.at("mieCoefficient").value<float>() = 0.005f;
@@ -73,7 +73,7 @@ int main() {
     scene->add(light);
 
     auto sky = createSky(light->position);
-    auto shaderMaterial = sky->material()->as<ShaderMaterial>();
+    auto shaderMaterial = sky->materialAs<ShaderMaterial>();
     auto& sunPositionUniform = shaderMaterial->uniforms.at("sunPosition").value<Vector3>();
     scene->add(sky);
 
