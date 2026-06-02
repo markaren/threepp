@@ -32,7 +32,9 @@
 #include "threepp/geometries/DecalGeometry.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/SVGLoader.hpp"
+#include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/objects/Line.hpp"
+#include "threepp/objects/Sky.hpp"
 #include "threepp/objects/TextSprite.hpp"
 
 #include <PxPhysicsAPI.h>
@@ -241,7 +243,7 @@ namespace {
 
     struct SoundBank {
         std::unique_ptr<AudioListener> listener;
-        Sound shot, empty, reload, hit, thud, hurt, step;
+        Sound shot, empty, reload, hit, thud, hurt, step, metal;
         bool ok = false;
 
         void init(Object3D& attachTo) {
@@ -261,11 +263,13 @@ namespace {
                 const std::string assets = std::string(PROJECT_FOLDER) + "/examples/projects/Shooter/assets/";
                 const std::string gunFile = assets + "submachine_gun.mp3";
                 const std::string reloadFile = assets + "reload_1911.mp3";
+                const std::string metalFile = assets + "metal_impact.mp3";
                 std::vector<Spec> specs{
                         {"shot.wav", synthShot(), &shot, 6, fs::exists(gunFile) ? gunFile : std::string{}},
                         {"empty.wav", synthClick(), &empty, 2, {}},
                         {"reload.wav", synthReload(), &reload, 2, fs::exists(reloadFile) ? reloadFile : std::string{}},
                         {"hit.wav", synthHit(), &hit, 4, {}},
+                        {"metal.wav", synthThud(), &metal, 4, fs::exists(metalFile) ? metalFile : std::string{}},
                         {"thud.wav", synthThud(), &thud, 4, {}},
                         {"hurt.wav", synthHurt(), &hurt, 2, {}},
                         {"step.wav", synthStep(), &step, 4, {}}};
@@ -451,23 +455,49 @@ int main() {
 
     // ===== world ============================================================
     auto scene = Scene::create();
-    scene->background = Color(0x88aedb);
-    scene->fog = Fog(0x88aedb, 35.f, 80.f);
 
-    auto camera = PerspectiveCamera::create(70, canvas.aspect(), 0.1f, 400.f);
+    auto camera = PerspectiveCamera::create(70, canvas.aspect(), 0.1f, 1000.f);
     camera->position.set(0, 3, 8);
 
-    auto hemi = HemisphereLight::create(0xbcd6ff, 0x4a4233, 0.85f);
-    hemi->position.set(0, 40, 0);
+    // One sun direction (low golden-hour sun) drives both the sky shader and the
+    // directional light, so the lighting matches the sky.
+    Vector3 sunDir;
+    sunDir.setFromSphericalCoords(1.f, math::degToRad(90.f - 15.f), math::degToRad(150.f));
+
+    // Procedural Preetham sky dome (the shader pins itself to the far plane, so
+    // its scale is independent of the camera's far distance).
+    auto sky = Sky::create();
+    sky->scale.setScalar(1500.f);
+    {
+        auto& u = sky->materialAs<ShaderMaterial>()->uniforms;
+        u.at("turbidity").value<float>() = 6.f;
+        u.at("rayleigh").value<float>() = 2.2f;
+        u.at("mieCoefficient").value<float>() = 0.005f;
+        u.at("mieDirectionalG").value<float>() = 0.82f;
+        u.at("sunPosition").value<Vector3>().copy(sunDir);
+    }
+    scene->add(sky);
+
+    const Color fogColor(0xd8c7ac);// warm horizon haze, blends geometry into the sky
+    scene->background = fogColor;
+    scene->fog = Fog(fogColor, 48.f, 150.f);
+
+    // lighting: warm low sun + cool sky fill + a touch of ambient
+    auto hemi = HemisphereLight::create(0xaeccff, 0x4a4031, 0.55f);
+    hemi->position.set(0, 50, 0);
     scene->add(hemi);
-    auto sun = DirectionalLight::create(0xfff2e0, 2.4f);
-    sun->position.set(18, 32, 14);
+    scene->add(AmbientLight::create(0xffffff, 0.12f));
+    auto sun = DirectionalLight::create(0xffe4bd, 2.9f);
+    sun->position.copy(sunDir * 80.f);
     sun->castShadow = true;
     sun->shadow->mapSize.set(2048, 2048);
-    sun->shadow->camera->as<OrthographicCamera>()->left = -40;
-    sun->shadow->camera->as<OrthographicCamera>()->right = 40;
-    sun->shadow->camera->as<OrthographicCamera>()->top = 40;
-    sun->shadow->camera->as<OrthographicCamera>()->bottom = -40;
+    sun->shadow->bias = -0.0004f;
+    sun->shadow->camera->as<OrthographicCamera>()->left = -kArena;
+    sun->shadow->camera->as<OrthographicCamera>()->right = kArena;
+    sun->shadow->camera->as<OrthographicCamera>()->top = kArena;
+    sun->shadow->camera->as<OrthographicCamera>()->bottom = -kArena;
+    sun->shadow->camera->nearPlane = 1.f;
+    sun->shadow->camera->farPlane = 240.f;
     sun->shadow->camera->updateProjectionMatrix();
     scene->add(sun);
 
@@ -482,59 +512,96 @@ int main() {
     // decal on whatever it hit (and parent it there so it rides moving crates).
     std::unordered_map<const PxRigidActor*, Mesh*> actorToMesh;
 
-    // ground
-    auto groundMat = MeshStandardMaterial::create(
-            MeshStandardMaterial::Params{}.color(0x55603f).roughness(0.95f).metalness(0.f));
+    // ---- materials --------------------------------------------------------
+    // Solid PBR colours (no image maps). The GL backend crashes uploading the
+    // large non-power-of-two assets (sand.jpg 2070x1381, crate.gif), so the
+    // world stays texture-free; the sky + lighting still carry the look.
+    auto groundMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(0xbeae89).roughness(1.f).metalness(0.f));
+    auto concreteMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(0x9a958c).roughness(0.85f).metalness(0.04f));
+    auto sandstoneMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(0xb8a17e).roughness(0.9f).metalness(0.f));
+    auto crateMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(0xb5793a).roughness(0.7f).metalness(0.05f).map(TextureLoader().load(std::string(DATA_FOLDER) + "/textures/crate.gif")));
+    auto barrelMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(0x3f7d4f).roughness(0.45f).metalness(0.4f));
+
+    // ---- ground ------------------------------------------------------------
     auto ground = Mesh::create(BoxGeometry::create(kArena * 2, 1.f, kArena * 2), groundMat);
     ground->position.y = -0.5f;
     ground->receiveShadow = true;
     scene->add(ground);
     actorToMesh[world.addStatic(*ground)] = ground.get();
 
-    // grid for spatial reference
-    auto grid = GridHelper::create(static_cast<int>(kArena * 2), static_cast<int>(kArena * 2), Color(0x3a4a2c), Color(0x4a5a38));
-    grid->position.y = 0.02f;
-    scene->add(grid);
-
-    // perimeter walls (static)
-    auto wallMat = MeshStandardMaterial::create(
-            MeshStandardMaterial::Params{}.color(0x6b7280).roughness(0.8f).metalness(0.1f));
-    auto addWall = [&](float x, float z, float w, float d) {
-        auto wall = Mesh::create(BoxGeometry::create(w, 4.f, d), wallMat);
-        wall->position.set(x, 2.f, z);
-        wall->castShadow = true;
-        wall->receiveShadow = true;
-        scene->add(wall);
-        actorToMesh[world.addStatic(*wall)] = wall.get();
+    // ---- static-geometry helpers (each collider registers for decals/dust) -
+    // Axis-aligned or rotated box. Shape is inferred from the geometry (no
+    // scaling), so ramps tilt via `pitch` rather than a scaled mesh.
+    auto addBox = [&](const Vector3& pos, const Vector3& size, const std::shared_ptr<Material>& mat, float yaw = 0.f, float pitch = 0.f) {
+        auto m = Mesh::create(BoxGeometry::create(size.x, size.y, size.z), mat);
+        m->position.copy(pos);
+        m->rotation.set(pitch, yaw, 0.f);
+        m->castShadow = true;
+        m->receiveShadow = true;
+        scene->add(m);
+        actorToMesh[world.addStatic(*m)] = m.get();
+        return m;
     };
-    addWall(0, -kArena, kArena * 2, 1.f);
-    addWall(0, kArena, kArena * 2, 1.f);
-    addWall(-kArena, 0, 1.f, kArena * 2);
-    addWall(kArena, 0, 1.f, kArena * 2);
+    auto addPillar = [&](float x, float z, float radius, float height, const std::shared_ptr<Material>& mat) {
+        auto m = Mesh::create(CylinderGeometry::create(radius, radius, height, 20), mat);
+        m->position.set(x, height * 0.5f, z);
+        m->castShadow = true;
+        m->receiveShadow = true;
+        scene->add(m);
+        if (auto* b = world.addStaticTrimesh(*m)) actorToMesh[b] = m.get();
+        return m;
+    };
 
-    // scattered static cover blocks
-    auto coverMat = MeshStandardMaterial::create(
-            MeshStandardMaterial::Params{}.color(0x8a7f6a).roughness(0.9f).metalness(0.f));
-    for (int i = 0; i < 9; ++i) {
-        const float w = frand(2.f, 4.f), h = frand(1.2f, 2.6f), d = frand(2.f, 4.f);
-        auto block = Mesh::create(BoxGeometry::create(w, h, d), coverMat);
-        block->position.set(frand(-kArena + 5, kArena - 5), h * 0.5f, frand(-kArena + 5, kArena - 5));
-        if (block->position.length() < 6.f) block->position.x += 8.f;// keep spawn clear
-        block->castShadow = true;
-        block->receiveShadow = true;
-        scene->add(block);
-        actorToMesh[world.addStatic(*block)] = block.get();
+    // ---- perimeter walls + corner towers ----------------------------------
+    const float wallH = 5.f;
+    addBox({0, wallH * 0.5f, -kArena}, {kArena * 2, wallH, 1.f}, concreteMat);
+    addBox({0, wallH * 0.5f, kArena}, {kArena * 2, wallH, 1.f}, concreteMat);
+    addBox({-kArena, wallH * 0.5f, 0}, {1.f, wallH, kArena * 2}, concreteMat);
+    addBox({kArena, wallH * 0.5f, 0}, {1.f, wallH, kArena * 2}, concreteMat);
+    for (int sx = -1; sx <= 1; sx += 2)
+        for (int sz = -1; sz <= 1; sz += 2)
+            addBox({sx * kArena, 3.5f, sz * kArena}, {4.5f, 7.f, 4.5f}, sandstoneMat);
+
+    // ---- central pillar plaza ---------------------------------------------
+    for (int sx = -1; sx <= 1; sx += 2)
+        for (int sz = -1; sz <= 1; sz += 2)
+            addPillar(sx * 8.f, sz * 8.f, 0.55f, 6.f, sandstoneMat);
+    (void) addPillar;
+
+    // ---- raised bunker with a ramp up (rewards the jump) ------------------
+    {
+        const float pz = -16.f, pw = 12.f, pd = 7.f, ph = 1.4f;
+        addBox({0, ph * 0.5f, pz}, {pw, ph, pd}, concreteMat);          // platform (top at ph; low enough to jump onto the edge)
+        addBox({0, ph + 0.5f, pz - pd * 0.5f + 0.5f}, {pw, 1.f, 1.f}, sandstoneMat);// rear parapet (cover up top)
+        // ramp on the +Z (centre-facing) edge. Flip the pitch sign if it tilts
+        // the wrong way.
+        const float run = 7.f;
+        addBox({0, ph * 0.5f - 0.1f, pz + pd * 0.5f + run * 0.5f - 1.f}, {5.f, 0.5f, run}, concreteMat, 0.f, std::atan2(ph, run));
     }
 
-    // dynamic crates (shootable / pushable) — store initial pose for restart
+    // ---- corner L-cover ----------------------------------------------------
+    auto addCornerCover = [&](float cx, float cz) {
+        const float ix = cx > 0 ? -1.f : 1.f, iz = cz > 0 ? -1.f : 1.f;
+        addBox({cx + ix * 2.f, 0.8f, cz}, {5.f, 1.6f, 1.f}, sandstoneMat);
+        addBox({cx, 0.8f, cz + iz * 2.f}, {1.f, 1.6f, 5.f}, sandstoneMat);
+    };
+    addCornerCover(-18, -18);
+    addCornerCover(18, -18);
+    addCornerCover(-18, 18);
+    addCornerCover(18, 18);
+
+    // ---- mid-lane sandbag cover -------------------------------------------
+    addBox({17, 0.5f, 0}, {1.2f, 1.f, 6.f}, sandstoneMat);
+    addBox({-17, 0.5f, 0}, {1.2f, 1.f, 6.f}, sandstoneMat);
+    addBox({0, 0.5f, 17}, {6.f, 1.f, 1.2f}, sandstoneMat);
+
+    // ---- dynamic crates (shootable / pushable) — home pose kept for restart -
     struct Dynamic {
         std::shared_ptr<Mesh> mesh;
         PxRigidDynamic* body;
         Vector3 home;
     };
     std::vector<Dynamic> dynamics;
-    auto crateMat = MeshStandardMaterial::create(
-            MeshStandardMaterial::Params{}.color(0xb5793a).roughness(0.7f).metalness(0.05f));
     auto crateGeo = BoxGeometry::create(1.f, 1.f, 1.f);
     auto spawnCrateStack = [&](float cx, float cz, int height) {
         for (int y = 0; y < height; ++y) {
@@ -548,28 +615,30 @@ int main() {
             dynamics.push_back({m, body, m->position.clone()});
         }
     };
-    spawnCrateStack(7, 6, 3);
-    spawnCrateStack(-8, 7, 2);
-    spawnCrateStack(9, -7, 3);
-    spawnCrateStack(-7, -9, 2);
+    spawnCrateStack(13, 11, 3);
+    spawnCrateStack(-13, 12, 2);
+    spawnCrateStack(12, -12, 3);
+    spawnCrateStack(-12, -13, 2);
+    spawnCrateStack(6, -14, 2);
 
-    // dynamic barrels (convex collider cooked from cylinder verts)
-    auto barrelMat = MeshStandardMaterial::create(
-            MeshStandardMaterial::Params{}.color(0x3f7d4f).roughness(0.5f).metalness(0.3f));
+    // ---- dynamic barrels (convex collider cooked from cylinder verts) ------
     auto barrelGeo = CylinderGeometry::create(0.45f, 0.45f, 1.2f, 18);
-    for (int i = 0; i < 6; ++i) {
-        auto m = Mesh::create(barrelGeo, barrelMat);
-        m->position.set(frand(-kArena + 6, kArena - 6), 0.6f, frand(-kArena + 6, kArena - 6));
-        if (m->position.length() < 6.f) m->position.z -= 8.f;
-        m->castShadow = true;
-        m->receiveShadow = true;
-        scene->add(m);
-        auto* body = world.addDynamicConvex(*m, 35.f);
-        if (body) {
-            actorToMesh[body] = m.get();
-            dynamics.push_back({m, body, m->position.clone()});
+    auto spawnBarrels = [&](float cx, float cz, int n) {
+        for (int i = 0; i < n; ++i) {
+            auto m = Mesh::create(barrelGeo, barrelMat);
+            m->position.set(cx + frand(-1.2f, 1.2f), 0.6f, cz + frand(-1.2f, 1.2f));
+            m->castShadow = true;
+            m->receiveShadow = true;
+            scene->add(m);
+            if (auto* body = world.addDynamicConvex(*m, 35.f)) {
+                actorToMesh[body] = m.get();
+                dynamics.push_back({m, body, m->position.clone()});
+            }
         }
-    }
+    };
+    spawnBarrels(16, -4, 3);
+    spawnBarrels(-16, 4, 3);
+    spawnBarrels(4, 16, 2);
 
     // ===== player ===========================================================
     // Collision proxy: a capsule rigid body with locked rotation, driven by
@@ -794,7 +863,7 @@ int main() {
     // drag) and faded out via material opacity. One draw call per burst; the
     // soft round look comes from the smoke / disc sprite textures.
     auto dustTex = texLoader.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png", ColorSpace::sRGB);
-    auto bloodTex = texLoader.load(std::string(DATA_FOLDER) + "/textures/disc.png", ColorSpace::sRGB);
+    auto bloodTex = texLoader.load(std::string(DATA_FOLDER) + "/textures/sprites/disc.png", ColorSpace::sRGB);
 
     struct ParticleBurst {
         std::shared_ptr<Points> points;
@@ -905,17 +974,17 @@ int main() {
             }
         }
 
-        // environment hit -> dust puff + scorch decal
+        // environment hit -> hard metal impact + dust + scorch decal
+        sfx.metal.play();
         spawnParticles(point, dir, hitNormal, /*blood*/ false);
         if (auto it = actorToMesh.find(actor); it != actorToMesh.end()) {
             stampDecal(it->second, point, hitNormal);
         }
 
-        // otherwise knock the hit body around if it's dynamic
+        // knock the hit body around if it's dynamic
         if (auto* rd = actor ? actor->is<PxRigidDynamic>() : nullptr) {
             PxRigidBodyExt::addForceAtPos(*rd, toPxVec3(dir * 220.f),
                                           hitBuf.block.position, PxForceMode::eIMPULSE);
-            sfx.hit.play();
         }
     };
 
