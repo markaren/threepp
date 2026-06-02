@@ -2501,6 +2501,14 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             for (auto* item : renderList_.opaque)       warmMaterial(item->material);
             for (auto* item : renderList_.transparent)  warmMaterial(item->material);
             for (auto* item : renderList_.transmissive) warmMaterial(item->material);
+            // Screen-space sprites (e.g. HUD TextSprite) live in their own
+            // queue, not renderList_, and are drawn in a separate pass after
+            // this point. Warm them here too — otherwise getOrCreateTexture
+            // runs lazily *inside* that pass, after flushPendingMipmaps(), so
+            // the mip chain is a frame stale: full-size sprites blink on every
+            // setText() (texture recreated mid-frame) and minified labels
+            // sample undefined mips >0 and vanish entirely.
+            for (auto* sprite : screenSpaceSprites_) warmMaterial(sprite->material().get());
         }
 
         // Flush any pending mipmap generation before the render pass begins.
