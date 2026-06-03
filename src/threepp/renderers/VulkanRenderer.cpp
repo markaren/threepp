@@ -2215,7 +2215,9 @@ namespace threepp {
                            vertexCount * 4 * sizeof(float));
 
             // Bone matrices buffer: [bindMatrix, bindMatrixInverse, bones...].
-            // bindMatrix / bindMatrixInverse are constant — written once here.
+            // bindMatrix is constant. bindMatrixInverse is NOT (attached bind mode
+            // ties it to the current matrixWorld) — refreshSkinnedBlas re-uploads
+            // it every frame; seed both here.
             const VkDeviceSize matsBytes = (2 + boneCount) * 16 * sizeof(float);
             state->boneMatrices = createBuffer(
                     ctx->allocator(), ctx->device(), matsBytes,
@@ -2325,6 +2327,15 @@ namespace threepp {
             const auto& skel = *sm.skeleton;
             void* mapped = nullptr;
             vmaMapMemory(ctx->allocator(), st.boneMatrices.alloc, &mapped);
+            // mats[1] = bindMatrixInverse is NOT constant in attached bind mode:
+            // SkinnedMesh::updateMatrixWorld recomputes it to matrixWorld^-1 every
+            // frame so that (TLAS instance transform · bindMatrixInverse) collapses
+            // to a single world application. ensureSkinnedBlas wrote it once at the
+            // bind pose (≈identity at the origin), so a *moving* skinned mesh gets
+            // its world transform applied twice — invisible at the origin, wrong
+            // once it translates/rotates. Re-upload it every frame.
+            std::memcpy(static_cast<char*>(mapped) + 16 * sizeof(float),
+                        sm.bindMatrixInverse.elements.data(), 16 * sizeof(float));
             char* dst = static_cast<char*>(mapped) + 32 * sizeof(float);
             for (uint32_t b = 0; b < st.boneCount; ++b) {
                 Matrix4 m;
