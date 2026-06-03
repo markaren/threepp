@@ -11,99 +11,101 @@
 #include "threepp/textures/Texture.hpp"
 
 #include <algorithm>
+#include <vector>
 
 using namespace threepp;
 using namespace threepp::gl;
 
 namespace {
 
-    constexpr int LOD_MIN = 4;
-    constexpr int LOD_MAX = 8;
-    constexpr int PMREM_SIZE_MAX = 1 << LOD_MAX;                     // 256
-    constexpr int TOTAL_LODS = (LOD_MAX - LOD_MIN + 1) + 6;    // 11
-    constexpr int PMREM_WIDTH = 3 * PMREM_SIZE_MAX;                  // 768
-    constexpr int PMREM_HEIGHT = 3 * PMREM_SIZE_MAX;                 // 768
+    // ---------------------------------------------------------------------
+    // Equirect LOD-strip atlas (replaces the old cube-face "cubeUV" atlas).
+    //
+    // The old GL IBL path packed 6 cube faces per roughness LOD into a 768x768
+    // atlas and read it with a hand-rolled bilinear that clamped at every
+    // cube-face boundary. On smoothly-curved surfaces (cylinders, capsules,
+    // spheres) whose normal sweeps the full horizon, those face boundaries plus
+    // the very low per-face resolution (16x16 for the roughest/diffuse tile)
+    // showed up as hard vertical streaks under a high-contrast HDR — a defect
+    // unique to GL (WGPU/Vulkan sample a prefiltered equirect mip chain).
+    //
+    // We now store N_LODS *full equirect* strips stacked vertically, each
+    // GGX-prefiltered at an increasing roughness, and read them with hardware
+    // bilinear + Repeat-U. Azimuth is seamless (Repeat wrap, no cube faces) and
+    // the per-strip resolution is high enough that the banding is gone. The
+    // material-facing entry point in cube_uv_reflection_fragment.glsl keeps the
+    // name `textureCubeUV` for drop-in compatibility (same signature, same
+    // Mapping::CubeUVReflection trigger).
+    //
+    // Strip L occupies atlas rows [L*STRIP_H, (L+1)*STRIP_H); roughness is
+    // linear in L (roughness = L/(N_LODS-1)), matching the WGPU PMREM convention
+    // and the shader's `roughness * (N_LODS-1)` LOD lookup.
+    // ---------------------------------------------------------------------
 
-    // Per-LOD roughness, chosen to match three.js roughnessToMip() inverse:
-    // LOD 0 is smoothest (mip=LOD_MAX=8, roughness~0), LOD 10 is roughest
-    // (mip=m0=-2, roughness=1.0). `cube_uv_reflection_fragment.glsl` picks
-    // the mip for a given material roughness and reads the corresponding
-    // tile region via bilinearCubeUV().
-    constexpr float LOD_ROUGHNESS[TOTAL_LODS] = {
-            0.00f,  // LOD 0  (mip=8)
-            0.08f,  // LOD 1  (mip=7)
-            0.11f,  // LOD 2  (mip=6)
-            0.15f,  // LOD 3  (mip=5)
-            0.22f,  // LOD 4  (mip=4)
-            0.31f,  // LOD 5  (mip=3, filterInt=1)
-            0.40f,  // LOD 6  (mip=2, filterInt=2)
-            0.53f,  // LOD 7  (mip=1, filterInt=3)
-            0.67f,  // LOD 8  (mip=0, filterInt=4)
-            0.80f,  // LOD 9  (mip=-1, filterInt=5)
-            1.00f,  // LOD 10 (mip=-2, filterInt=6)
+    constexpr int STRIP_W = 512;
+    constexpr int STRIP_H = 256;
+    constexpr int N_LODS = 7;
+    constexpr int ATLAS_W = STRIP_W;            // 512
+    constexpr int ATLAS_H = STRIP_H * N_LODS;   // 1792
+
+    // Must match EQ_STRIP_W / EQ_STRIP_H / EQ_N_LODS in
+    // cube_uv_reflection_fragment.glsl.
+    constexpr float LOD_ROUGHNESS[N_LODS] = {
+            0.0f / 6.0f,  // 0.000  (sharpest — direct equirect copy)
+            1.0f / 6.0f,  // 0.167
+            2.0f / 6.0f,  // 0.333
+            3.0f / 6.0f,  // 0.500
+            4.0f / 6.0f,  // 0.667
+            5.0f / 6.0f,  // 0.833
+            6.0f / 6.0f,  // 1.000  (roughest — diffuse irradiance)
     };
 
-    // Pure port of three.js PMREMGenerator._getCommonVertexShader(). Each vertex
-    // carries a face index and a [0,1]² face-UV; getDirection() maps (face, uv) to
-    // a world-space cube direction that the fragment shader samples with.
+    // Fullscreen quad. The render viewport restricts it to one strip; uv spans
+    // [0,1]^2 over the strip, uv.y increasing upward (GL bottom-up) so uv.y=0 is
+    // the south pole. getDirection() in the fragment shader maps (uv) -> world
+    // direction; the material's eqUvFromDir() is its exact inverse.
     const char* const VERTEX_SRC = R"(#version 330 core
 in vec3 position;
 in vec2 uv;
-in float faceIndex;
-out vec3 vOutputDirection;
-
-vec3 getDirection(vec2 uv, float face) {
-    uv = 2.0 * uv - 1.0;
-    vec3 direction = vec3(uv, 1.0);
-    if (face == 0.0) {
-        direction = direction.zyx;
-    } else if (face == 1.0) {
-        direction = direction.xzy;
-        direction.xz *= -1.0;
-    } else if (face == 2.0) {
-        direction.x *= -1.0;
-    } else if (face == 3.0) {
-        direction = direction.zyx;
-        direction.xz *= -1.0;
-    } else if (face == 4.0) {
-        direction = direction.xzy;
-        direction.xy *= -1.0;
-    } else if (face == 5.0) {
-        direction.z *= -1.0;
-    }
-    return direction;
-}
+out vec2 vUv;
 
 void main() {
-    vOutputDirection = getDirection(uv, faceIndex);
+    vUv = uv;
     gl_Position = vec4(position, 1.0);
 }
 )";
 
-    // GGX importance-sampled PMREM filter. For roughness == 0 (LOD 0) this
-    // collapses to a direct equirect sample. For roughness > 0 it accumulates
-    // hemispherical GGX samples around the output direction (= N for prefilter)
-    // weighted by NdotL — same approach WGPU PMREM uses (see WgpuPMREM.cpp).
-    // Without this the cubeUV atlas had sharp reflections at every roughness
-    // level, making GL look glossier than WGPU on identical scenes.
+    // GGX importance-sampled equirect prefilter. Identical math to the WGPU
+    // (WgpuPMREM.cpp) and Vulkan (prefilter_env.comp) prefilters: integrate the
+    // source equirect over a GGX lobe around the output direction (= N for the
+    // prefilter), weighted by NdotL. roughness==0 collapses to a direct fetch.
     const char* const FRAGMENT_SRC = R"(#version 330 core
 precision highp float;
 precision highp int;
 
-in vec3 vOutputDirection;
+in vec2 vUv;
 out vec4 fragColor;
 
 uniform sampler2D envMap;
 uniform float roughness;
 uniform int numSamples;
 
-#define RECIPROCAL_PI 0.31830988618
-#define RECIPROCAL_PI2 0.15915494
-#define PI2 6.28318530718
+#define PI        3.14159265359
+#define PI2       6.28318530718
+#define RECIP_PI  0.31830988618
+#define RECIP_2PI 0.15915494309
 
-vec2 equirectUv(in vec3 dir) {
-    float u = atan(dir.z, dir.x) * RECIPROCAL_PI2 + 0.5;
-    float v = asin(clamp(dir.y, -1.0, 1.0)) * RECIPROCAL_PI + 0.5;
+// Strip uv -> world direction (inverse of equirectUv below).
+vec3 dirFromUv(vec2 uv) {
+    float phi   = (uv.x - 0.5) * PI2;   // longitude about +Y, [-PI, PI]
+    float theta = (uv.y - 0.5) * PI;    // latitude, [-PI/2, PI/2]
+    float cosT = cos(theta);
+    return vec3(cosT * cos(phi), sin(theta), cosT * sin(phi));
+}
+
+vec2 equirectUv(vec3 dir) {
+    float u = atan(dir.z, dir.x) * RECIP_2PI + 0.5;
+    float v = asin(clamp(dir.y, -1.0, 1.0)) * RECIP_PI + 0.5;
     return vec2(u, v);
 }
 
@@ -120,10 +122,7 @@ vec2 hammersley(uint i, uint N) {
     return vec2(float(i) / float(N), vdc(i));
 }
 
-vec3 importanceSampleGGX(vec2 Xi, vec3 N, float r) {
-    // Disney convention: GGX α = roughness², so the cosTheta formula needs
-    // (α² - 1) = (r⁴ - 1). Mirrors WgpuPMREM.cpp's importanceSampleGGX.
-    float a = r * r;
+vec3 importanceSampleGGX(vec2 Xi, vec3 N, float a) {
     float phi = PI2 * Xi.x;
     float cosTheta = sqrt(max((1.0 - Xi.y) / (1.0 + (a * a - 1.0) * Xi.y), 0.0));
     float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
@@ -134,30 +133,56 @@ vec3 importanceSampleGGX(vec2 Xi, vec3 N, float r) {
     return normalize(tangent * H_t.x + bitangent * H_t.y + N * H_t.z);
 }
 
-vec3 sampleEquirect(vec3 dir) {
-    return texture(envMap, equirectUv(dir)).rgb;
+float ggxD(float NdotH, float a) {
+    float a2 = a * a;
+    float d = (NdotH * NdotH) * (a2 - 1.0) + 1.0;
+    return a2 / (PI * d * d);
 }
 
 void main() {
-    vec3 N = normalize(vOutputDirection);
+    vec3 N = normalize(dirFromUv(vUv));
 
     if (roughness <= 0.0) {
-        fragColor = vec4(sampleEquirect(N), 1.0);
+        fragColor = vec4(texture(envMap, equirectUv(N)).rgb, 1.0);
         return;
     }
+
+    // Colbert/Krivanek mip-biased importance sampling: each GGX sample reads the
+    // source at a mip whose texels cover ~the sample's solid angle, so a small,
+    // ultra-bright sun is pre-averaged into its neighbourhood instead of being
+    // hit by a handful of samples (which produced a scattered-dots starburst on
+    // the wide roughness lobes). The source equirect carries a full mip chain.
+    float a = roughness * roughness;
+    vec2 srcSize = vec2(textureSize(envMap, 0));
+    float saTexel = 4.0 * PI / (srcSize.x * srcSize.y);
 
     vec3 accumColor = vec3(0.0);
     float accumWeight = 0.0;
     uint NS = uint(numSamples);
     for (uint i = 0u; i < NS; i++) {
         vec2 Xi = hammersley(i, NS);
-        vec3 H = importanceSampleGGX(Xi, N, roughness);
-        vec3 L = normalize(-N + 2.0 * dot(N, H) * H);
+        vec3 H = importanceSampleGGX(Xi, N, a);
+        vec3 L = normalize(2.0 * dot(N, H) * H - N);
         float NdotL = max(dot(N, L), 0.0);
         if (NdotL > 0.0) {
-            // Clamp per-channel to suppress fireflies from ultra-bright HDR pixels
-            // (sun disk, specular highlights) and Inf from RGBE exponent overflow.
-            vec3 s = min(sampleEquirect(L), vec3(50.0));
+            float NdotH = max(dot(N, H), 0.0);
+            float pdf = ggxD(NdotH, a) * 0.25 + 1e-4;        // V=N -> VdotH=NdotH
+            float saSample = 1.0 / (float(NS) * pdf);
+            float mip = 0.5 * log2(saSample / saTexel);
+            // Floor the source mip by roughness². The Hammersley GGX directions
+            // are discrete, so a tiny ultra-bright sun gets hit at a few phi
+            // spokes that survive as radial streaks on the wide rough lobes
+            // (→ vertical streaks on curved surfaces). Reading a sufficiently
+            // blurred source mip spreads each sample's footprint enough to
+            // overlap its neighbours and erase the spokes. (WGPU avoids this via
+            // low-res rough mips; our strips are full-res so we blur at source.)
+            // Linear in roughness so the worst-case mid-roughness lobes blur
+            // hard while roughness=1 keeps enough source detail for a directional
+            // diffuse ambient (a roughness² floor over-flattened it).
+            mip = max(mip, roughness * 8.0);
+            mip = max(mip, 0.0);
+            // Clamp per-channel to bound residual fireflies / RGBE Inf.
+            vec3 s = min(textureLod(envMap, equirectUv(L), mip).rgb, vec3(50.0));
             accumColor += s * NdotL;
             accumWeight += NdotL;
         }
@@ -166,45 +191,19 @@ void main() {
 }
 )";
 
-    // Build geometry for one LOD. UVs are extended by half-texel on each side so
-    // that pixel centres in the rendered tile align exactly with the face-local
-    // pixel grid that `bilinearCubeUV()` reads (which treats the tile as a
-    // [0..faceSize-1] integer grid, not as a [0,1] texture). See three.js
-    // PMREMGenerator._createPlanes — sizeLod-1 is critical.
-    std::shared_ptr<BufferGeometry> createLodPlane(int sizeLod) {
-        const float texelSize = 1.0f / static_cast<float>(sizeLod - 1);
-        const float uvMin = -texelSize * 0.5f;
-        const float uvMax = 1.0f + texelSize * 0.5f;
-
-        std::vector<float> positions;
-        std::vector<float> uvs;
-        std::vector<float> faceIndices;
-        positions.reserve(6 * 6 * 3);
-        uvs.reserve(6 * 6 * 2);
-        faceIndices.reserve(6 * 6);
-
-        for (int face = 0; face < 6; ++face) {
-            const float x0 = static_cast<float>(face % 3) * (2.0f / 3.0f) - 1.0f;
-            const float x1 = x0 + (2.0f / 3.0f);
-            const float y0 = face > 2 ? 0.0f : -1.0f;
-            const float y1 = y0 + 1.0f;
-
-            const float pos[18] = {
-                    x0, y0, 0, x1, y0, 0, x1, y1, 0,
-                    x0, y0, 0, x1, y1, 0, x0, y1, 0};
-            const float uv[12] = {
-                    uvMin, uvMin, uvMax, uvMin, uvMax, uvMax,
-                    uvMin, uvMin, uvMax, uvMax, uvMin, uvMax};
-
-            for (float p : pos) positions.push_back(p);
-            for (float u : uv) uvs.push_back(u);
-            for (int i = 0; i < 6; ++i) faceIndices.push_back(static_cast<float>(face));
-        }
+    // One fullscreen quad ([-1,1]^2, uv [0,1]^2). The viewport restricts it to
+    // the active strip, so the same geometry is reused for every LOD.
+    std::shared_ptr<BufferGeometry> createFullscreenQuad() {
+        const std::vector<float> positions = {
+                -1.f, -1.f, 0.f, 1.f, -1.f, 0.f, 1.f, 1.f, 0.f,
+                -1.f, -1.f, 0.f, 1.f, 1.f, 0.f, -1.f, 1.f, 0.f};
+        const std::vector<float> uvs = {
+                0.f, 0.f, 1.f, 0.f, 1.f, 1.f,
+                0.f, 0.f, 1.f, 1.f, 0.f, 1.f};
 
         auto geom = BufferGeometry::create();
         geom->setAttribute("position", FloatBufferAttribute::create(positions, 3));
         geom->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
-        geom->setAttribute("faceIndex", FloatBufferAttribute::create(faceIndices, 1));
         return geom;
     }
 
@@ -243,19 +242,20 @@ std::unique_ptr<RenderTarget> GLPMREM::fromEquirectangular(Texture& equirect) {
     options.type = Type::HalfFloat;
     options.format = Format::RGBA;
     options.encoding = ColorSpace::Linear;
-    // NearestFilter — cube_uv_reflection_fragment.glsl does its own manual
-    // 4-tap bilinear via 4 textureLod reads with +texelSize offsets, so GL
-    // must not filter or we'd double-filter across face seams.
-    options.magFilter = Filter::Nearest;
-    options.minFilter = Filter::Nearest;
-    options.wrapS = TextureWrapping::ClampToEdge;
+    // Hardware bilinear — the shader samples the strips directly (no manual
+    // 4-tap). Repeat on U makes the equirect azimuth seam (atan2 at -X) wrap
+    // seamlessly; V is clamped per-strip in the shader to avoid bleeding into
+    // the neighbouring roughness strip.
+    options.magFilter = Filter::Linear;
+    options.minFilter = Filter::Linear;
+    options.wrapS = TextureWrapping::Repeat;
     options.wrapT = TextureWrapping::ClampToEdge;
     options.generateMipmaps = false;
     options.depthBuffer = false;
 
-    auto target = RenderTarget::create(PMREM_WIDTH, PMREM_HEIGHT, options);
+    auto target = RenderTarget::create(ATLAS_W, ATLAS_H, options);
     // cube_uv_reflection_fragment.glsl activates via Mapping::CubeUVReflection
-    // — this is the signal to the material pipeline to compile ENVMAP_TYPE_CUBE_UV.
+    // — the signal to compile ENVMAP_TYPE_CUBE_UV (now the equirect-strip path).
     target->texture->mapping = Mapping::CubeUVReflection;
     target->scissorTest = true;
 
@@ -265,55 +265,41 @@ std::unique_ptr<RenderTarget> GLPMREM::fromEquirectangular(Texture& equirect) {
     const bool oldAutoClear = renderer.autoClear;
     renderer.autoClear = false;
 
-    // Clear the full atlas once before rendering tiles, so any regions not
-    // covered by a tile start in a defined state (not GPU garbage).
-    target->viewport.set(0, 0, static_cast<float>(PMREM_WIDTH), static_cast<float>(PMREM_HEIGHT));
-    target->scissor.set(0, 0, static_cast<float>(PMREM_WIDTH), static_cast<float>(PMREM_HEIGHT));
+    // Clear the full atlas once so any uncovered region is defined.
+    target->viewport.set(0, 0, static_cast<float>(ATLAS_W), static_cast<float>(ATLAS_H));
+    target->scissor.set(0, 0, static_cast<float>(ATLAS_W), static_cast<float>(ATLAS_H));
     renderer.setRenderTarget(target.get(), 0, 0);
     renderer.clear(true, true, false);
 
-    for (int lod = 0; lod < TOTAL_LODS; ++lod) {
-        // Per-LOD tile geometry, mirroring three.js PMREMGenerator._halfBlur layout.
-        const int sizeLod = (lod <= LOD_MAX - LOD_MIN)
-                ? (PMREM_SIZE_MAX >> lod)
-                : (PMREM_SIZE_MAX >> (LOD_MAX - LOD_MIN));  // 16 for extra LODs
+    auto geometry = createFullscreenQuad();
+    Mesh mesh(geometry, impl->material);
+    mesh.frustumCulled = false;
 
-        const int extraOffset = (lod > LOD_MAX - LOD_MIN) ? (lod - (LOD_MAX - LOD_MIN)) : 0;
-        const int x = 3 * std::max(0, PMREM_SIZE_MAX - 2 * sizeLod);
-        const int y = (lod == 0 ? 0 : 2 * PMREM_SIZE_MAX) + 2 * sizeLod * extraOffset;
-        const int w = 3 * sizeLod;
-        const int h = 2 * sizeLod;
-
-        target->viewport.set(static_cast<float>(x), static_cast<float>(y),
-                             static_cast<float>(w), static_cast<float>(h));
-        target->scissor.set(static_cast<float>(x), static_cast<float>(y),
-                            static_cast<float>(w), static_cast<float>(h));
+    for (int lod = 0; lod < N_LODS; ++lod) {
+        const int y = lod * STRIP_H;
+        target->viewport.set(0.f, static_cast<float>(y),
+                             static_cast<float>(STRIP_W), static_cast<float>(STRIP_H));
+        target->scissor.set(0.f, static_cast<float>(y),
+                            static_cast<float>(STRIP_W), static_cast<float>(STRIP_H));
 
         impl->material->uniforms["roughness"].setValue(LOD_ROUGHNESS[lod]);
-        // Fewer samples for smoothest / roughest extremes: LOD 0 is direct
-        // fetch (1 sample); high roughness lobes are wide so low sample counts
-        // still converge.
-        const int samples = (lod == 0) ? 1 : (lod <= 2 ? 256 : 128);
+        // LOD 0 is a direct fetch (1 sample); narrow low-roughness lobes need
+        // more samples to converge; wide rough lobes need fewer.
+        const int samples = (lod == 0) ? 1 : (LOD_ROUGHNESS[lod] < 0.3f ? 256 : 128);
         impl->material->uniforms["numSamples"].setValue(samples);
-
-        // Fresh geometry per LOD: the half-texel UV extension depends on sizeLod,
-        // so cube_uv_reflection_fragment.glsl's pixel-centre sampling aligns.
-        auto geometry = createLodPlane(sizeLod);
-        Mesh mesh(geometry, impl->material);
-        mesh.frustumCulled = false;
 
         renderer.setRenderTarget(target.get(), 0, 0);
         renderer.render(mesh, *impl->camera);
-
-        geometry->dispose();
     }
+
+    geometry->dispose();
 
     renderer.autoClear = oldAutoClear;
     renderer.setRenderTarget(oldTarget, 0, 0);
 
     target->scissorTest = false;
-    target->viewport.set(0, 0, static_cast<float>(PMREM_WIDTH), static_cast<float>(PMREM_HEIGHT));
-    target->scissor.set(0, 0, static_cast<float>(PMREM_WIDTH), static_cast<float>(PMREM_HEIGHT));
+    target->viewport.set(0, 0, static_cast<float>(ATLAS_W), static_cast<float>(ATLAS_H));
+    target->scissor.set(0, 0, static_cast<float>(ATLAS_W), static_cast<float>(ATLAS_H));
 
     return target;
 }
