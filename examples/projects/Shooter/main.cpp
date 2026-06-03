@@ -433,7 +433,7 @@ int main() {
     Canvas canvas(Canvas::Parameters().title("threepp - Third Person Shooter").size(1280, 800).antialiasing(4));
     // Force the GL backend so the demo launches straight into the game instead
     // of prompting for a renderer on stdin (createRenderer's default behaviour).
-    auto renderer = createRenderer(canvas, GraphicsAPI::OpenGL);
+    auto renderer = createRenderer(canvas, GraphicsAPI::WebGPU);
     renderer->shadowMap().enabled = true;
     renderer->autoClear = false;
 
@@ -839,6 +839,8 @@ int main() {
 
         const float s = frand(0.26f, 0.40f);
         auto geo = DecalGeometry::create(*target, point, orientation, Vector3(s, s, s));
+        // Coplanar with the surface; the decal material's polygonOffset keeps it
+        // from z-fighting (honored by both the GL and WGPU backends).
         auto decal = Mesh::create(geo, decalMat);
 
         // DecalGeometry bakes vertices in WORLD space. Parent to the hit mesh
