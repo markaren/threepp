@@ -31,10 +31,9 @@
 #include "threepp/geometries/CylinderGeometry.hpp"
 #include "threepp/geometries/DecalGeometry.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
+#include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/loaders/SVGLoader.hpp"
-#include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/objects/Line.hpp"
-#include "threepp/objects/Sky.hpp"
 #include "threepp/objects/TextSprite.hpp"
 
 #include <PxPhysicsAPI.h>
@@ -436,6 +435,8 @@ int main() {
     auto renderer = createRenderer(canvas, GraphicsAPI::OpenGL);
     renderer->shadowMap().enabled = true;
     renderer->autoClear = false;
+    renderer->toneMapping = ToneMapping::ACESFilmic;// HDR env needs tone mapping
+    renderer->toneMappingExposure = 1.0f;
 
     const float dpi = monitor::contentScale().first;
 
@@ -459,35 +460,27 @@ int main() {
     auto camera = PerspectiveCamera::create(70, canvas.aspect(), 0.1f, 1000.f);
     camera->position.set(0, 3, 8);
 
-    // One sun direction (low golden-hour sun) drives both the sky shader and the
-    // directional light, so the lighting matches the sky.
+    // Sun direction for the directional light (raster shadows). On Vulkan the
+    // path tracer takes its key light + shadows from the HDR sun instead.
     Vector3 sunDir;
-    sunDir.setFromSphericalCoords(1.f, math::degToRad(90.f - 15.f), math::degToRad(150.f));
+    sunDir.setFromSphericalCoords(1.f, math::degToRad(90.f - 35.f), math::degToRad(55.f));
 
-    // Procedural Preetham sky dome (the shader pins itself to the far plane, so
-    // its scale is independent of the camera's far distance).
-    auto sky = Sky::create();
-    sky->scale.setScalar(1500.f);
-    {
-        auto& u = sky->materialAs<ShaderMaterial>()->uniforms;
-        u.at("turbidity").value<float>() = 6.f;
-        u.at("rayleigh").value<float>() = 2.2f;
-        u.at("mieCoefficient").value<float>() = 0.005f;
-        u.at("mieDirectionalG").value<float>() = 0.82f;
-        u.at("sunPosition").value<Vector3>().copy(sunDir);
+    // HDR equirectangular environment = the sky AND the image-based light, on
+    // every backend. Replaces the procedural Sky shader (a ShaderMaterial the
+    // Vulkan path tracer can't render); on Vulkan this is exactly what the PT
+    // importance-samples for the visible sky and IBL.
+    RGBELoader hdrLoader;
+    if (auto hdr = hdrLoader.load(std::string(DATA_FOLDER) + "/textures/env/autumn_field_puresky_2k.hdr")) {
+        scene->background = hdr;
+        scene->environment = hdr;
     }
-    scene->add(sky);
 
-    const Color fogColor(0xd8c7ac);// warm horizon haze, blends geometry into the sky
-    scene->background = fogColor;
-    scene->fog = Fog(fogColor, 48.f, 150.f);
-
-    // lighting: warm low sun + cool sky fill + a touch of ambient
-    auto hemi = HemisphereLight::create(0xaeccff, 0x4a4031, 0.55f);
+    // lighting: the HDR env supplies ambient + IBL; a directional sun adds the
+    // crisp shadows the raster backends need (the Vulkan PT shadows off the HDR).
+    auto hemi = HemisphereLight::create(0xaeccff, 0x4a4031, 0.25f);
     hemi->position.set(0, 50, 0);
     scene->add(hemi);
-    scene->add(AmbientLight::create(0xffffff, 0.12f));
-    auto sun = DirectionalLight::create(0xffe4bd, 2.9f);
+    auto sun = DirectionalLight::create(0xffe4bd, 1.8f);
     sun->position.copy(sunDir * 80.f);
     sun->castShadow = true;
     sun->shadow->mapSize.set(2048, 2048);
@@ -520,7 +513,12 @@ int main() {
     auto concreteMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(0x9a958c).roughness(0.85f).metalness(0.04f));
     auto sandstoneMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(0xb8a17e).roughness(0.9f).metalness(0.f));
     auto crateMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(0xb5793a).roughness(0.7f).metalness(0.05f).map(TextureLoader().load(std::string(DATA_FOLDER) + "/textures/crate.gif")));
-    auto barrelMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(0x3f7d4f).roughness(0.45f).metalness(0.4f));
+    // Kept rough + low envMapIntensity on purpose: glossy metal cylinders expose
+    // a vertical-streak seam in the GL backend's cubeUV PMREM IBL (curved surfaces
+    // sample the prefiltered-env atlas across a tile boundary; a cylinder's
+    // constant-along-axis reflection turns it into a clean streak). WGPU/Vulkan
+    // are unaffected — softening the reflection just hides it in the demo.
+    auto barrelMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(0x3f7d4f).roughness(0.7f).metalness(0.2f).envMapIntensity(0.5f));
 
     // ---- ground ------------------------------------------------------------
     auto ground = Mesh::create(BoxGeometry::create(kArena * 2, 1.f, kArena * 2), groundMat);
@@ -747,7 +745,7 @@ int main() {
         const float r = frand(kArena * 0.5f, kArena - 3.f);
         auto e = std::make_unique<Enemy>();
         e->mat = MeshStandardMaterial::create(
-                MeshStandardMaterial::Params{}.color(0xc0392b).roughness(0.6f).metalness(0.1f));
+                MeshStandardMaterial::Params{}.color(0xc0392b).roughness(0.65f).metalness(0.f).envMapIntensity(0.6f));
         e->visual = Mesh::create(enemyGeo, e->mat);
         e->visual->position.set(std::cos(ang) * r, 0.9f, std::sin(ang) * r);
         e->visual->castShadow = true;
