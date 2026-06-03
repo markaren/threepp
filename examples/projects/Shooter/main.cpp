@@ -433,7 +433,7 @@ int main() {
     Canvas canvas(Canvas::Parameters().title("threepp - Third Person Shooter").size(1280, 800).antialiasing(4));
     // Force the GL backend so the demo launches straight into the game instead
     // of prompting for a renderer on stdin (createRenderer's default behaviour).
-    auto renderer = createRenderer(canvas, GraphicsAPI::WebGPU);
+    auto renderer = createRenderer(canvas, GraphicsAPI::OpenGL);
     renderer->shadowMap().enabled = true;
     renderer->autoClear = false;
 
@@ -861,27 +861,29 @@ int main() {
     };
 
     // ===== impact particles (dust on surfaces, blood on enemies) ============
-    // A small Points cloud per hit, integrated on the CPU (velocity + gravity +
-    // drag) and faded out via material opacity. One draw call per burst; the
-    // soft round look comes from the smoke / disc sprite textures.
+    // A short-lived burst of camera-facing billboard sprites per hit, integrated
+    // on the CPU (velocity + gravity + drag) and faded via material opacity.
+    // NB: NOT Points — PointsMaterial renders at 1px on the WGPU backend (no
+    // gl_PointSize), so world-sized points are invisible there. Sprites are
+    // world-sized billboards on every backend. Soft round look from the
+    // smoke / disc sprite textures.
     auto dustTex = texLoader.load(std::string(DATA_FOLDER) + "/textures/smokeparticle.png", ColorSpace::sRGB);
     auto bloodTex = texLoader.load(std::string(DATA_FOLDER) + "/textures/sprites/disc.png", ColorSpace::sRGB);
 
     struct ParticleBurst {
-        std::shared_ptr<Points> points;
-        std::shared_ptr<PointsMaterial> mat;
-        std::shared_ptr<FloatBufferAttribute> posAttr;
+        std::shared_ptr<Group> group;                // holds the billboards
+        std::shared_ptr<SpriteMaterial> mat;         // shared, faded together
+        std::vector<std::shared_ptr<Sprite>> sprites;
         std::vector<Vector3> pos, vel;
         float ttl, life, gravity, drag;
     };
     std::vector<ParticleBurst> bursts;
 
     auto spawnParticles = [&](const Vector3& point, const Vector3& dir, const Vector3& normal, bool blood) {
-        const int count = blood ? 20 : 14;
+        const int count = blood ? 14 : 11;
         ParticleBurst b;
         b.pos.resize(count);
         b.vel.resize(count);
-        std::vector<float> flat(count * 3, 0.f);
 
         // Blood sprays back toward the shooter and out of the surface; dust
         // puffs outward along the surface normal.
@@ -889,33 +891,30 @@ int main() {
         if (base.length() < 1e-4f) base = normal;
         base.normalize();
 
+        b.mat = SpriteMaterial::create();
+        b.mat->map = blood ? bloodTex : dustTex;
+        b.mat->color = blood ? Color(0x9a0d0d) : Color(0x9c8f76);
+        b.mat->transparent = true;
+        b.mat->depthWrite = false;
+        const float size = blood ? 0.16f : 0.28f;
+
+        b.group = Group::create();
         for (int i = 0; i < count; ++i) {
             b.pos[i] = point;
             Vector3 v = base + Vector3(frand(-1.f, 1.f), frand(-1.f, 1.f), frand(-1.f, 1.f)) * (blood ? 0.45f : 0.75f);
             if (v.length() < 1e-4f) v = base;
             v.normalize();
             b.vel[i] = v * (blood ? frand(2.5f, 6.5f) : frand(1.2f, 3.2f));
-            flat[i * 3 + 0] = point.x;
-            flat[i * 3 + 1] = point.y;
-            flat[i * 3 + 2] = point.z;
+            auto s = Sprite::create(b.mat);
+            s->position.copy(point);
+            s->scale.set(size, size, 1.f);
+            b.group->add(s);
+            b.sprites.push_back(s);
         }
-
-        b.posAttr = FloatBufferAttribute::create(flat, 3);
-        b.posAttr->setUsage(DrawUsage::Dynamic);
-        auto geo = BufferGeometry::create();
-        geo->setAttribute("position", b.posAttr);
-        b.mat = PointsMaterial::create(PointsMaterial::Params{}
-                                               .color(blood ? Color(0x9a0d0d) : Color(0x9c8f76))
-                                               .size(blood ? 0.18f : 0.30f)
-                                               .sizeAttenuation(true)
-                                               .map(blood ? bloodTex : dustTex));
-        b.mat->transparent = true;
-        b.mat->depthWrite = false;
-        b.points = Points::create(geo, b.mat);
+        scene->add(b.group);
         b.life = b.ttl = blood ? 0.55f : 0.70f;
         b.gravity = blood ? 16.f : 3.5f;
         b.drag = blood ? 1.5f : 3.0f;
-        scene->add(b.points);
         bursts.push_back(std::move(b));
     };
 
@@ -1405,7 +1404,7 @@ int main() {
             auto& b = *it;
             b.ttl -= dt;
             if (b.ttl <= 0.f) {
-                scene->remove(*b.points);
+                scene->remove(*b.group);
                 it = bursts.erase(it);
                 continue;
             }
@@ -1413,9 +1412,8 @@ int main() {
                 b.vel[i].y -= b.gravity * dt;
                 b.vel[i] *= std::max(0.f, 1.f - b.drag * dt);
                 b.pos[i] += b.vel[i] * dt;
-                b.posAttr->setXYZ(i, b.pos[i].x, b.pos[i].y, b.pos[i].z);
+                b.sprites[i]->position.copy(b.pos[i]);
             }
-            b.posAttr->needsUpdate();
             b.mat->opacity = std::clamp(b.ttl / b.life, 0.f, 1.f);
             ++it;
         }
