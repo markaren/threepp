@@ -33,7 +33,7 @@ LOD& LOD::addLevel(Object3D& object, float distance) {
 
     levels.insert(levels.begin() + l, {distance, &object});
 
-    this->add(object);
+    this->addRef(object);
 
     return *this;
 }

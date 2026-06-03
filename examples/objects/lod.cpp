@@ -18,7 +18,7 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     LOD lod1;
-    scene.add(lod1);
+    scene.addRef(lod1);
 
     auto material = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.wireframe(true));
     for (int z = 0; z <= 5; z++) {
@@ -30,7 +30,7 @@ int main() {
 
     LOD lod2;
     lod2.copy(lod1);
-    scene.add(lod2);
+    scene.addRef(lod2);
 
     float spacing = 1;
     lod1.position.x = spacing;

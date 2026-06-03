@@ -118,6 +118,11 @@ void Audio::stop() {
     ma_sound_stop(&pimpl_->sound_);
 }
 
+void Audio::seekToStart() {
+
+    ma_sound_seek_to_pcm_frame(&pimpl_->sound_, 0);
+}
+
 void Audio::togglePlay() {
 
     if (!isPlaying()) {

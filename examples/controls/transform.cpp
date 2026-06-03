@@ -56,7 +56,7 @@ int main() {
 
     TransformControls controls(camera, canvas);
     controls.attach(*object);
-    scene.add(controls);
+    scene.addRef(controls);
 
     LambdaEventListener changeListener([&](Event& event) {
         orbitControls.enabled = !std::any_cast<bool>(event.target);

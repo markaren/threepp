@@ -89,7 +89,7 @@ int main() {
     // --- Lidar sensor ---
     auto lidar = std::make_unique<LidarSensor>(LidarModel::OS0_128(),  512, 0.5f, 20.f);
     lidar->position.set(0, 2, 0);
-    scene->add(*lidar);
+    scene->addRef(*lidar);
 
     OrbitControls controls{*camera, canvas};
 
@@ -117,7 +117,7 @@ int main() {
         newLidar->position.copy(lidar->position);
         newLidar->rotation.copy(lidar->rotation);
         lidar = std::move(newLidar);
-        scene->add(*lidar);
+        scene->addRef(*lidar);
     };
 
     bool senorDataOnly = false;

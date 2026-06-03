@@ -71,7 +71,7 @@ int main() {
     PhysxWorld world(settings);
 
     PhysxDebugRenderer debugRenderer(world);
-    scene->add(debugRenderer);
+    scene->addRef(debugRenderer);
 
     auto groundMat = MeshLambertMaterial::create();
     groundMat->color = Color::darkgray;

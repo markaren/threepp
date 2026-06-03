@@ -73,10 +73,10 @@ int main() {
 
     Sphero sphero;
     sphero.position.y = 0.25;
-    scene.add(sphero);
+    scene.addRef(sphero);
 
     camera.lookAt(sphero.position);
-    sphero.add(camera);
+    sphero.addRef(camera);
 
     auto &spheroCamera = sphero.camera();
     auto cameraHelper = CameraHelper::create(spheroCamera);

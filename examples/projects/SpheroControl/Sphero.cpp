@@ -148,7 +148,7 @@ Sphero::Sphero()
 
     add(sphero);
 
-    Object3D::add(*camera_);
+    Object3D::addRef(*camera_);
 
     raycaster_.params.lineThreshold = 0.01f;
     raycaster_.layers.set(0);

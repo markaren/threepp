@@ -308,7 +308,7 @@ int main() {
         depthSensor = std::make_unique<DepthSensor>(60.f, kSensorW, kSensorH, 0.5f, 30.f);
         depthSensor->position.set(0, 0.5f, 2.f);// nose-mounted, forward
         depthSensor->rotation.y = math::degToRad(180.f);
-        chassisMesh->add(*depthSensor);
+        chassisMesh->addRef(*depthSensor);
 
         const size_t maxPts = kSensorW * kSensorH;
         auto pcGeom = BufferGeometry::create();
@@ -320,7 +320,7 @@ int main() {
         auto pcMat = PointsMaterial::create(PointsMaterial::Params{}.size(0.05f).vertexColors(true));
         depthPoints = Points::create(pcGeom, pcMat);
         depthPoints->frustumCulled = false;
-        sensorScene->add(*depthPoints);
+        sensorScene->addRef(*depthPoints);
     }
 
     Clock clock;

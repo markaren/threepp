@@ -28,7 +28,7 @@ int main() {
     initFountain(engine.settings());
 
     engine.initialize();
-    scene.add(engine);
+    scene.addRef(engine);
 
     auto grid = GridHelper::create();
     scene.add(grid);

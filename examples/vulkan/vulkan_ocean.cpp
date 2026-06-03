@@ -512,7 +512,7 @@ int main() {
     lidarSensor->params.mediumAlbedo     = 0.85f;
     lidarSensor->params.mediumAnisotropy = 0.85f;
     lidarSensor->params.mediumSurfaceY   = 0.f;
-    scene.add(*lidarSensor);
+    scene.addRef(*lidarSensor);
     bool lidarEnabled = false;
     bool lidarShowPanel = true;
 

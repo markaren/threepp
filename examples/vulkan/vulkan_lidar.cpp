@@ -168,7 +168,7 @@ int main() {
     sensor->params.laserPower = 1.f;
     sensor->params.atmosphericExtinction = 0.f;
     sensor->params.detectorThreshold = 0.005f;
-    scene.add(*sensor);
+    scene.addRef(*sensor);
 
     // ── Visualisation: Points overlay ─────────────────────────────────
     // One vertex per LIDAR return, colour-mapped by intensity. Vulkan PT
@@ -304,7 +304,7 @@ int main() {
             next->params = sensor->params;
             scene.remove(*sensor);
             sensor = std::move(next);
-            scene.add(*sensor);
+            scene.addRef(*sensor);
             cachedModelIndex = currentModel;
         }
 

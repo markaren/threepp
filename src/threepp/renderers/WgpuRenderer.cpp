@@ -1358,9 +1358,20 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
             case WGPUBackendType_OpenGLES:  backendName = "OpenGLES"; break;
             default: break;
         }
-        // std::cout << "WgpuRenderer: backend=" << backendName
-        //           << " adapter=\"" << std::string_view(info.device.data, info.device.length) << "\""
-        //           << std::endl;
+        // Report the selected adapter so GPU-selection issues (e.g. landing on an
+        // integrated GPU) are visible. Adapter type: 0=discrete, 1=integrated,
+        // 2=CPU/software — anything but discrete on a dGPU machine is a red flag.
+        const char* adapterType = "Other";
+        switch (info.adapterType) {
+            case WGPUAdapterType_DiscreteGPU:   adapterType = "DiscreteGPU"; break;
+            case WGPUAdapterType_IntegratedGPU: adapterType = "IntegratedGPU"; break;
+            case WGPUAdapterType_CPU:           adapterType = "CPU(software)"; break;
+            default: break;
+        }
+        std::cout << "WgpuRenderer: backend=" << backendName
+                  << " adapterType=" << adapterType
+                  << " adapter=\"" << std::string_view(info.device.data, info.device.length) << "\""
+                  << std::endl;
         wgpuAdapterInfoFreeMembers(info);
     }
 
@@ -2490,6 +2501,14 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             for (auto* item : renderList_.opaque)       warmMaterial(item->material);
             for (auto* item : renderList_.transparent)  warmMaterial(item->material);
             for (auto* item : renderList_.transmissive) warmMaterial(item->material);
+            // Screen-space sprites (e.g. HUD TextSprite) live in their own
+            // queue, not renderList_, and are drawn in a separate pass after
+            // this point. Warm them here too — otherwise getOrCreateTexture
+            // runs lazily *inside* that pass, after flushPendingMipmaps(), so
+            // the mip chain is a frame stale: full-size sprites blink on every
+            // setText() (texture recreated mid-frame) and minified labels
+            // sample undefined mips >0 and vanish entirely.
+            for (auto* sprite : screenSpaceSprites_) warmMaterial(sprite->material().get());
         }
 
         // Flush any pending mipmap generation before the render pass begins.
@@ -3336,6 +3355,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         }
         if (!rawMat->depthTest) {
             features |= SF::DepthTestOff;
+        }
+        if (rawMat->polygonOffset) {
+            features |= SF::PolygonOffset;
         }
 
         // Instancing

@@ -51,6 +51,11 @@ namespace threepp {
 
         void stop();
 
+        // Rewind the playback cursor to the start. stop()/play() only
+        // pause/resume (miniaudio semantics), so call this before play() to
+        // re-trigger a one-shot sound from the beginning (e.g. rapid fire).
+        void seekToStart();
+
         void setLooping(bool flag);
 
         virtual ~Audio();

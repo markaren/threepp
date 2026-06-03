@@ -103,7 +103,7 @@ DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, fl
 
     postScene_.add(Mesh::create(PlaneGeometry::create(2, 2), postMaterial_));
 
-    DepthSensor::add(camera_);
+    DepthSensor::addRef(camera_);
 
     // Precompute per-column/row view-space ray direction factors.
     // view point = (xDir_[x] * depth, yDir_[y] * depth, -depth)

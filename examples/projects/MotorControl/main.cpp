@@ -108,7 +108,7 @@ int main() {
     PIDRegulator controller(1.0, 0.1, 0.2);// Adjust PID gains as needed
 
     auto motorVisuals = VisualisationObject();
-    scene.add(motorVisuals);
+    scene.addRef(motorVisuals);
 
     FontLoader fontLoader;
     auto font = fontLoader.defaultFont();

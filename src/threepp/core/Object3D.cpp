@@ -207,10 +207,10 @@ void Object3D::lookAt(float x, float y, float z) {
 void Object3D::add(const std::shared_ptr<Object3D>& object) {
 
     this->children_.emplace_back(object);
-    add(*object);
+    addRef(*object);
 }
 
-void Object3D::add(Object3D& object) {
+void Object3D::addRef(Object3D& object) {
 
     if (object.parent) {
 

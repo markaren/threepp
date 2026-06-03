@@ -60,7 +60,7 @@ int main() {
     auto spriteMaterial = SpriteMaterial::create(SpriteMaterial::Params{}.map(texture));
     Sprite sprite(spriteMaterial);
     sprite.scale.set(textureSize, textureSize, 1);
-    orthoScene.add(sprite);
+    orthoScene.addRef(sprite);
 
     updateSpritePosition(sprite, size, textureSize);
 
@@ -70,14 +70,14 @@ int main() {
     const auto sphereMaterial = MeshBasicMaterial::create(MeshBasicMaterial::Params{}.map(tl.load(std::string(DATA_FOLDER) + "/textures/checker.png", ColorSpace::sRGB)));
     Mesh sphere(sphereGeometry, sphereMaterial);
     sphere.position.x = 1;
-    scene.add(sphere);
+    scene.addRef(sphere);
 
     const auto boxGeometry = BoxGeometry::create(1, 1, 1);
     const auto boxMaterial = MeshBasicMaterial::create(
             MeshBasicMaterial::Params{}.map(tl.load(std::string(DATA_FOLDER) + "/textures/crate.gif", ColorSpace::sRGB)));
     Mesh box(boxGeometry, boxMaterial);
     box.position.x = -1;
-    scene.add(box);
+    scene.addRef(box);
 
     addGrid(scene);
 

@@ -68,44 +68,47 @@ int main() {
 
 
     auto postMaterial = ShaderMaterial::create();
+    // flipUv compensates for WebGPU sampling render targets with a top-left UV
+    // origin (OpenGL uses bottom-left). Driven by renderer->renderTargetFlipY().
     postMaterial->vertexShader = R"(
         varying vec2 vUv;
-
-		void main() {
-			vUv = uv;
-			gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-		}
+        uniform float flipUv;
+        void main() {
+            vUv = vec2(uv.x, mix(uv.y, 1.0 - uv.y, flipUv));
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
     )";
+    // The packing helpers are inlined (rather than #include <packing>) and the
+    // depth is sampled at point of use — both required for the WebGPU GLSL→SPIR-V
+    // path, which can't pass a combined sampler2D into a function.
     postMaterial->fragmentShader = R"(
-            #include <packing>
+        varying vec2 vUv;
+        uniform sampler2D tDepth;
+        uniform float cameraNear;
+        uniform float cameraFar;
 
-			varying vec2 vUv;
-			uniform sampler2D tDiffuse;
-			uniform sampler2D tDepth;
-			uniform float cameraNear;
-			uniform float cameraFar;
+        float perspectiveDepthToViewZ(float invClipZ, float near, float far) {
+            return (near * far) / ((far - near) * invClipZ - far);
+        }
+        float viewZToOrthographicDepth(float viewZ, float near, float far) {
+            return (viewZ + near) / (near - far);
+        }
 
+        void main() {
+            float fragCoordZ = texture2D(tDepth, vUv).x;
+            float viewZ = perspectiveDepthToViewZ(fragCoordZ, cameraNear, cameraFar);
+            float depth = viewZToOrthographicDepth(viewZ, cameraNear, cameraFar);
 
-			float readDepth( sampler2D depthSampler, vec2 coord ) {
-				float fragCoordZ = texture2D( depthSampler, coord ).x;
-				float viewZ = perspectiveDepthToViewZ( fragCoordZ, cameraNear, cameraFar );
-				return viewZToOrthographicDepth( viewZ, cameraNear, cameraFar );
-			}
-
-			void main() {
-				//vec3 diffuse = texture2D( tDiffuse, vUv ).rgb;
-				float depth = readDepth( tDepth, vUv );
-
-				gl_FragColor.rgb = 1.0 - vec3( depth );
-				gl_FragColor.a = 1.0;
-			}
-        )";
+            gl_FragColor.rgb = 1.0 - vec3(depth);
+            gl_FragColor.a = 1.0;
+        }
+    )";
 
     postMaterial->uniforms = {
-            {"tDiffuse", Uniform()},
             {"tDepth", Uniform()},
             {"cameraNear", Uniform(camera.nearPlane)},
-            {"cameraFar", Uniform(camera.farPlane)}};
+            {"cameraFar", Uniform(camera.farPlane)},
+            {"flipUv", Uniform(renderer->renderTargetFlipY() ? 1.0f : 0.0f)}};
 
     OrthographicCamera postCamera(-1, 1, 1, -1, 0, 1);
     const auto postPlane = PlaneGeometry::create(2, 2);
@@ -124,8 +127,7 @@ int main() {
         renderer->setRenderTarget(&target);
         renderer->render(scene, camera);
 
-        postMaterial->uniforms.at("tDiffuse").setValue(target.texture.get());
-        postMaterial->uniforms.at("tDepth").setValue(target.depthTexture.get());
+        postMaterial->uniforms.at("tDepth").setValue(static_cast<Texture*>(target.depthTexture.get()));
 
         renderer->setRenderTarget(nullptr);
 

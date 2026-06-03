@@ -21,9 +21,9 @@
 //   mats[0]     = bindMatrix
 //   mats[1]     = bindMatrixInverse
 //   mats[2..N+2]= bone matrices [0..N-1]
-// bindMatrix / bindMatrixInverse are constants per SkinnedMesh; written
-// once at ensureSkinnedBlas. Only the bones[..] portion is re-uploaded
-// per frame.
+// bindMatrix is constant per SkinnedMesh. bindMatrixInverse tracks the current
+// matrixWorld (attached bind mode), so it AND the bones[..] portion are
+// re-uploaded each frame; only mats[0] is truly written once.
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 

@@ -89,7 +89,7 @@ int main() {
     // --- Lidar sensor ---
     DepthSensor lidar(50.f, 512, 256, 0.5f, 20.f);
     lidar.position.set(0, 2, 0);
-    scene->add(lidar);
+    scene->addRef(lidar);
 
     OrbitControls controls{*camera, canvas};
 

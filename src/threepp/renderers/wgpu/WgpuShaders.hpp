@@ -116,6 +116,11 @@ namespace threepp::wgpu {
         // RectAreaLights (bit 45): scene has RectAreaLights — enables LTC binding + eval path
         constexpr uint64_t RectAreaLights  = 1ULL << 45;
 
+        // PolygonOffset (bit 46): material has polygonOffset=true → apply a depth
+        // bias in the pipeline so coplanar geometry (decals) doesn't z-fight the
+        // surface. Parity with the GL backend's glPolygonOffset handling.
+        constexpr uint64_t PolygonOffset   = 1ULL << 46;
+
         // Convenience: test if shader needs lighting calculations.
         inline bool isLit(uint64_t features) {
             return (features & (Lighting | Specular | PBR)) != 0;
