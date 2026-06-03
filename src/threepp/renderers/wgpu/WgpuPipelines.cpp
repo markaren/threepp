@@ -409,6 +409,16 @@ namespace threepp::wgpu {
         depthStencil.depthCompare = (features & ShaderFeatures::DepthTestOff)
                                           ? WGPUCompareFunction_Always
                                           : WGPUCompareFunction_LessEqual;
+        // polygonOffset → depth bias (parity with the GL backend): nudge coplanar
+        // geometry (decals) toward the camera so it doesn't z-fight the surface.
+        // The bitmask pipeline cache can't carry per-material factor/units, so we
+        // use conventional values here; the ShaderMaterial path honours the
+        // material's exact polygonOffsetFactor/Units.
+        if (features & ShaderFeatures::PolygonOffset) {
+            depthStencil.depthBias = -1;
+            depthStencil.depthBiasSlopeScale = -4.0f;
+            depthStencil.depthBiasClamp = 0.0f;
+        }
 
         WGPURenderPipelineDescriptor pipelineDesc{};
         pipelineDesc.label = WGPUStringView{"wgpu_pipeline", WGPU_STRLEN} ;
@@ -851,6 +861,11 @@ namespace threepp::wgpu {
                 ? WGPUOptionalBool_True : WGPUOptionalBool_False;
             depthStencil.depthCompare = sm->depthTest
                 ? mapDepthFunc(sm->depthFunc) : WGPUCompareFunction_Always;
+            if (sm->polygonOffset) {
+                depthStencil.depthBias = static_cast<int32_t>(sm->polygonOffsetUnits);
+                depthStencil.depthBiasSlopeScale = sm->polygonOffsetFactor;
+                depthStencil.depthBiasClamp = 0.0f;
+            }
 
             WGPUCullMode cullMode = WGPUCullMode_None;
             if (sm->side == Side::Front) cullMode = WGPUCullMode_Back;

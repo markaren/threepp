@@ -3356,6 +3356,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         if (!rawMat->depthTest) {
             features |= SF::DepthTestOff;
         }
+        if (rawMat->polygonOffset) {
+            features |= SF::PolygonOffset;
+        }
 
         // Instancing
         if (instancedMesh) {
