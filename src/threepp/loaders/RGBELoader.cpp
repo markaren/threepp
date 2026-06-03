@@ -48,6 +48,11 @@ std::shared_ptr<Texture> RGBELoader::load(const std::filesystem::path& path, boo
     texture->type = Type::Float;
     texture->colorSpace = ColorSpace::Linear;// stbi_loadf already decoded RGBE → linear floats
     texture->mapping = Mapping::EquirectangularReflection;
+    // Equirect maps wrap 360° in azimuth — Repeat on S keeps the atan2 seam (at
+    // -X) continuous when sampled directly as a background and when GGX-prefiltered
+    // into the GL PMREM atlas (otherwise the seam bakes a vertical streak). T stays
+    // clamped (the poles do not wrap).
+    texture->wrapS = TextureWrapping::Repeat;
     texture->needsUpdate();
 
     return texture;
