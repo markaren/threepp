@@ -223,7 +223,7 @@ int main(int argc, char** argv) {
 
     PhysxDebugRenderer debugRenderer(world);
     debugRenderer.visible = false;
-    scene.add(debugRenderer);
+    scene.addRef(debugRenderer);
 
     // --- Conveyor system: rebuild the layout authored in the designer ----------
     // Each piece becomes a visual model (shared loader → identical placement to the
