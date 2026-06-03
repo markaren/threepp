@@ -259,10 +259,10 @@ namespace {
 
                 // Real submachine-gun sample for the gun; the rest stay
                 // procedural. Falls back to the synth shot if the file is absent.
-                const std::string assets = std::string(PROJECT_FOLDER) + "/examples/projects/Shooter/assets/";
-                const std::string gunFile = assets + "submachine_gun.mp3";
-                const std::string reloadFile = assets + "reload_1911.mp3";
-                const std::string metalFile = assets + "metal_impact.mp3";
+                const std::string assets = std::string(DATA_FOLDER) + "/sounds/";
+                const std::string gunFile = assets + "freesound_community-submachine-gun-79846.mp3";
+                const std::string reloadFile = assets + "freesound_community-1911-reload-6248.mp3";
+                const std::string metalFile = assets + "freesound_community-hard-metal-impact-43052.mp3";
                 std::vector<Spec> specs{
                         {"shot.wav", synthShot(), &shot, 6, fs::exists(gunFile) ? gunFile : std::string{}},
                         {"empty.wav", synthClick(), &empty, 2, {}},
