@@ -78,9 +78,9 @@ namespace glfwc {
 namespace {
 
     // ---- tuning constants --------------------------------------------------
-    constexpr float kArena = 28.f;       // half-extent of the play area
+    constexpr float kArena = 28.f;// half-extent of the play area
     constexpr float kPlayerRadius = 0.35f;
-    constexpr float kPlayerLen = 1.1f;   // capsule cylinder segment
+    constexpr float kPlayerLen = 1.1f;                              // capsule cylinder segment
     constexpr float kPlayerHalf = kPlayerLen * 0.5f + kPlayerRadius;// centre->foot
     constexpr float kWalkSpeed = 3.2f;
     constexpr float kRunSpeed = 6.4f;
@@ -412,7 +412,7 @@ namespace {
     // ========================================================================
 
     struct Enemy {
-        std::shared_ptr<Mesh> visual;            // capsule body (added to scene)
+        std::shared_ptr<Mesh> visual;// capsule body (added to scene)
         std::shared_ptr<MeshStandardMaterial> mat;
         PxRigidDynamic* body = nullptr;
         int hp = kEnemyHp;
@@ -571,7 +571,7 @@ int main() {
     // ---- raised bunker with a ramp up (rewards the jump) ------------------
     {
         const float pz = -16.f, pw = 12.f, pd = 7.f, ph = 1.4f;
-        addBox({0, ph * 0.5f, pz}, {pw, ph, pd}, concreteMat);          // platform (top at ph; low enough to jump onto the edge)
+        addBox({0, ph * 0.5f, pz}, {pw, ph, pd}, concreteMat);                      // platform (top at ph; low enough to jump onto the edge)
         addBox({0, ph + 0.5f, pz - pd * 0.5f + 0.5f}, {pw, 1.f, 1.f}, sandstoneMat);// rear parapet (cover up top)
         // ramp on the +Z (centre-facing) edge. Flip the pitch sign if it tilts
         // the wrong way.
@@ -799,10 +799,10 @@ int main() {
     bool reloading = false;
     float reloadTimer = 0.f;
     float fireTimer = 0.f;
-    bool firing = false;     // LMB held
-    bool firedEmpty = false; // debounce empty click
+    bool firing = false;    // LMB held
+    bool firedEmpty = false;// debounce empty click
     bool gameOver = false;
-    float hitMarkerT = 0.f;  // >0 while the hit marker flashes
+    float hitMarkerT = 0.f;// >0 while the hit marker flashes
     float stepTimer = 0.f;
 
     // ===== bullet-impact decals =============================================
@@ -1007,12 +1007,12 @@ int main() {
             crosshair->add(r.mesh);
             chMats.push_back(r.material);
         };
-        const float g = 6, len = 12, th = 2;
-        mk(th, len, 0, g);  // up
-        mk(th, len, 0, -g);       // down
-        mk(len, th, -g, th);// left
-        mk(len, th, g, th);       // right
-        mk(3, 3, 0, 1.5f);        // dot
+        const float g = 6, len = 8, th = 2;
+        mk(th, len, 0, g + th);// up
+        mk(th, len, 0, -g);     // down
+        mk(len, th, -g - th, th);    // left
+        mk(len, th, g + th, th);     // right
+        mk(3, 3, 0, 1.5f);      // dot
     }
     ui->add(crosshair);
     layout.add(crosshair, 0.5f, 0.5f, 0, 0, 0.5f);
@@ -1170,7 +1170,7 @@ int main() {
     canvas.addMouseListener(down);
     canvas.addMouseListener(up);
 
-    struct WheelListener : MouseListener {
+    struct WheelListener: MouseListener {
         std::function<void(float)> f;
         void onMouseWheel(const Vector2& d) override { f(d.y); }
     } wheel;
@@ -1284,7 +1284,8 @@ int main() {
         if (mixer) {
             AnimationAction* want = idleA;
             if (moveSpeed > kWalkSpeed + 0.5f) want = runA ? runA : walkA;
-            else if (moveSpeed > 0.1f) want = walkA ? walkA : idleA;
+            else if (moveSpeed > 0.1f)
+                want = walkA ? walkA : idleA;
             if (want && want != currentA) {
                 want->reset();
                 want->play();
