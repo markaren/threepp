@@ -52,6 +52,12 @@ namespace threepp {
 
         void setInterpolation(Interpolation interpolation);
 
+        // Convert this track's values to deltas relative to its first keyframe, so
+        // it can be played as an additive layer (rotations become relative
+        // quaternions, positions/numbers become differences). Used by
+        // AnimationClip::makeAdditive for upper-body-overlay animation.
+        void makeAdditive();
+
         KeyframeTrack& shift(float timeOffset);
 
         KeyframeTrack& scale(float timeScale);

@@ -2,10 +2,12 @@
 #include "threepp/animation/KeyframeTrack.hpp"
 
 #include "threepp/animation/AnimationUtils.hpp"
+#include "threepp/math/Quaternion.hpp"
 #include "threepp/math/interpolants/CubicInterpolant.hpp"
 #include "threepp/math/interpolants/DiscreteInterpolant.hpp"
 #include "threepp/math/interpolants/LinearInterpolant.hpp"
 
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 
@@ -195,6 +197,38 @@ std::unique_ptr<Interpolant> KeyframeTrack::createInterpolant(std::vector<float>
 size_t KeyframeTrack::getValueSize() const {
 
     return values_.size() / times_.size();
+}
+
+void KeyframeTrack::makeAdditive() {
+
+    // Rebase every keyframe to a delta relative to the first keyframe, so the
+    // track can be accumulated additively on top of a base layer (port of
+    // three.js AnimationUtils.makeClipAdditive with referenceFrame 0).
+    const auto valueSize = getValueSize();
+    if (valueSize == 0 || values_.size() < valueSize) return;
+
+    const std::string type = ValueTypeName();
+    if (type == "bool" || type == "string") return;// not meaningfully additive
+
+    if (type == "quaternion") {
+        // reference := conjugate(normalize(firstFrameQuat)); value := reference * value
+        std::vector<float> ref(values_.begin(), values_.begin() + valueSize);// x,y,z,w
+        const float len = std::sqrt(ref[0] * ref[0] + ref[1] * ref[1] + ref[2] * ref[2] + ref[3] * ref[3]);
+        if (len > 0.f)
+            for (float& v : ref) v /= len;
+        ref[0] = -ref[0];
+        ref[1] = -ref[1];
+        ref[2] = -ref[2];// conjugate (w kept)
+        for (size_t j = 0; j + valueSize <= values_.size(); j += valueSize) {
+            Quaternion::multiplyQuaternionsFlat(values_, j, ref, 0, values_, j);
+        }
+    } else {
+        // numeric/vector/color: value := value - firstFrameValue (component-wise)
+        const std::vector<float> ref(values_.begin(), values_.begin() + valueSize);
+        for (size_t j = 0; j < values_.size(); ++j) {
+            values_[j] -= ref[j % valueSize];
+        }
+    }
 }
 
 void KeyframeTrack::setInterpolation(Interpolation interpolation) {
