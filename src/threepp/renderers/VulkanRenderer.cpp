@@ -33,6 +33,7 @@
 #include "vulkan/SkinningPipeline.hpp"
 #include "vulkan/TetSkinningPipeline.hpp"
 #include "vulkan/TaaResolve.hpp"
+#include "vulkan/BloomPass.hpp"
 #include "vulkan/WaterDisplacePipeline.hpp"
 #include "vulkan/FoamWorldPipeline.hpp"
 #include "vulkan/shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
@@ -1220,6 +1221,15 @@ namespace threepp {
         // External deps (raster gbuffer views, swapchain views) are passed
         // in at descriptor-write time.
         std::unique_ptr<vulkan::TaaResolve> taa_;
+        // HDR bloom + tone-map/sRGB composite — tail of the PT post stack.
+        // denoise.comp (resolve) writes linear HDR into bloom_->sceneHdr
+        // (the shared set's binding 1); bloom_ down/blurs it and composites
+        // bloom + tone map + sRGB into the TAA input. bloomIntensity_ == 0
+        // skips the bloom passes (composite still owns the tone map).
+        std::unique_ptr<vulkan::BloomPass> bloom_;
+        float bloomIntensity_ = 0.0f;
+        float bloomThreshold_ = 1.0f;// soft-knee bright-pass cutoff (linear HDR)
+        float sharpenStrength_ = 0.0f;// post-TAA RCAS amount; 0 = off
         float taaBlendAlpha_ = 0.1f;// 10% current, 90% history
 
         bool perSppJitterHybrid_ = true;
@@ -1499,11 +1509,17 @@ namespace threepp {
                 taa_->createImages(inExt.width, inExt.height,
                                    outExt.width, outExt.height);
             }
+            // HDR bloom + tone-map/sRGB composite. sceneHdr lives at the
+            // path-trace render extent (it is the shared set's binding 1
+            // target); the bloom ping-pong buffers are half that.
+            bloom_ = std::make_unique<vulkan::BloomPass>(*ctx, cmdPool, kFramesInFlight);
+            bloom_->createImages(renderExtent().width, renderExtent().height);
             createDescriptorPool();
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             createOceanFineDummy_();// must run before descriptor writes (binding 32)
             createOceanFoamDummy_();// must run before descriptor writes (binding 33)
             rewriteTaaDescriptors();// after ensureHybridResources gave us raster gbuf views
+            rewriteBloomDescriptors();// bloom composite reads gbuf + writes the TAA input
             createTimestampPools();// per-frame VkQueryPool for the timings API
         }
 
@@ -9278,6 +9294,22 @@ namespace threepp {
             taa_->rewriteDescriptors(in);
         }
 
+        // Bloom composite reads the per-frame G-buffer (for the solid-bg sky
+        // bypass) and writes the per-frame TAA input. Call after bloom_->
+        // createImages OR after the gbuffer / TAA images are reallocated.
+        void rewriteBloomDescriptors() {
+            std::array<VkImageView, kFramesInFlight> gbufViews{};
+            std::array<VkImageView, kFramesInFlight> taaInViews{};
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                gbufViews[f]  = gbufImagesPP[f].view;
+                taaInViews[f] = taa_->inputView(f);
+            }
+            vulkan::BloomPass::DescriptorWriteInputs in{};
+            in.gbufPerFrame     = gbufViews.data();
+            in.taaInputPerFrame = taaInViews.data();
+            bloom_->rewriteDescriptors(in);
+        }
+
 
         // Lazy bring-up: called at the start of each render() when hybrid is on.
         // Idempotent — handles both initial creation and post-resize reallocation.
@@ -11619,6 +11651,7 @@ namespace threepp {
                 taa_->createImages(inExt.width, inExt.height,
                                    outExt.width, outExt.height);
             }
+            bloom_->createImages(renderExtent().width, renderExtent().height);
             vkDestroyDescriptorPool(ctx->device(), descriptorPool, nullptr);
             descriptorPool = VK_NULL_HANDLE;
             descriptorSets.clear();
@@ -11633,6 +11666,7 @@ namespace threepp {
             // TAA descriptor sets are persistent (pool lives inside TaaResolve);
             // just rewrite them to the new image / view handles.
             rewriteTaaDescriptors();
+            rewriteBloomDescriptors();// gbuf + TAA-input views changed
             // The descriptor pool was rebuilt — force the per-frame binding-1
             // target rewrite to re-run regardless of its prior cached mode.
             binding1Mode_.fill(-1);
@@ -12480,6 +12514,19 @@ namespace threepp {
             timingEnd(cb, TP_Denoise);
             // ── End denoise ─────────────────────────────────────────────────────
 
+            // ── Bloom + tone-map/sRGB composite (HDR post stack) ───────────────
+            // denoise.comp (resolve) wrote linear HDR into bloom_->sceneHdr
+            // (the shared set's binding 1). This pass glows the bright
+            // highlights and composites bloom + tone map + sRGB into the TAA
+            // input image. With bloomIntensity_ == 0 the bloom passes are
+            // skipped and the composite reproduces the old finalize output
+            // (tone map + sRGB + solid-bg bypass) exactly.
+            bloom_->recordDispatch(cb, currentFrame, ptExt.width, ptExt.height,
+                                   static_cast<uint32_t>(toneMapping_),
+                                   exposureBits, envIsBgColor,
+                                   bloomIntensity_, bloomThreshold_);
+            // ── End bloom ──────────────────────────────────────────────────────
+
             // ── Stage 1A.5: raster TAA / temporal upsampler ────────────────────
             // Reads denoise output from the TAA input image (render extent),
             // blends with reprojected history (rgba16f, swapchain extent),
@@ -12492,7 +12539,8 @@ namespace threepp {
             timingBegin(cb, TP_TAA);
             taa_->recordResolve(cb, currentFrame, imageIndex,
                                 ptExt.width, ptExt.height,
-                                ext.width, ext.height, taaBlendAlpha_);
+                                ext.width, ext.height, taaBlendAlpha_,
+                                sharpenStrength_ > 0.0f, sharpenStrength_);
             timingEnd(cb, TP_TAA);
             // ── End raster TAA ─────────────────────────────────────────────────
 
@@ -13315,12 +13363,15 @@ namespace threepp {
             // gives stills quality (chit primary is high-quality input), TAA
             // sits on top to handle motion.
             {
-                const int8_t desired = 1;// binding 1 always targets the TAA input
+                const int8_t desired = 1;// binding 1 → bloom sceneHdr (HDR resolve)
                 if (binding1Mode_[currentFrame] != desired) {
                     for (uint32_t i = 0; i < imageCount_; ++i) {
                         const uint32_t idx = currentFrame * imageCount_ + i;
                         VkDescriptorImageInfo info{};
-                        info.imageView   = taa_->inputView(currentFrame);
+                        // denoise.comp (resolve) writes linear HDR here; the
+                        // bloom/composite pass then tonemaps it into the TAA
+                        // input. (Was taa_->inputView before the HDR split.)
+                        info.imageView   = bloom_->sceneHdrView(currentFrame);
                         info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                         VkWriteDescriptorSet w{};
                         w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -14071,6 +14122,30 @@ namespace threepp {
 
     bool VulkanRenderer::denoise() const {
         return pimpl_->denoiseEnabled_;
+    }
+
+    void VulkanRenderer::setBloomIntensity(float intensity) {
+        pimpl_->bloomIntensity_ = intensity < 0.f ? 0.f : intensity;
+    }
+
+    float VulkanRenderer::bloomIntensity() const {
+        return pimpl_->bloomIntensity_;
+    }
+
+    void VulkanRenderer::setBloomThreshold(float threshold) {
+        pimpl_->bloomThreshold_ = threshold < 0.f ? 0.f : threshold;
+    }
+
+    float VulkanRenderer::bloomThreshold() const {
+        return pimpl_->bloomThreshold_;
+    }
+
+    void VulkanRenderer::setSharpenStrength(float amount) {
+        pimpl_->sharpenStrength_ = amount < 0.f ? 0.f : amount;
+    }
+
+    float VulkanRenderer::sharpenStrength() const {
+        return pimpl_->sharpenStrength_;
     }
 
     void VulkanRenderer::setSilhouetteMsaaExtra(uint32_t extra) {

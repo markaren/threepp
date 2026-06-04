@@ -626,6 +626,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/SkinningPipeline.cpp"
             "threepp/renderers/vulkan/TetSkinningPipeline.cpp"
             "threepp/renderers/vulkan/TaaResolve.cpp"
+            "threepp/renderers/vulkan/BloomPass.cpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
             "threepp/renderers/vulkan/FoamWorldPipeline.cpp"
             "threepp/renderers/vulkan/water/OceanFFT.cpp"
@@ -944,6 +945,21 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/denoise_atrous.comp"
         kDenoiseAtrousCompSpv
         _denoise_atrous_spv_h)
+    # PT post stack: bloom (Karis downsample + separable Gaussian blur) +
+    # the tone-map/sRGB/bloom composite that closes the HDR path. See
+    # vulkan/BloomPass.{hpp,cpp} and denoise.comp (resolve) for the producer.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/bloom_down.comp"
+        kBloomDownCompSpv
+        _bloom_down_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/bloom_blur.comp"
+        kBloomBlurCompSpv
+        _bloom_blur_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/composite.comp"
+        kCompositeCompSpv
+        _composite_spv_h)
     compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/skinning.comp"
         kSkinningCompSpv
@@ -1016,6 +1032,12 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/taa_resolve.comp"
         kTaaResolveCompSpv
         _taa_resolve_spv_h)
+    # Post-TAA RCAS sharpen (FidelityFX-style) — restores detail the temporal
+    # resolve softens. See vulkan/TaaResolve.cpp (folded into that pass).
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/rcas.comp"
+        kRcasCompSpv
+        _rcas_spv_h)
     # Hybrid raster overlay: wireframe + Line/LineSegments draw on top of
     # the post-TAA swapchain image. Depth-tested against the G-buffer's
     # depth attachment so overlays are correctly occluded by path-traced

@@ -229,6 +229,26 @@ namespace threepp {
         void setDenoise(bool enabled);
         [[nodiscard]] bool denoise() const;
 
+        // HDR bloom, added in linear HDR *before* the tone-map curve. A
+        // soft-knee bright pass (see setBloomThreshold) keeps only highlights,
+        // which are blurred and added back additively, so darks/mid-tones stay
+        // crisp and bright areas glow. 0 disables the bloom passes (the
+        // composite still owns tone map + sRGB). Typical intensity: 0.2–0.8.
+        void setBloomIntensity(float intensity);
+        [[nodiscard]] float bloomIntensity() const;
+
+        // Bloom bright-pass cutoff in linear-HDR luma: only scene values above
+        // this (with a soft knee below it) contribute to the glow. Higher =
+        // only the very brightest highlights bloom. Typical: 0.8–2.0.
+        void setBloomThreshold(float threshold);
+        [[nodiscard]] float bloomThreshold() const;
+
+        // Post-TAA RCAS sharpen strength — restores high-frequency detail the
+        // temporal resolve softens (contrast-limited, so it won't ring or
+        // amplify fireflies). 0 disables the sharpen pass. Typical: 0.2–0.5.
+        void setSharpenStrength(float amount);
+        [[nodiscard]] float sharpenStrength() const;
+
         // Extra primary rays fired at detected silhouette pixels (mesh-ID,
         // depth-gradient, or diagonal neighbour mismatch in the raster
         // prepass). 0 disables silhouette MSAA. N gives (N+1)× total

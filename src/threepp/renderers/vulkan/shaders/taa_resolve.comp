@@ -57,7 +57,9 @@ layout(push_constant) uniform Pc {
     uint  height;
     uint  inWidth;   // input (path-trace render) extent — equals width/height
     uint  inHeight;  // when renderScale == 1 (no upsampling)
-    uint  _pad;
+    uint  writeSwap; // 1 = write the swapchain here; 0 = a downstream RCAS
+                     //     sharpen pass owns the swapchain write (history is
+                     //     still written so it reads the resolved frame).
 } pc;
 
 // Catmull-Rom history reconstruction (5-tap, bilinear-fused).
@@ -190,6 +192,10 @@ void main() {
     const float a = clamp(pc.blendAlpha + velocityBump, 0.02, 1.0);
     const vec3 result = reprojValid ? mix(history, curr, a) : curr;
 
-    imageStore(taaSwapImage,        px, vec4(result, 1.0));
+    // When a downstream RCAS pass owns the swapchain write, skip it here but
+    // still write history (RCAS reads the resolved frame from the history slot).
+    // When a downstream RCAS pass owns the swapchain write, skip it here but
+    // still write history (RCAS reads the resolved frame from the history slot).
+    if (pc.writeSwap != 0u) imageStore(taaSwapImage, px, vec4(result, 1.0));
     imageStore(taaHistoryWriteImg,  px, vec4(result, 1.0));
 }

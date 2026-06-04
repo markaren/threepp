@@ -69,6 +69,10 @@ namespace threepp::vulkan {
         // OUTPUT extent in 8×8 groups (each thread reconstructs one full-res
         // pixel; the input may be lower-res). Auto-flips history-valid to
         // true after the first dispatch.
+        // When `sharpen` is true the temporal resolve skips its swapchain
+        // write and a post-resolve RCAS pass (sharpenAmount ~0.2–0.6) reads
+        // the resolved frame back from the history slot and writes the
+        // sharpened result to the swapchain instead.
         void recordResolve(VkCommandBuffer cb,
                            uint32_t frame,
                            uint32_t imageIndex,
@@ -76,7 +80,9 @@ namespace threepp::vulkan {
                            uint32_t inHeight,
                            uint32_t outWidth,
                            uint32_t outHeight,
-                           float blendAlpha);
+                           float blendAlpha,
+                           bool sharpen,
+                           float sharpenAmount);
 
         // Denoise writes its output here when TAA is active (replaces the
         // direct-to-swapchain write of non-TAA mode).
@@ -122,6 +128,13 @@ namespace threepp::vulkan {
         VkPipeline            pipeline_       = VK_NULL_HANDLE;
         VkDescriptorPool      descPool_       = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> descSets_;
+
+        // Post-resolve RCAS sharpen (folded into this pass). Reads the just-
+        // written history slot (the resolved frame) and writes the swapchain.
+        VkDescriptorSetLayout rcasDsLayout_   = VK_NULL_HANDLE;
+        VkPipelineLayout      rcasPipeLayout_ = VK_NULL_HANDLE;
+        VkPipeline            rcasPipe_       = VK_NULL_HANDLE;
+        std::vector<VkDescriptorSet> rcasSets_;
 
         bool historyValid_ = false;
 

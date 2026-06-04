@@ -1,0 +1,32 @@
+#version 460
+
+// Separable Gaussian blur for bloom. The host runs it H then V per iteration
+// (two iterations give a wide, soft glow). 9 taps, σ ≈ 2.5 texels, step 1.5×
+// texel for extra reach. Operates at the half-res bloom extent — cheap.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D srcTex;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D dstImg;
+
+layout(push_constant) uniform Pc {
+    uint  w; uint h;        // extent
+    float dirX; float dirY; // blur axis in texel units: (1,0) = H, (0,1) = V
+} pc;
+
+void main() {
+    const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.w) || p.y >= int(pc.h)) return;
+
+    const vec2 sz = vec2(float(pc.w), float(pc.h));
+    const vec2 uv = (vec2(p) + 0.5) / sz;
+    const vec2 st = vec2(pc.dirX, pc.dirY) / sz * 1.5;
+
+    const float wt[5] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+    vec3 acc = texture(srcTex, uv).rgb * wt[0];
+    for (int o = 1; o < 5; ++o) {
+        acc += texture(srcTex, uv + st * float(o)).rgb * wt[o];
+        acc += texture(srcTex, uv - st * float(o)).rgb * wt[o];
+    }
+    imageStore(dstImg, p, vec4(acc, 1.0));
+}

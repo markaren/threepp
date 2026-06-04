@@ -1,84 +1,40 @@
 #version 460
 
-// Denoise finalize stage: reads the raw temporally-accumulated radiance
-// (accumImage) and the multi-pass à-trous output (filteredArray[0]),
-// FC-fades between them, tonemaps + sRGB-encodes to the swap chain.
+// PT "resolve" stage (formerly the finalize tonemap stage).
 //
-// When denoiseEnabled == 0 the filtered read is skipped — output is just
-// tonemap + sRGB on raw accum. Pixel-identical to the prior in-shader
-// raygen tail in that mode.
+// Reads the raw temporally-accumulated radiance (accumImage) and the
+// multi-pass à-trous output (filteredArray[0]), mixes them per-pixel by the
+// filter weight the à-trous stage wrote into filtered.a, and writes the
+// result as LINEAR HDR to outImage (rgba16f).
 //
-// Two à-trous passes (denoise_atrous.comp) run before this stage with
-// strides 1, 2 ping-ponging filteredArray[0] ↔ filteredArray[1]; the
-// final pass writes to filteredArray[0] which is what we read here.
+// Tone mapping + sRGB encode + bloom compositing now happen downstream in
+// composite.comp (BloomPass), so bloom can be added in linear HDR *before*
+// the tone-map curve (correct, AAA-style glow) instead of on already-
+// compressed LDR. When bloom is disabled the composite stage performs the
+// exact tone-map + sRGB + solid-bg bypass this stage used to do, so the
+// final image is identical to the pre-split behaviour.
+//
+// When denoiseEnabled == 0 the filtered read is skipped — output is the raw
+// accumulated radiance (still linear HDR; composite tonemaps it).
+//
+// Two à-trous passes (denoise_atrous.comp) run before this stage; the final
+// pass writes filteredArray[0], whose .a carries the per-pixel filter weight.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D outImage;
-layout(set = 0, binding = 2) uniform CameraUbo {
-    mat4 viewInverse;
-    mat4 projInverse;
-} cam;
+// rgba16f: linear HDR scene colour consumed by the bloom down-sample + the
+// composite tone-map pass. (Was rgba8 tonemapped output before the split.)
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outImage;
 layout(set = 0, binding = 7,  rgba32f) uniform readonly image2D accumImage;
 layout(set = 0, binding = 12, rgba32f) uniform readonly image2D gbufImage;
 layout(set = 0, binding = 20, rgba32f) uniform readonly image2D filteredArray[2];
 
 layout(push_constant) uniform Pc {
-    uint toneMapping;     // matches raygen.rgen Pc.toneMapping enum
-    uint exposureBits;    // float-bits for exposure
-    uint denoiseEnabled;  // 0 = bypass à-trous mix, raw → tonemap; 1 = mix filtered by FC fade
-    uint bgIsSolidColor;  // 1 = scene.background is a solid color → sky pixels bypass tone map
+    uint toneMapping;     // unused here — composite.comp owns tone mapping
+    uint exposureBits;    // unused here — kept for ABI parity with the
+    uint denoiseEnabled;  // Denoiser::recordDispatch finalize push (4×u32).
+    uint bgIsSolidColor;  // unused here — composite.comp owns the bg bypass.
 } pc;
-
-vec3 linearToSRGB(vec3 x) {
-    const vec3 cutoff = vec3(lessThan(x, vec3(0.0031308)));
-    const vec3 lower  = 12.92 * x;
-    const vec3 higher = 1.055 * pow(max(x, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
-    return mix(higher, lower, cutoff);
-}
-vec3 reinhard(vec3 c) { return clamp(c / (vec3(1.0) + c), 0.0, 1.0); }
-vec3 cineon(vec3 c) {
-    c = max(vec3(0.0), c - 0.004);
-    return pow((c * (6.2 * c + 0.5)) / (c * (6.2 * c + 1.7) + 0.06), vec3(2.2));
-}
-vec3 acesFilmic(vec3 c) {
-    const mat3 inMat = mat3(
-            vec3(0.59719, 0.07600, 0.02840),
-            vec3(0.35458, 0.90834, 0.13383),
-            vec3(0.04823, 0.01566, 0.83777));
-    const mat3 outMat = mat3(
-            vec3( 1.60475, -0.10208, -0.00327),
-            vec3(-0.53108,  1.10813, -0.07276),
-            vec3(-0.07367, -0.00605,  1.07602));
-    c = inMat * c;
-    const vec3 a = c * (c + 0.0245786) - 0.000090537;
-    const vec3 b = c * (0.983729 * c + 0.4329510) + 0.238081;
-    return clamp(outMat * (a / b), 0.0, 1.0);
-}
-// Khronos PBR Neutral (three.js NeutralToneMapping): compresses luminance while
-// preserving a bright colour's hue — no ACES path-to-white. Input pre-exposed.
-vec3 neutral(vec3 color) {
-    const float startCompression = 0.8 - 0.04;
-    const float desaturation = 0.15;
-    float x = min(color.r, min(color.g, color.b));
-    float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
-    color -= offset;
-    float peak = max(color.r, max(color.g, color.b));
-    if (peak < startCompression) return color;
-    float d = 1.0 - startCompression;
-    float newPeak = 1.0 - d * d / (peak + d - startCompression);
-    color *= newPeak / peak;
-    float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
-    return mix(color, vec3(newPeak), g);
-}
-vec3 toneMap(vec3 c, uint mode, float exposure) {
-    if (mode == 1u) return c * exposure;                  // Linear
-    if (mode == 2u) return reinhard(c * exposure);        // Reinhard
-    if (mode == 3u) return cineon(c * exposure);          // OptimizedCineon
-    if (mode == 4u) return acesFilmic(c * (exposure / 0.6));// ACESFilmic
-    if (mode == 6u) return neutral(c * exposure);         // Khronos PBR Neutral
-    return c;// None / Custom — pass-through
-}
 
 void main() {
     const ivec2 size = imageSize(accumImage);
@@ -91,36 +47,19 @@ void main() {
     vec3 color = raw.rgb;
 
     // Sky pixels bypass the filtered mix — env is already temporally smooth.
-    // Disabled mode also bypasses (raw → tonemap, identity to prior behaviour).
     if (pc.denoiseEnabled != 0u && g.w > 0.5) {
-        const float fc     = raw.a;
-        // Filter fades to zero at FC=16. Vulkan PT runs 60-200 FPS at 2 spp
-        // → 120-400 SPP/sec → settled FC reaches 16 in well under a second.
-        // The filter is only doing useful work in the first ~16 frames after
-        // disocclusion / motion. After that the raw radiance is already
-        // clean and the filter only blurs detail. (Was 64 in initial land —
-        // overblurred on this fast-converging input.)
-        const float fcFade = clamp(1.0 - fc * (1.0 / 16.0), 0.0, 1.0);
-        if (fcFade > 0.001) {
-            const vec3 filtered = imageLoad(filteredArray[0], px).rgb;
-            color = mix(raw.rgb, filtered, fcFade);
+        // The à-trous stage wrote a per-pixel filter-mix weight into
+        // filtered.a: high where the pixel is still noisy (fresh disocclusion
+        // OR high residual variance), → 0 where it has settled clean. Mixing
+        // by it keeps the spatial filter ON wherever it helps and OFF on
+        // converged pixels (so texture/detail stays crisp).
+        const vec4  filtered = imageLoad(filteredArray[0], px);
+        const float wFilt    = filtered.a;
+        if (wFilt > 0.001) {
+            color = mix(raw.rgb, filtered.rgb, wFilt);
         }
     }
 
-    const float exposure = uintBitsToFloat(pc.exposureBits);
-    // Sky pixels (g.w == 0) under a solid-color background skip tone mapping
-    // (so the flat background isn't ACES-desaturated) but are still sRGB-encoded:
-    // the BGRA8_UNORM swapchain performs no hardware encoding and shaded pixels
-    // are encoded via linearToSRGB, so the (linear, color-managed) background
-    // color must be encoded too or it renders too dark. HDR env maps still go
-    // through the full pipeline.
-    const bool bypassToneMap = (pc.bgIsSolidColor != 0u) && (g.w < 0.5);
-    vec3 outRgb;
-    if (bypassToneMap) {
-        outRgb = linearToSRGB(color);
-    } else {
-        const vec3 mapped = toneMap(color, pc.toneMapping, exposure);
-        outRgb = linearToSRGB(mapped);
-    }
-    imageStore(outImage, px, vec4(outRgb, 1.0));
+    // Linear HDR out — composite.comp applies tone map + sRGB (+ bloom).
+    imageStore(outImage, px, vec4(color, 1.0));
 }
