@@ -152,6 +152,33 @@ PositionalAudio::PositionalAudio(AudioListener& ctx, const std::filesystem::path
     ma_sound_set_spatialization_enabled(&pimpl_->sound_, true);
 }
 
+void PositionalAudio::setMinDistance(float distance) {
+
+    ma_sound_set_min_distance(&pimpl_->sound_, distance);
+}
+
+void PositionalAudio::setMaxDistance(float distance) {
+
+    ma_sound_set_max_distance(&pimpl_->sound_, distance);
+}
+
+void PositionalAudio::setRolloffFactor(float rolloff) {
+
+    ma_sound_set_rolloff(&pimpl_->sound_, rolloff);
+}
+
+void PositionalAudio::setDistanceModel(DistanceModel model) {
+
+    ma_attenuation_model m = ma_attenuation_model_inverse;
+    switch (model) {
+        case DistanceModel::None: m = ma_attenuation_model_none; break;
+        case DistanceModel::Inverse: m = ma_attenuation_model_inverse; break;
+        case DistanceModel::Linear: m = ma_attenuation_model_linear; break;
+        case DistanceModel::Exponential: m = ma_attenuation_model_exponential; break;
+    }
+    ma_sound_set_attenuation_model(&pimpl_->sound_, m);
+}
+
 void PositionalAudio::updateMatrixWorld(bool force) {
     Object3D::updateMatrixWorld(force);
 
