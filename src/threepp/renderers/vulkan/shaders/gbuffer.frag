@@ -82,6 +82,20 @@ layout(location = 3) out vec4 outUv;
 // the deferred pass rather than baked here.
 layout(location = 4) out vec4 outAlbedoMetal;
 
+// Per-pixel, per-frame hash in [0,1) for the stochastic alpha-blend screen-
+// door. Folds the Halton sub-pixel jitter (changes every frame) into the seed
+// so the dither pattern decorrelates over time and the temporal accumulator /
+// TAA resolve it toward the true alpha-weighted blend instead of a fixed grid.
+float alphaHash(vec2 fragXY, vec2 jitter) {
+    uint h = uint(fragXY.x) * 1973u + uint(fragXY.y) * 9277u
+           + floatBitsToUint(jitter.x) * 26699u
+           + floatBitsToUint(jitter.y) * 53401u + 0x9e3779b9u;
+    h ^= h >> 16; h *= 0x7feb352du;
+    h ^= h >> 15; h *= 0x846ca68bu;
+    h ^= h >> 16;
+    return float(h) / 4294967296.0;
+}
+
 void main() {
     vec3 N = normalize(vWorldNormal);
 
@@ -134,10 +148,13 @@ void main() {
 
     // Albedo: scalar PBR colour × bound albedo map (.rgb). Albedo views are
     // VK_FORMAT_*_SRGB so texture() returns linear, exactly as in chit.
-    vec3 albedoSample = vec3(1.0);
+    vec3  albedoSample = vec3(1.0);
+    float albedoAlpha  = 1.0;
     if (m.albedoTexIndex >= 0) {
-        const int ai = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        albedoSample = texture(gbufAlbedoMaps[ai], uvAlbedo).rgb;
+        const int  ai    = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        const vec4 texel = texture(gbufAlbedoMaps[ai], uvAlbedo);
+        albedoSample = texel.rgb;
+        albedoAlpha  = texel.a;// linear (alpha is never sRGB-decoded) → matches chit
     }
     const vec3 albedo = m.albedo * albedoSample;
 
@@ -164,6 +181,35 @@ void main() {
         }
         roughness = clamp(roughness, 0.04, 1.0);
         metalness = clamp(metalness, 0.0,  1.0);
+    }
+
+    // ── Alpha cutout / blend test (mirrors closest_hit_alpha.rahit). The
+    // raster prepass draws every visible mesh regardless of transparency
+    // (buildIndirectDrawData does not filter), so without this, alpha-tested
+    // foliage/decals fill their cutout holes with opaque G-buffer data and
+    // BLEND surfaces render fully opaque. Discarding here writes no depth/ID,
+    // so the deferred pass sees sky (or the opaque surface behind, which the
+    // depth test lets win) through the hole — matching the PT any-hit's
+    // ignoreIntersectionEXT. alphaCutoff semantics match the host
+    // (VulkanRenderer::materialFromMesh: d.alphaCutoff = mat->alphaTest):
+    //   > 0  cutout : discard fragments below the cutoff.
+    //   < 0  BLEND  : stochastic screen-door so the surface behind shows
+    //                 through; the temporal accumulator + TAA average it.
+    //   == 0 opaque : keep (the common path; one comparison, no texture cost).
+    // MUST run after every texture()/dFdx/dFdy above — a per-pixel discard
+    // before an implicit-derivative sample corrupts the 2×2 quad's neighbours.
+    if (m.albedoTexIndex >= 0 && m.alphaCutoff != 0.0) {
+        if (m.alphaCutoff > 0.0) {
+            if (albedoAlpha < m.alphaCutoff) discard;
+        } else {
+            // BLEND: variance-reduced stochastic rejection, matching the PT
+            // any-hit's 0.99 (accept) / 0.01 (reject) early-outs.
+            if (albedoAlpha <= 0.01) {
+                discard;
+            } else if (albedoAlpha < 0.99) {
+                if (alphaHash(gl_FragCoord.xy, cam.jitter.xy) >= albedoAlpha) discard;
+            }
+        }
     }
 
     // Remap [-1, 1] → [0, 1] so negative components are visible in the
