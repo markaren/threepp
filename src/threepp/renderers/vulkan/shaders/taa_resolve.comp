@@ -101,6 +101,37 @@ vec3 sampleHistoryCR(vec2 uv) {
     return max(result, vec3(0.0));// Catmull-Rom can ring slightly negative on hard edges.
 }
 
+// Spatial FXAA (FXAA3 "console" variant) on the LDR input. This is the deferred
+// path's anti-aliasing now that camera jitter is off (jitter+TAA flickered). It
+// edge-detects via luma and blends along the edge — stable, no temporal shimmer.
+// On the already-temporally-AA'd PT path it's a near-no-op: smooth edges fall
+// under the contrast threshold and pass through unchanged.
+vec3 fxaa(sampler2D tex, vec2 uv, vec2 rcpFrame) {
+    const vec3 L = vec3(0.299, 0.587, 0.114);
+    const vec3 rgbM = texture(tex, uv).rgb;
+    const float lM  = dot(rgbM, L);
+    const float lNW = dot(textureOffset(tex, uv, ivec2(-1, -1)).rgb, L);
+    const float lNE = dot(textureOffset(tex, uv, ivec2( 1, -1)).rgb, L);
+    const float lSW = dot(textureOffset(tex, uv, ivec2(-1,  1)).rgb, L);
+    const float lSE = dot(textureOffset(tex, uv, ivec2( 1,  1)).rgb, L);
+    const float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+    const float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+    if (lMax - lMin < max(0.0312, lMax * 0.125)) return rgbM;// no edge → passthrough
+
+    vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)),
+                     ((lNW + lSW) - (lNE + lSE)));
+    const float dirReduce = max((lNW + lNE + lSW + lSE) * 0.25 * (1.0 / 8.0), 1.0 / 128.0);
+    const float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+    dir = clamp(dir * rcpDirMin, vec2(-8.0), vec2(8.0)) * rcpFrame;
+
+    const vec3 rgbA = 0.5 * (texture(tex, uv + dir * (1.0 / 3.0 - 0.5)).rgb +
+                             texture(tex, uv + dir * (2.0 / 3.0 - 0.5)).rgb);
+    const vec3 rgbB = rgbA * 0.5 + 0.25 * (texture(tex, uv + dir * -0.5).rgb +
+                                           texture(tex, uv + dir *  0.5).rgb);
+    const float lB = dot(rgbB, L);
+    return (lB < lMin || lB > lMax) ? rgbA : rgbB;
+}
+
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
@@ -108,10 +139,10 @@ void main() {
     const vec2 sz = vec2(float(pc.width), float(pc.height));
     const vec2 uv = (vec2(px) + 0.5) / sz;
 
-    // Current sample — a bilinear fetch of the (possibly lower-res) input.
-    // At renderScale 1, uv lands on an input texel centre so the LINEAR
-    // sampler returns that exact texel (equivalent to the old texelFetch).
-    const vec3 curr = texture(taaInputTex, uv).rgb;
+    // Current sample — FXAA-resolved (spatial AA; jitter is off on the deferred
+    // path). FXAA samples the input at its own texel size (inWidth/inHeight).
+    const vec3 curr = fxaa(taaInputTex, uv,
+                           1.0 / vec2(float(pc.inWidth), float(pc.inHeight)));
 
     // Reproject prev frame via gbuffer motion vec. Motion is in GL-NDC delta
     // (Y-up); convert UV → GL-NDC → add motion → back to screen UV.

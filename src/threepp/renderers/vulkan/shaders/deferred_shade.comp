@@ -313,6 +313,14 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, out float openness) {
     vec3  acc  = vec3(0.0);
     float open = 0.0;
     const float GA = 2.39996323;// golden angle (rad)
+    // LOCAL contact AO: occlusion rays are short (AO_RADIUS), so only NEARBY
+    // geometry (crevices, contact, corners) darkens. With infinite-length rays
+    // every surface counted any geometry anywhere as full occlusion (and we add
+    // no bounce-light fill), which over-darkened the whole scene → "shadows
+    // everywhere" the PT (full GI) doesn't have. Beyond AO_RADIUS a ray "escapes"
+    // → reads the sky → that direction is lit, so open areas (even in sun-shadow)
+    // get full sky light like the PT. Tunable.
+    const float AO_RADIUS = 2.0;
     for (int s = 0; s < GI_RAYS; ++s) {
         const float u1  = (float(s) + 0.5) / float(GI_RAYS);// cosine radial (even, deterministic)
         const float phi = float(s) * GA;                    // golden-angle azimuth spiral
@@ -322,15 +330,22 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, out float openness) {
         rayQueryEXT rq;
         rayQueryInitializeEXT(rq, topAS,
                               gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
-                              0xFFu, orig, 1e-3, dir, 1e30);
+                              0xFFu, orig, 1e-3, dir, AO_RADIUS);
         while (rayQueryProceedEXT(rq)) {}
-        if (rayQueryGetIntersectionTypeEXT(rq, true) ==
+        // DISTANCE-ATTENUATED occlusion (no hard radius boundary). A binary
+        // hit/escape cutoff at AO_RADIUS produces a visible soft "step" ~AO_RADIUS
+        // in from each wall (the rectangular floor bands). Instead, a far hit (near
+        // AO_RADIUS) barely occludes and a contact hit fully occludes:
+        //   w = 1 → fully open (sky); w → 0 → fully occluded.
+        float w = 1.0;
+        if (rayQueryGetIntersectionTypeEXT(rq, true) !=
             gl_RayQueryCommittedIntersectionNoneEXT) {
-            // Escaped to the sky. Cosine-weighted → estimator is the mean
-            // radiance (cos/pdf cancel); high mip = pre-blurred = low noise.
-            acc  += sampleEnvLod(dir, maxLod);
-            open += 1.0;
+            const float t = rayQueryGetIntersectionTEXT(rq, true);// hit distance
+            w = clamp(t / AO_RADIUS, 0.0, 1.0);
         }
+        // Cosine-weighted estimator (cos/pdf cancel); high mip = pre-blurred sky.
+        acc  += w * sampleEnvLod(dir, maxLod);
+        open += w;
     }
     openness = open / float(GI_RAYS);
     return acc / float(GI_RAYS);
@@ -486,6 +501,35 @@ vec3 sampleGGXReflection(vec3 V, vec3 N, float roughness, inout uint seed) {
     return reflect(-V, ggxHalfVector(N, roughness, seed));
 }
 
+// DETERMINISTIC, well-distributed (Hammersley) GGX half-vector — NO per-pixel RNG.
+// The random version left a FROZEN per-pixel speckle once the seed went
+// frame-stable → "static noise on glass/reflective". Hammersley is coherent across
+// pixels (smooth, no speckle) and converges with sample count, like the AO gather.
+float radicalInverseVdC(uint bits) {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10;
+}
+vec3 ggxHalfVectorFib(vec3 N, float roughness, int s, int count) {
+    const float a    = roughness * roughness;
+    const float u1   = (float(s) + 0.5) / float(count);
+    const float u2   = radicalInverseVdC(uint(s));
+    const float phi  = TWO_PI * u1;
+    const float cosT = sqrt((1.0 - u2) / (1.0 + (a * a - 1.0) * u2));
+    const float sinT = sqrt(max(0.0, 1.0 - cosT * cosT));
+    const vec3  Ht   = vec3(sinT * cos(phi), sinT * sin(phi), cosT);
+    const vec3  up   = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    const vec3  T    = normalize(cross(up, N));
+    const vec3  B    = cross(N, T);
+    return normalize(T * Ht.x + B * Ht.y + N * Ht.z);
+}
+vec3 sampleGGXReflectionFib(vec3 V, vec3 N, float roughness, int s, int count) {
+    return reflect(-V, ggxHalfVectorFib(N, roughness, s, count));
+}
+
 // MULTI-BOUNCE specular reflection (or refraction-continuation). Follows the ray
 // through up to REFL_MAX_BOUNCES reflective hits: at each hit it adds the
 // surface's diffuse + direct (shadowed) shading weighted by the running specular
@@ -564,7 +608,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         }
         // Continue the reflection one bounce deeper (GGX-jittered when glossy).
         tput      *= specW;
-        d          = (hRough < 0.08) ? hitR : sampleGGXReflection(hitV, hitN, hRough, seed);
+        d          = (hRough < 0.08) ? hitR : sampleGGXReflectionFib(hitV, hitN, hRough, 0, 1);
         if (dot(d, hitN) <= 0.0) d = hitR;
         o          = hitP + hitN * SHADOW_EPS;
         curMissLod = hRough * maxLod;
@@ -677,8 +721,8 @@ void traceHit(vec3 origin, vec3 dir, out vec3 hitP, out vec3 hitN, out float dis
 // it's a clean soft — not the milky 1-sample grain. Raise kGlassFrost for
 // softer/dreamier glass, drop to 0 for a perfect lens; raise GSAMP if the soft
 // shows residual grain on moving glass (costs proportionally).
-const float kGlassFrost = 0.12;
-const int   kGlassSamples = 2;
+const float kGlassFrost = 0.04;// near-sharp glass: a wide frost lobe scatters the HDR sun into static speckle
+const int   kGlassSamples = 6;// Fibonacci (deterministic) samples → smooth frosted glass, no static speckle
 
 vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
                 bool doShadows, float maxLod, inout uint seed) {
@@ -691,11 +735,14 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
     // converges clean. The reflection itself is the multi-bounce traceRadiance,
     // so it's genuinely recursive (reflected metal/glossy reflects on too).
     const float gr      = max(clamp(pm.roughness, 0.04, 1.0), kGlassFrost);
-    const float missLod = gr * maxLod;// reflections read the matching pre-blurred env mip
+    // Env MISSES (sky) read a BLURRED mip so the HDR sun doesn't appear as a sharp
+    // bright speckle on curved glass (the env is plain equirect mips, not a smooth
+    // PMREM — a sharp sample shows the raw sun). Scene hits stay sharp.
+    const float missLod = max(gr, 0.30) * maxLod;
 
     vec3 sum = vec3(0.0);
     for (int s = 0; s < kGlassSamples; ++s) {
-        vec3 Ns = ggxHalfVector(N, gr, seed);
+        vec3 Ns = ggxHalfVectorFib(N, gr, s, kGlassSamples);// distinct per-iteration Fibonacci sample
         if (dot(Ns, V) <= 0.0) Ns = N;// reject back-facing microfacets
         const float NdotV = max(dot(Ns, V), 1e-4);
         const float F     = r0 + (1.0 - r0) * pow(1.0 - NdotV, 5.0);
@@ -748,7 +795,13 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
                 transmitColor = behind * tint;
             }
         }
-        sum += mix(transmitColor, reflectColor, F);
+        // Firefly-clamp the glass env contribution — the HDR sun reflected/
+        // refracted through curved glass otherwise scatters into bright STATIC
+        // speckle. The cap keeps the sky/scene reflection but tames the sun spike.
+        vec3 contrib = mix(transmitColor, reflectColor, F);
+        const float cl = max(max(contrib.r, contrib.g), contrib.b);
+        if (cl > 2.5) contrib *= 2.5 / cl;
+        sum += contrib;
     }
     return sum / float(kGlassSamples);
 }
@@ -904,11 +957,11 @@ void main() {
     const float reflBlend = 1.0 - smoothstep(0.55, 0.70, roughness);
     if (reflBlend > 0.0) {
         const float missLod = roughness * maxLod;// glossy misses read the blurred env mip
-        const int   RSAMP   = roughness < 0.08 ? 1 : (roughness < 0.30 ? 2 : 3);
+        const int   RSAMP   = roughness < 0.08 ? 1 : (roughness < 0.30 ? 4 : 8);// Fibonacci → more samples = smoother glossy blur, still no speckle
         vec3 acc = vec3(0.0);
         for (int s = 0; s < RSAMP; ++s) {
             // r<0.08 → exact mirror (deterministic, noise-free); else GGX lobe.
-            vec3 L = (RSAMP == 1) ? R : sampleGGXReflection(V, N, roughness, seed);
+            vec3 L = (RSAMP == 1) ? R : sampleGGXReflectionFib(V, N, roughness, s, RSAMP);
             if (dot(L, N) <= 0.0) L = R;// keep below-horizon samples on the surface
             vec3 r = traceRadiance(shadowOrig, L, shadowsOn, maxLod, missLod, seed);
             // Firefly clamp glossy samples only.

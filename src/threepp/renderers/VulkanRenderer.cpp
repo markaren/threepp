@@ -1235,11 +1235,11 @@ namespace threepp {
         // OFF by default — it softened the image ("murky"); we rely on a high
         // fixed sample count instead. setDeferredDenoise(true) re-enables it.
         bool  deferredDenoise_ = false;
-        // Ray-traced env ambient occlusion / GI (RasterFirst). OFF by default:
-        // occlusion-testing the IBL makes the HDRI look like it casts shadows,
-        // which isn't wanted (the directional sun casts shadows instead). Off →
-        // flat env IBL (no env shadows, no AO noise, no AO rays = much faster).
-        bool  deferredAO_ = false;
+        // Ray-traced env ambient occlusion / GI (RasterFirst). ON: gives the
+        // "dirty realistic" PT-like grounding (contact darkening + 1-bounce GI).
+        // Uses the deterministic Fibonacci 64-sample gather (clean + settles), so
+        // it's the realistic look WITHOUT the old per-frame flicker.
+        bool  deferredAO_ = true;
 
         // Raster-first deferred lighting (RenderMode::RasterFirst). Shades the
         // material G-buffer analytically into bloom_->sceneHdr, replacing the
@@ -5838,12 +5838,34 @@ namespace threepp {
             return true;
         }
 
+        // REVERSED-Z Vulkan projection from a GL-convention (NDC z∈[-1,1]) proj.
+        // threepp's projection is GL-style; fed to Vulkan as-is it (a) clips the
+        // [-1,0] near-slab so HALF the depth precision is wasted on never-visible
+        // geometry, and (b) bunches precision near the camera → distant z-fighting.
+        // Reverse-Z maps near→1, far→0 in Vulkan [0,1] → reclaims the lost half AND
+        // gives near-uniform precision (with D32F, kills distance z-fighting). The
+        // new z-output row = 0.5*w_row - 0.5*z_row. Pair with depth clear 0.0 +
+        // GREATER compare. Shaders are convention-agnostic (use the uploaded
+        // matrices), so this is host-side only.
+        static Matrix4 reverseZVk(const Matrix4& glProj) {
+            Matrix4 p = glProj;
+            auto& e = p.elements;// column-major: z-output = row 2, w-output = row 3
+            for (int c = 0; c < 4; ++c)
+                e[c * 4 + 2] = 0.5f * e[c * 4 + 3] - 0.5f * e[c * 4 + 2];
+            return p;
+        }
+
         void updateCameraUbo(uint32_t frame, Camera& camera) {
             camera.updateMatrixWorld(true);
 
             float data[36];
-            std::memcpy(data + 0,  camera.matrixWorld->elements.data(),            64);
-            std::memcpy(data + 16, camera.projectionMatrixInverse.elements.data(), 64);
+            std::memcpy(data + 0,  camera.matrixWorld->elements.data(), 64);
+            // Reverse-Z projInverse (matches the reverse-Z VP the raster uses) so
+            // depth reconstruction (deferred worldFromDepth, hybrid primary) is
+            // consistent with the reverse-Z depth buffer.
+            Matrix4 vkProjInv = reverseZVk(camera.projectionMatrix);
+            vkProjInv.invert();
+            std::memcpy(data + 16, vkProjInv.elements.data(), 64);
 
             // Per-frame Halton(2,3) jitter — must match what uploadRasterCameraUbo
             // computes for THIS frame so raygen's hybrid primary direction lands
@@ -6027,8 +6049,10 @@ namespace threepp {
             Matrix4 view, proj;
             std::memcpy(view.elements.data(),
                         camera.matrixWorldInverse.elements.data(), 64);
-            std::memcpy(proj.elements.data(),
-                        camera.projectionMatrix.elements.data(), 64);
+            // Reverse-Z projection (near→1, far→0) — feeds the gbuffer VP AND
+            // currVPunjit_ (overlay depth prepass). Depth clear + compares flipped
+            // to match (see recordRasterGbufPass clears + pipeline depthCompareOp).
+            proj = reverseZVk(camera.projectionMatrix);
             Matrix4 vpUnj;
             vpUnj.multiplyMatrices(proj, view);
 
@@ -6053,6 +6077,9 @@ namespace threepp {
             // sub-pixel jitter still happens in raygen's hybrid primary via
             // the blue-noise tile (see primaryDirHybrid), so interior AA
             // doesn't disappear — only the coverage jitter is gone.
+            // OFF: jitter+TAA flickered badly on the deferred path. Anti-aliasing
+            // is done by FXAA (spatial, in the TAA resolve shader) instead — no
+            // jitter, no temporal shimmer.
             constexpr bool kRasterJitterEnabled = false;
             const float jClipX = kRasterJitterEnabled ? 2.f * jx / float(ext.width)  : 0.f;
             const float jClipY = kRasterJitterEnabled ? 2.f * jy / float(ext.height) : 0.f;
@@ -6406,7 +6433,7 @@ namespace threepp {
             clears[2].color.uint32[3] = 0u;
             clears[3].color = {{0.f, 0.f, 0.f, 0.f}};   // uv — sky has no UV
             clears[4].color = {{0.f, 0.f, 0.f, 0.f}};   // albedo+metalness — sky as zero
-            clears[5].depthStencil = {1.f, 0u};
+            clears[5].depthStencil = {0.f, 0u};// reverse-Z: clear depth to 0 (far)
 
             VkRenderPassBeginInfo rpbi{};
             rpbi.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -7690,7 +7717,7 @@ namespace threepp {
             ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
             ds.depthTestEnable  = VK_TRUE;
             ds.depthWriteEnable = VK_TRUE;
-            ds.depthCompareOp   = VK_COMPARE_OP_LESS;
+            ds.depthCompareOp   = VK_COMPARE_OP_GREATER;// reverse-Z (near→1, far→0)
 
             VkPipelineColorBlendAttachmentState cbas[5]{};
             for (auto& a : cbas) {
@@ -8060,7 +8087,7 @@ namespace threepp {
             ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
             ds.depthTestEnable  = VK_TRUE;
             ds.depthWriteEnable = VK_FALSE;
-            ds.depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL;
+            ds.depthCompareOp   = VK_COMPARE_OP_GREATER_OR_EQUAL;// reverse-Z (overlay vs unjitDepth)
 
             VkPipelineColorBlendAttachmentState cbas{};
             cbas.blendEnable    = VK_FALSE;
@@ -8399,7 +8426,7 @@ namespace threepp {
                 dds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
                 dds.depthTestEnable  = VK_TRUE;
                 dds.depthWriteEnable = VK_TRUE;
-                dds.depthCompareOp   = VK_COMPARE_OP_LESS;
+                dds.depthCompareOp   = VK_COMPARE_OP_GREATER;// reverse-Z (overlay depth prepass)
 
                 // No color attachments — pColorBlendState attachmentCount=0.
                 VkPipelineColorBlendStateCreateInfo dcb{};
@@ -12225,7 +12252,7 @@ namespace threepp {
                     dDepthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
                     dDepthAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
                     dDepthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-                    dDepthAtt.clearValue.depthStencil = {1.0f, 0u};
+                    dDepthAtt.clearValue.depthStencil = {0.0f, 0u};// reverse-Z: clear to 0 (far)
 
                     VkRenderingInfo dRi{};
                     dRi.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
