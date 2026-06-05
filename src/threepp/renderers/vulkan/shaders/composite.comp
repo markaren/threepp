@@ -17,7 +17,14 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform sampler2D sceneHdrTex;            // linear HDR, render extent
 layout(set = 0, binding = 1) uniform sampler2D bloomTex;               // blurred bloom (half res)
 layout(set = 0, binding = 2, rgba32f) uniform readonly image2D gbufImg;// .w = instanceId+1 (0 = sky)
-layout(set = 0, binding = 3, rgba8) uniform writeonly image2D outImage;// TAA input (bgra8)
+// No format qualifier: the TAA-input image is VK_FORMAT_B8G8R8A8_UNORM (matches
+// the swapchain channel order) but GLSL has no bgra8 format qualifier. Declaring
+// rgba8 here mismatches the bound VkImageView and yields undefined stores
+// (Undefined-Value-StorageImage-FormatMismatch-ImageView). Writing without a
+// format needs shaderStorageImageWriteWithoutFormat (enabled at device
+// creation) — channel names (r/g/b/a) still map by component, so the stored
+// value is unchanged. Matches taa_resolve.comp / rcas.comp's swapchain writes.
+layout(set = 0, binding = 3) uniform writeonly image2D outImage;// TAA input (bgra8, no format)
 
 layout(push_constant) uniform Pc {
     uint toneMapping;        // matches ToneMapping enum

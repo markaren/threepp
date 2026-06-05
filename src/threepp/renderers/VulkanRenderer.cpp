@@ -1369,10 +1369,25 @@ namespace threepp {
         // (alongside auto-detected wireframe materials + Line/LineSegments).
         // -1 disables layer-based selection. Mirrors WGPU PT's overlayLayer_.
         int overlayLayer_ = -1;
-        // Memoized "scene actually has overlay objects" so the per-frame
-        // overlay pass can early-out without traversing on a static-no-
-        // overlay scene. Set during the prior frame's traversal.
-        bool overlayFoundLastFrame_ = false;
+        // True when the scene has any content the post-TAA overlay pass will
+        // draw this frame: an overlay-tagged mesh, or any Line/LineSegments/
+        // Points entry (those always render via the overlay path). The
+        // unjittered-depth prepass and the overlay draw BOTH gate on this same
+        // current-frame answer, so the prepass that fills + transitions
+        // unjitDepth runs in lockstep with the draw that reads it. (Previously
+        // the prepass keyed off the *previous* frame's result, so the first
+        // frame an overlay appeared — including frame 1 after a resize — the
+        // prepass was skipped and the overlay draw read unjitDepth while it was
+        // still UNDEFINED: VUID-vkCmdBeginRendering-pRenderingInfo-09588.)
+        // Cheap: both lists are already populated by the visibility pass before
+        // any command recording, so this is just two size/flag checks.
+        bool sceneHasOverlayContent() const {
+            if (!lastVisibleLines_.empty()) return true;
+            for (const auto& en : lastVisibleEntries_) {
+                if (en.isOverlay) return true;
+            }
+            return false;
+        }
         // Sub-pixel jitter sequence index for raster TAA. Cycles within a
         // small period (16 frames) — long enough to look stable, short enough
         // to avoid ever-growing index drift.
@@ -7423,6 +7438,51 @@ namespace threepp {
                 g.width  = w;
                 g.height = h;
             }
+
+            // Initialise every slot's attachments to their sampled-read layout.
+            // The gbuffer render pass writes only the CURRENT frame's slot each
+            // frame (its attachments use initialLayout = UNDEFINED, so it
+            // ignores whatever we set here), but the temporal consumers sample a
+            // slot that has not been rasterised yet on the first frame(s) it is
+            // the "previous" slot — TaaResolve reads gbufIdsPrevTex for its
+            // same-mesh reproject guard, and deferred/raygen read the per-frame
+            // gbuffer. Without a defined starting layout that read finds the
+            // image in UNDEFINED and trips VUID-vkCmdDraw-None-09600 /
+            // -vkCmdDispatch-None-09600. Contents stay undefined, but the layout
+            // is now valid; the temporal logic discards previous data on the
+            // first frame regardless. Re-runs on resize (images are recreated).
+            VkCommandBuffer initCb = beginOneShot();
+            std::vector<VkImageMemoryBarrier> inits;
+            inits.reserve(rasterGbufs.size() * 6);
+            auto pushInit = [&](VkImage image, VkImageAspectFlags aspect, VkImageLayout layout) {
+                VkImageMemoryBarrier b{};
+                b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout = layout;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image = image;
+                b.subresourceRange.aspectMask = aspect;
+                b.subresourceRange.levelCount = 1;
+                b.subresourceRange.layerCount = 1;
+                b.srcAccessMask = 0;
+                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                inits.push_back(b);
+            };
+            for (auto& g : rasterGbufs) {
+                pushInit(g.normal.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                pushInit(g.motion.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                pushInit(g.ids.image,    VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                pushInit(g.uv.image,     VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                pushInit(g.albedo.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                pushInit(g.depth.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+            }
+            vkCmdPipelineBarrier(initCb,
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                 0, 0, nullptr, 0, nullptr,
+                                 static_cast<uint32_t>(inits.size()), inits.data());
+            endAndSubmitOneShot(initCb, "rasterGbuf init layouts");
         }
 
         void createRasterCameraUbos() {
@@ -12042,7 +12102,7 @@ namespace threepp {
                 // pass for occlusion testing. Only runs when an overlay
                 // pipeline exists AND the scene actually has overlay
                 // candidates this frame (else the prepass is wasted work).
-                if (overlayDepthPrepassPipeline != VK_NULL_HANDLE && overlayFoundLastFrame_) {
+                if (overlayDepthPrepassPipeline != VK_NULL_HANDLE && sceneHasOverlayContent()) {
                     timingBegin(cb, TP_OverlayDepth);
                     // Swapchain extent — unjitDepth is full-res so the
                     // post-TAA overlay can depth-test the upscaled image.
@@ -12654,13 +12714,11 @@ namespace threepp {
             // built), pipeline failed to create, or the early scan didn't
             // find any overlay candidates this frame.
             if (overlayWireframePipeline != VK_NULL_HANDLE) {
-                bool hasOverlay = !lastVisibleLines_.empty();
-                if (!hasOverlay) {
-                    for (const auto& en : lastVisibleEntries_) {
-                        if (en.isOverlay) { hasOverlay = true; break; }
-                    }
-                }
-                overlayFoundLastFrame_ = hasOverlay;
+                // Gate on the same current-frame answer the unjittered-depth
+                // prepass keyed off, so the prepass that filled + transitioned
+                // unjitDepth to DEPTH_STENCIL_READ_ONLY_OPTIMAL ran iff we draw
+                // here and read it (see sceneHasOverlayContent()).
+                const bool hasOverlay = sceneHasOverlayContent();
 
                 if (hasOverlay) {
                     timingBegin(cb, TP_OverlayDraw);

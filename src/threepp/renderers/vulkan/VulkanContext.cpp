@@ -294,6 +294,13 @@ namespace threepp::vulkan {
         f13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
         f13.dynamicRendering = VK_TRUE;
         f13.synchronization2 = VK_TRUE;
+        // Shaders are compiled with glslangValidator --target-env vulkan1.3,
+        // which lowers `discard` (e.g. overlay_point.frag's round-point cutout)
+        // to OpDemoteToHelperInvocation rather than OpKill. That op needs the
+        // DemoteToHelperInvocation SPIR-V capability enabled at device creation,
+        // else vkCreateShaderModule warns (VUID-VkShaderModuleCreateInfo-pCode-08740).
+        // The feature is core in Vulkan 1.3 (apiVersion is VK_API_VERSION_1_3).
+        f13.shaderDemoteToHelperInvocation = VK_TRUE;
 
         VkPhysicalDeviceVulkan12Features f12{};
         f12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
