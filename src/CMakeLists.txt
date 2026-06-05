@@ -966,6 +966,10 @@ if (THREEPP_WITH_VULKAN)
         kDeferredShadeCompSpv
         _deferred_shade_spv_h)
     compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/deferred_denoise.comp"
+        kDeferredDenoiseCompSpv
+        _deferred_denoise_spv_h)
+    compile_vulkan_shader(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/skinning.comp"
         kSkinningCompSpv
         _skinning_spv_h)

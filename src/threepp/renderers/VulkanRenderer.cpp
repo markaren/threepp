@@ -1018,6 +1018,7 @@ namespace threepp {
             Image2D       ids;          // rgba16ui — instanceCustomIndex/meshID/flags/reserved
             Image2D       uv;           // rgba16f — material UV in .rg
             Image2D       albedo;       // rgba8 unorm — linear base colour in .rgb, metalness in .a (raster-first deferred input)
+            Image2D       indirect;     // rgba16f — demodulated diffuse-indirect irradiance (deferred denoiser scratch; STORAGE, not an attachment)
             Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
             // Hybrid raster overlay's UNJITTERED depth attachment. Filled by
             // an extra depth-only prepass (overlay_depth.vert) right after
@@ -1230,6 +1231,15 @@ namespace threepp {
         // skips the bloom passes (composite still owns the tone map).
         std::unique_ptr<vulkan::BloomPass> bloom_;
         float bloomIntensity_ = 0.0f;
+        // Spatial denoise of the demodulated diffuse-indirect (RasterFirst only).
+        // OFF by default — it softened the image ("murky"); we rely on a high
+        // fixed sample count instead. setDeferredDenoise(true) re-enables it.
+        bool  deferredDenoise_ = false;
+        // Ray-traced env ambient occlusion / GI (RasterFirst). OFF by default:
+        // occlusion-testing the IBL makes the HDRI look like it casts shadows,
+        // which isn't wanted (the directional sun casts shadows instead). Off →
+        // flat env IBL (no env shadows, no AO noise, no AO rays = much faster).
+        bool  deferredAO_ = false;
 
         // Raster-first deferred lighting (RenderMode::RasterFirst). Shades the
         // material G-buffer analytically into bloom_->sceneHdr, replacing the
@@ -7299,6 +7309,7 @@ namespace threepp {
                 destroyImage2D(ctx->allocator(), d, g.ids);
                 destroyImage2D(ctx->allocator(), d, g.uv);
                 destroyImage2D(ctx->allocator(), d, g.albedo);
+                destroyImage2D(ctx->allocator(), d, g.indirect);
                 destroyImage2D(ctx->allocator(), d, g.depth);
                 destroyImage2D(ctx->allocator(), d, g.unjitDepth);
                 g.width  = 0;
@@ -7415,6 +7426,11 @@ namespace threepp {
                 g.albedo = createAttachmentImage2D(w, h, VK_FORMAT_R8G8B8A8_UNORM,
                                                    colorUsage, VK_IMAGE_ASPECT_COLOR_BIT,
                                                    N("albedo"));
+                // Deferred denoiser scratch — STORAGE only (compute write/read,
+                // never a render-pass attachment), so it's not in the framebuffer.
+                g.indirect = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                     VK_IMAGE_USAGE_STORAGE_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
+                                                     N("indirect"));
                 g.depth  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
                                                    depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
                                                    N("depth"));
@@ -7484,6 +7500,7 @@ namespace threepp {
                 pushInit(g.ids.image,    VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 pushInit(g.uv.image,     VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 pushInit(g.albedo.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                pushInit(g.indirect.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.depth.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
             }
             vkCmdPipelineBarrier(initCb,
@@ -9434,6 +9451,7 @@ namespace threepp {
             std::array<VkImageView, kFramesInFlight> idsViews{};
             std::array<VkImageView, kFramesInFlight> albedoViews{};
             std::array<VkImageView, kFramesInFlight> uvViews{};
+            std::array<VkImageView, kFramesInFlight> indirectViews{};
             std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 camBufs[f]       = cameraUbos[f].handle;
@@ -9445,6 +9463,7 @@ namespace threepp {
                 idsViews[f]      = rasterGbufs[f].ids.view;
                 albedoViews[f]   = rasterGbufs[f].albedo.view;
                 uvViews[f]       = rasterGbufs[f].uv.view;
+                indirectViews[f] = rasterGbufs[f].indirect.view;
                 sceneHdrViews[f] = bloom_->sceneHdrView(f);
             }
             // Bindless material-texture array for reflected-hit texturing —
@@ -9462,6 +9481,7 @@ namespace threepp {
             in.gbufIds          = idsViews.data();
             in.gbufAlbedo       = albedoViews.data();
             in.gbufUv           = uvViews.data();
+            in.indirect         = indirectViews.data();
             in.sceneHdr         = sceneHdrViews.data();
             in.tlas             = tlas;
             in.materialBuf      = matBufs.data();
@@ -12748,11 +12768,31 @@ namespace threepp {
                 deferredShade_->recordDispatch(cb, currentFrame,
                                                ptExt.width, ptExt.height,
                                                envImage.mipLevels, /*shadows=*/true,
-                                               /*ao=*/true, sampleIndex,
+                                               /*ao=*/deferredAO_, sampleIndex,
                                                emissiveTriCountThisFrame_,
                                                emissiveTotalPowerThisFrame_,
                                                fireflyClamp_,
-                                               oceanFineTileSize, oceanFoamTileSize);
+                                               oceanFineTileSize, oceanFoamTileSize,
+                                               deferredDenoise_);
+                // Spatial denoise of the demodulated diffuse-indirect + recombine.
+                // Barrier: the shade wrote sceneHdr + the indirect image (both
+                // GENERAL storage); the denoise reads the indirect 5×5 neighbourhood
+                // and read-modify-writes sceneHdr — compute→compute RAW/WAR.
+                if (deferredDenoise_) {
+                    VkMemoryBarrier2 denoiseBar{};
+                    denoiseBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    denoiseBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    denoiseBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    denoiseBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    denoiseBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                               VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    VkDependencyInfo denoiseDep{};
+                    denoiseDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    denoiseDep.memoryBarrierCount = 1;
+                    denoiseDep.pMemoryBarriers = &denoiseBar;
+                    vkCmdPipelineBarrier2(cb, &denoiseDep);
+                    deferredShade_->recordDenoiseDispatch(cb, currentFrame, ptExt.width, ptExt.height);
+                }
                 timingEnd(cb, TP_PathTrace);
             }
 
@@ -14383,6 +14423,22 @@ namespace threepp {
 
     float VulkanRenderer::bloomIntensity() const {
         return pimpl_->bloomIntensity_;
+    }
+
+    void VulkanRenderer::setDeferredDenoise(bool enabled) {
+        pimpl_->deferredDenoise_ = enabled;
+    }
+
+    bool VulkanRenderer::deferredDenoise() const {
+        return pimpl_->deferredDenoise_;
+    }
+
+    void VulkanRenderer::setDeferredAO(bool enabled) {
+        pimpl_->deferredAO_ = enabled;
+    }
+
+    bool VulkanRenderer::deferredAO() const {
+        return pimpl_->deferredAO_;
     }
 
     void VulkanRenderer::setBloomThreshold(float threshold) {

@@ -5,6 +5,7 @@
 #include "threepp/renderers/vulkan/shaders/vulkan_shared.h"// kMaxMaterialTextures
 
 #include "threepp/renderers/vulkan/shaders/deferred_shade.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/deferred_denoise.comp.spv.h"
 
 #include <array>
 #include <cstring>
@@ -19,7 +20,8 @@ namespace threepp::vulkan {
 
     DeferredShade::~DeferredShade() {
         VkDevice d = ctx_.device();
-        if (pipe_)       vkDestroyPipeline(d, pipe_, nullptr);
+        if (pipe_)        vkDestroyPipeline(d, pipe_, nullptr);
+        if (denoisePipe_) vkDestroyPipeline(d, denoisePipe_, nullptr);
         if (pipeLayout_) vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
         if (dsLayout_)   vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
         if (descPool_)   vkDestroyDescriptorPool(d, descPool_, nullptr);
@@ -43,7 +45,7 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[16]{};
+        VkDescriptorSetLayoutBinding b[17]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -67,10 +69,11 @@ namespace threepp::vulkan {
         set(13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // ocean FFT fine-cascade height (water chop)
         set(14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // ocean world-space foam accumulator
         set(15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf uv (primary emissive-map sample)
+        set(16, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // demodulated diffuse-indirect (denoiser scratch)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 16;
+        dlci.bindingCount = 17;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -107,7 +110,22 @@ namespace threepp::vulkan {
         cpci.layout = pipeLayout_;
         check(vkCreateComputePipelines(d, VK_NULL_HANDLE, 1, &cpci, nullptr, &pipe_),
               "vkCreateComputePipelines(deferred_shade)");
+
+        // Second pipeline — spatial denoise + recombine — shares the descriptor
+        // set layout + push-constant range, just a different shader module.
+        VkShaderModuleCreateInfo smciD{};
+        smciD.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        smciD.codeSize = sizeof(kDeferredDenoiseCompSpv);
+        smciD.pCode    = kDeferredDenoiseCompSpv;
+        VkShaderModule modD = VK_NULL_HANDLE;
+        check(vkCreateShaderModule(d, &smciD, nullptr, &modD), "vkCreateShaderModule(deferred_denoise)");
+        VkComputePipelineCreateInfo cpciD = cpci;
+        cpciD.stage.module = modD;
+        check(vkCreateComputePipelines(d, VK_NULL_HANDLE, 1, &cpciD, nullptr, &denoisePipe_),
+              "vkCreateComputePipelines(deferred_denoise)");
+
         vkDestroyShaderModule(d, mod, nullptr);
+        vkDestroyShaderModule(d, modD, nullptr);
     }
 
     void DeferredShade::createDescriptorPool() {
@@ -117,7 +135,7 @@ namespace threepp::vulkan {
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         sizes[1].descriptorCount = framesInFlight_ * (8 + kMaxMaterialTextures);// env + 5 gbuf(normal,depth,ids,albedo,uv) + 2 ocean + bindless array
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[2].descriptorCount = framesInFlight_ * 1;// out
+        sizes[2].descriptorCount = framesInFlight_ * 2;// out sceneHdr + indirect (denoiser scratch)
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;// TLAS
         sizes[4].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -176,6 +194,10 @@ namespace threepp::vulkan {
             outInfo.imageView   = in.sceneHdr[f];
             outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
+            VkDescriptorImageInfo indInfo{};
+            indInfo.imageView   = in.indirect[f];
+            indInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
             // Ocean textures stay in GENERAL (written by the FFT/foam compute
             // passes, sampled here) — matching the RT set's bindings 32 + 44.
             VkDescriptorImageInfo oceanFineInfo{};
@@ -210,7 +232,7 @@ namespace threepp::vulkan {
             asInfo.accelerationStructureCount = 1;
             asInfo.pAccelerationStructures = &tlasLocal;
 
-            VkWriteDescriptorSet w[16]{};
+            VkWriteDescriptorSet w[17]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -246,7 +268,8 @@ namespace threepp::vulkan {
             setw(13, 13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanFineInfo, nullptr);
             setw(14, 14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanFoamInfo, nullptr);
             setw(15, 15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &uvInfo, nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 16, w, 0, nullptr);
+            setw(16, 16, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &indInfo, nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), 17, w, 0, nullptr);
         }
     }
 
@@ -270,11 +293,12 @@ namespace threepp::vulkan {
                                        bool shadows, bool ao, uint32_t frameCounter,
                                        uint32_t emissiveCount, float emissiveTotalPower,
                                        float fireflyClamp,
-                                       float oceanFineTileSize, float oceanFoamTileSize) {
+                                       float oceanFineTileSize, float oceanFoamTileSize,
+                                       bool denoise) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
-        const uint32_t flags = (shadows ? 1u : 0u) | (ao ? 2u : 0u);
+        const uint32_t flags = (shadows ? 1u : 0u) | (ao ? 2u : 0u) | (denoise ? 4u : 0u);
         uint32_t emPowerBits, fireflyBits, oceanFineBits, oceanFoamBits;
         std::memcpy(&emPowerBits,   &emissiveTotalPower, sizeof(emPowerBits));
         std::memcpy(&fireflyBits,   &fireflyClamp,       sizeof(fireflyBits));
@@ -283,6 +307,17 @@ namespace threepp::vulkan {
         const uint32_t pc[10] = {envMipCount, width, height, flags,
                                  frameCounter, emissiveCount, emPowerBits, fireflyBits,
                                  oceanFineBits, oceanFoamBits};
+        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+        vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
+    }
+
+    void DeferredShade::recordDenoiseDispatch(VkCommandBuffer cb, uint32_t frame,
+                                              uint32_t width, uint32_t height) {
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, denoisePipe_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
+        // Shares the 40-byte PC range; the denoise shader only reads width/height.
+        const uint32_t pc[10] = {0u, width, height, 0u, 0u, 0u, 0u, 0u, 0u, 0u};
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
         vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
     }

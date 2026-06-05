@@ -46,6 +46,7 @@ namespace threepp::vulkan {
             const VkImageView* gbufIds    = nullptr;// [framesInFlight] (usampler2D)
             const VkImageView* gbufAlbedo = nullptr;// [framesInFlight]
             const VkImageView* gbufUv     = nullptr;// [framesInFlight] (.rg = UV, emissive-map sample)
+            const VkImageView* indirect   = nullptr;// [framesInFlight] demodulated diffuse-indirect (denoiser scratch, storage)
             const VkImageView* sceneHdr   = nullptr;// [framesInFlight] output (storage)
             VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;// shared scene TLAS (shadow + reflection rays)
             const VkBuffer*    materialBuf = nullptr;// [framesInFlight] MaterialDesc[] (emissive)
@@ -79,7 +80,14 @@ namespace threepp::vulkan {
                             bool shadows, bool ao, uint32_t frameCounter,
                             uint32_t emissiveCount, float emissiveTotalPower,
                             float fireflyClamp,
-                            float oceanFineTileSize, float oceanFoamTileSize);
+                            float oceanFineTileSize, float oceanFoamTileSize,
+                            bool denoise);
+
+        // Spatial denoise of the demodulated diffuse-indirect (binding 16) +
+        // recombine into sceneHdr. Run AFTER recordDispatch (same descriptor
+        // set); the caller inserts a compute→compute barrier between them.
+        void recordDenoiseDispatch(VkCommandBuffer cb, uint32_t frame,
+                                   uint32_t width, uint32_t height);
 
     private:
         VulkanContext& ctx_;
@@ -89,6 +97,7 @@ namespace threepp::vulkan {
         VkDescriptorSetLayout dsLayout_     = VK_NULL_HANDLE;
         VkPipelineLayout      pipeLayout_   = VK_NULL_HANDLE;
         VkPipeline            pipe_         = VK_NULL_HANDLE;
+        VkPipeline            denoisePipe_  = VK_NULL_HANDLE;// spatial denoise + recombine
         VkDescriptorPool      descPool_     = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> sets_;// [framesInFlight]
 

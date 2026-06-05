@@ -237,6 +237,18 @@ namespace threepp {
         void setBloomIntensity(float intensity);
         [[nodiscard]] float bloomIntensity() const;
 
+        // RasterFirst spatial denoiser for the ray-traced diffuse-indirect
+        // (AO/GI). On by default; disable to see the raw noisy base.
+        void setDeferredDenoise(bool enabled);
+        [[nodiscard]] bool deferredDenoise() const;
+
+        // RasterFirst ray-traced env ambient-occlusion / GI. OFF by default —
+        // occlusion-testing the IBL makes the HDRI appear to cast shadows. Off =
+        // flat env IBL (the directional light still casts shadows). On = soft RT
+        // AO/GI (costs occlusion rays; pair with setDeferredDenoise for noise).
+        void setDeferredAO(bool enabled);
+        [[nodiscard]] bool deferredAO() const;
+
         // Bloom bright-pass cutoff in linear-HDR luma: only scene values above
         // this (with a soft knee below it) contribute to the glow. Higher =
         // only the very brightest highlights bloom. Typical: 0.8–2.0.

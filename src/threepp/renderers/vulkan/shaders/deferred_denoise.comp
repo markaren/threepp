@@ -1,0 +1,89 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+
+// Spatial denoiser for the RasterFirst deferred base.
+//
+// deferred_shade.comp writes the DEMODULATED diffuse-indirect irradiance
+// (gatherEnv: RT ambient-occlusion + 1-bounce env GI, PRE-albedo) into its own
+// image (binding 16) and EXCLUDES it from the HDR output. This pass edge-aware
+// blurs that low-frequency irradiance — killing the 4-ray-per-pixel AO/GI noise
+// that TAA can't resolve while the camera moves — then recombines:
+//     sceneHdr += blur(indirect) * diffuseColor
+// Because only the irradiance is filtered (and albedo/direct/reflections were
+// never folded into it), texture detail + direct lighting stay perfectly crisp.
+//
+// Edge stops (normal + tangent-plane distance) follow denoise_atrous.comp so AO
+// doesn't bleed across geometry boundaries (no halos / light leaks). Runs after
+// the shade dispatch (same descriptor set), before bloom.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform CameraUbo {
+    mat4 viewInverse;
+    mat4 projInverse;
+    vec4 jitter;
+} cam;
+layout(set = 0, binding = 3) uniform sampler2D  gbufNormalTex; // xyz=n*0.5+0.5, w=roughness (<0 unlit)
+layout(set = 0, binding = 4) uniform sampler2D  gbufDepthTex;  // x = NDC z [0,1]
+layout(set = 0, binding = 5) uniform usampler2D gbufIdsTex;    // x = instanceId+1 (0 = sky)
+layout(set = 0, binding = 6) uniform sampler2D  gbufAlbedoTex; // rgb=albedo, a=metalness
+layout(set = 0, binding = 7,  rgba16f) uniform image2D outImage;            // sceneHdr (read+write)
+layout(set = 0, binding = 16, rgba16f) uniform readonly image2D indirectImage;
+
+layout(push_constant) uniform Pc {
+    uint envMipCount; uint width; uint height; uint flags;
+    uint frame; uint emissiveCount; uint emPower; uint firefly;
+    uint oceanFine; uint oceanFoam;
+} pc;
+
+vec3 worldFromDepth(ivec2 q, float depth) {
+    const vec2 uv  = (vec2(q) + 0.5) / vec2(float(pc.width), float(pc.height));
+    const vec2 ndc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    const vec4 vh  = cam.projInverse * vec4(ndc, depth, 1.0);
+    return (cam.viewInverse * vec4(vh.xyz / vh.w, 1.0)).xyz;
+}
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
+
+    // Sky / unlit pixels carry no demodulated indirect (deferred_shade wrote 0
+    // there and the HDR already holds the final value) — leave sceneHdr alone.
+    if (texelFetch(gbufIdsTex, px, 0).x == 0u) return;
+    const vec4 nC = texelFetch(gbufNormalTex, px, 0);
+    if (nC.w < 0.0) return;
+
+    const vec3  Nc     = normalize(nC.xyz * 2.0 - 1.0);
+    const vec3  Pc     = worldFromDepth(px, texelFetch(gbufDepthTex, px, 0).x);
+    const vec3  camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    // Plane-distance tolerance scaled to ~5% of view distance, so the geometry
+    // edge stop is scene-scale-independent.
+    const float planeScale = 1.0 / max(0.05 * length(Pc - camPos), 1e-3);
+
+    vec3  sum  = vec3(0.0);
+    float wsum = 0.0;
+    const int R = 5;// 11x11 footprint — AO/GI is low-frequency, so a wide kernel is appropriate
+    for (int dy = -R; dy <= R; ++dy)
+    for (int dx = -R; dx <= R; ++dx) {
+        const ivec2 q = px + ivec2(dx, dy);
+        if (q.x < 0 || q.y < 0 || q.x >= int(pc.width) || q.y >= int(pc.height)) continue;
+        if (texelFetch(gbufIdsTex, q, 0).x == 0u) continue;
+        const vec4 nq = texelFetch(gbufNormalTex, q, 0);
+        if (nq.w < 0.0) continue;
+        const vec3  Nq = normalize(nq.xyz * 2.0 - 1.0);
+        const float wn = pow(max(dot(Nc, Nq), 0.0), 32.0);// normal edge stop
+        if (wn <= 0.0) continue;
+        const vec3  Pq = worldFromDepth(q, texelFetch(gbufDepthTex, q, 0).x);
+        const float wz = exp(-abs(dot(Pq - Pc, Nc)) * planeScale);// tangent-plane edge stop
+        const float ws = exp(-float(dx * dx + dy * dy) * 0.08);// spatial Gaussian σ≈2.5: smooth, less blobbing than a box
+        const float w  = wn * wz * ws;
+        sum  += imageLoad(indirectImage, q).rgb * w;
+        wsum += w;
+    }
+
+    const vec3 filtered     = wsum > 0.0 ? sum / wsum : imageLoad(indirectImage, px).rgb;
+    const vec4 am           = texelFetch(gbufAlbedoTex, px, 0);
+    const vec3 diffuseColor = am.rgb * (1.0 - am.a);// matches shadeDiffuseDirect's albedo*(1-metalness)
+    const vec3 cur          = imageLoad(outImage, px).rgb;
+    imageStore(outImage, px, vec4(cur + filtered * diffuseColor, 1.0));
+}

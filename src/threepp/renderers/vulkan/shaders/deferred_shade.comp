@@ -97,6 +97,11 @@ layout(set = 0, binding = 12, scalar) readonly buffer EmissiveTriBuf { EmTri emi
 layout(set = 0, binding = 13) uniform sampler2D oceanFineHeight;
 layout(set = 0, binding = 14) uniform sampler2D oceanFoamWorld;
 layout(set = 0, binding = 15) uniform sampler2D gbufUvTex;     // .rg = primary surface UV (emissive-map sample)
+// Demodulated diffuse-indirect irradiance (gatherEnv AO/GI, PRE-albedo). Written
+// here, spatially denoised + recombined by deferred_denoise.comp. vec4(0) where
+// the indirect is kept inline (sky/unlit/water/glass/sheen) so the denoise adds
+// nothing there.
+layout(set = 0, binding = 16, rgba16f) uniform writeonly image2D indirectImage;
 
 layout(push_constant) uniform Pc {
     uint  envMipCount;       // PMREM mip levels (>=1)
@@ -294,20 +299,24 @@ vec3 emissiveNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, vec3 albedo,
 // Hits contribute 0 here (no emissive/colour bounce — that's GI/emissive-NEE,
 // a separate step), so an enclosed scene goes dark rather than sky-lit.
 vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, out float openness) {
-    const int   GI_RAYS = 4;
+    const int   GI_RAYS = 64;// brute-force fixed samples — clean WITHOUT a spatial denoiser
     const float maxLod  = float(max(pc.envMipCount, 1u) - 1u);
-    uint seed = pcgHash(uint(px.x) ^ pcgHash(uint(px.y) ^ pcgHash(frame)));
+    // DETERMINISTIC, well-distributed Fibonacci cosine-hemisphere set — NO per-pixel
+    // RNG and NO `frame`. Well-distributed (not random) so it converges SMOOTHLY
+    // with sample count (no fixed-pattern grain that random sampling leaves), and
+    // identical every frame so a static view is noise-free + crisp and SETTLES
+    // instantly — no blur filter needed. (frame param kept for ABI; unused.)
     const vec3 up = abs(N.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     const vec3 T  = normalize(cross(up, N));
     const vec3 B  = cross(N, T);
     const vec3 orig = P + N * SHADOW_EPS;
     vec3  acc  = vec3(0.0);
     float open = 0.0;
+    const float GA = 2.39996323;// golden angle (rad)
     for (int s = 0; s < GI_RAYS; ++s) {
-        const float u1 = rnd(seed);
-        const float u2 = rnd(seed);
+        const float u1  = (float(s) + 0.5) / float(GI_RAYS);// cosine radial (even, deterministic)
+        const float phi = float(s) * GA;                    // golden-angle azimuth spiral
         const float r   = sqrt(u1);
-        const float phi = TWO_PI * u2;
         const vec3  hemi = vec3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));
         const vec3  dir  = normalize(T * hemi.x + B * hemi.y + N * hemi.z);
         rayQueryEXT rq;
@@ -761,6 +770,7 @@ void main() {
         const vec3 dirVS = normalize(tVS.xyz / tVS.w);
         const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
         imageStore(outImage, px, vec4(sampleEnvLod(dirWS, 0.0), 1.0));
+        imageStore(indirectImage, px, vec4(0.0));
         return;
     }
 
@@ -771,6 +781,7 @@ void main() {
     // Unlit (MeshBasicMaterial, roughness sentinel < 0): emit base colour.
     if (nTap.w < 0.0) {
         imageStore(outImage, px, vec4(albedo, 1.0));
+        imageStore(indirectImage, px, vec4(0.0));
         return;
     }
 
@@ -798,7 +809,10 @@ void main() {
     const bool shadowsOn  = (pc.flags & 1u) != 0u;
     // Per-pixel RNG stream (frame-jittered) for emissive NEE; advanced through
     // the primary + reflection shades so the draws decorrelate. TAA averages.
-    uint seed = pcgHash(uint(px.x) ^ pcgHash(uint(px.y) ^ pcgHash(pc.frame * 2654435761u + 1u)));
+    // Temporally stable (no `frame`) — same reasoning as gatherEnv: reflections /
+    // emissive-NEE settle to a fixed result instead of flickering. Different
+    // constant so this stream decorrelates from the AO/GI stream above.
+    uint seed = pcgHash(uint(px.x) ^ pcgHash(uint(px.y) ^ 0x85ebca6bu));
 
     // ── FFT fine-cascade normal: recover the sub-mesh chop the rasterised wave
     // geometry can't resolve (mirrors closest_hit's oceanFineHeight gradient).
@@ -828,6 +842,7 @@ void main() {
         const vec3 wcol = shadeWater(worldPos, N, V, pm, int(id - 1u),
                                      shadowsOn, maxLod, pc.frame, seed);
         imageStore(outImage, px, vec4(wcol, 1.0));
+        imageStore(indirectImage, px, vec4(0.0));
         return;
     }
 
@@ -847,9 +862,23 @@ void main() {
         diffInd = sampleEnvLod(N, maxLod) + lights.ambient;
     }
 
+    // Demodulate the (noisy) diffuse-indirect into binding 16 for the spatial
+    // denoiser (deferred_denoise.comp), EXCLUDING it from the inline shade — it's
+    // recombined post-blur as blur(diffInd)*diffuseColor. Kept INLINE (indirect=0)
+    // for glass (mixed with the glass look below) and sheen (its IBL modulator
+    // isn't in the G-buffer) so those stay correct, at the cost of un-denoised
+    // indirect there (both rare).
+    // Only demodulate when the denoiser is enabled (flags bit 2); otherwise keep
+    // the indirect INLINE (noisy but present) so disabling the denoise pass
+    // doesn't drop AO/GI/ambient lighting entirely.
+    const bool denoiseOn = (pc.flags & 4u) != 0u;
+    const bool demodIndirect = denoiseOn && (pm.transmission <= 0.0) &&
+                               (dot(pm.sheenColor, pm.sheenColor) <= 0.0);
+    const vec3 diffIndShade = demodIndirect ? vec3(0.0) : diffInd;
+
     // Diffuse + direct (shadowed) + emissive-NEE + diffuse indirect + emissive.
     vec3 lit = shadeDiffuseDirect(worldPos, N, V, albedo, roughness, metalness,
-                                  emissive, shadowsOn, diffInd,
+                                  emissive, shadowsOn, diffIndShade,
                                   pm.sheenColor, pm.sheenRoughness,
                                   pm.specularIntensity, pm.specularColor, seed);
 
@@ -863,10 +892,15 @@ void main() {
     // surfaces; the firefly clamp bounds glossy variance on moving ones. Above
     // ~0.7 roughness the lobe is so wide that prefiltered-env IBL is both
     // cheaper and indistinguishable, so RT bows out there.
-    const vec3 R  = reflect(-V, N);
-    const vec2 ab = envBRDFApprox(NdotV, roughness);
-    vec3 specSrc  = sampleEnvLod(R, roughness * maxLod);// env IBL (rough fallback)
-
+    // Specular: ONLY ray-traced reflections of real scene geometry on glossy /
+    // mirror surfaces. The env-IBL specular FALLBACK is intentionally DROPPED: on
+    // rough/matte surfaces it mirrored the HDRI sun as a blocky glare (envTex is a
+    // plain mipmapped equirect, not a smooth GGX PMREM, so the sun never spreads).
+    // Rough surfaces (reflBlend == 0, i.e. roughness ≳ 0.7 — all the game's matte
+    // materials) therefore now get NO env specular at all. Glossy surfaces still
+    // reflect the real scene (and the env on ray-miss) via the traced path.
+    const vec3  R         = reflect(-V, N);
+    const vec2  ab        = envBRDFApprox(NdotV, roughness);
     const float reflBlend = 1.0 - smoothstep(0.55, 0.70, roughness);
     if (reflBlend > 0.0) {
         const float missLod = roughness * maxLod;// glossy misses read the blurred env mip
@@ -877,18 +911,15 @@ void main() {
             vec3 L = (RSAMP == 1) ? R : sampleGGXReflection(V, N, roughness, seed);
             if (dot(L, N) <= 0.0) L = R;// keep below-horizon samples on the surface
             vec3 r = traceRadiance(shadowOrig, L, shadowsOn, maxLod, missLod, seed);
-            // Firefly clamp glossy samples only — a sharp mirror reflection is
-            // deterministic, so its (possibly bright) sun glint must stay intact.
+            // Firefly clamp glossy samples only.
             if (RSAMP > 1) {
                 const float lum = max(max(r.r, r.g), r.b);
                 if (lum > pc.fireflyClamp) r *= pc.fireflyClamp / lum;
             }
             acc += r;
         }
-        specSrc = mix(specSrc, acc / float(RSAMP), reflBlend);
+        lit += (acc / float(RSAMP)) * (F0 * ab.x + ab.y) * reflBlend;
     }
-
-    lit += specSrc * (F0 * ab.x + ab.y);
 
     // ── Refractive glass (any transmissive surface that ISN'T the ocean) ──────
     // Ocean water returned far above. Everything else with transmission — closed
@@ -905,4 +936,5 @@ void main() {
     }
 
     imageStore(outImage, px, vec4(lit, 1.0));
+    imageStore(indirectImage, px, demodIndirect ? vec4(diffInd, 1.0) : vec4(0.0));
 }
