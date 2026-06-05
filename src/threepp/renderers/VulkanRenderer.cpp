@@ -9466,6 +9466,16 @@ namespace threepp {
             in.materialTex      = matTexInfos.data();
             in.materialTexCount = kMaxMaterialTextures;
             in.emissiveTriBuf   = emBufs.data();
+            // Ocean textures for the thin-shell water branch. These renderer
+            // members are the live ocean FFT-fine + foam views/samplers (or 1×1
+            // dummies + tile size 0 when no DisplacedMesh is present) — the same
+            // handles the RT set binds at 32 + 44. ensureDisplacedState sets them
+            // BEFORE the scene-build descriptor rewrite that calls us, so the
+            // deferred set always picks up the current ocean state.
+            in.oceanFineView    = oceanFineHeightView;
+            in.oceanFineSampler = oceanFineHeightSampler;
+            in.oceanFoamView    = oceanFoamView;
+            in.oceanFoamSampler = oceanFoamSampler;
             deferredShade_->rewriteDescriptors(in);
         }
 
@@ -12738,7 +12748,8 @@ namespace threepp {
                                                /*ao=*/true, sampleIndex,
                                                emissiveTriCountThisFrame_,
                                                emissiveTotalPowerThisFrame_,
-                                               fireflyClamp_);
+                                               fireflyClamp_,
+                                               oceanFineTileSize, oceanFoamTileSize);
                 timingEnd(cb, TP_PathTrace);
             }
 

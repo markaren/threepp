@@ -52,6 +52,13 @@ namespace threepp::vulkan {
             const VkDescriptorImageInfo* materialTex = nullptr;// bindless array (reflection-hit textures)
             uint32_t           materialTexCount = 0;          // == kMaxMaterialTextures
             const VkBuffer*    emissiveTriBuf = nullptr;// [framesInFlight] EmTri[] (emissive NEE)
+            // Ocean textures (thin-shell water branch). Single shared handles —
+            // 1×1 dummies when no DisplacedMesh is in the scene (the tile-size
+            // push constants gate sampling). Mirror RT bindings 32 + 44.
+            VkImageView        oceanFineView    = VK_NULL_HANDLE;// FFT fine-cascade height
+            VkSampler          oceanFineSampler = VK_NULL_HANDLE;
+            VkImageView        oceanFoamView    = VK_NULL_HANDLE;// world-space foam accumulator
+            VkSampler          oceanFoamSampler = VK_NULL_HANDLE;
         };
         void rewriteDescriptors(const DescriptorWriteInputs& in);
 
@@ -70,7 +77,8 @@ namespace threepp::vulkan {
                             uint32_t width, uint32_t height, uint32_t envMipCount,
                             bool shadows, bool ao, uint32_t frameCounter,
                             uint32_t emissiveCount, float emissiveTotalPower,
-                            float fireflyClamp);
+                            float fireflyClamp,
+                            float oceanFineTileSize, float oceanFoamTileSize);
 
     private:
         VulkanContext& ctx_;

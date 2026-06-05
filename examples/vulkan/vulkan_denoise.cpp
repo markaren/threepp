@@ -65,7 +65,7 @@ namespace {
     auto makeBackWall() {
         auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
                 .color(Color(0.75f, 0.75f, 0.75f))
-                .roughness(0.01f)
+                .roughness(0.1f)
                 .metalness(0.9f));
         auto mesh = Mesh::create(BoxGeometry::create(12.f, 8.f, 0.1f), mat);
         mesh->position.set(0.f, 4.f, -5.f);

@@ -43,7 +43,7 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[13]{};
+        VkDescriptorSetLayoutBinding b[15]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -64,10 +64,12 @@ namespace threepp::vulkan {
         set(11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // bindless material textures...
         b[11].descriptorCount = kMaxMaterialTextures;       // ...fixed-size array (reflection-hit textures)
         set(12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // EmTri[] emissive triangles (area-light NEE)
+        set(13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // ocean FFT fine-cascade height (water chop)
+        set(14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // ocean world-space foam accumulator
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 13;
+        dlci.bindingCount = 15;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -75,7 +77,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pc.offset = 0;
-        pc.size = 32;// 8×u32 (…, emissiveCount, emissiveTotalPower, fireflyClamp)
+        pc.size = 40;// 10×u32 (…, fireflyClamp, oceanFineTileSize, oceanFoamTileSize)
         VkPipelineLayoutCreateInfo plci{};
         plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         plci.setLayoutCount = 1;
@@ -112,7 +114,7 @@ namespace threepp::vulkan {
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = framesInFlight_ * 2;// camera + lights
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * (5 + kMaxMaterialTextures);// env + 4 gbuf + bindless array
+        sizes[1].descriptorCount = framesInFlight_ * (7 + kMaxMaterialTextures);// env + 4 gbuf + 2 ocean + bindless array
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[2].descriptorCount = framesInFlight_ * 1;// out
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -172,6 +174,17 @@ namespace threepp::vulkan {
             outInfo.imageView   = in.sceneHdr[f];
             outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
+            // Ocean textures stay in GENERAL (written by the FFT/foam compute
+            // passes, sampled here) — matching the RT set's bindings 32 + 44.
+            VkDescriptorImageInfo oceanFineInfo{};
+            oceanFineInfo.sampler     = in.oceanFineSampler;
+            oceanFineInfo.imageView   = in.oceanFineView;
+            oceanFineInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo oceanFoamInfo{};
+            oceanFoamInfo.sampler     = in.oceanFoamSampler;
+            oceanFoamInfo.imageView   = in.oceanFoamView;
+            oceanFoamInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
             VkDescriptorBufferInfo matInfo{};
             matInfo.buffer = in.materialBuf[f];
             matInfo.offset = 0;
@@ -195,7 +208,7 @@ namespace threepp::vulkan {
             asInfo.accelerationStructureCount = 1;
             asInfo.pAccelerationStructures = &tlasLocal;
 
-            VkWriteDescriptorSet w[13]{};
+            VkWriteDescriptorSet w[15]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -228,7 +241,9 @@ namespace threepp::vulkan {
             w[11].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w[11].pImageInfo      = in.materialTex;
             setw(12, 12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,      nullptr, &emInfo);
-            vkUpdateDescriptorSets(ctx_.device(), 13, w, 0, nullptr);
+            setw(13, 13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanFineInfo, nullptr);
+            setw(14, 14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanFoamInfo, nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), 15, w, 0, nullptr);
         }
     }
 
@@ -251,16 +266,20 @@ namespace threepp::vulkan {
                                        uint32_t width, uint32_t height, uint32_t envMipCount,
                                        bool shadows, bool ao, uint32_t frameCounter,
                                        uint32_t emissiveCount, float emissiveTotalPower,
-                                       float fireflyClamp) {
+                                       float fireflyClamp,
+                                       float oceanFineTileSize, float oceanFoamTileSize) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
         const uint32_t flags = (shadows ? 1u : 0u) | (ao ? 2u : 0u);
-        uint32_t emPowerBits, fireflyBits;
-        std::memcpy(&emPowerBits, &emissiveTotalPower, sizeof(emPowerBits));
-        std::memcpy(&fireflyBits, &fireflyClamp, sizeof(fireflyBits));
-        const uint32_t pc[8] = {envMipCount, width, height, flags,
-                                frameCounter, emissiveCount, emPowerBits, fireflyBits};
+        uint32_t emPowerBits, fireflyBits, oceanFineBits, oceanFoamBits;
+        std::memcpy(&emPowerBits,   &emissiveTotalPower, sizeof(emPowerBits));
+        std::memcpy(&fireflyBits,   &fireflyClamp,       sizeof(fireflyBits));
+        std::memcpy(&oceanFineBits, &oceanFineTileSize,  sizeof(oceanFineBits));
+        std::memcpy(&oceanFoamBits, &oceanFoamTileSize,  sizeof(oceanFoamBits));
+        const uint32_t pc[10] = {envMipCount, width, height, flags,
+                                 frameCounter, emissiveCount, emPowerBits, fireflyBits,
+                                 oceanFineBits, oceanFoamBits};
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
         vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
     }

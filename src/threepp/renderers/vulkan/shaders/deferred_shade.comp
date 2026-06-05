@@ -90,6 +90,13 @@ struct EmTri {
 };
 layout(set = 0, binding = 12, scalar) readonly buffer EmissiveTriBuf { EmTri emissiveTris[]; };
 
+// Ocean FFT fine-cascade height (sub-mesh chop) + world-space foam accumulator.
+// Mirror closest_hit bindings 32 + 44. Both fall back to 1×1 dummies (and the
+// tile-size push constants to 0) when no DisplacedMesh is in the scene, so the
+// thin-shell water branch's `tileSize > 0` gates skip sampling them entirely.
+layout(set = 0, binding = 13) uniform sampler2D oceanFineHeight;
+layout(set = 0, binding = 14) uniform sampler2D oceanFoamWorld;
+
 layout(push_constant) uniform Pc {
     uint  envMipCount;       // PMREM mip levels (>=1)
     uint  width;
@@ -99,6 +106,8 @@ layout(push_constant) uniform Pc {
     uint  emissiveCount;     // # emissive triangles (0 = none)
     float emissiveTotalPower;// power-CDF total (denominator)
     float fireflyClamp;      // luminance cap for emissive NEE samples (large = disabled)
+    float oceanFineTileSize; // FFT fine-cascade tile (m); 0 = no ocean fine normal
+    float oceanFoamTileSize; // world-space foam tile (m); 0 = no foam sampling
 } pc;
 
 // ── BRDF helpers (verbatim from shade_common.glsl) ──────────────────────────
@@ -164,6 +173,33 @@ float rnd(inout uint seed) {
     uint r = ((seed >> ((seed >> 28) + 4u)) ^ seed) * 277803737u;
     r = (r >> 22) ^ r;
     return float(r) * (1.0 / 4294967296.0);
+}
+
+// ── Value-noise / fBm (verbatim from shade_common.glsl) — foam shading only ──
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+float vnoise21(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+float fbm4(vec2 p) {
+    float a = 0.0;
+    float w = 0.5;
+    for (int i = 0; i < 4; ++i) {
+        a += w * vnoise21(p);
+        p *= 2.03;
+        w *= 0.5;
+    }
+    return a;
 }
 
 // Emissive-mesh NEE: directly sample the emissive-triangle area lights (power
@@ -385,6 +421,146 @@ vec3 hitTex(int texIndex, mat3 uvXform, vec2 uv, vec3 fallback) {
     return fallback * textureLod(albedoMaps[i], (uvXform * vec3(uv, 1.0)).xy, 0.0).rgb;
 }
 
+// GGX NDF importance-sampled reflection direction. Perturbs the mirror reflect
+// by the roughness lobe (tight at r→0, wide at high r) so ray-traced reflections
+// blur glossily instead of staying mirror-sharp. alpha = roughness². Plain NDF
+// (not VNDF) sampling — cheap and fine across the moderate roughness range we
+// trace. The caller frame-jitters the seed so TAA averages successive samples
+// into a clean glossy lobe on static surfaces.
+vec3 sampleGGXReflection(vec3 V, vec3 N, float roughness, inout uint seed) {
+    const float a    = roughness * roughness;
+    const float u1   = rnd(seed);
+    const float u2   = rnd(seed);
+    const float phi  = TWO_PI * u1;
+    const float cosT = sqrt((1.0 - u2) / (1.0 + (a * a - 1.0) * u2));
+    const float sinT = sqrt(max(0.0, 1.0 - cosT * cosT));
+    const vec3  Ht   = vec3(sinT * cos(phi), sinT * sin(phi), cosT);// half-vec, tangent space
+    const vec3  up   = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    const vec3  T    = normalize(cross(up, N));
+    const vec3  B    = cross(N, T);
+    const vec3  H    = normalize(T * Ht.x + B * Ht.y + N * Ht.z);
+    return reflect(-V, H);
+}
+
+// Trace one ray (reflection or water-reflect) and return the incoming radiance:
+// the fully-shaded scene hit (lit + shadowed + its own env specular), or the
+// environment on a miss — sampled at `missLod` so a glossy reflection's missed
+// rays read the pre-blurred env mip (0 = sharp, roughness*maxLod = matched blur)
+// → low noise. Factored out of main()'s reflection block so the water branch can
+// reuse it for the reflected sky. Compute has no derivatives → mip 0 on hit textures.
+vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu, origin, 1e-3, dir, 1e30);
+    while (rayQueryProceedEXT(rq)) {}
+    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT)
+        return sampleEnvLod(dir, missLod);// miss → environment (pre-blurred for glossy)
+
+    const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+    const MaterialDesc hm     = mats[hitId];
+    const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+    const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+    const float  tHit   = rayQueryGetIntersectionTEXT(rq, true);
+    const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
+    vec3 hitN; vec2 hitUv;
+    fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
+
+    const vec3 hAlbedo = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
+    if (hm.roughness < 0.0) return hAlbedo;// unlit hit surface
+
+    vec3 hitV = -dir;// view dir at the hit = back along the ray
+    if (dot(hitN, hitV) < 0.0) hitN = -hitN;
+    float hRough = hm.roughness;
+    float hMetal = hm.metalness;
+    if (hm.roughnessTexIndex >= 0)
+        hRough *= textureLod(albedoMaps[clamp(hm.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1)],
+                             (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).g;
+    if (hm.metalnessTexIndex >= 0)
+        hMetal *= textureLod(albedoMaps[clamp(hm.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1)],
+                             (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).b;
+    hRough = clamp(hRough, 0.04, 1.0);
+    hMetal = clamp(hMetal, 0.0, 1.0);
+    const vec3 hEmissive = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hitUv,
+                                  hm.emissive * hm.emissiveIntensity);
+    const vec3 hitP = origin + dir * tHit;
+    // Crude (unoccluded) env IBL for the hit's diffuse indirect — no per-hit
+    // gather/recursion. Direct lights are shadowed inside shadeDiffuseDirect.
+    const vec3 hitDiffInd = sampleEnvLod(hitN, maxLod) + lights.ambient;
+    vec3 c = shadeDiffuseDirect(hitP, hitN, hitV, hAlbedo, hRough, hMetal,
+                                hEmissive, doShadows, hitDiffInd, seed);
+    const float hitNdotV = max(dot(hitN, hitV), 1e-4);
+    const vec3  hitF0 = mix(vec3(0.04), hAlbedo, hMetal);
+    const vec3  hitR  = reflect(-hitV, hitN);
+    const vec2  hitAB = envBRDFApprox(hitNdotV, hRough);
+    c += sampleEnvLod(hitR, hRough * maxLod) * (hitF0 * hitAB.x + hitAB.y);
+    return c;
+}
+
+// Thin-shell water (RenderMode::RasterFirst). Replicates closest_hit's
+// DETERMINISTIC thin-shell BSDF — noise-free because it's an analytic Fresnel
+// split, not a stochastic reflect/refract pick:
+//   colour = mix( (1-F)·transmit , F·reflect )
+// • reflect  = ray-traced sky + scene (carries the env's sun → glittering
+//              glints across the FFT-perturbed wave facets),
+// • transmit = the refracted underwater view (sand floor / deep env) tinted by
+//              Beer-Lambert absorption (thin-shell `thickness` proxy),
+// • foam     = a diffuse whitewater layer where the Tessendorf Jacobian folded
+//              the surface (ocean only; gated on the per-vertex foam attribute).
+// N must already carry the FFT fine-cascade perturbation (applied in main()).
+vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
+                bool doShadows, float maxLod, uint frame, inout uint seed) {
+    const float NdotV = max(dot(N, V), 1e-4);
+    const float ior   = max(pm.ior, 1.0);
+    const float r0    = pow((1.0 - ior) / (1.0 + ior), 2.0);
+    const float F     = r0 + (1.0 - r0) * pow(1.0 - NdotV, 5.0);
+
+    // Reflected sky + scene (sharp). The reflection ray points up/out (away
+    // from the water), so it escapes to the sky or hits scene geometry cleanly.
+    const vec3 R = reflect(-V, N);
+    const vec3 reflectColor = traceRadiance(P + N * SHADOW_EPS, R, doShadows, maxLod, 0.0, seed);
+
+    // Transmission: ANALYTIC deep-water body — deliberately NOT a refraction
+    // ray. A downward ray self-intersects this same choppy surface (adjacent
+    // wave crests), which traceRadiance then shades as opaque water → a chaotic
+    // black/white speckle that fills the screen when viewed from ABOVE (F≈0.02
+    // there, so the transmission term dominates). The seabed is near-black and
+    // metres down anyway, so true see-through buys almost nothing. Instead: the
+    // Beer-Lambert absorption tint lit by ambient skylight → a smooth deep
+    // blue-green. (The path tracer can refract correctly because it CONTINUES
+    // the path with medium tracking across the bounce; a single inline ray can't.)
+    vec3 tint = vec3(1.0);
+    if (pm.attenuationDistance > 0.0)
+        tint = pow(max(pm.attenuationColor, vec3(1e-6)), vec3(pm.thickness / pm.attenuationDistance));
+    const vec3 skyFill = sampleEnvLod(N, maxLod) * 0.4 + lights.ambient;
+    const vec3 transmitColor = tint * skyFill;
+
+    vec3 col = mix(transmitColor, reflectColor, F);
+
+    // Foam: folded-surface coverage (foamAddress attribute + live world foam
+    // texture) bleaches a diffuse whitewater layer over the glass. Two-layer
+    // noise (macro fBm pool mask + micro value-noise bubbles) matches
+    // closest_hit's foam shading.
+    if (pc.oceanFoamTileSize > 0.0 && geoms[instIdx].foamAddress != 0ul) {
+        const float foamCoverage = clamp(textureLod(oceanFoamWorld, P.xz / pc.oceanFoamTileSize, 0.0).r, 0.0, 1.0);
+        if (foamCoverage > 0.0) {
+            const float t      = float(frame) * (1.0 / 60.0);
+            const vec2  drift  = vec2(0.42, 0.71) * t * 0.18;
+            const float macroN = fbm4(P.xz * 0.18 + drift);
+            const float foamMask = smoothstep(0.05, 0.70, foamCoverage - macroN * 0.45);
+            if (foamMask > 0.0) {
+                const vec2  wxzMicro = P.xz * 6.5 - drift * 0.4;
+                const float micro    = vnoise21(wxzMicro) * 0.65 + vnoise21(wxzMicro * 2.3) * 0.35;
+                const vec3  foamCol  = mix(vec3(0.55, 0.62, 0.66), vec3(0.97, 0.99, 1.00), micro);
+                const float foamRough= mix(1.0, 0.45, micro);
+                const vec3  foamDiff = sampleEnvLod(N, maxLod) + lights.ambient;
+                const vec3  foamLit  = shadeDiffuseDirect(P, N, V, foamCol, foamRough, 0.0,
+                                                          vec3(0.0), doShadows, foamDiff, seed);
+                col = mix(col, foamLit, foamMask);
+            }
+        }
+    }
+    return col;
+}
+
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
@@ -420,21 +596,48 @@ void main() {
     const vec4  viewH    = cam.projInverse * vec4(ndc, depth, 1.0);
     const vec3  worldPos = (cam.viewInverse * vec4(viewH.xyz / viewH.w, 1.0)).xyz;
 
-    const vec3  N         = normalize(nTap.xyz * 2.0 - 1.0);
+    vec3        N         = normalize(nTap.xyz * 2.0 - 1.0);// mutable: FFT chop below
     const float roughness = clamp(nTap.w, 0.04, 1.0);
     const float metalness = clamp(am.a, 0.0, 1.0);
 
     const MaterialDesc pm = mats[id - 1u];
     const vec3 emissive   = pm.emissive * pm.emissiveIntensity;
 
-    const vec3  V     = normalize(camPos - worldPos);
-    const float NdotV = max(dot(N, V), 1e-4);
-    const vec3  F0    = mix(vec3(0.04), albedo, metalness);
-    const bool  shadowsOn  = (pc.flags & 1u) != 0u;
-    const vec3  shadowOrig = worldPos + N * SHADOW_EPS;
+    const vec3 V          = normalize(camPos - worldPos);
+    const bool shadowsOn  = (pc.flags & 1u) != 0u;
     // Per-pixel RNG stream (frame-jittered) for emissive NEE; advanced through
     // the primary + reflection shades so the draws decorrelate. TAA averages.
     uint seed = pcgHash(uint(px.x) ^ pcgHash(uint(px.y) ^ pcgHash(pc.frame * 2654435761u + 1u)));
+
+    // ── FFT fine-cascade normal: recover the sub-mesh chop the rasterised wave
+    // geometry can't resolve (mirrors closest_hit's oceanFineHeight gradient).
+    // Gated on thin-shell + an active ocean (dummy tex + tile size 0 otherwise),
+    // so it's a no-op for every non-ocean surface. Must run before N is used.
+    if (pm.thinWalled != 0 && pc.oceanFineTileSize > 0.0) {
+        const float invTile = 1.0 / pc.oceanFineTileSize;
+        const float eps     = pc.oceanFineTileSize / 32.0;
+        const float depsUV  = eps * invTile;
+        const vec2  uvW     = worldPos.xz * invTile;
+        const float hL = textureLod(oceanFineHeight, uvW + vec2(-depsUV, 0.0), 0.0).r * invTile;
+        const float hR = textureLod(oceanFineHeight, uvW + vec2( depsUV, 0.0), 0.0).r * invTile;
+        const float hD = textureLod(oceanFineHeight, uvW + vec2(0.0, -depsUV), 0.0).r * invTile;
+        const float hU = textureLod(oceanFineHeight, uvW + vec2(0.0,  depsUV), 0.0).r * invTile;
+        const vec2  grad = vec2(hR - hL, hU - hD) / (2.0 * eps);
+        N = normalize(N + 0.5 * vec3(-grad.x, 0.0, -grad.y));
+    }
+
+    // ── Thin-shell water (ocean / glass sheet): analytic Fresnel reflect ⊕
+    // refract, noise-free — replaces the generic opaque PBR shade entirely.
+    if (pm.thinWalled != 0 && pm.transmission > 0.0) {
+        const vec3 wcol = shadeWater(worldPos, N, V, pm, int(id - 1u),
+                                     shadowsOn, maxLod, pc.frame, seed);
+        imageStore(outImage, px, vec4(wcol, 1.0));
+        return;
+    }
+
+    const float NdotV = max(dot(N, V), 1e-4);
+    const vec3  F0    = mix(vec3(0.04), albedo, metalness);
+    const vec3  shadowOrig = worldPos + N * SHADOW_EPS;
 
     // Diffuse indirect: visibility-gated env irradiance (RT, flags bit 1) so
     // enclosed surfaces aren't lit by a sky they can't see (also gives ambient
@@ -452,65 +655,39 @@ void main() {
     vec3 lit = shadeDiffuseDirect(worldPos, N, V, albedo, roughness, metalness,
                                   emissive, shadowsOn, diffInd, seed);
 
-    // ── Specular: RT reflection (sharp) ⊕ prefiltered-env IBL (rough) ────────
+    // ── Specular: roughness-aware RT reflection (sharp → glossy) ⊕ env IBL ────
+    // Sharp surfaces trace the exact mirror ray; glossy surfaces GGX-importance-
+    // sample the reflection lobe so the reflection BLURS with roughness and
+    // shows real SCENE geometry — not just the prefiltered environment (the old
+    // behaviour, which cut RT reflections off at roughness 0.18 and fell back to
+    // env-only). Missed rays read the env at the roughness mip (pre-blurred). A
+    // few frame-jittered GGX samples + TAA converge it cleanly on static
+    // surfaces; the firefly clamp bounds glossy variance on moving ones. Above
+    // ~0.7 roughness the lobe is so wide that prefiltered-env IBL is both
+    // cheaper and indistinguishable, so RT bows out there.
     const vec3 R  = reflect(-V, N);
     const vec2 ab = envBRDFApprox(NdotV, roughness);
-    vec3 specSrc  = sampleEnvLod(R, roughness * maxLod);// env IBL default
+    vec3 specSrc  = sampleEnvLod(R, roughness * maxLod);// env IBL (rough fallback)
 
-    const float reflBlend = 1.0 - smoothstep(0.06, 0.18, roughness);
+    const float reflBlend = 1.0 - smoothstep(0.55, 0.70, roughness);
     if (reflBlend > 0.0) {
-        rayQueryEXT rq;
-        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu,
-                              shadowOrig, 1e-3, R, 1e30);
-        while (rayQueryProceedEXT(rq)) {}
-        vec3 reflColor;
-        if (rayQueryGetIntersectionTypeEXT(rq, true) ==
-            gl_RayQueryCommittedIntersectionNoneEXT) {
-            reflColor = sampleEnvLod(R, 0.0);// miss → sharp environment
-        } else {
-            const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-            const MaterialDesc hm     = mats[hitId];
-            const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
-            const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
-            const float  tHit   = rayQueryGetIntersectionTEXT(rq, true);
-            const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
-            vec3 hitN; vec2 hitUv;
-            fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
-
-            // Textured material at the reflected hit (albedo / rough-metal /
-            // emissive), matching closest_hit + gbuffer.frag conventions.
-            const vec3 hAlbedo = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
-            if (hm.roughness < 0.0) {
-                reflColor = hAlbedo;// unlit reflected surface
-            } else {
-                vec3 hitV = -R;// view dir at the hit = back toward the reflector
-                if (dot(hitN, hitV) < 0.0) hitN = -hitN;
-                float hRough = hm.roughness;
-                float hMetal = hm.metalness;
-                if (hm.roughnessTexIndex >= 0)
-                    hRough *= textureLod(albedoMaps[clamp(hm.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1)],
-                                         (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).g;
-                if (hm.metalnessTexIndex >= 0)
-                    hMetal *= textureLod(albedoMaps[clamp(hm.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1)],
-                                         (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).b;
-                hRough = clamp(hRough, 0.04, 1.0);
-                hMetal = clamp(hMetal, 0.0, 1.0);
-                const vec3 hEmissive = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hitUv,
-                                              hm.emissive * hm.emissiveIntensity);
-                const vec3 hitP = shadowOrig + R * tHit;
-                // Lit + shadowed reflected hit. Crude (unoccluded) env IBL for
-                // its diffuse indirect + env specular — no per-hit gather/recursion.
-                const vec3 hitDiffInd = sampleEnvLod(hitN, maxLod) + lights.ambient;
-                reflColor = shadeDiffuseDirect(hitP, hitN, hitV, hAlbedo, hRough, hMetal,
-                                               hEmissive, shadowsOn, hitDiffInd, seed);
-                const float hitNdotV = max(dot(hitN, hitV), 1e-4);
-                const vec3  hitF0 = mix(vec3(0.04), hAlbedo, hMetal);
-                const vec3  hitR  = reflect(-hitV, hitN);
-                const vec2  hitAB = envBRDFApprox(hitNdotV, hRough);
-                reflColor += sampleEnvLod(hitR, hRough * maxLod) * (hitF0 * hitAB.x + hitAB.y);
+        const float missLod = roughness * maxLod;// glossy misses read the blurred env mip
+        const int   RSAMP   = roughness < 0.08 ? 1 : (roughness < 0.30 ? 2 : 3);
+        vec3 acc = vec3(0.0);
+        for (int s = 0; s < RSAMP; ++s) {
+            // r<0.08 → exact mirror (deterministic, noise-free); else GGX lobe.
+            vec3 L = (RSAMP == 1) ? R : sampleGGXReflection(V, N, roughness, seed);
+            if (dot(L, N) <= 0.0) L = R;// keep below-horizon samples on the surface
+            vec3 r = traceRadiance(shadowOrig, L, shadowsOn, maxLod, missLod, seed);
+            // Firefly clamp glossy samples only — a sharp mirror reflection is
+            // deterministic, so its (possibly bright) sun glint must stay intact.
+            if (RSAMP > 1) {
+                const float lum = max(max(r.r, r.g), r.b);
+                if (lum > pc.fireflyClamp) r *= pc.fireflyClamp / lum;
             }
+            acc += r;
         }
-        specSrc = mix(specSrc, reflColor, reflBlend);
+        specSrc = mix(specSrc, acc / float(RSAMP), reflBlend);
     }
 
     lit += specSrc * (F0 * ab.x + ab.y);
