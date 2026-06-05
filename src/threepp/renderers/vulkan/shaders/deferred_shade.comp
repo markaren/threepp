@@ -1,0 +1,227 @@
+#version 460
+#extension GL_EXT_scalar_block_layout : require
+
+// Raster-first deferred shading (Phase 2a). Reads the material G-buffer
+// produced by the raster prepass and shades a clean, analytic, NOISE-FREE
+// base: emissive-free direct analytic lights (no shadows yet — Phase 2b adds
+// ray-query hard shadows) + split-sum specular IBL + approximate diffuse IBL.
+// Writes linear HDR straight into the bloom sceneHdr image; the existing
+// bloom + TAA tail finishes the frame. The path tracer (RenderMode::ReferencePT)
+// is left entirely untouched — this pass only runs in RenderMode::RasterFirst.
+//
+// BRDF math is copied verbatim from shade_common.glsl (distGGX / geomSmithG1 /
+// fresnelSchlick / envBRDFApprox) and the analytic light loops mirror
+// analyticNeeOpaque() so RasterFirst and ReferencePT agree on lit surfaces.
+// It is inlined rather than #included because shade_common's NEE helpers call
+// traceRayEXT, which is unavailable in a compute stage.
+//
+// G-buffer reads use texelFetch (1:1 with the dispatch — deferred runs at the
+// same render extent the G-buffer was rasterised at), so no sampler filtering
+// is involved and the bound sampler is irrelevant for those taps. Only the
+// environment uses textureLod (prefiltered PMREM mip chain).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+const float PI     = 3.14159265358979;
+const float TWO_PI = 6.28318530717959;
+
+// Binding 0 — same buffer as the RT set's CameraUbo (binding 2): the
+// unjittered inverse view/proj used to reconstruct world position from depth.
+layout(set = 0, binding = 0) uniform CameraUbo {
+    mat4 viewInverse;
+    mat4 projInverse;
+    vec4 jitter;
+} cam;
+
+// Binding 1 — same GpuLightsUbo as the RT set's binding 5 (scalar layout).
+struct DirLight   { vec3 direction; vec3 color; };
+struct PointLight { vec3 position; float range; vec3 color; float decay; };
+struct SpotLight  { vec3 position; float range; vec3 color; float decay;
+                    vec3 direction; float cosAngleOuter; float cosAngleInner; };
+struct RectLight  { vec3 position; vec3 halfU; vec3 halfV; vec3 normal; vec3 color; };
+layout(set = 0, binding = 1, scalar) uniform LightsUbo {
+    vec3       ambient;
+    uint       dirCount;
+    DirLight   dirLights[8];
+    uint       pointCount;
+    uint       spotCount;
+    uint       rectCount;
+    PointLight pointLights[8];
+    SpotLight  spotLights[8];
+    RectLight  rectLights[4];
+} lights;
+
+layout(set = 0, binding = 2) uniform sampler2D  envTex;        // prefiltered PMREM mip chain
+layout(set = 0, binding = 3) uniform sampler2D  gbufNormalTex; // .xyz = n*0.5+0.5, .w = roughness
+layout(set = 0, binding = 4) uniform sampler2D  gbufDepthTex;  // .x = Vulkan NDC z [0,1]
+layout(set = 0, binding = 5) uniform usampler2D gbufIdsTex;    // .x = instanceId+1 (0 == sky), .z = flags
+layout(set = 0, binding = 6) uniform sampler2D  gbufAlbedoTex; // .rgb = linear albedo, .a = metalness
+layout(set = 0, binding = 7, rgba16f) uniform writeonly image2D outImage; // linear HDR (bloom sceneHdr)
+
+layout(push_constant) uniform Pc {
+    uint envMipCount;  // PMREM mip levels (>=1); roughness → lod via *(envMipCount-1)
+    uint width;
+    uint height;
+    uint flags;        // reserved (Phase 2b: shadow toggle etc.)
+} pc;
+
+// ── BRDF helpers (verbatim from shade_common.glsl — keep in lockstep) ────────
+float distGGX(float NdotH, float roughness) {
+    float a  = roughness * roughness;
+    float a2 = a * a;
+    float d  = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / (PI * d * d);
+}
+float geomSmithG1(float NdotX, float k) {
+    return NdotX / (NdotX * (1.0 - k) + k);
+}
+vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+// Karis 2014 split-sum env-BRDF fit: (scale, bias) so spec dir-albedo = F0*scale+bias.
+vec2 envBRDFApprox(float NdotV, float r) {
+    const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
+    const vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
+    const vec4 v  = r * c0 + c1;
+    const float a004 = min(v.x * v.x, exp2(-9.28 * NdotV)) * v.x + v.y;
+    return vec2(-1.04, 1.04) * a004 + v.zw;
+}
+// GL / three.js equirect convention (matches shade_common::sampleEquirect).
+vec3 sampleEnvLod(vec3 dir, float lod) {
+    const float u = 0.5 + atan(dir.z, dir.x) / TWO_PI;
+    const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
+    return textureLod(envTex, vec2(u, v), lod).rgb;
+}
+
+// Cook-Torrance specular + Lambert diffuse for one analytic light direction L.
+vec3 evalLight(vec3 N, vec3 V, vec3 L, float NdotV, vec3 F0, vec3 albedo,
+               float roughness, float metalness, float k) {
+    const float NdotL = max(dot(N, L), 0.0);
+    if (NdotL <= 0.0) return vec3(0.0);
+    const vec3  H     = normalize(V + L);
+    const float NdotH = max(dot(N, H), 0.0);
+    const float VdotH = max(dot(V, H), 0.0);
+    const vec3  F     = fresnelSchlick(VdotH, F0);
+    const float D     = distGGX(NdotH, roughness);
+    const float G     = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
+    const vec3  spec  = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4);
+    const vec3  kd    = (vec3(1.0) - F) * (1.0 - metalness);
+    const vec3  diff  = kd * albedo / PI;
+    return (diff + spec) * NdotL;
+}
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
+    const vec2 size = vec2(float(pc.width), float(pc.height));
+    const vec2 uv   = (vec2(px) + 0.5) / size;
+
+    // NDC with the raster G-buffer's Y-flip (matches raygen primary-ray build).
+    const vec2 ndc    = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    const vec3 camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    const float maxLod = float(max(pc.envMipCount, 1u) - 1u);
+
+    const uint id = texelFetch(gbufIdsTex, px, 0).x;// 0 == sky / miss
+
+    if (id == 0u) {
+        // Sky / background: primary ray direction → environment (sharp mip 0).
+        // A solid-colour background is stored as a 1×1 env image, so this also
+        // reproduces flat backgrounds correctly.
+        const vec4 tVS   = cam.projInverse * vec4(ndc, 1.0, 1.0);
+        const vec3 dirVS = normalize(tVS.xyz / tVS.w);
+        const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
+        imageStore(outImage, px, vec4(sampleEnvLod(dirWS, 0.0), 1.0));
+        return;
+    }
+
+    // Reconstruct world position from the G-buffer depth.
+    const float depth   = texelFetch(gbufDepthTex, px, 0).x;
+    const vec4  viewH   = cam.projInverse * vec4(ndc, depth, 1.0);
+    const vec3  viewPos = viewH.xyz / viewH.w;
+    const vec3  worldPos = (cam.viewInverse * vec4(viewPos, 1.0)).xyz;
+
+    const vec4  nTap      = texelFetch(gbufNormalTex, px, 0);
+    const vec3  N         = normalize(nTap.xyz * 2.0 - 1.0);
+    const float roughness = clamp(nTap.w, 0.04, 1.0);
+
+    const vec4  am        = texelFetch(gbufAlbedoTex, px, 0);
+    const vec3  albedo    = am.rgb;
+    const float metalness = clamp(am.a, 0.0, 1.0);
+
+    const vec3  V     = normalize(camPos - worldPos);
+    const float NdotV = max(dot(N, V), 1e-4);
+
+    const vec3  F0          = mix(vec3(0.04), albedo, metalness);
+    const vec3  diffuseColor = albedo * (1.0 - metalness);
+    const float k           = (roughness + 1.0) * (roughness + 1.0) / 8.0;// direct Schlick-GGX
+
+    vec3 lit = vec3(0.0);
+
+    // === Directional lights ===
+    for (uint i = 0u; i < lights.dirCount; ++i) {
+        const vec3 L = normalize(lights.dirLights[i].direction);
+        lit += evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k)
+               * lights.dirLights[i].color;
+    }
+
+    // === Point lights ===
+    for (uint i = 0u; i < lights.pointCount; ++i) {
+        vec3        toL  = lights.pointLights[i].position - worldPos;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float decay = lights.pointLights[i].decay;
+        float atten = 1.0 / max(pow(dist, decay), 0.01);
+        const float range = lights.pointLights[i].range;
+        if (range > 0.0) {
+            const float t  = dist / range;
+            const float t4 = t * t * t * t;
+            const float w  = max(1.0 - t4, 0.0);
+            atten *= w * w;
+        }
+        lit += evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k)
+               * lights.pointLights[i].color * atten;
+    }
+
+    // === Spot lights ===
+    for (uint i = 0u; i < lights.spotCount; ++i) {
+        vec3        toL  = lights.spotLights[i].position - worldPos;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float spotCos   = dot(-toL, lights.spotLights[i].direction);
+        const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
+                                           lights.spotLights[i].cosAngleInner, spotCos);
+        if (spotAtten <= 0.0) continue;
+        const float decay = lights.spotLights[i].decay;
+        float atten = 1.0 / max(pow(dist, decay), 0.01);
+        const float range = lights.spotLights[i].range;
+        if (range > 0.0) {
+            const float t  = dist / range;
+            const float t4 = t * t * t * t;
+            const float w  = max(1.0 - t4, 0.0);
+            atten *= w * w;
+        }
+        atten *= spotAtten;
+        lit += evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k)
+               * lights.spotLights[i].color * atten;
+    }
+
+    // ── Image-based lighting (noise-free) ───────────────────────────────────
+    // Specular IBL: split-sum — prefiltered env mip selected by roughness,
+    // weighted by the analytic env-BRDF (Karis fit). The reflection ray's tail
+    // env is the superset that RT reflections (Phase 3) will replace.
+    const vec3 R          = reflect(-V, N);
+    const vec3 prefiltered = sampleEnvLod(R, roughness * maxLod);
+    const vec2 ab          = envBRDFApprox(NdotV, roughness);
+    const vec3 specIBL     = prefiltered * (F0 * ab.x + ab.y);
+
+    // Diffuse IBL: roughest prefiltered mip along N ≈ irradiance (approximate
+    // but noise-free); lights.ambient provides fill when no env is present.
+    const vec3 irradiance = sampleEnvLod(N, maxLod);
+    const vec3 diffIBL    = (irradiance + lights.ambient) * diffuseColor;
+
+    lit += specIBL + diffIBL;
+
+    imageStore(outImage, px, vec4(lit, 1.0));
+}

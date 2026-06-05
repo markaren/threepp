@@ -34,6 +34,7 @@
 #include "vulkan/TetSkinningPipeline.hpp"
 #include "vulkan/TaaResolve.hpp"
 #include "vulkan/BloomPass.hpp"
+#include "vulkan/DeferredShade.hpp"
 #include "vulkan/WaterDisplacePipeline.hpp"
 #include "vulkan/FoamWorldPipeline.hpp"
 #include "vulkan/shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
@@ -1012,10 +1013,11 @@ namespace threepp {
         // top of raster, not as Monte Carlo on the PT primary. Disabled by
         // default until the integration is validated end-to-end (stage 1).
         struct RasterGbufImages {
-            Image2D       normal;       // rgba16f — world-space normal in xyz, .w=0 (roughness in stage 2)
+            Image2D       normal;       // rgba16f — world-space normal in xyz, .w = linear roughness
             Image2D       motion;       // rgba16f — NDC delta in .rg, .ba reserved
             Image2D       ids;          // rgba16ui — instanceCustomIndex/meshID/flags/reserved
             Image2D       uv;           // rgba16f — material UV in .rg
+            Image2D       albedo;       // rgba8 unorm — linear base colour in .rgb, metalness in .a (raster-first deferred input)
             Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
             // Hybrid raster overlay's UNJITTERED depth attachment. Filled by
             // an extra depth-only prepass (overlay_depth.vert) right after
@@ -1228,6 +1230,12 @@ namespace threepp {
         // skips the bloom passes (composite still owns the tone map).
         std::unique_ptr<vulkan::BloomPass> bloom_;
         float bloomIntensity_ = 0.0f;
+
+        // Raster-first deferred lighting (RenderMode::RasterFirst). Shades the
+        // material G-buffer analytically into bloom_->sceneHdr, replacing the
+        // raygen + denoise stages; bloom + TAA finish the frame unchanged. Owns
+        // no images and does not touch rtDsLayout, so ReferencePT is unaffected.
+        std::unique_ptr<vulkan::DeferredShade> deferredShade_;
         float bloomThreshold_ = 1.0f;// soft-knee bright-pass cutoff (linear HDR)
         float sharpenStrength_ = 0.0f;// post-TAA RCAS amount; 0 = off
         float taaBlendAlpha_ = 0.1f;// 10% current, 90% history
@@ -1378,8 +1386,16 @@ namespace threepp {
             Motion = 2,
             Depth  = 3,
             Ids    = 4,
+            Albedo = 5,   // raster-first material G-buffer: linear albedo in rgb
         };
         HybridDebugView hybridDebugView_ = HybridDebugView::Off;
+
+        // Shading strategy (see VulkanRenderer::RenderMode in the public
+        // header). RasterFirst aliases ReferencePT until the deferred base +
+        // PT-accent passes land, so this currently only stores the user's
+        // preference and does not yet branch the frame graph. Default
+        // ReferencePT keeps today's behaviour byte-for-byte.
+        VulkanRenderer::RenderMode renderMode_ = VulkanRenderer::RenderMode::ReferencePT;
 
         // Debug: gate raygen to exit immediately after step-0 primary trace
         // so pathTraceMs measures roughly the primary-trace cost. See
@@ -1514,12 +1530,18 @@ namespace threepp {
             // target); the bloom ping-pong buffers are half that.
             bloom_ = std::make_unique<vulkan::BloomPass>(*ctx, cmdPool, kFramesInFlight);
             bloom_->createImages(renderExtent().width, renderExtent().height);
+            // Raster-first deferred lighting pass. Writes bloom_->sceneHdr, so
+            // it must exist after bloom_; its descriptors reference the camera /
+            // lights UBOs, the env image, the raster gbuffer and sceneHdr — all
+            // created above by this point.
+            deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
             createDescriptorPool();
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             createOceanFineDummy_();// must run before descriptor writes (binding 32)
             createOceanFoamDummy_();// must run before descriptor writes (binding 33)
             rewriteTaaDescriptors();// after ensureHybridResources gave us raster gbuf views
             rewriteBloomDescriptors();// bloom composite reads gbuf + writes the TAA input
+            rewriteDeferredDescriptors();// raster-first deferred shade inputs
             createTimestampPools();// per-frame VkQueryPool for the timings API
         }
 
@@ -6341,7 +6363,7 @@ namespace threepp {
             const auto& g = rasterGbufs[frame];
             if (g.framebuffer == VK_NULL_HANDLE) return;// not initialized
 
-            VkClearValue clears[5]{};
+            VkClearValue clears[6]{};
             clears[0].color = {{0.f, 0.f, 0.f, 0.f}};   // normal — sky/miss as zero
             clears[1].color = {{0.f, 0.f, 0.f, 0.f}};   // motion
             clears[2].color.uint32[0] = 0u;             // instanceID — 0 reserved as sky
@@ -6349,7 +6371,8 @@ namespace threepp {
             clears[2].color.uint32[2] = 0u;
             clears[2].color.uint32[3] = 0u;
             clears[3].color = {{0.f, 0.f, 0.f, 0.f}};   // uv — sky has no UV
-            clears[4].depthStencil = {1.f, 0u};
+            clears[4].color = {{0.f, 0.f, 0.f, 0.f}};   // albedo+metalness — sky as zero
+            clears[5].depthStencil = {1.f, 0u};
 
             VkRenderPassBeginInfo rpbi{};
             rpbi.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -6357,7 +6380,7 @@ namespace threepp {
             rpbi.framebuffer     = g.framebuffer;
             rpbi.renderArea.offset = {0, 0};
             rpbi.renderArea.extent = {g.width, g.height};
-            rpbi.clearValueCount = 5;
+            rpbi.clearValueCount = 6;
             rpbi.pClearValues    = clears;
             vkCmdBeginRenderPass(cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -6418,6 +6441,7 @@ namespace threepp {
                                               srcLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
                                               break;
                 case HybridDebugView::Ids:    src = g.ids.image; break;
+                case HybridDebugView::Albedo: src = g.albedo.image; break;
                 default: return;
             }
             if (src == VK_NULL_HANDLE) return;
@@ -7250,6 +7274,7 @@ namespace threepp {
                 destroyImage2D(ctx->allocator(), d, g.motion);
                 destroyImage2D(ctx->allocator(), d, g.ids);
                 destroyImage2D(ctx->allocator(), d, g.uv);
+                destroyImage2D(ctx->allocator(), d, g.albedo);
                 destroyImage2D(ctx->allocator(), d, g.depth);
                 destroyImage2D(ctx->allocator(), d, g.unjitDepth);
                 g.width  = 0;
@@ -7258,7 +7283,7 @@ namespace threepp {
         }
 
         void createRasterGbufRenderPass() {
-            VkAttachmentDescription attachments[5]{};
+            VkAttachmentDescription attachments[6]{};
             // 0: world-space normal (rgba16f). FragShader writes; raygen samples.
             attachments[0].format         = VK_FORMAT_R16G16B16A16_SFLOAT;
             attachments[0].samples        = VK_SAMPLE_COUNT_1_BIT;
@@ -7275,23 +7300,26 @@ namespace threepp {
             attachments[2].format = VK_FORMAT_R16G16B16A16_UINT;
             // 3: material UV (rgba16f, only rg used).
             attachments[3] = attachments[0];
-            // 4: depth (d32_sfloat).
-            attachments[4]              = attachments[0];
-            attachments[4].format       = VK_FORMAT_D32_SFLOAT;
-            attachments[4].finalLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            // 4: albedo + metalness (rgba8 unorm) — raster-first deferred input.
+            attachments[4]        = attachments[0];
+            attachments[4].format = VK_FORMAT_R8G8B8A8_UNORM;
+            // 5: depth (d32_sfloat).
+            attachments[5]              = attachments[0];
+            attachments[5].format       = VK_FORMAT_D32_SFLOAT;
+            attachments[5].finalLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
-            VkAttachmentReference colorRefs[4]{};
-            for (uint32_t i = 0; i < 4; ++i) {
+            VkAttachmentReference colorRefs[5]{};
+            for (uint32_t i = 0; i < 5; ++i) {
                 colorRefs[i].attachment = i;
                 colorRefs[i].layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             }
             VkAttachmentReference depthRef{};
-            depthRef.attachment = 4;
+            depthRef.attachment = 5;
             depthRef.layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
             VkSubpassDescription subpass{};
             subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
-            subpass.colorAttachmentCount    = 4;
+            subpass.colorAttachmentCount    = 5;
             subpass.pColorAttachments       = colorRefs;
             subpass.pDepthStencilAttachment = &depthRef;
 
@@ -7313,14 +7341,17 @@ namespace threepp {
             deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
             deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                                     VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-            deps[1].dstStageMask  = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
+            // Consumed by raygen (ReferencePT) AND the deferred shade compute
+            // pass (RasterFirst) — make the attachments visible to both stages.
+            deps[1].dstStageMask  = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR |
+                                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
             deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                     VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
             deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
             VkRenderPassCreateInfo rpci{};
             rpci.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-            rpci.attachmentCount = 5;
+            rpci.attachmentCount = 6;
             rpci.pAttachments    = attachments;
             rpci.subpassCount    = 1;
             rpci.pSubpasses      = &subpass;
@@ -7357,6 +7388,9 @@ namespace threepp {
                 g.uv     = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                    colorUsage, VK_IMAGE_ASPECT_COLOR_BIT,
                                                    N("uv"));
+                g.albedo = createAttachmentImage2D(w, h, VK_FORMAT_R8G8B8A8_UNORM,
+                                                   colorUsage, VK_IMAGE_ASPECT_COLOR_BIT,
+                                                   N("albedo"));
                 g.depth  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
                                                    depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
                                                    N("depth"));
@@ -7374,12 +7408,12 @@ namespace threepp {
                                                        depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
                                                        N("unjitDepth"));
 
-                VkImageView views[5] = {g.normal.view, g.motion.view, g.ids.view,
-                                        g.uv.view, g.depth.view};
+                VkImageView views[6] = {g.normal.view, g.motion.view, g.ids.view,
+                                        g.uv.view, g.albedo.view, g.depth.view};
                 VkFramebufferCreateInfo fci{};
                 fci.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
                 fci.renderPass      = rasterGbufRenderPass;
-                fci.attachmentCount = 5;
+                fci.attachmentCount = 6;
                 fci.pAttachments    = views;
                 fci.width           = w;
                 fci.height          = h;
@@ -7572,7 +7606,7 @@ namespace threepp {
             ds.depthWriteEnable = VK_TRUE;
             ds.depthCompareOp   = VK_COMPARE_OP_LESS;
 
-            VkPipelineColorBlendAttachmentState cbas[4]{};
+            VkPipelineColorBlendAttachmentState cbas[5]{};
             for (auto& a : cbas) {
                 a.blendEnable    = VK_FALSE;
                 a.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -7580,7 +7614,7 @@ namespace threepp {
             }
             VkPipelineColorBlendStateCreateInfo cb{};
             cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-            cb.attachmentCount = 4;
+            cb.attachmentCount = 5;
             cb.pAttachments    = cbas;
 
             // Dynamic viewport + scissor + cullMode (Vulkan 1.3 core via
@@ -9308,6 +9342,42 @@ namespace threepp {
             in.gbufPerFrame     = gbufViews.data();
             in.taaInputPerFrame = taaInViews.data();
             bloom_->rewriteDescriptors(in);
+        }
+
+        // Raster-first deferred shade reads the camera + lights UBOs, the env
+        // PMREM, the raster material G-buffer (normal+rough / albedo+metal /
+        // depth / ids) and writes bloom_->sceneHdr. Call after the raster
+        // gbuffer or sceneHdr is reallocated (resize) and after the env image
+        // is rebuilt. The UBO buffers are stable; rewriting them is harmless.
+        void rewriteDeferredDescriptors() {
+            if (!deferredShade_) return;
+            std::array<VkBuffer, kFramesInFlight>    camBufs{};
+            std::array<VkBuffer, kFramesInFlight>    lightBufs{};
+            std::array<VkImageView, kFramesInFlight> normalViews{};
+            std::array<VkImageView, kFramesInFlight> depthViews{};
+            std::array<VkImageView, kFramesInFlight> idsViews{};
+            std::array<VkImageView, kFramesInFlight> albedoViews{};
+            std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                camBufs[f]       = cameraUbos[f].handle;
+                lightBufs[f]     = lightsUbos[f].handle;
+                normalViews[f]   = rasterGbufs[f].normal.view;
+                depthViews[f]    = rasterGbufs[f].depth.view;
+                idsViews[f]      = rasterGbufs[f].ids.view;
+                albedoViews[f]   = rasterGbufs[f].albedo.view;
+                sceneHdrViews[f] = bloom_->sceneHdrView(f);
+            }
+            vulkan::DeferredShade::DescriptorWriteInputs in{};
+            in.cameraUbo  = camBufs.data();
+            in.lightsUbo  = lightBufs.data();
+            in.envView    = envImage.view;
+            in.envSampler = envImage.sampler;
+            in.gbufNormal = normalViews.data();
+            in.gbufDepth  = depthViews.data();
+            in.gbufIds    = idsViews.data();
+            in.gbufAlbedo = albedoViews.data();
+            in.sceneHdr   = sceneHdrViews.data();
+            deferredShade_->rewriteDescriptors(in);
         }
 
 
@@ -11615,6 +11685,9 @@ namespace threepp {
             vkUpdateDescriptorSets(ctx->device(),
                                    static_cast<uint32_t>(writes.size()),
                                    writes.data(), 0, nullptr);
+            // The raster-first deferred pass also samples the env (its own
+            // binding 2); refresh it with the new env image / sampler.
+            rewriteDeferredDescriptors();
         }
 
         // Rebuild every resource sized to the PT render extent — the accum /
@@ -11667,6 +11740,7 @@ namespace threepp {
             // just rewrite them to the new image / view handles.
             rewriteTaaDescriptors();
             rewriteBloomDescriptors();// gbuf + TAA-input views changed
+            rewriteDeferredDescriptors();// raster gbuf + sceneHdr views changed
             // The descriptor pool was rebuilt — force the per-frame binding-1
             // target rewrite to re-run regardless of its prior cached mode.
             binding1Mode_.fill(-1);
@@ -12357,6 +12431,22 @@ namespace threepp {
             // descriptorSets index is shared by photon and primary RT pipelines.
             const uint32_t setIdx = currentFrame * imageCount_ + imageIndex;
 
+            // Extents + exposure are shared by both render modes and by the
+            // bloom/TAA tail below, so hoist them out of the mode branch.
+            const VkExtent2D ext   = ctx->swapchainExtent();
+            // Path-trace / deferred render extent — equals `ext` unless
+            // renderScale_ < 1, in which case TAA upsamples to the swapchain.
+            const VkExtent2D ptExt = renderExtent();
+            const float exposure   = toneMappingExposure_;
+            uint32_t exposureBits;
+            std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
+
+            // RenderMode::ReferencePT — the path tracer shades everything
+            // (photon caustics + raygen + à-trous denoise). RenderMode::
+            // RasterFirst replaces this entire block with one analytic
+            // deferred-shade compute pass; bloom + TAA below are shared.
+            if (renderMode_ == VulkanRenderer::RenderMode::ReferencePT) {
+
             // ── Photon emit pass ────────────────────────────────────────────────
             // Two gates: (1) sceneHasGlass_ — no transmissive material means
             // there's no chance of caustics anywhere, and the chit gather is
@@ -12378,9 +12468,7 @@ namespace threepp {
             }
             if (sceneHasGlass_ && glassVisibleThisFrame_) {
                 timingBegin(cb, TP_PhotonEmit);
-                const float exposure = toneMappingExposure_;
-                uint32_t exposureBits;
-                std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
+                // exposureBits hoisted above the mode branch.
                 const uint32_t motionFlagsPhoton =
                         (motionThisFrame_      ? 1u : 0u) |
                         (cameraMovedThisFrame_ ? 2u : 0u) |
@@ -12441,9 +12529,7 @@ namespace threepp {
             //                          occluded; only set when bit 4 is too),
             // [5] emissiveCount, [6] emissiveTotalPower (float bits).
             // Per-instance moved bits live in the binding 21 SSBO.
-            const float exposure = toneMappingExposure_;
-            uint32_t exposureBits;
-            std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
+            // (exposure / exposureBits hoisted above the mode branch.)
             const uint32_t motionFlags =
                     (motionThisFrame_           ? 1u   : 0u) |
                     (cameraMovedThisFrame_      ? 2u   : 0u) |
@@ -12488,12 +12574,7 @@ namespace threepp {
                                        VK_SHADER_STAGE_MISS_BIT_KHR,
                                0, sizeof(pc), pc);
 
-            const VkExtent2D ext = ctx->swapchainExtent();
-            // Path-trace render extent — equals `ext` unless renderScale_ < 1.
-            // raygen + denoise dispatch over it. When it is smaller than the
-            // swapchain, TAA brings the result up to full resolution as a
-            // temporal upsampler (it resolves straight to the swapchain).
-            const VkExtent2D ptExt   = renderExtent();
+            // (ext / ptExt hoisted above the mode branch.)
             timingBegin(cb, TP_PathTrace);
             ctx->rt().cmdTraceRays(cb, &rtv.rgenRegion, &rtv.missRegion, &rtv.hitRegion,
                                    &callRegion, ptExt.width, ptExt.height, 1);
@@ -12513,6 +12594,21 @@ namespace threepp {
                                       envIsBgColor);
             timingEnd(cb, TP_Denoise);
             // ── End denoise ─────────────────────────────────────────────────────
+
+            } else {
+                // ── RenderMode::RasterFirst — analytic deferred base ───────────
+                // Shade the raster material G-buffer (direct analytic lights +
+                // split-sum specular IBL + approximate diffuse IBL) straight
+                // into bloom_->sceneHdr. No path tracing, no denoise — the base
+                // is noise-free. The raster G-buffer pass already ran and its
+                // render-pass dependency makes it visible to COMPUTE; bloom's
+                // leading barrier makes this write visible to the composite.
+                timingBegin(cb, TP_PathTrace);
+                deferredShade_->recordDispatch(cb, currentFrame,
+                                               ptExt.width, ptExt.height,
+                                               envImage.mipLevels);
+                timingEnd(cb, TP_PathTrace);
+            }
 
             // ── Bloom + tone-map/sRGB composite (HDR post stack) ───────────────
             // denoise.comp (resolve) wrote linear HDR into bloom_->sceneHdr
@@ -14182,6 +14278,17 @@ namespace threepp {
         return static_cast<int>(pimpl_->maxBounces_);
     }
 
+    void VulkanRenderer::setRenderMode(RenderMode mode) {
+        // No frame-graph branch yet: RasterFirst falls back to ReferencePT
+        // until the deferred base + accent passes land (Phase 2+). Storing the
+        // preference now lets callers opt in and lets the getter read it back.
+        pimpl_->renderMode_ = mode;
+    }
+
+    VulkanRenderer::RenderMode VulkanRenderer::renderMode() const {
+        return pimpl_->renderMode_;
+    }
+
     void VulkanRenderer::resetAccumulation() {
         pimpl_->resetAccumulation();
     }
@@ -14280,6 +14387,7 @@ namespace threepp {
             case 1:  pimpl_->hybridDebugView_ = V::Normal; break;
             case 2:  pimpl_->hybridDebugView_ = V::Motion; break;
             case 3:  pimpl_->hybridDebugView_ = V::Ids;    break;
+            case 4:  pimpl_->hybridDebugView_ = V::Albedo; break;
             default: pimpl_->hybridDebugView_ = V::Off;    break;
         }
     }

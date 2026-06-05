@@ -207,6 +207,13 @@ int main(int argc, char** argv) {
         if (loadedModel && loadedModel->isLoading()) ImGui::Text("Loading...");
         ImGui::Text("Left/Right arrows to browse");
 
+        // Raster G-buffer debug views. "Albedo" exercises the new raster-first
+        // material attachment (linear base colour in rgb, metalness in alpha).
+        static int debugView = 0;
+        const char* dbgItems[] = {"Off (PT)", "Normal", "Motion", "InstanceID", "Albedo"};
+        if (ImGui::Combo("Debug view", &debugView, dbgItems, IM_ARRAYSIZE(dbgItems)))
+            renderer.setHybridDebugView(debugView);
+
         if (ImGui::CollapsingHeader("Models")) {
             for (int i = 0; i < static_cast<int>(models.size()); i++) {
                 const bool selected = (i == currentModel);

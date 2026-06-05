@@ -283,12 +283,35 @@ namespace threepp {
         // Mirrors WgpuPathTracer::resetAccumulation.
         void resetAccumulation();
 
-        // The renderer always runs in hybrid raster + path-tracer mode
-        // (UE/Omniverse-style): a deterministic raster G-buffer prepass
-        // (depth, normal, motion vectors, per-pixel IDs) supplies primary
-        // visibility and the path tracer starts at bounce 1. This eliminates
-        // moving-object shake from PT primary jitter; AA happens via TAA on
-        // the raster side.
+        // Renderer shading strategy. Both modes share the raster G-buffer
+        // prepass (depth, normal, motion vectors, per-pixel IDs) and the whole
+        // post chain (denoise / bloom / TAA); they diverge only in how the
+        // surface is shaded.
+        //
+        //   ReferencePT — the path tracer shades everything (the existing
+        //                 infra): the raster prepass supplies primary
+        //                 visibility and raygen path-traces all direct +
+        //                 indirect light. Ground-truth quality, but carries the
+        //                 full PT noise and cost. Kept as the reference / high-
+        //                 fidelity option.
+        //
+        //   RasterFirst — raster shades a clean, analytic, noise-free base
+        //                 (direct analytic lights + IBL) and the path tracer
+        //                 contributes only additive accents (reflections, GI,
+        //                 caustics) on top. The intended default once built
+        //                 out: most of the look of PT without the noise or the
+        //                 per-pixel ray cost.
+        //
+        // NOTE: RasterFirst is being landed in stages. Until the deferred
+        // shading path exists it falls back to ReferencePT behaviour, so the
+        // two modes currently render identically. Default is ReferencePT and
+        // flips to RasterFirst once the base + accent passes are in.
+        enum class RenderMode {
+            RasterFirst,
+            ReferencePT,
+        };
+        void setRenderMode(RenderMode mode);
+        [[nodiscard]] RenderMode renderMode() const;
 
         void setPerSppJitterHybrid(bool enabled);
         [[nodiscard]] bool perSppJitterHybrid() const;
@@ -357,6 +380,7 @@ namespace threepp {
         //   1 = world-space normal
         //   2 = motion vector (NDC delta in red/green)
         //   3 = per-pixel instanceCustomIndex (raw uint16)
+        //   4 = albedo (linear base colour in rgb; metalness in alpha)
         void setHybridDebugView(int view);
         [[nodiscard]] int hybridDebugView() const;
 
