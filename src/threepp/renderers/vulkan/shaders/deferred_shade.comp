@@ -421,78 +421,111 @@ vec3 hitTex(int texIndex, mat3 uvXform, vec2 uv, vec3 fallback) {
     return fallback * textureLod(albedoMaps[i], (uvXform * vec3(uv, 1.0)).xy, 0.0).rgb;
 }
 
-// GGX NDF importance-sampled reflection direction. Perturbs the mirror reflect
-// by the roughness lobe (tight at r→0, wide at high r) so ray-traced reflections
-// blur glossily instead of staying mirror-sharp. alpha = roughness². Plain NDF
-// (not VNDF) sampling — cheap and fine across the moderate roughness range we
-// trace. The caller frame-jitters the seed so TAA averages successive samples
-// into a clean glossy lobe on static surfaces.
-vec3 sampleGGXReflection(vec3 V, vec3 N, float roughness, inout uint seed) {
+// GGX NDF importance-sampled microfacet half-vector around N (alpha=roughness²).
+// Tight cone at r→0, wide at high r. Plain NDF (not VNDF) sampling — cheap and
+// fine across the moderate roughness range we use. The caller frame-jitters the
+// seed so TAA averages successive samples into a clean lobe on static surfaces.
+vec3 ggxHalfVector(vec3 N, float roughness, inout uint seed) {
     const float a    = roughness * roughness;
     const float u1   = rnd(seed);
     const float u2   = rnd(seed);
     const float phi  = TWO_PI * u1;
     const float cosT = sqrt((1.0 - u2) / (1.0 + (a * a - 1.0) * u2));
     const float sinT = sqrt(max(0.0, 1.0 - cosT * cosT));
-    const vec3  Ht   = vec3(sinT * cos(phi), sinT * sin(phi), cosT);// half-vec, tangent space
+    const vec3  Ht   = vec3(sinT * cos(phi), sinT * sin(phi), cosT);// tangent space
     const vec3  up   = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
     const vec3  T    = normalize(cross(up, N));
     const vec3  B    = cross(N, T);
-    const vec3  H    = normalize(T * Ht.x + B * Ht.y + N * Ht.z);
-    return reflect(-V, H);
+    return normalize(T * Ht.x + B * Ht.y + N * Ht.z);
+}
+// Perturbed reflection direction (mirror reflect about a GGX-sampled half-vec) —
+// blurs glossy reflections instead of staying mirror-sharp.
+vec3 sampleGGXReflection(vec3 V, vec3 N, float roughness, inout uint seed) {
+    return reflect(-V, ggxHalfVector(N, roughness, seed));
 }
 
-// Trace one ray (reflection or water-reflect) and return the incoming radiance:
-// the fully-shaded scene hit (lit + shadowed + its own env specular), or the
-// environment on a miss — sampled at `missLod` so a glossy reflection's missed
-// rays read the pre-blurred env mip (0 = sharp, roughness*maxLod = matched blur)
-// → low noise. Factored out of main()'s reflection block so the water branch can
-// reuse it for the reflected sky. Compute has no derivatives → mip 0 on hit textures.
+// MULTI-BOUNCE specular reflection (or refraction-continuation). Follows the ray
+// through up to REFL_MAX_BOUNCES reflective hits: at each hit it adds the
+// surface's diffuse + direct (shadowed) shading weighted by the running specular
+// throughput, then — if the surface is smooth/metallic enough — CONTINUES the
+// reflection one bounce deeper. Rough surfaces, the final bounce, or negligible
+// throughput cap off with prefiltered-env specular. A miss terminates into the
+// environment at `missLod` (then the running roughness mip on deeper bounces).
+//
+// This is what gives reflections DEPTH — a reflected mirror/metal now shows the
+// real scene (and its further reflections), not just the environment as the old
+// single-bounce version did. Non-recursive: GLSL has no recursion, so it's an
+// explicit loop. Most rays hit a rough surface and stop after one bounce, so the
+// extra cost is paid only on actual mirror-on-mirror chains. Same signature as
+// before, so every caller (primary glossy reflection, water + glass reflect,
+// glass behind-view) gets the depth. Compute has no derivatives → mip 0 on tex.
 vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed) {
-    rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu, origin, 1e-3, dir, 1e30);
-    while (rayQueryProceedEXT(rq)) {}
-    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT)
-        return sampleEnvLod(dir, missLod);// miss → environment (pre-blurred for glossy)
+    const int REFL_MAX_BOUNCES = 3;
+    vec3  radiance   = vec3(0.0);
+    vec3  tput       = vec3(1.0);
+    vec3  o          = origin;
+    vec3  d          = dir;
+    float curMissLod = missLod;
 
-    const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-    const MaterialDesc hm     = mats[hitId];
-    const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
-    const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
-    const float  tHit   = rayQueryGetIntersectionTEXT(rq, true);
-    const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
-    vec3 hitN; vec2 hitUv;
-    fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
+    for (int b = 0; b < REFL_MAX_BOUNCES; ++b) {
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu, o, 1e-3, d, 1e30);
+        while (rayQueryProceedEXT(rq)) {}
+        if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+            radiance += tput * sampleEnvLod(d, curMissLod);// escaped → environment
+            break;
+        }
+        const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        const MaterialDesc hm     = mats[hitId];
+        const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+        const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+        const float  tHit   = rayQueryGetIntersectionTEXT(rq, true);
+        const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
+        vec3 hitN; vec2 hitUv;
+        fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
 
-    const vec3 hAlbedo = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
-    if (hm.roughness < 0.0) return hAlbedo;// unlit hit surface
+        const vec3 hAlbedo = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
+        if (hm.roughness < 0.0) { radiance += tput * hAlbedo; break; }// unlit hit
 
-    vec3 hitV = -dir;// view dir at the hit = back along the ray
-    if (dot(hitN, hitV) < 0.0) hitN = -hitN;
-    float hRough = hm.roughness;
-    float hMetal = hm.metalness;
-    if (hm.roughnessTexIndex >= 0)
-        hRough *= textureLod(albedoMaps[clamp(hm.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1)],
-                             (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).g;
-    if (hm.metalnessTexIndex >= 0)
-        hMetal *= textureLod(albedoMaps[clamp(hm.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1)],
-                             (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).b;
-    hRough = clamp(hRough, 0.04, 1.0);
-    hMetal = clamp(hMetal, 0.0, 1.0);
-    const vec3 hEmissive = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hitUv,
-                                  hm.emissive * hm.emissiveIntensity);
-    const vec3 hitP = origin + dir * tHit;
-    // Crude (unoccluded) env IBL for the hit's diffuse indirect — no per-hit
-    // gather/recursion. Direct lights are shadowed inside shadeDiffuseDirect.
-    const vec3 hitDiffInd = sampleEnvLod(hitN, maxLod) + lights.ambient;
-    vec3 c = shadeDiffuseDirect(hitP, hitN, hitV, hAlbedo, hRough, hMetal,
-                                hEmissive, doShadows, hitDiffInd, seed);
-    const float hitNdotV = max(dot(hitN, hitV), 1e-4);
-    const vec3  hitF0 = mix(vec3(0.04), hAlbedo, hMetal);
-    const vec3  hitR  = reflect(-hitV, hitN);
-    const vec2  hitAB = envBRDFApprox(hitNdotV, hRough);
-    c += sampleEnvLod(hitR, hRough * maxLod) * (hitF0 * hitAB.x + hitAB.y);
-    return c;
+        vec3 hitV = -d;// view dir at the hit = back along the ray
+        if (dot(hitN, hitV) < 0.0) hitN = -hitN;
+        float hRough = hm.roughness;
+        float hMetal = hm.metalness;
+        if (hm.roughnessTexIndex >= 0)
+            hRough *= textureLod(albedoMaps[clamp(hm.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1)],
+                                 (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).g;
+        if (hm.metalnessTexIndex >= 0)
+            hMetal *= textureLod(albedoMaps[clamp(hm.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1)],
+                                 (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).b;
+        hRough = clamp(hRough, 0.04, 1.0);
+        hMetal = clamp(hMetal, 0.0, 1.0);
+        const vec3 hEmissive = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hitUv,
+                                      hm.emissive * hm.emissiveIntensity);
+        const vec3 hitP = o + d * tHit;
+        const vec3 hitDiffInd = sampleEnvLod(hitN, maxLod) + lights.ambient;
+        radiance += tput * shadeDiffuseDirect(hitP, hitN, hitV, hAlbedo, hRough, hMetal,
+                                              hEmissive, doShadows, hitDiffInd, seed);
+
+        const float hitNdotV = max(dot(hitN, hitV), 1e-4);
+        const vec3  hitF0 = mix(vec3(0.04), hAlbedo, hMetal);
+        const vec2  hitAB = envBRDFApprox(hitNdotV, hRough);
+        const vec3  specW = hitF0 * hitAB.x + hitAB.y;// specular throughput for the next bounce
+        const vec3  hitR  = reflect(-hitV, hitN);
+        // Stop bouncing on rough surfaces, the last bounce, or when the specular
+        // throughput is negligible — cap off with prefiltered-env specular.
+        if (b == REFL_MAX_BOUNCES - 1 || hRough > 0.35 ||
+            max(max(specW.r, specW.g), specW.b) < 0.02) {
+            radiance += tput * specW * sampleEnvLod(hitR, hRough * maxLod);
+            break;
+        }
+        // Continue the reflection one bounce deeper (GGX-jittered when glossy).
+        tput      *= specW;
+        d          = (hRough < 0.08) ? hitR : sampleGGXReflection(hitV, hitN, hRough, seed);
+        if (dot(d, hitN) <= 0.0) d = hitR;
+        o          = hitP + hitN * SHADOW_EPS;
+        curMissLod = hRough * maxLod;
+    }
+    return radiance;
 }
 
 // Thin-shell water (RenderMode::RasterFirst). Replicates closest_hit's
@@ -561,6 +594,119 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     return col;
 }
 
+// Trace a ray and return the HIT GEOMETRY (point/normal/distance) instead of a
+// shaded colour — used by the glass branch to find the refraction exit face and
+// bend the ray a second time. miss=true if the ray escapes.
+void traceHit(vec3 origin, vec3 dir, out vec3 hitP, out vec3 hitN, out float dist, out bool miss) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu, origin, 1e-3, dir, 1e30);
+    while (rayQueryProceedEXT(rq)) {}
+    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+        miss = true; hitP = origin; hitN = vec3(0.0, 1.0, 0.0); dist = 0.0; return;
+    }
+    miss = false;
+    const int    hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+    const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+    const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+    dist = rayQueryGetIntersectionTEXT(rq, true);
+    const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
+    vec2 uvTmp;
+    fetchHit(hitId, primId, bary, w2o, hitN, uvTmp);
+    hitP = origin + dir * dist;
+}
+
+// Refractive glass (CLOSED transmissive mesh — sphere / bottle / goblet, NOT the
+// thin-shell water handled above). Deterministic 2-interface refraction so it's
+// noise-free for smooth glass:
+//   Fresnel-mix( transmit , reflect )
+// • reflect  = ray-traced sky + scene (mirror; the surface is near-smooth),
+// • transmit = enter the front face → trace through to the back face → refract
+//   out → continue to the SCENE BEHIND, all distortion-correct, then tint by the
+//   glass colour + Beer-Lambert over the in-glass path length. This mirrors
+//   closest_hit's closed-glass intent (ior>1.01 → tint = albedo) but in 2 bounces
+//   rather than full path continuation, so deep multi-bounce caustics inside
+//   concave glass are approximated (fine for spheres; goblet stems lose a little).
+// Tunable middleground "finish" for glass: a gentle frost FLOOR so glass is
+// never razor-sharp ("too perfect"), and the sample count that CONVERGES it so
+// it's a clean soft — not the milky 1-sample grain. Raise kGlassFrost for
+// softer/dreamier glass, drop to 0 for a perfect lens; raise GSAMP if the soft
+// shows residual grain on moving glass (costs proportionally).
+const float kGlassFrost = 0.12;
+const int   kGlassSamples = 2;
+
+vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
+                bool doShadows, float maxLod, inout uint seed) {
+    const float ior     = max(pm.ior, 1.0);
+    const float r0      = pow((1.0 - ior) / (1.0 + ior), 2.0);
+    // Microfacet roughness: the material's, floored to kGlassFrost. The slight
+    // softening is the "less perfect" the user wanted AND it lets the multi-bounce
+    // surface REFLECTIONS read through the refraction (a perfectly clear lens
+    // hides them — "no recursive reflections"). Averaged over kGlassSamples so it
+    // converges clean. The reflection itself is the multi-bounce traceRadiance,
+    // so it's genuinely recursive (reflected metal/glossy reflects on too).
+    const float gr      = max(clamp(pm.roughness, 0.04, 1.0), kGlassFrost);
+    const float missLod = gr * maxLod;// reflections read the matching pre-blurred env mip
+
+    vec3 sum = vec3(0.0);
+    for (int s = 0; s < kGlassSamples; ++s) {
+        vec3 Ns = ggxHalfVector(N, gr, seed);
+        if (dot(Ns, V) <= 0.0) Ns = N;// reject back-facing microfacets
+        const float NdotV = max(dot(Ns, V), 1e-4);
+        const float F     = r0 + (1.0 - r0) * pow(1.0 - NdotV, 5.0);
+
+        // Reflection (sky + scene) — multi-bounce / recursive.
+        const vec3 R = reflect(-V, Ns);
+        const vec3 reflectColor = traceRadiance(P + N * SHADOW_EPS, R, doShadows, maxLod, missLod, seed);
+
+        vec3 transmitColor;
+        if (pm.thinWalled != 0) {
+            // THIN-SHELL glass (glTF default): a single gentle refraction to the
+            // scene behind (matches closest_hit's thin-shell BSDF). A 2-interface
+            // "solid" treatment over-bends a hollow shell → rays escape to the
+            // sky → cloudy wash. Beer-Lambert uses the thin-shell thickness proxy.
+            vec3 dT = refract(-V, Ns, 1.0 / ior);
+            if (dot(dT, dT) < 1e-6) {
+                transmitColor = reflectColor;// TIR
+            } else {
+                const vec3 behind = traceRadiance(P - N * SHADOW_EPS, normalize(dT), doShadows, maxLod, missLod, seed);
+                vec3 tint = albedo;
+                if (pm.attenuationDistance > 0.0 && pm.thickness > 0.0)
+                    tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(pm.thickness / pm.attenuationDistance));
+                transmitColor = behind * tint;
+            }
+        } else {
+            // SOLID glass (closed mesh): full 2-interface refraction → the
+            // inverted, magnified background a real glass ball shows. Beer-Lambert
+            // over the ACTUAL in-glass distance → deeper tint through the centre.
+            vec3 dIn = refract(-V, Ns, 1.0 / ior);
+            if (dot(dIn, dIn) < 1e-6) {
+                transmitColor = reflectColor;// TIR at the front face
+            } else {
+                dIn = normalize(dIn);
+                vec3 exitP, exitN; float inDist; bool exitMiss;
+                traceHit(P - N * SHADOW_EPS, dIn, exitP, exitN, inDist, exitMiss);
+                vec3 dOut;
+                if (exitMiss) {
+                    dOut = dIn; inDist = 0.0;// open/odd geometry — straight through
+                } else {
+                    vec3 nb = exitN;
+                    if (dot(nb, dIn) < 0.0) nb = -nb;           // orient outward
+                    vec3 o = refract(dIn, -nb, ior);            // glass→air
+                    dOut = (dot(o, o) < 1e-6) ? reflect(dIn, nb)// TIR → internal reflect
+                                              : normalize(o);
+                }
+                const vec3 behind = traceRadiance(exitP + dOut * SHADOW_EPS, dOut, doShadows, maxLod, missLod, seed);
+                vec3 tint = albedo;
+                if (pm.attenuationDistance > 0.0)
+                    tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(inDist / pm.attenuationDistance));
+                transmitColor = behind * tint;
+            }
+        }
+        sum += mix(transmitColor, reflectColor, F);
+    }
+    return sum / float(kGlassSamples);
+}
+
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
@@ -626,9 +772,14 @@ void main() {
         N = normalize(N + 0.5 * vec3(-grad.x, 0.0, -grad.y));
     }
 
-    // ── Thin-shell water (ocean / glass sheet): analytic Fresnel reflect ⊕
-    // refract, noise-free — replaces the generic opaque PBR shade entirely.
-    if (pm.thinWalled != 0 && pm.transmission > 0.0) {
+    // ── OCEAN water surface only: analytic deep-water shade (Fresnel reflect ⊕
+    // absorption-tinted body + foam), replacing the opaque shade entirely. Gated
+    // on the per-mesh FOAM ATTRIBUTE (foamAddress) — i.e. an actual FFT-displaced
+    // DisplacedMesh — NOT just `thinWalled`. glTF glass is almost always
+    // thin-walled too (no KHR_volume → thinWalled), and routing it here painted
+    // it milky-teal ocean water instead of clear refraction. Thin-walled glass
+    // now falls through to the refractive glass branch below like closed glass.
+    if (pm.thinWalled != 0 && pm.transmission > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
         const vec3 wcol = shadeWater(worldPos, N, V, pm, int(id - 1u),
                                      shadowsOn, maxLod, pc.frame, seed);
         imageStore(outImage, px, vec4(wcol, 1.0));
@@ -691,5 +842,20 @@ void main() {
     }
 
     lit += specSrc * (F0 * ab.x + ab.y);
+
+    // ── Refractive glass (any transmissive surface that ISN'T the ocean) ──────
+    // Ocean water returned far above. Everything else with transmission — closed
+    // glass (spheres/bottles) AND thin-walled glass (glTF glass with no
+    // KHR_volume, the common case) — BLENDS a Fresnel reflect+refract glass look
+    // over the opaque shade, weighted by `transmission` (matches the path
+    // tracer's reflect/refract-vs-opaque split in expectation: transmission=1 →
+    // pure glass; 0.8 → 80% glass + 20% the opaque PBR above). shadeGlass does
+    // the 2-interface refraction either way (a thin shell just has a short
+    // in-glass path → minimal tint → near-clear).
+    if (pm.transmission > 0.0) {
+        const vec3 glassCol = shadeGlass(worldPos, N, V, pm, albedo, shadowsOn, maxLod, seed);
+        lit = mix(lit, glassCol, clamp(pm.transmission, 0.0, 1.0));
+    }
+
     imageStore(outImage, px, vec4(lit, 1.0));
 }
