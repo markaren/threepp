@@ -1410,7 +1410,7 @@ namespace threepp {
         // PT-accent passes land, so this currently only stores the user's
         // preference and does not yet branch the frame graph. Default
         // ReferencePT keeps today's behaviour byte-for-byte.
-        VulkanRenderer::RenderMode renderMode_ = VulkanRenderer::RenderMode::ReferencePT;
+        VulkanRenderer::RenderMode renderMode_ = VulkanRenderer::RenderMode::RasterFirst;
 
         // Debug: gate raygen to exit immediately after step-0 primary trace
         // so pathTraceMs measures roughly the primary-trace cost. See
@@ -1487,6 +1487,10 @@ namespace threepp {
         // called when Idle apply immediately as before.
         bool pendingRenderScaleRealloc_ = false;
         bool pendingAccumulationReset_  = false;
+        // Set by setRenderMode; refreshes the deferred (RasterFirst) descriptor
+        // set at the next GPU-idle point so a runtime mode toggle doesn't leave
+        // it stale.
+        bool pendingDeferredRewrite_    = false;
 
         explicit Impl(Canvas& c) : canvas(c), size(c.size()) {
             ctx = std::make_unique<VulkanContext>(
@@ -1549,7 +1553,12 @@ namespace threepp {
             // it must exist after bloom_; its descriptors reference the camera /
             // lights UBOs, the env image, the raster gbuffer and sceneHdr — all
             // created above by this point.
-            deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
+            // The deferred base traces ray-query shadow rays, so only stand it
+            // up when the device supports VK_KHR_ray_query. Without it,
+            // deferredShade_ stays null and RasterFirst falls back to ReferencePT.
+            if (ctx->rayQuerySupported()) {
+                deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
+            }
             createDescriptorPool();
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             createOceanFineDummy_();// must run before descriptor writes (binding 32)
@@ -9410,9 +9419,16 @@ namespace threepp {
         // gbuffer or sceneHdr is reallocated (resize) and after the env image
         // is rebuilt. The UBO buffers are stable; rewriting them is harmless.
         void rewriteDeferredDescriptors() {
-            if (!deferredShade_) return;
+            // Needs a built TLAS (binding 8) + material buffer (binding 9). Both
+            // come from the scene build; before then there's nothing to bind and
+            // the deferred pass can't dispatch anyway. allocateAndUpdateDescriptors
+            // (which runs right after the TLAS build) calls this, so the first
+            // valid write lands before the first RasterFirst dispatch.
+            if (!deferredShade_ || tlas == VK_NULL_HANDLE) return;
             std::array<VkBuffer, kFramesInFlight>    camBufs{};
             std::array<VkBuffer, kFramesInFlight>    lightBufs{};
+            std::array<VkBuffer, kFramesInFlight>    matBufs{};
+            std::array<VkBuffer, kFramesInFlight>    emBufs{};
             std::array<VkImageView, kFramesInFlight> normalViews{};
             std::array<VkImageView, kFramesInFlight> depthViews{};
             std::array<VkImageView, kFramesInFlight> idsViews{};
@@ -9421,22 +9437,35 @@ namespace threepp {
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 camBufs[f]       = cameraUbos[f].handle;
                 lightBufs[f]     = lightsUbos[f].handle;
+                matBufs[f]       = materialDescsBuffers[f].handle;
+                emBufs[f]        = emissiveTriBuffers[f].handle;
                 normalViews[f]   = rasterGbufs[f].normal.view;
                 depthViews[f]    = rasterGbufs[f].depth.view;
                 idsViews[f]      = rasterGbufs[f].ids.view;
                 albedoViews[f]   = rasterGbufs[f].albedo.view;
                 sceneHdrViews[f] = bloom_->sceneHdrView(f);
             }
+            // Bindless material-texture array for reflected-hit texturing —
+            // same source the RT set's binding 8 uses.
+            std::array<VkDescriptorImageInfo, kMaxMaterialTextures> matTexInfos{};
+            fillMaterialTextureInfos(matTexInfos);
+
             vulkan::DeferredShade::DescriptorWriteInputs in{};
-            in.cameraUbo  = camBufs.data();
-            in.lightsUbo  = lightBufs.data();
-            in.envView    = envImage.view;
-            in.envSampler = envImage.sampler;
-            in.gbufNormal = normalViews.data();
-            in.gbufDepth  = depthViews.data();
-            in.gbufIds    = idsViews.data();
-            in.gbufAlbedo = albedoViews.data();
-            in.sceneHdr   = sceneHdrViews.data();
+            in.cameraUbo        = camBufs.data();
+            in.lightsUbo        = lightBufs.data();
+            in.envView          = envImage.view;
+            in.envSampler       = envImage.sampler;
+            in.gbufNormal       = normalViews.data();
+            in.gbufDepth        = depthViews.data();
+            in.gbufIds          = idsViews.data();
+            in.gbufAlbedo       = albedoViews.data();
+            in.sceneHdr         = sceneHdrViews.data();
+            in.tlas             = tlas;
+            in.materialBuf      = matBufs.data();
+            in.geomDescBuf      = geometryDescsBuffer.handle;
+            in.materialTex      = matTexInfos.data();
+            in.materialTexCount = kMaxMaterialTextures;
+            in.emissiveTriBuf   = emBufs.data();
             deferredShade_->rewriteDescriptors(in);
         }
 
@@ -11554,6 +11583,11 @@ namespace threepp {
             // above) — record that so renderFrame's per-frame rewrite block
             // can detect a hybrid-on transition without firing on every frame.
             binding1Mode_.fill(0);
+
+            // The TLAS + material buffer the raster-first deferred pass binds
+            // are now valid (this runs right after the scene/TLAS build), so
+            // refresh its descriptor set. No-op until ray query is supported.
+            rewriteDeferredDescriptors();
         }
 
         // Populate `infos` with the current bindless material-texture array,
@@ -11710,6 +11744,20 @@ namespace threepp {
             vkUpdateDescriptorSets(ctx->device(),
                                    static_cast<uint32_t>(writes.size()),
                                    writes.data(), 0, nullptr);
+
+            // RasterFirst: the deferred descriptor set holds its OWN copies of
+            // the scene-dependent handles — mats (binding 9), geom descs (10),
+            // the bindless material-texture array (11), the emissive-tri buffer
+            // (12) and the TLAS (8). A rebuild above freed and recreated those
+            // buffers, so the deferred set now dangles: its buffer-device-
+            // address dereferences (fetchHit on geoms[], emissiveNEE on
+            // emissiveTris[]) would read freed memory → GPU page fault → device
+            // lost → crash at the next refitTlas one-shot wait (and a black
+            // frame in between). rewriteSceneDescriptors only refreshes the RT
+            // set, so re-point the deferred set here too. We're already past
+            // vkDeviceWaitIdle (see ensureSceneBuilt's rebuild path), so the
+            // sets are not in flight. No-op when ray_query is unavailable.
+            rewriteDeferredDescriptors();
         }
 
         // Phase 7: rewrite only binding 6 across every descriptor set (called
@@ -12505,7 +12553,9 @@ namespace threepp {
             // (photon caustics + raygen + à-trous denoise). RenderMode::
             // RasterFirst replaces this entire block with one analytic
             // deferred-shade compute pass; bloom + TAA below are shared.
-            if (renderMode_ == VulkanRenderer::RenderMode::ReferencePT) {
+            // RasterFirst also falls back here when ray query is unsupported
+            // (deferredShade_ == null), so it never renders a black frame.
+            if (renderMode_ == VulkanRenderer::RenderMode::ReferencePT || !deferredShade_) {
 
             // ── Photon emit pass ────────────────────────────────────────────────
             // Two gates: (1) sceneHasGlass_ — no transmissive material means
@@ -12663,10 +12713,32 @@ namespace threepp {
                 // is noise-free. The raster G-buffer pass already ran and its
                 // render-pass dependency makes it visible to COMPUTE; bloom's
                 // leading barrier makes this write visible to the composite.
+                // Per-frame BLAS refits (skinned / deformable meshes) are fenced
+                // only to the RT pipeline stage by the build barriers above. The
+                // deferred pass traverses the same acceleration structures via
+                // ray query from COMPUTE, so add an AS-build → compute fence here.
+                // No-op for static scenes (no pending AS write this frame).
+                {
+                    VkMemoryBarrier2 asbar{};
+                    asbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    asbar.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+                    asbar.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                    asbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    asbar.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+                    VkDependencyInfo asdep{};
+                    asdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    asdep.memoryBarrierCount = 1;
+                    asdep.pMemoryBarriers = &asbar;
+                    vkCmdPipelineBarrier2(cb, &asdep);
+                }
                 timingBegin(cb, TP_PathTrace);
                 deferredShade_->recordDispatch(cb, currentFrame,
                                                ptExt.width, ptExt.height,
-                                               envImage.mipLevels);
+                                               envImage.mipLevels, /*shadows=*/true,
+                                               /*ao=*/true, sampleIndex,
+                                               emissiveTriCountThisFrame_,
+                                               emissiveTotalPowerThisFrame_,
+                                               fireflyClamp_);
                 timingEnd(cb, TP_PathTrace);
             }
 
@@ -13455,15 +13527,22 @@ namespace threepp {
             // pool / clear images — both unsafe with an open cmd buffer in the
             // prior frame. We're past the fence wait now so the GPU is idle for
             // *this* slot at minimum; vkDeviceWaitIdle below drains the rest.
-            if (pendingRenderScaleRealloc_ || pendingAccumulationReset_) {
+            if (pendingRenderScaleRealloc_ || pendingAccumulationReset_ || pendingDeferredRewrite_) {
                 vkDeviceWaitIdle(d);
                 if (pendingRenderScaleRealloc_) {
-                    reallocateRenderExtentResources();
+                    reallocateRenderExtentResources();// also rewrites deferred descriptors
                     pendingRenderScaleRealloc_ = false;
+                    pendingDeferredRewrite_    = false;
                 }
                 if (pendingAccumulationReset_) {
                     clearGbufImages();
                     pendingAccumulationReset_ = false;
+                }
+                if (pendingDeferredRewrite_) {
+                    // Runtime render-mode toggle: re-point the deferred set at the
+                    // current per-frame resources (GPU idle from the wait above).
+                    rewriteDeferredDescriptors();
+                    pendingDeferredRewrite_ = false;
                 }
             }
 
@@ -13545,6 +13624,12 @@ namespace threepp {
             // if the buffer grew.
             if (buildAndUploadEmissiveTris(currentFrame, lastVisibleEntries_)) {
                 rewriteEmissiveTriDescriptors(currentFrame);
+                // Keep the raster-first deferred pass's emissive binding fresh
+                // (same per-frame buffer grows for it too).
+                if (deferredShade_) {
+                    deferredShade_->rewriteEmissive(currentFrame,
+                                                    emissiveTriBuffers[currentFrame].handle);
+                }
             }
             if (refreshEnvTextureFromScene(scene)) {
                 rewriteEnvDescriptors();
@@ -14337,10 +14422,14 @@ namespace threepp {
     }
 
     void VulkanRenderer::setRenderMode(RenderMode mode) {
-        // No frame-graph branch yet: RasterFirst falls back to ReferencePT
-        // until the deferred base + accent passes land (Phase 2+). Storing the
-        // preference now lets callers opt in and lets the getter read it back.
+        if (pimpl_->renderMode_ == mode) return;
         pimpl_->renderMode_ = mode;
+        // The deferred (RasterFirst) descriptor set is only rewritten on scene
+        // build / resize / env change — never on a mode toggle. Switching modes
+        // at runtime can otherwise leave it stale (manifested as a black scene
+        // until a window resize forced a rewrite). Flag a refresh, processed at
+        // the next frame's GPU-idle point (beginFrameForPT).
+        pimpl_->pendingDeferredRewrite_ = true;
     }
 
     VulkanRenderer::RenderMode VulkanRenderer::renderMode() const {

@@ -144,18 +144,27 @@ void main() {
     // glTF packs roughness in .g and metalness in .b; threepp's roughnessMap /
     // metalnessMap usually point at the same packed texture. Multiplicative —
     // matches three.js and chit.
+    //
+    // MeshBasicMaterial (unlit) is flagged with material roughness < 0 (see
+    // VulkanRenderer::materialFromMesh). Preserve that sentinel through the
+    // G-buffer — don't sample the rough/metal maps or clamp — so the deferred
+    // pass can emit the base colour unlit, matching closest_hit.rchit's
+    // `roughness < 0` gate. Clamping here would turn the unlit surface into a
+    // glossy one that reflects the environment.
     float roughness = m.roughness;
     float metalness = m.metalness;
-    if (m.roughnessTexIndex >= 0) {
-        const int i = clamp(m.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        roughness *= texture(gbufAlbedoMaps[i], uvRoughMetal).g;
+    if (roughness >= 0.0) {
+        if (m.roughnessTexIndex >= 0) {
+            const int i = clamp(m.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
+            roughness *= texture(gbufAlbedoMaps[i], uvRoughMetal).g;
+        }
+        if (m.metalnessTexIndex >= 0) {
+            const int i = clamp(m.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
+            metalness *= texture(gbufAlbedoMaps[i], uvRoughMetal).b;
+        }
+        roughness = clamp(roughness, 0.04, 1.0);
+        metalness = clamp(metalness, 0.0,  1.0);
     }
-    if (m.metalnessTexIndex >= 0) {
-        const int i = clamp(m.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
-        metalness *= texture(gbufAlbedoMaps[i], uvRoughMetal).b;
-    }
-    roughness = clamp(roughness, 0.04, 1.0);
-    metalness = clamp(metalness, 0.0,  1.0);
 
     // Remap [-1, 1] → [0, 1] so negative components are visible in the
     // BGRA8_UNORM debug blit (which clamps negatives to 0). raygen reverses

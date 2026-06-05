@@ -239,6 +239,25 @@ namespace threepp::vulkan {
             std::cerr << "[VulkanContext] SER (VK_NV_ray_tracing_invocation_reorder): "
                       << (rayTracingInvocationReorderSupported_ ? "enabled" : "fallback")
                       << "\n";
+
+            // Probe for VK_KHR_ray_query — lets compute shaders trace inline
+            // rays (rayQueryEXT). Used by the raster-first deferred shading pass
+            // for hard shadow rays. Optional: ReferencePT doesn't need it, so a
+            // device that has the RT pipeline but not ray query still runs (the
+            // renderer falls RasterFirst back to ReferencePT). All current RT
+            // hardware exposes both.
+            const auto pickedExtsRq = deviceExtensions(physicalDevice_);
+            if (hasExtension(pickedExtsRq, VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
+                VkPhysicalDeviceRayQueryFeaturesKHR rqFeat{};
+                rqFeat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+                VkPhysicalDeviceFeatures2 feat2{};
+                feat2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+                feat2.pNext = &rqFeat;
+                vkGetPhysicalDeviceFeatures2(physicalDevice_, &feat2);
+                rayQuerySupported_ = rqFeat.rayQuery == VK_TRUE;
+            }
+            std::cerr << "[VulkanContext] ray query (VK_KHR_ray_query): "
+                      << (rayQuerySupported_ ? "enabled" : "unavailable") << "\n";
         }
 
         // Find queue families.
@@ -287,6 +306,9 @@ namespace threepp::vulkan {
             if (rayTracingInvocationReorderSupported_) {
                 extensions.push_back(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
             }
+            if (rayQuerySupported_) {
+                extensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+            }
         }
 
         // Required core 1.2 / 1.3 features (BDA, dynamic rendering, sync2).
@@ -326,12 +348,22 @@ namespace threepp::vulkan {
         fReorder.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV;
         fReorder.rayTracingInvocationReorder = VK_TRUE;
 
+        // Inline ray query (rayQueryEXT in compute) for the raster-first
+        // deferred shadow pass. Chained at the tail (after f13) when supported.
+        VkPhysicalDeviceRayQueryFeaturesKHR fRQ{};
+        fRQ.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+        fRQ.rayQuery = VK_TRUE;
+
         if (rayTracingEnabled_) {
             fRT.pNext = &f12;
             fAS.pNext = &fRT;
             if (rayTracingInvocationReorderSupported_) {
                 // Splice fReorder at the head of the chain so it precedes fAS.
                 fReorder.pNext = &fAS;
+            }
+            if (rayQuerySupported_) {
+                fRQ.pNext = f13.pNext;// preserve any existing tail (currently null)
+                f13.pNext = &fRQ;
             }
         }
 

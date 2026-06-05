@@ -2,6 +2,7 @@
 
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 #include "threepp/renderers/vulkan/VulkanResources.hpp"
+#include "threepp/renderers/vulkan/shaders/vulkan_shared.h"// kMaxMaterialTextures
 
 #include "threepp/renderers/vulkan/shaders/deferred_shade.comp.spv.h"
 
@@ -42,7 +43,7 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[8]{};
+        VkDescriptorSetLayoutBinding b[13]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -57,10 +58,16 @@ namespace threepp::vulkan {
         set(5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);  // gbuf ids
         set(6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);  // gbuf albedo+metal
         set(7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);           // out sceneHdr
+        set(8, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);// TLAS (shadow + reflection rays)
+        set(9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);          // MaterialDesc[] (emissive + reflected material)
+        set(10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // GeometryDesc[] (reflection-hit normals/UVs)
+        set(11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // bindless material textures...
+        b[11].descriptorCount = kMaxMaterialTextures;       // ...fixed-size array (reflection-hit textures)
+        set(12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // EmTri[] emissive triangles (area-light NEE)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 8;
+        dlci.bindingCount = 13;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -68,7 +75,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pc.offset = 0;
-        pc.size = 16;// 4×u32 (envMipCount, width, height, flags)
+        pc.size = 32;// 8×u32 (…, emissiveCount, emissiveTotalPower, fireflyClamp)
         VkPipelineLayoutCreateInfo plci{};
         plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         plci.setLayoutCount = 1;
@@ -101,18 +108,22 @@ namespace threepp::vulkan {
     }
 
     void DeferredShade::createDescriptorPool() {
-        VkDescriptorPoolSize sizes[3]{};
+        VkDescriptorPoolSize sizes[5]{};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = framesInFlight_ * 2;// camera + lights
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * 5;// env + 4 gbuf
+        sizes[1].descriptorCount = framesInFlight_ * (5 + kMaxMaterialTextures);// env + 4 gbuf + bindless array
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[2].descriptorCount = framesInFlight_ * 1;// out
+        sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        sizes[3].descriptorCount = framesInFlight_ * 1;// TLAS
+        sizes[4].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        sizes[4].descriptorCount = framesInFlight_ * 3;// material + geometry + emissive-tri buffers
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         dpci.maxSets       = framesInFlight_;
-        dpci.poolSizeCount = 3;
+        dpci.poolSizeCount = 5;
         dpci.pPoolSizes    = sizes;
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
               "vkCreateDescriptorPool(deferred)");
@@ -161,7 +172,30 @@ namespace threepp::vulkan {
             outInfo.imageView   = in.sceneHdr[f];
             outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-            VkWriteDescriptorSet w[8]{};
+            VkDescriptorBufferInfo matInfo{};
+            matInfo.buffer = in.materialBuf[f];
+            matInfo.offset = 0;
+            matInfo.range  = VK_WHOLE_SIZE;
+
+            VkDescriptorBufferInfo geomInfo{};
+            geomInfo.buffer = in.geomDescBuf;// single buffer shared across frames
+            geomInfo.offset = 0;
+            geomInfo.range  = VK_WHOLE_SIZE;
+
+            VkDescriptorBufferInfo emInfo{};
+            emInfo.buffer = in.emissiveTriBuf[f];// per-frame (can grow → rewriteEmissive)
+            emInfo.offset = 0;
+            emInfo.range  = VK_WHOLE_SIZE;
+
+            // TLAS for the shadow rays. The handle must outlive vkUpdateDescriptorSets,
+            // so copy it locally and point the AS-write extension struct at it.
+            VkAccelerationStructureKHR tlasLocal = in.tlas;
+            VkWriteDescriptorSetAccelerationStructureKHR asInfo{};
+            asInfo.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+            asInfo.accelerationStructureCount = 1;
+            asInfo.pAccelerationStructures = &tlasLocal;
+
+            VkWriteDescriptorSet w[13]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -180,16 +214,53 @@ namespace threepp::vulkan {
             setw(5, 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &idsInfo,    nullptr);
             setw(6, 6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &albInfo,    nullptr);
             setw(7, 7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &outInfo,    nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 8, w, 0, nullptr);
+            setw(8, 8, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, nullptr, nullptr);
+            w[8].pNext = &asInfo;
+            setw(9, 9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,        nullptr, &matInfo);
+            setw(10, 10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,      nullptr, &geomInfo);
+            // Bindless material-texture array — a single array write of the
+            // whole array (descriptorCount = materialTexCount == kMaxMaterialTextures).
+            w[11].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[11].dstSet          = sets_[f];
+            w[11].dstBinding      = 11;
+            w[11].dstArrayElement = 0;
+            w[11].descriptorCount = in.materialTexCount;
+            w[11].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[11].pImageInfo      = in.materialTex;
+            setw(12, 12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,      nullptr, &emInfo);
+            vkUpdateDescriptorSets(ctx_.device(), 13, w, 0, nullptr);
         }
     }
 
+    void DeferredShade::rewriteEmissive(uint32_t frame, VkBuffer emissiveTriBuf) {
+        VkDescriptorBufferInfo info{};
+        info.buffer = emissiveTriBuf;
+        info.offset = 0;
+        info.range  = VK_WHOLE_SIZE;
+        VkWriteDescriptorSet w{};
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet = sets_[frame];
+        w.dstBinding = 12;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        w.pBufferInfo = &info;
+        vkUpdateDescriptorSets(ctx_.device(), 1, &w, 0, nullptr);
+    }
+
     void DeferredShade::recordDispatch(VkCommandBuffer cb, uint32_t frame,
-                                       uint32_t width, uint32_t height, uint32_t envMipCount) {
+                                       uint32_t width, uint32_t height, uint32_t envMipCount,
+                                       bool shadows, bool ao, uint32_t frameCounter,
+                                       uint32_t emissiveCount, float emissiveTotalPower,
+                                       float fireflyClamp) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
-        const uint32_t pc[4] = {envMipCount, width, height, 0u};
+        const uint32_t flags = (shadows ? 1u : 0u) | (ao ? 2u : 0u);
+        uint32_t emPowerBits, fireflyBits;
+        std::memcpy(&emPowerBits, &emissiveTotalPower, sizeof(emPowerBits));
+        std::memcpy(&fireflyBits, &fireflyClamp, sizeof(fireflyBits));
+        const uint32_t pc[8] = {envMipCount, width, height, flags,
+                                frameCounter, emissiveCount, emPowerBits, fireflyBits};
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
         vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
     }

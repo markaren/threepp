@@ -1,39 +1,40 @@
 #version 460
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive : enable
 
-// Raster-first deferred shading (Phase 2a). Reads the material G-buffer
-// produced by the raster prepass and shades a clean, analytic, NOISE-FREE
-// base: emissive-free direct analytic lights (no shadows yet — Phase 2b adds
-// ray-query hard shadows) + split-sum specular IBL + approximate diffuse IBL.
-// Writes linear HDR straight into the bloom sceneHdr image; the existing
-// bloom + TAA tail finishes the frame. The path tracer (RenderMode::ReferencePT)
-// is left entirely untouched — this pass only runs in RenderMode::RasterFirst.
+#include "vulkan_shared.h"// MaterialDesc
+
+// Raster-first deferred shading (Phase 2 + 3). Shades the material G-buffer
+// from the raster prepass into a clean, analytic base + adds ray-traced
+// accents, writing linear HDR straight into the bloom sceneHdr image:
+//   • direct analytic lights (dir/point/spot) with ray-query HARD shadows,
+//   • emissive (flat material emissive × intensity),
+//   • split-sum specular: ray-query REFLECTIONS on near-mirror surfaces
+//     (reflected hits are fully shaded — lit + shadowed), prefiltered-env IBL
+//     on rough surfaces,
+//   • approximate diffuse IBL.
+// RenderMode::ReferencePT (the path tracer) is untouched — this only runs in
+// RenderMode::RasterFirst.
 //
-// BRDF math is copied verbatim from shade_common.glsl (distGGX / geomSmithG1 /
-// fresnelSchlick / envBRDFApprox) and the analytic light loops mirror
-// analyticNeeOpaque() so RasterFirst and ReferencePT agree on lit surfaces.
-// It is inlined rather than #included because shade_common's NEE helpers call
-// traceRayEXT, which is unavailable in a compute stage.
-//
-// G-buffer reads use texelFetch (1:1 with the dispatch — deferred runs at the
-// same render extent the G-buffer was rasterised at), so no sampler filtering
-// is involved and the bound sampler is irrelevant for those taps. Only the
-// environment uses textureLod (prefiltered PMREM mip chain).
+// BRDF math is copied verbatim from shade_common.glsl; geometry fetch for the
+// reflection hit mirrors closest_hit.rchit (GeometryDesc + buffer-reference
+// vertex/normal/index buffers + barycentric interpolation).
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
-const float PI     = 3.14159265358979;
-const float TWO_PI = 6.28318530717959;
+const float PI         = 3.14159265358979;
+const float TWO_PI     = 6.28318530717959;
+const float SHADOW_EPS = 1e-3;// surface offset along N (avoids self-shadow / self-reflection acne)
 
-// Binding 0 — same buffer as the RT set's CameraUbo (binding 2): the
-// unjittered inverse view/proj used to reconstruct world position from depth.
 layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 viewInverse;
     mat4 projInverse;
     vec4 jitter;
 } cam;
 
-// Binding 1 — same GpuLightsUbo as the RT set's binding 5 (scalar layout).
 struct DirLight   { vec3 direction; vec3 color; };
 struct PointLight { vec3 position; float range; vec3 color; float decay; };
 struct SpotLight  { vec3 position; float range; vec3 color; float decay;
@@ -52,33 +53,65 @@ layout(set = 0, binding = 1, scalar) uniform LightsUbo {
 } lights;
 
 layout(set = 0, binding = 2) uniform sampler2D  envTex;        // prefiltered PMREM mip chain
-layout(set = 0, binding = 3) uniform sampler2D  gbufNormalTex; // .xyz = n*0.5+0.5, .w = roughness
+layout(set = 0, binding = 3) uniform sampler2D  gbufNormalTex; // .xyz = n*0.5+0.5, .w = roughness (<0 = unlit)
 layout(set = 0, binding = 4) uniform sampler2D  gbufDepthTex;  // .x = Vulkan NDC z [0,1]
-layout(set = 0, binding = 5) uniform usampler2D gbufIdsTex;    // .x = instanceId+1 (0 == sky), .z = flags
-layout(set = 0, binding = 6) uniform sampler2D  gbufAlbedoTex; // .rgb = linear albedo, .a = metalness
-layout(set = 0, binding = 7, rgba16f) uniform writeonly image2D outImage; // linear HDR (bloom sceneHdr)
+layout(set = 0, binding = 5) uniform usampler2D gbufIdsTex;    // .x = instanceId+1 (0 == sky)
+layout(set = 0, binding = 6) uniform sampler2D  gbufAlbedoTex; // .rgb = albedo, .a = metalness
+layout(set = 0, binding = 7, rgba16f) uniform writeonly image2D outImage;
+layout(set = 0, binding = 8) uniform accelerationStructureEXT topAS;
+layout(set = 0, binding = 9, scalar) readonly buffer MatBuf  { MaterialDesc mats[]; };
+
+// Geometry fetch for reflection-hit normals + UVs — mirrors closest_hit.rchit.
+layout(buffer_reference, scalar) readonly buffer NormalBuf { float n[]; };
+layout(buffer_reference, scalar) readonly buffer IndexBuf  { uint  i[]; };
+layout(buffer_reference, scalar) readonly buffer UvBuf     { float u[]; };
+struct GeometryDesc {
+    uint64_t vertexAddress;
+    uint64_t normalAddress;
+    uint64_t indexAddress;
+    uint64_t uvAddress;
+    uint64_t foamAddress;
+    uint64_t prevVertexAddress;
+    uint     indexed;
+    uint     _pad;
+};
+layout(set = 0, binding = 10, scalar) readonly buffer GeomDescBuf { GeometryDesc geoms[]; };
+// Bindless material textures (reflection hits sample these). Indexed by the
+// material's per-map texIndex — same array + convention as closest_hit binding 8.
+layout(set = 0, binding = 11) uniform sampler2D albedoMaps[kMaxMaterialTextures];
+// Emissive triangles (area-light NEE). Packed as the path tracer's EmTri:
+// v0.xyz/area, v1.xyz/cumPower(CDF), v2.xyz/power, emission.rgb. Same buffer
+// as the RT set's binding 14 (per-frame emissiveTriBuffers).
+struct EmTri {
+    vec4 v0;       // xyz = pos, w = area
+    vec4 v1;       // xyz = pos, w = cumPower (running power CDF)
+    vec4 v2;       // xyz = pos, w = power (lum × area)
+    vec4 emission; // xyz = emissive × intensity
+};
+layout(set = 0, binding = 12, scalar) readonly buffer EmissiveTriBuf { EmTri emissiveTris[]; };
 
 layout(push_constant) uniform Pc {
-    uint envMipCount;  // PMREM mip levels (>=1); roughness → lod via *(envMipCount-1)
-    uint width;
-    uint height;
-    uint flags;        // reserved (Phase 2b: shadow toggle etc.)
+    uint  envMipCount;       // PMREM mip levels (>=1)
+    uint  width;
+    uint  height;
+    uint  flags;             // bit 0 = shadows, bit 1 = RT env-visibility (AO/GI)
+    uint  frame;             // sample/frame index — temporal jitter (TAA averages it)
+    uint  emissiveCount;     // # emissive triangles (0 = none)
+    float emissiveTotalPower;// power-CDF total (denominator)
+    float fireflyClamp;      // luminance cap for emissive NEE samples (large = disabled)
 } pc;
 
-// ── BRDF helpers (verbatim from shade_common.glsl — keep in lockstep) ────────
+// ── BRDF helpers (verbatim from shade_common.glsl) ──────────────────────────
 float distGGX(float NdotH, float roughness) {
     float a  = roughness * roughness;
     float a2 = a * a;
     float d  = NdotH * NdotH * (a2 - 1.0) + 1.0;
     return a2 / (PI * d * d);
 }
-float geomSmithG1(float NdotX, float k) {
-    return NdotX / (NdotX * (1.0 - k) + k);
-}
+float geomSmithG1(float NdotX, float k) { return NdotX / (NdotX * (1.0 - k) + k); }
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
-// Karis 2014 split-sum env-BRDF fit: (scale, bias) so spec dir-albedo = F0*scale+bias.
 vec2 envBRDFApprox(float NdotV, float r) {
     const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
     const vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
@@ -86,11 +119,21 @@ vec2 envBRDFApprox(float NdotV, float r) {
     const float a004 = min(v.x * v.x, exp2(-9.28 * NdotV)) * v.x + v.y;
     return vec2(-1.04, 1.04) * a004 + v.zw;
 }
-// GL / three.js equirect convention (matches shade_common::sampleEquirect).
 vec3 sampleEnvLod(vec3 dir, float lod) {
     const float u = 0.5 + atan(dir.z, dir.x) / TWO_PI;
     const float v = 0.5 + asin(clamp(dir.y, -1.0, 1.0)) / PI;
     return textureLod(envTex, vec2(u, v), lod).rgb;
+}
+
+// Inline hard-shadow test (TerminateOnFirstHit + Opaque). 1.0 lit / 0.0 occluded.
+float shadowVis(vec3 origin, vec3 dir, float tMax) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topAS,
+                          gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+                          0xFFu, origin, 0.0, dir, tMax);
+    while (rayQueryProceedEXT(rq)) {}
+    return (rayQueryGetIntersectionTypeEXT(rq, true) ==
+            gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
 }
 
 // Cook-Torrance specular + Lambert diffuse for one analytic light direction L.
@@ -110,23 +153,251 @@ vec3 evalLight(vec3 N, vec3 V, vec3 L, float NdotV, vec3 F0, vec3 albedo,
     return (diff + spec) * NdotL;
 }
 
+// ── RNG + RT ambient occlusion / env GI ─────────────────────────────────────
+uint pcgHash(uint v) {
+    v = v * 747796405u + 2891336453u;
+    const uint s = ((v >> ((v >> 28) + 4u)) ^ v) * 277803737u;
+    return (s >> 22) ^ s;
+}
+float rnd(inout uint seed) {
+    seed = seed * 747796405u + 2891336453u;
+    uint r = ((seed >> ((seed >> 28) + 4u)) ^ seed) * 277803737u;
+    r = (r >> 22) ^ r;
+    return float(r) * (1.0 / 4294967296.0);
+}
+
+// Emissive-mesh NEE: directly sample the emissive-triangle area lights (power
+// CDF), shadow-test, add the contribution. Clean (samples the emitter, not a
+// random hemisphere), so an emissive sphere actually illuminates the room.
+// Mirrors closest_hit's emissive sampling. One sample/frame, frame-jittered →
+// TAA averages it.
+vec3 emissiveNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, vec3 albedo,
+                 float roughness, float metalness, float k, inout uint seed, bool doShadows) {
+    if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
+    const int   emIters    = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
+    const int   EM_SAMPLES = 2;// averaged; small bright emitters are high-variance
+    const vec3  shadowOrig = P + N * SHADOW_EPS;
+    vec3 sum = vec3(0.0);
+    for (int s = 0; s < EM_SAMPLES; ++s) {
+        const float xi = rnd(seed) * pc.emissiveTotalPower;
+        uint lo = 0u, hi = pc.emissiveCount - 1u;
+        for (int it = 0; it < emIters; ++it) {
+            if (lo >= hi) break;
+            const uint mid = (lo + hi) >> 1u;
+            if (emissiveTris[mid].v1.w < xi) lo = mid + 1u; else hi = mid;
+        }
+        const EmTri t = emissiveTris[lo];
+        const float su1 = sqrt(rnd(seed));
+        const float r2  = rnd(seed);
+        const vec3 lp = (1.0 - su1) * t.v0.xyz + (su1 * (1.0 - r2)) * t.v1.xyz + (su1 * r2) * t.v2.xyz;
+        const vec3 toL = lp - P;
+        const float dist2 = dot(toL, toL);
+        const float dist  = sqrt(max(dist2, 1e-20));
+        if (dist <= 1e-4) continue;
+        const vec3 L = toL / dist;
+        if (dot(N, L) <= 0.01) continue;
+        const vec3 lnRaw = cross(t.v1.xyz - t.v0.xyz, t.v2.xyz - t.v0.xyz);
+        const float lnLen = length(lnRaw);
+        if (lnLen < 1e-20 || t.v0.w <= 1e-20 || t.v2.w <= 0.0) continue;
+        const float cosLight = abs(dot(-L, lnRaw / lnLen));
+        if (cosLight <= 0.05) continue;// reject grazing emitter angles (firefly source)
+        const float pickPdf = t.v2.w / pc.emissiveTotalPower;
+        const float p_omega = pickPdf * dist2 / (t.v0.w * cosLight);
+        if (p_omega <= 1e-20) continue;
+        if (doShadows) {
+            rayQueryEXT rq;
+            rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+                                  0xFFu, shadowOrig, 1e-3, L, dist - 1e-2);
+            while (rayQueryProceedEXT(rq)) {}
+            if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT)
+                continue;
+        }
+        vec3 c = evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k) * t.emission.rgb / p_omega;
+        // Firefly clamp: cap a single sample's luminance so a stray spike (grazing
+        // emitter / near hit) can't dominate — the dominant noise on animated
+        // geometry where TAA can't accumulate it away.
+        const float lum = max(max(c.r, c.g), c.b);
+        if (lum > pc.fireflyClamp) c *= pc.fireflyClamp / lum;
+        sum += c;
+    }
+    return sum / float(EM_SAMPLES);
+}
+
+// Ray-traced diffuse environment irradiance WITH visibility (subsumes ambient
+// occlusion): cosine-hemisphere rays, environment radiance on escape, zero on
+// occlusion — so enclosed surfaces see no sky (no IBL leak into closed rooms,
+// and natural contact darkening). `openness` (unoccluded fraction) gates the
+// flat ambient fill. Per-frame jittered; TAA averages the few rays clean.
+// Hits contribute 0 here (no emissive/colour bounce — that's GI/emissive-NEE,
+// a separate step), so an enclosed scene goes dark rather than sky-lit.
+vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, out float openness) {
+    const int   GI_RAYS = 4;
+    const float maxLod  = float(max(pc.envMipCount, 1u) - 1u);
+    uint seed = pcgHash(uint(px.x) ^ pcgHash(uint(px.y) ^ pcgHash(frame)));
+    const vec3 up = abs(N.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    const vec3 T  = normalize(cross(up, N));
+    const vec3 B  = cross(N, T);
+    const vec3 orig = P + N * SHADOW_EPS;
+    vec3  acc  = vec3(0.0);
+    float open = 0.0;
+    for (int s = 0; s < GI_RAYS; ++s) {
+        const float u1 = rnd(seed);
+        const float u2 = rnd(seed);
+        const float r   = sqrt(u1);
+        const float phi = TWO_PI * u2;
+        const vec3  hemi = vec3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));
+        const vec3  dir  = normalize(T * hemi.x + B * hemi.y + N * hemi.z);
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, topAS,
+                              gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+                              0xFFu, orig, 1e-3, dir, 1e30);
+        while (rayQueryProceedEXT(rq)) {}
+        if (rayQueryGetIntersectionTypeEXT(rq, true) ==
+            gl_RayQueryCommittedIntersectionNoneEXT) {
+            // Escaped to the sky. Cosine-weighted → estimator is the mean
+            // radiance (cos/pdf cancel); high mip = pre-blurred = low noise.
+            acc  += sampleEnvLod(dir, maxLod);
+            open += 1.0;
+        }
+    }
+    openness = open / float(GI_RAYS);
+    return acc / float(GI_RAYS);
+}
+
+// Emissive + direct analytic lights (optionally shadowed) + approximate
+// diffuse IBL (× ambient occlusion). Shared by the primary surface and the
+// reflection hit (so
+// reflected geometry is lit + shadowed). Does NOT add the specular lobe — the
+// caller adds it (RT reflection for the primary, env IBL for the hit) to avoid
+// recursion.
+vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
+                        float metalness, vec3 emissive, bool doShadows, vec3 diffuseIndirect,
+                        inout uint seed) {
+    const float NdotV = max(dot(N, V), 1e-4);
+    const vec3  F0           = mix(vec3(0.04), albedo, metalness);
+    const vec3  diffuseColor = albedo * (1.0 - metalness);
+    const float k            = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    const vec3  shadowOrig   = P + N * SHADOW_EPS;
+
+    vec3 lit = emissive;
+
+    for (uint i = 0u; i < lights.dirCount; ++i) {
+        const vec3 L = normalize(lights.dirLights[i].direction);
+        if (dot(N, L) <= 0.0) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, L, 1e30) : 1.0;
+        if (vis <= 0.0) continue;
+        lit += evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k)
+               * lights.dirLights[i].color * vis;
+    }
+    for (uint i = 0u; i < lights.pointCount; ++i) {
+        vec3        toL  = lights.pointLights[i].position - P;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        if (dot(N, toL) <= 0.0) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
+        if (vis <= 0.0) continue;
+        const float decay = lights.pointLights[i].decay;
+        float atten = 1.0 / max(pow(dist, decay), 0.01);
+        const float range = lights.pointLights[i].range;
+        if (range > 0.0) {
+            const float t  = dist / range;
+            const float t4 = t * t * t * t;
+            const float wnd = max(1.0 - t4, 0.0);
+            atten *= wnd * wnd;
+        }
+        lit += evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k)
+               * lights.pointLights[i].color * atten * vis;
+    }
+    for (uint i = 0u; i < lights.spotCount; ++i) {
+        vec3        toL  = lights.spotLights[i].position - P;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        if (dot(N, toL) <= 0.0) continue;
+        const float spotCos   = dot(-toL, lights.spotLights[i].direction);
+        const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
+                                           lights.spotLights[i].cosAngleInner, spotCos);
+        if (spotAtten <= 0.0) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
+        if (vis <= 0.0) continue;
+        const float decay = lights.spotLights[i].decay;
+        float atten = 1.0 / max(pow(dist, decay), 0.01);
+        const float range = lights.spotLights[i].range;
+        if (range > 0.0) {
+            const float t  = dist / range;
+            const float t4 = t * t * t * t;
+            const float wnd = max(1.0 - t4, 0.0);
+            atten *= wnd * wnd;
+        }
+        atten *= spotAtten;
+        lit += evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k)
+               * lights.spotLights[i].color * atten * vis;
+    }
+
+    // Emissive-mesh area lights (NEE) — clean direct illumination from emissive
+    // geometry (e.g. an emissive sphere lighting the room), matching the PT.
+    lit += emissiveNEE(P, N, V, NdotV, F0, albedo, roughness, metalness, k, seed, doShadows);
+
+    // Diffuse indirect (caller-supplied): visibility-gated env irradiance for
+    // the primary surface, crude env IBL for reflected hits. Only modulates the
+    // indirect term — direct lights have their own shadows.
+    lit += diffuseIndirect * diffuseColor;
+    return lit;
+}
+
+// Interpolated world-space normal + UV at a reflection hit. Mirrors
+// closest_hit's GeometryDesc + barycentric interpolation + world transform.
+void fetchHit(int instIdx, int primId, vec2 bary, mat4x3 worldToObj,
+              out vec3 Nworld, out vec2 uvOut) {
+    const GeometryDesc g = geoms[instIdx];
+    uvec3 idx;
+    if (g.indexed != 0u) {
+        IndexBuf ib = IndexBuf(g.indexAddress);
+        idx = uvec3(ib.i[primId * 3 + 0], ib.i[primId * 3 + 1], ib.i[primId * 3 + 2]);
+    } else {
+        idx = uvec3(primId * 3 + 0, primId * 3 + 1, primId * 3 + 2);
+    }
+    const float w = 1.0 - bary.x - bary.y;
+
+    NormalBuf nb = NormalBuf(g.normalAddress);
+    const vec3 n0 = vec3(nb.n[idx.x * 3 + 0], nb.n[idx.x * 3 + 1], nb.n[idx.x * 3 + 2]);
+    const vec3 n1 = vec3(nb.n[idx.y * 3 + 0], nb.n[idx.y * 3 + 1], nb.n[idx.y * 3 + 2]);
+    const vec3 n2 = vec3(nb.n[idx.z * 3 + 0], nb.n[idx.z * 3 + 1], nb.n[idx.z * 3 + 2]);
+    const vec3 nObj = normalize(w * n0 + bary.x * n1 + bary.y * n2);
+    Nworld = normalize(transpose(mat3(worldToObj)) * nObj);
+
+    uvOut = vec2(0.0);
+    if (g.uvAddress != 0ul) {
+        UvBuf ub = UvBuf(g.uvAddress);
+        const vec2 u0 = vec2(ub.u[idx.x * 2 + 0], ub.u[idx.x * 2 + 1]);
+        const vec2 u1 = vec2(ub.u[idx.y * 2 + 0], ub.u[idx.y * 2 + 1]);
+        const vec2 u2 = vec2(ub.u[idx.z * 2 + 0], ub.u[idx.z * 2 + 1]);
+        uvOut = w * u0 + bary.x * u1 + bary.y * u2;
+    }
+}
+
+// Sample a bindless material texture at a reflection-hit UV (compute has no
+// derivatives → explicit mip 0). texIndex < 0 → return `fallback` unchanged.
+vec3 hitTex(int texIndex, mat3 uvXform, vec2 uv, vec3 fallback) {
+    if (texIndex < 0) return fallback;
+    const int i = clamp(texIndex, 0, int(kMaxMaterialTextures) - 1);
+    return fallback * textureLod(albedoMaps[i], (uvXform * vec3(uv, 1.0)).xy, 0.0).rgb;
+}
+
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
     const vec2 size = vec2(float(pc.width), float(pc.height));
     const vec2 uv   = (vec2(px) + 0.5) / size;
 
-    // NDC with the raster G-buffer's Y-flip (matches raygen primary-ray build).
     const vec2 ndc    = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
     const vec3 camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
     const float maxLod = float(max(pc.envMipCount, 1u) - 1u);
 
-    const uint id = texelFetch(gbufIdsTex, px, 0).x;// 0 == sky / miss
+    const uint id = texelFetch(gbufIdsTex, px, 0).x;// 0 == sky
 
     if (id == 0u) {
-        // Sky / background: primary ray direction → environment (sharp mip 0).
-        // A solid-colour background is stored as a 1×1 env image, so this also
-        // reproduces flat backgrounds correctly.
         const vec4 tVS   = cam.projInverse * vec4(ndc, 1.0, 1.0);
         const vec3 dirVS = normalize(tVS.xyz / tVS.w);
         const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
@@ -134,94 +405,114 @@ void main() {
         return;
     }
 
-    // Reconstruct world position from the G-buffer depth.
-    const float depth   = texelFetch(gbufDepthTex, px, 0).x;
-    const vec4  viewH   = cam.projInverse * vec4(ndc, depth, 1.0);
-    const vec3  viewPos = viewH.xyz / viewH.w;
-    const vec3  worldPos = (cam.viewInverse * vec4(viewPos, 1.0)).xyz;
+    const vec4  nTap   = texelFetch(gbufNormalTex, px, 0);
+    const vec4  am     = texelFetch(gbufAlbedoTex, px, 0);
+    const vec3  albedo = am.rgb;
 
-    const vec4  nTap      = texelFetch(gbufNormalTex, px, 0);
+    // Unlit (MeshBasicMaterial, roughness sentinel < 0): emit base colour.
+    if (nTap.w < 0.0) {
+        imageStore(outImage, px, vec4(albedo, 1.0));
+        return;
+    }
+
+    // Reconstruct world position from depth.
+    const float depth    = texelFetch(gbufDepthTex, px, 0).x;
+    const vec4  viewH    = cam.projInverse * vec4(ndc, depth, 1.0);
+    const vec3  worldPos = (cam.viewInverse * vec4(viewH.xyz / viewH.w, 1.0)).xyz;
+
     const vec3  N         = normalize(nTap.xyz * 2.0 - 1.0);
     const float roughness = clamp(nTap.w, 0.04, 1.0);
-
-    const vec4  am        = texelFetch(gbufAlbedoTex, px, 0);
-    const vec3  albedo    = am.rgb;
     const float metalness = clamp(am.a, 0.0, 1.0);
+
+    const MaterialDesc pm = mats[id - 1u];
+    const vec3 emissive   = pm.emissive * pm.emissiveIntensity;
 
     const vec3  V     = normalize(camPos - worldPos);
     const float NdotV = max(dot(N, V), 1e-4);
+    const vec3  F0    = mix(vec3(0.04), albedo, metalness);
+    const bool  shadowsOn  = (pc.flags & 1u) != 0u;
+    const vec3  shadowOrig = worldPos + N * SHADOW_EPS;
+    // Per-pixel RNG stream (frame-jittered) for emissive NEE; advanced through
+    // the primary + reflection shades so the draws decorrelate. TAA averages.
+    uint seed = pcgHash(uint(px.x) ^ pcgHash(uint(px.y) ^ pcgHash(pc.frame * 2654435761u + 1u)));
 
-    const vec3  F0          = mix(vec3(0.04), albedo, metalness);
-    const vec3  diffuseColor = albedo * (1.0 - metalness);
-    const float k           = (roughness + 1.0) * (roughness + 1.0) / 8.0;// direct Schlick-GGX
-
-    vec3 lit = vec3(0.0);
-
-    // === Directional lights ===
-    for (uint i = 0u; i < lights.dirCount; ++i) {
-        const vec3 L = normalize(lights.dirLights[i].direction);
-        lit += evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k)
-               * lights.dirLights[i].color;
+    // Diffuse indirect: visibility-gated env irradiance (RT, flags bit 1) so
+    // enclosed surfaces aren't lit by a sky they can't see (also gives ambient
+    // occlusion). Falls back to crude unoccluded env IBL when disabled.
+    const bool aoOn = (pc.flags & 2u) != 0u;
+    vec3 diffInd;
+    if (aoOn) {
+        float openness;
+        diffInd = gatherEnv(worldPos, N, px, pc.frame, openness) + lights.ambient * openness;
+    } else {
+        diffInd = sampleEnvLod(N, maxLod) + lights.ambient;
     }
 
-    // === Point lights ===
-    for (uint i = 0u; i < lights.pointCount; ++i) {
-        vec3        toL  = lights.pointLights[i].position - worldPos;
-        const float dist = length(toL);
-        if (dist < 1e-4) continue;
-        toL /= dist;
-        const float decay = lights.pointLights[i].decay;
-        float atten = 1.0 / max(pow(dist, decay), 0.01);
-        const float range = lights.pointLights[i].range;
-        if (range > 0.0) {
-            const float t  = dist / range;
-            const float t4 = t * t * t * t;
-            const float w  = max(1.0 - t4, 0.0);
-            atten *= w * w;
+    // Diffuse + direct (shadowed) + emissive-NEE + diffuse indirect + emissive.
+    vec3 lit = shadeDiffuseDirect(worldPos, N, V, albedo, roughness, metalness,
+                                  emissive, shadowsOn, diffInd, seed);
+
+    // ── Specular: RT reflection (sharp) ⊕ prefiltered-env IBL (rough) ────────
+    const vec3 R  = reflect(-V, N);
+    const vec2 ab = envBRDFApprox(NdotV, roughness);
+    vec3 specSrc  = sampleEnvLod(R, roughness * maxLod);// env IBL default
+
+    const float reflBlend = 1.0 - smoothstep(0.06, 0.18, roughness);
+    if (reflBlend > 0.0) {
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu,
+                              shadowOrig, 1e-3, R, 1e30);
+        while (rayQueryProceedEXT(rq)) {}
+        vec3 reflColor;
+        if (rayQueryGetIntersectionTypeEXT(rq, true) ==
+            gl_RayQueryCommittedIntersectionNoneEXT) {
+            reflColor = sampleEnvLod(R, 0.0);// miss → sharp environment
+        } else {
+            const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+            const MaterialDesc hm     = mats[hitId];
+            const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+            const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+            const float  tHit   = rayQueryGetIntersectionTEXT(rq, true);
+            const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
+            vec3 hitN; vec2 hitUv;
+            fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
+
+            // Textured material at the reflected hit (albedo / rough-metal /
+            // emissive), matching closest_hit + gbuffer.frag conventions.
+            const vec3 hAlbedo = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
+            if (hm.roughness < 0.0) {
+                reflColor = hAlbedo;// unlit reflected surface
+            } else {
+                vec3 hitV = -R;// view dir at the hit = back toward the reflector
+                if (dot(hitN, hitV) < 0.0) hitN = -hitN;
+                float hRough = hm.roughness;
+                float hMetal = hm.metalness;
+                if (hm.roughnessTexIndex >= 0)
+                    hRough *= textureLod(albedoMaps[clamp(hm.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1)],
+                                         (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).g;
+                if (hm.metalnessTexIndex >= 0)
+                    hMetal *= textureLod(albedoMaps[clamp(hm.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1)],
+                                         (hm.uvTransformRoughMetal * vec3(hitUv, 1.0)).xy, 0.0).b;
+                hRough = clamp(hRough, 0.04, 1.0);
+                hMetal = clamp(hMetal, 0.0, 1.0);
+                const vec3 hEmissive = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hitUv,
+                                              hm.emissive * hm.emissiveIntensity);
+                const vec3 hitP = shadowOrig + R * tHit;
+                // Lit + shadowed reflected hit. Crude (unoccluded) env IBL for
+                // its diffuse indirect + env specular — no per-hit gather/recursion.
+                const vec3 hitDiffInd = sampleEnvLod(hitN, maxLod) + lights.ambient;
+                reflColor = shadeDiffuseDirect(hitP, hitN, hitV, hAlbedo, hRough, hMetal,
+                                               hEmissive, shadowsOn, hitDiffInd, seed);
+                const float hitNdotV = max(dot(hitN, hitV), 1e-4);
+                const vec3  hitF0 = mix(vec3(0.04), hAlbedo, hMetal);
+                const vec3  hitR  = reflect(-hitV, hitN);
+                const vec2  hitAB = envBRDFApprox(hitNdotV, hRough);
+                reflColor += sampleEnvLod(hitR, hRough * maxLod) * (hitF0 * hitAB.x + hitAB.y);
+            }
         }
-        lit += evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k)
-               * lights.pointLights[i].color * atten;
+        specSrc = mix(specSrc, reflColor, reflBlend);
     }
 
-    // === Spot lights ===
-    for (uint i = 0u; i < lights.spotCount; ++i) {
-        vec3        toL  = lights.spotLights[i].position - worldPos;
-        const float dist = length(toL);
-        if (dist < 1e-4) continue;
-        toL /= dist;
-        const float spotCos   = dot(-toL, lights.spotLights[i].direction);
-        const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
-                                           lights.spotLights[i].cosAngleInner, spotCos);
-        if (spotAtten <= 0.0) continue;
-        const float decay = lights.spotLights[i].decay;
-        float atten = 1.0 / max(pow(dist, decay), 0.01);
-        const float range = lights.spotLights[i].range;
-        if (range > 0.0) {
-            const float t  = dist / range;
-            const float t4 = t * t * t * t;
-            const float w  = max(1.0 - t4, 0.0);
-            atten *= w * w;
-        }
-        atten *= spotAtten;
-        lit += evalLight(N, V, toL, NdotV, F0, albedo, roughness, metalness, k)
-               * lights.spotLights[i].color * atten;
-    }
-
-    // ── Image-based lighting (noise-free) ───────────────────────────────────
-    // Specular IBL: split-sum — prefiltered env mip selected by roughness,
-    // weighted by the analytic env-BRDF (Karis fit). The reflection ray's tail
-    // env is the superset that RT reflections (Phase 3) will replace.
-    const vec3 R          = reflect(-V, N);
-    const vec3 prefiltered = sampleEnvLod(R, roughness * maxLod);
-    const vec2 ab          = envBRDFApprox(NdotV, roughness);
-    const vec3 specIBL     = prefiltered * (F0 * ab.x + ab.y);
-
-    // Diffuse IBL: roughest prefiltered mip along N ≈ irradiance (approximate
-    // but noise-free); lights.ambient provides fill when no env is present.
-    const vec3 irradiance = sampleEnvLod(N, maxLod);
-    const vec3 diffIBL    = (irradiance + lights.ambient) * diffuseColor;
-
-    lit += specIBL + diffIBL;
-
+    lit += specSrc * (F0 * ab.x + ab.y);
     imageStore(outImage, px, vec4(lit, 1.0));
 }

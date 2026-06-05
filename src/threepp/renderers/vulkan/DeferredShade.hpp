@@ -46,8 +46,19 @@ namespace threepp::vulkan {
             const VkImageView* gbufIds    = nullptr;// [framesInFlight] (usampler2D)
             const VkImageView* gbufAlbedo = nullptr;// [framesInFlight]
             const VkImageView* sceneHdr   = nullptr;// [framesInFlight] output (storage)
+            VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;// shared scene TLAS (shadow + reflection rays)
+            const VkBuffer*    materialBuf = nullptr;// [framesInFlight] MaterialDesc[] (emissive)
+            VkBuffer           geomDescBuf = VK_NULL_HANDLE;// GeometryDesc[] (reflection-hit normals/UVs)
+            const VkDescriptorImageInfo* materialTex = nullptr;// bindless array (reflection-hit textures)
+            uint32_t           materialTexCount = 0;          // == kMaxMaterialTextures
+            const VkBuffer*    emissiveTriBuf = nullptr;// [framesInFlight] EmTri[] (emissive NEE)
         };
         void rewriteDescriptors(const DescriptorWriteInputs& in);
+
+        // Rebind just the emissive-triangle buffer (binding 12) for one frame —
+        // the emissive buffer grows in the per-frame path, so call this when it
+        // reallocates (mirrors the RT rewriteEmissiveTriDescriptors).
+        void rewriteEmissive(uint32_t frame, VkBuffer emissiveTriBuf);
 
         // Dispatch the deferred shade over the render extent. width/height =
         // path-trace render extent (== G-buffer extent). envMipCount drives the
@@ -56,7 +67,10 @@ namespace threepp::vulkan {
         // pass declares a COMPUTE consumer dependency) and for the sceneHdr
         // write→read barrier (BloomPass::recordDispatch's leading barrier).
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
-                            uint32_t width, uint32_t height, uint32_t envMipCount);
+                            uint32_t width, uint32_t height, uint32_t envMipCount,
+                            bool shadows, bool ao, uint32_t frameCounter,
+                            uint32_t emissiveCount, float emissiveTotalPower,
+                            float fireflyClamp);
 
     private:
         VulkanContext& ctx_;
