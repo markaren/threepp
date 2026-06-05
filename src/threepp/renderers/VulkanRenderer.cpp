@@ -4081,10 +4081,22 @@ namespace threepp {
                 d.ior          = std::max(1.0f, tr->ior);
                 d.dispersion   = std::max(0.0f, tr->dispersion);
             }
+            // Additive-blend effects (muzzle flashes, sparks, energy glows): the
+            // surface GLOWS over the scene rather than occluding/refracting it.
+            // Deferred sentinel: transmission > 1 (= 1 + strength) → "add, don't
+            // mix". PT-safe — transmission>1 reads as full stochastic pass-through
+            // (effectively invisible in the PT), which is correct since additive
+            // blending has no physical analogue.
+            if (mat->blending == Blending::Additive && d.transmission == 0.0f) {
+                d.transmission = 1.0f + std::clamp(mat->opacity, 0.0f, 1.0f);
+                d.ior          = 1.0f;
+            }
             // Alpha-blend transparency (transparent=true, opacity<1) has no
             // physical analogue in a PT, so treat it as stochastic pass-through:
             // with probability (1-opacity) the ray continues straight through
             // (ior=1 → refract returns the incident direction unchanged, F=0).
+            // Deferred reads ior≈1 as the "clean alpha blend" marker (vs ior>1
+            // real refractive glass).
             if (d.transmission == 0.0f && mat->transparent && mat->opacity < 1.0f) {
                 d.transmission = 1.0f - mat->opacity;
                 d.ior          = 1.0f;
@@ -6212,7 +6224,7 @@ namespace threepp {
             uint32_t instanceCustomIndex;
             uint32_t flags;
             uint32_t indexed;
-            uint32_t _pad;
+            float    polygonOffset;    // clip-z depth bias (reverse-Z: + = toward near = on top)
         };
         static_assert(sizeof(DrawInfoGpu) == 120,
                       "DrawInfoGpu layout drifted from gbuffer_indirect.vert");
@@ -6335,7 +6347,22 @@ namespace threepp {
                 if (en.isSkinned)   flags |= 8u;
                 di.flags   = flags;
                 di.indexed = indexed ? 1u : 0u;
-                di._pad    = 0u;
+                // polygonOffset → per-mesh clip-z depth bias (decals). Reverse-Z:
+                // a +clip-z bias pushes the surface toward NEAR so it renders on
+                // top of coplanar geometry (no z-fight). threepp/GL uses NEGATIVE
+                // polygonOffsetUnits for "on top", so flip the sign; units==0
+                // (bool only) → a small default that clears z-fight without
+                // floating. (The slope-scaled `factor` term isn't applied — flat
+                // decals don't need it; bias is uniform in NDC.)
+                float polyOff = 0.f;
+                if (auto pm = en.mesh->material(); pm && pm->polygonOffset) {
+                    // Honor BOTH factor + units (combined as a constant NDC bias —
+                    // the slope term can't be evaluated in the vertex shader; flat
+                    // decals don't need it). 0/0 (bool only) → a small default.
+                    const float uf = pm->polygonOffsetUnits + pm->polygonOffsetFactor;
+                    polyOff = (uf != 0.f) ? (-uf * 1.0e-6f) : 4.0e-6f;
+                }
+                di.polygonOffset = polyOff;
                 draws[b].push_back(di);
 
                 VkDrawIndirectCommand cmd{};

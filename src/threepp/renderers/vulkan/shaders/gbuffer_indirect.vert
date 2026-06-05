@@ -48,7 +48,7 @@ struct DrawInfo {
     uint     instanceCustomIndex;
     uint     flags;
     uint     indexed;          // 0 / 1
-    uint     _pad;
+    float    polygonOffset;    // clip-z depth bias (reverse-Z: + = toward near = on top of coplanar geom)
 };
 layout(set = 0, binding = 4, scalar) readonly buffer DrawInfoBuf {
     DrawInfo draws[];
@@ -103,5 +103,9 @@ void main() {
     vWorldPos      = worldPos.xyz;
 
     gl_Position    = cam.currVPjittered * worldPos;
+    // Per-mesh polygon offset (decals): bias clip-z so the fragment's NDC depth
+    // shifts toward NEAR (reverse-Z) → wins the depth test against coplanar
+    // geometry and renders on top, no z-fighting. 0 for normal meshes.
+    gl_Position.z += d.polygonOffset * gl_Position.w;
     gl_Position.y  = -gl_Position.y;
 }

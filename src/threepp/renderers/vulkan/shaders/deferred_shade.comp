@@ -983,9 +983,32 @@ void main() {
     // pure glass; 0.8 → 80% glass + 20% the opaque PBR above). shadeGlass does
     // the 2-interface refraction either way (a thin shell just has a short
     // in-glass path → minimal tint → near-clear).
-    if (pm.transmission > 0.0) {
-        const vec3 glassCol = shadeGlass(worldPos, N, V, pm, albedo, shadowsOn, maxLod, seed);
-        lit = mix(lit, glassCol, clamp(pm.transmission, 0.0, 1.0));
+    if (pm.transmission > 1.0) {
+        // ADDITIVE blend (muzzle flashes, sparks, energy glows). The surface
+        // GLOWS over the scene behind: dst = behind + src*strength. The opaque
+        // G-buffer already overwrote the scene behind this pixel, so re-trace a
+        // straight (-V) ray to recover it. Host encodes strength = transmission-1
+        // (transmission>1 is the additive marker).
+        const float strength = clamp(pm.transmission - 1.0, 0.0, 1.0);
+        const vec3  behind   = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed);
+        lit = behind + lit * strength;
+    } else if (pm.transmission > 0.0) {
+        if (pm.ior < 1.05) {
+            // CLEAN ALPHA blend (transparent, opacity<1; host sets ior=1,
+            // transmission=1-opacity). Straight-through to the re-traced scene
+            // behind, blended by opacity — flat alpha, NO glass Fresnel/refraction
+            // darkening. (One transparent layer over opaque: the behind ray sees
+            // opaque geometry shaded as PBR; overlapping transparent isn't sorted.)
+            const float opacity = 1.0 - clamp(pm.transmission, 0.0, 1.0);
+            const vec3  behind  = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed);
+            lit = mix(behind, lit, opacity);
+        } else {
+            // REAL refractive glass (ior>1: KHR_materials_transmission / volume).
+            // Fresnel reflect + 2-interface refract over the opaque shade, weighted
+            // by transmission (matches the PT's reflect/refract-vs-opaque split).
+            const vec3 glassCol = shadeGlass(worldPos, N, V, pm, albedo, shadowsOn, maxLod, seed);
+            lit = mix(lit, glassCol, clamp(pm.transmission, 0.0, 1.0));
+        }
     }
 
     imageStore(outImage, px, vec4(lit, 1.0));
