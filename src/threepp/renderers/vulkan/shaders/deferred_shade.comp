@@ -96,6 +96,7 @@ layout(set = 0, binding = 12, scalar) readonly buffer EmissiveTriBuf { EmTri emi
 // thin-shell water branch's `tileSize > 0` gates skip sampling them entirely.
 layout(set = 0, binding = 13) uniform sampler2D oceanFineHeight;
 layout(set = 0, binding = 14) uniform sampler2D oceanFoamWorld;
+layout(set = 0, binding = 15) uniform sampler2D gbufUvTex;     // .rg = primary surface UV (emissive-map sample)
 
 layout(push_constant) uniform Pc {
     uint  envMipCount;       // PMREM mip levels (>=1)
@@ -783,7 +784,15 @@ void main() {
     const float metalness = clamp(am.a, 0.0, 1.0);
 
     const MaterialDesc pm = mats[id - 1u];
-    const vec3 emissive   = pm.emissive * pm.emissiveIntensity;
+    // Emissive: factor × emissive MAP. glTF sets emissiveFactor=(1,1,1) whenever
+    // an emissive texture is present (the MAP, not the factor, carries the actual
+    // emission), so applying the bare factor makes textured-emissive submeshes
+    // (e.g. the SWAT exoskeleton) glow full white. The primary UV comes from the
+    // G-buffer (gbuffer.frag attachment 3). Mirrors the reflection-hit path
+    // (hitTex at the hit UV); texIndex < 0 → factor unchanged (no regression).
+    const vec2 primUv     = texelFetch(gbufUvTex, px, 0).rg;
+    const vec3 emissive   = hitTex(pm.emissiveTexIndex, pm.uvTransformEmissive, primUv,
+                                   pm.emissive * pm.emissiveIntensity);
 
     const vec3 V          = normalize(camPos - worldPos);
     const bool shadowsOn  = (pc.flags & 1u) != 0u;

@@ -43,7 +43,7 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[15]{};
+        VkDescriptorSetLayoutBinding b[16]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -66,10 +66,11 @@ namespace threepp::vulkan {
         set(12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);         // EmTri[] emissive triangles (area-light NEE)
         set(13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // ocean FFT fine-cascade height (water chop)
         set(14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // ocean world-space foam accumulator
+        set(15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf uv (primary emissive-map sample)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 15;
+        dlci.bindingCount = 16;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -114,7 +115,7 @@ namespace threepp::vulkan {
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = framesInFlight_ * 2;// camera + lights
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * (7 + kMaxMaterialTextures);// env + 4 gbuf + 2 ocean + bindless array
+        sizes[1].descriptorCount = framesInFlight_ * (8 + kMaxMaterialTextures);// env + 5 gbuf(normal,depth,ids,albedo,uv) + 2 ocean + bindless array
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[2].descriptorCount = framesInFlight_ * 1;// out
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -163,6 +164,7 @@ namespace threepp::vulkan {
             VkDescriptorImageInfo normalInfo = sampled(in.gbufNormal[f], gbufSampler_);
             VkDescriptorImageInfo idsInfo    = sampled(in.gbufIds[f], gbufSampler_);
             VkDescriptorImageInfo albInfo    = sampled(in.gbufAlbedo[f], gbufSampler_);
+            VkDescriptorImageInfo uvInfo     = sampled(in.gbufUv[f], gbufSampler_);
             // Depth rests in DEPTH_STENCIL_READ_ONLY_OPTIMAL (the G-buffer render
             // pass's finalLayout for the depth attachment), not SHADER_READ_ONLY.
             VkDescriptorImageInfo depthInfo{};
@@ -208,7 +210,7 @@ namespace threepp::vulkan {
             asInfo.accelerationStructureCount = 1;
             asInfo.pAccelerationStructures = &tlasLocal;
 
-            VkWriteDescriptorSet w[15]{};
+            VkWriteDescriptorSet w[16]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -243,7 +245,8 @@ namespace threepp::vulkan {
             setw(12, 12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,      nullptr, &emInfo);
             setw(13, 13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanFineInfo, nullptr);
             setw(14, 14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanFoamInfo, nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 15, w, 0, nullptr);
+            setw(15, 15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &uvInfo, nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), 16, w, 0, nullptr);
         }
     }
 

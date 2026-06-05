@@ -9433,6 +9433,7 @@ namespace threepp {
             std::array<VkImageView, kFramesInFlight> depthViews{};
             std::array<VkImageView, kFramesInFlight> idsViews{};
             std::array<VkImageView, kFramesInFlight> albedoViews{};
+            std::array<VkImageView, kFramesInFlight> uvViews{};
             std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 camBufs[f]       = cameraUbos[f].handle;
@@ -9443,6 +9444,7 @@ namespace threepp {
                 depthViews[f]    = rasterGbufs[f].depth.view;
                 idsViews[f]      = rasterGbufs[f].ids.view;
                 albedoViews[f]   = rasterGbufs[f].albedo.view;
+                uvViews[f]       = rasterGbufs[f].uv.view;
                 sceneHdrViews[f] = bloom_->sceneHdrView(f);
             }
             // Bindless material-texture array for reflected-hit texturing —
@@ -9459,6 +9461,7 @@ namespace threepp {
             in.gbufDepth        = depthViews.data();
             in.gbufIds          = idsViews.data();
             in.gbufAlbedo       = albedoViews.data();
+            in.gbufUv           = uvViews.data();
             in.sceneHdr         = sceneHdrViews.data();
             in.tlas             = tlas;
             in.materialBuf      = matBufs.data();

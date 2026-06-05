@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     scene.environment = env;
 
     // ---- Camera ----
-    PerspectiveCamera camera(60.f, canvas.aspect(), 0.01f, 1000.f);
+    PerspectiveCamera camera(60.f, canvas.aspect(), 0.1f, 1000.f);// near 0.01→0.1: far/near ratio was 100k → z-fighting
     camera.position.set(-10.f, 3.f, -5.f);
     OrbitControls controls{camera, canvas};
     controls.enableKeys = false;
