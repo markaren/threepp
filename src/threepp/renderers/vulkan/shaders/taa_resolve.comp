@@ -240,12 +240,28 @@ void main() {
     // to pixels for an intuitive scale: 30 px/frame → +0.5 boost, capped.
     const vec2 motionPx = motionGL * 0.5 * vec2(pc.width, pc.height);
     const float motionLen = length(motionPx);
-    const float velocityBump = clamp(motionLen / 30.0, 0.0, 0.5);
+    const float velocityBump = clamp(motionLen / 30.0, 0.0, 0.2);// reduced 0.5→0.2: the
+                                          // YCoCg variance clip controls ghosting now, so
+                                          // don't crank α into motion flicker at fast edges.
     // is_skinned flag (bit 3) is informational; SkinnedMesh now has proper
     // per-vertex motion vectors via a prev-pose vertex buffer (gbuffer.vert
     // reads it at attribute 3). The previous force-high-alpha hack is gone —
     // velocity bump alone now correctly tracks deformation.
-    const float a = clamp(pc.blendAlpha + velocityBump, 0.02, 1.0);
+    //
+    // LUMA ANTI-FLICKER (Karis): where the current (1-spp jittered) sample
+    // disagrees strongly with the converged history — i.e. EDGES, especially
+    // distant sub-pixel geometry — drop α hard so the pixel locks to the AA'd
+    // history instead of letting the per-frame coverage swing through. Interiors
+    // (history≈curr) keep the normal α and accumulate as usual. This kills the
+    // residual edge flicker that a constant α leaves (α·contrast per frame).
+    const float lumaH = dot(history, vec3(0.299, 0.587, 0.114));
+    const float lumaC = dot(curr,    vec3(0.299, 0.587, 0.114));
+    const float contrast = clamp(abs(lumaC - lumaH) / max(max(lumaC, lumaH), 0.1), 0.0, 1.0);
+    const float antiFlicker = mix(1.0, 0.1, sqrt(contrast));// sqrt: triggers at a converged
+                                          // edge (contrast~0.5 → α×0.36) AND locks hard at a
+                                          // full-contrast edge (→ α×0.1). The variance clip
+                                          // still handles disocclusion, so a low edge α is safe.
+    const float a = clamp((pc.blendAlpha + velocityBump) * antiFlicker, 0.01, 1.0);
     const vec3 result = reprojValid ? mix(history, curr, a) : curr;
 
     // When a downstream RCAS pass owns the swapchain write, skip it here but
