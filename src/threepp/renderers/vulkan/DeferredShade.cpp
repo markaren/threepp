@@ -205,15 +205,20 @@ namespace threepp::vulkan {
             // indirect image — holds last frame's accumulated GI (a 1-frame
             // history; the 2 per-frame indirect images alternate as a ping-pong).
             // Sampled in GENERAL (it's a storage image with SAMPLED usage added).
-            // motion = this frame's motion vec; idsPrev = the other index's
-            // mesh-IDs (1-frame, for the disocclusion reset).
+            // motion = this frame's motion vec; normalPrev = the other index's
+            // world-space NORMALS (1-frame, for the GEOMETRIC disocclusion reset).
+            // NOT prev-IDs: instanceCustomIndex is the per-frame draw-list index,
+            // so it shifts whenever objects spawn/despawn (e.g. firing adds a
+            // tracer → every ID renumbers → an ID-based disocclusion false-fires
+            // globally → GI reset). World normals don't shift on re-sort and are
+            // camera-independent (no false reset on camera motion either).
             const uint32_t pf = (f + 1u) % framesInFlight_;
             VkDescriptorImageInfo prevIndInfo{};
             prevIndInfo.sampler     = gbufSampler_;
             prevIndInfo.imageView   = in.indirect[pf];
             prevIndInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-            VkDescriptorImageInfo motionInfo  = sampled(in.gbufMotion[f], gbufSampler_);
-            VkDescriptorImageInfo idsPrevInfo = sampled(in.gbufIds[pf], gbufSampler_);
+            VkDescriptorImageInfo motionInfo     = sampled(in.gbufMotion[f], gbufSampler_);
+            VkDescriptorImageInfo normalPrevInfo = sampled(in.gbufNormal[pf], gbufSampler_);
 
             // Ocean textures stay in GENERAL (written by the FFT/foam compute
             // passes, sampled here) — matching the RT set's bindings 32 + 44.
@@ -288,7 +293,7 @@ namespace threepp::vulkan {
             setw(16, 16, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &indInfo, nullptr);
             setw(17, 17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevIndInfo, nullptr);
             setw(18, 18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &motionInfo,  nullptr);
-            setw(19, 19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &idsPrevInfo, nullptr);
+            setw(19, 19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalPrevInfo, nullptr);
             vkUpdateDescriptorSets(ctx_.device(), 20, w, 0, nullptr);
         }
     }

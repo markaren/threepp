@@ -105,10 +105,11 @@ layout(set = 0, binding = 15) uniform sampler2D gbufUvTex;     // .rg = primary 
 // frame reads it as the reproject history via binding 17).
 layout(set = 0, binding = 16, rgba16f) uniform image2D indirectImage;
 // GI reproject (Phase 2): prev accumulated GI (the OTHER frame-in-flight's indirect
-// = 1-frame history), the motion vector, and the prev mesh-IDs for disocclusion.
-layout(set = 0, binding = 17) uniform sampler2D  giPrevTex;     // 1-frame GI history (reprojected)
-layout(set = 0, binding = 18) uniform sampler2D  gbufMotionTex; // .rg = NDC motion
-layout(set = 0, binding = 19) uniform usampler2D gbufIdsPrevTex;// prev mesh-IDs (disocclusion)
+// = 1-frame history), the motion vector, and the prev world NORMALS for the
+// geometric disocclusion (NOT IDs — those are draw-order, see binding setup).
+layout(set = 0, binding = 17) uniform sampler2D giPrevTex;      // 1-frame GI history (reprojected)
+layout(set = 0, binding = 18) uniform sampler2D gbufMotionTex;  // .rg = NDC motion
+layout(set = 0, binding = 19) uniform sampler2D gbufNormalPrevTex;// prev world normals (geometric disocclusion)
 
 layout(push_constant) uniform Pc {
     uint  envMipCount;       // PMREM mip levels (>=1)
@@ -1082,21 +1083,23 @@ void main() {
         const vec2 prevUv   = vec2(prevNDC.x * 0.5 + 0.5, 0.5 - prevNDC.y * 0.5);
         bool valid = all(greaterThanEqual(prevUv, vec2(0.0))) &&
                      all(lessThanEqual(prevUv, vec2(1.0)));
-        // JITTER-ROBUST DISOCCLUSION: the current surface (id) must appear SOMEWHERE
-        // in the 3×3 prev-ID neighbourhood around the reprojected pixel. This
-        // absorbs the sub-pixel jitter coverage flip + reproject rounding (a static
-        // silhouette's surface is still in the 3×3 → no false reset → no edge
-        // wobble), while a MOVING object that vacated this pixel (its prev ID is
-        // gone from the neighbourhood) DOES reset → the stale GI is cleared instead
-        // of trailing as a "dust cloud".
+        // GEOMETRIC (normal-based) JITTER-ROBUST DISOCCLUSION: the current surface's
+        // world normal must match SOMEWHERE in the 3×3 prev-normal neighbourhood at
+        // the reprojected pixel. Normals are draw-order-INDEPENDENT (so firing —
+        // which spawns a tracer and renumbers every instanceCustomIndex — does NOT
+        // false-reset, the bug an ID test had) AND camera-INDEPENDENT (so camera
+        // motion doesn't false-reset). The 3×3 absorbs the sub-pixel jitter coverage
+        // flip; a MOVING object that vacated this pixel reveals a differently-facing
+        // surface → no match → reset → the stale GI is cleared instead of trailing
+        // as a "dust cloud".
         if (valid) {
             const ivec2 ip = ivec2(prevUv * vec2(float(pc.width), float(pc.height)));
             const ivec2 mx = ivec2(int(pc.width), int(pc.height)) - 1;
             bool found = false;
             for (int dy = -1; dy <= 1; ++dy) {
                 for (int dx = -1; dx <= 1; ++dx) {
-                    if (texelFetch(gbufIdsPrevTex, clamp(ip + ivec2(dx, dy), ivec2(0), mx), 0).x == id)
-                        found = true;
+                    const vec3 pn = texelFetch(gbufNormalPrevTex, clamp(ip + ivec2(dx, dy), ivec2(0), mx), 0).xyz * 2.0 - 1.0;
+                    if (dot(N, normalize(pn)) > 0.9) found = true;// ~25° tolerance
                 }
             }
             valid = found;
@@ -1104,7 +1107,7 @@ void main() {
         const vec4  prevT = valid ? texture(giPrevTex, prevUv) : vec4(0.0);
         const vec3  prev  = prevT.rgb;
         valid = valid && all(lessThan(abs(prev), vec3(1e6)));// NaN/garbage guard
-        const float histLen = valid ? min(prevT.a + 1.0, 32.0) : 1.0;
+        const float histLen = valid ? min(prevT.a + 1.0, 64.0) : 1.0;// 32→64: more temporal averaging → cleaner GI in shadows
         const vec3  accum   = valid ? mix(prev, diffInd, 1.0 / histLen) : diffInd;
         imageStore(indirectImage, px, vec4(accum, histLen));
     } else {

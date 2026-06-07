@@ -60,6 +60,15 @@ void main() {
     // edge stop is scene-scale-independent.
     const float planeScale = 1.0 / max(0.05 * length(Pc - camPos), 1e-3);
 
+    // History-length-guided blur width: freshly-reset / disoccluded pixels (low
+    // histLen — deferred_shade's GI accumulator stores its history length in .a)
+    // carry the most 1-spp noise, so widen the spatial Gaussian there; converged
+    // pixels (high histLen) keep the sharp σ≈5 kernel. A poor-man's SVGF variance
+    // guidance using the accumulator's history length (no separate moments buffer)
+    // — this is what keeps disocclusion-reset regions from reading as noisy.
+    const float histLen = imageLoad(indirectImage, px).a;
+    const float wScale  = mix(4.0, 1.0, clamp(histLen / 16.0, 0.0, 1.0));
+
     vec3  sum  = vec3(0.0);
     float wsum = 0.0;
     const int R = 10;// 21x21 footprint — demod GI is low-frequency + now 1-2 spp stochastic,
@@ -76,7 +85,7 @@ void main() {
         if (wn <= 0.0) continue;
         const vec3  Pq = worldFromDepth(q, texelFetch(gbufDepthTex, q, 0).x);
         const float wz = exp(-abs(dot(Pq - Pc, Nc)) * planeScale);// tangent-plane edge stop
-        const float ws = exp(-float(dx * dx + dy * dy) * 0.02);// spatial Gaussian σ≈5 (matches the wider R=10 kernel)
+        const float ws = exp(-float(dx * dx + dy * dy) * 0.02 / wScale);// histLen-guided σ (wider where the GI is still noisy)
         const float w  = wn * wz * ws;
         sum  += imageLoad(indirectImage, q).rgb * w;
         wsum += w;
