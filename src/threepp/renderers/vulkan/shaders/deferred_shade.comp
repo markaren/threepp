@@ -303,20 +303,16 @@ vec3 emissiveNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, vec3 albedo,
 }
 
 // Ray-traced diffuse environment irradiance WITH visibility (subsumes ambient
-// occlusion): cosine-hemisphere rays, environment radiance on escape, zero on
-// occlusion — so enclosed surfaces see no sky (no IBL leak into closed rooms,
-// and natural contact darkening). `openness` (unoccluded fraction) gates the
-// flat ambient fill. Per-frame jittered; TAA averages the few rays clean.
-// Hits contribute 0 here (no emissive/colour bounce — that's GI/emissive-NEE,
-// a separate step), so an enclosed scene goes dark rather than sky-lit.
-vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, out float openness) {
-    const int   GI_RAYS = 64;// brute-force fixed samples — clean WITHOUT a spatial denoiser
+// occlusion): cosine-hemisphere rays, environment radiance on escape, "far hit ≈
+// sky" hack on occlusion (gated by sky-reachability so enclosures go dark).
+// DETERMINISTIC Fibonacci set → noise-free WITHOUT a denoiser.
+// PHASE-2 NOTE: real stochastic 1-bounce GI via traceRadiance was verified correct
+// here (enclosure dark, colour bleed, emitter-lit) but is 1-spp-NOISY — it returns
+// only with its SVGF denoiser (temporal-illum accumulation + variance + à-trous).
+// Kept deterministic until then so the shared deferred path is never left noisy.
+vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, out float openness) {
+    const int   GI_RAYS = 64;// brute-force fixed samples — clean WITHOUT a denoiser
     const float maxLod  = float(max(pc.envMipCount, 1u) - 1u);
-    // DETERMINISTIC, well-distributed Fibonacci cosine-hemisphere set — NO per-pixel
-    // RNG and NO `frame`. Well-distributed (not random) so it converges SMOOTHLY
-    // with sample count (no fixed-pattern grain that random sampling leaves), and
-    // identical every frame so a static view is noise-free + crisp and SETTLES
-    // instantly — no blur filter needed. (frame param kept for ABI; unused.)
     const vec3 up = abs(N.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     const vec3 T  = normalize(cross(up, N));
     const vec3 B  = cross(N, T);
@@ -324,23 +320,12 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, out float openness) {
     vec3  acc  = vec3(0.0);
     float open = 0.0;
     const float GA = 2.39996323;// golden angle (rad)
-    // One LONG trace per ray (SKY_DIST), used two ways:
-    //  • ESCAPE → the ray reached the sky → real env (acc), and count it (open).
-    //  • HIT → no sky in this direction. Treat a FAR hit as ≈ sky (contact→1) and
-    //    a NEAR hit as darkening (contact→0, contact AO). This "far hit ≈ sky"
-    //    term (hitHack) is exactly the ORIGINAL look that kept OPEN scenes bright
-    //    (distant geometry doesn't darken them — no "shadows everywhere") — but it
-    //    is a HACK (there may be no sky behind the far geometry), so it is GATED
-    //    below by whether the sky is genuinely reachable from this pixel.
-    // Why long rays: AO_RADIUS=2 was too short to notice a DISTANT enclosure (a
-    // 200-unit skybox ~100 units out) → every ray "escaped" the 2-unit cap → a
-    // SEALED scene was lit by a sky it can't see. SKY_DIST detects the enclosure.
     const float AO_RADIUS = 2.0;    // contact-AO fade range
     const float SKY_DIST  = 1000.0; // a ray must clear this to count the sky
     vec3 hitHack = vec3(0.0);       // occluded dirs treated as ≈sky (the OPEN look)
     for (int s = 0; s < GI_RAYS; ++s) {
-        const float u1  = (float(s) + 0.5) / float(GI_RAYS);// cosine radial (even, deterministic)
-        const float phi = float(s) * GA;                    // golden-angle azimuth spiral
+        const float u1  = (float(s) + 0.5) / float(GI_RAYS);
+        const float phi = float(s) * GA;
         const float r   = sqrt(u1);
         const vec3  hemi = vec3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));
         const vec3  dir  = normalize(T * hemi.x + B * hemi.y + N * hemi.z);
@@ -350,22 +335,15 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, out float openness) {
         while (rayQueryProceedEXT(rq)) {}
         if (rayQueryGetIntersectionTypeEXT(rq, true) ==
             gl_RayQueryCommittedIntersectionNoneEXT) {
-            acc  += sampleEnvLod(dir, maxLod);// escaped → real sky
+            acc  += sampleEnvLod(dir, maxLod);
             open += 1.0;
         } else {
             const float t       = rayQueryGetIntersectionTEXT(rq, true);
-            const float contact = clamp(t / AO_RADIUS, 0.0, 1.0);// near→0 AO, far→1 ≈sky
+            const float contact = clamp(t / AO_RADIUS, 0.0, 1.0);
             hitHack += contact * sampleEnvLod(dir, maxLod);
         }
     }
     openness = open / float(GI_RAYS);
-    // SKY-REACHABILITY GATE on the "far hit ≈ sky" hack. OPEN scene (a few rays
-    // escape) → full hack → ORIGINAL bright look, distant geometry never
-    // over-darkens. SEALED scene (NO ray reaches SKY_DIST) → hack killed → the env
-    // can't light the interior, so it's lit purely by emitters / analytic lights
-    // (dark + smooth — no faceted bounce). Real escaped sky (acc) is naturally 0
-    // when sealed, so only the hack needs gating. Low threshold so any genuine sky
-    // keeps the open look; only true enclosures go dark.
     const float skyMix = smoothstep(0.0, 0.03, openness);
     acc += hitHack * skyMix;
     return acc / float(GI_RAYS);
@@ -946,7 +924,7 @@ void main() {
     vec3 diffInd;
     if (aoOn) {
         float openness;
-        diffInd = gatherEnv(worldPos, N, px, pc.frame, openness) + lights.ambient * openness;
+        diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, openness) + lights.ambient * openness;
     } else {
         diffInd = sampleEnvLod(N, maxLod) + lights.ambient;
     }
@@ -999,6 +977,12 @@ void main() {
         // shortcut, same family as the glass primary-roughness clamp — but with no
         // grain and no "N copies in a ring". The env-miss blur still uses the TRUE
         // roughness (missLod) so rough surfaces keep a soft sky reflection.
+        // NOTE: deterministic lobe-clamp (Phase-1 era). Phase-2 stochastic glossy
+        // reflections need a DEDICATED reflection denoiser (reflection history +
+        // roughness-guided spatial filter) — the final-image TAA can't stabilize a
+        // 1-2 spp stochastic reflection (high spatial variance → wide variance-clip
+        // box → history wobbles; verified: mean frame diff 0.034→0.87). Kept clamped
+        // until that denoiser exists.
         const float reflRough = min(roughness, 0.16);
         const int   RSAMP     = roughness < 0.08 ? 1 : 8;
         vec3 acc = vec3(0.0);
@@ -1007,9 +991,8 @@ void main() {
             vec3 L = (RSAMP == 1) ? R : sampleGGXReflectionFib(V, N, reflRough, s, RSAMP);
             if (dot(L, N) <= 0.0) L = R;// keep below-horizon samples on the surface
             vec3 r = traceRadiance(shadowOrig, L, shadowsOn, maxLod, missLod, seed);
-            // Firefly clamp glossy samples only.
             if (RSAMP > 1) {
-                const float lum = max(max(r.r, r.g), r.b);
+                const float lum = max(max(r.r, r.g), r.b);// firefly clamp glossy variance
                 if (lum > pc.fireflyClamp) r *= pc.fireflyClamp / lum;
             }
             acc += r;
