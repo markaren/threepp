@@ -62,7 +62,8 @@ void main() {
 
     vec3  sum  = vec3(0.0);
     float wsum = 0.0;
-    const int R = 5;// 11x11 footprint — AO/GI is low-frequency, so a wide kernel is appropriate
+    const int R = 10;// 21x21 footprint — demod GI is low-frequency + now 1-2 spp stochastic,
+                     // so a WIDE edge-aware blur cleans the noise without losing detail.
     for (int dy = -R; dy <= R; ++dy)
     for (int dx = -R; dx <= R; ++dx) {
         const ivec2 q = px + ivec2(dx, dy);
@@ -75,7 +76,7 @@ void main() {
         if (wn <= 0.0) continue;
         const vec3  Pq = worldFromDepth(q, texelFetch(gbufDepthTex, q, 0).x);
         const float wz = exp(-abs(dot(Pq - Pc, Nc)) * planeScale);// tangent-plane edge stop
-        const float ws = exp(-float(dx * dx + dy * dy) * 0.08);// spatial Gaussian σ≈2.5: smooth, less blobbing than a box
+        const float ws = exp(-float(dx * dx + dy * dy) * 0.02);// spatial Gaussian σ≈5 (matches the wider R=10 kernel)
         const float w  = wn * wz * ws;
         sum  += imageLoad(indirectImage, q).rgb * w;
         wsum += w;
