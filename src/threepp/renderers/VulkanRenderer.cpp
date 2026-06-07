@@ -6089,10 +6089,13 @@ namespace threepp {
             // sub-pixel jitter still happens in raygen's hybrid primary via
             // the blue-noise tile (see primaryDirHybrid), so interior AA
             // doesn't disappear — only the coverage jitter is gone.
-            // OFF: jitter+TAA flickered badly on the deferred path. Anti-aliasing
-            // is done by FXAA (spatial, in the TAA resolve shader) instead — no
-            // jitter, no temporal shimmer.
-            constexpr bool kRasterJitterEnabled = false;
+            // Phase 1 (TSR rebuild): jitter ON. Sub-pixel Halton coverage +
+            // temporal accumulation = proper TAA/TSR (replaces FXAA). The earlier
+            // "flicker" was silhouette coverage-flip on MOVING objects with a loose
+            // RGB AABB history clamp; the resolve now uses a YCoCg variance clip
+            // (tighter history rejection) to suppress it. Static views converge to
+            // clean AA over the 16-frame Halton cycle.
+            constexpr bool kRasterJitterEnabled = true;
             const float jClipX = kRasterJitterEnabled ? 2.f * jx / float(ext.width)  : 0.f;
             const float jClipY = kRasterJitterEnabled ? 2.f * jy / float(ext.height) : 0.f;
 

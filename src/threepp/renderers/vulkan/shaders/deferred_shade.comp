@@ -324,22 +324,20 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, out float openness) {
     vec3  acc  = vec3(0.0);
     float open = 0.0;
     const float GA = 2.39996323;// golden angle (rad)
-    // Each ray serves TWO purposes via ONE long trace:
-    //  • SKY VISIBILITY (env IBL): a ray that reaches SKY_DIST without hitting
-    //    geometry sees the sky → add the env. A ray that hits ANYTHING does NOT.
-    //    The old AO_RADIUS-only cap (2 units) was far too short to notice a
-    //    DISTANT enclosure (e.g. a 200-unit skybox mesh ~100 units away) → every
-    //    ray "escaped" the 2-unit cap → a SEALED scene was lit by a sky it can't
-    //    actually see. SKY_DIST fixes that leak.
-    //  • 1-BOUNCE FILL + CONTACT AO: an occluded direction contributes the hit
-    //    surface's albedo reflecting the (average) env, faded by contact distance.
-    //    Distant LIT geometry bounces fill light (open scenes don't over-darken
-    //    into "shadows everywhere"); a dark/black enclosure bounces ~nothing (a
-    //    sealed scene goes dark, not env-lit); a NEAR hit barely bounces (contact
-    //    AO in crevices, with no hard radius band).
+    // One LONG trace per ray (SKY_DIST), used two ways:
+    //  • ESCAPE → the ray reached the sky → real env (acc), and count it (open).
+    //  • HIT → no sky in this direction. Treat a FAR hit as ≈ sky (contact→1) and
+    //    a NEAR hit as darkening (contact→0, contact AO). This "far hit ≈ sky"
+    //    term (hitHack) is exactly the ORIGINAL look that kept OPEN scenes bright
+    //    (distant geometry doesn't darken them — no "shadows everywhere") — but it
+    //    is a HACK (there may be no sky behind the far geometry), so it is GATED
+    //    below by whether the sky is genuinely reachable from this pixel.
+    // Why long rays: AO_RADIUS=2 was too short to notice a DISTANT enclosure (a
+    // 200-unit skybox ~100 units out) → every ray "escaped" the 2-unit cap → a
+    // SEALED scene was lit by a sky it can't see. SKY_DIST detects the enclosure.
     const float AO_RADIUS = 2.0;    // contact-AO fade range
     const float SKY_DIST  = 1000.0; // a ray must clear this to count the sky
-    const vec3  avgEnv    = sampleEnvLod(N, maxLod);// cheap bounce illuminant proxy
+    vec3 hitHack = vec3(0.0);       // occluded dirs treated as ≈sky (the OPEN look)
     for (int s = 0; s < GI_RAYS; ++s) {
         const float u1  = (float(s) + 0.5) / float(GI_RAYS);// cosine radial (even, deterministic)
         const float phi = float(s) * GA;                    // golden-angle azimuth spiral
@@ -347,31 +345,29 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, out float openness) {
         const vec3  hemi = vec3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));
         const vec3  dir  = normalize(T * hemi.x + B * hemi.y + N * hemi.z);
         rayQueryEXT rq;
-        // Closest hit (NO terminate-on-first) so the contact distance + hit albedo
-        // belong to the NEAREST occluder, not an arbitrary one.
         rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT,
                               0xFFu, orig, 1e-3, dir, SKY_DIST);
         while (rayQueryProceedEXT(rq)) {}
         if (rayQueryGetIntersectionTypeEXT(rq, true) ==
             gl_RayQueryCommittedIntersectionNoneEXT) {
-            // Escaped → sky visible in this direction.
-            acc  += sampleEnvLod(dir, maxLod);
+            acc  += sampleEnvLod(dir, maxLod);// escaped → real sky
             open += 1.0;
         } else {
-            // Occluded → NO sky; contribute a cheap distance-faded albedo bounce.
             const float t       = rayQueryGetIntersectionTEXT(rq, true);
-            const float contact = clamp(t / AO_RADIUS, 0.0, 1.0);
-            const uint  hid     = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-            // 0.5 bounce factor: the illuminant is the GLOBAL env (a proxy — the
-            // hit may not actually see it), so damp it. Enough fill to keep open
-            // scenes from over-darkening (they're sky-dominated anyway); dim
-            // enough that a sealed scene's interior bounce stays subtle.
-            acc += mats[hid].albedo * avgEnv * contact * 0.5;
-            // open stays 0 for this ray — an occluded direction gates the flat
-            // ambient fill the caller adds as `lights.ambient * openness`.
+            const float contact = clamp(t / AO_RADIUS, 0.0, 1.0);// near→0 AO, far→1 ≈sky
+            hitHack += contact * sampleEnvLod(dir, maxLod);
         }
     }
     openness = open / float(GI_RAYS);
+    // SKY-REACHABILITY GATE on the "far hit ≈ sky" hack. OPEN scene (a few rays
+    // escape) → full hack → ORIGINAL bright look, distant geometry never
+    // over-darkens. SEALED scene (NO ray reaches SKY_DIST) → hack killed → the env
+    // can't light the interior, so it's lit purely by emitters / analytic lights
+    // (dark + smooth — no faceted bounce). Real escaped sky (acc) is naturally 0
+    // when sealed, so only the hack needs gating. Low threshold so any genuine sky
+    // keeps the open look; only true enclosures go dark.
+    const float skyMix = smoothstep(0.0, 0.03, openness);
+    acc += hitHack * skyMix;
     return acc / float(GI_RAYS);
 }
 
@@ -844,7 +840,15 @@ void main() {
     const vec2 size = vec2(float(pc.width), float(pc.height));
     const vec2 uv   = (vec2(px) + 0.5) / size;
 
-    const vec2 ndc    = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    // Jitter-aware NDC. The G-buffer is rasterized with a sub-pixel jittered
+    // projection (TSR), so the depth at this pixel belongs to geometry whose
+    // UNJITTERED NDC is offset by the jitter. Add it back before reconstructing
+    // worldPos with the unjittered projInverse — without it, GRAZING surfaces
+    // reconstruct OFF the surface (the depth gradient is steep, so a sub-pixel NDC
+    // error becomes a large position error), the gatherEnv ray origin lands behind
+    // the surface → every ray occluded → the surface renders BLACK. cam.jitter.xy
+    // equals the gbuffer's Halton jitter (same haltonFrame_, same frame).
+    const vec2 ndc    = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + cam.jitter.xy;
     const vec3 camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
     const float maxLod = float(max(pc.envMipCount, 1u) - 1u);
 
