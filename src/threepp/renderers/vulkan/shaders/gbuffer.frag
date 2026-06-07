@@ -99,6 +99,18 @@ float alphaHash(vec2 fragXY, vec2 jitter) {
 void main() {
     vec3 N = normalize(vWorldNormal);
 
+    // Two-sided / back-facing fragments: flip the geometric normal to face the
+    // viewer. A Side::Double surface stores ONE geometric normal for both faces,
+    // so the face whose normal points away from a light stays dark in the
+    // deferred shade (and the lit side appears to "bleed" — e.g. one of two
+    // symmetric divider walls dark, the other lit). gl_FrontFacing is reliable
+    // here: the vertex-shader Y-flip (gl_Position.y = -y) restores GL's CCW-front
+    // convention, matching the pipeline frontFace = COUNTER_CLOCKWISE. Single-
+    // sided (cull-back) meshes never produce back fragments, so this is a no-op
+    // for them; done BEFORE the normal-map TBN so perturbation is relative to the
+    // correctly-oriented surface.
+    if (!gl_FrontFacing) N = -N;
+
     // UV derivatives — used both for the LOD bias attachment and the normal-
     // map TBN construction below. Hoisted out of the normal-map branch
     // because dFdx/dFdy must be called from non-divergent control flow.

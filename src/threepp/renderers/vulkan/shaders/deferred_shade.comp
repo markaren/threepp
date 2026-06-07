@@ -237,17 +237,26 @@ float fbm4(vec2 p) {
 // Emissive-mesh NEE: directly sample the emissive-triangle area lights (power
 // CDF), shadow-test, add the contribution. Clean (samples the emitter, not a
 // random hemisphere), so an emissive sphere actually illuminates the room.
-// Mirrors closest_hit's emissive sampling. One sample/frame, frame-jittered →
-// TAA averages it.
+//
+// DETERMINISTIC + COHERENT across pixels (like gatherEnv) — NO per-pixel
+// rnd(seed). The old random version gave per-pixel speckle that ONLY temporal
+// accumulation could hide, so on the deterministic deferred path (jitter off,
+// FXAA) any scene with emissives was "crazy noisy". Coherent area-light shading
+// is correct (diffuse contribution is a smooth function of position — no "copies"
+// like a mirror reflection would have). Sample count now controls emitter
+// COVERAGE (bias), not noise: stratified power-CDF picks span the emitters ∝
+// power; a low-discrepancy (R2) barycentric covers each picked triangle's area.
+// Settles instantly, no denoiser. (`seed` kept for ABI; unused.)
 vec3 emissiveNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, vec3 albedo,
                  float roughness, float metalness, float k, inout uint seed, bool doShadows) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
     const int   emIters    = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
-    const int   EM_SAMPLES = 2;// averaged; small bright emitters are high-variance
+    const int   EM_SAMPLES = 16;// coherent → no noise; count = emitter coverage
     const vec3  shadowOrig = P + N * SHADOW_EPS;
     vec3 sum = vec3(0.0);
     for (int s = 0; s < EM_SAMPLES; ++s) {
-        const float xi = rnd(seed) * pc.emissiveTotalPower;
+        // Stratified power-CDF pick (covers emitters ∝ power, deterministically).
+        const float xi = (float(s) + 0.5) / float(EM_SAMPLES) * pc.emissiveTotalPower;
         uint lo = 0u, hi = pc.emissiveCount - 1u;
         for (int it = 0; it < emIters; ++it) {
             if (lo >= hi) break;
@@ -255,8 +264,10 @@ vec3 emissiveNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, vec3 albedo,
             if (emissiveTris[mid].v1.w < xi) lo = mid + 1u; else hi = mid;
         }
         const EmTri t = emissiveTris[lo];
-        const float su1 = sqrt(rnd(seed));
-        const float r2  = rnd(seed);
+        // Low-discrepancy (R2 additive-recurrence) barycentric point — deterministic,
+        // well-spread so a large/near emitter's area is covered smoothly.
+        const float su1 = sqrt(fract(0.5 + float(s) * 0.7548776662));
+        const float r2  =      fract(0.5 + float(s) * 0.5698402909);
         const vec3 lp = (1.0 - su1) * t.v0.xyz + (su1 * (1.0 - r2)) * t.v1.xyz + (su1 * r2) * t.v2.xyz;
         const vec3 toL = lp - P;
         const float dist2 = dot(toL, toL);
@@ -313,14 +324,22 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, out float openness) {
     vec3  acc  = vec3(0.0);
     float open = 0.0;
     const float GA = 2.39996323;// golden angle (rad)
-    // LOCAL contact AO: occlusion rays are short (AO_RADIUS), so only NEARBY
-    // geometry (crevices, contact, corners) darkens. With infinite-length rays
-    // every surface counted any geometry anywhere as full occlusion (and we add
-    // no bounce-light fill), which over-darkened the whole scene → "shadows
-    // everywhere" the PT (full GI) doesn't have. Beyond AO_RADIUS a ray "escapes"
-    // → reads the sky → that direction is lit, so open areas (even in sun-shadow)
-    // get full sky light like the PT. Tunable.
-    const float AO_RADIUS = 2.0;
+    // Each ray serves TWO purposes via ONE long trace:
+    //  • SKY VISIBILITY (env IBL): a ray that reaches SKY_DIST without hitting
+    //    geometry sees the sky → add the env. A ray that hits ANYTHING does NOT.
+    //    The old AO_RADIUS-only cap (2 units) was far too short to notice a
+    //    DISTANT enclosure (e.g. a 200-unit skybox mesh ~100 units away) → every
+    //    ray "escaped" the 2-unit cap → a SEALED scene was lit by a sky it can't
+    //    actually see. SKY_DIST fixes that leak.
+    //  • 1-BOUNCE FILL + CONTACT AO: an occluded direction contributes the hit
+    //    surface's albedo reflecting the (average) env, faded by contact distance.
+    //    Distant LIT geometry bounces fill light (open scenes don't over-darken
+    //    into "shadows everywhere"); a dark/black enclosure bounces ~nothing (a
+    //    sealed scene goes dark, not env-lit); a NEAR hit barely bounces (contact
+    //    AO in crevices, with no hard radius band).
+    const float AO_RADIUS = 2.0;    // contact-AO fade range
+    const float SKY_DIST  = 1000.0; // a ray must clear this to count the sky
+    const vec3  avgEnv    = sampleEnvLod(N, maxLod);// cheap bounce illuminant proxy
     for (int s = 0; s < GI_RAYS; ++s) {
         const float u1  = (float(s) + 0.5) / float(GI_RAYS);// cosine radial (even, deterministic)
         const float phi = float(s) * GA;                    // golden-angle azimuth spiral
@@ -328,24 +347,29 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, out float openness) {
         const vec3  hemi = vec3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));
         const vec3  dir  = normalize(T * hemi.x + B * hemi.y + N * hemi.z);
         rayQueryEXT rq;
-        rayQueryInitializeEXT(rq, topAS,
-                              gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
-                              0xFFu, orig, 1e-3, dir, AO_RADIUS);
+        // Closest hit (NO terminate-on-first) so the contact distance + hit albedo
+        // belong to the NEAREST occluder, not an arbitrary one.
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT,
+                              0xFFu, orig, 1e-3, dir, SKY_DIST);
         while (rayQueryProceedEXT(rq)) {}
-        // DISTANCE-ATTENUATED occlusion (no hard radius boundary). A binary
-        // hit/escape cutoff at AO_RADIUS produces a visible soft "step" ~AO_RADIUS
-        // in from each wall (the rectangular floor bands). Instead, a far hit (near
-        // AO_RADIUS) barely occludes and a contact hit fully occludes:
-        //   w = 1 → fully open (sky); w → 0 → fully occluded.
-        float w = 1.0;
-        if (rayQueryGetIntersectionTypeEXT(rq, true) !=
+        if (rayQueryGetIntersectionTypeEXT(rq, true) ==
             gl_RayQueryCommittedIntersectionNoneEXT) {
-            const float t = rayQueryGetIntersectionTEXT(rq, true);// hit distance
-            w = clamp(t / AO_RADIUS, 0.0, 1.0);
+            // Escaped → sky visible in this direction.
+            acc  += sampleEnvLod(dir, maxLod);
+            open += 1.0;
+        } else {
+            // Occluded → NO sky; contribute a cheap distance-faded albedo bounce.
+            const float t       = rayQueryGetIntersectionTEXT(rq, true);
+            const float contact = clamp(t / AO_RADIUS, 0.0, 1.0);
+            const uint  hid     = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+            // 0.5 bounce factor: the illuminant is the GLOBAL env (a proxy — the
+            // hit may not actually see it), so damp it. Enough fill to keep open
+            // scenes from over-darkening (they're sky-dominated anyway); dim
+            // enough that a sealed scene's interior bounce stays subtle.
+            acc += mats[hid].albedo * avgEnv * contact * 0.5;
+            // open stays 0 for this ray — an occluded direction gates the flat
+            // ambient fill the caller adds as `lights.ambient * openness`.
         }
-        // Cosine-weighted estimator (cos/pdf cancel); high mip = pre-blurred sky.
-        acc  += w * sampleEnvLod(dir, maxLod);
-        open += w;
     }
     openness = open / float(GI_RAYS);
     return acc / float(GI_RAYS);
@@ -514,11 +538,19 @@ float radicalInverseVdC(uint bits) {
     return float(bits) * 2.3283064365386963e-10;
 }
 vec3 ggxHalfVectorFib(vec3 N, float roughness, int s, int count) {
+    if (count <= 1) return N;// single sample = exact mirror (deterministic bounce)
     const float a    = roughness * roughness;
+    // Elevation: stratified GGX-importance uniform → correct lobe distribution.
     const float u1   = (float(s) + 0.5) / float(count);
-    const float u2   = radicalInverseVdC(uint(s));
-    const float phi  = TWO_PI * u1;
-    const float cosT = sqrt((1.0 - u2) / (1.0 + (a * a - 1.0) * u2));
+    // Azimuth: GOLDEN-ANGLE SPIRAL (s*GA) instead of a count-spaced ring. The old
+    // ring (phi = 2π·(s+0.5)/count) put the samples at `count` discrete azimuths,
+    // so a flat glossy surface reflected the scene as `count` coherent COPIES at
+    // those angles. The spiral spreads them evenly with no banding. Coherent
+    // across pixels (no per-pixel jitter) → NO grain; the reflection lobe is
+    // clamped narrow at the call site so the residual copies cluster tightly near
+    // the mirror direction and read as a clean soft reflection, not ghost images.
+    const float phi  = float(s) * 2.39996323;
+    const float cosT = sqrt((1.0 - u1) / (1.0 + (a * a - 1.0) * u1));
     const float sinT = sqrt(max(0.0, 1.0 - cosT * cosT));
     const vec3  Ht   = vec3(sinT * cos(phi), sinT * sin(phi), cosT);
     const vec3  up   = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
@@ -956,12 +988,19 @@ void main() {
     const vec2  ab        = envBRDFApprox(NdotV, roughness);
     const float reflBlend = 1.0 - smoothstep(0.55, 0.70, roughness);
     if (reflBlend > 0.0) {
-        const float missLod = roughness * maxLod;// glossy misses read the blurred env mip
-        const int   RSAMP   = roughness < 0.08 ? 1 : (roughness < 0.30 ? 4 : 8);// Fibonacci → more samples = smoother glossy blur, still no speckle
+        const float missLod = roughness * maxLod;// glossy misses read the blurred env mip (TRUE roughness)
+        // Clamp the reflection LOBE to a narrow cone so the stochastic estimate is
+        // low-variance (clean) at a modest sample count. A rough surface then
+        // reflects the SCENE slightly sharper than physical — a deliberate game
+        // shortcut, same family as the glass primary-roughness clamp — but with no
+        // grain and no "N copies in a ring". The env-miss blur still uses the TRUE
+        // roughness (missLod) so rough surfaces keep a soft sky reflection.
+        const float reflRough = min(roughness, 0.16);
+        const int   RSAMP     = roughness < 0.08 ? 1 : 8;
         vec3 acc = vec3(0.0);
         for (int s = 0; s < RSAMP; ++s) {
-            // r<0.08 → exact mirror (deterministic, noise-free); else GGX lobe.
-            vec3 L = (RSAMP == 1) ? R : sampleGGXReflectionFib(V, N, roughness, s, RSAMP);
+            // r<0.08 → exact mirror (deterministic, noise-free); else clamped GGX lobe.
+            vec3 L = (RSAMP == 1) ? R : sampleGGXReflectionFib(V, N, reflRough, s, RSAMP);
             if (dot(L, N) <= 0.0) L = R;// keep below-horizon samples on the surface
             vec3 r = traceRadiance(shadowOrig, L, shadowsOn, maxLod, missLod, seed);
             // Firefly clamp glossy samples only.
