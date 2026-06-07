@@ -1231,10 +1231,14 @@ namespace threepp {
         // skips the bloom passes (composite still owns the tone map).
         std::unique_ptr<vulkan::BloomPass> bloom_;
         float bloomIntensity_ = 0.0f;
-        // Spatial denoise of the demodulated diffuse-indirect (RasterFirst only).
-        // OFF by default — it softened the image ("murky"); we rely on a high
-        // fixed sample count instead. setDeferredDenoise(true) re-enables it.
-        bool  deferredDenoise_ = false;
+        // Phase-2 GI path (RasterFirst): ON now activates REAL stochastic 1-bounce
+        // GI (colour bleed, no AO/sky hacks) + temporal accumulation + à-trous.
+        // OFF falls back to the clean deterministic AO+far≈sky approximation.
+        // Default ON to ship the Phase-2 GI. CAVEATS (follow-ups): GI bounce uses
+        // full traceRadiance (expensive in emitter-heavy scenes — cheap sun+emissive
+        // bounce pending); no reproject/disocclusion yet → MOTION GHOSTS (ping-pong
+        // history reproject pending). setDeferredDenoise(false) → clean fallback.
+        bool  deferredDenoise_ = true;
         // Ray-traced env ambient occlusion / GI (RasterFirst). ON: gives the
         // "dirty realistic" PT-like grounding (contact darkening + 1-bounce GI).
         // Uses the deterministic Fibonacci 64-sample gather (clean + settles), so
@@ -7483,11 +7487,14 @@ namespace threepp {
                 g.albedo = createAttachmentImage2D(w, h, VK_FORMAT_R8G8B8A8_UNORM,
                                                    colorUsage, VK_IMAGE_ASPECT_COLOR_BIT,
                                                    N("albedo"));
-                // Deferred denoiser scratch — STORAGE only (compute write/read,
-                // never a render-pass attachment), so it's not in the framebuffer.
+                // Deferred GI accumulator / denoiser scratch — STORAGE (compute
+                // write/read) + SAMPLED so the deferred shade can sample the OTHER
+                // frame-in-flight's indirect as the 1-frame GI history (reprojected
+                // by the motion vector — Phase-2 GI reproject). Never a render-pass
+                // attachment, so not in the framebuffer.
                 g.indirect = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                     VK_IMAGE_USAGE_STORAGE_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
-                                                     N("indirect"));
+                                                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                     VK_IMAGE_ASPECT_COLOR_BIT, N("indirect"));
                 g.depth  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
                                                    depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
                                                    N("depth"));
@@ -9508,6 +9515,7 @@ namespace threepp {
             std::array<VkImageView, kFramesInFlight> idsViews{};
             std::array<VkImageView, kFramesInFlight> albedoViews{};
             std::array<VkImageView, kFramesInFlight> uvViews{};
+            std::array<VkImageView, kFramesInFlight> motionViews{};
             std::array<VkImageView, kFramesInFlight> indirectViews{};
             std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
@@ -9520,6 +9528,7 @@ namespace threepp {
                 idsViews[f]      = rasterGbufs[f].ids.view;
                 albedoViews[f]   = rasterGbufs[f].albedo.view;
                 uvViews[f]       = rasterGbufs[f].uv.view;
+                motionViews[f]   = rasterGbufs[f].motion.view;
                 indirectViews[f] = rasterGbufs[f].indirect.view;
                 sceneHdrViews[f] = bloom_->sceneHdrView(f);
             }
@@ -9538,6 +9547,7 @@ namespace threepp {
             in.gbufIds          = idsViews.data();
             in.gbufAlbedo       = albedoViews.data();
             in.gbufUv           = uvViews.data();
+            in.gbufMotion       = motionViews.data();
             in.indirect         = indirectViews.data();
             in.sceneHdr         = sceneHdrViews.data();
             in.tlas             = tlas;
@@ -12808,13 +12818,22 @@ namespace threepp {
                 // deferred pass traverses the same acceleration structures via
                 // ray query from COMPUTE, so add an AS-build → compute fence here.
                 // No-op for static scenes (no pending AS write this frame).
+                // ALSO carries the GI-reproject cross-frame dependency: this
+                // frame's deferred shade SAMPLES the OTHER frame-in-flight's
+                // indirect image (last frame's accumulated GI history). Make the
+                // prev frame's COMPUTE write to it visible to this frame's COMPUTE
+                // read (the GPU executes frames sequentially per queue, so this is a
+                // cache-visibility barrier, not ordering).
                 {
                     VkMemoryBarrier2 asbar{};
                     asbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                    asbar.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-                    asbar.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                    asbar.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    asbar.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
+                                          VK_ACCESS_2_SHADER_WRITE_BIT;
                     asbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    asbar.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+                    asbar.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                          VK_ACCESS_2_SHADER_READ_BIT;
                     VkDependencyInfo asdep{};
                     asdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
                     asdep.memoryBarrierCount = 1;

@@ -101,7 +101,14 @@ layout(set = 0, binding = 15) uniform sampler2D gbufUvTex;     // .rg = primary 
 // here, spatially denoised + recombined by deferred_denoise.comp. vec4(0) where
 // the indirect is kept inline (sky/unlit/water/glass/sheen) so the denoise adds
 // nothing there.
-layout(set = 0, binding = 16, rgba16f) uniform writeonly image2D indirectImage;
+// Write-target for THIS frame's accumulated demod GI (the denoise reads it; NEXT
+// frame reads it as the reproject history via binding 17).
+layout(set = 0, binding = 16, rgba16f) uniform image2D indirectImage;
+// GI reproject (Phase 2): prev accumulated GI (the OTHER frame-in-flight's indirect
+// = 1-frame history), the motion vector, and the prev mesh-IDs for disocclusion.
+layout(set = 0, binding = 17) uniform sampler2D  giPrevTex;     // 1-frame GI history (reprojected)
+layout(set = 0, binding = 18) uniform sampler2D  gbufMotionTex; // .rg = NDC motion
+layout(set = 0, binding = 19) uniform usampler2D gbufIdsPrevTex;// prev mesh-IDs (disocclusion)
 
 layout(push_constant) uniform Pc {
     uint  envMipCount;       // PMREM mip levels (>=1)
@@ -312,7 +319,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
 //    temporally accumulated (TAA) by the caller.
 //  • DENOISER OFF → the deterministic Fibonacci AO + gated "far≈sky" approximation
 //    (noise-free WITHOUT a denoiser; the clean fallback for non-denoised scenes).
-vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, out float openness) {
+vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stochastic, out float openness) {
     const float maxLod  = float(max(pc.envMipCount, 1u) - 1u);
     const vec3 up = abs(N.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     const vec3 T  = normalize(cross(up, N));
@@ -320,8 +327,8 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, out float o
     const vec3 orig = P + N * SHADOW_EPS;
     openness = 1.0;
 
-    if ((pc.flags & 4u) != 0u) {
-        // Real stochastic 1-bounce GI (denoiser on).
+    if (stochastic) {
+        // Real stochastic 1-bounce GI (accumulated + denoised downstream).
         uint seed = uint(px.x) * 1973u + uint(px.y) * 9277u + frame * 26699u + 0x9e3779b9u;
         const int N_GI = 2;// low spp; spatial denoise + TAA integrate it
         vec3 acc = vec3(0.0);
@@ -332,7 +339,14 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, out float o
             const float phi = TWO_PI * u2;
             const vec3  hemi = vec3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));
             const vec3  dir  = normalize(T * hemi.x + B * hemi.y + N * hemi.z);
-            acc += traceRadiance(orig, dir, doShadows, maxLod, maxLod, seed);// cosine pdf cancels
+            vec3 gi = traceRadiance(orig, dir, doShadows, maxLod, maxLod, seed);// cosine pdf cancels
+            // FIREFLY CLAMP — a single GI bounce that catches the sun via a glossy
+            // hit / an emissiveNEE spike returns a huge value the temporal+à-trous
+            // can't suppress (it smears into bright blobs). Diffuse GI is bounded,
+            // so cap each sample's luminance hard.
+            const float gl = max(max(gi.r, gi.g), gi.b);
+            if (gl > 6.0) gi *= 6.0 / gl;
+            acc += gi;
         }
         return acc / float(N_GI);
     }
@@ -935,30 +949,26 @@ void main() {
     const vec3  F0    = mix(vec3(0.04) * pm.specularIntensity * pm.specularColor, albedo, metalness);
     const vec3  shadowOrig = worldPos + N * SHADOW_EPS;
 
-    // Diffuse indirect: visibility-gated env irradiance (RT, flags bit 1) so
-    // enclosed surfaces aren't lit by a sky they can't see (also gives ambient
-    // occlusion). Falls back to crude unoccluded env IBL when disabled.
+    // Demodulated (binding 16, accumulated + denoised) vs INLINE diffuse indirect.
+    // demodIndirect (opaque, non-sheen) → the GI is demodulated, temporally
+    // accumulated + à-trous denoised. INLINE (transparent/glass/sheen) → the GI is
+    // used directly. Computed BEFORE gatherEnv so the gather picks the right path:
+    // stochastic real GI ONLY for the demod path (it gets accumulated/denoised);
+    // the INLINE path uses the DETERMINISTIC GI (1-spp would just be noisy there —
+    // that was the transparent-quad wobble).
+    const bool denoiseOn = (pc.flags & 4u) != 0u;
+    const bool demodIndirect = denoiseOn && (pm.transmission <= 0.0) &&
+                               (dot(pm.sheenColor, pm.sheenColor) <= 0.0);
+
+    // Diffuse indirect: visibility-gated env irradiance (RT, flags bit 1).
     const bool aoOn = (pc.flags & 2u) != 0u;
     vec3 diffInd;
     if (aoOn) {
         float openness;
-        diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, openness) + lights.ambient * openness;
+        diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect, openness) + lights.ambient * openness;
     } else {
         diffInd = sampleEnvLod(N, maxLod) + lights.ambient;
     }
-
-    // Demodulate the (noisy) diffuse-indirect into binding 16 for the spatial
-    // denoiser (deferred_denoise.comp), EXCLUDING it from the inline shade — it's
-    // recombined post-blur as blur(diffInd)*diffuseColor. Kept INLINE (indirect=0)
-    // for glass (mixed with the glass look below) and sheen (its IBL modulator
-    // isn't in the G-buffer) so those stay correct, at the cost of un-denoised
-    // indirect there (both rare).
-    // Only demodulate when the denoiser is enabled (flags bit 2); otherwise keep
-    // the indirect INLINE (noisy but present) so disabling the denoise pass
-    // doesn't drop AO/GI/ambient lighting entirely.
-    const bool denoiseOn = (pc.flags & 4u) != 0u;
-    const bool demodIndirect = denoiseOn && (pm.transmission <= 0.0) &&
-                               (dot(pm.sheenColor, pm.sheenColor) <= 0.0);
     const vec3 diffIndShade = demodIndirect ? vec3(0.0) : diffInd;
 
     // Diffuse + direct (shadowed) + emissive-NEE + diffuse indirect + emissive.
@@ -1056,5 +1066,48 @@ void main() {
     }
 
     imageStore(outImage, px, vec4(lit, 1.0));
-    imageStore(indirectImage, px, demodIndirect ? vec4(diffInd, 1.0) : vec4(0.0));
+    // SVGF TEMPORAL stage for the demod GI — now with REPROJECTION (kills motion
+    // ghosting). Read the 1-frame GI history (the OTHER fif index, giPrevTex) at
+    // the MOTION-REPROJECTED pixel, exp-moving-average the current stochastic GI
+    // into it with a history-length α (1/histLen → converged pixels barely change),
+    // and write the result for the denoise + next frame. DISOCCLUSION RESET: if the
+    // reprojected pixel is off-screen OR its prev mesh-ID ≠ this surface's, the
+    // history is stale → start fresh (α=1) so a moving / newly-revealed surface
+    // doesn't drag a ghost. NaN-guard the feedback. Motion convention matches
+    // taa_resolve exactly.
+    if (demodIndirect) {
+        const vec2 motionGL = texture(gbufMotionTex, uv).rg;
+        const vec2 currNDC  = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+        const vec2 prevNDC  = currNDC + motionGL;
+        const vec2 prevUv   = vec2(prevNDC.x * 0.5 + 0.5, 0.5 - prevNDC.y * 0.5);
+        bool valid = all(greaterThanEqual(prevUv, vec2(0.0))) &&
+                     all(lessThanEqual(prevUv, vec2(1.0)));
+        // JITTER-ROBUST DISOCCLUSION: the current surface (id) must appear SOMEWHERE
+        // in the 3×3 prev-ID neighbourhood around the reprojected pixel. This
+        // absorbs the sub-pixel jitter coverage flip + reproject rounding (a static
+        // silhouette's surface is still in the 3×3 → no false reset → no edge
+        // wobble), while a MOVING object that vacated this pixel (its prev ID is
+        // gone from the neighbourhood) DOES reset → the stale GI is cleared instead
+        // of trailing as a "dust cloud".
+        if (valid) {
+            const ivec2 ip = ivec2(prevUv * vec2(float(pc.width), float(pc.height)));
+            const ivec2 mx = ivec2(int(pc.width), int(pc.height)) - 1;
+            bool found = false;
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    if (texelFetch(gbufIdsPrevTex, clamp(ip + ivec2(dx, dy), ivec2(0), mx), 0).x == id)
+                        found = true;
+                }
+            }
+            valid = found;
+        }
+        const vec4  prevT = valid ? texture(giPrevTex, prevUv) : vec4(0.0);
+        const vec3  prev  = prevT.rgb;
+        valid = valid && all(lessThan(abs(prev), vec3(1e6)));// NaN/garbage guard
+        const float histLen = valid ? min(prevT.a + 1.0, 32.0) : 1.0;
+        const vec3  accum   = valid ? mix(prev, diffInd, 1.0 / histLen) : diffInd;
+        imageStore(indirectImage, px, vec4(accum, histLen));
+    } else {
+        imageStore(indirectImage, px, vec4(0.0));// histLen=0 → next frame cold-starts
+    }
 }

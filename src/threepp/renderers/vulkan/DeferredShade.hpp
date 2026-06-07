@@ -46,7 +46,8 @@ namespace threepp::vulkan {
             const VkImageView* gbufIds    = nullptr;// [framesInFlight] (usampler2D)
             const VkImageView* gbufAlbedo = nullptr;// [framesInFlight]
             const VkImageView* gbufUv     = nullptr;// [framesInFlight] (.rg = UV, emissive-map sample)
-            const VkImageView* indirect   = nullptr;// [framesInFlight] demodulated diffuse-indirect (denoiser scratch, storage)
+            const VkImageView* gbufMotion = nullptr;// [framesInFlight] (.rg = NDC motion, GI reproject)
+            const VkImageView* indirect   = nullptr;// [framesInFlight] GI accumulator / denoiser scratch (storage+sampled)
             const VkImageView* sceneHdr   = nullptr;// [framesInFlight] output (storage)
             VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;// shared scene TLAS (shadow + reflection rays)
             const VkBuffer*    materialBuf = nullptr;// [framesInFlight] MaterialDesc[] (emissive)

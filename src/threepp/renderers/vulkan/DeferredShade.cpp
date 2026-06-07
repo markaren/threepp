@@ -45,7 +45,7 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[17]{};
+        VkDescriptorSetLayoutBinding b[20]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -70,10 +70,13 @@ namespace threepp::vulkan {
         set(14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // ocean world-space foam accumulator
         set(15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf uv (primary emissive-map sample)
         set(16, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // demodulated diffuse-indirect (denoiser scratch)
+        set(17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV indirect (other fif index) = 1-frame GI history
+        set(18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf motion (GI reproject)
+        set(19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV gbuf ids (GI disocclusion reset)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 17;
+        dlci.bindingCount = 20;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -133,7 +136,7 @@ namespace threepp::vulkan {
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = framesInFlight_ * 2;// camera + lights
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * (8 + kMaxMaterialTextures);// env + 5 gbuf(normal,depth,ids,albedo,uv) + 2 ocean + bindless array
+        sizes[1].descriptorCount = framesInFlight_ * (11 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + bindless + prevIndirect + motion + idsPrev (GI reproject)
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         sizes[2].descriptorCount = framesInFlight_ * 2;// out sceneHdr + indirect (denoiser scratch)
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -198,6 +201,20 @@ namespace threepp::vulkan {
             indInfo.imageView   = in.indirect[f];
             indInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
+            // GI reproject inputs. prevIndirect = the OTHER frame-in-flight's
+            // indirect image — holds last frame's accumulated GI (a 1-frame
+            // history; the 2 per-frame indirect images alternate as a ping-pong).
+            // Sampled in GENERAL (it's a storage image with SAMPLED usage added).
+            // motion = this frame's motion vec; idsPrev = the other index's
+            // mesh-IDs (1-frame, for the disocclusion reset).
+            const uint32_t pf = (f + 1u) % framesInFlight_;
+            VkDescriptorImageInfo prevIndInfo{};
+            prevIndInfo.sampler     = gbufSampler_;
+            prevIndInfo.imageView   = in.indirect[pf];
+            prevIndInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo motionInfo  = sampled(in.gbufMotion[f], gbufSampler_);
+            VkDescriptorImageInfo idsPrevInfo = sampled(in.gbufIds[pf], gbufSampler_);
+
             // Ocean textures stay in GENERAL (written by the FFT/foam compute
             // passes, sampled here) — matching the RT set's bindings 32 + 44.
             VkDescriptorImageInfo oceanFineInfo{};
@@ -232,7 +249,7 @@ namespace threepp::vulkan {
             asInfo.accelerationStructureCount = 1;
             asInfo.pAccelerationStructures = &tlasLocal;
 
-            VkWriteDescriptorSet w[17]{};
+            VkWriteDescriptorSet w[20]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -269,7 +286,10 @@ namespace threepp::vulkan {
             setw(14, 14, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &oceanFoamInfo, nullptr);
             setw(15, 15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &uvInfo, nullptr);
             setw(16, 16, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &indInfo, nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 17, w, 0, nullptr);
+            setw(17, 17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevIndInfo, nullptr);
+            setw(18, 18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &motionInfo,  nullptr);
+            setw(19, 19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &idsPrevInfo, nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), 20, w, 0, nullptr);
         }
     }
 
