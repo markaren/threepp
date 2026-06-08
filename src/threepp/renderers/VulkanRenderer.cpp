@@ -1022,6 +1022,7 @@ namespace threepp {
             Image2D       momentsSq;    // r16f — temporally-accumulated E[L²] of the indirect luminance (SVGF variance: var = E[L²] - lum(indirect)²); STORAGE+SAMPLED, ping-ponged like indirect
             Image2D       atrousA;      // rgba16f — SVGF multi-pass à-trous ping-pong (rgb=GI, a=variance); STORAGE scratch
             Image2D       atrousB;      // rgba16f — SVGF multi-pass à-trous ping-pong (the other half)
+            Image2D       reflect;      // rgba16f — sharp 1-mirror-ray reflection radiance (.rgb), demodulated; roughness-blurred by the reflection denoise. STORAGE
             Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
             // Hybrid raster overlay's UNJITTERED depth attachment. Filled by
             // an extra depth-only prepass (overlay_depth.vert) right after
@@ -7377,6 +7378,7 @@ namespace threepp {
                 destroyImage2D(ctx->allocator(), d, g.momentsSq);
                 destroyImage2D(ctx->allocator(), d, g.atrousA);
                 destroyImage2D(ctx->allocator(), d, g.atrousB);
+                destroyImage2D(ctx->allocator(), d, g.reflect);
                 destroyImage2D(ctx->allocator(), d, g.depth);
                 destroyImage2D(ctx->allocator(), d, g.unjitDepth);
                 g.width  = 0;
@@ -7518,6 +7520,11 @@ namespace threepp {
                 g.atrousB = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                     VK_IMAGE_USAGE_STORAGE_BIT,
                                                     VK_IMAGE_ASPECT_COLOR_BIT, N("atrousB"));
+                // Sharp mirror-ray reflection radiance — written by the shade, then
+                // roughness-blurred + recombined by the reflection denoise pass.
+                g.reflect = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                    VK_IMAGE_USAGE_STORAGE_BIT,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT, N("reflect"));
                 g.depth  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
                                                    depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
                                                    N("depth"));
@@ -7591,6 +7598,7 @@ namespace threepp {
                 pushInit(g.momentsSq.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.atrousA.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.atrousB.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.reflect.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.depth.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
             }
             vkCmdPipelineBarrier(initCb,
@@ -9546,6 +9554,7 @@ namespace threepp {
             std::array<VkImageView, kFramesInFlight> momentsSqViews{};
             std::array<VkImageView, kFramesInFlight> atrousAViews{};
             std::array<VkImageView, kFramesInFlight> atrousBViews{};
+            std::array<VkImageView, kFramesInFlight> reflectViews{};
             std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 camBufs[f]       = cameraUbos[f].handle;
@@ -9562,6 +9571,7 @@ namespace threepp {
                 momentsSqViews[f]= rasterGbufs[f].momentsSq.view;
                 atrousAViews[f]  = rasterGbufs[f].atrousA.view;
                 atrousBViews[f]  = rasterGbufs[f].atrousB.view;
+                reflectViews[f]  = rasterGbufs[f].reflect.view;
                 sceneHdrViews[f] = bloom_->sceneHdrView(f);
             }
             // Bindless material-texture array for reflected-hit texturing —
@@ -9584,6 +9594,7 @@ namespace threepp {
             in.momentsSq        = momentsSqViews.data();
             in.atrousA          = atrousAViews.data();
             in.atrousB          = atrousBViews.data();
+            in.reflect          = reflectViews.data();
             in.sceneHdr         = sceneHdrViews.data();
             in.tlas             = tlas;
             in.materialBuf      = matBufs.data();

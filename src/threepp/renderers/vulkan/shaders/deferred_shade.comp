@@ -113,6 +113,7 @@ layout(set = 0, binding = 19) uniform sampler2D gbufNormalPrevTex;// prev world 
 layout(set = 0, binding = 20, r16f) uniform image2D momentsImage; // SVGF E[L²] accumulator (this frame)
 layout(set = 0, binding = 21) uniform sampler2D momentsPrevTex;   // PREV E[L²] (reprojected SVGF history)
 layout(set = 0, binding = 24) uniform sampler2D gbufDepthPrevTex; // PREV depth (depth-discontinuity disocclusion)
+layout(set = 0, binding = 25, rgba16f) uniform image2D reflectImage;// sharp mirror-ray reflection radiance (.rgb pre-weighted, .a=roughness); denoise blurs by roughness
 
 layout(push_constant) uniform Pc {
     uint  envMipCount;       // PMREM mip levels (>=1)
@@ -1082,6 +1083,7 @@ void main() {
                                      shadowsOn, maxLod, pc.frame, seed);
         imageStore(outImage, px, vec4(wcol, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
+        imageStore(reflectImage, px, vec4(0.0));// water shades its own reflection inline
         return;
     }
 
@@ -1172,35 +1174,28 @@ void main() {
     const vec3  R         = reflect(-V, N);
     const vec2  ab        = envBRDFApprox(NdotV, roughness);
     const float reflBlend = 1.0 - smoothstep(0.55, 0.70, roughness);
-    if (reflBlend > 0.0) {
-        const float missLod = roughness * maxLod;// glossy misses read the blurred env mip (TRUE roughness)
-        // Clamp the reflection LOBE to a narrow cone so the stochastic estimate is
-        // low-variance (clean) at a modest sample count. A rough surface then
-        // reflects the SCENE slightly sharper than physical — a deliberate game
-        // shortcut, same family as the glass primary-roughness clamp — but with no
-        // grain and no "N copies in a ring". The env-miss blur still uses the TRUE
-        // roughness (missLod) so rough surfaces keep a soft sky reflection.
-        // NOTE: deterministic lobe-clamp (Phase-1 era). Phase-2 stochastic glossy
-        // reflections need a DEDICATED reflection denoiser (reflection history +
-        // roughness-guided spatial filter) — the final-image TAA can't stabilize a
-        // 1-2 spp stochastic reflection (high spatial variance → wide variance-clip
-        // box → history wobbles; verified: mean frame diff 0.034→0.87). Kept clamped
-        // until that denoiser exists.
-        const float reflRough = min(roughness, 0.16);
-        const int   RSAMP     = roughness < 0.08 ? 1 : 8;
-        vec3 acc = vec3(0.0);
-        for (int s = 0; s < RSAMP; ++s) {
-            // r<0.08 → exact mirror (deterministic, noise-free); else clamped GGX lobe.
-            vec3 L = (RSAMP == 1) ? R : sampleGGXReflectionFib(V, N, reflRough, s, RSAMP);
-            if (dot(L, N) <= 0.0) L = R;// keep below-horizon samples on the surface
-            vec3 r = traceRadiance(shadowOrig, L, shadowsOn, maxLod, missLod, seed);
-            if (RSAMP > 1) {
-                const float lum = max(max(r.r, r.g), r.b);// firefly clamp glossy variance
-                if (lum > pc.fireflyClamp) r *= pc.fireflyClamp / lum;
-            }
-            acc += r;
-        }
-        lit += (acc / float(RSAMP)) * (F0 * ab.x + ab.y) * reflBlend;
+    // ONE SHARP MIRROR RAY → the reflection buffer (binding 25). A single ray has
+    // NO discrete-GGX ghost copies (the doubled/tripled-object artifact the
+    // 8-sample spiral produced) and no per-sample noise. The reflection denoise
+    // (deferred_denoise channel 1) then BLURS this by roughness — the spatial blur
+    // IS the gloss — and recombines. Pre-weighted by the spec BRDF × reflBlend so
+    // the denoise just blurs + adds. Glass/sheen reflect inline below (excluded).
+    const bool opaqueRefl = (pm.transmission <= 0.0) && (dot(pm.sheenColor, pm.sheenColor) <= 0.0);
+    vec3 reflOut = vec3(0.0);
+    if (reflBlend > 0.0 && opaqueRefl) {
+        const float missLod = roughness * maxLod;// ray-miss reads the roughness-blurred env mip
+        vec3 r = traceRadiance(shadowOrig, R, shadowsOn, maxLod, missLod, seed);
+        const float rl = max(max(r.r, r.g), r.b);// firefly clamp the single sample
+        if (rl > pc.fireflyClamp) r *= pc.fireflyClamp / rl;
+        reflOut = r * (F0 * ab.x + ab.y) * reflBlend;
+    }
+    if (demodIndirect) {
+        // Denoise ON: hand the sharp reflection to the roughness-blur denoise pass.
+        imageStore(reflectImage, px, vec4(reflOut, roughness));
+    } else {
+        // Denoise OFF (or glass/sheen, where reflOut==0): inline sharp reflection.
+        lit += reflOut;
+        imageStore(reflectImage, px, vec4(0.0));
     }
 
     // ── Refractive glass (any transmissive surface that ISN'T the ocean) ──────

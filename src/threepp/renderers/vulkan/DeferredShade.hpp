@@ -51,6 +51,7 @@ namespace threepp::vulkan {
             const VkImageView* momentsSq  = nullptr;// [framesInFlight] SVGF E[L²] accumulator (storage+sampled, ping-pong like indirect)
             const VkImageView* atrousA    = nullptr;// [framesInFlight] SVGF à-trous ping-pong A (storage)
             const VkImageView* atrousB    = nullptr;// [framesInFlight] SVGF à-trous ping-pong B (storage)
+            const VkImageView* reflect    = nullptr;// [framesInFlight] sharp mirror-ray reflection radiance (storage)
             const VkImageView* sceneHdr   = nullptr;// [framesInFlight] output (storage)
             VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;// shared scene TLAS (shadow + reflection rays)
             const VkBuffer*    materialBuf = nullptr;// [framesInFlight] MaterialDesc[] (emissive)

@@ -45,7 +45,7 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[25]{};
+        VkDescriptorSetLayoutBinding b[26]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -78,10 +78,11 @@ namespace threepp::vulkan {
         set(22, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // SVGF à-trous ping-pong A (rgb=GI, a=variance)
         set(23, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // SVGF à-trous ping-pong B
         set(24, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV gbuf depth (geometric GI disocclusion: depth discontinuity)
+        set(25, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reflect (sharp mirror-ray reflection radiance; shade writes, reflection denoise reads)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 25;
+        dlci.bindingCount = 26;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -143,7 +144,7 @@ namespace threepp::vulkan {
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         sizes[1].descriptorCount = framesInFlight_ * (13 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev (GI reproject + SVGF + disocclusion)
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[2].descriptorCount = framesInFlight_ * 5;// out sceneHdr + indirect + momentsSq + atrousA + atrousB (SVGF multi-pass scratch)
+        sizes[2].descriptorCount = framesInFlight_ * 6;// out sceneHdr + indirect + momentsSq + atrousA + atrousB + reflect
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;// TLAS
         sizes[4].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -216,6 +217,9 @@ namespace threepp::vulkan {
             VkDescriptorImageInfo atrBInfo{};// SVGF à-trous ping-pong B — storage
             atrBInfo.imageView   = in.atrousB[f];
             atrBInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo reflInfo{};// sharp mirror-ray reflection radiance — storage
+            reflInfo.imageView   = in.reflect[f];
+            reflInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
             // GI reproject inputs. prevIndirect = the OTHER frame-in-flight's
             // indirect image — holds last frame's accumulated GI (a 1-frame
@@ -278,7 +282,7 @@ namespace threepp::vulkan {
             asInfo.accelerationStructureCount = 1;
             asInfo.pAccelerationStructures = &tlasLocal;
 
-            VkWriteDescriptorSet w[25]{};
+            VkWriteDescriptorSet w[26]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -323,7 +327,8 @@ namespace threepp::vulkan {
             setw(22, 22, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &atrAInfo,      nullptr);
             setw(23, 23, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &atrBInfo,      nullptr);
             setw(24, 24, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthPrevInfo, nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 25, w, 0, nullptr);
+            setw(25, 25, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &reflInfo,      nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), 26, w, 0, nullptr);
         }
     }
 
@@ -400,6 +405,19 @@ namespace threepp::vulkan {
                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
                                      1, &mb, 0, nullptr, 0, nullptr);
         }
+
+        // ── Reflection denoise (channel = 1) ─────────────────────────────────
+        // Roughness-guided edge-stopping blur of the sharp 1-mirror-ray reflection
+        // (binding 25, written by the shade) + recombine × spec weight into
+        // sceneHdr. ONE sharp ray (no discrete GGX samples) blurred by roughness =
+        // a smooth glossy reflection with NO ghost copies. Barrier: the last GI
+        // pass wrote sceneHdr (RAW for this pass's read-modify-write).
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                             1, &mb, 0, nullptr, 0, nullptr);
+        const uint32_t rpc[10] = {0u, width, height, 0u, 0u, 0u, 0u, 1u/*channel=reflection*/, 0u, 0u};
+        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(rpc), rpc);
+        vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
     }
 
 }// namespace threepp::vulkan

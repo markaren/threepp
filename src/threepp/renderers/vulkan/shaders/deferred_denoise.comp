@@ -37,13 +37,15 @@ layout(set = 0, binding = 16, rgba16f) uniform image2D indirectImage;// accumula
 layout(set = 0, binding = 20, r16f)    uniform readonly image2D momentsImage; // E[L²]
 layout(set = 0, binding = 22, rgba16f) uniform image2D atrousA;            // ping-pong (rgb=GI, a=variance)
 layout(set = 0, binding = 23, rgba16f) uniform image2D atrousB;
+layout(set = 0, binding = 25, rgba16f) uniform readonly image2D reflectImage;// sharp mirror reflection (.rgb pre-weighted, .a=roughness)
 
 layout(push_constant) uniform Pc {
     uint _p0; uint width; uint height; uint step;
     uint srcMode;// 0 = indirect (raw, pass 0), 1 = atrousA, 2 = atrousB
     uint dstMode;// 0 = atrousA, 1 = atrousB, 2 = recombine → sceneHdr
     uint feedback;// 1 = also write src (the 1st-pass filtered) back as temporal history
-    uint _p7; uint _p8; uint _p9;
+    uint channel;// 0 = GI (à-trous), 1 = reflection (roughness-guided blur + recombine)
+    uint _p8; uint _p9;
 } pc;
 
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
@@ -70,6 +72,49 @@ void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
     const ivec2 mx = ivec2(int(pc.width), int(pc.height)) - 1;
+
+    // ── REFLECTION denoise (channel 1) ───────────────────────────────────────
+    // Roughness-guided edge-stopping blur of the SHARP single-mirror-ray reflection
+    // (reflectImage, pre-weighted by the spec BRDF) + recombine into sceneHdr. The
+    // single ray has NO ghost copies; this blur just turns it into a roughness-
+    // correct gloss (sharp when smooth → soft when rough). Normal/plane stops keep
+    // it from bleeding across surfaces.
+    if (pc.channel == 1u) {
+        if (texelFetch(gbufIdsTex, px, 0).x == 0u) return;// sky
+        const vec4 nC = texelFetch(gbufNormalTex, px, 0);
+        if (nC.w < 0.0) return;                            // unlit
+        const vec3  Nc     = normalize(nC.xyz * 2.0 - 1.0);
+        const vec3  Pc     = worldFromDepth(px, texelFetch(gbufDepthTex, px, 0).x);
+        const vec3  camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        const float planeScale = 1.0 / max(0.035 * length(Pc - camPos), 1e-3);
+        const float rough  = imageLoad(reflectImage, px).a;
+        const float sigma  = max(rough * 22.0, 0.6);// blur width ∝ roughness (≈sharp when smooth)
+        const float inv2s2 = 1.0 / (2.0 * sigma * sigma);
+        vec3  sum = vec3(0.0);
+        float wsum = 0.0;
+        const int RR = 12;
+        for (int dy = -RR; dy <= RR; ++dy)
+        for (int dx = -RR; dx <= RR; ++dx) {
+            const ivec2 q = px + ivec2(dx, dy);
+            if (q.x < 0 || q.y < 0 || q.x > mx.x || q.y > mx.y) continue;
+            if (texelFetch(gbufIdsTex, q, 0).x == 0u) continue;
+            const vec4 nq = texelFetch(gbufNormalTex, q, 0);
+            if (nq.w < 0.0) continue;
+            const vec3  Nq = normalize(nq.xyz * 2.0 - 1.0);
+            const float wn = pow(max(dot(Nc, Nq), 0.0), 32.0);// don't blur across differing normals
+            if (wn <= 0.0) continue;
+            const vec3  Pq = worldFromDepth(q, texelFetch(gbufDepthTex, q, 0).x);
+            const float wz = exp(-abs(dot(Pq - Pc, Nc)) * planeScale);
+            const float ws = exp(-float(dx * dx + dy * dy) * inv2s2);
+            const float w  = wn * wz * ws;
+            sum  += imageLoad(reflectImage, q).rgb * w;
+            wsum += w;
+        }
+        const vec3 blurred = wsum > 0.0 ? sum / wsum : imageLoad(reflectImage, px).rgb;
+        const vec3 cur     = imageLoad(outImage, px).rgb;
+        imageStore(outImage, px, vec4(cur + blurred, 1.0));// pre-weighted → just add
+        return;
+    }
 
     // Sky / unlit pixels carry no indirect. For scratch-target passes write 0 (so
     // later passes read clean zeros); for the recombine pass leave sceneHdr alone.
