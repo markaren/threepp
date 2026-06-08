@@ -322,7 +322,16 @@ vec3 emissiveNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, vec3 albedo,
             if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT)
                 continue;
         }
-        vec3 c = evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k, vec3(0.0), 0.0) * t.emission.rgb / p_omega;
+        // DIFFUSE-ONLY emitter NEE. Light sampling (sampling the emitter) is the
+        // correct, low-variance estimator for the broad DIFFUSE term — but the WRONG
+        // one for the peaked SPECULAR lobe: at low roughness a single sample lands
+        // near the GGX peak and the firefly clamp leaves a bright "probe speckle"
+        // highlight (which the PT, using BRDF sampling + MIS, never shows). Emitter
+        // specular is owned by the reflection path (a BRDF-sampled mirror ray).
+        const vec3  H  = normalize(V + L);
+        const vec3  Fr = fresnelSchlick(max(dot(V, H), 0.0), F0);
+        const vec3  kd = (vec3(1.0) - Fr) * (1.0 - metalness);
+        vec3 c = (kd * albedo * (1.0 / PI)) * max(dot(N, L), 0.0) * t.emission.rgb / p_omega;
         // Firefly clamp: cap a single sample's luminance so a stray spike (grazing
         // emitter / near hit) can't dominate — the dominant noise on animated
         // geometry where TAA can't accumulate it away.
@@ -388,6 +397,13 @@ vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
 
 vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed);// fwd decl
 vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint seed);// fwd decl (cheap 1-bounce GI)
+
+// When set, traceRadiance drops the DIRECT emission of its hits. Used by the
+// OPAQUE reflection so an emitter isn't counted twice: the surface's emissiveNEE
+// already adds the emitter's specular reflection analytically (solid-angle-
+// weighted → the dim, correct value the PT shows). Letting the mirror ray ALSO
+// hit the emitter at full radiance produced bright sub-lobe "probe speckles".
+bool gSuppressReflEmitter = false;
 
 // Diffuse indirect. TWO paths, selected by the denoiser flag (pc.flags bit 2):
 //  • DENOISER ON → REAL stochastic 1-bounce GI: a few cosine rays via traceRadiance
@@ -706,7 +722,8 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         const vec3 hitP = o + d * tHit;
         const vec3 hitDiffInd = sampleEnvLod(hitN, maxLod) + lights.ambient;
         radiance += tput * shadeDiffuseDirect(hitP, hitN, hitV, hAlbedo, hRough, hMetal,
-                                              hEmissive, doShadows, hitDiffInd,
+                                              (gSuppressReflEmitter ? vec3(0.0) : hEmissive),
+                                              doShadows, hitDiffInd,
                                               hm.sheenColor, hm.sheenRoughness,
                                               hm.specularIntensity, hm.specularColor, seed);
 
@@ -1206,7 +1223,15 @@ void main() {
     vec3 reflOut = vec3(0.0);
     if (reflBlend > 0.0 && opaqueRefl) {
         const float missLod = roughness * maxLod;// ray-miss reads the roughness-blurred env mip
+        // Suppress emitter self-emission in the reflection of DIELECTRICS: there the
+        // Fresnel reflectance is tiny (F0≈0.04) so a reflected small emitter should
+        // be ~invisible (the PT shows nothing), yet the full-radiance mirror-ray hit
+        // produced bright "probe speckles". Metals (F0≈albedo) DO show bright emitter
+        // reflections — keep those (BRDF-sampled = sharp + correct). emissiveNEE is
+        // now diffuse-only, so this is the sole emitter-specular path either way.
+        gSuppressReflEmitter = (metalness < 0.5);
         vec3 r = traceRadiance(shadowOrig, R, shadowsOn, maxLod, missLod, seed);
+        gSuppressReflEmitter = false;
         const float rl = max(max(r.r, r.g), r.b);// firefly clamp the single sample
         if (rl > pc.fireflyClamp) r *= pc.fireflyClamp / rl;
         reflOut = r * (F0 * ab.x + ab.y) * reflBlend;

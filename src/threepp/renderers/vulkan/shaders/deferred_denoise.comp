@@ -149,7 +149,35 @@ void main() {
             sum  += imageLoad(reflectImage, q).rgb * w;
             wsum += w;
         }
-        const vec3 blurred = wsum > 0.0 ? sum / wsum : cR.rgb;
+        vec3 blurred = wsum > 0.0 ? sum / wsum : cR.rgb;
+        // ── DESPECKLE bright emitter "probe speckles" ────────────────────────────
+        // A small bright emitter reflected by a GLOSSY surface is rendered by the
+        // single mirror ray at FULL radiance — but its true (PT) value is the
+        // lobe-coverage fraction, which for a sub-lobe source is ~nothing. The
+        // energy-conserving blur above only softens the spike into a speck. Once the
+        // surface is even slightly glossy (rough > 0.04 → the reflection lobe is
+        // wider than a tiny source), clamp an ISOLATED bright reflection down to its
+        // raw surround. True mirrors (rough ≤ 0.04, sharp reflections expected) are
+        // skipped; broad bright reflections (sky/walls → bright surround) pass
+        // unchanged because their surround ring is bright too.
+        if (!isGlass && rough > 0.04) {
+            const ivec2 ring[8] = ivec2[8](ivec2(7,0), ivec2(-7,0), ivec2(0,7), ivec2(0,-7),
+                                           ivec2(6,6), ivec2(6,-6), ivec2(-6,6), ivec2(-6,-6));
+            float rsum = 0.0, rn = 0.0, rmax = 0.0;
+            for (int k = 0; k < 8; ++k) {
+                const ivec2 q = px + ring[k];
+                if (q.x < 0 || q.y < 0 || q.x > mx.x || q.y > mx.y) continue;
+                if (texelFetch(gbufIdsTex, q, 0).x != cid) continue;// same surface only
+                const float l = dot(imageLoad(reflectImage, q).rgb, LUMA);
+                rsum += l; rmax = max(rmax, l); rn += 1.0;
+            }
+            // Trimmed mean: drop the single brightest ring sample so a sample that
+            // grazed the spike's halo can't inflate the surround estimate.
+            const float ringMean = (rn > 1.0) ? (rsum - rmax) / (rn - 1.0) : rsum / max(rn, 1.0);
+            const float bl  = dot(blurred, LUMA);
+            const float cap = ringMean * 3.0 + 0.02;// 3× surround + small floor
+            if (bl > cap) blurred *= cap / bl;       // collapse the isolated spike
+        }
         const vec3 cur     = imageLoad(outImage, px).rgb;
         imageStore(outImage, px, vec4(cur + blurred, 1.0));// pre-weighted → just add
         return;
