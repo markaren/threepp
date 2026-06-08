@@ -7522,8 +7522,11 @@ namespace threepp {
                                                     VK_IMAGE_ASPECT_COLOR_BIT, N("atrousB"));
                 // Sharp mirror-ray reflection radiance — written by the shade, then
                 // roughness-blurred + recombined by the reflection denoise pass.
+                // SAMPLED too: the shade temporally accumulates it (samples the OTHER
+                // frame-in-flight as 1-frame history) to anti-alias the 1-ray
+                // refraction via the gbuffer jitter — sharp AND alias-free.
                 g.reflect = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                    VK_IMAGE_USAGE_STORAGE_BIT,
+                                                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                                     VK_IMAGE_ASPECT_COLOR_BIT, N("reflect"));
                 g.depth  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
                                                    depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,

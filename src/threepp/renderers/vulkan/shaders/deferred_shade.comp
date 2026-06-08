@@ -114,6 +114,25 @@ layout(set = 0, binding = 20, r16f) uniform image2D momentsImage; // SVGF E[L²]
 layout(set = 0, binding = 21) uniform sampler2D momentsPrevTex;   // PREV E[L²] (reprojected SVGF history)
 layout(set = 0, binding = 24) uniform sampler2D gbufDepthPrevTex; // PREV depth (depth-discontinuity disocclusion)
 layout(set = 0, binding = 25, rgba16f) uniform image2D reflectImage;// sharp mirror-ray reflection radiance (.rgb pre-weighted, .a=roughness); denoise blurs by roughness
+layout(set = 0, binding = 26) uniform sampler2D reflectPrevTex;   // PREV reflect (other fif) — temporal AA history
+
+// Temporal AA for the 1-mirror-ray reflection/glass: blend with the motion-
+// reprojected 1-frame history. The gbuffer JITTER varies the ray sub-pixel each
+// frame, so accumulating ~10 frames anti-aliases the 1-ray refraction/reflection
+// while staying SHARP (no spatial mush). Motion-scaled: static accumulates (AA),
+// motion falls back to the current sample (the refraction is view-dependent, so a
+// surface-motion reproject would ghost it). .a (roughness / glass marker) is kept
+// from the current sample. Off-screen / garbage history → current.
+vec4 reflTemporal(vec4 cur, vec2 uv) {
+    const vec2 mv   = texture(gbufMotionTex, uv).rg;
+    const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
+    const vec2 pUv  = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
+    if (any(lessThan(pUv, vec2(0.0))) || any(greaterThan(pUv, vec2(1.0)))) return cur;
+    const vec4 prev = texture(reflectPrevTex, pUv);
+    if (any(greaterThan(abs(prev.rgb), vec3(1e6)))) return cur;// NaN/garbage guard
+    const float a = mix(0.1, 1.0, smoothstep(0.001, 0.02, length(mv)));// static→accumulate (AA), motion→current
+    return vec4(mix(prev.rgb, cur.rgb, a), cur.a);
+}
 
 layout(push_constant) uniform Pc {
     uint  envMipCount;       // PMREM mip levels (>=1)
@@ -901,7 +920,9 @@ void traceHit(vec3 origin, vec3 dir, out vec3 hitP, out vec3 hitN, out float dis
 // softer/dreamier glass, drop to 0 for a perfect lens; raise GSAMP if the soft
 // shows residual grain on moving glass (costs proportionally).
 const float kGlassFrost = 0.04;// near-sharp glass: a wide frost lobe scatters the HDR sun into static speckle
-const int   kGlassSamples = 6;// Fibonacci (deterministic) samples → smooth frosted glass, no static speckle
+const int   kGlassSamples = 1;// ONE sharp Fresnel reflect+refract sample → NO discrete-microfacet ghost
+                              // copies. The frost (roughness blur) is applied afterwards by the reflection
+                              // denoise (deferred_denoise channel 1), exactly like opaque reflections.
 
 vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
                 bool doShadows, float maxLod, inout uint seed) {
@@ -1190,8 +1211,9 @@ void main() {
         reflOut = r * (F0 * ab.x + ab.y) * reflBlend;
     }
     if (demodIndirect) {
-        // Denoise ON: hand the sharp reflection to the roughness-blur denoise pass.
-        imageStore(reflectImage, px, vec4(reflOut, roughness));
+        // Denoise ON: temporally AA the sharp reflection, then hand it to the
+        // roughness-blur denoise pass.
+        imageStore(reflectImage, px, reflTemporal(vec4(reflOut, roughness), uv));
     } else {
         // Denoise OFF (or glass/sheen, where reflOut==0): inline sharp reflection.
         lit += reflOut;
@@ -1227,11 +1249,25 @@ void main() {
             const vec3  behind  = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed);
             lit = mix(behind, lit, opacity);
         } else {
-            // REAL refractive glass (ior>1: KHR_materials_transmission / volume).
-            // Fresnel reflect + 2-interface refract over the opaque shade, weighted
-            // by transmission (matches the PT's reflect/refract-vs-opaque split).
-            const vec3 glassCol = shadeGlass(worldPos, N, V, pm, albedo, shadowsOn, maxLod, seed);
-            lit = mix(lit, glassCol, clamp(pm.transmission, 0.0, 1.0));
+            // REAL refractive glass (ior>1). ONE sharp Fresnel reflect+refract
+            // sample (no ghost copies); the reflection denoise blurs it by the glass
+            // roughness (the frost) + recombines — same channel as opaque reflections.
+            const float gt       = clamp(pm.transmission, 0.0, 1.0);
+            const vec3  glassCol = shadeGlass(worldPos, N, V, pm, albedo, shadowsOn, maxLod, seed);
+            if (denoiseOn) {
+                // Demodulate the mix(): hand glassCol·t to the reflection denoise
+                // (which ADDS blur(reflect)) and scale the opaque base by (1-t), so
+                // the recombine reconstructs mix(lit, blur(glass), t) — frosted.
+                const float gr = max(clamp(pm.roughness, 0.04, 1.0), kGlassFrost);
+                // .a NEGATIVE = glass marker: the denoise gives it a minimum AA blur
+                // + an ID-based (not normal) edge stop so the blur smooths ACROSS the
+                // curved surface — refraction is far more normal-sensitive than
+                // reflection, so 1 ray aliases into blocky speckles without it.
+                imageStore(reflectImage, px, reflTemporal(vec4(glassCol * gt, -gr), uv));
+                lit = lit * (1.0 - gt);
+            } else {
+                lit = mix(lit, glassCol, gt);// denoise off → inline (sharp, no frost)
+            }
         }
     }
 

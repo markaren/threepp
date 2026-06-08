@@ -80,16 +80,25 @@ void main() {
     // correct gloss (sharp when smooth → soft when rough). Normal/plane stops keep
     // it from bleeding across surfaces.
     if (pc.channel == 1u) {
-        if (texelFetch(gbufIdsTex, px, 0).x == 0u) return;// sky
+        const uint cid = texelFetch(gbufIdsTex, px, 0).x;
+        if (cid == 0u) return;                             // sky
         const vec4 nC = texelFetch(gbufNormalTex, px, 0);
         if (nC.w < 0.0) return;                            // unlit
         const vec3  Nc     = normalize(nC.xyz * 2.0 - 1.0);
         const vec3  Pc     = worldFromDepth(px, texelFetch(gbufDepthTex, px, 0).x);
         const vec3  camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
         const float planeScale = 1.0 / max(0.035 * length(Pc - camPos), 1e-3);
-        const float rough  = imageLoad(reflectImage, px).a;
-        const float sigma  = max(rough * 22.0, 0.6);// blur width ∝ roughness (≈sharp when smooth)
-        const float inv2s2 = 1.0 / (2.0 * sigma * sigma);
+        // .a < 0 marks GLASS (refraction): it aliases far worse than reflection
+        // (1 ray, very normal-sensitive), so give it a MIN AA blur and an ID-based
+        // edge stop (blur across the curve). Opaque reflection keeps the sharp,
+        // normal-stopped kernel so mirrors stay crisp.
+        const float ra      = imageLoad(reflectImage, px).a;
+        const bool  isGlass = ra < 0.0;
+        const float rough   = abs(ra);
+        // σ = the ROUGHNESS frost only (temporal AA now handles the 1-ray aliasing,
+        // so no big AA floor → clear glass stays SHARP, frosted glass blurs).
+        const float sigma   = max(rough * 22.0, 0.6);
+        const float inv2s2  = 1.0 / (2.0 * sigma * sigma);
         vec3  sum = vec3(0.0);
         float wsum = 0.0;
         const int RR = 12;
@@ -97,11 +106,18 @@ void main() {
         for (int dx = -RR; dx <= RR; ++dx) {
             const ivec2 q = px + ivec2(dx, dy);
             if (q.x < 0 || q.y < 0 || q.x > mx.x || q.y > mx.y) continue;
-            if (texelFetch(gbufIdsTex, q, 0).x == 0u) continue;
+            const uint qid = texelFetch(gbufIdsTex, q, 0).x;
+            if (qid == 0u) continue;
             const vec4 nq = texelFetch(gbufNormalTex, q, 0);
             if (nq.w < 0.0) continue;
-            const vec3  Nq = normalize(nq.xyz * 2.0 - 1.0);
-            const float wn = pow(max(dot(Nc, Nq), 0.0), 32.0);// don't blur across differing normals
+            float wn;
+            if (isGlass) {
+                // Same glass object → blur across the curve (kills 1-ray refraction
+                // speckle); the σ + plane stop keep it local.
+                wn = (qid == cid) ? 1.0 : 0.0;
+            } else {
+                wn = pow(max(dot(Nc, normalize(nq.xyz * 2.0 - 1.0)), 0.0), 32.0);
+            }
             if (wn <= 0.0) continue;
             const vec3  Pq = worldFromDepth(q, texelFetch(gbufDepthTex, q, 0).x);
             const float wz = exp(-abs(dot(Pq - Pc, Nc)) * planeScale);
