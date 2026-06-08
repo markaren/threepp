@@ -95,16 +95,19 @@ void main() {
         const float planeScale = 1.0 / max(0.035 * length(Pc - camPos), 1e-3);
         // .a < 0 marks GLASS (refraction): ID-based edge stop (blur across the
         // curve); opaque reflection keeps the normal-stopped kernel (mirrors crisp).
-        const bool  isGlass = cR.a < 0.0;
-        const float rough   = abs(cR.a);
-        // σ = the ROUGHNESS frost (temporal AA handles the 1-ray aliasing). OPAQUE
-        // reflections CAP the roughness at 0.16 (the old game-shortcut) so glossy-
-        // but-not-mirror surfaces (Sponza stone, roughness ~0.3-0.5) reflect SHARP
-        // detail instead of a physical mush — fixes the "blurred detail" regression
-        // while mirrors (low roughness) stay sharp. Glass keeps its TRUE frost.
-        const float blurRough = isGlass ? rough : min(rough, 0.16);
-        const float sigma     = max(blurRough * 8.0, 0.6);// ×8 (was 22): the old 0.16 GGX lobe was ~1px sharp,
-                                                          // not a 3.5px screen blur → keep reflected DETAIL crisp
+        const bool  isGlass   = cR.a < 0.0;
+        const float rough     = abs(cR.a);
+        const float metalness = texelFetch(gbufAlbedoTex, px, 0).a;
+        // Blur width by material TYPE — the key is gating on metalness:
+        //  • METAL   → TRUE roughness blur (a rough metal's reflection IS its look,
+        //              so rough metal SHOULD be blurry). ×16, capped for kernel cost.
+        //  • DIELECTRIC (Sponza stone) → sharp Fresnel reflection: cap roughness at
+        //              0.16 (the old game-shortcut), ×8 → crisp reflected detail.
+        //  • GLASS   → true roughness frost.
+        const float dielSigma  = min(rough, 0.16) * 8.0; // dielectric: sharp
+        const float metalSigma = rough * 16.0;           // metal: rough = blurry
+        const float baseSigma  = isGlass ? rough * 12.0 : mix(dielSigma, metalSigma, metalness);
+        const float sigma      = clamp(baseSigma, 0.6, 5.0);// cap → single-pass kernel stays cheap
         const float inv2s2  = 1.0 / (2.0 * sigma * sigma);
         // PERF: size the kernel to what σ actually reaches — sharp reflections use a
         // tiny kernel, only frosted/rough surfaces pay for the wide one (was a fixed
