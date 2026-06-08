@@ -523,6 +523,22 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, bool doShadows) {
     }
     finalizeReservoir(r);
 
+    // ── Visibility reuse (Bitterli 2020 §5) ── the RIS target p_hat is UNSHADOWED, so
+    // the chosen candidate may be occluded (the emitter's own far face, a wall, the
+    // sphere's shadow). Shadow-test it NOW — before temporal reuse — and DISCARD the
+    // reservoir if occluded (W←0, W_sum←0; keep M for the merge normalisation). Without
+    // this, occluded samples persist into temporal history with positive weight and
+    // inflate W on a later VISIBLE pick → the penumbra / self-occlusion OVER-COUNT that
+    // read as too bright (floor brighter than wall). +1 shadow ray (still ≪ the 16 the
+    // old emissiveNEE cast); introduces the standard small conservative bias.
+    if (r.W > 0.0 && r.lightType >= 999.5) {
+        const LightInfoD liV = evalLightInfoEm(int(r.lightType), r.lightPos, P);
+        if (max(dot(N, liV.dir), 0.0) <= 0.0
+                || (doShadows && restirOccluded(shadowOrig, liV.dir, liV.maxDist))) {
+            r.W = 0.0; r.W_sum = 0.0;// occluded — let temporal reuse recover a visible sample
+        }
+    }
+
     // ── Stage B: temporal reuse ── reproject via the motion vector, validate the
     // surface (prev-normal match), read LAST frame's reservoir, re-evaluate ITS
     // target p_hat at THIS pixel (the point of ReSTIR reuse), and merge. The single
