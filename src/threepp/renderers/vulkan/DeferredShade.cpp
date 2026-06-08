@@ -379,20 +379,20 @@ namespace threepp::vulkan {
         // [1]=width [2]=height [3]=step [4]=srcMode [5]=dstMode.
         // srcMode 0=indirect(raw), 1=atrousA, 2=atrousB.  dstMode 0=atrousA,
         // 1=atrousB, 2=recombine→sceneHdr.
-        struct Pass { uint32_t step, srcMode, dstMode; };
+        struct Pass { uint32_t step, srcMode, dstMode, feedback; };
         const Pass passes[4] = {
-            {1u, 0u, 0u},// indirect → A  (step 1)
-            {2u, 1u, 1u},// A → B         (step 2)
-            {4u, 2u, 0u},// B → A         (step 4)
-            {8u, 1u, 2u},// A → recombine into sceneHdr (step 8)
+            {1u, 0u, 0u, 0u},// indirect → A  (step 1)
+            {2u, 1u, 1u, 1u},// A → B  (step 2) + feed A (1st-pass filtered) back as temporal history
+            {4u, 2u, 0u, 0u},// B → A  (step 4)
+            {8u, 1u, 2u, 0u},// A → recombine into sceneHdr (step 8)
         };
         VkMemoryBarrier mb{};
         mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;// RAW (scratch) + WAR (history feedback writes indirect that pass 0 read)
         mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         for (int p = 0; p < 4; ++p) {
             const uint32_t pc[10] = {0u, width, height, passes[p].step,
-                                     passes[p].srcMode, passes[p].dstMode, 0u, 0u, 0u, 0u};
+                                     passes[p].srcMode, passes[p].dstMode, passes[p].feedback, 0u, 0u, 0u};
             vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
             vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
             if (p < 3)// make this pass's scratch write visible to the next pass's read

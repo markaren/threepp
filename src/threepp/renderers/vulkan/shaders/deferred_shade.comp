@@ -1114,13 +1114,16 @@ void main() {
         float ph = 0.0;// prev histLen at the reprojected pixel (0 = off-screen / disoccluded ⇒ fresh)
         if (all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)))) {
             const vec3  pn = texture(gbufNormalPrevTex, pUv).xyz * 2.0 - 1.0;
-            const float pD = texture(gbufDepthPrevTex, pUv).x;
-            const vec4  pVH = cam.projInverse * vec4(pNdc, pD, 1.0);
-            const float cVZ = viewH.z / viewH.w;
-            // same surface = normal match AND depth match (depth catches the
-            // same-normal object trail) → trust the history; else treat as fresh.
-            if (dot(N, normalize(pn)) > 0.9 &&
-                abs(cVZ - pVH.z / pVH.w) <= 0.1 * max(abs(cVZ), 1e-3))
+            const float surfD = texture(gbufMotionTex, uv).b;    // this surface's prev NDC depth
+            const float bufD  = texture(gbufDepthPrevTex, pUv).x;// prev depth buffer at the reproject
+            const vec4  svh = cam.projInverse * vec4(pNdc, surfD, 1.0);
+            const vec4  bvh = cam.projInverse * vec4(pNdc, bufD, 1.0);
+            const float svz = svh.z / svh.w;
+            // same surface = loose normal match AND its own prev depth matches the
+            // buffer (depth is primary; loose normal avoids treating a deforming
+            // skinned surface as fresh → keeps its history → no dust).
+            if (dot(N, normalize(pn)) > 0.7 &&
+                abs(svz - bvh.z / bvh.w) <= 0.1 * max(abs(svz), 1e-3))
                 ph = texture(giPrevTex, pUv).a;
         }
         // EFFECTIVE history = min(prev history, the motion-scaled cap this pixel will
@@ -1270,7 +1273,10 @@ void main() {
             for (int dy = -1; dy <= 1; ++dy) {
                 for (int dx = -1; dx <= 1; ++dx) {
                     const vec3 pn = texelFetch(gbufNormalPrevTex, clamp(ip + ivec2(dx, dy), ivec2(0), mx), 0).xyz * 2.0 - 1.0;
-                    if (dot(N, normalize(pn)) > 0.9) found = true;// ~25° tolerance
+                    if (dot(N, normalize(pn)) > 0.7) found = true;// ~45° — loose: the surface-aware DEPTH
+                                                                  // check is the primary disocclusion now, so this
+                                                                  // just rejects gross flips without false-resetting
+                                                                  // a deforming skinned surface (bending joints)
                 }
             }
             valid = found;
@@ -1280,11 +1286,18 @@ void main() {
         // in top-down views), a view-Z jump means a DIFFERENT surface → reset. This
         // is what kills the object-trail "dust" the normal test alone leaves behind.
         if (valid) {
-            const float curVZ  = viewH.z / viewH.w;// this pixel's view-space Z
-            const float prevD  = texture(gbufDepthPrevTex, prevUv).x;
-            const vec4  prevVH = cam.projInverse * vec4(prevNDC, prevD, 1.0);
-            const float prevVZ = prevVH.z / prevVH.w;
-            if (abs(curVZ - prevVZ) > 0.1 * max(abs(curVZ), 1e-3)) valid = false;// >10% depth jump → disocclusion
+            // Surface's OWN prev depth (gbuffer motion .b) vs the prev depth BUFFER
+            // at the reprojected spot. Equal → the reproject landed on THIS surface's
+            // past location (same surface, even if it moved/deformed — e.g. a skinned
+            // vertex) → keep the history; differ → a different surface was there
+            // (real disocclusion / object trail) → reset. NOT curr-vs-prev depth,
+            // which wrongly resets anything that moves in depth → dust on animation.
+            const float surfD = texture(gbufMotionTex, uv).b;        // this surface's prev NDC depth
+            const float bufD  = texture(gbufDepthPrevTex, prevUv).x; // prev depth buffer at the reproject
+            const vec4  svh = cam.projInverse * vec4(prevNDC, surfD, 1.0);
+            const vec4  bvh = cam.projInverse * vec4(prevNDC, bufD, 1.0);
+            const float svz = svh.z / svh.w;
+            if (abs(svz - bvh.z / bvh.w) > 0.1 * max(abs(svz), 1e-3)) valid = false;
         }
         const vec4  prevT = valid ? texture(giPrevTex, prevUv) : vec4(0.0);
         const vec3  prev  = prevT.rgb;

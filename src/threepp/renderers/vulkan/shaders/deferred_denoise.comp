@@ -33,7 +33,7 @@ layout(set = 0, binding = 4) uniform sampler2D  gbufDepthTex;  // x = NDC z [0,1
 layout(set = 0, binding = 5) uniform usampler2D gbufIdsTex;    // x = instanceId+1 (0 = sky)
 layout(set = 0, binding = 6) uniform sampler2D  gbufAlbedoTex; // rgb=albedo, a=metalness
 layout(set = 0, binding = 7,  rgba16f) uniform image2D outImage;            // sceneHdr (recombine: read+write)
-layout(set = 0, binding = 16, rgba16f) uniform readonly image2D indirectImage;// raw accumulated GI (.rgb), histLen (.a)
+layout(set = 0, binding = 16, rgba16f) uniform image2D indirectImage;// accumulated GI (.rgb), histLen (.a); written by the SVGF history feedback
 layout(set = 0, binding = 20, r16f)    uniform readonly image2D momentsImage; // E[L²]
 layout(set = 0, binding = 22, rgba16f) uniform image2D atrousA;            // ping-pong (rgb=GI, a=variance)
 layout(set = 0, binding = 23, rgba16f) uniform image2D atrousB;
@@ -42,7 +42,8 @@ layout(push_constant) uniform Pc {
     uint _p0; uint width; uint height; uint step;
     uint srcMode;// 0 = indirect (raw, pass 0), 1 = atrousA, 2 = atrousB
     uint dstMode;// 0 = atrousA, 1 = atrousB, 2 = recombine → sceneHdr
-    uint _p6; uint _p7; uint _p8; uint _p9;
+    uint feedback;// 1 = also write src (the 1st-pass filtered) back as temporal history
+    uint _p7; uint _p8; uint _p9;
 } pc;
 
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
@@ -144,6 +145,17 @@ void main() {
     // variance available); later passes carry the à-trous-filtered variance.
     const float fV = (pc.srcMode == 0u) ? variance
                    : (sumW > 0.0 ? sumV / (sumW * sumW) : variance);
+
+    // SVGF HISTORY FEEDBACK: on the designated pass, write THIS pass's SOURCE (the
+    // first à-trous pass's already-filtered GI) back into the indirect image as the
+    // temporal history (preserving histLen in .a). Next frame's accumulation then
+    // blends against the FILTERED (clean) history instead of the raw 1-spp, so a
+    // freshly-disoccluded region converges in ~2 frames instead of fading over many
+    // — this is what removes the residual object-trail "dust" TAIL.
+    if (pc.feedback == 1u) {
+        const float hl = imageLoad(indirectImage, px).a;
+        imageStore(indirectImage, px, vec4(cC.rgb, hl));
+    }
 
     if (pc.dstMode == 2u) {
         // Recombine: sceneHdr += blur(indirect) · diffuseColor (matches

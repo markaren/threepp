@@ -241,7 +241,14 @@ void main() {
     // deterministic value (see raygen primaryWorldPosHybrid override after
     // the primary traceRayEXT). Motion vec stays jitter-free.
     vec2 motion = prevNDC - currNDC;
-    outMotion = vec4(motion, 0.0, 0.0);
+    // .b = this surface's OWN previous NDC depth (same convention as the depth
+    // buffer: both are (VP·worldPos).z/w). The deferred GI disocclusion compares
+    // it against what the prev depth BUFFER actually held at the reprojected spot —
+    // they MATCH for a correctly-reprojected moving/deforming surface (skinned
+    // mesh) so it does NOT false-reset, but DIFFER for a real disocclusion (a
+    // trail revealing another surface). Comparing curr-vs-prev depth instead would
+    // wrongly reset any surface that moves in depth → dust on animated meshes.
+    outMotion = vec4(motion, vPrevClip.z / vPrevClip.w, 0.0);
 
     // +1 so the renderpass's clear-to-0 means "sky/no draw", matching
     // raygen's Payload.hitInstanceId convention exactly.
