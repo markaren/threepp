@@ -110,6 +110,9 @@ layout(set = 0, binding = 16, rgba16f) uniform image2D indirectImage;
 layout(set = 0, binding = 17) uniform sampler2D giPrevTex;      // 1-frame GI history (reprojected)
 layout(set = 0, binding = 18) uniform sampler2D gbufMotionTex;  // .rg = NDC motion
 layout(set = 0, binding = 19) uniform sampler2D gbufNormalPrevTex;// prev world normals (geometric disocclusion)
+layout(set = 0, binding = 20, r16f) uniform image2D momentsImage; // SVGF E[L²] accumulator (this frame)
+layout(set = 0, binding = 21) uniform sampler2D momentsPrevTex;   // PREV E[L²] (reprojected SVGF history)
+layout(set = 0, binding = 24) uniform sampler2D gbufDepthPrevTex; // PREV depth (depth-discontinuity disocclusion)
 
 layout(push_constant) uniform Pc {
     uint  envMipCount;       // PMREM mip levels (>=1)
@@ -374,7 +377,7 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
 //    temporally accumulated (TAA) by the caller.
 //  • DENOISER OFF → the deterministic Fibonacci AO + gated "far≈sky" approximation
 //    (noise-free WITHOUT a denoiser; the clean fallback for non-denoised scenes).
-vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stochastic, out float openness) {
+vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stochastic, int nGI, out float openness) {
     const float maxLod  = float(max(pc.envMipCount, 1u) - 1u);
     const vec3 up = abs(N.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     const vec3 T  = normalize(cross(up, N));
@@ -385,7 +388,8 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
     if (stochastic) {
         // Real stochastic 1-bounce GI (accumulated + denoised downstream).
         uint seed = uint(px.x) * 1973u + uint(px.y) * 9277u + frame * 26699u + 0x9e3779b9u;
-        const int N_GI = 3;// giRadiance is cheap now → afford more spp; denoise+TAA integrate
+        const int N_GI = nGI;// adaptive: fresh/disoccluded pixels get more rays so they
+                             // converge with SAMPLES (crisp) instead of a wide blur (cloud)
         vec3 acc = vec3(0.0);
         for (int s = 0; s < N_GI; ++s) {
             const float u1 = rnd(seed);
@@ -1096,12 +1100,44 @@ void main() {
     const bool demodIndirect = denoiseOn && (pm.transmission <= 0.0) &&
                                (dot(pm.sheenColor, pm.sheenColor) <= 0.0);
 
+    // ADAPTIVE GI SAMPLE COUNT — probe the reprojected prev history length (binding
+    // 17 .a). Fresh / just-disoccluded pixels (low/zero history) carry all the
+    // 1-spp noise, so spend MORE rays there to converge them with SAMPLES (stays
+    // crisp) rather than a wide blur (which reads as a moving "cloud"). Converged
+    // pixels coast on 2 rays + temporal history. Cost only spikes in disoccluded
+    // regions during motion — exactly where it's needed and tolerable.
+    int giSpp = 3;
+    if (demodIndirect) {
+        const vec2 mv   = texture(gbufMotionTex, uv).rg;
+        const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
+        const vec2 pUv  = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
+        float ph = 0.0;// prev histLen at the reprojected pixel (0 = off-screen / disoccluded ⇒ fresh)
+        if (all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)))) {
+            const vec3  pn = texture(gbufNormalPrevTex, pUv).xyz * 2.0 - 1.0;
+            const float pD = texture(gbufDepthPrevTex, pUv).x;
+            const vec4  pVH = cam.projInverse * vec4(pNdc, pD, 1.0);
+            const float cVZ = viewH.z / viewH.w;
+            // same surface = normal match AND depth match (depth catches the
+            // same-normal object trail) → trust the history; else treat as fresh.
+            if (dot(N, normalize(pn)) > 0.9 &&
+                abs(cVZ - pVH.z / pVH.w) <= 0.1 * max(abs(cVZ), 1e-3))
+                ph = texture(giPrevTex, pUv).a;
+        }
+        // EFFECTIVE history = min(prev history, the motion-scaled cap this pixel will
+        // get in the accumulation). So a fast camera PAN (no disocclusion, but a
+        // short effective history) ALSO gets more rays — killing the pan "cloud",
+        // not just disocclusions. Disoccl (ph=0) → 8, pan → 4, static → 2.
+        const float capF  = mix(48.0, 6.0, smoothstep(0.002, 0.03, length(mv)));
+        const float effPh = min(ph, capF);
+        giSpp = effPh < 4.0 ? 8 : (effPh < 16.0 ? 4 : 2);
+    }
+
     // Diffuse indirect: visibility-gated env irradiance (RT, flags bit 1).
     const bool aoOn = (pc.flags & 2u) != 0u;
     vec3 diffInd;
     if (aoOn) {
         float openness;
-        diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect, openness) + lights.ambient * openness;
+        diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect, giSpp, openness) + lights.ambient * openness;
     } else {
         diffInd = sampleEnvLod(N, maxLod) + lights.ambient;
     }
@@ -1239,13 +1275,44 @@ void main() {
             }
             valid = found;
         }
+        // DEPTH-DISCONTINUITY disocclusion: even when the prev NORMAL matches (a
+        // moving object's top vs the floor it reveals share the +Y normal — common
+        // in top-down views), a view-Z jump means a DIFFERENT surface → reset. This
+        // is what kills the object-trail "dust" the normal test alone leaves behind.
+        if (valid) {
+            const float curVZ  = viewH.z / viewH.w;// this pixel's view-space Z
+            const float prevD  = texture(gbufDepthPrevTex, prevUv).x;
+            const vec4  prevVH = cam.projInverse * vec4(prevNDC, prevD, 1.0);
+            const float prevVZ = prevVH.z / prevVH.w;
+            if (abs(curVZ - prevVZ) > 0.1 * max(abs(curVZ), 1e-3)) valid = false;// >10% depth jump → disocclusion
+        }
         const vec4  prevT = valid ? texture(giPrevTex, prevUv) : vec4(0.0);
         const vec3  prev  = prevT.rgb;
         valid = valid && all(lessThan(abs(prev), vec3(1e6)));// NaN/garbage guard
-        const float histLen = valid ? min(prevT.a + 1.0, 64.0) : 1.0;// 32→64: more temporal averaging → cleaner GI in shadows
+        // MOTION-SCALED temporal cap: a fixed cap can't be both clean (static needs
+        // a LONG history to average the 1-spp noise) and lag-free (motion needs a
+        // SHORT one, else the slow running mean trails the camera/object as a
+        // "cloud"). Scale the cap by the motion-vector magnitude — static pixels
+        // keep the long clean history; moving pixels get a short responsive one.
+        // Temporal analogue of the TAA velocity bump: decouples static cleanliness
+        // from motion lag (so we don't have to trade one for the other).
+        const float capF = mix(48.0, 6.0, smoothstep(0.002, 0.03, length(motionGL)));
+        const float histLen = valid ? min(prevT.a + 1.0, capF) : 1.0;
         const vec3  accum   = valid ? mix(prev, diffInd, 1.0 / histLen) : diffInd;
         imageStore(indirectImage, px, vec4(accum, histLen));
+
+        // SVGF second moment E[L²] of the indirect luminance — accumulated with the
+        // SAME reproject + α, so the denoiser can form the TEMPORAL variance
+        // var = E[L²] - lum(accum)². A stable edge has low temporal var (preserve →
+        // crisp); flickering 1-spp noise has high var (blur → clean). E[L] needs no
+        // storage: luminance is linear, so lum(accum) (the running-mean GI's luma)
+        // IS the running-mean luminance E[L].
+        const float curLum = dot(diffInd, vec3(0.2126, 0.7152, 0.0722));
+        const float prevSq = valid ? texture(momentsPrevTex, prevUv).r : (curLum * curLum);
+        const float accSq  = mix(prevSq, curLum * curLum, 1.0 / histLen);
+        imageStore(momentsImage, px, vec4(accSq, 0.0, 0.0, 0.0));
     } else {
         imageStore(indirectImage, px, vec4(0.0));// histLen=0 → next frame cold-starts
+        imageStore(momentsImage, px, vec4(0.0));
     }
 }

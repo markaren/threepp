@@ -45,7 +45,7 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[20]{};
+        VkDescriptorSetLayoutBinding b[25]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -72,11 +72,16 @@ namespace threepp::vulkan {
         set(16, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // demodulated diffuse-indirect (denoiser scratch)
         set(17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV indirect (other fif index) = 1-frame GI history
         set(18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // gbuf motion (GI reproject)
-        set(19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV gbuf ids (GI disocclusion reset)
+        set(19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV gbuf normals (geometric GI disocclusion reset)
+        set(20, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // momentsSq cur (SVGF E[L²] accumulator; denoise reads for variance)
+        set(21, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV momentsSq (other fif index) = 1-frame SVGF moment history
+        set(22, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // SVGF à-trous ping-pong A (rgb=GI, a=variance)
+        set(23, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // SVGF à-trous ping-pong B
+        set(24, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV gbuf depth (geometric GI disocclusion: depth discontinuity)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 20;
+        dlci.bindingCount = 25;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -136,9 +141,9 @@ namespace threepp::vulkan {
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = framesInFlight_ * 2;// camera + lights
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * (11 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + bindless + prevIndirect + motion + idsPrev (GI reproject)
+        sizes[1].descriptorCount = framesInFlight_ * (13 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev (GI reproject + SVGF + disocclusion)
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[2].descriptorCount = framesInFlight_ * 2;// out sceneHdr + indirect (denoiser scratch)
+        sizes[2].descriptorCount = framesInFlight_ * 5;// out sceneHdr + indirect + momentsSq + atrousA + atrousB (SVGF multi-pass scratch)
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;// TLAS
         sizes[4].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -201,6 +206,17 @@ namespace threepp::vulkan {
             indInfo.imageView   = in.indirect[f];
             indInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
+            VkDescriptorImageInfo momCurInfo{};// SVGF E[L²] accumulator (this frame) — storage r/w
+            momCurInfo.imageView   = in.momentsSq[f];
+            momCurInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+            VkDescriptorImageInfo atrAInfo{};// SVGF à-trous ping-pong A — storage
+            atrAInfo.imageView   = in.atrousA[f];
+            atrAInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo atrBInfo{};// SVGF à-trous ping-pong B — storage
+            atrBInfo.imageView   = in.atrousB[f];
+            atrBInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
             // GI reproject inputs. prevIndirect = the OTHER frame-in-flight's
             // indirect image — holds last frame's accumulated GI (a 1-frame
             // history; the 2 per-frame indirect images alternate as a ping-pong).
@@ -217,6 +233,14 @@ namespace threepp::vulkan {
             prevIndInfo.sampler     = gbufSampler_;
             prevIndInfo.imageView   = in.indirect[pf];
             prevIndInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo prevMomInfo{};// PREV E[L²] (other fif) — sampled in GENERAL for the SVGF reproject
+            prevMomInfo.sampler     = gbufSampler_;
+            prevMomInfo.imageView   = in.momentsSq[pf];
+            prevMomInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo depthPrevInfo{};// PREV depth (other fif) — depth-discontinuity disocclusion
+            depthPrevInfo.sampler     = gbufSampler_;
+            depthPrevInfo.imageView   = in.gbufDepth[pf];
+            depthPrevInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
             VkDescriptorImageInfo motionInfo     = sampled(in.gbufMotion[f], gbufSampler_);
             VkDescriptorImageInfo normalPrevInfo = sampled(in.gbufNormal[pf], gbufSampler_);
 
@@ -254,7 +278,7 @@ namespace threepp::vulkan {
             asInfo.accelerationStructureCount = 1;
             asInfo.pAccelerationStructures = &tlasLocal;
 
-            VkWriteDescriptorSet w[20]{};
+            VkWriteDescriptorSet w[25]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -294,7 +318,12 @@ namespace threepp::vulkan {
             setw(17, 17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevIndInfo, nullptr);
             setw(18, 18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &motionInfo,  nullptr);
             setw(19, 19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalPrevInfo, nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 20, w, 0, nullptr);
+            setw(20, 20, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &momCurInfo,    nullptr);
+            setw(21, 21, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevMomInfo,   nullptr);
+            setw(22, 22, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &atrAInfo,      nullptr);
+            setw(23, 23, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &atrBInfo,      nullptr);
+            setw(24, 24, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthPrevInfo, nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), 25, w, 0, nullptr);
         }
     }
 
@@ -341,10 +370,36 @@ namespace threepp::vulkan {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, denoisePipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
-        // Shares the 40-byte PC range; the denoise shader only reads width/height.
-        const uint32_t pc[10] = {0u, width, height, 0u, 0u, 0u, 0u, 0u, 0u, 0u};
-        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
-        vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
+        // SVGF multi-pass à-trous wavelet: each pass is a 5×5 edge-stopping filter
+        // at a WIDENING step (1,2,4,8 → reaches ±~30 px) that re-applies the edge
+        // stops + re-filters variance, bouncing (rgb=GI, a=variance) between two
+        // scratch images. This is what cleans large disoccluded regions (the motion
+        // "cloud") + residual noise (patchy shadows) without softening real edges,
+        // which a single fixed-width pass cannot. The shared 40-byte PC carries
+        // [1]=width [2]=height [3]=step [4]=srcMode [5]=dstMode.
+        // srcMode 0=indirect(raw), 1=atrousA, 2=atrousB.  dstMode 0=atrousA,
+        // 1=atrousB, 2=recombine→sceneHdr.
+        struct Pass { uint32_t step, srcMode, dstMode; };
+        const Pass passes[4] = {
+            {1u, 0u, 0u},// indirect → A  (step 1)
+            {2u, 1u, 1u},// A → B         (step 2)
+            {4u, 2u, 0u},// B → A         (step 4)
+            {8u, 1u, 2u},// A → recombine into sceneHdr (step 8)
+        };
+        VkMemoryBarrier mb{};
+        mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        for (int p = 0; p < 4; ++p) {
+            const uint32_t pc[10] = {0u, width, height, passes[p].step,
+                                     passes[p].srcMode, passes[p].dstMode, 0u, 0u, 0u, 0u};
+            vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+            vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
+            if (p < 3)// make this pass's scratch write visible to the next pass's read
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                                     1, &mb, 0, nullptr, 0, nullptr);
+        }
     }
 
 }// namespace threepp::vulkan
