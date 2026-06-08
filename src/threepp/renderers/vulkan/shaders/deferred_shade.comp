@@ -310,7 +310,61 @@ vec3 emissiveNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, vec3 albedo,
     return sum / float(EM_SAMPLES);
 }
 
+// Cheap diffuse IRRADIANCE from the emissive area lights — like emissiveNEE but
+// returns ∫Li·cosθ/pdf (no BRDF; the caller applies albedo/π) with a small,
+// caller-chosen sample count. Used by the 1-bounce GI gather, which tolerates the
+// extra noise (it's temporally accumulated + à-trous denoised). Shares the
+// power-CDF pick + R2 barycentric of emissiveNEE.
+vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
+    if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
+    const int  emIters    = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
+    const vec3 shadowOrig = P + N * SHADOW_EPS;
+    vec3 sum = vec3(0.0);
+    for (int s = 0; s < EM_SAMPLES; ++s) {
+        const float xi = (float(s) + 0.5) / float(EM_SAMPLES) * pc.emissiveTotalPower;
+        uint lo = 0u, hi = pc.emissiveCount - 1u;
+        for (int it = 0; it < emIters; ++it) {
+            if (lo >= hi) break;
+            const uint mid = (lo + hi) >> 1u;
+            if (emissiveTris[mid].v1.w < xi) lo = mid + 1u; else hi = mid;
+        }
+        const EmTri t = emissiveTris[lo];
+        const float su1 = sqrt(fract(0.5 + float(s) * 0.7548776662));
+        const float r2  =      fract(0.5 + float(s) * 0.5698402909);
+        const vec3 lp = (1.0 - su1) * t.v0.xyz + (su1 * (1.0 - r2)) * t.v1.xyz + (su1 * r2) * t.v2.xyz;
+        const vec3 toL = lp - P;
+        const float dist2 = dot(toL, toL);
+        const float dist  = sqrt(max(dist2, 1e-20));
+        if (dist <= 1e-4) continue;
+        const vec3 L = toL / dist;
+        const float ndl = dot(N, L);
+        if (ndl <= 0.01) continue;
+        const vec3 lnRaw = cross(t.v1.xyz - t.v0.xyz, t.v2.xyz - t.v0.xyz);
+        const float lnLen = length(lnRaw);
+        if (lnLen < 1e-20 || t.v0.w <= 1e-20 || t.v2.w <= 0.0) continue;
+        const float cosLight = abs(dot(-L, lnRaw / lnLen));
+        if (cosLight <= 0.05) continue;
+        const float pickPdf = t.v2.w / pc.emissiveTotalPower;
+        const float p_omega = pickPdf * dist2 / (t.v0.w * cosLight);
+        if (p_omega <= 1e-20) continue;
+        if (doShadows) {
+            rayQueryEXT rq;
+            rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+                                  0xFFu, shadowOrig, 1e-3, L, dist - 1e-2);
+            while (rayQueryProceedEXT(rq)) {}
+            if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT)
+                continue;
+        }
+        vec3 c = ndl * t.emission.rgb / p_omega;
+        const float lum = max(max(c.r, c.g), c.b);
+        if (lum > pc.fireflyClamp) c *= pc.fireflyClamp / lum;
+        sum += c;
+    }
+    return sum / float(EM_SAMPLES);
+}
+
 vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed);// fwd decl
+vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint seed);// fwd decl (cheap 1-bounce GI)
 
 // Diffuse indirect. TWO paths, selected by the denoiser flag (pc.flags bit 2):
 //  • DENOISER ON → REAL stochastic 1-bounce GI: a few cosine rays via traceRadiance
@@ -331,7 +385,7 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
     if (stochastic) {
         // Real stochastic 1-bounce GI (accumulated + denoised downstream).
         uint seed = uint(px.x) * 1973u + uint(px.y) * 9277u + frame * 26699u + 0x9e3779b9u;
-        const int N_GI = 2;// low spp; spatial denoise + TAA integrate it
+        const int N_GI = 3;// giRadiance is cheap now → afford more spp; denoise+TAA integrate
         vec3 acc = vec3(0.0);
         for (int s = 0; s < N_GI; ++s) {
             const float u1 = rnd(seed);
@@ -340,11 +394,10 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
             const float phi = TWO_PI * u2;
             const vec3  hemi = vec3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));
             const vec3  dir  = normalize(T * hemi.x + B * hemi.y + N * hemi.z);
-            vec3 gi = traceRadiance(orig, dir, doShadows, maxLod, maxLod, seed);// cosine pdf cancels
-            // FIREFLY CLAMP — a single GI bounce that catches the sun via a glossy
-            // hit / an emissiveNEE spike returns a huge value the temporal+à-trous
-            // can't suppress (it smears into bright blobs). Diffuse GI is bounded,
-            // so cap each sample's luminance hard.
+            vec3 gi = giRadiance(orig, dir, doShadows, maxLod, seed);// cheap 1-bounce; cosine pdf cancels
+            // FIREFLY CLAMP (safety) — giRadiance has no specular sun-catch and its
+            // emitter NEE is internally clamped, so the diffuse GI is already
+            // bounded; this just caps any residual emitter spike.
             const float gl = max(max(gi.r, gi.g), gi.b);
             if (gl > 6.0) gi *= 6.0 / gl;
             acc += gi;
@@ -653,6 +706,88 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         curMissLod = hRough * maxLod;
     }
     return radiance;
+}
+
+// CHEAP 1-bounce diffuse GI — replaces the recursive traceRadiance on the GI
+// path. One ray; on a hit, shade with ONLY direct sun/point/spot (one shadow ray
+// each) + the hit's own emissive + a small-sample emitter NEE. NO specular lobe
+// and NO further bounces. That removes both the COST (the 3-bounce recursion +
+// 16-sample emissiveNEE per bounce, which dominate in emitter-heavy scenes) and
+// the FIREFLIES (the specular continuation catching the sun via a glossy hit).
+// Diffuse GI is what the cosine gather integrates anyway. The hit gets NO env
+// fill: the 2nd-bounce sky comes from the gather's OWN rays that MISS — so
+// enclosed scenes don't leak sky while open scenes still get it.
+vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint seed) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu, origin, 1e-3, dir, 1e30);
+    while (rayQueryProceedEXT(rq)) {}
+    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT)
+        return sampleEnvLod(dir, maxLod);// escaped → sky (the env 1st-bounce term)
+
+    const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+    const MaterialDesc hm     = mats[hitId];
+    const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+    const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+    const float  tHit   = rayQueryGetIntersectionTEXT(rq, true);
+    const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
+    vec3 hitN; vec2 hitUv;
+    fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
+
+    const vec3 hAlbedo = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
+    if (hm.roughness < 0.0) return hAlbedo;// unlit hit (e.g. a pure-emissive proxy)
+
+    if (dot(hitN, -dir) < 0.0) hitN = -hitN;
+    const vec3 hEmissive = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hitUv,
+                                  hm.emissive * hm.emissiveIntensity);
+    const vec3 hitP       = origin + dir * tHit;
+    const vec3 shadowOrig = hitP + hitN * SHADOW_EPS;
+    const vec3 diff       = hAlbedo * (1.0 - clamp(hm.metalness, 0.0, 1.0)) * (1.0 / PI);
+
+    vec3 lit = hEmissive;// a GI ray that hits an emitter sees it glow directly
+    for (uint i = 0u; i < lights.dirCount; ++i) {
+        const vec3  L   = normalize(lights.dirLights[i].direction);
+        const float ndl = dot(hitN, L);
+        if (ndl <= 0.0) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, L, 1e30) : 1.0;
+        if (vis <= 0.0) continue;
+        lit += diff * ndl * lights.dirLights[i].color * vis;
+    }
+    for (uint i = 0u; i < lights.pointCount; ++i) {
+        vec3        toL  = lights.pointLights[i].position - hitP;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float ndl = dot(hitN, toL);
+        if (ndl <= 0.0) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
+        if (vis <= 0.0) continue;
+        float atten = 1.0 / max(pow(dist, lights.pointLights[i].decay), 0.01);
+        const float range = lights.pointLights[i].range;
+        if (range > 0.0) { const float tt = dist / range; const float t4 = tt*tt*tt*tt; const float wnd = max(1.0 - t4, 0.0); atten *= wnd * wnd; }
+        lit += diff * ndl * lights.pointLights[i].color * atten * vis;
+    }
+    for (uint i = 0u; i < lights.spotCount; ++i) {
+        vec3        toL  = lights.spotLights[i].position - hitP;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float ndl = dot(hitN, toL);
+        if (ndl <= 0.0) continue;
+        const float spotCos   = dot(-toL, lights.spotLights[i].direction);
+        const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
+                                           lights.spotLights[i].cosAngleInner, spotCos);
+        if (spotAtten <= 0.0) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
+        if (vis <= 0.0) continue;
+        float atten = spotAtten / max(pow(dist, lights.spotLights[i].decay), 0.01);
+        const float range = lights.spotLights[i].range;
+        if (range > 0.0) { const float tt = dist / range; const float t4 = tt*tt*tt*tt; const float wnd = max(1.0 - t4, 0.0); atten *= wnd * wnd; }
+        lit += diff * ndl * lights.spotLights[i].color * atten * vis;
+    }
+    // Emitter 1-bounce (e.g. enclosed scene lit only by an emissive sphere) —
+    // cheap small-sample diffuse NEE so the colour bleed survives the denoiser.
+    lit += diff * emissiveIrradiance(hitP, hitN, 4, doShadows);
+    return lit;
 }
 
 // Thin-shell water (RenderMode::RasterFirst). Replicates closest_hit's
