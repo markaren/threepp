@@ -45,7 +45,7 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[27]{};
+        VkDescriptorSetLayoutBinding b[31]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -80,10 +80,17 @@ namespace threepp::vulkan {
         set(24, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV gbuf depth (geometric GI disocclusion: depth discontinuity)
         set(25, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reflect (sharp mirror-ray reflection radiance; shade writes, reflection denoise reads)
         set(26, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV reflect (other fif index) = 1-frame reflection/glass history (temporal AA)
+        // ReSTIR DI reservoir ping-pong (shared with the PT path's reservoir images).
+        // 27/28 = lightPos+type write/read (rgba32f); 29/30 = W_sum/M/W/p_hat write/read
+        // (rgba16f). Storage images (the PT images have no SAMPLED usage), GENERAL layout.
+        set(27, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reservoir pos+type WRITE (this frame)
+        set(28, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reservoir pos+type READ (prev frame, temporal reuse)
+        set(29, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reservoir W_sum/M/W/p_hat WRITE
+        set(30, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reservoir W_sum/M/W/p_hat READ
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 27;
+        dlci.bindingCount = 31;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -145,7 +152,7 @@ namespace threepp::vulkan {
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         sizes[1].descriptorCount = framesInFlight_ * (14 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[2].descriptorCount = framesInFlight_ * 6;// out sceneHdr + indirect + momentsSq + atrousA + atrousB + reflect
+        sizes[2].descriptorCount = framesInFlight_ * 10;// sceneHdr + indirect + momentsSq + atrousA/B + reflect + 4 reservoir (pos/W × write/read)
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;// TLAS
         sizes[4].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -287,7 +294,25 @@ namespace threepp::vulkan {
             asInfo.accelerationStructureCount = 1;
             asInfo.pAccelerationStructures = &tlasLocal;
 
-            VkWriteDescriptorSet w[27]{};
+            // ReSTIR DI reservoir ping-pong: this frame WRITES slot (f&1) and READS the
+            // other (last frame's write). Baked once at allocation — with 2 frames-in-
+            // flight + 2 slots, consecutive frames alternate automatically (same trick as
+            // the RT set). GENERAL layout (storage images, no SAMPLED usage).
+            const uint32_t resWs = f & 1u, resRs = resWs ^ 1u;
+            VkDescriptorImageInfo resPosWriteInfo{};
+            resPosWriteInfo.imageView   = in.reservoirPos[resWs];
+            resPosWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo resPosReadInfo{};
+            resPosReadInfo.imageView   = in.reservoirPos[resRs];
+            resPosReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo resWWriteInfo{};
+            resWWriteInfo.imageView   = in.reservoirW[resWs];
+            resWWriteInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo resWReadInfo{};
+            resWReadInfo.imageView   = in.reservoirW[resRs];
+            resWReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+            VkWriteDescriptorSet w[31]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -334,7 +359,11 @@ namespace threepp::vulkan {
             setw(24, 24, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthPrevInfo, nullptr);
             setw(25, 25, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &reflInfo,      nullptr);
             setw(26, 26, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevReflInfo,  nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 27, w, 0, nullptr);
+            setw(27, 27, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resPosWriteInfo, nullptr);
+            setw(28, 28, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resPosReadInfo,  nullptr);
+            setw(29, 29, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resWWriteInfo,   nullptr);
+            setw(30, 30, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resWReadInfo,    nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), 31, w, 0, nullptr);
         }
     }
 
@@ -359,11 +388,12 @@ namespace threepp::vulkan {
                                        uint32_t emissiveCount, float emissiveTotalPower,
                                        float fireflyClamp,
                                        float oceanFineTileSize, float oceanFoamTileSize,
-                                       bool denoise) {
+                                       bool denoise, bool restirDI) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
-        const uint32_t flags = (shadows ? 1u : 0u) | (ao ? 2u : 0u) | (denoise ? 4u : 0u);
+        const uint32_t flags = (shadows ? 1u : 0u) | (ao ? 2u : 0u) | (denoise ? 4u : 0u)
+                             | (restirDI ? 8u : 0u);
         uint32_t emPowerBits, fireflyBits, oceanFineBits, oceanFoamBits;
         std::memcpy(&emPowerBits,   &emissiveTotalPower, sizeof(emPowerBits));
         std::memcpy(&fireflyBits,   &fireflyClamp,       sizeof(fireflyBits));

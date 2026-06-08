@@ -9615,6 +9615,13 @@ namespace threepp {
             in.oceanFineSampler = oceanFineHeightSampler;
             in.oceanFoamView    = oceanFoamView;
             in.oceanFoamSampler = oceanFoamSampler;
+            // ReSTIR DI reservoir ping-pong — the same 2 physical images the PT path
+            // uses (created unconditionally in createAccumImage). rewriteDescriptors
+            // picks write/read slots per frame. Locals must outlive the call below.
+            const VkImageView resPosViews[2] = {reservoirPosImagesPP[0].view, reservoirPosImagesPP[1].view};
+            const VkImageView resWViews[2]   = {reservoirWImagesPP[0].view,   reservoirWImagesPP[1].view};
+            in.reservoirPos     = resPosViews;
+            in.reservoirW       = resWViews;
             deferredShade_->rewriteDescriptors(in);
         }
 
@@ -12898,7 +12905,7 @@ namespace threepp {
                                                emissiveTotalPowerThisFrame_,
                                                fireflyClamp_,
                                                oceanFineTileSize, oceanFoamTileSize,
-                                               deferredDenoise_);
+                                               deferredDenoise_, restirDIEnabled_);
                 timingEnd(cb, TP_PathTrace);// pathTraceMs = deferred SHADE only
                 // Spatial denoise of the demodulated diffuse-indirect + recombine.
                 // Barrier: the shade wrote sceneHdr + the indirect image (both

@@ -53,6 +53,11 @@ namespace threepp::vulkan {
             const VkImageView* atrousB    = nullptr;// [framesInFlight] SVGF à-trous ping-pong B (storage)
             const VkImageView* reflect    = nullptr;// [framesInFlight] sharp mirror-ray reflection radiance (storage)
             const VkImageView* sceneHdr   = nullptr;// [framesInFlight] output (storage)
+            // ReSTIR DI reservoir ping-pong — [2] PHYSICAL images (not per-frame): the
+            // shared PT reservoir images. rewriteDescriptors picks write=slot(f&1),
+            // read=other per frame, matching the RT set's ping-pong. STORAGE images.
+            const VkImageView* reservoirPos = nullptr;// [2] lightPos.xyz + lightType.w (rgba32f)
+            const VkImageView* reservoirW   = nullptr;// [2] W_sum/M/W/p_hat (rgba16f)
             VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;// shared scene TLAS (shadow + reflection rays)
             const VkBuffer*    materialBuf = nullptr;// [framesInFlight] MaterialDesc[] (emissive)
             VkBuffer           geomDescBuf = VK_NULL_HANDLE;// GeometryDesc[] (reflection-hit normals/UVs)
@@ -86,7 +91,7 @@ namespace threepp::vulkan {
                             uint32_t emissiveCount, float emissiveTotalPower,
                             float fireflyClamp,
                             float oceanFineTileSize, float oceanFoamTileSize,
-                            bool denoise);
+                            bool denoise, bool restirDI);
 
         // Spatial denoise of the demodulated diffuse-indirect (binding 16) +
         // recombine into sceneHdr. Run AFTER recordDispatch (same descriptor
