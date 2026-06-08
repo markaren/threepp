@@ -97,6 +97,16 @@ void main() {
         // curve); opaque reflection keeps the normal-stopped kernel (mirrors crisp).
         const bool  isGlass   = cR.a < 0.0;
         const float rough     = abs(cR.a);
+        // CLEAR glass (watch crystal etc.): temporal AA already anti-aliased the
+        // refraction, so add it SHARP with NO spatial blur. Any blur here (even the
+        // σ=0.6 floor → a 5×5) destroys fine detail under the glass (a watch dial)
+        // AND bleeds the per-pixel Fresnel reflection across the face = the "washed,
+        // detail-destroyed" look. Frosted glass (rough ≥ 0.12) still blurs below.
+        if (isGlass && rough < 0.12) {
+            const vec3 cur = imageLoad(outImage, px).rgb;
+            imageStore(outImage, px, vec4(cur + cR.rgb, 1.0));
+            return;
+        }
         const float metalness = texelFetch(gbufAlbedoTex, px, 0).a;
         // Blur width by material TYPE — the key is gating on metalness:
         //  • METAL   → TRUE roughness blur (a rough metal's reflection IS its look,

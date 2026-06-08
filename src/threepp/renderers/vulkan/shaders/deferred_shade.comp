@@ -953,15 +953,16 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
 
         vec3 transmitColor;
         if (pm.thinWalled != 0) {
-            // THIN-SHELL glass (glTF default): a single gentle refraction to the
-            // scene behind (matches closest_hit's thin-shell BSDF). A 2-interface
-            // "solid" treatment over-bends a hollow shell → rays escape to the
-            // sky → cloudy wash. Beer-Lambert uses the thin-shell thickness proxy.
-            vec3 dT = refract(-V, Ns, 1.0 / ior);
-            if (dot(dT, dT) < 1e-6) {
-                transmitColor = reflectColor;// TIR
-            } else {
-                const vec3 behind = traceRadiance(P - N * SHADOW_EPS, normalize(dT), doShadows, maxLod, missLod, seed);
+            // THIN-SHELL glass (glTF default, e.g. a watch crystal): a thin parallel
+            // shell refracts on ENTRY then back on EXIT → NET ~zero bend (a tiny
+            // parallel offset). So pass the view ray ~STRAIGHT through and read the
+            // surface directly behind — undistorted, full detail. A single refract()
+            // (the old code) bends by the full first-interface angle → it shifts/
+            // warps the face beneath and lets rays escape to the sky = a blue
+            // "washed, detail-destroyed" look over e.g. a watch dial.
+            const vec3 dT = -V;// straight-through (net-zero thin-shell bend)
+            {
+                const vec3 behind = traceRadiance(P - N * SHADOW_EPS, dT, doShadows, maxLod, missLod, seed);
                 vec3 tint = albedo;
                 if (pm.attenuationDistance > 0.0 && pm.thickness > 0.0)
                     tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(pm.thickness / pm.attenuationDistance));
