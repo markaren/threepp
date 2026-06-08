@@ -192,13 +192,55 @@ float IBLSheenBRDF(float dotNV, float roughness) {
     return clamp(DG / PI, 0.0, 1.0);
 }
 
-// Inline hard-shadow test (TerminateOnFirstHit + Opaque). 1.0 lit / 0.0 occluded.
+// Interpolated UV at a hit (lean — UV only, for the alpha-tested shadow test).
+// Mirrors fetchHit's index + barycentric interpolation.
+vec2 fetchUvAt(int instIdx, int primId, vec2 bary) {
+    const GeometryDesc g = geoms[instIdx];
+    if (g.uvAddress == 0ul) return vec2(0.0);
+    uvec3 idx;
+    if (g.indexed != 0u) {
+        IndexBuf ib = IndexBuf(g.indexAddress);
+        idx = uvec3(ib.i[primId * 3 + 0], ib.i[primId * 3 + 1], ib.i[primId * 3 + 2]);
+    } else {
+        idx = uvec3(primId * 3 + 0, primId * 3 + 1, primId * 3 + 2);
+    }
+    UvBuf ub = UvBuf(g.uvAddress);
+    const vec2 u0 = vec2(ub.u[idx.x * 2 + 0], ub.u[idx.x * 2 + 1]);
+    const vec2 u1 = vec2(ub.u[idx.y * 2 + 0], ub.u[idx.y * 2 + 1]);
+    const vec2 u2 = vec2(ub.u[idx.z * 2 + 0], ub.u[idx.z * 2 + 1]);
+    return (1.0 - bary.x - bary.y) * u0 + bary.x * u1 + bary.y * u2;
+}
+
+// Does a shadow-ray candidate hit actually OCCLUDE? Opaque materials (no albedo map
+// or alphaCutoff == 0) short-circuit immediately (one buffer read). Alpha-tested
+// materials sample the albedo alpha — mirrors gbuffer.frag / closest_hit_alpha.rahit:
+//   cutoff > 0 (cutout) → occludes iff alpha ≥ cutoff
+//   cutoff < 0 (blend)  → occludes iff alpha ≥ 0.5 (deterministic shadow proxy)
+bool shadowOccludes(int instIdx, int primId, vec2 bary) {
+    const MaterialDesc m = mats[instIdx];
+    if (m.albedoTexIndex < 0 || m.alphaCutoff == 0.0) return true;// opaque
+    const vec2  uv = fetchUvAt(instIdx, primId, bary);
+    const int   ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
+    const float a  = textureLod(albedoMaps[ti], (m.uvTransform * vec3(uv, 1.0)).xy, 0.0).a;
+    return (m.alphaCutoff > 0.0) ? (a >= m.alphaCutoff) : (a >= 0.5);
+}
+
+// Inline hard-shadow test (TerminateOnFirstHit). 1.0 lit / 0.0 occluded.
+// NOT forced-opaque: geometry is non-opaque in the BLAS, so alpha-tested casters
+// (foliage, grids, cutout decals) yield CANDIDATES we alpha-test here — otherwise
+// they'd cast a solid silhouette. Opaque candidates confirm on the first hit (one
+// buffer read), so the cost on solid geometry stays negligible.
 float shadowVis(vec3 origin, vec3 dir, float tMax) {
     rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, topAS,
-                          gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
                           0xFFu, origin, 0.0, dir, tMax);
-    while (rayQueryProceedEXT(rq)) {}
+    while (rayQueryProceedEXT(rq)) {
+        if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
+            shadowOccludes(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
+                           rayQueryGetIntersectionPrimitiveIndexEXT(rq, false),
+                           rayQueryGetIntersectionBarycentricsEXT(rq, false)))
+            rayQueryConfirmIntersectionEXT(rq);
+    }
     return (rayQueryGetIntersectionTypeEXT(rq, true) ==
             gl_RayQueryCommittedIntersectionNoneEXT) ? 1.0 : 0.0;
 }
