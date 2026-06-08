@@ -907,11 +907,58 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // the path with medium tracking across the bounce; a single inline ray can't.)
     vec3 tint = vec3(1.0);
     if (pm.attenuationDistance > 0.0)
-        tint = pow(max(pm.attenuationColor, vec3(1e-6)), vec3(pm.thickness / pm.attenuationDistance));
-    const vec3 skyFill = sampleEnvLod(N, maxLod) * 0.4 + lights.ambient;
-    const vec3 transmitColor = tint * skyFill;
+        // 2× the crossing depth → matches the PT's down+up Beer-Lambert (2 crossings
+        // over a dark seabed). The deeper absorption darkens it AND shifts it bluer
+        // (red absorbs first), turning the old washed grey into rich deep-ocean blue.
+        tint = pow(max(pm.attenuationColor, vec3(1e-6)), vec3(2.0 * pm.thickness / pm.attenuationDistance));
+    // Lit by the sky's BRIGHTNESS (scalar luminance), NOT the coloured env — the
+    // coloured sky washed the absorption hue to a dull grey. Scalar skylight keeps
+    // the deep blue SATURATED. A view-depth term deepens it looking straight down
+    // (longer water column) → the foreground-deep / horizon-bright gradient the PT
+    // shows. Dimmed (×0.45) because the deep body sits over a near-black seabed.
+    const float skyLum    = dot(sampleEnvLod(N, maxLod), vec3(0.2126, 0.7152, 0.0722));
+    const float depthFade = mix(1.0, 0.4, NdotV);// darker looking down into the column
+    const vec3  transmitColor = tint * (skyLum * 0.45 + lights.ambient) * depthFade;
 
     vec3 col = mix(transmitColor, reflectColor, F);
+
+    // ── Sun/light specular GLINTS ─────────────────────────────────────────────
+    // Sharp analytic GGX highlights of the scene lights across the FFT-perturbed
+    // facets — the glittering sparkle that sells "ocean". shadeWater never did this
+    // (only reflect+transmit), so the deferred water was flat/dull; the env
+    // reflection alone misses it (the scene's directional sun isn't baked into the
+    // HDRI). The clearcoat layer (pm.clearcoat) adds a 2nd tighter lobe. This is the
+    // bulk of the dull→epic difference; the PT gets it from its analytic light NEE.
+    {
+        const float specRough = max(pm.roughness, 0.03);
+        const float kG        = (specRough + 1.0) * (specRough + 1.0) / 8.0;
+        const float ccRough   = clamp(pm.clearcoatRoughness, 0.03, 0.3);
+        const vec3  sunOrig   = P + N * SHADOW_EPS;
+        for (uint i = 0u; i < lights.dirCount; ++i) {
+            const vec3  L   = normalize(lights.dirLights[i].direction);
+            const float ndl = dot(N, L);
+            if (ndl <= 0.0) continue;
+            const float vis = doShadows ? shadowVis(sunOrig, L, 1e30) : 1.0;
+            if (vis <= 0.0) continue;
+            const vec3  H   = normalize(V + L);
+            const float ndh = max(dot(N, H), 0.0);
+            const float vdh = max(dot(V, H), 0.0);
+            const float Gs  = geomSmithG1(NdotV, kG) * geomSmithG1(ndl, kG);
+            const float Fb  = r0 + (1.0 - r0) * pow(1.0 - vdh, 5.0);
+            float spec = distGGX(ndh, specRough) * Gs * Fb / max(4.0 * NdotV * ndl, 1e-4);
+            if (pm.clearcoat > 0.0) {
+                const float Fc = 0.04 + 0.96 * pow(1.0 - vdh, 5.0);
+                spec += pm.clearcoat * distGGX(ndh, ccRough) * Gs * Fc / max(4.0 * NdotV * ndl, 1e-4);
+            }
+            vec3 c = spec * ndl * lights.dirLights[i].color * vis;
+            // Directional lights are deltas → GGX spikes; clamp so a glint blooms
+            // bright but never fireflies. (×4 over the global clamp → bright suns.)
+            const float cl = max(max(c.r, c.g), c.b);
+            const float gMax = pc.fireflyClamp * 4.0;
+            if (cl > gMax) c *= gMax / cl;
+            col += c;
+        }
+    }
 
     // Foam: folded-surface coverage (foamAddress attribute + live world foam
     // texture) bleaches a diffuse whitewater layer over the glass. Two-layer
@@ -1140,6 +1187,13 @@ void main() {
     // Gated on thin-shell + an active ocean (dummy tex + tile size 0 otherwise),
     // so it's a no-op for every non-ocean surface. Must run before N is used.
     if (pm.thinWalled != 0 && pc.oceanFineTileSize > 0.0) {
+        // The FFT DisplacedMesh's gbuffer normal comes out INVERTED (pointing down
+        // into the water) → NdotV≈0 → Fresnel pinned at ~1 → the ocean read as a
+        // flat, dull sky reflection with NO depth gradient (the whole reason it
+        // looked dull vs the PT, which uses geometry normals directly). Water is
+        // always viewed from above, so face the camera. Done BEFORE the fine-cascade
+        // perturbation so the chop tilt is added in the correct (up) frame.
+        if (dot(N, V) < 0.0) N = -N;
         const float invTile = 1.0 / pc.oceanFineTileSize;
         const float eps     = pc.oceanFineTileSize / 32.0;
         const float depsUV  = eps * invTile;
