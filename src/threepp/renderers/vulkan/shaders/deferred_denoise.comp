@@ -84,24 +84,34 @@ void main() {
         if (cid == 0u) return;                             // sky
         const vec4 nC = texelFetch(gbufNormalTex, px, 0);
         if (nC.w < 0.0) return;                            // unlit
+        const vec4 cR = imageLoad(reflectImage, px);// .rgb = reflection (pre-weighted), .a = roughness (<0 = glass)
+        // PERF EARLY-OUT: most of the scene is matte (reflBlend=0 → reflection=0).
+        // Skip the entire neighbourhood blur there — it used to run the full kernel
+        // on EVERY pixel, which was the bulk of the deferred denoise cost.
+        if (dot(cR.rgb, cR.rgb) < 1e-10) return;
         const vec3  Nc     = normalize(nC.xyz * 2.0 - 1.0);
         const vec3  Pc     = worldFromDepth(px, texelFetch(gbufDepthTex, px, 0).x);
         const vec3  camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
         const float planeScale = 1.0 / max(0.035 * length(Pc - camPos), 1e-3);
-        // .a < 0 marks GLASS (refraction): it aliases far worse than reflection
-        // (1 ray, very normal-sensitive), so give it a MIN AA blur and an ID-based
-        // edge stop (blur across the curve). Opaque reflection keeps the sharp,
-        // normal-stopped kernel so mirrors stay crisp.
-        const float ra      = imageLoad(reflectImage, px).a;
-        const bool  isGlass = ra < 0.0;
-        const float rough   = abs(ra);
-        // σ = the ROUGHNESS frost only (temporal AA now handles the 1-ray aliasing,
-        // so no big AA floor → clear glass stays SHARP, frosted glass blurs).
-        const float sigma   = max(rough * 22.0, 0.6);
+        // .a < 0 marks GLASS (refraction): ID-based edge stop (blur across the
+        // curve); opaque reflection keeps the normal-stopped kernel (mirrors crisp).
+        const bool  isGlass = cR.a < 0.0;
+        const float rough   = abs(cR.a);
+        // σ = the ROUGHNESS frost (temporal AA handles the 1-ray aliasing). OPAQUE
+        // reflections CAP the roughness at 0.16 (the old game-shortcut) so glossy-
+        // but-not-mirror surfaces (Sponza stone, roughness ~0.3-0.5) reflect SHARP
+        // detail instead of a physical mush — fixes the "blurred detail" regression
+        // while mirrors (low roughness) stay sharp. Glass keeps its TRUE frost.
+        const float blurRough = isGlass ? rough : min(rough, 0.16);
+        const float sigma     = max(blurRough * 8.0, 0.6);// ×8 (was 22): the old 0.16 GGX lobe was ~1px sharp,
+                                                          // not a 3.5px screen blur → keep reflected DETAIL crisp
         const float inv2s2  = 1.0 / (2.0 * sigma * sigma);
+        // PERF: size the kernel to what σ actually reaches — sharp reflections use a
+        // tiny kernel, only frosted/rough surfaces pay for the wide one (was a fixed
+        // 25×25 = 625 taps on every reflective pixel).
+        const int   RR      = int(clamp(ceil(sigma * 2.5), 1.0, 12.0));
         vec3  sum = vec3(0.0);
         float wsum = 0.0;
-        const int RR = 12;
         for (int dy = -RR; dy <= RR; ++dy)
         for (int dx = -RR; dx <= RR; ++dx) {
             const ivec2 q = px + ivec2(dx, dy);
@@ -126,7 +136,7 @@ void main() {
             sum  += imageLoad(reflectImage, q).rgb * w;
             wsum += w;
         }
-        const vec3 blurred = wsum > 0.0 ? sum / wsum : imageLoad(reflectImage, px).rgb;
+        const vec3 blurred = wsum > 0.0 ? sum / wsum : cR.rgb;
         const vec3 cur     = imageLoad(outImage, px).rgb;
         imageStore(outImage, px, vec4(cur + blurred, 1.0));// pre-weighted → just add
         return;

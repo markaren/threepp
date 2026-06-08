@@ -12899,6 +12899,7 @@ namespace threepp {
                                                fireflyClamp_,
                                                oceanFineTileSize, oceanFoamTileSize,
                                                deferredDenoise_);
+                timingEnd(cb, TP_PathTrace);// pathTraceMs = deferred SHADE only
                 // Spatial denoise of the demodulated diffuse-indirect + recombine.
                 // Barrier: the shade wrote sceneHdr + the indirect image (both
                 // GENERAL storage); the denoise reads the indirect 5×5 neighbourhood
@@ -12916,9 +12917,10 @@ namespace threepp {
                     denoiseDep.memoryBarrierCount = 1;
                     denoiseDep.pMemoryBarriers = &denoiseBar;
                     vkCmdPipelineBarrier2(cb, &denoiseDep);
+                    timingBegin(cb, TP_Denoise);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
                     deferredShade_->recordDenoiseDispatch(cb, currentFrame, ptExt.width, ptExt.height);
+                    timingEnd(cb, TP_Denoise);
                 }
-                timingEnd(cb, TP_PathTrace);
             }
 
             // ── Bloom + tone-map/sRGB composite (HDR post stack) ───────────────
