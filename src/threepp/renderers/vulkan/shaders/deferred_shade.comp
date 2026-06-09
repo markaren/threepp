@@ -131,6 +131,16 @@ layout(set = 0, binding = 30, rgba16f) uniform readonly  image2D reservoirWRead;
 // narrow where converged (preserves the lobe detail).
 layout(set = 0, binding = 31, rgba16f) uniform writeonly image2D reflAuxWrite;
 layout(set = 0, binding = 32) uniform sampler2D reflAuxPrevTex;
+// Scene fog (homogeneous medium) — the SAME per-frame GpuFogUbo the PT path
+// consumes, so scene.fog drives both modes from one source of truth.
+// waterSurfaceY caps the medium (underwater fog stops at the surface).
+layout(set = 0, binding = 33, scalar) uniform FogUbo {
+    vec3  sigmaT;        // per-channel extinction (1/world unit)
+    float enabled;       // 1.0 = fog active
+    vec3  color;         // inscatter tint = single-scattering albedo
+    float anisotropy;    // HG g (drives the volumetric beam phase when fog is on)
+    float waterSurfaceY; // world-Y medium cap; 1e30 = unbounded
+} fog;
 
 // ReBLUR-style TEMPORAL accumulation for the reflection (+ glass). Adaptive blend
 // α = 1/historyLength → fast convergence early, then a long stable mean. Tracks the
@@ -1738,6 +1748,39 @@ float hgPhase(float mu, float g) {
     const float g2 = g * g;
     return (1.0 - g2) / (4.0 * PI * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5));
 }
+
+// ── Scene fog (deferred) ─────────────────────────────────────────────────────
+// Beer-Lambert extinction toward the fog colour over the PRIMARY distance —
+// the raster-side approximation of the PT's true volumetric scattering (which
+// also fogs reflected/refracted sub-paths; here only the camera→surface leg is
+// fogged). Sky pixels stay unfogged (three.js background semantics). The
+// fogged path is clipped to y < waterSurfaceY, so the underwater medium ends
+// exactly at the wave surface.
+float fogPathLength(vec3 a, vec3 b) {
+    const float full = distance(a, b);
+    if (fog.waterSurfaceY > 1e29) return full;
+    const float ya = a.y - fog.waterSurfaceY;
+    const float yb = b.y - fog.waterSurfaceY;
+    if (ya >= 0.0 && yb >= 0.0) return 0.0;       // segment entirely above the medium
+    if (ya < 0.0 && yb < 0.0) return full;        // entirely inside
+    const float t = ya / (ya - yb);               // surface crossing
+    return (ya < 0.0) ? full * t : full * (1.0 - t);
+}
+vec3 applySceneFog(vec3 col, vec3 ro, vec3 hit) {
+    if (fog.enabled < 0.5) return col;
+    const float d = fogPathLength(ro, hit);
+    if (d <= 0.0) return col;
+    const vec3 tr = exp(-fog.sigmaT * d);
+    // In-scatter = fog ALBEDO × an ambient-light estimate (env mean + scene
+    // ambient). The fog colour is a single-scattering albedo in this engine
+    // (the PT lights the medium with real NEE) — mixing toward it directly,
+    // three.js-style, makes fog GLOW in dark scenes (a black Cornell room
+    // washed out to white). Spot-light in-scatter is added separately by the
+    // fog-driven volumetricSpotScatter march (the god rays).
+    const vec3 fogLight = lights.ambient
+                        + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+    return col * tr + fog.color * fogLight * (vec3(1.0) - tr);
+}
 // ── Procedural star field (sky pixels) ───────────────────────────────────────
 // Hash-based stars evaluated in DIRECTION space — resolution-independent and
 // pixel-crisp at any FOV/zoom. Baked env-texture stars are sub-texel features,
@@ -1770,9 +1813,17 @@ vec3 proceduralStars(vec3 dir) {
 }
 
 vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
-    if (pc.volDensity <= 0.0 || lights.spotCount == 0u) return vec3(0.0);
+    // Scene fog drives the march when active (σ, HG g, and the medium albedo
+    // tint all come from the fog UBO → spotlight god rays appear automatically
+    // in any fogged deferred scene); pc.volDensity remains the explicit knob
+    // for clear-air beams (the lighthouse).
+    const bool  fogDriven = fog.enabled > 0.5;
+    const float sigma = fogDriven ? max(dot(fog.sigmaT, vec3(1.0 / 3.0)), pc.volDensity)
+                                  : pc.volDensity;
+    const float hgG   = fogDriven ? fog.anisotropy : pc.volAniso;
+    const vec3  medAlbedo = fogDriven ? fog.color : vec3(1.0);
+    if (sigma <= 0.0 || lights.spotCount == 0u) return vec3(0.0);
     const int   STEPS = 40;
-    const float sigma = pc.volDensity;
     uint seed = pcgHash(uint(px.x) * 7919u + pcgHash(uint(px.y) * 104729u + pc.frame * 6271u));
     const float jitter = rnd(seed);
     vec3 sum = vec3(0.0);
@@ -1809,12 +1860,13 @@ vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
             atten *= wnd * wnd;
             // HG phase: incoming (light→x) vs outgoing (x→camera = -rd).
             const float mu    = dot(-toL, -rd);
-            const float phase = hgPhase(mu, pc.volAniso);
+            const float phase = hgPhase(mu, hgG);
             // Transmittance camera→x and light→x (uniform thin haze).
             const float trans = exp(-sigma * (t + dist));
             acc += sl.color * (cone * atten * phase * trans);
         }
-        sum += acc * (sigma * dt);
+        // σ_s = σ_t · albedo: the medium's tint scales what gets IN-scattered.
+        sum += acc * medAlbedo * (sigma * dt);
     }
     return sum;
 }
@@ -1857,9 +1909,13 @@ void main() {
     const vec4  am     = texelFetch(gbufAlbedoTex, px, 0);
     const vec3  albedo = am.rgb;
 
-    // Unlit (MeshBasicMaterial, roughness sentinel < 0): emit base colour.
+    // Unlit (MeshBasicMaterial, roughness sentinel < 0): emit base colour
+    // (fogged by primary distance — three.js fogs basic materials too).
     if (nTap.w < 0.0) {
-        imageStore(outImage, px, vec4(albedo, 1.0));
+        const float depthU = texelFetch(gbufDepthTex, px, 0).x;
+        const vec4  vhU    = cam.projInverse * vec4(ndc, depthU, 1.0);
+        const vec3  wpU    = (cam.viewInverse * vec4(vhU.xyz / vhU.w, 1.0)).xyz;
+        imageStore(outImage, px, vec4(applySceneFog(albedo, camPos, wpU), 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         return;
     }
@@ -1927,6 +1983,7 @@ void main() {
     if (pm.thinWalled != 0 && pm.transmission > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
         vec3 wcol = shadeWater(worldPos, N, V, pm, int(id - 1u),
                                shadowsOn, maxLod, pc.frame, seed);
+        wcol = applySceneFog(wcol, camPos, worldPos);
         wcol += volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);
         imageStore(outImage, px, vec4(wcol, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
@@ -2150,6 +2207,7 @@ void main() {
         }
     }
 
+    lit = applySceneFog(lit, camPos, worldPos);// extinction first; the beam march carries its own
     lit += volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);
     imageStore(outImage, px, vec4(lit, 1.0));
     // SVGF TEMPORAL stage for the demod GI — now with REPROJECTION (kills motion

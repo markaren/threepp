@@ -9657,9 +9657,11 @@ namespace threepp {
             std::array<VkImageView, kFramesInFlight> reflectViews{};
             std::array<VkImageView, kFramesInFlight> reflAuxViews{};
             std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
+            std::array<VkBuffer, kFramesInFlight> fogBufs{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 camBufs[f]       = cameraUbos[f].handle;
                 lightBufs[f]     = lightsUbos[f].handle;
+                fogBufs[f]       = fogUbos[f].handle;
                 matBufs[f]       = materialDescsBuffers[f].handle;
                 emBufs[f]        = emissiveTriBuffers[f].handle;
                 normalViews[f]   = rasterGbufs[f].normal.view;
@@ -9699,6 +9701,8 @@ namespace threepp {
             in.reflect          = reflectViews.data();
             in.reflAux          = reflAuxViews.data();
             in.sceneHdr         = sceneHdrViews.data();
+            in.fogBuf           = fogBufs.data();
+            in.fogRange         = sizeof(GpuFogUbo);
             in.tlas             = tlas;
             in.materialBuf      = matBufs.data();
             in.geomDescBuf      = geometryDescsBuffer.handle;

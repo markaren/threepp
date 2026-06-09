@@ -39,6 +39,18 @@ layout(set = 0, binding = 22, rgba16f) uniform image2D atrousA;            // pi
 layout(set = 0, binding = 23, rgba16f) uniform image2D atrousB;
 layout(set = 0, binding = 25, rgba16f) uniform readonly image2D reflectImage;// sharp mirror reflection (.rgb pre-weighted, .a=roughness)
 layout(set = 0, binding = 31, rgba16f) uniform readonly image2D reflAuxImage;// ReBLUR aux: .x=history length, .y=E[L²] (temporal convergence → blur width)
+// Scene fog — same UBO the shade pass consumes (binding 33 of the shared set).
+// The GI + reflection RECOMBINES below add radiance into sceneHdr AFTER the
+// shade pass fogged the base — these additions must carry the same primary-
+// distance extinction or they glow through the murk. (Extinction only: the
+// inscatter term was already added once by the shade pass.)
+layout(set = 0, binding = 33, scalar) uniform FogUbo {
+    vec3  sigmaT;
+    float enabled;
+    vec3  color;
+    float anisotropy;
+    float waterSurfaceY;
+} fog;
 
 layout(push_constant) uniform Pc {
     uint _p0; uint width; uint height; uint step;
@@ -56,6 +68,23 @@ vec3 worldFromDepth(ivec2 q, float depth) {
     const vec2 ndc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
     const vec4 vh  = cam.projInverse * vec4(ndc, depth, 1.0);
     return (cam.viewInverse * vec4(vh.xyz / vh.w, 1.0)).xyz;
+}
+
+// Fog transmittance over the camera→surface leg, clipped to y < waterSurfaceY
+// (mirrors the shade pass's fogPathLength — keep in sync).
+vec3 fogTransmittance(vec3 a, vec3 b) {
+    if (fog.enabled < 0.5) return vec3(1.0);
+    float d = distance(a, b);
+    if (fog.waterSurfaceY < 1e29) {
+        const float ya = a.y - fog.waterSurfaceY;
+        const float yb = b.y - fog.waterSurfaceY;
+        if (ya >= 0.0 && yb >= 0.0) return vec3(1.0);
+        if (!(ya < 0.0 && yb < 0.0)) {
+            const float t = ya / (ya - yb);
+            d *= (ya < 0.0) ? t : (1.0 - t);
+        }
+    }
+    return exp(-fog.sigmaT * d);
 }
 
 // Source color (.rgb) + variance (.a). Pass 0 reads the raw GI (variance computed
@@ -105,7 +134,7 @@ void main() {
         // detail-destroyed" look. Frosted glass (rough ≥ 0.12) still blurs below.
         if (isGlass && rough < 0.12) {
             const vec3 cur = imageLoad(outImage, px).rgb;
-            imageStore(outImage, px, vec4(cur + cR.rgb, 1.0));
+            imageStore(outImage, px, vec4(cur + cR.rgb * fogTransmittance(camPos, Pc), 1.0));
             return;
         }
         const float metalness = texelFetch(gbufAlbedoTex, px, 0).a;
@@ -228,7 +257,7 @@ void main() {
             if (bl > cap) blurred *= cap / bl;       // collapse the isolated spike
         }
         const vec3 cur     = imageLoad(outImage, px).rgb;
-        imageStore(outImage, px, vec4(cur + blurred, 1.0));// pre-weighted → just add
+        imageStore(outImage, px, vec4(cur + blurred * fogTransmittance(camPos, Pc), 1.0));// pre-weighted → add, fog-extinguished
         return;
     }
 
@@ -325,7 +354,7 @@ void main() {
         const vec4 am           = texelFetch(gbufAlbedoTex, px, 0);
         const vec3 diffuseColor = am.rgb * (1.0 - am.a);
         const vec3 cur          = imageLoad(outImage, px).rgb;
-        imageStore(outImage, px, vec4(cur + fC * diffuseColor, 1.0));
+        imageStore(outImage, px, vec4(cur + fC * diffuseColor * fogTransmittance(camPos, Pc), 1.0));
     } else if (pc.dstMode == 0u) {
         imageStore(atrousA, px, vec4(fC, fV));
     } else {

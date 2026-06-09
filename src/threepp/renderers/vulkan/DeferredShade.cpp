@@ -45,7 +45,7 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[33]{};
+        VkDescriptorSetLayoutBinding b[34]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -89,10 +89,11 @@ namespace threepp::vulkan {
         set(30, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reservoir W_sum/M/W/p_hat READ
         set(31, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reflAux CUR (reflection-denoiser auxiliary; mirrors 25)
         set(32, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV reflAux (other fif index) = 1-frame reflection-denoiser history (mirrors 26)
+        set(33, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // scene fog UBO (shared with the PT path)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 33;
+        dlci.bindingCount = 34;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -150,7 +151,7 @@ namespace threepp::vulkan {
     void DeferredShade::createDescriptorPool() {
         VkDescriptorPoolSize sizes[5]{};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        sizes[0].descriptorCount = framesInFlight_ * 2;// camera + lights
+        sizes[0].descriptorCount = framesInFlight_ * 3;// camera + lights + fog
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         sizes[1].descriptorCount = framesInFlight_ * (15 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -241,6 +242,10 @@ namespace threepp::vulkan {
             prevReflAuxInfo.sampler     = gbufSampler_;
             prevReflAuxInfo.imageView   = in.reflAux[(f + 1u) % framesInFlight_];
             prevReflAuxInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorBufferInfo fogInfo{};// scene fog (same UBO the PT consumes)
+            fogInfo.buffer = in.fogBuf[f];
+            fogInfo.offset = 0;
+            fogInfo.range  = in.fogRange;
 
             // GI reproject inputs. prevIndirect = the OTHER frame-in-flight's
             // indirect image — holds last frame's accumulated GI (a 1-frame
@@ -321,7 +326,7 @@ namespace threepp::vulkan {
             resWReadInfo.imageView   = in.reservoirW[resRs];
             resWReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-            VkWriteDescriptorSet w[33]{};
+            VkWriteDescriptorSet w[34]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -374,7 +379,8 @@ namespace threepp::vulkan {
             setw(30, 30, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resWReadInfo,    nullptr);
             setw(31, 31, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &reflAuxInfo,     nullptr);
             setw(32, 32, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevReflAuxInfo, nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 33, w, 0, nullptr);
+            setw(33, 33, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr,          &fogInfo);
+            vkUpdateDescriptorSets(ctx_.device(), 34, w, 0, nullptr);
         }
     }
 
