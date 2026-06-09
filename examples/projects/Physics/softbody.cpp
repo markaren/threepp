@@ -1,5 +1,11 @@
 // Soft body (PxDeformableVolume) demo. Requires a CUDA-capable GPU — soft
 // bodies run on PhysX's GPU dynamics solver. SPACE drops fresh soft bodies.
+//
+// When built with THREEPP_PHYSX_CUDA_VK_INTEROP (Vulkan backend + CUDA
+// toolkit, see CMakeLists.txt) and the Vulkan renderer is selected, each body
+// switches to GPU tet skinning with ZERO-COPY interop: PhysX's deformed tet
+// positions are copied device→device into the renderer's exported
+// tet-skinning buffer — the deformation never touches the CPU.
 
 #include "threepp/threepp.hpp"
 
@@ -7,8 +13,14 @@
 #include "threepp/extras/physx/PhysxDebugRenderer.hpp"
 #include "threepp/extras/physx/PhysxWorld.hpp"
 
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+#include "threepp/renderers/VulkanRenderer.hpp"
+#endif
+
 #include <PxPhysicsAPI.h>
 
+#include <algorithm>
+#include <iostream>
 #include <random>
 #include <vector>
 
@@ -49,6 +61,10 @@ int main() {
     Canvas canvas("PhysX Soft Body Demo", {{"aa", 4}, {"vsync", true}});
     auto renderer = createRenderer(canvas);
     renderer->autoClear = false;
+
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+    auto* vkRenderer = dynamic_cast<VulkanRenderer*>(renderer.get());
+#endif
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
@@ -101,9 +117,23 @@ int main() {
 
     std::mt19937 rng{12345};
 
+    // Live bodies — tracked for the (optional) zero-copy interop registration.
+    std::vector<SoftBody*> bodies;
+    auto trackSpawn = [&](SoftBody* sb) {
+        bodies.push_back(sb);
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+        // Vulkan renderer: GPU tet skinning (visual blended in compute from the
+        // few-hundred-vertex collision tets). The interop registration below
+        // then upgrades the tet feed to zero-copy once the renderer has built
+        // the mesh's tet state (after its first rendered frame).
+        if (vkRenderer) sb->enableGpuSkinning();
+#endif
+        return sb;
+    };
+
     // Initial set so the scene isn't empty on launch.
     for (int i = 0; i < 4; ++i) {
-        spawnSoftBody(world, *scene, sbMaterial, {-2.f + i * 1.4f, 5.f + i * 0.6f, 0}, sbPhysicsMat, rng);
+        trackSpawn(spawnSoftBody(world, *scene, sbMaterial, {-2.f + i * 1.4f, 5.f + i * 0.6f, 0}, sbPhysicsMat, rng));
     }
 
     bool spawnPending = false;
@@ -164,13 +194,14 @@ int main() {
             Vector3 spawn;
             spawn.copy(camera->position).addScaledVector(dir, 5.f);
             spawn.y = std::max(spawn.y, 5.f);
-            auto ptr = spawnSoftBody(world, *scene, sbMaterial, spawn, sbPhysicsMat, rng);
+            auto ptr = trackSpawn(spawnSoftBody(world, *scene, sbMaterial, spawn, sbPhysicsMat, rng));
 
             // removeSoftBody also detaches the Mesh from the scene graph because
             // the body was created via the Mesh& overload.
-            tm.invokeLater([&world, ptr] {
+            tm.invokeLater([&world, &bodies, ptr] {
+                std::erase(bodies, ptr);
                 world.removeSoftBody(ptr);
-            }, 2);
+            }, 20);
         }
 
         tm.handleTasks();
@@ -180,5 +211,27 @@ int main() {
         renderer->clear();
         renderer->render(*scene, *camera);
         ui.render();
+
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+        // Zero-copy registration — polled because the renderer only builds a
+        // mesh's tet state during its first rendered frame. One-shot per body:
+        // export the renderer's tet buffer, import it into CUDA, and hand the
+        // renderer the per-frame device→device copy. Import failure falls back
+        // to the CPU bridge (needsVkInteropRegister goes false either way).
+        if (vkRenderer) {
+            for (auto* sb : bodies) {
+                if (!sb->needsVkInteropRegister()) continue;
+                const auto h = vkRenderer->enableSoftBodyInterop(
+                        *sb->mesh(), [sb] { sb->copyTetToVulkan(); });
+                if (!h.osHandle) continue;// tet state not built yet — retry next frame
+                if (sb->registerVulkanMemory(h.osHandle, h.sizeBytes)) {
+                    std::cout << "[softbody] CUDA->Vulkan zero-copy tet interop active" << std::endl;
+                } else {
+                    vkRenderer->disableSoftBodyInterop(*sb->mesh());
+                    std::cout << "[softbody] CUDA import failed - staying on the CPU bridge" << std::endl;
+                }
+            }
+        }
+#endif
     });
 }

@@ -23,6 +23,8 @@
 
 namespace threepp {
 
+    class Mesh;
+
     class VulkanRenderer : public Renderer {
 
     public:
@@ -248,6 +250,29 @@ namespace threepp {
         // AO/GI (costs occlusion rays; pair with setDeferredDenoise for noise).
         void setDeferredAO(bool enabled);
         [[nodiscard]] bool deferredAO() const;
+
+        // ── PhysX soft-body zero-copy interop (CUDA → Vulkan) ────────────────
+        // Re-backs `mesh`'s per-frame tet-position buffer (the tet_skinning.comp
+        // input) with EXPORTED external device memory and registers `deviceCopy`
+        // to be invoked each frame in place of the CPU upload. The caller (the
+        // PhysX soft-body glue) imports the returned OS handle into CUDA and has
+        // `deviceCopy` issue a device→device copy from PhysX's deformed-position
+        // buffer — the tet data then never touches the host.
+        //   • Call AFTER the first render (the mesh's tet state must exist) —
+        //     returns an empty handle until then; poll.
+        //   • Returns an empty handle when the device lacks the external-memory
+        //     extension. On Windows the handle is a Win32 NT handle owned by the
+        //     renderer (valid until disable/teardown; CUDA's import duplicates
+        //     it). On POSIX it is an fd cast into the pointer, ownership
+        //     transferring to CUDA on successful import.
+        //   • If the CUDA import fails, call disableSoftBodyInterop to fall back
+        //     to the CPU upload path.
+        struct SoftBodyInteropHandle {
+            void*  osHandle  = nullptr;
+            size_t sizeBytes = 0;
+        };
+        SoftBodyInteropHandle enableSoftBodyInterop(const Mesh& mesh, std::function<void()> deviceCopy);
+        void disableSoftBodyInterop(const Mesh& mesh);
 
         // Bloom bright-pass cutoff in linear-HDR luma: only scene values above
         // this (with a soft knee below it) contribute to the glow. Higher =

@@ -320,6 +320,12 @@ namespace threepp {
             // frame from the soft body's tet texture image.
             Buffer tetPos     {};
             VkDeviceSize tetPosBytes = 0;
+            // Zero-copy interop (enableSoftBodyInterop): when tetPosExt holds a
+            // buffer, it replaces tetPos as the shader's binding-6 source and
+            // tetPosExternalCopy (a CUDA device→device copy registered by the
+            // PhysX glue) replaces the CPU upload in refreshTetBlas.
+            vulkan::ExternalBuffer tetPosExt {};
+            std::function<void()>  tetPosExternalCopy;
             uint32_t vertexCount    = 0;
             uint32_t primitiveCount = 0;
             bool     indexed        = false;
@@ -1681,6 +1687,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), st->restInv1);
                 destroyBuffer(ctx->allocator(), st->restInv2);
                 destroyBuffer(ctx->allocator(), st->tetPos);
+                vulkan::destroyExternalBuffer(d, st->tetPosExt);
                 destroyBuffer(ctx->allocator(), st->blasScratch);
                 auto& rec = st->blas;
                 if (!rec) continue;
@@ -2597,6 +2604,16 @@ namespace threepp {
         // BLAS rebuild — recorded in recordCommandBuffer next to the skinned path.
         void refreshTetBlas(Mesh& m, TetMeshState& st) {
             if (!st.blas) return;
+            // Zero-copy interop: the registered CUDA device→device copy writes the
+            // deformed tet positions straight into the exported binding-6 buffer —
+            // no host readback, no DataTexture, no map/memcpy. Runs at the SAME
+            // frame point as the CPU upload below, so the (pre-existing, benign)
+            // overlap with a still-in-flight prior frame's dispatch is unchanged.
+            if (st.tetPosExt.handle != VK_NULL_HANDLE) {
+                if (st.tetPosExternalCopy) st.tetPosExternalCopy();
+                pendingTetRebuilds_.push_back(&st);
+                return;
+            }
             auto mat = m.material();
             if (!mat || !mat->tetTexture) return;
             const auto& tetImg = mat->tetTexture->image().data<float>();
@@ -2608,6 +2625,68 @@ namespace threepp {
             std::memcpy(mapped, tetImg.data(), bytes);
             vmaUnmapMemory(ctx->allocator(), st.tetPos.alloc);
             pendingTetRebuilds_.push_back(&st);
+        }
+
+        // Rewrite binding 6 (tetPos — see tet_skinning.comp) of a tet mesh's
+        // descriptor set to point at `buf`. Used by the interop enable/disable
+        // swap; the other 8 bindings are untouched.
+        void rewriteTetPosBinding(TetMeshState& st, VkBuffer buf) {
+            VkDescriptorBufferInfo bi{};
+            bi.buffer = buf;
+            bi.offset = 0;
+            bi.range  = VK_WHOLE_SIZE;
+            VkWriteDescriptorSet wr{};
+            wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr.dstSet          = st.tetDescSet;
+            wr.dstBinding      = 6;
+            wr.descriptorCount = 1;
+            wr.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            wr.pBufferInfo     = &bi;
+            vkUpdateDescriptorSets(ctx->device(), 1, &wr, 0, nullptr);
+        }
+
+        // Zero-copy interop enable: swap the mesh's tet-position buffer for an
+        // EXPORTED dedicated device allocation and register the CUDA copy that
+        // fills it each frame. Once-per-body; drains the device (the in-flight
+        // frames' dispatches read the buffer being replaced, and this is a
+        // registration-time call, not a per-frame one).
+        VulkanRenderer::SoftBodyInteropHandle
+        enableSoftBodyInterop(const Mesh& mesh, std::function<void()> deviceCopy) {
+            auto it = tetMeshStates.find(&mesh);
+            if (it == tetMeshStates.end() || !ctx->externalMemorySupported()) return {};
+            auto& st = *it->second;
+            if (st.tetPosExt.handle != VK_NULL_HANDLE) {// already enabled — same handle
+                st.tetPosExternalCopy = std::move(deviceCopy);
+                return {st.tetPosExt.osHandle, static_cast<size_t>(st.tetPosExt.size)};
+            }
+            if (st.tetPosBytes == 0 || st.tetDescSet == VK_NULL_HANDLE) return {};
+            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (softbody interop enable)");
+            st.tetPosExt = vulkan::createExternalBuffer(
+                    ctx->physicalDevice(), ctx->device(), st.tetPosBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+            rewriteTetPosBinding(st, st.tetPosExt.handle);
+            destroyBuffer(ctx->allocator(), st.tetPos);// CPU-path buffer no longer read
+            st.tetPosExternalCopy = std::move(deviceCopy);
+            return {st.tetPosExt.osHandle, static_cast<size_t>(st.tetPosExt.size)};
+        }
+
+        // Interop disable / CUDA-import-failure fallback: restore the host-visible
+        // VMA buffer and the CPU upload path. The caller must have stopped (or
+        // never started) the CUDA writes into the exported memory.
+        void disableSoftBodyInterop(const Mesh& mesh) {
+            auto it = tetMeshStates.find(&mesh);
+            if (it == tetMeshStates.end()) return;
+            auto& st = *it->second;
+            if (st.tetPosExt.handle == VK_NULL_HANDLE) return;
+            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (softbody interop disable)");
+            st.tetPos = createBuffer(
+                    ctx->allocator(), ctx->device(), st.tetPosBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            rewriteTetPosBinding(st, st.tetPos.handle);
+            vulkan::destroyExternalBuffer(ctx->device(), st.tetPosExt);
+            st.tetPosExternalCopy = nullptr;
         }
 
         // Per-frame refresh op for a plain (non-skinned/non-displaced/non-morphed)
@@ -4965,6 +5044,7 @@ namespace threepp {
                         destroyBuffer(ctx->allocator(), it->second->restInv1);
                         destroyBuffer(ctx->allocator(), it->second->restInv2);
                         destroyBuffer(ctx->allocator(), it->second->tetPos);
+                        vulkan::destroyExternalBuffer(ctx->device(), it->second->tetPosExt);
                         destroyBuffer(ctx->allocator(), it->second->blasScratch);
                         auto& rec = it->second->blas;
                         if (rec) {
@@ -14649,6 +14729,15 @@ namespace threepp {
 
     VulkanRenderer::RenderMode VulkanRenderer::renderMode() const {
         return pimpl_->renderMode_;
+    }
+
+    VulkanRenderer::SoftBodyInteropHandle
+    VulkanRenderer::enableSoftBodyInterop(const Mesh& mesh, std::function<void()> deviceCopy) {
+        return pimpl_->enableSoftBodyInterop(mesh, std::move(deviceCopy));
+    }
+
+    void VulkanRenderer::disableSoftBodyInterop(const Mesh& mesh) {
+        pimpl_->disableSoftBodyInterop(mesh);
     }
 
     void VulkanRenderer::resetAccumulation() {
