@@ -92,7 +92,8 @@ namespace threepp::vulkan {
                             uint32_t emissiveCount, float emissiveTotalPower,
                             float fireflyClamp,
                             float oceanFineTileSize, float oceanFoamTileSize,
-                            bool denoise, bool restirDI);
+                            bool denoise, bool restirDI,
+                            float volDensity, float volAniso);
 
         // Spatial denoise of the demodulated diffuse-indirect (binding 16) +
         // recombine into sceneHdr. Run AFTER recordDispatch (same descriptor

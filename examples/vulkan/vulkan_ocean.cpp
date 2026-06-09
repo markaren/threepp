@@ -30,9 +30,17 @@
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <iostream>
+#include <random>
+#include <vector>
 
 using namespace threepp;
 
@@ -129,7 +137,27 @@ namespace {
 
 }// namespace
 
-int main() {
+int main(int argc, char** argv) {
+
+    // ── Headless capture (dev iteration loop) ───────────────────────────────
+    //   vulkan_ocean --shot <name.png> [--frames N] [--night] [--pt]
+    // Fixed aerial camera, N warm-up frames (TAA/denoiser converge), one PNG
+    // into <project>/aaa_caps/, exit. --night starts in night mode; --pt
+    // captures the path-traced reference instead of the deferred default.
+    std::string shotPath;
+    int  shotFrames = 240;
+    bool startNight = false;
+    bool shotPT     = false;
+    int  toggleNightAt = 0;// --toggle: start in day, flip to night mid-run (exercises the runtime toggle path)
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
+        else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--night") == 0) startNight = true;
+        else if (std::strcmp(argv[i], "--pt") == 0) shotPT = true;
+        else if (std::strcmp(argv[i], "--toggle") == 0) toggleNightAt = 60;
+    }
+    const bool capturing = !shotPath.empty();
+    int shotFrame = 0;
 
     Canvas canvas("Vulkan PT  Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
     VulkanRenderer renderer(canvas);
@@ -142,6 +170,7 @@ int main() {
     renderer.setRenderScale(0.9f);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 0.7f;
+    if (shotPT) renderer.setRenderMode(VulkanRenderer::RenderMode::ReferencePT);// --pt: capture the PT reference
 
     RGBELoader rgbe;
     auto env = rgbe.load(std::string(DATA_FOLDER) +
@@ -211,6 +240,182 @@ int main() {
     ocean->params.textureSize1 = kFftSize / 2;
     ocean->params.textureSize2 = kFftSize / 2;
     scene.add(ocean);
+
+    // ── Lighthouse (scene centre) ───────────────────────────────────────────
+    // Rock base + tapered white tower + red gallery + emissive lamp room. The
+    // LAMP is the night-mode hero: an emissive mesh (area light for the PT /
+    // deferred emissive paths) + a rotating SpotLight whose beam the deferred
+    // volumetric march renders as the classic sweeping lighthouse fan.
+    auto lampMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+            .color(Color(1.f, 0.95f, 0.8f)).roughness(0.4f).metalness(0.f));
+    lampMat->emissive = Color(1.f, 0.85f, 0.55f);
+    lampMat->emissiveIntensity = 0.f;// day: off — night toggle raises it
+    {
+        auto rockMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.22f, 0.21f, 0.20f)).roughness(0.95f).metalness(0.f));
+        auto rock = Mesh::create(CylinderGeometry::create(7.f, 10.f, 6.f, 24), rockMat);
+        rock->position.set(0.f, -1.f, 0.f);
+        scene.add(rock);
+
+        auto towerMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.92f, 0.90f, 0.86f)).roughness(0.6f).metalness(0.f));
+        auto tower = Mesh::create(CylinderGeometry::create(1.9f, 2.8f, 16.f, 24), towerMat);
+        tower->position.set(0.f, 10.f, 0.f);
+        scene.add(tower);
+
+        auto bandMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.75f, 0.12f, 0.10f)).roughness(0.6f).metalness(0.f));
+        auto gallery = Mesh::create(CylinderGeometry::create(2.4f, 2.4f, 1.2f, 24), bandMat);
+        gallery->position.set(0.f, 18.6f, 0.f);
+        scene.add(gallery);
+
+        auto lamp = Mesh::create(CylinderGeometry::create(1.4f, 1.4f, 2.2f, 16), lampMat);
+        lamp->position.set(0.f, 20.3f, 0.f);
+        scene.add(lamp);
+
+        auto roof = Mesh::create(CylinderGeometry::create(0.1f, 1.8f, 1.6f, 16), bandMat);
+        roof->position.set(0.f, 22.2f, 0.f);
+        scene.add(roof);
+    }
+
+    // Rotating beam — narrow long-throw spot, aimed slightly below horizontal
+    // so the far end grazes the swells. decay 2 = physical inverse-square; a
+    // real lighthouse lamp is O(10⁵–10⁶ cd), which is what it takes to light
+    // water hundreds of metres out. Off by day (intensity 0).
+    auto beam = SpotLight::create(Color(1.f, 0.92f, 0.72f), 0.f,
+                                  /*distance=*/600.f, /*angle=*/math::PI / 40.f,
+                                  /*penumbra=*/0.45f, /*decay=*/2.f);
+    beam->position.set(0.f, 20.3f, 0.f);
+    Object3D beamTarget;
+    beamTarget.position.set(300.f, -4.f, 0.f);
+    beam->setTarget(beamTarget);
+    scene.add(beam);
+
+    // Dim blue moonlight — direction matches the procedural night env's moon
+    // disc so shadows and the bright sky spot agree.
+    auto moon = DirectionalLight::create(Color(0.65f, 0.75f, 1.0f), 0.f);
+    moon->position.set(-0.55f, 0.60f, 0.35f);
+    Object3D moonTarget;
+    moonTarget.position.set(0.f, 0.f, 0.f);
+    moon->setTarget(moonTarget);
+    scene.add(moon);
+
+    // ── Procedural night sky (equirect, RGBA float) ─────────────────────────
+    // Deep-blue elevation gradient + faint horizon glow + star field + a moon
+    // disc bright enough that the PT's env CDF importance-samples it (it acts
+    // as the night "sun"). Built once; the night toggle swaps scene.environment
+    // / background and the renderer re-runs PMREM + descriptor rewrites.
+    std::shared_ptr<Texture> nightEnv;
+    {
+        // 2048×1024: one texel ≈ 0.18° ≈ ~4 screen px at this FOV — stars stay
+        // point-like. At 512² a texel was ~19 px and bilinear magnification
+        // rendered every star as a big square tent.
+        const int W = 2048, H = 1024;
+        std::vector<float> data(static_cast<size_t>(W) * H * 4, 0.f);
+        std::mt19937 srng{42};
+        std::uniform_real_distribution<float> u01(0.f, 1.f);
+        // sampleEnvLod maps dir.y=+1 → v=1.0 (zenith = last row).
+        const Vector3 moonDir = Vector3(-0.55f, 0.60f, 0.35f).normalize();
+        for (int y = 0; y < H; ++y) {
+            const float v    = (y + 0.5f) / H;
+            const float elev = (v - 0.5f) * math::PI;// >0 = above horizon
+            for (int x = 0; x < W; ++x) {
+                const float u  = (x + 0.5f) / W;
+                const float az = (u - 0.5f) * 2.f * math::PI;
+                const Vector3 dir(std::cos(elev) * std::cos(az), std::sin(elev),
+                                  std::cos(elev) * std::sin(az));
+                // Sky gradient: near-black zenith → faint blue horizon band;
+                // below the horizon a dark sea-glow so reflections aren't void.
+                float r, g, b;
+                if (elev >= 0.f) {
+                    const float horizon = std::exp(-elev * 4.5f);
+                    r = 0.004f + 0.020f * horizon;
+                    g = 0.006f + 0.028f * horizon;
+                    b = 0.012f + 0.050f * horizon;
+                } else {
+                    const float fade = std::exp(elev * 6.f);
+                    r = 0.003f * fade; g = 0.004f * fade; b = 0.007f * fade;
+                }
+                // Moon disc (~1.7° radius) + soft glow halo.
+                const float cosToMoon = std::clamp(dir.dot(moonDir), -1.f, 1.f);
+                const float angTo     = std::acos(cosToMoon);
+                if (angTo < 0.03f) {
+                    r += 28.f; g += 32.f; b += 40.f;
+                } else {
+                    const float glow = 0.35f * std::exp(-angTo * angTo * 90.f);
+                    r += glow * 0.65f; g += glow * 0.75f; b += glow;
+                }
+                const size_t i = (static_cast<size_t>(y) * W + x) * 4;
+                data[i + 0] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 1.f;
+            }
+        }
+        // Star field: sub-texel ANTI-ALIASED point splats (2×2 bilinear
+        // weights) above the horizon — round dots instead of square texels.
+        // Kept modest (≤ ~2.5): bright point features reflect off the
+        // chop-perturbed water normals as pixel-speckle.
+        for (int s = 0; s < 700; ++s) {
+            const float fx  = u01(srng) * static_cast<float>(W);
+            const float fy  = H * 0.5f + u01(srng) * (H * 0.5f - 8.f);
+            const float mag = 0.3f + 2.2f * u01(srng) * u01(srng) * u01(srng);// few bright, many dim
+            const int   x0  = static_cast<int>(fx);
+            const int   y0  = static_cast<int>(fy);
+            const float ax  = fx - static_cast<float>(x0);
+            const float ay  = fy - static_cast<float>(y0);
+            auto splat = [&](int xx, int yy, float w) {
+                xx = (xx + W) % W;
+                yy = std::clamp(yy, H / 2, H - 1);
+                const size_t i = (static_cast<size_t>(yy) * W + xx) * 4;
+                data[i + 0] += mag * w;
+                data[i + 1] += mag * w;
+                data[i + 2] += mag * 1.08f * w;
+            };
+            splat(x0,     y0,     (1.f - ax) * (1.f - ay));
+            splat(x0 + 1, y0,     ax * (1.f - ay));
+            splat(x0,     y0 + 1, (1.f - ax) * ay);
+            splat(x0 + 1, y0 + 1, ax * ay);
+        }
+        Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
+        nightEnv = Texture::create(img);
+        nightEnv->format = Format::RGBA;
+        nightEnv->type = Type::Float;
+        nightEnv->colorSpace = ColorSpace::Linear;
+        nightEnv->mapping = Mapping::EquirectangularReflection;
+        nightEnv->needsUpdate();
+    }
+
+    // ── Day/night toggle ────────────────────────────────────────────────────
+    bool  night       = startNight;
+    float beamSpeed   = 0.45f;// rad/s — ~14 s revolution, classic lighthouse cadence
+    float beamAngle   = 0.f;
+    float hazeDensity = 0.018f;// σ (1/m) for the deferred volumetric beams
+    auto applyMode = [&] {
+        if (night) {
+            scene.background  = nightEnv;
+            scene.environment = nightEnv;
+            sun->intensity  = 0.f;
+            moon->intensity = 0.30f;
+            beam->intensity = 150000.f;// inverse-square: bright enough to read at 300 m
+            lampMat->emissiveIntensity = 25.f;
+            renderer.setDeferredVolumetrics(hazeDensity, 0.6f);
+            renderer.toneMappingExposure = 1.15f;
+        } else {
+            scene.background  = env;
+            scene.environment = env;
+            sun->intensity  = 2.0f;
+            moon->intensity = 0.f;
+            beam->intensity = 0.f;
+            lampMat->emissiveIntensity = 0.f;
+            renderer.setDeferredVolumetrics(0.f, 0.6f);
+            renderer.toneMappingExposure = 0.7f;
+        }
+        // Material PBR values live in a GPU MaterialDesc refreshed on version
+        // bump — emissiveIntensity is a plain field, so without this the
+        // day↔night toggle leaves the GPU-side lamp at the OLD emissive:
+        // no glow, no lamp area light, and (since strongly-emissive housings
+        // are what shadow rays skip) the housing blocks the beam entirely.
+        lampMat->needsUpdate();
+    };
+    applyMode();
 
     constexpr float kBoatLength = 28.0f;
     constexpr float kBoatBeam   = 9.0f;
@@ -626,6 +831,17 @@ int main() {
         // if (ImGui::SliderFloat("Wind direction (rad)", &windTheta, -3.14f, 3.14f, "%.2f"))
         //     ocean->params.windTheta = windTheta;
         ImGui::TextDisabled("Wind changes apply on scene reload.");
+        ImGui::Separator();
+        ImGui::TextUnformatted("Night & lighthouse");
+        if (ImGui::Checkbox("Night mode", &night)) {
+            applyMode();
+            exposure = renderer.toneMappingExposure;
+        }
+        if (night) {
+            ImGui::SliderFloat("Beam speed (rad/s)", &beamSpeed, 0.f, 2.f, "%.2f");
+            if (ImGui::SliderFloat("Haze density (1/m)", &hazeDensity, 0.f, 0.08f, "%.3f"))
+                renderer.setDeferredVolumetrics(hazeDensity, 0.6f);
+        }
         ImGui::Separator();
         if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f, "%.2f"))
             renderer.toneMappingExposure = exposure;
@@ -1328,6 +1544,28 @@ int main() {
             }
         }
 
+        // ── Lighthouse beam sweep ─────────────────────────────────────────
+        if (night) {
+            if (capturing) {
+                // Deterministic capture aim: steeper + into the FRAMED water so
+                // the lit pool lands in-shot (~135 m out, centre-right).
+                beamAngle = -1.1f;
+                beamTarget.position.set(std::cos(beamAngle) * 150.f, -2.f,
+                                        std::sin(beamAngle) * 150.f);
+            } else {
+                beamAngle += beamSpeed * dt;
+                beamTarget.position.set(std::cos(beamAngle) * 300.f, -4.f,
+                                        std::sin(beamAngle) * 300.f);
+            }
+            // Spot origin at the lamp glass's OUTER face along the beam — never
+            // inside the housing, so no self-geometry can occlude the beam's
+            // shadow rays regardless of emissive thresholds.
+            const Vector3 lampPos(0.f, 20.3f, 0.f);
+            Vector3 beamDir = beamTarget.position;
+            beamDir.sub(lampPos).normalize();
+            beam->position.copy(lampPos).addScaledVector(beamDir, 1.7f);
+        }
+
         // ── Underwater fog activation ─────────────────────────────────────
         // Sample the wave height at the camera's XZ position. If the camera
         // is below the surface, enable homogeneous fog (participating media)
@@ -1356,7 +1594,32 @@ int main() {
             }
         }
 
+        if (capturing) {
+            // Fixed aerial framing (≈ the reported-artifact view): boat centre,
+            // mostly water in frame, horizon out of shot.
+            camera.position.set(10.f, 32.f, 50.f);
+            camera.lookAt(Vector3(0.f, 0.f, -20.f));
+            camera.updateMatrixWorld();
+        }
+
         renderer.render(scene, camera);
+
+        if (capturing && toggleNightAt > 0 && shotFrame == toggleNightAt) {
+            night = true;// runtime day→night flip — the path the UI checkbox takes
+            applyMode();
+        }
+        if (capturing && ++shotFrame >= shotFrames) {
+            const auto px = renderer.readRGBPixels();
+            const auto sz = canvas.size();
+            namespace fs  = std::filesystem;
+            const fs::path outDir = fs::path(PROJECT_FOLDER) / "aaa_caps";
+            fs::create_directories(outDir);
+            const auto path = (outDir / shotPath).string();
+            if (!px.empty())
+                stbi_write_png(path.c_str(), sz.width(), sz.height(), 3, px.data(), sz.width() * 3);
+            std::printf("wrote %s (%dx%d)\n", path.c_str(), sz.width(), sz.height());
+            std::exit(0);
+        }
 
         // ── LIDAR scan + visualisation update ─────────────────────────────
         // Must follow render() so the TLAS is built; the cloud/panel show
@@ -1458,7 +1721,7 @@ int main() {
             lidarCloudGeom->setDrawRange(0, 0);
         }
 
-        ui.render();
+        if (!capturing) ui.render();// capture reads the bare frame (no HUD)
     });
 
     return 0;

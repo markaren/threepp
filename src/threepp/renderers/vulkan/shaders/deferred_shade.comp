@@ -199,6 +199,8 @@ layout(push_constant) uniform Pc {
     float fireflyClamp;      // luminance cap for emissive NEE samples (large = disabled)
     float oceanFineTileSize; // FFT fine-cascade tile (m); 0 = no ocean fine normal
     float oceanFoamTileSize; // world-space foam tile (m); 0 = no foam sampling
+    float volDensity;        // volumetric scattering σ (1/m); 0 = beams off
+    float volAniso;          // Henyey-Greenstein g for the beam phase
 } pc;
 
 // ── BRDF helpers (verbatim from shade_common.glsl) ──────────────────────────
@@ -272,6 +274,13 @@ vec2 fetchUvAt(int instIdx, int primId, vec2 bary) {
 //   cutoff < 0 (blend)  → occludes iff alpha ≥ 0.5 (deterministic shadow proxy)
 bool shadowOccludes(int instIdx, int primId, vec2 bary) {
     const MaterialDesc m = mats[instIdx];
+    // STRONG emitters never occlude — an analytic light that sits INSIDE its
+    // own glowing housing (a lighthouse lamp room) must shine through it. Same
+    // "a light never shadows itself" rule emissiveNEE/restirOccluded apply to
+    // emissive-triangle lights; threshold 1.0 keeps faintly-emissive props
+    // (glowing screens etc.) casting normal shadows.
+    const vec3 em = m.emissive * m.emissiveIntensity;
+    if (max(max(em.r, em.g), em.b) >= 1.0) return false;
     if (m.albedoTexIndex < 0 || m.alphaCutoff == 0.0) return true;// opaque
     const vec2  uv = fetchUvAt(instIdx, primId, bary);
     const int   ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
@@ -1431,10 +1440,14 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     const float r0    = pow((1.0 - ior) / (1.0 + ior), 2.0);
     const float F     = r0 + (1.0 - r0) * pow(1.0 - NdotV, 5.0);
 
-    // Reflected sky + scene (sharp). The reflection ray points up/out (away
-    // from the water), so it escapes to the sky or hits scene geometry cleanly.
+    // Reflected sky + scene. The reflection ray points up/out (away from the
+    // water), so it escapes to the sky or hits scene geometry cleanly. Env
+    // MISSES read a MILDLY blurred mip — point features in the env (stars, a
+    // small bright moon) otherwise reflect off the chop-perturbed normals as
+    // per-pixel white speckle; smooth day skies are visually unchanged.
     const vec3 R = reflect(-V, N);
-    const vec3 reflectColor = traceRadiance(P + N * SHADOW_EPS, R, doShadows, maxLod, 0.0, seed);
+    const vec3 reflectColor = traceRadiance(P + N * SHADOW_EPS, R, doShadows, maxLod,
+                                            0.12 * maxLod, seed);
 
     // Transmission: ANALYTIC deep-water body — deliberately NOT a refraction
     // ray. A downward ray self-intersects this same choppy surface (adjacent
@@ -1456,9 +1469,16 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // the deep blue SATURATED. A view-depth term deepens it looking straight down
     // (longer water column) → the foreground-deep / horizon-bright gradient the PT
     // shows. Dimmed (×0.45) because the deep body sits over a near-black seabed.
-    const float skyLum    = dot(sampleEnvLod(N, maxLod), vec3(0.2126, 0.7152, 0.0722));
-    const float depthFade = mix(1.0, 0.4, NdotV);// darker looking down into the column
-    const vec3  transmitColor = tint * (skyLum * 0.45 + lights.ambient) * depthFade;
+    //
+    // BOTH terms keyed on SMOOTH per-view quantities, NOT the chop-perturbed N:
+    // skyLum at the fixed zenith, depthFade on the view ELEVATION (V.y). Keying
+    // them on N made every fine-cascade crest a 2.5×-brighter saturated-teal
+    // BLOTCH (the deferred ocean's "cyan patches" — diagnosed by isolating this
+    // term: the blotch pattern was entirely transmit). The analytic water BODY is
+    // a smooth volumetric quantity; the chop belongs to Fresnel/reflection only.
+    const float skyLum    = dot(sampleEnvLod(vec3(0.0, 1.0, 0.0), maxLod), vec3(0.2126, 0.7152, 0.0722));
+    const float depthFade = mix(1.0, 0.4, clamp(V.y, 0.0, 1.0));// darker looking down into the column
+    const vec3  transmitColor = tint * (skyLum * 0.35 + lights.ambient) * depthFade;
 
     vec3 col = mix(transmitColor, reflectColor, F);
 
@@ -1493,6 +1513,53 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             vec3 c = spec * ndl * lights.dirLights[i].color * vis;
             // Directional lights are deltas → GGX spikes; clamp so a glint blooms
             // bright but never fireflies. (×4 over the global clamp → bright suns.)
+            const float cl = max(max(c.r, c.g), c.b);
+            const float gMax = pc.fireflyClamp * 4.0;
+            if (cl > gMax) c *= gMax / cl;
+            col += c;
+        }
+        // SPOT lights — same GGX glints with cone + range + inverse-square
+        // attenuation, so a sweeping beam (lighthouse) lights the waves it
+        // crosses instead of existing only as the in-scattered air volume.
+        for (uint i = 0u; i < lights.spotCount; ++i) {
+            vec3 toL = lights.spotLights[i].position - P;
+            const float dist = length(toL);
+            if (dist < 1e-4) continue;
+            toL /= dist;
+            const float ndl = dot(N, toL);
+            if (ndl <= 0.0) continue;
+            const float spotCos   = dot(-toL, lights.spotLights[i].direction);
+            const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
+                                               lights.spotLights[i].cosAngleInner, spotCos);
+            if (spotAtten <= 0.0) continue;
+            float atten = spotAtten / max(pow(dist, lights.spotLights[i].decay), 0.01);
+            const float range = lights.spotLights[i].range;
+            if (range > 0.0) {
+                const float tt = dist / range;
+                const float t4 = tt * tt * tt * tt;
+                const float wnd = max(1.0 - t4, 0.0);
+                atten *= wnd * wnd;
+            }
+            if (atten <= 1e-6) continue;
+            const float vis = doShadows ? shadowVis(sunOrig, toL, dist - 1e-2) : 1.0;
+            if (vis <= 0.0) continue;
+            const vec3  H   = normalize(V + toL);
+            const float ndh = max(dot(N, H), 0.0);
+            const float vdh = max(dot(V, H), 0.0);
+            const float Gs  = geomSmithG1(NdotV, kG) * geomSmithG1(ndl, kG);
+            const float Fb  = r0 + (1.0 - r0) * pow(1.0 - vdh, 5.0);
+            float spec = distGGX(ndh, specRough) * Gs * Fb / max(4.0 * NdotV * ndl, 1e-4);
+            if (pm.clearcoat > 0.0) {
+                const float Fc = 0.04 + 0.96 * pow(1.0 - vdh, 5.0);
+                spec += pm.clearcoat * distGGX(ndh, ccRough) * Gs * Fc / max(4.0 * NdotV * ndl, 1e-4);
+            }
+            // Beam POOL — a broad faint sheen where the beam strikes the
+            // surface. Real water returns part of a grazing beam diffusely
+            // (micro-facets beyond the GGX tail, spray, top-layer scatter);
+            // at roughness 0.04 the pure specular lobe is so tight the lit
+            // pool would otherwise be invisible unless perfectly aligned.
+            spec += 0.035 / PI;
+            vec3 c = spec * ndl * lights.spotLights[i].color * atten * vis;
             const float cl = max(max(c.r, c.g), c.b);
             const float gMax = pc.fireflyClamp * 4.0;
             if (cl > gMax) c *= gMax / cl;
@@ -1654,6 +1721,72 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
     return sum / float(kGlassSamples);
 }
 
+// ── Volumetric SPOT-light beams (single scattering, ray-marched) ─────────────
+// In-scattered radiance along [ro, ro+rd·tMax] from every spot light — the
+// lighthouse-beam / searchlight look. The march window is the ray∩sphere
+// (light, range) segment: any in-cone point lies within `range` of the light,
+// and a ray-sphere clip is unconditionally robust where exact cone-interval
+// logic (two nappes, axis slab) is fiddly; the per-step cone smoothstep then
+// carves the actual beam shape. ONE jittered march per pixel per frame (PCG,
+// frame-keyed) → TAA averages the stratification to smooth. No shadow rays
+// through the medium — open-air beams are rarely occluded and this keeps the
+// pass pure ALU. The base surface is NOT extinction-attenuated (σ is haze-thin;
+// attenuating would wash the whole scene for a localized effect) — the term is
+// purely additive in-scatter. Skipped entirely when pc.volDensity == 0.
+float hgPhase(float mu, float g) {
+    const float g2 = g * g;
+    return (1.0 - g2) / (4.0 * PI * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5));
+}
+vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
+    if (pc.volDensity <= 0.0 || lights.spotCount == 0u) return vec3(0.0);
+    const int   STEPS = 40;
+    const float sigma = pc.volDensity;
+    uint seed = pcgHash(uint(px.x) * 7919u + pcgHash(uint(px.y) * 104729u + pc.frame * 6271u));
+    const float jitter = rnd(seed);
+    vec3 sum = vec3(0.0);
+    for (uint i = 0u; i < lights.spotCount; ++i) {
+        const SpotLight sl = lights.spotLights[i];
+        const float range = (sl.range > 0.0) ? sl.range : 200.0;
+        const vec3  oc   = ro - sl.position;
+        const float b    = dot(oc, rd);
+        const float c    = dot(oc, oc) - range * range;
+        const float disc = b * b - c;
+        if (disc <= 0.0) continue;
+        const float sq = sqrt(disc);
+        const float t0 = max(-b - sq, 0.0);
+        const float t1 = min(-b + sq, tMax);
+        if (t1 <= t0) continue;
+        const float dt = (t1 - t0) / float(STEPS);
+        vec3 acc = vec3(0.0);
+        for (int s = 0; s < STEPS; ++s) {
+            const float t = t0 + (float(s) + jitter) * dt;
+            const vec3  x = ro + rd * t;
+            vec3  toL = sl.position - x;
+            const float dist = length(toL);
+            if (dist < 1e-3) continue;
+            toL /= dist;
+            const float spotCos = dot(-toL, sl.direction);
+            const float cone    = smoothstep(sl.cosAngleOuter, sl.cosAngleInner, spotCos);
+            if (cone <= 0.0) continue;
+            // Inverse-square with a 1 m clamp (no firefly core at the lamp) +
+            // the same range window the surface path applies.
+            float atten = 1.0 / max(dist * dist, 1.0);
+            const float tr  = dist / range;
+            const float t4  = tr * tr * tr * tr;
+            const float wnd = max(1.0 - t4, 0.0);
+            atten *= wnd * wnd;
+            // HG phase: incoming (light→x) vs outgoing (x→camera = -rd).
+            const float mu    = dot(-toL, -rd);
+            const float phase = hgPhase(mu, pc.volAniso);
+            // Transmittance camera→x and light→x (uniform thin haze).
+            const float trans = exp(-sigma * (t + dist));
+            acc += sl.color * (cone * atten * phase * trans);
+        }
+        sum += acc * (sigma * dt);
+    }
+    return sum;
+}
+
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
@@ -1678,7 +1811,11 @@ void main() {
         const vec4 tVS   = cam.projInverse * vec4(ndc, 1.0, 1.0);
         const vec3 dirVS = normalize(tVS.xyz / tVS.w);
         const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
-        imageStore(outImage, px, vec4(sampleEnvLod(dirWS, 0.0), 1.0));
+        // Sky pixels march the beams too — a lighthouse beam against the night
+        // sky is exactly where the volumetric is most visible.
+        const vec3 sky = sampleEnvLod(dirWS, 0.0)
+                       + volumetricSpotScatter(camPos, dirWS, 2000.0, px);
+        imageStore(outImage, px, vec4(sky, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         return;
     }
@@ -1755,8 +1892,9 @@ void main() {
     // it milky-teal ocean water instead of clear refraction. Thin-walled glass
     // now falls through to the refractive glass branch below like closed glass.
     if (pm.thinWalled != 0 && pm.transmission > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
-        const vec3 wcol = shadeWater(worldPos, N, V, pm, int(id - 1u),
-                                     shadowsOn, maxLod, pc.frame, seed);
+        vec3 wcol = shadeWater(worldPos, N, V, pm, int(id - 1u),
+                               shadowsOn, maxLod, pc.frame, seed);
+        wcol += volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);
         imageStore(outImage, px, vec4(wcol, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(reflectImage, px, vec4(0.0));// water shades its own reflection inline
@@ -1979,6 +2117,7 @@ void main() {
         }
     }
 
+    lit += volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);
     imageStore(outImage, px, vec4(lit, 1.0));
     // SVGF TEMPORAL stage for the demod GI — now with REPROJECTION (kills motion
     // ghosting). Read the 1-frame GI history (the OTHER fif index, giPrevTex) at

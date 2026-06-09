@@ -1255,6 +1255,10 @@ namespace threepp {
         // Uses the deterministic Fibonacci 64-sample gather (clean + settles), so
         // it's the realistic look WITHOUT the old per-frame flicker.
         bool  deferredAO_ = true;
+        // Deferred volumetric spot-light beams (ray-marched single scattering in
+        // deferred_shade.comp). σ = 0 disables (the march is skipped entirely).
+        float deferredVolDensity_ = 0.f;
+        float deferredVolAniso_   = 0.55f;
 
         // Raster-first deferred lighting (RenderMode::RasterFirst). Shades the
         // material G-buffer analytically into bloom_->sceneHdr, replacing the
@@ -12996,7 +13000,8 @@ namespace threepp {
                                                emissiveTotalPowerThisFrame_,
                                                fireflyClamp_,
                                                oceanFineTileSize, oceanFoamTileSize,
-                                               deferredDenoise_, restirDIEnabled_);
+                                               deferredDenoise_, restirDIEnabled_,
+                                               deferredVolDensity_, deferredVolAniso_);
                 timingEnd(cb, TP_PathTrace);// pathTraceMs = deferred SHADE only
                 // Spatial denoise of the demodulated diffuse-indirect + recombine.
                 // Barrier: the shade wrote sceneHdr + the indirect image (both
@@ -14734,6 +14739,11 @@ namespace threepp {
     VulkanRenderer::SoftBodyInteropHandle
     VulkanRenderer::enableSoftBodyInterop(const Mesh& mesh, std::function<void()> deviceCopy) {
         return pimpl_->enableSoftBodyInterop(mesh, std::move(deviceCopy));
+    }
+
+    void VulkanRenderer::setDeferredVolumetrics(float density, float anisotropy) {
+        pimpl_->deferredVolDensity_ = std::max(density, 0.f);
+        pimpl_->deferredVolAniso_   = std::clamp(anisotropy, -0.95f, 0.95f);
     }
 
     void VulkanRenderer::disableSoftBodyInterop(const Mesh& mesh) {

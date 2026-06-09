@@ -251,6 +251,14 @@ namespace threepp {
         void setDeferredAO(bool enabled);
         [[nodiscard]] bool deferredAO() const;
 
+        // RasterFirst volumetric SPOT-light beams: ray-marched single scattering
+        // through a uniform thin haze — searchlight / lighthouse beams, visible
+        // against sky and surfaces alike. `density` is the scattering coefficient
+        // σ (1/m; typical 0.005–0.05, 0 = off, no cost); `anisotropy` is the
+        // Henyey-Greenstein g (forward-peaked ≈ 0.5–0.8 reads as atmospheric
+        // haze). RasterFirst only; the PT path has its own fog volumetrics.
+        void setDeferredVolumetrics(float density, float anisotropy = 0.55f);
+
         // ── PhysX soft-body zero-copy interop (CUDA → Vulkan) ────────────────
         // Re-backs `mesh`'s per-frame tet-position buffer (the tet_skinning.comp
         // input) with EXPORTED external device memory and registers `deviceCopy`
