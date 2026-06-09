@@ -38,6 +38,7 @@ layout(set = 0, binding = 20, r16f)    uniform readonly image2D momentsImage; //
 layout(set = 0, binding = 22, rgba16f) uniform image2D atrousA;            // ping-pong (rgb=GI, a=variance)
 layout(set = 0, binding = 23, rgba16f) uniform image2D atrousB;
 layout(set = 0, binding = 25, rgba16f) uniform readonly image2D reflectImage;// sharp mirror reflection (.rgb pre-weighted, .a=roughness)
+layout(set = 0, binding = 31, rgba16f) uniform readonly image2D reflAuxImage;// ReBLUR aux: .x=history length, .y=E[L²] (temporal convergence → blur width)
 
 layout(push_constant) uniform Pc {
     uint _p0; uint width; uint height; uint step;
@@ -117,7 +118,43 @@ void main() {
         const float dielSigma  = min(rough, 0.16) * 8.0; // dielectric: sharp
         const float metalSigma = rough * 16.0;           // metal: rough = blurry
         const float baseSigma  = isGlass ? rough * 12.0 : mix(dielSigma, metalSigma, metalness);
-        const float sigma      = clamp(baseSigma, 0.6, 5.0);// cap → single-pass kernel stays cheap
+        // ── ReBLUR: spatial blur width ∝ temporal NON-convergence ─────────────────
+        // The reflection is GGX-importance-sampled (1 ray/frame, per-frame seed). The
+        // TEMPORAL accumulator (reflSVGFTemporal) and this SPATIAL blur are two estimators
+        // of the SAME lobe integral, so let the spatial width back off as the temporal
+        // converges (history climbs):
+        //   fresh / moving (history→1): the 1-sample lobe is noisy → blur WIDE (roughness-
+        //     scaled) to approximate the lobe = STABLE (no per-frame flicker, no dust).
+        //   converged (history→16+): the temporal already integrated the lobe (smooth) →
+        //     blur NARROW → preserve the lobe detail = PRETTY.
+        // The fixed-width blur could only ever be one of those (pretty OR stable); this is
+        // both. History resets to 1 on camera motion / disocclusion (view-dependent reflection
+        // can't reproject), so motion blurs wide (clean) and a held view sharpens back.
+        const vec2  aux         = imageLoad(reflAuxImage, px).xy;
+        const float histLen     = aux.x;
+        const float convT       = clamp((histLen - 1.0) / 15.0, 0.0, 1.0);// 0 fresh → 1 at 16 frames
+        // RESIDUAL-SHIMMER term (the variance the aux .y was plumbed for): aux.y is
+        // E[L²] of the 1-spp lobe samples, so tvar = E[L²] − E[L]² estimates the
+        // SINGLE-SAMPLE variance, and the EMA mean retains tvar/(2·hist−1) of it.
+        // Where that residual is still large RELATIVE to the mean (a rough metal
+        // whose lobe spans HDR sun ↔ shadow never converges below visibility at the
+        // 32-frame cap), history length alone says "converged" while the pixel still
+        // boils — keep the blur WIDE there. Cheap, already-accumulated, per-pixel.
+        const float meanLum     = dot(cR.rgb, LUMA);
+        const float tvar        = max(aux.y - meanLum * meanLum, 0.0);
+        const float resStd      = sqrt(tvar / max(2.0 * histLen - 1.0, 1.0));
+        const float noiseT      = clamp(resStd / (0.25 * meanLum + 1e-3), 0.0, 1.0);// ≥25% shimmer → full wide
+        // DETERMINISTIC band (roughness < the shade's kReflStochastic=0.25, and
+        // glass — always 1 deterministic sample): the ray is the exact mirror
+        // every frame, so the temporal never integrates a lobe — the spatial
+        // blur IS the gloss/frost and must NOT narrow with convergence
+        // (narrowing made low-rough surfaces mirror-sharp instead of glossy).
+        // Convergence-narrowing only makes sense where stochastic lobe samples
+        // actually accumulate (roughness ≥ 0.25).
+        const float detT        = isGlass ? 1.0 : (1.0 - smoothstep(0.20, 0.30, rough));
+        const float widenT      = max(max(1.0 - convT, noiseT), detT);
+        const float narrowSigma = clamp(baseSigma, 0.6, 1.3);// converged floor (mild, roughness-aware)
+        const float sigma       = clamp(mix(narrowSigma, baseSigma, widenT), 0.6, 5.0);
         const float inv2s2  = 1.0 / (2.0 * sigma * sigma);
         // PERF: size the kernel to what σ actually reaches — sharp reflections use a
         // tiny kernel, only frosted/rough surfaces pay for the wide one (was a fixed
@@ -139,7 +176,19 @@ void main() {
                 // speckle); the σ + plane stop keep it local.
                 wn = (qid == cid) ? 1.0 : 0.0;
             } else {
-                wn = pow(max(dot(Nc, normalize(nq.xyz * 2.0 - 1.0)), 0.0), 32.0);
+                // Roughness-scaled normal stop: SHARP reflections keep the tight pow-32
+                // (mirrors stay crisp, no bleed across surfaces); ROUGH reflections LOOSEN it
+                // so the blur averages across a CURVED surface's varying normals. Without
+                // this, pow-32 rejects a sphere's own neighbours → the per-pixel GGX lobe
+                // speckle survives = "dust" on rough metal spheres. A rough reflection IS
+                // blurry, so a loose stop there is correct.
+                // Loose when the blur needs to be WIDE (fresh history OR residual
+                // shimmer — the wide kernel must average across a curved surface's
+                // varying normals, else pow-32 rejects the sphere's own neighbours
+                // and the 1-ray speckle survives as "dust"); TIGHTEN as it truly
+                // converges (preserve the reflected detail instead of bleeding it).
+                const float nStopExp = mix(24.0, mix(32.0, 3.0, smoothstep(0.1, 0.5, rough)), widenT);
+                wn = pow(max(dot(Nc, normalize(nq.xyz * 2.0 - 1.0)), 0.0), nStopExp);
             }
             if (wn <= 0.0) continue;
             const vec3  Pq = worldFromDepth(q, texelFetch(gbufDepthTex, q, 0).x);

@@ -1023,6 +1023,7 @@ namespace threepp {
             Image2D       atrousA;      // rgba16f — SVGF multi-pass à-trous ping-pong (rgb=GI, a=variance); STORAGE scratch
             Image2D       atrousB;      // rgba16f — SVGF multi-pass à-trous ping-pong (the other half)
             Image2D       reflect;      // rgba16f — sharp 1-mirror-ray reflection radiance (.rgb), demodulated; roughness-blurred by the reflection denoise. STORAGE
+            Image2D       reflAux;      // rgba16f — reflection-denoiser auxiliary (ping-pong, mirrors `reflect`: STORAGE write + SAMPLED prev-frame read)
             Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
             // Hybrid raster overlay's UNJITTERED depth attachment. Filled by
             // an extra depth-only prepass (overlay_depth.vert) right after
@@ -7379,6 +7380,7 @@ namespace threepp {
                 destroyImage2D(ctx->allocator(), d, g.atrousA);
                 destroyImage2D(ctx->allocator(), d, g.atrousB);
                 destroyImage2D(ctx->allocator(), d, g.reflect);
+                destroyImage2D(ctx->allocator(), d, g.reflAux);
                 destroyImage2D(ctx->allocator(), d, g.depth);
                 destroyImage2D(ctx->allocator(), d, g.unjitDepth);
                 g.width  = 0;
@@ -7528,6 +7530,11 @@ namespace threepp {
                 g.reflect = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                                     VK_IMAGE_ASPECT_COLOR_BIT, N("reflect"));
+                // Reflection-denoiser auxiliary — mirrors `reflect` exactly (STORAGE
+                // write + SAMPLED prev-frame read, ping-ponged across frames-in-flight).
+                g.reflAux = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT, N("reflAux"));
                 g.depth  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
                                                    depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
                                                    N("depth"));
@@ -7602,6 +7609,7 @@ namespace threepp {
                 pushInit(g.atrousA.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.atrousB.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.reflect.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.reflAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.depth.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
             }
             vkCmdPipelineBarrier(initCb,
@@ -9558,6 +9566,7 @@ namespace threepp {
             std::array<VkImageView, kFramesInFlight> atrousAViews{};
             std::array<VkImageView, kFramesInFlight> atrousBViews{};
             std::array<VkImageView, kFramesInFlight> reflectViews{};
+            std::array<VkImageView, kFramesInFlight> reflAuxViews{};
             std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 camBufs[f]       = cameraUbos[f].handle;
@@ -9575,6 +9584,7 @@ namespace threepp {
                 atrousAViews[f]  = rasterGbufs[f].atrousA.view;
                 atrousBViews[f]  = rasterGbufs[f].atrousB.view;
                 reflectViews[f]  = rasterGbufs[f].reflect.view;
+                reflAuxViews[f]  = rasterGbufs[f].reflAux.view;
                 sceneHdrViews[f] = bloom_->sceneHdrView(f);
             }
             // Bindless material-texture array for reflected-hit texturing —
@@ -9598,6 +9608,7 @@ namespace threepp {
             in.atrousA          = atrousAViews.data();
             in.atrousB          = atrousBViews.data();
             in.reflect          = reflectViews.data();
+            in.reflAux          = reflAuxViews.data();
             in.sceneHdr         = sceneHdrViews.data();
             in.tlas             = tlas;
             in.materialBuf      = matBufs.data();

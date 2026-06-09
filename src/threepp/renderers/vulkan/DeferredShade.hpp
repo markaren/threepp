@@ -52,6 +52,7 @@ namespace threepp::vulkan {
             const VkImageView* atrousA    = nullptr;// [framesInFlight] SVGF à-trous ping-pong A (storage)
             const VkImageView* atrousB    = nullptr;// [framesInFlight] SVGF à-trous ping-pong B (storage)
             const VkImageView* reflect    = nullptr;// [framesInFlight] sharp mirror-ray reflection radiance (storage)
+            const VkImageView* reflAux    = nullptr;// [framesInFlight] reflection-denoiser auxiliary (storage+sampled, ping-pong like reflect)
             const VkImageView* sceneHdr   = nullptr;// [framesInFlight] output (storage)
             // ReSTIR DI reservoir ping-pong — [2] PHYSICAL images (not per-frame): the
             // shared PT reservoir images. rewriteDescriptors picks write=slot(f&1),

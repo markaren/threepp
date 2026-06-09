@@ -45,7 +45,7 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[31]{};
+        VkDescriptorSetLayoutBinding b[33]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -87,10 +87,12 @@ namespace threepp::vulkan {
         set(28, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reservoir pos+type READ (prev frame, temporal reuse)
         set(29, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reservoir W_sum/M/W/p_hat WRITE
         set(30, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reservoir W_sum/M/W/p_hat READ
+        set(31, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reflAux CUR (reflection-denoiser auxiliary; mirrors 25)
+        set(32, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV reflAux (other fif index) = 1-frame reflection-denoiser history (mirrors 26)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 31;
+        dlci.bindingCount = 33;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -150,9 +152,9 @@ namespace threepp::vulkan {
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         sizes[0].descriptorCount = framesInFlight_ * 2;// camera + lights
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * (14 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev
+        sizes[1].descriptorCount = framesInFlight_ * (15 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[2].descriptorCount = framesInFlight_ * 10;// sceneHdr + indirect + momentsSq + atrousA/B + reflect + 4 reservoir (pos/W × write/read)
+        sizes[2].descriptorCount = framesInFlight_ * 11;// sceneHdr + indirect + momentsSq + atrousA/B + reflect + reflAux + 4 reservoir (pos/W × write/read)
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;// TLAS
         sizes[4].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -232,6 +234,13 @@ namespace threepp::vulkan {
             prevReflInfo.sampler     = gbufSampler_;
             prevReflInfo.imageView   = in.reflect[(f + 1u) % framesInFlight_];
             prevReflInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo reflAuxInfo{};// reflection-denoiser auxiliary — storage (mirrors reflInfo)
+            reflAuxInfo.imageView   = in.reflAux[f];
+            reflAuxInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo prevReflAuxInfo{};// PREV reflAux (other fif) — sampled in GENERAL (mirrors prevReflInfo)
+            prevReflAuxInfo.sampler     = gbufSampler_;
+            prevReflAuxInfo.imageView   = in.reflAux[(f + 1u) % framesInFlight_];
+            prevReflAuxInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
             // GI reproject inputs. prevIndirect = the OTHER frame-in-flight's
             // indirect image — holds last frame's accumulated GI (a 1-frame
@@ -312,7 +321,7 @@ namespace threepp::vulkan {
             resWReadInfo.imageView   = in.reservoirW[resRs];
             resWReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-            VkWriteDescriptorSet w[31]{};
+            VkWriteDescriptorSet w[33]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -363,7 +372,9 @@ namespace threepp::vulkan {
             setw(28, 28, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resPosReadInfo,  nullptr);
             setw(29, 29, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resWWriteInfo,   nullptr);
             setw(30, 30, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resWReadInfo,    nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 31, w, 0, nullptr);
+            setw(31, 31, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &reflAuxInfo,     nullptr);
+            setw(32, 32, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevReflAuxInfo, nullptr);
+            vkUpdateDescriptorSets(ctx_.device(), 33, w, 0, nullptr);
         }
     }
 

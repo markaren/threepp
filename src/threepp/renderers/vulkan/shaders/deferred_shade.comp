@@ -123,23 +123,69 @@ layout(set = 0, binding = 27, rgba32f) uniform writeonly image2D reservoirPosWri
 layout(set = 0, binding = 28, rgba32f) uniform readonly  image2D reservoirPosRead;
 layout(set = 0, binding = 29, rgba16f) uniform writeonly image2D reservoirWWrite;
 layout(set = 0, binding = 30, rgba16f) uniform readonly  image2D reservoirWRead;
+// Reflection denoiser AUX (ReBLUR-style), ping-pong (mirrors reflect 25/26). 31 = CUR
+// write, 32 = PREV read. .x = history length (accumulated frames, →fast convergence +
+// noise proxy), .y = E[L²] of the reflection luma (→ temporal variance), .z = reflection
+// hit distance (→ distance-correct blur width). The reflection denoise (channel 1) reads
+// CUR to drive a variance/history/hit-distance blur: wide where noisy/unconverged/moving,
+// narrow where converged (preserves the lobe detail).
+layout(set = 0, binding = 31, rgba16f) uniform writeonly image2D reflAuxWrite;
+layout(set = 0, binding = 32) uniform sampler2D reflAuxPrevTex;
 
-// Temporal AA for the 1-mirror-ray reflection/glass: blend with the motion-
-// reprojected 1-frame history. The gbuffer JITTER varies the ray sub-pixel each
-// frame, so accumulating ~10 frames anti-aliases the 1-ray refraction/reflection
-// while staying SHARP (no spatial mush). Motion-scaled: static accumulates (AA),
-// motion falls back to the current sample (the refraction is view-dependent, so a
-// surface-motion reproject would ghost it). .a (roughness / glass marker) is kept
-// from the current sample. Off-screen / garbage history → current.
-vec4 reflTemporal(vec4 cur, vec2 uv) {
-    const vec2 mv   = texture(gbufMotionTex, uv).rg;
-    const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
-    const vec2 pUv  = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
-    if (any(lessThan(pUv, vec2(0.0))) || any(greaterThan(pUv, vec2(1.0)))) return cur;
-    const vec4 prev = texture(reflectPrevTex, pUv);
-    if (any(greaterThan(abs(prev.rgb), vec3(1e6)))) return cur;// NaN/garbage guard
-    const float a = mix(0.1, 1.0, smoothstep(0.001, 0.02, length(mv)));// static→accumulate (AA), motion→current
-    return vec4(mix(prev.rgb, cur.rgb, a), cur.a);
+// ReBLUR-style TEMPORAL accumulation for the reflection (+ glass). Adaptive blend
+// α = 1/historyLength → fast convergence early, then a long stable mean. Tracks the
+// luminance 2nd moment E[L²] so the channel-1 denoise can form temporal variance
+// (var = E[L²] − E[L]²) and size its blur by it. Writes the AUX buffer (binding 31:
+// .x=history, .y=E[L²]). The accumulated RADIANCE is the return value (→ reflectImage).
+//   RESET (history→1) when: off-screen reproject, surface mismatch (disocclusion), OR
+//   camera MOTION — the reflection is VIEW-DEPENDENT, so a surface-motion reproject can't
+//   follow the reflected content (it would ghost); on reset the spatial denoise blurs the
+//   fresh 1-sample wide (history=1 ⇒ wide), and on a held-still view history climbs and
+//   the blur narrows back to the converged (sharp) lobe. This is why it's pretty AND
+//   stable where the fixed-α version was only one or the other.
+vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N) {
+    const float curLum = dot(cur.rgb, vec3(0.2126, 0.7152, 0.0722));
+    const vec2  mv     = texture(gbufMotionTex, uv).rg;
+    const vec2  pNdc   = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
+    const vec2  pUv    = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
+    bool valid = all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)));
+    if (valid) {
+        const vec3 pn = texture(gbufNormalPrevTex, pUv).xyz * 2.0 - 1.0;
+        valid = dot(pn, pn) > 1e-6 && dot(N, normalize(pn)) > 0.9;// surface match (disocclusion)
+    }
+    // ROUGHNESS-AWARE motion policy. The old blanket reset (any camera motion →
+    // history=1) starved exactly the surfaces that need history most: a ROUGH lobe
+    // integrates a wide solid angle, so its reflection is nearly VIEW-INDEPENDENT
+    // and survives a surface reproject — like diffuse GI, which reprojects under
+    // motion with a short cap. Only near-MIRROR content actually shifts with the
+    // camera (a surface reproject can't follow it → ghost), so only that resets.
+    // In between, the cap blends: motion-scaled (24→6, the GI channel's pattern)
+    // for rough, down to 1 (reset) as roughness → mirror. Thresholds match the
+    // PT's view-dependence factor (1 - smoothstep(0.05, 0.30, roughness)).
+    const float rough = abs(cur.a);// .a < 0 = glass marker (frost gr) — same policy
+    float histCap = 32.0;
+    const float mvLen = length(mv);
+    if (mvLen > 0.004) {// above jitter
+        const float viewDepT  = 1.0 - smoothstep(0.05, 0.30, rough);// 1 = mirror-like
+        const float motionCap = mix(24.0, 6.0, smoothstep(0.004, 0.03, mvLen));
+        histCap = mix(motionCap, 1.0, viewDepT);
+        if (histCap < 1.5) valid = false;// near-mirror: hard reset (view-dependent)
+    }
+    const vec4 prevR = valid ? texture(reflectPrevTex, pUv) : vec4(0.0);
+    if (valid && any(greaterThan(abs(prevR.rgb), vec3(1e6)))) valid = false;// garbage guard
+    float histLen, moment;
+    vec3  accum;
+    if (valid) {
+        const vec2  pa = texture(reflAuxPrevTex, pUv).xy;
+        histLen = min(pa.x + 1.0, histCap);
+        const float a = 1.0 / histLen;
+        accum   = mix(prevR.rgb, cur.rgb, a);
+        moment  = mix(pa.y, curLum * curLum, a);
+    } else {
+        histLen = 1.0; accum = cur.rgb; moment = curLum * curLum;
+    }
+    imageStore(reflAuxWrite, px, vec4(histLen, moment, 0.0, 0.0));
+    return vec4(accum, cur.a);
 }
 
 layout(push_constant) uniform Pc {
@@ -407,7 +453,8 @@ vec3 emissiveNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, vec3 albedo,
         // one for the peaked SPECULAR lobe: at low roughness a single sample lands
         // near the GGX peak and the firefly clamp leaves a bright "probe speckle"
         // highlight (which the PT, using BRDF sampling + MIS, never shows). Emitter
-        // specular is owned by the reflection path (a BRDF-sampled mirror ray).
+        // specular is owned by the reflection ray at near-mirror roughness and by
+        // emissiveSpecNEE on rough lobes (the specNEET split in main()).
         const vec3  H  = normalize(V + L);
         const vec3  Fr = fresnelSchlick(max(dot(V, H), 0.0), F0);
         const vec3  kd = (vec3(1.0) - Fr) * (1.0 - metalness);
@@ -417,6 +464,89 @@ vec3 emissiveNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, vec3 albedo,
         // geometry where TAA can't accumulate it away.
         const float lum = max(max(c.r, c.g), c.b);
         if (lum > pc.fireflyClamp) c *= pc.fireflyClamp / lum;
+        sum += c;
+    }
+    return sum / float(EM_SAMPLES);
+}
+
+// Coherent emitter SPECULAR NEE — the GGX-lobe analogue of emissiveNEE (same
+// deterministic stratified power-CDF picks + R2 barycentrics → settles
+// instantly, zero per-frame noise, same accepted emitter-coverage bias). For a
+// ROUGH reflective surface the stochastic reflection ray hits a small bright
+// emitter with probability p ≪ 1 → a firefly-clamped binomial spike train that
+// neither the temporal EMA nor the roughness blur can settle (= the constant
+// boiling around reflected lamps). For a BROAD lobe, light-sampling is the
+// low-variance estimator (the MIS logic): evaluate D·G·F toward the coherent
+// emitter set and scale the emitter's self-emission OUT of the stochastic ray
+// (gReflEmitterScale) so nothing is double-counted. Near-mirror stays with the
+// BRDF ray — a tight lobe either hits the emitter every frame (no variance) or
+// never, and NEE of a peaked lobe is the probe-speckle regime that made
+// emissiveNEE diffuse-only in the first place.
+vec3 emissiveSpecNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0,
+                     float roughness, float k, bool doShadows) {
+    if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
+    const int   emIters    = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
+    const int   EM_SAMPLES = 16;// matches emissiveNEE's emitter coverage
+    const vec3  shadowOrig = P + N * SHADOW_EPS;
+    vec3 sum = vec3(0.0);
+    for (int s = 0; s < EM_SAMPLES; ++s) {
+        const float xi = (float(s) + 0.5) / float(EM_SAMPLES) * pc.emissiveTotalPower;
+        uint lo = 0u, hi = pc.emissiveCount - 1u;
+        for (int it = 0; it < emIters; ++it) {
+            if (lo >= hi) break;
+            const uint mid = (lo + hi) >> 1u;
+            if (emissiveTris[mid].v1.w < xi) lo = mid + 1u; else hi = mid;
+        }
+        const EmTri t = emissiveTris[lo];
+        const float su1 = sqrt(fract(0.5 + float(s) * 0.7548776662));
+        const float r2  =      fract(0.5 + float(s) * 0.5698402909);
+        const vec3 lp = (1.0 - su1) * t.v0.xyz + (su1 * (1.0 - r2)) * t.v1.xyz + (su1 * r2) * t.v2.xyz;
+        const vec3 toL = lp - P;
+        const float dist2 = dot(toL, toL);
+        const float dist  = sqrt(max(dist2, 1e-20));
+        if (dist <= 1e-4) continue;
+        const vec3 L = toL / dist;
+        const float NdotL = dot(N, L);
+        if (NdotL <= 0.01) continue;
+        const vec3 lnRaw = cross(t.v1.xyz - t.v0.xyz, t.v2.xyz - t.v0.xyz);
+        const float lnLen = length(lnRaw);
+        if (lnLen < 1e-20 || t.v0.w <= 1e-20 || t.v2.w <= 0.0) continue;
+        const float cosLight = dot(-L, lnRaw / lnLen);
+        if (cosLight <= 0.05) continue;// front-facing only (matches emissiveNEE)
+        const float pickPdf = t.v2.w / pc.emissiveTotalPower;
+        const float p_omega = pickPdf * dist2 / (t.v0.w * cosLight);
+        if (p_omega <= 1e-20) continue;
+        // GGX spec toward the emitter sample — BRDF eval BEFORE the shadow ray:
+        // most samples sit outside the lobe (D≈0), so their ray is skipped and
+        // the per-pixel cost concentrates on the few in-lobe samples.
+        const vec3  H     = normalize(V + L);
+        const float NdotH = max(dot(N, H), 0.0);
+        const vec3  F     = fresnelSchlick(max(dot(V, H), 0.0), F0);
+        const float D     = distGGX(NdotH, roughness);
+        const float G     = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
+        vec3 c = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4) * NdotL * t.emission.rgb / p_omega;
+        const float lum = max(max(c.r, c.g), c.b);
+        if (lum <= 1e-4) continue;// outside the lobe → skip the shadow ray
+        if (lum > pc.fireflyClamp) c *= pc.fireflyClamp / lum;
+        if (doShadows) {
+            // Emitter-skipping shadow ray (a light never shadows itself) — same
+            // query as emissiveNEE's.
+            const vec3  toLs  = lp - shadowOrig;
+            const float dists = length(toLs);
+            rayQueryEXT rq;
+            rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
+                                  0xFFu, shadowOrig, 1e-3, toLs / max(dists, 1e-6), dists - 1e-2);
+            while (rayQueryProceedEXT(rq)) {
+                if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
+                    const MaterialDesc hm = mats[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false)];
+                    const vec3 hem = hm.emissive * hm.emissiveIntensity;
+                    if (max(max(hem.r, hem.g), hem.b) < 0.05)// not an emitter → real occluder
+                        rayQueryConfirmIntersectionEXT(rq);
+                }
+            }
+            if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT)
+                continue;
+        }
         sum += c;
     }
     return sum / float(EM_SAMPLES);
@@ -726,12 +856,14 @@ vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
 vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed);// fwd decl
 vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint seed);// fwd decl (cheap 1-bounce GI)
 
-// When set, traceRadiance drops the DIRECT emission of its hits. Used by the
-// OPAQUE reflection so an emitter isn't counted twice: the surface's emissiveNEE
-// already adds the emitter's specular reflection analytically (solid-angle-
-// weighted → the dim, correct value the PT shows). Letting the mirror ray ALSO
-// hit the emitter at full radiance produced bright sub-lobe "probe speckles".
-bool gSuppressReflEmitter = false;
+// Scales the DIRECT emission of traceRadiance's hits — the emitter-specular
+// OWNERSHIP split for the opaque reflection. 1 = the ray owns emitter spec
+// (near-mirror: the tight lobe hits the emitter every frame → no variance).
+// 0 = emissiveSpecNEE owns it (rough lobes: a stochastic ray hits a small
+// bright emitter with p≪1 → a clamped binomial spike train = constant boiling;
+// dielectrics: F0≈0.04 → the full-radiance hit was a "probe speckle"). Blended
+// in between so nothing is double-counted at the crossover.
+float gReflEmitterScale = 1.0;
 
 // Diffuse indirect. TWO paths, selected by the denoiser flag (pc.flags bit 2):
 //  • DENOISER ON → REAL stochastic 1-bounce GI: a few cosine rays via traceRadiance
@@ -1165,7 +1297,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         const vec3 hitP = o + d * tHit;
         const vec3 hitDiffInd = sampleEnvLod(hitN, maxLod) + lights.ambient;
         radiance += tput * shadeDiffuseDirect(hitP, hitN, hitV, hAlbedo, hRough, hMetal,
-                                              (gSuppressReflEmitter ? vec3(0.0) : hEmissive),
+                                              hEmissive * gReflEmitterScale,
                                               doShadows, hitDiffInd,
                                               hm.sheenColor, hm.sheenRoughness,
                                               hm.specularIntensity, hm.specularColor, seed,
@@ -1735,18 +1867,53 @@ void main() {
     // IS the gloss — and recombines. Pre-weighted by the spec BRDF × reflBlend so
     // the denoise just blurs + adds. Glass/sheen reflect inline below (excluded).
     const bool opaqueRefl = (pm.transmission <= 0.0) && (dot(pm.sheenColor, pm.sheenColor) <= 0.0);
+    // ── Emitter-specular ESTIMATOR SPLIT by lobe width ──────────────────────
+    // specNEET: 0 = near-mirror (the BRDF ray owns emitter spec — tight lobe hits
+    // the emitter every frame, no variance, crisp lamp image), 1 = rough (the
+    // coherent emissiveSpecNEE owns it — deterministic, settles instantly; the
+    // ray's emitter self-emission is scaled out via gReflEmitterScale so nothing
+    // double-counts). The NEE add is faded by reflBlend so emitter spec follows
+    // the same ≥0.7-roughness specular cutoff as the rest of the spec model.
+    const float specNEET = smoothstep(0.10, 0.25, roughness);
+    if (opaqueRefl && reflBlend > 0.0 && specNEET > 0.0 && pc.emissiveCount > 0u) {
+        const float kS = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+        lit += (specNEET * reflBlend)
+             * emissiveSpecNEE(worldPos, N, V, NdotV, F0, roughness, kS, shadowsOn);
+    }
     vec3 reflOut = vec3(0.0);
     if (reflBlend > 0.0 && opaqueRefl) {
         const float missLod = roughness * maxLod;// ray-miss reads the roughness-blurred env mip
-        // Suppress emitter self-emission in the reflection of DIELECTRICS: there the
-        // Fresnel reflectance is tiny (F0≈0.04) so a reflected small emitter should
-        // be ~invisible (the PT shows nothing), yet the full-radiance mirror-ray hit
-        // produced bright "probe speckles". Metals (F0≈albedo) DO show bright emitter
-        // reflections — keep those (BRDF-sampled = sharp + correct). emissiveNEE is
-        // now diffuse-only, so this is the sole emitter-specular path either way.
-        gSuppressReflEmitter = (metalness < 0.5);
-        vec3 r = traceRadiance(shadowOrig, R, shadowsOn, maxLod, missLod, seed);
-        gSuppressReflEmitter = false;
+        // Emitter self-emission scale for the ray (the other half of the split):
+        // DIELECTRICS → 0: F0≈0.04, a reflected small emitter is ~invisible in the
+        // PT, yet a full-radiance hit produced bright "probe speckles" (their faint
+        // correct highlight now comes from emissiveSpecNEE). METALS → (1−specNEET):
+        // near-mirror keeps the sharp BRDF-sampled lamp image; rough hands the
+        // energy to the NEE above.
+        gReflEmitterScale = (metalness < 0.5) ? 0.0 : (1.0 - specNEET);
+        // GGX-importance-sample the reflection LOBE — but ONLY where it's WIDE
+        // (roughness ≥ kReflStochastic). A NARROW lobe at 1 spp is a spike train
+        // on any high-contrast reflected content (a lamp, a tight highlight: hit
+        // probability p ≪ 1 per frame → clamped binomial boiling that the narrow
+        // low-rough blur correctly refuses to smooth — the "speckles persist
+        // below 0.25" band). There the DETERMINISTIC mirror ray is the better
+        // estimator: a stable image every frame, with the reflection denoise's
+        // roughness-scaled blur AS the gloss (the original design). Where the
+        // lobe is wide, the stochastic sample is the better estimator: correct
+        // parallax + roughening, low-contrast per sample, wide blur, the SVGF
+        // temporal converges it — and emissiveSpecNEE owns emitter spec (the
+        // threshold aligns with specNEET's upper edge so the handoff is exact).
+        const float kReflStochastic = 0.25;
+        uint reflSeed = pcgHash(uint(px.x) + pcgHash(uint(px.y) + pcgHash(pc.frame * 2654435761u + 7u)));
+        vec3 Rd = (roughness < kReflStochastic) ? R : sampleGGXReflection(V, N, roughness, reflSeed);
+        // BELOW-HORIZON guard: plain NDF sampling (no VNDF) reflects under the
+        // surface for a good fraction of samples at grazing view / high roughness.
+        // Those rays start at shadowOrig pointing INTO the surface → graze the
+        // backside / floor at epsilon distance → dark+erratic samples = grain that
+        // no amount of denoising should have to absorb. Mirror fallback matches
+        // the bounce-continuation guard inside traceRadiance.
+        if (dot(Rd, N) <= 0.0) Rd = R;
+        vec3 r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed);
+        gReflEmitterScale = 1.0;
         const float rl = max(max(r.r, r.g), r.b);// firefly clamp the single sample
         if (rl > pc.fireflyClamp) r *= pc.fireflyClamp / rl;
         reflOut = r * (F0 * ab.x + ab.y) * reflBlend;
@@ -1754,7 +1921,7 @@ void main() {
     if (demodIndirect) {
         // Denoise ON: temporally AA the sharp reflection, then hand it to the
         // roughness-blur denoise pass.
-        imageStore(reflectImage, px, reflTemporal(vec4(reflOut, roughness), uv));
+        imageStore(reflectImage, px, reflSVGFTemporal(vec4(reflOut, roughness), px, uv, N));
     } else {
         // Denoise OFF (or glass/sheen, where reflOut==0): inline sharp reflection.
         lit += reflOut;
@@ -1804,7 +1971,7 @@ void main() {
                 // + an ID-based (not normal) edge stop so the blur smooths ACROSS the
                 // curved surface — refraction is far more normal-sensitive than
                 // reflection, so 1 ray aliases into blocky speckles without it.
-                imageStore(reflectImage, px, reflTemporal(vec4(glassCol * gt, -gr), uv));
+                imageStore(reflectImage, px, reflSVGFTemporal(vec4(glassCol * gt, -gr), px, uv, N));
                 lit = lit * (1.0 - gt);
             } else {
                 lit = mix(lit, glassCol, gt);// denoise off → inline (sharp, no frost)
