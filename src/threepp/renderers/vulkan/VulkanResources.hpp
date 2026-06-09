@@ -47,6 +47,29 @@ namespace threepp::vulkan {
     // Zeroes the struct on exit so subsequent calls are no-ops.
     void destroyBuffer(VmaAllocator alloc, Buffer& b);
 
+    // Dedicated EXPORTABLE device-local buffer for cross-API interop (CUDA).
+    // Allocated outside VMA: export requires VkExportMemoryAllocateInfo +
+    // dedicated allocation, which VMA pools don't carry. `osHandle` is the
+    // exported OS handle — a Win32 NT handle on Windows (owned by us; closed
+    // in destroyExternalBuffer — CUDA's import duplicates it), a POSIX fd
+    // elsewhere (ownership transfers to CUDA on successful import, so it is
+    // set to null here once handed out and NOT closed by destroy).
+    struct ExternalBuffer {
+        VkBuffer       handle   = VK_NULL_HANDLE;
+        VkDeviceMemory memory   = VK_NULL_HANDLE;
+        VkDeviceSize   size     = 0;
+        void*          osHandle = nullptr;
+    };
+
+    // Create an exportable dedicated buffer. Requires the platform external-
+    // memory extension on the device (VulkanContext::externalMemorySupported()).
+    // Throws on failure (same contract as the other helpers).
+    ExternalBuffer createExternalBuffer(VkPhysicalDevice physicalDevice, VkDevice device,
+                                        VkDeviceSize size, VkBufferUsageFlags usage);
+
+    // Free an external buffer (idempotent; closes the Win32 handle).
+    void destroyExternalBuffer(VkDevice device, ExternalBuffer& b);
+
     // Acceleration-structure scratch buffer with the alignment the spec demands:
     // VkAccelerationStructureBuildGeometryInfoKHR::scratchData::deviceAddress
     // must be aligned to

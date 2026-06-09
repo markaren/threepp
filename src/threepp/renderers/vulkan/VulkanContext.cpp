@@ -260,6 +260,23 @@ namespace threepp::vulkan {
                       << (rayQuerySupported_ ? "enabled" : "unavailable") << "\n";
         }
 
+        // Probe for exportable external memory (the platform handle extension;
+        // VK_KHR_external_memory itself is core since 1.1). Lets device-local
+        // buffers be exported as OS handles and imported by CUDA — the zero-copy
+        // path for PhysX soft-body tet positions. Independent of ray tracing.
+        {
+            // Name spelled as a literal: the macro lives in the platform header
+            // (vulkan_win32.h), which would drag windows.h into this TU.
+            const auto exts = deviceExtensions(physicalDevice_);
+#ifdef _WIN32
+            externalMemorySupported_ = hasExtension(exts, "VK_KHR_external_memory_win32");
+#else
+            externalMemorySupported_ = hasExtension(exts, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+#endif
+            std::cerr << "[VulkanContext] external memory export: "
+                      << (externalMemorySupported_ ? "enabled" : "unavailable") << "\n";
+        }
+
         // Find queue families.
         uint32_t qn = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_, &qn, nullptr);
@@ -309,6 +326,13 @@ namespace threepp::vulkan {
             if (rayQuerySupported_) {
                 extensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
             }
+        }
+        if (externalMemorySupported_) {
+#ifdef _WIN32
+            extensions.push_back("VK_KHR_external_memory_win32");// macro lives in vulkan_win32.h
+#else
+            extensions.push_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+#endif
         }
 
         // Required core 1.2 / 1.3 features (BDA, dynamic rendering, sync2).

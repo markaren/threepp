@@ -43,6 +43,14 @@
 #include <cudaGL.h>// CUDA driver-API GL interop (pulls in cuda.h + GL/gl.h)
 #endif
 
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+// CUDA driver API for external-memory import — the zero-copy bridge into the
+// Vulkan renderer's EXPORTED tet-position buffer (enableSoftBodyInterop).
+// Needs the CUDA toolkit headers + driver library (CUDA::cuda_driver); see the
+// Physics example CMake wiring.
+#include <cuda.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cfloat>
@@ -322,6 +330,21 @@ namespace threepp {
                 cudaTexResource_ = nullptr;
             }
 #endif
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+            if (vkExtMem_) {
+                // Release the CUDA side BEFORE the renderer frees the Vulkan
+                // allocation (removeSoftBody destroys the SoftBody first; the
+                // renderer's tet-state GC runs later). Mapped buffers must be
+                // cuMemFree'd before the external memory is destroyed.
+                ::physx::PxScopedCudaLock _lock(*cuda_);
+                if (vkTetPtr_) {
+                    cuMemFree(vkTetPtr_);
+                    vkTetPtr_ = 0;
+                }
+                cuDestroyExternalMemory(vkExtMem_);
+                vkExtMem_ = nullptr;
+            }
+#endif
             if (positionsInvMass_) {
                 PX_EXT_PINNED_MEMORY_FREE(*cuda_, positionsInvMass_);
                 positionsInvMass_ = nullptr;
@@ -507,6 +530,73 @@ namespace threepp {
         }
 #endif
 
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+        // CUDA→Vulkan zero-copy. The Vulkan renderer re-backs the tet_skinning.comp
+        // input buffer with EXPORTED device memory (VulkanRenderer::
+        // enableSoftBodyInterop); registerVulkanMemory() imports that allocation
+        // into CUDA once, and copyTetToVulkan() — handed to the renderer as its
+        // per-frame deviceCopy callback — then moves the deformed tet positions
+        // device→device. The tet data never touches the host: no DtoH pull, no
+        // DataTexture staging, no map/memcpy.
+        // Glue (after the first render, e.g. polled in the render loop):
+        //   if (sb->needsVkInteropRegister()) {
+        //       auto h = vk->enableSoftBodyInterop(*sb->mesh(), [sb] { sb->copyTetToVulkan(); });
+        //       if (h.osHandle && !sb->registerVulkanMemory(h.osHandle, h.sizeBytes))
+        //           vk->disableSoftBodyInterop(*sb->mesh());// import failed → CPU bridge
+        //   }
+        [[nodiscard]] bool needsVkInteropRegister() const {
+            return gpuSkin_ && !vkInteropRegistered_ && !vkInteropTried_;
+        }
+
+        bool registerVulkanMemory(void* osHandle, size_t sizeBytes) {
+            if (vkInteropRegistered_ || vkInteropTried_ || !gpuSkin_ || !osHandle || sizeBytes == 0)
+                return false;
+            vkInteropTried_ = true;// attempt once; on failure the caller reverts to the CPU bridge
+            ::physx::PxScopedCudaLock _lock(*cuda_);
+            CUDA_EXTERNAL_MEMORY_HANDLE_DESC hd{};
+#ifdef _WIN32
+            hd.type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32;
+            hd.handle.win32.handle = osHandle;// NT handle stays owned by the renderer (CUDA dups it)
+#else
+            hd.type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD;// fd ownership transfers to CUDA on success
+            hd.handle.fd = static_cast<int>(reinterpret_cast<intptr_t>(osHandle));
+#endif
+            hd.size  = sizeBytes;
+            hd.flags = CUDA_EXTERNAL_MEMORY_DEDICATED;// the export is a dedicated VkDeviceMemory
+            if (cuImportExternalMemory(&vkExtMem_, &hd) != CUDA_SUCCESS) {
+                vkExtMem_ = nullptr;
+                return false;
+            }
+            CUDA_EXTERNAL_MEMORY_BUFFER_DESC bd{};
+            bd.offset = 0;
+            bd.size   = sizeBytes;
+            if (cuExternalMemoryGetMappedBuffer(&vkTetPtr_, vkExtMem_, &bd) != CUDA_SUCCESS) {
+                cuDestroyExternalMemory(vkExtMem_);
+                vkExtMem_ = nullptr;
+                vkTetPtr_ = 0;
+                return false;
+            }
+            vkInteropRegistered_ = true;
+            return true;
+        }
+
+        // The renderer's per-frame deviceCopy callback. PhysX's positionInvMass
+        // buffer is PxVec4 = pos.xyz + invMass.w — exactly the shader's
+        // `vec4 tetPos[]` layout (.w ignored), so this is a single straight
+        // device→device copy. Synchronized before returning, so the data is in
+        // place before the frame's command buffer is submitted — the same
+        // host-ordering contract as the CPU upload this replaces.
+        void copyTetToVulkan() const {
+            if (!vkInteropRegistered_) return;
+            ::physx::PxScopedCudaLock _lock(*cuda_);
+            cuMemcpyDtoDAsync(vkTetPtr_,
+                              reinterpret_cast<CUdeviceptr>(volume_->getPositionInvMassBufferD()),
+                              static_cast<size_t>(nbCollVerts_) * sizeof(::physx::PxVec4),
+                              nullptr);
+            cuStreamSynchronize(nullptr);
+        }
+#endif
+
     private:
         ::physx::PxDeformableVolume* volume_;
         ::physx::PxCudaContextManager* cuda_;
@@ -525,6 +615,12 @@ namespace threepp {
         CUgraphicsResource cudaTexResource_ = nullptr;
         bool interopRegistered_ = false;
         bool interopTried_ = false;
+#endif
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+        CUexternalMemory vkExtMem_ = nullptr;// imported Vulkan tet-position allocation
+        CUdeviceptr      vkTetPtr_ = 0;      // its device pointer (copyTetToVulkan dst)
+        bool vkInteropRegistered_ = false;
+        bool vkInteropTried_      = false;
 #endif
         friend class PhysxWorld;
 
@@ -570,8 +666,10 @@ namespace threepp {
                 cuMemcpy2DAsync(&cp, stream);
             }
         }
+#endif
 
-        // GPU-skin interop: bounds from PhysX's world AABB (no host position copy).
+        // GPU-skin interop (GL + Vulkan): bounds from PhysX's world AABB — no
+        // host position copy, so the zero-copy paths stay zero-copy.
         void updateBoundsFromWorld() {
             using namespace ::physx;
             const PxBounds3 b = volume_->getWorldBounds(1.0f);
@@ -583,7 +681,6 @@ namespace threepp {
             visualGeometry_->boundingBox = Box3(mn, mx);
             visualGeometry_->boundingSphere = Sphere(c, c.distanceTo(mx));
         }
-#endif
 
         // GPU-skin: copy the (just-pulled) tet positions into the texture, flag for re-upload.
         void uploadTetTexture() {
@@ -1026,6 +1123,11 @@ namespace threepp {
                     continue;
                 }
 #endif
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+                // Vulkan zero-copy: the renderer invokes copyTetToVulkan at its own
+                // (fence-ordered) refresh point — no host pull needed here at all.
+                if (sb->vkInteropRegistered_) continue;
+#endif
                 sb->pullDeformedPositionsAsync(cudaCopyStream_);
             }
 #ifdef THREEPP_PHYSX_CUDA_GL_INTEROP
@@ -1042,6 +1144,14 @@ namespace threepp {
                 if (sb->interopRegistered_) {
                     // Texture was filled device-side above; bounds come from PhysX's
                     // world AABB (no host positions this frame).
+                    sb->updateBoundsFromWorld();
+                    continue;
+                }
+#endif
+#ifdef THREEPP_PHYSX_CUDA_VK_INTEROP
+                if (sb->vkInteropRegistered_) {
+                    // Tet buffer is filled device-side by the renderer's deviceCopy;
+                    // bounds from PhysX's world AABB (no host positions this frame).
                     sb->updateBoundsFromWorld();
                     continue;
                 }

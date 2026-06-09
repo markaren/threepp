@@ -76,6 +76,14 @@ namespace threepp::vulkan {
             return rayQuerySupported_;
         }
 
+        // Exportable external memory (VK_KHR_external_memory_win32 / _fd) —
+        // lets device-local buffers be shared zero-copy with CUDA (PhysX
+        // soft-body tet positions). Optional; everything falls back to the
+        // host-visible upload path without it.
+        bool externalMemorySupported() const {
+            return externalMemorySupported_;
+        }
+
         // Attach a debug-utils name to a Vulkan object so validation messages
         // and RenderDoc / Nsight reports identify it by label instead of by
         // raw uint64 handle. No-op when validation is off (the EXT extension
@@ -131,6 +139,7 @@ namespace threepp::vulkan {
         bool rayTracingEnabled_ = false;
         bool rayTracingInvocationReorderSupported_ = false;
         bool rayQuerySupported_ = false;
+        bool externalMemorySupported_ = false;
         VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtPipelineProperties_{};
         RtFunctions rt_{};
         // Non-null only when VK_EXT_debug_utils is enabled (i.e. validation

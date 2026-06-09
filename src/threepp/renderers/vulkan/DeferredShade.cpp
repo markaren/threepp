@@ -45,7 +45,7 @@ namespace threepp::vulkan {
         sci.maxLod       = 0.f;
         check(vkCreateSampler(d, &sci, nullptr, &gbufSampler_), "vkCreateSampler(deferred)");
 
-        VkDescriptorSetLayoutBinding b[31]{};
+        VkDescriptorSetLayoutBinding b[34]{};
         auto set = [&](uint32_t i, VkDescriptorType t) {
             b[i].binding = i;
             b[i].descriptorType = t;
@@ -87,10 +87,13 @@ namespace threepp::vulkan {
         set(28, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reservoir pos+type READ (prev frame, temporal reuse)
         set(29, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reservoir W_sum/M/W/p_hat WRITE
         set(30, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reservoir W_sum/M/W/p_hat READ
+        set(31, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);          // reflAux CUR (reflection-denoiser auxiliary; mirrors 25)
+        set(32, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // PREV reflAux (other fif index) = 1-frame reflection-denoiser history (mirrors 26)
+        set(33, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);         // scene fog UBO (shared with the PT path)
 
         VkDescriptorSetLayoutCreateInfo dlci{};
         dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dlci.bindingCount = 31;
+        dlci.bindingCount = 34;
         dlci.pBindings = b;
         check(vkCreateDescriptorSetLayout(d, &dlci, nullptr, &dsLayout_),
               "vkCreateDescriptorSetLayout(deferred)");
@@ -98,7 +101,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pc.offset = 0;
-        pc.size = 40;// 10×u32 (…, fireflyClamp, oceanFineTileSize, oceanFoamTileSize)
+        pc.size = 52;// 13×u32 (…, volDensity, volAniso, starIntensity)
         VkPipelineLayoutCreateInfo plci{};
         plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         plci.setLayoutCount = 1;
@@ -148,11 +151,11 @@ namespace threepp::vulkan {
     void DeferredShade::createDescriptorPool() {
         VkDescriptorPoolSize sizes[5]{};
         sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        sizes[0].descriptorCount = framesInFlight_ * 2;// camera + lights
+        sizes[0].descriptorCount = framesInFlight_ * 3;// camera + lights + fog
         sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[1].descriptorCount = framesInFlight_ * (14 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev
+        sizes[1].descriptorCount = framesInFlight_ * (15 + kMaxMaterialTextures);// env + 5 gbuf + 2 ocean + bindless + prevIndirect + motion + normalPrev + momentsSqPrev + depthPrev + reflectPrev + reflAuxPrev
         sizes[2].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[2].descriptorCount = framesInFlight_ * 10;// sceneHdr + indirect + momentsSq + atrousA/B + reflect + 4 reservoir (pos/W × write/read)
+        sizes[2].descriptorCount = framesInFlight_ * 11;// sceneHdr + indirect + momentsSq + atrousA/B + reflect + reflAux + 4 reservoir (pos/W × write/read)
         sizes[3].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         sizes[3].descriptorCount = framesInFlight_ * 1;// TLAS
         sizes[4].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -232,6 +235,17 @@ namespace threepp::vulkan {
             prevReflInfo.sampler     = gbufSampler_;
             prevReflInfo.imageView   = in.reflect[(f + 1u) % framesInFlight_];
             prevReflInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo reflAuxInfo{};// reflection-denoiser auxiliary — storage (mirrors reflInfo)
+            reflAuxInfo.imageView   = in.reflAux[f];
+            reflAuxInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorImageInfo prevReflAuxInfo{};// PREV reflAux (other fif) — sampled in GENERAL (mirrors prevReflInfo)
+            prevReflAuxInfo.sampler     = gbufSampler_;
+            prevReflAuxInfo.imageView   = in.reflAux[(f + 1u) % framesInFlight_];
+            prevReflAuxInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkDescriptorBufferInfo fogInfo{};// scene fog (same UBO the PT consumes)
+            fogInfo.buffer = in.fogBuf[f];
+            fogInfo.offset = 0;
+            fogInfo.range  = in.fogRange;
 
             // GI reproject inputs. prevIndirect = the OTHER frame-in-flight's
             // indirect image — holds last frame's accumulated GI (a 1-frame
@@ -312,7 +326,7 @@ namespace threepp::vulkan {
             resWReadInfo.imageView   = in.reservoirW[resRs];
             resWReadInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-            VkWriteDescriptorSet w[31]{};
+            VkWriteDescriptorSet w[34]{};
             auto setw = [&](int n, uint32_t bind, VkDescriptorType t,
                             const VkDescriptorImageInfo* img, const VkDescriptorBufferInfo* buf) {
                 w[n].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -363,7 +377,10 @@ namespace threepp::vulkan {
             setw(28, 28, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resPosReadInfo,  nullptr);
             setw(29, 29, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resWWriteInfo,   nullptr);
             setw(30, 30, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &resWReadInfo,    nullptr);
-            vkUpdateDescriptorSets(ctx_.device(), 31, w, 0, nullptr);
+            setw(31, 31, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          &reflAuxInfo,     nullptr);
+            setw(32, 32, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &prevReflAuxInfo, nullptr);
+            setw(33, 33, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         nullptr,          &fogInfo);
+            vkUpdateDescriptorSets(ctx_.device(), 34, w, 0, nullptr);
         }
     }
 
@@ -388,20 +405,26 @@ namespace threepp::vulkan {
                                        uint32_t emissiveCount, float emissiveTotalPower,
                                        float fireflyClamp,
                                        float oceanFineTileSize, float oceanFoamTileSize,
-                                       bool denoise, bool restirDI) {
+                                       bool denoise, bool restirDI,
+                                       float volDensity, float volAniso,
+                                       float starIntensity) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
         const uint32_t flags = (shadows ? 1u : 0u) | (ao ? 2u : 0u) | (denoise ? 4u : 0u)
                              | (restirDI ? 8u : 0u);
-        uint32_t emPowerBits, fireflyBits, oceanFineBits, oceanFoamBits;
+        uint32_t emPowerBits, fireflyBits, oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits, starBits;
         std::memcpy(&emPowerBits,   &emissiveTotalPower, sizeof(emPowerBits));
         std::memcpy(&fireflyBits,   &fireflyClamp,       sizeof(fireflyBits));
         std::memcpy(&oceanFineBits, &oceanFineTileSize,  sizeof(oceanFineBits));
         std::memcpy(&oceanFoamBits, &oceanFoamTileSize,  sizeof(oceanFoamBits));
-        const uint32_t pc[10] = {envMipCount, width, height, flags,
+        std::memcpy(&volDensBits,   &volDensity,         sizeof(volDensBits));
+        std::memcpy(&volAnisoBits,  &volAniso,           sizeof(volAnisoBits));
+        std::memcpy(&starBits,      &starIntensity,      sizeof(starBits));
+        const uint32_t pc[13] = {envMipCount, width, height, flags,
                                  frameCounter, emissiveCount, emPowerBits, fireflyBits,
-                                 oceanFineBits, oceanFoamBits};
+                                 oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits,
+                                 starBits};
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
         vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
     }

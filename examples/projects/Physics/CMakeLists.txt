@@ -2,6 +2,20 @@
 add_example(NAME "physx_demo" SOURCES main.cpp LINK_IMGUI LINK_PHYSX)
 add_example(NAME "physx_softbody" SOURCES softbody.cpp LINK_IMGUI LINK_PHYSX)
 
+# CUDA→Vulkan zero-copy interop for the soft-body tet positions (optional):
+# PhysX's deformed positions are copied device→device into the Vulkan
+# renderer's exported tet-skinning buffer — no host round-trip. Needs the
+# Vulkan backend + the CUDA toolkit (driver API) at build time; without
+# either, the example silently keeps the pinned-memory CPU bridge.
+if (TARGET physx_softbody AND THREEPP_WITH_VULKAN)
+    find_package(CUDAToolkit QUIET)
+    if (CUDAToolkit_FOUND)
+        target_compile_definitions(physx_softbody PRIVATE THREEPP_PHYSX_CUDA_VK_INTEROP)
+        target_link_libraries(physx_softbody PRIVATE CUDA::cuda_driver)
+        message(STATUS "physx_softbody: CUDA->Vulkan zero-copy interop enabled")
+    endif ()
+endif ()
+
 add_example(NAME "physx_fish" SOURCES fish_softbody.cpp LINK_IMGUI LINK_PHYSX LINK_MESHOPT)
 if (TARGET physx_fish)
     target_include_directories(physx_fish PRIVATE "${PROJECT_SOURCE_DIR}/src/external/nlohmann")
@@ -26,3 +40,4 @@ if (TARGET conveyor_designer)
         target_link_libraries(conveyor_designer PRIVATE opengl32)
     endif ()
 endif ()
+

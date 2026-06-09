@@ -123,23 +123,79 @@ layout(set = 0, binding = 27, rgba32f) uniform writeonly image2D reservoirPosWri
 layout(set = 0, binding = 28, rgba32f) uniform readonly  image2D reservoirPosRead;
 layout(set = 0, binding = 29, rgba16f) uniform writeonly image2D reservoirWWrite;
 layout(set = 0, binding = 30, rgba16f) uniform readonly  image2D reservoirWRead;
+// Reflection denoiser AUX (ReBLUR-style), ping-pong (mirrors reflect 25/26). 31 = CUR
+// write, 32 = PREV read. .x = history length (accumulated frames, →fast convergence +
+// noise proxy), .y = E[L²] of the reflection luma (→ temporal variance), .z = reflection
+// hit distance (→ distance-correct blur width). The reflection denoise (channel 1) reads
+// CUR to drive a variance/history/hit-distance blur: wide where noisy/unconverged/moving,
+// narrow where converged (preserves the lobe detail).
+layout(set = 0, binding = 31, rgba16f) uniform writeonly image2D reflAuxWrite;
+layout(set = 0, binding = 32) uniform sampler2D reflAuxPrevTex;
+// Scene fog (homogeneous medium) — the SAME per-frame GpuFogUbo the PT path
+// consumes, so scene.fog drives both modes from one source of truth.
+// waterSurfaceY caps the medium (underwater fog stops at the surface).
+layout(set = 0, binding = 33, scalar) uniform FogUbo {
+    vec3  sigmaT;        // per-channel extinction (1/world unit)
+    float enabled;       // 1.0 = fog active
+    vec3  color;         // inscatter tint = single-scattering albedo
+    float anisotropy;    // HG g (drives the volumetric beam phase when fog is on)
+    float waterSurfaceY; // world-Y medium cap; 1e30 = unbounded
+} fog;
 
-// Temporal AA for the 1-mirror-ray reflection/glass: blend with the motion-
-// reprojected 1-frame history. The gbuffer JITTER varies the ray sub-pixel each
-// frame, so accumulating ~10 frames anti-aliases the 1-ray refraction/reflection
-// while staying SHARP (no spatial mush). Motion-scaled: static accumulates (AA),
-// motion falls back to the current sample (the refraction is view-dependent, so a
-// surface-motion reproject would ghost it). .a (roughness / glass marker) is kept
-// from the current sample. Off-screen / garbage history → current.
-vec4 reflTemporal(vec4 cur, vec2 uv) {
-    const vec2 mv   = texture(gbufMotionTex, uv).rg;
-    const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
-    const vec2 pUv  = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
-    if (any(lessThan(pUv, vec2(0.0))) || any(greaterThan(pUv, vec2(1.0)))) return cur;
-    const vec4 prev = texture(reflectPrevTex, pUv);
-    if (any(greaterThan(abs(prev.rgb), vec3(1e6)))) return cur;// NaN/garbage guard
-    const float a = mix(0.1, 1.0, smoothstep(0.001, 0.02, length(mv)));// static→accumulate (AA), motion→current
-    return vec4(mix(prev.rgb, cur.rgb, a), cur.a);
+// ReBLUR-style TEMPORAL accumulation for the reflection (+ glass). Adaptive blend
+// α = 1/historyLength → fast convergence early, then a long stable mean. Tracks the
+// luminance 2nd moment E[L²] so the channel-1 denoise can form temporal variance
+// (var = E[L²] − E[L]²) and size its blur by it. Writes the AUX buffer (binding 31:
+// .x=history, .y=E[L²]). The accumulated RADIANCE is the return value (→ reflectImage).
+//   RESET (history→1) when: off-screen reproject, surface mismatch (disocclusion), OR
+//   camera MOTION — the reflection is VIEW-DEPENDENT, so a surface-motion reproject can't
+//   follow the reflected content (it would ghost); on reset the spatial denoise blurs the
+//   fresh 1-sample wide (history=1 ⇒ wide), and on a held-still view history climbs and
+//   the blur narrows back to the converged (sharp) lobe. This is why it's pretty AND
+//   stable where the fixed-α version was only one or the other.
+vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N) {
+    const float curLum = dot(cur.rgb, vec3(0.2126, 0.7152, 0.0722));
+    const vec2  mv     = texture(gbufMotionTex, uv).rg;
+    const vec2  pNdc   = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
+    const vec2  pUv    = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
+    bool valid = all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)));
+    if (valid) {
+        const vec3 pn = texture(gbufNormalPrevTex, pUv).xyz * 2.0 - 1.0;
+        valid = dot(pn, pn) > 1e-6 && dot(N, normalize(pn)) > 0.9;// surface match (disocclusion)
+    }
+    // ROUGHNESS-AWARE motion policy. The old blanket reset (any camera motion →
+    // history=1) starved exactly the surfaces that need history most: a ROUGH lobe
+    // integrates a wide solid angle, so its reflection is nearly VIEW-INDEPENDENT
+    // and survives a surface reproject — like diffuse GI, which reprojects under
+    // motion with a short cap. Only near-MIRROR content actually shifts with the
+    // camera (a surface reproject can't follow it → ghost), so only that resets.
+    // In between, the cap blends: motion-scaled (24→6, the GI channel's pattern)
+    // for rough, down to 1 (reset) as roughness → mirror. Thresholds match the
+    // PT's view-dependence factor (1 - smoothstep(0.05, 0.30, roughness)).
+    const float rough = abs(cur.a);// .a < 0 = glass marker (frost gr) — same policy
+    float histCap = 32.0;
+    const float mvLen = length(mv);
+    if (mvLen > 0.004) {// above jitter
+        const float viewDepT  = 1.0 - smoothstep(0.05, 0.30, rough);// 1 = mirror-like
+        const float motionCap = mix(24.0, 6.0, smoothstep(0.004, 0.03, mvLen));
+        histCap = mix(motionCap, 1.0, viewDepT);
+        if (histCap < 1.5) valid = false;// near-mirror: hard reset (view-dependent)
+    }
+    const vec4 prevR = valid ? texture(reflectPrevTex, pUv) : vec4(0.0);
+    if (valid && any(greaterThan(abs(prevR.rgb), vec3(1e6)))) valid = false;// garbage guard
+    float histLen, moment;
+    vec3  accum;
+    if (valid) {
+        const vec2  pa = texture(reflAuxPrevTex, pUv).xy;
+        histLen = min(pa.x + 1.0, histCap);
+        const float a = 1.0 / histLen;
+        accum   = mix(prevR.rgb, cur.rgb, a);
+        moment  = mix(pa.y, curLum * curLum, a);
+    } else {
+        histLen = 1.0; accum = cur.rgb; moment = curLum * curLum;
+    }
+    imageStore(reflAuxWrite, px, vec4(histLen, moment, 0.0, 0.0));
+    return vec4(accum, cur.a);
 }
 
 layout(push_constant) uniform Pc {
@@ -153,6 +209,9 @@ layout(push_constant) uniform Pc {
     float fireflyClamp;      // luminance cap for emissive NEE samples (large = disabled)
     float oceanFineTileSize; // FFT fine-cascade tile (m); 0 = no ocean fine normal
     float oceanFoamTileSize; // world-space foam tile (m); 0 = no foam sampling
+    float volDensity;        // volumetric scattering σ (1/m); 0 = beams off
+    float volAniso;          // Henyey-Greenstein g for the beam phase
+    float starIntensity;     // procedural sky star field brightness; 0 = off
 } pc;
 
 // ── BRDF helpers (verbatim from shade_common.glsl) ──────────────────────────
@@ -226,6 +285,13 @@ vec2 fetchUvAt(int instIdx, int primId, vec2 bary) {
 //   cutoff < 0 (blend)  → occludes iff alpha ≥ 0.5 (deterministic shadow proxy)
 bool shadowOccludes(int instIdx, int primId, vec2 bary) {
     const MaterialDesc m = mats[instIdx];
+    // STRONG emitters never occlude — an analytic light that sits INSIDE its
+    // own glowing housing (a lighthouse lamp room) must shine through it. Same
+    // "a light never shadows itself" rule emissiveNEE/restirOccluded apply to
+    // emissive-triangle lights; threshold 1.0 keeps faintly-emissive props
+    // (glowing screens etc.) casting normal shadows.
+    const vec3 em = m.emissive * m.emissiveIntensity;
+    if (max(max(em.r, em.g), em.b) >= 1.0) return false;
     if (m.albedoTexIndex < 0 || m.alphaCutoff == 0.0) return true;// opaque
     const vec2  uv = fetchUvAt(instIdx, primId, bary);
     const int   ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
@@ -407,7 +473,8 @@ vec3 emissiveNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, vec3 albedo,
         // one for the peaked SPECULAR lobe: at low roughness a single sample lands
         // near the GGX peak and the firefly clamp leaves a bright "probe speckle"
         // highlight (which the PT, using BRDF sampling + MIS, never shows). Emitter
-        // specular is owned by the reflection path (a BRDF-sampled mirror ray).
+        // specular is owned by the reflection ray at near-mirror roughness and by
+        // emissiveSpecNEE on rough lobes (the specNEET split in main()).
         const vec3  H  = normalize(V + L);
         const vec3  Fr = fresnelSchlick(max(dot(V, H), 0.0), F0);
         const vec3  kd = (vec3(1.0) - Fr) * (1.0 - metalness);
@@ -417,6 +484,89 @@ vec3 emissiveNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, vec3 albedo,
         // geometry where TAA can't accumulate it away.
         const float lum = max(max(c.r, c.g), c.b);
         if (lum > pc.fireflyClamp) c *= pc.fireflyClamp / lum;
+        sum += c;
+    }
+    return sum / float(EM_SAMPLES);
+}
+
+// Coherent emitter SPECULAR NEE — the GGX-lobe analogue of emissiveNEE (same
+// deterministic stratified power-CDF picks + R2 barycentrics → settles
+// instantly, zero per-frame noise, same accepted emitter-coverage bias). For a
+// ROUGH reflective surface the stochastic reflection ray hits a small bright
+// emitter with probability p ≪ 1 → a firefly-clamped binomial spike train that
+// neither the temporal EMA nor the roughness blur can settle (= the constant
+// boiling around reflected lamps). For a BROAD lobe, light-sampling is the
+// low-variance estimator (the MIS logic): evaluate D·G·F toward the coherent
+// emitter set and scale the emitter's self-emission OUT of the stochastic ray
+// (gReflEmitterScale) so nothing is double-counted. Near-mirror stays with the
+// BRDF ray — a tight lobe either hits the emitter every frame (no variance) or
+// never, and NEE of a peaked lobe is the probe-speckle regime that made
+// emissiveNEE diffuse-only in the first place.
+vec3 emissiveSpecNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0,
+                     float roughness, float k, bool doShadows) {
+    if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
+    const int   emIters    = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
+    const int   EM_SAMPLES = 16;// matches emissiveNEE's emitter coverage
+    const vec3  shadowOrig = P + N * SHADOW_EPS;
+    vec3 sum = vec3(0.0);
+    for (int s = 0; s < EM_SAMPLES; ++s) {
+        const float xi = (float(s) + 0.5) / float(EM_SAMPLES) * pc.emissiveTotalPower;
+        uint lo = 0u, hi = pc.emissiveCount - 1u;
+        for (int it = 0; it < emIters; ++it) {
+            if (lo >= hi) break;
+            const uint mid = (lo + hi) >> 1u;
+            if (emissiveTris[mid].v1.w < xi) lo = mid + 1u; else hi = mid;
+        }
+        const EmTri t = emissiveTris[lo];
+        const float su1 = sqrt(fract(0.5 + float(s) * 0.7548776662));
+        const float r2  =      fract(0.5 + float(s) * 0.5698402909);
+        const vec3 lp = (1.0 - su1) * t.v0.xyz + (su1 * (1.0 - r2)) * t.v1.xyz + (su1 * r2) * t.v2.xyz;
+        const vec3 toL = lp - P;
+        const float dist2 = dot(toL, toL);
+        const float dist  = sqrt(max(dist2, 1e-20));
+        if (dist <= 1e-4) continue;
+        const vec3 L = toL / dist;
+        const float NdotL = dot(N, L);
+        if (NdotL <= 0.01) continue;
+        const vec3 lnRaw = cross(t.v1.xyz - t.v0.xyz, t.v2.xyz - t.v0.xyz);
+        const float lnLen = length(lnRaw);
+        if (lnLen < 1e-20 || t.v0.w <= 1e-20 || t.v2.w <= 0.0) continue;
+        const float cosLight = dot(-L, lnRaw / lnLen);
+        if (cosLight <= 0.05) continue;// front-facing only (matches emissiveNEE)
+        const float pickPdf = t.v2.w / pc.emissiveTotalPower;
+        const float p_omega = pickPdf * dist2 / (t.v0.w * cosLight);
+        if (p_omega <= 1e-20) continue;
+        // GGX spec toward the emitter sample — BRDF eval BEFORE the shadow ray:
+        // most samples sit outside the lobe (D≈0), so their ray is skipped and
+        // the per-pixel cost concentrates on the few in-lobe samples.
+        const vec3  H     = normalize(V + L);
+        const float NdotH = max(dot(N, H), 0.0);
+        const vec3  F     = fresnelSchlick(max(dot(V, H), 0.0), F0);
+        const float D     = distGGX(NdotH, roughness);
+        const float G     = geomSmithG1(NdotV, k) * geomSmithG1(NdotL, k);
+        vec3 c = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4) * NdotL * t.emission.rgb / p_omega;
+        const float lum = max(max(c.r, c.g), c.b);
+        if (lum <= 1e-4) continue;// outside the lobe → skip the shadow ray
+        if (lum > pc.fireflyClamp) c *= pc.fireflyClamp / lum;
+        if (doShadows) {
+            // Emitter-skipping shadow ray (a light never shadows itself) — same
+            // query as emissiveNEE's.
+            const vec3  toLs  = lp - shadowOrig;
+            const float dists = length(toLs);
+            rayQueryEXT rq;
+            rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
+                                  0xFFu, shadowOrig, 1e-3, toLs / max(dists, 1e-6), dists - 1e-2);
+            while (rayQueryProceedEXT(rq)) {
+                if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
+                    const MaterialDesc hm = mats[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false)];
+                    const vec3 hem = hm.emissive * hm.emissiveIntensity;
+                    if (max(max(hem.r, hem.g), hem.b) < 0.05)// not an emitter → real occluder
+                        rayQueryConfirmIntersectionEXT(rq);
+                }
+            }
+            if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT)
+                continue;
+        }
         sum += c;
     }
     return sum / float(EM_SAMPLES);
@@ -578,14 +728,81 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
             }
         }
     }
-    // Persist this frame's reservoir for next frame's temporal read. Cap the stored
-    // W (firefly bound) so a one-off high-W sample can't perpetuate via the
-    // multiplicative w_prev feedback (= static bright specks that never average out).
-    float persistW = r.W;
+    // ── Snapshot the PRE-SPATIAL reservoir ── this (NOT the post-spatial r) is what
+    // gets persisted for next frame's temporal merge, matching the PT (closest_hit
+    // Stage 1c) + WGPU. Persisting the post-spatial reservoir would feed spatial
+    // contributions — which don't generalise across reprojection — back into the
+    // temporal M, biasing the weights and producing visible temporal instability.
+    Reservoir rPreSpatial = r;
+    // Cap the persisted W (firefly bound) so a one-off high-W sample can't perpetuate
+    // via the multiplicative w_prev temporal feedback (= static bright specks that
+    // never average out). Shading below uses the unclamped post-spatial r.
+    float persistW = rPreSpatial.W;
     if (pc.fireflyClamp < 1e20) persistW = min(persistW, 5.0);
-    imageStore(reservoirPosWrite, px, vec4(r.lightPos, r.lightType));
-    imageStore(reservoirWWrite,   px, vec4(r.W_sum, r.M, persistW, r.p_hat));
 
+    // ── Stage 1c: spatial reuse ── (ported from closest_hit.rchit:1458)
+    // Tap a few random neighbours from the PREV-frame reservoir buffer (bindings
+    // 28/30), validate each against THIS pixel's surface (prev-normal cone + world
+    // distance — the same prev gbuffer the temporal stage validates against), and
+    // RIS-merge it after re-evaluating its target p_hat at OUR shading point. The
+    // M>=mTarget early-out means converged static pixels (high temporal M) skip it;
+    // the cost is spent where temporal reuse is weakest — freshly DISOCCLUDED pixels
+    // with little/no history (the frame-after-disocclusion noise the temporal-only
+    // path couldn't fix). M-cap 4/neighbour; spMax 5 static / 2 in motion (fewer
+    // stale taps under motion). Reads prev-frame neighbours so there's no second
+    // dispatch / barrier — exactly like the PT + WGPU.
+    {
+        const vec2  size   = vec2(float(pc.width), float(pc.height));
+        const vec3  camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        const float distC  = length(P - camPos);
+        const float mvLen  = length(texture(gbufMotionTex, (vec2(px) + 0.5) / size).rg);
+        const uint  spMax   = (mvLen > 0.01) ? 2u : 5u;
+        const float mTarget = 20.0;
+        const ivec2 maxPx   = ivec2(int(pc.width) - 1, int(pc.height) - 1);
+        for (uint sp = 0u; sp < spMax; ++sp) {
+            if (r.M >= mTarget) break;
+            const float ang = rnd(seed) * TWO_PI;
+            const float rad = sqrt(rnd(seed)) * 20.0;// 20px tap radius (matches the PT)
+            const ivec2 off = ivec2(int(rad * cos(ang)), int(rad * sin(ang)));
+            if (off.x == 0 && off.y == 0) continue;
+            const ivec2 spPx = clamp(px + off, ivec2(0), maxPx);
+            // Validate the neighbour's PREV surface vs ours: normal cone (rejects
+            // sky / differently-facing) + world distance (rejects depth jumps that
+            // share a normal, e.g. parallel floors). Reconstructs the neighbour's
+            // prev world pos with the current cam — a near-exact gate for the static
+            // camera where spatial reuse matters most; loosens harmlessly otherwise
+            // (a bad tap's p_hat re-eval keeps the merge unbiased).
+            const vec3 pn = texelFetch(gbufNormalPrevTex, spPx, 0).xyz * 2.0 - 1.0;
+            if (dot(pn, pn) < 1e-6 || dot(N, normalize(pn)) <= 0.7) continue;
+            const vec2  uvN  = (vec2(spPx) + 0.5) / size;
+            const vec2  ndcN = vec2(uvN.x * 2.0 - 1.0, -(uvN.y * 2.0 - 1.0));
+            const float dN   = texelFetch(gbufDepthPrevTex, spPx, 0).x;
+            const vec4  vhN  = cam.projInverse * vec4(ndcN, dN, 1.0);
+            const vec3  wpN  = (cam.viewInverse * vec4(vhN.xyz / vhN.w, 1.0)).xyz;
+            if (length(wpN - P) > 0.1 * distC) continue;
+            // Merge the neighbour's prev-frame reservoir (target p_hat re-eval'd here).
+            const vec4 spPos = imageLoad(reservoirPosRead, spPx);
+            const vec4 spWd  = imageLoad(reservoirWRead,   spPx);
+            if (spWd.z <= 0.0 || spWd.y <= 0.0 || spPos.w < 999.5) continue;// valid emissive only
+            const float spM    = min(spWd.y, 4.0);// per-neighbour M-cap
+            const LightInfoD spli = evalLightInfoEm(int(spPos.w), spPos.xyz, P);
+            const float spPhat = max(dot(N, spli.dir), 0.0) * lum3(spli.Le);
+            if (spPhat <= 0.0) continue;
+            const float wSp = spPhat * spM * spWd.z;
+            r.W_sum += wSp;
+            r.M     += spM;
+            if (rnd(seed) < wSp / max(r.W_sum, 1e-20)) {
+                r.lightPos = spPos.xyz; r.lightType = spPos.w; r.p_hat = spPhat;
+            }
+        }
+        finalizeReservoir(r);
+    }
+
+    // Persist the PRE-SPATIAL reservoir for next frame's temporal read.
+    imageStore(reservoirPosWrite, px, vec4(rPreSpatial.lightPos, rPreSpatial.lightType));
+    imageStore(reservoirWWrite,   px, vec4(rPreSpatial.W_sum, rPreSpatial.M, persistW, rPreSpatial.p_hat));
+
+    // Shading uses the POST-SPATIAL reservoir r (the improved current-frame estimate).
     if (r.W <= 0.0 || r.p_hat <= 0.0 || r.lightType < 999.5) return vec3(0.0);
     const LightInfoD li = evalLightInfoEm(int(r.lightType), r.lightPos, P);
     const float NdotL = max(dot(N, li.dir), 0.0);
@@ -659,12 +876,14 @@ vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
 vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed);// fwd decl
 vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint seed);// fwd decl (cheap 1-bounce GI)
 
-// When set, traceRadiance drops the DIRECT emission of its hits. Used by the
-// OPAQUE reflection so an emitter isn't counted twice: the surface's emissiveNEE
-// already adds the emitter's specular reflection analytically (solid-angle-
-// weighted → the dim, correct value the PT shows). Letting the mirror ray ALSO
-// hit the emitter at full radiance produced bright sub-lobe "probe speckles".
-bool gSuppressReflEmitter = false;
+// Scales the DIRECT emission of traceRadiance's hits — the emitter-specular
+// OWNERSHIP split for the opaque reflection. 1 = the ray owns emitter spec
+// (near-mirror: the tight lobe hits the emitter every frame → no variance).
+// 0 = emissiveSpecNEE owns it (rough lobes: a stochastic ray hits a small
+// bright emitter with p≪1 → a clamped binomial spike train = constant boiling;
+// dielectrics: F0≈0.04 → the full-radiance hit was a "probe speckle"). Blended
+// in between so nothing is double-counted at the crossover.
+float gReflEmitterScale = 1.0;
 
 // Diffuse indirect. TWO paths, selected by the denoiser flag (pc.flags bit 2):
 //  • DENOISER ON → REAL stochastic 1-bounce GI: a few cosine rays via traceRadiance
@@ -1098,7 +1317,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         const vec3 hitP = o + d * tHit;
         const vec3 hitDiffInd = sampleEnvLod(hitN, maxLod) + lights.ambient;
         radiance += tput * shadeDiffuseDirect(hitP, hitN, hitV, hAlbedo, hRough, hMetal,
-                                              (gSuppressReflEmitter ? vec3(0.0) : hEmissive),
+                                              hEmissive * gReflEmitterScale,
                                               doShadows, hitDiffInd,
                                               hm.sheenColor, hm.sheenRoughness,
                                               hm.specularIntensity, hm.specularColor, seed,
@@ -1232,10 +1451,14 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     const float r0    = pow((1.0 - ior) / (1.0 + ior), 2.0);
     const float F     = r0 + (1.0 - r0) * pow(1.0 - NdotV, 5.0);
 
-    // Reflected sky + scene (sharp). The reflection ray points up/out (away
-    // from the water), so it escapes to the sky or hits scene geometry cleanly.
+    // Reflected sky + scene. The reflection ray points up/out (away from the
+    // water), so it escapes to the sky or hits scene geometry cleanly. Env
+    // MISSES read a MILDLY blurred mip — point features in the env (stars, a
+    // small bright moon) otherwise reflect off the chop-perturbed normals as
+    // per-pixel white speckle; smooth day skies are visually unchanged.
     const vec3 R = reflect(-V, N);
-    const vec3 reflectColor = traceRadiance(P + N * SHADOW_EPS, R, doShadows, maxLod, 0.0, seed);
+    const vec3 reflectColor = traceRadiance(P + N * SHADOW_EPS, R, doShadows, maxLod,
+                                            0.12 * maxLod, seed);
 
     // Transmission: ANALYTIC deep-water body — deliberately NOT a refraction
     // ray. A downward ray self-intersects this same choppy surface (adjacent
@@ -1257,9 +1480,16 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // the deep blue SATURATED. A view-depth term deepens it looking straight down
     // (longer water column) → the foreground-deep / horizon-bright gradient the PT
     // shows. Dimmed (×0.45) because the deep body sits over a near-black seabed.
-    const float skyLum    = dot(sampleEnvLod(N, maxLod), vec3(0.2126, 0.7152, 0.0722));
-    const float depthFade = mix(1.0, 0.4, NdotV);// darker looking down into the column
-    const vec3  transmitColor = tint * (skyLum * 0.45 + lights.ambient) * depthFade;
+    //
+    // BOTH terms keyed on SMOOTH per-view quantities, NOT the chop-perturbed N:
+    // skyLum at the fixed zenith, depthFade on the view ELEVATION (V.y). Keying
+    // them on N made every fine-cascade crest a 2.5×-brighter saturated-teal
+    // BLOTCH (the deferred ocean's "cyan patches" — diagnosed by isolating this
+    // term: the blotch pattern was entirely transmit). The analytic water BODY is
+    // a smooth volumetric quantity; the chop belongs to Fresnel/reflection only.
+    const float skyLum    = dot(sampleEnvLod(vec3(0.0, 1.0, 0.0), maxLod), vec3(0.2126, 0.7152, 0.0722));
+    const float depthFade = mix(1.0, 0.4, clamp(V.y, 0.0, 1.0));// darker looking down into the column
+    const vec3  transmitColor = tint * (skyLum * 0.35 + lights.ambient) * depthFade;
 
     vec3 col = mix(transmitColor, reflectColor, F);
 
@@ -1294,6 +1524,53 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
             vec3 c = spec * ndl * lights.dirLights[i].color * vis;
             // Directional lights are deltas → GGX spikes; clamp so a glint blooms
             // bright but never fireflies. (×4 over the global clamp → bright suns.)
+            const float cl = max(max(c.r, c.g), c.b);
+            const float gMax = pc.fireflyClamp * 4.0;
+            if (cl > gMax) c *= gMax / cl;
+            col += c;
+        }
+        // SPOT lights — same GGX glints with cone + range + inverse-square
+        // attenuation, so a sweeping beam (lighthouse) lights the waves it
+        // crosses instead of existing only as the in-scattered air volume.
+        for (uint i = 0u; i < lights.spotCount; ++i) {
+            vec3 toL = lights.spotLights[i].position - P;
+            const float dist = length(toL);
+            if (dist < 1e-4) continue;
+            toL /= dist;
+            const float ndl = dot(N, toL);
+            if (ndl <= 0.0) continue;
+            const float spotCos   = dot(-toL, lights.spotLights[i].direction);
+            const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
+                                               lights.spotLights[i].cosAngleInner, spotCos);
+            if (spotAtten <= 0.0) continue;
+            float atten = spotAtten / max(pow(dist, lights.spotLights[i].decay), 0.01);
+            const float range = lights.spotLights[i].range;
+            if (range > 0.0) {
+                const float tt = dist / range;
+                const float t4 = tt * tt * tt * tt;
+                const float wnd = max(1.0 - t4, 0.0);
+                atten *= wnd * wnd;
+            }
+            if (atten <= 1e-6) continue;
+            const float vis = doShadows ? shadowVis(sunOrig, toL, dist - 1e-2) : 1.0;
+            if (vis <= 0.0) continue;
+            const vec3  H   = normalize(V + toL);
+            const float ndh = max(dot(N, H), 0.0);
+            const float vdh = max(dot(V, H), 0.0);
+            const float Gs  = geomSmithG1(NdotV, kG) * geomSmithG1(ndl, kG);
+            const float Fb  = r0 + (1.0 - r0) * pow(1.0 - vdh, 5.0);
+            float spec = distGGX(ndh, specRough) * Gs * Fb / max(4.0 * NdotV * ndl, 1e-4);
+            if (pm.clearcoat > 0.0) {
+                const float Fc = 0.04 + 0.96 * pow(1.0 - vdh, 5.0);
+                spec += pm.clearcoat * distGGX(ndh, ccRough) * Gs * Fc / max(4.0 * NdotV * ndl, 1e-4);
+            }
+            // Beam POOL — a broad faint sheen where the beam strikes the
+            // surface. Real water returns part of a grazing beam diffusely
+            // (micro-facets beyond the GGX tail, spray, top-layer scatter);
+            // at roughness 0.04 the pure specular lobe is so tight the lit
+            // pool would otherwise be invisible unless perfectly aligned.
+            spec += 0.035 / PI;
+            vec3 c = spec * ndl * lights.spotLights[i].color * atten * vis;
             const float cl = max(max(c.r, c.g), c.b);
             const float gMax = pc.fireflyClamp * 4.0;
             if (cl > gMax) c *= gMax / cl;
@@ -1455,6 +1732,145 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
     return sum / float(kGlassSamples);
 }
 
+// ── Volumetric SPOT-light beams (single scattering, ray-marched) ─────────────
+// In-scattered radiance along [ro, ro+rd·tMax] from every spot light — the
+// lighthouse-beam / searchlight look. The march window is the ray∩sphere
+// (light, range) segment: any in-cone point lies within `range` of the light,
+// and a ray-sphere clip is unconditionally robust where exact cone-interval
+// logic (two nappes, axis slab) is fiddly; the per-step cone smoothstep then
+// carves the actual beam shape. ONE jittered march per pixel per frame (PCG,
+// frame-keyed) → TAA averages the stratification to smooth. No shadow rays
+// through the medium — open-air beams are rarely occluded and this keeps the
+// pass pure ALU. The base surface is NOT extinction-attenuated (σ is haze-thin;
+// attenuating would wash the whole scene for a localized effect) — the term is
+// purely additive in-scatter. Skipped entirely when pc.volDensity == 0.
+float hgPhase(float mu, float g) {
+    const float g2 = g * g;
+    return (1.0 - g2) / (4.0 * PI * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5));
+}
+
+// ── Scene fog (deferred) ─────────────────────────────────────────────────────
+// Beer-Lambert extinction toward the fog colour over the PRIMARY distance —
+// the raster-side approximation of the PT's true volumetric scattering (which
+// also fogs reflected/refracted sub-paths; here only the camera→surface leg is
+// fogged). Sky pixels stay unfogged (three.js background semantics). The
+// fogged path is clipped to y < waterSurfaceY, so the underwater medium ends
+// exactly at the wave surface.
+float fogPathLength(vec3 a, vec3 b) {
+    const float full = distance(a, b);
+    if (fog.waterSurfaceY > 1e29) return full;
+    const float ya = a.y - fog.waterSurfaceY;
+    const float yb = b.y - fog.waterSurfaceY;
+    if (ya >= 0.0 && yb >= 0.0) return 0.0;       // segment entirely above the medium
+    if (ya < 0.0 && yb < 0.0) return full;        // entirely inside
+    const float t = ya / (ya - yb);               // surface crossing
+    return (ya < 0.0) ? full * t : full * (1.0 - t);
+}
+vec3 applySceneFog(vec3 col, vec3 ro, vec3 hit) {
+    if (fog.enabled < 0.5) return col;
+    const float d = fogPathLength(ro, hit);
+    if (d <= 0.0) return col;
+    const vec3 tr = exp(-fog.sigmaT * d);
+    // In-scatter = fog ALBEDO × an ambient-light estimate (env mean + scene
+    // ambient). The fog colour is a single-scattering albedo in this engine
+    // (the PT lights the medium with real NEE) — mixing toward it directly,
+    // three.js-style, makes fog GLOW in dark scenes (a black Cornell room
+    // washed out to white). Spot-light in-scatter is added separately by the
+    // fog-driven volumetricSpotScatter march (the god rays).
+    const vec3 fogLight = lights.ambient
+                        + sampleEnvLod(vec3(0.0, 1.0, 0.0), float(max(pc.envMipCount, 1u) - 1u));
+    return col * tr + fog.color * fogLight * (vec3(1.0) - tr);
+}
+// ── Procedural star field (sky pixels) ───────────────────────────────────────
+// Hash-based stars evaluated in DIRECTION space — resolution-independent and
+// pixel-crisp at any FOV/zoom. Baked env-texture stars are sub-texel features,
+// so bilinear magnification (+ the TAA upscale) rendered every one of them as a
+// soft ~14 px blob no matter the env resolution. Cells on the (azimuth,
+// elevation) grid; ~2% of cells host a star at a hashed sub-cell position with
+// a power-law brightness; a tight gaussian gives ~1 px points that twinkle
+// subtly under the TAA jitter (which is what real stars do). Stable across
+// frames (no frame term). Applied to SKY pixels only — points this small are
+// invisible in rough reflections anyway.
+vec3 proceduralStars(vec3 dir) {
+    if (pc.starIntensity <= 0.0 || dir.y <= 0.0) return vec3(0.0);
+    const float SCALE = 220.0;
+    const vec2  sph = vec2(atan(dir.z, dir.x), asin(clamp(dir.y, -1.0, 1.0)));
+    const vec2  g   = vec2(sph.x, sph.y) * SCALE;
+    vec3 sum = vec3(0.0);
+    for (int dy = -1; dy <= 1; ++dy)
+    for (int dx = -1; dx <= 1; ++dx) {// 3×3 so stars near cell edges don't clip
+        const vec2  cell = floor(g) + vec2(float(dx), float(dy));
+        const float h    = hash21(cell * 0.193 + 11.71);
+        if (h > 0.02) continue;// ~2% of cells → naked-eye star density
+        const vec2  sp = cell + vec2(hash21(cell + 31.7), hash21(cell + 57.3));
+        const vec2  d  = g - sp;
+        const float r2 = dot(d, d);
+        const float bright = 0.4 + 2.4 * pow(hash21(cell + 91.1), 8.0);// many dim, few bright
+        sum += vec3(1.0, 1.0, 1.06) * (bright * exp(-r2 * 24.0));
+    }
+    // Horizon fade — stars dissolve into the atmospheric band, no hard pop.
+    return sum * (pc.starIntensity * smoothstep(0.0, 0.05, dir.y));
+}
+
+vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
+    // Scene fog drives the march when active (σ, HG g, and the medium albedo
+    // tint all come from the fog UBO → spotlight god rays appear automatically
+    // in any fogged deferred scene); pc.volDensity remains the explicit knob
+    // for clear-air beams (the lighthouse).
+    const bool  fogDriven = fog.enabled > 0.5;
+    const float sigma = fogDriven ? max(dot(fog.sigmaT, vec3(1.0 / 3.0)), pc.volDensity)
+                                  : pc.volDensity;
+    const float hgG   = fogDriven ? fog.anisotropy : pc.volAniso;
+    const vec3  medAlbedo = fogDriven ? fog.color : vec3(1.0);
+    if (sigma <= 0.0 || lights.spotCount == 0u) return vec3(0.0);
+    const int   STEPS = 40;
+    uint seed = pcgHash(uint(px.x) * 7919u + pcgHash(uint(px.y) * 104729u + pc.frame * 6271u));
+    const float jitter = rnd(seed);
+    vec3 sum = vec3(0.0);
+    for (uint i = 0u; i < lights.spotCount; ++i) {
+        const SpotLight sl = lights.spotLights[i];
+        const float range = (sl.range > 0.0) ? sl.range : 200.0;
+        const vec3  oc   = ro - sl.position;
+        const float b    = dot(oc, rd);
+        const float c    = dot(oc, oc) - range * range;
+        const float disc = b * b - c;
+        if (disc <= 0.0) continue;
+        const float sq = sqrt(disc);
+        const float t0 = max(-b - sq, 0.0);
+        const float t1 = min(-b + sq, tMax);
+        if (t1 <= t0) continue;
+        const float dt = (t1 - t0) / float(STEPS);
+        vec3 acc = vec3(0.0);
+        for (int s = 0; s < STEPS; ++s) {
+            const float t = t0 + (float(s) + jitter) * dt;
+            const vec3  x = ro + rd * t;
+            vec3  toL = sl.position - x;
+            const float dist = length(toL);
+            if (dist < 1e-3) continue;
+            toL /= dist;
+            const float spotCos = dot(-toL, sl.direction);
+            const float cone    = smoothstep(sl.cosAngleOuter, sl.cosAngleInner, spotCos);
+            if (cone <= 0.0) continue;
+            // Inverse-square with a 1 m clamp (no firefly core at the lamp) +
+            // the same range window the surface path applies.
+            float atten = 1.0 / max(dist * dist, 1.0);
+            const float tr  = dist / range;
+            const float t4  = tr * tr * tr * tr;
+            const float wnd = max(1.0 - t4, 0.0);
+            atten *= wnd * wnd;
+            // HG phase: incoming (light→x) vs outgoing (x→camera = -rd).
+            const float mu    = dot(-toL, -rd);
+            const float phase = hgPhase(mu, hgG);
+            // Transmittance camera→x and light→x (uniform thin haze).
+            const float trans = exp(-sigma * (t + dist));
+            acc += sl.color * (cone * atten * phase * trans);
+        }
+        // σ_s = σ_t · albedo: the medium's tint scales what gets IN-scattered.
+        sum += acc * medAlbedo * (sigma * dt);
+    }
+    return sum;
+}
+
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
@@ -1479,7 +1895,12 @@ void main() {
         const vec4 tVS   = cam.projInverse * vec4(ndc, 1.0, 1.0);
         const vec3 dirVS = normalize(tVS.xyz / tVS.w);
         const vec3 dirWS = normalize((cam.viewInverse * vec4(dirVS, 0.0)).xyz);
-        imageStore(outImage, px, vec4(sampleEnvLod(dirWS, 0.0), 1.0));
+        // Sky pixels march the beams too — a lighthouse beam against the night
+        // sky is exactly where the volumetric is most visible.
+        const vec3 sky = sampleEnvLod(dirWS, 0.0)
+                       + proceduralStars(dirWS)
+                       + volumetricSpotScatter(camPos, dirWS, 2000.0, px);
+        imageStore(outImage, px, vec4(sky, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         return;
     }
@@ -1488,9 +1909,13 @@ void main() {
     const vec4  am     = texelFetch(gbufAlbedoTex, px, 0);
     const vec3  albedo = am.rgb;
 
-    // Unlit (MeshBasicMaterial, roughness sentinel < 0): emit base colour.
+    // Unlit (MeshBasicMaterial, roughness sentinel < 0): emit base colour
+    // (fogged by primary distance — three.js fogs basic materials too).
     if (nTap.w < 0.0) {
-        imageStore(outImage, px, vec4(albedo, 1.0));
+        const float depthU = texelFetch(gbufDepthTex, px, 0).x;
+        const vec4  vhU    = cam.projInverse * vec4(ndc, depthU, 1.0);
+        const vec3  wpU    = (cam.viewInverse * vec4(vhU.xyz / vhU.w, 1.0)).xyz;
+        imageStore(outImage, px, vec4(applySceneFog(albedo, camPos, wpU), 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         return;
     }
@@ -1556,8 +1981,10 @@ void main() {
     // it milky-teal ocean water instead of clear refraction. Thin-walled glass
     // now falls through to the refractive glass branch below like closed glass.
     if (pm.thinWalled != 0 && pm.transmission > 0.0 && geoms[id - 1u].foamAddress != 0ul) {
-        const vec3 wcol = shadeWater(worldPos, N, V, pm, int(id - 1u),
-                                     shadowsOn, maxLod, pc.frame, seed);
+        vec3 wcol = shadeWater(worldPos, N, V, pm, int(id - 1u),
+                               shadowsOn, maxLod, pc.frame, seed);
+        wcol = applySceneFog(wcol, camPos, worldPos);
+        wcol += volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);
         imageStore(outImage, px, vec4(wcol, 1.0));
         imageStore(indirectImage, px, vec4(0.0));
         imageStore(reflectImage, px, vec4(0.0));// water shades its own reflection inline
@@ -1668,18 +2095,53 @@ void main() {
     // IS the gloss — and recombines. Pre-weighted by the spec BRDF × reflBlend so
     // the denoise just blurs + adds. Glass/sheen reflect inline below (excluded).
     const bool opaqueRefl = (pm.transmission <= 0.0) && (dot(pm.sheenColor, pm.sheenColor) <= 0.0);
+    // ── Emitter-specular ESTIMATOR SPLIT by lobe width ──────────────────────
+    // specNEET: 0 = near-mirror (the BRDF ray owns emitter spec — tight lobe hits
+    // the emitter every frame, no variance, crisp lamp image), 1 = rough (the
+    // coherent emissiveSpecNEE owns it — deterministic, settles instantly; the
+    // ray's emitter self-emission is scaled out via gReflEmitterScale so nothing
+    // double-counts). The NEE add is faded by reflBlend so emitter spec follows
+    // the same ≥0.7-roughness specular cutoff as the rest of the spec model.
+    const float specNEET = smoothstep(0.10, 0.25, roughness);
+    if (opaqueRefl && reflBlend > 0.0 && specNEET > 0.0 && pc.emissiveCount > 0u) {
+        const float kS = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+        lit += (specNEET * reflBlend)
+             * emissiveSpecNEE(worldPos, N, V, NdotV, F0, roughness, kS, shadowsOn);
+    }
     vec3 reflOut = vec3(0.0);
     if (reflBlend > 0.0 && opaqueRefl) {
         const float missLod = roughness * maxLod;// ray-miss reads the roughness-blurred env mip
-        // Suppress emitter self-emission in the reflection of DIELECTRICS: there the
-        // Fresnel reflectance is tiny (F0≈0.04) so a reflected small emitter should
-        // be ~invisible (the PT shows nothing), yet the full-radiance mirror-ray hit
-        // produced bright "probe speckles". Metals (F0≈albedo) DO show bright emitter
-        // reflections — keep those (BRDF-sampled = sharp + correct). emissiveNEE is
-        // now diffuse-only, so this is the sole emitter-specular path either way.
-        gSuppressReflEmitter = (metalness < 0.5);
-        vec3 r = traceRadiance(shadowOrig, R, shadowsOn, maxLod, missLod, seed);
-        gSuppressReflEmitter = false;
+        // Emitter self-emission scale for the ray (the other half of the split):
+        // DIELECTRICS → 0: F0≈0.04, a reflected small emitter is ~invisible in the
+        // PT, yet a full-radiance hit produced bright "probe speckles" (their faint
+        // correct highlight now comes from emissiveSpecNEE). METALS → (1−specNEET):
+        // near-mirror keeps the sharp BRDF-sampled lamp image; rough hands the
+        // energy to the NEE above.
+        gReflEmitterScale = (metalness < 0.5) ? 0.0 : (1.0 - specNEET);
+        // GGX-importance-sample the reflection LOBE — but ONLY where it's WIDE
+        // (roughness ≥ kReflStochastic). A NARROW lobe at 1 spp is a spike train
+        // on any high-contrast reflected content (a lamp, a tight highlight: hit
+        // probability p ≪ 1 per frame → clamped binomial boiling that the narrow
+        // low-rough blur correctly refuses to smooth — the "speckles persist
+        // below 0.25" band). There the DETERMINISTIC mirror ray is the better
+        // estimator: a stable image every frame, with the reflection denoise's
+        // roughness-scaled blur AS the gloss (the original design). Where the
+        // lobe is wide, the stochastic sample is the better estimator: correct
+        // parallax + roughening, low-contrast per sample, wide blur, the SVGF
+        // temporal converges it — and emissiveSpecNEE owns emitter spec (the
+        // threshold aligns with specNEET's upper edge so the handoff is exact).
+        const float kReflStochastic = 0.25;
+        uint reflSeed = pcgHash(uint(px.x) + pcgHash(uint(px.y) + pcgHash(pc.frame * 2654435761u + 7u)));
+        vec3 Rd = (roughness < kReflStochastic) ? R : sampleGGXReflection(V, N, roughness, reflSeed);
+        // BELOW-HORIZON guard: plain NDF sampling (no VNDF) reflects under the
+        // surface for a good fraction of samples at grazing view / high roughness.
+        // Those rays start at shadowOrig pointing INTO the surface → graze the
+        // backside / floor at epsilon distance → dark+erratic samples = grain that
+        // no amount of denoising should have to absorb. Mirror fallback matches
+        // the bounce-continuation guard inside traceRadiance.
+        if (dot(Rd, N) <= 0.0) Rd = R;
+        vec3 r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed);
+        gReflEmitterScale = 1.0;
         const float rl = max(max(r.r, r.g), r.b);// firefly clamp the single sample
         if (rl > pc.fireflyClamp) r *= pc.fireflyClamp / rl;
         reflOut = r * (F0 * ab.x + ab.y) * reflBlend;
@@ -1687,7 +2149,7 @@ void main() {
     if (demodIndirect) {
         // Denoise ON: temporally AA the sharp reflection, then hand it to the
         // roughness-blur denoise pass.
-        imageStore(reflectImage, px, reflTemporal(vec4(reflOut, roughness), uv));
+        imageStore(reflectImage, px, reflSVGFTemporal(vec4(reflOut, roughness), px, uv, N));
     } else {
         // Denoise OFF (or glass/sheen, where reflOut==0): inline sharp reflection.
         lit += reflOut;
@@ -1737,7 +2199,7 @@ void main() {
                 // + an ID-based (not normal) edge stop so the blur smooths ACROSS the
                 // curved surface — refraction is far more normal-sensitive than
                 // reflection, so 1 ray aliases into blocky speckles without it.
-                imageStore(reflectImage, px, reflTemporal(vec4(glassCol * gt, -gr), uv));
+                imageStore(reflectImage, px, reflSVGFTemporal(vec4(glassCol * gt, -gr), px, uv, N));
                 lit = lit * (1.0 - gt);
             } else {
                 lit = mix(lit, glassCol, gt);// denoise off → inline (sharp, no frost)
@@ -1745,6 +2207,8 @@ void main() {
         }
     }
 
+    lit = applySceneFog(lit, camPos, worldPos);// extinction first; the beam march carries its own
+    lit += volumetricSpotScatter(camPos, -V, length(worldPos - camPos), px);
     imageStore(outImage, px, vec4(lit, 1.0));
     // SVGF TEMPORAL stage for the demod GI — now with REPROJECTION (kills motion
     // ghosting). Read the 1-frame GI history (the OTHER fif index, giPrevTex) at

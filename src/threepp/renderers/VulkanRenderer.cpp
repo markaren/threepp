@@ -73,6 +73,9 @@
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/Texture.hpp"
 
+// stb_image_write — implementation is already compiled in GLRenderer.cpp.
+#include "stb_image_write.h"
+
 #include "threepp/renderers/vulkan/shaders/raygen.rgen.spv.h"
 #include "threepp/renderers/vulkan/shaders/raygen.rgen.ser.spv.h"
 #include "threepp/renderers/vulkan/shaders/miss.rmiss.spv.h"
@@ -320,6 +323,12 @@ namespace threepp {
             // frame from the soft body's tet texture image.
             Buffer tetPos     {};
             VkDeviceSize tetPosBytes = 0;
+            // Zero-copy interop (enableSoftBodyInterop): when tetPosExt holds a
+            // buffer, it replaces tetPos as the shader's binding-6 source and
+            // tetPosExternalCopy (a CUDA device→device copy registered by the
+            // PhysX glue) replaces the CPU upload in refreshTetBlas.
+            vulkan::ExternalBuffer tetPosExt {};
+            std::function<void()>  tetPosExternalCopy;
             uint32_t vertexCount    = 0;
             uint32_t primitiveCount = 0;
             bool     indexed        = false;
@@ -1023,6 +1032,7 @@ namespace threepp {
             Image2D       atrousA;      // rgba16f — SVGF multi-pass à-trous ping-pong (rgb=GI, a=variance); STORAGE scratch
             Image2D       atrousB;      // rgba16f — SVGF multi-pass à-trous ping-pong (the other half)
             Image2D       reflect;      // rgba16f — sharp 1-mirror-ray reflection radiance (.rgb), demodulated; roughness-blurred by the reflection denoise. STORAGE
+            Image2D       reflAux;      // rgba16f — reflection-denoiser auxiliary (ping-pong, mirrors `reflect`: STORAGE write + SAMPLED prev-frame read)
             Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
             // Hybrid raster overlay's UNJITTERED depth attachment. Filled by
             // an extra depth-only prepass (overlay_depth.vert) right after
@@ -1248,6 +1258,12 @@ namespace threepp {
         // Uses the deterministic Fibonacci 64-sample gather (clean + settles), so
         // it's the realistic look WITHOUT the old per-frame flicker.
         bool  deferredAO_ = true;
+        // Deferred volumetric spot-light beams (ray-marched single scattering in
+        // deferred_shade.comp). σ = 0 disables (the march is skipped entirely).
+        float deferredVolDensity_ = 0.f;
+        float deferredVolAniso_   = 0.55f;
+        // Procedural direction-space star field on deferred sky pixels (0 = off).
+        float deferredStarIntensity_ = 0.f;
 
         // Raster-first deferred lighting (RenderMode::RasterFirst). Shades the
         // material G-buffer analytically into bloom_->sceneHdr, replacing the
@@ -1680,6 +1696,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), st->restInv1);
                 destroyBuffer(ctx->allocator(), st->restInv2);
                 destroyBuffer(ctx->allocator(), st->tetPos);
+                vulkan::destroyExternalBuffer(d, st->tetPosExt);
                 destroyBuffer(ctx->allocator(), st->blasScratch);
                 auto& rec = st->blas;
                 if (!rec) continue;
@@ -2596,6 +2613,16 @@ namespace threepp {
         // BLAS rebuild — recorded in recordCommandBuffer next to the skinned path.
         void refreshTetBlas(Mesh& m, TetMeshState& st) {
             if (!st.blas) return;
+            // Zero-copy interop: the registered CUDA device→device copy writes the
+            // deformed tet positions straight into the exported binding-6 buffer —
+            // no host readback, no DataTexture, no map/memcpy. Runs at the SAME
+            // frame point as the CPU upload below, so the (pre-existing, benign)
+            // overlap with a still-in-flight prior frame's dispatch is unchanged.
+            if (st.tetPosExt.handle != VK_NULL_HANDLE) {
+                if (st.tetPosExternalCopy) st.tetPosExternalCopy();
+                pendingTetRebuilds_.push_back(&st);
+                return;
+            }
             auto mat = m.material();
             if (!mat || !mat->tetTexture) return;
             const auto& tetImg = mat->tetTexture->image().data<float>();
@@ -2607,6 +2634,68 @@ namespace threepp {
             std::memcpy(mapped, tetImg.data(), bytes);
             vmaUnmapMemory(ctx->allocator(), st.tetPos.alloc);
             pendingTetRebuilds_.push_back(&st);
+        }
+
+        // Rewrite binding 6 (tetPos — see tet_skinning.comp) of a tet mesh's
+        // descriptor set to point at `buf`. Used by the interop enable/disable
+        // swap; the other 8 bindings are untouched.
+        void rewriteTetPosBinding(TetMeshState& st, VkBuffer buf) {
+            VkDescriptorBufferInfo bi{};
+            bi.buffer = buf;
+            bi.offset = 0;
+            bi.range  = VK_WHOLE_SIZE;
+            VkWriteDescriptorSet wr{};
+            wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr.dstSet          = st.tetDescSet;
+            wr.dstBinding      = 6;
+            wr.descriptorCount = 1;
+            wr.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            wr.pBufferInfo     = &bi;
+            vkUpdateDescriptorSets(ctx->device(), 1, &wr, 0, nullptr);
+        }
+
+        // Zero-copy interop enable: swap the mesh's tet-position buffer for an
+        // EXPORTED dedicated device allocation and register the CUDA copy that
+        // fills it each frame. Once-per-body; drains the device (the in-flight
+        // frames' dispatches read the buffer being replaced, and this is a
+        // registration-time call, not a per-frame one).
+        VulkanRenderer::SoftBodyInteropHandle
+        enableSoftBodyInterop(const Mesh& mesh, std::function<void()> deviceCopy) {
+            auto it = tetMeshStates.find(&mesh);
+            if (it == tetMeshStates.end() || !ctx->externalMemorySupported()) return {};
+            auto& st = *it->second;
+            if (st.tetPosExt.handle != VK_NULL_HANDLE) {// already enabled — same handle
+                st.tetPosExternalCopy = std::move(deviceCopy);
+                return {st.tetPosExt.osHandle, static_cast<size_t>(st.tetPosExt.size)};
+            }
+            if (st.tetPosBytes == 0 || st.tetDescSet == VK_NULL_HANDLE) return {};
+            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (softbody interop enable)");
+            st.tetPosExt = vulkan::createExternalBuffer(
+                    ctx->physicalDevice(), ctx->device(), st.tetPosBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+            rewriteTetPosBinding(st, st.tetPosExt.handle);
+            destroyBuffer(ctx->allocator(), st.tetPos);// CPU-path buffer no longer read
+            st.tetPosExternalCopy = std::move(deviceCopy);
+            return {st.tetPosExt.osHandle, static_cast<size_t>(st.tetPosExt.size)};
+        }
+
+        // Interop disable / CUDA-import-failure fallback: restore the host-visible
+        // VMA buffer and the CPU upload path. The caller must have stopped (or
+        // never started) the CUDA writes into the exported memory.
+        void disableSoftBodyInterop(const Mesh& mesh) {
+            auto it = tetMeshStates.find(&mesh);
+            if (it == tetMeshStates.end()) return;
+            auto& st = *it->second;
+            if (st.tetPosExt.handle == VK_NULL_HANDLE) return;
+            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (softbody interop disable)");
+            st.tetPos = createBuffer(
+                    ctx->allocator(), ctx->device(), st.tetPosBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            rewriteTetPosBinding(st, st.tetPos.handle);
+            vulkan::destroyExternalBuffer(ctx->device(), st.tetPosExt);
+            st.tetPosExternalCopy = nullptr;
         }
 
         // Per-frame refresh op for a plain (non-skinned/non-displaced/non-morphed)
@@ -4964,6 +5053,7 @@ namespace threepp {
                         destroyBuffer(ctx->allocator(), it->second->restInv1);
                         destroyBuffer(ctx->allocator(), it->second->restInv2);
                         destroyBuffer(ctx->allocator(), it->second->tetPos);
+                        vulkan::destroyExternalBuffer(ctx->device(), it->second->tetPosExt);
                         destroyBuffer(ctx->allocator(), it->second->blasScratch);
                         auto& rec = it->second->blas;
                         if (rec) {
@@ -7379,6 +7469,7 @@ namespace threepp {
                 destroyImage2D(ctx->allocator(), d, g.atrousA);
                 destroyImage2D(ctx->allocator(), d, g.atrousB);
                 destroyImage2D(ctx->allocator(), d, g.reflect);
+                destroyImage2D(ctx->allocator(), d, g.reflAux);
                 destroyImage2D(ctx->allocator(), d, g.depth);
                 destroyImage2D(ctx->allocator(), d, g.unjitDepth);
                 g.width  = 0;
@@ -7528,6 +7619,11 @@ namespace threepp {
                 g.reflect = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                                     VK_IMAGE_ASPECT_COLOR_BIT, N("reflect"));
+                // Reflection-denoiser auxiliary — mirrors `reflect` exactly (STORAGE
+                // write + SAMPLED prev-frame read, ping-ponged across frames-in-flight).
+                g.reflAux = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT, N("reflAux"));
                 g.depth  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
                                                    depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
                                                    N("depth"));
@@ -7602,6 +7698,7 @@ namespace threepp {
                 pushInit(g.atrousA.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.atrousB.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.reflect.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.reflAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
                 pushInit(g.depth.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
             }
             vkCmdPipelineBarrier(initCb,
@@ -9558,10 +9655,13 @@ namespace threepp {
             std::array<VkImageView, kFramesInFlight> atrousAViews{};
             std::array<VkImageView, kFramesInFlight> atrousBViews{};
             std::array<VkImageView, kFramesInFlight> reflectViews{};
+            std::array<VkImageView, kFramesInFlight> reflAuxViews{};
             std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
+            std::array<VkBuffer, kFramesInFlight> fogBufs{};
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
                 camBufs[f]       = cameraUbos[f].handle;
                 lightBufs[f]     = lightsUbos[f].handle;
+                fogBufs[f]       = fogUbos[f].handle;
                 matBufs[f]       = materialDescsBuffers[f].handle;
                 emBufs[f]        = emissiveTriBuffers[f].handle;
                 normalViews[f]   = rasterGbufs[f].normal.view;
@@ -9575,6 +9675,7 @@ namespace threepp {
                 atrousAViews[f]  = rasterGbufs[f].atrousA.view;
                 atrousBViews[f]  = rasterGbufs[f].atrousB.view;
                 reflectViews[f]  = rasterGbufs[f].reflect.view;
+                reflAuxViews[f]  = rasterGbufs[f].reflAux.view;
                 sceneHdrViews[f] = bloom_->sceneHdrView(f);
             }
             // Bindless material-texture array for reflected-hit texturing —
@@ -9598,7 +9699,10 @@ namespace threepp {
             in.atrousA          = atrousAViews.data();
             in.atrousB          = atrousBViews.data();
             in.reflect          = reflectViews.data();
+            in.reflAux          = reflAuxViews.data();
             in.sceneHdr         = sceneHdrViews.data();
+            in.fogBuf           = fogBufs.data();
+            in.fogRange         = sizeof(GpuFogUbo);
             in.tlas             = tlas;
             in.materialBuf      = matBufs.data();
             in.geomDescBuf      = geometryDescsBuffer.handle;
@@ -12905,7 +13009,9 @@ namespace threepp {
                                                emissiveTotalPowerThisFrame_,
                                                fireflyClamp_,
                                                oceanFineTileSize, oceanFoamTileSize,
-                                               deferredDenoise_, restirDIEnabled_);
+                                               deferredDenoise_, restirDIEnabled_,
+                                               deferredVolDensity_, deferredVolAniso_,
+                                               deferredStarIntensity_);
                 timingEnd(cb, TP_PathTrace);// pathTraceMs = deferred SHADE only
                 // Spatial denoise of the demodulated diffuse-indirect + recombine.
                 // Barrier: the shade wrote sceneHdr + the indirect image (both
@@ -14191,6 +14297,34 @@ namespace threepp {
     RenderTarget* VulkanRenderer::getRenderTarget() { return nullptr; }
     void VulkanRenderer::setRenderTarget(RenderTarget*, int, int) {}
 
+    void VulkanRenderer::writeFramebuffer(const std::filesystem::path& filename) {
+        auto ext = filename.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".bmp") {
+            throw std::runtime_error("VulkanRenderer::writeFramebuffer: unsupported format " + ext);
+        }
+        const auto pixels = readRGBPixels();
+        if (pixels.empty()) return;
+        const auto sz = size();
+        const int  w  = sz.width();
+        const int  h  = sz.height();
+        if (filename.has_parent_path() && !std::filesystem::exists(filename.parent_path())) {
+            std::error_code ec;
+            std::filesystem::create_directories(filename.parent_path(), ec);
+        }
+        bool success = false;
+        if (ext == ".png") {
+            success = stbi_write_png(filename.string().c_str(), w, h, 3, pixels.data(), w * 3);
+        } else if (ext == ".jpg" || ext == ".jpeg") {
+            success = stbi_write_jpg(filename.string().c_str(), w, h, 3, pixels.data(), 100);
+        } else {
+            success = stbi_write_bmp(filename.string().c_str(), w, h, 3, pixels.data());
+        }
+        if (!success) {
+            throw std::runtime_error("VulkanRenderer: failed to write framebuffer to " + filename.string());
+        }
+    }
+
     std::vector<unsigned char> VulkanRenderer::readRGBPixels() {
         auto& impl = *pimpl_;
         auto* ctx  = impl.ctx.get();
@@ -14638,6 +14772,24 @@ namespace threepp {
 
     VulkanRenderer::RenderMode VulkanRenderer::renderMode() const {
         return pimpl_->renderMode_;
+    }
+
+    VulkanRenderer::SoftBodyInteropHandle
+    VulkanRenderer::enableSoftBodyInterop(const Mesh& mesh, std::function<void()> deviceCopy) {
+        return pimpl_->enableSoftBodyInterop(mesh, std::move(deviceCopy));
+    }
+
+    void VulkanRenderer::setDeferredVolumetrics(float density, float anisotropy) {
+        pimpl_->deferredVolDensity_ = std::max(density, 0.f);
+        pimpl_->deferredVolAniso_   = std::clamp(anisotropy, -0.95f, 0.95f);
+    }
+
+    void VulkanRenderer::setDeferredStarfield(float intensity) {
+        pimpl_->deferredStarIntensity_ = std::max(intensity, 0.f);
+    }
+
+    void VulkanRenderer::disableSoftBodyInterop(const Mesh& mesh) {
+        pimpl_->disableSoftBodyInterop(mesh);
     }
 
     void VulkanRenderer::resetAccumulation() {
