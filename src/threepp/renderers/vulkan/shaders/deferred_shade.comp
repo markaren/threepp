@@ -201,6 +201,7 @@ layout(push_constant) uniform Pc {
     float oceanFoamTileSize; // world-space foam tile (m); 0 = no foam sampling
     float volDensity;        // volumetric scattering σ (1/m); 0 = beams off
     float volAniso;          // Henyey-Greenstein g for the beam phase
+    float starIntensity;     // procedural sky star field brightness; 0 = off
 } pc;
 
 // ── BRDF helpers (verbatim from shade_common.glsl) ──────────────────────────
@@ -1737,6 +1738,37 @@ float hgPhase(float mu, float g) {
     const float g2 = g * g;
     return (1.0 - g2) / (4.0 * PI * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5));
 }
+// ── Procedural star field (sky pixels) ───────────────────────────────────────
+// Hash-based stars evaluated in DIRECTION space — resolution-independent and
+// pixel-crisp at any FOV/zoom. Baked env-texture stars are sub-texel features,
+// so bilinear magnification (+ the TAA upscale) rendered every one of them as a
+// soft ~14 px blob no matter the env resolution. Cells on the (azimuth,
+// elevation) grid; ~2% of cells host a star at a hashed sub-cell position with
+// a power-law brightness; a tight gaussian gives ~1 px points that twinkle
+// subtly under the TAA jitter (which is what real stars do). Stable across
+// frames (no frame term). Applied to SKY pixels only — points this small are
+// invisible in rough reflections anyway.
+vec3 proceduralStars(vec3 dir) {
+    if (pc.starIntensity <= 0.0 || dir.y <= 0.0) return vec3(0.0);
+    const float SCALE = 220.0;
+    const vec2  sph = vec2(atan(dir.z, dir.x), asin(clamp(dir.y, -1.0, 1.0)));
+    const vec2  g   = vec2(sph.x, sph.y) * SCALE;
+    vec3 sum = vec3(0.0);
+    for (int dy = -1; dy <= 1; ++dy)
+    for (int dx = -1; dx <= 1; ++dx) {// 3×3 so stars near cell edges don't clip
+        const vec2  cell = floor(g) + vec2(float(dx), float(dy));
+        const float h    = hash21(cell * 0.193 + 11.71);
+        if (h > 0.02) continue;// ~2% of cells → naked-eye star density
+        const vec2  sp = cell + vec2(hash21(cell + 31.7), hash21(cell + 57.3));
+        const vec2  d  = g - sp;
+        const float r2 = dot(d, d);
+        const float bright = 0.4 + 2.4 * pow(hash21(cell + 91.1), 8.0);// many dim, few bright
+        sum += vec3(1.0, 1.0, 1.06) * (bright * exp(-r2 * 24.0));
+    }
+    // Horizon fade — stars dissolve into the atmospheric band, no hard pop.
+    return sum * (pc.starIntensity * smoothstep(0.0, 0.05, dir.y));
+}
+
 vec3 volumetricSpotScatter(vec3 ro, vec3 rd, float tMax, ivec2 px) {
     if (pc.volDensity <= 0.0 || lights.spotCount == 0u) return vec3(0.0);
     const int   STEPS = 40;
@@ -1814,6 +1846,7 @@ void main() {
         // Sky pixels march the beams too — a lighthouse beam against the night
         // sky is exactly where the volumetric is most visible.
         const vec3 sky = sampleEnvLod(dirWS, 0.0)
+                       + proceduralStars(dirWS)
                        + volumetricSpotScatter(camPos, dirWS, 2000.0, px);
         imageStore(outImage, px, vec4(sky, 1.0));
         imageStore(indirectImage, px, vec4(0.0));

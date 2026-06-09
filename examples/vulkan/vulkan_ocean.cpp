@@ -30,9 +30,6 @@
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
 
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
-
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -312,8 +309,6 @@ int main(int argc, char** argv) {
         // rendered every star as a big square tent.
         const int W = 2048, H = 1024;
         std::vector<float> data(static_cast<size_t>(W) * H * 4, 0.f);
-        std::mt19937 srng{42};
-        std::uniform_real_distribution<float> u01(0.f, 1.f);
         // sampleEnvLod maps dir.y=+1 → v=1.0 (zenith = last row).
         const Vector3 moonDir = Vector3(-0.55f, 0.60f, 0.35f).normalize();
         for (int y = 0; y < H; ++y) {
@@ -349,31 +344,12 @@ int main(int argc, char** argv) {
                 data[i + 0] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 1.f;
             }
         }
-        // Star field: sub-texel ANTI-ALIASED point splats (2×2 bilinear
-        // weights) above the horizon — round dots instead of square texels.
-        // Kept modest (≤ ~2.5): bright point features reflect off the
-        // chop-perturbed water normals as pixel-speckle.
-        for (int s = 0; s < 700; ++s) {
-            const float fx  = u01(srng) * static_cast<float>(W);
-            const float fy  = H * 0.5f + u01(srng) * (H * 0.5f - 8.f);
-            const float mag = 0.3f + 2.2f * u01(srng) * u01(srng) * u01(srng);// few bright, many dim
-            const int   x0  = static_cast<int>(fx);
-            const int   y0  = static_cast<int>(fy);
-            const float ax  = fx - static_cast<float>(x0);
-            const float ay  = fy - static_cast<float>(y0);
-            auto splat = [&](int xx, int yy, float w) {
-                xx = (xx + W) % W;
-                yy = std::clamp(yy, H / 2, H - 1);
-                const size_t i = (static_cast<size_t>(yy) * W + xx) * 4;
-                data[i + 0] += mag * w;
-                data[i + 1] += mag * w;
-                data[i + 2] += mag * 1.08f * w;
-            };
-            splat(x0,     y0,     (1.f - ax) * (1.f - ay));
-            splat(x0 + 1, y0,     ax * (1.f - ay));
-            splat(x0,     y0 + 1, (1.f - ax) * ay);
-            splat(x0 + 1, y0 + 1, ax * ay);
-        }
+        // NO baked stars: a star is sub-texel at ANY practical env resolution,
+        // so after bilinear magnification (+ TAA upscale) every baked star
+        // renders as a ~14 px blob. Stars come from the renderer's procedural
+        // direction-space star field instead (setDeferredStarfield) — crisp
+        // points at every resolution/FOV. The env keeps what magnifies well:
+        // gradient, horizon glow, moon (which also feeds reflections + PT CDF).
         Image img{std::move(data), static_cast<unsigned>(W), static_cast<unsigned>(H), 0};
         nightEnv = Texture::create(img);
         nightEnv->format = Format::RGBA;
@@ -397,6 +373,7 @@ int main(int argc, char** argv) {
             beam->intensity = 150000.f;// inverse-square: bright enough to read at 300 m
             lampMat->emissiveIntensity = 25.f;
             renderer.setDeferredVolumetrics(hazeDensity, 0.6f);
+            renderer.setDeferredStarfield(1.0f);
             renderer.toneMappingExposure = 1.15f;
         } else {
             scene.background  = env;
@@ -406,6 +383,7 @@ int main(int argc, char** argv) {
             beam->intensity = 0.f;
             lampMat->emissiveIntensity = 0.f;
             renderer.setDeferredVolumetrics(0.f, 0.6f);
+            renderer.setDeferredStarfield(0.f);
             renderer.toneMappingExposure = 0.7f;
         }
         // Material PBR values live in a GPU MaterialDesc refreshed on version
@@ -1595,10 +1573,17 @@ int main(int argc, char** argv) {
         }
 
         if (capturing) {
-            // Fixed aerial framing (≈ the reported-artifact view): boat centre,
-            // mostly water in frame, horizon out of shot.
-            camera.position.set(10.f, 32.f, 50.f);
-            camera.lookAt(Vector3(0.f, 0.f, -20.f));
+            if (night) {
+                // Night framing: low camera toward the lighthouse + horizon —
+                // sky (stars), beam fan, and lit water all in shot.
+                camera.position.set(70.f, 7.f, 110.f);
+                camera.lookAt(Vector3(0.f, 14.f, 0.f));
+            } else {
+                // Day framing (≈ the reported-artifact view): boat centre,
+                // mostly water in frame, horizon out of shot.
+                camera.position.set(10.f, 32.f, 50.f);
+                camera.lookAt(Vector3(0.f, 0.f, -20.f));
+            }
             camera.updateMatrixWorld();
         }
 
@@ -1609,15 +1594,9 @@ int main(int argc, char** argv) {
             applyMode();
         }
         if (capturing && ++shotFrame >= shotFrames) {
-            const auto px = renderer.readRGBPixels();
-            const auto sz = canvas.size();
-            namespace fs  = std::filesystem;
-            const fs::path outDir = fs::path(PROJECT_FOLDER) / "aaa_caps";
-            fs::create_directories(outDir);
-            const auto path = (outDir / shotPath).string();
-            if (!px.empty())
-                stbi_write_png(path.c_str(), sz.width(), sz.height(), 3, px.data(), sz.width() * 3);
-            std::printf("wrote %s (%dx%d)\n", path.c_str(), sz.width(), sz.height());
+            const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
+            renderer.writeFramebuffer(path);// creates parent dirs; throws on failure
+            std::printf("wrote %s\n", path.string().c_str());
             std::exit(0);
         }
 

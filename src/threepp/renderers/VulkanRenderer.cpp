@@ -73,6 +73,9 @@
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/Texture.hpp"
 
+// stb_image_write — implementation is already compiled in GLRenderer.cpp.
+#include "stb_image_write.h"
+
 #include "threepp/renderers/vulkan/shaders/raygen.rgen.spv.h"
 #include "threepp/renderers/vulkan/shaders/raygen.rgen.ser.spv.h"
 #include "threepp/renderers/vulkan/shaders/miss.rmiss.spv.h"
@@ -1259,6 +1262,8 @@ namespace threepp {
         // deferred_shade.comp). σ = 0 disables (the march is skipped entirely).
         float deferredVolDensity_ = 0.f;
         float deferredVolAniso_   = 0.55f;
+        // Procedural direction-space star field on deferred sky pixels (0 = off).
+        float deferredStarIntensity_ = 0.f;
 
         // Raster-first deferred lighting (RenderMode::RasterFirst). Shades the
         // material G-buffer analytically into bloom_->sceneHdr, replacing the
@@ -13001,7 +13006,8 @@ namespace threepp {
                                                fireflyClamp_,
                                                oceanFineTileSize, oceanFoamTileSize,
                                                deferredDenoise_, restirDIEnabled_,
-                                               deferredVolDensity_, deferredVolAniso_);
+                                               deferredVolDensity_, deferredVolAniso_,
+                                               deferredStarIntensity_);
                 timingEnd(cb, TP_PathTrace);// pathTraceMs = deferred SHADE only
                 // Spatial denoise of the demodulated diffuse-indirect + recombine.
                 // Barrier: the shade wrote sceneHdr + the indirect image (both
@@ -14287,6 +14293,34 @@ namespace threepp {
     RenderTarget* VulkanRenderer::getRenderTarget() { return nullptr; }
     void VulkanRenderer::setRenderTarget(RenderTarget*, int, int) {}
 
+    void VulkanRenderer::writeFramebuffer(const std::filesystem::path& filename) {
+        auto ext = filename.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".bmp") {
+            throw std::runtime_error("VulkanRenderer::writeFramebuffer: unsupported format " + ext);
+        }
+        const auto pixels = readRGBPixels();
+        if (pixels.empty()) return;
+        const auto sz = size();
+        const int  w  = sz.width();
+        const int  h  = sz.height();
+        if (filename.has_parent_path() && !std::filesystem::exists(filename.parent_path())) {
+            std::error_code ec;
+            std::filesystem::create_directories(filename.parent_path(), ec);
+        }
+        bool success = false;
+        if (ext == ".png") {
+            success = stbi_write_png(filename.string().c_str(), w, h, 3, pixels.data(), w * 3);
+        } else if (ext == ".jpg" || ext == ".jpeg") {
+            success = stbi_write_jpg(filename.string().c_str(), w, h, 3, pixels.data(), 100);
+        } else {
+            success = stbi_write_bmp(filename.string().c_str(), w, h, 3, pixels.data());
+        }
+        if (!success) {
+            throw std::runtime_error("VulkanRenderer: failed to write framebuffer to " + filename.string());
+        }
+    }
+
     std::vector<unsigned char> VulkanRenderer::readRGBPixels() {
         auto& impl = *pimpl_;
         auto* ctx  = impl.ctx.get();
@@ -14744,6 +14778,10 @@ namespace threepp {
     void VulkanRenderer::setDeferredVolumetrics(float density, float anisotropy) {
         pimpl_->deferredVolDensity_ = std::max(density, 0.f);
         pimpl_->deferredVolAniso_   = std::clamp(anisotropy, -0.95f, 0.95f);
+    }
+
+    void VulkanRenderer::setDeferredStarfield(float intensity) {
+        pimpl_->deferredStarIntensity_ = std::max(intensity, 0.f);
     }
 
     void VulkanRenderer::disableSoftBodyInterop(const Mesh& mesh) {

@@ -17,6 +17,7 @@
 #include "threepp/renderers/Renderer.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -61,6 +62,12 @@ namespace threepp {
         void setRenderTarget(RenderTarget* renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0) override;
 
         [[nodiscard]] std::vector<unsigned char> readRGBPixels() override;
+
+        // Save the last presented frame to disk (.png / .jpg / .jpeg / .bmp),
+        // creating parent directories as needed — same convenience GLRenderer
+        // and WgpuRenderer expose. Wraps readRGBPixels(); call after render().
+        // Throws on unsupported extension or write failure.
+        void writeFramebuffer(const std::filesystem::path& filename);
 
         // Toggle scene-only swapchain capture. When enabled, the renderer
         // snapshots the post-TAA / pre-overlay swapchain image into a
@@ -258,6 +265,13 @@ namespace threepp {
         // Henyey-Greenstein g (forward-peaked ≈ 0.5–0.8 reads as atmospheric
         // haze). RasterFirst only; the PT path has its own fog volumetrics.
         void setDeferredVolumetrics(float density, float anisotropy = 0.55f);
+
+        // RasterFirst procedural star field on SKY pixels — hash-based points
+        // evaluated in direction space, so they stay pixel-crisp at any
+        // resolution/FOV (env-texture stars are sub-texel features that
+        // magnify into blobs). 0 disables (no cost); ~1.0 = naked-eye night
+        // sky. Pair with a dark environment.
+        void setDeferredStarfield(float intensity);
 
         // ── PhysX soft-body zero-copy interop (CUDA → Vulkan) ────────────────
         // Re-backs `mesh`'s per-frame tet-position buffer (the tet_skinning.comp
