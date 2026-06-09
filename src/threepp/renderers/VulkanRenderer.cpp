@@ -1349,9 +1349,9 @@ namespace threepp {
         float    pendingCpuEnsureSceneMs_ = 0.f;
         // ReSTIR DI master toggle. When false, chit's primary RIS branch is
         // bypassed and the legacy per-light NEE classic loops run instead
-        // (same pattern as bounces). Default off. Forwarded to chit via
+        // (same pattern as bounces). Forwarded to chit via
         // pc.motionFlags bit 4 each frame.
-        bool restirDIEnabled_ = false;
+        bool restirDIEnabled_ = true;
         // ReSTIR DI visibility reuse (Bitterli 2020 §5). When on, the chit
         // shadow-tests the RIS-selected candidate before temporal/spatial reuse
         // and discards occluded ones, so history converges onto visible lights.
