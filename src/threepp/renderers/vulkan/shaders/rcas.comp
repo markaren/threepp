@@ -1,0 +1,74 @@
+#version 460
+
+// Contrast-Adaptive Sharpening (AMD FidelityFX CAS), run after the TAA
+// resolve. Reads the resolved frame (TAA history-write slot, output extent)
+// and writes the sharpened result to the swapchain. TAA's history blend +
+// Catmull-Rom reconstruction soften the image; this restores high-frequency
+// detail — the standard pairing for any TAA/upscaler.
+//
+// CAS (not naive unsharp): a low-pass-subtraction whose weight ADAPTS to the
+// local 3×3 contrast and headroom — it sharpens edges/detail strongly while
+// backing off near black/white (no clipping) and on flat areas (no noise
+// amplification), with far less ringing than a fixed unsharp. Operates on the
+// LDR sRGB resolve, the perceptually correct space for sharpening.
+//
+// (Replaces an earlier min/max-clamped unsharp that clamped the center back
+//  to itself at every local extremum — i.e. exactly at the edges it was meant
+//  to sharpen — making it a near no-op on smooth content.)
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D resolvedTex;     // TAA output (output extent)
+layout(set = 0, binding = 1) uniform writeonly image2D swapOut; // swapchain (bgra8, no format)
+
+layout(push_constant) uniform Pc {
+    uint  width;
+    uint  height;
+    float amount;// sharpness 0..1 (slider); 0 should not dispatch this pass
+    uint  _pad;
+} pc;
+
+vec3 fetch(ivec2 p) {
+    return texelFetch(resolvedTex,
+                      clamp(p, ivec2(0), ivec2(int(pc.width) - 1, int(pc.height) - 1)), 0).rgb;
+}
+
+void main() {
+    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
+
+    // 3×3 neighbourhood:  a b c
+    //                     d e f
+    //                     g h i
+    const vec3 a = fetch(px + ivec2(-1, -1));
+    const vec3 b = fetch(px + ivec2( 0, -1));
+    const vec3 c = fetch(px + ivec2( 1, -1));
+    const vec3 d = fetch(px + ivec2(-1,  0));
+    const vec3 e = fetch(px + ivec2( 0,  0));
+    const vec3 f = fetch(px + ivec2( 1,  0));
+    const vec3 g = fetch(px + ivec2(-1,  1));
+    const vec3 h = fetch(px + ivec2( 0,  1));
+    const vec3 i = fetch(px + ivec2( 1,  1));
+
+    // Soft min/max over the cross, then fold in the diagonals (CAS weighting).
+    vec3 mnRGB = min(min(min(d, e), min(f, b)), h);
+    mnRGB += min(min(min(a, c), min(g, i)), mnRGB);
+    vec3 mxRGB = max(max(max(d, e), max(f, b)), h);
+    mxRGB += max(max(max(a, c), max(g, i)), mxRGB);
+
+    // Adaptive amplitude: distance of the darkest/brightest to the 0/2 signal
+    // limits, normalised by the local max. Low near flat or near clipping,
+    // high on in-range high-contrast detail.
+    const vec3 rcpM = 1.0 / max(mxRGB, vec3(1e-4));
+    vec3 amp = clamp(min(mnRGB, 2.0 - mxRGB) * rcpM, 0.0, 1.0);
+    amp = sqrt(amp);
+
+    // Peak negative weight, scaled by the sharpness slider. sharpness 0 → mild
+    // (-1/8), 1 → strong (-1/5). CAS kernel: (e + w·(b+d+f+h)) / (1 + 4w).
+    const float sharpness = clamp(pc.amount, 0.0, 1.0);
+    const float peak = -1.0 / mix(8.0, 5.0, sharpness);
+    const vec3  w    = amp * peak;
+    vec3 res = (e + (b + d + f + h) * w) / (1.0 + 4.0 * w);
+
+    imageStore(swapOut, px, vec4(clamp(res, 0.0, 1.0), 1.0));
+}

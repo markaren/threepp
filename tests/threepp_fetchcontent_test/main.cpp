@@ -1,4 +1,5 @@
-#include "threepp/threepp.hpp"
+#include <threepp/objects/TextSprite.hpp>
+#include <threepp/threepp.hpp>
 
 using namespace threepp;
 
@@ -14,19 +15,23 @@ namespace {
         return mesh;
     }
 
-    std::unique_ptr<HUD> createHUD(WindowSize size) {
-        auto hud = std::make_unique<HUD>(size);
-        FontLoader fontLoader;
-        const auto font = fontLoader.defaultFont();
-        TextGeometry::Options opts(font, 20, 5);
-        const auto hudText2 = Text2D::create(opts, "Hello World!");
-        hudText2->setColor(Color::gray);
-        hud->add(hudText2, HUD::Options()
-                                  .setNormalizedPosition({1, 1})
-                                  .setHorizontalAlignment(HUD::HorizontalAlignment::RIGHT)
-                                  .setVerticalAlignment(HUD::VerticalAlignment::TOP));
+    // Screen-space "HUD" text, anchored to the top-right corner. Replaces the
+    // old HUD/Text2D API with a screenSpace TextSprite (Sprite::screenSpace),
+    // which the renderer composites over the 3D scene each frame.
+    std::shared_ptr<TextSprite> createHudText(const Font &font) {
+        auto text = TextSprite::create(font, 20.f);// 20px
+        text->setText("Hello World!");
+        text->setColor(Color::gray);
+        text->setHorizontalAlignment(TextSprite::HorizontalAlignment::Right);
+        text->setVerticalAlignment(TextSprite::VerticalAlignment::Below);
+        text->screenSpace = true;
+        // Screen-space layout is y-up (origin bottom-left): anchor {1,1} is the
+        // top-right corner; the negative offset insets down-left from it, and
+        // Right/Below keep the text growing inward (on-screen).
+        text->screenAnchor = {1.f, 1.f};
+        text->position.set(-15.f, -15.f, 0.f);
 
-        return hud;
+        return text;
     }
 
 }// namespace
@@ -35,7 +40,6 @@ int main() {
 
     Canvas canvas("threepp demo", {{"aa", 4}});
     GLRenderer renderer(canvas);
-    renderer.autoClear = false;// hud
 
     auto camera = PerspectiveCamera::create(50, canvas.aspect());
     camera->position.z = 5;
@@ -50,14 +54,14 @@ int main() {
     group->add(createBox({1, 0, 0}, Color::blue));
     scene->add(group);
 
-    const auto hud = createHUD(canvas.size());
+    FontLoader fontLoader;
+    const auto font = fontLoader.defaultFont();
+    scene->add(createHudText(font));
 
     canvas.onWindowResize([&](const WindowSize &size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-
-        hud->setSize(size);
     });
 
     Clock clock;
@@ -66,8 +70,6 @@ int main() {
         const auto dt = clock.getDelta();
         group->rotation.y += rotationSpeed * dt;
 
-        renderer.clear();//autoClear is false
         renderer.render(*scene, *camera);
-        hud->apply(renderer);
     });
 }

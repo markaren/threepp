@@ -69,6 +69,13 @@ namespace threepp::vulkan {
             return rayTracingInvocationReorderSupported_;
         }
 
+        // VK_KHR_ray_query — inline ray tracing from any stage (compute). Used
+        // by the raster-first deferred shading pass for hard shadow rays.
+        // Optional; ReferencePT works without it.
+        bool rayQuerySupported() const {
+            return rayQuerySupported_;
+        }
+
         // Attach a debug-utils name to a Vulkan object so validation messages
         // and RenderDoc / Nsight reports identify it by label instead of by
         // raw uint64 handle. No-op when validation is off (the EXT extension
@@ -123,6 +130,7 @@ namespace threepp::vulkan {
         bool vsync_ = true;// FIFO when true, else MAILBOX/IMMEDIATE (see createSwapchain)
         bool rayTracingEnabled_ = false;
         bool rayTracingInvocationReorderSupported_ = false;
+        bool rayQuerySupported_ = false;
         VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtPipelineProperties_{};
         RtFunctions rt_{};
         // Non-null only when VK_EXT_debug_utils is enabled (i.e. validation

@@ -1,0 +1,73 @@
+#version 460
+
+// Bloom downsample: full-res linear-HDR scene → half-res, using the 13-tap
+// Karis-averaged filter from Jimenez "Next Generation Post Processing in
+// Call of Duty: Advanced Warfare". The Karis average (weight each 2×2 group
+// by 1/(1+luma)) suppresses fireflies, so a single bright sub-pixel sample
+// can't explode into a blocky bloom square. Bilinear sampling fuses 4 source
+// texels per fetch, so this 13-tap pattern actually reads a 6×6 footprint.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D srcTex;                  // linear HDR
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D dstImg;// half res
+
+layout(push_constant) uniform Pc {
+    uint  srcW; uint srcH;  // source extent (for texel size)
+    uint  dstW; uint dstH;  // dest extent  (dispatch bounds)
+    float threshold;        // soft-knee bright-pass cutoff (linear HDR luma)
+} pc;
+
+float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+float karis(vec3 c) { return 1.0 / (1.0 + luma(c)); }
+
+void main() {
+    const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.dstW) || p.y >= int(pc.dstH)) return;
+
+    const vec2 uv = (vec2(p) + 0.5) / vec2(float(pc.dstW), float(pc.dstH));
+    const vec2 t  = 1.0 / vec2(float(pc.srcW), float(pc.srcH));
+
+    const vec3 a = texture(srcTex, uv + t * vec2(-2, -2)).rgb;
+    const vec3 b = texture(srcTex, uv + t * vec2( 0, -2)).rgb;
+    const vec3 c = texture(srcTex, uv + t * vec2( 2, -2)).rgb;
+    const vec3 d = texture(srcTex, uv + t * vec2(-2,  0)).rgb;
+    const vec3 e = texture(srcTex, uv                   ).rgb;
+    const vec3 f = texture(srcTex, uv + t * vec2( 2,  0)).rgb;
+    const vec3 g = texture(srcTex, uv + t * vec2(-2,  2)).rgb;
+    const vec3 h = texture(srcTex, uv + t * vec2( 0,  2)).rgb;
+    const vec3 i = texture(srcTex, uv + t * vec2( 2,  2)).rgb;
+    const vec3 j = texture(srcTex, uv + t * vec2(-1, -1)).rgb;
+    const vec3 k = texture(srcTex, uv + t * vec2( 1, -1)).rgb;
+    const vec3 l = texture(srcTex, uv + t * vec2(-1,  1)).rgb;
+    const vec3 m = texture(srcTex, uv + t * vec2( 1,  1)).rgb;
+
+    // Five overlapping 2×2 groups: centre (weight 0.5) + 4 corners (0.125).
+    const vec3 g0 = (j + k + l + m) * 0.25;// centre
+    const vec3 g1 = (a + b + d + e) * 0.25;// TL
+    const vec3 g2 = (b + c + e + f) * 0.25;// TR
+    const vec3 g3 = (d + e + g + h) * 0.25;// BL
+    const vec3 g4 = (e + f + h + i) * 0.25;// BR
+
+    // Karis-weighted combine (firefly suppression).
+    const float w0 = 0.5   * karis(g0);
+    const float w1 = 0.125 * karis(g1);
+    const float w2 = 0.125 * karis(g2);
+    const float w3 = 0.125 * karis(g3);
+    const float w4 = 0.125 * karis(g4);
+    vec3 res = (g0 * w0 + g1 * w1 + g2 * w2 + g3 * w3 + g4 * w4)
+             / max(w0 + w1 + w2 + w3 + w4, 1e-5);
+
+    // Soft-knee bright pass: only highlights above `threshold` bloom, with a
+    // smooth ramp through the knee so there is no hard popping edge. Darks
+    // drop to ~0 so the additive composite leaves them crisp (the "punchy
+    // highlight glow" look, vs. a thresholdless veiling glare).
+    const float br   = max(res.r, max(res.g, res.b));
+    const float knee = pc.threshold * 0.5 + 1e-5;
+    float soft = clamp(br - pc.threshold + knee, 0.0, 2.0 * knee);
+    soft = soft * soft / (4.0 * knee);
+    const float contrib = max(soft, br - pc.threshold) / max(br, 1e-5);
+    res *= max(contrib, 0.0);
+
+    imageStore(dstImg, p, vec4(res, 1.0));
+}

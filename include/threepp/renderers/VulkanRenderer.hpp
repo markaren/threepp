@@ -229,6 +229,38 @@ namespace threepp {
         void setDenoise(bool enabled);
         [[nodiscard]] bool denoise() const;
 
+        // HDR bloom, added in linear HDR *before* the tone-map curve. A
+        // soft-knee bright pass (see setBloomThreshold) keeps only highlights,
+        // which are blurred and added back additively, so darks/mid-tones stay
+        // crisp and bright areas glow. 0 disables the bloom passes (the
+        // composite still owns tone map + sRGB). Typical intensity: 0.2–0.8.
+        void setBloomIntensity(float intensity);
+        [[nodiscard]] float bloomIntensity() const;
+
+        // RasterFirst spatial denoiser for the ray-traced diffuse-indirect
+        // (AO/GI). On by default; disable to see the raw noisy base.
+        void setDeferredDenoise(bool enabled);
+        [[nodiscard]] bool deferredDenoise() const;
+
+        // RasterFirst ray-traced env ambient-occlusion / GI. OFF by default —
+        // occlusion-testing the IBL makes the HDRI appear to cast shadows. Off =
+        // flat env IBL (the directional light still casts shadows). On = soft RT
+        // AO/GI (costs occlusion rays; pair with setDeferredDenoise for noise).
+        void setDeferredAO(bool enabled);
+        [[nodiscard]] bool deferredAO() const;
+
+        // Bloom bright-pass cutoff in linear-HDR luma: only scene values above
+        // this (with a soft knee below it) contribute to the glow. Higher =
+        // only the very brightest highlights bloom. Typical: 0.8–2.0.
+        void setBloomThreshold(float threshold);
+        [[nodiscard]] float bloomThreshold() const;
+
+        // Post-TAA RCAS sharpen strength — restores high-frequency detail the
+        // temporal resolve softens (contrast-limited, so it won't ring or
+        // amplify fireflies). 0 disables the sharpen pass. Typical: 0.2–0.5.
+        void setSharpenStrength(float amount);
+        [[nodiscard]] float sharpenStrength() const;
+
         // Extra primary rays fired at detected silhouette pixels (mesh-ID,
         // depth-gradient, or diagonal neighbour mismatch in the raster
         // prepass). 0 disables silhouette MSAA. N gives (N+1)× total
@@ -263,12 +295,35 @@ namespace threepp {
         // Mirrors WgpuPathTracer::resetAccumulation.
         void resetAccumulation();
 
-        // The renderer always runs in hybrid raster + path-tracer mode
-        // (UE/Omniverse-style): a deterministic raster G-buffer prepass
-        // (depth, normal, motion vectors, per-pixel IDs) supplies primary
-        // visibility and the path tracer starts at bounce 1. This eliminates
-        // moving-object shake from PT primary jitter; AA happens via TAA on
-        // the raster side.
+        // Renderer shading strategy. Both modes share the raster G-buffer
+        // prepass (depth, normal, motion vectors, per-pixel IDs) and the whole
+        // post chain (denoise / bloom / TAA); they diverge only in how the
+        // surface is shaded.
+        //
+        //   ReferencePT — the path tracer shades everything (the existing
+        //                 infra): the raster prepass supplies primary
+        //                 visibility and raygen path-traces all direct +
+        //                 indirect light. Ground-truth quality, but carries the
+        //                 full PT noise and cost. Kept as the reference / high-
+        //                 fidelity option.
+        //
+        //   RasterFirst — raster shades a clean, analytic, noise-free base
+        //                 (direct analytic lights + IBL) and the path tracer
+        //                 contributes only additive accents (reflections, GI,
+        //                 caustics) on top. The intended default once built
+        //                 out: most of the look of PT without the noise or the
+        //                 per-pixel ray cost.
+        //
+        // NOTE: RasterFirst is being landed in stages. Until the deferred
+        // shading path exists it falls back to ReferencePT behaviour, so the
+        // two modes currently render identically. Default is ReferencePT and
+        // flips to RasterFirst once the base + accent passes are in.
+        enum class RenderMode {
+            RasterFirst,
+            ReferencePT,
+        };
+        void setRenderMode(RenderMode mode);
+        [[nodiscard]] RenderMode renderMode() const;
 
         void setPerSppJitterHybrid(bool enabled);
         [[nodiscard]] bool perSppJitterHybrid() const;
@@ -337,6 +392,7 @@ namespace threepp {
         //   1 = world-space normal
         //   2 = motion vector (NDC delta in red/green)
         //   3 = per-pixel instanceCustomIndex (raw uint16)
+        //   4 = albedo (linear base colour in rgb; metalness in alpha)
         void setHybridDebugView(int view);
         [[nodiscard]] int hybridDebugView() const;
 

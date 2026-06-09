@@ -68,7 +68,25 @@ namespace threepp {
     class PositionalAudio: public Audio, public Object3D {
 
     public:
+        // Distance-attenuation curve, mirroring three.js PositionalAudio /
+        // the Web Audio PannerNode distance models.
+        enum class DistanceModel {
+            None,       // no attenuation (constant volume)
+            Inverse,    // gain = min / (min + rolloff * (d - min))   [default]
+            Linear,     // gain = 1 - rolloff * (d - min) / (max - min)
+            Exponential // gain = (d / min) ^ -rolloff
+        };
+
         PositionalAudio(AudioListener& ctx, const std::filesystem::path& file);
+
+        // World-space distance within which the sound plays at full volume.
+        void setMinDistance(float distance);
+        // Distance at which attenuation stops increasing (matters for the Linear model).
+        void setMaxDistance(float distance);
+        // How quickly volume falls off with distance (higher = steeper).
+        void setRolloffFactor(float rolloff);
+        // Selects the attenuation curve above.
+        void setDistanceModel(DistanceModel model);
 
         void updateMatrixWorld(bool force) override;
     };

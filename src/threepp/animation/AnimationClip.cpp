@@ -68,3 +68,11 @@ void AnimationClip::resetDuration() {
 
     this->duration = duration;
 }
+
+void AnimationClip::makeAdditive() {
+
+    for (auto& track : tracks) {
+        if (track) track->makeAdditive();
+    }
+    blendMode = AnimationBlendMode::Additive;
+}

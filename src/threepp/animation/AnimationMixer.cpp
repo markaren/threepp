@@ -103,6 +103,10 @@ struct AnimationMixer::Impl {
     std::shared_ptr<Interpolant> _lendControlInterpolant() {
 
         auto& pool = this->_controlInterpolants;
+        // Guard: a prior unbalanced take-back must never leave this negative, or
+        // pool[lastActiveIndex] below becomes pool[-1] — an out-of-bounds
+        // vector::operator[] (heap corruption that surfaces as a crash elsewhere).
+        if (this->_nActiveControlInterpolants < 0) this->_nActiveControlInterpolants = 0;
         const auto lastActiveIndex = this->_nActiveControlInterpolants++;
 
         if (lastActiveIndex >= static_cast<int>(pool.size())) {
@@ -119,11 +123,18 @@ struct AnimationMixer::Impl {
     void _takeBackControlInterpolant(const std::shared_ptr<Interpolant>& interpolant) {
 
         auto& pool = this->_controlInterpolants;
-        const auto firstInactiveIndex = --this->_nActiveControlInterpolants;
+        // Only consume an active slot when the interpolant is actually found in
+        // the active region. The original unconditionally decremented even when
+        // std::find failed, so a spurious/duplicate take-back drove the count
+        // negative → the next _lendControlInterpolant did pool[-1] (OOB → heap
+        // corruption). Decrement only on a real find keeps the pool consistent.
+        if (this->_nActiveControlInterpolants <= 0) return;
+        const auto firstInactiveIndex = this->_nActiveControlInterpolants - 1;
 
         auto it = std::find(pool.begin(), pool.begin() + firstInactiveIndex + 1, interpolant);
         if (it != pool.begin() + firstInactiveIndex + 1) {
             std::iter_swap(it, pool.begin() + firstInactiveIndex);
+            --this->_nActiveControlInterpolants;
         }
     }
 
@@ -360,7 +371,11 @@ struct AnimationMixer::Impl {
 
         const auto lastActiveIndex = this->_nActiveActions++;
 
-        auto& firstInactiveAction = actions[lastActiveIndex];
+        // COPY the shared_ptr (not a reference to the vector slot): the next line
+        // overwrites actions[lastActiveIndex], which would release the displaced
+        // action and leave a slot-reference dangling (use-after-free). Holding a
+        // copy keeps it alive and gives a stable handle. (three.js uses a value here.)
+        auto firstInactiveAction = actions[lastActiveIndex];
 
         action->_cacheIndex = lastActiveIndex;
         actions[lastActiveIndex] = action;
@@ -382,7 +397,9 @@ struct AnimationMixer::Impl {
 
         const auto firstInactiveIndex = --this->_nActiveActions;
 
-        const auto& lastActiveAction = actions[firstInactiveIndex];
+        // COPY, not a slot reference — see _lendAction. actions[firstInactiveIndex]
+        // is overwritten below; a reference would dangle once the slot is reassigned.
+        const auto lastActiveAction = actions[firstInactiveIndex];
 
         action->_cacheIndex = firstInactiveIndex;
         actions[firstInactiveIndex] = action;
@@ -475,7 +492,8 @@ struct AnimationMixer::Impl {
 
         auto lastActiveIndex = this->_nActiveBindings++;
 
-        auto& firstInactiveBinding = bindings[lastActiveIndex];
+        // COPY, not a slot reference — see _lendAction (same dangling-slot hazard).
+        auto firstInactiveBinding = bindings[lastActiveIndex];
 
         binding->_cacheIndex = lastActiveIndex;
         bindings[lastActiveIndex] = binding;

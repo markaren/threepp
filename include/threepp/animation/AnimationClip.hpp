@@ -31,6 +31,11 @@ namespace threepp {
 
         void resetDuration();
 
+        // Convert every track to additive (delta-from-first-frame) form and mark
+        // the clip Additive, so an action created from it layers on top of a base
+        // animation (e.g. an upper-body reload over a walk). Call before clipAction.
+        void makeAdditive();
+
         static std::shared_ptr<AnimationClip> findByName(const Object3D& object, const std::string& name);
         static std::shared_ptr<AnimationClip> findByName(const std::vector<std::shared_ptr<AnimationClip>>& clipArray, const std::string& name);
 

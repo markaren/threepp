@@ -65,7 +65,7 @@ namespace {
     auto makeBackWall() {
         auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
                 .color(Color(0.75f, 0.75f, 0.75f))
-                .roughness(0.01f)
+                .roughness(0.1f)
                 .metalness(0.9f));
         auto mesh = Mesh::create(BoxGeometry::create(12.f, 8.f, 0.1f), mat);
         mesh->position.set(0.f, 4.f, -5.f);
@@ -109,6 +109,12 @@ int main() {
 
     renderer.setDenoise(true);
     renderer.setRestirDIEnabled(true);
+    // AAA post stack: punchy HDR bloom + post-TAA RCAS sharpen (live-tunable
+    // below). Bloom is additive over a soft-knee bright pass, so darks stay
+    // crisp; sharpen restores detail the temporal resolve softens.
+    renderer.setBloomIntensity(0.5f);
+    renderer.setBloomThreshold(1.0f);
+    renderer.setSharpenStrength(0.5f);
 
     // ---- Scene ----
     Scene scene;
@@ -159,6 +165,9 @@ int main() {
     float rotSpeed    = 0.5f;
     float exposure    = renderer.toneMappingExposure;
     int spp           = renderer.samplesPerPixel();
+    float bloomInt    = renderer.bloomIntensity();
+    float bloomThresh = renderer.bloomThreshold();
+    float sharpen     = renderer.sharpenStrength();
     uint64_t frames   = 0;
     float fps         = 0.f;
     float fpsAccum    = 0.f;
@@ -191,6 +200,15 @@ int main() {
             renderer.toneMappingExposure = exposure;
         if (ImGui::SliderInt("Samples / pixel", &spp, 1, 8))
             renderer.setSamplesPerPixel(spp);
+
+        ImGui::Separator();
+        ImGui::TextDisabled("AAA post");
+        if (ImGui::SliderFloat("Bloom intensity", &bloomInt, 0.0f, 1.5f))
+            renderer.setBloomIntensity(bloomInt);
+        if (ImGui::SliderFloat("Bloom threshold", &bloomThresh, 0.0f, 3.0f))
+            renderer.setBloomThreshold(bloomThresh);
+        if (ImGui::SliderFloat("Sharpen (RCAS)", &sharpen, 0.0f, 0.8f))
+            renderer.setSharpenStrength(sharpen);
 
         ImGui::Separator();
         const auto t = renderer.lastFrameTimings();

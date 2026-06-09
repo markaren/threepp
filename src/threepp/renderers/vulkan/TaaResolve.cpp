@@ -3,6 +3,7 @@
 #include "threepp/renderers/vulkan/VulkanContext.hpp"
 
 #include "threepp/renderers/vulkan/shaders/taa_resolve.comp.spv.h"
+#include "threepp/renderers/vulkan/shaders/rcas.comp.spv.h"
 
 #include <array>
 #include <cstring>
@@ -25,6 +26,9 @@ namespace threepp::vulkan {
         if (pipeline_)       vkDestroyPipeline(d, pipeline_, nullptr);
         if (pipelineLayout_) vkDestroyPipelineLayout(d, pipelineLayout_, nullptr);
         if (dsLayout_)       vkDestroyDescriptorSetLayout(d, dsLayout_, nullptr);
+        if (rcasPipe_)       vkDestroyPipeline(d, rcasPipe_, nullptr);
+        if (rcasPipeLayout_) vkDestroyPipelineLayout(d, rcasPipeLayout_, nullptr);
+        if (rcasDsLayout_)   vkDestroyDescriptorSetLayout(d, rcasDsLayout_, nullptr);
         if (descPool_)       vkDestroyDescriptorPool(d, descPool_, nullptr);
         if (sampler_)        vkDestroySampler(d, sampler_, nullptr);
         destroyImages();
@@ -233,19 +237,75 @@ namespace threepp::vulkan {
                                        1, &cpci, nullptr, &pipeline_),
               "vkCreateComputePipelines(taa)");
         vkDestroyShaderModule(ctx_.device(), mod, nullptr);
+
+        // ── RCAS sharpen pipeline: sampled resolved @0, storage swapchain @1;
+        //    16-byte PC (width, height, amount, pad). ──────────────────────
+        {
+            VkDescriptorSetLayoutBinding rb[2]{};
+            rb[0].binding = 0;
+            rb[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            rb[0].descriptorCount = 1;
+            rb[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            rb[1].binding = 1;
+            rb[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            rb[1].descriptorCount = 1;
+            rb[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            VkDescriptorSetLayoutCreateInfo rdlci{};
+            rdlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            rdlci.bindingCount = 2;
+            rdlci.pBindings    = rb;
+            check(vkCreateDescriptorSetLayout(ctx_.device(), &rdlci, nullptr, &rcasDsLayout_),
+                  "vkCreateDescriptorSetLayout(rcas)");
+
+            VkPushConstantRange rpc{};
+            rpc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            rpc.offset     = 0;
+            rpc.size       = 16;
+            VkPipelineLayoutCreateInfo rplci{};
+            rplci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            rplci.setLayoutCount         = 1;
+            rplci.pSetLayouts            = &rcasDsLayout_;
+            rplci.pushConstantRangeCount = 1;
+            rplci.pPushConstantRanges    = &rpc;
+            check(vkCreatePipelineLayout(ctx_.device(), &rplci, nullptr, &rcasPipeLayout_),
+                  "vkCreatePipelineLayout(rcas)");
+
+            VkShaderModuleCreateInfo rsmci{};
+            rsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            rsmci.codeSize = sizeof(kRcasCompSpv);
+            rsmci.pCode    = kRcasCompSpv;
+            VkShaderModule rmod = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx_.device(), &rsmci, nullptr, &rmod),
+                  "vkCreateShaderModule(rcas)");
+            VkPipelineShaderStageCreateInfo rstage{};
+            rstage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            rstage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+            rstage.module = rmod;
+            rstage.pName  = "main";
+            VkComputePipelineCreateInfo rcpci{};
+            rcpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            rcpci.stage  = rstage;
+            rcpci.layout = rcasPipeLayout_;
+            check(vkCreateComputePipelines(ctx_.device(), VK_NULL_HANDLE, 1, &rcpci,
+                                           nullptr, &rcasPipe_),
+                  "vkCreateComputePipelines(rcas)");
+            vkDestroyShaderModule(ctx_.device(), rmod, nullptr);
+        }
     }
 
     void TaaResolve::createDescriptorPool() {
         const uint32_t totalSets = imageCount_ * framesInFlight_;
         VkDescriptorPoolSize sizes[2]{};
+        // Main resolve set: 5 sampled + 2 storage. RCAS set: 1 sampled + 1
+        // storage. Both families × totalSets, sharing this pool.
         sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sizes[0].descriptorCount = totalSets * 5;// 5 sampled per set
+        sizes[0].descriptorCount = totalSets * (5 + 1);
         sizes[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        sizes[1].descriptorCount = totalSets * 2;// 2 storage per set
+        sizes[1].descriptorCount = totalSets * (2 + 1);
 
         VkDescriptorPoolCreateInfo dpci{};
         dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpci.maxSets       = totalSets;
+        dpci.maxSets       = totalSets * 2;// main + rcas
         dpci.poolSizeCount = 2;
         dpci.pPoolSizes    = sizes;
         check(vkCreateDescriptorPool(ctx_.device(), &dpci, nullptr, &descPool_),
@@ -260,6 +320,16 @@ namespace threepp::vulkan {
         descSets_.resize(totalSets);
         check(vkAllocateDescriptorSets(ctx_.device(), &ai, descSets_.data()),
               "vkAllocateDescriptorSets(taa)");
+
+        std::vector<VkDescriptorSetLayout> rlayouts(totalSets, rcasDsLayout_);
+        VkDescriptorSetAllocateInfo rai{};
+        rai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        rai.descriptorPool     = descPool_;
+        rai.descriptorSetCount = totalSets;
+        rai.pSetLayouts        = rlayouts.data();
+        rcasSets_.resize(totalSets);
+        check(vkAllocateDescriptorSets(ctx_.device(), &rai, rcasSets_.data()),
+              "vkAllocateDescriptorSets(rcas)");
     }
 
     void TaaResolve::rewriteDescriptors(const DescriptorWriteInputs& inputs) {
@@ -326,6 +396,30 @@ namespace threepp::vulkan {
                 w[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w[6].pImageInfo = &idsPrevI;
                 vkUpdateDescriptorSets(ctx_.device(), 7, w, 0, nullptr);
+
+                // RCAS set: this frame's resolved output lives in the history
+                // WRITE slot (writeSlot) → sample it, sharpen, write swapchain.
+                VkDescriptorImageInfo rcasIn{};
+                rcasIn.sampler     = sampler_;
+                rcasIn.imageView   = historyImagesPP_[writeSlot].view;
+                rcasIn.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                VkDescriptorImageInfo rcasOut{};
+                rcasOut.imageView   = inputs.swapchainViews[i];
+                rcasOut.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                VkWriteDescriptorSet rw[2]{};
+                rw[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                rw[0].dstSet          = rcasSets_[idx];
+                rw[0].dstBinding      = 0;
+                rw[0].descriptorCount = 1;
+                rw[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                rw[0].pImageInfo      = &rcasIn;
+                rw[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                rw[1].dstSet          = rcasSets_[idx];
+                rw[1].dstBinding      = 1;
+                rw[1].descriptorCount = 1;
+                rw[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                rw[1].pImageInfo      = &rcasOut;
+                vkUpdateDescriptorSets(ctx_.device(), 2, rw, 0, nullptr);
             }
         }
     }
@@ -337,7 +431,9 @@ namespace threepp::vulkan {
                                    uint32_t inHeight,
                                    uint32_t outWidth,
                                    uint32_t outHeight,
-                                   float blendAlpha) {
+                                   float blendAlpha,
+                                   bool sharpen,
+                                   float sharpenAmount) {
         // Barrier: taaInput write → read; both history slots covered (RAW
         // hazard on the read slot, WAW on the write slot we're about to
         // overwrite this frame).
@@ -382,7 +478,7 @@ namespace threepp::vulkan {
         // Layout: blendAlpha, output w/h (history + dispatch + writes),
         // input w/h (the render extent the samples were traced at).
         const uint32_t pc[6] = {alphaBits, outWidth, outHeight,
-                                inWidth, inHeight, 0u};
+                                inWidth, inHeight, sharpen ? 0u : 1u};
         vkCmdPushConstants(cb, pipelineLayout_,
                            VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(pc), pc);
@@ -390,6 +486,35 @@ namespace threepp::vulkan {
         const uint32_t gx = (outWidth  + 7u) / 8u;
         const uint32_t gy = (outHeight + 7u) / 8u;
         vkCmdDispatch(cb, gx, gy, 1);
+
+        if (sharpen) {
+            // The resolve wrote the resolved frame into the history slot and
+            // skipped the swapchain. Make it visible, then RCAS-sharpen it
+            // into the swapchain.
+            VkMemoryBarrier2 mb{};
+            mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+            mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            mb.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                               VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            VkDependencyInfo di{};
+            di.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            di.memoryBarrierCount = 1;
+            di.pMemoryBarriers    = &mb;
+            vkCmdPipelineBarrier2(cb, &di);
+
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, rcasPipe_);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    rcasPipeLayout_, 0, 1, &rcasSets_[descIdx], 0, nullptr);
+            uint32_t amountBits;
+            std::memcpy(&amountBits, &sharpenAmount, sizeof(amountBits));
+            const uint32_t rpc[4] = {outWidth, outHeight, amountBits, 0u};
+            vkCmdPushConstants(cb, rcasPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(rpc), rpc);
+            vkCmdDispatch(cb, gx, gy, 1);
+        }
+
         historyValid_ = true;
     }
 
