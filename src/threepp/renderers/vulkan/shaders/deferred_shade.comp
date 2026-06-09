@@ -478,7 +478,7 @@ bool restirOccluded(vec3 shadowOrig, vec3 dir, float maxDist) {
 // recombine applies albedo·(1-metalness)). The caller folds this into diffInd so it
 // rides the SVGF temporal + à-trous denoise: the reservoir converges light SELECTION,
 // the denoiser smooths the 1-sample RADIANCE (ReSTIR DI is always denoiser-paired).
-vec3 restirEmissiveDI(vec3 P, vec3 N, bool doShadows) {
+vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
     const vec3 shadowOrig = P + N * SHADOW_EPS;
     const int  emIters    = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
@@ -592,9 +592,12 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, bool doShadows) {
     if (NdotL <= 0.0) return vec3(0.0);
     if (doShadows && restirOccluded(shadowOrig, li.dir, li.maxDist)) return vec3(0.0);
 
-    // DEMOD irradiance: NdotL·Le·W/π (the ReSTIR estimator f·W with f's BRDF reduced
-    // to the demod 1/π — albedo·(1-metalness) is reapplied by the denoise recombine).
-    vec3 c = (NdotL * (1.0 / PI) * r.W) * li.Le;
+    // DEMOD irradiance: (1-F)·NdotL·Le·W/π. The (1-F) diffuse Fresnel (specular takes F,
+    // the diffuse lobe gets the rest) restores the term emissiveNEE's kd=(1-Fr)(1-metal)
+    // carried — dropping it over-brightened, WORST at grazing (the floor sees the emitter
+    // at a shallow angle). Keyed on the surface NdotV (not per-light H) so it stays a
+    // per-surface demod quantity. albedo·(1-metal) is reapplied by the denoise recombine.
+    vec3 c = (NdotL * (1.0 / PI) * r.W) * li.Le * (vec3(1.0) - fresnelSchlick(NdotV, F0));
     const float clum = max(max(c.r, c.g), c.b);
     if (clum > pc.fireflyClamp) c *= pc.fireflyClamp / clum;
     return c;
@@ -1043,13 +1046,19 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
     if (hm.roughness < 0.0) return hAlbedo;// unlit hit (e.g. a pure-emissive proxy)
 
     if (dot(hitN, -dir) < 0.0) hitN = -hitN;
-    const vec3 hEmissive = hitTex(hm.emissiveTexIndex, hm.uvTransformEmissive, hitUv,
-                                  hm.emissive * hm.emissiveIntensity);
     const vec3 hitP       = origin + dir * tHit;
     const vec3 shadowOrig = hitP + hitN * SHADOW_EPS;
     const vec3 diff       = hAlbedo * (1.0 - clamp(hm.metalness, 0.0, 1.0)) * (1.0 / PI);
 
-    vec3 lit = hEmissive;// a GI ray that hits an emitter sees it glow directly
+    // Emitter EMISSION is SUPPRESSED in the GI bounce. The DIRECT term (emitter → the
+    // shaded surface) is owned by ReSTIR DI / emissiveNEE at the primary, so re-adding
+    // the emitter's glow when a GI ray lands on it DOUBLE-COUNTS the direct light — a
+    // path tracer's MIS prevents exactly this; the cheap GI has no MIS. The hit's
+    // DIFFUSE bounce (loops below) + its own emitter-NEE (emissiveIrradiance) stay —
+    // that's legitimate INDIRECT. Same principle as gSuppressReflEmitter for reflections.
+    // Was `lit = hEmissive`, which over-brightened every emitter-lit surface (worst where
+    // GI rays point at the emitter — e.g. a floor under it = the floor>wall over-count).
+    vec3 lit = vec3(0.0);
     for (uint i = 0u; i < lights.dirCount; ++i) {
         const vec3  L   = normalize(lights.dirLights[i].direction);
         const float ndl = dot(hitN, L);
@@ -1510,8 +1519,11 @@ void main() {
     // converges light selection; this denoises the 1-sample radiance). Added before
     // the demod split so it flows through BOTH the denoise accum path AND the inline
     // (denoise-off) path. restirEmissiveDI also persists this pixel's reservoir.
-    if ((pc.flags & 8u) != 0u)
-        diffInd += restirEmissiveDI(worldPos, N, shadowsOn);
+    if ((pc.flags & 8u) != 0u) {
+        const float rNdotV = max(dot(N, V), 1e-4);
+        const vec3  rF0    = mix(vec3(0.04) * pm.specularIntensity * pm.specularColor, albedo, metalness);
+        diffInd += restirEmissiveDI(worldPos, N, rNdotV, rF0, shadowsOn);
+    }
     const vec3 diffIndShade = demodIndirect ? vec3(0.0) : diffInd;
 
     // Diffuse + direct (shadowed) + emissive-NEE + diffuse indirect + emissive.
