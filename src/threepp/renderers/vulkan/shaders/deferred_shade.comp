@@ -578,14 +578,81 @@ vec3 restirEmissiveDI(vec3 P, vec3 N, float NdotV, vec3 F0, bool doShadows) {
             }
         }
     }
-    // Persist this frame's reservoir for next frame's temporal read. Cap the stored
-    // W (firefly bound) so a one-off high-W sample can't perpetuate via the
-    // multiplicative w_prev feedback (= static bright specks that never average out).
-    float persistW = r.W;
+    // ── Snapshot the PRE-SPATIAL reservoir ── this (NOT the post-spatial r) is what
+    // gets persisted for next frame's temporal merge, matching the PT (closest_hit
+    // Stage 1c) + WGPU. Persisting the post-spatial reservoir would feed spatial
+    // contributions — which don't generalise across reprojection — back into the
+    // temporal M, biasing the weights and producing visible temporal instability.
+    Reservoir rPreSpatial = r;
+    // Cap the persisted W (firefly bound) so a one-off high-W sample can't perpetuate
+    // via the multiplicative w_prev temporal feedback (= static bright specks that
+    // never average out). Shading below uses the unclamped post-spatial r.
+    float persistW = rPreSpatial.W;
     if (pc.fireflyClamp < 1e20) persistW = min(persistW, 5.0);
-    imageStore(reservoirPosWrite, px, vec4(r.lightPos, r.lightType));
-    imageStore(reservoirWWrite,   px, vec4(r.W_sum, r.M, persistW, r.p_hat));
 
+    // ── Stage 1c: spatial reuse ── (ported from closest_hit.rchit:1458)
+    // Tap a few random neighbours from the PREV-frame reservoir buffer (bindings
+    // 28/30), validate each against THIS pixel's surface (prev-normal cone + world
+    // distance — the same prev gbuffer the temporal stage validates against), and
+    // RIS-merge it after re-evaluating its target p_hat at OUR shading point. The
+    // M>=mTarget early-out means converged static pixels (high temporal M) skip it;
+    // the cost is spent where temporal reuse is weakest — freshly DISOCCLUDED pixels
+    // with little/no history (the frame-after-disocclusion noise the temporal-only
+    // path couldn't fix). M-cap 4/neighbour; spMax 5 static / 2 in motion (fewer
+    // stale taps under motion). Reads prev-frame neighbours so there's no second
+    // dispatch / barrier — exactly like the PT + WGPU.
+    {
+        const vec2  size   = vec2(float(pc.width), float(pc.height));
+        const vec3  camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        const float distC  = length(P - camPos);
+        const float mvLen  = length(texture(gbufMotionTex, (vec2(px) + 0.5) / size).rg);
+        const uint  spMax   = (mvLen > 0.01) ? 2u : 5u;
+        const float mTarget = 20.0;
+        const ivec2 maxPx   = ivec2(int(pc.width) - 1, int(pc.height) - 1);
+        for (uint sp = 0u; sp < spMax; ++sp) {
+            if (r.M >= mTarget) break;
+            const float ang = rnd(seed) * TWO_PI;
+            const float rad = sqrt(rnd(seed)) * 20.0;// 20px tap radius (matches the PT)
+            const ivec2 off = ivec2(int(rad * cos(ang)), int(rad * sin(ang)));
+            if (off.x == 0 && off.y == 0) continue;
+            const ivec2 spPx = clamp(px + off, ivec2(0), maxPx);
+            // Validate the neighbour's PREV surface vs ours: normal cone (rejects
+            // sky / differently-facing) + world distance (rejects depth jumps that
+            // share a normal, e.g. parallel floors). Reconstructs the neighbour's
+            // prev world pos with the current cam — a near-exact gate for the static
+            // camera where spatial reuse matters most; loosens harmlessly otherwise
+            // (a bad tap's p_hat re-eval keeps the merge unbiased).
+            const vec3 pn = texelFetch(gbufNormalPrevTex, spPx, 0).xyz * 2.0 - 1.0;
+            if (dot(pn, pn) < 1e-6 || dot(N, normalize(pn)) <= 0.7) continue;
+            const vec2  uvN  = (vec2(spPx) + 0.5) / size;
+            const vec2  ndcN = vec2(uvN.x * 2.0 - 1.0, -(uvN.y * 2.0 - 1.0));
+            const float dN   = texelFetch(gbufDepthPrevTex, spPx, 0).x;
+            const vec4  vhN  = cam.projInverse * vec4(ndcN, dN, 1.0);
+            const vec3  wpN  = (cam.viewInverse * vec4(vhN.xyz / vhN.w, 1.0)).xyz;
+            if (length(wpN - P) > 0.1 * distC) continue;
+            // Merge the neighbour's prev-frame reservoir (target p_hat re-eval'd here).
+            const vec4 spPos = imageLoad(reservoirPosRead, spPx);
+            const vec4 spWd  = imageLoad(reservoirWRead,   spPx);
+            if (spWd.z <= 0.0 || spWd.y <= 0.0 || spPos.w < 999.5) continue;// valid emissive only
+            const float spM    = min(spWd.y, 4.0);// per-neighbour M-cap
+            const LightInfoD spli = evalLightInfoEm(int(spPos.w), spPos.xyz, P);
+            const float spPhat = max(dot(N, spli.dir), 0.0) * lum3(spli.Le);
+            if (spPhat <= 0.0) continue;
+            const float wSp = spPhat * spM * spWd.z;
+            r.W_sum += wSp;
+            r.M     += spM;
+            if (rnd(seed) < wSp / max(r.W_sum, 1e-20)) {
+                r.lightPos = spPos.xyz; r.lightType = spPos.w; r.p_hat = spPhat;
+            }
+        }
+        finalizeReservoir(r);
+    }
+
+    // Persist the PRE-SPATIAL reservoir for next frame's temporal read.
+    imageStore(reservoirPosWrite, px, vec4(rPreSpatial.lightPos, rPreSpatial.lightType));
+    imageStore(reservoirWWrite,   px, vec4(rPreSpatial.W_sum, rPreSpatial.M, persistW, rPreSpatial.p_hat));
+
+    // Shading uses the POST-SPATIAL reservoir r (the improved current-frame estimate).
     if (r.W <= 0.0 || r.p_hat <= 0.0 || r.lightType < 999.5) return vec3(0.0);
     const LightInfoD li = evalLightInfoEm(int(r.lightType), r.lightPos, P);
     const float NdotL = max(dot(N, li.dir), 0.0);
