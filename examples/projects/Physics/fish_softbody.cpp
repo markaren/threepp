@@ -303,6 +303,8 @@ int main(int argc, char** argv) {
     // Per-path belt ribbons whose texture is scrolled each frame to fake surface motion.
     struct AnimatedBelt {
         std::shared_ptr<Texture> tex;
+        std::shared_ptr<MeshStandardMaterial> mat;// bumped each frame so the scrolled
+                                                  // offset re-uploads (see scroll loop)
         float scrollRate;// d(offset.y)/dt at beltSpeedScale = 1
     };
     std::vector<AnimatedBelt> beltVisuals;
@@ -517,7 +519,7 @@ int main(int argc, char** argv) {
             // offset.y is in tile units → scroll rate = speed[m/s] * repeat.y[tiles/m];
             // negative drags the pattern in the +arc-length (travel) direction, flipped
             // for a reversed belt.
-            beltVisuals.push_back({tex, (reverse ? 1.f : -1.f) * speed * tex->repeat.y});
+            beltVisuals.push_back({tex, mat, (reverse ? 1.f : -1.f) * speed * tex->repeat.y});
 
             // Inlet: spawn a bit downstream of the upstream edge so fish land fully on the
             // belt instead of half-off it. Walk the travel-ordered path forward ~a fish length.
@@ -779,6 +781,13 @@ int main(int argc, char** argv) {
         for (auto& bv : beltVisuals) {
             bv.tex->offset.y += bv.scrollRate * beltSpeedScale * realDt;
             bv.tex->offset.y -= std::floor(bv.tex->offset.y);// keep in [0,1) for float precision
+            // The Vulkan renderer caches each material's uvTransform in a GPU MaterialDesc
+            // buffer (shared by the deferred gbuffer AND the path tracer) and only re-uploads
+            // it when Material::version() changes — a bare texture->offset write doesn't bump
+            // it, so the scroll would never reach the GPU. needsUpdate() bumps the version so
+            // the new offset flows through. (GLRenderer recomputes the UV matrix per draw, so
+            // it never needed this.)
+            bv.mat->needsUpdate();
         }
 
         renderer->render(scene, *camera);
