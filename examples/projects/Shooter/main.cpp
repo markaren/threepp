@@ -433,6 +433,30 @@ namespace {
         return os.str();
     }
 
+    float wrapPi(float a) {
+        while (a > math::PI) a -= 2.f * math::PI;
+        while (a < -math::PI) a += 2.f * math::PI;
+        return a;
+    }
+
+    // Annular wedge (donut slice) path, polyline-sampled — no SVG arc-flag
+    // pitfalls. Centred on the origin, opening toward +y (screen-up in the
+    // y-up UI overlay), spanning ±halfDeg. rInner = 0 gives a pie slice.
+    std::string wedgePath(float rInner, float rOuter, float halfDeg) {
+        std::ostringstream d;
+        const int N = 18;
+        auto ang = [&](int i) { return (90.f - halfDeg + 2.f * halfDeg * i / N) * math::DEG2RAD; };
+        for (int i = 0; i <= N; ++i)
+            d << (i == 0 ? "M" : "L") << rOuter * std::cos(ang(i)) << "," << rOuter * std::sin(ang(i)) << " ";
+        if (rInner > 0.f)
+            for (int i = N; i >= 0; --i)
+                d << "L" << rInner * std::cos(ang(i)) << "," << rInner * std::sin(ang(i)) << " ";
+        else
+            d << "L0,0 ";
+        d << "Z";
+        return d.str();
+    }
+
     // Owned-material rect (so we can recolour / rescale it). Built from <rect>.
     struct RectMesh {
         std::shared_ptr<Mesh> mesh;
@@ -453,6 +477,27 @@ namespace {
         mat->side = Side::Double;
         auto geo = ShapeGeometry::create(SVGLoader::createShapes(data.front()));
         return {Mesh::create(geo, mat), mat};
+    }
+
+    // Rounded, border-stroked panel — the HUD framing primitive (<rect rx> + stroke).
+    std::shared_ptr<Group> panel(float w, float h, float rx, int fill, float fillOp,
+                                 int edge, float edgeW) {
+        std::ostringstream svg;
+        svg << R"(<svg xmlns="http://www.w3.org/2000/svg"><rect x="0" y="0" width=")" << w
+            << R"(" height=")" << h << R"(" rx=")" << rx << R"(" fill=")" << hex(fill)
+            << R"(" fill-opacity=")" << fillOp << R"(" stroke=")" << hex(edge)
+            << R"(" stroke-width=")" << edgeW << R"("/></svg>)";
+        return svgFromString(svg.str());
+    }
+
+    // Collect every MeshBasicMaterial under an svgFromString group, so HUD
+    // pieces built from full SVG documents stay restylable per frame.
+    std::vector<std::shared_ptr<MeshBasicMaterial>> svgMats(const std::shared_ptr<Group>& g) {
+        std::vector<std::shared_ptr<MeshBasicMaterial>> out;
+        g->traverseType<Mesh>([&](Mesh& m) {
+            if (auto mat = std::dynamic_pointer_cast<MeshBasicMaterial>(m.material())) out.push_back(mat);
+        });
+        return out;
     }
 
     std::shared_ptr<TextSprite> makeText(const Font& font, const std::string& text, int color,
@@ -525,7 +570,16 @@ namespace {
 
 }// namespace
 
-int main() {
+int main(int argc, char** argv) {
+
+    // Headless capture (dev): tps_shooter --shot <name.png> [--frames N] —
+    // renders N frames from spawn, saves via writeFramebuffer, exits.
+    std::string shotPath;
+    int shotFrames = 180, shotFrame = 0;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--shot" && i + 1 < argc) shotPath = argv[++i];
+        else if (std::string(argv[i]) == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+    }
 
     Canvas canvas(Canvas::Parameters().title("threepp - Third Person Shooter").size(1280, 800).antialiasing(4));
     // Force the GL backend so the demo launches straight into the game instead
@@ -1189,6 +1243,21 @@ int main() {
     bool firedEmpty = false;// debounce empty click
     bool gameOver = false;
     float hitMarkerT = 0.f;// >0 while the hit marker flashes
+    bool  hitWasKill = false;// last hit was a kill → red, popped marker + score float
+    float scorePopT  = 0.f;  // >0 while the "+100" kill pop floats up
+    float chipHealth = 100.f;// damage-lag bar: eases down toward `health`
+    float chSpread   = 6.f;  // crosshair tick spread (eased toward dynamic target)
+    float hudT       = 0.f;  // HUD wall-clock for pulses/sweeps
+    // Damage-direction arcs: a small pool of wedge overlays around the
+    // crosshair; each records the attacker's world bearing and fades out.
+    struct DmgArc {
+        std::shared_ptr<Group> g;
+        std::vector<std::shared_ptr<MeshBasicMaterial>> mats;
+        float t = 0.f;
+        float bearing = 0.f;
+    };
+    std::array<DmgArc, 3> dmgArcs;
+    int dmgArcNext = 0;
     float stepTimer = 0.f;
     float hitReactTimer = 0.f;       // >0 while the hit-reaction clip plays
     float inFwd = 0.f, inStr = 0.f;  // player's intended move dir (drives anim choice)
@@ -1395,9 +1464,13 @@ int main() {
                 spawnParticles(point, dir, hitNormal, /*blood*/ true);
                 e->hp--;
                 hitMarkerT = 0.12f;
+                hitWasKill = false;
                 if (e->hp <= 0) {
                     killEnemy(e, dir);
                     score += 100;
+                    hitMarkerT = 0.25f;// kill: longer, popped, red marker
+                    hitWasKill = true;
+                    scorePopT = 0.8f;  // float a "+100" up from the crosshair
                     sfx.thud.play();
                 } else {
                     sfx.hit.play();
@@ -1474,6 +1547,9 @@ int main() {
                 d.normalize();
                 killEnemy(e.get(), d);
                 score += 100;
+                hitMarkerT = 0.25f;
+                hitWasKill = true;
+                scorePopT = 0.8f;
             }
         }
         for (auto& dyn : dynamics) {
@@ -1496,34 +1572,53 @@ int main() {
     FontLoader fontLoader;
     const Font font = fontLoader.defaultFont();
 
-    // crosshair (4 ticks + dot), recolours on hit
+    // crosshair (4 ticks + dot) — DYNAMIC: the tick gap eases toward a spread
+    // driven by recoil + movement (hip fire blooms, ADS tightens), and the
+    // whole thing recolours on hit. Each tick lives in its own group so the
+    // per-frame update just moves four groups.
     auto crosshair = Group::create();
     std::vector<std::shared_ptr<MeshBasicMaterial>> chMats;
+    std::array<std::shared_ptr<Group>, 4> chTicks;
     {
-        auto mk = [&](float w, float h, float x, float y) {
+        const float len = 9, th = 2;
+        auto mkTick = [&](int i, float w, float h) {
             auto r = rect(w, h, 0xffffff, 0.9f);
-            r.mesh->position.set(x - w / 2, y - h / 2, 0);
-            crosshair->add(r.mesh);
+            r.mesh->position.set(-w / 2, -h / 2, 0);// centre the rect on the group origin
+            chTicks[i] = Group::create();
+            chTicks[i]->add(r.mesh);
+            crosshair->add(chTicks[i]);
             chMats.push_back(r.material);
         };
-        const float g = 6, len = 8, th = 2;
-        mk(th, len, 0, g + th);  // up
-        mk(th, len, 0, -g);      // down
-        mk(len, th, -g - th, th);// left
-        mk(len, th, g + th, th); // right
-        mk(3, 3, 0, 1.5f);       // dot
+        mkTick(0, th, len);// up
+        mkTick(1, th, len);// down
+        mkTick(2, len, th);// left
+        mkTick(3, len, th);// right
+        auto dot = rect(3, 3, 0xffffff, 0.9f);
+        dot.mesh->position.set(-1.5f, -1.5f, 0);
+        crosshair->add(dot.mesh);
+        chMats.push_back(dot.material);
     }
     ui->add(crosshair);
     layout.add(crosshair, 0.5f, 0.5f, 0, 0, 0.5f);
 
-    // health bar (bottom-left): frame + fill
+    // health bar (bottom-left): rounded bordered frame + damage-lag chip + fill.
+    // The CHIP bar (amber) snaps to the old value and eases down toward the
+    // fill, so every hit leaves a visible "chunk" that drains — classic
+    // fighting-game damage feedback, and it makes burst damage readable.
     {
-        auto frame = rect(224, 26, kPanel, 0.7f);
         auto fg = Group::create();
-        fg->add(frame.mesh);
+        fg->add(panel(224, 26, 6, kPanel, 0.75f, kPanelEdge, 1.5f));
         fg->scale.y = -1.f;
         ui->add(fg);
         layout.add(fg, 0.f, 0.f, 22, 56, 0.1f);
+    }
+    auto chipFill = rect(216, 18, 0xffaa55, 0.55f);
+    {
+        auto cg = Group::create();
+        cg->add(chipFill.mesh);
+        cg->scale.y = -1.f;
+        ui->add(cg);
+        layout.add(cg, 0.f, 0.f, 26, 52, 0.15f);
     }
     auto healthFill = rect(216, 18, kHudGood, 0.95f);
     {
@@ -1548,12 +1643,130 @@ int main() {
                                TextSprite::HorizontalAlignment::Right)};
     ui->add(reloadTxt.sprite);
 
+    // magazine pips (above the ammo readout): one per round, draining right to
+    // left; a reload refills them as a left-to-right sweep timed to kReloadTime;
+    // a dry mag pulses them red.
+    auto magGroup = Group::create();
+    std::vector<std::shared_ptr<MeshBasicMaterial>> pipMats;
+    for (int i = 0; i < kMagSize; ++i) {
+        auto p = rect(6, 20, 0xffffff, 0.95f);
+        p.mesh->position.set(-static_cast<float>(i) * 10.f - 6.f, 0.f, 0.f);
+        magGroup->add(p.mesh);
+        pipMats.push_back(p.material);
+    }
+    ui->add(magGroup);
+    layout.add(magGroup, 1.f, 0.f, -40, 112, 0.2f);
+
+    // grenade pip (right of the health bar): drains on throw, refills over the
+    // cooldown, green when ready
+    auto gPip = rect(8, 26, kHudGood, 0.9f);
+    {
+        auto gg = Group::create();
+        gg->add(gPip.mesh);
+        ui->add(gg);
+        layout.add(gg, 0.f, 0.f, 256, 30, 0.2f);
+    }
+    ui->add(makeText(font, "G", kHudCyan, 11 * dpi, 0.f, 0.f, 258, 20));
+
     // score + enemies (top)
     Readout scoreTxt{makeText(font, "SCORE 0", kHudCyan, 22 * dpi, 0.f, 1.f, 24, -34)};
     ui->add(scoreTxt.sprite);
     Readout aliveTxt{makeText(font, "", 0xffffff, 16 * dpi, 1.f, 1.f, -24, -34,
                               TextSprite::HorizontalAlignment::Right)};
     ui->add(aliveTxt.sprite);
+
+    // ── compass strip (top-centre) ──────────────────────────────────────────
+    // Cardinal labels + 15° ticks slide horizontally with camera yaw under a
+    // fixed caret; a numeric heading readout sits below the caret. Ticks are
+    // SVG rects inside a top-centre-anchored group; labels are independent
+    // screen-space TextSprites (they anchor themselves), both driven by the
+    // same wrapped angular offset, hidden outside the strip's half-width.
+    constexpr float kCompassHalfW = 170.f, kCompassPxPerRad = 150.f;
+    struct CompassMark {
+        std::shared_ptr<Mesh> tick;            // null for label-only marks
+        std::shared_ptr<TextSprite> label;     // null for tick-only marks
+        float ang = 0.f;                       // world bearing, radians
+    };
+    std::vector<CompassMark> compassMarks;
+    auto compassTicks = Group::create();
+    {
+        static const char* kCard[8] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+        for (int d = 0; d < 360; d += 15) {
+            CompassMark m;
+            m.ang = static_cast<float>(d) * math::DEG2RAD;
+            const bool card = d % 45 == 0;
+            auto t = rect(2, card ? 12.f : 7.f, card ? kHudCyan : 0x9fb6c8, card ? 0.95f : 0.55f);
+            m.tick = t.mesh;
+            compassTicks->add(m.tick);
+            if (card) {
+                m.label = makeText(font, kCard[(d / 45) % 8], d == 0 ? kHudWarn : 0xd7e6f2,
+                                   13 * dpi, 0.5f, 1.f, 0, -46,
+                                   TextSprite::HorizontalAlignment::Center);
+                ui->add(m.label);
+            }
+            compassMarks.push_back(std::move(m));
+        }
+        // caret + baseline
+        auto caret = svgFromString(std::string(R"(<svg xmlns="http://www.w3.org/2000/svg"><polygon points="-5,0 5,0 0,-7" fill=")") +
+                                   hex(kHudCyan) + R"("/></svg>)");
+        compassTicks->add(caret);
+        caret->position.set(0, -2, 0);
+        auto base = rect(2.f * kCompassHalfW, 1.5f, kPanelEdge, 0.8f);
+        base.mesh->position.set(-kCompassHalfW, -26, 0);
+        compassTicks->add(base.mesh);
+    }
+    ui->add(compassTicks);
+    layout.add(compassTicks, 0.5f, 1.f, 0, -10, 0.2f);
+    Readout headingTxt{makeText(font, "000", 0xd7e6f2, 13 * dpi, 0.5f, 1.f, 0, -64,
+                                TextSprite::HorizontalAlignment::Center)};
+    ui->add(headingTxt.sprite);
+
+    // ── radar (top-right) ───────────────────────────────────────────────────
+    // Heading-up scope: rings + cross from one SVG document, a rotating sweep
+    // wedge, hostile blips from a small pool, a north tick that orbits with
+    // yaw, and the player as a centre dot. Same instrument the ocean demo
+    // draws with ImGui — here it's pure SVG in the overlay pass.
+    constexpr float kRadarR = 64.f, kRadarRange = 38.f;
+    constexpr int kMaxBlips = 12;
+    auto radar = Group::create();
+    {
+        std::ostringstream svg;
+        svg << R"(<svg xmlns="http://www.w3.org/2000/svg">)"
+            << R"(<circle cx="0" cy="0" r="64" fill=")" << hex(kPanel) << R"(" fill-opacity="0.55" stroke=")"
+            << hex(kPanelEdge) << R"(" stroke-width="1.5"/>)"
+            << R"(<circle cx="0" cy="0" r="42.7" fill="none" stroke=")" << hex(kPanelEdge) << R"(" stroke-width="1" stroke-opacity="0.7"/>)"
+            << R"(<circle cx="0" cy="0" r="21.3" fill="none" stroke=")" << hex(kPanelEdge) << R"(" stroke-width="1" stroke-opacity="0.7"/>)"
+            << R"(<line x1="-64" y1="0" x2="64" y2="0" stroke=")" << hex(kPanelEdge) << R"(" stroke-width="1" stroke-opacity="0.6"/>)"
+            << R"(<line x1="0" y1="-64" x2="0" y2="64" stroke=")" << hex(kPanelEdge) << R"(" stroke-width="1" stroke-opacity="0.6"/>)"
+            << R"(</svg>)";
+        radar->add(svgFromString(svg.str()));
+    }
+    auto radarSweep = svgFromString(std::string(R"(<svg xmlns="http://www.w3.org/2000/svg"><path d=")") +
+                                    wedgePath(0.f, 62.f, 13.f) + R"(" fill=)" + '"' + hex(kHudCyan) +
+                                    R"(" fill-opacity="0.16"/></svg>)");
+    radar->add(radarSweep);
+    auto radarNorth = rect(3, 8, kHudCyan, 0.9f);
+    radarNorth.mesh->position.set(-1.5f, -4.f, 0.f);
+    auto radarNorthG = Group::create();
+    radarNorthG->add(radarNorth.mesh);
+    radar->add(radarNorthG);
+    {
+        auto dotC = rect(5, 5, kHudCyan, 1.f);
+        dotC.mesh->position.set(-2.5f, -2.5f, 0.f);
+        radar->add(dotC.mesh);
+    }
+    std::vector<std::shared_ptr<Group>> blips;
+    for (int i = 0; i < kMaxBlips; ++i) {
+        auto b = rect(5, 5, kHudWarn, 0.95f);
+        b.mesh->position.set(-2.5f, -2.5f, 0.f);// centre on the blip group origin
+        auto bg = Group::create();
+        bg->add(b.mesh);
+        bg->visible = false;
+        radar->add(bg);
+        blips.push_back(bg);
+    }
+    ui->add(radar);
+    layout.add(radar, 1.f, 1.f, -92, -110, 0.15f);
 
     // hit marker (centre, flashes)
     auto hitMarker = svgFromString(std::string(R"(<svg xmlns="http://www.w3.org/2000/svg"><g stroke=")") + hex(kHudWarn) +
@@ -1562,6 +1775,24 @@ int main() {
     hitMarker->visible = false;
     ui->add(hitMarker);
     layout.add(hitMarker, 0.5f, 0.5f, 0, 0, 0.6f);
+    auto hitMats = svgMats(hitMarker);// recolour: white = hit, red + pop = kill
+
+    // "+100" kill pop — floats up from beside the crosshair and vanishes
+    auto scorePop = makeText(font, "+100", kHudGood, 16 * dpi, 0.5f, 0.5f, 30, 14,
+                             TextSprite::HorizontalAlignment::Left);
+    scorePop->visible = false;
+    ui->add(scorePop);
+
+    // damage-direction arcs (pool built from the wedge primitive); each is
+    // rotated toward its attacker bearing relative to the camera and faded
+    for (auto& a : dmgArcs) {
+        a.g = svgFromString(std::string(R"(<svg xmlns="http://www.w3.org/2000/svg"><path d=")") +
+                            wedgePath(56.f, 68.f, 26.f) + R"(" fill=)" + '"' + hex(kHudWarn) + R"("/></svg>)");
+        a.mats = svgMats(a.g);
+        a.g->visible = false;
+        ui->add(a.g);
+        layout.add(a.g, 0.5f, 0.5f, 0, 0, 0.55f);
+    }
 
     // low-health vignette (full-screen red, opacity tracks damage)
     auto vignette = rect(1, 1, kHudWarn, 0.f);
@@ -1574,17 +1805,24 @@ int main() {
                      0x9fb6c8, 12 * dpi, 0.5f, 0.f, 0, 20,
                      TextSprite::HorizontalAlignment::Center));
 
-    // game-over panel (hidden until death)
+    // game-over: full-screen dim backdrop (eases in) + bordered rounded panel
+    auto overDim = rect(1, 1, 0x000000, 0.f);
+    ui->add(overDim.mesh);
+    layout.addRaw([m = overDim.mesh](float W, float H) { m->scale.set(W, H, 1); m->position.set(0, 0, 0.65f); });
     auto over = Group::create();
     over->visible = false;
     ui->add(over);
     {
-        auto panel = rect(420, 200, kPanel, 0.92f);
         auto pg = Group::create();
-        pg->add(panel.mesh);
+        pg->add(panel(420, 210, 10, kPanel, 0.92f, kPanelEdge, 2.f));
         pg->scale.y = -1.f;
         over->add(pg);
-        layout.add(pg, 0.5f, 0.5f, -210, 100, 0.7f);
+        layout.add(pg, 0.5f, 0.5f, -210, 105, 0.7f);
+        auto sep = rect(340, 1.5f, kPanelEdge, 0.9f);
+        auto sg = Group::create();
+        sg->add(sep.mesh);
+        over->add(sg);
+        layout.add(sg, 0.5f, 0.5f, -170, 30, 0.71f);
     }
     auto overTitle = makeText(font, "GAME OVER", kHudWarn, 40 * dpi, 0.5f, 0.5f, 0, 50,
                               TextSprite::HorizontalAlignment::Center);
@@ -1636,6 +1874,10 @@ int main() {
         recoilYaw = 0.f;
         aiming = false;
         inspect = false;
+        chipHealth = 100.f;
+        scorePopT = 0.f;
+        hitWasKill = false;
+        for (auto& a : dmgArcs) a.t = 0.f;
         // reset player
         playerBody->setGlobalPose(toPxTransform(Vector3(0, kPlayerHalf, 0)));
         playerBody->setLinearVelocity(PxVec3(0));
@@ -2075,6 +2317,15 @@ int main() {
                         health -= 9;
                         hitReactTimer = 0.45f;// flinch
                         e->attackCd = 0.8f;
+                        // Damage-direction arc: record the attacker's bearing;
+                        // the HUD rotates a wedge toward them and fades it.
+                        {
+                            const PxVec3 ap = e->body->getGlobalPose().p;
+                            auto& slot = dmgArcs[dmgArcNext];
+                            dmgArcNext = static_cast<int>((dmgArcNext + 1) % dmgArcs.size());
+                            slot.t = 1.f;
+                            slot.bearing = std::atan2(ap.x - playerPos.x, ap.z - playerPos.z);
+                        }
                         sfx.hurt.play();
                         if (health <= 0) {
                             health = 0;
@@ -2170,15 +2421,44 @@ int main() {
         }
 
         // --- HUD update ---
+        hudT += dt;
+
+        // health: fill + colour + low-HP pulse; chip bar eases down toward it
         healthFill.mesh->scale.x = std::max(0.001f, static_cast<float>(health) / 100.f);
         healthFill.material->color = Color(health > 50 ? kHudGood : (health > 25 ? 0xffaa33 : kHudWarn));
+        healthFill.material->opacity = health <= 25 ? 0.7f + 0.25f * std::sin(hudT * 8.f) : 0.95f;
+        if (static_cast<float>(health) > chipHealth) chipHealth = static_cast<float>(health);
+        chipHealth = std::max(static_cast<float>(health), chipHealth - dt * 35.f);
+        chipFill.mesh->scale.x = std::max(0.001f, chipHealth / 100.f);
         healthTxt->setText(std::to_string(health));
+
+        // ammo readout + magazine pips (reload = left-to-right refill sweep)
         {
             std::ostringstream os;
             os << ammo << " / " << kMagSize;
             ammoTxt.set(os.str());
         }
         reloadTxt.set(reloading ? "RELOADING" : (ammo == 0 ? "EMPTY" : ""));
+        {
+            const int lit = reloading
+                ? static_cast<int>((1.f - reloadTimer / kReloadTime) * kMagSize + 1e-3f)
+                : ammo;
+            const bool dry = !reloading && ammo == 0;
+            for (int i = 0; i < kMagSize; ++i) {
+                const bool on = i < lit;
+                pipMats[i]->color = Color(dry ? kHudWarn : (on ? 0xffffff : kPanelEdge));
+                pipMats[i]->opacity = dry ? 0.25f + 0.4f * (0.5f + 0.5f * std::sin(hudT * 10.f))
+                                          : (on ? 0.95f : 0.35f);
+            }
+        }
+
+        // grenade pip: drains on throw, refills over the cooldown
+        {
+            const float ready = throwTimer <= 0.f ? 1.f : 1.f - throwTimer / kThrowTime;
+            gPip.mesh->scale.y = std::max(0.05f, ready);
+            gPip.material->color = Color(ready >= 1.f ? kHudGood : 0x9fb6c8);
+        }
+
         scoreTxt.set("SCORE " + std::to_string(score));
         {
             int a = 0;
@@ -2186,9 +2466,86 @@ int main() {
                 if (e->alive) a++;
             aliveTxt.set("HOSTILES " + std::to_string(a));
         }
+
+        // crosshair: spread eases toward recoil + movement (ADS tightens)
+        {
+            const PxVec3 pv = playerBody->getLinearVelocity();
+            const float speed = std::sqrt(pv.x * pv.x + pv.z * pv.z);
+            const float target = std::clamp((aiming ? 2.5f : 6.f) + recoilKick * 60.f + speed * 0.9f, 2.f, 26.f);
+            chSpread += (target - chSpread) * std::min(1.f, dt * 14.f);
+            const float s = chSpread + 4.5f;
+            chTicks[0]->position.set(0, s, 0);
+            chTicks[1]->position.set(0, -s, 0);
+            chTicks[2]->position.set(-s, 0, 0);
+            chTicks[3]->position.set(s, 0, 0);
+        }
+
+        // hit marker: white flash on hit, red popped flash on kill; "+100" floats
         hitMarkerT -= dt;
         hitMarker->visible = hitMarkerT > 0.f;
+        if (hitMarker->visible) {
+            const float pop = hitWasKill ? 1.f + 0.6f * std::min(1.f, hitMarkerT / 0.25f) : 1.f;
+            hitMarker->scale.set(pop, pop, 1);
+            for (auto& m : hitMats) m->color = Color(hitWasKill ? kHudWarn : 0xffffff);
+        }
+        scorePopT -= dt;
+        scorePop->visible = scorePopT > 0.f;
+        if (scorePop->visible) scorePop->position.set(30.f, 14.f + (0.8f - scorePopT) * 55.f, 0.f);
+
+        // damage-direction arcs: rotate toward the attacker (camera-relative), fade
+        for (auto& a : dmgArcs) {
+            a.t -= dt;
+            a.g->visible = a.t > 0.f;
+            if (!a.g->visible) continue;
+            a.g->rotation.z = wrapPi(a.bearing - camYaw);
+            const float o = std::clamp(a.t, 0.f, 1.f) * 0.8f;
+            for (auto& m : a.mats) m->opacity = o;
+        }
+
+        // compass: slide marks under the caret; heading readout
+        {
+            for (auto& m : compassMarks) {
+                // screen-right = bearing-(90°) in this scene's mirrored frame,
+                // so marks move LEFT as bearing increases (matches the radar)
+                const float dx = -wrapPi(m.ang - camYaw) * kCompassPxPerRad;
+                const bool vis = std::abs(dx) < kCompassHalfW;
+                if (m.tick) {
+                    m.tick->visible = vis;
+                    m.tick->position.set(dx - 1.f, m.label ? -16.f : -12.f, 0.f);
+                }
+                if (m.label) {
+                    m.label->visible = vis;
+                    m.label->position.set(dx, -46.f, 0.f);
+                }
+            }
+            const int deg = (static_cast<int>(std::round(camYaw * math::RAD2DEG)) % 360 + 360) % 360;
+            std::ostringstream os;
+            os << std::setw(3) << std::setfill('0') << deg;
+            headingTxt.set(os.str());
+        }
+
+        // radar: sweep spins, north tick orbits, hostiles blip (heading-up)
+        {
+            radarSweep->rotation.z = -hudT * 2.2f;
+            const float nRel = wrapPi(0.f - camYaw);
+            radarNorthG->position.set(-std::sin(nRel) * (kRadarR - 7.f), std::cos(nRel) * (kRadarR - 7.f), 0.f);
+            size_t bi = 0;
+            for (auto& e : enemies) {
+                if (!e->alive || bi >= blips.size()) continue;
+                const PxVec3 ep = e->body->getGlobalPose().p;
+                const float relX = ep.x - playerPos.x, relZ = ep.z - playerPos.z;
+                const float d2 = relX * relX + relZ * relZ;
+                const float rel = wrapPi(std::atan2(relX, relZ) - camYaw);
+                const float r = std::min(std::sqrt(d2) / kRadarRange, 0.94f) * kRadarR;
+                blips[bi]->position.set(-std::sin(rel) * r, std::cos(rel) * r, 0.f);
+                blips[bi]->visible = true;
+                ++bi;
+            }
+            for (; bi < blips.size(); ++bi) blips[bi]->visible = false;
+        }
+
         vignette.material->opacity = std::clamp((60.f - health) / 60.f, 0.f, 0.55f);
+        overDim.material->opacity += ((gameOver ? 0.55f : 0.f) - overDim.material->opacity) * std::min(1.f, dt * 6.f);
         for (auto& m : chMats) m->color = Color(hitMarkerT > 0.f ? kHudWarn : 0xffffff);
 
         // ===== render: world, then SVG overlay =====
@@ -2197,5 +2554,12 @@ int main() {
         renderer->autoClear = false;
         renderer->clearDepth();
         renderer->render(*ui, *uiCam);
+
+        if (!shotPath.empty() && ++shotFrame >= shotFrames) {
+            const auto path = fs::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
+            if (auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get())) vk->writeFramebuffer(path);
+            std::cout << "wrote " << path.string() << std::endl;
+            std::exit(0);
+        }
     });
 }
