@@ -1218,6 +1218,14 @@ namespace threepp {
         std::array<Buffer, kFramesInFlight> rasterCameraUbos{};
         bool  rasterPrevVPValid_ = false;
         float rasterPrevVP_[16]{};
+        // prevVPunjit · currVPunjit⁻¹ for the TAA's sky-motion reconstruction
+        // (sky rasterizes nothing → zero motion → wrong reproject under
+        // camera rotation). Computed in uploadRasterCameraUbo while both
+        // VPs are in hand; identity until the first real frame.
+        std::array<float, 16> taaSkyReproj_{1.f, 0.f, 0.f, 0.f,
+                                            0.f, 1.f, 0.f, 0.f,
+                                            0.f, 0.f, 1.f, 0.f,
+                                            0.f, 0.f, 0.f, 1.f};
         float rasterPrevJitter_[2]{};
         bool  rasterPrevJitterValid_ = false;
 
@@ -6240,6 +6248,18 @@ namespace threepp {
             std::memcpy(mapped, &ubo, sizeof(ubo));
             vmaUnmapMemory(ctx->allocator(), rasterCameraUbos[frame].alloc);
 
+            // Far-plane reprojection for the TAA sky path — must be built
+            // BEFORE rasterPrevVP_ rolls over to this frame's VP.
+            {
+                Matrix4 invCurr;
+                invCurr.copy(vpUnj).invert();
+                Matrix4 prevVPm;
+                std::memcpy(prevVPm.elements.data(),
+                            rasterPrevVPValid_ ? rasterPrevVP_ : vpUnj.elements.data(), 64);
+                Matrix4 sky;
+                sky.multiplyMatrices(prevVPm, invCurr);
+                std::memcpy(taaSkyReproj_.data(), sky.elements.data(), 64);
+            }
             std::memcpy(rasterPrevVP_, vpUnj.elements.data(), 64);
             rasterPrevVPValid_ = true;
             rasterPrevJitter_[0] = jClipX;
@@ -13064,7 +13084,8 @@ namespace threepp {
             taa_->recordResolve(cb, currentFrame, imageIndex,
                                 ptExt.width, ptExt.height,
                                 ext.width, ext.height, taaBlendAlpha_,
-                                sharpenStrength_ > 0.0f, sharpenStrength_);
+                                sharpenStrength_ > 0.0f, sharpenStrength_,
+                                taaSkyReproj_.data());
             timingEnd(cb, TP_TAA);
             // ── End raster TAA ─────────────────────────────────────────────────
 

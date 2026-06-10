@@ -173,7 +173,12 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N) {
     // for rough, down to 1 (reset) as roughness → mirror. Thresholds match the
     // PT's view-dependence factor (1 - smoothstep(0.05, 0.30, roughness)).
     const float rough = abs(cur.a);// .a < 0 = glass marker (frost gr) — same policy
-    float histCap = 32.0;
+    // Static-view cap: 512 (was 32). The reflection ray is GGX-sampled with a
+    // per-frame seed, so a held-still view keeps integrating fresh stochastic
+    // samples; a 32-frame mean leaves sigma/sqrt(32) residual boil that reads
+    // as "steel never settles" on high-contrast (sun/env) reflections. Motion
+    // caps below are unchanged — this only affects a stationary camera.
+    float histCap = 512.0;
     const float mvLen = length(mv);
     if (mvLen > 0.004) {// above jitter
         const float viewDepT  = 1.0 - smoothstep(0.05, 0.30, rough);// 1 = mirror-like

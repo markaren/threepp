@@ -82,7 +82,8 @@ namespace threepp::vulkan {
                            uint32_t outHeight,
                            float blendAlpha,
                            bool sharpen,
-                           float sharpenAmount);
+                           float sharpenAmount,
+                           const float* skyReproj);
 
         // Denoise writes its output here when TAA is active (replaces the
         // direct-to-swapchain write of non-TAA mode).
