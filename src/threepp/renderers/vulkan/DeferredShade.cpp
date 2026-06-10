@@ -469,14 +469,22 @@ namespace threepp::vulkan {
         // Roughness-guided edge-stopping blur of the sharp 1-mirror-ray reflection
         // (binding 25, written by the shade) + recombine × spec weight into
         // sceneHdr. ONE sharp ray (no discrete GGX samples) blurred by roughness =
-        // a smooth glossy reflection with NO ghost copies. Barrier: the last GI
-        // pass wrote sceneHdr (RAW for this pass's read-modify-write).
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
-                             1, &mb, 0, nullptr, 0, nullptr);
-        const uint32_t rpc[10] = {0u, width, height, 0u, 0u, 0u, 0u, 1u/*channel=reflection*/, 0u, 0u};
-        vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(rpc), rpc);
-        vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
+        // a smooth glossy reflection with NO ghost copies. SEPARABLE: step 0
+        // blurs horizontally into the atrousB scratch (free again — the GI
+        // à-trous finished with it), step 1 blurs that vertically + despeckles +
+        // recombines. Same Gaussian as the old dense grid at ≤2·25 instead of up
+        // to 625 taps/pixel. Barrier 1: the last GI pass wrote sceneHdr (RAW for
+        // the V pass's read-modify-write) and read atrousB the H pass overwrites
+        // (WAR). Barrier 2: H's scratch write → V's read.
+        const uint32_t rpcSep[2] = {0u /*H*/, 1u /*V*/};
+        for (uint32_t s : rpcSep) {
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                                 1, &mb, 0, nullptr, 0, nullptr);
+            const uint32_t rpc[10] = {0u, width, height, s/*0=H,1=V*/, 0u, 0u, 0u, 1u/*channel=reflection*/, 0u, 0u};
+            vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(rpc), rpc);
+            vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
+        }
     }
 
 }// namespace threepp::vulkan

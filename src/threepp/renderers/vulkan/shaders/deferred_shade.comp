@@ -153,32 +153,34 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
 //   fresh 1-sample wide (history=1 ⇒ wide), and on a held-still view history climbs and
 //   the blur narrows back to the converged (sharp) lobe. This is why it's pretty AND
 //   stable where the fixed-α version was only one or the other.
-vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N) {
-    const float curLum = dot(cur.rgb, vec3(0.2126, 0.7152, 0.0722));
-    const vec2  mv     = texture(gbufMotionTex, uv).rg;
-    const vec2  pNdc   = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
-    const vec2  pUv    = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
+// Shared reflection-channel REPROJECTION + history policy. Two callers — the
+// temporal accumulation below AND the checkerboard skip decision made BEFORE the
+// reflection trace — one logic, so the "may I hold history?" answer can't drift
+// from the "how do I blend history?" answer.
+// ROUGHNESS-AWARE motion policy: the old blanket reset (any camera motion →
+// history=1) starved exactly the surfaces that need history most: a ROUGH lobe
+// integrates a wide solid angle, so its reflection is nearly VIEW-INDEPENDENT
+// and survives a surface reproject — like diffuse GI, which reprojects under
+// motion with a short cap. Only near-MIRROR content actually shifts with the
+// camera (a surface reproject can't follow it → ghost), so only that resets.
+// In between, the cap blends: motion-scaled (24→6, the GI channel's pattern)
+// for rough, down to 1 (reset) as roughness → mirror. Thresholds match the
+// PT's view-dependence factor (1 - smoothstep(0.05, 0.30, roughness)).
+bool reflReproject(vec2 uv, vec3 N, float rough, out vec2 pUv, out float histCap) {
+    const vec2 mv   = texture(gbufMotionTex, uv).rg;
+    const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
+    pUv = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
     bool valid = all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)));
     if (valid) {
         const vec3 pn = texture(gbufNormalPrevTex, pUv).xyz * 2.0 - 1.0;
         valid = dot(pn, pn) > 1e-6 && dot(N, normalize(pn)) > 0.9;// surface match (disocclusion)
     }
-    // ROUGHNESS-AWARE motion policy. The old blanket reset (any camera motion →
-    // history=1) starved exactly the surfaces that need history most: a ROUGH lobe
-    // integrates a wide solid angle, so its reflection is nearly VIEW-INDEPENDENT
-    // and survives a surface reproject — like diffuse GI, which reprojects under
-    // motion with a short cap. Only near-MIRROR content actually shifts with the
-    // camera (a surface reproject can't follow it → ghost), so only that resets.
-    // In between, the cap blends: motion-scaled (24→6, the GI channel's pattern)
-    // for rough, down to 1 (reset) as roughness → mirror. Thresholds match the
-    // PT's view-dependence factor (1 - smoothstep(0.05, 0.30, roughness)).
-    const float rough = abs(cur.a);// .a < 0 = glass marker (frost gr) — same policy
     // Static-view cap: 512 (was 32). The reflection ray is GGX-sampled with a
     // per-frame seed, so a held-still view keeps integrating fresh stochastic
     // samples; a 32-frame mean leaves sigma/sqrt(32) residual boil that reads
     // as "steel never settles" on high-contrast (sun/env) reflections. Motion
     // caps below are unchanged — this only affects a stationary camera.
-    float histCap = 512.0;
+    histCap = 512.0;
     const float mvLen = length(mv);
     if (mvLen > 0.004) {// above jitter
         const float viewDepT  = 1.0 - smoothstep(0.05, 0.30, rough);// 1 = mirror-like
@@ -186,20 +188,58 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N) {
         histCap = mix(motionCap, 1.0, viewDepT);
         if (histCap < 1.5) valid = false;// near-mirror: hard reset (view-dependent)
     }
+    return valid;
+}
+vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, bool hold) {
+    const float curLum = dot(cur.rgb, vec3(0.2126, 0.7152, 0.0722));
+    const float rough  = abs(cur.a);// .a < 0 = glass marker (frost gr) — same policy
+    vec2 pUv; float histCap;
+    bool valid = reflReproject(uv, N, rough, pUv, histCap);
     const vec4 prevR = valid ? texture(reflectPrevTex, pUv) : vec4(0.0);
     if (valid && any(greaterThan(abs(prevR.rgb), vec3(1e6)))) valid = false;// garbage guard
-    float histLen, moment;
+    if (hold && valid) {
+        // Checkerboard SKIP frame: no new sample — carry the history through
+        // UNCHANGED (no histLen increment, no blend, trend carried), the GI
+        // channel's giSkip pattern. Freezing histLen keeps the blend alpha tied
+        // to the number of REAL samples, so the running mean stays unbiased at
+        // half rate.
+        const vec3 pa = texture(reflAuxPrevTex, pUv).xyz;
+        imageStore(reflAuxWrite, px, vec4(clamp(pa.x, 1.0, histCap), pa.y, pa.z, 0.0));
+        return vec4(prevR.rgb, cur.a);
+    }
+    float histLen, moment, trend;
     vec3  accum;
     if (valid) {
-        const vec2  pa = texture(reflAuxPrevTex, pUv).xy;
-        histLen = min(pa.x + 1.0, histCap);
+        const vec3  pa = texture(reflAuxPrevTex, pUv).xyz;
+        // CONTENT-CHANGE ANTILAG — fixes "glass/mirror reflections never update
+        // under a static camera". The static-512 cap freezes the running mean:
+        // CONTENT motion (an object sliding behind glass, or moving in a mirror
+        // — no camera motion, no surface motion vectors, no disocclusion) was
+        // blended at alpha=1/512 → an ~8-second smear that reads as frozen.
+        // Distinguish content change from sampling noise by the SIGN TREND of
+        // the deviation (the TAA streak lesson, adapted): jitter/GGX-lobe BOIL
+        // ALTERNATES around the converged mean (EMA → 0), real content change
+        // pushes the SAME direction every frame (EMA → ±1). On a sustained
+        // trend, cut history multiplicatively → the channel re-blends at
+        // content rate; once the content settles, the trend decays and history
+        // regrows to the full static cap (settling unharmed).
+        const float prevLum = dot(prevR.rgb, vec3(0.2126, 0.7152, 0.0722));
+        const float sdev = clamp((curLum - prevLum) / (0.05 + 0.25 * max(curLum, prevLum)), -1.0, 1.0);
+        trend = mix(pa.z, sdev, 0.34);// ~3-frame EMA, carried in aux .z
+        // Smooth trend→cap mapping (a hard threshold + multiplicative cut made a
+        // relaxation oscillator out of pixels hovering at the boundary: slash →
+        // pop → regrow → slash). Alternating boil EMAs to ~±0.2, DC-biased edge
+        // boil reaches ~0.6 (mild cap, settling barely touched); real content
+        // change pegs |trend| ≈ 1 → cap ~3 → re-blends at content rate.
+        const float trendCap = mix(histCap, 3.0, smoothstep(0.45, 0.9, abs(trend)));
+        histLen = max(min(pa.x + 1.0, trendCap), 1.0);
         const float a = 1.0 / histLen;
         accum   = mix(prevR.rgb, cur.rgb, a);
         moment  = mix(pa.y, curLum * curLum, a);
     } else {
-        histLen = 1.0; accum = cur.rgb; moment = curLum * curLum;
+        histLen = 1.0; accum = cur.rgb; moment = curLum * curLum; trend = 0.0;
     }
-    imageStore(reflAuxWrite, px, vec4(histLen, moment, 0.0, 0.0));
+    imageStore(reflAuxWrite, px, vec4(histLen, moment, trend, 0.0));
     return vec4(accum, cur.a);
 }
 
@@ -2315,7 +2355,22 @@ void main() {
              * emissiveSpecNEE(worldPos, N, V, NdotV, F0, roughness, kS, shadowsOn);
     }
     vec3 reflOut = vec3(0.0);
-    if (reflBlend > 0.0 && opaqueRefl) {
+    // CHECKERBOARD reflections (OPPOSITE parity to giSkip → an eligible pixel
+    // traces exactly ONE indirect channel per frame): with ≥4 frames of usable
+    // history, skip the whole traceRadiance chain and HOLD the accumulation.
+    // reflReproject's policy already encodes when holding is safe: near-mirror
+    // under camera motion hard-resets (histCap < 1.5 → not usable), so the
+    // deterministic mirror ray keeps full rate exactly where the reflection is
+    // view-dependent; rough and static pixels ride their history instead. A
+    // static mirror's ray is deterministic, so its held value IS the ray's value.
+    bool reflSkip = false;
+    if (demodIndirect && reflBlend > 0.0 && opaqueRefl &&
+        ((((px.x ^ px.y) ^ int(pc.frame)) & 1) == 0)) {
+        vec2 rUv; float rCap;
+        if (reflReproject(uv, N, roughness, rUv, rCap))
+            reflSkip = rCap >= 4.0 && texture(reflAuxPrevTex, rUv).x >= 4.0;
+    }
+    if (reflBlend > 0.0 && opaqueRefl && !reflSkip) {
         const float missLod = roughness * maxLod;// ray-miss reads the roughness-blurred env mip
         // Emitter self-emission scale for the ray (the other half of the split):
         // DIELECTRICS → 0: F0≈0.04, a reflected small emitter is ~invisible in the
@@ -2355,7 +2410,7 @@ void main() {
     if (demodIndirect) {
         // Denoise ON: temporally AA the sharp reflection, then hand it to the
         // roughness-blur denoise pass.
-        imageStore(reflectImage, px, reflSVGFTemporal(vec4(reflOut, roughness), px, uv, N));
+        imageStore(reflectImage, px, reflSVGFTemporal(vec4(reflOut, roughness), px, uv, N, reflSkip));
     } else {
         // Denoise OFF (or glass/sheen, where reflOut==0): inline sharp reflection.
         lit += reflOut;
@@ -2405,7 +2460,7 @@ void main() {
                 // + an ID-based (not normal) edge stop so the blur smooths ACROSS the
                 // curved surface — refraction is far more normal-sensitive than
                 // reflection, so 1 ray aliases into blocky speckles without it.
-                imageStore(reflectImage, px, reflSVGFTemporal(vec4(glassCol * gt, -gr), px, uv, N));
+                imageStore(reflectImage, px, reflSVGFTemporal(vec4(glassCol * gt, -gr), px, uv, N, /*hold=*/false));// glass: full rate (refraction aliases at half)
                 lit = lit * (1.0 - gt);
             } else {
                 lit = mix(lit, glassCol, gt);// denoise off → inline (sharp, no frost)

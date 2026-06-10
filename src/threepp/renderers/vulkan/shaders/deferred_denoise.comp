@@ -109,16 +109,35 @@ void main() {
     // single ray has NO ghost copies; this blur just turns it into a roughness-
     // correct gloss (sharp when smooth → soft when rough). Normal/plane stops keep
     // it from bleeding across surfaces.
+    // SEPARABLE two-pass (pc.step: 0 = HORIZONTAL into the atrousB scratch,
+    // 1 = VERTICAL from the scratch + despeckle + recombine). The old single-pass
+    // dense grid cost 81–625 edge-stopped taps on every reflective pixel and
+    // dominated the whole deferred denoise on metal-heavy scenes (steel harness:
+    // ~0.4 ms — more than the entire shade pass). The separable pair covers the
+    // SAME Gaussian with ≤ 2·25 taps and ZERO sampling noise — a Gaussian is
+    // exactly separable, and sparse-disk variants (tried first) left a static
+    // crosshatch on wide soft reflections: 16 point taps alias the
+    // high-frequency reflected content a 25×25 footprint contains. Edge stops
+    // re-apply per axis (the usual SVGF-style approximation — divergence only
+    // where stops vary INSIDE the kernel, i.e. material seams, where they cut
+    // anyway). The V pass blurs neighbours' H results, each made with the
+    // NEIGHBOUR's σ; roughness varies smoothly within a surface, so ditto.
     if (pc.channel == 1u) {
+        const bool vert = (pc.step == 1u);// which axis this dispatch blurs
         const uint cid = texelFetch(gbufIdsTex, px, 0).x;
-        if (cid == 0u) return;                             // sky
         const vec4 nC = texelFetch(gbufNormalTex, px, 0);
-        if (nC.w < 0.0) return;                            // unlit
-        const vec4 cR = imageLoad(reflectImage, px);// .rgb = reflection (pre-weighted), .a = roughness (<0 = glass)
-        // PERF EARLY-OUT: most of the scene is matte (reflBlend=0 → reflection=0).
-        // Skip the entire neighbourhood blur there — it used to run the full kernel
-        // on EVERY pixel, which was the bulk of the deferred denoise cost.
-        if (dot(cR.rgb, cR.rgb) < 1e-10) return;
+        // H pass source = the sharp reflection; V pass source = the H-blurred scratch.
+        const vec4 cR = vert ? imageLoad(atrousB, px) : imageLoad(reflectImage, px);
+        // Sky / unlit / matte (most of the scene: reflBlend=0 → reflection=0 —
+        // skipping the kernel there was/is the bulk of the deferred denoise win).
+        // The H pass must still WRITE: the scratch holds stale GI-àtrous data and
+        // reflective neighbours' V taps will read this texel. V pass: leave
+        // sceneHdr alone. (A matte zero STILL pulls same-surface neighbours'
+        // blurs toward zero via their taps — same as the dense grid did.)
+        if (cid == 0u || nC.w < 0.0 || dot(cR.rgb, cR.rgb) < 1e-10) {
+            if (!vert) imageStore(atrousB, px, vec4(0.0));
+            return;
+        }
         const vec3  Nc     = normalize(nC.xyz * 2.0 - 1.0);
         const vec3  Pc     = worldFromDepth(px, texelFetch(gbufDepthTex, px, 0).x);
         const vec3  camPos = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
@@ -132,7 +151,9 @@ void main() {
         // σ=0.6 floor → a 5×5) destroys fine detail under the glass (a watch dial)
         // AND bleeds the per-pixel Fresnel reflection across the face = the "washed,
         // detail-destroyed" look. Frosted glass (rough ≥ 0.12) still blurs below.
+        // Separable: H passes it through untouched, V adds it sharp.
         if (isGlass && rough < 0.12) {
+            if (!vert) { imageStore(atrousB, px, cR); return; }
             const vec3 cur = imageLoad(outImage, px).rgb;
             imageStore(outImage, px, vec4(cur + cR.rgb * fogTransmittance(camPos, Pc), 1.0));
             return;
@@ -186,14 +207,12 @@ void main() {
         const float sigma       = clamp(mix(narrowSigma, baseSigma, widenT), 0.6, 5.0);
         const float inv2s2  = 1.0 / (2.0 * sigma * sigma);
         // PERF: size the kernel to what σ actually reaches — sharp reflections use a
-        // tiny kernel, only frosted/rough surfaces pay for the wide one (was a fixed
-        // 25×25 = 625 taps on every reflective pixel).
+        // tiny kernel, only frosted/rough surfaces pay for the wide one.
         const int   RR      = int(clamp(ceil(sigma * 2.5), 1.0, 12.0));
         vec3  sum = vec3(0.0);
         float wsum = 0.0;
-        for (int dy = -RR; dy <= RR; ++dy)
-        for (int dx = -RR; dx <= RR; ++dx) {
-            const ivec2 q = px + ivec2(dx, dy);
+        for (int t = -RR; t <= RR; ++t) {
+            const ivec2 q = px + (vert ? ivec2(0, t) : ivec2(t, 0));
             if (q.x < 0 || q.y < 0 || q.x > mx.x || q.y > mx.y) continue;
             const uint qid = texelFetch(gbufIdsTex, q, 0).x;
             if (qid == 0u) continue;
@@ -222,12 +241,15 @@ void main() {
             if (wn <= 0.0) continue;
             const vec3  Pq = worldFromDepth(q, texelFetch(gbufDepthTex, q, 0).x);
             const float wz = exp(-abs(dot(Pq - Pc, Nc)) * planeScale);
-            const float ws = exp(-float(dx * dx + dy * dy) * inv2s2);
+            const float ws = exp(-float(t * t) * inv2s2);
             const float w  = wn * wz * ws;
-            sum  += imageLoad(reflectImage, q).rgb * w;
+            sum  += (vert ? imageLoad(atrousB, q).rgb : imageLoad(reflectImage, q).rgb) * w;
             wsum += w;
         }
         vec3 blurred = wsum > 0.0 ? sum / wsum : cR.rgb;
+        // H pass ends here: stash the half-blurred reflection (+ the roughness/
+        // glass marker for the V pass) and let the V dispatch finish the job.
+        if (!vert) { imageStore(atrousB, px, vec4(blurred, cR.a)); return; }
         // ── DESPECKLE bright emitter "probe speckles" ────────────────────────────
         // A small bright emitter reflected by a GLOSSY surface is rendered by the
         // single mirror ray at FULL radiance — but its true (PT) value is the
