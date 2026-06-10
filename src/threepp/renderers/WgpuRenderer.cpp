@@ -197,6 +197,7 @@ struct WgpuRenderer::Impl {
     // intermediate needed when toneMapping=None. Pipelines targeting the
     // surface (cachedFrame_ MSAA, direct-path render, tone-map blit) use this.
     WGPUTextureFormat surfaceFormat = WGPUTextureFormat_BGRA8UnormSrgb;
+    bool surfaceCopySrc_ = false;// surface supports CopySrc (→ on-screen readback)
     // Linear equivalent of surfaceFormat. Used by user-created RenderTargets
     // (so sampling returns raw linear values) and by the in-shader sRGB encode
     // path that writes into them. Propagated to wgpuState.surfaceFormat.
@@ -1139,6 +1140,11 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
                 else if (surfaceFormat == WGPUTextureFormat_RGBA8Unorm)
                     surfaceFormat = WGPUTextureFormat_RGBA8UnormSrgb;
             }
+            // CopySrc on the surface enables readRGBPixels/writeFramebuffer of
+            // the on-screen frame (not just RenderTargets). Supported by every
+            // native wgpu backend in practice; remembered so configureSurface
+            // only requests what the platform grants.
+            surfaceCopySrc_ = (caps.usages & WGPUTextureUsage_CopySrc) != 0;
             wgpuSurfaceCapabilitiesFreeMembers(caps);
 
             // Compute the linear sibling for RT and intermediate-blit use.
@@ -1384,6 +1390,7 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
         config.device = device;
         config.format = surfaceFormat;
         config.usage = WGPUTextureUsage_RenderAttachment;
+        if (surfaceCopySrc_) config.usage |= WGPUTextureUsage_CopySrc;
         config.width  = w;
         config.height = h;
 #ifdef __EMSCRIPTEN__
@@ -4162,7 +4169,32 @@ void WgpuRenderer::flush() {
 }
 
 std::vector<unsigned char> WgpuRenderer::readRGBPixels() {
-    if (!pimpl_->initialized || !pimpl_->currentRenderTarget_) return {};
+    if (!pimpl_->initialized) return {};
+
+    // Surface (no RenderTarget bound): capture the in-flight on-screen frame.
+    // render() leaves the frame open until the canvas frame-end callback
+    // presents it, so the surface texture is still alive here. With tone
+    // mapping active the scene so far lives in the intermediate — blit it to
+    // the surface first; endFrame re-records the same blit afterwards
+    // (idempotent), then draws the overlay and presents as usual.
+    if (!pimpl_->currentRenderTarget_) {
+        auto& im = *pimpl_;
+        if (!im.frame_.active || !im.frame_.surfaceTexture.texture || !im.surfaceCopySrc_) return {};
+        if (im.needsToneMapPass() && im.toneMap_.colorTexture) im.toneMapBlit();
+        if (im.renderEncoder_) {
+            WGPUCommandBufferDescriptor cbd{};
+            cbd.label = WGPUStringView{"surface_readback_flush", sizeof("surface_readback_flush") - 1};
+            WGPUCommandBuffer cb = wgpuCommandEncoderFinish(im.renderEncoder_, &cbd);
+            wgpuQueueSubmit(im.queue, 1, &cb);
+            wgpuCommandBufferRelease(cb);
+            wgpuCommandEncoderRelease(im.renderEncoder_);
+            im.renderEncoder_ = nullptr;
+        }
+        const bool bgra = im.surfaceFormat != WGPUTextureFormat_RGBA8Unorm &&
+                          im.surfaceFormat != WGPUTextureFormat_RGBA8UnormSrgb;
+        return wgpu::readRGBPixels(im.device, im.queue, im.frame_.surfaceTexture.texture,
+                                   im.frame_.width, im.frame_.height, bgra);
+    }
 
     // When rendering to a RenderTarget (headless or nested), endFrame() is not
     // called via the canvas frame-end callback, so the command encoder may still
@@ -4502,10 +4534,23 @@ void WgpuRenderer::writeFramebuffer(const std::filesystem::path& filename) {
     }
 
     auto pixels = readRGBPixels();
-    if (pixels.empty()) return;
+    if (pixels.empty()) {
+        throw std::runtime_error(
+                "WgpuRenderer::writeFramebuffer: no readable framebuffer (no frame in flight / "
+                "surface lacks CopySrc / no RenderTarget bound)");
+    }
 
-    int w = pimpl_->size_.width();
-    int h = pimpl_->size_.height();
+    // Dimensions of whatever readRGBPixels actually read: the bound
+    // RenderTarget, or the surface frame.
+    int w, h;
+    if (pimpl_->currentRenderTarget_) {
+        auto& rt = pimpl_->renderTargets->getOrCreate(pimpl_->currentRenderTarget_, pimpl_->sampleCount_);
+        w = static_cast<int>(rt.width);
+        h = static_cast<int>(rt.height);
+    } else {
+        w = static_cast<int>(pimpl_->frame_.width);
+        h = static_cast<int>(pimpl_->frame_.height);
+    }
 
     if (filename.has_parent_path() && !std::filesystem::exists(filename.parent_path())) {
         std::error_code ec;

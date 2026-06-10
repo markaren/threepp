@@ -13,7 +13,6 @@
 
 #include "threepp/threepp.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
-#include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/loaders/FontLoader.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
@@ -229,16 +228,11 @@ int main(int argc, char** argv) {
     // ----------------------------------------------------------------
     // Render loop
     // ----------------------------------------------------------------
-    // --shot: surface readback is unsupported, so capture via an offscreen
-    // RenderTarget (the path WgpuRenderer::readRGBPixels supports).
-    std::unique_ptr<RenderTarget> shotTarget;
-    if (!shotPath.empty()) shotTarget = RenderTarget::create(WIN, WIN, RenderTarget::Options{});
     int shotFrame = 0;
     canvas.animate([&] {
-        if (shotTarget) renderer.setRenderTarget(shotTarget.get());
         renderer.render(*scene, *camera);
-        if (shotTarget && ++shotFrame >= 5) {
-            renderer.writeFramebuffer(shotPath);
+        if (!shotPath.empty() && ++shotFrame >= 5) {
+            renderer.writeFramebuffer(shotPath);// surface capture of the in-flight frame
             std::cout << "wrote " << shotPath << "\n";
             std::exit(0);
         }

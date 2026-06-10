@@ -67,7 +67,7 @@ namespace threepp {
         // creating parent directories as needed — same convenience GLRenderer
         // and WgpuRenderer expose. Wraps readRGBPixels(); call after render().
         // Throws on unsupported extension or write failure.
-        void writeFramebuffer(const std::filesystem::path& filename);
+        void writeFramebuffer(const std::filesystem::path& filename) override;
 
         // Toggle scene-only swapchain capture. When enabled, the renderer
         // snapshots the post-TAA / pre-overlay swapchain image into a

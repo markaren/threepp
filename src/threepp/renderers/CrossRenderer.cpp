@@ -305,6 +305,10 @@ namespace threepp {
         pimpl_->wgpuRenderer->setRenderTarget(renderTarget, activeCubeFace, activeMipmapLevel);
     }
 
+    void CrossRenderer::writeFramebuffer(const std::filesystem::path& filename) {
+        pimpl_->wgpuRenderer->writeFramebuffer(filename);
+    }
+
     std::vector<unsigned char> CrossRenderer::readRGBPixels() {
         return pimpl_->wgpuRenderer->readRGBPixels();
     }

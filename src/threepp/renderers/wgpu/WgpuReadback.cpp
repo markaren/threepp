@@ -19,7 +19,7 @@ namespace {
 std::vector<unsigned char> threepp::wgpu::readRGBPixels(
         WGPUDevice device, WGPUQueue queue,
         WGPUTexture colorTexture,
-        uint32_t w, uint32_t h) {
+        uint32_t w, uint32_t h, bool bgra) {
 
     // Row alignment: WebGPU requires bytesPerRow to be a multiple of 256
     uint32_t bytesPerPixel = 4; // BGRA8
@@ -89,10 +89,10 @@ std::vector<unsigned char> threepp::wgpu::readRGBPixels(
             for (uint32_t col = 0; col < w; col++) {
                 const auto* px = mapped + row * paddedBytesPerRow + col * 4;
                 size_t outIdx = (row * w + col) * 3;
-                // BGRA -> RGB
-                result[outIdx + 0] = px[2];
+                // BGRA or RGBA -> RGB
+                result[outIdx + 0] = bgra ? px[2] : px[0];
                 result[outIdx + 1] = px[1];
-                result[outIdx + 2] = px[0];
+                result[outIdx + 2] = bgra ? px[0] : px[2];
             }
         }
         wgpuBufferUnmap(stagingBuf);

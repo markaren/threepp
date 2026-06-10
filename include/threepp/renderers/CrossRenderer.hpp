@@ -57,6 +57,8 @@ namespace threepp {
 
         [[nodiscard]] std::vector<unsigned char> readRGBPixels() override;
 
+        void writeFramebuffer(const std::filesystem::path& filename) override;
+
         void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0) override;
         void copyTextureToImage(Texture& texture) override;
 

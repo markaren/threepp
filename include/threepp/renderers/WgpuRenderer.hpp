@@ -76,7 +76,7 @@ namespace threepp {
 
         void copyTextureToImage(Texture& texture) override;
 
-        void writeFramebuffer(const std::filesystem::path& filename);
+        void writeFramebuffer(const std::filesystem::path& filename) override;
 
         [[nodiscard]] bool renderTargetFlipY() const override { return true; }
 

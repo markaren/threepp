@@ -2,6 +2,9 @@
 // Split from CrossRenderer_test.cpp for maintainability.
 
 #include "CrossRenderer_helpers.hpp"
+#include "threepp/loaders/ImageLoader.hpp"
+
+#include <fstream>
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/textures/CubeTexture.hpp"
 
@@ -28,6 +31,77 @@ TEST_CASE("Cross: clear color matches between GL and Wgpu", "[wgpu]") {
     CHECK(std::abs(glAvg.r - wgpuAvg.r) < 3.0);
     CHECK(std::abs(glAvg.g - wgpuAvg.g) < 3.0);
     CHECK(std::abs(glAvg.b - wgpuAvg.b) < 3.0);
+}
+
+TEST_CASE("Cross: writeFramebuffer writes decodable images on every backend", "[wgpu]") {
+    REQUIRE_WGPU();
+
+    auto scene = Scene::create();
+    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
+    camera->position.z = 3;
+    auto material = MeshBasicMaterial::create();
+    material->color = Color(0xff8800);
+    scene->add(Mesh::create(BoxGeometry::create(2, 2, 2), material));
+
+    const auto dir = std::filesystem::temp_directory_path() / "threepp_writefb_test";
+    std::filesystem::remove_all(dir);
+
+    auto checkPng = [](const std::filesystem::path& p) {
+        REQUIRE(std::filesystem::exists(p));
+        CHECK(std::filesystem::file_size(p) > 100);// non-trivial encode
+        std::ifstream f(p, std::ios::binary);
+        unsigned char sig[8]{};
+        f.read(reinterpret_cast<char*>(sig), 8);
+        CHECK((sig[0] == 137 && sig[1] == 'P' && sig[2] == 'N' && sig[3] == 'G'));
+    };
+
+    // GL — default framebuffer (bottom-up readback; impl flips before encode).
+    {
+        GLRenderer renderer(glCanvas());
+        renderer.setClearColor(Color(0x000000));
+        renderer.render(*scene, *camera);
+        const auto p = dir / "gl.png";// missing parent dir: writeFramebuffer creates it
+        renderer.writeFramebuffer(p);
+        checkPng(p);
+    }
+
+    // Wgpu — bound RenderTarget.
+    {
+        auto& renderer = wgpuRenderer();
+        static RenderTarget* target =
+                RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{}).release();
+        renderer.setClearColor(Color(0x000000));
+        renderer.setRenderTarget(target);
+        renderer.render(*scene, *camera);
+        const auto p = dir / "wgpu_rt.png";
+        renderer.writeFramebuffer(p);
+        renderer.setRenderTarget(nullptr);
+        checkPng(p);
+    }
+    // GL — bound RenderTarget with a size ≠ window. Regression: the GL impl
+    // used to size the readback from the WINDOW even when an FBO was bound,
+    // mis-dimensioning any non-window-sized target.
+    {
+        GLRenderer renderer(glCanvas());
+        auto target = RenderTarget::create(32, 16, RenderTarget::Options{});
+        renderer.setRenderTarget(target.get());
+        renderer.setClearColor(Color(0x000000));
+        renderer.render(*scene, *camera);
+        const auto p = dir / "gl_rt.png";
+        renderer.writeFramebuffer(p);
+        renderer.setRenderTarget(nullptr);
+        checkPng(p);
+        ImageLoader il;
+        auto img = il.load(p, 3, false);
+        REQUIRE(img);
+        CHECK(img->width == 32);
+        CHECK(img->height == 16);
+    }
+    // (Wgpu surface capture — the in-flight swapchain frame — is exercised by
+    // the examples' --shot flags; kept out of CI where surface acquisition on
+    // headless runners is not guaranteed.)
+
+    std::filesystem::remove_all(dir);
 }
 
 TEST_CASE("Cross: unlit colored box produces similar average color", "[wgpu]") {

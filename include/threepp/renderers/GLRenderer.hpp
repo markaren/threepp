@@ -136,7 +136,7 @@ namespace threepp {
 
         [[nodiscard]] const gl::GLInfo& info() const;
 
-        void writeFramebuffer(const std::filesystem::path& filename);
+        void writeFramebuffer(const std::filesystem::path& filename) override;
 
         ~GLRenderer() override;
 

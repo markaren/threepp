@@ -14306,7 +14306,9 @@ namespace threepp {
             throw std::runtime_error("VulkanRenderer::writeFramebuffer: unsupported format " + ext);
         }
         const auto pixels = readRGBPixels();
-        if (pixels.empty()) return;
+        if (pixels.empty()) {
+            throw std::runtime_error("VulkanRenderer::writeFramebuffer: no readable framebuffer");
+        }
         const auto sz = size();
         const int  w  = sz.width();
         const int  h  = sz.height();
