@@ -34,6 +34,7 @@
 #include "vulkan/TetSkinningPipeline.hpp"
 #include "vulkan/TaaResolve.hpp"
 #include "vulkan/BloomPass.hpp"
+#include "vulkan/DeferredShade.hpp"
 #include "vulkan/WaterDisplacePipeline.hpp"
 #include "vulkan/FoamWorldPipeline.hpp"
 #include "vulkan/shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
@@ -71,6 +72,9 @@
 #include "threepp/renderers/vulkan/water/OceanFFT.hpp"
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/Texture.hpp"
+
+// stb_image_write — implementation is already compiled in GLRenderer.cpp.
+#include "stb_image_write.h"
 
 #include "threepp/renderers/vulkan/shaders/raygen.rgen.spv.h"
 #include "threepp/renderers/vulkan/shaders/raygen.rgen.ser.spv.h"
@@ -319,6 +323,12 @@ namespace threepp {
             // frame from the soft body's tet texture image.
             Buffer tetPos     {};
             VkDeviceSize tetPosBytes = 0;
+            // Zero-copy interop (enableSoftBodyInterop): when tetPosExt holds a
+            // buffer, it replaces tetPos as the shader's binding-6 source and
+            // tetPosExternalCopy (a CUDA device→device copy registered by the
+            // PhysX glue) replaces the CPU upload in refreshTetBlas.
+            vulkan::ExternalBuffer tetPosExt {};
+            std::function<void()>  tetPosExternalCopy;
             uint32_t vertexCount    = 0;
             uint32_t primitiveCount = 0;
             bool     indexed        = false;
@@ -1012,10 +1022,17 @@ namespace threepp {
         // top of raster, not as Monte Carlo on the PT primary. Disabled by
         // default until the integration is validated end-to-end (stage 1).
         struct RasterGbufImages {
-            Image2D       normal;       // rgba16f — world-space normal in xyz, .w=0 (roughness in stage 2)
+            Image2D       normal;       // rgba16f — world-space normal in xyz, .w = linear roughness
             Image2D       motion;       // rgba16f — NDC delta in .rg, .ba reserved
             Image2D       ids;          // rgba16ui — instanceCustomIndex/meshID/flags/reserved
             Image2D       uv;           // rgba16f — material UV in .rg
+            Image2D       albedo;       // rgba8 unorm — linear base colour in .rgb, metalness in .a (raster-first deferred input)
+            Image2D       indirect;     // rgba16f — demodulated diffuse-indirect irradiance (deferred denoiser scratch; STORAGE, not an attachment)
+            Image2D       momentsSq;    // r16f — temporally-accumulated E[L²] of the indirect luminance (SVGF variance: var = E[L²] - lum(indirect)²); STORAGE+SAMPLED, ping-ponged like indirect
+            Image2D       atrousA;      // rgba16f — SVGF multi-pass à-trous ping-pong (rgb=GI, a=variance); STORAGE scratch
+            Image2D       atrousB;      // rgba16f — SVGF multi-pass à-trous ping-pong (the other half)
+            Image2D       reflect;      // rgba16f — sharp 1-mirror-ray reflection radiance (.rgb), demodulated; roughness-blurred by the reflection denoise. STORAGE
+            Image2D       reflAux;      // rgba16f — reflection-denoiser auxiliary (ping-pong, mirrors `reflect`: STORAGE write + SAMPLED prev-frame read)
             Image2D       depth;        // d32_sfloat — JITTERED projection (matches color attachments above; consumed by chit + TAA)
             // Hybrid raster overlay's UNJITTERED depth attachment. Filled by
             // an extra depth-only prepass (overlay_depth.vert) right after
@@ -1228,7 +1245,33 @@ namespace threepp {
         // skips the bloom passes (composite still owns the tone map).
         std::unique_ptr<vulkan::BloomPass> bloom_;
         float bloomIntensity_ = 0.0f;
+        // Phase-2 GI path (RasterFirst): ON now activates REAL stochastic 1-bounce
+        // GI (colour bleed, no AO/sky hacks) + temporal accumulation + à-trous.
+        // OFF falls back to the clean deterministic AO+far≈sky approximation.
+        // Default ON to ship the Phase-2 GI. CAVEATS (follow-ups): GI bounce uses
+        // full traceRadiance (expensive in emitter-heavy scenes — cheap sun+emissive
+        // bounce pending); no reproject/disocclusion yet → MOTION GHOSTS (ping-pong
+        // history reproject pending). setDeferredDenoise(false) → clean fallback.
+        bool  deferredDenoise_ = true;
+        // Ray-traced env ambient occlusion / GI (RasterFirst). ON: gives the
+        // "dirty realistic" PT-like grounding (contact darkening + 1-bounce GI).
+        // Uses the deterministic Fibonacci 64-sample gather (clean + settles), so
+        // it's the realistic look WITHOUT the old per-frame flicker.
+        bool  deferredAO_ = true;
+        // Deferred volumetric spot-light beams (ray-marched single scattering in
+        // deferred_shade.comp). σ = 0 disables (the march is skipped entirely).
+        float deferredVolDensity_ = 0.f;
+        float deferredVolAniso_   = 0.55f;
+        // Procedural direction-space star field on deferred sky pixels (0 = off).
+        float deferredStarIntensity_ = 0.f;
+
+        // Raster-first deferred lighting (RenderMode::RasterFirst). Shades the
+        // material G-buffer analytically into bloom_->sceneHdr, replacing the
+        // raygen + denoise stages; bloom + TAA finish the frame unchanged. Owns
+        // no images and does not touch rtDsLayout, so ReferencePT is unaffected.
+        std::unique_ptr<vulkan::DeferredShade> deferredShade_;
         float bloomThreshold_ = 1.0f;// soft-knee bright-pass cutoff (linear HDR)
+        float bloomClamp_ = 0.0f;    // per-tap HDR cap before the bright pass; <= 0 = off
         float sharpenStrength_ = 0.0f;// post-TAA RCAS amount; 0 = off
         float taaBlendAlpha_ = 0.1f;// 10% current, 90% history
 
@@ -1323,9 +1366,9 @@ namespace threepp {
         float    pendingCpuEnsureSceneMs_ = 0.f;
         // ReSTIR DI master toggle. When false, chit's primary RIS branch is
         // bypassed and the legacy per-light NEE classic loops run instead
-        // (same pattern as bounces). Default off. Forwarded to chit via
+        // (same pattern as bounces). Forwarded to chit via
         // pc.motionFlags bit 4 each frame.
-        bool restirDIEnabled_ = false;
+        bool restirDIEnabled_ = true;
         // ReSTIR DI visibility reuse (Bitterli 2020 §5). When on, the chit
         // shadow-tests the RIS-selected candidate before temporal/spatial reuse
         // and discards occluded ones, so history converges onto visible lights.
@@ -1361,10 +1404,25 @@ namespace threepp {
         // (alongside auto-detected wireframe materials + Line/LineSegments).
         // -1 disables layer-based selection. Mirrors WGPU PT's overlayLayer_.
         int overlayLayer_ = -1;
-        // Memoized "scene actually has overlay objects" so the per-frame
-        // overlay pass can early-out without traversing on a static-no-
-        // overlay scene. Set during the prior frame's traversal.
-        bool overlayFoundLastFrame_ = false;
+        // True when the scene has any content the post-TAA overlay pass will
+        // draw this frame: an overlay-tagged mesh, or any Line/LineSegments/
+        // Points entry (those always render via the overlay path). The
+        // unjittered-depth prepass and the overlay draw BOTH gate on this same
+        // current-frame answer, so the prepass that fills + transitions
+        // unjitDepth runs in lockstep with the draw that reads it. (Previously
+        // the prepass keyed off the *previous* frame's result, so the first
+        // frame an overlay appeared — including frame 1 after a resize — the
+        // prepass was skipped and the overlay draw read unjitDepth while it was
+        // still UNDEFINED: VUID-vkCmdBeginRendering-pRenderingInfo-09588.)
+        // Cheap: both lists are already populated by the visibility pass before
+        // any command recording, so this is just two size/flag checks.
+        bool sceneHasOverlayContent() const {
+            if (!lastVisibleLines_.empty()) return true;
+            for (const auto& en : lastVisibleEntries_) {
+                if (en.isOverlay) return true;
+            }
+            return false;
+        }
         // Sub-pixel jitter sequence index for raster TAA. Cycles within a
         // small period (16 frames) — long enough to look stable, short enough
         // to avoid ever-growing index drift.
@@ -1378,8 +1436,16 @@ namespace threepp {
             Motion = 2,
             Depth  = 3,
             Ids    = 4,
+            Albedo = 5,   // raster-first material G-buffer: linear albedo in rgb
         };
         HybridDebugView hybridDebugView_ = HybridDebugView::Off;
+
+        // Shading strategy (see VulkanRenderer::RenderMode in the public
+        // header). RasterFirst aliases ReferencePT until the deferred base +
+        // PT-accent passes land, so this currently only stores the user's
+        // preference and does not yet branch the frame graph. Default
+        // ReferencePT keeps today's behaviour byte-for-byte.
+        VulkanRenderer::RenderMode renderMode_ = VulkanRenderer::RenderMode::RasterFirst;
 
         // Debug: gate raygen to exit immediately after step-0 primary trace
         // so pathTraceMs measures roughly the primary-trace cost. See
@@ -1456,6 +1522,10 @@ namespace threepp {
         // called when Idle apply immediately as before.
         bool pendingRenderScaleRealloc_ = false;
         bool pendingAccumulationReset_  = false;
+        // Set by setRenderMode; refreshes the deferred (RasterFirst) descriptor
+        // set at the next GPU-idle point so a runtime mode toggle doesn't leave
+        // it stale.
+        bool pendingDeferredRewrite_    = false;
 
         explicit Impl(Canvas& c) : canvas(c), size(c.size()) {
             ctx = std::make_unique<VulkanContext>(
@@ -1514,12 +1584,23 @@ namespace threepp {
             // target); the bloom ping-pong buffers are half that.
             bloom_ = std::make_unique<vulkan::BloomPass>(*ctx, cmdPool, kFramesInFlight);
             bloom_->createImages(renderExtent().width, renderExtent().height);
+            // Raster-first deferred lighting pass. Writes bloom_->sceneHdr, so
+            // it must exist after bloom_; its descriptors reference the camera /
+            // lights UBOs, the env image, the raster gbuffer and sceneHdr — all
+            // created above by this point.
+            // The deferred base traces ray-query shadow rays, so only stand it
+            // up when the device supports VK_KHR_ray_query. Without it,
+            // deferredShade_ stays null and RasterFirst falls back to ReferencePT.
+            if (ctx->rayQuerySupported()) {
+                deferredShade_ = std::make_unique<vulkan::DeferredShade>(*ctx, kFramesInFlight);
+            }
             createDescriptorPool();
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             createOceanFineDummy_();// must run before descriptor writes (binding 32)
             createOceanFoamDummy_();// must run before descriptor writes (binding 33)
             rewriteTaaDescriptors();// after ensureHybridResources gave us raster gbuf views
             rewriteBloomDescriptors();// bloom composite reads gbuf + writes the TAA input
+            rewriteDeferredDescriptors();// raster-first deferred shade inputs
             createTimestampPools();// per-frame VkQueryPool for the timings API
         }
 
@@ -1616,6 +1697,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), st->restInv1);
                 destroyBuffer(ctx->allocator(), st->restInv2);
                 destroyBuffer(ctx->allocator(), st->tetPos);
+                vulkan::destroyExternalBuffer(d, st->tetPosExt);
                 destroyBuffer(ctx->allocator(), st->blasScratch);
                 auto& rec = st->blas;
                 if (!rec) continue;
@@ -2532,6 +2614,16 @@ namespace threepp {
         // BLAS rebuild — recorded in recordCommandBuffer next to the skinned path.
         void refreshTetBlas(Mesh& m, TetMeshState& st) {
             if (!st.blas) return;
+            // Zero-copy interop: the registered CUDA device→device copy writes the
+            // deformed tet positions straight into the exported binding-6 buffer —
+            // no host readback, no DataTexture, no map/memcpy. Runs at the SAME
+            // frame point as the CPU upload below, so the (pre-existing, benign)
+            // overlap with a still-in-flight prior frame's dispatch is unchanged.
+            if (st.tetPosExt.handle != VK_NULL_HANDLE) {
+                if (st.tetPosExternalCopy) st.tetPosExternalCopy();
+                pendingTetRebuilds_.push_back(&st);
+                return;
+            }
             auto mat = m.material();
             if (!mat || !mat->tetTexture) return;
             const auto& tetImg = mat->tetTexture->image().data<float>();
@@ -2543,6 +2635,68 @@ namespace threepp {
             std::memcpy(mapped, tetImg.data(), bytes);
             vmaUnmapMemory(ctx->allocator(), st.tetPos.alloc);
             pendingTetRebuilds_.push_back(&st);
+        }
+
+        // Rewrite binding 6 (tetPos — see tet_skinning.comp) of a tet mesh's
+        // descriptor set to point at `buf`. Used by the interop enable/disable
+        // swap; the other 8 bindings are untouched.
+        void rewriteTetPosBinding(TetMeshState& st, VkBuffer buf) {
+            VkDescriptorBufferInfo bi{};
+            bi.buffer = buf;
+            bi.offset = 0;
+            bi.range  = VK_WHOLE_SIZE;
+            VkWriteDescriptorSet wr{};
+            wr.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr.dstSet          = st.tetDescSet;
+            wr.dstBinding      = 6;
+            wr.descriptorCount = 1;
+            wr.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            wr.pBufferInfo     = &bi;
+            vkUpdateDescriptorSets(ctx->device(), 1, &wr, 0, nullptr);
+        }
+
+        // Zero-copy interop enable: swap the mesh's tet-position buffer for an
+        // EXPORTED dedicated device allocation and register the CUDA copy that
+        // fills it each frame. Once-per-body; drains the device (the in-flight
+        // frames' dispatches read the buffer being replaced, and this is a
+        // registration-time call, not a per-frame one).
+        VulkanRenderer::SoftBodyInteropHandle
+        enableSoftBodyInterop(const Mesh& mesh, std::function<void()> deviceCopy) {
+            auto it = tetMeshStates.find(&mesh);
+            if (it == tetMeshStates.end() || !ctx->externalMemorySupported()) return {};
+            auto& st = *it->second;
+            if (st.tetPosExt.handle != VK_NULL_HANDLE) {// already enabled — same handle
+                st.tetPosExternalCopy = std::move(deviceCopy);
+                return {st.tetPosExt.osHandle, static_cast<size_t>(st.tetPosExt.size)};
+            }
+            if (st.tetPosBytes == 0 || st.tetDescSet == VK_NULL_HANDLE) return {};
+            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (softbody interop enable)");
+            st.tetPosExt = vulkan::createExternalBuffer(
+                    ctx->physicalDevice(), ctx->device(), st.tetPosBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+            rewriteTetPosBinding(st, st.tetPosExt.handle);
+            destroyBuffer(ctx->allocator(), st.tetPos);// CPU-path buffer no longer read
+            st.tetPosExternalCopy = std::move(deviceCopy);
+            return {st.tetPosExt.osHandle, static_cast<size_t>(st.tetPosExt.size)};
+        }
+
+        // Interop disable / CUDA-import-failure fallback: restore the host-visible
+        // VMA buffer and the CPU upload path. The caller must have stopped (or
+        // never started) the CUDA writes into the exported memory.
+        void disableSoftBodyInterop(const Mesh& mesh) {
+            auto it = tetMeshStates.find(&mesh);
+            if (it == tetMeshStates.end()) return;
+            auto& st = *it->second;
+            if (st.tetPosExt.handle == VK_NULL_HANDLE) return;
+            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (softbody interop disable)");
+            st.tetPos = createBuffer(
+                    ctx->allocator(), ctx->device(), st.tetPosBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            rewriteTetPosBinding(st, st.tetPos.handle);
+            vulkan::destroyExternalBuffer(ctx->device(), st.tetPosExt);
+            st.tetPosExternalCopy = nullptr;
         }
 
         // Per-frame refresh op for a plain (non-skinned/non-displaced/non-morphed)
@@ -4025,10 +4179,22 @@ namespace threepp {
                 d.ior          = std::max(1.0f, tr->ior);
                 d.dispersion   = std::max(0.0f, tr->dispersion);
             }
+            // Additive-blend effects (muzzle flashes, sparks, energy glows): the
+            // surface GLOWS over the scene rather than occluding/refracting it.
+            // Deferred sentinel: transmission > 1 (= 1 + strength) → "add, don't
+            // mix". PT-safe — transmission>1 reads as full stochastic pass-through
+            // (effectively invisible in the PT), which is correct since additive
+            // blending has no physical analogue.
+            if (mat->blending == Blending::Additive && d.transmission == 0.0f) {
+                d.transmission = 1.0f + std::clamp(mat->opacity, 0.0f, 1.0f);
+                d.ior          = 1.0f;
+            }
             // Alpha-blend transparency (transparent=true, opacity<1) has no
             // physical analogue in a PT, so treat it as stochastic pass-through:
             // with probability (1-opacity) the ray continues straight through
             // (ior=1 → refract returns the incident direction unchanged, F=0).
+            // Deferred reads ior≈1 as the "clean alpha blend" marker (vs ior>1
+            // real refractive glass).
             if (d.transmission == 0.0f && mat->transparent && mat->opacity < 1.0f) {
                 d.transmission = 1.0f - mat->opacity;
                 d.ior          = 1.0f;
@@ -4888,6 +5054,7 @@ namespace threepp {
                         destroyBuffer(ctx->allocator(), it->second->restInv1);
                         destroyBuffer(ctx->allocator(), it->second->restInv2);
                         destroyBuffer(ctx->allocator(), it->second->tetPos);
+                        vulkan::destroyExternalBuffer(ctx->device(), it->second->tetPosExt);
                         destroyBuffer(ctx->allocator(), it->second->blasScratch);
                         auto& rec = it->second->blas;
                         if (rec) {
@@ -5782,12 +5949,34 @@ namespace threepp {
             return true;
         }
 
+        // REVERSED-Z Vulkan projection from a GL-convention (NDC z∈[-1,1]) proj.
+        // threepp's projection is GL-style; fed to Vulkan as-is it (a) clips the
+        // [-1,0] near-slab so HALF the depth precision is wasted on never-visible
+        // geometry, and (b) bunches precision near the camera → distant z-fighting.
+        // Reverse-Z maps near→1, far→0 in Vulkan [0,1] → reclaims the lost half AND
+        // gives near-uniform precision (with D32F, kills distance z-fighting). The
+        // new z-output row = 0.5*w_row - 0.5*z_row. Pair with depth clear 0.0 +
+        // GREATER compare. Shaders are convention-agnostic (use the uploaded
+        // matrices), so this is host-side only.
+        static Matrix4 reverseZVk(const Matrix4& glProj) {
+            Matrix4 p = glProj;
+            auto& e = p.elements;// column-major: z-output = row 2, w-output = row 3
+            for (int c = 0; c < 4; ++c)
+                e[c * 4 + 2] = 0.5f * e[c * 4 + 3] - 0.5f * e[c * 4 + 2];
+            return p;
+        }
+
         void updateCameraUbo(uint32_t frame, Camera& camera) {
             camera.updateMatrixWorld(true);
 
             float data[36];
-            std::memcpy(data + 0,  camera.matrixWorld->elements.data(),            64);
-            std::memcpy(data + 16, camera.projectionMatrixInverse.elements.data(), 64);
+            std::memcpy(data + 0,  camera.matrixWorld->elements.data(), 64);
+            // Reverse-Z projInverse (matches the reverse-Z VP the raster uses) so
+            // depth reconstruction (deferred worldFromDepth, hybrid primary) is
+            // consistent with the reverse-Z depth buffer.
+            Matrix4 vkProjInv = reverseZVk(camera.projectionMatrix);
+            vkProjInv.invert();
+            std::memcpy(data + 16, vkProjInv.elements.data(), 64);
 
             // Per-frame Halton(2,3) jitter — must match what uploadRasterCameraUbo
             // computes for THIS frame so raygen's hybrid primary direction lands
@@ -5971,8 +6160,10 @@ namespace threepp {
             Matrix4 view, proj;
             std::memcpy(view.elements.data(),
                         camera.matrixWorldInverse.elements.data(), 64);
-            std::memcpy(proj.elements.data(),
-                        camera.projectionMatrix.elements.data(), 64);
+            // Reverse-Z projection (near→1, far→0) — feeds the gbuffer VP AND
+            // currVPunjit_ (overlay depth prepass). Depth clear + compares flipped
+            // to match (see recordRasterGbufPass clears + pipeline depthCompareOp).
+            proj = reverseZVk(camera.projectionMatrix);
             Matrix4 vpUnj;
             vpUnj.multiplyMatrices(proj, view);
 
@@ -5997,7 +6188,13 @@ namespace threepp {
             // sub-pixel jitter still happens in raygen's hybrid primary via
             // the blue-noise tile (see primaryDirHybrid), so interior AA
             // doesn't disappear — only the coverage jitter is gone.
-            constexpr bool kRasterJitterEnabled = false;
+            // Phase 1 (TSR rebuild): jitter ON. Sub-pixel Halton coverage +
+            // temporal accumulation = proper TAA/TSR (replaces FXAA). The earlier
+            // "flicker" was silhouette coverage-flip on MOVING objects with a loose
+            // RGB AABB history clamp; the resolve now uses a YCoCg variance clip
+            // (tighter history rejection) to suppress it. Static views converge to
+            // clean AA over the 16-frame Halton cycle.
+            constexpr bool kRasterJitterEnabled = true;
             const float jClipX = kRasterJitterEnabled ? 2.f * jx / float(ext.width)  : 0.f;
             const float jClipY = kRasterJitterEnabled ? 2.f * jy / float(ext.height) : 0.f;
 
@@ -6129,7 +6326,7 @@ namespace threepp {
             uint32_t instanceCustomIndex;
             uint32_t flags;
             uint32_t indexed;
-            uint32_t _pad;
+            float    polygonOffset;    // clip-z depth bias (reverse-Z: + = toward near = on top)
         };
         static_assert(sizeof(DrawInfoGpu) == 120,
                       "DrawInfoGpu layout drifted from gbuffer_indirect.vert");
@@ -6252,7 +6449,22 @@ namespace threepp {
                 if (en.isSkinned)   flags |= 8u;
                 di.flags   = flags;
                 di.indexed = indexed ? 1u : 0u;
-                di._pad    = 0u;
+                // polygonOffset → per-mesh clip-z depth bias (decals). Reverse-Z:
+                // a +clip-z bias pushes the surface toward NEAR so it renders on
+                // top of coplanar geometry (no z-fight). threepp/GL uses NEGATIVE
+                // polygonOffsetUnits for "on top", so flip the sign; units==0
+                // (bool only) → a small default that clears z-fight without
+                // floating. (The slope-scaled `factor` term isn't applied — flat
+                // decals don't need it; bias is uniform in NDC.)
+                float polyOff = 0.f;
+                if (auto pm = en.mesh->material(); pm && pm->polygonOffset) {
+                    // Honor BOTH factor + units (combined as a constant NDC bias —
+                    // the slope term can't be evaluated in the vertex shader; flat
+                    // decals don't need it). 0/0 (bool only) → a small default.
+                    const float uf = pm->polygonOffsetUnits + pm->polygonOffsetFactor;
+                    polyOff = (uf != 0.f) ? (-uf * 1.0e-6f) : 4.0e-6f;
+                }
+                di.polygonOffset = polyOff;
                 draws[b].push_back(di);
 
                 VkDrawIndirectCommand cmd{};
@@ -6341,7 +6553,7 @@ namespace threepp {
             const auto& g = rasterGbufs[frame];
             if (g.framebuffer == VK_NULL_HANDLE) return;// not initialized
 
-            VkClearValue clears[5]{};
+            VkClearValue clears[6]{};
             clears[0].color = {{0.f, 0.f, 0.f, 0.f}};   // normal — sky/miss as zero
             clears[1].color = {{0.f, 0.f, 0.f, 0.f}};   // motion
             clears[2].color.uint32[0] = 0u;             // instanceID — 0 reserved as sky
@@ -6349,7 +6561,8 @@ namespace threepp {
             clears[2].color.uint32[2] = 0u;
             clears[2].color.uint32[3] = 0u;
             clears[3].color = {{0.f, 0.f, 0.f, 0.f}};   // uv — sky has no UV
-            clears[4].depthStencil = {1.f, 0u};
+            clears[4].color = {{0.f, 0.f, 0.f, 0.f}};   // albedo+metalness — sky as zero
+            clears[5].depthStencil = {0.f, 0u};// reverse-Z: clear depth to 0 (far)
 
             VkRenderPassBeginInfo rpbi{};
             rpbi.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -6357,7 +6570,7 @@ namespace threepp {
             rpbi.framebuffer     = g.framebuffer;
             rpbi.renderArea.offset = {0, 0};
             rpbi.renderArea.extent = {g.width, g.height};
-            rpbi.clearValueCount = 5;
+            rpbi.clearValueCount = 6;
             rpbi.pClearValues    = clears;
             vkCmdBeginRenderPass(cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -6418,6 +6631,7 @@ namespace threepp {
                                               srcLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
                                               break;
                 case HybridDebugView::Ids:    src = g.ids.image; break;
+                case HybridDebugView::Albedo: src = g.albedo.image; break;
                 default: return;
             }
             if (src == VK_NULL_HANDLE) return;
@@ -7250,6 +7464,13 @@ namespace threepp {
                 destroyImage2D(ctx->allocator(), d, g.motion);
                 destroyImage2D(ctx->allocator(), d, g.ids);
                 destroyImage2D(ctx->allocator(), d, g.uv);
+                destroyImage2D(ctx->allocator(), d, g.albedo);
+                destroyImage2D(ctx->allocator(), d, g.indirect);
+                destroyImage2D(ctx->allocator(), d, g.momentsSq);
+                destroyImage2D(ctx->allocator(), d, g.atrousA);
+                destroyImage2D(ctx->allocator(), d, g.atrousB);
+                destroyImage2D(ctx->allocator(), d, g.reflect);
+                destroyImage2D(ctx->allocator(), d, g.reflAux);
                 destroyImage2D(ctx->allocator(), d, g.depth);
                 destroyImage2D(ctx->allocator(), d, g.unjitDepth);
                 g.width  = 0;
@@ -7258,7 +7479,7 @@ namespace threepp {
         }
 
         void createRasterGbufRenderPass() {
-            VkAttachmentDescription attachments[5]{};
+            VkAttachmentDescription attachments[6]{};
             // 0: world-space normal (rgba16f). FragShader writes; raygen samples.
             attachments[0].format         = VK_FORMAT_R16G16B16A16_SFLOAT;
             attachments[0].samples        = VK_SAMPLE_COUNT_1_BIT;
@@ -7275,23 +7496,26 @@ namespace threepp {
             attachments[2].format = VK_FORMAT_R16G16B16A16_UINT;
             // 3: material UV (rgba16f, only rg used).
             attachments[3] = attachments[0];
-            // 4: depth (d32_sfloat).
-            attachments[4]              = attachments[0];
-            attachments[4].format       = VK_FORMAT_D32_SFLOAT;
-            attachments[4].finalLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            // 4: albedo + metalness (rgba8 unorm) — raster-first deferred input.
+            attachments[4]        = attachments[0];
+            attachments[4].format = VK_FORMAT_R8G8B8A8_UNORM;
+            // 5: depth (d32_sfloat).
+            attachments[5]              = attachments[0];
+            attachments[5].format       = VK_FORMAT_D32_SFLOAT;
+            attachments[5].finalLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
-            VkAttachmentReference colorRefs[4]{};
-            for (uint32_t i = 0; i < 4; ++i) {
+            VkAttachmentReference colorRefs[5]{};
+            for (uint32_t i = 0; i < 5; ++i) {
                 colorRefs[i].attachment = i;
                 colorRefs[i].layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             }
             VkAttachmentReference depthRef{};
-            depthRef.attachment = 4;
+            depthRef.attachment = 5;
             depthRef.layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
             VkSubpassDescription subpass{};
             subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
-            subpass.colorAttachmentCount    = 4;
+            subpass.colorAttachmentCount    = 5;
             subpass.pColorAttachments       = colorRefs;
             subpass.pDepthStencilAttachment = &depthRef;
 
@@ -7313,14 +7537,17 @@ namespace threepp {
             deps[1].dstSubpass    = VK_SUBPASS_EXTERNAL;
             deps[1].srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                                     VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-            deps[1].dstStageMask  = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
+            // Consumed by raygen (ReferencePT) AND the deferred shade compute
+            // pass (RasterFirst) — make the attachments visible to both stages.
+            deps[1].dstStageMask  = VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR |
+                                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
             deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                     VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
             deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
             VkRenderPassCreateInfo rpci{};
             rpci.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-            rpci.attachmentCount = 5;
+            rpci.attachmentCount = 6;
             rpci.pAttachments    = attachments;
             rpci.subpassCount    = 1;
             rpci.pSubpasses      = &subpass;
@@ -7357,6 +7584,47 @@ namespace threepp {
                 g.uv     = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                    colorUsage, VK_IMAGE_ASPECT_COLOR_BIT,
                                                    N("uv"));
+                g.albedo = createAttachmentImage2D(w, h, VK_FORMAT_R8G8B8A8_UNORM,
+                                                   colorUsage, VK_IMAGE_ASPECT_COLOR_BIT,
+                                                   N("albedo"));
+                // Deferred GI accumulator / denoiser scratch — STORAGE (compute
+                // write/read) + SAMPLED so the deferred shade can sample the OTHER
+                // frame-in-flight's indirect as the 1-frame GI history (reprojected
+                // by the motion vector — Phase-2 GI reproject). Never a render-pass
+                // attachment, so not in the framebuffer.
+                g.indirect = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                     VK_IMAGE_ASPECT_COLOR_BIT, N("indirect"));
+                // SVGF second-moment accumulator E[L²] (single channel). Same
+                // STORAGE+SAMPLED + ping-pong as indirect: deferred_shade reproject-
+                // accumulates it, deferred_denoise reads it for the per-pixel
+                // temporal variance that guides the à-trous (crisp where stable,
+                // blurred where noisy).
+                g.momentsSq = createAttachmentImage2D(w, h, VK_FORMAT_R16_SFLOAT,
+                                                      VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                      VK_IMAGE_ASPECT_COLOR_BIT, N("momentsSq"));
+                // SVGF multi-pass à-trous ping-pong scratch (rgb=GI, a=variance).
+                // STORAGE only (compute imageLoad/Store, no sampling). The denoise
+                // bounces the GI between these at widening step sizes.
+                g.atrousA = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                    VK_IMAGE_USAGE_STORAGE_BIT,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT, N("atrousA"));
+                g.atrousB = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                    VK_IMAGE_USAGE_STORAGE_BIT,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT, N("atrousB"));
+                // Sharp mirror-ray reflection radiance — written by the shade, then
+                // roughness-blurred + recombined by the reflection denoise pass.
+                // SAMPLED too: the shade temporally accumulates it (samples the OTHER
+                // frame-in-flight as 1-frame history) to anti-alias the 1-ray
+                // refraction via the gbuffer jitter — sharp AND alias-free.
+                g.reflect = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT, N("reflect"));
+                // Reflection-denoiser auxiliary — mirrors `reflect` exactly (STORAGE
+                // write + SAMPLED prev-frame read, ping-ponged across frames-in-flight).
+                g.reflAux = createAttachmentImage2D(w, h, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT, N("reflAux"));
                 g.depth  = createAttachmentImage2D(w, h, VK_FORMAT_D32_SFLOAT,
                                                    depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
                                                    N("depth"));
@@ -7374,12 +7642,12 @@ namespace threepp {
                                                        depthUsage, VK_IMAGE_ASPECT_DEPTH_BIT,
                                                        N("unjitDepth"));
 
-                VkImageView views[5] = {g.normal.view, g.motion.view, g.ids.view,
-                                        g.uv.view, g.depth.view};
+                VkImageView views[6] = {g.normal.view, g.motion.view, g.ids.view,
+                                        g.uv.view, g.albedo.view, g.depth.view};
                 VkFramebufferCreateInfo fci{};
                 fci.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
                 fci.renderPass      = rasterGbufRenderPass;
-                fci.attachmentCount = 5;
+                fci.attachmentCount = 6;
                 fci.pAttachments    = views;
                 fci.width           = w;
                 fci.height          = h;
@@ -7389,6 +7657,57 @@ namespace threepp {
                 g.width  = w;
                 g.height = h;
             }
+
+            // Initialise every slot's attachments to their sampled-read layout.
+            // The gbuffer render pass writes only the CURRENT frame's slot each
+            // frame (its attachments use initialLayout = UNDEFINED, so it
+            // ignores whatever we set here), but the temporal consumers sample a
+            // slot that has not been rasterised yet on the first frame(s) it is
+            // the "previous" slot — TaaResolve reads gbufIdsPrevTex for its
+            // same-mesh reproject guard, and deferred/raygen read the per-frame
+            // gbuffer. Without a defined starting layout that read finds the
+            // image in UNDEFINED and trips VUID-vkCmdDraw-None-09600 /
+            // -vkCmdDispatch-None-09600. Contents stay undefined, but the layout
+            // is now valid; the temporal logic discards previous data on the
+            // first frame regardless. Re-runs on resize (images are recreated).
+            VkCommandBuffer initCb = beginOneShot();
+            std::vector<VkImageMemoryBarrier> inits;
+            inits.reserve(rasterGbufs.size() * 6);
+            auto pushInit = [&](VkImage image, VkImageAspectFlags aspect, VkImageLayout layout) {
+                VkImageMemoryBarrier b{};
+                b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout = layout;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image = image;
+                b.subresourceRange.aspectMask = aspect;
+                b.subresourceRange.levelCount = 1;
+                b.subresourceRange.layerCount = 1;
+                b.srcAccessMask = 0;
+                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                inits.push_back(b);
+            };
+            for (auto& g : rasterGbufs) {
+                pushInit(g.normal.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                pushInit(g.motion.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                pushInit(g.ids.image,    VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                pushInit(g.uv.image,     VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                pushInit(g.albedo.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                pushInit(g.indirect.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.momentsSq.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.atrousA.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.atrousB.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.reflect.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.reflAux.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);// storage (compute r/w)
+                pushInit(g.depth.image,  VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+            }
+            vkCmdPipelineBarrier(initCb,
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                 0, 0, nullptr, 0, nullptr,
+                                 static_cast<uint32_t>(inits.size()), inits.data());
+            endAndSubmitOneShot(initCb, "rasterGbuf init layouts");
         }
 
         void createRasterCameraUbos() {
@@ -7570,9 +7889,9 @@ namespace threepp {
             ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
             ds.depthTestEnable  = VK_TRUE;
             ds.depthWriteEnable = VK_TRUE;
-            ds.depthCompareOp   = VK_COMPARE_OP_LESS;
+            ds.depthCompareOp   = VK_COMPARE_OP_GREATER;// reverse-Z (near→1, far→0)
 
-            VkPipelineColorBlendAttachmentState cbas[4]{};
+            VkPipelineColorBlendAttachmentState cbas[5]{};
             for (auto& a : cbas) {
                 a.blendEnable    = VK_FALSE;
                 a.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -7580,7 +7899,7 @@ namespace threepp {
             }
             VkPipelineColorBlendStateCreateInfo cb{};
             cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-            cb.attachmentCount = 4;
+            cb.attachmentCount = 5;
             cb.pAttachments    = cbas;
 
             // Dynamic viewport + scissor + cullMode (Vulkan 1.3 core via
@@ -7940,7 +8259,7 @@ namespace threepp {
             ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
             ds.depthTestEnable  = VK_TRUE;
             ds.depthWriteEnable = VK_FALSE;
-            ds.depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL;
+            ds.depthCompareOp   = VK_COMPARE_OP_GREATER_OR_EQUAL;// reverse-Z (overlay vs unjitDepth)
 
             VkPipelineColorBlendAttachmentState cbas{};
             cbas.blendEnable    = VK_FALSE;
@@ -8279,7 +8598,7 @@ namespace threepp {
                 dds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
                 dds.depthTestEnable  = VK_TRUE;
                 dds.depthWriteEnable = VK_TRUE;
-                dds.depthCompareOp   = VK_COMPARE_OP_LESS;
+                dds.depthCompareOp   = VK_COMPARE_OP_GREATER;// reverse-Z (overlay depth prepass)
 
                 // No color attachments — pColorBlendState attachmentCount=0.
                 VkPipelineColorBlendStateCreateInfo dcb{};
@@ -9308,6 +9627,107 @@ namespace threepp {
             in.gbufPerFrame     = gbufViews.data();
             in.taaInputPerFrame = taaInViews.data();
             bloom_->rewriteDescriptors(in);
+        }
+
+        // Raster-first deferred shade reads the camera + lights UBOs, the env
+        // PMREM, the raster material G-buffer (normal+rough / albedo+metal /
+        // depth / ids) and writes bloom_->sceneHdr. Call after the raster
+        // gbuffer or sceneHdr is reallocated (resize) and after the env image
+        // is rebuilt. The UBO buffers are stable; rewriting them is harmless.
+        void rewriteDeferredDescriptors() {
+            // Needs a built TLAS (binding 8) + material buffer (binding 9). Both
+            // come from the scene build; before then there's nothing to bind and
+            // the deferred pass can't dispatch anyway. allocateAndUpdateDescriptors
+            // (which runs right after the TLAS build) calls this, so the first
+            // valid write lands before the first RasterFirst dispatch.
+            if (!deferredShade_ || tlas == VK_NULL_HANDLE) return;
+            std::array<VkBuffer, kFramesInFlight>    camBufs{};
+            std::array<VkBuffer, kFramesInFlight>    lightBufs{};
+            std::array<VkBuffer, kFramesInFlight>    matBufs{};
+            std::array<VkBuffer, kFramesInFlight>    emBufs{};
+            std::array<VkImageView, kFramesInFlight> normalViews{};
+            std::array<VkImageView, kFramesInFlight> depthViews{};
+            std::array<VkImageView, kFramesInFlight> idsViews{};
+            std::array<VkImageView, kFramesInFlight> albedoViews{};
+            std::array<VkImageView, kFramesInFlight> uvViews{};
+            std::array<VkImageView, kFramesInFlight> motionViews{};
+            std::array<VkImageView, kFramesInFlight> indirectViews{};
+            std::array<VkImageView, kFramesInFlight> momentsSqViews{};
+            std::array<VkImageView, kFramesInFlight> atrousAViews{};
+            std::array<VkImageView, kFramesInFlight> atrousBViews{};
+            std::array<VkImageView, kFramesInFlight> reflectViews{};
+            std::array<VkImageView, kFramesInFlight> reflAuxViews{};
+            std::array<VkImageView, kFramesInFlight> sceneHdrViews{};
+            std::array<VkBuffer, kFramesInFlight> fogBufs{};
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                camBufs[f]       = cameraUbos[f].handle;
+                lightBufs[f]     = lightsUbos[f].handle;
+                fogBufs[f]       = fogUbos[f].handle;
+                matBufs[f]       = materialDescsBuffers[f].handle;
+                emBufs[f]        = emissiveTriBuffers[f].handle;
+                normalViews[f]   = rasterGbufs[f].normal.view;
+                depthViews[f]    = rasterGbufs[f].depth.view;
+                idsViews[f]      = rasterGbufs[f].ids.view;
+                albedoViews[f]   = rasterGbufs[f].albedo.view;
+                uvViews[f]       = rasterGbufs[f].uv.view;
+                motionViews[f]   = rasterGbufs[f].motion.view;
+                indirectViews[f] = rasterGbufs[f].indirect.view;
+                momentsSqViews[f]= rasterGbufs[f].momentsSq.view;
+                atrousAViews[f]  = rasterGbufs[f].atrousA.view;
+                atrousBViews[f]  = rasterGbufs[f].atrousB.view;
+                reflectViews[f]  = rasterGbufs[f].reflect.view;
+                reflAuxViews[f]  = rasterGbufs[f].reflAux.view;
+                sceneHdrViews[f] = bloom_->sceneHdrView(f);
+            }
+            // Bindless material-texture array for reflected-hit texturing —
+            // same source the RT set's binding 8 uses.
+            std::array<VkDescriptorImageInfo, kMaxMaterialTextures> matTexInfos{};
+            fillMaterialTextureInfos(matTexInfos);
+
+            vulkan::DeferredShade::DescriptorWriteInputs in{};
+            in.cameraUbo        = camBufs.data();
+            in.lightsUbo        = lightBufs.data();
+            in.envView          = envImage.view;
+            in.envSampler       = envImage.sampler;
+            in.gbufNormal       = normalViews.data();
+            in.gbufDepth        = depthViews.data();
+            in.gbufIds          = idsViews.data();
+            in.gbufAlbedo       = albedoViews.data();
+            in.gbufUv           = uvViews.data();
+            in.gbufMotion       = motionViews.data();
+            in.indirect         = indirectViews.data();
+            in.momentsSq        = momentsSqViews.data();
+            in.atrousA          = atrousAViews.data();
+            in.atrousB          = atrousBViews.data();
+            in.reflect          = reflectViews.data();
+            in.reflAux          = reflAuxViews.data();
+            in.sceneHdr         = sceneHdrViews.data();
+            in.fogBuf           = fogBufs.data();
+            in.fogRange         = sizeof(GpuFogUbo);
+            in.tlas             = tlas;
+            in.materialBuf      = matBufs.data();
+            in.geomDescBuf      = geometryDescsBuffer.handle;
+            in.materialTex      = matTexInfos.data();
+            in.materialTexCount = kMaxMaterialTextures;
+            in.emissiveTriBuf   = emBufs.data();
+            // Ocean textures for the thin-shell water branch. These renderer
+            // members are the live ocean FFT-fine + foam views/samplers (or 1×1
+            // dummies + tile size 0 when no DisplacedMesh is present) — the same
+            // handles the RT set binds at 32 + 44. ensureDisplacedState sets them
+            // BEFORE the scene-build descriptor rewrite that calls us, so the
+            // deferred set always picks up the current ocean state.
+            in.oceanFineView    = oceanFineHeightView;
+            in.oceanFineSampler = oceanFineHeightSampler;
+            in.oceanFoamView    = oceanFoamView;
+            in.oceanFoamSampler = oceanFoamSampler;
+            // ReSTIR DI reservoir ping-pong — the same 2 physical images the PT path
+            // uses (created unconditionally in createAccumImage). rewriteDescriptors
+            // picks write/read slots per frame. Locals must outlive the call below.
+            const VkImageView resPosViews[2] = {reservoirPosImagesPP[0].view, reservoirPosImagesPP[1].view};
+            const VkImageView resWViews[2]   = {reservoirWImagesPP[0].view,   reservoirWImagesPP[1].view};
+            in.reservoirPos     = resPosViews;
+            in.reservoirW       = resWViews;
+            deferredShade_->rewriteDescriptors(in);
         }
 
 
@@ -11424,6 +11844,11 @@ namespace threepp {
             // above) — record that so renderFrame's per-frame rewrite block
             // can detect a hybrid-on transition without firing on every frame.
             binding1Mode_.fill(0);
+
+            // The TLAS + material buffer the raster-first deferred pass binds
+            // are now valid (this runs right after the scene/TLAS build), so
+            // refresh its descriptor set. No-op until ray query is supported.
+            rewriteDeferredDescriptors();
         }
 
         // Populate `infos` with the current bindless material-texture array,
@@ -11580,6 +12005,20 @@ namespace threepp {
             vkUpdateDescriptorSets(ctx->device(),
                                    static_cast<uint32_t>(writes.size()),
                                    writes.data(), 0, nullptr);
+
+            // RasterFirst: the deferred descriptor set holds its OWN copies of
+            // the scene-dependent handles — mats (binding 9), geom descs (10),
+            // the bindless material-texture array (11), the emissive-tri buffer
+            // (12) and the TLAS (8). A rebuild above freed and recreated those
+            // buffers, so the deferred set now dangles: its buffer-device-
+            // address dereferences (fetchHit on geoms[], emissiveNEE on
+            // emissiveTris[]) would read freed memory → GPU page fault → device
+            // lost → crash at the next refitTlas one-shot wait (and a black
+            // frame in between). rewriteSceneDescriptors only refreshes the RT
+            // set, so re-point the deferred set here too. We're already past
+            // vkDeviceWaitIdle (see ensureSceneBuilt's rebuild path), so the
+            // sets are not in flight. No-op when ray_query is unavailable.
+            rewriteDeferredDescriptors();
         }
 
         // Phase 7: rewrite only binding 6 across every descriptor set (called
@@ -11615,6 +12054,9 @@ namespace threepp {
             vkUpdateDescriptorSets(ctx->device(),
                                    static_cast<uint32_t>(writes.size()),
                                    writes.data(), 0, nullptr);
+            // The raster-first deferred pass also samples the env (its own
+            // binding 2); refresh it with the new env image / sampler.
+            rewriteDeferredDescriptors();
         }
 
         // Rebuild every resource sized to the PT render extent — the accum /
@@ -11667,6 +12109,7 @@ namespace threepp {
             // just rewrite them to the new image / view handles.
             rewriteTaaDescriptors();
             rewriteBloomDescriptors();// gbuf + TAA-input views changed
+            rewriteDeferredDescriptors();// raster gbuf + sceneHdr views changed
             // The descriptor pool was rebuilt — force the per-frame binding-1
             // target rewrite to re-run regardless of its prior cached mode.
             binding1Mode_.fill(-1);
@@ -11968,7 +12411,7 @@ namespace threepp {
                 // pass for occlusion testing. Only runs when an overlay
                 // pipeline exists AND the scene actually has overlay
                 // candidates this frame (else the prepass is wasted work).
-                if (overlayDepthPrepassPipeline != VK_NULL_HANDLE && overlayFoundLastFrame_) {
+                if (overlayDepthPrepassPipeline != VK_NULL_HANDLE && sceneHasOverlayContent()) {
                     timingBegin(cb, TP_OverlayDepth);
                     // Swapchain extent — unjitDepth is full-res so the
                     // post-TAA overlay can depth-test the upscaled image.
@@ -12010,7 +12453,7 @@ namespace threepp {
                     dDepthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
                     dDepthAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
                     dDepthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-                    dDepthAtt.clearValue.depthStencil = {1.0f, 0u};
+                    dDepthAtt.clearValue.depthStencil = {0.0f, 0u};// reverse-Z: clear to 0 (far)
 
                     VkRenderingInfo dRi{};
                     dRi.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -12357,6 +12800,24 @@ namespace threepp {
             // descriptorSets index is shared by photon and primary RT pipelines.
             const uint32_t setIdx = currentFrame * imageCount_ + imageIndex;
 
+            // Extents + exposure are shared by both render modes and by the
+            // bloom/TAA tail below, so hoist them out of the mode branch.
+            const VkExtent2D ext   = ctx->swapchainExtent();
+            // Path-trace / deferred render extent — equals `ext` unless
+            // renderScale_ < 1, in which case TAA upsamples to the swapchain.
+            const VkExtent2D ptExt = renderExtent();
+            const float exposure   = toneMappingExposure_;
+            uint32_t exposureBits;
+            std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
+
+            // RenderMode::ReferencePT — the path tracer shades everything
+            // (photon caustics + raygen + à-trous denoise). RenderMode::
+            // RasterFirst replaces this entire block with one analytic
+            // deferred-shade compute pass; bloom + TAA below are shared.
+            // RasterFirst also falls back here when ray query is unsupported
+            // (deferredShade_ == null), so it never renders a black frame.
+            if (renderMode_ == VulkanRenderer::RenderMode::ReferencePT || !deferredShade_) {
+
             // ── Photon emit pass ────────────────────────────────────────────────
             // Two gates: (1) sceneHasGlass_ — no transmissive material means
             // there's no chance of caustics anywhere, and the chit gather is
@@ -12378,9 +12839,7 @@ namespace threepp {
             }
             if (sceneHasGlass_ && glassVisibleThisFrame_) {
                 timingBegin(cb, TP_PhotonEmit);
-                const float exposure = toneMappingExposure_;
-                uint32_t exposureBits;
-                std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
+                // exposureBits hoisted above the mode branch.
                 const uint32_t motionFlagsPhoton =
                         (motionThisFrame_      ? 1u : 0u) |
                         (cameraMovedThisFrame_ ? 2u : 0u) |
@@ -12441,9 +12900,7 @@ namespace threepp {
             //                          occluded; only set when bit 4 is too),
             // [5] emissiveCount, [6] emissiveTotalPower (float bits).
             // Per-instance moved bits live in the binding 21 SSBO.
-            const float exposure = toneMappingExposure_;
-            uint32_t exposureBits;
-            std::memcpy(&exposureBits, &exposure, sizeof(exposureBits));
+            // (exposure / exposureBits hoisted above the mode branch.)
             const uint32_t motionFlags =
                     (motionThisFrame_           ? 1u   : 0u) |
                     (cameraMovedThisFrame_      ? 2u   : 0u) |
@@ -12488,12 +12945,7 @@ namespace threepp {
                                        VK_SHADER_STAGE_MISS_BIT_KHR,
                                0, sizeof(pc), pc);
 
-            const VkExtent2D ext = ctx->swapchainExtent();
-            // Path-trace render extent — equals `ext` unless renderScale_ < 1.
-            // raygen + denoise dispatch over it. When it is smaller than the
-            // swapchain, TAA brings the result up to full resolution as a
-            // temporal upsampler (it resolves straight to the swapchain).
-            const VkExtent2D ptExt   = renderExtent();
+            // (ext / ptExt hoisted above the mode branch.)
             timingBegin(cb, TP_PathTrace);
             ctx->rt().cmdTraceRays(cb, &rtv.rgenRegion, &rtv.missRegion, &rtv.hitRegion,
                                    &callRegion, ptExt.width, ptExt.height, 1);
@@ -12514,6 +12966,77 @@ namespace threepp {
             timingEnd(cb, TP_Denoise);
             // ── End denoise ─────────────────────────────────────────────────────
 
+            } else {
+                // ── RenderMode::RasterFirst — analytic deferred base ───────────
+                // Shade the raster material G-buffer (direct analytic lights +
+                // split-sum specular IBL + approximate diffuse IBL) straight
+                // into bloom_->sceneHdr. No path tracing, no denoise — the base
+                // is noise-free. The raster G-buffer pass already ran and its
+                // render-pass dependency makes it visible to COMPUTE; bloom's
+                // leading barrier makes this write visible to the composite.
+                // Per-frame BLAS refits (skinned / deformable meshes) are fenced
+                // only to the RT pipeline stage by the build barriers above. The
+                // deferred pass traverses the same acceleration structures via
+                // ray query from COMPUTE, so add an AS-build → compute fence here.
+                // No-op for static scenes (no pending AS write this frame).
+                // ALSO carries the GI-reproject cross-frame dependency: this
+                // frame's deferred shade SAMPLES the OTHER frame-in-flight's
+                // indirect image (last frame's accumulated GI history). Make the
+                // prev frame's COMPUTE write to it visible to this frame's COMPUTE
+                // read (the GPU executes frames sequentially per queue, so this is a
+                // cache-visibility barrier, not ordering).
+                {
+                    VkMemoryBarrier2 asbar{};
+                    asbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    asbar.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    asbar.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
+                                          VK_ACCESS_2_SHADER_WRITE_BIT;
+                    asbar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    asbar.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                          VK_ACCESS_2_SHADER_READ_BIT;
+                    VkDependencyInfo asdep{};
+                    asdep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    asdep.memoryBarrierCount = 1;
+                    asdep.pMemoryBarriers = &asbar;
+                    vkCmdPipelineBarrier2(cb, &asdep);
+                }
+                timingBegin(cb, TP_PathTrace);
+                deferredShade_->recordDispatch(cb, currentFrame,
+                                               ptExt.width, ptExt.height,
+                                               envImage.mipLevels, /*shadows=*/true,
+                                               /*ao=*/deferredAO_, sampleIndex,
+                                               emissiveTriCountThisFrame_,
+                                               emissiveTotalPowerThisFrame_,
+                                               fireflyClamp_,
+                                               oceanFineTileSize, oceanFoamTileSize,
+                                               deferredDenoise_, restirDIEnabled_,
+                                               deferredVolDensity_, deferredVolAniso_,
+                                               deferredStarIntensity_);
+                timingEnd(cb, TP_PathTrace);// pathTraceMs = deferred SHADE only
+                // Spatial denoise of the demodulated diffuse-indirect + recombine.
+                // Barrier: the shade wrote sceneHdr + the indirect image (both
+                // GENERAL storage); the denoise reads the indirect 5×5 neighbourhood
+                // and read-modify-writes sceneHdr — compute→compute RAW/WAR.
+                if (deferredDenoise_) {
+                    VkMemoryBarrier2 denoiseBar{};
+                    denoiseBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    denoiseBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    denoiseBar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    denoiseBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    denoiseBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                               VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    VkDependencyInfo denoiseDep{};
+                    denoiseDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    denoiseDep.memoryBarrierCount = 1;
+                    denoiseDep.pMemoryBarriers = &denoiseBar;
+                    vkCmdPipelineBarrier2(cb, &denoiseDep);
+                    timingBegin(cb, TP_Denoise);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
+                    deferredShade_->recordDenoiseDispatch(cb, currentFrame, ptExt.width, ptExt.height);
+                    timingEnd(cb, TP_Denoise);
+                }
+            }
+
             // ── Bloom + tone-map/sRGB composite (HDR post stack) ───────────────
             // denoise.comp (resolve) wrote linear HDR into bloom_->sceneHdr
             // (the shared set's binding 1). This pass glows the bright
@@ -12524,7 +13047,7 @@ namespace threepp {
             bloom_->recordDispatch(cb, currentFrame, ptExt.width, ptExt.height,
                                    static_cast<uint32_t>(toneMapping_),
                                    exposureBits, envIsBgColor,
-                                   bloomIntensity_, bloomThreshold_);
+                                   bloomIntensity_, bloomThreshold_, bloomClamp_);
             // ── End bloom ──────────────────────────────────────────────────────
 
             // ── Stage 1A.5: raster TAA / temporal upsampler ────────────────────
@@ -12558,13 +13081,11 @@ namespace threepp {
             // built), pipeline failed to create, or the early scan didn't
             // find any overlay candidates this frame.
             if (overlayWireframePipeline != VK_NULL_HANDLE) {
-                bool hasOverlay = !lastVisibleLines_.empty();
-                if (!hasOverlay) {
-                    for (const auto& en : lastVisibleEntries_) {
-                        if (en.isOverlay) { hasOverlay = true; break; }
-                    }
-                }
-                overlayFoundLastFrame_ = hasOverlay;
+                // Gate on the same current-frame answer the unjittered-depth
+                // prepass keyed off, so the prepass that filled + transitioned
+                // unjitDepth to DEPTH_STENCIL_READ_ONLY_OPTIMAL ran iff we draw
+                // here and read it (see sceneHasOverlayContent()).
+                const bool hasOverlay = sceneHasOverlayContent();
 
                 if (hasOverlay) {
                     timingBegin(cb, TP_OverlayDraw);
@@ -13301,15 +13822,22 @@ namespace threepp {
             // pool / clear images — both unsafe with an open cmd buffer in the
             // prior frame. We're past the fence wait now so the GPU is idle for
             // *this* slot at minimum; vkDeviceWaitIdle below drains the rest.
-            if (pendingRenderScaleRealloc_ || pendingAccumulationReset_) {
+            if (pendingRenderScaleRealloc_ || pendingAccumulationReset_ || pendingDeferredRewrite_) {
                 vkDeviceWaitIdle(d);
                 if (pendingRenderScaleRealloc_) {
-                    reallocateRenderExtentResources();
+                    reallocateRenderExtentResources();// also rewrites deferred descriptors
                     pendingRenderScaleRealloc_ = false;
+                    pendingDeferredRewrite_    = false;
                 }
                 if (pendingAccumulationReset_) {
                     clearGbufImages();
                     pendingAccumulationReset_ = false;
+                }
+                if (pendingDeferredRewrite_) {
+                    // Runtime render-mode toggle: re-point the deferred set at the
+                    // current per-frame resources (GPU idle from the wait above).
+                    rewriteDeferredDescriptors();
+                    pendingDeferredRewrite_ = false;
                 }
             }
 
@@ -13391,6 +13919,12 @@ namespace threepp {
             // if the buffer grew.
             if (buildAndUploadEmissiveTris(currentFrame, lastVisibleEntries_)) {
                 rewriteEmissiveTriDescriptors(currentFrame);
+                // Keep the raster-first deferred pass's emissive binding fresh
+                // (same per-frame buffer grows for it too).
+                if (deferredShade_) {
+                    deferredShade_->rewriteEmissive(currentFrame,
+                                                    emissiveTriBuffers[currentFrame].handle);
+                }
             }
             if (refreshEnvTextureFromScene(scene)) {
                 rewriteEnvDescriptors();
@@ -13764,6 +14298,34 @@ namespace threepp {
     RenderTarget* VulkanRenderer::getRenderTarget() { return nullptr; }
     void VulkanRenderer::setRenderTarget(RenderTarget*, int, int) {}
 
+    void VulkanRenderer::writeFramebuffer(const std::filesystem::path& filename) {
+        auto ext = filename.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".bmp") {
+            throw std::runtime_error("VulkanRenderer::writeFramebuffer: unsupported format " + ext);
+        }
+        const auto pixels = readRGBPixels();
+        if (pixels.empty()) return;
+        const auto sz = size();
+        const int  w  = sz.width();
+        const int  h  = sz.height();
+        if (filename.has_parent_path() && !std::filesystem::exists(filename.parent_path())) {
+            std::error_code ec;
+            std::filesystem::create_directories(filename.parent_path(), ec);
+        }
+        bool success = false;
+        if (ext == ".png") {
+            success = stbi_write_png(filename.string().c_str(), w, h, 3, pixels.data(), w * 3);
+        } else if (ext == ".jpg" || ext == ".jpeg") {
+            success = stbi_write_jpg(filename.string().c_str(), w, h, 3, pixels.data(), 100);
+        } else {
+            success = stbi_write_bmp(filename.string().c_str(), w, h, 3, pixels.data());
+        }
+        if (!success) {
+            throw std::runtime_error("VulkanRenderer: failed to write framebuffer to " + filename.string());
+        }
+    }
+
     std::vector<unsigned char> VulkanRenderer::readRGBPixels() {
         auto& impl = *pimpl_;
         auto* ctx  = impl.ctx.get();
@@ -14132,12 +14694,36 @@ namespace threepp {
         return pimpl_->bloomIntensity_;
     }
 
+    void VulkanRenderer::setDeferredDenoise(bool enabled) {
+        pimpl_->deferredDenoise_ = enabled;
+    }
+
+    bool VulkanRenderer::deferredDenoise() const {
+        return pimpl_->deferredDenoise_;
+    }
+
+    void VulkanRenderer::setDeferredAO(bool enabled) {
+        pimpl_->deferredAO_ = enabled;
+    }
+
+    bool VulkanRenderer::deferredAO() const {
+        return pimpl_->deferredAO_;
+    }
+
     void VulkanRenderer::setBloomThreshold(float threshold) {
         pimpl_->bloomThreshold_ = threshold < 0.f ? 0.f : threshold;
     }
 
     float VulkanRenderer::bloomThreshold() const {
         return pimpl_->bloomThreshold_;
+    }
+
+    void VulkanRenderer::setBloomClamp(float clampMax) {
+        pimpl_->bloomClamp_ = clampMax < 0.f ? 0.f : clampMax;
+    }
+
+    float VulkanRenderer::bloomClamp() const {
+        return pimpl_->bloomClamp_;
     }
 
     void VulkanRenderer::setSharpenStrength(float amount) {
@@ -14180,6 +14766,39 @@ namespace threepp {
 
     int VulkanRenderer::maxBounces() const {
         return static_cast<int>(pimpl_->maxBounces_);
+    }
+
+    void VulkanRenderer::setRenderMode(RenderMode mode) {
+        if (pimpl_->renderMode_ == mode) return;
+        pimpl_->renderMode_ = mode;
+        // The deferred (RasterFirst) descriptor set is only rewritten on scene
+        // build / resize / env change — never on a mode toggle. Switching modes
+        // at runtime can otherwise leave it stale (manifested as a black scene
+        // until a window resize forced a rewrite). Flag a refresh, processed at
+        // the next frame's GPU-idle point (beginFrameForPT).
+        pimpl_->pendingDeferredRewrite_ = true;
+    }
+
+    VulkanRenderer::RenderMode VulkanRenderer::renderMode() const {
+        return pimpl_->renderMode_;
+    }
+
+    VulkanRenderer::SoftBodyInteropHandle
+    VulkanRenderer::enableSoftBodyInterop(const Mesh& mesh, std::function<void()> deviceCopy) {
+        return pimpl_->enableSoftBodyInterop(mesh, std::move(deviceCopy));
+    }
+
+    void VulkanRenderer::setDeferredVolumetrics(float density, float anisotropy) {
+        pimpl_->deferredVolDensity_ = std::max(density, 0.f);
+        pimpl_->deferredVolAniso_   = std::clamp(anisotropy, -0.95f, 0.95f);
+    }
+
+    void VulkanRenderer::setDeferredStarfield(float intensity) {
+        pimpl_->deferredStarIntensity_ = std::max(intensity, 0.f);
+    }
+
+    void VulkanRenderer::disableSoftBodyInterop(const Mesh& mesh) {
+        pimpl_->disableSoftBodyInterop(mesh);
     }
 
     void VulkanRenderer::resetAccumulation() {
@@ -14280,6 +14899,7 @@ namespace threepp {
             case 1:  pimpl_->hybridDebugView_ = V::Normal; break;
             case 2:  pimpl_->hybridDebugView_ = V::Motion; break;
             case 3:  pimpl_->hybridDebugView_ = V::Ids;    break;
+            case 4:  pimpl_->hybridDebugView_ = V::Albedo; break;
             default: pimpl_->hybridDebugView_ = V::Off;    break;
         }
     }

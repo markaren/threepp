@@ -17,11 +17,14 @@
 #include "threepp/renderers/Renderer.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <vector>
 
 namespace threepp {
+
+    class Mesh;
 
     class VulkanRenderer : public Renderer {
 
@@ -59,6 +62,12 @@ namespace threepp {
         void setRenderTarget(RenderTarget* renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0) override;
 
         [[nodiscard]] std::vector<unsigned char> readRGBPixels() override;
+
+        // Save the last presented frame to disk (.png / .jpg / .jpeg / .bmp),
+        // creating parent directories as needed — same convenience GLRenderer
+        // and WgpuRenderer expose. Wraps readRGBPixels(); call after render().
+        // Throws on unsupported extension or write failure.
+        void writeFramebuffer(const std::filesystem::path& filename);
 
         // Toggle scene-only swapchain capture. When enabled, the renderer
         // snapshots the post-TAA / pre-overlay swapchain image into a
@@ -237,11 +246,70 @@ namespace threepp {
         void setBloomIntensity(float intensity);
         [[nodiscard]] float bloomIntensity() const;
 
+        // RasterFirst spatial denoiser for the ray-traced diffuse-indirect
+        // (AO/GI). On by default; disable to see the raw noisy base.
+        void setDeferredDenoise(bool enabled);
+        [[nodiscard]] bool deferredDenoise() const;
+
+        // RasterFirst ray-traced env ambient-occlusion / GI. OFF by default —
+        // occlusion-testing the IBL makes the HDRI appear to cast shadows. Off =
+        // flat env IBL (the directional light still casts shadows). On = soft RT
+        // AO/GI (costs occlusion rays; pair with setDeferredDenoise for noise).
+        void setDeferredAO(bool enabled);
+        [[nodiscard]] bool deferredAO() const;
+
+        // RasterFirst volumetric SPOT-light beams: ray-marched single scattering
+        // through a uniform thin haze — searchlight / lighthouse beams, visible
+        // against sky and surfaces alike. `density` is the scattering coefficient
+        // σ (1/m; typical 0.005–0.05, 0 = off, no cost); `anisotropy` is the
+        // Henyey-Greenstein g (forward-peaked ≈ 0.5–0.8 reads as atmospheric
+        // haze). RasterFirst only; the PT path has its own fog volumetrics.
+        void setDeferredVolumetrics(float density, float anisotropy = 0.55f);
+
+        // RasterFirst procedural star field on SKY pixels — hash-based points
+        // evaluated in direction space, so they stay pixel-crisp at any
+        // resolution/FOV (env-texture stars are sub-texel features that
+        // magnify into blobs). 0 disables (no cost); ~1.0 = naked-eye night
+        // sky. Pair with a dark environment.
+        void setDeferredStarfield(float intensity);
+
+        // ── PhysX soft-body zero-copy interop (CUDA → Vulkan) ────────────────
+        // Re-backs `mesh`'s per-frame tet-position buffer (the tet_skinning.comp
+        // input) with EXPORTED external device memory and registers `deviceCopy`
+        // to be invoked each frame in place of the CPU upload. The caller (the
+        // PhysX soft-body glue) imports the returned OS handle into CUDA and has
+        // `deviceCopy` issue a device→device copy from PhysX's deformed-position
+        // buffer — the tet data then never touches the host.
+        //   • Call AFTER the first render (the mesh's tet state must exist) —
+        //     returns an empty handle until then; poll.
+        //   • Returns an empty handle when the device lacks the external-memory
+        //     extension. On Windows the handle is a Win32 NT handle owned by the
+        //     renderer (valid until disable/teardown; CUDA's import duplicates
+        //     it). On POSIX it is an fd cast into the pointer, ownership
+        //     transferring to CUDA on successful import.
+        //   • If the CUDA import fails, call disableSoftBodyInterop to fall back
+        //     to the CPU upload path.
+        struct SoftBodyInteropHandle {
+            void*  osHandle  = nullptr;
+            size_t sizeBytes = 0;
+        };
+        SoftBodyInteropHandle enableSoftBodyInterop(const Mesh& mesh, std::function<void()> deviceCopy);
+        void disableSoftBodyInterop(const Mesh& mesh);
+
         // Bloom bright-pass cutoff in linear-HDR luma: only scene values above
         // this (with a soft knee below it) contribute to the glow. Higher =
         // only the very brightest highlights bloom. Typical: 0.8–2.0.
         void setBloomThreshold(float threshold);
         [[nodiscard]] float bloomThreshold() const;
+
+        // Bloom input clamp in linear-HDR luma (UE's bloom "max brightness"):
+        // each bright-pass tap is capped here, so a tiny ultra-bright specular
+        // highlight (an analytic light mirrored in smooth metal) can't pulse
+        // the halo radius as the TAA jitter swings its per-frame intensity by
+        // orders of magnitude. <= 0 disables (default — unclamped legacy
+        // look). Typical: 8–32; lower = more stable but dims very-bright halos.
+        void setBloomClamp(float clampMax);
+        [[nodiscard]] float bloomClamp() const;
 
         // Post-TAA RCAS sharpen strength — restores high-frequency detail the
         // temporal resolve softens (contrast-limited, so it won't ring or
@@ -283,12 +351,35 @@ namespace threepp {
         // Mirrors WgpuPathTracer::resetAccumulation.
         void resetAccumulation();
 
-        // The renderer always runs in hybrid raster + path-tracer mode
-        // (UE/Omniverse-style): a deterministic raster G-buffer prepass
-        // (depth, normal, motion vectors, per-pixel IDs) supplies primary
-        // visibility and the path tracer starts at bounce 1. This eliminates
-        // moving-object shake from PT primary jitter; AA happens via TAA on
-        // the raster side.
+        // Renderer shading strategy. Both modes share the raster G-buffer
+        // prepass (depth, normal, motion vectors, per-pixel IDs) and the whole
+        // post chain (denoise / bloom / TAA); they diverge only in how the
+        // surface is shaded.
+        //
+        //   ReferencePT — the path tracer shades everything (the existing
+        //                 infra): the raster prepass supplies primary
+        //                 visibility and raygen path-traces all direct +
+        //                 indirect light. Ground-truth quality, but carries the
+        //                 full PT noise and cost. Kept as the reference / high-
+        //                 fidelity option.
+        //
+        //   RasterFirst — raster shades a clean, analytic, noise-free base
+        //                 (direct analytic lights + IBL) and the path tracer
+        //                 contributes only additive accents (reflections, GI,
+        //                 caustics) on top. The intended default once built
+        //                 out: most of the look of PT without the noise or the
+        //                 per-pixel ray cost.
+        //
+        // NOTE: RasterFirst is being landed in stages. Until the deferred
+        // shading path exists it falls back to ReferencePT behaviour, so the
+        // two modes currently render identically. Default is ReferencePT and
+        // flips to RasterFirst once the base + accent passes are in.
+        enum class RenderMode {
+            RasterFirst,
+            ReferencePT,
+        };
+        void setRenderMode(RenderMode mode);
+        [[nodiscard]] RenderMode renderMode() const;
 
         void setPerSppJitterHybrid(bool enabled);
         [[nodiscard]] bool perSppJitterHybrid() const;
@@ -357,6 +448,7 @@ namespace threepp {
         //   1 = world-space normal
         //   2 = motion vector (NDC delta in red/green)
         //   3 = per-pixel instanceCustomIndex (raw uint16)
+        //   4 = albedo (linear base colour in rgb; metalness in alpha)
         void setHybridDebugView(int view);
         [[nodiscard]] int hybridDebugView() const;
 

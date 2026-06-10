@@ -34,18 +34,21 @@ int main(int argc, char** argv) {
     renderer.toneMapping = ToneMapping::Neutral;
     renderer.setRestirDIEnabled(true);
     renderer.setFireflyClamp(8.f);
-    renderer.setRenderScale(0.8f);
+    renderer.setDeferredAO(true);
+    renderer.setRenderScale(0.75);
 
-    RGBELoader imgLoader;
-    auto env = imgLoader.load(modelFolder / "san_giuseppe_bridge_4k.hdr");
 
     // ---- Scene ----
     Scene scene;
-    scene.background = env;
-    scene.environment = env;
+
+    RGBELoader imgLoader;
+    if (auto env = imgLoader.load(modelFolder / "san_giuseppe_bridge_4k.hdr")) {
+        scene.background = env;
+        scene.environment = env;
+    }
 
     // ---- Camera ----
-    PerspectiveCamera camera(60.f, canvas.aspect(), 0.01f, 1000.f);
+    PerspectiveCamera camera(60.f, canvas.aspect(), 0.1f, 1000.f);// near 0.01→0.1: far/near ratio was 100k → z-fighting
     camera.position.set(-10.f, 3.f, -5.f);
     OrbitControls controls{camera, canvas};
     controls.enableKeys = false;
@@ -56,7 +59,7 @@ int main(int argc, char** argv) {
     // Bistro emissives (lamps, signs, string lights) are authored at low factors;
     // the official Falcor scene multiplies every emissive factor by 1000 to get a
     // well-exposed image, so do the same here for interior lighting to read.
-    loader.emissiveScale = 1000.0f;
+    loader.emissiveScale = 100.0f;
     auto interior = loadAsync(loader, modelFolder / "BistroInterior_Wine.fbx");
     auto exterior = loadAsync(loader, modelFolder / "BistroExterior.fbx");
 

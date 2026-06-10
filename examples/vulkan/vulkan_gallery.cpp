@@ -391,14 +391,17 @@ int main() {
             bucket = (bucket > 0.f) ? bucket * (1.f - ptEmaAlpha) + t.pathTraceMs * ptEmaAlpha
                                     : t.pathTraceMs;
         }
-        if (ImGui::Checkbox("Measure primary trace only", &measurePrimaryOnly))
+        if (ImGui::Checkbox("Measure primary trace only", &measurePrimaryOnly)) {
             renderer.setMeasurePrimaryTraceOnly(measurePrimaryOnly);
-        if (measurePrimaryOnly)
+        }
+        if (measurePrimaryOnly) {
             ImGui::TextDisabled("Image is black while measuring.");
+        }
         ImGui::Text("Full PT:      %6.2f ms", fullPtMs);
         ImGui::Text("Primary only: %6.2f ms", primaryOnlyMs);
-        if (fullPtMs > 1e-3f && primaryOnlyMs > 0.f)
+        if (fullPtMs > 1e-3f && primaryOnlyMs > 0.f) {
             ImGui::Text("Primary share: %5.1f %%", 100.f * primaryOnlyMs / fullPtMs);
+        }
         ImGui::Separator();
 
         if (ImGui::Checkbox("Window", &showWindow)) {
@@ -412,29 +415,37 @@ int main() {
 
         ImGui::Separator();
         ImGui::TextUnformatted("RectAreaLight (window)");
-        if (ImGui::Checkbox("On##rect", &rectOn))
+        if (ImGui::Checkbox("On##rect", &rectOn)) {
             rectLight->intensity = rectOn ? rectIntensity : 0.f;
+        }
         ImGui::SameLine();
-        if (ImGui::SliderFloat("Intensity", &rectIntensity, 0.f, 60.f, "%.1f") && rectOn)
+        if (ImGui::SliderFloat("Intensity", &rectIntensity, 0.f, 60.f, "%.1f") && rectOn) {
             rectLight->intensity = rectIntensity;
+        }
 
         ImGui::Separator();
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 3.0f, "%.2f"))
+        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 3.0f, "%.2f")) {
             renderer.toneMappingExposure = exposure;
+        }
         const char* toneItems[] = {"None", "Linear", "Reinhard", "Cineon", "ACESFilmic"};
-        if (ImGui::Combo("Tone mapping", &toneMode, toneItems, IM_ARRAYSIZE(toneItems)))
+        if (ImGui::Combo("Tone mapping", &toneMode, toneItems, IM_ARRAYSIZE(toneItems))) {
             renderer.toneMapping = static_cast<ToneMapping>(toneMode);
+        }
 
-        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
+        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16)) {
             renderer.setSamplesPerPixel(spp);
+        }
 
         ImGui::Separator();
-        if (ImGui::Checkbox("Denoiser", &denoiseOn))
+        if (ImGui::Checkbox("Denoiser", &denoiseOn)) {
             renderer.setDenoise(denoiseOn);
-        if (ImGui::Checkbox("ReSTIR DI", &restirOn))
+        }
+        if (ImGui::Checkbox("ReSTIR DI", &restirOn)) {
             renderer.setRestirDIEnabled(restirOn);
-        if (ImGui::Checkbox("ReSTIR GI", &restirGiOn))
+        }
+        if (ImGui::Checkbox("ReSTIR GI", &restirGiOn)) {
             renderer.setRestirGIEnabled(restirGiOn);
+        }
 
         ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");

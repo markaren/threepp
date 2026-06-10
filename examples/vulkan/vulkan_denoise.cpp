@@ -65,7 +65,7 @@ namespace {
     auto makeBackWall() {
         auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
                 .color(Color(0.75f, 0.75f, 0.75f))
-                .roughness(0.01f)
+                .roughness(0.1f)
                 .metalness(0.9f));
         auto mesh = Mesh::create(BoxGeometry::create(12.f, 8.f, 0.1f), mat);
         mesh->position.set(0.f, 4.f, -5.f);
@@ -114,6 +114,10 @@ int main() {
     // crisp; sharpen restores detail the temporal resolve softens.
     renderer.setBloomIntensity(0.5f);
     renderer.setBloomThreshold(1.0f);
+    // Cap the bloom input: the analytic lights mirrored in the smooth gold
+    // sphere are sub-pixel HDR spikes whose intensity swings per frame with
+    // the TAA jitter — unclamped, the halo radius visibly pulses.
+    renderer.setBloomClamp(16.0f);
     renderer.setSharpenStrength(0.5f);
 
     // ---- Scene ----
@@ -167,6 +171,7 @@ int main() {
     int spp           = renderer.samplesPerPixel();
     float bloomInt    = renderer.bloomIntensity();
     float bloomThresh = renderer.bloomThreshold();
+    float bloomClamp  = renderer.bloomClamp();
     float sharpen     = renderer.sharpenStrength();
     uint64_t frames   = 0;
     float fps         = 0.f;
@@ -207,6 +212,8 @@ int main() {
             renderer.setBloomIntensity(bloomInt);
         if (ImGui::SliderFloat("Bloom threshold", &bloomThresh, 0.0f, 3.0f))
             renderer.setBloomThreshold(bloomThresh);
+        if (ImGui::SliderFloat("Bloom clamp", &bloomClamp, 0.0f, 64.0f))
+            renderer.setBloomClamp(bloomClamp);
         if (ImGui::SliderFloat("Sharpen (RCAS)", &sharpen, 0.0f, 0.8f))
             renderer.setSharpenStrength(sharpen);
 

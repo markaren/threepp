@@ -18,6 +18,11 @@
 #include "threepp/scenes/FogExp2.hpp"
 #include "threepp/threepp.hpp"
 
+#include <cstdlib>
+#include <filesystem>
+#include <iostream>
+#include <string>
+
 using namespace threepp;
 
 namespace {
@@ -109,12 +114,23 @@ namespace {
 
 }// namespace
 
-int main() {
+int main(int argc, char** argv) {
+
+    // Headless capture (dev): vulkan_fog --shot <name.png> [--frames N] [--pt]
+    std::string shotPath;
+    int shotFrames = 240, shotFrame = 0;
+    bool shotPT = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--shot" && i + 1 < argc) shotPath = argv[++i];
+        else if (std::string(argv[i]) == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+        else if (std::string(argv[i]) == "--pt") shotPT = true;
+    }
 
     Canvas canvas("Vulkan PT - Fog", {{"vsync", false}});
     VulkanRenderer renderer(canvas);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 0.9f;
+    if (shotPT) renderer.setRenderMode(VulkanRenderer::RenderMode::ReferencePT);
 
     Scene scene;
     scene.background = Color::black;
@@ -215,7 +231,14 @@ int main() {
         }
 
         renderer.render(scene, camera);
-        ui.render();
+        if (shotPath.empty()) {
+            ui.render();
+        } else if (++shotFrame >= shotFrames) {
+            const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
+            renderer.writeFramebuffer(path);
+            std::cout << "wrote " << path.string() << std::endl;
+            std::exit(0);
+        }
     });
 
     return 0;

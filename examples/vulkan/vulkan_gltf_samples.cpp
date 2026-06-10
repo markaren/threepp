@@ -76,6 +76,7 @@ int main(int argc, char** argv) {
     Canvas canvas("Vulkan PT - GLTF Samples", {{"vsync", false}});
 
     VulkanRenderer renderer(canvas);
+    renderer.setRenderMode(VulkanRenderer::RenderMode::RasterFirst);
     renderer.setHybridDebugView(0);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
@@ -206,6 +207,24 @@ int main(int argc, char** argv) {
         ImGui::Text("Model: %s", currentModel >= 0 ? models[currentModel].name.c_str() : "none");
         if (loadedModel && loadedModel->isLoading()) ImGui::Text("Loading...");
         ImGui::Text("Left/Right arrows to browse");
+
+        // Render mode: RasterFirst (clean analytic raster base + IBL) vs
+        // ReferencePT (full path tracer). 0 = RasterFirst, 1 = ReferencePT.
+        static int renderMode = 0;
+        const char* modeItems[] = {"RasterFirst (raster base)", "ReferencePT (path tracer)"};
+        if (ImGui::Combo("Render mode", &renderMode, modeItems, IM_ARRAYSIZE(modeItems))) {
+            renderer.setRenderMode(renderMode == 0
+                                           ? VulkanRenderer::RenderMode::RasterFirst
+                                           : VulkanRenderer::RenderMode::ReferencePT);
+            renderer.resetAccumulation();
+        }
+
+        // Raster G-buffer debug views. "Albedo" exercises the new raster-first
+        // material attachment (linear base colour in rgb, metalness in alpha).
+        static int debugView = 0;
+        const char* dbgItems[] = {"Off (PT)", "Normal", "Motion", "InstanceID", "Albedo"};
+        if (ImGui::Combo("Debug view", &debugView, dbgItems, IM_ARRAYSIZE(dbgItems)))
+            renderer.setHybridDebugView(debugView);
 
         if (ImGui::CollapsingHeader("Models")) {
             for (int i = 0; i < static_cast<int>(models.size()); i++) {

@@ -200,7 +200,7 @@ namespace threepp::vulkan {
             VkPushConstantRange pc{};
             pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
             pc.offset = 0;
-            pc.size = 20;// down: 4×u32 + 1×float ; blur: 2×u32 + 2×float
+            pc.size = 24;// down: 4×u32 + 2×float ; blur: 2×u32 + 2×float
             VkPipelineLayoutCreateInfo plci{};
             plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
             plci.setLayoutCount = 1;
@@ -343,7 +343,7 @@ namespace threepp::vulkan {
                                    uint32_t width, uint32_t height,
                                    uint32_t toneMapping, uint32_t exposureBits,
                                    bool bgIsSolidColor, float bloomIntensity,
-                                   float bloomThreshold) {
+                                   float bloomThreshold, float bloomClamp) {
         auto barrier = [&]() {
             VkMemoryBarrier2 mb{};
             mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
@@ -366,14 +366,14 @@ namespace threepp::vulkan {
             const uint32_t ghx = (halfW_ + 7u) / 8u;
             const uint32_t ghy = (halfH_ + 7u) / 8u;
 
-            struct DownPc { uint32_t srcW, srcH, dstW, dstH; float threshold; };
+            struct DownPc { uint32_t srcW, srcH, dstW, dstH; float threshold, clampMax; };
             struct BlurPc { uint32_t w, h; float dx, dy; };
 
             // Downsample sceneHdr -> bloomA (half res, Karis + soft-knee bright pass).
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, downPipe_);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                     bloomPipeLayout_, 0, 1, &downSets_[frame], 0, nullptr);
-            DownPc dpc{width, height, halfW_, halfH_, bloomThreshold};
+            DownPc dpc{width, height, halfW_, halfH_, bloomThreshold, bloomClamp};
             vkCmdPushConstants(cb, bloomPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(dpc), &dpc);
             vkCmdDispatch(cb, ghx, ghy, 1);
             barrier();

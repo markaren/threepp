@@ -239,6 +239,42 @@ namespace threepp::vulkan {
             std::cerr << "[VulkanContext] SER (VK_NV_ray_tracing_invocation_reorder): "
                       << (rayTracingInvocationReorderSupported_ ? "enabled" : "fallback")
                       << "\n";
+
+            // Probe for VK_KHR_ray_query — lets compute shaders trace inline
+            // rays (rayQueryEXT). Used by the raster-first deferred shading pass
+            // for hard shadow rays. Optional: ReferencePT doesn't need it, so a
+            // device that has the RT pipeline but not ray query still runs (the
+            // renderer falls RasterFirst back to ReferencePT). All current RT
+            // hardware exposes both.
+            const auto pickedExtsRq = deviceExtensions(physicalDevice_);
+            if (hasExtension(pickedExtsRq, VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
+                VkPhysicalDeviceRayQueryFeaturesKHR rqFeat{};
+                rqFeat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+                VkPhysicalDeviceFeatures2 feat2{};
+                feat2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+                feat2.pNext = &rqFeat;
+                vkGetPhysicalDeviceFeatures2(physicalDevice_, &feat2);
+                rayQuerySupported_ = rqFeat.rayQuery == VK_TRUE;
+            }
+            std::cerr << "[VulkanContext] ray query (VK_KHR_ray_query): "
+                      << (rayQuerySupported_ ? "enabled" : "unavailable") << "\n";
+        }
+
+        // Probe for exportable external memory (the platform handle extension;
+        // VK_KHR_external_memory itself is core since 1.1). Lets device-local
+        // buffers be exported as OS handles and imported by CUDA — the zero-copy
+        // path for PhysX soft-body tet positions. Independent of ray tracing.
+        {
+            // Name spelled as a literal: the macro lives in the platform header
+            // (vulkan_win32.h), which would drag windows.h into this TU.
+            const auto exts = deviceExtensions(physicalDevice_);
+#ifdef _WIN32
+            externalMemorySupported_ = hasExtension(exts, "VK_KHR_external_memory_win32");
+#else
+            externalMemorySupported_ = hasExtension(exts, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+#endif
+            std::cerr << "[VulkanContext] external memory export: "
+                      << (externalMemorySupported_ ? "enabled" : "unavailable") << "\n";
         }
 
         // Find queue families.
@@ -287,6 +323,16 @@ namespace threepp::vulkan {
             if (rayTracingInvocationReorderSupported_) {
                 extensions.push_back(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
             }
+            if (rayQuerySupported_) {
+                extensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+            }
+        }
+        if (externalMemorySupported_) {
+#ifdef _WIN32
+            extensions.push_back("VK_KHR_external_memory_win32");// macro lives in vulkan_win32.h
+#else
+            extensions.push_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+#endif
         }
 
         // Required core 1.2 / 1.3 features (BDA, dynamic rendering, sync2).
@@ -294,6 +340,13 @@ namespace threepp::vulkan {
         f13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
         f13.dynamicRendering = VK_TRUE;
         f13.synchronization2 = VK_TRUE;
+        // Shaders are compiled with glslangValidator --target-env vulkan1.3,
+        // which lowers `discard` (e.g. overlay_point.frag's round-point cutout)
+        // to OpDemoteToHelperInvocation rather than OpKill. That op needs the
+        // DemoteToHelperInvocation SPIR-V capability enabled at device creation,
+        // else vkCreateShaderModule warns (VUID-VkShaderModuleCreateInfo-pCode-08740).
+        // The feature is core in Vulkan 1.3 (apiVersion is VK_API_VERSION_1_3).
+        f13.shaderDemoteToHelperInvocation = VK_TRUE;
 
         VkPhysicalDeviceVulkan12Features f12{};
         f12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -319,12 +372,22 @@ namespace threepp::vulkan {
         fReorder.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV;
         fReorder.rayTracingInvocationReorder = VK_TRUE;
 
+        // Inline ray query (rayQueryEXT in compute) for the raster-first
+        // deferred shadow pass. Chained at the tail (after f13) when supported.
+        VkPhysicalDeviceRayQueryFeaturesKHR fRQ{};
+        fRQ.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+        fRQ.rayQuery = VK_TRUE;
+
         if (rayTracingEnabled_) {
             fRT.pNext = &f12;
             fAS.pNext = &fRT;
             if (rayTracingInvocationReorderSupported_) {
                 // Splice fReorder at the head of the chain so it precedes fAS.
                 fReorder.pNext = &fAS;
+            }
+            if (rayQuerySupported_) {
+                fRQ.pNext = f13.pNext;// preserve any existing tail (currently null)
+                f13.pNext = &fRQ;
             }
         }
 

@@ -101,6 +101,60 @@ vec3 sampleHistoryCR(vec2 uv) {
     return max(result, vec3(0.0));// Catmull-Rom can ring slightly negative on hard edges.
 }
 
+// Spatial FXAA (FXAA3 "console" variant) on the LDR input. This is the deferred
+// path's anti-aliasing now that camera jitter is off (jitter+TAA flickered). It
+// edge-detects via luma and blends along the edge — stable, no temporal shimmer.
+// On the already-temporally-AA'd PT path it's a near-no-op: smooth edges fall
+// under the contrast threshold and pass through unchanged.
+vec3 fxaa(sampler2D tex, vec2 uv, vec2 rcpFrame) {
+    const vec3 L = vec3(0.299, 0.587, 0.114);
+    const vec3 rgbM = texture(tex, uv).rgb;
+    const float lM  = dot(rgbM, L);
+    const float lNW = dot(textureOffset(tex, uv, ivec2(-1, -1)).rgb, L);
+    const float lNE = dot(textureOffset(tex, uv, ivec2( 1, -1)).rgb, L);
+    const float lSW = dot(textureOffset(tex, uv, ivec2(-1,  1)).rgb, L);
+    const float lSE = dot(textureOffset(tex, uv, ivec2( 1,  1)).rgb, L);
+    const float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+    const float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+    if (lMax - lMin < max(0.0312, lMax * 0.125)) return rgbM;// no edge → passthrough
+
+    vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)),
+                     ((lNW + lSW) - (lNE + lSE)));
+    const float dirReduce = max((lNW + lNE + lSW + lSE) * 0.25 * (1.0 / 8.0), 1.0 / 128.0);
+    const float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+    dir = clamp(dir * rcpDirMin, vec2(-8.0), vec2(8.0)) * rcpFrame;
+
+    const vec3 rgbA = 0.5 * (texture(tex, uv + dir * (1.0 / 3.0 - 0.5)).rgb +
+                             texture(tex, uv + dir * (2.0 / 3.0 - 0.5)).rgb);
+    const vec3 rgbB = rgbA * 0.5 + 0.25 * (texture(tex, uv + dir * -0.5).rgb +
+                                           texture(tex, uv + dir *  0.5).rgb);
+    const float lB = dot(rgbB, L);
+    return (lB < lMin || lB > lMax) ? rgbA : rgbB;
+}
+
+// YCoCg transform — TAA history rectification works far better in YCoCg than RGB
+// (luma/chroma separation → tighter, more perceptual clipping).
+vec3 RGB_to_YCoCg(vec3 c) {
+    return vec3( 0.25 * c.r + 0.5 * c.g + 0.25 * c.b,
+                 0.5  * c.r            - 0.5  * c.b,
+                -0.25 * c.r + 0.5 * c.g - 0.25 * c.b);
+}
+vec3 YCoCg_to_RGB(vec3 c) {
+    const float t = c.x - c.z;
+    return vec3(t + c.y, c.x + c.z, t - c.y);
+}
+// Variance clip (Karis/Salvi): clip the history toward the neighbourhood centre
+// until it lands inside the [min,max] box (along the centre→history line, so
+// chroma is preserved better than a per-channel clamp).
+vec3 clipAABB(vec3 aabbMin, vec3 aabbMax, vec3 q) {
+    const vec3 center = 0.5 * (aabbMax + aabbMin);
+    const vec3 extent = 0.5 * (aabbMax - aabbMin) + vec3(1e-5);
+    const vec3 v = q - center;
+    const vec3 a = abs(v / extent);
+    const float ma = max(a.x, max(a.y, a.z));
+    return (ma > 1.0) ? (center + v / ma) : q;
+}
+
 void main() {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
     if (px.x >= int(pc.width) || px.y >= int(pc.height)) return;
@@ -108,9 +162,8 @@ void main() {
     const vec2 sz = vec2(float(pc.width), float(pc.height));
     const vec2 uv = (vec2(px) + 0.5) / sz;
 
-    // Current sample — a bilinear fetch of the (possibly lower-res) input.
-    // At renderScale 1, uv lands on an input texel centre so the LINEAR
-    // sampler returns that exact texel (equivalent to the old texelFetch).
+    // Current sample — raw (jittered) input. Temporal accumulation over the
+    // Halton jitter sequence is the anti-aliasing now (TSR), not FXAA.
     const vec3 curr = texture(taaInputTex, uv).rgb;
 
     // Reproject prev frame via gbuffer motion vec. Motion is in GL-NDC delta
@@ -132,50 +185,53 @@ void main() {
             ? texture(gbufIdsPrevTex, prevUv)
             : uvec4(0u);
     const bool isSkinned = (currIds.z & 8u) != 0u;
-    // Mesh-ID disagreement at the reprojected pixel = disocclusion. Reject.
-    if (reprojValid && currIds.x != prevIds.x) reprojValid = false;
+    // NO hard mesh-ID disocclusion reject. Under jitter a silhouette pixel's
+    // coverage (hence its mesh-ID) flips EVERY frame, so an ID-mismatch reject
+    // fires at every edge every frame → history never accumulates → edges
+    // oscillate hard (the "edges unstable" bug; frame N vs N+1 differed ~230/255
+    // at every silhouette). The YCoCg variance clip below handles disocclusion
+    // smoothly instead: genuinely stale history falls outside the neighbourhood
+    // box and gets clipped, while a jittering edge stays inside the box (which
+    // spans surface+background) and converges to the anti-aliased average.
 
-    // 3×3 neighbourhood colour AABB — bounds the Catmull-Rom history
-    // reconstruction (catches slight overshoot from the cubic weights,
-    // softens disocclusion edges).
+    // 3×3 YCoCg neighbourhood MEAN + VARIANCE → history is variance-clipped to
+    // mu ± γ·σ below. This is the standard TSR history rectification.
     //
-    // Same-mesh gate: cross-mesh neighbours contribute nothing to the
-    // AABB. Without the gate, a ceiling pixel adjacent to a bright
-    // emissive ring lets the ring's HDR brightness into nMax, and any
-    // bilinear bleed of the ring's history into the ceiling pixel
-    // survives the clamp → halo grows outward 1 pixel per motion frame
-    // and decays slowly at α=0.1 when motion stops (visible "stop-and-go
-    // artifact" around emissives). Same-mesh AABB tightens the bound
-    // so cross-mesh bleed is clamped to the ceiling's own value range.
+    // NO same-mesh gate (deliberately). The gate was added to stop emissive-halo
+    // bleed, but it is FATAL to edge anti-aliasing under jitter: at a silhouette
+    // pixel the jitter flips the centre's coverage (surface↔background) every
+    // frame, so a same-mesh gate flips the clip box between surface-only and
+    // background-only stats each frame → the history is forced alternately to one
+    // or the other and can NEVER converge to the anti-aliased edge average →
+    // edges oscillate hard (frame N vs N+1 differed by ~229/255 at every
+    // silhouette). The full neighbourhood spans surface+background, so the box is
+    // stable and the edge converges to the jitter-averaged coverage = clean AA.
+    // The halo the gate guarded against is bounded now anyway: the TAA input is
+    // post-tonemap LDR, so a bright neighbour can't blow up σ.
     const ivec2 inSz = ivec2(int(pc.inWidth), int(pc.inHeight));
     const ivec2 ipx  = clamp(ivec2(uv * vec2(inSz)), ivec2(0), inSz - 1);
-    const uint centerMesh = currIds.x;
-    vec3 nMin = vec3(1e30);
-    vec3 nMax = vec3(-1e30);
+    vec3 m1 = vec3(0.0), m2 = vec3(0.0);
+    float cnt = 0.0;
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
             const ivec2 q = clamp(ipx + ivec2(dx, dy), ivec2(0), inSz - 1);
-            const uint qMesh = texelFetch(gbufIdsCurrTex, q, 0).x;
-            if (qMesh != centerMesh) continue;
-            const vec3 n = texelFetch(taaInputTex, q, 0).rgb;
-            nMin = min(nMin, n);
-            nMax = max(nMax, n);
+            const vec3 c = RGB_to_YCoCg(texelFetch(taaInputTex, q, 0).rgb);
+            m1 += c; m2 += c * c; cnt += 1.0;
         }
     }
-    // Fallback: if every neighbour rejected (lone-pixel of one mesh
-    // embedded in another), collapse the AABB to curr so the clamp
-    // pins history to this pixel rather than letting the un-tightened
-    // bound through.
-    if (nMin.x > nMax.x) { nMin = curr; nMax = curr; }
 
     vec3 history = curr;
-    if (reprojValid) {
+    if (reprojValid && cnt > 0.5) {
         // Catmull-Rom 5-tap (sharper than single bilinear — kills the
         // "everything smears on camera translation" compounding blur).
-        history = sampleHistoryCR(prevUv);
-        // Neighborhood AABB clamp — softens edge disocclusion, keeps fresh,
-        // also caps any slight overshoot from the Catmull-Rom reconstruction.
-        history = clamp(history, nMin, nMax);
+        const vec3 histRGB = sampleHistoryCR(prevUv);
+        // Variance clip in YCoCg. γ widens/tightens the allowed history box:
+        // ~1 is a good flicker/ghost balance.
+        const vec3  mu    = m1 / cnt;
+        const vec3  sigma = sqrt(max(m2 / cnt - mu * mu, vec3(0.0)));
+        const float gamma = 1.0;
+        history = YCoCg_to_RGB(clipAABB(mu - gamma * sigma, mu + gamma * sigma,
+                                        RGB_to_YCoCg(histRGB)));
     }
 
     // Velocity-scaled alpha: faster-moving pixels weight current more,
@@ -184,12 +240,28 @@ void main() {
     // to pixels for an intuitive scale: 30 px/frame → +0.5 boost, capped.
     const vec2 motionPx = motionGL * 0.5 * vec2(pc.width, pc.height);
     const float motionLen = length(motionPx);
-    const float velocityBump = clamp(motionLen / 30.0, 0.0, 0.5);
+    const float velocityBump = clamp(motionLen / 30.0, 0.0, 0.2);// reduced 0.5→0.2: the
+                                          // YCoCg variance clip controls ghosting now, so
+                                          // don't crank α into motion flicker at fast edges.
     // is_skinned flag (bit 3) is informational; SkinnedMesh now has proper
     // per-vertex motion vectors via a prev-pose vertex buffer (gbuffer.vert
     // reads it at attribute 3). The previous force-high-alpha hack is gone —
     // velocity bump alone now correctly tracks deformation.
-    const float a = clamp(pc.blendAlpha + velocityBump, 0.02, 1.0);
+    //
+    // LUMA ANTI-FLICKER (Karis): where the current (1-spp jittered) sample
+    // disagrees strongly with the converged history — i.e. EDGES, especially
+    // distant sub-pixel geometry — drop α hard so the pixel locks to the AA'd
+    // history instead of letting the per-frame coverage swing through. Interiors
+    // (history≈curr) keep the normal α and accumulate as usual. This kills the
+    // residual edge flicker that a constant α leaves (α·contrast per frame).
+    const float lumaH = dot(history, vec3(0.299, 0.587, 0.114));
+    const float lumaC = dot(curr,    vec3(0.299, 0.587, 0.114));
+    const float contrast = clamp(abs(lumaC - lumaH) / max(max(lumaC, lumaH), 0.1), 0.0, 1.0);
+    const float antiFlicker = mix(1.0, 0.1, sqrt(contrast));// sqrt: triggers at a converged
+                                          // edge (contrast~0.5 → α×0.36) AND locks hard at a
+                                          // full-contrast edge (→ α×0.1). The variance clip
+                                          // still handles disocclusion, so a low edge α is safe.
+    const float a = clamp((pc.blendAlpha + velocityBump) * antiFlicker, 0.01, 1.0);
     const vec3 result = reprojValid ? mix(history, curr, a) : curr;
 
     // When a downstream RCAS pass owns the swapchain write, skip it here but

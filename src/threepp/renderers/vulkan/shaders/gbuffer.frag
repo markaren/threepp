@@ -12,7 +12,15 @@
 // of vWorldPos + vUv. Without it, primary surfaces look flat; chit's
 // non-hybrid path samples the normal map and most assets rely on it for
 // surface detail (mortar lines, fabric weave, brick relief, etc.).
-// Albedo / roughness / metalness sampling stays in raygen.
+//
+// Raster-first (Phase 1+): albedo / roughness / metalness are now also
+// sampled here and written to the G-buffer so the deferred shading pass can
+// light the surface analytically. Sampling matches closest_hit.rchit exactly
+// (albedo.rgb, roughness from .g, metalness from .b, per-channel uvTransforms,
+// hardware sRGB decode on the albedo view) so RasterFirst and ReferencePT
+// agree. Fragment-shader derivatives give correct mip selection for free —
+// raygen needs the lodBias attachment because RT shaders have none, but here
+// plain texture() is correct.
 
 layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 currVPjittered;
@@ -35,9 +43,10 @@ layout(location = 4) flat in uint vFlags;
 layout(location = 5) in vec2 vUv;
 layout(location = 6) in vec3 vWorldPos;
 
-// Attachment 0: world-space normal (rgba16f). Stage 2 will pack roughness
-// into .w; stage 1 leaves it zero. rgba16f is necessary for ocean wave
-// normals — rgba8 loses too much precision on the FFT-driven detail.
+// Attachment 0: world-space normal (rgba16f). .xyz = n*0.5+0.5 encoded world
+// normal, .w = linear roughness (raster-first deferred pass reads it; raygen
+// samples only .xyz). rgba16f is necessary for ocean wave normals — rgba8
+// loses too much precision on the FFT-driven detail.
 layout(location = 0) out vec4 outNormal;
 
 // Attachment 1: motion vector in NDC delta (rg16f). raygen converts to
@@ -65,8 +74,42 @@ layout(location = 2) out uvec4 outIds;
 // samples but hybrid (1-2 spp/frame) cannot.
 layout(location = 3) out vec4 outUv;
 
+// Attachment 4: albedo + metalness (rgba8 unorm). .rgb = linear base colour
+// (material albedo × albedo-map, sRGB-decoded on sample), .a = metalness.
+// Roughness lives in outNormal.w. Together these give the deferred shading
+// pass a complete PBR surface. Linear 8-bit is the standard albedo G-buffer
+// format; emissive / clearcoat / sheen stay re-sampled from MaterialDesc in
+// the deferred pass rather than baked here.
+layout(location = 4) out vec4 outAlbedoMetal;
+
+// Per-pixel, per-frame hash in [0,1) for the stochastic alpha-blend screen-
+// door. Folds the Halton sub-pixel jitter (changes every frame) into the seed
+// so the dither pattern decorrelates over time and the temporal accumulator /
+// TAA resolve it toward the true alpha-weighted blend instead of a fixed grid.
+float alphaHash(vec2 fragXY, vec2 jitter) {
+    uint h = uint(fragXY.x) * 1973u + uint(fragXY.y) * 9277u
+           + floatBitsToUint(jitter.x) * 26699u
+           + floatBitsToUint(jitter.y) * 53401u + 0x9e3779b9u;
+    h ^= h >> 16; h *= 0x7feb352du;
+    h ^= h >> 15; h *= 0x846ca68bu;
+    h ^= h >> 16;
+    return float(h) / 4294967296.0;
+}
+
 void main() {
     vec3 N = normalize(vWorldNormal);
+
+    // Two-sided / back-facing fragments: flip the geometric normal to face the
+    // viewer. A Side::Double surface stores ONE geometric normal for both faces,
+    // so the face whose normal points away from a light stays dark in the
+    // deferred shade (and the lit side appears to "bleed" — e.g. one of two
+    // symmetric divider walls dark, the other lit). gl_FrontFacing is reliable
+    // here: the vertex-shader Y-flip (gl_Position.y = -y) restores GL's CCW-front
+    // convention, matching the pipeline frontFace = COUNTER_CLOCKWISE. Single-
+    // sided (cull-back) meshes never produce back fragments, so this is a no-op
+    // for them; done BEFORE the normal-map TBN so perturbation is relative to the
+    // correctly-oriented surface.
+    if (!gl_FrontFacing) N = -N;
 
     // UV derivatives — used both for the LOD bias attachment and the normal-
     // map TBN construction below. Hoisted out of the normal-map branch
@@ -109,10 +152,84 @@ void main() {
         }
     }
 
+    // ── PBR material sampling — mirrors closest_hit.rchit:705-739 so the
+    // deferred (RasterFirst) shade matches the path-traced (ReferencePT) shade.
+    // Per-channel transformed UVs.
+    const vec2 uvAlbedo     = (m.uvTransform           * vec3(vUv, 1.0)).xy;
+    const vec2 uvRoughMetal = (m.uvTransformRoughMetal * vec3(vUv, 1.0)).xy;
+
+    // Albedo: scalar PBR colour × bound albedo map (.rgb). Albedo views are
+    // VK_FORMAT_*_SRGB so texture() returns linear, exactly as in chit.
+    vec3  albedoSample = vec3(1.0);
+    float albedoAlpha  = 1.0;
+    if (m.albedoTexIndex >= 0) {
+        const int  ai    = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
+        const vec4 texel = texture(gbufAlbedoMaps[ai], uvAlbedo);
+        albedoSample = texel.rgb;
+        albedoAlpha  = texel.a;// linear (alpha is never sRGB-decoded) → matches chit
+    }
+    const vec3 albedo = m.albedo * albedoSample;
+
+    // glTF packs roughness in .g and metalness in .b; threepp's roughnessMap /
+    // metalnessMap usually point at the same packed texture. Multiplicative —
+    // matches three.js and chit.
+    //
+    // MeshBasicMaterial (unlit) is flagged with material roughness < 0 (see
+    // VulkanRenderer::materialFromMesh). Preserve that sentinel through the
+    // G-buffer — don't sample the rough/metal maps or clamp — so the deferred
+    // pass can emit the base colour unlit, matching closest_hit.rchit's
+    // `roughness < 0` gate. Clamping here would turn the unlit surface into a
+    // glossy one that reflects the environment.
+    float roughness = m.roughness;
+    float metalness = m.metalness;
+    if (roughness >= 0.0) {
+        if (m.roughnessTexIndex >= 0) {
+            const int i = clamp(m.roughnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
+            roughness *= texture(gbufAlbedoMaps[i], uvRoughMetal).g;
+        }
+        if (m.metalnessTexIndex >= 0) {
+            const int i = clamp(m.metalnessTexIndex, 0, int(kMaxMaterialTextures) - 1);
+            metalness *= texture(gbufAlbedoMaps[i], uvRoughMetal).b;
+        }
+        roughness = clamp(roughness, 0.04, 1.0);
+        metalness = clamp(metalness, 0.0,  1.0);
+    }
+
+    // ── Alpha cutout / blend test (mirrors closest_hit_alpha.rahit). The
+    // raster prepass draws every visible mesh regardless of transparency
+    // (buildIndirectDrawData does not filter), so without this, alpha-tested
+    // foliage/decals fill their cutout holes with opaque G-buffer data and
+    // BLEND surfaces render fully opaque. Discarding here writes no depth/ID,
+    // so the deferred pass sees sky (or the opaque surface behind, which the
+    // depth test lets win) through the hole — matching the PT any-hit's
+    // ignoreIntersectionEXT. alphaCutoff semantics match the host
+    // (VulkanRenderer::materialFromMesh: d.alphaCutoff = mat->alphaTest):
+    //   > 0  cutout : discard fragments below the cutoff.
+    //   < 0  BLEND  : stochastic screen-door so the surface behind shows
+    //                 through; the temporal accumulator + TAA average it.
+    //   == 0 opaque : keep (the common path; one comparison, no texture cost).
+    // MUST run after every texture()/dFdx/dFdy above — a per-pixel discard
+    // before an implicit-derivative sample corrupts the 2×2 quad's neighbours.
+    if (m.albedoTexIndex >= 0 && m.alphaCutoff != 0.0) {
+        if (m.alphaCutoff > 0.0) {
+            if (albedoAlpha < m.alphaCutoff) discard;
+        } else {
+            // BLEND: variance-reduced stochastic rejection, matching the PT
+            // any-hit's 0.99 (accept) / 0.01 (reject) early-outs.
+            if (albedoAlpha <= 0.01) {
+                discard;
+            } else if (albedoAlpha < 0.99) {
+                if (alphaHash(gl_FragCoord.xy, cam.jitter.xy) >= albedoAlpha) discard;
+            }
+        }
+    }
+
     // Remap [-1, 1] → [0, 1] so negative components are visible in the
     // BGRA8_UNORM debug blit (which clamps negatives to 0). raygen reverses
-    // this with `n * 2 - 1` when reading the attachment.
-    outNormal = vec4(N * 0.5 + 0.5, 0.0);
+    // this with `n * 2 - 1` when reading the attachment. .w carries linear
+    // roughness for the deferred pass.
+    outNormal = vec4(N * 0.5 + 0.5, roughness);
+    outAlbedoMetal = vec4(albedo, metalness);
 
     vec2 currNDC = vCurrClipUnjit.xy / vCurrClipUnjit.w;
     vec2 prevNDC = vPrevClip.xy      / vPrevClip.w;
@@ -124,7 +241,14 @@ void main() {
     // deterministic value (see raygen primaryWorldPosHybrid override after
     // the primary traceRayEXT). Motion vec stays jitter-free.
     vec2 motion = prevNDC - currNDC;
-    outMotion = vec4(motion, 0.0, 0.0);
+    // .b = this surface's OWN previous NDC depth (same convention as the depth
+    // buffer: both are (VP·worldPos).z/w). The deferred GI disocclusion compares
+    // it against what the prev depth BUFFER actually held at the reprojected spot —
+    // they MATCH for a correctly-reprojected moving/deforming surface (skinned
+    // mesh) so it does NOT false-reset, but DIFFER for a real disocclusion (a
+    // trail revealing another surface). Comparing curr-vs-prev depth instead would
+    // wrongly reset any surface that moves in depth → dust on animated meshes.
+    outMotion = vec4(motion, vPrevClip.z / vPrevClip.w, 0.0);
 
     // +1 so the renderpass's clear-to-0 means "sky/no draw", matching
     // raygen's Payload.hitInstanceId convention exactly.
