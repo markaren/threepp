@@ -1271,6 +1271,7 @@ namespace threepp {
         // no images and does not touch rtDsLayout, so ReferencePT is unaffected.
         std::unique_ptr<vulkan::DeferredShade> deferredShade_;
         float bloomThreshold_ = 1.0f;// soft-knee bright-pass cutoff (linear HDR)
+        float bloomClamp_ = 0.0f;    // per-tap HDR cap before the bright pass; <= 0 = off
         float sharpenStrength_ = 0.0f;// post-TAA RCAS amount; 0 = off
         float taaBlendAlpha_ = 0.1f;// 10% current, 90% history
 
@@ -13046,7 +13047,7 @@ namespace threepp {
             bloom_->recordDispatch(cb, currentFrame, ptExt.width, ptExt.height,
                                    static_cast<uint32_t>(toneMapping_),
                                    exposureBits, envIsBgColor,
-                                   bloomIntensity_, bloomThreshold_);
+                                   bloomIntensity_, bloomThreshold_, bloomClamp_);
             // ── End bloom ──────────────────────────────────────────────────────
 
             // ── Stage 1A.5: raster TAA / temporal upsampler ────────────────────
@@ -14715,6 +14716,14 @@ namespace threepp {
 
     float VulkanRenderer::bloomThreshold() const {
         return pimpl_->bloomThreshold_;
+    }
+
+    void VulkanRenderer::setBloomClamp(float clampMax) {
+        pimpl_->bloomClamp_ = clampMax < 0.f ? 0.f : clampMax;
+    }
+
+    float VulkanRenderer::bloomClamp() const {
+        return pimpl_->bloomClamp_;
     }
 
     void VulkanRenderer::setSharpenStrength(float amount) {

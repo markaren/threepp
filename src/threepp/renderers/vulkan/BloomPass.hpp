@@ -64,11 +64,13 @@ namespace threepp::vulkan {
 
         // Records the bloom chain (skipped when bloomIntensity <= 0) and the
         // composite (always). width/height = path-trace render extent.
+        // bloomClamp caps the per-tap HDR input to the bright pass (<= 0 = off)
+        // so sub-pixel specular flicker can't pulse the halo radius.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
                             uint32_t width, uint32_t height,
                             uint32_t toneMapping, uint32_t exposureBits,
                             bool bgIsSolidColor, float bloomIntensity,
-                            float bloomThreshold);
+                            float bloomThreshold, float bloomClamp);
 
     private:
         VulkanContext& ctx_;
@@ -81,7 +83,7 @@ namespace threepp::vulkan {
         std::vector<Image2D> bloomB_;  // [framesInFlight] half res rgba16f
         VkSampler sampler_ = VK_NULL_HANDLE;
 
-        // Down + blur share a layout (sampler in @0, storage out @1; 16B PC).
+        // Down + blur share a layout (sampler in @0, storage out @1; 24B PC).
         VkDescriptorSetLayout bloomDsLayout_   = VK_NULL_HANDLE;
         VkPipelineLayout      bloomPipeLayout_ = VK_NULL_HANDLE;
         VkPipeline            downPipe_        = VK_NULL_HANDLE;

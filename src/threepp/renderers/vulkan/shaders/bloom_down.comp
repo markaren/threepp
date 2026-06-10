@@ -16,10 +16,29 @@ layout(push_constant) uniform Pc {
     uint  srcW; uint srcH;  // source extent (for texel size)
     uint  dstW; uint dstH;  // dest extent  (dispatch bounds)
     float threshold;        // soft-knee bright-pass cutoff (linear HDR luma)
+    float clampMax;         // per-tap HDR cap (<= 0 disables) — temporal stability
 } pc;
 
 float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 float karis(vec3 c) { return 1.0 / (1.0 + luma(c)); }
+
+// Per-tap HDR clamp (hue-preserving), BEFORE the Karis combine. A tiny
+// near-mirror specular highlight (an analytic light reflected in a smooth
+// metal sphere) swings by orders of magnitude per frame as the TAA jitter
+// slides across the sub-pixel GGX peak; ACES hides that at the pixel, but
+// bloom integrates it into a halo whose radius visibly pulses. Capping each
+// tap makes every such frame saturate to the SAME value → stable halo.
+// Clamping after the Karis combine would NOT fix it: with only a few hot
+// texels the weighted average itself flips between ~0 (suppressed) and the
+// full HDR value as the footprint shifts. <= 0 disables (legacy behaviour).
+vec3 tap(vec2 uv) {
+    vec3 c = texture(srcTex, uv).rgb;
+    if (pc.clampMax > 0.0) {
+        const float br = max(c.r, max(c.g, c.b));
+        if (br > pc.clampMax) c *= pc.clampMax / br;
+    }
+    return c;
+}
 
 void main() {
     const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
@@ -28,19 +47,19 @@ void main() {
     const vec2 uv = (vec2(p) + 0.5) / vec2(float(pc.dstW), float(pc.dstH));
     const vec2 t  = 1.0 / vec2(float(pc.srcW), float(pc.srcH));
 
-    const vec3 a = texture(srcTex, uv + t * vec2(-2, -2)).rgb;
-    const vec3 b = texture(srcTex, uv + t * vec2( 0, -2)).rgb;
-    const vec3 c = texture(srcTex, uv + t * vec2( 2, -2)).rgb;
-    const vec3 d = texture(srcTex, uv + t * vec2(-2,  0)).rgb;
-    const vec3 e = texture(srcTex, uv                   ).rgb;
-    const vec3 f = texture(srcTex, uv + t * vec2( 2,  0)).rgb;
-    const vec3 g = texture(srcTex, uv + t * vec2(-2,  2)).rgb;
-    const vec3 h = texture(srcTex, uv + t * vec2( 0,  2)).rgb;
-    const vec3 i = texture(srcTex, uv + t * vec2( 2,  2)).rgb;
-    const vec3 j = texture(srcTex, uv + t * vec2(-1, -1)).rgb;
-    const vec3 k = texture(srcTex, uv + t * vec2( 1, -1)).rgb;
-    const vec3 l = texture(srcTex, uv + t * vec2(-1,  1)).rgb;
-    const vec3 m = texture(srcTex, uv + t * vec2( 1,  1)).rgb;
+    const vec3 a = tap(uv + t * vec2(-2, -2));
+    const vec3 b = tap(uv + t * vec2( 0, -2));
+    const vec3 c = tap(uv + t * vec2( 2, -2));
+    const vec3 d = tap(uv + t * vec2(-2,  0));
+    const vec3 e = tap(uv                   );
+    const vec3 f = tap(uv + t * vec2( 2,  0));
+    const vec3 g = tap(uv + t * vec2(-2,  2));
+    const vec3 h = tap(uv + t * vec2( 0,  2));
+    const vec3 i = tap(uv + t * vec2( 2,  2));
+    const vec3 j = tap(uv + t * vec2(-1, -1));
+    const vec3 k = tap(uv + t * vec2( 1, -1));
+    const vec3 l = tap(uv + t * vec2(-1,  1));
+    const vec3 m = tap(uv + t * vec2( 1,  1));
 
     // Five overlapping 2×2 groups: centre (weight 0.5) + 4 corners (0.125).
     const vec3 g0 = (j + k + l + m) * 0.25;// centre
