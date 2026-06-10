@@ -475,11 +475,12 @@ float fbm4(vec2 p) {
 // COVERAGE (bias), not noise: stratified power-CDF picks span the emitters ∝
 // power; a low-discrepancy (R2) barycentric covers each picked triangle's area.
 // Settles instantly, no denoiser. (`seed` kept for ABI; unused.)
-vec3 emissiveNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, vec3 albedo,
+vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, vec3 albedo,
                  float roughness, float metalness, float k, inout uint seed, bool doShadows) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
     const int   emIters    = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
-    const int   EM_SAMPLES = 16;// per-surface-dithered → soft penumbra
+    // EM_SAMPLES: 16 at primaries (per-surface-dithered → soft penumbra),
+    // small at reflection-bounce hits (accumulated + roughness-blurred).
     const vec3  shadowOrig = P + N * SHADOW_EPS;
     // COHERENT deterministic sampling — the SAME stratified sample set at every pixel (NO
     // per-pixel rotation). Coherent area-light sampling is noise-free: the diffuse
@@ -587,7 +588,9 @@ vec3 emissiveSpecNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0,
                      float roughness, float k, bool doShadows) {
     if (pc.emissiveCount == 0u || pc.emissiveTotalPower <= 0.0) return vec3(0.0);
     const int   emIters    = findMSB(max(pc.emissiveCount - 1u, 1u)) + 1;
-    const int   EM_SAMPLES = 16;// matches emissiveNEE's emitter coverage
+    const int   EM_SAMPLES = 8;// was 16 — halves the per-glossy-pixel shadow rays;
+                                // still deterministic (zero temporal noise), slightly
+                                // coarser emitter coverage on wide-lobe metals.
     const vec3  shadowOrig = P + N * SHADOW_EPS;
     vec3 sum = vec3(0.0);
     for (int s = 0; s < EM_SAMPLES; ++s) {
@@ -1060,12 +1063,56 @@ float rectFormFactor(vec3 N, vec3 P, vec3 c0, vec3 c1, vec3 c2, vec3 c3) {
 // reflected geometry is lit + shadowed). Does NOT add the specular lobe — the
 // caller adds it (RT reflection for the primary, env IBL for the hit) to avoid
 // recursion.
+// Pick weight for the single-light estimators (cheapHit / giRadiance):
+// premultiplied colour luminance (= intensity), distance-attenuated for
+// point/spot. ZERO-power lights (e.g. the ocean's day-mode moon + lighthouse
+// beam at intensity 0 — uploaded regardless) get ZERO pick probability; a
+// uniform pick wasted most samples on them and flickered the water
+// reflections dark. The pick pdf w/W is compensated exactly (×W/w) → any
+// positive weight set is unbiased; proportional weights just cut variance.
+float lightPickWeight(uint gi, vec3 P) {
+    const vec3 LUM = vec3(0.2126, 0.7152, 0.0722);
+    if (gi < lights.dirCount) {
+        return dot(lights.dirLights[gi].color, LUM);
+    } else if (gi < lights.dirCount + lights.pointCount) {
+        const uint i = gi - lights.dirCount;
+        const vec3 d = lights.pointLights[i].position - P;
+        return dot(lights.pointLights[i].color, LUM) / (1.0 + dot(d, d));
+    }
+    const uint i = gi - lights.dirCount - lights.pointCount;
+    const vec3 d = lights.spotLights[i].position - P;
+    return dot(lights.spotLights[i].color, LUM) / (1.0 + dot(d, d));
+}
+
+// Power-proportional single-light pick. Returns the global light index (or
+// 0xFFFFFFFF when no light has power) and writes the exact compensation
+// factor W/w_pick.
+uint pickAnalyticLight(vec3 P, inout uint seed, out float wPick) {
+    wPick = 1.0;
+    const uint nL = lights.dirCount + lights.pointCount + lights.spotCount;
+    if (nL == 0u) return 0xFFFFFFFFu;
+    float wSum = 0.0;
+    for (uint i = 0u; i < nL; ++i) wSum += lightPickWeight(i, P);
+    if (wSum <= 1e-8) return 0xFFFFFFFFu;
+    const float xi = rnd(seed) * wSum;
+    float acc = 0.0;
+    for (uint i = 0u; i < nL; ++i) {
+        const float w = lightPickWeight(i, P);
+        acc += w;
+        if (xi <= acc && w > 1e-8) {
+            wPick = wSum / w;
+            return i;
+        }
+    }
+    return 0xFFFFFFFFu;// numeric edge: treat as no pick
+}
+
 vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
                         float metalness, vec3 emissive, bool doShadows, vec3 diffuseIndirect,
                         vec3 sheenColor, float sheenRoughness,
                         float specularIntensity, vec3 specularColor,
                         float iridescence, float iridescenceIOR, float iridescenceThicknessNm,
-                        inout uint seed, bool addEmissive) {
+                        inout uint seed, bool addEmissive, bool cheapHit) {
     const float NdotV = max(dot(N, V), 1e-4);
     vec3        F0           = mix(vec3(0.04) * specularIntensity * specularColor, albedo, metalness);
     // Thin-film iridescence (KHR_materials_iridescence) — shift the Fresnel base
@@ -1081,21 +1128,32 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
 
     vec3 lit = emissive;
 
+    // REFLECTION-HIT cheap mode (cheapHit): ONE stochastically-picked analytic
+    // light (×nL compensation), a 1-ray jittered rect shadow, and a small
+    // emitter NEE. The reflection channel rides the ReBLUR temporal
+    // accumulation + the roughness-driven spatial blur, which absorb the
+    // estimator noise; the PRIMARY path keeps the exhaustive loops.
+    uint  pickIdx = 0xFFFFFFFFu;
+    float wPick   = 1.0;
+    if (cheapHit) pickIdx = pickAnalyticLight(P, seed, wPick);
+
     for (uint i = 0u; i < lights.dirCount; ++i) {
+        if (cheapHit && i != pickIdx) continue;
         const vec3 L = normalize(lights.dirLights[i].direction);
         if (dot(N, L) <= 0.0) continue;
-        const float vis = doShadows ? shadowVis(shadowOrig, L, 1e30) : 1.0;
+        const float vis = (doShadows ? shadowVis(shadowOrig, L, 1e30) : 1.0) * wPick;
         if (vis <= 0.0) continue;
         lit += evalLight(N, V, L, NdotV, F0, albedo, roughness, metalness, k, sheenColor, sheenRoughness)
                * lights.dirLights[i].color * vis;
     }
     for (uint i = 0u; i < lights.pointCount; ++i) {
+        if (cheapHit && (lights.dirCount + i) != pickIdx) continue;
         vec3        toL  = lights.pointLights[i].position - P;
         const float dist = length(toL);
         if (dist < 1e-4) continue;
         toL /= dist;
         if (dot(N, toL) <= 0.0) continue;
-        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
+        const float vis = (doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0) * wPick;
         if (vis <= 0.0) continue;
         const float decay = lights.pointLights[i].decay;
         float atten = 1.0 / max(pow(dist, decay), 0.01);
@@ -1110,6 +1168,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
                * lights.pointLights[i].color * atten * vis;
     }
     for (uint i = 0u; i < lights.spotCount; ++i) {
+        if (cheapHit && (lights.dirCount + lights.pointCount + i) != pickIdx) continue;
         vec3        toL  = lights.spotLights[i].position - P;
         const float dist = length(toL);
         if (dist < 1e-4) continue;
@@ -1119,7 +1178,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
         const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
                                            lights.spotLights[i].cosAngleInner, spotCos);
         if (spotAtten <= 0.0) continue;
-        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
+        const float vis = (doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0) * wPick;
         if (vis <= 0.0) continue;
         const float decay = lights.spotLights[i].decay;
         float atten = 1.0 / max(pow(dist, decay), 0.01);
@@ -1172,7 +1231,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
                         const uvec2 sx = gl_GlobalInvocationID.xy;
                         const float jx = float(pcgHash(sx.x + pcgHash(sx.y))) * (1.0 / 4294967296.0);
                         const float jy = float(pcgHash(sx.y + pcgHash(sx.x + 0x9e3779b9u))) * (1.0 / 4294967296.0);
-                        const uint SIDE = 4u;
+                        const uint SIDE = cheapHit ? 1u : 4u;// 1-ray jittered at reflection hits
                         float vsum = 0.0;
                         for (uint sj = 0u; sj < SIDE; ++sj)
                         for (uint si = 0u; si < SIDE; ++si) {
@@ -1233,7 +1292,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
     // and don't exist for reflected surfaces, so without this metals reflecting an
     // emissive-lit room lose their reflected lighting (= "metals lost their color").
     if (addEmissive)
-        lit += emissiveNEE(P, N, V, NdotV, F0, albedo, roughness, metalness, k, seed, doShadows);
+        lit += emissiveNEE(cheapHit ? 4 : 16, P, N, V, NdotV, F0, albedo, roughness, metalness, k, seed, doShadows);
 
     // Diffuse indirect (caller-supplied): visibility-gated env irradiance for
     // the primary surface, crude env IBL for reflected hits. Only modulates the
@@ -1411,7 +1470,8 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                                               hm.sheenColor, hm.sheenRoughness,
                                               hm.specularIntensity, hm.specularColor,
                                               hm.iridescence, hm.iridescenceIOR, hm.iridescenceThicknessNm, seed,
-                                              /*addEmissive=*/true);// reflected hit: no per-pixel reservoir → coherent emissiveNEE
+                                              /*addEmissive=*/true,// reflected hit: no per-pixel reservoir → coherent emissiveNEE
+                                              /*cheapHit=*/true);  // 1 picked light + 4-sample NEE (ReBLUR absorbs)
 
         const float hitNdotV = max(dot(hitN, hitV), 1e-4);
         const vec3  hitF0 = mix(vec3(0.04) * hm.specularIntensity * hm.specularColor, hAlbedo, hMetal);
@@ -1482,10 +1542,9 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
     // selection noise. Cuts per-hit shadow rays from nLights to 1: the
     // dominant AO/GI cost in lamp-heavy scenes (bistro interiors).
     vec3 lit = vec3(0.0);
-    const uint nL = lights.dirCount + lights.pointCount + lights.spotCount;
-    if (nL > 0u) {
-        const uint pick = min(uint(rnd(seed) * float(nL)), nL - 1u);
-        const float wL  = float(nL);
+    float wL;
+    const uint pick = pickAnalyticLight(hitP, seed, wL);
+    if (pick != 0xFFFFFFFFu) {
         if (pick < lights.dirCount) {
             const uint  i   = pick;
             const vec3  L   = normalize(lights.dirLights[i].direction);
@@ -1709,7 +1768,8 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                                                           vec3(0.0), 0.0,
                                                           1.0, vec3(1.0),
                                                           0.0, 1.3, 0.0, seed,
-                                                          /*addEmissive=*/true);// foam: no iridescence
+                                                          /*addEmissive=*/true,// foam: no iridescence
+                                                          /*cheapHit=*/false);
                 col = mix(col, foamLit, foamMask);
             }
         }
@@ -2189,7 +2249,8 @@ void main() {
                                   pm.sheenColor, pm.sheenRoughness,
                                   pm.specularIntensity, pm.specularColor,
                                   pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm, seed,
-                                  /*addEmissive=*/((pc.flags & 8u) == 0u));// ReSTIR on → emissive via main()/diffInd; off → coherent emissiveNEE here
+                                  /*addEmissive=*/((pc.flags & 8u) == 0u),// ReSTIR on → emissive via main()/diffInd; off → coherent emissiveNEE here
+                                  /*cheapHit=*/false);// primary: exhaustive lights + full NEE
 
     // Sharp surfaces trace the exact mirror ray; glossy surfaces GGX-importance-
     // sample the reflection lobe so the reflection BLURS with roughness and
