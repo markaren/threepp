@@ -2192,6 +2192,7 @@ void main() {
     // pixels coast on 2 rays + temporal history. Cost only spikes in disoccluded
     // regions during motion — exactly where it's needed and tolerable.
     int giSpp = 3;
+    bool giSkip = false;// checkerboard carry (set in the adaptive block below)
     if (demodIndirect) {
         const vec2 mv   = texture(gbufMotionTex, uv).rg;
         const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
@@ -2218,15 +2219,37 @@ void main() {
         const float capF  = mix(48.0, 6.0, smoothstep(0.002, 0.03, length(mv)));
         const float effPh = min(ph, capF);
         // Tiers 8/3/1 (was 8/4/2): converged static pixels ride 1 ray/frame —
-    // the TAA now actually converges statics, so the long-history tier can
-    // lean on accumulation instead of fresh rays.
-    giSpp = effPh < 4.0 ? 8 : (effPh < 16.0 ? 3 : 1);
+        // the TAA now actually converges statics, so the long-history tier can
+        // lean on accumulation instead of fresh rays.
+        giSpp = effPh < 4.0 ? 6 : (effPh < 16.0 ? 2 : 1);// 6/2/1 (was 8/3/1): flattens
+        // the motion cost spike — a fast pan puts the WHOLE frame in the mid
+        // tier, so its ray count dominates frame time exactly when input
+        // responsiveness matters most. With the checkerboard halving, the pan
+        // tier now costs ~the static tier; the SVGF variance blur carries the
+        // slightly higher fresh-pixel noise.
+        // CHECKERBOARD: with ≥8 frames of valid history, alternating pixels
+        // skip the ENTIRE gather + ReSTIR this frame and carry their
+        // accumulated history through — halves the gather cost at EVERY tier
+        // (including the expensive motion tiers, which the per-hit cuts
+        // didn't touch). Fresh/disoccluded pixels (effPh < 8) always trace,
+        // so convergence quality is unchanged where it matters.
+        giSkip = ((((px.x ^ px.y) ^ int(pc.frame)) & 1) == 1) && effPh >= 4.0;
     }
 
     // Diffuse indirect: visibility-gated env irradiance (RT, flags bit 1).
     const bool aoOn = (pc.flags & 2u) != 0u;
+    if (!aoOn) giSkip = false;// checkerboard only pays off on the RT gather
     vec3 diffInd;
-    if (aoOn) {
+    if (giSkip) {
+        diffInd = vec3(0.0);// unused — the accumulation below carries history
+        // ReSTIR reservoirs PING-PONG (read prev fif, write curr): a skipped
+        // pixel must still pass its reservoir through, or next frame's read
+        // sees stale data in a checkerboard pattern.
+        if ((pc.flags & 8u) != 0u) {
+            imageStore(reservoirPosWrite, px, imageLoad(reservoirPosRead, px));
+            imageStore(reservoirWWrite,  px, imageLoad(reservoirWRead,  px));
+        }
+    } else if (aoOn) {
         float openness;
         diffInd = gatherEnv(worldPos, N, px, pc.frame, shadowsOn, demodIndirect, giSpp, openness) + lights.ambient * openness;
     } else {
@@ -2237,7 +2260,7 @@ void main() {
     // converges light selection; this denoises the 1-sample radiance). Added before
     // the demod split so it flows through BOTH the denoise accum path AND the inline
     // (denoise-off) path. restirEmissiveDI also persists this pixel's reservoir.
-    if ((pc.flags & 8u) != 0u) {
+    if (!giSkip && (pc.flags & 8u) != 0u) {
         const float rNdotV = max(dot(N, V), 1e-4);
         diffInd += restirEmissiveDI(worldPos, N, rNdotV, F0, shadowsOn);// F0 already iridescence-modulated
     }
@@ -2451,7 +2474,11 @@ void main() {
             const float svz = svh.z / svh.w;
             if (abs(svz - bvh.z / bvh.w) > 0.1 * max(abs(svz), 1e-3)) valid = false;
         }
-        const vec4  prevT = valid ? texture(giPrevTex, prevUv) : vec4(0.0);
+        // Checkerboard carry: prefer the reprojected history; if this skip-
+        // frame pixel's reproject fails (rare gate mismatch), carry the
+        // same-pixel history rather than cold-starting on no data.
+        const vec4  prevT = valid ? texture(giPrevTex, prevUv)
+                                  : (giSkip ? texture(giPrevTex, uv) : vec4(0.0));
         const vec3  prev  = prevT.rgb;
         valid = valid && all(lessThan(abs(prev), vec3(1e6)));// NaN/garbage guard
         // MOTION-SCALED temporal cap: a fixed cap can't be both clean (static needs
@@ -2462,8 +2489,12 @@ void main() {
         // Temporal analogue of the TAA velocity bump: decouples static cleanliness
         // from motion lag (so we don't have to trade one for the other).
         const float capF = mix(48.0, 6.0, smoothstep(0.002, 0.03, length(motionGL)));
-        const float histLen = valid ? min(prevT.a + 1.0, capF) : 1.0;
-        const vec3  accum   = valid ? mix(prev, diffInd, 1.0 / histLen) : diffInd;
+        // Skip frames carry the history UNCHANGED (no new sample → no histLen
+        // increment, no blend); trace frames accumulate as before.
+        const float histLen = giSkip ? max(prevT.a, 1.0)
+                                     : (valid ? min(prevT.a + 1.0, capF) : 1.0);
+        const vec3  accum   = giSkip ? prevT.rgb
+                                     : (valid ? mix(prev, diffInd, 1.0 / histLen) : diffInd);
         imageStore(indirectImage, px, vec4(accum, histLen));
 
         // SVGF second moment E[L²] of the indirect luminance — accumulated with the
@@ -2473,8 +2504,9 @@ void main() {
         // storage: luminance is linear, so lum(accum) (the running-mean GI's luma)
         // IS the running-mean luminance E[L].
         const float curLum = dot(diffInd, vec3(0.2126, 0.7152, 0.0722));
-        const float prevSq = valid ? texture(momentsPrevTex, prevUv).r : (curLum * curLum);
-        const float accSq  = mix(prevSq, curLum * curLum, 1.0 / histLen);
+        const float prevSq = valid ? texture(momentsPrevTex, prevUv).r
+                                   : (giSkip ? texture(momentsPrevTex, uv).r : (curLum * curLum));
+        const float accSq  = giSkip ? prevSq : mix(prevSq, curLum * curLum, 1.0 / histLen);
         imageStore(momentsImage, px, vec4(accSq, 0.0, 0.0, 0.0));
     } else {
         imageStore(indirectImage, px, vec4(0.0));// histLen=0 → next frame cold-starts
