@@ -254,7 +254,7 @@ set_languages("c++20")
 ### Screenshots
 ![Fonts](doc/screenshots/fonts.png)
 ![Ocean](doc/screenshots/pt_ocean.png)
-![Ocean night](doc/screenshots/ocean_night.png)
+![Ocean night](doc/screenshots/deferred_ocean_night.png)
 ![Spline Editor](doc/screenshots/spline_editor.png)
 ![SVG UI](doc/screenshots/svg_ui.png)
 ![colnav](doc/screenshots/colnav.png)

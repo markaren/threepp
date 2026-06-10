@@ -302,6 +302,15 @@ namespace threepp {
         void setBloomThreshold(float threshold);
         [[nodiscard]] float bloomThreshold() const;
 
+        // Bloom input clamp in linear-HDR luma (UE's bloom "max brightness"):
+        // each bright-pass tap is capped here, so a tiny ultra-bright specular
+        // highlight (an analytic light mirrored in smooth metal) can't pulse
+        // the halo radius as the TAA jitter swings its per-frame intensity by
+        // orders of magnitude. <= 0 disables (default — unclamped legacy
+        // look). Typical: 8–32; lower = more stable but dims very-bright halos.
+        void setBloomClamp(float clampMax);
+        [[nodiscard]] float bloomClamp() const;
+
         // Post-TAA RCAS sharpen strength — restores high-frequency detail the
         // temporal resolve softens (contrast-limited, so it won't ring or
         // amplify fireflies). 0 disables the sharpen pass. Typical: 0.2–0.5.
