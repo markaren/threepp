@@ -77,6 +77,7 @@ int main(int argc, char** argv) {
     bool restdirOn = renderer.restirDIEnabled();
     bool restdirVisReuse = renderer.restirDIVisibilityReuse();
     bool restdirGiOn = renderer.restirGIEnabled();
+    float renderScale = renderer.renderScale();
     // Tone-map dropdown state, initialized from the renderer's current setting so
     // the label matches what's actually applied at startup. The selection maps
     // straight to ToneMapping (index 2 -> Reinhard, etc.).
@@ -117,6 +118,10 @@ int main(int argc, char** argv) {
         }
         if (ImGui::Checkbox("REsTDIR GI", &restdirGiOn)) {
             renderer.setRestirGIEnabled(restdirGiOn);
+        }
+
+        if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f)) {
+            renderer.setRenderScale(renderScale);
         }
 
         if (ImGui::Button("Toggle bistro lights")) {
