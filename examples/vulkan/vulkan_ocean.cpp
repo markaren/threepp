@@ -1256,14 +1256,13 @@ int main(int argc, char** argv) {
         }
         ImGui::Separator();
 
-        if (ImGui::SliderFloat("Wave scale", &waveScale, 0.f, 3.f, "%.2f"))
+        if (ImGui::SliderFloat("Wave scale", &waveScale, 0.f, 3.f, "%.2f")) {
             ocean->params.waveScale = waveScale;
-        if (ImGui::SliderFloat("Choppiness", &choppiness, 0.f, 1.0f, "%.2f"))
+        }
+        if (ImGui::SliderFloat("Choppiness", &choppiness, 0.f, 1.0f, "%.2f")) {
             ocean->params.choppiness = choppiness;
-        // if (ImGui::SliderFloat("Wind speed (m/s)", &windSpeed, 1.f, 30.f, "%.1f"))
-        //     ocean->params.windSpeed = windSpeed;
-        // if (ImGui::SliderFloat("Wind direction (rad)", &windTheta, -3.14f, 3.14f, "%.2f"))
-        //     ocean->params.windTheta = windTheta;
+        }
+
         ImGui::TextDisabled("Wind changes apply on scene reload.");
         ImGui::Separator();
         ImGui::TextUnformatted("Night & lighthouse");
@@ -1273,8 +1272,9 @@ int main(int argc, char** argv) {
         }
         if (night) {
             ImGui::SliderFloat("Beam speed (rad/s)", &beamSpeed, 0.f, 2.f, "%.2f");
-            if (ImGui::SliderFloat("Haze density (1/m)", &hazeDensity, 0.f, 0.08f, "%.3f"))
+            if (ImGui::SliderFloat("Haze density (1/m)", &hazeDensity, 0.f, 0.08f, "%.3f")) {
                 renderer.setDeferredVolumetrics(hazeDensity, 0.6f);
+            }
         }
         ImGui::Separator();
         ImGui::TextUnformatted("Audio");
@@ -1288,53 +1288,43 @@ int main(int argc, char** argv) {
         if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f, "%.2f"))
             renderer.toneMappingExposure = exposure;
         const char* toneItems[] = {"None", "Linear", "Reinhard", "Cineon", "ACESFilmic"};
-        if (ImGui::Combo("Tone mapping", &toneMode, toneItems, IM_ARRAYSIZE(toneItems)))
+        if (ImGui::Combo("Tone mapping", &toneMode, toneItems, IM_ARRAYSIZE(toneItems))) {
             renderer.toneMapping = static_cast<ToneMapping>(toneMode);
+        }
         bool restirDI = renderer.restirDIEnabled();
-        if (ImGui::Checkbox("ReSTIR DI", &restirDI))
+        if (ImGui::Checkbox("ReSTIR DI", &restirDI)) {
             renderer.setRestirDIEnabled(restirDI);
+        }
         bool restirGI = renderer.restirGIEnabled();
-        if (ImGui::Checkbox("ReSTIR GI", &restirGI))
+        if (ImGui::Checkbox("ReSTIR GI", &restirGI)) {
             renderer.setRestirGIEnabled(restirGI);
-        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
+        }
+        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16)) {
             renderer.setSamplesPerPixel(spp);
+        }
         // Silhouette MSAA: extra primary rays at edge pixels only.
         // 0 disables; default 7 → 8× MSAA at edges.
         int edgeMsaa = static_cast<int>(renderer.silhouetteMsaaExtra());
-        if (ImGui::SliderInt("Silhouette MSAA extras", &edgeMsaa, 0, 15))
+        if (ImGui::SliderInt("Silhouette MSAA extras", &edgeMsaa, 0, 15)) {
             renderer.setSilhouetteMsaaExtra(static_cast<uint32_t>(edgeMsaa));
+        }
         // Path-trace render scale: < 1 traces fewer pixels, then upscales.
-        if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f, "%.2f"))
+        if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f, "%.2f")) {
             renderer.setRenderScale(renderScale);
+        }
         ImGui::Separator();
 
-        {
-            const auto t = renderer.lastFrameTimings();
-            if (t.pathTraceMs > 0.f) {
-                float& bucket = measurePrimaryOnly ? primaryOnlyMs : fullPtMs;
-                bucket = (bucket > 0.f) ? bucket * (1.f - ptEmaAlpha) + t.pathTraceMs * ptEmaAlpha
-                                        : t.pathTraceMs;
-            }
-            if (ImGui::Checkbox("Measure primary trace only", &measurePrimaryOnly))
-                renderer.setMeasurePrimaryTraceOnly(measurePrimaryOnly);
-            if (measurePrimaryOnly)
-                ImGui::TextDisabled("Image is black while measuring.");
-            ImGui::Text("Full PT:      %6.2f ms", fullPtMs);
-            ImGui::Text("Primary only: %6.2f ms", primaryOnlyMs);
-            if (fullPtMs > 1e-3f && primaryOnlyMs > 0.f)
-                ImGui::Text("Primary share: %5.1f %%", 100.f * primaryOnlyMs / fullPtMs);
-            ImGui::Separator();
-        }
 
         ImGui::TextUnformatted("Underwater fog");
         ImGui::SliderFloat("Density (1/m)", &uwFogDensity, 0.01f, 0.20f, "%.3f");
         ImGui::ColorEdit3("Inscatter tint", uwFogColor,
                           ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs);
         ImGui::SliderFloat("Anisotropy (g)", &uwFogAniso, -0.95f, 0.95f, "%.2f");
-        if (uwDepthSmooth > 0.001f)
+        if (uwDepthSmooth > 0.001f) {
             ImGui::Text("Submerged: %.1f%%", uwDepthSmooth * 100.f);
-        else
+        } else {
             ImGui::TextDisabled("Camera above water.");
+        }
 
         ImGui::Separator();
         if (ImGui::CollapsingHeader("LIDAR mast (OS0-128, path-traced)")) {
@@ -1351,8 +1341,9 @@ int main(int argc, char** argv) {
                 // sensor see the seafloor below the wave crests where the
                 // surface Fresnel return doesn't fully attenuate the beam.
                 int maxRet = static_cast<int>(lidarSensor->params.maxReturns);
-                if (ImGui::SliderInt("Max returns##lidar", &maxRet, 1, 4))
+                if (ImGui::SliderInt("Max returns##lidar", &maxRet, 1, 4)) {
                     lidarSensor->params.maxReturns = static_cast<uint32_t>(std::max(1, maxRet));
+                }
             }
             {
                 // Monte Carlo samples per beam: jitters direction within the
