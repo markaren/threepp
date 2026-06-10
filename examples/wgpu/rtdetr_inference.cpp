@@ -11,11 +11,11 @@
 
 #include "threepp/threepp.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
+#include "threepp/loaders/FontLoader.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
-#include "threepp/objects/LineSegments.hpp"
-#include "threepp/core/BufferAttribute.hpp"
 
+#include "utility/DetectionOverlay.hpp"
 #include "rtdetr/RtDetr.hpp"
 
 #include <algorithm>
@@ -43,26 +43,6 @@ static const char* kCocoNames[80] = {
     "book","clock","vase","scissors","teddy bear","hair drier","toothbrush"
 };
 
-/// Build a LineSegments object drawing 4 edges of a 2D bounding box.
-static std::shared_ptr<LineSegments> makeBoxLines(
-        float x1, float y1, float x2, float y2, const Color& col) {
-
-    std::vector<float> positions = {
-        x1, y1, 0,  x2, y1, 0,   // top edge
-        x2, y1, 0,  x2, y2, 0,   // right edge
-        x2, y2, 0,  x1, y2, 0,   // bottom edge
-        x1, y2, 0,  x1, y1, 0    // left edge
-    };
-
-    auto geo = BufferGeometry::create();
-    geo->setAttribute("position", FloatBufferAttribute::create(positions, 3));
-
-    auto mat = LineBasicMaterial::create();
-    mat->color = col;
-    mat->depthTest = false;
-
-    return LineSegments::create(geo, mat);
-}
 
 int main(int argc, char** argv) {
     std::string imgPath;
@@ -210,11 +190,8 @@ int main(int argc, char** argv) {
     quad->position.set(320, 320, 0);
     scene->add(quad);
 
-    // Detection colour palette
-    static const Color kPalette[] = {
-        Color(0xff3333), Color(0x33ff33), Color(0x3333ff),
-        Color(0xffff33), Color(0xff33ff), Color(0x33ffff)
-    };
+    FontLoader fontLoader;
+    const Font font = fontLoader.defaultFont();
 
     // Map detections from original-image pixel space onto the 640x640 display
     const float sx = 640.f / float(img.width);
@@ -227,9 +204,10 @@ int main(int argc, char** argv) {
         float sy1 = 640.f - y2;
         float sy2 = 640.f - y1;
 
-        Color col = kPalette[d.classId % 6];
-        auto box = makeBoxLines(x1, sy1, x2, sy2, col);
-        scene->add(box);
+        const Color& col = detviz::kPalette[d.classId % 6];
+        scene->add(detviz::makeBoxLines(x1, sy1, x2, sy2, col));
+        const char* name = (d.classId >= 0 && d.classId < 80) ? kCocoNames[d.classId] : "?";
+        scene->add(detviz::makeLabel(font, detviz::labelText(name, d.confidence), col, x1, sy2));
     }
 
     // ----------------------------------------------------------------

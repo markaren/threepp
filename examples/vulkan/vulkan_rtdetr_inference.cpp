@@ -16,13 +16,13 @@
 
 #include "threepp/threepp.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/loaders/FontLoader.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
-#include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
-#include "threepp/core/BufferAttribute.hpp"
 
+#include "utility/DetectionOverlay.hpp"
 #include "rtdetr/RtDetrVk.hpp"
 #include "rtdetr/WeightLoader.hpp"
 
@@ -48,20 +48,6 @@ static const char* kCocoNames[80] = {
     "remote","keyboard","cell phone","microwave","oven","toaster","sink","refrigerator",
     "book","clock","vase","scissors","teddy bear","hair drier","toothbrush"
 };
-
-static std::shared_ptr<LineSegments> makeBoxLines(
-        float x1, float y1, float x2, float y2, const Color& col) {
-    std::vector<float> positions = {
-        x1, y1, 0,  x2, y1, 0,  x2, y1, 0,  x2, y2, 0,
-        x2, y2, 0,  x1, y2, 0,  x1, y2, 0,  x1, y1, 0
-    };
-    auto geo = BufferGeometry::create();
-    geo->setAttribute("position", FloatBufferAttribute::create(positions, 3));
-    auto mat = LineBasicMaterial::create();
-    mat->color = col;
-    mat->depthTest = false;
-    return LineSegments::create(geo, mat);
-}
 
 // ── Validation mode (--validate): diff every layer against the captured ref ──
 static void compare(const char* name, const std::vector<float>& got,
@@ -143,7 +129,8 @@ static int runValidation(rtdetr::RtDetrVk& model, const std::string& weightsPath
 
 // ── Detection mode: run inference and visualize boxes over the image ──
 static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rtdetr::RtDetrVk& model,
-                        const std::string& imgPath, const std::string& weightsPath) {
+                        const std::string& imgPath, const std::string& weightsPath,
+                        const std::string& shotPath) {
     ImageLoader imgLoader;
     auto imgOpt = imgLoader.load(imgPath, 4, false);
     if (!imgOpt) { std::cerr << "ERROR: cannot load image '" << imgPath << "'\n"; return 1; }
@@ -195,19 +182,28 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rtdetr::RtDetr
     imageSprite->position.set(320.f, 320.f, 0.f);
     scene->add(imageSprite);
 
-    static const Color kPalette[] = {
-        Color(0xff3333), Color(0x33ff33), Color(0x3333ff),
-        Color(0xffff33), Color(0xff33ff), Color(0x33ffff)
-    };
+    FontLoader fontLoader;
+    const Font font = fontLoader.defaultFont();
+
     const float sx = 640.f / float(img.width), sy = 640.f / float(img.height);
     for (auto& d : detections) {
         float bx1 = d.x1 * sx, bx2 = d.x2 * sx;
         float by1 = 640.f - d.y2 * sy, by2 = 640.f - d.y1 * sy;// flip Y for ortho
-        Color col = kPalette[d.classId % 6];
-        scene->add(makeBoxLines(bx1, by1, bx2, by2, col));
+        const Color& col = detviz::kPalette[d.classId % 6];
+        scene->add(detviz::makeBoxLines(bx1, by1, bx2, by2, col));
+        const char* name = (d.classId >= 0 && d.classId < 80) ? kCocoNames[d.classId] : "?";
+        scene->add(detviz::makeLabel(font, detviz::labelText(name, d.confidence), col, bx1, by2));
     }
 
-    canvas.animate([&] { renderer.render(*scene, *camera); });
+    int shotFrame = 0;
+    canvas.animate([&] {
+        renderer.render(*scene, *camera);
+        if (!shotPath.empty() && ++shotFrame >= 5) {
+            renderer.writeFramebuffer(shotPath);
+            std::cout << "wrote " << shotPath << "\n";
+            std::exit(0);
+        }
+    });
     return 0;
 }
 
@@ -216,9 +212,20 @@ int main(int argc, char** argv) {
     const bool selfTest = !args.empty() && args[0] == "--selftest";
     const bool validate = !args.empty() && args[0] == "--validate";
 
+    // --shot <png>: headless capture — render a few viewer frames, save, exit.
+    std::string shotPath;
+    for (size_t i = 0; i + 1 < args.size();) {
+        if (args[i] == "--shot") {
+            shotPath = args[i + 1];
+            args.erase(args.begin() + i, args.begin() + i + 2);
+        } else {
+            ++i;
+        }
+    }
+
     if (!selfTest &&
         ((validate && args.size() < 3) || (!validate && args.size() < 2))) {
-        std::cerr << "Usage: " << argv[0] << " <image> <weights>\n"
+        std::cerr << "Usage: " << argv[0] << " <image> <weights> [--shot out.png]\n"
                   << "   or: " << argv[0] << " --validate <weights> <ref.bin>\n"
                   << "   or: " << argv[0] << " --selftest\n";
         return 1;
@@ -246,7 +253,7 @@ int main(int argc, char** argv) {
         }
         if (validate)
             return runValidation(model, args[1], args[2]);
-        return runDetection(canvas, renderer, model, args[0], args[1]);
+        return runDetection(canvas, renderer, model, args[0], args[1], shotPath);
     } catch (const std::exception& e) {
         std::cerr << "ERROR: " << e.what() << std::endl;
         return 1;
