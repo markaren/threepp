@@ -47,6 +47,11 @@ namespace threepp {
 
         void setVolume(float volume);
 
+        // Playback rate / pitch multiplier (1 = as recorded). Takes effect on
+        // the next play(); re-rolling it per trigger keeps short one-shots
+        // (footsteps, impacts) from sounding machine-gunned.
+        void setPlaybackRate(float rate);
+
         void togglePlay();
 
         void stop();
