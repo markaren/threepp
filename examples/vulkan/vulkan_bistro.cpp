@@ -48,7 +48,7 @@ int main(int argc, char** argv) {
     }
 
     // ---- Camera ----
-    PerspectiveCamera camera(60.f, canvas.aspect(), 0.1f, 1000.f);// near 0.01→0.1: far/near ratio was 100k → z-fighting
+    PerspectiveCamera camera(60.f, canvas.aspect(), 0.01f, 1000.f);// 100k far/near is fine now: reversed-Z raster (was z-fighting before; near was bumped to 0.1 as a workaround)
     camera.position.set(-10.f, 3.f, -5.f);
     OrbitControls controls{camera, canvas};
     controls.enableKeys = false;

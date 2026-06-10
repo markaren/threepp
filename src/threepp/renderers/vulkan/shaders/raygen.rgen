@@ -1011,11 +1011,16 @@ void main() {
         const ivec2 csz = ivec2(gl_LaunchSizeEXT.xy);
         const uint  idC = texelFetch(gbufIdsTex,   cpx, 0).x;
         const float zC  = texelFetch(gbufDepthTex, cpx, 0).x;
-        // Depth-gradient tolerance: 1 % of centre depth, with a 1e-3
-        // absolute floor so near-plane geometry (zC small) doesn't fire
-        // on sub-pixel jitter alone. Far surfaces (zC → 1) get a looser
-        // tolerance which avoids false positives on slopes.
-        const float depthEps = max(1e-3, zC * 0.01);
+        // Depth-crease tolerance under REVERSED-Z (z ≈ near/dist): relative
+        // depth difference equals relative DISTANCE difference
+        // (|zN/zC − 1| = |dC/dN − 1|), so a fixed relative threshold is
+        // scale-invariant from near to far — a ≥15 % distance jump across
+        // one pixel reads as a crease. The old forward-Z form
+        // (max(1e-3, zC·0.01)) inverted under reversed-Z: near geometry
+        // (zC large → was small) got a tiny epsilon where gradients are
+        // big → slope false-positives → 8× MSAA shading over large areas.
+        // The 1e-6 floor keeps sky runs (z = 0 everywhere) silent.
+        const float depthEps = max(1e-6, zC * 0.15);
         // 8-neighbourhood: 4 cardinals followed by 4 diagonals. Order
         // matters slightly — cardinals are more likely to differ on a
         // typical silhouette so they short-circuit first.
@@ -1031,7 +1036,8 @@ void main() {
             }
             // Same mesh ID: check for a sharp depth crease (corner /
             // self-occlusion edge). Sky pixels (idC == 0) all share
-            // depth ≈ 1 so this branch never fires on a sky run.
+            // depth = 0 (reverse-Z far) so this branch never fires on
+            // a sky run.
             const float zN = texelFetch(gbufDepthTex, p, 0).x;
             if (abs(zN - zC) > depthEps) {
                 isSilhouette = true;

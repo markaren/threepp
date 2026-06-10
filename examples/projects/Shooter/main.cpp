@@ -744,7 +744,7 @@ int main(int argc, char** argv) {
     // ===== world ============================================================
     auto scene = Scene::create();
 
-    auto camera = PerspectiveCamera::create(70, canvas.aspect(), 0.1f, 1000.f);// near 0.001→0.1: far/near ratio was 1M → z-fighting (cam min dist 0.6)
+    auto camera = PerspectiveCamera::create(70, canvas.aspect(), 0.001f, 1000.f);// 1M far/near is fine now: reversed-Z raster (was z-fighting before; near was bumped to 0.1 as a workaround)
     camera->position.set(0, 3, 8);
 
     // Sun direction for the directional light (raster shadows). On Vulkan the
