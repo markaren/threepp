@@ -142,6 +142,24 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
     float waterSurfaceY; // world-Y medium cap; 1e30 = unbounded
 } fog;
 
+layout(push_constant) uniform Pc {
+    uint  envMipCount;       // PMREM mip levels (>=1)
+    uint  width;
+    uint  height;
+    uint  flags;             // bit 0 = shadows, bit 1 = RT env-visibility (AO/GI)
+    uint  frame;             // sample/frame index — temporal jitter (TAA averages it)
+    uint  emissiveCount;     // # emissive triangles (0 = none)
+    float emissiveTotalPower;// power-CDF total (denominator)
+    float fireflyClamp;      // luminance cap for emissive NEE samples (large = disabled)
+    float oceanFineTileSize; // FFT fine-cascade tile (m); 0 = no ocean fine normal
+    float oceanFoamTileSize; // world-space foam tile (m); 0 = no foam sampling
+    float volDensity;        // volumetric scattering σ (1/m); 0 = beams off
+    float volAniso;          // Henyey-Greenstein g for the beam phase
+    float starIntensity;     // procedural sky star field brightness; 0 = off
+    float camDelta;          // camera WORLD translation this frame (m)
+    float camRot;            // camera forward-direction change this frame (rad)
+} pc;
+
 // ReBLUR-style TEMPORAL accumulation for the reflection (+ glass). Adaptive blend
 // α = 1/historyLength → fast convergence early, then a long stable mean. Tracks the
 // luminance 2nd moment E[L²] so the channel-1 denoise can form temporal variance
@@ -166,7 +184,7 @@ layout(set = 0, binding = 33, scalar) uniform FogUbo {
 // In between, the cap blends: motion-scaled (24→6, the GI channel's pattern)
 // for rough, down to 1 (reset) as roughness → mirror. Thresholds match the
 // PT's view-dependence factor (1 - smoothstep(0.05, 0.30, roughness)).
-bool reflReproject(vec2 uv, vec3 N, float rough, out vec2 pUv, out float histCap) {
+bool reflReproject(vec2 uv, vec3 N, float rough, float viewDist, out vec2 pUv, out float histCap) {
     const vec2 mv   = texture(gbufMotionTex, uv).rg;
     const vec2 pNdc = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0)) + mv;
     pUv = vec2(pNdc.x * 0.5 + 0.5, 0.5 - pNdc.y * 0.5);
@@ -181,7 +199,17 @@ bool reflReproject(vec2 uv, vec3 N, float rough, out vec2 pUv, out float histCap
     // as "steel never settles" on high-contrast (sun/env) reflections. Motion
     // caps below are unchanged — this only affects a stationary camera.
     histCap = 512.0;
-    const float mvLen = length(mv);
+    // Motion = screen-space surface motion OR camera WORLD motion. The latter
+    // catches the CHASE-CAM case: a surface tracked by the camera (car sunroof,
+    // followed boat) is screen-stationary — mv ≈ 0 — while every meter of
+    // camera travel slides its view-dependent reflection content. Translation
+    // is converted to an equivalent NDC shift via the parallax of content at
+    // ~the surface's own distance (the best single-fetch proxy for reflected-
+    // content distance); rotation maps through the FOV scale (~1.7 NDC/rad at
+    // 60°). Pure camera rotation also moves the surface on screen, so max()
+    // (not sum) keeps it from double-counting.
+    const float camNdc = pc.camRot * 1.7 + 1.7 * pc.camDelta / max(viewDist, 0.25);
+    const float mvLen = max(length(mv), camNdc);
     if (mvLen > 0.004) {// above jitter
         const float viewDepT  = 1.0 - smoothstep(0.05, 0.30, rough);// 1 = mirror-like
         const float motionCap = mix(24.0, 6.0, smoothstep(0.004, 0.03, mvLen));
@@ -190,11 +218,11 @@ bool reflReproject(vec2 uv, vec3 N, float rough, out vec2 pUv, out float histCap
     }
     return valid;
 }
-vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, bool hold) {
+vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, float viewDist, bool hold) {
     const float curLum = dot(cur.rgb, vec3(0.2126, 0.7152, 0.0722));
     const float rough  = abs(cur.a);// .a < 0 = glass marker (frost gr) — same policy
     vec2 pUv; float histCap;
-    bool valid = reflReproject(uv, N, rough, pUv, histCap);
+    bool valid = reflReproject(uv, N, rough, viewDist, pUv, histCap);
     const vec4 prevR = valid ? texture(reflectPrevTex, pUv) : vec4(0.0);
     if (valid && any(greaterThan(abs(prevR.rgb), vec3(1e6)))) valid = false;// garbage guard
     if (hold && valid) {
@@ -242,22 +270,6 @@ vec4 reflSVGFTemporal(vec4 cur, ivec2 px, vec2 uv, vec3 N, bool hold) {
     imageStore(reflAuxWrite, px, vec4(histLen, moment, trend, 0.0));
     return vec4(accum, cur.a);
 }
-
-layout(push_constant) uniform Pc {
-    uint  envMipCount;       // PMREM mip levels (>=1)
-    uint  width;
-    uint  height;
-    uint  flags;             // bit 0 = shadows, bit 1 = RT env-visibility (AO/GI)
-    uint  frame;             // sample/frame index — temporal jitter (TAA averages it)
-    uint  emissiveCount;     // # emissive triangles (0 = none)
-    float emissiveTotalPower;// power-CDF total (denominator)
-    float fireflyClamp;      // luminance cap for emissive NEE samples (large = disabled)
-    float oceanFineTileSize; // FFT fine-cascade tile (m); 0 = no ocean fine normal
-    float oceanFoamTileSize; // world-space foam tile (m); 0 = no foam sampling
-    float volDensity;        // volumetric scattering σ (1/m); 0 = beams off
-    float volAniso;          // Henyey-Greenstein g for the beam phase
-    float starIntensity;     // procedural sky star field brightness; 0 = off
-} pc;
 
 // ── BRDF helpers (verbatim from shade_common.glsl) ──────────────────────────
 float distGGX(float NdotH, float roughness) {
@@ -2367,7 +2379,7 @@ void main() {
     if (demodIndirect && reflBlend > 0.0 && opaqueRefl &&
         ((((px.x ^ px.y) ^ int(pc.frame)) & 1) == 0)) {
         vec2 rUv; float rCap;
-        if (reflReproject(uv, N, roughness, rUv, rCap))
+        if (reflReproject(uv, N, roughness, length(worldPos - camPos), rUv, rCap))
             reflSkip = rCap >= 4.0 && texture(reflAuxPrevTex, rUv).x >= 4.0;
     }
     if (reflBlend > 0.0 && opaqueRefl && !reflSkip) {
@@ -2410,7 +2422,7 @@ void main() {
     if (demodIndirect) {
         // Denoise ON: temporally AA the sharp reflection, then hand it to the
         // roughness-blur denoise pass.
-        imageStore(reflectImage, px, reflSVGFTemporal(vec4(reflOut, roughness), px, uv, N, reflSkip));
+        imageStore(reflectImage, px, reflSVGFTemporal(vec4(reflOut, roughness), px, uv, N, length(worldPos - camPos), reflSkip));
     } else {
         // Denoise OFF (or glass/sheen, where reflOut==0): inline sharp reflection.
         lit += reflOut;
@@ -2460,7 +2472,7 @@ void main() {
                 // + an ID-based (not normal) edge stop so the blur smooths ACROSS the
                 // curved surface — refraction is far more normal-sensitive than
                 // reflection, so 1 ray aliases into blocky speckles without it.
-                imageStore(reflectImage, px, reflSVGFTemporal(vec4(glassCol * gt, -gr), px, uv, N, /*hold=*/false));// glass: full rate (refraction aliases at half)
+                imageStore(reflectImage, px, reflSVGFTemporal(vec4(glassCol * gt, -gr), px, uv, N, length(worldPos - camPos), /*hold=*/false));// glass: full rate (refraction aliases at half)
                 lit = lit * (1.0 - gt);
             } else {
                 lit = mix(lit, glassCol, gt);// denoise off → inline (sharp, no frost)

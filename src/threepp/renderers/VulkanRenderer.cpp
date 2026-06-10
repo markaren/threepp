@@ -1228,6 +1228,17 @@ namespace threepp {
                                             0.f, 0.f, 0.f, 1.f};
         float rasterPrevJitter_[2]{};
         bool  rasterPrevJitterValid_ = false;
+        // Camera WORLD motion this frame (translation m, forward-rotation rad)
+        // for the deferred reflection history policy: a chase-cam surface (car
+        // sunroof with a following camera) is screen-STATIONARY — its motion
+        // vectors are ~0 — while its view-dependent reflection content slides
+        // with every meter the camera travels. Screen-space motion alone cannot
+        // see camera+object co-motion; these can.
+        float deferredCamPrevPos_[3]{};
+        float deferredCamPrevFwd_[3]{};
+        bool  deferredCamPrevValid_ = false;
+        float deferredCamDeltaLen_ = 0.f;
+        float deferredCamRotAngle_ = 0.f;
 
         // Nearest-filter sampler used by raygen to read gbuffer attachments.
         // Nearest avoids bilinear smearing of normal/motion/ids at silhouettes
@@ -6265,6 +6276,30 @@ namespace threepp {
             rasterPrevJitter_[0] = jClipX;
             rasterPrevJitter_[1] = jClipY;
             rasterPrevJitterValid_ = true;
+            // Camera world motion (translation + forward rotation) for the
+            // deferred reflection policy — see the member comment.
+            {
+                const auto& mw = camera.matrixWorld->elements;
+                const float pos[3] = {mw[12], mw[13], mw[14]};
+                const float fwd[3] = {-mw[8], -mw[9], -mw[10]};// -Z column = view dir
+                if (deferredCamPrevValid_) {
+                    const float dx = pos[0] - deferredCamPrevPos_[0];
+                    const float dy = pos[1] - deferredCamPrevPos_[1];
+                    const float dz = pos[2] - deferredCamPrevPos_[2];
+                    deferredCamDeltaLen_ = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    const float c = std::clamp(fwd[0] * deferredCamPrevFwd_[0] +
+                                                       fwd[1] * deferredCamPrevFwd_[1] +
+                                                       fwd[2] * deferredCamPrevFwd_[2],
+                                               -1.f, 1.f);
+                    deferredCamRotAngle_ = std::acos(c);
+                } else {
+                    deferredCamDeltaLen_ = 0.f;
+                    deferredCamRotAngle_ = 0.f;
+                }
+                std::memcpy(deferredCamPrevPos_, pos, sizeof(pos));
+                std::memcpy(deferredCamPrevFwd_, fwd, sizeof(fwd));
+                deferredCamPrevValid_ = true;
+            }
             // 16-frame Halton cycle: longer than the eye notices, short
             // enough that any drift in the host counter never overflows.
             haltonFrame_ = (haltonFrame_ + 1u) & 15u;
@@ -13033,7 +13068,8 @@ namespace threepp {
                                                oceanFineTileSize, oceanFoamTileSize,
                                                denoiseEnabled_, restirDIEnabled_,
                                                deferredVolDensity_, deferredVolAniso_,
-                                               deferredStarIntensity_);
+                                               deferredStarIntensity_,
+                                               deferredCamDeltaLen_, deferredCamRotAngle_);
                 timingEnd(cb, TP_PathTrace);// pathTraceMs = deferred SHADE only
                 // Spatial denoise of the demodulated diffuse-indirect + recombine.
                 // Barrier: the shade wrote sceneHdr + the indirect image (both

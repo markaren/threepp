@@ -90,6 +90,10 @@ namespace threepp::vulkan {
         // making the G-buffer visible to COMPUTE (the raster G-buffer render
         // pass declares a COMPUTE consumer dependency) and for the sceneHdr
         // write→read barrier (BloomPass::recordDispatch's leading barrier).
+        // camDeltaLen/camRotAngle: the camera's WORLD motion this frame (m,
+        // radians) — the reflection history policy needs it because a chase-cam
+        // surface (sunroof on a followed car) is screen-stationary (motion
+        // vectors ~0) while its view-dependent reflection content slides.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
                             uint32_t width, uint32_t height, uint32_t envMipCount,
                             bool shadows, bool ao, uint32_t frameCounter,
@@ -98,7 +102,8 @@ namespace threepp::vulkan {
                             float oceanFineTileSize, float oceanFoamTileSize,
                             bool denoise, bool restirDI,
                             float volDensity, float volAniso,
-                            float starIntensity);
+                            float starIntensity,
+                            float camDeltaLen, float camRotAngle);
 
         // Spatial denoise of the demodulated diffuse-indirect (binding 16) +
         // recombine into sceneHdr. Run AFTER recordDispatch (same descriptor
