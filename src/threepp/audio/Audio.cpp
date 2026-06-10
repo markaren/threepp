@@ -137,6 +137,11 @@ void Audio::setVolume(float volume) {
     ma_sound_set_volume(&pimpl_->sound_, volume);
 }
 
+void Audio::setPlaybackRate(float rate) {
+
+    ma_sound_set_pitch(&pimpl_->sound_, rate);
+}
+
 void Audio::play() {
 
     ma_sound_start(&pimpl_->sound_);
