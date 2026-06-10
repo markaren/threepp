@@ -138,6 +138,197 @@ namespace {
 
 }// namespace
 
+// ── Procedural enclosing archipelago ────────────────────────────────────────
+// A ring of rocky islands around the play area (r ≈ 385–495 m) so the scene
+// reads as a sheltered Norwegian skerry bay instead of bare open horizon.
+// Deterministic value-noise FBM drives everything: an angular "mass plan"
+// (periodic by construction — noise sampled on a circle) picks where islands
+// rise and where passes stay open sea; a radial bump profile dives both
+// shores below the sand floor so the rims bury cleanly; ridged FBM adds the
+// rocky relief. Colour comes from a texture baked in the mesh's own polar
+// parameterisation (the Vulkan PT has no vertex-colour path for meshes):
+// wet dark rock at the waterline, FBM-mottled granite on the slopes,
+// moss/heather on gentle low ground — all derived from the same height field.
+namespace island {
+
+    constexpr float kInnerR = 385.f;// boat waypoints reach ~320 m — keep clear water
+    constexpr float kOuterR = 495.f;// stays inside the 1 km ocean/sand tile
+    constexpr float kPeakH  = 55.f; // tallest summits (m)
+    constexpr float kSkirt  = 7.f;  // rim depth — below the sand floor (-5 m)
+
+    float smoothstepf(float e0, float e1, float x) {
+        const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
+        return t * t * (3.f - 2.f * t);
+    }
+
+    float hashf(int xi, int zi) {
+        uint32_t h = static_cast<uint32_t>(xi) * 374761393u + static_cast<uint32_t>(zi) * 668265263u;
+        h = (h ^ (h >> 13)) * 1274126177u;
+        h ^= h >> 16;
+        return static_cast<float>(h) * (1.f / 4294967296.f);
+    }
+
+    // Value noise with quintic fade, range [0,1].
+    float vnoise(float x, float z) {
+        const float fx = std::floor(x), fz = std::floor(z);
+        const int xi = static_cast<int>(fx), zi = static_cast<int>(fz);
+        float tx = x - fx, tz = z - fz;
+        tx = tx * tx * tx * (tx * (tx * 6.f - 15.f) + 10.f);
+        tz = tz * tz * tz * (tz * (tz * 6.f - 15.f) + 10.f);
+        const float a = hashf(xi, zi), b = hashf(xi + 1, zi);
+        const float c = hashf(xi, zi + 1), d = hashf(xi + 1, zi + 1);
+        return a + (b - a) * tx + (c - a) * tz + (a - b - c + d) * tx * tz;
+    }
+
+    float fbm(float x, float z, int octaves) {
+        float sum = 0.f, amp = 0.5f, norm = 0.f;
+        for (int o = 0; o < octaves; ++o) {
+            sum += amp * vnoise(x, z);
+            norm += amp;
+            amp *= 0.5f;
+            // irrational-ish lacunarity + offset decorrelates the octave lattices
+            const float nx = x * 1.93f + 19.7f, nz = z * 2.11f + 7.3f;
+            x = nx;
+            z = nz;
+        }
+        return sum / norm;
+    }
+
+    float heightAt(float x, float z) {
+        const float r = std::sqrt(x * x + z * z);
+        // ring coordinate, warped so the coastlines wander instead of circling
+        float w = (r - kInnerR) / (kOuterR - kInnerR);
+        w += 0.20f * (2.f * fbm(x * 0.011f, z * 0.011f, 2) - 1.f);
+        if (w <= 0.f || w >= 1.f) return -kSkirt;
+        const float prof = std::pow(std::sin(math::PI * w), 1.5f);
+
+        // mass plan: low-frequency noise on a circle, thresholded — sections
+        // below the band stay a submerged sill (the passes between islands)
+        const float a = std::atan2(z, x);
+        const float m0 = 0.65f * vnoise(7.3f + std::cos(a) * 2.9f, 3.1f + std::sin(a) * 2.9f) +
+                         0.35f * vnoise(13.7f + std::cos(a) * 5.3f, 23.9f + std::sin(a) * 5.3f);
+        const float m = smoothstepf(0.27f, 0.60f, m0);
+
+        // ridged FBM (fold-over of signed noise) = sharp rocky crests
+        const float ridge = 1.f - std::abs(2.f * fbm(x * 0.035f, z * 0.035f, 4) - 1.f);
+        const float crest = kPeakH * m * (0.45f + 0.55f * ridge * ridge);
+        // prof=1 mid-ring: passes top out 2 m underwater, islands rise to crest
+        return -kSkirt + (crest + kSkirt - 2.f) * prof;
+    }
+
+    // Analytic finite-difference normal — seam-consistent (the height field is
+    // continuous in angle) and adds sub-vertex shading detail for free.
+    Vector3 normalAt(float x, float z, float eps = 2.f) {
+        const float dhdx = (heightAt(x + eps, z) - heightAt(x - eps, z)) / (2.f * eps);
+        const float dhdz = (heightAt(x, z + eps) - heightAt(x, z - eps)) / (2.f * eps);
+        Vector3 n(-dhdx, 1.f, -dhdz);
+        return n.normalize();
+    }
+
+    // Colour map in the mesh's polar parameterisation (u = angle, v = radius):
+    // one texel column ≈ 1.4 m of coastline. Each texel re-evaluates the
+    // height field, so the colours track the actual geometry.
+    std::shared_ptr<DataTexture> bakeColorMap() {
+        const int W = 2048, H = 128;
+        std::vector<unsigned char> px(static_cast<size_t>(W) * H * 4);
+        auto toByte = [](float v) {
+            return static_cast<unsigned char>(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
+        };
+        for (int y = 0; y < H; ++y) {
+            const float r = kInnerR + (kOuterR - kInnerR) * ((y + 0.5f) / H);
+            for (int x = 0; x < W; ++x) {
+                const float a = 2.f * math::PI * ((x + 0.5f) / W);
+                const float wx = std::cos(a) * r, wz = std::sin(a) * r;
+                const float h = heightAt(wx, wz);
+                const float ny = normalAt(wx, wz).y;
+
+                const float mottle = fbm(wx * 0.05f, wz * 0.05f, 3);
+                const float veg    = fbm(wx * 0.016f + 31.f, wz * 0.016f, 3);
+
+                float cr = 0.36f + 0.20f * mottle;// base granite grey
+                float cg = 0.34f + 0.18f * mottle;
+                float cb = 0.32f + 0.16f * mottle;
+                // moss/heather on gentle low/mid ground, patched by its own noise
+                const float vegMask = smoothstepf(0.55f, 0.78f, ny) *
+                                      smoothstepf(0.8f, 2.5f, h) * (1.f - smoothstepf(28.f, 42.f, h)) *
+                                      smoothstepf(0.40f, 0.60f, veg);
+                cr += (0.16f + 0.10f * veg - cr) * vegMask;
+                cg += (0.30f + 0.06f * veg - cg) * vegMask;
+                cb += (0.10f + 0.04f * veg - cb) * vegMask;
+                // dark wet band at the waterline, continuing underwater
+                const float wet = (1.f - smoothstepf(0.4f, 2.2f, h)) * 0.85f;
+                cr += (0.10f - cr) * wet;
+                cg += (0.10f - cg) * wet;
+                cb += (0.095f - cb) * wet;
+
+                const size_t i = (static_cast<size_t>(y) * W + x) * 4;
+                px[i + 0] = toByte(cr);
+                px[i + 1] = toByte(cg);
+                px[i + 2] = toByte(cb);
+                px[i + 3] = 255;
+            }
+        }
+        auto tex = DataTexture::create(ImageData{std::move(px)},
+                                       static_cast<unsigned>(W), static_cast<unsigned>(H));
+        tex->colorSpace = ColorSpace::sRGB;
+        tex->magFilter = Filter::Linear;
+        tex->minFilter = Filter::LinearMipmapLinear;
+        tex->generateMipmaps = true;
+        tex->needsUpdate();
+        return tex;
+    }
+
+    std::shared_ptr<Mesh> build() {
+        // 1024 angular columns ≈ 2.7 m spacing at mid-ring; the seam column is
+        // duplicated (u = 0 and u = 1) so UVs never wrap. ~30 K verts, static
+        // BLAS built once.
+        const int NA = 1024, NR = 28;
+        std::vector<float> pos, nrm, uv;
+        pos.reserve((NA + 1) * (NR + 1) * 3);
+        nrm.reserve((NA + 1) * (NR + 1) * 3);
+        uv.reserve((NA + 1) * (NR + 1) * 2);
+        for (int j = 0; j <= NR; ++j) {
+            const float r = kInnerR + (kOuterR - kInnerR) * (static_cast<float>(j) / NR);
+            for (int i = 0; i <= NA; ++i) {
+                const float a = 2.f * math::PI * (static_cast<float>(i) / NA);
+                const float x = std::cos(a) * r, z = std::sin(a) * r;
+                const Vector3 n = normalAt(x, z);
+                pos.insert(pos.end(), {x, heightAt(x, z), z});
+                nrm.insert(nrm.end(), {n.x, n.y, n.z});
+                uv.insert(uv.end(), {static_cast<float>(i) / NA, static_cast<float>(j) / NR});
+            }
+        }
+        std::vector<unsigned int> idx;
+        idx.reserve(static_cast<size_t>(NA) * NR * 6);
+        for (int j = 0; j < NR; ++j)
+            for (int i = 0; i < NA; ++i) {
+                const unsigned a0 = j * (NA + 1) + i;// (i, j)
+                const unsigned b0 = a0 + 1;          // (i+1, j)
+                const unsigned a1 = a0 + (NA + 1);   // (i, j+1)
+                const unsigned b1 = a1 + 1;          // (i+1, j+1)
+                idx.insert(idx.end(), {a0, b0, b1});
+                idx.insert(idx.end(), {a0, b1, a1});
+            }
+
+        auto geo = BufferGeometry::create();
+        geo->setIndex(idx);
+        geo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
+        geo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
+        geo->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
+        geo->computeBoundingBox();
+        geo->computeBoundingSphere();
+
+        auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                        .roughness(0.95f)
+                                                        .metalness(0.f));
+        mat->map = bakeColorMap();
+        auto mesh = Mesh::create(geo, mat);
+        mesh->frustumCulled = false;// the ring surrounds the camera — always partly in view
+        return mesh;
+    }
+
+}// namespace island
+
 // ── Procedural looping audio (engine + ocean/wind ambience) ─────────────────
 // Same temp-WAV approach as the Shooter example: the Audio API loads files,
 // so the loops are synthesised once at startup and written to the temp dir.
@@ -388,20 +579,23 @@ namespace {
 int main(int argc, char** argv) {
 
     // ── Headless capture (dev iteration loop) ───────────────────────────────
-    //   vulkan_ocean --shot <name.png> [--frames N] [--night] [--pt]
+    //   vulkan_ocean --shot <name.png> [--frames N] [--night] [--pt] [--vista]
     // Fixed aerial camera, N warm-up frames (TAA/denoiser converge), one PNG
     // into <project>/aaa_caps/, exit. --night starts in night mode; --pt
-    // captures the path-traced reference instead of the deferred default.
+    // captures the path-traced reference instead of the deferred default;
+    // --vista frames a high oblique overview (archipelago ring + lighthouse).
     std::string shotPath;
     int  shotFrames = 240;
     bool startNight = false;
     bool shotPT     = false;
+    bool shotVista  = false;
     int  toggleNightAt = 0;// --toggle: start in day, flip to night mid-run (exercises the runtime toggle path)
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--night") == 0) startNight = true;
         else if (std::strcmp(argv[i], "--pt") == 0) shotPT = true;
+        else if (std::strcmp(argv[i], "--vista") == 0) shotVista = true;
         else if (std::strcmp(argv[i], "--toggle") == 0) toggleNightAt = 60;
     }
     const bool capturing = !shotPath.empty();
@@ -449,6 +643,10 @@ int main(int argc, char** argv) {
     floor->rotation.x = -math::PI / 2.f;
     floor->position.y = -5.f;
     scene.add(floor);
+
+    // Enclosing archipelago ring — see namespace island above. Static mesh,
+    // one BLAS build; the lighthouse beam grazes its cliffs at night.
+    scene.add(island::build());
 
     // Ocean surface. PlaneGeometry with kSubdiv segments → kFftSize²
     // vertices. The DisplacedMesh detects the grid dimension at first-frame
@@ -1851,7 +2049,12 @@ int main(int argc, char** argv) {
         }
 
         if (capturing) {
-            if (night) {
+            if (shotVista) {
+                // High oblique overview: lighthouse centre, archipelago ring,
+                // passes and the far shore all in frame.
+                camera.position.set(300.f, 220.f, 520.f);
+                camera.lookAt(Vector3(0.f, 0.f, -60.f));
+            } else if (night) {
                 // Night framing: low camera toward the lighthouse + horizon —
                 // sky (stars), beam fan, and lit water all in shot.
                 camera.position.set(70.f, 7.f, 110.f);
