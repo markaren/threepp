@@ -1251,8 +1251,9 @@ namespace threepp {
         // Default ON to ship the Phase-2 GI. CAVEATS (follow-ups): GI bounce uses
         // full traceRadiance (expensive in emitter-heavy scenes — cheap sun+emissive
         // bounce pending); no reproject/disocclusion yet → MOTION GHOSTS (ping-pong
-        // history reproject pending). setDeferredDenoise(false) → clean fallback.
-        bool  deferredDenoise_ = true;
+        // history reproject pending). setDenoise(false) → clean fallback.
+        // (One flag for BOTH paths — denoiseEnabled_ — so a single toggle
+        // follows the active RenderMode; setDeferredDenoise is an alias.)
         // Ray-traced env ambient occlusion / GI (RasterFirst). ON: gives the
         // "dirty realistic" PT-like grounding (contact darkening + 1-bounce GI).
         // Uses the deterministic Fibonacci 64-sample gather (clean + settles), so
@@ -13010,7 +13011,7 @@ namespace threepp {
                                                emissiveTotalPowerThisFrame_,
                                                fireflyClamp_,
                                                oceanFineTileSize, oceanFoamTileSize,
-                                               deferredDenoise_, restirDIEnabled_,
+                                               denoiseEnabled_, restirDIEnabled_,
                                                deferredVolDensity_, deferredVolAniso_,
                                                deferredStarIntensity_);
                 timingEnd(cb, TP_PathTrace);// pathTraceMs = deferred SHADE only
@@ -13018,7 +13019,7 @@ namespace threepp {
                 // Barrier: the shade wrote sceneHdr + the indirect image (both
                 // GENERAL storage); the denoise reads the indirect 5×5 neighbourhood
                 // and read-modify-writes sceneHdr — compute→compute RAW/WAR.
-                if (deferredDenoise_) {
+                if (denoiseEnabled_) {
                     VkMemoryBarrier2 denoiseBar{};
                     denoiseBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
                     denoiseBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -14695,11 +14696,11 @@ namespace threepp {
     }
 
     void VulkanRenderer::setDeferredDenoise(bool enabled) {
-        pimpl_->deferredDenoise_ = enabled;
+        pimpl_->denoiseEnabled_ = enabled;
     }
 
     bool VulkanRenderer::deferredDenoise() const {
-        return pimpl_->deferredDenoise_;
+        return pimpl_->denoiseEnabled_;
     }
 
     void VulkanRenderer::setDeferredAO(bool enabled) {

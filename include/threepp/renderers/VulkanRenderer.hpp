@@ -231,10 +231,13 @@ namespace threepp {
         void setRenderScale(float scale);
         [[nodiscard]] float renderScale() const;
 
-        // Spatial denoiser (5×5 à-trous edge-aware filter) applied to the
-        // temporally-accumulated radiance before tonemap + sRGB encode. Default
-        // on. When off, the compute pass still runs but acts as a tonemap-only
-        // pass-through (pixel-identical to the prior in-shader tonemap path).
+        // Denoiser toggle for the ACTIVE render mode — one switch, both paths.
+        // PT/hybrid: 5×5 à-trous edge-aware filter on the temporally-accumulated
+        // radiance before tonemap + sRGB encode (off = tonemap-only pass-through,
+        // pixel-identical to the prior in-shader tonemap path). RasterFirst:
+        // SVGF à-trous on the ray-traced diffuse-indirect (AO/GI) channel only
+        // (off = raw noisy GI; the raster base is deterministic either way).
+        // Default on. Switching RenderMode needs no re-toggle.
         void setDenoise(bool enabled);
         [[nodiscard]] bool denoise() const;
 
@@ -246,8 +249,9 @@ namespace threepp {
         void setBloomIntensity(float intensity);
         [[nodiscard]] float bloomIntensity() const;
 
-        // RasterFirst spatial denoiser for the ray-traced diffuse-indirect
-        // (AO/GI). On by default; disable to see the raw noisy base.
+        // Deprecated alias of setDenoise()/denoise() — the denoise toggle is
+        // unified across render modes (it used to control only the RasterFirst
+        // GI denoiser, so mode switches required toggling two flags).
         void setDeferredDenoise(bool enabled);
         [[nodiscard]] bool deferredDenoise() const;
 
