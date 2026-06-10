@@ -169,17 +169,20 @@ void main() {
             float pdf = ggxD(NdotH, a) * 0.25 + 1e-4;        // V=N -> VdotH=NdotH
             float saSample = 1.0 / (float(NS) * pdf);
             float mip = 0.5 * log2(saSample / saTexel);
-            // Floor the source mip by roughness². The Hammersley GGX directions
+            // Floor the source mip by roughness. The Hammersley GGX directions
             // are discrete, so a tiny ultra-bright sun gets hit at a few phi
             // spokes that survive as radial streaks on the wide rough lobes
             // (→ vertical streaks on curved surfaces). Reading a sufficiently
             // blurred source mip spreads each sample's footprint enough to
             // overlap its neighbours and erase the spokes. (WGPU avoids this via
             // low-res rough mips; our strips are full-res so we blur at source.)
-            // Linear in roughness so the worst-case mid-roughness lobes blur
-            // hard while roughness=1 keeps enough source detail for a directional
-            // diffuse ambient (a roughness² floor over-flattened it).
-            mip = max(mip, roughness * 8.0);
+            // The floor is RELATIVE to the source size: roughness=1 reads the
+            // ~16x8 mip (log2(W)-4), which keeps the hemisphere-scale variation
+            // a directional diffuse ambient needs. An absolute floor (was
+            // `roughness * 8.0`) overshot small sources past their whole mip
+            // pyramid into the 1x1 global average — diffuse IBL lost all
+            // directionality (caught by the top-lit furnace test).
+            mip = max(mip, roughness * max(log2(srcSize.x) - 4.0, 0.0));
             mip = max(mip, 0.0);
             // Clamp per-channel to bound residual fireflies / RGBE Inf.
             vec3 s = min(textureLod(envMap, equirectUv(L), mip).rgb, vec3(50.0));

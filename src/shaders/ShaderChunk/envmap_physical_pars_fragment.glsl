@@ -39,13 +39,15 @@
 
 		#endif
 
-		// No PI multiplier here. Modern three.js / WGPU convention: PMREM at
-		// maxMip already stores the NdotL-weighted hemispheric mean, and the
-		// downstream BRDF_Lambert applies its own 1/π. A legacy `* PI` here
-		// cancelled with Lambert's 1/π, leaving GL π× brighter than WGPU on
-		// the same scene (light-gray floors went near-white once GLPMREM
-		// started filtering LOD 10 properly).
-		return envMapColor.rgb * envMapIntensity;
+		// PI multiplier: the PMREM roughness-1 strip stores the NdotL-weighted
+		// hemispheric MEAN, i.e. E/π (for a unit furnace env it reads exactly
+		// 1.0). Downstream, RE_IndirectSpecular folds in Lambert's 1/π via
+		// cosineWeightedIrradiance, so this function must return the full
+		// irradiance E = π · sample for the chain to come out at ρE/π — the
+		// white-furnace identity L_o = 1 for ρ = 1 (CrossRenderer_furnace_test).
+		// This factor was once removed to match WGPU, but WGPU was the π-dark
+		// outlier (its diffuse env lacked the π-scaling); both now carry it.
+		return PI * envMapColor.rgb * envMapIntensity;
 
 	}
 

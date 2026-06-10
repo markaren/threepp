@@ -963,8 +963,20 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
             s << "    let F0 = mix(vec3<f32>(0.04) * material.specularAndShininess.rgb * material.specularAndShininess.w, baseColor, metalness);\n";
             if (features & (ShaderFeatures::EnvMap | ShaderFeatures::EnvMapCube)) {
                 s << "    let R = reflect(-V, N);\n";
-                s << "    let maxMip    = f32(textureNumLevels(t_envMap) - 1u);\n";
-                s << "    let envMip    = clamp(roughness * maxMip, 0.0, maxMip);\n";
+                if (features & ShaderFeatures::EnvMapCube) {
+                    // Cube envs carry plain box mips — roughness maps over the full chain.
+                    s << "    let maxMip    = f32(textureNumLevels(t_envMap) - 1u);\n";
+                    s << "    let envMip    = clamp(roughness * maxMip, 0.0, maxMip);\n";
+                } else {
+                    // Equirect envs are GGX-prefiltered (WgpuPMREM): roughness 1 lives at
+                    // the last mip with angular resolution (>= 32x16, log2(W)-5), NOT the
+                    // 1x1 tail — sampling the tail collapses diffuse E(n) to one
+                    // direction-independent value (top-lit furnace test). Must match
+                    // lastUseful in WgpuPMREM::prefilter2D.
+                    s << "    let envW      = f32(textureDimensions(t_envMap, 0u).x);\n";
+                    s << "    let maxMip    = clamp(floor(log2(envW)) - 5.0, 0.0, f32(textureNumLevels(t_envMap) - 1u));\n";
+                    s << "    let envMip    = clamp(roughness * maxMip, 0.0, maxMip);\n";
+                }
                 if (features & ShaderFeatures::EnvMapCube) {
                     s << "    let envColor  = textureSampleLevel(t_envMap, s_envMap, R, envMip).rgb;\n";
                     s << "    let envDiff   = textureSampleLevel(t_envMap, s_envMap, N, maxMip).rgb;\n";
@@ -988,11 +1000,13 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
                 s << "    let dfgA  = min(dfgR.x * dfgR.x, exp2(-9.28 * dotNV_ibl)) * dfgR.x + dfgR.y;\n";
                 s << "    let dfg   = vec2<f32>(-1.04, 1.04) * dfgA + dfgR.zw;\n";
                 s << "    let indirSpec    = (F0 * dfg.x + dfg.y) * envColor;\n";
-                // 1/π is the Lambert BRDF normalization; mirrors GL's
-                // indirectDiffuse += irradiance * BRDF_Diffuse_Lambert(diffuseColor)
-                // (lights_physical_pars_fragment.glsl:120). Without it the env
-                // IBL diffuse is π× brighter than GL on the same scene.
-                s << "    let indirDiff    = envDiff * baseColor * (1.0 - metalness) * 0.31830989;\n";
+                // envDiff (PMREM max mip) stores the hemispheric mean = E/π, so
+                // ρ·envDiff IS the Lambertian exit radiance ρE/π — the π that
+                // converts the mean to irradiance and Lambert's 1/π cancel.
+                // An extra 1/π here (once added to match GL while GL's own π
+                // was missing) makes a unit furnace read 1/π instead of 1.0
+                // (CrossRenderer_furnace_test).
+                s << "    let indirDiff    = envDiff * baseColor * (1.0 - metalness);\n";
                 s << "    let ambientSpecOnly = indirSpec * material.emissive.w;\n";
                 s << "    let ambientDiff     = indirDiff * material.emissive.w;\n";
                 if (features & ShaderFeatures::Sheen) {

@@ -63,11 +63,18 @@ fn importanceSampleGGX(Xi: vec2<f32>, N: vec3<f32>, roughness: f32) -> vec3<f32>
     return normalize(tangent * H_t.x + bitangent * H_t.y + N * H_t.z);
 }
 
-fn sampleEquirect(dir: vec3<f32>) -> vec3<f32> {
+fn sampleEquirect(dir: vec3<f32>, mip: f32) -> vec3<f32> {
     // three.js / GL convention: u = atan2(z, x) / (2π) + 0.5; v = asin(y) / π + 0.5
     let uPhi = atan2(dir.z, dir.x) * 0.15915494 + 0.5;
     let vTheta = asin(clamp(dir.y, -1.0, 1.0)) * 0.31830989 + 0.5;
-    return textureSampleLevel(srcTex, srcSampler, vec2<f32>(uPhi, vTheta), 0.0).rgb;
+    return textureSampleLevel(srcTex, srcSampler, vec2<f32>(uPhi, vTheta), mip).rgb;
+}
+
+fn ggxD(NdotH: f32, roughness: f32) -> f32 {
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let d = (NdotH * NdotH) * (a2 - 1.0) + 1.0;
+    return a2 / (3.14159265359 * d * d);
 }
 
 struct V {
@@ -95,8 +102,20 @@ struct V {
 
     // For roughness = 0 (mip 0 won't call this, but guard), return source directly.
     if (u.roughness <= 0.0) {
-        return vec4<f32>(sampleEquirect(N), 1.0);
+        return vec4<f32>(sampleEquirect(N, 0.0), 1.0);
     }
+
+    // Colbert/Krivanek mip-biased importance sampling (mirrors GLPMREM): each
+    // GGX sample reads the source at a mip whose texels cover ~the sample's
+    // solid angle, so a small ultra-bright sun is pre-averaged into its
+    // neighbourhood instead of being hit (or MISSED) by a handful of discrete
+    // samples. Sampling only mip 0 systematically lost the sun's irradiance —
+    // env-lit floors read ~2x darker than GL on sunny HDRs.
+    let srcDim = vec2<f32>(textureDimensions(srcTex, 0u));
+    let saTexel = 4.0 * 3.14159265359 / (srcDim.x * srcDim.y);
+    let maxSrcMip = f32(textureNumLevels(srcTex) - 1u);
+    // Same source-relative streak floor as GL: roughness=1 reads the ~16x8 mip.
+    let roughFloor = u.roughness * max(log2(srcDim.x) - 4.0, 0.0);
 
     var accumColor = vec3<f32>(0.0);
     var accumWeight = 0.0;
@@ -106,10 +125,15 @@ struct V {
         let L = normalize(-N + 2.0 * dot(N, H) * H);
         let NdotL = max(dot(N, L), 0.0);
         if (NdotL > 0.0) {
+            let NdotH = max(dot(N, H), 0.0);
+            let pdf = ggxD(NdotH, u.roughness) * 0.25 + 1e-4;  // V=N -> VdotH=NdotH
+            let saSample = 1.0 / (f32(u.numSamples) * pdf);
+            var mip = 0.5 * log2(saSample / saTexel);
+            mip = clamp(max(mip, roughFloor), 0.0, maxSrcMip);
             // Clamp per-channel to suppress firefly / pixelation from ultra-bright HDR pixels
             // (sun disk, specular highlights). Per-channel min also handles Inf values in the
             // source — which occur in RGBE loaders when the exponent overflows float range.
-            let s = min(sampleEquirect(L), vec3<f32>(50.0));
+            let s = min(sampleEquirect(L, mip), vec3<f32>(50.0));
             accumColor = accumColor + s * NdotL;
             accumWeight = accumWeight + NdotL;
         }
@@ -152,7 +176,8 @@ struct V {
     WGPUSamplerDescriptor sd{};
     sd.magFilter    = WGPUFilterMode_Linear;
     sd.minFilter    = WGPUFilterMode_Linear;
-    sd.mipmapFilter = WGPUMipmapFilterMode_Nearest;
+    // Trilinear: the Colbert mip-biased sampling computes fractional source LODs.
+    sd.mipmapFilter = WGPUMipmapFilterMode_Linear;
     sd.addressModeU = WGPUAddressMode_Repeat;
     sd.addressModeV = WGPUAddressMode_ClampToEdge;
     sd.lodMaxClamp = 32.0f;
@@ -186,26 +211,65 @@ struct V {
     pipelineFormat_ = format;
 }
 
-void WgpuPMREM::prefilter2D(WGPUTexture texture, uint32_t /*width*/, uint32_t /*height*/,
+void WgpuPMREM::prefilter2D(WGPUTexture texture, uint32_t width, uint32_t height,
                             uint32_t mipLevels, WGPUTextureFormat format) {
     if (mipLevels <= 1) return;
     ensurePipeline(format);
 
-    // Source view: mip 0 only, so the texture isn't both read + write for overlapping subresources.
-    WGPUTextureViewDescriptor srcVd{};
-    srcVd.dimension      = WGPUTextureViewDimension_2D;
-    srcVd.baseMipLevel   = 0;
-    srcVd.mipLevelCount  = 1;
-    srcVd.baseArrayLayer = 0;
-    srcVd.arrayLayerCount = 1;
-    srcVd.aspect         = WGPUTextureAspect_All;
-    WGPUTextureView srcView = wgpuTextureCreateView(texture, &srcVd);
+    // roughness reaches 1.0 at the last mip that still has angular resolution
+    // (>= 32x16, i.e. floor(log2(W)) - 5), NOT at the tail of the chain: a 1x1
+    // mip is one convolved direction sprayed onto every normal, which flattens
+    // the diffuse IBL E(n) to a direction-independent constant (caught by the
+    // top-lit furnace test — floors read horizon irradiance instead of
+    // bright-sky-up). Must match maxMip in WgpuShaders.cpp's env sampling.
+    uint32_t log2W = 0;
+    for (uint32_t w = width; w > 1; w >>= 1) ++log2W;
+    const uint32_t lastUseful = log2W > 5 ? std::min(log2W - 5, mipLevels - 1) : 0;
+
+    // Snapshot the (box-mipped) source pyramid into a temp texture: the
+    // mip-biased sampling reads arbitrary source mips while the passes below
+    // overwrite mips 1..N-1 of the live texture, and a subresource can't be
+    // both sampled and rendered to. flushPendingMipmaps runs the box-mip
+    // generator before calling us, so the temp carries a full pyramid.
+    WGPUTextureDescriptor tmpDesc{};
+    tmpDesc.label = WGPUStringView{"pmrem_src_snapshot", WGPU_STRLEN};
+    tmpDesc.size = {width, height, 1};
+    tmpDesc.mipLevelCount = mipLevels;
+    tmpDesc.sampleCount = 1;
+    tmpDesc.dimension = WGPUTextureDimension_2D;
+    tmpDesc.format = format;
+    tmpDesc.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
+    WGPUTexture tmpTex = wgpuDeviceCreateTexture(state_.device, &tmpDesc);
 
     WGPUCommandEncoderDescriptor ceDesc{};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(state_.device, &ceDesc);
 
+    for (uint32_t level = 0; level < mipLevels; ++level) {
+        WGPUTexelCopyTextureInfo src{};
+        src.texture = texture;
+        src.mipLevel = level;
+        WGPUTexelCopyTextureInfo dst{};
+        dst.texture = tmpTex;
+        dst.mipLevel = level;
+        WGPUExtent3D extent{std::max(1u, width >> level), std::max(1u, height >> level), 1};
+        wgpuCommandEncoderCopyTextureToTexture(encoder, &src, &dst, &extent);
+    }
+
+    WGPUTextureViewDescriptor srcVd{};
+    srcVd.dimension      = WGPUTextureViewDimension_2D;
+    srcVd.baseMipLevel   = 0;
+    srcVd.mipLevelCount  = mipLevels;
+    srcVd.baseArrayLayer = 0;
+    srcVd.arrayLayerCount = 1;
+    srcVd.aspect         = WGPUTextureAspect_All;
+    WGPUTextureView srcView = wgpuTextureCreateView(tmpTex, &srcVd);
+
     for (uint32_t level = 1; level < mipLevels; ++level) {
-        const float roughness = static_cast<float>(level) / static_cast<float>(mipLevels - 1);
+        // Levels past lastUseful repeat roughness 1 so any LOD overshoot or
+        // trilinear tail stays consistent with the irradiance level.
+        const float roughness = lastUseful > 0
+                                        ? std::min(1.f, static_cast<float>(level) / static_cast<float>(lastUseful))
+                                        : 1.f;
         // Fewer samples for very rough mips (they average over a wide lobe anyway).
         const uint32_t samples = roughness < 0.5f ? 256u : 128u;
 
@@ -270,4 +334,5 @@ void WgpuPMREM::prefilter2D(WGPUTexture texture, uint32_t /*width*/, uint32_t /*
     wgpuCommandEncoderRelease(encoder);
 
     wgpuTextureViewRelease(srcView);
+    wgpuTextureRelease(tmpTex);
 }
