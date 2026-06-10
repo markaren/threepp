@@ -228,7 +228,8 @@ For local development against a working copy of the assets, configure with
 
 An example is provided [here](tests/threepp_fetchcontent_test). <br>
 
-See also [this demo](https://github.com/markaren/threepp_wxwidgets), which additionally uses [WxWidgets](https://wxwidgets.org/) as the Window system.
+See also [this demo](https://github.com/markaren/threepp_wxwidgets), 
+which additionally uses [WxWidgets](https://wxwidgets.org/) as the Window system.
 
 ### Using Conan
 
