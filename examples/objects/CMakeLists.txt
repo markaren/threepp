@@ -2,9 +2,6 @@
 add_example(NAME "instancing" LINK_IMGUI WEB WEB_EMBED
         "${THREEPP_DATA_DIR}/fonts@data/fonts"
 )
-if (TARGET "instancing")
-    target_include_directories("instancing" PRIVATE "${PROJECT_SOURCE_DIR}/examples/libs")
-endif ()
 
 add_example(NAME "sprite" WEB WEB_EMBED
         "${THREEPP_DATA_DIR}/textures/sprite0.png@data/textures/"

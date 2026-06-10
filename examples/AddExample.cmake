@@ -28,6 +28,7 @@ function(add_example)
     endif ()
 
     target_link_libraries("${arg_NAME}" PRIVATE threepp)
+    target_include_directories("${arg_NAME}" PRIVATE "${PROJECT_SOURCE_DIR}/examples/libs")
 
     if (arg_LINK_IMGUI)
         target_link_libraries("${arg_NAME}" PRIVATE imgui::imgui)
