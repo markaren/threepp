@@ -259,6 +259,82 @@ float IBLSheenBRDF(float dotNV, float roughness) {
     return clamp(DG / PI, 0.0, 1.0);
 }
 
+// ── Thin-film iridescence (KHR_materials_iridescence, Belcour & Barla 2017) —
+// verbatim from shade_common.glsl so the deferred (RasterFirst) iridescence
+// matches the path-traced (ReferencePT) result. The deferred base BRDF omitted
+// this, so soap-film / oil-slick / nacre F0 read as plain dielectric. Modulates
+// dielectric F0 with wavelength-dependent thin-film interference; the lobe shape
+// (GGX) is unchanged, only the Fresnel base shifts per channel.
+vec3 iridFresnel0ToIor(vec3 F0) {
+    vec3 sqrtF0 = sqrt(F0);
+    return (vec3(1.0) + sqrtF0) / (vec3(1.0) - sqrtF0);
+}
+vec3 iridIorToFresnel0_v(vec3 transmittedIor, float incidentIor) {
+    return pow((transmittedIor - vec3(incidentIor)) / (transmittedIor + vec3(incidentIor)), vec3(2.0));
+}
+float iridIorToFresnel0_s(float transmittedIor, float incidentIor) {
+    return pow((transmittedIor - incidentIor) / (transmittedIor + incidentIor), 2.0);
+}
+vec3 iridSensitivity(float OPD, vec3 shift) {
+    float phase = 2.0 * PI * OPD * 1.0e-9;
+    vec3 val = vec3(5.4856e-13, 4.4201e-13, 5.2481e-13);
+    vec3 pos = vec3(1.6810e+06, 1.7953e+06, 2.2084e+06);
+    vec3 vr  = vec3(4.3278e+09, 9.3046e+09, 6.6121e+09);
+    vec3 xyz = val * sqrt(2.0 * PI * vr) * cos(pos * phase + shift) * exp(-(phase*phase) * vr);
+    xyz.x   += 9.7470e-14 * sqrt(2.0 * PI * 4.5282e+09) * cos(2.2399e+06 * phase + shift.x) * exp(-4.5282e+09 * (phase*phase));
+    xyz     /= 1.0685e-7;
+    // XYZ → linear sRGB (D65)
+    mat3 XYZ_TO_REC709 = mat3(
+         3.2404542, -0.9692660,  0.0556434,
+        -1.5371385,  1.8760108, -0.2040259,
+        -0.4985314,  0.0415560,  1.0572252);
+    return XYZ_TO_REC709 * xyz;
+}
+vec3 evalIridescence(float outsideIOR, float eta2, float cosTheta1,
+                     float thinFilmThickness, vec3 baseF0) {
+    // Force iridescenceIOR -> outsideIOR when thinFilmThickness == 0 → reduces to base F0.
+    float iridescenceIor = mix(outsideIOR, eta2, smoothstep(0.0, 0.03, thinFilmThickness));
+    // Snell to the angle inside the film.
+    float sinTheta2Sq = (outsideIOR / iridescenceIor) * (outsideIOR / iridescenceIor) *
+                       (1.0 - cosTheta1 * cosTheta1);
+    float cosTheta2Sq = 1.0 - sinTheta2Sq;
+    if (cosTheta2Sq < 0.0) return vec3(1.0);// total internal reflection at the film top
+    float cosTheta2 = sqrt(cosTheta2Sq);
+    // First interface (above the film).
+    float R0   = iridIorToFresnel0_s(iridescenceIor, outsideIOR);
+    float R12  = R0 + (1.0 - R0) * pow(1.0 - cosTheta1, 5.0);
+    float T121 = 1.0 - R12;
+    float phi12 = 0.0;
+    if (iridescenceIor < outsideIOR) phi12 = PI;
+    float phi21 = PI - phi12;
+    // Second interface (substrate). Recover the substrate's IOR from baseF0.
+    vec3 baseIOR = iridFresnel0ToIor(clamp(baseF0, vec3(0.0), vec3(0.9999)));
+    vec3 R1      = iridIorToFresnel0_v(baseIOR, iridescenceIor);
+    vec3 R23     = R1 + (vec3(1.0) - R1) * pow(1.0 - cosTheta2, 5.0);
+    vec3 phi23   = vec3(0.0);
+    if (baseIOR.x < iridescenceIor) phi23.x = PI;
+    if (baseIOR.y < iridescenceIor) phi23.y = PI;
+    if (baseIOR.z < iridescenceIor) phi23.z = PI;
+    // Optical path difference and phase.
+    float OPD     = 2.0 * iridescenceIor * thinFilmThickness * cosTheta2;
+    vec3  phi     = vec3(phi21) + phi23;
+    // Compound reflectance — exact formulas from Belcour 2017 §3.
+    vec3  R123    = clamp(R12 * R23, vec3(1e-5), vec3(0.9999));
+    vec3  r123    = sqrt(R123);
+    vec3  Rs      = (T121 * T121) * R23 / (vec3(1.0) - R123);
+    // First-order Fourier (m=0) — base reflectance.
+    vec3 C0 = R12 + Rs;
+    vec3 I  = C0;
+    // Higher-order Fourier terms: spectral cosine integrals (m=1,2).
+    vec3 Cm = Rs - T121;
+    for (int m = 1; m <= 2; ++m) {
+        Cm     *= r123;
+        vec3 Sm = 2.0 * iridSensitivity(float(m) * OPD, float(m) * phi);
+        I      += Cm * Sm;
+    }
+    return max(I, vec3(0.0));
+}
+
 // Interpolated UV at a hit (lean — UV only, for the alpha-tested shadow test).
 // Mirrors fetchHit's index + barycentric interpolation.
 vec2 fetchUvAt(int instIdx, int primId, vec2 bary) {
@@ -982,10 +1058,18 @@ float rectFormFactor(vec3 N, vec3 P, vec3 c0, vec3 c1, vec3 c2, vec3 c3) {
 vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
                         float metalness, vec3 emissive, bool doShadows, vec3 diffuseIndirect,
                         vec3 sheenColor, float sheenRoughness,
-                        float specularIntensity, vec3 specularColor, inout uint seed,
-                        bool addEmissive) {
+                        float specularIntensity, vec3 specularColor,
+                        float iridescence, float iridescenceIOR, float iridescenceThicknessNm,
+                        inout uint seed, bool addEmissive) {
     const float NdotV = max(dot(N, V), 1e-4);
-    const vec3  F0           = mix(vec3(0.04) * specularIntensity * specularColor, albedo, metalness);
+    vec3        F0           = mix(vec3(0.04) * specularIntensity * specularColor, albedo, metalness);
+    // Thin-film iridescence (KHR_materials_iridescence) — shift the Fresnel base
+    // before any lobe uses it so the direct analytic lighting matches the path
+    // tracer. Skipped when factor == 0 (non-iridescent surfaces pay only the branch).
+    if (iridescence > 0.0) {
+        const vec3 irid = evalIridescence(1.0, iridescenceIOR, NdotV, iridescenceThicknessNm, F0);
+        F0 = mix(F0, irid, iridescence);
+    }
     const vec3  diffuseColor = albedo * (1.0 - metalness);
     const float k            = (roughness + 1.0) * (roughness + 1.0) / 8.0;
     const vec3  shadowOrig   = P + N * SHADOW_EPS;
@@ -1320,7 +1404,8 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                                               hEmissive * gReflEmitterScale,
                                               doShadows, hitDiffInd,
                                               hm.sheenColor, hm.sheenRoughness,
-                                              hm.specularIntensity, hm.specularColor, seed,
+                                              hm.specularIntensity, hm.specularColor,
+                                              hm.iridescence, hm.iridescenceIOR, hm.iridescenceThicknessNm, seed,
                                               /*addEmissive=*/true);// reflected hit: no per-pixel reservoir → coherent emissiveNEE
 
         const float hitNdotV = max(dot(hitN, hitV), 1e-4);
@@ -1598,8 +1683,9 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
                 const vec3  foamLit  = shadeDiffuseDirect(P, N, V, foamCol, foamRough, 0.0,
                                                           vec3(0.0), doShadows, foamDiff,
                                                           vec3(0.0), 0.0,
-                                                          1.0, vec3(1.0), seed,
-                                                          /*addEmissive=*/true);
+                                                          1.0, vec3(1.0),
+                                                          0.0, 1.3, 0.0, seed,
+                                                          /*addEmissive=*/true);// foam: no iridescence
                 col = mix(col, foamLit, foamMask);
             }
         }
@@ -1992,7 +2078,16 @@ void main() {
     }
 
     const float NdotV = max(dot(N, V), 1e-4);
-    const vec3  F0    = mix(vec3(0.04) * pm.specularIntensity * pm.specularColor, albedo, metalness);
+    vec3        F0    = mix(vec3(0.04) * pm.specularIntensity * pm.specularColor, albedo, metalness);
+    // Thin-film iridescence (KHR_materials_iridescence). Modulates F0 with the
+    // wavelength-dependent interference colour; lobe shape (GGX) is unchanged.
+    // Mirrors closest_hit.rchit so the raster-first base matches the path tracer.
+    // Skipped when factor == 0 → non-iridescent surfaces pay only the branch.
+    if (pm.iridescence > 0.0) {
+        const vec3 irid = evalIridescence(1.0, pm.iridescenceIOR, NdotV,
+                                          pm.iridescenceThicknessNm, F0);
+        F0 = mix(F0, irid, pm.iridescence);
+    }
     const vec3  shadowOrig = worldPos + N * SHADOW_EPS;
 
     // Demodulated (binding 16, accumulated + denoised) vs INLINE diffuse indirect.
@@ -2057,8 +2152,7 @@ void main() {
     // (denoise-off) path. restirEmissiveDI also persists this pixel's reservoir.
     if ((pc.flags & 8u) != 0u) {
         const float rNdotV = max(dot(N, V), 1e-4);
-        const vec3  rF0    = mix(vec3(0.04) * pm.specularIntensity * pm.specularColor, albedo, metalness);
-        diffInd += restirEmissiveDI(worldPos, N, rNdotV, rF0, shadowsOn);
+        diffInd += restirEmissiveDI(worldPos, N, rNdotV, F0, shadowsOn);// F0 already iridescence-modulated
     }
     const vec3 diffIndShade = demodIndirect ? vec3(0.0) : diffInd;
 
@@ -2066,7 +2160,8 @@ void main() {
     vec3 lit = shadeDiffuseDirect(worldPos, N, V, albedo, roughness, metalness,
                                   emissive, shadowsOn, diffIndShade,
                                   pm.sheenColor, pm.sheenRoughness,
-                                  pm.specularIntensity, pm.specularColor, seed,
+                                  pm.specularIntensity, pm.specularColor,
+                                  pm.iridescence, pm.iridescenceIOR, pm.iridescenceThicknessNm, seed,
                                   /*addEmissive=*/((pc.flags & 8u) == 0u));// ReSTIR on → emissive via main()/diffInd; off → coherent emissiveNEE here
 
     // Sharp surfaces trace the exact mirror ray; glossy surfaces GGX-importance-
