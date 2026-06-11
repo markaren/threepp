@@ -17,12 +17,14 @@ std::shared_ptr<Texture> RGBELoader::load(const std::filesystem::path& path, boo
         return nullptr;
     }
 
-    stbi_set_flip_vertically_on_load(flipY);
-
     int width{}, height{}, channels{};
     // stbi_loadf decodes RGBE encoding internally and returns linear float RGB(A).
     // Request 3 channels from stbi — then pad to RGBA ourselves.
     // WebGPU has no rgb32float format; GL also handles rgba32f more reliably.
+    // Flip manually instead of via stbi_set_flip_vertically_on_load: that flag
+    // is process-global and leaked into every later stbi decode (glTF embedded
+    // textures came back upside-down once any HDR had loaded with flipY=true —
+    // previously masked because ImageLoader re-set the global on every call).
     float* pixels = stbi_loadf(path.string().c_str(), &width, &height, &channels, 3);
 
     if (!pixels) {
@@ -32,11 +34,16 @@ std::shared_ptr<Texture> RGBELoader::load(const std::filesystem::path& path, boo
 
     const int nPixels = width * height;
     std::vector<float> data(nPixels * 4);
-    for (int i = 0; i < nPixels; ++i) {
-        data[4 * i + 0] = pixels[3 * i + 0];
-        data[4 * i + 1] = pixels[3 * i + 1];
-        data[4 * i + 2] = pixels[3 * i + 2];
-        data[4 * i + 3] = 1.0f;
+    for (int y = 0; y < height; ++y) {
+        const int srcY = flipY ? (height - 1 - y) : y;
+        for (int x = 0; x < width; ++x) {
+            const int dst = (y * width + x) * 4;
+            const int src = (srcY * width + x) * 3;
+            data[dst + 0] = pixels[src + 0];
+            data[dst + 1] = pixels[src + 1];
+            data[dst + 2] = pixels[src + 2];
+            data[dst + 3] = 1.0f;
+        }
     }
     stbi_image_free(pixels);
 
