@@ -2223,11 +2223,36 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         if (useSurface) frame_.hasRendered = true;
     }
 
+    // Finish and submit the deferred per-frame encoder, if any. Used before
+    // recycling pooled buffers and before readbacks — encoded-but-unsubmitted
+    // passes hold references to pooled buffers, and queue writes from later
+    // acquire() calls execute ahead of any later submit, so the pass would
+    // read the overwritten data.
+    void submitPendingEncoder(const char* label) {
+        if (!renderEncoder_) return;
+        WGPUCommandBufferDescriptor cbd{};
+        cbd.label = WGPUStringView{label, WGPU_STRLEN};
+        WGPUCommandBuffer cb = wgpuCommandEncoderFinish(renderEncoder_, &cbd);
+        wgpuQueueSubmit(queue, 1, &cb);
+        wgpuCommandBufferRelease(cb);
+        wgpuCommandEncoderRelease(renderEncoder_);
+        renderEncoder_ = nullptr;
+    }
+
     void render(Object3D& scene, Camera& camera) {
         if (!initialized) return;
 
         if (!frame_.active) {
-            // New frame — recycle per-draw buffers and evict stale bind groups
+            // New frame — recycle per-draw buffers and evict stale bind groups.
+            // !frame_.active is also true for render-to-target calls that
+            // precede the first surface render of a frame (sensor scans,
+            // mirror passes), so passes from a previous render() may still
+            // sit unsubmitted on the deferred encoder while referencing
+            // pooled buffers. Submit them first or the recycle hands their
+            // buffers to this render's acquires, which silently overwrite
+            // them before the shared submit (frozen DepthSensor readbacks
+            // on WebGPU were exactly this).
+            submitPendingEncoder("pre_recycle_flush");
             bufferPool->beginFrame();
             bindGroupCache->beginFrame();
         }
@@ -4200,15 +4225,7 @@ std::vector<unsigned char> WgpuRenderer::readRGBPixels() {
     // called via the canvas frame-end callback, so the command encoder may still
     // be pending. Submit it now so the GPU has finished writing the texture before
     // the readback copy encoder runs.
-    if (pimpl_->renderEncoder_ && !pimpl_->frame_.active) {
-        WGPUCommandBufferDescriptor cbd{};
-        cbd.label = WGPUStringView{"rt_flush", sizeof("rt_flush") - 1};
-        WGPUCommandBuffer cb = wgpuCommandEncoderFinish(pimpl_->renderEncoder_, &cbd);
-        wgpuQueueSubmit(pimpl_->queue, 1, &cb);
-        wgpuCommandBufferRelease(cb);
-        wgpuCommandEncoderRelease(pimpl_->renderEncoder_);
-        pimpl_->renderEncoder_ = nullptr;
-    }
+    pimpl_->submitPendingEncoder("rt_flush");
 
     auto& rt = pimpl_->renderTargets->getOrCreate(pimpl_->currentRenderTarget_, pimpl_->sampleCount_);
     return wgpu::readRGBPixels(pimpl_->device, pimpl_->queue, rt.colorTexture, rt.width, rt.height);
@@ -4449,16 +4466,10 @@ void WgpuRenderer::copyTextureToImage(Texture& texture) {
     // Flush any deferred render commands first: the source is typically a render
     // target that was just rendered into, and those passes live on the pending
     // per-frame encoder. Without this the readback copies stale/uninitialised
-    // contents. (Mirrors readRGBPixels.)
-    if (pimpl_->renderEncoder_ && !pimpl_->frame_.active) {
-        WGPUCommandBufferDescriptor cbd{};
-        cbd.label = WGPUStringView{"copytex_flush", sizeof("copytex_flush") - 1};
-        WGPUCommandBuffer cb = wgpuCommandEncoderFinish(pimpl_->renderEncoder_, &cbd);
-        wgpuQueueSubmit(pimpl_->queue, 1, &cb);
-        wgpuCommandBufferRelease(cb);
-        wgpuCommandEncoderRelease(pimpl_->renderEncoder_);
-        pimpl_->renderEncoder_ = nullptr;
-    }
+    // contents. Submitting mid-frame is fine — the encoder only ever holds
+    // complete passes, and endFrame() lazily creates a fresh one for the
+    // tone-map blit / overlay. (Mirrors readRGBPixels.)
+    pimpl_->submitPendingEncoder("copytex_flush");
 
     // Resolve the source GPU texture + dimensions. Render-target textures live in
     // the render-target cache (not the user-texture cache), so check there first —
