@@ -32,6 +32,7 @@
 #include "vulkan/PhotonCaustics.hpp"
 #include "vulkan/SkinningPipeline.hpp"
 #include "vulkan/TetSkinningPipeline.hpp"
+#include "vulkan/GpuTimings.hpp"
 #include "vulkan/TaaResolve.hpp"
 #include "vulkan/BloomPass.hpp"
 #include "vulkan/DeferredShade.hpp"
@@ -140,6 +141,14 @@ namespace threepp {
     using vulkan::destroyBuffer;
     using vulkan::createAsScratchBuffer;
     using vulkan::destroyImage2D;
+    using vulkan::TimingPass;
+    using vulkan::TP_RasterGbuf;
+    using vulkan::TP_OverlayDepth;
+    using vulkan::TP_PhotonEmit;
+    using vulkan::TP_PathTrace;
+    using vulkan::TP_Denoise;
+    using vulkan::TP_TAA;
+    using vulkan::TP_OverlayDraw;
 
     namespace {
         // Frames-in-flight depth. Bumped from 2 → 3 to deepen CPU/GPU
@@ -1504,38 +1513,14 @@ namespace threepp {
         }
 
         // ── Per-frame timing instrumentation ─────────────────────────────
-        // GPU timestamps via VkQueryPool (one pool per frame-in-flight).
-        // Each pool has 2 slots per pass (begin / end). After the fence
-        // wait at the top of renderFrame, the previous use of this slot's
-        // pool has retired, so vkGetQueryPoolResults reads the last frame's
-        // values. We translate ticks → ms using
-        // VkPhysicalDeviceLimits::timestampPeriod.
-        //
-        // timingMaskRecorded_ tracks which passes wrote both endpoints last
-        // frame so we don't read undefined slots from skipped passes
-        // (photon emit on no-glass frames, overlay depth on no-overlay
-        // frames, etc.).
-        enum TimingPass : uint32_t {
-            TP_RasterGbuf    = 0,
-            TP_OverlayDepth  = 1,
-            TP_PhotonEmit    = 2,
-            TP_PathTrace     = 3,
-            TP_Denoise       = 4,
-            TP_TAA           = 5,
-            TP_OverlayDraw   = 6,
-            TP_COUNT         = 7,
-        };
-        static constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
-        std::array<VkQueryPool, kFramesInFlight> timestampPools{};
-        std::array<uint32_t, kFramesInFlight> timingMaskRecorded_{};
-        float    timestampPeriodNs_ = 1.0f;
-        bool     timingsSupported_  = false;
-        VulkanRenderer::FrameTimings lastFrameTimings_{};
-        std::chrono::high_resolution_clock::time_point recordStartTp_{};
+        // Managed by vulkan/GpuTimings.{hpp,cpp}. Owns one VkQueryPool per
+        // frame-in-flight; exposes begin/end brackets per TimingPass plus CPU
+        // record/frame timing. Constructed in the Impl ctor, after ctx is
+        // available.
+        std::unique_ptr<vulkan::GpuTimings> gpuTimings_;
         // Set by VulkanRenderer::render(...) right after ensureSceneBuilt
-        // and consumed by readBackTimingsFromPriorUse on the next frame's
-        // fence wait so the public getter sees the same frame's CPU + GPU
-        // numbers.
+        // and consumed by gpuTimings_->readBack() on the next frame's fence
+        // wait so the public getter sees the same frame's CPU + GPU numbers.
         float    pendingCpuEnsureSceneMs_ = 0.f;
         // ReSTIR DI master toggle. When false, chit's primary RIS branch is
         // bypassed and the legacy per-light NEE classic loops run instead
@@ -1774,7 +1759,7 @@ namespace threepp {
             rewriteTaaDescriptors();// after ensureHybridResources gave us raster gbuf views
             rewriteBloomDescriptors();// bloom composite reads gbuf + writes the TAA input
             rewriteDeferredDescriptors();// raster-first deferred shade inputs
-            createTimestampPools();// per-frame VkQueryPool for the timings API
+            gpuTimings_ = std::make_unique<vulkan::GpuTimings>(*ctx, kFramesInFlight);
         }
 
         ~Impl() {
@@ -1796,7 +1781,7 @@ namespace threepp {
             for (auto s : renderFinished) if (s) vkDestroySemaphore(d, s, nullptr);
             for (auto f : inFlight) if (f) vkDestroyFence(d, f, nullptr);
             if (cmdPool) vkDestroyCommandPool(d, cmdPool, nullptr);
-            for (auto p : timestampPools) if (p) vkDestroyQueryPool(d, p, nullptr);
+            gpuTimings_.reset();// query pool destruction while device is still valid
 
             if (descriptorPool) vkDestroyDescriptorPool(d, descriptorPool, nullptr);
 
@@ -11567,96 +11552,6 @@ namespace threepp {
             callRegion = {};
         }
 
-        // Allocate one VkQueryPool per frame-in-flight, each sized for the
-        // begin/end pair of every TimingPass. We probe device support up
-        // front; on the (rare) device without timestampComputeAndGraphics
-        // we skip pool creation and lastFrameTimings_ stays at zero — the
-        // helpers below short-circuit when the pool handle is null.
-        void createTimestampPools() {
-            VkPhysicalDeviceProperties props{};
-            vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
-            timestampPeriodNs_ = props.limits.timestampPeriod;
-            timingsSupported_  = (timestampPeriodNs_ > 0.f) &&
-                                 (props.limits.timestampComputeAndGraphics != 0u);
-            if (!timingsSupported_) return;
-            VkQueryPoolCreateInfo qpci{};
-            qpci.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-            qpci.queryType  = VK_QUERY_TYPE_TIMESTAMP;
-            qpci.queryCount = kTimingSlots;
-            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                check(vkCreateQueryPool(ctx->device(), &qpci, nullptr,
-                                        &timestampPools[f]),
-                      "vkCreateQueryPool(timing)");
-            }
-        }
-
-        // Bracket helpers — write a timestamp at BOTTOM_OF_PIPE (= once all
-        // prior commands have finished). Marking the pass bit lets readback
-        // skip pairs that didn't run this frame (photon emit when glass not
-        // visible, overlay passes when no overlay objects are visible, etc.).
-        void timingBegin(VkCommandBuffer cb, TimingPass p) {
-            if (!timingsSupported_) return;
-            vkCmdWriteTimestamp2(cb,
-                                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                                 timestampPools[currentFrame],
-                                 p * 2u);
-            timingMaskRecorded_[currentFrame] |= (1u << p);
-        }
-        void timingEnd(VkCommandBuffer cb, TimingPass p) {
-            if (!timingsSupported_) return;
-            vkCmdWriteTimestamp2(cb,
-                                 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                                 timestampPools[currentFrame],
-                                 p * 2u + 1u);
-        }
-
-        // Read back the timestamps written into THIS frame's pool by the
-        // previous render that used the same slot. Safe to call after the
-        // inFlight[currentFrame] fence has signaled — the GPU has retired
-        // every command that wrote into this pool.
-        //
-        // We read pairs individually (not in one bulk fetch) because slots
-        // for passes that didn't run this cycle are RESET but never WRITTEN,
-        // and VK_QUERY_RESULT_WAIT_BIT on a reset query blocks indefinitely.
-        // The recorded-mask tells us which pair endpoints were both written.
-        void readBackTimingsFromPriorUse() {
-            // Pre-populate CPU fields the caller can keep updated even if
-            // GPU timings aren't available.
-            lastFrameTimings_.cpuEnsureSceneMs = pendingCpuEnsureSceneMs_;
-            // Zero the GPU fields — only the passes that ran will overwrite.
-            lastFrameTimings_.rasterGbufMs = 0.f;
-            lastFrameTimings_.overlayMs    = 0.f;
-            lastFrameTimings_.photonEmitMs = 0.f;
-            lastFrameTimings_.pathTraceMs  = 0.f;
-            lastFrameTimings_.denoiseMs    = 0.f;
-            lastFrameTimings_.taaMs        = 0.f;
-            if (!timingsSupported_) return;
-            const uint32_t mask = timingMaskRecorded_[currentFrame];
-            if (mask == 0u) return;// first use of this slot
-            const float toMs = timestampPeriodNs_ * 1e-6f;
-            auto pairMs = [&](TimingPass p) -> float {
-                if ((mask & (1u << p)) == 0u) return 0.f;
-                std::array<uint64_t, 2> pair{};
-                const VkResult r = vkGetQueryPoolResults(
-                        ctx->device(), timestampPools[currentFrame],
-                        p * 2u, 2u,
-                        sizeof(pair), pair.data(),
-                        sizeof(uint64_t),
-                        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-                if (r != VK_SUCCESS) return 0.f;
-                if (pair[1] < pair[0]) return 0.f;
-                return float(pair[1] - pair[0]) * toMs;
-            };
-            lastFrameTimings_.rasterGbufMs = pairMs(TP_RasterGbuf);
-            // Overlay timings collapse the depth prepass + draw pair into
-            // a single "overlay" column for the public API.
-            lastFrameTimings_.overlayMs    = pairMs(TP_OverlayDepth) + pairMs(TP_OverlayDraw);
-            lastFrameTimings_.photonEmitMs = pairMs(TP_PhotonEmit);
-            lastFrameTimings_.pathTraceMs  = pairMs(TP_PathTrace);
-            lastFrameTimings_.denoiseMs    = pairMs(TP_Denoise);
-            lastFrameTimings_.taaMs        = pairMs(TP_TAA);
-        }
-
         void createDescriptorPool() {
             imageCount_ = static_cast<uint32_t>(ctx->swapchainImages().size());
             const uint32_t totalSets = imageCount_ * kFramesInFlight;
@@ -12841,9 +12736,9 @@ namespace threepp {
             // overlay on top (mirrors the PT path's overlay flow), then
             // present — bypassing the entire RT pipeline.
             if (rasterGbufPipeline != VK_NULL_HANDLE) {
-                timingBegin(cb, TP_RasterGbuf);
+                gpuTimings_->begin(cb, TP_RasterGbuf, currentFrame);
                 recordRasterGbufPass(cb, currentFrame);
-                timingEnd(cb, TP_RasterGbuf);
+                gpuTimings_->end(cb, TP_RasterGbuf, currentFrame);
                 // ── Overlay depth prepass ──────────────────────────────────
                 // Fills rasterGbufs[currentFrame].unjitDepth with the
                 // unjittered VP. Consumed by the post-TAA wireframe overlay
@@ -12851,7 +12746,7 @@ namespace threepp {
                 // pipeline exists AND the scene actually has overlay
                 // candidates this frame (else the prepass is wasted work).
                 if (overlayDepthPrepassPipeline != VK_NULL_HANDLE && sceneHasOverlayContent()) {
-                    timingBegin(cb, TP_OverlayDepth);
+                    gpuTimings_->begin(cb, TP_OverlayDepth, currentFrame);
                     // Swapchain extent — unjitDepth is full-res so the
                     // post-TAA overlay can depth-test the upscaled image.
                     const VkExtent2D dext = ctx->swapchainExtent();
@@ -12974,7 +12869,7 @@ namespace threepp {
                     depToRead.imageMemoryBarrierCount = 1;
                     depToRead.pImageMemoryBarriers = &toRead;
                     vkCmdPipelineBarrier2(cb, &depToRead);
-                    timingEnd(cb, TP_OverlayDepth);
+                    gpuTimings_->end(cb, TP_OverlayDepth, currentFrame);
                 }
                 if (hybridDebugView_ != HybridDebugView::Off) {
                     recordHybridDebugBlit(cb, imageIndex, currentFrame);
@@ -13064,11 +12959,7 @@ namespace threepp {
                         vkCmdPipelineBarrier2(cb, &depPresent);
                     }
                     check(vkEndCommandBuffer(cb), "vkEndCommandBuffer");
-                    {
-                        using namespace std::chrono;
-                        const auto dt = high_resolution_clock::now() - recordStartTp_;
-                        lastFrameTimings_.cpuRecordMs = duration<float, std::milli>(dt).count();
-                    }
+                    gpuTimings_->finishRecord();
                     return;
                 }
             }
@@ -13277,7 +13168,7 @@ namespace threepp {
                 photon_->recordZeroFillCounts(cb);
             }
             if (sceneHasGlass_ && glassVisibleThisFrame_) {
-                timingBegin(cb, TP_PhotonEmit);
+                gpuTimings_->begin(cb, TP_PhotonEmit, currentFrame);
                 // exposureBits hoisted above the mode branch.
                 const uint32_t motionFlagsPhoton =
                         (motionThisFrame_      ? 1u : 0u) |
@@ -13306,7 +13197,7 @@ namespace threepp {
                 push.v[11] = fireflyBitsPhoton;
                 push.v[12] = oceanFineBitsPhoton;
                 photon_->recordEmitPass(cb, descriptorSets[setIdx], push);
-                timingEnd(cb, TP_PhotonEmit);
+                gpuTimings_->end(cb, TP_PhotonEmit, currentFrame);
             }
             // ── End photon emit ─────────────────────────────────────────────────
 
@@ -13385,10 +13276,10 @@ namespace threepp {
                                0, sizeof(pc), pc);
 
             // (ext / ptExt hoisted above the mode branch.)
-            timingBegin(cb, TP_PathTrace);
+            gpuTimings_->begin(cb, TP_PathTrace, currentFrame);
             ctx->rt().cmdTraceRays(cb, &rtv.rgenRegion, &rtv.missRegion, &rtv.hitRegion,
                                    &callRegion, ptExt.width, ptExt.height, 1);
-            timingEnd(cb, TP_PathTrace);
+            gpuTimings_->end(cb, TP_PathTrace, currentFrame);
 
             // ── Spatial denoiser: 2-pass à-trous + finalize tonemap + sRGB ──────
             // RT writes accumImage + gbufImage; denoise pipeline reads them.
@@ -13396,13 +13287,13 @@ namespace threepp {
             // stripped). All ping-pong slots stay GENERAL throughout. The
             // RT_SHADER → COMPUTE_SHADER barrier is recorded inside
             // Denoiser::recordDispatch.
-            timingBegin(cb, TP_Denoise);
+            gpuTimings_->begin(cb, TP_Denoise, currentFrame);
             denoiser_->recordDispatch(cb, descriptorSets[setIdx], ptExt,
                                       denoiseEnabled_,
                                       static_cast<uint32_t>(toneMapping_),
                                       exposureBits,
                                       envIsBgColor);
-            timingEnd(cb, TP_Denoise);
+            gpuTimings_->end(cb, TP_Denoise, currentFrame);
             // ── End denoise ─────────────────────────────────────────────────────
 
             } else {
@@ -13440,7 +13331,7 @@ namespace threepp {
                     asdep.pMemoryBarriers = &asbar;
                     vkCmdPipelineBarrier2(cb, &asdep);
                 }
-                timingBegin(cb, TP_PathTrace);
+                gpuTimings_->begin(cb, TP_PathTrace, currentFrame);
                 deferredShade_->recordDispatch(cb, currentFrame,
                                                ptExt.width, ptExt.height,
                                                envImage.mipLevels, /*shadows=*/true,
@@ -13453,7 +13344,7 @@ namespace threepp {
                                                deferredVolDensity_, deferredVolAniso_,
                                                deferredStarIntensity_,
                                                deferredCamDeltaLen_, deferredCamRotAngle_);
-                timingEnd(cb, TP_PathTrace);// pathTraceMs = deferred SHADE only
+                gpuTimings_->end(cb, TP_PathTrace, currentFrame);// pathTraceMs = deferred SHADE only
                 // Spatial denoise of the demodulated diffuse-indirect + recombine.
                 // Barrier: the shade wrote sceneHdr + the indirect image (both
                 // GENERAL storage); the denoise reads the indirect 5×5 neighbourhood
@@ -13471,9 +13362,9 @@ namespace threepp {
                     denoiseDep.memoryBarrierCount = 1;
                     denoiseDep.pMemoryBarriers = &denoiseBar;
                     vkCmdPipelineBarrier2(cb, &denoiseDep);
-                    timingBegin(cb, TP_Denoise);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
+                    gpuTimings_->begin(cb, TP_Denoise, currentFrame);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
                     deferredShade_->recordDenoiseDispatch(cb, currentFrame, ptExt.width, ptExt.height);
-                    timingEnd(cb, TP_Denoise);
+                    gpuTimings_->end(cb, TP_Denoise, currentFrame);
                 }
             }
 
@@ -13499,13 +13390,13 @@ namespace threepp {
             // res history, reconstructing detail (no separate blit needed).
             // The spatial neighborhood clamp + motion-vec reproject smooths
             // per-frame Halton jitter shake on moving objects.
-            timingBegin(cb, TP_TAA);
+            gpuTimings_->begin(cb, TP_TAA, currentFrame);
             taa_->recordResolve(cb, currentFrame, imageIndex,
                                 ptExt.width, ptExt.height,
                                 ext.width, ext.height, taaBlendAlpha_,
                                 sharpenStrength_ > 0.0f, sharpenStrength_,
                                 taaSkyReproj_.data());
-            timingEnd(cb, TP_TAA);
+            gpuTimings_->end(cb, TP_TAA, currentFrame);
             // ── End raster TAA ─────────────────────────────────────────────────
 
             // ── Hybrid raster overlay pass ─────────────────────────────────────
@@ -13529,7 +13420,7 @@ namespace threepp {
                 const bool hasOverlay = sceneHasOverlayContent();
 
                 if (hasOverlay) {
-                    timingBegin(cb, TP_OverlayDraw);
+                    gpuTimings_->begin(cb, TP_OverlayDraw, currentFrame);
                     // Swapchain GENERAL → COLOR_ATTACHMENT_OPTIMAL. The
                     // overlay always composites onto the full-resolution
                     // swapchain — TAA wrote it directly (upscaling there if
@@ -13818,7 +13709,7 @@ namespace threepp {
                     dBack.imageMemoryBarrierCount = 1;
                     dBack.pImageMemoryBarriers = &toGeneral;
                     vkCmdPipelineBarrier2(cb, &dBack);
-                    timingEnd(cb, TP_OverlayDraw);
+                    gpuTimings_->end(cb, TP_OverlayDraw, currentFrame);
                 }
             }
             // ── End hybrid raster overlay pass ─────────────────────────────────
@@ -14228,20 +14119,10 @@ namespace threepp {
         // timestamp pool. Caller must have already acquired the swap image,
         // reset the fence, and reset the cmd buffer.
         void beginCommandRecording(VkCommandBuffer cb) {
-            recordStartTp_ = std::chrono::high_resolution_clock::now();
             VkCommandBufferBeginInfo bi{};
             bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer");
-
-            // Timing pool reset must run on the command stream (CPU-side
-            // vkResetQueryPool also works on 1.2+ but we keep the GPU-side
-            // reset for portability with older Vulkan toolchains). Clear
-            // the host-side recorded-mask in lockstep.
-            if (timingsSupported_ && timestampPools[currentFrame] != VK_NULL_HANDLE) {
-                vkCmdResetQueryPool(cb, timestampPools[currentFrame],
-                                    0, kTimingSlots);
-                timingMaskRecorded_[currentFrame] = 0u;
-            }
+            gpuTimings_->beginFrame(cb, currentFrame);
         }
 
         // Acquire next swapchain image, run all per-frame UBO / descriptor
@@ -14252,11 +14133,11 @@ namespace threepp {
         bool beginFrameForPT(Object3D& scene, Camera& camera) {
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
-            // Fence has signaled → the previous render that wrote into
-            // timestampPools[currentFrame] has retired. Read it now, before
-            // we reset the pool and re-record. Result lands in
-            // lastFrameTimings_ for the public getter to read.
-            readBackTimingsFromPriorUse();
+            // Fence has signaled → the previous render that wrote into this
+            // frame's query pool has retired. Read it now, before we reset
+            // the pool and re-record. Result is stored in gpuTimings_ for
+            // the public getter to read.
+            gpuTimings_->readBack(currentFrame, pendingCpuEnsureSceneMs_);
 
             // Apply any setter requests deferred from mid-frame. setRenderScale
             // / resetAccumulation issue vkDeviceWaitIdle + reallocate descriptor
@@ -14435,7 +14316,7 @@ namespace threepp {
         bool beginFrameOrthoOnly() {
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
-            readBackTimingsFromPriorUse();
+            gpuTimings_->readBack(currentFrame, pendingCpuEnsureSceneMs_);
 
             uint32_t imageIndex = 0;
             VkResult acq = vkAcquireNextImageKHR(d, ctx->swapchain(), UINT64_MAX,
@@ -14536,11 +14417,7 @@ namespace threepp {
 
             recordOverlayAndPresentTransition(cb, imageIndex);
             check(vkEndCommandBuffer(cb), "vkEndCommandBuffer");
-            {
-                using namespace std::chrono;
-                const auto dt = high_resolution_clock::now() - recordStartTp_;
-                lastFrameTimings_.cpuRecordMs = duration<float, std::milli>(dt).count();
-            }
+            gpuTimings_->finishRecord();
 
             VkSemaphoreSubmitInfo waitInfo{};
             waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
@@ -14697,10 +14574,10 @@ namespace threepp {
         // pipeline-compile cost on first toggle, then never again).
         pimpl_->ensureCurrentRtVariantBuilt();
         pimpl_->renderFrame(scene, camera);
-        pimpl_->lastFrameTimings_.cpuFrameMs =
+        pimpl_->gpuTimings_->setCpuFrameMs(
                 std::chrono::duration<float, std::milli>(
                         std::chrono::high_resolution_clock::now() - frameStart)
-                        .count();
+                        .count());
     }
 
     WindowSize VulkanRenderer::size() const { return pimpl_->size; }
@@ -15326,7 +15203,7 @@ namespace threepp {
     }
 
     VulkanRenderer::FrameTimings VulkanRenderer::lastFrameTimings() const {
-        return pimpl_->lastFrameTimings_;
+        return pimpl_->gpuTimings_->timings();
     }
 
     void VulkanRenderer::scanLidar(const std::vector<LidarBeam>& beams,
