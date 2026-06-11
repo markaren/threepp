@@ -41,6 +41,12 @@ namespace threepp {
         [[nodiscard]] WindowSize size() const override;
         void setSize(const std::pair<int, int>& size) override;
 
+        // The actual surface (swapchain) size in PIXELS. Differs from size()
+        // when the OS display scaling is not 100%: size() is the logical
+        // window size, this is what readRGBPixels()/writeFramebuffer()
+        // operate at. Use it for any pixel-space math on read-back frames.
+        [[nodiscard]] WindowSize framebufferSize() const;
+
         [[nodiscard]] float getTargetPixelRatio() const override;
         void setPixelRatio(float value) override;
 

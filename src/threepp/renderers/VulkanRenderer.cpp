@@ -14659,6 +14659,13 @@ namespace threepp {
 
     WindowSize VulkanRenderer::size() const { return pimpl_->size; }
 
+    WindowSize VulkanRenderer::framebufferSize() const {
+        auto* ctx = pimpl_->ctx.get();
+        if (!ctx || ctx->swapchainImages().empty()) return pimpl_->size;
+        const VkExtent2D ext = ctx->swapchainExtent();
+        return {static_cast<int>(ext.width), static_cast<int>(ext.height)};
+    }
+
     void VulkanRenderer::setSize(const std::pair<int, int>& s) {
         pimpl_->size = WindowSize{s.first, s.second};
         pimpl_->needsResize = true;
