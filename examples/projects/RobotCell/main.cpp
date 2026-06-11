@@ -15,17 +15,23 @@
 //     kinematic sphere rides the tool tip so the arm can nudge crates; the
 //     suction gripper carries a crate by switching its actor kinematic and
 //     driving it from the tool frame.
-//   * DepthSensor: eye-in-hand RGB-D-style depth camera on the flange,
-//     visualised as a live world-space point cloud + CameraHelper frustum.
+//   * DepthSensor: eye-in-hand depth camera on the flange. The point cloud is
+//     not decoration — it is the ONLY source of crate positions. The robot
+//     surveys the table from above, clusters the cloud into detections
+//     (centroid + measured top height), and picks from those. The controller
+//     never reads crate poses from the scene graph; its world knowledge is
+//     perception (the cloud), proprioception (its own FK), and the suction
+//     cup's vacuum-seal state. Turn the sensor off and the robot is blind.
 //   * SVG UI: HUD built from runtime-generated SVG (panels, LEDs, joint-range
 //     bars, buttons) + screen-space TextSprites, after examples/loaders/svg_ui.
 //
 // Interactions:
-//   click crate   pick it up and drop it in the bin (one-shot job)
-//   click floor   jog the tool to that spot (when idle)
-//   AUTO          keep clearing the table until no crates remain
-//   SPACE         spawn a crate on the infeed table
-//   G             toggle the suction gripper (manual)
+//   click  take manual control: jog the tool to hover just above the clicked
+//          point (disengages AUTO, like grabbing the wheel). With the tool
+//          over a crate, G seals the suction; jog elsewhere and G releases —
+//          full manual pick-and-place.
+//   AUTO   resume the perception loop: survey + clear the table
+//   SPACE  spawn a crate on the infeed table
 //
 // Coordinate conventions: world is metres, Y-up. The URDF is Z-up, so the
 // robot root is rotated -90 deg about X. The HUD ortho camera is (0,W,H,0),
@@ -47,12 +53,14 @@
 
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <iomanip>
 #include <iostream>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using namespace threepp;
@@ -80,6 +88,9 @@ namespace {
     constexpr float kTipLen = 0.10f;    // flange -> suction tip along tool Z
     constexpr float kHoverH = 0.16f;    // hover height above a crate
     constexpr float kGrabRadius = 0.09f;// suction engage distance
+    // survey pose: eye-in-hand sensor straight above the table centre, high
+    // enough that the 70-deg FOV covers the whole crate zone
+    const Vector3 kSurveyTip{kTableCenter.x, kTableTop + 0.45f, kTableCenter.z};
     constexpr float kTravelY = 0.52f;   // safe height for lateral traverses
     // Base-column keep-out: the top must sit ABOVE kTravelY, so table<->bin
     // traverses arc AROUND the pedestal instead of crossing directly over the
@@ -538,10 +549,94 @@ namespace {
     struct Crate {
         std::shared_ptr<Mesh> mesh;
         PxRigidDynamic* actor = nullptr;
-        bool placed = false; // dropped in the bin (or given up on)
     };
 
     constexpr std::array<int, 4> kCrateColors{0xff8c42, 0x47e07a, 0xb087f5, 0xffd166};
+
+    // ========================================================================
+    // perception: point cloud -> crate detections
+    // ========================================================================
+    // The controller's only source of crate positions. Points above the table
+    // surface inside the table footprint are binned into a 2 cm XZ grid and
+    // flood-filled into clusters; each cluster of sufficient support becomes a
+    // detection with an XZ centroid and a measured top height. Crates already
+    // dropped in the bin fall outside the table footprint and disappear from
+    // perception naturally — no bookkeeping flags.
+
+    struct Detection {
+        Vector3 center;// XZ centroid at measured top height
+        int support = 0;// contributing cloud points
+    };
+
+    std::vector<Detection> detectCrates(const std::vector<Vector3>& cloud) {
+
+        constexpr float cell = 0.02f;
+        constexpr float yMin = kTableTop + 0.02f;// above table-surface returns + noise
+        constexpr float yMax = kTableTop + 0.30f;// below the arm/tool
+        constexpr int kGrid = 64;// covers +-0.64 m around the table centre
+
+        struct CellAgg {
+            float sx = 0, sz = 0, top = 0;
+            int n = 0;
+            int cluster = -1;
+        };
+        std::unordered_map<int, CellAgg> cells;
+        const auto keyOf = [&](float x, float z) -> int {
+            const int ix = static_cast<int>(std::floor((x - kTableCenter.x) / cell)) + kGrid;
+            const int iz = static_cast<int>(std::floor((z - kTableCenter.z) / cell)) + kGrid;
+            if (ix < 0 || iz < 0 || ix >= 2 * kGrid || iz >= 2 * kGrid) return -1;
+            return ix * 2 * kGrid + iz;
+        };
+
+        for (const auto& p : cloud) {
+            if (p.y < yMin || p.y > yMax) continue;
+            if (std::abs(p.x - kTableCenter.x) > 0.27f || std::abs(p.z - kTableCenter.z) > 0.37f) continue;
+            const int key = keyOf(p.x, p.z);
+            if (key < 0) continue;
+            auto& c = cells[key];
+            c.sx += p.x;
+            c.sz += p.z;
+            c.top = std::max(c.top, p.y);
+            c.n++;
+        }
+
+        // flood fill over occupied neighbouring cells (8-connected)
+        std::vector<Detection> out;
+        std::vector<int> stack;
+        int nextCluster = 0;
+        for (auto& [key, c] : cells) {
+            if (c.cluster >= 0 || c.n < 2) continue;
+            const int id = nextCluster++;
+            float sx = 0, sz = 0, top = 0;
+            int n = 0;
+            stack.assign(1, key);
+            c.cluster = id;
+            while (!stack.empty()) {
+                const int k = stack.back();
+                stack.pop_back();
+                auto& cc = cells.at(k);
+                sx += cc.sx;
+                sz += cc.sz;
+                top = std::max(top, cc.top);
+                n += cc.n;
+                const int ix = k / (2 * kGrid), iz = k % (2 * kGrid);
+                for (int dx = -1; dx <= 1; ++dx) {
+                    for (int dz = -1; dz <= 1; ++dz) {
+                        const int nx = ix + dx, nz = iz + dz;
+                        if (nx < 0 || nz < 0 || nx >= 2 * kGrid || nz >= 2 * kGrid) continue;
+                        const auto it = cells.find(nx * 2 * kGrid + nz);
+                        if (it == cells.end() || it->second.cluster >= 0 || it->second.n < 2) continue;
+                        it->second.cluster = id;
+                        stack.push_back(nx * 2 * kGrid + nz);
+                    }
+                }
+            }
+            if (n >= 30) {// reject speckle / partial edge returns
+                out.push_back({{sx / static_cast<float>(n), top, sz / static_cast<float>(n)}, n});
+            }
+        }
+        return out;
+    }
 
     // --selftest: headless IK convergence check over representative cell
     // targets (no window / GL needed). Returns 0 when every target is reached
@@ -561,7 +656,7 @@ namespace {
                 {kTableCenter.x - 0.07f, kTableTop + kCrate + 0.012f, kTableCenter.z - 0.2f}, // descend onto crate
                 {kBinCenter.x, 0.46f, kBinCenter.z},                                          // transport to bin
                 {kTableCenter.x + 0.07f, kTableTop + kCrate + 0.012f, kTableCenter.z + 0.2f}, // pick at far corner
-                {0.45f, 0.55f, -0.3f},                                                        // free pose
+                kSurveyTip,                                                                   // perception survey pose
         };
 
         constexpr float dt = 1.f / 60.f;
@@ -837,7 +932,8 @@ int main(int argc, char** argv) {
     pusher->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
 
     // ===== eye-in-hand depth sensor =========================================
-    DepthSensor sensor(58.f, 160, 120, 0.04f, 1.6f);
+    // 70-deg FOV so the survey pose sees the whole crate zone in one scan
+    DepthSensor sensor(70.f, 160, 120, 0.04f, 1.6f);
     sensor.rangeNoise = 0.004f;
     sensor.position.set(0.065f, 0.f, 0.01f);
     sensor.rotation.x = math::PI;// camera looks -Z; flip to look along tool +Z (down)
@@ -858,6 +954,29 @@ int main(int argc, char** argv) {
 
     bool sensorOn = true;
     std::vector<Vector3> cloud;
+    std::vector<Detection> detections;// refreshed every scan; consumed at Survey
+
+    // detection markers: a ring hovering over each perceived crate, so what
+    // the robot BELIEVES is visible next to what IS (markers are hidden
+    // during the scan so perception never sees its own annotations)
+    constexpr size_t kMaxMarkers = 10;
+    auto markerGroup = Group::create();
+    std::vector<std::shared_ptr<Mesh>> markers;
+    {
+        auto markerMat = MeshBasicMaterial::create();
+        markerMat->color = Color(kGood);
+        markerMat->transparent = true;
+        markerMat->opacity = 0.85f;
+        auto ringGeom = TorusGeometry::create(0.052f, 0.0045f, 8, 32);
+        for (size_t i = 0; i < kMaxMarkers; ++i) {
+            auto m = Mesh::create(ringGeom, markerMat);
+            m->rotation.x = math::PI / 2;// torus lies flat (XZ plane)
+            m->visible = false;
+            markerGroup->add(m);
+            markers.push_back(m);
+        }
+    }
+    scene->add(markerGroup);
 
     // ===== crates ===========================================================
     std::vector<Crate> crates;
@@ -875,7 +994,7 @@ int main(int argc, char** argv) {
                            kTableCenter.z - 0.2f + fz * 0.4f);
         scene->add(mesh);
         auto* actor = world.add(*mesh, 300.f);
-        crates.push_back({mesh, actor, false});
+        crates.push_back({mesh, actor});
     };
 
     std::srand(7);
@@ -883,6 +1002,7 @@ int main(int argc, char** argv) {
 
     // ===== gripper / job state ==============================================
     enum class Phase { Idle,
+                       Survey,
                        Hover,
                        Descend,
                        Grip,
@@ -894,9 +1014,16 @@ int main(int argc, char** argv) {
     Phase phase = Phase::Idle;
     bool autoMode = true;
     bool gripWanted = false;
-    int targetCrate = -1; // crates index of the active job
     int pickedCount = 0;
     float phaseTime = 0.f;
+    float surveySettle = 0.f;// time spent settled at the survey pose
+
+    // The active job is a perceived detection (centroid + measured top), not
+    // a crate index — the controller never touches crate ground truth.
+    Detection job{};
+    bool haveJob = false;
+    std::optional<Vector3> jogRequest;// user click: take manual control, go here
+    std::optional<Vector3> lastFailed;// skip this spot for one survey round
 
     PxRigidDynamic* carried = nullptr;
     PxTransform grabOffset(PxIdentity);
@@ -912,10 +1039,6 @@ int main(int argc, char** argv) {
     Vector3 tipTarget = homeTip;
     planner.reset(tip);
 
-    auto crateTop = [&](const Crate& c) {
-        return Vector3(c.mesh->position.x, c.mesh->position.y + kCrate / 2.f + 0.012f, c.mesh->position.z);
-    };
-
     auto releaseCarried = [&] {
         if (!carried) return;
         carried->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, false);
@@ -924,10 +1047,13 @@ int main(int argc, char** argv) {
         carried = nullptr;
     };
 
+    // Suction actuator model: the cup seals against whatever crate face is
+    // within reach of the tip. The proximity test below is the physical seal
+    // forming, not the controller peeking at the world — the controller only
+    // ever observes the resulting vacuum state (`carried != nullptr`).
     auto tryGrab = [&] {
         if (carried) return;
         for (auto& c : crates) {
-            if (c.placed) continue;
             if (c.mesh->position.distanceTo(tip) < kGrabRadius) {
                 carried = c.actor;
                 carried->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
@@ -945,32 +1071,38 @@ int main(int argc, char** argv) {
         if (carried) carried->setKinematicTarget(tipPose * grabOffset);
     });
 
-    // pick the next unplaced crate, preferring the requested index
-    auto nextCrate = [&](int preferred) -> int {
-        if (preferred >= 0 && preferred < static_cast<int>(crates.size()) && !crates[preferred].placed) {
-            return preferred;
-        }
+    // choose a detection from the latest scan: nearest the robot base; a
+    // just-failed spot is skipped for one round so the robot tries something
+    // else first
+    auto chooseDetection = [&]() -> bool {
         int best = -1;
         float bestD = 1e9f;
-        for (int i = 0; i < static_cast<int>(crates.size()); ++i) {
-            if (crates[i].placed) continue;
-            const float d = crates[i].mesh->position.length();
-            if (d < bestD) {
-                bestD = d;
+        for (int i = 0; i < static_cast<int>(detections.size()); ++i) {
+            const auto& d = detections[i];
+            if (lastFailed && detections.size() > 1 &&
+                std::hypot(d.center.x - lastFailed->x, d.center.z - lastFailed->z) < 0.05f) {
+                continue;
+            }
+            const float dist = std::hypot(d.center.x, d.center.z);
+            if (dist < bestD) {
+                bestD = dist;
                 best = i;
             }
         }
-        return best;
+        lastFailed.reset();
+        if (best < 0) return false;
+        job = detections[best];
+        haveJob = true;
+        return true;
     };
-
-    int clickRequest = -1;// crate index requested via mouse click
 
     auto resetCell = [&] {
         releaseCarried();
         gripWanted = false;
         phase = Phase::Idle;
-        targetCrate = -1;
-        clickRequest = -1;
+        haveJob = false;
+        jogRequest.reset();
+        lastFailed.reset();
         pickedCount = 0;
         for (auto& c : crates) {
             world.unbind(*c.mesh);
@@ -1076,7 +1208,10 @@ int main(int argc, char** argv) {
             buttons.push_back(b);
             bx += bw + gap;
         };
-        addBtn("AUTO", [&] { autoMode = !autoMode; });
+        addBtn("AUTO", [&] {
+            autoMode = !autoMode;
+            if (autoMode) phaseTime = 99.f;// survey on the next tick, not in 3 s
+        });
         addBtn("GRIP", [&] {
             if (phase != Phase::Idle) return;// the job sequencer owns the gripper
             gripWanted = !gripWanted;
@@ -1086,7 +1221,7 @@ int main(int argc, char** argv) {
         addBtn("SPAWN", [&] { spawnCrate(); });
         addBtn("RESET", [&] { resetCell(); });
     }
-    ui->add(makeText(font, "CLICK CRATE: FETCH      CLICK FLOOR: JOG      SPACE: SPAWN      G: GRIP", 0x5f7a90,
+    ui->add(makeText(font, "CLICK: JOG (TAKES MANUAL CONTROL)      G: GRIP / RELEASE      SPACE: SPAWN      AUTO: RESUME", 0x5f7a90,
                      12 * dpi, 0.5f, 0.f, 0.f, 84.f, TextSprite::HorizontalAlignment::Center));
 
     // ===== input ============================================================
@@ -1114,7 +1249,7 @@ int main(int argc, char** argv) {
 
         std::vector<Object3D*> targets;
         for (auto& c : crates) {
-            if (!c.placed) targets.push_back(c.mesh.get());
+            targets.push_back(c.mesh.get());
         }
         targets.push_back(table.get());
         targets.push_back(floorMesh.get());
@@ -1123,17 +1258,12 @@ int main(int argc, char** argv) {
         if (hits.empty()) return;
         const auto& hit = hits.front();
 
-        for (int i = 0; i < static_cast<int>(crates.size()); ++i) {
-            if (crates[i].mesh.get() == hit.object) {
-                clickRequest = i;// one-shot fetch job, honored in Idle
-                return;
-            }
-        }
-        // floor / table: jog target (hover above the clicked point), idle only
-        if (phase == Phase::Idle) {
-            manualTarget = hit.point;
-            manualTarget.y += kHoverH;
-        }
+        // A click is the user taking the wheel: jog the tool to hover just
+        // above the clicked surface point — low enough that the suction cup
+        // can reach a crate top there (G then grips/releases). The controller
+        // receives only the pointed-at position, never a crate identity.
+        jogRequest = hit.point;
+        jogRequest->y += 0.05f;
     });
     canvas.addMouseListener(upL);
 
@@ -1158,7 +1288,7 @@ int main(int argc, char** argv) {
     canvas.onWindowResize([&](WindowSize s) { relayout(s); });
     relayout(size);
 
-    const char* phaseNames[]{"IDLE", "MOVE TO CRATE", "DESCEND", "GRIP", "LIFT", "TO BIN", "RELEASE", "RETREAT"};
+    const char* phaseNames[]{"IDLE", "SURVEY", "MOVE TO TARGET", "DESCEND", "GRIP", "LIFT", "TO BIN", "RELEASE", "RETREAT"};
 
     // ===== main loop ========================================================
     Clock clock;
@@ -1188,42 +1318,64 @@ int main(int argc, char** argv) {
         const bool timedOut = phaseTime > 5.f;
 
         // A job that stalls mid-flight (unreachable pose, lost crate) drops
-        // whatever is held where it is and returns to Idle WITHOUT counting —
-        // the crate stays unplaced and is simply retried.
+        // whatever is held where it is, remembers the spot so the next survey
+        // tries a different detection first, and goes back to look again.
         const auto abortJob = [&] {
             gripWanted = false;
-            targetCrate = -1;
-            goTo(Phase::Idle);
+            if (haveJob) lastFailed = job.center;
+            haveJob = false;
+            goTo(autoMode && sensorOn ? Phase::Survey : Phase::Idle);
         };
+
+        // Manual override: a world click disengages AUTO (taking the wheel)
+        // and jogs the tool to the clicked point. Works in any phase, with or
+        // without a crate on the cup — G then grips/releases.
+        if (jogRequest) {
+            manualTarget = *jogRequest;
+            jogRequest.reset();
+            autoMode = false;
+            haveJob = false;
+            if (!carried) gripWanted = false;
+            goTo(Phase::Idle);
+        }
 
         switch (phase) {
             case Phase::Idle:
                 tipTarget = manualTarget;
-                if (autoMode || clickRequest >= 0) {
-                    targetCrate = nextCrate(clickRequest);
-                    clickRequest = -1;
-                    if (targetCrate >= 0 && !carried) {
+                // sensorOn is the robot's eyes: without them there is nothing
+                // to act on. AUTO patrols the table every few seconds in case
+                // crates appeared.
+                if (sensorOn && !carried && autoMode && phaseTime > 3.f) {
+                    goTo(Phase::Survey);
+                }
+                break;
+            case Phase::Survey:
+                tipTarget = kSurveyTip;
+                // decide only from a scan taken at rest: a survey done while
+                // braking smears the cloud across the approach path
+                surveySettle = near(0.03f) ? surveySettle + dt : 0.f;
+                if (surveySettle > 0.35f) {
+                    surveySettle = 0.f;
+                    if (chooseDetection()) {
                         gripWanted = false;
                         goTo(Phase::Hover);
+                    } else {
+                        goTo(Phase::Idle);// table perceived empty
                     }
-                }
-                break;
-            case Phase::Hover: {
-                if (targetCrate < 0 || crates[targetCrate].placed) {
-                    goTo(Phase::Idle);
-                    break;
-                }
-                tipTarget = crateTop(crates[targetCrate]).add(Vector3(0, kHoverH, 0));
-                if (near()) {
-                    goTo(Phase::Descend);
                 } else if (timedOut) {
-                    crates[targetCrate].placed = true;// out of reach: skip it
-                    goTo(Phase::Idle);
+                    goTo(Phase::Idle);// survey pose unreachable
                 }
                 break;
-            }
+            case Phase::Hover:
+                tipTarget = Vector3(job.center.x, job.center.y + kHoverH, job.center.z);
+                if (near()) goTo(Phase::Descend);
+                else if (timedOut) abortJob();
+                break;
             case Phase::Descend:
-                tipTarget = crateTop(crates[targetCrate]);
+                // descend onto the PERCEIVED top (+ cup standoff); if the
+                // crate moved since the survey, the grip simply misses and
+                // the robot goes back to look again
+                tipTarget = Vector3(job.center.x, job.center.y + 0.012f, job.center.z);
                 if (near() || timedOut) goTo(Phase::Grip);
                 break;
             case Phase::Grip:
@@ -1233,7 +1385,7 @@ int main(int argc, char** argv) {
                     tipTarget = Vector3(tip.x, kTableTop + 0.35f, tip.z);
                     goTo(Phase::Lift);
                 } else if (!carried && phaseTime > 1.f) {
-                    goTo(Phase::Hover);// missed: retry
+                    abortJob();// no vacuum seal: re-perceive
                 }
                 break;
             case Phase::Lift:
@@ -1248,14 +1400,14 @@ int main(int argc, char** argv) {
                 break;
             case Phase::Release:
                 if (phaseTime > 0.15f) {
-                    // Count only verified deliveries: still holding the crate,
-                    // tip actually above the bin.
+                    // Count only verified deliveries: vacuum still sealed and
+                    // the tip (own FK) actually above the bin.
                     const bool delivered = carried &&
                                            std::hypot(tip.x - kBinCenter.x, tip.z - kBinCenter.z) < 0.10f;
                     gripWanted = false;// release either way
                     if (delivered) {
-                        crates[targetCrate].placed = true;
                         pickedCount++;
+                        haveJob = false;
                         goTo(Phase::Retreat);
                     } else {
                         abortJob();
@@ -1265,8 +1417,7 @@ int main(int argc, char** argv) {
             case Phase::Retreat:
                 tipTarget = Vector3(kBinCenter.x, 0.62f, kBinCenter.z);
                 if (near() || timedOut) {
-                    targetCrate = -1;
-                    goTo(Phase::Idle);
+                    goTo(autoMode && sensorOn ? Phase::Survey : Phase::Idle);
                 }
                 break;
         }
@@ -1294,13 +1445,17 @@ int main(int argc, char** argv) {
         // --- physics ---------------------------------------------------------
         world.step(dt);
 
-        // --- depth sensor ----------------------------------------------------
+        // --- depth sensor + perception ---------------------------------------
         cloudPoints->visible = false;
         if (sensorOn) {
             const bool frustumWasVisible = frustum->visible;
             frustum->visible = false;
+            markerGroup->visible = false;// perception must not see its own annotations
             sensor.scan(*renderer, *scene, cloud);
             frustum->visible = frustumWasVisible;
+            markerGroup->visible = true;
+
+            detections = detectCrates(cloud);
 
             auto* posAttr = pcGeom->getAttribute<float>("position");
             auto* colAttr = pcGeom->getAttribute<float>("color");
@@ -1318,6 +1473,19 @@ int main(int argc, char** argv) {
             posAttr->needsUpdate();
             colAttr->needsUpdate();
             cloudPoints->visible = true;
+        } else {
+            detections.clear();// eyes off, beliefs gone
+        }
+
+        // detection markers: one ring per perceived crate
+        for (size_t i = 0; i < markers.size(); ++i) {
+            const bool on = i < detections.size();
+            markers[i]->visible = on;
+            if (on) {
+                markers[i]->position.set(detections[i].center.x,
+                                         detections[i].center.y + 0.015f,
+                                         detections[i].center.z);
+            }
         }
 
         // --- HUD --------------------------------------------------------------
@@ -1349,14 +1517,11 @@ int main(int argc, char** argv) {
             bars[i].set((qCmd[i] - r.min) / (r.max - r.min));
         }
 
-        int remaining = 0;
-        for (auto& c : crates) {
-            if (!c.placed) remaining++;
-        }
-        stateTxt.set(phaseNames[static_cast<int>(phase)]);
+        stateTxt.set(!sensorOn && autoMode ? "BLIND (SENSOR OFF)"
+                                           : phaseNames[static_cast<int>(phase)]);
         {
             std::ostringstream os;
-            os << "PLACED " << pickedCount << "   REMAINING " << remaining;
+            os << "PLACED " << pickedCount << "   DETECTED " << detections.size();
             pickedTxt.set(os.str());
         }
         {
