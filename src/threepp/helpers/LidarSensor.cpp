@@ -89,14 +89,20 @@ namespace {
         Renderer& r;
         ColorSpace cs;
         ToneMapping tm;
+        bool ac;
         explicit DataPassGuard(Renderer& renderer)
-            : r(renderer), cs(renderer.outputColorSpace), tm(renderer.toneMapping) {
+            : r(renderer), cs(renderer.outputColorSpace), tm(renderer.toneMapping), ac(renderer.autoClear) {
             r.outputColorSpace = LinearSRGBColorSpace;
             r.toneMapping = ToneMapping::None;
+            // The scan re-renders its targets from scratch every call, so the
+            // caller's autoClear must not leak in (HUD-overlay apps leave it
+            // false between frames; the un-cleared depth freezes the readback).
+            r.autoClear = true;
         }
         ~DataPassGuard() {
             r.outputColorSpace = cs;
             r.toneMapping = tm;
+            r.autoClear = ac;
         }
     };
 
