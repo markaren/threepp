@@ -1316,8 +1316,19 @@ namespace threepp {
             uint32_t positionVersion = 0;
             uint32_t indexVersion    = 0;
             uint32_t colorVersion    = 0;
+            // BufferGeometry::id (monotonic per construction) of the geometry
+            // this rec was uploaded for. The map keys on the raw pointer, but
+            // a freed geometry's address is recycled for a NEW geometry — whose
+            // fresh attributes start at version 0, matching a stale rec's
+            // version-0 → the per-attribute version check alone would return
+            // the OLD geometry's buffers. (Manifested as wrong/stale detection
+            // boxes when an overlay rebuilds LineSegments every frame.) The id
+            // differs on any recycled pointer, so it detects the collision.
+            unsigned int geomId = 0;
+            uint64_t lastTouch  = 0;// overlay-frame counter; for stale eviction
         };
         std::unordered_map<const BufferGeometry*, LineRec> lineGeomCache_;
+        uint64_t overlayFrameCounter_ = 0;// bumped once per recordOrthoOverlay
 
         // Per-Line scene snapshot, refreshed in ensureSceneBuilt alongside
         // lastVisibleEntries_. Lives only for the overlay record's draw
@@ -9321,6 +9332,28 @@ namespace threepp {
             scene.updateMatrixWorld(true);
             camera.updateMatrixWorld(true);
 
+            // Advance the overlay-frame clock and evict line/mesh geometry
+            // buffers untouched for longer than the in-flight window. Overlays
+            // that rebuild transient geometry every frame (e.g. a detection
+            // box overlay calling makeBoxLines per detection) would otherwise
+            // leave a dead cache entry per geometry forever. The margin (>
+            // frames-in-flight) guarantees no evicted buffer is still
+            // referenced by an in-flight command buffer.
+            ++overlayFrameCounter_;
+            if (overlayFrameCounter_ > 8) {
+                const uint64_t cutoff = overlayFrameCounter_ - 8;
+                for (auto it = lineGeomCache_.begin(); it != lineGeomCache_.end();) {
+                    if (it->second.lastTouch < cutoff) {
+                        destroyBuffer(ctx->allocator(), it->second.vertex);
+                        if (it->second.index.handle) destroyBuffer(ctx->allocator(), it->second.index);
+                        if (it->second.color.handle) destroyBuffer(ctx->allocator(), it->second.color);
+                        it = lineGeomCache_.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+
             // Reset the per-frame descriptor pool before allocating this
             // frame's sprite sets. Safe because the inFlight fence wait
             // at frame start already guarantees the prior frame's sets
@@ -9862,8 +9895,19 @@ namespace threepp {
             const uint32_t colVer = (colAttr && colAttr->count() > 0) ? colAttr->version : 0u;
 
             auto it = lineGeomCache_.find(geom);
+            if (it != lineGeomCache_.end() && it->second.geomId != geom->id) {
+                // Recycled pointer: this address was a DIFFERENT geometry whose
+                // buffers we still hold. Retire them and re-upload from scratch
+                // (the version fields would otherwise alias — both at 0).
+                destroyBuffer(ctx->allocator(), it->second.vertex);
+                if (it->second.index.handle) destroyBuffer(ctx->allocator(), it->second.index);
+                if (it->second.color.handle) destroyBuffer(ctx->allocator(), it->second.color);
+                lineGeomCache_.erase(it);
+                it = lineGeomCache_.end();
+            }
             if (it != lineGeomCache_.end()) {
                 auto& rec = it->second;
+                rec.lastTouch = overlayFrameCounter_;
                 if (rec.positionVersion == posVer &&
                     rec.indexVersion    == idxVer &&
                     rec.colorVersion    == colVer) {
@@ -9939,6 +9983,8 @@ namespace threepp {
             LineRec rec{};
             rec.vertexCount     = static_cast<uint32_t>(posAttr->count());
             rec.positionVersion = posVer;
+            rec.geomId          = geom->id;
+            rec.lastTouch       = overlayFrameCounter_;
 
             const VkDeviceSize vbBytes = posArr.size() * sizeof(float);
             rec.vertex = createBuffer(

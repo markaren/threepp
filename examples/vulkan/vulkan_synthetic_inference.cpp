@@ -51,30 +51,6 @@ namespace {
             "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "N/A", "book", "clock", "vase",
             "scissors", "teddy bear", "hair drier", "toothbrush"};
 
-    // Box outline as four thin SPRITE bars — the exact primitive the label
-    // plates use, which is the one primitive the Vulkan HUD overlay renders
-    // pixel-exact. (LineSegments and Mesh quads in the ortho overlay pass
-    // currently render with an aspect-stretched vertical size — renderer bug,
-    // tracked separately — so box and tag could disagree about the screen.)
-    std::shared_ptr<Object3D> makeBoxFrame(float x1, float y1, float x2, float y2,
-                                           const Color& col, float th = 3.f) {
-        auto group = Group::create();
-        auto bar = [&](float x, float y, float w, float h) {
-            auto m = SpriteMaterial::create();
-            m->map = detviz::solidTexture(col);
-            auto s = Sprite::create(m);
-            s->center.set(0.f, 0.f);
-            s->scale.set(w, h, 1.f);
-            s->position.set(x, y, 0.2f);
-            group->add(s);
-        };
-        bar(x1, y1, x2 - x1, th);      // bottom
-        bar(x1, y2 - th, x2 - x1, th); // top
-        bar(x1, y1, th, y2 - y1);      // left
-        bar(x2 - th, y1, th, y2 - y1); // right
-        return group;
-    }
-
     // Load one soldier instance and start the named clip. The glb is loaded
     // once per instance — skinned meshes can't share a skeleton between
     // independently-posed characters.
@@ -274,7 +250,7 @@ int main(int argc, char** argv) {
             for (const auto& d : dets) {
                 const Color& col = detviz::kPalette[d.classId % 6];
                 const float y1 = H - d.y2, y2 = H - d.y1;
-                overlay->add(makeBoxFrame(d.x1, y1, d.x2, y2, col));
+                overlay->add(detviz::makeBoxLines(d.x1, y1, d.x2, y2, col));
                 const char* name = (d.classId >= 0 && d.classId < 91) ? kCoco91[d.classId] : "?";
                 overlay->add(detviz::makeLabel(font, detviz::labelText(name, d.confidence), col, d.x1, y2, H));
             }
