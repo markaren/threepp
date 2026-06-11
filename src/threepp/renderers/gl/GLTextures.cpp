@@ -180,14 +180,14 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
         //
 
-        state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat, image.width, image.height, glFormat, glType, nullptr);
+        state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat, image.width(), image.height(), glFormat, glType, nullptr);
 
     } else if (dataTexture3D) {
 
         state->texImage3D(GL_TEXTURE_3D, 0, glInternalFormat,
-                          static_cast<int>(image.width),
-                          static_cast<int>(image.height),
-                          static_cast<int>(image.depth),
+                          static_cast<int>(image.width()),
+                          static_cast<int>(image.height()),
+                          static_cast<int>(image.depth()),
                           glFormat, glType, image.data().data());
         textureProperties->maxMipLevel = 0;
 
@@ -207,7 +207,7 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
             auto uploadCompressed = [&](int level, Image& img) {
                 const auto& buf = img.data();
                 state->texCompressedImage2D(GL_TEXTURE_2D, level, compFmt,
-                        static_cast<int>(img.width), static_cast<int>(img.height),
+                        static_cast<int>(img.width()), static_cast<int>(img.height()),
                         static_cast<int>(buf.size()), buf.data());
             };
             uploadCompressed(0, image);
@@ -223,7 +223,7 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
                 auto& mipmap = mipmaps[i];
                 state->texImage2D(GL_TEXTURE_2D, i, glInternalFormat,
-                                  static_cast<int>(mipmap.width), static_cast<int>(mipmap.height),
+                                  static_cast<int>(mipmap.width()), static_cast<int>(mipmap.height()),
                                   glFormat, glType, mipmap.data().data());
             }
 
@@ -234,11 +234,11 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
             if (glType == GL_UNSIGNED_BYTE) {
                 state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
-                                  static_cast<int>(image.width), static_cast<int>(image.height),
+                                  static_cast<int>(image.width()), static_cast<int>(image.height()),
                                   glFormat, glType, texture.image().data().data());
             } else if (glType == GL_FLOAT) {
                 state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
-                                  static_cast<int>(image.width), static_cast<int>(image.height),
+                                  static_cast<int>(image.width()), static_cast<int>(image.height()),
                                   glFormat, glType, texture.image().data<float>().data());
             } else {
 
@@ -250,7 +250,7 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
     if (textureNeedsGenerateMipmaps(texture)) {
 
-        generateMipmap(textureType, texture, image.width, image.height);
+        generateMipmap(textureType, texture, image.width(), image.height());
     }
 
     textureProperties->version = texture.version();
@@ -426,17 +426,17 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Tex
     auto& mipmaps = texture.mipmaps();
     for (int i = 0; i < 6; i++) {
         auto& image = images[i];
-        state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, glInternalFormat, image.width, image.height, glFormat, glType, image.data().data());
+        state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, glInternalFormat, image.width(), image.height(), glFormat, glType, image.data().data());
 
         for (unsigned j = 0; j < mipmaps.size(); j++) {
-            state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, j + 1, glInternalFormat, image.width, image.height, glFormat, glType, mipmaps[j].data().data());
+            state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, j + 1, glInternalFormat, image.width(), image.height(), glFormat, glType, mipmaps[j].data().data());
         }
     }
 
     textureProperties->maxMipLevel = static_cast<int>(mipmaps.size());
 
     if (textureNeedsGenerateMipmaps(texture)) {
-        generateMipmap(GL_TEXTURE_CUBE_MAP, texture, images.front().width, images.front().height);
+        generateMipmap(GL_TEXTURE_CUBE_MAP, texture, images.front().width(), images.front().height());
     }
 
     textureProperties->version = texture.version();
@@ -507,11 +507,10 @@ void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, GLRenderTarget*
 
     // upload an empty depth texture with framebuffer size
     if (!properties->textureProperties.get(renderTarget->depthTexture.get())->glTexture ||
-        renderTarget->depthTexture->image().width != renderTarget->width ||
-        renderTarget->depthTexture->image().height != renderTarget->height) {
+        renderTarget->depthTexture->image().width() != renderTarget->width ||
+        renderTarget->depthTexture->image().height() != renderTarget->height) {
 
-        renderTarget->depthTexture->image().width = renderTarget->width;
-        renderTarget->depthTexture->image().height = renderTarget->height;
+        renderTarget->depthTexture->image() = Image(std::vector<unsigned char>{}, renderTarget->width, renderTarget->height);
         renderTarget->depthTexture->needsUpdate();
     }
 

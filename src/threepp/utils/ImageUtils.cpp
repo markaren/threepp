@@ -18,3 +18,7 @@ void threepp::flipImage(std::vector<unsigned char>& pixels, int channels, int w,
                          pixels.begin() + channels * w * (h - line - 1));
     }
 }
+
+void threepp::flipImage(Image& image) {
+    flipImage(image.data(), image.channels(), static_cast<int>(image.width()), static_cast<int>(image.height()));
+}

@@ -157,8 +157,7 @@ void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& c
     // directly, so flip it to share the depth's row convention — keeping color
     // and geometry aligned identically on every backend.
     if (renderer.renderTargetFlipY()) {
-        flipImage(sceneTarget_->texture->image().data(), 3,
-                  static_cast<int>(width_), static_cast<int>(height_));
+        flipImage(sceneTarget_->texture->image());
     }
 
     // Linearize depth into packed RG16

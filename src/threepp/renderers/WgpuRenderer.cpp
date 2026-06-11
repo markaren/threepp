@@ -795,7 +795,7 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
         if (envBgTex_) { wgpuTextureRelease(envBgTex_); envBgTex_ = nullptr; }
 
         auto& img = envTex->image();
-        uint32_t w = img.width, h = img.height;
+        uint32_t w = img.width(), h = img.height();
         if (w == 0 || h == 0) return;
 
         const void* srcData = nullptr;
@@ -4271,8 +4271,8 @@ void WgpuRenderer::copyFramebufferToTexture(const Vector2& position, Texture& te
     if (!dstEntry.texture) return;
 
     auto& img = texture.image();
-    uint32_t texW = img.width;
-    uint32_t texH = img.height;
+    uint32_t texW = img.width();
+    uint32_t texH = img.height();
     if (texW == 0 || texH == 0) return;
 
     // Clamp copy region to source bounds
@@ -4471,8 +4471,8 @@ void WgpuRenderer::copyTextureToImage(Texture& texture) {
         h = rt->height;
     } else if (auto* entry = pimpl_->textures->findTexture(texture.id); entry && entry->texture) {
         src = entry->texture;
-        w = texture.image().width;
-        h = texture.image().height;
+        w = texture.image().width();
+        h = texture.image().height();
     }
     if (!src || w == 0 || h == 0) return;
 

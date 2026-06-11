@@ -47,11 +47,11 @@ Texture* GLCubeMaps::get(Texture* texture) {
 
                 const auto& image = texture->image();
 
-                if (image.height > 0) {
+                if (image.height() > 0) {
 
                     const auto& currentRenderTarget = renderer.getRenderTarget();
 
-                    auto renderTarget = std::make_unique<GLCubeRenderTarget>(image.height / 2);
+                    auto renderTarget = std::make_unique<GLCubeRenderTarget>(image.height() / 2);
                     renderTarget->fromEquirectangularTexture(renderer, *texture);
                     cubemaps[texture] = std::move(renderTarget);
 
@@ -86,7 +86,7 @@ Texture* GLCubeMaps::getPMREM(Texture* texture) {
     }
 
     const auto& image = texture->image();
-    if (image.height <= 0) return nullptr;
+    if (image.height() == 0) return nullptr;
 
     if (!pmremGenerator) {
         pmremGenerator = std::make_unique<GLPMREM>(renderer);

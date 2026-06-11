@@ -70,7 +70,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     auto& img = *imgOpt;
-    std::cout << "Loaded image: " << img.width << "x" << img.height << "\n";
+    std::cout << "Loaded image: " << img.width() << "x" << img.height() << "\n";
 
     constexpr int WIN = 900;
     Canvas::Parameters params;
@@ -104,14 +104,14 @@ int main(int argc, char** argv) {
 
         std::cout << "Warming up..." << std::flush;
         for (int i = 0; i < WARMUP; ++i)
-            detections = model.infer(rgba.data(), static_cast<int>(img.width), static_cast<int>(img.height));
+            detections = model.infer(rgba.data(), static_cast<int>(img.width()), static_cast<int>(img.height()));
         std::cout << " done.\n\n";
 
         std::vector<double> times_ms;
         times_ms.reserve(RUNS);
         for (int i = 0; i < RUNS; ++i) {
             auto ta = clk::now();
-            detections = model.infer(rgba.data(), static_cast<int>(img.width), static_cast<int>(img.height));
+            detections = model.infer(rgba.data(), static_cast<int>(img.width()), static_cast<int>(img.height()));
             auto tb = clk::now();
             double dt = ms(tb - ta);
             times_ms.push_back(dt);
@@ -160,8 +160,8 @@ int main(int argc, char** argv) {
     FontLoader fontLoader;
     const Font font = fontLoader.defaultFont();
 
-    const float sx = 640.f / static_cast<float>(img.width);
-    const float sy = 640.f / static_cast<float>(img.height);
+    const float sx = 640.f / static_cast<float>(img.width());
+    const float sy = 640.f / static_cast<float>(img.height());
     for (auto& d : detections) {
         float x1 = std::max(0.f, d.x1 * sx), y1 = std::max(0.f, d.y1 * sy);
         float x2 = std::min(640.f, d.x2 * sx), y2 = std::min(640.f, d.y2 * sy);
