@@ -1009,7 +1009,7 @@ vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
     return sum / float(EM_SAMPLES);
 }
 
-vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed);// fwd decl
+vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed, bool cheapHits);// fwd decl
 vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint seed);// fwd decl (cheap 1-bounce GI)
 
 // Scales the DIRECT emission of traceRadiance's hits — the emitter-specular
@@ -1472,7 +1472,13 @@ vec3 sampleGGXReflectionFib(vec3 V, vec3 N, float roughness, int s, int count) {
 // extra cost is paid only on actual mirror-on-mirror chains. Same signature as
 // before, so every caller (primary glossy reflection, water + glass reflect,
 // glass behind-view) gets the depth. Compute has no derivatives → mip 0 on tex.
-vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed) {
+// cheapHits: shade hits with the stochastic 1-picked-light NEE (cheap, noisy —
+// ONLY for callers whose result flows through a blur + temporal channel that
+// absorbs it: the opaque reflection buffer, ocean water). Callers whose result
+// reaches the screen UNBLURRED — clear glass (its denoise path is deliberately
+// sharp), additive/alpha-blend behind-traces straight into `lit` — must pass
+// false: the stochastic pick showed as per-pixel noise in the glass sphere.
+vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float missLod, inout uint seed, bool cheapHits) {
     const int REFL_MAX_BOUNCES = 3;
     vec3  radiance   = vec3(0.0);
     vec3  tput       = vec3(1.0);
@@ -1523,7 +1529,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                                               hm.specularIntensity, hm.specularColor,
                                               hm.iridescence, hm.iridescenceIOR, hm.iridescenceThicknessNm, seed,
                                               /*addEmissive=*/true,// reflected hit: no per-pixel reservoir → coherent emissiveNEE
-                                              /*cheapHit=*/true);  // 1 picked light + 4-sample NEE (ReBLUR absorbs)
+                                              /*cheapHit=*/cheapHits);// caller decides (see header comment)
 
         const float hitNdotV = max(dot(hitN, hitV), 1e-4);
         const vec3  hitF0 = mix(vec3(0.04) * hm.specularIntensity * hm.specularColor, hAlbedo, hMetal);
@@ -1678,7 +1684,7 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     // per-pixel white speckle; smooth day skies are visually unchanged.
     const vec3 R = reflect(-V, N);
     const vec3 reflectColor = traceRadiance(P + N * SHADOW_EPS, R, doShadows, maxLod,
-                                            0.12 * maxLod, seed);
+                                            0.12 * maxLod, seed, /*cheapHits=*/true);// water: blur+temporal absorb
 
     // Transmission: ANALYTIC deep-water body — deliberately NOT a refraction
     // ray. A downward ray self-intersects this same choppy surface (adjacent
@@ -1896,7 +1902,8 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
 
         // Reflection (sky + scene) — multi-bounce / recursive.
         const vec3 R = reflect(-V, Ns);
-        const vec3 reflectColor = traceRadiance(P + N * SHADOW_EPS, R, doShadows, maxLod, missLod, seed);
+        const vec3 reflectColor = traceRadiance(P + N * SHADOW_EPS, R, doShadows, maxLod, missLod, seed,
+                                                /*cheapHits=*/false);// glass shows hits SHARP — deterministic shading
 
         vec3 transmitColor;
         if (pm.thinWalled != 0) {
@@ -1909,7 +1916,8 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
             // "washed, detail-destroyed" look over e.g. a watch dial.
             const vec3 dT = -V;// straight-through (net-zero thin-shell bend)
             {
-                const vec3 behind = traceRadiance(P - N * SHADOW_EPS, dT, doShadows, maxLod, missLod, seed);
+                const vec3 behind = traceRadiance(P - N * SHADOW_EPS, dT, doShadows, maxLod, missLod, seed,
+                                                  /*cheapHits=*/false);// refracted content is sharp
                 vec3 tint = albedo;
                 if (pm.attenuationDistance > 0.0 && pm.thickness > 0.0)
                     tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(pm.thickness / pm.attenuationDistance));
@@ -1936,7 +1944,8 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
                     dOut = (dot(o, o) < 1e-6) ? reflect(dIn, nb)// TIR → internal reflect
                                               : normalize(o);
                 }
-                const vec3 behind = traceRadiance(exitP + dOut * SHADOW_EPS, dOut, doShadows, maxLod, missLod, seed);
+                const vec3 behind = traceRadiance(exitP + dOut * SHADOW_EPS, dOut, doShadows, maxLod, missLod, seed,
+                                                  /*cheapHits=*/false);// refracted content is sharp
                 vec3 tint = albedo;
                 if (pm.attenuationDistance > 0.0)
                     tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(inDist / pm.attenuationDistance));
@@ -2413,7 +2422,8 @@ void main() {
         // no amount of denoising should have to absorb. Mirror fallback matches
         // the bounce-continuation guard inside traceRadiance.
         if (dot(Rd, N) <= 0.0) Rd = R;
-        vec3 r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed);
+        vec3 r = traceRadiance(shadowOrig, Rd, shadowsOn, maxLod, missLod, reflSeed,
+                               /*cheapHits=*/true);// reflection channel: blur+temporal absorb
         gReflEmitterScale = 1.0;
         const float rl = max(max(r.r, r.g), r.b);// firefly clamp the single sample
         if (rl > pc.fireflyClamp) r *= pc.fireflyClamp / rl;
@@ -2445,7 +2455,8 @@ void main() {
         // straight (-V) ray to recover it. Host encodes strength = transmission-1
         // (transmission>1 is the additive marker).
         const float strength = clamp(pm.transmission - 1.0, 0.0, 1.0);
-        const vec3  behind   = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed);
+        const vec3  behind   = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
+                                             /*cheapHits=*/false);// straight into lit, unblurred
         lit = behind + lit * strength;
     } else if (pm.transmission > 0.0) {
         if (pm.ior < 1.05) {
@@ -2455,7 +2466,8 @@ void main() {
             // darkening. (One transparent layer over opaque: the behind ray sees
             // opaque geometry shaded as PBR; overlapping transparent isn't sorted.)
             const float opacity = 1.0 - clamp(pm.transmission, 0.0, 1.0);
-            const vec3  behind  = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed);
+            const vec3  behind  = traceRadiance(worldPos - V * SHADOW_EPS, -V, shadowsOn, maxLod, 0.0, seed,
+                                                /*cheapHits=*/false);// straight into lit, unblurred
             lit = mix(behind, lit, opacity);
         } else {
             // REAL refractive glass (ior>1). ONE sharp Fresnel reflect+refract
