@@ -36,10 +36,12 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <execution>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <numeric>
 #include <random>
 #include <vector>
 
@@ -145,10 +147,13 @@ namespace {
 // (periodic by construction — noise sampled on a circle) picks where islands
 // rise and where passes stay open sea; a radial bump profile dives both
 // shores below the sand floor so the rims bury cleanly; ridged FBM adds the
-// rocky relief. Colour comes from a texture baked in the mesh's own polar
-// parameterisation (the Vulkan PT has no vertex-colour path for meshes):
-// wet dark rock at the waterline, FBM-mottled granite on the slopes,
-// moss/heather on gentle low ground — all derived from the same height field.
+// rocky relief. Surface detail comes from three maps baked in the mesh's own
+// polar parameterisation (the Vulkan PT has no vertex-colour path for
+// meshes): an albedo map layering two granite tones, strata banding, scree,
+// grass / heather / lichen niches and a wet waterline; a tangent-space
+// normal map carrying creased-slab relief far below the vertex grid; and a
+// roughness map that turns the wet band glossy — all derived from the same
+// height field.
 namespace island {
 
     constexpr float kInnerR = 385.f;// boat waypoints reach ~320 m — keep clear water
@@ -211,93 +216,233 @@ namespace island {
 
         // ridged FBM (fold-over of signed noise) = sharp rocky crests
         const float ridge = 1.f - std::abs(2.f * fbm(x * 0.035f, z * 0.035f, 4) - 1.f);
-        const float crest = kPeakH * m * (0.45f + 0.55f * ridge * ridge);
+        // meso relief: creased-slab ridges (λ ≈ 11 m down to ~3.5 m) — real
+        // geometry now that the vertex grid resolves it; the baked normal map
+        // carries only the finer scales (≤ 3 m). Scaled by the mass plan so
+        // the submerged passes stay smooth sills.
+        const float slab = 1.f - std::abs(2.f * fbm(x * 0.09f, z * 0.09f, 3) - 1.f);
+        const float meso = 3.5f * (slab * slab - 0.45f);
+        const float crest = (kPeakH * (0.45f + 0.55f * ridge * ridge) + meso) * m;
         // prof=1 mid-ring: passes top out 2 m underwater, islands rise to crest
         return -kSkirt + (crest + kSkirt - 2.f) * prof;
     }
 
     // Analytic finite-difference normal — seam-consistent (the height field is
-    // continuous in angle) and adds sub-vertex shading detail for free.
-    Vector3 normalAt(float x, float z, float eps = 2.f) {
+    // continuous in angle) and adds sub-vertex shading detail for free. The
+    // 1.2 m radius matches the ~1.4 m vertex grid so the meso slabs shade
+    // correctly instead of being averaged away.
+    Vector3 normalAt(float x, float z, float eps = 1.2f) {
         const float dhdx = (heightAt(x + eps, z) - heightAt(x - eps, z)) / (2.f * eps);
         const float dhdz = (heightAt(x, z + eps) - heightAt(x, z - eps)) / (2.f * eps);
         Vector3 n(-dhdx, 1.f, -dhdz);
         return n.normalize();
     }
 
-    // Colour map in the mesh's polar parameterisation (u = angle, v = radius):
-    // one texel column ≈ 1.4 m of coastline. Each texel re-evaluates the
-    // height field, so the colours track the actual geometry.
-    std::shared_ptr<DataTexture> bakeColorMap() {
-        const int W = 2048, H = 128;
-        std::vector<unsigned char> px(static_cast<size_t>(W) * H * 4);
+    // High-frequency rock relief for the baked normal map — creased slabs
+    // (λ ≈ 3 m) plus value-noise grain (λ ≈ 1 m): only the scales below what
+    // the vertex grid carries (the λ ≥ 3.5 m slabs live in heightAt now).
+    float detailHeight(float x, float z) {
+        const float r2 = 1.f - std::abs(2.f * fbm(x * 0.31f + 53.f, z * 0.31f + 17.f, 3) - 1.f);
+        const float g  = fbm(x * 0.9f + 9.f, z * 0.9f + 27.f, 2);
+        return 0.55f * r2 * r2 + 0.10f * g;
+    }
+
+    struct BakedMaps {
+        std::shared_ptr<DataTexture> albedo;
+        std::shared_ptr<DataTexture> normal;
+        std::shared_ptr<DataTexture> rough;
+    };
+
+    // Albedo + tangent-space normal + roughness in the mesh's polar
+    // parameterisation (u = angle, v = radius): one texel ≈ 0.7 m of
+    // coastline, 0.4 m radially. Each texel re-evaluates the height field —
+    // centre + 4 neighbours give the slope normal AND the Laplacian
+    // (crest/hollow) from the same five probes — so every mask tracks the
+    // actual geometry. Rows bake in parallel; the pass is a one-off at startup.
+    BakedMaps bakeMaps() {
+        const int W = 4096, H = 256;
+        std::vector<unsigned char> albPx(static_cast<size_t>(W) * H * 4);
+        std::vector<unsigned char> nrmPx(static_cast<size_t>(W) * H * 4);
+        std::vector<unsigned char> rghPx(static_cast<size_t>(W) * H * 4);
         auto toByte = [](float v) {
             return static_cast<unsigned char>(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
         };
-        for (int y = 0; y < H; ++y) {
+
+        std::vector<int> rows(H);
+        std::iota(rows.begin(), rows.end(), 0);
+        std::for_each(std::execution::par, rows.begin(), rows.end(), [&](int y) {
             const float r = kInnerR + (kOuterR - kInnerR) * ((y + 0.5f) / H);
             for (int x = 0; x < W; ++x) {
                 const float a = 2.f * math::PI * ((x + 0.5f) / W);
-                const float wx = std::cos(a) * r, wz = std::sin(a) * r;
-                const float h = heightAt(wx, wz);
-                const float ny = normalAt(wx, wz).y;
+                const float ca = std::cos(a), sa = std::sin(a);
+                const float wx = ca * r, wz = sa * r;
 
-                const float mottle = fbm(wx * 0.05f, wz * 0.05f, 3);
-                const float veg    = fbm(wx * 0.016f + 31.f, wz * 0.016f, 3);
+                const float eps = 2.5f;
+                const float h   = heightAt(wx, wz);
+                const float hxp = heightAt(wx + eps, wz), hxm = heightAt(wx - eps, wz);
+                const float hzp = heightAt(wx, wz + eps), hzm = heightAt(wx, wz - eps);
+                const float dhdx = (hxp - hxm) / (2.f * eps);
+                const float dhdz = (hzp - hzm) / (2.f * eps);
+                const float ny   = 1.f / std::sqrt(1.f + dhdx * dhdx + dhdz * dhdz);
+                const float lap  = (hxp + hxm + hzp + hzm - 4.f * h) / (eps * eps);
+                // convexity: exposed crests bleach, concave seams collect dirt
+                const float crest = std::clamp(-lap * 0.8f, -1.f, 1.f);
 
-                float cr = 0.36f + 0.20f * mottle;// base granite grey
-                float cg = 0.34f + 0.18f * mottle;
-                float cb = 0.32f + 0.16f * mottle;
-                // moss/heather on gentle low/mid ground, patched by its own noise
-                const float vegMask = smoothstepf(0.55f, 0.78f, ny) *
-                                      smoothstepf(0.8f, 2.5f, h) * (1.f - smoothstepf(28.f, 42.f, h)) *
-                                      smoothstepf(0.40f, 0.60f, veg);
-                cr += (0.16f + 0.10f * veg - cr) * vegMask;
-                cg += (0.30f + 0.06f * veg - cg) * vegMask;
-                cb += (0.10f + 0.04f * veg - cb) * vegMask;
-                // dark wet band at the waterline, continuing underwater
+                const float tone   = fbm(wx * 0.0045f, wz * 0.0045f, 2); // per-face rock tone, λ ≈ 220 m
+                const float mottle = fbm(wx * 0.05f, wz * 0.05f, 3);     // λ ≈ 20 m
+                const float grain  = fbm(wx * 0.7f + 5.f, wz * 0.7f + 13.f, 2);// λ ≈ 1.4 m
+                const float vegL   = fbm(wx * 0.013f + 31.f, wz * 0.013f, 3);  // veg patches, λ ≈ 75 m
+                const float vegS   = fbm(wx * 0.11f + 7.f, wz * 0.11f + 3.f, 2);// ragged veg edges, λ ≈ 9 m
+                const float warp   = fbm(wx * 0.03f + 71.f, wz * 0.03f + 11.f, 2);
+
+                // two-tone base: pale weathered granite vs darker gneiss,
+                // blended at island scale so each face reads as its own mass
+                const float t = smoothstepf(0.35f, 0.65f, tone);
+                float cr = 0.26f + 0.20f * t;
+                float cg = 0.245f + 0.195f * t;
+                float cb = 0.235f + 0.175f * t;
+                const float speck = (mottle - 0.5f) * 0.14f + (grain - 0.5f) * 0.09f;
+                cr += speck;
+                cg += speck;
+                cb += speck * 0.9f;
+                // wandering sub-horizontal strata bands on steep faces
+                const float strata = 1.f + 0.09f * std::sin(h * 0.75f + 6.f * warp) *
+                                                 smoothstepf(0.85f, 0.55f, ny);
+                // crest/hollow shading from the Laplacian
+                const float cav = 1.f + 0.14f * crest;
+                cr *= strata * cav;
+                cg *= strata * cav;
+                cb *= strata * cav;
+
+                // scree aprons: gentle low benches at the cliff feet collect debris
+                const float scree = smoothstepf(0.60f, 0.78f, ny) * smoothstepf(1.2f, 2.6f, h) *
+                                    (1.f - smoothstepf(5.f, 13.f, h)) *
+                                    smoothstepf(0.35f, 0.65f, vegS) * 0.55f;
+                cr += (0.41f - cr) * scree;
+                cg += (0.375f - cg) * scree;
+                cb += (0.315f - cb) * scree;
+
+                // heather/shrub on mid slopes, its own patch noise
+                const float hePatch = fbm(wx * 0.019f + 57.f, wz * 0.019f + 91.f, 2);
+                const float heather = smoothstepf(0.45f, 0.62f, ny) * smoothstepf(1.5f, 3.5f, h) *
+                                      (1.f - smoothstepf(22.f, 34.f, h)) *
+                                      smoothstepf(0.45f, 0.62f, hePatch);
+                cr += (0.205f + 0.05f * hePatch - cr) * heather;
+                cg += (0.17f + 0.05f * hePatch - cg) * heather;
+                cb += (0.105f - cb) * heather;
+
+                // grass/moss on flat low benches; hollows accumulate soil, so
+                // the Laplacian feeds the patch threshold
+                const float gPatch = 0.55f * vegL + 0.30f * vegS +
+                                     0.15f * std::clamp(lap * 1.5f, 0.f, 1.f);
+                const float grass = smoothstepf(0.60f, 0.80f, ny) * smoothstepf(0.8f, 2.6f, h) *
+                                    (1.f - smoothstepf(24.f, 38.f, h)) *
+                                    smoothstepf(0.42f, 0.58f, gPatch);
+                cr += (0.13f + 0.07f * vegS - cr) * grass;
+                cg += (0.27f + 0.08f * vegL - cg) * grass;
+                cb += (0.085f - cb) * grass;
+
+                // pale lichen crusts on exposed high rock
+                const float lich = smoothstepf(8.f, 20.f, h) *
+                                   smoothstepf(0.55f, 0.75f, fbm(wx * 0.15f + 13.f, wz * 0.15f + 29.f, 2)) *
+                                   std::clamp(0.5f + 0.5f * crest, 0.f, 1.f) * 0.30f;
+                cr += (0.50f - cr) * lich;
+                cg += (0.51f - cg) * lich;
+                cb += (0.46f - cb) * lich;
+                // summits bleach toward bare washed rock
+                const float alt = 1.f + 0.08f * smoothstepf(28.f, 52.f, h);
+                cr *= alt;
+                cg *= alt;
+                cb *= alt;
+
+                // algae film straddling the waterline, then the dark wet band
+                const float algae = (1.f - smoothstepf(0.6f, 1.4f, std::abs(h - 0.3f))) * 0.5f;
+                cr += (0.10f - cr) * algae;
+                cg += (0.15f - cg) * algae;
+                cb += (0.10f - cb) * algae;
                 const float wet = (1.f - smoothstepf(0.4f, 2.2f, h)) * 0.85f;
-                cr += (0.10f - cr) * wet;
-                cg += (0.10f - cg) * wet;
-                cb += (0.095f - cb) * wet;
+                cr += (0.095f - cr) * wet;
+                cg += (0.095f - cg) * wet;
+                cb += (0.09f - cb) * wet;
+
+                // detail normal: world-plane gradient of the relief field,
+                // projected onto the polar tangent frame (T = +u = angular,
+                // B = +v = radial — matches the shader's derivative TBN).
+                // Damped under vegetation: soil and moss smooth micro-relief.
+                const float de = 0.5f;
+                const float damp = 0.8f * (1.f - 0.65f * std::max(grass, heather));
+                const float gx = (detailHeight(wx + de, wz) - detailHeight(wx - de, wz)) / (2.f * de) * damp;
+                const float gz = (detailHeight(wx, wz + de) - detailHeight(wx, wz - de)) / (2.f * de) * damp;
+                const float st = -gx * sa + gz * ca;// slope along +u (angular)
+                const float sb = gx * ca + gz * sa; // slope along +v (radial)
+                const float inv = 1.f / std::sqrt(st * st + sb * sb + 1.f);
+
+                // roughness (.g multiplies material roughness): matte dry
+                // granite, matte vegetation, water-slicked rock turns glossy
+                float rough = 0.86f + 0.10f * (mottle - 0.5f) - 0.06f * crest;
+                rough += (0.95f - rough) * std::max(grass, heather);
+                rough += (0.45f - rough) * wet;
 
                 const size_t i = (static_cast<size_t>(y) * W + x) * 4;
-                px[i + 0] = toByte(cr);
-                px[i + 1] = toByte(cg);
-                px[i + 2] = toByte(cb);
-                px[i + 3] = 255;
+                albPx[i + 0] = toByte(cr);
+                albPx[i + 1] = toByte(cg);
+                albPx[i + 2] = toByte(cb);
+                albPx[i + 3] = 255;
+                nrmPx[i + 0] = toByte(-st * inv * 0.5f + 0.5f);
+                nrmPx[i + 1] = toByte(-sb * inv * 0.5f + 0.5f);
+                nrmPx[i + 2] = toByte(inv * 0.5f + 0.5f);
+                nrmPx[i + 3] = 255;
+                rghPx[i + 0] = 255;
+                rghPx[i + 1] = toByte(rough);
+                rghPx[i + 2] = 0;
+                rghPx[i + 3] = 255;
             }
-        }
-        auto tex = DataTexture::create(ImageData{std::move(px)},
-                                       static_cast<unsigned>(W), static_cast<unsigned>(H));
-        tex->colorSpace = ColorSpace::sRGB;
-        tex->magFilter = Filter::Linear;
-        tex->minFilter = Filter::LinearMipmapLinear;
-        tex->generateMipmaps = true;
-        tex->needsUpdate();
-        return tex;
+        });
+
+        auto makeTex = [&](std::vector<unsigned char>&& px, bool srgb) {
+            auto tex = DataTexture::create(ImageData{std::move(px)},
+                                           static_cast<unsigned>(W), static_cast<unsigned>(H));
+            if (srgb) tex->colorSpace = ColorSpace::sRGB;// normal/rough stay raw UNORM
+            tex->magFilter = Filter::Linear;
+            tex->minFilter = Filter::LinearMipmapLinear;
+            tex->generateMipmaps = true;
+            tex->needsUpdate();
+            return tex;
+        };
+        return {makeTex(std::move(albPx), true),
+                makeTex(std::move(nrmPx), false),
+                makeTex(std::move(rghPx), false)};
     }
 
     std::shared_ptr<Mesh> build() {
-        // 1024 angular columns ≈ 2.7 m spacing at mid-ring; the seam column is
-        // duplicated (u = 0 and u = 1) so UVs never wrap. ~30 K verts, static
-        // BLAS built once.
-        const int NA = 1024, NR = 28;
-        std::vector<float> pos, nrm, uv;
-        pos.reserve((NA + 1) * (NR + 1) * 3);
-        nrm.reserve((NA + 1) * (NR + 1) * 3);
-        uv.reserve((NA + 1) * (NR + 1) * 2);
-        for (int j = 0; j <= NR; ++j) {
+        // 2048 angular columns ≈ 1.35 m spacing at mid-ring, 64 radial rows
+        // ≈ 1.7 m — fine enough to resolve the λ ≥ 3.5 m meso slabs in
+        // heightAt. The seam column is duplicated (u = 0 and u = 1) so UVs
+        // never wrap. ~133 K verts / ~262 K tris, static BLAS built once;
+        // rows fill in parallel (≈ 670 K height-field probes).
+        const int NA = 2048, NR = 64;
+        std::vector<float> pos(static_cast<size_t>(NA + 1) * (NR + 1) * 3);
+        std::vector<float> nrm(static_cast<size_t>(NA + 1) * (NR + 1) * 3);
+        std::vector<float> uv(static_cast<size_t>(NA + 1) * (NR + 1) * 2);
+        std::vector<int> rows(NR + 1);
+        std::iota(rows.begin(), rows.end(), 0);
+        std::for_each(std::execution::par, rows.begin(), rows.end(), [&](int j) {
             const float r = kInnerR + (kOuterR - kInnerR) * (static_cast<float>(j) / NR);
             for (int i = 0; i <= NA; ++i) {
                 const float a = 2.f * math::PI * (static_cast<float>(i) / NA);
                 const float x = std::cos(a) * r, z = std::sin(a) * r;
                 const Vector3 n = normalAt(x, z);
-                pos.insert(pos.end(), {x, heightAt(x, z), z});
-                nrm.insert(nrm.end(), {n.x, n.y, n.z});
-                uv.insert(uv.end(), {static_cast<float>(i) / NA, static_cast<float>(j) / NR});
+                const size_t v = static_cast<size_t>(j) * (NA + 1) + i;
+                pos[v * 3 + 0] = x;
+                pos[v * 3 + 1] = heightAt(x, z);
+                pos[v * 3 + 2] = z;
+                nrm[v * 3 + 0] = n.x;
+                nrm[v * 3 + 1] = n.y;
+                nrm[v * 3 + 2] = n.z;
+                uv[v * 2 + 0] = static_cast<float>(i) / NA;
+                uv[v * 2 + 1] = static_cast<float>(j) / NR;
             }
-        }
+        });
         std::vector<unsigned int> idx;
         idx.reserve(static_cast<size_t>(NA) * NR * 6);
         for (int j = 0; j < NR; ++j)
@@ -319,9 +464,12 @@ namespace island {
         geo->computeBoundingSphere();
 
         auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
-                                                        .roughness(0.95f)
+                                                        .roughness(1.f)// baked map carries the variation
                                                         .metalness(0.f));
-        mat->map = bakeColorMap();
+        const BakedMaps maps = bakeMaps();
+        mat->map          = maps.albedo;
+        mat->normalMap    = maps.normal;
+        mat->roughnessMap = maps.rough;
         auto mesh = Mesh::create(geo, mat);
         mesh->frustumCulled = false;// the ring surrounds the camera — always partly in view
         return mesh;
