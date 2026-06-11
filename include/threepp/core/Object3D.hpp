@@ -335,6 +335,11 @@ namespace threepp {
         // not raising matrixWorldNeedsUpdate it lets updateMatrixWorld() skip
         // the world multiply for the whole unchanged subtree. Pure polling;
         // no user-side notification ever required.
+        // When matrixAutoUpdate is false, updateMatrixWorld() reuses
+        // composedMatrix_ as a snapshot of the externally-driven `matrix`
+        // (helpers alias another object's matrixWorld) so external writes
+        // still raise matrixWorldNeedsUpdate; composedPqs_ is NaN-poisoned in
+        // that mode so re-enabling matrixAutoUpdate always recomposes.
         std::array<float, 10> composedPqs_{};
         std::array<float, 16> composedMatrix_{};
         bool composedValid_ = false;

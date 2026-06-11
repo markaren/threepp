@@ -2,7 +2,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/core/Object3D.hpp"
+#include "threepp/helpers/CameraHelper.hpp"
 #include "threepp/math/Euler.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix3.hpp"
@@ -318,6 +320,80 @@ TEST_CASE("updateMatrixWorld") {
                                                                   0, 1, 0, 0,
                                                                   0, 0, 1, 0,
                                                                   4, 5, 6, 1});
+}
+
+TEST_CASE("external matrix writes propagate when matrixAutoUpdate is false") {
+
+    // The helper pattern: CameraHelper and the light helpers alias another
+    // object's matrixWorld as their local matrix with matrixAutoUpdate=false,
+    // relying on updateMatrixWorld() (no force) to pick up external writes.
+    // Before updateMatrix() gained its early-out this was carried by the
+    // every-frame force cascade from the root; now it's polled.
+
+    auto root = Object3D::create();
+    auto tracker = Object3D::create();
+    tracker->matrixAutoUpdate = false;
+    root->add(tracker);
+
+    root->updateMatrixWorld();// settle — nothing dirty
+
+    REQUIRE(tracker->matrixWorld->elements == std::array<float, 16>{
+                                                      1, 0, 0, 0,
+                                                      0, 1, 0, 0,
+                                                      0, 0, 1, 0,
+                                                      0, 0, 0, 1});
+
+    // external write to the local matrix (as if the tracked camera moved)
+    tracker->matrix->setPosition(Vector3(1, 2, 3));
+
+    root->updateMatrixWorld();// no force
+
+    REQUIRE(tracker->matrixWorld->elements == std::array<float, 16>{
+                                                      1, 0, 0, 0,
+                                                      0, 1, 0, 0,
+                                                      0, 0, 1, 0,
+                                                      1, 2, 3, 1});
+
+    // re-enabling matrixAutoUpdate must recompose from position/quaternion/
+    // scale and clobber the external matrix, exactly like three.js
+    tracker->matrixAutoUpdate = true;
+    root->updateMatrixWorld();
+
+    REQUIRE(tracker->matrix->elements == std::array<float, 16>{
+                                                 1, 0, 0, 0,
+                                                 0, 1, 0, 0,
+                                                 0, 0, 1, 0,
+                                                 0, 0, 0, 1});
+
+    REQUIRE(tracker->matrixWorld->elements == std::array<float, 16>{
+                                                      1, 0, 0, 0,
+                                                      0, 1, 0, 0,
+                                                      0, 0, 1, 0,
+                                                      0, 0, 0, 1});
+}
+
+TEST_CASE("CameraHelper follows camera without forced world update") {
+
+    auto scene = Object3D::create();
+    auto camera = PerspectiveCamera::create(60.f, 1.f, 0.1f, 100.f);
+    auto helper = CameraHelper::create(*camera);
+    scene->add(helper);
+
+    scene->updateMatrixWorld();
+
+    camera->position.set(5, 6, 7);
+    camera->updateMatrixWorld();
+    scene->updateMatrixWorld();// renderer per-frame pass, no force
+
+    REQUIRE(helper->matrixWorld->elements == camera->matrixWorld->elements);
+
+    // move again — must keep tracking on subsequent frames too
+    camera->position.set(-3, 0, 1);
+    camera->updateMatrixWorld();
+    scene->updateMatrixWorld();
+
+    REQUIRE(helper->matrixWorld->elements == camera->matrixWorld->elements);
+    REQUIRE(helper->matrixWorld->elements[12] == -3.f);
 }
 
 TEST_CASE("updateWorldMatrix") {
