@@ -46,8 +46,14 @@
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/loaders/SVGLoader.hpp"
 #include "threepp/loaders/URDFLoader.hpp"
+#include "threepp/objects/LineLoop.hpp"
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/TextSprite.hpp"
+
+#ifdef ROBOT_CELL_WITH_VULKAN
+#include "threepp/helpers/PathTracedLidarSensor.hpp"
+#include "threepp/renderers/VulkanRenderer.hpp"
+#endif
 
 #include <PxPhysicsAPI.h>
 
@@ -692,9 +698,10 @@ namespace {
         return failures == 0 ? 0 : 1;
     }
 
-    // --depthprobe [gl|wgpu]: deterministic sensor check. Sensor 1 m above a
-    // flat floor with one 0.4 m box offset in +x: floor points must land at
-    // y=0, box-top points at y=0.4, on every backend.
+    // --depthprobe [gl|wgpu|vulkan]: deterministic sensor check. Sensor 1 m
+    // above a flat floor with one 0.4 m box offset in +x: floor points must
+    // land at y=0, box-top points at y=0.4, on every backend. On Vulkan the
+    // identical pinhole pattern is ray-traced instead of rasterised.
     int runDepthProbe(GraphicsAPI api) {
 
         Canvas canvas(Canvas::Parameters().title("depth probe").size(320, 240));
@@ -714,6 +721,15 @@ namespace {
         sensor.position.set(0.f, 1.f, 0.f);
         sensor.rotation.x = -math::PI / 2;// look straight down
         scene.addRef(sensor);
+
+#ifdef ROBOT_CELL_WITH_VULKAN
+        auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get());
+        PathTracedLidarSensor ptProbe(60.f, 64, 48, 3.f);
+        std::vector<LidarReturn> returns;
+        ptProbe.position.copy(sensor.position);
+        ptProbe.rotation.x = -math::PI / 2;
+        if (vk) scene.addRef(ptProbe);
+#endif
         scene.updateMatrixWorld(true);
 
         PerspectiveCamera cam(60, canvas.aspect(), 0.1f, 10.f);
@@ -747,7 +763,27 @@ namespace {
             sensor.position.x = 0.15f * static_cast<float>(frame);
             sensor.position.y = 1.f + 0.05f * static_cast<float>(frame);
 
-            sensor.scan(*renderer, scene, cloud);
+            // render BEFORE scanning: the ray-traced sensor walks the TLAS
+            // the render just built (the raster sensor doesn't care)
+            renderer->autoClear = true;
+            renderer->render(scene, cam);
+            renderer->autoClear = false;
+            renderer->clearDepth();
+            renderer->render(*uiScene, *uiCam);
+
+#ifdef ROBOT_CELL_WITH_VULKAN
+            if (vk) {
+                ptProbe.position.copy(sensor.position);
+                ptProbe.scan(*vk, returns);
+                cloud.clear();
+                for (const auto& r : returns) {
+                    if (r.returnNo > 0) cloud.push_back(r.position);
+                }
+            } else
+#endif
+            {
+                sensor.scan(*renderer, scene, cloud);
+            }
 
             // mean position of all points more than 5 cm above the floor = box top
             int nBox = 0;
@@ -771,12 +807,6 @@ namespace {
 
             label->setText(std::to_string(frame));
 
-            renderer->autoClear = true;
-            renderer->render(scene, cam);
-            renderer->autoClear = false;
-            renderer->clearDepth();
-            renderer->render(*uiScene, *uiCam);
-
             if (frame >= 5) canvas.close();
         });
         return failures == 0 ? 0 : 1;
@@ -787,9 +817,17 @@ namespace {
 int main(int argc, char** argv) {
 
     if (argc > 1 && std::string(argv[1]) == "--depthprobe") {
-        const GraphicsAPI api = (argc > 2 && std::string(argv[2]) == "wgpu")
-                ? GraphicsAPI::WebGPU
-                : GraphicsAPI::OpenGL;
+        const std::string backend = argc > 2 ? argv[2] : "gl";
+        GraphicsAPI api = GraphicsAPI::OpenGL;
+        if (backend == "wgpu") api = GraphicsAPI::WebGPU;
+        if (backend == "vulkan") {
+#ifdef ROBOT_CELL_WITH_VULKAN
+            api = GraphicsAPI::Vulkan;
+#else
+            std::cerr << "built without Vulkan support" << std::endl;
+            return 1;
+#endif
+        }
         return runDepthProbe(api);
     }
 
@@ -812,6 +850,12 @@ int main(int argc, char** argv) {
 
     Canvas canvas(Canvas::Parameters().title("threepp - KUKA Robot Cell").size(1366, 820).antialiasing(4));
     auto renderer = createRenderer(canvas);
+
+#ifdef ROBOT_CELL_WITH_VULKAN
+    // On Vulkan the perception sensor is ray-traced through the renderer's
+    // TLAS instead of rasterised into a render target.
+    auto* vkRenderer = dynamic_cast<VulkanRenderer*>(renderer.get());
+#endif
 
     const float dpi = monitor::contentScale().first;
 
@@ -932,17 +976,36 @@ int main(int argc, char** argv) {
     pusher->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
 
     // ===== eye-in-hand depth sensor =========================================
-    // 70-deg FOV so the survey pose sees the whole crate zone in one scan
-    DepthSensor sensor(70.f, 160, 120, 0.04f, 1.6f);
+    // 70-deg FOV so the survey pose sees the whole crate zone in one scan.
+    // GL/WGPU: raster DepthSensor (render-to-target + depth readback).
+    // Vulkan: the SAME pinhole beam pattern, ray-traced through the
+    // renderer's TLAS — perception downstream is identical.
+    constexpr float kSensFov = 70.f;
+    constexpr unsigned int kSensW = 160, kSensH = 120;
+    constexpr float kSensFar = 1.6f;
+
+    DepthSensor sensor(kSensFov, kSensW, kSensH, 0.04f, kSensFar);
     sensor.rangeNoise = 0.004f;
     sensor.position.set(0.065f, 0.f, 0.01f);
     sensor.rotation.x = math::PI;// camera looks -Z; flip to look along tool +Z (down)
-    toolGroup->addRef(sensor);
 
-    auto frustum = CameraHelper::create(sensor.getCamera());
-    scene->add(frustum);
+    std::shared_ptr<CameraHelper> frustum;// raster only — the PT sensor has no Camera
+#ifdef ROBOT_CELL_WITH_VULKAN
+    PathTracedLidarSensor ptSensor(kSensFov, kSensW, kSensH, kSensFar);
+    std::vector<LidarReturn> lidarReturns;
+    if (vkRenderer) {
+        ptSensor.position.copy(sensor.position);
+        ptSensor.rotation.x = math::PI;
+        toolGroup->addRef(ptSensor);
+    } else
+#endif
+    {
+        toolGroup->addRef(sensor);
+        frustum = CameraHelper::create(sensor.getCamera());
+        scene->add(frustum);
+    }
 
-    const size_t maxPoints = sensor.width() * sensor.height();
+    const size_t maxPoints = static_cast<size_t>(kSensW) * kSensH;
     auto pcGeom = BufferGeometry::create();
     pcGeom->setAttribute("position", FloatBufferAttribute::create(std::vector<float>(maxPoints * 3), 3));
     pcGeom->setAttribute("color", FloatBufferAttribute::create(std::vector<float>(maxPoints * 3), 3));
@@ -956,21 +1019,28 @@ int main(int argc, char** argv) {
     std::vector<Vector3> cloud;
     std::vector<Detection> detections;// refreshed every scan; consumed at Survey
 
-    // detection markers: a ring hovering over each perceived crate, so what
-    // the robot BELIEVES is visible next to what IS (markers are hidden
-    // during the scan so perception never sees its own annotations)
+    // Detection markers: a ring hovering over each perceived crate, so what
+    // the robot BELIEVES is visible next to what IS. Deliberately LINES, not
+    // meshes: lines never enter the ray-tracing acceleration structure, so
+    // the Vulkan sensor cannot see its own annotations by construction. The
+    // raster sensors DO rasterise lines, so the group is still hidden during
+    // raster scans.
     constexpr size_t kMaxMarkers = 10;
     auto markerGroup = Group::create();
-    std::vector<std::shared_ptr<Mesh>> markers;
+    std::vector<std::shared_ptr<LineLoop>> markers;
     {
-        auto markerMat = MeshBasicMaterial::create();
-        markerMat->color = Color(kGood);
-        markerMat->transparent = true;
-        markerMat->opacity = 0.85f;
-        auto ringGeom = TorusGeometry::create(0.052f, 0.0045f, 8, 32);
+        auto ringMat = LineBasicMaterial::create();
+        ringMat->color = Color(kGood);
+        std::vector<float> pts;
+        constexpr int kSeg = 48;
+        for (int i = 0; i < kSeg; ++i) {
+            const float a = 2.f * math::PI * static_cast<float>(i) / kSeg;
+            pts.insert(pts.end(), {std::cos(a) * 0.052f, 0.f, std::sin(a) * 0.052f});
+        }
+        auto ringGeom = BufferGeometry::create();
+        ringGeom->setAttribute("position", FloatBufferAttribute::create(pts, 3));
         for (size_t i = 0; i < kMaxMarkers; ++i) {
-            auto m = Mesh::create(ringGeom, markerMat);
-            m->rotation.x = math::PI / 2;// torus lies flat (XZ plane)
+            auto m = LineLoop::create(ringGeom, ringMat);
             m->visible = false;
             markerGroup->add(m);
             markers.push_back(m);
@@ -1217,7 +1287,9 @@ int main(int argc, char** argv) {
             gripWanted = !gripWanted;
         });
         addBtn("SENSOR", [&] { sensorOn = !sensorOn; });
-        addBtn("FRUSTUM", [&] { frustum->visible = !frustum->visible; });
+        addBtn("FRUSTUM", [&] {
+            if (frustum) frustum->visible = !frustum->visible;
+        });
         addBtn("SPAWN", [&] { spawnCrate(); });
         addBtn("RESET", [&] { resetCell(); });
     }
@@ -1295,6 +1367,7 @@ int main(int argc, char** argv) {
     std::vector<float> qCmd = q;
     float fpsTimer = 0.f;
     int frames = 0;
+    bool renderedOnce = false;// the ray-traced sensor needs a TLAS first
 
     canvas.animate([&] {
         const float dt = std::min(clock.getDelta(), 0.05f);
@@ -1447,25 +1520,49 @@ int main(int argc, char** argv) {
 
         // --- depth sensor + perception ---------------------------------------
         cloudPoints->visible = false;
+        bool scanned = false;
+        Vector3 sensorWorld;
         if (sensorOn) {
-            const bool frustumWasVisible = frustum->visible;
-            frustum->visible = false;
-            markerGroup->visible = false;// perception must not see its own annotations
-            sensor.scan(*renderer, *scene, cloud);
-            frustum->visible = frustumWasVisible;
-            markerGroup->visible = true;
+#ifdef ROBOT_CELL_WITH_VULKAN
+            if (vkRenderer) {
+                // Ray-traced path: the scan walks the TLAS from the previous
+                // render (hence the first-frame guard). The point cloud, the
+                // helper lines, and the line-based detection rings are not
+                // triangles, so the rays cannot see any of them — no scan
+                // hygiene required.
+                if (renderedOnce) {
+                    ptSensor.scan(*vkRenderer, lidarReturns);
+                    cloud.clear();
+                    for (const auto& r : lidarReturns) {
+                        if (r.returnNo > 0) cloud.push_back(r.position);
+                    }
+                    ptSensor.getWorldPosition(sensorWorld);
+                    scanned = true;
+                }
+            } else
+#endif
+            {
+                const bool frustumWasVisible = frustum && frustum->visible;
+                if (frustum) frustum->visible = false;
+                markerGroup->visible = false;// perception must not see its own annotations
+                sensor.scan(*renderer, *scene, cloud);
+                if (frustum) frustum->visible = frustumWasVisible;
+                markerGroup->visible = true;
+                sensor.getWorldPosition(sensorWorld);
+                scanned = true;
+            }
+        }
 
+        if (scanned) {
             detections = detectCrates(cloud);
 
             auto* posAttr = pcGeom->getAttribute<float>("position");
             auto* colAttr = pcGeom->getAttribute<float>("color");
-            Vector3 sensorWorld;
-            sensor.getWorldPosition(sensorWorld);
             Color c;
             int i = 0;
             for (const auto& p : cloud) {
                 posAttr->setXYZ(i, p.x, p.y, p.z);
-                c.setHSL(0.55f * (1.f - std::min(p.distanceTo(sensorWorld) / sensor.far(), 1.f)), 1.f, 0.55f);
+                c.setHSL(0.55f * (1.f - std::min(p.distanceTo(sensorWorld) / kSensFar, 1.f)), 1.f, 0.55f);
                 colAttr->setXYZ(i, c.r, c.g, c.b);
                 ++i;
             }
@@ -1473,7 +1570,7 @@ int main(int argc, char** argv) {
             posAttr->needsUpdate();
             colAttr->needsUpdate();
             cloudPoints->visible = true;
-        } else {
+        } else if (!sensorOn) {
             detections.clear();// eyes off, beliefs gone
         }
 
@@ -1504,7 +1601,7 @@ int main(int argc, char** argv) {
         buttons[0]->active = autoMode;
         buttons[1]->active = gripWanted;
         buttons[2]->active = sensorOn;
-        buttons[3]->active = frustum->visible;
+        buttons[3]->active = frustum && frustum->visible;
         for (auto& b : buttons) b->refresh();
 
         rows[0].led.set(autoMode ? kGood : kDim);
@@ -1548,6 +1645,7 @@ int main(int argc, char** argv) {
         renderer->autoClear = false;
         renderer->clearDepth();
         renderer->render(*ui, *uiCam);
+        renderedOnce = true;
 
         if (captureAfter > 0.f && clock.getElapsedTime() >= captureAfter) {
             captureAfter = 0.f;
