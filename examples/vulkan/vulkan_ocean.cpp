@@ -1070,7 +1070,7 @@ int main(int argc, char** argv) {
     OceanSounds sounds;
     if (!capturing) sounds.init();
     bool  audioOn  = true;
-    float audioVol = 0.8f;
+    float audioVol = 0.3f;
 
     float waveScale = ocean->params.waveScale;
     float choppiness = ocean->params.choppiness;
