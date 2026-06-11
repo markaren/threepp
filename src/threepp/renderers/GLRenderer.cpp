@@ -1306,8 +1306,19 @@ struct GLRenderer::Impl {
 
         const auto glFormat = gl::toGLFormat(format);
 
+        // Callers pass tightly packed buffers (width * height * channels). The
+        // default GL_PACK_ALIGNMENT of 4 pads each destination row to a 4-byte
+        // boundary, so any format/width whose row stride isn't 4-aligned (RGB
+        // at width 1366 = 4098 bytes) drifts 2 bytes per row — the output
+        // skews diagonally and the per-row channel rotation grays the colors.
+        GLint prevAlign = 4;
+        glGetIntegerv(GL_PACK_ALIGNMENT, &prevAlign);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
         // this was size.width(), size.width() before refactor.. I assume it was an error
         glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.first, size.second, glFormat, GL_UNSIGNED_BYTE, data);
+
+        glPixelStorei(GL_PACK_ALIGNMENT, prevAlign);
     }
 
     void copyTextureToImage(Texture& texture) {
