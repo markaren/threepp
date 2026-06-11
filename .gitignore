@@ -21,3 +21,6 @@ src/external/wgpu-native/
 temp/
 
 .claude
+
+#folder used locally for capturing screenshots of the rendered output, not needed in the repo
+aaa_caps
