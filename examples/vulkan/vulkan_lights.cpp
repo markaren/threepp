@@ -91,8 +91,6 @@ int main() {
 
     Canvas canvas("Vulkan PT - Lights", {{"vsync", false}, {"size", WindowSize{1700, 900}}});
     VulkanRenderer renderer(canvas);
-    renderer.toneMapping = ToneMapping::ACESFilmic;
-    renderer.toneMappingExposure = 1.0f;
 
     Scene scene;
     scene.background = Color(0.02f, 0.02f, 0.02f);

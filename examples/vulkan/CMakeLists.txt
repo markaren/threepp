@@ -46,6 +46,49 @@ if (THREEPP_WITH_INFERENCE)
         compile_vulkan_shader(vulkan_yolov8_inference "${_yolo_sh}/detect_fused.comp" kDetectFusedSpv _yh12)
     endif ()
 
+#    # Synthetic perception loop: render an animated scene with the deferred
+#    # path, detect in the rendered frames with the Vulkan RF-DETR-Nano port,
+#    # overlay the detections live. No image files involved.
+#    add_example(NAME "vulkan_synthetic_inference"
+#            SOURCES vulkan_synthetic_inference.cpp
+#            rfdetr/RfDetrVk.cpp
+#            rfdetr/VkInfer.cpp
+#            rfdetr/WeightLoader.cpp)
+#
+#    if (TARGET vulkan_synthetic_inference)
+#        target_include_directories(vulkan_synthetic_inference PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+#        target_link_libraries(vulkan_synthetic_inference PRIVATE Vulkan::Vulkan)
+#
+#        set(_rf_sh "${CMAKE_CURRENT_SOURCE_DIR}/rfdetr/shaders")
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/conv2d.comp"     kRfConv2dSpv     _sy0  VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/conv1x1.comp"    kRfConv1x1Spv    _sy1  VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/conv3x3.comp"    kRfConv3x3Spv    _sy2  VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/im2col.comp"     kRfIm2colSpv     _sy3  VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/linear.comp"     kRfLinearSpv     _sy4  VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/layernorm.comp"  kRfLayerNormSpv  _sy5  VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/softmax.comp"    kRfSoftmaxSpv    _sy6  VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/gelu.comp"       kRfGeluSpv       _sy7  VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/layerscale.comp" kRfLayerScaleSpv _sy8  VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/attn_scores.comp" kRfAttnScoresSpv _sy9 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/attn_apply.comp" kRfAttnApplySpv  _sy10 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/add.comp"        kRfAddSpv        _sy11 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/concat.comp"     kRfConcatSpv     _sy12 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/build_embeddings.comp" kRfBuildEmbedSpv _sy13 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/attn_vit_scores.comp" kRfAttnVitScoresSpv _sy14 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/attn_vit_apply.comp"  kRfAttnVitApplySpv  _sy15 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/unwindow.comp"      kRfUnwindowSpv  _sy16 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/layernorm_chw.comp" kRfLnChwSpv     _sy17 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/chcopy.comp"        kRfChCopySpv    _sy18 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/transpose_chw2tokens.comp" kRfT2tSpv       _sy19 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/qkv_splice.comp"           kRfQkvSpliceSpv _sy20 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/relu.comp"                 kRfReluSpv      _sy21 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/offset_preprocess.comp"    kRfOffPreSpv    _sy22 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/msdeformattn.comp"         kRfMsDeformSpv  _sy23 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/scale_add.comp"            kRfScaleAddSpv  _sy24 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/linear_splitk.comp"        kRfLinearSplitKSpv _sy25 VARIANT_SUFFIX rfdetr)
+#        compile_vulkan_shader(vulkan_synthetic_inference "${_rf_sh}/reduce_splitk.comp"        kRfReduceSplitKSpv _sy26 VARIANT_SUFFIX rfdetr)
+#    endif ()
+
     add_example(NAME "vulkan_rtdetr_inference"
             SOURCES vulkan_rtdetr_inference.cpp
             rtdetr/RtDetrVk.cpp

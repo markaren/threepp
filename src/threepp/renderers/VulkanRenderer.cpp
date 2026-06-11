@@ -749,6 +749,9 @@ namespace threepp {
             bool     isDisplaced = false;
             bool     isMorphed   = false;
             bool     isTet       = false;
+            bool     isInstanced = false;// entry came from an InstancedMesh expansion
+                                         // (the snapshot fast path recomputes its world
+                                         // matrix as matrixWorld * getMatrixAt(i))
             // Frustum-cull bit, populated once per frame by
             // cullEntriesAgainstFrustum() right before record. Raster passes
             // skip entries with inFrustum == false to dodge the GPU's per-
@@ -759,6 +762,131 @@ namespace threepp {
             // local AABB doesn't reflect deformed extents.
             bool     inFrustum   = true;
         };
+
+        // ── Scene-structure SNAPSHOT (ensureSceneBuilt fast path) ────────────
+        // One node per traverseVisible visit from the last full expansion, in
+        // visit order. ensureSceneBuilt first REPLAYS the traversal comparing
+        // only cheap invariants (object/geometry/material pointers + the flags
+        // that route classification); when the whole sequence matches, last
+        // frame's entries + fingerprints are reused with refreshed matrices and
+        // live version reads instead of being re-derived (the per-mesh
+        // dynamic_cast storm + texture lookups + allocations cost ~9 ms/frame
+        // on Bistro's ~1500 meshes — on a completely STATIC scene). Any
+        // mismatch anywhere falls back to the full expansion, so correctness
+        // never depends on the snapshot: worst case we rebuild, exactly like
+        // every frame did before. three.js polling semantics are preserved —
+        // transform/material/geometry mutations are still picked up by the
+        // value/version diffs every frame; no user-side notification calls.
+        // KNOWN EDGE (accepted as rare-as-asset-restructuring): morph
+        // attributes ADDED to an already-seen geometry keep the cached
+        // isMorphed=false until any structural change rebuilds the snapshot
+        // (position/normal additions ARE detected via the flag bits below).
+        struct SnapNode {
+            Object3D* obj = nullptr;
+            // Typed views of obj, resolved by the full pass's dynamic_casts.
+            // Object3D is a VIRTUAL base, so the replay walk cannot
+            // static_cast down — it reuses these instead (same object at the
+            // same address ⇒ same dynamic type ⇒ pointers still valid).
+            Mesh*          mesh = nullptr;
+            InstancedMesh* inst = nullptr;
+            Line*          line = nullptr;
+            Points*        pts  = nullptr;
+            const void* geom = nullptr;               // mesh/line/points geometry
+            BufferGeometry* geomB = nullptr;          // typed view of geom (attributesVersion reads)
+            const Material* mat = nullptr;            // mesh material
+            const MaterialWithWireframe* wf = nullptr;// cached cast of mat (same object ⇒ still valid)
+            int32_t instCount = -1;                   // InstancedMesh count; -1 = plain Mesh
+            uint32_t flags = 0;                       // kind(2b) | attr/wire/overlay/tet bits
+            // BufferGeometry::attributesVersion() at record time. Unchanged ⇒
+            // no attribute was added/replaced/removed ⇒ the hasPos/hasNorm
+            // flag bits are still valid WITHOUT re-doing the string-keyed
+            // hasAttribute lookups (2/mesh/frame — ~1 ms on Bistro).
+            unsigned int attrVer = 0;
+        };
+        static constexpr uint32_t kSnapKindMask   = 3u;
+        static constexpr uint32_t kSnapKindOther  = 0u;
+        static constexpr uint32_t kSnapKindMesh   = 1u;
+        static constexpr uint32_t kSnapKindLine   = 2u;
+        static constexpr uint32_t kSnapKindPoints = 3u;
+        static constexpr uint32_t kSnapHasPos     = 4u;
+        static constexpr uint32_t kSnapHasNorm    = 8u;
+        static constexpr uint32_t kSnapWire       = 16u;
+        static constexpr uint32_t kSnapOverlay    = 32u;
+        static constexpr uint32_t kSnapTet        = 64u;
+        std::vector<SnapNode> sceneSnapshot_;
+
+        // Classification-routing flags for a mesh — shared by the snapshot
+        // build and the replay walk so the two can't drift.
+        uint32_t snapMeshFlags(Mesh& m, const MaterialWithWireframe* wf) const {
+            uint32_t fl = kSnapKindMesh;
+            if (auto geom = m.geometry()) {
+                if (geom->hasAttribute("position")) fl |= kSnapHasPos;
+                if (geom->hasAttribute("normal")) fl |= kSnapHasNorm;
+            }
+            if (wf && wf->wireframe) fl |= kSnapWire;
+            if (overlayLayer_ >= 0 &&
+                m.layers.isEnabled(static_cast<unsigned>(overlayLayer_))) fl |= kSnapOverlay;
+            if (auto mat = m.material(); mat && mat->tetSkinning && mat->tetTexture) fl |= kSnapTet;
+            return fl;
+        }
+
+        // Replay the last expansion's traversal against the snapshot. true ⇒
+        // tree shape, visibility, classification routing and all mesh/geom/mat
+        // pointers are unchanged since the last full expansion.
+        bool sceneSnapshotMatches(Object3D& scene) {
+            if (!sceneBuilt_ || sceneSnapshot_.empty()) return false;
+            if (prevSceneFingerprint.size() != lastVisibleEntries_.size()) return false;
+            size_t cur = 0;
+            bool ok = true;
+            scene.traverseVisible([&](Object3D& o) {
+                if (!ok) return;
+                if (cur >= sceneSnapshot_.size() || sceneSnapshot_[cur].obj != &o) {
+                    ok = false;
+                    return;
+                }
+                const SnapNode& sn = sceneSnapshot_[cur++];
+                const uint32_t kind = sn.flags & kSnapKindMask;
+                if (kind == kSnapKindOther) return;// pointer identity is all we need
+                // Same object at the same address ⇒ same dynamic type — the
+                // typed pointers recorded by the full pass are still valid, so
+                // the walk pays zero dynamic_casts. attributesVersion()
+                // unchanged ⇒ the hasPos/hasNorm flag bits are still valid
+                // without re-doing the string-keyed attribute lookups.
+                if (kind == kSnapKindLine || kind == kSnapKindPoints) {
+                    auto geom = sn.line ? sn.line->geometry() : sn.pts->geometry();
+                    if (geom.get() != sn.geom ||
+                        (sn.geomB && sn.geomB->attributesVersion() != sn.attrVer)) ok = false;
+                    return;
+                }
+                Mesh* m = sn.mesh;
+                if (m->geometry().get() != sn.geom || m->material().get() != sn.mat) {
+                    ok = false;
+                    return;
+                }
+                if (sn.geomB && sn.geomB->attributesVersion() != sn.attrVer) {
+                    ok = false;// attribute added/replaced/removed → full pass re-derives
+                    return;
+                }
+                // Dynamic routing bits — plain bool reads, no lookups. The
+                // pointed-to material is alive (the mesh holding it just
+                // compared equal) and its dynamic type is fixed.
+                const bool wire = sn.wf && sn.wf->wireframe;
+                const bool over = overlayLayer_ >= 0 &&
+                                  o.layers.isEnabled(static_cast<unsigned>(overlayLayer_));
+                const bool tet = sn.mat && sn.mat->tetSkinning && sn.mat->tetTexture != nullptr;
+                if (wire != ((sn.flags & kSnapWire) != 0u) ||
+                    over != ((sn.flags & kSnapOverlay) != 0u) ||
+                    tet != ((sn.flags & kSnapTet) != 0u)) {
+                    ok = false;
+                    return;
+                }
+                if (sn.instCount >= 0 &&
+                    sn.inst->count() != static_cast<size_t>(sn.instCount)) {
+                    ok = false;
+                }
+            });
+            return ok && cur == sceneSnapshot_.size();
+        }
 
         // Previous-frame camera (proj_prev * view_prev) for primary-hit
         // reprojection. One UBO per frame-in-flight so updates don't race the
@@ -882,6 +1010,20 @@ namespace threepp {
             unsigned int geomVersion = 0;// composite BufferAttribute version (pos+norm+idx+uv)
             std::array<float, 16> matrix{};
             std::array<float, 15> pbr{};// + normalScale.xy + transmission/ior + clearcoat/roughness
+            // TYPED views + attribute-pointer cache for the snapshot lean diff
+            // (the void* fields above are compare-only). attrVersion gates the
+            // cached attribute pointers: while BufferGeometry::
+            // attributesVersion() is unchanged, the attribute map still holds
+            // the same objects, so the raw pointers cannot dangle and the
+            // composite geomVersion is 4 direct version reads instead of 4
+            // string-keyed map lookups + dynamic_casts per entry per frame.
+            const Material* matTyped = nullptr;
+            BufferGeometry* geomTyped = nullptr;
+            unsigned int attrVersion = ~0u;
+            const BufferAttribute* posAttr  = nullptr;
+            const BufferAttribute* normAttr = nullptr;
+            const BufferAttribute* uvAttr   = nullptr;
+            const BufferAttribute* idxAttr  = nullptr;
         };
         std::vector<MeshFingerprint> prevSceneFingerprint;
         // Per-entry record in TLAS-instance order from the last ensureSceneBuilt
@@ -1218,8 +1360,27 @@ namespace threepp {
         std::array<Buffer, kFramesInFlight> rasterCameraUbos{};
         bool  rasterPrevVPValid_ = false;
         float rasterPrevVP_[16]{};
+        // prevVPunjit · currVPunjit⁻¹ for the TAA's sky-motion reconstruction
+        // (sky rasterizes nothing → zero motion → wrong reproject under
+        // camera rotation). Computed in uploadRasterCameraUbo while both
+        // VPs are in hand; identity until the first real frame.
+        std::array<float, 16> taaSkyReproj_{1.f, 0.f, 0.f, 0.f,
+                                            0.f, 1.f, 0.f, 0.f,
+                                            0.f, 0.f, 1.f, 0.f,
+                                            0.f, 0.f, 0.f, 1.f};
         float rasterPrevJitter_[2]{};
         bool  rasterPrevJitterValid_ = false;
+        // Camera WORLD motion this frame (translation m, forward-rotation rad)
+        // for the deferred reflection history policy: a chase-cam surface (car
+        // sunroof with a following camera) is screen-STATIONARY — its motion
+        // vectors are ~0 — while its view-dependent reflection content slides
+        // with every meter the camera travels. Screen-space motion alone cannot
+        // see camera+object co-motion; these can.
+        float deferredCamPrevPos_[3]{};
+        float deferredCamPrevFwd_[3]{};
+        bool  deferredCamPrevValid_ = false;
+        float deferredCamDeltaLen_ = 0.f;
+        float deferredCamRotAngle_ = 0.f;
 
         // Nearest-filter sampler used by raygen to read gbuffer attachments.
         // Nearest avoids bilinear smearing of normal/motion/ids at silhouettes
@@ -1251,8 +1412,9 @@ namespace threepp {
         // Default ON to ship the Phase-2 GI. CAVEATS (follow-ups): GI bounce uses
         // full traceRadiance (expensive in emitter-heavy scenes — cheap sun+emissive
         // bounce pending); no reproject/disocclusion yet → MOTION GHOSTS (ping-pong
-        // history reproject pending). setDeferredDenoise(false) → clean fallback.
-        bool  deferredDenoise_ = true;
+        // history reproject pending). setDenoise(false) → clean fallback.
+        // (One flag for BOTH paths — denoiseEnabled_ — so a single toggle
+        // follows the active RenderMode; setDeferredDenoise is an alias.)
         // Ray-traced env ambient occlusion / GI (RasterFirst). ON: gives the
         // "dirty realistic" PT-like grounding (contact darkening + 1-bounce GI).
         // Uses the deterministic Fibonacci 64-sample gather (clean + settles), so
@@ -4350,7 +4512,12 @@ namespace threepp {
         // the TLAS + scene desc buffers, and rewrites bindings 0/3/4 across
         // every descriptor set without re-allocating from the pool.
         void ensureSceneBuilt(Object3D& scene) {
-            scene.updateMatrixWorld(true);
+            // force=false (matching GLRenderer/WgpuRenderer): with
+            // updateMatrix()'s change-detection early-out, only subtrees whose
+            // transforms actually moved pay the world-matrix multiplies — a
+            // forced pass re-multiplied every node every frame (several
+            // ms/frame on Bistro's node count, static or not).
+            scene.updateMatrixWorld();
 
             // First call each render(): start with no motion. Camera + mesh
             // motion checks below + in updateCameraUbo OR true into this flag
@@ -4359,23 +4526,63 @@ namespace threepp {
             cameraMovedThisFrame_ = false;
             std::fill(meshMovedBits_.begin(), meshMovedBits_.end(), 0u);
 
+            // SNAPSHOT FAST PATH: replay the last expansion's traversal against
+            // cheap invariants. On a match (the overwhelmingly common frame —
+            // including matrix-only motion like a driving car or URDF joints),
+            // skip the expansion AND the fingerprint re-derivation entirely:
+            // reuse last frame's entries/fingerprints, refresh world matrices
+            // and version numbers from the live objects, and fall into the
+            // SAME diff + non-structural tail below. Mutations are still
+            // caught: matrices by the memcmp diff, material/geometry edits by
+            // their version reads, structure/visibility/texture-routing
+            // changes by the snapshot walk itself (mismatch ⇒ full path).
+            const bool snapLean = sceneSnapshotMatches(scene);
+            std::vector<MeshEntry>& entries = lastVisibleEntries_;// canonical list, cached across frames
+            std::vector<MeshFingerprint> currFp;
+            if (snapLean) {
+                for (auto& e : entries) {
+                    if (e.isInstanced) {
+                        Matrix4 instMat;
+                        Matrix4 world;
+                        static_cast<InstancedMesh*>(e.mesh)->getMatrixAt(e.instanceIndex, instMat);
+                        world.multiplyMatrices(*e.mesh->matrixWorld, instMat);
+                        std::memcpy(e.worldMatrix.data(), world.elements.data(), 64);
+                    } else {
+                        std::memcpy(e.worldMatrix.data(), e.mesh->matrixWorld->elements.data(), 64);
+                    }
+                }
+                for (auto& le : lastVisibleLines_) {
+                    const Object3D* src = le.line ? static_cast<const Object3D*>(le.line)
+                                                  : static_cast<const Object3D*>(le.points);
+                    std::memcpy(le.worldMatrix.data(), src->matrixWorld->elements.data(), 64);
+                }
+            } else {
             // Expand the visible scene into one MeshEntry per TLAS instance.
             // Regular meshes contribute one entry; an InstancedMesh contributes
             // count() entries each with worldMatrix = matrixWorld * instanceMat[i].
             // Mirrors WGPU's expandMeshEntries (WgpuPathTracerAtlas.cpp:20).
-            std::vector<MeshEntry> entries;
-            std::vector<LineEntry> lineEntries;
+            std::vector<MeshEntry> built;
+            std::vector<LineEntry> builtLines;
+            sceneSnapshot_.clear();
             // traverseVisible (not traverse) so an invisible parent hides its
             // whole subtree — matches three.js / GLRenderer convention. Plain
             // `traverse` walks every node regardless of visibility, leaking
             // children of hidden groups into the PT/overlay passes.
             scene.traverseVisible([&](Object3D& o) {
+                SnapNode sn{};
+                sn.obj = &o;
                 // Line / LineSegments: never path-trace, always overlay.
                 // Collected before the Mesh dispatch so subclasses don't
                 // accidentally route through the Mesh path.
                 if (auto* line = dynamic_cast<Line*>(&o); line && line->visible) {
                     auto geom = line->geometry();
+                    sn.flags = kSnapKindLine;
+                    sn.line  = line;
+                    sn.geom  = geom.get();
+                    sn.geomB = geom.get();
+                    if (geom) sn.attrVer = geom->attributesVersion();
                     if (geom && geom->hasAttribute("position")) {
+                        sn.flags |= kSnapHasPos;
                         LineEntry le{};
                         le.line       = line;
                         le.points     = nullptr;
@@ -4383,8 +4590,9 @@ namespace threepp {
                         le.isPoints   = false;
                         std::memcpy(le.worldMatrix.data(),
                                     line->matrixWorld->elements.data(), 64);
-                        lineEntries.push_back(le);
+                        builtLines.push_back(le);
                     }
+                    sceneSnapshot_.push_back(sn);
                     return;// Lines aren't Meshes; nothing more to do
                 }
                 // Points (point clouds) — never path-trace, always rasterise
@@ -4392,7 +4600,13 @@ namespace threepp {
                 // cache as Line via the BufferGeometry* key.
                 if (auto* pts = dynamic_cast<Points*>(&o); pts && pts->visible) {
                     auto geom = pts->geometry();
+                    sn.flags = kSnapKindPoints;
+                    sn.pts   = pts;
+                    sn.geom  = geom.get();
+                    sn.geomB = geom.get();
+                    if (geom) sn.attrVer = geom->attributesVersion();
                     if (geom && geom->hasAttribute("position")) {
+                        sn.flags |= kSnapHasPos;
                         LineEntry le{};
                         le.line       = nullptr;
                         le.points     = pts;
@@ -4400,33 +4614,45 @@ namespace threepp {
                         le.isPoints   = true;
                         std::memcpy(le.worldMatrix.data(),
                                     pts->matrixWorld->elements.data(), 64);
-                        lineEntries.push_back(le);
+                        builtLines.push_back(le);
                     }
+                    sceneSnapshot_.push_back(sn);
                     return;
                 }
                 auto* m = dynamic_cast<Mesh*>(&o);
-                if (!m || !m->visible) return;
-                auto geom = m->geometry();
-                if (!geom || !geom->hasAttribute("position")) return;
-                if (!geom->hasAttribute("normal")) return;
+                if (!m || !m->visible) {
+                    sceneSnapshot_.push_back(sn);// kind Other: pointer identity only
+                    return;
+                }
                 // Hybrid overlay (raster-only) classification. Wireframe-
                 // flagged materials and overlay-layer membership both route
                 // the mesh to the post-TAA raster overlay pass and exclude
                 // it from PT (TLAS, raster G-buffer, emissive NEE). PT can't
                 // see/shadow overlay meshes — they're pure debug visuals.
-                bool isOverlay = false;
+                const MaterialWithWireframe* wf = nullptr;
                 if (auto mat = m->material()) {
-                    if (auto* wf = dynamic_cast<MaterialWithWireframe*>(mat.get()); wf && wf->wireframe) {
-                        isOverlay = true;
-                    }
+                    wf = dynamic_cast<MaterialWithWireframe*>(mat.get());
                 }
-                if (overlayLayer_ >= 0 &&
-                    o.layers.isEnabled(static_cast<unsigned>(overlayLayer_))) {
-                    isOverlay = true;
-                }
+                auto* inst = dynamic_cast<InstancedMesh*>(m);
+                sn.mesh      = m;
+                sn.inst      = inst;
+                sn.geom      = m->geometry().get();
+                sn.geomB     = m->geometry().get();
+                sn.mat       = m->material().get();
+                sn.wf        = wf;
+                sn.instCount = inst ? static_cast<int32_t>(inst->count()) : -1;
+                sn.flags     = snapMeshFlags(*m, wf);
+                if (sn.geomB) sn.attrVer = sn.geomB->attributesVersion();
+                sceneSnapshot_.push_back(sn);
+                auto geom = m->geometry();
+                if (!geom || !geom->hasAttribute("position")) return;
+                if (!geom->hasAttribute("normal")) return;
+                const bool isOverlay = (sn.flags & (kSnapWire | kSnapOverlay)) != 0u;
                 // One-shot type probes: an N-instance InstancedMesh costs 3
-                // dynamic_casts total, not 3·N. Consumed by raster pass loops,
-                // resolveBlasForEntry, TLAS refit, and dirty-detection.
+                // dynamic_casts total, not 3·N — and on snapshot-match frames
+                // none at all (the cached entry flags are reused). Consumed by
+                // raster pass loops, resolveBlasForEntry, TLAS refit, and
+                // dirty-detection.
                 const bool isSkinned   = (dynamic_cast<SkinnedMesh*>(m)   != nullptr);
                 const bool isDisplaced = (dynamic_cast<DisplacedMesh*>(m) != nullptr);
                 const bool isMorphed   = isMorphedMesh(*m);
@@ -4437,7 +4663,7 @@ namespace threepp {
                 const bool isTet = !isSkinned && !isDisplaced && !isMorphed &&
                                    m->material() && m->material()->tetSkinning &&
                                    m->material()->tetTexture != nullptr;
-                if (auto* inst = dynamic_cast<InstancedMesh*>(m); inst && inst->count() > 0) {
+                if (inst && inst->count() > 0) {
                     Matrix4 instMat;
                     Matrix4 world;
                     for (size_t j = 0; j < inst->count(); ++j) {
@@ -4451,8 +4677,9 @@ namespace threepp {
                         e.isDisplaced  = isDisplaced;
                         e.isMorphed    = isMorphed;
                         e.isTet        = isTet;
+                        e.isInstanced  = true;
                         std::memcpy(e.worldMatrix.data(), world.elements.data(), 64);
-                        entries.push_back(e);
+                        built.push_back(e);
                     }
                 } else {
                     MeshEntry e{};
@@ -4464,18 +4691,126 @@ namespace threepp {
                     e.isMorphed    = isMorphed;
                     e.isTet        = isTet;
                     std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
-                    entries.push_back(e);
+                    built.push_back(e);
                 }
             });
+            lastVisibleEntries_ = std::move(built);
+            lastVisibleLines_   = std::move(builtLines);
+            }// !snapLean
 
-            // Per-entry fingerprint construction. Hot path on big static scenes
-            // (Bistro): when mesh + mat + geom pointers all match prev frame
-            // AND mat->version() also matches, the 8 texture-of lookups and
-            // materialFromMesh (~21 dynamic_casts/mesh) all return identical
-            // results — copy them straight from prevSceneFingerprint[i] and
-            // only refresh the world matrix. Bistro has ~1500 meshes which
-            // would otherwise cost ~31k dynamic_casts/frame here alone.
-            std::vector<MeshFingerprint> currFp;
+            // Change flags shared by the LEAN in-place diff and the generic
+            // compare loop below — exactly one of the two fills them.
+            bool structuralSame = true;
+            bool matricesSame = true;
+            bool materialValuesSame = true;
+            bool bonesDirtyAny = false;
+            bool displacedDirtyAny = false;
+            bool tetDirtyAny = false;
+            bool geomDirtyAny = false;
+            bool morphDirtyAny = false;
+            std::vector<bool> entryGeomDirty(entries.size(), false);
+
+            // LEAN IN-PLACE DIFF: prevSceneFingerprint IS this frame's
+            // fingerprint state — diff against the live objects and update it
+            // directly instead of copying it into currFp (the copy refcounted
+            // 8 shared_ptr<Texture> per entry: ~24k atomics/frame on Bistro's
+            // textured materials, measured as the largest remaining cost).
+            // Per entry: matrix memcmp, a material-version read through the
+            // cached typed pointer, and the composite geometry version through
+            // the attribute-pointer cache (attributesVersion() gates its
+            // validity — zero string lookups). A bumped material version
+            // re-derives that entry's textures FIRST and only commits its
+            // updates when they are unchanged; a texture swap aborts to the
+            // full fingerprint + compare path (which classifies it STRUCTURAL)
+            // with every already-committed entry still holding verified-
+            // correct values.
+            bool leanOk = false;
+            if (snapLean) {
+                leanOk = true;
+                for (size_t i = 0; i < prevSceneFingerprint.size() && leanOk; ++i) {
+                    MeshFingerprint& fp = prevSceneFingerprint[i];
+                    const MeshEntry& en = entries[i];
+                    const bool xfmChanged =
+                            std::memcmp(fp.matrix.data(), en.worldMatrix.data(), sizeof(fp.matrix)) != 0;
+                    bool matChanged = false;
+                    const unsigned int matVer = fp.matTyped ? fp.matTyped->version() : 0u;
+                    if (matVer != fp.matVersion) {
+                        Mesh* m = en.mesh;
+                        if (albedoTexOf(*m) != fp.albedoTex ||
+                            roughnessTexOf(*m) != fp.roughnessTex ||
+                            metalnessTexOf(*m) != fp.metalnessTex ||
+                            normalTexOf(*m) != fp.normalTex ||
+                            transmissionTexOf(*m) != fp.transmissionTex ||
+                            clearcoatTexOf(*m) != fp.clearcoatTex ||
+                            clearcoatRoughnessTexOf(*m) != fp.clearcoatRoughnessTex ||
+                            emissiveTexOf(*m) != fp.emissiveTex) {
+                            leanOk = false;// texture swap = STRUCTURAL — full path decides
+                            break;
+                        }
+                        matChanged = true;
+                        fp.matVersion = matVer;
+                        const MaterialDesc md = materialFromMesh(*m);
+                        fp.pbr = {md.albedo[0], md.albedo[1], md.albedo[2],
+                                  md.roughness, md.metalness,
+                                  md.emissive[0], md.emissive[1], md.emissive[2],
+                                  md.emissiveIntensity,
+                                  md.normalScale[0], md.normalScale[1],
+                                  md.transmission, md.ior,
+                                  md.clearcoat, md.clearcoatRoughness};
+                    }
+                    BufferGeometry* g = fp.geomTyped;
+                    const unsigned int av = g->attributesVersion();
+                    if (av != fp.attrVersion) {// attribute added/replaced/removed — re-cache
+                        fp.attrVersion = av;
+                        fp.posAttr  = g->getAttribute<float>("position");
+                        fp.normAttr = g->getAttribute<float>("normal");
+                        fp.uvAttr   = g->getAttribute<float>("uv");
+                        fp.idxAttr  = g->getIndex();
+                    }
+                    unsigned int gv = 0;// must mirror geomVersionOf()
+                    if (fp.posAttr)  gv += fp.posAttr->version;
+                    if (fp.normAttr) gv += fp.normAttr->version;
+                    if (fp.idxAttr)  gv += fp.idxAttr->version;
+                    if (fp.uvAttr)   gv += fp.uvAttr->version;
+                    const bool geomChanged = (gv != fp.geomVersion);
+                    if (geomChanged) {
+                        fp.geomVersion = gv;
+                        geomDirtyAny = true;
+                        entryGeomDirty[i] = true;
+                        // boundingBox invalidation — mirrors the generic loop.
+                        if (auto gg = en.mesh->geometry()) gg->boundingBox.reset();
+                    }
+                    if (xfmChanged) {
+                        matricesSame = false;
+                        fp.matrix = en.worldMatrix;
+                    }
+                    if (matChanged) materialValuesSame = false;
+                    if (xfmChanged || matChanged || geomChanged) {
+                        const size_t w = i >> 5;
+                        if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
+                        meshMovedBits_[w] |= (1u << (i & 31u));
+                    }
+                }
+                if (!leanOk) {
+                    // Partial in-place updates are all verified-correct values;
+                    // reset the flags and let the full fingerprint + compare
+                    // re-derive and classify (texture swap ⇒ structural rebuild).
+                    structuralSame = true;
+                    matricesSame = true;
+                    materialValuesSame = true;
+                    geomDirtyAny = false;
+                    entryGeomDirty.assign(entries.size(), false);
+                }
+            }
+
+            // Per-entry fingerprint construction (full path only — the lean
+            // path diffed prev's fingerprints in place above). Hot path on big
+            // static scenes (Bistro): when mesh + mat + geom pointers all match
+            // prev frame AND mat->version() also matches, the 8 texture-of
+            // lookups and materialFromMesh (~21 dynamic_casts/mesh) all return
+            // identical results — copy them straight from
+            // prevSceneFingerprint[i] and only refresh the world matrix.
+            if (!leanOk) {
             currFp.resize(entries.size());
             const bool prevValid = sceneBuilt_ && prevSceneFingerprint.size() == entries.size();
             for (size_t i = 0; i < entries.size(); ++i) {
@@ -4510,6 +4845,13 @@ namespace threepp {
                     fp.mat  = matPtr;
                     fp.matVersion = matVer;
                     fp.geomVersion = geomVer;
+                    fp.matTyped  = matPtr;
+                    fp.geomTyped = m->geometry().get();
+                    fp.attrVersion = fp.geomTyped->attributesVersion();
+                    fp.posAttr  = fp.geomTyped->getAttribute<float>("position");
+                    fp.normAttr = fp.geomTyped->getAttribute<float>("normal");
+                    fp.uvAttr   = fp.geomTyped->getAttribute<float>("uv");
+                    fp.idxAttr  = fp.geomTyped->getIndex();
                     fp.albedoTex             = albedoTexOf(*m);
                     fp.roughnessTex          = roughnessTexOf(*m);
                     fp.metalnessTex          = metalnessTexOf(*m);
@@ -4530,6 +4872,7 @@ namespace threepp {
                               md.clearcoat, md.clearcoatRoughness};
                 }
             }
+            }// !leanOk (fingerprint re-derivation)
 
             // Per-entry bone-dirty bits. SkinnedMesh poses change without
             // touching the SkinnedMesh's worldMatrix, so the matrix-fingerprint
@@ -4591,15 +4934,31 @@ namespace threepp {
                 }
             }
 
+            // LEAN path: the deformer dirty bits (bones / displaced / morph)
+            // come from the scans above — fold them into the moved-bits mask
+            // and the *DirtyAny flags exactly like the generic loop does.
+            if (leanOk) {
+                for (size_t i = 0; i < entries.size(); ++i) {
+                    const bool b = entryBonesDirty[i];
+                    const bool d = entryDisplacedDirty[i];
+                    const bool mo = entryMorphDirty[i];
+                    if (!(b || d || mo)) continue;
+                    if (b) bonesDirtyAny = true;
+                    if (d) displacedDirtyAny = true;
+                    if (mo) morphDirtyAny = true;
+                    const size_t w = i >> 5;
+                    if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
+                    meshMovedBits_[w] |= (1u << (i & 31u));
+                }
+            }
             // Continuous-motion fast path: when only the per-mesh matrices
             // changed (everything else — topology, materials, textures —
             // matches), refit the TLAS in place and let raygen reproject.
             // We only have to detect the matrix-only case ahead of time;
             // motion matrices themselves are computed each frame in
             // renderFrame so we can defer the host write past the fence wait.
-            lastVisibleEntries_ = entries;
-            lastVisibleLines_   = std::move(lineEntries);
-            if (sceneBuilt_ && currFp.size() == prevSceneFingerprint.size()) {
+            // (entries IS lastVisibleEntries_ — cached in place, both paths.)
+            if (sceneBuilt_ && (leanOk || currFp.size() == prevSceneFingerprint.size())) {
                 // Four classes of change:
                 //   structural    — pointers (mesh/geom/mat/textures): full rebuild.
                 //   matrices      — per-mesh world matrices: TLAS refit + bit set.
@@ -4613,15 +4972,9 @@ namespace threepp {
                 // without changing any pointer or texture. Lumping it under
                 // structural caused full rebuild every frame, which reset the
                 // gbuf+sampleIndex globally and froze accumulation scene-wide.
-                bool structuralSame = true;
-                bool matricesSame = true;
-                bool materialValuesSame = true;
-                bool bonesDirtyAny = false;
-                bool displacedDirtyAny = false;
-                bool tetDirtyAny = false;
-                bool geomDirtyAny = false;
-                bool morphDirtyAny = false;
-                std::vector<bool> entryGeomDirty(entries.size(), false);
+                // The LEAN path already filled the change flags in its in-place
+                // diff; only the full path runs the generic compare here.
+                if (!leanOk)
                 for (size_t i = 0; i < currFp.size(); ++i) {
                     const auto& a = currFp[i];
                     const auto& b = prevSceneFingerprint[i];
@@ -4959,8 +5312,9 @@ namespace threepp {
                         cacheCullFlags(matDescsCached_);
                     }
                     // Update prevSceneFingerprint so later frames compare
-                    // against this frame's state, not stale.
-                    prevSceneFingerprint = std::move(currFp);
+                    // against this frame's state, not stale. (The lean path
+                    // diffed + updated prevSceneFingerprint in place.)
+                    if (!leanOk) prevSceneFingerprint = std::move(currFp);
                     return;
                 }
             }
@@ -6239,11 +6593,47 @@ namespace threepp {
             std::memcpy(mapped, &ubo, sizeof(ubo));
             vmaUnmapMemory(ctx->allocator(), rasterCameraUbos[frame].alloc);
 
+            // Far-plane reprojection for the TAA sky path — must be built
+            // BEFORE rasterPrevVP_ rolls over to this frame's VP.
+            {
+                Matrix4 invCurr;
+                invCurr.copy(vpUnj).invert();
+                Matrix4 prevVPm;
+                std::memcpy(prevVPm.elements.data(),
+                            rasterPrevVPValid_ ? rasterPrevVP_ : vpUnj.elements.data(), 64);
+                Matrix4 sky;
+                sky.multiplyMatrices(prevVPm, invCurr);
+                std::memcpy(taaSkyReproj_.data(), sky.elements.data(), 64);
+            }
             std::memcpy(rasterPrevVP_, vpUnj.elements.data(), 64);
             rasterPrevVPValid_ = true;
             rasterPrevJitter_[0] = jClipX;
             rasterPrevJitter_[1] = jClipY;
             rasterPrevJitterValid_ = true;
+            // Camera world motion (translation + forward rotation) for the
+            // deferred reflection policy — see the member comment.
+            {
+                const auto& mw = camera.matrixWorld->elements;
+                const float pos[3] = {mw[12], mw[13], mw[14]};
+                const float fwd[3] = {-mw[8], -mw[9], -mw[10]};// -Z column = view dir
+                if (deferredCamPrevValid_) {
+                    const float dx = pos[0] - deferredCamPrevPos_[0];
+                    const float dy = pos[1] - deferredCamPrevPos_[1];
+                    const float dz = pos[2] - deferredCamPrevPos_[2];
+                    deferredCamDeltaLen_ = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    const float c = std::clamp(fwd[0] * deferredCamPrevFwd_[0] +
+                                                       fwd[1] * deferredCamPrevFwd_[1] +
+                                                       fwd[2] * deferredCamPrevFwd_[2],
+                                               -1.f, 1.f);
+                    deferredCamRotAngle_ = std::acos(c);
+                } else {
+                    deferredCamDeltaLen_ = 0.f;
+                    deferredCamRotAngle_ = 0.f;
+                }
+                std::memcpy(deferredCamPrevPos_, pos, sizeof(pos));
+                std::memcpy(deferredCamPrevFwd_, fwd, sizeof(fwd));
+                deferredCamPrevValid_ = true;
+            }
             // 16-frame Halton cycle: longer than the eye notices, short
             // enough that any drift in the host counter never overflows.
             haltonFrame_ = (haltonFrame_ + 1u) & 15u;
@@ -6744,7 +7134,10 @@ namespace threepp {
         // mirroring three.js's DirectionalLight.target convention. The shader
         // expects the L vector (toward the light), so we negate.
         void updateLightsUbo(uint32_t frame, Object3D& scene) {
-            scene.updateMatrixWorld(true);
+            // force=false: ensureSceneBuilt already brought the graph current
+            // this frame — the forced variant here was a SECOND full
+            // world-multiply pass over every node, every frame.
+            scene.updateMatrixWorld();
 
             GpuLightsUbo ubo{};
 
@@ -13010,15 +13403,16 @@ namespace threepp {
                                                emissiveTotalPowerThisFrame_,
                                                fireflyClamp_,
                                                oceanFineTileSize, oceanFoamTileSize,
-                                               deferredDenoise_, restirDIEnabled_,
+                                               denoiseEnabled_, restirDIEnabled_,
                                                deferredVolDensity_, deferredVolAniso_,
-                                               deferredStarIntensity_);
+                                               deferredStarIntensity_,
+                                               deferredCamDeltaLen_, deferredCamRotAngle_);
                 timingEnd(cb, TP_PathTrace);// pathTraceMs = deferred SHADE only
                 // Spatial denoise of the demodulated diffuse-indirect + recombine.
                 // Barrier: the shade wrote sceneHdr + the indirect image (both
                 // GENERAL storage); the denoise reads the indirect 5×5 neighbourhood
                 // and read-modify-writes sceneHdr — compute→compute RAW/WAR.
-                if (deferredDenoise_) {
+                if (denoiseEnabled_) {
                     VkMemoryBarrier2 denoiseBar{};
                     denoiseBar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
                     denoiseBar.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -13063,7 +13457,8 @@ namespace threepp {
             taa_->recordResolve(cb, currentFrame, imageIndex,
                                 ptExt.width, ptExt.height,
                                 ext.width, ext.height, taaBlendAlpha_,
-                                sharpenStrength_ > 0.0f, sharpenStrength_);
+                                sharpenStrength_ > 0.0f, sharpenStrength_,
+                                taaSkyReproj_.data());
             timingEnd(cb, TP_TAA);
             // ── End raster TAA ─────────────────────────────────────────────────
 
@@ -14264,6 +14659,13 @@ namespace threepp {
 
     WindowSize VulkanRenderer::size() const { return pimpl_->size; }
 
+    WindowSize VulkanRenderer::framebufferSize() const {
+        auto* ctx = pimpl_->ctx.get();
+        if (!ctx || ctx->swapchainImages().empty()) return pimpl_->size;
+        const VkExtent2D ext = ctx->swapchainExtent();
+        return {static_cast<int>(ext.width), static_cast<int>(ext.height)};
+    }
+
     void VulkanRenderer::setSize(const std::pair<int, int>& s) {
         pimpl_->size = WindowSize{s.first, s.second};
         pimpl_->needsResize = true;
@@ -14305,7 +14707,9 @@ namespace threepp {
             throw std::runtime_error("VulkanRenderer::writeFramebuffer: unsupported format " + ext);
         }
         const auto pixels = readRGBPixels();
-        if (pixels.empty()) return;
+        if (pixels.empty()) {
+            throw std::runtime_error("VulkanRenderer::writeFramebuffer: no readable framebuffer");
+        }
         const auto sz = size();
         const int  w  = sz.width();
         const int  h  = sz.height();
@@ -14695,11 +15099,11 @@ namespace threepp {
     }
 
     void VulkanRenderer::setDeferredDenoise(bool enabled) {
-        pimpl_->deferredDenoise_ = enabled;
+        pimpl_->denoiseEnabled_ = enabled;
     }
 
     bool VulkanRenderer::deferredDenoise() const {
-        return pimpl_->deferredDenoise_;
+        return pimpl_->denoiseEnabled_;
     }
 
     void VulkanRenderer::setDeferredAO(bool enabled) {

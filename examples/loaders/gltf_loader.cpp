@@ -15,6 +15,7 @@ using namespace threepp;
 int main(int argc, char** argv) {
     Canvas canvas("GLTF Demo");
     auto renderer = createRenderer(canvas);
+    renderer->toneMapping = ToneMapping::ACESFilmic;
     renderer->shadowMap().enabled = true;
 
     auto scene = Scene::create();
@@ -29,9 +30,6 @@ int main(int argc, char** argv) {
         scene->background = hdrTexture;
         scene->environment = hdrTexture;
     }
-
-    auto ambientLight = AmbientLight::create(0xffffff, 0.2f);
-    scene->add(ambientLight);
 
     auto dirLight = DirectionalLight::create(0xffffff, 1.0f);
     dirLight->position.set(1, 1, -1);

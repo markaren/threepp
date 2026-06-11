@@ -11,13 +11,13 @@
 
 #include "threepp/threepp.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/loaders/FontLoader.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
-#include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
-#include "threepp/core/BufferAttribute.hpp"
 
+#include "utility/DetectionOverlay.hpp"
 #include "yolov8/YoloV8nVk.hpp"
 
 #include <algorithm>
@@ -44,28 +44,22 @@ static const char* kCocoNames[80] = {
     "book","clock","vase","scissors","teddy bear","hair drier","toothbrush"
 };
 
-static std::shared_ptr<LineSegments> makeBoxLines(
-        float x1, float y1, float x2, float y2, const Color& col) {
-    std::vector<float> positions = {
-        x1, y1, 0,  x2, y1, 0,
-        x2, y1, 0,  x2, y2, 0,
-        x2, y2, 0,  x1, y2, 0,
-        x1, y2, 0,  x1, y1, 0
-    };
-    auto geo = BufferGeometry::create();
-    geo->setAttribute("position", FloatBufferAttribute::create(positions, 3));
-    auto mat = LineBasicMaterial::create();
-    mat->color = col;
-    mat->depthTest = false;
-    return LineSegments::create(geo, mat);
-}
-
 int main(int argc, char** argv) {
-    std::string imgPath, weightsPath;
-    if (argc > 1) imgPath     = argv[1];
-    if (argc > 2) weightsPath = argv[2];
+    std::string imgPath, weightsPath, shotPath;
+    std::vector<std::string> args(argv + 1, argv + argc);
+    // --shot <png>: headless capture — render a few viewer frames, save, exit.
+    for (size_t i = 0; i + 1 < args.size();) {
+        if (args[i] == "--shot") {
+            shotPath = args[i + 1];
+            args.erase(args.begin() + i, args.begin() + i + 2);
+        } else {
+            ++i;
+        }
+    }
+    if (args.size() > 0) imgPath     = args[0];
+    if (args.size() > 1) weightsPath = args[1];
     if (imgPath.empty() || weightsPath.empty()) {
-        std::cerr << "Usage: " << argv[0] << " imgPath weightsPath\n";
+        std::cerr << "Usage: " << argv[0] << " imgPath weightsPath [--shot out.png]\n";
         return 1;
     }
 
@@ -163,10 +157,8 @@ int main(int argc, char** argv) {
     imageSprite->position.set(320.f, 320.f, 0.f);// centered -> spans [0,640]
     scene->add(imageSprite);
 
-    static const Color kPalette[] = {
-        Color(0xff3333), Color(0x33ff33), Color(0x3333ff),
-        Color(0xffff33), Color(0xff33ff), Color(0x33ffff)
-    };
+    FontLoader fontLoader;
+    const Font font = fontLoader.defaultFont();
 
     const float sx = 640.f / static_cast<float>(img.width);
     const float sy = 640.f / static_cast<float>(img.height);
@@ -175,12 +167,20 @@ int main(int argc, char** argv) {
         float x2 = std::min(640.f, d.x2 * sx), y2 = std::min(640.f, d.y2 * sy);
         float sy1 = 640.f - y2;
         float sy2 = 640.f - y1;
-        Color col = kPalette[d.cls_id % 6];
-        scene->add(makeBoxLines(x1, sy1, x2, sy2, col));
+        const Color& col = detviz::kPalette[d.cls_id % 6];
+        scene->add(detviz::makeBoxLines(x1, sy1, x2, sy2, col));
+        const char* name = (d.cls_id >= 0 && d.cls_id < 80) ? kCocoNames[d.cls_id] : "unknown";
+        scene->add(detviz::makeLabel(font, detviz::labelText(name, d.conf), col, x1, sy2));
     }
 
+    int shotFrame = 0;
     canvas.animate([&] {
         renderer.render(*scene, *camera);
+        if (!shotPath.empty() && ++shotFrame >= 5) {
+            renderer.writeFramebuffer(shotPath);
+            std::cout << "wrote " << shotPath << "\n";
+            std::exit(0);
+        }
     });
 
     return 0;

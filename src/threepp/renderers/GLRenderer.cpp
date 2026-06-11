@@ -1289,11 +1289,15 @@ struct GLRenderer::Impl {
 
     std::vector<unsigned char> readRGBPixels() {
 
-        const auto [width, height] = _size;
+        // glReadPixels reads from the BOUND framebuffer: the current
+        // RenderTarget's FBO when one is set, else the default framebuffer —
+        // so the dimensions must come from the same source.
+        const int width  = _currentRenderTarget ? static_cast<int>(_currentRenderTarget->width) : _size.width();
+        const int height = _currentRenderTarget ? static_cast<int>(_currentRenderTarget->height) : _size.height();
 
-        std::vector<unsigned char> data(width * height * 3);
+        std::vector<unsigned char> data(static_cast<size_t>(width) * height * 3);
 
-        readPixels({0, 0}, _size, Format::RGB, data.data());
+        readPixels({0, 0}, {width, height}, Format::RGB, data.data());
 
         return data;
     }
@@ -1387,7 +1391,8 @@ struct GLRenderer::Impl {
         auto ext = filename.extension().string();
         std::ranges::transform(ext, ext.begin(), ::tolower);
         std::vector<unsigned char> data;
-        const auto [width, height] = _size;
+        const int width  = _currentRenderTarget ? static_cast<int>(_currentRenderTarget->width) : _size.width();
+        const int height = _currentRenderTarget ? static_cast<int>(_currentRenderTarget->height) : _size.height();
         if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp") {
             data = readRGBPixels();
             flipImage(data, 3, width, height);
@@ -1411,8 +1416,8 @@ struct GLRenderer::Impl {
         if (ext == ".bmp") {
             sucess = stbi_write_bmp(filename.string().c_str(), width, height, 3, data.data());
         }
-        if (sucess) {
-            std::cout << "Saved framebuffer to '" << absolute(filename) << "'" << std::endl;
+        if (!sucess) {
+            throw std::runtime_error("GLRenderer: failed to write framebuffer to " + filename.string());
         }
     }
 

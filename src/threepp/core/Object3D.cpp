@@ -13,6 +13,7 @@
 #include "threepp/lights/Light.hpp"
 
 #include <algorithm>
+#include <cstring>
 
 using namespace threepp;
 
@@ -220,6 +221,12 @@ void Object3D::addRef(Object3D& object) {
     object.parent = this;
     this->children.emplace_back(&object);
 
+    // The new parent's world transform must flow into this subtree even when
+    // the child's local transform is unchanged (updateMatrix()'s early-out no
+    // longer raises this flag every frame). The child's world multiply then
+    // force-propagates to its descendants.
+    object.matrixWorldNeedsUpdate = true;
+
     object.dispatchEvent("added");
 }
 
@@ -339,7 +346,30 @@ void Object3D::traverseAncestors(const std::function<void(Object3D&)>& callback)
 
 void Object3D::updateMatrix() {
 
+    // Early-out when nothing moved since the last compose. matrixAutoUpdate
+    // recomposes EVERY object EVERY frame, so a large static scene paid
+    // thousands of composes plus the cascading world multiplies (the compose
+    // unconditionally raised matrixWorldNeedsUpdate) — several ms/frame of
+    // pure CPU on scenes like Bistro. Comparing the source values keeps the
+    // three.js polling contract bit-identical: mutations to position/
+    // rotation/quaternion/scale are picked up on the very next frame with no
+    // user-side notification; comparing the composed matrix bytes too means a
+    // direct user write to `matrix` while matrixAutoUpdate is on still gets
+    // clobbered by the recompose, exactly as before. (NaN compares unequal,
+    // so degenerate values safely fall through to the recompose.)
+    const std::array<float, 10> pqs{position.x, position.y, position.z,
+                                    quaternion.x, quaternion.y, quaternion.z, quaternion.w,
+                                    scale.x, scale.y, scale.z};
+    if (composedValid_ && pqs == composedPqs_ &&
+        std::memcmp(matrix->elements.data(), composedMatrix_.data(), sizeof(composedMatrix_)) == 0) {
+        return;// unchanged — matrixWorldNeedsUpdate stays as-is, subtree multiply skipped
+    }
+
     this->matrix->compose(this->position, this->quaternion, this->scale);
+
+    composedPqs_ = pqs;
+    std::memcpy(composedMatrix_.data(), matrix->elements.data(), sizeof(composedMatrix_));
+    composedValid_ = true;
 
     this->matrixWorldNeedsUpdate = true;
 }

@@ -41,6 +41,12 @@ namespace threepp {
         [[nodiscard]] WindowSize size() const override;
         void setSize(const std::pair<int, int>& size) override;
 
+        // The actual surface (swapchain) size in PIXELS. Differs from size()
+        // when the OS display scaling is not 100%: size() is the logical
+        // window size, this is what readRGBPixels()/writeFramebuffer()
+        // operate at. Use it for any pixel-space math on read-back frames.
+        [[nodiscard]] WindowSize framebufferSize() const;
+
         [[nodiscard]] float getTargetPixelRatio() const override;
         void setPixelRatio(float value) override;
 
@@ -67,7 +73,7 @@ namespace threepp {
         // creating parent directories as needed — same convenience GLRenderer
         // and WgpuRenderer expose. Wraps readRGBPixels(); call after render().
         // Throws on unsupported extension or write failure.
-        void writeFramebuffer(const std::filesystem::path& filename);
+        void writeFramebuffer(const std::filesystem::path& filename) override;
 
         // Toggle scene-only swapchain capture. When enabled, the renderer
         // snapshots the post-TAA / pre-overlay swapchain image into a
@@ -231,10 +237,13 @@ namespace threepp {
         void setRenderScale(float scale);
         [[nodiscard]] float renderScale() const;
 
-        // Spatial denoiser (5×5 à-trous edge-aware filter) applied to the
-        // temporally-accumulated radiance before tonemap + sRGB encode. Default
-        // on. When off, the compute pass still runs but acts as a tonemap-only
-        // pass-through (pixel-identical to the prior in-shader tonemap path).
+        // Denoiser toggle for the ACTIVE render mode — one switch, both paths.
+        // PT/hybrid: 5×5 à-trous edge-aware filter on the temporally-accumulated
+        // radiance before tonemap + sRGB encode (off = tonemap-only pass-through,
+        // pixel-identical to the prior in-shader tonemap path). RasterFirst:
+        // SVGF à-trous on the ray-traced diffuse-indirect (AO/GI) channel only
+        // (off = raw noisy GI; the raster base is deterministic either way).
+        // Default on. Switching RenderMode needs no re-toggle.
         void setDenoise(bool enabled);
         [[nodiscard]] bool denoise() const;
 
@@ -246,8 +255,9 @@ namespace threepp {
         void setBloomIntensity(float intensity);
         [[nodiscard]] float bloomIntensity() const;
 
-        // RasterFirst spatial denoiser for the ray-traced diffuse-indirect
-        // (AO/GI). On by default; disable to see the raw noisy base.
+        // Deprecated alias of setDenoise()/denoise() — the denoise toggle is
+        // unified across render modes (it used to control only the RasterFirst
+        // GI denoiser, so mode switches required toggling two flags).
         void setDeferredDenoise(bool enabled);
         [[nodiscard]] bool deferredDenoise() const;
 

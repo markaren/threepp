@@ -14,6 +14,7 @@
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/core/misc.hpp"
 
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -107,6 +108,13 @@ namespace threepp {
         // --- Readback ---
 
         [[nodiscard]] virtual std::vector<unsigned char> readRGBPixels() = 0;
+
+        // Save the current framebuffer — the default framebuffer / swapchain,
+        // or the bound RenderTarget — to an image file (.png/.jpg/.jpeg/.bmp,
+        // chosen by extension). Missing parent directories are created.
+        // Throws on an unsupported extension, on encode failure, or when no
+        // framebuffer is readable.
+        virtual void writeFramebuffer(const std::filesystem::path& filename) = 0;
 
         virtual void copyFramebufferToTexture(const Vector2& /*position*/, Texture& /*texture*/, int /*level*/ = 0) {}
 

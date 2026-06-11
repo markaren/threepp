@@ -88,6 +88,7 @@ std::vector<std::shared_ptr<BufferAttribute>>* BufferGeometry::getMorphAttribute
 
 std::vector<std::shared_ptr<BufferAttribute>>* BufferGeometry::getOrCreateMorphAttribute(const std::string& name) {
 
+    ++attributesVersion_;// callers typically add morph targets through this
     return &morphAttributes_[name];
 }
 
@@ -104,6 +105,7 @@ const std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAttribut
 void BufferGeometry::setAttribute(const std::string& name, std::shared_ptr<BufferAttribute> attribute) {
 
     attributes_[name] = std::move(attribute);
+    ++attributesVersion_;
 }
 
 void BufferGeometry::deleteAttribute(const std::string& name) {
@@ -111,6 +113,7 @@ void BufferGeometry::deleteAttribute(const std::string& name) {
     if (attributes_.count(name)) {
 
         attributes_.erase(name);
+        ++attributesVersion_;
     }
 }
 

@@ -60,6 +60,11 @@ layout(push_constant) uniform Pc {
     uint  writeSwap; // 1 = write the swapchain here; 0 = a downstream RCAS
                      //     sharpen pass owns the swapchain write (history is
                      //     still written so it reads the resolved frame).
+    // prevVPunjit · currVPunjit⁻¹ — maps current CLIP at the far plane
+    // (reversed-Z: z = 0) to previous clip. Supplies SKY pixels (no
+    // rasterized geometry → motion stays at the 0 clear) their true
+    // rotation-induced motion. std430: aligns to offset 32.
+    mat4  skyReproj;
 } pc;
 
 // Catmull-Rom history reconstruction (5-tap, bilinear-fused).
@@ -168,8 +173,20 @@ void main() {
 
     // Reproject prev frame via gbuffer motion vec. Motion is in GL-NDC delta
     // (Y-up); convert UV → GL-NDC → add motion → back to screen UV.
-    const vec2 motionGL = texture(gbufMotionTex, uv).rg;
+    vec2 motionGL = texture(gbufMotionTex, uv).rg;
     const vec2 currNDC  = vec2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    // SKY MOTION RECONSTRUCTION. Sky rasterizes no geometry, so its motion
+    // stays at the 0 clear — correct under TRANSLATION (sky is at infinity)
+    // but wrong under ROTATION: the whole sky slides across the screen while
+    // its history reprojects from the same spot (sky smears when tilting).
+    // Rebuild the true motion from the camera matrices by reprojecting this
+    // pixel AT THE FAR PLANE. Geometry that legitimately carries ~0 motion
+    // (static camera) maps through the same matrices to ~identity, so the
+    // exact-zero test is safe.
+    if (all(equal(motionGL, vec2(0.0)))) {
+        const vec4 pclip = pc.skyReproj * vec4(currNDC, 0.0, 1.0);// reversed-Z far
+        if (abs(pclip.w) > 1e-6) motionGL = pclip.xy / pclip.w - currNDC;
+    }
     const vec2 prevNDC  = currNDC + motionGL;
     const vec2 prevUv   = vec2((prevNDC.x * 0.5) + 0.5,
                                 0.5 - (prevNDC.y * 0.5));
@@ -220,7 +237,30 @@ void main() {
         }
     }
 
+    // Motion in pixels — used by the clip-rate gate below AND the velocity
+    // alpha. NDC motion is in [-2, 2] across the screen.
+    const vec2 motionPx = motionGL * 0.5 * vec2(pc.width, pc.height);
+    const float motionLen = length(motionPx);
+
+    // DILATED motion: max |motion| over the 3×3 input neighbourhood. A pixel
+    // an object edge just vacated reads ZERO motion itself when the revealed
+    // background writes none (sky has no geometry) — but the edge that left
+    // it is still adjacent and carries real motion vectors. Dilation gives
+    // the vacated pixel that motion context; a truly static neighbourhood
+    // (camera + scene still) stays at zero.
+    float dilatedMotionPx = motionLen;
+    {
+        const vec2 inTexel = 1.0 / vec2(textureSize(gbufMotionTex, 0));
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                const vec2 mv = texture(gbufMotionTex, uv + vec2(dx, dy) * inTexel).rg;
+                dilatedMotionPx = max(dilatedMotionPx,
+                                      length(mv * 0.5 * vec2(pc.width, pc.height)));
+            }
+    }
+
     vec3 history = curr;
+    float devStreak = 0.0;// consecutive strongly-deviating frames (carried in history .a)
     if (reprojValid && cnt > 0.5) {
         // Catmull-Rom 5-tap (sharper than single bilinear — kills the
         // "everything smears on camera translation" compounding blur).
@@ -230,16 +270,54 @@ void main() {
         const vec3  mu    = m1 / cnt;
         const vec3  sigma = sqrt(max(m2 / cnt - mu * mu, vec3(0.0)));
         const float gamma = 1.0;
-        history = YCoCg_to_RGB(clipAABB(mu - gamma * sigma, mu + gamma * sigma,
-                                        RGB_to_YCoCg(histRGB)));
+        const vec3 histY  = RGB_to_YCoCg(histRGB);
+        const vec3 clipped = clipAABB(mu - gamma * sigma, mu + gamma * sigma, histY);
+        // SOFT RECTIFICATION for jitter-scale deviations only. At a converged
+        // jittering edge the 3×3 box itself oscillates with the sub-pixel
+        // jitter, so HARD-clipping history to each frame's box re-injects that
+        // oscillation regardless of how small the blend α is — the clip, not
+        // the blend, is the static-flicker floor (silhouette edges + the
+        // grazing-horizon stripe in the --steel harness never settled).
+        // Gate the rate on HOW FAR outside the box the history is, in σ units:
+        //   · converged edge under jitter → box spans the edge contrast, σ is
+        //     large, history deviates ≤ ~1σ → soft (15 %/frame) → settles.
+        //   · stale history (disocclusion / vacated pixel) → the box is the
+        //     NEW content with small σ, history is many σ outside → hard clip.
+        // σ-gating (not motion-gating) is load-bearing for SKY-adjacent edges:
+        // sky writes no motion vectors, so a motion gate never fires there and
+        // object history smears into the sky during camera moves (the "edges
+        // toward sky ghost" regression). Pixel motion still forces the hard
+        // clip outright when it IS available.
+        const vec3  devSig = abs(histY - clipped) / max(sigma, vec3(1e-3));
+        const float devK   = max(devSig.x, max(devSig.y, devSig.z));
+        // Deviation STREAK (carried in history .a): a thin SUB-PIXEL feature
+        // deviates only on the jitter frames that MISS it (the 3×3 box
+        // collapses to the smooth background, σ→small, the converged blend
+        // history lands many σ outside) and recovers on hit frames — hard-
+        // clipping those frames pops the feature out of the history (bistro
+        // chair legs/slats read worse, not better). A genuinely VACATED pixel
+        // (e.g. an object edge passing across the motionless sky, which
+        // writes no motion vectors) deviates EVERY frame. So the deviation
+        // term fires only after ≥3 consecutive deviating frames: a real
+        // change eats a ~2-frame (~33 ms) ghost — invisible — while
+        // intermittent sub-pixel misses stay on the soft path and settle.
+        devStreak = (devK > 2.0) ? min(texture(taaHistoryReadTex, prevUv).a + 1.0, 8.0) : 0.0;
+        // Instant σ-term, gated on DILATED motion: during continuous camera
+        // motion the streak's 3-frame ramp re-arms on every freshly-vacated
+        // pixel, leaving a steady-state stale rim trailing edges across the
+        // sky. With motion context in the neighbourhood the deviation is
+        // trusted immediately; on a fully static view the term is disabled
+        // and sub-pixel features keep their jitter-miss protection.
+        const float instantDev = smoothstep(1.25, 4.0, devK) * clamp(dilatedMotionPx * 2.0, 0.0, 1.0);
+        const float rate = max(max(clamp(motionLen * 0.5, 0.0, 1.0),// real pixel motion → hard
+                                   instantDev),                     // deviation + motion context → hard now
+                               smoothstep(2.5, 3.5, devStreak));    // persistent deviation → hard (static backstop)
+        history = YCoCg_to_RGB(mix(histY, clipped, mix(0.15, 1.0, rate)));
     }
 
     // Velocity-scaled alpha: faster-moving pixels weight current more,
     // making ghost trails decay quicker. Static/slow keeps strong AA via
-    // history. Motion is in NDC (∈ [-2, 2] across the screen), convert
-    // to pixels for an intuitive scale: 30 px/frame → +0.5 boost, capped.
-    const vec2 motionPx = motionGL * 0.5 * vec2(pc.width, pc.height);
-    const float motionLen = length(motionPx);
+    // history (motionPx computed above the clip block).
     const float velocityBump = clamp(motionLen / 30.0, 0.0, 0.2);// reduced 0.5→0.2: the
                                           // YCoCg variance clip controls ghosting now, so
                                           // don't crank α into motion flicker at fast edges.
@@ -269,5 +347,5 @@ void main() {
     // When a downstream RCAS pass owns the swapchain write, skip it here but
     // still write history (RCAS reads the resolved frame from the history slot).
     if (pc.writeSwap != 0u) imageStore(taaSwapImage, px, vec4(result, 1.0));
-    imageStore(taaHistoryWriteImg,  px, vec4(result, 1.0));
+    imageStore(taaHistoryWriteImg,  px, vec4(result, devStreak));// .a = deviation streak
 }

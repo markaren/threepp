@@ -131,8 +131,6 @@ int main() {
                   {{"vsync", false}, {"size", WindowSize{1600, 1000}}});
 
     VulkanRenderer renderer(canvas);
-    renderer.toneMapping = ToneMapping::ACESFilmic;
-    renderer.toneMappingExposure = 1.0f;
 
     Scene scene;
     scene.background = Color::black;
@@ -202,8 +200,6 @@ int main() {
     controls.update();
 
     bool spin = true;
-    float exposure = renderer.toneMappingExposure;
-    int toneMode = static_cast<int>(renderer.toneMapping);
     int spp = renderer.samplesPerPixel();
     float renderScale = renderer.renderScale();
     float fps = 0.f, fpsAccum = 0.f;
@@ -226,26 +222,23 @@ int main() {
 
         ImGui::Checkbox("Animate torus knot", &spin);
 
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
-            renderer.toneMappingExposure = exposure;
-
-        const char* toneItems[] = {"None", "Linear", "Reinhard", "Cineon", "ACESFilmic"};
-        if (ImGui::Combo("Tone mapping", &toneMode, toneItems, IM_ARRAYSIZE(toneItems)))
-            renderer.toneMapping = static_cast<ToneMapping>(toneMode);
-
         bool restirDI = renderer.restirDIEnabled();
-        if (ImGui::Checkbox("ReSTIR DI", &restirDI))
+        if (ImGui::Checkbox("ReSTIR DI", &restirDI)) {
             renderer.setRestirDIEnabled(restirDI);
+        }
         bool restirGI = renderer.restirGIEnabled();
-        if (ImGui::Checkbox("ReSTIR GI", &restirGI))
+        if (ImGui::Checkbox("ReSTIR GI", &restirGI)) {
             renderer.setRestirGIEnabled(restirGI);
+        }
 
-        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
+        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16)) {
             renderer.setSamplesPerPixel(spp);
+        }
 
         // Path-trace render scale: < 1 traces fewer pixels, then upscales.
-        if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f, "%.2f"))
+        if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f, "%.2f")) {
             renderer.setRenderScale(renderScale);
+        }
 
         ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");

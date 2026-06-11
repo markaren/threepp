@@ -188,20 +188,21 @@ namespace {
     auto makeSphereGrid() {
         auto group = Group::create();
         // 5x5 grid of spheres with varying roughness/metalness
+
+        Color c;
         for (int ix = 0; ix < 5; ix++) {
             for (int iz = 0; iz < 5; iz++) {
-                float roughness = static_cast<float>(ix) / 4.f;
-                float metalness = static_cast<float>(iz) / 4.f;
-                float hue = static_cast<float>(ix * 5 + iz) / 25.f;
+                const float roughness = static_cast<float>(ix) / 4.f;
+                const float metalness = static_cast<float>(iz) / 4.f;
+                const float hue = static_cast<float>(ix * 5 + iz) / 25.f;
 
-                Color c;
                 c.setHSL(hue, 0.7f, 0.5f);
 
                 auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(c).roughness(roughness).metalness(metalness));
 
                 auto sphere = Mesh::create(SphereGeometry::create(0.3f, 24, 24), mat);
-                float x = -6.f + ix * 1.0f;
-                float z = -6.f + iz * 1.0f;
+                const float x = -6.f + ix * 1.0f;
+                const float z = -6.f + iz * 1.0f;
                 sphere->position.set(x, 0.35f, z);
                 sphere->castShadow = true;
                 sphere->receiveShadow = true;
@@ -216,17 +217,7 @@ namespace {
 int main() {
 
     Canvas canvas("Vulkan Material Gallery", {{"vsync", false}, {"size", WindowSize{1280, 720}}});
-
     VulkanRenderer renderer(canvas);
-    renderer.toneMapping = ToneMapping::ACESFilmic;
-    renderer.toneMappingExposure = 1.0f;
-    // 1 spp keeps the per-frame PT cost manageable on a poly-heavy scene
-    // (TorusKnot 128×32, 25-sphere grid, stormtrooper). Bump in the UI for
-    // less noise when stationary.
-    renderer.setSamplesPerPixel(1);
-    // Hybrid raster G-buffer supplies primary visibility — the path tracer
-    // skips the primary trace and starts at bounce 1. Big FPS win on scenes
-    // with many high-poly meshes (primary is the most expensive ray).
 
     // ---- Scene ----
     Scene scene;
@@ -356,52 +347,18 @@ int main() {
     bool showWindow = true;
     bool denoiseOn = renderer.denoise();
     bool restirOn = renderer.restirDIEnabled();
-    bool restirGiOn = renderer.restirGIEnabled();
     bool rectOn = true;
     float rectIntensity = rectLight->intensity;
-    float exposure = renderer.toneMappingExposure;
-    int toneMode = static_cast<int>(renderer.toneMapping);
     int spp = renderer.samplesPerPixel();
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
-    // ── Primary-trace cost measurement ─────────────────────────────────
-    // Toggle `setMeasurePrimaryTraceOnly` and watch the delta on
-    // pathTraceMs. EMA-smoothed so the readouts don't dance frame-to-frame;
-    // both numbers persist across toggle changes so the comparison stays
-    // visible after flipping back to "full".
-    bool measurePrimaryOnly = renderer.measurePrimaryTraceOnly();
-    float fullPtMs = 0.f;
-    float primaryOnlyMs = 0.f;
-    constexpr float ptEmaAlpha = 0.10f;
 
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({});
         ImGui::SetNextWindowSize({340, 0});
         ImGui::Begin("Vulkan Path Tracer");
         ImGui::Text("FPS: %.1f", fps);
-
-        const auto t = renderer.lastFrameTimings();
-        ImGui::Text("PT %.2f / Denoise %.2f ms", t.pathTraceMs, t.denoiseMs);
-        ImGui::Text("Gbuf %.2f / TAA %.2f ms", t.rasterGbufMs, t.taaMs);
-
-        // Update whichever EMA bucket matches the current measurement mode.
-        if (t.pathTraceMs > 0.f) {
-            float& bucket = measurePrimaryOnly ? primaryOnlyMs : fullPtMs;
-            bucket = (bucket > 0.f) ? bucket * (1.f - ptEmaAlpha) + t.pathTraceMs * ptEmaAlpha
-                                    : t.pathTraceMs;
-        }
-        if (ImGui::Checkbox("Measure primary trace only", &measurePrimaryOnly)) {
-            renderer.setMeasurePrimaryTraceOnly(measurePrimaryOnly);
-        }
-        if (measurePrimaryOnly) {
-            ImGui::TextDisabled("Image is black while measuring.");
-        }
-        ImGui::Text("Full PT:      %6.2f ms", fullPtMs);
-        ImGui::Text("Primary only: %6.2f ms", primaryOnlyMs);
-        if (fullPtMs > 1e-3f && primaryOnlyMs > 0.f) {
-            ImGui::Text("Primary share: %5.1f %%", 100.f * primaryOnlyMs / fullPtMs);
-        }
         ImGui::Separator();
 
         if (ImGui::Checkbox("Window", &showWindow)) {
@@ -415,23 +372,12 @@ int main() {
 
         ImGui::Separator();
         ImGui::TextUnformatted("RectAreaLight (window)");
-        if (ImGui::Checkbox("On##rect", &rectOn)) {
-            rectLight->intensity = rectOn ? rectIntensity : 0.f;
-        }
-        ImGui::SameLine();
+
         if (ImGui::SliderFloat("Intensity", &rectIntensity, 0.f, 60.f, "%.1f") && rectOn) {
             rectLight->intensity = rectIntensity;
         }
 
         ImGui::Separator();
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 3.0f, "%.2f")) {
-            renderer.toneMappingExposure = exposure;
-        }
-        const char* toneItems[] = {"None", "Linear", "Reinhard", "Cineon", "ACESFilmic"};
-        if (ImGui::Combo("Tone mapping", &toneMode, toneItems, IM_ARRAYSIZE(toneItems))) {
-            renderer.toneMapping = static_cast<ToneMapping>(toneMode);
-        }
-
         if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16)) {
             renderer.setSamplesPerPixel(spp);
         }
@@ -442,9 +388,6 @@ int main() {
         }
         if (ImGui::Checkbox("ReSTIR DI", &restirOn)) {
             renderer.setRestirDIEnabled(restirOn);
-        }
-        if (ImGui::Checkbox("ReSTIR GI", &restirGiOn)) {
-            renderer.setRestirGIEnabled(restirGiOn);
         }
 
         ImGui::Separator();

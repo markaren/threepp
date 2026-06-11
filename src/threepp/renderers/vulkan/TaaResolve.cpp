@@ -204,7 +204,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pcRange{};
         pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pcRange.offset     = 0;
-        pcRange.size       = 24;// blendAlpha + out w/h + in w/h + pad
+        pcRange.size       = 96;// 6 scalars + pad(8) + mat4 skyReproj (offset 32)
 
         VkPipelineLayoutCreateInfo plci{};
         plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -433,7 +433,8 @@ namespace threepp::vulkan {
                                    uint32_t outHeight,
                                    float blendAlpha,
                                    bool sharpen,
-                                   float sharpenAmount) {
+                                   float sharpenAmount,
+                                   const float* skyReproj) {
         // Barrier: taaInput write → read; both history slots covered (RAW
         // hazard on the read slot, WAW on the write slot we're about to
         // overwrite this frame).
@@ -477,8 +478,15 @@ namespace threepp::vulkan {
         std::memcpy(&alphaBits, &alpha, sizeof(alphaBits));
         // Layout: blendAlpha, output w/h (history + dispatch + writes),
         // input w/h (the render extent the samples were traced at).
-        const uint32_t pc[6] = {alphaBits, outWidth, outHeight,
-                                inWidth, inHeight, sharpen ? 0u : 1u};
+        // Layout mirrors the shader's std430 push block: 6 scalars, 8 bytes
+        // of pad, then the column-major mat4 at offset 32.
+        float pc[24] = {};
+        std::memcpy(&pc[0], &alphaBits, 4);
+        const uint32_t dims[4] = {outWidth, outHeight, inWidth, inHeight};
+        std::memcpy(&pc[1], dims, 16);
+        const uint32_t ws = sharpen ? 0u : 1u;
+        std::memcpy(&pc[5], &ws, 4);
+        std::memcpy(&pc[8], skyReproj, 64);
         vkCmdPushConstants(cb, pipelineLayout_,
                            VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(pc), pc);

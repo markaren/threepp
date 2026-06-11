@@ -16,6 +16,7 @@
 #include "misc.hpp"
 
 #include <any>
+#include <array>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -325,6 +326,18 @@ namespace threepp {
         inline static unsigned int _object3Did{0};
 
         std::vector<std::shared_ptr<Object3D>> children_;
+
+        // updateMatrix() change-detection cache: the position/quaternion/scale
+        // values at the last compose, plus the matrix bytes that compose
+        // produced (so a direct user write to `matrix` is still clobbered on
+        // the next updateMatrix(), exactly like three.js). When neither moved,
+        // updateMatrix() is a 26-float compare instead of a compose — and by
+        // not raising matrixWorldNeedsUpdate it lets updateMatrixWorld() skip
+        // the world multiply for the whole unchanged subtree. Pure polling;
+        // no user-side notification ever required.
+        std::array<float, 10> composedPqs_{};
+        std::array<float, 16> composedMatrix_{};
+        bool composedValid_ = false;
     };
 
 }// namespace threepp

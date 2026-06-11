@@ -20,8 +20,15 @@ namespace {
         uint16_t sign = static_cast<uint16_t>((x >> 31) << 15);
         int32_t  exp  = static_cast<int32_t>((x >> 23) & 0xFFu) - 127 + 15;
         uint32_t mant = x & 0x7FFFFFu;
+        if ((x & 0x7FFFFFFFu) > 0x7F800000u) return sign;// NaN -> 0 (would poison mip averages)
         if (exp <= 0) return sign;
-        if (exp >= 31) return sign | 0x7C00u;
+        // Saturate to f16 max (65504) instead of overflowing to Inf. HDR suns
+        // exceed f16 range (san_giuseppe_bridge peaks at 98304) and an Inf
+        // texel is STICKY through box-mip averaging — a few deep-mip levels
+        // later it covers much of the pyramid, every prefilter fetch reads
+        // min(Inf, clamp) = the firefly bound, and env-lit diffuse inflates
+        // ~3x in the sun's channels (yellow-tinted scenes under sunny HDRs).
+        if (exp >= 31) return sign | 0x7BFFu;
         return sign | static_cast<uint16_t>(exp << 10) | static_cast<uint16_t>(mant >> 13);
     }
 
@@ -368,9 +375,15 @@ void WgpuTextures::flushPendingMipmaps() {
     if (pendingMipmaps_.empty()) return;
     for (auto& pm : pendingMipmaps_) {
         if (pm.prefiltered && !pm.isCube) {
-            // Need mip 0 populated first via box-filter down-chain — then overwrite mips 1..N-1
-            // with GGX-convolved versions. Simpler: just run PMREM, which writes mips 1..N-1
-            // directly from mip 0 (no mip-0 copy needed; mip 0 already has source data).
+            // Box-mip first: the GGX prefilter samples the source MIP-BIASED
+            // (Colbert/Krivanek), reading a mip whose texels cover each
+            // sample's solid angle. Sampling only mip 0 (the old behaviour)
+            // made the discrete Hammersley set statistically MISS small
+            // ultra-bright sun discs — losing most of the sun's irradiance,
+            // so env-lit floors read ~2x darker than GL on sunny HDRs.
+            mipmapGen_.generate2D(pm.texture, pm.width, pm.height, pm.mipLevels, pm.format);
+            // Snapshots the box pyramid internally, then overwrites mips 1..N-1
+            // with GGX-convolved versions.
             pmrem_.prefilter2D(pm.texture, pm.width, pm.height, pm.mipLevels, pm.format);
         } else if (pm.isCube) {
             mipmapGen_.generateCube(pm.texture, pm.width, pm.mipLevels, pm.format);
@@ -412,7 +425,9 @@ TextureEntry& WgpuTextures::getOrCreateEnvTexture2D(Texture* tex) {
     td.mipLevelCount = mipLevels;
     td.sampleCount = 1;
     td.dimension = WGPUTextureDimension_2D;
-    td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment;
+    // CopySrc: WgpuPMREM snapshots the box-mip pyramid before GGX-overwriting it.
+    td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst |
+               WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc;
 
     WGPUTexelCopyTextureInfo dst{};
     WGPUTexelCopyBufferLayout layout{};

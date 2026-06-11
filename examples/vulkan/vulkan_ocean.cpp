@@ -10,6 +10,7 @@
 // procedural sky come later; for now a single 40 m tile + an HDRI sky is
 // enough to validate the geometry pipeline and BLAS-rebuild-per-frame.
 
+#include "threepp/audio/Audio.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
@@ -32,10 +33,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <memory>
 #include <random>
 #include <vector>
 
@@ -134,23 +138,464 @@ namespace {
 
 }// namespace
 
+// ── Procedural enclosing archipelago ────────────────────────────────────────
+// A ring of rocky islands around the play area (r ≈ 385–495 m) so the scene
+// reads as a sheltered Norwegian skerry bay instead of bare open horizon.
+// Deterministic value-noise FBM drives everything: an angular "mass plan"
+// (periodic by construction — noise sampled on a circle) picks where islands
+// rise and where passes stay open sea; a radial bump profile dives both
+// shores below the sand floor so the rims bury cleanly; ridged FBM adds the
+// rocky relief. Colour comes from a texture baked in the mesh's own polar
+// parameterisation (the Vulkan PT has no vertex-colour path for meshes):
+// wet dark rock at the waterline, FBM-mottled granite on the slopes,
+// moss/heather on gentle low ground — all derived from the same height field.
+namespace island {
+
+    constexpr float kInnerR = 385.f;// boat waypoints reach ~320 m — keep clear water
+    constexpr float kOuterR = 495.f;// stays inside the 1 km ocean/sand tile
+    constexpr float kPeakH  = 55.f; // tallest summits (m)
+    constexpr float kSkirt  = 7.f;  // rim depth — below the sand floor (-5 m)
+
+    float smoothstepf(float e0, float e1, float x) {
+        const float t = std::clamp((x - e0) / (e1 - e0), 0.f, 1.f);
+        return t * t * (3.f - 2.f * t);
+    }
+
+    float hashf(int xi, int zi) {
+        uint32_t h = static_cast<uint32_t>(xi) * 374761393u + static_cast<uint32_t>(zi) * 668265263u;
+        h = (h ^ (h >> 13)) * 1274126177u;
+        h ^= h >> 16;
+        return static_cast<float>(h) * (1.f / 4294967296.f);
+    }
+
+    // Value noise with quintic fade, range [0,1].
+    float vnoise(float x, float z) {
+        const float fx = std::floor(x), fz = std::floor(z);
+        const int xi = static_cast<int>(fx), zi = static_cast<int>(fz);
+        float tx = x - fx, tz = z - fz;
+        tx = tx * tx * tx * (tx * (tx * 6.f - 15.f) + 10.f);
+        tz = tz * tz * tz * (tz * (tz * 6.f - 15.f) + 10.f);
+        const float a = hashf(xi, zi), b = hashf(xi + 1, zi);
+        const float c = hashf(xi, zi + 1), d = hashf(xi + 1, zi + 1);
+        return a + (b - a) * tx + (c - a) * tz + (a - b - c + d) * tx * tz;
+    }
+
+    float fbm(float x, float z, int octaves) {
+        float sum = 0.f, amp = 0.5f, norm = 0.f;
+        for (int o = 0; o < octaves; ++o) {
+            sum += amp * vnoise(x, z);
+            norm += amp;
+            amp *= 0.5f;
+            // irrational-ish lacunarity + offset decorrelates the octave lattices
+            const float nx = x * 1.93f + 19.7f, nz = z * 2.11f + 7.3f;
+            x = nx;
+            z = nz;
+        }
+        return sum / norm;
+    }
+
+    float heightAt(float x, float z) {
+        const float r = std::sqrt(x * x + z * z);
+        // ring coordinate, warped so the coastlines wander instead of circling
+        float w = (r - kInnerR) / (kOuterR - kInnerR);
+        w += 0.20f * (2.f * fbm(x * 0.011f, z * 0.011f, 2) - 1.f);
+        if (w <= 0.f || w >= 1.f) return -kSkirt;
+        const float prof = std::pow(std::sin(math::PI * w), 1.5f);
+
+        // mass plan: low-frequency noise on a circle, thresholded — sections
+        // below the band stay a submerged sill (the passes between islands)
+        const float a = std::atan2(z, x);
+        const float m0 = 0.65f * vnoise(7.3f + std::cos(a) * 2.9f, 3.1f + std::sin(a) * 2.9f) +
+                         0.35f * vnoise(13.7f + std::cos(a) * 5.3f, 23.9f + std::sin(a) * 5.3f);
+        const float m = smoothstepf(0.27f, 0.60f, m0);
+
+        // ridged FBM (fold-over of signed noise) = sharp rocky crests
+        const float ridge = 1.f - std::abs(2.f * fbm(x * 0.035f, z * 0.035f, 4) - 1.f);
+        const float crest = kPeakH * m * (0.45f + 0.55f * ridge * ridge);
+        // prof=1 mid-ring: passes top out 2 m underwater, islands rise to crest
+        return -kSkirt + (crest + kSkirt - 2.f) * prof;
+    }
+
+    // Analytic finite-difference normal — seam-consistent (the height field is
+    // continuous in angle) and adds sub-vertex shading detail for free.
+    Vector3 normalAt(float x, float z, float eps = 2.f) {
+        const float dhdx = (heightAt(x + eps, z) - heightAt(x - eps, z)) / (2.f * eps);
+        const float dhdz = (heightAt(x, z + eps) - heightAt(x, z - eps)) / (2.f * eps);
+        Vector3 n(-dhdx, 1.f, -dhdz);
+        return n.normalize();
+    }
+
+    // Colour map in the mesh's polar parameterisation (u = angle, v = radius):
+    // one texel column ≈ 1.4 m of coastline. Each texel re-evaluates the
+    // height field, so the colours track the actual geometry.
+    std::shared_ptr<DataTexture> bakeColorMap() {
+        const int W = 2048, H = 128;
+        std::vector<unsigned char> px(static_cast<size_t>(W) * H * 4);
+        auto toByte = [](float v) {
+            return static_cast<unsigned char>(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
+        };
+        for (int y = 0; y < H; ++y) {
+            const float r = kInnerR + (kOuterR - kInnerR) * ((y + 0.5f) / H);
+            for (int x = 0; x < W; ++x) {
+                const float a = 2.f * math::PI * ((x + 0.5f) / W);
+                const float wx = std::cos(a) * r, wz = std::sin(a) * r;
+                const float h = heightAt(wx, wz);
+                const float ny = normalAt(wx, wz).y;
+
+                const float mottle = fbm(wx * 0.05f, wz * 0.05f, 3);
+                const float veg    = fbm(wx * 0.016f + 31.f, wz * 0.016f, 3);
+
+                float cr = 0.36f + 0.20f * mottle;// base granite grey
+                float cg = 0.34f + 0.18f * mottle;
+                float cb = 0.32f + 0.16f * mottle;
+                // moss/heather on gentle low/mid ground, patched by its own noise
+                const float vegMask = smoothstepf(0.55f, 0.78f, ny) *
+                                      smoothstepf(0.8f, 2.5f, h) * (1.f - smoothstepf(28.f, 42.f, h)) *
+                                      smoothstepf(0.40f, 0.60f, veg);
+                cr += (0.16f + 0.10f * veg - cr) * vegMask;
+                cg += (0.30f + 0.06f * veg - cg) * vegMask;
+                cb += (0.10f + 0.04f * veg - cb) * vegMask;
+                // dark wet band at the waterline, continuing underwater
+                const float wet = (1.f - smoothstepf(0.4f, 2.2f, h)) * 0.85f;
+                cr += (0.10f - cr) * wet;
+                cg += (0.10f - cg) * wet;
+                cb += (0.095f - cb) * wet;
+
+                const size_t i = (static_cast<size_t>(y) * W + x) * 4;
+                px[i + 0] = toByte(cr);
+                px[i + 1] = toByte(cg);
+                px[i + 2] = toByte(cb);
+                px[i + 3] = 255;
+            }
+        }
+        auto tex = DataTexture::create(ImageData{std::move(px)},
+                                       static_cast<unsigned>(W), static_cast<unsigned>(H));
+        tex->colorSpace = ColorSpace::sRGB;
+        tex->magFilter = Filter::Linear;
+        tex->minFilter = Filter::LinearMipmapLinear;
+        tex->generateMipmaps = true;
+        tex->needsUpdate();
+        return tex;
+    }
+
+    std::shared_ptr<Mesh> build() {
+        // 1024 angular columns ≈ 2.7 m spacing at mid-ring; the seam column is
+        // duplicated (u = 0 and u = 1) so UVs never wrap. ~30 K verts, static
+        // BLAS built once.
+        const int NA = 1024, NR = 28;
+        std::vector<float> pos, nrm, uv;
+        pos.reserve((NA + 1) * (NR + 1) * 3);
+        nrm.reserve((NA + 1) * (NR + 1) * 3);
+        uv.reserve((NA + 1) * (NR + 1) * 2);
+        for (int j = 0; j <= NR; ++j) {
+            const float r = kInnerR + (kOuterR - kInnerR) * (static_cast<float>(j) / NR);
+            for (int i = 0; i <= NA; ++i) {
+                const float a = 2.f * math::PI * (static_cast<float>(i) / NA);
+                const float x = std::cos(a) * r, z = std::sin(a) * r;
+                const Vector3 n = normalAt(x, z);
+                pos.insert(pos.end(), {x, heightAt(x, z), z});
+                nrm.insert(nrm.end(), {n.x, n.y, n.z});
+                uv.insert(uv.end(), {static_cast<float>(i) / NA, static_cast<float>(j) / NR});
+            }
+        }
+        std::vector<unsigned int> idx;
+        idx.reserve(static_cast<size_t>(NA) * NR * 6);
+        for (int j = 0; j < NR; ++j)
+            for (int i = 0; i < NA; ++i) {
+                const unsigned a0 = j * (NA + 1) + i;// (i, j)
+                const unsigned b0 = a0 + 1;          // (i+1, j)
+                const unsigned a1 = a0 + (NA + 1);   // (i, j+1)
+                const unsigned b1 = a1 + 1;          // (i+1, j+1)
+                idx.insert(idx.end(), {a0, b0, b1});
+                idx.insert(idx.end(), {a0, b1, a1});
+            }
+
+        auto geo = BufferGeometry::create();
+        geo->setIndex(idx);
+        geo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
+        geo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
+        geo->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
+        geo->computeBoundingBox();
+        geo->computeBoundingSphere();
+
+        auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                                                        .roughness(0.95f)
+                                                        .metalness(0.f));
+        mat->map = bakeColorMap();
+        auto mesh = Mesh::create(geo, mat);
+        mesh->frustumCulled = false;// the ring surrounds the camera — always partly in view
+        return mesh;
+    }
+
+}// namespace island
+
+// ── Procedural looping audio (engine + ocean/wind ambience) ─────────────────
+// Same temp-WAV approach as the Shooter example: the Audio API loads files,
+// so the loops are synthesised once at startup and written to the temp dir.
+// Seamless looping: every deterministic component (engine harmonics, swell /
+// gust LFOs) is given an exact integer number of cycles over the loop length,
+// then the synth renders an extra tail whose start is crossfaded back onto
+// the head — periodic terms pass through the wrap unchanged while the noise
+// and one-pole filter states blend across it.
+namespace {
+
+    struct OnePole {
+        float y = 0.f;
+        float operator()(float x, float a) {
+            y += a * (x - y);
+            return y;
+        }
+    };
+    float lpAlpha(float cutoffHz, int sr) {
+        return 1.f - std::exp(-2.f * math::PI * cutoffHz / static_cast<float>(sr));
+    }
+
+    std::vector<float> normalized(std::vector<float> s, float peak) {
+        float m = 0.f;
+        for (float x : s) m = std::max(m, std::abs(x));
+        if (m > 1e-6f)
+            for (float& x : s) x *= peak / m;
+        return s;
+    }
+
+    // Fold the `extra`-sample overhang back onto the head (linear crossfade).
+    // out[0] == s[n] so the n-1 → 0 junction is the continuation of the tail;
+    // by i == extra the signal is back on the head verbatim.
+    std::vector<float> loopable(const std::vector<float>& s, int n, int extra) {
+        std::vector<float> out(s.begin(), s.begin() + n);
+        for (int i = 0; i < extra; ++i) {
+            const float w = static_cast<float>(i) / static_cast<float>(extra);
+            out[i] = s[n + i] * (1.f - w) + s[i] * w;
+        }
+        return out;
+    }
+
+    // 16-bit mono PCM WAV writer (verbatim from the Shooter example).
+    void writeWav(const std::filesystem::path& path, const std::vector<float>& samples, int sr = 44100) {
+        std::ofstream f(path, std::ios::binary);
+        auto u32 = [&](uint32_t v) { f.write(reinterpret_cast<char*>(&v), 4); };
+        auto u16 = [&](uint16_t v) { f.write(reinterpret_cast<char*>(&v), 2); };
+        const uint32_t dataBytes = static_cast<uint32_t>(samples.size()) * 2u;
+        f.write("RIFF", 4);
+        u32(36 + dataBytes);
+        f.write("WAVE", 4);
+        f.write("fmt ", 4);
+        u32(16);
+        u16(1);// PCM
+        u16(1);// mono
+        u32(sr);
+        u32(sr * 2);
+        u16(2);
+        u16(16);
+        f.write("data", 4);
+        u32(dataBytes);
+        for (float x : samples) {
+            const auto q = static_cast<int16_t>(std::lround(std::clamp(x, -1.f, 1.f) * 32767.f));
+            f.write(reinterpret_cast<const char*>(&q), 2);
+        }
+    }
+
+    // Marine diesel at mid RPM, 2 s loop. Firing rate f0 = 27 Hz (54 exact
+    // cycles): harmonic stack for the tonal drone, a |sin|³ "chug" envelope
+    // gating low-passed exhaust noise, and a faint band-passed mechanical
+    // clatter. Played at rate 0.7 (idle) … 1.6 (full ahead) by the updater.
+    std::vector<float> synthEngineLoop(int sr = 44100) {
+        const float dur = 2.0f;
+        const int n     = static_cast<int>(sr * dur);
+        const int extra = sr / 4;
+        std::mt19937 r(7);
+        auto rn = [&] { return std::uniform_real_distribution<float>(-1.f, 1.f)(r); };
+        const float f0 = 27.f;
+        OnePole lpExhaust, lpClatHi, lpClatLo;
+        const float aExhaust = lpAlpha(170.f, sr);
+        const float aClatHi  = lpAlpha(1300.f, sr);
+        const float aClatLo  = lpAlpha(450.f, sr);
+        std::vector<float> s(n + extra);
+        for (int i = 0; i < n + extra; ++i) {
+            const float t    = static_cast<float>(i) / sr;
+            const float chug = std::pow(0.55f + 0.45f * std::abs(std::sin(math::PI * f0 * t)), 3.f);
+            float tone = 0.f;
+            tone += std::sin(2.f * math::PI * f0 * t) * 0.55f;
+            tone += std::sin(2.f * math::PI * 2.f * f0 * t) * 0.30f;
+            tone += std::sin(2.f * math::PI * 3.f * f0 * t) * 0.16f;
+            tone += std::sin(2.f * math::PI * 4.f * f0 * t) * 0.09f;
+            const float w       = rn();
+            const float exhaust = lpExhaust(w, aExhaust) * chug * 1.7f;
+            const float clatter = (lpClatHi(w, aClatHi) - lpClatLo(w, aClatLo)) * (0.4f + 0.6f * chug) * 0.45f;
+            s[i] = tone * (0.7f + 0.3f * chug) + exhaust + clatter;
+        }
+        return normalized(loopable(s, n, extra), 0.7f);
+    }
+
+    // Rolling sea, 8 s loop: deep low-passed noise swelling on three loop-
+    // exact LFOs (k/8 Hz), plus a brighter band-passed "wash" that peaks on
+    // its own sharper envelope — the crest-breaking hiss over the rumble.
+    std::vector<float> synthOceanLoop(int sr = 44100) {
+        const float dur = 8.0f;
+        const int n     = static_cast<int>(sr * dur);
+        const int extra = sr;
+        std::mt19937 r(11);
+        auto rn = [&] { return std::uniform_real_distribution<float>(-1.f, 1.f)(r); };
+        OnePole lpDeep, lpWashHi, lpWashLo;
+        const float aDeep   = lpAlpha(240.f, sr);
+        const float aWashHi = lpAlpha(1500.f, sr);
+        const float aWashLo = lpAlpha(500.f, sr);
+        std::vector<float> s(n + extra);
+        for (int i = 0; i < n + extra; ++i) {
+            const float t = static_cast<float>(i) / sr;
+            float swell = 0.6f * std::sin(2.f * math::PI * 0.125f * t)
+                        + 0.3f * std::sin(2.f * math::PI * 0.375f * t + 1.7f)
+                        + 0.1f * std::sin(2.f * math::PI * 0.625f * t + 4.1f);
+            swell = 0.55f + 0.45f * swell;
+            const float washEnv = std::pow(0.5f + 0.5f * std::sin(2.f * math::PI * 0.25f * t + 2.6f), 3.f);
+            const float w    = rn();
+            const float deep = lpDeep(w, aDeep) * swell * 1.0f;
+            const float wash = (lpWashHi(w, aWashHi) - lpWashLo(w, aWashLo)) * washEnv * 0.55f;
+            s[i] = deep + wash;
+        }
+        return normalized(loopable(s, n, extra), 0.6f);
+    }
+
+    // Wind, 8 s loop. NOT a flat noise band — that reads as TV static. The
+    // "whoosh" character comes from (a) a NARROW low band whose cutoff SWEEPS
+    // upward with the gust envelope (the rising pitch of a building gust),
+    // (b) 12 dB/oct edges — cascaded one-poles; a single pole leaks so much
+    // above cutoff that the leak IS the white-noise hiss — and (c) a hard
+    // lull↔gust amplitude swing (gust², near-silent lulls) so it reads as
+    // weather, not a constant carrier. A faint flutter band rides only the
+    // gust peaks (gust⁴). Gust LFOs are loop-exact (k/8 Hz).
+    std::vector<float> synthWindLoop(int sr = 44100) {
+        const float dur = 8.0f;
+        const int n     = static_cast<int>(sr * dur);
+        const int extra = sr;
+        std::mt19937 r(13);
+        auto rn = [&] { return std::uniform_real_distribution<float>(-1.f, 1.f)(r); };
+        OnePole hi1, hi2, lo1, lo2, fl1, fl2;
+        const float aFlHi = lpAlpha(1000.f, sr);
+        const float aFlLo = lpAlpha(450.f, sr);
+        std::vector<float> s(n + extra);
+        for (int i = 0; i < n + extra; ++i) {
+            const float t = static_cast<float>(i) / sr;
+            float gust = 0.55f * std::sin(2.f * math::PI * 0.25f * t)
+                       + 0.30f * std::sin(2.f * math::PI * 0.5f * t + 1.3f)
+                       + 0.15f * std::sin(2.f * math::PI * 0.875f * t + 4.0f);
+            gust = std::clamp(0.5f + 0.5f * gust, 0.f, 1.f);
+            // Swept band: lulls murmur at ~60–180 Hz, full gusts open to
+            // ~140–620 Hz. The per-sample alpha is driven by the loop-exact
+            // LFOs, so the sweep itself wraps seamlessly too.
+            const float aHi = lpAlpha(180.f + 440.f * gust, sr);
+            const float aLo = lpAlpha(60.f + 80.f * gust, sr);
+            const float w   = rn();
+            const float band    = hi2(hi1(w, aHi), aHi) - lo2(lo1(w, aLo), aLo);
+            const float whoosh  = band * (0.10f + 0.90f * gust * gust);
+            const float flutter = (fl1(w, aFlHi) - fl2(w, aFlLo)) * gust * gust * gust * gust * 0.18f;
+            s[i] = whoosh + flutter;
+        }
+        return normalized(loopable(s, n, extra), 0.5f);
+    }
+
+    // Engine (spatialised at the stern) + ocean/wind ambience loops, with the
+    // listener following the camera. Degrades to a no-op when no audio device
+    // is available; never constructed in headless --shot capture runs.
+    struct OceanSounds {
+        std::unique_ptr<AudioListener> listener;
+        std::unique_ptr<PositionalAudio> engine;
+        std::unique_ptr<Audio> waves, wind;
+        bool ok    = false;
+        float rpm_ = 0.f;// smoothed RPM proxy ∈ [0,1] — the engine spools, it doesn't snap
+
+        void init() {
+            try {
+                const auto dir = std::filesystem::temp_directory_path() / "threepp_ocean_sounds";
+                std::filesystem::create_directories(dir);
+                const auto enginePath = dir / "engine_loop.wav";
+                const auto wavesPath  = dir / "waves_loop.wav";
+                const auto windPath   = dir / "wind_loop.wav";
+                writeWav(enginePath, synthEngineLoop());
+                writeWav(wavesPath, synthOceanLoop());
+                writeWav(windPath, synthWindLoop());
+
+                listener = std::make_unique<AudioListener>();
+                // Engine: full volume within ~10 m (the side/deck camera),
+                // shallow inverse falloff so the chase cam still hears it and
+                // the far buoy cam gets only a faint distant throb.
+                engine = std::make_unique<PositionalAudio>(*listener, enginePath);
+                engine->setDistanceModel(PositionalAudio::DistanceModel::Inverse);
+                engine->setMinDistance(10.f);
+                engine->setRolloffFactor(0.5f);
+                engine->setLooping(true);
+                engine->setVolume(0.f);
+                engine->play();
+                waves = std::make_unique<Audio>(*listener, wavesPath);
+                waves->setLooping(true);
+                waves->setVolume(0.f);
+                waves->play();
+                wind = std::make_unique<Audio>(*listener, windPath);
+                wind->setLooping(true);
+                wind->setVolume(0.f);
+                wind->play();
+                ok = true;
+            } catch (const std::exception& e) {
+                std::cerr << "[audio] disabled: " << e.what() << "\n";
+            }
+        }
+
+        // sternWorld: engine mount position. thrusting: throttle is open
+        // (autopilot under way, or W/S held) — bumps the RPM floor so the
+        // engine revs as thrust is applied, before boat speed builds.
+        // uw: smoothed submersion ∈ [0,1] — above-surface sound ducks under
+        // water (wind almost fully, waves partially, engine least: hull noise
+        // carries through the water).
+        void update(float dt, const Vector3& sternWorld, float forwardSpeed,
+                    bool thrusting, float uw, const PerspectiveCamera& cam,
+                    float masterVolume) {
+            if (!ok) return;
+            listener->setMasterVolume(masterVolume);
+
+            const float speedNorm = std::clamp(std::abs(forwardSpeed) / 8.f, 0.f, 1.f);
+            float target = 0.18f + 0.82f * speedNorm;
+            if (thrusting) target = std::max(target, 0.45f);
+            // Spool up faster than the wind-down coast (turbo lag vs. inertia).
+            const float tau = target > rpm_ ? 0.9f : 1.8f;
+            rpm_ += (target - rpm_) * (1.f - std::exp(-dt / tau));
+
+            engine->setPlaybackRate((0.7f + 0.9f * rpm_) * (1.f - 0.10f * uw));
+            engine->setVolume((0.25f + 0.65f * rpm_) * (1.f - 0.35f * uw));
+            engine->position.copy(sternWorld);
+            engine->updateMatrixWorld(true);// push the source position to the audio engine
+
+            // Slight speed bump on the ambience = apparent wind over the deck.
+            waves->setVolume((0.45f + 0.10f * speedNorm) * (1.f - 0.55f * uw));
+            wind->setVolume((0.15f + 0.08f * speedNorm) * (1.f - 0.85f * uw));
+
+            listener->position.copy(cam.position);
+            listener->quaternion.copy(cam.quaternion);
+            listener->updateMatrixWorld(true);
+        }
+    };
+
+}// namespace
+
 int main(int argc, char** argv) {
 
     // ── Headless capture (dev iteration loop) ───────────────────────────────
-    //   vulkan_ocean --shot <name.png> [--frames N] [--night] [--pt]
+    //   vulkan_ocean --shot <name.png> [--frames N] [--night] [--pt] [--vista]
     // Fixed aerial camera, N warm-up frames (TAA/denoiser converge), one PNG
     // into <project>/aaa_caps/, exit. --night starts in night mode; --pt
-    // captures the path-traced reference instead of the deferred default.
+    // captures the path-traced reference instead of the deferred default;
+    // --vista frames a high oblique overview (archipelago ring + lighthouse).
     std::string shotPath;
     int  shotFrames = 240;
     bool startNight = false;
     bool shotPT     = false;
+    bool shotVista  = false;
     int  toggleNightAt = 0;// --toggle: start in day, flip to night mid-run (exercises the runtime toggle path)
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
         else if (std::strcmp(argv[i], "--frames") == 0 && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--night") == 0) startNight = true;
         else if (std::strcmp(argv[i], "--pt") == 0) shotPT = true;
+        else if (std::strcmp(argv[i], "--vista") == 0) shotVista = true;
         else if (std::strcmp(argv[i], "--toggle") == 0) toggleNightAt = 60;
     }
     const bool capturing = !shotPath.empty();
@@ -198,6 +643,10 @@ int main(int argc, char** argv) {
     floor->rotation.x = -math::PI / 2.f;
     floor->position.y = -5.f;
     scene.add(floor);
+
+    // Enclosing archipelago ring — see namespace island above. Static mesh,
+    // one BLAS build; the lighthouse beam grazes its cliffs at night.
+    scene.add(island::build());
 
     // Ocean surface. PlaneGeometry with kSubdiv segments → kFftSize²
     // vertices. The DisplacedMesh detects the grid dimension at first-frame
@@ -616,6 +1065,13 @@ int main(int argc, char** argv) {
     });
     canvas.addKeyListener(camKey);
 
+    // ── Sound: engine + ocean/wind ambience ─────────────────────────────────
+    // Skipped in --shot capture runs (headless iteration shouldn't bleep).
+    OceanSounds sounds;
+    if (!capturing) sounds.init();
+    bool  audioOn  = true;
+    float audioVol = 0.3f;
+
     float waveScale = ocean->params.waveScale;
     float choppiness = ocean->params.choppiness;
     float windSpeed = ocean->params.windSpeed;
@@ -800,14 +1256,13 @@ int main(int argc, char** argv) {
         }
         ImGui::Separator();
 
-        if (ImGui::SliderFloat("Wave scale", &waveScale, 0.f, 3.f, "%.2f"))
+        if (ImGui::SliderFloat("Wave scale", &waveScale, 0.f, 3.f, "%.2f")) {
             ocean->params.waveScale = waveScale;
-        if (ImGui::SliderFloat("Choppiness", &choppiness, 0.f, 1.0f, "%.2f"))
+        }
+        if (ImGui::SliderFloat("Choppiness", &choppiness, 0.f, 1.0f, "%.2f")) {
             ocean->params.choppiness = choppiness;
-        // if (ImGui::SliderFloat("Wind speed (m/s)", &windSpeed, 1.f, 30.f, "%.1f"))
-        //     ocean->params.windSpeed = windSpeed;
-        // if (ImGui::SliderFloat("Wind direction (rad)", &windTheta, -3.14f, 3.14f, "%.2f"))
-        //     ocean->params.windTheta = windTheta;
+        }
+
         ImGui::TextDisabled("Wind changes apply on scene reload.");
         ImGui::Separator();
         ImGui::TextUnformatted("Night & lighthouse");
@@ -817,60 +1272,59 @@ int main(int argc, char** argv) {
         }
         if (night) {
             ImGui::SliderFloat("Beam speed (rad/s)", &beamSpeed, 0.f, 2.f, "%.2f");
-            if (ImGui::SliderFloat("Haze density (1/m)", &hazeDensity, 0.f, 0.08f, "%.3f"))
+            if (ImGui::SliderFloat("Haze density (1/m)", &hazeDensity, 0.f, 0.08f, "%.3f")) {
                 renderer.setDeferredVolumetrics(hazeDensity, 0.6f);
+            }
+        }
+        ImGui::Separator();
+        ImGui::TextUnformatted("Audio");
+        if (sounds.ok) {
+            ImGui::Checkbox("Enable##audio", &audioOn);
+            ImGui::SliderFloat("Volume##audio", &audioVol, 0.f, 1.f, "%.2f");
+        } else {
+            ImGui::TextDisabled("Audio unavailable.");
         }
         ImGui::Separator();
         if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f, "%.2f"))
             renderer.toneMappingExposure = exposure;
         const char* toneItems[] = {"None", "Linear", "Reinhard", "Cineon", "ACESFilmic"};
-        if (ImGui::Combo("Tone mapping", &toneMode, toneItems, IM_ARRAYSIZE(toneItems)))
+        if (ImGui::Combo("Tone mapping", &toneMode, toneItems, IM_ARRAYSIZE(toneItems))) {
             renderer.toneMapping = static_cast<ToneMapping>(toneMode);
+        }
         bool restirDI = renderer.restirDIEnabled();
-        if (ImGui::Checkbox("ReSTIR DI", &restirDI))
+        if (ImGui::Checkbox("ReSTIR DI", &restirDI)) {
             renderer.setRestirDIEnabled(restirDI);
+        }
         bool restirGI = renderer.restirGIEnabled();
-        if (ImGui::Checkbox("ReSTIR GI", &restirGI))
+        if (ImGui::Checkbox("ReSTIR GI", &restirGI)) {
             renderer.setRestirGIEnabled(restirGI);
-        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
+        }
+        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16)) {
             renderer.setSamplesPerPixel(spp);
+        }
         // Silhouette MSAA: extra primary rays at edge pixels only.
         // 0 disables; default 7 → 8× MSAA at edges.
         int edgeMsaa = static_cast<int>(renderer.silhouetteMsaaExtra());
-        if (ImGui::SliderInt("Silhouette MSAA extras", &edgeMsaa, 0, 15))
+        if (ImGui::SliderInt("Silhouette MSAA extras", &edgeMsaa, 0, 15)) {
             renderer.setSilhouetteMsaaExtra(static_cast<uint32_t>(edgeMsaa));
+        }
         // Path-trace render scale: < 1 traces fewer pixels, then upscales.
-        if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f, "%.2f"))
+        if (ImGui::SliderFloat("Render scale", &renderScale, 0.25f, 1.0f, "%.2f")) {
             renderer.setRenderScale(renderScale);
+        }
         ImGui::Separator();
 
-        {
-            const auto t = renderer.lastFrameTimings();
-            if (t.pathTraceMs > 0.f) {
-                float& bucket = measurePrimaryOnly ? primaryOnlyMs : fullPtMs;
-                bucket = (bucket > 0.f) ? bucket * (1.f - ptEmaAlpha) + t.pathTraceMs * ptEmaAlpha
-                                        : t.pathTraceMs;
-            }
-            if (ImGui::Checkbox("Measure primary trace only", &measurePrimaryOnly))
-                renderer.setMeasurePrimaryTraceOnly(measurePrimaryOnly);
-            if (measurePrimaryOnly)
-                ImGui::TextDisabled("Image is black while measuring.");
-            ImGui::Text("Full PT:      %6.2f ms", fullPtMs);
-            ImGui::Text("Primary only: %6.2f ms", primaryOnlyMs);
-            if (fullPtMs > 1e-3f && primaryOnlyMs > 0.f)
-                ImGui::Text("Primary share: %5.1f %%", 100.f * primaryOnlyMs / fullPtMs);
-            ImGui::Separator();
-        }
 
         ImGui::TextUnformatted("Underwater fog");
         ImGui::SliderFloat("Density (1/m)", &uwFogDensity, 0.01f, 0.20f, "%.3f");
         ImGui::ColorEdit3("Inscatter tint", uwFogColor,
                           ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs);
         ImGui::SliderFloat("Anisotropy (g)", &uwFogAniso, -0.95f, 0.95f, "%.2f");
-        if (uwDepthSmooth > 0.001f)
+        if (uwDepthSmooth > 0.001f) {
             ImGui::Text("Submerged: %.1f%%", uwDepthSmooth * 100.f);
-        else
+        } else {
             ImGui::TextDisabled("Camera above water.");
+        }
 
         ImGui::Separator();
         if (ImGui::CollapsingHeader("LIDAR mast (OS0-128, path-traced)")) {
@@ -887,8 +1341,9 @@ int main(int argc, char** argv) {
                 // sensor see the seafloor below the wave crests where the
                 // surface Fresnel return doesn't fully attenuate the beam.
                 int maxRet = static_cast<int>(lidarSensor->params.maxReturns);
-                if (ImGui::SliderInt("Max returns##lidar", &maxRet, 1, 4))
+                if (ImGui::SliderInt("Max returns##lidar", &maxRet, 1, 4)) {
                     lidarSensor->params.maxReturns = static_cast<uint32_t>(std::max(1, maxRet));
+                }
             }
             {
                 // Monte Carlo samples per beam: jitters direction within the
@@ -1572,8 +2027,25 @@ int main(int argc, char** argv) {
             }
         }
 
+        // ── Sound update ──────────────────────────────────────────────────
+        // After the camera pose (listener follows it) and the underwater fog
+        // (uwDepthSmooth ducks the above-surface ambience). Engine source
+        // sits at the stern, just above the waterline by the prop wash.
+        {
+            const Vector3 sternWorld = boatPos - boatFwd * (kBoatLength * 0.45f) + Vector3(0.f, 1.0f, 0.f);
+            const bool thrusting = autoPilot ? std::abs(autoCruiseSpeed) > 0.1f
+                                             : (bi.W || bi.S);
+            sounds.update(dt, sternWorld, bs.forwardSpeed, thrusting,
+                          uwDepthSmooth, camera, audioOn ? audioVol : 0.f);
+        }
+
         if (capturing) {
-            if (night) {
+            if (shotVista) {
+                // High oblique overview: lighthouse centre, archipelago ring,
+                // passes and the far shore all in frame.
+                camera.position.set(300.f, 220.f, 520.f);
+                camera.lookAt(Vector3(0.f, 0.f, -60.f));
+            } else if (night) {
                 // Night framing: low camera toward the lighthouse + horizon —
                 // sky (stars), beam fan, and lit water all in shot.
                 camera.position.set(70.f, 7.f, 110.f);
