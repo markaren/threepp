@@ -67,14 +67,28 @@ namespace {
         }
     };
 
-    // Persistent boat state. Position is world, yaw is rotation around +Y
-    // (heading); pitch and roll are read each frame from wave-surface tilt
-    // and aren't integrated. Forward speed is along +heading; max ~14 kn
-    // (~7 m/s) for a research vessel of Gunnerus's size.
+    // Persistent boat state — a reduced 3-DOF maneuvering model (surge, sway,
+    // yaw) in the horizontal plane, with wave-driven heave/pitch/roll layered
+    // on top each frame.
+    //   • Surge: engine thrust vs quadratic hull drag — natural top speed
+    //     (~14 kn for a vessel of Gunnerus's size) and a long coast-down.
+    //   • Yaw: first-order Nomoto response. The rudder commands a steady-state
+    //     turn rate proportional to flow over the blade; hull yaw inertia makes
+    //     the rate build/decay over T ≈ L/u seconds instead of snapping.
+    //   • Sway: centripetal coupling gives the outward drift a displacement
+    //     hull carries through a turn (velocity lags heading by the drift angle).
+    //   • Actuators: the rudder slews at a finite rate and the throttle spools
+    //     like an engine telegraph. Manual keys and the waypoint autopilot
+    //     both drive these same actuators, so motion is identical either way.
     struct BoatState {
-        Vector3 position{0.f, 0.f, 0.f};
-        float   yaw          = 0.f;       // radians
-        float   forwardSpeed = 0.f;       // m/s along +heading
+        Vector3 position{0.f, 0.f, 0.f};  // world; y unused (heave is separate)
+        float   yaw          = 0.f;       // heading, radians around +Y
+        float   yawRate      = 0.f;       // r, rad/s (state — yaw inertia)
+        float   forwardSpeed = 0.f;       // surge u, m/s along +heading
+        float   swaySpeed    = 0.f;       // sway v, m/s lateral (drift in turns)
+        float   rudder       = 0.f;       // actual rudder deflection, radians
+        float   throttle     = 0.f;       // engine telegraph state ∈ [−1, 1]
+        bool    aground      = false;     // keel touching (island shores / sills)
         float   smoothPitch  = 0.f;       // radians, low-passed from wave tilt
         float   smoothRoll   = 0.f;       // radians
         float   y            = 0.f;       // metres, spring-damped toward wave height
@@ -693,9 +707,9 @@ namespace {
             }
         }
 
-        // sternWorld: engine mount position. thrusting: throttle is open
-        // (autopilot under way, or W/S held) — bumps the RPM floor so the
-        // engine revs as thrust is applied, before boat speed builds.
+        // sternWorld: engine mount position. thrusting: the telegraph is
+        // open — bumps the RPM floor so the engine revs as thrust is
+        // applied, before boat speed builds.
         // uw: smoothed submersion ∈ [0,1] — above-surface sound ducks under
         // water (wind almost fully, waves partially, engine least: hull noise
         // carries through the water).
@@ -1001,6 +1015,23 @@ int main(int argc, char** argv) {
 
     constexpr float kBoatLength = 28.0f;
     constexpr float kBoatBeam   = 9.0f;
+
+    // ── Maneuvering model constants (R/V Gunnerus-ish, 28 m displacement hull) ──
+    constexpr float kMaxSpeed    = 7.2f;  // m/s ≈ 14 kn, full ahead
+    constexpr float kMaxAccel    = 0.55f; // m/s² at full throttle from rest
+    constexpr float kDragQuad    = kMaxAccel / (kMaxSpeed * kMaxSpeed);// drag balances thrust at kMaxSpeed
+    constexpr float kAsternFrac  = 0.25f; // astern thrust fraction → ~3.5 m/s astern
+    constexpr float kRudderMax   = 0.61f; // 35° hard-over
+    constexpr float kRudderRate  = 0.30f; // rad/s actuator slew — hard-over in ~2 s
+    constexpr float kTurnGain    = 1.f / (70.f * kRudderMax);// r_ss = gain·flow·δ → ~70 m radius hard-over (≈2.5 L)
+    constexpr float kPropWash    = 2.0f;  // m/s of extra rudder flow per unit ahead throttle (kick-turn from rest)
+    constexpr float kTurnDrag    = 0.5f;  // surge drag ∝ |r|·u — speed bleeds off through a hard turn
+    constexpr float kSwayCouple  = 1.45f; // centripetal sway forcing — ~10° drift angle in a hard turn
+    constexpr float kSwayDamp    = 0.8f;  // 1/s lateral damping
+    constexpr float kTurnHeel    = 0.08f; // rad of outward heel per (m/s · rad/s) — CG above lateral pressure centre
+    constexpr float kSpeedTrim   = 0.021f;// rad of bow-up squat trim at full speed
+    constexpr float kDraft       = 2.5f;  // m — grounding test depth (island sills top out at −2 m)
+
     GLTFLoader gltfLoader;
     auto boat = loadAsync([&gltfLoader]() -> std::shared_ptr<Group> {
         auto gltf = gltfLoader.load(std::string(DATA_FOLDER) + "/models/gltf/Gunnerus.glb");
@@ -1216,6 +1247,9 @@ int main(int argc, char** argv) {
         bs.position.set(p0.x, 0.f, p0.z);
         bs.yaw          = std::atan2(t0.x, t0.z);
         bs.forwardSpeed = autoCruiseSpeed;
+        // Steady-state telegraph for the cruise speed, so the demo opens
+        // under way instead of spooling the engine up from stop.
+        bs.throttle     = std::clamp(kDragQuad * autoCruiseSpeed * autoCruiseSpeed / kMaxAccel, 0.f, 1.f);
     }
 
     // Far-clip raised so the horizon doesn't get cut at the elevated/distant
@@ -1424,10 +1458,14 @@ int main(int argc, char** argv) {
         ImGui::TextWrapped(
             "FFT-displaced surface (multi-cascade Phillips, %u² IFFT, "
             "%.0f m tile). Path-traced refraction + photon-map caustics. "
-            "WASD = steer the Gunnerus.",
+            "W/S = engine telegraph, A/D = rudder.",
             kFftSize, kTileSize);
-        ImGui::Text("Speed: %.1f m/s   Heading: %.0f°", bs.forwardSpeed,
+        ImGui::Text("Speed: %.1f kn (%.1f m/s)   Heading: %.0f°",
+                    bs.forwardSpeed * 1.94384f, bs.forwardSpeed,
                     bs.yaw * 180.f / 3.14159f);
+        ImGui::Text("Telegraph: %+4.0f%%   Rudder: %+5.1f°%s",
+                    bs.throttle * 100.f, bs.rudder * 180.f / 3.14159f,
+                    bs.aground ? "   AGROUND!" : "");
         ImGui::Text("Pos: %7.1f, %7.1f", bs.position.x, bs.position.z);
         ImGui::Text("Keys  W:%d  A:%d  S:%d  D:%d   (C = cycle camera)",
                     bi.W ? 1 : 0, bi.A ? 1 : 0, bi.S ? 1 : 0, bi.D ? 1 : 0);
@@ -1443,13 +1481,13 @@ int main(int argc, char** argv) {
         ImGui::TextUnformatted("Autopilot");
         ImGui::Checkbox("Follow waypoint loop", &autoPilot);
         if (autoPilot) {
-            ImGui::SliderFloat("Cruise speed (m/s)", &autoCruiseSpeed, 1.f, 12.f, "%.1f");
+            ImGui::SliderFloat("Cruise speed (m/s)", &autoCruiseSpeed, 1.f, kMaxSpeed, "%.1f");
             const int wpCount = static_cast<int>(waypoints.size());
             const int currentWp = std::min(wpCount - 1,
                                            static_cast<int>(autoU * wpCount));
             ImGui::Text("Waypoint %d / %d   (u = %.2f)", currentWp + 1, wpCount, autoU);
         } else {
-            ImGui::TextDisabled("WASD to steer manually.");
+            ImGui::TextDisabled("W/S engine ahead/astern, A/D rudder.");
         }
         ImGui::Separator();
 
@@ -1707,46 +1745,101 @@ int main(int argc, char** argv) {
             fpsFrames = 0;
         }
 
-        // === Boat steering integration ===
-        // Autopilot path: advance arc-length parameter u by cruise speed × dt
-        // along the closed nav curve and lift position + heading directly
-        // from the curve. Yaw aligns with the tangent so the boat always
-        // faces "forward along the path". forwardSpeed is set to the cruise
-        // speed so the wake reads correctly. closed=true on the curve means
-        // u wraps seamlessly — fmod handles the [0, 1) wrap, and the loop
-        // restarts without a heading jump.
-        float cosY, sinY;
+        // === Boat steering & propulsion ===
+        // Both modes only produce rudder/throttle COMMANDS; the shared
+        // actuator + dynamics integration below turns them into motion.
+        // The autopilot is a helmsman, not a teleport: it chases a pure-
+        // pursuit look-ahead point on the nav curve with a PD heading
+        // controller, so the boat heels, drifts and bleeds speed through
+        // turns exactly as it does under manual control (and cuts the
+        // corners a real helm would).
+        float rudderCmd = 0.f, throttleCmd = 0.f;
         if (autoPilot && navCurveLength > 1e-3f) {
-            autoU += (autoCruiseSpeed * dt) / navCurveLength;
-            autoU = std::fmod(autoU, 1.f);
-            if (autoU < 0.f) autoU += 1.f;
-            Vector3 p, tan;
-            navCurve.getPointAt(autoU, p);
-            navCurve.getTangentAt(autoU, tan);
-            bs.position.set(p.x, 0.f, p.z);
-            bs.yaw          = std::atan2(tan.x, tan.z);
-            bs.forwardSpeed = autoCruiseSpeed;
-            cosY = std::cos(bs.yaw);
-            sinY = std::sin(bs.yaw);
+            // Advance the pursuit target along the curve until it sits
+            // kLookAhead metres from the hull. getPointAt is arc-length
+            // parameterised, so stepU advances ~2 m per iteration; the guard
+            // bounds the catch-up after a long pause or a manual excursion.
+            constexpr float kLookAhead = 40.f;
+            Vector3 tgt;
+            navCurve.getPointAt(autoU, tgt);
+            const float stepU = 2.f / navCurveLength;
+            for (int guard = 0; guard < 64; ++guard) {
+                const float dx = tgt.x - bs.position.x;
+                const float dz = tgt.z - bs.position.z;
+                if (dx * dx + dz * dz >= kLookAhead * kLookAhead) break;
+                autoU = std::fmod(autoU + stepU, 1.f);
+                navCurve.getPointAt(autoU, tgt);
+            }
+            const float desiredYaw = std::atan2(tgt.x - bs.position.x,
+                                                tgt.z - bs.position.z);
+            float err = desiredYaw - bs.yaw;
+            while (err >  math::PI) err -= 2.f * math::PI;
+            while (err < -math::PI) err += 2.f * math::PI;
+            // PD: P on heading error, D on yaw rate (counter-rudder — checks
+            // the swing early instead of S-curving across the track).
+            rudderCmd   = std::clamp(1.0f * err - 2.5f * bs.yawRate,
+                                     -kRudderMax, kRudderMax);
+            throttleCmd = std::clamp((autoCruiseSpeed - bs.forwardSpeed) * 0.6f,
+                                     -0.3f, 1.f);
         } else {
-            // Manual: W = forward thrust, S = reverse. Speed clamped to ±vMax;
-            // a linear drag (0.7/s) gives a coast-down once thrust released.
-            const float thrust = (bi.W ? 6.0f : 0.f) - (bi.S ? 4.0f : 0.f);
-            bs.forwardSpeed += thrust * dt;
-            bs.forwardSpeed -= bs.forwardSpeed * 0.5f * dt;
-            bs.forwardSpeed = std::clamp(bs.forwardSpeed, -4.f, 8.f);
-            // Yaw: A = left, D = right. Rate scales with speed (a stationary
-            // hull doesn't yaw easily). Min factor 0.1 keeps the rudder usable
-            // when nearly stopped.
-            const float yawInput = (bi.A ? 1.0f : 0.f) - (bi.D ? 1.0f : 0.f);
-            const float speedFactor = std::clamp(std::abs(bs.forwardSpeed) / 5.f, 0.1f, 1.0f);
-            bs.yaw += yawInput * 0.6f * speedFactor * dt;
-            // Position: boat moves along its heading. Convention: yaw=0 → +Z,
-            // matching the OrbitControls default forward.
-            cosY = std::cos(bs.yaw);
-            sinY = std::sin(bs.yaw);
-            bs.position.x += sinY * bs.forwardSpeed * dt;
-            bs.position.z += cosY * bs.forwardSpeed * dt;
+            // Manual: A/D order the rudder hard-over (it slews there at the
+            // actuator rate), W/S open the telegraph ahead/astern. Released
+            // keys recentre the helm and ring the engine back to stop — the
+            // hull then coasts on its own inertia against quadratic drag.
+            rudderCmd   = ((bi.A ? 1.f : 0.f) - (bi.D ? 1.f : 0.f)) * kRudderMax;
+            throttleCmd = bi.W ? 1.f : (bi.S ? -1.f : 0.f);
+        }
+
+        // Actuators. Rudder slews at a fixed rate; the engine spools faster
+        // than it winds down (turbo lag vs shaft inertia, mirrors the audio).
+        auto slewTo = [dt](float v, float tgt, float rate) {
+            const float d = tgt - v;
+            const float step = rate * dt;
+            return std::abs(d) <= step ? tgt : v + std::copysign(step, d);
+        };
+        bs.rudder   = slewTo(bs.rudder, rudderCmd, kRudderRate);
+        bs.throttle = slewTo(bs.throttle, throttleCmd,
+                             throttleCmd > bs.throttle ? 0.5f : 0.35f);
+
+        // Yaw — first-order Nomoto model: the rudder commands a steady-state
+        // turn rate ∝ flow over the blade (hull speed + prop wash, so a burst
+        // of ahead throttle kick-turns a stationary boat); the hull reaches it
+        // with time constant T ≈ L/u.
+        const float flow    = bs.forwardSpeed + kPropWash * std::max(bs.throttle, 0.f);
+        const float rTarget = kTurnGain * flow * bs.rudder;
+        const float Tyaw    = std::clamp(kBoatLength / std::max(std::abs(bs.forwardSpeed), 1.5f), 2.f, 7.f);
+        bs.yawRate += (rTarget - bs.yawRate) * std::min(dt / Tyaw, 1.f);
+        bs.yaw     += bs.yawRate * dt;
+
+        // Surge: thrust vs quadratic hull drag, plus the extra resistance of
+        // a deflected hull in a turn. Sway: centripetal coupling pushes the
+        // hull outward through a turn; lateral drag bleeds it off again.
+        const float thrust = kMaxAccel * (bs.throttle > 0.f ? bs.throttle
+                                                            : kAsternFrac * bs.throttle);
+        const float u = bs.forwardSpeed;
+        bs.forwardSpeed += (thrust
+                            - kDragQuad * u * std::abs(u)
+                            - kTurnDrag * std::abs(bs.yawRate) * u) * dt;
+        bs.forwardSpeed = std::clamp(bs.forwardSpeed, -4.f, kMaxSpeed + 0.5f);
+        bs.swaySpeed += (-kSwayCouple * u * bs.yawRate - kSwayDamp * bs.swaySpeed) * dt;
+
+        // Position: world velocity = heading·u + lateral·v. Convention:
+        // yaw=0 → +Z forward, lateral basis (cosY, −sinY).
+        float cosY = std::cos(bs.yaw);
+        float sinY = std::sin(bs.yaw);
+        bs.position.x += (sinY * bs.forwardSpeed + cosY * bs.swaySpeed) * dt;
+        bs.position.z += (cosY * bs.forwardSpeed - sinY * bs.swaySpeed) * dt;
+
+        // Grounding: the archipelago sills top out ~2 m below the surface and
+        // the shores shoal up — once the island height field rises above keel
+        // depth the hull scrubs off its way fast. (The sand floor of the bay
+        // sits at −5 m, so open water never triggers this.)
+        bs.aground = island::heightAt(bs.position.x, bs.position.z) > -kDraft;
+        if (bs.aground) {
+            const float g = std::exp(-3.f * dt);
+            bs.forwardSpeed *= g;
+            bs.swaySpeed    *= g;
+            bs.yawRate      *= g;
         }
 
         // === Hydrodynamics from sampled wave surface ===
@@ -1774,10 +1867,19 @@ int main(int argc, char** argv) {
         const float hPort   = sampleH(-halfB, 0.f);
         const float hStbd   = sampleH(+halfB, 0.f);
         // Positive pitch = bow up (right-hand rotation around local X).
-        const float pitch = std::atan2(hBow  - hStern, kBoatLength);
+        // Speed trim added on top: a displacement hull squats stern-down
+        // (bow up ~1°) as it approaches hull speed.
+        const float trimNorm = bs.forwardSpeed / kMaxSpeed;
+        const float pitch = std::atan2(hBow  - hStern, kBoatLength)
+                          + kSpeedTrim * trimNorm * std::abs(trimNorm);
         // Positive roll = starboard down (right-hand rotation around local Z,
         // which under +Z forward convention means starboard side dips).
-        const float roll  = std::atan2(hStbd - hPort,  kBoatBeam);
+        // Turn heel added on top: a surface ship heels OUTWARD in a turn
+        // (centre of gravity above the lateral pressure centre), ∝ the
+        // centripetal acceleration u·r. Both inputs are already first-order
+        // states, so the heel builds and releases smoothly with the turn.
+        const float roll  = std::atan2(hStbd - hPort,  kBoatBeam)
+                          - kTurnHeel * bs.forwardSpeed * bs.yawRate;
 
         // Pitch / roll: temporal low-pass at ~1 Hz so attitude rides the
         // swells but doesn't snap to wave-pumping at hull-traversal rates.
@@ -2230,8 +2332,9 @@ int main(int argc, char** argv) {
         // sits at the stern, just above the waterline by the prop wash.
         {
             const Vector3 sternWorld = boatPos - boatFwd * (kBoatLength * 0.45f) + Vector3(0.f, 1.0f, 0.f);
-            const bool thrusting = autoPilot ? std::abs(autoCruiseSpeed) > 0.1f
-                                             : (bi.W || bi.S);
+            // Telegraph state covers both modes now — the autopilot works the
+            // same throttle, so the engine note tracks what the prop is doing.
+            const bool thrusting = std::abs(bs.throttle) > 0.05f;
             sounds.update(dt, sternWorld, bs.forwardSpeed, thrusting,
                           uwDepthSmooth, camera, audioOn ? audioVol : 0.f);
         }
