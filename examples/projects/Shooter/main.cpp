@@ -468,8 +468,7 @@ namespace {
                 const std::string gunFile = assets + "freesound_community-submachine-gun-79846.mp3";
                 const std::string reloadFile = assets + "freesound_community-1911-reload-6248.mp3";
                 const std::string metalFile = assets + "freesound_community-hard-metal-impact-43052.mp3";
-                // grenade blast ships with the example (version-controlled), not the fetched data repo
-                const std::string boomFile = std::string(PROJECT_FOLDER) + "/examples/projects/Shooter/assets/grenade_explosion.mp3";
+                const std::string boomFile = "grenade_explosion.mp3";
                 std::vector<Spec> specs{
                         {"shot", {synthShot()}, &shot, 6, fs::exists(gunFile) ? gunFile : std::string{}},
                         {"empty", {synthClick()}, &empty, 2, {}},
@@ -732,7 +731,7 @@ int main(int argc, char** argv) {
     Canvas canvas(Canvas::Parameters().title("threepp - Third Person Shooter").size(winW, winH).antialiasing(4));
     // Force the GL backend so the demo launches straight into the game instead
     // of prompting for a renderer on stdin (createRenderer's default behaviour).
-    auto renderer = createRenderer(canvas, GraphicsAPI::Vulkan);
+    auto renderer = createRenderer(canvas);
     renderer->shadowMap().enabled = true;
     renderer->autoClear = false;
     renderer->toneMapping = ToneMapping::ACESFilmic;// HDR env needs tone mapping
@@ -1049,7 +1048,7 @@ int main(int argc, char** argv) {
     Vector3 hipsBind;// Hips bind-pose local position; clip root-motion (X/Z) is pinned to this
     {
         GLTFLoader loader;
-        const std::string swatPath = std::string(PROJECT_FOLDER) + "/examples/projects/Shooter/assets/swat.glb";
+        const std::string swatPath = std::string(DATA_FOLDER) + "/models/gltf/swat.glb";
         auto res = loader.load(swatPath);
         if (res) {
             auto& model = res->scene;
@@ -1189,7 +1188,7 @@ int main(int argc, char** argv) {
     auto rifle = Group::create();
     {
         GLTFLoader gloader;
-        if (auto r = gloader.load(std::string(PROJECT_FOLDER) + "/examples/projects/Shooter/assets/rifle.glb")) {
+        if (auto r = gloader.load(std::string(DATA_FOLDER) + "/models/gltf/rifle.glb")) {
             auto& gun = r->scene;
             gun->traverseType<Mesh>([](Mesh& m) { m.castShadow = true; });
             gun->updateMatrixWorld(true);
