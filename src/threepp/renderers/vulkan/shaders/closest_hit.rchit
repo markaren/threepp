@@ -7,7 +7,7 @@
 
 #include "vulkan_shared.h"
 
-// Phase 9: this shader fills a struct payload (radiance leaving the hit +
+// This shader fills a struct payload (radiance leaving the hit +
 // sampled bounce direction + throughput multiplier). raygen handles the
 // path loop; we just shade the hit and pick where the path goes next.
 //
@@ -273,7 +273,7 @@ layout(set = 0, binding = 43, rgba32f) uniform readonly  image2D giResLoRead;
 // payload.primaryAlbedo; raygen owns the temporal-blend write to the
 // ping-pong albedo accumulator (bindings 35 write / 36 read).
 
-// Phase 11: PMREM mip count comes via the same push-constant block used by
+// PMREM mip count comes via the same push-constant block used by
 // raygen. .x is raygen's sampleIndex (not read here); .y is envMipCount.
 layout(push_constant) uniform Pc {
     uint sampleIndex;
@@ -315,9 +315,10 @@ layout(location = 2) rayPayloadEXT Payload giSubPayload;
 // photonData) that some of the helpers reference.
 #include "shade_common.glsl"
 
-// ───── ReSTIR DI — Stage 1a (init RIS, no temporal/spatial reuse) ─────
-// One reservoir per primary-shading invocation; lives in registers and is
-// not persisted across frames (no SSBO yet — Stage 1b adds temporal reuse).
+// ───── ReSTIR DI — Stage 1a (init RIS) ─────
+// One reservoir per primary-shading invocation, built in registers via RIS.
+// Temporal reuse (persisted across frames via SSBO) and spatial reuse are
+// applied later — see the Stage 1b / 1c sections below.
 //
 // lightType encoding:
 //   < 0      : sentinel "no candidate" / env (env is NEE'd separately,
@@ -363,18 +364,17 @@ void finalizeReservoir(inout Reservoir r) {
 // represented as (xs, ns, Lo, omegaI) — a virtual point sample where
 //   xs      = world-space position of the first indirect hit,
 //   ns      = shading normal at xs,
-//   Lo      = outgoing radiance at xs (one-bounce direct in Stage 1a — full
+//   Lo      = outgoing radiance at xs (one-bounce direct at init — full
 //             path-tracer continuation from xs lives in raygen, not here),
 //   omegaI  = direction from the primary surface point to xs.
 //
 // Stage 1a generates exactly one candidate per pixel per frame via BSDF
 // sampling from the primary, traces the sub-ray, and shades xs (via the
 // recursive chit invocation) to obtain Lo. The reservoir struct + helpers
-// are scaffolded here so Stage 1b can add temporal reuse (persistent
-// reservoir ping-pong) and Stage 1c can add spatial reuse without rewriting
-// the data layout. At M=1 the contribution collapses to the classic MC
-// bounce-1 estimate (= bs.weight · Lo); the variance reduction kicks in at
-// M>1 when neighbours/history contribute via RIS.
+// feed temporal reuse (persistent reservoir ping-pong) and spatial reuse —
+// the Stage 1b / 1c sections below. At M=1 the contribution collapses to the
+// classic MC bounce-1 estimate (= bs.weight · Lo); the variance reduction
+// kicks in at M>1 when neighbours/history contribute via RIS.
 struct GiReservoir {
     vec3  xs;      // sample position (world space)
     vec3  ns;      // sample normal (world space)
@@ -1733,7 +1733,7 @@ void main() {
     }
     const vec3 ambient = albedo * (1.0 - metalness) * lights.ambient * baseScale * ao;
 
-    // Phase 9 v2: probabilistic spec/diffuse lobe selection so polished
+    // Probabilistic spec/diffuse lobe selection so polished
     // metals reflect nearby geometry, not just the env probe. p_spec mirrors
     // the WGPU PT (mix(0.5, 0.98, metalness)). The selected lobe's BRDF·cos
     // is divided by its sampling pdf and by p_spec / (1-p_spec) so the
@@ -2436,10 +2436,9 @@ void main() {
         giConsumed   = true;
     }
 
-    // Phase 1: route ALL contributions to diff channel for now. Phase 1b
-    // will split litDiff and litSpec at each NEE site for proper channel
-    // separation. Keeping spec=0 for this initial split preserves current
-    // behavior pixel-identical while the infrastructure lands.
+    // All contributions currently route to the diff channel (spec=0). A
+    // proper split would separate litDiff and litSpec at each NEE site; the
+    // payload channels exist for it but the PT accumulator is single-channel.
     if (giConsumed) {
         // GI absorbed bounce 1's contribution; raygen's step 1 trace continues
         // from xs at bounce 2. payload.flags bit 3 (=8u) is a documentation

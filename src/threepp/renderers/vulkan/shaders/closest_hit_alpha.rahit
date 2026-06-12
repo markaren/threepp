@@ -7,7 +7,7 @@
 
 #include "vulkan_shared.h"
 
-// Phase 10: alpha-test + alpha-blend any-hit. Bound to the same hit group as
+// Alpha-test + alpha-blend any-hit. Bound to the same hit group as
 // closest_hit, fires for every triangle hit candidate before closest_hit.
 //   - alphaCutoff > 0  (cutout)   : standard alpha test against the cutoff.
 //   - alphaCutoff < 0  (BLEND)    : stochastic rejection — sample texture

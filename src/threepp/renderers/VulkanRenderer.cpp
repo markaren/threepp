@@ -1,5 +1,4 @@
-﻿// VulkanRenderer — hardware ray-traced renderer (Phase 9 v2 + dynamic
-// scene rebuild).
+﻿// VulkanRenderer — hardware ray-traced renderer with dynamic scene rebuild.
 //
 // On every render() we walk the scene and fingerprint each visible Mesh
 // (geometry/material identity + world matrix + PBR scalars). When the
@@ -9,18 +8,18 @@
 // bindings 0/3/4 across every descriptor set. BLAS records stay cached by
 // BufferGeometry pointer so static geometry is never re-traced.
 //
-// Shading: Phase 5/6 do Lambert + GGX direct lighting against scene
-// AmbientLight + DirectionalLights with shadow rays. Phase 7 samples
-// `scene.environment` / `scene.background` HDR equirects for both the
-// background miss and the closest-hit env probe. Phase 8 adds progressive
-// accumulation (rgba32f persistent accum image) with sub-pixel jitter,
-// resetting on camera, env, or scene change. Phase 9 turns the ray pipe
-// into an iterative path tracer driven from raygen — each closest_hit
-// shade returns direct radiance + a sampled bounce direction; raygen
-// loops up to kMaxBounces and applies Russian Roulette after the first
-// indirect bounce. Phase 9 v2 swaps the cosine-only scatter for a
-// probabilistic spec/diffuse split (VNDF-sampled GGX for the spec lobe)
-// so polished metals reflect nearby geometry as well as the env.
+// Two render modes (RenderMode):
+//   • ReferencePT — an iterative path tracer driven from raygen: each
+//     closest_hit returns direct radiance (Lambert + VNDF-sampled GGX against
+//     AmbientLight/DirectionalLights with shadow rays, plus emissive/ReSTIR
+//     area lights) + a sampled bounce direction; raygen loops to kMaxBounces
+//     with Russian Roulette, accumulating into a persistent rgba32f image that
+//     resets on camera/env/scene change.
+//   • RasterFirst — a hybrid: a raster G-buffer supplies primary visibility,
+//     then deferred_shade.comp lights it analytically and adds ray-query
+//     accents (shadows, reflections, AO/GI), denoised + TAA-resolved.
+// Both sample `scene.environment` / `scene.background` HDR equirects (GGX-
+// prefiltered into a PMREM mip chain) for the background miss and IBL.
 
 #define VMA_IMPLEMENTATION
 #include "vulkan/VulkanContext.hpp"
@@ -568,7 +567,7 @@ namespace threepp {
         float    fogWaterSurfaceY_ = 1e30f;
         uint64_t prevFogHash_ = 0u;
 
-        // Phase 7: environment equirect (HDR float) used by the primary miss
+        // Environment equirect (HDR float) used by the primary miss
         // for backgrounds and by closest-hit for a single mirror-reflection
         // IBL probe. Default is a 1×1 black dummy so descriptors are always
         // valid; replaced lazily when the scene's environment / background
@@ -629,7 +628,7 @@ namespace threepp {
         uint32_t envCdfHeight_ = 1;
         float    envCdfTotalSum_ = 0.0f;
 
-        // PMREM (Phase 11): GGX-prefiltered env mip chain. Built once per env
+        // PMREM: GGX-prefiltered env mip chain. Built once per env
         // upload — see vulkan/EnvPrefilter.{hpp,cpp}. Owns the prefilter
         // compute pipeline + descriptor pool + source sampler; the host calls
         // envPrefilter_->buildPmrem(...) when scene.environment changes.
@@ -1218,7 +1217,7 @@ namespace threepp {
         // Indirect-drawing variant: uses gbuffer_indirect.vert with bindless
         // vertex pulling, declares zero vertex input bindings, consumes the
         // per-frame DrawInfo SSBO at binding 4. Selected by default for the
-        // gbuf pass since it collapses N draws into 1-3 vkCmdDrawIndirect
+        // gbuf pass since it collapses N draws into 1-4 vkCmdDrawIndirect
         // calls — see recordRasterGbufPass.
         VkPipeline            rasterGbufIndirectPipeline = VK_NULL_HANDLE;
         // Decal variant of the indirect pipeline (bucket [3], drawn last):
@@ -1360,7 +1359,7 @@ namespace threepp {
         // of per-mesh UV availability.
         Buffer dummyUvBuffer_{};
 
-        // ── Raster TAA resolve (stage 1A.5) ────────────────────────────────
+        // ── Raster TAA resolve ─────────────────────────────────────────────
         // Encapsulated in vulkan/TaaResolve.{hpp,cpp}. Owns its pipeline,
         // descriptor pool/sets, sampler, input image + history ping-pong.
         // External deps (raster gbuffer views, swapchain views) are passed
@@ -1476,7 +1475,7 @@ namespace threepp {
         // record/frame timing. Constructed in the Impl ctor, after ctx is
         // available.
         std::unique_ptr<vulkan::GpuTimings>  gpuTimings_;
-        // Ortho/HUD overlay pass. Extracted in Phase 1; owns the sprite and
+        // Ortho/HUD overlay pass. Owns the sprite and
         // ortho-line pipelines, atlas/geometry caches, and per-frame descriptor
         // pools. Constructed after ctx is available (same constraint as gpuTimings_).
         std::unique_ptr<vulkan::OverlayPass> overlayPass_;
@@ -1547,7 +1546,7 @@ namespace threepp {
         // small period (16 frames) — long enough to look stable, short enough
         // to avoid ever-growing index drift.
         uint32_t haltonFrame_ = 0;
-        // Day-1 verification mode: blit one G-buffer channel onto the
+        // G-buffer debug-view mode: blit one G-buffer channel onto the
         // swapchain instead of running the path tracer. Lets us see the
         // raster output before raygen integration.
         enum class HybridDebugView : uint32_t {
@@ -1607,7 +1606,7 @@ namespace threepp {
         //
         // Idle              : no frame in flight; next render() runs beginFrame.
         // RecordingPostPT   : PT pass recorded; further render(ortho) calls
-        //                     append HUD overlay draws to the same cb (Phase 2).
+        //                     append HUD overlay draws to the same cb.
         // RecordingOrthoOnly: render(ortho) called with no prior PT — frame
         //                     was opened with an empty PT result (cleared
         //                     swapchain). Rare; mostly defensive.
@@ -2040,7 +2039,7 @@ namespace threepp {
             auto* posAttr = geom.getAttribute<float>("position");
             if (!posAttr) return nullptr;
             auto* normAttr = geom.getAttribute<float>("normal");
-            if (!normAttr) return nullptr;// Phase 5a requires per-vertex normals
+            if (!normAttr) return nullptr;// the RT path requires per-vertex normals
             const auto& positions = posAttr->array();
             const auto& normals = normAttr->array();
             const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
@@ -3989,7 +3988,7 @@ namespace threepp {
         }
 
         // Build a TLAS over the supplied instance descriptors. Empty input is
-        // legal — produces an empty TLAS that always misses (Phase 2 fallback).
+        // legal — produces an empty TLAS that always misses.
         void buildTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances) {
             const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
             const VkDeviceSize instBytes = std::max<VkDeviceSize>(
@@ -5578,7 +5577,7 @@ namespace threepp {
                     }
                 }
                 inst.instanceCustomIndex = static_cast<uint32_t>(i);
-                inst.mask = 0xFFu;
+                inst.mask = kRayMaskOpaque;// placeholder; set to Opaque/Alpha once md is built below
                 inst.instanceShaderBindingTableRecordOffset = 0;
                 inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
                 inst.accelerationStructureReference = recPtr->address;
@@ -6538,7 +6537,7 @@ namespace threepp {
             // sub-pixel jitter still happens in raygen's hybrid primary via
             // the blue-noise tile (see primaryDirHybrid), so interior AA
             // doesn't disappear — only the coverage jitter is gone.
-            // Phase 1 (TSR rebuild): jitter ON. Sub-pixel Halton coverage +
+            // Raster jitter ON: sub-pixel Halton coverage +
             // temporal accumulation = proper TAA/TSR (replaces FXAA). The earlier
             // "flicker" was silhouette coverage-flip on MOVING objects with a loose
             // RGB AABB history clamp; the resolve now uses a YCoCg variance clip
@@ -6767,13 +6766,13 @@ namespace threepp {
         // hybrid raster G-buffer pass. Called from renderFrame right after
         // cullEntriesAgainstFrustum (which sets MeshEntry::inFrustum) so we
         // can skip culled draws here. The actual GPU dispatch happens in
-        // recordRasterGbufPass via 1-3 vkCmdDrawIndirect calls partitioned
-        // by cull mode.
+        // recordRasterGbufPass via 1-4 vkCmdDrawIndirect calls partitioned
+        // by cull mode (+ a trailing blend-decal bucket).
         //
         // Draw partitioning: walk entries once, sort each visible draw
-        // into one of three buckets (Side::Front/Back/Double). Buckets
-        // are concatenated [Front | Back | Double] in the device buffers,
-        // and each VkDrawIndirectCommand's firstInstance carries the
+        // into one of four buckets (Side::Front/Back/Double, then blend
+        // decals). Buckets are concatenated [Front | Back | Double | Decal]
+        // in the device buffers, and each VkDrawIndirectCommand's firstInstance carries the
         // global DrawInfo index — surfaced to the VS as gl_InstanceIndex
         // so the shader fetches `draws[gl_InstanceIndex]`. This trick
         // sidesteps the gl_DrawIDARB-resets-per-call issue without
@@ -6941,8 +6940,9 @@ namespace threepp {
         }
 
         // Begin the raster G-buffer render pass and ship the prebuilt
-        // indirect-draw groups via 1-3 vkCmdDrawIndirect calls (one per
-        // active cull mode). Replaces the prior per-mesh draw loop —
+        // indirect-draw groups via 1-4 vkCmdDrawIndirect calls (one per
+        // active cull mode, plus a trailing blend-decal group on the
+        // albedo-blend pipeline). Replaces the prior per-mesh draw loop —
         // see buildIndirectDrawData above for how the GPU buffers are
         // populated.
         void recordRasterGbufPass(VkCommandBuffer cb, uint32_t frame) {
@@ -7027,8 +7027,8 @@ namespace threepp {
             vkCmdEndRenderPass(cb);
         }
 
-        // Day-1 visualization: blit one of the G-buffer color attachments to
-        // the swapchain image so we can verify raster output before wiring
+        // Debug visualization: blit one of the G-buffer color attachments to
+        // the swapchain image so we can inspect raster output without wiring
         // raygen to read it. Normal channel is the most informative — solid
         // surfaces show their world-space orientation as RGB.
         void recordHybridDebugBlit(VkCommandBuffer cb, uint32_t imageIndex, uint32_t frame) {
@@ -7320,7 +7320,7 @@ namespace threepp {
             vmaUnmapMemory(ctx->allocator(), fogUbos[frame].alloc);
         }
 
-        // Phase 7: allocate, transition, and upload an Image2D from a tightly-
+        // Allocate, transition, and upload an Image2D from a tightly-
         // packed CPU buffer. Pixel layout matches `format`. Caller owns the
         // returned Image2D and must call destroyImage2D() on shutdown.
         Image2D createSampledImage2D(uint32_t w, uint32_t h, VkFormat format,
@@ -7557,7 +7557,7 @@ namespace threepp {
             return out;
         }
 
-        // Phase 8: storage-image (rgba32f, GENERAL layout) used as the
+        // Storage-image (rgba32f, GENERAL layout) used as the
         // progressive accumulation target. No staging upload — contents are
         // initialised the first frame after sampleIndex resets to 0. The
         // raygen reads/writes this every frame, so we transition once at
@@ -9989,12 +9989,12 @@ namespace threepp {
             envIsBgColor = false;
             if (!envIsDefault && tex->id == envTextureIdUploaded) return false;
 
-            // Phase 7 v1 supports HDR float equirects (RGBELoader output).
-            // LDR backgrounds are not yet handled — fall through to default.
+            // Only HDR float equirects (RGBELoader output) are supported.
+            // LDR backgrounds are not handled — fall through to default.
             const auto& image = tex->image();
             if (tex->type != Type::Float) {
                 std::cerr << "[VulkanRenderer] env texture is not float HDR; "
-                             "ignoring (Phase 7 v1 supports HDR equirect only)" << std::endl;
+                             "ignoring (HDR equirect only)" << std::endl;
                 return false;
             }
             const auto& src = image.data<float>();
@@ -10008,7 +10008,7 @@ namespace threepp {
             vkDeviceWaitIdle(ctx->device());
             destroyImage2D(ctx->allocator(), ctx->device(), envImage);
 
-            // Phase 11: GGX-prefilter the env into a mip chain so the closest_hit
+            // GGX-prefilter the env into a mip chain so the closest_hit
             // shader can sample at a roughness-derived LOD instead of the cheap
             // (1-r)² fade. Mip 0 is the source mirror, mip k is convolved with
             // GGX(α=(k/(N-1))²). closest_hit fades from mirror to fully diffuse
@@ -10028,7 +10028,7 @@ namespace threepp {
 
         void createRtPipeline() {
             // 0=TLAS, 1=storage image (swapchain), 2=camera UBO, 3=geometry SSBO,
-            // 4=material SSBO, 5=lights UBO, 6=env equirect (Phase 7),
+            // 4=material SSBO, 5=lights UBO, 6=env equirect,
             // 7=accum write image (ping-pong), 8=material texture array,
             // 9=prev camera UBO (motion), 10=motion matrix SSBO (motion),
             // 11=prev accum read image (ping-pong), 12=gbuf write image
@@ -11536,7 +11536,7 @@ namespace threepp {
             rewriteDeferredDescriptors();
         }
 
-        // Phase 7: rewrite only binding 6 across every descriptor set (called
+        // Rewrite only binding 6 across every descriptor set (called
         // when refreshEnvTextureFromScene replaces the env image). Avoids
         // re-allocating the pool / sets.
         void rewriteEnvDescriptors() {
@@ -11912,7 +11912,7 @@ namespace threepp {
 
             // ── Hybrid raster G-buffer pass ─────────────────────────────────
             // Runs ahead of any RT work so the gbuffer is ready when raygen
-            // wants to read primary visibility. In Day-1 debug mode we blit
+            // wants to read primary visibility. In G-buffer debug mode we blit
             // a chosen channel directly to the swapchain, draw the ImGui
             // overlay on top (mirrors the PT path's overlay flow), then
             // present — bypassing the entire RT pipeline.
@@ -12563,7 +12563,7 @@ namespace threepp {
                                    bloomIntensity_, bloomThreshold_, bloomClamp_);
             // ── End bloom ──────────────────────────────────────────────────────
 
-            // ── Stage 1A.5: raster TAA / temporal upsampler ────────────────────
+            // ── Raster TAA / temporal upsampler ─────────────────────────────────
             // Reads denoise output from the TAA input image (render extent),
             // blends with reprojected history (rgba16f, swapchain extent),
             // writes the result straight to the swapchain. When renderScale
@@ -13523,8 +13523,8 @@ namespace threepp {
 
         // Ortho-only frame start: no PT, no per-frame uploads. Acquires the
         // swap image, opens the cmd buffer, and clears the swapchain to the
-        // configured clearColor (leaves layout = GENERAL). Phase 2 will add
-        // recordOrthoOverlay() to draw the HUD scene atop this cleared image.
+        // configured clearColor (leaves layout = GENERAL). recordOrthoOverlay()
+        // then draws the HUD scene atop this cleared image.
         bool beginFrameOrthoOnly() {
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
@@ -13688,7 +13688,7 @@ namespace threepp {
 
         // State-machine dispatcher for VulkanRenderer::render(). First call
         // of a user animate iteration runs beginFrame*, subsequent calls
-        // either append HUD overlay draws (Phase 2 — ortho path) or finalize
+        // either append HUD overlay draws (ortho path) or finalize
         // the prior frame and restart (defensive — second perspective call).
         // endFrame() runs from the Canvas frame-end callback at the tail of
         // animateOnce().
@@ -13764,8 +13764,7 @@ namespace threepp {
         // a separate HUD scene) must not touch any of that, or it clobbers
         // motionThisFrame_ / meshMovedBits_ / lastVisibleEntries_ and the
         // next PT frame cold-starts (visibly drops to ~1-spp quality).
-        // Phase 2 walks the HUD scene directly inside the ortho overlay
-        // record path instead.
+        // The ortho overlay record path walks the HUD scene directly instead.
         if (!camera.is<OrthographicCamera>()) {
             const auto sceneStart = std::chrono::high_resolution_clock::now();
             pimpl_->ensureSceneBuilt(scene);

@@ -8,12 +8,12 @@
 // normal (with normal map applied), screen-space motion vector, and
 // per-pixel IDs/flags. Depth is written automatically.
 //
-// Stage 1A.5+: normal mapping is done here via screen-space derivatives
+// Normal mapping is done here via screen-space derivatives
 // of vWorldPos + vUv. Without it, primary surfaces look flat; chit's
 // non-hybrid path samples the normal map and most assets rely on it for
 // surface detail (mortar lines, fabric weave, brick relief, etc.).
 //
-// Raster-first (Phase 1+): albedo / roughness / metalness are now also
+// Raster-first: albedo / roughness / metalness are also
 // sampled here and written to the G-buffer so the deferred shading pass can
 // light the surface analytically. Sampling matches closest_hit.rchit exactly
 // (albedo.rgb, roughness from .g, metalness from .b, per-channel uvTransforms,
@@ -215,6 +215,7 @@ void main() {
     //   > 0  cutout : discard fragments below the cutoff.
     //   < 0  BLEND  : stochastic screen-door so the surface behind shows
     //                 through; the temporal accumulator + TAA average it.
+    //                 (Overridden on the decal pipeline — see DECAL pass below.)
     //   == 0 opaque : keep (the common path; one comparison, no texture cost).
     // MUST run after every texture()/dFdx/dFdy above — a per-pixel discard
     // before an implicit-derivative sample corrupts the 2×2 quad's neighbours.

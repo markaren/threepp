@@ -1859,8 +1859,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
         // MSAA color attachment (resolves into colorTexture). Without this, redirecting
         // the scene through the tone-map intermediate would force effectiveSampleCount=1
-        // on every render that triggers needsToneMapPass(), which is the new default after
-        // Phase 4 (sRGB output) — so MSAA would silently disable on RT and surface alike.
+        // on every render that triggers needsToneMapPass(), which is the default when
+        // sRGB output routes the scene through the tone-map pass — so MSAA would
+        // otherwise silently disable on RT and surface alike.
         if (sampleCount > 1) {
             WGPUTextureDescriptor mtd{};
             mtd.label = WGPUStringView{"tonemap_msaa_color", sizeof("tonemap_msaa_color") - 1};
@@ -2403,7 +2404,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 // The HDR intermediate preserves values >1.0 so ACES operates on full range.
                 // When sampleCount_>1, attach the MSAA color/depth and resolve into the
                 // single-sample colorTexture (the blit's bind source). This preserves
-                // anti-aliasing through the tone-map redirect introduced by Phase 4.
+                // anti-aliasing through the tone-map redirect.
                 ensureToneMapRT(frame_.width, frame_.height, sampleCount_);
                 if (sampleCount_ > 1) {
                     colorView = toneMap_.msaaColorView;

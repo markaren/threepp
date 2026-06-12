@@ -1,12 +1,12 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
 
-// Phase 7: primary miss samples the scene environment (equirect HDR) so
+// Primary miss samples the scene environment (equirect HDR) so
 // rays that escape geometry pick up the sky / IBL background. If no env
 // texture is bound, a 1×1 black dummy is bound by the host so the sample
-// returns zero — same as the Phase 2 fallback.
+// returns zero — same as the empty-TLAS fallback.
 //
-// Phase 9: payload is now a struct shared with raygen + closest_hit. We
+// The payload is a struct shared with raygen + closest_hit. We
 // write the env radiance and set bit 0 of `flags` so raygen terminates the
 // path (no further bounce ray is launched).
 
@@ -103,9 +103,9 @@ void main() {
     //     wrote into payload.bsdfPdf when sampling the bounce.
     //   • envCdfTotalSum <= 0 → chit used BSDF-sampled env NEE; pdfs match
     //     so the balance-heuristic weight collapses to 0.5.
-    // Phase 1: route all env miss radiance to diff channel for now.
-    // Phase 1b will route bounce-escape env to the spec channel when
-    // payload.flags bit indicates primary lobe was spec.
+    // All env miss radiance currently routes to the diff channel. (A future
+    // split would route bounce-escape env to the spec channel when
+    // payload.flags indicates the primary lobe was spec.)
     vec3 envContrib;
     if ((payload.flags & 2u) != 0u) {
         if (pc.envCdfTotalSum > 0.0) {

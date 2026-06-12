@@ -1,6 +1,6 @@
 #version 460
 
-// PMREM (Phase 11): GGX-prefilter the env equirect into a mip chain so
+// PMREM: GGX-prefilter the env equirect into a mip chain so
 // glossy hits sample at a roughness-derived LOD instead of getting a flat
 // (1-r)² fade off mip 0. Karis-style importance sampling with the V=N
 // approximation: we treat the lobe as if the viewer is looking head-on at

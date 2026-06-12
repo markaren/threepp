@@ -17,7 +17,7 @@
 
 #include "vulkan_shared.h"
 
-// Phase 4a: derive ray origin / direction from a real threepp Camera. The
+// Derive ray origin / direction from a real threepp Camera. The
 // host uploads camera.matrixWorld (viewInverse) and camera.projectionMatrixInverse
 // (projInverse). Ray construction follows the standard NV/Khronos pattern:
 // eye in view-space is (0,0,0); the pixel target in view-space comes from
@@ -26,13 +26,13 @@
 // Pixel (0,0) is top-left of the swapchain image, while NDC y = +1 is the
 // top of the projection frustum, so we flip y after the [-1,1] remap.
 //
-// Phase 8: progressive accumulation. Each frame we jitter the primary ray
+// Progressive accumulation. Each frame we jitter the primary ray
 // inside its pixel (blue-noise tile) and average the result into a persistent
 // rgba32f accumulator (binding 7). The host resets `pc.sampleIndex` to 0
 // whenever the camera or env changes. denoise.comp tonemaps + sRGB-encodes
 // the accumulator to the swapchain image (binding 1) for display.
 //
-// Phase 9: iterative path tracing. We loop up to kMaxBounces times,
+// Iterative path tracing. We loop up to kMaxBounces times,
 // tracing a primary then sampled indirect bounces. closest_hit fills the
 // payload with direct lighting at the hit + a sampled bounce direction
 // + a throughput multiplier; raygen accumulates
@@ -1505,8 +1505,8 @@ void main() {
         // off a sunlit surface). Primary view (scatter==0) is left
         // unclamped so directly-visible emissive surfaces and the
         // background-through-glass case stay at full intensity.
-        // Phase 1: sum diff+spec for the existing single-channel accumulator.
-        // Phase 2 will split into separate accumImages per channel.
+        // Sum diff+spec for the single-channel accumulator. (A per-channel
+        // accumImage split is not yet done in the PT path.)
         vec3 contribution = throughput * (payload.radianceDiff + payload.radianceSpec);
         if (scatter > 0 && pc.fireflyClamp < 1e20) {
             // Tie indirect-bounce cap to fireflyClamp so a tightened

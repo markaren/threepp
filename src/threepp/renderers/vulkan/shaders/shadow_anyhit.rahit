@@ -60,7 +60,7 @@ void main() {
     // Glass/transmission: attenuate shadow by Fresnel-weighted transmittance.
     // Normal-incidence F0 is a good approximation for rays arriving at
     // shallow angles through thin geometry. shadowVisibility is a scalar so
-    // coloured glass tinting is not captured here; that is a Phase 2 concern.
+    // coloured glass tinting is not captured here.
     if (mdesc.transmission > 0.0) {
         const float k   = (mdesc.ior - 1.0) / (mdesc.ior + 1.0);
         const float f0  = k * k;

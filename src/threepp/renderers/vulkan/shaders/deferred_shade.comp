@@ -7,7 +7,7 @@
 
 #include "vulkan_shared.h"// MaterialDesc
 
-// Raster-first deferred shading (Phase 2 + 3). Shades the material G-buffer
+// Raster-first deferred shading. Shades the material G-buffer
 // from the raster prepass into a clean, analytic base + adds ray-traced
 // accents, writing linear HDR straight into the bloom sceneHdr image:
 //   • direct analytic lights (dir/point/spot) with ray-query HARD shadows,
@@ -111,7 +111,7 @@ layout(set = 0, binding = 15) uniform sampler2D gbufUvTex;     // .rg = primary 
 // Write-target for THIS frame's accumulated demod GI (the denoise reads it; NEXT
 // frame reads it as the reproject history via binding 17).
 layout(set = 0, binding = 16, rgba16f) uniform image2D indirectImage;
-// GI reproject (Phase 2): prev accumulated GI (the OTHER frame-in-flight's indirect
+// GI reproject: prev accumulated GI (the OTHER frame-in-flight's indirect
 // = 1-frame history), the motion vector, and the prev world NORMALS for the
 // geometric disocclusion (NOT IDs — those are draw-order, see binding setup).
 layout(set = 0, binding = 17) uniform sampler2D giPrevTex;      // 1-frame GI history (reprojected)
