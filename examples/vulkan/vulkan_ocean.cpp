@@ -52,7 +52,11 @@ namespace {
     // Boat input state — captured by KeyListener, polled each frame.
     struct BoatInput : KeyListener {
         bool W = false, A = false, S = false, D = false;
-        void onKeyPressed(KeyEvent e) override { update(e.key, true); }
+        bool shotRequest = false;// F12: dump the next frame to aaa_caps/ (artifact reports)
+        void onKeyPressed(KeyEvent e) override {
+            if (e.key == Key::F12) shotRequest = true;
+            update(e.key, true);
+        }
         void onKeyReleased(KeyEvent e) override { update(e.key, false); }
         void update(Key k, bool down) {
             if (k == Key::W || k == Key::UP)    W = down;
@@ -737,6 +741,7 @@ int main(int argc, char** argv) {
     bool startNight = false;
     bool shotPT     = false;
     bool shotVista  = false;
+    bool shotClose  = false;// near-surface grazing view — surface-artifact hunting
     int  toggleNightAt = 0;// --toggle: start in day, flip to night mid-run (exercises the runtime toggle path)
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
@@ -744,6 +749,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--night") == 0) startNight = true;
         else if (std::strcmp(argv[i], "--pt") == 0) shotPT = true;
         else if (std::strcmp(argv[i], "--vista") == 0) shotVista = true;
+        else if (std::strcmp(argv[i], "--close") == 0) shotClose = true;
         else if (std::strcmp(argv[i], "--toggle") == 0) toggleNightAt = 60;
     }
     const bool capturing = !shotPath.empty();
@@ -822,7 +828,7 @@ int main(int argc, char** argv) {
     // waves, visible chop without overpowering geometry). waveScale should
     // stay near 1 (physical) — keeping it at 0.1 just attenuates the entire
     // multi-cascade detail and reads as a glassy lake.
-    ocean->params.windSpeed   = 10.0f;
+    ocean->params.windSpeed   = shotClose ? 3.5f : 10.0f;// --close: calm glassy sea — the artifact-hunting state
     ocean->params.waveScale   = 1.0f;
     ocean->params.choppiness  = 0.55f;      // sharper crests, more visible wave-folding
     // Per-cascade FFT resolution. Cascade-0 (big swells, 1 km tile) needs the
@@ -2188,7 +2194,24 @@ int main(int argc, char** argv) {
         }
 
         if (capturing) {
-            if (shotVista) {
+            if (shotClose) {
+                // Near-surface grazing view beside the boat, looking across
+                // its wake — the high-foam-coverage region where close-up
+                // world-grid surface artifacts (foam texels, normal facets)
+                // are magnified to screen-filling size.
+                const Vector3 side = Vector3(boatFwd.z, 0.f, -boatFwd.x);
+                // Keep the camera MOVING (slow sideways strafe) — temporal
+                // history (TAA / reflection accumulation) never converges,
+                // matching interactive flying where the tile artifact shows.
+                camera.position.copy(boatPos)
+                        .addScaledVector(boatFwd, -10.f)
+                        .addScaledVector(side, 9.f + 0.04f * static_cast<float>(shotFrame))
+                        .add(Vector3(0.f, 2.5f, 0.f));
+                Vector3 tgt = boatPos;
+                tgt.addScaledVector(boatFwd, -45.f);// far into the wake — near-horizontal grazing
+                tgt.y = 0.5f;
+                camera.lookAt(tgt);
+            } else if (shotVista) {
                 // High oblique overview: lighthouse centre, archipelago ring,
                 // passes and the far shore all in frame.
                 camera.position.set(300.f, 220.f, 520.f);
@@ -2208,6 +2231,22 @@ int main(int argc, char** argv) {
         }
 
         renderer.render(scene, camera);
+
+        // F12: interactive screenshot → aaa_caps/usershot_N.png. Native-res
+        // ground truth for artifact reports — screen captures of the window
+        // get rescaled/compressed and hide texel-scale structure.
+        if (bi.shotRequest) {
+            bi.shotRequest = false;
+            static int userShotN = 0;
+            const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" /
+                              ("usershot_" + std::to_string(userShotN++) + ".png");
+            try {
+                renderer.writeFramebuffer(path);
+                std::printf("wrote %s\n", path.string().c_str());
+            } catch (const std::exception& e) {
+                std::cerr << "[shot] failed: " << e.what() << "\n";
+            }
+        }
 
         if (capturing && toggleNightAt > 0 && shotFrame == toggleNightAt) {
             night = true;// runtime day→night flip — the path the UI checkbox takes

@@ -96,6 +96,13 @@ layout(set = 0, binding = 12, scalar) readonly buffer EmissiveTriBuf { EmTri emi
 // thin-shell water branch's `tileSize > 0` gates skip sampling them entirely.
 layout(set = 0, binding = 13) uniform sampler2D oceanFineHeight;
 layout(set = 0, binding = 14) uniform sampler2D oceanFoamWorld;
+// Baked tileable foam detail (RG8, mipped): R = micro bubble brightness
+// (designed for a 4 m world mapping), G = ridged lace/filament pattern
+// (12 m mapping). Replaces the per-pixel procedural noise octaves in the
+// foam block — a sampled texture is band-limited at distance via its mip
+// chain (no shimmer under TAA) and 2 fetches replace ~20 hash evaluations.
+// Mirrors RT binding 45.
+layout(set = 0, binding = 34) uniform sampler2D foamDetailTex;
 layout(set = 0, binding = 15) uniform sampler2D gbufUvTex;     // .rg = primary surface UV (emissive-map sample)
 // Demodulated diffuse-indirect irradiance (gatherEnv AO/GI, PRE-albedo). Written
 // here, spatially denoised + recombined by deferred_denoise.comp. vec4(0) where
@@ -158,6 +165,7 @@ layout(push_constant) uniform Pc {
     float starIntensity;     // procedural sky star field brightness; 0 = off
     float camDelta;          // camera WORLD translation this frame (m)
     float camRot;            // camera forward-direction change this frame (rad)
+    float timeSec;           // wall-clock seconds — foam noise drift (frame-rate independent)
 } pc;
 
 // ReBLUR-style TEMPORAL accumulation for the reflection (+ glass). Adaptive blend
@@ -512,6 +520,36 @@ float fbm4(vec2 p) {
         w *= 0.5;
     }
     return a;
+}
+
+// Bicubic B-spline reconstruction of the world foam accumulator via 4
+// bilinear taps (Sigg & Hadwiger, GPU Gems 2 ch. 20). Plain bilinear
+// renders every isolated foam texel as a soft axis-aligned SQUARE (the
+// bilinear tent's support is a square), which reads as a grid artifact up
+// close; the cubic kernel reconstructs round, C1-smooth blobs. Kept in
+// lockstep with closest_hit.rchit.
+float sampleFoamBicubic(vec2 uv) {
+    const vec2 res = vec2(textureSize(oceanFoamWorld, 0));
+    const vec2 st  = uv * res - 0.5;
+    const vec2 i   = floor(st);
+    const vec2 f   = st - i;
+    const vec2 f2  = f * f;
+    const vec2 f3  = f2 * f;
+    const vec2 w0  = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w1  = (3.0 * f3 - 6.0 * f2 + 4.0)       * (1.0 / 6.0);
+    const vec2 w2  = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w3  = f3 * (1.0 / 6.0);
+    const vec2 g0  = w0 + w1;
+    const vec2 g1  = w2 + w3;
+    // Two sample coords per axis, each placed so ONE bilinear fetch
+    // integrates a weighted texel pair; REPEAT sampler handles the wrap.
+    const vec2 c0  = (i - 0.5 + w1 / g0) / res;
+    const vec2 c1  = (i + 1.5 + w3 / g1) / res;
+    const float t00 = textureLod(oceanFoamWorld, vec2(c0.x, c0.y), 0.0).r;
+    const float t10 = textureLod(oceanFoamWorld, vec2(c1.x, c0.y), 0.0).r;
+    const float t01 = textureLod(oceanFoamWorld, vec2(c0.x, c1.y), 0.0).r;
+    const float t11 = textureLod(oceanFoamWorld, vec2(c1.x, c1.y), 0.0).r;
+    return g0.y * (g0.x * t00 + g1.x * t10) + g1.y * (g0.x * t01 + g1.x * t11);
 }
 
 // Emissive-mesh NEE: directly sample the emissive-triangle area lights (power
@@ -1805,20 +1843,59 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     }
 
     // Foam: folded-surface coverage (foamAddress attribute + live world foam
-    // texture) bleaches a diffuse whitewater layer over the glass. Two-layer
-    // noise (macro fBm pool mask + micro value-noise bubbles) matches
-    // closest_hit's foam shading.
+    // texture) bleaches a diffuse whitewater layer over the glass. The world
+    // accumulator decays exponentially, so COVERAGE IS FRESHNESS — the mask
+    // uses it to run a whitewater lifecycle instead of uniformly dimming:
+    //   fresh (≈1)  — near-solid sheet, micro-bubble texture
+    //   aging (mid) — fBm pools bite harder as coverage drops, tearing the
+    //                 sheet into patches
+    //   residue     — a ridged filament web (the lace a collapsed whitecap
+    //                 leaves behind) outlives the sheet, thinning to streaks
+    // Matches closest_hit's foam shading.
     if (pc.oceanFoamTileSize > 0.0 && geoms[instIdx].foamAddress != 0ul) {
-        const float foamCoverage = clamp(textureLod(oceanFoamWorld, P.xz / pc.oceanFoamTileSize, 0.0).r, 0.0, 1.0);
+        // Bicubic + 1.3 gain: the B-spline kernel approximates rather than
+        // interpolates, attenuating an isolated single-texel whitecap to
+        // ~0.44 of its stored value — the gain restores it; patch interiors
+        // already read ~1 and just clamp.
+        const float foamCoverage = clamp(sampleFoamBicubic(P.xz / pc.oceanFoamTileSize) * 1.3, 0.0, 1.0);
         if (foamCoverage > 0.0) {
-            const float t      = float(frame) * (1.0 / 60.0);
-            const vec2  drift  = vec2(0.42, 0.71) * t * 0.18;
-            const float macroN = fbm4(P.xz * 0.18 + drift);
-            const float foamMask = smoothstep(0.05, 0.70, foamCoverage - macroN * 0.45);
+            const vec2  drift = vec2(0.42, 0.71) * pc.timeSec * 0.18;
+            // Detail from the baked foam tile (binding 34). Manual LOD —
+            // compute has no derivatives; a distance-based estimate (pixel
+            // angle ≈ 0.001 rad) lands within ±1 mip of the true footprint,
+            // indistinguishable for band-limited noise content.
+            const vec3  camPosF = (cam.viewInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+            const float distF   = length(P - camPosF);
+            const float lodMicro = log2(max(1.0, distF * 0.128)); // 512 texels / 4 m · 0.001
+            const float lodLace  = log2(max(1.0, distF * 0.0427));// 512 texels / 12 m · 0.001
+            const float lodEdge  = log2(max(1.0, distF * 0.064)); // 512 texels / 8 m · 0.001
+            // Sheet: solid where coverage beats the pool noise; the noise
+            // bite scales with age so fresh caps read unbroken. Calibrated
+            // to foam_world.comp's GRADED soft-knee deposits (solid from
+            // coverage ≈ 0.55) — retune the two together.
+            //
+            // The coverage accumulator only resolves ~1 m (cascade-0 texel
+            // bumps survive the graded deposit), so a sheet edge cut purely
+            // by coverage reads TEXELATED. A zero-mean mid-frequency sample
+            // of the detail tile (R over an 8 m mapping → 0.3–1 m features)
+            // erodes the threshold so the boundary detail comes from the
+            // texture — same trick that fixed the lace streaks.
+            const float pools = fbm4(P.xz * 0.18 + drift);
+            const float edgeN = textureLod(foamDetailTex, P.xz * 0.125 + drift * 0.07, lodEdge).r;
+            const float sheet = smoothstep(0.03, 0.42,
+                    foamCoverage - pools * mix(0.50, 0.22, foamCoverage)
+                                 - (edgeN - 0.5) * 0.30);
+            // Lace: ridged filament pattern from the detail tile (~1.2 m
+            // cells over the 12 m mapping). Fresh foam widens the band until
+            // it merges with the sheet; old foam keeps only filament cores.
+            const float lace = textureLod(foamDetailTex, P.xz * (1.0 / 12.0) + drift * 0.12, lodLace).g;
+            const float web  = smoothstep(0.55, 0.80, lace * (0.55 + 0.45 * foamCoverage)) *
+                               smoothstep(0.03, 0.22, foamCoverage);
+            const float foamMask = max(sheet, web * 0.8);
             if (foamMask > 0.0) {
-                const vec2  wxzMicro = P.xz * 6.5 - drift * 0.4;
-                const float micro    = vnoise21(wxzMicro) * 0.65 + vnoise21(wxzMicro * 2.3) * 0.35;
-                const vec3  foamCol  = mix(vec3(0.55, 0.62, 0.66), vec3(0.97, 0.99, 1.00), micro);
+                const float micro = textureLod(foamDetailTex, P.xz * 0.25 - drift * 0.1, lodMicro).r;
+                vec3 foamCol = mix(vec3(0.62, 0.68, 0.72), vec3(0.97, 0.99, 1.00), micro);
+                foamCol = mix(foamCol, vec3(0.97, 0.99, 1.00), 0.35 * foamCoverage);// fresh caps brighter
                 const float foamRough= mix(1.0, 0.45, micro);
                 const vec3  foamDiff = sampleEnvLod(N, maxLod) + lights.ambient;
                 const vec3  foamLit  = shadeDiffuseDirect(P, N, V, foamCol, foamRough, 0.0,
