@@ -9,8 +9,10 @@
 #include "external/stb/stb_image_write.h"
 
 #include <array>
-#include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <vector>
 
 using namespace threepp;
 
@@ -99,14 +101,10 @@ TEST_CASE("ImageLoader preserves pixel layout") {
 
     SECTION("memory overload matches file overload") {
         // read the png bytes back and load via the memory path
-        FILE* f = nullptr;
-        fopen_s(&f, path.string().c_str(), "rb");
-        REQUIRE(f != nullptr);
-        std::fseek(f, 0, SEEK_END);
-        std::vector<unsigned char> bytes(static_cast<size_t>(std::ftell(f)));
-        std::fseek(f, 0, SEEK_SET);
-        REQUIRE(std::fread(bytes.data(), 1, bytes.size(), f) == bytes.size());
-        std::fclose(f);
+        std::ifstream f(path, std::ios::binary);
+        REQUIRE(f.is_open());
+        std::vector<unsigned char> bytes(std::istreambuf_iterator<char>(f), {});
+        REQUIRE(!bytes.empty());
 
         auto a = loader.load(path, 3, true);
         auto b = loader.load(bytes, 3, true);
