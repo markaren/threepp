@@ -43,6 +43,7 @@
 #include <memory>
 #include <numeric>
 #include <random>
+#include <unordered_map>
 #include <vector>
 
 using namespace threepp;
@@ -1028,6 +1029,48 @@ int main(int argc, char** argv) {
                 innerAsset->scale.set(s, s, s);
             }
         }
+
+        // Material re-grade. The GLB exports EVERY material with the same
+        // metallic-roughness pair (rough 0.71, metal 0.40) — half-metallic
+        // everything is exactly the "grey plastic toy" look, and the PBR
+        // ocean now exposes it hard. Painted marine steel is a DIELECTRIC
+        // with a fairly glossy topcoat; deck paint is matte non-slip; only
+        // railings/stairs/exhaust keep a metallic component; glass is
+        // near-mirror. Albedo + normal maps stay — only the response
+        // changes. Keyed by the GLB's material names (see git history for
+        // the dumped inventory).
+        struct Grade { float rough, metal; };
+        static const std::unordered_map<std::string, Grade> grades = {
+                {"HullWhite",            {0.38f, 0.00f}},// painted steel topsides
+                {"VesselBlue",           {0.35f, 0.00f}},
+                {"BridgeWhite",          {0.42f, 0.00f}},
+                {"BridgeWhite.001",      {0.42f, 0.00f}},
+                {"BridgeBlue",           {0.40f, 0.00f}},
+                {"whitePaint_notBridge", {0.42f, 0.00f}},
+                {"VesselBottom",         {0.55f, 0.15f}},// antifouling; bronze props share it
+                {"Deck",                 {0.85f, 0.00f}},// matte non-slip paint
+                {"Interior",             {0.80f, 0.00f}},
+                {"Decals",               {0.55f, 0.00f}},
+                {"Glass",                {0.06f, 0.00f}},// near-mirror, mostly sky reflection
+                {"VesselGlass",          {0.06f, 0.00f}},
+                {"Railing",              {0.45f, 0.35f}},// galvanized/painted metalwork
+                {"stairs",               {0.50f, 0.35f}},
+                {"Material #315",        {0.50f, 0.35f}},// stairs sibling
+                {"Exhaust",              {0.60f, 0.30f}},
+                {"VesselSafe",           {0.55f, 0.00f}},// life rings: actual plastic
+                {"BridgeSafe",           {0.55f, 0.00f}},
+                {"vesselShared",         {0.50f, 0.10f}},
+        };
+        innerAsset->traverseType<Mesh>([](Mesh& m) {
+            auto* mat = m.material()->as<MeshStandardMaterial>();
+            if (!mat) return;
+            const auto it = grades.find(mat->name);
+            // Unknown names: sane dielectric default, far better than the
+            // export's uniform half-metal.
+            const Grade g = (it != grades.end()) ? it->second : Grade{0.55f, 0.05f};
+            mat->roughness = g.rough;
+            mat->metalness = g.metal;
+        });
 
         auto group = Group::create();
         group->add(innerAsset);
