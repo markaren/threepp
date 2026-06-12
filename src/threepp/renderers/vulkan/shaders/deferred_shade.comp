@@ -419,11 +419,12 @@ vec2 fetchUvAt(int instIdx, int primId, vec2 bary) {
     return (1.0 - bary.x - bary.y) * u0 + bary.x * u1 + bary.y * u2;
 }
 
-// Does a shadow-ray candidate hit actually OCCLUDE? Opaque materials (no albedo map
-// or alphaCutoff == 0) short-circuit immediately (one buffer read). Alpha-tested
-// materials sample the albedo alpha — mirrors gbuffer.frag / closest_hit_alpha.rahit:
-//   cutoff > 0 (cutout) → occludes iff alpha ≥ cutoff
-//   cutoff < 0 (blend)  → occludes iff alpha ≥ 0.5 (deterministic shadow proxy)
+// Does a shadow-ray candidate hit actually OCCLUDE? Policy mirrors the RT
+// shadow_anyhit.rahit so the deferred and ray-traced backends agree:
+//   transmission > 0 (glass / alpha-blend transparency / additive) → never blocks
+//   cutoff < 0 (blend)  → never blocks (e.g. textured decals — light passes through)
+//   cutoff > 0 (cutout) → occludes iff alpha ≥ cutoff (foliage, grids)
+//   opaque              → occludes
 bool shadowOccludes(int instIdx, int primId, vec2 bary) {
     const MaterialDesc m = mats[instIdx];
     // STRONG emitters never occlude — an analytic light that sits INSIDE its
@@ -433,11 +434,23 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
     // (glowing screens etc.) casting normal shadows.
     const vec3 em = m.emissive * m.emissiveIntensity;
     if (max(max(em.r, em.g), em.b) >= 1.0) return false;
+    // Transmissive surfaces — glass, alpha-blend transparency (host encodes
+    // opacity<1 as transmission=1-opacity, ior=1) and additive blends
+    // (transmission>1) — do NOT cast a solid shadow. Mirrors shadow_anyhit.rahit,
+    // which ignores these candidate hits so direct light passes through. Without
+    // this the deferred path paints opaque shadows behind transparent materials.
+    if (m.transmission > 0.0) return false;
+    // Alpha-blend (host sets alphaCutoff < 0: transparent=true + texture, opacity=1).
+    // Like shadow_anyhit.rahit's isBlend branch these do NOT block light, so blend
+    // decals (bullet-scorch splats etc.) stop painting a hard shadow halo that the
+    // GL backend never produces — decals default to castShadow=false there.
+    if (m.alphaCutoff < 0.0) return false;
     if (m.albedoTexIndex < 0 || m.alphaCutoff == 0.0) return true;// opaque
+    // Alpha-cutout (alphaCutoff > 0): occlude only where the texel is solid.
     const vec2  uv = fetchUvAt(instIdx, primId, bary);
     const int   ti = clamp(m.albedoTexIndex, 0, int(kMaxMaterialTextures) - 1);
     const float a  = textureLod(albedoMaps[ti], (m.uvTransform * vec3(uv, 1.0)).xy, 0.0).a;
-    return (m.alphaCutoff > 0.0) ? (a >= m.alphaCutoff) : (a >= 0.5);
+    return a >= m.alphaCutoff;
 }
 
 // Inline hard-shadow test (TerminateOnFirstHit). 1.0 lit / 0.0 occluded.

@@ -1221,6 +1221,12 @@ namespace threepp {
         // gbuf pass since it collapses N draws into 1-3 vkCmdDrawIndirect
         // calls — see recordRasterGbufPass.
         VkPipeline            rasterGbufIndirectPipeline = VK_NULL_HANDLE;
+        // Decal variant of the indirect pipeline (bucket [3], drawn last):
+        // depth-write OFF, attachments 0-3 write-masked to zero, attachment 4
+        // (albedo+metalness) alpha-blended with an RGB-only write mask — the
+        // decal lerps its albedo over the receiver's, everything else (normal,
+        // ids, motion, depth, metalness) stays the receiving surface's.
+        VkPipeline            rasterGbufDecalPipeline = VK_NULL_HANDLE;
         VkDescriptorPool      rasterDescPool       = VK_NULL_HANDLE;
         std::array<VkDescriptorSet, kFramesInFlight> rasterDescSets{};
         // Per-frame draw info ring. Each entry mirrors the GLSL DrawInfo
@@ -1930,6 +1936,7 @@ namespace threepp {
             for (auto& b : indirectCmdBuffers)  destroyBuffer(ctx->allocator(), b);
             if (rasterGbufPipeline)         vkDestroyPipeline(d, rasterGbufPipeline, nullptr);
             if (rasterGbufIndirectPipeline) vkDestroyPipeline(d, rasterGbufIndirectPipeline, nullptr);
+            if (rasterGbufDecalPipeline)    vkDestroyPipeline(d, rasterGbufDecalPipeline, nullptr);
             if (rasterPipelineLayout)   vkDestroyPipelineLayout(d, rasterPipelineLayout, nullptr);
             if (rasterDsLayout)         vkDestroyDescriptorSetLayout(d, rasterDsLayout, nullptr);
             if (rasterDescPool)         vkDestroyDescriptorPool(d, rasterDescPool, nullptr);
@@ -4321,8 +4328,20 @@ namespace threepp {
             // BLEND mode with texture alpha (alphaMode=BLEND, opacity=1.0):
             // alphaCutoff=-1.0 sentinel triggers per-texel stochastic blend in
             // closest_hit using the albedo texture's alpha channel.
+            //
+            // DECAL refinement (-2.0): transparent + depthWrite=false +
+            // polygonOffset is the decal authoring signature (DecalGeometry
+            // scorch splats etc.). The gbuffer raster routes these to a
+            // dedicated pipeline that alpha-blends ONLY the albedo attachment
+            // over the receiving surface (normal/ids/motion/depth untouched) —
+            // a deterministic lerp matching GL's forward blend, instead of the
+            // stochastic screen-door whose per-frame id flicker defeats the
+            // temporal accumulator and lets the denoiser dilate the splat.
+            // Every shader-side blend test is a sign test (alphaCutoff < 0),
+            // so -2 inherits all -1 semantics (no shadow cast, stochastic
+            // pass-through in the PT chit) automatically.
             if (mat->transparent && d.alphaCutoff == 0.0f && d.transmission == 0.0f) {
-                d.alphaCutoff = -1.0f;
+                d.alphaCutoff = (!mat->depthWrite && mat->polygonOffset) ? -2.0f : -1.0f;
             }
             if (auto* cc = dynamic_cast<MaterialWithClearcoat*>(mat.get())) {
                 d.clearcoat = cc->clearcoat;
@@ -6684,10 +6703,12 @@ namespace threepp {
             uint32_t        offset   = 0;// first cmd index (cmd-buffer-relative)
             uint32_t        count    = 0;
         };
-        // [0] Front (BACK cull), [1] Back (FRONT cull), [2] Double (NONE cull).
-        // The static order means recordRasterGbufPass can issue at most 3
+        // [0] Front (BACK cull), [1] Back (FRONT cull), [2] Double (NONE cull),
+        // [3] blend decals (NONE cull, drawn LAST with rasterGbufDecalPipeline
+        // so their albedo lerps over the already-rasterized receivers).
+        // The static order means recordRasterGbufPass can issue at most 4
         // vkCmdDrawIndirect calls and skip the empty ones.
-        std::array<DrawGroup, 3> indirectGroups_{};
+        std::array<DrawGroup, 4> indirectGroups_{};
         uint32_t indirectTotalDraws_ = 0;
 
         bool ensureDrawInfoCapacity(uint32_t frame, VkDeviceSize neededBytes) {
@@ -6743,9 +6764,9 @@ namespace threepp {
 
             if (lastVisibleEntries_.empty()) return;
 
-            // Three buckets in [BACK_cull, FRONT_cull, NONE_cull] order.
-            std::array<std::vector<DrawInfoGpu>, 3>            draws;
-            std::array<std::vector<VkDrawIndirectCommand>, 3>  cmds;
+            // Four buckets: [BACK_cull, FRONT_cull, NONE_cull, decal] order.
+            std::array<std::vector<DrawInfoGpu>, 4>            draws;
+            std::array<std::vector<VkDrawIndirectCommand>, 4>  cmds;
             auto bucketOf = [](VkCullModeFlags cm) -> int {
                 if (cm == VK_CULL_MODE_BACK_BIT)  return 0;
                 if (cm == VK_CULL_MODE_FRONT_BIT) return 1;
@@ -6768,7 +6789,17 @@ namespace threepp {
                         (i < lastVisibleCullMode_.size())
                                 ? lastVisibleCullMode_[i]
                                 : VK_CULL_MODE_BACK_BIT;
-                const int b = bucketOf(wantCull);
+                // Blend decals (alphaCutoff == -2 sentinel from materialFromMesh)
+                // go to bucket [3]: drawn last, with the albedo-blend pipeline.
+                // RasterFirst only — its shade reads the blended albedo
+                // attachment. ReferencePT's hybrid raygen re-samples material
+                // textures via the ids/UV attachments (which the decal pipeline
+                // write-masks), so there decals stay on the stochastic
+                // screen-door path that the PT accumulator converges.
+                const bool isDecal = renderMode_ == VulkanRenderer::RenderMode::RasterFirst &&
+                                     (i < matDescsCached_.size()) &&
+                                     (matDescsCached_[i].alphaCutoff == -2.0f);
+                const int b = isDecal ? 3 : bucketOf(wantCull);
 
                 DrawInfoGpu di{};
                 std::memcpy(di.model, en.worldMatrix.data(), 64);
@@ -6840,10 +6871,11 @@ namespace threepp {
             uint8_t* dDst = static_cast<uint8_t*>(mappedDraws);
             uint8_t* cDst = static_cast<uint8_t*>(mappedCmds);
             uint32_t offset = 0;
-            const VkCullModeFlags cullForBucket[3] = {
-                    VK_CULL_MODE_BACK_BIT, VK_CULL_MODE_FRONT_BIT, VK_CULL_MODE_NONE
+            const VkCullModeFlags cullForBucket[4] = {
+                    VK_CULL_MODE_BACK_BIT, VK_CULL_MODE_FRONT_BIT, VK_CULL_MODE_NONE,
+                    VK_CULL_MODE_NONE// decals: DecalGeometry wraps edges, don't cull
             };
-            for (int b = 0; b < 3; ++b) {
+            for (int b = 0; b < 4; ++b) {
                 const uint32_t n = static_cast<uint32_t>(draws[b].size());
                 indirectGroups_[b].cullMode = cullForBucket[b];
                 indirectGroups_[b].offset   = offset;
@@ -6950,8 +6982,20 @@ namespace threepp {
             // via the dynamic cullMode state — far cheaper than re-doing
             // it per draw.
             constexpr VkDeviceSize cmdStride = sizeof(VkDrawIndirectCommand);
-            for (const auto& g : indirectGroups_) {
+            for (int b = 0; b < 3; ++b) {
+                const auto& g = indirectGroups_[b];
                 if (g.count == 0u) continue;
+                vkCmdSetCullMode(cb, g.cullMode);
+                vkCmdDrawIndirect(cb,
+                                  indirectCmdBuffers[frame].handle,
+                                  static_cast<VkDeviceSize>(g.offset) * cmdStride,
+                                  g.count,
+                                  static_cast<uint32_t>(cmdStride));
+            }
+            // Blend decals last: albedo-blend pipeline lerps over the receivers
+            // rasterized above (same layout/descriptors, no set rebind needed).
+            if (const auto& g = indirectGroups_[3]; g.count > 0u) {
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, rasterGbufDecalPipeline);
                 vkCmdSetCullMode(cb, g.cullMode);
                 vkCmdDrawIndirect(cb,
                                   indirectCmdBuffers[frame].handle,
@@ -8345,6 +8389,52 @@ namespace threepp {
             check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciInd, nullptr,
                                             &rasterGbufIndirectPipeline),
                   "vkCreateGraphicsPipelines(rasterGbufIndirect)");
+
+            // Decal variant (same shaders/layout/render pass): blend-decal
+            // meshes (MaterialDesc.alphaCutoff == -2) draw AFTER the opaque
+            // buckets and only tint the receiver's albedo. Depth test stays on
+            // (GREATER, reverse-Z — the per-draw polygonOffset clip-z bias
+            // lifts the coplanar decal above its receiver) but depth write is
+            // off, and every attachment except albedo is write-masked so the
+            // pixel keeps the receiving surface's normal/ids/motion — the
+            // deferred shade lights the receiver, with lerped base colour,
+            // exactly like GL's forward alpha blend of a coplanar decal.
+            VkPipelineDepthStencilStateCreateInfo dsDecal = ds;
+            dsDecal.depthWriteEnable = VK_FALSE;
+            VkPipelineColorBlendAttachmentState cbasDecal[5]{};
+            for (int a = 0; a < 4; ++a) {
+                cbasDecal[a].blendEnable    = VK_FALSE;
+                cbasDecal[a].colorWriteMask = 0;// keep receiver's normal/motion/ids/uv
+            }
+            cbasDecal[4].blendEnable         = VK_TRUE;
+            cbasDecal[4].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            cbasDecal[4].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbasDecal[4].colorBlendOp        = VK_BLEND_OP_ADD;
+            cbasDecal[4].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbasDecal[4].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            cbasDecal[4].alphaBlendOp        = VK_BLEND_OP_ADD;
+            cbasDecal[4].colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                               VK_COLOR_COMPONENT_B_BIT;// .a = receiver metalness, keep
+            VkPipelineColorBlendStateCreateInfo cbDecal = cb;
+            cbDecal.pAttachments = cbasDecal;
+
+            // DECAL_PASS=1 specialization flips gbuffer.frag from the stochastic
+            // screen-door to "emit texture alpha as the blend factor". The
+            // regular pipelines keep DECAL_PASS=0, so in ReferencePT mode (where
+            // decals draw with the regular pipeline) they stay on the screen-door.
+            const uint32_t kDecalPassOn = 1u;
+            VkSpecializationMapEntry decalSpecEntry{0, 0, sizeof(uint32_t)};
+            VkSpecializationInfo decalSpecInfo{1, &decalSpecEntry, sizeof(uint32_t), &kDecalPassOn};
+            VkPipelineShaderStageCreateInfo stagesDecal[2] = {stagesInd[0], stagesInd[1]};
+            stagesDecal[1].pSpecializationInfo = &decalSpecInfo;
+
+            VkGraphicsPipelineCreateInfo gpciDecal = gpciInd;
+            gpciDecal.pStages            = stagesDecal;
+            gpciDecal.pDepthStencilState = &dsDecal;
+            gpciDecal.pColorBlendState   = &cbDecal;
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciDecal, nullptr,
+                                            &rasterGbufDecalPipeline),
+                  "vkCreateGraphicsPipelines(rasterGbufDecal)");
 
             vkDestroyShaderModule(ctx->device(), vertIndirectModule, nullptr);
             vkDestroyShaderModule(ctx->device(), fragIndModule, nullptr);

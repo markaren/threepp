@@ -82,6 +82,14 @@ layout(location = 3) out vec4 outUv;
 // the deferred pass rather than baked here.
 layout(location = 4) out vec4 outAlbedoMetal;
 
+// Set to 1 on the decal pipeline variant (rasterGbufDecalPipeline): bucket-[3]
+// blend decals draw with albedo alpha-blending + write-masked id/normal/motion
+// attachments, so this shader emits texture alpha as the blend factor instead
+// of running the stochastic screen-door. 0 everywhere else — in ReferencePT
+// mode decal materials draw with the regular pipeline and fall back to the
+// screen-door (the PT accumulator converges it; the deferred one can't).
+layout(constant_id = 0) const uint DECAL_PASS = 0u;
+
 // Per-pixel, per-frame hash in [0,1) for the stochastic alpha-blend screen-
 // door. Folds the Halton sub-pixel jitter (changes every frame) into the seed
 // so the dither pattern decorrelates over time and the temporal accumulator /
@@ -210,9 +218,17 @@ void main() {
     //   == 0 opaque : keep (the common path; one comparison, no texture cost).
     // MUST run after every texture()/dFdx/dFdy above — a per-pixel discard
     // before an implicit-derivative sample corrupts the 2×2 quad's neighbours.
+    // DECAL pass: the dedicated decal pipeline alpha-blends ONLY the albedo
+    // attachment (others write-masked) — albedoAlpha is emitted as the blend
+    // factor below, so no discard logic is needed beyond skipping fully-
+    // transparent texels. Deterministic: no screen-door, no temporal flicker,
+    // the splat lerps over the receiver exactly like GL.
+    const bool isDecal = (DECAL_PASS != 0u);
     if (m.albedoTexIndex >= 0 && m.alphaCutoff != 0.0) {
         if (m.alphaCutoff > 0.0) {
             if (albedoAlpha < m.alphaCutoff) discard;
+        } else if (isDecal) {
+            if (albedoAlpha <= 0.004) discard;// nothing to blend
         } else {
             // BLEND: variance-reduced stochastic rejection, matching the PT
             // any-hit's 0.99 (accept) / 0.01 (reject) early-outs.
@@ -229,7 +245,10 @@ void main() {
     // this with `n * 2 - 1` when reading the attachment. .w carries linear
     // roughness for the deferred pass.
     outNormal = vec4(N * 0.5 + 0.5, roughness);
-    outAlbedoMetal = vec4(albedo, metalness);
+    // Decals emit texture alpha as the blend factor (the decal pipeline's
+    // SRC_ALPHA blend consumes it; its RGB-only write mask keeps the
+    // receiver's metalness in .a). Everything else writes metalness.
+    outAlbedoMetal = vec4(albedo, isDecal ? albedoAlpha : metalness);
 
     vec2 currNDC = vCurrClipUnjit.xy / vCurrClipUnjit.w;
     vec2 prevNDC = vPrevClip.xy      / vPrevClip.w;
