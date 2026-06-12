@@ -19,8 +19,11 @@
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/geometries/LatheGeometry.hpp"
+#include "threepp/geometries/TorusGeometry.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
+#include "threepp/utils/BufferGeometryUtils.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/math/Box3.hpp"
@@ -857,40 +860,219 @@ int main(int argc, char** argv) {
     scene.add(ocean);
 
     // ── Lighthouse (scene centre) ───────────────────────────────────────────
-    // Rock base + tapered white tower + red gallery + emissive lamp room. The
-    // LAMP is the night-mode hero: an emissive mesh (area light for the PT /
-    // deferred emissive paths) + a rotating SpotLight whose beam the deferred
-    // volumetric march renders as the classic sweeping lighthouse fan.
+    // Norwegian-coast station built from procedural primitives: noise-displaced
+    // granite skerry, concrete pads, lathe-profiled white masonry tower (plinth
+    // → concave taper → corbelled gallery), railed gallery deck, red watch
+    // room, glazed lantern (transmission glass between mullions), domed roof
+    // with ventilator finial, and a small service hut. The LAMP is the
+    // night-mode hero: an emissive mesh (area light for the PT / deferred
+    // emissive paths) + a rotating SpotLight whose beam the deferred
+    // volumetric march renders as the classic sweeping fan. A rotating
+    // occluder hood around the lamp gives the emissive area light the same
+    // directionality as the spot — the lantern flares only when the beam
+    // sweeps your way, like the real optic.
     auto lampMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
             .color(Color(1.f, 0.95f, 0.8f)).roughness(0.4f).metalness(0.f));
     lampMat->emissive = Color(1.f, 0.85f, 0.55f);
     lampMat->emissiveIntensity = 0.f;// day: off — night toggle raises it
+    std::shared_ptr<Mesh> lensHood;   // rotated with beamAngle in the render loop
+    std::shared_ptr<MeshStandardMaterial> hoodMat;// soft lens glow — night toggle drives it
     {
+        auto whitePaint = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.92f, 0.90f, 0.86f)).roughness(0.55f).metalness(0.f));
+        auto redPaint = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.70f, 0.10f, 0.08f)).roughness(0.5f).metalness(0.f));
+        auto ironwork = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.07f, 0.075f, 0.08f)).roughness(0.45f).metalness(0.85f));
+        auto concrete = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.55f, 0.54f, 0.52f)).roughness(0.9f).metalness(0.f));
+
+        // Granite skerry: flattened sphere with vertices pushed in/out by the
+        // island FBM — same granite character as the surrounding ring. The
+        // noise mixes a y-dependent term so the relief isn't vertical ridges.
         auto rockMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
-                .color(Color(0.22f, 0.21f, 0.20f)).roughness(0.95f).metalness(0.f));
-        auto rock = Mesh::create(CylinderGeometry::create(7.f, 10.f, 6.f, 24), rockMat);
-        rock->position.set(0.f, -1.f, 0.f);
+                .color(Color(0.14f, 0.135f, 0.13f)).roughness(0.95f).metalness(0.f));
+        auto rockGeo = SphereGeometry::create(8.5f, 56, 28);
+        {
+            auto* p = rockGeo->getAttribute<float>("position");
+            for (unsigned i = 0; i < p->count(); ++i) {
+                const float x = p->getX(i), y = p->getY(i), z = p->getZ(i);
+                // Two scales: a broad mass term shifts whole flanks in/out, a
+                // ridged term (fold-over, like the islands') carves crevices
+                // and sharp spurs so the skerry reads as fractured granite
+                // rather than a sanded dome.
+                const float broad = island::fbm(x * 0.16f + 11.f, z * 0.16f + 5.f, 3)
+                                  + 0.5f * island::fbm(y * 0.45f + 3.f, (x + z) * 0.22f + 17.f, 2);
+                const float ridge = 1.f - std::abs(2.f * island::fbm(x * 0.45f + 31.f, z * 0.45f + 13.f, 3) - 1.f);
+                const float k = 1.f + 0.55f * (broad / 1.5f - 0.5f) + 0.30f * (ridge * ridge - 0.45f);
+                p->setXYZ(i, x * k, y * 0.5f * k, z * k);
+            }
+            rockGeo->computeVertexNormals();
+            rockGeo->computeBoundingBox();
+            rockGeo->computeBoundingSphere();
+        }
+        auto rock = Mesh::create(rockGeo, rockMat);
+        rock->position.set(0.f, -1.8f, 0.f);
         scene.add(rock);
 
-        auto towerMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
-                .color(Color(0.92f, 0.90f, 0.86f)).roughness(0.6f).metalness(0.f));
-        auto tower = Mesh::create(CylinderGeometry::create(1.9f, 2.8f, 16.f, 24), towerMat);
-        tower->position.set(0.f, 10.f, 0.f);
-        scene.add(tower);
+        // Concrete foundation pads — generous height absorbs the skerry's
+        // noise variance so the tower and hut always sit on solid footing.
+        auto pad = Mesh::create(CylinderGeometry::create(3.4f, 3.7f, 1.2f, 32), concrete);
+        pad->position.set(0.f, 2.0f, 0.f);
+        scene.add(pad);
+        auto hutPad = Mesh::create(CylinderGeometry::create(2.5f, 2.9f, 1.6f, 24), concrete);
+        hutPad->position.set(5.6f, 0.6f, 0.f);
+        scene.add(hutPad);
 
-        auto bandMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
-                .color(Color(0.75f, 0.12f, 0.10f)).roughness(0.6f).metalness(0.f));
-        auto gallery = Mesh::create(CylinderGeometry::create(2.4f, 2.4f, 1.2f, 24), bandMat);
-        gallery->position.set(0.f, 18.6f, 0.f);
-        scene.add(gallery);
+        // Tower: lathe profile, base at world y = 2.6 (pad top). Plinth with a
+        // chamfer, concave-tapered shaft, corbel flare carrying the gallery.
+        constexpr float kTowerBase = 2.6f;
+        {
+            const std::vector<Vector2> prof = {
+                    {0.05f, 0.00f}, {2.85f, 0.00f}, {2.85f, 0.85f}, {2.45f, 1.05f},
+                    {2.29f, 3.50f}, {2.04f, 6.50f}, {1.83f, 9.50f},
+                    {1.66f, 12.50f}, {1.52f, 15.00f},
+                    {1.55f, 15.15f}, {1.95f, 15.75f}, {1.95f, 15.90f}};
+            auto tower = Mesh::create(LatheGeometry::create(prof, 48), whitePaint);
+            tower->position.y = kTowerBase;
+            scene.add(tower);
+        }
 
-        auto lamp = Mesh::create(CylinderGeometry::create(1.4f, 1.4f, 2.2f, 16), lampMat);
+        // Gallery deck + red watch room below the lantern.
+        auto deck = Mesh::create(CylinderGeometry::create(2.8f, 2.8f, 0.22f, 32), redPaint);
+        deck->position.set(0.f, 18.6f, 0.f);
+        scene.add(deck);
+        auto watchRoom = Mesh::create(CylinderGeometry::create(1.8f, 1.8f, 0.95f, 24), redPaint);
+        watchRoom->position.set(0.f, 19.18f, 0.f);
+        scene.add(watchRoom);
+
+        // Lantern glazing: an open thin-walled transmission cylinder — the
+        // lamp shines through real glass. Radius stays inside the 1.7 m
+        // offset the render loop pushes the SpotLight origin out to, so the
+        // spot never starts inside the pane.
+        auto glassMat = MeshPhysicalMaterial::create();
+        glassMat->color = Color::white;
+        glassMat->roughness = 0.03f;
+        glassMat->metalness = 0.f;
+        glassMat->transmission = 1.f;
+        glassMat->setIor(1.52f);
+        glassMat->thickness = 0.02f;
+        glassMat->thinWalled = true;
+        glassMat->side = Side::Double;
+        auto glazing = Mesh::create(
+                CylinderGeometry::create(1.45f, 1.45f, 1.4f, 24, 1, true), glassMat);
+        glazing->position.set(0.f, 20.3f, 0.f);
+        scene.add(glazing);
+
+        // Lantern frame: 8 vertical mullions + top/bottom astragal rings,
+        // baked into one static geometry (one BLAS instance).
+        {
+            std::vector<std::shared_ptr<BufferGeometry>> parts;
+            for (int i = 0; i < 8; ++i) {
+                const float a = 2.f * math::PI * (static_cast<float>(i) / 8.f);
+                auto m = BoxGeometry::create(0.09f, 1.4f, 0.09f);
+                m->rotateY(a);
+                m->translate(1.45f * std::sin(a), 20.3f, 1.45f * std::cos(a));
+                parts.push_back(m);
+            }
+            for (const float y : {19.62f, 20.98f}) {
+                auto ring = TorusGeometry::create(1.45f, 0.06f, 10, 48);
+                ring->rotateX(math::PI / 2.f);
+                ring->translate(0.f, y, 0.f);
+                parts.push_back(ring);
+            }
+            scene.add(Mesh::create(mergeBufferGeometries(parts), redPaint));
+        }
+
+        // Lamp + rotating lens assembly. The "hood" is a partial cylinder with
+        // a ~109° window the render loop yaws to track the beam direction —
+        // the full lamp blazes through the opening while the shell itself
+        // glows softly at night (a Fresnel optic leaks light everywhere, it
+        // doesn't black out the lantern), so the beacon reads from any bearing.
+        auto lamp = Mesh::create(CylinderGeometry::create(0.5f, 0.5f, 1.0f, 16), lampMat);
         lamp->position.set(0.f, 20.3f, 0.f);
         scene.add(lamp);
+        hoodMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.30f, 0.27f, 0.22f)).roughness(0.4f).metalness(0.2f));
+        hoodMat->emissive = Color(1.f, 0.85f, 0.55f);
+        hoodMat->emissiveIntensity = 0.f;// day: off — night toggle raises it
+        hoodMat->side = Side::Double;
+        lensHood = Mesh::create(
+                CylinderGeometry::create(0.8f, 0.8f, 1.25f, 24, 1, true,
+                                         0.95f, math::TWO_PI - 1.9f), hoodMat);
+        lensHood->position.set(0.f, 20.3f, 0.f);
+        scene.add(lensHood);
 
-        auto roof = Mesh::create(CylinderGeometry::create(0.1f, 1.8f, 1.6f, 16), bandMat);
-        roof->position.set(0.f, 22.2f, 0.f);
-        scene.add(roof);
+        // Domed roof + ventilator ball and lightning rod.
+        {
+            const std::vector<Vector2> domeProf = {
+                    {1.92f, 0.00f}, {1.78f, 0.42f}, {1.45f, 0.80f},
+                    {0.95f, 1.10f}, {0.42f, 1.32f}, {0.10f, 1.42f}};
+            auto dome = Mesh::create(LatheGeometry::create(domeProf, 32), redPaint);
+            dome->position.y = 21.0f;
+            scene.add(dome);
+        }
+
+        // Gallery railing (18 stanchions + two hoop rails) and the roof
+        // finial, merged into a single ironwork instance.
+        {
+            std::vector<std::shared_ptr<BufferGeometry>> parts;
+            for (int i = 0; i < 18; ++i) {
+                const float a = 2.f * math::PI * (static_cast<float>(i) / 18.f);
+                auto post = CylinderGeometry::create(0.035f, 0.035f, 1.0f, 6);
+                post->translate(2.62f * std::sin(a), 19.21f, 2.62f * std::cos(a));
+                parts.push_back(post);
+            }
+            for (const float y : {19.40f, 19.70f}) {
+                auto rail = TorusGeometry::create(2.62f, 0.045f, 8, 48);
+                rail->rotateX(math::PI / 2.f);
+                rail->translate(0.f, y, 0.f);
+                parts.push_back(rail);
+            }
+            auto ball = SphereGeometry::create(0.17f, 12, 8);
+            ball->translate(0.f, 22.55f, 0.f);
+            parts.push_back(ball);
+            auto rod = CylinderGeometry::create(0.02f, 0.02f, 0.6f, 6);
+            rod->translate(0.f, 22.95f, 0.f);
+            parts.push_back(rod);
+            scene.add(Mesh::create(mergeBufferGeometries(parts), ironwork));
+        }
+
+        // Door at the plinth and three shaft windows, all facing the hut
+        // (+X). Window radius follows the shaft taper so each frame sits
+        // proud of the wall by ~10 cm.
+        {
+            auto shaftR = [&](float yWorld) {
+                const float yl = yWorld - kTowerBase;
+                return 2.45f - 0.95f * (yl - 1.05f) / 13.95f;
+            };
+            std::vector<std::shared_ptr<BufferGeometry>> parts;
+            auto door = BoxGeometry::create(0.3f, 2.0f, 0.95f);
+            door->translate(2.45f, 3.6f, 0.f);
+            parts.push_back(door);
+            for (const float y : {7.0f, 10.5f, 14.0f}) {
+                auto win = BoxGeometry::create(0.24f, 0.7f, 0.5f);
+                win->translate(shaftR(y), y, 0.f);
+                parts.push_back(win);
+            }
+            auto joinery = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                    .color(Color(0.05f, 0.10f, 0.08f)).roughness(0.6f).metalness(0.1f));
+            scene.add(Mesh::create(mergeBufferGeometries(parts), joinery));
+        }
+
+        // Service hut: white walls, red gabled roof (45°-rotated box reads as
+        // a gable from any playable distance), on its own pad. Yawed a touch
+        // so it doesn't sit axis-aligned with the door/window azimuth.
+        const float hutYaw = 0.35f;
+        auto hut = Mesh::create(BoxGeometry::create(3.0f, 2.2f, 2.4f), whitePaint);
+        hut->position.set(5.6f, 2.5f, 0.f);
+        hut->rotation.y = hutYaw;
+        scene.add(hut);
+        auto hutRoof = Mesh::create(BoxGeometry::create(1.75f, 1.75f, 3.0f), redPaint);
+        // Euler XYZ applies Z first: the 45° gable tilt, then the yaw.
+        hutRoof->rotation.set(0.f, hutYaw, math::PI / 4.f);
+        hutRoof->position.set(5.6f, 3.55f, 0.f);
+        scene.add(hutRoof);
     }
 
     // Rotating beam — narrow long-throw spot, aimed slightly below horizontal
@@ -989,7 +1171,10 @@ int main(int argc, char** argv) {
             sun->intensity  = 0.f;
             moon->intensity = 0.30f;
             beam->intensity = 150000.f;// inverse-square: bright enough to read at 300 m
-            lampMat->emissiveIntensity = 25.f;
+            // Lamp is ~6× smaller in area than the pre-optic version — higher
+            // intensity keeps the through-window flare reading at distance.
+            lampMat->emissiveIntensity = 45.f;
+            hoodMat->emissiveIntensity = 8.f;// soft all-round lens glow
             renderer.setDeferredVolumetrics(hazeDensity, 0.6f);
             renderer.setDeferredStarfield(1.0f);
             renderer.toneMappingExposure = 1.15f;
@@ -1000,6 +1185,7 @@ int main(int argc, char** argv) {
             moon->intensity = 0.f;
             beam->intensity = 0.f;
             lampMat->emissiveIntensity = 0.f;
+            hoodMat->emissiveIntensity = 0.f;
             renderer.setDeferredVolumetrics(0.f, 0.6f);
             renderer.setDeferredStarfield(0.f);
             renderer.toneMappingExposure = 0.7f;
@@ -1010,6 +1196,7 @@ int main(int argc, char** argv) {
         // no glow, no lamp area light, and (since strongly-emissive housings
         // are what shadow rays skip) the housing blocks the beam entirely.
         lampMat->needsUpdate();
+        hoodMat->needsUpdate();
     };
     applyMode();
 
@@ -2277,15 +2464,18 @@ int main(int argc, char** argv) {
         }
 
         // ── Lighthouse beam sweep ─────────────────────────────────────────
+        if (capturing) {
+            // Deterministic capture aim: steeper + into the FRAMED water so
+            // the lit pool lands in-shot (~135 m out, centre-right).
+            beamAngle = -1.1f;
+        } else {
+            beamAngle += beamSpeed * dt;
+        }
         if (night) {
             if (capturing) {
-                // Deterministic capture aim: steeper + into the FRAMED water so
-                // the lit pool lands in-shot (~135 m out, centre-right).
-                beamAngle = -1.1f;
                 beamTarget.position.set(std::cos(beamAngle) * 150.f, -2.f,
                                         std::sin(beamAngle) * 150.f);
             } else {
-                beamAngle += beamSpeed * dt;
                 beamTarget.position.set(std::cos(beamAngle) * 300.f, -4.f,
                                         std::sin(beamAngle) * 300.f);
             }
@@ -2297,6 +2487,11 @@ int main(int argc, char** argv) {
             beamDir.sub(lampPos).normalize();
             beam->position.copy(lampPos).addScaledVector(beamDir, 1.7f);
         }
+        // The lamp hood's window tracks the beam azimuth (cylinder θ=0 is
+        // local +Z; the beam dir is (cos A, sin A) in XZ → yaw = π/2 − A), so
+        // the lantern's emissive flare points where the spot does. The optic
+        // keeps turning by day too, visible inside the glass.
+        if (lensHood) lensHood->rotation.y = math::PI / 2.f - beamAngle;
 
         // ── Underwater fog activation ─────────────────────────────────────
         // Sample the wave height at the camera's XZ position. If the camera
