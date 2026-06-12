@@ -1990,25 +1990,41 @@ void traceHit(vec3 origin, vec3 dir, out vec3 hitP, out vec3 hitN, out float dis
 // softer/dreamier glass, drop to 0 for a perfect lens; raise GSAMP if the soft
 // shows residual grain on moving glass (costs proportionally).
 const float kGlassFrost = 0.04;// near-sharp glass: a wide frost lobe scatters the HDR sun into static speckle
+const float kGlassMaxRough = 0.14;// PT parity: the path tracer clamps the primary refraction lobe to
+                              // alpha 0.02 (≈ roughness 0.14) because a wide refraction lobe is
+                              // per-pixel variance no denoiser can fix. Deferred used the raw material
+                              // roughness here, so asset glass with a mid-grey roughness map (e.g. the
+                              // OpenChessSet pawn domes) blurred into a milky ball — structureless,
+                              // duller than the PT reference. Same trade as the PT: frosted glass
+                              // renders polished at primary, but it stays GLASS.
 const int   kGlassSamples = 1;// ONE sharp Fresnel reflect+refract sample → NO discrete-microfacet ghost
                               // copies. The frost (roughness blur) is applied afterwards by the reflection
                               // denoise (deferred_denoise channel 1), exactly like opaque reflections.
+
+// Effective glass shading/blur roughness — used by shadeGlass AND the demod
+// recombine below; both must agree or the denoise blur mismatches the lobe.
+float glassRough(float matRoughness) {
+    return clamp(matRoughness, kGlassFrost, kGlassMaxRough);
+}
 
 vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
                 bool doShadows, float maxLod, inout uint seed) {
     const float ior     = max(pm.ior, 1.0);
     const float r0      = pow((1.0 - ior) / (1.0 + ior), 2.0);
-    // Microfacet roughness: the material's, floored to kGlassFrost. The slight
-    // softening is the "less perfect" the user wanted AND it lets the multi-bounce
-    // surface REFLECTIONS read through the refraction (a perfectly clear lens
-    // hides them — "no recursive reflections"). Averaged over kGlassSamples so it
-    // converges clean. The reflection itself is the multi-bounce traceRadiance,
-    // so it's genuinely recursive (reflected metal/glossy reflects on too).
-    const float gr      = max(clamp(pm.roughness, 0.04, 1.0), kGlassFrost);
-    // Env MISSES (sky) read a BLURRED mip so the HDR sun doesn't appear as a sharp
-    // bright speckle on curved glass (the env is plain equirect mips, not a smooth
-    // PMREM — a sharp sample shows the raw sun). Scene hits stay sharp.
-    const float missLod = max(gr, 0.30) * maxLod;
+    // Microfacet roughness: the material's, floored to kGlassFrost and capped at
+    // kGlassMaxRough (PT parity — see the const). The slight softening is the
+    // "less perfect" the user wanted AND it lets the multi-bounce surface
+    // REFLECTIONS read through the refraction (a perfectly clear lens hides
+    // them — "no recursive reflections"). The reflection itself is the
+    // multi-bounce traceRadiance, so it's genuinely recursive (reflected
+    // metal/glossy reflects on too).
+    const float gr      = glassRough(pm.roughness);
+    // Env MISSES (sky) read a slightly blurred mip so the HDR sun's single hot
+    // texel doesn't speckle on curved glass (the env is plain equirect mips,
+    // not a smooth PMREM). The old 0.30 floor smeared the whole sky into the
+    // glass — with the lobe now capped near-mirror, a gentle floor keeps the
+    // sky crisp and the sun reads as a real glint. Scene hits stay sharp.
+    const float missLod = max(gr, 0.10) * maxLod;
 
     vec3 sum = vec3(0.0);
     for (int s = 0; s < kGlassSamples; ++s) {
@@ -2071,13 +2087,42 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
         }
         // Firefly-clamp the glass env contribution — the HDR sun reflected/
         // refracted through curved glass otherwise scatters into bright STATIC
-        // speckle. The cap keeps the sky/scene reflection but tames the sun spike.
+        // speckle. 6.0 (was 2.5): with the lobe capped near-mirror the scatter
+        // is coherent, and the old cap flattened every highlight — glass needs
+        // its bright glints or it reads dull.
         vec3 contrib = mix(transmitColor, reflectColor, F);
         const float cl = max(max(contrib.r, contrib.g), contrib.b);
-        if (cl > 2.5) contrib *= 2.5 / cl;
+        if (cl > 6.0) contrib *= 6.0 / cl;
         sum += contrib;
     }
-    return sum / float(kGlassSamples);
+
+    // Direct-light glint. The recombine scales the opaque base by
+    // (1 − transmission), which erases its analytic specular entirely for
+    // transmission=1 glass — so glass under a sun/dir light had NO surface
+    // glint at all, a big part of the "dull" look. Spec-only Cook-Torrance at
+    // the glass lobe + Fresnel from the ior (no diffuse — the transmit path
+    // carries that energy). Deterministic, so it's added sharp on top of the
+    // (possibly denoise-blurred) reflect/refract channel, like a real
+    // highlight rides on frosted glass.
+    vec3 glint = vec3(0.0);
+    {
+        const float NdotV = max(dot(N, V), 1e-4);
+        const float kG    = (gr + 1.0) * (gr + 1.0) / 8.0;
+        for (uint i = 0u; i < lights.dirCount; ++i) {
+            const vec3  L     = normalize(lights.dirLights[i].direction);
+            const float NdotL = max(dot(N, L), 0.0);
+            if (NdotL <= 0.0) continue;
+            const float vis = doShadows ? shadowVis(P + N * SHADOW_EPS, L, 1e30) : 1.0;
+            if (vis <= 0.0) continue;
+            const vec3  H = normalize(V + L);
+            const float D = distGGX(max(dot(N, H), 0.0), gr);
+            const float G = geomSmithG1(NdotV, kG) * geomSmithG1(NdotL, kG);
+            const float F = r0 + (1.0 - r0) * pow(1.0 - max(dot(V, H), 0.0), 5.0);
+            // spec·NdotL = D·G·F / (4·NdotV·NdotL) · NdotL
+            glint += lights.dirLights[i].color * (D * G * F / max(4.0 * NdotV, 1e-4)) * vis;
+        }
+    }
+    return sum / float(kGlassSamples) + glint;
 }
 
 // ── Volumetric SPOT-light beams (single scattering, ray-marched) ─────────────
@@ -2596,7 +2641,9 @@ void main() {
                 // Demodulate the mix(): hand glassCol·t to the reflection denoise
                 // (which ADDS blur(reflect)) and scale the opaque base by (1-t), so
                 // the recombine reconstructs mix(lit, blur(glass), t) — frosted.
-                const float gr = max(clamp(pm.roughness, 0.04, 1.0), kGlassFrost);
+                // Same clamped roughness as shadeGlass (PT-parity cap) so the
+                // denoise blur matches the lobe that produced the sample.
+                const float gr = glassRough(pm.roughness);
                 // .a NEGATIVE = glass marker: the denoise gives it a minimum AA blur
                 // + an ID-based (not normal) edge stop so the blur smooths ACROSS the
                 // curved surface — refraction is far more normal-sensitive than
