@@ -2597,20 +2597,19 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         const double clearA = useToneMapIntermediate
                 ? 0.0
                 : static_cast<double>(effectiveClearAlpha);
-        // Surface-direct clear: clearValue is written straight to the sRGB swapchain.
-        // WebGPU does NOT sRGB-encode clearValue (unlike shader fragment writes, which
-        // the sRGB surface encodes in hardware), so a color-managed (linear) clear color
-        // must be encoded here or the background renders too dark. The tone-map-intermediate
-        // path clears a linear RGBA16Float target whose background is re-emitted (and thus
-        // hardware-encoded) by toneMapBlit, so it stays linear. No-op when management is off.
-        Color clearRGB = effectiveClearColor;
-        if (!useToneMapIntermediate) {
-            ColorManagement::workingToColorSpace(clearRGB, SRGBColorSpace);
-        }
+        // Clear values are interpreted in the attachment's LINEAR space and
+        // converted on store, exactly like shader writes — an sRGB-format
+        // surface hardware-encodes the clear (verified on wgpu-native/Vulkan:
+        // clearing 0.0052 linear stores byte 16, the sRGB-encoded value). So
+        // the working-space color goes in unconverted on every path. A manual
+        // workingToColorSpace encode here (a leftover from the UNORM-surface
+        // era, when raw stores DID need pre-encoded bytes) double-encoded the
+        // background: direct-to-surface output was visibly brighter than the
+        // identical render through a RenderTarget (and than GL).
         colorAttachment.clearValue = {
-                static_cast<double>(clearRGB.r),
-                static_cast<double>(clearRGB.g),
-                static_cast<double>(clearRGB.b),
+                static_cast<double>(effectiveClearColor.r),
+                static_cast<double>(effectiveClearColor.g),
+                static_cast<double>(effectiveClearColor.b),
                 clearA};
 
         WGPURenderPassDepthStencilAttachment depthAttachment{};

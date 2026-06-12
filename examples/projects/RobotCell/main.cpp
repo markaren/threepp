@@ -831,6 +831,43 @@ int main(int argc, char** argv) {
         return runDepthProbe(api);
     }
 
+    // --colorprobe [gl|wgpu]: clear-color convention check. The framebuffer
+    // bytes for a flat background must equal the user's sRGB color value on
+    // BOTH the surface and render-target paths (the three.js convention all
+    // backends follow). Catches double/missing encodes in either path.
+    if (argc > 1 && std::string(argv[1]) == "--colorprobe") {
+        const std::string backend = argc > 2 ? argv[2] : "gl";
+        const GraphicsAPI api = backend == "wgpu" ? GraphicsAPI::WebGPU : GraphicsAPI::OpenGL;
+        Canvas canvas(Canvas::Parameters().title("color probe").size(320, 240));
+        auto renderer = createRenderer(canvas, api);
+
+        Scene scene;
+        scene.background = Color(0x10151c);// expect raw bytes 16,21,28
+        PerspectiveCamera cam(60, canvas.aspect(), 0.1f, 10.f);
+
+        auto rt = RenderTarget::create(320, 240, RenderTarget::Options{});
+        int frame = 0;
+        canvas.animate([&] {
+            frame++;
+            renderer->setRenderTarget(rt.get());
+            renderer->render(scene, cam);
+            renderer->copyTextureToImage(*rt->texture);
+            renderer->setRenderTarget(nullptr);
+            renderer->render(scene, cam);
+            if (frame >= 3) {
+                const auto& d = rt->texture->image().data();
+                std::cout << "RT bytes:      " << int(d[0]) << "," << int(d[1]) << "," << int(d[2]) << std::endl;
+                auto fb = renderer->readRGBPixels();
+                if (fb.size() >= 3) {
+                    const size_t mid = (fb.size() / 2 / 3) * 3;
+                    std::cout << "surface bytes: " << int(fb[mid]) << "," << int(fb[mid + 1]) << "," << int(fb[mid + 2]) << std::endl;
+                }
+                canvas.close();
+            }
+        });
+        return 0;
+    }
+
     if (argc > 1 && std::string(argv[1]) == "--selftest") {
         const auto urdfPath = std::filesystem::path(DATA_FOLDER) / "urdf" / "lbr_iiwa_14_r820.urdf";
         URDFLoader urdfLoader;
