@@ -811,14 +811,24 @@ void main() {
         // the true footprint, indistinguishable for band-limited noise.
         const float lodMicro = log2(max(1.0, gl_HitTEXT * 0.128)); // 512 texels / 4 m · 0.001
         const float lodLace  = log2(max(1.0, gl_HitTEXT * 0.0427));// 512 texels / 12 m · 0.001
+        const float lodEdge  = log2(max(1.0, gl_HitTEXT * 0.064)); // 512 texels / 8 m · 0.001
 
         // Sheet: solid where coverage beats the pool noise; the noise bite
         // scales with age so fresh caps read unbroken. Calibrated to
         // foam_world.comp's GRADED soft-knee deposits (solid from coverage
         // ≈ 0.55) — retune the two together.
+        //
+        // The coverage accumulator only resolves ~1 m (cascade-0 texel bumps
+        // survive the graded deposit), so a sheet edge cut purely by coverage
+        // reads TEXELATED. A zero-mean mid-frequency sample of the detail
+        // tile (R over an 8 m mapping → 0.3–1 m features) erodes the
+        // threshold so the boundary detail comes from the texture — same
+        // trick that fixed the lace streaks.
         const float pools = fbm4(wxz * 0.18 + drift);
+        const float edgeN = textureLod(foamDetailTex, wxz * 0.125 + drift * 0.07, lodEdge).r;
         const float sheet = smoothstep(0.03, 0.42,
-                foamCoverage - pools * mix(0.50, 0.22, foamCoverage));
+                foamCoverage - pools * mix(0.50, 0.22, foamCoverage)
+                             - (edgeN - 0.5) * 0.30);
         // Lace: ridged filament pattern from the detail tile (~1.2 m cells
         // over the 12 m mapping). Fresh foam widens the band until it merges
         // with the sheet; old foam keeps only the filament cores.
