@@ -171,6 +171,14 @@ layout(set = 0, binding = 32) uniform sampler2D oceanFineHeight;
 // foam values with their vertex indices. Gated by pc.oceanFoamTileSize > 0.
 layout(set = 0, binding = 44) uniform sampler2D oceanFoamWorld;
 
+// Baked tileable foam detail (RG8, mipped): R = micro bubble brightness
+// (designed for a 4 m world mapping), G = ridged lace/filament pattern
+// (12 m mapping). Replaces the per-pixel procedural noise octaves in the
+// foam block — a sampled texture is band-limited at distance via its mip
+// chain (no shimmer under accumulation) and 2 fetches replace ~20 hash
+// evaluations. Mirrors the deferred set's binding 34.
+layout(set = 0, binding = 45) uniform sampler2D foamDetailTex;
+
 // Bicubic B-spline reconstruction of the world foam accumulator via 4
 // bilinear taps (Sigg & Hadwiger, GPU Gems 2 ch. 20). Plain bilinear
 // renders every isolated foam texel as a soft axis-aligned SQUARE (the
@@ -797,6 +805,13 @@ void main() {
         const float t = float(pc.sampleIndex) * (1.0 / 60.0);   // seconds-ish
         const vec2 drift = vec2(0.42, 0.71) * t * 0.18;          // m/s scale
 
+        // Detail from the baked foam tile (binding 45). Manual LOD — ray
+        // stages have no derivatives; a distance-based estimate (pixel angle
+        // ≈ 0.001 rad, dist = ray length to this hit) lands within ±1 mip of
+        // the true footprint, indistinguishable for band-limited noise.
+        const float lodMicro = log2(max(1.0, gl_HitTEXT * 0.128)); // 512 texels / 4 m · 0.001
+        const float lodLace  = log2(max(1.0, gl_HitTEXT * 0.0427));// 512 texels / 12 m · 0.001
+
         // Sheet: solid where coverage beats the pool noise; the noise bite
         // scales with age so fresh caps read unbroken. Calibrated to
         // foam_world.comp's GRADED soft-knee deposits (solid from coverage
@@ -804,23 +819,18 @@ void main() {
         const float pools = fbm4(wxz * 0.18 + drift);
         const float sheet = smoothstep(0.03, 0.42,
                 foamCoverage - pools * mix(0.50, 0.22, foamCoverage));
-        // Lace: band-pass of mid-frequency value noise = connected thin
-        // filaments (~1.5 m cells). Fresh foam widens the band until it
-        // merges with the sheet; old foam keeps only the filament cores.
-        const float nf   = vnoise21(wxz * 0.85 + drift * 1.4) * 0.62 +
-                           vnoise21(wxz * 1.93 - drift * 0.6) * 0.38;
-        const float lace = 1.0 - abs(nf - 0.5) * 2.0;
+        // Lace: ridged filament pattern from the detail tile (~1.2 m cells
+        // over the 12 m mapping). Fresh foam widens the band until it merges
+        // with the sheet; old foam keeps only the filament cores.
+        const float lace = textureLod(foamDetailTex, wxz * (1.0 / 12.0) + drift * 0.12, lodLace).g;
         const float web  = smoothstep(0.55, 0.80, lace * (0.55 + 0.45 * foamCoverage)) *
                            smoothstep(0.03, 0.22, foamCoverage);
         foamMask = max(sheet, web * 0.8);
 
-        // MICRO bubble detail. Three octaves of value noise at small scale
-        // (~0.15 m). Animated with anti-phase drift so the bubble pattern
-        // shifts independently of the pool boundary.
-        const vec2 wxzMicro = wxz * 6.5 - drift * 0.4;
-        const float micro   = vnoise21(wxzMicro) * 0.55 +
-                              vnoise21(wxzMicro * 2.3) * 0.30 +
-                              vnoise21(wxzMicro * 5.1) * 0.15;
+        // MICRO bubble detail from the tile's R channel (~0.15 m features
+        // over the 4 m mapping). Animated with anti-phase drift so the
+        // bubble pattern shifts independently of the pool boundary.
+        const float micro = textureLod(foamDetailTex, wxz * 0.25 - drift * 0.1, lodMicro).r;
 
         // Two-tone foam colour: peaks light (off-white with slight blue),
         // valleys mid-gray. The luminance variation alone is responsible

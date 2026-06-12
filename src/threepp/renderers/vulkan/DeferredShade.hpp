@@ -76,6 +76,10 @@ namespace threepp::vulkan {
             VkSampler          oceanFineSampler = VK_NULL_HANDLE;
             VkImageView        oceanFoamView    = VK_NULL_HANDLE;// world-space foam accumulator
             VkSampler          oceanFoamSampler = VK_NULL_HANDLE;
+            // Baked tileable foam detail (R=bubbles, G=lace) — created once at
+            // renderer startup, mipped, SHADER_READ_ONLY. Mirrors RT binding 45.
+            VkImageView        foamDetailView    = VK_NULL_HANDLE;
+            VkSampler          foamDetailSampler = VK_NULL_HANDLE;
         };
         void rewriteDescriptors(const DescriptorWriteInputs& in);
 
