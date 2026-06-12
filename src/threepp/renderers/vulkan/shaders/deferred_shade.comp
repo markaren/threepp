@@ -458,10 +458,14 @@ bool shadowOccludes(int instIdx, int primId, vec2 bary) {
 // (foliage, grids, cutout decals) yield CANDIDATES we alpha-test here — otherwise
 // they'd cast a solid silhouette. Opaque candidates confirm on the first hit (one
 // buffer read), so the cost on solid geometry stays negligible.
+// kRayMaskOpaque culls blend/transmissive instances in HW — shadowOccludes
+// would ignore those candidates anyway (transmission>0 / alphaCutoff<0 never
+// block), so this is a pure traversal saving; water stays opaque-mask and is
+// still ignored by the material test.
 float shadowVis(vec3 origin, vec3 dir, float tMax) {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
-                          0xFFu, origin, 0.0, dir, tMax);
+                          kRayMaskOpaque, origin, 0.0, dir, tMax);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT &&
             shadowOccludes(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false),
@@ -640,8 +644,10 @@ vec3 emissiveNEE(int EM_SAMPLES, vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0, v
             const vec3  toLs = lp - shadowOrig;
             const float dists = length(toLs);
             rayQueryEXT rq;
+            // kRayMaskOpaque: blend/transmissive surfaces (decals, glass) must
+            // not block emissive light — this loop only filters emitters.
             rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
-                                  0xFFu, shadowOrig, 1e-3, toLs / max(dists, 1e-6), dists - 1e-2);
+                                  kRayMaskOpaque, shadowOrig, 1e-3, toLs / max(dists, 1e-6), dists - 1e-2);
             while (rayQueryProceedEXT(rq)) {
                 if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
                     const MaterialDesc hm = mats[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false)];
@@ -737,12 +743,12 @@ vec3 emissiveSpecNEE(vec3 P, vec3 N, vec3 V, float NdotV, vec3 F0,
         if (lum > pc.fireflyClamp) c *= pc.fireflyClamp / lum;
         if (doShadows) {
             // Emitter-skipping shadow ray (a light never shadows itself) — same
-            // query as emissiveNEE's.
+            // query as emissiveNEE's (kRayMaskOpaque: decals/glass don't block).
             const vec3  toLs  = lp - shadowOrig;
             const float dists = length(toLs);
             rayQueryEXT rq;
             rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT,
-                                  0xFFu, shadowOrig, 1e-3, toLs / max(dists, 1e-6), dists - 1e-2);
+                                  kRayMaskOpaque, shadowOrig, 1e-3, toLs / max(dists, 1e-6), dists - 1e-2);
             while (rayQueryProceedEXT(rq)) {
                 if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
                     const MaterialDesc hm = mats[rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false)];
@@ -799,7 +805,9 @@ LightInfoD evalLightInfoEm(int typeCode, vec3 lightPos, vec3 hitPos) {
 // can't shadow itself) — same ray-query the emissiveNEE shadow path uses.
 bool restirOccluded(vec3 shadowOrig, vec3 dir, float maxDist) {
     rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT, 0xFFu,
+    // kRayMaskOpaque: decals/glass never block emissive light (matches
+    // emissiveNEE's shadow query).
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT, kRayMaskOpaque,
                           shadowOrig, 1e-3, dir, maxDist);
     while (rayQueryProceedEXT(rq)) {
         if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT) {
@@ -1046,8 +1054,10 @@ vec3 emissiveIrradiance(vec3 P, vec3 N, int EM_SAMPLES, bool doShadows) {
         if (p_omega <= 1e-20) continue;
         if (doShadows) {
             rayQueryEXT rq;
+            // kRayMaskOpaque: blend/transmissive surfaces don't block (force-
+            // opaque flag would otherwise commit a decal's transparent quad).
             rayQueryInitializeEXT(rq, topAS, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
-                                  0xFFu, shadowOrig, 1e-3, L, dist - 1e-2);
+                                  kRayMaskOpaque, shadowOrig, 1e-3, L, dist - 1e-2);
             while (rayQueryProceedEXT(rq)) {}
             if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT)
                 continue;
@@ -1127,7 +1137,10 @@ vec3 gatherEnv(vec3 P, vec3 N, ivec2 px, uint frame, bool doShadows, bool stocha
         const vec3  hemi = vec3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));
         const vec3  dir  = normalize(T * hemi.x + B * hemi.y + N * hemi.z);
         rayQueryEXT rq;
-        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu, orig, 1e-3, dir, SKY_DIST);
+        // kRayMaskOpaque: blend decals / glass must not block sky visibility —
+        // with 0xFF + force-opaque, a transparent text quad on a hull painted
+        // a dark env-occlusion rectangle onto the surface behind it.
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque, orig, 1e-3, dir, SKY_DIST);
         while (rayQueryProceedEXT(rq)) {}
         if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
             acc  += sampleEnvLod(dir, maxLod);
@@ -1550,6 +1563,17 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
         const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
         const float  tHit   = rayQueryGetIntersectionTEXT(rq, true);
+
+        // Blend surfaces (alphaCutoff < 0, no transmission — text decals, alpha
+        // quads): pass straight through. Shading them as opaque painted the
+        // decal's full quad into reflections/refractions as a dark plate. The
+        // tint is skipped (decals hug their receiver, which dominates the ray).
+        // Burns one of the bounce budget — fine, stacked decals are rare.
+        if (hm.alphaCutoff < 0.0 && hm.transmission <= 0.0) {
+            o = o + d * (tHit + 1e-3);
+            continue;
+        }
+
         const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
         vec3 hitN; vec2 hitUv;
         fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
@@ -1615,7 +1639,10 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
 // enclosed scenes don't leak sky while open scenes still get it.
 vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint seed) {
     rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu, origin, 1e-3, dir, 1e30);
+    // kRayMaskOpaque: the cheap GI bounce passes through blend decals/glass and
+    // shades the opaque surface behind them (shading a decal quad as an opaque
+    // dark wall painted indirect darkening onto its receiver).
+    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, kRayMaskOpaque, origin, 1e-3, dir, 1e30);
     while (rayQueryProceedEXT(rq)) {}
     if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT)
         return sampleEnvLod(dir, maxLod);// escaped → sky (the env 1st-bounce term)

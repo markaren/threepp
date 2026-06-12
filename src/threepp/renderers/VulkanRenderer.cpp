@@ -5179,7 +5179,15 @@ namespace threepp {
                                 }
                             }
                             inst.instanceCustomIndex = static_cast<uint32_t>(i);
-                            inst.mask = 0xFFu;
+                            // Same visibility-group rule as the full rebuild:
+                            // blend/transmissive (non-water) → alpha mask so
+                            // occlusion queries skip them.
+                            inst.mask = kRayMaskOpaque;
+                            if (i < matDescsCached_.size() && !en.isDisplaced) {
+                                const auto& cmd = matDescsCached_[i];
+                                if (cmd.transmission > 0.0f || cmd.alphaCutoff < 0.0f)
+                                    inst.mask = kRayMaskAlpha;
+                            }
                             inst.instanceShaderBindingTableRecordOffset = 0;
                             inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
                             inst.accelerationStructureReference = blasAddr;
@@ -5650,6 +5658,18 @@ namespace threepp {
                     copyTexUvTransform(md.uvTransformOcclusion, tex);
                 }
                 matDescs[i] = md;
+                // Visibility group (see vulkan_shared.h): blend/transmissive
+                // surfaces move to the alpha mask so pure-visibility occlusion
+                // queries (env gather, GI, emissive-NEE) cull them out — a text
+                // decal's transparent quad must not block IBL light. Water
+                // (DisplacedMesh) stays opaque-mask: underwater light transport
+                // is handled by its volumetrics, not pass-through.
+                if (!instances.empty()) {
+                    instances.back().mask =
+                            (!en.isDisplaced && (md.transmission > 0.0f || md.alphaCutoff < 0.0f))
+                                    ? kRayMaskAlpha
+                                    : kRayMaskOpaque;
+                }
             }
 
             buildTlas(instances);
