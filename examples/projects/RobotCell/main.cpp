@@ -85,6 +85,16 @@ namespace {
     constexpr int kWarn = 0xffb347;
     constexpr int kDim = 0x254056;
 
+    // ---- HUD scale -----------------------------------------------------------
+    // All HUD dimensions in this file are design units: logical pixels on a
+    // 100% (96-dpi) display. GLFW window coordinates are physical pixels on
+    // Windows/X11, so the helpers below multiply every design unit — geometry,
+    // offsets AND text — by the monitor content scale; scaling only the text
+    // (as earlier revisions did) makes it overflow the panels on high-dpi
+    // screens. On macOS window coordinates are already logical points (the
+    // renderer compensates via pixelRatio), so the scale stays 1 there.
+    float uiScale = 1.f;
+
     // ---- cell layout (metres) ----------------------------------------------
     constexpr float kPedestalH = 0.2f;
     constexpr float kTableTop = 0.30f;
@@ -161,6 +171,9 @@ namespace {
     };
 
     RectMesh roundedRect(float w, float h, float r, int color, float opacity = 1.f) {
+        w *= uiScale;
+        h *= uiScale;
+        r *= uiScale;
         std::ostringstream svg;
         svg << R"(<svg xmlns="http://www.w3.org/2000/svg">)"
             << R"(<rect x="0" y="0" width=")" << w << R"(" height=")" << h
@@ -183,7 +196,7 @@ namespace {
         std::vector<std::function<void(float, float)>> fns;
         void add(const std::shared_ptr<Object3D>& g, float ax, float ay, float ox, float oy, float z) {
             fns.emplace_back([=](float W, float H) {
-                g->position.set(ax * W + ox, ay * H + oy, z);
+                g->position.set(ax * W + ox * uiScale, ay * H + oy * uiScale, z);
             });
         }
         void addRaw(std::function<void(float, float)> fn) { fns.emplace_back(std::move(fn)); }
@@ -206,14 +219,14 @@ namespace {
                                          float px, float ax, float ay, float ox, float oy,
                                          TextSprite::HorizontalAlignment h = TextSprite::HorizontalAlignment::Left,
                                          TextSprite::VerticalAlignment v = TextSprite::VerticalAlignment::Center) {
-        auto t = TextSprite::create(font, px);
+        auto t = TextSprite::create(font, px * uiScale);
         t->setColor(Color(color));
         t->setText(text);
         t->setHorizontalAlignment(h);
         t->setVerticalAlignment(v);
         t->screenSpace = true;
         t->screenAnchor.set(ax, ay);
-        t->position.set(ox, oy, 0.f);
+        t->position.set(ox * uiScale, oy * uiScale, 0.f);
         return t;
     }
 
@@ -245,10 +258,12 @@ namespace {
         auto b = std::make_shared<Button>();
         b->ax = ax;
         b->ay = ay;
-        b->ox = ox;
-        b->oy = oy;
-        b->w = w;
-        b->h = h;
+        // stored scaled: contains() and the hit sprite below are tested in
+        // window pixels, the same frame the screen-space sprite pass draws in
+        b->ox = ox * uiScale;
+        b->oy = oy * uiScale;
+        b->w = w * uiScale;
+        b->h = h * uiScale;
         b->onClick = std::move(onClick);
 
         auto rect = roundedRect(w, h, 8.f, kBtn);
@@ -262,9 +277,9 @@ namespace {
         const float labelPx = h * 0.40f;
         b->label = makeText(font, text, 0xcfe8ff, labelPx, ax, ay, ox + w / 2.f, oy - h / 2.f,
                             TextSprite::HorizontalAlignment::Center, TextSprite::VerticalAlignment::Center);
-        const float maxLabelW = w - 16.f;
+        const float maxLabelW = (w - 16.f) * uiScale;// label->scale is window px
         if (b->label->scale.x > maxLabelW) {
-            b->label->setWorldScale(labelPx * maxLabelW / static_cast<float>(b->label->scale.x));
+            b->label->setWorldScale(labelPx * uiScale * maxLabelW / static_cast<float>(b->label->scale.x));
         }
         ui.add(b->label);
 
@@ -273,8 +288,8 @@ namespace {
         b->hit = Sprite::create(hitMat);
         b->hit->screenSpace = true;
         b->hit->screenAnchor.set(ax, ay);
-        b->hit->position.set(ox, oy, 0.f);
-        b->hit->scale.set(w, h, 1.f);
+        b->hit->position.set(b->ox, b->oy, 0.f);
+        b->hit->scale.set(b->w, b->h, 1.f);
         b->hit->center.set(0.f, 1.f);
         Button* raw = b.get();
         b->hit->onMouseDown = [raw](int) { raw->pressed = true; };
@@ -293,6 +308,7 @@ namespace {
     };
 
     Led makeLed(float r) {
+        r *= uiScale;
         std::ostringstream svg;
         svg << R"(<svg xmlns="http://www.w3.org/2000/svg"><circle cx=")" << r << R"(" cy=")" << r
             << R"(" r=")" << r << R"(" fill="#ffffff"/></svg>)";
@@ -330,9 +346,11 @@ namespace {
         auto track = roundedRect(w, h, h / 2.f, kBtn, 0.9f);
         bar.group->add(track.mesh);
 
-        // 1px-wide fill rect, x-scaled to the bar value (slight inset)
+        // 1px-wide fill rect, x-scaled to the bar value (slight inset).
+        // set() scales by the DESIGN width: the geometry is already uiScale
+        // px wide, so the product comes out in window px.
         auto fill = roundedRect(1.f, h - 2.f, 0.f, kAccent);
-        fill.mesh->position.set(1.f, 1.f, 0.05f);
+        fill.mesh->position.set(uiScale, uiScale, 0.05f);
         bar.fill = fill.mesh;
         bar.fill->scale.x = 1.f;
         bar.group->add(bar.fill);
@@ -885,7 +903,15 @@ int main(int argc, char** argv) {
         captureAfter = std::stof(argv[2]);
     }
 
-    Canvas canvas(Canvas::Parameters().title("threepp - KUKA Robot Cell").size(1366, 820).antialiasing(4));
+#ifndef __APPLE__
+    uiScale = monitor::contentScale().first;
+#endif
+    // scale the window with the HUD, but keep it on screen (a 150% 1080p
+    // display has fewer logical pixels than the 1366x820 design)
+    const auto screen = monitor::monitorSize();
+    const int winW = std::min(static_cast<int>(1366 * uiScale), screen.width() * 9 / 10);
+    const int winH = std::min(static_cast<int>(820 * uiScale), screen.height() * 9 / 10);
+    Canvas canvas(Canvas::Parameters().title("threepp - KUKA Robot Cell").size(winW, winH).antialiasing(4));
     auto renderer = createRenderer(canvas);
 
 #ifdef ROBOT_CELL_WITH_VULKAN
@@ -893,8 +919,6 @@ int main(int argc, char** argv) {
     // TLAS instead of rasterised into a render target.
     auto* vkRenderer = dynamic_cast<VulkanRenderer*>(renderer.get());
 #endif
-
-    const float dpi = monitor::contentScale().first;
 
     // ===== 3D world =========================================================
     auto scene = Scene::create();
@@ -1241,14 +1265,14 @@ int main(int argc, char** argv) {
         ui->add(g);
         layout.addRaw([g](float W, float H) {
             g->position.set(0.f, H, 0.1f);
-            g->scale.set(W, -1.f, 1.f);
+            g->scale.set(W, -uiScale, 1.f);
         });
     }
-    ui->add(makeText(font, "THREEPP  //  KUKA ROBOT CELL", kAccent, 20 * dpi, 0.f, 1.f, 18.f, -22.f));
-    Readout stateTxt{makeText(font, "", 0xcfe8ff, 18 * dpi, 0.5f, 1.f, 0.f, -22.f,
+    ui->add(makeText(font, "THREEPP  //  KUKA ROBOT CELL", kAccent, 20, 0.f, 1.f, 18.f, -22.f));
+    Readout stateTxt{makeText(font, "", 0xcfe8ff, 18, 0.5f, 1.f, 0.f, -22.f,
                               TextSprite::HorizontalAlignment::Center)};
     ui->add(stateTxt.sprite);
-    Readout fpsTxt{makeText(font, "", 0x8fb6cf, 16 * dpi, 1.f, 1.f, -18.f, -22.f,
+    Readout fpsTxt{makeText(font, "", 0x8fb6cf, 16, 1.f, 1.f, -18.f, -22.f,
                             TextSprite::HorizontalAlignment::Right)};
     ui->add(fpsTxt.sprite);
 
@@ -1261,7 +1285,7 @@ int main(int argc, char** argv) {
         ui->add(g);
         layout.add(g, 0.f, 1.f, 18.f, -64.f, 0.1f);
     }
-    ui->add(makeText(font, "SYSTEMS", kAccent, 15 * dpi, 0.f, 1.f, 34.f, -86.f));
+    ui->add(makeText(font, "SYSTEMS", kAccent, 15, 0.f, 1.f, 34.f, -86.f));
 
     struct StatusRow {
         Led led;
@@ -1276,11 +1300,11 @@ int main(int argc, char** argv) {
         const float y = -112.f - static_cast<float>(i) * 24.f;
         ui->add(rows[i].led.group);
         layout.add(rows[i].led.group, 0.f, 1.f, 36.f, y + 8.f, 0.2f);
-        ui->add(makeText(font, rows[i].name, 0xcfe8ff, 14 * dpi, 0.f, 1.f, 58.f, y));
+        ui->add(makeText(font, rows[i].name, 0xcfe8ff, 14, 0.f, 1.f, 58.f, y));
     }
-    Readout pickedTxt{makeText(font, "", 0xffffff, 15 * dpi, 0.f, 1.f, 36.f, -216.f)};
+    Readout pickedTxt{makeText(font, "", 0xffffff, 15, 0.f, 1.f, 36.f, -216.f)};
     ui->add(pickedTxt.sprite);
-    Readout tipTxt{makeText(font, "", 0x8fb6cf, 13 * dpi, 0.f, 1.f, 36.f, -240.f)};
+    Readout tipTxt{makeText(font, "", 0x8fb6cf, 13, 0.f, 1.f, 36.f, -240.f)};
     ui->add(tipTxt.sprite);
 
     // right joints panel
@@ -1292,12 +1316,12 @@ int main(int argc, char** argv) {
         ui->add(g);
         layout.add(g, 1.f, 1.f, -268.f, -64.f, 0.1f);
     }
-    ui->add(makeText(font, "JOINTS", kAccent, 15 * dpi, 1.f, 1.f, -252.f, -86.f));
+    ui->add(makeText(font, "JOINTS", kAccent, 15, 1.f, 1.f, -252.f, -86.f));
 
     std::vector<JointBar> bars;
     for (size_t i = 0; i < nDof; ++i) {
         const float y = -112.f - static_cast<float>(i) * 26.f;
-        ui->add(makeText(font, "J" + std::to_string(i + 1), 0xcfe8ff, 13 * dpi, 1.f, 1.f, -252.f, y));
+        ui->add(makeText(font, "J" + std::to_string(i + 1), 0xcfe8ff, 13, 1.f, 1.f, -252.f, y));
         auto bar = makeJointBar(170.f, 10.f);
         ui->add(bar.group);
         layout.add(bar.group, 1.f, 1.f, -218.f, y + 5.f, 0.2f);
@@ -1331,7 +1355,7 @@ int main(int argc, char** argv) {
         addBtn("RESET", [&] { resetCell(); });
     }
     ui->add(makeText(font, "CLICK: JOG (TAKES MANUAL CONTROL)      G: GRIP / RELEASE      SPACE: SPAWN      AUTO: RESUME", 0x5f7a90,
-                     12 * dpi, 0.5f, 0.f, 0.f, 84.f, TextSprite::HorizontalAlignment::Center));
+                     12, 0.5f, 0.f, 0.f, 84.f, TextSprite::HorizontalAlignment::Center));
 
     // ===== input ============================================================
     Vector2 cursor{-1e9f, -1e9f};
@@ -1349,7 +1373,7 @@ int main(int argc, char** argv) {
 
     MouseUpListener upL([&](int button, const Vector2& pos) {
         if (button != 0 || uiHover) return;
-        if (downPos.distanceTo(pos) > 6.f) return;// drag = orbit, not a click
+        if (downPos.distanceTo(pos) > 6.f * uiScale) return;// drag = orbit, not a click
 
         const auto s = canvas.size();
         Vector2 ndc{(pos.x / static_cast<float>(s.width())) * 2 - 1,
