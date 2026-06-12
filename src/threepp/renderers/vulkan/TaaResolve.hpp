@@ -73,6 +73,10 @@ namespace threepp::vulkan {
         // write and a post-resolve RCAS pass (sharpenAmount ~0.2–0.6) reads
         // the resolved frame back from the history slot and writes the
         // sharpened result to the swapchain instead.
+        // `dtFrames` = this frame's duration in reference frames (dt · 90 fps,
+        // clamped [1, 6] by the caller; 1 at high fps). The shader scales its
+        // per-frame temporal constants (deviation-streak ramp, soft-clip rate)
+        // by it so ghost decay is constant in wall-clock time, not frames.
         void recordResolve(VkCommandBuffer cb,
                            uint32_t frame,
                            uint32_t imageIndex,
@@ -81,6 +85,7 @@ namespace threepp::vulkan {
                            uint32_t outWidth,
                            uint32_t outHeight,
                            float blendAlpha,
+                           float dtFrames,
                            bool sharpen,
                            float sharpenAmount,
                            const float* skyReproj);

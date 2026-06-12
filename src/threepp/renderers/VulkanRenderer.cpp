@@ -1384,7 +1384,18 @@ namespace threepp {
         float bloomThreshold_ = 1.0f;// soft-knee bright-pass cutoff (linear HDR)
         float bloomClamp_ = 0.0f;    // per-tap HDR cap before the bright pass; <= 0 = off
         float sharpenStrength_ = 0.0f;// post-TAA RCAS amount; 0 = off
-        float taaBlendAlpha_ = 0.1f;// 10% current, 90% history
+        float taaBlendAlpha_ = 0.1f;// 10% current, 90% history at the reference rate;
+                                    // frame-rate-corrected per frame (see taaPrevTimeSec_)
+        // Wall-clock anchor for the frame-rate-aware TAA blend. taaBlendAlpha_ is a
+        // per-FRAME new-sample weight, so holding it fixed ties the history half-life
+        // to frame COUNT: the same 90 %/frame retention is an invisible ~10 ms ghost
+        // at 200 fps but a long visible smear on a 30 fps (or vsync-capped + heavy)
+        // frame — the "moving object leaves edge trails" report. Each frame the
+        // weight is re-solved (in recordCommandBuffer, against kTaaRefFps) so
+        // (1-alpha) is held constant in wall-clock time instead of per frame; the
+        // shader's velocity/deviation gates are already per-frame-displacement based,
+        // so only this base weight needs the correction.
+        double taaPrevTimeSec_ = -1.0;
 
         bool perSppJitterHybrid_ = true;
         // Tracks what each per-frame slot's binding 1 (RT denoise output)
@@ -12325,10 +12336,39 @@ namespace threepp {
             // res history, reconstructing detail (no separate blit needed).
             // The spatial neighborhood clamp + motion-vec reproject smooths
             // per-frame Halton jitter shake on moving objects.
+            // Frame-rate-aware history blend: keep the ghost-decay time constant in
+            // wall-clock seconds, not frames (see taaPrevTimeSec_). taaBlendAlpha_ is
+            // authored to look good at kTaaRefFps; at or above that rate this is a
+            // no-op (effAlpha == taaBlendAlpha_, so the demos that already look clean
+            // are byte-unchanged), and BELOW it the new-sample weight is raised so a
+            // moving object's trail clears in the same real time it would at the
+            // reference rate instead of lingering for a fixed frame count. `frames` is
+            // (1-alpha)'s exponent = how many reference-frames this real frame spans;
+            // clamped to [1, 6] so we never reduce alpha (preserving the high-fps
+            // look) and a one-off hitch (loading stall, alt-tab) can't spike it toward
+            // 1 and strobe the frame to raw jittered input.
+            constexpr float kTaaRefFps = 90.0f;
+            float effAlpha = taaBlendAlpha_;
+            float taaDtFrames = 1.0f;// also pushed to the shader, which scales its
+                                     // own per-frame constants (deviation-streak
+                                     // ramp, soft-clip rate) by it — without that,
+                                     // low fps leaves discrete stale edge bands
+                                     // (one per ramp frame) behind moving objects.
+            {
+                const double now = glfwGetTime();
+                if (taaPrevTimeSec_ >= 0.0) {
+                    const double dt = now - taaPrevTimeSec_;
+                    if (dt > 0.0) {
+                        taaDtFrames = std::clamp(static_cast<float>(dt) * kTaaRefFps, 1.0f, 6.0f);
+                        effAlpha = 1.0f - std::pow(1.0f - taaBlendAlpha_, taaDtFrames);
+                    }
+                }
+                taaPrevTimeSec_ = now;
+            }
             gpuTimings_->begin(cb, TP_TAA, currentFrame);
             taa_->recordResolve(cb, currentFrame, imageIndex,
                                 ptExt.width, ptExt.height,
-                                ext.width, ext.height, taaBlendAlpha_,
+                                ext.width, ext.height, effAlpha, taaDtFrames,
                                 sharpenStrength_ > 0.0f, sharpenStrength_,
                                 taaSkyReproj_.data());
             gpuTimings_->end(cb, TP_TAA, currentFrame);

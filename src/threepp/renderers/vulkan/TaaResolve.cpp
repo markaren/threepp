@@ -432,6 +432,7 @@ namespace threepp::vulkan {
                                    uint32_t outWidth,
                                    uint32_t outHeight,
                                    float blendAlpha,
+                                   float dtFrames,
                                    bool sharpen,
                                    float sharpenAmount,
                                    const float* skyReproj) {
@@ -478,7 +479,7 @@ namespace threepp::vulkan {
         std::memcpy(&alphaBits, &alpha, sizeof(alphaBits));
         // Layout: blendAlpha, output w/h (history + dispatch + writes),
         // input w/h (the render extent the samples were traced at).
-        // Layout mirrors the shader's std430 push block: 6 scalars, 8 bytes
+        // Layout mirrors the shader's std430 push block: 7 scalars, 4 bytes
         // of pad, then the column-major mat4 at offset 32.
         float pc[24] = {};
         std::memcpy(&pc[0], &alphaBits, 4);
@@ -486,6 +487,7 @@ namespace threepp::vulkan {
         std::memcpy(&pc[1], dims, 16);
         const uint32_t ws = sharpen ? 0u : 1u;
         std::memcpy(&pc[5], &ws, 4);
+        pc[6] = dtFrames;
         std::memcpy(&pc[8], skyReproj, 64);
         vkCmdPushConstants(cb, pipelineLayout_,
                            VK_SHADER_STAGE_COMPUTE_BIT,
