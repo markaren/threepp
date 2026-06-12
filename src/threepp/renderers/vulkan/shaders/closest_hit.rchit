@@ -171,6 +171,44 @@ layout(set = 0, binding = 32) uniform sampler2D oceanFineHeight;
 // foam values with their vertex indices. Gated by pc.oceanFoamTileSize > 0.
 layout(set = 0, binding = 44) uniform sampler2D oceanFoamWorld;
 
+// Baked tileable foam detail (RG8, mipped): R = micro bubble brightness
+// (designed for a 4 m world mapping), G = ridged lace/filament pattern
+// (12 m mapping). Replaces the per-pixel procedural noise octaves in the
+// foam block — a sampled texture is band-limited at distance via its mip
+// chain (no shimmer under accumulation) and 2 fetches replace ~20 hash
+// evaluations. Mirrors the deferred set's binding 34.
+layout(set = 0, binding = 45) uniform sampler2D foamDetailTex;
+
+// Bicubic B-spline reconstruction of the world foam accumulator via 4
+// bilinear taps (Sigg & Hadwiger, GPU Gems 2 ch. 20). Plain bilinear
+// renders every isolated foam texel as a soft axis-aligned SQUARE (the
+// bilinear tent's support is a square), which reads as a grid artifact up
+// close; the cubic kernel reconstructs round, C1-smooth blobs. Kept in
+// lockstep with deferred_shade.comp.
+float sampleFoamBicubic(vec2 uv) {
+    const vec2 res = vec2(textureSize(oceanFoamWorld, 0));
+    const vec2 st  = uv * res - 0.5;
+    const vec2 i   = floor(st);
+    const vec2 f   = st - i;
+    const vec2 f2  = f * f;
+    const vec2 f3  = f2 * f;
+    const vec2 w0  = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w1  = (3.0 * f3 - 6.0 * f2 + 4.0)       * (1.0 / 6.0);
+    const vec2 w2  = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w3  = f3 * (1.0 / 6.0);
+    const vec2 g0  = w0 + w1;
+    const vec2 g1  = w2 + w3;
+    // Two sample coords per axis, each placed so ONE bilinear fetch
+    // integrates a weighted texel pair; REPEAT sampler handles the wrap.
+    const vec2 c0  = (i - 0.5 + w1 / g0) / res;
+    const vec2 c1  = (i + 1.5 + w3 / g1) / res;
+    const float t00 = textureLod(oceanFoamWorld, vec2(c0.x, c0.y), 0.0).r;
+    const float t10 = textureLod(oceanFoamWorld, vec2(c1.x, c0.y), 0.0).r;
+    const float t01 = textureLod(oceanFoamWorld, vec2(c0.x, c1.y), 0.0).r;
+    const float t11 = textureLod(oceanFoamWorld, vec2(c1.x, c1.y), 0.0).r;
+    return g0.y * (g0.x * t00 + g1.x * t10) + g1.y * (g0.x * t01 + g1.x * t11);
+}
+
 // Emissive-mesh NEE: each emissive triangle is packed as 4 vec4
 // (v0.xyz/area, v1.xyz/cumPower, v2.xyz/power, emission.rgb/_pad).
 // The host walks the scene each frame, transforms triangle vertices to
@@ -531,7 +569,11 @@ void main() {
     if (gdesc.foamAddress != 0ul && pc.oceanFoamTileSize > 0.0) {
         const vec3 hitWorld = gl_WorldRayOriginEXT + gl_HitTEXT * gl_WorldRayDirectionEXT;
         const vec2 uv = hitWorld.xz / pc.oceanFoamTileSize;
-        foamCoverage = clamp(texture(oceanFoamWorld, uv).r, 0.0, 1.0);
+        // Bicubic + 1.3 gain: the B-spline kernel approximates rather than
+        // interpolates, attenuating an isolated single-texel whitecap to
+        // ~0.44 of its stored value — the gain restores it; patch interiors
+        // already read ~1 and just clamp.
+        foamCoverage = clamp(sampleFoamBicubic(uv) * 1.3, 0.0, 1.0);
     }
 
     const vec3 nObj = normalize(w * n0 + attribs.x * n1 + attribs.y * n2);
@@ -746,15 +788,15 @@ void main() {
     // rather than tinted glass-foam. No-op when foamCoverage = 0.
     float foamMask = 0.0;
     if (foamCoverage > 0.0) {
-        // Foam shading is two-layer:
-        //   - MACRO fBm (~5 m features) gates the coverage mask so the foam
-        //     pool edges break up organically rather than reading as a
-        //     bilinear ramp from per-vertex interpolation.
-        //   - MICRO value-noise (~0.15 m features) modulates the WITHIN-foam
-        //     brightness and roughness — this is what gives dense foam its
-        //     bubble look instead of flat paint. Two-tone (off-white peaks,
-        //     mid-gray valleys) + a small specular catch on peaks via the
-        //     roughness lerp produces the look the reference image has.
+        // Whitewater lifecycle mask — kept in lockstep with shadeWater in
+        // deferred_shade.comp (the deferred path is the demo default; this
+        // is the PT-reference twin). The world foam accumulator decays
+        // exponentially, so COVERAGE IS FRESHNESS:
+        //   fresh (≈1)  — near-solid sheet, micro-bubble texture
+        //   aging (mid) — fBm pools bite harder as coverage drops, tearing
+        //                 the sheet into patches
+        //   residue     — a ridged filament web (the lace a collapsed
+        //                 whitecap leaves behind) outlives the sheet
         // A slow time drift (driven by sampleIndex so it works without a
         // separate time uniform) prevents dense foam from reading as a
         // static texture during long stationary camera shots.
@@ -763,26 +805,51 @@ void main() {
         const float t = float(pc.sampleIndex) * (1.0 / 60.0);   // seconds-ish
         const vec2 drift = vec2(0.42, 0.71) * t * 0.18;          // m/s scale
 
-        // MACRO mask noise. fBm at low frequency (~5 m features) gives
-        // soft, organic pool edges. Scaled to subtract a sizable chunk
-        // from coverage so foam appears only where coverage clearly wins.
-        const vec2 wxzMacro = wxz * 0.18 + drift;
-        const float macroN  = fbm4(wxzMacro);
-        foamMask = smoothstep(0.05, 0.70, foamCoverage - macroN * 0.45);
+        // Detail from the baked foam tile (binding 45). Manual LOD — ray
+        // stages have no derivatives; a distance-based estimate (pixel angle
+        // ≈ 0.001 rad, dist = ray length to this hit) lands within ±1 mip of
+        // the true footprint, indistinguishable for band-limited noise.
+        const float lodMicro = log2(max(1.0, gl_HitTEXT * 0.128)); // 512 texels / 4 m · 0.001
+        const float lodLace  = log2(max(1.0, gl_HitTEXT * 0.0427));// 512 texels / 12 m · 0.001
+        const float lodEdge  = log2(max(1.0, gl_HitTEXT * 0.064)); // 512 texels / 8 m · 0.001
 
-        // MICRO bubble detail. Two octaves of value noise at small scale
-        // (~0.15 m). Animated with anti-phase drift so the bubble pattern
-        // shifts independently of the pool boundary.
-        const vec2 wxzMicro = wxz * 6.5 - drift * 0.4;
-        const float micro   = vnoise21(wxzMicro) * 0.65 +
-                              vnoise21(wxzMicro * 2.3) * 0.35;
+        // Sheet: solid where coverage beats the pool noise; the noise bite
+        // scales with age so fresh caps read unbroken. Calibrated to
+        // foam_world.comp's GRADED soft-knee deposits (solid from coverage
+        // ≈ 0.55) — retune the two together.
+        //
+        // The coverage accumulator only resolves ~1 m (cascade-0 texel bumps
+        // survive the graded deposit), so a sheet edge cut purely by coverage
+        // reads TEXELATED. A zero-mean mid-frequency sample of the detail
+        // tile (R over an 8 m mapping → 0.3–1 m features) erodes the
+        // threshold so the boundary detail comes from the texture — same
+        // trick that fixed the lace streaks.
+        const float pools = fbm4(wxz * 0.18 + drift);
+        const float edgeN = textureLod(foamDetailTex, wxz * 0.125 + drift * 0.07, lodEdge).r;
+        const float sheet = smoothstep(0.03, 0.42,
+                foamCoverage - pools * mix(0.50, 0.22, foamCoverage)
+                             - (edgeN - 0.5) * 0.30);
+        // Lace: ridged filament pattern from the detail tile (~1.2 m cells
+        // over the 12 m mapping). Fresh foam widens the band until it merges
+        // with the sheet; old foam keeps only the filament cores.
+        const float lace = textureLod(foamDetailTex, wxz * (1.0 / 12.0) + drift * 0.12, lodLace).g;
+        const float web  = smoothstep(0.55, 0.80, lace * (0.55 + 0.45 * foamCoverage)) *
+                           smoothstep(0.03, 0.22, foamCoverage);
+        foamMask = max(sheet, web * 0.8);
+
+        // MICRO bubble detail from the tile's R channel (~0.15 m features
+        // over the 4 m mapping). Animated with anti-phase drift so the
+        // bubble pattern shifts independently of the pool boundary.
+        const float micro = textureLod(foamDetailTex, wxz * 0.25 - drift * 0.1, lodMicro).r;
 
         // Two-tone foam colour: peaks light (off-white with slight blue),
         // valleys mid-gray. The luminance variation alone is responsible
-        // for ~80% of the "looks like foam" effect.
+        // for ~80% of the "looks like foam" effect. Fresh caps lift toward
+        // the bright end on top of the bubble modulation.
         const vec3 foamHi = vec3(0.97, 0.99, 1.00);
-        const vec3 foamLo = vec3(0.55, 0.62, 0.66);
-        const vec3 foamCol = mix(foamLo, foamHi, micro);
+        const vec3 foamLo = vec3(0.62, 0.68, 0.72);
+        vec3 foamCol = mix(foamLo, foamHi, micro);
+        foamCol = mix(foamCol, foamHi, 0.35 * foamCoverage);
 
         albedo = mix(albedo, foamCol, foamMask);
         // Roughness: 0.45..1.0 range. Bubble peaks (high micro) get the

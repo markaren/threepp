@@ -440,6 +440,9 @@ namespace threepp {
             uint32_t foamRes      = 0;          // texels per side
             float    foamTileSize = 0.f;        // world extent (m) covered
             VkDescriptorSet foamWorldDS = VK_NULL_HANDLE;
+            // Wall-clock timestamp of the previous foam dispatch — drives the
+            // frame-rate-independent decay push constant (−1 = first frame).
+            double   foamPrevTimeSec = -1.0;
         };
         std::unordered_map<const DisplacedMesh*, std::unique_ptr<DisplacedMeshState>> displacedStates;
 
@@ -596,6 +599,15 @@ namespace threepp {
         VkImageView oceanFoamView   = VK_NULL_HANDLE;
         VkSampler   oceanFoamSampler = VK_NULL_HANDLE;
         float       oceanFoamTileSize = 0.f;              // 0 disables sampling
+
+        // Tileable foam detail texture (RT binding 45 / deferred binding 34).
+        // R = micro bubble brightness (three value-noise octaves matching the
+        // old procedural micro look over a 4 m world mapping), G = ridged
+        // lace/filament pattern (12 m mapping). Baked once at startup with a
+        // full mip chain — replaces the per-pixel procedural noise octaves in
+        // the foam shading: a sampled texture is band-limited at distance (no
+        // shimmer under TAA) and 2 fetches replace ~20 hash evaluations.
+        Image2D foamDetailImage{};
 
         // Env luminance CDF (Phase A: env importance sampling).
         // Conditional CDF: w×h R32F texture; row r holds the cumulative
@@ -1700,6 +1712,7 @@ namespace threepp {
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             createOceanFineDummy_();// must run before descriptor writes (binding 32)
             createOceanFoamDummy_();// must run before descriptor writes (binding 33)
+            createFoamDetailImage_();// must run before descriptor writes (binding 45 + deferred 34)
             rewriteTaaDescriptors();// after ensureHybridResources gave us raster gbuf views
             rewriteBloomDescriptors();// bloom composite reads gbuf + writes the TAA input
             rewriteDeferredDescriptors();// raster-first deferred shade inputs
@@ -1881,6 +1894,7 @@ namespace threepp {
             destroyImage2D(ctx->allocator(), d, blueNoiseImage);
             destroyImage2D(ctx->allocator(), d, oceanFineHeightDummy);
             destroyImage2D(ctx->allocator(), d, oceanFoamDummy);
+            destroyImage2D(ctx->allocator(), d, foamDetailImage);
             for (auto& img : accumImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, img);
@@ -3404,12 +3418,13 @@ namespace threepp {
             // World-space foam image. Coverage equals the cascade-0 tile
             // (matches the FFT periodicity, so REPEAT-sampling at any
             // world XZ folds back into the same texture cell). Resolution
-            // 1024² over 1000 m → ~0.98 m per texel, comparable to the
-            // base ocean's vertex spacing. R32F storage so both compute
+            // 2048² over 1000 m → ~0.49 m per texel — fine enough to carry
+            // the cascade-1 whitecap detail foam_world.comp's fine Jacobian
+            // stencil extracts (16 MB R32F). R32F storage so both compute
             // imageLoad/Store and chit linear sampling work without
             // format conversions.
             {
-                state->foamRes      = 1024u;
+                state->foamRes      = 2048u;
                 state->foamTileSize = dm.params.tileSize0;
                 VkImageCreateInfo ici{};
                 ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -3441,8 +3456,8 @@ namespace threepp {
                 vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 check(vkCreateImageView(ctx->device(), &vci, nullptr, &state->foamImage.view),
                       "vkCreateImageView(foamWorld)");
-                ctx->setObjectName(state->foamImage.image, "ocean.foamWorld (1024x1024 R32F)");
-                ctx->setObjectName(state->foamImage.view,  "ocean.foamWorld (1024x1024 R32F)");
+                ctx->setObjectName(state->foamImage.image, "ocean.foamWorld (2048x2048 R32F)");
+                ctx->setObjectName(state->foamImage.view,  "ocean.foamWorld (2048x2048 R32F)");
 
                 // Initial clear to zero + layout transition to GENERAL so the
                 // first foam_world dispatch's imageLoad reads 0 (no foam yet)
@@ -3794,6 +3809,22 @@ namespace threepp {
             // pool's cascade-image bindings without a layout flip; the
             // cascades stay in GENERAL throughout.
             {
+                // Wall-clock foam persistence. The old fixed 0.992/frame tied
+                // the foam half-life to frame rate (≈1.4 s at 60 fps, half
+                // that at 120) — same bug class as the TAA temporal constants.
+                // τ = 2 s reproduces the old look at 60 fps. dt clamped so an
+                // alt-tab / loading stall can't wipe the accumulator in one
+                // frame.
+                const double nowSec = glfwGetTime();
+                float foamDecay = 0.992f;// first frame: no dt reference yet
+                if (st.foamPrevTimeSec >= 0.0) {
+                    const float dt = std::clamp(
+                            static_cast<float>(nowSec - st.foamPrevTimeSec),
+                            0.0f, 0.25f);
+                    foamDecay = std::exp(-dt / 2.0f);
+                }
+                st.foamPrevTimeSec = nowSec;
+
                 vulkan::FoamWorldPipeline::PushConstants fpc{};
                 fpc.disturbAddr    = st.foamDisturbBuffer.address;
                 fpc.foamRes        = st.foamRes;
@@ -3812,7 +3843,7 @@ namespace threepp {
                 fpc.hullCosYaw     = dm.hullExclusion.cosYaw;
                 fpc.forwardSpeed   = dm.wake.enabled ? dm.wake.forwardSpeed : 0.0f;
                 fpc.disturbCount   = disturbCount;
-                fpc.decay          = 0.992f;
+                fpc.decay          = foamDecay;
                 fpc.wakeTrailAddr  = st.wakeTrailBuffer.address;
                 fpc.wakeTrailCount = wakeSampleCount;
                 fpc._pad           = 0;
@@ -9090,6 +9121,8 @@ namespace threepp {
             in.oceanFineSampler = oceanFineHeightSampler;
             in.oceanFoamView    = oceanFoamView;
             in.oceanFoamSampler = oceanFoamSampler;
+            in.foamDetailView    = foamDetailImage.view;
+            in.foamDetailSampler = foamDetailImage.sampler;
             // ReSTIR DI reservoir ping-pong — the same 2 physical images the PT path
             // uses (created unconditionally in createAccumImage). rewriteDescriptors
             // picks write/read slots per frame. Locals must outlive the call below.
@@ -9584,6 +9617,75 @@ namespace threepp {
                     "blueNoiseImage (64x64 void-and-cluster tile)");
         }
 
+        // Tileable foam detail tile — R = micro bubble brightness, G = ridged
+        // "lace" filament pattern. All lattice frequencies are integers so
+        // every octave wraps seamlessly across the tile edges. Channel content
+        // matches the procedural noise it replaces in the foam shading:
+        //   R ≈ vnoise·0.55 + vnoise(×2.3)·0.30 + vnoise(×5.1)·0.15 with
+        //       0.154 m base features over the shader's 4 m world mapping;
+        //   G ≈ 1 − 2·|nf − 0.5| (filament cores at nf = 0.5) with ~1.2 m
+        //       cells over the 12 m mapping.
+        std::vector<unsigned char> generateFoamDetailTile_(int res) {
+            auto hashf = [](int x, int y) {
+                uint32_t h = static_cast<uint32_t>(x) * 374761393u +
+                             static_cast<uint32_t>(y) * 668265263u;
+                h = (h ^ (h >> 13)) * 1274126177u;
+                h ^= h >> 16;
+                return static_cast<float>(h) * (1.0f / 4294967296.0f);
+            };
+            // Tileable value noise: `cells` lattice points per tile edge,
+            // wrapped; `seed` decorrelates octaves sharing a frequency.
+            auto vnoiseT = [&](float u, float v, int cells, int seed) {
+                const float x = u * static_cast<float>(cells);
+                const float y = v * static_cast<float>(cells);
+                const int xi = static_cast<int>(std::floor(x));
+                const int yi = static_cast<int>(std::floor(y));
+                float tx = x - static_cast<float>(xi);
+                float ty = y - static_cast<float>(yi);
+                tx = tx * tx * (3.f - 2.f * tx);
+                ty = ty * ty * (3.f - 2.f * ty);
+                auto at = [&](int ix, int iy) {
+                    return hashf(((ix % cells) + cells) % cells + seed * 7919,
+                                 ((iy % cells) + cells) % cells);
+                };
+                const float a = at(xi, yi), b = at(xi + 1, yi);
+                const float c = at(xi, yi + 1), d = at(xi + 1, yi + 1);
+                return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
+            };
+            std::vector<unsigned char> px(static_cast<size_t>(res) * res * 2);
+            for (int y = 0; y < res; ++y) {
+                const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(res);
+                for (int x = 0; x < res; ++x) {
+                    const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(res);
+                    const float micro = 0.55f * vnoiseT(u, v, 26, 1) +
+                                        0.30f * vnoiseT(u, v, 60, 2) +
+                                        0.15f * vnoiseT(u, v, 132, 3);
+                    const float nf = 0.62f * vnoiseT(u, v, 10, 4) +
+                                     0.38f * vnoiseT(u, v, 23, 5);
+                    const float lace = 1.f - std::fabs(nf - 0.5f) * 2.f;
+                    const size_t i = (static_cast<size_t>(y) * res + x) * 2;
+                    px[i + 0] = static_cast<unsigned char>(std::lround(std::clamp(micro, 0.f, 1.f) * 255.f));
+                    px[i + 1] = static_cast<unsigned char>(std::lround(std::clamp(lace, 0.f, 1.f) * 255.f));
+                }
+            }
+            return px;
+        }
+
+        void createFoamDetailImage_() {
+            constexpr int kRes = 512;
+            const auto tile = generateFoamDetailTile_(kRes);
+            // LINEAR + size>1 → createSampledImage2D builds the full mip
+            // chain (blit cascade) and a trilinear/aniso REPEAT sampler.
+            foamDetailImage = createSampledImage2D(
+                    /*w*/ kRes, /*h*/ kRes,
+                    VK_FORMAT_R8G8_UNORM,
+                    tile.data(), tile.size(),
+                    VK_FILTER_LINEAR,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    "foamDetail (512x512 RG8 bubbles+lace, mipped)");
+        }
+
         // 1×1 R32F dummy used at binding 32 when no DisplacedMesh is in the
         // scene. closest_hit gates on pc.oceanFineTileSize > 0 so the sampler
         // result is unread; the descriptor still needs a valid view/sampler
@@ -9827,7 +9929,7 @@ namespace threepp {
             // for material lookup, UV for texture sampling on the primary).
             // Always present in the layout; raygen gates use on the hybrid
             // push-constant bit.
-            std::array<VkDescriptorSetLayoutBinding, 45> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 46> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -10145,6 +10247,15 @@ namespace threepp {
             bindings[44].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[44].descriptorCount = 1;
             bindings[44].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+            // Binding 45 — baked tileable foam detail (RG8, mipped). Static
+            // for the renderer's lifetime; closest_hit samples it in the foam
+            // block (R = bubbles, G = lace) instead of evaluating procedural
+            // value noise per pixel. Mirrors deferred binding 34.
+            bindings[45].binding = 45;
+            bindings[45].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[45].descriptorCount = 1;
+            bindings[45].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -10511,7 +10622,7 @@ namespace threepp {
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             ps[3].descriptorCount = totalSets * 7;// bindings 3,4,10,14 (existing) + 15,16 (photon) + 21 (meshMovedBits)
             ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures + 5 + 1 + 1 + 1);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF) + bindings 22-26 (hybrid gbuffer attachments incl. UV) + binding 27 (blue noise tile) + binding 32 (ocean fine-cascade height) + binding 44 (world-space foam)
+            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures + 5 + 1 + 1 + 1 + 1);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF) + bindings 22-26 (hybrid gbuffer attachments incl. UV) + binding 27 (blue noise tile) + binding 32 (ocean fine-cascade height) + binding 44 (world-space foam) + binding 45 (foam detail tile)
 
             VkDescriptorPoolCreateInfo ci{};
             ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -11101,7 +11212,21 @@ namespace threepp {
                     wOceanFoam.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                     wOceanFoam.pImageInfo = &oceanFoamInfo;
 
-                    std::array<VkWriteDescriptorSet, 45> writes{
+                    // Binding 45 — baked tileable foam detail (static, mipped,
+                    // SHADER_READ_ONLY for the renderer's lifetime).
+                    VkDescriptorImageInfo foamDetailInfo{};
+                    foamDetailInfo.sampler     = foamDetailImage.sampler;
+                    foamDetailInfo.imageView   = foamDetailImage.view;
+                    foamDetailInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    VkWriteDescriptorSet wFoamDetail{};
+                    wFoamDetail.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wFoamDetail.dstSet = descriptorSets[idx];
+                    wFoamDetail.dstBinding = 45;
+                    wFoamDetail.descriptorCount = 1;
+                    wFoamDetail.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wFoamDetail.pImageInfo = &foamDetailInfo;
+
+                    std::array<VkWriteDescriptorSet, 46> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
                             wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered,
@@ -11114,7 +11239,7 @@ namespace threepp {
                             wAlbedoWrite, wAlbedoRead, wAlbedoSnap,
                             wGiXsWrite, wGiXsRead, wGiNsWrite, wGiNsRead,
                             wGiLoWrite, wGiLoRead,
-                            wOceanFoam};
+                            wOceanFoam, wFoamDetail};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -12289,7 +12414,8 @@ namespace threepp {
                                                denoiseEnabled_, restirDIEnabled_,
                                                deferredVolDensity_, deferredVolAniso_,
                                                deferredStarIntensity_,
-                                               deferredCamDeltaLen_, deferredCamRotAngle_);
+                                               deferredCamDeltaLen_, deferredCamRotAngle_,
+                                               static_cast<float>(glfwGetTime()));
                 gpuTimings_->end(cb, TP_PathTrace, currentFrame);// pathTraceMs = deferred SHADE only
                 // Spatial denoise of the demodulated diffuse-indirect + recombine.
                 // Barrier: the shade wrote sceneHdr + the indirect image (both
