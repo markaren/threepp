@@ -94,6 +94,8 @@ namespace threepp::vulkan {
         // radians) — the reflection history policy needs it because a chase-cam
         // surface (sunroof on a followed car) is screen-stationary (motion
         // vectors ~0) while its view-dependent reflection content slides.
+        // timeSec: wall-clock seconds (frame-rate independent) — drives the
+        // foam-noise drift so its speed doesn't scale with fps.
         void recordDispatch(VkCommandBuffer cb, uint32_t frame,
                             uint32_t width, uint32_t height, uint32_t envMipCount,
                             bool shadows, bool ao, uint32_t frameCounter,
@@ -103,7 +105,8 @@ namespace threepp::vulkan {
                             bool denoise, bool restirDI,
                             float volDensity, float volAniso,
                             float starIntensity,
-                            float camDeltaLen, float camRotAngle);
+                            float camDeltaLen, float camRotAngle,
+                            float timeSec);
 
         // Spatial denoise of the demodulated diffuse-indirect (binding 16) +
         // recombine into sceneHdr. Run AFTER recordDispatch (same descriptor

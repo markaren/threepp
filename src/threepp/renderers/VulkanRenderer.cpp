@@ -440,6 +440,9 @@ namespace threepp {
             uint32_t foamRes      = 0;          // texels per side
             float    foamTileSize = 0.f;        // world extent (m) covered
             VkDescriptorSet foamWorldDS = VK_NULL_HANDLE;
+            // Wall-clock timestamp of the previous foam dispatch — drives the
+            // frame-rate-independent decay push constant (−1 = first frame).
+            double   foamPrevTimeSec = -1.0;
         };
         std::unordered_map<const DisplacedMesh*, std::unique_ptr<DisplacedMeshState>> displacedStates;
 
@@ -3404,12 +3407,13 @@ namespace threepp {
             // World-space foam image. Coverage equals the cascade-0 tile
             // (matches the FFT periodicity, so REPEAT-sampling at any
             // world XZ folds back into the same texture cell). Resolution
-            // 1024² over 1000 m → ~0.98 m per texel, comparable to the
-            // base ocean's vertex spacing. R32F storage so both compute
+            // 2048² over 1000 m → ~0.49 m per texel — fine enough to carry
+            // the cascade-1 whitecap detail foam_world.comp's fine Jacobian
+            // stencil extracts (16 MB R32F). R32F storage so both compute
             // imageLoad/Store and chit linear sampling work without
             // format conversions.
             {
-                state->foamRes      = 1024u;
+                state->foamRes      = 2048u;
                 state->foamTileSize = dm.params.tileSize0;
                 VkImageCreateInfo ici{};
                 ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -3441,8 +3445,8 @@ namespace threepp {
                 vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 check(vkCreateImageView(ctx->device(), &vci, nullptr, &state->foamImage.view),
                       "vkCreateImageView(foamWorld)");
-                ctx->setObjectName(state->foamImage.image, "ocean.foamWorld (1024x1024 R32F)");
-                ctx->setObjectName(state->foamImage.view,  "ocean.foamWorld (1024x1024 R32F)");
+                ctx->setObjectName(state->foamImage.image, "ocean.foamWorld (2048x2048 R32F)");
+                ctx->setObjectName(state->foamImage.view,  "ocean.foamWorld (2048x2048 R32F)");
 
                 // Initial clear to zero + layout transition to GENERAL so the
                 // first foam_world dispatch's imageLoad reads 0 (no foam yet)
@@ -3794,6 +3798,22 @@ namespace threepp {
             // pool's cascade-image bindings without a layout flip; the
             // cascades stay in GENERAL throughout.
             {
+                // Wall-clock foam persistence. The old fixed 0.992/frame tied
+                // the foam half-life to frame rate (≈1.4 s at 60 fps, half
+                // that at 120) — same bug class as the TAA temporal constants.
+                // τ = 2 s reproduces the old look at 60 fps. dt clamped so an
+                // alt-tab / loading stall can't wipe the accumulator in one
+                // frame.
+                const double nowSec = glfwGetTime();
+                float foamDecay = 0.992f;// first frame: no dt reference yet
+                if (st.foamPrevTimeSec >= 0.0) {
+                    const float dt = std::clamp(
+                            static_cast<float>(nowSec - st.foamPrevTimeSec),
+                            0.0f, 0.25f);
+                    foamDecay = std::exp(-dt / 2.0f);
+                }
+                st.foamPrevTimeSec = nowSec;
+
                 vulkan::FoamWorldPipeline::PushConstants fpc{};
                 fpc.disturbAddr    = st.foamDisturbBuffer.address;
                 fpc.foamRes        = st.foamRes;
@@ -3812,7 +3832,7 @@ namespace threepp {
                 fpc.hullCosYaw     = dm.hullExclusion.cosYaw;
                 fpc.forwardSpeed   = dm.wake.enabled ? dm.wake.forwardSpeed : 0.0f;
                 fpc.disturbCount   = disturbCount;
-                fpc.decay          = 0.992f;
+                fpc.decay          = foamDecay;
                 fpc.wakeTrailAddr  = st.wakeTrailBuffer.address;
                 fpc.wakeTrailCount = wakeSampleCount;
                 fpc._pad           = 0;
@@ -12289,7 +12309,8 @@ namespace threepp {
                                                denoiseEnabled_, restirDIEnabled_,
                                                deferredVolDensity_, deferredVolAniso_,
                                                deferredStarIntensity_,
-                                               deferredCamDeltaLen_, deferredCamRotAngle_);
+                                               deferredCamDeltaLen_, deferredCamRotAngle_,
+                                               static_cast<float>(glfwGetTime()));
                 gpuTimings_->end(cb, TP_PathTrace, currentFrame);// pathTraceMs = deferred SHADE only
                 // Spatial denoise of the demodulated diffuse-indirect + recombine.
                 // Barrier: the shade wrote sceneHdr + the indirect image (both

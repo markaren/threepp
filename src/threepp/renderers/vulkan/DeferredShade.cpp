@@ -101,7 +101,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pc{};
         pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pc.offset = 0;
-        pc.size = 60;// 15×u32 (…, volDensity, volAniso, starIntensity, camDelta, camRot)
+        pc.size = 64;// 16×u32 (…, starIntensity, camDelta, camRot, timeSec)
         VkPipelineLayoutCreateInfo plci{};
         plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         plci.setLayoutCount = 1;
@@ -408,14 +408,15 @@ namespace threepp::vulkan {
                                        bool denoise, bool restirDI,
                                        float volDensity, float volAniso,
                                        float starIntensity,
-                                       float camDeltaLen, float camRotAngle) {
+                                       float camDeltaLen, float camRotAngle,
+                                       float timeSec) {
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
         vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 pipeLayout_, 0, 1, &sets_[frame], 0, nullptr);
         const uint32_t flags = (shadows ? 1u : 0u) | (ao ? 2u : 0u) | (denoise ? 4u : 0u)
                              | (restirDI ? 8u : 0u);
         uint32_t emPowerBits, fireflyBits, oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits, starBits,
-                camDeltaBits, camRotBits;
+                camDeltaBits, camRotBits, timeBits;
         std::memcpy(&emPowerBits,   &emissiveTotalPower, sizeof(emPowerBits));
         std::memcpy(&fireflyBits,   &fireflyClamp,       sizeof(fireflyBits));
         std::memcpy(&oceanFineBits, &oceanFineTileSize,  sizeof(oceanFineBits));
@@ -425,10 +426,11 @@ namespace threepp::vulkan {
         std::memcpy(&starBits,      &starIntensity,      sizeof(starBits));
         std::memcpy(&camDeltaBits,  &camDeltaLen,        sizeof(camDeltaBits));
         std::memcpy(&camRotBits,    &camRotAngle,        sizeof(camRotBits));
-        const uint32_t pc[15] = {envMipCount, width, height, flags,
+        std::memcpy(&timeBits,      &timeSec,            sizeof(timeBits));
+        const uint32_t pc[16] = {envMipCount, width, height, flags,
                                  frameCounter, emissiveCount, emPowerBits, fireflyBits,
                                  oceanFineBits, oceanFoamBits, volDensBits, volAnisoBits,
-                                 starBits, camDeltaBits, camRotBits};
+                                 starBits, camDeltaBits, camRotBits, timeBits};
         vkCmdPushConstants(cb, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
         vkCmdDispatch(cb, (width + 7u) / 8u, (height + 7u) / 8u, 1);
     }
