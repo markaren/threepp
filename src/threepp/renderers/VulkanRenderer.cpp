@@ -1163,7 +1163,13 @@ namespace threepp {
         // images. Shares rtDsLayout so a single per-frame descriptor set
         // drives RT raygen, atrous, and finalize.
         std::unique_ptr<vulkan::Denoiser> denoiser_;
-        bool                              denoiseEnabled_ = true;
+        // THREEPP_DENOISE=0 disables denoising from the environment — an A/B
+        // discriminator for "is this artifact shading or temporal/denoise?"
+        // without plumbing a flag through every example.
+        bool denoiseEnabled_ = []() {
+            const char* e = std::getenv("THREEPP_DENOISE");
+            return !(e && e[0] == '0');
+        }();
 
         // ── GPU skinning compute pipeline ──────────────────────────────────
         // Replaces the cpuSkin() loop. One dispatch per skinned mesh per

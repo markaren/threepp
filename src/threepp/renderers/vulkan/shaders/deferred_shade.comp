@@ -1461,6 +1461,16 @@ vec3 hitTex(int texIndex, mat3 uvXform, vec2 uv, vec3 fallback) {
     return fallback * textureLod(albedoMaps[i], (uvXform * vec3(uv, 1.0)).xy, 0.0).rgb;
 }
 
+// Albedo-texture ALPHA at a hit — for alpha-testing cutouts and weighting
+// blend surfaces along secondary rays (the queries run force-opaque, so no
+// any-hit ever evaluates alpha for us). 1.0 when untextured, matching the
+// gbuffer screen-door (factor-only opacity routes through transmission).
+float hitTexAlpha(int texIndex, mat3 uvXform, vec2 uv) {
+    if (texIndex < 0) return 1.0;
+    const int i = clamp(texIndex, 0, int(kMaxMaterialTextures) - 1);
+    return textureLod(albedoMaps[i], (uvXform * vec3(uv, 1.0)).xy, 0.0).a;
+}
+
 // GGX NDF importance-sampled microfacet half-vector around N (alpha=roughness²).
 // Tight cone at r→0, wide at high r. Plain NDF (not VNDF) sampling — cheap and
 // fine across the moderate roughness range we use. The caller frame-jitters the
@@ -1563,20 +1573,35 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
         const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
         const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
         const float  tHit   = rayQueryGetIntersectionTEXT(rq, true);
+        const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
+        vec3 hitN; vec2 hitUv;
+        fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
 
-        // Blend surfaces (alphaCutoff < 0, no transmission — text decals, alpha
-        // quads): pass straight through. Shading them as opaque painted the
-        // decal's full quad into reflections/refractions as a dark plate. The
-        // tint is skipped (decals hug their receiver, which dominates the ray).
-        // Burns one of the bounce budget — fine, stacked decals are rare.
-        if (hm.alphaCutoff < 0.0 && hm.transmission <= 0.0) {
+        // Cutout (MASK): the query runs force-opaque, so alpha-test here —
+        // sub-cutoff texels pass through (mirrors gbuffer.frag / shadow_anyhit).
+        // Without this a masked plane behind glass shaded fully opaque,
+        // painting its transparent regions as a solid wall.
+        if (hm.alphaCutoff > 0.0 &&
+            hitTexAlpha(hm.albedoTexIndex, hm.uvTransform, hitUv) < hm.alphaCutoff) {
             o = o + d * (tHit + 1e-3);
             continue;
         }
 
-        const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
-        vec3 hitN; vec2 hitUv;
-        fetchHit(hitId, primId, bary, w2o, hitN, hitUv);
+        // Blend surfaces (alphaCutoff < 0, no transmission — alpha quads, text
+        // decals): COMPOSITE them src-over along the ray instead of skipping.
+        // Skipping made every blend surface invisible through glass/reflections
+        // (the TransmissionOrderTest "missing alpha blend" failure); shading
+        // them fully opaque painted the whole quad as a dark plate. The texel
+        // alpha weights a diffuse shade, the remainder carries on through.
+        const bool blendThrough = (hm.alphaCutoff < 0.0 && hm.transmission <= 0.0);
+        float hitAlpha = 1.0;
+        if (blendThrough) {
+            hitAlpha = hitTexAlpha(hm.albedoTexIndex, hm.uvTransform, hitUv);
+            if (hitAlpha <= 0.01) {// nothing to composite
+                o = o + d * (tHit + 1e-3);
+                continue;
+            }
+        }
 
         const vec3 hAlbedo = hitTex(hm.albedoTexIndex, hm.uvTransform, hitUv, hm.albedo);
         if (hm.roughness < 0.0) { radiance += tput * hAlbedo; break; }// unlit hit
@@ -1597,7 +1622,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                                       hm.emissive * hm.emissiveIntensity);
         const vec3 hitP = o + d * tHit;
         const vec3 hitDiffInd = sampleEnvLod(hitN, maxLod) + lights.ambient;
-        radiance += tput * shadeDiffuseDirect(hitP, hitN, hitV, hAlbedo, hRough, hMetal,
+        radiance += tput * hitAlpha * shadeDiffuseDirect(hitP, hitN, hitV, hAlbedo, hRough, hMetal,
                                               hEmissive * gReflEmitterScale,
                                               doShadows, hitDiffInd,
                                               hm.sheenColor, hm.sheenRoughness,
@@ -1605,6 +1630,16 @@ vec3 traceRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, float mi
                                               hm.iridescence, hm.iridescenceIOR, hm.iridescenceThicknessNm, seed,
                                               /*addEmissive=*/true,// reflected hit: no per-pixel reservoir → coherent emissiveNEE
                                               /*cheapHit=*/cheapHits);// caller decides (see header comment)
+
+        // Blend hit composited — carry the remaining (1−α) through along the
+        // same ray. No specular continuation for the blend layer itself (its
+        // alpha-weighted diffuse is the visually dominant term).
+        if (blendThrough) {
+            tput *= (1.0 - hitAlpha);
+            if (max(max(tput.r, tput.g), tput.b) < 0.02) break;
+            o = o + d * (tHit + 1e-3);
+            continue;
+        }
 
         const float hitNdotV = max(dot(hitN, hitV), 1e-4);
         const vec3  hitF0 = mix(vec3(0.04) * hm.specularIntensity * hm.specularColor, hAlbedo, hMetal);
@@ -1952,25 +1987,82 @@ vec3 shadeWater(vec3 P, vec3 N, vec3 V, MaterialDesc pm, int instIdx,
     return col;
 }
 
-// Trace a ray and return the HIT GEOMETRY (point/normal/distance) instead of a
-// shaded colour — used by the glass branch to find the refraction exit face and
-// bend the ray a second time. miss=true if the ray escapes.
-void traceHit(vec3 origin, vec3 dir, out vec3 hitP, out vec3 hitN, out float dist, out bool miss) {
-    rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu, origin, 1e-3, dir, 1e30);
-    while (rayQueryProceedEXT(rq)) {}
-    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
-        miss = true; hitP = origin; hitN = vec3(0.0, 1.0, 0.0); dist = 0.0; return;
+// In-glass transit for the refraction path. Marches from the entry point along
+// the refracted ray to find the EXIT INTERFACE (the next transmissive surface —
+// normally the glass's own back face), while handling content embedded inside
+// the volume on the way (TransmissionOrderTest middle column):
+//   • blend surfaces composite src-over into (over, overT),
+//   • cutout surfaces alpha-test (holes pass, solid texels BLOCK),
+//   • opaque surfaces BLOCK — the caller stops the refraction there and lets
+//     the behind-ray shade the blocker instead of mistaking it for an exit
+//     face (which bent the ray with the blocker's normal and never shaded it).
+// miss=true if the ray escapes the scene.
+void traceGlassInterior(vec3 origin, vec3 dir, float maxLod, bool doShadows, inout uint seed,
+                        out vec3 hitP, out vec3 hitN, out float dist, out bool miss, out bool blocked,
+                        inout vec3 over, inout float overT) {
+    vec3  o         = origin;
+    float travelled = 0.0;
+    miss = false; blocked = false;
+    hitP = origin; hitN = vec3(0.0, 1.0, 0.0); dist = 0.0;
+    for (int s = 0; s < 4; ++s) {
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, topAS, gl_RayFlagsOpaqueEXT, 0xFFu, o, 1e-3, dir, 1e30);
+        while (rayQueryProceedEXT(rq)) {}
+        if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+            miss = true; hitP = o; dist = travelled;
+            return;
+        }
+        const int          hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        const MaterialDesc hm     = mats[hitId];
+        const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+        const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+        const float  tHit   = rayQueryGetIntersectionTEXT(rq, true);
+        const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
+        vec2 uv;
+        fetchHit(hitId, primId, bary, w2o, hitN, uv);
+        hitP = o + dir * tHit;
+        dist = travelled + tHit;
+
+        if (hm.transmission > 0.0) return;// exit interface (glass back face / nested glass)
+
+        if (hm.alphaCutoff > 0.0) {// cutout: holes pass, solid texels block
+            if (hitTexAlpha(hm.albedoTexIndex, hm.uvTransform, uv) < hm.alphaCutoff) {
+                o = o + dir * (tHit + 1e-3);
+                travelled += tHit + 1e-3;
+                continue;
+            }
+            blocked = true;
+            return;
+        }
+        if (hm.alphaCutoff < 0.0) {// blend content inside the glass: composite
+            const float a = hitTexAlpha(hm.albedoTexIndex, hm.uvTransform, uv);
+            if (a > 0.01) {
+                vec3 n = hitN;
+                if (dot(n, -dir) < 0.0) n = -n;
+                const vec3 alb     = hitTex(hm.albedoTexIndex, hm.uvTransform, uv, hm.albedo);
+                const vec3 diffInd = sampleEnvLod(n, maxLod) + lights.ambient;
+                over  += overT * a * shadeDiffuseDirect(hitP, n, -dir, alb,
+                                                        clamp(hm.roughness, 0.04, 1.0), clamp(hm.metalness, 0.0, 1.0),
+                                                        hm.emissive * hm.emissiveIntensity,
+                                                        doShadows, diffInd,
+                                                        hm.sheenColor, hm.sheenRoughness,
+                                                        hm.specularIntensity, hm.specularColor,
+                                                        hm.iridescence, hm.iridescenceIOR, hm.iridescenceThicknessNm, seed,
+                                                        /*addEmissive=*/true, /*cheapHit=*/true);
+                overT *= (1.0 - a);
+                if (overT < 0.02) {// effectively solid — nothing left to transmit
+                    blocked = true;
+                    return;
+                }
+            }
+            o = o + dir * (tHit + 1e-3);
+            travelled += tHit + 1e-3;
+            continue;
+        }
+        blocked = true;// embedded opaque content
+        return;
     }
-    miss = false;
-    const int    hitId  = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-    const int    primId = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
-    const vec2   bary   = rayQueryGetIntersectionBarycentricsEXT(rq, true);
-    dist = rayQueryGetIntersectionTEXT(rq, true);
-    const mat4x3 w2o    = rayQueryGetIntersectionWorldToObjectEXT(rq, true);
-    vec2 uvTmp;
-    fetchHit(hitId, primId, bary, w2o, hitN, uvTmp);
-    hitP = origin + dir * dist;
+    blocked = true;// layer budget exhausted — treat the last hit as the blocker
 }
 
 // Refractive glass (CLOSED transmissive mesh — sphere / bottle / goblet, NOT the
@@ -2065,11 +2157,22 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
                 transmitColor = reflectColor;// TIR at the front face
             } else {
                 dIn = normalize(dIn);
-                vec3 exitP, exitN; float inDist; bool exitMiss;
-                traceHit(P - N * SHADOW_EPS, dIn, exitP, exitN, inDist, exitMiss);
+                vec3 exitP, exitN; float inDist; bool exitMiss, blockedInside;
+                vec3  overC = vec3(0.0);
+                float overT = 1.0;
+                traceGlassInterior(P - N * SHADOW_EPS, dIn, maxLod, doShadows, seed,
+                                   exitP, exitN, inDist, exitMiss, blockedInside, overC, overT);
                 vec3 dOut;
                 if (exitMiss) {
                     dOut = dIn; inDist = 0.0;// open/odd geometry — straight through
+                } else if (blockedInside) {
+                    // Opaque content inside the volume: stop the refraction at
+                    // it. Back the origin off so the behind-ray re-hits the
+                    // blocker and traceRadiance shades it (with its own
+                    // cutout/blend handling) — no exit bend through a surface
+                    // the ray never actually leaves.
+                    dOut  = dIn;
+                    exitP = exitP - dIn * (4.0 * SHADOW_EPS);
                 } else {
                     vec3 nb = exitN;
                     if (dot(nb, dIn) < 0.0) nb = -nb;           // orient outward
@@ -2082,7 +2185,11 @@ vec3 shadeGlass(vec3 P, vec3 N, vec3 V, MaterialDesc pm, vec3 albedo,
                 vec3 tint = albedo;
                 if (pm.attenuationDistance > 0.0)
                     tint *= pow(max(pm.attenuationColor, vec3(1e-6)), vec3(inDist / pm.attenuationDistance));
-                transmitColor = behind * tint;
+                // Blend content composited inside the volume layers over the
+                // (remaining) behind term; the glass tint applies to both —
+                // an embedded symbol is seen through the front surface, so it
+                // picks up the glass colour like the PT reference shows.
+                transmitColor = (overC + overT * behind) * tint;
             }
         }
         // Firefly-clamp the glass env contribution — the HDR sun reflected/
