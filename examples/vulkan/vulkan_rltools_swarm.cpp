@@ -22,11 +22,14 @@
 
 #include "threepp/renderers/vulkan/shaders/swarm_rollout.comp.spv.h"// kSwarmRolloutSpv
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <mutex>
 #include <numeric>
 #include <random>
+#include <thread>
 #include <vector>
 
 using namespace threepp;
@@ -197,10 +200,40 @@ int main() {
     seedStates();// the parity dispatch advanced state; reset for training
     vk.upload(stateBuf.buffer, stateHost.data(), stateHost.size() * sizeof(float));
 
-    // ---- learner-facing scratch -----------------------------------------------
-    std::vector<float> obsArr(N_TOTAL * 3), actArr(N_TOTAL), rewArr(N_TOTAL), nObsArr(N_TOTAL * 3);
-    std::vector<unsigned char> truncArr(N_TOTAL);
+    // ---- dedicated learner thread (decoupled from render/rollout) -------------
+    // The render thread does GPU rollout + readback + viz; it hands each transition
+    // batch to this thread, which runs SAC gradient steps flat-out on its own core
+    // (no render contention, no per-frame budget) -> ~2x gradient throughput and a
+    // smooth frame rate. ts stays owned by this single thread (addTransitions+update).
+    std::atomic<bool> running{true};
+    std::mutex batchMutex;
+    bool batchReady = false;
+    std::vector<float> pObs(N_TOTAL * 3), pAct(N_TOTAL), pRew(N_TOTAL), pNObs(N_TOTAL * 3);
+    std::vector<unsigned char> pTrunc(N_TOTAL);
     std::vector<float> returnHistory;
+
+    std::thread learnerThread([&] {
+        std::vector<float> lObs(N_TOTAL * 3), lAct(N_TOTAL), lRew(N_TOTAL), lNObs(N_TOTAL * 3);
+        std::vector<unsigned char> lTrunc(N_TOTAL);
+        while (running.load()) {
+            bool got = false;
+            {
+                std::lock_guard<std::mutex> lock(batchMutex);
+                if (batchReady) {
+                    lObs = pObs;
+                    lAct = pAct;
+                    lRew = pRew;
+                    lNObs = pNObs;
+                    lTrunc = pTrunc;
+                    batchReady = false;
+                    got = true;
+                }
+            }
+            if (got) trainer.addTransitions(lObs.data(), lAct.data(), lRew.data(), lNObs.data(), lTrunc.data(), N_TOTAL);
+            if (!trainer.done()) trainer.update(8);// a chunk, then re-check for fresh data
+            else std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    });
 
     float gradPerSec = 0.f;
     long lastGrad = 0;
@@ -277,24 +310,22 @@ int main() {
         vk.readback2(outBuf.buffer, outHost.data(), outHost.size() * sizeof(float),
                      stateBuf.buffer, stateHost.data(), stateHost.size() * sizeof(float));
 
-        // 3. feed the CPU learner
-        for (int e = 0; e < N_TOTAL; ++e) {
-            obsArr[e * 3] = outHost[e * 9 + 0];
-            obsArr[e * 3 + 1] = outHost[e * 9 + 1];
-            obsArr[e * 3 + 2] = outHost[e * 9 + 2];
-            actArr[e] = outHost[e * 9 + 3];
-            rewArr[e] = outHost[e * 9 + 4];
-            nObsArr[e * 3] = outHost[e * 9 + 5];
-            nObsArr[e * 3 + 1] = outHost[e * 9 + 6];
-            nObsArr[e * 3 + 2] = outHost[e * 9 + 7];
-            truncArr[e] = outHost[e * 9 + 8] > 0.5f ? 1 : 0;
+        // 3. hand the batch to the learner thread (it does add + grad steps on its own core)
+        {
+            std::lock_guard<std::mutex> lock(batchMutex);
+            for (int e = 0; e < N_TOTAL; ++e) {
+                pObs[e * 3] = outHost[e * 9 + 0];
+                pObs[e * 3 + 1] = outHost[e * 9 + 1];
+                pObs[e * 3 + 2] = outHost[e * 9 + 2];
+                pAct[e] = outHost[e * 9 + 3];
+                pRew[e] = outHost[e * 9 + 4];
+                pNObs[e * 3] = outHost[e * 9 + 5];
+                pNObs[e * 3 + 1] = outHost[e * 9 + 6];
+                pNObs[e * 3 + 2] = outHost[e * 9 + 7];
+                pTrunc[e] = outHost[e * 9 + 8] > 0.5f ? 1 : 0;
+            }
+            batchReady = true;
         }
-        trainer.addTransitions(obsArr.data(), actArr.data(), rewArr.data(), nObsArr.data(), truncArr.data(), N_TOTAL);
-
-        // 4. SAC gradient steps within a time budget
-        const auto t0 = std::chrono::steady_clock::now();
-        while (!trainer.done() && std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() < 0.04)
-            trainer.update(1);
 
         // 5. visualize the swarm from the read-back GPU states
         for (int i = 0; i < N_VIS; ++i) {
@@ -337,5 +368,7 @@ int main() {
         ui.render();
     });
 
+    running.store(false);
+    if (learnerThread.joinable()) learnerThread.join();
     return 0;
 }
