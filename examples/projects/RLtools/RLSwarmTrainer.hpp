@@ -31,6 +31,15 @@ namespace rldemo {
         static constexpr int kNumEnvs = 64;// M parallel environments (compile-time)
         static constexpr int kObsDim = 3;
         static constexpr int kActDim = 1;
+        static constexpr int kHidden = 64;// actor MLP hidden width
+        // actor MLP weight count (flattened, per layer: W row-major [out][in], then b[out]):
+        //   3->64, 64->64, 64->2  =  (3*64+64) + (64*64+64) + (2*64+2) = 4546
+        static constexpr int kWeightCount = kObsDim * kHidden + kHidden + kHidden * kHidden + kHidden + 2 * kHidden + 2;
+        static constexpr float kLogStdLo = -20.f, kLogStdHi = 2.f;// sample_and_squash bounds
+
+        // [any thread] Snapshot the actor MLP weights into `out` (kWeightCount floats), in the
+        // layout above — for uploading to a GPU rollout shader. Reads the published snapshot.
+        void extractWeights(float* out) const;
 
         // [collector thread] Batched collection actions for m<=kNumEnvs envs.
         // While in warmup -> uniform random in [-1,1]; afterwards -> stochastic policy

@@ -1,0 +1,105 @@
+#version 450
+// Fused per-environment RL rollout: ONE GPU thread = ONE pendulum environment.
+// Each thread: observe -> actor MLP forward -> sample_and_squash action -> step
+// dynamics + reward -> emit a transition -> advance/reset its episode. The whole
+// rollout for thousands of envs is one dispatch; transitions are read back to a CPU
+// SAC learner (RLSwarmTrainer). The MLP math is a direct port of the CPU-validated
+// forward (3->64 ReLU, 64->64 ReLU, 64->2 identity) + RLtools' sample_and_squash.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform PC {
+    uint n;            // number of environments
+    float dt, maxTorque, maxSpeed, g, l, m;
+    uint episodeLimit; // EPISODE_STEP_LIMIT (200)
+    uint stochastic;   // 1 = sample exploration noise, 0 = deterministic (mean)
+    uint warmup;       // 1 = use noise[] directly as a uniform random action
+} p;
+
+layout(std430, binding = 0) readonly buffer Weights  { float w[]; };     // 4546 flattened actor weights
+layout(std430, binding = 1)          buffer State    { float st[]; };    // n*3: theta, thetaDot, episodeStep
+layout(std430, binding = 2) readonly buffer Noise    { float nz[]; };    // n: N(0,1) (or uniform[-1,1] in warmup)
+layout(std430, binding = 3) readonly buffer Initials { float ini[]; };   // n*2: reset theta0, thetaDot0
+layout(std430, binding = 4)          buffer Outp     { float o[]; };     // n*9: obs(3), action, reward, nextObs(3), trunc
+
+const int H = 64;
+const float PI = 3.14159265358979;
+// flattened weight offsets for 3->64->64->2 (W row-major [out][in], then b[out])
+const int W1 = 0, B1 = 192, W2 = 256, B2 = 4352, W3 = 4416, B3 = 4544;
+
+float angnorm(float x) {
+    float tp = 2.0 * PI;
+    return mod(x + PI, tp) - PI;
+}
+
+void main() {
+    uint e = gl_GlobalInvocationID.x;
+    if (e >= p.n) return;
+
+    float theta = st[e * 3 + 0];
+    float thetaDot = st[e * 3 + 1];
+    int epStep = int(st[e * 3 + 2]);
+
+    float ct = cos(theta), si = sin(theta);
+    float obs0 = ct, obs1 = si, obs2 = thetaDot;
+
+    float action;
+    if (p.warmup == 1u) {
+        action = nz[e];// uniform[-1,1] exploration during warmup
+    } else {
+        float h1[H], h2[H];
+        for (int oo = 0; oo < H; ++oo) {
+            float s = w[B1 + oo]
+                    + w[W1 + oo * 3 + 0] * obs0
+                    + w[W1 + oo * 3 + 1] * obs1
+                    + w[W1 + oo * 3 + 2] * obs2;
+            h1[oo] = s > 0.0 ? s : 0.0;
+        }
+        for (int oo = 0; oo < H; ++oo) {
+            float s = w[B2 + oo];
+            for (int i = 0; i < H; ++i) s += w[W2 + oo * H + i] * h1[i];
+            h2[oo] = s > 0.0 ? s : 0.0;
+        }
+        float mean = w[B3 + 0];
+        float logstd = w[B3 + 1];
+        for (int i = 0; i < H; ++i) {
+            mean += w[W3 + 0 * H + i] * h2[i];
+            logstd += w[W3 + 1 * H + i] * h2[i];
+        }
+        float sd = exp(clamp(logstd, -20.0, 2.0));
+        float noise = (p.stochastic == 1u) ? nz[e] : 0.0;
+        action = tanh(mean + noise * sd);
+    }
+
+    float u = p.maxTorque * clamp(action, -1.0, 1.0);
+    float an = angnorm(theta);
+    float reward = -(an * an + 0.1 * thetaDot * thetaDot + 0.001 * u * u);
+
+    float ntd = thetaDot + (3.0 * p.g / (2.0 * p.l) * si + 3.0 / (p.m * p.l * p.l) * u) * p.dt;
+    ntd = clamp(ntd, -p.maxSpeed, p.maxSpeed);
+    float nth = theta + ntd * p.dt;
+
+    int nep = epStep + 1;
+    float trunc = (nep >= int(p.episodeLimit)) ? 1.0 : 0.0;
+
+    uint b = e * 9u;
+    o[b + 0] = obs0;
+    o[b + 1] = obs1;
+    o[b + 2] = obs2;
+    o[b + 3] = action;
+    o[b + 4] = reward;
+    o[b + 5] = cos(nth);
+    o[b + 6] = sin(nth);
+    o[b + 7] = ntd;
+    o[b + 8] = trunc;
+
+    if (trunc > 0.5) {
+        st[e * 3 + 0] = ini[e * 2 + 0];
+        st[e * 3 + 1] = ini[e * 2 + 1];
+        st[e * 3 + 2] = 0.0;
+    } else {
+        st[e * 3 + 0] = nth;
+        st[e * 3 + 1] = ntd;
+        st[e * 3 + 2] = float(nep);
+    }
+}

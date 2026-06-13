@@ -237,6 +237,23 @@ namespace rldemo {
         for (int i = 0; i < m; ++i) actions[i] = rlt::get(impl_->inferDevice, impl_->detOut, 0, i, 0);
     }
 
+    void RLSwarmTrainer::extractWeights(float* out) const {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        auto& dev = impl_->inferDevice;
+        const auto& mlp = impl_->snapshot.content;// sequential: content = MLP, next_module = sample_and_squash
+        int p = 0;
+        auto emit = [&](const auto& layer, int outDim, int inDim) {
+            for (int o = 0; o < outDim; ++o)
+                for (int i = 0; i < inDim; ++i)
+                    out[p++] = static_cast<float>(rlt::get(dev, layer.weights.parameters, o, i));
+            for (int o = 0; o < outDim; ++o)
+                out[p++] = static_cast<float>(rlt::get(dev, layer.biases.parameters, o));
+        };
+        emit(mlp.input_layer, kHidden, kObsDim);
+        emit(mlp.hidden_layers[0], kHidden, kHidden);
+        emit(mlp.output_layer, 2 * kActDim, kHidden);
+    }
+
     long RLSwarmTrainer::transitionsCollected() const { return impl_->transitions.load(); }
     bool RLSwarmTrainer::pastWarmup() const { return impl_->transitions.load() >= LOOP_CORE_PARAMETERS::N_WARMUP_STEPS_CRITIC; }
     long RLSwarmTrainer::gradientSteps() const { return impl_->gradStep.load(); }

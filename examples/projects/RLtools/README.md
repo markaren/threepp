@@ -52,8 +52,32 @@ RLtools is opt-in (it is fetched only when you ask for it):
 ```bash
 cmake -S . -B build -DTHREEPP_WITH_RLTOOLS=ON
 cmake --build build --target rltools_pendulum   # single-policy preview field
-cmake --build build --target rltools_swarm      # parallel-rollout swarm (64 envs -> 1 learner)
+cmake --build build --target rltools_swarm      # parallel-rollout swarm (64 envs -> 1 learner, CPU)
+# Stage 2 (also needs the Vulkan backend):
+cmake -S . -B build -DTHREEPP_WITH_RLTOOLS=ON -DTHREEPP_WITH_VULKAN=ON
+cmake --build build --target vulkan_rltools_swarm  # GPU rollout (Vulkan compute) -> 1 CPU learner
 ```
+
+## Stage 2 — GPU rollout (Vulkan compute)
+
+`vulkan_rltools_swarm` (`examples/vulkan/`) moves the **rollout onto the GPU**,
+cross-vendor, while the learner stays on the CPU. A single fused compute shader
+([`swarm_rollout.comp`](../../vulkan/rl_swarm/shaders/swarm_rollout.comp)) runs the
+*entire* rollout for every environment in **one dispatch** — one GPU thread per env:
+observe → actor MLP forward (3→64→64→2) → `sample_and_squash` → step dynamics →
+emit a transition + reset. The transitions are read back and fed to the **same,
+unchanged `RLSwarmTrainer`** — only the rollout moved to the GPU. It reuses the
+RF-DETR `VkInfer` compute harness; the actor weights are snapshotted from RLtools
+(`RLSwarmTrainer::extractWeights`) and uploaded each tick.
+
+The GPU forward pass is validated **bit-exact** against the CPU at startup
+(`max |diff| ≈ 4e-8`), and a deterministic-policy learning curve is printed to the
+console so the pipeline is verifiable without watching the window. This is the
+"thousands of envs → one learner" (Isaac-Gym/Brax) pattern, at toy scale and on any
+GPU vendor — the lever NVIDIA's CUDA-only stack can't claim. Honest scope: the CPU
+learner is the bottleneck (the GPU collects far faster than one SAC stream trains),
+and stochastic sampling uses CPU-generated noise uploaded per tick; full on-GPU
+training (backprop) is the unbuilt Stage 3.
 
 `-DTHREEPP_WITH_RLTOOLS=ON` fetches the (pinned) header-only library via
 `FetchContent` and exposes it as the `rltools` interface target. To build against
