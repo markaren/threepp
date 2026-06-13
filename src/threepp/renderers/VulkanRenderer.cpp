@@ -4309,6 +4309,23 @@ namespace threepp {
                 d.transmission = tr->transmission;
                 d.ior          = std::max(1.0f, tr->ior);
                 d.dispersion   = std::max(0.0f, tr->dispersion);
+                // glTF permits transmission + alphaMode BLEND together; alpha
+                // is COVERAGE, independent of the transmission tint, and the
+                // spec composite is α·glassResult + (1−α)·background. Smoked
+                // car windows ship exactly this pattern (BLACK baseColor as
+                // the tint + low alpha): taking the tint alone renders them
+                // opaque-black in both render modes, while GL — which ignores
+                // the transmission extension and plain alpha-blends — shows
+                // the background through. Fold the coverage into the tint,
+                // tint' = mix(1, tint, α): for the dominant straight-through
+                // path this reproduces the blend composite exactly, with no
+                // second blend pass in either pipeline.
+                if (d.transmission > 0.0f && mat->transparent && mat->opacity < 1.0f) {
+                    const float a = std::clamp(mat->opacity, 0.0f, 1.0f);
+                    for (float& c : d.albedo) {
+                        c = (1.0f - a) + a * c;
+                    }
+                }
             }
             // Additive-blend effects (muzzle flashes, sparks, energy glows): the
             // surface GLOWS over the scene rather than occluding/refracting it.

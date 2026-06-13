@@ -44,6 +44,7 @@ int main(int argc, char** argv) {
     int   shotFrames = 240;
     float shotZoom   = 1.f; // <1 = closer (distance scales with it)
     bool  shotFront  = false;// view head-on along the model's thinnest axis (test walls/panels)
+    bool  bare       = false;// skip the demo floor + skeleton helper (tiny/odd-scale models)
     std::string shotAxis;    // explicit --front axis: x, -x, z, -z
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) {
@@ -56,6 +57,10 @@ int main(int argc, char** argv) {
         }
         if (std::strcmp(argv[i], "--zoom") == 0 && i + 1 < argc) {
             shotZoom = static_cast<float>(std::atof(argv[++i]));
+            continue;
+        }
+        if (std::strcmp(argv[i], "--bare") == 0) {
+            bare = true;
             continue;
         }
         if (std::strcmp(argv[i], "--front") == 0) {
@@ -103,17 +108,18 @@ int main(int argc, char** argv) {
         mixer->clipAction(result->animations.front())->play();
     }
 
-    auto skeletonHelper = SkeletonHelper::create(*result->scene);
-    skeletonHelper->materialAs<LineBasicMaterial>()->linewidth = 2;
-    scene->add(skeletonHelper);
+    if (!bare) {
+        auto skeletonHelper = SkeletonHelper::create(*result->scene);
+        skeletonHelper->materialAs<LineBasicMaterial>()->linewidth = 2;
+        scene->add(skeletonHelper);
 
-
-    auto floor = Mesh::create(
-            BoxGeometry::create(10, 0.1f, 10),
-            MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::lightgray)));
-    floor->position.set(0, 0, 0);
-    floor->receiveShadow = true;
-    scene->add(floor);
+        auto floor = Mesh::create(
+                BoxGeometry::create(10, 0.1f, 10),
+                MeshStandardMaterial::create(MeshStandardMaterial::Params{}.color(Color::lightgray)));
+        floor->position.set(0, 0, 0);
+        floor->receiveShadow = true;
+        scene->add(floor);
+    }
 
     if (capturing) {
         // Frame the MODEL (not the whole scene — the helper floor would widen
