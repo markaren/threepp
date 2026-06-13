@@ -240,12 +240,21 @@ namespace island {
 
         // ridged FBM (fold-over of signed noise) = sharp rocky crests
         const float ridge = 1.f - std::abs(2.f * fbm(x * 0.035f, z * 0.035f, 4) - 1.f);
-        // meso relief: creased-slab ridges (λ ≈ 11 m down to ~3.5 m) — real
-        // geometry now that the vertex grid resolves it; the baked normal map
-        // carries only the finer scales (≤ 3 m). Scaled by the mass plan so
-        // the submerged passes stay smooth sills.
-        const float slab = 1.f - std::abs(2.f * fbm(x * 0.09f, z * 0.09f, 3) - 1.f);
-        const float meso = 3.5f * (slab * slab - 0.45f);
+        // meso relief: layered creased-slab ridges carried as REAL geometry by
+        // the dense vertex grid — λ ≈ 11 m slabs, ≈ 4 m ledges, and sub-metre
+        // bumps (≈ 1.8 m and ≈ 0.9 m). Amplitudes are absolute (a ledge is a
+        // ledge, independent of the mountain's height) and stay gentler than
+        // their own wavelength. Scaled by the mass plan so the submerged passes
+        // stay smooth sills; the normal map now carries only the truly
+        // sub-vertex scales (≤ ~0.6 m).
+        const float slab    = 1.f - std::abs(2.f * fbm(x * 0.09f, z * 0.09f, 3) - 1.f);
+        const float slabFn  = 1.f - std::abs(2.f * fbm(x * 0.24f, z * 0.24f, 3) - 1.f);
+        const float bump    = fbm(x * 0.55f + 41.f, z * 0.55f + 17.f, 2);
+        const float grainHi = fbm(x * 1.15f + 7.f, z * 1.15f + 91.f, 2);
+        const float meso = 3.5f * (slab * slab - 0.45f)
+                         + 1.8f * (slabFn * slabFn - 0.45f)
+                         + 0.7f * (bump - 0.5f)
+                         + 0.35f * (grainHi - 0.5f);
         const float crest = (kPeakH * (0.45f + 0.55f * ridge * ridge) + meso) * m;
         // prof=1 mid-ring: passes top out 2 m underwater, islands rise to crest
         return -kSkirt + (crest + kSkirt - 2.f) * prof;
@@ -253,22 +262,28 @@ namespace island {
 
     // Analytic finite-difference normal — seam-consistent (the height field is
     // continuous in angle) and adds sub-vertex shading detail for free. The
-    // 1.2 m radius matches the ~1.4 m vertex grid so the meso slabs shade
-    // correctly instead of being averaged away.
-    Vector3 normalAt(float x, float z, float eps = 1.2f) {
+    // 0.6 m radius matches the denser ~0.4 m vertex grid so the sub-metre
+    // relief shades correctly instead of being averaged away.
+    Vector3 normalAt(float x, float z, float eps = 0.6f) {
         const float dhdx = (heightAt(x + eps, z) - heightAt(x - eps, z)) / (2.f * eps);
         const float dhdz = (heightAt(x, z + eps) - heightAt(x, z - eps)) / (2.f * eps);
         Vector3 n(-dhdx, 1.f, -dhdz);
         return n.normalize();
     }
 
-    // High-frequency rock relief for the baked normal map — creased slabs
-    // (λ ≈ 3 m) plus value-noise grain (λ ≈ 1 m): only the scales below what
-    // the vertex grid carries (the λ ≥ 3.5 m slabs live in heightAt now).
+    // High-frequency rock relief for the baked normal map — layered creased
+    // slabs (λ ≈ 3 m and ≈ 1.3 m), value-noise grain (λ ≈ 1 m) and fine pepper
+    // (λ ≈ 0.5 m and ≈ 0.25 m): only the scales below what the vertex grid
+    // carries (the λ ≥ 3.5 m slabs live in heightAt). The finest octave only
+    // pays off at the doubled normal-map resolution + the tightened gradient
+    // step (`de`) bakeMaps now uses.
     float detailHeight(float x, float z) {
         const float r2 = 1.f - std::abs(2.f * fbm(x * 0.31f + 53.f, z * 0.31f + 17.f, 3) - 1.f);
-        const float g  = fbm(x * 0.9f + 9.f, z * 0.9f + 27.f, 2);
-        return 0.55f * r2 * r2 + 0.10f * g;
+        const float r3 = 1.f - std::abs(2.f * fbm(x * 0.72f + 101.f, z * 0.72f + 61.f, 2) - 1.f);
+        const float g   = fbm(x * 0.9f + 9.f, z * 0.9f + 27.f, 2);
+        const float gf  = fbm(x * 1.9f + 33.f, z * 1.9f + 71.f, 2);
+        const float gff = fbm(x * 4.0f + 5.f, z * 4.0f + 53.f, 2);
+        return 0.50f * r2 * r2 + 0.22f * r3 * r3 + 0.10f * g + 0.05f * gf + 0.03f * gff;
     }
 
     struct BakedMaps {
@@ -278,13 +293,13 @@ namespace island {
     };
 
     // Albedo + tangent-space normal + roughness in the mesh's polar
-    // parameterisation (u = angle, v = radius): one texel ≈ 0.7 m of
-    // coastline, 0.4 m radially. Each texel re-evaluates the height field —
+    // parameterisation (u = angle, v = radius): one texel ≈ 0.13 m of
+    // coastline, 0.11 m radially. Each texel re-evaluates the height field —
     // centre + 4 neighbours give the slope normal AND the Laplacian
     // (crest/hollow) from the same five probes — so every mask tracks the
     // actual geometry. Rows bake in parallel; the pass is a one-off at startup.
     BakedMaps bakeMaps() {
-        const int W = 4096, H = 256;
+        const int W = 20480, H = 1024;
         std::vector<unsigned char> albPx(static_cast<size_t>(W) * H * 4);
         std::vector<unsigned char> nrmPx(static_cast<size_t>(W) * H * 4);
         std::vector<unsigned char> rghPx(static_cast<size_t>(W) * H * 4);
@@ -315,6 +330,7 @@ namespace island {
                 const float tone   = fbm(wx * 0.0045f, wz * 0.0045f, 2); // per-face rock tone, λ ≈ 220 m
                 const float mottle = fbm(wx * 0.05f, wz * 0.05f, 3);     // λ ≈ 20 m
                 const float grain  = fbm(wx * 0.7f + 5.f, wz * 0.7f + 13.f, 2);// λ ≈ 1.4 m
+                const float micro  = fbm(wx * 1.6f + 211.f, wz * 1.6f + 97.f, 2);// λ ≈ 0.6 m
                 const float vegL   = fbm(wx * 0.013f + 31.f, wz * 0.013f, 3);  // veg patches, λ ≈ 75 m
                 const float vegS   = fbm(wx * 0.11f + 7.f, wz * 0.11f + 3.f, 2);// ragged veg edges, λ ≈ 9 m
                 const float warp   = fbm(wx * 0.03f + 71.f, wz * 0.03f + 11.f, 2);
@@ -325,7 +341,8 @@ namespace island {
                 float cr = 0.26f + 0.20f * t;
                 float cg = 0.245f + 0.195f * t;
                 float cb = 0.235f + 0.175f * t;
-                const float speck = (mottle - 0.5f) * 0.14f + (grain - 0.5f) * 0.09f;
+                const float speck = (mottle - 0.5f) * 0.14f + (grain - 0.5f) * 0.09f
+                                  + (micro - 0.5f) * 0.05f;
                 cr += speck;
                 cg += speck;
                 cb += speck * 0.9f;
@@ -379,6 +396,38 @@ namespace island {
                 cg *= alt;
                 cb *= alt;
 
+                // Conifer forest — the signature cover of these slopes. Climbs
+                // steep ground (unlike grass) but sheds off sheer cliff faces;
+                // a coarse stand field + a ragged canopy-edge noise carve
+                // clearings and break the treeline so it never reads as a
+                // contour line. Deep blue-green, varied stand to stand.
+                const float forestStand = fbm(wx * 0.020f + 13.f, wz * 0.020f + 47.f, 3);// λ ≈ 50 m
+                const float forestEdge  = fbm(wx * 0.13f + 61.f, wz * 0.13f + 29.f, 2);  // λ ≈ 8 m
+                const float forest = smoothstepf(0.40f, 0.58f, ny) *
+                                     smoothstepf(1.5f, 4.0f, h) *
+                                     (1.f - smoothstepf(26.f, 36.f, h)) *
+                                     smoothstepf(0.34f, 0.52f, 0.6f * forestStand + 0.4f * forestEdge);
+                cr += (0.045f + 0.030f * forestStand - cr) * forest;
+                cg += (0.135f + 0.060f * forestStand - cg) * forest;
+                cb += (0.050f + 0.020f * forestStand - cb) * forest;
+
+                // Snow — settles on low-angle ground above the snowline and
+                // pools in the concave couloirs (lap > 0) well below it, while
+                // shedding off anything approaching vertical. Faint cool tint
+                // on the ambient-shadowed fields; a patch field keeps the
+                // upper edge ragged instead of a hard ring. At this 55 m skerry
+                // scale snow reads as summit caps + gully streaks, not full
+                // alpine cover — matching a low Norwegian coastal massif.
+                const float snowPatch = fbm(wx * 0.05f + 91.f, wz * 0.05f + 5.f, 2);
+                const float snowSlope = smoothstepf(0.42f, 0.72f, ny);
+                const float snowfield = smoothstepf(26.f, 42.f, h);
+                const float couloir   = std::clamp(lap * 1.4f, 0.f, 1.f) * smoothstepf(16.f, 28.f, h);
+                float snow = snowSlope * std::clamp(std::max(snowfield, couloir), 0.f, 1.f);
+                snow *= 0.6f + 0.4f * smoothstepf(0.35f, 0.65f, snowPatch);
+                cr += (0.92f - cr) * snow;
+                cg += (0.94f - cg) * snow;
+                cb += (0.98f - cb) * snow;
+
                 // algae film straddling the waterline, then the dark wet band
                 const float algae = (1.f - smoothstepf(0.6f, 1.4f, std::abs(h - 0.3f))) * 0.5f;
                 cr += (0.10f - cr) * algae;
@@ -389,12 +438,33 @@ namespace island {
                 cg += (0.095f - cg) * wet;
                 cb += (0.09f - cb) * wet;
 
+                // Snowmelt waterfalls — sparse thin ribbons down the steep
+                // faces. A slow azimuthal selector picks a few fall-lines and
+                // a high-frequency stripe makes each one narrow; both depend
+                // only on the angle, so a ribbon runs unbroken down the face
+                // as the radius row changes. Gated to steep rock between the
+                // splash zone and the snow source above. Bright and slightly
+                // blue; the glossy wet sheen is added in the roughness block.
+                const float fallRegion = smoothstepf(0.60f, 0.82f, fbm(a * 2.5f + 11.f, 4.0f, 2));
+                const float fallStripe = std::pow(std::max(0.f, std::sin(a * 48.f + 6.f * fbm(a * 9.f, 2.f, 2))), 60.f);
+                const float fall = fallRegion * fallStripe *
+                                   smoothstepf(0.30f, 0.55f, 1.f - ny) *
+                                   smoothstepf(4.f, 9.f, h) *
+                                   (1.f - smoothstepf(34.f, 44.f, h));
+                cr += (0.82f - cr) * fall;
+                cg += (0.86f - cg) * fall;
+                cb += (0.92f - cb) * fall;
+
                 // detail normal: world-plane gradient of the relief field,
                 // projected onto the polar tangent frame (T = +u = angular,
                 // B = +v = radial — matches the shader's derivative TBN).
                 // Damped under vegetation: soil and moss smooth micro-relief.
-                const float de = 0.5f;
-                const float damp = 0.8f * (1.f - 0.65f * std::max(grass, heather));
+                // de ≈ the doubled radial texel spacing (~0.11 m) so the
+                // sub-0.5 m octaves of detailHeight resolve instead of being
+                // averaged out.
+                const float de = 0.12f;
+                const float canopy = std::max({grass, heather, forest});
+                const float damp = 0.8f * (1.f - 0.6f * canopy) * (1.f - 0.85f * snow);
                 const float gx = (detailHeight(wx + de, wz) - detailHeight(wx - de, wz)) / (2.f * de) * damp;
                 const float gz = (detailHeight(wx, wz + de) - detailHeight(wx, wz - de)) / (2.f * de) * damp;
                 const float st = -gx * sa + gz * ca;// slope along +u (angular)
@@ -402,10 +472,14 @@ namespace island {
                 const float inv = 1.f / std::sqrt(st * st + sb * sb + 1.f);
 
                 // roughness (.g multiplies material roughness): matte dry
-                // granite, matte vegetation, water-slicked rock turns glossy
+                // granite, matte vegetation, matte conifer canopy, water-
+                // slicked rock turns glossy, bright soft snow, glossy falls
                 float rough = 0.86f + 0.10f * (mottle - 0.5f) - 0.06f * crest;
                 rough += (0.95f - rough) * std::max(grass, heather);
+                rough += (0.93f - rough) * forest;
                 rough += (0.45f - rough) * wet;
+                rough += (0.62f - rough) * snow;
+                rough += (0.38f - rough) * fall;
 
                 const size_t i = (static_cast<size_t>(y) * W + x) * 4;
                 albPx[i + 0] = toByte(cr);
@@ -439,12 +513,14 @@ namespace island {
     }
 
     std::shared_ptr<Mesh> build() {
-        // 2048 angular columns ≈ 1.35 m spacing at mid-ring, 64 radial rows
-        // ≈ 1.7 m — fine enough to resolve the λ ≥ 3.5 m meso slabs in
-        // heightAt. The seam column is duplicated (u = 0 and u = 1) so UVs
-        // never wrap. ~133 K verts / ~262 K tris, static BLAS built once;
-        // rows fill in parallel (≈ 670 K height-field probes).
-        const int NA = 2048, NR = 64;
+        // 8192 angular columns ≈ 0.34 m spacing at mid-ring, 256 radial rows
+        // ≈ 0.43 m — fine enough to carry the new sub-metre relief in heightAt
+        // as real geometry instead of normal-map fakery. The seam column is
+        // duplicated (u = 0 and u = 1) so UVs never wrap. ~2.1 M verts /
+        // ~4.2 M tris, static BLAS built once; rows fill in parallel
+        // (≈ 10 M height-field probes). Cheap for ray tracing (one static
+        // BLAS) and trivial for the deferred raster pass on a modern GPU.
+        const int NA = 8192, NR = 256;
         std::vector<float> pos(static_cast<size_t>(NA + 1) * (NR + 1) * 3);
         std::vector<float> nrm(static_cast<size_t>(NA + 1) * (NR + 1) * 3);
         std::vector<float> uv(static_cast<size_t>(NA + 1) * (NR + 1) * 2);
@@ -752,12 +828,13 @@ int main(int argc, char** argv) {
 
     // ── Headless capture (dev iteration loop) ───────────────────────────────
     //   vulkan_ocean --shot <name.png> [--frames N] [--night] [--pt]
-    //                [--vista] [--close] [--toggle]
+    //                [--vista] [--close] [--island] [--toggle]
     // Fixed aerial camera, N warm-up frames (TAA/denoiser converge), one PNG
     // into <project>/aaa_caps/, exit. --night starts in night mode; --pt
     // captures the path-traced reference instead of the deferred default;
     // --vista frames a high oblique overview (archipelago ring + lighthouse);
     // --close is a near-surface grazing view for surface-artifact hunting;
+    // --island frames a close terrain view of one archipelago island;
     // --toggle starts in day and flips to night mid-run.
     std::string shotPath;
     int  shotFrames = 240;
@@ -765,6 +842,7 @@ int main(int argc, char** argv) {
     bool shotPT     = false;
     bool shotVista  = false;
     bool shotClose  = false;// near-surface grazing view — surface-artifact hunting
+    bool shotIsland = false;// low close-up of the −X archipelago island (terrain-detail capture)
     int  toggleNightAt = 0;// --toggle: start in day, flip to night mid-run (exercises the runtime toggle path)
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
@@ -773,6 +851,7 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--pt") == 0) shotPT = true;
         else if (std::strcmp(argv[i], "--vista") == 0) shotVista = true;
         else if (std::strcmp(argv[i], "--close") == 0) shotClose = true;
+        else if (std::strcmp(argv[i], "--island") == 0) shotIsland = true;
         else if (std::strcmp(argv[i], "--toggle") == 0) toggleNightAt = 60;
     }
     const bool capturing = !shotPath.empty();
@@ -2563,6 +2642,12 @@ int main(int argc, char** argv) {
                 // passes and the far shore all in frame.
                 camera.position.set(300.f, 220.f, 520.f);
                 camera.lookAt(Vector3(0.f, 0.f, -60.f));
+            } else if (shotIsland) {
+                // Low, close view across the water at the −X archipelago
+                // island — frames the forest / treeline / snow / waterfall
+                // banding and the new sub-metre rock relief for detail capture.
+                camera.position.set(-200.f, 15.f, 30.f);
+                camera.lookAt(Vector3(-460.f, 30.f, 10.f));
             } else if (night) {
                 // Night framing: low camera toward the lighthouse + horizon —
                 // sky (stars), beam fan, and lit water all in shot.
