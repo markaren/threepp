@@ -30,7 +30,7 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
     # so two compiles of the same source (e.g. raygen.rgen with/without SER)
     # don't collide. Optional 6th+ args become `-D<MACRO>` flags to
     # glslangValidator.
-    cmake_parse_arguments(ARG "" "VARIANT_SUFFIX" "DEFINES;INCLUDE_DIRS" ${ARGN})
+    cmake_parse_arguments(ARG "" "VARIANT_SUFFIX" "DEFINES" ${ARGN})
 
     get_filename_component(_name "${shader_src}" NAME)
     get_filename_component(_src_dir "${shader_src}" DIRECTORY)
@@ -52,17 +52,6 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
     set(_define_flags "")
     foreach(_d ${ARG_DEFINES})
         list(APPEND _define_flags "-D${_d}")
-    endforeach()
-
-    # extra include dirs for #include inside the shader (e.g. shared single-source
-    # env-dynamics files that also compile as C++). Listed as DEPENDS too so edits
-    # to an included file trigger a recompile.
-    set(_include_flags "")
-    set(_include_deps "")
-    foreach(_dir ${ARG_INCLUDE_DIRS})
-        list(APPEND _include_flags "-I${_dir}")
-        file(GLOB _dir_files "${_dir}/*")
-        list(APPEND _include_deps ${_dir_files})
     endforeach()
 
     # SPIR-V optimization. -Os runs glslang's spirv-opt size recipe (dead-code
@@ -98,12 +87,11 @@ function(compile_vulkan_shader target shader_src var_name out_header_var)
         COMMAND "${GLSLANG_VALIDATOR}" -V --target-env vulkan1.3
                 ${_opt_flags}
                 "-I${_src_dir}"
-                ${_include_flags}
                 ${_define_flags}
                 --vn "${var_name}"
                 "${shader_src}"
                 -o   "${_out_header}"
-        DEPENDS "${shader_src}" ${_extra_deps} ${_include_deps}
+        DEPENDS "${shader_src}" ${_extra_deps}
         COMMENT "Compiling Vulkan shader ${_name} -> ${var_name}"
         VERBATIM)
 

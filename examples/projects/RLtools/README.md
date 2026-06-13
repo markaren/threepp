@@ -30,27 +30,23 @@ C++, and the rendering, HUD and UI are threepp.
 ## A second demo: parallel-rollout swarm (`rltools_swarm`)
 
 `rltools_pendulum` (above) trains on one internal environment and shows a *preview*
-field. `rltools_swarm` is the honest, scaled-up version: a **single** SAC learner is
-fed by a **field of 64 environments stepped in parallel** — the "many envs → one
-learner" pattern that makes GPU RL (Isaac-Gym/Brax) worthwhile, here at toy scale and
-fully cross-platform. **The pendulums you see ARE the training data.** Each frame the
-render thread collects one rollout step for all 64 envs (from the latest policy
-snapshot) and hands the batch to a dedicated learner thread running SAC gradient steps
-flat-out — so the field animates at frame rate while training never blocks it (the same
-threading shape as the GPU demo below, with a CPU forward in place of the dispatch).
-Each env's links are drawn as instanced cylinders with a sphere at every distal joint (a
-pendulum's bob; an acrobot's elbow + tip), and that sphere turns **green the moment the
-env is solved** (`Env::upright`) — so the whole field is a live, at-a-glance "how many
-has the policy cracked" meter (and it honestly shows acrobot *flashing* through the top
+field. `rltools_swarm` is the honest, scaled-up version: a **single** SAC learner is fed
+by a **field of 64 environments stepped in parallel** — the "many envs → one learner"
+pattern, at toy scale and fully cross-platform. **The pendulums you see ARE the training
+data.** Each frame the render thread collects one rollout step for all 64 envs (from the
+latest policy snapshot) and hands the batch to a dedicated learner thread running SAC
+gradient steps flat-out — so the field animates at frame rate while training never blocks
+it. Each env's links are drawn as instanced cylinders with a sphere at every distal joint
+(a pendulum's bob; an acrobot's elbow + tip), and that sphere turns **green the moment the
+env is solved** (`Env::upright`) — so the whole field is a live, at-a-glance "how many has
+the policy cracked" meter (and it honestly shows acrobot *flashing* through the top
 without holding). A **"Policy view" checkbox** swaps the exploratory training field for a
 clean **deterministic** showcase (the no-noise policy), with training continuing in the
 background.
 
-This is Stage 1 (CPU) of a staged plan; the environment dynamics live in a plain
-[`pendulum_env.hpp`](pendulum_env.hpp) and the learner behind
+The environment dynamics live in plain-C++ env headers and the learner behind
 [`RLSwarmTrainer`](RLSwarmTrainer.hpp) only does inference + replay-buffer insertion +
-gradient updates — that boundary is the seam where a **Vulkan-compute rollout** (Stage 2,
-reusing the RF-DETR `VkInfer` GEMM kernels) later plugs in with no learner change.
+gradient updates, so the task is fully decoupled from the learner.
 
 ### Pluggable tasks — swap the pendulum in one line
 
@@ -70,25 +66,6 @@ underactuated — reaches the goal in 100% of episodes), just by switching that 
 Adding a task whose dims aren't a native RLtools env needs one extra mapping in
 `RLSwarmTrainer.cpp`.
 
-### Write the dynamics once — it runs on CPU *and* GPU
-
-The catch with running a rollout on the GPU is normally that the env's dynamics have to
-be written twice — once in C++ (for the learner) and once in GLSL (for the shader) — and
-kept bit-identical by hand, which is a real barrier for anyone who doesn't know GLSL. The
-swarm avoids that: each task's dynamics live **once**, in a single
-[`envdyn/<task>.envdyn`](envdyn/) file written in a small subset that is valid as **both
-C++ and GLSL**. The CPU adapter (`env_*.hpp`) and the GPU rollout shader
-(`swarm_rollout.comp`) both `#include` that one file, so they can't drift.
-
-It's the standard "shared shader source" technique ([`env_dyn_compat.hpp`](envdyn/env_dyn_compat.hpp)
-documents the dialect): by-value struct returns, `const` dims/constants (namespaced in
-C++ so two envs coexist in one TU), `f`-suffixed literals, and two tiny macros
-(`ENVDYN_FN`, `ENVDYN_OUT_ARR`) for the only qualifiers that differ. A cross-check over
-100k random transitions confirms the single source is numerically identical to the
-original hand-written dynamics (step/obs exact; reward within one ULP). So **adding a
-task is: write one `.envdyn` (plain C++-looking math) + a thin adapter — and it runs on
-the CPU learner and compiles to the GPU kernel automatically.** No GLSL authoring.
-
 ## Build
 
 RLtools is opt-in (it is fetched only when you ask for it):
@@ -96,49 +73,12 @@ RLtools is opt-in (it is fetched only when you ask for it):
 ```bash
 cmake -S . -B build -DTHREEPP_WITH_RLTOOLS=ON
 cmake --build build --target rltools_pendulum   # single-policy preview field
-cmake --build build --target rltools_swarm      # parallel-rollout swarm (64 envs -> 1 learner, CPU)
-# Stage 2 (also needs the Vulkan backend):
-cmake -S . -B build -DTHREEPP_WITH_RLTOOLS=ON -DTHREEPP_WITH_VULKAN=ON
-cmake --build build --target vulkan_rltools_swarm  # GPU rollout (Vulkan compute) -> 1 CPU learner
+cmake --build build --target rltools_swarm      # parallel-rollout swarm (64 envs -> 1 learner)
 ```
 
-## Stage 2 — GPU rollout (Vulkan compute)
-
-`vulkan_rltools_swarm` (`examples/vulkan/`) moves the **rollout onto the GPU**,
-cross-vendor, while the learner stays on the CPU. A single fused compute shader
-([`swarm_rollout.comp`](../../vulkan/rl_swarm/shaders/swarm_rollout.comp)) runs the
-*entire* rollout for every environment in **one dispatch** — one GPU thread per env:
-observe → actor MLP forward (3→64→64→2) → `sample_and_squash` → step dynamics →
-emit a transition + reset. The transitions are read back and fed to the **same,
-unchanged `RLSwarmTrainer`** — only the rollout moved to the GPU. It reuses the
-RF-DETR `VkInfer` compute harness; the actor weights are snapshotted from RLtools
-(`RLSwarmTrainer::extractWeights`) and uploaded each tick.
-
-The GPU forward pass is validated **bit-exact** against the CPU at startup
-(`max |diff| ≈ 4e-8`), and a deterministic-policy learning curve is printed to the
-console so the pipeline is verifiable without watching the window. This is the
-"thousands of envs → one learner" (Isaac-Gym/Brax) pattern, at toy scale and on any
-GPU vendor — the lever NVIDIA's CUDA-only stack can't claim. Honest scope: the CPU
-learner is the bottleneck (the GPU collects far faster than one SAC stream trains),
-and stochastic sampling uses CPU-generated noise uploaded per tick; full on-GPU
-training (backprop) is the unbuilt Stage 3.
-
-**The GPU rollout is pluggable too — not capped to one task.** Only the env's
-*dynamics + observation* and its dims are task-specific; the rest of the shader (actor
-MLP forward, `sample_and_squash`, transition emit/reset) is generic. So
-`swarm_rollout.comp` `#include`s the selected task's single-source
-[`envdyn/*.envdyn`](envdyn/) — the **same file the CPU learner compiles** (see "Write the
-dynamics once" above) — and is built to **one SPIR-V variant per task**; the host selects
-the matching variant + dims from the same `using Env = …` line as the CPU swarm. Verified
-end-to-end on the GPU for **both** tasks: pendulum (parity `3.7e-8`, solves) and
-**acrobot** (parity `3.4e-8`, 6-dim obs + 2-link RK4, det score climbs `−399 → −86` —
-swings up), each by flipping that one typedef and rebuilding. The viz renders any task's
-links via instanced cylinders.
-
-`-DTHREEPP_WITH_RLTOOLS=ON` fetches the (pinned) header-only library via
-`FetchContent` and exposes it as the `rltools` interface target. To build against
-a local checkout instead of cloning, add
-`-DFETCHCONTENT_SOURCE_DIR_RL_TOOLS=<path-to-rl-tools>`.
+`-DTHREEPP_WITH_RLTOOLS=ON` fetches the (pinned) header-only library via `FetchContent`
+and exposes it as the `rltools` interface target. To build against a local checkout
+instead of cloning, add `-DFETCHCONTENT_SOURCE_DIR_RL_TOOLS=<path-to-rl-tools>`.
 
 ## Performance / acceleration
 
@@ -185,12 +125,13 @@ Windows.
 ## Architecture
 
 - [`RLPendulumTrainer.hpp`](RLPendulumTrainer.hpp) / [`.cpp`](RLPendulumTrainer.cpp)
-  — a plain-C++ facade. **All** of RLtools' template machinery is confined to the
-  one `.cpp`; the header exposes only `float`/`long`. The render thread reads the
-  policy through a periodically-refreshed snapshot, so the heavy SAC training step
-  stays lock-free and never stalls rendering.
-- [`main.cpp`](main.cpp) — the threepp scene, the (identical) pendulum dynamics,
-  the HUD and the ImGui panel.
+  (single-policy demo) and [`RLSwarmTrainer.hpp`](RLSwarmTrainer.hpp) /
+  [`.cpp`](RLSwarmTrainer.cpp) (parallel-rollout swarm) — plain-C++ facades. **All**
+  of RLtools' template machinery is confined to the `.cpp`; the headers expose only
+  `float`/`long`. The render thread reads the policy through a periodically-refreshed
+  snapshot, so the heavy SAC training step stays lock-free and never stalls rendering.
+- [`main.cpp`](main.cpp) / [`swarm.cpp`](swarm.cpp) — the threepp scenes, the (identical)
+  env dynamics, the HUD and the ImGui panels.
 
 ## Credits
 
