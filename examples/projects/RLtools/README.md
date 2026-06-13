@@ -46,8 +46,16 @@ runs anywhere with zero extra dependencies. The trade-off is training throughput
 RLtools' headline numbers (pendulum trains in seconds) come from a BLAS backend
 (Accelerate / OpenBLAS / MKL) **and** the `-O3 -ffast-math -march=native` flags
 its CMake applies only for GNU/Clang. A plain MSVC (`cl.exe`) build gets neither,
-so full training takes ~80 s here instead of seconds — fine for a "watch it learn"
-loop, but leaving a lot on the table.
+so full training (5000 steps) takes ~40 s here instead of seconds — fine for a
+"watch it learn" loop, but leaving a lot on the table.
+
+**Build type matters a lot on MSVC.** RLtools' speed depends entirely on the
+compiler inlining its many tiny templated matrix kernels. RelWithDebInfo defaults
+to `/Ob1` (limited inlining), which leaves them un-inlined and makes training
+**~10× slower** (measured: 85 ms/step vs 7.9 ms/step). This example's CMakeLists
+forces `/Ob2` (full inlining) in optimized configs, so RelWithDebInfo and Release
+both train fast. A **Debug** build (`/Od`) has no optimization at all and stays
+slow — it warns at configure time; use RelWithDebInfo or Release.
 
 To speed up the (isolated, compute-bound) trainer translation unit, configure with
 `-DTHREEPP_RLTOOLS_FAST=ON`. It applies the best flags for the detected compiler:

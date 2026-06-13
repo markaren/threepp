@@ -148,7 +148,7 @@ int main() {
     auto titleHud = makeHud(14.f, -12.f, 30.f, Color(0x8fe3ff));
     titleHud->setText("RLtools  x  threepp");
     auto subHud = makeHud(14.f, -46.f, 17.f, Color(0xc8d2dc));
-    subHud->setText("Soft Actor-Critic learning Pendulum swing-up, live");
+    subHud->setText("3D pendulum = a live test of the current policy (restarts every ~10s)");
     auto stepHud = makeHud(14.f, -78.f, 20.f, Color(0xffffff));
     auto statusHud = makeHud(14.f, -108.f, 22.f, Color(0xffd23f));
     auto telemetryHud = makeHud(14.f, -140.f, 17.f, Color(0xc8d2dc));
@@ -188,7 +188,7 @@ int main() {
     int episodesDone = 0;
     float lastAction = 0.f;
     std::vector<float> returnHistory;
-    int simSpeed = 1;       // physics-step multiplier (fast-forward the viz)
+    int simSpeed = 1;       // physics-step multiplier (speeds up the view, not training)
     bool nextEpisodeReq = false;
 
     double simAccum = 0.0;
@@ -238,7 +238,10 @@ int main() {
         ImGui::SetNextWindowSize({340, 0}, ImGuiCond_Always);
         ImGui::Begin("RLtools - Soft Actor-Critic", nullptr, ImGuiWindowFlags_NoCollapse);
 
-        ImGui::TextWrapped("A SAC policy is trained from scratch (rl.tools) and drives the pendulum live.");
+        ImGui::TextWrapped("A SAC agent (rl.tools) trains in the background (counted in steps below). "
+                           "The 3D pendulum is a live test of its CURRENT policy, auto-restarted every "
+                           "~10s: it flails early and swings up cleanly once trained. The plot shows each "
+                           "test run's score climbing as it learns.");
         ImGui::Separator();
 
         const long sc = trainer.stepCount();
@@ -247,18 +250,24 @@ int main() {
         ImGui::ProgressBar(lim > 0 ? static_cast<float>(sc) / static_cast<float>(lim) : 0.f,
                            {-1, 0}, (std::to_string(sc) + " / " + std::to_string(lim)).c_str());
         ImGui::Text("Throughput: %.0f steps/s", stepsPerSec);
+        if (trainer.done()) {
+            ImGui::TextColored(ImVec4(0.22f, 0.83f, 0.29f, 1.f), "Converged - policy trained.");
+        } else {
+            const float eta = stepsPerSec > 1.f ? static_cast<float>(lim - sc) / stepsPerSec : 0.f;
+            ImGui::TextColored(ImVec4(1.f, 0.82f, 0.25f, 1.f), "~%.0fs to converge (automatic)", eta);
+        }
         ImGui::Spacing();
 
         ImGui::Text("Angle from upright: %+6.1f deg", angleNormalize(theta) * 180.f / kPi);
         ImGui::Text("Angular velocity : %+6.2f rad/s", thetaDot);
         ImGui::Text("Policy torque     : %+5.2f  (x%.0f Nm)", lastAction, RLPendulumTrainer::kMaxTorque);
-        ImGui::Text("Episode return    : %8.1f", episodeReturn);
-        ImGui::Text("Episodes shown    : %d", episodesDone);
+        ImGui::Text("This run's score  : %8.1f", episodeReturn);
+        ImGui::Text("Test runs shown   : %d", episodesDone);
         ImGui::Spacing();
 
         if (!returnHistory.empty()) {
             ImGui::PlotLines("##returns", returnHistory.data(), static_cast<int>(returnHistory.size()),
-                             0, "episode return", -1700.f, 0.f, {-1, 70});
+                             0, "score per test run (up = better)", -1700.f, 0.f, {-1, 70});
         }
         ImGui::Separator();
 
@@ -270,8 +279,8 @@ int main() {
             returnHistory.clear();
             episodesDone = 0;
         }
-        if (ImGui::Button("Skip to next episode", {-1, 0})) nextEpisodeReq = true;
-        ImGui::SliderInt("Sim speed", &simSpeed, 1, 4, "%dx");
+        if (ImGui::Button("Skip to next episode (view only)", {-1, 0})) nextEpisodeReq = true;
+        ImGui::SliderInt("View speed", &simSpeed, 1, 8, "%dx");
 
         ImGui::End();
     });
@@ -292,10 +301,10 @@ int main() {
     canvas.animate([&] {
         const float dt = clock.getDelta();
 
-        // advance the simulation at the pendulum's native 20 Hz (x simSpeed)
+        // advance the simulation at the pendulum's native 20 Hz (x view speed)
         simAccum += static_cast<double>(dt) * simSpeed;
         int guard = 0;
-        while (simAccum >= RLPendulumTrainer::kDt && guard++ < 16) {
+        while (simAccum >= RLPendulumTrainer::kDt && guard++ < 32) {
             physicsStep();
             simAccum -= RLPendulumTrainer::kDt;
         }
@@ -357,13 +366,13 @@ int main() {
         std::string status;
         Color statusCol;
         if (trainer.done()) {
-            status = "CONVERGED - policy trained";
+            status = "TRAINED - this is the final controller";
             statusCol = Color(0x37d34a);
         } else if (sc < RLPendulumTrainer::warmupSteps()) {
-            status = "WARMUP - random exploration";
+            status = "WARMUP - random actions (it flails)";
             statusCol = Color(0xff9f1c);
         } else {
-            status = "LEARNING...";
+            status = "LEARNING - policy improving live";
             statusCol = Color(0xffd23f);
         }
         statusHud->setText(status);

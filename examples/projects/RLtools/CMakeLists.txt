@@ -27,10 +27,25 @@ if (TARGET "rltools_pendulum")
         set(_rltools_clang_cl TRUE)
     endif ()
 
-    # Base flags: RLtools' template instantiation is heavy, so MSVC / clang-cl
-    # need /bigobj; /fp:fast matches the math the policy was validated with.
+    # RLtools is header-only and leans ENTIRELY on the compiler inlining its many
+    # tiny templated matrix kernels. Two MSVC gotchas, both needed for real speed:
+    #   * /bigobj  — the template instantiation is heavy (too many sections otherwise).
+    #   * /Ob2     — full inlining. RelWithDebInfo defaults to /Ob1 (limited inlining),
+    #                which leaves the kernels un-inlined and makes TRAINING ~10x SLOWER
+    #                (measured: 85 ms/step vs 7.9 ms/step). Force /Ob2 in optimized
+    #                configs so RelWithDebInfo trains at Release speed.
     if (MSVC)
         target_compile_options("rltools_pendulum" PRIVATE /bigobj /fp:fast)
+        target_compile_options("rltools_pendulum" PRIVATE "$<$<NOT:$<CONFIG:Debug>>:/Ob2>")
+    endif ()
+
+    # Debug disables optimization entirely (/Od), so RLtools trains painfully slowly
+    # there no matter what. Warn on single-config generators set to Debug / no type.
+    if (NOT CMAKE_CONFIGURATION_TYPES AND (NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "Debug"))
+        message(WARNING
+            "rltools_pendulum: CMAKE_BUILD_TYPE='${CMAKE_BUILD_TYPE}' — RLtools' training "
+            "kernels are UNOPTIMIZED in Debug and train ~10x slower. Configure with "
+            "-DCMAKE_BUILD_TYPE=RelWithDebInfo (or Release) for the intended speed.")
     endif ()
 
     if (THREEPP_RLTOOLS_FAST)

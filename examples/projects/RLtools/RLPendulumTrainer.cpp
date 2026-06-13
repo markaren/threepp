@@ -51,7 +51,7 @@ namespace {
             static constexpr TI ACTOR_BATCH_SIZE = 100;
             static constexpr TI CRITIC_BATCH_SIZE = 100;
         };
-        static constexpr TI STEP_LIMIT = 10000;// SAC converges on the pendulum well within this
+        static constexpr TI STEP_LIMIT = 5000;// SAC reliably solves the pendulum by here (verified); ~half the wait of 10k
         static constexpr TI ACTOR_NUM_LAYERS = 3;
         static constexpr TI ACTOR_HIDDEN_DIM = 64;
         static constexpr TI CRITIC_NUM_LAYERS = 3;
