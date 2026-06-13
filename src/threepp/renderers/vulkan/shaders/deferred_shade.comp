@@ -1251,10 +1251,23 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
     // estimator noise; the PRIMARY path keeps the exhaustive loops.
     uint  pickIdx = 0xFFFFFFFFu;
     float wPick   = 1.0;
-    if (cheapHit) pickIdx = pickAnalyticLight(P, seed, wPick);
+    // cheapHit (reflection / denoised hits) normally samples ONE analytic light
+    // to keep reflected-hit cost down, leaning on SVGF to average the pick. But
+    // with only a handful of analytic lights that stochastic 1-of-N pick is pure
+    // variance for no real saving — and in VIEW-DEPENDENT reflections SVGF can't
+    // fully average it (the reflection history resets under camera motion), so it
+    // shows up as non-deterministic point/spot-light shimmer on metals. (The
+    // DIFFUSE/primary path is clean precisely because it always loops every
+    // light.) For small light counts, loop them all here too: deterministic,
+    // noise-free, at ~nLights shadow rays per reflected hit — no more than the
+    // exhaustive eval the primary path already runs. Keep the 1-pick only when
+    // there are many lights, where looping all would be the real cost.
+    const uint nLights = lights.dirCount + lights.pointCount + lights.spotCount;
+    const bool pickOne = cheapHit && (nLights > 8u);
+    if (pickOne) pickIdx = pickAnalyticLight(P, seed, wPick);
 
     for (uint i = 0u; i < lights.dirCount; ++i) {
-        if (cheapHit && i != pickIdx) continue;
+        if (pickOne && i != pickIdx) continue;
         const vec3 L = normalize(lights.dirLights[i].direction);
         if (dot(N, L) <= 0.0) continue;
         const float vis = (doShadows ? shadowVis(shadowOrig, L, 1e30) : 1.0) * wPick;
@@ -1263,7 +1276,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
                * lights.dirLights[i].color * vis;
     }
     for (uint i = 0u; i < lights.pointCount; ++i) {
-        if (cheapHit && (lights.dirCount + i) != pickIdx) continue;
+        if (pickOne && (lights.dirCount + i) != pickIdx) continue;
         vec3        toL  = lights.pointLights[i].position - P;
         const float dist = length(toL);
         if (dist < 1e-4) continue;
@@ -1284,7 +1297,7 @@ vec3 shadeDiffuseDirect(vec3 P, vec3 N, vec3 V, vec3 albedo, float roughness,
                * lights.pointLights[i].color * atten * vis;
     }
     for (uint i = 0u; i < lights.spotCount; ++i) {
-        if (cheapHit && (lights.dirCount + lights.pointCount + i) != pickIdx) continue;
+        if (pickOne && (lights.dirCount + lights.pointCount + i) != pickIdx) continue;
         vec3        toL  = lights.spotLights[i].position - P;
         const float dist = length(toL);
         if (dist < 1e-4) continue;
