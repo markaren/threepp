@@ -9,6 +9,7 @@ option(THREEPP_WITH_AUDIO "Build with Audio" ON)
 
 option(THREEPP_WITH_FBX "Build with FBXLoader (OpenFBX)" OFF)
 option(THREEPP_WITH_USD "Build with USDLoader (tinyusdz)" OFF)
+option(THREEPP_WITH_RLTOOLS "Fetch RLtools (header-only deep RL) for the reinforcement-learning example" OFF)
 
 option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 option(THREEPP_WITH_WGPU "Build with WebGPU backend (via wgpu-native)" OFF)

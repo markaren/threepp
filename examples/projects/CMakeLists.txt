@@ -15,3 +15,7 @@ endif ()
 if (THREEPP_WITH_WGPU)
     add_subdirectory(WebTide)
 endif ()
+
+if (TARGET rltools)
+    add_subdirectory(RLtools)
+endif ()

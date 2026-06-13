@@ -41,6 +41,31 @@ if (THREEPP_WITH_USD)
     )
 endif ()
 
+if (THREEPP_WITH_RLTOOLS)
+    message(STATUS "Fetching rl-tools...")
+    FetchContent_Declare(
+        rl_tools
+        GIT_REPOSITORY https://github.com/rl-tools/rl-tools.git
+        GIT_TAG        b32d9985c65a5e098a6bbf190fd994962d288b99  # pinned for reproducible builds
+    )
+    # Populate the source only — do NOT add_subdirectory(rl-tools). RLtools is
+    # header-only, and its CMakeLists runs an autodetect pass that would pull in
+    # optional BLAS/HDF5/CUDA backends (changing the numerics and adding link
+    # dependencies). We want the pure, dependency-free CPU build, so we expose a
+    # minimal INTERFACE target pointing at its include/ directory ourselves.
+    # CMP0169 OLD lets us call FetchContent_Populate directly on CMake 4.x.
+    # For a local checkout: -DFETCHCONTENT_SOURCE_DIR_RL_TOOLS=<dir>.
+    cmake_policy(SET CMP0169 OLD)
+    FetchContent_GetProperties(rl_tools)
+    if (NOT rl_tools_POPULATED)
+        FetchContent_Populate(rl_tools)
+    endif ()
+    add_library(rltools INTERFACE)
+    target_include_directories(rltools INTERFACE "${rl_tools_SOURCE_DIR}/include")
+    target_compile_features(rltools INTERFACE cxx_std_17)
+    add_library(RLtools::headers ALIAS rltools)
+endif ()
+
 if (THREEPP_WITH_FBX)
     message(STATUS "Fetching OpenFBX...")
     FetchContent_Declare(
