@@ -1,14 +1,16 @@
 // Ocean — Vulkan PT demo of FFT-displaced water using DisplacedMesh.
 //
-// Single-cascade Phillips spectrum + GPU IFFT chain feeds vertex positions
+// A three-cascade Phillips spectrum + GPU IFFT chain feeds vertex positions
 // directly into the BLAS each frame; the path tracer's existing transmission
 // BSDF handles refraction, Beer-Lambert absorption, and reflections. A simple
 // sandy floor sits below the surface so caustics from the photon-mapping
 // pass become visible as the sun moves.
 //
-// Phase 1 of the WebTide-style ocean integration. Multi-cascade + foam +
-// procedural sky come later; for now a single 40 m tile + an HDRI sky is
-// enough to validate the geometry pipeline and BLAS-rebuild-per-frame.
+// Built out well past the original single-cascade prototype: foam + Kelvin
+// wake, an adaptive vertex warp that packs density around the vessel, a
+// procedural archipelago ring, a lighthouse with a day/night toggle and a
+// procedural night sky, a maneuvering-model boat (manual + waypoint
+// autopilot) with buoys, plus path-traced LIDAR and a radar HUD.
 
 #include "threepp/audio/Audio.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
@@ -749,11 +751,14 @@ namespace {
 int main(int argc, char** argv) {
 
     // ── Headless capture (dev iteration loop) ───────────────────────────────
-    //   vulkan_ocean --shot <name.png> [--frames N] [--night] [--pt] [--vista]
+    //   vulkan_ocean --shot <name.png> [--frames N] [--night] [--pt]
+    //                [--vista] [--close] [--toggle]
     // Fixed aerial camera, N warm-up frames (TAA/denoiser converge), one PNG
     // into <project>/aaa_caps/, exit. --night starts in night mode; --pt
     // captures the path-traced reference instead of the deferred default;
-    // --vista frames a high oblique overview (archipelago ring + lighthouse).
+    // --vista frames a high oblique overview (archipelago ring + lighthouse);
+    // --close is a near-surface grazing view for surface-artifact hunting;
+    // --toggle starts in day and flips to night mid-run.
     std::string shotPath;
     int  shotFrames = 240;
     bool startNight = false;
@@ -820,9 +825,11 @@ int main(int argc, char** argv) {
     // one BLAS build; the lighthouse beam grazes its cliffs at night.
     scene.add(island::build());
 
-    // Ocean surface. PlaneGeometry with kSubdiv segments → kFftSize²
-    // vertices. The DisplacedMesh detects the grid dimension at first-frame
-    // init and runs the FFT/displace pipeline against it.
+    // Ocean surface. PlaneGeometry with kSubdiv segments → (kFftSize/2)² =
+    // 512² vertices (mesh density is decoupled from the kFftSize² wave
+    // field — see kSubdiv above). The DisplacedMesh detects the grid
+    // dimension at first-frame init and runs the FFT/displace pipeline
+    // against it.
     auto oceanGeo = PlaneGeometry::create(kPlaneEdge, kPlaneEdge, kSubdiv, kSubdiv);
     oceanGeo->rotateX(-math::PI / 2.f);
     auto oceanMat = makeOceanMaterial();
@@ -1319,12 +1326,11 @@ int main(int argc, char** argv) {
     const float navCurveLength = navCurve.getLength();
 
     // ── Buoys at each waypoint ─────────────────────────────────────────────
-    // Loaded from a GLB containing 5 distinct buoy meshes as top-level
-    // children. We use the GLB's scene root as the buoy group directly
-    // (Object3D doesn't expose the owning shared_ptr for children, so the
-    // cleanest reparent is to keep them where they are and just reposition
-    // each in place). Root transform is reset so the children's local
-    // positions ARE their world positions.
+    // A named group is pulled from the buoy GLB and cloned; its children are
+    // the buoy variants, one placed at each waypoint. The clone keeps the
+    // GLB's Z-up→Y-up rotation and 0.1 scale on its root, so positioning a
+    // child at a world-space waypoint goes through the inverse root matrix
+    // (see the GLB-success branch below).
     //
     // Fallback path: if the GLB is missing or doesn't expose ≥5 children,
     // emissive spheres take over. Path tracer's emissive NEE picks them up
@@ -2156,10 +2162,10 @@ int main(int argc, char** argv) {
         // The Kelvin V-wake additionally uses a historical sample trail
         // so it traces the boat's actual sailed curve through turns,
         // instead of snapping to the current heading every frame. Trail
-        // is maintained below: emit at 4 Hz, drop samples older than 10 s,
-        // cap at the renderer's kMaxWakeSamples (32) — that's ~8 s of
-        // path at 4 m/s ≈ 32 m of wake trail, comfortably longer than
-        // the Kelvin 5·λ visible decay (~50 m at v=4 m/s).
+        // is maintained below: emit at 10 Hz (or every 1 m travelled),
+        // drop samples older than 6 s, cap at the renderer's
+        // kMaxWakeSamples (64) — that's ~36 m of path at the 6 m/s cruise,
+        // enough curved history to bend the V-wake through the boat's turns.
         ocean->wake.forwardSpeed = bs.forwardSpeed;
         {
             constexpr float kEmitInterval     = 0.10f;     // 10 Hz cadence
