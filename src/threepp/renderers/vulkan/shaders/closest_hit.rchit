@@ -49,14 +49,13 @@ layout(buffer_reference, scalar) readonly buffer VertexBuf { float p[]; };
 layout(buffer_reference, scalar) readonly buffer NormalBuf  { float n[]; };
 layout(buffer_reference, scalar) readonly buffer IndexBuf   { uint  i[]; };
 layout(buffer_reference, scalar) readonly buffer UvBuf      { float u[]; };
-layout(buffer_reference, scalar) readonly buffer FoamBuf    { float f[]; };
 
 struct GeometryDesc {
     uint64_t vertexAddress;
     uint64_t normalAddress;
     uint64_t indexAddress;
     uint64_t uvAddress;// 0 == no UV attribute
-    uint64_t foamAddress;// 0 == no foam attribute (per-vertex float; written by water_displace.comp for ocean meshes)
+    uint64_t foamAddress;// 0/1 flag (not an address): 1 == FFT-displaced ocean surface (world-space foam + thin-shell water)
     uint64_t prevVertexAddress;// previous frame deformed positions (skinned/displaced); == vertexAddress for static
     uint     indexed;
     uint     _pad;

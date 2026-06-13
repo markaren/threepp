@@ -214,7 +214,12 @@ namespace threepp {
             Buffer index;// .handle == VK_NULL_HANDLE for non-indexed geometry
             Buffer normal;
             Buffer uv;   // .handle == VK_NULL_HANDLE if geometry has no "uv"
-            Buffer foam; // .handle == VK_NULL_HANDLE unless this is an FFT-displaced ocean mesh
+            // True for FFT-displaced ocean meshes — gates world-space foam +
+            // thin-shell water shading downstream (surfaced to the shaders via
+            // GeometryDesc::foamAddress, now a 0/1 flag). Replaces a per-vertex
+            // foam buffer that used to live on the BLAS but was never read for
+            // its contents — only its non-null address served as this marker.
+            bool isOceanSurface = false;
             // Previous-frame vertex positions, allocated for skinned + displaced
             // meshes only. Used by the hybrid raster prepass to compute
             // per-vertex motion vectors (skinned/displaced surfaces deform
@@ -1797,7 +1802,6 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->index);
                 destroyBuffer(ctx->allocator(), rec->normal);
                 destroyBuffer(ctx->allocator(), rec->uv);
-                destroyBuffer(ctx->allocator(), rec->foam);
                 destroyBuffer(ctx->allocator(), rec->prevVertex);
                 destroyBuffer(ctx->allocator(), rec->blasScratch);
             }
@@ -1820,7 +1824,6 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->index);
                 destroyBuffer(ctx->allocator(), rec->normal);
                 destroyBuffer(ctx->allocator(), rec->uv);
-                destroyBuffer(ctx->allocator(), rec->foam);
                 destroyBuffer(ctx->allocator(), rec->prevVertex);
                 destroyBuffer(ctx->allocator(), rec->blasScratch);
             }
@@ -1844,7 +1847,6 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->index);
                 destroyBuffer(ctx->allocator(), rec->normal);
                 destroyBuffer(ctx->allocator(), rec->uv);
-                destroyBuffer(ctx->allocator(), rec->foam);
                 destroyBuffer(ctx->allocator(), rec->prevVertex);
                 destroyBuffer(ctx->allocator(), rec->blasScratch);
             }
@@ -1859,7 +1861,6 @@ namespace threepp {
                     destroyBuffer(ctx->allocator(), rec->index);
                     destroyBuffer(ctx->allocator(), rec->normal);
                     destroyBuffer(ctx->allocator(), rec->uv);
-                    destroyBuffer(ctx->allocator(), rec->foam);
                     destroyBuffer(ctx->allocator(), rec->prevVertex);
                     destroyBuffer(ctx->allocator(), rec->blasScratch);
                 }
@@ -1886,7 +1887,6 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->index);
                 destroyBuffer(ctx->allocator(), rec->normal);
                 destroyBuffer(ctx->allocator(), rec->uv);
-                destroyBuffer(ctx->allocator(), rec->foam);
                 destroyBuffer(ctx->allocator(), rec->prevVertex);
                 destroyBuffer(ctx->allocator(), rec->blasScratch);
             }
@@ -3244,30 +3244,13 @@ namespace threepp {
             if (!blas) return nullptr;
             blas->liveCheck = dm.geometry();
 
-            // Per-vertex foam coverage (1 float per vertex, [0..1]). Written
-            // by water_displace.comp via Jacobian of horizontal displacement;
-            // read by closest_hit.rchit to lerp roughness/albedo toward white
-            // where the surface is folding (= breaking-wave whitewater).
-            blas->foam = createBuffer(
-                    ctx->allocator(), ctx->device(),
-                    VkDeviceSize(vertexCount) * sizeof(float),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-                            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    VMA_MEMORY_USAGE_AUTO);
-            // Zero-init: water_displace.comp's decay path reads the previous
-            // frame's foam at this vertex and computes max(foamInstant, prev*
-            // decay). Without explicit init the first frame reads undefined
-            // GPU memory — often huge garbage values (NaN/Inf bit patterns
-            // or just large floats) that decay slowly enough to be visible
-            // for tens of seconds, bilinear-interpolated across the plane's
-            // triangulation as a hex-tile foam pattern.
-            {
-                VkCommandBuffer cb = beginOneShot();
-                vkCmdFillBuffer(cb, blas->foam.handle, 0, VK_WHOLE_SIZE, 0);
-                endAndSubmitOneShot(cb);
-            }
+            // FFT-displaced ocean mesh: mark it so the chit / deferred passes
+            // apply world-space foam + thin-shell water shading. Foam itself
+            // lives in a world-space texture built by foam_world.comp, so the
+            // only per-mesh state needed here is this "is water" marker (it
+            // used to be a zero-filled per-vertex foam buffer, read solely for
+            // its non-null address — the contents were dead).
+            blas->isOceanSurface = true;
 
             // Per-vertex previous-pose buffer for hybrid raster motion vec.
             // Same size as vertex (R32G32B32 SFLOAT × vertexCount). Filled
@@ -3786,7 +3769,6 @@ namespace threepp {
             vulkan::WaterDisplacePipeline::PushConstants pc{};
             pc.posOut       = st.blas->vertex.address;
             pc.normOut      = st.blas->normal.address;
-            pc.foamOut      = st.blas->foam.address;
             pc.disturbAddr  = st.foamDisturbBuffer.address;
             pc.vertexCount  = st.vertexCount;
             pc.gridDim      = st.gridDim;
@@ -5365,7 +5347,6 @@ namespace threepp {
                         destroyBuffer(ctx->allocator(), rec->index);
                         destroyBuffer(ctx->allocator(), rec->normal);
                         destroyBuffer(ctx->allocator(), rec->uv);
-                        destroyBuffer(ctx->allocator(), rec->foam);
                         destroyBuffer(ctx->allocator(), rec->prevVertex);
                         destroyBuffer(ctx->allocator(), rec->blasScratch);
                         it = blasCache.erase(it);
@@ -5389,7 +5370,6 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), rec->index);
                             destroyBuffer(ctx->allocator(), rec->normal);
                             destroyBuffer(ctx->allocator(), rec->uv);
-                            destroyBuffer(ctx->allocator(), rec->foam);
                             destroyBuffer(ctx->allocator(), rec->prevVertex);
                         }
                         // Return the skinning descriptor set to the pool, else
@@ -5424,7 +5404,6 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), rec->index);
                             destroyBuffer(ctx->allocator(), rec->normal);
                             destroyBuffer(ctx->allocator(), rec->uv);
-                            destroyBuffer(ctx->allocator(), rec->foam);
                             destroyBuffer(ctx->allocator(), rec->prevVertex);
                         }
                         if (it->second->tetDescSet != VK_NULL_HANDLE) {
@@ -5447,7 +5426,6 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), rec->index);
                             destroyBuffer(ctx->allocator(), rec->normal);
                             destroyBuffer(ctx->allocator(), rec->uv);
-                            destroyBuffer(ctx->allocator(), rec->foam);
                             destroyBuffer(ctx->allocator(), rec->prevVertex);
                         }
                         if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->scratchA.view, nullptr);
@@ -5471,7 +5449,6 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), rec->index);
                             destroyBuffer(ctx->allocator(), rec->normal);
                             destroyBuffer(ctx->allocator(), rec->uv);
-                            destroyBuffer(ctx->allocator(), rec->foam);
                             destroyBuffer(ctx->allocator(), rec->prevVertex);
                         }
                         it = morphedMeshStates.erase(it);
@@ -5563,7 +5540,6 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), old->index);
                             destroyBuffer(ctx->allocator(), old->normal);
                             destroyBuffer(ctx->allocator(), old->uv);
-                            destroyBuffer(ctx->allocator(), old->foam);
                             destroyBuffer(ctx->allocator(), old->prevVertex);
                             destroyBuffer(ctx->allocator(), old->blasScratch);
                             blasCache.erase(it);
@@ -5611,7 +5587,7 @@ namespace threepp {
                 gdesc.normalAddress = recPtr->normal.address;
                 gdesc.indexAddress  = recPtr->index.address;
                 gdesc.uvAddress     = recPtr->uv.address;// 0 if no UV attribute
-                gdesc.foamAddress   = recPtr->foam.address;// 0 unless this is an FFT-displaced ocean mesh
+                gdesc.foamAddress   = recPtr->isOceanSurface ? 1ull : 0ull;// 0/1 flag (not an address); 1 == FFT-displaced ocean surface
                 // prevVertexAddress: skinned + displaced meshes have a real
                 // prev-vertex buffer (different from current). Static meshes
                 // get vertex.address as a fallback — the chit reads the same

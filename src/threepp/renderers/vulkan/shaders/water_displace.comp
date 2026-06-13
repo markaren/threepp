@@ -37,7 +37,6 @@ layout(set = 0, binding = 5) uniform sampler2D displace2;
 
 layout(buffer_reference, scalar) buffer PosBuf  { float v[]; };
 layout(buffer_reference, scalar) buffer NormBuf { float v[]; };
-layout(buffer_reference, scalar) buffer FoamBuf { float v[]; };
 
 // Per-disturbance point source — splatted into the per-vertex foam buffer
 // with a gaussian falloff. Populated by host code each frame from boat
@@ -68,7 +67,6 @@ layout(buffer_reference, scalar) buffer WakeTrailBuf { WakeSample s[]; };
 layout(push_constant, scalar) uniform Pc {
     PosBuf   posOut;
     NormBuf  normOut;
-    uint64_t foamAddr;
     uint64_t disturbAddr;
     uint64_t wakeTrailAddr; // 0 = no historical trail (falls back to current pose)
     uint    vertexCount;
@@ -484,10 +482,11 @@ void main() {
     pc.normOut.v[i * 3u + 2u] = n.z;
 
     // Foam used to be computed per-vertex right here (Jacobian + wake
-    // formulas + disturbance splats + persistence decay, all written to
-    // pc.foamAddr). It now lives in a world-space texture built by
-    // foam_world.comp, so foam stays pinned to world XZ regardless of
-    // mesh layout. The per-vertex foam buffer + the wakeFoam variable
-    // computed above are kept inert for the moment — the next cleanup
-    // pass strips them along with the foamAddr push-constant.
+    // formulas + disturbance splats + persistence decay) and written to a
+    // per-vertex foam buffer via pc.foamAddr. Foam now lives in a world-
+    // space texture built by foam_world.comp, pinned to world XZ regardless
+    // of mesh layout, so both the buffer and the foamAddr push-constant are
+    // gone. The wakeFoam value computed above is now write-only dead code
+    // (the compiler DCEs it); a later micro-cleanup can drop it along with
+    // the now-unused disturbAddr / DisturbBuf plumbing in this shader.
 }
