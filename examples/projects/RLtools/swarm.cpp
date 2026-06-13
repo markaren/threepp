@@ -123,80 +123,111 @@ int main() {
     auto stepHud = makeHud(-74.f, 19.f, Color(0xffffff));
     auto statusHud = makeHud(-103.f, 21.f, Color(0xffd23f));
 
-    // ---- trainer + background collect/train thread ----------------------------
+    // ---- trainer + dedicated learner thread (same shape as the GPU swarm) ------
+    // The render thread collects one rollout step for all M envs EVERY FRAME (so the
+    // field animates smoothly at frame rate) and hands the transition batch to a
+    // dedicated learner thread that runs SAC gradient steps flat-out on its own core.
+    // The rollout reads a periodically-published weight snapshot (extractWeights), so it
+    // never races the learner's update() — exactly the GPU swarm, with a CPU forward in
+    // place of the compute dispatch.
     Trainer trainer(1);
     std::atomic<bool> running{true};
-    std::vector<typename Env::State> published(M);
-    std::mutex pubMutex;
+    std::atomic<int> uprightCount{0};
     std::vector<float> returnHistory;
     std::mutex histMutex;
-    std::atomic<int> uprightCount{0};
 
-    std::thread trainerThread([&] {
-        using clk = std::chrono::steady_clock;
-        std::mt19937 rng(7), evalRng(99);
-        std::vector<typename Env::State> states(M), next(M);
-        std::vector<int> epStep(M);
+    // transition batch handed render-thread -> learner-thread
+    std::mutex batchMutex;
+    bool batchReady = false;
+    std::vector<float> pObs(M * O), pAct(M * A), pRew(M), pNObs(M * O);
+    std::vector<unsigned char> pTrunc(M);
+
+    std::thread learnerThread([&] {
+        std::vector<float> lObs(M * O), lAct(M * A), lRew(M), lNObs(M * O);
+        std::vector<unsigned char> lTrunc(M);
+        while (running.load()) {
+            bool got = false;
+            {
+                std::lock_guard<std::mutex> lock(batchMutex);
+                if (batchReady) {
+                    lObs = pObs;
+                    lAct = pAct;
+                    lRew = pRew;
+                    lNObs = pNObs;
+                    lTrunc = pTrunc;
+                    batchReady = false;
+                    got = true;
+                }
+            }
+            if (got) trainer.addTransitions(lObs.data(), lAct.data(), lRew.data(), lNObs.data(), lTrunc.data(), M);
+            if (!trainer.done()) trainer.update(8);
+            else std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    });
+
+    // stochastic actor forward on the CPU (same math as swarm_rollout.comp):
+    // raw = [mean(A), logStd(A)]; the env states live on the render thread.
+    auto actorRaw = [](const float* w, const float* obs, float* raw) {
+        constexpr int H = Trainer::kHidden;
+        const float* W1 = w;
+        const float* b1 = w + H * O;
+        const float* W2 = b1 + H;
+        const float* b2 = W2 + H * H;
+        const float* W3 = b2 + H;
+        const float* b3 = W3 + (2 * A) * H;
+        float h1[H], h2[H];
+        for (int o = 0; o < H; ++o) {
+            float s = b1[o];
+            for (int i = 0; i < O; ++i) s += W1[o * O + i] * obs[i];
+            h1[o] = s > 0 ? s : 0;
+        }
+        for (int o = 0; o < H; ++o) {
+            float s = b2[o];
+            for (int i = 0; i < H; ++i) s += W2[o * H + i] * h1[i];
+            h2[o] = s > 0 ? s : 0;
+        }
+        for (int o = 0; o < 2 * A; ++o) {
+            float s = b3[o];
+            for (int i = 0; i < H; ++i) s += W3[o * H + i] * h2[i];
+            raw[o] = s;
+        }
+    };
+
+    std::vector<typename Env::State> states(M), next(M);
+    std::vector<int> epStep(M);
+    std::vector<float> obs(M * O), nextObs(M * O), act(M * A), rew(M), weightsHost(Trainer::kWeightCount);
+    std::vector<unsigned char> truncv(M);
+    std::mt19937 rng(7), evalRng(99);
+    std::normal_distribution<float> gauss(0.f, 1.f);
+    std::uniform_real_distribution<float> uni(-1.f, 1.f);
+    {
         std::uniform_int_distribution<int> phase(0, Env::kEpisodeSteps - 1);
         for (int i = 0; i < M; ++i) {
             states[i] = Env::sampleInitial(rng);
             epStep[i] = phase(rng);
         }
-        std::vector<float> obs(M * O), nextObs(M * O), act(M * A), rew(M);
-        std::vector<unsigned char> trunc(M);
-        long tick = 0;
-        while (running.load()) {
-            const auto t0 = clk::now();
-            for (int i = 0; i < M; ++i) Env::observe(states[i], &obs[i * O]);
-            trainer.rolloutActions(obs.data(), act.data(), M);
-            int up = 0;
-            for (int i = 0; i < M; ++i) {
-                rew[i] = Env::reward(states[i], &act[i * A]);
-                next[i] = Env::step(states[i], &act[i * A]);
-                Env::observe(next[i], &nextObs[i * O]);
-                ++epStep[i];
-                trunc[i] = epStep[i] >= Env::kEpisodeSteps ? 1 : 0;
-                if (Env::upright(states[i])) ++up;
-            }
-            trainer.addTransitions(obs.data(), act.data(), rew.data(), nextObs.data(), trunc.data(), M);
-            {
-                std::lock_guard<std::mutex> lock(pubMutex);
-                published = states;
-            }
-            for (int i = 0; i < M; ++i) {
-                if (trunc[i]) { states[i] = Env::sampleInitial(rng); epStep[i] = 0; }
-                else states[i] = next[i];
-            }
-            uprightCount.store(up);
+    }
 
-            while (!trainer.done() && std::chrono::duration<double>(clk::now() - t0).count() < 0.045)
-                trainer.update(1);
-
-            if (++tick % 20 == 0) {
-                // deterministic eval: mean per-episode return over a few fresh envs
-                constexpr int E = 8;
-                std::vector<typename Env::State> s(E);
-                for (auto& st : s) st = Env::sampleInitial(evalRng);
-                std::vector<float> o(E * O), a(E * A), ret(E, 0.f);
-                for (int k = 0; k < Env::kEpisodeSteps; ++k) {
-                    for (int i = 0; i < E; ++i) Env::observe(s[i], &o[i * O]);
-                    trainer.policyActionsDet(o.data(), a.data(), E);
-                    for (int i = 0; i < E; ++i) {
-                        ret[i] += Env::reward(s[i], &a[i * A]);
-                        s[i] = Env::step(s[i], &a[i * A]);
-                    }
-                }
-                std::lock_guard<std::mutex> lock(histMutex);
-                returnHistory.push_back(std::accumulate(ret.begin(), ret.end(), 0.f) / E);
-                if (returnHistory.size() > 300) returnHistory.erase(returnHistory.begin());
+    auto deterministicEval = [&]() -> float {
+        constexpr int E = 8;
+        std::vector<typename Env::State> s(E);
+        for (auto& st : s) st = Env::sampleInitial(evalRng);
+        std::vector<float> o(E * O), a(E * A), ret(E, 0.f);
+        for (int k = 0; k < Env::kEpisodeSteps; ++k) {
+            for (int i = 0; i < E; ++i) Env::observe(s[i], &o[i * O]);
+            trainer.policyActionsDet(o.data(), a.data(), E);
+            for (int i = 0; i < E; ++i) {
+                ret[i] += Env::reward(s[i], &a[i * A]);
+                s[i] = Env::step(s[i], &a[i * A]);
             }
-            std::this_thread::sleep_until(t0 + std::chrono::milliseconds(50));
         }
-    });
+        return std::accumulate(ret.begin(), ret.end(), 0.f) / E;
+    };
 
     float gradPerSec = 0.f;
     long lastGrad = 0;
     double spsTimer = 0.0;
+    long frame = 0;
 
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
         const auto vp = ImGui::GetMainViewport();
@@ -236,21 +267,58 @@ int main() {
         renderer->setSize(size);
     });
 
-    std::vector<typename Env::State> snap(M);
     Quaternion q;
     Clock clock;
     canvas.animate([&] {
         const float dt = clock.getDelta();
-        {
-            std::lock_guard<std::mutex> lock(pubMutex);
-            snap = published;
+
+        // 1. collect one rollout step for all M envs from the latest policy snapshot
+        trainer.extractWeights(weightsHost.data());
+        const bool warm = !trainer.pastWarmup();
+        for (int i = 0; i < M; ++i) Env::observe(states[i], &obs[i * O]);
+        for (int i = 0; i < M; ++i) {
+            float raw[2 * A];
+            actorRaw(weightsHost.data(), &obs[i * O], raw);
+            for (int a = 0; a < A; ++a) {
+                if (warm) act[i * A + a] = uni(rng);
+                else {
+                    const float sd = std::exp(std::clamp(raw[A + a], Trainer::kLogStdLo, Trainer::kLogStdHi));
+                    act[i * A + a] = std::tanh(raw[a] + gauss(rng) * sd);
+                }
+            }
+            rew[i] = Env::reward(states[i], &act[i * A]);
+            next[i] = Env::step(states[i], &act[i * A]);
+            Env::observe(next[i], &nextObs[i * O]);
+            ++epStep[i];
+            truncv[i] = epStep[i] >= Env::kEpisodeSteps ? 1 : 0;
         }
-        // place each env's links + end-effector spheres from its published state
+
+        // 2. hand the batch to the learner thread (it does add + grad steps on its own core)
+        {
+            std::lock_guard<std::mutex> lock(batchMutex);
+            pObs = obs;
+            pAct = act;
+            pRew = rew;
+            pNObs = nextObs;
+            pTrunc = truncv;
+            batchReady = true;
+        }
+
+        // 3. advance the env states (reset truncated) + count solved
+        int up = 0;
+        for (int i = 0; i < M; ++i) {
+            if (truncv[i]) { states[i] = Env::sampleInitial(rng); epStep[i] = 0; }
+            else states[i] = next[i];
+            if (Env::upright(states[i])) ++up;
+        }
+        uprightCount.store(up);
+
+        // 4. place each env's links + end-effector spheres from its live state
         const Quaternion qi;// identity (spheres don't rotate)
         for (int r = 0; r < Env::kRods; ++r) {
             for (int i = 0; i < M; ++i) {
                 float x0, y0, x1, y1;
-                Env::rod(snap[i], r, x0, y0, x1, y1);
+                Env::rod(states[i], r, x0, y0, x1, y1);
                 const float ax = cellX[i] + x0, ay = kBaseY + y0;
                 const float bx = cellX[i] + x1, by = kBaseY + y1;
                 const float ddx = bx - ax, ddy = by - ay;
@@ -261,7 +329,7 @@ int main() {
                 links[r]->setMatrixAt(i, m);
 
                 // sphere at the distal joint; show it in the rest- or goal-colored mesh
-                const bool solved = Env::upright(snap[i]);
+                const bool solved = Env::upright(states[i]);
                 Matrix4 show, hide;
                 show.compose({bx, by, cellZ[i]}, qi, {1.f, 1.f, 1.f});
                 hide.compose({bx, by, cellZ[i]}, qi, {0.f, 0.f, 0.f});// collapsed -> invisible
@@ -273,6 +341,15 @@ int main() {
             bobsGoal[r]->instanceMatrix()->needsUpdate();
         }
 
+        // 5. learning curve: deterministic eval every ~20 frames once learning
+        if (++frame % 20 == 0 && trainer.pastWarmup()) {
+            const float r = deterministicEval();
+            std::lock_guard<std::mutex> lock(histMutex);
+            returnHistory.push_back(r);
+            if (returnHistory.size() > 300) returnHistory.erase(returnHistory.begin());
+        }
+
+        // 6. metrics + HUD
         spsTimer += dt;
         if (spsTimer >= 0.4) {
             const long sc = trainer.gradientSteps();
@@ -291,6 +368,6 @@ int main() {
     });
 
     running.store(false);
-    if (trainerThread.joinable()) trainerThread.join();
+    if (learnerThread.joinable()) learnerThread.join();
     return 0;
 }
