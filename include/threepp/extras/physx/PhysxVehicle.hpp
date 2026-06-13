@@ -198,6 +198,32 @@ namespace threepp {
             return wheelRigidBody1dStates_[i].rotationSpeed;
         }
 
+        // Longitudinal tire slip ratio (0 = pure rolling; ±1 = full spin/lock).
+        float tireLongitudinalSlip(int i) const {
+            return tireSlipStates_[i].slips[::physx::vehicle2::PxVehicleTireDirectionModes::eLONGITUDINAL];
+        }
+
+        // Lateral tire slip (≈ tan of the slip angle; 0.1 ≈ 6° of drift).
+        float tireLateralSlip(int i) const {
+            return tireSlipStates_[i].slips[::physx::vehicle2::PxVehicleTireDirectionModes::eLATERAL];
+        }
+
+        // Suspension compression (m): 0 = full droop … suspensionTravelDist = bottomed out.
+        float suspensionJounce(int i) const {
+            return suspensionStates_[i].jounce;
+        }
+
+        // Compression rate (m/s). Spikes on curb strikes / jump landings —
+        // useful for impact effects (audio thuds, camera shake).
+        float suspensionJounceSpeed(int i) const {
+            return suspensionStates_[i].jounceSpeed;
+        }
+
+        // True when the wheel's road query found ground within suspension reach.
+        bool wheelGrounded(int i) const {
+            return roadGeometryStates_[i].hitState;
+        }
+
         Gear gear() const { return static_cast<Gear>(transmissionCommands_.gear); }
 
         const Settings& settings() const { return settings_; }

@@ -1,6 +1,8 @@
 // Drivable PxVehicle2 demo. WASD steer/throttle/brake, R toggles gear,
-// SPACE handbrake, Backspace respawns. Vehicle chassis + 4 wheels follow
-// the PhysX state via PhysxWorld bindings + per-wheel local poses.
+// SPACE handbrake, H horn, Backspace respawns. Vehicle chassis + 4 wheels
+// follow the PhysX state via PhysxWorld bindings + per-wheel local poses.
+// Procedural audio (road/wind beds, impact one-shots, horn, reverse beeper)
+// driven by PhysX telemetry — see VehicleSounds.hpp.
 
 #include "threepp/threepp.hpp"
 
@@ -14,6 +16,7 @@
 #include "threepp/renderers/WgpuRenderer.hpp"
 
 #include "LandRoverScene.hpp"
+#include "VehicleSounds.hpp"
 
 #include <PxPhysicsAPI.h>
 
@@ -156,11 +159,41 @@ int main() {
         }
     }
 
+    // Tail lamps: drive the MODEL's own lamp meshes. The Evoque ships
+    // dedicated "lights_position_back" (tail/brake) and "lights_reverse"
+    // groups that share one emissive "glows" material — clone it per group so
+    // brake and reverse can flare independently. emissiveIntensity 1 is the
+    // model's stock glow; the render loop boosts it on brake / reverse gear.
+    std::shared_ptr<MeshStandardMaterial> brakeLightMat, reverseLightMat;
+    carBody->traverseType<Mesh>([&](Mesh& m) {
+        auto retag = [&m](std::shared_ptr<MeshStandardMaterial>& slot) {
+            if (!slot) {
+                if (auto* orig = m.materialAs<MeshStandardMaterial>()) {
+                    slot = std::dynamic_pointer_cast<MeshStandardMaterial>(orig->clone());
+                }
+            }
+            if (slot) m.setMaterial(slot);
+        };
+        if (m.name.find("lights_position_back") != std::string::npos) {
+            retag(brakeLightMat);
+        } else if (m.name.find("lights_reverse") != std::string::npos) {
+            retag(reverseLightMat);
+        }
+    });
+
+    // Procedural audio rig: road/wind beds, impact one-shots, horn + reverse
+    // beeper (engine/tire loops deliberately omitted — see VehicleSounds.hpp).
+    vehiclesound::VehicleSounds sounds;
+    sounds.init();
+    bool audioOn = true;
+    float audioVol = 0.7f;
+
     // Input state
     bool throttleDown = false, brakeDown = false, handbrakeDown = false;
     bool driverView = false;
     bool steerLeftDown = false, steerRightDown = false;
     bool respawnPressed = false;
+    bool hornDown = false;
 
     auto keyToggle = [&](Key key, bool down) {
         switch (key) {
@@ -182,6 +215,9 @@ int main() {
                 break;
             case Key::SPACE:
                 handbrakeDown = down;
+                break;
+            case Key::H:
+                hornDown = down;
                 break;
             default:
                 break;
@@ -222,6 +258,7 @@ int main() {
         ImGui::Text("Steer  : A / D");
         ImGui::Text("Gear   : R (toggle Fwd/Rev)");
         ImGui::Text("Brake  : SPACE (handbrake)");
+        ImGui::Text("Horn   : H");
         ImGui::Text("Respawn: BACKSPACE");
         ImGui::Separator();
         const float speedKmh = vehicle.forwardSpeed() * 3.6f;
@@ -232,11 +269,19 @@ int main() {
         ImGui::Text("Gear    : %s", gearTxt);
         ImGui::ProgressBar(throttleCmd, {-1, 0}, "Throttle");
         ImGui::ProgressBar(brakeCmd, {-1, 0}, "Brake");
+        ImGui::ProgressBar(sounds.rpm(), {-1, 0}, "RPM");
+        ImGui::ProgressBar(sounds.skidLevel(), {-1, 0}, "Tire slip");
         ImGui::SliderFloat("Steer", &steerCmd, -1.f, 1.f, "%.2f");
         if (ImGui::Button("Respawn")) respawnPressed = true;
         ImGui::Separator();
         ImGui::Checkbox("PhysX debug", &physxDebug->visible);
         ImGui::Checkbox("Driver view (V)", &driverView);
+        if (sounds.ok) {
+            ImGui::Checkbox("Audio", &audioOn);
+            ImGui::SliderFloat("Volume", &audioVol, 0.f, 1.f, "%.2f");
+        } else {
+            ImGui::TextDisabled("Audio unavailable.");
+        }
 
         ImGui::End();
     });
@@ -300,7 +345,7 @@ int main() {
     // a forward-facing camera mounted on the chassis, producing a 3D point
     // cloud. The cloud is visualised as Points and rendered into the lower-left
     // viewport from the sensor's POV.
-    auto* glRenderer = dynamic_cast<GLRenderer*>(renderer.get());
+    auto glRenderer = dynamic_cast<GLRenderer*>(renderer.get());
     std::unique_ptr<DepthSensor> depthSensor;
     std::shared_ptr<Points> depthPoints;
     constexpr unsigned int kSensorW = 256, kSensorH = 192;
@@ -396,6 +441,31 @@ int main() {
         camera->lookAt(camTarget);
 
         Camera& activeCamera = driverView ? static_cast<Camera&>(*povCamera) : static_cast<Camera&>(*camera);
+
+        // Audio: engine/skid/road/wind loops + impact one-shots, listener on
+        // the active camera.
+        sounds.update(dt, vehicle, throttleCmd, hornDown, activeCamera,
+                      audioOn ? audioVol : 0.f);
+
+        // Lamp states (the model's own lamp meshes, materials cloned above).
+        // Only bump the material version when the state actually flips —
+        // needsUpdate() re-uploads the material on some backends.
+        {
+            static bool brakeWasOn = false, reverseWasOn = false;
+            const bool brakeOn = brakeCmd > 0.05f;
+            const bool reverseOn = vehicle.gear() == PhysxVehicle::Gear::Reverse;
+            if (brakeLightMat && brakeOn != brakeWasOn) {
+                brakeWasOn = brakeOn;
+                brakeLightMat->emissiveIntensity = brakeOn ? 5.f : 1.f;
+                brakeLightMat->needsUpdate();
+            }
+            if (reverseLightMat && reverseOn != reverseWasOn) {
+                reverseWasOn = reverseOn;
+                reverseLightMat->emissiveIntensity = reverseOn ? 5.f : 1.f;
+                reverseLightMat->needsUpdate();
+            }
+        }
+
         renderer->render(*scene, activeCamera);
 
         // Depth-sensor inset overlay (GL only). Scan from the chassis-mounted
@@ -429,18 +499,19 @@ int main() {
 
             auto& sensorCam = depthSensor->getCamera();
 
+            // Viewport/scissor are on the Renderer base, so the inset works on
+            // both backends. The base has no getViewport — restore the full
+            // canvas viewport explicitly (nothing else customises it here).
             const auto canvasSize = canvas.size();
             const int w = canvasSize.width() / 5;
             const int h = canvasSize.height() / 5;
             constexpr int margin = 5;
-            Vector4 oldVp;
-            glRenderer->getViewport(oldVp);
-            glRenderer->setScissorTest(true);
-            glRenderer->setViewport(margin, margin, w, h);
-            glRenderer->setScissor(margin, margin, w, h);
-            glRenderer->render(*sensorScene, sensorCam);
-            glRenderer->setScissorTest(false);
-            glRenderer->setViewport(oldVp);
+            renderer->setScissorTest(true);
+            renderer->setViewport(margin, margin, w, h);
+            renderer->setScissor(margin, margin, w, h);
+            renderer->render(*sensorScene, sensorCam);
+            renderer->setScissorTest(false);
+            renderer->setViewport(0, 0, canvasSize.width(), canvasSize.height());
         }
 
         ui.render();
