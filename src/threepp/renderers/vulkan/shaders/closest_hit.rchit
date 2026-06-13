@@ -1535,7 +1535,17 @@ void main() {
             const ivec2 sz = imageSize(prevGbufImage);
             if (sz.x > 0 && sz.y > 0) {
                 const bool camMoving = (pc.motionFlags & 2u) != 0u;
-                const uint spMax     = camMoving ? 2u : 5u;
+                // Convergence-skip: once a STATIC pixel's temporal history is
+                // deep, its DI estimate is converged and further spatial taps
+                // only add cost — and risk re-injecting the very fireflies
+                // spatial reuse can perpetuate (see the W-cap at line ~1522).
+                // Skip taps past FC 48 (matches WGPU's spatial-skip threshold).
+                // FC is halved on motion and the camMoving branch keeps 2 taps
+                // regardless, so moving pixels are unaffected. spMax==0 ⇒ the
+                // loop below no-ops; the pre-spatial snapshot/persist (above)
+                // and finalizeReservoir (below) still run unchanged.
+                const float pixelFc  = imageLoad(accumImage, ivec2(gl_LaunchIDEXT.xy)).w;
+                const uint spMax     = camMoving ? 2u : (pixelFc > 48.0 ? 0u : 5u);
                 const float mTarget  = 20.0;
                 const uint curMeshId = uint(gl_InstanceCustomIndexEXT) + 1u;
                 const float curDistC = length(hitPos - pcam.prevCamPosX.xyz);
@@ -2258,7 +2268,13 @@ void main() {
                 // M ≈ 10-15, and with M-cap-per-tap of 4, 3 taps already
                 // reach ~12-16 added M. Saves ~40% of spatial cost for
                 // imperceptible variance increase on the cases GI targets.
-                const uint  spMax    = camMoving ? 1u : 3u;
+                // Convergence-skip: drop spatial taps once the pixel is
+                // converged. GI converges slower than DI, so this uses the
+                // SAME FC>100 threshold the GI fast-path (above) treats as
+                // converged — not DI's 48 — to avoid under-converging indirect
+                // light. spMax==0 ⇒ loop no-ops; finalizeGiReservoir still runs.
+                const float pixelFc  = imageLoad(accumImage, ivec2(gl_LaunchIDEXT.xy)).w;
+                const uint  spMax    = camMoving ? 1u : (pixelFc > 100.0 ? 0u : 3u);
                 const float mTarget  = 20.0;
                 const uint  curMeshId = uint(gl_InstanceCustomIndexEXT) + 1u;
                 const float curDistC  = length(hitPos - pcam.prevCamPosX.xyz);
