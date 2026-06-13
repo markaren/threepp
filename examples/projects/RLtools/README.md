@@ -35,9 +35,12 @@ fed by a **field of 64 environments stepped in parallel** — the "many envs →
 learner" pattern that makes GPU RL (Isaac-Gym/Brax) worthwhile, here at toy scale and
 fully cross-platform. **The pendulums you see ARE the training data.** A background
 thread steps all 64 envs, feeds their transitions to the learner, and runs SAC
-gradient steps; the render thread only visualizes the published states. A checkbox
-flips the field to a **deterministic showcase** (the latest policy with no exploration
-noise — the clean view).
+gradient steps; the render thread only visualizes the published states. Each env's
+links are drawn as instanced cylinders with a sphere at every distal joint (a
+pendulum's bob; an acrobot's elbow + tip), and that sphere turns **green the moment
+the env is solved** (`Env::upright`) — so the whole field becomes a live, at-a-glance
+"how many has the policy cracked" meter (and it honestly shows acrobot *flashing*
+through the top without holding).
 
 This is Stage 1 (CPU) of a staged plan; the environment dynamics live in a plain
 [`pendulum_env.hpp`](pendulum_env.hpp) and the learner behind
@@ -59,9 +62,28 @@ sampleInitial`, and its renderable links (`rod(...)`). The learner is templated 
 env's dims (`RLSwarmTrainer<OBS, ACT>`), and the viz renders any env's links via
 instanced cylinders — so nothing else changes. Verified: the **same** architecture
 trains **pendulum** (obs 3, 1 link — solves 100%) and **acrobot** (obs 6, 2 links,
-underactuated — reaches the goal in ~97% of episodes), just by switching that typedef.
+underactuated — reaches the goal in 100% of episodes), just by switching that typedef.
 Adding a task whose dims aren't a native RLtools env needs one extra mapping in
 `RLSwarmTrainer.cpp`.
+
+### Write the dynamics once — it runs on CPU *and* GPU
+
+The catch with running a rollout on the GPU is normally that the env's dynamics have to
+be written twice — once in C++ (for the learner) and once in GLSL (for the shader) — and
+kept bit-identical by hand, which is a real barrier for anyone who doesn't know GLSL. The
+swarm avoids that: each task's dynamics live **once**, in a single
+[`envdyn/<task>.envdyn`](envdyn/) file written in a small subset that is valid as **both
+C++ and GLSL**. The CPU adapter (`env_*.hpp`) and the GPU rollout shader
+(`swarm_rollout.comp`) both `#include` that one file, so they can't drift.
+
+It's the standard "shared shader source" technique ([`env_dyn_compat.hpp`](envdyn/env_dyn_compat.hpp)
+documents the dialect): by-value struct returns, `const` dims/constants (namespaced in
+C++ so two envs coexist in one TU), `f`-suffixed literals, and two tiny macros
+(`ENVDYN_FN`, `ENVDYN_OUT_ARR`) for the only qualifiers that differ. A cross-check over
+100k random transitions confirms the single source is numerically identical to the
+original hand-written dynamics (step/obs exact; reward within one ULP). So **adding a
+task is: write one `.envdyn` (plain C++-looking math) + a thin adapter — and it runs on
+the CPU learner and compiles to the GPU kernel automatically.** No GLSL authoring.
 
 ## Build
 
@@ -98,16 +120,16 @@ and stochastic sampling uses CPU-generated noise uploaded per tick; full on-GPU
 training (backprop) is the unbuilt Stage 3.
 
 **The GPU rollout is pluggable too — not capped to one task.** Only the env's
-*dynamics + observation* (~15 lines of GLSL) and its dims are task-specific; the rest of
-the shader (actor MLP forward, `sample_and_squash`, transition emit/reset) is generic.
-So `swarm_rollout.comp` carries each task behind `#ifdef ENV_*` and is compiled to **one
-SPIR-V variant per task**; the host selects the matching variant + dims from the same
-`using Env = …` line as the CPU swarm. Each `Env` writes its dynamics twice — once in
-C++ (`env_*.hpp`, for the learner + viz) and once in GLSL (for the GPU rollout) — since
-there's no automatic C++→GLSL path. Verified end-to-end on the GPU for **both** tasks:
-pendulum (parity `3.7e-8`, solves) and **acrobot** (parity `3.4e-8`, 6-dim obs + 2-link
-RK4 in the shader, det score climbs `−399 → −90` — swings up), each by flipping that one
-typedef and rebuilding. The viz renders any task's links via instanced cylinders.
+*dynamics + observation* and its dims are task-specific; the rest of the shader (actor
+MLP forward, `sample_and_squash`, transition emit/reset) is generic. So
+`swarm_rollout.comp` `#include`s the selected task's single-source
+[`envdyn/*.envdyn`](envdyn/) — the **same file the CPU learner compiles** (see "Write the
+dynamics once" above) — and is built to **one SPIR-V variant per task**; the host selects
+the matching variant + dims from the same `using Env = …` line as the CPU swarm. Verified
+end-to-end on the GPU for **both** tasks: pendulum (parity `3.7e-8`, solves) and
+**acrobot** (parity `3.4e-8`, 6-dim obs + 2-link RK4, det score climbs `−399 → −86` —
+swings up), each by flipping that one typedef and rebuilding. The viz renders any task's
+links via instanced cylinders.
 
 `-DTHREEPP_WITH_RLTOOLS=ON` fetches the (pinned) header-only library via
 `FetchContent` and exposes it as the `rltools` interface target. To build against

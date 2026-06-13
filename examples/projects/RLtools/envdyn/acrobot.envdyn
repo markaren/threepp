@@ -1,0 +1,122 @@
+// acrobot.envdyn -- SINGLE-SOURCE acrobot dynamics (Sutton/Gym 2-link underactuated
+// swing-up, RK4), valid as BOTH C++ and GLSL. Same dialect as pendulum.envdyn; see
+// env_dyn_compat.hpp. Consumed by env_acrobot.hpp (CPU) and swarm_rollout.comp (GPU).
+
+const int ENV_OBS_DIM = 6;
+const int ENV_ACT_DIM = 1;
+const int ENV_STATE_DIM = 4;
+const int ENV_EPISODE_STEPS = 200;
+
+struct EnvState {
+    float t1;
+    float t2;
+    float d1;
+    float d2;
+};
+struct EnvObs {
+    float v[ENV_OBS_DIM];
+};
+
+const float ENV_PI = 3.14159265358979f;
+const float ENV_HALF_PI = 1.57079633f;
+const float ENV_L1 = 1.0f;
+const float ENV_L2 = 1.0f;
+const float ENV_LC1 = 0.5f;
+const float ENV_LC2 = 0.5f;
+const float ENV_M1 = 1.0f;
+const float ENV_M2 = 1.0f;
+const float ENV_I1 = 1.0f;
+const float ENV_I2 = 1.0f;
+const float ENV_G = 9.8f;
+const float ENV_DT = 0.2f;
+const float ENV_MAXV1 = 12.5663706f;// 4*pi
+const float ENV_MAXV2 = 28.2743339f;// 9*pi
+
+ENVDYN_FN EnvState envLoad(const float buf[ENV_STATE_DIM]) {
+    EnvState s;
+    s.t1 = buf[0];
+    s.t2 = buf[1];
+    s.d1 = buf[2];
+    s.d2 = buf[3];
+    return s;
+}
+ENVDYN_FN void envStore(EnvState s, ENVDYN_OUT_ARR(float, buf, ENV_STATE_DIM)) {
+    buf[0] = s.t1;
+    buf[1] = s.t2;
+    buf[2] = s.d1;
+    buf[3] = s.d2;
+}
+
+ENVDYN_FN float envWrap(float x) {
+    return mod(x + ENV_PI, 2.0f * ENV_PI) - ENV_PI;
+}
+
+ENVDYN_FN EnvObs envObserve(EnvState s) {
+    EnvObs o;
+    o.v[0] = cos(s.t1);
+    o.v[1] = sin(s.t1);
+    o.v[2] = cos(s.t2);
+    o.v[3] = sin(s.t2);
+    o.v[4] = s.d1;
+    o.v[5] = s.d2;
+    return o;
+}
+
+ENVDYN_FN float envTipHeight(EnvState s) {
+    return -ENV_L1 * cos(s.t1) - ENV_L2 * cos(s.t1 + s.t2);
+}
+ENVDYN_FN float envReward(EnvState s, const float act[ENV_ACT_DIM]) {
+    return envTipHeight(s);
+}
+ENVDYN_FN bool envUpright(EnvState s) {
+    return envTipHeight(s) > 1.0f;
+}
+
+// state derivative for elbow torque `tau`; returned in an EnvState (t1<-d1, t2<-d2,
+// d1<-ddt1, d2<-ddt2), matching the RK4 combination below.
+ENVDYN_FN EnvState envDeriv(EnvState s, float tau) {
+    float c2 = cos(s.t2);
+    float s2 = sin(s.t2);
+    float dd1 = ENV_M1 * ENV_LC1 * ENV_LC1 + ENV_M2 * (ENV_L1 * ENV_L1 + ENV_LC2 * ENV_LC2 + 2.0f * ENV_L1 * ENV_LC2 * c2) + ENV_I1 + ENV_I2;
+    float dd2 = ENV_M2 * (ENV_LC2 * ENV_LC2 + ENV_L1 * ENV_LC2 * c2) + ENV_I2;
+    float phi2 = ENV_M2 * ENV_LC2 * ENV_G * cos(s.t1 + s.t2 - ENV_HALF_PI);
+    float phi1 = -ENV_M2 * ENV_L1 * ENV_LC2 * s.d2 * s.d2 * s2
+               - 2.0f * ENV_M2 * ENV_L1 * ENV_LC2 * s.d2 * s.d1 * s2
+               + (ENV_M1 * ENV_LC1 + ENV_M2 * ENV_L1) * ENV_G * cos(s.t1 - ENV_HALF_PI) + phi2;
+    float ddt2 = (tau + dd2 / dd1 * phi1 - ENV_M2 * ENV_L1 * ENV_LC2 * s.d1 * s.d1 * s2 - phi2)
+               / (ENV_M2 * ENV_LC2 * ENV_LC2 + ENV_I2 - dd2 * dd2 / dd1);
+    float ddt1 = -(dd2 * ddt2 + phi1) / dd1;
+    EnvState k;
+    k.t1 = s.d1;
+    k.t2 = s.d2;
+    k.d1 = ddt1;
+    k.d2 = ddt2;
+    return k;
+}
+
+ENVDYN_FN EnvState envAdd(EnvState a, EnvState k, float h) {
+    EnvState r;
+    r.t1 = a.t1 + h * k.t1;
+    r.t2 = a.t2 + h * k.t2;
+    r.d1 = a.d1 + h * k.d1;
+    r.d2 = a.d2 + h * k.d2;
+    return r;
+}
+
+ENVDYN_FN EnvState envStep(EnvState s, const float act[ENV_ACT_DIM]) {
+    float tau = clamp(act[0], -1.0f, 1.0f);
+    EnvState k1 = envDeriv(s, tau);
+    EnvState k2 = envDeriv(envAdd(s, k1, ENV_DT * 0.5f), tau);
+    EnvState k3 = envDeriv(envAdd(s, k2, ENV_DT * 0.5f), tau);
+    EnvState k4 = envDeriv(envAdd(s, k3, ENV_DT), tau);
+    EnvState n;
+    n.t1 = s.t1 + ENV_DT / 6.0f * (k1.t1 + 2.0f * k2.t1 + 2.0f * k3.t1 + k4.t1);
+    n.t2 = s.t2 + ENV_DT / 6.0f * (k1.t2 + 2.0f * k2.t2 + 2.0f * k3.t2 + k4.t2);
+    n.d1 = s.d1 + ENV_DT / 6.0f * (k1.d1 + 2.0f * k2.d1 + 2.0f * k3.d1 + k4.d1);
+    n.d2 = s.d2 + ENV_DT / 6.0f * (k1.d2 + 2.0f * k2.d2 + 2.0f * k3.d2 + k4.d2);
+    n.t1 = envWrap(n.t1);
+    n.t2 = envWrap(n.t2);
+    n.d1 = clamp(n.d1, -ENV_MAXV1, ENV_MAXV1);
+    n.d2 = clamp(n.d2, -ENV_MAXV2, ENV_MAXV2);
+    return n;
+}

@@ -212,13 +212,14 @@ if (TARGET rltools)
             target_compile_options(vulkan_rltools_swarm PRIVATE /bigobj /fp:fast)
             target_compile_options(vulkan_rltools_swarm PRIVATE "$<$<NOT:$<CONFIG:Debug>>:/Ob2>")
         endif ()
-        # one rollout-shader variant per task (env dynamics + dims compiled in);
-        # the host picks the matching SPIR-V from the selected Env at compile time.
+        # one rollout-shader variant per task; each #includes its single-source env
+        # dynamics from envdyn/ (the SAME file the CPU learner compiles). The host
+        # picks the matching SPIR-V from the selected Env at compile time.
         compile_vulkan_shader(vulkan_rltools_swarm
                 "${CMAKE_CURRENT_SOURCE_DIR}/rl_swarm/shaders/swarm_rollout.comp" kSwarmPendulumSpv _rlsw0
-                VARIANT_SUFFIX pendulum DEFINES ENV_PENDULUM)
+                VARIANT_SUFFIX pendulum DEFINES ENV_PENDULUM INCLUDE_DIRS "${_rlsw}/envdyn")
         compile_vulkan_shader(vulkan_rltools_swarm
                 "${CMAKE_CURRENT_SOURCE_DIR}/rl_swarm/shaders/swarm_rollout.comp" kSwarmAcrobotSpv _rlsw1
-                VARIANT_SUFFIX acrobot DEFINES ENV_ACROBOT)
+                VARIANT_SUFFIX acrobot DEFINES ENV_ACROBOT INCLUDE_DIRS "${_rlsw}/envdyn")
     endif ()
 endif ()

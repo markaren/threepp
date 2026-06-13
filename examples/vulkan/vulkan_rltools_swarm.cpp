@@ -65,10 +65,12 @@ namespace {
     constexpr int H = Trainer::kHidden;
     constexpr bool kIsPendulum = std::is_same_v<Env, rldemo::PendulumEnv>;
 
+    // The shader gets all dynamics constants + episode length from the single-source
+    // envdyn file, so the push-constant only carries the per-dispatch flags.
     struct PC {
         uint32_t n;
-        float dt, p0, p1, p2, p3, p4;
-        uint32_t episodeLimit, stochastic, warmup;
+        uint32_t stochastic;
+        uint32_t warmup;
     };
 
     // CPU reference forward (deterministic, action 0) — for the GPU parity self-test.
@@ -97,10 +99,7 @@ namespace {
     }
 
     PC makePC(uint32_t stochastic, uint32_t warmup) {
-        float p[5];
-        Env::gpuParams(p);
-        return PC{(uint32_t) N_TOTAL, Env::kDt, p[0], p[1], p[2], p[3], p[4],
-                  (uint32_t) Env::kEpisodeSteps, stochastic, warmup};
+        return PC{(uint32_t) N_TOTAL, stochastic, warmup};
     }
 }// namespace
 
@@ -150,6 +149,23 @@ int main() {
         links[r] = InstancedMesh::create(CylinderGeometry::create(thick, thick, 1.f, 8), linkMat, N_VIS);
         links[r]->instanceMatrix()->setUsage(DrawUsage::Dynamic);
         scene->add(links[r]);
+    }
+
+    // End-effector spheres at each link's distal joint (pendulum -> bob; acrobot ->
+    // elbow + tip), turning green when that env is "solved" (Env::upright) so the
+    // swarm is a live at-a-glance success meter. Two meshes per joint + a scale toggle
+    // (not per-instance color, which the Vulkan backend doesn't carry).
+    const float bobR = 0.12f * reach;
+    auto bobRestMat = MeshStandardMaterial::create({{"color", Color(0x6fd0ff)}, {"roughness", 0.35f}, {"metalness", 0.1f}});
+    auto bobGoalMat = MeshStandardMaterial::create({{"color", Color(0x39d353)}, {"roughness", 0.4f}, {"metalness", 0.1f}, {"emissive", Color(0x12491f)}});
+    std::vector<std::shared_ptr<InstancedMesh>> bobsRest(R), bobsGoal(R);
+    for (int r = 0; r < R; ++r) {
+        bobsRest[r] = InstancedMesh::create(SphereGeometry::create(bobR, 14, 10), bobRestMat, N_VIS);
+        bobsGoal[r] = InstancedMesh::create(SphereGeometry::create(bobR, 14, 10), bobGoalMat, N_VIS);
+        bobsRest[r]->instanceMatrix()->setUsage(DrawUsage::Dynamic);
+        bobsGoal[r]->instanceMatrix()->setUsage(DrawUsage::Dynamic);
+        scene->add(bobsRest[r]);
+        scene->add(bobsGoal[r]);
     }
 
     // HUD
@@ -358,6 +374,7 @@ int main() {
         }
 
         // 5. visualize the swarm from the read-back GPU states (any Env, R links)
+        const Quaternion qi;// identity (spheres don't rotate)
         for (int r = 0; r < R; ++r) {
             for (int i = 0; i < N_VIS; ++i) {
                 const Env::State st = Env::unpackState(&stateHost[i * SSTRIDE]);
@@ -371,8 +388,18 @@ int main() {
                 Matrix4 m;
                 m.compose({(ax + bx) / 2.f, (ay + by) / 2.f, cellZ[i]}, q, {1.f, std::max(1e-3f, len), 1.f});
                 links[r]->setMatrixAt(i, m);
+
+                // sphere at the distal joint, shown in the rest- or goal-colored mesh
+                const bool solved = Env::upright(st);
+                Matrix4 show, hide;
+                show.compose({bx, by, cellZ[i]}, qi, {1.f, 1.f, 1.f});
+                hide.compose({bx, by, cellZ[i]}, qi, {0.f, 0.f, 0.f});// collapsed -> invisible
+                bobsGoal[r]->setMatrixAt(i, solved ? show : hide);
+                bobsRest[r]->setMatrixAt(i, solved ? hide : show);
             }
             links[r]->instanceMatrix()->needsUpdate();
+            bobsRest[r]->instanceMatrix()->needsUpdate();
+            bobsGoal[r]->instanceMatrix()->needsUpdate();
         }
 
         // 6. metrics + console learning curve

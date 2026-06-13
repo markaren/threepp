@@ -85,6 +85,23 @@ int main() {
         scene->add(links[r]);
     }
 
+    // End-effector spheres at each link's distal joint (pendulum -> bob; acrobot ->
+    // elbow + tip). Two meshes per joint so the sphere turns green when that env is
+    // "solved" (Env::upright) -> the field becomes a live at-a-glance success meter.
+    // (A two-mesh scale toggle, not per-instance color, so it works on every backend.)
+    const float bobR = 0.12f * Env::kReach;
+    auto bobRestMat = MeshStandardMaterial::create({{"color", Color(0x6fd0ff)}, {"roughness", 0.35f}, {"metalness", 0.1f}});
+    auto bobGoalMat = MeshStandardMaterial::create({{"color", Color(0x39d353)}, {"roughness", 0.4f}, {"metalness", 0.1f}, {"emissive", Color(0x12491f)}});
+    std::vector<std::shared_ptr<InstancedMesh>> bobsRest(Env::kRods), bobsGoal(Env::kRods);
+    for (int r = 0; r < Env::kRods; ++r) {
+        bobsRest[r] = InstancedMesh::create(SphereGeometry::create(bobR, 14, 10), bobRestMat, M);
+        bobsGoal[r] = InstancedMesh::create(SphereGeometry::create(bobR, 14, 10), bobGoalMat, M);
+        bobsRest[r]->instanceMatrix()->setUsage(DrawUsage::Dynamic);
+        bobsGoal[r]->instanceMatrix()->setUsage(DrawUsage::Dynamic);
+        scene->add(bobsRest[r]);
+        scene->add(bobsGoal[r]);
+    }
+
     // HUD
     FontLoader fontLoader;
     const auto font = fontLoader.defaultFont();
@@ -228,7 +245,8 @@ int main() {
             std::lock_guard<std::mutex> lock(pubMutex);
             snap = published;
         }
-        // place each env's links from its published state
+        // place each env's links + end-effector spheres from its published state
+        const Quaternion qi;// identity (spheres don't rotate)
         for (int r = 0; r < Env::kRods; ++r) {
             for (int i = 0; i < M; ++i) {
                 float x0, y0, x1, y1;
@@ -241,8 +259,18 @@ int main() {
                 Matrix4 m;
                 m.compose({(ax + bx) / 2.f, (ay + by) / 2.f, cellZ[i]}, q, {1.f, std::max(1e-3f, len), 1.f});
                 links[r]->setMatrixAt(i, m);
+
+                // sphere at the distal joint; show it in the rest- or goal-colored mesh
+                const bool solved = Env::upright(snap[i]);
+                Matrix4 show, hide;
+                show.compose({bx, by, cellZ[i]}, qi, {1.f, 1.f, 1.f});
+                hide.compose({bx, by, cellZ[i]}, qi, {0.f, 0.f, 0.f});// collapsed -> invisible
+                bobsGoal[r]->setMatrixAt(i, solved ? show : hide);
+                bobsRest[r]->setMatrixAt(i, solved ? hide : show);
             }
             links[r]->instanceMatrix()->needsUpdate();
+            bobsRest[r]->instanceMatrix()->needsUpdate();
+            bobsGoal[r]->instanceMatrix()->needsUpdate();
         }
 
         spsTimer += dt;
