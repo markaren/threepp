@@ -1,10 +1,11 @@
-// RLtools x threepp — live deep-reinforcement-learning demo.
+// RLtools x threepp — live deep-reinforcement-learning demo (multi-pendulum).
 //
-// A Soft-Actor-Critic (SAC) agent from RLtools (https://rl.tools) learns the
-// classic Pendulum swing-up task. Training runs on a background thread; the
-// threepp scene continuously renders the *current* policy controlling a pendulum
-// that obeys the very same dynamics the agent trains on. Watch it go from random
-// flailing to a crisp swing-up-and-balance over the first ~minute.
+// A single Soft-Actor-Critic (SAC) agent from RLtools (https://rl.tools) learns the
+// classic Pendulum swing-up task. Training runs on a background thread; the threepp
+// scene renders a whole FIELD of pendulums, all driven by that one current policy
+// from different starting angles. Early on they flail in unison; as the shared
+// policy learns, the whole field swings up and balances. It's a vivid way to see a
+// single controller generalize across initial conditions.
 //
 // The RLtools engine is wrapped behind RLPendulumTrainer (plain C++); none of its
 // template machinery leaks into this file.
@@ -20,7 +21,6 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
-#include <deque>
 #include <random>
 #include <thread>
 #include <vector>
@@ -31,8 +31,15 @@ using rldemo::RLPendulumTrainer;
 namespace {
 
     constexpr float kPi = 3.14159265358979323846f;
-    constexpr float kPivotY = 0.65f;// height of the pivot above the world origin
+    constexpr float kPivotY = 0.65f;// height of each pivot above its base
     constexpr float kArmLen = RLPendulumTrainer::kL;
+
+    // field layout
+    constexpr int kCols = 5;
+    constexpr int kRows = 3;
+    constexpr int kCount = kCols * kRows;
+    constexpr float kDX = 1.7f;// spacing in X
+    constexpr float kDZ = 1.7f;// spacing in Z
 
     // Match RLtools' angle_normalize (python-style modulo) so the displayed reward
     // tracks the training objective exactly.
@@ -43,16 +50,20 @@ namespace {
         return m - kPi;
     }
 
-    // Bob position in the pivot frame: theta = 0 -> straight up, theta = PI -> down.
-    Vector3 bobOffset(float theta) {
-        return {std::sin(theta) * kArmLen, std::cos(theta) * kArmLen, 0.f};
-    }
+    struct Pendulum {
+        float theta = kPi, thetaDot = 0.f, prevTheta = kPi;
+        float ret = 0.f;       // current run's accumulated return
+        float lastAction = 0.f;// last policy torque in [-1, 1]
+        std::shared_ptr<Group> pivot;
+        std::shared_ptr<MeshStandardMaterial> bobMat;
+        std::shared_ptr<MeshStandardMaterial> goalMat;
+    };
 
 }// namespace
 
 int main() {
 
-    Canvas canvas("RLtools x threepp - SAC Pendulum", {{"aa", 4}, {"size", WindowSize{1280, 800}}});
+    Canvas canvas("RLtools x threepp - SAC Pendulum field", {{"aa", 4}, {"size", WindowSize{1280, 800}}});
     auto renderer = createRenderer(canvas);
     renderer->autoClear = true;
 
@@ -60,10 +71,10 @@ int main() {
     scene->background = Color(0x222a33);
 
     auto camera = PerspectiveCamera::create(55, canvas.aspect(), 0.1f, 100);
-    camera->position.set(0.f, 0.7f, 5.0f);
+    camera->position.set(0.f, 2.8f, 9.5f);
 
     OrbitControls controls{*camera, canvas};
-    controls.target.set(0.f, 0.55f, 0.f);
+    controls.target.set(0.f, 0.45f, 0.f);
     controls.update();
 
     // ---- lighting -------------------------------------------------------------
@@ -72,72 +83,73 @@ int main() {
     sun->position.set(3.f, 6.f, 4.f);
     scene->add(sun);
 
-    // ---- static scaffolding ---------------------------------------------------
-    auto grid = GridHelper::create(10, 20, 0x3a4654, 0x2c343d);
+    auto grid = GridHelper::create(16, 32, 0x3a4654, 0x2c343d);
     grid->position.y = -0.6f;
     scene->add(grid);
 
-    auto stand = Mesh::create(
-            CylinderGeometry::create(0.035f, 0.05f, kPivotY + 0.6f, 24),
-            MeshStandardMaterial::create({{"color", Color(0x4a5360)}, {"roughness", 0.7f}, {"metalness", 0.2f}}));
-    stand->position.set(0.f, (kPivotY - 0.6f) / 2.f, 0.f);
-    scene->add(stand);
+    // ---- shared geometry + static materials (one set, reused by every pendulum)
+    const auto standGeo = CylinderGeometry::create(0.03f, 0.045f, kPivotY + 0.6f, 16);
+    const auto hubGeo = SphereGeometry::create(0.06f, 16, 12);
+    const auto armGeo = CylinderGeometry::create(0.026f, 0.026f, kArmLen, 14);
+    const auto bobGeo = SphereGeometry::create(0.12f, 24, 16);
+    const auto goalGeo = TorusGeometry::create(0.16f, 0.02f, 12, 32);
 
-    auto hub = Mesh::create(
-            SphereGeometry::create(0.07f, 24, 16),
-            MeshStandardMaterial::create({{"color", Color(0x9aa6b4)}, {"roughness", 0.4f}, {"metalness", 0.6f}}));
-    hub->position.set(0.f, kPivotY, 0.f);
-    scene->add(hub);
+    const auto standMat = MeshStandardMaterial::create({{"color", Color(0x4a5360)}, {"roughness", 0.7f}, {"metalness", 0.2f}});
+    const auto hubMat = MeshStandardMaterial::create({{"color", Color(0x9aa6b4)}, {"roughness", 0.4f}, {"metalness", 0.6f}});
+    const auto armMat = MeshStandardMaterial::create({{"color", Color(0xced6e0)}, {"roughness", 0.5f}, {"metalness", 0.3f}});
 
-    // goal ring at the upright target
-    auto goalMat = MeshStandardMaterial::create({{"color", Color(0x2f6b3a)}, {"emissive", Color(0x102810)}});
-    goalMat->transparent = true;
-    goalMat->opacity = 0.85f;
-    auto goal = Mesh::create(TorusGeometry::create(0.17f, 0.022f, 16, 48), goalMat);
-    goal->position.set(0.f, kPivotY + kArmLen, 0.f);
-    scene->add(goal);
+    std::vector<Pendulum> pends;
+    pends.reserve(kCount);
+    for (int r = 0; r < kRows; ++r) {
+        for (int c = 0; c < kCols; ++c) {
+            const float x = (c - (kCols - 1) / 2.f) * kDX;
+            const float z = (r - (kRows - 1) / 2.f) * kDZ;
 
-    // ---- the pendulum (a rotating pivot group) --------------------------------
-    auto armPivot = Group::create();
-    armPivot->position.set(0.f, kPivotY, 0.f);
-    scene->add(armPivot);
+            auto stand = Mesh::create(standGeo, standMat);
+            stand->position.set(x, (kPivotY - 0.6f) / 2.f, z);
+            scene->add(stand);
 
-    auto arm = Mesh::create(
-            CylinderGeometry::create(0.028f, 0.028f, kArmLen, 20),
-            MeshStandardMaterial::create({{"color", Color(0xced6e0)}, {"roughness", 0.5f}, {"metalness", 0.3f}}));
-    arm->position.set(0.f, kArmLen / 2.f, 0.f);// span pivot -> bob along local +Y
-    armPivot->add(arm);
+            auto hub = Mesh::create(hubGeo, hubMat);
+            hub->position.set(x, kPivotY, z);
+            scene->add(hub);
 
-    auto bobMat = MeshStandardMaterial::create({{"color", Color(0xffffff)}, {"roughness", 0.35f}, {"metalness", 0.1f}});
-    auto bob = Mesh::create(SphereGeometry::create(0.13f, 32, 24), bobMat);
-    bob->position.set(0.f, kArmLen, 0.f);
-    armPivot->add(bob);
+            auto pivot = Group::create();
+            pivot->position.set(x, kPivotY, z);
+            scene->add(pivot);
 
-    // torque indicator arrow (tangential push applied by the policy)
-    auto torqueArrow = ArrowHelper::create(Vector3(1, 0, 0), Vector3(), 0.001f, Color(0xffd23f));
-    scene->add(torqueArrow);
+            auto arm = Mesh::create(armGeo, armMat);
+            arm->position.set(0.f, kArmLen / 2.f, 0.f);// span pivot -> bob along local +Y
+            pivot->add(arm);
 
-    // fading swing-up trail of the bob
-    auto trailMat = LineBasicMaterial::create();
-    trailMat->color = Color(0x6fd0ff);
-    trailMat->transparent = true;
-    trailMat->opacity = 0.6f;
-    auto trailGeom = BufferGeometry::create();
-    auto trail = Line::create(trailGeom, trailMat);
-    scene->add(trail);
-    std::deque<Vector3> trailPts;
+            auto bobMat = MeshStandardMaterial::create({{"color", Color(0xffffff)}, {"roughness", 0.35f}, {"metalness", 0.1f}});
+            auto bob = Mesh::create(bobGeo, bobMat);
+            bob->position.set(0.f, kArmLen, 0.f);
+            pivot->add(bob);
+
+            auto goalMat = MeshStandardMaterial::create({{"color", Color(0x2f6b3a)}, {"emissive", Color(0x102810)}});
+            goalMat->transparent = true;
+            goalMat->opacity = 0.85f;
+            auto goal = Mesh::create(goalGeo, goalMat);
+            goal->position.set(x, kPivotY + kArmLen, z);
+            scene->add(goal);
+
+            Pendulum p;
+            p.pivot = pivot;
+            p.bobMat = bobMat;
+            p.goalMat = goalMat;
+            pends.push_back(p);
+        }
+    }
 
     // ---- HUD text -------------------------------------------------------------
     FontLoader fontLoader;
     const auto font = fontLoader.defaultFont();
     const float cs = monitor::contentScale().first;
 
-    auto makeHud = [&](float px, float py, float sizePx, const Color& col,
-                       TextSprite::HorizontalAlignment ha = TextSprite::HorizontalAlignment::Left) {
+    auto makeHud = [&](float px, float py, float sizePx, const Color& col) {
         auto t = TextSprite::create(font, sizePx * cs);
         t->setColor(col);
         t->setVerticalAlignment(TextSprite::VerticalAlignment::Below);
-        t->setHorizontalAlignment(ha);
         t->screenSpace = true;
         t->screenAnchor.set(0.f, 1.f);// top-left
         t->position.set(px, py, 0.f);
@@ -148,7 +160,7 @@ int main() {
     auto titleHud = makeHud(14.f, -12.f, 30.f, Color(0x8fe3ff));
     titleHud->setText("RLtools  x  threepp");
     auto subHud = makeHud(14.f, -46.f, 17.f, Color(0xc8d2dc));
-    subHud->setText("3D pendulum = a live test of the current policy (restarts every ~10s)");
+    subHud->setText("One SAC policy controlling " + std::to_string(kCount) + " pendulums (each from a different start, restarts every ~10s)");
     auto stepHud = makeHud(14.f, -78.f, 20.f, Color(0xffffff));
     auto statusHud = makeHud(14.f, -108.f, 22.f, Color(0xffd23f));
     auto telemetryHud = makeHud(14.f, -140.f, 17.f, Color(0xc8d2dc));
@@ -173,56 +185,54 @@ int main() {
 
     // ---- viz / episode state --------------------------------------------------
     std::mt19937 rng(1234);
-    auto resetEpisode = [&](float& theta, float& thetaDot, float& prevTheta) {
-        std::uniform_real_distribution<float> d(-0.05f, 0.05f);
-        std::uniform_real_distribution<float> dv(-0.2f, 0.2f);
-        theta = kPi + d(rng);// start hanging down for a dramatic swing-up
-        thetaDot = dv(rng);
-        prevTheta = theta;
+    auto resetEpisode = [&](Pendulum& p) {
+        std::uniform_real_distribution<float> d(-0.45f, 0.45f);// spread of starts -> variety across the field
+        std::uniform_real_distribution<float> dv(-0.6f, 0.6f);
+        p.theta = kPi + d(rng);// start near hanging-down for a dramatic swing-up
+        p.thetaDot = dv(rng);
+        p.prevTheta = p.theta;
+        p.ret = 0.f;
     };
+    for (auto& p : pends) resetEpisode(p);
 
-    float theta, thetaDot, prevTheta;
-    resetEpisode(theta, thetaDot, prevTheta);
-    int episodeStep = 0;
-    float episodeReturn = 0.f;
+    int episodeStep = 0;        // shared: all pendulums step and reset together
     int episodesDone = 0;
-    float lastAction = 0.f;
-    std::vector<float> returnHistory;
-    int simSpeed = 1;       // physics-step multiplier (speeds up the view, not training)
+    std::vector<float> returnHistory;// mean score per wave
     bool nextEpisodeReq = false;
-
+    int simSpeed = 1;           // physics-step multiplier (speeds the view, not training)
     double simAccum = 0.0;
 
+    // values computed each frame, surfaced to the ImGui panel
+    int solvedCount = 0;
+    float meanReturn = 0.f;
+
     auto physicsStep = [&] {
-        const float c = std::cos(theta), s = std::sin(theta);
-        const float a = trainer.policyAction(c, s, thetaDot);// policy torque in [-1, 1]
-        lastAction = a;
-        const float u = RLPendulumTrainer::kMaxTorque * std::clamp(a, -1.f, 1.f);
+        for (auto& p : pends) {
+            const float c = std::cos(p.theta), s = std::sin(p.theta);
+            const float a = trainer.policyAction(c, s, p.thetaDot);// policy torque in [-1, 1]
+            p.lastAction = a;
+            const float u = RLPendulumTrainer::kMaxTorque * std::clamp(a, -1.f, 1.f);
 
-        // reward (RLtools' pendulum cost), from the pre-step state + action
-        const float an = angleNormalize(theta);
-        episodeReturn += -(an * an + 0.1f * thetaDot * thetaDot + 0.001f * (u * u));
+            const float an = angleNormalize(p.theta);
+            p.ret += -(an * an + 0.1f * p.thetaDot * p.thetaDot + 0.001f * (u * u));
 
-        // integrate identical dynamics
-        float newthdot = thetaDot + (3.f * RLPendulumTrainer::kG / (2.f * RLPendulumTrainer::kL) * std::sin(theta) + 3.f / (RLPendulumTrainer::kM * RLPendulumTrainer::kL * RLPendulumTrainer::kL) * u) * RLPendulumTrainer::kDt;
-        newthdot = std::clamp(newthdot, -RLPendulumTrainer::kMaxSpeed, RLPendulumTrainer::kMaxSpeed);
-        prevTheta = theta;
-        theta += newthdot * RLPendulumTrainer::kDt;
-        thetaDot = newthdot;
-
-        // trail sample (in pivot frame -> world)
-        trailPts.push_back(bobOffset(theta) + armPivot->position);
-        while (trailPts.size() > 64) trailPts.pop_front();
+            float newthdot = p.thetaDot + (3.f * RLPendulumTrainer::kG / (2.f * RLPendulumTrainer::kL) * std::sin(p.theta) + 3.f / (RLPendulumTrainer::kM * RLPendulumTrainer::kL * RLPendulumTrainer::kL) * u) * RLPendulumTrainer::kDt;
+            newthdot = std::clamp(newthdot, -RLPendulumTrainer::kMaxSpeed, RLPendulumTrainer::kMaxSpeed);
+            p.prevTheta = p.theta;
+            p.theta += newthdot * RLPendulumTrainer::kDt;
+            p.thetaDot = newthdot;
+        }
 
         if (++episodeStep >= RLPendulumTrainer::kEpisodeSteps || nextEpisodeReq) {
             nextEpisodeReq = false;
-            returnHistory.push_back(episodeReturn);
+            float mean = 0.f;
+            for (auto& p : pends) mean += p.ret;
+            mean /= static_cast<float>(pends.size());
+            returnHistory.push_back(mean);
             if (returnHistory.size() > 240) returnHistory.erase(returnHistory.begin());
             ++episodesDone;
-            episodeReturn = 0.f;
             episodeStep = 0;
-            trailPts.clear();
-            resetEpisode(theta, thetaDot, prevTheta);
+            for (auto& p : pends) resetEpisode(p);
         }
     };
 
@@ -232,16 +242,15 @@ int main() {
     double spsTimer = 0.0;
 
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Once, {1, 0});
         const auto vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos({vp->WorkPos.x + vp->WorkSize.x - 10, vp->WorkPos.y + 10}, ImGuiCond_Always, {1, 0});
         ImGui::SetNextWindowSize({340, 0}, ImGuiCond_Always);
         ImGui::Begin("RLtools - Soft Actor-Critic", nullptr, ImGuiWindowFlags_NoCollapse);
 
-        ImGui::TextWrapped("A SAC agent (rl.tools) trains in the background (counted in steps below). "
-                           "The 3D pendulum is a live test of its CURRENT policy, auto-restarted every "
-                           "~10s: it flails early and swings up cleanly once trained. The plot shows each "
-                           "test run's score climbing as it learns.");
+        ImGui::TextWrapped("A single SAC agent (rl.tools) trains in the background (counted in steps below). "
+                           "Every pendulum in the field is driven by that one CURRENT policy from a different "
+                           "start, and they all restart together every ~10s. Early = flailing; once trained, "
+                           "the whole field swings up. The plot is the field's mean score per run.");
         ImGui::Separator();
 
         const long sc = trainer.stepCount();
@@ -258,16 +267,14 @@ int main() {
         }
         ImGui::Spacing();
 
-        ImGui::Text("Angle from upright: %+6.1f deg", angleNormalize(theta) * 180.f / kPi);
-        ImGui::Text("Angular velocity : %+6.2f rad/s", thetaDot);
-        ImGui::Text("Policy torque     : %+5.2f  (x%.0f Nm)", lastAction, RLPendulumTrainer::kMaxTorque);
-        ImGui::Text("This run's score  : %8.1f", episodeReturn);
+        ImGui::Text("Pendulums upright : %d / %d", solvedCount, kCount);
+        ImGui::Text("Mean run score    : %8.1f", meanReturn);
         ImGui::Text("Test runs shown   : %d", episodesDone);
         ImGui::Spacing();
 
         if (!returnHistory.empty()) {
             ImGui::PlotLines("##returns", returnHistory.data(), static_cast<int>(returnHistory.size()),
-                             0, "score per test run (up = better)", -1700.f, 0.f, {-1, 70});
+                             0, "mean score per run (up = better)", -1700.f, 0.f, {-1, 70});
         }
         ImGui::Separator();
 
@@ -279,7 +286,7 @@ int main() {
             returnHistory.clear();
             episodesDone = 0;
         }
-        if (ImGui::Button("Skip to next episode (view only)", {-1, 0})) nextEpisodeReq = true;
+        if (ImGui::Button("Skip to next run (view only)", {-1, 0})) nextEpisodeReq = true;
         ImGui::SliderInt("View speed", &simSpeed, 1, 8, "%dx");
 
         ImGui::End();
@@ -304,49 +311,37 @@ int main() {
         // advance the simulation at the pendulum's native 20 Hz (x view speed)
         simAccum += static_cast<double>(dt) * simSpeed;
         int guard = 0;
-        while (simAccum >= RLPendulumTrainer::kDt && guard++ < 32) {
+        while (simAccum >= RLPendulumTrainer::kDt && guard++ < 12) {
             physicsStep();
             simAccum -= RLPendulumTrainer::kDt;
         }
 
-        // smooth sub-step interpolation of the rendered angle
         const float frac = static_cast<float>(std::clamp(simAccum / RLPendulumTrainer::kDt, 0.0, 1.0));
-        const float renderTheta = prevTheta + (theta - prevTheta) * frac;
-        armPivot->rotation.z = -renderTheta;
 
-        // bob colour encodes torque sign/magnitude (blue = CCW, red = CW)
-        Color tc;
-        if (lastAction >= 0) tc.lerpColors(Color(0xffffff), Color(0xff3b30), std::min(1.f, lastAction));
-        else tc.lerpColors(Color(0xffffff), Color(0x3b7bff), std::min(1.f, -lastAction));
-        bobMat->color.copy(tc);
+        solvedCount = 0;
+        meanReturn = 0.f;
+        float meanAngleDeg = 0.f;
+        for (auto& p : pends) {
+            const float renderTheta = p.prevTheta + (p.theta - p.prevTheta) * frac;
+            p.pivot->rotation.z = -renderTheta;
 
-        // torque arrow: tangential push at the bob
-        const Vector3 bobWorld = bobOffset(renderTheta) + armPivot->position;
-        const float mag = std::abs(lastAction);
-        if (mag > 0.02f) {
-            Vector3 tangent(std::cos(renderTheta), -std::sin(renderTheta), 0.f);
-            if (lastAction < 0) tangent.negate();
-            torqueArrow->position.copy(bobWorld);
-            torqueArrow->setDirection(tangent.normalize());
-            torqueArrow->setLength(0.25f + 0.55f * mag, 0.12f, 0.08f);
-            torqueArrow->visible = true;
-        } else {
-            torqueArrow->visible = false;
+            // bob colour encodes torque sign/magnitude (blue = CCW, red = CW)
+            Color tc;
+            if (p.lastAction >= 0) tc.lerpColors(Color(0xffffff), Color(0xff3b30), std::min(1.f, p.lastAction));
+            else tc.lerpColors(Color(0xffffff), Color(0x3b7bff), std::min(1.f, -p.lastAction));
+            p.bobMat->color.copy(tc);
+
+            const float an = angleNormalize(p.theta);
+            const bool balanced = std::abs(an) < 0.2f && std::abs(p.thetaDot) < 1.5f;
+            p.goalMat->color.copy(balanced ? Color(0x37d34a) : Color(0x2f6b3a));
+            p.goalMat->emissive.copy(balanced ? Color(0x123d16) : Color(0x102810));
+
+            if (balanced) ++solvedCount;
+            meanReturn += p.ret;
+            meanAngleDeg += std::abs(an) * 180.f / kPi;
         }
-
-        // goal ring turns green when balanced upright
-        const bool balanced = std::abs(angleNormalize(theta)) < 0.2f && std::abs(thetaDot) < 1.5f;
-        goalMat->color.copy(balanced ? Color(0x37d34a) : Color(0x2f6b3a));
-        goalMat->emissive.copy(balanced ? Color(0x123d16) : Color(0x102810));
-
-        // trail
-        if (trailPts.size() >= 2) {
-            std::vector<Vector3> pts(trailPts.begin(), trailPts.end());
-            trailGeom->setFromPoints(pts);
-            trail->visible = true;
-        } else {
-            trail->visible = false;
-        }
+        meanReturn /= static_cast<float>(pends.size());
+        meanAngleDeg /= static_cast<float>(pends.size());
 
         // throughput readout
         spsTimer += dt;
@@ -369,7 +364,7 @@ int main() {
             status = "TRAINED - this is the final controller";
             statusCol = Color(0x37d34a);
         } else if (sc < RLPendulumTrainer::warmupSteps()) {
-            status = "WARMUP - random actions (it flails)";
+            status = "WARMUP - random actions (they flail)";
             statusCol = Color(0xff9f1c);
         } else {
             status = "LEARNING - policy improving live";
@@ -379,8 +374,8 @@ int main() {
         statusHud->setColor(statusCol);
 
         char tele[160];
-        std::snprintf(tele, sizeof(tele), "angle %+6.1f deg   |w| %4.2f   torque %+4.2f   return %7.1f",
-                      angleNormalize(theta) * 180.f / kPi, std::abs(thetaDot), lastAction, episodeReturn);
+        std::snprintf(tele, sizeof(tele), "upright %2d / %d    mean |angle| %5.1f deg    mean score %7.1f",
+                      solvedCount, kCount, meanAngleDeg, meanReturn);
         telemetryHud->setText(tele);
 
         renderer->render(*scene, *camera);

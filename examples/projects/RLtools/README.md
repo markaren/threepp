@@ -1,12 +1,13 @@
-# RLtools × threepp — live SAC pendulum swing-up
+# RLtools × threepp — live SAC pendulum field
 
-A [Soft Actor-Critic](https://arxiv.org/abs/1801.01290) agent from
+A single [Soft-Actor-Critic](https://arxiv.org/abs/1801.01290) agent from
 [**RLtools**](https://rl.tools) (a dependency-free, header-only C++ deep-RL
 library) is trained *from scratch, live*, on the classic Pendulum swing-up task.
-Training runs on a background thread while the threepp scene continuously renders
-the **current** policy controlling a pendulum that obeys the very same dynamics
-the agent trains on. Over the first ~minute you watch it go from random flailing
-to a crisp swing-up-and-balance.
+Training runs on a background thread while the threepp scene renders a whole
+**field of pendulums**, all driven by that one **current** policy from different
+starting angles. Over the first ~minute you watch the field go from random
+flailing to a synchronized swing-up-and-balance — a vivid way to see one
+controller generalize across initial conditions.
 
 It's a compact illustration of threepp as a real-time visualization front-end for
 robotics / control / RL work: the physics and the learned controller are plain
@@ -14,16 +15,17 @@ C++, and the rendering, HUD and UI are threepp.
 
 ## What you see
 
-- **The pendulum** — a rotating arm + bob driven each step by the policy's torque.
-  The bob tints **blue ↔ red** with the sign/magnitude of the applied torque, and
-  a yellow arrow shows the tangential push.
-- **The goal ring** turns green when the pole is balanced upright.
-- **A trail** traces the swing-up arc.
+- **A field of pendulums** (5×3) — each a rotating arm + bob, all driven every
+  step by the *same* policy from its own random start. The bob tints
+  **blue ↔ red** with the sign/magnitude of the applied torque.
+- **Goal rings** turn green on each pendulum that's balanced upright — so you can
+  count, at a glance, how many the policy has solved.
 - **HUD** (top-left): training step / progress, phase (WARMUP → LEARNING →
-  CONVERGED), and live angle / angular-velocity / torque / episode-return.
-- **Control panel** (ImGui, right): training throughput, a live learning curve
-  (episode return climbing as it learns), and buttons to pause, restart from a
-  fresh random policy, skip to the next episode, or fast-forward the sim.
+  TRAINED), and field aggregates (how many upright, mean angle, mean score).
+- **Control panel** (ImGui, right): training throughput + ETA, a live learning
+  curve (the field's mean score per run climbing as it learns), and buttons to
+  pause, restart from a fresh random policy, skip to the next run, plus a
+  view-speed slider (speeds the view, not training).
 
 ## Build
 
