@@ -27,13 +27,32 @@ C++, and the rendering, HUD and UI are threepp.
   pause, restart from a fresh random policy, skip to the next run, plus a
   view-speed slider (speeds the view, not training).
 
+## A second demo: parallel-rollout swarm (`rltools_swarm`)
+
+`rltools_pendulum` (above) trains on one internal environment and shows a *preview*
+field. `rltools_swarm` is the honest, scaled-up version: a **single** SAC learner is
+fed by a **field of 64 environments stepped in parallel** — the "many envs → one
+learner" pattern that makes GPU RL (Isaac-Gym/Brax) worthwhile, here at toy scale and
+fully cross-platform. **The pendulums you see ARE the training data.** A background
+thread steps all 64 envs, feeds their transitions to the learner, and runs SAC
+gradient steps; the render thread only visualizes the published states. A checkbox
+flips the field to a **deterministic showcase** (the latest policy with no exploration
+noise — the clean view).
+
+This is Stage 1 (CPU) of a staged plan; the environment dynamics live in a plain
+[`pendulum_env.hpp`](pendulum_env.hpp) and the learner behind
+[`RLSwarmTrainer`](RLSwarmTrainer.hpp) only does inference + replay-buffer insertion +
+gradient updates — that boundary is the seam where a **Vulkan-compute rollout** (Stage 2,
+reusing the RF-DETR `VkInfer` GEMM kernels) later plugs in with no learner change.
+
 ## Build
 
 RLtools is opt-in (it is fetched only when you ask for it):
 
 ```bash
 cmake -S . -B build -DTHREEPP_WITH_RLTOOLS=ON
-cmake --build build --target rltools_pendulum
+cmake --build build --target rltools_pendulum   # single-policy preview field
+cmake --build build --target rltools_swarm      # parallel-rollout swarm (64 envs -> 1 learner)
 ```
 
 `-DTHREEPP_WITH_RLTOOLS=ON` fetches the (pinned) header-only library via
