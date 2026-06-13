@@ -411,6 +411,13 @@ namespace threepp::vulkan {
         // to BGRA8 swap targets without declaring rgba8 (which would mismatch
         // the underlying VkImageView format and produce a validation warning).
         features2.features.shaderStorageImageWriteWithoutFormat = VK_TRUE;
+        // Per-attachment color-blend on the gbuffer MRT: the decal pipeline
+        // blends only the albedo attachment (SRC_ALPHA) while the other targets
+        // stay non-blended. Without independentBlend, all
+        // VkPipelineColorBlendAttachmentState entries must be identical
+        // (VUID-VkPipelineColorBlendStateCreateInfo-pAttachments-00605). Core
+        // 1.0, universally supported on RT-capable hardware.
+        features2.features.independentBlend = VK_TRUE;
         if (rayTracingEnabled_) {
             features2.pNext = rayTracingInvocationReorderSupported_
                                       ? static_cast<void*>(&fReorder)

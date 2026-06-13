@@ -5744,10 +5744,22 @@ namespace threepp {
             // count exceeds the current capacity. The descriptor write below
             // (or the initial allocate, on first build) will pick up the new
             // buffer handles.
-            const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
-            const uint32_t neededBitWords = std::max<uint32_t>((instanceCount + 31u) / 32u, 1u);
+            // motionMat[] and meshMovedBits[] are indexed by ENTRY index
+            // (== instanceCustomIndex == the meshID the gbuffer writes; see the
+            // geomDescs/matDescs "ONE index space" note above), NOT by the
+            // compact TLAS instance count. Size them to entries.size(): when
+            // leading entries are overlay (e.g. wireframe PointLightHelpers
+            // added to the scene before the PT meshes), the PT meshes land at
+            // entry indices >= instances.size(), so a buffer sized to the
+            // instance count is read out of bounds in the shader — a GPU fault
+            // that surfaces at the next AS one-shot fence wait (looks like a
+            // "tblas refit" crash). computeAndUploadMotionMatrices uploads
+            // entries.size() matrices, so the instance-count sizing overflowed
+            // the host buffer too.
+            const uint32_t motionSlots    = static_cast<uint32_t>(entries.size());
+            const uint32_t neededBitWords = std::max<uint32_t>((motionSlots + 31u) / 32u, 1u);
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                ensureMotionMatCapacity(f, std::max<uint32_t>(instanceCount, 1u));
+                ensureMotionMatCapacity(f, std::max<uint32_t>(motionSlots, 1u));
                 ensureMeshMovedBitsCapacity(f, neededBitWords);
             }
             meshMovedBits_.resize(neededBitWords, 0u);
@@ -8136,7 +8148,8 @@ namespace threepp {
         }
 
         void createRasterDsLayoutAndPool() {
-            // binding 0: per-frame CameraUbo (vertex)
+            // binding 0: per-frame CameraUbo (vertex + fragment — gbuffer.frag
+            //            reads cam.jitter for the alpha-hash cutout discard)
             // binding 1: motionMat[] storage (vertex; same VkBuffer as raygen's binding 10)
             // binding 2: mats[] storage (fragment; for normal-map index + uvTransformNormal)
             // binding 3: albedoMaps[] bindless sampler array (fragment;
@@ -8149,7 +8162,7 @@ namespace threepp {
             bindings[0].binding         = 0;
             bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[0].descriptorCount = 1;
-            bindings[0].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT;
+            bindings[0].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             bindings[1].binding         = 1;
             bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[1].descriptorCount = 1;
