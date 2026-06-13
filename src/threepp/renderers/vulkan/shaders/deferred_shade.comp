@@ -1735,63 +1735,63 @@ vec3 giRadiance(vec3 origin, vec3 dir, bool doShadows, float maxLod, inout uint 
     // that's legitimate INDIRECT. Same principle as gSuppressReflEmitter for reflections.
     // Was `lit = hEmissive`, which over-brightened every emitter-lit surface (worst where
     // GI rays point at the emitter — e.g. a floor under it = the floor>wall over-count).
-    // ONE stochastically-picked analytic light per GI hit (was: shadow-test
-    // EVERY light). Uniform pick with ×nL compensation — unbiased; the GI
-    // channel is temporally accumulated + SVGF-denoised, which absorbs the
-    // selection noise. Cuts per-hit shadow rays from nLights to 1: the
-    // dominant AO/GI cost in lamp-heavy scenes (bistro interiors).
+    // Analytic direct at the GI hit. With MANY lights, sample ONE (×wL
+    // compensation, unbiased) — the GI channel is temporally accumulated +
+    // SVGF-denoised, which absorbs the selection noise, and this keeps lamp-
+    // heavy interiors cheap (1 shadow ray vs nLights). But for a SMALL light
+    // count that 1-of-N pick is pure variance the denoiser only SMEARS — worst
+    // for concentrated lights like SPOTLIGHTS, whose tight cone makes "is this
+    // bounce point in the cone?" a high-contrast coin-flip per gather ray. So
+    // for nLights<=8 loop them ALL (deterministic, ~nLights shadow rays/hit) —
+    // mirrors the cheapHit reflection path; the 1-pick stays only where looping
+    // all would be the real cost.
     vec3 lit = vec3(0.0);
-    float wL;
-    const uint pick = pickAnalyticLight(hitP, seed, wL);
-    if (pick != 0xFFFFFFFFu) {
-        if (pick < lights.dirCount) {
-            const uint  i   = pick;
-            const vec3  L   = normalize(lights.dirLights[i].direction);
-            const float ndl = dot(hitN, L);
-            if (ndl > 0.0) {
-                const float vis = doShadows ? shadowVis(shadowOrig, L, 1e30) : 1.0;
-                lit += diff * ndl * lights.dirLights[i].color * (vis * wL);
-            }
-        } else if (pick < lights.dirCount + lights.pointCount) {
-            const uint  i    = pick - lights.dirCount;
-            vec3        toL  = lights.pointLights[i].position - hitP;
-            const float dist = length(toL);
-            if (dist >= 1e-4) {
-                toL /= dist;
-                const float ndl = dot(hitN, toL);
-                if (ndl > 0.0) {
-                    float atten = 1.0 / max(pow(dist, lights.pointLights[i].decay), 0.01);
-                    const float range = lights.pointLights[i].range;
-                    if (range > 0.0) { const float tt = dist / range; const float t4 = tt*tt*tt*tt; const float wnd = max(1.0 - t4, 0.0); atten *= wnd * wnd; }
-                    if (atten > 1e-6) {
-                        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
-                        lit += diff * ndl * lights.pointLights[i].color * (atten * vis * wL);
-                    }
-                }
-            }
-        } else {
-            const uint  i    = pick - lights.dirCount - lights.pointCount;
-            vec3        toL  = lights.spotLights[i].position - hitP;
-            const float dist = length(toL);
-            if (dist >= 1e-4) {
-                toL /= dist;
-                const float ndl = dot(hitN, toL);
-                if (ndl > 0.0) {
-                    const float spotCos   = dot(-toL, lights.spotLights[i].direction);
-                    const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
-                                                       lights.spotLights[i].cosAngleInner, spotCos);
-                    if (spotAtten > 0.0) {
-                        float atten = spotAtten / max(pow(dist, lights.spotLights[i].decay), 0.01);
-                        const float range = lights.spotLights[i].range;
-                        if (range > 0.0) { const float tt = dist / range; const float t4 = tt*tt*tt*tt; const float wnd = max(1.0 - t4, 0.0); atten *= wnd * wnd; }
-                        if (atten > 1e-6) {
-                            const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
-                            lit += diff * ndl * lights.spotLights[i].color * (atten * vis * wL);
-                        }
-                    }
-                }
-            }
-        }
+    const uint nLights = lights.dirCount + lights.pointCount + lights.spotCount;
+    const bool pickOne = nLights > 8u;
+    float wL = 1.0;
+    const uint pick = pickOne ? pickAnalyticLight(hitP, seed, wL) : 0xFFFFFFFFu;
+
+    for (uint i = 0u; i < lights.dirCount; ++i) {
+        if (pickOne && i != pick) continue;
+        const vec3  L   = normalize(lights.dirLights[i].direction);
+        const float ndl = dot(hitN, L);
+        if (ndl <= 0.0) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, L, 1e30) : 1.0;
+        lit += diff * ndl * lights.dirLights[i].color * (vis * wL);
+    }
+    for (uint i = 0u; i < lights.pointCount; ++i) {
+        if (pickOne && (lights.dirCount + i) != pick) continue;
+        vec3        toL  = lights.pointLights[i].position - hitP;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float ndl = dot(hitN, toL);
+        if (ndl <= 0.0) continue;
+        float atten = 1.0 / max(pow(dist, lights.pointLights[i].decay), 0.01);
+        const float range = lights.pointLights[i].range;
+        if (range > 0.0) { const float tt = dist / range; const float t4 = tt*tt*tt*tt; const float wnd = max(1.0 - t4, 0.0); atten *= wnd * wnd; }
+        if (atten <= 1e-6) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
+        lit += diff * ndl * lights.pointLights[i].color * (atten * vis * wL);
+    }
+    for (uint i = 0u; i < lights.spotCount; ++i) {
+        if (pickOne && (lights.dirCount + lights.pointCount + i) != pick) continue;
+        vec3        toL  = lights.spotLights[i].position - hitP;
+        const float dist = length(toL);
+        if (dist < 1e-4) continue;
+        toL /= dist;
+        const float ndl = dot(hitN, toL);
+        if (ndl <= 0.0) continue;
+        const float spotCos   = dot(-toL, lights.spotLights[i].direction);
+        const float spotAtten = smoothstep(lights.spotLights[i].cosAngleOuter,
+                                           lights.spotLights[i].cosAngleInner, spotCos);
+        if (spotAtten <= 0.0) continue;
+        float atten = spotAtten / max(pow(dist, lights.spotLights[i].decay), 0.01);
+        const float range = lights.spotLights[i].range;
+        if (range > 0.0) { const float tt = dist / range; const float t4 = tt*tt*tt*tt; const float wnd = max(1.0 - t4, 0.0); atten *= wnd * wnd; }
+        if (atten <= 1e-6) continue;
+        const float vis = doShadows ? shadowVis(shadowOrig, toL, dist - 1e-2) : 1.0;
+        lit += diff * ndl * lights.spotLights[i].color * (atten * vis * wL);
     }
     // Emitter 1-bounce (e.g. enclosed scene lit only by an emissive sphere) —
     // cheap small-sample diffuse NEE so the colour bleed survives the denoiser.
