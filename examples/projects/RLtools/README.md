@@ -33,14 +33,18 @@ C++, and the rendering, HUD and UI are threepp.
 field. `rltools_swarm` is the honest, scaled-up version: a **single** SAC learner is
 fed by a **field of 64 environments stepped in parallel** — the "many envs → one
 learner" pattern that makes GPU RL (Isaac-Gym/Brax) worthwhile, here at toy scale and
-fully cross-platform. **The pendulums you see ARE the training data.** A background
-thread steps all 64 envs, feeds their transitions to the learner, and runs SAC
-gradient steps; the render thread only visualizes the published states. Each env's
-links are drawn as instanced cylinders with a sphere at every distal joint (a
-pendulum's bob; an acrobot's elbow + tip), and that sphere turns **green the moment
-the env is solved** (`Env::upright`) — so the whole field becomes a live, at-a-glance
-"how many has the policy cracked" meter (and it honestly shows acrobot *flashing*
-through the top without holding).
+fully cross-platform. **The pendulums you see ARE the training data.** Each frame the
+render thread collects one rollout step for all 64 envs (from the latest policy
+snapshot) and hands the batch to a dedicated learner thread running SAC gradient steps
+flat-out — so the field animates at frame rate while training never blocks it (the same
+threading shape as the GPU demo below, with a CPU forward in place of the dispatch).
+Each env's links are drawn as instanced cylinders with a sphere at every distal joint (a
+pendulum's bob; an acrobot's elbow + tip), and that sphere turns **green the moment the
+env is solved** (`Env::upright`) — so the whole field is a live, at-a-glance "how many
+has the policy cracked" meter (and it honestly shows acrobot *flashing* through the top
+without holding). A **"Policy view" checkbox** swaps the exploratory training field for a
+clean **deterministic** showcase (the no-noise policy), with training continuing in the
+background.
 
 This is Stage 1 (CPU) of a staged plan; the environment dynamics live in a plain
 [`pendulum_env.hpp`](pendulum_env.hpp) and the learner behind

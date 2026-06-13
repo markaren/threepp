@@ -208,6 +208,15 @@ int main() {
         }
     }
 
+    // optional deterministic "policy view" showcase: a separate field driven by the
+    // no-noise policy (policyActionsDet). Training never pauses — this just changes what
+    // is drawn. Synchronized episodes so the whole field swings up together (clean view).
+    bool policyView = false;
+    std::vector<typename Env::State> showStates(M);
+    std::vector<float> showObs(M * O), showAct(M * A);
+    int showEp = 0;
+    for (int i = 0; i < M; ++i) showStates[i] = Env::sampleInitial(rng);
+
     auto deterministicEval = [&]() -> float {
         constexpr int E = 8;
         std::vector<typename Env::State> s(E);
@@ -234,8 +243,10 @@ int main() {
         ImGui::SetNextWindowPos({vp->WorkPos.x + vp->WorkSize.x - 10, vp->WorkPos.y + 10}, ImGuiCond_Always, {1, 0});
         ImGui::SetNextWindowSize({340, 0}, ImGuiCond_Always);
         ImGui::Begin("RLtools - parallel SAC", nullptr, ImGuiWindowFlags_NoCollapse);
-        ImGui::TextWrapped("Task: %s.  One SAC learner trains from %d environments stepped in parallel; the field "
-                           "you see IS the live training data.", Env::kName, M);
+        ImGui::TextWrapped("Task: %s.  One SAC learner trains from %d environments stepped in parallel.", Env::kName, M);
+        ImGui::Checkbox("Policy view (deterministic - no exploration noise)", &policyView);
+        ImGui::TextDisabled("%s", policyView ? "showing the clean policy (training continues in the background)"
+                                             : "showing the live training rollout (this IS the training data)");
         ImGui::Separator();
         const long sc = trainer.gradientSteps();
         const long lim = Trainer::updateBudget();
@@ -304,21 +315,35 @@ int main() {
             batchReady = true;
         }
 
-        // 3. advance the env states (reset truncated) + count solved
-        int up = 0;
+        // 3. advance the training env states (reset truncated)
         for (int i = 0; i < M; ++i) {
             if (truncv[i]) { states[i] = Env::sampleInitial(rng); epStep[i] = 0; }
             else states[i] = next[i];
-            if (Env::upright(states[i])) ++up;
         }
+
+        // 3b. when in policy view, step the deterministic showcase field (training above
+        //     is unaffected); pick which field to draw.
+        if (policyView) {
+            for (int i = 0; i < M; ++i) Env::observe(showStates[i], &showObs[i * O]);
+            trainer.policyActionsDet(showObs.data(), showAct.data(), M);
+            for (int i = 0; i < M; ++i) showStates[i] = Env::step(showStates[i], &showAct[i * A]);
+            if (++showEp >= Env::kEpisodeSteps) {
+                showEp = 0;
+                for (int i = 0; i < M; ++i) showStates[i] = Env::sampleInitial(rng);
+            }
+        }
+        const std::vector<typename Env::State>& field = policyView ? showStates : states;
+        int up = 0;
+        for (int i = 0; i < M; ++i)
+            if (Env::upright(field[i])) ++up;
         uprightCount.store(up);
 
-        // 4. place each env's links + end-effector spheres from its live state
+        // 4. place each env's links + end-effector spheres from the displayed field
         const Quaternion qi;// identity (spheres don't rotate)
         for (int r = 0; r < Env::kRods; ++r) {
             for (int i = 0; i < M; ++i) {
                 float x0, y0, x1, y1;
-                Env::rod(states[i], r, x0, y0, x1, y1);
+                Env::rod(field[i], r, x0, y0, x1, y1);
                 const float ax = cellX[i] + x0, ay = kBaseY + y0;
                 const float bx = cellX[i] + x1, by = kBaseY + y1;
                 const float ddx = bx - ax, ddy = by - ay;
@@ -329,7 +354,7 @@ int main() {
                 links[r]->setMatrixAt(i, m);
 
                 // sphere at the distal joint; show it in the rest- or goal-colored mesh
-                const bool solved = Env::upright(states[i]);
+                const bool solved = Env::upright(field[i]);
                 Matrix4 show, hide;
                 show.compose({bx, by, cellZ[i]}, qi, {1.f, 1.f, 1.f});
                 hide.compose({bx, by, cellZ[i]}, qi, {0.f, 0.f, 0.f});// collapsed -> invisible

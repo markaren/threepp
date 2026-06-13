@@ -293,6 +293,16 @@ int main() {
     long tick = 0;
     std::mt19937 evalRng(99);
 
+    // optional deterministic "policy view" showcase: a separate field driven by the
+    // no-noise policy (policyActionsDet, chunked by kNumEnvs). The GPU training rollout
+    // never pauses; this only changes what is drawn. Synchronized episodes.
+    bool policyView = false;
+    std::vector<typename Env::State> showStates(N_VIS);
+    std::vector<float> showObs(Trainer::kNumEnvs * O), showAct(Trainer::kNumEnvs * A);
+    int showEp = 0;
+    std::mt19937 showRng(123);
+    for (int i = 0; i < N_VIS; ++i) showStates[i] = Env::sampleInitial(showRng);
+
     auto deterministicEval = [&]() -> float {
         constexpr int E = 8;
         std::vector<typename Env::State> s(E);
@@ -316,6 +326,7 @@ int main() {
         ImGui::Begin("RLtools - GPU rollout swarm", nullptr, ImGuiWindowFlags_NoCollapse);
         ImGui::TextWrapped("Task: %s.  %d environments are stepped in ONE Vulkan compute dispatch (observe -> "
                            "actor MLP -> sample -> step). Transitions feed one CPU SAC learner.", Env::kName, N_TOTAL);
+        ImGui::Checkbox("Policy view (deterministic - no exploration noise)", &policyView);
         ImGui::Separator();
         const long sc = trainer.gradientSteps();
         const long lim = Trainer::updateBudget();
@@ -373,11 +384,26 @@ int main() {
             batchReady = true;
         }
 
-        // 5. visualize the swarm from the read-back GPU states (any Env, R links)
+        // 4b. when in policy view, step the deterministic showcase field (the GPU
+        //     training rollout above is unaffected — it always feeds the learner).
+        if (policyView) {
+            for (int base = 0; base < N_VIS; base += Trainer::kNumEnvs) {
+                const int m = std::min(Trainer::kNumEnvs, N_VIS - base);
+                for (int i = 0; i < m; ++i) Env::observe(showStates[base + i], &showObs[i * O]);
+                trainer.policyActionsDet(showObs.data(), showAct.data(), m);
+                for (int i = 0; i < m; ++i) showStates[base + i] = Env::step(showStates[base + i], &showAct[i * A]);
+            }
+            if (++showEp >= Env::kEpisodeSteps) {
+                showEp = 0;
+                for (int i = 0; i < N_VIS; ++i) showStates[i] = Env::sampleInitial(showRng);
+            }
+        }
+
+        // 5. visualize: the live GPU training rollout, or the deterministic showcase
         const Quaternion qi;// identity (spheres don't rotate)
         for (int r = 0; r < R; ++r) {
             for (int i = 0; i < N_VIS; ++i) {
-                const Env::State st = Env::unpackState(&stateHost[i * SSTRIDE]);
+                const Env::State st = policyView ? showStates[i] : Env::unpackState(&stateHost[i * SSTRIDE]);
                 float x0, y0, x1, y1;
                 Env::rod(st, r, x0, y0, x1, y1);
                 const float ax = cellX[i] + x0, ay = baseY + y0;
