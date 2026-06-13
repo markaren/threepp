@@ -1,16 +1,13 @@
-// RLSwarmTrainer — a plain-C++ facade over an RLtools (https://rl.tools) SAC
-// *learner* fed by externally-collected, parallel rollouts.
+// RLSwarmTrainer<OBS_DIM, ACT_DIM> — a plain-C++ facade over an RLtools SAC learner
+// fed by externally-collected parallel rollouts, generalized over observation/action
+// dimensions so the SAME learner trains ANY continuous-control task (pendulum,
+// cartpole, acrobot, ...). The environment dynamics live outside (in the env headers
+// / a GPU shader); this class only does policy inference + replay-buffer insertion +
+// SAC gradient updates. ALL RLtools template machinery is confined to the .cpp;
+// instantiations are provided explicitly there (one per task's dims).
 //
-// Unlike RLPendulumTrainer (which runs RLtools' canned loop on ONE internal env),
-// this trainer is environment-agnostic: the caller steps M environments in
-// parallel (on CPU now, on a GPU shader later) and feeds the resulting transitions
-// here. The trainer only does: policy inference (batched), replay-buffer insertion,
-// and SAC gradient updates. That boundary is the GPU seam — moving the rollout to
-// Vulkan compute requires no change to this class.
-//
-// Threading: rolloutActions()/addTransitions()/update() are called from ONE thread
-// (the collector/learner thread). policyActionsDet() is safe from another thread
-// (the render thread) — it reads a periodically-published policy snapshot.
+// Threading: rolloutActions()/addTransitions()/update() from ONE thread; the rest are
+// safe from another thread (they read a periodically-published policy snapshot).
 
 #ifndef THREEPP_RL_SWARM_TRAINER_HPP
 #define THREEPP_RL_SWARM_TRAINER_HPP
@@ -19,6 +16,7 @@
 
 namespace rldemo {
 
+    template<int OBS_DIM, int ACT_DIM>
     class RLSwarmTrainer {
 
     public:
@@ -28,50 +26,50 @@ namespace rldemo {
         RLSwarmTrainer(const RLSwarmTrainer&) = delete;
         RLSwarmTrainer& operator=(const RLSwarmTrainer&) = delete;
 
-        static constexpr int kNumEnvs = 64;// M parallel environments (compile-time)
-        static constexpr int kObsDim = 3;
-        static constexpr int kActDim = 1;
+        static constexpr int kNumEnvs = 64;// M parallel environments (replay-buffer count)
+        static constexpr int kObsDim = OBS_DIM;
+        static constexpr int kActDim = ACT_DIM;
         static constexpr int kHidden = 64;// actor MLP hidden width
-        // actor MLP weight count (flattened, per layer: W row-major [out][in], then b[out]):
-        //   3->64, 64->64, 64->2  =  (3*64+64) + (64*64+64) + (2*64+2) = 4546
-        static constexpr int kWeightCount = kObsDim * kHidden + kHidden + kHidden * kHidden + kHidden + 2 * kHidden + 2;
-        static constexpr float kLogStdLo = -20.f, kLogStdHi = 2.f;// sample_and_squash bounds
+        // flattened actor weight count (per layer: W row-major [out][in], then b[out]):
+        //   OBS->64, 64->64, 64->2*ACT
+        static constexpr int kWeightCount =
+                OBS_DIM * kHidden + kHidden + kHidden * kHidden + kHidden + 2 * ACT_DIM * kHidden + 2 * ACT_DIM;
+        static constexpr float kLogStdLo = -20.f, kLogStdHi = 2.f;
 
-        // [any thread] Snapshot the actor MLP weights into `out` (kWeightCount floats), in the
-        // layout above — for uploading to a GPU rollout shader. Reads the published snapshot.
-        void extractWeights(float* out) const;
-
-        // [collector thread] Batched collection actions for m<=kNumEnvs envs.
-        // While in warmup -> uniform random in [-1,1]; afterwards -> stochastic policy
-        // (exploration). obs: m*3 row-major; actions: m out.
+        // [collector thread] Batched collection actions for m<=kNumEnvs envs. Warmup ->
+        // uniform random in [-1,1]; afterwards -> stochastic policy. obs: m*OBS_DIM; actions: m*ACT_DIM.
         void rolloutActions(const float* obs, float* actions, int m);
 
-        // [collector thread] Ingest m transitions (caller owns env dynamics + reward).
-        // obs/nextObs: m*3; actions/rewards: m; truncated: m (0/1). terminated is always
-        // false for the pendulum.
+        // [collector thread] Ingest m transitions (caller owns dynamics + reward).
         void addTransitions(const float* obs, const float* actions, const float* rewards,
                             const float* nextObs, const unsigned char* truncated, int m);
 
-        // [collector thread] Run up to gradSteps SAC gradient steps. No-op until past
-        // warmup or once the budget is exhausted. Returns the number actually performed.
+        // [collector thread] Up to gradSteps SAC gradient steps (no-op until past warmup / done).
         int update(int gradSteps);
 
-        // [render thread] Deterministic batched policy eval on the published snapshot,
-        // for the optional "showcase" visualization (m<=kNumEnvs).
+        // [render thread] Deterministic batched eval on the published snapshot.
         void policyActionsDet(const float* obs, float* actions, int m);
 
-        [[nodiscard]] long transitionsCollected() const;
-        [[nodiscard]] bool pastWarmup() const;// has training started?
-        [[nodiscard]] long gradientSteps() const;
-        [[nodiscard]] bool done() const;       // gradient-step budget exhausted
+        // [any thread] Flatten the actor MLP weights into `out` (kWeightCount floats) for a GPU shader.
+        void extractWeights(float* out) const;
 
-        static long updateBudget();  // total gradient-step budget
+        [[nodiscard]] long transitionsCollected() const;
+        [[nodiscard]] bool pastWarmup() const;
+        [[nodiscard]] long gradientSteps() const;
+        [[nodiscard]] bool done() const;
+
+        static long updateBudget();
         static long warmupTransitions();
 
     private:
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };
+
+    // Explicit instantiations live in the .cpp (one per task's dims). To add a task
+    // whose dims aren't a native RLtools env, add a generic-env mapping in the .cpp.
+    extern template class RLSwarmTrainer<3, 1>;// pendulum
+    extern template class RLSwarmTrainer<6, 1>;// acrobot
 
 }// namespace rldemo
 

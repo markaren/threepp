@@ -45,6 +45,24 @@ This is Stage 1 (CPU) of a staged plan; the environment dynamics live in a plain
 gradient updates — that boundary is the seam where a **Vulkan-compute rollout** (Stage 2,
 reusing the RF-DETR `VkInfer` GEMM kernels) later plugs in with no learner change.
 
+### Pluggable tasks — swap the pendulum in one line
+
+The swarm is **environment-generic**. The task is chosen by a single line in `swarm.cpp`:
+
+```cpp
+using Env = rldemo::PendulumEnv;   // or rldemo::AcrobotEnv
+```
+
+An `Env` is a small plain-C++ struct ([`env_pendulum.hpp`](env_pendulum.hpp),
+[`env_acrobot.hpp`](env_acrobot.hpp)) that supplies its dims, `observe/step/reward/
+sampleInitial`, and its renderable links (`rod(...)`). The learner is templated on the
+env's dims (`RLSwarmTrainer<OBS, ACT>`), and the viz renders any env's links via
+instanced cylinders — so nothing else changes. Verified: the **same** architecture
+trains **pendulum** (obs 3, 1 link — solves 100%) and **acrobot** (obs 6, 2 links,
+underactuated — reaches the goal in ~97% of episodes), just by switching that typedef.
+Adding a task whose dims aren't a native RLtools env needs one extra mapping in
+`RLSwarmTrainer.cpp`.
+
 ## Build
 
 RLtools is opt-in (it is fetched only when you ask for it):

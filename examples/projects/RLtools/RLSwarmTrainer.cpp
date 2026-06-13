@@ -1,12 +1,12 @@
-// RLtools-isolated implementation of RLSwarmTrainer (the parallel-rollout learner).
+// RLtools-isolated implementation of RLSwarmTrainer<OBS_DIM, ACT_DIM>.
 //
-// This is the ONLY translation unit that instantiates RLtools templates for the
-// swarm demo. It drives SAC manually: external transitions are inserted into the
-// off-policy runner's replay buffers via rlt::add(), and the gradient updates
-// replicate the *training half* of rl/algorithms/sac/loop/core/operations_generic.h
-// step() verbatim (SHARED_BATCH path). The data-collection half (which would step
-// RLtools' own internal env) is intentionally NOT used — the caller supplies the
-// transitions, which is exactly the seam where a GPU rollout later plugs in.
+// The ONLY TU that instantiates RLtools templates for the swarm demos. SAC is driven
+// manually: external transitions go into the off-policy runner's replay buffers via
+// rlt::add(), and the gradient updates replicate the SHARED_BATCH train half of
+// rl/algorithms/sac/loop/core/operations_generic.h step(). The data-collection half
+// (which would step RLtools' own env) is NOT used — the caller supplies transitions,
+// so the learner is environment-agnostic. The trainer needs an RLtools env type only
+// for its DIMS + State (its dynamics are bypassed), so we map dims -> a native env.
 
 #include "RLSwarmTrainer.hpp"
 
@@ -15,6 +15,7 @@
 #include <rl_tools/nn/operations_cpu.h>
 #include <rl_tools/nn/layers/sample_and_squash/operations_generic.h>
 #include <rl_tools/rl/environments/pendulum/operations_cpu.h>
+#include <rl_tools/rl/environments/acrobot/operations_generic.h>
 #include <rl_tools/nn_models/mlp/operations_generic.h>
 #include <rl_tools/nn_models/sequential/operations_generic.h>
 #include <rl_tools/nn_models/random_uniform/operations_generic.h>
@@ -40,62 +41,76 @@ namespace {
     using TI = typename DEVICE::index_t;
     using TYPE_POLICY = rlt::numeric_types::Policy<T>;
 
-    using PENDULUM_SPEC = rlt::rl::environments::pendulum::Specification<T, TI, rlt::rl::environments::pendulum::DefaultParameters<T>>;
-    using ENVIRONMENT = rlt::rl::environments::Pendulum<PENDULUM_SPEC>;
+    constexpr int kM = 64;                // RLSwarmTrainer::kNumEnvs (replay-buffer / eval batch)
+    constexpr long kSnapshotInterval = 25;// refresh the inference snapshot every N grad steps
 
-    constexpr int kM = rldemo::RLSwarmTrainer::kNumEnvs;// 64
-
-    struct LOOP_CORE_PARAMETERS: rlt::rl::algorithms::sac::loop::core::DefaultParameters<TYPE_POLICY, TI, ENVIRONMENT> {
-        struct SAC_PARAMETERS: rlt::rl::algorithms::sac::DefaultParameters<TYPE_POLICY, TI, ENVIRONMENT::ACTION_DIM> {
-            static constexpr TI ACTOR_BATCH_SIZE = 100;
-            static constexpr TI CRITIC_BATCH_SIZE = 100;
-        };
-        static constexpr TI N_ENVIRONMENTS = kM;       // M parallel replay buffers
-        static constexpr TI N_WARMUP_STEPS = 1000;      // random-action transitions before training
-        static constexpr TI N_WARMUP_STEPS_CRITIC = 1000;
-        static constexpr TI N_WARMUP_STEPS_ACTOR = 1000;
-        static constexpr TI STEP_LIMIT = 8000;          // gradient-step budget
-        static constexpr TI REPLAY_BUFFER_CAP = 10000;  // per-env capacity (must be set explicitly)
-        static constexpr TI ACTOR_NUM_LAYERS = 3;
-        static constexpr TI ACTOR_HIDDEN_DIM = 64;
-        static constexpr TI CRITIC_NUM_LAYERS = 3;
-        static constexpr TI CRITIC_HIDDEN_DIM = 64;
+    // Map (obs_dim, act_dim) -> a native RLtools environment. The env's DYNAMICS are
+    // never used (the caller owns them) — only its DIMS + State type matter here.
+    template<int OBS, int ACT>
+    struct RLEnv;
+    template<>
+    struct RLEnv<3, 1> {
+        using type = rlt::rl::environments::Pendulum<rlt::rl::environments::pendulum::Specification<T, TI, rlt::rl::environments::pendulum::DefaultParameters<T>>>;
+    };
+    template<>
+    struct RLEnv<6, 1> {
+        using type = rlt::rl::environments::Acrobot<rlt::rl::environments::acrobot::Specification<T, TI, rlt::rl::environments::acrobot::DefaultParameters<T>>>;
     };
 
-    using LOOP_CONFIG = rlt::rl::algorithms::sac::loop::core::Config<TYPE_POLICY, TI, RNG, ENVIRONMENT, LOOP_CORE_PARAMETERS>;
-    using LOOP_STATE = LOOP_CONFIG::State<LOOP_CONFIG>;
-    using SAC_PARAMS = LOOP_CORE_PARAMETERS::SAC_PARAMETERS;
-
-    static_assert(ENVIRONMENT::Observation::DIM == 3 && ENVIRONMENT::ACTION_DIM == 1);
-
-    constexpr long kSnapshotInterval = 25;// refresh deterministic-viz snapshot every N grad steps
-
-    using ObsMat = rlt::Matrix<rlt::matrix::Specification<T, TI, 1, 3>>;
-    using ActMat = rlt::Matrix<rlt::matrix::Specification<T, TI, 1, 1>>;
-    using BatchInput = rlt::Tensor<rlt::tensor::Specification<T, TI, rlt::tensor::Shape<TI, 1, kM, 3>>>;
-    using BatchOutput = rlt::Tensor<rlt::tensor::Specification<T, TI, rlt::tensor::Shape<TI, 1, kM, 1>>>;
+    template<typename ENVIRONMENT>
+    struct Cfg {
+        struct LOOP_CORE_PARAMETERS: rlt::rl::algorithms::sac::loop::core::DefaultParameters<TYPE_POLICY, TI, ENVIRONMENT> {
+            struct SAC_PARAMETERS: rlt::rl::algorithms::sac::DefaultParameters<TYPE_POLICY, TI, ENVIRONMENT::ACTION_DIM> {
+                static constexpr TI ACTOR_BATCH_SIZE = 100;
+                static constexpr TI CRITIC_BATCH_SIZE = 100;
+            };
+            static constexpr TI N_ENVIRONMENTS = kM;
+            static constexpr TI N_WARMUP_STEPS = 1000;
+            static constexpr TI N_WARMUP_STEPS_CRITIC = 1000;
+            static constexpr TI N_WARMUP_STEPS_ACTOR = 1000;
+            static constexpr TI STEP_LIMIT = 8000;
+            static constexpr TI REPLAY_BUFFER_CAP = 10000;
+            static constexpr TI ACTOR_NUM_LAYERS = 3;
+            static constexpr TI ACTOR_HIDDEN_DIM = 64;
+            static constexpr TI CRITIC_NUM_LAYERS = 3;
+            static constexpr TI CRITIC_HIDDEN_DIM = 64;
+        };
+        using LOOP_CONFIG = rlt::rl::algorithms::sac::loop::core::Config<TYPE_POLICY, TI, RNG, ENVIRONMENT, LOOP_CORE_PARAMETERS>;
+        using LOOP_STATE = typename LOOP_CONFIG::template State<LOOP_CONFIG>;
+        using SAC_PARAMS = typename LOOP_CORE_PARAMETERS::SAC_PARAMETERS;
+    };
 
 }// namespace
 
 namespace rldemo {
 
-    struct RLSwarmTrainer::Impl {
-        DEVICE trainDevice;// collector/learner thread
-        DEVICE inferDevice;// render thread (policyActionsDet)
-        LOOP_STATE ts;     // owned by the collector/learner thread
+    template<int OBS_DIM, int ACT_DIM>
+    struct RLSwarmTrainer<OBS_DIM, ACT_DIM>::Impl {
+        using ENVIRONMENT = typename RLEnv<OBS_DIM, ACT_DIM>::type;
+        using CFG = Cfg<ENVIRONMENT>;
+        using LOOP_CONFIG = typename CFG::LOOP_CONFIG;
+        using LOOP_STATE = typename CFG::LOOP_STATE;
+        using SAC_PARAMS = typename CFG::SAC_PARAMS;
+        static constexpr int H = 64;
 
-        // shared deterministic-viz snapshot (same type as the live actor)
+        using ObsMat = rlt::Matrix<rlt::matrix::Specification<T, TI, 1, OBS_DIM>>;
+        using ActMat = rlt::Matrix<rlt::matrix::Specification<T, TI, 1, ACT_DIM>>;
+        using BatchInput = rlt::Tensor<rlt::tensor::Specification<T, TI, rlt::tensor::Shape<TI, 1, kM, OBS_DIM>>>;
+        using BatchOutput = rlt::Tensor<rlt::tensor::Specification<T, TI, rlt::tensor::Shape<TI, 1, kM, ACT_DIM>>>;
+
+        DEVICE trainDevice;
+        DEVICE inferDevice;
+        LOOP_STATE ts;
+
         decltype(ts.actor_critic.actor) snapshot;
         std::mutex mutex;
 
-        // collector-thread rollout scratch (reuses ts.actor_buffers_eval as the eval buffer)
         BatchInput rolloutIn;
         BatchOutput rolloutOut;
         ObsMat addObs, addNextObs;
         ActMat addAction;
         std::mt19937 warmupRng;
 
-        // render-thread deterministic scratch
         typename LOOP_CONFIG::EVAL_ACTOR_TYPE::template Buffer<true> detBuffer;
         RNG detRng;
         BatchInput detIn;
@@ -137,43 +152,42 @@ namespace rldemo {
         }
     };
 
-    RLSwarmTrainer::RLSwarmTrainer(unsigned int seed)
+    template<int OBS_DIM, int ACT_DIM>
+    RLSwarmTrainer<OBS_DIM, ACT_DIM>::RLSwarmTrainer(unsigned int seed)
         : impl_(std::make_unique<Impl>(seed)) {}
-    RLSwarmTrainer::~RLSwarmTrainer() = default;
 
-    void RLSwarmTrainer::rolloutActions(const float* obs, float* actions, int m) {
-        if (impl_->transitions.load() < LOOP_CORE_PARAMETERS::N_WARMUP_STEPS) {
+    template<int OBS_DIM, int ACT_DIM>
+    RLSwarmTrainer<OBS_DIM, ACT_DIM>::~RLSwarmTrainer() = default;
+
+    template<int OBS_DIM, int ACT_DIM>
+    void RLSwarmTrainer<OBS_DIM, ACT_DIM>::rolloutActions(const float* obs, float* actions, int m) {
+        if (impl_->transitions.load() < Impl::CFG::LOOP_CORE_PARAMETERS::N_WARMUP_STEPS) {
             std::uniform_real_distribution<float> d(-1.f, 1.f);
-            for (int i = 0; i < m; ++i) actions[i] = d(impl_->warmupRng);
+            for (int i = 0; i < m * ACT_DIM; ++i) actions[i] = d(impl_->warmupRng);
             return;
         }
         for (int i = 0; i < m; ++i)
-            for (int c = 0; c < 3; ++c)
-                rlt::set(impl_->trainDevice, impl_->rolloutIn, obs[i * 3 + c], 0, i, c);
+            for (int c = 0; c < OBS_DIM; ++c)
+                rlt::set(impl_->trainDevice, impl_->rolloutIn, obs[i * OBS_DIM + c], 0, i, c);
         rlt::evaluate(impl_->trainDevice, impl_->ts.actor_critic.actor, impl_->rolloutIn, impl_->rolloutOut,
                       impl_->ts.actor_buffers_eval, impl_->ts.rng, rlt::Mode<rlt::mode::Rollout<>>{});
-        for (int i = 0; i < m; ++i) actions[i] = rlt::get(impl_->trainDevice, impl_->rolloutOut, 0, i, 0);
+        for (int i = 0; i < m; ++i)
+            for (int a = 0; a < ACT_DIM; ++a)
+                actions[i * ACT_DIM + a] = rlt::get(impl_->trainDevice, impl_->rolloutOut, 0, i, a);
     }
 
-    void RLSwarmTrainer::addTransitions(const float* obs, const float* actions, const float* rewards,
-                                        const float* nextObs, const unsigned char* truncated, int m) {
+    template<int OBS_DIM, int ACT_DIM>
+    void RLSwarmTrainer<OBS_DIM, ACT_DIM>::addTransitions(const float* obs, const float* actions, const float* rewards,
+                                                          const float* nextObs, const unsigned char* truncated, int m) {
         auto& dev = impl_->trainDevice;
         for (int i = 0; i < m; ++i) {
-            const float c = obs[i * 3], s = obs[i * 3 + 1], wd = obs[i * 3 + 2];
-            const float nc = nextObs[i * 3], ns = nextObs[i * 3 + 1], nwd = nextObs[i * 3 + 2];
-            typename ENVIRONMENT::State st;
-            st.theta = std::atan2(s, c);
-            st.theta_dot = wd;
-            typename ENVIRONMENT::State nst;
-            nst.theta = std::atan2(ns, nc);
-            nst.theta_dot = nwd;
-            rlt::set(impl_->addObs, 0, 0, c);
-            rlt::set(impl_->addObs, 0, 1, s);
-            rlt::set(impl_->addObs, 0, 2, wd);
-            rlt::set(impl_->addNextObs, 0, 0, nc);
-            rlt::set(impl_->addNextObs, 0, 1, ns);
-            rlt::set(impl_->addNextObs, 0, 2, nwd);
-            rlt::set(impl_->addAction, 0, 0, actions[i]);
+            typename Impl::ENVIRONMENT::State st{};// cosmetic for Markovian SAC (gather never reads it)
+            typename Impl::ENVIRONMENT::State nst{};
+            for (int c = 0; c < OBS_DIM; ++c) {
+                rlt::set(impl_->addObs, 0, c, obs[i * OBS_DIM + c]);
+                rlt::set(impl_->addNextObs, 0, c, nextObs[i * OBS_DIM + c]);
+            }
+            for (int a = 0; a < ACT_DIM; ++a) rlt::set(impl_->addAction, 0, a, actions[i * ACT_DIM + a]);
             auto& rb = get(impl_->ts.off_policy_runner.replay_buffers, 0, i % kM);
             rlt::add(dev, rb, st, impl_->addObs, impl_->addObs, impl_->addAction, rewards[i],
                      nst, impl_->addNextObs, impl_->addNextObs, false, truncated[i] != 0);
@@ -181,14 +195,16 @@ namespace rldemo {
         impl_->transitions.fetch_add(m);
     }
 
-    int RLSwarmTrainer::update(int gradSteps) {
-        if (impl_->transitions.load() < LOOP_CORE_PARAMETERS::N_WARMUP_STEPS_CRITIC) return 0;
+    template<int OBS_DIM, int ACT_DIM>
+    int RLSwarmTrainer<OBS_DIM, ACT_DIM>::update(int gradSteps) {
+        if (impl_->transitions.load() < Impl::CFG::LOOP_CORE_PARAMETERS::N_WARMUP_STEPS_CRITIC) return 0;
         auto& dev = impl_->trainDevice;
         auto& ts = impl_->ts;
+        using SAC_PARAMS = typename Impl::SAC_PARAMS;
         int performed = 0;
         for (int g = 0; g < gradSteps; ++g) {
             long step = impl_->gradStep.load();
-            if (step >= LOOP_CORE_PARAMETERS::STEP_LIMIT) {
+            if (step >= Impl::CFG::LOOP_CORE_PARAMETERS::STEP_LIMIT) {
                 impl_->done.store(true);
                 break;
             }
@@ -227,20 +243,24 @@ namespace rldemo {
         return performed;
     }
 
-    void RLSwarmTrainer::policyActionsDet(const float* obs, float* actions, int m) {
+    template<int OBS_DIM, int ACT_DIM>
+    void RLSwarmTrainer<OBS_DIM, ACT_DIM>::policyActionsDet(const float* obs, float* actions, int m) {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         for (int i = 0; i < m; ++i)
-            for (int c = 0; c < 3; ++c)
-                rlt::set(impl_->inferDevice, impl_->detIn, obs[i * 3 + c], 0, i, c);
+            for (int c = 0; c < OBS_DIM; ++c)
+                rlt::set(impl_->inferDevice, impl_->detIn, obs[i * OBS_DIM + c], 0, i, c);
         rlt::evaluate(impl_->inferDevice, impl_->snapshot, impl_->detIn, impl_->detOut,
                       impl_->detBuffer, impl_->detRng, rlt::Mode<rlt::mode::Evaluation<>>{});
-        for (int i = 0; i < m; ++i) actions[i] = rlt::get(impl_->inferDevice, impl_->detOut, 0, i, 0);
+        for (int i = 0; i < m; ++i)
+            for (int a = 0; a < ACT_DIM; ++a)
+                actions[i * ACT_DIM + a] = rlt::get(impl_->inferDevice, impl_->detOut, 0, i, a);
     }
 
-    void RLSwarmTrainer::extractWeights(float* out) const {
+    template<int OBS_DIM, int ACT_DIM>
+    void RLSwarmTrainer<OBS_DIM, ACT_DIM>::extractWeights(float* out) const {
         std::lock_guard<std::mutex> lock(impl_->mutex);
         auto& dev = impl_->inferDevice;
-        const auto& mlp = impl_->snapshot.content;// sequential: content = MLP, next_module = sample_and_squash
+        const auto& mlp = impl_->snapshot.content;
         int p = 0;
         auto emit = [&](const auto& layer, int outDim, int inDim) {
             for (int o = 0; o < outDim; ++o)
@@ -249,16 +269,26 @@ namespace rldemo {
             for (int o = 0; o < outDim; ++o)
                 out[p++] = static_cast<float>(rlt::get(dev, layer.biases.parameters, o));
         };
-        emit(mlp.input_layer, kHidden, kObsDim);
+        emit(mlp.input_layer, kHidden, OBS_DIM);
         emit(mlp.hidden_layers[0], kHidden, kHidden);
-        emit(mlp.output_layer, 2 * kActDim, kHidden);
+        emit(mlp.output_layer, 2 * ACT_DIM, kHidden);
     }
 
-    long RLSwarmTrainer::transitionsCollected() const { return impl_->transitions.load(); }
-    bool RLSwarmTrainer::pastWarmup() const { return impl_->transitions.load() >= LOOP_CORE_PARAMETERS::N_WARMUP_STEPS_CRITIC; }
-    long RLSwarmTrainer::gradientSteps() const { return impl_->gradStep.load(); }
-    bool RLSwarmTrainer::done() const { return impl_->done.load(); }
-    long RLSwarmTrainer::updateBudget() { return static_cast<long>(LOOP_CORE_PARAMETERS::STEP_LIMIT); }
-    long RLSwarmTrainer::warmupTransitions() { return static_cast<long>(LOOP_CORE_PARAMETERS::N_WARMUP_STEPS); }
+    template<int OBS_DIM, int ACT_DIM>
+    long RLSwarmTrainer<OBS_DIM, ACT_DIM>::transitionsCollected() const { return impl_->transitions.load(); }
+    template<int OBS_DIM, int ACT_DIM>
+    bool RLSwarmTrainer<OBS_DIM, ACT_DIM>::pastWarmup() const { return impl_->transitions.load() >= Impl::CFG::LOOP_CORE_PARAMETERS::N_WARMUP_STEPS_CRITIC; }
+    template<int OBS_DIM, int ACT_DIM>
+    long RLSwarmTrainer<OBS_DIM, ACT_DIM>::gradientSteps() const { return impl_->gradStep.load(); }
+    template<int OBS_DIM, int ACT_DIM>
+    bool RLSwarmTrainer<OBS_DIM, ACT_DIM>::done() const { return impl_->done.load(); }
+    template<int OBS_DIM, int ACT_DIM>
+    long RLSwarmTrainer<OBS_DIM, ACT_DIM>::updateBudget() { return static_cast<long>(Cfg<typename RLEnv<OBS_DIM, ACT_DIM>::type>::LOOP_CORE_PARAMETERS::STEP_LIMIT); }
+    template<int OBS_DIM, int ACT_DIM>
+    long RLSwarmTrainer<OBS_DIM, ACT_DIM>::warmupTransitions() { return static_cast<long>(Cfg<typename RLEnv<OBS_DIM, ACT_DIM>::type>::LOOP_CORE_PARAMETERS::N_WARMUP_STEPS); }
+
+    // ---- explicit instantiations (one per task's dims) ------------------------
+    template class RLSwarmTrainer<3, 1>;// pendulum
+    template class RLSwarmTrainer<6, 1>;// acrobot
 
 }// namespace rldemo

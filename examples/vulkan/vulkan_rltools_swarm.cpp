@@ -33,14 +33,14 @@
 #include <vector>
 
 using namespace threepp;
-using rldemo::RLSwarmTrainer;
+using Trainer = rldemo::RLSwarmTrainer<3, 1>;
 
 namespace {
     constexpr int N_TOTAL = 256;// environments stepped on the GPU per dispatch
     constexpr int N_VIS = 256;  // visualized (instanced)
     constexpr int kCols = 16, kRows = 16;
-    constexpr int WCOUNT = RLSwarmTrainer::kWeightCount;
-    constexpr int H = RLSwarmTrainer::kHidden;
+    constexpr int WCOUNT = Trainer::kWeightCount;
+    constexpr int H = Trainer::kHidden;
     constexpr float kPivotY = 0.65f, kArmLen = rlenv::kL, kDX = 1.6f, kDZ = 1.6f;
 
     struct PC {
@@ -173,7 +173,7 @@ int main() {
     seedStates();
     vk.upload(stateBuf.buffer, stateHost.data(), stateHost.size() * sizeof(float));
 
-    RLSwarmTrainer trainer(1);
+    Trainer trainer(1);
 
     // ---- GPU<->CPU parity self-test (deterministic) ---------------------------
     trainer.extractWeights(weightsHost.data());
@@ -266,7 +266,7 @@ int main() {
                            "-> sample -> step). Transitions feed one CPU SAC learner.", N_TOTAL);
         ImGui::Separator();
         const long sc = trainer.gradientSteps();
-        const long lim = RLSwarmTrainer::updateBudget();
+        const long lim = Trainer::updateBudget();
         ImGui::ProgressBar(lim > 0 ? static_cast<float>(sc) / lim : 0.f, {-1, 0},
                            (std::to_string(sc) + " / " + std::to_string(lim) + " grad steps").c_str());
         ImGui::Text("Learner: %.0f grad/s   |   %ld transitions", gradPerSec, trainer.transitionsCollected());
@@ -359,7 +359,7 @@ int main() {
         }
 
         const long sc = trainer.gradientSteps();
-        const long lim = RLSwarmTrainer::updateBudget();
+        const long lim = Trainer::updateBudget();
         stepHud->setText("Grad steps  " + std::to_string(sc) + " / " + std::to_string(lim) +
                          "    |    " + std::to_string(N_TOTAL) + " envs on GPU/tick");
         statusHud->setText(trainer.done() ? "TRAINED" : (trainer.pastWarmup() ? "LEARNING (GPU rollout -> CPU SAC)" : "WARMUP"));
