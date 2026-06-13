@@ -36,6 +36,8 @@
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
 
+#include "capture_util.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -855,6 +857,9 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--toggle") == 0) toggleNightAt = 60;
     }
     const bool capturing = !shotPath.empty();
+    // Shared capture machinery (capture_util.hpp): --cam/--look override the
+    // capture framing below with NO rebuild; --profile dumps per-pass timings.
+    const capture::Args capArgs = capture::parseArgs(argc, argv);
     int shotFrame = 0;
 
     Canvas canvas("Vulkan PT  Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
@@ -2620,7 +2625,12 @@ int main(int argc, char** argv) {
         }
 
         if (capturing) {
-            if (shotClose) {
+            if (capArgs.camPos && capArgs.camTarget) {
+                // --cam/--look override (capture_util): reframe any capture from
+                // the CLI with no rebuild — highest priority over the named shots.
+                camera.position.copy(*capArgs.camPos);
+                camera.lookAt(*capArgs.camTarget);
+            } else if (shotClose) {
                 // Near-surface grazing view beside the boat, looking across
                 // its wake — the high-foam-coverage region where close-up
                 // world-grid surface artifacts (foam texels, normal facets)
@@ -2663,6 +2673,15 @@ int main(int argc, char** argv) {
         }
 
         renderer.render(scene, camera);
+
+        // --profile (capture_util): per-pass GPU/CPU timings as JSON. Headless
+        // this makes perf measurable (e.g. the cost of a geometry/texture bump)
+        // instead of eyeballed; interactive, throttle to ~once a second.
+        if (capArgs.profile) {
+            static int profCount = 0;
+            if (capturing || ++profCount % 60 == 0)
+                capture::writeFrameTimings(renderer.lastFrameTimings(), capArgs, shotFrame);
+        }
 
         // F12: interactive screenshot → aaa_caps/usershot_N.png. Native-res
         // ground truth for artifact reports — screen captures of the window

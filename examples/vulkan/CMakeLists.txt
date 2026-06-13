@@ -12,6 +12,16 @@ add_example(NAME "vulkan_furnace_test" LINK_IMGUI)
 add_example(NAME "vulkan_lidar" LINK_IMGUI)
 add_example(NAME "vulkan_event_camera" LINK_IMGUI)
 
+# Local scratch harnesses (capture / repro / profiling tools) are not tracked —
+# see scratch/README.md and .gitignore. Auto-register every scratch/*.cpp as its
+# own target so this tracked build file never churns as harnesses come and go.
+# CONFIGURE_DEPENDS re-globs on each build; an empty/absent scratch/ is a no-op.
+file(GLOB _scratch_examples CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scratch/*.cpp")
+foreach (_scratch_src ${_scratch_examples})
+    get_filename_component(_scratch_name "${_scratch_src}" NAME_WE)
+    add_example(NAME "${_scratch_name}" SOURCES "scratch/${_scratch_name}.cpp" LINK_IMGUI)
+endforeach ()
+
 if (THREEPP_WITH_FBX)
     add_example(NAME "vulkan_bistro" LINK_IMGUI)
 endif ()
