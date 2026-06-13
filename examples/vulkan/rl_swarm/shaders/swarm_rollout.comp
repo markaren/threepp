@@ -1,105 +1,175 @@
 #version 450
-// Fused per-environment RL rollout: ONE GPU thread = ONE pendulum environment.
-// Each thread: observe -> actor MLP forward -> sample_and_squash action -> step
-// dynamics + reward -> emit a transition -> advance/reset its episode. The whole
-// rollout for thousands of envs is one dispatch; transitions are read back to a CPU
-// SAC learner (RLSwarmTrainer). The MLP math is a direct port of the CPU-validated
-// forward (3->64 ReLU, 64->64 ReLU, 64->2 identity) + RLtools' sample_and_squash.
+// Fused per-environment RL rollout: ONE GPU thread = ONE environment. Generic over
+// the task: the env-specific dynamics/observation live behind ENV_* (compiled into a
+// variant per task); everything else (the actor MLP forward, sample_and_squash, the
+// transition emit + reset) is parameterized by the dims and shared by all tasks.
+//
+// Compiled once per task, e.g.:  -DENV_PENDULUM  /  -DENV_ACROBOT
+
+// ---- task selection -> dims + state layout ---------------------------------
+#if defined(ENV_ACROBOT)
+    #define OBS_DIM   6
+    #define ACT_DIM   1
+    #define STATE_DIM 4   // t1, t2, d1, d2
+#else // ENV_PENDULUM (default)
+    #define ENV_PENDULUM
+    #define OBS_DIM   3
+    #define ACT_DIM   1
+    #define STATE_DIM 2   // theta, thetaDot
+#endif
+
+#define HID 64
+#define OUT_DIM (2 * ACT_DIM)
+#define TRANS (2 * OBS_DIM + ACT_DIM + 2)// obs, action, reward, nextObs, trunc
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant, std430) uniform PC {
-    uint n;            // number of environments
-    float dt, maxTorque, maxSpeed, g, l, m;
-    uint episodeLimit; // EPISODE_STEP_LIMIT (200)
-    uint stochastic;   // 1 = sample exploration noise, 0 = deterministic (mean)
-    uint warmup;       // 1 = use noise[] directly as a uniform random action
+    uint n;
+    float dt, p0, p1, p2, p3, p4;// generic task params (meaning is env-specific)
+    uint episodeLimit, stochastic, warmup;
 } p;
 
-layout(std430, binding = 0) readonly buffer Weights  { float w[]; };     // 4546 flattened actor weights
-layout(std430, binding = 1)          buffer State    { float st[]; };    // n*3: theta, thetaDot, episodeStep
-layout(std430, binding = 2) readonly buffer Noise    { float nz[]; };    // n: N(0,1) (or uniform[-1,1] in warmup)
-layout(std430, binding = 3) readonly buffer Initials { float ini[]; };   // n*2: reset theta0, thetaDot0
-layout(std430, binding = 4)          buffer Outp     { float o[]; };     // n*9: obs(3), action, reward, nextObs(3), trunc
+layout(std430, binding = 0) readonly buffer Weights  { float w[]; };
+layout(std430, binding = 1)          buffer State    { float st[]; };    // n*(STATE_DIM+1): vars..., epStep
+layout(std430, binding = 2) readonly buffer Noise    { float nz[]; };
+layout(std430, binding = 3) readonly buffer Initials { float ini[]; };   // n*STATE_DIM
+layout(std430, binding = 4)          buffer Outp     { float o[]; };      // n*TRANS
 
-const int H = 64;
 const float PI = 3.14159265358979;
-// flattened weight offsets for 3->64->64->2 (W row-major [out][in], then b[out])
-const int W1 = 0, B1 = 192, W2 = 256, B2 = 4352, W3 = 4416, B3 = 4544;
+// flattened actor weight offsets for OBS_DIM->64->64->OUT_DIM
+const int W1 = 0;
+const int B1 = OBS_DIM * HID;
+const int W2 = B1 + HID;
+const int B2 = W2 + HID * HID;
+const int W3 = B2 + HID;
+const int B3 = W3 + OUT_DIM * HID;
 
-float angnorm(float x) {
-    float tp = 2.0 * PI;
-    return mod(x + PI, tp) - PI;
+float clampf(float x, float lo, float hi) { return x < lo ? lo : (x > hi ? hi : x); }
+float angnorm(float x) { return mod(x + PI, 2.0 * PI) - PI; }
+
+// ===== env-specific: observe + step (dynamics + reward) =====================
+#if defined(ENV_PENDULUM)
+// params: p0 = maxTorque, p1 = maxSpeed, p2 = g, p3 = l, p4 = m
+void envObserve(float s[STATE_DIM], out float obs[OBS_DIM]) {
+    obs[0] = cos(s[0]);
+    obs[1] = sin(s[0]);
+    obs[2] = s[1];
 }
+void envStep(inout float s[STATE_DIM], float act[ACT_DIM], out float reward) {
+    float u = p.p0 * clampf(act[0], -1.0, 1.0);
+    float an = angnorm(s[0]);
+    reward = -(an * an + 0.1 * s[1] * s[1] + 0.001 * u * u);
+    float ntd = s[1] + (3.0 * p.p2 / (2.0 * p.p3) * sin(s[0]) + 3.0 / (p.p4 * p.p3 * p.p3) * u) * p.dt;
+    ntd = clampf(ntd, -p.p1, p.p1);
+    s[0] = s[0] + ntd * p.dt;
+    s[1] = ntd;
+}
+#elif defined(ENV_ACROBOT)
+// fixed acrobot constants (match env_acrobot.hpp)
+const float L1 = 1.0, L2 = 1.0, LC1 = 0.5, LC2 = 0.5, MA = 1.0, MB = 1.0, IA = 1.0, IB = 1.0, GA = 9.8;
+const float MAXV1 = 4.0 * PI, MAXV2 = 9.0 * PI;
+void acroDeriv(float t1, float t2, float d1, float d2, float tau, out float o0, out float o1, out float o2, out float o3) {
+    float c2 = cos(t2), s2 = sin(t2);
+    float dd1 = MA * LC1 * LC1 + MB * (L1 * L1 + LC2 * LC2 + 2.0 * L1 * LC2 * c2) + IA + IB;
+    float dd2 = MB * (LC2 * LC2 + L1 * LC2 * c2) + IB;
+    float phi2 = MB * LC2 * GA * cos(t1 + t2 - 1.57079633);
+    float phi1 = -MB * L1 * LC2 * d2 * d2 * s2 - 2.0 * MB * L1 * LC2 * d2 * d1 * s2
+               + (MA * LC1 + MB * L1) * GA * cos(t1 - 1.57079633) + phi2;
+    float ddt2 = (tau + dd2 / dd1 * phi1 - MB * L1 * LC2 * d1 * d1 * s2 - phi2) / (MB * LC2 * LC2 + IB - dd2 * dd2 / dd1);
+    float ddt1 = -(dd2 * ddt2 + phi1) / dd1;
+    o0 = d1;
+    o1 = d2;
+    o2 = ddt1;
+    o3 = ddt2;
+}
+void envObserve(float s[STATE_DIM], out float obs[OBS_DIM]) {
+    obs[0] = cos(s[0]);
+    obs[1] = sin(s[0]);
+    obs[2] = cos(s[1]);
+    obs[3] = sin(s[1]);
+    obs[4] = s[2];
+    obs[5] = s[3];
+}
+void envStep(inout float s[STATE_DIM], float act[ACT_DIM], out float reward) {
+    reward = -L1 * cos(s[0]) - L2 * cos(s[0] + s[1]);// tip height (pre-step)
+    float tau = clampf(act[0], -1.0, 1.0);
+    float h = p.dt;
+    float a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3, d0, d1, d2, d3;
+    acroDeriv(s[0], s[1], s[2], s[3], tau, a0, a1, a2, a3);
+    acroDeriv(s[0] + h / 2 * a0, s[1] + h / 2 * a1, s[2] + h / 2 * a2, s[3] + h / 2 * a3, tau, b0, b1, b2, b3);
+    acroDeriv(s[0] + h / 2 * b0, s[1] + h / 2 * b1, s[2] + h / 2 * b2, s[3] + h / 2 * b3, tau, c0, c1, c2, c3);
+    acroDeriv(s[0] + h * c0, s[1] + h * c1, s[2] + h * c2, s[3] + h * c3, tau, d0, d1, d2, d3);
+    s[0] = angnorm(s[0] + h / 6 * (a0 + 2 * b0 + 2 * c0 + d0));
+    s[1] = angnorm(s[1] + h / 6 * (a1 + 2 * b1 + 2 * c1 + d1));
+    s[2] = clampf(s[2] + h / 6 * (a2 + 2 * b2 + 2 * c2 + d2), -MAXV1, MAXV1);
+    s[3] = clampf(s[3] + h / 6 * (a3 + 2 * b3 + 2 * c3 + d3), -MAXV2, MAXV2);
+}
+#endif
 
+// ===== generic rollout ======================================================
 void main() {
     uint e = gl_GlobalInvocationID.x;
     if (e >= p.n) return;
 
-    float theta = st[e * 3 + 0];
-    float thetaDot = st[e * 3 + 1];
-    int epStep = int(st[e * 3 + 2]);
+    uint sb = e * (STATE_DIM + 1u);
+    float s[STATE_DIM];
+    for (int i = 0; i < STATE_DIM; ++i) s[i] = st[sb + uint(i)];
+    int epStep = int(st[sb + uint(STATE_DIM)]);
 
-    float ct = cos(theta), si = sin(theta);
-    float obs0 = ct, obs1 = si, obs2 = thetaDot;
+    float obs[OBS_DIM];
+    envObserve(s, obs);
 
-    float action;
+    float action[ACT_DIM];
     if (p.warmup == 1u) {
-        action = nz[e];// uniform[-1,1] exploration during warmup
+        for (int a = 0; a < ACT_DIM; ++a) action[a] = nz[e * uint(ACT_DIM) + uint(a)];
     } else {
-        float h1[H], h2[H];
-        for (int oo = 0; oo < H; ++oo) {
-            float s = w[B1 + oo]
-                    + w[W1 + oo * 3 + 0] * obs0
-                    + w[W1 + oo * 3 + 1] * obs1
-                    + w[W1 + oo * 3 + 2] * obs2;
-            h1[oo] = s > 0.0 ? s : 0.0;
+        float h1[HID], h2[HID];
+        for (int oo = 0; oo < HID; ++oo) {
+            float a = w[B1 + oo];
+            for (int i = 0; i < OBS_DIM; ++i) a += w[W1 + oo * OBS_DIM + i] * obs[i];
+            h1[oo] = a > 0.0 ? a : 0.0;
         }
-        for (int oo = 0; oo < H; ++oo) {
-            float s = w[B2 + oo];
-            for (int i = 0; i < H; ++i) s += w[W2 + oo * H + i] * h1[i];
-            h2[oo] = s > 0.0 ? s : 0.0;
+        for (int oo = 0; oo < HID; ++oo) {
+            float a = w[B2 + oo];
+            for (int i = 0; i < HID; ++i) a += w[W2 + oo * HID + i] * h1[i];
+            h2[oo] = a > 0.0 ? a : 0.0;
         }
-        float mean = w[B3 + 0];
-        float logstd = w[B3 + 1];
-        for (int i = 0; i < H; ++i) {
-            mean += w[W3 + 0 * H + i] * h2[i];
-            logstd += w[W3 + 1 * H + i] * h2[i];
+        float outv[OUT_DIM];
+        for (int oo = 0; oo < OUT_DIM; ++oo) {
+            float a = w[B3 + oo];
+            for (int i = 0; i < HID; ++i) a += w[W3 + oo * HID + i] * h2[i];
+            outv[oo] = a;
         }
-        float sd = exp(clamp(logstd, -20.0, 2.0));
-        float noise = (p.stochastic == 1u) ? nz[e] : 0.0;
-        action = tanh(mean + noise * sd);
+        for (int a = 0; a < ACT_DIM; ++a) {
+            float mean = outv[a];
+            float sd = exp(clampf(outv[ACT_DIM + a], -20.0, 2.0));
+            float noise = (p.stochastic == 1u) ? nz[e * uint(ACT_DIM) + uint(a)] : 0.0;
+            action[a] = tanh(mean + noise * sd);
+        }
     }
 
-    float u = p.maxTorque * clamp(action, -1.0, 1.0);
-    float an = angnorm(theta);
-    float reward = -(an * an + 0.1 * thetaDot * thetaDot + 0.001 * u * u);
-
-    float ntd = thetaDot + (3.0 * p.g / (2.0 * p.l) * si + 3.0 / (p.m * p.l * p.l) * u) * p.dt;
-    ntd = clamp(ntd, -p.maxSpeed, p.maxSpeed);
-    float nth = theta + ntd * p.dt;
+    float reward;
+    envStep(s, action, reward);// s is now the next state
+    float nObs[OBS_DIM];
+    envObserve(s, nObs);
 
     int nep = epStep + 1;
     float trunc = (nep >= int(p.episodeLimit)) ? 1.0 : 0.0;
 
-    uint b = e * 9u;
-    o[b + 0] = obs0;
-    o[b + 1] = obs1;
-    o[b + 2] = obs2;
-    o[b + 3] = action;
-    o[b + 4] = reward;
-    o[b + 5] = cos(nth);
-    o[b + 6] = sin(nth);
-    o[b + 7] = ntd;
-    o[b + 8] = trunc;
+    uint b = e * uint(TRANS);
+    int k = 0;
+    for (int i = 0; i < OBS_DIM; ++i) o[b + uint(k++)] = obs[i];
+    for (int i = 0; i < ACT_DIM; ++i) o[b + uint(k++)] = action[i];
+    o[b + uint(k++)] = reward;
+    for (int i = 0; i < OBS_DIM; ++i) o[b + uint(k++)] = nObs[i];
+    o[b + uint(k++)] = trunc;
 
     if (trunc > 0.5) {
-        st[e * 3 + 0] = ini[e * 2 + 0];
-        st[e * 3 + 1] = ini[e * 2 + 1];
-        st[e * 3 + 2] = 0.0;
+        for (int i = 0; i < STATE_DIM; ++i) st[sb + uint(i)] = ini[e * uint(STATE_DIM) + uint(i)];
+        st[sb + uint(STATE_DIM)] = 0.0;
     } else {
-        st[e * 3 + 0] = nth;
-        st[e * 3 + 1] = ntd;
-        st[e * 3 + 2] = float(nep);
+        for (int i = 0; i < STATE_DIM; ++i) st[sb + uint(i)] = s[i];
+        st[sb + uint(STATE_DIM)] = float(nep);
     }
 }

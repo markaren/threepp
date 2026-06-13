@@ -97,6 +97,18 @@ learner is the bottleneck (the GPU collects far faster than one SAC stream train
 and stochastic sampling uses CPU-generated noise uploaded per tick; full on-GPU
 training (backprop) is the unbuilt Stage 3.
 
+**The GPU rollout is pluggable too — not capped to one task.** Only the env's
+*dynamics + observation* (~15 lines of GLSL) and its dims are task-specific; the rest of
+the shader (actor MLP forward, `sample_and_squash`, transition emit/reset) is generic.
+So `swarm_rollout.comp` carries each task behind `#ifdef ENV_*` and is compiled to **one
+SPIR-V variant per task**; the host selects the matching variant + dims from the same
+`using Env = …` line as the CPU swarm. Each `Env` writes its dynamics twice — once in
+C++ (`env_*.hpp`, for the learner + viz) and once in GLSL (for the GPU rollout) — since
+there's no automatic C++→GLSL path. Verified end-to-end on the GPU for **both** tasks:
+pendulum (parity `3.7e-8`, solves) and **acrobot** (parity `3.4e-8`, 6-dim obs + 2-link
+RK4 in the shader, det score climbs `−399 → −90` — swings up), each by flipping that one
+typedef and rebuilding. The viz renders any task's links via instanced cylinders.
+
 `-DTHREEPP_WITH_RLTOOLS=ON` fetches the (pinned) header-only library via
 `FetchContent` and exposes it as the `rltools` interface target. To build against
 a local checkout instead of cloning, add

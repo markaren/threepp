@@ -129,6 +129,22 @@ namespace rldemo {
                 y1 = jy - kL2 * std::cos(s.t1 + s.t2);
             }
         }
+
+        // --- GPU rollout hooks (used by vulkan_rltools_swarm) ---
+        // State <-> the flat per-env GPU buffer (must match swarm_rollout.comp's
+        // ENV_ACROBOT layout). The shader carries the acrobot constants itself, so
+        // gpuParams is unused (the push-constant p0..p4 are ignored for this task).
+        static constexpr int kStateDim = 4;// t1, t2, d1, d2
+        static void packState(const State& s, float* o) {
+            o[0] = s.t1;
+            o[1] = s.t2;
+            o[2] = s.d1;
+            o[3] = s.d2;
+        }
+        static State unpackState(const float* in) { return State{in[0], in[1], in[2], in[3]}; }
+        static void gpuParams(float* p) {
+            for (int i = 0; i < 5; ++i) p[i] = 0.f;
+        }
     };
 
 }// namespace rldemo

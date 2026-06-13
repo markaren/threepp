@@ -1,28 +1,39 @@
-// RLtools x threepp — GPU rollout swarm (Stage 2, Vulkan compute).
+// RLtools x threepp — GPU rollout swarm (Stage 2, Vulkan compute), env-generic.
 //
 // The ENTIRE rollout runs on the GPU: a single fused compute shader steps N
-// pendulum environments in parallel (one thread per env), running the actor MLP
-// forward + sample_and_squash + dynamics, and emits a transition each. Those
-// transitions are read back and fed to the SAME CPU SAC learner (RLSwarmTrainer)
-// from Stage 1 — the learner never changed; only the rollout moved to the GPU.
-// Cross-vendor (Vulkan), reusing the RF-DETR VkInfer harness.
+// environments in parallel (one thread per env), running the actor MLP forward +
+// sample_and_squash + dynamics, and emits a transition each. Those transitions are
+// read back and fed to the SAME CPU SAC learner (RLSwarmTrainer) — the learner never
+// changed; only the rollout moved to the GPU. Cross-vendor (Vulkan), reusing the
+// RF-DETR VkInfer harness.
+//
+// The TASK is chosen by ONE line below (`using Env = ...`), exactly like the CPU
+// swarm. Each Env owns its dynamics twice: once in C++ (env_*.hpp, for the learner +
+// viz) and once in GLSL (swarm_rollout.comp, behind ENV_*, compiled to a per-task
+// SPIR-V variant). The host wires the matching variant + dims from the Env.
 //
 // Prints a self-test (GPU action == CPU forward) and a live learning curve to the
 // console, so the pipeline is verifiable without watching the window.
 
 #include "VkInfer.hpp"// rfdetr/VkInfer.hpp (added to include path)
 
+#include "env_acrobot.hpp"
+#include "env_pendulum.hpp"
 #include "RLSwarmTrainer.hpp"
-#include "pendulum_env.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/TextSprite.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/threepp.hpp"
 
-#include "threepp/renderers/vulkan/shaders/swarm_rollout.comp.spv.h"// kSwarmRolloutSpv
+// one rollout-shader SPIR-V variant per task; the matching one is selected below.
+#include "threepp/renderers/vulkan/shaders/swarm_rollout.comp.pendulum.spv.h"// kSwarmPendulumSpv
+#include "threepp/renderers/vulkan/shaders/swarm_rollout.comp.acrobot.spv.h" // kSwarmAcrobotSpv
 
+#include <algorithm>
 #include <atomic>
+#include <cfloat>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -30,37 +41,49 @@
 #include <numeric>
 #include <random>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 using namespace threepp;
-using Trainer = rldemo::RLSwarmTrainer<3, 1>;
+
+// ===== choose the task here ==================================================
+using Env = rldemo::PendulumEnv;
+// using Env = rldemo::AcrobotEnv;
+// =============================================================================
+using Trainer = rldemo::RLSwarmTrainer<Env::kObsDim, Env::kActDim>;
 
 namespace {
     constexpr int N_TOTAL = 256;// environments stepped on the GPU per dispatch
     constexpr int N_VIS = 256;  // visualized (instanced)
     constexpr int kCols = 16, kRows = 16;
+    constexpr int O = Env::kObsDim, A = Env::kActDim;
+    constexpr int SD = Env::kStateDim;       // dynamics vars per env in the GPU state buffer
+    constexpr int SSTRIDE = SD + 1;          // + epStep
+    constexpr int TRANS = 2 * O + A + 2;      // obs, action, reward, nextObs, trunc
+    constexpr int R = Env::kRods;
     constexpr int WCOUNT = Trainer::kWeightCount;
     constexpr int H = Trainer::kHidden;
-    constexpr float kPivotY = 0.65f, kArmLen = rlenv::kL, kDX = 1.6f, kDZ = 1.6f;
+    constexpr bool kIsPendulum = std::is_same_v<Env, rldemo::PendulumEnv>;
 
     struct PC {
         uint32_t n;
-        float dt, maxTorque, maxSpeed, g, l, m;
+        float dt, p0, p1, p2, p3, p4;
         uint32_t episodeLimit, stochastic, warmup;
     };
 
-    // CPU reference forward (deterministic) — for the GPU parity self-test.
+    // CPU reference forward (deterministic, action 0) — for the GPU parity self-test.
+    // Mirrors the shader's actor MLP: OBS->64->64->2*ACT, action0 = tanh(output[0]).
     float forwardDet(const float* w, const float* obs) {
         const float* W1 = w;
-        const float* b1 = w + H * 3;
+        const float* b1 = w + H * O;
         const float* W2 = b1 + H;
         const float* b2 = W2 + H * H;
         const float* W3 = b2 + H;
-        const float* b3 = W3 + 2 * H;
+        const float* b3 = W3 + (2 * A) * H;
         float h1[H], h2[H];
         for (int o = 0; o < H; ++o) {
             float s = b1[o];
-            for (int i = 0; i < 3; ++i) s += W1[o * 3 + i] * obs[i];
+            for (int i = 0; i < O; ++i) s += W1[o * O + i] * obs[i];
             h1[o] = s > 0 ? s : 0;
         }
         for (int o = 0; o < H; ++o) {
@@ -74,53 +97,60 @@ namespace {
     }
 
     PC makePC(uint32_t stochastic, uint32_t warmup) {
-        return PC{(uint32_t) N_TOTAL, rlenv::kDt, rlenv::kMaxTorque, rlenv::kMaxSpeed,
-                  rlenv::kG, rlenv::kL, rlenv::kM, (uint32_t) rlenv::kEpisodeSteps, stochastic, warmup};
+        float p[5];
+        Env::gpuParams(p);
+        return PC{(uint32_t) N_TOTAL, Env::kDt, p[0], p[1], p[2], p[3], p[4],
+                  (uint32_t) Env::kEpisodeSteps, stochastic, warmup};
     }
 }// namespace
 
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);// unbuffered so console validation shows up live
-    Canvas canvas("RLtools x threepp - GPU swarm (Vulkan compute)", {{"vsync", true}, {"size", WindowSize{1280, 800}}});
+    Canvas canvas(std::string("RLtools x threepp - GPU swarm (Vulkan compute): ") + Env::kName,
+                  {{"vsync", true}, {"size", WindowSize{1280, 800}}});
     VulkanRenderer renderer(canvas);
     renderer.outputColorSpace = ColorSpace::sRGB;
 
     auto scene = Scene::create();
     scene->background = Color(0x20262e);
-    auto camera = PerspectiveCamera::create(50, canvas.aspect(), 0.1f, 400);
-    camera->position.set(0.f, 11.f, 30.f);
+
+    const float reach = Env::kReach;
+    const float baseY = reach;            // pivot height so the mechanism clears the floor
+    const float spacing = 2.4f * reach;   // grid spacing scales with the task's size
+    const float gridW = spacing * kCols;
+    auto camera = PerspectiveCamera::create(50, canvas.aspect(), 0.1f, std::max(400.f, gridW * 3.f));
+    camera->position.set(0.f, gridW * 0.40f, gridW * 1.15f);
     OrbitControls controls{*camera, canvas};
-    controls.target.set(0.f, 0.f, 0.f);
+    controls.target.set(0.f, baseY * 0.3f, 0.f);
     controls.update();
 
     scene->add(HemisphereLight::create(0xbfd4ff, 0x202830, 1.2f));
     auto sun = DirectionalLight::create(0xffffff, 1.3f);
-    sun->position.set(6.f, 10.f, 8.f);
+    sun->position.set(0.4f * gridW, gridW, 0.6f * gridW);
     scene->add(sun);
-    auto grid = GridHelper::create(46, 46, 0x3a4654, 0x2c343d);
+    auto grid = GridHelper::create(static_cast<unsigned>(gridW * 1.4f), static_cast<unsigned>(gridW * 1.4f), 0x3a4654, 0x2c343d);
     grid->position.y = -0.6f;
     scene->add(grid);
 
-    // instanced field
-    auto armMat = MeshStandardMaterial::create({{"color", Color(0xced6e0)}, {"roughness", 0.5f}, {"metalness", 0.3f}});
-    auto bobMat = MeshStandardMaterial::create({{"color", Color(0x6fd0ff)}, {"roughness", 0.35f}, {"metalness", 0.1f}});
-    auto instArm = InstancedMesh::create(CylinderGeometry::create(0.02f, 0.02f, kArmLen, 8), armMat, N_VIS);
-    auto instBob = InstancedMesh::create(SphereGeometry::create(0.09f, 12, 8), bobMat, N_VIS);
-    instArm->instanceMatrix()->setUsage(DrawUsage::Dynamic);
-    instBob->instanceMatrix()->setUsage(DrawUsage::Dynamic);
-    scene->add(instArm);
-    scene->add(instBob);
-
-    std::vector<Matrix4> pivotT(N_VIS);
+    // grid cell centres
+    std::vector<float> cellX(N_VIS), cellZ(N_VIS);
     for (int r = 0; r < kRows; ++r)
         for (int c = 0; c < kCols; ++c) {
             const int i = r * kCols + c;
             if (i >= N_VIS) break;
-            pivotT[i].makeTranslation((c - (kCols - 1) / 2.f) * kDX, kPivotY, (r - (kRows - 1) / 2.f) * kDZ);
+            cellX[i] = (c - (kCols - 1) / 2.f) * spacing;
+            cellZ[i] = (r - (kRows - 1) / 2.f) * spacing;
         }
-    Matrix4 armLocal, bobLocal;
-    armLocal.makeTranslation(0.f, kArmLen / 2.f, 0.f);
-    bobLocal.makeTranslation(0.f, kArmLen, 0.f);
+
+    // one InstancedMesh of unit-length cylinders per renderable link (any Env)
+    const float thick = 0.05f * reach;
+    auto linkMat = MeshStandardMaterial::create({{"color", Color(0xced6e0)}, {"roughness", 0.5f}, {"metalness", 0.3f}});
+    std::vector<std::shared_ptr<InstancedMesh>> links(R);
+    for (int r = 0; r < R; ++r) {
+        links[r] = InstancedMesh::create(CylinderGeometry::create(thick, thick, 1.f, 8), linkMat, N_VIS);
+        links[r]->instanceMatrix()->setUsage(DrawUsage::Dynamic);
+        scene->add(links[r]);
+    }
 
     // HUD
     FontLoader fontLoader;
@@ -137,7 +167,7 @@ int main() {
         return t;
     };
     auto titleHud = makeHud(-12.f, 27.f, Color(0x8fe3ff));
-    titleHud->setText("RLtools x threepp - GPU rollout swarm (Vulkan compute)");
+    titleHud->setText(std::string("RLtools x threepp - GPU rollout swarm: ") + Env::kName);
     auto subHud = makeHud(-43.f, 16.f, Color(0xc8d2dc));
     subHud->setText(std::to_string(N_TOTAL) + " environments stepped per dispatch on the GPU; one CPU SAC learner");
     auto stepHud = makeHud(-72.f, 19.f, Color(0xffffff));
@@ -149,26 +179,32 @@ int main() {
                        static_cast<VkQueue>(renderer.nativeGraphicsQueue()),
                        renderer.graphicsQueueFamily());
     auto weightsBuf = vk.createOwned({(uint32_t) WCOUNT});
-    auto stateBuf = vk.createOwned({(uint32_t) (N_TOTAL * 3)});
-    auto noiseBuf = vk.createOwned({(uint32_t) N_TOTAL});
-    auto initBuf = vk.createOwned({(uint32_t) (N_TOTAL * 2)});
-    auto outBuf = vk.createOwned({(uint32_t) (N_TOTAL * 9)});
-    auto pipe = vk.createPipe(kSwarmRolloutSpv, sizeof(kSwarmRolloutSpv), 5, sizeof(PC));
+    auto stateBuf = vk.createOwned({(uint32_t) (N_TOTAL * SSTRIDE)});
+    auto noiseBuf = vk.createOwned({(uint32_t) (N_TOTAL * A)});
+    auto initBuf = vk.createOwned({(uint32_t) (N_TOTAL * SD)});
+    auto outBuf = vk.createOwned({(uint32_t) (N_TOTAL * TRANS)});
+
+    // pick the rollout-shader variant compiled for this task
+    const uint32_t* shaderSpv = kIsPendulum ? kSwarmPendulumSpv : kSwarmAcrobotSpv;
+    const size_t shaderLen = kIsPendulum ? sizeof(kSwarmPendulumSpv) : sizeof(kSwarmAcrobotSpv);
+    auto pipe = vk.createPipe(shaderSpv, shaderLen, 5, sizeof(PC));
     const std::vector<VkBuffer> ssbos = {weightsBuf.buffer, stateBuf.buffer, noiseBuf.buffer, initBuf.buffer, outBuf.buffer};
     const uint32_t groups = (N_TOTAL + 63) / 64;
 
     std::mt19937 rng(1);
     std::normal_distribution<float> gauss(0.f, 1.f);
     std::uniform_real_distribution<float> uni(-1.f, 1.f);
-    std::vector<float> stateHost(N_TOTAL * 3), initHost(N_TOTAL * 2), noiseHost(N_TOTAL), weightsHost(WCOUNT), outHost(N_TOTAL * 9);
-    std::uniform_int_distribution<int> phase(0, rlenv::kEpisodeSteps - 1);
+    std::vector<float> stateHost(N_TOTAL * SSTRIDE), initHost(N_TOTAL * SD), noiseHost(N_TOTAL * A),
+            weightsHost(WCOUNT), outHost(N_TOTAL * TRANS);
+    std::uniform_int_distribution<int> phase(0, Env::kEpisodeSteps - 1);
     auto seedStates = [&] {
         for (int e = 0; e < N_TOTAL; ++e) {
-            auto s = rlenv::sampleInitial(rng);
-            stateHost[e * 3 + 0] = s.theta;
-            stateHost[e * 3 + 1] = s.thetaDot;
-            stateHost[e * 3 + 2] = static_cast<float>(phase(rng));
+            Env::packState(Env::sampleInitial(rng), &stateHost[e * SSTRIDE]);
+            stateHost[e * SSTRIDE + SD] = static_cast<float>(phase(rng));
         }
+    };
+    auto seedInitials = [&] {
+        for (int e = 0; e < N_TOTAL; ++e) Env::packState(Env::sampleInitial(rng), &initHost[e * SD]);
     };
     seedStates();
     vk.upload(stateBuf.buffer, stateHost.data(), stateHost.size() * sizeof(float));
@@ -180,7 +216,7 @@ int main() {
     vk.upload(weightsBuf.buffer, weightsHost.data(), WCOUNT * sizeof(float));
     std::fill(noiseHost.begin(), noiseHost.end(), 0.f);
     vk.upload(noiseBuf.buffer, noiseHost.data(), noiseHost.size() * sizeof(float));
-    for (int e = 0; e < N_TOTAL; ++e) { initHost[e * 2] = rlenv::kPi; initHost[e * 2 + 1] = 0.f; }
+    seedInitials();
     vk.upload(initBuf.buffer, initHost.data(), initHost.size() * sizeof(float));
     {
         PC pc = makePC(0, 0);
@@ -190,12 +226,12 @@ int main() {
         vk.readback(outBuf.buffer, outHost.data(), outHost.size() * sizeof(float));
         float maxDiff = 0.f;
         for (int e = 0; e < N_TOTAL; ++e) {
-            const float* obs = &outHost[e * 9];
-            const float gpuA = outHost[e * 9 + 3];
+            const float* obs = &outHost[e * TRANS];
+            const float gpuA = outHost[e * TRANS + O];// first action
             maxDiff = std::fmax(maxDiff, std::fabs(gpuA - forwardDet(weightsHost.data(), obs)));
         }
-        std::printf("[parity] GPU rollout vs CPU forward: max |diff| = %.2e  ->  %s\n",
-                    maxDiff, maxDiff < 1e-4f ? "PARITY ok" : "MISMATCH");
+        std::printf("[parity:%s] GPU rollout vs CPU forward: max |diff| = %.2e  ->  %s\n",
+                    Env::kName, maxDiff, maxDiff < 1e-4f ? "PARITY ok" : "MISMATCH");
     }
     seedStates();// the parity dispatch advanced state; reset for training
     vk.upload(stateBuf.buffer, stateHost.data(), stateHost.size() * sizeof(float));
@@ -208,12 +244,12 @@ int main() {
     std::atomic<bool> running{true};
     std::mutex batchMutex;
     bool batchReady = false;
-    std::vector<float> pObs(N_TOTAL * 3), pAct(N_TOTAL), pRew(N_TOTAL), pNObs(N_TOTAL * 3);
+    std::vector<float> pObs(N_TOTAL * O), pAct(N_TOTAL * A), pRew(N_TOTAL), pNObs(N_TOTAL * O);
     std::vector<unsigned char> pTrunc(N_TOTAL);
     std::vector<float> returnHistory;
 
     std::thread learnerThread([&] {
-        std::vector<float> lObs(N_TOTAL * 3), lAct(N_TOTAL), lRew(N_TOTAL), lNObs(N_TOTAL * 3);
+        std::vector<float> lObs(N_TOTAL * O), lAct(N_TOTAL * A), lRew(N_TOTAL), lNObs(N_TOTAL * O);
         std::vector<unsigned char> lTrunc(N_TOTAL);
         while (running.load()) {
             bool got = false;
@@ -243,15 +279,15 @@ int main() {
 
     auto deterministicEval = [&]() -> float {
         constexpr int E = 8;
-        std::vector<rlenv::State> s(E);
-        for (auto& st : s) st = rlenv::sampleInitial(evalRng);
-        std::vector<float> o(E * 3), a(E), ret(E, 0.f);
-        for (int k = 0; k < rlenv::kEpisodeSteps; ++k) {
-            for (int i = 0; i < E; ++i) rlenv::observe(s[i], &o[i * 3]);
+        std::vector<typename Env::State> s(E);
+        for (auto& st : s) st = Env::sampleInitial(evalRng);
+        std::vector<float> o(E * O), a(E * A), ret(E, 0.f);
+        for (int k = 0; k < Env::kEpisodeSteps; ++k) {
+            for (int i = 0; i < E; ++i) Env::observe(s[i], &o[i * O]);
             trainer.policyActionsDet(o.data(), a.data(), E);
             for (int i = 0; i < E; ++i) {
-                ret[i] += rlenv::reward(s[i], a[i]);
-                s[i] = rlenv::step(s[i], a[i]);
+                ret[i] += Env::reward(s[i], &a[i * A]);
+                s[i] = Env::step(s[i], &a[i * A]);
             }
         }
         return std::accumulate(ret.begin(), ret.end(), 0.f) / E;
@@ -262,8 +298,8 @@ int main() {
         ImGui::SetNextWindowPos({vp->WorkPos.x + vp->WorkSize.x - 10, vp->WorkPos.y + 10}, ImGuiCond_Always, {1, 0});
         ImGui::SetNextWindowSize({340, 0}, ImGuiCond_Always);
         ImGui::Begin("RLtools - GPU rollout swarm", nullptr, ImGuiWindowFlags_NoCollapse);
-        ImGui::TextWrapped("%d environments are stepped in ONE Vulkan compute dispatch (observe -> actor MLP "
-                           "-> sample -> step). Transitions feed one CPU SAC learner.", N_TOTAL);
+        ImGui::TextWrapped("Task: %s.  %d environments are stepped in ONE Vulkan compute dispatch (observe -> "
+                           "actor MLP -> sample -> step). Transitions feed one CPU SAC learner.", Env::kName, N_TOTAL);
         ImGui::Separator();
         const long sc = trainer.gradientSteps();
         const long lim = Trainer::updateBudget();
@@ -275,7 +311,7 @@ int main() {
         else ImGui::TextColored(ImVec4(1.f, 0.82f, 0.25f, 1.f), "Learning...");
         if (!returnHistory.empty())
             ImGui::PlotLines("##ret", returnHistory.data(), static_cast<int>(returnHistory.size()), 0,
-                             "deterministic policy score (up=better)", -1700.f, 0.f, {-1, 70});
+                             "deterministic policy score (up=better)", FLT_MAX, FLT_MAX, {-1, 70});
         ImGui::End();
     });
 
@@ -285,6 +321,7 @@ int main() {
         renderer.setSize(size);
     });
 
+    Quaternion q;
     Clock clock;
     canvas.animate([&] {
         const float dt = clock.getDelta();
@@ -292,12 +329,8 @@ int main() {
         // 1. upload the latest policy + per-tick noise/initials
         trainer.extractWeights(weightsHost.data());
         const bool warm = !trainer.pastWarmup();
-        for (int e = 0; e < N_TOTAL; ++e) noiseHost[e] = warm ? uni(rng) : gauss(rng);
-        for (int e = 0; e < N_TOTAL; ++e) {
-            auto s = rlenv::sampleInitial(rng);
-            initHost[e * 2] = s.theta;
-            initHost[e * 2 + 1] = s.thetaDot;
-        }
+        for (int e = 0; e < N_TOTAL * A; ++e) noiseHost[e] = warm ? uni(rng) : gauss(rng);
+        seedInitials();
         vk.upload(weightsBuf.buffer, weightsHost.data(), WCOUNT * sizeof(float));
         vk.upload(noiseBuf.buffer, noiseHost.data(), noiseHost.size() * sizeof(float));
         vk.upload(initBuf.buffer, initHost.data(), initHost.size() * sizeof(float));
@@ -314,32 +347,33 @@ int main() {
         {
             std::lock_guard<std::mutex> lock(batchMutex);
             for (int e = 0; e < N_TOTAL; ++e) {
-                pObs[e * 3] = outHost[e * 9 + 0];
-                pObs[e * 3 + 1] = outHost[e * 9 + 1];
-                pObs[e * 3 + 2] = outHost[e * 9 + 2];
-                pAct[e] = outHost[e * 9 + 3];
-                pRew[e] = outHost[e * 9 + 4];
-                pNObs[e * 3] = outHost[e * 9 + 5];
-                pNObs[e * 3 + 1] = outHost[e * 9 + 6];
-                pNObs[e * 3 + 2] = outHost[e * 9 + 7];
-                pTrunc[e] = outHost[e * 9 + 8] > 0.5f ? 1 : 0;
+                const float* t = &outHost[e * TRANS];
+                for (int j = 0; j < O; ++j) pObs[e * O + j] = t[j];
+                for (int j = 0; j < A; ++j) pAct[e * A + j] = t[O + j];
+                pRew[e] = t[O + A];
+                for (int j = 0; j < O; ++j) pNObs[e * O + j] = t[O + A + 1 + j];
+                pTrunc[e] = t[O + A + 1 + O] > 0.5f ? 1 : 0;
             }
             batchReady = true;
         }
 
-        // 5. visualize the swarm from the read-back GPU states
-        for (int i = 0; i < N_VIS; ++i) {
-            const float theta = stateHost[i * 3];
-            Matrix4 r, pr, mm;
-            r.makeRotationZ(-theta);
-            pr.multiplyMatrices(pivotT[i], r);
-            mm.multiplyMatrices(pr, armLocal);
-            instArm->setMatrixAt(i, mm);
-            mm.multiplyMatrices(pr, bobLocal);
-            instBob->setMatrixAt(i, mm);
+        // 5. visualize the swarm from the read-back GPU states (any Env, R links)
+        for (int r = 0; r < R; ++r) {
+            for (int i = 0; i < N_VIS; ++i) {
+                const Env::State st = Env::unpackState(&stateHost[i * SSTRIDE]);
+                float x0, y0, x1, y1;
+                Env::rod(st, r, x0, y0, x1, y1);
+                const float ax = cellX[i] + x0, ay = baseY + y0;
+                const float bx = cellX[i] + x1, by = baseY + y1;
+                const float ddx = bx - ax, ddy = by - ay;
+                const float len = std::sqrt(ddx * ddx + ddy * ddy);
+                q.setFromAxisAngle({0.f, 0.f, 1.f}, std::atan2(-ddx, ddy));
+                Matrix4 m;
+                m.compose({(ax + bx) / 2.f, (ay + by) / 2.f, cellZ[i]}, q, {1.f, std::max(1e-3f, len), 1.f});
+                links[r]->setMatrixAt(i, m);
+            }
+            links[r]->instanceMatrix()->needsUpdate();
         }
-        instArm->instanceMatrix()->needsUpdate();
-        instBob->instanceMatrix()->needsUpdate();
 
         // 6. metrics + console learning curve
         spsTimer += dt;
@@ -353,8 +387,8 @@ int main() {
             const float r = deterministicEval();
             returnHistory.push_back(r);
             if (returnHistory.size() > 300) returnHistory.erase(returnHistory.begin());
-            std::printf("[train] grad=%5ld  trans=%8ld  detScore=%8.1f  %s\n",
-                        trainer.gradientSteps(), trainer.transitionsCollected(), r,
+            std::printf("[train:%s] grad=%5ld  trans=%8ld  detScore=%8.1f  %s\n",
+                        Env::kName, trainer.gradientSteps(), trainer.transitionsCollected(), r,
                         trainer.done() ? "DONE" : (trainer.pastWarmup() ? "learning" : "warmup"));
         }
 

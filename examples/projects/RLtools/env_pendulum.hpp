@@ -38,6 +38,26 @@ namespace rldemo {
         static bool upright(const State& s) {
             return std::fabs(rlenv::angleNormalize(s.theta)) < 0.3f && std::fabs(s.thetaDot) < 2.f;
         }
+
+        // --- GPU rollout hooks (used by vulkan_rltools_swarm) ---
+        // State <-> the flat per-env GPU buffer (kStateDim dynamics vars, must match
+        // swarm_rollout.comp's ENV_PENDULUM layout), plus the shader push-constant params.
+        static constexpr int kStateDim = 2;// theta, thetaDot
+        static constexpr float kDt = rlenv::kDt;
+        static void packState(const State& s, float* o) { o[0] = s.theta; o[1] = s.thetaDot; }
+        static State unpackState(const float* in) {
+            State s;
+            s.theta = in[0];
+            s.thetaDot = in[1];
+            return s;
+        }
+        static void gpuParams(float* p) {// p0..p4 for the PC
+            p[0] = rlenv::kMaxTorque;
+            p[1] = rlenv::kMaxSpeed;
+            p[2] = rlenv::kG;
+            p[3] = rlenv::kL;
+            p[4] = rlenv::kM;
+        }
     };
 
 }// namespace rldemo
