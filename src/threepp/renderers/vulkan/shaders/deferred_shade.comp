@@ -27,7 +27,14 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 const float PI         = 3.14159265358979;
 const float TWO_PI     = 6.28318530717959;
-const float SHADOW_EPS = 1e-3;// surface offset along N (avoids self-shadow / self-reflection acne)
+// Surface offset along N (avoids self-shadow / self-reflection acne). NOT a
+// const: main() rescales it per-pixel from the shading point's world-coordinate
+// magnitude (see rtSelfEps rationale). A float32 ULP grows with |coord|, so the
+// fixed 1mm offset is swallowed by rounding at ~1e3-1e4 units and the sun's
+// tmin=0.0 shadow ray (shadowVis) self-intersects the surface → the plane
+// flickers under the directional light in large outdoor scenes. The per-pixel
+// rescale floors at 1e-3, so geometry within ~100 units of origin is unchanged.
+float SHADOW_EPS = 1e-3;
 
 layout(set = 0, binding = 0) uniform CameraUbo {
     mat4 viewInverse;
@@ -2452,6 +2459,12 @@ void main() {
     const float depth    = texelFetch(gbufDepthTex, px, 0).x;
     const vec4  viewH    = cam.projInverse * vec4(ndc, depth, 1.0);
     const vec3  worldPos = (cam.viewInverse * vec4(viewH.xyz / viewH.w, 1.0)).xyz;
+
+    // World-scale-aware self-intersection offset for this pixel's shadow /
+    // reflection rays. Floored at 1e-3 (scenes within ~100 units unchanged),
+    // grows ~linearly past that so the sun's tmin=0.0 shadow ray clears the
+    // surface even when float precision at large |worldPos| swallows 1mm.
+    SHADOW_EPS = max(1e-3, max(max(abs(worldPos.x), abs(worldPos.y)), abs(worldPos.z)) * 1e-5);
 
     vec3        N         = normalize(nTap.xyz * 2.0 - 1.0);// mutable: FFT chop below
     const float roughness = clamp(nTap.w, 0.04, 1.0);

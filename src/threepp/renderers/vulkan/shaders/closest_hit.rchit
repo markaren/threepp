@@ -1089,7 +1089,7 @@ void main() {
         if (isThinShell) {
             // ── Deterministic split (variance reduction for thin shells) ──
             const vec3 reflectDir    = reflect(I, H);
-            const vec3 reflectOrigin = hitPos + N * 1e-3;
+            const vec3 reflectOrigin = hitPos + N * rtSelfEps(hitPos);
             shadowVisibility = 1.0;
             traceRayEXT(topAS,
                         gl_RayFlagsTerminateOnFirstHitEXT |
@@ -1105,7 +1105,7 @@ void main() {
 
             if (!tir) {
                 wDir    = normalize(refr);
-                wOrigin = hitPos - N * 1e-3;
+                wOrigin = hitPos - N * rtSelfEps(hitPos);
                 tWeight = (1.0 - F) * glassTint * channelMask / (eta * eta);
             } else {
                 // TIR — Schlick gave F=1 already, full reflection captured by
@@ -1116,18 +1116,18 @@ void main() {
             // ── Stochastic split (original — multi-bounce intact for closed glass) ──
             if (urand(seed) < F) {
                 wDir       = reflect(I, H);
-                wOrigin    = hitPos + N * 1e-3;
+                wOrigin    = hitPos + N * rtSelfEps(hitPos);
                 tWeight    = vec3(1.0);
                 wasReflect = true;
             } else if (tir) {
                 // TIR — fall back to mirror reflect.
                 wDir       = reflect(I, H);
-                wOrigin    = hitPos + N * 1e-3;
+                wOrigin    = hitPos + N * rtSelfEps(hitPos);
                 tWeight    = vec3(1.0);
                 wasReflect = true;
             } else {
                 wDir    = normalize(refr);
-                wOrigin = hitPos - N * 1e-3;
+                wOrigin = hitPos - N * rtSelfEps(hitPos);
                 tWeight = glassTint * channelMask / (eta * eta);
                 // Closed-mesh refract — update the ray's current medium so
                 // the next bounce knows where it is (entering glass: medium
@@ -1433,7 +1433,7 @@ void main() {
                             gl_RayFlagsSkipClosestHitShaderEXT |
                             gl_RayFlagsNoOpaqueEXT,
                             0xff, 1, 0, 1,
-                            hitPos + N * 1e-3, 0.0, liV.dir, liV.maxDist, 1);
+                            hitPos + N * rtSelfEps(hitPos), 0.0, liV.dir, liV.maxDist, 1);
                 if (shadowVisibility <= 0.0) {
                     r.W = 0.0; r.W_sum = 0.0;// occluded — let reuse recover a visible sample
                 }
@@ -1637,7 +1637,7 @@ void main() {
                             gl_RayFlagsSkipClosestHitShaderEXT |
                             gl_RayFlagsNoOpaqueEXT,
                             0xff, 1, 0, 1,
-                            hitPos + N * 1e-3, 0.0, lDir, lMaxDist, 1);
+                            hitPos + N * rtSelfEps(hitPos), 0.0, lDir, lMaxDist, 1);
                 if (shadowVisibility > 0.0) {
                     // BRDF eval at chosen direction (mirrors per-light eval below).
                     const vec3 H = normalize(V + lDir);
@@ -1879,7 +1879,7 @@ void main() {
         giSubPayload.hitNormal       = vec3(0.0);
 
         traceRayEXT(topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
-                    hitPos + N * 1e-3, 0.001, bs.dir, 10000.0, 2);
+                    hitPos + N * rtSelfEps(hitPos), 0.001, bs.dir, 10000.0, 2);
 
         seed = giSubPayload.seed;
 
@@ -2025,7 +2025,7 @@ void main() {
         giSubPayload.hitNormal       = vec3(0.0);
 
         traceRayEXT(topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
-                    hitPos + N * 1e-3, 0.001, bs.dir, 10000.0, 2);
+                    hitPos + N * rtSelfEps(hitPos), 0.001, bs.dir, 10000.0, 2);
 
         seed = giSubPayload.seed;
 
@@ -2354,7 +2354,7 @@ void main() {
                             gl_RayFlagsSkipClosestHitShaderEXT |
                             gl_RayFlagsNoOpaqueEXT,
                             0xff, 1, 0, 1,
-                            hitPos + N * 1e-3, 0.0, omegaI_chosen,
+                            hitPos + N * rtSelfEps(hitPos), 0.0, omegaI_chosen,
                             distChosen - 1e-2, 1);
                 const float vis = shadowVisibility;
 
@@ -2428,7 +2428,7 @@ void main() {
                             gl_RayFlagsSkipClosestHitShaderEXT |
                             gl_RayFlagsNoOpaqueEXT,
                             0xff, 1, 0, 1,
-                            hitPos + N * 1e-3, 0.0, omegaI_chosen,
+                            hitPos + N * rtSelfEps(hitPos), 0.0, omegaI_chosen,
                             distChosen - 1e-2, 1);
                 const float vis = shadowVisibility;
                 if (vis > 0.0) {
@@ -2471,7 +2471,7 @@ void main() {
         payload.radianceDiff = emissiveOut + ambient + lit;
         payload.radianceSpec = vec3(0.0);
         payload.brdfWeight   = brdfWeight;
-        payload.nextOrigin   = hitPos + N * 1e-3;
+        payload.nextOrigin   = hitPos + N * rtSelfEps(hitPos);
         payload.nextDir      = bounceDir;
         payload.flags        = pathFlags;
     }
