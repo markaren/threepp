@@ -27,19 +27,58 @@ C++, and the rendering, HUD and UI are threepp.
   pause, restart from a fresh random policy, skip to the next run, plus a
   view-speed slider (speeds the view, not training).
 
+## A second demo: parallel-rollout swarm (`rltools_swarm`)
+
+`rltools_pendulum` (above) trains on one internal environment and shows a *preview*
+field. `rltools_swarm` is the honest, scaled-up version: a **single** SAC learner is fed
+by a **field of 64 environments stepped in parallel** — the "many envs → one learner"
+pattern, at toy scale and fully cross-platform. **The pendulums you see ARE the training
+data.** Each frame the render thread collects one rollout step for all 64 envs (from the
+latest policy snapshot) and hands the batch to a dedicated learner thread running SAC
+gradient steps flat-out — so the field animates at frame rate while training never blocks
+it. Each env's links are drawn as instanced cylinders with a sphere at every distal joint
+(a pendulum's bob; an acrobot's elbow + tip), and that sphere turns **green the moment the
+env is solved** (`Env::upright`) — so the whole field is a live, at-a-glance "how many has
+the policy cracked" meter (and it honestly shows acrobot *flashing* through the top
+without holding). A **"Policy view" checkbox** swaps the exploratory training field for a
+clean **deterministic** showcase (the no-noise policy), with training continuing in the
+background.
+
+The environment dynamics live in plain-C++ env headers and the learner behind
+[`RLSwarmTrainer`](RLSwarmTrainer.hpp) only does inference + replay-buffer insertion +
+gradient updates, so the task is fully decoupled from the learner.
+
+### Pluggable tasks — swap the pendulum in one line
+
+The swarm is **environment-generic**. The task is chosen by a single line in `swarm.cpp`:
+
+```cpp
+using Env = rldemo::PendulumEnv;   // or rldemo::AcrobotEnv
+```
+
+An `Env` is a small plain-C++ struct ([`env_pendulum.hpp`](env_pendulum.hpp),
+[`env_acrobot.hpp`](env_acrobot.hpp)) that supplies its dims, `observe/step/reward/
+sampleInitial`, and its renderable links (`rod(...)`). The learner is templated on the
+env's dims (`RLSwarmTrainer<OBS, ACT>`), and the viz renders any env's links via
+instanced cylinders — so nothing else changes. Verified: the **same** architecture
+trains **pendulum** (obs 3, 1 link — solves 100%) and **acrobot** (obs 6, 2 links,
+underactuated — reaches the goal in 100% of episodes), just by switching that typedef.
+Adding a task whose dims aren't a native RLtools env needs one extra mapping in
+`RLSwarmTrainer.cpp`.
+
 ## Build
 
 RLtools is opt-in (it is fetched only when you ask for it):
 
 ```bash
 cmake -S . -B build -DTHREEPP_WITH_RLTOOLS=ON
-cmake --build build --target rltools_pendulum
+cmake --build build --target rltools_pendulum   # single-policy preview field
+cmake --build build --target rltools_swarm      # parallel-rollout swarm (64 envs -> 1 learner)
 ```
 
-`-DTHREEPP_WITH_RLTOOLS=ON` fetches the (pinned) header-only library via
-`FetchContent` and exposes it as the `rltools` interface target. To build against
-a local checkout instead of cloning, add
-`-DFETCHCONTENT_SOURCE_DIR_RL_TOOLS=<path-to-rl-tools>`.
+`-DTHREEPP_WITH_RLTOOLS=ON` fetches the (pinned) header-only library via `FetchContent`
+and exposes it as the `rltools` interface target. To build against a local checkout
+instead of cloning, add `-DFETCHCONTENT_SOURCE_DIR_RL_TOOLS=<path-to-rl-tools>`.
 
 ## Performance / acceleration
 
@@ -86,12 +125,13 @@ Windows.
 ## Architecture
 
 - [`RLPendulumTrainer.hpp`](RLPendulumTrainer.hpp) / [`.cpp`](RLPendulumTrainer.cpp)
-  — a plain-C++ facade. **All** of RLtools' template machinery is confined to the
-  one `.cpp`; the header exposes only `float`/`long`. The render thread reads the
-  policy through a periodically-refreshed snapshot, so the heavy SAC training step
-  stays lock-free and never stalls rendering.
-- [`main.cpp`](main.cpp) — the threepp scene, the (identical) pendulum dynamics,
-  the HUD and the ImGui panel.
+  (single-policy demo) and [`RLSwarmTrainer.hpp`](RLSwarmTrainer.hpp) /
+  [`.cpp`](RLSwarmTrainer.cpp) (parallel-rollout swarm) — plain-C++ facades. **All**
+  of RLtools' template machinery is confined to the `.cpp`; the headers expose only
+  `float`/`long`. The render thread reads the policy through a periodically-refreshed
+  snapshot, so the heavy SAC training step stays lock-free and never stalls rendering.
+- [`main.cpp`](main.cpp) / [`swarm.cpp`](swarm.cpp) — the threepp scenes, the (identical)
+  env dynamics, the HUD and the ImGui panels.
 
 ## Credits
 
