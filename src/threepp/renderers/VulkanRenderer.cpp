@@ -265,6 +265,19 @@ namespace threepp {
             // dynamic ParticleSystems).
             uint32_t blasRefitCounter = 0;
             static constexpr uint32_t kBlasFullRebuildInterval = 64;
+            // Position-buffer byte size, captured at build, for the prevVertex
+            // re-sync copy below.
+            VkDeviceSize vbBytes = 0;
+            // Set when refreshGeomBlasBatch snapshots OLD positions into
+            // prevVertex on an in-place vertex update. The change frame
+            // correctly reports old→new motion; the NEXT clean frame we re-sync
+            // prevVertex := vertex so a now-static re-rolled mesh returns to
+            // prevVertex == vertex (zero motion), matching initial-build
+            // geometry. Without this, prevVertex stays frozen at the pre-update
+            // positions and the mesh emits a constant bogus per-vertex motion
+            // vector every frame → persistent denoiser/TAA history rejection
+            // (runtime-updated geometry stays noisy / visibly shakes).
+            bool prevVertexResyncPending = false;
         };
         std::unordered_map<const BufferGeometry*, std::unique_ptr<BlasRecord>> blasCache;
 
@@ -2268,6 +2281,7 @@ namespace threepp {
             rec->geomVersion = geomVersionOf(geom);
             rec->vertexCount = vertexCount;
             rec->indexCount  = indexed ? static_cast<uint32_t>(idxAttr->count()) : 0u;
+            rec->vbBytes     = vbBytes;// for the prevVertex re-sync copy
 
             return rec;
         }
@@ -2889,6 +2903,11 @@ namespace threepp {
                     VkBufferCopy region{};
                     region.size = posAttr->array().size() * sizeof(float);
                     vkCmdCopyBuffer(cb, rec.vertex.handle, rec.prevVertex.handle, 1, &region);
+                    // This snapshot is the PRE-update geometry. It is correct for
+                    // the change frame's motion vector, but must be re-synced to
+                    // the new positions on the next clean frame (see the resync
+                    // pass in ensureSceneBuilt) or the mesh shakes forever.
+                    rec.prevVertexResyncPending = true;
                     any = true;
                 }
                 if (any) {
@@ -5082,6 +5101,11 @@ namespace threepp {
                         meshMovedBits_[w] |= (1u << (i & 31u));
                     }
                     if (tetDirtyAny) motionThisFrame_ = true;
+                    // Geometries whose prevVertex was re-snapshotted (to OLD
+                    // positions) this frame. The prevVertex re-sync pass below
+                    // must SKIP these so their legitimate change-frame deformation
+                    // motion survives — they settle on the next clean frame.
+                    std::unordered_set<const BufferGeometry*> geomRefreshedThisFrame;
                     if (geomDirtyAny) {
                         // Re-upload vertex data for geometries whose
                         // BufferAttribute versions changed and rebuild their
@@ -5140,7 +5164,52 @@ namespace threepp {
                             goto fullRebuild;
                         }
                         refreshGeomBlasBatch(refreshOps);
+                        for (const auto& op : refreshOps) geomRefreshedThisFrame.insert(op.geom);
                     }
+
+                    // ── prevVertex re-sync ──────────────────────────────────
+                    // A plain mesh updated in place (e.g. a re-rolled terrain)
+                    // keeps prevVertex frozen at its PRE-update positions once it
+                    // stops being geom-dirty: refreshGeomBlasBatch's Phase B only
+                    // runs on the change frame. The G-buffer VS then reads a stale
+                    // inPrevPos every subsequent frame → a constant nonzero motion
+                    // vector on a static surface → the denoiser/TAA reject history
+                    // forever → the mesh stays noisy and visibly shakes. One frame
+                    // after the update settles (the record is no longer refreshed
+                    // this frame) we copy vertex → prevVertex so motion collapses
+                    // back to zero, exactly like initial-build static geometry.
+                    // Skinned/displaced/tet own their own every-frame snapshot and
+                    // never enter refreshGeomBlasBatch, so they are untouched.
+                    {
+                        std::vector<BlasRecord*> resyncRecs;
+                        for (auto& [geomKey, recPtr] : blasCache) {
+                            BlasRecord* rec = recPtr.get();
+                            if (!rec->prevVertexResyncPending) continue;
+                            // Re-snapshotted this frame → keep its change-frame
+                            // motion; settle on the next clean frame instead.
+                            if (geomRefreshedThisFrame.count(geomKey)) continue;
+                            resyncRecs.push_back(rec);
+                        }
+                        if (!resyncRecs.empty()) {
+                            // Same in-flight hazard as the refresh above: prior
+                            // frames may still read prevVertex as a vertex buffer,
+                            // so drain device-wide before overwriting it.
+                            check(vkDeviceWaitIdle(ctx->device()),
+                                  "vkDeviceWaitIdle (pre-prevVertex-resync)");
+                            VkCommandBuffer cb = beginOneShot();
+                            for (BlasRecord* rec : resyncRecs) {
+                                if (rec->prevVertex.handle != VK_NULL_HANDLE && rec->vbBytes > 0) {
+                                    VkBufferCopy region{};
+                                    region.size = rec->vbBytes;
+                                    vkCmdCopyBuffer(cb, rec->vertex.handle,
+                                                    rec->prevVertex.handle, 1, &region);
+                                }
+                                rec->prevVertexResyncPending = false;
+                            }
+                            endAndSubmitOneShot(cb, "prevVertex resync");
+                        }
+                    }
+
                     if (!matricesSame || bonesDirtyAny || displacedDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny) {
                         // TLAS refit: needed when instance transforms change
                         // (matricesSame=false) AND when any skinned BLAS was
