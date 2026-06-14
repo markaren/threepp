@@ -8,6 +8,7 @@
 #include <vehicle2/PxVehicleAPI.h>
 
 #include <array>
+#include <cstring>
 #include <stdexcept>
 
 namespace threepp {

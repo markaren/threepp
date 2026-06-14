@@ -17,6 +17,7 @@
 #include "ofbx.h"
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
