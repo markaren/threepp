@@ -11,6 +11,7 @@
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Points.hpp"
 #include "threepp/objects/Sprite.hpp"
 
 // SPIR-V blobs shared with createOverlayPipeline (3D hybrid overlay) and
@@ -18,6 +19,8 @@
 // including in two TUs is safe.
 #include "threepp/renderers/vulkan/shaders/overlay.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_point.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/overlay_point.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_sprite.frag.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_sprite.vert.spv.h"
 
@@ -45,6 +48,7 @@ OverlayPass::~OverlayPass() {
     if (orthoLineStripPipeline_)    vkDestroyPipeline(d, orthoLineStripPipeline_, nullptr);
     if (orthoMeshPipeline_)         vkDestroyPipeline(d, orthoMeshPipeline_, nullptr);
     if (orthoMeshTransparentPipeline_) vkDestroyPipeline(d, orthoMeshTransparentPipeline_, nullptr);
+    if (orthoPointListPipeline_)    vkDestroyPipeline(d, orthoPointListPipeline_, nullptr);
     if (orthoLinePipelineLayout_)   vkDestroyPipelineLayout(d, orthoLinePipelineLayout_, nullptr);
     if (spriteDescSetLayout_)       vkDestroyDescriptorSetLayout(d, spriteDescSetLayout_, nullptr);
     for (auto& pool : spriteDescPools_) {
@@ -227,6 +231,121 @@ void OverlayPass::createOrthoLinePipelines() {
     check(vkCreateGraphicsPipelines(ctx_.device(), VK_NULL_HANDLE, 1, &gpciMeshT, nullptr,
                                     &orthoMeshTransparentPipeline_),
           "vkCreateGraphicsPipelines(orthoMeshTransparent)");
+
+    vkDestroyShaderModule(ctx_.device(), vertModule, nullptr);
+    vkDestroyShaderModule(ctx_.device(), fragModule, nullptr);
+}
+
+void OverlayPass::createOrthoPointPipeline() {
+    if (orthoPointListPipeline_ != VK_NULL_HANDLE) return;
+    // Needs the shared layout (mat4 mvp + vec4 color) created by the line
+    // pipelines; build those first if this is the first overlay primitive.
+    if (orthoLinePipelineLayout_ == VK_NULL_HANDLE) createOrthoLinePipelines();
+
+    VkShaderModuleCreateInfo vsmci{};
+    vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    vsmci.codeSize = sizeof(kOverlayPointVertSpv);
+    vsmci.pCode    = kOverlayPointVertSpv;
+    VkShaderModule vertModule = VK_NULL_HANDLE;
+    check(vkCreateShaderModule(ctx_.device(), &vsmci, nullptr, &vertModule),
+          "vkCreateShaderModule(overlay_point.vert)");
+    VkShaderModuleCreateInfo fsmci{};
+    fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    fsmci.codeSize = sizeof(kOverlayPointFragSpv);
+    fsmci.pCode    = kOverlayPointFragSpv;
+    VkShaderModule fragModule = VK_NULL_HANDLE;
+    check(vkCreateShaderModule(ctx_.device(), &fsmci, nullptr, &fragModule),
+          "vkCreateShaderModule(overlay_point.frag)");
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName  = "main";
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName  = "main";
+
+    // Two bindings: position (loc 0) + per-vertex color (loc 1) — the point
+    // shader requires both, mirroring the colored line variants.
+    VkVertexInputBindingDescription vibs[2]{};
+    vibs[0].binding = 0; vibs[0].stride = 3 * sizeof(float); vibs[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    vibs[1].binding = 1; vibs[1].stride = 3 * sizeof(float); vibs[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    VkVertexInputAttributeDescription vias[2]{};
+    vias[0].location = 0; vias[0].binding = 0; vias[0].format = VK_FORMAT_R32G32B32_SFLOAT; vias[0].offset = 0;
+    vias[1].location = 1; vias[1].binding = 1; vias[1].format = VK_FORMAT_R32G32B32_SFLOAT; vias[1].offset = 0;
+    VkPipelineVertexInputStateCreateInfo vi{};
+    vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount   = 2;
+    vi.pVertexBindingDescriptions      = vibs;
+    vi.vertexAttributeDescriptionCount = 2;
+    vi.pVertexAttributeDescriptions    = vias;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{};
+    ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{};
+    vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount  = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs{};
+    rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode    = VK_CULL_MODE_NONE;
+    rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth   = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo ds{};
+    ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable  = VK_FALSE;
+    ds.depthWriteEnable = VK_FALSE;
+
+    VkPipelineColorBlendAttachmentState cbas{};
+    cbas.blendEnable    = VK_FALSE;
+    cbas.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo cb{};
+    cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cb.attachmentCount = 1;
+    cb.pAttachments    = &cbas;
+
+    VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{};
+    dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dyn.dynamicStateCount = 2;
+    dyn.pDynamicStates    = dynStates;
+
+    const VkFormat colorFmt = ctx_.swapchainFormat();
+    VkPipelineRenderingCreateInfo prci{};
+    prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    prci.colorAttachmentCount    = 1;
+    prci.pColorAttachmentFormats = &colorFmt;
+    prci.depthAttachmentFormat   = VK_FORMAT_UNDEFINED;
+
+    VkGraphicsPipelineCreateInfo gpci{};
+    gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    gpci.pNext               = &prci;
+    gpci.stageCount          = 2;
+    gpci.pStages             = stages;
+    gpci.pVertexInputState   = &vi;
+    gpci.pInputAssemblyState = &ia;
+    gpci.pViewportState      = &vp;
+    gpci.pRasterizationState = &rs;
+    gpci.pMultisampleState   = &ms;
+    gpci.pDepthStencilState  = &ds;
+    gpci.pColorBlendState    = &cb;
+    gpci.pDynamicState       = &dyn;
+    gpci.layout              = orthoLinePipelineLayout_;
+    check(vkCreateGraphicsPipelines(ctx_.device(), VK_NULL_HANDLE, 1, &gpci, nullptr,
+                                    &orthoPointListPipeline_),
+          "vkCreateGraphicsPipelines(orthoPointList)");
 
     vkDestroyShaderModule(ctx_.device(), vertModule, nullptr);
     vkDestroyShaderModule(ctx_.device(), fragModule, nullptr);
@@ -698,7 +817,9 @@ OverlayPass::ensureLineGeometryUploaded(const BufferGeometry* geom) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex,
-                          Object3D& scene, Camera& camera, bool screenSpaceOnly) {
+                          Object3D& scene, Camera& camera, bool screenSpaceOnly,
+                          uint32_t regionX, uint32_t regionY,
+                          uint32_t regionW, uint32_t regionH) {
     // Lazy pipeline setup on first HUD overlay of the program.
     if (overlaySpritePipeline_ == VK_NULL_HANDLE) {
         createSpriteOverlayPipeline();
@@ -857,7 +978,35 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
         });
     }
 
-    if (draws.empty() && lineDraws.empty() && meshDraws.empty()) return;
+    // Collect Points objects (point clouds). POINT_LIST topology; the push
+    // constant's color.w carries PointsMaterial::size (pixels). Requires a
+    // per-vertex "color" attribute — the point pipeline always reads binding 1.
+    // Same ortho/HUD gating as lines/meshes (never the PT screen-space pass).
+    struct OrthoPointDraw {
+        Points* points = nullptr;
+        Matrix4 world;
+        Color   color{1.f, 1.f, 1.f};
+        float   size = 3.f;
+    };
+    std::vector<OrthoPointDraw> pointDraws;
+    if (!screenSpaceOnly) {
+        scene.traverseVisible([&](Object3D& o) {
+            auto* p = dynamic_cast<Points*>(&o);
+            if (!p) return;
+            auto g = p->geometry();
+            if (!g || !g->hasAttribute("position") || !g->hasAttribute("color")) return;
+            OrthoPointDraw pd;
+            pd.points = p;
+            std::memcpy(pd.world.elements.data(), p->matrixWorld->elements.data(), 64);
+            if (auto mat = p->material()) {
+                if (auto* mc = dynamic_cast<MaterialWithColor*>(mat.get())) pd.color = mc->color;
+                if (auto* ms = dynamic_cast<MaterialWithSize*>(mat.get())) pd.size = std::max(1.f, ms->size);
+            }
+            pointDraws.push_back(pd);
+        });
+    }
+
+    if (draws.empty() && lineDraws.empty() && meshDraws.empty() && pointDraws.empty()) return;
     if (draws.size() > kMaxSpritesPerFrame) {
         std::cerr << "[VulkanRenderer] HUD sprite count " << draws.size()
                   << " exceeds kMaxSpritesPerFrame=" << kMaxSpritesPerFrame
@@ -916,9 +1065,15 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
     ri.pColorAttachments = &colorAtt;
     vkCmdBeginRendering(cb, &ri);
 
-    VkViewport vp{0.f, 0.f, float(ext.width), float(ext.height), 0.f, 1.f};
+    // Split-screen: clip to the region sub-rect (regionW == 0 → full frame).
+    const bool   regionActive = regionW > 0u && regionH > 0u;
+    const float  rgx = regionActive ? float(regionX) : 0.f;
+    const float  rgy = regionActive ? float(regionY) : 0.f;
+    const float  rgw = regionActive ? float(regionW) : float(ext.width);
+    const float  rgh = regionActive ? float(regionH) : float(ext.height);
+    VkViewport vp{rgx, rgy, rgw, rgh, 0.f, 1.f};
     vkCmdSetViewport(cb, 0, 1, &vp);
-    VkRect2D sc{{0,0}, ext};
+    VkRect2D sc{{int32_t(rgx), int32_t(rgy)}, {uint32_t(rgw), uint32_t(rgh)}};
     vkCmdSetScissor(cb, 0, 1, &sc);
 
     // ── Filled Mesh overlays ────────────────────────────────────────
@@ -1143,6 +1298,58 @@ void OverlayPass::record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex
                 const uint32_t cnt   = std::min(cap, static_cast<uint32_t>(std::max(0, dr.count)));
                 if (cnt > 0) vkCmdDraw(cb, cnt, 1, start, 0);
             }
+        }
+    }
+
+    // ── Points overlay (point clouds) ───────────────────────────────
+    // Drawn last so dense scan/map clouds composite over grid + gizmos.
+    // Mirrors the inline primary-scene point path: POINT_LIST pipeline,
+    // pos (binding 0) + color (binding 1), color.w = point size in pixels.
+    if (!pointDraws.empty()) {
+        if (orthoPointListPipeline_ == VK_NULL_HANDLE) createOrthoPointPipeline();
+
+        Matrix4 zfix;
+        zfix.set(1.f, 0.f, 0.f, 0.f,
+                 0.f, 1.f, 0.f, 0.f,
+                 0.f, 0.f, 0.5f, 0.5f,
+                 0.f, 0.f, 0.f, 1.f);
+        Matrix4 vpMat;
+        vpMat.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+        Matrix4 cvp;
+        cvp.multiplyMatrices(zfix, vpMat);
+
+        struct PointPC {
+            float mvp[16];
+            float color[4];// .rgb = tint, .w = point size (pixels)
+        };
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, orthoPointListPipeline_);
+        for (const auto& pd : pointDraws) {
+            auto g = pd.points->geometry();
+            const LineRec* prec = ensureLineGeometryUploaded(g.get());
+            if (!prec || prec->vertex.handle == VK_NULL_HANDLE) continue;
+            if (prec->color.handle == VK_NULL_HANDLE) continue;// pipeline reads binding 1
+
+            Matrix4 mvp;
+            mvp.multiplyMatrices(cvp, pd.world);
+            PointPC pc{};
+            std::memcpy(pc.mvp, mvp.elements.data(), 64);
+            pc.color[0] = pd.color.r;
+            pc.color[1] = pd.color.g;
+            pc.color[2] = pd.color.b;
+            pc.color[3] = pd.size;
+            vkCmdPushConstants(cb, orthoLinePipelineLayout_,
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(pc), &pc);
+
+            VkBuffer     vb[2] = {prec->vertex.handle, prec->color.handle};
+            VkDeviceSize vo[2] = {0, 0};
+            vkCmdBindVertexBuffers(cb, 0, 2, vb, vo);
+
+            const auto& dr = g->drawRange;
+            const uint32_t start = static_cast<uint32_t>(std::max(0, dr.start));
+            const uint32_t cap   = (prec->vertexCount > start) ? (prec->vertexCount - start) : 0u;
+            const uint32_t cnt   = std::min(cap, static_cast<uint32_t>(std::max(0, dr.count)));
+            if (cnt > 0) vkCmdDraw(cb, cnt, 1, start, 0);
         }
     }
 

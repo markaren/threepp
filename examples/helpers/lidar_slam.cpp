@@ -458,10 +458,11 @@ int main(int argc, char** argv) {
     sceneRight.add(rightDir);
 
     // The reconstruction overlays (map points + trajectories) live in the RIGHT
-    // scene on raster backends (true split screen), but in the LEFT scene on
-    // Vulkan: the PT renderer can't composite two scenes, so there they overlay
-    // the path-traced ground truth as a single view (estimate-vs-truth in place).
-    Scene& reconScene = isVulkan ? sceneLeft : sceneRight;
+    // scene on both backends. On raster this is a true split (each pane its own
+    // raster render); on Vulkan the left pane is the path-traced ground truth
+    // and the right pane is an overlay-only compose (points + lines) of a second
+    // render into the right scissor region.
+    Scene& reconScene = sceneRight;
 
     // View 0: raw point cloud.
     auto mapPoints = makePointCloud(0.05f);
@@ -615,8 +616,7 @@ int main(int argc, char** argv) {
         ImGui::SetNextWindowPos({0, 0}, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize({0, 0}, ImGuiCond_FirstUseEver);
         ImGui::Begin("SLAM");
-        ImGui::Text("%s", isVulkan ? "Ground truth + SLAM map overlay"
-                                   : "Left: ground truth   Right: reconstruction");
+        ImGui::Text("Left: ground truth   Right: reconstruction");
         ImGui::Text("Sensor: %s", isVulkan ? "path-traced (Vulkan)" : "raster (cube-face)");
         ImGui::Separator();
         ImGui::Checkbox("Pause robot", &paused);
@@ -707,28 +707,29 @@ int main(int argc, char** argv) {
         Matrix4 mInv;
         mInv.copy(mGt).invert();
 
-        // View geometry. Raster backends split the window (each half its own
-        // aspect); Vulkan uses one full-screen view (its PT renderer can't
-        // composite two scenes), so the camera spans the full width there.
+        // View geometry: both backends split the window in half (ground truth
+        // left, reconstruction right), so each pane gets the half-width aspect.
+        // On Vulkan the left pane is the path-traced view and the right pane is
+        // an overlay-only compose of a second render into the right region.
         const auto size = canvas.size();
         const int w = size.width();
         const int h = size.height();
         const int halfW = w / 2;
-        camera->aspect = isVulkan ? (static_cast<float>(w) / static_cast<float>(h))
-                                  : (static_cast<float>(halfW) / static_cast<float>(h));
+        camera->aspect = static_cast<float>(halfW) / static_cast<float>(h);
         camera->updateProjectionMatrix();
         controls.update();
 
         // --- Scan ---
         if (isVulkan) {
 #ifdef THREEPP_WITH_VULKAN
-            // Path-traced scan reads the renderer's TLAS, so render the scene
-            // first (full screen — this is also the displayed frame, with the
-            // map + trajectories overlaid). Points are overlay-only (never in the
-            // TLAS); the robot is, but its near self-returns are dropped below.
+            // Path-traced scan reads the renderer's TLAS, so render the ground-
+            // truth scene first — into the LEFT pane (the PT view). The right
+            // pane (reconstruction) is composed afterwards in the render step.
+            // Points are overlay-only (never in the TLAS); the robot is, but its
+            // near self-returns are dropped below.
             livePoints->visible = showLive;
-            renderer->setViewport(0, 0, w, h);
-            renderer->setScissor(0, 0, w, h);
+            renderer->setViewport(0, 0, halfW, h);
+            renderer->setScissor(0, 0, halfW, h);
             renderer->render(sceneLeft, *camera);
             const float t0 = clock.getElapsedTime();
             ptLidar->scan(*vk, cloud);
@@ -847,16 +848,18 @@ int main(int argc, char** argv) {
 
         // --- Render ---
         if (!isVulkan) {
-            // Raster split screen: ground truth left, reconstruction right.
+            // Raster: ground truth left (Vulkan already path-traced its left
+            // pane in the scan step above).
             renderer->setViewport(0, 0, halfW, h);
             renderer->setScissor(0, 0, halfW, h);
             renderer->render(sceneLeft, *camera);
-
-            renderer->setViewport(halfW, 0, w - halfW, h);
-            renderer->setScissor(halfW, 0, w - halfW, h);
-            renderer->render(sceneRight, *camera);
         }
-        // (Vulkan already rendered the single full-screen view in the scan step.)
+        // Reconstruction right pane: a full raster render on GL, an overlay-only
+        // compose on Vulkan (the renderer draws Points/Lines into the right
+        // scissor region beside the PT pane, leaving PT accumulation untouched).
+        renderer->setViewport(halfW, 0, w - halfW, h);
+        renderer->setScissor(halfW, 0, w - halfW, h);
+        renderer->render(sceneRight, *camera);
 
         // UI spans the whole window.
         renderer->setViewport(0, 0, w, h);

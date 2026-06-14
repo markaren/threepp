@@ -11708,7 +11708,10 @@ namespace threepp {
                 regionDstY_ = 0;
                 if (scissorTest && scissor.z >= 1.f && scissor.w >= 1.f &&
                     fullSwap.width > 0 && fullSwap.height > 0) {
-                    const int sx  = std::clamp(static_cast<int>(scissor.x), 0, static_cast<int>(fullSwap.width));
+                    // Cap sx at width-1 (not width) so the sw clamp below always
+                    // has hi = width-sx >= 1; a degenerate scissor.x >= width
+                    // would otherwise make std::clamp(.., 1, 0) — lo > hi is UB.
+                    const int sx  = std::clamp(static_cast<int>(scissor.x), 0, static_cast<int>(fullSwap.width) - 1);
                     const int sw  = std::clamp(static_cast<int>(scissor.z), 1, static_cast<int>(fullSwap.width) - sx);
                     const int sh  = std::clamp(static_cast<int>(scissor.w), 1, static_cast<int>(fullSwap.height));
                     const int syB = std::clamp(static_cast<int>(scissor.y), 0, static_cast<int>(fullSwap.height) - sh);
@@ -12042,9 +12045,16 @@ namespace threepp {
                     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                             rasterPipelineLayout, 0, 1,
                                             &rasterDescSets[currentFrame], 0, nullptr);
-                    VkViewport dvp{0.f, 0.f, float(dext.width), float(dext.height), 0.f, 1.f};
+                    // Split-screen: clip the overlay depth prepass to the pane
+                    // region. unjitDepth is full-res but the PT pane lands at
+                    // regionDst (size regionSwapExt) after the TAA write, so the
+                    // overlay's occluder depth must be laid down at the same
+                    // place the color pass reads it. Both default to the full
+                    // frame when scissorTest is off (byte-identical single-scene).
+                    VkViewport dvp{float(regionDstX_), float(regionDstY_),
+                                   float(regionSwapExt_.width), float(regionSwapExt_.height), 0.f, 1.f};
                     vkCmdSetViewport(cb, 0, 1, &dvp);
-                    VkRect2D dsc{{0, 0}, dext};
+                    VkRect2D dsc{{regionDstX_, regionDstY_}, regionSwapExt_};
                     vkCmdSetScissor(cb, 0, 1, &dsc);
 
                     for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
@@ -12793,10 +12803,15 @@ namespace threepp {
 
                     // Pipeline is selected per-draw based on material.wireframe.
                     // Set viewport/scissor once — they're dynamic state shared
-                    // across the wireframe + basic pipelines.
-                    VkViewport vpDyn{0.f, 0.f, float(ext.width), float(ext.height), 0.f, 1.f};
+                    // across the wireframe + basic pipelines. Split-screen: clip
+                    // to the pane region (same as the depth prepass above) so the
+                    // scene overlays — live point cloud, wireframes, lines — land
+                    // in the PT pane instead of spanning the whole window.
+                    // regionSwapExt_ == full extent when scissorTest is off.
+                    VkViewport vpDyn{float(regionDstX_), float(regionDstY_),
+                                     float(regionSwapExt_.width), float(regionSwapExt_.height), 0.f, 1.f};
                     vkCmdSetViewport(cb, 0, 1, &vpDyn);
-                    VkRect2D scDyn{{0, 0}, ext};
+                    VkRect2D scDyn{{regionDstX_, regionDstY_}, regionSwapExt_};
                     vkCmdSetScissor(cb, 0, 1, &scDyn);
 
                     Matrix4 vpUnjitMat;
@@ -13817,8 +13832,25 @@ namespace threepp {
 
             // Frame already in flight from a prior render() call this iteration.
             if (!isOrtho) {
-                // User issued a second perspective render — finalize the
-                // prior frame, then re-enter from Idle for the new one.
+                // Split-screen secondary pane: when a scissor sub-rect is set, a
+                // second perspective render() composes overlay-only (Points /
+                // Lines / Sprites of THIS scene+camera) into that region of the
+                // open frame, beside the primary PT pane — without touching the
+                // PT accumulation/TLAS state. Without a scissor, fall back to the
+                // old behavior (finalize the prior frame, restart for this one).
+                if (scissorTest && scissor.z >= 1.f && scissor.w >= 1.f) {
+                    const VkExtent2D full = ctx->swapchainExtent();
+                    const uint32_t rx = static_cast<uint32_t>(std::clamp(static_cast<int>(scissor.x), 0, static_cast<int>(full.width)));
+                    const uint32_t rw = static_cast<uint32_t>(std::clamp(static_cast<int>(scissor.z), 1, static_cast<int>(full.width) - static_cast<int>(rx)));
+                    const uint32_t rh = static_cast<uint32_t>(std::clamp(static_cast<int>(scissor.w), 1, static_cast<int>(full.height)));
+                    const int      syB = std::clamp(static_cast<int>(scissor.y), 0, static_cast<int>(full.height) - static_cast<int>(rh));
+                    const uint32_t ry = static_cast<uint32_t>(static_cast<int>(full.height) - (syB + static_cast<int>(rh)));
+                    overlayPass_->record(cmdBuffers[currentFrame], currentFrame, frameImageIndex_,
+                                         scene, camera, /*screenSpaceOnly=*/false, rx, ry, rw, rh);
+                    return;
+                }
+                // User issued a second full-frame perspective render — finalize
+                // the prior frame, then re-enter from Idle for the new one.
                 endFrame();
                 renderFrame(scene, camera);
                 return;

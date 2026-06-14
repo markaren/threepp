@@ -65,8 +65,13 @@ namespace threepp::vulkan {
         // screenSpaceOnly — when true, only sprites with Sprite::screenSpace=true
         //                   are drawn (used for the automatic screen-space sprite
         //                   compositing after the PT body).
+        // regionW == 0 → full frame. Otherwise the overlay is clipped to the
+        // swapchain sub-rect (regionX, regionY, regionW, regionH) — used for
+        // split-screen secondary panes (overlay-only, drawn beside a PT pane).
         void record(VkCommandBuffer cb, uint32_t frame, uint32_t imageIndex,
-                    Object3D& scene, Camera& camera, bool screenSpaceOnly);
+                    Object3D& scene, Camera& camera, bool screenSpaceOnly,
+                    uint32_t regionX = 0, uint32_t regionY = 0,
+                    uint32_t regionW = 0, uint32_t regionH = 0);
 
     private:
         // Cached uploaded sprite atlas. Keyed on Texture*; liveCheck detects
@@ -91,6 +96,7 @@ namespace threepp::vulkan {
         // Lazy pipeline setup — called from record() on first use.
         void createSpriteOverlayPipeline();
         void createOrthoLinePipelines();
+        void createOrthoPointPipeline();
 
         // Cache helpers — called from record() on each draw.
         const SpriteAtlasRec* ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp);
@@ -114,6 +120,10 @@ namespace threepp::vulkan {
         VkPipeline       orthoLineStripPipeline_       = VK_NULL_HANDLE;
         VkPipeline       orthoMeshPipeline_            = VK_NULL_HANDLE;
         VkPipeline       orthoMeshTransparentPipeline_ = VK_NULL_HANDLE;
+
+        // Ortho point pipeline (overlay_point.vert/frag, POINT_LIST, pos+color
+        // vertex bindings, depth-off). Reuses orthoLinePipelineLayout_.
+        VkPipeline       orthoPointListPipeline_       = VK_NULL_HANDLE;
 
         // Per-frame descriptor pools reset at the top of each record() call.
         std::vector<VkDescriptorPool> spriteDescPools_;
