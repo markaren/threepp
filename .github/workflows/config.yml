@@ -75,6 +75,58 @@ jobs:
           ctest --output-on-failure
 
 
+  # Compile-only smoke test for the Vulkan path-tracing backend.
+  # GitHub runners have no GPU, but the backend and its 550+ GLSL shaders can
+  # still be *compiled*: the Vulkan loader links without a physical device, and
+  # glslangValidator needs no GPU to emit SPIR-V. This guards the largest and
+  # most actively-developed subsystem (VulkanRenderer.cpp + shaders) against
+  # bit-rot on non-MSVC toolchains. It is NOT a runtime / rendering test.
+  linux-vulkan:
+
+    runs-on: ubuntu-22.04
+    env:
+      CC: gcc-11
+      CXX: g++-11
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+          libxinerama-dev \
+          libxcursor-dev \
+          xorg-dev \
+          libglu1-mesa-dev \
+          pkg-config
+
+      - name: Install Vulkan SDK (headers, loader, current glslangValidator)
+        run: |
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc \
+            | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc > /dev/null
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list \
+            https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt-get update
+          sudo apt-get install -y vulkan-sdk
+          glslangValidator --version
+
+      - name: Fetch Vulkan Memory Allocator header
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/third_party/vma"
+          wget -qO "$GITHUB_WORKSPACE/third_party/vma/vk_mem_alloc.h" \
+            https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/v3.1.0/include/vk_mem_alloc.h
+
+      - name: Configure and build (library only — compile check)
+        run: |
+          cmake . -B build \
+            -DTHREEPP_WITH_VULKAN=ON \
+            -DTHREEPP_BUILD_EXAMPLES=OFF \
+            -DTHREEPP_BUILD_TESTS=OFF \
+            -DVMA_INCLUDE_DIR="$GITHUB_WORKSPACE/third_party/vma" \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+
   windows:
 
     runs-on: ${{ matrix.os }}
