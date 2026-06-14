@@ -25,12 +25,12 @@
 
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
+#include "threepp/utils/Parallel.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <execution>
 #include <memory>
 #include <numeric>
 #include <random>
@@ -139,7 +139,7 @@ namespace threepp::terrain {
 
             std::vector<int> rows(static_cast<size_t>(dim_));
             std::iota(rows.begin(), rows.end(), 0);
-            std::for_each(std::execution::par, rows.begin(), rows.end(), [&](int iz) {
+            parallelForEach(rows.begin(), rows.end(), [&](int iz) {
                 const float z = -half + static_cast<float>(iz) * step;
                 for (int ix = 0; ix < dim_; ++ix) {
                     const float x = -half + static_cast<float>(ix) * step;
@@ -179,7 +179,7 @@ namespace threepp::terrain {
 
             std::vector<int> idx(static_cast<size_t>(vcount));
             std::iota(idx.begin(), idx.end(), 0);
-            std::for_each(std::execution::par, idx.begin(), idx.end(), [&](int i) {
+            parallelForEach(idx.begin(), idx.end(), [&](int i) {
                 const float x = a[i * 3 + 0];
                 const float z = a[i * 3 + 2];
                 // field cell index == vertex index (built in the same order).
@@ -229,7 +229,7 @@ namespace threepp::terrain {
 
             std::vector<int> rows(static_cast<size_t>(dim));
             std::iota(rows.begin(), rows.end(), 0);
-            std::for_each(std::execution::par, rows.begin(), rows.end(), [&](int z) {
+            parallelForEach(rows.begin(), rows.end(), [&](int z) {
                 for (int x = 0; x < dim; ++x) {
                     const int xm = std::max(x - 1, 0), xp = std::min(x + 1, dim - 1);
                     const int zm = std::max(z - 1, 0), zp = std::min(z + 1, dim - 1);

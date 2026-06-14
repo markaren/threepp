@@ -26,6 +26,7 @@
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/utils/BufferGeometryUtils.hpp"
+#include "threepp/utils/Parallel.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/math/Box3.hpp"
@@ -43,7 +44,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <execution>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -311,7 +311,7 @@ namespace island {
 
         std::vector<int> rows(H);
         std::iota(rows.begin(), rows.end(), 0);
-        std::for_each(std::execution::par, rows.begin(), rows.end(), [&](int y) {
+        threepp::parallelForEach(rows.begin(), rows.end(), [&](int y) {
             const float r = kInnerR + (kOuterR - kInnerR) * ((y + 0.5f) / H);
             for (int x = 0; x < W; ++x) {
                 const float a = 2.f * math::PI * ((x + 0.5f) / W);
@@ -528,7 +528,7 @@ namespace island {
         std::vector<float> uv(static_cast<size_t>(NA + 1) * (NR + 1) * 2);
         std::vector<int> rows(NR + 1);
         std::iota(rows.begin(), rows.end(), 0);
-        std::for_each(std::execution::par, rows.begin(), rows.end(), [&](int j) {
+        threepp::parallelForEach(rows.begin(), rows.end(), [&](int j) {
             const float r = kInnerR + (kOuterR - kInnerR) * (static_cast<float>(j) / NR);
             for (int i = 0; i <= NA; ++i) {
                 const float a = 2.f * math::PI * (static_cast<float>(i) / NA);
