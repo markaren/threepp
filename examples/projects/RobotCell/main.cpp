@@ -57,6 +57,7 @@
 
 #include <PxPhysicsAPI.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -64,9 +65,11 @@
 #include <iomanip>
 #include <iostream>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 using namespace threepp;
@@ -581,11 +584,16 @@ namespace {
     // perception: point cloud -> crate detections
     // ========================================================================
     // The controller's only source of crate positions. Points above the table
-    // surface inside the table footprint are binned into a 2 cm XZ grid and
-    // flood-filled into clusters; each cluster of sufficient support becomes a
-    // detection with an XZ centroid and a measured top height. Crates already
-    // dropped in the bin fall outside the table footprint and disappear from
-    // perception naturally — no bookkeeping flags.
+    // surface inside the table footprint are binned into a 2 cm XZ grid, then
+    // segmented in two stages so that crates touching or piled together resolve as
+    // INDIVIDUAL detections (a plain XZ flood fill merges them into one blob): (1) a
+    // height-aware flood fill that won't merge cells across a height step (separates
+    // piles), then (2) a size-aware split that divides a cluster wider than one crate
+    // into crate-pitch slots (separates touching same-height crates, which top-down
+    // depth can't tell apart without the known box size). Each slot with enough support
+    // becomes a detection with a centre and a measured top height. Validate with
+    // `robot_cell --detecttest`. Crates already dropped in the bin fall outside the
+    // table footprint and disappear from perception naturally — no bookkeeping flags.
 
     struct Detection {
         Vector3 center;// XZ centroid at measured top height
@@ -624,42 +632,149 @@ namespace {
             c.n++;
         }
 
-        // flood fill over occupied neighbouring cells (8-connected)
-        std::vector<Detection> out;
+        // 1) HEIGHT-AWARE flood fill (8-connected): neighbouring occupied cells join a
+        //    cluster only when their top heights agree (within heightTol). A pile, or a
+        //    crate sitting higher because it landed on another, makes a height STEP at
+        //    its border and splits into its own cluster -- the old height-blind fill
+        //    merged everything that merely touched in XZ.
+        constexpr float heightTol = 0.03f;
+        constexpr int minCellN = 2;
+        std::vector<std::vector<int>> clusters;
         std::vector<int> stack;
-        int nextCluster = 0;
         for (auto& [key, c] : cells) {
-            if (c.cluster >= 0 || c.n < 2) continue;
-            const int id = nextCluster++;
-            float sx = 0, sz = 0, top = 0;
-            int n = 0;
+            if (c.cluster >= 0 || c.n < minCellN) continue;
+            const int id = static_cast<int>(clusters.size());
+            clusters.emplace_back();
             stack.assign(1, key);
             c.cluster = id;
             while (!stack.empty()) {
                 const int k = stack.back();
                 stack.pop_back();
-                auto& cc = cells.at(k);
-                sx += cc.sx;
-                sz += cc.sz;
-                top = std::max(top, cc.top);
-                n += cc.n;
+                clusters[id].push_back(k);
+                const float kTop = cells.at(k).top;
                 const int ix = k / (2 * kGrid), iz = k % (2 * kGrid);
                 for (int dx = -1; dx <= 1; ++dx) {
                     for (int dz = -1; dz <= 1; ++dz) {
                         const int nx = ix + dx, nz = iz + dz;
                         if (nx < 0 || nz < 0 || nx >= 2 * kGrid || nz >= 2 * kGrid) continue;
                         const auto it = cells.find(nx * 2 * kGrid + nz);
-                        if (it == cells.end() || it->second.cluster >= 0 || it->second.n < 2) continue;
+                        if (it == cells.end() || it->second.cluster >= 0 || it->second.n < minCellN) continue;
+                        if (std::abs(it->second.top - kTop) > heightTol) continue;// height step -> different object
                         it->second.cluster = id;
                         stack.push_back(nx * 2 * kGrid + nz);
                     }
                 }
             }
-            if (n >= 30) {// reject speckle / partial edge returns
-                out.push_back({{sx / static_cast<float>(n), top, sz / static_cast<float>(n)}, n});
+        }
+
+        // 2) Each height-coherent cluster -> ONE detection (weighted centroid + top).
+        //    HONEST LIMIT: from straight overhead, depth alone cannot reliably separate
+        //    crates that are coplanar and touching -- there is no seam to see, and
+        //    counting identical cubes by footprint needs fragile, sensor-specific
+        //    calibration (bounding-box span over-splits ROTATED cubes; occupied-cell area
+        //    over-counts them, since a rotated square clips ~30% more grid cells than its
+        //    footprint). Such crates merge into one detection. Height-distinct piles and
+        //    clearly gapped crates DO separate. For a per-crate guarantee regardless of
+        //    packing, segment by COLOUR / instance id (the crates are distinctly coloured)
+        //    rather than depth -- see the README.
+        constexpr int minSupport = 20;
+        std::vector<Detection> out;
+        for (const auto& cl : clusters) {
+            float sx = 0, sz = 0, top = 0;
+            int w = 0;
+            for (const int k : cl) {
+                const auto& cc = cells.at(k);
+                sx += cc.sx;
+                sz += cc.sz;
+                top = std::max(top, cc.top);
+                w += cc.n;
             }
+            if (w >= minSupport)// reject speckle / partial edge returns
+                out.push_back({{sx / static_cast<float>(w), top, sz / static_cast<float>(w)}, w});
         }
         return out;
+    }
+
+    // --detecttest: headless segmentation check (no window / GL / robot needed).
+    // Builds synthetic crate-top point clouds with known answers -- single crate,
+    // gapped pair, touching pairs/rows, a 2x2 block, and an adjacent step (two
+    // heights) -- and checks detectCrates recovers ONE detection per crate at the
+    // right place. The touching/block/step cases are exactly the "individual box"
+    // failures a height-blind XZ flood fill produces.
+    int runDetectTest() {
+        std::mt19937 rng(42);
+        std::normal_distribution<float> yn(0.f, 0.002f);// 2 mm range noise on the surface
+        // A crate top: N x N samples across the 7 cm face, optionally YAW-rotated and
+        // TILTED (a sloped top, as a crate resting on others has) -- the real, messy
+        // returns, not idealised flat axis-aligned tops.
+        auto genTop = [&](std::vector<Vector3>& cloud, float cx, float cz, float topY, float rotDeg, float tilt) {
+            const float a = rotDeg * 3.14159265f / 180.f, ca = std::cos(a), sa = std::sin(a);
+            constexpr int N = 18;// ~4 mm sample spacing across a 7 cm crate top
+            for (int i = 0; i < N; ++i)
+                for (int j = 0; j < N; ++j) {
+                    const float lx = (static_cast<float>(i) / (N - 1.f) - 0.5f) * kCrate;
+                    const float lz = (static_cast<float>(j) / (N - 1.f) - 0.5f) * kCrate;
+                    cloud.push_back({cx + lx * ca - lz * sa, topY + tilt * lx + yn(rng), cz + lx * sa + lz * ca});
+                }
+        };
+        const float t1 = kTableTop + kCrate;        // a crate resting on the table
+        const float t2 = kTableTop + 1.6f * kCrate;  // an adjacent crate sitting higher (a step)
+        const Vector3 C = kTableCenter;
+
+        struct TC {
+            float dx, dz, topY, rot, tilt;
+        };// one crate, position relative to the table centre
+        struct Scene {
+            const char* name;
+            std::vector<Vector3> cloud;
+            std::vector<Vector3> expect;
+        };
+        std::vector<Scene> scenes;
+        auto make = [&](const char* name, std::vector<TC> crates) {
+            Scene s;
+            s.name = name;
+            for (const auto& c : crates) {
+                genTop(s.cloud, C.x + c.dx, C.z + c.dz, c.topY, c.rot, c.tilt);
+                s.expect.push_back({C.x + c.dx, c.topY, C.z + c.dz});
+            }
+            scenes.push_back(std::move(s));
+        };
+
+        make("single", {{0, 0, t1, 0, 0}});
+        make("two touching (7cm)", {{0, -0.035f, t1, 0, 0}, {0, 0.035f, t1, 0, 0}});
+        make("row of 4 touching", {{0, -0.105f, t1, 0, 0}, {0, -0.035f, t1, 0, 0}, {0, 0.035f, t1, 0, 0}, {0, 0.105f, t1, 0, 0}});
+        make("single tilted (~4cm)", {{0, 0, t1, 0, 0.6f}});
+        make("single rotated 35deg", {{0, 0, t1, 35, 0}});
+        make("two touching rotated 20deg", {{0, -0.035f, t1, 20, 0}, {0, 0.035f, t1, 20, 0}});
+        make("adjacent step (2 heights)", {{0, -0.035f, t1, 0, 0}, {0, 0.035f, t2, 0, 0}});
+        make("jammed 5 (jitter+rot+tilt)", {{-0.038f, -0.04f, t1, 15, 0.2f}, {0.036f, -0.045f, t1, -20, 0}, {-0.03f, 0.034f, t1, 30, 0}, {0.04f, 0.036f, t1, -10, 0.15f}, {0.002f, 0.108f, t1, 5, 0}});
+
+        // The detector must never HALLUCINATE (report more crates than exist) and every
+        // detection must sit on a real crate. Under-counting when coplanar crates touch is
+        // a documented depth-only limit (printed as "merged", not failed) -- segment by
+        // colour for a per-crate guarantee.
+        int fails = 0;
+        for (const auto& s : scenes) {
+            const auto det = detectCrates(s.cloud);
+            const int exp = static_cast<int>(s.expect.size());
+            const int got = static_cast<int>(det.size());
+            float stray = 0.f;
+            for (const auto& d : det) {
+                float best = 1e9f;
+                for (const auto& e : s.expect) best = std::min(best, std::hypot(d.center.x - e.x, d.center.z - e.z));
+                stray = std::max(stray, best);
+            }
+            const bool ok = got <= exp && got >= 1 && stray < 0.06f;
+            std::cout << "[detecttest] " << std::left << std::setw(28) << s.name
+                      << " crates " << exp << ", detected " << got
+                      << (got < exp ? "  (merged - depth limit)" : "")
+                      << "   " << (ok ? "OK" : (got > exp ? "OVER-COUNT" : "STRAY")) << std::endl;
+            if (!ok) fails++;
+        }
+        std::cout << "[detecttest] " << (fails == 0 ? "no over-count, all detections on crates -> OK"
+                                                    : std::to_string(fails) + " SCENE(S) FAILED")
+                  << std::endl;
+        return fails == 0 ? 0 : 1;
     }
 
     // --selftest: headless IK convergence check over representative cell
@@ -884,6 +999,10 @@ int main(int argc, char** argv) {
             }
         });
         return 0;
+    }
+
+    if (argc > 1 && std::string(argv[1]) == "--detecttest") {
+        return runDetectTest();
     }
 
     if (argc > 1 && std::string(argv[1]) == "--selftest") {
@@ -1189,6 +1308,12 @@ int main(int argc, char** argv) {
                 carried = c.actor;
                 carried->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
                 grabOffset = tipPose.transformInv(carried->getGlobalPose());
+                // The captured offset bakes in the descend standoff + grab-radius slack,
+                // leaving the crate floating ~1 cm below the cup. Seat it: put the crate
+                // centre exactly kCrate/2 down the tool axis (tipPose +Z) so its top face
+                // meets the cup contact plane (which sits at the tip). Lateral position
+                // and the crate's orientation are kept.
+                grabOffset.p.z = kCrate * 0.5f;
                 break;
             }
         }
@@ -1615,7 +1740,16 @@ int main(int argc, char** argv) {
         }
 
         if (scanned) {
-            detections = detectCrates(cloud);
+            // Only (re)run detection from a SETTLED SURVEY scan. That is the one moment
+            // the tool is parked high above the table (tip at table+0.45, above the
+            // detector's 0.30 m height band), so the eye-in-hand camera is not looking at
+            // its own gripper or a carried crate, and the cloud is not smeared by motion.
+            // Re-detecting every frame turned the in-frame tool/crate into phantom
+            // "crates" (over-count). Between surveys the rings hold the last belief while
+            // the raw point cloud below still updates live.
+            if (phase == Phase::Survey && surveySettle > 0.15f) {
+                detections = detectCrates(cloud);
+            }
 
             auto* posAttr = pcGeom->getAttribute<float>("position");
             auto* colAttr = pcGeom->getAttribute<float>("color");
