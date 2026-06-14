@@ -27,12 +27,16 @@
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <random>
 #include <string>
+#include <vector>
 
 using namespace threepp;
 using namespace threepp::terrain;
@@ -139,6 +143,100 @@ namespace {
         }
     }
 
+    // Full path for a named config slot under the repo's terrain_configs/. The
+    // save/load + JSON themselves live in the generator
+    // (threepp::terrain::saveConfig / loadConfig).
+    std::string configPath(const std::string& name) {
+        const std::string n = name.empty() ? "terrain" : name;
+        return (std::filesystem::path(PROJECT_FOLDER) / "terrain_configs" / (n + ".json")).string();
+    }
+
+    // Minimal, dependency-free ImGui file selector (owned — no native-dialog
+    // lib). Browses directories and *.json files under a start folder; used for
+    // both Save (editable filename) and Load (pick/double-click a file). Call
+    // draw() every frame inside the ImGui frame; it returns true once when the
+    // user confirms, with `result` holding the full path.
+    struct FileDialog {
+        bool active = false;     // popup is open
+        bool justOpened = false; // fire ImGui::OpenPopup once
+        bool saveMode = false;
+        std::filesystem::path dir;
+        char filename[80] = "";
+        std::string result;
+
+        void open(const std::filesystem::path& startDir, bool save, const char* initialName = "") {
+            std::error_code ec;
+            dir = std::filesystem::exists(startDir, ec) ? startDir : std::filesystem::current_path(ec);
+            saveMode = save;
+            std::snprintf(filename, sizeof(filename), "%s", initialName ? initialName : "");
+            active = true;
+            justOpened = true;
+        }
+
+        bool draw(const char* title) {
+            if (justOpened) {
+                ImGui::OpenPopup(title);
+                justOpened = false;
+            }
+            bool chosen = false;
+            ImGui::SetNextWindowSize({480, 360}, ImGuiCond_Appearing);
+            if (ImGui::BeginPopupModal(title, &active)) {
+                ImGui::TextDisabled("%s", dir.string().c_str());
+                ImGui::Separator();
+
+                ImGui::BeginChild("##list", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() * 2.1f), true);
+                std::error_code ec;
+                if (dir.has_parent_path() && dir != dir.root_path()) {
+                    if (ImGui::Selectable("../")) dir = dir.parent_path();
+                }
+                std::vector<std::filesystem::path> dirs, files;
+                if (std::filesystem::is_directory(dir, ec)) {
+                    for (const auto& e : std::filesystem::directory_iterator(
+                                 dir, std::filesystem::directory_options::skip_permission_denied, ec)) {
+                        if (e.is_directory(ec)) dirs.push_back(e.path());
+                        else if (e.path().extension() == ".json") files.push_back(e.path());
+                    }
+                }
+                std::sort(dirs.begin(), dirs.end());
+                std::sort(files.begin(), files.end());
+                for (const auto& d : dirs) {
+                    if (ImGui::Selectable(("[D] " + d.filename().string()).c_str())) dir = d;
+                }
+                for (const auto& f : files) {
+                    const std::string stem = f.stem().string();
+                    if (ImGui::Selectable(f.filename().string().c_str(), stem == filename))
+                        std::snprintf(filename, sizeof(filename), "%s", stem.c_str());
+                    if (!saveMode && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+                        result = f.string();
+                        chosen = true;
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::EndChild();
+
+                ImGui::SetNextItemWidth(-260);
+                ImGui::InputText("##fname", filename, sizeof(filename),
+                                 saveMode ? 0 : ImGuiInputTextFlags_ReadOnly);
+                ImGui::SameLine();
+                ImGui::TextDisabled(".json");
+
+                ImGui::BeginDisabled(filename[0] == '\0');
+                if (ImGui::Button(saveMode ? "Save" : "Load", ImVec2(110, 0))) {
+                    result = (dir / (std::string(filename) + ".json")).string();
+                    chosen = true;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(110, 0))) ImGui::CloseCurrentPopup();
+
+                ImGui::EndPopup();
+            }
+            if (chosen) active = false;
+            return chosen;
+        }
+    };
+
 }// namespace
 
 int main(int argc, char** argv) {
@@ -152,6 +250,7 @@ int main(int argc, char** argv) {
     bool noErode = false;// force erosion off (capture the pre-erosion baseline)
     bool topDown = false;// overhead camera (inspect drainage channels)
     bool retex = false;// mid-run live texturing change (verify live recolor reaches the GPU)
+    bool cfgTest = false;// headless config save/load round-trip self-test
     int startPreset = 0;// 0 Alpine, 1 Rolling, 2 Mesa, 3 Volcanic
     float sceneScale = 1.f;     // debug: scale world/amplitude/feature (precision A/B)
     float ovSunAz = -1, ovSunEl = -1;// debug: override sun azimuth/elevation
@@ -176,6 +275,8 @@ int main(int argc, char** argv) {
             topDown = true;
         else if (std::string(argv[i]) == "--retex")
             retex = true;
+        else if (std::string(argv[i]) == "--cfgtest")
+            cfgTest = true;
         else if (std::string(argv[i]) == "--pt")
             shotPT = true;
     }
@@ -216,6 +317,23 @@ int main(int argc, char** argv) {
         params.featureScale *= sceneScale;
     }
     if (noErode) params.erosion = ErosionType::None;
+
+    if (cfgTest) {// save → load into fresh params → compare (no renderer needed)
+        const TerrainParams orig = params;
+        const std::string path = configPath("cfgtest");
+        TerrainParams loaded;// defaults
+        const bool io = saveConfig(path, orig) && loadConfig(path, loaded);
+        const bool ok = io && loaded.seed == orig.seed && loaded.noiseType == orig.noiseType &&
+                        loaded.erosion == orig.erosion && loaded.droplets == orig.droplets &&
+                        loaded.octaves == orig.octaves && loaded.terraces == orig.terraces &&
+                        std::abs(loaded.worldSize - orig.worldSize) < 0.5f &&
+                        std::abs(loaded.amplitude - orig.amplitude) < 0.5f &&
+                        std::abs(loaded.snowLine - orig.snowLine) < 1e-3f &&
+                        std::abs(loaded.rockColor[0] - orig.rockColor[0]) < 1e-3f &&
+                        std::abs(loaded.snowColor[2] - orig.snowColor[2]) < 1e-3f;
+        std::cout << "[cfgtest] round-trip " << (ok ? "PASS" : "FAIL") << std::endl;
+        std::exit(ok ? 0 : 1);
+    }
 
     TerrainGenerator gen(params.seed);
     auto terrainMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
@@ -292,6 +410,8 @@ int main(int argc, char** argv) {
     float sunAzimuth = ovSunAz >= 0 ? ovSunAz : 135.f;
     float sunElevation = ovSunEl >= 0 ? ovSunEl : 32.f;
     int spp = renderer.samplesPerPixel();
+    FileDialog fileDlg;// config save/load file selector
+    const std::filesystem::path configDir = std::filesystem::path(PROJECT_FOLDER) / "terrain_configs";
 
     bool regenRequested = false;
     bool regenErode = false;// when servicing a regen, also run the (slow) erosion pass
@@ -338,6 +458,16 @@ int main(int argc, char** argv) {
                 regenRequested = true;
             }
         }
+
+        // Config save/load — writes/reads terrain_configs/<name>.json. Because
+        // generation is deterministic, a loaded config reproduces the exact
+        // terrain (erosion + texturing included).
+        ImGui::SeparatorText("Config");
+        if (ImGui::Button("Save...##cfg")) fileDlg.open(configDir, true, "my_terrain");
+        ImGui::SameLine();
+        if (ImGui::Button("Load...##cfg")) fileDlg.open(configDir, false);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(.json)");
 
         ImGui::SeparatorText("Grid");
         {
@@ -423,6 +553,27 @@ int main(int argc, char** argv) {
         ImGui::TextDisabled("Noise edits preview raw on release;");
         ImGui::TextDisabled("press Generate to erode.");
         ImGui::End();
+
+        // File selector (modal, top-level — drawn after the panel). Confirms
+        // into fileDlg.result; save or load accordingly.
+        if (fileDlg.draw("Terrain config")) {
+            if (fileDlg.saveMode) {
+                if (saveConfig(fileDlg.result, params))
+                    std::cout << "[config] saved " << fileDlg.result << std::endl;
+                else
+                    std::cerr << "[config] save failed: " << fileDlg.result << std::endl;
+            } else if (loadConfig(fileDlg.result, params)) {
+                noiseTypeIdx = static_cast<int>(params.noiseType);
+                falloffIdx = static_cast<int>(params.falloff);
+                erosionIdx = static_cast<int>(params.erosion);
+                preset = 4;// custom
+                regenRequested = true;
+                regenErode = (params.erosion != ErosionType::None);
+                std::cout << "[config] loaded " << fileDlg.result << std::endl;
+            } else {
+                std::cerr << "[config] load failed: " << fileDlg.result << std::endl;
+            }
+        }
     });
 
     IOCapture ioCapture;

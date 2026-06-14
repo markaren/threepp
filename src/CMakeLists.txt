@@ -320,6 +320,7 @@ set(sources
         "threepp/core/Uniform.cpp"
 
         "threepp/extras/ShapeUtils.cpp"
+        "threepp/extras/terrain/TerrainGenerator.cpp"
         "threepp/extras/core/Curve.cpp"
         "threepp/extras/core/CurvePath.cpp"
         "threepp/extras/core/Font.cpp"

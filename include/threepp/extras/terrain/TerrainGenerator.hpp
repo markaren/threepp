@@ -34,6 +34,7 @@
 #include <memory>
 #include <numeric>
 #include <random>
+#include <string>
 #include <vector>
 
 namespace threepp::terrain {
@@ -569,6 +570,19 @@ namespace threepp::terrain {
         std::vector<float> field_;// [0,1] faded base height per vertex (eroded in place)
         int dim_ = 0;
     };
+
+    // ── Config (de)serialisation (implemented in TerrainGenerator.cpp) ────────
+    // Round-trip the full TerrainParams to/from JSON. Generation is deterministic,
+    // so a loaded config reproduces the EXACT terrain (erosion + texturing
+    // included). Unknown/missing keys keep their current value, so a config stays
+    // forward/backward compatible as params are added.
+    [[nodiscard]] std::string toJson(const TerrainParams& params);
+    [[nodiscard]] bool fromJson(const std::string& json, TerrainParams& out);
+
+    // File convenience wrappers. saveConfig creates missing parent directories.
+    // Both return false on I/O (or, for load, JSON parse) failure.
+    [[nodiscard]] bool saveConfig(const std::string& filePath, const TerrainParams& params);
+    [[nodiscard]] bool loadConfig(const std::string& filePath, TerrainParams& out);
 
 }// namespace threepp::terrain
 
