@@ -1,18 +1,22 @@
-// Vulkan PT — procedural mountain configurator (M1).
+// Vulkan PT — procedural mountain configurator (M1 + M2).
 //
 // A single hero mountain massif rendered through the Vulkan path tracer, with a
 // live ImGui panel that re-rolls and re-shapes the terrain. The heightfield is
 // generated on the CPU by threepp::terrain::TerrainGenerator (fBm / ridged /
-// hybrid multifractal + domain warp) and baked into a horizontal PlaneGeometry;
-// the renderer rebuilds the mesh BLAS automatically when the displaced vertex
-// positions change (the plain dynamic-geometry path — no special mesh type and
-// no renderer surgery). Lighting is HDRI image-based + a directional sun.
+// hybrid multifractal + domain warp), optionally carved by droplet-hydraulic +
+// thermal/talus EROSION, and baked into a horizontal PlaneGeometry; the renderer
+// rebuilds the mesh BLAS automatically when the displaced vertex positions
+// change (the plain dynamic-geometry path — no special mesh type, no renderer
+// surgery). Lighting is HDRI image-based + a directional sun.
 //
-// This is M1 of the mountain-configurator plan: noise heightfield + minimal
-// configurator. Erosion (M2), slope/altitude texturing (M3) and atmosphere /
-// presets polish (M4) build on top of this scaffold.
+// Noise/shape edits re-roll a fast RAW preview on release; the (slower) erosion
+// pass runs on demand via the Generate button. Presets bake fully eroded.
 //
-// Headless capture (dev): vulkan_mountains --shot <name.png> [--frames N] [--pt]
+// M1 = noise heightfield + configurator; M2 = erosion (this file). Slope/
+// altitude texturing (M3) and atmosphere/haze polish (M4) build on top.
+//
+// Headless capture (dev): vulkan_mountains --shot <name.png> [--frames N]
+//   [--preset 0..3] [--no-erode] [--pt]
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
@@ -54,6 +58,12 @@ namespace {
                 p.terraces = 0;
                 p.falloff = Falloff::Radial;
                 p.falloffStart = 0.62f;
+                p.erosion = ErosionType::Both;// hydraulic drainage + light talus on the ridges
+                p.droplets = 110000;
+                p.erodeSpeed = 0.4f;
+                p.erosionRadius = 3;
+                p.talusAngle = 42.f;
+                p.thermalIterations = 22;// keep ridgelines crisp between carved valleys
                 break;
             case 1:// Rolling hills — soft fBm; hills across most of the patch, tapering at the rim.
                 p.noiseType = NoiseType::fBm;
@@ -69,6 +79,9 @@ namespace {
                 p.terraces = 0;
                 p.falloff = Falloff::Radial;
                 p.falloffStart = 0.8f;
+                p.erosion = ErosionType::Thermal;// gentle talus smoothing
+                p.talusAngle = 32.f;
+                p.thermalIterations = 40;
                 break;
             case 2:// Desert mesa — terraced strata.
                 p.noiseType = NoiseType::Hybrid;
@@ -84,6 +97,10 @@ namespace {
                 p.terraces = 10;
                 p.falloff = Falloff::Radial;
                 p.falloffStart = 0.72f;
+                p.erosion = ErosionType::Hydraulic;// gullies cut into the strata
+                p.droplets = 60000;
+                p.erodeSpeed = 0.3f;
+                p.depositSpeed = 0.4f;
                 break;
             case 3:// Volcanic — single radial cone.
                 p.noiseType = NoiseType::Ridged;
@@ -99,6 +116,12 @@ namespace {
                 p.terraces = 0;
                 p.falloff = Falloff::Radial;
                 p.falloffStart = 0.5f;
+                p.erosion = ErosionType::Both;// deep radial channels + talus to tame the spires
+                p.droplets = 100000;
+                p.erodeSpeed = 0.45f;
+                p.erosionRadius = 2;
+                p.talusAngle = 40.f;
+                p.thermalIterations = 22;
                 break;
             default: break;
         }
@@ -114,6 +137,8 @@ int main(int argc, char** argv) {
     bool shotPT = false;
     bool stress = false;// re-roll repeatedly to exercise the runtime regen / BLAS-rebuild path
     bool rerollOnce = false;// single in-place re-roll at frame 20, then settle (motion-vector test)
+    bool noErode = false;// force erosion off (capture the pre-erosion baseline)
+    bool topDown = false;// overhead camera (inspect drainage channels)
     int startPreset = 0;// 0 Alpine, 1 Rolling, 2 Mesa, 3 Volcanic
     float sceneScale = 1.f;     // debug: scale world/amplitude/feature (precision A/B)
     float ovSunAz = -1, ovSunEl = -1;// debug: override sun azimuth/elevation
@@ -132,6 +157,10 @@ int main(int argc, char** argv) {
             stress = true;
         else if (std::string(argv[i]) == "--reroll")
             rerollOnce = true;
+        else if (std::string(argv[i]) == "--no-erode")
+            noErode = true;
+        else if (std::string(argv[i]) == "--topdown")
+            topDown = true;
         else if (std::string(argv[i]) == "--pt")
             shotPT = true;
     }
@@ -171,13 +200,15 @@ int main(int argc, char** argv) {
         params.amplitude *= sceneScale;
         params.featureScale *= sceneScale;
     }
+    if (noErode) params.erosion = ErosionType::None;
 
     TerrainGenerator gen(params.seed);
     auto terrainMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
                                                            .color(Color(0.46f, 0.43f, 0.40f))
                                                            .roughness(0.93f)
                                                            .metalness(0.0f));
-    auto terrain = Mesh::create(gen.createGeometry(params), terrainMat);
+    // Initial bake runs erosion if the preset calls for it (a ~1s one-off).
+    auto terrain = Mesh::create(gen.createGeometry(params, params.erosion != ErosionType::None), terrainMat);
     scene.add(terrain);
 
     // Surrounding plain — a large flat ground a touch below the base so the
@@ -201,20 +232,29 @@ int main(int argc, char** argv) {
     camera.position.set(params.worldSize * 0.95f, params.amplitude * 0.85f, params.worldSize * 0.95f);
     OrbitControls controls{camera, canvas};
     controls.target.set(0.f, params.amplitude * 0.45f, 0.f);
+    if (topDown) {// overhead — reveals the drainage network on the surface
+        camera.position.set(0.f, params.worldSize * 1.3f, 0.1f);
+        controls.target.set(0.f, 0.f, 0.f);
+    }
     controls.update();
 
     // ---- Configurator state ----
     int preset = startPreset;// 0 Alpine, 1 Rolling, 2 Mesa, 3 Volcanic, 4 Custom
     int noiseTypeIdx = static_cast<int>(params.noiseType);
     int falloffIdx = static_cast<int>(params.falloff);
+    int erosionIdx = static_cast<int>(params.erosion);
     float sunAzimuth = ovSunAz >= 0 ? ovSunAz : 135.f;
     float sunElevation = ovSunEl >= 0 ? ovSunEl : 32.f;
     int spp = renderer.samplesPerPixel();
 
     bool regenRequested = false;
+    bool regenErode = false;// when servicing a regen, also run the (slow) erosion pass
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
+    // Noise/shape edits re-roll a fast RAW preview (no erosion); the eroded
+    // result is produced on demand by the Generate button (erosion is the
+    // expensive pass, ~1s, so it must not run on every slider release).
     auto markCustom = [&](bool changed) { if (changed) { preset = 4; regenRequested = true; } };
 
     ImguiFunctionalContext ui(canvas, renderer, [&] {
@@ -234,7 +274,9 @@ int main(int argc, char** argv) {
                 applyPreset(preset, params);
                 noiseTypeIdx = static_cast<int>(params.noiseType);
                 falloffIdx = static_cast<int>(params.falloff);
+                erosionIdx = static_cast<int>(params.erosion);
                 regenRequested = true;
+                regenErode = (params.erosion != ErosionType::None);// presets define a complete eroded look
             }
         }
         {
@@ -287,6 +329,27 @@ int main(int argc, char** argv) {
             regenRequested = true;
         }
 
+        ImGui::SeparatorText("Erosion");
+        // Erosion knobs only take effect on the next Generate (it's the slow
+        // pass). Noise/shape edits above show the raw, un-eroded shape live.
+        if (ImGui::Combo("Erosion type", &erosionIdx, "None\0Hydraulic\0Thermal\0Both\0")) {
+            params.erosion = static_cast<ErosionType>(erosionIdx);
+            preset = 4;
+        }
+        ImGui::SliderInt("Droplets", &params.droplets, 0, 400000);
+        ImGui::SliderFloat("Erode rate", &params.erodeSpeed, 0.f, 1.f, "%.2f");
+        ImGui::SliderFloat("Deposit rate", &params.depositSpeed, 0.f, 1.f, "%.2f");
+        ImGui::SliderInt("Erosion radius", &params.erosionRadius, 1, 6);
+        ImGui::SliderFloat("Talus angle", &params.talusAngle, 20.f, 60.f, "%.0f");
+        ImGui::SliderInt("Thermal iters", &params.thermalIterations, 0, 200);
+        if (ImGui::Button("Generate (erode)")) {
+            preset = 4;
+            regenRequested = true;
+            regenErode = true;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("~1s pass");
+
         ImGui::SeparatorText("Sun & render");
         ImGui::SliderFloat("Sun azimuth", &sunAzimuth, 0.f, 360.f, "%.0f");
         ImGui::SliderFloat("Sun elevation", &sunElevation, 1.f, 89.f, "%.0f");
@@ -297,7 +360,8 @@ int main(int argc, char** argv) {
 
         ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");
-        ImGui::TextDisabled("Terrain rebuilds on release");
+        ImGui::TextDisabled("Noise edits preview raw on release;");
+        ImGui::TextDisabled("press Generate to erode.");
         ImGui::End();
     });
 
@@ -370,14 +434,17 @@ int main(int argc, char** argv) {
         const bool uiBusy = shotPath.empty() && ImGui::IsAnyItemActive();
         if (regenRequested && !uiBusy) {
             if (params.seed != gen.seed()) gen.reseed(params.seed);
+            gen.buildField(params);              // noise heightfield (fast)
+            if (regenErode) gen.erode(params);   // droplet + thermal (the ~1s pass)
             if (params.resolution != builtResolution || params.worldSize != builtWorldSize) {
-                terrain->setGeometry(gen.createGeometry(params));
+                terrain->setGeometry(gen.makeGeometry(params));
                 builtResolution = params.resolution;
                 builtWorldSize = params.worldSize;
             } else {
-                gen.applyTo(*terrain->geometry(), params);
+                gen.displaceTo(*terrain->geometry(), params);
             }
             regenRequested = false;
+            regenErode = false;
         }
 
         renderer.render(scene, camera);
