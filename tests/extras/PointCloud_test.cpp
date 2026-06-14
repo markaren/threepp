@@ -3,6 +3,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "threepp/extras/pointcloud/Icp.hpp"
+#include "threepp/extras/pointcloud/MarchingCubes.hpp"
 #include "threepp/extras/pointcloud/VoxelGrid.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/MathUtils.hpp"
@@ -10,7 +11,11 @@
 #include "threepp/math/Vector3.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <map>
 #include <random>
+#include <utility>
 #include <vector>
 
 using namespace threepp;
@@ -110,4 +115,94 @@ TEST_CASE("icpPointToPoint recovers a known rigid transform") {
         maxErr = std::max(maxErr, a.sub(b).length());
     }
     REQUIRE(maxErr < 0.02f);
+}
+
+TEST_CASE("VoxelGrid occupancy view reports one centre per cell") {
+
+    VoxelGrid g(1.0f, 20, 0.f);
+    g.insert({0.1f, 0.1f, 0.1f});// cell (0,0,0)
+    g.insert({0.9f, 0.2f, 0.3f});// same cell
+    g.insert({2.5f, 0.f, 0.f});  // cell (2,0,0)
+    REQUIRE(g.voxelCount() == 2);
+
+    std::vector<Vector3> centers;
+    g.collectVoxelCenters(centers);
+    REQUIRE(centers.size() == 2);
+    for (const auto& c : centers) {
+        REQUIRE_THAT(c.y, Catch::Matchers::WithinAbs(0.5, 1e-6));
+        REQUIRE_THAT(c.z, Catch::Matchers::WithinAbs(0.5, 1e-6));
+        REQUIRE((std::abs(c.x - 0.5f) < 1e-6f || std::abs(c.x - 2.5f) < 1e-6f));
+    }
+}
+
+TEST_CASE("marchingCubes extracts a watertight isosurface") {
+
+    // Solid ball as a scalar field: value = R - distance(node, centre), so the
+    // inside (value > 0) is the ball and the iso-0 surface is the sphere.
+    const int n = 32;
+    const float cs = 0.1f;
+    const Vector3 origin(-1.6f, -1.6f, -1.6f);// grid spans ~[-1.6, 1.5], ball R=1 fits
+    const float R = 1.0f;
+
+    ScalarField f;
+    f.nx = f.ny = f.nz = n;
+    f.origin = origin;
+    f.cellSize = cs;
+    f.data.resize(static_cast<std::size_t>(n) * n * n);
+    for (int z = 0; z < n; ++z)
+        for (int y = 0; y < n; ++y)
+            for (int x = 0; x < n; ++x) {
+                const Vector3 p(origin.x + x * cs, origin.y + y * cs, origin.z + z * cs);
+                const float d = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+                f.data[static_cast<std::size_t>(x) + static_cast<std::size_t>(y) * n + static_cast<std::size_t>(z) * n * n] = R - d;
+            }
+
+    const IsoMesh mesh = marchingCubes(f, 0.f);
+    REQUIRE(mesh.positions.size() >= 3);
+    REQUIRE(mesh.positions.size() % 3 == 0);
+    REQUIRE(mesh.positions.size() == mesh.normals.size());
+
+    // Every vertex lies on the sphere (within ~one cell).
+    for (const auto& p : mesh.positions) {
+        const float d = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+        REQUIRE_THAT(d, Catch::Matchers::WithinAbs(R, 2.0 * cs));
+    }
+
+    // Normals point radially outward (gradient of the field is inward, negated).
+    for (std::size_t i = 0; i < mesh.positions.size(); ++i) {
+        const Vector3& p = mesh.positions[i];
+        const Vector3& nrm = mesh.normals[i];
+        const float plen = p.length();
+        if (plen < 1e-4f) continue;
+        const float dot = (p.x * nrm.x + p.y * nrm.y + p.z * nrm.z) / plen;
+        REQUIRE(dot > 0.5f);// roughly aligned with the outward radial direction
+    }
+
+    // Watertight & manifold: every undirected edge is shared by exactly two
+    // triangles. Shared-edge vertices are computed identically in neighbouring
+    // cubes, so positions match to float precision; a fine quantisation keys them.
+    auto key = [&](const Vector3& v) {
+        auto q = [&](float c) { return static_cast<long long>(std::llround(c / (cs * 1e-3f))); };
+        return std::array<long long, 3>{q(v.x), q(v.y), q(v.z)};
+    };
+    std::map<std::pair<std::array<long long, 3>, std::array<long long, 3>>, int> edgeCount;
+    auto addEdge = [&](const Vector3& a, const Vector3& b) {
+        auto ka = key(a), kb = key(b);
+        if (kb < ka) std::swap(ka, kb);
+        ++edgeCount[{ka, kb}];
+    };
+    for (std::size_t i = 0; i + 2 < mesh.positions.size(); i += 3) {
+        addEdge(mesh.positions[i], mesh.positions[i + 1]);
+        addEdge(mesh.positions[i + 1], mesh.positions[i + 2]);
+        addEdge(mesh.positions[i + 2], mesh.positions[i]);
+    }
+    int nonManifold = 0;
+    for (const auto& kv : edgeCount)
+        if (kv.second != 2) ++nonManifold;
+
+    // The basic Lorensen-Cline table has known ambiguous-case cracks, so the
+    // surface is essentially (not perfectly) closed. This bound still catches a
+    // gross table error — that would corrupt the vast majority of edges.
+    INFO("non-manifold edges: " << nonManifold << " / " << edgeCount.size());
+    REQUIRE(static_cast<std::size_t>(nonManifold) * 20 < edgeCount.size());// < 5%
 }

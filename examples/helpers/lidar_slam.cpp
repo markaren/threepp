@@ -31,6 +31,7 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/extras/pointcloud/Icp.hpp"
+#include "threepp/extras/pointcloud/MarchingCubes.hpp"
 #include "threepp/extras/pointcloud/VoxelGrid.hpp"
 #include "threepp/helpers/AxesHelper.hpp"
 #include "threepp/helpers/GridHelper.hpp"
@@ -75,6 +76,15 @@ namespace {
     constexpr size_t kMaxLivePoints = 200000;   // live-scan display capacity
     constexpr size_t kMaxMapPoints = 400000;    // reconstruction display capacity
     constexpr size_t kMaxTrajPoints = 200000;
+
+    // Map "meshification" (right pane can show: point cloud / occupancy cubes /
+    // marching-cubes surface). Mesh views are rebuilt at most this often.
+    constexpr size_t kMaxCubes = 120000;        // occupancy-cube instance capacity
+    constexpr float kSurfaceCell = 0.3f;        // marching-cubes grid resolution
+    constexpr float kSurfaceRadius = 0.45f;     // point splat radius (surface thickness)
+    constexpr float kSurfaceIso = 0.5f;         // isolevel within the splat field
+    constexpr float kMeshRebuildInterval = 0.5f;// seconds between active-view rebuilds
+    constexpr size_t kMaxSurfaceVerts = 600000; // marching-cubes vertex capacity
 
     // Room: 30 (X) x 20 (Z), centred on the origin, 3 m walls.
     constexpr float kRoomHalfX = 15.f;
@@ -401,8 +411,46 @@ int main(int argc, char** argv) {
     sceneRight.add(GridHelper::create(60, 60, Color(0x224422), Color(0x1a2a1a)));
     sceneRight.add(AxesHelper::create(2.0f));
 
+    // Lights for the shaded mesh views (point cloud + lines are unlit, so these
+    // only affect the cubes / surface).
+    sceneRight.add(AmbientLight::create(0xffffff, 0.7f));
+    auto rightDir = DirectionalLight::create(0xffffff, 0.7f);
+    rightDir->position.set(8, 20, 12);
+    sceneRight.add(rightDir);
+
+    // View 0: raw point cloud.
     auto mapPoints = makePointCloud(0.05f);
     sceneRight.add(mapPoints);
+
+    // View 1: occupancy cubes (one voxel-sized box per occupied cell).
+    const float cubeSize = static_cast<float>(kMapVoxel);
+    auto cubesMesh = InstancedMesh::create(
+            BoxGeometry::create(cubeSize, cubeSize, cubeSize),
+            MeshStandardMaterial::create(MeshStandardMaterial::Params{}.roughness(0.9f).metalness(0.f)),
+            kMaxCubes);
+    cubesMesh->setCount(0);
+    cubesMesh->frustumCulled = false;
+    cubesMesh->visible = false;
+    sceneRight.add(cubesMesh);
+
+    // View 2: marching-cubes surface. Attributes are preallocated and updated
+    // in place each rebuild (replacing them would churn the GL buffers and cause
+    // intermittent bad frames).
+    auto surfaceGeom = BufferGeometry::create();
+    surfaceGeom->setAttribute("position", FloatBufferAttribute::create(std::vector<float>(kMaxSurfaceVerts * 3), 3));
+    surfaceGeom->setAttribute("normal", FloatBufferAttribute::create(std::vector<float>(kMaxSurfaceVerts * 3), 3));
+    surfaceGeom->setAttribute("color", FloatBufferAttribute::create(std::vector<float>(kMaxSurfaceVerts * 3), 3));
+    surfaceGeom->getAttribute<float>("position")->setUsage(DrawUsage::Dynamic);
+    surfaceGeom->getAttribute<float>("normal")->setUsage(DrawUsage::Dynamic);
+    surfaceGeom->getAttribute<float>("color")->setUsage(DrawUsage::Dynamic);
+    surfaceGeom->setDrawRange(0, 0);
+    auto surfaceMat = MeshStandardMaterial::create(
+            MeshStandardMaterial::Params{}.roughness(0.85f).metalness(0.f).vertexColors(true));
+    surfaceMat->side = Side::Double;
+    auto surfaceMesh = Mesh::create(surfaceGeom, surfaceMat);
+    surfaceMesh->frustumCulled = false;
+    surfaceMesh->visible = false;
+    sceneRight.add(surfaceMesh);
 
     auto gtTraj = makeTrajectory(Color(0x33ff66)); // ground truth
     auto estTraj = makeTrajectory(Color(0xffaa22));// SLAM estimate
@@ -424,6 +472,12 @@ int main(int argc, char** argv) {
     int estCount = 0;
     float motionElapsed = 0.f;// time since (re)start, drives the speed ease-in
 
+    // Right-pane map view: 0 = point cloud, 1 = occupancy cubes, 2 = surface.
+    int viewMode = 0;
+    int meshBuiltMode = -1;  // which view the cube/surface mesh currently shows
+    int meshBuiltCount = -1; // mapCount at the last mesh rebuild
+    float meshBuildTime = -1.f;
+
     auto resetReconstruction = [&] {
         slamInitialised = false;
         mapCount = 0;
@@ -433,6 +487,10 @@ int main(int argc, char** argv) {
         mapPoints->geometry()->setDrawRange(0, 0);
         gtTraj->geometry()->setDrawRange(0, 0);
         estTraj->geometry()->setDrawRange(0, 0);
+        cubesMesh->setCount(0);
+        surfaceMesh->geometry()->setDrawRange(0, 0);
+        meshBuiltMode = -1;
+        meshBuiltCount = -1;
     };
 
     // --- Robot motion ---
@@ -451,6 +509,56 @@ int main(int argc, char** argv) {
         lidar = std::move(next);
         sceneLeft.addRef(*lidar);
         resetReconstruction();
+    };
+
+    // --- Map mesh rebuilds (occupancy cubes / marching-cubes surface) ---
+    std::vector<Vector3> scratchCenters;
+    auto rebuildCubes = [&] {
+        scratchCenters.clear();
+        slam.map().collectVoxelCenters(scratchCenters);
+        const size_t n = std::min(scratchCenters.size(), kMaxCubes);
+        Matrix4 m;// identity; only the translation is updated below
+        for (size_t i = 0; i < n; ++i) {
+            m.setPosition(scratchCenters[i]);
+            cubesMesh->setMatrixAt(i, m);
+            cubesMesh->setColorAt(i, heightColor(scratchCenters[i].y));
+        }
+        cubesMesh->setCount(n);
+        cubesMesh->instanceMatrix()->needsUpdate();
+        if (cubesMesh->instanceColor()) cubesMesh->instanceColor()->needsUpdate();
+    };
+
+    std::vector<Vector3> scratchPts;
+    auto rebuildSurface = [&] {
+        scratchPts.clear();
+        slam.map().collect(scratchPts);
+        const ScalarField field = splatPointsToField(scratchPts, kSurfaceCell, kSurfaceRadius);
+        const IsoMesh iso = marchingCubes(field, kSurfaceIso);
+        auto& geom = *surfaceMesh->geometry();
+        auto* pos = geom.getAttribute<float>("position");
+        auto* nrm = geom.getAttribute<float>("normal");
+        auto* col = geom.getAttribute<float>("color");
+
+        size_t nv = std::min(iso.positions.size(), kMaxSurfaceVerts);
+        nv -= nv % 3;// whole triangles only
+        Color c;
+        for (size_t i = 0; i < nv; ++i) {
+            pos->setXYZ(i, iso.positions[i].x, iso.positions[i].y, iso.positions[i].z);
+            nrm->setXYZ(i, iso.normals[i].x, iso.normals[i].y, iso.normals[i].z);
+            c = heightColor(iso.positions[i].y);
+            col->setXYZ(i, c.r, c.g, c.b);
+        }
+        const int cnt = static_cast<int>(nv) * 3;
+        pos->updateRange.offset = 0;
+        pos->updateRange.count = cnt;
+        pos->needsUpdate();
+        nrm->updateRange.offset = 0;
+        nrm->updateRange.count = cnt;
+        nrm->needsUpdate();
+        col->updateRange.offset = 0;
+        col->updateRange.count = cnt;
+        col->needsUpdate();
+        geom.setDrawRange(0, static_cast<int>(nv));
     };
 
     // --- UI ---
@@ -476,6 +584,9 @@ int main(int argc, char** argv) {
         int prevFace = currentFaceIdx;
         ImGui::Combo("Scan res", &currentFaceIdx, faceSizeNames, 4);
         if (currentFaceIdx != prevFace) rebuildLidar();
+
+        const char* viewNames[] = {"Point cloud", "Occupancy cubes", "Surface (marching cubes)"};
+        ImGui::Combo("Map view", &viewMode, viewNames, 3);
 
         if (ImGui::Button("Reset SLAM")) resetReconstruction();
         ImGui::Separator();
@@ -618,6 +729,26 @@ int main(int argc, char** argv) {
         appendVertex(*gtTraj->geometry(), gtCount, gtPos);
         appendVertex(*estTraj->geometry(), estCount, estPos);
         drift = (estPos.clone().sub(gtPos)).length();
+
+        // --- Map view: point cloud / occupancy cubes / surface ---
+        mapPoints->visible = (viewMode == 0);
+        cubesMesh->visible = (viewMode == 1);
+        surfaceMesh->visible = (viewMode == 2);
+        if (viewMode == 0) {
+            meshBuiltMode = 0;// nothing to rebuild
+        } else {
+            // Rebuild the active mesh on switch, then throttled as the map grows.
+            const bool modeChanged = (viewMode != meshBuiltMode);
+            const bool grew = (mapCount - meshBuiltCount) > 100;
+            const bool throttleOk = (now - meshBuildTime) > kMeshRebuildInterval;
+            if (modeChanged || (grew && throttleOk)) {
+                if (viewMode == 1) rebuildCubes();
+                else rebuildSurface();
+                meshBuiltMode = viewMode;
+                meshBuiltCount = mapCount;
+                meshBuildTime = now;
+            }
+        }
 
         // --- Split-screen render (independent, correctly-proportioned views) ---
         const auto size = canvas.size();

@@ -117,6 +117,21 @@ namespace threepp {
                 for (const auto& p : kv.second) out.push_back(p);
         }
 
+        /// Number of occupied voxels (cells holding at least one point).
+        [[nodiscard]] std::size_t voxelCount() const { return cells_.size(); }
+
+        /// Append the centre of every occupied voxel to `out` — an occupancy-grid
+        /// view of the cloud (one point per cell, regardless of how many points
+        /// it holds).
+        void collectVoxelCenters(std::vector<Vector3>& out) const {
+            out.reserve(out.size() + cells_.size());
+            for (const auto& kv : cells_) {
+                out.emplace_back((static_cast<float>(kv.first.x) + 0.5f) * voxelSize_,
+                                 (static_cast<float>(kv.first.y) + 0.5f) * voxelSize_,
+                                 (static_cast<float>(kv.first.z) + 0.5f) * voxelSize_);
+            }
+        }
+
     private:
         float inv_;
         float voxelSize_;
