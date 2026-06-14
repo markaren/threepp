@@ -7206,10 +7206,15 @@ namespace threepp {
             }
 
             // Restore src attachment to its original SHADER_READ layout (so
-            // raygen can sample on the next frame). Leave dst in
-            // TRANSFER_DST_OPTIMAL — the caller in recordCommandBuffer
-            // handles the overlay (ImGui) draw and the final PRESENT_SRC
-            // transition uniformly with the existing PT path.
+            // raygen can sample on the next frame), and bring dst (the
+            // swapchain) to GENERAL — the SAME exit layout the full PT path
+            // leaves behind. The caller returns immediately after this, so
+            // endFrame()'s recordOverlayAndPresentTransition (which assumes
+            // GENERAL) composites the overlay and does the single PRESENT_SRC
+            // transition uniformly with the PT path. Leaving dst in
+            // TRANSFER_DST here (the old behavior) collided with that unified
+            // finalize — double vkEndCommandBuffer + a GENERAL-vs-TRANSFER_DST
+            // layout mismatch that crashed the --shot writeFramebuffer readback.
             VkImageMemoryBarrier2 toShaderRead{};
             toShaderRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
             toShaderRead.srcStageMask  = VK_PIPELINE_STAGE_2_BLIT_BIT;
@@ -7225,10 +7230,38 @@ namespace threepp {
             toShaderRead.subresourceRange.levelCount = 1;
             toShaderRead.subresourceRange.layerCount = 1;
 
+            // dst: TRANSFER_DST_OPTIMAL → GENERAL. For the Depth view the blit
+            // above is skipped, but toDst still moved dst to TRANSFER_DST, so
+            // this transition is valid for every view. dstStage/access mirror
+            // the ortho-only clear path's TRANSFER_DST→GENERAL transition so the
+            // downstream overlay/present/readback all observe a settled image.
+            VkImageMemoryBarrier2 toGeneral{};
+            toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            toGeneral.srcStageMask  = VK_PIPELINE_STAGE_2_BLIT_BIT;
+            toGeneral.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            toGeneral.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                      VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+                                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            toGeneral.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                      VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                      VK_ACCESS_2_TRANSFER_READ_BIT |
+                                      VK_ACCESS_2_TRANSFER_WRITE_BIT |
+                                      VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                                      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            toGeneral.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            toGeneral.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toGeneral.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toGeneral.image = dst;
+            toGeneral.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            toGeneral.subresourceRange.levelCount = 1;
+            toGeneral.subresourceRange.layerCount = 1;
+
+            VkImageMemoryBarrier2 post[2] = {toShaderRead, toGeneral};
             VkDependencyInfo depPost{};
             depPost.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            depPost.imageMemoryBarrierCount = 1;
-            depPost.pImageMemoryBarriers = &toShaderRead;
+            depPost.imageMemoryBarrierCount = 2;
+            depPost.pImageMemoryBarriers = post;
             vkCmdPipelineBarrier2(cb, &depPost);
         }
 
@@ -12191,94 +12224,16 @@ namespace threepp {
                     gpuTimings_->end(cb, TP_OverlayDepth, currentFrame);
                 }
                 if (hybridDebugView_ != HybridDebugView::Off) {
+                    // Blit the chosen G-buffer channel to the swapchain and
+                    // leave it in GENERAL with the cmd buffer still open — the
+                    // exact exit contract of the full PT path. The shared
+                    // tail (overlayPass_ screen-space sprites in beginFrameForPT,
+                    // then endFrame()'s overlay composite + single PRESENT_SRC
+                    // transition + submit/present) finalizes the frame
+                    // uniformly. This keeps the --shot writeFramebuffer readback
+                    // (which expects PRESENT_SRC) consistent and avoids the
+                    // double vkEndCommandBuffer the bespoke finalize used to do.
                     recordHybridDebugBlit(cb, imageIndex, currentFrame);
-                    // Blit left swapchain in TRANSFER_DST_OPTIMAL. Same
-                    // overlay + present sequence the PT path uses, just
-                    // with a different srcLayout entering the transition.
-                    const VkImage swap = ctx->swapchainImages()[imageIndex];
-                    const VkExtent2D ext = ctx->swapchainExtent();
-                    if (overlayCallback) {
-                        VkImageMemoryBarrier2 toColor{};
-                        toColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                        toColor.srcStageMask  = VK_PIPELINE_STAGE_2_BLIT_BIT;
-                        toColor.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                        toColor.dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                        toColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
-                                                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                        toColor.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                        toColor.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                        toColor.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                        toColor.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                        toColor.image = swap;
-                        toColor.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                        toColor.subresourceRange.levelCount = 1;
-                        toColor.subresourceRange.layerCount = 1;
-                        VkDependencyInfo depColor{};
-                        depColor.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                        depColor.imageMemoryBarrierCount = 1;
-                        depColor.pImageMemoryBarriers = &toColor;
-                        vkCmdPipelineBarrier2(cb, &depColor);
-
-                        VkRenderingAttachmentInfo colorAtt{};
-                        colorAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                        colorAtt.imageView = ctx->swapchainImageViews()[imageIndex];
-                        colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                        colorAtt.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-                        colorAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-
-                        VkRenderingInfo ri{};
-                        ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-                        ri.renderArea.offset = {0, 0};
-                        ri.renderArea.extent = ext;
-                        ri.layerCount = 1;
-                        ri.colorAttachmentCount = 1;
-                        ri.pColorAttachments = &colorAtt;
-                        vkCmdBeginRendering(cb, &ri);
-                        overlayCallback(static_cast<void*>(cb));
-                        vkCmdEndRendering(cb);
-
-                        VkImageMemoryBarrier2 toPresent{};
-                        toPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                        toPresent.srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                        toPresent.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                        toPresent.dstStageMask  = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
-                        toPresent.dstAccessMask = 0;
-                        toPresent.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                        toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-                        toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                        toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                        toPresent.image = swap;
-                        toPresent.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                        toPresent.subresourceRange.levelCount = 1;
-                        toPresent.subresourceRange.layerCount = 1;
-                        VkDependencyInfo depPresent{};
-                        depPresent.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                        depPresent.imageMemoryBarrierCount = 1;
-                        depPresent.pImageMemoryBarriers = &toPresent;
-                        vkCmdPipelineBarrier2(cb, &depPresent);
-                    } else {
-                        VkImageMemoryBarrier2 toPresent{};
-                        toPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                        toPresent.srcStageMask  = VK_PIPELINE_STAGE_2_BLIT_BIT;
-                        toPresent.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                        toPresent.dstStageMask  = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
-                        toPresent.dstAccessMask = 0;
-                        toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                        toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-                        toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                        toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                        toPresent.image = swap;
-                        toPresent.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                        toPresent.subresourceRange.levelCount = 1;
-                        toPresent.subresourceRange.layerCount = 1;
-                        VkDependencyInfo depPresent{};
-                        depPresent.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                        depPresent.imageMemoryBarrierCount = 1;
-                        depPresent.pImageMemoryBarriers = &toPresent;
-                        vkCmdPipelineBarrier2(cb, &depPresent);
-                    }
-                    check(vkEndCommandBuffer(cb), "vkEndCommandBuffer");
-                    gpuTimings_->finishRecord();
                     return;
                 }
             }
