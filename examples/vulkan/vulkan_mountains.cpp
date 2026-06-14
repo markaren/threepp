@@ -409,7 +409,6 @@ int main(int argc, char** argv) {
     int erosionIdx = static_cast<int>(params.erosion);
     float sunAzimuth = ovSunAz >= 0 ? ovSunAz : 135.f;
     float sunElevation = ovSunEl >= 0 ? ovSunEl : 32.f;
-    int spp = renderer.samplesPerPixel();
     FileDialog fileDlg;// config save/load file selector
     const std::filesystem::path configDir = std::filesystem::path(PROJECT_FOLDER) / "terrain_configs";
 
@@ -545,8 +544,6 @@ int main(int argc, char** argv) {
         ImGui::SliderFloat("Sun elevation", &sunElevation, 1.f, 89.f, "%.0f");
         ImGui::SliderFloat("Sun intensity", &sun->intensity, 0.f, 8.f, "%.2f");
         ImGui::SliderFloat("Exposure", &renderer.toneMappingExposure, 0.1f, 3.0f, "%.2f");
-        if (ImGui::SliderInt("Samples / pixel", &spp, 1, 16))
-            renderer.setSamplesPerPixel(spp);
 
         ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");
