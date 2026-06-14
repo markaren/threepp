@@ -675,11 +675,18 @@ namespace threepp {
         // (vulkan_shared.h, included near the top of this file). Editing any of
         // them there propagates to every shader on the next clean rebuild.
         std::vector<Image2D> materialTextures;// owns image + view (sampler is shared)
-        // Cache value pairs (weak_ptr, slot). The weak_ptr is the liveness tag —
-        // when a Texture is destroyed (model unloaded), the entry is pruned in
-        // ensureSceneBuilt so a future Texture* address-collision doesn't read
-        // back stale GPU data.
-        std::unordered_map<const Texture*, std::pair<std::weak_ptr<Texture>, uint32_t>> textureCache;
+        // Cache value: (weak_ptr liveness tag, bindless slot, uploaded version).
+        // The weak_ptr lets ensureSceneBuilt prune entries when a Texture is
+        // destroyed (so a future Texture* address-collision doesn't read stale
+        // GPU data). `version` is the Texture::version() at last upload; when it
+        // changes (setData + needsUpdate on a DataTexture), refreshDirtyMaterialTextures
+        // re-uploads the slot in place so live texture edits are honoured.
+        struct CachedTexture {
+            std::weak_ptr<Texture> ref;
+            uint32_t slot = 0;
+            unsigned int version = 0;
+        };
+        std::unordered_map<const Texture*, CachedTexture> textureCache;
         std::vector<uint32_t> freeTextureSlots;// slots reclaimed by prune
         VkSampler textureSampler_ = VK_NULL_HANDLE;
 
@@ -4529,6 +4536,11 @@ namespace threepp {
             // ms/frame on Bistro's node count, static or not).
             scene.updateMatrixWorld();
 
+            // Honour live edits to already-uploaded material textures (e.g. a
+            // DataTexture re-baked via setData + needsUpdate). Cheap version
+            // scan; only re-uploads + rewrites descriptors when something changed.
+            refreshDirtyMaterialTextures();
+
             // First call each render(): start with no motion. Camera + mesh
             // motion checks below + in updateCameraUbo OR true into this flag
             // before dispatch.
@@ -5537,8 +5549,8 @@ namespace threepp {
                     }
                 }
                 for (auto it = textureCache.begin(); it != textureCache.end(); ) {
-                    if (it->second.first.expired()) {
-                        const uint32_t slot = it->second.second;
+                    if (it->second.ref.expired()) {
+                        const uint32_t slot = it->second.slot;
                         if (slot < materialTextures.size()) {
                             destroyImage2D(ctx->allocator(), ctx->device(), materialTextures[slot]);
                             materialTextures[slot] = {};
@@ -9517,17 +9529,38 @@ namespace threepp {
             if (!texSp) return -1;
             const Texture* tex = texSp.get();
             if (auto it = textureCache.find(tex); it != textureCache.end()) {
-                return static_cast<int32_t>(it->second.second);
+                return static_cast<int32_t>(it->second.slot);
             }
             if (freeTextureSlots.empty() && materialTextures.size() >= kMaxMaterialTextures) {
                 std::cerr << "[VulkanRenderer] material texture slots exhausted ("
                           << kMaxMaterialTextures << "); using -1 fallback\n";
                 return -1;
             }
+            Image2D out = buildMaterialImage2D(tex);
+            if (!out.view) return -1;
+            uint32_t slot;
+            if (!freeTextureSlots.empty()) {
+                slot = freeTextureSlots.back();
+                freeTextureSlots.pop_back();
+                materialTextures[slot] = out;
+            } else {
+                slot = static_cast<uint32_t>(materialTextures.size());
+                materialTextures.push_back(out);
+            }
+            textureCache.emplace(tex, CachedTexture{std::weak_ptr<Texture>(texSp), slot, tex->version()});
+            return static_cast<int32_t>(slot);
+        }
+
+        // Build a tightly-packed RGBA8 sampled image from a material texture's
+        // CPU image (BCn decompress / channel pad / float quantize). Returns a
+        // null Image2D ({}) on unsupported/degenerate input. Slot-agnostic so the
+        // initial upload (ensureMaterialTexture) and the in-place re-upload
+        // (refreshDirtyMaterialTextures) share one code path.
+        Image2D buildMaterialImage2D(const Texture* tex) {
             Image& img = const_cast<Texture*>(tex)->image();
             const uint32_t w = img.width();
             const uint32_t h = img.height();
-            if (w == 0 || h == 0) return -1;
+            if (w == 0 || h == 0) return {};
 
             // Normalise everything to tightly-packed RGBA8. The pipeline
             // treats the bindless array as a uniform u8x4 sampler set, so
@@ -9550,7 +9583,7 @@ namespace threepp {
                     std::cerr << "[VulkanRenderer] unsupported compressed format 0x"
                               << std::hex << *img.compressedFormat << std::dec
                               << " for material tex (" << w << "x" << h << ")\n";
-                    return -1;
+                    return {};
                 }
                 srcPtr = bcnRgba.data();
                 channels = 4;
@@ -9561,13 +9594,13 @@ namespace threepp {
                     if (src.size() % pixels != 0) {
                         std::cerr << "[VulkanRenderer] unsupported pixel layout for material tex ("
                                   << src.size() << " bytes for " << w << "x" << h << ")\n";
-                        return -1;
+                        return {};
                     }
                     channels = static_cast<int>(src.size() / pixels);
                     if (channels < 1 || channels > 4) {
                         std::cerr << "[VulkanRenderer] unsupported channel count " << channels
                                   << " for material tex (" << w << "x" << h << ")\n";
-                        return -1;
+                        return {};
                     }
                     srcPtr = src.data();
                 } catch (const std::bad_variant_access&) {
@@ -9583,13 +9616,13 @@ namespace threepp {
                         std::cerr << "[VulkanRenderer] unsupported float-pixel layout for material tex ("
                                   << srcF.size() * sizeof(float) << " bytes for "
                                   << w << "x" << h << ")\n";
-                        return -1;
+                        return {};
                     }
                     const int fch = static_cast<int>(srcF.size() / pixels);
                     if (fch < 1 || fch > 4) {
                         std::cerr << "[VulkanRenderer] unsupported float channel count " << fch
                                   << " for material tex\n";
-                        return -1;
+                        return {};
                     }
                     rgba.resize(pixels * 4);
                     for (size_t i = 0; i < pixels; ++i) {
@@ -9636,34 +9669,52 @@ namespace threepp {
             const VkFormat fmt = (tex->colorSpace == ColorSpace::sRGB)
                                          ? VK_FORMAT_R8G8B8A8_SRGB
                                          : VK_FORMAT_R8G8B8A8_UNORM;
-            // Pre-compute the slot so the debug name can include it. The
-            // allocation order below (free list pop, else push_back) is
-            // mirrored in the actual assignment below.
-            const uint32_t plannedSlot = freeTextureSlots.empty()
-                    ? static_cast<uint32_t>(materialTextures.size())
-                    : freeTextureSlots.back();
             char texName[80];
             std::snprintf(texName, sizeof(texName),
-                          "materialTexture[%u] (%ux%u, tex=%p)",
-                          plannedSlot, w, h, static_cast<const void*>(tex));
-            Image2D out = createSampledImage2D(
+                          "materialTexture (%ux%u, tex=%p)",
+                          w, h, static_cast<const void*>(tex));
+            return createSampledImage2D(
                     w, h, fmt,
                     rgba.data(), rgba.size(),
                     VK_FILTER_LINEAR,
                     wrapToVk(tex->wrapS),
                     wrapToVk(tex->wrapT),
                     texName);
-            uint32_t slot;
-            if (!freeTextureSlots.empty()) {
-                slot = freeTextureSlots.back();
-                freeTextureSlots.pop_back();
-                materialTextures[slot] = out;
-            } else {
-                slot = static_cast<uint32_t>(materialTextures.size());
-                materialTextures.push_back(out);
+        }
+
+        // Re-upload any cached material texture whose Texture::version() changed
+        // since last upload (e.g. a DataTexture edited via setData + needsUpdate),
+        // in place at its existing bindless slot. ensureMaterialTexture caches by
+        // pointer and the bindless image array is only rewritten on a full scene
+        // rebuild, so without this a live texture edit would never reach the GPU.
+        // Cheap version scan each frame; only drains + rewrites when dirty.
+        void refreshDirtyMaterialTextures() {
+            bool any = false;
+            for (auto& kv : textureCache) {
+                const auto sp = kv.second.ref.lock();
+                if (sp && sp->version() != kv.second.version) { any = true; break; }
             }
-            textureCache.emplace(tex, std::make_pair(std::weak_ptr<Texture>(texSp), slot));
-            return static_cast<int32_t>(slot);
+            if (!any) return;
+            // Prior in-flight frames may still sample these images; drain first.
+            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (material texture refresh)");
+            for (auto& kv : textureCache) {
+                const auto sp = kv.second.ref.lock();
+                if (!sp || sp->version() == kv.second.version) continue;
+                if (kv.second.slot >= materialTextures.size()) continue;
+                Image2D rebuilt = buildMaterialImage2D(kv.first);
+                if (!rebuilt.view) continue;// keep the old image on failure
+                destroyImage2D(ctx->allocator(), ctx->device(), materialTextures[kv.second.slot]);
+                materialTextures[kv.second.slot] = rebuilt;// same slot index, new view
+                kv.second.version = sp->version();
+            }
+            // The bindless material array is referenced by three descriptor sets:
+            // the PT set (binding 8) and deferred-compute set (binding 11) are
+            // rewritten here; the gbuffer raster set (binding 3) is refreshed
+            // lazily by invalidating its per-frame validity flag. All three must
+            // see the new image views or the (default RasterFirst) gbuffer keeps
+            // sampling the freed view.
+            rewriteSceneDescriptors();
+            rasterMatTexValid_.fill(0);
         }
 
         // (Re)allocate envCdfImage / envMargImage from a built EnvCdfResult.
