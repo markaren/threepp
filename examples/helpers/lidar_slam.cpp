@@ -36,6 +36,10 @@
 #include "threepp/helpers/AxesHelper.hpp"
 #include "threepp/helpers/GridHelper.hpp"
 #include "threepp/helpers/LidarSensor.hpp"
+#ifdef THREEPP_WITH_VULKAN
+#include "threepp/helpers/PathTracedLidarSensor.hpp"
+#include "threepp/renderers/VulkanRenderer.hpp"
+#endif
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/Points.hpp"
 #include "threepp/renderers/RendererFactory.hpp"
@@ -246,13 +250,18 @@ namespace {
         body->position.y = 0.2f;
         robot->add(body);
 
-        auto mast = Mesh::create(BoxGeometry::create(0.1f, 0.6f, 0.1f), mastMat);
-        mast->position.y = 0.7f;
+        // The mast + marker must top out *below* the sensor origin so no mesh
+        // encloses it. On Vulkan the robot is in the path-traced TLAS, and an
+        // enclosing mesh would make every beam hit it at ~0 m (the whole scan
+        // becomes self-returns). The AxesHelper is an unlit overlay (never in
+        // the TLAS), so it marks the sensor without being scanned.
+        auto mast = Mesh::create(BoxGeometry::create(0.1f, 0.45f, 0.1f), mastMat);
+        mast->position.y = 0.625f;// spans 0.40 .. 0.85
         robot->add(mast);
 
-        auto sensor = Mesh::create(BoxGeometry::create(0.26f, 0.14f, 0.26f), sensorMat);
-        sensor->position.y = kSensorHeight;
-        robot->add(sensor);
+        auto marker = Mesh::create(BoxGeometry::create(0.24f, 0.1f, 0.24f), sensorMat);
+        marker->position.y = 0.85f;// top at 0.90, clears the sensor at kSensorHeight (1.0)
+        robot->add(marker);
 
         robot->add(AxesHelper::create(1.2f));
         return robot;
@@ -372,6 +381,16 @@ int main(int argc, char** argv) {
     renderer->setScissorTest(true);
     renderer->shadowMap().enabled = false;
 
+    // Pick the LIDAR sensor by backend: the raster LidarSensor (GL/WGPU) is
+    // cube-face based and unsupported on Vulkan, which uses the ray-traced
+    // PathTracedLidarSensor instead. Everything downstream consumes LidarReturn,
+    // so the SLAM + meshing is identical on both.
+    bool isVulkan = false;
+#ifdef THREEPP_WITH_VULKAN
+    VulkanRenderer* vk = dynamic_cast<VulkanRenderer*>(renderer.get());
+    isVulkan = (vk != nullptr);
+#endif
+
     // --- Ground-truth scene (left) ---
     Scene sceneLeft;
     sceneLeft.background = Color(0x1d2330);
@@ -380,27 +399,47 @@ int main(int argc, char** argv) {
     auto robot = buildRobot();
     sceneLeft.add(robot);
 
-    // LIDAR model + scan resolution are both live-selectable; changing either
-    // rebuilds the sensor (resolution is a constructor parameter).
+    // LIDAR model (and, on the raster backend, scan resolution) are live-
+    // selectable; changing either rebuilds the sensor.
     const char* modelNames[] = {"OS1-64", "OS0-128", "HDL-32E", "VLP-16"};
     int currentModel = 0;
     const int faceSizeOptions[] = {192, 256, 384, 512};
     const char* faceSizeNames[] = {"192", "256", "384", "512"};
     int currentFaceIdx = 2;// 384
-    auto makeLidar = [&](int model, unsigned int faceSize) {
-        std::unique_ptr<LidarSensor> s;
-        switch (model) {
-            case 1: s = std::make_unique<LidarSensor>(LidarModel::OS0_128(), faceSize, kSensorNear, kSensorFar); break;
-            case 2: s = std::make_unique<LidarSensor>(LidarModel::HDL32E(), faceSize, kSensorNear, kSensorFar); break;
-            case 3: s = std::make_unique<LidarSensor>(LidarModel::VLP16(), faceSize, kSensorNear, kSensorFar); break;
-            default: s = std::make_unique<LidarSensor>(LidarModel::OS1_64(), faceSize, kSensorNear, kSensorFar); break;
+    auto makeModel = [&]() -> LidarModel {
+        switch (currentModel) {
+            case 1: return LidarModel::OS0_128();
+            case 2: return LidarModel::HDL32E();
+            case 3: return LidarModel::VLP16();
+            default: return LidarModel::OS1_64();
         }
-        return s;
     };
 
-    auto lidar = makeLidar(currentModel, static_cast<unsigned int>(faceSizeOptions[currentFaceIdx]));
-    lidar->rangeNoise = 0.02f;
-    sceneLeft.addRef(*lidar);
+    // Exactly one of these is live; `sensorObj` is the active sensor's Object3D
+    // (its pose is driven each frame).
+    std::unique_ptr<LidarSensor> rasterLidar;
+#ifdef THREEPP_WITH_VULKAN
+    std::unique_ptr<PathTracedLidarSensor> ptLidar;
+#endif
+    Object3D* sensorObj = nullptr;
+    auto buildSensor = [&] {
+#ifdef THREEPP_WITH_VULKAN
+        if (isVulkan) {
+            ptLidar = std::make_unique<PathTracedLidarSensor>(makeModel(), kSensorFar);
+            ptLidar->params.referenceRange = 5.f;
+            ptLidar->params.detectorThreshold = 0.005f;
+            sensorObj = ptLidar.get();
+            sceneLeft.addRef(*ptLidar);
+            return;
+        }
+#endif
+        rasterLidar = std::make_unique<LidarSensor>(
+                makeModel(), static_cast<unsigned int>(faceSizeOptions[currentFaceIdx]), kSensorNear, kSensorFar);
+        rasterLidar->rangeNoise = 0.02f;
+        sensorObj = rasterLidar.get();
+        sceneLeft.addRef(*rasterLidar);
+    };
+    buildSensor();
 
     auto livePoints = makePointCloud(0.06f);
     sceneLeft.add(livePoints);
@@ -418,9 +457,15 @@ int main(int argc, char** argv) {
     rightDir->position.set(8, 20, 12);
     sceneRight.add(rightDir);
 
+    // The reconstruction overlays (map points + trajectories) live in the RIGHT
+    // scene on raster backends (true split screen), but in the LEFT scene on
+    // Vulkan: the PT renderer can't composite two scenes, so there they overlay
+    // the path-traced ground truth as a single view (estimate-vs-truth in place).
+    Scene& reconScene = isVulkan ? sceneLeft : sceneRight;
+
     // View 0: raw point cloud.
     auto mapPoints = makePointCloud(0.05f);
-    sceneRight.add(mapPoints);
+    reconScene.add(mapPoints);
 
     // View 1: occupancy cubes (one voxel-sized box per occupied cell).
     const float cubeSize = static_cast<float>(kMapVoxel);
@@ -454,8 +499,8 @@ int main(int argc, char** argv) {
 
     auto gtTraj = makeTrajectory(Color(0x33ff66)); // ground truth
     auto estTraj = makeTrajectory(Color(0xffaa22));// SLAM estimate
-    sceneRight.add(gtTraj);
-    sceneRight.add(estTraj);
+    reconScene.add(gtTraj);
+    reconScene.add(estTraj);
 
     // --- Shared camera + controls ---
     auto camera = PerspectiveCamera::create(55, canvas.aspect(), 0.1f, 400.f);
@@ -500,14 +545,15 @@ int main(int argc, char** argv) {
     bool paused = false;
     bool showLive = true;
 
-    auto rebuildLidar = [&] {
-        sceneLeft.remove(*lidar);
-        auto next = makeLidar(currentModel, static_cast<unsigned int>(faceSizeOptions[currentFaceIdx]));
-        next->rangeNoise = lidar->rangeNoise;
-        next->position.copy(lidar->position);
-        next->rotation.copy(lidar->rotation);
-        lidar = std::move(next);
-        sceneLeft.addRef(*lidar);
+    auto rebuildSensor = [&] {
+        const float noise = rasterLidar ? rasterLidar->rangeNoise : 0.02f;
+        if (sensorObj) sceneLeft.remove(*sensorObj);
+        rasterLidar.reset();
+#ifdef THREEPP_WITH_VULKAN
+        ptLidar.reset();
+#endif
+        buildSensor();// pose is re-applied next frame
+        if (rasterLidar) rasterLidar->rangeNoise = noise;
         resetReconstruction();
     };
 
@@ -569,24 +615,39 @@ int main(int argc, char** argv) {
         ImGui::SetNextWindowPos({0, 0}, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize({0, 0}, ImGuiCond_FirstUseEver);
         ImGui::Begin("SLAM");
-        ImGui::Text("Left: ground truth   Right: reconstruction");
+        ImGui::Text("%s", isVulkan ? "Ground truth + SLAM map overlay"
+                                   : "Left: ground truth   Right: reconstruction");
+        ImGui::Text("Sensor: %s", isVulkan ? "path-traced (Vulkan)" : "raster (cube-face)");
         ImGui::Separator();
         ImGui::Checkbox("Pause robot", &paused);
         ImGui::SameLine();
         ImGui::Checkbox("Show live scan", &showLive);
         ImGui::SliderFloat("Speed (m/s)", &speed, 0.2f, 2.5f);
-        ImGui::SliderFloat("Range noise (m)", &lidar->rangeNoise, 0.f, 0.1f);
 
         int prevModel = currentModel;
         ImGui::Combo("LIDAR", &currentModel, modelNames, 4);
-        if (currentModel != prevModel) rebuildLidar();
+        if (currentModel != prevModel) rebuildSensor();
 
-        int prevFace = currentFaceIdx;
-        ImGui::Combo("Scan res", &currentFaceIdx, faceSizeNames, 4);
-        if (currentFaceIdx != prevFace) rebuildLidar();
+        if (rasterLidar) {
+            int prevFace = currentFaceIdx;
+            ImGui::Combo("Scan res", &currentFaceIdx, faceSizeNames, 4);
+            if (currentFaceIdx != prevFace) rebuildSensor();
+            ImGui::SliderFloat("Range noise (m)", &rasterLidar->rangeNoise, 0.f, 0.1f);
+        }
+#ifdef THREEPP_WITH_VULKAN
+        if (ptLidar) {
+            ImGui::SliderFloat("Max range (m)", &ptLidar->params.maxRange, 5.f, 50.f);
+        }
+#endif
 
-        const char* viewNames[] = {"Point cloud", "Occupancy cubes", "Surface (marching cubes)"};
-        ImGui::Combo("Map view", &viewMode, viewNames, 3);
+        if (isVulkan) {
+            // The path-traced backend can't draw the dynamic occupancy/surface
+            // meshes in the reconstruction scene; it shows the point cloud.
+            ImGui::TextWrapped("Map view: point cloud (occupancy/surface meshing needs a raster backend)");
+        } else {
+            const char* viewNames[] = {"Point cloud", "Occupancy cubes", "Surface (marching cubes)"};
+            ImGui::Combo("Map view", &viewMode, viewNames, 3);
+        }
 
         if (ImGui::Button("Reset SLAM")) resetReconstruction();
         ImGui::Separator();
@@ -633,27 +694,57 @@ int main(int argc, char** argv) {
         const float vz = pathRz * std::cos(pathAngle);
         const float yaw = std::atan2(vx, vz);// face along the tangent
 
-        lidar->position.set(px, kSensorHeight, pz);
-        lidar->rotation.set(0, yaw, 0);
+        sensorObj->position.set(px, kSensorHeight, pz);
+        sensorObj->rotation.set(0, yaw, 0);
         robot->position.set(px, 0, pz);
         robot->rotation.set(0, yaw, 0);
 
-        // Make the ground-truth sensor pose current, then capture it. This is
-        // the matrix the cube-face scan uses; its inverse de-frames returns.
-        lidar->updateMatrixWorld(true);
+        // Make the ground-truth sensor pose current, then capture it. Its
+        // inverse de-frames the world-space returns back to sensor-local.
+        sensorObj->updateMatrixWorld(true);
         Matrix4 mGt;
-        mGt.copy(*lidar->matrixWorld);
+        mGt.copy(*sensorObj->matrixWorld);
         Matrix4 mInv;
         mInv.copy(mGt).invert();
 
-        // --- Scan (the robot must not see itself) ---
-        const float scanT0 = clock.getElapsedTime();
-        robot->visible = false;
-        livePoints->visible = false;
-        lidar->scan(*renderer, sceneLeft, cloud);
-        robot->visible = true;
-        livePoints->visible = showLive;
-        scanMs = (clock.getElapsedTime() - scanT0) * 1000.f;
+        // View geometry. Raster backends split the window (each half its own
+        // aspect); Vulkan uses one full-screen view (its PT renderer can't
+        // composite two scenes), so the camera spans the full width there.
+        const auto size = canvas.size();
+        const int w = size.width();
+        const int h = size.height();
+        const int halfW = w / 2;
+        camera->aspect = isVulkan ? (static_cast<float>(w) / static_cast<float>(h))
+                                  : (static_cast<float>(halfW) / static_cast<float>(h));
+        camera->updateProjectionMatrix();
+        controls.update();
+
+        // --- Scan ---
+        if (isVulkan) {
+#ifdef THREEPP_WITH_VULKAN
+            // Path-traced scan reads the renderer's TLAS, so render the scene
+            // first (full screen — this is also the displayed frame, with the
+            // map + trajectories overlaid). Points are overlay-only (never in the
+            // TLAS); the robot is, but its near self-returns are dropped below.
+            livePoints->visible = showLive;
+            renderer->setViewport(0, 0, w, h);
+            renderer->setScissor(0, 0, w, h);
+            renderer->render(sceneLeft, *camera);
+            const float t0 = clock.getElapsedTime();
+            ptLidar->scan(*vk, cloud);
+            scanMs = (clock.getElapsedTime() - t0) * 1000.f;
+#endif
+        } else {
+            // Raster cube-face scan renders its own views; hide the robot +
+            // overlay so the sensor doesn't see itself.
+            const float t0 = clock.getElapsedTime();
+            robot->visible = false;
+            livePoints->visible = false;
+            rasterLidar->scan(*renderer, sceneLeft, cloud);
+            robot->visible = true;
+            livePoints->visible = showLive;
+            scanMs = (clock.getElapsedTime() - t0) * 1000.f;
+        }
 
         // --- Live point cloud (left), coloured by range ---
         {
@@ -682,7 +773,10 @@ int main(int argc, char** argv) {
 
         // --- De-frame to sensor-local + voxel downsample ---
         // Coarse source for a cheap ICP; dense source for a good map + display.
-        const auto localScan = deframeScan(cloud, mInv, kSelfReturnRange);
+        // Vulkan keeps the robot in the TLAS, so use a wider self-return cut to
+        // drop its near hits (the path stays >1.5 m from real geometry).
+        const float selfRange = isVulkan ? 1.1f : kSelfReturnRange;
+        const auto localScan = deframeScan(cloud, mInv, selfRange);
         const auto regSrc = voxelDownsample(localScan, kRegVoxel);
         const auto mapSrc = voxelDownsample(localScan, kDownsampleVoxel);
 
@@ -731,6 +825,7 @@ int main(int argc, char** argv) {
         drift = (estPos.clone().sub(gtPos)).length();
 
         // --- Map view: point cloud / occupancy cubes / surface ---
+        if (isVulkan) viewMode = 0;// mesh views are raster-only; never show them on the PT path
         mapPoints->visible = (viewMode == 0);
         cubesMesh->visible = (viewMode == 1);
         surfaceMesh->visible = (viewMode == 2);
@@ -750,22 +845,18 @@ int main(int argc, char** argv) {
             }
         }
 
-        // --- Split-screen render (independent, correctly-proportioned views) ---
-        const auto size = canvas.size();
-        const int w = size.width();
-        const int h = size.height();
-        const int halfW = w / 2;
-        camera->aspect = static_cast<float>(halfW) / static_cast<float>(h);
-        camera->updateProjectionMatrix();
-        controls.update();
+        // --- Render ---
+        if (!isVulkan) {
+            // Raster split screen: ground truth left, reconstruction right.
+            renderer->setViewport(0, 0, halfW, h);
+            renderer->setScissor(0, 0, halfW, h);
+            renderer->render(sceneLeft, *camera);
 
-        renderer->setViewport(0, 0, halfW, h);
-        renderer->setScissor(0, 0, halfW, h);
-        renderer->render(sceneLeft, *camera);
-
-        renderer->setViewport(halfW, 0, w - halfW, h);
-        renderer->setScissor(halfW, 0, w - halfW, h);
-        renderer->render(sceneRight, *camera);
+            renderer->setViewport(halfW, 0, w - halfW, h);
+            renderer->setScissor(halfW, 0, w - halfW, h);
+            renderer->render(sceneRight, *camera);
+        }
+        // (Vulkan already rendered the single full-screen view in the scan step.)
 
         // UI spans the whole window.
         renderer->setViewport(0, 0, w, h);
