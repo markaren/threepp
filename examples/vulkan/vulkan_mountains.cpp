@@ -24,6 +24,7 @@
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
+#include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
 
 #include <cmath>
@@ -82,6 +83,9 @@ namespace {
                 p.erosion = ErosionType::Thermal;// gentle talus smoothing
                 p.talusAngle = 32.f;
                 p.thermalIterations = 40;
+                p.snowLine = 0.9f;// mostly green hills, only the very tops dusted
+                p.slopeGrassMax = 0.4f;
+                p.grassColor = {0.30f, 0.40f, 0.18f};
                 break;
             case 2:// Desert mesa — terraced strata.
                 p.noiseType = NoiseType::Hybrid;
@@ -101,6 +105,10 @@ namespace {
                 p.droplets = 60000;
                 p.erodeSpeed = 0.3f;
                 p.depositSpeed = 0.4f;
+                p.snowLine = 1.1f;// desert — no snow
+                p.rockColor = {0.46f, 0.31f, 0.22f};// red rock
+                p.screeColor = {0.66f, 0.52f, 0.38f};// tan
+                p.grassColor = {0.60f, 0.49f, 0.33f};// sand (the low+flat band)
                 break;
             case 3:// Volcanic — single radial cone.
                 p.noiseType = NoiseType::Ridged;
@@ -122,6 +130,10 @@ namespace {
                 p.erosionRadius = 2;
                 p.talusAngle = 40.f;
                 p.thermalIterations = 22;
+                p.snowLine = 1.1f;// basalt cone — no snow
+                p.rockColor = {0.20f, 0.18f, 0.17f};// dark basalt
+                p.screeColor = {0.30f, 0.27f, 0.25f};// ash scree
+                p.grassColor = {0.24f, 0.23f, 0.21f};// dark lower slopes
                 break;
             default: break;
         }
@@ -139,6 +151,7 @@ int main(int argc, char** argv) {
     bool rerollOnce = false;// single in-place re-roll at frame 20, then settle (motion-vector test)
     bool noErode = false;// force erosion off (capture the pre-erosion baseline)
     bool topDown = false;// overhead camera (inspect drainage channels)
+    bool retex = false;// mid-run live texturing change (verify live recolor reaches the GPU)
     int startPreset = 0;// 0 Alpine, 1 Rolling, 2 Mesa, 3 Volcanic
     float sceneScale = 1.f;     // debug: scale world/amplitude/feature (precision A/B)
     float ovSunAz = -1, ovSunEl = -1;// debug: override sun azimuth/elevation
@@ -161,6 +174,8 @@ int main(int argc, char** argv) {
             noErode = true;
         else if (std::string(argv[i]) == "--topdown")
             topDown = true;
+        else if (std::string(argv[i]) == "--retex")
+            retex = true;
         else if (std::string(argv[i]) == "--pt")
             shotPT = true;
     }
@@ -209,7 +224,38 @@ int main(int argc, char** argv) {
                                                            .metalness(0.0f));
     // Initial bake runs erosion if the preset calls for it (a ~1s one-off).
     auto terrain = Mesh::create(gen.createGeometry(params, params.erosion != ErosionType::None), terrainMat);
+
+    // Slope/altitude/snow splat baked into an sRGB albedo map — one texel per
+    // mesh vertex, so the PlaneGeometry UVs map it 1:1. Re-baked whenever the
+    // field or the texturing params change (see rebakeColors below).
+    auto terrainTex = DataTexture::create(ImageData{gen.bakeSplatColors(params)},
+                                          static_cast<unsigned int>(gen.dim()),
+                                          static_cast<unsigned int>(gen.dim()));
+    terrainTex->colorSpace = ColorSpace::sRGB;
+    terrainTex->magFilter = Filter::Linear;
+    terrainTex->minFilter = Filter::Linear;
+    terrainMat->map = terrainTex;
+    terrainMat->color = Color::white;// albedo comes from the map now
+    terrainMat->needsUpdate();
+    int builtTexDim = gen.dim();
     scene.add(terrain);
+
+    auto rebakeColors = [&] {
+        if (gen.dim() == builtTexDim) {
+            terrainTex->setData(ImageData{gen.bakeSplatColors(params)});
+            terrainTex->needsUpdate();
+        } else {// resolution changed → new texture dimensions
+            terrainTex = DataTexture::create(ImageData{gen.bakeSplatColors(params)},
+                                             static_cast<unsigned int>(gen.dim()),
+                                             static_cast<unsigned int>(gen.dim()));
+            terrainTex->colorSpace = ColorSpace::sRGB;
+            terrainTex->magFilter = Filter::Linear;
+            terrainTex->minFilter = Filter::Linear;
+            terrainMat->map = terrainTex;
+            terrainMat->needsUpdate();
+            builtTexDim = gen.dim();
+        }
+    };
 
     // Surrounding plain — a large flat ground a touch below the base so the
     // EdgeFade'd massif rises out of it instead of floating. Sits just under
@@ -249,6 +295,7 @@ int main(int argc, char** argv) {
 
     bool regenRequested = false;
     bool regenErode = false;// when servicing a regen, also run the (slow) erosion pass
+    bool recolorRequested = false;// texturing params changed; re-bake the splat map only
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
 
@@ -350,6 +397,19 @@ int main(int argc, char** argv) {
         ImGui::SameLine();
         ImGui::TextDisabled("~1s pass");
 
+        ImGui::SeparatorText("Texturing");
+        // Cheap — re-bakes only the albedo map (no geometry rebuild), on release.
+        recolorRequested |= ImGui::SliderFloat("Snow line", &params.snowLine, 0.f, 1.f, "%.2f");
+        recolorRequested |= ImGui::SliderFloat("Snow wiggle", &params.snowNoiseAmp, 0.f, 0.2f, "%.2f");
+        recolorRequested |= ImGui::SliderFloat("Snow slope max", &params.snowSlopeMax, 0.f, 1.f, "%.2f");
+        recolorRequested |= ImGui::SliderFloat("Grass/scree slope", &params.slopeGrassMax, 0.f, 1.f, "%.2f");
+        recolorRequested |= ImGui::SliderFloat("Scree/rock slope", &params.slopeRockMin, 0.f, 1.f, "%.2f");
+        recolorRequested |= ImGui::SliderFloat("Band softness", &params.bandEdge, 0.01f, 0.2f, "%.2f");
+        recolorRequested |= ImGui::ColorEdit3("Rock", params.rockColor.data());
+        recolorRequested |= ImGui::ColorEdit3("Grass/base", params.grassColor.data());
+        recolorRequested |= ImGui::ColorEdit3("Scree", params.screeColor.data());
+        recolorRequested |= ImGui::ColorEdit3("Snow", params.snowColor.data());
+
         ImGui::SeparatorText("Sun & render");
         ImGui::SliderFloat("Sun azimuth", &sunAzimuth, 0.f, 360.f, "%.0f");
         ImGui::SliderFloat("Sun elevation", &sunElevation, 1.f, 89.f, "%.0f");
@@ -405,6 +465,19 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Live texturing test: at frame 30, drop the snow line via the recolor
+        // path only (no geometry change). With the renderer's material-texture
+        // version refresh, the terrain should turn much snowier; without it the
+        // colour would never update.
+        {
+            static int rtFrame = 0;
+            if (retex && ++rtFrame == 30) {
+                params.snowLine = 0.1f;
+                recolorRequested = true;
+                std::cout << "[retex] snowLine -> 0.1 (live recolor only)" << std::endl;
+            }
+        }
+
         // Stress mode: drive the same regen path the UI uses, alternating
         // resolution so both the same-topology refit and the topology-change
         // rebuild get exercised at runtime. Headless validation of "re-roll".
@@ -443,8 +516,13 @@ int main(int argc, char** argv) {
             } else {
                 gen.displaceTo(*terrain->geometry(), params);
             }
+            rebakeColors();// slope/altitude changed → re-bake the splat albedo
             regenRequested = false;
             regenErode = false;
+            recolorRequested = false;
+        } else if (recolorRequested && !uiBusy) {
+            rebakeColors();// texturing params changed; geometry is unchanged
+            recolorRequested = false;
         }
 
         renderer.render(scene, camera);

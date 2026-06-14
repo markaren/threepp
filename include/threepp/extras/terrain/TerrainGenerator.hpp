@@ -93,6 +93,18 @@ namespace threepp::terrain {
         float talusAngle = 38.f;    // degrees — slopes steeper than this slump
         int thermalIterations = 30; // slump sweeps
         float thermalRate = 0.5f;   // fraction of the excess moved per sweep
+
+        // ── Texturing (slope / altitude splat baked into an albedo map) ───────
+        float snowLine = 0.5f;      // altitude fraction (0..1) where snow begins
+        float snowNoiseAmp = 0.08f; // snowline wiggle (breaks the iso-contour)
+        float snowSlopeMax = 0.72f; // slope (0 flat..1 vertical) above which snow sheds (cliffs go bare)
+        float slopeGrassMax = 0.28f;// grass → scree slope
+        float slopeRockMin = 0.55f; // scree → rock slope
+        float bandEdge = 0.07f;     // transition softness
+        std::array<float, 3> rockColor = {0.39f, 0.36f, 0.33f};// neutral grey-brown
+        std::array<float, 3> grassColor = {0.29f, 0.33f, 0.19f};// muted olive ("low+flat" band; sand/ash for other presets)
+        std::array<float, 3> screeColor = {0.49f, 0.46f, 0.42f};
+        std::array<float, 3> snowColor = {0.90f, 0.91f, 0.93f};// faintly off-white (pure white reads plastic)
     };
 
     class TerrainGenerator {
@@ -193,6 +205,77 @@ namespace threepp::terrain {
         // physics/placement queries; the mesh path uses the eroded field.
         [[nodiscard]] float heightAt(float wx, float wz, const TerrainParams& tp) const {
             return shape01(wx, wz, tp) * falloffMul(wx, wz, tp) * tp.amplitude - baseSink(wx, wz, tp);
+        }
+
+        // Bake a slope/altitude/snow splat into an sRGB RGBA8 albedo image
+        // (dim×dim, row-major, one texel per mesh vertex — the PlaneGeometry UVs
+        // map it 1:1). Reads the CURRENT (eroded) field, so call after buildField
+        // /erode. Blends four bands — grass (low+flat), scree (mid slope), rock
+        // (steep), snow (high, slope-shed, noise-perturbed snowline). Returns the
+        // byte buffer; the caller wraps it in a DataTexture (no texture
+        // dependency here keeps the generator header lean).
+        [[nodiscard]] std::vector<unsigned char> bakeSplatColors(const TerrainParams& tp) const {
+            const int dim = dim_;
+            std::vector<unsigned char> out(static_cast<size_t>(std::max(dim, 1)) * std::max(dim, 1) * 4, 255u);
+            if (dim < 2 || static_cast<size_t>(dim) * dim != field_.size()) return out;
+
+            const float cellWorld = tp.worldSize / static_cast<float>(dim - 1);
+            const float e = std::max(tp.bandEdge, 1e-3f);
+            const auto at = [dim](int x, int y) { return static_cast<size_t>(y) * dim + x; };
+            const auto band = [](float x, float lo, float hi, float ee) {
+                return smoothstep(lo - ee, lo + ee, x) * (1.f - smoothstep(hi - ee, hi + ee, x));
+            };
+
+            std::vector<int> rows(static_cast<size_t>(dim));
+            std::iota(rows.begin(), rows.end(), 0);
+            std::for_each(std::execution::par, rows.begin(), rows.end(), [&](int z) {
+                for (int x = 0; x < dim; ++x) {
+                    const int xm = std::max(x - 1, 0), xp = std::min(x + 1, dim - 1);
+                    const int zm = std::max(z - 1, 0), zp = std::min(z + 1, dim - 1);
+                    const float hC = field_[at(x, z)];
+                    const float dHdx = (field_[at(xp, z)] - field_[at(xm, z)]) * tp.amplitude / (2.f * cellWorld);
+                    const float dHdz = (field_[at(x, zp)] - field_[at(x, zm)]) * tp.amplitude / (2.f * cellWorld);
+                    const float ny = 1.f / std::sqrt(dHdx * dHdx + dHdz * dHdz + 1.f);
+                    const float slope = 1.f - ny;             // 0 flat .. 1 vertical
+                    const float alt = std::clamp(hC, 0.f, 1.f);
+                    const float wig = noise2(static_cast<float>(x) * 0.06f, static_cast<float>(z) * 0.06f);
+
+                    float wGrass = band(slope, 0.f, tp.slopeGrassMax, e) * band(alt, 0.f, tp.snowLine, e);
+                    float wScree = band(slope, tp.slopeGrassMax, tp.slopeRockMin, e);
+                    float wRock = smoothstep(tp.slopeRockMin - 0.05f, tp.slopeRockMin + 0.2f, slope);
+                    float wSnow = smoothstep(tp.snowLine - 0.06f, tp.snowLine + 0.06f, alt + wig * tp.snowNoiseAmp) *
+                                  (1.f - smoothstep(tp.snowSlopeMax - 0.1f, tp.snowSlopeMax + 0.1f, slope));
+
+                    float total = wGrass + wScree + wRock + wSnow;
+                    if (total < 1e-4f) {
+                        wRock = 1.f;
+                        total = 1.f;
+                    }
+                    // De-plastic: break flat band fills with multi-scale albedo
+                    // variation and darken concave creases (cheap baked AO). A
+                    // pure per-band flat colour reads as painted plastic; real
+                    // ground has grain and occlusion in the folds.
+                    const float n1 = fbm(static_cast<float>(x) * 0.16f, static_cast<float>(z) * 0.16f, 4, 2.f, 0.5f);
+                    const float n2 = noise2(static_cast<float>(x) * 0.8f, static_cast<float>(z) * 0.8f);
+                    const float varia = std::clamp(1.f + 0.15f * n1 + 0.08f * n2, 0.65f, 1.25f);
+                    const float curv = field_[at(xm, z)] + field_[at(xp, z)] + field_[at(x, zm)] + field_[at(x, zp)] - 4.f * hC;
+                    const float ao = 1.f - std::clamp(-curv * 45.f, 0.f, 0.35f);// valleys/creases darker
+
+                    const float inv = (varia * ao) / total;
+                    const float r = (tp.grassColor[0] * wGrass + tp.screeColor[0] * wScree + tp.rockColor[0] * wRock + tp.snowColor[0] * wSnow) * inv;
+                    const float g = (tp.grassColor[1] * wGrass + tp.screeColor[1] * wScree + tp.rockColor[1] * wRock + tp.snowColor[1] * wSnow) * inv;
+                    const float b = (tp.grassColor[2] * wGrass + tp.screeColor[2] * wScree + tp.rockColor[2] * wRock + tp.snowColor[2] * wSnow) * inv;
+
+                    // Z-flip: the albedo map's rows run opposite to world Z vs the
+                    // PlaneGeometry UV v-axis, so store this cell at the mirrored row.
+                    const size_t o = at(x, dim - 1 - z) * 4;
+                    out[o + 0] = static_cast<unsigned char>(std::clamp(r, 0.f, 1.f) * 255.f + 0.5f);
+                    out[o + 1] = static_cast<unsigned char>(std::clamp(g, 0.f, 1.f) * 255.f + 0.5f);
+                    out[o + 2] = static_cast<unsigned char>(std::clamp(b, 0.f, 1.f) * 255.f + 0.5f);
+                    out[o + 3] = 255u;
+                }
+            });
+            return out;
         }
 
     private:
