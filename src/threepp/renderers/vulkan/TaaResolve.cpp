@@ -204,7 +204,7 @@ namespace threepp::vulkan {
         VkPushConstantRange pcRange{};
         pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         pcRange.offset     = 0;
-        pcRange.size       = 96;// 6 scalars + pad(8) + mat4 skyReproj (offset 32)
+        pcRange.size       = 112;// scalars + dstOffset(@28) + mat4 skyReproj(@32) + phys dims(@96)
 
         VkPipelineLayoutCreateInfo plci{};
         plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -435,7 +435,18 @@ namespace threepp::vulkan {
                                    float dtFrames,
                                    bool sharpen,
                                    float sharpenAmount,
-                                   const float* skyReproj) {
+                                   const float* skyReproj,
+                                   uint32_t dstX,
+                                   uint32_t dstY,
+                                   uint32_t physInW,
+                                   uint32_t physInH,
+                                   uint32_t physOutW,
+                                   uint32_t physOutH) {
+        // Physical (full texture) sizes default to the region sizes → scale 1.
+        if (physInW == 0)  physInW  = inWidth;
+        if (physInH == 0)  physInH  = inHeight;
+        if (physOutW == 0) physOutW = outWidth;
+        if (physOutH == 0) physOutH = outHeight;
         // Barrier: taaInput write → read; both history slots covered (RAW
         // hazard on the read slot, WAW on the write slot we're about to
         // overwrite this frame).
@@ -481,14 +492,18 @@ namespace threepp::vulkan {
         // input w/h (the render extent the samples were traced at).
         // Layout mirrors the shader's std430 push block: 7 scalars, 4 bytes
         // of pad, then the column-major mat4 at offset 32.
-        float pc[24] = {};
+        float pc[28] = {};
         std::memcpy(&pc[0], &alphaBits, 4);
         const uint32_t dims[4] = {outWidth, outHeight, inWidth, inHeight};
         std::memcpy(&pc[1], dims, 16);
         const uint32_t ws = sharpen ? 0u : 1u;
         std::memcpy(&pc[5], &ws, 4);
         pc[6] = dtFrames;
-        std::memcpy(&pc[8], skyReproj, 64);
+        const uint32_t packedDst = (dstX & 0xFFFFu) | (dstY << 16);
+        std::memcpy(&pc[7], &packedDst, 4);// offset 28: swapchain write offset
+        std::memcpy(&pc[8], skyReproj, 64);// offset 32: mat4
+        const uint32_t physDims[4] = {physInW, physInH, physOutW, physOutH};
+        std::memcpy(&pc[24], physDims, 16);// offset 96: full texture sizes
         vkCmdPushConstants(cb, pipelineLayout_,
                            VK_SHADER_STAGE_COMPUTE_BIT,
                            0, sizeof(pc), pc);
@@ -519,7 +534,7 @@ namespace threepp::vulkan {
                                     rcasPipeLayout_, 0, 1, &rcasSets_[descIdx], 0, nullptr);
             uint32_t amountBits;
             std::memcpy(&amountBits, &sharpenAmount, sizeof(amountBits));
-            const uint32_t rpc[4] = {outWidth, outHeight, amountBits, 0u};
+            const uint32_t rpc[4] = {outWidth, outHeight, amountBits, packedDst};
             vkCmdPushConstants(cb, rcasPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                                0, sizeof(rpc), rpc);
             vkCmdDispatch(cb, gx, gy, 1);

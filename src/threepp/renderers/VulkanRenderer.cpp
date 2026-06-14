@@ -191,6 +191,17 @@ namespace threepp {
         Vector4 viewport;
         Vector4 scissor;
         bool scissorTest = false;
+        bool autoClear_ = true;// mirrored from Renderer::autoClear each render()
+
+        // Split-screen (Increment 0): the primary PT pane is clipped to the
+        // scissor sub-rect. The PT pipeline renders the pane region-sized AT THE
+        // IMAGE ORIGIN (gbuf/raygen/denoise/bloom); only the final TAA write is
+        // offset to the scissor position. All default to the full frame, so the
+        // single-scene path is byte-identical when scissorTest is off.
+        VkExtent2D regionRenderExt_{};// render-extent-space pane size
+        VkExtent2D regionSwapExt_{};  // swapchain-space pane size (TAA output)
+        int32_t    regionDstX_ = 0;   // swapchain write offset (image space)
+        int32_t    regionDstY_ = 0;
 
         // Mirrored from VulkanRenderer (Renderer base) at the start of each
         // render() so the renderFrame path can read them without a pointer back
@@ -6984,17 +6995,21 @@ namespace threepp {
             rpbi.pClearValues    = clears;
             vkCmdBeginRenderPass(cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
 
+            // Split-screen: draw the pane region-sized at the origin (the render
+            // pass still clears the whole gbuf, so outside the pane reads as sky).
+            // regionRenderExt_ == full render extent when scissorTest is off.
+            const VkExtent2D gbufReg = regionRenderExt_;
             VkViewport viewport{};
             viewport.x = 0.f;
             viewport.y = 0.f;
-            viewport.width  = float(ext.width);
-            viewport.height = float(ext.height);
+            viewport.width  = float(gbufReg.width);
+            viewport.height = float(gbufReg.height);
             viewport.minDepth = 0.f;
             viewport.maxDepth = 1.f;
             vkCmdSetViewport(cb, 0, 1, &viewport);
             VkRect2D scissor{};
             scissor.offset = {0, 0};
-            scissor.extent = ext;
+            scissor.extent = gbufReg;
             vkCmdSetScissor(cb, 0, 1, &scissor);
 
             if (indirectTotalDraws_ == 0u) {
@@ -11678,6 +11693,38 @@ namespace threepp {
         // endFrame transitions can rely on a known layout.
         void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
 
+            // ── Split-screen pane region ───────────────────────────────────
+            // When scissorTest is on, clip the PT pane to the scissor sub-rect:
+            // render region-sized at the image origin (gbuf/raygen/denoise/bloom
+            // all read the members below), and offset only the final TAA write
+            // to the scissor position. Defaults to the full frame (byte-identical
+            // single-scene path) when scissorTest is off.
+            {
+                const VkExtent2D fullSwap   = ctx->swapchainExtent();
+                const VkExtent2D fullRender = renderExtent();
+                regionSwapExt_   = fullSwap;
+                regionRenderExt_ = fullRender;
+                regionDstX_ = 0;
+                regionDstY_ = 0;
+                if (scissorTest && scissor.z >= 1.f && scissor.w >= 1.f &&
+                    fullSwap.width > 0 && fullSwap.height > 0) {
+                    const int sx  = std::clamp(static_cast<int>(scissor.x), 0, static_cast<int>(fullSwap.width));
+                    const int sw  = std::clamp(static_cast<int>(scissor.z), 1, static_cast<int>(fullSwap.width) - sx);
+                    const int sh  = std::clamp(static_cast<int>(scissor.w), 1, static_cast<int>(fullSwap.height));
+                    const int syB = std::clamp(static_cast<int>(scissor.y), 0, static_cast<int>(fullSwap.height) - sh);
+                    regionSwapExt_ = {static_cast<uint32_t>(sw), static_cast<uint32_t>(sh)};
+                    regionDstX_    = sx;
+                    // GL scissor y is from the bottom; the swapchain image is
+                    // top-left origin → flip. Full-height panes map to 0.
+                    regionDstY_    = static_cast<int>(fullSwap.height) - (syB + sh);
+                    regionRenderExt_ = {
+                            std::max(1u, static_cast<uint32_t>(std::lround(
+                                                 static_cast<double>(sw) * fullRender.width / fullSwap.width))),
+                            std::max(1u, static_cast<uint32_t>(std::lround(
+                                                 static_cast<double>(sh) * fullRender.height / fullSwap.height)))};
+                }
+            }
+
             // ── Skinned-mesh GPU pipeline ──────────────────────────────────
             // ensureSceneBuilt populated pendingSkinnedRebuilds_ with the
             // states whose bones changed this frame and uploaded the new
@@ -12320,6 +12367,47 @@ namespace threepp {
             dep.pImageMemoryBarriers = preBarriers.data();
             vkCmdPipelineBarrier2(cb, &dep);
 
+            // Split-screen: clear the whole frame to clearColor once so the area
+            // outside the PT pane's scissor shows the clear colour. Gated on
+            // scissorTest so the default full-screen path is byte-identical (the
+            // TAA write covers the whole frame there anyway).
+            if (autoClear_ && scissorTest) {
+                Color cc;
+                cc.copy(clearColor);
+                ColorManagement::workingToColorSpace(cc, SRGBColorSpace);
+                VkClearColorValue cv{};
+                cv.float32[0] = cc.r;
+                cv.float32[1] = cc.g;
+                cv.float32[2] = cc.b;
+                cv.float32[3] = clearAlpha;
+                VkImageSubresourceRange clrRange{};
+                clrRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                clrRange.levelCount = 1;
+                clrRange.layerCount = 1;
+                vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_GENERAL, &cv, 1, &clrRange);
+                // Clear (transfer write) → the TAA swapchain store (compute write).
+                VkImageMemoryBarrier2 clrBar{};
+                clrBar.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                clrBar.srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                clrBar.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                clrBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                clrBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                       VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                clrBar.oldLayout            = VK_IMAGE_LAYOUT_GENERAL;
+                clrBar.newLayout            = VK_IMAGE_LAYOUT_GENERAL;
+                clrBar.srcQueueFamilyIndex  = VK_QUEUE_FAMILY_IGNORED;
+                clrBar.dstQueueFamilyIndex  = VK_QUEUE_FAMILY_IGNORED;
+                clrBar.image                = img;
+                clrBar.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                clrBar.subresourceRange.levelCount = 1;
+                clrBar.subresourceRange.layerCount = 1;
+                VkDependencyInfo clrDep{};
+                clrDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                clrDep.imageMemoryBarrierCount = 1;
+                clrDep.pImageMemoryBarriers    = &clrBar;
+                vkCmdPipelineBarrier2(cb, &clrDep);
+            }
+
             // descriptorSets index is shared by photon and primary RT pipelines.
             const uint32_t setIdx = currentFrame * imageCount_ + imageIndex;
 
@@ -12471,7 +12559,7 @@ namespace threepp {
             // (ext / ptExt hoisted above the mode branch.)
             gpuTimings_->begin(cb, TP_PathTrace, currentFrame);
             ctx->rt().cmdTraceRays(cb, &rtv.rgenRegion, &rtv.missRegion, &rtv.hitRegion,
-                                   &callRegion, ptExt.width, ptExt.height, 1);
+                                   &callRegion, regionRenderExt_.width, regionRenderExt_.height, 1);
             gpuTimings_->end(cb, TP_PathTrace, currentFrame);
 
             // ── Spatial denoiser: 2-pass à-trous + finalize tonemap + sRGB ──────
@@ -12481,7 +12569,7 @@ namespace threepp {
             // RT_SHADER → COMPUTE_SHADER barrier is recorded inside
             // Denoiser::recordDispatch.
             gpuTimings_->begin(cb, TP_Denoise, currentFrame);
-            denoiser_->recordDispatch(cb, descriptorSets[setIdx], ptExt,
+            denoiser_->recordDispatch(cb, descriptorSets[setIdx], regionRenderExt_,
                                       denoiseEnabled_,
                                       static_cast<uint32_t>(toneMapping_),
                                       exposureBits,
@@ -12526,7 +12614,7 @@ namespace threepp {
                 }
                 gpuTimings_->begin(cb, TP_PathTrace, currentFrame);
                 deferredShade_->recordDispatch(cb, currentFrame,
-                                               ptExt.width, ptExt.height,
+                                               regionRenderExt_.width, regionRenderExt_.height,
                                                envImage.mipLevels, /*shadows=*/true,
                                                /*ao=*/deferredAO_, sampleIndex,
                                                emissiveTriCountThisFrame_,
@@ -12557,7 +12645,7 @@ namespace threepp {
                     denoiseDep.pMemoryBarriers = &denoiseBar;
                     vkCmdPipelineBarrier2(cb, &denoiseDep);
                     gpuTimings_->begin(cb, TP_Denoise, currentFrame);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
-                    deferredShade_->recordDenoiseDispatch(cb, currentFrame, ptExt.width, ptExt.height);
+                    deferredShade_->recordDenoiseDispatch(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height);
                     gpuTimings_->end(cb, TP_Denoise, currentFrame);
                 }
             }
@@ -12569,7 +12657,7 @@ namespace threepp {
             // input image. With bloomIntensity_ == 0 the bloom passes are
             // skipped and the composite reproduces the old finalize output
             // (tone map + sRGB + solid-bg bypass) exactly.
-            bloom_->recordDispatch(cb, currentFrame, ptExt.width, ptExt.height,
+            bloom_->recordDispatch(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height,
                                    static_cast<uint32_t>(toneMapping_),
                                    exposureBits, envIsBgColor,
                                    bloomIntensity_, bloomThreshold_, bloomClamp_);
@@ -12615,10 +12703,12 @@ namespace threepp {
             }
             gpuTimings_->begin(cb, TP_TAA, currentFrame);
             taa_->recordResolve(cb, currentFrame, imageIndex,
-                                ptExt.width, ptExt.height,
-                                ext.width, ext.height, effAlpha, taaDtFrames,
+                                regionRenderExt_.width, regionRenderExt_.height,
+                                regionSwapExt_.width, regionSwapExt_.height, effAlpha, taaDtFrames,
                                 sharpenStrength_ > 0.0f, sharpenStrength_,
-                                taaSkyReproj_.data());
+                                taaSkyReproj_.data(),
+                                static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
+                                ptExt.width, ptExt.height, ext.width, ext.height);
             gpuTimings_->end(cb, TP_TAA, currentFrame);
             // ── End raster TAA ─────────────────────────────────────────────────
 
@@ -13769,6 +13859,7 @@ namespace threepp {
         // can flip toneMapping / toneMappingExposure freely between frames.
         pimpl_->toneMapping_         = toneMapping;
         pimpl_->toneMappingExposure_ = toneMappingExposure;
+        pimpl_->autoClear_           = autoClear;
         // Only the PT-bound (perspective-camera) render() call needs the
         // scene-build pass — it populates lastVisibleEntries_, the BLAS
         // cache, motion bits and the per-mesh fingerprint state the PT

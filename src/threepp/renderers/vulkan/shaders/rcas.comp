@@ -22,10 +22,10 @@ layout(set = 0, binding = 0) uniform sampler2D resolvedTex;     // TAA output (o
 layout(set = 0, binding = 1) uniform writeonly image2D swapOut; // swapchain (bgra8, no format)
 
 layout(push_constant) uniform Pc {
-    uint  width;
+    uint  width;     // PANE (scissor region) size — resolved input is at the origin
     uint  height;
     float amount;// sharpness 0..1 (slider); 0 should not dispatch this pass
-    uint  _pad;
+    uint  dstOffset;// split-screen: packed swapchain write offset (dstX | dstY<<16)
 } pc;
 
 vec3 fetch(ivec2 p) {
@@ -70,5 +70,6 @@ void main() {
     const vec3  w    = amp * peak;
     vec3 res = (e + (b + d + f + h) * w) / (1.0 + 4.0 * w);
 
-    imageStore(swapOut, px, vec4(clamp(res, 0.0, 1.0), 1.0));
+    imageStore(swapOut, px + ivec2(int(pc.dstOffset & 0xFFFFu), int(pc.dstOffset >> 16u)),
+               vec4(clamp(res, 0.0, 1.0), 1.0));
 }
