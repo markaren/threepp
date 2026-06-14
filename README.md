@@ -66,6 +66,19 @@ Thus, you don't necessarily need to handle memory explicitly using `threepp`.
 Furthermore, materials, geometries and textures are automatically disposed of when they go out of scope.
 Yay!
 
+
+### A good fit for AI-assisted development
+
+- **Familiar API.** `threepp` mirrors the [three.js](https://github.com/mrdoob/three.js/)
+  API — well-represented in model training data. This gives an
+  agent context and a head start on the design rationale.
+- **Few dependencies.** Small enough to build without dependency hell and reason about
+  end-to-end.
+- **Full access.** Almost entirely first-party source — an agent can read and modify any layer, from
+  the scene graph to the path-tracer's shaders.
+- **Tight write → compile → display → save → evaluate loop.** Low overhead from code to a
+  rendered image and back: compile, render (headless if needed), screenshot, judge, iterate.
+
 ## Example
 
 ```cpp
