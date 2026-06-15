@@ -357,6 +357,62 @@ namespace {
         return geo;
     }
 
+    // Bake flower cards into ONE merged geometry for the Vulkan GrassMesh path
+    // (same GPU-deform + BLAS-refit treatment as grass). Per-vertex heightFrac
+    // = card-local y (0 base, 1 top) so the bloom sways and the stem stays put.
+    // No vertex colour — flowers carry their colour in the alpha-cutout texture.
+    std::shared_ptr<BufferGeometry> makeFlowerField(const std::vector<Blade>& blades) {
+        struct V { Vector3 p; Vector3 n; float u, vv, hf; };
+        std::vector<V> tmpl;
+        std::vector<unsigned int> tidx;
+        const float hw = 0.5f;
+        const Vector3 up{0.f, 1.f, 0.f};
+        auto addQuad = [&](const Vector3& right, const Vector3& face) {
+            const auto base = static_cast<unsigned int>(tmpl.size());
+            Vector3 n;
+            n.copy(face).multiplyScalar(0.4f).add(up).normalize();
+            Vector3 c[4] = {Vector3{0.f, 0.f, 0.f}, Vector3{0.f, 0.f, 0.f},
+                            Vector3{0.f, 1.f, 0.f}, Vector3{0.f, 1.f, 0.f}};
+            c[0].addScaledVector(right, -hw);
+            c[1].addScaledVector(right, hw);
+            c[2].addScaledVector(right, hw);
+            c[3].addScaledVector(right, -hw);
+            const float vs[4] = {0.f, 0.f, 1.f, 1.f};
+            const float us[4] = {0.f, 1.f, 1.f, 0.f};
+            for (int i = 0; i < 4; ++i) tmpl.push_back({c[i], n, us[i], vs[i], vs[i]});
+            tidx.insert(tidx.end(), {base, base + 1u, base + 2u, base, base + 2u, base + 3u});
+        };
+        addQuad(Vector3{1.f, 0.f, 0.f}, Vector3{0.f, 0.f, 1.f});
+        addQuad(Vector3{0.f, 0.f, 1.f}, Vector3{1.f, 0.f, 0.f});
+
+        std::vector<float> pos, nrm, uv, hfrac;
+        std::vector<unsigned int> idx;
+        Matrix4 m;
+        for (const auto& bl : blades) {
+            const auto base = static_cast<unsigned int>(pos.size() / 3);
+            m.compose(bl.pos, bl.yaw, bl.scale);
+            for (const auto& tv : tmpl) {
+                Vector3 p = tv.p;
+                p.applyMatrix4(m);
+                Vector3 n = tv.n;
+                n.applyQuaternion(bl.yaw);
+                n.normalize();
+                pos.push_back(p.x); pos.push_back(p.y); pos.push_back(p.z);
+                nrm.push_back(n.x); nrm.push_back(n.y); nrm.push_back(n.z);
+                uv.push_back(tv.u); uv.push_back(tv.vv);
+                hfrac.push_back(tv.hf);
+            }
+            for (unsigned int t : tidx) idx.push_back(base + t);
+        }
+        auto geo = BufferGeometry::create();
+        geo->setIndex(idx);
+        geo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
+        geo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
+        geo->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
+        geo->setAttribute("heightFrac", FloatBufferAttribute::create(hfrac, 1));
+        return geo;
+    }
+
     // Low-poly faceted boulder: a sphere displaced by a few smooth lumps.
     // Pair with a flat-shaded material for crisp facets.
     std::shared_ptr<BufferGeometry> makeRock(unsigned int seed) {
@@ -714,25 +770,27 @@ int main() {
         }
     }
 
-    // ── Wildflowers (instanced cards; gentle CPU-tilt sway, all backends) ─
-    std::vector<std::shared_ptr<InstancedMesh>> flowerMeshes;
+    // ── Wildflowers ──────────────────────────────────────────────────────
+    // Vulkan: one GPU-wind GrassMesh per colour variant (compute-deform + BLAS
+    // refit, like the grass) so they add no per-frame TLAS rebuild. GL/WGPU:
+    // instanced cards with the gentle CPU tilt in the animate loop.
+    std::vector<std::shared_ptr<InstancedMesh>> flowerMeshes;// GL + WGPU
     std::vector<std::vector<Blade>> flowerBlades;
+    std::vector<std::shared_ptr<GrassMesh>> flowerFieldsVk;  // Vulkan
     {
-        const int perVariant = shaderGrass ? 1100 : (vulkanBackend ? 400 : 900);
+        const int perVariant = shaderGrass ? 1100 : (vulkanBackend ? 800 : 900);
         const Vector3 up{0.f, 1.f, 0.f};
         for (int fv = 0; fv < 3; ++fv) {
-            auto card = makeFlowerCard();
             auto mat = MeshStandardMaterial::create(
                     MeshStandardMaterial::Params{}.color(Color::white).roughness(0.9f).metalness(0.f));
             mat->map = vegetation::makeFlowerTexture(128, static_cast<unsigned int>(1 + fv));
             mat->alphaTest = 0.5f;
             mat->side = Side::Double;
             mat->envMapIntensity = 0.6f;
-            auto fm = InstancedMesh::create(card, mat, static_cast<size_t>(perVariant));
+
             std::vector<Blade> fb(static_cast<size_t>(perVariant));
             std::mt19937 rng(static_cast<unsigned int>(200 + fv));
             std::uniform_real_distribution<float> u01(0.f, 1.f);
-            Matrix4 m;
             for (int i = 0; i < perVariant; ++i) {
                 const float ang = u01(rng) * 6.28318530718f;
                 const float rr = std::sqrt(u01(rng)) * grassRadius;
@@ -743,13 +801,25 @@ int main() {
                 bl.scale.set(s, s * (1.0f + u01(rng) * 0.6f), s);
                 bl.yaw.setFromAxisAngle(up, u01(rng) * 6.28318530718f);
                 bl.phase = u01(rng) * 6.28318530718f;
-                m.compose(bl.pos, bl.yaw, bl.scale);
-                fm->setMatrixAt(static_cast<size_t>(i), m);
             }
-            fm->instanceMatrix()->needsUpdate();
 
-            scene.add(fm);
-            flowerMeshes.push_back(fm);
+            if (vulkanBackend) {
+                auto ff = GrassMesh::create(makeFlowerField(fb), mat);
+                ff->params.windDir = windDir2;
+                ff->params.windStrength = 0.18f * 0.7f;// gentler than grass
+                scene.add(ff);
+                flowerFieldsVk.push_back(ff);
+            } else {
+                auto fm = InstancedMesh::create(makeFlowerCard(), mat, static_cast<size_t>(perVariant));
+                Matrix4 m;
+                for (size_t i = 0; i < fb.size(); ++i) {
+                    m.compose(fb[i].pos, fb[i].yaw, fb[i].scale);
+                    fm->setMatrixAt(i, m);
+                }
+                fm->instanceMatrix()->needsUpdate();
+                scene.add(fm);
+                flowerMeshes.push_back(fm);
+            }
             flowerBlades.push_back(std::move(fb));
         }
     }
@@ -892,19 +962,28 @@ int main() {
             grass->instanceMatrix()->needsUpdate();
         }
 
-        // Wildflowers sway via CPU tilt on every backend (cheap at this count).
-        for (size_t v = 0; v < flowerMeshes.size(); ++v) {
-            const auto& fb = flowerBlades[v];
-            for (size_t i = 0; i < fb.size(); ++i) {
-                const Blade& bl = fb[i];
-                const float gust = std::sin(tElapsed * 1.5f + bl.phase) * 0.6f +
-                                   std::sin(tElapsed * 3.3f + bl.phase * 2.1f) * 0.2f;
-                qLean.setFromAxisAngle(windAxis, gust * windStrength * 0.7f);
-                qOut.multiplyQuaternions(qLean, bl.yaw);
-                m.compose(bl.pos, qOut, bl.scale);
-                flowerMeshes[v]->setMatrixAt(i, m);
+        // Wildflowers.
+        if (vulkanBackend) {
+            // GPU compute-deform GrassMesh per variant — just advance the clock.
+            for (auto& ff : flowerFieldsVk) {
+                ff->params.time = tElapsed;
+                ff->params.windStrength = windStrength * 0.7f;
             }
-            flowerMeshes[v]->instanceMatrix()->needsUpdate();
+        } else {
+            // GL/WGPU: gentle CPU tilt over the instanced cards.
+            for (size_t v = 0; v < flowerMeshes.size(); ++v) {
+                const auto& fb = flowerBlades[v];
+                for (size_t i = 0; i < fb.size(); ++i) {
+                    const Blade& bl = fb[i];
+                    const float gust = std::sin(tElapsed * 1.5f + bl.phase) * 0.6f +
+                                       std::sin(tElapsed * 3.3f + bl.phase * 2.1f) * 0.2f;
+                    qLean.setFromAxisAngle(windAxis, gust * windStrength * 0.7f);
+                    qOut.multiplyQuaternions(qLean, bl.yaw);
+                    m.compose(bl.pos, qOut, bl.scale);
+                    flowerMeshes[v]->setMatrixAt(i, m);
+                }
+                flowerMeshes[v]->instanceMatrix()->needsUpdate();
+            }
         }
 
         {
