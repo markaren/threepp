@@ -49,6 +49,7 @@ layout(buffer_reference, scalar) readonly buffer VertexBuf { float p[]; };
 layout(buffer_reference, scalar) readonly buffer NormalBuf  { float n[]; };
 layout(buffer_reference, scalar) readonly buffer IndexBuf   { uint  i[]; };
 layout(buffer_reference, scalar) readonly buffer UvBuf      { float u[]; };
+layout(buffer_reference, scalar) readonly buffer ColorBuf   { float c[]; };// per-vertex RGB (vertexColors)
 
 struct GeometryDesc {
     uint64_t vertexAddress;
@@ -57,6 +58,7 @@ struct GeometryDesc {
     uint64_t uvAddress;// 0 == no UV attribute
     uint64_t foamAddress;// 0/1 flag (not an address): 1 == FFT-displaced ocean surface (world-space foam + thin-shell water)
     uint64_t prevVertexAddress;// previous frame deformed positions (skinned/displaced); == vertexAddress for static
+    uint64_t colorAddress;// 0 == no per-vertex color (material.vertexColors off or geometry has no "color")
     uint     indexed;
     uint     _pad;
 };
@@ -641,10 +643,20 @@ void main() {
             const vec2 uvA = (mdesc.uvTransform * vec3(unlitUv, 1.0)).xy;
             albedoSample = texture(albedoMaps[idxClamped], uvA).rgb;
         }
+        // Per-vertex color (material.vertexColors) — MeshBasicMaterial honours
+        // it in three.js too. Same linear-space multiply as the lit path.
+        vec3 unlitVtxCol = vec3(1.0);
+        if (gdesc.colorAddress != 0ul) {
+            ColorBuf cb = ColorBuf(gdesc.colorAddress);
+            const vec3 c0 = vec3(cb.c[idx.x * 3 + 0], cb.c[idx.x * 3 + 1], cb.c[idx.x * 3 + 2]);
+            const vec3 c1 = vec3(cb.c[idx.y * 3 + 0], cb.c[idx.y * 3 + 1], cb.c[idx.y * 3 + 2]);
+            const vec3 c2 = vec3(cb.c[idx.z * 3 + 0], cb.c[idx.z * 3 + 1], cb.c[idx.z * 3 + 2]);
+            unlitVtxCol = w * c0 + attribs.x * c1 + attribs.y * c2;
+        }
         const vec3 hitPosUnlit = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
         // Unlit: emit base color as direct radiance. Route to diff channel
         // (unlit is view-independent by definition).
-        payload.radianceDiff  = mdesc.albedo * albedoSample;
+        payload.radianceDiff  = mdesc.albedo * albedoSample * unlitVtxCol;
         payload.radianceSpec  = vec3(0.0);
         payload.brdfWeight    = vec3(0.0);
         payload.nextOrigin    = vec3(0.0);
@@ -762,6 +774,20 @@ void main() {
         albedoSample = texture(albedoMaps[idxClamped], uvAlbedo).rgb;
     }
     vec3 albedo = mdesc.albedo * albedoSample;
+
+    // Per-vertex color (material.vertexColors). Barycentric-interpolated RGB,
+    // modulates albedo — matches three.js and the raster gbuffer's vColor
+    // multiply so RasterFirst and ReferencePT agree. colorAddress is 0 when the
+    // material doesn't opt in or the geometry has no "color" attribute. Vertex
+    // colors are authored in the working (linear) space, same as mdesc.albedo,
+    // so a plain multiply is correct.
+    if (gdesc.colorAddress != 0ul) {
+        ColorBuf cb = ColorBuf(gdesc.colorAddress);
+        const vec3 c0 = vec3(cb.c[idx.x * 3 + 0], cb.c[idx.x * 3 + 1], cb.c[idx.x * 3 + 2]);
+        const vec3 c1 = vec3(cb.c[idx.y * 3 + 0], cb.c[idx.y * 3 + 1], cb.c[idx.y * 3 + 2]);
+        const vec3 c2 = vec3(cb.c[idx.z * 3 + 0], cb.c[idx.z * 3 + 1], cb.c[idx.z * 3 + 2]);
+        albedo *= w * c0 + attribs.x * c1 + attribs.y * c2;
+    }
 
     // glTF packs roughness in .g and metalness in .b; threepp's metalnessMap /
     // roughnessMap typically point at the same packed texture, so the bindless

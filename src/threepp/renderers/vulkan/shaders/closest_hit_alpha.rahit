@@ -34,6 +34,7 @@ struct GeometryDesc {
     uint64_t uvAddress;
     uint64_t foamAddress;// unused here, kept for layout match with closest_hit.rchit
     uint64_t prevVertexAddress;// unused here, kept for layout match
+    uint64_t colorAddress;// unused here, kept for layout match with closest_hit.rchit
     uint     indexed;
     uint     _pad;
 };

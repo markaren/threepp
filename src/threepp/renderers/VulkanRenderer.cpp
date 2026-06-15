@@ -226,6 +226,11 @@ namespace threepp {
             Buffer index;// .handle == VK_NULL_HANDLE for non-indexed geometry
             Buffer normal;
             Buffer uv;   // .handle == VK_NULL_HANDLE if geometry has no "uv"
+            // Per-vertex RGB color (BufferGeometry "color" attribute, itemSize 3).
+            // .handle == VK_NULL_HANDLE when the geometry has no usable "color".
+            // Surfaced to the shaders via GeometryDesc::colorAddress / DrawInfo::
+            // colorAddr, gated on the material's vertexColors flag at fill time.
+            Buffer color;
             // True for FFT-displaced ocean meshes — gates world-space foam +
             // thin-shell water shading downstream (surfaced to the shaders via
             // GeometryDesc::foamAddress, now a 0/1 flag). Replaces a per-vertex
@@ -511,6 +516,10 @@ namespace threepp {
             // rigid-only meshes: set equal to vertexAddress, in which case the
             // chit reads the same data twice (no harm; equals current pos).
             VkDeviceAddress prevVertexAddress;
+            // Per-vertex RGB color buffer (BlasRecord::color). 0 when the mesh's
+            // material has vertexColors off or the geometry has no "color" — the
+            // chit then skips the vertex-color multiply. Set per-instance below.
+            VkDeviceAddress colorAddress;
             uint32_t indexed;
             uint32_t _pad;
         };
@@ -1834,6 +1843,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->index);
                 destroyBuffer(ctx->allocator(), rec->normal);
                 destroyBuffer(ctx->allocator(), rec->uv);
+                destroyBuffer(ctx->allocator(), rec->color);
                 destroyBuffer(ctx->allocator(), rec->prevVertex);
                 destroyBuffer(ctx->allocator(), rec->blasScratch);
             }
@@ -2067,6 +2077,7 @@ namespace threepp {
             if (auto* a = g.getAttribute<float>("normal"))   v += a->version;
             if (auto* idx = g.getIndex())                     v += idx->version;
             if (auto* a = g.getAttribute<float>("uv"))        v += a->version;
+            if (auto* a = g.getAttribute<float>("color"))     v += a->version;
             return v;
         }
 
@@ -2171,6 +2182,41 @@ namespace threepp {
                     vmaMapMemory(ctx->allocator(), rec->uv.alloc, &mapped);
                     std::memcpy(mapped, uvs.data(), uvBytes);
                     vmaUnmapMemory(ctx->allocator(), rec->uv.alloc);
+                }
+            }
+
+            // Optional per-vertex color (material.vertexColors). closest_hit and
+            // the raster gbuffer interpolate this and modulate albedo. Stored as
+            // tightly-packed vec3 (the shaders fetch 3 floats/vertex); itemSize-4
+            // colors are repacked to RGB, dropping the alpha. Whether it actually
+            // applies is decided per-instance from the material's vertexColors
+            // flag when GeometryDesc / DrawInfo are filled — the buffer is always
+            // uploaded if present so a shared geometry works under either material.
+            if (auto* colAttr = geom.getAttribute<float>("color")) {
+                const int itemSize = colAttr->itemSize();
+                if (colAttr->count() == static_cast<int>(vertexCount) &&
+                    (itemSize == 3 || itemSize == 4)) {
+                    const auto& cols = colAttr->array();
+                    const VkDeviceSize cbBytes = static_cast<VkDeviceSize>(vertexCount) * 3 * sizeof(float);
+                    rec->color = createBuffer(
+                            ctx->allocator(), ctx->device(), cbBytes,
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                            VMA_MEMORY_USAGE_AUTO,
+                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                    vmaMapMemory(ctx->allocator(), rec->color.alloc, &mapped);
+                    if (itemSize == 3) {
+                        std::memcpy(mapped, cols.data(), cbBytes);
+                    } else {
+                        auto* dst = static_cast<float*>(mapped);
+                        for (uint32_t v = 0; v < vertexCount; ++v) {
+                            dst[v * 3 + 0] = cols[v * 4 + 0];
+                            dst[v * 3 + 1] = cols[v * 4 + 1];
+                            dst[v * 3 + 2] = cols[v * 4 + 2];
+                        }
+                    }
+                    vmaUnmapMemory(ctx->allocator(), rec->color.alloc);
                 }
             }
 
@@ -5440,6 +5486,7 @@ namespace threepp {
                         destroyBuffer(ctx->allocator(), rec->index);
                         destroyBuffer(ctx->allocator(), rec->normal);
                         destroyBuffer(ctx->allocator(), rec->uv);
+                        destroyBuffer(ctx->allocator(), rec->color);
                         destroyBuffer(ctx->allocator(), rec->prevVertex);
                         destroyBuffer(ctx->allocator(), rec->blasScratch);
                         it = blasCache.erase(it);
@@ -5633,6 +5680,7 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), old->index);
                             destroyBuffer(ctx->allocator(), old->normal);
                             destroyBuffer(ctx->allocator(), old->uv);
+                            destroyBuffer(ctx->allocator(), old->color);
                             destroyBuffer(ctx->allocator(), old->prevVertex);
                             destroyBuffer(ctx->allocator(), old->blasScratch);
                             blasCache.erase(it);
@@ -5702,6 +5750,15 @@ namespace threepp {
                                 ? recPtr->prevVertex.address
                                 : recPtr->vertex.address;
                 gdesc.indexed = recPtr->index.handle != VK_NULL_HANDLE ? 1u : 0u;
+                // Per-vertex color only when the material opts in (three.js
+                // semantics: vertexColors == true) AND the geometry uploaded a
+                // color buffer. 0 otherwise → chit skips the modulation.
+                {
+                    const auto mat = m->material();
+                    const bool useVtxColor = recPtr->color.handle != VK_NULL_HANDLE &&
+                                             mat && mat->vertexColors;
+                    gdesc.colorAddress = useVtxColor ? recPtr->color.address : 0;
+                }
                 gdesc._pad = 0;
                 geomDescs[i] = gdesc;
 
@@ -6812,12 +6869,13 @@ namespace threepp {
             uint64_t uvAddr;           // 8
             uint64_t prevPosAddr;      // 8
             uint64_t indexAddr;        // 8 (0 → non-indexed)
+            uint64_t colorAddr;        // 8 (0 → no per-vertex color / vertexColors off)
             uint32_t instanceCustomIndex;
             uint32_t flags;
             uint32_t indexed;
             float    polygonOffset;    // clip-z depth bias (reverse-Z: + = toward near = on top)
         };
-        static_assert(sizeof(DrawInfoGpu) == 120,
+        static_assert(sizeof(DrawInfoGpu) == 128,
                       "DrawInfoGpu layout drifted from gbuffer_indirect.vert");
 
         // Per-cull-mode dispatch span into indirectCmdBuffers[frame].
@@ -6942,6 +7000,16 @@ namespace threepp {
                                          ? rec->prevVertex.address
                                          : rec->vertex.address;
                 di.indexAddr   = indexed ? rec->index.address : 0ull;
+                // Per-vertex color: only when the material opts in (vertexColors)
+                // and the geometry uploaded a color buffer — matches the
+                // GeometryDesc::colorAddress gate so RasterFirst and ReferencePT
+                // agree. gbuffer.frag multiplies albedo by the interpolated value.
+                {
+                    const auto dmat = en.mesh->material();
+                    di.colorAddr = (rec->color.handle != VK_NULL_HANDLE && dmat && dmat->vertexColors)
+                                           ? rec->color.address
+                                           : 0ull;
+                }
                 di.instanceCustomIndex = static_cast<uint32_t>(i);
                 // Flag bits match the old gbuffer.vert push-constant layout:
                 //   bit 0 = is_water (DisplacedMesh), bit 3 = is_skinned.

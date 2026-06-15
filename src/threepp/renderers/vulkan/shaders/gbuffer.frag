@@ -42,6 +42,7 @@ layout(location = 3) flat in uint vInstanceIdx;
 layout(location = 4) flat in uint vFlags;
 layout(location = 5) in vec2 vUv;
 layout(location = 6) in vec3 vWorldPos;
+layout(location = 7) in vec3 vColor;// per-vertex color (material.vertexColors); white when unused
 
 // Attachment 0: world-space normal (rgba16f). .xyz = n*0.5+0.5 encoded world
 // normal, .w = linear roughness (raster-first deferred pass reads it; raygen
@@ -176,7 +177,10 @@ void main() {
         albedoSample = texel.rgb;
         albedoAlpha  = texel.a;// linear (alpha is never sRGB-decoded) → matches chit
     }
-    const vec3 albedo = m.albedo * albedoSample;
+    // Per-vertex color (material.vertexColors): vColor is white when the mesh
+    // has no "color" attribute, so this multiply is a no-op then. Linear working
+    // space — matches m.albedo and the closest_hit.rchit vertex-color path.
+    const vec3 albedo = m.albedo * albedoSample * vColor;
 
     // glTF packs roughness in .g and metalness in .b; threepp's roughnessMap /
     // metalnessMap usually point at the same packed texture. Multiplicative —
