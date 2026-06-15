@@ -22,6 +22,7 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
+#include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
 
@@ -350,29 +351,23 @@ int main() {
     Canvas canvas("Procedural Forest", {{"vsync", true}, {"aa", 4}});
     auto renderer = createRenderer(canvas);
 
-    // GPU vertex-shader grass works on GL + WGPU (GLSL compat); only the
-    // Vulkan backend lacks a ShaderMaterial path, so it uses the CPU fallback.
-    //
-    // On Vulkan (a path tracer), animating instance matrices every frame would
-    // refit the ray-tracing acceleration structure each frame — the dominant
-    // cost. Routing the animated foliage to the renderer's raster OVERLAY layer
-    // keeps it out of the TLAS entirely (drawn on top, depth-tested), so the
-    // sway costs only a cheap raster redraw. Static geometry (trees/bushes/
-    // rocks) stays in the path tracer and is built once.
-    bool shaderGrass = true;
+    // Grass wind path:
+    //  - GL only: cheap GPU vertex-shader (ShaderMaterial). The WGPU GLSL→WGSL
+    //    path does not render this shader, and Vulkan (a path tracer) has no
+    //    ShaderMaterial path at all.
+    //  - WGPU + Vulkan: CPU-tilt instance matrices on a standard lit material
+    //    (the same material the flowers use — proven to render on both).
+    const bool shaderGrass = (dynamic_cast<GLRenderer*>(renderer.get()) != nullptr);
+    bool vulkanBackend = false;
 #ifdef THREEPP_WITH_VULKAN
     auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get());
     if (vk) {
-        shaderGrass = false;
-        // Vulkan is a path tracer: GPU cost (pathTrace + denoise) scales with
-        // pixel count, so render at 0.6× and TAA-upsample.
+        vulkanBackend = true;
+        // Path tracer: GPU cost (pathTrace + denoise) scales with pixel count,
+        // so render below native and TAA-upsample.
         vk->setRenderScale(0.8f);
     }
 #endif
-    // The per-frame acceleration-structure refit on Vulkan is ~linear in the
-    // number of *moving* instances, so the swaying foliage is far sparser there
-    // than on the cheap GPU-shader path used by GL/WGPU.
-    const bool lightFoliage = !shaderGrass;
 
     renderer->setClearColor(Color(0.62f, 0.72f, 0.84f));
     renderer->toneMapping = ToneMapping::ACESFilmic;
@@ -530,8 +525,11 @@ int main() {
     scene.fog = Fog(fogColor, fogNear, fogFar);
 
     // ── Swaying grass (instanced) ────────────────────────────────────────
-    const int bladeCount = lightFoliage ? 9000 : 90000;// Vulkan refit is per-instance → far fewer
-    const float grassRadius = lightFoliage ? 42.f : 70.f;// smaller patch keeps density up
+    // GL's GPU-shader grass is nearly free → dense. WGPU CPU-tilt rasterises
+    // cheaply but pays per-instance CPU each frame → medium. Vulkan pays an
+    // O(all-instances) TLAS refit per moving frame → sparse.
+    const int bladeCount = shaderGrass ? 90000 : (vulkanBackend ? 9000 : 30000);
+    const float grassRadius = shaderGrass ? 70.f : (vulkanBackend ? 42.f : 58.f);
     const Vector3 windAxis = Vector3(0.6f, 0.f, -0.8f).normalize();// CPU-path tilt axis ⟂ wind
     const Vector2 windDir2(0.8f, 0.6f);
 
@@ -642,7 +640,7 @@ int main() {
     std::vector<std::shared_ptr<InstancedMesh>> flowerMeshes;
     std::vector<std::vector<Blade>> flowerBlades;
     {
-        const int perVariant = lightFoliage ? 400 : 1100;
+        const int perVariant = shaderGrass ? 1100 : (vulkanBackend ? 400 : 900);
         const Vector3 up{0.f, 1.f, 0.f};
         for (int fv = 0; fv < 3; ++fv) {
             auto card = makeFlowerCard();
