@@ -129,12 +129,20 @@ namespace threepp::vegetation {
             std::mt19937 rng(tp.seed ? tp.seed : 1u);
             nodes_.clear();
 
-            // Grow trunk as a straight chain of nodes from origin to crown base.
+            // Grow the trunk as a chain of nodes from origin to crown base.
+            // A gentle per-tree bend keeps it from reading as a ramrod-straight
+            // cylinder (the bend grows with height; base stays planted).
             const int trunkSegs = std::max(1, static_cast<int>(std::round(tp.trunkHeight / tp.segmentLength)));
             const float trunkStep = tp.trunkHeight / static_cast<float>(trunkSegs);
+            std::uniform_real_distribution<float> u11(-1.f, 1.f);
+            const float bendAng = (u11(rng) * 0.5f + 0.5f) * 6.28318530718f;
+            const float bendAmt = tp.trunkHeight * (0.04f + (u11(rng) * 0.5f + 0.5f) * 0.08f);
+            const float bdx = std::cos(bendAng), bdz = std::sin(bendAng);
             for (int i = 0; i <= trunkSegs; ++i) {
                 detail::TreeNode n;
-                n.position = {0.f, static_cast<float>(i) * trunkStep, 0.f};
+                const float t = static_cast<float>(i) / static_cast<float>(trunkSegs);
+                const float off = bendAmt * std::sin(t * 1.57079633f);// 0 at base → bendAmt at top
+                n.position = {bdx * off, static_cast<float>(i) * trunkStep, bdz * off};
                 n.parent = i > 0 ? i - 1 : -1;
                 n.depth = i;
                 if (i > 0) nodes_[static_cast<size_t>(i - 1)].children.push_back(i);
@@ -333,6 +341,9 @@ namespace threepp::vegetation {
                     // consistent scale on trunk and twigs alike; material
                     // `repeat` controls the final tile density.
                     const float v = arcLen[static_cast<size_t>(i)];
+                    // Phase that twists the cross-section bumps up the chain so
+                    // the bark ridges run roughly vertically.
+                    const float hp = arcLen[static_cast<size_t>(i)] * 3.0f;
 
                     for (int j = 0; j <= R; ++j) {
                         const float a = static_cast<float>(j) / static_cast<float>(R) * 6.28318530718f;
@@ -340,9 +351,14 @@ namespace threepp::vegetation {
                         const float nx = P.x * ca + Q.x * sa;
                         const float ny = P.y * ca + Q.y * sa;
                         const float nz = P.z * ca + Q.z * sa;
-                        positions.push_back(nd.position.x + nx * r);
-                        positions.push_back(nd.position.y + ny * r);
-                        positions.push_back(nd.position.z + nz * r);
+                        // Non-circular cross-section (periodic in `a` so the
+                        // seam at j=0/j=R matches): breaks the perfect cylinder.
+                        const float bump = 1.f + 0.10f * std::sin(3.f * a + hp) +
+                                           0.05f * std::sin(7.f * a - hp * 0.7f);
+                        const float rr = r * bump;
+                        positions.push_back(nd.position.x + nx * rr);
+                        positions.push_back(nd.position.y + ny * rr);
+                        positions.push_back(nd.position.z + nz * rr);
                         normals.push_back(nx);
                         normals.push_back(ny);
                         normals.push_back(nz);
@@ -755,6 +771,26 @@ namespace threepp::vegetation {
             if (!nodes_.empty() && nodes_[0].radius > 1e-8f) {
                 const float scale = tp.trunkRadius / nodes_[0].radius;
                 for (auto& nd : nodes_) nd.radius *= scale;
+            }
+
+            // Height-based taper + root flare. The pipe model leaves a
+            // single-child trunk at constant radius (→ a plain cylinder); a
+            // continuous taper narrows it toward the top, and a flare swells
+            // the lowest stretch so the base spreads into the ground.
+            float minY = std::numeric_limits<float>::max();
+            float maxY = -std::numeric_limits<float>::max();
+            for (const auto& nd : nodes_) {
+                minY = std::min(minY, nd.position.y);
+                maxY = std::max(maxY, nd.position.y);
+            }
+            const float span = std::max(maxY - minY, 1e-3f);
+            const float flareH = span * 0.10f;
+            for (auto& nd : nodes_) {
+                const float t = (nd.position.y - minY) / span;       // 0 base .. 1 top
+                const float taper = 1.f - 0.40f * t;                 // narrow upward
+                const float fl = std::clamp((flareH - (nd.position.y - minY)) / flareH, 0.f, 1.f);
+                const float flare = 1.f + 0.6f * fl * fl;            // swell at the very base
+                nd.radius *= taper * flare;
             }
         }
 
