@@ -20,9 +20,14 @@
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
+
+#ifdef THREEPP_WITH_VULKAN
+#include "threepp/renderers/VulkanRenderer.hpp"
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -41,6 +46,128 @@ namespace {
         std::shared_ptr<MeshStandardMaterial> barkMat;
         std::shared_ptr<MeshStandardMaterial> leafMat;
     };
+
+    // ── Grass ────────────────────────────────────────────────────────────
+    // A single tapered blade, instanced thousands of times. The sway is a
+    // whole-blade tilt applied by rewriting each instance matrix on the CPU
+    // every frame — this works on BOTH the GL and Vulkan backends (Vulkan has
+    // no ShaderMaterial path, but it consumes InstancedMesh matrices directly).
+    // A baked vertex-colour gradient + a standard lit material give the blades
+    // shading and scene fog for free.
+    std::shared_ptr<BufferGeometry> makeGrassBlade() {
+        constexpr int seg = 4;
+        constexpr float wBase = 0.05f;// half-width at the base
+        // Kept deliberately dark: strong sun + sky IBL otherwise pushes the
+        // green past 1.0 and ACES desaturates the tips toward white.
+        const Vector3 bottom{0.06f, 0.13f, 0.04f};
+        const Vector3 top{0.20f, 0.34f, 0.11f};
+        std::vector<float> pos, nrm, uv, col;
+        std::vector<unsigned int> idx;
+        for (int i = 0; i <= seg; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(seg);
+            const float y = t;                 // unit height (scaled per instance)
+            const float w = wBase * (1.f - t); // taper to a point at the tip
+            const float r = bottom.x + (top.x - bottom.x) * t;
+            const float g = bottom.y + (top.y - bottom.y) * t;
+            const float b = bottom.z + (top.z - bottom.z) * t;
+            for (int s = 0; s < 2; ++s) {
+                const float x = (s == 0) ? -w : w;
+                pos.push_back(x);
+                pos.push_back(y);
+                pos.push_back(0.f);
+                // Up-biased normal: catches sky/sun light regardless of facing.
+                nrm.push_back(0.f);
+                nrm.push_back(0.85f);
+                nrm.push_back(0.53f);
+                uv.push_back(s == 0 ? 0.f : 1.f);
+                uv.push_back(t);
+                col.push_back(r);
+                col.push_back(g);
+                col.push_back(b);
+            }
+        }
+        for (int i = 0; i < seg; ++i) {
+            const auto a = static_cast<unsigned int>(i * 2);
+            const unsigned int b = a + 1, c = a + 2, d = a + 3;
+            idx.push_back(a); idx.push_back(b); idx.push_back(c);
+            idx.push_back(b); idx.push_back(d); idx.push_back(c);
+        }
+        auto geo = BufferGeometry::create();
+        geo->setIndex(idx);
+        geo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
+        geo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
+        geo->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
+        geo->setAttribute("color", FloatBufferAttribute::create(col, 3));
+        return geo;
+    }
+
+    // Per-blade static placement data; used by the CPU (Vulkan) fallback,
+    // which recomputes the tilt matrix each frame.
+    struct Blade {
+        Vector3 pos;
+        Vector3 scale;
+        Quaternion yaw;// base orientation about +Y
+        float phase;   // wind phase offset
+    };
+
+    // ── Preferred path: GPU vertex-shader wind (GL + WGPU via GLSL compat) ─
+    // Cheaper (no per-frame CPU work) and nicer (per-vertex curve, base
+    // planted) than the CPU tilt. ShaderMaterial supplies the #version,
+    // modelViewMatrix / projectionMatrix / instanceMatrix / position / uv.
+    const char* grassVertexShader() {
+        return R"(
+            uniform float time;
+            uniform float windStrength;
+            uniform vec2  windDir;
+            varying float vHeight;
+            varying float vFog;
+            void main() {
+                vHeight = uv.y;
+                vec3 p = position;
+            #ifdef USE_INSTANCING
+                vec3 instPos = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
+            #else
+                vec3 instPos = vec3(0.0);
+            #endif
+                float phase = time * 1.6 + instPos.x * 0.25 + instPos.z * 0.25;
+                float gust  = sin(phase) * 0.6 + sin(phase * 2.3 + 1.7) * 0.25;
+                float bend  = gust * windStrength * vHeight * vHeight;// base planted, tip sways
+                p.x += windDir.x * bend;
+                p.z += windDir.y * bend;
+            #ifdef USE_INSTANCING
+                vec4 mv = modelViewMatrix * instanceMatrix * vec4(p, 1.0);
+            #else
+                vec4 mv = modelViewMatrix * vec4(p, 1.0);
+            #endif
+                vFog = -mv.z;
+                gl_Position = projectionMatrix * mv;
+            }
+        )";
+    }
+
+    const char* grassFragmentShader() {
+        // Self-contained shading (no IBL) keeps the blades from blowing out to
+        // white the way a full standard material under the bright sky does.
+        return R"(
+            uniform vec3  topColor;
+            uniform vec3  bottomColor;
+            uniform vec3  sunDir;
+            uniform vec3  sunColor;
+            uniform vec3  ambient;
+            uniform vec3  fogColor;
+            uniform float fogNear;
+            uniform float fogFar;
+            varying float vHeight;
+            varying float vFog;
+            void main() {
+                vec3 base = mix(bottomColor, topColor, vHeight);
+                // Thin blades: a soft constant wrap + ambient, no harsh N·L term.
+                vec3 lit = base * (ambient + sunColor * 0.7);
+                float f = clamp((vFog - fogNear) / (fogFar - fogNear), 0.0, 1.0);
+                gl_FragColor = vec4(mix(lit, fogColor, f), 1.0);
+            }
+        )";
+    }
 
     TreeVariant makeVariant(int preset, unsigned int seed) {
         vegetation::TreeParams tp;
@@ -85,6 +212,14 @@ int main() {
 
     Canvas canvas("Procedural Forest", {{"vsync", true}, {"aa", 4}});
     auto renderer = createRenderer(canvas);
+
+    // GPU vertex-shader grass works on GL + WGPU (GLSL compat); only the
+    // Vulkan backend lacks a ShaderMaterial path, so it uses the CPU fallback.
+    bool shaderGrass = true;
+#ifdef THREEPP_WITH_VULKAN
+    if (dynamic_cast<VulkanRenderer*>(renderer.get())) shaderGrass = false;
+#endif
+
     renderer->setClearColor(Color(0.62f, 0.72f, 0.84f));
     renderer->toneMapping = ToneMapping::ACESFilmic;
     renderer->toneMappingExposure = 1.0f;
@@ -234,8 +369,76 @@ int main() {
     unsigned int scatterSeed = 1u;
     buildForest(scatterSeed, spacing, fillProb);
 
-    // ── Distance fog for depth ───────────────────────────────────────────
-    scene.fog = Fog(Color(0.66f, 0.75f, 0.86f), terr.worldSize * 0.35f, terr.worldSize * 1.05f);
+    // ── Distance fog (shared by the scene and the grass shader) ──────────
+    const Color fogColor(0.66f, 0.75f, 0.86f);
+    const float fogNear = terr.worldSize * 0.35f;
+    const float fogFar = terr.worldSize * 1.05f;
+    scene.fog = Fog(fogColor, fogNear, fogFar);
+
+    // ── Swaying grass (instanced) ────────────────────────────────────────
+    const int bladeCount = shaderGrass ? 90000 : 45000;// GPU path is cheap → denser
+    const float grassRadius = 70.f;                    // camera-centred patch
+    const Vector3 windAxis = Vector3(0.6f, 0.f, -0.8f).normalize();// CPU-path tilt axis ⟂ wind
+    const Vector2 windDir2(0.8f, 0.6f);
+
+    // Material: ShaderMaterial (GPU wind) when supported, else a standard lit
+    // material driven by the CPU tilt below.
+    std::shared_ptr<ShaderMaterial> grassShaderMat;
+    std::shared_ptr<Material> grassMat;
+    if (shaderGrass) {
+        Vector3 sunDirN(60.f, 120.f, 80.f);
+        sunDirN.normalize();
+        grassShaderMat = ShaderMaterial::create();
+        grassShaderMat->vertexShader = grassVertexShader();
+        grassShaderMat->fragmentShader = grassFragmentShader();
+        grassShaderMat->side = Side::Double;
+        grassShaderMat->uniforms["time"].setValue(0.f);
+        grassShaderMat->uniforms["windStrength"].setValue(0.18f);
+        grassShaderMat->uniforms["windDir"].setValue(windDir2);
+        grassShaderMat->uniforms["topColor"].setValue(Vector3(0.30f, 0.42f, 0.14f));
+        grassShaderMat->uniforms["bottomColor"].setValue(Vector3(0.08f, 0.16f, 0.05f));
+        grassShaderMat->uniforms["sunColor"].setValue(Vector3(0.55f, 0.55f, 0.50f));
+        grassShaderMat->uniforms["ambient"].setValue(Vector3(0.30f, 0.34f, 0.30f));
+        grassShaderMat->uniforms["fogColor"].setValue(Vector3(fogColor.r, fogColor.g, fogColor.b));
+        grassShaderMat->uniforms["fogNear"].setValue(fogNear);
+        grassShaderMat->uniforms["fogFar"].setValue(fogFar);
+        grassMat = grassShaderMat;
+    } else {
+        auto std = MeshStandardMaterial::create(
+                MeshStandardMaterial::Params{}.color(Color::white).roughness(0.97f).metalness(0.f));
+        std->vertexColors = true;
+        std->side = Side::Double;
+        std->envMapIntensity = 0.45f;
+        grassMat = std;
+    }
+
+    auto grass = InstancedMesh::create(makeGrassBlade(), grassMat, static_cast<size_t>(bladeCount));
+    std::vector<Blade> blades(static_cast<size_t>(bladeCount));
+    {
+        std::mt19937 grng(7u);
+        std::uniform_real_distribution<float> u01(0.f, 1.f);
+        const Vector3 up{0.f, 1.f, 0.f};
+        Matrix4 m;
+        for (int i = 0; i < bladeCount; ++i) {
+            const float ang = u01(grng) * 6.28318530718f;
+            const float rr = std::sqrt(u01(grng)) * grassRadius;// uniform over disk
+            const float x = std::cos(ang) * rr;
+            const float z = std::sin(ang) * rr;
+            const float h = terrainGen.heightAt(x, z, terr);
+            const float s = 0.5f + u01(grng) * 0.5f;  // width scale
+            const float hgt = 0.3f + u01(grng) * 0.4f;// height 0.3–0.7 world units
+
+            Blade& bl = blades[static_cast<size_t>(i)];
+            bl.pos.set(x, h - 0.05f, z);
+            bl.scale.set(s, hgt, s);
+            bl.yaw.setFromAxisAngle(up, u01(grng) * 6.28318530718f);
+            bl.phase = u01(grng) * 6.28318530718f;
+            m.compose(bl.pos, bl.yaw, bl.scale);
+            grass->setMatrixAt(static_cast<size_t>(i), m);
+        }
+        grass->instanceMatrix()->needsUpdate();// static for the shader path
+    }
+    scene.add(grass);
 
     // ── Camera ───────────────────────────────────────────────────────────
     PerspectiveCamera camera(55.f, canvas.aspect(), 0.1f, 1000.f);
@@ -254,6 +457,7 @@ int main() {
     float fps = 0.f, fpsAccum = 0.f;
     int fpsFrames = 0;
     bool regen = false;
+    float windStrength = 0.18f;
 
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({10, 10}, ImGuiCond_FirstUseEver);
@@ -267,6 +471,8 @@ int main() {
             ++scatterSeed;
             regen = true;
         }
+        ImGui::SeparatorText("Wind");
+        ImGui::SliderFloat("Strength", &windStrength, 0.f, 0.5f, "%.2f");
         ImGui::End();
     });
 
@@ -277,9 +483,33 @@ int main() {
     canvas.setIOCapture(&ioCapture);
 
     Clock clock;
+    float tElapsed = 0.f;
+    Matrix4 m;
+    Quaternion qLean, qOut;
     canvas.animate([&] {
         const float dt = clock.getDelta();
+        tElapsed += dt;
         controls.update();
+
+        // Wind sway.
+        if (shaderGrass) {
+            // GPU path: just advance the shader clock (no per-frame CPU work).
+            grassShaderMat->uniforms["time"].setValue(tElapsed);
+            grassShaderMat->uniforms["windStrength"].setValue(windStrength);
+        } else {
+            // CPU fallback (Vulkan): rewrite each instance matrix as a whole-
+            // blade tilt toward the wind.
+            for (size_t i = 0; i < blades.size(); ++i) {
+                const Blade& bl = blades[i];
+                const float gust = std::sin(tElapsed * 1.6f + bl.phase) * 0.6f +
+                                   std::sin(tElapsed * 3.7f + bl.phase * 2.3f) * 0.25f;
+                qLean.setFromAxisAngle(windAxis, gust * windStrength);
+                qOut.multiplyQuaternions(qLean, bl.yaw);
+                m.compose(bl.pos, qOut, bl.scale);
+                grass->setMatrixAt(i, m);
+            }
+            grass->instanceMatrix()->needsUpdate();
+        }
 
         fpsAccum += dt;
         fpsFrames++;
