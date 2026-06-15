@@ -26,6 +26,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <random>
@@ -85,6 +86,7 @@ namespace threepp::vegetation {
         float leafDensity = 0.9f;
         int leavesPerCluster = 5;
         float leafSpread = 0.5f;
+        float leafClumping = 0.5f;// 0 = solid shell, →1 = clumped with sky-gaps
 
         // ── Albedo hints (sRGB) ──────────────────────────────────────────
         std::array<float, 3> barkColor = {0.35f, 0.25f, 0.18f};
@@ -389,13 +391,23 @@ namespace threepp::vegetation {
             std::uniform_real_distribution<float> angle(0.f, 6.28318530718f);
             std::uniform_real_distribution<float> sizeVar(0.85f, 1.15f);
 
-            std::vector<float> positions, normals, uvs;
+            std::vector<float> positions, normals, uvs, colors;
             std::vector<unsigned int> indices;
             unsigned int baseVert = 0;
 
-            // Compute max depth to determine which nodes are "near tips".
+            // Compute max depth (for "near tip" test) and the canopy vertical
+            // extent (for the top-lit tonal gradient).
             int maxDepth = 0;
-            for (auto& n : nodes_) maxDepth = std::max(maxDepth, n.depth);
+            float canopyMinY = std::numeric_limits<float>::max();
+            float canopyMaxY = -std::numeric_limits<float>::max();
+            for (auto& n : nodes_) {
+                maxDepth = std::max(maxDepth, n.depth);
+                if (n.children.empty() || n.radius <= tp.trunkRadius * 0.4f) {
+                    canopyMinY = std::min(canopyMinY, n.position.y);
+                    canopyMaxY = std::max(canopyMaxY, n.position.y);
+                }
+            }
+            const float canopySpan = std::max(0.5f, canopyMaxY - canopyMinY);
 
             // Leaf-eligible: terminal nodes always, plus thin branches in the
             // upper canopy.  Foliage should never grow on the thick trunk, so
@@ -404,7 +416,7 @@ namespace threepp::vegetation {
             const float radiusThresh = tp.trunkRadius * 0.4f;
 
             // ── Low-poly foliage puff (deformed UV sphere, radial normals) ──
-            auto emitBlob = [&](const Vector3& c, float radius) {
+            auto emitBlob = [&](const Vector3& c, float radius, const Vector3& col) {
                 constexpr int latSegs = 4;
                 constexpr int lonSegs = 6;
                 constexpr float PI = 3.14159265358979f;
@@ -427,6 +439,9 @@ namespace threepp::vegetation {
                         normals.push_back(nz);
                         uvs.push_back(u);
                         uvs.push_back(v);
+                        colors.push_back(col.x);
+                        colors.push_back(col.y);
+                        colors.push_back(col.z);
                     }
                 }
                 const int rowVerts = lonSegs + 1;
@@ -446,7 +461,8 @@ namespace threepp::vegetation {
             };
 
             auto emitQuad = [&](const Vector3& pos, const Vector3& r2,
-                                const Vector3& u2, const Vector3& qn, float hs) {
+                                const Vector3& u2, const Vector3& qn, float hs,
+                                const Vector3& col) {
                 Vector3 corners[4];
                 corners[0].copy(pos).addScaledVector(r2, -hs).addScaledVector(u2, -hs);
                 corners[1].copy(pos).addScaledVector(r2,  hs).addScaledVector(u2, -hs);
@@ -460,6 +476,9 @@ namespace threepp::vegetation {
                     normals.push_back(qn.x);
                     normals.push_back(qn.y);
                     normals.push_back(qn.z);
+                    colors.push_back(col.x);
+                    colors.push_back(col.y);
+                    colors.push_back(col.z);
                 }
                 uvs.push_back(0.f); uvs.push_back(0.f);
                 uvs.push_back(1.f); uvs.push_back(0.f);
@@ -475,11 +494,35 @@ namespace threepp::vegetation {
                 baseVert += 4;
             };
 
+            // Per-card tint (vertex colour, multiplies the leaf texture):
+            // top-lit gradient — brighter & warmer toward the crown top,
+            // darker & cooler in the shaded interior — plus random jitter.
+            auto tintFor = [&](const Vector3& p) {
+                const float h = std::clamp((p.y - canopyMinY) / canopySpan, 0.f, 1.f);
+                const float bright = (0.62f + 0.5f * h) * (0.88f + unit(rng) * 0.24f);
+                Vector3 c;
+                c.set(bright * (1.f + 0.10f * h),
+                      bright * (1.f + 0.04f * h),
+                      bright * (1.f - 0.10f * h));
+                return c;
+            };
+
             for (size_t ni = 0; ni < nodes_.size(); ++ni) {
                 const auto& node = nodes_[ni];
                 const bool eligible = node.terminal ||
                         (node.depth >= depthThresh && node.radius <= radiusThresh);
                 if (!eligible) continue;
+
+                // Spatial clumping: low-frequency noise carves whole regions of
+                // foliage away, so the canopy outline looks grown (irregular,
+                // with sky-gaps) rather than a solid trimmed shell.
+                if (tp.leafClumping > 0.f) {
+                    constexpr float f = 0.6f;
+                    const float n = noise3(node.position.x * f + 13.1f,
+                                           node.position.y * f + 7.7f,
+                                           node.position.z * f + 41.3f);
+                    if (n < tp.leafClumping * 0.55f) continue;
+                }
 
                 float prob = tp.leafDensity;
                 if (!node.terminal) prob *= 0.6f;
@@ -496,7 +539,7 @@ namespace threepp::vegetation {
                             pos.y += (unit(rng) - 0.5f) * tp.leafSpread * 2.f;
                             pos.z += (unit(rng) - 0.5f) * tp.leafSpread * 2.f;
                         }
-                        emitBlob(pos, tp.leafSize * sizeVar(rng));
+                        emitBlob(pos, tp.leafSize * sizeVar(rng), tintFor(pos));
                     }
                     continue;
                 }
@@ -553,6 +596,7 @@ namespace threepp::vegetation {
                     }
 
                     const float hs = tp.leafSize * 0.5f * sizeVar(rng);
+                    const Vector3 col = tintFor(pos);
 
                     // Up-biased normals so foliage reads as lit from the sky
                     // (rather than going dark when a card is edge-on to the sun).
@@ -564,10 +608,10 @@ namespace threepp::vegetation {
                         // Proper 3D cross: two upright quads sharing the growth
                         // axis, with perpendicular normals — one always faces
                         // the viewer, no edge-on slivers.
-                        emitQuad(pos, perpA, axis, nA, hs);// spans perpA × axis
-                        emitQuad(pos, perpB, axis, nB, hs);// spans perpB × axis
+                        emitQuad(pos, perpA, axis, nA, hs, col);// spans perpA × axis
+                        emitQuad(pos, perpB, axis, nB, hs, col);// spans perpB × axis
                     } else {
-                        emitQuad(pos, perpA, axis, nA, hs);
+                        emitQuad(pos, perpA, axis, nA, hs, col);
                     }
                 }
             }
@@ -579,6 +623,7 @@ namespace threepp::vegetation {
             geo->setAttribute("position", FloatBufferAttribute::create(positions, 3));
             geo->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
             geo->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
+            geo->setAttribute("color", FloatBufferAttribute::create(colors, 3));
             geo->computeBoundingBox();
             geo->computeBoundingSphere();
             return geo;
@@ -722,7 +767,31 @@ namespace threepp::vegetation {
             perp2.crossVectors(dir, perp1).normalize();
         }
 
-        // ── Helpers ──────────────────────────────────────────────────────
+        // ── 3D value noise (trilinear, hash lattice) for canopy clumping ──
+        static float hashf(int x, int y, int z) {
+            uint32_t n = static_cast<uint32_t>(x) * 374761393u +
+                         static_cast<uint32_t>(y) * 668265263u +
+                         static_cast<uint32_t>(z) * 1274126177u;
+            n = (n ^ (n >> 13)) * 1274126177u;
+            n = n ^ (n >> 16);
+            return static_cast<float>(n & 0xffffffu) / static_cast<float>(0xffffff);
+        }
+        static float noise3(float x, float y, float z) {
+            const int xi = static_cast<int>(std::floor(x));
+            const int yi = static_cast<int>(std::floor(y));
+            const int zi = static_cast<int>(std::floor(z));
+            auto sm = [](float t) { return t * t * (3.f - 2.f * t); };
+            const float fx = sm(x - static_cast<float>(xi));
+            const float fy = sm(y - static_cast<float>(yi));
+            const float fz = sm(z - static_cast<float>(zi));
+            auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
+            const float c000 = hashf(xi, yi, zi), c100 = hashf(xi + 1, yi, zi);
+            const float c010 = hashf(xi, yi + 1, zi), c110 = hashf(xi + 1, yi + 1, zi);
+            const float c001 = hashf(xi, yi, zi + 1), c101 = hashf(xi + 1, yi, zi + 1);
+            const float c011 = hashf(xi, yi + 1, zi + 1), c111 = hashf(xi + 1, yi + 1, zi + 1);
+            return lerp(lerp(lerp(c000, c100, fx), lerp(c010, c110, fx), fy),
+                        lerp(lerp(c001, c101, fx), lerp(c011, c111, fx), fy), fz);
+        }
     };
 
     // ── Species presets ──────────────────────────────────────────────────

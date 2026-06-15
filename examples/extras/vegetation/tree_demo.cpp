@@ -98,6 +98,7 @@ int main() {
     leafMat->map = leafTex;
     leafMat->alphaTest = 0.5f;
     leafMat->side = Side::Double;
+    leafMat->vertexColors = true;// per-card tonal variation (top-lit gradient)
 
     auto trunkMesh = Mesh::create(gen.makeTrunkGeometry(params), barkMat);
     auto leafMesh = Mesh::create(gen.makeLeafGeometry(params), leafMat);
@@ -223,6 +224,7 @@ int main() {
         }
         markCustom(ImGui::SliderFloat("Leaf size", &params.leafSize, 0.05f, 1.0f, "%.2f"));
         markCustom(ImGui::SliderFloat("Leaf density", &params.leafDensity, 0.f, 1.f, "%.2f"));
+        markCustom(ImGui::SliderFloat("Clumping", &params.leafClumping, 0.f, 0.9f, "%.2f"));
         markCustom(ImGui::SliderInt("Per cluster", &params.leavesPerCluster, 1, 10));
         markCustom(ImGui::SliderFloat("Leaf spread", &params.leafSpread, 0.f, 1.f, "%.2f"));
 
