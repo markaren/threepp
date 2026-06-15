@@ -382,7 +382,7 @@ namespace drive {
 
         std::shared_ptr<MeshStandardMaterial> headlampMat_, brakeMat_, reverseMat_, blinkerLMat_, blinkerRMat_;
         std::array<std::shared_ptr<SpotLight>, 2> headlights_{};
-        float headlightIntensity_ = 12.f;
+        float headlightIntensity_ = 48.f;
         bool headlightsOn_ = false;
         float blinkPhase_ = 0.f;
     };
