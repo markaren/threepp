@@ -1,4 +1,4 @@
-// Vulkan PT — procedural mountain configurator (M1 + M2).
+// Vulkan PT — procedural mountain configurator.
 //
 // A single hero mountain massif rendered through the Vulkan path tracer, with a
 // live ImGui panel that re-rolls and re-shapes the terrain. The heightfield is
@@ -12,18 +12,12 @@
 // Noise/shape edits re-roll a fast RAW preview on release; the (slower) erosion
 // pass runs on demand via the Generate button. Presets bake fully eroded.
 //
-// M1 = noise heightfield + configurator; M2 = erosion (this file). Slope/
-// altitude texturing (M3) and atmosphere/haze polish (M4) build on top.
-//
-// Headless capture (dev): vulkan_mountains --shot <name.png> [--frames N]
-//   [--preset 0..3] [--no-erode] [--pt]
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
-#include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
 
@@ -197,8 +191,8 @@ namespace {
                         else if (e.path().extension() == ".json") files.push_back(e.path());
                     }
                 }
-                std::sort(dirs.begin(), dirs.end());
-                std::sort(files.begin(), files.end());
+                std::ranges::sort(dirs);
+                std::ranges::sort(files);
                 for (const auto& d : dirs) {
                     if (ImGui::Selectable(("[D] " + d.filename().string()).c_str())) dir = d;
                 }
@@ -239,10 +233,8 @@ namespace {
 
 }// namespace
 
-int main(int argc, char** argv) {
-
-    // Headless capture (dev): vulkan_mountains --shot <name.png> [--frames N] [--pt]
-    std::string shotPath;
+int main() {
+    
     int shotFrames = 240, shotFrame = 0;
     bool shotPT = false;
     bool stress = false;// re-roll repeatedly to exercise the runtime regen / BLAS-rebuild path
@@ -254,38 +246,11 @@ int main(int argc, char** argv) {
     int startPreset = 0;// 0 Alpine, 1 Rolling, 2 Mesa, 3 Volcanic
     float sceneScale = 1.f;     // debug: scale world/amplitude/feature (precision A/B)
     float ovSunAz = -1, ovSunEl = -1;// debug: override sun azimuth/elevation
-    for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--shot" && i + 1 < argc) shotPath = argv[++i];
-        else if (std::string(argv[i]) == "--frames" && i + 1 < argc)
-            shotFrames = std::atoi(argv[++i]);
-        else if (std::string(argv[i]) == "--preset" && i + 1 < argc)
-            startPreset = std::atoi(argv[++i]);
-        else if (std::string(argv[i]) == "--scale" && i + 1 < argc)
-            sceneScale = static_cast<float>(std::atof(argv[++i]));
-        else if (std::string(argv[i]) == "--sun" && i + 2 < argc) {
-            ovSunAz = static_cast<float>(std::atof(argv[++i]));
-            ovSunEl = static_cast<float>(std::atof(argv[++i]));
-        } else if (std::string(argv[i]) == "--stress")
-            stress = true;
-        else if (std::string(argv[i]) == "--reroll")
-            rerollOnce = true;
-        else if (std::string(argv[i]) == "--no-erode")
-            noErode = true;
-        else if (std::string(argv[i]) == "--topdown")
-            topDown = true;
-        else if (std::string(argv[i]) == "--retex")
-            retex = true;
-        else if (std::string(argv[i]) == "--cfgtest")
-            cfgTest = true;
-        else if (std::string(argv[i]) == "--pt")
-            shotPT = true;
-    }
 
     Canvas canvas("Vulkan PT - Mountains", {{"vsync", false}});
-    VulkanRenderer renderer(canvas);
-    renderer.toneMapping = ToneMapping::ACESFilmic;
-    renderer.toneMappingExposure = 1.0f;
-    if (shotPT) renderer.setRenderMode(VulkanRenderer::RenderMode::ReferencePT);
+    auto renderer = createRenderer(canvas);
+    renderer->toneMapping = ToneMapping::ACESFilmic;
+    renderer->toneMappingExposure = 1.0f;
 
     Scene scene;
     RGBELoader rgbe;
@@ -423,9 +388,9 @@ int main(int argc, char** argv) {
     // expensive pass, ~1s, so it must not run on every slider release).
     auto markCustom = [&](bool changed) { if (changed) { preset = 4; regenRequested = true; } };
 
-    ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({0, 0}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize({340, 0}, ImGuiCond_FirstUseEver);
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
+        ImGui::SetNextWindowPos({}, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize({}, ImGuiCond_FirstUseEver);
         ImGui::Begin("Mountain Configurator");
 
         ImGui::Text("FPS: %.1f   verts: %d", fps,
@@ -543,7 +508,7 @@ int main(int argc, char** argv) {
         ImGui::SliderFloat("Sun azimuth", &sunAzimuth, 0.f, 360.f, "%.0f");
         ImGui::SliderFloat("Sun elevation", &sunElevation, 1.f, 89.f, "%.0f");
         ImGui::SliderFloat("Sun intensity", &sun->intensity, 0.f, 8.f, "%.2f");
-        ImGui::SliderFloat("Exposure", &renderer.toneMappingExposure, 0.1f, 3.0f, "%.2f");
+        ImGui::SliderFloat("Exposure", &renderer->toneMappingExposure, 0.1f, 3.0f, "%.2f");
 
         ImGui::Separator();
         ImGui::TextDisabled("Drag = orbit, scroll = zoom");
@@ -580,7 +545,7 @@ int main(int argc, char** argv) {
     canvas.setIOCapture(&ioCapture);
 
     canvas.onWindowResize([&](const WindowSize& ns) {
-        renderer.setSize(ns);
+        renderer->setSize(ns);
         camera.aspect = canvas.aspect();
         camera.updateProjectionMatrix();
     });
@@ -652,7 +617,7 @@ int main(int argc, char** argv) {
         // Regenerate the terrain once the user releases the control (avoids a
         // per-frame BLAS rebuild while a slider is being dragged). In headless
         // capture/stress mode there is no live UI, so regenerate immediately.
-        const bool uiBusy = shotPath.empty() && ImGui::IsAnyItemActive();
+        const bool uiBusy = ImGui::IsAnyItemActive();
         if (regenRequested && !uiBusy) {
             if (params.seed != gen.seed()) gen.reseed(params.seed);
             gen.buildField(params);              // noise heightfield (fast)
@@ -673,16 +638,10 @@ int main(int argc, char** argv) {
             recolorRequested = false;
         }
 
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
 
-        if (shotPath.empty()) {
-            ui.render();
-        } else if (++shotFrame >= shotFrames) {
-            const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
-            renderer.writeFramebuffer(path);
-            std::cout << "wrote " << path.string() << std::endl;
-            std::exit(0);
-        }
+        ui.render();
+
     });
 
     return 0;
