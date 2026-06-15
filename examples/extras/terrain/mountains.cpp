@@ -273,7 +273,7 @@ int main() {
     TerrainParams params;
     startPreset = std::clamp(startPreset, 0, 3);
     applyPreset(startPreset, params);
-    params.resolution = 512;// good detail/cost balance; 256 for snappier re-rolls, 1024 for a final bake
+    params.resolution = 1024;// default detail; 256/512 for snappier re-rolls, 2048/4096 for a final bake
     if (sceneScale != 1.f) {// keep terrain shape identical, just change world-coordinate magnitude
         params.worldSize *= sceneScale;
         params.amplitude *= sceneScale;
@@ -433,11 +433,12 @@ int main() {
 
         ImGui::SeparatorText("Grid");
         {
-            static const int resVals[4] = {128, 256, 512, 1024};
-            int resIdx = 1;
-            for (int i = 0; i < 4; ++i)
+            static const int resVals[] = {128, 256, 512, 1024, 2048, 4096};
+            constexpr int resCount = static_cast<int>(std::size(resVals));
+            int resIdx = 3;// fallback highlight = 1024
+            for (int i = 0; i < resCount; ++i)
                 if (resVals[i] == params.resolution) resIdx = i;
-            if (ImGui::Combo("Resolution", &resIdx, "128\0" "256\0" "512\0" "1024\0")) {
+            if (ImGui::Combo("Resolution", &resIdx, "128\0" "256\0" "512\0" "1024\0" "2048\0" "4096\0")) {
                 params.resolution = resVals[resIdx];
                 regenRequested = true;
             }
