@@ -278,6 +278,78 @@ namespace threepp::vegetation {
         return {albedo, normal};
     }
 
+    // ── Wildflower alpha cutout ──────────────────────────────────────────
+    //
+    // A single bloom (petals + centre disc) on a short green stem, on a
+    // transparent background. Use on a card material with alphaTest. The petal
+    // colour is chosen from a small palette by `seed`, so passing different
+    // seeds yields different-coloured flowers.
+    inline std::shared_ptr<DataTexture> makeFlowerTexture(
+            unsigned int size = 128,
+            unsigned int seed = 1337) {
+
+        auto tex = DataTexture::create(4, size, size);
+        auto& px = tex->image().data<unsigned char>();// zero → transparent
+
+        static const std::array<std::array<float, 3>, 5> palette = {{
+                {0.96f, 0.96f, 0.94f},// white
+                {0.97f, 0.85f, 0.25f},// yellow
+                {0.93f, 0.42f, 0.62f},// pink
+                {0.62f, 0.42f, 0.88f},// violet
+                {0.88f, 0.30f, 0.26f},// red
+        }};
+        const auto& petal = palette[seed % palette.size()];
+        const std::array<float, 3> centre = {0.98f, 0.80f, 0.20f};
+        const std::array<float, 3> stem = {0.20f, 0.40f, 0.13f};
+
+        const auto S = static_cast<float>(size);
+        const float cx = 0.5f, cy = 0.64f;// bloom centre in uv space (v up)
+        const float bloomR = 0.30f;
+        const int nPetals = 6;
+        const float centreR = 0.085f;
+        const float stemHalf = 0.022f;
+
+        for (unsigned int y = 0; y < size; ++y) {
+            for (unsigned int x = 0; x < size; ++x) {
+                const float u = (static_cast<float>(x) + 0.5f) / S;
+                const float v = (static_cast<float>(y) + 0.5f) / S;// 0 at base, 1 at top
+                float r = 0.f, g = 0.f, b = 0.f, a = 0.f;
+
+                // Stem.
+                if (v < 0.6f && std::abs(u - 0.5f) < stemHalf) {
+                    r = stem[0]; g = stem[1]; b = stem[2]; a = 1.f;
+                }
+                // Petals: rose-curve radius gives a flower outline.
+                const float dx = u - cx, dy = v - cy;
+                const float rr = std::sqrt(dx * dx + dy * dy);
+                const float theta = std::atan2(dy, dx);
+                const float petalEdge = bloomR * (0.55f + 0.45f * std::cos(static_cast<float>(nPetals) * theta));
+                if (rr < petalEdge) {
+                    const float shade = 0.8f + 0.2f * (1.f - rr / std::max(petalEdge, 1e-3f));
+                    r = petal[0] * shade; g = petal[1] * shade; b = petal[2] * shade; a = 1.f;
+                }
+                if (rr < centreR) {
+                    r = centre[0]; g = centre[1]; b = centre[2]; a = 1.f;
+                }
+
+                const size_t idx = (static_cast<size_t>(y) * size + x) * 4;
+                px[idx + 0] = detail::toByte(r);
+                px[idx + 1] = detail::toByte(g);
+                px[idx + 2] = detail::toByte(b);
+                px[idx + 3] = detail::toByte(a);
+            }
+        }
+
+        tex->colorSpace = ColorSpace::sRGB;
+        tex->magFilter = Filter::Linear;
+        tex->minFilter = Filter::LinearMipmapLinear;
+        tex->generateMipmaps = true;
+        tex->wrapS = TextureWrapping::ClampToEdge;
+        tex->wrapT = TextureWrapping::ClampToEdge;
+        tex->needsUpdate();
+        return tex;
+    }
+
 }// namespace threepp::vegetation
 
 #endif// THREEPP_EXTRAS_VEGETATION_TREETEXTURES_HPP
