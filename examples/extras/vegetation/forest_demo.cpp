@@ -30,6 +30,7 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <random>
@@ -351,10 +352,27 @@ int main() {
 
     // GPU vertex-shader grass works on GL + WGPU (GLSL compat); only the
     // Vulkan backend lacks a ShaderMaterial path, so it uses the CPU fallback.
+    //
+    // On Vulkan (a path tracer), animating instance matrices every frame would
+    // refit the ray-tracing acceleration structure each frame — the dominant
+    // cost. Routing the animated foliage to the renderer's raster OVERLAY layer
+    // keeps it out of the TLAS entirely (drawn on top, depth-tested), so the
+    // sway costs only a cheap raster redraw. Static geometry (trees/bushes/
+    // rocks) stays in the path tracer and is built once.
     bool shaderGrass = true;
 #ifdef THREEPP_WITH_VULKAN
-    if (dynamic_cast<VulkanRenderer*>(renderer.get())) shaderGrass = false;
+    auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get());
+    if (vk) {
+        shaderGrass = false;
+        // Vulkan is a path tracer: GPU cost (pathTrace + denoise) scales with
+        // pixel count, so render at 0.6× and TAA-upsample.
+        vk->setRenderScale(0.8f);
+    }
 #endif
+    // The per-frame acceleration-structure refit on Vulkan is ~linear in the
+    // number of *moving* instances, so the swaying foliage is far sparser there
+    // than on the cheap GPU-shader path used by GL/WGPU.
+    const bool lightFoliage = !shaderGrass;
 
     renderer->setClearColor(Color(0.62f, 0.72f, 0.84f));
     renderer->toneMapping = ToneMapping::ACESFilmic;
@@ -512,8 +530,8 @@ int main() {
     scene.fog = Fog(fogColor, fogNear, fogFar);
 
     // ── Swaying grass (instanced) ────────────────────────────────────────
-    const int bladeCount = shaderGrass ? 90000 : 45000;// GPU path is cheap → denser
-    const float grassRadius = 70.f;                    // camera-centred patch
+    const int bladeCount = lightFoliage ? 9000 : 90000;// Vulkan refit is per-instance → far fewer
+    const float grassRadius = lightFoliage ? 42.f : 70.f;// smaller patch keeps density up
     const Vector3 windAxis = Vector3(0.6f, 0.f, -0.8f).normalize();// CPU-path tilt axis ⟂ wind
     const Vector2 windDir2(0.8f, 0.6f);
 
@@ -574,6 +592,7 @@ int main() {
         }
         grass->instanceMatrix()->needsUpdate();// static for the shader path
     }
+
     scene.add(grass);
 
     const float groundHalf = terr.worldSize * 0.5f * 0.9f;
@@ -623,7 +642,7 @@ int main() {
     std::vector<std::shared_ptr<InstancedMesh>> flowerMeshes;
     std::vector<std::vector<Blade>> flowerBlades;
     {
-        constexpr int perVariant = 1100;
+        const int perVariant = lightFoliage ? 400 : 1100;
         const Vector3 up{0.f, 1.f, 0.f};
         for (int fv = 0; fv < 3; ++fv) {
             auto card = makeFlowerCard();
@@ -652,6 +671,7 @@ int main() {
                 fm->setMatrixAt(static_cast<size_t>(i), m);
             }
             fm->instanceMatrix()->needsUpdate();
+
             scene.add(fm);
             flowerMeshes.push_back(fm);
             flowerBlades.push_back(std::move(fb));
@@ -710,12 +730,38 @@ int main() {
     int fpsFrames = 0;
     bool regen = false;
     float windStrength = 0.18f;
+    float foliageUpdateMs = 0.f;// CPU cost of rewriting grass/flower matrices
+    float uiRenderScale = 0.6f; // Vulkan render-scale (quadratic GPU lever)
+    bool uiDenoise = true;      // Vulkan denoiser
+    bool perfDirty = false;     // apply the above at the next frame top
+    // Animate foliage every Nth frame. On Vulkan the dominant cost is the
+    // per-frame TLAS refit when foliage moves (O(total instances)); raising
+    // this trades sway smoothness for fps, but each update frame still spikes
+    // (a refit can't be made sparse), so 1 (smooth every frame, no stutter) is
+    // the default. GL/WGPU use the cheap GPU-shader grass regardless.
+    int foliageUpdateEvery = 1;
 
     ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({10, 10}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize({300, 0}, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize({320, 0}, ImGuiCond_FirstUseEver);
         ImGui::Begin("Forest");
         ImGui::Text("FPS: %.1f   trees: %d", fps, treeCount);
+        ImGui::Text("grass path: %s", shaderGrass ? "GPU shader" : "CPU tilt");
+        ImGui::Text("foliage CPU update: %.3f ms", foliageUpdateMs);
+#ifdef THREEPP_WITH_VULKAN
+        if (vk) {
+            const auto t = vk->lastFrameTimings();
+            ImGui::SeparatorText("Vulkan GPU (ms)");
+            ImGui::Text("pathTrace %.2f  rasterGbuf %.2f", t.pathTraceMs, t.rasterGbufMs);
+            ImGui::Text("overlay   %.2f  denoise    %.2f", t.overlayMs, t.denoiseMs);
+            ImGui::Text("taa       %.2f  frame(cpu) %.2f", t.taaMs, t.cpuFrameMs);
+            ImGui::Text("record(cpu) %.3f  ensureScene(cpu) %.3f", t.cpuRecordMs, t.cpuEnsureSceneMs);
+            ImGui::SeparatorText("Vulkan perf");
+            if (ImGui::SliderFloat("render scale", &uiRenderScale, 0.25f, 1.0f, "%.2f")) perfDirty = true;
+            if (ImGui::Checkbox("denoise", &uiDenoise)) perfDirty = true;
+            ImGui::SliderInt("foliage anim every N", &foliageUpdateEvery, 1, 8);
+        }
+#endif
         ImGui::Separator();
         ImGui::SliderFloat("Spacing", &spacing, 6.f, 24.f, "%.1f");
         ImGui::SliderFloat("Fill", &fillProb, 0.1f, 1.0f, "%.2f");
@@ -736,6 +782,7 @@ int main() {
 
     Clock clock;
     float tElapsed = 0.f;
+    unsigned int foliageFrame = 0;
     Matrix4 m;
     Quaternion qLean, qOut;
     canvas.animate([&] {
@@ -743,14 +790,27 @@ int main() {
         tElapsed += dt;
         controls.update();
 
+#ifdef THREEPP_WITH_VULKAN
+        if (vk && perfDirty) {// applied here (outside render) — setRenderScale waits idle
+            vk->setRenderScale(uiRenderScale);
+            vk->setDenoise(uiDenoise);
+            perfDirty = false;
+        }
+#endif
+
+        const auto tFoliage0 = std::chrono::high_resolution_clock::now();
+
+        const int every = std::max(foliageUpdateEvery, 1);
+        const bool updateFoliage = (foliageFrame++ % static_cast<unsigned int>(every)) == 0u;
+
         // Wind sway.
         if (shaderGrass) {
             // GPU path: just advance the shader clock (no per-frame CPU work).
             grassShaderMat->uniforms["time"].setValue(tElapsed);
             grassShaderMat->uniforms["windStrength"].setValue(windStrength);
-        } else {
+        } else if (updateFoliage) {
             // CPU fallback (Vulkan): rewrite each instance matrix as a whole-
-            // blade tilt toward the wind.
+            // blade tilt toward the wind. Skipping frames avoids the TLAS refit.
             for (size_t i = 0; i < blades.size(); ++i) {
                 const Blade& bl = blades[i];
                 const float gust = std::sin(tElapsed * 1.6f + bl.phase) * 0.6f +
@@ -763,20 +823,27 @@ int main() {
             grass->instanceMatrix()->needsUpdate();
         }
 
-        // Wildflowers always sway via CPU tilt (cheap at this count; works on
-        // every backend). Slightly gentler than the grass.
-        for (size_t v = 0; v < flowerMeshes.size(); ++v) {
-            const auto& fb = flowerBlades[v];
-            for (size_t i = 0; i < fb.size(); ++i) {
-                const Blade& bl = fb[i];
-                const float gust = std::sin(tElapsed * 1.5f + bl.phase) * 0.6f +
-                                   std::sin(tElapsed * 3.3f + bl.phase * 2.1f) * 0.2f;
-                qLean.setFromAxisAngle(windAxis, gust * windStrength * 0.7f);
-                qOut.multiplyQuaternions(qLean, bl.yaw);
-                m.compose(bl.pos, qOut, bl.scale);
-                flowerMeshes[v]->setMatrixAt(i, m);
+        // Wildflowers sway via the same CPU tilt, throttled identically.
+        if (updateFoliage) {
+            for (size_t v = 0; v < flowerMeshes.size(); ++v) {
+                const auto& fb = flowerBlades[v];
+                for (size_t i = 0; i < fb.size(); ++i) {
+                    const Blade& bl = fb[i];
+                    const float gust = std::sin(tElapsed * 1.5f + bl.phase) * 0.6f +
+                                       std::sin(tElapsed * 3.3f + bl.phase * 2.1f) * 0.2f;
+                    qLean.setFromAxisAngle(windAxis, gust * windStrength * 0.7f);
+                    qOut.multiplyQuaternions(qLean, bl.yaw);
+                    m.compose(bl.pos, qOut, bl.scale);
+                    flowerMeshes[v]->setMatrixAt(i, m);
+                }
+                flowerMeshes[v]->instanceMatrix()->needsUpdate();
             }
-            flowerMeshes[v]->instanceMatrix()->needsUpdate();
+        }
+
+        {
+            const auto tFoliage1 = std::chrono::high_resolution_clock::now();
+            const float ms = std::chrono::duration<float, std::milli>(tFoliage1 - tFoliage0).count();
+            foliageUpdateMs += (ms - foliageUpdateMs) * 0.1f;// smoothed
         }
 
         fpsAccum += dt;
