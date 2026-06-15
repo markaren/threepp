@@ -234,9 +234,7 @@ namespace {
 }// namespace
 
 int main() {
-    
-    int shotFrames = 240, shotFrame = 0;
-    bool shotPT = false;
+
     bool stress = false;// re-roll repeatedly to exercise the runtime regen / BLAS-rebuild path
     bool rerollOnce = false;// single in-place re-roll at frame 20, then settle (motion-vector test)
     bool noErode = false;// force erosion off (capture the pre-erosion baseline)
