@@ -276,6 +276,9 @@ struct ParticleSystem::Impl {
         particleCount = settings.particlesPerSecond * std::min(settings.particleDeathAge, settings.emitterDeathAge);
 
         particleMaterial = ShaderMaterial::create();
+        // Tag so backends without a generic ShaderMaterial path (Vulkan) can
+        // recognize this as a particle billboard mesh — see kParticleMaterialName.
+        particleMaterial->name = kParticleMaterialName;
         particleMaterial->vertexShader = particleVertexShader;
         particleMaterial->fragmentShader = particleFragmentShader;
         particleMaterial->transparent = true;
