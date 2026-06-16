@@ -194,13 +194,13 @@ void OverlayPass::createOrthoLinePipelines() {
     gpci.pColorBlendState    = &cb;
     gpci.pDynamicState       = &dyn;
     gpci.layout              = orthoLinePipelineLayout_;
-    check(vkCreateGraphicsPipelines(ctx_.device(), VK_NULL_HANDLE, 1, &gpci, nullptr,
+    check(vkCreateGraphicsPipelines(ctx_.device(), ctx_.pipelineCache(), 1, &gpci, nullptr,
                                     &orthoLineListPipeline_),
           "vkCreateGraphicsPipelines(orthoLineList)");
 
     VkGraphicsPipelineCreateInfo gpciStrip = gpci;
     gpciStrip.pInputAssemblyState = &iaStrip;
-    check(vkCreateGraphicsPipelines(ctx_.device(), VK_NULL_HANDLE, 1, &gpciStrip, nullptr,
+    check(vkCreateGraphicsPipelines(ctx_.device(), ctx_.pipelineCache(), 1, &gpciStrip, nullptr,
                                     &orthoLineStripPipeline_),
           "vkCreateGraphicsPipelines(orthoLineStrip)");
 
@@ -212,7 +212,7 @@ void OverlayPass::createOrthoLinePipelines() {
 
     VkGraphicsPipelineCreateInfo gpciMesh = gpci;
     gpciMesh.pInputAssemblyState = &iaTri;
-    check(vkCreateGraphicsPipelines(ctx_.device(), VK_NULL_HANDLE, 1, &gpciMesh, nullptr,
+    check(vkCreateGraphicsPipelines(ctx_.device(), ctx_.pipelineCache(), 1, &gpciMesh, nullptr,
                                     &orthoMeshPipeline_),
           "vkCreateGraphicsPipelines(orthoMesh)");
 
@@ -228,7 +228,7 @@ void OverlayPass::createOrthoLinePipelines() {
     cbT.pAttachments = &cbasT;
     VkGraphicsPipelineCreateInfo gpciMeshT = gpciMesh;
     gpciMeshT.pColorBlendState = &cbT;
-    check(vkCreateGraphicsPipelines(ctx_.device(), VK_NULL_HANDLE, 1, &gpciMeshT, nullptr,
+    check(vkCreateGraphicsPipelines(ctx_.device(), ctx_.pipelineCache(), 1, &gpciMeshT, nullptr,
                                     &orthoMeshTransparentPipeline_),
           "vkCreateGraphicsPipelines(orthoMeshTransparent)");
 
@@ -343,7 +343,7 @@ void OverlayPass::createOrthoPointPipeline() {
     gpci.pColorBlendState    = &cb;
     gpci.pDynamicState       = &dyn;
     gpci.layout              = orthoLinePipelineLayout_;
-    check(vkCreateGraphicsPipelines(ctx_.device(), VK_NULL_HANDLE, 1, &gpci, nullptr,
+    check(vkCreateGraphicsPipelines(ctx_.device(), ctx_.pipelineCache(), 1, &gpci, nullptr,
                                     &orthoPointListPipeline_),
           "vkCreateGraphicsPipelines(orthoPointList)");
 
@@ -512,7 +512,7 @@ void OverlayPass::createSpriteOverlayPipeline() {
     gpci.pColorBlendState    = &cb;
     gpci.pDynamicState       = &dyn;
     gpci.layout              = spritePipelineLayout_;
-    check(vkCreateGraphicsPipelines(ctx_.device(), VK_NULL_HANDLE, 1, &gpci, nullptr,
+    check(vkCreateGraphicsPipelines(ctx_.device(), ctx_.pipelineCache(), 1, &gpci, nullptr,
                                     &overlaySpritePipeline_),
           "vkCreateGraphicsPipelines(overlaySprite)");
 
