@@ -516,11 +516,30 @@ namespace threepp {
         // Shared grass-wind compute pipeline (no descriptor sets — all I/O by
         // device address). See vulkan/GrassWindPipeline.{hpp,cpp}.
         std::unique_ptr<vulkan::GrassWindPipeline> grassWind_;
+        // GrassMesh deforms queued in ensureSceneBuilt, recorded into the frame
+        // command buffer in recordCommandBuffer (no blocking submit) — same
+        // pattern as pendingSkinnedRebuilds_. Cleared at end of recordCommandBuffer.
+        std::vector<std::pair<GrassMesh*, GrassMeshState*>> pendingGrassDeforms_;
 
         // Single TLAS over all mesh instances in the scene.
         VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
         Buffer tlasBuffer;
-        Buffer tlasInstancesBuffer;
+        // Per-in-flight-frame instance buffers. The per-frame TLAS refit is
+        // recorded into the frame command buffer (not a one-shot drain), so the
+        // host instance write for frame N must not clobber the buffer frame N-1
+        // is still reading — hence one buffer per in-flight slot, indexed by
+        // currentFrame. The structural full build (buildTlas) writes all slots.
+        Buffer tlasInstancesBuffers[kFramesInFlight];
+        // Persistent scratch for the in-frame TLAS refit (sized once; reused —
+        // the frame command buffers execute in submit order so it never races).
+        Buffer tlasRefitScratch_{};
+        VkDeviceSize tlasRefitScratchSize_ = 0;
+        // Per-frame TLAS refit, staged by ensureSceneBuilt and recorded into the
+        // frame command buffer by recordCommandBuffer (after the deformable BLAS
+        // rebuilds). Replaces the old mid-frame refitTlas one-shot drain.
+        std::vector<VkAccelerationStructureInstanceKHR> pendingTlasInstances_;
+        bool pendingTlasRefit_ = false;
+        bool pendingTlasFullBuild_ = false;
 
         // Per-instance descriptor tables the closest-hit shader indexes by
         // gl_InstanceCustomIndexEXT. Layout matches the matching shader
@@ -1851,7 +1870,8 @@ namespace threepp {
 
             if (tlas) ctx->rt().destroyAccelerationStructure(d, tlas, nullptr);
             destroyBuffer(ctx->allocator(), tlasBuffer);
-            destroyBuffer(ctx->allocator(), tlasInstancesBuffer);
+            for (auto& b : tlasInstancesBuffers) destroyBuffer(ctx->allocator(), b);
+            destroyBuffer(ctx->allocator(), tlasRefitScratch_);
             destroyBuffer(ctx->allocator(), geometryDescsBuffer);
             for (auto& b : materialDescsBuffers) destroyBuffer(ctx->allocator(), b);
             destroyBuffer(ctx->allocator(), sceneCaptureBuf_);
@@ -4163,13 +4183,14 @@ namespace threepp {
             return raw;
         }
 
-        // Per-frame: dispatch the wind compute pass (rest → displaced positions
-        // in the BLAS vertex buffer) then refit the BLAS in place. FFT-free
-        // analogue of refreshDisplacedBlas; normals are left static so only the
-        // position buffer is written/barriered.
-        void refreshGrassBlas(GrassMesh& gm, GrassMeshState& st, float /*elapsedSeconds*/) {
-            VkCommandBuffer cb = beginOneShot();
-
+        // Record the grass wind deform (rest → displaced positions in the BLAS
+        // vertex buffer) + in-place BLAS refit into `cb`. No submit — the caller
+        // batches these into the main frame command buffer (recordCommandBuffer),
+        // exactly like the skinned-mesh path, so there is NO mid-frame
+        // vkQueueWaitIdle. Uses the persistent per-BLAS scratch (grass geometry
+        // is fixed-size, so it's allocated once on first use). Normals are left
+        // static, so only the position buffer is written/barriered.
+        void recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, GrassMeshState& st) {
             vulkan::GrassWindPipeline::PushConstants pc{};
             pc.posOut       = st.blas->vertex.address;
             pc.restIn       = st.restPos.address;
@@ -4181,19 +4202,26 @@ namespace threepp {
             pc.windDirZ     = gm.params.windDir.y;
             grassWind_->recordDispatch(cb, pc);
 
-            // Compute write → AS-build read on the vertex buffer only.
-            VkBufferMemoryBarrier bb{};
-            bb.sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-            bb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            bb.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-            bb.buffer        = st.blas->vertex.handle;
-            bb.size          = VK_WHOLE_SIZE;
-            bb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            vkCmdPipelineBarrier(cb,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                0, 0, nullptr, 1, &bb, 0, nullptr);
+            // Compute write → AS-build read (BLAS refit) + vertex-attribute read
+            // (raster G-buffer prepass reads the deformed positions). Mirrors the
+            // skinned path's post-dispatch barrier.
+            {
+                VkMemoryBarrier2 mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                   VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
+                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                   VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
+                                   VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                VkDependencyInfo dep{};
+                dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.memoryBarrierCount = 1;
+                dep.pMemoryBarriers    = &mb;
+                vkCmdPipelineBarrier2(cb, &dep);
+            }
 
             // Refit the BLAS in place (periodic full rebuild keeps it balanced).
             auto* posAttr = gm.geometry()->getAttribute<float>("position");
@@ -4245,18 +4273,30 @@ namespace threepp {
                     ctx->device(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                     &build, &primCount, &sizes);
 
-            const VkDeviceSize scratchSize =
-                    fullRebuild ? sizes.buildScratchSize : sizes.updateScratchSize;
-            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), scratchSize);
-            build.scratchData.deviceAddress = scratch.address;
+            // Persistent scratch (sized once; buildScratchSize ≥ updateScratchSize).
+            if (st.blas->blasScratch.handle == VK_NULL_HANDLE ||
+                st.blas->blasScratchSize < sizes.buildScratchSize) {
+                if (st.blas->blasScratch.handle != VK_NULL_HANDLE)
+                    destroyBuffer(ctx->allocator(), st.blas->blasScratch);
+                st.blas->blasScratch = createAsScratchBuffer(
+                        ctx->allocator(), ctx->device(), sizes.buildScratchSize);
+                st.blas->blasScratchSize = sizes.buildScratchSize;
+            }
+            build.scratchData.deviceAddress = st.blas->blasScratch.address;
 
             VkAccelerationStructureBuildRangeInfoKHR range{};
             range.primitiveCount = primCount;
             const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &build, &pRange);
+        }
 
-            endAndSubmitOneShot(cb);
-            destroyBuffer(ctx->allocator(), scratch);
+        // One-shot wrapper — used only for the initial prime during scene build
+        // (rare). The per-frame path records into the frame cb via the pending
+        // queue, so it never drains.
+        void refreshGrassBlas(GrassMesh& gm, GrassMeshState& st, float /*elapsedSeconds*/) {
+            VkCommandBuffer cb = beginOneShot();
+            recordGrassDeform(cb, gm, st);
+            endAndSubmitOneShot(cb, "grass prime");
         }
 
         // Build a TLAS over the supplied instance descriptors. Empty input is
@@ -4267,24 +4307,30 @@ namespace threepp {
                     instanceCount * sizeof(VkAccelerationStructureInstanceKHR),
                     sizeof(VkAccelerationStructureInstanceKHR));// keep buf non-empty
 
-            tlasInstancesBuffer = createBuffer(
-                    ctx->allocator(), ctx->device(), instBytes,
-                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            if (instanceCount > 0) {
-                void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), tlasInstancesBuffer.alloc, &mapped);
-                std::memcpy(mapped, instances.data(),
-                            instanceCount * sizeof(VkAccelerationStructureInstanceKHR));
-                vmaUnmapMemory(ctx->allocator(), tlasInstancesBuffer.alloc);
+            // (Re)allocate all in-flight instance buffers and seed every slot
+            // with the current instances, so whichever slot the next per-frame
+            // refit overwrites is already a valid build input.
+            for (uint32_t s = 0; s < kFramesInFlight; ++s) {
+                destroyBuffer(ctx->allocator(), tlasInstancesBuffers[s]);
+                tlasInstancesBuffers[s] = createBuffer(
+                        ctx->allocator(), ctx->device(), instBytes,
+                        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                if (instanceCount > 0) {
+                    void* mapped = nullptr;
+                    vmaMapMemory(ctx->allocator(), tlasInstancesBuffers[s].alloc, &mapped);
+                    std::memcpy(mapped, instances.data(),
+                                instanceCount * sizeof(VkAccelerationStructureInstanceKHR));
+                    vmaUnmapMemory(ctx->allocator(), tlasInstancesBuffers[s].alloc);
+                }
             }
 
             VkAccelerationStructureGeometryInstancesDataKHR instData{};
             instData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
             instData.arrayOfPointers = VK_FALSE;
-            instData.data.deviceAddress = tlasInstancesBuffer.address;
+            instData.data.deviceAddress = tlasInstancesBuffers[0].address;
 
             VkAccelerationStructureGeometryKHR tlasGeom{};
             tlasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
@@ -4337,26 +4383,29 @@ namespace threepp {
             destroyBuffer(ctx->allocator(), scratch);
         }
 
-        // Refit the existing TLAS in-place with new instance transforms.
-        // Cheaper than a full rebuild and crucially leaves the TLAS handle
-        // unchanged so descriptor binding 0 keeps pointing at it. Caller
-        // must hold the same instance count as the previous build (only
-        // matrices may change) — topology growth requires a full rebuild.
-        void refitTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances,
-                       bool fullBuild = false) {
+        // Record a per-frame TLAS refit/rebuild into `cb` — NO blocking submit.
+        // The host instance write goes to tlasInstancesBuffers[currentFrame]
+        // (safe: recordCommandBuffer runs after this slot's fence wait), and the
+        // build uses the persistent scratch. Leaves the TLAS handle unchanged so
+        // descriptor binding 0 keeps pointing at it. Must be recorded AFTER all
+        // deformable BLAS rebuilds in the same cb.
+        void recordTlasRefit(VkCommandBuffer cb,
+                             const std::vector<VkAccelerationStructureInstanceKHR>& instances,
+                             bool fullBuild) {
             const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
             if (instanceCount == 0 || tlas == VK_NULL_HANDLE) return;
 
+            Buffer& instBuf = tlasInstancesBuffers[currentFrame];
             void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), tlasInstancesBuffer.alloc, &mapped);
+            vmaMapMemory(ctx->allocator(), instBuf.alloc, &mapped);
             std::memcpy(mapped, instances.data(),
                         instanceCount * sizeof(VkAccelerationStructureInstanceKHR));
-            vmaUnmapMemory(ctx->allocator(), tlasInstancesBuffer.alloc);
+            vmaUnmapMemory(ctx->allocator(), instBuf.alloc);
 
             VkAccelerationStructureGeometryInstancesDataKHR instData{};
             instData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
             instData.arrayOfPointers = VK_FALSE;
-            instData.data.deviceAddress = tlasInstancesBuffer.address;
+            instData.data.deviceAddress = instBuf.address;
 
             VkAccelerationStructureGeometryKHR tlasGeom{};
             tlasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
@@ -4386,19 +4435,21 @@ namespace threepp {
                     VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                     &tlasBuild, &instanceCount, &sizes);
 
-            const VkDeviceSize scratchSize = fullBuild
-                    ? sizes.buildScratchSize : sizes.updateScratchSize;
-            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), scratchSize);
-            tlasBuild.scratchData.deviceAddress = scratch.address;
+            // Persistent scratch (sized once; build ≥ update). The TLAS build is
+            // ordered after the prior frame's by submit order, so reuse is safe.
+            const VkDeviceSize need = std::max(sizes.buildScratchSize, sizes.updateScratchSize);
+            if (tlasRefitScratch_.handle == VK_NULL_HANDLE || tlasRefitScratchSize_ < need) {
+                if (tlasRefitScratch_.handle != VK_NULL_HANDLE)
+                    destroyBuffer(ctx->allocator(), tlasRefitScratch_);
+                tlasRefitScratch_ = createAsScratchBuffer(ctx->allocator(), ctx->device(), need);
+                tlasRefitScratchSize_ = need;
+            }
+            tlasBuild.scratchData.deviceAddress = tlasRefitScratch_.address;
 
             VkAccelerationStructureBuildRangeInfoKHR range{};
             range.primitiveCount = instanceCount;
             const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
-
-            VkCommandBuffer cb = beginOneShot();
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &tlasBuild, &pRange);
-            endAndSubmitOneShot(cb, "refitTlas");
-            destroyBuffer(ctx->allocator(), scratch);
         }
 
         template<typename DescT>
@@ -5356,16 +5407,16 @@ namespace threepp {
                         }
                     }
                     if (grassDirtyAny) {
-                        // Re-bend every GrassMesh: grass_wind.comp → BLAS refit
-                        // in place. One mesh = one TLAS instance, so the refit
-                        // just below is a one-instance update, not a rebuild.
-                        const float now = static_cast<float>(glfwGetTime());
+                        // Queue each GrassMesh deform; the grass_wind dispatch +
+                        // BLAS refit are recorded into the frame command buffer
+                        // in recordCommandBuffer (no blocking submit), mirroring
+                        // the skinned-mesh path. One mesh = one TLAS instance.
                         for (size_t i = 0; i < entries.size(); ++i) {
                             if (!entryGrassDirty[i]) continue;
                             auto* gm = static_cast<GrassMesh*>(entries[i].mesh);
                             auto stIt = grassStates.find(gm);
                             if (stIt == grassStates.end()) continue;
-                            refreshGrassBlas(*gm, *stIt->second, now);
+                            pendingGrassDeforms_.emplace_back(gm, stIt->second.get());
                             ++gm->frameTick;
                         }
                     }
@@ -5577,7 +5628,11 @@ namespace threepp {
                             instances.push_back(inst);
                         }
                         const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny;
-                        refitTlas(instances, blasDeformed);
+                        // Stage the refit; recordCommandBuffer records it into the
+                        // frame cb after the deformable BLAS rebuilds (no drain).
+                        pendingTlasInstances_ = std::move(instances);
+                        pendingTlasFullBuild_ = blasDeformed;
+                        pendingTlasRefit_ = true;
                     }
                     if (!materialValuesSame) {
                         // Material-values-only update: rebuild MaterialDescs into
@@ -5722,14 +5777,13 @@ namespace threepp {
                     tlas = VK_NULL_HANDLE;
                 }
                 destroyBuffer(ctx->allocator(), tlasBuffer);
-                destroyBuffer(ctx->allocator(), tlasInstancesBuffer);
+                for (auto& b : tlasInstancesBuffers) { destroyBuffer(ctx->allocator(), b); b = {}; }
                 destroyBuffer(ctx->allocator(), geometryDescsBuffer);
                 for (auto& b : materialDescsBuffers) {
                     destroyBuffer(ctx->allocator(), b);
                     b = {};
                 }
                 tlasBuffer = {};
-                tlasInstancesBuffer = {};
                 geometryDescsBuffer = {};
 
                 // Prune stale cache entries whose underlying objects have been
@@ -12486,6 +12540,54 @@ namespace threepp {
                 }
 
                 pendingTetRebuilds_.clear();
+            }
+
+            // ── GrassMesh wind deform (GPU) + BLAS refit ────────────────────
+            // Recorded into the frame cb (no blocking submit), like the skinned
+            // and tet paths above. recordGrassDeform issues the grass_wind
+            // dispatch + a compute→AS barrier + the in-place BLAS refit per mesh;
+            // a final AS-write→RT-read barrier publishes the rebuilt geometry to
+            // the trace. (The TLAS sees last frame's bounds — fine for the small
+            // sway envelope, same 1-frame-late deal as skinned.)
+            if (!pendingGrassDeforms_.empty() && grassWind_) {
+                for (auto& [gm, st] : pendingGrassDeforms_) {
+                    recordGrassDeform(cb, *gm, *st);
+                }
+                VkMemoryBarrier2 mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+                mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+                VkDependencyInfo dep{};
+                dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.memoryBarrierCount = 1;
+                dep.pMemoryBarriers    = &mb;
+                vkCmdPipelineBarrier2(cb, &dep);
+                pendingGrassDeforms_.clear();
+            }
+
+            // ── Per-frame TLAS refit ────────────────────────────────────────
+            // Recorded here (after every deformable BLAS rebuild above) instead
+            // of a mid-frame one-shot drain in ensureSceneBuilt — this is what
+            // removes the resolution-scaled stall (the old drain blocked on the
+            // previous frame's path trace). One submit per frame; CPU/GPU
+            // overlap restored.
+            if (pendingTlasRefit_) {
+                recordTlasRefit(cb, pendingTlasInstances_, pendingTlasFullBuild_);
+                VkMemoryBarrier2 mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+                mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                mb.dstStageMask  = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+                VkDependencyInfo dep{};
+                dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.memoryBarrierCount = 1;
+                dep.pMemoryBarriers    = &mb;
+                vkCmdPipelineBarrier2(cb, &dep);
+                pendingTlasRefit_ = false;
             }
 
             // ── Hybrid raster G-buffer pass ─────────────────────────────────
