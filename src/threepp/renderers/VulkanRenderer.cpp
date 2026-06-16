@@ -39,6 +39,7 @@
 #include "vulkan/DeferredShade.hpp"
 #include "vulkan/WaterDisplacePipeline.hpp"
 #include "vulkan/FoamWorldPipeline.hpp"
+#include "vulkan/GrassWindPipeline.hpp"
 #include "vulkan/shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
 #include "wgpu/pathtracer/WgpuPathTracerEnvCdf.hpp"// reused: pure C++ template, no WGPU deps
 
@@ -64,6 +65,7 @@
 #include "threepp/math/Vector3.hpp"
 #include "threepp/objects/Bone.hpp"
 #include "threepp/objects/DisplacedMesh.hpp"
+#include "threepp/objects/GrassMesh.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Skeleton.hpp"
@@ -494,6 +496,27 @@ namespace threepp {
         // frame; replaces the per-vertex foam buffer.
         std::unique_ptr<vulkan::FoamWorldPipeline> foamWorld_;
 
+        // ── GrassMesh (GPU wind-deformed foliage) ────────────────────────
+        // Same deform-on-GPU + BLAS-refit-in-place pattern as DisplacedMesh,
+        // but FFT-free: a wind compute shader bends each blade vertex from an
+        // immutable rest pose. The whole grass field is ONE mesh → one BLAS →
+        // one TLAS instance, so animating it is a cheap per-frame BLAS/TLAS
+        // refit instead of the O(all-instances) TLAS rebuild an animated
+        // InstancedMesh would force.
+        struct GrassMeshState {
+            std::unique_ptr<BlasRecord> blas;
+            Buffer   restPos{};   // immutable rest xyz (device addr, host-written once)
+            Buffer   heightFrac{};// per-vertex height fraction (device addr)
+            uint32_t vertexCount = 0;
+            std::weak_ptr<BufferGeometry> liveCheck;
+            uint32_t blasRefitCounter = 0;
+            static constexpr uint32_t kBlasFullRebuildInterval = 64;
+        };
+        std::unordered_map<const GrassMesh*, std::unique_ptr<GrassMeshState>> grassStates;
+        // Shared grass-wind compute pipeline (no descriptor sets — all I/O by
+        // device address). See vulkan/GrassWindPipeline.{hpp,cpp}.
+        std::unique_ptr<vulkan::GrassWindPipeline> grassWind_;
+
         // Single TLAS over all mesh instances in the scene.
         VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
         Buffer tlasBuffer;
@@ -815,6 +838,7 @@ namespace threepp {
             // casting every frame.
             bool     isSkinned   = false;
             bool     isDisplaced = false;
+            bool     isGrass     = false;// GPU wind-deformed grass field
             bool     isMorphed   = false;
             bool     isTet       = false;
             bool     isInstanced = false;// entry came from an InstancedMesh expansion
@@ -1733,6 +1757,7 @@ namespace threepp {
             photon_ = std::make_unique<vulkan::PhotonCaustics>(*ctx, rtPipelineLayout);
             waterDisplace_ = std::make_unique<vulkan::WaterDisplacePipeline>(*ctx);
             foamWorld_     = std::make_unique<vulkan::FoamWorldPipeline>(*ctx);
+            grassWind_     = std::make_unique<vulkan::GrassWindPipeline>(*ctx);
             // Hybrid raster G-buffer infrastructure. Costs a few hundred MB
             // at 1080p for six attachments × kFramesInFlight.
             ensureHybridResources();
@@ -1920,6 +1945,23 @@ namespace threepp {
             }
             displacedStates.clear();
 
+            for (auto& [_, st] : grassStates) {
+                if (st->blas) {
+                    auto& rec = st->blas;
+                    if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
+                    destroyBuffer(ctx->allocator(), rec->storage);
+                    destroyBuffer(ctx->allocator(), rec->vertex);
+                    destroyBuffer(ctx->allocator(), rec->index);
+                    destroyBuffer(ctx->allocator(), rec->normal);
+                    destroyBuffer(ctx->allocator(), rec->uv);
+                    destroyBuffer(ctx->allocator(), rec->prevVertex);
+                    destroyBuffer(ctx->allocator(), rec->blasScratch);
+                }
+                destroyBuffer(ctx->allocator(), st->restPos);
+                destroyBuffer(ctx->allocator(), st->heightFrac);
+            }
+            grassStates.clear();
+
             for (auto& [_, st] : morphedMeshStates) {
                 auto& rec = st->blas;
                 if (!rec) continue;
@@ -1973,6 +2015,9 @@ namespace threepp {
             // World-space foam pipeline; foam ping-pong images are owned by
             // each DisplacedMeshState and destroyed there.
             foamWorld_.reset();
+            // Grass-wind pipeline; per-mesh buffers freed in the grassStates
+            // loop above.
+            grassWind_.reset();
 
             // Hybrid raster G-buffer cleanup. Resources are lazy-created on
             // first render(); if render() was never called, all handles stay
@@ -4059,6 +4104,161 @@ namespace threepp {
             }
         }
 
+        // ── GrassMesh helpers ────────────────────────────────────────────
+        // Lazy create the per-GrassMesh state: a BLAS over the rest geometry
+        // (built ALLOW_UPDATE, refit each frame) plus an immutable copy of the
+        // rest positions and the per-vertex height fractions the wind shader
+        // reads. Returns nullptr if the geometry lacks position / heightFrac.
+        GrassMeshState* ensureGrassState(GrassMesh& gm) {
+            auto it = grassStates.find(&gm);
+            if (it != grassStates.end()) return it->second.get();
+
+            auto* posAttr = gm.geometry()->getAttribute<float>("position");
+            auto* hfAttr  = gm.geometry()->getAttribute<float>("heightFrac");
+            if (!posAttr || !hfAttr) return nullptr;
+            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
+            if (vertexCount == 0 || static_cast<uint32_t>(hfAttr->count()) != vertexCount) return nullptr;
+
+            auto blas = buildBlasFor(*gm.geometry());
+            if (!blas) return nullptr;
+            blas->liveCheck = gm.geometry();
+
+            auto state = std::make_unique<GrassMeshState>();
+            state->vertexCount = vertexCount;
+            state->liveCheck = gm.geometry();
+
+            // Immutable rest positions — the shader reads these and writes the
+            // displaced result into the (separate) BLAS vertex buffer.
+            const VkDeviceSize posBytes = VkDeviceSize(vertexCount) * 3u * sizeof(float);
+            state->restPos = createBuffer(
+                    ctx->allocator(), ctx->device(), posBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            {
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), state->restPos.alloc, &mapped);
+                std::memcpy(mapped, posAttr->array().data(), posBytes);
+                vmaUnmapMemory(ctx->allocator(), state->restPos.alloc);
+            }
+
+            const VkDeviceSize hfBytes = VkDeviceSize(vertexCount) * sizeof(float);
+            state->heightFrac = createBuffer(
+                    ctx->allocator(), ctx->device(), hfBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            {
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), state->heightFrac.alloc, &mapped);
+                std::memcpy(mapped, hfAttr->array().data(), hfBytes);
+                vmaUnmapMemory(ctx->allocator(), state->heightFrac.alloc);
+            }
+
+            state->blas = std::move(blas);
+            auto* raw = state.get();
+            grassStates.emplace(&gm, std::move(state));
+            return raw;
+        }
+
+        // Per-frame: dispatch the wind compute pass (rest → displaced positions
+        // in the BLAS vertex buffer) then refit the BLAS in place. FFT-free
+        // analogue of refreshDisplacedBlas; normals are left static so only the
+        // position buffer is written/barriered.
+        void refreshGrassBlas(GrassMesh& gm, GrassMeshState& st, float /*elapsedSeconds*/) {
+            VkCommandBuffer cb = beginOneShot();
+
+            vulkan::GrassWindPipeline::PushConstants pc{};
+            pc.posOut       = st.blas->vertex.address;
+            pc.restIn       = st.restPos.address;
+            pc.hfracIn      = st.heightFrac.address;
+            pc.vertexCount  = st.vertexCount;
+            pc.time         = gm.params.time;
+            pc.windStrength = gm.params.windStrength;
+            pc.windDirX     = gm.params.windDir.x;
+            pc.windDirZ     = gm.params.windDir.y;
+            grassWind_->recordDispatch(cb, pc);
+
+            // Compute write → AS-build read on the vertex buffer only.
+            VkBufferMemoryBarrier bb{};
+            bb.sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            bb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            bb.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+            bb.buffer        = st.blas->vertex.handle;
+            bb.size          = VK_WHOLE_SIZE;
+            bb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            vkCmdPipelineBarrier(cb,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                0, 0, nullptr, 1, &bb, 0, nullptr);
+
+            // Refit the BLAS in place (periodic full rebuild keeps it balanced).
+            auto* posAttr = gm.geometry()->getAttribute<float>("position");
+            auto* idxAttr = gm.geometry()->getIndex();
+            const uint32_t vc = static_cast<uint32_t>(posAttr->count());
+            const bool indexed = idxAttr != nullptr;
+            const uint32_t primCount = indexed ? static_cast<uint32_t>(idxAttr->count() / 3)
+                                               : vc / 3;
+
+            VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+            triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+            triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            triData.vertexData.deviceAddress = st.blas->vertex.address;
+            triData.vertexStride = 3 * sizeof(float);
+            triData.maxVertex = vc - 1;
+            if (indexed) {
+                triData.indexType = VK_INDEX_TYPE_UINT32;
+                triData.indexData.deviceAddress = st.blas->index.address;
+            } else {
+                triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+            }
+
+            VkAccelerationStructureGeometryKHR blasGeom{};
+            blasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            blasGeom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            blasGeom.geometry.triangles = triData;
+            blasGeom.flags = 0;
+
+            const bool fullRebuild =
+                    st.blasRefitCounter >= GrassMeshState::kBlasFullRebuildInterval;
+            st.blasRefitCounter = fullRebuild ? 0u : (st.blasRefitCounter + 1u);
+
+            VkAccelerationStructureBuildGeometryInfoKHR build{};
+            build.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+            build.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            build.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                          VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+            build.mode  = fullRebuild
+                    ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
+                    : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+            build.geometryCount = 1;
+            build.pGeometries = &blasGeom;
+            build.srcAccelerationStructure = fullRebuild ? VK_NULL_HANDLE : st.blas->as;
+            build.dstAccelerationStructure = st.blas->as;
+
+            VkAccelerationStructureBuildSizesInfoKHR sizes{};
+            sizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+            ctx->rt().getAccelerationStructureBuildSizes(
+                    ctx->device(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                    &build, &primCount, &sizes);
+
+            const VkDeviceSize scratchSize =
+                    fullRebuild ? sizes.buildScratchSize : sizes.updateScratchSize;
+            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), scratchSize);
+            build.scratchData.deviceAddress = scratch.address;
+
+            VkAccelerationStructureBuildRangeInfoKHR range{};
+            range.primitiveCount = primCount;
+            const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+            ctx->rt().cmdBuildAccelerationStructures(cb, 1, &build, &pRange);
+
+            endAndSubmitOneShot(cb);
+            destroyBuffer(ctx->allocator(), scratch);
+        }
+
         // Build a TLAS over the supplied instance descriptors. Empty input is
         // legal — produces an empty TLAS that always misses.
         void buildTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances) {
@@ -4277,7 +4477,7 @@ namespace threepp {
                 // (skinned/displaced/morphed/tet) are here because their cached local
                 // AABB doesn't reflect the per-frame deformed extents, so frustum-
                 // culling them risks popping a still-on-screen body out of the gbuffer.
-                if (en.isOverlay || en.isSkinned || en.isDisplaced || en.isMorphed || en.isTet) {
+                if (en.isOverlay || en.isSkinned || en.isDisplaced || en.isGrass || en.isMorphed || en.isTet) {
                     en.inFrustum = true;
                 } else {
                     auto geom = en.mesh->geometry();
@@ -4724,12 +4924,13 @@ namespace threepp {
                 // dirty-detection.
                 const bool isSkinned   = (dynamic_cast<SkinnedMesh*>(m)   != nullptr);
                 const bool isDisplaced = (dynamic_cast<DisplacedMesh*>(m) != nullptr);
+                const bool isGrass     = (dynamic_cast<GrassMesh*>(m)     != nullptr);
                 const bool isMorphed   = isMorphedMesh(*m);
                 // Tet-skinned PhysX soft body — detected via the material flag set by
                 // SoftBody::enableGpuSkinning() (which also carries the per-frame tet
                 // texture and the static tetIndex/tetWeight/tetRestInv* attributes).
                 // Mutually exclusive with the other deformers.
-                const bool isTet = !isSkinned && !isDisplaced && !isMorphed &&
+                const bool isTet = !isSkinned && !isDisplaced && !isGrass && !isMorphed &&
                                    m->material() && m->material()->tetSkinning &&
                                    m->material()->tetTexture != nullptr;
                 if (inst && inst->count() > 0) {
@@ -4744,6 +4945,7 @@ namespace threepp {
                         e.isOverlay    = isOverlay;
                         e.isSkinned    = isSkinned;
                         e.isDisplaced  = isDisplaced;
+                        e.isGrass      = isGrass;
                         e.isMorphed    = isMorphed;
                         e.isTet        = isTet;
                         e.isInstanced  = true;
@@ -4757,6 +4959,7 @@ namespace threepp {
                     e.isOverlay    = isOverlay;
                     e.isSkinned    = isSkinned;
                     e.isDisplaced  = isDisplaced;
+                    e.isGrass      = isGrass;
                     e.isMorphed    = isMorphed;
                     e.isTet        = isTet;
                     std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
@@ -4774,6 +4977,7 @@ namespace threepp {
             bool materialValuesSame = true;
             bool bonesDirtyAny = false;
             bool displacedDirtyAny = false;
+            bool grassDirtyAny = false;
             bool tetDirtyAny = false;
             bool geomDirtyAny = false;
             bool morphDirtyAny = false;
@@ -4984,6 +5188,12 @@ namespace threepp {
                 if (entries[i].isDisplaced) entryDisplacedDirty[i] = true;
             }
 
+            // GrassMesh — same: intrinsically dirty every frame (wind advances).
+            std::vector<bool> entryGrassDirty(entries.size(), false);
+            for (size_t i = 0; i < entries.size(); ++i) {
+                if (entries[i].isGrass) entryGrassDirty[i] = true;
+            }
+
             // Morphed meshes — dirty when morphTargetInfluences changed.
             // Skinned meshes that also carry morph targets are handled by the
             // bone path above (GPU-skinned BLAS rebuild) so we skip them
@@ -5016,10 +5226,12 @@ namespace threepp {
                 for (size_t i = 0; i < entries.size(); ++i) {
                     const bool b = entryBonesDirty[i];
                     const bool d = entryDisplacedDirty[i];
+                    const bool gr = entryGrassDirty[i];
                     const bool mo = entryMorphDirty[i];
-                    if (!(b || d || mo)) continue;
+                    if (!(b || d || gr || mo)) continue;
                     if (b) bonesDirtyAny = true;
                     if (d) displacedDirtyAny = true;
+                    if (gr) grassDirtyAny = true;
                     if (mo) morphDirtyAny = true;
                     const size_t w = i >> 5;
                     if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
@@ -5074,12 +5286,14 @@ namespace threepp {
                                               || a.matVersion != b.matVersion;
                     const bool bonesChanged = entryBonesDirty[i];
                     const bool dispChanged  = entryDisplacedDirty[i];
+                    const bool grassChanged = entryGrassDirty[i];
                     const bool geomChanged  = (a.geomVersion != b.geomVersion);
                     const bool morphChanged = entryMorphDirty[i];
                     if (xfmChanged) matricesSame = false;
                     if (matChanged) { materialValuesSame = false; entryMatDirty[i] = true; }
                     if (bonesChanged) bonesDirtyAny = true;
                     if (dispChanged)  displacedDirtyAny = true;
+                    if (grassChanged) grassDirtyAny = true;
                     if (geomChanged) {
                         geomDirtyAny = true;
                         entryGeomDirty[i] = true;
@@ -5107,7 +5321,7 @@ namespace threepp {
                     }
                 }
                 if (structuralSame) {
-                    if (!matricesSame || !materialValuesSame || bonesDirtyAny || displacedDirtyAny || geomDirtyAny || morphDirtyAny) {
+                    if (!matricesSame || !materialValuesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || geomDirtyAny || morphDirtyAny) {
                         motionThisFrame_ = true;
                     }
                     if (bonesDirtyAny) {
@@ -5139,6 +5353,20 @@ namespace threepp {
                             if (stIt == displacedStates.end()) continue;
                             refreshDisplacedBlas(*dm, *stIt->second, now);
                             ++dm->frameTick;
+                        }
+                    }
+                    if (grassDirtyAny) {
+                        // Re-bend every GrassMesh: grass_wind.comp → BLAS refit
+                        // in place. One mesh = one TLAS instance, so the refit
+                        // just below is a one-instance update, not a rebuild.
+                        const float now = static_cast<float>(glfwGetTime());
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            if (!entryGrassDirty[i]) continue;
+                            auto* gm = static_cast<GrassMesh*>(entries[i].mesh);
+                            auto stIt = grassStates.find(gm);
+                            if (stIt == grassStates.end()) continue;
+                            refreshGrassBlas(*gm, *stIt->second, now);
+                            ++gm->frameTick;
                         }
                     }
                     if (morphDirtyAny) {
@@ -5200,6 +5428,7 @@ namespace threepp {
                             if (!entryGeomDirty[i]) continue;
                             if (entries[i].isSkinned)   continue;
                             if (entries[i].isDisplaced) continue;
+                            if (entries[i].isGrass)     continue;
 
                             const BufferGeometry* geomKey = entries[i].mesh->geometry().get();
                             if (refreshedGeoms.count(geomKey)) continue;
@@ -5275,7 +5504,7 @@ namespace threepp {
                         }
                     }
 
-                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny) {
+                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny) {
                         // TLAS refit: needed when instance transforms change
                         // (matricesSame=false) AND when any skinned BLAS was
                         // just rebuilt — the TLAS's per-instance wrapped AABB
@@ -5306,6 +5535,11 @@ namespace threepp {
                                 auto dmIt = displacedStates.find(dm);
                                 if (dmIt == displacedStates.end()) continue;
                                 blasAddr = dmIt->second->blas->address;
+                            } else if (en.isGrass) {
+                                auto* gm = static_cast<GrassMesh*>(en.mesh);
+                                auto gIt = grassStates.find(gm);
+                                if (gIt == grassStates.end()) continue;
+                                blasAddr = gIt->second->blas->address;
                             } else if (en.isTet) {
                                 auto tIt = tetMeshStates.find(en.mesh);
                                 if (tIt == tetMeshStates.end()) continue;
@@ -5342,7 +5576,7 @@ namespace threepp {
                             inst.accelerationStructureReference = blasAddr;
                             instances.push_back(inst);
                         }
-                        const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny;
+                        const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny;
                         refitTlas(instances, blasDeformed);
                     }
                     if (!materialValuesSame) {
@@ -5605,6 +5839,26 @@ namespace threepp {
                         ++it;
                     }
                 }
+                for (auto it = grassStates.begin(); it != grassStates.end(); ) {
+                    if (it->second->liveCheck.expired()) {
+                        auto& st = it->second;
+                        if (st->blas) {
+                            auto& rec = st->blas;
+                            if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);
+                            destroyBuffer(ctx->allocator(), rec->storage);
+                            destroyBuffer(ctx->allocator(), rec->vertex);
+                            destroyBuffer(ctx->allocator(), rec->index);
+                            destroyBuffer(ctx->allocator(), rec->normal);
+                            destroyBuffer(ctx->allocator(), rec->uv);
+                            destroyBuffer(ctx->allocator(), rec->prevVertex);
+                        }
+                        destroyBuffer(ctx->allocator(), st->restPos);
+                        destroyBuffer(ctx->allocator(), st->heightFrac);
+                        it = grassStates.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
                 for (auto it = morphedMeshStates.begin(); it != morphedMeshStates.end(); ) {
                     if (it->second->liveCheck.expired()) {
                         auto& rec = it->second->blas;
@@ -5686,6 +5940,13 @@ namespace threepp {
                     // contents (rest grid right now) become the displaced
                     // surface before the first ray-trace sees it.
                     refreshDisplacedBlas(*dm, *st, static_cast<float>(glfwGetTime()));
+                } else if (en.isGrass) {
+                    auto* gm = static_cast<GrassMesh*>(m);
+                    auto* st = ensureGrassState(*gm);
+                    if (!st) continue;
+                    recPtr = st->blas.get();
+                    // Prime the BLAS with the first wind pose before the first trace.
+                    refreshGrassBlas(*gm, *st, static_cast<float>(glfwGetTime()));
                 } else if (en.isTet) {
                     auto* st = ensureTetBlas(*m);
                     if (!st) continue;
@@ -6665,6 +6926,13 @@ namespace threepp {
                 auto* dm = static_cast<DisplacedMesh*>(en.mesh);
                 auto it = displacedStates.find(dm);
                 if (it != displacedStates.end() && it->second->blas)
+                    return it->second->blas.get();
+                return nullptr;
+            }
+            if (en.isGrass) {
+                auto* gm = static_cast<GrassMesh*>(en.mesh);
+                auto it = grassStates.find(gm);
+                if (it != grassStates.end() && it->second->blas)
                     return it->second->blas.get();
                 return nullptr;
             }

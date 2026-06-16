@@ -193,6 +193,7 @@ set(publicHeaders
         "threepp/objects/TextSprite.hpp"
         "threepp/objects/Water.hpp"
         "threepp/objects/DisplacedMesh.hpp"
+        "threepp/objects/GrassMesh.hpp"
 
         "threepp/textures/CubeTexture.hpp"
         "threepp/textures/DataTexture.hpp"
@@ -469,6 +470,7 @@ set(sources
         "threepp/objects/TextSprite.cpp"
         "threepp/objects/Water.cpp"
         "threepp/objects/DisplacedMesh.cpp"
+        "threepp/objects/GrassMesh.cpp"
 
         "threepp/textures/Texture.cpp"
         "threepp/textures/DataTexture3D.cpp"
@@ -615,6 +617,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/VulkanFrameTypes.hpp"
             "threepp/renderers/vulkan/TaaResolve.hpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.hpp"
+            "threepp/renderers/vulkan/GrassWindPipeline.hpp"
             "threepp/renderers/vulkan/water/OceanFFT.hpp"
     )
     list(APPEND sources
@@ -636,6 +639,7 @@ if (THREEPP_WITH_VULKAN)
             "threepp/renderers/vulkan/DeferredShade.cpp"
             "threepp/renderers/vulkan/WaterDisplacePipeline.cpp"
             "threepp/renderers/vulkan/FoamWorldPipeline.cpp"
+            "threepp/renderers/vulkan/GrassWindPipeline.cpp"
             "threepp/renderers/vulkan/water/OceanFFT.cpp"
     )
 endif ()
@@ -1020,6 +1024,10 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/foam_world.comp"
         kFoamWorldCompSpv
         _foam_world_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/grass_wind.comp"
+        kGrassWindCompSpv
+        _grass_wind_spv_h)
     # Hybrid raster G-buffer prepass — produces depth/normal/motion/IDs
     # for the path tracer to skip its primary BVH trace. See raygen.rgen
     # for the consumer side.
