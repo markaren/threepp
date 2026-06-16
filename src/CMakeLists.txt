@@ -1117,6 +1117,27 @@ if (THREEPP_WITH_VULKAN)
         "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/overlay_sprite.frag"
         kOverlaySpriteFragSpv
         _overlay_sprite_frag_spv_h)
+    # World-space particle billboards (ParticleSystem). The Vulkan backend has no
+    # generic ShaderMaterial path, so the particle Mesh is drawn by a dedicated
+    # billboard pass in the post-TAA overlay block — depth-tested against the
+    # G-buffer depth, composited onto the swapchain. Two blend variants (alpha /
+    # additive) selected per material at draw time.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle.vert"
+        kParticleVertSpv
+        _particle_vert_spv_h)
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/particle.frag"
+        kParticleFragSpv
+        _particle_frag_spv_h)
+    # World-space Sprite billboards (screenSpace == false) — perspective,
+    # depth-tested counterpart to the ortho overlay_sprite HUD path. Shares
+    # overlay_sprite.frag; only the vertex shader differs (perspective reverse-Z,
+    # no GL z-remap). Drawn in the post-TAA overlay block.
+    compile_vulkan_shader(threepp
+        "${CMAKE_CURRENT_SOURCE_DIR}/threepp/renderers/vulkan/shaders/sprite3d.vert"
+        kSprite3dVertSpv
+        _sprite3d_vert_spv_h)
 endif ()
 
 
