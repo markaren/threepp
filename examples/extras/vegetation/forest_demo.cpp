@@ -489,7 +489,7 @@ int main() {
 #endif
 
     renderer->setClearColor(Color(0.62f, 0.72f, 0.84f));
-    renderer->toneMapping = ToneMapping::ACESFilmic;
+    renderer->toneMapping = ToneMapping::Neutral;
     renderer->toneMappingExposure = 1.0f;
     renderer->shadowMap().enabled = true;
     renderer->shadowMap().type = ShadowMap::PFCSoft;
