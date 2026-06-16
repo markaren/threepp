@@ -207,7 +207,23 @@ bool reflReproject(vec2 uv, vec3 N, float rough, float viewDist, out vec2 pUv, o
     bool valid = all(greaterThanEqual(pUv, vec2(0.0))) && all(lessThanEqual(pUv, vec2(1.0)));
     if (valid) {
         const vec3 pn = texture(gbufNormalPrevTex, pUv).xyz * 2.0 - 1.0;
-        valid = dot(pn, pn) > 1e-6 && dot(N, normalize(pn)) > 0.9;// surface match (disocclusion)
+        // DEPTH-discontinuity disocclusion (mirrors the GI reproject below, ~line
+        // 2630 — the reason GI doesn't smear at silhouettes but the reflection did).
+        // The reflection channel did a NORMAL-only match (dot>0.9); at a car-body
+        // SILHOUETTE under camera ROTATION the bilinear prev-normal tap stays inside
+        // that cone, so stale reflection from ACROSS the edge bled into the temporal
+        // history → "edges smear when turning". motion .b carries THIS surface's prev
+        // NDC depth; gbufDepthPrevTex at pUv is the prev depth BUFFER there — a
+        // mismatch means the reproject crossed the silhouette onto a DIFFERENT surface
+        // ⇒ reject ⇒ the edge resets to a fresh (noisy, un-smeared) reflection. Normal
+        // loosened to 0.7 to match the GI (depth is now the primary disocclusion gate).
+        const float surfD = texture(gbufMotionTex, uv).b;     // this surface's prev NDC depth
+        const float bufD  = texture(gbufDepthPrevTex, pUv).x; // prev depth buffer at the reproject
+        const vec4  svh   = cam.projInverse * vec4(pNdc, surfD, 1.0);
+        const vec4  bvh   = cam.projInverse * vec4(pNdc, bufD,  1.0);
+        const float svz   = svh.z / svh.w;
+        valid = dot(pn, pn) > 1e-6 && dot(N, normalize(pn)) > 0.7 &&
+                abs(svz - bvh.z / bvh.w) <= 0.1 * max(abs(svz), 1e-3);// same-surface depth gate
     }
     // Static-view cap: 512 (was 32). The reflection ray is GGX-sampled with a
     // per-frame seed, so a held-still view keeps integrating fresh stochastic
