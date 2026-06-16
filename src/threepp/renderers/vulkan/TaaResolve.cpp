@@ -233,7 +233,7 @@ namespace threepp::vulkan {
         cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         cpci.stage  = stage;
         cpci.layout = pipelineLayout_;
-        check(vkCreateComputePipelines(ctx_.device(), VK_NULL_HANDLE,
+        check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(),
                                        1, &cpci, nullptr, &pipeline_),
               "vkCreateComputePipelines(taa)");
         vkDestroyShaderModule(ctx_.device(), mod, nullptr);
@@ -286,7 +286,7 @@ namespace threepp::vulkan {
             rcpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
             rcpci.stage  = rstage;
             rcpci.layout = rcasPipeLayout_;
-            check(vkCreateComputePipelines(ctx_.device(), VK_NULL_HANDLE, 1, &rcpci,
+            check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(), 1, &rcpci,
                                            nullptr, &rcasPipe_),
                   "vkCreateComputePipelines(rcas)");
             vkDestroyShaderModule(ctx_.device(), rmod, nullptr);

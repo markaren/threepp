@@ -44,6 +44,14 @@ namespace threepp::vulkan {
         VkDevice         device() const { return device_; }
         VmaAllocator     allocator() const { return allocator_; }
 
+        // Shared pipeline cache, loaded from disk at construction and saved at
+        // destruction. Pass to every vkCreate{Graphics,Compute,RayTracing}
+        // Pipelines call so repeat launches skip the (multi-second, esp. for
+        // the RT megakernel) cold pipeline compile. Purely an optimization —
+        // the driver validates the on-disk blob against the device and it is
+        // discarded if incompatible, so it can never affect correctness.
+        VkPipelineCache pipelineCache() const { return pipelineCache_; }
+
         VkSurfaceKHR surface() const { return surface_; }
         VkQueue graphicsQueue() const { return graphicsQueue_; }
         VkQueue presentQueue() const { return presentQueue_; }
@@ -146,12 +154,18 @@ namespace threepp::vulkan {
         // is on). Loaded via vkGetDeviceProcAddr at device creation.
         PFN_vkSetDebugUtilsObjectNameEXT setObjectNameFn_ = nullptr;
 
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
+
         void createInstance(bool enableValidation);
         void createDebugMessenger();
         void createSurface();
         void pickPhysicalDevice();
         void createLogicalDevice();
         void createAllocator();
+        // Load the on-disk pipeline cache (validated against this device) at
+        // startup; persist it back to disk at shutdown.
+        void createPipelineCache();
+        void savePipelineCache();
         void createSwapchain();
         void createSwapchainImageViews();
         void destroySwapchainResources();

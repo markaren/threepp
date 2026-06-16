@@ -143,7 +143,7 @@ namespace threepp::vulkan {
         cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         cpci.stage  = ssci;
         cpci.layout = pipelineLayout_;
-        check(vkCreateComputePipelines(ctx_.device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &pipeline_),
+        check(vkCreateComputePipelines(ctx_.device(), ctx_.pipelineCache(), 1, &cpci, nullptr, &pipeline_),
               "vkCreateComputePipelines(event_detect)");
 
         vkDestroyShaderModule(ctx_.device(), shader, nullptr);
