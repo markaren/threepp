@@ -795,7 +795,7 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
         if (envBgTex_) { wgpuTextureRelease(envBgTex_); envBgTex_ = nullptr; }
 
         auto& img = envTex->image();
-        uint32_t w = img.width, h = img.height;
+        uint32_t w = img.width(), h = img.height();
         if (w == 0 || h == 0) return;
 
         const void* srcData = nullptr;
@@ -1859,8 +1859,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
         // MSAA color attachment (resolves into colorTexture). Without this, redirecting
         // the scene through the tone-map intermediate would force effectiveSampleCount=1
-        // on every render that triggers needsToneMapPass(), which is the new default after
-        // Phase 4 (sRGB output) — so MSAA would silently disable on RT and surface alike.
+        // on every render that triggers needsToneMapPass(), which is the default when
+        // sRGB output routes the scene through the tone-map pass — so MSAA would
+        // otherwise silently disable on RT and surface alike.
         if (sampleCount > 1) {
             WGPUTextureDescriptor mtd{};
             mtd.label = WGPUStringView{"tonemap_msaa_color", sizeof("tonemap_msaa_color") - 1};
@@ -2223,11 +2224,36 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         if (useSurface) frame_.hasRendered = true;
     }
 
+    // Finish and submit the deferred per-frame encoder, if any. Used before
+    // recycling pooled buffers and before readbacks — encoded-but-unsubmitted
+    // passes hold references to pooled buffers, and queue writes from later
+    // acquire() calls execute ahead of any later submit, so the pass would
+    // read the overwritten data.
+    void submitPendingEncoder(const char* label) {
+        if (!renderEncoder_) return;
+        WGPUCommandBufferDescriptor cbd{};
+        cbd.label = WGPUStringView{label, WGPU_STRLEN};
+        WGPUCommandBuffer cb = wgpuCommandEncoderFinish(renderEncoder_, &cbd);
+        wgpuQueueSubmit(queue, 1, &cb);
+        wgpuCommandBufferRelease(cb);
+        wgpuCommandEncoderRelease(renderEncoder_);
+        renderEncoder_ = nullptr;
+    }
+
     void render(Object3D& scene, Camera& camera) {
         if (!initialized) return;
 
         if (!frame_.active) {
-            // New frame — recycle per-draw buffers and evict stale bind groups
+            // New frame — recycle per-draw buffers and evict stale bind groups.
+            // !frame_.active is also true for render-to-target calls that
+            // precede the first surface render of a frame (sensor scans,
+            // mirror passes), so passes from a previous render() may still
+            // sit unsubmitted on the deferred encoder while referencing
+            // pooled buffers. Submit them first or the recycle hands their
+            // buffers to this render's acquires, which silently overwrite
+            // them before the shared submit (frozen DepthSensor readbacks
+            // on WebGPU were exactly this).
+            submitPendingEncoder("pre_recycle_flush");
             bufferPool->beginFrame();
             bindGroupCache->beginFrame();
         }
@@ -2378,7 +2404,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 // The HDR intermediate preserves values >1.0 so ACES operates on full range.
                 // When sampleCount_>1, attach the MSAA color/depth and resolve into the
                 // single-sample colorTexture (the blit's bind source). This preserves
-                // anti-aliasing through the tone-map redirect introduced by Phase 4.
+                // anti-aliasing through the tone-map redirect.
                 ensureToneMapRT(frame_.width, frame_.height, sampleCount_);
                 if (sampleCount_ > 1) {
                     colorView = toneMap_.msaaColorView;
@@ -2572,20 +2598,19 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         const double clearA = useToneMapIntermediate
                 ? 0.0
                 : static_cast<double>(effectiveClearAlpha);
-        // Surface-direct clear: clearValue is written straight to the sRGB swapchain.
-        // WebGPU does NOT sRGB-encode clearValue (unlike shader fragment writes, which
-        // the sRGB surface encodes in hardware), so a color-managed (linear) clear color
-        // must be encoded here or the background renders too dark. The tone-map-intermediate
-        // path clears a linear RGBA16Float target whose background is re-emitted (and thus
-        // hardware-encoded) by toneMapBlit, so it stays linear. No-op when management is off.
-        Color clearRGB = effectiveClearColor;
-        if (!useToneMapIntermediate) {
-            ColorManagement::workingToColorSpace(clearRGB, SRGBColorSpace);
-        }
+        // Clear values are interpreted in the attachment's LINEAR space and
+        // converted on store, exactly like shader writes — an sRGB-format
+        // surface hardware-encodes the clear (verified on wgpu-native/Vulkan:
+        // clearing 0.0052 linear stores byte 16, the sRGB-encoded value). So
+        // the working-space color goes in unconverted on every path. A manual
+        // workingToColorSpace encode here (a leftover from the UNORM-surface
+        // era, when raw stores DID need pre-encoded bytes) double-encoded the
+        // background: direct-to-surface output was visibly brighter than the
+        // identical render through a RenderTarget (and than GL).
         colorAttachment.clearValue = {
-                static_cast<double>(clearRGB.r),
-                static_cast<double>(clearRGB.g),
-                static_cast<double>(clearRGB.b),
+                static_cast<double>(effectiveClearColor.r),
+                static_cast<double>(effectiveClearColor.g),
+                static_cast<double>(effectiveClearColor.b),
                 clearA};
 
         WGPURenderPassDepthStencilAttachment depthAttachment{};
@@ -4200,15 +4225,7 @@ std::vector<unsigned char> WgpuRenderer::readRGBPixels() {
     // called via the canvas frame-end callback, so the command encoder may still
     // be pending. Submit it now so the GPU has finished writing the texture before
     // the readback copy encoder runs.
-    if (pimpl_->renderEncoder_ && !pimpl_->frame_.active) {
-        WGPUCommandBufferDescriptor cbd{};
-        cbd.label = WGPUStringView{"rt_flush", sizeof("rt_flush") - 1};
-        WGPUCommandBuffer cb = wgpuCommandEncoderFinish(pimpl_->renderEncoder_, &cbd);
-        wgpuQueueSubmit(pimpl_->queue, 1, &cb);
-        wgpuCommandBufferRelease(cb);
-        wgpuCommandEncoderRelease(pimpl_->renderEncoder_);
-        pimpl_->renderEncoder_ = nullptr;
-    }
+    pimpl_->submitPendingEncoder("rt_flush");
 
     auto& rt = pimpl_->renderTargets->getOrCreate(pimpl_->currentRenderTarget_, pimpl_->sampleCount_);
     return wgpu::readRGBPixels(pimpl_->device, pimpl_->queue, rt.colorTexture, rt.width, rt.height);
@@ -4271,8 +4288,8 @@ void WgpuRenderer::copyFramebufferToTexture(const Vector2& position, Texture& te
     if (!dstEntry.texture) return;
 
     auto& img = texture.image();
-    uint32_t texW = img.width;
-    uint32_t texH = img.height;
+    uint32_t texW = img.width();
+    uint32_t texH = img.height();
     if (texW == 0 || texH == 0) return;
 
     // Clamp copy region to source bounds
@@ -4449,16 +4466,10 @@ void WgpuRenderer::copyTextureToImage(Texture& texture) {
     // Flush any deferred render commands first: the source is typically a render
     // target that was just rendered into, and those passes live on the pending
     // per-frame encoder. Without this the readback copies stale/uninitialised
-    // contents. (Mirrors readRGBPixels.)
-    if (pimpl_->renderEncoder_ && !pimpl_->frame_.active) {
-        WGPUCommandBufferDescriptor cbd{};
-        cbd.label = WGPUStringView{"copytex_flush", sizeof("copytex_flush") - 1};
-        WGPUCommandBuffer cb = wgpuCommandEncoderFinish(pimpl_->renderEncoder_, &cbd);
-        wgpuQueueSubmit(pimpl_->queue, 1, &cb);
-        wgpuCommandBufferRelease(cb);
-        wgpuCommandEncoderRelease(pimpl_->renderEncoder_);
-        pimpl_->renderEncoder_ = nullptr;
-    }
+    // contents. Submitting mid-frame is fine — the encoder only ever holds
+    // complete passes, and endFrame() lazily creates a fresh one for the
+    // tone-map blit / overlay. (Mirrors readRGBPixels.)
+    pimpl_->submitPendingEncoder("copytex_flush");
 
     // Resolve the source GPU texture + dimensions. Render-target textures live in
     // the render-target cache (not the user-texture cache), so check there first —
@@ -4471,8 +4482,8 @@ void WgpuRenderer::copyTextureToImage(Texture& texture) {
         h = rt->height;
     } else if (auto* entry = pimpl_->textures->findTexture(texture.id); entry && entry->texture) {
         src = entry->texture;
-        w = texture.image().width;
-        h = texture.image().height;
+        w = texture.image().width();
+        h = texture.image().height();
     }
     if (!src || w == 0 || h == 0) return;
 

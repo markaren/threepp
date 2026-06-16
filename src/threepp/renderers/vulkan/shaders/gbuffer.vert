@@ -57,6 +57,9 @@ layout(location = 3) flat out uint vInstanceIdx;
 layout(location = 4) flat out uint vFlags;
 layout(location = 5) out vec2 vUv;
 layout(location = 6) out vec3 vWorldPos;// for fragment-shader TBN via dFdx/dFdy
+layout(location = 7) out vec3 vColor;// per-vertex color; this fixed-input path has no
+                                     // color binding, so always white (the indirect
+                                     // path — gbuffer_indirect.vert — does real vertex colors)
 
 void main() {
     vec4 worldPos     = pc.model * vec4(inPos, 1.0);
@@ -80,6 +83,7 @@ void main() {
     vFlags         = pc.flags;
     vUv            = inUv;
     vWorldPos      = worldPos.xyz;
+    vColor         = vec3(1.0);// no color binding on this path
 
     // threepp's projection matrix follows the GL convention (Y up in NDC).
     // Vulkan NDC has Y pointing down, so we negate Y at the gl_Position

@@ -14,8 +14,8 @@
 // That matches the FFT's intrinsic periodicity — natural-foam crests
 // repeat with the FFT pattern, so wrapping at the tile boundary is
 // consistent with the wave field underneath. Texel size = tileSize /
-// res; at 1024² over 1000 m that's ≈0.98 m, similar to the base mesh's
-// vertex spacing. Bump res to 2048 for ~0.5 m foam detail (4× memory).
+// res; at 2048² over 1000 m that's ≈0.49 m — fine enough to carry the
+// cascade-1 whitecap detail the fine Jacobian stencil extracts.
 //
 // Per frame: decay last frame's foam, recompute the three instant
 // sources at every texel, take the max, write to the current target.
@@ -97,35 +97,90 @@ vec2 toroidalDelta(vec2 a, vec2 b, float tileSize) {
     return d - tileSize * floor(d / tileSize + 0.5);
 }
 
-vec3 sampleDisplacement(vec2 worldXZ) {
-    vec3 d = vec3(0.0);
-    if ((pc.cascadeMask & 1u) != 0u) {
+// Horizontal displacement only — the Jacobian and the inverse-map never
+// need the height channel, so skip those fetches entirely (the height
+// bindings stay declared for descriptor-layout compatibility). `mask`
+// selects which cascades contribute, ANDed with the host's cascadeMask.
+vec2 sampleDispXZ(vec2 worldXZ, uint mask) {
+    vec2 d = vec2(0.0);
+    if ((mask & pc.cascadeMask & 1u) != 0u) {
         const float invTile = 1.0 / pc.tileSize0;
-        const vec2 uv = worldXZ * invTile;
-        d.y += texture(height0,   uv).r * invTile;
-        const vec2 dxz = texture(displace0, uv).rg * invTile;
-        d.x += dxz.x;
-        d.z += dxz.y;
+        d += texture(displace0, worldXZ * invTile).rg * invTile;
     }
-    if ((pc.cascadeMask & 2u) != 0u) {
+    if ((mask & pc.cascadeMask & 2u) != 0u) {
         const float invTile = 1.0 / pc.tileSize1;
-        const vec2 uv = worldXZ * invTile;
-        d.y += texture(height1,   uv).r * invTile;
-        const vec2 dxz = texture(displace1, uv).rg * invTile;
-        d.x += dxz.x;
-        d.z += dxz.y;
+        d += texture(displace1, worldXZ * invTile).rg * invTile;
     }
-    if ((pc.cascadeMask & 4u) != 0u) {
+    if ((mask & pc.cascadeMask & 4u) != 0u) {
         const float invTile = 1.0 / pc.tileSize2;
-        const vec2 uv = worldXZ * invTile;
-        d.y += texture(height2,   uv).r * invTile;
-        const vec2 dxz = texture(displace2, uv).rg * invTile;
-        d.x += dxz.x;
-        d.z += dxz.y;
+        d += texture(displace2, worldXZ * invTile).rg * invTile;
     }
-    return vec3(d.x * pc.choppiness,
-                d.y * pc.waveScale,
-                d.z * pc.choppiness);
+    return d * pc.choppiness;
+}
+
+// Bicubic B-spline RG fetch (4 bilinear taps, Sigg & Hadwiger). The Jacobian
+// below DIFFERENTIATES the displacement field; the derivative of a BILINEAR
+// texture is only piecewise-continuous (kinks at every texel boundary), and
+// the steep foam ramp amplifies those kinks into hard world-aligned ~1 m
+// squares baked into the foam accumulator (cascade-0 texel = tileSize0/res
+// ≈ 0.98 m — exactly the visible artifact). The B-spline kernel is C1, so
+// the fold field carries no cell boundaries to bake in.
+vec2 sampleBicubicRG(sampler2D tex, vec2 uv) {
+    const vec2 res = vec2(textureSize(tex, 0));
+    const vec2 st  = uv * res - 0.5;
+    const vec2 i   = floor(st);
+    const vec2 f   = st - i;
+    const vec2 f2  = f * f;
+    const vec2 f3  = f2 * f;
+    const vec2 w0  = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w1  = (3.0 * f3 - 6.0 * f2 + 4.0)       * (1.0 / 6.0);
+    const vec2 w2  = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w3  = f3 * (1.0 / 6.0);
+    const vec2 g0  = w0 + w1;
+    const vec2 g1  = w2 + w3;
+    const vec2 c0  = (i - 0.5 + w1 / g0) / res;
+    const vec2 c1  = (i + 1.5 + w3 / g1) / res;
+    const vec2 t00 = texture(tex, vec2(c0.x, c0.y)).rg;
+    const vec2 t10 = texture(tex, vec2(c1.x, c0.y)).rg;
+    const vec2 t01 = texture(tex, vec2(c0.x, c1.y)).rg;
+    const vec2 t11 = texture(tex, vec2(c1.x, c1.y)).rg;
+    return g0.y * (g0.x * t00 + g1.x * t10) + g1.y * (g0.x * t01 + g1.x * t11);
+}
+
+// Bicubic variant of sampleDispXZ — used ONLY inside the Jacobian stencil
+// (the inverse-map keeps the cheap bilinear path: kinks in the VALUE field
+// are second-order there and invisible).
+vec2 sampleDispXZSmooth(vec2 worldXZ, uint mask) {
+    vec2 d = vec2(0.0);
+    if ((mask & pc.cascadeMask & 1u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize0;
+        d += sampleBicubicRG(displace0, worldXZ * invTile) * invTile;
+    }
+    if ((mask & pc.cascadeMask & 2u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize1;
+        d += sampleBicubicRG(displace1, worldXZ * invTile) * invTile;
+    }
+    if ((mask & pc.cascadeMask & 4u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize2;
+        d += sampleBicubicRG(displace2, worldXZ * invTile) * invTile;
+    }
+    return d * pc.choppiness;
+}
+
+// 1 − J of (x,z) → (x,z) + Dxz over the masked cascades, central-differenced
+// at stencil half-width `eps`. Positive = the surface is compressing/folding
+// (a breaking crest); the stencil width sets which wavelengths register.
+float jacobianFold(vec2 p, uint mask, float eps) {
+    const vec2 dL = sampleDispXZSmooth(p + vec2(-eps, 0.0), mask);
+    const vec2 dR = sampleDispXZSmooth(p + vec2( eps, 0.0), mask);
+    const vec2 dD = sampleDispXZSmooth(p + vec2(0.0, -eps), mask);
+    const vec2 dU = sampleDispXZSmooth(p + vec2(0.0,  eps), mask);
+    const float inv2e = 0.5 / eps;
+    const float dDxDx = (dR.x - dL.x) * inv2e;
+    const float dDxDz = (dU.x - dD.x) * inv2e;
+    const float dDzDx = (dR.y - dL.y) * inv2e;
+    const float dDzDz = (dU.y - dD.y) * inv2e;
+    return 1.0 - ((1.0 + dDxDx) * (1.0 + dDzDz) - dDxDz * dDzDx);
 }
 
 void main() {
@@ -137,21 +192,48 @@ void main() {
     const vec2 worldXZ = uv * pc.foamTileSize;
 
     // ── Natural Jacobian foam ────────────────────────────────────────
-    // J of (x, z) → (x + Dx, z + Dz). Below ~1 the surface is folding;
-    // map J ∈ [foamThresh−foamWidth, foamThresh] onto [1, 0].
-    const float eps = pc.tileSize0 / 256.0;
-    const vec3 dL = sampleDisplacement(worldXZ + vec2(-eps, 0.0));
-    const vec3 dR = sampleDisplacement(worldXZ + vec2( eps, 0.0));
-    const vec3 dD = sampleDisplacement(worldXZ + vec2(0.0, -eps));
-    const vec3 dU = sampleDisplacement(worldXZ + vec2(0.0,  eps));
-    const float dDxDx = (dR.x - dL.x) * 0.5 / eps;
-    const float dDxDz = (dU.x - dD.x) * 0.5 / eps;
-    const float dDzDx = (dR.z - dL.z) * 0.5 / eps;
-    const float dDzDz = (dU.z - dD.z) * 0.5 / eps;
-    const float J = (1.0 + dDxDx) * (1.0 + dDzDz) - dDxDz * dDzDx;
-    const float foamThresh  = 0.97;
-    const float foamWidth   = 0.04;
-    const float foamInstant = clamp((foamThresh - J) / foamWidth, 0.0, 1.0);
+    // Foam must land where the crest is SEEN: shading samples this texture
+    // at the DISPLACED world XZ of the hit point, but the wave field is
+    // defined over reference (undisplaced) coordinates. Invert x = q + D(q)
+    // with two fixed-point iterations so the Jacobian is evaluated at the
+    // reference point whose displaced image is this texel — without this
+    // the foam sits off-crest by the full chop displacement.
+    vec2 q = worldXZ - sampleDispXZ(worldXZ, 0xFFu);
+    q      = worldXZ - sampleDispXZ(q, 0xFFu);
+
+    // Two-scale folding measure:
+    //   coarse — cascade 0 (1 km tile) at a ~2 m stencil: swell-crest foam.
+    //   fine   — cascade 1 (100 m tile) at a sub-metre stencil: the small
+    //            whitecaps that make a wind-blown sea read as alive. The old
+    //            single 3.9 m stencil over the summed field low-pass-filtered
+    //            these out entirely, which is why foam only ever appeared as
+    //            big soft swell blobs.
+    // Cascade 2 (8 m tile) is deliberately excluded: its Jacobian would stamp
+    // a visible 8 m repeating foam grid, and its wavelengths barely fold.
+    // First-order in the displacement gradients, fold terms add: the overlap
+    // (chop folding ON a breaking swell crest) saturates toward 1 — exactly
+    // where real whitewater is densest.
+    const float texel      = pc.foamTileSize / float(pc.foamRes);
+    // Coarse stencil at tileSize0/256 (≈4 m): folding is spectrally dominated
+    // by content near the cascade's Nyquist, so a texel-scale stencil measures
+    // a field of per-texel bumps. Combined with a steep ramp those deposited
+    // as saturated ~1 m squares aligned to the cascade-0 texel grid — the
+    // long-standing visible "foam texels" (≈1/30 of the 28 m vessel). The
+    // wide stencil measures swell-scale folding instead; sub-4 m whitecap
+    // detail belongs to cascade 1.
+    const float foldCoarse = jacobianFold(q, 1u, pc.tileSize0 / 256.0);
+    const float foldFine   = jacobianFold(q, 2u, max(pc.tileSize1 / 256.0, texel));
+    // GRADED ramps + soft-knee saturation (1 − e^−x). A near-binary threshold
+    // re-quantizes the band-limited fold field into hard texel-grid blobs no
+    // matter how smoothly it is sampled; graded deposits leave the shading
+    // lifecycle mask a real gradient to shape. Genuinely breaking crests
+    // (multi-texel folding, coarse+fine overlapping) still saturate toward 1.
+    // NOTE: the shading mask in deferred_shade.comp / closest_hit.rchit is
+    // calibrated to this curve (sheet solidifies from coverage ≈ 0.55) — they
+    // must be retuned TOGETHER or the ocean under/over-foams.
+    const float foamCoarse  = max(foldCoarse - 0.02, 0.0) / 0.12;
+    const float foamFine    = max(foldFine   - 0.03, 0.0) / 0.25;
+    const float foamInstant = 1.0 - exp(-3.0 * (min(foamCoarse, 1.4) + 0.85 * min(foamFine, 1.0)));
 
     // ── Vessel wake foam ─────────────────────────────────────────────
     // Iterates the historical pose trail and takes MAX over each

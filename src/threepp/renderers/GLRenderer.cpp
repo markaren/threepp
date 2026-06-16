@@ -1277,8 +1277,8 @@ struct GLRenderer::Impl {
     void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level) {
 
         const auto levelScale = std::pow(2, -level);
-        const auto width = static_cast<int>(texture.image().width * levelScale);
-        const auto height = static_cast<int>(texture.image().height * levelScale);
+        const auto width = static_cast<int>(texture.image().width() * levelScale);
+        const auto height = static_cast<int>(texture.image().height() * levelScale);
 
         textures.setTexture2D(texture, 0);
 
@@ -1306,8 +1306,19 @@ struct GLRenderer::Impl {
 
         const auto glFormat = gl::toGLFormat(format);
 
+        // Callers pass tightly packed buffers (width * height * channels). The
+        // default GL_PACK_ALIGNMENT of 4 pads each destination row to a 4-byte
+        // boundary, so any format/width whose row stride isn't 4-aligned (RGB
+        // at width 1366 = 4098 bytes) drifts 2 bytes per row — the output
+        // skews diagonally and the per-row channel rotation grays the colors.
+        GLint prevAlign = 4;
+        glGetIntegerv(GL_PACK_ALIGNMENT, &prevAlign);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
         // this was size.width(), size.width() before refactor.. I assume it was an error
         glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.first, size.second, glFormat, GL_UNSIGNED_BYTE, data);
+
+        glPixelStorei(GL_PACK_ALIGNMENT, prevAlign);
     }
 
     void copyTextureToImage(Texture& texture) {
@@ -1316,7 +1327,7 @@ struct GLRenderer::Impl {
         auto& image = texture.image();
         auto& data = image.data();
         const auto channels = gl::numChannels(texture.format);
-        const auto newSize = static_cast<size_t>(image.width) * image.height * channels;
+        const auto newSize = static_cast<size_t>(image.width()) * image.height() * channels;
         data.resize(newSize);
 
 #ifdef __EMSCRIPTEN__
@@ -1340,13 +1351,13 @@ struct GLRenderer::Impl {
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *texId, 0);
 
-        const int npixels = static_cast<int>(image.width) * static_cast<int>(image.height);
+        const int npixels = static_cast<int>(image.width()) * static_cast<int>(image.height());
 
         if (channels == 4) {
-            glReadPixels(0, 0, image.width, image.height, GL_RGBA, GL_UNSIGNED_BYTE, data.data());
+            glReadPixels(0, 0, image.width(), image.height(), GL_RGBA, GL_UNSIGNED_BYTE, data.data());
         } else if (channels == 3) {
             std::vector<unsigned char> rgba(npixels * 4);
-            glReadPixels(0, 0, image.width, image.height, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+            glReadPixels(0, 0, image.width(), image.height(), GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
             for (int i = 0; i < npixels; ++i) {
                 data[i * 3 + 0] = rgba[i * 4 + 0];
                 data[i * 3 + 1] = rgba[i * 4 + 1];
@@ -1356,7 +1367,7 @@ struct GLRenderer::Impl {
             // GL_RG/GL_RED readback is not guaranteed by WebGL2.
             // Use the guaranteed RGBA path and pack into the target channel count.
             std::vector<unsigned char> rgba(npixels * 4);
-            glReadPixels(0, 0, image.width, image.height, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+            glReadPixels(0, 0, image.width(), image.height(), GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
             for (int i = 0; i < npixels; ++i) {
                 for (int c = 0; c < channels; ++c) {
                     data[i * channels + c] = rgba[i * 4 + c];

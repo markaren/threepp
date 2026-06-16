@@ -94,8 +94,8 @@ TEST_CASE("Cross: writeFramebuffer writes decodable images on every backend", "[
         ImageLoader il;
         auto img = il.load(p, 3, false);
         REQUIRE(img);
-        CHECK(img->width == 32);
-        CHECK(img->height == 16);
+        CHECK(img->width() == 32);
+        CHECK(img->height() == 16);
     }
     // (Wgpu surface capture — the in-flight swapchain frame — is exercised by
     // the examples' --shot flags; kept out of CI where surface acquisition on

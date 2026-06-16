@@ -156,14 +156,11 @@ TextureEntry& WgpuTextures::getOrCreateTexture(Texture* tex) {
 
     TextureEntry entry{};
     auto& img = tex->image();
-    auto w = img.width;
-    auto h = img.height;
+    auto w = img.width();
+    auto h = img.height();
     if (w == 0 || h == 0) return dummyTexture_;
 
-    // Detect float (HDR) vs byte data
-    bool isHdr = false;
-    try { (void)img.data<float>(); isHdr = true; }
-    catch (const std::bad_variant_access&) {}
+    const bool isHdr = img.isFloat();
 
     const bool needsMips = tex->generateMipmaps && filterUsesMips(tex->minFilter);
     const uint32_t mipLevels = needsMips ? calcMipLevels(w, h) : 1u;
@@ -283,8 +280,8 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
     TextureEntry entry{};
     auto& images = tex->images();
     if (images.size() < 6) return dummyCubeTexture_;
-    auto w = static_cast<uint32_t>(images[0].width);
-    auto h = static_cast<uint32_t>(images[0].height);
+    auto w = static_cast<uint32_t>(images[0].width());
+    auto h = static_cast<uint32_t>(images[0].height());
     if (w == 0 || h == 0) return dummyCubeTexture_;
 
     const bool needsMips = tex->generateMipmaps && filterUsesMips(tex->minFilter);
@@ -408,13 +405,11 @@ TextureEntry& WgpuTextures::getOrCreateEnvTexture2D(Texture* tex) {
 
     TextureEntry entry{};
     auto& img = tex->image();
-    auto w = img.width;
-    auto h = img.height;
+    auto w = img.width();
+    auto h = img.height();
     if (w == 0 || h == 0) return dummyTexture_;
 
-    bool isHdr = false;
-    try { (void)img.data<float>(); isHdr = true; }
-    catch (const std::bad_variant_access&) {}
+    const bool isHdr = img.isFloat();
 
     // Always generate a full mip chain for env maps so roughness-indexed sampling works.
     const uint32_t mipLevels = calcMipLevels(w, h);

@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 
 using namespace threepp;
 
@@ -376,7 +377,31 @@ void Object3D::updateMatrix() {
 
 void Object3D::updateMatrixWorld(bool force) {
 
-    if (this->matrixAutoUpdate) this->updateMatrix();
+    if (this->matrixAutoUpdate) {
+
+        this->updateMatrix();
+
+    } else if (!composedValid_ ||
+               std::memcmp(matrix->elements.data(), composedMatrix_.data(), sizeof(composedMatrix_)) != 0) {
+
+        // matrixAutoUpdate == false means `matrix` is driven externally:
+        // helpers alias another object's matrixWorld (CameraHelper, the light
+        // helpers), loaders bake static transforms, users write it directly.
+        // These writes used to propagate only because the unconditional
+        // every-frame compose at the scene root force-cascaded the world
+        // multiply to every descendant; with updateMatrix()'s early-out that
+        // cascade is gone, so poll the matrix bytes here instead. Mutations
+        // still show up on the very next frame, unchanged matrices still skip
+        // the multiply.
+        std::memcpy(composedMatrix_.data(), matrix->elements.data(), sizeof(composedMatrix_));
+        // Poison the PQS snapshot: if matrixAutoUpdate is re-enabled, the
+        // external matrix must be clobbered by a recompose (NaN never
+        // compares equal, so updateMatrix() cannot early-out on it).
+        composedPqs_.fill(std::numeric_limits<float>::quiet_NaN());
+        composedValid_ = true;
+
+        this->matrixWorldNeedsUpdate = true;
+    }
 
     if (this->matrixWorldNeedsUpdate || force) {
 

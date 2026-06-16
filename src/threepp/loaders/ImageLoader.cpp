@@ -3,20 +3,20 @@
 
 #ifndef STB_IMAGE_IMPLEMENTATION
 #if defined(__GNUC__) || defined(__clang__)
-// Temporarily disable specific warnings
 #pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wall"    // Disables all warnings
-#pragma GCC diagnostic ignored "-Wextra"  // Disables extra warnings
-#pragma GCC diagnostic ignored "-Wpedantic"  // Disables pedantic warnings
+#pragma GCC diagnostic ignored "-Wall"
+#pragma GCC diagnostic ignored "-Wextra"
+#pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 #define STB_IMAGE_IMPLEMENTATION
 #endif
 #include "stb_image.h"
 
 #if defined(__GNUC__) || defined(__clang__)
-// Re-enable the warnings
 #pragma GCC diagnostic pop
 #endif
+
+#include <cstring>
 
 using namespace threepp;
 
@@ -27,20 +27,34 @@ namespace {
         int width{};
         int height{};
         int channels;
-        unsigned char* pixels;
+        unsigned char* pixels = nullptr;
 
-        ImageStruct(const std::vector<unsigned char>& data, int channels, bool flipY): channels(channels) {
-            stbi_set_flip_vertically_on_load(flipY);
-            pixels = stbi_load_from_memory(data.data(), static_cast<int>(data.size()), &width, &height, nullptr, channels);
+        ImageStruct(const std::vector<unsigned char>& data, int channels): channels(channels) {
+            pixels = stbi_load_from_memory(data.data(), static_cast<int>(data.size()),
+                                           &width, &height, nullptr, channels);
         }
 
-        ImageStruct(const std::filesystem::path& imagePath, int channels, bool flipY): channels(channels) {
-            stbi_set_flip_vertically_on_load(flipY);
+        ImageStruct(const std::filesystem::path& imagePath, int channels): channels(channels) {
             pixels = stbi_load(imagePath.string().c_str(), &width, &height, nullptr, channels);
         }
 
-        [[nodiscard]] std::vector<unsigned char> get() const {
-            return {pixels, pixels + (channels * width * height)};
+        [[nodiscard]] bool ok() const noexcept { return pixels != nullptr; }
+
+        [[nodiscard]] std::vector<unsigned char> get(bool flipY) const {
+            const size_t rowBytes = static_cast<size_t>(channels) * width;
+            const size_t total = rowBytes * height;
+            std::vector<unsigned char> result(total);
+            if (flipY) {
+                for (int y = 0; y < height; ++y) {
+                    const int srcY = height - 1 - y;
+                    std::memcpy(result.data() + static_cast<size_t>(y) * rowBytes,
+                                pixels + static_cast<size_t>(srcY) * rowBytes,
+                                rowBytes);
+                }
+            } else {
+                std::memcpy(result.data(), pixels, total);
+            }
+            return result;
         }
 
         ~ImageStruct() {
@@ -56,22 +70,22 @@ std::optional<Image> ImageLoader::load(const std::filesystem::path& imagePath, i
         return std::nullopt;
     }
 
-    ImageStruct image{imagePath, channels, flipY};
+    ImageStruct image{imagePath, channels};
+    if (!image.ok()) return std::nullopt;
 
     return Image{
-            image.get(),
+            image.get(flipY),
             static_cast<unsigned int>(image.width),
-            static_cast<unsigned int>(image.height),
-            0};
+            static_cast<unsigned int>(image.height)};
 }
 
 std::optional<Image> ImageLoader::load(const std::vector<unsigned char>& data, int channels, bool flipY) {
 
-    ImageStruct image{data, channels, flipY};
+    ImageStruct image{data, channels};
+    if (!image.ok()) return std::nullopt;
 
     return Image{
-            image.get(),
+            image.get(flipY),
             static_cast<unsigned int>(image.width),
-            static_cast<unsigned int>(image.height),
-            0};
+            static_cast<unsigned int>(image.height)};
 }

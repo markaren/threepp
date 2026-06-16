@@ -41,9 +41,7 @@ void RenderTarget::setSize(unsigned int width, unsigned int height, unsigned int
         this->height = height;
         this->depth = depth;
 
-        this->texture->image().width = width;
-        this->texture->image().height = height;
-        this->texture->image().depth = depth;
+        this->texture->image() = Image(std::vector<unsigned char>{}, width, height, depth);
 
         this->dispose();
     }

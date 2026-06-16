@@ -66,6 +66,19 @@ Thus, you don't necessarily need to handle memory explicitly using `threepp`.
 Furthermore, materials, geometries and textures are automatically disposed of when they go out of scope.
 Yay!
 
+
+### A good fit for AI-assisted development
+
+- **Familiar API.** `threepp` mirrors the [three.js](https://github.com/mrdoob/three.js/)
+  API — well-represented in model training data. This gives an
+  agent context and a head start on the design rationale.
+- **Few dependencies.** Small enough to build without dependency hell and reason about
+  end-to-end.
+- **Full access.** Almost entirely first-party source — an agent can read and modify any layer, from
+  the scene graph to the path-tracer's shaders.
+- **Tight write → compile → display → save → evaluate loop.** Low overhead from code to a
+  rendered image and back: compile, render (headless if needed), screenshot, judge, iterate.
+
 ## Example
 
 ```cpp
@@ -279,14 +292,14 @@ set_languages("c++20")
 
 ## Gallery
 
-|                                                                                                                       |                                                                                                         |
-|-----------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------|
-| ![Ocean night](doc/screenshots/deferred_ocean_night.png) *Lighthouse at night — deferred hybrid, volumetric beam ([vulkan_ocean](examples/vulkan/vulkan_ocean.cpp))* | ![Bistro](doc/screenshots/bistro.png) *Lumberyard Bistro, path traced ([vulkan_bistro](examples/vulkan/vulkan_bistro.cpp))* |
-| ![Shooter](doc/screenshots/tps.png) *Third-person shooter ([projects/Shooter](examples/projects/Shooter))*             | ![Lidar](doc/screenshots/lidar.png) *LIDAR*                                       |
-| ![Depth sensor](doc/screenshots/depth_sensor.png) *Depth sensor simulation*                                            | ![Water+sky](doc/screenshots/water_sky.png) *Water and sky shaders*                                     |
-| ![Animation](doc/screenshots/animation.png) *Skinned animation*                                                        | ![Shadows](doc/screenshots/Shadows.PNG) *Shadow mapping*                                                |
-| ![Crane](doc/screenshots/crane.png) *Crane3R ([projects/Crane3R](examples/projects/Crane3R))*                          | ![MotorController](doc/screenshots/motor_controller.PNG) *Motor control ([projects/MotorControl](examples/projects/MotorControl))* |
-| ![Optimization](doc/screenshots/Optimization.PNG) *Optimization playground ([projects/Optimization](examples/projects/Optimization))* | ![colnav](doc/screenshots/colnav.png) *Collision avoidance*                                             |
-| ![Spline Editor](doc/screenshots/spline_editor.png) *Spline editor*                                                    | ![SVG UI](doc/screenshots/svg_ui.png) *SVG-based UI*                                                    |
-| ![SVG](doc/screenshots/tiger_svg.png) *SVG loader*                                                                     | ![Fonts](doc/screenshots/fonts.png) *Text rendering*                                                    |
-| ![FlyControls](doc/screenshots/fly.PNG) *Fly controls*                                                                 | ![Chess](doc/screenshots/chess.png) *Chess*                                                             |
+|                                                                                                                                                                      |                                                                                                                                    |
+|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
+| ![Ocean night](doc/screenshots/deferred_ocean_night.png) *Lighthouse at night — deferred hybrid, volumetric beam ([vulkan_ocean](examples/vulkan/vulkan_ocean.cpp))* | ![Bistro](doc/screenshots/bistro.png) *Lumberyard Bistro, path traced ([vulkan_bistro](examples/vulkan/vulkan_bistro.cpp))*        |
+| ![Shooter](doc/screenshots/tps.png) *Third-person shooter ([projects/Shooter](examples/projects/Shooter))*                                                           | ![Lidar](doc/screenshots/lidar.png) *LIDAR*                                                                                        |
+| ![Inference](doc/screenshots/detect.png) *RF-DETR detection*                                                                                                         | ![Water+sky](doc/screenshots/water_sky.png) *Water and sky shaders*                                                                |
+| ![Animation](doc/screenshots/animation.png) *Skinned animation*                                                                                                      | ![Shadows](doc/screenshots/Shadows.PNG) *Shadow mapping*                                                                           |
+| ![Crane](doc/screenshots/crane.png) *Crane3R ([projects/Crane3R](examples/projects/Crane3R))*                                                                        | ![MotorController](doc/screenshots/motor_controller.PNG) *Motor control ([projects/MotorControl](examples/projects/MotorControl))* |
+| ![Optimization](doc/screenshots/Optimization.PNG) *Optimization playground ([projects/Optimization](examples/projects/Optimization))*                                | ![colnav](doc/screenshots/colnav.png) *Collision avoidance*                                                                        |
+| ![Spline Editor](doc/screenshots/spline_editor.png) *Spline editor*                                                                                                  | ![SVG UI](doc/screenshots/robot_cell_capture.png) *SVG-based UI*                                                                   |
+| ![SVG](doc/screenshots/tiger_svg.png) *SVG loader*                                                                                                                   | ![Fonts](doc/screenshots/fonts.png) *Text rendering*                                                                               |
+| ![FlyControls](doc/screenshots/fly.PNG) *Fly controls*                                                                                                               | ![Chess](doc/screenshots/chess.png) *Chess*                                                                                        |

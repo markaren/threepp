@@ -33,6 +33,10 @@ namespace threepp {
             std::cout << "\n> ";
             std::string line;
             if (std::getline(std::cin, line)) {
+                // piped stdin on Windows delivers "2\r" — strip trailing whitespace
+                while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
+                    line.pop_back();
+                }
 #ifdef THREEPP_WITH_WGPU
                 if (line == "2") chosen = GraphicsAPI::WebGPU;
                 else if (line == "3") chosen = GraphicsAPI::Cross;

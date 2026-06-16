@@ -1,6 +1,6 @@
 #version 460
 
-// Phase 1 smoke test: clear the swapchain image to a constant magenta.
+// Smoke test: clear the swapchain image to a constant magenta.
 // Bound as a storage image at set=0 binding=0; one invocation per pixel.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;

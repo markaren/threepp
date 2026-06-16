@@ -7,7 +7,7 @@
 
 #include "vulkan_shared.h"
 
-// Phase 9: this shader fills a struct payload (radiance leaving the hit +
+// This shader fills a struct payload (radiance leaving the hit +
 // sampled bounce direction + throughput multiplier). raygen handles the
 // path loop; we just shade the hit and pick where the path goes next.
 //
@@ -49,15 +49,16 @@ layout(buffer_reference, scalar) readonly buffer VertexBuf { float p[]; };
 layout(buffer_reference, scalar) readonly buffer NormalBuf  { float n[]; };
 layout(buffer_reference, scalar) readonly buffer IndexBuf   { uint  i[]; };
 layout(buffer_reference, scalar) readonly buffer UvBuf      { float u[]; };
-layout(buffer_reference, scalar) readonly buffer FoamBuf    { float f[]; };
+layout(buffer_reference, scalar) readonly buffer ColorBuf   { float c[]; };// per-vertex RGB (vertexColors)
 
 struct GeometryDesc {
     uint64_t vertexAddress;
     uint64_t normalAddress;
     uint64_t indexAddress;
     uint64_t uvAddress;// 0 == no UV attribute
-    uint64_t foamAddress;// 0 == no foam attribute (per-vertex float; written by water_displace.comp for ocean meshes)
+    uint64_t foamAddress;// 0/1 flag (not an address): 1 == FFT-displaced ocean surface (world-space foam + thin-shell water)
     uint64_t prevVertexAddress;// previous frame deformed positions (skinned/displaced); == vertexAddress for static
+    uint64_t colorAddress;// 0 == no per-vertex color (material.vertexColors off or geometry has no "color")
     uint     indexed;
     uint     _pad;
 };
@@ -171,6 +172,44 @@ layout(set = 0, binding = 32) uniform sampler2D oceanFineHeight;
 // foam values with their vertex indices. Gated by pc.oceanFoamTileSize > 0.
 layout(set = 0, binding = 44) uniform sampler2D oceanFoamWorld;
 
+// Baked tileable foam detail (RG8, mipped): R = micro bubble brightness
+// (designed for a 4 m world mapping), G = ridged lace/filament pattern
+// (12 m mapping). Replaces the per-pixel procedural noise octaves in the
+// foam block — a sampled texture is band-limited at distance via its mip
+// chain (no shimmer under accumulation) and 2 fetches replace ~20 hash
+// evaluations. Mirrors the deferred set's binding 34.
+layout(set = 0, binding = 45) uniform sampler2D foamDetailTex;
+
+// Bicubic B-spline reconstruction of the world foam accumulator via 4
+// bilinear taps (Sigg & Hadwiger, GPU Gems 2 ch. 20). Plain bilinear
+// renders every isolated foam texel as a soft axis-aligned SQUARE (the
+// bilinear tent's support is a square), which reads as a grid artifact up
+// close; the cubic kernel reconstructs round, C1-smooth blobs. Kept in
+// lockstep with deferred_shade.comp.
+float sampleFoamBicubic(vec2 uv) {
+    const vec2 res = vec2(textureSize(oceanFoamWorld, 0));
+    const vec2 st  = uv * res - 0.5;
+    const vec2 i   = floor(st);
+    const vec2 f   = st - i;
+    const vec2 f2  = f * f;
+    const vec2 f3  = f2 * f;
+    const vec2 w0  = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w1  = (3.0 * f3 - 6.0 * f2 + 4.0)       * (1.0 / 6.0);
+    const vec2 w2  = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w3  = f3 * (1.0 / 6.0);
+    const vec2 g0  = w0 + w1;
+    const vec2 g1  = w2 + w3;
+    // Two sample coords per axis, each placed so ONE bilinear fetch
+    // integrates a weighted texel pair; REPEAT sampler handles the wrap.
+    const vec2 c0  = (i - 0.5 + w1 / g0) / res;
+    const vec2 c1  = (i + 1.5 + w3 / g1) / res;
+    const float t00 = textureLod(oceanFoamWorld, vec2(c0.x, c0.y), 0.0).r;
+    const float t10 = textureLod(oceanFoamWorld, vec2(c1.x, c0.y), 0.0).r;
+    const float t01 = textureLod(oceanFoamWorld, vec2(c0.x, c1.y), 0.0).r;
+    const float t11 = textureLod(oceanFoamWorld, vec2(c1.x, c1.y), 0.0).r;
+    return g0.y * (g0.x * t00 + g1.x * t10) + g1.y * (g0.x * t01 + g1.x * t11);
+}
+
 // Emissive-mesh NEE: each emissive triangle is packed as 4 vec4
 // (v0.xyz/area, v1.xyz/cumPower, v2.xyz/power, emission.rgb/_pad).
 // The host walks the scene each frame, transforms triangle vertices to
@@ -235,7 +274,7 @@ layout(set = 0, binding = 43, rgba32f) uniform readonly  image2D giResLoRead;
 // payload.primaryAlbedo; raygen owns the temporal-blend write to the
 // ping-pong albedo accumulator (bindings 35 write / 36 read).
 
-// Phase 11: PMREM mip count comes via the same push-constant block used by
+// PMREM mip count comes via the same push-constant block used by
 // raygen. .x is raygen's sampleIndex (not read here); .y is envMipCount.
 layout(push_constant) uniform Pc {
     uint sampleIndex;
@@ -277,9 +316,10 @@ layout(location = 2) rayPayloadEXT Payload giSubPayload;
 // photonData) that some of the helpers reference.
 #include "shade_common.glsl"
 
-// ───── ReSTIR DI — Stage 1a (init RIS, no temporal/spatial reuse) ─────
-// One reservoir per primary-shading invocation; lives in registers and is
-// not persisted across frames (no SSBO yet — Stage 1b adds temporal reuse).
+// ───── ReSTIR DI — Stage 1a (init RIS) ─────
+// One reservoir per primary-shading invocation, built in registers via RIS.
+// Temporal reuse (persisted across frames via SSBO) and spatial reuse are
+// applied later — see the Stage 1b / 1c sections below.
 //
 // lightType encoding:
 //   < 0      : sentinel "no candidate" / env (env is NEE'd separately,
@@ -325,18 +365,17 @@ void finalizeReservoir(inout Reservoir r) {
 // represented as (xs, ns, Lo, omegaI) — a virtual point sample where
 //   xs      = world-space position of the first indirect hit,
 //   ns      = shading normal at xs,
-//   Lo      = outgoing radiance at xs (one-bounce direct in Stage 1a — full
+//   Lo      = outgoing radiance at xs (one-bounce direct at init — full
 //             path-tracer continuation from xs lives in raygen, not here),
 //   omegaI  = direction from the primary surface point to xs.
 //
 // Stage 1a generates exactly one candidate per pixel per frame via BSDF
 // sampling from the primary, traces the sub-ray, and shades xs (via the
 // recursive chit invocation) to obtain Lo. The reservoir struct + helpers
-// are scaffolded here so Stage 1b can add temporal reuse (persistent
-// reservoir ping-pong) and Stage 1c can add spatial reuse without rewriting
-// the data layout. At M=1 the contribution collapses to the classic MC
-// bounce-1 estimate (= bs.weight · Lo); the variance reduction kicks in at
-// M>1 when neighbours/history contribute via RIS.
+// feed temporal reuse (persistent reservoir ping-pong) and spatial reuse —
+// the Stage 1b / 1c sections below. At M=1 the contribution collapses to the
+// classic MC bounce-1 estimate (= bs.weight · Lo); the variance reduction
+// kicks in at M>1 when neighbours/history contribute via RIS.
 struct GiReservoir {
     vec3  xs;      // sample position (world space)
     vec3  ns;      // sample normal (world space)
@@ -531,7 +570,11 @@ void main() {
     if (gdesc.foamAddress != 0ul && pc.oceanFoamTileSize > 0.0) {
         const vec3 hitWorld = gl_WorldRayOriginEXT + gl_HitTEXT * gl_WorldRayDirectionEXT;
         const vec2 uv = hitWorld.xz / pc.oceanFoamTileSize;
-        foamCoverage = clamp(texture(oceanFoamWorld, uv).r, 0.0, 1.0);
+        // Bicubic + 1.3 gain: the B-spline kernel approximates rather than
+        // interpolates, attenuating an isolated single-texel whitecap to
+        // ~0.44 of its stored value — the gain restores it; patch interiors
+        // already read ~1 and just clamp.
+        foamCoverage = clamp(sampleFoamBicubic(uv) * 1.3, 0.0, 1.0);
     }
 
     const vec3 nObj = normalize(w * n0 + attribs.x * n1 + attribs.y * n2);
@@ -600,10 +643,20 @@ void main() {
             const vec2 uvA = (mdesc.uvTransform * vec3(unlitUv, 1.0)).xy;
             albedoSample = texture(albedoMaps[idxClamped], uvA).rgb;
         }
+        // Per-vertex color (material.vertexColors) — MeshBasicMaterial honours
+        // it in three.js too. Same linear-space multiply as the lit path.
+        vec3 unlitVtxCol = vec3(1.0);
+        if (gdesc.colorAddress != 0ul) {
+            ColorBuf cb = ColorBuf(gdesc.colorAddress);
+            const vec3 c0 = vec3(cb.c[idx.x * 3 + 0], cb.c[idx.x * 3 + 1], cb.c[idx.x * 3 + 2]);
+            const vec3 c1 = vec3(cb.c[idx.y * 3 + 0], cb.c[idx.y * 3 + 1], cb.c[idx.y * 3 + 2]);
+            const vec3 c2 = vec3(cb.c[idx.z * 3 + 0], cb.c[idx.z * 3 + 1], cb.c[idx.z * 3 + 2]);
+            unlitVtxCol = w * c0 + attribs.x * c1 + attribs.y * c2;
+        }
         const vec3 hitPosUnlit = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
         // Unlit: emit base color as direct radiance. Route to diff channel
         // (unlit is view-independent by definition).
-        payload.radianceDiff  = mdesc.albedo * albedoSample;
+        payload.radianceDiff  = mdesc.albedo * albedoSample * unlitVtxCol;
         payload.radianceSpec  = vec3(0.0);
         payload.brdfWeight    = vec3(0.0);
         payload.nextOrigin    = vec3(0.0);
@@ -722,6 +775,20 @@ void main() {
     }
     vec3 albedo = mdesc.albedo * albedoSample;
 
+    // Per-vertex color (material.vertexColors). Barycentric-interpolated RGB,
+    // modulates albedo — matches three.js and the raster gbuffer's vColor
+    // multiply so RasterFirst and ReferencePT agree. colorAddress is 0 when the
+    // material doesn't opt in or the geometry has no "color" attribute. Vertex
+    // colors are authored in the working (linear) space, same as mdesc.albedo,
+    // so a plain multiply is correct.
+    if (gdesc.colorAddress != 0ul) {
+        ColorBuf cb = ColorBuf(gdesc.colorAddress);
+        const vec3 c0 = vec3(cb.c[idx.x * 3 + 0], cb.c[idx.x * 3 + 1], cb.c[idx.x * 3 + 2]);
+        const vec3 c1 = vec3(cb.c[idx.y * 3 + 0], cb.c[idx.y * 3 + 1], cb.c[idx.y * 3 + 2]);
+        const vec3 c2 = vec3(cb.c[idx.z * 3 + 0], cb.c[idx.z * 3 + 1], cb.c[idx.z * 3 + 2]);
+        albedo *= w * c0 + attribs.x * c1 + attribs.y * c2;
+    }
+
     // glTF packs roughness in .g and metalness in .b; threepp's metalnessMap /
     // roughnessMap typically point at the same packed texture, so the bindless
     // cache dedupes to a single slot. Multiplicative — matches three.js.
@@ -746,15 +813,15 @@ void main() {
     // rather than tinted glass-foam. No-op when foamCoverage = 0.
     float foamMask = 0.0;
     if (foamCoverage > 0.0) {
-        // Foam shading is two-layer:
-        //   - MACRO fBm (~5 m features) gates the coverage mask so the foam
-        //     pool edges break up organically rather than reading as a
-        //     bilinear ramp from per-vertex interpolation.
-        //   - MICRO value-noise (~0.15 m features) modulates the WITHIN-foam
-        //     brightness and roughness — this is what gives dense foam its
-        //     bubble look instead of flat paint. Two-tone (off-white peaks,
-        //     mid-gray valleys) + a small specular catch on peaks via the
-        //     roughness lerp produces the look the reference image has.
+        // Whitewater lifecycle mask — kept in lockstep with shadeWater in
+        // deferred_shade.comp (the deferred path is the demo default; this
+        // is the PT-reference twin). The world foam accumulator decays
+        // exponentially, so COVERAGE IS FRESHNESS:
+        //   fresh (≈1)  — near-solid sheet, micro-bubble texture
+        //   aging (mid) — fBm pools bite harder as coverage drops, tearing
+        //                 the sheet into patches
+        //   residue     — a ridged filament web (the lace a collapsed
+        //                 whitecap leaves behind) outlives the sheet
         // A slow time drift (driven by sampleIndex so it works without a
         // separate time uniform) prevents dense foam from reading as a
         // static texture during long stationary camera shots.
@@ -763,26 +830,51 @@ void main() {
         const float t = float(pc.sampleIndex) * (1.0 / 60.0);   // seconds-ish
         const vec2 drift = vec2(0.42, 0.71) * t * 0.18;          // m/s scale
 
-        // MACRO mask noise. fBm at low frequency (~5 m features) gives
-        // soft, organic pool edges. Scaled to subtract a sizable chunk
-        // from coverage so foam appears only where coverage clearly wins.
-        const vec2 wxzMacro = wxz * 0.18 + drift;
-        const float macroN  = fbm4(wxzMacro);
-        foamMask = smoothstep(0.05, 0.70, foamCoverage - macroN * 0.45);
+        // Detail from the baked foam tile (binding 45). Manual LOD — ray
+        // stages have no derivatives; a distance-based estimate (pixel angle
+        // ≈ 0.001 rad, dist = ray length to this hit) lands within ±1 mip of
+        // the true footprint, indistinguishable for band-limited noise.
+        const float lodMicro = log2(max(1.0, gl_HitTEXT * 0.128)); // 512 texels / 4 m · 0.001
+        const float lodLace  = log2(max(1.0, gl_HitTEXT * 0.0427));// 512 texels / 12 m · 0.001
+        const float lodEdge  = log2(max(1.0, gl_HitTEXT * 0.064)); // 512 texels / 8 m · 0.001
 
-        // MICRO bubble detail. Two octaves of value noise at small scale
-        // (~0.15 m). Animated with anti-phase drift so the bubble pattern
-        // shifts independently of the pool boundary.
-        const vec2 wxzMicro = wxz * 6.5 - drift * 0.4;
-        const float micro   = vnoise21(wxzMicro) * 0.65 +
-                              vnoise21(wxzMicro * 2.3) * 0.35;
+        // Sheet: solid where coverage beats the pool noise; the noise bite
+        // scales with age so fresh caps read unbroken. Calibrated to
+        // foam_world.comp's GRADED soft-knee deposits (solid from coverage
+        // ≈ 0.55) — retune the two together.
+        //
+        // The coverage accumulator only resolves ~1 m (cascade-0 texel bumps
+        // survive the graded deposit), so a sheet edge cut purely by coverage
+        // reads TEXELATED. A zero-mean mid-frequency sample of the detail
+        // tile (R over an 8 m mapping → 0.3–1 m features) erodes the
+        // threshold so the boundary detail comes from the texture — same
+        // trick that fixed the lace streaks.
+        const float pools = fbm4(wxz * 0.18 + drift);
+        const float edgeN = textureLod(foamDetailTex, wxz * 0.125 + drift * 0.07, lodEdge).r;
+        const float sheet = smoothstep(0.03, 0.42,
+                foamCoverage - pools * mix(0.50, 0.22, foamCoverage)
+                             - (edgeN - 0.5) * 0.30);
+        // Lace: ridged filament pattern from the detail tile (~1.2 m cells
+        // over the 12 m mapping). Fresh foam widens the band until it merges
+        // with the sheet; old foam keeps only the filament cores.
+        const float lace = textureLod(foamDetailTex, wxz * (1.0 / 12.0) + drift * 0.12, lodLace).g;
+        const float web  = smoothstep(0.55, 0.80, lace * (0.55 + 0.45 * foamCoverage)) *
+                           smoothstep(0.03, 0.22, foamCoverage);
+        foamMask = max(sheet, web * 0.8);
+
+        // MICRO bubble detail from the tile's R channel (~0.15 m features
+        // over the 4 m mapping). Animated with anti-phase drift so the
+        // bubble pattern shifts independently of the pool boundary.
+        const float micro = textureLod(foamDetailTex, wxz * 0.25 - drift * 0.1, lodMicro).r;
 
         // Two-tone foam colour: peaks light (off-white with slight blue),
         // valleys mid-gray. The luminance variation alone is responsible
-        // for ~80% of the "looks like foam" effect.
+        // for ~80% of the "looks like foam" effect. Fresh caps lift toward
+        // the bright end on top of the bubble modulation.
         const vec3 foamHi = vec3(0.97, 0.99, 1.00);
-        const vec3 foamLo = vec3(0.55, 0.62, 0.66);
-        const vec3 foamCol = mix(foamLo, foamHi, micro);
+        const vec3 foamLo = vec3(0.62, 0.68, 0.72);
+        vec3 foamCol = mix(foamLo, foamHi, micro);
+        foamCol = mix(foamCol, foamHi, 0.35 * foamCoverage);
 
         albedo = mix(albedo, foamCol, foamMask);
         // Roughness: 0.45..1.0 range. Bubble peaks (high micro) get the
@@ -1023,7 +1115,7 @@ void main() {
         if (isThinShell) {
             // ── Deterministic split (variance reduction for thin shells) ──
             const vec3 reflectDir    = reflect(I, H);
-            const vec3 reflectOrigin = hitPos + N * 1e-3;
+            const vec3 reflectOrigin = hitPos + N * rtSelfEps(hitPos);
             shadowVisibility = 1.0;
             traceRayEXT(topAS,
                         gl_RayFlagsTerminateOnFirstHitEXT |
@@ -1039,7 +1131,7 @@ void main() {
 
             if (!tir) {
                 wDir    = normalize(refr);
-                wOrigin = hitPos - N * 1e-3;
+                wOrigin = hitPos - N * rtSelfEps(hitPos);
                 tWeight = (1.0 - F) * glassTint * channelMask / (eta * eta);
             } else {
                 // TIR — Schlick gave F=1 already, full reflection captured by
@@ -1050,18 +1142,18 @@ void main() {
             // ── Stochastic split (original — multi-bounce intact for closed glass) ──
             if (urand(seed) < F) {
                 wDir       = reflect(I, H);
-                wOrigin    = hitPos + N * 1e-3;
+                wOrigin    = hitPos + N * rtSelfEps(hitPos);
                 tWeight    = vec3(1.0);
                 wasReflect = true;
             } else if (tir) {
                 // TIR — fall back to mirror reflect.
                 wDir       = reflect(I, H);
-                wOrigin    = hitPos + N * 1e-3;
+                wOrigin    = hitPos + N * rtSelfEps(hitPos);
                 tWeight    = vec3(1.0);
                 wasReflect = true;
             } else {
                 wDir    = normalize(refr);
-                wOrigin = hitPos - N * 1e-3;
+                wOrigin = hitPos - N * rtSelfEps(hitPos);
                 tWeight = glassTint * channelMask / (eta * eta);
                 // Closed-mesh refract — update the ray's current medium so
                 // the next bounce knows where it is (entering glass: medium
@@ -1367,7 +1459,7 @@ void main() {
                             gl_RayFlagsSkipClosestHitShaderEXT |
                             gl_RayFlagsNoOpaqueEXT,
                             0xff, 1, 0, 1,
-                            hitPos + N * 1e-3, 0.0, liV.dir, liV.maxDist, 1);
+                            hitPos + N * rtSelfEps(hitPos), 0.0, liV.dir, liV.maxDist, 1);
                 if (shadowVisibility <= 0.0) {
                     r.W = 0.0; r.W_sum = 0.0;// occluded — let reuse recover a visible sample
                 }
@@ -1469,7 +1561,17 @@ void main() {
             const ivec2 sz = imageSize(prevGbufImage);
             if (sz.x > 0 && sz.y > 0) {
                 const bool camMoving = (pc.motionFlags & 2u) != 0u;
-                const uint spMax     = camMoving ? 2u : 5u;
+                // Convergence-skip: once a STATIC pixel's temporal history is
+                // deep, its DI estimate is converged and further spatial taps
+                // only add cost — and risk re-injecting the very fireflies
+                // spatial reuse can perpetuate (see the W-cap at line ~1522).
+                // Skip taps past FC 48 (matches WGPU's spatial-skip threshold).
+                // FC is halved on motion and the camMoving branch keeps 2 taps
+                // regardless, so moving pixels are unaffected. spMax==0 ⇒ the
+                // loop below no-ops; the pre-spatial snapshot/persist (above)
+                // and finalizeReservoir (below) still run unchanged.
+                const float pixelFc  = imageLoad(accumImage, ivec2(gl_LaunchIDEXT.xy)).w;
+                const uint spMax     = camMoving ? 2u : (pixelFc > 48.0 ? 0u : 5u);
                 const float mTarget  = 20.0;
                 const uint curMeshId = uint(gl_InstanceCustomIndexEXT) + 1u;
                 const float curDistC = length(hitPos - pcam.prevCamPosX.xyz);
@@ -1561,7 +1663,7 @@ void main() {
                             gl_RayFlagsSkipClosestHitShaderEXT |
                             gl_RayFlagsNoOpaqueEXT,
                             0xff, 1, 0, 1,
-                            hitPos + N * 1e-3, 0.0, lDir, lMaxDist, 1);
+                            hitPos + N * rtSelfEps(hitPos), 0.0, lDir, lMaxDist, 1);
                 if (shadowVisibility > 0.0) {
                     // BRDF eval at chosen direction (mirrors per-light eval below).
                     const vec3 H = normalize(V + lDir);
@@ -1666,7 +1768,7 @@ void main() {
     }
     const vec3 ambient = albedo * (1.0 - metalness) * lights.ambient * baseScale * ao;
 
-    // Phase 9 v2: probabilistic spec/diffuse lobe selection so polished
+    // Probabilistic spec/diffuse lobe selection so polished
     // metals reflect nearby geometry, not just the env probe. p_spec mirrors
     // the WGPU PT (mix(0.5, 0.98, metalness)). The selected lobe's BRDF·cos
     // is divided by its sampling pdf and by p_spec / (1-p_spec) so the
@@ -1803,7 +1905,7 @@ void main() {
         giSubPayload.hitNormal       = vec3(0.0);
 
         traceRayEXT(topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
-                    hitPos + N * 1e-3, 0.001, bs.dir, 10000.0, 2);
+                    hitPos + N * rtSelfEps(hitPos), 0.001, bs.dir, 10000.0, 2);
 
         seed = giSubPayload.seed;
 
@@ -1949,7 +2051,7 @@ void main() {
         giSubPayload.hitNormal       = vec3(0.0);
 
         traceRayEXT(topAS, gl_RayFlagsNoneEXT, 0xff, 0, 0, 0,
-                    hitPos + N * 1e-3, 0.001, bs.dir, 10000.0, 2);
+                    hitPos + N * rtSelfEps(hitPos), 0.001, bs.dir, 10000.0, 2);
 
         seed = giSubPayload.seed;
 
@@ -2192,7 +2294,13 @@ void main() {
                 // M ≈ 10-15, and with M-cap-per-tap of 4, 3 taps already
                 // reach ~12-16 added M. Saves ~40% of spatial cost for
                 // imperceptible variance increase on the cases GI targets.
-                const uint  spMax    = camMoving ? 1u : 3u;
+                // Convergence-skip: drop spatial taps once the pixel is
+                // converged. GI converges slower than DI, so this uses the
+                // SAME FC>100 threshold the GI fast-path (above) treats as
+                // converged — not DI's 48 — to avoid under-converging indirect
+                // light. spMax==0 ⇒ loop no-ops; finalizeGiReservoir still runs.
+                const float pixelFc  = imageLoad(accumImage, ivec2(gl_LaunchIDEXT.xy)).w;
+                const uint  spMax    = camMoving ? 1u : (pixelFc > 100.0 ? 0u : 3u);
                 const float mTarget  = 20.0;
                 const uint  curMeshId = uint(gl_InstanceCustomIndexEXT) + 1u;
                 const float curDistC  = length(hitPos - pcam.prevCamPosX.xyz);
@@ -2272,7 +2380,7 @@ void main() {
                             gl_RayFlagsSkipClosestHitShaderEXT |
                             gl_RayFlagsNoOpaqueEXT,
                             0xff, 1, 0, 1,
-                            hitPos + N * 1e-3, 0.0, omegaI_chosen,
+                            hitPos + N * rtSelfEps(hitPos), 0.0, omegaI_chosen,
                             distChosen - 1e-2, 1);
                 const float vis = shadowVisibility;
 
@@ -2346,7 +2454,7 @@ void main() {
                             gl_RayFlagsSkipClosestHitShaderEXT |
                             gl_RayFlagsNoOpaqueEXT,
                             0xff, 1, 0, 1,
-                            hitPos + N * 1e-3, 0.0, omegaI_chosen,
+                            hitPos + N * rtSelfEps(hitPos), 0.0, omegaI_chosen,
                             distChosen - 1e-2, 1);
                 const float vis = shadowVisibility;
                 if (vis > 0.0) {
@@ -2369,10 +2477,9 @@ void main() {
         giConsumed   = true;
     }
 
-    // Phase 1: route ALL contributions to diff channel for now. Phase 1b
-    // will split litDiff and litSpec at each NEE site for proper channel
-    // separation. Keeping spec=0 for this initial split preserves current
-    // behavior pixel-identical while the infrastructure lands.
+    // All contributions currently route to the diff channel (spec=0). A
+    // proper split would separate litDiff and litSpec at each NEE site; the
+    // payload channels exist for it but the PT accumulator is single-channel.
     if (giConsumed) {
         // GI absorbed bounce 1's contribution; raygen's step 1 trace continues
         // from xs at bounce 2. payload.flags bit 3 (=8u) is a documentation
@@ -2390,7 +2497,7 @@ void main() {
         payload.radianceDiff = emissiveOut + ambient + lit;
         payload.radianceSpec = vec3(0.0);
         payload.brdfWeight   = brdfWeight;
-        payload.nextOrigin   = hitPos + N * 1e-3;
+        payload.nextOrigin   = hitPos + N * rtSelfEps(hitPos);
         payload.nextDir      = bounceDir;
         payload.flags        = pathFlags;
     }

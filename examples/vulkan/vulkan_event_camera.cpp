@@ -286,8 +286,8 @@ int main() {
         ImGui::Text("Frame rate:     %.0f Hz", static_cast<double>(smoothedFps));
         ImGui::Text("Readback cost:  %.2f ms", static_cast<double>(lastCaptureMs));
         ImGui::Text("Sensor res:     %u × %u",
-                    static_cast<unsigned>(eventVizTex->image().width),
-                    static_cast<unsigned>(eventVizTex->image().height));
+                    static_cast<unsigned>(eventVizTex->image().width()),
+                    static_cast<unsigned>(eventVizTex->image().height()));
         // Sparse event stream stats. Counts of bright vs dark events
         // computed by walking the host buffer — costs ~10 µs for typical
         // counts so safe to do inline; switch to a GPU-side polarity

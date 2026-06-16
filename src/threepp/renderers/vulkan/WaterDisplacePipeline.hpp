@@ -29,12 +29,11 @@ namespace threepp::vulkan {
         // combined-image-samplers (3 cascades × 2 images).
         static constexpr uint32_t kMaxOceans = 16;
 
-        // Must match water_displace.comp's `Pc` struct (128 bytes total):
-        // 5 × VkDeviceAddress (40) + 22 × u32/float (88).
+        // Must match water_displace.comp's `Pc` struct (120 bytes total):
+        // 4 × VkDeviceAddress (32) + 22 × u32/float (88).
         struct PushConstants {
             VkDeviceAddress posOut;
             VkDeviceAddress normOut;
-            VkDeviceAddress foamOut;
             VkDeviceAddress disturbAddr;  // 0 = no disturbance buffer
             VkDeviceAddress wakeTrailAddr;// 0 = no historical trail
             uint32_t        vertexCount;

@@ -28,7 +28,7 @@ struct TextSprite::Impl {
         this->text_ = text;
 
         auto image = createText(text);
-        imgAspect_ = static_cast<float>(image.width) / static_cast<float>(image.height);
+        imgAspect_ = static_cast<float>(image.width()) / static_cast<float>(image.height());
 
         const auto material = that->materialAs<MaterialWithMap>();
         material->map->images() = {image};
@@ -42,7 +42,7 @@ struct TextSprite::Impl {
         const auto& map = that->materialAs<MaterialWithMap>()->map;
         if (map->images().empty()) return;
         auto& image = map->image();
-        for (int i = 0; i < image.width * image.height; ++i) {
+        for (int i = 0; i < static_cast<int>(image.width() * image.height()); ++i) {
             image.data()[i * 4 + 0] = 255 * color.r;
             image.data()[i * 4 + 1] = 255 * color.g;
             image.data()[i * 4 + 2] = 255 * color.b;

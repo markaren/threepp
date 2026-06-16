@@ -45,6 +45,7 @@ struct DrawInfo {
     uint64_t uvAddr;
     uint64_t prevPosAddr;
     uint64_t indexAddr;        // 0 → non-indexed (gl_VertexIndex IS the vertex ID)
+    uint64_t colorAddr;        // 0 → no per-vertex color (material.vertexColors off / geometry has no "color")
     uint     instanceCustomIndex;
     uint     flags;
     uint     indexed;          // 0 / 1
@@ -61,6 +62,7 @@ layout(location = 3) flat out uint vInstanceIdx;
 layout(location = 4) flat out uint vFlags;
 layout(location = 5) out vec2 vUv;
 layout(location = 6) out vec3 vWorldPos;
+layout(location = 7) out vec3 vColor;// per-vertex color (vec3(1) when no "color" / vertexColors off)
 
 vec3 fetchVec3(uint64_t addr, uint i) {
     FloatBuf b = FloatBuf(addr);
@@ -101,6 +103,10 @@ void main() {
     vFlags         = d.flags;
     vUv            = inUv;
     vWorldPos      = worldPos.xyz;
+    // Per-vertex color (material.vertexColors). gbuffer.frag multiplies albedo
+    // by this; white when the mesh has no "color" attribute so the multiply is
+    // a no-op. Linear working space — matches the material albedo.
+    vColor         = (d.colorAddr != 0ul) ? fetchVec3(d.colorAddr, vid) : vec3(1.0);
 
     gl_Position    = cam.currVPjittered * worldPos;
     // Per-mesh polygon offset (decals): bias clip-z so the fragment's NDC depth

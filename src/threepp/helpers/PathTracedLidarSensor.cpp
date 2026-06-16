@@ -21,6 +21,11 @@ PathTracedLidarSensor::PathTracedLidarSensor(const LidarModel& model, float maxR
     buildModelBeams(model);
 }
 
+PathTracedLidarSensor::PathTracedLidarSensor(float fovY, unsigned int width, unsigned int height, float maxRange) {
+    params.maxRange = maxRange;
+    buildCameraBeams(fovY, width, height);
+}
+
 void PathTracedLidarSensor::buildDenseBeams(unsigned int hRes, unsigned int vRes) {
     directions_.clear();
     directions_.reserve(static_cast<size_t>(hRes) * vRes);
@@ -63,6 +68,25 @@ void PathTracedLidarSensor::buildModelBeams(const LidarModel& model) {
             const float sinE = std::sin(elevation);
             // azimuth = 0 → sensor-local -Z (forward); CCW from above.
             directions_.emplace_back(cosE * sinA, sinE, -cosE * cosA);
+        }
+    }
+}
+
+void PathTracedLidarSensor::buildCameraBeams(float fovY, unsigned int width, unsigned int height) {
+    directions_.clear();
+    directions_.reserve(static_cast<size_t>(width) * height);
+
+    // Pinhole grid through pixel centres, matching DepthSensor's xDir_/yDir_
+    // precompute: view direction = (dx, dy, -1), dx/dy in tan space.
+    const float tanHalfY = std::tan(math::degToRad(fovY) * 0.5f);
+    const float tanHalfX = tanHalfY * static_cast<float>(width) / static_cast<float>(height);
+
+    for (unsigned y = 0; y < height; ++y) {
+        const float dy = ((static_cast<float>(y) + 0.5f) / static_cast<float>(height) * 2.f - 1.f) * tanHalfY;
+        for (unsigned x = 0; x < width; ++x) {
+            const float dx = ((static_cast<float>(x) + 0.5f) / static_cast<float>(width) * 2.f - 1.f) * tanHalfX;
+            Vector3 d(dx, dy, -1.f);
+            directions_.emplace_back(d.normalize());
         }
     }
 }

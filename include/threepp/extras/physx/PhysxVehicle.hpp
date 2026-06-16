@@ -8,6 +8,7 @@
 #include <vehicle2/PxVehicleAPI.h>
 
 #include <array>
+#include <cstring>
 #include <stdexcept>
 
 namespace threepp {
@@ -109,6 +110,40 @@ namespace threepp {
             float stickyTimeThreshold = 0.1f;      // s;   PhysX default is 1.0
             float stickyDampingLongitudinal = 1.0f;// same as PhysX default
             float stickyDampingLateral = 1.0f;     // PhysX default is 0.1
+
+            // Vehicle sub-stepping. The wheel rotational dynamics — drive torque
+            // fought by the slip-proportional tire force — form a stiff ODE. At a
+            // 1/60 s timestep that ODE is numerically unstable at low speed: the
+            // wheel spin oscillates (even reversing sign frame-to-frame) and the
+            // tires report large spurious slip throughout ordinary acceleration.
+            // The cure is to integrate the suspension/tire/drivetrain/wheel/rigid-
+            // body components at a finer timestep via a PxVehicleComponentSequence
+            // substep group (the road query + actor read/write stay at 1/60). The
+            // instability is worst at low speed (the slip denominator is the
+            // longitudinal speed), so use more substeps below a threshold and
+            // fewer above — the same scheme as PhysX's SnippetVehicle2, with
+            // higher counts to suit the larger 1/60 s timestep used here.
+            unsigned subStepCountLowSpeed = 8; // below subStepThresholdSpeed
+            unsigned subStepCountHighSpeed = 2;// at/above it
+            float subStepThresholdSpeed = 6.f; // m/s (~22 km/h)
+
+            // Tire-slip denominator floors (PxVehicleTireSlipParams). Slip is a
+            // ratio whose denominator is the longitudinal speed:
+            //   longitudinalSlip = (wheelω·r − v) / max(|v|, denom)
+            //   lateralSlip      = atan(vLat / max(|v|, minLatSlipDenominator))
+            // The floor keeps the quotient finite as v → 0. PhysX's stock active
+            // floor (0.1) assumes a small timestep; at this demo's 1/60 s substep
+            // it is far too small — during a wheel spinning up from rest the slip
+            // explodes, the longitudinal force slams to the friction ceiling and
+            // reverses every substep, and the tire "slips" all through ordinary
+            // low-speed acceleration (the wheel-spin oscillation is plainly visible
+            // in telemetry). A larger active floor matched to the timestep makes
+            // the spin-up converge to its true ~few-percent slip. PhysX docs:
+            // "Larger timesteps typically require larger values of
+            // minActiveLongSlipDenominator." Passive/lateral keep PhysX defaults.
+            float minLongSlipDenominatorActive = 2.0f; // PhysX default 0.1
+            float minLongSlipDenominatorPassive = 4.0f;// PhysX default 4.0
+            float minLatSlipDenominator = 1.0f;        // PhysX default 1.0
         };
 
         enum class Gear : int { Reverse = 0,
@@ -196,6 +231,32 @@ namespace threepp {
         // Wheel spin rate in rad/s.
         float wheelAngularSpeed(int i) const {
             return wheelRigidBody1dStates_[i].rotationSpeed;
+        }
+
+        // Longitudinal tire slip ratio (0 = pure rolling; ±1 = full spin/lock).
+        float tireLongitudinalSlip(int i) const {
+            return tireSlipStates_[i].slips[::physx::vehicle2::PxVehicleTireDirectionModes::eLONGITUDINAL];
+        }
+
+        // Lateral tire slip (≈ tan of the slip angle; 0.1 ≈ 6° of drift).
+        float tireLateralSlip(int i) const {
+            return tireSlipStates_[i].slips[::physx::vehicle2::PxVehicleTireDirectionModes::eLATERAL];
+        }
+
+        // Suspension compression (m): 0 = full droop … suspensionTravelDist = bottomed out.
+        float suspensionJounce(int i) const {
+            return suspensionStates_[i].jounce;
+        }
+
+        // Compression rate (m/s). Spikes on curb strikes / jump landings —
+        // useful for impact effects (audio thuds, camera shake).
+        float suspensionJounceSpeed(int i) const {
+            return suspensionStates_[i].jounceSpeed;
+        }
+
+        // True when the wheel's road query found ground within suspension reach.
+        bool wheelGrounded(int i) const {
+            return roadGeometryStates_[i].hitState;
         }
 
         Gear gear() const { return static_cast<Gear>(transmissionCommands_.gear); }
@@ -388,6 +449,14 @@ namespace threepp {
             sticky.stickyParams[PxVehicleTireDirectionModes::eLATERAL].thresholdSpeed = settings_.stickySpeedThreshold;
             sticky.stickyParams[PxVehicleTireDirectionModes::eLATERAL].thresholdTime = settings_.stickyTimeThreshold;
             sticky.stickyParams[PxVehicleTireDirectionModes::eLATERAL].damping = settings_.stickyDampingLateral;
+
+            // Raise the longitudinal slip-ratio denominator floor to match the
+            // sim timestep — see Settings docs. Without this the wheel spin-up is
+            // numerically unstable and the tires slip during normal acceleration.
+            auto& slip = simContext_.tireSlipParams;
+            slip.minActiveLongSlipDenominator = settings_.minLongSlipDenominatorActive;
+            slip.minPassiveLongSlipDenominator = settings_.minLongSlipDenominatorPassive;
+            slip.minLatSlipDenominator = settings_.minLatSlipDenominator;
         }
 
         void createPhysxActor() {
@@ -454,6 +523,15 @@ namespace threepp {
             using namespace ::physx::vehicle2;
             componentSequence_.add(static_cast<PxVehiclePhysXActorBeginComponent*>(this));
             componentSequence_.add(static_cast<PxVehiclePhysXRoadGeometrySceneQueryComponent*>(this));
+
+            // Sub-step the integration-heavy components (suspension through rigid
+            // body). They form the stiff wheel-spin ODE that is unstable at the
+            // full timestep — see Settings::subStepCount* docs. The per-step count
+            // is set by speed in stepVehicle(); seed with the low-speed count. The
+            // road query + actor read/write stay outside the group so they run
+            // once per frame. Mirrors PhysX's SnippetVehicle2 direct-drive layout.
+            substepGroupHandle_ = componentSequence_.beginSubstepGroup(
+                    static_cast<::physx::PxU8>(std::max(1u, settings_.subStepCountLowSpeed)));
             componentSequence_.add(static_cast<PxVehicleSuspensionComponent*>(this));
             componentSequence_.add(static_cast<PxVehicleTireComponent*>(this));
             componentSequence_.add(static_cast<PxVehicleDirectDriveCommandResponseComponent*>(this));
@@ -461,6 +539,8 @@ namespace threepp {
             componentSequence_.add(static_cast<PxVehicleDirectDrivetrainComponent*>(this));
             componentSequence_.add(static_cast<PxVehicleWheelComponent*>(this));
             componentSequence_.add(static_cast<PxVehicleRigidBodyComponent*>(this));
+            componentSequence_.endSubstepGroup();
+
             // Convert sticky-tire + suspension-limit states into PxConstraint impulses.
             // Goes after rigid-body update so it sees the up-to-date pose, before
             // ActorEnd which writes velocities back onto the PxRigidBody.
@@ -469,6 +549,15 @@ namespace threepp {
         }
 
         void stepVehicle(float dt) {
+            // Pick the substep count by speed: the wheel-spin ODE is stiffest (and
+            // the slip denominator smallest) at low speed, so spend more substeps
+            // there and fewer once the vehicle is rolling. See Settings docs.
+            const float fwdSpeed = std::abs(rigidBodyState_.getLongitudinalSpeed(simContext_.frame));
+            const unsigned nSub = fwdSpeed < settings_.subStepThresholdSpeed
+                                          ? settings_.subStepCountLowSpeed
+                                          : settings_.subStepCountHighSpeed;
+            componentSequence_.setSubsteps(substepGroupHandle_,
+                                           static_cast<::physx::PxU8>(std::max(1u, nSub)));
             componentSequence_.update(dt, simContext_);
             // PxVehicle's component sequence updates wheelLocalPoses_ but doesn't
             // push them onto the chassis-attached wheel shapes — debug visualization
@@ -828,6 +917,7 @@ namespace threepp {
 
         ::physx::vehicle2::PxVehiclePhysXSimulationContext simContext_{};
         ::physx::vehicle2::PxVehicleComponentSequence componentSequence_{};
+        ::physx::PxU8 substepGroupHandle_ = 0;
     };
 
 }// namespace threepp

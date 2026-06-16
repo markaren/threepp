@@ -37,7 +37,6 @@ layout(set = 0, binding = 5) uniform sampler2D displace2;
 
 layout(buffer_reference, scalar) buffer PosBuf  { float v[]; };
 layout(buffer_reference, scalar) buffer NormBuf { float v[]; };
-layout(buffer_reference, scalar) buffer FoamBuf { float v[]; };
 
 // Per-disturbance point source — splatted into the per-vertex foam buffer
 // with a gaussian falloff. Populated by host code each frame from boat
@@ -68,7 +67,6 @@ layout(buffer_reference, scalar) buffer WakeTrailBuf { WakeSample s[]; };
 layout(push_constant, scalar) uniform Pc {
     PosBuf   posOut;
     NormBuf  normOut;
-    uint64_t foamAddr;
     uint64_t disturbAddr;
     uint64_t wakeTrailAddr; // 0 = no historical trail (falls back to current pose)
     uint    vertexCount;
@@ -95,6 +93,77 @@ layout(push_constant, scalar) uniform Pc {
     uint    wakeTrailCount; // # valid samples in wakeTrailAddr
 } pc;
 
+// Bicubic B-spline single-channel fetch (4 bilinear taps, Sigg & Hadwiger).
+// Used by the NORMAL stencil only: the derivative of a BILINEAR texture
+// kinks at every texel boundary (cascade-0 texel ≈ the vertex spacing),
+// which scattered near-random error into adjacent per-vertex normals —
+// Gouraud interpolation then exposed every ~2 m quad edge as a crease,
+// reading as hard-edged "glass tiles" under grazing sky reflection. The
+// B-spline kernel is C1, so the height gradient is smooth across texels.
+float sampleBicubicR(sampler2D tex, vec2 uv) {
+    const vec2 res = vec2(textureSize(tex, 0));
+    const vec2 st  = uv * res - 0.5;
+    const vec2 i   = floor(st);
+    const vec2 f   = st - i;
+    const vec2 f2  = f * f;
+    const vec2 f3  = f2 * f;
+    const vec2 w0  = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w1  = (3.0 * f3 - 6.0 * f2 + 4.0)       * (1.0 / 6.0);
+    const vec2 w2  = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w3  = f3 * (1.0 / 6.0);
+    const vec2 g0  = w0 + w1;
+    const vec2 g1  = w2 + w3;
+    const vec2 c0  = (i - 0.5 + w1 / g0) / res;
+    const vec2 c1  = (i + 1.5 + w3 / g1) / res;
+    const float t00 = texture(tex, vec2(c0.x, c0.y)).r;
+    const float t10 = texture(tex, vec2(c1.x, c0.y)).r;
+    const float t01 = texture(tex, vec2(c0.x, c1.y)).r;
+    const float t11 = texture(tex, vec2(c1.x, c1.y)).r;
+    return g0.y * (g0.x * t00 + g1.x * t10) + g1.y * (g0.x * t01 + g1.x * t11);
+}
+
+// Smooth height for the normal stencil — cascades 0+1 ONLY. Cascade 2's
+// 8 m tile is far below what the mesh resolves: sampled at a metres-wide
+// stencil it only aliases into the vertex normals, and BOTH shading paths
+// (chit + deferred) re-add the cascade-2 gradient per pixel from
+// oceanFineHeight anyway, so including it here double-counted the chop.
+float sampleHeightSmooth(vec2 worldXZ) {
+    float h = 0.0;
+    if ((pc.cascadeMask & 1u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize0;
+        h += sampleBicubicR(height0, worldXZ * invTile) * invTile;
+    }
+    if ((pc.cascadeMask & 2u) != 0u) {
+        const float invTile = 1.0 / pc.tileSize1;
+        h += sampleBicubicR(height1, worldXZ * invTile) * invTile;
+    }
+    return h * pc.waveScale;
+}
+
+// Bicubic B-spline RG fetch — same kernel as sampleBicubicR above, both
+// channels. See sampleDisplacement for why the displacement itself needs it.
+vec2 sampleBicubicRG(sampler2D tex, vec2 uv) {
+    const vec2 res = vec2(textureSize(tex, 0));
+    const vec2 st  = uv * res - 0.5;
+    const vec2 i   = floor(st);
+    const vec2 f   = st - i;
+    const vec2 f2  = f * f;
+    const vec2 f3  = f2 * f;
+    const vec2 w0  = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w1  = (3.0 * f3 - 6.0 * f2 + 4.0)       * (1.0 / 6.0);
+    const vec2 w2  = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) * (1.0 / 6.0);
+    const vec2 w3  = f3 * (1.0 / 6.0);
+    const vec2 g0  = w0 + w1;
+    const vec2 g1  = w2 + w3;
+    const vec2 c0  = (i - 0.5 + w1 / g0) / res;
+    const vec2 c1  = (i + 1.5 + w3 / g1) / res;
+    const vec2 t00 = texture(tex, vec2(c0.x, c0.y)).rg;
+    const vec2 t10 = texture(tex, vec2(c1.x, c0.y)).rg;
+    const vec2 t01 = texture(tex, vec2(c0.x, c1.y)).rg;
+    const vec2 t11 = texture(tex, vec2(c1.x, c1.y)).rg;
+    return g0.y * (g0.x * t00 + g1.x * t10) + g1.y * (g0.x * t01 + g1.x * t11);
+}
+
 vec3 sampleDisplacement(vec2 worldXZ) {
     // Per-cascade amplitude normalization: divide by the cascade's tile size.
     // Tessendorf's Phillips spectrum produces unnormalized IFFT output whose
@@ -105,20 +174,30 @@ vec3 sampleDisplacement(vec2 worldXZ) {
     // Vertical (height) gets `waveScale`, horizontal gets `choppiness`. Choppy
     // waves come from large horizontal displacement and produce sharp Gerstner-
     // like crests when choppiness is too high — keep it ≤ ~0.6 for natural look.
+    //
+    // Cascades 0+1 are BICUBIC-reconstructed: a bilinear height field is only
+    // C0 — its slope kinks along every texel boundary. The adaptive warp packs
+    // vertices near the vessel down to ~0.15 m, FINER than the cascade texels
+    // (0.98 m / 0.20 m), so the mesh faithfully tessellated those kinks into
+    // real geometry: under a mirror-sky reflection every cascade-0 texel read
+    // as a hard-edged ~1 m world-aligned tile ("the texels are visible").
+    // The B-spline kernel is C1, so there are no creases to tessellate.
+    // Cascade 2 stays bilinear: its 1.6 cm texels are far below the finest
+    // vertex spacing, so the mesh never resolves them.
     vec3 d = vec3(0.0);
     if ((pc.cascadeMask & 1u) != 0u) {
         const float invTile = 1.0 / pc.tileSize0;
         const vec2 uv = worldXZ * invTile;
-        d.y += texture(height0,   uv).r * invTile;
-        const vec2 dxz = texture(displace0, uv).rg * invTile;
+        d.y += sampleBicubicR(height0, uv) * invTile;
+        const vec2 dxz = sampleBicubicRG(displace0, uv) * invTile;
         d.x += dxz.x;
         d.z += dxz.y;
     }
     if ((pc.cascadeMask & 2u) != 0u) {
         const float invTile = 1.0 / pc.tileSize1;
         const vec2 uv = worldXZ * invTile;
-        d.y += texture(height1,   uv).r * invTile;
-        const vec2 dxz = texture(displace1, uv).rg * invTile;
+        d.y += sampleBicubicR(height1, uv) * invTile;
+        const vec2 dxz = sampleBicubicRG(displace1, uv) * invTile;
         d.x += dxz.x;
         d.z += dxz.y;
     }
@@ -383,15 +462,16 @@ void main() {
 
     const vec3 outPos = rest + disp;
 
-    // Finite-difference samples at four neighbours. Reused for both the
-    // height-only normal computation (already there) and the Jacobian of
-    // the horizontal displacement (new — drives foam coverage).
-    const float eps = pc.tileSize0 / 256.0;
-    const vec3 dL = sampleDisplacement(rest.xz + vec2(-eps, 0.0));
-    const vec3 dR = sampleDisplacement(rest.xz + vec2( eps, 0.0));
-    const vec3 dD = sampleDisplacement(rest.xz + vec2(0.0, -eps));
-    const vec3 dU = sampleDisplacement(rest.xz + vec2(0.0,  eps));
-    const vec3 n = normalize(vec3(dL.y - dR.y, 2.0 * eps, dD.y - dU.y));
+    // Finite-difference normal from BICUBIC height taps (cascades 0+1 —
+    // see sampleHeightSmooth for why cascade 2 is excluded). eps matches
+    // the vertex grid (the old tileSize0/256 ≈ 2× spacing oversmoothed
+    // the resolvable band on top of the bilinear-derivative kinks).
+    const float eps = pc.planeSize / float(pc.gridDim - 1u);
+    const float hL = sampleHeightSmooth(rest.xz + vec2(-eps, 0.0));
+    const float hR = sampleHeightSmooth(rest.xz + vec2( eps, 0.0));
+    const float hD = sampleHeightSmooth(rest.xz + vec2(0.0, -eps));
+    const float hU = sampleHeightSmooth(rest.xz + vec2(0.0,  eps));
+    const vec3 n = normalize(vec3(hL - hR, 2.0 * eps, hD - hU));
 
     pc.posOut.v[i * 3u + 0u] = outPos.x;
     pc.posOut.v[i * 3u + 1u] = outPos.y;
@@ -402,10 +482,11 @@ void main() {
     pc.normOut.v[i * 3u + 2u] = n.z;
 
     // Foam used to be computed per-vertex right here (Jacobian + wake
-    // formulas + disturbance splats + persistence decay, all written to
-    // pc.foamAddr). It now lives in a world-space texture built by
-    // foam_world.comp, so foam stays pinned to world XZ regardless of
-    // mesh layout. The per-vertex foam buffer + the wakeFoam variable
-    // computed above are kept inert for the moment — the next cleanup
-    // pass strips them along with the foamAddr push-constant.
+    // formulas + disturbance splats + persistence decay) and written to a
+    // per-vertex foam buffer via pc.foamAddr. Foam now lives in a world-
+    // space texture built by foam_world.comp, pinned to world XZ regardless
+    // of mesh layout, so both the buffer and the foamAddr push-constant are
+    // gone. The wakeFoam value computed above is now write-only dead code
+    // (the compiler DCEs it); a later micro-cleanup can drop it along with
+    // the now-unused disturbAddr / DisturbBuf plumbing in this shader.
 }

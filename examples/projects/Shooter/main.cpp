@@ -43,6 +43,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -146,6 +147,21 @@ namespace {
     constexpr int kHudWarn = 0xff4d4d;
     constexpr int kPanel = 0x0e1b2a;
     constexpr int kPanelEdge = 0x1d3b57;
+
+    // ---- HUD scale -----------------------------------------------------------
+    // Every HUD dimension here is a design unit: a logical pixel at 100% (96
+    // dpi). GLFW window coordinates are physical pixels on Windows/X11, so the
+    // overlay must scale by the monitor content scale or it draws half-size on
+    // a 200% display while text (formerly the only thing scaled) stays large —
+    // hence overlapping widgets. The whole overlay lives in two coordinate
+    // systems: SVG meshes render through `uiCam` (group transforms apply), so a
+    // widget GROUP is scaled by uiScale and its baked geometry + child offsets
+    // ride along; screen-space sprites (TextSprite, hit targets) bypass the
+    // scene graph — the renderer composes their matrix from screenAnchor +
+    // position — so makeText and the explicit sprite scales below carry uiScale
+    // themselves. On macOS window coords are already logical points (the
+    // renderer compensates via pixelRatio), so this stays 1.
+    float uiScale = 1.f;
 
     std::mt19937 rng{1337};
     float frand(float a, float b) {
@@ -453,8 +469,7 @@ namespace {
                 const std::string gunFile = assets + "freesound_community-submachine-gun-79846.mp3";
                 const std::string reloadFile = assets + "freesound_community-1911-reload-6248.mp3";
                 const std::string metalFile = assets + "freesound_community-hard-metal-impact-43052.mp3";
-                // grenade blast ships with the example (version-controlled), not the fetched data repo
-                const std::string boomFile = std::string(PROJECT_FOLDER) + "/examples/projects/Shooter/assets/grenade_explosion.mp3";
+                const std::string boomFile = assets + "grenade_explosion.mp3";
                 std::vector<Spec> specs{
                         {"shot", {synthShot()}, &shot, 6, fs::exists(gunFile) ? gunFile : std::string{}},
                         {"empty", {synthClick()}, &empty, 2, {}},
@@ -627,14 +642,16 @@ namespace {
                                          float px, float ax, float ay, float ox, float oy,
                                          TextSprite::HorizontalAlignment h = TextSprite::HorizontalAlignment::Left,
                                          TextSprite::VerticalAlignment v = TextSprite::VerticalAlignment::Center) {
-        auto t = TextSprite::create(font, px);
+        // screen-space sprites bypass the scene graph, so scale px size AND
+        // pixel offsets here (uiScale, not a parent group transform)
+        auto t = TextSprite::create(font, px * uiScale);
         t->setColor(Color(color));
         t->setText(text);
         t->setHorizontalAlignment(h);
         t->setVerticalAlignment(v);
         t->screenSpace = true;
         t->screenAnchor.set(ax, ay);
-        t->position.set(ox, oy, 0.f);
+        t->position.set(ox * uiScale, oy * uiScale, 0.f);
         return t;
     }
 
@@ -654,7 +671,7 @@ namespace {
     struct Layout {
         std::vector<std::function<void(float, float)>> fns;
         void add(const std::shared_ptr<Object3D>& g, float ax, float ay, float ox, float oy, float z) {
-            fns.emplace_back([=](float W, float H) { g->position.set(ax * W + ox, ay * H + oy, z); });
+            fns.emplace_back([=](float W, float H) { g->position.set(ax * W + ox * uiScale, ay * H + oy * uiScale, z); });
         }
         void addRaw(std::function<void(float, float)> fn) { fns.emplace_back(std::move(fn)); }
         void apply(float W, float H) {
@@ -704,10 +721,18 @@ int main(int argc, char** argv) {
         else if (std::string(argv[i]) == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
     }
 
-    Canvas canvas(Canvas::Parameters().title("threepp - Third Person Shooter").size(1280, 800).antialiasing(4));
+#ifndef __APPLE__
+    uiScale = monitor::contentScale().first;
+#endif
+    // scale the window with the HUD, but keep it on screen (a 150% 1080p
+    // display has fewer logical pixels than the 1280x800 design)
+    const auto screen = monitor::monitorSize();
+    const int winW = std::min(static_cast<int>(1280 * uiScale), screen.width() * 9 / 10);
+    const int winH = std::min(static_cast<int>(800 * uiScale), screen.height() * 9 / 10);
+    Canvas canvas(Canvas::Parameters().title("threepp - Third Person Shooter").size(winW, winH).antialiasing(4));
     // Force the GL backend so the demo launches straight into the game instead
     // of prompting for a renderer on stdin (createRenderer's default behaviour).
-    auto renderer = createRenderer(canvas, GraphicsAPI::Vulkan);
+    auto renderer = createRenderer(canvas);
     renderer->shadowMap().enabled = true;
     renderer->autoClear = false;
     renderer->toneMapping = ToneMapping::ACESFilmic;// HDR env needs tone mapping
@@ -724,8 +749,6 @@ int main(int argc, char** argv) {
         // pt->setBloomIntensity(1);
         // pt->setSharpenStrength(0.5f);
     }
-
-    const float dpi = monitor::contentScale().first;
 
     // Pointer-lock mouse-look: cursor hidden + grabbed while playing (raw,
     // unbounded deltas), released on game-over so the restart button is
@@ -1026,7 +1049,7 @@ int main(int argc, char** argv) {
     Vector3 hipsBind;// Hips bind-pose local position; clip root-motion (X/Z) is pinned to this
     {
         GLTFLoader loader;
-        const std::string swatPath = std::string(PROJECT_FOLDER) + "/examples/projects/Shooter/assets/swat.glb";
+        const std::string swatPath = std::string(DATA_FOLDER) + "/models/gltf/swat.glb";
         auto res = loader.load(swatPath);
         if (res) {
             auto& model = res->scene;
@@ -1166,7 +1189,7 @@ int main(int argc, char** argv) {
     auto rifle = Group::create();
     {
         GLTFLoader gloader;
-        if (auto r = gloader.load(std::string(PROJECT_FOLDER) + "/examples/projects/Shooter/assets/rifle.glb")) {
+        if (auto r = gloader.load(std::string(DATA_FOLDER) + "/models/gltf/rifle.glb")) {
             auto& gun = r->scene;
             gun->traverseType<Mesh>([](Mesh& m) { m.castShadow = true; });
             gun->updateMatrixWorld(true);
@@ -1696,6 +1719,15 @@ int main(int argc, char** argv) {
     FontLoader fontLoader;
     const Font font = fontLoader.defaultFont();
 
+    // Scale a HUD widget group's baked SVG geometry + child offsets to physical
+    // pixels, preserving any y-flip the group uses to map y-down SVG into the
+    // y-up overlay. Screen-space sprites bypass the scene graph and are scaled
+    // in makeText / explicitly instead.
+    auto hudScale = [&](const std::shared_ptr<Object3D>& g) {
+        g->scale.set(g->scale.x < 0.f ? -uiScale : uiScale,
+                     g->scale.y < 0.f ? -uiScale : uiScale, 1.f);
+    };
+
     // crosshair (4 ticks + dot) — DYNAMIC: the tick gap eases toward a spread
     // driven by recoil + movement (hip fire blooms, ADS tightens), and the
     // whole thing recolours on hit. Each tick lives in its own group so the
@@ -1733,6 +1765,7 @@ int main(int argc, char** argv) {
         auto fg = Group::create();
         fg->add(panel(224, 26, 6, kPanel, 0.75f, kPanelEdge, 1.5f));
         fg->scale.y = -1.f;
+        hudScale(fg);
         ui->add(fg);
         layout.add(fg, 0.f, 0.f, 22, 56, 0.1f);
     }
@@ -1741,6 +1774,7 @@ int main(int argc, char** argv) {
         auto cg = Group::create();
         cg->add(chipFill.mesh);
         cg->scale.y = -1.f;
+        hudScale(cg);
         ui->add(cg);
         layout.add(cg, 0.f, 0.f, 26, 52, 0.15f);
     }
@@ -1749,21 +1783,22 @@ int main(int argc, char** argv) {
         auto hg = Group::create();
         hg->add(healthFill.mesh);
         hg->scale.y = -1.f;
+        hudScale(hg);
         ui->add(hg);
         layout.add(hg, 0.f, 0.f, 26, 52, 0.2f);
     }
-    auto healthTxt = makeText(font, "100", 0xffffff, 15 * dpi, 0.f, 0.f, 134, 43,
+    auto healthTxt = makeText(font, "100", 0xffffff, 15, 0.f, 0.f, 134, 43,
                               TextSprite::HorizontalAlignment::Center);
     ui->add(healthTxt);
-    ui->add(makeText(font, "HP", kHudCyan, 12 * dpi, 0.f, 0.f, 30, 70));
+    ui->add(makeText(font, "HP", kHudCyan, 12, 0.f, 0.f, 30, 70));
 
     // ammo (bottom-right)
-    Readout ammoTxt{makeText(font, "", 0xffffff, 34 * dpi, 1.f, 0.f, -40, 60,
+    Readout ammoTxt{makeText(font, "", 0xffffff, 34, 1.f, 0.f, -40, 60,
                              TextSprite::HorizontalAlignment::Right)};
     ui->add(ammoTxt.sprite);
-    ui->add(makeText(font, "AMMO", kHudCyan, 13 * dpi, 1.f, 0.f, -40, 92,
+    ui->add(makeText(font, "AMMO", kHudCyan, 13, 1.f, 0.f, -40, 92,
                      TextSprite::HorizontalAlignment::Right));
-    Readout reloadTxt{makeText(font, "", kHudWarn, 16 * dpi, 1.f, 0.f, -40, 28,
+    Readout reloadTxt{makeText(font, "", kHudWarn, 16, 1.f, 0.f, -40, 28,
                                TextSprite::HorizontalAlignment::Right)};
     ui->add(reloadTxt.sprite);
 
@@ -1778,6 +1813,7 @@ int main(int argc, char** argv) {
         magGroup->add(p.mesh);
         pipMats.push_back(p.material);
     }
+    hudScale(magGroup);
     ui->add(magGroup);
     layout.add(magGroup, 1.f, 0.f, -40, 112, 0.2f);
 
@@ -1787,15 +1823,16 @@ int main(int argc, char** argv) {
     {
         auto gg = Group::create();
         gg->add(gPip.mesh);
+        hudScale(gg);
         ui->add(gg);
         layout.add(gg, 0.f, 0.f, 256, 30, 0.2f);
     }
-    ui->add(makeText(font, "G", kHudCyan, 11 * dpi, 0.f, 0.f, 258, 20));
+    ui->add(makeText(font, "G", kHudCyan, 11, 0.f, 0.f, 258, 20));
 
     // score + enemies (top)
-    Readout scoreTxt{makeText(font, "SCORE 0", kHudCyan, 22 * dpi, 0.f, 1.f, 24, -34)};
+    Readout scoreTxt{makeText(font, "SCORE 0", kHudCyan, 22, 0.f, 1.f, 24, -34)};
     ui->add(scoreTxt.sprite);
-    Readout aliveTxt{makeText(font, "", 0xffffff, 16 * dpi, 1.f, 1.f, -24, -34,
+    Readout aliveTxt{makeText(font, "", 0xffffff, 16, 1.f, 1.f, -24, -34,
                               TextSprite::HorizontalAlignment::Right)};
     ui->add(aliveTxt.sprite);
 
@@ -1824,7 +1861,7 @@ int main(int argc, char** argv) {
             compassTicks->add(m.tick);
             if (card) {
                 m.label = makeText(font, kCard[(d / 45) % 8], d == 0 ? kHudWarn : 0xd7e6f2,
-                                   13 * dpi, 0.5f, 1.f, 0, -46,
+                                   13, 0.5f, 1.f, 0, -46,
                                    TextSprite::HorizontalAlignment::Center);
                 ui->add(m.label);
             }
@@ -1839,9 +1876,10 @@ int main(int argc, char** argv) {
         base.mesh->position.set(-kCompassHalfW, -26, 0);
         compassTicks->add(base.mesh);
     }
+    hudScale(compassTicks);
     ui->add(compassTicks);
     layout.add(compassTicks, 0.5f, 1.f, 0, -10, 0.2f);
-    Readout headingTxt{makeText(font, "000", 0xd7e6f2, 13 * dpi, 0.5f, 1.f, 0, -64,
+    Readout headingTxt{makeText(font, "000", 0xd7e6f2, 13, 0.5f, 1.f, 0, -64,
                                 TextSprite::HorizontalAlignment::Center)};
     ui->add(headingTxt.sprite);
 
@@ -1889,6 +1927,7 @@ int main(int argc, char** argv) {
         radar->add(bg);
         blips.push_back(bg);
     }
+    hudScale(radar);
     ui->add(radar);
     layout.add(radar, 1.f, 1.f, -92, -110, 0.15f);
 
@@ -1902,7 +1941,7 @@ int main(int argc, char** argv) {
     auto hitMats = svgMats(hitMarker);// recolour: white = hit, red + pop = kill
 
     // "+100" kill pop — floats up from beside the crosshair and vanishes
-    auto scorePop = makeText(font, "+100", kHudGood, 16 * dpi, 0.5f, 0.5f, 30, 14,
+    auto scorePop = makeText(font, "+100", kHudGood, 16, 0.5f, 0.5f, 30, 14,
                              TextSprite::HorizontalAlignment::Left);
     scorePop->visible = false;
     ui->add(scorePop);
@@ -1914,6 +1953,7 @@ int main(int argc, char** argv) {
                             wedgePath(56.f, 68.f, 26.f) + R"(" fill=)" + '"' + hex(kHudWarn) + R"("/></svg>)");
         a.mats = svgMats(a.g);
         a.g->visible = false;
+        hudScale(a.g);
         ui->add(a.g);
         layout.add(a.g, 0.5f, 0.5f, 0, 0, 0.55f);
     }
@@ -1926,7 +1966,7 @@ int main(int argc, char** argv) {
 
     // controls hint (bottom-centre)
     ui->add(makeText(font, "WASD move    MOUSE look    LMB fire    SHIFT sprint    SPACE jump    R reload    G grenade",
-                     0x9fb6c8, 12 * dpi, 0.5f, 0.f, 0, 20,
+                     0x9fb6c8, 12, 0.5f, 0.f, 0, 20,
                      TextSprite::HorizontalAlignment::Center));
 
     // game-over: full-screen dim backdrop (eases in) + bordered rounded panel
@@ -1940,24 +1980,26 @@ int main(int argc, char** argv) {
         auto pg = Group::create();
         pg->add(panel(420, 210, 10, kPanel, 0.92f, kPanelEdge, 2.f));
         pg->scale.y = -1.f;
+        hudScale(pg);
         over->add(pg);
         layout.add(pg, 0.5f, 0.5f, -210, 105, 0.7f);
         auto sep = rect(340, 1.5f, kPanelEdge, 0.9f);
         auto sg = Group::create();
         sg->add(sep.mesh);
+        hudScale(sg);
         over->add(sg);
         layout.add(sg, 0.5f, 0.5f, -170, 30, 0.71f);
     }
-    auto overTitle = makeText(font, "GAME OVER", kHudWarn, 40 * dpi, 0.5f, 0.5f, 0, 50,
+    auto overTitle = makeText(font, "GAME OVER", kHudWarn, 40, 0.5f, 0.5f, 0, 50,
                               TextSprite::HorizontalAlignment::Center);
     over->add(overTitle);
-    Readout overScore{makeText(font, "", 0xffffff, 22 * dpi, 0.5f, 0.5f, 0, 0,
+    Readout overScore{makeText(font, "", 0xffffff, 22, 0.5f, 0.5f, 0, 0,
                                TextSprite::HorizontalAlignment::Center)};
     over->add(overScore.sprite);
-    over->add(makeText(font, "PRESS ENTER OR CLICK RESTART", kHudCyan, 15 * dpi, 0.5f, 0.5f, 0, -40,
+    over->add(makeText(font, "PRESS ENTER OR CLICK RESTART", kHudCyan, 15, 0.5f, 0.5f, 0, -40,
                        TextSprite::HorizontalAlignment::Center));
     // restart hit-target (SpriteInteractor)
-    auto restartLabel = makeText(font, "[ RESTART ]", kHudGood, 20 * dpi, 0.5f, 0.5f, 0, -75,
+    auto restartLabel = makeText(font, "[ RESTART ]", kHudGood, 20, 0.5f, 0.5f, 0, -75,
                                  TextSprite::HorizontalAlignment::Center);
     over->add(restartLabel);
     auto restartHitMat = SpriteMaterial::create();
@@ -1965,7 +2007,7 @@ int main(int argc, char** argv) {
     auto restartHit = Sprite::create(restartHitMat);
     restartHit->screenSpace = true;
     restartHit->screenAnchor.set(0.5f, 0.5f);
-    restartHit->scale.set(180, 44, 1);
+    restartHit->scale.set(180 * uiScale, 44 * uiScale, 1);// screen-space: bypasses parent scale
     restartHit->center.set(0.5f, 0.5f);
     over->add(restartHit);
 
@@ -2333,7 +2375,7 @@ int main(int argc, char** argv) {
         const float shoulder = kCamShoulder + (kCamShoulderAds - kCamShoulder) * zoomT;
         camera->fov = kFovHip + (kFovAds - kFovHip) * zoomT;
         camera->updateProjectionMatrix();
-        crosshair->scale.set(1.f + recoilKick * 4.f, 1.f + recoilKick * 4.f, 1.f);// bloom on recoil
+        crosshair->scale.set(uiScale * (1.f + recoilKick * 4.f), uiScale * (1.f + recoilKick * 4.f), 1.f);// bloom on recoil
         const float effYaw = camYaw + recoilYaw;
         const float effPitch = camPitch - recoilKick;
         const Vector3 pivot = playerPos + Vector3(0, kPlayerLen, 0);
@@ -2621,12 +2663,12 @@ int main(int argc, char** argv) {
         hitMarker->visible = hitMarkerT > 0.f;
         if (hitMarker->visible) {
             const float pop = hitWasKill ? 1.f + 0.6f * std::min(1.f, hitMarkerT / 0.25f) : 1.f;
-            hitMarker->scale.set(pop, pop, 1);
+            hitMarker->scale.set(uiScale * pop, uiScale * pop, 1);
             for (auto& m : hitMats) m->color = Color(hitWasKill ? kHudWarn : 0xffffff);
         }
         scorePopT -= dt;
         scorePop->visible = scorePopT > 0.f;
-        if (scorePop->visible) scorePop->position.set(30.f, 14.f + (0.8f - scorePopT) * 55.f, 0.f);
+        if (scorePop->visible) scorePop->position.set(30.f * uiScale, (14.f + (0.8f - scorePopT) * 55.f) * uiScale, 0.f);// screen-space sprite
 
         // damage-direction arcs: rotate toward the attacker (camera-relative), fade
         for (auto& a : dmgArcs) {
@@ -2651,7 +2693,9 @@ int main(int argc, char** argv) {
                 }
                 if (m.label) {
                     m.label->visible = vis;
-                    m.label->position.set(dx, -46.f, 0.f);
+                    // label is a screen-space sprite (bypasses the compassTicks
+                    // group scale that the tick rides), so scale dx + offset here
+                    m.label->position.set(dx * uiScale, -46.f * uiScale, 0.f);
                 }
             }
             const int deg = (static_cast<int>(std::round(camYaw * math::RAD2DEG)) % 360 + 360) % 360;

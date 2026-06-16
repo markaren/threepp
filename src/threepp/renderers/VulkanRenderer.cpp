@@ -1,5 +1,4 @@
-// VulkanRenderer — hardware ray-traced renderer (Phase 9 v2 + dynamic
-// scene rebuild).
+﻿// VulkanRenderer — hardware ray-traced renderer with dynamic scene rebuild.
 //
 // On every render() we walk the scene and fingerprint each visible Mesh
 // (geometry/material identity + world matrix + PBR scalars). When the
@@ -9,18 +8,18 @@
 // bindings 0/3/4 across every descriptor set. BLAS records stay cached by
 // BufferGeometry pointer so static geometry is never re-traced.
 //
-// Shading: Phase 5/6 do Lambert + GGX direct lighting against scene
-// AmbientLight + DirectionalLights with shadow rays. Phase 7 samples
-// `scene.environment` / `scene.background` HDR equirects for both the
-// background miss and the closest-hit env probe. Phase 8 adds progressive
-// accumulation (rgba32f persistent accum image) with sub-pixel jitter,
-// resetting on camera, env, or scene change. Phase 9 turns the ray pipe
-// into an iterative path tracer driven from raygen — each closest_hit
-// shade returns direct radiance + a sampled bounce direction; raygen
-// loops up to kMaxBounces and applies Russian Roulette after the first
-// indirect bounce. Phase 9 v2 swaps the cosine-only scatter for a
-// probabilistic spec/diffuse split (VNDF-sampled GGX for the spec lobe)
-// so polished metals reflect nearby geometry as well as the env.
+// Two render modes (RenderMode):
+//   • ReferencePT — an iterative path tracer driven from raygen: each
+//     closest_hit returns direct radiance (Lambert + VNDF-sampled GGX against
+//     AmbientLight/DirectionalLights with shadow rays, plus emissive/ReSTIR
+//     area lights) + a sampled bounce direction; raygen loops to kMaxBounces
+//     with Russian Roulette, accumulating into a persistent rgba32f image that
+//     resets on camera/env/scene change.
+//   • RasterFirst — a hybrid: a raster G-buffer supplies primary visibility,
+//     then deferred_shade.comp lights it analytically and adds ray-query
+//     accents (shadows, reflections, AO/GI), denoised + TAA-resolved.
+// Both sample `scene.environment` / `scene.background` HDR equirects (GGX-
+// prefiltered into a PMREM mip chain) for the background miss and IBL.
 
 #define VMA_IMPLEMENTATION
 #include "vulkan/VulkanContext.hpp"
@@ -32,11 +31,15 @@
 #include "vulkan/PhotonCaustics.hpp"
 #include "vulkan/SkinningPipeline.hpp"
 #include "vulkan/TetSkinningPipeline.hpp"
+#include "vulkan/GpuTimings.hpp"
+#include "vulkan/OverlayPass.hpp"
+#include "vulkan/VulkanFrameTypes.hpp"
 #include "vulkan/TaaResolve.hpp"
 #include "vulkan/BloomPass.hpp"
 #include "vulkan/DeferredShade.hpp"
 #include "vulkan/WaterDisplacePipeline.hpp"
 #include "vulkan/FoamWorldPipeline.hpp"
+#include "vulkan/GrassWindPipeline.hpp"
 #include "vulkan/shaders/vulkan_shared.h"// MaterialDesc + kMaxMaterialTextures + photon-grid constants — same source the shaders read
 #include "wgpu/pathtracer/WgpuPathTracerEnvCdf.hpp"// reused: pure C++ template, no WGPU deps
 
@@ -62,6 +65,7 @@
 #include "threepp/math/Vector3.hpp"
 #include "threepp/objects/Bone.hpp"
 #include "threepp/objects/DisplacedMesh.hpp"
+#include "threepp/objects/GrassMesh.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Skeleton.hpp"
@@ -113,6 +117,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <random>
 #include <cstring>
@@ -140,6 +145,14 @@ namespace threepp {
     using vulkan::destroyBuffer;
     using vulkan::createAsScratchBuffer;
     using vulkan::destroyImage2D;
+    using vulkan::TimingPass;
+    using vulkan::TP_RasterGbuf;
+    using vulkan::TP_OverlayDepth;
+    using vulkan::TP_PhotonEmit;
+    using vulkan::TP_PathTrace;
+    using vulkan::TP_Denoise;
+    using vulkan::TP_TAA;
+    using vulkan::TP_OverlayDraw;
 
     namespace {
         // Frames-in-flight depth. Bumped from 2 → 3 to deepen CPU/GPU
@@ -181,6 +194,17 @@ namespace threepp {
         Vector4 viewport;
         Vector4 scissor;
         bool scissorTest = false;
+        bool autoClear_ = true;// mirrored from Renderer::autoClear each render()
+
+        // Split-screen (Increment 0): the primary PT pane is clipped to the
+        // scissor sub-rect. The PT pipeline renders the pane region-sized AT THE
+        // IMAGE ORIGIN (gbuf/raygen/denoise/bloom); only the final TAA write is
+        // offset to the scissor position. All default to the full frame, so the
+        // single-scene path is byte-identical when scissorTest is off.
+        VkExtent2D regionRenderExt_{};// render-extent-space pane size
+        VkExtent2D regionSwapExt_{};  // swapchain-space pane size (TAA output)
+        int32_t    regionDstX_ = 0;   // swapchain write offset (image space)
+        int32_t    regionDstY_ = 0;
 
         // Mirrored from VulkanRenderer (Renderer base) at the start of each
         // render() so the renderFrame path can read them without a pointer back
@@ -204,7 +228,17 @@ namespace threepp {
             Buffer index;// .handle == VK_NULL_HANDLE for non-indexed geometry
             Buffer normal;
             Buffer uv;   // .handle == VK_NULL_HANDLE if geometry has no "uv"
-            Buffer foam; // .handle == VK_NULL_HANDLE unless this is an FFT-displaced ocean mesh
+            // Per-vertex RGB color (BufferGeometry "color" attribute, itemSize 3).
+            // .handle == VK_NULL_HANDLE when the geometry has no usable "color".
+            // Surfaced to the shaders via GeometryDesc::colorAddress / DrawInfo::
+            // colorAddr, gated on the material's vertexColors flag at fill time.
+            Buffer color;
+            // True for FFT-displaced ocean meshes — gates world-space foam +
+            // thin-shell water shading downstream (surfaced to the shaders via
+            // GeometryDesc::foamAddress, now a 0/1 flag). Replaces a per-vertex
+            // foam buffer that used to live on the BLAS but was never read for
+            // its contents — only its non-null address served as this marker.
+            bool isOceanSurface = false;
             // Previous-frame vertex positions, allocated for skinned + displaced
             // meshes only. Used by the hybrid raster prepass to compute
             // per-vertex motion vectors (skinned/displaced surfaces deform
@@ -239,6 +273,19 @@ namespace threepp {
             // dynamic ParticleSystems).
             uint32_t blasRefitCounter = 0;
             static constexpr uint32_t kBlasFullRebuildInterval = 64;
+            // Position-buffer byte size, captured at build, for the prevVertex
+            // re-sync copy below.
+            VkDeviceSize vbBytes = 0;
+            // Set when refreshGeomBlasBatch snapshots OLD positions into
+            // prevVertex on an in-place vertex update. The change frame
+            // correctly reports old→new motion; the NEXT clean frame we re-sync
+            // prevVertex := vertex so a now-static re-rolled mesh returns to
+            // prevVertex == vertex (zero motion), matching initial-build
+            // geometry. Without this, prevVertex stays frozen at the pre-update
+            // positions and the mesh emits a constant bogus per-vertex motion
+            // vector every frame → persistent denoiser/TAA history rejection
+            // (runtime-updated geometry stays noisy / visibly shakes).
+            bool prevVertexResyncPending = false;
         };
         std::unordered_map<const BufferGeometry*, std::unique_ptr<BlasRecord>> blasCache;
 
@@ -429,6 +476,9 @@ namespace threepp {
             uint32_t foamRes      = 0;          // texels per side
             float    foamTileSize = 0.f;        // world extent (m) covered
             VkDescriptorSet foamWorldDS = VK_NULL_HANDLE;
+            // Wall-clock timestamp of the previous foam dispatch — drives the
+            // frame-rate-independent decay push constant (−1 = first frame).
+            double   foamPrevTimeSec = -1.0;
         };
         std::unordered_map<const DisplacedMesh*, std::unique_ptr<DisplacedMeshState>> displacedStates;
 
@@ -446,10 +496,50 @@ namespace threepp {
         // frame; replaces the per-vertex foam buffer.
         std::unique_ptr<vulkan::FoamWorldPipeline> foamWorld_;
 
+        // ── GrassMesh (GPU wind-deformed foliage) ────────────────────────
+        // Same deform-on-GPU + BLAS-refit-in-place pattern as DisplacedMesh,
+        // but FFT-free: a wind compute shader bends each blade vertex from an
+        // immutable rest pose. The whole grass field is ONE mesh → one BLAS →
+        // one TLAS instance, so animating it is a cheap per-frame BLAS/TLAS
+        // refit instead of the O(all-instances) TLAS rebuild an animated
+        // InstancedMesh would force.
+        struct GrassMeshState {
+            std::unique_ptr<BlasRecord> blas;
+            Buffer   restPos{};   // immutable rest xyz (device addr, host-written once)
+            Buffer   heightFrac{};// per-vertex height fraction (device addr)
+            uint32_t vertexCount = 0;
+            std::weak_ptr<BufferGeometry> liveCheck;
+            uint32_t blasRefitCounter = 0;
+            static constexpr uint32_t kBlasFullRebuildInterval = 64;
+        };
+        std::unordered_map<const GrassMesh*, std::unique_ptr<GrassMeshState>> grassStates;
+        // Shared grass-wind compute pipeline (no descriptor sets — all I/O by
+        // device address). See vulkan/GrassWindPipeline.{hpp,cpp}.
+        std::unique_ptr<vulkan::GrassWindPipeline> grassWind_;
+        // GrassMesh deforms queued in ensureSceneBuilt, recorded into the frame
+        // command buffer in recordCommandBuffer (no blocking submit) — same
+        // pattern as pendingSkinnedRebuilds_. Cleared at end of recordCommandBuffer.
+        std::vector<std::pair<GrassMesh*, GrassMeshState*>> pendingGrassDeforms_;
+
         // Single TLAS over all mesh instances in the scene.
         VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
         Buffer tlasBuffer;
-        Buffer tlasInstancesBuffer;
+        // Per-in-flight-frame instance buffers. The per-frame TLAS refit is
+        // recorded into the frame command buffer (not a one-shot drain), so the
+        // host instance write for frame N must not clobber the buffer frame N-1
+        // is still reading — hence one buffer per in-flight slot, indexed by
+        // currentFrame. The structural full build (buildTlas) writes all slots.
+        Buffer tlasInstancesBuffers[kFramesInFlight];
+        // Persistent scratch for the in-frame TLAS refit (sized once; reused —
+        // the frame command buffers execute in submit order so it never races).
+        Buffer tlasRefitScratch_{};
+        VkDeviceSize tlasRefitScratchSize_ = 0;
+        // Per-frame TLAS refit, staged by ensureSceneBuilt and recorded into the
+        // frame command buffer by recordCommandBuffer (after the deformable BLAS
+        // rebuilds). Replaces the old mid-frame refitTlas one-shot drain.
+        std::vector<VkAccelerationStructureInstanceKHR> pendingTlasInstances_;
+        bool pendingTlasRefit_ = false;
+        bool pendingTlasFullBuild_ = false;
 
         // Per-instance descriptor tables the closest-hit shader indexes by
         // gl_InstanceCustomIndexEXT. Layout matches the matching shader
@@ -468,6 +558,10 @@ namespace threepp {
             // rigid-only meshes: set equal to vertexAddress, in which case the
             // chit reads the same data twice (no harm; equals current pos).
             VkDeviceAddress prevVertexAddress;
+            // Per-vertex RGB color buffer (BlasRecord::color). 0 when the mesh's
+            // material has vertexColors off or the geometry has no "color" — the
+            // chit then skips the vertex-color multiply. Set per-instance below.
+            VkDeviceAddress colorAddress;
             uint32_t indexed;
             uint32_t _pad;
         };
@@ -554,7 +648,7 @@ namespace threepp {
         float    fogWaterSurfaceY_ = 1e30f;
         uint64_t prevFogHash_ = 0u;
 
-        // Phase 7: environment equirect (HDR float) used by the primary miss
+        // Environment equirect (HDR float) used by the primary miss
         // for backgrounds and by closest-hit for a single mirror-reflection
         // IBL probe. Default is a 1×1 black dummy so descriptors are always
         // valid; replaced lazily when the scene's environment / background
@@ -586,6 +680,15 @@ namespace threepp {
         VkSampler   oceanFoamSampler = VK_NULL_HANDLE;
         float       oceanFoamTileSize = 0.f;              // 0 disables sampling
 
+        // Tileable foam detail texture (RT binding 45 / deferred binding 34).
+        // R = micro bubble brightness (three value-noise octaves matching the
+        // old procedural micro look over a 4 m world mapping), G = ridged
+        // lace/filament pattern (12 m mapping). Baked once at startup with a
+        // full mip chain — replaces the per-pixel procedural noise octaves in
+        // the foam shading: a sampled texture is band-limited at distance (no
+        // shimmer under TAA) and 2 fetches replace ~20 hash evaluations.
+        Image2D foamDetailImage{};
+
         // Env luminance CDF (Phase A: env importance sampling).
         // Conditional CDF: w×h R32F texture; row r holds the cumulative
         // distribution over columns at that latitude.
@@ -606,7 +709,7 @@ namespace threepp {
         uint32_t envCdfHeight_ = 1;
         float    envCdfTotalSum_ = 0.0f;
 
-        // PMREM (Phase 11): GGX-prefiltered env mip chain. Built once per env
+        // PMREM: GGX-prefiltered env mip chain. Built once per env
         // upload — see vulkan/EnvPrefilter.{hpp,cpp}. Owns the prefilter
         // compute pipeline + descriptor pool + source sampler; the host calls
         // envPrefilter_->buildPmrem(...) when scene.environment changes.
@@ -624,11 +727,18 @@ namespace threepp {
         // (vulkan_shared.h, included near the top of this file). Editing any of
         // them there propagates to every shader on the next clean rebuild.
         std::vector<Image2D> materialTextures;// owns image + view (sampler is shared)
-        // Cache value pairs (weak_ptr, slot). The weak_ptr is the liveness tag —
-        // when a Texture is destroyed (model unloaded), the entry is pruned in
-        // ensureSceneBuilt so a future Texture* address-collision doesn't read
-        // back stale GPU data.
-        std::unordered_map<const Texture*, std::pair<std::weak_ptr<Texture>, uint32_t>> textureCache;
+        // Cache value: (weak_ptr liveness tag, bindless slot, uploaded version).
+        // The weak_ptr lets ensureSceneBuilt prune entries when a Texture is
+        // destroyed (so a future Texture* address-collision doesn't read stale
+        // GPU data). `version` is the Texture::version() at last upload; when it
+        // changes (setData + needsUpdate on a DataTexture), refreshDirtyMaterialTextures
+        // re-uploads the slot in place so live texture edits are honoured.
+        struct CachedTexture {
+            std::weak_ptr<Texture> ref;
+            uint32_t slot = 0;
+            unsigned int version = 0;
+        };
+        std::unordered_map<const Texture*, CachedTexture> textureCache;
         std::vector<uint32_t> freeTextureSlots;// slots reclaimed by prune
         VkSampler textureSampler_ = VK_NULL_HANDLE;
 
@@ -747,6 +857,7 @@ namespace threepp {
             // casting every frame.
             bool     isSkinned   = false;
             bool     isDisplaced = false;
+            bool     isGrass     = false;// GPU wind-deformed grass field
             bool     isMorphed   = false;
             bool     isTet       = false;
             bool     isInstanced = false;// entry came from an InstancedMesh expansion
@@ -1141,7 +1252,13 @@ namespace threepp {
         // images. Shares rtDsLayout so a single per-frame descriptor set
         // drives RT raygen, atrous, and finalize.
         std::unique_ptr<vulkan::Denoiser> denoiser_;
-        bool                              denoiseEnabled_ = true;
+        // THREEPP_DENOISE=0 disables denoising from the environment — an A/B
+        // discriminator for "is this artifact shading or temporal/denoise?"
+        // without plumbing a flag through every example.
+        bool denoiseEnabled_ = []() {
+            const char* e = std::getenv("THREEPP_DENOISE");
+            return !(e && e[0] == '0');
+        }();
 
         // ── GPU skinning compute pipeline ──────────────────────────────────
         // Replaces the cpuSkin() loop. One dispatch per skinned mesh per
@@ -1195,9 +1312,15 @@ namespace threepp {
         // Indirect-drawing variant: uses gbuffer_indirect.vert with bindless
         // vertex pulling, declares zero vertex input bindings, consumes the
         // per-frame DrawInfo SSBO at binding 4. Selected by default for the
-        // gbuf pass since it collapses N draws into 1-3 vkCmdDrawIndirect
+        // gbuf pass since it collapses N draws into 1-4 vkCmdDrawIndirect
         // calls — see recordRasterGbufPass.
         VkPipeline            rasterGbufIndirectPipeline = VK_NULL_HANDLE;
+        // Decal variant of the indirect pipeline (bucket [3], drawn last):
+        // depth-write OFF, attachments 0-3 write-masked to zero, attachment 4
+        // (albedo+metalness) alpha-blended with an RGB-only write mask — the
+        // decal lerps its albedo over the receiver's, everything else (normal,
+        // ids, motion, depth, metalness) stays the receiving surface's.
+        VkPipeline            rasterGbufDecalPipeline = VK_NULL_HANDLE;
         VkDescriptorPool      rasterDescPool       = VK_NULL_HANDLE;
         std::array<VkDescriptorSet, kFramesInFlight> rasterDescSets{};
         // Per-frame draw info ring. Each entry mirrors the GLSL DrawInfo
@@ -1256,68 +1379,6 @@ namespace threepp {
         // constants (same camera UBO, same model matrix push). Runs after
         // recordRasterGbufPass and only renders non-overlay geometry.
         VkPipeline       overlayDepthPrepassPipeline = VK_NULL_HANDLE;
-
-        // HUD sprite pipeline (overlay_sprite.vert/.frag). One pipeline for
-        // all Sprite/TextSprite draws — alpha-blended, depth-disabled,
-        // triangle-list. Per-sprite atlas texture bound via a descriptor
-        // set allocated from spriteDescPool_ each frame. Push constant
-        // carries projection + per-sprite math (mvPos, scale, center,
-        // rotation, color). See createSpriteOverlayPipeline().
-        VkDescriptorSetLayout spriteDescSetLayout_   = VK_NULL_HANDLE;
-        VkPipelineLayout      spritePipelineLayout_  = VK_NULL_HANDLE;
-
-        // Ortho HUD overlay line pipelines (color-only, depth-test off) — the
-        // "Mesh / Line HUD overlay" follow-up so Line/LineSegments draw under an
-        // OrthographicCamera, not just Sprites. Reuse overlay.vert/frag; the
-        // GL->Vulkan clip-z remap is baked into the MVP (overlay.vert only flips Y).
-        VkPipeline       orthoLineListPipeline_   = VK_NULL_HANDLE;
-        VkPipeline       orthoLineStripPipeline_  = VK_NULL_HANDLE;
-        // Filled triangle counterparts so MeshBasicMaterial geometry (e.g. SVG
-        // ShapeGeometry HUD art) draws under an OrthographicCamera too. Same
-        // overlay.vert/frag + push-constant layout as the line pipelines; only
-        // topology (TRIANGLE_LIST) and the transparent variant's blend differ.
-        VkPipeline       orthoMeshPipeline_            = VK_NULL_HANDLE;
-        VkPipeline       orthoMeshTransparentPipeline_ = VK_NULL_HANDLE;
-        VkPipelineLayout orthoLinePipelineLayout_ = VK_NULL_HANDLE;
-        VkPipeline            overlaySpritePipeline_ = VK_NULL_HANDLE;
-        // Per-frame-in-flight descriptor pool for sprite combined-image-
-        // sampler sets. Reset at the top of each ortho overlay record so
-        // freed sets from the prior use of this frame's slot come back to
-        // the pool. Sized to kMaxSpritesPerFrame per slot.
-        static constexpr uint32_t kMaxSpritesPerFrame = 64;
-        std::array<VkDescriptorPool, kFramesInFlight> spriteDescPools_{};
-        // Cached uploaded sprite atlases. Keyed by Texture*; weak_ptr
-        // detects dangling pointers if the user destroys a TextSprite then
-        // creates a new one whose Texture happens to land at the same
-        // address. textureVersion mirrors Texture::version() so setText()
-        // (which bumps the version via needsUpdate()) triggers a re-upload.
-        struct SpriteAtlasRec {
-            Image2D image{};
-            unsigned int textureVersion = ~0u;
-            uint32_t width  = 0;
-            uint32_t height = 0;
-            std::weak_ptr<Texture> liveCheck;
-        };
-        std::unordered_map<const Texture*, SpriteAtlasRec> spriteAtlasCache_;
-
-        // Per-BufferGeometry vertex/index upload cache for Line objects.
-        // Lines never go through the BLAS path — they don't ray-trace —
-        // so they need an independent host-visible upload. Keyed by raw
-        // BufferGeometry pointer (stable for the life of the geometry).
-        // positionVersion / indexVersion mirror the BufferAttribute::version
-        // counters; ensureLineGeometryUploaded re-uploads (in place when the
-        // size fits, recreate-and-copy when it grew) any time either bumps.
-        struct LineRec {
-            Buffer   vertex;
-            Buffer   index;          // .handle == VK_NULL_HANDLE if non-indexed
-            Buffer   color;          // .handle == VK_NULL_HANDLE if no "color" attribute
-            uint32_t vertexCount  = 0;
-            uint32_t indexCount   = 0;  // 0 if non-indexed
-            uint32_t positionVersion = 0;
-            uint32_t indexVersion    = 0;
-            uint32_t colorVersion    = 0;
-        };
-        std::unordered_map<const BufferGeometry*, LineRec> lineGeomCache_;
 
         // Per-Line scene snapshot, refreshed in ensureSceneBuilt alongside
         // lastVisibleEntries_. Lives only for the overlay record's draw
@@ -1393,7 +1454,7 @@ namespace threepp {
         // of per-mesh UV availability.
         Buffer dummyUvBuffer_{};
 
-        // ── Raster TAA resolve (stage 1A.5) ────────────────────────────────
+        // ── Raster TAA resolve ─────────────────────────────────────────────
         // Encapsulated in vulkan/TaaResolve.{hpp,cpp}. Owns its pipeline,
         // descriptor pool/sets, sampler, input image + history ping-pong.
         // External deps (raster gbuffer views, swapchain views) are passed
@@ -1435,7 +1496,18 @@ namespace threepp {
         float bloomThreshold_ = 1.0f;// soft-knee bright-pass cutoff (linear HDR)
         float bloomClamp_ = 0.0f;    // per-tap HDR cap before the bright pass; <= 0 = off
         float sharpenStrength_ = 0.0f;// post-TAA RCAS amount; 0 = off
-        float taaBlendAlpha_ = 0.1f;// 10% current, 90% history
+        float taaBlendAlpha_ = 0.1f;// 10% current, 90% history at the reference rate;
+                                    // frame-rate-corrected per frame (see taaPrevTimeSec_)
+        // Wall-clock anchor for the frame-rate-aware TAA blend. taaBlendAlpha_ is a
+        // per-FRAME new-sample weight, so holding it fixed ties the history half-life
+        // to frame COUNT: the same 90 %/frame retention is an invisible ~10 ms ghost
+        // at 200 fps but a long visible smear on a 30 fps (or vsync-capped + heavy)
+        // frame — the "moving object leaves edge trails" report. Each frame the
+        // weight is re-solved (in recordCommandBuffer, against kTaaRefFps) so
+        // (1-alpha) is held constant in wall-clock time instead of per frame; the
+        // shader's velocity/deviation gates are already per-frame-displacement based,
+        // so only this base weight needs the correction.
+        double taaPrevTimeSec_ = -1.0;
 
         bool perSppJitterHybrid_ = true;
         // Tracks what each per-frame slot's binding 1 (RT denoise output)
@@ -1493,38 +1565,18 @@ namespace threepp {
         }
 
         // ── Per-frame timing instrumentation ─────────────────────────────
-        // GPU timestamps via VkQueryPool (one pool per frame-in-flight).
-        // Each pool has 2 slots per pass (begin / end). After the fence
-        // wait at the top of renderFrame, the previous use of this slot's
-        // pool has retired, so vkGetQueryPoolResults reads the last frame's
-        // values. We translate ticks → ms using
-        // VkPhysicalDeviceLimits::timestampPeriod.
-        //
-        // timingMaskRecorded_ tracks which passes wrote both endpoints last
-        // frame so we don't read undefined slots from skipped passes
-        // (photon emit on no-glass frames, overlay depth on no-overlay
-        // frames, etc.).
-        enum TimingPass : uint32_t {
-            TP_RasterGbuf    = 0,
-            TP_OverlayDepth  = 1,
-            TP_PhotonEmit    = 2,
-            TP_PathTrace     = 3,
-            TP_Denoise       = 4,
-            TP_TAA           = 5,
-            TP_OverlayDraw   = 6,
-            TP_COUNT         = 7,
-        };
-        static constexpr uint32_t kTimingSlots = TP_COUNT * 2u;
-        std::array<VkQueryPool, kFramesInFlight> timestampPools{};
-        std::array<uint32_t, kFramesInFlight> timingMaskRecorded_{};
-        float    timestampPeriodNs_ = 1.0f;
-        bool     timingsSupported_  = false;
-        VulkanRenderer::FrameTimings lastFrameTimings_{};
-        std::chrono::high_resolution_clock::time_point recordStartTp_{};
+        // Managed by vulkan/GpuTimings.{hpp,cpp}. Owns one VkQueryPool per
+        // frame-in-flight; exposes begin/end brackets per TimingPass plus CPU
+        // record/frame timing. Constructed in the Impl ctor, after ctx is
+        // available.
+        std::unique_ptr<vulkan::GpuTimings>  gpuTimings_;
+        // Ortho/HUD overlay pass. Owns the sprite and
+        // ortho-line pipelines, atlas/geometry caches, and per-frame descriptor
+        // pools. Constructed after ctx is available (same constraint as gpuTimings_).
+        std::unique_ptr<vulkan::OverlayPass> overlayPass_;
         // Set by VulkanRenderer::render(...) right after ensureSceneBuilt
-        // and consumed by readBackTimingsFromPriorUse on the next frame's
-        // fence wait so the public getter sees the same frame's CPU + GPU
-        // numbers.
+        // and consumed by gpuTimings_->readBack() on the next frame's fence
+        // wait so the public getter sees the same frame's CPU + GPU numbers.
         float    pendingCpuEnsureSceneMs_ = 0.f;
         // ReSTIR DI master toggle. When false, chit's primary RIS branch is
         // bypassed and the legacy per-light NEE classic loops run instead
@@ -1589,7 +1641,7 @@ namespace threepp {
         // small period (16 frames) — long enough to look stable, short enough
         // to avoid ever-growing index drift.
         uint32_t haltonFrame_ = 0;
-        // Day-1 verification mode: blit one G-buffer channel onto the
+        // G-buffer debug-view mode: blit one G-buffer channel onto the
         // swapchain instead of running the path tracer. Lets us see the
         // raster output before raygen integration.
         enum class HybridDebugView : uint32_t {
@@ -1649,7 +1701,7 @@ namespace threepp {
         //
         // Idle              : no frame in flight; next render() runs beginFrame.
         // RecordingPostPT   : PT pass recorded; further render(ortho) calls
-        //                     append HUD overlay draws to the same cb (Phase 2).
+        //                     append HUD overlay draws to the same cb.
         // RecordingOrthoOnly: render(ortho) called with no prior PT — frame
         //                     was opened with an empty PT result (cleared
         //                     swapchain). Rare; mostly defensive.
@@ -1724,6 +1776,7 @@ namespace threepp {
             photon_ = std::make_unique<vulkan::PhotonCaustics>(*ctx, rtPipelineLayout);
             waterDisplace_ = std::make_unique<vulkan::WaterDisplacePipeline>(*ctx);
             foamWorld_     = std::make_unique<vulkan::FoamWorldPipeline>(*ctx);
+            grassWind_     = std::make_unique<vulkan::GrassWindPipeline>(*ctx);
             // Hybrid raster G-buffer infrastructure. Costs a few hundred MB
             // at 1080p for six attachments × kFramesInFlight.
             ensureHybridResources();
@@ -1760,10 +1813,22 @@ namespace threepp {
             createBlueNoiseImage_();// must run before descriptor writes (binding 27)
             createOceanFineDummy_();// must run before descriptor writes (binding 32)
             createOceanFoamDummy_();// must run before descriptor writes (binding 33)
+            createFoamDetailImage_();// must run before descriptor writes (binding 45 + deferred 34)
             rewriteTaaDescriptors();// after ensureHybridResources gave us raster gbuf views
             rewriteBloomDescriptors();// bloom composite reads gbuf + writes the TAA input
             rewriteDeferredDescriptors();// raster-first deferred shade inputs
-            createTimestampPools();// per-frame VkQueryPool for the timings API
+            gpuTimings_ = std::make_unique<vulkan::GpuTimings>(*ctx, kFramesInFlight);
+            overlayPass_ = std::make_unique<vulkan::OverlayPass>(
+                    *ctx, kFramesInFlight,
+                    [this](uint32_t w, uint32_t h, VkFormat fmt,
+                           const void* pix, VkDeviceSize sz,
+                           VkFilter filter,
+                           VkSamplerAddressMode addrU,
+                           VkSamplerAddressMode addrV,
+                           const char* name) {
+                        return createSampledImage2D(w, h, fmt, pix, sz,
+                                                   filter, addrU, addrV, name);
+                    });
         }
 
         ~Impl() {
@@ -1785,7 +1850,7 @@ namespace threepp {
             for (auto s : renderFinished) if (s) vkDestroySemaphore(d, s, nullptr);
             for (auto f : inFlight) if (f) vkDestroyFence(d, f, nullptr);
             if (cmdPool) vkDestroyCommandPool(d, cmdPool, nullptr);
-            for (auto p : timestampPools) if (p) vkDestroyQueryPool(d, p, nullptr);
+            gpuTimings_.reset();// query pool destruction while device is still valid
 
             if (descriptorPool) vkDestroyDescriptorPool(d, descriptorPool, nullptr);
 
@@ -1805,7 +1870,8 @@ namespace threepp {
 
             if (tlas) ctx->rt().destroyAccelerationStructure(d, tlas, nullptr);
             destroyBuffer(ctx->allocator(), tlasBuffer);
-            destroyBuffer(ctx->allocator(), tlasInstancesBuffer);
+            for (auto& b : tlasInstancesBuffers) destroyBuffer(ctx->allocator(), b);
+            destroyBuffer(ctx->allocator(), tlasRefitScratch_);
             destroyBuffer(ctx->allocator(), geometryDescsBuffer);
             for (auto& b : materialDescsBuffers) destroyBuffer(ctx->allocator(), b);
             destroyBuffer(ctx->allocator(), sceneCaptureBuf_);
@@ -1822,7 +1888,7 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->index);
                 destroyBuffer(ctx->allocator(), rec->normal);
                 destroyBuffer(ctx->allocator(), rec->uv);
-                destroyBuffer(ctx->allocator(), rec->foam);
+                destroyBuffer(ctx->allocator(), rec->color);
                 destroyBuffer(ctx->allocator(), rec->prevVertex);
                 destroyBuffer(ctx->allocator(), rec->blasScratch);
             }
@@ -1845,7 +1911,6 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->index);
                 destroyBuffer(ctx->allocator(), rec->normal);
                 destroyBuffer(ctx->allocator(), rec->uv);
-                destroyBuffer(ctx->allocator(), rec->foam);
                 destroyBuffer(ctx->allocator(), rec->prevVertex);
                 destroyBuffer(ctx->allocator(), rec->blasScratch);
             }
@@ -1869,7 +1934,6 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->index);
                 destroyBuffer(ctx->allocator(), rec->normal);
                 destroyBuffer(ctx->allocator(), rec->uv);
-                destroyBuffer(ctx->allocator(), rec->foam);
                 destroyBuffer(ctx->allocator(), rec->prevVertex);
                 destroyBuffer(ctx->allocator(), rec->blasScratch);
             }
@@ -1884,7 +1948,6 @@ namespace threepp {
                     destroyBuffer(ctx->allocator(), rec->index);
                     destroyBuffer(ctx->allocator(), rec->normal);
                     destroyBuffer(ctx->allocator(), rec->uv);
-                    destroyBuffer(ctx->allocator(), rec->foam);
                     destroyBuffer(ctx->allocator(), rec->prevVertex);
                     destroyBuffer(ctx->allocator(), rec->blasScratch);
                 }
@@ -1902,6 +1965,23 @@ namespace threepp {
             }
             displacedStates.clear();
 
+            for (auto& [_, st] : grassStates) {
+                if (st->blas) {
+                    auto& rec = st->blas;
+                    if (rec->as) ctx->rt().destroyAccelerationStructure(d, rec->as, nullptr);
+                    destroyBuffer(ctx->allocator(), rec->storage);
+                    destroyBuffer(ctx->allocator(), rec->vertex);
+                    destroyBuffer(ctx->allocator(), rec->index);
+                    destroyBuffer(ctx->allocator(), rec->normal);
+                    destroyBuffer(ctx->allocator(), rec->uv);
+                    destroyBuffer(ctx->allocator(), rec->prevVertex);
+                    destroyBuffer(ctx->allocator(), rec->blasScratch);
+                }
+                destroyBuffer(ctx->allocator(), st->restPos);
+                destroyBuffer(ctx->allocator(), st->heightFrac);
+            }
+            grassStates.clear();
+
             for (auto& [_, st] : morphedMeshStates) {
                 auto& rec = st->blas;
                 if (!rec) continue;
@@ -1911,7 +1991,6 @@ namespace threepp {
                 destroyBuffer(ctx->allocator(), rec->index);
                 destroyBuffer(ctx->allocator(), rec->normal);
                 destroyBuffer(ctx->allocator(), rec->uv);
-                destroyBuffer(ctx->allocator(), rec->foam);
                 destroyBuffer(ctx->allocator(), rec->prevVertex);
                 destroyBuffer(ctx->allocator(), rec->blasScratch);
             }
@@ -1930,6 +2009,7 @@ namespace threepp {
             destroyImage2D(ctx->allocator(), d, blueNoiseImage);
             destroyImage2D(ctx->allocator(), d, oceanFineHeightDummy);
             destroyImage2D(ctx->allocator(), d, oceanFoamDummy);
+            destroyImage2D(ctx->allocator(), d, foamDetailImage);
             for (auto& img : accumImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : gbufImagesPP) destroyImage2D(ctx->allocator(), d, img);
             for (auto& img : reservoirPosImagesPP) destroyImage2D(ctx->allocator(), d, img);
@@ -1955,6 +2035,9 @@ namespace threepp {
             // World-space foam pipeline; foam ping-pong images are owned by
             // each DisplacedMeshState and destroyed there.
             foamWorld_.reset();
+            // Grass-wind pipeline; per-mesh buffers freed in the grassStates
+            // loop above.
+            grassWind_.reset();
 
             // Hybrid raster G-buffer cleanup. Resources are lazy-created on
             // first render(); if render() was never called, all handles stay
@@ -1965,6 +2048,7 @@ namespace threepp {
             for (auto& b : indirectCmdBuffers)  destroyBuffer(ctx->allocator(), b);
             if (rasterGbufPipeline)         vkDestroyPipeline(d, rasterGbufPipeline, nullptr);
             if (rasterGbufIndirectPipeline) vkDestroyPipeline(d, rasterGbufIndirectPipeline, nullptr);
+            if (rasterGbufDecalPipeline)    vkDestroyPipeline(d, rasterGbufDecalPipeline, nullptr);
             if (rasterPipelineLayout)   vkDestroyPipelineLayout(d, rasterPipelineLayout, nullptr);
             if (rasterDsLayout)         vkDestroyDescriptorSetLayout(d, rasterDsLayout, nullptr);
             if (rasterDescPool)         vkDestroyDescriptorPool(d, rasterDescPool, nullptr);
@@ -1979,32 +2063,7 @@ namespace threepp {
             if (overlayPointListPipeline)         vkDestroyPipeline(d, overlayPointListPipeline, nullptr);
             if (overlayDepthPrepassPipeline)      vkDestroyPipeline(d, overlayDepthPrepassPipeline, nullptr);
             if (overlayPipelineLayout)      vkDestroyPipelineLayout(d, overlayPipelineLayout, nullptr);
-            if (overlaySpritePipeline_)     vkDestroyPipeline(d, overlaySpritePipeline_, nullptr);
-            if (spritePipelineLayout_)      vkDestroyPipelineLayout(d, spritePipelineLayout_, nullptr);
-            if (orthoLineListPipeline_)     vkDestroyPipeline(d, orthoLineListPipeline_, nullptr);
-            if (orthoLineStripPipeline_)    vkDestroyPipeline(d, orthoLineStripPipeline_, nullptr);
-            if (orthoMeshPipeline_)            vkDestroyPipeline(d, orthoMeshPipeline_, nullptr);
-            if (orthoMeshTransparentPipeline_) vkDestroyPipeline(d, orthoMeshTransparentPipeline_, nullptr);
-            if (orthoLinePipelineLayout_)   vkDestroyPipelineLayout(d, orthoLinePipelineLayout_, nullptr);
-            if (spriteDescSetLayout_)       vkDestroyDescriptorSetLayout(d, spriteDescSetLayout_, nullptr);
-            for (auto& pool : spriteDescPools_) {
-                if (pool) vkDestroyDescriptorPool(d, pool, nullptr);
-            }
-            for (auto& [t, rec] : spriteAtlasCache_) {
-                destroyImage2D(ctx->allocator(), d, rec.image);
-            }
-            spriteAtlasCache_.clear();
-            for (auto& [g, rec] : spriteGeomCache_) {
-                destroyBuffer(ctx->allocator(), rec.vertex);
-                if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.index);
-            }
-            spriteGeomCache_.clear();
-            for (auto& [g, rec] : lineGeomCache_) {
-                destroyBuffer(ctx->allocator(), rec.vertex);
-                if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.index);
-                if (rec.color.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.color);
-            }
-            lineGeomCache_.clear();
+            overlayPass_.reset();// destroy sprite/line pipelines + caches while device is alive
             if (gbufSampler_)           vkDestroySampler(d, gbufSampler_, nullptr);
             destroyBuffer(ctx->allocator(), dummyUvBuffer_);
 
@@ -2083,6 +2142,7 @@ namespace threepp {
             if (auto* a = g.getAttribute<float>("normal"))   v += a->version;
             if (auto* idx = g.getIndex())                     v += idx->version;
             if (auto* a = g.getAttribute<float>("uv"))        v += a->version;
+            if (auto* a = g.getAttribute<float>("color"))     v += a->version;
             return v;
         }
 
@@ -2093,7 +2153,7 @@ namespace threepp {
             auto* posAttr = geom.getAttribute<float>("position");
             if (!posAttr) return nullptr;
             auto* normAttr = geom.getAttribute<float>("normal");
-            if (!normAttr) return nullptr;// Phase 5a requires per-vertex normals
+            if (!normAttr) return nullptr;// the RT path requires per-vertex normals
             const auto& positions = posAttr->array();
             const auto& normals = normAttr->array();
             const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
@@ -2187,6 +2247,41 @@ namespace threepp {
                     vmaMapMemory(ctx->allocator(), rec->uv.alloc, &mapped);
                     std::memcpy(mapped, uvs.data(), uvBytes);
                     vmaUnmapMemory(ctx->allocator(), rec->uv.alloc);
+                }
+            }
+
+            // Optional per-vertex color (material.vertexColors). closest_hit and
+            // the raster gbuffer interpolate this and modulate albedo. Stored as
+            // tightly-packed vec3 (the shaders fetch 3 floats/vertex); itemSize-4
+            // colors are repacked to RGB, dropping the alpha. Whether it actually
+            // applies is decided per-instance from the material's vertexColors
+            // flag when GeometryDesc / DrawInfo are filled — the buffer is always
+            // uploaded if present so a shared geometry works under either material.
+            if (auto* colAttr = geom.getAttribute<float>("color")) {
+                const int itemSize = colAttr->itemSize();
+                if (colAttr->count() == static_cast<int>(vertexCount) &&
+                    (itemSize == 3 || itemSize == 4)) {
+                    const auto& cols = colAttr->array();
+                    const VkDeviceSize cbBytes = static_cast<VkDeviceSize>(vertexCount) * 3 * sizeof(float);
+                    rec->color = createBuffer(
+                            ctx->allocator(), ctx->device(), cbBytes,
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                            VMA_MEMORY_USAGE_AUTO,
+                            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                    vmaMapMemory(ctx->allocator(), rec->color.alloc, &mapped);
+                    if (itemSize == 3) {
+                        std::memcpy(mapped, cols.data(), cbBytes);
+                    } else {
+                        auto* dst = static_cast<float*>(mapped);
+                        for (uint32_t v = 0; v < vertexCount; ++v) {
+                            dst[v * 3 + 0] = cols[v * 4 + 0];
+                            dst[v * 3 + 1] = cols[v * 4 + 1];
+                            dst[v * 3 + 2] = cols[v * 4 + 2];
+                        }
+                    }
+                    vmaUnmapMemory(ctx->allocator(), rec->color.alloc);
                 }
             }
 
@@ -2305,6 +2400,7 @@ namespace threepp {
             rec->geomVersion = geomVersionOf(geom);
             rec->vertexCount = vertexCount;
             rec->indexCount  = indexed ? static_cast<uint32_t>(idxAttr->count()) : 0u;
+            rec->vbBytes     = vbBytes;// for the prevVertex re-sync copy
 
             return rec;
         }
@@ -2926,6 +3022,11 @@ namespace threepp {
                     VkBufferCopy region{};
                     region.size = posAttr->array().size() * sizeof(float);
                     vkCmdCopyBuffer(cb, rec.vertex.handle, rec.prevVertex.handle, 1, &region);
+                    // This snapshot is the PRE-update geometry. It is correct for
+                    // the change frame's motion vector, but must be re-synced to
+                    // the new positions on the next clean frame (see the resync
+                    // pass in ensureSceneBuilt) or the mesh shakes forever.
+                    rec.prevVertexResyncPending = true;
                     any = true;
                 }
                 if (any) {
@@ -3292,30 +3393,13 @@ namespace threepp {
             if (!blas) return nullptr;
             blas->liveCheck = dm.geometry();
 
-            // Per-vertex foam coverage (1 float per vertex, [0..1]). Written
-            // by water_displace.comp via Jacobian of horizontal displacement;
-            // read by closest_hit.rchit to lerp roughness/albedo toward white
-            // where the surface is folding (= breaking-wave whitewater).
-            blas->foam = createBuffer(
-                    ctx->allocator(), ctx->device(),
-                    VkDeviceSize(vertexCount) * sizeof(float),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-                            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    VMA_MEMORY_USAGE_AUTO);
-            // Zero-init: water_displace.comp's decay path reads the previous
-            // frame's foam at this vertex and computes max(foamInstant, prev*
-            // decay). Without explicit init the first frame reads undefined
-            // GPU memory — often huge garbage values (NaN/Inf bit patterns
-            // or just large floats) that decay slowly enough to be visible
-            // for tens of seconds, bilinear-interpolated across the plane's
-            // triangulation as a hex-tile foam pattern.
-            {
-                VkCommandBuffer cb = beginOneShot();
-                vkCmdFillBuffer(cb, blas->foam.handle, 0, VK_WHOLE_SIZE, 0);
-                endAndSubmitOneShot(cb);
-            }
+            // FFT-displaced ocean mesh: mark it so the chit / deferred passes
+            // apply world-space foam + thin-shell water shading. Foam itself
+            // lives in a world-space texture built by foam_world.comp, so the
+            // only per-mesh state needed here is this "is water" marker (it
+            // used to be a zero-filled per-vertex foam buffer, read solely for
+            // its non-null address — the contents were dead).
+            blas->isOceanSurface = true;
 
             // Per-vertex previous-pose buffer for hybrid raster motion vec.
             // Same size as vertex (R32G32B32 SFLOAT × vertexCount). Filled
@@ -3478,12 +3562,13 @@ namespace threepp {
             // World-space foam image. Coverage equals the cascade-0 tile
             // (matches the FFT periodicity, so REPEAT-sampling at any
             // world XZ folds back into the same texture cell). Resolution
-            // 1024² over 1000 m → ~0.98 m per texel, comparable to the
-            // base ocean's vertex spacing. R32F storage so both compute
+            // 2048² over 1000 m → ~0.49 m per texel — fine enough to carry
+            // the cascade-1 whitecap detail foam_world.comp's fine Jacobian
+            // stencil extracts (16 MB R32F). R32F storage so both compute
             // imageLoad/Store and chit linear sampling work without
             // format conversions.
             {
-                state->foamRes      = 1024u;
+                state->foamRes      = 2048u;
                 state->foamTileSize = dm.params.tileSize0;
                 VkImageCreateInfo ici{};
                 ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -3515,8 +3600,8 @@ namespace threepp {
                 vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 check(vkCreateImageView(ctx->device(), &vci, nullptr, &state->foamImage.view),
                       "vkCreateImageView(foamWorld)");
-                ctx->setObjectName(state->foamImage.image, "ocean.foamWorld (1024x1024 R32F)");
-                ctx->setObjectName(state->foamImage.view,  "ocean.foamWorld (1024x1024 R32F)");
+                ctx->setObjectName(state->foamImage.image, "ocean.foamWorld (2048x2048 R32F)");
+                ctx->setObjectName(state->foamImage.view,  "ocean.foamWorld (2048x2048 R32F)");
 
                 // Initial clear to zero + layout transition to GENERAL so the
                 // first foam_world dispatch's imageLoad reads 0 (no foam yet)
@@ -3833,7 +3918,6 @@ namespace threepp {
             vulkan::WaterDisplacePipeline::PushConstants pc{};
             pc.posOut       = st.blas->vertex.address;
             pc.normOut      = st.blas->normal.address;
-            pc.foamOut      = st.blas->foam.address;
             pc.disturbAddr  = st.foamDisturbBuffer.address;
             pc.vertexCount  = st.vertexCount;
             pc.gridDim      = st.gridDim;
@@ -3868,6 +3952,22 @@ namespace threepp {
             // pool's cascade-image bindings without a layout flip; the
             // cascades stay in GENERAL throughout.
             {
+                // Wall-clock foam persistence. The old fixed 0.992/frame tied
+                // the foam half-life to frame rate (≈1.4 s at 60 fps, half
+                // that at 120) — same bug class as the TAA temporal constants.
+                // τ = 2 s reproduces the old look at 60 fps. dt clamped so an
+                // alt-tab / loading stall can't wipe the accumulator in one
+                // frame.
+                const double nowSec = glfwGetTime();
+                float foamDecay = 0.992f;// first frame: no dt reference yet
+                if (st.foamPrevTimeSec >= 0.0) {
+                    const float dt = std::clamp(
+                            static_cast<float>(nowSec - st.foamPrevTimeSec),
+                            0.0f, 0.25f);
+                    foamDecay = std::exp(-dt / 2.0f);
+                }
+                st.foamPrevTimeSec = nowSec;
+
                 vulkan::FoamWorldPipeline::PushConstants fpc{};
                 fpc.disturbAddr    = st.foamDisturbBuffer.address;
                 fpc.foamRes        = st.foamRes;
@@ -3886,7 +3986,7 @@ namespace threepp {
                 fpc.hullCosYaw     = dm.hullExclusion.cosYaw;
                 fpc.forwardSpeed   = dm.wake.enabled ? dm.wake.forwardSpeed : 0.0f;
                 fpc.disturbCount   = disturbCount;
-                fpc.decay          = 0.992f;
+                fpc.decay          = foamDecay;
                 fpc.wakeTrailAddr  = st.wakeTrailBuffer.address;
                 fpc.wakeTrailCount = wakeSampleCount;
                 fpc._pad           = 0;
@@ -4024,32 +4124,213 @@ namespace threepp {
             }
         }
 
+        // ── GrassMesh helpers ────────────────────────────────────────────
+        // Lazy create the per-GrassMesh state: a BLAS over the rest geometry
+        // (built ALLOW_UPDATE, refit each frame) plus an immutable copy of the
+        // rest positions and the per-vertex height fractions the wind shader
+        // reads. Returns nullptr if the geometry lacks position / heightFrac.
+        GrassMeshState* ensureGrassState(GrassMesh& gm) {
+            auto it = grassStates.find(&gm);
+            if (it != grassStates.end()) return it->second.get();
+
+            auto* posAttr = gm.geometry()->getAttribute<float>("position");
+            auto* hfAttr  = gm.geometry()->getAttribute<float>("heightFrac");
+            if (!posAttr || !hfAttr) return nullptr;
+            const uint32_t vertexCount = static_cast<uint32_t>(posAttr->count());
+            if (vertexCount == 0 || static_cast<uint32_t>(hfAttr->count()) != vertexCount) return nullptr;
+
+            auto blas = buildBlasFor(*gm.geometry());
+            if (!blas) return nullptr;
+            blas->liveCheck = gm.geometry();
+
+            auto state = std::make_unique<GrassMeshState>();
+            state->vertexCount = vertexCount;
+            state->liveCheck = gm.geometry();
+
+            // Immutable rest positions — the shader reads these and writes the
+            // displaced result into the (separate) BLAS vertex buffer.
+            const VkDeviceSize posBytes = VkDeviceSize(vertexCount) * 3u * sizeof(float);
+            state->restPos = createBuffer(
+                    ctx->allocator(), ctx->device(), posBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            {
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), state->restPos.alloc, &mapped);
+                std::memcpy(mapped, posAttr->array().data(), posBytes);
+                vmaUnmapMemory(ctx->allocator(), state->restPos.alloc);
+            }
+
+            const VkDeviceSize hfBytes = VkDeviceSize(vertexCount) * sizeof(float);
+            state->heightFrac = createBuffer(
+                    ctx->allocator(), ctx->device(), hfBytes,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                    VMA_MEMORY_USAGE_AUTO,
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            {
+                void* mapped = nullptr;
+                vmaMapMemory(ctx->allocator(), state->heightFrac.alloc, &mapped);
+                std::memcpy(mapped, hfAttr->array().data(), hfBytes);
+                vmaUnmapMemory(ctx->allocator(), state->heightFrac.alloc);
+            }
+
+            state->blas = std::move(blas);
+            auto* raw = state.get();
+            grassStates.emplace(&gm, std::move(state));
+            return raw;
+        }
+
+        // Record the grass wind deform (rest → displaced positions in the BLAS
+        // vertex buffer) + in-place BLAS refit into `cb`. No submit — the caller
+        // batches these into the main frame command buffer (recordCommandBuffer),
+        // exactly like the skinned-mesh path, so there is NO mid-frame
+        // vkQueueWaitIdle. Uses the persistent per-BLAS scratch (grass geometry
+        // is fixed-size, so it's allocated once on first use). Normals are left
+        // static, so only the position buffer is written/barriered.
+        void recordGrassDeform(VkCommandBuffer cb, GrassMesh& gm, GrassMeshState& st) {
+            vulkan::GrassWindPipeline::PushConstants pc{};
+            pc.posOut       = st.blas->vertex.address;
+            pc.restIn       = st.restPos.address;
+            pc.hfracIn      = st.heightFrac.address;
+            pc.vertexCount  = st.vertexCount;
+            pc.time         = gm.params.time;
+            pc.windStrength = gm.params.windStrength;
+            pc.windDirX     = gm.params.windDir.x;
+            pc.windDirZ     = gm.params.windDir.y;
+            grassWind_->recordDispatch(cb, pc);
+
+            // Compute write → AS-build read (BLAS refit) + vertex-attribute read
+            // (raster G-buffer prepass reads the deformed positions). Mirrors the
+            // skinned path's post-dispatch barrier.
+            {
+                VkMemoryBarrier2 mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                mb.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                   VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
+                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                   VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
+                                   VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                VkDependencyInfo dep{};
+                dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.memoryBarrierCount = 1;
+                dep.pMemoryBarriers    = &mb;
+                vkCmdPipelineBarrier2(cb, &dep);
+            }
+
+            // Refit the BLAS in place (periodic full rebuild keeps it balanced).
+            auto* posAttr = gm.geometry()->getAttribute<float>("position");
+            auto* idxAttr = gm.geometry()->getIndex();
+            const uint32_t vc = static_cast<uint32_t>(posAttr->count());
+            const bool indexed = idxAttr != nullptr;
+            const uint32_t primCount = indexed ? static_cast<uint32_t>(idxAttr->count() / 3)
+                                               : vc / 3;
+
+            VkAccelerationStructureGeometryTrianglesDataKHR triData{};
+            triData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+            triData.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            triData.vertexData.deviceAddress = st.blas->vertex.address;
+            triData.vertexStride = 3 * sizeof(float);
+            triData.maxVertex = vc - 1;
+            if (indexed) {
+                triData.indexType = VK_INDEX_TYPE_UINT32;
+                triData.indexData.deviceAddress = st.blas->index.address;
+            } else {
+                triData.indexType = VK_INDEX_TYPE_NONE_KHR;
+            }
+
+            VkAccelerationStructureGeometryKHR blasGeom{};
+            blasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            blasGeom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            blasGeom.geometry.triangles = triData;
+            blasGeom.flags = 0;
+
+            const bool fullRebuild =
+                    st.blasRefitCounter >= GrassMeshState::kBlasFullRebuildInterval;
+            st.blasRefitCounter = fullRebuild ? 0u : (st.blasRefitCounter + 1u);
+
+            VkAccelerationStructureBuildGeometryInfoKHR build{};
+            build.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+            build.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            build.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                          VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+            build.mode  = fullRebuild
+                    ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR
+                    : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
+            build.geometryCount = 1;
+            build.pGeometries = &blasGeom;
+            build.srcAccelerationStructure = fullRebuild ? VK_NULL_HANDLE : st.blas->as;
+            build.dstAccelerationStructure = st.blas->as;
+
+            VkAccelerationStructureBuildSizesInfoKHR sizes{};
+            sizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+            ctx->rt().getAccelerationStructureBuildSizes(
+                    ctx->device(), VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                    &build, &primCount, &sizes);
+
+            // Persistent scratch (sized once; buildScratchSize ≥ updateScratchSize).
+            if (st.blas->blasScratch.handle == VK_NULL_HANDLE ||
+                st.blas->blasScratchSize < sizes.buildScratchSize) {
+                if (st.blas->blasScratch.handle != VK_NULL_HANDLE)
+                    destroyBuffer(ctx->allocator(), st.blas->blasScratch);
+                st.blas->blasScratch = createAsScratchBuffer(
+                        ctx->allocator(), ctx->device(), sizes.buildScratchSize);
+                st.blas->blasScratchSize = sizes.buildScratchSize;
+            }
+            build.scratchData.deviceAddress = st.blas->blasScratch.address;
+
+            VkAccelerationStructureBuildRangeInfoKHR range{};
+            range.primitiveCount = primCount;
+            const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
+            ctx->rt().cmdBuildAccelerationStructures(cb, 1, &build, &pRange);
+        }
+
+        // One-shot wrapper — used only for the initial prime during scene build
+        // (rare). The per-frame path records into the frame cb via the pending
+        // queue, so it never drains.
+        void refreshGrassBlas(GrassMesh& gm, GrassMeshState& st, float /*elapsedSeconds*/) {
+            VkCommandBuffer cb = beginOneShot();
+            recordGrassDeform(cb, gm, st);
+            endAndSubmitOneShot(cb, "grass prime");
+        }
+
         // Build a TLAS over the supplied instance descriptors. Empty input is
-        // legal — produces an empty TLAS that always misses (Phase 2 fallback).
+        // legal — produces an empty TLAS that always misses.
         void buildTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances) {
             const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
             const VkDeviceSize instBytes = std::max<VkDeviceSize>(
                     instanceCount * sizeof(VkAccelerationStructureInstanceKHR),
                     sizeof(VkAccelerationStructureInstanceKHR));// keep buf non-empty
 
-            tlasInstancesBuffer = createBuffer(
-                    ctx->allocator(), ctx->device(), instBytes,
-                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            if (instanceCount > 0) {
-                void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), tlasInstancesBuffer.alloc, &mapped);
-                std::memcpy(mapped, instances.data(),
-                            instanceCount * sizeof(VkAccelerationStructureInstanceKHR));
-                vmaUnmapMemory(ctx->allocator(), tlasInstancesBuffer.alloc);
+            // (Re)allocate all in-flight instance buffers and seed every slot
+            // with the current instances, so whichever slot the next per-frame
+            // refit overwrites is already a valid build input.
+            for (uint32_t s = 0; s < kFramesInFlight; ++s) {
+                destroyBuffer(ctx->allocator(), tlasInstancesBuffers[s]);
+                tlasInstancesBuffers[s] = createBuffer(
+                        ctx->allocator(), ctx->device(), instBytes,
+                        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                        VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                if (instanceCount > 0) {
+                    void* mapped = nullptr;
+                    vmaMapMemory(ctx->allocator(), tlasInstancesBuffers[s].alloc, &mapped);
+                    std::memcpy(mapped, instances.data(),
+                                instanceCount * sizeof(VkAccelerationStructureInstanceKHR));
+                    vmaUnmapMemory(ctx->allocator(), tlasInstancesBuffers[s].alloc);
+                }
             }
 
             VkAccelerationStructureGeometryInstancesDataKHR instData{};
             instData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
             instData.arrayOfPointers = VK_FALSE;
-            instData.data.deviceAddress = tlasInstancesBuffer.address;
+            instData.data.deviceAddress = tlasInstancesBuffers[0].address;
 
             VkAccelerationStructureGeometryKHR tlasGeom{};
             tlasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
@@ -4102,26 +4383,29 @@ namespace threepp {
             destroyBuffer(ctx->allocator(), scratch);
         }
 
-        // Refit the existing TLAS in-place with new instance transforms.
-        // Cheaper than a full rebuild and crucially leaves the TLAS handle
-        // unchanged so descriptor binding 0 keeps pointing at it. Caller
-        // must hold the same instance count as the previous build (only
-        // matrices may change) — topology growth requires a full rebuild.
-        void refitTlas(const std::vector<VkAccelerationStructureInstanceKHR>& instances,
-                       bool fullBuild = false) {
+        // Record a per-frame TLAS refit/rebuild into `cb` — NO blocking submit.
+        // The host instance write goes to tlasInstancesBuffers[currentFrame]
+        // (safe: recordCommandBuffer runs after this slot's fence wait), and the
+        // build uses the persistent scratch. Leaves the TLAS handle unchanged so
+        // descriptor binding 0 keeps pointing at it. Must be recorded AFTER all
+        // deformable BLAS rebuilds in the same cb.
+        void recordTlasRefit(VkCommandBuffer cb,
+                             const std::vector<VkAccelerationStructureInstanceKHR>& instances,
+                             bool fullBuild) {
             const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
             if (instanceCount == 0 || tlas == VK_NULL_HANDLE) return;
 
+            Buffer& instBuf = tlasInstancesBuffers[currentFrame];
             void* mapped = nullptr;
-            vmaMapMemory(ctx->allocator(), tlasInstancesBuffer.alloc, &mapped);
+            vmaMapMemory(ctx->allocator(), instBuf.alloc, &mapped);
             std::memcpy(mapped, instances.data(),
                         instanceCount * sizeof(VkAccelerationStructureInstanceKHR));
-            vmaUnmapMemory(ctx->allocator(), tlasInstancesBuffer.alloc);
+            vmaUnmapMemory(ctx->allocator(), instBuf.alloc);
 
             VkAccelerationStructureGeometryInstancesDataKHR instData{};
             instData.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
             instData.arrayOfPointers = VK_FALSE;
-            instData.data.deviceAddress = tlasInstancesBuffer.address;
+            instData.data.deviceAddress = instBuf.address;
 
             VkAccelerationStructureGeometryKHR tlasGeom{};
             tlasGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
@@ -4151,19 +4435,21 @@ namespace threepp {
                     VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                     &tlasBuild, &instanceCount, &sizes);
 
-            const VkDeviceSize scratchSize = fullBuild
-                    ? sizes.buildScratchSize : sizes.updateScratchSize;
-            Buffer scratch = createAsScratchBuffer(ctx->allocator(), ctx->device(), scratchSize);
-            tlasBuild.scratchData.deviceAddress = scratch.address;
+            // Persistent scratch (sized once; build ≥ update). The TLAS build is
+            // ordered after the prior frame's by submit order, so reuse is safe.
+            const VkDeviceSize need = std::max(sizes.buildScratchSize, sizes.updateScratchSize);
+            if (tlasRefitScratch_.handle == VK_NULL_HANDLE || tlasRefitScratchSize_ < need) {
+                if (tlasRefitScratch_.handle != VK_NULL_HANDLE)
+                    destroyBuffer(ctx->allocator(), tlasRefitScratch_);
+                tlasRefitScratch_ = createAsScratchBuffer(ctx->allocator(), ctx->device(), need);
+                tlasRefitScratchSize_ = need;
+            }
+            tlasBuild.scratchData.deviceAddress = tlasRefitScratch_.address;
 
             VkAccelerationStructureBuildRangeInfoKHR range{};
             range.primitiveCount = instanceCount;
             const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
-
-            VkCommandBuffer cb = beginOneShot();
             ctx->rt().cmdBuildAccelerationStructures(cb, 1, &tlasBuild, &pRange);
-            endAndSubmitOneShot(cb, "refitTlas");
-            destroyBuffer(ctx->allocator(), scratch);
         }
 
         template<typename DescT>
@@ -4242,7 +4528,7 @@ namespace threepp {
                 // (skinned/displaced/morphed/tet) are here because their cached local
                 // AABB doesn't reflect the per-frame deformed extents, so frustum-
                 // culling them risks popping a still-on-screen body out of the gbuffer.
-                if (en.isOverlay || en.isSkinned || en.isDisplaced || en.isMorphed || en.isTet) {
+                if (en.isOverlay || en.isSkinned || en.isDisplaced || en.isGrass || en.isMorphed || en.isTet) {
                     en.inFrustum = true;
                 } else {
                     auto geom = en.mesh->geometry();
@@ -4340,6 +4626,23 @@ namespace threepp {
                 d.transmission = tr->transmission;
                 d.ior          = std::max(1.0f, tr->ior);
                 d.dispersion   = std::max(0.0f, tr->dispersion);
+                // glTF permits transmission + alphaMode BLEND together; alpha
+                // is COVERAGE, independent of the transmission tint, and the
+                // spec composite is α·glassResult + (1−α)·background. Smoked
+                // car windows ship exactly this pattern (BLACK baseColor as
+                // the tint + low alpha): taking the tint alone renders them
+                // opaque-black in both render modes, while GL — which ignores
+                // the transmission extension and plain alpha-blends — shows
+                // the background through. Fold the coverage into the tint,
+                // tint' = mix(1, tint, α): for the dominant straight-through
+                // path this reproduces the blend composite exactly, with no
+                // second blend pass in either pipeline.
+                if (d.transmission > 0.0f && mat->transparent && mat->opacity < 1.0f) {
+                    const float a = std::clamp(mat->opacity, 0.0f, 1.0f);
+                    for (float& c : d.albedo) {
+                        c = (1.0f - a) + a * c;
+                    }
+                }
             }
             // Additive-blend effects (muzzle flashes, sparks, energy glows): the
             // surface GLOWS over the scene rather than occluding/refracting it.
@@ -4364,8 +4667,20 @@ namespace threepp {
             // BLEND mode with texture alpha (alphaMode=BLEND, opacity=1.0):
             // alphaCutoff=-1.0 sentinel triggers per-texel stochastic blend in
             // closest_hit using the albedo texture's alpha channel.
+            //
+            // DECAL refinement (-2.0): transparent + depthWrite=false +
+            // polygonOffset is the decal authoring signature (DecalGeometry
+            // scorch splats etc.). The gbuffer raster routes these to a
+            // dedicated pipeline that alpha-blends ONLY the albedo attachment
+            // over the receiving surface (normal/ids/motion/depth untouched) —
+            // a deterministic lerp matching GL's forward blend, instead of the
+            // stochastic screen-door whose per-frame id flicker defeats the
+            // temporal accumulator and lets the denoiser dilate the splat.
+            // Every shader-side blend test is a sign test (alphaCutoff < 0),
+            // so -2 inherits all -1 semantics (no shadow cast, stochastic
+            // pass-through in the PT chit) automatically.
             if (mat->transparent && d.alphaCutoff == 0.0f && d.transmission == 0.0f) {
-                d.alphaCutoff = -1.0f;
+                d.alphaCutoff = (!mat->depthWrite && mat->polygonOffset) ? -2.0f : -1.0f;
             }
             if (auto* cc = dynamic_cast<MaterialWithClearcoat*>(mat.get())) {
                 d.clearcoat = cc->clearcoat;
@@ -4519,6 +4834,11 @@ namespace threepp {
             // ms/frame on Bistro's node count, static or not).
             scene.updateMatrixWorld();
 
+            // Honour live edits to already-uploaded material textures (e.g. a
+            // DataTexture re-baked via setData + needsUpdate). Cheap version
+            // scan; only re-uploads + rewrites descriptors when something changed.
+            refreshDirtyMaterialTextures();
+
             // First call each render(): start with no motion. Camera + mesh
             // motion checks below + in updateCameraUbo OR true into this flag
             // before dispatch.
@@ -4655,12 +4975,13 @@ namespace threepp {
                 // dirty-detection.
                 const bool isSkinned   = (dynamic_cast<SkinnedMesh*>(m)   != nullptr);
                 const bool isDisplaced = (dynamic_cast<DisplacedMesh*>(m) != nullptr);
+                const bool isGrass     = (dynamic_cast<GrassMesh*>(m)     != nullptr);
                 const bool isMorphed   = isMorphedMesh(*m);
                 // Tet-skinned PhysX soft body — detected via the material flag set by
                 // SoftBody::enableGpuSkinning() (which also carries the per-frame tet
                 // texture and the static tetIndex/tetWeight/tetRestInv* attributes).
                 // Mutually exclusive with the other deformers.
-                const bool isTet = !isSkinned && !isDisplaced && !isMorphed &&
+                const bool isTet = !isSkinned && !isDisplaced && !isGrass && !isMorphed &&
                                    m->material() && m->material()->tetSkinning &&
                                    m->material()->tetTexture != nullptr;
                 if (inst && inst->count() > 0) {
@@ -4675,6 +4996,7 @@ namespace threepp {
                         e.isOverlay    = isOverlay;
                         e.isSkinned    = isSkinned;
                         e.isDisplaced  = isDisplaced;
+                        e.isGrass      = isGrass;
                         e.isMorphed    = isMorphed;
                         e.isTet        = isTet;
                         e.isInstanced  = true;
@@ -4688,6 +5010,7 @@ namespace threepp {
                     e.isOverlay    = isOverlay;
                     e.isSkinned    = isSkinned;
                     e.isDisplaced  = isDisplaced;
+                    e.isGrass      = isGrass;
                     e.isMorphed    = isMorphed;
                     e.isTet        = isTet;
                     std::memcpy(e.worldMatrix.data(), m->matrixWorld->elements.data(), 64);
@@ -4705,10 +5028,17 @@ namespace threepp {
             bool materialValuesSame = true;
             bool bonesDirtyAny = false;
             bool displacedDirtyAny = false;
+            bool grassDirtyAny = false;
             bool tetDirtyAny = false;
             bool geomDirtyAny = false;
             bool morphDirtyAny = false;
             std::vector<bool> entryGeomDirty(entries.size(), false);
+            // Per-entry "material values bumped" bits — the ONLY entries whose
+            // MaterialDesc must be re-derived in the material-values fast path
+            // (materialFromMesh is a ~25-dynamic_cast + shared_ptr-churn walk).
+            // Filled by both the LEAN in-place diff and the generic compare so
+            // a single material toggle costs O(changed) instead of O(scene).
+            std::vector<bool> entryMatDirty(entries.size(), false);
 
             // LEAN IN-PLACE DIFF: prevSceneFingerprint IS this frame's
             // fingerprint state — diff against the live objects and update it
@@ -4784,7 +5114,7 @@ namespace threepp {
                         matricesSame = false;
                         fp.matrix = en.worldMatrix;
                     }
-                    if (matChanged) materialValuesSame = false;
+                    if (matChanged) { materialValuesSame = false; entryMatDirty[i] = true; }
                     if (xfmChanged || matChanged || geomChanged) {
                         const size_t w = i >> 5;
                         if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
@@ -4909,6 +5239,12 @@ namespace threepp {
                 if (entries[i].isDisplaced) entryDisplacedDirty[i] = true;
             }
 
+            // GrassMesh — same: intrinsically dirty every frame (wind advances).
+            std::vector<bool> entryGrassDirty(entries.size(), false);
+            for (size_t i = 0; i < entries.size(); ++i) {
+                if (entries[i].isGrass) entryGrassDirty[i] = true;
+            }
+
             // Morphed meshes — dirty when morphTargetInfluences changed.
             // Skinned meshes that also carry morph targets are handled by the
             // bone path above (GPU-skinned BLAS rebuild) so we skip them
@@ -4941,10 +5277,12 @@ namespace threepp {
                 for (size_t i = 0; i < entries.size(); ++i) {
                     const bool b = entryBonesDirty[i];
                     const bool d = entryDisplacedDirty[i];
+                    const bool gr = entryGrassDirty[i];
                     const bool mo = entryMorphDirty[i];
-                    if (!(b || d || mo)) continue;
+                    if (!(b || d || gr || mo)) continue;
                     if (b) bonesDirtyAny = true;
                     if (d) displacedDirtyAny = true;
+                    if (gr) grassDirtyAny = true;
                     if (mo) morphDirtyAny = true;
                     const size_t w = i >> 5;
                     if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
@@ -4999,12 +5337,14 @@ namespace threepp {
                                               || a.matVersion != b.matVersion;
                     const bool bonesChanged = entryBonesDirty[i];
                     const bool dispChanged  = entryDisplacedDirty[i];
+                    const bool grassChanged = entryGrassDirty[i];
                     const bool geomChanged  = (a.geomVersion != b.geomVersion);
                     const bool morphChanged = entryMorphDirty[i];
                     if (xfmChanged) matricesSame = false;
-                    if (matChanged) materialValuesSame = false;
+                    if (matChanged) { materialValuesSame = false; entryMatDirty[i] = true; }
                     if (bonesChanged) bonesDirtyAny = true;
                     if (dispChanged)  displacedDirtyAny = true;
+                    if (grassChanged) grassDirtyAny = true;
                     if (geomChanged) {
                         geomDirtyAny = true;
                         entryGeomDirty[i] = true;
@@ -5032,7 +5372,7 @@ namespace threepp {
                     }
                 }
                 if (structuralSame) {
-                    if (!matricesSame || !materialValuesSame || bonesDirtyAny || displacedDirtyAny || geomDirtyAny || morphDirtyAny) {
+                    if (!matricesSame || !materialValuesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || geomDirtyAny || morphDirtyAny) {
                         motionThisFrame_ = true;
                     }
                     if (bonesDirtyAny) {
@@ -5066,6 +5406,20 @@ namespace threepp {
                             ++dm->frameTick;
                         }
                     }
+                    if (grassDirtyAny) {
+                        // Queue each GrassMesh deform; the grass_wind dispatch +
+                        // BLAS refit are recorded into the frame command buffer
+                        // in recordCommandBuffer (no blocking submit), mirroring
+                        // the skinned-mesh path. One mesh = one TLAS instance.
+                        for (size_t i = 0; i < entries.size(); ++i) {
+                            if (!entryGrassDirty[i]) continue;
+                            auto* gm = static_cast<GrassMesh*>(entries[i].mesh);
+                            auto stIt = grassStates.find(gm);
+                            if (stIt == grassStates.end()) continue;
+                            pendingGrassDeforms_.emplace_back(gm, stIt->second.get());
+                            ++gm->frameTick;
+                        }
+                    }
                     if (morphDirtyAny) {
                         std::unordered_set<Mesh*> refreshed;
                         for (size_t i = 0; i < entries.size(); ++i) {
@@ -5091,6 +5445,11 @@ namespace threepp {
                         meshMovedBits_[w] |= (1u << (i & 31u));
                     }
                     if (tetDirtyAny) motionThisFrame_ = true;
+                    // Geometries whose prevVertex was re-snapshotted (to OLD
+                    // positions) this frame. The prevVertex re-sync pass below
+                    // must SKIP these so their legitimate change-frame deformation
+                    // motion survives — they settle on the next clean frame.
+                    std::unordered_set<const BufferGeometry*> geomRefreshedThisFrame;
                     if (geomDirtyAny) {
                         // Re-upload vertex data for geometries whose
                         // BufferAttribute versions changed and rebuild their
@@ -5120,6 +5479,7 @@ namespace threepp {
                             if (!entryGeomDirty[i]) continue;
                             if (entries[i].isSkinned)   continue;
                             if (entries[i].isDisplaced) continue;
+                            if (entries[i].isGrass)     continue;
 
                             const BufferGeometry* geomKey = entries[i].mesh->geometry().get();
                             if (refreshedGeoms.count(geomKey)) continue;
@@ -5149,8 +5509,53 @@ namespace threepp {
                             goto fullRebuild;
                         }
                         refreshGeomBlasBatch(refreshOps);
+                        for (const auto& op : refreshOps) geomRefreshedThisFrame.insert(op.geom);
                     }
-                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny) {
+
+                    // ── prevVertex re-sync ──────────────────────────────────
+                    // A plain mesh updated in place (e.g. a re-rolled terrain)
+                    // keeps prevVertex frozen at its PRE-update positions once it
+                    // stops being geom-dirty: refreshGeomBlasBatch's Phase B only
+                    // runs on the change frame. The G-buffer VS then reads a stale
+                    // inPrevPos every subsequent frame → a constant nonzero motion
+                    // vector on a static surface → the denoiser/TAA reject history
+                    // forever → the mesh stays noisy and visibly shakes. One frame
+                    // after the update settles (the record is no longer refreshed
+                    // this frame) we copy vertex → prevVertex so motion collapses
+                    // back to zero, exactly like initial-build static geometry.
+                    // Skinned/displaced/tet own their own every-frame snapshot and
+                    // never enter refreshGeomBlasBatch, so they are untouched.
+                    {
+                        std::vector<BlasRecord*> resyncRecs;
+                        for (auto& [geomKey, recPtr] : blasCache) {
+                            BlasRecord* rec = recPtr.get();
+                            if (!rec->prevVertexResyncPending) continue;
+                            // Re-snapshotted this frame → keep its change-frame
+                            // motion; settle on the next clean frame instead.
+                            if (geomRefreshedThisFrame.count(geomKey)) continue;
+                            resyncRecs.push_back(rec);
+                        }
+                        if (!resyncRecs.empty()) {
+                            // Same in-flight hazard as the refresh above: prior
+                            // frames may still read prevVertex as a vertex buffer,
+                            // so drain device-wide before overwriting it.
+                            check(vkDeviceWaitIdle(ctx->device()),
+                                  "vkDeviceWaitIdle (pre-prevVertex-resync)");
+                            VkCommandBuffer cb = beginOneShot();
+                            for (BlasRecord* rec : resyncRecs) {
+                                if (rec->prevVertex.handle != VK_NULL_HANDLE && rec->vbBytes > 0) {
+                                    VkBufferCopy region{};
+                                    region.size = rec->vbBytes;
+                                    vkCmdCopyBuffer(cb, rec->vertex.handle,
+                                                    rec->prevVertex.handle, 1, &region);
+                                }
+                                rec->prevVertexResyncPending = false;
+                            }
+                            endAndSubmitOneShot(cb, "prevVertex resync");
+                        }
+                    }
+
+                    if (!matricesSame || bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || geomDirtyAny || morphDirtyAny) {
                         // TLAS refit: needed when instance transforms change
                         // (matricesSame=false) AND when any skinned BLAS was
                         // just rebuilt — the TLAS's per-instance wrapped AABB
@@ -5181,6 +5586,11 @@ namespace threepp {
                                 auto dmIt = displacedStates.find(dm);
                                 if (dmIt == displacedStates.end()) continue;
                                 blasAddr = dmIt->second->blas->address;
+                            } else if (en.isGrass) {
+                                auto* gm = static_cast<GrassMesh*>(en.mesh);
+                                auto gIt = grassStates.find(gm);
+                                if (gIt == grassStates.end()) continue;
+                                blasAddr = gIt->second->blas->address;
                             } else if (en.isTet) {
                                 auto tIt = tetMeshStates.find(en.mesh);
                                 if (tIt == tetMeshStates.end()) continue;
@@ -5203,14 +5613,26 @@ namespace threepp {
                                 }
                             }
                             inst.instanceCustomIndex = static_cast<uint32_t>(i);
-                            inst.mask = 0xFFu;
+                            // Same visibility-group rule as the full rebuild:
+                            // blend/transmissive (non-water) → alpha mask so
+                            // occlusion queries skip them.
+                            inst.mask = kRayMaskOpaque;
+                            if (i < matDescsCached_.size() && !en.isDisplaced) {
+                                const auto& cmd = matDescsCached_[i];
+                                if (cmd.transmission > 0.0f || cmd.alphaCutoff < 0.0f)
+                                    inst.mask = kRayMaskAlpha;
+                            }
                             inst.instanceShaderBindingTableRecordOffset = 0;
                             inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
                             inst.accelerationStructureReference = blasAddr;
                             instances.push_back(inst);
                         }
-                        const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny;
-                        refitTlas(instances, blasDeformed);
+                        const bool blasDeformed = bonesDirtyAny || displacedDirtyAny || grassDirtyAny || tetDirtyAny || morphDirtyAny || geomDirtyAny;
+                        // Stage the refit; recordCommandBuffer records it into the
+                        // frame cb after the deformable BLAS rebuilds (no drain).
+                        pendingTlasInstances_ = std::move(instances);
+                        pendingTlasFullBuild_ = blasDeformed;
+                        pendingTlasRefit_ = true;
                     }
                     if (!materialValuesSame) {
                         // Material-values-only update: rebuild MaterialDescs into
@@ -5229,18 +5651,38 @@ namespace threepp {
                         // slots left default) to match the full-rebuild layout so
                         // gl_InstanceCustomIndexEXT (== entry index) keeps indexing
                         // the right material. Dummy slots are never sampled.
-                        matDescsCached_.assign(entries.size(), MaterialDesc{});
-                        // Same dedup as the full-rebuild path below: entries
-                        // order is identical (overlay skip matches), so
-                        // identical Material* pointers produce identical
-                        // materialAssetIdx values frame-to-frame.
+                        // TARGETED PATCH: only entries whose material version
+                        // actually bumped (entryMatDirty) get their MaterialDesc
+                        // re-derived. materialFromMesh is a ~25-dynamic_cast walk
+                        // (plus each albedoTexOf/…/occlusionTexOf is another typed
+                        // probe + shared_ptr churn); re-deriving EVERY entry here
+                        // turned a single brake-light / blinker emissive toggle into
+                        // an O(scene) stall — tens of ms once InstancedMesh foliage
+                        // expands the scene to tens of thousands of entries, firing
+                        // several times a second while a blinker ticks. matDescsCached_
+                        // already holds correct values for every unchanged entry (it
+                        // survives matrix-only frames untouched), and a changed
+                        // material keeps its pointer + textures (a texture swap aborts
+                        // to the full structural rebuild), so its dedup index stays
+                        // valid. Full fallback only if the cache size somehow doesn't
+                        // match (never on the fast path that reaches here).
+                        const bool patchMatDescs = matDescsCached_.size() == entries.size();
+                        if (!patchMatDescs) matDescsCached_.assign(entries.size(), MaterialDesc{});
+                        // Same dedup as the full-rebuild path below (consulted only on
+                        // the full-rebuild fallback): entries order is identical
+                        // (overlay skip matches), so identical Material* pointers
+                        // produce identical materialAssetIdx values frame-to-frame.
                         std::unordered_map<const Material*, uint32_t> matAssetMap;
                         for (size_t i = 0; i < entries.size(); ++i) {
                             const MeshEntry& en = entries[i];
                             if (en.isOverlay) continue;// raster-overlay only — no MaterialDesc slot
+                            if (patchMatDescs && !entryMatDirty[i]) continue;// unchanged → keep cached desc
                             Mesh* m = en.mesh;
                             MaterialDesc md = materialFromMesh(*m);
-                            {
+                            if (patchMatDescs) {
+                                // Material* unchanged → its dedup index is stable.
+                                md.materialAssetIdx = matDescsCached_[i].materialAssetIdx;
+                            } else {
                                 const Material* matKey = m->material().get();
                                 auto [matIt, inserted] = matAssetMap.try_emplace(
                                         matKey, static_cast<uint32_t>(matAssetMap.size()));
@@ -5335,14 +5777,13 @@ namespace threepp {
                     tlas = VK_NULL_HANDLE;
                 }
                 destroyBuffer(ctx->allocator(), tlasBuffer);
-                destroyBuffer(ctx->allocator(), tlasInstancesBuffer);
+                for (auto& b : tlasInstancesBuffers) { destroyBuffer(ctx->allocator(), b); b = {}; }
                 destroyBuffer(ctx->allocator(), geometryDescsBuffer);
                 for (auto& b : materialDescsBuffers) {
                     destroyBuffer(ctx->allocator(), b);
                     b = {};
                 }
                 tlasBuffer = {};
-                tlasInstancesBuffer = {};
                 geometryDescsBuffer = {};
 
                 // Prune stale cache entries whose underlying objects have been
@@ -5359,7 +5800,7 @@ namespace threepp {
                         destroyBuffer(ctx->allocator(), rec->index);
                         destroyBuffer(ctx->allocator(), rec->normal);
                         destroyBuffer(ctx->allocator(), rec->uv);
-                        destroyBuffer(ctx->allocator(), rec->foam);
+                        destroyBuffer(ctx->allocator(), rec->color);
                         destroyBuffer(ctx->allocator(), rec->prevVertex);
                         destroyBuffer(ctx->allocator(), rec->blasScratch);
                         it = blasCache.erase(it);
@@ -5383,7 +5824,6 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), rec->index);
                             destroyBuffer(ctx->allocator(), rec->normal);
                             destroyBuffer(ctx->allocator(), rec->uv);
-                            destroyBuffer(ctx->allocator(), rec->foam);
                             destroyBuffer(ctx->allocator(), rec->prevVertex);
                         }
                         // Return the skinning descriptor set to the pool, else
@@ -5418,7 +5858,6 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), rec->index);
                             destroyBuffer(ctx->allocator(), rec->normal);
                             destroyBuffer(ctx->allocator(), rec->uv);
-                            destroyBuffer(ctx->allocator(), rec->foam);
                             destroyBuffer(ctx->allocator(), rec->prevVertex);
                         }
                         if (it->second->tetDescSet != VK_NULL_HANDLE) {
@@ -5441,7 +5880,6 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), rec->index);
                             destroyBuffer(ctx->allocator(), rec->normal);
                             destroyBuffer(ctx->allocator(), rec->uv);
-                            destroyBuffer(ctx->allocator(), rec->foam);
                             destroyBuffer(ctx->allocator(), rec->prevVertex);
                         }
                         if (st->scratchA.view  != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), st->scratchA.view, nullptr);
@@ -5451,6 +5889,26 @@ namespace threepp {
                         // PhillipsSpectrum / DynamicSpectrum / IFFT destructors
                         // run on unique_ptr reset.
                         it = displacedStates.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+                for (auto it = grassStates.begin(); it != grassStates.end(); ) {
+                    if (it->second->liveCheck.expired()) {
+                        auto& st = it->second;
+                        if (st->blas) {
+                            auto& rec = st->blas;
+                            if (rec->as) ctx->rt().destroyAccelerationStructure(ctx->device(), rec->as, nullptr);
+                            destroyBuffer(ctx->allocator(), rec->storage);
+                            destroyBuffer(ctx->allocator(), rec->vertex);
+                            destroyBuffer(ctx->allocator(), rec->index);
+                            destroyBuffer(ctx->allocator(), rec->normal);
+                            destroyBuffer(ctx->allocator(), rec->uv);
+                            destroyBuffer(ctx->allocator(), rec->prevVertex);
+                        }
+                        destroyBuffer(ctx->allocator(), st->restPos);
+                        destroyBuffer(ctx->allocator(), st->heightFrac);
+                        it = grassStates.erase(it);
                     } else {
                         ++it;
                     }
@@ -5465,7 +5923,6 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), rec->index);
                             destroyBuffer(ctx->allocator(), rec->normal);
                             destroyBuffer(ctx->allocator(), rec->uv);
-                            destroyBuffer(ctx->allocator(), rec->foam);
                             destroyBuffer(ctx->allocator(), rec->prevVertex);
                         }
                         it = morphedMeshStates.erase(it);
@@ -5474,8 +5931,8 @@ namespace threepp {
                     }
                 }
                 for (auto it = textureCache.begin(); it != textureCache.end(); ) {
-                    if (it->second.first.expired()) {
-                        const uint32_t slot = it->second.second;
+                    if (it->second.ref.expired()) {
+                        const uint32_t slot = it->second.slot;
                         if (slot < materialTextures.size()) {
                             destroyImage2D(ctx->allocator(), ctx->device(), materialTextures[slot]);
                             materialTextures[slot] = {};
@@ -5537,6 +5994,13 @@ namespace threepp {
                     // contents (rest grid right now) become the displaced
                     // surface before the first ray-trace sees it.
                     refreshDisplacedBlas(*dm, *st, static_cast<float>(glfwGetTime()));
+                } else if (en.isGrass) {
+                    auto* gm = static_cast<GrassMesh*>(m);
+                    auto* st = ensureGrassState(*gm);
+                    if (!st) continue;
+                    recPtr = st->blas.get();
+                    // Prime the BLAS with the first wind pose before the first trace.
+                    refreshGrassBlas(*gm, *st, static_cast<float>(glfwGetTime()));
                 } else if (en.isTet) {
                     auto* st = ensureTetBlas(*m);
                     if (!st) continue;
@@ -5557,7 +6021,7 @@ namespace threepp {
                             destroyBuffer(ctx->allocator(), old->index);
                             destroyBuffer(ctx->allocator(), old->normal);
                             destroyBuffer(ctx->allocator(), old->uv);
-                            destroyBuffer(ctx->allocator(), old->foam);
+                            destroyBuffer(ctx->allocator(), old->color);
                             destroyBuffer(ctx->allocator(), old->prevVertex);
                             destroyBuffer(ctx->allocator(), old->blasScratch);
                             blasCache.erase(it);
@@ -5594,7 +6058,7 @@ namespace threepp {
                     }
                 }
                 inst.instanceCustomIndex = static_cast<uint32_t>(i);
-                inst.mask = 0xFFu;
+                inst.mask = kRayMaskOpaque;// placeholder; set to Opaque/Alpha once md is built below
                 inst.instanceShaderBindingTableRecordOffset = 0;
                 inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
                 inst.accelerationStructureReference = recPtr->address;
@@ -5605,7 +6069,7 @@ namespace threepp {
                 gdesc.normalAddress = recPtr->normal.address;
                 gdesc.indexAddress  = recPtr->index.address;
                 gdesc.uvAddress     = recPtr->uv.address;// 0 if no UV attribute
-                gdesc.foamAddress   = recPtr->foam.address;// 0 unless this is an FFT-displaced ocean mesh
+                gdesc.foamAddress   = recPtr->isOceanSurface ? 1ull : 0ull;// 0/1 flag (not an address); 1 == FFT-displaced ocean surface
                 // prevVertexAddress: skinned + displaced meshes have a real
                 // prev-vertex buffer (different from current). Static meshes
                 // get vertex.address as a fallback — the chit reads the same
@@ -5627,6 +6091,15 @@ namespace threepp {
                                 ? recPtr->prevVertex.address
                                 : recPtr->vertex.address;
                 gdesc.indexed = recPtr->index.handle != VK_NULL_HANDLE ? 1u : 0u;
+                // Per-vertex color only when the material opts in (three.js
+                // semantics: vertexColors == true) AND the geometry uploaded a
+                // color buffer. 0 otherwise → chit skips the modulation.
+                {
+                    const auto mat = m->material();
+                    const bool useVtxColor = recPtr->color.handle != VK_NULL_HANDLE &&
+                                             mat && mat->vertexColors;
+                    gdesc.colorAddress = useVtxColor ? recPtr->color.address : 0;
+                }
                 gdesc._pad = 0;
                 geomDescs[i] = gdesc;
 
@@ -5674,6 +6147,18 @@ namespace threepp {
                     copyTexUvTransform(md.uvTransformOcclusion, tex);
                 }
                 matDescs[i] = md;
+                // Visibility group (see vulkan_shared.h): blend/transmissive
+                // surfaces move to the alpha mask so pure-visibility occlusion
+                // queries (env gather, GI, emissive-NEE) cull them out — a text
+                // decal's transparent quad must not block IBL light. Water
+                // (DisplacedMesh) stays opaque-mask: underwater light transport
+                // is handled by its volumetrics, not pass-through.
+                if (!instances.empty()) {
+                    instances.back().mask =
+                            (!en.isDisplaced && (md.transmission > 0.0f || md.alphaCutoff < 0.0f))
+                                    ? kRayMaskAlpha
+                                    : kRayMaskOpaque;
+                }
             }
 
             buildTlas(instances);
@@ -5750,10 +6235,22 @@ namespace threepp {
             // count exceeds the current capacity. The descriptor write below
             // (or the initial allocate, on first build) will pick up the new
             // buffer handles.
-            const uint32_t instanceCount = static_cast<uint32_t>(instances.size());
-            const uint32_t neededBitWords = std::max<uint32_t>((instanceCount + 31u) / 32u, 1u);
+            // motionMat[] and meshMovedBits[] are indexed by ENTRY index
+            // (== instanceCustomIndex == the meshID the gbuffer writes; see the
+            // geomDescs/matDescs "ONE index space" note above), NOT by the
+            // compact TLAS instance count. Size them to entries.size(): when
+            // leading entries are overlay (e.g. wireframe PointLightHelpers
+            // added to the scene before the PT meshes), the PT meshes land at
+            // entry indices >= instances.size(), so a buffer sized to the
+            // instance count is read out of bounds in the shader — a GPU fault
+            // that surfaces at the next AS one-shot fence wait (looks like a
+            // "tblas refit" crash). computeAndUploadMotionMatrices uploads
+            // entries.size() matrices, so the instance-count sizing overflowed
+            // the host buffer too.
+            const uint32_t motionSlots    = static_cast<uint32_t>(entries.size());
+            const uint32_t neededBitWords = std::max<uint32_t>((motionSlots + 31u) / 32u, 1u);
             for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                ensureMotionMatCapacity(f, std::max<uint32_t>(instanceCount, 1u));
+                ensureMotionMatCapacity(f, std::max<uint32_t>(motionSlots, 1u));
                 ensureMeshMovedBitsCapacity(f, neededBitWords);
             }
             meshMovedBits_.resize(neededBitWords, 0u);
@@ -6486,6 +6983,13 @@ namespace threepp {
                     return it->second->blas.get();
                 return nullptr;
             }
+            if (en.isGrass) {
+                auto* gm = static_cast<GrassMesh*>(en.mesh);
+                auto it = grassStates.find(gm);
+                if (it != grassStates.end() && it->second->blas)
+                    return it->second->blas.get();
+                return nullptr;
+            }
             if (en.isTet) {
                 auto it = tetMeshStates.find(en.mesh);
                 if (it != tetMeshStates.end() && it->second->blas)
@@ -6542,7 +7046,7 @@ namespace threepp {
             // sub-pixel jitter still happens in raygen's hybrid primary via
             // the blue-noise tile (see primaryDirHybrid), so interior AA
             // doesn't disappear — only the coverage jitter is gone.
-            // Phase 1 (TSR rebuild): jitter ON. Sub-pixel Halton coverage +
+            // Raster jitter ON: sub-pixel Halton coverage +
             // temporal accumulation = proper TAA/TSR (replaces FXAA). The earlier
             // "flicker" was silhouette coverage-flip on MOVING objects with a loose
             // RGB AABB history clamp; the resolve now uses a YCoCg variance clip
@@ -6713,12 +7217,13 @@ namespace threepp {
             uint64_t uvAddr;           // 8
             uint64_t prevPosAddr;      // 8
             uint64_t indexAddr;        // 8 (0 → non-indexed)
+            uint64_t colorAddr;        // 8 (0 → no per-vertex color / vertexColors off)
             uint32_t instanceCustomIndex;
             uint32_t flags;
             uint32_t indexed;
             float    polygonOffset;    // clip-z depth bias (reverse-Z: + = toward near = on top)
         };
-        static_assert(sizeof(DrawInfoGpu) == 120,
+        static_assert(sizeof(DrawInfoGpu) == 128,
                       "DrawInfoGpu layout drifted from gbuffer_indirect.vert");
 
         // Per-cull-mode dispatch span into indirectCmdBuffers[frame].
@@ -6727,10 +7232,12 @@ namespace threepp {
             uint32_t        offset   = 0;// first cmd index (cmd-buffer-relative)
             uint32_t        count    = 0;
         };
-        // [0] Front (BACK cull), [1] Back (FRONT cull), [2] Double (NONE cull).
-        // The static order means recordRasterGbufPass can issue at most 3
+        // [0] Front (BACK cull), [1] Back (FRONT cull), [2] Double (NONE cull),
+        // [3] blend decals (NONE cull, drawn LAST with rasterGbufDecalPipeline
+        // so their albedo lerps over the already-rasterized receivers).
+        // The static order means recordRasterGbufPass can issue at most 4
         // vkCmdDrawIndirect calls and skip the empty ones.
-        std::array<DrawGroup, 3> indirectGroups_{};
+        std::array<DrawGroup, 4> indirectGroups_{};
         uint32_t indirectTotalDraws_ = 0;
 
         bool ensureDrawInfoCapacity(uint32_t frame, VkDeviceSize neededBytes) {
@@ -6769,13 +7276,13 @@ namespace threepp {
         // hybrid raster G-buffer pass. Called from renderFrame right after
         // cullEntriesAgainstFrustum (which sets MeshEntry::inFrustum) so we
         // can skip culled draws here. The actual GPU dispatch happens in
-        // recordRasterGbufPass via 1-3 vkCmdDrawIndirect calls partitioned
-        // by cull mode.
+        // recordRasterGbufPass via 1-4 vkCmdDrawIndirect calls partitioned
+        // by cull mode (+ a trailing blend-decal bucket).
         //
         // Draw partitioning: walk entries once, sort each visible draw
-        // into one of three buckets (Side::Front/Back/Double). Buckets
-        // are concatenated [Front | Back | Double] in the device buffers,
-        // and each VkDrawIndirectCommand's firstInstance carries the
+        // into one of four buckets (Side::Front/Back/Double, then blend
+        // decals). Buckets are concatenated [Front | Back | Double | Decal]
+        // in the device buffers, and each VkDrawIndirectCommand's firstInstance carries the
         // global DrawInfo index — surfaced to the VS as gl_InstanceIndex
         // so the shader fetches `draws[gl_InstanceIndex]`. This trick
         // sidesteps the gl_DrawIDARB-resets-per-call issue without
@@ -6786,9 +7293,9 @@ namespace threepp {
 
             if (lastVisibleEntries_.empty()) return;
 
-            // Three buckets in [BACK_cull, FRONT_cull, NONE_cull] order.
-            std::array<std::vector<DrawInfoGpu>, 3>            draws;
-            std::array<std::vector<VkDrawIndirectCommand>, 3>  cmds;
+            // Four buckets: [BACK_cull, FRONT_cull, NONE_cull, decal] order.
+            std::array<std::vector<DrawInfoGpu>, 4>            draws;
+            std::array<std::vector<VkDrawIndirectCommand>, 4>  cmds;
             auto bucketOf = [](VkCullModeFlags cm) -> int {
                 if (cm == VK_CULL_MODE_BACK_BIT)  return 0;
                 if (cm == VK_CULL_MODE_FRONT_BIT) return 1;
@@ -6811,7 +7318,17 @@ namespace threepp {
                         (i < lastVisibleCullMode_.size())
                                 ? lastVisibleCullMode_[i]
                                 : VK_CULL_MODE_BACK_BIT;
-                const int b = bucketOf(wantCull);
+                // Blend decals (alphaCutoff == -2 sentinel from materialFromMesh)
+                // go to bucket [3]: drawn last, with the albedo-blend pipeline.
+                // RasterFirst only — its shade reads the blended albedo
+                // attachment. ReferencePT's hybrid raygen re-samples material
+                // textures via the ids/UV attachments (which the decal pipeline
+                // write-masks), so there decals stay on the stochastic
+                // screen-door path that the PT accumulator converges.
+                const bool isDecal = renderMode_ == VulkanRenderer::RenderMode::RasterFirst &&
+                                     (i < matDescsCached_.size()) &&
+                                     (matDescsCached_[i].alphaCutoff == -2.0f);
+                const int b = isDecal ? 3 : bucketOf(wantCull);
 
                 DrawInfoGpu di{};
                 std::memcpy(di.model, en.worldMatrix.data(), 64);
@@ -6831,6 +7348,16 @@ namespace threepp {
                                          ? rec->prevVertex.address
                                          : rec->vertex.address;
                 di.indexAddr   = indexed ? rec->index.address : 0ull;
+                // Per-vertex color: only when the material opts in (vertexColors)
+                // and the geometry uploaded a color buffer — matches the
+                // GeometryDesc::colorAddress gate so RasterFirst and ReferencePT
+                // agree. gbuffer.frag multiplies albedo by the interpolated value.
+                {
+                    const auto dmat = en.mesh->material();
+                    di.colorAddr = (rec->color.handle != VK_NULL_HANDLE && dmat && dmat->vertexColors)
+                                           ? rec->color.address
+                                           : 0ull;
+                }
                 di.instanceCustomIndex = static_cast<uint32_t>(i);
                 // Flag bits match the old gbuffer.vert push-constant layout:
                 //   bit 0 = is_water (DisplacedMesh), bit 3 = is_skinned.
@@ -6883,10 +7410,11 @@ namespace threepp {
             uint8_t* dDst = static_cast<uint8_t*>(mappedDraws);
             uint8_t* cDst = static_cast<uint8_t*>(mappedCmds);
             uint32_t offset = 0;
-            const VkCullModeFlags cullForBucket[3] = {
-                    VK_CULL_MODE_BACK_BIT, VK_CULL_MODE_FRONT_BIT, VK_CULL_MODE_NONE
+            const VkCullModeFlags cullForBucket[4] = {
+                    VK_CULL_MODE_BACK_BIT, VK_CULL_MODE_FRONT_BIT, VK_CULL_MODE_NONE,
+                    VK_CULL_MODE_NONE// decals: DecalGeometry wraps edges, don't cull
             };
-            for (int b = 0; b < 3; ++b) {
+            for (int b = 0; b < 4; ++b) {
                 const uint32_t n = static_cast<uint32_t>(draws[b].size());
                 indirectGroups_[b].cullMode = cullForBucket[b];
                 indirectGroups_[b].offset   = offset;
@@ -6932,8 +7460,9 @@ namespace threepp {
         }
 
         // Begin the raster G-buffer render pass and ship the prebuilt
-        // indirect-draw groups via 1-3 vkCmdDrawIndirect calls (one per
-        // active cull mode). Replaces the prior per-mesh draw loop —
+        // indirect-draw groups via 1-4 vkCmdDrawIndirect calls (one per
+        // active cull mode, plus a trailing blend-decal group on the
+        // albedo-blend pipeline). Replaces the prior per-mesh draw loop —
         // see buildIndirectDrawData above for how the GPU buffers are
         // populated.
         void recordRasterGbufPass(VkCommandBuffer cb, uint32_t frame) {
@@ -6964,17 +7493,21 @@ namespace threepp {
             rpbi.pClearValues    = clears;
             vkCmdBeginRenderPass(cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
 
+            // Split-screen: draw the pane region-sized at the origin (the render
+            // pass still clears the whole gbuf, so outside the pane reads as sky).
+            // regionRenderExt_ == full render extent when scissorTest is off.
+            const VkExtent2D gbufReg = regionRenderExt_;
             VkViewport viewport{};
             viewport.x = 0.f;
             viewport.y = 0.f;
-            viewport.width  = float(ext.width);
-            viewport.height = float(ext.height);
+            viewport.width  = float(gbufReg.width);
+            viewport.height = float(gbufReg.height);
             viewport.minDepth = 0.f;
             viewport.maxDepth = 1.f;
             vkCmdSetViewport(cb, 0, 1, &viewport);
             VkRect2D scissor{};
             scissor.offset = {0, 0};
-            scissor.extent = ext;
+            scissor.extent = gbufReg;
             vkCmdSetScissor(cb, 0, 1, &scissor);
 
             if (indirectTotalDraws_ == 0u) {
@@ -6993,8 +7526,20 @@ namespace threepp {
             // via the dynamic cullMode state — far cheaper than re-doing
             // it per draw.
             constexpr VkDeviceSize cmdStride = sizeof(VkDrawIndirectCommand);
-            for (const auto& g : indirectGroups_) {
+            for (int b = 0; b < 3; ++b) {
+                const auto& g = indirectGroups_[b];
                 if (g.count == 0u) continue;
+                vkCmdSetCullMode(cb, g.cullMode);
+                vkCmdDrawIndirect(cb,
+                                  indirectCmdBuffers[frame].handle,
+                                  static_cast<VkDeviceSize>(g.offset) * cmdStride,
+                                  g.count,
+                                  static_cast<uint32_t>(cmdStride));
+            }
+            // Blend decals last: albedo-blend pipeline lerps over the receivers
+            // rasterized above (same layout/descriptors, no set rebind needed).
+            if (const auto& g = indirectGroups_[3]; g.count > 0u) {
+                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, rasterGbufDecalPipeline);
                 vkCmdSetCullMode(cb, g.cullMode);
                 vkCmdDrawIndirect(cb,
                                   indirectCmdBuffers[frame].handle,
@@ -7006,8 +7551,8 @@ namespace threepp {
             vkCmdEndRenderPass(cb);
         }
 
-        // Day-1 visualization: blit one of the G-buffer color attachments to
-        // the swapchain image so we can verify raster output before wiring
+        // Debug visualization: blit one of the G-buffer color attachments to
+        // the swapchain image so we can inspect raster output without wiring
         // raygen to read it. Normal channel is the most informative — solid
         // surfaces show their world-space orientation as RGB.
         void recordHybridDebugBlit(VkCommandBuffer cb, uint32_t imageIndex, uint32_t frame) {
@@ -7090,10 +7635,15 @@ namespace threepp {
             }
 
             // Restore src attachment to its original SHADER_READ layout (so
-            // raygen can sample on the next frame). Leave dst in
-            // TRANSFER_DST_OPTIMAL — the caller in recordCommandBuffer
-            // handles the overlay (ImGui) draw and the final PRESENT_SRC
-            // transition uniformly with the existing PT path.
+            // raygen can sample on the next frame), and bring dst (the
+            // swapchain) to GENERAL — the SAME exit layout the full PT path
+            // leaves behind. The caller returns immediately after this, so
+            // endFrame()'s recordOverlayAndPresentTransition (which assumes
+            // GENERAL) composites the overlay and does the single PRESENT_SRC
+            // transition uniformly with the PT path. Leaving dst in
+            // TRANSFER_DST here (the old behavior) collided with that unified
+            // finalize — double vkEndCommandBuffer + a GENERAL-vs-TRANSFER_DST
+            // layout mismatch that crashed the --shot writeFramebuffer readback.
             VkImageMemoryBarrier2 toShaderRead{};
             toShaderRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
             toShaderRead.srcStageMask  = VK_PIPELINE_STAGE_2_BLIT_BIT;
@@ -7109,10 +7659,38 @@ namespace threepp {
             toShaderRead.subresourceRange.levelCount = 1;
             toShaderRead.subresourceRange.layerCount = 1;
 
+            // dst: TRANSFER_DST_OPTIMAL → GENERAL. For the Depth view the blit
+            // above is skipped, but toDst still moved dst to TRANSFER_DST, so
+            // this transition is valid for every view. dstStage/access mirror
+            // the ortho-only clear path's TRANSFER_DST→GENERAL transition so the
+            // downstream overlay/present/readback all observe a settled image.
+            VkImageMemoryBarrier2 toGeneral{};
+            toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            toGeneral.srcStageMask  = VK_PIPELINE_STAGE_2_BLIT_BIT;
+            toGeneral.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            toGeneral.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                      VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+                                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            toGeneral.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                      VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                      VK_ACCESS_2_TRANSFER_READ_BIT |
+                                      VK_ACCESS_2_TRANSFER_WRITE_BIT |
+                                      VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                                      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            toGeneral.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            toGeneral.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toGeneral.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toGeneral.image = dst;
+            toGeneral.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            toGeneral.subresourceRange.levelCount = 1;
+            toGeneral.subresourceRange.layerCount = 1;
+
+            VkImageMemoryBarrier2 post[2] = {toShaderRead, toGeneral};
             VkDependencyInfo depPost{};
             depPost.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            depPost.imageMemoryBarrierCount = 1;
-            depPost.pImageMemoryBarriers = &toShaderRead;
+            depPost.imageMemoryBarrierCount = 2;
+            depPost.pImageMemoryBarriers = post;
             vkCmdPipelineBarrier2(cb, &depPost);
         }
 
@@ -7299,7 +7877,7 @@ namespace threepp {
             vmaUnmapMemory(ctx->allocator(), fogUbos[frame].alloc);
         }
 
-        // Phase 7: allocate, transition, and upload an Image2D from a tightly-
+        // Allocate, transition, and upload an Image2D from a tightly-
         // packed CPU buffer. Pixel layout matches `format`. Caller owns the
         // returned Image2D and must call destroyImage2D() on shutdown.
         Image2D createSampledImage2D(uint32_t w, uint32_t h, VkFormat format,
@@ -7536,7 +8114,7 @@ namespace threepp {
             return out;
         }
 
-        // Phase 8: storage-image (rgba32f, GENERAL layout) used as the
+        // Storage-image (rgba32f, GENERAL layout) used as the
         // progressive accumulation target. No staging upload — contents are
         // initialised the first frame after sampleIndex resets to 0. The
         // raygen reads/writes this every frame, so we transition once at
@@ -8116,7 +8694,8 @@ namespace threepp {
         }
 
         void createRasterDsLayoutAndPool() {
-            // binding 0: per-frame CameraUbo (vertex)
+            // binding 0: per-frame CameraUbo (vertex + fragment — gbuffer.frag
+            //            reads cam.jitter for the alpha-hash cutout discard)
             // binding 1: motionMat[] storage (vertex; same VkBuffer as raygen's binding 10)
             // binding 2: mats[] storage (fragment; for normal-map index + uvTransformNormal)
             // binding 3: albedoMaps[] bindless sampler array (fragment;
@@ -8129,7 +8708,7 @@ namespace threepp {
             bindings[0].binding         = 0;
             bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             bindings[0].descriptorCount = 1;
-            bindings[0].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT;
+            bindings[0].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             bindings[1].binding         = 1;
             bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             bindings[1].descriptorCount = 1;
@@ -8389,6 +8968,52 @@ namespace threepp {
                                             &rasterGbufIndirectPipeline),
                   "vkCreateGraphicsPipelines(rasterGbufIndirect)");
 
+            // Decal variant (same shaders/layout/render pass): blend-decal
+            // meshes (MaterialDesc.alphaCutoff == -2) draw AFTER the opaque
+            // buckets and only tint the receiver's albedo. Depth test stays on
+            // (GREATER, reverse-Z — the per-draw polygonOffset clip-z bias
+            // lifts the coplanar decal above its receiver) but depth write is
+            // off, and every attachment except albedo is write-masked so the
+            // pixel keeps the receiving surface's normal/ids/motion — the
+            // deferred shade lights the receiver, with lerped base colour,
+            // exactly like GL's forward alpha blend of a coplanar decal.
+            VkPipelineDepthStencilStateCreateInfo dsDecal = ds;
+            dsDecal.depthWriteEnable = VK_FALSE;
+            VkPipelineColorBlendAttachmentState cbasDecal[5]{};
+            for (int a = 0; a < 4; ++a) {
+                cbasDecal[a].blendEnable    = VK_FALSE;
+                cbasDecal[a].colorWriteMask = 0;// keep receiver's normal/motion/ids/uv
+            }
+            cbasDecal[4].blendEnable         = VK_TRUE;
+            cbasDecal[4].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            cbasDecal[4].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbasDecal[4].colorBlendOp        = VK_BLEND_OP_ADD;
+            cbasDecal[4].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbasDecal[4].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            cbasDecal[4].alphaBlendOp        = VK_BLEND_OP_ADD;
+            cbasDecal[4].colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                               VK_COLOR_COMPONENT_B_BIT;// .a = receiver metalness, keep
+            VkPipelineColorBlendStateCreateInfo cbDecal = cb;
+            cbDecal.pAttachments = cbasDecal;
+
+            // DECAL_PASS=1 specialization flips gbuffer.frag from the stochastic
+            // screen-door to "emit texture alpha as the blend factor". The
+            // regular pipelines keep DECAL_PASS=0, so in ReferencePT mode (where
+            // decals draw with the regular pipeline) they stay on the screen-door.
+            const uint32_t kDecalPassOn = 1u;
+            VkSpecializationMapEntry decalSpecEntry{0, 0, sizeof(uint32_t)};
+            VkSpecializationInfo decalSpecInfo{1, &decalSpecEntry, sizeof(uint32_t), &kDecalPassOn};
+            VkPipelineShaderStageCreateInfo stagesDecal[2] = {stagesInd[0], stagesInd[1]};
+            stagesDecal[1].pSpecializationInfo = &decalSpecInfo;
+
+            VkGraphicsPipelineCreateInfo gpciDecal = gpciInd;
+            gpciDecal.pStages            = stagesDecal;
+            gpciDecal.pDepthStencilState = &dsDecal;
+            gpciDecal.pColorBlendState   = &cbDecal;
+            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciDecal, nullptr,
+                                            &rasterGbufDecalPipeline),
+                  "vkCreateGraphicsPipelines(rasterGbufDecal)");
+
             vkDestroyShaderModule(ctx->device(), vertIndirectModule, nullptr);
             vkDestroyShaderModule(ctx->device(), fragIndModule, nullptr);
         }
@@ -8401,173 +9026,6 @@ namespace threepp {
         // per-draw on material.wireframe / overlayLayer membership.
         // Line/LineSegments get their own pipeline variants + cached
         // vertex buffer, also built below.
-        // Color-only, depth-test-off Line/LineSegments pipelines for the ortho
-        // HUD overlay pass (recordOrthoOverlay). Reuses overlay.vert/frag — the
-        // GL->Vulkan clip-z remap that overlay.vert omits is baked into the MVP
-        // on the CPU side, and Y is flipped in the shader (same NDC convention as
-        // the sprite pass, so lines align with sprites). No depth attachment.
-        void createOrthoLinePipelines() {
-            VkShaderModuleCreateInfo vsmci{};
-            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            vsmci.codeSize = sizeof(kOverlayVertSpv);
-            vsmci.pCode    = kOverlayVertSpv;
-            VkShaderModule vertModule = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vertModule),
-                  "vkCreateShaderModule(ortho overlay.vert)");
-            VkShaderModuleCreateInfo fsmci{};
-            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            fsmci.codeSize = sizeof(kOverlayFragSpv);
-            fsmci.pCode    = kOverlayFragSpv;
-            VkShaderModule fragModule = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &fragModule),
-                  "vkCreateShaderModule(ortho overlay.frag)");
-
-            VkPipelineShaderStageCreateInfo stages[2]{};
-            stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
-            stages[0].module = vertModule;
-            stages[0].pName  = "main";
-            stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
-            stages[1].module = fragModule;
-            stages[1].pName  = "main";
-
-            VkVertexInputBindingDescription vib{};
-            vib.binding   = 0;
-            vib.stride    = 3 * sizeof(float);
-            vib.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-            VkVertexInputAttributeDescription via{};
-            via.location = 0;
-            via.binding  = 0;
-            via.format   = VK_FORMAT_R32G32B32_SFLOAT;
-            via.offset   = 0;
-            VkPipelineVertexInputStateCreateInfo vi{};
-            vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-            vi.vertexBindingDescriptionCount   = 1;
-            vi.pVertexBindingDescriptions      = &vib;
-            vi.vertexAttributeDescriptionCount = 1;
-            vi.pVertexAttributeDescriptions    = &via;
-
-            VkPipelineInputAssemblyStateCreateInfo iaList{};
-            iaList.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-            iaList.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
-            VkPipelineInputAssemblyStateCreateInfo iaStrip = iaList;
-            iaStrip.topology = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
-
-            VkPipelineViewportStateCreateInfo vp{};
-            vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-            vp.viewportCount = 1;
-            vp.scissorCount  = 1;
-
-            VkPipelineRasterizationStateCreateInfo rs{};
-            rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-            rs.polygonMode = VK_POLYGON_MODE_FILL;
-            rs.cullMode    = VK_CULL_MODE_NONE;
-            rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-            rs.lineWidth   = 1.0f;
-
-            VkPipelineMultisampleStateCreateInfo ms{};
-            ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-            ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-            // No depth attachment in the ortho overlay pass → depth test off.
-            VkPipelineDepthStencilStateCreateInfo ds{};
-            ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-            ds.depthTestEnable  = VK_FALSE;
-            ds.depthWriteEnable = VK_FALSE;
-
-            VkPipelineColorBlendAttachmentState cbas{};
-            cbas.blendEnable    = VK_FALSE;
-            cbas.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                  VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-            VkPipelineColorBlendStateCreateInfo cb{};
-            cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-            cb.attachmentCount = 1;
-            cb.pAttachments    = &cbas;
-
-            VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-            VkPipelineDynamicStateCreateInfo dyn{};
-            dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-            dyn.dynamicStateCount = 2;
-            dyn.pDynamicStates    = dynStates;
-
-            if (orthoLinePipelineLayout_ == VK_NULL_HANDLE) {
-                VkPushConstantRange pcRange{};// mat4 mvp (64) + vec4 color (16) = 80
-                pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-                pcRange.offset     = 0;
-                pcRange.size       = 80;
-                VkPipelineLayoutCreateInfo plci{};
-                plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-                plci.pushConstantRangeCount = 1;
-                plci.pPushConstantRanges    = &pcRange;
-                check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &orthoLinePipelineLayout_),
-                      "vkCreatePipelineLayout(orthoLine)");
-            }
-
-            const VkFormat colorFmt = ctx->swapchainFormat();
-            VkPipelineRenderingCreateInfo prci{};
-            prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-            prci.colorAttachmentCount    = 1;
-            prci.pColorAttachmentFormats = &colorFmt;
-            prci.depthAttachmentFormat   = VK_FORMAT_UNDEFINED;// color-only pass
-
-            VkGraphicsPipelineCreateInfo gpci{};
-            gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-            gpci.pNext               = &prci;
-            gpci.stageCount          = 2;
-            gpci.pStages             = stages;
-            gpci.pVertexInputState   = &vi;
-            gpci.pInputAssemblyState = &iaList;
-            gpci.pViewportState      = &vp;
-            gpci.pRasterizationState = &rs;
-            gpci.pMultisampleState   = &ms;
-            gpci.pDepthStencilState  = &ds;
-            gpci.pColorBlendState    = &cb;
-            gpci.pDynamicState       = &dyn;
-            gpci.layout              = orthoLinePipelineLayout_;
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpci, nullptr,
-                                            &orthoLineListPipeline_),
-                  "vkCreateGraphicsPipelines(orthoLineList)");
-
-            VkGraphicsPipelineCreateInfo gpciStrip = gpci;
-            gpciStrip.pInputAssemblyState = &iaStrip;
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciStrip, nullptr,
-                                            &orthoLineStripPipeline_),
-                  "vkCreateGraphicsPipelines(orthoLineStrip)");
-
-            // Filled-triangle variants for MeshBasicMaterial HUD geometry.
-            // Identical state to the line pipelines (position-only input,
-            // depth off, CULL_NONE, same layout) but TRIANGLE_LIST topology;
-            // the transparent variant adds standard src-alpha blending.
-            VkPipelineInputAssemblyStateCreateInfo iaTri = iaList;
-            iaTri.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-            VkGraphicsPipelineCreateInfo gpciMesh = gpci;
-            gpciMesh.pInputAssemblyState = &iaTri;
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciMesh, nullptr,
-                                            &orthoMeshPipeline_),
-                  "vkCreateGraphicsPipelines(orthoMesh)");
-
-            VkPipelineColorBlendAttachmentState cbasT = cbas;
-            cbasT.blendEnable         = VK_TRUE;
-            cbasT.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-            cbasT.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            cbasT.colorBlendOp        = VK_BLEND_OP_ADD;
-            cbasT.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-            cbasT.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            cbasT.alphaBlendOp        = VK_BLEND_OP_ADD;
-            VkPipelineColorBlendStateCreateInfo cbT = cb;
-            cbT.pAttachments = &cbasT;
-            VkGraphicsPipelineCreateInfo gpciMeshT = gpciMesh;
-            gpciMeshT.pColorBlendState = &cbT;
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciMeshT, nullptr,
-                                            &orthoMeshTransparentPipeline_),
-                  "vkCreateGraphicsPipelines(orthoMeshTransparent)");
-
-            vkDestroyShaderModule(ctx->device(), vertModule, nullptr);
-            vkDestroyShaderModule(ctx->device(), fragModule, nullptr);
-        }
-
         void createOverlayPipeline() {
             VkShaderModuleCreateInfo vsmci{};
             vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -9032,810 +9490,15 @@ namespace threepp {
             }
         }
 
-        // HUD sprite (TextSprite + Sprite) pipeline. Alpha-blended quad
-        // drawn over the swapchain in the ortho overlay pass — no depth,
-        // CULL_NONE, triangle-list, vertex layout matching Sprite's
-        // InterleavedBuffer (5 floats: pos.xyz at offset 0, uv.xy at
-        // offset 12). One per-sprite combined-image-sampler descriptor at
-        // set 0 binding 0, allocated each frame from spriteDescPools_.
-        // Push constant carries projection + per-sprite scale/center/
-        // rotation/mvPos/color (128 bytes — fits the 128B minimum guarantee).
-        void createSpriteOverlayPipeline() {
-            if (overlaySpritePipeline_ != VK_NULL_HANDLE) return;
-
-            VkDescriptorSetLayoutBinding b{};
-            b.binding         = 0;
-            b.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            b.descriptorCount = 1;
-            b.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
-            VkDescriptorSetLayoutCreateInfo dslci{};
-            dslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            dslci.bindingCount = 1;
-            dslci.pBindings    = &b;
-            check(vkCreateDescriptorSetLayout(ctx->device(), &dslci, nullptr, &spriteDescSetLayout_),
-                  "vkCreateDescriptorSetLayout(spriteOverlay)");
-
-            VkPushConstantRange pcRange{};
-            pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-            pcRange.offset     = 0;
-            pcRange.size       = 128;
-
-            VkPipelineLayoutCreateInfo plci{};
-            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            plci.setLayoutCount         = 1;
-            plci.pSetLayouts            = &spriteDescSetLayout_;
-            plci.pushConstantRangeCount = 1;
-            plci.pPushConstantRanges    = &pcRange;
-            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &spritePipelineLayout_),
-                  "vkCreatePipelineLayout(spriteOverlay)");
-
-            // Per-frame-in-flight descriptor pool. Reset before each ortho
-            // overlay record so the prior frame's allocations return to the
-            // pool without per-set vkFreeDescriptorSets calls.
-            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                VkDescriptorPoolSize ps{};
-                ps.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                ps.descriptorCount = kMaxSpritesPerFrame;
-                VkDescriptorPoolCreateInfo dpci{};
-                dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-                dpci.maxSets       = kMaxSpritesPerFrame;
-                dpci.poolSizeCount = 1;
-                dpci.pPoolSizes    = &ps;
-                check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &spriteDescPools_[f]),
-                      "vkCreateDescriptorPool(spriteOverlay)");
-            }
-
-            VkShaderModuleCreateInfo vsmci{};
-            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            vsmci.codeSize = sizeof(kOverlaySpriteVertSpv);
-            vsmci.pCode    = kOverlaySpriteVertSpv;
-            VkShaderModule vert = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vert),
-                  "vkCreateShaderModule(overlay_sprite.vert)");
-            VkShaderModuleCreateInfo fsmci{};
-            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            fsmci.codeSize = sizeof(kOverlaySpriteFragSpv);
-            fsmci.pCode    = kOverlaySpriteFragSpv;
-            VkShaderModule frag = VK_NULL_HANDLE;
-            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &frag),
-                  "vkCreateShaderModule(overlay_sprite.frag)");
-
-            VkPipelineShaderStageCreateInfo stages[2]{};
-            stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
-            stages[0].module = vert;
-            stages[0].pName  = "main";
-            stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-            stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
-            stages[1].module = frag;
-            stages[1].pName  = "main";
-
-            // Sprite's InterleavedBuffer: 5 floats per vertex (pos.xyz at 0..2,
-            // uv.xy at 3..4). One binding, two attributes.
-            VkVertexInputBindingDescription vib{};
-            vib.binding   = 0;
-            vib.stride    = 5 * sizeof(float);
-            vib.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-            VkVertexInputAttributeDescription vias[2]{};
-            vias[0].location = 0; vias[0].binding = 0;
-            vias[0].format   = VK_FORMAT_R32G32B32_SFLOAT;
-            vias[0].offset   = 0;
-            vias[1].location = 1; vias[1].binding = 0;
-            vias[1].format   = VK_FORMAT_R32G32_SFLOAT;
-            vias[1].offset   = 3 * sizeof(float);
-            VkPipelineVertexInputStateCreateInfo vi{};
-            vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-            vi.vertexBindingDescriptionCount   = 1;
-            vi.pVertexBindingDescriptions      = &vib;
-            vi.vertexAttributeDescriptionCount = 2;
-            vi.pVertexAttributeDescriptions    = vias;
-
-            VkPipelineInputAssemblyStateCreateInfo ia{};
-            ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-            ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-            VkPipelineViewportStateCreateInfo vp{};
-            vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-            vp.viewportCount = 1;
-            vp.scissorCount  = 1;
-
-            VkPipelineRasterizationStateCreateInfo rs{};
-            rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-            rs.polygonMode = VK_POLYGON_MODE_FILL;
-            rs.cullMode    = VK_CULL_MODE_NONE;
-            rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-            rs.lineWidth   = 1.0f;
-
-            VkPipelineMultisampleStateCreateInfo ms{};
-            ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-            ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-            VkPipelineDepthStencilStateCreateInfo ds{};
-            ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-            ds.depthTestEnable  = VK_FALSE;
-            ds.depthWriteEnable = VK_FALSE;
-
-            // Standard non-premultiplied alpha.
-            VkPipelineColorBlendAttachmentState cbas{};
-            cbas.blendEnable         = VK_TRUE;
-            cbas.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-            cbas.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            cbas.colorBlendOp        = VK_BLEND_OP_ADD;
-            cbas.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-            cbas.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            cbas.alphaBlendOp        = VK_BLEND_OP_ADD;
-            cbas.colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                       VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-            VkPipelineColorBlendStateCreateInfo cb{};
-            cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-            cb.attachmentCount = 1;
-            cb.pAttachments    = &cbas;
-
-            VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT,
-                                           VK_DYNAMIC_STATE_SCISSOR};
-            VkPipelineDynamicStateCreateInfo dyn{};
-            dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-            dyn.dynamicStateCount = 2;
-            dyn.pDynamicStates    = dynStates;
-
-            // Dynamic rendering — color attachment only, no depth attachment.
-            // HUD draws after the existing overlay pass so the swapchain has
-            // already been transitioned through COLOR_ATTACHMENT_OPTIMAL.
-            const VkFormat colorFmt = ctx->swapchainFormat();
-            VkPipelineRenderingCreateInfo prci{};
-            prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-            prci.colorAttachmentCount    = 1;
-            prci.pColorAttachmentFormats = &colorFmt;
-
-            VkGraphicsPipelineCreateInfo gpci{};
-            gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-            gpci.pNext               = &prci;
-            gpci.stageCount          = 2;
-            gpci.pStages             = stages;
-            gpci.pVertexInputState   = &vi;
-            gpci.pInputAssemblyState = &ia;
-            gpci.pViewportState      = &vp;
-            gpci.pRasterizationState = &rs;
-            gpci.pMultisampleState   = &ms;
-            gpci.pDepthStencilState  = &ds;
-            gpci.pColorBlendState    = &cb;
-            gpci.pDynamicState       = &dyn;
-            gpci.layout              = spritePipelineLayout_;
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpci, nullptr,
-                                            &overlaySpritePipeline_),
-                  "vkCreateGraphicsPipelines(overlaySprite)");
-
-            vkDestroyShaderModule(ctx->device(), vert, nullptr);
-            vkDestroyShaderModule(ctx->device(), frag, nullptr);
-        }
-
-        // Upload / refresh a sprite atlas texture. Returns nullptr on
-        // failure (no image, unsupported pixel layout, or dimensions zero).
-        // Re-uploads when Texture::version() bumps (TextSprite::setText
-        // calls Texture::needsUpdate() → version() increments) or when the
-        // image dimensions change. Cache is keyed by raw Texture* with a
-        // weak_ptr live-check to detect address reuse.
-        const SpriteAtlasRec* ensureSpriteAtlasTexture(const std::shared_ptr<Texture>& texSp) {
-            if (!texSp) return nullptr;
-            const Texture* tex = texSp.get();
-            Image& img = const_cast<Texture*>(tex)->image();
-            const uint32_t w = img.width;
-            const uint32_t h = img.height;
-            if (w == 0 || h == 0) return nullptr;
-
-            const unsigned int curVersion = tex->version();
-            auto it = spriteAtlasCache_.find(tex);
-            if (it != spriteAtlasCache_.end()) {
-                SpriteAtlasRec& rec = it->second;
-                const bool stale = rec.liveCheck.expired() ||
-                                   rec.liveCheck.lock().get() != tex ||
-                                   rec.textureVersion != curVersion ||
-                                   rec.width != w || rec.height != h;
-                if (!stale) return &rec;
-                // Stale — destroy and re-upload.
-                vkDeviceWaitIdle(ctx->device());
-                destroyImage2D(ctx->allocator(), ctx->device(), rec.image);
-                spriteAtlasCache_.erase(it);
-            }
-
-            // TextSprite / Font::rasterize emits RGBA8. Other sprite atlases
-            // (image-file loaded textures) usually do too. Anything else
-            // we don't bother supporting here — the user can manually
-            // upload via the bindless texture path before render().
-            std::vector<unsigned char> rgba;
-            const size_t pixels = static_cast<size_t>(w) * h;
-            try {
-                auto& src = img.data<unsigned char>();
-                if (src.size() == pixels * 4) {
-                    rgba.assign(src.begin(), src.end());
-                } else if (src.size() == pixels * 3) {
-                    rgba.resize(pixels * 4);
-                    for (size_t i = 0; i < pixels; ++i) {
-                        rgba[i*4+0] = src[i*3+0];
-                        rgba[i*4+1] = src[i*3+1];
-                        rgba[i*4+2] = src[i*3+2];
-                        rgba[i*4+3] = 255u;
-                    }
-                } else {
-                    return nullptr;
-                }
-            } catch (const std::bad_variant_access&) {
-                return nullptr;
-            }
-
-            // Match GL/WGPU's colorSpace→format rule (`isSrgb = colorSpace
-            // == sRGB`): ONLY an explicitly sRGB-tagged texture gets hardware
-            // sRGB decode on sample. Linear AND NoColorSpace are sampled raw.
-            // The TextSprite glyph atlas is NoColorSpace but Font::rasterize
-            // bakes LINEAR bytes (color.r*255) into it — so it must be sampled
-            // raw (UNORM), and overlay_sprite.frag applies the linear→sRGB
-            // output encode for the UNORM swapchain. (Was: NoColorSpace fell
-            // to SRGB here → double sRGB decode → dark non-white text.)
-            const VkFormat fmt = (tex->colorSpace == ColorSpace::sRGB)
-                                         ? VK_FORMAT_R8G8B8A8_SRGB
-                                         : VK_FORMAT_R8G8B8A8_UNORM;
-            char spriteName[64];
-            std::snprintf(spriteName, sizeof(spriteName),
-                          "spriteAtlas[%p]", static_cast<const void*>(tex));
-            Image2D up = createSampledImage2D(
-                    w, h, fmt,
-                    rgba.data(), rgba.size(),
-                    VK_FILTER_LINEAR,
-                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-                    spriteName);
-
-            SpriteAtlasRec rec{};
-            rec.image          = up;
-            rec.textureVersion = curVersion;
-            rec.width          = w;
-            rec.height         = h;
-            rec.liveCheck      = std::weak_ptr<Texture>(texSp);
-            auto [ins, _] = spriteAtlasCache_.emplace(tex, std::move(rec));
-            return &ins->second;
-        }
-
-        // Records Sprite / TextSprite draws onto the open swapchain cmd
-        // buffer. Two callers:
-        //   1. renderFrame dispatcher when the user calls render(orthoCamera)
-        //      — the legacy HUD pattern. screenSpaceOnly=false: all visible
-        //      Sprites in the supplied scene are drawn at their matrixWorld
-        //      positions through the supplied ortho camera's projection.
-        //   2. beginFrameForPT auto-call after PT body, with the main scene
-        //      and the renderer's internal screen-space ortho camera —
-        //      screenSpaceOnly=true: only Sprites flagged screenSpace are
-        //      drawn, with worldMatrix synthesised from screenAnchor +
-        //      viewportSize + position. Lets users drop a sprite into the
-        //      main scene and have it appear in screen space without a
-        //      separate scene/camera.
-        void recordOrthoOverlay(Object3D& scene, Camera& camera, bool screenSpaceOnly) {
-            // Lazy pipeline setup on first HUD overlay of the program.
-            if (overlaySpritePipeline_ == VK_NULL_HANDLE) {
-                createSpriteOverlayPipeline();
-            }
-            // Ensure scene + camera matrices are current — the user's HUD
-            // class typically only updates the camera's projection on
-            // resize and the sprite positions per-frame; matrixWorld
-            // computation here keeps us self-contained (no implicit
-            // requirement that the user call updateMatrixWorld).
-            scene.updateMatrixWorld(true);
-            camera.updateMatrixWorld(true);
-
-            // Reset the per-frame descriptor pool before allocating this
-            // frame's sprite sets. Safe because the inFlight fence wait
-            // at frame start already guarantees the prior frame's sets
-            // aren't bound on any in-flight cmd buffer.
-            check(vkResetDescriptorPool(ctx->device(),
-                                        spriteDescPools_[currentFrame], 0),
-                  "vkResetDescriptorPool(sprite)");
-
-            // Collect visible sprites. traverseVisible skips invisible
-            // subtrees the same way the PT walk does. effWorld captures the
-            // world matrix used for the draw — for screenSpace sprites we
-            // synthesise this from screenAnchor + viewport + position
-            // instead of using sp->matrixWorld (which carries the user's
-            // 3D placement, irrelevant in screen-space mode).
-            const VkExtent2D extEarly = ctx->swapchainExtent();
-            struct SpriteDraw {
-                Sprite* sprite = nullptr;
-                std::shared_ptr<Texture> atlas;
-                float color[4]{1.f,1.f,1.f,1.f};
-                float rotation = 0.f;
-                Matrix4 effWorld;
-            };
-            std::vector<SpriteDraw> draws;
-            scene.traverseVisible([&](Object3D& o) {
-                auto* sp = dynamic_cast<Sprite*>(&o);
-                if (!sp) return;
-                if (screenSpaceOnly && !sp->screenSpace) return;
-                auto mat = sp->material();
-                if (!mat) return;
-                auto* mm = dynamic_cast<MaterialWithMap*>(mat.get());
-                if (!mm || !mm->map) return;
-                SpriteDraw d;
-                d.sprite = sp;
-                d.atlas  = mm->map;
-                if (auto* mc = dynamic_cast<MaterialWithColor*>(mat.get())) {
-                    d.color[0] = mc->color.r;
-                    d.color[1] = mc->color.g;
-                    d.color[2] = mc->color.b;
-                }
-                d.color[3] = mat->opacity;
-                if (auto* mr = dynamic_cast<MaterialWithRotation*>(mat.get())) {
-                    d.rotation = mr->rotation;
-                }
-                if (sp->screenSpace) {
-                    // Pixel position = anchor·viewport + position.xy.
-                    // Negative offsets read as "from the opposite edge".
-                    const float pxX = sp->screenAnchor.x * float(extEarly.width)
-                                    + static_cast<float>(sp->position.x);
-                    const float pxY = sp->screenAnchor.y * float(extEarly.height)
-                                    + static_cast<float>(sp->position.y);
-                    // Compose: T(pxX,pxY,0) * R(quaternion) * S(scale). Reuse
-                    // the sprite's own quaternion + scale (TextSprite::applyScale
-                    // packs glyph-atlas pixel dimensions into scale.xy).
-                    d.effWorld.compose(Vector3(pxX, pxY, 0.f),
-                                       sp->quaternion,
-                                       sp->scale);
-                } else {
-                    std::memcpy(d.effWorld.elements.data(),
-                                sp->matrixWorld->elements.data(), 64);
-                }
-                draws.push_back(std::move(d));
-            });
-
-            // Collect Line / LineSegments for the ortho overlay (the deferred
-            // "Mesh / Line HUD overlay" follow-up). ensureSceneBuilt is skipped
-            // for ortho cameras, so lastVisibleLines_ isn't populated — gather
-            // straight from the scene here.
-            //
-            // ONLY in the true ortho/HUD path (screenSpaceOnly == false). The
-            // screenSpaceOnly == true call comes from the perspective path
-            // (beginFrameForPT, compositing screen-space Sprites over the PT
-            // image): a perspective scene's Lines are already drawn correctly by
-            // the 3D hybrid overlay, so collecting them here would double-draw
-            // them through the internal screen-space camera at wrong positions.
-            struct OrthoLineDraw {
-                Line* line = nullptr;
-                bool  isSegments = false;
-                Matrix4 world;
-            };
-            std::vector<OrthoLineDraw> lineDraws;
-            if (!screenSpaceOnly) {
-                scene.traverseVisible([&](Object3D& o) {
-                    auto* ln = dynamic_cast<Line*>(&o);
-                    if (!ln) return;
-                    auto g = ln->geometry();
-                    if (!g || !g->hasAttribute("position")) return;
-                    OrthoLineDraw ld;
-                    ld.line = ln;
-                    ld.isSegments = (dynamic_cast<LineSegments*>(ln) != nullptr);
-                    std::memcpy(ld.world.elements.data(), ln->matrixWorld->elements.data(), 64);
-                    lineDraws.push_back(ld);
-                });
-            }
-
-            // Collect filled Mesh overlays (flat MeshBasicMaterial-style fills,
-            // e.g. SVG ShapeGeometry HUD art). Same gating as lines: only the
-            // explicit ortho/HUD render, never the PT screen-space auto-pass
-            // (which would wrongly flatten the path-traced 3D scene's meshes).
-            struct OrthoMeshDraw {
-                Mesh*   mesh = nullptr;
-                Matrix4 world;
-                Color   color{1.f, 1.f, 1.f};
-                float   opacity = 1.f;
-                bool    transparent = false;
-            };
-            std::vector<OrthoMeshDraw> meshDraws;
-            if (!screenSpaceOnly) {
-                scene.traverseVisible([&](Object3D& o) {
-                    auto* m = dynamic_cast<Mesh*>(&o);
-                    if (!m) return;// Sprites/Lines aren't Meshes — handled above
-                    auto g = m->geometry();
-                    if (!g || !g->hasAttribute("position")) return;
-                    auto mat = m->material();
-                    if (!mat) return;
-                    OrthoMeshDraw md;
-                    md.mesh = m;
-                    std::memcpy(md.world.elements.data(), m->matrixWorld->elements.data(), 64);
-                    if (auto* mc = dynamic_cast<MaterialWithColor*>(mat.get())) md.color = mc->color;
-                    md.opacity     = mat->opacity;
-                    md.transparent = mat->transparent;
-                    meshDraws.push_back(md);
-                });
-            }
-
-            if (draws.empty() && lineDraws.empty() && meshDraws.empty()) return;
-            if (draws.size() > kMaxSpritesPerFrame) {
-                std::cerr << "[VulkanRenderer] HUD sprite count " << draws.size()
-                          << " exceeds kMaxSpritesPerFrame=" << kMaxSpritesPerFrame
-                          << "; extras dropped\n";
-                draws.resize(kMaxSpritesPerFrame);
-            }
-
-            const VkExtent2D ext = ctx->swapchainExtent();
-            VkCommandBuffer cb = cmdBuffers[currentFrame];
-            const uint32_t imageIndex = frameImageIndex_;
-
-            // Open a fresh dynamic render pass on the swapchain so we can
-            // emit draw commands. The hybrid 3D overlay pass earlier in
-            // recordCommandBuffer leaves the swapchain in GENERAL; we
-            // transition GENERAL → COLOR_ATTACHMENT_OPTIMAL, draw, then
-            // transition back to GENERAL so endFrame's overlay/present
-            // logic sees the layout it expects.
-            const VkImage img = ctx->swapchainImages()[imageIndex];
-            {
-                VkImageMemoryBarrier2 toColor{};
-                toColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                toColor.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                        VK_PIPELINE_STAGE_2_TRANSFER_BIT |
-                                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                toColor.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                                        VK_ACCESS_2_TRANSFER_WRITE_BIT |
-                                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                toColor.dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                toColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
-                                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                toColor.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                toColor.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                toColor.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                toColor.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                toColor.image = img;
-                toColor.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                toColor.subresourceRange.levelCount = 1;
-                toColor.subresourceRange.layerCount = 1;
-                VkDependencyInfo dep{};
-                dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                dep.imageMemoryBarrierCount = 1;
-                dep.pImageMemoryBarriers = &toColor;
-                vkCmdPipelineBarrier2(cb, &dep);
-            }
-
-            VkRenderingAttachmentInfo colorAtt{};
-            colorAtt.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-            colorAtt.imageView   = ctx->swapchainImageViews()[imageIndex];
-            colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            colorAtt.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
-            colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-            VkRenderingInfo ri{};
-            ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-            ri.renderArea.offset = {0, 0};
-            ri.renderArea.extent = ext;
-            ri.layerCount = 1;
-            ri.colorAttachmentCount = 1;
-            ri.pColorAttachments = &colorAtt;
-            vkCmdBeginRendering(cb, &ri);
-
-            VkViewport vp{0.f, 0.f, float(ext.width), float(ext.height), 0.f, 1.f};
-            vkCmdSetViewport(cb, 0, 1, &vp);
-            VkRect2D sc{{0,0}, ext};
-            vkCmdSetScissor(cb, 0, 1, &sc);
-
-            // ── Filled Mesh overlays ────────────────────────────────────────
-            // Drawn FIRST so Sprites/TextSprites composite on top of the vector
-            // art (panels behind labels). Uses the same flat-color overlay
-            // shader + ortho MVP (with GL→Vulkan clip-z remap) as the lines.
-            if (!meshDraws.empty()) {
-                if (orthoMeshPipeline_ == VK_NULL_HANDLE) createOrthoLinePipelines();
-                Matrix4 zfix;
-                zfix.set(1.f, 0.f, 0.f, 0.f,
-                         0.f, 1.f, 0.f, 0.f,
-                         0.f, 0.f, 0.5f, 0.5f,
-                         0.f, 0.f, 0.f, 1.f);
-                Matrix4 vpMat;
-                vpMat.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-                Matrix4 cvp;
-                cvp.multiplyMatrices(zfix, vpMat);
-
-                struct MeshPC {
-                    float mvp[16];
-                    float color[4];
-                };
-                VkPipeline curMesh = VK_NULL_HANDLE;
-                for (const auto& md : meshDraws) {
-                    const LineRec* rec = ensureLineGeometryUploaded(md.mesh->geometry().get());
-                    if (!rec || rec->vertex.handle == VK_NULL_HANDLE) continue;
-
-                    VkPipeline want = md.transparent ? orthoMeshTransparentPipeline_ : orthoMeshPipeline_;
-                    if (want != curMesh) {
-                        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
-                        curMesh = want;
-                    }
-
-                    Matrix4 mvp;
-                    mvp.multiplyMatrices(cvp, md.world);
-                    MeshPC pc{};
-                    std::memcpy(pc.mvp, mvp.elements.data(), 64);
-                    pc.color[0] = md.color.r;
-                    pc.color[1] = md.color.g;
-                    pc.color[2] = md.color.b;
-                    pc.color[3] = md.opacity;
-                    vkCmdPushConstants(cb, orthoLinePipelineLayout_,
-                                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                       0, sizeof(pc), &pc);
-
-                    VkBuffer     vb[1] = {rec->vertex.handle};
-                    VkDeviceSize vo[1] = {0};
-                    vkCmdBindVertexBuffers(cb, 0, 1, vb, vo);
-                    if (rec->index.handle != VK_NULL_HANDLE) {
-                        vkCmdBindIndexBuffer(cb, rec->index.handle, 0, VK_INDEX_TYPE_UINT32);
-                        vkCmdDrawIndexed(cb, rec->indexCount, 1, 0, 0, 0);
-                    } else {
-                        vkCmdDraw(cb, rec->vertexCount, 1, 0, 0);
-                    }
-                }
-            }
-
-            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, overlaySpritePipeline_);
-
-            // Per-frame projection (ortho) extracted from the camera. matrixWorldInverse
-            // is the view matrix; we precompute modelView for each sprite below.
-            Matrix4 projMat;
-            std::memcpy(projMat.elements.data(),
-                        camera.projectionMatrix.elements.data(), 64);
-
-            // 128-byte push constant layout, matches overlay_sprite.vert/frag.
-            struct SpritePC {
-                float projection[16];   // 64
-                float mvPos[4];         // 16
-                float scale[2];         // 8
-                float center[2];        // 8
-                float color[4];         // 16
-                float rotation;         // 4
-                float _pad[3];          // 12
-            };
-            static_assert(sizeof(SpritePC) == 128,
-                          "SpritePC must match push-constant layout");
-
-            for (const auto& d : draws) {
-                const auto* atlas = ensureSpriteAtlasTexture(d.atlas);
-                if (!atlas) continue;
-
-                // Per-sprite descriptor set bound to the atlas texture.
-                VkDescriptorSetAllocateInfo asi{};
-                asi.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-                asi.descriptorPool     = spriteDescPools_[currentFrame];
-                asi.descriptorSetCount = 1;
-                asi.pSetLayouts        = &spriteDescSetLayout_;
-                VkDescriptorSet set = VK_NULL_HANDLE;
-                if (vkAllocateDescriptorSets(ctx->device(), &asi, &set) != VK_SUCCESS) continue;
-                VkDescriptorImageInfo dii{};
-                dii.imageView   = atlas->image.view;
-                dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                dii.sampler     = atlas->image.sampler;
-                VkWriteDescriptorSet w{};
-                w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                w.dstSet          = set;
-                w.dstBinding      = 0;
-                w.descriptorCount = 1;
-                w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                w.pImageInfo      = &dii;
-                vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
-                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        spritePipelineLayout_, 0, 1, &set, 0, nullptr);
-
-                Sprite* sp = d.sprite;
-                // modelView = viewInverse * effWorld. effWorld is either
-                // sp->matrixWorld (3D) or a screen-space composite built
-                // from screenAnchor + viewport + position (screen-space).
-                Matrix4 modelView;
-                modelView.multiplyMatrices(camera.matrixWorldInverse, d.effWorld);
-                Vector3 worldScale;
-                worldScale.setFromMatrixScale(d.effWorld);
-                Vector3 mvPos;
-                mvPos.setFromMatrixPosition(modelView);
-
-                SpritePC pc{};
-                std::memcpy(pc.projection, projMat.elements.data(), 64);
-                pc.mvPos[0] = static_cast<float>(mvPos.x);
-                pc.mvPos[1] = static_cast<float>(mvPos.y);
-                pc.mvPos[2] = static_cast<float>(mvPos.z);
-                pc.mvPos[3] = 1.f;
-                pc.scale[0] = static_cast<float>(worldScale.x);
-                pc.scale[1] = static_cast<float>(worldScale.y);
-                pc.center[0] = sp->center.x;
-                pc.center[1] = sp->center.y;
-                pc.color[0] = d.color[0];
-                pc.color[1] = d.color[1];
-                pc.color[2] = d.color[2];
-                pc.color[3] = d.color[3];
-                pc.rotation = d.rotation;
-
-                vkCmdPushConstants(cb, spritePipelineLayout_,
-                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                   0, sizeof(pc), &pc);
-
-                // Sprite geometry: shared 4-vertex interleaved quad + 6-index
-                // buffer. Upload through the existing line-geometry helper —
-                // it doesn't know about Lines specifically, it just stages
-                // a position+optional-color vertex buffer. We need a slightly
-                // different uploader for the 5-float interleaved layout.
-                const BufferGeometry* geom = sp->geometry().get();
-                const SpriteGeomRec* gr = ensureSpriteGeometryUploaded(geom);
-                if (!gr || gr->vertex.handle == VK_NULL_HANDLE) continue;
-
-                VkBuffer     vbufs[1] = {gr->vertex.handle};
-                VkDeviceSize voffs[1] = {0};
-                vkCmdBindVertexBuffers(cb, 0, 1, vbufs, voffs);
-                vkCmdBindIndexBuffer(cb, gr->index.handle, 0, VK_INDEX_TYPE_UINT32);
-                vkCmdDrawIndexed(cb, gr->indexCount, 1, 0, 0, 0);
-            }
-
-            // ── Line / LineSegments overlay ─────────────────────────────────
-            // Drawn after the sprites in the same color-only pass, so boxes /
-            // gizmos land on top of any image sprite.
-            if (!lineDraws.empty()) {
-                if (orthoLineListPipeline_ == VK_NULL_HANDLE) createOrthoLinePipelines();
-
-                // overlay.vert flips Y but does NOT remap GL clip-z to Vulkan's
-                // [0,w] range; bake that remap (z' = 0.5z + 0.5w) into the MVP so
-                // the ortho near/far range isn't clipped away.
-                Matrix4 zfix;
-                zfix.set(1.f, 0.f, 0.f, 0.f,
-                         0.f, 1.f, 0.f, 0.f,
-                         0.f, 0.f, 0.5f, 0.5f,
-                         0.f, 0.f, 0.f, 1.f);
-                Matrix4 vpMat;
-                vpMat.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-                Matrix4 cvp;
-                cvp.multiplyMatrices(zfix, vpMat);
-
-                struct LinePC {
-                    float mvp[16];
-                    float color[4];
-                };
-                VkPipeline curLine = VK_NULL_HANDLE;
-                for (const auto& ld : lineDraws) {
-                    auto g = ld.line->geometry();
-                    const LineRec* lrec = ensureLineGeometryUploaded(g.get());
-                    if (!lrec || lrec->vertex.handle == VK_NULL_HANDLE) continue;
-
-                    Color color(1.f, 1.f, 1.f);
-                    float opacity = 1.f;
-                    if (auto m = ld.line->material()) {
-                        if (auto* mc = dynamic_cast<MaterialWithColor*>(m.get())) color = mc->color;
-                        opacity = m->opacity;
-                    }
-
-                    VkPipeline want = ld.isSegments ? orthoLineListPipeline_ : orthoLineStripPipeline_;
-                    if (want != curLine) {
-                        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
-                        curLine = want;
-                    }
-
-                    Matrix4 mvp;
-                    mvp.multiplyMatrices(cvp, ld.world);
-                    LinePC pc{};
-                    std::memcpy(pc.mvp, mvp.elements.data(), 64);
-                    pc.color[0] = color.r;
-                    pc.color[1] = color.g;
-                    pc.color[2] = color.b;
-                    pc.color[3] = opacity;
-                    vkCmdPushConstants(cb, orthoLinePipelineLayout_,
-                                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                       0, sizeof(pc), &pc);
-
-                    VkBuffer     vb[1] = {lrec->vertex.handle};
-                    VkDeviceSize vo[1] = {0};
-                    vkCmdBindVertexBuffers(cb, 0, 1, vb, vo);
-
-                    const auto& dr = g->drawRange;
-                    if (lrec->index.handle != VK_NULL_HANDLE) {
-                        vkCmdBindIndexBuffer(cb, lrec->index.handle, 0, VK_INDEX_TYPE_UINT32);
-                        const uint32_t start = static_cast<uint32_t>(std::max(0, dr.start));
-                        const uint32_t cap   = (lrec->indexCount > start) ? (lrec->indexCount - start) : 0u;
-                        const uint32_t cnt   = std::min(cap, static_cast<uint32_t>(std::max(0, dr.count)));
-                        if (cnt > 0) vkCmdDrawIndexed(cb, cnt, 1, start, 0, 0);
-                    } else {
-                        const uint32_t start = static_cast<uint32_t>(std::max(0, dr.start));
-                        const uint32_t cap   = (lrec->vertexCount > start) ? (lrec->vertexCount - start) : 0u;
-                        const uint32_t cnt   = std::min(cap, static_cast<uint32_t>(std::max(0, dr.count)));
-                        if (cnt > 0) vkCmdDraw(cb, cnt, 1, start, 0);
-                    }
-                }
-            }
-
-            vkCmdEndRendering(cb);
-
-            // Back to GENERAL for endFrame's overlay/present transition.
-            {
-                VkImageMemoryBarrier2 toGeneral{};
-                toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                toGeneral.srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                toGeneral.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                toGeneral.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                          VK_PIPELINE_STAGE_2_TRANSFER_BIT |
-                                          VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                          VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
-                toGeneral.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                          VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                                          VK_ACCESS_2_TRANSFER_READ_BIT |
-                                          VK_ACCESS_2_TRANSFER_WRITE_BIT |
-                                          VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
-                                          VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                toGeneral.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                toGeneral.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                toGeneral.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                toGeneral.image = img;
-                toGeneral.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                toGeneral.subresourceRange.levelCount = 1;
-                toGeneral.subresourceRange.layerCount = 1;
-                VkDependencyInfo dep{};
-                dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                dep.imageMemoryBarrierCount = 1;
-                dep.pImageMemoryBarriers = &toGeneral;
-                vkCmdPipelineBarrier2(cb, &dep);
-            }
-        }
-
-        // Per-BufferGeometry vertex/index upload for Sprite quads. Sprite
-        // shares one 5-float interleaved buffer per instance (Sprite.cpp
-        // builds the geometry in its constructor); we upload it once on
-        // first encounter and reuse from then on.
-        struct SpriteGeomRec {
-            Buffer   vertex;
-            Buffer   index;
-            uint32_t indexCount = 0;
-            std::weak_ptr<BufferGeometry> liveCheck;
-        };
-        std::unordered_map<const BufferGeometry*, SpriteGeomRec> spriteGeomCache_;
-
-        const SpriteGeomRec* ensureSpriteGeometryUploaded(const BufferGeometry* geom) {
-            if (!geom) return nullptr;
-            auto it = spriteGeomCache_.find(geom);
-            if (it != spriteGeomCache_.end()) return &it->second;
-
-            // Sprite's geometry uses one InterleavedBuffer (5 floats /
-            // vertex: pos.xyz at 0..2, uv.xy at 3..4). Pull the underlying
-            // shared array via the interleaved attribute, not the position
-            // attribute's stride-aware accessor, so we upload the full
-            // interleaved 5-float layout the pipeline's vertex input
-            // expects.
-            auto* posAttr = geom->getAttribute<float>("position");
-            const auto* idxAttr = geom->getIndex();
-            if (!posAttr || !idxAttr) return nullptr;
-            const auto* posIB = dynamic_cast<const InterleavedBufferAttribute*>(posAttr);
-            if (!posIB) return nullptr;
-            const auto& packed = posIB->data->array();
-            if (packed.empty()) return nullptr;
-
-            SpriteGeomRec rec{};
-            const VkDeviceSize vbSize = packed.size() * sizeof(float);
-            rec.vertex = createBuffer(
-                    ctx->allocator(), ctx->device(), vbSize,
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            {
-                void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), rec.vertex.alloc, &mapped);
-                std::memcpy(mapped, packed.data(), vbSize);
-                vmaUnmapMemory(ctx->allocator(), rec.vertex.alloc);
-            }
-
-            const auto& indices = idxAttr->array();
-            std::vector<uint32_t> idx32(indices.size());
-            for (size_t i = 0; i < indices.size(); ++i) {
-                idx32[i] = static_cast<uint32_t>(indices[i]);
-            }
-            const VkDeviceSize ibSize = idx32.size() * sizeof(uint32_t);
-            rec.index = createBuffer(
-                    ctx->allocator(), ctx->device(), ibSize,
-                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                    VMA_MEMORY_USAGE_AUTO,
-                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
-            {
-                void* mapped = nullptr;
-                vmaMapMemory(ctx->allocator(), rec.index.alloc, &mapped);
-                std::memcpy(mapped, idx32.data(), ibSize);
-                vmaUnmapMemory(ctx->allocator(), rec.index.alloc);
-            }
-            rec.indexCount = static_cast<uint32_t>(idx32.size());
-
-            auto [ins, _] = spriteGeomCache_.emplace(geom, std::move(rec));
-            return &ins->second;
-        }
+        // Line geometry cache shared between the ortho overlay (via
+        // OverlayPass::record) and the 3D hybrid overlay
+        // (recordCommandBuffer's line-draw section). Keyed on raw
+        // BufferGeometry*; geomId in LineRec guards against recycled-
+        // pointer aliasing. Counter bumped each frame by the 3D overlay
+        // path; stale eviction intentionally omitted here (3D overlay
+        // objects are persistent scene objects, not transient geometry).
+        std::unordered_map<const BufferGeometry*, vulkan::LineRec> lineGeomCache_;
+        uint64_t overlayFrameCounter_ = 0;// lastTouch reference for lineGeomCache_ entries
 
         // Lazy-upload Line / LineSegments geometry into a host-visible
         // vertex (+ optional index) buffer pair. Returns nullptr if the
@@ -9847,7 +9510,7 @@ namespace threepp {
         // refreshSkinnedBlas pattern — a write-during-read race for that
         // one frame is benign because the per-pixel result blends sub-
         // pixel anyway).
-        const LineRec* ensureLineGeometryUploaded(const BufferGeometry* geom) {
+        const vulkan::LineRec* ensureLineGeometryUploaded(const BufferGeometry* geom) {
             if (!geom) return nullptr;
             auto posAttr = geom->getAttribute<float>("position");
             if (!posAttr || posAttr->count() == 0) return nullptr;
@@ -9862,8 +9525,19 @@ namespace threepp {
             const uint32_t colVer = (colAttr && colAttr->count() > 0) ? colAttr->version : 0u;
 
             auto it = lineGeomCache_.find(geom);
+            if (it != lineGeomCache_.end() && it->second.geomId != geom->id) {
+                // Recycled pointer: this address was a DIFFERENT geometry whose
+                // buffers we still hold. Retire them and re-upload from scratch
+                // (the version fields would otherwise alias — both at 0).
+                destroyBuffer(ctx->allocator(), it->second.vertex);
+                if (it->second.index.handle) destroyBuffer(ctx->allocator(), it->second.index);
+                if (it->second.color.handle) destroyBuffer(ctx->allocator(), it->second.color);
+                lineGeomCache_.erase(it);
+                it = lineGeomCache_.end();
+            }
             if (it != lineGeomCache_.end()) {
                 auto& rec = it->second;
+                rec.lastTouch = overlayFrameCounter_;
                 if (rec.positionVersion == posVer &&
                     rec.indexVersion    == idxVer &&
                     rec.colorVersion    == colVer) {
@@ -9936,9 +9610,11 @@ namespace threepp {
 
             // First-time upload.
             const auto& posArr = posAttr->array();
-            LineRec rec{};
+            vulkan::LineRec rec{};
             rec.vertexCount     = static_cast<uint32_t>(posAttr->count());
             rec.positionVersion = posVer;
+            rec.geomId          = geom->id;
+            rec.lastTouch       = overlayFrameCounter_;
 
             const VkDeviceSize vbBytes = posArr.size() * sizeof(float);
             rec.vertex = createBuffer(
@@ -10113,6 +9789,8 @@ namespace threepp {
             in.oceanFineSampler = oceanFineHeightSampler;
             in.oceanFoamView    = oceanFoamView;
             in.oceanFoamSampler = oceanFoamSampler;
+            in.foamDetailView    = foamDetailImage.view;
+            in.foamDetailSampler = foamDetailImage.sampler;
             // ReSTIR DI reservoir ping-pong — the same 2 physical images the PT path
             // uses (created unconditionally in createAccumImage). rewriteDescriptors
             // picks write/read slots per frame. Locals must outlive the call below.
@@ -10268,17 +9946,38 @@ namespace threepp {
             if (!texSp) return -1;
             const Texture* tex = texSp.get();
             if (auto it = textureCache.find(tex); it != textureCache.end()) {
-                return static_cast<int32_t>(it->second.second);
+                return static_cast<int32_t>(it->second.slot);
             }
             if (freeTextureSlots.empty() && materialTextures.size() >= kMaxMaterialTextures) {
                 std::cerr << "[VulkanRenderer] material texture slots exhausted ("
                           << kMaxMaterialTextures << "); using -1 fallback\n";
                 return -1;
             }
+            Image2D out = buildMaterialImage2D(tex);
+            if (!out.view) return -1;
+            uint32_t slot;
+            if (!freeTextureSlots.empty()) {
+                slot = freeTextureSlots.back();
+                freeTextureSlots.pop_back();
+                materialTextures[slot] = out;
+            } else {
+                slot = static_cast<uint32_t>(materialTextures.size());
+                materialTextures.push_back(out);
+            }
+            textureCache.emplace(tex, CachedTexture{std::weak_ptr<Texture>(texSp), slot, tex->version()});
+            return static_cast<int32_t>(slot);
+        }
+
+        // Build a tightly-packed RGBA8 sampled image from a material texture's
+        // CPU image (BCn decompress / channel pad / float quantize). Returns a
+        // null Image2D ({}) on unsupported/degenerate input. Slot-agnostic so the
+        // initial upload (ensureMaterialTexture) and the in-place re-upload
+        // (refreshDirtyMaterialTextures) share one code path.
+        Image2D buildMaterialImage2D(const Texture* tex) {
             Image& img = const_cast<Texture*>(tex)->image();
-            const uint32_t w = img.width;
-            const uint32_t h = img.height;
-            if (w == 0 || h == 0) return -1;
+            const uint32_t w = img.width();
+            const uint32_t h = img.height();
+            if (w == 0 || h == 0) return {};
 
             // Normalise everything to tightly-packed RGBA8. The pipeline
             // treats the bindless array as a uniform u8x4 sampler set, so
@@ -10301,7 +10000,7 @@ namespace threepp {
                     std::cerr << "[VulkanRenderer] unsupported compressed format 0x"
                               << std::hex << *img.compressedFormat << std::dec
                               << " for material tex (" << w << "x" << h << ")\n";
-                    return -1;
+                    return {};
                 }
                 srcPtr = bcnRgba.data();
                 channels = 4;
@@ -10312,13 +10011,13 @@ namespace threepp {
                     if (src.size() % pixels != 0) {
                         std::cerr << "[VulkanRenderer] unsupported pixel layout for material tex ("
                                   << src.size() << " bytes for " << w << "x" << h << ")\n";
-                        return -1;
+                        return {};
                     }
                     channels = static_cast<int>(src.size() / pixels);
                     if (channels < 1 || channels > 4) {
                         std::cerr << "[VulkanRenderer] unsupported channel count " << channels
                                   << " for material tex (" << w << "x" << h << ")\n";
-                        return -1;
+                        return {};
                     }
                     srcPtr = src.data();
                 } catch (const std::bad_variant_access&) {
@@ -10334,13 +10033,13 @@ namespace threepp {
                         std::cerr << "[VulkanRenderer] unsupported float-pixel layout for material tex ("
                                   << srcF.size() * sizeof(float) << " bytes for "
                                   << w << "x" << h << ")\n";
-                        return -1;
+                        return {};
                     }
                     const int fch = static_cast<int>(srcF.size() / pixels);
                     if (fch < 1 || fch > 4) {
                         std::cerr << "[VulkanRenderer] unsupported float channel count " << fch
                                   << " for material tex\n";
-                        return -1;
+                        return {};
                     }
                     rgba.resize(pixels * 4);
                     for (size_t i = 0; i < pixels; ++i) {
@@ -10387,34 +10086,52 @@ namespace threepp {
             const VkFormat fmt = (tex->colorSpace == ColorSpace::sRGB)
                                          ? VK_FORMAT_R8G8B8A8_SRGB
                                          : VK_FORMAT_R8G8B8A8_UNORM;
-            // Pre-compute the slot so the debug name can include it. The
-            // allocation order below (free list pop, else push_back) is
-            // mirrored in the actual assignment below.
-            const uint32_t plannedSlot = freeTextureSlots.empty()
-                    ? static_cast<uint32_t>(materialTextures.size())
-                    : freeTextureSlots.back();
             char texName[80];
             std::snprintf(texName, sizeof(texName),
-                          "materialTexture[%u] (%ux%u, tex=%p)",
-                          plannedSlot, w, h, static_cast<const void*>(tex));
-            Image2D out = createSampledImage2D(
+                          "materialTexture (%ux%u, tex=%p)",
+                          w, h, static_cast<const void*>(tex));
+            return createSampledImage2D(
                     w, h, fmt,
                     rgba.data(), rgba.size(),
                     VK_FILTER_LINEAR,
                     wrapToVk(tex->wrapS),
                     wrapToVk(tex->wrapT),
                     texName);
-            uint32_t slot;
-            if (!freeTextureSlots.empty()) {
-                slot = freeTextureSlots.back();
-                freeTextureSlots.pop_back();
-                materialTextures[slot] = out;
-            } else {
-                slot = static_cast<uint32_t>(materialTextures.size());
-                materialTextures.push_back(out);
+        }
+
+        // Re-upload any cached material texture whose Texture::version() changed
+        // since last upload (e.g. a DataTexture edited via setData + needsUpdate),
+        // in place at its existing bindless slot. ensureMaterialTexture caches by
+        // pointer and the bindless image array is only rewritten on a full scene
+        // rebuild, so without this a live texture edit would never reach the GPU.
+        // Cheap version scan each frame; only drains + rewrites when dirty.
+        void refreshDirtyMaterialTextures() {
+            bool any = false;
+            for (auto& kv : textureCache) {
+                const auto sp = kv.second.ref.lock();
+                if (sp && sp->version() != kv.second.version) { any = true; break; }
             }
-            textureCache.emplace(tex, std::make_pair(std::weak_ptr<Texture>(texSp), slot));
-            return static_cast<int32_t>(slot);
+            if (!any) return;
+            // Prior in-flight frames may still sample these images; drain first.
+            check(vkDeviceWaitIdle(ctx->device()), "vkDeviceWaitIdle (material texture refresh)");
+            for (auto& kv : textureCache) {
+                const auto sp = kv.second.ref.lock();
+                if (!sp || sp->version() == kv.second.version) continue;
+                if (kv.second.slot >= materialTextures.size()) continue;
+                Image2D rebuilt = buildMaterialImage2D(kv.first);
+                if (!rebuilt.view) continue;// keep the old image on failure
+                destroyImage2D(ctx->allocator(), ctx->device(), materialTextures[kv.second.slot]);
+                materialTextures[kv.second.slot] = rebuilt;// same slot index, new view
+                kv.second.version = sp->version();
+            }
+            // The bindless material array is referenced by three descriptor sets:
+            // the PT set (binding 8) and deferred-compute set (binding 11) are
+            // rewritten here; the gbuffer raster set (binding 3) is refreshed
+            // lazily by invalidating its per-frame validity flag. All three must
+            // see the new image views or the (default RasterFirst) gbuffer keeps
+            // sampling the freed view.
+            rewriteSceneDescriptors();
+            rasterMatTexValid_.fill(0);
         }
 
         // (Re)allocate envCdfImage / envMargImage from a built EnvCdfResult.
@@ -10605,6 +10322,75 @@ namespace threepp {
                     VK_SAMPLER_ADDRESS_MODE_REPEAT,
                     VK_SAMPLER_ADDRESS_MODE_REPEAT,
                     "blueNoiseImage (64x64 void-and-cluster tile)");
+        }
+
+        // Tileable foam detail tile — R = micro bubble brightness, G = ridged
+        // "lace" filament pattern. All lattice frequencies are integers so
+        // every octave wraps seamlessly across the tile edges. Channel content
+        // matches the procedural noise it replaces in the foam shading:
+        //   R ≈ vnoise·0.55 + vnoise(×2.3)·0.30 + vnoise(×5.1)·0.15 with
+        //       0.154 m base features over the shader's 4 m world mapping;
+        //   G ≈ 1 − 2·|nf − 0.5| (filament cores at nf = 0.5) with ~1.2 m
+        //       cells over the 12 m mapping.
+        std::vector<unsigned char> generateFoamDetailTile_(int res) {
+            auto hashf = [](int x, int y) {
+                uint32_t h = static_cast<uint32_t>(x) * 374761393u +
+                             static_cast<uint32_t>(y) * 668265263u;
+                h = (h ^ (h >> 13)) * 1274126177u;
+                h ^= h >> 16;
+                return static_cast<float>(h) * (1.0f / 4294967296.0f);
+            };
+            // Tileable value noise: `cells` lattice points per tile edge,
+            // wrapped; `seed` decorrelates octaves sharing a frequency.
+            auto vnoiseT = [&](float u, float v, int cells, int seed) {
+                const float x = u * static_cast<float>(cells);
+                const float y = v * static_cast<float>(cells);
+                const int xi = static_cast<int>(std::floor(x));
+                const int yi = static_cast<int>(std::floor(y));
+                float tx = x - static_cast<float>(xi);
+                float ty = y - static_cast<float>(yi);
+                tx = tx * tx * (3.f - 2.f * tx);
+                ty = ty * ty * (3.f - 2.f * ty);
+                auto at = [&](int ix, int iy) {
+                    return hashf(((ix % cells) + cells) % cells + seed * 7919,
+                                 ((iy % cells) + cells) % cells);
+                };
+                const float a = at(xi, yi), b = at(xi + 1, yi);
+                const float c = at(xi, yi + 1), d = at(xi + 1, yi + 1);
+                return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
+            };
+            std::vector<unsigned char> px(static_cast<size_t>(res) * res * 2);
+            for (int y = 0; y < res; ++y) {
+                const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(res);
+                for (int x = 0; x < res; ++x) {
+                    const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(res);
+                    const float micro = 0.55f * vnoiseT(u, v, 26, 1) +
+                                        0.30f * vnoiseT(u, v, 60, 2) +
+                                        0.15f * vnoiseT(u, v, 132, 3);
+                    const float nf = 0.62f * vnoiseT(u, v, 10, 4) +
+                                     0.38f * vnoiseT(u, v, 23, 5);
+                    const float lace = 1.f - std::fabs(nf - 0.5f) * 2.f;
+                    const size_t i = (static_cast<size_t>(y) * res + x) * 2;
+                    px[i + 0] = static_cast<unsigned char>(std::lround(std::clamp(micro, 0.f, 1.f) * 255.f));
+                    px[i + 1] = static_cast<unsigned char>(std::lround(std::clamp(lace, 0.f, 1.f) * 255.f));
+                }
+            }
+            return px;
+        }
+
+        void createFoamDetailImage_() {
+            constexpr int kRes = 512;
+            const auto tile = generateFoamDetailTile_(kRes);
+            // LINEAR + size>1 → createSampledImage2D builds the full mip
+            // chain (blit cascade) and a trilinear/aniso REPEAT sampler.
+            foamDetailImage = createSampledImage2D(
+                    /*w*/ kRes, /*h*/ kRes,
+                    VK_FORMAT_R8G8_UNORM,
+                    tile.data(), tile.size(),
+                    VK_FILTER_LINEAR,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    "foamDetail (512x512 RG8 bubbles+lace, mipped)");
         }
 
         // 1×1 R32F dummy used at binding 32 when no DisplacedMesh is in the
@@ -10800,17 +10586,17 @@ namespace threepp {
             envIsBgColor = false;
             if (!envIsDefault && tex->id == envTextureIdUploaded) return false;
 
-            // Phase 7 v1 supports HDR float equirects (RGBELoader output).
-            // LDR backgrounds are not yet handled — fall through to default.
+            // Only HDR float equirects (RGBELoader output) are supported.
+            // LDR backgrounds are not handled — fall through to default.
             const auto& image = tex->image();
             if (tex->type != Type::Float) {
                 std::cerr << "[VulkanRenderer] env texture is not float HDR; "
-                             "ignoring (Phase 7 v1 supports HDR equirect only)" << std::endl;
+                             "ignoring (HDR equirect only)" << std::endl;
                 return false;
             }
-            const auto& src = const_cast<Image&>(image).data<float>();
-            const uint32_t w = image.width;
-            const uint32_t h = image.height;
+            const auto& src = image.data<float>();
+            const uint32_t w = image.width();
+            const uint32_t h = image.height();
             if (w == 0 || h == 0 || src.size() < 4u * w * h) {
                 std::cerr << "[VulkanRenderer] env texture has unexpected size; ignoring" << std::endl;
                 return false;
@@ -10819,7 +10605,7 @@ namespace threepp {
             vkDeviceWaitIdle(ctx->device());
             destroyImage2D(ctx->allocator(), ctx->device(), envImage);
 
-            // Phase 11: GGX-prefilter the env into a mip chain so the closest_hit
+            // GGX-prefilter the env into a mip chain so the closest_hit
             // shader can sample at a roughness-derived LOD instead of the cheap
             // (1-r)² fade. Mip 0 is the source mirror, mip k is convolved with
             // GGX(α=(k/(N-1))²). closest_hit fades from mirror to fully diffuse
@@ -10839,7 +10625,7 @@ namespace threepp {
 
         void createRtPipeline() {
             // 0=TLAS, 1=storage image (swapchain), 2=camera UBO, 3=geometry SSBO,
-            // 4=material SSBO, 5=lights UBO, 6=env equirect (Phase 7),
+            // 4=material SSBO, 5=lights UBO, 6=env equirect,
             // 7=accum write image (ping-pong), 8=material texture array,
             // 9=prev camera UBO (motion), 10=motion matrix SSBO (motion),
             // 11=prev accum read image (ping-pong), 12=gbuf write image
@@ -10850,7 +10636,7 @@ namespace threepp {
             // for material lookup, UV for texture sampling on the primary).
             // Always present in the layout; raygen gates use on the hybrid
             // push-constant bit.
-            std::array<VkDescriptorSetLayoutBinding, 45> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 46> bindings{};
             bindings[0].binding = 0;
             bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
             bindings[0].descriptorCount = 1;
@@ -11168,6 +10954,15 @@ namespace threepp {
             bindings[44].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             bindings[44].descriptorCount = 1;
             bindings[44].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+            // Binding 45 — baked tileable foam detail (RG8, mipped). Static
+            // for the renderer's lifetime; closest_hit samples it in the foam
+            // block (R = bubbles, G = lace) instead of evaluating procedural
+            // value noise per pixel. Mirrors deferred binding 34.
+            bindings[45].binding = 45;
+            bindings[45].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            bindings[45].descriptorCount = 1;
+            bindings[45].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -11521,96 +11316,6 @@ namespace threepp {
             callRegion = {};
         }
 
-        // Allocate one VkQueryPool per frame-in-flight, each sized for the
-        // begin/end pair of every TimingPass. We probe device support up
-        // front; on the (rare) device without timestampComputeAndGraphics
-        // we skip pool creation and lastFrameTimings_ stays at zero — the
-        // helpers below short-circuit when the pool handle is null.
-        void createTimestampPools() {
-            VkPhysicalDeviceProperties props{};
-            vkGetPhysicalDeviceProperties(ctx->physicalDevice(), &props);
-            timestampPeriodNs_ = props.limits.timestampPeriod;
-            timingsSupported_  = (timestampPeriodNs_ > 0.f) &&
-                                 (props.limits.timestampComputeAndGraphics != 0u);
-            if (!timingsSupported_) return;
-            VkQueryPoolCreateInfo qpci{};
-            qpci.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-            qpci.queryType  = VK_QUERY_TYPE_TIMESTAMP;
-            qpci.queryCount = kTimingSlots;
-            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
-                check(vkCreateQueryPool(ctx->device(), &qpci, nullptr,
-                                        &timestampPools[f]),
-                      "vkCreateQueryPool(timing)");
-            }
-        }
-
-        // Bracket helpers — write a timestamp at BOTTOM_OF_PIPE (= once all
-        // prior commands have finished). Marking the pass bit lets readback
-        // skip pairs that didn't run this frame (photon emit when glass not
-        // visible, overlay passes when no overlay objects are visible, etc.).
-        void timingBegin(VkCommandBuffer cb, TimingPass p) {
-            if (!timingsSupported_) return;
-            vkCmdWriteTimestamp2(cb,
-                                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                                 timestampPools[currentFrame],
-                                 p * 2u);
-            timingMaskRecorded_[currentFrame] |= (1u << p);
-        }
-        void timingEnd(VkCommandBuffer cb, TimingPass p) {
-            if (!timingsSupported_) return;
-            vkCmdWriteTimestamp2(cb,
-                                 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                                 timestampPools[currentFrame],
-                                 p * 2u + 1u);
-        }
-
-        // Read back the timestamps written into THIS frame's pool by the
-        // previous render that used the same slot. Safe to call after the
-        // inFlight[currentFrame] fence has signaled — the GPU has retired
-        // every command that wrote into this pool.
-        //
-        // We read pairs individually (not in one bulk fetch) because slots
-        // for passes that didn't run this cycle are RESET but never WRITTEN,
-        // and VK_QUERY_RESULT_WAIT_BIT on a reset query blocks indefinitely.
-        // The recorded-mask tells us which pair endpoints were both written.
-        void readBackTimingsFromPriorUse() {
-            // Pre-populate CPU fields the caller can keep updated even if
-            // GPU timings aren't available.
-            lastFrameTimings_.cpuEnsureSceneMs = pendingCpuEnsureSceneMs_;
-            // Zero the GPU fields — only the passes that ran will overwrite.
-            lastFrameTimings_.rasterGbufMs = 0.f;
-            lastFrameTimings_.overlayMs    = 0.f;
-            lastFrameTimings_.photonEmitMs = 0.f;
-            lastFrameTimings_.pathTraceMs  = 0.f;
-            lastFrameTimings_.denoiseMs    = 0.f;
-            lastFrameTimings_.taaMs        = 0.f;
-            if (!timingsSupported_) return;
-            const uint32_t mask = timingMaskRecorded_[currentFrame];
-            if (mask == 0u) return;// first use of this slot
-            const float toMs = timestampPeriodNs_ * 1e-6f;
-            auto pairMs = [&](TimingPass p) -> float {
-                if ((mask & (1u << p)) == 0u) return 0.f;
-                std::array<uint64_t, 2> pair{};
-                const VkResult r = vkGetQueryPoolResults(
-                        ctx->device(), timestampPools[currentFrame],
-                        p * 2u, 2u,
-                        sizeof(pair), pair.data(),
-                        sizeof(uint64_t),
-                        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-                if (r != VK_SUCCESS) return 0.f;
-                if (pair[1] < pair[0]) return 0.f;
-                return float(pair[1] - pair[0]) * toMs;
-            };
-            lastFrameTimings_.rasterGbufMs = pairMs(TP_RasterGbuf);
-            // Overlay timings collapse the depth prepass + draw pair into
-            // a single "overlay" column for the public API.
-            lastFrameTimings_.overlayMs    = pairMs(TP_OverlayDepth) + pairMs(TP_OverlayDraw);
-            lastFrameTimings_.photonEmitMs = pairMs(TP_PhotonEmit);
-            lastFrameTimings_.pathTraceMs  = pairMs(TP_PathTrace);
-            lastFrameTimings_.denoiseMs    = pairMs(TP_Denoise);
-            lastFrameTimings_.taaMs        = pairMs(TP_TAA);
-        }
-
         void createDescriptorPool() {
             imageCount_ = static_cast<uint32_t>(ctx->swapchainImages().size());
             const uint32_t totalSets = imageCount_ * kFramesInFlight;
@@ -11624,7 +11329,7 @@ namespace threepp {
             ps[3].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             ps[3].descriptorCount = totalSets * 7;// bindings 3,4,10,14 (existing) + 15,16 (photon) + 21 (meshMovedBits)
             ps[4].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures + 5 + 1 + 1 + 1);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF) + bindings 22-26 (hybrid gbuffer attachments incl. UV) + binding 27 (blue noise tile) + binding 32 (ocean fine-cascade height) + binding 44 (world-space foam)
+            ps[4].descriptorCount = totalSets * (3 + kMaxMaterialTextures + 5 + 1 + 1 + 1 + 1);// binding 6 (env) + binding 8 (material array) + bindings 18,19 (env CDF) + bindings 22-26 (hybrid gbuffer attachments incl. UV) + binding 27 (blue noise tile) + binding 32 (ocean fine-cascade height) + binding 44 (world-space foam) + binding 45 (foam detail tile)
 
             VkDescriptorPoolCreateInfo ci{};
             ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -12214,7 +11919,21 @@ namespace threepp {
                     wOceanFoam.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                     wOceanFoam.pImageInfo = &oceanFoamInfo;
 
-                    std::array<VkWriteDescriptorSet, 45> writes{
+                    // Binding 45 — baked tileable foam detail (static, mipped,
+                    // SHADER_READ_ONLY for the renderer's lifetime).
+                    VkDescriptorImageInfo foamDetailInfo{};
+                    foamDetailInfo.sampler     = foamDetailImage.sampler;
+                    foamDetailInfo.imageView   = foamDetailImage.view;
+                    foamDetailInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    VkWriteDescriptorSet wFoamDetail{};
+                    wFoamDetail.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                    wFoamDetail.dstSet = descriptorSets[idx];
+                    wFoamDetail.dstBinding = 45;
+                    wFoamDetail.descriptorCount = 1;
+                    wFoamDetail.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wFoamDetail.pImageInfo = &foamDetailInfo;
+
+                    std::array<VkWriteDescriptorSet, 46> writes{
                             wAS, wImg, wUbo, wGeom, wMat, wLights, wEnv, wAccum, wMatTex,
                             wPrevCam, wMotion, wPrevAccum, wGbuf, wPrevGbuf, wEmTri,
                             wPhotonCnt, wPhotonData, wFog, wEnvCdf, wEnvMarg, wFiltered,
@@ -12227,7 +11946,7 @@ namespace threepp {
                             wAlbedoWrite, wAlbedoRead, wAlbedoSnap,
                             wGiXsWrite, wGiXsRead, wGiNsWrite, wGiNsRead,
                             wGiLoWrite, wGiLoRead,
-                            wOceanFoam};
+                            wOceanFoam, wFoamDetail};
                     vkUpdateDescriptorSets(ctx->device(),
                                            static_cast<uint32_t>(writes.size()),
                                            writes.data(), 0, nullptr);
@@ -12414,7 +12133,7 @@ namespace threepp {
             rewriteDeferredDescriptors();
         }
 
-        // Phase 7: rewrite only binding 6 across every descriptor set (called
+        // Rewrite only binding 6 across every descriptor set (called
         // when refreshEnvTextureFromScene replaces the env image). Avoids
         // re-allocating the pool / sets.
         void rewriteEnvDescriptors() {
@@ -12543,6 +12262,41 @@ namespace threepp {
         // VK_IMAGE_LAYOUT_GENERAL (per the post-TAA / upscale path) so the
         // endFrame transitions can rely on a known layout.
         void recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex) {
+
+            // ── Split-screen pane region ───────────────────────────────────
+            // When scissorTest is on, clip the PT pane to the scissor sub-rect:
+            // render region-sized at the image origin (gbuf/raygen/denoise/bloom
+            // all read the members below), and offset only the final TAA write
+            // to the scissor position. Defaults to the full frame (byte-identical
+            // single-scene path) when scissorTest is off.
+            {
+                const VkExtent2D fullSwap   = ctx->swapchainExtent();
+                const VkExtent2D fullRender = renderExtent();
+                regionSwapExt_   = fullSwap;
+                regionRenderExt_ = fullRender;
+                regionDstX_ = 0;
+                regionDstY_ = 0;
+                if (scissorTest && scissor.z >= 1.f && scissor.w >= 1.f &&
+                    fullSwap.width > 0 && fullSwap.height > 0) {
+                    // Cap sx at width-1 (not width) so the sw clamp below always
+                    // has hi = width-sx >= 1; a degenerate scissor.x >= width
+                    // would otherwise make std::clamp(.., 1, 0) — lo > hi is UB.
+                    const int sx  = std::clamp(static_cast<int>(scissor.x), 0, static_cast<int>(fullSwap.width) - 1);
+                    const int sw  = std::clamp(static_cast<int>(scissor.z), 1, static_cast<int>(fullSwap.width) - sx);
+                    const int sh  = std::clamp(static_cast<int>(scissor.w), 1, static_cast<int>(fullSwap.height));
+                    const int syB = std::clamp(static_cast<int>(scissor.y), 0, static_cast<int>(fullSwap.height) - sh);
+                    regionSwapExt_ = {static_cast<uint32_t>(sw), static_cast<uint32_t>(sh)};
+                    regionDstX_    = sx;
+                    // GL scissor y is from the bottom; the swapchain image is
+                    // top-left origin → flip. Full-height panes map to 0.
+                    regionDstY_    = static_cast<int>(fullSwap.height) - (syB + sh);
+                    regionRenderExt_ = {
+                            std::max(1u, static_cast<uint32_t>(std::lround(
+                                                 static_cast<double>(sw) * fullRender.width / fullSwap.width))),
+                            std::max(1u, static_cast<uint32_t>(std::lround(
+                                                 static_cast<double>(sh) * fullRender.height / fullSwap.height)))};
+                }
+            }
 
             // ── Skinned-mesh GPU pipeline ──────────────────────────────────
             // ensureSceneBuilt populated pendingSkinnedRebuilds_ with the
@@ -12788,16 +12542,64 @@ namespace threepp {
                 pendingTetRebuilds_.clear();
             }
 
+            // ── GrassMesh wind deform (GPU) + BLAS refit ────────────────────
+            // Recorded into the frame cb (no blocking submit), like the skinned
+            // and tet paths above. recordGrassDeform issues the grass_wind
+            // dispatch + a compute→AS barrier + the in-place BLAS refit per mesh;
+            // a final AS-write→RT-read barrier publishes the rebuilt geometry to
+            // the trace. (The TLAS sees last frame's bounds — fine for the small
+            // sway envelope, same 1-frame-late deal as skinned.)
+            if (!pendingGrassDeforms_.empty() && grassWind_) {
+                for (auto& [gm, st] : pendingGrassDeforms_) {
+                    recordGrassDeform(cb, *gm, *st);
+                }
+                VkMemoryBarrier2 mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+                mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                mb.dstStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+                VkDependencyInfo dep{};
+                dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.memoryBarrierCount = 1;
+                dep.pMemoryBarriers    = &mb;
+                vkCmdPipelineBarrier2(cb, &dep);
+                pendingGrassDeforms_.clear();
+            }
+
+            // ── Per-frame TLAS refit ────────────────────────────────────────
+            // Recorded here (after every deformable BLAS rebuild above) instead
+            // of a mid-frame one-shot drain in ensureSceneBuilt — this is what
+            // removes the resolution-scaled stall (the old drain blocked on the
+            // previous frame's path trace). One submit per frame; CPU/GPU
+            // overlap restored.
+            if (pendingTlasRefit_) {
+                recordTlasRefit(cb, pendingTlasInstances_, pendingTlasFullBuild_);
+                VkMemoryBarrier2 mb{};
+                mb.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                mb.srcStageMask  = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+                mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+                mb.dstStageMask  = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+                VkDependencyInfo dep{};
+                dep.sType              = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.memoryBarrierCount = 1;
+                dep.pMemoryBarriers    = &mb;
+                vkCmdPipelineBarrier2(cb, &dep);
+                pendingTlasRefit_ = false;
+            }
+
             // ── Hybrid raster G-buffer pass ─────────────────────────────────
             // Runs ahead of any RT work so the gbuffer is ready when raygen
-            // wants to read primary visibility. In Day-1 debug mode we blit
+            // wants to read primary visibility. In G-buffer debug mode we blit
             // a chosen channel directly to the swapchain, draw the ImGui
             // overlay on top (mirrors the PT path's overlay flow), then
             // present — bypassing the entire RT pipeline.
             if (rasterGbufPipeline != VK_NULL_HANDLE) {
-                timingBegin(cb, TP_RasterGbuf);
+                gpuTimings_->begin(cb, TP_RasterGbuf, currentFrame);
                 recordRasterGbufPass(cb, currentFrame);
-                timingEnd(cb, TP_RasterGbuf);
+                gpuTimings_->end(cb, TP_RasterGbuf, currentFrame);
                 // ── Overlay depth prepass ──────────────────────────────────
                 // Fills rasterGbufs[currentFrame].unjitDepth with the
                 // unjittered VP. Consumed by the post-TAA wireframe overlay
@@ -12805,7 +12607,7 @@ namespace threepp {
                 // pipeline exists AND the scene actually has overlay
                 // candidates this frame (else the prepass is wasted work).
                 if (overlayDepthPrepassPipeline != VK_NULL_HANDLE && sceneHasOverlayContent()) {
-                    timingBegin(cb, TP_OverlayDepth);
+                    gpuTimings_->begin(cb, TP_OverlayDepth, currentFrame);
                     // Swapchain extent — unjitDepth is full-res so the
                     // post-TAA overlay can depth-test the upscaled image.
                     const VkExtent2D dext = ctx->swapchainExtent();
@@ -12861,9 +12663,16 @@ namespace threepp {
                     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                             rasterPipelineLayout, 0, 1,
                                             &rasterDescSets[currentFrame], 0, nullptr);
-                    VkViewport dvp{0.f, 0.f, float(dext.width), float(dext.height), 0.f, 1.f};
+                    // Split-screen: clip the overlay depth prepass to the pane
+                    // region. unjitDepth is full-res but the PT pane lands at
+                    // regionDst (size regionSwapExt) after the TAA write, so the
+                    // overlay's occluder depth must be laid down at the same
+                    // place the color pass reads it. Both default to the full
+                    // frame when scissorTest is off (byte-identical single-scene).
+                    VkViewport dvp{float(regionDstX_), float(regionDstY_),
+                                   float(regionSwapExt_.width), float(regionSwapExt_.height), 0.f, 1.f};
                     vkCmdSetViewport(cb, 0, 1, &dvp);
-                    VkRect2D dsc{{0, 0}, dext};
+                    VkRect2D dsc{{regionDstX_, regionDstY_}, regionSwapExt_};
                     vkCmdSetScissor(cb, 0, 1, &dsc);
 
                     for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
@@ -12928,101 +12737,19 @@ namespace threepp {
                     depToRead.imageMemoryBarrierCount = 1;
                     depToRead.pImageMemoryBarriers = &toRead;
                     vkCmdPipelineBarrier2(cb, &depToRead);
-                    timingEnd(cb, TP_OverlayDepth);
+                    gpuTimings_->end(cb, TP_OverlayDepth, currentFrame);
                 }
                 if (hybridDebugView_ != HybridDebugView::Off) {
+                    // Blit the chosen G-buffer channel to the swapchain and
+                    // leave it in GENERAL with the cmd buffer still open — the
+                    // exact exit contract of the full PT path. The shared
+                    // tail (overlayPass_ screen-space sprites in beginFrameForPT,
+                    // then endFrame()'s overlay composite + single PRESENT_SRC
+                    // transition + submit/present) finalizes the frame
+                    // uniformly. This keeps the --shot writeFramebuffer readback
+                    // (which expects PRESENT_SRC) consistent and avoids the
+                    // double vkEndCommandBuffer the bespoke finalize used to do.
                     recordHybridDebugBlit(cb, imageIndex, currentFrame);
-                    // Blit left swapchain in TRANSFER_DST_OPTIMAL. Same
-                    // overlay + present sequence the PT path uses, just
-                    // with a different srcLayout entering the transition.
-                    const VkImage swap = ctx->swapchainImages()[imageIndex];
-                    const VkExtent2D ext = ctx->swapchainExtent();
-                    if (overlayCallback) {
-                        VkImageMemoryBarrier2 toColor{};
-                        toColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                        toColor.srcStageMask  = VK_PIPELINE_STAGE_2_BLIT_BIT;
-                        toColor.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                        toColor.dstStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                        toColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
-                                                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                        toColor.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                        toColor.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                        toColor.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                        toColor.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                        toColor.image = swap;
-                        toColor.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                        toColor.subresourceRange.levelCount = 1;
-                        toColor.subresourceRange.layerCount = 1;
-                        VkDependencyInfo depColor{};
-                        depColor.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                        depColor.imageMemoryBarrierCount = 1;
-                        depColor.pImageMemoryBarriers = &toColor;
-                        vkCmdPipelineBarrier2(cb, &depColor);
-
-                        VkRenderingAttachmentInfo colorAtt{};
-                        colorAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                        colorAtt.imageView = ctx->swapchainImageViews()[imageIndex];
-                        colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                        colorAtt.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-                        colorAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-
-                        VkRenderingInfo ri{};
-                        ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-                        ri.renderArea.offset = {0, 0};
-                        ri.renderArea.extent = ext;
-                        ri.layerCount = 1;
-                        ri.colorAttachmentCount = 1;
-                        ri.pColorAttachments = &colorAtt;
-                        vkCmdBeginRendering(cb, &ri);
-                        overlayCallback(static_cast<void*>(cb));
-                        vkCmdEndRendering(cb);
-
-                        VkImageMemoryBarrier2 toPresent{};
-                        toPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                        toPresent.srcStageMask  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                        toPresent.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                        toPresent.dstStageMask  = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
-                        toPresent.dstAccessMask = 0;
-                        toPresent.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                        toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-                        toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                        toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                        toPresent.image = swap;
-                        toPresent.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                        toPresent.subresourceRange.levelCount = 1;
-                        toPresent.subresourceRange.layerCount = 1;
-                        VkDependencyInfo depPresent{};
-                        depPresent.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                        depPresent.imageMemoryBarrierCount = 1;
-                        depPresent.pImageMemoryBarriers = &toPresent;
-                        vkCmdPipelineBarrier2(cb, &depPresent);
-                    } else {
-                        VkImageMemoryBarrier2 toPresent{};
-                        toPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                        toPresent.srcStageMask  = VK_PIPELINE_STAGE_2_BLIT_BIT;
-                        toPresent.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                        toPresent.dstStageMask  = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
-                        toPresent.dstAccessMask = 0;
-                        toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                        toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-                        toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                        toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                        toPresent.image = swap;
-                        toPresent.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                        toPresent.subresourceRange.levelCount = 1;
-                        toPresent.subresourceRange.layerCount = 1;
-                        VkDependencyInfo depPresent{};
-                        depPresent.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                        depPresent.imageMemoryBarrierCount = 1;
-                        depPresent.pImageMemoryBarriers = &toPresent;
-                        vkCmdPipelineBarrier2(cb, &depPresent);
-                    }
-                    check(vkEndCommandBuffer(cb), "vkEndCommandBuffer");
-                    {
-                        using namespace std::chrono;
-                        const auto dt = high_resolution_clock::now() - recordStartTp_;
-                        lastFrameTimings_.cpuRecordMs = duration<float, std::milli>(dt).count();
-                    }
                     return;
                 }
             }
@@ -13190,6 +12917,47 @@ namespace threepp {
             dep.pImageMemoryBarriers = preBarriers.data();
             vkCmdPipelineBarrier2(cb, &dep);
 
+            // Split-screen: clear the whole frame to clearColor once so the area
+            // outside the PT pane's scissor shows the clear colour. Gated on
+            // scissorTest so the default full-screen path is byte-identical (the
+            // TAA write covers the whole frame there anyway).
+            if (autoClear_ && scissorTest) {
+                Color cc;
+                cc.copy(clearColor);
+                ColorManagement::workingToColorSpace(cc, SRGBColorSpace);
+                VkClearColorValue cv{};
+                cv.float32[0] = cc.r;
+                cv.float32[1] = cc.g;
+                cv.float32[2] = cc.b;
+                cv.float32[3] = clearAlpha;
+                VkImageSubresourceRange clrRange{};
+                clrRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                clrRange.levelCount = 1;
+                clrRange.layerCount = 1;
+                vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_GENERAL, &cv, 1, &clrRange);
+                // Clear (transfer write) → the TAA swapchain store (compute write).
+                VkImageMemoryBarrier2 clrBar{};
+                clrBar.sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                clrBar.srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                clrBar.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                clrBar.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                clrBar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                       VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                clrBar.oldLayout            = VK_IMAGE_LAYOUT_GENERAL;
+                clrBar.newLayout            = VK_IMAGE_LAYOUT_GENERAL;
+                clrBar.srcQueueFamilyIndex  = VK_QUEUE_FAMILY_IGNORED;
+                clrBar.dstQueueFamilyIndex  = VK_QUEUE_FAMILY_IGNORED;
+                clrBar.image                = img;
+                clrBar.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                clrBar.subresourceRange.levelCount = 1;
+                clrBar.subresourceRange.layerCount = 1;
+                VkDependencyInfo clrDep{};
+                clrDep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                clrDep.imageMemoryBarrierCount = 1;
+                clrDep.pImageMemoryBarriers    = &clrBar;
+                vkCmdPipelineBarrier2(cb, &clrDep);
+            }
+
             // descriptorSets index is shared by photon and primary RT pipelines.
             const uint32_t setIdx = currentFrame * imageCount_ + imageIndex;
 
@@ -13231,7 +12999,7 @@ namespace threepp {
                 photon_->recordZeroFillCounts(cb);
             }
             if (sceneHasGlass_ && glassVisibleThisFrame_) {
-                timingBegin(cb, TP_PhotonEmit);
+                gpuTimings_->begin(cb, TP_PhotonEmit, currentFrame);
                 // exposureBits hoisted above the mode branch.
                 const uint32_t motionFlagsPhoton =
                         (motionThisFrame_      ? 1u : 0u) |
@@ -13260,7 +13028,7 @@ namespace threepp {
                 push.v[11] = fireflyBitsPhoton;
                 push.v[12] = oceanFineBitsPhoton;
                 photon_->recordEmitPass(cb, descriptorSets[setIdx], push);
-                timingEnd(cb, TP_PhotonEmit);
+                gpuTimings_->end(cb, TP_PhotonEmit, currentFrame);
             }
             // ── End photon emit ─────────────────────────────────────────────────
 
@@ -13339,10 +13107,10 @@ namespace threepp {
                                0, sizeof(pc), pc);
 
             // (ext / ptExt hoisted above the mode branch.)
-            timingBegin(cb, TP_PathTrace);
+            gpuTimings_->begin(cb, TP_PathTrace, currentFrame);
             ctx->rt().cmdTraceRays(cb, &rtv.rgenRegion, &rtv.missRegion, &rtv.hitRegion,
-                                   &callRegion, ptExt.width, ptExt.height, 1);
-            timingEnd(cb, TP_PathTrace);
+                                   &callRegion, regionRenderExt_.width, regionRenderExt_.height, 1);
+            gpuTimings_->end(cb, TP_PathTrace, currentFrame);
 
             // ── Spatial denoiser: 2-pass à-trous + finalize tonemap + sRGB ──────
             // RT writes accumImage + gbufImage; denoise pipeline reads them.
@@ -13350,13 +13118,13 @@ namespace threepp {
             // stripped). All ping-pong slots stay GENERAL throughout. The
             // RT_SHADER → COMPUTE_SHADER barrier is recorded inside
             // Denoiser::recordDispatch.
-            timingBegin(cb, TP_Denoise);
-            denoiser_->recordDispatch(cb, descriptorSets[setIdx], ptExt,
+            gpuTimings_->begin(cb, TP_Denoise, currentFrame);
+            denoiser_->recordDispatch(cb, descriptorSets[setIdx], regionRenderExt_,
                                       denoiseEnabled_,
                                       static_cast<uint32_t>(toneMapping_),
                                       exposureBits,
                                       envIsBgColor);
-            timingEnd(cb, TP_Denoise);
+            gpuTimings_->end(cb, TP_Denoise, currentFrame);
             // ── End denoise ─────────────────────────────────────────────────────
 
             } else {
@@ -13394,9 +13162,9 @@ namespace threepp {
                     asdep.pMemoryBarriers = &asbar;
                     vkCmdPipelineBarrier2(cb, &asdep);
                 }
-                timingBegin(cb, TP_PathTrace);
+                gpuTimings_->begin(cb, TP_PathTrace, currentFrame);
                 deferredShade_->recordDispatch(cb, currentFrame,
-                                               ptExt.width, ptExt.height,
+                                               regionRenderExt_.width, regionRenderExt_.height,
                                                envImage.mipLevels, /*shadows=*/true,
                                                /*ao=*/deferredAO_, sampleIndex,
                                                emissiveTriCountThisFrame_,
@@ -13406,8 +13174,9 @@ namespace threepp {
                                                denoiseEnabled_, restirDIEnabled_,
                                                deferredVolDensity_, deferredVolAniso_,
                                                deferredStarIntensity_,
-                                               deferredCamDeltaLen_, deferredCamRotAngle_);
-                timingEnd(cb, TP_PathTrace);// pathTraceMs = deferred SHADE only
+                                               deferredCamDeltaLen_, deferredCamRotAngle_,
+                                               static_cast<float>(glfwGetTime()));
+                gpuTimings_->end(cb, TP_PathTrace, currentFrame);// pathTraceMs = deferred SHADE only
                 // Spatial denoise of the demodulated diffuse-indirect + recombine.
                 // Barrier: the shade wrote sceneHdr + the indirect image (both
                 // GENERAL storage); the denoise reads the indirect 5×5 neighbourhood
@@ -13425,9 +13194,9 @@ namespace threepp {
                     denoiseDep.memoryBarrierCount = 1;
                     denoiseDep.pMemoryBarriers = &denoiseBar;
                     vkCmdPipelineBarrier2(cb, &denoiseDep);
-                    timingBegin(cb, TP_Denoise);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
-                    deferredShade_->recordDenoiseDispatch(cb, currentFrame, ptExt.width, ptExt.height);
-                    timingEnd(cb, TP_Denoise);
+                    gpuTimings_->begin(cb, TP_Denoise, currentFrame);// denoiseMs = deferred SVGF (4 GI passes + reflection pass)
+                    deferredShade_->recordDenoiseDispatch(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height);
+                    gpuTimings_->end(cb, TP_Denoise, currentFrame);
                 }
             }
 
@@ -13438,13 +13207,13 @@ namespace threepp {
             // input image. With bloomIntensity_ == 0 the bloom passes are
             // skipped and the composite reproduces the old finalize output
             // (tone map + sRGB + solid-bg bypass) exactly.
-            bloom_->recordDispatch(cb, currentFrame, ptExt.width, ptExt.height,
+            bloom_->recordDispatch(cb, currentFrame, regionRenderExt_.width, regionRenderExt_.height,
                                    static_cast<uint32_t>(toneMapping_),
                                    exposureBits, envIsBgColor,
                                    bloomIntensity_, bloomThreshold_, bloomClamp_);
             // ── End bloom ──────────────────────────────────────────────────────
 
-            // ── Stage 1A.5: raster TAA / temporal upsampler ────────────────────
+            // ── Raster TAA / temporal upsampler ─────────────────────────────────
             // Reads denoise output from the TAA input image (render extent),
             // blends with reprojected history (rgba16f, swapchain extent),
             // writes the result straight to the swapchain. When renderScale
@@ -13453,13 +13222,44 @@ namespace threepp {
             // res history, reconstructing detail (no separate blit needed).
             // The spatial neighborhood clamp + motion-vec reproject smooths
             // per-frame Halton jitter shake on moving objects.
-            timingBegin(cb, TP_TAA);
+            // Frame-rate-aware history blend: keep the ghost-decay time constant in
+            // wall-clock seconds, not frames (see taaPrevTimeSec_). taaBlendAlpha_ is
+            // authored to look good at kTaaRefFps; at or above that rate this is a
+            // no-op (effAlpha == taaBlendAlpha_, so the demos that already look clean
+            // are byte-unchanged), and BELOW it the new-sample weight is raised so a
+            // moving object's trail clears in the same real time it would at the
+            // reference rate instead of lingering for a fixed frame count. `frames` is
+            // (1-alpha)'s exponent = how many reference-frames this real frame spans;
+            // clamped to [1, 6] so we never reduce alpha (preserving the high-fps
+            // look) and a one-off hitch (loading stall, alt-tab) can't spike it toward
+            // 1 and strobe the frame to raw jittered input.
+            constexpr float kTaaRefFps = 90.0f;
+            float effAlpha = taaBlendAlpha_;
+            float taaDtFrames = 1.0f;// also pushed to the shader, which scales its
+                                     // own per-frame constants (deviation-streak
+                                     // ramp, soft-clip rate) by it — without that,
+                                     // low fps leaves discrete stale edge bands
+                                     // (one per ramp frame) behind moving objects.
+            {
+                const double now = glfwGetTime();
+                if (taaPrevTimeSec_ >= 0.0) {
+                    const double dt = now - taaPrevTimeSec_;
+                    if (dt > 0.0) {
+                        taaDtFrames = std::clamp(static_cast<float>(dt) * kTaaRefFps, 1.0f, 6.0f);
+                        effAlpha = 1.0f - std::pow(1.0f - taaBlendAlpha_, taaDtFrames);
+                    }
+                }
+                taaPrevTimeSec_ = now;
+            }
+            gpuTimings_->begin(cb, TP_TAA, currentFrame);
             taa_->recordResolve(cb, currentFrame, imageIndex,
-                                ptExt.width, ptExt.height,
-                                ext.width, ext.height, taaBlendAlpha_,
+                                regionRenderExt_.width, regionRenderExt_.height,
+                                regionSwapExt_.width, regionSwapExt_.height, effAlpha, taaDtFrames,
                                 sharpenStrength_ > 0.0f, sharpenStrength_,
-                                taaSkyReproj_.data());
-            timingEnd(cb, TP_TAA);
+                                taaSkyReproj_.data(),
+                                static_cast<uint32_t>(regionDstX_), static_cast<uint32_t>(regionDstY_),
+                                ptExt.width, ptExt.height, ext.width, ext.height);
+            gpuTimings_->end(cb, TP_TAA, currentFrame);
             // ── End raster TAA ─────────────────────────────────────────────────
 
             // ── Hybrid raster overlay pass ─────────────────────────────────────
@@ -13483,7 +13283,7 @@ namespace threepp {
                 const bool hasOverlay = sceneHasOverlayContent();
 
                 if (hasOverlay) {
-                    timingBegin(cb, TP_OverlayDraw);
+                    gpuTimings_->begin(cb, TP_OverlayDraw, currentFrame);
                     // Swapchain GENERAL → COLOR_ATTACHMENT_OPTIMAL. The
                     // overlay always composites onto the full-resolution
                     // swapchain — TAA wrote it directly (upscaling there if
@@ -13543,10 +13343,15 @@ namespace threepp {
 
                     // Pipeline is selected per-draw based on material.wireframe.
                     // Set viewport/scissor once — they're dynamic state shared
-                    // across the wireframe + basic pipelines.
-                    VkViewport vpDyn{0.f, 0.f, float(ext.width), float(ext.height), 0.f, 1.f};
+                    // across the wireframe + basic pipelines. Split-screen: clip
+                    // to the pane region (same as the depth prepass above) so the
+                    // scene overlays — live point cloud, wireframes, lines — land
+                    // in the PT pane instead of spanning the whole window.
+                    // regionSwapExt_ == full extent when scissorTest is off.
+                    VkViewport vpDyn{float(regionDstX_), float(regionDstY_),
+                                     float(regionSwapExt_.width), float(regionSwapExt_.height), 0.f, 1.f};
                     vkCmdSetViewport(cb, 0, 1, &vpDyn);
-                    VkRect2D scDyn{{0, 0}, ext};
+                    VkRect2D scDyn{{regionDstX_, regionDstY_}, regionSwapExt_};
                     vkCmdSetScissor(cb, 0, 1, &scDyn);
 
                     Matrix4 vpUnjitMat;
@@ -13650,7 +13455,7 @@ namespace threepp {
                             matPtr  = le.line->material();
                         }
                         if (!geomPtr) continue;
-                        const LineRec* lrec = ensureLineGeometryUploaded(geomPtr.get());
+                        const vulkan::LineRec* lrec = ensureLineGeometryUploaded(geomPtr.get());
                         if (!lrec || lrec->vertex.handle == VK_NULL_HANDLE) continue;
 
                         Color color(1.f, 1.f, 1.f);
@@ -13772,7 +13577,7 @@ namespace threepp {
                     dBack.imageMemoryBarrierCount = 1;
                     dBack.pImageMemoryBarriers = &toGeneral;
                     vkCmdPipelineBarrier2(cb, &dBack);
-                    timingEnd(cb, TP_OverlayDraw);
+                    gpuTimings_->end(cb, TP_OverlayDraw, currentFrame);
                 }
             }
             // ── End hybrid raster overlay pass ─────────────────────────────────
@@ -14182,20 +13987,10 @@ namespace threepp {
         // timestamp pool. Caller must have already acquired the swap image,
         // reset the fence, and reset the cmd buffer.
         void beginCommandRecording(VkCommandBuffer cb) {
-            recordStartTp_ = std::chrono::high_resolution_clock::now();
             VkCommandBufferBeginInfo bi{};
             bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             check(vkBeginCommandBuffer(cb, &bi), "vkBeginCommandBuffer");
-
-            // Timing pool reset must run on the command stream (CPU-side
-            // vkResetQueryPool also works on 1.2+ but we keep the GPU-side
-            // reset for portability with older Vulkan toolchains). Clear
-            // the host-side recorded-mask in lockstep.
-            if (timingsSupported_ && timestampPools[currentFrame] != VK_NULL_HANDLE) {
-                vkCmdResetQueryPool(cb, timestampPools[currentFrame],
-                                    0, kTimingSlots);
-                timingMaskRecorded_[currentFrame] = 0u;
-            }
+            gpuTimings_->beginFrame(cb, currentFrame);
         }
 
         // Acquire next swapchain image, run all per-frame UBO / descriptor
@@ -14206,11 +14001,11 @@ namespace threepp {
         bool beginFrameForPT(Object3D& scene, Camera& camera) {
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
-            // Fence has signaled → the previous render that wrote into
-            // timestampPools[currentFrame] has retired. Read it now, before
-            // we reset the pool and re-record. Result lands in
-            // lastFrameTimings_ for the public getter to read.
-            readBackTimingsFromPriorUse();
+            // Fence has signaled → the previous render that wrote into this
+            // frame's query pool has retired. Read it now, before we reset
+            // the pool and re-record. Result is stored in gpuTimings_ for
+            // the public getter to read.
+            gpuTimings_->readBack(currentFrame, pendingCpuEnsureSceneMs_);
 
             // Apply any setter requests deferred from mid-frame. setRenderScale
             // / resetAccumulation issue vkDeviceWaitIdle + reallocate descriptor
@@ -14378,18 +14173,19 @@ namespace threepp {
                 screenSpaceCam_->bottom = 0.f;
                 screenSpaceCam_->updateProjectionMatrix();
             }
-            recordOrthoOverlay(scene, *screenSpaceCam_, /*screenSpaceOnly=*/true);
+            overlayPass_->record(cmdBuffers[currentFrame], currentFrame, frameImageIndex_,
+                                 scene, *screenSpaceCam_, /*screenSpaceOnly=*/true);
             return true;
         }
 
         // Ortho-only frame start: no PT, no per-frame uploads. Acquires the
         // swap image, opens the cmd buffer, and clears the swapchain to the
-        // configured clearColor (leaves layout = GENERAL). Phase 2 will add
-        // recordOrthoOverlay() to draw the HUD scene atop this cleared image.
+        // configured clearColor (leaves layout = GENERAL). recordOrthoOverlay()
+        // then draws the HUD scene atop this cleared image.
         bool beginFrameOrthoOnly() {
             VkDevice d = ctx->device();
             vkWaitForFences(d, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
-            readBackTimingsFromPriorUse();
+            gpuTimings_->readBack(currentFrame, pendingCpuEnsureSceneMs_);
 
             uint32_t imageIndex = 0;
             VkResult acq = vkAcquireNextImageKHR(d, ctx->swapchain(), UINT64_MAX,
@@ -14490,11 +14286,7 @@ namespace threepp {
 
             recordOverlayAndPresentTransition(cb, imageIndex);
             check(vkEndCommandBuffer(cb), "vkEndCommandBuffer");
-            {
-                using namespace std::chrono;
-                const auto dt = high_resolution_clock::now() - recordStartTp_;
-                lastFrameTimings_.cpuRecordMs = duration<float, std::milli>(dt).count();
-            }
+            gpuTimings_->finishRecord();
 
             VkSemaphoreSubmitInfo waitInfo{};
             waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
@@ -14553,7 +14345,7 @@ namespace threepp {
 
         // State-machine dispatcher for VulkanRenderer::render(). First call
         // of a user animate iteration runs beginFrame*, subsequent calls
-        // either append HUD overlay draws (Phase 2 — ortho path) or finalize
+        // either append HUD overlay draws (ortho path) or finalize
         // the prior frame and restart (defensive — second perspective call).
         // endFrame() runs from the Canvas frame-end callback at the tail of
         // animateOnce().
@@ -14569,7 +14361,8 @@ namespace threepp {
                     // call produces output. The HUD pattern (a perspective render
                     // first, then ortho) instead reaches recordOrthoOverlay via the
                     // frame-already-in-flight path below.
-                    recordOrthoOverlay(scene, camera, /*screenSpaceOnly=*/false);
+                    overlayPass_->record(cmdBuffers[currentFrame], currentFrame, frameImageIndex_,
+                                         scene, camera, /*screenSpaceOnly=*/false);
                 } else {
                     if (!beginFrameForPT(scene, camera)) return;
                     frameState_ = FrameState::RecordingPostPT;
@@ -14579,8 +14372,25 @@ namespace threepp {
 
             // Frame already in flight from a prior render() call this iteration.
             if (!isOrtho) {
-                // User issued a second perspective render — finalize the
-                // prior frame, then re-enter from Idle for the new one.
+                // Split-screen secondary pane: when a scissor sub-rect is set, a
+                // second perspective render() composes overlay-only (Points /
+                // Lines / Sprites of THIS scene+camera) into that region of the
+                // open frame, beside the primary PT pane — without touching the
+                // PT accumulation/TLAS state. Without a scissor, fall back to the
+                // old behavior (finalize the prior frame, restart for this one).
+                if (scissorTest && scissor.z >= 1.f && scissor.w >= 1.f) {
+                    const VkExtent2D full = ctx->swapchainExtent();
+                    const uint32_t rx = static_cast<uint32_t>(std::clamp(static_cast<int>(scissor.x), 0, static_cast<int>(full.width)));
+                    const uint32_t rw = static_cast<uint32_t>(std::clamp(static_cast<int>(scissor.z), 1, static_cast<int>(full.width) - static_cast<int>(rx)));
+                    const uint32_t rh = static_cast<uint32_t>(std::clamp(static_cast<int>(scissor.w), 1, static_cast<int>(full.height)));
+                    const int      syB = std::clamp(static_cast<int>(scissor.y), 0, static_cast<int>(full.height) - static_cast<int>(rh));
+                    const uint32_t ry = static_cast<uint32_t>(static_cast<int>(full.height) - (syB + static_cast<int>(rh)));
+                    overlayPass_->record(cmdBuffers[currentFrame], currentFrame, frameImageIndex_,
+                                         scene, camera, /*screenSpaceOnly=*/false, rx, ry, rw, rh);
+                    return;
+                }
+                // User issued a second full-frame perspective render — finalize
+                // the prior frame, then re-enter from Idle for the new one.
                 endFrame();
                 renderFrame(scene, camera);
                 return;
@@ -14589,7 +14399,8 @@ namespace threepp {
             // cmd buffer's swapchain image. Mesh / Line HUD overlays are
             // a follow-up — the no-op branch falls through to here so the
             // present still completes from endFrame().
-            recordOrthoOverlay(scene, camera, /*screenSpaceOnly=*/false);
+            overlayPass_->record(cmdBuffers[currentFrame], currentFrame, frameImageIndex_,
+                                 scene, camera, /*screenSpaceOnly=*/false);
         }
     };
 
@@ -14620,6 +14431,7 @@ namespace threepp {
         // can flip toneMapping / toneMappingExposure freely between frames.
         pimpl_->toneMapping_         = toneMapping;
         pimpl_->toneMappingExposure_ = toneMappingExposure;
+        pimpl_->autoClear_           = autoClear;
         // Only the PT-bound (perspective-camera) render() call needs the
         // scene-build pass — it populates lastVisibleEntries_, the BLAS
         // cache, motion bits and the per-mesh fingerprint state the PT
@@ -14627,8 +14439,7 @@ namespace threepp {
         // a separate HUD scene) must not touch any of that, or it clobbers
         // motionThisFrame_ / meshMovedBits_ / lastVisibleEntries_ and the
         // next PT frame cold-starts (visibly drops to ~1-spp quality).
-        // Phase 2 walks the HUD scene directly inside the ortho overlay
-        // record path instead.
+        // The ortho overlay record path walks the HUD scene directly instead.
         if (!camera.is<OrthographicCamera>()) {
             const auto sceneStart = std::chrono::high_resolution_clock::now();
             pimpl_->ensureSceneBuilt(scene);
@@ -14651,10 +14462,10 @@ namespace threepp {
         // pipeline-compile cost on first toggle, then never again).
         pimpl_->ensureCurrentRtVariantBuilt();
         pimpl_->renderFrame(scene, camera);
-        pimpl_->lastFrameTimings_.cpuFrameMs =
+        pimpl_->gpuTimings_->setCpuFrameMs(
                 std::chrono::duration<float, std::milli>(
                         std::chrono::high_resolution_clock::now() - frameStart)
-                        .count();
+                        .count());
     }
 
     WindowSize VulkanRenderer::size() const { return pimpl_->size; }
@@ -15280,7 +15091,7 @@ namespace threepp {
     }
 
     VulkanRenderer::FrameTimings VulkanRenderer::lastFrameTimings() const {
-        return pimpl_->lastFrameTimings_;
+        return pimpl_->gpuTimings_->timings();
     }
 
     void VulkanRenderer::scanLidar(const std::vector<LidarBeam>& beams,

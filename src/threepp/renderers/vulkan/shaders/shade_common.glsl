@@ -34,6 +34,20 @@ float lum3(vec3 c) {
     return dot(c, vec3(0.2126, 0.7152, 0.0722));
 }
 
+// World-scale-aware self-intersection epsilon for spawning shadow / bounce /
+// reflection / refraction rays off a surface. A float32 ULP grows ~linearly
+// with |coordinate|, so the old fixed 1mm push-off is swallowed by rounding
+// once world coordinates reach ~1e3–1e4 units (large outdoor scenes): the ray
+// then starts *on* the surface it was spawned from and self-intersects —
+// directional shadow rays make the surface flicker as TAA jitters sub-pixel.
+// Scaling the offset by the coordinate magnitude keeps a robust push-off (~80
+// ULP) at any scale. Floored at 1e-3 so geometry within ~100 units of the
+// origin is bit-identical to the old constant (existing goldens unaffected).
+float rtSelfEps(vec3 p) {
+    const float m = max(max(abs(p.x), abs(p.y)), abs(p.z));
+    return max(1e-3, m * 1e-5);
+}
+
 // 2D→1D hash. Used to break up bilinear-interpolated per-vertex foam into
 // crisp speckle (matches the multi-octave hash noise in the WGPU webtide
 // raster shader).

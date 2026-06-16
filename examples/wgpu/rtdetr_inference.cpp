@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     auto& img = *imgOpt;
-    std::cout << "Loaded image: " << img.width << "x" << img.height << "\n";
+    std::cout << "Loaded image: " << img.width() << "x" << img.height() << "\n";
 
     // ----------------------------------------------------------------
     // Setup WebGPU window
@@ -108,14 +108,14 @@ int main(int argc, char** argv) {
 
         std::cout << "Warming up (" << WARMUP << " runs)..." << std::flush;
         for (int i = 0; i < WARMUP; ++i)
-            detections = model.infer(rgba.data(), int(img.width), int(img.height));
+            detections = model.infer(rgba.data(), int(img.width()), int(img.height()));
         std::cout << " done.\n\n";
 
         std::vector<double> times_ms;
         times_ms.reserve(RUNS);
         for (int i = 0; i < RUNS; ++i) {
             auto ta = clk::now();
-            detections = model.infer(rgba.data(), int(img.width), int(img.height));
+            detections = model.infer(rgba.data(), int(img.width()), int(img.height()));
             auto tb = clk::now();
             double dt = std::chrono::duration<double, std::milli>(tb - ta).count();
             times_ms.push_back(dt);
@@ -194,8 +194,8 @@ int main(int argc, char** argv) {
     const Font font = fontLoader.defaultFont();
 
     // Map detections from original-image pixel space onto the 640x640 display
-    const float sx = 640.f / float(img.width);
-    const float sy = 640.f / float(img.height);
+    const float sx = 640.f / float(img.width());
+    const float sy = 640.f / float(img.height());
     for (auto& d : detections) {
         float x1 = std::max(0.f, d.x1 * sx), y1 = std::max(0.f, d.y1 * sy);
         float x2 = std::min(640.f, d.x2 * sx), y2 = std::min(640.f, d.y2 * sy);

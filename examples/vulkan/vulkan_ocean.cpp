@@ -1,14 +1,16 @@
 // Ocean — Vulkan PT demo of FFT-displaced water using DisplacedMesh.
 //
-// Single-cascade Phillips spectrum + GPU IFFT chain feeds vertex positions
+// A three-cascade Phillips spectrum + GPU IFFT chain feeds vertex positions
 // directly into the BLAS each frame; the path tracer's existing transmission
 // BSDF handles refraction, Beer-Lambert absorption, and reflections. A simple
 // sandy floor sits below the surface so caustics from the photon-mapping
 // pass become visible as the sun moves.
 //
-// Phase 1 of the WebTide-style ocean integration. Multi-cascade + foam +
-// procedural sky come later; for now a single 40 m tile + an HDRI sky is
-// enough to validate the geometry pipeline and BLAS-rebuild-per-frame.
+// Built out well past the original single-cascade prototype: foam + Kelvin
+// wake, an adaptive vertex warp that packs density around the vessel, a
+// procedural archipelago ring, a lighthouse with a day/night toggle and a
+// procedural night sky, a maneuvering-model boat (manual + waypoint
+// autopilot) with buoys, plus path-traced LIDAR and a radar HUD.
 
 #include "threepp/audio/Audio.hpp"
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
@@ -19,8 +21,12 @@
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/lights/AmbientLight.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
+#include "threepp/geometries/LatheGeometry.hpp"
+#include "threepp/geometries/TorusGeometry.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
+#include "threepp/utils/BufferGeometryUtils.hpp"
+#include "threepp/utils/Parallel.hpp"
 #include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/math/Box3.hpp"
@@ -31,6 +37,8 @@
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
 
+#include "capture_util.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -40,7 +48,9 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <numeric>
 #include <random>
+#include <unordered_map>
 #include <vector>
 
 using namespace threepp;
@@ -50,7 +60,11 @@ namespace {
     // Boat input state — captured by KeyListener, polled each frame.
     struct BoatInput : KeyListener {
         bool W = false, A = false, S = false, D = false;
-        void onKeyPressed(KeyEvent e) override { update(e.key, true); }
+        bool shotRequest = false;// F12: dump the next frame to aaa_caps/ (artifact reports)
+        void onKeyPressed(KeyEvent e) override {
+            if (e.key == Key::F12) shotRequest = true;
+            update(e.key, true);
+        }
         void onKeyReleased(KeyEvent e) override { update(e.key, false); }
         void update(Key k, bool down) {
             if (k == Key::W || k == Key::UP)    W = down;
@@ -60,14 +74,28 @@ namespace {
         }
     };
 
-    // Persistent boat state. Position is world, yaw is rotation around +Y
-    // (heading); pitch and roll are read each frame from wave-surface tilt
-    // and aren't integrated. Forward speed is along +heading; max ~14 kn
-    // (~7 m/s) for a research vessel of Gunnerus's size.
+    // Persistent boat state — a reduced 3-DOF maneuvering model (surge, sway,
+    // yaw) in the horizontal plane, with wave-driven heave/pitch/roll layered
+    // on top each frame.
+    //   • Surge: engine thrust vs quadratic hull drag — natural top speed
+    //     (~14 kn for a vessel of Gunnerus's size) and a long coast-down.
+    //   • Yaw: first-order Nomoto response. The rudder commands a steady-state
+    //     turn rate proportional to flow over the blade; hull yaw inertia makes
+    //     the rate build/decay over T ≈ L/u seconds instead of snapping.
+    //   • Sway: centripetal coupling gives the outward drift a displacement
+    //     hull carries through a turn (velocity lags heading by the drift angle).
+    //   • Actuators: the rudder slews at a finite rate and the throttle spools
+    //     like an engine telegraph. Manual keys and the waypoint autopilot
+    //     both drive these same actuators, so motion is identical either way.
     struct BoatState {
-        Vector3 position{0.f, 0.f, 0.f};
-        float   yaw          = 0.f;       // radians
-        float   forwardSpeed = 0.f;       // m/s along +heading
+        Vector3 position{0.f, 0.f, 0.f};  // world; y unused (heave is separate)
+        float   yaw          = 0.f;       // heading, radians around +Y
+        float   yawRate      = 0.f;       // r, rad/s (state — yaw inertia)
+        float   forwardSpeed = 0.f;       // surge u, m/s along +heading
+        float   swaySpeed    = 0.f;       // sway v, m/s lateral (drift in turns)
+        float   rudder       = 0.f;       // actual rudder deflection, radians
+        float   throttle     = 0.f;       // engine telegraph state ∈ [−1, 1]
+        bool    aground      = false;     // keel touching (island shores / sills)
         float   smoothPitch  = 0.f;       // radians, low-passed from wave tilt
         float   smoothRoll   = 0.f;       // radians
         float   y            = 0.f;       // metres, spring-damped toward wave height
@@ -145,10 +173,13 @@ namespace {
 // (periodic by construction — noise sampled on a circle) picks where islands
 // rise and where passes stay open sea; a radial bump profile dives both
 // shores below the sand floor so the rims bury cleanly; ridged FBM adds the
-// rocky relief. Colour comes from a texture baked in the mesh's own polar
-// parameterisation (the Vulkan PT has no vertex-colour path for meshes):
-// wet dark rock at the waterline, FBM-mottled granite on the slopes,
-// moss/heather on gentle low ground — all derived from the same height field.
+// rocky relief. Surface detail comes from three maps baked in the mesh's own
+// polar parameterisation (the Vulkan PT has no vertex-colour path for
+// meshes): an albedo map layering two granite tones, strata banding, scree,
+// grass / heather / lichen niches and a wet waterline; a tangent-space
+// normal map carrying creased-slab relief far below the vertex grid; and a
+// roughness map that turns the wet band glossy — all derived from the same
+// height field.
 namespace island {
 
     constexpr float kInnerR = 385.f;// boat waypoints reach ~320 m — keep clear water
@@ -211,93 +242,309 @@ namespace island {
 
         // ridged FBM (fold-over of signed noise) = sharp rocky crests
         const float ridge = 1.f - std::abs(2.f * fbm(x * 0.035f, z * 0.035f, 4) - 1.f);
-        const float crest = kPeakH * m * (0.45f + 0.55f * ridge * ridge);
+        // meso relief: layered creased-slab ridges carried as REAL geometry by
+        // the dense vertex grid — λ ≈ 11 m slabs, ≈ 4 m ledges, and sub-metre
+        // bumps (≈ 1.8 m and ≈ 0.9 m). Amplitudes are absolute (a ledge is a
+        // ledge, independent of the mountain's height) and stay gentler than
+        // their own wavelength. Scaled by the mass plan so the submerged passes
+        // stay smooth sills; the normal map now carries only the truly
+        // sub-vertex scales (≤ ~0.6 m).
+        const float slab    = 1.f - std::abs(2.f * fbm(x * 0.09f, z * 0.09f, 3) - 1.f);
+        const float slabFn  = 1.f - std::abs(2.f * fbm(x * 0.24f, z * 0.24f, 3) - 1.f);
+        const float bump    = fbm(x * 0.55f + 41.f, z * 0.55f + 17.f, 2);
+        const float grainHi = fbm(x * 1.15f + 7.f, z * 1.15f + 91.f, 2);
+        const float meso = 3.5f * (slab * slab - 0.45f)
+                         + 1.8f * (slabFn * slabFn - 0.45f)
+                         + 0.7f * (bump - 0.5f)
+                         + 0.35f * (grainHi - 0.5f);
+        const float crest = (kPeakH * (0.45f + 0.55f * ridge * ridge) + meso) * m;
         // prof=1 mid-ring: passes top out 2 m underwater, islands rise to crest
         return -kSkirt + (crest + kSkirt - 2.f) * prof;
     }
 
     // Analytic finite-difference normal — seam-consistent (the height field is
-    // continuous in angle) and adds sub-vertex shading detail for free.
-    Vector3 normalAt(float x, float z, float eps = 2.f) {
+    // continuous in angle) and adds sub-vertex shading detail for free. The
+    // 0.6 m radius matches the denser ~0.4 m vertex grid so the sub-metre
+    // relief shades correctly instead of being averaged away.
+    Vector3 normalAt(float x, float z, float eps = 0.6f) {
         const float dhdx = (heightAt(x + eps, z) - heightAt(x - eps, z)) / (2.f * eps);
         const float dhdz = (heightAt(x, z + eps) - heightAt(x, z - eps)) / (2.f * eps);
         Vector3 n(-dhdx, 1.f, -dhdz);
         return n.normalize();
     }
 
-    // Colour map in the mesh's polar parameterisation (u = angle, v = radius):
-    // one texel column ≈ 1.4 m of coastline. Each texel re-evaluates the
-    // height field, so the colours track the actual geometry.
-    std::shared_ptr<DataTexture> bakeColorMap() {
-        const int W = 2048, H = 128;
-        std::vector<unsigned char> px(static_cast<size_t>(W) * H * 4);
+    // High-frequency rock relief for the baked normal map — layered creased
+    // slabs (λ ≈ 3 m and ≈ 1.3 m), value-noise grain (λ ≈ 1 m) and fine pepper
+    // (λ ≈ 0.5 m and ≈ 0.25 m): only the scales below what the vertex grid
+    // carries (the λ ≥ 3.5 m slabs live in heightAt). The finest octave only
+    // pays off at the doubled normal-map resolution + the tightened gradient
+    // step (`de`) bakeMaps now uses.
+    float detailHeight(float x, float z) {
+        const float r2 = 1.f - std::abs(2.f * fbm(x * 0.31f + 53.f, z * 0.31f + 17.f, 3) - 1.f);
+        const float r3 = 1.f - std::abs(2.f * fbm(x * 0.72f + 101.f, z * 0.72f + 61.f, 2) - 1.f);
+        const float g   = fbm(x * 0.9f + 9.f, z * 0.9f + 27.f, 2);
+        const float gf  = fbm(x * 1.9f + 33.f, z * 1.9f + 71.f, 2);
+        const float gff = fbm(x * 4.0f + 5.f, z * 4.0f + 53.f, 2);
+        return 0.50f * r2 * r2 + 0.22f * r3 * r3 + 0.10f * g + 0.05f * gf + 0.03f * gff;
+    }
+
+    struct BakedMaps {
+        std::shared_ptr<DataTexture> albedo;
+        std::shared_ptr<DataTexture> normal;
+        std::shared_ptr<DataTexture> rough;
+    };
+
+    // Albedo + tangent-space normal + roughness in the mesh's polar
+    // parameterisation (u = angle, v = radius): one texel ≈ 0.13 m of
+    // coastline, 0.11 m radially. Each texel re-evaluates the height field —
+    // centre + 4 neighbours give the slope normal AND the Laplacian
+    // (crest/hollow) from the same five probes — so every mask tracks the
+    // actual geometry. Rows bake in parallel; the pass is a one-off at startup.
+    BakedMaps bakeMaps() {
+        const int W = 20480, H = 1024;
+        std::vector<unsigned char> albPx(static_cast<size_t>(W) * H * 4);
+        std::vector<unsigned char> nrmPx(static_cast<size_t>(W) * H * 4);
+        std::vector<unsigned char> rghPx(static_cast<size_t>(W) * H * 4);
         auto toByte = [](float v) {
             return static_cast<unsigned char>(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
         };
-        for (int y = 0; y < H; ++y) {
+
+        std::vector<int> rows(H);
+        std::iota(rows.begin(), rows.end(), 0);
+        threepp::parallelForEach(rows.begin(), rows.end(), [&](int y) {
             const float r = kInnerR + (kOuterR - kInnerR) * ((y + 0.5f) / H);
             for (int x = 0; x < W; ++x) {
                 const float a = 2.f * math::PI * ((x + 0.5f) / W);
-                const float wx = std::cos(a) * r, wz = std::sin(a) * r;
-                const float h = heightAt(wx, wz);
-                const float ny = normalAt(wx, wz).y;
+                const float ca = std::cos(a), sa = std::sin(a);
+                const float wx = ca * r, wz = sa * r;
 
-                const float mottle = fbm(wx * 0.05f, wz * 0.05f, 3);
-                const float veg    = fbm(wx * 0.016f + 31.f, wz * 0.016f, 3);
+                const float eps = 2.5f;
+                const float h   = heightAt(wx, wz);
+                const float hxp = heightAt(wx + eps, wz), hxm = heightAt(wx - eps, wz);
+                const float hzp = heightAt(wx, wz + eps), hzm = heightAt(wx, wz - eps);
+                const float dhdx = (hxp - hxm) / (2.f * eps);
+                const float dhdz = (hzp - hzm) / (2.f * eps);
+                const float ny   = 1.f / std::sqrt(1.f + dhdx * dhdx + dhdz * dhdz);
+                const float lap  = (hxp + hxm + hzp + hzm - 4.f * h) / (eps * eps);
+                // convexity: exposed crests bleach, concave seams collect dirt
+                const float crest = std::clamp(-lap * 0.8f, -1.f, 1.f);
 
-                float cr = 0.36f + 0.20f * mottle;// base granite grey
-                float cg = 0.34f + 0.18f * mottle;
-                float cb = 0.32f + 0.16f * mottle;
-                // moss/heather on gentle low/mid ground, patched by its own noise
-                const float vegMask = smoothstepf(0.55f, 0.78f, ny) *
-                                      smoothstepf(0.8f, 2.5f, h) * (1.f - smoothstepf(28.f, 42.f, h)) *
-                                      smoothstepf(0.40f, 0.60f, veg);
-                cr += (0.16f + 0.10f * veg - cr) * vegMask;
-                cg += (0.30f + 0.06f * veg - cg) * vegMask;
-                cb += (0.10f + 0.04f * veg - cb) * vegMask;
-                // dark wet band at the waterline, continuing underwater
+                const float tone   = fbm(wx * 0.0045f, wz * 0.0045f, 2); // per-face rock tone, λ ≈ 220 m
+                const float mottle = fbm(wx * 0.05f, wz * 0.05f, 3);     // λ ≈ 20 m
+                const float grain  = fbm(wx * 0.7f + 5.f, wz * 0.7f + 13.f, 2);// λ ≈ 1.4 m
+                const float micro  = fbm(wx * 1.6f + 211.f, wz * 1.6f + 97.f, 2);// λ ≈ 0.6 m
+                const float vegL   = fbm(wx * 0.013f + 31.f, wz * 0.013f, 3);  // veg patches, λ ≈ 75 m
+                const float vegS   = fbm(wx * 0.11f + 7.f, wz * 0.11f + 3.f, 2);// ragged veg edges, λ ≈ 9 m
+                const float warp   = fbm(wx * 0.03f + 71.f, wz * 0.03f + 11.f, 2);
+
+                // two-tone base: pale weathered granite vs darker gneiss,
+                // blended at island scale so each face reads as its own mass
+                const float t = smoothstepf(0.35f, 0.65f, tone);
+                float cr = 0.26f + 0.20f * t;
+                float cg = 0.245f + 0.195f * t;
+                float cb = 0.235f + 0.175f * t;
+                const float speck = (mottle - 0.5f) * 0.14f + (grain - 0.5f) * 0.09f
+                                  + (micro - 0.5f) * 0.05f;
+                cr += speck;
+                cg += speck;
+                cb += speck * 0.9f;
+                // wandering sub-horizontal strata bands on steep faces
+                const float strata = 1.f + 0.09f * std::sin(h * 0.75f + 6.f * warp) *
+                                                 smoothstepf(0.85f, 0.55f, ny);
+                // crest/hollow shading from the Laplacian
+                const float cav = 1.f + 0.14f * crest;
+                cr *= strata * cav;
+                cg *= strata * cav;
+                cb *= strata * cav;
+
+                // scree aprons: gentle low benches at the cliff feet collect debris
+                const float scree = smoothstepf(0.60f, 0.78f, ny) * smoothstepf(1.2f, 2.6f, h) *
+                                    (1.f - smoothstepf(5.f, 13.f, h)) *
+                                    smoothstepf(0.35f, 0.65f, vegS) * 0.55f;
+                cr += (0.41f - cr) * scree;
+                cg += (0.375f - cg) * scree;
+                cb += (0.315f - cb) * scree;
+
+                // heather/shrub on mid slopes, its own patch noise
+                const float hePatch = fbm(wx * 0.019f + 57.f, wz * 0.019f + 91.f, 2);
+                const float heather = smoothstepf(0.45f, 0.62f, ny) * smoothstepf(1.5f, 3.5f, h) *
+                                      (1.f - smoothstepf(22.f, 34.f, h)) *
+                                      smoothstepf(0.45f, 0.62f, hePatch);
+                cr += (0.205f + 0.05f * hePatch - cr) * heather;
+                cg += (0.17f + 0.05f * hePatch - cg) * heather;
+                cb += (0.105f - cb) * heather;
+
+                // grass/moss on flat low benches; hollows accumulate soil, so
+                // the Laplacian feeds the patch threshold
+                const float gPatch = 0.55f * vegL + 0.30f * vegS +
+                                     0.15f * std::clamp(lap * 1.5f, 0.f, 1.f);
+                const float grass = smoothstepf(0.60f, 0.80f, ny) * smoothstepf(0.8f, 2.6f, h) *
+                                    (1.f - smoothstepf(24.f, 38.f, h)) *
+                                    smoothstepf(0.42f, 0.58f, gPatch);
+                cr += (0.13f + 0.07f * vegS - cr) * grass;
+                cg += (0.27f + 0.08f * vegL - cg) * grass;
+                cb += (0.085f - cb) * grass;
+
+                // pale lichen crusts on exposed high rock
+                const float lich = smoothstepf(8.f, 20.f, h) *
+                                   smoothstepf(0.55f, 0.75f, fbm(wx * 0.15f + 13.f, wz * 0.15f + 29.f, 2)) *
+                                   std::clamp(0.5f + 0.5f * crest, 0.f, 1.f) * 0.30f;
+                cr += (0.50f - cr) * lich;
+                cg += (0.51f - cg) * lich;
+                cb += (0.46f - cb) * lich;
+                // summits bleach toward bare washed rock
+                const float alt = 1.f + 0.08f * smoothstepf(28.f, 52.f, h);
+                cr *= alt;
+                cg *= alt;
+                cb *= alt;
+
+                // Conifer forest — the signature cover of these slopes. Climbs
+                // steep ground (unlike grass) but sheds off sheer cliff faces;
+                // a coarse stand field + a ragged canopy-edge noise carve
+                // clearings and break the treeline so it never reads as a
+                // contour line. Deep blue-green, varied stand to stand.
+                const float forestStand = fbm(wx * 0.020f + 13.f, wz * 0.020f + 47.f, 3);// λ ≈ 50 m
+                const float forestEdge  = fbm(wx * 0.13f + 61.f, wz * 0.13f + 29.f, 2);  // λ ≈ 8 m
+                const float forest = smoothstepf(0.40f, 0.58f, ny) *
+                                     smoothstepf(1.5f, 4.0f, h) *
+                                     (1.f - smoothstepf(26.f, 36.f, h)) *
+                                     smoothstepf(0.34f, 0.52f, 0.6f * forestStand + 0.4f * forestEdge);
+                cr += (0.045f + 0.030f * forestStand - cr) * forest;
+                cg += (0.135f + 0.060f * forestStand - cg) * forest;
+                cb += (0.050f + 0.020f * forestStand - cb) * forest;
+
+                // Snow — settles on low-angle ground above the snowline and
+                // pools in the concave couloirs (lap > 0) well below it, while
+                // shedding off anything approaching vertical. Faint cool tint
+                // on the ambient-shadowed fields; a patch field keeps the
+                // upper edge ragged instead of a hard ring. At this 55 m skerry
+                // scale snow reads as summit caps + gully streaks, not full
+                // alpine cover — matching a low Norwegian coastal massif.
+                const float snowPatch = fbm(wx * 0.05f + 91.f, wz * 0.05f + 5.f, 2);
+                const float snowSlope = smoothstepf(0.42f, 0.72f, ny);
+                const float snowfield = smoothstepf(26.f, 42.f, h);
+                const float couloir   = std::clamp(lap * 1.4f, 0.f, 1.f) * smoothstepf(16.f, 28.f, h);
+                float snow = snowSlope * std::clamp(std::max(snowfield, couloir), 0.f, 1.f);
+                snow *= 0.6f + 0.4f * smoothstepf(0.35f, 0.65f, snowPatch);
+                cr += (0.92f - cr) * snow;
+                cg += (0.94f - cg) * snow;
+                cb += (0.98f - cb) * snow;
+
+                // algae film straddling the waterline, then the dark wet band
+                const float algae = (1.f - smoothstepf(0.6f, 1.4f, std::abs(h - 0.3f))) * 0.5f;
+                cr += (0.10f - cr) * algae;
+                cg += (0.15f - cg) * algae;
+                cb += (0.10f - cb) * algae;
                 const float wet = (1.f - smoothstepf(0.4f, 2.2f, h)) * 0.85f;
-                cr += (0.10f - cr) * wet;
-                cg += (0.10f - cg) * wet;
-                cb += (0.095f - cb) * wet;
+                cr += (0.095f - cr) * wet;
+                cg += (0.095f - cg) * wet;
+                cb += (0.09f - cb) * wet;
+
+                // Snowmelt waterfalls — sparse thin ribbons down the steep
+                // faces. A slow azimuthal selector picks a few fall-lines and
+                // a high-frequency stripe makes each one narrow; both depend
+                // only on the angle, so a ribbon runs unbroken down the face
+                // as the radius row changes. Gated to steep rock between the
+                // splash zone and the snow source above. Bright and slightly
+                // blue; the glossy wet sheen is added in the roughness block.
+                const float fallRegion = smoothstepf(0.60f, 0.82f, fbm(a * 2.5f + 11.f, 4.0f, 2));
+                const float fallStripe = std::pow(std::max(0.f, std::sin(a * 48.f + 6.f * fbm(a * 9.f, 2.f, 2))), 60.f);
+                const float fall = fallRegion * fallStripe *
+                                   smoothstepf(0.30f, 0.55f, 1.f - ny) *
+                                   smoothstepf(4.f, 9.f, h) *
+                                   (1.f - smoothstepf(34.f, 44.f, h));
+                cr += (0.82f - cr) * fall;
+                cg += (0.86f - cg) * fall;
+                cb += (0.92f - cb) * fall;
+
+                // detail normal: world-plane gradient of the relief field,
+                // projected onto the polar tangent frame (T = +u = angular,
+                // B = +v = radial — matches the shader's derivative TBN).
+                // Damped under vegetation: soil and moss smooth micro-relief.
+                // de ≈ the doubled radial texel spacing (~0.11 m) so the
+                // sub-0.5 m octaves of detailHeight resolve instead of being
+                // averaged out.
+                const float de = 0.12f;
+                const float canopy = std::max({grass, heather, forest});
+                const float damp = 0.8f * (1.f - 0.6f * canopy) * (1.f - 0.85f * snow);
+                const float gx = (detailHeight(wx + de, wz) - detailHeight(wx - de, wz)) / (2.f * de) * damp;
+                const float gz = (detailHeight(wx, wz + de) - detailHeight(wx, wz - de)) / (2.f * de) * damp;
+                const float st = -gx * sa + gz * ca;// slope along +u (angular)
+                const float sb = gx * ca + gz * sa; // slope along +v (radial)
+                const float inv = 1.f / std::sqrt(st * st + sb * sb + 1.f);
+
+                // roughness (.g multiplies material roughness): matte dry
+                // granite, matte vegetation, matte conifer canopy, water-
+                // slicked rock turns glossy, bright soft snow, glossy falls
+                float rough = 0.86f + 0.10f * (mottle - 0.5f) - 0.06f * crest;
+                rough += (0.95f - rough) * std::max(grass, heather);
+                rough += (0.93f - rough) * forest;
+                rough += (0.45f - rough) * wet;
+                rough += (0.62f - rough) * snow;
+                rough += (0.38f - rough) * fall;
 
                 const size_t i = (static_cast<size_t>(y) * W + x) * 4;
-                px[i + 0] = toByte(cr);
-                px[i + 1] = toByte(cg);
-                px[i + 2] = toByte(cb);
-                px[i + 3] = 255;
+                albPx[i + 0] = toByte(cr);
+                albPx[i + 1] = toByte(cg);
+                albPx[i + 2] = toByte(cb);
+                albPx[i + 3] = 255;
+                nrmPx[i + 0] = toByte(-st * inv * 0.5f + 0.5f);
+                nrmPx[i + 1] = toByte(-sb * inv * 0.5f + 0.5f);
+                nrmPx[i + 2] = toByte(inv * 0.5f + 0.5f);
+                nrmPx[i + 3] = 255;
+                rghPx[i + 0] = 255;
+                rghPx[i + 1] = toByte(rough);
+                rghPx[i + 2] = 0;
+                rghPx[i + 3] = 255;
             }
-        }
-        auto tex = DataTexture::create(ImageData{std::move(px)},
-                                       static_cast<unsigned>(W), static_cast<unsigned>(H));
-        tex->colorSpace = ColorSpace::sRGB;
-        tex->magFilter = Filter::Linear;
-        tex->minFilter = Filter::LinearMipmapLinear;
-        tex->generateMipmaps = true;
-        tex->needsUpdate();
-        return tex;
+        });
+
+        auto makeTex = [&](std::vector<unsigned char>&& px, bool srgb) {
+            auto tex = DataTexture::create(ImageData{std::move(px)},
+                                           static_cast<unsigned>(W), static_cast<unsigned>(H));
+            if (srgb) tex->colorSpace = ColorSpace::sRGB;// normal/rough stay raw UNORM
+            tex->magFilter = Filter::Linear;
+            tex->minFilter = Filter::LinearMipmapLinear;
+            tex->generateMipmaps = true;
+            tex->needsUpdate();
+            return tex;
+        };
+        return {makeTex(std::move(albPx), true),
+                makeTex(std::move(nrmPx), false),
+                makeTex(std::move(rghPx), false)};
     }
 
     std::shared_ptr<Mesh> build() {
-        // 1024 angular columns ≈ 2.7 m spacing at mid-ring; the seam column is
-        // duplicated (u = 0 and u = 1) so UVs never wrap. ~30 K verts, static
-        // BLAS built once.
-        const int NA = 1024, NR = 28;
-        std::vector<float> pos, nrm, uv;
-        pos.reserve((NA + 1) * (NR + 1) * 3);
-        nrm.reserve((NA + 1) * (NR + 1) * 3);
-        uv.reserve((NA + 1) * (NR + 1) * 2);
-        for (int j = 0; j <= NR; ++j) {
+        // 8192 angular columns ≈ 0.34 m spacing at mid-ring, 256 radial rows
+        // ≈ 0.43 m — fine enough to carry the new sub-metre relief in heightAt
+        // as real geometry instead of normal-map fakery. The seam column is
+        // duplicated (u = 0 and u = 1) so UVs never wrap. ~2.1 M verts /
+        // ~4.2 M tris, static BLAS built once; rows fill in parallel
+        // (≈ 10 M height-field probes). Cheap for ray tracing (one static
+        // BLAS) and trivial for the deferred raster pass on a modern GPU.
+        const int NA = 8192, NR = 256;
+        std::vector<float> pos(static_cast<size_t>(NA + 1) * (NR + 1) * 3);
+        std::vector<float> nrm(static_cast<size_t>(NA + 1) * (NR + 1) * 3);
+        std::vector<float> uv(static_cast<size_t>(NA + 1) * (NR + 1) * 2);
+        std::vector<int> rows(NR + 1);
+        std::iota(rows.begin(), rows.end(), 0);
+        threepp::parallelForEach(rows.begin(), rows.end(), [&](int j) {
             const float r = kInnerR + (kOuterR - kInnerR) * (static_cast<float>(j) / NR);
             for (int i = 0; i <= NA; ++i) {
                 const float a = 2.f * math::PI * (static_cast<float>(i) / NA);
                 const float x = std::cos(a) * r, z = std::sin(a) * r;
                 const Vector3 n = normalAt(x, z);
-                pos.insert(pos.end(), {x, heightAt(x, z), z});
-                nrm.insert(nrm.end(), {n.x, n.y, n.z});
-                uv.insert(uv.end(), {static_cast<float>(i) / NA, static_cast<float>(j) / NR});
+                const size_t v = static_cast<size_t>(j) * (NA + 1) + i;
+                pos[v * 3 + 0] = x;
+                pos[v * 3 + 1] = heightAt(x, z);
+                pos[v * 3 + 2] = z;
+                nrm[v * 3 + 0] = n.x;
+                nrm[v * 3 + 1] = n.y;
+                nrm[v * 3 + 2] = n.z;
+                uv[v * 2 + 0] = static_cast<float>(i) / NA;
+                uv[v * 2 + 1] = static_cast<float>(j) / NR;
             }
-        }
+        });
         std::vector<unsigned int> idx;
         idx.reserve(static_cast<size_t>(NA) * NR * 6);
         for (int j = 0; j < NR; ++j)
@@ -319,9 +566,12 @@ namespace island {
         geo->computeBoundingSphere();
 
         auto mat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
-                                                        .roughness(0.95f)
+                                                        .roughness(1.f)// baked map carries the variation
                                                         .metalness(0.f));
-        mat->map = bakeColorMap();
+        const BakedMaps maps = bakeMaps();
+        mat->map          = maps.albedo;
+        mat->normalMap    = maps.normal;
+        mat->roughnessMap = maps.rough;
         auto mesh = Mesh::create(geo, mat);
         mesh->frustumCulled = false;// the ring surrounds the camera — always partly in view
         return mesh;
@@ -540,9 +790,9 @@ namespace {
             }
         }
 
-        // sternWorld: engine mount position. thrusting: throttle is open
-        // (autopilot under way, or W/S held) — bumps the RPM floor so the
-        // engine revs as thrust is applied, before boat speed builds.
+        // sternWorld: engine mount position. thrusting: the telegraph is
+        // open — bumps the RPM floor so the engine revs as thrust is
+        // applied, before boat speed builds.
         // uw: smoothed submersion ∈ [0,1] — above-surface sound ducks under
         // water (wind almost fully, waves partially, engine least: hull noise
         // carries through the water).
@@ -579,16 +829,22 @@ namespace {
 int main(int argc, char** argv) {
 
     // ── Headless capture (dev iteration loop) ───────────────────────────────
-    //   vulkan_ocean --shot <name.png> [--frames N] [--night] [--pt] [--vista]
+    //   vulkan_ocean --shot <name.png> [--frames N] [--night] [--pt]
+    //                [--vista] [--close] [--island] [--toggle]
     // Fixed aerial camera, N warm-up frames (TAA/denoiser converge), one PNG
     // into <project>/aaa_caps/, exit. --night starts in night mode; --pt
     // captures the path-traced reference instead of the deferred default;
-    // --vista frames a high oblique overview (archipelago ring + lighthouse).
+    // --vista frames a high oblique overview (archipelago ring + lighthouse);
+    // --close is a near-surface grazing view for surface-artifact hunting;
+    // --island frames a close terrain view of one archipelago island;
+    // --toggle starts in day and flips to night mid-run.
     std::string shotPath;
     int  shotFrames = 240;
     bool startNight = false;
     bool shotPT     = false;
     bool shotVista  = false;
+    bool shotClose  = false;// near-surface grazing view — surface-artifact hunting
+    bool shotIsland = false;// low close-up of the −X archipelago island (terrain-detail capture)
     int  toggleNightAt = 0;// --toggle: start in day, flip to night mid-run (exercises the runtime toggle path)
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc) shotPath = argv[++i];
@@ -596,9 +852,14 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--night") == 0) startNight = true;
         else if (std::strcmp(argv[i], "--pt") == 0) shotPT = true;
         else if (std::strcmp(argv[i], "--vista") == 0) shotVista = true;
+        else if (std::strcmp(argv[i], "--close") == 0) shotClose = true;
+        else if (std::strcmp(argv[i], "--island") == 0) shotIsland = true;
         else if (std::strcmp(argv[i], "--toggle") == 0) toggleNightAt = 60;
     }
     const bool capturing = !shotPath.empty();
+    // Shared capture machinery (capture_util.hpp): --cam/--look override the
+    // capture framing below with NO rebuild; --profile dumps per-pass timings.
+    const capture::Args capArgs = capture::parseArgs(argc, argv);
     int shotFrame = 0;
 
     Canvas canvas("Vulkan PT  Ocean", {{"vsync", false}, {"size", WindowSize{1600, 900}}});
@@ -648,9 +909,11 @@ int main(int argc, char** argv) {
     // one BLAS build; the lighthouse beam grazes its cliffs at night.
     scene.add(island::build());
 
-    // Ocean surface. PlaneGeometry with kSubdiv segments → kFftSize²
-    // vertices. The DisplacedMesh detects the grid dimension at first-frame
-    // init and runs the FFT/displace pipeline against it.
+    // Ocean surface. PlaneGeometry with kSubdiv segments → (kFftSize/2)² =
+    // 512² vertices (mesh density is decoupled from the kFftSize² wave
+    // field — see kSubdiv above). The DisplacedMesh detects the grid
+    // dimension at first-frame init and runs the FFT/displace pipeline
+    // against it.
     auto oceanGeo = PlaneGeometry::create(kPlaneEdge, kPlaneEdge, kSubdiv, kSubdiv);
     oceanGeo->rotateX(-math::PI / 2.f);
     auto oceanMat = makeOceanMaterial();
@@ -674,7 +937,7 @@ int main(int argc, char** argv) {
     // waves, visible chop without overpowering geometry). waveScale should
     // stay near 1 (physical) — keeping it at 0.1 just attenuates the entire
     // multi-cascade detail and reads as a glassy lake.
-    ocean->params.windSpeed   = 10.0f;
+    ocean->params.windSpeed   = shotClose ? 3.5f : 10.0f;// --close: calm glassy sea — the artifact-hunting state
     ocean->params.waveScale   = 1.0f;
     ocean->params.choppiness  = 0.55f;      // sharper crests, more visible wave-folding
     // Per-cascade FFT resolution. Cascade-0 (big swells, 1 km tile) needs the
@@ -688,40 +951,219 @@ int main(int argc, char** argv) {
     scene.add(ocean);
 
     // ── Lighthouse (scene centre) ───────────────────────────────────────────
-    // Rock base + tapered white tower + red gallery + emissive lamp room. The
-    // LAMP is the night-mode hero: an emissive mesh (area light for the PT /
-    // deferred emissive paths) + a rotating SpotLight whose beam the deferred
-    // volumetric march renders as the classic sweeping lighthouse fan.
+    // Norwegian-coast station built from procedural primitives: noise-displaced
+    // granite skerry, concrete pads, lathe-profiled white masonry tower (plinth
+    // → concave taper → corbelled gallery), railed gallery deck, red watch
+    // room, glazed lantern (transmission glass between mullions), domed roof
+    // with ventilator finial, and a small service hut. The LAMP is the
+    // night-mode hero: an emissive mesh (area light for the PT / deferred
+    // emissive paths) + a rotating SpotLight whose beam the deferred
+    // volumetric march renders as the classic sweeping fan. A rotating
+    // occluder hood around the lamp gives the emissive area light the same
+    // directionality as the spot — the lantern flares only when the beam
+    // sweeps your way, like the real optic.
     auto lampMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
             .color(Color(1.f, 0.95f, 0.8f)).roughness(0.4f).metalness(0.f));
     lampMat->emissive = Color(1.f, 0.85f, 0.55f);
     lampMat->emissiveIntensity = 0.f;// day: off — night toggle raises it
+    std::shared_ptr<Mesh> lensHood;   // rotated with beamAngle in the render loop
+    std::shared_ptr<MeshStandardMaterial> hoodMat;// soft lens glow — night toggle drives it
     {
+        auto whitePaint = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.92f, 0.90f, 0.86f)).roughness(0.55f).metalness(0.f));
+        auto redPaint = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.70f, 0.10f, 0.08f)).roughness(0.5f).metalness(0.f));
+        auto ironwork = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.07f, 0.075f, 0.08f)).roughness(0.45f).metalness(0.85f));
+        auto concrete = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.55f, 0.54f, 0.52f)).roughness(0.9f).metalness(0.f));
+
+        // Granite skerry: flattened sphere with vertices pushed in/out by the
+        // island FBM — same granite character as the surrounding ring. The
+        // noise mixes a y-dependent term so the relief isn't vertical ridges.
         auto rockMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
-                .color(Color(0.22f, 0.21f, 0.20f)).roughness(0.95f).metalness(0.f));
-        auto rock = Mesh::create(CylinderGeometry::create(7.f, 10.f, 6.f, 24), rockMat);
-        rock->position.set(0.f, -1.f, 0.f);
+                .color(Color(0.14f, 0.135f, 0.13f)).roughness(0.95f).metalness(0.f));
+        auto rockGeo = SphereGeometry::create(8.5f, 56, 28);
+        {
+            auto* p = rockGeo->getAttribute<float>("position");
+            for (unsigned i = 0; i < p->count(); ++i) {
+                const float x = p->getX(i), y = p->getY(i), z = p->getZ(i);
+                // Two scales: a broad mass term shifts whole flanks in/out, a
+                // ridged term (fold-over, like the islands') carves crevices
+                // and sharp spurs so the skerry reads as fractured granite
+                // rather than a sanded dome.
+                const float broad = island::fbm(x * 0.16f + 11.f, z * 0.16f + 5.f, 3)
+                                  + 0.5f * island::fbm(y * 0.45f + 3.f, (x + z) * 0.22f + 17.f, 2);
+                const float ridge = 1.f - std::abs(2.f * island::fbm(x * 0.45f + 31.f, z * 0.45f + 13.f, 3) - 1.f);
+                const float k = 1.f + 0.55f * (broad / 1.5f - 0.5f) + 0.30f * (ridge * ridge - 0.45f);
+                p->setXYZ(i, x * k, y * 0.5f * k, z * k);
+            }
+            rockGeo->computeVertexNormals();
+            rockGeo->computeBoundingBox();
+            rockGeo->computeBoundingSphere();
+        }
+        auto rock = Mesh::create(rockGeo, rockMat);
+        rock->position.set(0.f, -1.8f, 0.f);
         scene.add(rock);
 
-        auto towerMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
-                .color(Color(0.92f, 0.90f, 0.86f)).roughness(0.6f).metalness(0.f));
-        auto tower = Mesh::create(CylinderGeometry::create(1.9f, 2.8f, 16.f, 24), towerMat);
-        tower->position.set(0.f, 10.f, 0.f);
-        scene.add(tower);
+        // Concrete foundation pads — generous height absorbs the skerry's
+        // noise variance so the tower and hut always sit on solid footing.
+        auto pad = Mesh::create(CylinderGeometry::create(3.4f, 3.7f, 1.2f, 32), concrete);
+        pad->position.set(0.f, 2.0f, 0.f);
+        scene.add(pad);
+        auto hutPad = Mesh::create(CylinderGeometry::create(2.5f, 2.9f, 1.6f, 24), concrete);
+        hutPad->position.set(5.6f, 0.6f, 0.f);
+        scene.add(hutPad);
 
-        auto bandMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
-                .color(Color(0.75f, 0.12f, 0.10f)).roughness(0.6f).metalness(0.f));
-        auto gallery = Mesh::create(CylinderGeometry::create(2.4f, 2.4f, 1.2f, 24), bandMat);
-        gallery->position.set(0.f, 18.6f, 0.f);
-        scene.add(gallery);
+        // Tower: lathe profile, base at world y = 2.6 (pad top). Plinth with a
+        // chamfer, concave-tapered shaft, corbel flare carrying the gallery.
+        constexpr float kTowerBase = 2.6f;
+        {
+            const std::vector<Vector2> prof = {
+                    {0.05f, 0.00f}, {2.85f, 0.00f}, {2.85f, 0.85f}, {2.45f, 1.05f},
+                    {2.29f, 3.50f}, {2.04f, 6.50f}, {1.83f, 9.50f},
+                    {1.66f, 12.50f}, {1.52f, 15.00f},
+                    {1.55f, 15.15f}, {1.95f, 15.75f}, {1.95f, 15.90f}};
+            auto tower = Mesh::create(LatheGeometry::create(prof, 48), whitePaint);
+            tower->position.y = kTowerBase;
+            scene.add(tower);
+        }
 
-        auto lamp = Mesh::create(CylinderGeometry::create(1.4f, 1.4f, 2.2f, 16), lampMat);
+        // Gallery deck + red watch room below the lantern.
+        auto deck = Mesh::create(CylinderGeometry::create(2.8f, 2.8f, 0.22f, 32), redPaint);
+        deck->position.set(0.f, 18.6f, 0.f);
+        scene.add(deck);
+        auto watchRoom = Mesh::create(CylinderGeometry::create(1.8f, 1.8f, 0.95f, 24), redPaint);
+        watchRoom->position.set(0.f, 19.18f, 0.f);
+        scene.add(watchRoom);
+
+        // Lantern glazing: an open thin-walled transmission cylinder — the
+        // lamp shines through real glass. Radius stays inside the 1.7 m
+        // offset the render loop pushes the SpotLight origin out to, so the
+        // spot never starts inside the pane.
+        auto glassMat = MeshPhysicalMaterial::create();
+        glassMat->color = Color::white;
+        glassMat->roughness = 0.03f;
+        glassMat->metalness = 0.f;
+        glassMat->transmission = 1.f;
+        glassMat->setIor(1.52f);
+        glassMat->thickness = 0.02f;
+        glassMat->thinWalled = true;
+        glassMat->side = Side::Double;
+        auto glazing = Mesh::create(
+                CylinderGeometry::create(1.45f, 1.45f, 1.4f, 24, 1, true), glassMat);
+        glazing->position.set(0.f, 20.3f, 0.f);
+        scene.add(glazing);
+
+        // Lantern frame: 8 vertical mullions + top/bottom astragal rings,
+        // baked into one static geometry (one BLAS instance).
+        {
+            std::vector<std::shared_ptr<BufferGeometry>> parts;
+            for (int i = 0; i < 8; ++i) {
+                const float a = 2.f * math::PI * (static_cast<float>(i) / 8.f);
+                auto m = BoxGeometry::create(0.09f, 1.4f, 0.09f);
+                m->rotateY(a);
+                m->translate(1.45f * std::sin(a), 20.3f, 1.45f * std::cos(a));
+                parts.push_back(m);
+            }
+            for (const float y : {19.62f, 20.98f}) {
+                auto ring = TorusGeometry::create(1.45f, 0.06f, 10, 48);
+                ring->rotateX(math::PI / 2.f);
+                ring->translate(0.f, y, 0.f);
+                parts.push_back(ring);
+            }
+            scene.add(Mesh::create(mergeBufferGeometries(parts), redPaint));
+        }
+
+        // Lamp + rotating lens assembly. The "hood" is a partial cylinder with
+        // a ~109° window the render loop yaws to track the beam direction —
+        // the full lamp blazes through the opening while the shell itself
+        // glows softly at night (a Fresnel optic leaks light everywhere, it
+        // doesn't black out the lantern), so the beacon reads from any bearing.
+        auto lamp = Mesh::create(CylinderGeometry::create(0.5f, 0.5f, 1.0f, 16), lampMat);
         lamp->position.set(0.f, 20.3f, 0.f);
         scene.add(lamp);
+        hoodMat = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                .color(Color(0.30f, 0.27f, 0.22f)).roughness(0.4f).metalness(0.2f));
+        hoodMat->emissive = Color(1.f, 0.85f, 0.55f);
+        hoodMat->emissiveIntensity = 0.f;// day: off — night toggle raises it
+        hoodMat->side = Side::Double;
+        lensHood = Mesh::create(
+                CylinderGeometry::create(0.8f, 0.8f, 1.25f, 24, 1, true,
+                                         0.95f, math::TWO_PI - 1.9f), hoodMat);
+        lensHood->position.set(0.f, 20.3f, 0.f);
+        scene.add(lensHood);
 
-        auto roof = Mesh::create(CylinderGeometry::create(0.1f, 1.8f, 1.6f, 16), bandMat);
-        roof->position.set(0.f, 22.2f, 0.f);
-        scene.add(roof);
+        // Domed roof + ventilator ball and lightning rod.
+        {
+            const std::vector<Vector2> domeProf = {
+                    {1.92f, 0.00f}, {1.78f, 0.42f}, {1.45f, 0.80f},
+                    {0.95f, 1.10f}, {0.42f, 1.32f}, {0.10f, 1.42f}};
+            auto dome = Mesh::create(LatheGeometry::create(domeProf, 32), redPaint);
+            dome->position.y = 21.0f;
+            scene.add(dome);
+        }
+
+        // Gallery railing (18 stanchions + two hoop rails) and the roof
+        // finial, merged into a single ironwork instance.
+        {
+            std::vector<std::shared_ptr<BufferGeometry>> parts;
+            for (int i = 0; i < 18; ++i) {
+                const float a = 2.f * math::PI * (static_cast<float>(i) / 18.f);
+                auto post = CylinderGeometry::create(0.035f, 0.035f, 1.0f, 6);
+                post->translate(2.62f * std::sin(a), 19.21f, 2.62f * std::cos(a));
+                parts.push_back(post);
+            }
+            for (const float y : {19.40f, 19.70f}) {
+                auto rail = TorusGeometry::create(2.62f, 0.045f, 8, 48);
+                rail->rotateX(math::PI / 2.f);
+                rail->translate(0.f, y, 0.f);
+                parts.push_back(rail);
+            }
+            auto ball = SphereGeometry::create(0.17f, 12, 8);
+            ball->translate(0.f, 22.55f, 0.f);
+            parts.push_back(ball);
+            auto rod = CylinderGeometry::create(0.02f, 0.02f, 0.6f, 6);
+            rod->translate(0.f, 22.95f, 0.f);
+            parts.push_back(rod);
+            scene.add(Mesh::create(mergeBufferGeometries(parts), ironwork));
+        }
+
+        // Door at the plinth and three shaft windows, all facing the hut
+        // (+X). Window radius follows the shaft taper so each frame sits
+        // proud of the wall by ~10 cm.
+        {
+            auto shaftR = [&](float yWorld) {
+                const float yl = yWorld - kTowerBase;
+                return 2.45f - 0.95f * (yl - 1.05f) / 13.95f;
+            };
+            std::vector<std::shared_ptr<BufferGeometry>> parts;
+            auto door = BoxGeometry::create(0.3f, 2.0f, 0.95f);
+            door->translate(2.45f, 3.6f, 0.f);
+            parts.push_back(door);
+            for (const float y : {7.0f, 10.5f, 14.0f}) {
+                auto win = BoxGeometry::create(0.24f, 0.7f, 0.5f);
+                win->translate(shaftR(y), y, 0.f);
+                parts.push_back(win);
+            }
+            auto joinery = MeshStandardMaterial::create(MeshStandardMaterial::Params{}
+                    .color(Color(0.05f, 0.10f, 0.08f)).roughness(0.6f).metalness(0.1f));
+            scene.add(Mesh::create(mergeBufferGeometries(parts), joinery));
+        }
+
+        // Service hut: white walls, red gabled roof (45°-rotated box reads as
+        // a gable from any playable distance), on its own pad. Yawed a touch
+        // so it doesn't sit axis-aligned with the door/window azimuth.
+        const float hutYaw = 0.35f;
+        auto hut = Mesh::create(BoxGeometry::create(3.0f, 2.2f, 2.4f), whitePaint);
+        hut->position.set(5.6f, 2.5f, 0.f);
+        hut->rotation.y = hutYaw;
+        scene.add(hut);
+        auto hutRoof = Mesh::create(BoxGeometry::create(1.75f, 1.75f, 3.0f), redPaint);
+        // Euler XYZ applies Z first: the 45° gable tilt, then the yaw.
+        hutRoof->rotation.set(0.f, hutYaw, math::PI / 4.f);
+        hutRoof->position.set(5.6f, 3.55f, 0.f);
+        scene.add(hutRoof);
     }
 
     // Rotating beam — narrow long-throw spot, aimed slightly below horizontal
@@ -820,7 +1262,10 @@ int main(int argc, char** argv) {
             sun->intensity  = 0.f;
             moon->intensity = 0.30f;
             beam->intensity = 150000.f;// inverse-square: bright enough to read at 300 m
-            lampMat->emissiveIntensity = 25.f;
+            // Lamp is ~6× smaller in area than the pre-optic version — higher
+            // intensity keeps the through-window flare reading at distance.
+            lampMat->emissiveIntensity = 45.f;
+            hoodMat->emissiveIntensity = 8.f;// soft all-round lens glow
             renderer.setDeferredVolumetrics(hazeDensity, 0.6f);
             renderer.setDeferredStarfield(1.0f);
             renderer.toneMappingExposure = 1.15f;
@@ -831,6 +1276,7 @@ int main(int argc, char** argv) {
             moon->intensity = 0.f;
             beam->intensity = 0.f;
             lampMat->emissiveIntensity = 0.f;
+            hoodMat->emissiveIntensity = 0.f;
             renderer.setDeferredVolumetrics(0.f, 0.6f);
             renderer.setDeferredStarfield(0.f);
             renderer.toneMappingExposure = 0.7f;
@@ -841,11 +1287,29 @@ int main(int argc, char** argv) {
         // no glow, no lamp area light, and (since strongly-emissive housings
         // are what shadow rays skip) the housing blocks the beam entirely.
         lampMat->needsUpdate();
+        hoodMat->needsUpdate();
     };
     applyMode();
 
     constexpr float kBoatLength = 28.0f;
     constexpr float kBoatBeam   = 9.0f;
+
+    // ── Maneuvering model constants (R/V Gunnerus-ish, 28 m displacement hull) ──
+    constexpr float kMaxSpeed    = 7.2f;  // m/s ≈ 14 kn, full ahead
+    constexpr float kMaxAccel    = 0.55f; // m/s² at full throttle from rest
+    constexpr float kDragQuad    = kMaxAccel / (kMaxSpeed * kMaxSpeed);// drag balances thrust at kMaxSpeed
+    constexpr float kAsternFrac  = 0.25f; // astern thrust fraction → ~3.5 m/s astern
+    constexpr float kRudderMax   = 0.61f; // 35° hard-over
+    constexpr float kRudderRate  = 0.30f; // rad/s actuator slew — hard-over in ~2 s
+    constexpr float kTurnGain    = 1.f / (70.f * kRudderMax);// r_ss = gain·flow·δ → ~70 m radius hard-over (≈2.5 L)
+    constexpr float kPropWash    = 2.0f;  // m/s of extra rudder flow per unit ahead throttle (kick-turn from rest)
+    constexpr float kTurnDrag    = 0.5f;  // surge drag ∝ |r|·u — speed bleeds off through a hard turn
+    constexpr float kSwayCouple  = 1.45f; // centripetal sway forcing — ~10° drift angle in a hard turn
+    constexpr float kSwayDamp    = 0.8f;  // 1/s lateral damping
+    constexpr float kTurnHeel    = 0.08f; // rad of outward heel per (m/s · rad/s) — CG above lateral pressure centre
+    constexpr float kSpeedTrim   = 0.021f;// rad of bow-up squat trim at full speed
+    constexpr float kDraft       = 2.5f;  // m — grounding test depth (island sills top out at −2 m)
+
     GLTFLoader gltfLoader;
     auto boat = loadAsync([&gltfLoader]() -> std::shared_ptr<Group> {
         auto gltf = gltfLoader.load(std::string(DATA_FOLDER) + "/models/gltf/Gunnerus.glb");
@@ -874,6 +1338,48 @@ int main(int argc, char** argv) {
                 innerAsset->scale.set(s, s, s);
             }
         }
+
+        // Material re-grade. The GLB exports EVERY material with the same
+        // metallic-roughness pair (rough 0.71, metal 0.40) — half-metallic
+        // everything is exactly the "grey plastic toy" look, and the PBR
+        // ocean now exposes it hard. Painted marine steel is a DIELECTRIC
+        // with a fairly glossy topcoat; deck paint is matte non-slip; only
+        // railings/stairs/exhaust keep a metallic component; glass is
+        // near-mirror. Albedo + normal maps stay — only the response
+        // changes. Keyed by the GLB's material names (see git history for
+        // the dumped inventory).
+        struct Grade { float rough, metal; };
+        static const std::unordered_map<std::string, Grade> grades = {
+                {"HullWhite",            {0.38f, 0.00f}},// painted steel topsides
+                {"VesselBlue",           {0.35f, 0.00f}},
+                {"BridgeWhite",          {0.42f, 0.00f}},
+                {"BridgeWhite.001",      {0.42f, 0.00f}},
+                {"BridgeBlue",           {0.40f, 0.00f}},
+                {"whitePaint_notBridge", {0.42f, 0.00f}},
+                {"VesselBottom",         {0.55f, 0.15f}},// antifouling; bronze props share it
+                {"Deck",                 {0.85f, 0.00f}},// matte non-slip paint
+                {"Interior",             {0.80f, 0.00f}},
+                {"Decals",               {0.55f, 0.00f}},
+                {"Glass",                {0.06f, 0.00f}},// near-mirror, mostly sky reflection
+                {"VesselGlass",          {0.06f, 0.00f}},
+                {"Railing",              {0.45f, 0.35f}},// galvanized/painted metalwork
+                {"stairs",               {0.50f, 0.35f}},
+                {"Material #315",        {0.50f, 0.35f}},// stairs sibling
+                {"Exhaust",              {0.60f, 0.30f}},
+                {"VesselSafe",           {0.55f, 0.00f}},// life rings: actual plastic
+                {"BridgeSafe",           {0.55f, 0.00f}},
+                {"vesselShared",         {0.50f, 0.10f}},
+        };
+        innerAsset->traverseType<Mesh>([](Mesh& m) {
+            auto* mat = m.material()->as<MeshStandardMaterial>();
+            if (!mat) return;
+            const auto it = grades.find(mat->name);
+            // Unknown names: sane dielectric default, far better than the
+            // export's uniform half-metal.
+            const Grade g = (it != grades.end()) ? it->second : Grade{0.55f, 0.05f};
+            mat->roughness = g.rough;
+            mat->metalness = g.metal;
+        });
 
         auto group = Group::create();
         group->add(innerAsset);
@@ -904,12 +1410,11 @@ int main(int argc, char** argv) {
     const float navCurveLength = navCurve.getLength();
 
     // ── Buoys at each waypoint ─────────────────────────────────────────────
-    // Loaded from a GLB containing 5 distinct buoy meshes as top-level
-    // children. We use the GLB's scene root as the buoy group directly
-    // (Object3D doesn't expose the owning shared_ptr for children, so the
-    // cleanest reparent is to keep them where they are and just reposition
-    // each in place). Root transform is reset so the children's local
-    // positions ARE their world positions.
+    // A named group is pulled from the buoy GLB and cloned; its children are
+    // the buoy variants, one placed at each waypoint. The clone keeps the
+    // GLB's Z-up→Y-up rotation and 0.1 scale on its root, so positioning a
+    // child at a world-space waypoint goes through the inverse root matrix
+    // (see the GLB-success branch below).
     //
     // Fallback path: if the GLB is missing or doesn't expose ≥5 children,
     // emissive spheres take over. Path tracer's emissive NEE picks them up
@@ -1019,6 +1524,9 @@ int main(int argc, char** argv) {
         bs.position.set(p0.x, 0.f, p0.z);
         bs.yaw          = std::atan2(t0.x, t0.z);
         bs.forwardSpeed = autoCruiseSpeed;
+        // Steady-state telegraph for the cruise speed, so the demo opens
+        // under way instead of spooling the engine up from stop.
+        bs.throttle     = std::clamp(kDragQuad * autoCruiseSpeed * autoCruiseSpeed / kMaxAccel, 0.f, 1.f);
     }
 
     // Far-clip raised so the horizon doesn't get cut at the elevated/distant
@@ -1227,10 +1735,14 @@ int main(int argc, char** argv) {
         ImGui::TextWrapped(
             "FFT-displaced surface (multi-cascade Phillips, %u² IFFT, "
             "%.0f m tile). Path-traced refraction + photon-map caustics. "
-            "WASD = steer the Gunnerus.",
+            "W/S = engine telegraph, A/D = rudder.",
             kFftSize, kTileSize);
-        ImGui::Text("Speed: %.1f m/s   Heading: %.0f°", bs.forwardSpeed,
+        ImGui::Text("Speed: %.1f kn (%.1f m/s)   Heading: %.0f°",
+                    bs.forwardSpeed * 1.94384f, bs.forwardSpeed,
                     bs.yaw * 180.f / 3.14159f);
+        ImGui::Text("Telegraph: %+4.0f%%   Rudder: %+5.1f°%s",
+                    bs.throttle * 100.f, bs.rudder * 180.f / 3.14159f,
+                    bs.aground ? "   AGROUND!" : "");
         ImGui::Text("Pos: %7.1f, %7.1f", bs.position.x, bs.position.z);
         ImGui::Text("Keys  W:%d  A:%d  S:%d  D:%d   (C = cycle camera)",
                     bi.W ? 1 : 0, bi.A ? 1 : 0, bi.S ? 1 : 0, bi.D ? 1 : 0);
@@ -1246,13 +1758,13 @@ int main(int argc, char** argv) {
         ImGui::TextUnformatted("Autopilot");
         ImGui::Checkbox("Follow waypoint loop", &autoPilot);
         if (autoPilot) {
-            ImGui::SliderFloat("Cruise speed (m/s)", &autoCruiseSpeed, 1.f, 12.f, "%.1f");
+            ImGui::SliderFloat("Cruise speed (m/s)", &autoCruiseSpeed, 1.f, kMaxSpeed, "%.1f");
             const int wpCount = static_cast<int>(waypoints.size());
             const int currentWp = std::min(wpCount - 1,
                                            static_cast<int>(autoU * wpCount));
             ImGui::Text("Waypoint %d / %d   (u = %.2f)", currentWp + 1, wpCount, autoU);
         } else {
-            ImGui::TextDisabled("WASD to steer manually.");
+            ImGui::TextDisabled("W/S engine ahead/astern, A/D rudder.");
         }
         ImGui::Separator();
 
@@ -1510,46 +2022,101 @@ int main(int argc, char** argv) {
             fpsFrames = 0;
         }
 
-        // === Boat steering integration ===
-        // Autopilot path: advance arc-length parameter u by cruise speed × dt
-        // along the closed nav curve and lift position + heading directly
-        // from the curve. Yaw aligns with the tangent so the boat always
-        // faces "forward along the path". forwardSpeed is set to the cruise
-        // speed so the wake reads correctly. closed=true on the curve means
-        // u wraps seamlessly — fmod handles the [0, 1) wrap, and the loop
-        // restarts without a heading jump.
-        float cosY, sinY;
+        // === Boat steering & propulsion ===
+        // Both modes only produce rudder/throttle COMMANDS; the shared
+        // actuator + dynamics integration below turns them into motion.
+        // The autopilot is a helmsman, not a teleport: it chases a pure-
+        // pursuit look-ahead point on the nav curve with a PD heading
+        // controller, so the boat heels, drifts and bleeds speed through
+        // turns exactly as it does under manual control (and cuts the
+        // corners a real helm would).
+        float rudderCmd = 0.f, throttleCmd = 0.f;
         if (autoPilot && navCurveLength > 1e-3f) {
-            autoU += (autoCruiseSpeed * dt) / navCurveLength;
-            autoU = std::fmod(autoU, 1.f);
-            if (autoU < 0.f) autoU += 1.f;
-            Vector3 p, tan;
-            navCurve.getPointAt(autoU, p);
-            navCurve.getTangentAt(autoU, tan);
-            bs.position.set(p.x, 0.f, p.z);
-            bs.yaw          = std::atan2(tan.x, tan.z);
-            bs.forwardSpeed = autoCruiseSpeed;
-            cosY = std::cos(bs.yaw);
-            sinY = std::sin(bs.yaw);
+            // Advance the pursuit target along the curve until it sits
+            // kLookAhead metres from the hull. getPointAt is arc-length
+            // parameterised, so stepU advances ~2 m per iteration; the guard
+            // bounds the catch-up after a long pause or a manual excursion.
+            constexpr float kLookAhead = 40.f;
+            Vector3 tgt;
+            navCurve.getPointAt(autoU, tgt);
+            const float stepU = 2.f / navCurveLength;
+            for (int guard = 0; guard < 64; ++guard) {
+                const float dx = tgt.x - bs.position.x;
+                const float dz = tgt.z - bs.position.z;
+                if (dx * dx + dz * dz >= kLookAhead * kLookAhead) break;
+                autoU = std::fmod(autoU + stepU, 1.f);
+                navCurve.getPointAt(autoU, tgt);
+            }
+            const float desiredYaw = std::atan2(tgt.x - bs.position.x,
+                                                tgt.z - bs.position.z);
+            float err = desiredYaw - bs.yaw;
+            while (err >  math::PI) err -= 2.f * math::PI;
+            while (err < -math::PI) err += 2.f * math::PI;
+            // PD: P on heading error, D on yaw rate (counter-rudder — checks
+            // the swing early instead of S-curving across the track).
+            rudderCmd   = std::clamp(1.0f * err - 2.5f * bs.yawRate,
+                                     -kRudderMax, kRudderMax);
+            throttleCmd = std::clamp((autoCruiseSpeed - bs.forwardSpeed) * 0.6f,
+                                     -0.3f, 1.f);
         } else {
-            // Manual: W = forward thrust, S = reverse. Speed clamped to ±vMax;
-            // a linear drag (0.7/s) gives a coast-down once thrust released.
-            const float thrust = (bi.W ? 6.0f : 0.f) - (bi.S ? 4.0f : 0.f);
-            bs.forwardSpeed += thrust * dt;
-            bs.forwardSpeed -= bs.forwardSpeed * 0.5f * dt;
-            bs.forwardSpeed = std::clamp(bs.forwardSpeed, -4.f, 8.f);
-            // Yaw: A = left, D = right. Rate scales with speed (a stationary
-            // hull doesn't yaw easily). Min factor 0.1 keeps the rudder usable
-            // when nearly stopped.
-            const float yawInput = (bi.A ? 1.0f : 0.f) - (bi.D ? 1.0f : 0.f);
-            const float speedFactor = std::clamp(std::abs(bs.forwardSpeed) / 5.f, 0.1f, 1.0f);
-            bs.yaw += yawInput * 0.6f * speedFactor * dt;
-            // Position: boat moves along its heading. Convention: yaw=0 → +Z,
-            // matching the OrbitControls default forward.
-            cosY = std::cos(bs.yaw);
-            sinY = std::sin(bs.yaw);
-            bs.position.x += sinY * bs.forwardSpeed * dt;
-            bs.position.z += cosY * bs.forwardSpeed * dt;
+            // Manual: A/D order the rudder hard-over (it slews there at the
+            // actuator rate), W/S open the telegraph ahead/astern. Released
+            // keys recentre the helm and ring the engine back to stop — the
+            // hull then coasts on its own inertia against quadratic drag.
+            rudderCmd   = ((bi.A ? 1.f : 0.f) - (bi.D ? 1.f : 0.f)) * kRudderMax;
+            throttleCmd = bi.W ? 1.f : (bi.S ? -1.f : 0.f);
+        }
+
+        // Actuators. Rudder slews at a fixed rate; the engine spools faster
+        // than it winds down (turbo lag vs shaft inertia, mirrors the audio).
+        auto slewTo = [dt](float v, float tgt, float rate) {
+            const float d = tgt - v;
+            const float step = rate * dt;
+            return std::abs(d) <= step ? tgt : v + std::copysign(step, d);
+        };
+        bs.rudder   = slewTo(bs.rudder, rudderCmd, kRudderRate);
+        bs.throttle = slewTo(bs.throttle, throttleCmd,
+                             throttleCmd > bs.throttle ? 0.5f : 0.35f);
+
+        // Yaw — first-order Nomoto model: the rudder commands a steady-state
+        // turn rate ∝ flow over the blade (hull speed + prop wash, so a burst
+        // of ahead throttle kick-turns a stationary boat); the hull reaches it
+        // with time constant T ≈ L/u.
+        const float flow    = bs.forwardSpeed + kPropWash * std::max(bs.throttle, 0.f);
+        const float rTarget = kTurnGain * flow * bs.rudder;
+        const float Tyaw    = std::clamp(kBoatLength / std::max(std::abs(bs.forwardSpeed), 1.5f), 2.f, 7.f);
+        bs.yawRate += (rTarget - bs.yawRate) * std::min(dt / Tyaw, 1.f);
+        bs.yaw     += bs.yawRate * dt;
+
+        // Surge: thrust vs quadratic hull drag, plus the extra resistance of
+        // a deflected hull in a turn. Sway: centripetal coupling pushes the
+        // hull outward through a turn; lateral drag bleeds it off again.
+        const float thrust = kMaxAccel * (bs.throttle > 0.f ? bs.throttle
+                                                            : kAsternFrac * bs.throttle);
+        const float u = bs.forwardSpeed;
+        bs.forwardSpeed += (thrust
+                            - kDragQuad * u * std::abs(u)
+                            - kTurnDrag * std::abs(bs.yawRate) * u) * dt;
+        bs.forwardSpeed = std::clamp(bs.forwardSpeed, -4.f, kMaxSpeed + 0.5f);
+        bs.swaySpeed += (-kSwayCouple * u * bs.yawRate - kSwayDamp * bs.swaySpeed) * dt;
+
+        // Position: world velocity = heading·u + lateral·v. Convention:
+        // yaw=0 → +Z forward, lateral basis (cosY, −sinY).
+        float cosY = std::cos(bs.yaw);
+        float sinY = std::sin(bs.yaw);
+        bs.position.x += (sinY * bs.forwardSpeed + cosY * bs.swaySpeed) * dt;
+        bs.position.z += (cosY * bs.forwardSpeed - sinY * bs.swaySpeed) * dt;
+
+        // Grounding: the archipelago sills top out ~2 m below the surface and
+        // the shores shoal up — once the island height field rises above keel
+        // depth the hull scrubs off its way fast. (The sand floor of the bay
+        // sits at −5 m, so open water never triggers this.)
+        bs.aground = island::heightAt(bs.position.x, bs.position.z) > -kDraft;
+        if (bs.aground) {
+            const float g = std::exp(-3.f * dt);
+            bs.forwardSpeed *= g;
+            bs.swaySpeed    *= g;
+            bs.yawRate      *= g;
         }
 
         // === Hydrodynamics from sampled wave surface ===
@@ -1577,10 +2144,19 @@ int main(int argc, char** argv) {
         const float hPort   = sampleH(-halfB, 0.f);
         const float hStbd   = sampleH(+halfB, 0.f);
         // Positive pitch = bow up (right-hand rotation around local X).
-        const float pitch = std::atan2(hBow  - hStern, kBoatLength);
+        // Speed trim added on top: a displacement hull squats stern-down
+        // (bow up ~1°) as it approaches hull speed.
+        const float trimNorm = bs.forwardSpeed / kMaxSpeed;
+        const float pitch = std::atan2(hBow  - hStern, kBoatLength)
+                          + kSpeedTrim * trimNorm * std::abs(trimNorm);
         // Positive roll = starboard down (right-hand rotation around local Z,
         // which under +Z forward convention means starboard side dips).
-        const float roll  = std::atan2(hStbd - hPort,  kBoatBeam);
+        // Turn heel added on top: a surface ship heels OUTWARD in a turn
+        // (centre of gravity above the lateral pressure centre), ∝ the
+        // centripetal acceleration u·r. Both inputs are already first-order
+        // states, so the heel builds and releases smoothly with the turn.
+        const float roll  = std::atan2(hStbd - hPort,  kBoatBeam)
+                          - kTurnHeel * bs.forwardSpeed * bs.yawRate;
 
         // Pitch / roll: temporal low-pass at ~1 Hz so attitude rides the
         // swells but doesn't snap to wave-pumping at hull-traversal rates.
@@ -1670,10 +2246,10 @@ int main(int argc, char** argv) {
         // The Kelvin V-wake additionally uses a historical sample trail
         // so it traces the boat's actual sailed curve through turns,
         // instead of snapping to the current heading every frame. Trail
-        // is maintained below: emit at 4 Hz, drop samples older than 10 s,
-        // cap at the renderer's kMaxWakeSamples (32) — that's ~8 s of
-        // path at 4 m/s ≈ 32 m of wake trail, comfortably longer than
-        // the Kelvin 5·λ visible decay (~50 m at v=4 m/s).
+        // is maintained below: emit at 10 Hz (or every 1 m travelled),
+        // drop samples older than 6 s, cap at the renderer's
+        // kMaxWakeSamples (64) — that's ~36 m of path at the 6 m/s cruise,
+        // enough curved history to bend the V-wake through the boat's turns.
         ocean->wake.forwardSpeed = bs.forwardSpeed;
         {
             constexpr float kEmitInterval     = 0.10f;     // 10 Hz cadence
@@ -1978,15 +2554,18 @@ int main(int argc, char** argv) {
         }
 
         // ── Lighthouse beam sweep ─────────────────────────────────────────
+        if (capturing) {
+            // Deterministic capture aim: steeper + into the FRAMED water so
+            // the lit pool lands in-shot (~135 m out, centre-right).
+            beamAngle = -1.1f;
+        } else {
+            beamAngle += beamSpeed * dt;
+        }
         if (night) {
             if (capturing) {
-                // Deterministic capture aim: steeper + into the FRAMED water so
-                // the lit pool lands in-shot (~135 m out, centre-right).
-                beamAngle = -1.1f;
                 beamTarget.position.set(std::cos(beamAngle) * 150.f, -2.f,
                                         std::sin(beamAngle) * 150.f);
             } else {
-                beamAngle += beamSpeed * dt;
                 beamTarget.position.set(std::cos(beamAngle) * 300.f, -4.f,
                                         std::sin(beamAngle) * 300.f);
             }
@@ -1998,6 +2577,11 @@ int main(int argc, char** argv) {
             beamDir.sub(lampPos).normalize();
             beam->position.copy(lampPos).addScaledVector(beamDir, 1.7f);
         }
+        // The lamp hood's window tracks the beam azimuth (cylinder θ=0 is
+        // local +Z; the beam dir is (cos A, sin A) in XZ → yaw = π/2 − A), so
+        // the lantern's emissive flare points where the spot does. The optic
+        // keeps turning by day too, visible inside the glass.
+        if (lensHood) lensHood->rotation.y = math::PI / 2.f - beamAngle;
 
         // ── Underwater fog activation ─────────────────────────────────────
         // Sample the wave height at the camera's XZ position. If the camera
@@ -2033,18 +2617,47 @@ int main(int argc, char** argv) {
         // sits at the stern, just above the waterline by the prop wash.
         {
             const Vector3 sternWorld = boatPos - boatFwd * (kBoatLength * 0.45f) + Vector3(0.f, 1.0f, 0.f);
-            const bool thrusting = autoPilot ? std::abs(autoCruiseSpeed) > 0.1f
-                                             : (bi.W || bi.S);
+            // Telegraph state covers both modes now — the autopilot works the
+            // same throttle, so the engine note tracks what the prop is doing.
+            const bool thrusting = std::abs(bs.throttle) > 0.05f;
             sounds.update(dt, sternWorld, bs.forwardSpeed, thrusting,
                           uwDepthSmooth, camera, audioOn ? audioVol : 0.f);
         }
 
         if (capturing) {
-            if (shotVista) {
+            if (capArgs.camPos && capArgs.camTarget) {
+                // --cam/--look override (capture_util): reframe any capture from
+                // the CLI with no rebuild — highest priority over the named shots.
+                camera.position.copy(*capArgs.camPos);
+                camera.lookAt(*capArgs.camTarget);
+            } else if (shotClose) {
+                // Near-surface grazing view beside the boat, looking across
+                // its wake — the high-foam-coverage region where close-up
+                // world-grid surface artifacts (foam texels, normal facets)
+                // are magnified to screen-filling size.
+                const Vector3 side = Vector3(boatFwd.z, 0.f, -boatFwd.x);
+                // Keep the camera MOVING (slow sideways strafe) — temporal
+                // history (TAA / reflection accumulation) never converges,
+                // matching interactive flying where the tile artifact shows.
+                camera.position.copy(boatPos)
+                        .addScaledVector(boatFwd, -10.f)
+                        .addScaledVector(side, 9.f + 0.04f * static_cast<float>(shotFrame))
+                        .add(Vector3(0.f, 2.5f, 0.f));
+                Vector3 tgt = boatPos;
+                tgt.addScaledVector(boatFwd, -45.f);// far into the wake — near-horizontal grazing
+                tgt.y = 0.5f;
+                camera.lookAt(tgt);
+            } else if (shotVista) {
                 // High oblique overview: lighthouse centre, archipelago ring,
                 // passes and the far shore all in frame.
                 camera.position.set(300.f, 220.f, 520.f);
                 camera.lookAt(Vector3(0.f, 0.f, -60.f));
+            } else if (shotIsland) {
+                // Low, close view across the water at the −X archipelago
+                // island — frames the forest / treeline / snow / waterfall
+                // banding and the new sub-metre rock relief for detail capture.
+                camera.position.set(-200.f, 15.f, 30.f);
+                camera.lookAt(Vector3(-460.f, 30.f, 10.f));
             } else if (night) {
                 // Night framing: low camera toward the lighthouse + horizon —
                 // sky (stars), beam fan, and lit water all in shot.
@@ -2060,6 +2673,31 @@ int main(int argc, char** argv) {
         }
 
         renderer.render(scene, camera);
+
+        // --profile (capture_util): per-pass GPU/CPU timings as JSON. Headless
+        // this makes perf measurable (e.g. the cost of a geometry/texture bump)
+        // instead of eyeballed; interactive, throttle to ~once a second.
+        if (capArgs.profile) {
+            static int profCount = 0;
+            if (capturing || ++profCount % 60 == 0)
+                capture::writeFrameTimings(renderer.lastFrameTimings(), capArgs, shotFrame);
+        }
+
+        // F12: interactive screenshot → aaa_caps/usershot_N.png. Native-res
+        // ground truth for artifact reports — screen captures of the window
+        // get rescaled/compressed and hide texel-scale structure.
+        if (bi.shotRequest) {
+            bi.shotRequest = false;
+            static int userShotN = 0;
+            const auto path = std::filesystem::path(PROJECT_FOLDER) / "aaa_caps" /
+                              ("usershot_" + std::to_string(userShotN++) + ".png");
+            try {
+                renderer.writeFramebuffer(path);
+                std::printf("wrote %s\n", path.string().c_str());
+            } catch (const std::exception& e) {
+                std::cerr << "[shot] failed: " << e.what() << "\n";
+            }
+        }
 
         if (capturing && toggleNightAt > 0 && shotFrame == toggleNightAt) {
             night = true;// runtime day→night flip — the path the UI checkbox takes

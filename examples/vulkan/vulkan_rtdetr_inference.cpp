@@ -135,7 +135,7 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rtdetr::RtDetr
     auto imgOpt = imgLoader.load(imgPath, 4, false);
     if (!imgOpt) { std::cerr << "ERROR: cannot load image '" << imgPath << "'\n"; return 1; }
     auto& img = *imgOpt;
-    std::cout << "Loaded image: " << img.width << "x" << img.height << "\n";
+    std::cout << "Loaded image: " << img.width() << "x" << img.height() << "\n";
 
     std::cout << "Loading weights '" << weightsPath << "' ..." << std::endl;
     model.loadWeights(weightsPath);
@@ -147,13 +147,13 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rtdetr::RtDetr
     // then average a few timed runs for a stable ms / FPS figure.
     std::vector<rtdetr::Detection> detections;
     for (int i = 0; i < 4; ++i) {
-        detections = model.infer(rgba.data(), static_cast<int>(img.width), static_cast<int>(img.height));
+        detections = model.infer(rgba.data(), static_cast<int>(img.width()), static_cast<int>(img.height()));
     }
     constexpr int kRuns = 5;
     double total = 0.0;
     for (int i = 0; i < kRuns; ++i) {
         auto t0 = clk::now();
-        detections = model.infer(rgba.data(), int(img.width), int(img.height));
+        detections = model.infer(rgba.data(), int(img.width()), int(img.height()));
         total += std::chrono::duration<double, std::milli>(clk::now() - t0).count();
     }
     const double ms = total / kRuns;
@@ -185,7 +185,7 @@ static int runDetection(Canvas& canvas, VulkanRenderer& renderer, rtdetr::RtDetr
     FontLoader fontLoader;
     const Font font = fontLoader.defaultFont();
 
-    const float sx = 640.f / float(img.width), sy = 640.f / float(img.height);
+    const float sx = 640.f / float(img.width()), sy = 640.f / float(img.height());
     for (auto& d : detections) {
         float bx1 = d.x1 * sx, bx2 = d.x2 * sx;
         float by1 = 640.f - d.y2 * sy, by2 = 640.f - d.y1 * sy;// flip Y for ortho

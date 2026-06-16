@@ -34,6 +34,18 @@
 // photons land in cells the gather can't find.
 #define kGatherRadius    0.15
 
+// TLAS instance visibility groups (VkAccelerationStructureInstanceKHR.mask).
+// Opaque + alpha-CUTOUT instances carry kRayMaskOpaque; alpha-BLEND and
+// transmissive instances (text decals, alpha quads, glass — anything whose
+// MaterialDesc has alphaCutoff < 0 or transmission > 0, except water) carry
+// kRayMaskAlpha INSTEAD. Pure-visibility occlusion queries (env/sky gather,
+// GI bounces, emissive-NEE shadow tests) trace with cullMask = kRayMaskOpaque
+// so a decal's transparent quad never blocks IBL/GI/emissive light — the HW
+// skips those instances entirely, no per-candidate alpha test needed. Every
+// radiance/primary trace keeps cullMask 0xFF and sees both groups.
+#define kRayMaskOpaque 0x01u
+#define kRayMaskAlpha  0x02u
+
 #ifdef __cplusplus
 
 #include <cstdint>

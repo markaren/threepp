@@ -27,14 +27,23 @@ namespace {
         Renderer& r;
         ColorSpace cs;
         ToneMapping tm;
+        bool ac;
         explicit DataPassGuard(Renderer& renderer)
-            : r(renderer), cs(renderer.outputColorSpace), tm(renderer.toneMapping) {
+            : r(renderer), cs(renderer.outputColorSpace), tm(renderer.toneMapping), ac(renderer.autoClear) {
             r.outputColorSpace = LinearSRGBColorSpace;
             r.toneMapping = ToneMapping::None;
+            // The scan re-renders its targets from scratch every call, so the
+            // caller's autoClear must not leak in. HUD-overlay apps leave
+            // autoClear=false between frames; without a depth clear the
+            // post-process quad fails its own depth test (Less vs the equal
+            // depth it wrote last scan) and the readback target silently
+            // freezes at the previous image.
+            r.autoClear = true;
         }
         ~DataPassGuard() {
             r.outputColorSpace = cs;
             r.toneMapping = tm;
+            r.autoClear = ac;
         }
     };
 
@@ -157,8 +166,7 @@ void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& c
     // directly, so flip it to share the depth's row convention — keeping color
     // and geometry aligned identically on every backend.
     if (renderer.renderTargetFlipY()) {
-        flipImage(sceneTarget_->texture->image().data(), 3,
-                  static_cast<int>(width_), static_cast<int>(height_));
+        flipImage(sceneTarget_->texture->image());
     }
 
     // Linearize depth into packed RG16

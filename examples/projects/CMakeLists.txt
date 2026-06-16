@@ -7,10 +7,15 @@ add_subdirectory(Youbot)
 
 if (TARGET unofficial::omniverse-physx-sdk::sdk)
     add_subdirectory(Physics)
+    add_subdirectory(RobotCell)
     add_subdirectory(Vehicle)
     add_subdirectory(Shooter)
 endif ()
 
 if (THREEPP_WITH_WGPU)
     add_subdirectory(WebTide)
+endif ()
+
+if (TARGET rltools)
+    add_subdirectory(RLtools)
 endif ()

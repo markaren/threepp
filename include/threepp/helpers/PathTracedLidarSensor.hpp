@@ -53,6 +53,16 @@ namespace threepp {
         explicit PathTracedLidarSensor(const LidarModel& model, float maxRange = 100.f);
 
         /**
+         * Depth-camera mode: a pinhole grid of width × height beams with a
+         * vertical FOV of `fovY` degrees (aspect = width/height), looking
+         * along sensor-local -Z — the same pattern and mounting convention
+         * as the raster `DepthSensor`. Lets perception code swap the raster
+         * sensor for a ray-traced one on Vulkan without changing anything
+         * downstream.
+         */
+        PathTracedLidarSensor(float fovY, unsigned int width, unsigned int height, float maxRange = 100.f);
+
+        /**
          * Run one scan. Beams are derived from the current world matrix
          * (composed from `position` / `rotation`) and the cached
          * sensor-local direction table.
@@ -70,6 +80,7 @@ namespace threepp {
 
         void buildDenseBeams(unsigned int hRes, unsigned int vRes);
         void buildModelBeams(const LidarModel& model);
+        void buildCameraBeams(float fovY, unsigned int width, unsigned int height);
     };
 
 }// namespace threepp

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 
@@ -54,13 +55,27 @@ static std::vector<ModelEntry> scanModels(const fs::path& root) {
 
 int main(int argc, char** argv) {
 
-    if (argc != 2) {
+    if (argc < 2) {
         // https://github.com/KhronosGroup/glTF-Sample-Assets
-        std::cout << "Usage: " << argv[0] << " <path_to_gltf_Models_folder>" << std::endl;
+        std::cout << "Usage: " << argv[0]
+                  << " <path_to_gltf_Models_folder> [--debug N] [--shot <name.png>] [--frames N]"
+                  << std::endl;
         return 1;
     }
 
     fs::path modelFolder = argv[1];
+
+    // Optional headless capture (dev): pass a debug view + a shot name to grab
+    // a G-buffer debug PNG and exit, e.g. `... <folder> --debug 2 --shot mot.png`.
+    // 1 Normal, 2 Motion, 3 InstanceID, 4 Albedo.
+    std::string shotPath;
+    int shotFrames = 120, shotFrame = 0, cliDebugView = 0;
+    for (int i = 2; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--shot" && i + 1 < argc) shotPath = argv[++i];
+        else if (a == "--debug" && i + 1 < argc) cliDebugView = std::atoi(argv[++i]);
+        else if (a == "--frames" && i + 1 < argc) shotFrames = std::atoi(argv[++i]);
+    }
     if (!fs::exists(modelFolder) || !fs::is_directory(modelFolder)) {
         std::cerr << "Invalid folder path: " << fs::absolute(modelFolder) << std::endl;
         return 1;
@@ -77,7 +92,7 @@ int main(int argc, char** argv) {
 
     VulkanRenderer renderer(canvas);
     renderer.setRenderMode(VulkanRenderer::RenderMode::RasterFirst);
-    renderer.setHybridDebugView(0);
+    renderer.setHybridDebugView(cliDebugView);
     renderer.toneMapping = ToneMapping::ACESFilmic;
     renderer.toneMappingExposure = 1.0f;
 
@@ -317,7 +332,14 @@ int main(int argc, char** argv) {
         controls.update();
         renderer.render(scene, camera);
 
-        ui.render();
+        if (shotPath.empty()) {
+            ui.render();
+        } else if (++shotFrame >= shotFrames) {
+            const auto path = fs::path(PROJECT_FOLDER) / "aaa_caps" / shotPath;
+            renderer.writeFramebuffer(path);
+            std::cout << "wrote " << path.string() << std::endl;
+            std::exit(0);
+        }
     });
 
     return 0;
