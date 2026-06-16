@@ -4982,6 +4982,12 @@ namespace threepp {
             bool geomDirtyAny = false;
             bool morphDirtyAny = false;
             std::vector<bool> entryGeomDirty(entries.size(), false);
+            // Per-entry "material values bumped" bits — the ONLY entries whose
+            // MaterialDesc must be re-derived in the material-values fast path
+            // (materialFromMesh is a ~25-dynamic_cast + shared_ptr-churn walk).
+            // Filled by both the LEAN in-place diff and the generic compare so
+            // a single material toggle costs O(changed) instead of O(scene).
+            std::vector<bool> entryMatDirty(entries.size(), false);
 
             // LEAN IN-PLACE DIFF: prevSceneFingerprint IS this frame's
             // fingerprint state — diff against the live objects and update it
@@ -5057,7 +5063,7 @@ namespace threepp {
                         matricesSame = false;
                         fp.matrix = en.worldMatrix;
                     }
-                    if (matChanged) materialValuesSame = false;
+                    if (matChanged) { materialValuesSame = false; entryMatDirty[i] = true; }
                     if (xfmChanged || matChanged || geomChanged) {
                         const size_t w = i >> 5;
                         if (w >= meshMovedBits_.size()) meshMovedBits_.resize(w + 1, 0u);
@@ -5284,7 +5290,7 @@ namespace threepp {
                     const bool geomChanged  = (a.geomVersion != b.geomVersion);
                     const bool morphChanged = entryMorphDirty[i];
                     if (xfmChanged) matricesSame = false;
-                    if (matChanged) materialValuesSame = false;
+                    if (matChanged) { materialValuesSame = false; entryMatDirty[i] = true; }
                     if (bonesChanged) bonesDirtyAny = true;
                     if (dispChanged)  displacedDirtyAny = true;
                     if (grassChanged) grassDirtyAny = true;
@@ -5590,18 +5596,38 @@ namespace threepp {
                         // slots left default) to match the full-rebuild layout so
                         // gl_InstanceCustomIndexEXT (== entry index) keeps indexing
                         // the right material. Dummy slots are never sampled.
-                        matDescsCached_.assign(entries.size(), MaterialDesc{});
-                        // Same dedup as the full-rebuild path below: entries
-                        // order is identical (overlay skip matches), so
-                        // identical Material* pointers produce identical
-                        // materialAssetIdx values frame-to-frame.
+                        // TARGETED PATCH: only entries whose material version
+                        // actually bumped (entryMatDirty) get their MaterialDesc
+                        // re-derived. materialFromMesh is a ~25-dynamic_cast walk
+                        // (plus each albedoTexOf/…/occlusionTexOf is another typed
+                        // probe + shared_ptr churn); re-deriving EVERY entry here
+                        // turned a single brake-light / blinker emissive toggle into
+                        // an O(scene) stall — tens of ms once InstancedMesh foliage
+                        // expands the scene to tens of thousands of entries, firing
+                        // several times a second while a blinker ticks. matDescsCached_
+                        // already holds correct values for every unchanged entry (it
+                        // survives matrix-only frames untouched), and a changed
+                        // material keeps its pointer + textures (a texture swap aborts
+                        // to the full structural rebuild), so its dedup index stays
+                        // valid. Full fallback only if the cache size somehow doesn't
+                        // match (never on the fast path that reaches here).
+                        const bool patchMatDescs = matDescsCached_.size() == entries.size();
+                        if (!patchMatDescs) matDescsCached_.assign(entries.size(), MaterialDesc{});
+                        // Same dedup as the full-rebuild path below (consulted only on
+                        // the full-rebuild fallback): entries order is identical
+                        // (overlay skip matches), so identical Material* pointers
+                        // produce identical materialAssetIdx values frame-to-frame.
                         std::unordered_map<const Material*, uint32_t> matAssetMap;
                         for (size_t i = 0; i < entries.size(); ++i) {
                             const MeshEntry& en = entries[i];
                             if (en.isOverlay) continue;// raster-overlay only — no MaterialDesc slot
+                            if (patchMatDescs && !entryMatDirty[i]) continue;// unchanged → keep cached desc
                             Mesh* m = en.mesh;
                             MaterialDesc md = materialFromMesh(*m);
-                            {
+                            if (patchMatDescs) {
+                                // Material* unchanged → its dedup index is stable.
+                                md.materialAssetIdx = matDescsCached_[i].materialAssetIdx;
+                            } else {
                                 const Material* matKey = m->material().get();
                                 auto [matIt, inserted] = matAssetMap.try_emplace(
                                         matKey, static_cast<uint32_t>(matAssetMap.size()));
