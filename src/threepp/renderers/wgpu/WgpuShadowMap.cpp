@@ -363,7 +363,6 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
     numPointShadows_ = 0;
 
     const auto& sl = state_.shadowLimits;
-    const auto mapSize = static_cast<float>(sl.mapSize);
 
     // Collect shadow-casting DirectionalLight and SpotLight instances
     struct ShadowCaster {
@@ -393,6 +392,25 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
     findShadowLights(scene);
 
     if (shadowLights.empty() && pointShadowLights.empty()) return;
+
+    // Honor the largest per-light shadow-map resolution the scene asks for
+    // (LightShadow::mapSize). WebGPU sizes its shadow atlas globally, so pick the
+    // max across the active directional/spot lights and recreate the atlas when
+    // it changes. Clamped so a stray value can't allocate an absurd texture.
+    {
+        uint32_t desired = 0;
+        for (auto& sc : shadowLights)
+            desired = std::max(desired, static_cast<uint32_t>(sc.shadowInterface->shadow->mapSize.x));
+        if (desired != 0) {
+            desired = std::clamp(desired, 1024u, 4096u);
+            if (desired != state_.shadowLimits.mapSize) {
+                state_.shadowLimits.mapSize = desired;
+                dispose();// resets initialized_; init() below rebuilds the atlas at the new size
+            }
+        }
+    }
+
+    const auto mapSize = static_cast<float>(sl.mapSize);
 
     init();
     active_ = true;
