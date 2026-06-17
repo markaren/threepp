@@ -7,7 +7,7 @@
 #include "threepp/lights/lights.hpp"
 #include "threepp/lights/LightShadow.hpp"
 #include "threepp/lights/PointLightShadow.hpp"
-#include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
 
@@ -301,6 +301,43 @@ void WgpuShadowMap::init() {
     pipeDesc.fragment = nullptr;
 
     depthPipeline_ = wgpuDeviceCreateRenderPipeline(state_.device, &pipeDesc);
+
+    // --- Instanced depth pipeline (InstancedMesh casters) ---
+    // Same vertex/depth state as the plain pipeline, plus a binding-28 storage
+    // buffer of per-instance model matrices applied in the vertex stage.
+    {
+        std::string wgsl = buildInstancedDepthWGSL();
+        WGPUShaderSourceWGSL src{};
+        src.chain.sType = WGPUSType_ShaderSourceWGSL;
+        src.code = {.data = wgsl.c_str(), .length = wgsl.size()};
+        WGPUShaderModuleDescriptor ismd{}; ismd.nextInChain = &src.chain;
+        ismd.label = WGPUStringView{"shadow_inst_shader", WGPU_STRLEN} ;
+        instancedDepthShader_ = wgpuDeviceCreateShaderModule(state_.device, &ismd);
+
+        WGPUBindGroupLayoutEntry ie[2]{};
+        ie[0].binding = 0; ie[0].visibility = WGPUShaderStage_Vertex;
+        ie[0].buffer.type = WGPUBufferBindingType_Uniform;
+        ie[0].buffer.hasDynamicOffset = true;
+        ie[0].buffer.minBindingSize = 64;
+        ie[1].binding = 28; ie[1].visibility = WGPUShaderStage_Vertex;
+        ie[1].buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+
+        WGPUBindGroupLayoutDescriptor ibgl{};
+        ibgl.label = WGPUStringView{"shadow_inst_bgl", WGPU_STRLEN} ;
+        ibgl.entryCount = 2; ibgl.entries = ie;
+        instancedDepthBGL_ = wgpuDeviceCreateBindGroupLayout(state_.device, &ibgl);
+
+        WGPUPipelineLayoutDescriptor ipl{};
+        ipl.label = WGPUStringView{"shadow_inst_pl", WGPU_STRLEN} ;
+        ipl.bindGroupLayoutCount = 1; ipl.bindGroupLayouts = &instancedDepthBGL_;
+        instancedDepthPipelineLayout_ = wgpuDeviceCreatePipelineLayout(state_.device, &ipl);
+
+        WGPURenderPipelineDescriptor ipd = pipeDesc;// reuse vertex layout, depth/primitive state
+        ipd.label = WGPUStringView{"shadow_inst_pipe", WGPU_STRLEN} ;
+        ipd.layout = instancedDepthPipelineLayout_;
+        ipd.vertex.module = instancedDepthShader_;
+        instancedDepthPipeline_ = wgpuDeviceCreateRenderPipeline(state_.device, &ipd);
+    }
 
     // --- Skinned depth pipeline ---
     {
@@ -726,6 +763,36 @@ WGPUBindGroup WgpuShadowMap::buildMorphBindGroup(Mesh* mesh) {
     return wgpuDeviceCreateBindGroup(state_.device, &bgd);
 }
 
+WGPUBindGroup WgpuShadowMap::buildInstancedBindGroup(Mesh* mesh) {
+    auto* im = static_cast<InstancedMesh*>(mesh);
+    auto* attr = im->instanceMatrix();
+    const size_t bytes = static_cast<size_t>(im->count()) * 16 * sizeof(float);
+
+    auto& e = instanceCache_[mesh];
+    if (!e.buf || e.bufSize != bytes) {
+        if (e.buf) wgpuBufferRelease(e.buf);
+        WGPUBufferDescriptor bd{};
+        bd.size = bytes;
+        bd.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+        e.buf = wgpuDeviceCreateBuffer(state_.device, &bd);
+        e.bufSize = bytes;
+        e.version = 0xffffffffu;// force re-upload into the fresh buffer
+    }
+    const uint32_t ver = attr ? attr->version : 0u;
+    if (e.version != ver) {
+        if (attr) wgpuQueueWriteBuffer(state_.queue, e.buf, 0, attr->array().data(), bytes);
+        e.version = ver;
+    }
+
+    WGPUBindGroupEntry entries[2]{};
+    entries[0].binding = 0;  entries[0].buffer = depthTransformBuffer_; entries[0].size = 64;
+    entries[1].binding = 28; entries[1].buffer = e.buf;                 entries[1].size = e.bufSize;
+    WGPUBindGroupDescriptor bgd{};
+    bgd.label = WGPUStringView{"shadow_inst_bg", WGPU_STRLEN} ;
+    bgd.layout = instancedDepthBGL_; bgd.entryCount = 2; bgd.entries = entries;
+    return wgpuDeviceCreateBindGroup(state_.device, &bgd);
+}
+
 void WgpuShadowMap::renderPass(WGPUCommandEncoder encoder, Object3D& scene,
                                const Matrix4& lightVP, int lightIndex) {
 
@@ -767,6 +834,10 @@ void WgpuShadowMap::renderPass(WGPUCommandEncoder encoder, Object3D& scene,
         Mesh* mesh = meshes[i];
         uint32_t dynOffset = static_cast<uint32_t>(i) * kDynStride;
 
+        auto* instancedMesh = mesh->as<InstancedMesh>();
+        const uint32_t instanceCount = instancedMesh
+                ? static_cast<uint32_t>(instancedMesh->count()) : 1u;
+
         WGPUBindGroup bg = nullptr;
         if (meshIsSkinned(mesh)) {
             wgpuRenderPassEncoderSetPipeline(pass, skinnedDepthPipeline_);
@@ -775,6 +846,10 @@ void WgpuShadowMap::renderPass(WGPUCommandEncoder encoder, Object3D& scene,
         } else if (meshHasMorphTargets(mesh)) {
             wgpuRenderPassEncoderSetPipeline(pass, morphDepthPipeline_);
             bg = buildMorphBindGroup(mesh);
+            wgpuRenderPassEncoderSetBindGroup(pass, 0, bg, 1, &dynOffset);
+        } else if (instancedMesh) {
+            wgpuRenderPassEncoderSetPipeline(pass, instancedDepthPipeline_);
+            bg = buildInstancedBindGroup(mesh);
             wgpuRenderPassEncoderSetBindGroup(pass, 0, bg, 1, &dynOffset);
         } else {
             wgpuRenderPassEncoderSetPipeline(pass, depthPipeline_);
@@ -789,9 +864,9 @@ void WgpuShadowMap::renderPass(WGPUCommandEncoder encoder, Object3D& scene,
                 wgpuRenderPassEncoderSetIndexBuffer(pass, gb.indexBuffer,
                                                      WGPUIndexFormat_Uint32, 0,
                                                      gb.indexCount * sizeof(uint32_t));
-                wgpuRenderPassEncoderDrawIndexed(pass, gb.indexCount, 1, 0, 0, 0);
+                wgpuRenderPassEncoderDrawIndexed(pass, gb.indexCount, instanceCount, 0, 0, 0);
             } else {
-                wgpuRenderPassEncoderDraw(pass, gb.vertexCount, 1, 0, 0);
+                wgpuRenderPassEncoderDraw(pass, gb.vertexCount, instanceCount, 0, 0);
             }
         }
 
@@ -830,6 +905,11 @@ void WgpuShadowMap::dispose() {
     if (morphDepthBGL_) wgpuBindGroupLayoutRelease(morphDepthBGL_);
     if (morphDepthShader_) wgpuShaderModuleRelease(morphDepthShader_);
 
+    if (instancedDepthPipeline_) wgpuRenderPipelineRelease(instancedDepthPipeline_);
+    if (instancedDepthPipelineLayout_) wgpuPipelineLayoutRelease(instancedDepthPipelineLayout_);
+    if (instancedDepthBGL_) wgpuBindGroupLayoutRelease(instancedDepthBGL_);
+    if (instancedDepthShader_) wgpuShaderModuleRelease(instancedDepthShader_);
+
     for (auto& [mesh, e] : skinCache_) {
         if (e.skinBuf)   wgpuBufferRelease(e.skinBuf);
         if (e.vertexBuf) wgpuBufferRelease(e.vertexBuf);
@@ -840,6 +920,11 @@ void WgpuShadowMap::dispose() {
         if (e.buf) wgpuBufferRelease(e.buf);
     }
     morphCache_.clear();
+
+    for (auto& [mesh, e] : instanceCache_) {
+        if (e.buf) wgpuBufferRelease(e.buf);
+    }
+    instanceCache_.clear();
 
     depthArrayTexture_ = nullptr;
     depthArrayView_ = nullptr;
@@ -855,6 +940,8 @@ void WgpuShadowMap::dispose() {
     skinnedDepthBGL_ = nullptr; skinnedDepthShader_ = nullptr;
     morphDepthPipeline_ = nullptr; morphDepthPipelineLayout_ = nullptr;
     morphDepthBGL_ = nullptr; morphDepthShader_ = nullptr;
+    instancedDepthPipeline_ = nullptr; instancedDepthPipelineLayout_ = nullptr;
+    instancedDepthBGL_ = nullptr; instancedDepthShader_ = nullptr;
 
     lights_.clear();
 

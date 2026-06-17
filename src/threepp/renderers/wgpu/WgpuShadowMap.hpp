@@ -88,6 +88,12 @@ namespace threepp::wgpu {
         WGPUBuffer depthTransformBuffer_ = nullptr;
         WGPUBindGroup depthBindGroup_ = nullptr;
 
+        // Instanced depth pipeline (InstancedMesh casters)
+        WGPURenderPipeline instancedDepthPipeline_ = nullptr;
+        WGPUPipelineLayout instancedDepthPipelineLayout_ = nullptr;
+        WGPUBindGroupLayout instancedDepthBGL_ = nullptr;
+        WGPUShaderModule instancedDepthShader_ = nullptr;
+
         // Skinned depth pipeline
         WGPURenderPipeline skinnedDepthPipeline_ = nullptr;
         WGPUPipelineLayout skinnedDepthPipelineLayout_ = nullptr;
@@ -116,6 +122,14 @@ namespace threepp::wgpu {
         };
         std::unordered_map<const Mesh*, MorphBuffers> morphCache_;
 
+        // Per-mesh persistent GPU buffer of InstancedMesh model matrices (binding 28).
+        struct InstanceBuffers {
+            WGPUBuffer buf = nullptr;
+            size_t bufSize = 0;
+            uint32_t version = 0xffffffffu;
+        };
+        std::unordered_map<const Mesh*, InstanceBuffers> instanceCache_;
+
         // Per-light entries (dir/spot)
         std::vector<ShadowLightEntry> lights_;
 
@@ -127,6 +141,7 @@ namespace threepp::wgpu {
         // a skinned or morph-target mesh, uploading/updating the cached GPU buffers.
         WGPUBindGroup buildSkinnedBindGroup(Mesh* mesh);
         WGPUBindGroup buildMorphBindGroup(Mesh* mesh);
+        WGPUBindGroup buildInstancedBindGroup(Mesh* mesh);
     };
 
 }// namespace threepp::wgpu
