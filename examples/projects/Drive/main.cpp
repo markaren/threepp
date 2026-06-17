@@ -25,6 +25,7 @@
 #include "threepp/extras/physx/PhysxWorld.hpp"
 #include "threepp/extras/road/RoadGenerator.hpp"
 #include "threepp/extras/terrain/TerrainGenerator.hpp"
+#include "threepp/extras/vegetation/GrassField.hpp"
 #include "threepp/extras/vegetation/TreeGenerator.hpp"
 #include "threepp/extras/vegetation/TreeTextures.hpp"
 #include "threepp/loaders/RGBELoader.hpp"
@@ -88,43 +89,6 @@ namespace {
         v.leafMat->side = Side::Double;
         v.leafMat->vertexColors = true;
         return v;
-    }
-
-    std::shared_ptr<BufferGeometry> makeGrassBlade() {
-        constexpr int seg = 4;
-        constexpr float wBase = 0.05f;
-        const Vector3 bottom{0.06f, 0.13f, 0.04f};
-        const Vector3 top{0.20f, 0.34f, 0.11f};
-        std::vector<float> pos, nrm, uv, col;
-        std::vector<unsigned int> idx;
-        for (int i = 0; i <= seg; ++i) {
-            const float t = static_cast<float>(i) / seg;
-            const float y = t, w = wBase * (1.f - t);
-            const float r = bottom.x + (top.x - bottom.x) * t;
-            const float g = bottom.y + (top.y - bottom.y) * t;
-            const float b = bottom.z + (top.z - bottom.z) * t;
-            for (int s = 0; s < 2; ++s) {
-                pos.push_back(s == 0 ? -w : w);
-                pos.push_back(y);
-                pos.push_back(0.f);
-                nrm.push_back(0.f); nrm.push_back(0.85f); nrm.push_back(0.53f);
-                uv.push_back(s == 0 ? 0.f : 1.f); uv.push_back(t);
-                col.push_back(r); col.push_back(g); col.push_back(b);
-            }
-        }
-        for (int i = 0; i < seg; ++i) {
-            const auto a = static_cast<unsigned int>(i * 2);
-            const unsigned int b = a + 1, c = a + 2, d = a + 3;
-            idx.push_back(a); idx.push_back(b); idx.push_back(c);
-            idx.push_back(b); idx.push_back(d); idx.push_back(c);
-        }
-        auto geo = BufferGeometry::create();
-        geo->setIndex(idx);
-        geo->setAttribute("position", FloatBufferAttribute::create(pos, 3));
-        geo->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
-        geo->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
-        geo->setAttribute("color", FloatBufferAttribute::create(col, 3));
-        return geo;
     }
 
     std::shared_ptr<BufferGeometry> makeFlowerCard() {
@@ -234,7 +198,6 @@ int main(int argc, char** argv) {
         vk->setRenderScale(0.8f);
     }
 #endif
-    const bool isGL = !vulkanBackend && dynamic_cast<GLRenderer*>(renderer.get()) != nullptr;
 
     renderer->setClearColor(Color(0.62f, 0.72f, 0.84f));
     renderer->toneMapping = ToneMapping::Neutral;
@@ -529,14 +492,30 @@ int main(int argc, char** argv) {
         }
     };
 
+    // GL/WGPU: a GrassField (instanced GPU vertex-shader wind) so the verge
+    // sways; held here so the animate loop can advance its clock and day/night
+    // can retint its fog. Vulkan (path tracer) has no ShaderMaterial path, so
+    // it falls back to static blades.
+    std::shared_ptr<GrassField> windGrass;
     {
-        auto grassMat = MeshStandardMaterial::create(
-                MeshStandardMaterial::Params{}.color(Color::white).roughness(0.97f).metalness(0.f));
-        grassMat->vertexColors = true;
-        grassMat->side = Side::Double;
-        grassMat->envMapIntensity = 0.45f;
         const int bladeCount = vulkanBackend ? 14000 : 42000;
-        auto grass = InstancedMesh::create(makeGrassBlade(), grassMat, static_cast<size_t>(bladeCount));
+        std::shared_ptr<InstancedMesh> grass;
+        if (vulkanBackend) {
+            auto grassMat = MeshStandardMaterial::create(
+                    MeshStandardMaterial::Params{}.color(Color::white).roughness(0.97f).metalness(0.f));
+            grassMat->vertexColors = true;
+            grassMat->side = Side::Double;
+            grassMat->envMapIntensity = 0.45f;
+            grass = InstancedMesh::create(GrassField::bladeGeometry(), grassMat, static_cast<size_t>(bladeCount));
+        } else {
+            GrassField::Params gp;
+            gp.windStrength = 0.16f;
+            gp.fogColor = {0.66f, 0.75f, 0.86f};// matches the day Fog set up below
+            gp.fogNear = terr.worldSize * 0.3f;
+            gp.fogFar = terr.worldSize * 0.95f;
+            windGrass = GrassField::create(static_cast<size_t>(bladeCount), gp);
+            grass = windGrass;
+        }
         std::mt19937 rng(7u);
         std::uniform_real_distribution<float> u01(0.f, 1.f);
         const Vector3 up{0.f, 1.f, 0.f};
@@ -747,6 +726,7 @@ int main(int argc, char** argv) {
             if (ambient) ambient->intensity = 0.05f;
             scene->background = nightFog;
             if (scene->fog) std::get<Fog>(*scene->fog) = Fog(nightFog, terr.worldSize * 0.18f, terr.worldSize * 0.7f);
+            if (windGrass) windGrass->setFog({nightFog.r, nightFog.g, nightFog.b}, terr.worldSize * 0.18f, terr.worldSize * 0.7f);
             carRig->setHeadlights(true);
         } else {
             sun->intensity = 2.8f;
@@ -754,12 +734,18 @@ int main(int argc, char** argv) {
             if (ambient) ambient->intensity = 0.25f;
             if (hdr) scene->background = hdr; else scene->background = dayFog;
             if (scene->fog) std::get<Fog>(*scene->fog) = Fog(dayFog, terr.worldSize * 0.3f, terr.worldSize * 0.95f);
+            if (windGrass) windGrass->setFog({dayFog.r, dayFog.g, dayFog.b}, terr.worldSize * 0.3f, terr.worldSize * 0.95f);
         }
     };
 
     Clock clock;
+    float grassTime = 0.f;
     canvas.animate([&] {
         const float dt = clock.getDelta();
+
+        // Advance the GrassField wind clock (GL/WGPU only; null on Vulkan).
+        grassTime += dt;
+        if (windGrass) windGrass->setTime(grassTime);
 
         fpsAccum += dt;
         if (++fpsFrames >= 30 || fpsAccum >= 0.5f) {
