@@ -122,6 +122,62 @@ namespace conveyor {
         return geom;
     }
 
+    // Build a vertical wall ribbon of the given height that stands ON the centerline
+    // (base at the centerline, top extruded straight up). Same waypoint system as the
+    // belt ribbon — used for separators / guide rails. The face normal is the
+    // horizontal lateral (perpendicular to travel), so the wall is visible from both
+    // sides with a double-sided material. UV: v = cumulative arc length, u = height.
+    inline std::shared_ptr<BufferGeometry> wallGeometry(const std::vector<Vector3>& centerline,
+                                                        float height) {
+        auto geom = BufferGeometry::create();
+        const size_t n = centerline.size();
+        if (n < 2) return geom;
+
+        const Vector3 up(0, 1, 0);
+        std::vector<float> pos, nrm, uv;
+        pos.reserve(n * 6);
+        nrm.reserve(n * 6);
+        uv.reserve(n * 4);
+
+        float runLen = 0.f;
+        for (size_t i = 0; i < n; ++i) {
+            if (i > 0) runLen += centerline[i].distanceTo(centerline[i - 1]);
+
+            Vector3 t;
+            if (i == 0) t.subVectors(centerline[1], centerline[0]);
+            else if (i + 1 == n) t.subVectors(centerline[n - 1], centerline[n - 2]);
+            else t.subVectors(centerline[i + 1], centerline[i - 1]);
+            if (t.length() < 1e-6f) t.set(1, 0, 0);
+            t.normalize();
+
+            Vector3 lat;// horizontal face normal
+            if (std::abs(t.dot(up)) > 0.999f) lat.set(0, 0, 1);
+            else lat.crossVectors(t, up).normalize();
+
+            const Vector3& c = centerline[i];
+            pos.insert(pos.end(), {c.x, c.y, c.z});                                      // base
+            pos.insert(pos.end(), {c.x + up.x * height, c.y + up.y * height, c.z + up.z * height});// top
+            nrm.insert(nrm.end(), {lat.x, lat.y, lat.z, lat.x, lat.y, lat.z});
+            uv.insert(uv.end(), {runLen, 0.f, runLen, 1.f});
+        }
+
+        std::vector<unsigned int> idx;
+        idx.reserve((n - 1) * 6);
+        for (size_t i = 0; i + 1 < n; ++i) {
+            const auto b0 = static_cast<unsigned int>(i * 2);
+            const unsigned int t0 = b0 + 1, b1 = b0 + 2, t1 = b0 + 3;
+            idx.insert(idx.end(), {b0, b1, t1, b0, t1, t0});
+        }
+
+        geom->setAttribute("position", FloatBufferAttribute::create(pos, 3));
+        geom->setAttribute("normal", FloatBufferAttribute::create(nrm, 3));
+        geom->setAttribute("uv", FloatBufferAttribute::create(uv, 2));
+        geom->setIndex(idx);
+        geom->computeBoundingSphere();
+        geom->computeBoundingBox();
+        return geom;
+    }
+
     // A path waypoint. Normally a point on the centerline; if arcCenter is set, this
     // point is the CENTRE of a circular arc between its two neighbours (start, end) —
     // used for exact 90/180 horizontal bends instead of a spline approximation.
@@ -263,6 +319,10 @@ namespace conveyor {
         float beltSpeed = 0.6f;
         bool reverse = false;
         bool smooth = true;// spline through the (non-arc) waypoints
+        // Separator: a collision-only vertical wall along the centerline (a guide rail /
+        // lane divider) instead of a moving belt surface. Uses the same waypoints.
+        bool separator = false;
+        float wallHeight = 0.5f;
     };
 
     struct Layout {
@@ -290,6 +350,8 @@ namespace conveyor {
             jp["beltSpeed"] = pa.beltSpeed;
             jp["reverse"] = pa.reverse;
             jp["smooth"] = pa.smooth;
+            jp["separator"] = pa.separator;
+            jp["wallHeight"] = pa.wallHeight;
             jp["waypoints"] = nlohmann::json::array();
             for (const auto& w : pa.waypoints) {
                 if (w.arcCenter) jp["waypoints"].push_back({w.pos.x, w.pos.y, w.pos.z, 1});
@@ -339,6 +401,8 @@ namespace conveyor {
                 p.beltSpeed = jp.value("beltSpeed", 0.6f);
                 p.reverse = jp.value("reverse", false);
                 p.smooth = jp.value("smooth", true);
+                p.separator = jp.value("separator", false);
+                p.wallHeight = jp.value("wallHeight", 0.5f);
                 if (auto w = jp.find("waypoints"); w != jp.end() && w->is_array()) readWaypoints(*w, p.waypoints);
                 out.paths.push_back(p);
             }

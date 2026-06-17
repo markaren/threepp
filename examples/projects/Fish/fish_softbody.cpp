@@ -530,13 +530,54 @@ int main(int argc, char** argv) {
         }
     };
 
+    // Separator: a collision-only vertical wall along a waypoint centerline (guide
+    // rail / lane divider) — STATIC thin boxes per segment (no belt velocity), plus a
+    // thin double-sided visual so it's placeable. Reuses the same waypoint system.
+    auto wallVisualMat = MeshStandardMaterial::create();
+    wallVisualMat->color = Color(0xbfc6cc);
+    wallVisualMat->roughness = 0.7f;
+    wallVisualMat->metalness = 0.f;
+    wallVisualMat->transparent = true;
+    wallVisualMat->opacity = 0.55f;
+    wallVisualMat->side = Side::Double;
+    constexpr float wallThick = 0.04f;
+    auto buildPathWall = [&](const std::vector<conveyor::Waypoint>& ctrl, float height, bool smooth) {
+        const std::vector<Vector3> pts = conveyor::resamplePath(ctrl, smooth, 5);
+        for (size_t i = 0; i + 1 < pts.size(); ++i) {
+            const Vector3& a = pts[i];
+            const Vector3& b = pts[i + 1];
+            const Vector3 d(b.x - a.x, b.y - a.y, b.z - a.z);
+            const float len = d.length();
+            if (len < 1e-3f) continue;
+            const PxQuat q = toPxQuat(conveyor::segmentOrientation(a, b));
+            const PxVec3 up = q.rotate(PxVec3(0, 1, 0));// frame normal — vertical on a flat belt
+            const PxVec3 center((a.x + b.x) * 0.5f + up.x * height * 0.5f,
+                                (a.y + b.y) * 0.5f + up.y * height * 0.5f,
+                                (a.z + b.z) * 0.5f + up.z * height * 0.5f);
+            // Kinematic (like the belts) so it reliably collides with the GPU-simulated
+            // deformable fish, but never added to belts[] → its target is never advanced,
+            // so it stays put: an immovable collision-only wall.
+            PxRigidDynamic* actor = world.physics().createRigidDynamic(PxTransform(center, q));
+            actor->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
+            PxShape* shape = world.physics().createShape(
+                    PxBoxGeometry(len * 0.5f, height * 0.5f, wallThick * 0.5f), *beltMat, true);
+            actor->attachShape(*shape);
+            shape->release();
+            world.scene().addActor(*actor);
+        }
+        const std::vector<Vector3> visPts = conveyor::resamplePath(ctrl, smooth);
+        if (visPts.size() >= 2)
+            scene.add(Mesh::create(conveyor::wallGeometry(visPts, height), wallVisualMat));
+    };
+
     if (auto layout = conveyor::loadLayout(layoutPath); layout) {
         std::cout << "Loaded conveyor layout (" << layout->pieces.size() << " pieces, "
                   << layout->paths.size() << " paths) from " << layoutPath << std::endl;
         for (const auto& piece : layout->pieces) addConveyorVisual(piece);
         if (!layout->paths.empty()) {
             for (const auto& p : layout->paths) {
-                buildPathBelts(p.waypoints, p.beltWidth, p.beltSpeed, p.reverse, p.smooth);
+                if (p.separator) buildPathWall(p.waypoints, p.wallHeight, p.smooth);
+                else buildPathBelts(p.waypoints, p.beltWidth, p.beltSpeed, p.reverse, p.smooth);
             }
         } else {
             for (const auto& piece : layout->pieces) addStraightBelt(piece);

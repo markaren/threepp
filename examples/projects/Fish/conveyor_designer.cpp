@@ -154,6 +154,9 @@ int main(int argc, char** argv) {
         std::vector<char> arcCenter;// parallel to markers: 1 = this is an arc centre
         float beltWidth = 1.0f, beltSpeed = 0.6f;
         bool reverse = false, smooth = true;
+        // Separator: a collision-only vertical wall along the centerline instead of a
+        // belt. beltWidth is reused as the wall height when this is set.
+        bool separator = false;
         std::shared_ptr<MeshBasicMaterial> markerMat, planeMat;
         std::shared_ptr<LineBasicMaterial> lineMat;
         std::shared_ptr<Line> line;
@@ -163,6 +166,7 @@ int main(int argc, char** argv) {
         std::vector<Vector3> cacheCtrl;
         float cacheWidth = -1.f;
         bool cacheSmooth = true;
+        bool cacheSeparator = false;
     };
     std::vector<DesignPath> paths;
     int activePath = -1;
@@ -449,11 +453,17 @@ int main(int argc, char** argv) {
                 ImGui::SameLine();
                 if (ImGui::Button("Delete waypoint")) deleteWaypoint(selectedWp);
             }
-            ImGui::SliderFloat("Belt width", &path.beltWidth, 0.1f, 3.f);
-            ImGui::SliderFloat("Belt speed (m/s)", &path.beltSpeed, 0.f, 3.f);
-            ImGui::Checkbox("Reverse flow", &path.reverse);
-            ImGui::SameLine();
-            ImGui::Checkbox("Smooth (spline)", &path.smooth);
+            ImGui::Checkbox("Separator (vertical wall, collision-only)", &path.separator);
+            if (path.separator) {
+                ImGui::SliderFloat("Wall height", &path.beltWidth, 0.1f, 3.f);
+                ImGui::Checkbox("Smooth (spline)", &path.smooth);
+            } else {
+                ImGui::SliderFloat("Belt width", &path.beltWidth, 0.1f, 3.f);
+                ImGui::SliderFloat("Belt speed (m/s)", &path.beltSpeed, 0.f, 3.f);
+                ImGui::Checkbox("Reverse flow", &path.reverse);
+                ImGui::SameLine();
+                ImGui::Checkbox("Smooth (spline)", &path.smooth);
+            }
         }
 
         ImGui::Separator();
@@ -475,6 +485,8 @@ int main(int argc, char** argv) {
                 cp.beltSpeed = path.beltSpeed;
                 cp.reverse = path.reverse;
                 cp.smooth = path.smooth;
+                cp.separator = path.separator;
+                cp.wallHeight = path.beltWidth;// designer reuses the width slider as wall height
                 for (size_t k = 0; k < path.markers.size(); ++k) {
                     conveyor::Waypoint w;
                     w.pos = path.markers[k]->position;
@@ -503,7 +515,8 @@ int main(int argc, char** argv) {
                 for (auto& lp : loaded->paths) {
                     addPath();
                     auto& path = paths.back();
-                    path.beltWidth = lp.beltWidth;
+                    path.separator = lp.separator;
+                    path.beltWidth = lp.separator ? lp.wallHeight : lp.beltWidth;// width slider doubles as height
                     path.beltSpeed = lp.beltSpeed;
                     path.reverse = lp.reverse;
                     path.smooth = lp.smooth;
@@ -552,7 +565,7 @@ int main(int argc, char** argv) {
         // frame would be wasteful). While a waypoint is being dragged it stays dirty.
         for (auto& path : paths) {
             bool dirty = !path.cacheValid || path.cacheWidth != path.beltWidth ||
-                         path.cacheSmooth != path.smooth ||
+                         path.cacheSmooth != path.smooth || path.cacheSeparator != path.separator ||
                          path.cacheCtrl.size() != path.markers.size();
             if (!dirty) {
                 for (size_t i = 0; i < path.markers.size(); ++i) {
@@ -571,6 +584,7 @@ int main(int argc, char** argv) {
             for (auto& m : path.markers) path.cacheCtrl.push_back(m->position);
             path.cacheWidth = path.beltWidth;
             path.cacheSmooth = path.smooth;
+            path.cacheSeparator = path.separator;
             path.cacheValid = true;
 
             if (path.line) {
@@ -600,7 +614,10 @@ int main(int argc, char** argv) {
                 // segment: neighbouring quads share their cross-section edge, so bends
                 // stay gap-free (independent boxes fan apart on the outside of a turn).
                 // Vertices are world-space, so the mesh keeps an identity transform.
-                auto ribbon = Mesh::create(conveyor::ribbonGeometry(pts, path.beltWidth), path.planeMat);
+                // A separator previews as a vertical wall of the same height (beltWidth).
+                auto geom = path.separator ? conveyor::wallGeometry(pts, path.beltWidth)
+                                           : conveyor::ribbonGeometry(pts, path.beltWidth);
+                auto ribbon = Mesh::create(geom, path.planeMat);
                 scene.add(ribbon);
                 path.preview.push_back(ribbon);
             }
