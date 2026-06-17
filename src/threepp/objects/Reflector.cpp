@@ -48,6 +48,11 @@ namespace {
                 void main() {
                     vec4 base = texture2DProj( tDiffuse, vUv );
                     gl_FragColor = vec4( blendOverlay( base.rgb, color ), 1.0 );
+                    // Apply the output color-space transform every threepp material does.
+                    // GL encodes sRGB in-shader (its framebuffer is not sRGB); on WGPU this is
+                    // a no-op macro because the sRGB swapchain encodes in hardware. Without it
+                    // the reflection is never encoded on GL and renders too dark vs WGPU.
+                    gl_FragColor = linearToOutputTexel( gl_FragColor );
                 })"
 
         };
