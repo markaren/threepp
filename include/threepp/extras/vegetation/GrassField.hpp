@@ -66,9 +66,13 @@ namespace threepp {
 
         [[nodiscard]] ShaderMaterial& windMaterial() const { return *windMaterial_; }
 
-        static std::shared_ptr<GrassField> create(size_t bladeCount, const Params& params = {}) {
+        static std::shared_ptr<GrassField> create(size_t bladeCount, const Params& params) {
             return std::make_shared<GrassField>(
                     bladeGeometry(params.segments), makeMaterial(params), bladeCount);
+        }
+
+        static std::shared_ptr<GrassField> create(size_t bladeCount) {
+            return create(bladeCount, Params{});
         }
 
         // A single tapered blade (origin at the base, unit height along +Y;
