@@ -101,10 +101,12 @@ int main() {
 
     auto light1 = AmbientLight::create(Color::white);
     auto light2 = DirectionalLight::create(Color::white);
-    light2->shadow->camera->as<OrthographicCamera>()->top = 15;
-    light2->shadow->camera->as<OrthographicCamera>()->bottom = -15;
-    light2->shadow->camera->as<OrthographicCamera>()->left = 15;
-    light2->shadow->camera->as<OrthographicCamera>()->right = -15;
+    {
+        auto* sc = light2->shadow->camera->as<OrthographicCamera>();
+        sc->left = sc->bottom = -15;
+        sc->right = sc->top = 15;
+        sc->farPlane = 300;// light is ~150 units out — keep the crane inside the frustum
+    }
     light2->position.set(-100, 100, 50);
     light2->castShadow = true;
     scene->add(light1);
