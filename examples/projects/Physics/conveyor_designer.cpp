@@ -59,8 +59,8 @@ namespace {
         if (!tex) return 0;
         auto& img = tex->image();
         auto& data = img.data<unsigned char>();
-        if (data.empty() || img.width == 0 || img.height == 0) return 0;
-        const std::size_t channels = data.size() / (static_cast<std::size_t>(img.width) * img.height);
+        if (data.empty() || img.width() == 0 || img.height() == 0) return 0;
+        const std::size_t channels = data.size() / (static_cast<std::size_t>(img.width()) * img.height());
         const GLenum fmt = channels == 4 ? GL_RGBA : (channels == 3 ? GL_RGB : 0);
         if (fmt == 0) return 0;
 
@@ -73,7 +73,7 @@ namespace {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(fmt),
-                     static_cast<GLsizei>(img.width), static_cast<GLsizei>(img.height),
+                     static_cast<GLsizei>(img.width()), static_cast<GLsizei>(img.height()),
                      0, fmt, GL_UNSIGNED_BYTE, data.data());
         return id;
 #else
@@ -170,7 +170,7 @@ int main(int argc, char** argv) {
 
     TransformControls controls(*camera, canvas);
     controls.setMode("translate");
-    scene.add(controls);
+    scene.addRef(controls);
 
     LambdaEventListener draggingListener([&](Event& e) {
         orbit.enabled = !std::any_cast<bool>(e.target);
