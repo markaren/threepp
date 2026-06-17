@@ -136,7 +136,8 @@ const std::vector<WGPUBindGroupEntry>& WgpuBindGroups::buildCustom(
         size_t lightUniformSize,
         WGPUBuffer customUniformBuffer, uint32_t customUniformSize,
         ShaderMaterial* sm,
-        const TextureList& textures) {
+        const TextureList& textures,
+        WGPUBuffer instanceBuffer, size_t instanceSize) {
     entries_.clear();
 
     // Binding 0: transform
@@ -155,6 +156,12 @@ const std::vector<WGPUBindGroupEntry>& WgpuBindGroups::buildCustom(
     for (auto& [name, views] : textures) {
         { WGPUBindGroupEntry e{}; e.binding = nextBinding++; e.textureView = views.first; entries_.push_back(e); }
         { WGPUBindGroupEntry e{}; e.binding = nextBinding++; e.sampler = views.second; entries_.push_back(e); }
+    }
+
+    // Binding 28: per-instance model-matrix storage buffer (InstancedMesh).
+    if (instanceBuffer) {
+        WGPUBindGroupEntry e{}; e.binding = 28; e.buffer = instanceBuffer; e.offset = 0; e.size = instanceSize;
+        entries_.push_back(e);
     }
 
     return entries_;

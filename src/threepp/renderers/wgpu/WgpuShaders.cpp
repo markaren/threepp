@@ -1210,6 +1210,20 @@ struct VertexInput { @location(0) position: vec3<f32>, @location(1) normal: vec3
 )";
 }
 
+std::string threepp::wgpu::buildInstancedDepthWGSL() {
+    // u.mvp = lightVP * mesh.matrixWorld; per-instance model from binding 28.
+    return R"(struct DepthUniforms { mvp: mat4x4<f32> };
+@group(0) @binding(0) var<uniform> u: DepthUniforms;
+struct InstanceData { model: mat4x4<f32> };
+@group(0) @binding(28) var<storage, read> instances: array<InstanceData>;
+struct VertexInput { @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv: vec2<f32>, @location(3) color: vec3<f32> };
+@vertex fn vs_main(in: VertexInput, @builtin(instance_index) iid: u32) -> @builtin(position) vec4<f32> {
+    return u.mvp * instances[iid].model * vec4<f32>(in.position, 1.0);
+}
+@fragment fn fs_main() {}
+)";
+}
+
 std::string threepp::wgpu::buildSkinnedDepthWGSL() {
     return R"(
 struct DepthUniforms { mvp: mat4x4<f32> };

@@ -63,7 +63,22 @@ namespace {
 
 int main() {
 
-    Canvas canvas("RLtools x threepp - SAC Pendulum field", {{"aa", 4}, {"size", WindowSize{1280, 800}}});
+    // HUD design units are logical pixels on a 96-dpi display. GLFW window
+    // coordinates are physical pixels on Windows/X11, so every HUD design unit —
+    // text AND the offsets between lines — is multiplied by the monitor content
+    // scale; scaling only the text (as before) left the lines spaced for 96 dpi
+    // and they overlapped on hi-dpi displays. On macOS window coordinates are
+    // already logical points (the renderer compensates via pixelRatio), uiScale = 1.
+    float uiScale = 1.f;
+#ifndef __APPLE__
+    uiScale = monitor::contentScale().first;
+#endif
+
+    // scale the window with the HUD, but keep it on screen
+    const auto screen = monitor::monitorSize();
+    const int winW = std::min(static_cast<int>(1280 * uiScale), screen.width() * 9 / 10);
+    const int winH = std::min(static_cast<int>(800 * uiScale), screen.height() * 9 / 10);
+    Canvas canvas("RLtools x threepp - SAC Pendulum field", {{"aa", 4}, {"size", WindowSize{winW, winH}}});
     auto renderer = createRenderer(canvas);
     renderer->autoClear = true;
 
@@ -144,15 +159,14 @@ int main() {
     // ---- HUD text -------------------------------------------------------------
     FontLoader fontLoader;
     const auto font = fontLoader.defaultFont();
-    const float cs = monitor::contentScale().first;
 
     auto makeHud = [&](float px, float py, float sizePx, const Color& col) {
-        auto t = TextSprite::create(font, sizePx * cs);
+        auto t = TextSprite::create(font, sizePx * uiScale);
         t->setColor(col);
         t->setVerticalAlignment(TextSprite::VerticalAlignment::Below);
         t->screenSpace = true;
         t->screenAnchor.set(0.f, 1.f);// top-left
-        t->position.set(px, py, 0.f);
+        t->position.set(px * uiScale, py * uiScale, 0.f);
         scene->add(t);
         return t;
     };

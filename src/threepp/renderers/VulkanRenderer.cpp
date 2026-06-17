@@ -68,10 +68,12 @@
 #include "threepp/objects/GrassMesh.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/ParticleSystem.hpp"
 #include "threepp/objects/Skeleton.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
+#include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/renderers/VulkanRenderer.hpp"
 #include "threepp/renderers/vulkan/water/OceanFFT.hpp"
 #include "threepp/scenes/Scene.hpp"
@@ -107,6 +109,9 @@
 #include "threepp/renderers/vulkan/shaders/event_shade.comp.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_sprite.vert.spv.h"
 #include "threepp/renderers/vulkan/shaders/overlay_sprite.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/particle.vert.spv.h"
+#include "threepp/renderers/vulkan/shaders/particle.frag.spv.h"
+#include "threepp/renderers/vulkan/shaders/sprite3d.vert.spv.h"
 
 #include "threepp/renderers/wgpu/pathtracer/WgpuPathTracerBCn.hpp"
 
@@ -849,6 +854,12 @@ namespace threepp {
             // raster G-buffer, and emissive-tri NEE so PT can't see/shadow
             // them; drawn instead by the post-TAA overlay pass.
             bool     isOverlay = false;
+            // ParticleSystem billboard mesh (material name == kParticleMaterialName).
+            // Implies isOverlay (so all the PT-exclusion guards apply), but is
+            // drawn by the dedicated billboard particle pass — NOT the wireframe/
+            // basic overlay-mesh loop, which would render its un-expanded quads as
+            // zero-area triangles. The overlay-mesh loop skips on this flag.
+            bool     isParticle = false;
             // Cached type probes. Resolved once per Mesh in ensureSceneBuilt's
             // traverseVisible callback (before the InstancedMesh fork so an
             // N-instance mesh costs 3 dynamic_casts, not 3·N). Consumers
@@ -924,6 +935,7 @@ namespace threepp {
         static constexpr uint32_t kSnapWire       = 16u;
         static constexpr uint32_t kSnapOverlay    = 32u;
         static constexpr uint32_t kSnapTet        = 64u;
+        static constexpr uint32_t kSnapParticle   = 128u;
         std::vector<SnapNode> sceneSnapshot_;
 
         // Classification-routing flags for a mesh — shared by the snapshot
@@ -938,6 +950,10 @@ namespace threepp {
             if (overlayLayer_ >= 0 &&
                 m.layers.isEnabled(static_cast<unsigned>(overlayLayer_))) fl |= kSnapOverlay;
             if (auto mat = m.material(); mat && mat->tetSkinning && mat->tetTexture) fl |= kSnapTet;
+            // ParticleSystem billboard mesh — detected by the unique material-name
+            // marker (cheap: a length-mismatch reject for the empty-named common
+            // case). Routed to the dedicated billboard pass and excluded from PT.
+            if (auto mat = m.material(); mat && mat->name == kParticleMaterialName) fl |= kSnapParticle;
             return fl;
         }
 
@@ -985,9 +1001,11 @@ namespace threepp {
                 const bool over = overlayLayer_ >= 0 &&
                                   o.layers.isEnabled(static_cast<unsigned>(overlayLayer_));
                 const bool tet = sn.mat && sn.mat->tetSkinning && sn.mat->tetTexture != nullptr;
+                const bool particle = sn.mat && sn.mat->name == kParticleMaterialName;
                 if (wire != ((sn.flags & kSnapWire) != 0u) ||
                     over != ((sn.flags & kSnapOverlay) != 0u) ||
-                    tet != ((sn.flags & kSnapTet) != 0u)) {
+                    tet != ((sn.flags & kSnapTet) != 0u) ||
+                    particle != ((sn.flags & kSnapParticle) != 0u)) {
                     ok = false;
                     return;
                 }
@@ -1380,6 +1398,82 @@ namespace threepp {
         // recordRasterGbufPass and only renders non-overlay geometry.
         VkPipeline       overlayDepthPrepassPipeline = VK_NULL_HANDLE;
 
+        // ── ParticleSystem billboard pass ───────────────────────────────────
+        // The Vulkan backend has no generic ShaderMaterial path, so the particle
+        // Mesh (a custom billboard ShaderMaterial whose quad is expanded in the
+        // vertex shader) is drawn here, in the post-TAA overlay block: depth-
+        // tested against unjitDepth, composited onto the swapchain. Two blend
+        // variants chosen per material at draw time. See createParticlePipeline /
+        // the particle draw loop in the overlay block, and particle.vert/.frag.
+        VkDescriptorSetLayout particleDescSetLayout_  = VK_NULL_HANDLE;
+        VkPipelineLayout      particlePipelineLayout_ = VK_NULL_HANDLE;
+        VkPipeline particlePipelineNormal_   = VK_NULL_HANDLE;// alpha blend, depth-test on
+        VkPipeline particlePipelineAdditive_ = VK_NULL_HANDLE;// additive blend, depth-test off
+        // Per-frame combined-image-sampler pool, reset at the top of the draw
+        // loop (mirrors OverlayPass::spriteDescPools_).
+        std::array<VkDescriptorPool, kFramesInFlight> particleDescPools_{};
+        // 1×1 white default bound when a particle system has no texture.
+        Image2D particleWhiteTex_{};
+        static constexpr uint32_t kMaxParticleTexPerFrame = 64;
+
+        // Per-BufferGeometry vertex/index buffers for particle billboards. The
+        // animated attributes (position/normal/color) are re-uploaded every frame
+        // (version-gated); uv + index are static (uploaded once). Particles own
+        // these buffers directly — they never build a BLAS. Single-buffered with
+        // in-place memcpy, exactly like ensureLineGeometryUploaded: a write-during-
+        // read race with the other in-flight frame is benign for an overlay visual
+        // (at most a sub-pixel tear on a fast-moving particle for one frame).
+        struct ParticleGeomRec {
+            Buffer   position;// vec3 — particle centers (all 4 quad verts equal)
+            Buffer   normal;  // vec3 — {size, angle, opacity}
+            Buffer   uv;      // vec2 — corner offset
+            Buffer   color;   // vec3 — RGB
+            Buffer   index;   // uint32
+            uint32_t indexCount  = 0;
+            uint32_t vertexCount = 0;
+            unsigned int animVersion = ~0u;// pos+normal+color composite version
+            std::weak_ptr<BufferGeometry> liveCheck;
+        };
+        std::unordered_map<const BufferGeometry*, ParticleGeomRec> particleGeomCache_;
+
+        // Per-Texture sampled image for particle textures. Keyed on the raw
+        // Texture* (the ShaderMaterial uniform holds no shared_ptr) + version;
+        // re-upload is vkDeviceWaitIdle-guarded. Pointer-recycle with an
+        // identical version is a documented edge case.
+        struct ParticleTexRec {
+            Image2D      image{};
+            unsigned int version = ~0u;
+            uint32_t     width   = 0;
+            uint32_t     height  = 0;
+        };
+        std::unordered_map<const Texture*, ParticleTexRec> particleTexCache_;
+
+        // ── World-space Sprite billboards (screenSpace == false) ────────────
+        // 3D-positioned camera-facing sprites (e.g. the TPS shooter's impact
+        // "particles"). The Vulkan renderer only composites screen-space (HUD)
+        // sprites via OverlayPass; world-space ones are drawn here in the
+        // depth-tested overlay block. Reuses particlePipelineLayout_ +
+        // particleDescSetLayout_ + particleDescPools_ + particleTexCache_ (the
+        // push-constant size, set-0 sampler layout, and texture cache all match);
+        // only the pipeline (perspective billboard vertex shader + interleaved
+        // pos/uv vertex input) and the shared static quad are new.
+        VkPipeline spriteWorldPipeline_ = VK_NULL_HANDLE;
+        // Shared canonical sprite quad (4 interleaved pos.xyz+uv.xy verts + 6
+        // indices) — identical for every Sprite, so one static copy serves all.
+        Buffer spriteQuadVtx_{};
+        Buffer spriteQuadIdx_{};
+        // Per-frame snapshot of visible world-space sprites, rebuilt each
+        // perspective frame by collectWorldSprites() (sprites move/spawn/expire
+        // constantly, so this is a fresh walk, not snapshot-cached).
+        struct WorldSpriteEntry {
+            std::array<float, 16> world;
+            std::array<float, 4>  color;   // rgb + opacity
+            Vector2               center;
+            float                 rotation = 0.f;
+            const Texture*        tex = nullptr;
+        };
+        std::vector<WorldSpriteEntry> lastVisibleSprites_;
+
         // Per-Line scene snapshot, refreshed in ensureSceneBuilt alongside
         // lastVisibleEntries_. Lives only for the overlay record's draw
         // loop — neither PT nor the raster G-buffer touches this.
@@ -1402,6 +1496,13 @@ namespace threepp {
         // uploadRasterCameraUbo and read by recordOverlayPass to build
         // the per-draw mvp = vpUnjit · model push constant.
         std::array<float, 16> currVPunjit_{};
+        // Cached unjittered view and reverse-Z projection matrices, mirrored
+        // alongside currVPunjit_ each frame. The particle billboard pass needs
+        // them SEPARATELY (not the combined VP): the distance-attenuated
+        // billboard scale uses view-space depth and proj[1][1] individually, so
+        // it pushes modelView = currViewUnjit_ · meshWorld and currProjUnjit_.
+        std::array<float, 16> currViewUnjit_{};
+        std::array<float, 16> currProjUnjit_{};
 
         // Per-frame raster camera data. currVPjittered drives gl_Position;
         // currVPunjittered + prevVP drive the motion-vector computation
@@ -1632,7 +1733,13 @@ namespace threepp {
         // any command recording, so this is just two size/flag checks.
         bool sceneHasOverlayContent() const {
             if (!lastVisibleLines_.empty()) return true;
+            // World-space sprites are drawn in the overlay pass and depth-test
+            // against unjitDepth, so they need the prepass + overlay pass too.
+            if (!lastVisibleSprites_.empty()) return true;
             for (const auto& en : lastVisibleEntries_) {
+                // isOverlay covers particle billboards too (kSnapParticle folds
+                // into isOverlay), so a scene with only particles still triggers
+                // the depth prepass + overlay pass the billboard loop needs.
                 if (en.isOverlay) return true;
             }
             return false;
@@ -2063,6 +2170,38 @@ namespace threepp {
             if (overlayPointListPipeline)         vkDestroyPipeline(d, overlayPointListPipeline, nullptr);
             if (overlayDepthPrepassPipeline)      vkDestroyPipeline(d, overlayDepthPrepassPipeline, nullptr);
             if (overlayPipelineLayout)      vkDestroyPipelineLayout(d, overlayPipelineLayout, nullptr);
+            // Particle billboard pass resources.
+            if (particlePipelineNormal_)    vkDestroyPipeline(d, particlePipelineNormal_, nullptr);
+            if (particlePipelineAdditive_)  vkDestroyPipeline(d, particlePipelineAdditive_, nullptr);
+            if (particlePipelineLayout_)    vkDestroyPipelineLayout(d, particlePipelineLayout_, nullptr);
+            if (particleDescSetLayout_)     vkDestroyDescriptorSetLayout(d, particleDescSetLayout_, nullptr);
+            for (auto& pool : particleDescPools_) {
+                if (pool) vkDestroyDescriptorPool(d, pool, nullptr);
+            }
+            if (spriteWorldPipeline_)       vkDestroyPipeline(d, spriteWorldPipeline_, nullptr);
+            destroyBuffer(ctx->allocator(), spriteQuadVtx_);
+            destroyBuffer(ctx->allocator(), spriteQuadIdx_);
+            if (particleWhiteTex_.view != VK_NULL_HANDLE)
+                destroyImage2D(ctx->allocator(), d, particleWhiteTex_);
+            for (auto& [t, rec] : particleTexCache_) {
+                destroyImage2D(ctx->allocator(), d, rec.image);
+            }
+            particleTexCache_.clear();
+            for (auto& [g, rec] : particleGeomCache_) {
+                destroyParticleGeomRec(rec);
+            }
+            particleGeomCache_.clear();
+            // 3D hybrid-overlay line/point geometry cache (GridHelper, AxesHelper,
+            // live point clouds). Pre-existing: this Impl-level cache had no
+            // teardown, so its vertex/index/color buffers leaked at device
+            // destroy (VUID-vkDestroyDevice-device-05137) for any scene with a
+            // Line/Points overlay. Mirror OverlayPass's own lineGeomCache_ cleanup.
+            for (auto& [g, rec] : lineGeomCache_) {
+                destroyBuffer(ctx->allocator(), rec.vertex);
+                if (rec.index.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.index);
+                if (rec.color.handle != VK_NULL_HANDLE) destroyBuffer(ctx->allocator(), rec.color);
+            }
+            lineGeomCache_.clear();
             overlayPass_.reset();// destroy sprite/line pipelines + caches while device is alive
             if (gbufSampler_)           vkDestroySampler(d, gbufSampler_, nullptr);
             destroyBuffer(ctx->allocator(), dummyUvBuffer_);
@@ -4967,7 +5106,13 @@ namespace threepp {
                 auto geom = m->geometry();
                 if (!geom || !geom->hasAttribute("position")) return;
                 if (!geom->hasAttribute("normal")) return;
-                const bool isOverlay = (sn.flags & (kSnapWire | kSnapOverlay)) != 0u;
+                // Particle billboard meshes are excluded from PT exactly like
+                // overlays (kSnapParticle folds into isOverlay so every
+                // `if (en.isOverlay) continue;` guard applies) but carry their
+                // own isParticle flag so the billboard pass claims them and the
+                // overlay-mesh loop skips them.
+                const bool isParticle = (sn.flags & kSnapParticle) != 0u;
+                const bool isOverlay = (sn.flags & (kSnapWire | kSnapOverlay | kSnapParticle)) != 0u;
                 // One-shot type probes: an N-instance InstancedMesh costs 3
                 // dynamic_casts total, not 3·N — and on snapshot-match frames
                 // none at all (the cached entry flags are reused). Consumed by
@@ -4994,6 +5139,7 @@ namespace threepp {
                         e.mesh = m;
                         e.instanceIndex = static_cast<uint32_t>(j);
                         e.isOverlay    = isOverlay;
+                        e.isParticle   = isParticle;
                         e.isSkinned    = isSkinned;
                         e.isDisplaced  = isDisplaced;
                         e.isGrass      = isGrass;
@@ -5008,6 +5154,7 @@ namespace threepp {
                     e.mesh = m;
                     e.instanceIndex = 0u;
                     e.isOverlay    = isOverlay;
+                    e.isParticle   = isParticle;
                     e.isSkinned    = isSkinned;
                     e.isDisplaced  = isDisplaced;
                     e.isGrass      = isGrass;
@@ -5105,10 +5252,17 @@ namespace threepp {
                     const bool geomChanged = (gv != fp.geomVersion);
                     if (geomChanged) {
                         fp.geomVersion = gv;
-                        geomDirtyAny = true;
-                        entryGeomDirty[i] = true;
-                        // boundingBox invalidation — mirrors the generic loop.
-                        if (auto gg = en.mesh->geometry()) gg->boundingBox.reset();
+                        // Particle billboard meshes mutate their attributes every
+                        // frame but own no BLAS — flagging geomDirty would fire a
+                        // per-frame vkDeviceWaitIdle for a refit that skips them
+                        // anyway (blasCache miss). The billboard pass re-uploads
+                        // their vertex cache itself, version-gated.
+                        if (!en.isParticle) {
+                            geomDirtyAny = true;
+                            entryGeomDirty[i] = true;
+                            // boundingBox invalidation — mirrors the generic loop.
+                            if (auto gg = en.mesh->geometry()) gg->boundingBox.reset();
+                        }
                     }
                     if (xfmChanged) {
                         matricesSame = false;
@@ -5345,7 +5499,11 @@ namespace threepp {
                     if (bonesChanged) bonesDirtyAny = true;
                     if (dispChanged)  displacedDirtyAny = true;
                     if (grassChanged) grassDirtyAny = true;
-                    if (geomChanged) {
+                    // Particle billboard meshes mutate attributes every frame but
+                    // own no BLAS; never flag them geomDirty (would fire a per-
+                    // frame vkDeviceWaitIdle for a refit that skips them). The
+                    // billboard pass re-uploads their vertex cache itself.
+                    if (geomChanged && !entries[i].isParticle) {
                         geomDirtyAny = true;
                         entryGeomDirty[i] = true;
                         // Invalidate the cached boundingBox so the next
@@ -5970,6 +6128,11 @@ namespace threepp {
             for (size_t i = 0; i < entries.size(); ++i) {
                 const MeshEntry& en = entries[i];
                 Mesh* m = en.mesh;
+                // Particle billboard meshes own their vertex buffers in the
+                // dedicated billboard pass — they need no BLAS and never enter
+                // the TLAS. Skip before the geometry-keyed build so we don't
+                // allocate (or per-frame refit) an AS for them.
+                if (en.isParticle) continue;
                 const BufferGeometry* geomKey = m->geometry().get();
 
                 // Skinned meshes get a per-instance deformed BLAS rather than
@@ -7076,6 +7239,11 @@ namespace threepp {
             // the raster prepass + TAA used so wireframes register pixel-
             // exact with the post-TAA path-traced silhouette.
             std::memcpy(currVPunjit_.data(), vpUnj.elements.data(), 64);
+            // Mirror the unjittered view + reverse-Z projection separately for
+            // the particle billboard pass (it can't use the combined VP — see
+            // currViewUnjit_/currProjUnjit_).
+            std::memcpy(currViewUnjit_.data(), view.elements.data(), 64);
+            std::memcpy(currProjUnjit_.data(), proj.elements.data(), 64);
             // First frame: self-seed prevVP so motion vectors are zero. The
             // following frame picks up the real history.
             std::memcpy(ubo.prevVP,
@@ -8114,6 +8282,188 @@ namespace threepp {
             return out;
         }
 
+        // ── ParticleSystem billboard resources ──────────────────────────────
+
+        // Lazily build the 1×1 white texel bound for untextured particle
+        // systems (matches the GL path, where an unset `tex` sampler reads
+        // white). Created once; freed in deinit.
+        void ensureParticleWhiteTexture() {
+            if (particleWhiteTex_.view != VK_NULL_HANDLE) return;
+            const uint8_t white[4] = {255, 255, 255, 255};
+            particleWhiteTex_ = createSampledImage2D(
+                    1, 1, VK_FORMAT_R8G8B8A8_UNORM, white, sizeof(white),
+                    VK_FILTER_LINEAR,
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                    "particleWhiteDefault");
+        }
+
+        // Upload/refresh a particle texture, keyed on the raw Texture* (the
+        // ShaderMaterial uniform holds no shared_ptr). Returns the cached
+        // Image2D, or nullptr (caller falls back to the white default). Mirrors
+        // OverlayPass::ensureSpriteAtlasTexture, minus the weak_ptr liveCheck.
+        const Image2D* ensureParticleTexture(const Texture* tex) {
+            if (!tex) return nullptr;
+            Image& img = const_cast<Texture*>(tex)->image();
+            const uint32_t w = img.width();
+            const uint32_t h = img.height();
+            if (w == 0 || h == 0) return nullptr;
+
+            const unsigned int curVersion = tex->version();
+            auto it = particleTexCache_.find(tex);
+            if (it != particleTexCache_.end()) {
+                ParticleTexRec& rec = it->second;
+                const bool stale = rec.version != curVersion ||
+                                   rec.width != w || rec.height != h;
+                if (!stale) return &rec.image;
+                vkDeviceWaitIdle(ctx->device());
+                destroyImage2D(ctx->allocator(), ctx->device(), rec.image);
+                particleTexCache_.erase(it);
+            }
+
+            std::vector<unsigned char> rgba;
+            const size_t pixels = static_cast<size_t>(w) * h;
+            try {
+                auto& src = img.data<unsigned char>();
+                if (src.size() == pixels * 4) {
+                    rgba.assign(src.begin(), src.end());
+                } else if (src.size() == pixels * 3) {
+                    rgba.resize(pixels * 4);
+                    for (size_t i = 0; i < pixels; ++i) {
+                        rgba[i * 4 + 0] = src[i * 3 + 0];
+                        rgba[i * 4 + 1] = src[i * 3 + 1];
+                        rgba[i * 4 + 2] = src[i * 3 + 2];
+                        rgba[i * 4 + 3] = 255u;
+                    }
+                } else {
+                    return nullptr;
+                }
+            } catch (const std::bad_variant_access&) {
+                return nullptr;
+            }
+
+            // Same colorSpace→format rule as the sprite/bindless paths: only an
+            // explicitly sRGB-tagged texture gets hardware sRGB decode on sample;
+            // particle.frag re-encodes the linear product for the UNORM swapchain.
+            const VkFormat fmt = (tex->colorSpace == ColorSpace::sRGB)
+                                         ? VK_FORMAT_R8G8B8A8_SRGB
+                                         : VK_FORMAT_R8G8B8A8_UNORM;
+            char name[64];
+            std::snprintf(name, sizeof(name), "particleTex[%p]",
+                          static_cast<const void*>(tex));
+            Image2D up = createSampledImage2D(
+                    w, h, fmt, rgba.data(), rgba.size(),
+                    VK_FILTER_LINEAR,
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                    name);
+            ParticleTexRec rec{};
+            rec.image   = up;
+            rec.version = curVersion;
+            rec.width   = w;
+            rec.height  = h;
+            auto [ins, _] = particleTexCache_.emplace(tex, std::move(rec));
+            return &ins->second.image;
+        }
+
+        void destroyParticleGeomRec(ParticleGeomRec& rec) {
+            destroyBuffer(ctx->allocator(), rec.position);
+            destroyBuffer(ctx->allocator(), rec.normal);
+            destroyBuffer(ctx->allocator(), rec.uv);
+            destroyBuffer(ctx->allocator(), rec.color);
+            destroyBuffer(ctx->allocator(), rec.index);
+        }
+
+        // Ensure the per-geometry particle vertex/index buffers exist and the
+        // animated attributes (position/normal/color) are current. uv + index
+        // are static (uploaded once). Returns nullptr on malformed geometry.
+        ParticleGeomRec* ensureParticleGeom(const std::shared_ptr<BufferGeometry>& geomSp) {
+            BufferGeometry* geom = geomSp.get();
+            if (!geom) return nullptr;
+            auto* posAttr  = geom->getAttribute<float>("position");
+            auto* normAttr = geom->getAttribute<float>("normal");
+            auto* uvAttr   = geom->getAttribute<float>("uv");
+            auto* colAttr  = geom->getAttribute<float>("color");
+            auto* idxAttr  = geom->getIndex();
+            if (!posAttr || !normAttr || !uvAttr || !colAttr || !idxAttr) return nullptr;
+
+            const uint32_t vtx = static_cast<uint32_t>(posAttr->count());
+            const uint32_t idxCount = static_cast<uint32_t>(idxAttr->count());
+            if (vtx == 0 || idxCount == 0) return nullptr;
+            // Particle attributes are vec3/vec3/vec2/vec3 — bail if a custom
+            // geometry doesn't match (the billboard pipeline assumes this layout).
+            if (normAttr->count() != static_cast<int>(vtx) ||
+                uvAttr->count()   != static_cast<int>(vtx) ||
+                colAttr->count()  != static_cast<int>(vtx)) return nullptr;
+
+            const unsigned int ver = geomVersionOf(*geom);
+
+            auto uploadAnim = [&](ParticleGeomRec& rec) {
+                void* m = nullptr;
+                vmaMapMemory(ctx->allocator(), rec.position.alloc, &m);
+                std::memcpy(m, posAttr->array().data(), vtx * 3 * sizeof(float));
+                vmaUnmapMemory(ctx->allocator(), rec.position.alloc);
+                vmaMapMemory(ctx->allocator(), rec.normal.alloc, &m);
+                std::memcpy(m, normAttr->array().data(), vtx * 3 * sizeof(float));
+                vmaUnmapMemory(ctx->allocator(), rec.normal.alloc);
+                vmaMapMemory(ctx->allocator(), rec.color.alloc, &m);
+                std::memcpy(m, colAttr->array().data(), vtx * 3 * sizeof(float));
+                vmaUnmapMemory(ctx->allocator(), rec.color.alloc);
+            };
+
+            auto it = particleGeomCache_.find(geom);
+            if (it != particleGeomCache_.end()) {
+                ParticleGeomRec& rec = it->second;
+                const bool stale = rec.vertexCount != vtx || rec.indexCount != idxCount ||
+                                   rec.liveCheck.expired() || rec.liveCheck.lock().get() != geom;
+                if (!stale) {
+                    if (rec.animVersion != ver) {
+                        uploadAnim(rec);
+                        rec.animVersion = ver;
+                    }
+                    return &rec;
+                }
+                // Topology change / recycled address — rebuild from scratch.
+                vkDeviceWaitIdle(ctx->device());
+                destroyParticleGeomRec(rec);
+                particleGeomCache_.erase(it);
+            }
+
+            // Fresh build. All buffers host-visible; pos/normal/color re-uploaded
+            // each frame, uv + index written once here.
+            const VkBufferUsageFlags vbUsage =
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            ParticleGeomRec rec{};
+            rec.vertexCount = vtx;
+            rec.indexCount  = idxCount;
+            rec.liveCheck   = geomSp;
+            auto mkBuf = [&](VkDeviceSize bytes) {
+                return createBuffer(ctx->allocator(), ctx->device(), bytes, vbUsage,
+                                    VMA_MEMORY_USAGE_AUTO,
+                                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            };
+            rec.position = mkBuf(vtx * 3 * sizeof(float));
+            rec.normal   = mkBuf(vtx * 3 * sizeof(float));
+            rec.uv       = mkBuf(vtx * 2 * sizeof(float));
+            rec.color    = mkBuf(vtx * 3 * sizeof(float));
+            rec.index    = createBuffer(ctx->allocator(), ctx->device(),
+                                        idxCount * sizeof(uint32_t),
+                                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                        VMA_MEMORY_USAGE_AUTO,
+                                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+            void* m = nullptr;
+            vmaMapMemory(ctx->allocator(), rec.uv.alloc, &m);
+            std::memcpy(m, uvAttr->array().data(), vtx * 2 * sizeof(float));
+            vmaUnmapMemory(ctx->allocator(), rec.uv.alloc);
+            vmaMapMemory(ctx->allocator(), rec.index.alloc, &m);
+            std::memcpy(m, idxAttr->array().data(), idxCount * sizeof(uint32_t));
+            vmaUnmapMemory(ctx->allocator(), rec.index.alloc);
+            auto [ins, _] = particleGeomCache_.emplace(geom, std::move(rec));
+            uploadAnim(ins->second);
+            ins->second.animVersion = ver;
+            return &ins->second;
+        }
+
         // Storage-image (rgba32f, GENERAL layout) used as the
         // progressive accumulation target. No staging upload — contents are
         // initialised the first frame after sampleIndex resets to 0. The
@@ -8915,7 +9265,7 @@ namespace threepp {
             gpci.layout              = rasterPipelineLayout;
             gpci.renderPass          = rasterGbufRenderPass;
             gpci.subpass             = 0;
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpci, nullptr,
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpci, nullptr,
                                             &rasterGbufPipeline),
                   "vkCreateGraphicsPipelines(rasterGbuf)");
 
@@ -8964,7 +9314,7 @@ namespace threepp {
             gpciInd.pStages           = stagesInd;
             gpciInd.pVertexInputState = &viInd;
 
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciInd, nullptr,
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciInd, nullptr,
                                             &rasterGbufIndirectPipeline),
                   "vkCreateGraphicsPipelines(rasterGbufIndirect)");
 
@@ -9010,7 +9360,7 @@ namespace threepp {
             gpciDecal.pStages            = stagesDecal;
             gpciDecal.pDepthStencilState = &dsDecal;
             gpciDecal.pColorBlendState   = &cbDecal;
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciDecal, nullptr,
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciDecal, nullptr,
                                             &rasterGbufDecalPipeline),
                   "vkCreateGraphicsPipelines(rasterGbufDecal)");
 
@@ -9170,7 +9520,7 @@ namespace threepp {
             gpci.pColorBlendState    = &cb;
             gpci.pDynamicState       = &dyn;
             gpci.layout              = overlayPipelineLayout;
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpci, nullptr,
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpci, nullptr,
                                             &overlayWireframePipeline),
                   "vkCreateGraphicsPipelines(overlayWireframe)");
 
@@ -9184,7 +9534,7 @@ namespace threepp {
             rsBasic.cullMode    = VK_CULL_MODE_BACK_BIT;
             VkGraphicsPipelineCreateInfo gpciBasic = gpci;
             gpciBasic.pRasterizationState = &rsBasic;
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciBasic, nullptr,
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciBasic, nullptr,
                                             &overlayBasicPipeline),
                   "vkCreateGraphicsPipelines(overlayBasic)");
 
@@ -9213,7 +9563,7 @@ namespace threepp {
             cbBlend.pAttachments    = &cbasBlend;
             VkGraphicsPipelineCreateInfo gpciBasicTr = gpciBasic;
             gpciBasicTr.pColorBlendState = &cbBlend;
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciBasicTr, nullptr,
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciBasicTr, nullptr,
                                             &overlayBasicTransparentPipeline),
                   "vkCreateGraphicsPipelines(overlayBasicTransparent)");
 
@@ -9233,7 +9583,7 @@ namespace threepp {
             VkGraphicsPipelineCreateInfo gpciLineList = gpci;
             gpciLineList.pInputAssemblyState = &iaLineList;
             gpciLineList.pRasterizationState = &rsLine;
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciLineList, nullptr,
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciLineList, nullptr,
                                             &overlayLineListPipeline),
                   "vkCreateGraphicsPipelines(overlayLineList)");
 
@@ -9243,7 +9593,7 @@ namespace threepp {
             VkGraphicsPipelineCreateInfo gpciLineStrip = gpci;
             gpciLineStrip.pInputAssemblyState = &iaLineStrip;
             gpciLineStrip.pRasterizationState = &rsLine;
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciLineStrip, nullptr,
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciLineStrip, nullptr,
                                             &overlayLineStripPipeline),
                   "vkCreateGraphicsPipelines(overlayLineStrip)");
 
@@ -9303,7 +9653,7 @@ namespace threepp {
             gpciLineListColored.stageCount        = 2;
             gpciLineListColored.pStages           = cStages;
             gpciLineListColored.pVertexInputState = &cvi;
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciLineListColored, nullptr,
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciLineListColored, nullptr,
                                             &overlayLineListColoredPipeline),
                   "vkCreateGraphicsPipelines(overlayLineListColored)");
 
@@ -9311,7 +9661,7 @@ namespace threepp {
             gpciLineStripColored.stageCount        = 2;
             gpciLineStripColored.pStages           = cStages;
             gpciLineStripColored.pVertexInputState = &cvi;
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciLineStripColored, nullptr,
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciLineStripColored, nullptr,
                                             &overlayLineStripColoredPipeline),
                   "vkCreateGraphicsPipelines(overlayLineStripColored)");
 
@@ -9357,7 +9707,7 @@ namespace threepp {
             gpciPointList.pStages           = pStages;
             gpciPointList.pVertexInputState = &cvi;
             gpciPointList.pInputAssemblyState = &iaPointList;
-            check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &gpciPointList, nullptr,
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciPointList, nullptr,
                                             &overlayPointListPipeline),
                   "vkCreateGraphicsPipelines(overlayPointList)");
 
@@ -9481,13 +9831,389 @@ namespace threepp {
                 dgpci.pColorBlendState    = &dcb;
                 dgpci.pDynamicState       = &ddyn;
                 dgpci.layout              = rasterPipelineLayout;
-                check(vkCreateGraphicsPipelines(ctx->device(), VK_NULL_HANDLE, 1, &dgpci, nullptr,
+                check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &dgpci, nullptr,
                                                 &overlayDepthPrepassPipeline),
                       "vkCreateGraphicsPipelines(overlayDepthPrepass)");
 
                 vkDestroyShaderModule(ctx->device(), dvert, nullptr);
                 vkDestroyShaderModule(ctx->device(), dfrag, nullptr);
             }
+        }
+
+        // ParticleSystem billboard pipelines. Two variants (alpha-blended /
+        // additive) that differ only in blend + depth-test state. Both: 4 vertex
+        // bindings (pos/normal/uv/color), a combined-image-sampler set 0, a 128B
+        // push constant (modelView + proj), dynamic viewport/scissor, dynamic
+        // rendering onto the swapchain + unjitDepth (read-only). Modeled on
+        // createOverlayPipeline + OverlayPass::createSpriteOverlayPipeline.
+        void createParticlePipeline() {
+            if (particlePipelineNormal_ != VK_NULL_HANDLE) return;
+
+            // set 0, binding 0: combined image sampler (particle texture).
+            VkDescriptorSetLayoutBinding b{};
+            b.binding         = 0;
+            b.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b.descriptorCount = 1;
+            b.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+            VkDescriptorSetLayoutCreateInfo dslci{};
+            dslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            dslci.bindingCount = 1;
+            dslci.pBindings    = &b;
+            check(vkCreateDescriptorSetLayout(ctx->device(), &dslci, nullptr, &particleDescSetLayout_),
+                  "vkCreateDescriptorSetLayout(particle)");
+
+            VkPushConstantRange pcRange{};
+            pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+            pcRange.offset     = 0;
+            pcRange.size       = 128;// mat4 modelView (64) + mat4 proj (64)
+            VkPipelineLayoutCreateInfo plci{};
+            plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            plci.setLayoutCount         = 1;
+            plci.pSetLayouts            = &particleDescSetLayout_;
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges    = &pcRange;
+            check(vkCreatePipelineLayout(ctx->device(), &plci, nullptr, &particlePipelineLayout_),
+                  "vkCreatePipelineLayout(particle)");
+
+            for (uint32_t f = 0; f < kFramesInFlight; ++f) {
+                VkDescriptorPoolSize ps{};
+                ps.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                ps.descriptorCount = kMaxParticleTexPerFrame;
+                VkDescriptorPoolCreateInfo dpci{};
+                dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+                dpci.maxSets       = kMaxParticleTexPerFrame;
+                dpci.poolSizeCount = 1;
+                dpci.pPoolSizes    = &ps;
+                check(vkCreateDescriptorPool(ctx->device(), &dpci, nullptr, &particleDescPools_[f]),
+                      "vkCreateDescriptorPool(particle)");
+            }
+
+            VkShaderModuleCreateInfo vsmci{};
+            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            vsmci.codeSize = sizeof(kParticleVertSpv);
+            vsmci.pCode    = kParticleVertSpv;
+            VkShaderModule vert = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vert),
+                  "vkCreateShaderModule(particle.vert)");
+            VkShaderModuleCreateInfo fsmci{};
+            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            fsmci.codeSize = sizeof(kParticleFragSpv);
+            fsmci.pCode    = kParticleFragSpv;
+            VkShaderModule frag = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &frag),
+                  "vkCreateShaderModule(particle.frag)");
+
+            VkPipelineShaderStageCreateInfo stages[2]{};
+            stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+            stages[0].module = vert;
+            stages[0].pName  = "main";
+            stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stages[1].module = frag;
+            stages[1].pName  = "main";
+
+            // 4 separate vertex bindings: pos(0), normal(1), uv(2), color(3).
+            VkVertexInputBindingDescription vibs[4]{};
+            vibs[0].binding = 0; vibs[0].stride = 3 * sizeof(float); vibs[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            vibs[1].binding = 1; vibs[1].stride = 3 * sizeof(float); vibs[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            vibs[2].binding = 2; vibs[2].stride = 2 * sizeof(float); vibs[2].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            vibs[3].binding = 3; vibs[3].stride = 3 * sizeof(float); vibs[3].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            VkVertexInputAttributeDescription vias[4]{};
+            vias[0].location = 0; vias[0].binding = 0; vias[0].format = VK_FORMAT_R32G32B32_SFLOAT; vias[0].offset = 0;
+            vias[1].location = 1; vias[1].binding = 1; vias[1].format = VK_FORMAT_R32G32B32_SFLOAT; vias[1].offset = 0;
+            vias[2].location = 2; vias[2].binding = 2; vias[2].format = VK_FORMAT_R32G32_SFLOAT;    vias[2].offset = 0;
+            vias[3].location = 3; vias[3].binding = 3; vias[3].format = VK_FORMAT_R32G32B32_SFLOAT; vias[3].offset = 0;
+            VkPipelineVertexInputStateCreateInfo vi{};
+            vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            vi.vertexBindingDescriptionCount   = 4;
+            vi.pVertexBindingDescriptions      = vibs;
+            vi.vertexAttributeDescriptionCount = 4;
+            vi.pVertexAttributeDescriptions    = vias;
+
+            VkPipelineInputAssemblyStateCreateInfo ia{};
+            ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+            VkPipelineViewportStateCreateInfo vp{};
+            vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+            vp.viewportCount = 1;
+            vp.scissorCount  = 1;
+
+            // Side::Double — particles are billboards, draw both faces.
+            VkPipelineRasterizationStateCreateInfo rs{};
+            rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            rs.polygonMode = VK_POLYGON_MODE_FILL;
+            rs.cullMode    = VK_CULL_MODE_NONE;
+            rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rs.lineWidth   = 1.0f;
+
+            VkPipelineMultisampleStateCreateInfo ms{};
+            ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+            ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+            VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+            VkPipelineDynamicStateCreateInfo dyn{};
+            dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            dyn.dynamicStateCount = 2;
+            dyn.pDynamicStates    = dynStates;
+
+            const VkFormat colorFmt = ctx->swapchainFormat();
+            VkPipelineRenderingCreateInfo prci{};
+            prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+            prci.colorAttachmentCount    = 1;
+            prci.pColorAttachmentFormats = &colorFmt;
+            prci.depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT;
+
+            // ── Normal variant: non-premultiplied alpha, depth-tested ──────────
+            // depthTest GREATER_OR_EQUAL (reverse-Z) so particles are occluded by
+            // scene geometry; depthWrite OFF (transparent, read-only unjitDepth).
+            VkPipelineDepthStencilStateCreateInfo dsNormal{};
+            dsNormal.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+            dsNormal.depthTestEnable  = VK_TRUE;
+            dsNormal.depthWriteEnable = VK_FALSE;
+            dsNormal.depthCompareOp   = VK_COMPARE_OP_GREATER_OR_EQUAL;
+
+            VkPipelineColorBlendAttachmentState cbasAlpha{};
+            cbasAlpha.blendEnable         = VK_TRUE;
+            cbasAlpha.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            cbasAlpha.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbasAlpha.colorBlendOp        = VK_BLEND_OP_ADD;
+            cbasAlpha.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbasAlpha.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbasAlpha.alphaBlendOp        = VK_BLEND_OP_ADD;
+            cbasAlpha.colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            VkPipelineColorBlendStateCreateInfo cbAlpha{};
+            cbAlpha.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            cbAlpha.attachmentCount = 1;
+            cbAlpha.pAttachments    = &cbasAlpha;
+
+            VkGraphicsPipelineCreateInfo gpci{};
+            gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            gpci.pNext               = &prci;
+            gpci.stageCount          = 2;
+            gpci.pStages             = stages;
+            gpci.pVertexInputState   = &vi;
+            gpci.pInputAssemblyState = &ia;
+            gpci.pViewportState      = &vp;
+            gpci.pRasterizationState = &rs;
+            gpci.pMultisampleState   = &ms;
+            gpci.pDepthStencilState  = &dsNormal;
+            gpci.pColorBlendState    = &cbAlpha;
+            gpci.pDynamicState       = &dyn;
+            gpci.layout              = particlePipelineLayout_;
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpci, nullptr,
+                                            &particlePipelineNormal_),
+                  "vkCreateGraphicsPipelines(particleNormal)");
+
+            // ── Additive variant: src·srcAlpha + dst, depth-test OFF ───────────
+            // Matches ParticleSystem's depthTest=false for non-Normal blending
+            // (fireball / firework draw over the scene).
+            VkPipelineDepthStencilStateCreateInfo dsAdd = dsNormal;
+            dsAdd.depthTestEnable = VK_FALSE;
+            VkPipelineColorBlendAttachmentState cbasAdd = cbasAlpha;
+            cbasAdd.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbasAdd.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbasAdd.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            VkPipelineColorBlendStateCreateInfo cbAdd = cbAlpha;
+            cbAdd.pAttachments = &cbasAdd;
+            VkGraphicsPipelineCreateInfo gpciAdd = gpci;
+            gpciAdd.pDepthStencilState = &dsAdd;
+            gpciAdd.pColorBlendState   = &cbAdd;
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpciAdd, nullptr,
+                                            &particlePipelineAdditive_),
+                  "vkCreateGraphicsPipelines(particleAdditive)");
+
+            vkDestroyShaderModule(ctx->device(), vert, nullptr);
+            vkDestroyShaderModule(ctx->device(), frag, nullptr);
+
+            ensureParticleWhiteTexture();
+            createSpriteWorldPipeline();
+        }
+
+        // World-space Sprite billboard pipeline. Perspective billboard
+        // (sprite3d.vert) + the shared overlay_sprite.frag, alpha-blended and
+        // depth-tested against unjitDepth (occluded by scene geometry,
+        // depth-write off). Reuses particlePipelineLayout_ (128B SpritePC + set-0
+        // sampler) and builds the shared static quad. Called from
+        // createParticlePipeline so the shared layout already exists.
+        void createSpriteWorldPipeline() {
+            if (spriteWorldPipeline_ != VK_NULL_HANDLE) return;
+
+            // Shared canonical quad: 4 interleaved (pos.xyz, uv.xy) verts +
+            // 6 indices — matches Sprite's geometry (src/objects/Sprite.cpp).
+            {
+                static const float quad[] = {
+                        -0.5f, -0.5f, 0.f, 0.f, 0.f,
+                         0.5f, -0.5f, 0.f, 1.f, 0.f,
+                         0.5f,  0.5f, 0.f, 1.f, 1.f,
+                        -0.5f,  0.5f, 0.f, 0.f, 1.f};
+                static const uint32_t idx[] = {0, 1, 2, 0, 2, 3};
+                spriteQuadVtx_ = createBuffer(
+                        ctx->allocator(), ctx->device(), sizeof(quad),
+                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                spriteQuadIdx_ = createBuffer(
+                        ctx->allocator(), ctx->device(), sizeof(idx),
+                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VMA_MEMORY_USAGE_AUTO,
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                void* m = nullptr;
+                vmaMapMemory(ctx->allocator(), spriteQuadVtx_.alloc, &m);
+                std::memcpy(m, quad, sizeof(quad));
+                vmaUnmapMemory(ctx->allocator(), spriteQuadVtx_.alloc);
+                vmaMapMemory(ctx->allocator(), spriteQuadIdx_.alloc, &m);
+                std::memcpy(m, idx, sizeof(idx));
+                vmaUnmapMemory(ctx->allocator(), spriteQuadIdx_.alloc);
+            }
+
+            VkShaderModuleCreateInfo vsmci{};
+            vsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            vsmci.codeSize = sizeof(kSprite3dVertSpv);
+            vsmci.pCode    = kSprite3dVertSpv;
+            VkShaderModule vert = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &vsmci, nullptr, &vert),
+                  "vkCreateShaderModule(sprite3d.vert)");
+            VkShaderModuleCreateInfo fsmci{};
+            fsmci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            fsmci.codeSize = sizeof(kOverlaySpriteFragSpv);
+            fsmci.pCode    = kOverlaySpriteFragSpv;
+            VkShaderModule frag = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(ctx->device(), &fsmci, nullptr, &frag),
+                  "vkCreateShaderModule(overlay_sprite.frag for sprite3d)");
+
+            VkPipelineShaderStageCreateInfo stages[2]{};
+            stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+            stages[0].module = vert;
+            stages[0].pName  = "main";
+            stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stages[1].module = frag;
+            stages[1].pName  = "main";
+
+            // One interleaved binding: pos.xyz at 0, uv.xy at offset 12.
+            VkVertexInputBindingDescription vib{};
+            vib.binding   = 0;
+            vib.stride    = 5 * sizeof(float);
+            vib.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            VkVertexInputAttributeDescription vias[2]{};
+            vias[0].location = 0; vias[0].binding = 0; vias[0].format = VK_FORMAT_R32G32B32_SFLOAT; vias[0].offset = 0;
+            vias[1].location = 1; vias[1].binding = 0; vias[1].format = VK_FORMAT_R32G32_SFLOAT;    vias[1].offset = 3 * sizeof(float);
+            VkPipelineVertexInputStateCreateInfo vi{};
+            vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+            vi.vertexBindingDescriptionCount   = 1;
+            vi.pVertexBindingDescriptions      = &vib;
+            vi.vertexAttributeDescriptionCount = 2;
+            vi.pVertexAttributeDescriptions    = vias;
+
+            VkPipelineInputAssemblyStateCreateInfo ia{};
+            ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+            ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+            VkPipelineViewportStateCreateInfo vp{};
+            vp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+            vp.viewportCount = 1;
+            vp.scissorCount  = 1;
+
+            VkPipelineRasterizationStateCreateInfo rs{};
+            rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+            rs.polygonMode = VK_POLYGON_MODE_FILL;
+            rs.cullMode    = VK_CULL_MODE_NONE;
+            rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rs.lineWidth   = 1.0f;
+
+            VkPipelineMultisampleStateCreateInfo ms{};
+            ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+            ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+            // Depth-tested (occluded by scene), depth-write off (transparent).
+            VkPipelineDepthStencilStateCreateInfo ds{};
+            ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+            ds.depthTestEnable  = VK_TRUE;
+            ds.depthWriteEnable = VK_FALSE;
+            ds.depthCompareOp   = VK_COMPARE_OP_GREATER_OR_EQUAL;// reverse-Z
+
+            VkPipelineColorBlendAttachmentState cbas{};
+            cbas.blendEnable         = VK_TRUE;
+            cbas.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+            cbas.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbas.colorBlendOp        = VK_BLEND_OP_ADD;
+            cbas.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            cbas.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            cbas.alphaBlendOp        = VK_BLEND_OP_ADD;
+            cbas.colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                       VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            VkPipelineColorBlendStateCreateInfo cb{};
+            cb.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+            cb.attachmentCount = 1;
+            cb.pAttachments    = &cbas;
+
+            VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+            VkPipelineDynamicStateCreateInfo dyn{};
+            dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+            dyn.dynamicStateCount = 2;
+            dyn.pDynamicStates    = dynStates;
+
+            const VkFormat colorFmt = ctx->swapchainFormat();
+            VkPipelineRenderingCreateInfo prci{};
+            prci.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+            prci.colorAttachmentCount    = 1;
+            prci.pColorAttachmentFormats = &colorFmt;
+            prci.depthAttachmentFormat   = VK_FORMAT_D32_SFLOAT;
+
+            VkGraphicsPipelineCreateInfo gpci{};
+            gpci.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            gpci.pNext               = &prci;
+            gpci.stageCount          = 2;
+            gpci.pStages             = stages;
+            gpci.pVertexInputState   = &vi;
+            gpci.pInputAssemblyState = &ia;
+            gpci.pViewportState      = &vp;
+            gpci.pRasterizationState = &rs;
+            gpci.pMultisampleState   = &ms;
+            gpci.pDepthStencilState  = &ds;
+            gpci.pColorBlendState    = &cb;
+            gpci.pDynamicState       = &dyn;
+            gpci.layout              = particlePipelineLayout_;// 128B SpritePC + set-0 sampler
+            check(vkCreateGraphicsPipelines(ctx->device(), ctx->pipelineCache(), 1, &gpci, nullptr,
+                                            &spriteWorldPipeline_),
+                  "vkCreateGraphicsPipelines(spriteWorld)");
+
+            vkDestroyShaderModule(ctx->device(), vert, nullptr);
+            vkDestroyShaderModule(ctx->device(), frag, nullptr);
+        }
+
+        // Walk the scene for visible world-space Sprites (screenSpace == false)
+        // with a texture map, snapshotting their world transform + material into
+        // lastVisibleSprites_. Run every perspective frame (sprites move / spawn
+        // / expire constantly — no snapshot caching). Mirrors OverlayPass's
+        // sprite collection, minus the screen-space branch.
+        void collectWorldSprites(Object3D& scene) {
+            lastVisibleSprites_.clear();
+            scene.traverseVisible([&](Object3D& o) {
+                auto* sp = dynamic_cast<Sprite*>(&o);
+                if (!sp || sp->screenSpace) return;
+                auto mat = sp->material();
+                if (!mat || !mat->visible) return;
+                auto* mm = dynamic_cast<MaterialWithMap*>(mat.get());
+                if (!mm || !mm->map) return;// untextured world sprites aren't drawn
+                WorldSpriteEntry e{};
+                std::memcpy(e.world.data(), sp->matrixWorld->elements.data(), 64);
+                e.color = {1.f, 1.f, 1.f, 1.f};
+                if (auto* mc = dynamic_cast<MaterialWithColor*>(mat.get())) {
+                    e.color[0] = mc->color.r;
+                    e.color[1] = mc->color.g;
+                    e.color[2] = mc->color.b;
+                }
+                e.color[3] = mat->opacity;
+                if (auto* mr = dynamic_cast<MaterialWithRotation*>(mat.get())) {
+                    e.rotation = mr->rotation;
+                }
+                e.center = sp->center;
+                e.tex = mm->map.get();
+                lastVisibleSprites_.push_back(e);
+            });
         }
 
         // Line geometry cache shared between the ortho overlay (via
@@ -9847,6 +10573,9 @@ namespace threepp {
             }
             if (overlayWireframePipeline == VK_NULL_HANDLE) {
                 createOverlayPipeline();
+            }
+            if (particlePipelineNormal_ == VK_NULL_HANDLE) {
+                createParticlePipeline();
             }
             // Raster G-buffer matches the PT render extent — in hybrid mode
             // raygen reads it 1:1 by launch coord, so it must launch at the
@@ -11234,7 +11963,7 @@ namespace threepp {
 
             const uint32_t idx = rtVariantIndex(useSer, restirDISpec);
             check(ctx->rt().createRayTracingPipelines(
-                          ctx->device(), VK_NULL_HANDLE, VK_NULL_HANDLE,
+                          ctx->device(), VK_NULL_HANDLE, ctx->pipelineCache(),
                           1, &rci, nullptr, &rtVariants_[idx].pipeline),
                   "vkCreateRayTracingPipelinesKHR (single)");
             createShaderBindingTable(useSer, restirDISpec);
@@ -13365,6 +14094,10 @@ namespace threepp {
                     for (size_t i = 0; i < lastVisibleEntries_.size(); ++i) {
                         const auto& en = lastVisibleEntries_[i];
                         if (!en.mesh || !en.isOverlay) continue;
+                        // Particle billboards are isOverlay but drawn by the
+                        // dedicated billboard loop below — their un-expanded
+                        // quads would render as zero-area triangles here.
+                        if (en.isParticle) continue;
                         Color color(1.f, 1.f, 1.f);
                         float opacity = 1.0f;
                         bool wireframe = false;
@@ -13542,6 +14275,198 @@ namespace threepp {
                             const uint32_t cnt   = std::min(cap,
                                     static_cast<uint32_t>(std::max(0, drawRange.count)));
                             if (cnt > 0) vkCmdDraw(cb, cnt, 1, start, 0);
+                        }
+                    }
+
+                    // ── Particle billboards ────────────────────────────────
+                    // ParticleSystem meshes (isParticle) are drawn here, after
+                    // the wireframe/line/point overlays, in the same render-pass
+                    // instance (reuses the viewport/scissor set above — split-
+                    // screen aware). Each is a billboard quad expanded in
+                    // particle.vert from per-vertex {size,angle,opacity}; depth-
+                    // tested against unjitDepth (Normal) or unconditionally drawn
+                    // (Additive). The vertex data lives in particleGeomCache_, the
+                    // texture in particleTexCache_ (white default if untextured).
+                    if (particlePipelineNormal_ != VK_NULL_HANDLE) {
+                        bool anyParticle = false;
+                        for (const auto& en : lastVisibleEntries_) {
+                            if (en.isParticle && en.mesh) { anyParticle = true; break; }
+                        }
+                        const bool anySprite = !lastVisibleSprites_.empty();
+                        if (anyParticle || anySprite) {
+                            // Shared per-frame descriptor pool + unjittered camera
+                            // for both billboard kinds (particles + world sprites).
+                            vkResetDescriptorPool(ctx->device(), particleDescPools_[currentFrame], 0);
+                            Matrix4 viewM, projM;
+                            std::memcpy(viewM.elements.data(), currViewUnjit_.data(), 64);
+                            std::memcpy(projM.elements.data(), currProjUnjit_.data(), 64);
+                            VkPipeline curParticlePipe = VK_NULL_HANDLE;
+
+                            for (const auto& en : lastVisibleEntries_) {
+                                if (!en.isParticle || !en.mesh) continue;
+                                auto geomSp = en.mesh->geometry();
+                                const ParticleGeomRec* prec = ensureParticleGeom(geomSp);
+                                if (!prec) continue;
+
+                                auto matPtr = en.mesh->material();
+                                auto* sm = dynamic_cast<ShaderMaterial*>(matPtr.get());
+                                if (!sm) continue;
+                                const bool additive = (sm->blending != Blending::Normal);
+                                const Texture* tex = nullptr;
+                                if (auto uit = sm->uniforms.find("tex");
+                                    uit != sm->uniforms.end() && uit->second.hasValue()) {
+                                    if (auto** t = std::get_if<Texture*>(&uit->second.value())) {
+                                        tex = *t;
+                                    }
+                                }
+
+                                VkPipeline want = additive ? particlePipelineAdditive_
+                                                           : particlePipelineNormal_;
+                                if (want != curParticlePipe) {
+                                    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                                    curParticlePipe = want;
+                                }
+
+                                // Resolve the texture (or white default) into a
+                                // per-draw descriptor set from this frame's pool.
+                                const Image2D* texImg = ensureParticleTexture(tex);
+                                if (!texImg) texImg = &particleWhiteTex_;
+                                VkDescriptorSetAllocateInfo asi{};
+                                asi.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                                asi.descriptorPool     = particleDescPools_[currentFrame];
+                                asi.descriptorSetCount = 1;
+                                asi.pSetLayouts        = &particleDescSetLayout_;
+                                VkDescriptorSet set = VK_NULL_HANDLE;
+                                if (vkAllocateDescriptorSets(ctx->device(), &asi, &set) != VK_SUCCESS) continue;
+                                VkDescriptorImageInfo dii{};
+                                dii.imageView   = texImg->view;
+                                dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                                dii.sampler     = texImg->sampler;
+                                VkWriteDescriptorSet w{};
+                                w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                                w.dstSet          = set;
+                                w.dstBinding      = 0;
+                                w.descriptorCount = 1;
+                                w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                                w.pImageInfo      = &dii;
+                                vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+                                vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                        particlePipelineLayout_, 0, 1, &set, 0, nullptr);
+
+                                Matrix4 modelM, mvM;
+                                std::memcpy(modelM.elements.data(), en.worldMatrix.data(), 64);
+                                mvM.multiplyMatrices(viewM, modelM);
+                                struct ParticlePC {
+                                    float modelView[16];
+                                    float proj[16];
+                                } pc{};
+                                std::memcpy(pc.modelView, mvM.elements.data(), 64);
+                                std::memcpy(pc.proj, projM.elements.data(), 64);
+                                vkCmdPushConstants(cb, particlePipelineLayout_,
+                                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                                   0, sizeof(pc), &pc);
+
+                                VkBuffer vbufs[4] = {prec->position.handle, prec->normal.handle,
+                                                     prec->uv.handle, prec->color.handle};
+                                VkDeviceSize voffs[4] = {0, 0, 0, 0};
+                                vkCmdBindVertexBuffers(cb, 0, 4, vbufs, voffs);
+                                vkCmdBindIndexBuffer(cb, prec->index.handle, 0, VK_INDEX_TYPE_UINT32);
+                                vkCmdDrawIndexed(cb, prec->indexCount, 1, 0, 0, 0);
+                            }
+
+                            // ── World-space sprites ────────────────────────
+                            // Camera-facing textured billboards positioned in 3D
+                            // (TPS impact particles etc.). Shared static quad +
+                            // per-sprite push constant (SpritePC). One descriptor
+                            // set per unique texture this frame (deduped) since a
+                            // burst shares one material/map across many sprites.
+                            if (anySprite && spriteWorldPipeline_ != VK_NULL_HANDLE) {
+                                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, spriteWorldPipeline_);
+                                VkBuffer qv[1] = {spriteQuadVtx_.handle};
+                                VkDeviceSize qo[1] = {0};
+                                vkCmdBindVertexBuffers(cb, 0, 1, qv, qo);
+                                vkCmdBindIndexBuffer(cb, spriteQuadIdx_.handle, 0, VK_INDEX_TYPE_UINT32);
+
+                                std::unordered_map<const Texture*, VkDescriptorSet> setCache;
+                                const Texture* curTex = nullptr;
+                                bool curTexBound = false;
+                                for (const auto& sd : lastVisibleSprites_) {
+                                    // Resolve (and cache) the descriptor set for
+                                    // this sprite's texture; white default on miss.
+                                    if (!curTexBound || sd.tex != curTex) {
+                                        VkDescriptorSet set = VK_NULL_HANDLE;
+                                        auto cIt = setCache.find(sd.tex);
+                                        if (cIt != setCache.end()) {
+                                            set = cIt->second;
+                                        } else {
+                                            const Image2D* texImg = ensureParticleTexture(sd.tex);
+                                            if (!texImg) texImg = &particleWhiteTex_;
+                                            VkDescriptorSetAllocateInfo asi{};
+                                            asi.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                                            asi.descriptorPool     = particleDescPools_[currentFrame];
+                                            asi.descriptorSetCount = 1;
+                                            asi.pSetLayouts        = &particleDescSetLayout_;
+                                            if (vkAllocateDescriptorSets(ctx->device(), &asi, &set) != VK_SUCCESS) continue;
+                                            VkDescriptorImageInfo dii{};
+                                            dii.imageView   = texImg->view;
+                                            dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                                            dii.sampler     = texImg->sampler;
+                                            VkWriteDescriptorSet w{};
+                                            w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                                            w.dstSet          = set;
+                                            w.dstBinding      = 0;
+                                            w.descriptorCount = 1;
+                                            w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                                            w.pImageInfo      = &dii;
+                                            vkUpdateDescriptorSets(ctx->device(), 1, &w, 0, nullptr);
+                                            setCache.emplace(sd.tex, set);
+                                        }
+                                        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                                particlePipelineLayout_, 0, 1, &set, 0, nullptr);
+                                        curTex = sd.tex;
+                                        curTexBound = true;
+                                    }
+
+                                    // modelView = view · spriteWorld; the billboard
+                                    // is rebuilt camera-facing in sprite3d.vert from
+                                    // the view-space center + world scale.
+                                    Matrix4 modelM, mvM;
+                                    std::memcpy(modelM.elements.data(), sd.world.data(), 64);
+                                    mvM.multiplyMatrices(viewM, modelM);
+                                    Vector3 worldScale;
+                                    worldScale.setFromMatrixScale(modelM);
+                                    Vector3 mvPos;
+                                    mvPos.setFromMatrixPosition(mvM);
+
+                                    struct SpritePC {
+                                        float projection[16];
+                                        float mvPos[4];
+                                        float scale[2];
+                                        float center[2];
+                                        float color[4];
+                                        float rotation;
+                                        float pad[3];
+                                    } pc{};
+                                    std::memcpy(pc.projection, projM.elements.data(), 64);
+                                    pc.mvPos[0] = static_cast<float>(mvPos.x);
+                                    pc.mvPos[1] = static_cast<float>(mvPos.y);
+                                    pc.mvPos[2] = static_cast<float>(mvPos.z);
+                                    pc.mvPos[3] = 1.f;
+                                    pc.scale[0] = static_cast<float>(worldScale.x);
+                                    pc.scale[1] = static_cast<float>(worldScale.y);
+                                    pc.center[0] = sd.center.x;
+                                    pc.center[1] = sd.center.y;
+                                    pc.color[0] = sd.color[0];
+                                    pc.color[1] = sd.color[1];
+                                    pc.color[2] = sd.color[2];
+                                    pc.color[3] = sd.color[3];
+                                    pc.rotation = sd.rotation;
+                                    vkCmdPushConstants(cb, particlePipelineLayout_,
+                                                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                                       0, sizeof(pc), &pc);
+                                    vkCmdDrawIndexed(cb, 6, 1, 0, 0, 0);
+                                }
+                            }
                         }
                     }
 
@@ -13737,7 +14662,7 @@ namespace threepp {
             cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
             cpci.stage  = ssci;
             cpci.layout = eventShadePipelineLayout_;
-            check(vkCreateComputePipelines(ctx->device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &eventShadePipeline_),
+            check(vkCreateComputePipelines(ctx->device(), ctx->pipelineCache(), 1, &cpci, nullptr, &eventShadePipeline_),
                   "vkCreateComputePipelines(event_shade)");
             vkDestroyShaderModule(ctx->device(), mod, nullptr);
 
@@ -14443,6 +15368,12 @@ namespace threepp {
         if (!camera.is<OrthographicCamera>()) {
             const auto sceneStart = std::chrono::high_resolution_clock::now();
             pimpl_->ensureSceneBuilt(scene);
+            // World-space Sprites (screenSpace == false) are drawn by the overlay
+            // billboard pass, not the PT/G-buffer path. Snapshot them each frame
+            // with fresh world matrices (ensureSceneBuilt just ran
+            // updateMatrixWorld) — independent of the snapshot/lean machinery,
+            // since impact sprites move/spawn/expire every frame.
+            pimpl_->collectWorldSprites(scene);
             pimpl_->pendingCpuEnsureSceneMs_ =
                     std::chrono::duration<float, std::milli>(
                             std::chrono::high_resolution_clock::now() - sceneStart)

@@ -7,24 +7,31 @@
 A cross-platform C++20 3D library with the high-level API of [three.js](https://github.com/mrdoob/three.js/) —
 and modern backends: OpenGL, WebGPU, and a real-time path-tracing Vulkan renderer.
 
-![Real-time path-traced FFT ocean](doc/screenshots/pt_ocean.png)
-*Real-time path-traced FFT ocean ([examples/vulkan/vulkan_ocean.cpp](examples/vulkan/vulkan_ocean.cpp))*
+![Real-time ray-traced FFT ocean](doc/screenshots/pt_ocean.png)
+*Real-time FFT ocean — Vulkan deferred-hybrid renderer (raster-first, with ray-traced shadows & reflections) ([examples/vulkan/vulkan_ocean.cpp](examples/vulkan/vulkan_ocean.cpp))*
+
+![Procedural forest](doc/screenshots/forest.png)
+*Procedural terrain, trees and vegetation ([examples/extras/vegetation/forest_demo.cpp](examples/extras/vegetation/forest_demo.cpp))*
+
 
 > You get a scene graph, materials, lighting, cameras, render loop, controls, loaders, all composable, in a handful of lines.
 
 ## Highlights
 
 * Three rendering backends behind one scene graph: OpenGL 3.3 raster, WebGPU raster,
-  and a Vulkan **real-time path tracer** (ReSTIR DI/GI, denoising, photon-mapped caustics,
+  and a Vulkan **real-time path tracer** (ReSTIR DI/GI, denoising,
   hybrid raster-first deferred mode)
 * FFT-displaced ocean, water & sky shaders, PMREM environment maps
 * Path-traced sensor simulation: LIDAR, depth sensor, event camera
 * Built-in model loaders [Binary STL, OBJ/MTL, glTF, COLLADA, USD, FBX, SVG, URDF]
 * Builds on Windows, Linux, macOS, MinGW and with Emscripten.
 
-> And ROS2 users: threepp is a great fit for your visualisation needs.
-
 ## Current state of the project
+
+> **Primary use case: research and education.** `threepp` is built for research, prototyping, and
+> learning — not as a production-hardened engine. **API and behavioural stability are not prioritized:**
+> APIs may change, and backends (especially the path tracer) evolve rapidly. Pin a tag/commit if you
+> need reproducibility, and expect to track changes if you follow `master`.
 
 The core library is mature and feature-complete, with advanced rendering capabilities including
 real-time path tracing on the Vulkan backend. It is usable for a wide variety of rendering applications,
@@ -197,8 +204,8 @@ some headers will require additional dependencies to compile.
 |--------------|----------------|-----------------------------------------------|
 | AssimpLoader | assimp         | Import a wide variety of different 3D formats |
 | ImguiContext | imgui          | ImGUI utility                                 |
-| Physx**.     | physx          | Physics simulation                            |
-| Vulkan**.    | Vulkan SDK     | Vulkan renderer backend                       |
+| Physx\*      | physx          | Physics simulation                            |
+| Vulkan\*     | Vulkan SDK     | Vulkan renderer backend                       |
 
 ## Consuming threepp
 
@@ -292,14 +299,13 @@ set_languages("c++20")
 
 ## Gallery
 
-|                                                                                                                                                                      |                                                                                                                                    |
-|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
-| ![Ocean night](doc/screenshots/deferred_ocean_night.png) *Lighthouse at night — deferred hybrid, volumetric beam ([vulkan_ocean](examples/vulkan/vulkan_ocean.cpp))* | ![Bistro](doc/screenshots/bistro.png) *Lumberyard Bistro, path traced ([vulkan_bistro](examples/vulkan/vulkan_bistro.cpp))*        |
-| ![Shooter](doc/screenshots/tps.png) *Third-person shooter ([projects/Shooter](examples/projects/Shooter))*                                                           | ![Lidar](doc/screenshots/lidar.png) *LIDAR*                                                                                        |
-| ![Inference](doc/screenshots/detect.png) *RF-DETR detection*                                                                                                         | ![Water+sky](doc/screenshots/water_sky.png) *Water and sky shaders*                                                                |
-| ![Animation](doc/screenshots/animation.png) *Skinned animation*                                                                                                      | ![Shadows](doc/screenshots/Shadows.PNG) *Shadow mapping*                                                                           |
-| ![Crane](doc/screenshots/crane.png) *Crane3R ([projects/Crane3R](examples/projects/Crane3R))*                                                                        | ![MotorController](doc/screenshots/motor_controller.PNG) *Motor control ([projects/MotorControl](examples/projects/MotorControl))* |
-| ![Optimization](doc/screenshots/Optimization.PNG) *Optimization playground ([projects/Optimization](examples/projects/Optimization))*                                | ![colnav](doc/screenshots/colnav.png) *Collision avoidance*                                                                        |
-| ![Spline Editor](doc/screenshots/spline_editor.png) *Spline editor*                                                                                                  | ![SVG UI](doc/screenshots/robot_cell_capture.png) *SVG-based UI*                                                                   |
-| ![SVG](doc/screenshots/tiger_svg.png) *SVG loader*                                                                                                                   | ![Fonts](doc/screenshots/fonts.png) *Text rendering*                                                                               |
-| ![FlyControls](doc/screenshots/fly.PNG) *Fly controls*                                                                                                               | ![Chess](doc/screenshots/chess.png) *Chess*                                                                                        |
+| | |
+|:---:|:---:|
+| <img src="doc/screenshots/deferred_ocean_night.png" width="400" alt="Ocean night"><br>*Lighthouse at night — deferred hybrid, volumetric beam ([vulkan_ocean](examples/vulkan/vulkan_ocean.cpp))* | <img src="doc/screenshots/bistro.png" width="400" alt="Bistro"><br>*Lumberyard Bistro, path traced ([vulkan_bistro](examples/vulkan/vulkan_bistro.cpp))* |
+| <img src="doc/screenshots/tps.png" width="400" alt="Shooter"><br>*Third-person shooter ([projects/Shooter](examples/projects/Shooter))* | <img src="doc/screenshots/lidar.png" width="400" alt="Lidar"><br>*LIDAR* |
+| <img src="doc/screenshots/detect.png" width="400" alt="Inference"><br>*RF-DETR detection* | <img src="doc/screenshots/water_sky.png" width="400" alt="Water+sky"><br>*Water and sky shaders* |
+| <img src="doc/screenshots/animation.png" width="400" alt="Animation"><br>*Skinned animation* | <img src="doc/screenshots/Shadows.PNG" width="400" alt="Shadows"><br>*Shadow mapping* |
+| <img src="doc/screenshots/Optimization.PNG" width="400" alt="Optimization"><br>*Optimization playground ([projects/Optimization](examples/projects/Optimization))* | <img src="doc/screenshots/colnav.png" width="400" alt="colnav"><br>*Collision avoidance* |
+| <img src="doc/screenshots/spline_editor.png" width="400" alt="Spline Editor"><br>*Spline editor* | <img src="doc/screenshots/robot_cell_capture.png" width="400" alt="SVG UI"><br>*SVG-based UI* |
+| <img src="doc/screenshots/tiger_svg.png" width="400" alt="SVG"><br>*SVG loader* | <img src="doc/screenshots/fonts.png" width="400" alt="Fonts"><br>*Text rendering* |
+| <img src="doc/screenshots/fly.PNG" width="400" alt="FlyControls"><br>*Fly controls* | <img src="doc/screenshots/chess.png" width="400" alt="Chess"><br>*glTF Chessboard under HDRi sky* |

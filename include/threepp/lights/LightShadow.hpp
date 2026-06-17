@@ -23,7 +23,9 @@ namespace threepp {
         float normalBias = 0;
         float radius = 1;
 
-        Vector2 mapSize{1024, 1024};
+        // Default shadow-map resolution. Bumped from the old three.js r129
+        // default (512) — modern desktop GPUs comfortably afford 2048².
+        Vector2 mapSize{2048, 2048};
 
         std::unique_ptr<RenderTarget> map;
         std::unique_ptr<RenderTarget> mapPass;

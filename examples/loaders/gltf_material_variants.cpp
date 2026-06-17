@@ -1,6 +1,7 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
+#include "threepp/loaders/RGBELoader.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -9,14 +10,20 @@ int main() {
 
     Canvas canvas("glTF Material Variants", {{"antialiasing", 4}});
     auto renderer = createRenderer(canvas);
+    renderer->toneMapping = ToneMapping::ACESFilmic;
 
     auto scene = Scene::create();
-    scene->background = Color::aliceblue;
+
+    RGBELoader hdrLoader;
+    if (auto hdrTexture = hdrLoader.load(std::string(DATA_FOLDER) + "/textures/env/san_giuseppe_bridge/san_giuseppe_bridge_4k.hdr" )) {
+        scene->background = hdrTexture;
+        scene->environment = hdrTexture;
+    } else {
+        scene->background = Color::aliceblue;
+    }
+
     auto camera = PerspectiveCamera::create(45, canvas.aspect(), 0.01f, 100.f);
     camera->position.set(0, 0.5f, 1.f);
-
-    auto ambientLight = AmbientLight::create(0xffffff, 0.6f);
-    scene->add(ambientLight);
 
     auto dirLight = DirectionalLight::create(0xffffff, 1.5f);
     dirLight->position.set(1, 2, 1);

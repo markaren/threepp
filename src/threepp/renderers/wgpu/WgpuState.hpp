@@ -32,7 +32,7 @@ namespace threepp::wgpu {
 
     // Runtime-configurable shadow limits.
     struct ShadowLimits {
-        uint32_t mapSize = 1024;
+        uint32_t mapSize = 2048;// default atlas size; auto-raised to the max per-light shadow->mapSize
         int maxShadowLights = 4;
         int maxShadowPointLights = 2;
 

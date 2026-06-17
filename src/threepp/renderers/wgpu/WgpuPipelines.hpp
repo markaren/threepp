@@ -70,7 +70,8 @@ namespace threepp::wgpu {
         CustomPipelineEntry& getOrCreateCustomPipeline(
                 ShaderMaterial* sm,
                 WGPUTextureFormat surfaceFormat,
-                uint32_t sampleCount);
+                uint32_t sampleCount,
+                bool isInstanced = false);
 
         // Release all cached pipelines (e.g. when sample count changes).
         void invalidateAll();

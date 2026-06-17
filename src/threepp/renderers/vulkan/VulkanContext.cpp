@@ -5,10 +5,13 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace threepp::vulkan {
 
@@ -91,6 +94,7 @@ namespace threepp::vulkan {
         createSurface();
         pickPhysicalDevice();
         createLogicalDevice();
+        createPipelineCache();
         createAllocator();
         createSwapchain();
         createSwapchainImageViews();
@@ -102,6 +106,10 @@ namespace threepp::vulkan {
         destroySwapchainResources();
 
         if (allocator_ != VK_NULL_HANDLE) vmaDestroyAllocator(allocator_);
+        if (pipelineCache_ != VK_NULL_HANDLE) {
+            savePipelineCache();
+            vkDestroyPipelineCache(device_, pipelineCache_, nullptr);
+        }
         if (device_ != VK_NULL_HANDLE) vkDestroyDevice(device_, nullptr);
         if (surface_ != VK_NULL_HANDLE) vkDestroySurfaceKHR(instance_, surface_, nullptr);
 
@@ -111,6 +119,80 @@ namespace threepp::vulkan {
             if (fn) fn(instance_, debugMessenger_, nullptr);
         }
         if (instance_ != VK_NULL_HANDLE) vkDestroyInstance(instance_, nullptr);
+    }
+
+    namespace {
+        std::filesystem::path pipelineCachePath() {
+            std::error_code ec;
+            auto dir = std::filesystem::temp_directory_path(ec);
+            if (ec) return {};
+            return dir / "threepp_pipeline_cache.bin";
+        }
+    }// namespace
+
+    void VulkanContext::createPipelineCache() {
+        // Read the previous run's blob, if any.
+        std::vector<char> initial;
+        const auto path = pipelineCachePath();
+        if (!path.empty()) {
+            std::ifstream f(path, std::ios::binary | std::ios::ate);
+            if (f) {
+                const std::streamsize sz = f.tellg();
+                if (sz > 0) {
+                    initial.resize(static_cast<size_t>(sz));
+                    f.seekg(0);
+                    f.read(initial.data(), sz);
+                }
+            }
+        }
+
+        // Validate the cache header against THIS device — vendor/device/UUID
+        // must match or the blob is from another GPU/driver and must be dropped
+        // (some drivers reject foreign data outright). Header layout
+        // (VkPipelineCacheHeaderVersionOne): u32 size, u32 version, u32 vendorID,
+        // u32 deviceID, u8 uuid[VK_UUID_SIZE] — 32 bytes total.
+        bool usable = false;
+        if (initial.size() >= 32) {
+            uint32_t hdrVersion = 0, vendorID = 0, deviceID = 0;
+            std::memcpy(&hdrVersion, initial.data() + 4, 4);
+            std::memcpy(&vendorID, initial.data() + 8, 4);
+            std::memcpy(&deviceID, initial.data() + 12, 4);
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(physicalDevice_, &props);
+            usable = hdrVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE &&
+                     vendorID == props.vendorID && deviceID == props.deviceID &&
+                     std::memcmp(initial.data() + 16, props.pipelineCacheUUID, VK_UUID_SIZE) == 0;
+        }
+
+        VkPipelineCacheCreateInfo ci{};
+        ci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+        if (usable) {
+            ci.initialDataSize = initial.size();
+            ci.pInitialData = initial.data();
+        }
+        if (vkCreatePipelineCache(device_, &ci, nullptr, &pipelineCache_) != VK_SUCCESS) {
+            pipelineCache_ = VK_NULL_HANDLE;// non-fatal: pipelines just compile cold
+        }
+        std::cout << "[VulkanContext] pipeline cache: "
+                  << (usable ? "WARM - loaded " : "COLD - ignoring ")
+                  << initial.size() << " bytes from " << path.string()
+                  << (usable ? " (pipelines reused)" : " (recompiling all pipelines)") << std::endl;
+    }
+
+    void VulkanContext::savePipelineCache() {
+        if (pipelineCache_ == VK_NULL_HANDLE) return;
+        size_t sz = 0;
+        if (vkGetPipelineCacheData(device_, pipelineCache_, &sz, nullptr) != VK_SUCCESS || sz == 0) return;
+        std::vector<char> data(sz);
+        if (vkGetPipelineCacheData(device_, pipelineCache_, &sz, data.data()) != VK_SUCCESS) return;
+        const auto path = pipelineCachePath();
+        if (path.empty()) return;
+        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+        if (f) {
+            f.write(data.data(), static_cast<std::streamsize>(sz));
+            std::cout << "[VulkanContext] pipeline cache: saved " << sz
+                      << " bytes to " << path.string() << std::endl;
+        }
     }
 
     void VulkanContext::createInstance(bool enableValidation) {

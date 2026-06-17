@@ -155,6 +155,10 @@ namespace threepp::wgpu {
     // Generate the depth-only WGSL shader for shadow passes.
     std::string buildDepthWGSL();
 
+    // Depth shader variant for InstancedMesh casters (per-instance model matrix
+    // from a binding-28 storage buffer, indexed by instance_index).
+    std::string buildInstancedDepthWGSL();
+
     // Depth shader variant for skinned (skeletal) meshes.
     std::string buildSkinnedDepthWGSL();
 

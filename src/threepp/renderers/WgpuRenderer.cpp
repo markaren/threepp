@@ -3067,14 +3067,58 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         auto geometry = mesh->geometry();
         if (!geometry || !geometry->hasAttribute("position")) return;
 
+        // InstancedMesh + ShaderMaterial: per-instance model matrices via a binding-28
+        // storage buffer (the translator exposes them as `instanceMatrix`).
+        auto* instancedMesh = mesh->as<InstancedMesh>();
+        if (instancedMesh && instancedMesh->count() == 0) return;// zero-size buffer binding is invalid
+        const bool isInstanced = instancedMesh != nullptr;
+
         // Register dispose listener so we evict the pipeline cache entry when the material is destroyed
         if (!sm->hasEventListener("dispose", onMaterialDispose)) {
             sm->addEventListener("dispose", onMaterialDispose);
             trackedMaterials_.insert(sm);
         }
 
-        auto& pe = pipelines->getOrCreateCustomPipeline(sm, activeColorFormat_, effectiveSampleCount_);
+        auto& pe = pipelines->getOrCreateCustomPipeline(sm, activeColorFormat_, effectiveSampleCount_, isInstanced);
         if (!pe.pipeline) return;
+
+        // Upload / reuse the per-instance model matrices (mat4-only layout, shared
+        // instanceCache_ keyed by mesh id; re-uploaded only when the version bumps).
+        WGPUBuffer instanceBuffer = nullptr;
+        size_t instanceBufSize = 0;
+        if (isInstanced) {
+            const size_t instanceCount = instancedMesh->count();
+            const size_t bufSize = instanceCount * 16 * sizeof(float);
+            auto* matAttr = instancedMesh->instanceMatrix();
+            const uint32_t matVer = matAttr ? matAttr->version : 0;
+
+            if (!instancedMesh->hasEventListener("dispose", onInstancedMeshDispose)) {
+                instancedMesh->addEventListener("dispose", onInstancedMeshDispose);
+                trackedInstancedMeshes_.insert(instancedMesh);
+            }
+
+            auto& entry = instanceCache_[instancedMesh->id];
+            constexpr auto kStorageUsage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+            const bool needsUpload = !entry.buffer || entry.bufferSize != bufSize
+                                  || entry.hasColor != false || entry.matrixVersion != matVer;
+            if (needsUpload) {
+                if (!entry.buffer || entry.bufferSize != bufSize || entry.hasColor != false) {
+                    if (entry.buffer) wgpuBufferRelease(entry.buffer);
+                    WGPUBufferDescriptor bd{};
+                    bd.size = bufSize;
+                    bd.usage = kStorageUsage;
+                    entry.buffer = wgpuDeviceCreateBuffer(device, &bd);
+                    entry.bufferSize = bufSize;
+                }
+                // mat4-only: the instanceMatrix attribute is already 16 contiguous floats/instance.
+                if (matAttr) wgpuQueueWriteBuffer(queue, entry.buffer, 0, matAttr->array().data(), bufSize);
+                entry.hasColor = false;
+                entry.matrixVersion = matVer;
+                entry.colorVersion = 0;
+            }
+            instanceBuffer = entry.buffer;
+            instanceBufSize = bufSize;
+        }
 
         // Create per-draw transform buffer
         float transformData[wgpu::TRANSFORM_UNIFORM_SIZE / sizeof(float)];
@@ -3153,6 +3197,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                     if (idx + 4 <= uboFloats) { uboData[idx] = *f; idx += 4; }
                 } else if (auto* i = std::get_if<int>(&val)) {
                     if (idx + 4 <= uboFloats) { float fi; std::memcpy(&fi, i, 4); uboData[idx] = fi; idx += 4; }
+                } else if (auto* v2 = std::get_if<Vector2>(&val)) {
+                    // vec2 occupies a full 16-byte std140 slot (xy + 2 pad floats).
+                    if (idx + 4 <= uboFloats) { uboData[idx] = v2->x; uboData[idx+1] = v2->y; idx += 4; }
                 } else if (auto* v3 = std::get_if<Vector3>(&val)) {
                     if (idx + 4 <= uboFloats) { uboData[idx] = v3->x; uboData[idx+1] = v3->y; uboData[idx+2] = v3->z; idx += 4; }
                 } else if (auto* v3p = std::get_if<Vector3*>(&val)) {
@@ -3207,7 +3254,8 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         auto& entries = bindGroups->buildCustom(perDrawTransformBuf, renderLightBuffer_,
                                                  lights->lightUniformSize(),
                                                  customUniformBuf, pe.customUniformSize,
-                                                 sm, unifiedTextures);
+                                                 sm, unifiedTextures,
+                                                 instanceBuffer, instanceBufSize);
 
         WGPUBindGroup bg = bindGroupCache->get(
                 mesh, sm,
@@ -3217,6 +3265,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         wgpuRenderPassEncoderSetPipeline(pass, pe.pipeline);
         wgpuRenderPassEncoderSetBindGroup(pass, 0, bg, 0, nullptr);
 
+        const uint32_t instanceCount = isInstanced
+                ? static_cast<uint32_t>(instancedMesh->count()) : 1;
+
         auto& gb = geometries->getOrCreateGeometryBuffers(geometry.get());
         if (gb.vertexBuffer && gb.vertexCount > 0) {
             wgpuRenderPassEncoderSetVertexBuffer(pass, 0, gb.vertexBuffer, 0,
@@ -3225,13 +3276,13 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 wgpuRenderPassEncoderSetIndexBuffer(pass, gb.indexBuffer,
                                                      WGPUIndexFormat_Uint32, 0,
                                                      gb.indexCount * sizeof(uint32_t));
-                wgpuRenderPassEncoderDrawIndexed(pass, gb.indexCount, 1, 0, 0, 0);
+                wgpuRenderPassEncoderDrawIndexed(pass, gb.indexCount, instanceCount, 0, 0, 0);
                 renderInfo.calls++;
-                renderInfo.triangles += gb.indexCount / 3;
+                renderInfo.triangles += (gb.indexCount / 3) * instanceCount;
             } else {
-                wgpuRenderPassEncoderDraw(pass, gb.vertexCount, 1, 0, 0);
+                wgpuRenderPassEncoderDraw(pass, gb.vertexCount, instanceCount, 0, 0);
                 renderInfo.calls++;
-                renderInfo.triangles += gb.vertexCount / 3;
+                renderInfo.triangles += (gb.vertexCount / 3) * instanceCount;
             }
         }
 

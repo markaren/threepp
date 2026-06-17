@@ -48,7 +48,8 @@ namespace threepp::wgpu {
                 const std::string& vertexGlsl,
                 const std::string& fragmentGlsl,
                 const std::vector<std::string>& uniformNames,
-                const std::vector<std::string>& textureNames);
+                const std::vector<std::string>& textureNames,
+                bool isInstanced = false);
 
     private:
         // Recursively expand #include <chunk> using ShaderChunk::instance()
@@ -77,7 +78,8 @@ namespace threepp::wgpu {
                 const std::vector<std::string>& varyingNames,
                 const std::vector<int>& varyingLocations,
                 const std::vector<std::pair<std::string,std::string>>& customFields,
-                const std::vector<std::string>& textureNames);
+                const std::vector<std::string>& textureNames,
+                bool isInstanced);
 
         // Compile Vulkan GLSL 450 to SPIR-V via glslang
         std::optional<std::vector<uint32_t>> compileToSpirv(
