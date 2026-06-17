@@ -403,8 +403,10 @@ int main() {
     sun->castShadow = true;
     {
         auto* cam = sun->shadow->camera->as<OrthographicCamera>();
-        cam->left = cam->bottom = -90.f;
-        cam->right = cam->top = 90.f;
+        // Cover the full scatter radius (~worldSize*0.46 ≈ 120) so the forest
+        // edge doesn't clip out of the shadow frustum; the 4096 map keeps it crisp.
+        cam->left = cam->bottom = -125.f;
+        cam->right = cam->top = 125.f;
         cam->nearPlane = 1.f;
         cam->farPlane = 400.f;
         sun->shadow->mapSize.set(4096, 4096);
