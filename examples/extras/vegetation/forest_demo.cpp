@@ -470,13 +470,6 @@ int main() {
     Canvas canvas("Procedural Forest", {{"vsync", true}, {"aa", 4}});
     auto renderer = createRenderer(canvas);
 
-    // Grass wind path:
-    //  - GL only: cheap GPU vertex-shader (ShaderMaterial). The WGPU GLSL→WGSL
-    //    path does not render this shader, and Vulkan (a path tracer) has no
-    //    ShaderMaterial path at all.
-    //  - WGPU + Vulkan: CPU-tilt instance matrices on a standard lit material
-    //    (the same material the flowers use — proven to render on both).
-    const bool shaderGrass = (dynamic_cast<GLRenderer*>(renderer.get()) != nullptr);
     bool vulkanBackend = false;
 #ifdef THREEPP_WITH_VULKAN
     auto* vk = dynamic_cast<VulkanRenderer*>(renderer.get());
@@ -487,6 +480,14 @@ int main() {
         vk->setRenderScale(0.8f);
     }
 #endif
+
+    // Grass wind path:
+    //  - GL + WGPU (raster): cheap GPU vertex-shader (ShaderMaterial on an
+    //    InstancedMesh). The WGPU GLSL→WGSL path now supports instanceMatrix,
+    //    so both raster backends drive the blades on the GPU.
+    //  - Vulkan (path tracer): grass baked into a merged GrassMesh (GPU deform);
+    //    no generic ShaderMaterial path.
+    const bool shaderGrass = !vulkanBackend;
 
     renderer->setClearColor(Color(0.62f, 0.72f, 0.84f));
     renderer->toneMapping = ToneMapping::Neutral;

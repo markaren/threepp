@@ -474,7 +474,8 @@ namespace threepp::wgpu {
     CustomPipelineEntry& WgpuPipelines::getOrCreateCustomPipeline(
             ShaderMaterial* sm,
             WGPUTextureFormat surfaceFormat,
-            uint32_t sampleCount) {
+            uint32_t sampleCount,
+            bool isInstanced) {
 
         const bool isGlsl = sm->vertexShader.find("gl_Position") != std::string::npos ||
                              sm->fragmentShader.find("gl_FragColor") != std::string::npos;
@@ -488,7 +489,8 @@ namespace threepp::wgpu {
         const uint64_t customCacheKey = static_cast<uint64_t>(sm->id)
                                       | (sampleCount > 1 ? (1ULL << 32) : 0ULL)
                                       | (isFloat16Custom ? (1ULL << 33) : 0ULL)
-                                      | (isSrgbCustom ? (1ULL << 34) : 0ULL);
+                                      | (isSrgbCustom ? (1ULL << 34) : 0ULL)
+                                      | (isInstanced ? (1ULL << 35) : 0ULL);
 
 #ifndef THREEPP_WGPU_GLSL_COMPAT
         if (isGlsl) {
@@ -542,7 +544,7 @@ namespace threepp::wgpu {
 
                 auto translated = translator_.translate(
                         sm->vertexShader, sm->fragmentShader,
-                        uniformNames, texNames);
+                        uniformNames, texNames, isInstanced);
 
                 if (!translated.success()) {
                     std::cerr << "[WgpuPipelines] GLSL translation failed for material "
@@ -755,6 +757,16 @@ namespace threepp::wgpu {
                                                   : WGPUSamplerBindingType_NonFiltering;
                     bglEntries.push_back(e);
                 }
+            }
+
+            // Binding 28: per-instance model-matrix storage buffer (InstancedMesh).
+            // Matches the standard material path and the translator's declaration.
+            if (isInstanced) {
+                WGPUBindGroupLayoutEntry e{};
+                e.binding = 28;
+                e.visibility = WGPUShaderStage_Vertex;
+                e.buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+                bglEntries.push_back(e);
             }
 
             entry.bglEntries = bglEntries;

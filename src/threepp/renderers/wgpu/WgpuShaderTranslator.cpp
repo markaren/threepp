@@ -120,7 +120,8 @@ namespace threepp::wgpu {
             const std::vector<std::string>& varyingNames,
             const std::vector<int>& varyingLocations,
             const std::vector<std::pair<std::string,std::string>>& customFields,
-            const std::vector<std::string>& textureNames) {
+            const std::vector<std::string>& textureNames,
+            bool isInstanced) {
 
         std::ostringstream out;
 
@@ -191,6 +192,10 @@ namespace threepp::wgpu {
                 } else if (t == "vec3" || t == "ivec3") {
                     // 1 float fills the remaining 4 bytes of the 16-byte vec3 slot.
                     out << "    float _p" << n << "_;\n";
+                } else if (t == "vec2" || t == "ivec2") {
+                    // 2 floats fill the remaining 8 bytes so the field takes a full
+                    // 16-byte slot, matching the CPU packer's per-field stride.
+                    out << "    float _p0" << n << "_, _p1" << n << "_;\n";
                 }
                 // vec4, mat4: already sized correctly in std140.
             }
@@ -233,6 +238,18 @@ namespace threepp::wgpu {
                 out << "layout(location=3) in vec3 color;\n";
             }
             out << "\n";
+
+            // --- Instancing: per-instance model matrix (matches the standard
+            // material path's binding-28 storage buffer; mat4-only, no color). ---
+            // Provides USE_INSTANCING + `instanceMatrix` so three.js-style instanced
+            // shaders (InstancedMesh) work through the GLSL→SPIR-V path.
+            if (isInstanced) {
+                out << "layout(std430, set=0, binding=28) readonly buffer InstanceBuffer {\n"
+                       "    mat4 _instanceModels[];\n"
+                       "};\n";
+                out << "#define USE_INSTANCING\n";
+                out << "#define instanceMatrix _instanceModels[gl_InstanceIndex]\n\n";
+            }
         }
 
         // --- Fragment color output (fragment stage only) ---
@@ -386,10 +403,12 @@ namespace threepp::wgpu {
             const std::string& vertexGlsl,
             const std::string& fragmentGlsl,
             const std::vector<std::string>& uniformNames,
-            const std::vector<std::string>& textureNames) {
+            const std::vector<std::string>& textureNames,
+            bool isInstanced) {
 
-        // Cache lookup
-        const size_t hash = std::hash<std::string>{}(vertexGlsl + "##SEP##" + fragmentGlsl);
+        // Cache lookup — instanced variant declares an extra binding, so key on it.
+        const size_t hash = std::hash<std::string>{}(
+                vertexGlsl + "##SEP##" + fragmentGlsl + (isInstanced ? "##INST##" : ""));
         {
             auto it = cache_.find(hash);
             if (it != cache_.end()) return it->second;
@@ -477,12 +496,13 @@ namespace threepp::wgpu {
         const std::string vulkanVert = upgradeToVulkanGlsl(
                 expandedVert, true,
                 varyingNames, varyingLocations,
-                customFields, textureNames);
+                customFields, textureNames, isInstanced);
 
+        // Fragment stage never declares the instance buffer (binding 28 is vertex-only).
         const std::string vulkanFrag = upgradeToVulkanGlsl(
                 expandedFrag, false,
                 varyingNames, varyingLocations,
-                customFields, textureNames);
+                customFields, textureNames, false);
 
         // Step 4: compile to SPIR-V
         std::string vertErr, fragErr;

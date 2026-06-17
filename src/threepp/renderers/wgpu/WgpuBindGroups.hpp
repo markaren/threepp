@@ -63,7 +63,8 @@ namespace threepp::wgpu {
                 size_t lightUniformSize,
                 WGPUBuffer customUniformBuffer, uint32_t customUniformSize,
                 ShaderMaterial* sm,
-                const TextureList& textures);
+                const TextureList& textures,
+                WGPUBuffer instanceBuffer = nullptr, size_t instanceSize = 0);
 
     private:
         std::vector<WGPUBindGroupEntry> entries_;  // persistent, reused across calls
