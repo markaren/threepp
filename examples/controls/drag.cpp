@@ -19,9 +19,9 @@ int main() {
     Scene scene;
     scene.background = Color(0xf0f0f0);
 
-    scene.add(AmbientLight::create(0xaaaaaa));
+    scene.add(AmbientLight::create(0xaaaaaa, 2.0f));
 
-    auto light = SpotLight::create(0xffffff, 2.f);
+    auto light = SpotLight::create(0xffffff, 4.f);
     light->position.set(0, 25, 50);
     light->angle = math::PI / 9;
     light->castShadow = true;
