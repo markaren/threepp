@@ -1,6 +1,5 @@
 
 add_example(NAME "physx_demo" SOURCES main.cpp LINK_IMGUI LINK_PHYSX)
-add_example(NAME "physx_softbody" SOURCES softbody.cpp LINK_IMGUI LINK_PHYSX)
 
 find_package(CUDAToolkit QUIET)
 
@@ -14,23 +13,5 @@ if (TARGET physx_softbody AND THREEPP_WITH_VULKAN)
         target_compile_definitions(physx_softbody PRIVATE THREEPP_PHYSX_CUDA_VK_INTEROP)
         target_link_libraries(physx_softbody PRIVATE CUDA::cuda_driver)
         message(STATUS "physx_softbody: CUDA->Vulkan zero-copy interop enabled")
-    endif ()
-endif ()
-
-add_example(NAME "physx_fish" SOURCES fish_softbody.cpp LINK_IMGUI LINK_PHYSX LINK_MESHOPT)
-if (TARGET physx_fish)
-    target_include_directories(physx_fish PRIVATE "${PROJECT_SOURCE_DIR}/src/external/nlohmann")
-    if (CUDAToolkit_FOUND)
-        target_link_libraries(physx_fish PRIVATE CUDA::cuda_driver)
-        target_compile_definitions(physx_fish PRIVATE THREEPP_PHYSX_CUDA_GL_INTEROP THREEPP_PHYSX_CUDA_VK_INTEROP)
-        message(STATUS "physx_fish: CUDA interop enabled")
-    endif ()
-endif ()
-
-add_example(NAME "conveyor_designer" SOURCES conveyor_designer.cpp LINK_IMGUI)
-if (TARGET conveyor_designer)
-    target_include_directories(conveyor_designer PRIVATE "${PROJECT_SOURCE_DIR}/src/external/nlohmann")
-    if (WIN32)
-        target_link_libraries(conveyor_designer PRIVATE opengl32)
     endif ()
 endif ()

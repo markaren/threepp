@@ -6,6 +6,7 @@ add_subdirectory(Optimization)
 add_subdirectory(Youbot)
 
 if (TARGET unofficial::omniverse-physx-sdk::sdk)
+    add_subdirectory(Fish)
     add_subdirectory(Physics)
     add_subdirectory(RobotCell)
     add_subdirectory(Vehicle)
