@@ -309,6 +309,23 @@ int main(int argc, char** argv) {
     };
     std::vector<AnimatedBelt> beltVisuals;
 
+    // Roller-conveyor visuals: one rotating bank of cylinders per rollers path. Spun each
+    // frame at omega * beltSpeedScale so the rollers turn in step with the kinematic belt
+    // drag underneath them (the collider stays a continuous box surface; the rollers are
+    // the visible powered-roller bed on top).
+    auto rollerVisualMat = MeshStandardMaterial::create();
+    rollerVisualMat->color = Color(0x8a9097);
+    rollerVisualMat->roughness = 0.4f;
+    rollerVisualMat->metalness = 0.7f;
+    rollerVisualMat->flatShading = true;
+    struct RollerBank {
+        std::vector<std::shared_ptr<Mesh>> rollers;
+        std::vector<Quaternion> base;// per-roller axis orientation (parallel to rollers)
+        float omega = 0.f;           // rad/s about each roller's own +Y at beltSpeedScale = 1
+        float angle = 0.f;           // accumulated spin
+    };
+    std::vector<RollerBank> rollerBanks;
+
     auto addConveyorVisual = [&](const conveyor::Piece& piece) {
         auto& t = convTemplate(piece.model);
         if (!t.group) {
@@ -455,7 +472,7 @@ int main(int argc, char** argv) {
     // linearly-dragged boxes; arc-CENTRE waypoints each become one rotationally-driven
     // bend body. `reverse` flips the whole path (travel direction + inlet).
     auto buildPathBelts = [&](const std::vector<conveyor::Waypoint>& ctrl, float width, float speed,
-                              bool reverse, bool smooth) {
+                              bool reverse, bool smooth, bool rollers, float rollerRadius) {
         bool hasArc = false;
         for (const auto& w : ctrl) {
             if (w.arcCenter) { hasArc = true; break; }
@@ -500,26 +517,47 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Visible belt surface (visual only): one continuous ribbon along the finely-
-        // resampled centreline. A per-path clone of the belt material + texture lets each
-        // belt scroll independently; UV.v is arc length (metres), so scrolling the texture
-        // offset.y drags the modular pattern along the belt — around bends included.
+        // Visible belt surface (visual only): a rotating roller bed for a rollers path,
+        // else one continuous ribbon along the finely-resampled centreline.
         auto visPts = conveyor::resamplePath(ctrl, smooth);
         if (visPts.size() >= 2) {
-            constexpr float tileLen = 0.25f;// metres of belt per texture tile
-            auto tex = beltTexture->clone();
-            tex->wrapS = tex->wrapT = TextureWrapping::Repeat;// ensure tiling survives clone
-            tex->minFilter = tex->magFilter = Filter::Linear;
-            tex->generateMipmaps = false;
-            tex->colorSpace = ColorSpace::sRGB;
-            tex->repeat.set(std::max(1.f, std::round(width / tileLen)), 1.f / tileLen);
-            auto mat = beltVisualMat->clone<MeshStandardMaterial>();
-            mat->map = tex;
-            scene.add(Mesh::create(conveyor::ribbonGeometry(visPts, width), mat));
-            // offset.y is in tile units → scroll rate = speed[m/s] * repeat.y[tiles/m];
-            // negative drags the pattern in the +arc-length (travel) direction, flipped
-            // for a reversed belt.
-            beltVisuals.push_back({tex, mat, (reverse ? 1.f : -1.f) * speed * tex->repeat.y});
+            if (rollers) {
+                // A row of cylinders across the belt, spun each frame so the bed reads as
+                // powered. Tops sit on the centreline (where the box collider's top also is),
+                // so fish appear to ride on the rollers. One shared geometry per bank.
+                const float spacing = conveyor::rollerSpacing(rollerRadius);
+                const auto rs = conveyor::rollerTransforms(visPts, rollerRadius, spacing);
+                auto cyl = CylinderGeometry::create(rollerRadius, rollerRadius, width, 12);
+                RollerBank bank;
+                bank.omega = (reverse ? 1.f : -1.f) * speed / std::max(rollerRadius, 1e-3f);
+                for (const auto& r : rs) {
+                    auto roller = Mesh::create(cyl, rollerVisualMat);
+                    roller->position.copy(r.center);
+                    roller->quaternion.copy(r.orientation);
+                    scene.add(roller);
+                    bank.rollers.push_back(roller);
+                    bank.base.push_back(r.orientation);
+                }
+                rollerBanks.push_back(std::move(bank));
+            } else {
+                // A per-path clone of the belt material + texture lets each belt scroll
+                // independently; UV.v is arc length (metres), so scrolling the texture
+                // offset.y drags the modular pattern along the belt — around bends included.
+                constexpr float tileLen = 0.25f;// metres of belt per texture tile
+                auto tex = beltTexture->clone();
+                tex->wrapS = tex->wrapT = TextureWrapping::Repeat;// ensure tiling survives clone
+                tex->minFilter = tex->magFilter = Filter::Linear;
+                tex->generateMipmaps = false;
+                tex->colorSpace = ColorSpace::sRGB;
+                tex->repeat.set(std::max(1.f, std::round(width / tileLen)), 1.f / tileLen);
+                auto mat = beltVisualMat->clone<MeshStandardMaterial>();
+                mat->map = tex;
+                scene.add(Mesh::create(conveyor::ribbonGeometry(visPts, width), mat));
+                // offset.y is in tile units → scroll rate = speed[m/s] * repeat.y[tiles/m];
+                // negative drags the pattern in the +arc-length (travel) direction, flipped
+                // for a reversed belt.
+                beltVisuals.push_back({tex, mat, (reverse ? 1.f : -1.f) * speed * tex->repeat.y});
+            }
 
             // Inlet: spawn a bit downstream of the upstream edge so fish land fully on the
             // belt instead of half-off it. Walk the travel-ordered path forward ~a fish length.
@@ -577,7 +615,8 @@ int main(int argc, char** argv) {
         if (!layout->paths.empty()) {
             for (const auto& p : layout->paths) {
                 if (p.separator) buildPathWall(p.waypoints, p.wallHeight, p.smooth);
-                else buildPathBelts(p.waypoints, p.beltWidth, p.beltSpeed, p.reverse, p.smooth);
+                else buildPathBelts(p.waypoints, p.beltWidth, p.beltSpeed, p.reverse, p.smooth,
+                                    p.rollers, p.rollerRadius);
             }
         } else {
             for (const auto& piece : layout->pieces) addStraightBelt(piece);
@@ -829,6 +868,19 @@ int main(int argc, char** argv) {
             // the new offset flows through. (GLRenderer recomputes the UV matrix per draw, so
             // it never needed this.)
             bv.mat->needsUpdate();
+        }
+
+        // Spin each roller bank in step with the belt drag (same beltSpeedScale), about each
+        // roller's own axis (local +Y), on top of its fixed width-axis orientation.
+        for (auto& bank : rollerBanks) {
+            bank.angle += bank.omega * beltSpeedScale * realDt;
+            Quaternion spin;
+            spin.setFromAxisAngle(Vector3(0, 1, 0), bank.angle);
+            for (size_t i = 0; i < bank.rollers.size() && i < bank.base.size(); ++i) {
+                Quaternion q;
+                q.multiplyQuaternions(bank.base[i], spin);
+                bank.rollers[i]->quaternion.copy(q);
+            }
         }
 
         renderer->render(scene, *camera);

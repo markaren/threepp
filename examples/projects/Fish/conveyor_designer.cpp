@@ -157,16 +157,28 @@ int main(int argc, char** argv) {
         // Separator: a collision-only vertical wall along the centerline instead of a
         // belt. beltWidth is reused as the wall height when this is set.
         bool separator = false;
+        // Rollers: preview the belt as a row of rotating cylinders (a roller conveyor)
+        // instead of one flat ribbon. rollerRadius is the cylinder radius.
+        bool rollers = false;
+        float rollerRadius = 0.05f;
         std::shared_ptr<MeshBasicMaterial> markerMat, planeMat;
+        std::shared_ptr<MeshStandardMaterial> rollerMat;
         std::shared_ptr<LineBasicMaterial> lineMat;
         std::shared_ptr<Line> line;
         std::vector<std::shared_ptr<Mesh>> preview;
+        // When previewing rollers, the per-roller base orientation (parallel to preview);
+        // each frame the cylinder is spun about its own axis on top of this. rollerAngle
+        // accumulates that spin so the rollers visibly turn at the belt speed.
+        std::vector<Quaternion> rollerBase;
+        float rollerAngle = 0.f;
         // Rebuild cache so the (spline-dense) preview only updates on change.
         bool cacheValid = false;
         std::vector<Vector3> cacheCtrl;
         float cacheWidth = -1.f;
         bool cacheSmooth = true;
         bool cacheSeparator = false;
+        bool cacheRollers = false;
+        float cacheRollerRadius = -1.f;
     };
     std::vector<DesignPath> paths;
     int activePath = -1;
@@ -213,6 +225,13 @@ int main(int argc, char** argv) {
         p.planeMat->transparent = true;
         p.planeMat->opacity = 0.35f;
         p.planeMat->side = Side::Double;
+        // Metallic + flat-shaded so the facets catch the light and the spin reads clearly;
+        // tinted by the path colour so roller paths are still colour-coded like the others.
+        p.rollerMat = MeshStandardMaterial::create();
+        p.rollerMat->color = c;
+        p.rollerMat->metalness = 0.6f;
+        p.rollerMat->roughness = 0.4f;
+        p.rollerMat->flatShading = true;
         paths.push_back(std::move(p));
         activePath = static_cast<int>(paths.size()) - 1;
         selectedWp = -1;
@@ -453,13 +472,18 @@ int main(int argc, char** argv) {
                 ImGui::SameLine();
                 if (ImGui::Button("Delete waypoint")) deleteWaypoint(selectedWp);
             }
-            ImGui::Checkbox("Separator (vertical wall, collision-only)", &path.separator);
+            if (ImGui::Checkbox("Separator (vertical wall, collision-only)", &path.separator) && path.separator)
+                path.rollers = false;// separator and rollers are mutually exclusive
             if (path.separator) {
                 ImGui::SliderFloat("Wall height", &path.beltWidth, 0.1f, 3.f);
                 ImGui::Checkbox("Smooth (spline)", &path.smooth);
             } else {
-                ImGui::SliderFloat("Belt width", &path.beltWidth, 0.1f, 3.f);
+                if (ImGui::Checkbox("Rollers (rotating cylinders)", &path.rollers) && path.rollers)
+                    path.separator = false;
+                ImGui::SliderFloat(path.rollers ? "Roller length (width)" : "Belt width",
+                                   &path.beltWidth, 0.1f, 3.f);
                 ImGui::SliderFloat("Belt speed (m/s)", &path.beltSpeed, 0.f, 3.f);
+                if (path.rollers) ImGui::SliderFloat("Roller radius", &path.rollerRadius, 0.02f, 0.2f);
                 ImGui::Checkbox("Reverse flow", &path.reverse);
                 ImGui::SameLine();
                 ImGui::Checkbox("Smooth (spline)", &path.smooth);
@@ -487,6 +511,8 @@ int main(int argc, char** argv) {
                 cp.smooth = path.smooth;
                 cp.separator = path.separator;
                 cp.wallHeight = path.beltWidth;// designer reuses the width slider as wall height
+                cp.rollers = path.rollers;
+                cp.rollerRadius = path.rollerRadius;
                 for (size_t k = 0; k < path.markers.size(); ++k) {
                     conveyor::Waypoint w;
                     w.pos = path.markers[k]->position;
@@ -520,6 +546,8 @@ int main(int argc, char** argv) {
                     path.beltSpeed = lp.beltSpeed;
                     path.reverse = lp.reverse;
                     path.smooth = lp.smooth;
+                    path.rollers = lp.rollers;
+                    path.rollerRadius = lp.rollerRadius;
                     for (auto& wp : lp.waypoints) {
                         auto m = Mesh::create(wpGeom, path.markerMat);
                         m->position.copy(wp.pos);
@@ -554,7 +582,9 @@ int main(int argc, char** argv) {
         renderer.setSize(size);
     });
 
+    Clock clock;
     canvas.animate([&] {
+        const float dt = clock.getDelta();
         // Yaw/scale are authoritative per-piece fields; position is gizmo/ImGui-driven.
         for (auto& p : placed) {
             p.obj->rotation.set(0, math::degToRad(p.yawDeg), 0);
@@ -566,6 +596,7 @@ int main(int argc, char** argv) {
         for (auto& path : paths) {
             bool dirty = !path.cacheValid || path.cacheWidth != path.beltWidth ||
                          path.cacheSmooth != path.smooth || path.cacheSeparator != path.separator ||
+                         path.cacheRollers != path.rollers || path.cacheRollerRadius != path.rollerRadius ||
                          path.cacheCtrl.size() != path.markers.size();
             if (!dirty) {
                 for (size_t i = 0; i < path.markers.size(); ++i) {
@@ -585,6 +616,8 @@ int main(int argc, char** argv) {
             path.cacheWidth = path.beltWidth;
             path.cacheSmooth = path.smooth;
             path.cacheSeparator = path.separator;
+            path.cacheRollers = path.rollers;
+            path.cacheRollerRadius = path.rollerRadius;
             path.cacheValid = true;
 
             if (path.line) {
@@ -595,6 +628,7 @@ int main(int argc, char** argv) {
                 if (m->parent) m->removeFromParent();
             }
             path.preview.clear();
+            path.rollerBase.clear();
 
             std::vector<conveyor::Waypoint> wps;
             wps.reserve(path.markers.size());
@@ -610,16 +644,52 @@ int main(int argc, char** argv) {
                 lineGeom->setFromPoints(pts);
                 path.line = Line::create(lineGeom, path.lineMat);
                 scene.add(path.line);
-                // One continuous ribbon through the centerline instead of a box per
-                // segment: neighbouring quads share their cross-section edge, so bends
-                // stay gap-free (independent boxes fan apart on the outside of a turn).
-                // Vertices are world-space, so the mesh keeps an identity transform.
-                // A separator previews as a vertical wall of the same height (beltWidth).
-                auto geom = path.separator ? conveyor::wallGeometry(pts, path.beltWidth)
-                                           : conveyor::ribbonGeometry(pts, path.beltWidth);
-                auto ribbon = Mesh::create(geom, path.planeMat);
-                scene.add(ribbon);
-                path.preview.push_back(ribbon);
+                if (path.rollers) {
+                    // A roller conveyor: a row of cylinders laid across the belt, spun each
+                    // frame (below) so the path reads as a powered-roller bed. One shared
+                    // cylinder geometry (length = belt width) is reused for every roller.
+                    const float spacing = conveyor::rollerSpacing(path.rollerRadius);
+                    const auto rollers = conveyor::rollerTransforms(pts, path.rollerRadius, spacing);
+                    auto cyl = CylinderGeometry::create(path.rollerRadius, path.rollerRadius,
+                                                        path.beltWidth, 12);
+                    for (const auto& r : rollers) {
+                        auto roller = Mesh::create(cyl, path.rollerMat);
+                        roller->position.copy(r.center);
+                        roller->quaternion.copy(r.orientation);
+                        scene.add(roller);
+                        path.preview.push_back(roller);
+                        path.rollerBase.push_back(r.orientation);
+                    }
+                } else {
+                    // One continuous ribbon through the centerline instead of a box per
+                    // segment: neighbouring quads share their cross-section edge, so bends
+                    // stay gap-free (independent boxes fan apart on the outside of a turn).
+                    // Vertices are world-space, so the mesh keeps an identity transform.
+                    // A separator previews as a vertical wall of the same height (beltWidth).
+                    auto geom = path.separator ? conveyor::wallGeometry(pts, path.beltWidth)
+                                               : conveyor::ribbonGeometry(pts, path.beltWidth);
+                    auto ribbon = Mesh::create(geom, path.planeMat);
+                    scene.add(ribbon);
+                    path.preview.push_back(ribbon);
+                }
+            }
+        }
+
+        // Spin roller previews so a roller path reads as moving. The cylinder's own axis
+        // (local +Y) is aligned to the belt-width direction by rollerBase; the extra turn
+        // about that axis is the surface rolling. omega = surface speed / radius; negative
+        // so the top surface flows along travel (reverse flips it).
+        for (auto& path : paths) {
+            if (!path.rollers || path.preview.empty()) continue;
+            const float omega = (path.reverse ? 1.f : -1.f) * path.beltSpeed /
+                                std::max(path.rollerRadius, 1e-3f);
+            path.rollerAngle += omega * dt;
+            Quaternion spin;
+            spin.setFromAxisAngle(Vector3(0, 1, 0), path.rollerAngle);
+            for (size_t i = 0; i < path.preview.size() && i < path.rollerBase.size(); ++i) {
+                Quaternion q;
+                q.multiplyQuaternions(path.rollerBase[i], spin);
+                path.preview[i]->quaternion.copy(q);
             }
         }
 

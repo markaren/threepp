@@ -178,6 +178,66 @@ namespace conveyor {
         return geom;
     }
 
+    // A single conveyor roller: a cylinder lying ACROSS the belt (its long axis is the
+    // horizontal width direction) whose top touches the centerline conveying surface.
+    // `orientation` maps a unit cylinder's local +Y (CylinderGeometry's axis) onto that
+    // width axis, so a roller is drawn/collided by spinning a cylinder about its own +Y.
+    // Shared by the designer (preview) and the sim (collider + spin) so they always match.
+    struct Roller {
+        Vector3 center;
+        Quaternion orientation;
+    };
+
+    // Centre-to-centre spacing of rollers of a given radius. Just over the diameter
+    // (2·radius) so the cylinders nearly touch — a tight roller bed with only a hair of
+    // gap — and the designer and sim lay out an identical row of rollers.
+    inline float rollerSpacing(float radius) { return radius * 2.15f; }
+
+    // Lay rollers along a centerline polyline: one cylinder every `spacing` metres of arc
+    // length, axis = horizontal lateral (perpendicular to travel, matching the belt frame),
+    // centre dropped `radius` below the centerline so the roller TOP sits on the conveying
+    // surface. A half-spacing margin is left at both ends so rollers stay within the path.
+    inline std::vector<Roller> rollerTransforms(const std::vector<Vector3>& centerline,
+                                                float radius, float spacing) {
+        std::vector<Roller> out;
+        const size_t n = centerline.size();
+        if (n < 2 || radius <= 1e-4f || spacing <= 1e-4f) return out;
+        const Vector3 up(0, 1, 0);
+
+        float total = 0.f;
+        for (size_t i = 0; i + 1 < n; ++i) total += centerline[i].distanceTo(centerline[i + 1]);
+        if (total < 1e-4f) return out;
+
+        float next = spacing * 0.5f;// first roller centre, half-gap margin at the ends
+        float acc = 0.f;
+        for (size_t i = 0; i + 1 < n && next < total; ++i) {
+            const float seg = centerline[i].distanceTo(centerline[i + 1]);
+            if (seg < 1e-6f) continue;
+            Vector3 t(centerline[i + 1].x - centerline[i].x,
+                      centerline[i + 1].y - centerline[i].y,
+                      centerline[i + 1].z - centerline[i].z);
+            t.multiplyScalar(1.f / seg);
+            Vector3 lat;
+            if (std::abs(t.dot(up)) > 0.999f) lat.set(0, 0, 1);
+            else lat.crossVectors(t, up).normalize();
+            Vector3 nv;
+            nv.crossVectors(lat, t).normalize();// belt normal: top is +nv from the centre
+            Quaternion q;
+            q.setFromUnitVectors(up, lat);// cylinder axis (+Y) → width direction
+            for (; next < acc + seg; next += spacing) {
+                const float f = (next - acc) / seg;
+                Vector3 p;
+                p.lerpVectors(centerline[i], centerline[i + 1], f);
+                Roller r;
+                r.center.set(p.x - nv.x * radius, p.y - nv.y * radius, p.z - nv.z * radius);
+                r.orientation.copy(q);
+                out.push_back(r);
+            }
+            acc += seg;
+        }
+        return out;
+    }
+
     // A path waypoint. Normally a point on the centerline; if arcCenter is set, this
     // point is the CENTRE of a circular arc between its two neighbours (start, end) —
     // used for exact 90/180 horizontal bends instead of a spline approximation.
@@ -323,6 +383,11 @@ namespace conveyor {
         // lane divider) instead of a moving belt surface. Uses the same waypoints.
         bool separator = false;
         float wallHeight = 0.5f;
+        // Rollers: render/collide the belt as a row of rotating cylinders (a roller
+        // conveyor) instead of one flat ribbon. Still conveys at beltSpeed; rollerRadius
+        // is the cylinder radius (and sets the deck height above the centerline).
+        bool rollers = false;
+        float rollerRadius = 0.05f;
     };
 
     struct Layout {
@@ -352,6 +417,8 @@ namespace conveyor {
             jp["smooth"] = pa.smooth;
             jp["separator"] = pa.separator;
             jp["wallHeight"] = pa.wallHeight;
+            jp["rollers"] = pa.rollers;
+            jp["rollerRadius"] = pa.rollerRadius;
             jp["waypoints"] = nlohmann::json::array();
             for (const auto& w : pa.waypoints) {
                 if (w.arcCenter) jp["waypoints"].push_back({w.pos.x, w.pos.y, w.pos.z, 1});
@@ -403,6 +470,8 @@ namespace conveyor {
                 p.smooth = jp.value("smooth", true);
                 p.separator = jp.value("separator", false);
                 p.wallHeight = jp.value("wallHeight", 0.5f);
+                p.rollers = jp.value("rollers", false);
+                p.rollerRadius = jp.value("rollerRadius", 0.05f);
                 if (auto w = jp.find("waypoints"); w != jp.end() && w->is_array()) readWaypoints(*w, p.waypoints);
                 out.paths.push_back(p);
             }
