@@ -7,7 +7,7 @@ find_package(CUDAToolkit QUIET)
 # Vulkan backend + the CUDA toolkit (driver API) at build time; without
 # either, the example silently keeps the pinned-memory CPU bridge.
 
-add_example(NAME "physx_fish" SOURCES fish_softbody.cpp LINK_IMGUI LINK_PHYSX LINK_MESHOPT)
+add_example(NAME "physx_fish" SOURCES fish_softbody.cpp ConveyorSystem.cpp LINK_IMGUI LINK_PHYSX LINK_MESHOPT)
 if (TARGET physx_fish)
     target_include_directories(physx_fish PRIVATE "${PROJECT_SOURCE_DIR}/src/external/nlohmann")
     if (CUDAToolkit_FOUND)
