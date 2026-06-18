@@ -238,12 +238,121 @@ namespace conveyor {
         return out;
     }
 
+    // A conveyor cleat (a.k.a. flight): a thin rectangular bar standing ACROSS the belt,
+    // perpendicular to travel, that catches product on an incline so it can't slide back
+    // (and carries it up). Shared by the designer (preview) and the sim (moving collider).
+    constexpr float kCleatThickness = 0.04f;// bar thickness along travel (metres)
+
+    struct Cleat {
+        Vector3 center;        // box centre: on the surface, raised height*0.5 along the normal
+        Quaternion orientation;// segmentOrientation: local +X travel, +Y normal, +Z width
+    };
+
+    // Pose of a cleat at arc-length `s` along a centerline polyline, folded by `foldAngle`
+    // (radians) about its BASE edge (the width axis, local +Z): 0 = standing perpendicular,
+    // ±PI/2 = lying flat along travel. The base edge stays anchored on the belt, so the bar
+    // pivots down to planar at the ends rather than sinking. Used by the designer (static,
+    // foldAngle 0) and the sim (the marching band folds over its pulleys).
+    inline void cleatPoseAt(const std::vector<Vector3>& centerline, float s, float height,
+                            float foldAngle, Vector3& center, Quaternion& orientation) {
+        const size_t n = centerline.size();
+        if (n == 0) return;
+        if (n == 1) {
+            center = centerline[0];
+            return;
+        }
+        float acc = 0.f;
+        size_t seg = 0;
+        float t = 0.f;
+        for (size_t i = 0; i + 1 < n; ++i) {
+            const float len = centerline[i].distanceTo(centerline[i + 1]);
+            seg = i;
+            if (s <= acc + len || i + 2 == n) {
+                t = len > 1e-6f ? std::clamp((s - acc) / len, 0.f, 1.f) : 0.f;
+                break;
+            }
+            acc += len;
+        }
+        const Vector3& a = centerline[seg];
+        const Vector3& b = centerline[seg + 1];
+        Vector3 base;
+        base.lerpVectors(a, b, t);
+        Quaternion fold;
+        fold.setFromAxisAngle(Vector3(0, 0, 1), foldAngle);// about the bar's own width axis
+        orientation.multiplyQuaternions(segmentOrientation(a, b), fold);
+        Vector3 up(0, 1, 0);
+        up.applyQuaternion(orientation);// the folded bar's up direction (its length axis)
+        center.set(base.x + up.x * height * 0.5f, base.y + up.y * height * 0.5f, base.z + up.z * height * 0.5f);
+    }
+
+    // Fold angle (radians, about the width axis) of a cleat at arc-length `s`: 0 across the
+    // carrying run, slerping to +PI/2 at the start and -PI/2 at the end within `rampLen` of
+    // each end, so the bar lies flat (planar to the belt) at the pulleys. A cleat models a
+    // closed band; folding flat there lets it wrap back without a standing bar catching its
+    // load. The bar tips the way the band curves: forward over the end, up from behind at the
+    // start. (Single-axis angle interpolation is a slerp of the standing→flat orientations.)
+    inline float cleatFold(float s, float length, float rampLen) {
+        if (rampLen <= 1e-4f) return 0.f;
+        const float half = static_cast<float>(math::PI) * 0.5f;
+        float f, sign;
+        if (s < rampLen) {
+            f = 1.f - s / rampLen;
+            sign = 1.f;// start: +PI/2 (folded back) -> 0 (standing)
+        } else if (s > length - rampLen) {
+            f = 1.f - (length - s) / rampLen;
+            sign = -1.f;// end: 0 (standing) -> -PI/2 (folded forward)
+        } else {
+            return 0.f;
+        }
+        f = std::clamp(f, 0.f, 1.f);
+        f = f * f * (3.f - 2.f * f);// smoothstep ease
+        return sign * half * f;
+    }
+
+    // Arc-length positions of cleats that EVENLY tile a run of length `length` at ~`spacing`
+    // apart: count = round(length/spacing) bars at (i+0.5)·length/count. Because the run is a
+    // closed loop (the band wraps end→start), deriving the pitch from a whole bar count keeps
+    // every gap — including across the wrap seam — equal, instead of leaving an odd remainder
+    // gap there (which would jump the spacing whenever a cleat starts over).
+    inline std::vector<float> cleatOffsets(float length, float spacing) {
+        std::vector<float> out;
+        if (length < 1e-4f || spacing < 1e-4f) return out;
+        const int count = std::max(1, static_cast<int>(std::lround(length / spacing)));
+        const float pitch = length / static_cast<float>(count);
+        for (int i = 0; i < count; ++i) out.push_back((static_cast<float>(i) + 0.5f) * pitch);
+        return out;
+    }
+
+    // Lay cleats along a centerline, evenly tiled (see cleatOffsets), each standing `height`
+    // above the surface. Shared layout so the designer and sim place an identical set of bars
+    // (the designer shows them at full height).
+    inline std::vector<Cleat> cleatTransforms(const std::vector<Vector3>& centerline,
+                                              float height, float spacing) {
+        std::vector<Cleat> out;
+        const size_t n = centerline.size();
+        if (n < 2 || height <= 1e-4f || spacing <= 1e-4f) return out;
+        float total = 0.f;
+        for (size_t i = 0; i + 1 < n; ++i) total += centerline[i].distanceTo(centerline[i + 1]);
+        for (float s : cleatOffsets(total, spacing)) {
+            Cleat c;
+            cleatPoseAt(centerline, s, height, 0.f, c.center, c.orientation);
+            out.push_back(c);
+        }
+        return out;
+    }
+
+    // Per-segment surface kind. A segment is the span LEAVING a waypoint (to the next one);
+    // by default it's a flat belt, with rollers / cleats opt-in PER SEGMENT (not per path).
+    enum SegKind { SegFlat = 0, SegRollers = 1, SegCleats = 2 };
+
     // A path waypoint. Normally a point on the centerline; if arcCenter is set, this
     // point is the CENTRE of a circular arc between its two neighbours (start, end) —
-    // used for exact 90/180 horizontal bends instead of a spline approximation.
+    // used for exact 90/180 horizontal bends instead of a spline approximation. segKind is
+    // the surface of the segment leaving this waypoint (unused on the last waypoint).
     struct Waypoint {
         Vector3 pos;
         bool arcCenter = false;
+        int segKind = SegFlat;
     };
 
     // Circular-arc parameters for a bend defined by an arc-CENTRE waypoint: the arc
@@ -361,6 +470,114 @@ namespace conveyor {
         return out;
     }
 
+    // A maximal run of consecutive same-kind segments, with its own dense centerline. Runs
+    // share a boundary point with their neighbours, so a flat→rollers change meets gap-free.
+    struct PathRun {
+        int kind = SegFlat;
+        std::vector<Vector3> pts;
+    };
+
+    // Like resamplePath, but split into runs by per-segment kind (Waypoint.segKind of the
+    // segment's starting waypoint). Adjacent same-kind segments merge into one run so flat
+    // stretches stay gap-free; arc spans are always treated as flat. Used by the designer
+    // and sim so each segment's surface (flat / rollers / cleats) matches.
+    inline std::vector<PathRun> resamplePathByKind(const std::vector<Waypoint>& wps, bool smooth,
+                                                   int samplesPerSegment = 12) {
+        const float PI = static_cast<float>(math::PI);
+        const int n = static_cast<int>(wps.size());
+        bool hasArc = false;
+        for (const auto& w : wps) {
+            if (w.arcCenter) {
+                hasArc = true;
+                break;
+            }
+        }
+
+        std::vector<Vector3> pts;
+        std::vector<int> edgeKind;// kind of edge pts[i] -> pts[i+1]
+
+        if (!hasArc && (!smooth || n < 3)) {
+            for (const auto& w : wps) pts.push_back(w.pos);
+            for (int j = 0; j + 1 < n; ++j) edgeKind.push_back(wps[j].segKind);
+        } else if (!hasArc) {
+            // Smooth Catmull-Rom: sample each control-point span over its own t-subrange so
+            // every output edge maps to a known waypoint segment (the curve passes through
+            // each control point at t = j/(n-1)).
+            std::vector<Vector3> ctrl;
+            ctrl.reserve(n);
+            for (const auto& w : wps) ctrl.push_back(w.pos);
+            CatmullRomCurve3 curve(ctrl);
+            const int steps = std::max(2, samplesPerSegment);
+            Vector3 p;
+            curve.getPoint(0.f, p);
+            pts.push_back(p);
+            for (int j = 0; j + 1 < n; ++j) {
+                for (int k = 1; k <= steps; ++k) {
+                    const float t = (static_cast<float>(j) + static_cast<float>(k) / static_cast<float>(steps)) /
+                                    static_cast<float>(n - 1);
+                    curve.getPoint(t, p);
+                    pts.push_back(p);
+                    edgeKind.push_back(wps[j].segKind);
+                }
+            }
+        } else {
+            // Arc walk (mirrors resamplePath). A straight edge into a regular waypoint carries
+            // the previous waypoint's kind; arc spans are flat.
+            int i = 0;
+            while (i < n) {
+                if (wps[i].arcCenter) {
+                    if (pts.empty() || i + 1 >= n || wps[i + 1].arcCenter) {
+                        ++i;
+                        continue;
+                    }
+                    const Vector3 A = pts.back();
+                    const Vector3 C = wps[i].pos;
+                    const Vector3 B = wps[i + 1].pos;
+                    Vector3 incoming(0.f, 0.f, 0.f);
+                    if (pts.size() >= 2) {
+                        incoming.set(pts.back().x - pts[pts.size() - 2].x, 0.f,
+                                     pts.back().z - pts[pts.size() - 2].z);
+                    }
+                    const Arc arc = computeArc(A, C, B, incoming);
+                    if (!arc.valid) {
+                        pts.push_back(B);
+                        edgeKind.push_back(SegFlat);
+                        i += 2;
+                        continue;
+                    }
+                    const int steps = std::max(2, static_cast<int>(std::ceil(
+                            std::abs(arc.sweep) / (PI * 0.5f) * static_cast<float>(std::max(2, samplesPerSegment)))));
+                    for (int k = 1; k <= steps; ++k) {
+                        const float t = static_cast<float>(k) / static_cast<float>(steps);
+                        const float ang = arc.a0 + arc.sweep * t;
+                        const float rad = arc.radA + (arc.radB - arc.radA) * t;
+                        pts.emplace_back(C.x + rad * std::cos(ang), A.y + (B.y - A.y) * t, C.z + rad * std::sin(ang));
+                        edgeKind.push_back(SegFlat);
+                    }
+                    i += 2;
+                } else {
+                    if (!pts.empty()) edgeKind.push_back(wps[i - 1].segKind);
+                    pts.push_back(wps[i].pos);
+                    ++i;
+                }
+            }
+        }
+
+        std::vector<PathRun> runs;
+        if (pts.size() < 2) return runs;
+        size_t start = 0;
+        for (size_t e = 0; e < edgeKind.size(); ++e) {
+            if (e + 1 == edgeKind.size() || edgeKind[e + 1] != edgeKind[e]) {
+                PathRun run;
+                run.kind = edgeKind[e];
+                run.pts.assign(pts.begin() + static_cast<long>(start), pts.begin() + static_cast<long>(e) + 2);
+                runs.push_back(std::move(run));
+                start = e + 1;
+            }
+        }
+        return runs;
+    }
+
     // --- Layout schema (the JSON written by the designer) ----------------------
 
     struct Piece {
@@ -383,11 +600,12 @@ namespace conveyor {
         // lane divider) instead of a moving belt surface. Uses the same waypoints.
         bool separator = false;
         float wallHeight = 0.5f;
-        // Rollers: render/collide the belt as a row of rotating cylinders (a roller
-        // conveyor) instead of one flat ribbon. Still conveys at beltSpeed; rollerRadius
-        // is the cylinder radius (and sets the deck height above the centerline).
-        bool rollers = false;
+        // Per-segment surface is opt-in via each Waypoint.segKind (flat / rollers / cleats);
+        // these are the shared tuning params for whichever segments use them. rollerRadius is
+        // the cylinder radius (and deck height); cleatHeight/cleatSpacing size the flights.
         float rollerRadius = 0.05f;
+        float cleatHeight = 0.15f;
+        float cleatSpacing = 0.6f;
     };
 
     struct Layout {
@@ -417,12 +635,19 @@ namespace conveyor {
             jp["smooth"] = pa.smooth;
             jp["separator"] = pa.separator;
             jp["wallHeight"] = pa.wallHeight;
-            jp["rollers"] = pa.rollers;
             jp["rollerRadius"] = pa.rollerRadius;
+            jp["cleatHeight"] = pa.cleatHeight;
+            jp["cleatSpacing"] = pa.cleatSpacing;
             jp["waypoints"] = nlohmann::json::array();
             for (const auto& w : pa.waypoints) {
-                if (w.arcCenter) jp["waypoints"].push_back({w.pos.x, w.pos.y, w.pos.z, 1});
-                else jp["waypoints"].push_back({w.pos.x, w.pos.y, w.pos.z});
+                // [x,y,z] (flat) | [x,y,z,arc] | [x,y,z,arc,segKind]: the 4th element is the
+                // arc-centre flag, the 5th the segment kind leaving this waypoint.
+                if (w.segKind != SegFlat)
+                    jp["waypoints"].push_back({w.pos.x, w.pos.y, w.pos.z, w.arcCenter ? 1 : 0, w.segKind});
+                else if (w.arcCenter)
+                    jp["waypoints"].push_back({w.pos.x, w.pos.y, w.pos.z, 1});
+                else
+                    jp["waypoints"].push_back({w.pos.x, w.pos.y, w.pos.z});
             }
             j["paths"].push_back(jp);
         }
@@ -457,9 +682,19 @@ namespace conveyor {
                     Waypoint w;
                     w.pos.set(jw[0].get<float>(), jw[1].get<float>(), jw[2].get<float>());
                     w.arcCenter = jw.size() >= 4 && jw[3].get<float>() != 0.f;
+                    w.segKind = jw.size() >= 5 ? static_cast<int>(jw[4].get<float>()) : SegFlat;
                     dst.push_back(w);
                 }
             }
+        };
+        // Back-compat: an old per-path rollers/cleats flag becomes the kind of every segment.
+        auto applyLegacyKind = [](const nlohmann::json& jp, Path& p) {
+            int kind = SegFlat;
+            if (jp.value("cleats", false)) kind = SegCleats;
+            else if (jp.value("rollers", false)) kind = SegRollers;
+            if (kind != SegFlat)
+                for (auto& w : p.waypoints)
+                    if (w.segKind == SegFlat) w.segKind = kind;
         };
         if (auto it = j.find("paths"); it != j.end() && it->is_array()) {
             for (const auto& jp : *it) {
@@ -470,9 +705,11 @@ namespace conveyor {
                 p.smooth = jp.value("smooth", true);
                 p.separator = jp.value("separator", false);
                 p.wallHeight = jp.value("wallHeight", 0.5f);
-                p.rollers = jp.value("rollers", false);
                 p.rollerRadius = jp.value("rollerRadius", 0.05f);
+                p.cleatHeight = jp.value("cleatHeight", 0.15f);
+                p.cleatSpacing = jp.value("cleatSpacing", 0.6f);
                 if (auto w = jp.find("waypoints"); w != jp.end() && w->is_array()) readWaypoints(*w, p.waypoints);
+                applyLegacyKind(jp, p);
                 out.paths.push_back(p);
             }
         } else if (auto w = j.find("waypoints"); w != j.end() && w->is_array()) {

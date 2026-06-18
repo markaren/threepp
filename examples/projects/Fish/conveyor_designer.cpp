@@ -152,33 +152,37 @@ int main(int argc, char** argv) {
     struct DesignPath {
         std::vector<std::shared_ptr<Object3D>> markers;
         std::vector<char> arcCenter;// parallel to markers: 1 = this is an arc centre
+        std::vector<int> segKind;   // parallel to markers: surface of the segment leaving each
         float beltWidth = 1.0f, beltSpeed = 0.6f;
         bool reverse = false, smooth = true;
         // Separator: a collision-only vertical wall along the centerline instead of a
         // belt. beltWidth is reused as the wall height when this is set.
         bool separator = false;
-        // Rollers: preview the belt as a row of rotating cylinders (a roller conveyor)
-        // instead of one flat ribbon. rollerRadius is the cylinder radius.
-        bool rollers = false;
+        // Shared tuning for whichever segments opt into rollers / cleats (segKind, per
+        // segment). rollerRadius = cylinder radius; cleatHeight/cleatSpacing size the flights.
         float rollerRadius = 0.05f;
+        float cleatHeight = 0.15f;
+        float cleatSpacing = 0.6f;
         std::shared_ptr<MeshBasicMaterial> markerMat, planeMat;
-        std::shared_ptr<MeshStandardMaterial> rollerMat;
+        std::shared_ptr<MeshStandardMaterial> rollerMat, cleatMat;
         std::shared_ptr<LineBasicMaterial> lineMat;
         std::shared_ptr<Line> line;
         std::vector<std::shared_ptr<Mesh>> preview;
-        // When previewing rollers, the per-roller base orientation (parallel to preview);
-        // each frame the cylinder is spun about its own axis on top of this. rollerAngle
-        // accumulates that spin so the rollers visibly turn at the belt speed.
+        // Roller previews to spin each frame (decoupled from `preview`, which also holds
+        // ribbons / cleat bars). rollerBase[i] is roller i's base axis orientation; the spin
+        // is an extra turn about its own axis. rollerAngle accumulates that spin.
+        std::vector<std::shared_ptr<Mesh>> rollerMeshes;
         std::vector<Quaternion> rollerBase;
         float rollerAngle = 0.f;
         // Rebuild cache so the (spline-dense) preview only updates on change.
         bool cacheValid = false;
         std::vector<Vector3> cacheCtrl;
+        std::vector<int> cacheSegKind;
         float cacheWidth = -1.f;
         bool cacheSmooth = true;
         bool cacheSeparator = false;
-        bool cacheRollers = false;
         float cacheRollerRadius = -1.f;
+        float cacheCleatHeight = -1.f, cacheCleatSpacing = -1.f;
     };
     std::vector<DesignPath> paths;
     int activePath = -1;
@@ -232,6 +236,11 @@ int main(int argc, char** argv) {
         p.rollerMat->metalness = 0.6f;
         p.rollerMat->roughness = 0.4f;
         p.rollerMat->flatShading = true;
+        // Cleats: solid bars, path-colour tinted so they read against the translucent belt.
+        p.cleatMat = MeshStandardMaterial::create();
+        p.cleatMat->color = c;
+        p.cleatMat->metalness = 0.3f;
+        p.cleatMat->roughness = 0.6f;
         paths.push_back(std::move(p));
         activePath = static_cast<int>(paths.size()) - 1;
         selectedWp = -1;
@@ -250,6 +259,7 @@ int main(int argc, char** argv) {
         scene.add(m);
         path.markers.push_back(m);
         path.arcCenter.push_back(0);
+        path.segKind.push_back(conveyor::SegFlat);
         selectWaypoint(static_cast<int>(path.markers.size()) - 1);
     };
 
@@ -261,6 +271,7 @@ int main(int argc, char** argv) {
         if (path.markers[i]->parent) path.markers[i]->removeFromParent();
         path.markers.erase(path.markers.begin() + i);
         path.arcCenter.erase(path.arcCenter.begin() + i);
+        path.segKind.erase(path.segKind.begin() + i);
         selectedWp = -1;
     };
 
@@ -284,6 +295,8 @@ int main(int argc, char** argv) {
         scene.add(m);
         path.markers.insert(path.markers.begin() + (i + 1), m);
         path.arcCenter.insert(path.arcCenter.begin() + (i + 1), 0);
+        // New segment inherits the kind of the one it splits, so the surface stays uniform.
+        path.segKind.insert(path.segKind.begin() + (i + 1), path.segKind[i]);
         selectWaypoint(i + 1);
     };
 
@@ -454,9 +467,13 @@ int main(int argc, char** argv) {
             ImGui::Text("Active path %d — %d waypoints", activePath, static_cast<int>(path.markers.size()));
             if (ImGui::Button("Add waypoint")) addWaypoint();
             for (int i = 0; i < static_cast<int>(path.markers.size()); ++i) {
-                char lbl[56];
-                std::snprintf(lbl, sizeof(lbl), "wp %d%s##wp%d", i,
-                              path.arcCenter[i] ? " [arc centre]" : "", i);
+                const bool hasSeg = i + 1 < static_cast<int>(path.markers.size()) && !path.arcCenter[i];
+                const char* kindTag = !hasSeg ? "" : path.segKind[i] == conveyor::SegRollers ? " [rollers]"
+                                              : path.segKind[i] == conveyor::SegCleats        ? " [cleats]"
+                                                                                              : "";
+                char lbl[64];
+                std::snprintf(lbl, sizeof(lbl), "wp %d%s%s##wp%d", i,
+                              path.arcCenter[i] ? " [arc centre]" : "", kindTag, i);
                 if (ImGui::Selectable(lbl, i == selectedWp)) selectWaypoint(i);
             }
             if (selectedWp >= 0 && selectedWp < static_cast<int>(path.markers.size())) {
@@ -468,25 +485,46 @@ int main(int argc, char** argv) {
                     path.markers[selectedWp]->scale.set(s, s, s);
                     path.cacheValid = false;// force preview rebuild
                 }
+                // Per-segment surface: the kind of the span leaving this waypoint (flat by
+                // default; arc spans are always flat so the selector is hidden for them).
+                if (!path.separator && selectedWp + 1 < static_cast<int>(path.markers.size()) &&
+                    !path.arcCenter[selectedWp]) {
+                    int* kp = &path.segKind[selectedWp];
+                    ImGui::Text("Segment to next:");
+                    ImGui::RadioButton("Flat", kp, conveyor::SegFlat);
+                    ImGui::SameLine();
+                    ImGui::RadioButton("Rollers", kp, conveyor::SegRollers);
+                    ImGui::SameLine();
+                    ImGui::RadioButton("Cleats", kp, conveyor::SegCleats);
+                }
                 if (ImGui::Button("Insert after")) insertWaypointAfter(selectedWp);
                 ImGui::SameLine();
                 if (ImGui::Button("Delete waypoint")) deleteWaypoint(selectedWp);
             }
-            if (ImGui::Checkbox("Separator (vertical wall, collision-only)", &path.separator) && path.separator)
-                path.rollers = false;// separator and rollers are mutually exclusive
+            ImGui::Checkbox("Separator (vertical wall, collision-only)", &path.separator);
             if (path.separator) {
                 ImGui::SliderFloat("Wall height", &path.beltWidth, 0.1f, 3.f);
                 ImGui::Checkbox("Smooth (spline)", &path.smooth);
             } else {
-                if (ImGui::Checkbox("Rollers (rotating cylinders)", &path.rollers) && path.rollers)
-                    path.separator = false;
-                ImGui::SliderFloat(path.rollers ? "Roller length (width)" : "Belt width",
-                                   &path.beltWidth, 0.1f, 3.f);
+                ImGui::SliderFloat("Belt width", &path.beltWidth, 0.1f, 3.f);
                 ImGui::SliderFloat("Belt speed (m/s)", &path.beltSpeed, 0.f, 3.f);
-                if (path.rollers) ImGui::SliderFloat("Roller radius", &path.rollerRadius, 0.02f, 0.2f);
                 ImGui::Checkbox("Reverse flow", &path.reverse);
                 ImGui::SameLine();
                 ImGui::Checkbox("Smooth (spline)", &path.smooth);
+                // Tuning for whichever segments opt into rollers / cleats (set per segment in
+                // the waypoint list above). Shown only when at least one segment uses them.
+                bool anyRollers = false, anyCleats = false;
+                for (int k = 0; k + 1 < static_cast<int>(path.markers.size()); ++k) {
+                    if (path.arcCenter[k]) continue;
+                    if (path.segKind[k] == conveyor::SegRollers) anyRollers = true;
+                    else if (path.segKind[k] == conveyor::SegCleats) anyCleats = true;
+                }
+                if (anyRollers) ImGui::SliderFloat("Roller radius", &path.rollerRadius, 0.02f, 0.2f);
+                if (anyCleats) {
+                    ImGui::SliderFloat("Cleat height", &path.cleatHeight, 0.03f, 0.5f);
+                    ImGui::SliderFloat("Cleat spacing", &path.cleatSpacing, 0.15f, 2.f);
+                }
+                ImGui::TextDisabled("Per segment: pick a waypoint, set Flat / Rollers / Cleats.");
             }
         }
 
@@ -511,12 +549,14 @@ int main(int argc, char** argv) {
                 cp.smooth = path.smooth;
                 cp.separator = path.separator;
                 cp.wallHeight = path.beltWidth;// designer reuses the width slider as wall height
-                cp.rollers = path.rollers;
                 cp.rollerRadius = path.rollerRadius;
+                cp.cleatHeight = path.cleatHeight;
+                cp.cleatSpacing = path.cleatSpacing;
                 for (size_t k = 0; k < path.markers.size(); ++k) {
                     conveyor::Waypoint w;
                     w.pos = path.markers[k]->position;
                     w.arcCenter = path.arcCenter[k] != 0;
+                    w.segKind = path.segKind[k];
                     cp.waypoints.push_back(w);
                 }
                 layout.paths.push_back(cp);
@@ -546,8 +586,9 @@ int main(int argc, char** argv) {
                     path.beltSpeed = lp.beltSpeed;
                     path.reverse = lp.reverse;
                     path.smooth = lp.smooth;
-                    path.rollers = lp.rollers;
                     path.rollerRadius = lp.rollerRadius;
+                    path.cleatHeight = lp.cleatHeight;
+                    path.cleatSpacing = lp.cleatSpacing;
                     for (auto& wp : lp.waypoints) {
                         auto m = Mesh::create(wpGeom, path.markerMat);
                         m->position.copy(wp.pos);
@@ -555,6 +596,7 @@ int main(int argc, char** argv) {
                         scene.add(m);
                         path.markers.push_back(m);
                         path.arcCenter.push_back(wp.arcCenter ? 1 : 0);
+                        path.segKind.push_back(wp.segKind);
                     }
                 }
                 if (paths.empty()) addPath();
@@ -596,7 +638,9 @@ int main(int argc, char** argv) {
         for (auto& path : paths) {
             bool dirty = !path.cacheValid || path.cacheWidth != path.beltWidth ||
                          path.cacheSmooth != path.smooth || path.cacheSeparator != path.separator ||
-                         path.cacheRollers != path.rollers || path.cacheRollerRadius != path.rollerRadius ||
+                         path.cacheRollerRadius != path.rollerRadius ||
+                         path.cacheCleatHeight != path.cleatHeight || path.cacheCleatSpacing != path.cleatSpacing ||
+                         path.cacheSegKind != path.segKind ||
                          path.cacheCtrl.size() != path.markers.size();
             if (!dirty) {
                 for (size_t i = 0; i < path.markers.size(); ++i) {
@@ -616,8 +660,10 @@ int main(int argc, char** argv) {
             path.cacheWidth = path.beltWidth;
             path.cacheSmooth = path.smooth;
             path.cacheSeparator = path.separator;
-            path.cacheRollers = path.rollers;
             path.cacheRollerRadius = path.rollerRadius;
+            path.cacheCleatHeight = path.cleatHeight;
+            path.cacheCleatSpacing = path.cleatSpacing;
+            path.cacheSegKind = path.segKind;
             path.cacheValid = true;
 
             if (path.line) {
@@ -628,6 +674,7 @@ int main(int argc, char** argv) {
                 if (m->parent) m->removeFromParent();
             }
             path.preview.clear();
+            path.rollerMeshes.clear();
             path.rollerBase.clear();
 
             std::vector<conveyor::Waypoint> wps;
@@ -636,6 +683,7 @@ int main(int argc, char** argv) {
                 conveyor::Waypoint w;
                 w.pos = path.markers[k]->position;
                 w.arcCenter = path.arcCenter[k] != 0;
+                w.segKind = path.segKind[k];
                 wps.push_back(w);
             }
             const std::vector<Vector3> pts = conveyor::resamplePath(wps, path.smooth);
@@ -644,52 +692,68 @@ int main(int argc, char** argv) {
                 lineGeom->setFromPoints(pts);
                 path.line = Line::create(lineGeom, path.lineMat);
                 scene.add(path.line);
-                if (path.rollers) {
-                    // A roller conveyor: a row of cylinders laid across the belt, spun each
-                    // frame (below) so the path reads as a powered-roller bed. One shared
-                    // cylinder geometry (length = belt width) is reused for every roller.
-                    const float spacing = conveyor::rollerSpacing(path.rollerRadius);
-                    const auto rollers = conveyor::rollerTransforms(pts, path.rollerRadius, spacing);
-                    auto cyl = CylinderGeometry::create(path.rollerRadius, path.rollerRadius,
-                                                        path.beltWidth, 12);
-                    for (const auto& r : rollers) {
-                        auto roller = Mesh::create(cyl, path.rollerMat);
-                        roller->position.copy(r.center);
-                        roller->quaternion.copy(r.orientation);
-                        scene.add(roller);
-                        path.preview.push_back(roller);
-                        path.rollerBase.push_back(r.orientation);
-                    }
+                if (path.separator) {
+                    // A separator previews as one continuous vertical wall (beltWidth = height).
+                    auto wall = Mesh::create(conveyor::wallGeometry(pts, path.beltWidth), path.planeMat);
+                    scene.add(wall);
+                    path.preview.push_back(wall);
                 } else {
-                    // One continuous ribbon through the centerline instead of a box per
-                    // segment: neighbouring quads share their cross-section edge, so bends
-                    // stay gap-free (independent boxes fan apart on the outside of a turn).
-                    // Vertices are world-space, so the mesh keeps an identity transform.
-                    // A separator previews as a vertical wall of the same height (beltWidth).
-                    auto geom = path.separator ? conveyor::wallGeometry(pts, path.beltWidth)
-                                               : conveyor::ribbonGeometry(pts, path.beltWidth);
-                    auto ribbon = Mesh::create(geom, path.planeMat);
-                    scene.add(ribbon);
-                    path.preview.push_back(ribbon);
+                    // Build each segment's surface by its kind. Runs share boundary points so a
+                    // flat→rollers/cleats change meets gap-free; consecutive flat segments are
+                    // one continuous ribbon (so bends stay watertight).
+                    std::shared_ptr<CylinderGeometry> cyl;
+                    std::shared_ptr<BoxGeometry> box;
+                    for (const auto& run : conveyor::resamplePathByKind(wps, path.smooth)) {
+                        if (run.pts.size() < 2) continue;
+                        if (run.kind == conveyor::SegRollers) {
+                            if (!cyl) cyl = CylinderGeometry::create(path.rollerRadius, path.rollerRadius,
+                                                                     path.beltWidth, 12);
+                            const float spacing = conveyor::rollerSpacing(path.rollerRadius);
+                            for (const auto& r : conveyor::rollerTransforms(run.pts, path.rollerRadius, spacing)) {
+                                auto roller = Mesh::create(cyl, path.rollerMat);
+                                roller->position.copy(r.center);
+                                roller->quaternion.copy(r.orientation);
+                                scene.add(roller);
+                                path.preview.push_back(roller);
+                                path.rollerMeshes.push_back(roller);
+                                path.rollerBase.push_back(r.orientation);
+                            }
+                        } else {
+                            auto ribbon = Mesh::create(conveyor::ribbonGeometry(run.pts, path.beltWidth), path.planeMat);
+                            scene.add(ribbon);
+                            path.preview.push_back(ribbon);
+                            if (run.kind == conveyor::SegCleats) {
+                                if (!box) box = BoxGeometry::create(conveyor::kCleatThickness,
+                                                                    path.cleatHeight, path.beltWidth);
+                                for (const auto& cl : conveyor::cleatTransforms(run.pts, path.cleatHeight, path.cleatSpacing)) {
+                                    auto bar = Mesh::create(box, path.cleatMat);
+                                    bar->position.copy(cl.center);
+                                    bar->quaternion.copy(cl.orientation);
+                                    scene.add(bar);
+                                    path.preview.push_back(bar);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        // Spin roller previews so a roller path reads as moving. The cylinder's own axis
+        // Spin roller previews so roller segments read as moving. The cylinder's own axis
         // (local +Y) is aligned to the belt-width direction by rollerBase; the extra turn
         // about that axis is the surface rolling. omega = surface speed / radius; negative
         // so the top surface flows along travel (reverse flips it).
         for (auto& path : paths) {
-            if (!path.rollers || path.preview.empty()) continue;
+            if (path.rollerMeshes.empty()) continue;
             const float omega = (path.reverse ? 1.f : -1.f) * path.beltSpeed /
                                 std::max(path.rollerRadius, 1e-3f);
             path.rollerAngle += omega * dt;
             Quaternion spin;
             spin.setFromAxisAngle(Vector3(0, 1, 0), path.rollerAngle);
-            for (size_t i = 0; i < path.preview.size() && i < path.rollerBase.size(); ++i) {
+            for (size_t i = 0; i < path.rollerMeshes.size() && i < path.rollerBase.size(); ++i) {
                 Quaternion q;
                 q.multiplyQuaternions(path.rollerBase[i], spin);
-                path.preview[i]->quaternion.copy(q);
+                path.rollerMeshes[i]->quaternion.copy(q);
             }
         }
 

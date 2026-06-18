@@ -326,6 +326,32 @@ int main(int argc, char** argv) {
     };
     std::vector<RollerBank> rollerBanks;
 
+    // Cleated belts: thin bars standing across the belt that GENUINELY travel along the path
+    // at belt speed (wrapping at the ends), so they catch fish on an incline and carry them
+    // up. The fake-velocity belt trick teleports its collider back each substep, which works
+    // for friction (tangential drag) but not for a pushing barrier (a teleported-back wall
+    // un-does its push), so cleats move for real instead.
+    auto cleatVisualMat = MeshStandardMaterial::create();
+    cleatVisualMat->color = Color(0x202428);
+    cleatVisualMat->roughness = 0.6f;
+    cleatVisualMat->metalness = 0.3f;
+    struct MovingCleat {
+        PxRigidDynamic* actor;
+        std::shared_ptr<Mesh> mesh;
+        float offset;       // base arc-length along the track
+        float prevS = -1.f; // last position; a backward jump = a wrap (teleport, no push)
+    };
+    struct CleatTrack {
+        std::vector<Vector3> poly;// travel-ordered centerline the cleats ride
+        float length = 0.f;       // total arc length
+        float speed = 0.f;        // m/s at beltSpeedScale = 1
+        float height = 0.f;
+        float rampLen = 0.f;      // distance over which a bar rises/folds flat at each end
+        float phase = 0.f;        // advances with time, wrapped to [0,length)
+        std::vector<MovingCleat> cleats;
+    };
+    std::vector<CleatTrack> cleatTracks;
+
     auto addConveyorVisual = [&](const conveyor::Piece& piece) {
         auto& t = convTemplate(piece.model);
         if (!t.group) {
@@ -472,7 +498,8 @@ int main(int argc, char** argv) {
     // linearly-dragged boxes; arc-CENTRE waypoints each become one rotationally-driven
     // bend body. `reverse` flips the whole path (travel direction + inlet).
     auto buildPathBelts = [&](const std::vector<conveyor::Waypoint>& ctrl, float width, float speed,
-                              bool reverse, bool smooth, bool rollers, float rollerRadius) {
+                              bool reverse, bool smooth, float rollerRadius,
+                              float cleatHeight, float cleatSpacing) {
         bool hasArc = false;
         for (const auto& w : ctrl) {
             if (w.arcCenter) { hasArc = true; break; }
@@ -517,20 +544,21 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Visible belt surface (visual only): a rotating roller bed for a rollers path,
-        // else one continuous ribbon along the finely-resampled centreline.
-        auto visPts = conveyor::resamplePath(ctrl, smooth);
-        if (visPts.size() >= 2) {
-            if (rollers) {
+        // Visible surface, PER SEGMENT kind (runs share boundary points so they meet
+        // gap-free). Flat/cleats runs get a scrolling ribbon; rollers runs a rotating bank;
+        // cleats runs additionally get moving flight bars (real, travelling colliders). The
+        // box-belt colliders above span the whole path regardless, so fish convey on every run.
+        for (const auto& run : conveyor::resamplePathByKind(ctrl, smooth)) {
+            if (run.pts.size() < 2) continue;
+            if (run.kind == conveyor::SegRollers) {
                 // A row of cylinders across the belt, spun each frame so the bed reads as
                 // powered. Tops sit on the centreline (where the box collider's top also is),
                 // so fish appear to ride on the rollers. One shared geometry per bank.
                 const float spacing = conveyor::rollerSpacing(rollerRadius);
-                const auto rs = conveyor::rollerTransforms(visPts, rollerRadius, spacing);
                 auto cyl = CylinderGeometry::create(rollerRadius, rollerRadius, width, 12);
                 RollerBank bank;
                 bank.omega = (reverse ? 1.f : -1.f) * speed / std::max(rollerRadius, 1e-3f);
-                for (const auto& r : rs) {
+                for (const auto& r : conveyor::rollerTransforms(run.pts, rollerRadius, spacing)) {
                     auto roller = Mesh::create(cyl, rollerVisualMat);
                     roller->position.copy(r.center);
                     roller->quaternion.copy(r.orientation);
@@ -538,11 +566,10 @@ int main(int argc, char** argv) {
                     bank.rollers.push_back(roller);
                     bank.base.push_back(r.orientation);
                 }
-                rollerBanks.push_back(std::move(bank));
+                if (!bank.rollers.empty()) rollerBanks.push_back(std::move(bank));
             } else {
-                // A per-path clone of the belt material + texture lets each belt scroll
-                // independently; UV.v is arc length (metres), so scrolling the texture
-                // offset.y drags the modular pattern along the belt — around bends included.
+                // Flat or cleats: a scrolling ribbon (one clone per run so each scrolls on its
+                // own); UV.v is arc length (metres), so scrolling offset.y drags the pattern.
                 constexpr float tileLen = 0.25f;// metres of belt per texture tile
                 auto tex = beltTexture->clone();
                 tex->wrapS = tex->wrapT = TextureWrapping::Repeat;// ensure tiling survives clone
@@ -552,15 +579,56 @@ int main(int argc, char** argv) {
                 tex->repeat.set(std::max(1.f, std::round(width / tileLen)), 1.f / tileLen);
                 auto mat = beltVisualMat->clone<MeshStandardMaterial>();
                 mat->map = tex;
-                scene.add(Mesh::create(conveyor::ribbonGeometry(visPts, width), mat));
+                scene.add(Mesh::create(conveyor::ribbonGeometry(run.pts, width), mat));
                 // offset.y is in tile units → scroll rate = speed[m/s] * repeat.y[tiles/m];
-                // negative drags the pattern in the +arc-length (travel) direction, flipped
-                // for a reversed belt.
+                // negative drags the pattern along travel, flipped for a reversed belt.
                 beltVisuals.push_back({tex, mat, (reverse ? 1.f : -1.f) * speed * tex->repeat.y});
-            }
 
-            // Inlet: spawn a bit downstream of the upstream edge so fish land fully on the
-            // belt instead of half-off it. Walk the travel-ordered path forward ~a fish length.
+                // Cleats: bars riding this run's (travel-ordered) centreline. Each is a kinematic
+                // box collider (raised across the belt) + a visual; both are advanced along the
+                // run every substep (see onPreSubstep), wrapping at its ends.
+                if (run.kind == conveyor::SegCleats && cleatHeight > 1e-3f && cleatSpacing > 1e-3f) {
+                    CleatTrack track;
+                    track.poly = run.pts;
+                    if (reverse) std::ranges::reverse(track.poly);// travel-ordered
+                    track.speed = speed;
+                    track.height = cleatHeight;
+                    for (size_t i = 0; i + 1 < track.poly.size(); ++i)
+                        track.length += track.poly[i].distanceTo(track.poly[i + 1]);
+                    // Fold the bars flat within this distance of each end (a closed band wraps
+                    // around its pulleys flush with the belt).
+                    track.rampLen = std::min(2.f * cleatHeight, 0.45f * track.length);
+                    auto box = BoxGeometry::create(conveyor::kCleatThickness, cleatHeight, width);
+                    // Evenly tiled so the spacing stays uniform across the wrap seam (the band
+                    // is a closed loop; advancing by phase mod length keeps every gap equal).
+                    for (float s : conveyor::cleatOffsets(track.length, cleatSpacing)) {
+                        Vector3 center;
+                        Quaternion q;
+                        const float fold = conveyor::cleatFold(s, track.length, track.rampLen);
+                        conveyor::cleatPoseAt(track.poly, s, cleatHeight, fold, center, q);
+                        PxRigidDynamic* actor = world.physics().createRigidDynamic(toPxTransform(center, q));
+                        actor->setRigidBodyFlag(PxRigidBodyFlag::eKINEMATIC, true);
+                        PxShape* shape = world.physics().createShape(
+                                PxBoxGeometry(conveyor::kCleatThickness * 0.5f, cleatHeight * 0.5f, width * 0.5f),
+                                *beltMat, true);
+                        actor->attachShape(*shape);
+                        shape->release();
+                        world.scene().addActor(*actor);
+                        auto bar = Mesh::create(box, cleatVisualMat);
+                        bar->position.copy(center);
+                        bar->quaternion.copy(q);
+                        scene.add(bar);
+                        track.cleats.push_back({actor, bar, s});
+                    }
+                    if (!track.cleats.empty()) cleatTracks.push_back(std::move(track));
+                }
+            }
+        }
+
+        // Inlet: spawn a bit downstream of the upstream edge so fish land fully on the belt
+        // instead of half-off it. Walk the travel-ordered path forward ~a fish length.
+        auto visPts = conveyor::resamplePath(ctrl, smooth);
+        if (visPts.size() >= 2) {
             std::vector<Vector3> travel(visPts);
             if (reverse) std::ranges::reverse(travel);
             const Vector3 in = pointAlong(travel, 0.6f);
@@ -616,7 +684,7 @@ int main(int argc, char** argv) {
             for (const auto& p : layout->paths) {
                 if (p.separator) buildPathWall(p.waypoints, p.wallHeight, p.smooth);
                 else buildPathBelts(p.waypoints, p.beltWidth, p.beltSpeed, p.reverse, p.smooth,
-                                    p.rollers, p.rollerRadius);
+                                    p.rollerRadius, p.cleatHeight, p.cleatSpacing);
             }
         } else {
             for (const auto& piece : layout->pieces) addStraightBelt(piece);
@@ -644,6 +712,26 @@ int main(int argc, char** argv) {
                 target.p += b.velocity * (beltSpeedScale * dt);
             }
             b.actor->setKinematicTarget(target);
+        }
+        // Cleats genuinely travel along their track (and are NOT restored in onPostSubstep),
+        // so they carry fish up an incline. A forward step uses setKinematicTarget (gives the
+        // contact a push velocity); the end→start wrap uses setGlobalPose so it teleports
+        // without flinging whatever it lands near.
+        for (auto& tr : cleatTracks) {
+            if (tr.length < 1e-4f) continue;
+            tr.phase = std::fmod(tr.phase + tr.speed * beltSpeedScale * dt, tr.length);
+            for (auto& cl : tr.cleats) {
+                const float s = std::fmod(cl.offset + tr.phase, tr.length);
+                Vector3 center;
+                Quaternion q;
+                // Slerp the bar flat (90°) at the ends so it folds over the pulley as it wraps.
+                const float fold = conveyor::cleatFold(s, tr.length, tr.rampLen);
+                conveyor::cleatPoseAt(tr.poly, s, tr.height, fold, center, q);
+                const PxTransform pose = toPxTransform(center, q);
+                if (cl.prevS < 0.f || s < cl.prevS) cl.actor->setGlobalPose(pose);
+                else cl.actor->setKinematicTarget(pose);
+                cl.prevS = s;
+            }
         }
     });
     world.onPostSubstep([&](float) {
@@ -880,6 +968,15 @@ int main(int argc, char** argv) {
                 Quaternion q;
                 q.multiplyQuaternions(bank.base[i], spin);
                 bank.rollers[i]->quaternion.copy(q);
+            }
+        }
+
+        // Move each cleat mesh to its collider's (post-step) pose so the bars visibly ride up.
+        for (auto& tr : cleatTracks) {
+            for (auto& cl : tr.cleats) {
+                const PxTransform pose = cl.actor->getGlobalPose();
+                cl.mesh->position.set(pose.p.x, pose.p.y, pose.p.z);
+                cl.mesh->quaternion.set(pose.q.x, pose.q.y, pose.q.z, pose.q.w);
             }
         }
 
