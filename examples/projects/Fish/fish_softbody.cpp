@@ -617,8 +617,8 @@ int main(int argc, char** argv) {
 
     std::mt19937 rng{42};
     int selectedFish = 0;
-    int voxelRes = 10;
-    int solverIters = 10;// soft-body solver iterations (lower = faster, less stiff)
+    int voxelRes = 8;
+    int solverIters = 15;// soft-body solver iterations (lower = faster, less stiff)
     // GPU tet-skinning is supported on the GL forward renderer (vertex-shader tet
     // blend from a tet texture) and on the Vulkan path tracer (tet_skinning.comp
     // writes the deformed verts straight into the BLAS). Other renderers (WGPU/Cross)
