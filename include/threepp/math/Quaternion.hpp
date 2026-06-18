@@ -6,6 +6,8 @@
 #include "threepp/math/float_view.hpp"
 
 #include <functional>
+#include <ostream>
+#include <vector>
 
 namespace threepp {
 

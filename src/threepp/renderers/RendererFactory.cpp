@@ -25,12 +25,12 @@ namespace threepp {
         if (!api.has_value()) {
             std::cout << "Select renderer:\n  [1] OpenGL (default)";
 #ifdef THREEPP_WITH_WGPU
-            std::cout << "\n  [2] WebGPU\n  [3] Cross (WGPU rendering, GL display)";
+            std::cout << "\n  [2] WebGPU\n  [3] Cross (GL left, WGPU right)";
 #endif
 #ifdef THREEPP_WITH_VULKAN
             std::cout << "\n  [4] Vulkan Path-tracer";
 #endif
-            std::cout << "\n> ";
+            std::cout << "\n  [0] Abort and Exit\n> ";
             std::string line;
             if (std::getline(std::cin, line)) {
                 // piped stdin on Windows delivers "2\r" — strip trailing whitespace
@@ -44,6 +44,10 @@ namespace threepp {
 #ifdef THREEPP_WITH_VULKAN
                 if (line == "4") chosen = GraphicsAPI::Vulkan;
 #endif
+            }
+            if (line == "0") {
+                std::cout << "Aborting.\n";
+                std::exit(0);
             }
         }
 
