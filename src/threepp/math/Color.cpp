@@ -39,7 +39,7 @@ namespace {
 
     //clang-format off
     std::unordered_map<std::string, int> colorKeywords{
-            {"aliceBlue", Color::aliceblue},
+            {"aliceblue", Color::aliceblue},
             {"antiquewhite", Color::antiquewhite},
             {"aqua", Color::aqua},
             {"aquamarine", Color::aquamarine},
@@ -118,7 +118,6 @@ namespace {
 
             {"lemonchiffon", Color::lemonchiffon},
             {"lightblue", Color::lightblue},
-            {"ivory", Color::ivory},
             {"lightcoral", Color::lightcoral},
             {"lightcyan", Color::lightcyan},
             {"lightgoldenrodyellow", Color::lightgoldenrodyellow},
@@ -179,6 +178,7 @@ namespace {
             {"powderblue", Color::powderblue},
             {"purple", Color::purple},
             {"rebeccapurple", Color::rebeccapurple},
+            {"red", Color::red},
             {"rosybrown", Color::rosybrown},
 
             {"royalblue", Color::royalblue},
