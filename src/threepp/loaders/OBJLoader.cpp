@@ -361,11 +361,22 @@ struct OBJLoader::Impl {
 
                 for (const auto& vertex : vertexData) {
 
-                    if (!vertexData.empty()) {
+                    if (!vertex.empty()) {
                         auto vertexParts = utils::split(vertex, '/');
                         faceVertices.insert(faceVertices.end(), vertexParts);
                     }
                 }
+
+                // A face needs at least 3 vertices; skip malformed faces.
+                if (faceVertices.size() < 3) continue;
+
+                // A face-vertex token can be "v", "v/vt", "v//vn" or "v/vt/vn", so
+                // the uv (index 1) and normal (index 2) components may be absent.
+                // Substitute an empty string when missing — addFace() guards on
+                // emptiness — instead of indexing out of bounds.
+                auto part = [](const std::vector<std::string>& parts, size_t i) -> std::string {
+                    return i < parts.size() ? parts[i] : std::string{};
+                };
 
                 auto& v1 = faceVertices[0];
 
@@ -375,8 +386,8 @@ struct OBJLoader::Impl {
                     auto& v3 = faceVertices[j + 1];
 
                     state.addFace(v1[0], v2[0], v3[0],
-                                  v1[1], v2[1], v3[1],
-                                  v1[2], v2[2], v3[2]);
+                                  part(v1, 1), part(v2, 1), part(v3, 1),
+                                  part(v1, 2), part(v2, 2), part(v3, 2));
                 }
 
 
