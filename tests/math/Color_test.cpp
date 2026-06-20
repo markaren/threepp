@@ -240,6 +240,33 @@ TEST_CASE("setStyleColorName") {
     CHECK(c.getHex() == 0xB0E0E6);
 }
 
+TEST_CASE("setColorName resolves standard CSS names") {
+
+    // "red" used to be absent from the keyword table -> lookup failed entirely.
+    Color c;
+    c.setColorName("red");
+    CHECK(c.getHex() == 0xFF0000);
+
+    // setStyle delegates to setColorName for bare names.
+    Color viaStyle;
+    viaStyle.setStyle("red");
+    CHECK(viaStyle.getHex() == 0xFF0000);
+
+    // "aliceblue" used to be stored mis-cased as "aliceBlue" -> lowercase lookup failed.
+    Color alice;
+    alice.setColorName("aliceblue");
+    CHECK(alice.getHex() == 0xF0F8FF);
+
+    // a couple of other names for good measure
+    Color lime;
+    lime.setColorName("lime");
+    CHECK(lime.getHex() == 0x00FF00);
+
+    Color rebecca;
+    rebecca.setColorName("rebeccapurple");
+    CHECK(rebecca.getHex() == 0x663399);
+}
+
 TEST_CASE("colorManagement linearizes sRGB input and round-trips") {
 
     // with management enabled (the default), hex/style input is stored linearized
