@@ -4,7 +4,7 @@
 
 K cart-poles swing up in one PhysX direct-GPU scene; obs/reward/reset and the PPO update all
 run in torch on the GPU. Learns to swing the pole up from any start and balance it in ~1.5 min.
-Reuses gpu_ppo (the compact owned PPO from ../spider). Saves cartpole_swingup.pt.
+Uses gpu_ppo (a compact, self-contained PPO). Saves cartpole_swingup.pt.
 """
 import argparse
 import os
@@ -17,7 +17,6 @@ import torch
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 sys.path.insert(0, _HERE)
-sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "spider"))  # reuse gpu_ppo
 
 import threepp as tp
 from cartpole_env import ACT_DIM, FORCE_SCALE, OBS_DIM, CartPoleEnv

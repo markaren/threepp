@@ -10,7 +10,6 @@ import torch
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 sys.path.insert(0, _HERE)
-sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "spider"))
 
 from cartpole_env import CartPoleEnv
 from gpu_ppo import load_policy
