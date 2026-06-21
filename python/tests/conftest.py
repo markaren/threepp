@@ -7,11 +7,21 @@ Run from the python/ directory:
 
 Requires the built `threepp` module in python/ (build the threepp_py target).
 """
+import gc
 import os
 import struct
 import sys
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _release_physx_between_tests():
+    """PhysX allows only one foundation per process, so a lingering PhysxWorld from
+    one test makes the next test's world fail to construct. Force a collection after
+    every test so the previous world is released regardless of GC timing."""
+    yield
+    gc.collect()
 
 # Make the built `threepp` module (in python/, the parent of tests/) importable.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

@@ -110,25 +110,33 @@ class Hexapod:
         self.cmd[0] = max(-1.0, min(1.0, forward))
         self.cmd[1] = max(-1.0, min(1.0, turn))
 
-    def update(self, dt, residuals=None):
-        """Advance the gait and set joint drive targets. `residuals` (optional, 12
-        values: coxa,femur per leg) are added on top of the CPG targets — this is
-        the action interface for residual RL (Stage 2)."""
+    def gait_targets(self, dt):
+        """Advance the gait and return the 12 CPG drive targets (coxa,femur per leg)
+        as a list — without setting them. Lets the vectorized env add residuals and
+        push all targets in one batched art.set_drive_targets() call."""
         self.psi += self.gait_freq * 2.0 * math.pi * dt
         fwd, turn = self.cmd
+        out = [0.0] * (2 * len(self.legs))
         for i, leg in enumerate(self.legs):
             phase = self.psi + (i % 2) * math.pi
             # +turn = left (CCW): right legs stroke harder than left. (Sign chosen so
             # the conventional +turn maps to a left turn / positive yaw rate.)
             drive = max(-1.0, min(1.0, fwd - turn * (1.0 if leg["side"] < 0 else -1.0)))
-            coxa_t = self.coxa_amp * drive * leg["coxa_sign"] * math.cos(phase)
-            lift = self.lift_amp * max(0.0, -math.sin(phase))
-            femur_t = leg["femur_sign"] * lift
-            if residuals is not None:
-                coxa_t += residuals[2 * i]
-                femur_t += residuals[2 * i + 1]
-            leg["coxa"].set_drive_target(coxa_t)
-            leg["femur"].set_drive_target(femur_t)
+            out[2 * i] = self.coxa_amp * drive * leg["coxa_sign"] * math.cos(phase)
+            out[2 * i + 1] = leg["femur_sign"] * self.lift_amp * max(0.0, -math.sin(phase))
+        return out
+
+    def update(self, dt, residuals=None):
+        """Advance the gait and set joint drive targets. `residuals` (optional, 12
+        values: coxa,femur per leg) are added on top of the CPG targets — the action
+        interface for residual RL. (Per-joint set; the vec env uses the batched path.)"""
+        t = self.gait_targets(dt)
+        if residuals is not None:
+            for k in range(len(t)):
+                t[k] += residuals[k]
+        for i, leg in enumerate(self.legs):
+            leg["coxa"].set_drive_target(t[2 * i])
+            leg["femur"].set_drive_target(t[2 * i + 1])
 
     def reset(self, position=(0.0, 0.40, 0.0)):
         """Teleport back to `position`, upright, joints zeroed; restart the gait."""

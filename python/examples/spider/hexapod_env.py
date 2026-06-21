@@ -29,45 +29,69 @@ sys.path.insert(0, _HERE)
 import threepp as tp
 from hexapod import Hexapod
 
-MAX_SPEED = 0.5         # m/s at |forward command| = 1
+MAX_SPEED = 0.7         # m/s at |forward command| = 1 (target the policy is pushed to reach)
 MAX_YAW = 1.2           # rad/s at |turn command| = 1
 RESIDUAL_SCALE = 0.28   # action [-1,1] -> joint-target residual (rad); shared with play.py
 START = (0.0, 0.40, 0.0)
 
 
-def compute_reward(spider, vel_xz, yawrate, command, action):
-    """Reward + fell flag, shared by the single env and the vectorized env."""
-    f = spider.forward
-    fl = math.hypot(f.x, f.z) or 1.0
-    fx, fz = f.x / fl, f.z / fl
+def sample_command(rng):
+    """A (forward, turn) command biased toward fast straight-line walking — mostly
+    forward, often perfectly straight, sometimes turning."""
+    f = float(rng.uniform(0.3, 1.0))
+    t = float(rng.uniform(-0.6, 0.6)) if rng.random() < 0.5 else 0.0
+    return np.array([f, t], np.float32)
+
+
+def read_state(spider):
+    """Read a robot's state in 3 batched pybind calls (vs ~26 per-property ones):
+    joint positions/velocities + the root pose. Returns
+    (jpos[12], jvel[12], up_y, fwd_x, fwd_z, yaw, pos_x, pos_z) with forward unit."""
+    jp = spider.art.joint_positions()
+    jv = spider.art.joint_velocities()
+    px, _, pz, qx, qy, qz, qw = spider.art.root_state()
+    fx = 1.0 - 2.0 * (qy * qy + qz * qz)            # forward = q * (1,0,0)
+    fz = 2.0 * (qx * qz - qw * qy)
+    fl = math.hypot(fx, fz) or 1.0
+    up = 1.0 - 2.0 * (qx * qx + qz * qz)            # up.y = (q * (0,1,0)).y
+    yaw = math.atan2(2.0 * (qw * qy + qx * qz), 1.0 - 2.0 * (qy * qy + qz * qz))
+    return jp, jv, up, fx / fl, fz / fl, yaw, float(px), float(pz)
+
+
+def assemble_obs(jp, jv, up, fx, fz, vel_xz, yawrate, psi, command):
+    tail = np.array([up, fx, fz, vel_xz[0], vel_xz[1], yawrate,
+                     math.cos(psi), math.sin(psi), command[0], command[1]], np.float32)
+    return np.concatenate([jp, jv, tail]).astype(np.float32)
+
+
+def reward_terms(up, fx, fz, vel_xz, yawrate, command, action):
     v_fwd = vel_xz[0] * fx + vel_xz[1] * fz
     v_lat = vel_xz[0] * fz - vel_xz[1] * fx
     tgt_v = float(command[0]) * MAX_SPEED
     tgt_w = float(command[1]) * MAX_YAW
-    up = spider.up_y
-    r = (2.0 * math.exp(-4.0 * (v_fwd - tgt_v) ** 2)
-         + 1.0 * math.exp(-2.0 * (yawrate - tgt_w) ** 2)
-         + 0.3 * max(0.0, up)
-         + 0.1                                       # alive bonus
-         - 0.03 * float(np.mean(np.square(action)))  # effort
-         - 0.2 * abs(v_lat))                         # sideways drift
-    return r, up < 0.4
+    # Track the commanded forward speed (MAX_SPEED is set high, so this pulls toward
+    # a faster walk than the gait's default) and the commanded yaw rate.
+    r = (2.2 * math.exp(-3.0 * (v_fwd - tgt_v) ** 2)
+         + 0.8 * math.exp(-2.0 * (yawrate - tgt_w) ** 2)   # track turn
+         + 0.6 * max(0.0, up)                              # stay/get upright -> push recovery
+         + 0.15                                            # alive (reward not terminating)
+         - 0.5 * abs(v_lat)                                # straight line: punish sideways drift
+         - 0.04 * float(np.mean(np.square(action))))       # effort
+    # Only terminate once truly toppled (past ~horizontal), so the policy has room to
+    # catch a stumble and recover rather than ending the episode at the first lean.
+    return r, up < 0.0
 
 
 def make_observation(spider, vel_xz, yawrate, command):
     """The 34-d observation, shared by the env and the play script so they match."""
-    pos, vel = spider.joint_states()
-    f = spider.forward
-    fl = math.hypot(f.x, f.z) or 1.0
-    return np.array(
-        pos + vel + [
-            spider.up_y,
-            f.x / fl, f.z / fl,
-            float(vel_xz[0]), float(vel_xz[1]),
-            float(yawrate),
-            math.cos(spider.psi), math.sin(spider.psi),
-            float(command[0]), float(command[1]),
-        ], dtype=np.float32)
+    jp, jv, up, fx, fz, _, _, _ = read_state(spider)
+    return assemble_obs(jp, jv, up, fx, fz, vel_xz, yawrate, spider.psi, command)
+
+
+def compute_reward(spider, vel_xz, yawrate, command, action):
+    """Reward + fell flag (single-env path; the vec env calls reward_terms directly)."""
+    _, _, up, fx, fz, _, _, _ = read_state(spider)
+    return reward_terms(up, fx, fz, vel_xz, yawrate, command, action)
 
 
 _Base = gym.Env if gym is not None else object
@@ -106,9 +130,7 @@ class HexapodEnv(_Base):
 
     # --- helpers ---------------------------------------------------------
     def _sample_command(self):
-        f = float(self.np_random.uniform(-0.4, 1.0))
-        t = float(self.np_random.uniform(-1.0, 1.0))
-        return np.array([f, t], np.float32)
+        return sample_command(self.np_random)
 
     def _obs(self):
         return make_observation(self.spider, self._vel, self._yawrate, self.command)

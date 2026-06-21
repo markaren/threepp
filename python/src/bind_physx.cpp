@@ -21,6 +21,7 @@
 
 #ifdef THREEPP_PY_HAS_PHYSX
 
+#include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
 #include "threepp/core/Object3D.hpp"
@@ -209,6 +210,7 @@ namespace {
             PxArticulationLink* parentLink = parent ? parent->raw() : nullptr;
             PxArticulationLink* link = art_->createLink(parentLink, linkPose);
             if (!link) throw std::runtime_error("Articulation.add_link: createLink failed");
+            if (!parentLink) rootLink_ = link;// the root link (for batched root_state)
 
             PxShape* s = world_.physics().createShape(shape.geom.any(), world_.defaultMaterial(), true);
             s->setLocalPose(shape.localPose);
@@ -234,6 +236,7 @@ namespace {
                                           PxArticulationDrive(stiffness, damping, maxForce, PxArticulationDriveType::eFORCE));
                     joint->setDriveTarget(PxArticulationAxis::eTWIST, driveTarget, false);// autowake=false: pre-scene
                 }
+                joints_.push_back(joint);
             }
             // A PxArticulationLink is a PxRigidActor, so the rigid-body bind path
             // syncs the visual mesh to the simulated link pose.
@@ -247,10 +250,48 @@ namespace {
             finalized_ = true;
         }
 
+        // Batched joint I/O — one call reads/writes every revolute joint (in
+        // add_link order), instead of a Python call per joint. This is the hot
+        // path for vectorized RL: it collapses ~36 pybind calls per robot per
+        // step to 3, clawing back the cost of the Python bridge.
+        py::array_t<float> joint_positions() const {
+            py::array_t<float> a(static_cast<py::ssize_t>(joints_.size()));
+            float* p = a.mutable_data();
+            for (size_t i = 0; i < joints_.size(); ++i)
+                p[i] = joints_[i]->getJointPosition(PxArticulationAxis::eTWIST);
+            return a;
+        }
+        py::array_t<float> joint_velocities() const {
+            py::array_t<float> a(static_cast<py::ssize_t>(joints_.size()));
+            float* p = a.mutable_data();
+            for (size_t i = 0; i < joints_.size(); ++i)
+                p[i] = joints_[i]->getJointVelocity(PxArticulationAxis::eTWIST);
+            return a;
+        }
+        void set_drive_targets(const py::array_t<float>& arr) {
+            auto r = arr.unchecked<1>();
+            const size_t n = std::min<size_t>(joints_.size(), static_cast<size_t>(r.shape(0)));
+            for (size_t i = 0; i < n; ++i)
+                joints_[i]->setDriveTarget(PxArticulationAxis::eTWIST, r(i), false);
+        }
+
+        // Root link world pose as one array [px,py,pz, qx,qy,qz,qw] — one call
+        // instead of reading position + quaternion + their 7 components separately.
+        py::array_t<float> root_state() const {
+            py::array_t<float> a(7);
+            float* p = a.mutable_data();
+            const PxTransform t = rootLink_ ? rootLink_->getGlobalPose() : PxTransform(PxIdentity);
+            p[0] = t.p.x; p[1] = t.p.y; p[2] = t.p.z;
+            p[3] = t.q.x; p[4] = t.q.y; p[5] = t.q.z; p[6] = t.q.w;
+            return a;
+        }
+
     private:
         PhysxWorld& world_;
         PxArticulationReducedCoordinate* art_ = nullptr;
         PxArticulationCache* cache_ = nullptr;
+        PxArticulationLink* rootLink_ = nullptr;
+        std::vector<PxArticulationJointReducedCoordinate*> joints_;// non-root joints, add order
         bool finalized_ = false;
     };
 
@@ -330,7 +371,16 @@ namespace threepp_py {
                      "Add the finished articulation to the scene. No links may be added afterwards.")
                 .def("reset", &Articulation::reset, py::arg("position"),
                      "Episode reset: teleport the root upright to `position` with zero velocity and "
-                     "zero all joint positions/velocities (back to the neutral build pose).");
+                     "zero all joint positions/velocities (back to the neutral build pose).")
+                .def("joint_positions", &Articulation::joint_positions,
+                     "All revolute joint angles (radians) as one numpy array, in add_link order.")
+                .def("joint_velocities", &Articulation::joint_velocities,
+                     "All revolute joint angular velocities (rad/s) as one numpy array.")
+                .def("set_drive_targets", &Articulation::set_drive_targets, py::arg("targets"),
+                     "Set every joint's PD drive target from one numpy array — the batched hot path "
+                     "for vectorized stepping (one call instead of one per joint).")
+                .def("root_state", &Articulation::root_state,
+                     "Root link world pose as numpy [px,py,pz, qx,qy,qz,qw] in one call.");
 
         py::class_<PhysxWorld>(m, "PhysxWorld",
                                "A PhysX rigid-body world wired to the threepp scene graph. Add meshes as "
