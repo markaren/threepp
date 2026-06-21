@@ -7746,9 +7746,10 @@ namespace threepp {
         void createDebugResolvePipeline() {
             if (debugResolvePipeline_ != VK_NULL_HANDLE) return;
 
-            // 5 bindings: normal/motion/ids/albedo (combined image samplers;
-            // ids is a usampler) + the swapchain storage image.
-            std::array<VkDescriptorSetLayoutBinding, 5> b{};
+            // 6 bindings: normal/motion/ids/albedo (combined image samplers;
+            // ids is a usampler) + the swapchain storage image + depth (a
+            // depth-aspect combined image sampler, for the depth AOV).
+            std::array<VkDescriptorSetLayoutBinding, 6> b{};
             for (uint32_t i = 0; i < 4; ++i) {
                 b[i].binding         = i;
                 b[i].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -7759,6 +7760,10 @@ namespace threepp {
             b[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             b[4].descriptorCount = 1;
             b[4].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+            b[5].binding         = 5;
+            b[5].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            b[5].descriptorCount = 1;
+            b[5].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
 
             VkDescriptorSetLayoutCreateInfo dlci{};
             dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -7805,7 +7810,7 @@ namespace threepp {
 
             std::array<VkDescriptorPoolSize, 2> ps{};
             ps[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps[0].descriptorCount = 4;
+            ps[0].descriptorCount = 5;// normal/motion/ids/albedo + depth
             ps[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             ps[1].descriptorCount = 1;
             VkDescriptorPoolCreateInfo dpci{};
@@ -7851,6 +7856,7 @@ namespace threepp {
                 case HybridDebugView::Motion: viewCode = 2; break;
                 case HybridDebugView::Ids:    viewCode = 3; break;
                 case HybridDebugView::Albedo: viewCode = 4; break;
+                case HybridDebugView::Depth:  viewCode = 5; break;
                 default:                      viewCode = 1; break;
             }
 
@@ -7866,11 +7872,19 @@ namespace threepp {
             VkDescriptorImageInfo idsInfo    = img(g.ids.view);
             VkDescriptorImageInfo albedoInfo = img(g.albedo.view);
 
+            // Depth is a depth-aspect image; it rests in DEPTH_STENCIL_READ_ONLY
+            // (the gbuffer render pass's depth finalLayout), not the colour
+            // SHADER_READ_ONLY the img() helper uses.
+            VkDescriptorImageInfo depthInfo{};
+            depthInfo.sampler     = gbufSampler_;
+            depthInfo.imageView   = g.depth.view;
+            depthInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+
             VkDescriptorImageInfo outInfo{};
             outInfo.imageView   = ctx->swapchainImageViews()[imageIndex];
             outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-            std::array<VkWriteDescriptorSet, 5> w{};
+            std::array<VkWriteDescriptorSet, 6> w{};
             for (auto& it : w) it.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             const VkDescriptorImageInfo* imgs[4] = {&normalInfo, &motionInfo, &idsInfo, &albedoInfo};
             for (uint32_t i = 0; i < 4; ++i) {
@@ -7885,6 +7899,11 @@ namespace threepp {
             w[4].descriptorCount = 1;
             w[4].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             w[4].pImageInfo      = &outInfo;
+            w[5].dstSet          = debugResolveDescSet_;
+            w[5].dstBinding      = 5;
+            w[5].descriptorCount = 1;
+            w[5].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[5].pImageInfo      = &depthInfo;
             vkUpdateDescriptorSets(ctx->device(), static_cast<uint32_t>(w.size()), w.data(), 0, nullptr);
 
             // Freshly-acquired swapchain image (contents undefined) → GENERAL
@@ -16112,6 +16131,7 @@ namespace threepp {
             case 2:  pimpl_->hybridDebugView_ = V::Motion; break;
             case 3:  pimpl_->hybridDebugView_ = V::Ids;    break;
             case 4:  pimpl_->hybridDebugView_ = V::Albedo; break;
+            case 5:  pimpl_->hybridDebugView_ = V::Depth;  break;
             default: pimpl_->hybridDebugView_ = V::Off;    break;
         }
     }

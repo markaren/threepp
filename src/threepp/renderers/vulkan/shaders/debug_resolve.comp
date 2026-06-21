@@ -28,9 +28,10 @@ layout(set = 0, binding = 1) uniform sampler2D  gbufMotion;  // .rg = signed NDC
 layout(set = 0, binding = 2) uniform usampler2D gbufIds;     // .r = instanceCustomIndex+1 (0 = sky)
 layout(set = 0, binding = 3) uniform sampler2D  gbufAlbedo;  // .rgb = linear albedo
 layout(set = 0, binding = 4) uniform writeonly image2D outImage;// swapchain (bgra8, no format)
+layout(set = 0, binding = 5) uniform sampler2D  gbufDepth;   // .r = reverse-Z depth [0,1] (1 = near, 0 = far)
 
 layout(push_constant) uniform Pc {
-    uint  view;       // 1 = normal, 2 = motion, 3 = ids, 4 = albedo
+    uint  view;       // 1 = normal, 2 = motion, 3 = ids, 4 = albedo, 5 = depth
     uint  width;      // output (swapchain) extent — drives the dispatch
     uint  height;
     uint  gbufWidth;  // gbuf (input) extent — may differ under sub-extent render
@@ -68,6 +69,13 @@ void main() {
         col = (id == 0u) ? vec3(0.0) : idToColor(id);
     } else if (pc.view == 4u) {
         col = texelFetch(gbufAlbedo, src, 0).rgb;
+    } else if (pc.view == 5u) {
+        // Raw reverse-Z depth [0,1] (1 = near, 0 = far, 0 = sky) packed into
+        // 24-bit RGB. The host decodes the integer back to [0,1] and linearizes
+        // to metric distance with the camera near/far.
+        const float d = clamp(texelFetch(gbufDepth, src, 0).r, 0.0, 1.0);
+        const uint  q = uint(d * 16777215.0 + 0.5);// 2^24 - 1
+        col = vec3(float((q >> 16) & 255u), float((q >> 8) & 255u), float(q & 255u)) / 255.0;
     } else {
         // Normal (default): already encoded to [0,1] as n*0.5+0.5.
         col = texelFetch(gbufNormal, src, 0).xyz;
