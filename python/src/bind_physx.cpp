@@ -184,11 +184,21 @@ namespace {
             if (art_ && !finalized_) art_->release();
         }
 
+        // CPU state I/O (per-joint getters/setters, the cache) is NOT valid once the world
+        // runs in direct-GPU mode — that state isn't synced. Fail loudly instead of silently
+        // returning stale data; use PhysxGpuBatch for state I/O under direct_gpu.
+        void cpuOnly(const char* what) const {
+            if (world_.directGpuEnabled())
+                throw std::runtime_error(std::string("Articulation.") + what +
+                                         ": not valid under direct_gpu — use PhysxGpuBatch for state I/O");
+        }
+
         // Episode reset: teleport the root to `pos` upright with zero velocity and
         // zero every joint position/velocity (back to the neutral build pose). The
         // bound visuals snap to the new state on the next world.step().
         void reset(const Vector3& pos) {
             if (!finalized_) throw std::runtime_error("Articulation.reset: finalize() first");
+            cpuOnly("reset");
             art_->setRootGlobalPose(PxTransform(toPxVec3(pos), PxQuat(PxIdentity)), false);
             if (!cache_) cache_ = art_->createCache();
             art_->zeroCache(*cache_);
@@ -278,6 +288,7 @@ namespace {
         // cart-pole hanging straight down for a swing-up demo.
         void set_joint_positions(const py::array_t<float>& pos) {
             if (!finalized_) throw std::runtime_error("Articulation.set_joint_positions: finalize() first");
+            cpuOnly("set_joint_positions");
             if (!cache_) cache_ = art_->createCache();
             art_->zeroCache(*cache_);
             auto r = pos.unchecked<1>();
@@ -297,6 +308,7 @@ namespace {
         // path for vectorized RL: it collapses ~36 pybind calls per robot per
         // step to 3, clawing back the cost of the Python bridge.
         py::array_t<float> joint_positions() const {
+            cpuOnly("joint_positions");
             py::array_t<float> a(static_cast<py::ssize_t>(joints_.size()));
             float* p = a.mutable_data();
             for (size_t i = 0; i < joints_.size(); ++i)
@@ -304,6 +316,7 @@ namespace {
             return a;
         }
         py::array_t<float> joint_velocities() const {
+            cpuOnly("joint_velocities");
             py::array_t<float> a(static_cast<py::ssize_t>(joints_.size()));
             float* p = a.mutable_data();
             for (size_t i = 0; i < joints_.size(); ++i)
@@ -311,6 +324,7 @@ namespace {
             return a;
         }
         void set_drive_targets(const py::array_t<float>& arr) {
+            cpuOnly("set_drive_targets");
             auto r = arr.unchecked<1>();
             const size_t n = std::min<size_t>(joints_.size(), static_cast<size_t>(r.shape(0)));
             // autowake=true on the last write: a policy that drives a settled robot
@@ -346,6 +360,7 @@ namespace {
         // Root link world pose as one array [px,py,pz, qx,qy,qz,qw] — one call
         // instead of reading position + quaternion + their 7 components separately.
         py::array_t<float> root_state() const {
+            cpuOnly("root_state");
             py::array_t<float> a(7);
             float* p = a.mutable_data();
             const PxTransform t = rootLink_ ? rootLink_->getGlobalPose() : PxTransform(PxIdentity);
@@ -572,12 +587,39 @@ namespace threepp_py {
             std::memcpy(a.mutable_data(), flat.data(), flat.size() * sizeof(float));
             return a;
         };
+        // Validate a torch CUDA tensor for the zero-copy path and return its device pointer.
+        // Without this the boundary would take a bare int and a wrong shape / dtype / device /
+        // non-contiguous / freed tensor would silently corrupt GPU memory instead of raising.
+        auto cudaPtr = [](const py::object& t, std::int64_t expectFloats, const char* what) -> CUdeviceptr {
+            if (!t.attr("is_cuda").cast<bool>())
+                throw std::runtime_error(std::string(what) + ": expected a CUDA tensor");
+            if (!t.attr("is_contiguous")().cast<bool>())
+                throw std::runtime_error(std::string(what) + ": tensor must be contiguous");
+            if (!t.attr("is_floating_point")().cast<bool>() || t.attr("element_size")().cast<int>() != 4)
+                throw std::runtime_error(std::string(what) + ": tensor must be float32");
+            const auto nfl = t.attr("numel")().cast<std::int64_t>();
+            if (nfl != expectFloats)
+                throw std::runtime_error(std::string(what) + ": tensor has " + std::to_string(nfl) +
+                                         " floats, expected " + std::to_string(expectFloats));
+            return static_cast<CUdeviceptr>(t.attr("data_ptr")().cast<std::uintptr_t>());
+        };
+        // Validate a 32-bit (int32/uint32) CUDA index tensor; returns its ptr and sets outN.
+        auto cudaIdx = [](const py::object& t, std::int64_t& outN, const char* what) -> CUdeviceptr {
+            if (!t.attr("is_cuda").cast<bool>())
+                throw std::runtime_error(std::string(what) + ": index tensor must be CUDA");
+            if (!t.attr("is_contiguous")().cast<bool>())
+                throw std::runtime_error(std::string(what) + ": index tensor must be contiguous");
+            if (t.attr("element_size")().cast<int>() != 4)
+                throw std::runtime_error(std::string(what) + ": index tensor must be 32-bit (int32/uint32)");
+            outN = t.attr("numel")().cast<std::int64_t>();
+            return static_cast<CUdeviceptr>(t.attr("data_ptr")().cast<std::uintptr_t>());
+        };
         py::class_<threepp::PhysxGpuBatch>(m, "PhysxGpuBatch",
                 "Batched GPU-resident state I/O over many reduced-coordinate articulations in one "
-                "direct-GPU scene. The read_*/write_* methods take a CUDA device pointer (e.g. a torch "
-                "cuda tensor's .data_ptr()) and move ALL robots' state in a single call with no CPU "
-                "readback; *_host variants stage through numpy for debugging. Requires "
-                "PhysxWorld(direct_gpu=True) and finalized articulations.")
+                "direct-GPU scene. The read_*/write_* methods take a torch CUDA tensor (validated for "
+                "cuda/float32/contiguous/correct-size) and move ALL robots' state in one call with no "
+                "CPU readback; *_host variants stage through numpy for debugging. All articulations in a "
+                "batch must share a DOF count. Requires PhysxWorld(direct_gpu=True) and finalized articulations.")
                 .def(py::init([](PhysxWorld& world, const py::iterable& arts) {
                          std::vector<PxArticulationReducedCoordinate*> raw;
                          for (auto h : arts) {
@@ -593,46 +635,52 @@ namespace threepp_py {
                 .def_property_readonly("max_dofs", [](threepp::PhysxGpuBatch& b) { return b.maxDofs(); })
                 .def("step", &threepp::PhysxGpuBatch::step, py::arg("dt"),
                      "Advance every articulation one substep on the GPU (no binding sync).")
-                // --- zero-copy device-pointer path (pass tensor.data_ptr()) ---
-                .def("read_joint_pos", [](threepp::PhysxGpuBatch& b, std::uintptr_t p) {
-                         b.read(static_cast<CUdeviceptr>(p), Read::eJOINT_POSITION); },
-                     py::arg("cuda_ptr"), "Fill [n, max_dofs] joint positions into the device buffer.")
-                .def("read_joint_vel", [](threepp::PhysxGpuBatch& b, std::uintptr_t p) {
-                         b.read(static_cast<CUdeviceptr>(p), Read::eJOINT_VELOCITY); },
-                     py::arg("cuda_ptr"), "Fill [n, max_dofs] joint velocities into the device buffer.")
-                .def("read_root_pose", [](threepp::PhysxGpuBatch& b, std::uintptr_t p) {
-                         b.read(static_cast<CUdeviceptr>(p), Read::eROOT_GLOBAL_POSE); },
-                     py::arg("cuda_ptr"), "Fill [n, 7] root pose [qx,qy,qz,qw,px,py,pz] into the device buffer.")
-                .def("read_root_linvel", [](threepp::PhysxGpuBatch& b, std::uintptr_t p) {
-                         b.read(static_cast<CUdeviceptr>(p), Read::eROOT_LINEAR_VELOCITY); },
-                     py::arg("cuda_ptr"), "Fill [n, 3] root linear velocity into the device buffer.")
-                .def("read_root_angvel", [](threepp::PhysxGpuBatch& b, std::uintptr_t p) {
-                         b.read(static_cast<CUdeviceptr>(p), Read::eROOT_ANGULAR_VELOCITY); },
-                     py::arg("cuda_ptr"), "Fill [n, 3] root angular velocity into the device buffer.")
-                .def("write_joint_target_pos", [](threepp::PhysxGpuBatch& b, std::uintptr_t p) {
-                         b.write(static_cast<CUdeviceptr>(p), Write::eJOINT_TARGET_POSITION); },
-                     py::arg("cuda_ptr"), "Set all joints' PD position targets from the [n, max_dofs] device buffer.")
-                .def("write_joint_force", [](threepp::PhysxGpuBatch& b, std::uintptr_t p) {
-                         b.write(static_cast<CUdeviceptr>(p), Write::eJOINT_FORCE); },
-                     py::arg("cuda_ptr"),
-                     "Apply per-DOF joint forces/torques (effort control) from the [n, max_dofs] device buffer. "
-                     "Re-apply each step (forces don't persist). Use for force-controlled joints (cart-pole).")
-                // --- subset reset (done envs only) ---
-                .def("write_subset_joint_pos", [](threepp::PhysxGpuBatch& b, std::uintptr_t src, std::uintptr_t idx, ::physx::PxU32 nb) {
-                         b.writeSubset(static_cast<CUdeviceptr>(src), static_cast<CUdeviceptr>(idx), Write::eJOINT_POSITION, nb); },
-                     py::arg("src_ptr"), py::arg("indices_ptr"), py::arg("nb"))
-                .def("write_subset_joint_vel", [](threepp::PhysxGpuBatch& b, std::uintptr_t src, std::uintptr_t idx, ::physx::PxU32 nb) {
-                         b.writeSubset(static_cast<CUdeviceptr>(src), static_cast<CUdeviceptr>(idx), Write::eJOINT_VELOCITY, nb); },
-                     py::arg("src_ptr"), py::arg("indices_ptr"), py::arg("nb"))
-                .def("write_subset_root_pose", [](threepp::PhysxGpuBatch& b, std::uintptr_t src, std::uintptr_t idx, ::physx::PxU32 nb) {
-                         b.writeSubset(static_cast<CUdeviceptr>(src), static_cast<CUdeviceptr>(idx), Write::eROOT_GLOBAL_POSE, nb); },
-                     py::arg("src_ptr"), py::arg("indices_ptr"), py::arg("nb"))
-                .def("write_subset_root_linvel", [](threepp::PhysxGpuBatch& b, std::uintptr_t src, std::uintptr_t idx, ::physx::PxU32 nb) {
-                         b.writeSubset(static_cast<CUdeviceptr>(src), static_cast<CUdeviceptr>(idx), Write::eROOT_LINEAR_VELOCITY, nb); },
-                     py::arg("src_ptr"), py::arg("indices_ptr"), py::arg("nb"))
-                .def("write_subset_root_angvel", [](threepp::PhysxGpuBatch& b, std::uintptr_t src, std::uintptr_t idx, ::physx::PxU32 nb) {
-                         b.writeSubset(static_cast<CUdeviceptr>(src), static_cast<CUdeviceptr>(idx), Write::eROOT_ANGULAR_VELOCITY, nb); },
-                     py::arg("src_ptr"), py::arg("indices_ptr"), py::arg("nb"))
+                // --- zero-copy path: pass the torch CUDA tensor (validated: cuda/float32/
+                //     contiguous/correct-numel) — NOT a raw .data_ptr() ---
+                .def("read_joint_pos", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
+                         b.read(cudaPtr(t, std::int64_t(b.count()) * b.maxDofs(), "read_joint_pos"), Read::eJOINT_POSITION); },
+                     py::arg("tensor"), "Fill the [n, max_dofs] float32 cuda tensor with joint positions.")
+                .def("read_joint_vel", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
+                         b.read(cudaPtr(t, std::int64_t(b.count()) * b.maxDofs(), "read_joint_vel"), Read::eJOINT_VELOCITY); },
+                     py::arg("tensor"), "Fill the [n, max_dofs] float32 cuda tensor with joint velocities.")
+                .def("read_root_pose", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
+                         b.read(cudaPtr(t, std::int64_t(b.count()) * 7, "read_root_pose"), Read::eROOT_GLOBAL_POSE); },
+                     py::arg("tensor"), "Fill the [n, 7] float32 cuda tensor with root pose [qx,qy,qz,qw,px,py,pz].")
+                .def("read_root_linvel", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
+                         b.read(cudaPtr(t, std::int64_t(b.count()) * 3, "read_root_linvel"), Read::eROOT_LINEAR_VELOCITY); },
+                     py::arg("tensor"), "Fill the [n, 3] float32 cuda tensor with root linear velocity.")
+                .def("read_root_angvel", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
+                         b.read(cudaPtr(t, std::int64_t(b.count()) * 3, "read_root_angvel"), Read::eROOT_ANGULAR_VELOCITY); },
+                     py::arg("tensor"), "Fill the [n, 3] float32 cuda tensor with root angular velocity.")
+                .def("write_joint_target_pos", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
+                         b.write(cudaPtr(t, std::int64_t(b.count()) * b.maxDofs(), "write_joint_target_pos"), Write::eJOINT_TARGET_POSITION); },
+                     py::arg("tensor"), "Set all joints' PD position targets from the [n, max_dofs] float32 cuda tensor.")
+                .def("write_joint_force", [cudaPtr](threepp::PhysxGpuBatch& b, const py::object& t) {
+                         b.write(cudaPtr(t, std::int64_t(b.count()) * b.maxDofs(), "write_joint_force"), Write::eJOINT_FORCE); },
+                     py::arg("tensor"),
+                     "Apply per-DOF joint forces/torques (effort control) from the [n, max_dofs] float32 cuda "
+                     "tensor. Re-apply each step (forces don't persist). Use for force-controlled joints.")
+                // --- subset reset (done envs only): nb is derived from the index tensor ---
+                .def("write_subset_joint_pos", [cudaPtr, cudaIdx](threepp::PhysxGpuBatch& b, const py::object& src, const py::object& idx) {
+                         std::int64_t nb = 0; auto ip = cudaIdx(idx, nb, "write_subset_joint_pos.indices");
+                         b.writeSubset(cudaPtr(src, nb * b.maxDofs(), "write_subset_joint_pos.src"), ip, Write::eJOINT_POSITION, static_cast<::physx::PxU32>(nb)); },
+                     py::arg("src"), py::arg("indices"))
+                .def("write_subset_joint_vel", [cudaPtr, cudaIdx](threepp::PhysxGpuBatch& b, const py::object& src, const py::object& idx) {
+                         std::int64_t nb = 0; auto ip = cudaIdx(idx, nb, "write_subset_joint_vel.indices");
+                         b.writeSubset(cudaPtr(src, nb * b.maxDofs(), "write_subset_joint_vel.src"), ip, Write::eJOINT_VELOCITY, static_cast<::physx::PxU32>(nb)); },
+                     py::arg("src"), py::arg("indices"))
+                .def("write_subset_root_pose", [cudaPtr, cudaIdx](threepp::PhysxGpuBatch& b, const py::object& src, const py::object& idx) {
+                         std::int64_t nb = 0; auto ip = cudaIdx(idx, nb, "write_subset_root_pose.indices");
+                         b.writeSubset(cudaPtr(src, nb * 7, "write_subset_root_pose.src"), ip, Write::eROOT_GLOBAL_POSE, static_cast<::physx::PxU32>(nb)); },
+                     py::arg("src"), py::arg("indices"))
+                .def("write_subset_root_linvel", [cudaPtr, cudaIdx](threepp::PhysxGpuBatch& b, const py::object& src, const py::object& idx) {
+                         std::int64_t nb = 0; auto ip = cudaIdx(idx, nb, "write_subset_root_linvel.indices");
+                         b.writeSubset(cudaPtr(src, nb * 3, "write_subset_root_linvel.src"), ip, Write::eROOT_LINEAR_VELOCITY, static_cast<::physx::PxU32>(nb)); },
+                     py::arg("src"), py::arg("indices"))
+                .def("write_subset_root_angvel", [cudaPtr, cudaIdx](threepp::PhysxGpuBatch& b, const py::object& src, const py::object& idx) {
+                         std::int64_t nb = 0; auto ip = cudaIdx(idx, nb, "write_subset_root_angvel.indices");
+                         b.writeSubset(cudaPtr(src, nb * 3, "write_subset_root_angvel.src"), ip, Write::eROOT_ANGULAR_VELOCITY, static_cast<::physx::PxU32>(nb)); },
+                     py::arg("src"), py::arg("indices"))
                 .def("gpu_indices", [](threepp::PhysxGpuBatch& b) {
                          auto idx = b.gpuIndicesHost();
                          py::array_t<std::uint32_t> a(static_cast<py::ssize_t>(idx.size()));

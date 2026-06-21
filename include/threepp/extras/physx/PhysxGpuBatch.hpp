@@ -8,6 +8,7 @@
 #include <PxDirectGPUAPI.h>
 
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace threepp {
@@ -43,6 +44,16 @@ namespace threepp {
             n_ = static_cast<PxU32>(arts_.size());
             if (n_ == 0) throw std::runtime_error("PhysxGpuBatch: no articulations");
 
+            // Homogeneity: every articulation must share a DOF count. The batch addresses
+            // all of them with a single per-block stride (maxDofs), so mixing robot types
+            // with different DOF counts would silently mis-shape the host-side tensors.
+            dofs_ = arts_[0]->getDofs();
+            for (PxU32 i = 1; i < n_; ++i)
+                if (arts_[i]->getDofs() != dofs_)
+                    throw std::runtime_error("PhysxGpuBatch: all articulations must share a DOF count (got " +
+                                             std::to_string(arts_[i]->getDofs()) + " at index " + std::to_string(i) +
+                                             " vs " + std::to_string(dofs_) + "); one batch == one robot type");
+
             // Warm up: the GPU sim assigns articulation GPU indices on the first
             // simulate(); they are not valid before that.
             world_.simulateRaw(world_.settings().fixedTimestep);
@@ -55,9 +66,9 @@ namespace threepp {
 
             PxScopedCudaLock lock(*cuda_);
             auto* ctx = cuda_->getCudaContext();
-            ctx->memAlloc(&dIndices_, n_ * sizeof(PxArticulationGPUIndex));
-            ctx->memcpyHtoD(dIndices_, idx.data(), n_ * sizeof(PxArticulationGPUIndex));
-            ctx->eventCreate(&finishEvent_, 0 /*CU_EVENT_DEFAULT*/);
+            cuCheck(ctx->memAlloc(&dIndices_, n_ * sizeof(PxArticulationGPUIndex)), "memAlloc(gpuIndices)");
+            cuCheck(ctx->memcpyHtoD(dIndices_, idx.data(), n_ * sizeof(PxArticulationGPUIndex)), "memcpyHtoD(gpuIndices)");
+            cuCheck(ctx->eventCreate(&finishEvent_, 0 /*CU_EVENT_DEFAULT*/), "eventCreate");
         }
 
         ~PhysxGpuBatch() {
@@ -73,6 +84,7 @@ namespace threepp {
 
         ::physx::PxU32 count() const { return n_; }
         ::physx::PxU32 maxDofs() const { return maxDofs_; }
+        ::physx::PxU32 dofs() const { return dofs_; }// per-articulation DOF count (homogeneous)
 
         // Number of floats per articulation block for a given read/write data type.
         static ::physx::PxU32 blockFloatsRead(Read::Enum t, ::physx::PxU32 maxDofs) {
@@ -110,7 +122,7 @@ namespace threepp {
             auto& dg = world_.scene().getDirectGPUAPI();
             if (!dg.getArticulationData(reinterpret_cast<void*>(dst), reinterpret_cast<const ::physx::PxArticulationGPUIndex*>(dIndices_), type, n_, nullptr, finishEvent_))
                 throw std::runtime_error("PhysxGpuBatch::read: getArticulationData failed");
-            cuda_->getCudaContext()->eventSynchronize(finishEvent_);
+            cuCheck(cuda_->getCudaContext()->eventSynchronize(finishEvent_), "eventSynchronize");
         }
         void write(CUdeviceptr src, Write::Enum type) {
             using namespace ::physx;
@@ -118,7 +130,7 @@ namespace threepp {
             auto& dg = world_.scene().getDirectGPUAPI();
             if (!dg.setArticulationData(reinterpret_cast<const void*>(src), reinterpret_cast<const ::physx::PxArticulationGPUIndex*>(dIndices_), type, n_, nullptr, finishEvent_))
                 throw std::runtime_error("PhysxGpuBatch::write: setArticulationData failed");
-            cuda_->getCudaContext()->eventSynchronize(finishEvent_);
+            cuCheck(cuda_->getCudaContext()->eventSynchronize(finishEvent_), "eventSynchronize");
         }
 
         // Subset write: only the `nb` articulations whose GPU indices are in the
@@ -134,7 +146,7 @@ namespace threepp {
                                         reinterpret_cast<const PxArticulationGPUIndex*>(subIndices),
                                         type, nb, nullptr, finishEvent_))
                 throw std::runtime_error("PhysxGpuBatch::writeSubset: setArticulationData failed");
-            cuda_->getCudaContext()->eventSynchronize(finishEvent_);
+            cuCheck(cuda_->getCudaContext()->eventSynchronize(finishEvent_), "eventSynchronize");
         }
 
         // The K articulation GPU indices (host copy) — upload to a torch cuda tensor
@@ -154,15 +166,15 @@ namespace threepp {
             PxScopedCudaLock lock(*cuda_);
             auto* ctx = cuda_->getCudaContext();
             CUdeviceptr scratch = 0;
-            ctx->memAlloc(&scratch, bytes);
+            cuCheck(ctx->memAlloc(&scratch, bytes), "memAlloc(readHost)");
             auto& dg = world_.scene().getDirectGPUAPI();
             if (!dg.getArticulationData(reinterpret_cast<void*>(scratch), reinterpret_cast<const ::physx::PxArticulationGPUIndex*>(dIndices_), type, n_, nullptr, finishEvent_)) {
                 ctx->memFree(scratch);
                 throw std::runtime_error("PhysxGpuBatch::readHost: getArticulationData failed");
             }
-            ctx->eventSynchronize(finishEvent_);
-            ctx->memcpyDtoH(host.data(), scratch, bytes);
-            ctx->memFree(scratch);
+            cuCheck(ctx->eventSynchronize(finishEvent_), "eventSynchronize(readHost)");
+            cuCheck(ctx->memcpyDtoH(host.data(), scratch, bytes), "memcpyDtoH(readHost)");
+            cuCheck(ctx->memFree(scratch), "memFree(readHost)");
             return host;
         }
         void writeHost(const std::vector<float>& host, Write::Enum type) {
@@ -174,18 +186,28 @@ namespace threepp {
             PxScopedCudaLock lock(*cuda_);
             auto* ctx = cuda_->getCudaContext();
             CUdeviceptr scratch = 0;
-            ctx->memAlloc(&scratch, bytes);
-            ctx->memcpyHtoD(scratch, host.data(), bytes);
+            cuCheck(ctx->memAlloc(&scratch, bytes), "memAlloc(writeHost)");
+            cuCheck(ctx->memcpyHtoD(scratch, host.data(), bytes), "memcpyHtoD(writeHost)");
             auto& dg = world_.scene().getDirectGPUAPI();
             if (!dg.setArticulationData(reinterpret_cast<const void*>(scratch), reinterpret_cast<const ::physx::PxArticulationGPUIndex*>(dIndices_), type, n_, nullptr, finishEvent_)) {
                 ctx->memFree(scratch);
                 throw std::runtime_error("PhysxGpuBatch::writeHost: setArticulationData failed");
             }
-            ctx->eventSynchronize(finishEvent_);
-            ctx->memFree(scratch);
+            cuCheck(ctx->eventSynchronize(finishEvent_), "eventSynchronize(writeHost)");
+            cuCheck(ctx->memFree(scratch), "memFree(writeHost)");
         }
 
     private:
+        // Throw on any failed CUDA driver call (PxCUresult != CUDA_SUCCESS). The driver
+        // result is templated so we don't depend on the exact PxCUresult spelling; an
+        // unchecked memAlloc/memcpy/event leaves a stale pointer the next op walks blindly.
+        template <class R>
+        static void cuCheck(R r, const char* what) {
+            if (static_cast<long long>(r) != 0)
+                throw std::runtime_error(std::string("PhysxGpuBatch: CUDA driver error in ") + what +
+                                         " (code " + std::to_string(static_cast<long long>(r)) + ")");
+        }
+
         PhysxWorld& world_;
         std::vector<::physx::PxArticulationReducedCoordinate*> arts_;
         ::physx::PxCudaContextManager* cuda_ = nullptr;
@@ -193,6 +215,7 @@ namespace threepp {
         CUevent finishEvent_ = nullptr;
         ::physx::PxU32 n_ = 0;
         ::physx::PxU32 maxDofs_ = 0;
+        ::physx::PxU32 dofs_ = 0;
     };
 
 }// namespace threepp

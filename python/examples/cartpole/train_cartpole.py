@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 sys.path.insert(0, _HERE)
 
 import threepp as tp
-from cartpole_env import ACT_DIM, FORCE_SCALE, OBS_DIM, CartPoleEnv
+from cartpole_env import ACT_DIM, CONFIG, OBS_DIM, CartPoleEnv
 from gpu_ppo import ActorCritic, RunningNorm, compute_gae, save_policy
 
 
@@ -49,9 +49,12 @@ def main():
     ac = ActorCritic(OBS_DIM, ACT_DIM, hidden=(128, 128), log_std_init=args.log_std_init).to(dev)
     norm = RunningNorm(OBS_DIM, dev)
     opt = torch.optim.Adam(ac.parameters(), lr=args.lr)
-    meta = {"obs_dim": OBS_DIM, "act_dim": ACT_DIM, "hidden": (128, 128), "force_scale": FORCE_SCALE}
+    # meta carries the FULL deploy contract (dt/substeps/force_scale/obs scales) so the viewer
+    # reconstructs and asserts it instead of re-typing constants. hidden as a list (weights_only).
+    meta = {"obs_dim": OBS_DIM, "act_dim": ACT_DIM, "hidden": [128, 128], **CONFIG}
 
     b_obs = torch.zeros(T, K, OBS_DIM, device=dev)
+    b_term = torch.zeros(T, K, OBS_DIM, device=dev)   # terminal (pre-reset) obs per step
     b_act = torch.zeros(T, K, ACT_DIM, device=dev)
     b_logp = torch.zeros(T, K, device=dev)
     b_val = torch.zeros(T, K, device=dev)
@@ -72,8 +75,8 @@ def main():
             nobs = norm.norm(obs)
             a, logp, val = ac.act(nobs)
             b_obs[t] = nobs; b_act[t] = a; b_logp[t] = logp; b_val[t] = val
-            obs, rew, done = env.step(a)
-            b_rew[t] = rew; b_done[t] = done.float()
+            obs, rew, done, term_obs = env.step(a)
+            b_rew[t] = rew; b_done[t] = done.float(); b_term[t] = term_obs
             ep_ret += rew; ep_len += 1
             d = done.nonzero(as_tuple=False).squeeze(-1)
             if d.numel() > 0:
@@ -83,7 +86,9 @@ def main():
 
         with torch.no_grad():
             last_val = ac.critic(norm.norm(obs)).squeeze(-1)
-        adv, ret = compute_gae(b_rew, b_val, b_done, last_val, args.gamma, args.lam)
+            # value of each step's terminal (pre-reset) obs, used to bootstrap on truncation
+            term_val = ac.critic(norm.norm(b_term.reshape(-1, OBS_DIM))).squeeze(-1).reshape(T, K)
+        adv, ret = compute_gae(b_rew, b_val, b_done, last_val, term_val, args.gamma, args.lam)
         adv = (adv - adv.mean()) / (adv.std() + 1e-8)
 
         f_obs = b_obs.reshape(-1, OBS_DIM); f_act = b_act.reshape(-1, ACT_DIM)
@@ -96,6 +101,9 @@ def main():
                 newlogp, ent, val = ac.evaluate(f_obs[j], f_act[j])
                 ratio = (newlogp - f_logp[j]).clamp(-20, 20).exp()
                 pg = -torch.min(ratio * f_adv[j], ratio.clamp(1 - args.clip, 1 + args.clip) * f_adv[j]).mean()
+                # Plain MSE value loss. PPO value-clipping is deliberately omitted: its clip is in
+                # value units, but returns here are UNNORMALIZED (~tens), so a 0.2 clip would freeze
+                # the value head. It's only meaningful with return normalization (a larger change).
                 vf = (val - f_ret[j]).pow(2).mean()
                 loss = pg + args.vfcoef * vf - args.entropy * ent.mean()
                 if not torch.isfinite(loss):

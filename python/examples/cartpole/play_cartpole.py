@@ -19,6 +19,8 @@ sys.path.insert(0, _HERE)
 
 import threepp as tp
 from cartpole import CartPole
+from cartpole_env import CONFIG as ENV_CONFIG
+from cartpole_env import make_obs   # the ONE observation function, shared with training
 from gpu_ppo import load_policy
 
 MODEL = os.path.join(_HERE, "cartpole_swingup.pt")
@@ -28,8 +30,16 @@ if not os.path.exists(MODEL):
     print("No policy yet — run: python train_cartpole.py"); sys.exit(0)
 
 ac, norm, meta = load_policy(MODEL, device="cpu")
+# The deploy contract comes from the policy's meta (what it was TRAINED with), not hand-typed
+# constants. Guard against this module having drifted from the trained config since.
+for k in ("force_scale", "rail", "dt", "max_substeps", "v_scale", "w_scale"):
+    if k in meta and k in ENV_CONFIG and abs(float(meta[k]) - float(ENV_CONFIG[k])) > 1e-9:
+        raise SystemExit(f"cartpole_env.{k}={ENV_CONFIG[k]} has drifted from the trained policy "
+                         f"(meta {k}={meta[k]}) — retrain or revert before deploying.")
 FORCE_SCALE = float(meta["force_scale"])
-RAIL, DT = 2.2, 1.0 / 60.0
+RAIL = float(meta["rail"])
+DT = float(meta["dt"])
+MAX_SUBSTEPS = int(meta["max_substeps"])
 DOWN = np.array([0.0, math.pi], np.float32)
 
 
@@ -78,7 +88,7 @@ for i in range(int(2 * HALF / STEP) + 1):
 scene.add(grid)
 
 # ---- physics (box colliders); visuals are built separately and follow the links
-world = tp.PhysxWorld(gravity=tp.Vector3(0, -9.81, 0), fixed_timestep=DT, max_substeps=1)
+world = tp.PhysxWorld(gravity=tp.Vector3(0, -9.81, 0), fixed_timestep=DT, max_substeps=MAX_SUBSTEPS)
 cp = CartPole(world, x0=0.0)
 cp.art.set_joint_positions(DOWN)
 world.step(DT)
@@ -120,14 +130,14 @@ st = {"accum": 0.0, "key_p": False, "key_r": False, "up": -1.0, "rng": np.random
 
 
 def observation():
-    return np.array([cp.cart.joint_position / RAIL, cp.cart.joint_velocity * 0.2,
-                     math.sin(cp.pole.joint_position), math.cos(cp.pole.joint_position),
-                     cp.pole.joint_velocity * 0.1], np.float32)
+    # the SAME make_obs the env trains with, fed this single robot's CPU joint readings
+    return make_obs(torch.tensor([cp.cart.joint_position]), torch.tensor([cp.cart.joint_velocity]),
+                    torch.tensor([cp.pole.joint_position]), torch.tensor([cp.pole.joint_velocity]))
 
 
 @torch.no_grad()
 def control_step():
-    a = float(ac.act_mean(norm.norm(torch.from_numpy(observation()).unsqueeze(0))).squeeze().item())
+    a = float(ac.act_mean(norm.norm(observation())).squeeze().item())
     cp.cart.add_force(tp.Vector3(max(-1.0, min(1.0, a)) * FORCE_SCALE, 0, 0))
     world.step(DT)
 

@@ -19,11 +19,11 @@ env = CartPoleEnv(num_envs=256)
 env.reset()
 
 # Force every env to hang straight DOWN (pole at pi), zero velocity.
-jp = torch.zeros(env.K, 2, device=env.device); jp[:, 1] = math.pi
-jv = torch.zeros(env.K, 2, device=env.device)
+jp = torch.zeros(env.K, env.dof, device=env.device); jp[:, 1] = math.pi   # canonical: pole down
+jv = torch.zeros(env.K, env.dof, device=env.device)
 torch.cuda.synchronize()
-env.batch.write_subset_joint_pos(jp.data_ptr(), env.gpu_idx.data_ptr(), env.K)
-env.batch.write_subset_joint_vel(jv.data_ptr(), env.gpu_idx.data_ptr(), env.K)
+env.batch.write_subset_joint_pos(env._to_gpu(jp), env.gpu_idx)            # canonical -> GPU order
+env.batch.write_subset_joint_vel(env._to_gpu(jv), env.gpu_idx)
 env.batch.step(env.dt)
 env._read()
 obs = env._obs()
@@ -33,7 +33,7 @@ t_up = torch.full((env.K,), -1.0, device=env.device)
 ups = []
 with torch.no_grad():
     for step in range(400):                       # ~6.7 s
-        obs, _, _ = env.step(ac.act_mean(norm.norm(obs)))
+        obs, _, _, _ = env.step(ac.act_mean(norm.norm(obs)))
         up = torch.cos(env.jp[:, 1])
         newly = (up > 0.9) & ~reached
         t_up[newly] = step / 60.0

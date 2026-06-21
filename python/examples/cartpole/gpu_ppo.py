@@ -44,7 +44,10 @@ class RunningNorm:
         return {"mean": self.mean, "var": self.var, "count": self.count, "clip": self.clip}
 
     def load(self, s):
-        self.mean = s["mean"]; self.var = s["var"]; self.count = s["count"]; self.clip = s["clip"]
+        # clone so we don't alias the (discarded) checkpoint dict; keep our device
+        self.mean = s["mean"].clone().to(self.mean.device)
+        self.var = s["var"].clone().to(self.var.device)
+        self.count = float(s["count"]); self.clip = float(s["clip"])
 
 
 def _mlp(sizes, act=nn.ELU):
@@ -91,16 +94,20 @@ class ActorCritic(nn.Module):
         return self._logprob(mean, act), self._entropy(), self.critic(obs).squeeze(-1)
 
 
-def compute_gae(rew, val, done, last_val, gamma=0.99, lam=0.95):
-    """rew/val/done: [T, K]; last_val: [K]. done treated as terminal (no bootstrap)."""
+def compute_gae(rew, val, done, last_val, term_val, gamma=0.99, lam=0.95):
+    """rew/val/done/term_val: [T, K]; last_val: [K]. `done` here is a TRUNCATION (time limit):
+    bootstrap the TD target with term_val (the value of the terminal state, before reset) rather
+    than zeroing it, and reset the GAE chain at the boundary. (For a true failure terminal, pass
+    term_val=0 at those steps.)"""
     T = rew.shape[0]
     adv = torch.zeros_like(rew)
     lastgae = torch.zeros_like(last_val)
     for t in reversed(range(T)):
         nextval = last_val if t == T - 1 else val[t + 1]
-        nonterminal = 1.0 - done[t].float()
-        delta = rew[t] + gamma * nextval * nonterminal - val[t]
-        lastgae = delta + gamma * lam * nonterminal * lastgae
+        d = done[t].float()
+        bootstrap = d * term_val[t] + (1.0 - d) * nextval   # terminal value on done, else in-traj
+        delta = rew[t] + gamma * bootstrap - val[t]
+        lastgae = delta + gamma * lam * (1.0 - d) * lastgae  # don't propagate GAE across resets
         adv[t] = lastgae
     return adv, adv + val
 
@@ -110,7 +117,9 @@ def save_policy(path, ac, norm, meta):
 
 
 def load_policy(path, device):
-    ckpt = torch.load(path, map_location=device, weights_only=False)
+    # weights_only=True: the checkpoint is only tensors + a JSON-able meta dict, so refuse to
+    # run arbitrary unpickle code (don't trust a .pt to be safe just because we wrote it).
+    ckpt = torch.load(path, map_location=device, weights_only=True)
     meta = ckpt["meta"]
     ac = ActorCritic(meta["obs_dim"], meta["act_dim"],
                      hidden=tuple(meta.get("hidden", (256, 256)))).to(device)
